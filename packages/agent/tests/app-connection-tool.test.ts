@@ -78,6 +78,7 @@ describe('AppConnectionTool', () => {
         data: [{ id: 'f1', name: 'test.txt' }],
       });
 
+      const before = Date.now();
       const result = await executor.execute(
         { pageSize: 10 },
         undefined,
@@ -86,9 +87,30 @@ describe('AppConnectionTool', () => {
 
       expect(ipcRequest).toHaveBeenCalledWith(
         'appConnection:invoke',
-        { connectionId: 'conn-1', action: 'drive.list_files', args: { pageSize: 10 } },
-        { timeout: 60_000 },
+        expect.objectContaining({
+          connectionId: 'conn-1',
+          action: 'drive.list_files',
+          args: { pageSize: 10 },
+          // Plan 580 D5: the worker stamps one absolute deadline per call and
+          // the main side honors it, so an aborted call never tears down the
+          // shared transport.
+          deadlineAt: expect.any(Number),
+        }),
+        // The IPC wait outlasts the deadline by a fixed 30s buffer, so the
+        // main side times out FIRST and returns a structured error instead of
+        // the IPC layer racing it. 120s deadline + 30s buffer.
+        { timeout: 150_000 },
       );
+
+      // The deadline is a real future instant, not merely present.
+      const [, payload] = ipcRequest.mock.calls[0] as unknown as [
+        string,
+        { deadlineAt: number },
+        unknown,
+      ];
+      expect(payload.deadlineAt).toBeGreaterThanOrEqual(before + 120_000);
+      expect(payload.deadlineAt).toBeLessThanOrEqual(Date.now() + 120_000);
+
       expect(result.name).toBe('google_drive_list_files');
       expect(result.error).toBe(false);
       const parsed = JSON.parse(result.result);
@@ -172,21 +194,50 @@ describe('AppConnectionTool', () => {
       expect(registry.getExposure('google_drive_list_files')).toBe('deferred');
     });
 
-    it('removes stale connector-prefixed tools not in the new set', () => {
+    it('removes stale connector tools not in the new set for the same connection', () => {
       const registry = new ToolRegistry();
-      // Pre-register a stale connector tool
-      const staleDesc = makeDescriptor({ name: 'google_old_tool' });
-      const { definition, executor, meta } = createAppConnectionTool(staleDesc);
-      registry.register(definition, executor, meta);
+      // Turn 1: the connection advertises a tool that later disappears.
+      // Stale tools can only enter the `connector:<id>` bucket through the
+      // real registration path — `registry.register()` hardcodes
+      // `owner: 'non-mcp'` and is outside every replace set, so seeding the
+      // bucket directly is what actually exercises eviction.
+      const first = registerAppConnectionTools(registry, [
+        makeDescriptor({ name: 'google_old_tool' }),
+        makeDescriptor({ name: 'google_drive_list_files' }),
+      ]);
+      expect(first.added).toBe(2);
       expect(registry.has('google_old_tool')).toBe(true);
+      expect(registry.getOwner('google_old_tool')).toBe('connector:conn-1');
 
-      // Register new set without the stale tool
+      // Turn 2: the same connection re-advertises without the stale tool.
       const result = registerAppConnectionTools(registry, [
         makeDescriptor({ name: 'google_drive_list_files' }),
       ]);
 
+      // `added` counts only keys that were not already in the bucket, so the
+      // surviving tool is a *keep*, not a re-add: the bucket is replaced in
+      // place rather than wiped and rebuilt.
+      expect(result.added).toBe(0);
       expect(result.removed).toBe(1);
       expect(registry.has('google_old_tool')).toBe(false);
+      expect(registry.has('google_drive_list_files')).toBe(true);
+      // The kept tool is still wired to an executor, not just a name.
+      expect(registry.getExecutor('google_drive_list_files')).toBeDefined();
+    });
+
+    it('leaves a different connection\'s tools untouched', () => {
+      const registry = new ToolRegistry();
+      registerAppConnectionTools(registry, [
+        makeDescriptor({ name: 'slack_search_messages', connectionId: 'conn-2' }),
+      ]);
+
+      // conn-1's set must not evict conn-2's bucket.
+      const result = registerAppConnectionTools(registry, [
+        makeDescriptor({ name: 'google_drive_list_files', connectionId: 'conn-1' }),
+      ]);
+
+      expect(result.removed).toBe(0);
+      expect(registry.has('slack_search_messages')).toBe(true);
       expect(registry.has('google_drive_list_files')).toBe(true);
     });
   });

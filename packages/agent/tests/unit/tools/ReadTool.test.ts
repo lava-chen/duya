@@ -1,11 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   validateReadInput,
   ReadTool,
-  _resetSharedParser,
 } from '../../../src/tool/ReadTool/ReadTool.js';
 
 describe('ReadTool', () => {
@@ -167,10 +166,6 @@ describe('ReadTool', () => {
 });
 
 describe('ReadTool .ipynb dispatch', () => {
-  beforeEach(() => {
-    _resetSharedParser();
-  });
-
   it('routes .ipynb through the document parser (not text mode)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'read-ipynb-'));
     const path = join(dir, 'foo.ipynb');

@@ -33,6 +33,15 @@ vi.mock('../../../logging/logger', () => ({
   },
 }));
 
+// `AppConnectionService.remove` tears down any cached Remote MCP session
+// through the process-wide ConnectorService singleton, which builds a real
+// TokenVault and reaches for electron `app.getPath('userData')`. These tests
+// are about local-state removal, so the session teardown is stubbed out
+// rather than allowed to escape to a singleton the test never set up.
+vi.mock('../connector-service', () => ({
+  disconnectMcpSession: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { riskTierToBehavior, normalizeRiskTier, DEFAULT_MISSING_TIER } from '../../../../../../../packages/agent/src/permissions/policy.js';
 import { redactSecrets } from '../../../../renderer/lib/errors/extractErrorMessage.js';
 import { PolicyEngine, DEFAULT_POLICY } from '@duya/plugin-core/security/policy-engine';
@@ -75,6 +84,9 @@ function makeConnection(overrides?: Partial<AppConnection>): AppConnection {
     status: 'connected',
     expiresAt: Date.now() + 3600_000,
     lastError: null,
+    // Plan 580 D7: per-connection namespace slug. Carried through the DTO
+    // so the renderer can disambiguate a provider's several connections.
+    connectionSlug: 'alpha',
     createdAt: 1,
     updatedAt: 1,
     ...overrides,
@@ -171,6 +183,7 @@ describe('toStatusDTO whitelist', () => {
       status: 'connected',
       expiresAt: conn.expiresAt,
       lastError: null,
+      connectionSlug: 'alpha',
       createdAt: 1,
       updatedAt: 1,
     });
@@ -191,7 +204,7 @@ describe('toStatusDTO whitelist', () => {
     expect(keys).toEqual(
       [
         'id', 'provider', 'accountLabel', 'accountId', 'scopes',
-        'status', 'expiresAt', 'lastError', 'createdAt', 'updatedAt',
+        'status', 'expiresAt', 'lastError', 'connectionSlug', 'createdAt', 'updatedAt',
       ].sort(),
     );
   });

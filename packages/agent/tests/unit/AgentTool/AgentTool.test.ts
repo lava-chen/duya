@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
-  getSubagentToolDefinition,
+  subagentTool,
   getAgentDefinitions,
   formatAgentLineForPrompt,
   SUBAGENT_TOOL_NAME,
@@ -9,6 +9,14 @@ import {
 import { runAgentSync, type RunAgentParams } from '../../../src/tool/SubagentTool/runAgent.js';
 import type { ToolUseContext, Tool, Message } from '../../../src/types.js';
 import type { AgentDefinition } from '../../../src/tool/SubagentTool/loadAgentsDir.js';
+
+// 99556ea4 deleted the exported `getSubagentToolDefinition()` helper, which
+// was a one-line `return subagentTool.toTool()` and added nothing. The
+// definition it returned is still the contract this suite pins, so read it
+// off the registered singleton instead — that is the object the tool
+// registry actually advertises, which is a strictly tighter assertion than
+// the deleted wrapper was.
+const getSubagentToolDefinition = () => subagentTool.toTool();
 
 describe('AgentTool', () => {
   describe('getSubagentToolDefinition', () => {

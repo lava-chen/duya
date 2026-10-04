@@ -36,6 +36,16 @@ const state = vi.hoisted(() => ({
    * The captured code/state are written to `state.capturedCode`
    * and `state.capturedState` when waitForCode is called.
    */
+  /**
+   * Mirrors the real `oauth/loopback-server` error class. `flow.ts` decides
+   * whether a waitForCode failure becomes FlowError('redirect_failed') with
+   * an `instanceof LoopbackServerError` check, so the stub must reject with
+   * an instance of the class it exports. A plain Error with `name` set to
+   * 'LoopbackServerError' does not satisfy that check.
+   */
+  LoopbackServerError: class extends Error {
+    constructor(m: string) { super(m); this.name = 'LoopbackServerError'; }
+  },
   loopbackMode: 'resolve' as 'resolve' | 'reject',
   capturedCode: 'auth-code-xyz',
   waitForCodeCalls: 0,
@@ -77,41 +87,22 @@ vi.mock('../oauth/loopback-server', () => ({
     waitForCode: () => {
       state.waitForCodeCalls++;
       if (state.loopbackMode === 'reject') {
-        const err = new Error('loopback timed out');
-        err.name = 'LoopbackServerError';
-        return Promise.reject(err);
+        return Promise.reject(new state.LoopbackServerError('loopback timed out'));
       }
       return Promise.resolve({ code: state.capturedCode, state: 'stub-state' });
     },
     close: () => { /* noop */ },
   }),
-  LoopbackServerError: class extends Error {
-    constructor(m: string) { super(m); this.name = 'LoopbackServerError'; }
-  },
+  LoopbackServerError: state.LoopbackServerError,
 }));
 
-import Database from 'better-sqlite3';
 import type { Database as DatabaseType } from 'better-sqlite3';
 import { ConnectionStore } from '../connection-store';
 import { TokenVault } from '../token-vault';
+import { makeAppConnectionsDb } from './app-connections-db';
 
 function makeDb(): DatabaseType {
-  const db = new Database(':memory:') as unknown as DatabaseType;
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS app_connections (
-      id TEXT PRIMARY KEY,
-      provider TEXT NOT NULL,
-      account_label TEXT NOT NULL DEFAULT '',
-      account_id TEXT NOT NULL DEFAULT '',
-      scopes TEXT NOT NULL DEFAULT '[]',
-      status TEXT NOT NULL DEFAULT 'disconnected',
-      expires_at INTEGER,
-      last_error TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    )
-  `);
-  return db;
+  return makeAppConnectionsDb();
 }
 
 /** Fake fetch that responds to the token + userinfo endpoints. */
