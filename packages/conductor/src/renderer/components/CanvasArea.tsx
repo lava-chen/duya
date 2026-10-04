@@ -5,6 +5,7 @@ import type { CanvasElement, CanvasPosition } from "..//types/conductor";
 import { getAbsolutePosition, useConductorStore } from "..//stores/conductor-store";
 import { createNativeElement, executeAction, uploadAsset } from "..//ipc/conductor-ipc";
 import { shouldStartEditingOnCreate } from "./native/native-element-capabilities";
+import { ELBOW_CORNER_RADIUS, ELBOW_STUB_LENGTH } from "./native/ConnectorElement";
 import { FreeformLayer } from "./FreeformLayer";
 import { ConnectorOverlay } from "./ConnectorOverlay";
 import { NativeConnectorOverlay } from "./NativeConnectorOverlay";
@@ -1521,6 +1522,11 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       sourceResolved.direction,
       targetResolved.edgePoint,
       targetResolved.direction,
+      undefined,
+      // Must match the committed connector's stub length. Omitting this fell
+      // back to the domain default (32) while ConnectorElement used 40, so the
+      // draft visibly jumped on commit.
+      ELBOW_STUB_LENGTH,
     );
     const curve = connectorDraft.routingMode === "curve"
       ? computeClippedConnectorCurve(
@@ -1531,7 +1537,7 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
       : null;
     return {
       path: connectorDraft.routingMode === "elbow"
-        ? computeRoundedElbowPath(points)
+        ? computeRoundedElbowPath(points, ELBOW_CORNER_RADIUS)
         : curve?.path ?? "",
       sourceReference: sourceResolved.referencePoint,
     };

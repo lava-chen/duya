@@ -20,6 +20,7 @@ import type {
 import type { ToolRegistry } from './registry.js'
 import type { RenderedToolMessage } from './types.js'
 import { PermissionRequiredError } from './BaseTool.js'
+import { takePendingToolInput } from './AskUserQuestionTool/AskUserQuestionTool.js'
 import { getCachedAppConnectionDescriptors } from './AppConnectionTool/index.js'
 import { buildToolParamsDisplay } from './AppConnectionTool/approval-message.js'
 import { ToolRetryExecutor } from './retry/ToolRetryExecutor.js'
@@ -186,6 +187,27 @@ export interface CanUseToolDecision {
  * Callback type for checking if a tool can be used
  */
 export type CanUseToolFn = (toolName: string, toolInput?: Record<string, unknown>) => Promise<boolean | CanUseToolDecision>
+
+/**
+ * Outcome of the shared permission gate
+ * (`StreamingToolExecutor.checkToolPermission`).
+ *
+ * The gate deliberately does NOT push messages or finalise the tool: the
+ * caller owns that, so the retry path can consult the same gate and convert
+ * a refusal into a retry failure instead of emitting a second, conflicting
+ * tool_result for the same tool_use_id.
+ */
+export type ToolPermissionVerdict =
+  | { allowed: true }
+  | {
+      allowed: false
+      /** Verbatim text for the `<tool_use_error>` / `<tool_error>` message. */
+      errorMessage: string
+      /** `finalizeTool` errorReason — a non-empty value marks the tool failed. */
+      finalizeError?: string
+      /** `finalizeTool` errorDetail. */
+      finalizeDetail?: string
+    }
 
 /**
  * Executor configuration options
@@ -728,8 +750,8 @@ export class StreamingToolExecutor {
     this.discarded = true
     // Abort any in-flight tools via the shared child abort controller. This
     // cancels worker tools (bash) through the WorkerPool abort path and
-    // non-worker tools through the per-tool abortPromise created in
-    // executeTool.
+    // non-worker tools through the per-tool abort promise created by
+    // `raceToolExecution` for each attempt.
     this.siblingAbortController.abort('discard')
     // Mark every unfinished tool as cancelled so its tracked state settles
     // and no further work is scheduled for it.
@@ -1195,7 +1217,226 @@ export class StreamingToolExecutor {
   }
 
   /**
-   * Execute a single tool with full progress tracking
+   * The tool input a granted call should actually execute.
+   *
+   * Normally that is the model's original `tool.block.input`. But when the
+   * user EDITED the call on the approval card, `agent-process-entry` stored
+   * the approved replacement under the same permission id (= toolUseId) and
+   * the user's edit must be what runs — re-running the original meant the
+   * user approved input the tool never executed. One-shot, exactly like
+   * `takePendingAnswer`: the override applies to the retry that follows the
+   * grant and not to any later re-attempt.
+   */
+  private takeApprovedToolInput(tool: TrackedTool): Record<string, unknown> {
+    const approved = takePendingToolInput(tool.id)
+    if (!approved) {
+      return (tool.block.input ?? {}) as Record<string, unknown>
+    }
+    logger.info('Executing the tool input the user edited on the approval card', {
+      toolUseId: tool.id,
+      toolName: tool.block.name,
+      keys: Object.keys(approved),
+    }, 'Permissions')
+    return approved
+  }
+
+  /**
+   * The one permission gate for a tool invocation.
+   *
+   * Both the initial call and every retry attempt come through here, so a
+   * re-attempted tool is authorised exactly like the first one — previously
+   * the retry went straight to `toolRegistry.execute`, which meant a retried
+   * (or fallback-tool) call ran without `canUseTool` and without
+   * `checkPermissions`.
+   *
+   * Returns a verdict instead of pushing messages or finalising the tool so
+   * the caller stays in control of that; the retry path converts a refusal
+   * into a retry failure rather than emitting a second `tool_result` for the
+   * same `tool_use_id`.
+   */
+  private async checkToolPermission(
+    tool: TrackedTool,
+    toolName: string,
+    toolInput: Record<string, unknown>,
+    toolAbortController: AbortController,
+  ): Promise<ToolPermissionVerdict> {
+    const canUseResult = await this.canUseTool(toolName, toolInput)
+    const canUse = typeof canUseResult === 'boolean' ? canUseResult : canUseResult.allowed
+    const canUseBehavior = typeof canUseResult === 'boolean' ? undefined : canUseResult.behavior
+
+    if (!canUse) {
+      const denyReason =
+        typeof canUseResult !== 'boolean' && canUseResult?.message
+          ? canUseResult.message
+          : `Permission denied: tool ${toolName} cannot be used`
+      return {
+        allowed: false,
+        errorMessage: `<tool_use_error>${denyReason.replace(/[<\n]/g, ' ')}</tool_use_error>`,
+        finalizeDetail: 'Permission denied',
+      }
+    }
+
+    // An `allow` the user already granted for this exact tool_use_id (the
+    // first attempt, or the `PermissionRequiredError` phase-1 prompt) must
+    // not raise a second approval card when the tool is retried.
+    const approvedMap = this.toolUseContext.getAppState()?._approvedToolUses as
+      | Record<string, boolean>
+      | undefined
+    const alreadyApproved = approvedMap?.[tool.id] === true
+
+    // Check if tool requires user confirmation via checkPermissions
+    // Skip confirmation if canUseTool already granted permission (behavior === 'allow')
+    const resolvedKey = this.resolveToolKey(toolName)
+    const executor = this.toolRegistry.getExecutor(resolvedKey)
+    if (
+      executor &&
+      'checkPermissions' in executor &&
+      canUseBehavior !== 'allow' &&
+      !alreadyApproved
+    ) {
+      // Build proper ToolContext for permission check
+      const toolContext = {
+        toolUseId: tool.id,
+        workingDirectory: this.toolUseContext.options.workingDirectory ?? process.cwd(),
+        abortController: toolAbortController,
+        sessionId: this.toolUseContext.options.sessionId ?? 'default',
+        getAppState: this.toolUseContext.getAppState,
+      }
+      const permResult = (executor as { checkPermissions: (input: unknown, context: unknown) => { allowed: boolean; requiresUserConfirmation?: boolean; reason?: string; mode?: 'generic' | 'ask_user_question' | 'exit_plan_mode' } }).checkPermissions(toolInput, toolContext)
+      // Plan 583 / ISS-11: the `&& this.toolUseContext.requestPermission` that
+      // used to sit on the branch below made an unwired hook silently skip
+      // the prompt and run the tool. Resolve the no-user case explicitly
+      // instead, and refuse unless the session mode says nobody is asked.
+      if (permResult.requiresUserConfirmation && !this.toolUseContext.requestPermission) {
+        const mode = readPermissionMode(this.toolUseContext.getAppState())
+        const fallback = resolveAskWithoutUser(mode, toolName)
+        if (fallback.behavior === 'deny') {
+          return {
+            allowed: false,
+            errorMessage: `<tool_error>${fallback.message}</tool_error>`,
+            finalizeError: 'Approval required',
+          }
+        }
+        // Allowed by session mode: fall through to the normal execution path.
+      }
+      if (permResult.requiresUserConfirmation && this.toolUseContext.requestPermission) {
+        // Use the tool's stable `tool.id` (= toolUseId) as the permission
+        // request id so that any answers the user submits can be looked up
+        // by the tool's two-phase retry logic. The pre-check id MUST match
+        // the throw-path id for `storePendingAnswer` (keyed by id) to
+        // resolve the same entry the second-phase `execute()` reads from.
+        // Plan 450 Phase D: attach structured tool-params display for
+        // connector tools so the approval card can render a tidy
+        // label:value summary above the raw input JSON. Only emitted
+        // when the descriptor is known and the renderer would benefit
+        // (i.e. at least one scalar argument exists).
+        const connectorDescriptor = getCachedAppConnectionDescriptors().find((d) => d.name === toolName)
+        const metadata = connectorDescriptor
+          ? { toolParamsDisplay: buildToolParamsDisplay(toolInput, connectorDescriptor.inputSchema) }
+          : undefined
+        const permissionRequest = {
+          id: tool.id,
+          toolName,
+          toolInput,
+          mode: permResult.mode || 'generic',
+          expiresAt: Date.now() + 5 * 60 * 1000,
+          decisionReason: permResult.reason,
+          ...(metadata && metadata.toolParamsDisplay && metadata.toolParamsDisplay.length > 0 ? { metadata } : {}),
+        }
+
+        try {
+          const decision = await this.toolUseContext.requestPermission(permissionRequest)
+
+          if (decision === 'deny') {
+            return {
+              allowed: false,
+              errorMessage: `<tool_error>Permission denied by user</tool_error>`,
+              finalizeError: 'Permission denied',
+            }
+          }
+
+          // Permission granted - mark this tool use as approved in appState
+          // so that tools can skip their internal permission checks
+          if (decision === 'allow') {
+            this.toolUseContext.setAppState((prev) => ({
+              ...prev,
+              _approvedToolUses: {
+                ...((prev._approvedToolUses as Record<string, boolean> | undefined) ?? {}),
+                [tool.id]: true,
+              },
+            }))
+          }
+        } catch (permError) {
+          return {
+            allowed: false,
+            errorMessage: `<tool_error>Permission request failed: ${permError instanceof Error ? permError.message : 'Unknown error'}</tool_error>`,
+            finalizeError: 'Permission request failed',
+          }
+        }
+      }
+    }
+
+    return { allowed: true }
+  }
+
+  /**
+   * Race one tool attempt against the per-tool timeout and the per-tool
+   * abort signal, then always release the timer and the abort listener.
+   *
+   * Shared by the initial invocation and by every retry attempt, so a
+   * re-attempted tool cannot run unbounded — the old retry path called
+   * `toolRegistry.execute` directly and had no timeout race at all.
+   */
+  private async raceToolExecution<T>(
+    toolAbortController: AbortController,
+    operation: Promise<T>,
+  ): Promise<T> {
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        reject(new Error(`Tool execution timed out after ${this.config.maxExecutionTimeMs}ms`))
+      }, this.config.maxExecutionTimeMs)
+    })
+
+    // Reject when the per-tool abort controller fires. This lets user
+    // interrupts cancel non-worker tools (Read, Write, Edit, etc.) in
+    // addition to worker tools (bash) which are handled by WorkerPool.
+    let abortHandler: (() => void) | undefined
+    const abortPromise = new Promise<never>((_, reject) => {
+      abortHandler = () => {
+        const err = new Error('AbortError')
+        err.name = 'AbortError'
+        reject(err)
+      }
+      if (toolAbortController.signal.aborted) {
+        abortHandler()
+      } else {
+        toolAbortController.signal.addEventListener('abort', abortHandler, { once: true })
+      }
+    })
+
+    try {
+      return await Promise.race([operation, timeoutPromise, abortPromise])
+    } finally {
+      // Always release the per-tool timeout timer and abort listener once
+      // the race is over. Without this the timer keeps ticking after a
+      // normal completion (kept alive by the unresolved timeoutPromise)
+      // and the abort listener accumulates one entry per tool execution.
+      if (timeoutHandle) clearTimeout(timeoutHandle)
+      if (abortHandler) toolAbortController.signal.removeEventListener('abort', abortHandler)
+    }
+  }
+
+  /**
+   * Execute a single tool with full progress tracking.
+   *
+   * Owns the first attempt end to end: the `starting` / `validating_input` /
+   * `checking_permissions` stage transitions reported through
+   * `updateProgress`, the abort checks, and the final `tool_result` written by
+   * `finalizeTool`. It does not decide permission itself — it calls
+   * `checkToolPermission` first, and on refusal finalises the tool with that
+   * verdict. The retry path re-enters the same gate and the same
+   * `raceToolExecution` timeout budget rather than calling the registry bare.
    */
   private async executeTool(tool: TrackedTool): Promise<void> {
     // Starting phase
@@ -1225,115 +1466,23 @@ export class StreamingToolExecutor {
     tool.stage = 'validating_input'
     this.updateProgress(tool, { stage: 'validating_input', currentOperation: 'Validating input...', percentComplete: 5 })
 
-    // Check permissions
+    // Check permissions — the same gate the retry path re-enters, so a
+    // re-attempted tool call is authorised exactly like the first one.
     tool.stage = 'checking_permissions'
     this.updateProgress(tool, { stage: 'checking_permissions', currentOperation: 'Checking permissions...', percentComplete: 10 })
 
     try {
-      const canUseResult = await this.canUseTool(tool.block.name, tool.block.input as Record<string, unknown>)
-      const canUse = typeof canUseResult === 'boolean' ? canUseResult : canUseResult.allowed
-      const canUseBehavior = typeof canUseResult === 'boolean' ? undefined : canUseResult.behavior
+      const permission = await this.checkToolPermission(
+        tool,
+        tool.block.name,
+        (tool.block.input ?? {}) as Record<string, unknown>,
+        toolAbortController,
+      )
 
-      if (!canUse) {
-        const denyReason =
-          typeof canUseResult !== 'boolean' && canUseResult?.message
-            ? canUseResult.message
-            : `Permission denied: tool ${tool.block.name} cannot be used`;
-        messages.push(
-          createErrorMessage(
-            tool.id,
-            `<tool_use_error>${denyReason.replace(/[<\n]/g, ' ')}</tool_use_error>`,
-          ),
-        )
-        this.finalizeTool(tool, messages, undefined, 'Permission denied')
+      if (!permission.allowed) {
+        messages.push(createErrorMessage(tool.id, permission.errorMessage))
+        this.finalizeTool(tool, messages, permission.finalizeError, permission.finalizeDetail)
         return
-      }
-
-      // Check if tool requires user confirmation via checkPermissions
-      // Skip confirmation if canUseTool already granted permission (behavior === 'allow')
-      const resolvedKey = this.resolveToolKey(tool.block.name);
-      const executor = this.toolRegistry.getExecutor(resolvedKey);
-      if (executor && 'checkPermissions' in executor && canUseBehavior !== 'allow') {
-        // Build proper ToolContext for permission check
-        const toolContext = {
-          toolUseId: tool.id,
-          workingDirectory: this.toolUseContext.options.workingDirectory ?? process.cwd(),
-          abortController: toolAbortController,
-          sessionId: this.toolUseContext.options.sessionId ?? 'default',
-          getAppState: this.toolUseContext.getAppState,
-        };
-        const permResult = (executor as { checkPermissions: (input: unknown, context: unknown) => { allowed: boolean; requiresUserConfirmation?: boolean; reason?: string; mode?: 'generic' | 'ask_user_question' | 'exit_plan_mode' } }).checkPermissions(tool.block.input, toolContext);
-        // Plan 583 / ISS-11: the `&& this.toolUseContext.requestPermission` that
-        // used to sit on the branch below made an unwired hook silently skip
-        // the prompt and run the tool. Resolve the no-user case explicitly
-        // instead, and refuse unless the session mode says nobody is asked.
-        if (permResult.requiresUserConfirmation && !this.toolUseContext.requestPermission) {
-          const mode = readPermissionMode(this.toolUseContext.getAppState());
-          const fallback = resolveAskWithoutUser(mode, tool.block.name);
-          if (fallback.behavior === 'deny') {
-            messages.push(
-              createErrorMessage(tool.id, `<tool_error>${fallback.message}</tool_error>`)
-            );
-            this.finalizeTool(tool, messages, 'Approval required');
-            return;
-          }
-          // Allowed by session mode: fall through to the normal execution path.
-        }
-        if (permResult.requiresUserConfirmation && this.toolUseContext.requestPermission) {
-          // Use the tool's stable `tool.id` (= toolUseId) as the permission
-          // request id so that any answers the user submits can be looked up
-          // by the tool's two-phase retry logic. The pre-check id MUST match
-          // the throw-path id for `storePendingAnswer` (keyed by id) to
-          // resolve the same entry the second-phase `execute()` reads from.
-          // Plan 450 Phase D: attach structured tool-params display for
-          // connector tools so the approval card can render a tidy
-          // label:value summary above the raw input JSON. Only emitted
-          // when the descriptor is known and the renderer would benefit
-          // (i.e. at least one scalar argument exists).
-          const connectorDescriptor = getCachedAppConnectionDescriptors().find((d) => d.name === tool.block.name);
-          const metadata = connectorDescriptor && tool.block.input
-            ? { toolParamsDisplay: buildToolParamsDisplay(tool.block.input as Record<string, unknown>, connectorDescriptor.inputSchema) }
-            : undefined;
-          const permissionRequest = {
-            id: tool.id,
-            toolName: tool.block.name,
-            toolInput: tool.block.input as Record<string, unknown>,
-            mode: permResult.mode || 'generic',
-            expiresAt: Date.now() + 5 * 60 * 1000,
-            decisionReason: permResult.reason,
-            ...(metadata && metadata.toolParamsDisplay && metadata.toolParamsDisplay.length > 0 ? { metadata } : {}),
-          };
-
-          try {
-            const decision = await this.toolUseContext.requestPermission(permissionRequest);
-
-            if (decision === 'deny') {
-              messages.push(
-                createErrorMessage(tool.id, `<tool_error>Permission denied by user</tool_error>`)
-              );
-              this.finalizeTool(tool, messages, 'Permission denied');
-              return;
-            }
-
-            // Permission granted - mark this tool use as approved in appState
-            // so that tools can skip their internal permission checks
-            if (decision === 'allow') {
-              this.toolUseContext.setAppState((prev) => ({
-                ...prev,
-                _approvedToolUses: {
-                  ...(prev._approvedToolUses as Record<string, boolean> || {}),
-                  [tool.id]: true,
-                },
-              }));
-            }
-          } catch (permError) {
-            messages.push(
-              createErrorMessage(tool.id, `<tool_error>Permission request failed: ${permError instanceof Error ? permError.message : 'Unknown error'}</tool_error>`)
-            );
-            this.finalizeTool(tool, messages, 'Permission request failed');
-            return;
-          }
-        }
       }
 
       // Start actual execution
@@ -1354,31 +1503,6 @@ export class StreamingToolExecutor {
         percentComplete: 20,
       })
 
-      // Set up timeout
-      let timeoutHandle: ReturnType<typeof setTimeout> | undefined
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(() => {
-          reject(new Error(`Tool execution timed out after ${this.config.maxExecutionTimeMs}ms`))
-        }, this.config.maxExecutionTimeMs)
-      })
-
-      // Set up abort promise - reject when the per-tool abort controller fires.
-      // This lets user interrupts cancel non-worker tools (Read, Write, Edit, etc.)
-      // in addition to worker tools (bash) which are handled by WorkerPool.
-      let abortHandler: (() => void) | undefined
-      const abortPromise = new Promise<never>((_, reject) => {
-        abortHandler = () => {
-          const err = new Error('AbortError')
-          err.name = 'AbortError'
-          reject(err)
-        }
-        if (toolAbortController.signal.aborted) {
-          abortHandler()
-        } else {
-          toolAbortController.signal.addEventListener('abort', abortHandler, { once: true })
-        }
-      })
-
       const executionContext: ToolUseContext = {
         ...this.toolUseContext,
         toolUseId: tool.id,
@@ -1393,8 +1517,12 @@ export class StreamingToolExecutor {
         abortController: toolAbortController,
       }
 
-      // For SubagentTool, create a context with progress callback to stream sub-agent events
-      const toolInput = (tool.block.input ?? {}) as Record<string, unknown>
+      // For SubagentTool, create a context with progress callback to stream sub-agent events.
+      // Resolved through `takeApprovedToolInput` so this is the input that
+      // will actually execute below (the user's edit, when they made one) —
+      // the permission check above deliberately ran on the ORIGINAL input,
+      // because that is the call the user was shown and approved.
+      const toolInput = this.takeApprovedToolInput(tool)
       const isSubagentTool = isSubagentToolCall(tool.block.name, toolInput)
       const toolContext: ToolUseContext = isSubagentTool
         ? {
@@ -1421,19 +1549,20 @@ export class StreamingToolExecutor {
         }, 'SubAgent')
       }
 
-      // Execute with timeout AND abort support
+      // Execute with timeout AND abort support. Every attempt — including a
+      // retry — goes through `raceToolExecution`, so each one gets a fresh
+      // `maxExecutionTimeMs` budget and the same per-tool abort wiring.
       let result: ToolResult | null
       try {
-        result = await Promise.race([
+        result = await this.raceToolExecution(
+          toolAbortController,
           this.toolRegistry.execute(
             this.resolveToolKey(tool.block.name),
-            tool.block.input as Record<string, unknown>,
+            toolInput,
             this.toolUseContext.options.workingDirectory,
             toolContext
           ),
-          timeoutPromise,
-          abortPromise,
-        ])
+        )
       } catch (err) {
         // New typed-error path: tool threw PermissionRequiredError instead of
         // returning a string sentinel.
@@ -1449,7 +1578,7 @@ export class StreamingToolExecutor {
           if (approvedMap && approvedMap[tool.id]) {
             const retryResult = await this.toolRegistry.execute(
               this.resolveToolKey(tool.block.name),
-              tool.block.input as Record<string, unknown>,
+              toolInput,
               this.toolUseContext.options.workingDirectory,
               executionContext
             );
@@ -1483,13 +1612,6 @@ export class StreamingToolExecutor {
         // to the outer catch at line ~1429 which handles AbortError and
         // retry-with-fallback for everything else.
         throw err
-      } finally {
-        // Always release the per-tool timeout timer and abort listener once
-        // the race is over. Without this the timer keeps ticking after a
-        // normal completion (kept alive by the unresolved timeoutPromise)
-        // and the abort listener accumulates one entry per tool execution.
-        if (timeoutHandle) clearTimeout(timeoutHandle)
-        if (abortHandler) toolAbortController.signal.removeEventListener('abort', abortHandler)
       }
 
       // Process results
@@ -1676,12 +1798,35 @@ export class StreamingToolExecutor {
           },
           this.retryStrategies,
           async (toolName, toolInput) => {
+            // A retry is a real invocation, not a bare registry call: it must
+            // clear the same permission gate and get the same per-attempt
+            // timeout budget as the first attempt. Without this, a retried
+            // (or fallback-tool) call ran completely unguarded — the gate at
+            // `checkToolPermission` and the `maxExecutionTimeMs` race only
+            // ever applied to the first try.
+            const permission = await this.checkToolPermission(
+              tool,
+              toolName,
+              toolInput,
+              toolAbortController,
+            )
+            if (!permission.allowed) {
+              return { error: permission.errorMessage }
+            }
+
             try {
-              const execResult = await this.toolRegistry.execute(
-                this.resolveToolKey(toolName),
-                toolInput,
-                this.toolUseContext.options.workingDirectory,
-                this.toolUseContext
+              const execResult = await this.raceToolExecution(
+                toolAbortController,
+                this.toolRegistry.execute(
+                  this.resolveToolKey(toolName),
+                  toolInput,
+                  this.toolUseContext.options.workingDirectory,
+                  {
+                    ...this.toolUseContext,
+                    toolUseId: tool.id,
+                    abortController: toolAbortController,
+                  }
+                ),
               )
               // Handle null case (tool not found)
               if (execResult === null) {
@@ -1689,7 +1834,7 @@ export class StreamingToolExecutor {
               }
               // Convert ToolResult error format to what ToolRetryExecutor expects
               // error?: boolean 鈫?error?: string
-              const errorStr = execResult.error ? String(execResult.result) : undefined
+              const errorStr = execResult.error === true ? String(execResult.result) : undefined
               return { result: execResult.result ?? undefined, error: errorStr }
             } catch (e) {
               return { error: e instanceof Error ? e.message : String(e) }
@@ -1823,9 +1968,12 @@ export class StreamingToolExecutor {
       // Retry with `this.toolUseContext` (NOT `toolContext`) so the tool sees
       // the same `toolUseId` as Phase 1 - this is what makes two-phase tools
       // like AskUserQuestionTool work (Phase 2 looks up `pendingAnswers` by id).
+      // The input is the one the user approved — their edit when they made
+      // one, otherwise the original `tool.block.input`.
+      const approvedInput = this.takeApprovedToolInput(tool);
       const retryResult = await this.toolRegistry.execute(
         this.resolveToolKey(tool.block.name),
-        tool.block.input as Record<string, unknown>,
+        approvedInput,
         this.toolUseContext.options.workingDirectory,
         {
           ...this.toolUseContext,

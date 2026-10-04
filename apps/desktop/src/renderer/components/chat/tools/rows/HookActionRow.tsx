@@ -18,6 +18,7 @@ import React, { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { WebhookIcon } from '@/components/icons';
 import { ActionRowChrome, StatusDot } from '../chrome/ActionRowChrome';
+import { formatDuration } from '../hooks/useTopLevelChrome';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
 import type { HookAction } from '@/types/hooks';
@@ -25,12 +26,6 @@ import type { ToolStatus } from '../types';
 
 interface HookActionRowProps {
   hook: HookAction;
-}
-
-/** Format ms \u2192 "1.2s" / "45ms" so the right slot stays compact. */
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 /**

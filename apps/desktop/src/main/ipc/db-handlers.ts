@@ -11,6 +11,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { randomUUID } from 'crypto';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
+import { dispatchDbAction } from '../agents/db-bridge';
 import { getAutomationScheduler } from '../automation/Scheduler';
 import type { CreateAutomationCronInput, UpdateAutomationCronInput } from '../automation/types';
 import { getLogger, LogComponent } from '../logging/logger';
@@ -23,6 +24,7 @@ import {
   resolveUnarchivedPath,
 } from '../db/core/archive-paths';
 import { recoverOriginalRel } from '../db/core/legacy-archive-migration';
+import { SESSION_LIST_UNLIMITED } from '../db/core/session-store';
 import { getChannelManager } from '../messaging/port-manager';
 import { invertPatch } from '../db/core/conductors/invert-patch';
 import { createConductorUndoRedoHandlers } from './conductor-handlers/conductor-undo-redo-handlers';
@@ -643,11 +645,18 @@ export function registerDbHandlers(): void {
     return coreSessionToIpcRow(session);
   });
 
-  ipcMain.handle('db:session:get', (_event, sessionId: string) => {
-    const { sessions } = getCoreStores();
-    const session = sessions.get(sessionId);
-    return session ? coreSessionToIpcRow(session) : undefined;
-  });
+  // NOT forwarded: `db:session:create` and `db:session:update` carry renderer
+  // behaviour the bridge does not have, and adopting the bridge's body would
+  // change what the renderer does. The bridge's `session:create` resolves the
+  // model from the provider config, which the renderer path does not; and the
+  // two disagree on the extension-bound key set — this side writes
+  // `plan_mode_enabled` / `goal_mode_enabled` through `setExtension` and the
+  // bridge's list omits both while adding `context_summary_updated_at`. The
+  // renderer additionally records the parent→child spawn edge on create. Those
+  // are separate contracts until someone unifies them deliberately.
+
+  ipcMain.handle('db:session:get', (_event, sessionId: string) =>
+    dispatchDbAction('session:get', { id: sessionId }));
 
   ipcMain.handle('db:session:update', (_event, sessionId: string, data: Record<string, unknown>) => {
     const { sessions } = getCoreStores();
@@ -666,32 +675,16 @@ export function registerDbHandlers(): void {
 
   // Decision 5: session:delete is now soft delete (status='deleted'), no cascade.
   // Old behavior was hard DELETE with cascade to messages/tasks/etc.
-  ipcMain.handle('db:session:delete', (_event, sessionId: string) => {
-    const { sessions } = getCoreStores();
-    const existing = sessions.get(sessionId);
-    if (!existing) return false;
-    sessions.update(sessionId, { status: 'deleted' });
-    return true;
-  });
+  ipcMain.handle('db:session:delete', (_event, sessionId: string) =>
+    dispatchDbAction('session:delete', { id: sessionId }));
 
-  ipcMain.handle('db:session:list', () => {
-    const { sessions } = getCoreStores();
-    // Cron sessions are fully ordinary (mode='chat'); no exclusion here.
-    const list = sessions.list({});
-    return list.map(coreSessionToIpcRow);
-  });
+  ipcMain.handle('db:session:list', () => dispatchDbAction('session:list', {}));
 
-  ipcMain.handle('db:session:listByWorkingDirectory', (_event, workingDirectory: string) => {
-    const { sessions } = getCoreStores();
-    const list = sessions.list({ workingDirectory: workingDirectory || '' });
-    return list.map(coreSessionToIpcRow);
-  });
+  ipcMain.handle('db:session:listByWorkingDirectory', (_event, workingDirectory: string) =>
+    dispatchDbAction('session:listByWorkingDirectory', { workingDirectory }));
 
-  ipcMain.handle('db:session:listByParentId', (_event, parentId: string) => {
-    const { sessions } = getCoreStores();
-    const list = sessions.list({ parentSessionId: parentId });
-    return list.map(coreSessionToIpcRow);
-  });
+  ipcMain.handle('db:session:listByParentId', (_event, parentId: string) =>
+    dispatchDbAction('session:listByParentId', { parentId }));
 
   // ─── Plan 506: rollout portability + session fork + session archive ───
 
@@ -1084,17 +1077,7 @@ export function registerDbHandlers(): void {
     duration_ms?: number;
     sub_agent_id?: string;
     attachments?: unknown[];
-  }) => {
-    const { messageLog } = getCoreStores();
-    // Decision 5: INSERT OR IGNORE semantics via appendBatch — same-id re-send
-    // is a no-op instead of overwriting (append-only discipline).
-    const event = ipcMessageToNewEvent(data.session_id, data);
-    messageLog.appendBatch([event]);
-    // Read back through the adapter to return the canonical row shape.
-    const events = messageLog.listBySession(data.session_id);
-    const stored = events.find((e) => e.id === data.id);
-    return stored ? storedEventToIpcMessage(stored) : null;
-  });
+  }) => dispatchDbAction('message:add', data));
 
   // Plan 548: `includeSuperseded` (default `true`) plumbs the chat-UI history
   // view down to `MessageLog.listBySession`. When `true`, the projection
@@ -1131,21 +1114,21 @@ export function registerDbHandlers(): void {
     return storedEventsToIpcMessages(events);
   });
 
-  ipcMain.handle('db:message:getCount', (_event, sessionId: string) => {
-    const { messageLog } = getCoreStores();
-    return messageLog.getCount(sessionId);
-  });
+  ipcMain.handle('db:message:getCount', (_event, sessionId: string) =>
+    dispatchDbAction('message:getCount', { sessionId }));
 
-  ipcMain.handle('db:message:deleteBySession', (_event, sessionId: string) => {
-    const { messageLog } = getCoreStores();
-    const before = messageLog.getCount(sessionId);
-    messageLog.deleteBySession(sessionId);
-    return before;
-  });
+  ipcMain.handle('db:message:deleteBySession', (_event, sessionId: string) =>
+    dispatchDbAction('message:deleteBySession', { sessionId }));
 
   // Decision 3: message:replace maps to MessageLog.appendBatch (INSERT OR IGNORE
   // idempotency). Generation optimistic lock is deprecated (append-only store).
   // If the session does not exist, auto-create it (matches old behavior).
+  // NOT forwarded: the bridge's `message:replace` is a different contract. It
+  // takes no generation argument, wraps the write in a try/catch, and answers
+  // `{ success, newGeneration, messageCount }` or `{ success: false, reason }`,
+  // whereas this channel auto-creates a missing session, accepts the
+  // (now-deprecated) `generation` lock argument, and answers the canonical
+  // message rows. Same capability name, different observable contract.
   ipcMain.handle('db:message:replace', (_event, sessionId: string, messages: unknown[], _generation: number) => {
     const { sessions, messageLog } = getCoreStores();
 
@@ -1270,7 +1253,8 @@ export function registerDbHandlers(): void {
     const { sessions: sessionStore, messageLog } = getCoreStores();
     const capabilityDao = new CapabilityDao(getDb());
 
-    const listed = sessionStore.list({});
+    // Usage totals must cover every session, not the sidebar's first page.
+    const listed = sessionStore.list({ limit: SESSION_LIST_UNLIMITED });
     const inputs: SessionFactsInput[] = listed.map((session) => {
       // 'none' = no rollout path; 'missing' = stat failed (listBySession's
       // self-heal still gets a chance to rescan on the read path below).
@@ -1332,26 +1316,48 @@ export function registerDbHandlers(): void {
 
   // ==================== Lock Handlers (core store thin forward) ====================
   // Plan 328 Phase 2: all lock IPC handlers forward to LockStore.
+  //
+  // FORWARDING CONVENTION (the rest of this file follows it too)
+  //
+  // An action the Agent process can also reach used to have TWO independent
+  // bodies: one here and one in the `dispatchDbAction` switch in
+  // `agents/db-bridge.ts`. They had already drifted — `goal:create` created
+  // unconditionally here and was get-then-create in the bridge, which is how a
+  // duplicate create reached a UNIQUE constraint and spammed worker errors.
+  // Two bodies for one capability means the NEXT field that differs diverges
+  // the same way, so there is now one body.
+  //
+  // These channels keep their own `ipcMain.handle` signature and argument
+  // shape (the renderer speaks positional arguments) and translate them into
+  // the action-name + payload-object form the bridge speaks. Only the
+  // translation is this entry point's job; the behaviour is the bridge's.
+  //
+  // The bridge's body is the canonical one because it is the one both callers
+  // must agree on, and because it carries the fixes (idempotence guards, the
+  // `session_id`/`sessionId` tolerance) whose absence caused the P0. Where a
+  // bridge body would CHANGE what the renderer observes, the renderer keeps
+  // its own body and is annotated — see `db:lock:release` below.
 
-  ipcMain.handle('db:lock:acquire', (_event, sessionId: string, lockId: string, owner: string, ttlSec = 300) => {
-    const { locks } = getCoreStores();
-    return locks.acquire(sessionId, lockId, owner, ttlSec);
-  });
+  ipcMain.handle('db:lock:acquire', (_event, sessionId: string, lockId: string, owner: string, ttlSec = 300) =>
+    dispatchDbAction('lock:acquire', { sessionId, lockId, owner, ttlSec }));
 
-  ipcMain.handle('db:lock:renew', (_event, sessionId: string, lockId: string, ttlSec = 300) => {
-    const { locks } = getCoreStores();
-    return locks.renew(sessionId, lockId, ttlSec);
-  });
+  ipcMain.handle('db:lock:renew', (_event, sessionId: string, lockId: string, ttlSec = 300) =>
+    dispatchDbAction('lock:renew', { sessionId, lockId, ttlSec }));
 
+  // NOT forwarded: the bridge's `lock:release` also calls `notifySessionIdle`,
+  // which re-kicks the wake dispatcher so parked background wakes drain. That
+  // is correct for an Agent-issued release but is a new side effect on the
+  // renderer path, and the renderer releases a lock at points where no wake
+  // queue is involved. Forwarding it would change observable behaviour, so the
+  // duplicated three-line body stays until the two release paths are unified
+  // on purpose.
   ipcMain.handle('db:lock:release', (_event, sessionId: string, lockId: string) => {
     const { locks } = getCoreStores();
     return locks.release(sessionId, lockId);
   });
 
-  ipcMain.handle('db:lock:isLocked', (_event, sessionId: string) => {
-    const { locks } = getCoreStores();
-    return locks.isLocked(sessionId);
-  });
+  ipcMain.handle('db:lock:isLocked', (_event, sessionId: string) =>
+    dispatchDbAction('lock:isLocked', { sessionId }));
 
   // ==================== Goal Handlers (core store thin forward) ====================
   // Plan 331 Phase 2: session_goals table — per-session goal + token budget
@@ -1359,54 +1365,33 @@ export function registerDbHandlers(): void {
   // turn and to transition the goal status. On session resume the persisted
   // counters are read back into the in-memory TokenBudgetManager.
 
-  ipcMain.handle('db:goal:get', (_event, payload: { sessionId: string }) => {
-    const { goals } = getCoreStores();
-    const goal = goals.get(payload.sessionId);
-    return goal ? coreGoalToIpcRow(goal) : undefined;
-  });
+  ipcMain.handle('db:goal:get', (_event, payload: { sessionId: string }) =>
+    dispatchDbAction('goal:get', payload));
 
+  // The bridge owns the get-then-create guard on this one. A second create for
+  // the same session hits `UNIQUE(session_id)`, so an unconditional insert
+  // turned a harmless retry into a constraint error. Forwarding makes the
+  // renderer path idempotent too, which is what the Agent path already was.
   ipcMain.handle('db:goal:create', (_event, data: {
     id: string;
     session_id: string;
     goal_text?: string | null;
     token_budget?: number | null;
-  }) => {
-    const { goals } = getCoreStores();
-    const goal = goals.create({
-      id: data.id,
-      sessionId: data.session_id,
-      goalText: data.goal_text ?? null,
-      tokenBudget: data.token_budget ?? null,
-    });
-    return coreGoalToIpcRow(goal);
-  });
+  }) => dispatchDbAction('goal:create', data));
 
   ipcMain.handle('db:goal:updateBudget', (_event, payload: {
     sessionId: string;
     tokensUsedDelta?: number;
     timeUsedDelta?: number;
-  }) => {
-    const { goals } = getCoreStores();
-    const goal = goals.updateBudget(payload.sessionId, {
-      tokensUsedDelta: payload.tokensUsedDelta,
-      timeUsedDelta: payload.timeUsedDelta,
-    });
-    return goal ? coreGoalToIpcRow(goal) : undefined;
-  });
+  }) => dispatchDbAction('goal:updateBudget', payload));
 
   ipcMain.handle('db:goal:setStatus', (_event, payload: {
     sessionId: string;
     status: 'active' | 'paused' | 'usage_limited' | 'complete';
-  }) => {
-    const { goals } = getCoreStores();
-    const goal = goals.setStatus(payload.sessionId, payload.status);
-    return goal ? coreGoalToIpcRow(goal) : undefined;
-  });
+  }) => dispatchDbAction('goal:setStatus', payload));
 
-  ipcMain.handle('db:goal:listByStatus', (_event, status: 'active' | 'paused' | 'usage_limited' | 'complete') => {
-    const { goals } = getCoreStores();
-    return goals.listByStatus(status).map(coreGoalToIpcRow);
-  });
+  ipcMain.handle('db:goal:listByStatus', (_event, status: 'active' | 'paused' | 'usage_limited' | 'complete') =>
+    dispatchDbAction('goal:listByStatus', { status }));
 
   // ==================== Task Handlers (core store thin forward) ====================
   // Plan 328 Phase 2: all task IPC handlers forward to TaskStore via
@@ -1420,62 +1405,38 @@ export function registerDbHandlers(): void {
     status?: string;
     active_form?: string;
     owner?: string;
-  }) => {
-    const { tasks } = getCoreStores();
-    const task = tasks.create(ipcTaskToCoreCreate(data));
-    return coreTaskToIpcRow(task);
-  });
+  }) => dispatchDbAction('task:create', data));
 
-  ipcMain.handle('db:task:get', (_event, id: string) => {
-    const { tasks } = getCoreStores();
-    const task = tasks.get(id);
-    return task ? coreTaskToIpcRow(task) : undefined;
-  });
+  ipcMain.handle('db:task:get', (_event, id: string) => dispatchDbAction('task:get', { id }));
 
-  ipcMain.handle('db:task:getBySession', (_event, sessionId: string) => {
-    const { tasks } = getCoreStores();
-    return tasks.getBySession(sessionId).map(coreTaskToIpcRow);
-  });
+  ipcMain.handle('db:task:getBySession', (_event, sessionId: string) =>
+    dispatchDbAction('task:getBySession', { sessionId }));
 
-  ipcMain.handle('db:task:update', (_event, id: string, data: Record<string, unknown>) => {
-    const { tasks } = getCoreStores();
-    const task = tasks.update(id, ipcTaskToUpdate(data));
-    return task ? coreTaskToIpcRow(task) : undefined;
-  });
+  // `ipcTaskToUpdate` is key-allowlisted, so folding the positional `id` into
+  // the payload cannot smuggle an `id` field into the update patch.
+  ipcMain.handle('db:task:update', (_event, id: string, data: Record<string, unknown>) =>
+    dispatchDbAction('task:update', { id, ...data }));
 
-  ipcMain.handle('db:task:delete', (_event, id: string) => {
-    const { tasks } = getCoreStores();
-    return tasks.delete(id);
-  });
+  ipcMain.handle('db:task:delete', (_event, id: string) => dispatchDbAction('task:delete', { id }));
 
+  // Deliberately discards the bridge's `{ success: true }`: this channel has
+  // always answered `undefined` and its preload wrapper does not read the
+  // result. Returning the shared value would be a gratuitous contract change.
   ipcMain.handle('db:task:deleteBySession', (_event, sessionId: string) => {
-    const { tasks } = getCoreStores();
-    tasks.deleteBySession(sessionId);
+    void dispatchDbAction('task:deleteBySession', { sessionId });
   });
 
-  ipcMain.handle('db:task:claim', (_event, id: string, owner: string) => {
-    const { tasks } = getCoreStores();
-    const result = tasks.claim(id, owner);
-    if (result.success && result.task) {
-      return { success: true, task: coreTaskToIpcRow(result.task) };
-    }
-    return result;
-  });
+  ipcMain.handle('db:task:claim', (_event, id: string, owner: string) =>
+    dispatchDbAction('task:claim', { id, owner }));
 
-  ipcMain.handle('db:task:block', (_event, fromId: string, toId: string) => {
-    const { tasks } = getCoreStores();
-    return tasks.block(fromId, toId);
-  });
+  ipcMain.handle('db:task:block', (_event, fromId: string, toId: string) =>
+    dispatchDbAction('task:block', { fromId, toId }));
 
-  ipcMain.handle('db:task:unassignTeammate', (_event, sessionId: string, owner: string) => {
-    const { tasks } = getCoreStores();
-    return tasks.unassignTeammate(sessionId, owner);
-  });
+  ipcMain.handle('db:task:unassignTeammate', (_event, sessionId: string, owner: string) =>
+    dispatchDbAction('task:unassignTeammate', { sessionId, owner }));
 
-  ipcMain.handle('db:task:getByOwner', (_event, sessionId: string, owner: string) => {
-    const { tasks } = getCoreStores();
-    return tasks.getByOwner(sessionId, owner).map(coreTaskToIpcRow);
-  });
+  ipcMain.handle('db:task:getByOwner', (_event, sessionId: string, owner: string) =>
+    dispatchDbAction('task:getByOwner', { sessionId, owner }));
 
   // ==================== Automation Handlers ====================
 
@@ -1614,6 +1575,20 @@ export function registerDbHandlers(): void {
   });
 
   // ==================== Settings Handlers ====================
+  //
+  // NOT forwarded to the bridge, and not a duplication. These handlers are not
+  // a second copy of the SQLite read/write the bridge does: they are a
+  // SUPERSET with a different owner. Channel/gateway config was moved to
+  // ConfigStore (plan 335), so each of these first routes gateway keys to
+  // `isGatewayConfigKey` / `readGatewaySettingFromStore` /
+  // `applyGatewaySettingToStore` and only falls through to SQLite for
+  // everything else, and then does renderer-only work the bridge has no notion
+  // of: `getAll` overlays `readAllGatewaySettings`, `set`/`setJson` emit
+  // `gateway:config-changed`, push `browserMaxTabs` to the browser daemon,
+  // and `notifyMcpConfigChanged()` on `mcpServers`. `getJson` also disagrees on
+  // malformed JSON — it returns the raw string here and the caller's default in
+  // the bridge. Forwarding any of them would drop that routing or change a
+  // return value, so the SQL tail is deliberately left in place.
 
   ipcMain.handle('db:setting:get', (_event, key: string) => {
     if (isGatewayConfigKey(key)) {
@@ -1726,30 +1701,24 @@ export function registerDbHandlers(): void {
     sessionId?: string;
     toolName: string;
     toolInput?: Record<string, unknown>;
-  }) => {
-    const { permissions } = getCoreStores();
-    const perm = permissions.create(ipcPermissionToCoreCreate(data));
-    return corePermissionToIpcRow(perm);
-  });
+  }) => dispatchDbAction('permission:create', data));
 
-  ipcMain.handle('db:permission:get', (_event, id: string) => {
-    const { permissions } = getCoreStores();
-    const perm = permissions.get(id);
-    return perm ? corePermissionToIpcRow(perm) : undefined;
-  });
+  ipcMain.handle('db:permission:get', (_event, id: string) =>
+    dispatchDbAction('permission:get', { id }));
 
-  ipcMain.handle('db:permission:resolve', (_event, id: string, status: string, extra?: {
+  ipcMain.handle('db:permission:resolve', async (_event, id: string, status: string, extra?: {
     message?: string;
     updatedPermissions?: unknown[];
     updatedInput?: Record<string, unknown>;
     sessionId?: string;
   }) => {
-    const { permissions } = getCoreStores();
-    permissions.resolve(id, {
-      status: status as 'pending' | 'allow' | 'deny' | 'timeout' | 'aborted',
-      decision: status,
-      ...ipcPermissionToResolve(extra),
-    });
+    // The ledger write and the read-back belong to the bridge, so the Agent
+    // path and this one cannot disagree about what a resolution wrote. The two
+    // things below — forwarding to the running worker process, and syncing the
+    // durable approval card — are this entry point's own job and stay here.
+    const resolved = (await dispatchDbAction('permission:resolve', { id, status, extra })) as
+      | ReturnType<typeof corePermissionToIpcRow>
+      | undefined;
 
     // Forward permission resolution to agent process so it can continue tool execution
     const agentPool = getAgentProcessPool();
@@ -1769,7 +1738,6 @@ export function registerDbHandlers(): void {
       dbLogger.warn('Agent process not available for permission:resolve forwarding', { sessionId, isRunning: sessionId ? agentPool.isRunning(sessionId) : false }, LogComponent.DB);
     }
 
-    const resolved = permissions.get(id);
     // Plan 498: keep any durable approval card in sync with the interactive
     // fast path — the worker executes right away via its in-memory promise,
     // so the card must transition and its one-shot ledger entry must burn.
@@ -1795,7 +1763,7 @@ export function registerDbHandlers(): void {
         status as ToolApprovalDecisionInput,
       );
     }
-    return resolved ? corePermissionToIpcRow(resolved) : undefined;
+    return resolved;
   });
 
   // ==================== Tool approval cards (plan 498) ====================
@@ -1812,6 +1780,13 @@ export function registerDbHandlers(): void {
     return getToolApproval(db, id);
   });
 
+  // NOT forwarded: same action name, two unrelated contracts. This one
+  // validates the decision, resolves the durable card, enqueues a wake
+  // continuation and broadcasts, and reports failure as `{ ok, reason }`. The
+  // bridge's `toolApproval:resolve` requires a `sessionId`, checks a one-shot
+  // ledger, accepts an `updatedInput` to persist, and reports failure as
+  // `{ ok, error }` — a different key, so a shared body would break whichever
+  // consumer reads it.
   ipcMain.handle('db:toolApproval:resolve', (_event, id: string, decision: string) => {
     const db = getDatabase();
     if (!db) return { ok: false, reason: 'db_unavailable' };
@@ -1853,43 +1828,11 @@ export function registerDbHandlers(): void {
   // titles beats unicode61 FTS (326 decision 3); messages_fts/sessions_fts
   // virtual tables are no longer referenced.
 
-  ipcMain.handle('db:search:sessions', (_event, query: string, limit = 10) => {
-    const { sessions, messageLog } = getCoreStores();
-    // 1. Metadata matches (title / project_name / agent_name) — snippet empty.
-    const metaHits = sessions.search(query, limit);
-    const seenIds = new Set(metaHits.map((s) => s.id));
-    const rows: Record<string, unknown>[] = metaHits.map((s) => ({
-      ...coreSessionToIpcRow(s),
-      snippet: '',
-    }));
-
-    // 2. Content matches (rollout scan) — fill in snippet for sessions not
-    //    already in the metadata set, up to `limit` total.
-    if (rows.length < limit) {
-      const remaining = limit - rows.length;
-      const contentHits = messageLog.searchText(query, { limit: remaining + 5 });
-      for (const hit of contentHits) {
-        if (rows.length >= limit) break;
-        if (seenIds.has(hit.sessionId)) {
-          // Attach snippet to existing metadata hit if not already set.
-          const row = rows.find((r) => r.id === hit.sessionId);
-          if (row && !row.snippet) row.snippet = hit.snippet;
-          continue;
-        }
-        const session = sessions.get(hit.sessionId);
-        if (!session || session.status === 'deleted') continue;
-        seenIds.add(hit.sessionId);
-        rows.push({
-          ...coreSessionToIpcRow(session),
-          snippet: hit.snippet,
-        });
-      }
-    }
-
-    // Sort by updated_at DESC (matches old ORDER BY).
-    rows.sort((a, b) => ((b.updated_at as number) ?? 0) - ((a.updated_at as number) ?? 0));
-    return rows.slice(0, limit);
-  });
+  // The Agent path runs the same metadata-plus-rollout-content search through
+  // `search:sessions`; the body is forwarded so the ranking cannot drift. The
+  // `limit = 10` default here is the same fallback the bridge applies.
+  ipcMain.handle('db:search:sessions', (_event, query: string, limit = 10) =>
+    dispatchDbAction('search:sessions', { query, limit }));
 
   // ==================== Unified Search (rakazo-inspired space search) ====================
   // Cross-entity aggregation over SQLite (sessions) + config.toml (bots, routines) +
@@ -2025,22 +1968,16 @@ export function registerDbHandlers(): void {
   });
 
   // ==================== Channel Binding Handlers ====================
+  // Raw SQL over `channel_bindings` / `channel_offsets`. The bridge runs the
+  // same statements for the Agent path; the bodies are forwarded so the two
+  // cannot drift. None of these five has a preload wrapper, so the renderer
+  // reaches them only through the Agent-side action today.
 
-  ipcMain.handle('db:channel:getBindings', (_event, channelType?: string) => {
-    const database = getDb();
-    if (channelType) {
-      return database.prepare(
-        'SELECT * FROM channel_bindings WHERE channel_type = ? ORDER BY updated_at DESC'
-      ).all(channelType);
-    }
-    return database.prepare('SELECT * FROM channel_bindings ORDER BY updated_at DESC').all();
-  });
+  ipcMain.handle('db:channel:getBindings', (_event, channelType?: string) =>
+    dispatchDbAction('channel:getBindings', { channelType }));
 
-  ipcMain.handle('db:channel:getBinding', (_event, channelType: string, chatId: string) => {
-    return getDb().prepare(
-      'SELECT * FROM channel_bindings WHERE channel_type = ? AND chat_id = ?'
-    ).get(channelType, chatId);
-  });
+  ipcMain.handle('db:channel:getBinding', (_event, channelType: string, chatId: string) =>
+    dispatchDbAction('channel:getBinding', { channelType, chatId }));
 
   ipcMain.handle('db:channel:upsertBinding', (_event, data: {
     id: string;
@@ -2051,51 +1988,13 @@ export function registerDbHandlers(): void {
     working_directory?: string;
     model?: string;
     mode?: string;
-  }) => {
-    const now = Date.now();
-    const database = getDb();
-    database.prepare(`
-      INSERT INTO channel_bindings (id, channel_type, chat_id, duya_session_id, sdk_session_id, working_directory, model, mode, active, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        duya_session_id = excluded.duya_session_id,
-        sdk_session_id = COALESCE(excluded.sdk_session_id, sdk_session_id),
-        working_directory = COALESCE(excluded.working_directory, working_directory),
-        model = COALESCE(excluded.model, model),
-        mode = COALESCE(excluded.mode, mode),
-        updated_at = excluded.updated_at
-    `).run(
-      data.id,
-      data.channel_type,
-      data.chat_id,
-      data.duya_session_id,
-      data.sdk_session_id || '',
-      data.working_directory || '',
-      data.model || '',
-      data.mode || 'code',
-      now,
-      now
-    );
-    return database.prepare('SELECT * FROM channel_bindings WHERE id = ?').get(data.id);
-  });
+  }) => dispatchDbAction('channel:upsertBinding', data));
 
-  ipcMain.handle('db:channel:getOffset', (_event, channelType: string, offsetKey: string) => {
-    return getDb().prepare(
-      'SELECT * FROM channel_offsets WHERE channel_type = ? AND offset_key = ?'
-    ).get(channelType, offsetKey);
-  });
+  ipcMain.handle('db:channel:getOffset', (_event, channelType: string, offsetKey: string) =>
+    dispatchDbAction('channel:getOffset', { channelType, offsetKey }));
 
-  ipcMain.handle('db:channel:setOffset', (_event, channelType: string, offsetKey: string, offsetValue: string, offsetType = 'long_polling') => {
-    const now = Date.now();
-    getDb().prepare(`
-      INSERT INTO channel_offsets (channel_type, offset_key, offset_value, offset_type, updated_at)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(channel_type, offset_key) DO UPDATE SET
-        offset_value = excluded.offset_value,
-        offset_type = COALESCE(excluded.offset_type, offset_type),
-        updated_at = excluded.updated_at
-    `).run(channelType, offsetKey, offsetValue, offsetType, now);
-  });
+  ipcMain.handle('db:channel:setOffset', (_event, channelType: string, offsetKey: string, offsetValue: string, offsetType = 'long_polling') =>
+    dispatchDbAction('channel:setOffset', { channelType, offsetKey, offsetValue, offsetType }));
 
   // ==================== Secret Store Handlers (Plan 488 P3.1) ====================
   // Handles secret-request from bot: UI collects the secret and stores it via this IPC.
@@ -2119,11 +2018,18 @@ export function registerDbHandlers(): void {
 
   // ==================== Project Group Handlers ====================
 
+  // NOT forwarded: the bridge's `project:getGroups` (plan 525) merges sessions
+  // of one multi-path project entity into a single group keyed on the entity's
+  // canonical root, while this handler groups strictly per `working_directory`.
+  // The two return different group sets for the same database, so one of them
+  // is wrong for a caller; forwarding either would silently change which.
   ipcMain.handle('db:project:getGroups', () => {
     // Plan 328 Phase 5: aggregate from core SessionStore instead of legacy
     // chat_sessions table. Group by working_directory in JS (small N).
     const { sessions } = getCoreStores();
-    const all = sessions.list(); // excludes status='deleted' by default
+    // Aggregates over EVERY row: `thread_count` and `last_activity` would
+    // silently under-report under `list`'s default cap.
+    const all = sessions.list({ limit: SESSION_LIST_UNLIMITED }); // excludes status='deleted' by default
     const groups = new Map<string, { working_directory: string; project_name: string; thread_count: number; last_activity: number }>();
     for (const s of all) {
       if (!s.workingDirectory) continue;

@@ -184,6 +184,7 @@ export class UpdateAgentTool implements Tool {
         return result(
           this.name,
           `No agent found with id ${agentId}. Check your teammates list for valid ids.`,
+          true,
         );
       }
       return result(this.name, `Failed to update agent: ${message}`, true);

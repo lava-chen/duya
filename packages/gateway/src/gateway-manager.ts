@@ -746,6 +746,13 @@ export class GatewayManager {
       platformUserId: msg.platformUserId,
       platformMsgId: msg.platformMsgId,
       platformChatId: msg.platformChatId,
+      // The thread a reply belongs to. Carried with the other message
+      // identifiers so it is not lost between the adapter and Main: the
+      // adapter sets it (Feishu `root_id` / Telegram `message_thread_id`), and
+      // until now it was only ever read for profile routing, so Main could
+      // not see it. Omitted when absent, so a non-threaded message's payload
+      // is unchanged.
+      ...(msg.threadId ? { threadId: msg.threadId } : {}),
       ...(cmd ? { command: cmd.command, args: cmd.args } : {}),
       options,
     })) as boolean;

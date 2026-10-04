@@ -8,6 +8,22 @@
  * history lives in the session's rollout — there is no run table.
  */
 
+/**
+ * What a scheduled fire does when the same routine already has a run in
+ * flight. This union IS the implemented set — the scheduler branches on
+ * exactly these three, and `CronFileStore` rejects/ coerces anything else:
+ *
+ * - `skip`     — drop the fire (default).
+ * - `parallel` — run concurrently.
+ * - `replace`  — interrupt the in-flight run, then start.
+ *
+ * `'queue'` (serialise behind the previous run) is deliberately NOT a member:
+ * it is not implemented, and advertising it on the wire made a caller's
+ * "serialised" request execute with unbounded concurrency. The CLI DTO type in
+ * `apps/desktop/src/main/cli/handlers/crons.ts` used to be the other half that
+ * still accepted it; that local copy has since dropped it too, so no layer
+ * accepts `'queue'` any more.
+ */
 export type ConcurrencyPolicy = 'skip' | 'parallel' | 'replace';
 export type CronScheduleKind = 'once' | 'every' | 'cron';
 
@@ -110,6 +126,13 @@ export interface AutomationCron {
   schedule: CronSchedule | null;
   workingDirectory: string;
   model: string;
+  /**
+   * Provider store id the `model` belongs to. Forwarded to
+   * `resolveCronProvider` so a routine pinned to one vendor's model does not
+   * resolve against whichever provider happens to be the default. Null =
+   * unpinned (resolve the default provider), the pre-existing behaviour.
+   */
+  modelProviderId: string | null;
   enabled: boolean;
   concurrencyPolicy: ConcurrencyPolicy;
   maxRetries: number;
@@ -163,6 +186,8 @@ export interface CreateAutomationCronInput {
   schedule?: CronSchedule;
   workingDirectory?: string;
   model?: string;
+  /** Provider store id for `model`; omit to fall back to the default provider. */
+  modelProviderId?: string;
   concurrencyPolicy?: ConcurrencyPolicy;
   maxRetries?: number;
   enabled?: boolean;
@@ -182,6 +207,8 @@ export interface UpdateAutomationCronInput {
   schedule?: CronSchedule;
   workingDirectory?: string;
   model?: string;
+  /** Provider store id for `model`; empty string / null clears the pin. */
+  modelProviderId?: string | null;
   concurrencyPolicy?: ConcurrencyPolicy;
   maxRetries?: number;
   enabled?: boolean;

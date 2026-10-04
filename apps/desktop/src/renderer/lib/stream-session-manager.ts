@@ -1155,6 +1155,20 @@ function formatResearchAuxEventTitle(type: string, data: unknown): string {
   return type;
 }
 
+/** Union of progress labels a `tool_use` frame may carry. */
+type ToolProgressSource = 'provider_commentary' | 'model_progress_tool' | 'tool_fallback';
+
+const TOOL_PROGRESS_SOURCES: readonly ToolProgressSource[] = [
+  'provider_commentary',
+  'model_progress_tool',
+  'tool_fallback',
+];
+
+/** Narrow an untrusted `progressSource` payload to the known union. */
+function isProgressSource(value: unknown): value is ToolProgressSource {
+  return typeof value === 'string' && (TOOL_PROGRESS_SOURCES as readonly string[]).includes(value);
+}
+
 // Exported for tests that need a fresh instance isolated from the
 // globalThis singleton (memory-retention / eviction specs).
 export class StreamSessionManager {
@@ -2282,6 +2296,14 @@ export class StreamSessionManager {
           this.handlePermissionEvent(sessionId, streamId, event.data as { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt?: number } | undefined);
           break;
 
+        case 'permission_expired':
+          this.handlePermissionExpiredEvent(
+            sessionId,
+            streamId,
+            (event.data ?? {}) as { id?: string; toolName?: string; expiresAt?: number },
+          );
+          break;
+
         case 'connector_auth_required':
           // Plan 450: pass through to dedicated listeners (AuthRequiredCard).
           this.handleConnectorAuthRequiredEvent(
@@ -2502,6 +2524,12 @@ export class StreamSessionManager {
           id: (data.id as string) || crypto.randomUUID(),
           name: data.name as string,
           input: data.input as Record<string, unknown>,
+          // The embedded-type variant carries the same rich-row fields as the
+          // top-level `tool_use` branch above. Dropping them here made rows
+          // rendered from this path lose their grouping and progress label.
+          groupId: typeof data.groupId === 'string' ? data.groupId : undefined,
+          progressTitle: typeof data.progressTitle === 'string' ? data.progressTitle : undefined,
+          progressSource: isProgressSource(data.progressSource) ? data.progressSource : undefined,
         });
       } else if (normalizedType === 'tool_use_delta' && data.id) {
         // Plan 461: embedded-type variant (event.data.type === 'tool_use_delta').
@@ -3045,6 +3073,37 @@ export class StreamSessionManager {
         console.error(`[stream-session-manager] Permission listener error for ${sessionId}:`, error);
       }
     });
+    this.resetIdleTimeout(sessionId);
+  }
+
+  /**
+   * The worker settled a pending permission request as a denial because its
+   * `expiresAt` lapsed unanswered. Retire the card here so a late click cannot
+   * be swallowed: the pending request is dropped and listeners are told the
+   * request is over.
+   *
+   * The card's own `expiresAt` stays authoritative — this event only reports
+   * that the worker enforced the very same deadline, so when the two ever
+   * disagree the card is already visibly dead (PermissionPrompt disables
+   * itself on the local clock) and this branch is a no-op for it.
+   */
+  private handlePermissionExpiredEvent(
+    sessionId: string,
+    streamId: string,
+    data: { id?: string; toolName?: string; expiresAt?: number },
+  ): void {
+    const s = this.sessions.get(sessionId);
+    if (!s || !this.isCurrentStream(sessionId, streamId)) return;
+    const pending = s.pendingPermissionRequest;
+    // Match on the request id. A blank id means the worker could not name the
+    // request; only then fall back to retiring whatever is pending.
+    if (pending && data.id && pending.id !== data.id) return;
+    s.pendingPermissionRequest = null;
+    this.notifyPermissionListeners(sessionId, null);
+    if (s.phase === 'awaiting_permission') {
+      s.phase = 'streaming';
+      this.notifyPhaseListeners(sessionId, s.phase);
+    }
     this.resetIdleTimeout(sessionId);
   }
 

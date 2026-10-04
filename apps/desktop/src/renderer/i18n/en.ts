@@ -578,6 +578,7 @@ const en = {
   'permission.answerSubmitted': 'Answer submitted',
   'permission.allowed': 'Allowed',
   'permission.denied': 'Denied',
+  'permission.expired': 'This request timed out and was denied. Start a new request to try again.',
   'permission.tellDuyaWhatToDoDifferently': 'No, and tell duya what to do differently',
   'permission.feedbackPlaceholder': 'Tell duya what to do differently...',
   'permission.continueHint': 'Continue',

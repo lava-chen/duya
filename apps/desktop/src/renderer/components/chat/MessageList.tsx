@@ -1302,17 +1302,27 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
 
     {/* Jump-to-latest button — appears when the user is scrolled away from
         the bottom. Mirrors BotDirectChatView's `.bot-chat-jump-to-latest`
-        so the two transcript UIs feel identical. The optional unread badge
+        so the two transcript UIs feel identical. The unread badge
         shows how many user turns landed while the user was frozen. */}
     {isScrolledUp && (
-      <button
-        type="button"
-        onClick={handleJumpToLatest}
-        className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40 inline-flex h-9 w-9 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-solid)] text-[var(--muted)] shadow-sm hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-colors animate-in fade-in slide-in-from-bottom-2 duration-200"
-        aria-label="Jump to latest message"
-      >
-        <ChevronDownIcon size={16} strokeWidth={2.25} />
-      </button>
+      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40">
+        <button
+          type="button"
+          onClick={handleJumpToLatest}
+          className="relative inline-flex h-9 w-9 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface-solid)] text-[var(--muted)] shadow-sm hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-colors animate-in fade-in slide-in-from-bottom-2 duration-200"
+          aria-label="Jump to latest message"
+        >
+          <ChevronDownIcon size={16} strokeWidth={2.25} />
+          {unreadTurns > 0 && (
+            <span
+              className="absolute -right-1 -top-1 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[var(--accent)] px-1 text-[10px] font-medium leading-none text-white tabular-nums"
+              data-testid="message-list-unread-badge"
+            >
+              {unreadTurns > 99 ? '99+' : unreadTurns}
+            </span>
+          )}
+        </button>
+      </div>
     )}
     </div>
   );

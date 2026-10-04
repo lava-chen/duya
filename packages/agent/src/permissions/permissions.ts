@@ -46,6 +46,7 @@ import {
   isWorkspaceEscapingCommand,
   isFileTool,
   isShellTool,
+  isBypassMode,
 } from './policy.js'
 import type { AIClient } from '@duya/ai'
 import type { Message } from '../types.js'
@@ -195,6 +196,114 @@ export function getRuleByContentsForToolName(
     }
   }
   return ruleByContents
+}
+
+// ─── content-scoped rules (`Tool(pattern)`) ───
+//
+// A rule string like `Bash(rm -rf:*)` parses into `{ toolName: 'Bash',
+// ruleContent: 'rm -rf:*' }`. The tool-name lookups above deliberately skip
+// those rules (`toolMatchesRule` returns false when `ruleContent` is set), so
+// a content rule is enforced HERE and nowhere else: it is a narrowing of the
+// same deny, consulted at the same step-1 priority as the tool-name deny, so
+// the two can never disagree about which one wins.
+
+/** Compiled-glob cache. Rule contents come from user settings and are few. */
+const ruleContentRegExpCache = new Map<string, RegExp>()
+
+/**
+ * Translate a rule content into an anchored glob RegExp. `*` matches any run
+ * of characters, `?` a single one; everything else is literal. The parser has
+ * already unescaped `\(` / `\)` / `\\` (see `rules.ts`), so those are literal
+ * characters here, not regex groups.
+ */
+function ruleContentToRegExp(pattern: string): RegExp {
+  const cached = ruleContentRegExpCache.get(pattern)
+  if (cached) return cached
+  let source = ''
+  for (const ch of pattern) {
+    if (ch === '*') source += '[\\s\\S]*'
+    else if (ch === '?') source += '[\\s\\S]'
+    else source += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  }
+  const compiled = new RegExp(`^(?:${source})$`)
+  // Bound the cache so a pathological settings file cannot grow it forever.
+  if (ruleContentRegExpCache.size >= 256) ruleContentRegExpCache.clear()
+  ruleContentRegExpCache.set(pattern, compiled)
+  return compiled
+}
+
+/**
+ * Shell separators a rule prefix can be scoped to. A content rule is written
+ * as a PREFIX of a command, so `Bash(rm -rf:*)` has to match the `rm -rf …`
+ * segment of `git status && rm -rf build` — not just a whole-command prefix.
+ * `sudo` and other leading words are NOT stripped: a prefix that does not
+ * literally appear in the command does not match, which is the fail-closed
+ * reading of what the user typed.
+ */
+const SHELL_SEGMENT_SPLIT = /(?:\r?\n|&&|\|\||;|\|)/
+
+/**
+ * The string a content rule for this tool is matched against. Returns
+ * undefined when the tool has no canonical content field, so no content rule
+ * can match it (a tool with no addressable content has nothing to scope to).
+ */
+function toolInputToRuleContent(
+  toolName: string,
+  input: Record<string, unknown>,
+): string | undefined {
+  if (isShellTool(toolName)) {
+    return typeof input.command === 'string' ? input.command : undefined
+  }
+  if (isFileTool(toolName)) {
+    const path = input.file_path ?? input.path
+    return typeof path === 'string' ? path : undefined
+  }
+  if (toolName === 'Grep') {
+    return typeof input.pattern === 'string' ? input.pattern : undefined
+  }
+  // `Bash(...)` / `Write(...)` on an unknown tool: fall back to the most
+  // specific string field the input has, so a content rule on a connector tool
+  // is not silently dead. Order matters — command > path > pattern.
+  for (const key of ['command', 'file_path', 'path', 'pattern', 'query', 'url'] as const) {
+    const value = input[key]
+    if (typeof value === 'string') return value
+  }
+  return undefined
+}
+
+/**
+ * The content-scoped rule of the given behavior that covers this call, if the
+ * user configured one. `getRuleByContentsForToolName` gives the candidates;
+ * the match is an exact glob against the tool's content string (or, for a
+ * shell tool, against any shell-separated segment of it).
+ *
+ * All three behaviors go through the one lookup on purpose. It used to be
+ * deny-only, which left `Bash(rm -rf:*)` under "allow" and under "ask"
+ * parsed, stored and displayed as active rules that silently did nothing —
+ * an asymmetry the deny wiring had already fixed for its own behavior.
+ */
+export function getContentRuleForTool(
+  context: ToolPermissionContext,
+  toolName: string,
+  input: Record<string, unknown>,
+  behavior: 'allow' | 'deny' | 'ask',
+): PermissionRule | null {
+  const candidates = getRuleByContentsForToolName(context, toolName, behavior)
+  if (candidates.size === 0) return null
+  const content = toolInputToRuleContent(toolName, input)
+  if (content === undefined) return null
+  // A shell rule is written as a PREFIX of a command, so it has to be able to
+  // match one segment of a compound command. A file path / pattern is a
+  // single value and is matched whole — splitting it would be wrong.
+  const haystacks = isShellTool(toolName)
+    ? content.split(SHELL_SEGMENT_SPLIT).map((segment: string) => segment.trim()).filter(Boolean)
+    : [content]
+  if (haystacks.length === 0) return null
+  for (const [pattern, rule] of candidates) {
+    const re = ruleContentToRegExp(pattern)
+    if (haystacks.some((candidate) => re.test(candidate))) return rule
+  }
+  return null
 }
 
 function createPermissionRequestMessage(
@@ -357,10 +466,76 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
       return decideMcpSource(source, appState.toolPermissionContext.mode, toolName)
     }
 
-    // 1. Canvas and project-database tools operate entirely within the
+    // 1. Check if the tool is denied. A deny rule is explicit user
+    // configuration, so it outranks every built-in allow gate below: the
+    // canvas tools and the `GLOBAL_ALWAYS_ALLOWED_TOOLS` set used to be
+    // consulted first, which silently discarded a configured deny rule for
+    // any tool in that set (or for `canvas_*` / `database_manage`).
+    const denyRule = getDenyRuleForTool(appState.toolPermissionContext, toolName)
+    if (denyRule) {
+      return {
+        behavior: 'deny',
+        decisionReason: {
+          type: 'rule',
+          rule: denyRule,
+        },
+        message: `Permission to use ${toolName} has been denied.`,
+      }
+    }
+
+    // 1b. Same priority, narrower scope: a content-scoped deny rule
+    // (`Bash(rm -rf:*)`). The tool-name lookup above cannot match it —
+    // `toolMatchesRule` skips any rule carrying content — so without this
+    // step such a rule would parse, be stored, be shown to the user as an
+    // active deny, and never deny anything. Consulted here rather than in
+    // `PermissionsGate` so the gate's step-1 tool-name check stays the single
+    // pre-gate fast path and this verdict arrives through the same
+    // `decision.behavior === 'deny'` branch it already handles.
+    const contentDenyRule = getContentRuleForTool(
+      appState.toolPermissionContext,
+      toolName,
+      input,
+      'deny',
+    )
+    if (contentDenyRule) {
+      return {
+        behavior: 'deny',
+        decisionReason: {
+          type: 'rule',
+          rule: contentDenyRule,
+        },
+        message: `Permission to use ${toolName} with this input has been denied by a content rule (${permissionRuleValueToString(contentDenyRule.ruleValue)}).`,
+      }
+    }
+
+    // 1c. Same reasoning as step 1, applied to "ask": a content-scoped ask
+    // rule is explicit user configuration, so it has to outrank the built-in
+    // allow gates below — most visibly `GLOBAL_ALWAYS_ALLOWED_TOOLS` at step
+    // 3, which would otherwise auto-allow a call the user explicitly asked to
+    // be confirmed every time. Placed here, beside the content deny, for the
+    // same reason: at step 4 (beside the tool-name ask) it would already be
+    // shadowed by step 3 and would stay as unenforced as it was before.
+    const contentAskRule = getContentRuleForTool(
+      appState.toolPermissionContext,
+      toolName,
+      input,
+      'ask',
+    )
+    if (contentAskRule) {
+      return {
+        behavior: 'ask',
+        decisionReason: {
+          type: 'rule',
+          rule: contentAskRule,
+        },
+        message: `Permission to use ${toolName} with this input requires approval by a content rule (${permissionRuleValueToString(contentAskRule.ruleValue)}).`,
+      }
+    }
+
+    // 2. Canvas and project-database tools operate entirely within the
     // application's own project workspace. They do not touch external systems, so they
-    // must be unconditionally allowed regardless of permission mode or user
-    // rules.
+    // must be unconditionally allowed regardless of permission mode. User deny
+    // rules still win — they were checked in step 1.
     if (isCanvasTool(toolName)) {
       return {
         behavior: 'allow',
@@ -372,8 +547,9 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
       }
     }
 
-    // 2. Internal-only tools that only read or mutate the application's own
-    // state should not be gated by permission modes or user rules.
+    // 3. Internal-only tools that only read or mutate the application's own
+    // state should not be gated by permission modes. User deny rules are the
+    // exception and were checked in step 1.
     if (GLOBAL_ALWAYS_ALLOWED_TOOLS.has(toolName)) {
       return {
         behavior: 'allow',
@@ -382,19 +558,6 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
           reason: `${toolName} is an internal application operation.`,
           classifierApprovable: false,
         },
-      }
-    }
-
-    // 3. Check if the tool is denied
-    const denyRule = getDenyRuleForTool(appState.toolPermissionContext, toolName)
-    if (denyRule) {
-      return {
-        behavior: 'deny',
-        decisionReason: {
-          type: 'rule',
-          rule: denyRule,
-        },
-        message: `Permission to use ${toolName} has been denied.`,
       }
     }
 
@@ -506,16 +669,18 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
     // switch overrides the prompt pipeline.
     const hostPermission: LocalToolPermission =
       appState.toolPermissionContext.hostToolPermission ?? DEFAULT_LOCAL_TOOL_PERMISSION;
-    const sessionModeIsExplicitBypass =
-      appState.toolPermissionContext.mode === 'bypassPermissions' ||
-      appState.toolPermissionContext.mode === 'dontAsk';
+    // `isBypassMode` is the single definition of "this session never asks
+    // again" (policy.ts). It is used here and in `resolveAskWithoutUser`, so
+    // the pipeline and the headless `ask` fallbacks cannot disagree about
+    // which modes that is. `plan` is deliberately NOT a member: it is a
+    // read-only planning mode whose writes must still be gated. The old
+    // inline `mode === 'plan' && isBypassPermissionsModeAvailable` clause
+    // made the pipeline allow everything in plan mode (production always
+    // passes `true`) while all three ask-fallbacks denied.
+    const sessionModeIsExplicitBypass = isBypassMode(appState.toolPermissionContext.mode);
     // Step 5's mode short-circuit, hoisted so the pre-screen below can see
     // whether the pipeline is about to auto-allow (identical predicate).
-    const shouldBypassPermissions =
-      appState.toolPermissionContext.mode === 'bypassPermissions' ||
-      appState.toolPermissionContext.mode === 'dontAsk' ||
-      (appState.toolPermissionContext.mode === 'plan' &&
-        appState.toolPermissionContext.isBypassPermissionsModeAvailable)
+    const shouldBypassPermissions = isBypassMode(appState.toolPermissionContext.mode);
 
     // 4.75 Plan 551 — System One risk pre-screen (infra channel, default
     // off). Fires ONLY when the pipeline is about to auto-allow (host
@@ -593,6 +758,29 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
         decisionReason: {
           type: 'rule',
           rule: alwaysAllowedRule,
+        },
+      }
+    }
+
+    // 6b. Content-scoped counterpart of step 6, for the same reason step 1b
+    // sits beside step 1: `toolAlwaysAllowedRule` cannot match a rule that
+    // carries content, so `Bash(git status:*)` under "allow" parsed, was
+    // listed as active, and never allowed anything. Sits here rather than
+    // earlier because an allow rule is the weakest user signal in the
+    // pipeline — it must not outrank the deny (1b), ask (1c) or
+    // catastrophic-safety (4.7) checks, and by step 6 all of those have run.
+    const contentAllowRule = getContentRuleForTool(
+      appState.toolPermissionContext,
+      toolName,
+      input,
+      'allow',
+    )
+    if (contentAllowRule) {
+      return {
+        behavior: 'allow',
+        decisionReason: {
+          type: 'rule',
+          rule: contentAllowRule,
         },
       }
     }

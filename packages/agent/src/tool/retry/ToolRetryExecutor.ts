@@ -16,8 +16,10 @@ import { RetryAction } from './types.js'
 /**
  * Tools with side effects that must not be transparently re-run after a
  * failure (a timed-out write may have already persisted, a re-run would
- * double-apply the change). Strategies flagged `idempotentOnly: true`
- * skip the RETRY action for these tools and fall through to FALLBACK/ABORT.
+ * double-apply the change). The RETRY action is never issued for these tools;
+ * a matching strategy falls through to FALLBACK (a different tool, which is
+ * safe) or ABORT. The check runs while the next attempt is being *scheduled*,
+ * so the second execution never happens in the first place.
  */
 const NON_IDEMPOTENT_TOOLS = new Set([
   'bash',
@@ -81,75 +83,21 @@ export class ToolRetryExecutor {
     let attempt = 0
     let currentTool = execution.toolName
     let currentInput = execution.toolInput
+    // Failure recorded by the previous attempt, if any. The next action is
+    // decided from this *before* the tool runs again. The old loop ran the
+    // tool first and only consulted the strategies afterwards, so a tool was
+    // re-executed (side effects and all) even when no strategy authorised the
+    // attempt — the non-idempotency guard below ran too late to prevent it.
+    let pendingFailure: ToolFailureContext | undefined
 
     while (attempt < this.getMaxAttempts(currentTool, allStrategies)) {
-      attempt++
-
-      try {
-        const result = await executorFn(currentTool, currentInput)
-
-        if (!result.error) {
-          return {
-            success: true,
-            result: result.result,
-            attempts: attempt,
-            finalAction: RetryAction.RETRY,
-          }
-        }
-
-        const error = new Error(result.error)
-        const context: ToolFailureContext = {
-          toolName: currentTool,
-          error,
-          attemptNumber: attempt,
-          toolInput: currentInput,
-          availableTools: this.getAvailableTools(currentTool),
-        }
-
-        const decision = this.decideNextAction(context, allStrategies)
-
-        if (decision.action === RetryAction.ABORT) {
-          return {
-            success: false,
-            error,
-            attempts: attempt,
-            finalAction: RetryAction.ABORT,
-          }
-        }
-
-        if (decision.action === RetryAction.SKIP) {
-          return {
-            success: false,
-            error,
-            attempts: attempt,
-            finalAction: RetryAction.SKIP,
-          }
-        }
-
-        if (decision.action === RetryAction.FALLBACK && decision.targetTool) {
-          currentTool = decision.targetTool
-          currentInput = this.adaptInputForFallback(currentInput, currentTool)
-        }
-
-        if (decision.delayMs) {
-          await this.sleep(decision.delayMs)
-        }
-
-      } catch (error) {
-        const context: ToolFailureContext = {
-          toolName: currentTool,
-          error: error instanceof Error ? error : new Error(String(error)),
-          attemptNumber: attempt,
-          toolInput: currentInput,
-          availableTools: this.getAvailableTools(currentTool),
-        }
-
-        const decision = this.decideNextAction(context, allStrategies)
+      if (pendingFailure) {
+        const decision = this.decideNextAction(pendingFailure, allStrategies)
 
         if (decision.action === RetryAction.ABORT || decision.action === RetryAction.SKIP) {
           return {
             success: false,
-            error: error instanceof Error ? error : new Error(String(error)),
+            error: pendingFailure.error,
             attempts: attempt,
             finalAction: decision.action,
           }
@@ -162,6 +110,40 @@ export class ToolRetryExecutor {
 
         if (decision.delayMs) {
           await this.sleep(decision.delayMs)
+        }
+      }
+
+      attempt++
+
+      try {
+        const result = await executorFn(currentTool, currentInput)
+
+        // `error === undefined` is the success test, not truthiness: a tool
+        // that fails with an empty message (`error: ''`) would otherwise be
+        // finalised as a successful, empty `tool_result`.
+        if (result.error === undefined) {
+          return {
+            success: true,
+            result: result.result,
+            attempts: attempt,
+            finalAction: RetryAction.RETRY,
+          }
+        }
+
+        pendingFailure = {
+          toolName: currentTool,
+          error: new Error(result.error),
+          attemptNumber: attempt,
+          toolInput: currentInput,
+          availableTools: this.getAvailableTools(currentTool),
+        }
+      } catch (error) {
+        pendingFailure = {
+          toolName: currentTool,
+          error: error instanceof Error ? error : new Error(String(error)),
+          attemptNumber: attempt,
+          toolInput: currentInput,
+          availableTools: this.getAvailableTools(currentTool),
         }
       }
     }
@@ -199,10 +181,13 @@ export class ToolRetryExecutor {
           }
         }
 
-        // Skip RETRY for non-idempotent tools when the strategy requires
-        // idempotency — re-running side-effectful tools risks double
-        // execution. Continue to the next strategy (or ABORT).
-        if (strategy.idempotentOnly && NON_IDEMPOTENT_TOOLS.has(context.toolName)) {
+        // Never re-run a tool with side effects: a timed-out write may have
+        // already persisted, so a second run would double-apply the change.
+        // This check runs before the attempt is scheduled (see the loop in
+        // `executeWithRetry`), so it actually prevents the second execution.
+        // `continue` (rather than abort) so a later strategy can still offer
+        // a FALLBACK, which runs a *different* tool and is therefore safe.
+        if (NON_IDEMPOTENT_TOOLS.has(context.toolName)) {
           continue
         }
 
@@ -251,8 +236,11 @@ export class ToolRetryExecutor {
       case 'powershell':
         return { command: `powershell -Command "${originalInput.command}"` }
       case 'read':
+        // `ReadTool.input_schema` names the field `file_path`; emitting
+        // `filePath` here produced an object the target tool can never
+        // validate.
         if (originalInput.file_path) {
-          return { filePath: originalInput.file_path }
+          return { file_path: originalInput.file_path }
         }
         return originalInput
       default:

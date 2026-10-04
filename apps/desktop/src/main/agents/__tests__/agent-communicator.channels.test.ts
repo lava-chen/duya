@@ -72,7 +72,8 @@ describe('registerAgentHandlers channel surface (ISS-12)', () => {
 
     // Returns a live `apiKey` to the renderer. Both are called from the
     // renderer today: stream-session-manager.ts:177 on every chat turn, and
-    // ModelSelectionSection.tsx:218 for vision-model parsing. Removing them is
+    // the now-removed ModelSelectionSection.tsx:218 for vision-model parsing.
+    // Removing them is
     // an architecture change, not a deletion — the renderer relays the key on
     // to the agent server. Tracked as an open item in the plan; listed here so
     // the set cannot silently grow a third entry.

@@ -36,6 +36,7 @@ import { getJsonSetting } from '../../db/queries/settings';
 import { collectMainMCPCandidates } from '../../agents/mcp/collect-main';
 import { readPluginManifest } from '../../plugins/manifest';
 import { getPluginManager } from '../../plugins/PluginManager';
+import { getLogger, LogComponent } from '../../logging/logger';
 
 import {
   effectivePrecedenceOf,
@@ -58,6 +59,7 @@ import type {
   McpToolDTO,
   PluginPackageDTO,
 } from './types';
+import { computeEffective } from './dto-mappers';
 import {
   getLatestMcpStatusByServer,
   type McpServerStatusEntry,
@@ -149,6 +151,54 @@ export interface CrossSourceSkillOptions {
   userDir: string;
 }
 
+/** What one installed plugin contributes to the cross-source aggregation. */
+interface InstalledPluginFacts {
+  enabled: boolean;
+  /** The plugin's own on-disk root, as the registry resolved it. */
+  installPath: string | undefined;
+}
+
+/** Warn once per process that a plugin's payload root could not be resolved. */
+let warnedUnresolvablePluginRoot = false;
+
+function warnUnresolvablePluginRoot(pluginId: string | undefined): void {
+  if (warnedUnresolvablePluginRoot) return;
+  warnedUnresolvablePluginRoot = true;
+  getLogger().warn(
+    'capability-management: plugin skill has no resolvable install path; security verdict falls back to unknown',
+    { pluginId: pluginId ?? null },
+    LogComponent.Main,
+  );
+}
+
+/**
+ * Per-pass lookup of the installed-plugin facts this module needs.
+ *
+ * `listInstalled()` is synchronous but hydrates every registry entry from
+ * disk, so it is read ONCE per aggregation pass rather than once per
+ * capability (O(capabilities × plugins) registry reads). The map is built
+ * lazily so a pass with no plugin candidates still costs nothing.
+ * Unknown ids keep the previous `?? true` semantics.
+ *
+ * The install path comes from the registry rather than from a configured
+ * `bundledDir` root: plugins are installed at their own resolved location
+ * (`PluginViewItem.installPath`, symlink target included), so a
+ * `<bundledDir>/<pluginId>/skills/…` join would be the wrong path even when
+ * a root happened to be supplied.
+ */
+function readPluginFactsLookup(): (pluginId: string) => InstalledPluginFacts {
+  let cache: Map<string, InstalledPluginFacts> | null = null;
+  return (pluginId: string): InstalledPluginFacts => {
+    if (!cache) {
+      cache = new Map<string, InstalledPluginFacts>();
+      for (const plugin of getPluginManager().listInstalled()) {
+        cache.set(plugin.id, { enabled: plugin.enabled, installPath: plugin.installPath });
+      }
+    }
+    return cache.get(pluginId) ?? { enabled: true, installPath: undefined };
+  };
+}
+
 export function buildCrossSourceSkillCandidates(
   options: CrossSourceSkillOptions,
 ): { candidates: SkillCandidate[]; descriptions: Map<string, string> } {
@@ -178,20 +228,29 @@ export function buildCrossSourceSkillCapabilities(
   const { candidates, descriptions } = buildCrossSourceSkillCandidates(options);
   const available = resolveAvailable(candidates);
   const out: CapabilityDTO[] = [];
+  const isPluginFacts = readPluginFactsLookup();
 
   for (const skill of available) {
     const ownEnabled = isWinnerEnabled(skill, overrides);
-    const providerEnabled = skill.origin === 'plugin'
-      ? (getPluginManager().listInstalled().find((p) => p.id === skill.pluginId)?.enabled ?? true)
-      : true;
+    const pluginFacts = skill.origin === 'plugin' && skill.pluginId
+      ? isPluginFacts(skill.pluginId)
+      : null;
+    const providerEnabled = pluginFacts ? pluginFacts.enabled : true;
     const { effectiveEnabled, blockedReason } = computeEffective(ownEnabled, providerEnabled);
 
-    // Security verdict: read the winner's on-disk SKILL.md.
-    const winnerDir = skill.origin === 'user'
-      ? join(options.userDir, skill.name)
-      : skill.origin === 'plugin' && skill.pluginId
-        ? join(options.bundledDir, skill.pluginId, 'skills', skill.name)
-        : '';
+    // Security verdict: read the winner's on-disk SKILL.md. A plugin skill
+    // resolves under the plugin's OWN install root as the registry reports it,
+    // never through a configured bundled root — and if that root is
+    // unavailable, fall back to 'unknown' rather than joining `undefined`.
+    let winnerDir: string;
+    if (skill.origin === 'user') {
+      winnerDir = join(options.userDir, skill.name);
+    } else if (pluginFacts?.installPath) {
+      winnerDir = join(pluginFacts.installPath, 'skills', skill.name);
+    } else {
+      if (skill.origin === 'plugin') warnUnresolvablePluginRoot(skill.pluginId);
+      winnerDir = '';
+    }
     const verdict = winnerDir ? deriveSecurityVerdict(winnerDir) : { verdict: 'unknown' as const, findingCount: 0 };
 
     out.push({
@@ -271,12 +330,13 @@ export async function buildCrossSourceMCPCapabilities(): Promise<CrossSourceMCPR
   const runtimeByName = getLatestMcpStatusByServer();
 
   const out: CapabilityDTO[] = [];
+  const isPluginFacts = readPluginFactsLookup();
 
   for (const { candidate, id } of winners) {
     const rawEnabled = (candidate.rawConfig as { enabled?: boolean }).enabled;
     const ownEnabled = rawEnabled !== false;
     const providerEnabled = candidate.source === 'plugin' && candidate.pluginId
-      ? (getPluginManager().listInstalled().find((p) => p.id === candidate.pluginId)?.enabled ?? true)
+      ? isPluginFacts(candidate.pluginId).enabled
       : true;
     const { effectiveEnabled, blockedReason } = computeEffective(ownEnabled, providerEnabled);
 
@@ -384,26 +444,15 @@ export function resolveMcpStatusFields(
 /**
  * Compute the (effectiveEnabled, blockedReason) pair.
  *
- * Phase 1B still does not derive `blockedReason` from connection errors
- * (Rev 3 修订 4). The two inputs are the configured ownEnabled and the
- * providerEnabled. The result is:
+ * Delegates to the single shared implementation in `dto-mappers.ts` so the
+ * cross-source and plugin-declared paths cannot disagree about
+ * `blockedReason` for the same state. `ownEnabled` is always a real boolean
+ * here (`isWinnerEnabled` reads the overrides map), so this path never yields
+ * the `ownEnabled === null` / `effectiveEnabled: null` case.
  *
- *   ownEnabled=false                → false, blockedReason='user-disabled'
- *   ownEnabled=true, provider=false → false, blockedReason='plugin-disabled'
- *   both true                       → true,  no blockedReason
+ * Phase 1B still does not derive `blockedReason` from connection errors
+ * (Rev 3 revision 4) — that stays in `mcp.connectionStatus` / `mcp.lastIssue`.
  */
-function computeEffective(
-  ownEnabled: boolean,
-  providerEnabled: boolean,
-): { effectiveEnabled: boolean; blockedReason?: CapabilityDTO['blockedReason'] } {
-  if (ownEnabled === false) {
-    return { effectiveEnabled: false, blockedReason: 'user-disabled' };
-  }
-  if (providerEnabled === false) {
-    return { effectiveEnabled: false, blockedReason: 'plugin-disabled' };
-  }
-  return { effectiveEnabled: true };
-}
 
 export interface AggregateBundledOptions {
   bundledDir: string;
@@ -439,9 +488,9 @@ export function buildPluginDeclaredOnlySkills(
       if (knownSkillNames.has(skillName)) continue;
       const ownEnabled: boolean | null = null;
       const providerEnabled = plugin.enabled;
-      const { effectiveEnabled, blockedReason } = providerEnabled
-        ? { effectiveEnabled: null as boolean | null, blockedReason: undefined as CapabilityDTO['blockedReason'] | undefined }
-        : { effectiveEnabled: false as boolean | null, blockedReason: 'plugin-disabled' as const };
+      // Same shared rule as the resolved-skill path above — a manifest-only
+      // skill has no own override, so it reports the `ownEnabled === null` case.
+      const { effectiveEnabled, blockedReason } = computeEffective(ownEnabled, providerEnabled);
       out.push({
         displayKey: `plugin:${plugin.id}:skill:${skillName}`,
         kind: 'skill',

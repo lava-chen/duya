@@ -105,7 +105,7 @@ describe('update_agent tool', () => {
     expect(res.result).toContain('agentId is required');
   });
 
-  it('turns a not-found error into grok guidance without the error flag', async () => {
+  it('turns a not-found error into grok guidance with the error flag', async () => {
     mocks.agentUpdate.mockImplementation(async () => {
       throw new Error("agent 'ghost' not found");
     });
@@ -113,7 +113,9 @@ describe('update_agent tool', () => {
       agentId: 'ghost',
       name: 'X',
     })) as ExecResult;
-    expect(res.error).toBeUndefined();
+    // A missing agent is a failed tool call, not a success: without the flag
+    // the executor's error accounting counted it as a completed update.
+    expect(res.error).toBe(true);
     expect(res.result).toContain('No agent found with id ghost');
     expect(res.result).toContain('teammates list');
   });

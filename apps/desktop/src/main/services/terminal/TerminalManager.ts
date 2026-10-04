@@ -125,7 +125,12 @@ function shellFromBasename(file: string): TerminalShell | null {
 
 function defaultShell(): TerminalShell {
   if (process.platform === 'win32') {
-    if (process.env.ComSpec?.toLowerCase().endsWith('cmd.exe')) return 'pwsh';
+    // Windows default is pwsh. `commandExists()` is a no-op on win32 (it
+    // cannot probe PATH reliably), so availability is handled by the
+    // pwsh -> powershell -> cmd fallback ladder in spawn() instead. A
+    // ComSpec check here was dead code: it returned 'pwsh' on both
+    // branches, and honouring it would hand cmd.exe to every Windows user
+    // (ComSpec is cmd.exe on all of them) instead of a PowerShell default.
     return 'pwsh';
   }
   const fromEnv = process.env.SHELL ? shellFromBasename(process.env.SHELL) : null;
@@ -171,12 +176,21 @@ function normalizeCommand(input: string): string {
   return input.trim();
 }
 
-function applyInputToLine(current: string, data: string): { line: string; submitted?: string } {
+/**
+ * Fold raw terminal input into the visible input line and collect every line
+ * the user submitted.
+ *
+ * The result is a LIST because one input chunk can submit several lines: a
+ * multi-line paste or a pasted script arrives as a single `write()`. The
+ * previous single `submitted` string was overwritten on every newline, so only
+ * the last line of such a paste ever reached `terminal_command_history`.
+ */
+function applyInputToLine(current: string, data: string): { line: string; submitted: string[] } {
   let line = current;
-  let submitted: string | undefined;
+  const submitted: string[] = [];
   for (const ch of data) {
     if (ch === '\r' || ch === '\n') {
-      submitted = line;
+      submitted.push(line);
       line = '';
     } else if (ch === '\u007f' || ch === '\b') {
       line = line.slice(0, -1);
@@ -309,8 +323,12 @@ export class TerminalManager {
 
     const next = applyInputToLine(entry.inputLine, data);
     entry.inputLine = next.line;
-    if (next.submitted !== undefined) {
-      this.recordCommand(next.submitted, entry.handle.shell, entry.handle.cwd, 'user');
+    // A multi-line paste submits several lines in one chunk: record each one,
+    // otherwise the history only ever learns the last line of the paste.
+    for (const submitted of next.submitted) {
+      if (submitted.trim()) {
+        this.recordCommand(submitted, entry.handle.shell, entry.handle.cwd, 'user');
+      }
     }
 
     try {
@@ -369,6 +387,12 @@ export class TerminalManager {
 
     const params: unknown[] = [`${trimmed}%`];
     const where: string[] = ['command LIKE ?'];
+    // The exact-match filter belongs in SQL, BEFORE the LIMIT window.
+    // Filtering afterwards meant a re-typed command the user had already run
+    // occupied one of the `limit` slots and was then discarded, so the caller
+    // received fewer candidates than it asked for.
+    where.push('command <> ?');
+    params.push(trimmed);
     if (shell) {
       where.push('shell = ?');
       params.push(shell);
@@ -387,14 +411,12 @@ export class TerminalManager {
         ORDER BY use_count DESC, last_used_at DESC
         LIMIT ?
       `).all(...params) as Array<{ command: string; useCount: number; lastUsedAt: number }>;
-      return rows
-        .filter((row) => row.command !== trimmed && row.command.startsWith(trimmed))
-        .map((row) => ({
-          command: row.command,
-          suffix: row.command.slice(trimmed.length),
-          useCount: row.useCount,
-          lastUsedAt: row.lastUsedAt,
-        }));
+      return rows.map((row) => ({
+        command: row.command,
+        suffix: row.command.slice(trimmed.length),
+        useCount: row.useCount,
+        lastUsedAt: row.lastUsedAt,
+      }));
     } catch (err) {
       this.log.warn('Terminal suggestion query failed', {
         error: err instanceof Error ? err.message : String(err),

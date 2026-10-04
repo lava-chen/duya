@@ -79,6 +79,7 @@ export const LEGACY_SSE_TYPES = [
   // unmodelled, but the UI depends on them
   'clipboard_write',
   'connector_auth_required',
+  'permission_expired',
   'workflow_run',
   'research_continue',
   'research_evidence',

@@ -83,6 +83,40 @@ describe('the IO detector has teeth', () => {
     expect(findCorePurityViolations([{ id: 'synthetic', roots: [dir], carveOut: [] }])).toEqual([]);
   });
 
+  it('flags IO on the same line as a "//" string literal', () => {
+    // The false negative this gate used to have, and the one that mattered.
+    // `findIoSites` carried its own regex stripper, and a `//` inside a string
+    // literal opened a line comment that ran to end of line — blanking the
+    // real code after it:
+    //
+    //   const label = "//"; const r = fetch(url);
+    //
+    // was stripped to `const label = "` and reported as pure. The comment above
+    // the old stripper claimed a naive strip "can only ever produce a FALSE
+    // POSITIVE ... never a false negative". That was false, and the direction is
+    // the expensive one: this is IO smuggled into a `core` module, which is
+    // exactly what the gate is for. `layer-purity.ts` now uses the shared
+    // tokenizer-grade stripper, and this case pins that.
+    const dir = scratchTree({
+      'src/smuggled.ts': 'const label = "//"; const r = fetch(url);\n',
+    });
+    const problems = findCorePurityViolations([{ id: 'synthetic', roots: [dir], carveOut: [] }]);
+    expect(problems.join('\n')).toContain('fetch');
+  });
+
+  it('still flags the IO on a following line after a "//" string literal', () => {
+    // The newline-separated shape of the case above. It survived the old
+    // stripper (only the rest of the comment's own line was blanked), so this is
+    // not a false-negative witness — it is here so a future "fix" that narrows
+    // the stripper cannot pass the case above by dropping string handling
+    // entirely.
+    const dir = scratchTree({
+      'src/smuggled-next-line.ts': 'const label = "//";\nexport const r = fetch(url);\n',
+    });
+    const problems = findCorePurityViolations([{ id: 'synthetic', roots: [dir], carveOut: [] }]);
+    expect(problems.join('\n')).toContain('fetch');
+  });
+
   it('honours a carve-out', () => {
     const rel = 'src/f.ts';
     const dir = scratchTree({ [rel]: 'export const go = () => fetch("http://x");\n' });

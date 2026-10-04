@@ -470,6 +470,23 @@ export class BackgroundAgentLifecycle {
     }
     // give in-flight .run() promises 5s to finalize via the kill transition
     await new Promise((resolve) => setTimeout(resolve, 5000))
+    // The grace period alone cannot guarantee a terminal state: a
+    // sub-agent generator that swallows the abort never reaches
+    // `tryKill` inside its own catch, so the record stays `running`
+    // forever — `transition` (which owns `reportInFlight`) never fires
+    // and the parent session's worker keep-alive is never dropped.
+    // Force the transition for whatever is still in flight. `tryKill`
+    // is the CAS variant: it re-checks the status, swallows the
+    // illegal-transition throw, and aborts only after the transition
+    // wins, so a record that settled during the grace period is
+    // reported `already_terminal` instead of being double-settled.
+    for (const r of inFlight) {
+      if (this.tryKill(r.taskId, reason) === 'killed') {
+        logger.warn('[SubAgent] killAll forced terminal state after grace period', {
+          taskId: r.taskId,
+        }, 'SubAgent')
+      }
+    }
   }
 }
 

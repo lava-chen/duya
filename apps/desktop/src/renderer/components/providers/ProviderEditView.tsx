@@ -62,6 +62,8 @@ import { useProviderModels } from '@/components/providers/hooks/useProviderModel
 import { ModelCapabilityBadges } from '@/components/providers/ModelCapabilityBadges';
 import { useProvidersQuery } from '@/lib/providers/hooks/useProvidersQuery';
 import { useProviderEditSave } from '@/lib/providers/hooks/useProviderEditSave';
+import { useDeleteProviderMutation } from '@/lib/providers/hooks/useDeleteProviderMutation';
+import { extractErrorMessage } from '@/lib/errors/extractErrorMessage';
 import { isMaskedKey } from '@/lib/providers/secret';
 import { getPreset, findPresetByBaseUrl, type QuickPreset } from '@/lib/provider-presets';
 import { useConversationStore } from '@/stores/conversation-store';
@@ -105,6 +107,11 @@ export function ProviderEditView() {
   const clearProviderEdit = useConversationStore((s) => s.clearProviderEdit);
   const { data: providers = [] } = useProvidersQuery();
   const { save, isPending: saving } = useProviderEditSave();
+  // Delete runs the same L1 mutation the provider list uses. The edit page
+  // is a separate component-tree branch, so it cannot hand a callback to
+  // `ProviderManagement` — calling the mutation here is what makes the
+  // destructive action actually reach the store.
+  const deleteProvider = useDeleteProviderMutation();
 
   // ── Resolve target → (preset, editProvider) pair ──
   const preset: QuickPreset | null = useMemo(() => {
@@ -282,6 +289,9 @@ export function ProviderEditView() {
   // Auth Token show/hide (local state — not persisted).
   const [apiKeyRevealed, setApiKeyRevealed] = useState(false);
 
+  // In-flight delete; keeps the button disabled and re-entrant-safe.
+  const [deleting, setDeleting] = useState(false);
+
   useEffect(() => {
     if (!preset) return;
     setError(null);
@@ -402,8 +412,8 @@ export function ProviderEditView() {
     }
   };
 
-  const handleDelete = () => {
-    if (!editProvider) return;
+  const handleDelete = async () => {
+    if (!editProvider || deleting) return;
     if (typeof window !== 'undefined') {
       const ok = window.confirm(
         locale === 'zh'
@@ -412,9 +422,18 @@ export function ProviderEditView() {
       );
       if (!ok) return;
     }
-    window.dispatchEvent(
-      new CustomEvent('duya:provider-delete', { detail: { id: editProvider.id } }),
-    );
+    setError(null);
+    setDeleting(true);
+    try {
+      await deleteProvider.mutateAsync(editProvider.id);
+    } catch (err) {
+      // Stay on the page and say why. Navigating away here would be the
+      // old silent no-op: the user would believe the provider was deleted.
+      setError(extractErrorMessage(err).message);
+      return;
+    } finally {
+      setDeleting(false);
+    }
     clearProviderEdit();
     setSettingsTab('providers');
   };
@@ -492,6 +511,13 @@ export function ProviderEditView() {
                 headers: editProvider.headers,
                 extraEnv: editProvider.extraEnv,
                 notes: editProvider.notes,
+                // `useProviderEditSave` preserves the provider's identity
+                // fields across an edit. Spellings match its reads exactly
+                // (`existingDto.createdAt`, `existingDto.sortOrder`).
+                // Omitting them re-stamped `meta.createdAt` and reset
+                // `meta.sortIndex` on every save.
+                createdAt: editProvider.createdAt,
+                sortOrder: editProvider.sortOrder,
               }
             : undefined,
         },
@@ -544,7 +570,8 @@ export function ProviderEditView() {
           <Button
             variant="danger"
             size="sm"
-            onClick={handleDelete}
+            onClick={() => void handleDelete()}
+            disabled={deleting}
             data-testid="provider-edit-delete"
             className="shrink-0"
           >

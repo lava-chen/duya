@@ -263,8 +263,20 @@ export class SessionFinalizer {
    * SessionEnd hooks, then yields done (reason='aborted').
    */
   async *finalizeAbort(): AsyncGenerator<SSEEvent, void, unknown> {
-    const { dispatchHooks, turnContext } = this.deps;
     this.deps.host._commitMessages();
+    yield* this.dispatchStopAndSessionEnd();
+    yield { type: 'done', reason: 'aborted' };
+  }
+
+  /**
+   * The Stop + SessionEnd half of the interrupt contract, shared by
+   * the between-turns abort ({@link finalizeAbort}) and the mid-stream
+   * abort ({@link finalizeStreamError}) so the two interrupt paths can
+   * never drift apart — a mid-stream Stop that skipped this block left
+   * mode-exit and background-teardown hook consumers silently unrun.
+   */
+  private async *dispatchStopAndSessionEnd(): AsyncGenerator<SSEEvent, void, unknown> {
+    const { dispatchHooks, turnContext } = this.deps;
     yield* dispatchHooks('Stop', {
       session_id: turnContext.sessionId ?? '',
       cwd: turnContext.workingDirectory ?? '',
@@ -277,7 +289,6 @@ export class SessionFinalizer {
       hook_event_name: 'SessionEnd',
       reason: 'user_exit',
     });
-    yield { type: 'done', reason: 'aborted' };
   }
 
   /**
@@ -291,9 +302,9 @@ export class SessionFinalizer {
    *   1. Log the error.
    *   2. `executor.discard()` — drop any buffered tool_use the
    *      failed stream left behind.
-   *   3. Remove the trailing incomplete `tool_use` assistant
-   *      message so the next turn does not start with an unmatched
-   *      tool call.
+   *   3. (non-abort only) Remove the trailing incomplete `tool_use`
+   *      assistant message so the next turn does not start with an
+   *      unmatched tool call.
    *   4. Persist the cleaned array via `host.setMessages` +
    *      `persistableMessages` so the timeline projection drops the
    *      partial assistant.
@@ -301,7 +312,13 @@ export class SessionFinalizer {
    *   6. If the error is an AbortError, inject synthetic
    *      `tool_result` user-messages for any unmatched tool_use
    *      blocks (so the next turn does not trigger the provider's
-   *      strict-validation error) and yield done(reason='aborted').
+   *      strict-validation error), dispatch Stop + SessionEnd — the
+   *      same hook contract the between-turns abort path runs — and
+   *      yield done(reason='aborted'). The injection runs BEFORE the
+   *      cleanup because the cleanup only ever inspects the trailing
+   *      assistant message: injecting afterwards could never see a
+   *      `tool_use` message (the cleanup had already spliced it out),
+   *      so step 6 used to be unreachable.
    *   7. Otherwise, wrap the error via Plan 462's machine-coded
    *      mapping and yield error + done(reason='error').
    *
@@ -319,12 +336,28 @@ export class SessionFinalizer {
     );
 
     if (executor) executor.discard();
-    this.cleanupIncompleteToolUse(messages);
+
+    // An abort is a user interrupt, not a provider failure: pair every
+    // unmatched `tool_use` with a synthetic result (the assistant
+    // message is still in place here, which is exactly why this must
+    // precede the cleanup below) and keep the pair. The non-abort path
+    // keeps the legacy cleanup, which drops the orphan assistant turn.
+    const isAbort = error instanceof Error && error.name === 'AbortError';
+    if (isAbort) {
+      yield* this.injectSyntheticToolResults(messages);
+    } else {
+      this.cleanupIncompleteToolUse(messages);
+    }
     this.deps.host.setMessages(persistableMessages(messages));
     this.deps.host._commitMessages();
 
-    if (error instanceof Error && error.name === 'AbortError') {
-      yield* this.injectSyntheticToolResults(messages);
+    if (isAbort) {
+      // Plan 587: a mid-stream Stop is the same interrupt the
+      // between-turns path finalizes, so it dispatches Stop +
+      // SessionEnd here too — previously it only yielded
+      // done(aborted) and every hook consumer (mode exit, background
+      // teardown) was silently skipped.
+      yield* this.dispatchStopAndSessionEnd();
       yield { type: 'done', reason: 'aborted' };
       return;
     }
@@ -378,6 +411,11 @@ export class SessionFinalizer {
    * when a run is interrupted mid-flight, so the next turn does
    * not start with an unmatched `tool_use` and trigger the
    * provider's strict-validation error.
+   *
+   * Runs BEFORE `cleanupIncompleteToolUse` on the abort path: the
+   * cleanup only looks at the trailing assistant message, so running
+   * it first removed the very message this has to pair, which is
+   * why the injection used to be unreachable on a mid-stream Stop.
    */
   private async *injectSyntheticToolResults(
     messages: Message[],

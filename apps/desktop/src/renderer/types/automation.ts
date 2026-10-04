@@ -58,6 +58,12 @@ export interface AutomationCron {
   schedule: CronSchedule | null;
   workingDirectory: string;
   model: string;
+  /**
+   * Provider store id the `model` belongs to. Pinning it is what makes a
+   * routine resolve to the vendor the user actually picked when two providers
+   * offer the same model name. Unset = resolve the default provider.
+   */
+  modelProviderId?: string | null;
   enabled: boolean;
   concurrencyPolicy: ConcurrencyPolicy;
   maxRetries: number;
@@ -104,6 +110,8 @@ export interface CreateAutomationCronInput {
   schedule: CronSchedule;
   workingDirectory?: string;
   model?: string;
+  /** Provider store id for `model`; omit to fall back to the default provider. */
+  modelProviderId?: string;
   concurrencyPolicy?: ConcurrencyPolicy;
   maxRetries?: number;
   enabled?: boolean;
@@ -121,6 +129,8 @@ export interface UpdateAutomationCronInput {
   schedule?: CronSchedule;
   workingDirectory?: string;
   model?: string;
+  /** Provider store id for `model`; empty string / null clears the pin. */
+  modelProviderId?: string | null;
   concurrencyPolicy?: ConcurrencyPolicy;
   maxRetries?: number;
   enabled?: boolean;

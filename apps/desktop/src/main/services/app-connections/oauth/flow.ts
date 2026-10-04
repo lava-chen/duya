@@ -124,6 +124,9 @@ export async function startAuthorization(
   }
   const fetchImpl = options.fetchImpl ?? fetch;
   const openExternal = options.openExternal ?? shell.openExternal;
+  // `??` and not `||` on purpose: an explicit `scopes: []` is a valid
+  // "request no scopes" instruction, not a reason to fall back to the
+  // provider defaults.
   const scopes = options.scopes ?? config.defaultScopes;
   const connectionId = options.connectionId ?? randomUUID();
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -216,13 +219,19 @@ export async function startAuthorization(
   }
 
   // 7) Persist metadata + tokens
+  // Record what was GRANTED, not merely what was asked for: a provider that
+  // narrows the scope list (or fills in its own defaults for an empty one)
+  // echoes the truth in the token response. Providers that do not echo
+  // `scope` at all leave `tokens.scopes` empty, and there the requested list
+  // is the only record available.
+  const grantedScopes = tokens.scopes.length > 0 ? tokens.scopes : scopes;
   const now = Date.now();
   const conn: AppConnection = {
     id: connectionId,
     provider,
     accountLabel,
     accountId,
-    scopes,
+    scopes: grantedScopes,
     status: 'connected',
     expiresAt: tokens.expiresAt,
     lastError: null,
@@ -270,11 +279,15 @@ function buildAuthUrl(
   url.searchParams.set('state', params.state);
   url.searchParams.set('code_challenge', params.codeChallenge);
   url.searchParams.set('code_challenge_method', params.codeChallengeMethod);
-  if (params.scopes.length > 0) {
-    // Google/Microsoft accept space-delimited; Slack accepts comma. Space
-    // is the OAuth 2.0 default (RFC 6749 §3.3) and Slack tolerates it.
-    url.searchParams.set('scope', params.scopes.join(' '));
-  }
+  // Always send `scope`, including its empty form. Omitting the parameter is
+  // a DIFFERENT request from `scope=`: RFC 6749 §3.3 leaves an absent scope
+  // to the server's defaults, while an explicit empty value asks for
+  // nothing. An explicit `scopes: []` must therefore be visible on the wire,
+  // otherwise the provider grants its defaults and the record would claim
+  // scopes the user never granted.
+  // Google/Microsoft accept space-delimited; Slack accepts comma. Space
+  // is the OAuth 2.0 default (RFC 6749 §3.3) and Slack tolerates it.
+  url.searchParams.set('scope', params.scopes.join(' '));
   return url.toString();
 }
 

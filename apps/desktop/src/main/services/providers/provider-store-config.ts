@@ -74,6 +74,14 @@ export class ConfigStoreReader implements ProviderStoreReader {
         providerType: p.providerType,
         baseUrl: p.baseUrl,
         options: p.options,
+        // These four are read back by `toApiProvider` below. Omitting them
+        // here made every persist (upsert / delete / setDefault) silently
+        // drop a custom `headers` entry and `extraEnv` from config.toml
+        // while the in-memory cache still showed them.
+        extraEnv: p.extraEnv,
+        headers: p.headers,
+        notes: p.notes,
+        sortOrder: p.sortOrder,
         enabled_models: (p as { enabled_models?: string[] }).enabled_models,
         apiKey: p.apiKey,
       };

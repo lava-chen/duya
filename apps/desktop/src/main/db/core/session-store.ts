@@ -143,6 +143,19 @@ export interface SessionListFilter {
    * `listArchived` / `list({ status: 'archived' })` is the explicit view.
    */
   includeArchived?: boolean;
+  /**
+   * Max rows to return. Clamped into
+   * [SESSION_LIST_MIN_LIMIT, SESSION_LIST_MAX_LIMIT] — the same bounds
+   * `search` and `listSummaries` share. Defaults to
+   * SESSION_LIST_MAX_LIMIT so the renderer-facing list surfaces cannot
+   * materialise the whole table.
+   *
+   * Pass {@link SESSION_LIST_UNLIMITED} ONLY from a caller that genuinely
+   * aggregates over every session (project grouping, capability facts). A
+   * silent cap on those paths would under-count rather than fail, which is
+   * worse than a slow read.
+   */
+  limit?: number;
 }
 
 // ─── SessionStore ───
@@ -301,7 +314,15 @@ export class SessionStore {
         created_at: createdAt,
         updated_at: updatedAt,
       });
-    return this.get(input.id)!;
+    // A read-back that cannot see the row we just wrote is a real failure
+    // (write rolled back, trigger, wrong connection). Throw instead of
+    // returning `undefined` through a non-null assertion: the caller gets a
+    // message naming the id, rather than a TypeError several frames away.
+    const created = this.get(input.id);
+    if (!created) {
+      throw new Error(`session create failed: row not readable after insert (id=${input.id})`);
+    }
+    return created;
   }
 
   get(id: string): CoreSession | null {
@@ -372,13 +393,30 @@ export class SessionStore {
       filter.excludeModes.forEach((m, i) => { params[`em${i}`] = m; });
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    // Bounded like its siblings: the ORDER BY below is already
+    // recency-first, so a truncated tail is the least-recently-used rows —
+    // the ones no sidebar page shows. `SESSION_LIST_UNLIMITED` opts out, and
+    // is reserved for callers that aggregate over every row.
+    const unlimited = filter.limit === SESSION_LIST_UNLIMITED;
+    const boundedLimit = unlimited
+      ? undefined
+      : Math.min(
+          Math.max(
+            Number.isInteger(filter.limit) ? (filter.limit as number) : SESSION_LIST_MAX_LIMIT,
+            SESSION_LIST_MIN_LIMIT,
+          ),
+          SESSION_LIST_MAX_LIMIT,
+        );
     // Plan 582 (G4): sort by recency, not by "last time the row was written",
     // so housekeeping (archive/pin/rename) does not reorder the sidebar. The
     // `id DESC` tiebreak matches `listSummaries` — without it, sessions
     // sharing a millisecond come back in whatever order SQLite feels like.
     const rows = this.db
-      .prepare(`SELECT * FROM sessions ${where} ORDER BY recency_at DESC, id DESC`)
-      .all(params) as SessionRow[];
+      .prepare(
+        `SELECT * FROM sessions ${where} ORDER BY recency_at DESC, id DESC` +
+          (boundedLimit === undefined ? '' : ' LIMIT @limit'),
+      )
+      .all(boundedLimit === undefined ? params : { ...params, limit: boundedLimit }) as SessionRow[];
     return rows.map(rowToSession);
   }
 
@@ -447,11 +485,27 @@ export class SessionStore {
 
   /**
    * LIKE search over title / project_name / agent_name. Escapes `%` `_` `\`,
-   * excludes soft-deleted sessions, sorts by updated_at DESC.
+   * excludes soft-deleted sessions.
+   *
+   * Ordering: `recency_at DESC, id DESC` — the same key as `listSummaries`,
+   * `listByPrefix` and `list()`. `recency_at` is the "user was last here"
+   * timestamp; `updated_at` is "this row changed", so sorting by it reorders
+   * the list on housekeeping writes (archive/rename), which is the split Plan
+   * 582 G4 introduced `recency_at` to remove.
+   *
+   * Unlike the `SessionSummaryOptions` paginated reads, the limit is clamped
+   * rather than rejected: this path is reachable straight from a renderer
+   * argument (`db:search:sessions`), where an out-of-range number must not
+   * turn a search box into an IPC error. The bound is still hard — no
+   * unbounded result set.
    */
-  search(query: string, limit = 50): CoreSession[] {
+  search(query: string, limit = SESSION_SEARCH_DEFAULT_LIMIT): CoreSession[] {
     const escaped = escapeLike(query);
     const pattern = `%${escaped}%`;
+    const boundedLimit = Math.min(
+      Math.max(Number.isInteger(limit) ? limit : SESSION_SEARCH_DEFAULT_LIMIT, SESSION_LIST_MIN_LIMIT),
+      SESSION_LIST_MAX_LIMIT,
+    );
     const rows = this.db
       .prepare(
         `SELECT * FROM sessions
@@ -459,10 +513,10 @@ export class SessionStore {
            AND (title LIKE @pattern ESCAPE '\\'
                 OR project_name LIKE @pattern ESCAPE '\\'
                 OR agent_name LIKE @pattern ESCAPE '\\')
-         ORDER BY updated_at DESC
+         ORDER BY recency_at DESC, id DESC
          LIMIT @limit`,
       )
-      .all({ pattern, limit }) as SessionRow[];
+      .all({ pattern, limit: boundedLimit }) as SessionRow[];
     return rows.map(rowToSession);
   }
 
@@ -473,7 +527,11 @@ export class SessionStore {
    * from `message_index`. Mirrors the legacy `listSessionSummaries` SQL
    * (Plan 99 P3) but reads from the core `sessions` + `message_index`
    * tables. Filters: not deleted, not automation, not gateway, no parent.
-   * Sorted by updated_at DESC, id DESC (deterministic).
+   * Sorted by recency_at DESC, id DESC (deterministic). `recency_at` is the
+   * "user was last here" column; sorting on `updated_at` instead would
+   * reorder cron history whenever housekeeping writes a row. All three
+   * session listers (`list`, `search`, `listSummaries`, `listByPrefix`) share
+   * this key on purpose.
    */
   listSummaries(opts: SessionSummaryOptions = {}): SessionSummary[] {
     const limit = clampLimit(opts.limit ?? SESSION_LIST_DEFAULT_LIMIT);
@@ -504,6 +562,10 @@ export class SessionStore {
    * run is an ordinary session whose id keeps the `cron:<jobId>:...` prefix.
    * `rawPrefix` is treated as a literal prefix (no wildcards): it is escaped
    * and a trailing `%` wildcard is appended.
+   *
+   * Sorted by recency_at DESC, id DESC — same key as every other session
+   * lister. `updated_at` is bumped by housekeeping writes (a housekeeping
+   * pass touching a row would otherwise reorder the run history).
    */
   listByPrefix(rawPrefix: string, opts: SessionSummaryOptions = {}): SessionSummary[] {
     const limit = clampLimit(opts.limit ?? SESSION_LIST_DEFAULT_LIMIT);
@@ -521,7 +583,7 @@ export class SessionStore {
          FROM sessions s
          WHERE s.status != 'deleted'
            AND s.id LIKE @pattern ESCAPE '\\'
-         ORDER BY s.updated_at DESC, s.id DESC
+         ORDER BY s.recency_at DESC, s.id DESC
          LIMIT @limit OFFSET @offset`,
       )
       .all({ pattern, limit, offset }) as SessionSummary[];
@@ -577,6 +639,17 @@ export interface SessionSummaryOptions {
 export const SESSION_LIST_DEFAULT_LIMIT = 20;
 export const SESSION_LIST_MIN_LIMIT = 1;
 export const SESSION_LIST_MAX_LIMIT = 100;
+
+/**
+ * Explicit opt-out for `list`'s default cap, for the few callers that must
+ * see every row (project grouping, capability facts, boot-time counts). A
+ * named sentinel rather than a bare large number so the intent is greppable
+ * and so the cap cannot be defeated by accident.
+ */
+export const SESSION_LIST_UNLIMITED = -1;
+
+/** Default page size for `search` (its own historical default). */
+const SESSION_SEARCH_DEFAULT_LIMIT = 50;
 
 function clampLimit(raw: number): number {
   if (!Number.isInteger(raw)) {

@@ -103,6 +103,32 @@ export interface ConnectorModule {
    * Execute an action with a pre-fetched access token. The connector
    * attaches the token to outbound HTTP requests itself; tokens never
    * leave this method's call frame.
+   *
+   * `tokenType` is the scheme the vault stored with the token (`Bearer` for
+   * every provider today, but OAuth does not guarantee it). Connectors that
+   * build an `Authorization` header must pass it through so a provider that
+   * issued a different scheme is not silently called with the wrong one.
+   * Omitted / empty falls back to `Bearer`, the historical hardcoded value.
    */
-  invoke(action: string, args: unknown, accessToken: string): Promise<ConnectorInvokeResult>;
+  invoke(
+    action: string,
+    args: unknown,
+    accessToken: string,
+    tokenType?: string,
+  ): Promise<ConnectorInvokeResult>;
+}
+
+/**
+ * Resolve the auth scheme for an `Authorization` header: the stored scheme
+ * when it says something other than `Bearer`, else `Bearer`. Case-insensitive
+ * so a vault-stored `bearer` is not sent verbatim as a non-standard scheme.
+ */
+export function resolveAuthScheme(tokenType?: string): string {
+  const scheme = typeof tokenType === 'string' ? tokenType.trim() : '';
+  return scheme.length > 0 && scheme.toLowerCase() !== 'bearer' ? scheme : 'Bearer';
+}
+
+/** `Authorization` header value for a connection's token. */
+export function authorizationHeader(accessToken: string, tokenType?: string): string {
+  return `${resolveAuthScheme(tokenType)} ${accessToken}`;
 }

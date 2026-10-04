@@ -1252,11 +1252,19 @@ export class MessageLog {
         .all(sessionId) as Array<{ id: string }>).map((r) => r.id),
     );
 
+    // Recovered rows must carry the session's current generation, not the
+    // column default (0): `listBySessionMultiFile` resolves a row's file from
+    // its generation, so a 0 would read the recovered tail out of
+    // `archive-0.jsonl` instead of the file it was actually written to.
+    // `getRolloutPath` always points at the open active segment, which is
+    // exactly the generation `getCurrentGeneration` reports.
+    const generation = this.getCurrentGeneration(sessionId);
+
     const insert = this.db.prepare(`
       INSERT OR IGNORE INTO message_index
-        (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len)
+        (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len, generation)
       VALUES
-        (?, ?, COALESCE((SELECT MAX(seq) FROM message_index WHERE session_id = ?), 0) + 1, ?, ?, ?, ?, ?)
+        (?, ?, COALESCE((SELECT MAX(seq) FROM message_index WHERE session_id = ?), 0) + 1, ?, ?, ?, ?, ?, ?)
     `);
 
     // Track offset as we iterate lines to backfill file_offset/byte_len.
@@ -1277,6 +1285,7 @@ export class MessageLog {
               rolloutLineTimestamp(entry),
               offset,
               contentLen,
+              generation,
             );
             indexedIds.add(entry.id);
           }
@@ -2068,12 +2077,18 @@ export class MessageLog {
     fs.renameSync(tmpPath, absolutePath);
 
     // Rebuild the index: DELETE then INSERT in a single transaction.
+    // Every rewritten row is stamped with the session's current generation:
+    // a rewrite collapses the whole timeline into ONE file (the active
+    // segment for a rotated session), so per-event generations would make
+    // `resolveFile` read these offsets out of an archive that no longer
+    // holds the bytes.
+    const generation = this.getCurrentGeneration(sessionId);
     const deleteStmt = this.db.prepare('DELETE FROM message_index WHERE session_id = ?');
     const insertStmt = this.db.prepare(
       `INSERT INTO message_index
-        (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len)
+        (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len, generation)
       VALUES
-        (?, ?, ?, ?, ?, ?, ?, ?)`,
+        (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
 
     // Compute file_offset / byte_len for each line (matching appendLines layout).
@@ -2099,6 +2114,7 @@ export class MessageLog {
           ev.createdAt,
           meta.fileOffset,
           meta.byteLen,
+          generation,
         );
       }
     });
@@ -2273,22 +2289,41 @@ export class MessageLog {
    * for non-bot sessions or before any rotation has happened for a bot
    * session.
    *
-   * Reads from the message_index row with the highest seq — the rotation
-   * event itself uses kind='rotation' and is written to message_index just
-   * like any other row (only the read path skips it). After a rotation the
-   * highest-seq row has the new generation; before any rotation the row
-   * carries generation=0 (the migration id=13 default).
+   * Invariant: the returned value is MONOTONIC across a rewrite. It is
+   * derived from two sources that only ever increase:
+   *   - `chat_sessions.generation`, bumped once per rotation by
+   *     `commitRotationMarker` and never renumbered, and
+   *   - `MAX(generation)` over message_index, which that same helper stamps
+   *     on the rotation marker row (and which stays valid when the
+   *     chat_sessions bump failed — missing column, or no row).
+   * The max of the two is taken so a failed bump cannot lower the value.
+   *
+   * `seq` is deliberately NOT the source. `appendBatch` allocates it as a
+   * cross-generation `MAX(seq)+1`, but `rewriteSession` renumbers from 1, so
+   * after a rewrite the highest-seq row is the LAST event of the timeline —
+   * not the newest generation — and stamping new rows from it would point
+   * `resolveFile` at an archive.
    */
   private getCurrentGeneration(sessionId: string): number {
+    let recorded = 0;
+    try {
+      const row = this.db
+        .prepare('SELECT generation FROM chat_sessions WHERE id = ?')
+        .get(sessionId) as { generation: number } | undefined;
+      recorded = row?.generation ?? 0;
+    } catch {
+      // chat_sessions may not exist yet (isolated tests) or may predate the
+      // column; the message_index max below still carries the rotation.
+    }
     try {
       const row = this.db
         .prepare(
-          'SELECT generation FROM message_index WHERE session_id = ? ORDER BY seq DESC LIMIT 1',
+          'SELECT COALESCE(MAX(generation), 0) AS g FROM message_index WHERE session_id = ?',
         )
-        .get(sessionId) as { generation: number } | undefined;
-      return row?.generation ?? 0;
+        .get(sessionId) as { g: number } | undefined;
+      return Math.max(recorded, row?.g ?? 0);
     } catch {
-      return 0;
+      return recorded;
     }
   }
 
@@ -2517,12 +2552,17 @@ export class MessageLog {
    */
   private rebuildIndexFromRollout(sessionId: string, absolutePath: string): void {
     const lines = this.readAll(absolutePath);
+    // All rebuilt rows live in the single file passed in, so they share one
+    // generation: the session's current one. Stamping the current generation
+    // (rather than 0) keeps `resolveFile` pointing at the file the offsets
+    // were measured against.
+    const generation = this.getCurrentGeneration(sessionId);
     const deleteStmt = this.db.prepare('DELETE FROM message_index WHERE session_id = ?');
     const insertStmt = this.db.prepare(`
       INSERT INTO message_index
-        (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len)
+        (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len, generation)
       VALUES
-        (?, ?, ?, ?, ?, ?, ?, ?)
+        (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const txn = this.db.transaction(() => {
@@ -2544,6 +2584,7 @@ export class MessageLog {
             rolloutLineTimestamp(entry),
             offset,
             contentLen,
+            generation,
           );
         } catch {
           // Skip unparseable lines (crash-damaged tail).

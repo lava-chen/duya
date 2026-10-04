@@ -536,7 +536,7 @@ const subCronRuns: CliSubcommand = {
 
 const subCronDedupe: CliSubcommand = {
   description:
-    'Collapse duplicate jobs in ~/.duya/cronjob.toml (same name + schedule + working directory). Keeps the oldest row; --yes required in non-TTY.',
+    'Collapse duplicate jobs in ~/.duya/cronjob.toml (same name + schedule + working directory + event listeners + bot binding). Keeps the oldest row; --yes required in non-TTY.',
   write: true,
   options: [{ flags: '--yes', description: 'Skip confirmation prompt' }],
   run: (ctx) => runCronCommand.dedupe(ctx),

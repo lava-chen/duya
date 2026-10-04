@@ -82,14 +82,20 @@ function formatUtcFilenameTimestamp(ms: number): string {
  * Build a filename with a custom shortid length (for collision extension).
  * Shape: `<YYYY-MM-DD>T<HH-MM-SS>-<shortid>-<slug>.md` in UTC.
  *
- * Mirrors the shortid logic in `projectionContent.ts::rolloutShortId`:
+ * Mirrors the cleaning in `projectionContent.ts::rolloutShortId`:
  * strip the leading `scheme:` prefix (e.g. `cron:`) and any non-hex
- * characters, then truncate to `shortidLen` chars. Using the same
+ * characters, then keep the first `shortidLen` chars. Using the same
  * algorithm here keeps the collision-extension path aligned with the
  * base derivation, so a file written under this path is recognized by
  * `reconcileProjections` as belonging to the same rollout (otherwise
  * the extension would mint a shortid that doesn't match any row and
  * the file would be misclassified as an orphan on the next reconcile).
+ *
+ * The cleaning is repeated here instead of slicing `rolloutShortId`'s
+ * result: that helper already truncates to 8 chars, so `.slice(0, 12)`
+ * on it was a no-op and the 12/16 ladder re-derived the SAME name
+ * three times — a genuine collision still overwrote the other rollout's
+ * summary.
  */
 function buildFilenameWithShortidLen(
   rolloutId: string,
@@ -97,7 +103,11 @@ function buildFilenameWithShortidLen(
   generatedAt: number,
   shortidLen: number
 ): string {
-  const shortid = rolloutShortId(rolloutId).slice(0, shortidLen);
+  const cleaned = rolloutId
+    .replace(/^[a-z]+:/i, '')
+    .replace(/[^a-f0-9]/gi, '')
+    .toLowerCase();
+  const shortid = cleaned.slice(0, shortidLen);
   return `${formatUtcFilenameTimestamp(generatedAt)}-${shortid}-${sanitizeRolloutSlug(slug)}.md`;
 }
 
@@ -116,12 +126,42 @@ function extractShortidFromFilename(filename: string): string | null {
 }
 
 /**
+ * Name of the file already occupying `filename`, or undefined.
+ * Read from the directory listing rather than reconstructed: on a
+ * case-insensitive filesystem the entry on disk is the authority, and
+ * comparing the derived name against the id it was derived from proves
+ * nothing.
+ */
+function findExistingFilename(summariesDir: string, filename: string): string | undefined {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(summariesDir);
+  } catch {
+    // Directory does not exist yet — the outbox write creates it, and the
+    // derived name is free by definition.
+    return undefined;
+  }
+  return (
+    entries.find((entry) => entry === filename) ??
+    entries.find((entry) => entry.toLowerCase() === filename.toLowerCase())
+  );
+}
+
+/**
  * Resolve the projection filename, handling collisions:
  *   - If no file exists at the derived path, use it.
- *   - If a file exists with the same 8-hex shortid prefix, it's the same
- *     rollout (re-write) — proceed.
- *   - If a file exists with a DIFFERENT shortid (genuine collision),
- *     extend the shortid to 12 then 16 hex chars until a free name is found.
+ *   - If a file exists whose shortid is OURS (same rollout, re-write) —
+ *     proceed and overwrite it.
+ *   - If a file exists with a DIFFERENT shortid (genuine collision), extend
+ *     the shortid to 12 then 16 hex chars until a free name is found.
+ *
+ * "Collision" here means: the derived path is already taken by a file whose
+ * shortid segment is not ours — another rollout whose id shares the first 8
+ * hex chars. The comparison MUST read the name of the file actually on disk;
+ * the previous code extracted the shortid from the freshly derived filename
+ * and compared it against the id that filename was derived from, which can
+ * never differ, so a genuine collision silently overwrote the other
+ * rollout's summary.
  */
 function resolveProjectionFilename(
   summariesDir: string,
@@ -140,20 +180,26 @@ function resolveProjectionFilename(
   }
 
   // File exists — same rollout (re-write) or genuine collision?
-  const existingShortid = extractShortidFromFilename(baseFilename);
-  const ourShortid8 = rolloutShortId(rolloutId);
-  if (existingShortid === ourShortid8) {
+  const existingFilename = findExistingFilename(summariesDir, baseFilename);
+  if (existingFilename === undefined) {
+    return baseFilename;
+  }
+  const existingShortid = extractShortidFromFilename(existingFilename);
+  if (existingShortid === rolloutShortId(rolloutId)) {
     return baseFilename;
   }
 
-  // Genuine collision — extend shortid to 12 then 16 hex chars.
+  // Genuine collision — extend the shortid to 12 then 16 hex chars.
   for (const len of [12, 16] as const) {
     const candidate = buildFilenameWithShortidLen(rolloutId, slug, generatedAt, len);
     if (!fs.existsSync(path.join(summariesDir, candidate))) {
       return candidate;
     }
   }
-  // All lengths collide — fall back to the 16-char form.
+  // All lengths collide — two rollouts share the first 16 hex chars of their
+  // id. 12/16 are the only lengths the D11 filename grammar accepts, so there
+  // is no non-colliding name left inside the contract; overwrite the 16-char
+  // form rather than mint a name reconcile would misclassify as an orphan.
   return buildFilenameWithShortidLen(rolloutId, slug, generatedAt, 16);
 }
 

@@ -67,7 +67,16 @@ export const GroupElement: React.FC<{ element: CanvasElement }> = ({ element }) 
   const locked = element.metadata.locked === true;
 
   // Real-time bbox: re-computes whenever elements change (members dragged, etc).
-  const bbox = useMemo(() => computeGroupBbox(memberIds, elements), [memberIds, elements]);
+  // Only members that still resolve are considered: `removeElement` prunes a
+  // group's `memberIds` when a member is deleted, but a member removed by any
+  // other path (undo, a reload of older data) can still be listed, and a frame
+  // sized from a missing member — or a drag that re-applies positions to dead
+  // ids — is worse than no frame at all.
+  const liveMemberIds = useMemo(
+    () => memberIds.filter((id) => elements.some((e) => e.id === id)),
+    [memberIds, elements],
+  );
+  const bbox = useMemo(() => computeGroupBbox(liveMemberIds, elements), [liveMemberIds, elements]);
 
   const isSelected = selectedElementId === element.id;
 
@@ -96,7 +105,7 @@ export const GroupElement: React.FC<{ element: CanvasElement }> = ({ element }) 
     setSelectedElementId(element.id);
 
     const origPositions = new Map<string, { x: number; y: number }>();
-    for (const id of memberIds) {
+    for (const id of liveMemberIds) {
       const el = elements.find((it) => it.id === id);
       if (el && el.metadata.locked !== true) origPositions.set(id, { x: el.position.x, y: el.position.y });
     }
@@ -109,7 +118,7 @@ export const GroupElement: React.FC<{ element: CanvasElement }> = ({ element }) 
       lastMouseX: e.clientX,
       lastMouseY: e.clientY,
     };
-  }, [bbox, elements, locked, memberIds, setSelectedElementId]);
+  }, [bbox, elements, locked, liveMemberIds, setSelectedElementId]);
 
   useEffect(() => {
     const flushDragFrame = () => {
@@ -125,7 +134,7 @@ export const GroupElement: React.FC<{ element: CanvasElement }> = ({ element }) 
       if (dxGrid === 0 && dyGrid === 0) return;
 
       // Apply delta to every member locally for snappy feedback.
-      for (const id of memberIds) {
+      for (const id of liveMemberIds) {
         const orig = r.origPositions.get(id);
         if (!orig) continue;
         updateElement(id, {
@@ -162,7 +171,7 @@ export const GroupElement: React.FC<{ element: CanvasElement }> = ({ element }) 
       const finalDx = (r.lastMouseX - r.startMouseX) / (canvasTransformState.zoom || 1);
       const finalDy = (r.lastMouseY - r.startMouseY) / (canvasTransformState.zoom || 1);
       if (finalDx === 0 && finalDy === 0) return;
-      for (const id of memberIds) {
+      for (const id of liveMemberIds) {
         const orig = r.origPositions.get(id);
         if (!orig) continue;
         const el = useConductorStore.getState().elements.find((it) => it.id === id);
@@ -184,7 +193,7 @@ export const GroupElement: React.FC<{ element: CanvasElement }> = ({ element }) 
       window.removeEventListener("mousemove", handleGlobalMouseMove);
       window.removeEventListener("mouseup", handleGlobalMouseUp);
     };
-  }, [activeCanvasId, elements, memberIds, setUiError, updateElement]);
+  }, [activeCanvasId, elements, liveMemberIds, setUiError, updateElement]);
 
   if (!bbox) return null;
 

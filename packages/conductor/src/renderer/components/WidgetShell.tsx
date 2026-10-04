@@ -44,8 +44,19 @@ export function WidgetShell({ widget, dynamicDef }: WidgetShellProps) {
     const widgetId = widget.id;
     const canvasId = widget.canvasId;
     const handleMessage = (e: MessageEvent) => {
+      // A `sandbox="allow-scripts"` iframe has an opaque origin, so
+      // `event.source` is the only sender identity the host can trust.
+      // Without this check ANY mounted widget iframe — or the host document
+      // itself — can post a `widget:resize` and drive this widget's persisted
+      // height. Mirrors the workbench listener below.
+      if (e.source !== iframeRef.current?.contentWindow) return;
       if (!e.data || typeof e.data !== "object") return;
       if (e.data.type !== "widget:resize" || typeof e.data.height !== "number") return;
+      // The receiver script in `widget-sanitizer.ts` posts no id. If a future
+      // one does, it must name THIS widget; a mismatched id is dropped even
+      // when the source somehow matched.
+      const claimedWidgetId = (e.data as { widgetId?: unknown }).widgetId;
+      if (typeof claimedWidgetId === "string" && claimedWidgetId !== widgetId) return;
       if (resizedRef.current) return;
       const contentHeight = e.data.height + CHROME_PADDING_PX;
       const currentHeightPx = widget.position.h * GRID_PX;

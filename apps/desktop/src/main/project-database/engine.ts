@@ -73,6 +73,7 @@ interface ViewRow {
   filter_json: string | null;
   sort_json: string | null;
   layout_json: string;
+  revision: number;
   created_at: number;
   updated_at: number;
   archived_at: number | null;
@@ -177,6 +178,7 @@ function mapView(row: ViewRow): DatabaseView {
     filter: parseJson<DatabaseFilterNode | null>(row.filter_json, null),
     sorts: parseJson<DatabaseSortRule[]>(row.sort_json, []),
     layout: parseJson(row.layout_json, {}),
+    revision: row.revision,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     archivedAt: row.archived_at,
@@ -240,10 +242,14 @@ function recordRow(db: Sqlite, sourceId: string, recordId: string): RecordRow {
   return row;
 }
 
-function assertRevision(row: RecordRow, expectedRevision: number): void {
+/**
+ * Optimistic-lock guard shared by the record and view mutators. `label` is
+ * the entity noun in the error message; records keep the original wording.
+ */
+function assertRevision(row: { id: string; revision: number }, expectedRevision: number, label = 'Record'): void {
   if (row.revision !== expectedRevision) {
     throw new ProjectDatabaseError(
-      `Record ${row.id} changed since it was loaded`,
+      `${label} ${row.id} changed since it was loaded`,
       'CONFLICT',
       { expectedRevision, actualRevision: row.revision },
     );
@@ -465,6 +471,42 @@ function comparable(value: DatabaseValue): string | number | boolean | null {
   return value;
 }
 
+/**
+ * Structural equality for filter values.
+ *
+ * Dates are compared field-by-field on a normalised shape instead of via
+ * `JSON.stringify`: the stored form is always `{start, end, timezone}` (all
+ * three keys, nulls included — see `valueFromRow`) while `DatabaseValueSchema`
+ * also permits a bare `{start}`. A stringify comparison therefore never
+ * matched, and an equality filter on a date property returned zero rows
+ * even for the record it was written from. A missing `end`/`timezone` means
+ * "unset", which is the same thing as an explicit `null`.
+ */
+function isDateValue(value: DatabaseValue): value is { start: string; end?: string | null; timezone?: string | null } {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) && typeof value.start === 'string';
+}
+
+function normalizeDateValue(value: { start: string; end?: string | null; timezone?: string | null }): {
+  start: string;
+  end: string | null;
+  timezone: string | null;
+} {
+  return { start: value.start, end: value.end ?? null, timezone: value.timezone ?? null };
+}
+
+function valuesEqual(actual: DatabaseValue, expected: DatabaseValue): boolean {
+  if (isDateValue(actual) || isDateValue(expected)) {
+    // A date never equals a non-date value (and vice versa).
+    if (!isDateValue(actual) || !isDateValue(expected)) return false;
+    const a = normalizeDateValue(actual);
+    const b = normalizeDateValue(expected);
+    return a.start === b.start && a.end === b.end && a.timezone === b.timezone;
+  }
+  // Scalars and string arrays keep the existing structural comparison; key
+  // order is irrelevant for both shapes.
+  return JSON.stringify(actual) === JSON.stringify(expected);
+}
+
 function filterMatches(snapshot: DatabaseRecordSnapshot, filter: DatabaseFilterNode, properties: Map<string, DatabaseProperty>): boolean {
   if ('and' in filter) return filter.and.every((node) => filterMatches(snapshot, node, properties));
   if ('or' in filter) return filter.or.some((node) => filterMatches(snapshot, node, properties));
@@ -475,9 +517,9 @@ function filterMatches(snapshot: DatabaseRecordSnapshot, filter: DatabaseFilterN
     case 'is_empty':
       return actual === null || actual === '' || (Array.isArray(actual) && actual.length === 0);
     case 'equals':
-      return JSON.stringify(actual) === JSON.stringify(expected);
+      return valuesEqual(actual, expected);
     case 'not_equals':
-      return JSON.stringify(actual) !== JSON.stringify(expected);
+      return !valuesEqual(actual, expected);
     case 'contains':
       return Array.isArray(actual)
         ? typeof expected === 'string' && actual.includes(expected)
@@ -531,7 +573,20 @@ function queryDatabase(db: Sqlite, command: Extract<ProjectDatabaseCommand, { ty
 
   if (command.cursor) {
     const cursorIndex = records.findIndex((record) => record.record.id === command.cursor);
-    if (cursorIndex >= 0) records = records.slice(cursorIndex + 1);
+    if (cursorIndex < 0) {
+      // Fail closed. The cursor row left the filtered+sorted result set (it
+      // was archived/deleted/edited, or the filter narrowed between pages).
+      // Falling through would re-emit page 1 under the same cursor and loop
+      // the caller forever; returning an empty page would silently truncate
+      // the result. A typed NOT_FOUND tells the caller its cursor is stale and
+      // that it should restart paging from the beginning deliberately.
+      throw new ProjectDatabaseError(
+        `Cursor ${command.cursor} is not in the result set for source ${command.sourceId}`,
+        'NOT_FOUND',
+        { cursor: command.cursor, sourceId: command.sourceId },
+      );
+    }
+    records = records.slice(cursorIndex + 1);
   }
   const hasMore = records.length > command.limit;
   records = records.slice(0, command.limit);
@@ -772,8 +827,8 @@ export class ProjectDatabaseEngine {
     const defaultLayout = { visiblePropertyIds: snapshot.properties.map((property) => property.id), columnWidths: {} };
     db.transaction(() => {
       db.prepare(`INSERT INTO db_views
-        (id, source_id, name, type, filter_json, sort_json, quick_filters_json, layout_json, created_at, updated_at, archived_at)
-        VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL)`).run(
+        (id, source_id, name, type, filter_json, sort_json, quick_filters_json, layout_json, revision, created_at, updated_at, archived_at)
+        VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 1, ?, ?, NULL)`).run(
         viewId,
         command.sourceId,
         command.name,
@@ -793,12 +848,18 @@ export class ProjectDatabaseEngine {
     const snapshot = sourceSnapshot(db, command.sourceId);
     const current = snapshot.views.find((view) => view.id === command.viewId);
     if (!current) throw new ProjectDatabaseError(`View ${command.viewId} not found`, 'NOT_FOUND');
+    // Same optimistic-lock discipline as `updateRecord` / `archiveRecord`: a
+    // second editor's write is rejected instead of silently replacing the
+    // first. The `AND revision = ?` below closes the read-then-write window
+    // the guard alone cannot see.
+    assertRevision({ id: current.id, revision: current.revision }, command.expectedRevision, 'View');
     const properties = new Map(snapshot.properties.map((property) => [property.id, property]));
     if (command.filter) assertFilterOperators(command.filter, properties);
     for (const sort of command.sorts ?? []) {
       if (!properties.has(sort.propertyId)) throw new ProjectDatabaseError(`Unknown sort property ${sort.propertyId}`, 'INVALID_QUERY');
     }
     const now = Date.now();
+    const revision = current.revision + 1;
     const next = {
       name: command.name ?? current.name,
       filter: command.filter !== undefined ? command.filter : current.filter,
@@ -806,16 +867,18 @@ export class ProjectDatabaseEngine {
       layout: command.layout !== undefined ? command.layout : current.layout,
     };
     db.transaction(() => {
-      db.prepare('UPDATE db_views SET name = ?, filter_json = ?, sort_json = ?, layout_json = ?, updated_at = ? WHERE id = ? AND source_id = ?').run(
+      db.prepare('UPDATE db_views SET name = ?, filter_json = ?, sort_json = ?, layout_json = ?, revision = ?, updated_at = ? WHERE id = ? AND source_id = ? AND revision = ?').run(
         next.name,
         next.filter ? JSON.stringify(next.filter) : null,
         JSON.stringify(next.sorts),
         JSON.stringify(next.layout),
+        revision,
         now,
         command.viewId,
         command.sourceId,
+        command.expectedRevision,
       );
-      addEvent(db, command.sourceId, null, actor(command), command.type, { viewId: command.viewId }, { name: current.name, filter: current.filter, sorts: current.sorts, layout: current.layout }, now);
+      addEvent(db, command.sourceId, null, actor(command), command.type, { viewId: command.viewId, revision }, { name: current.name, filter: current.filter, sorts: current.sorts, layout: current.layout }, now);
     })();
     return viewsForSource(db, command.sourceId).find((view) => view.id === command.viewId)!;
   }

@@ -540,18 +540,52 @@ export class WeixinAdapter extends BaseAdapter {
       try {
         const response = await this.api.getUpdates(this.pollSyncBuf, LONG_POLL_TIMEOUT_MS);
 
-        const newSyncBuf = response.get_updates_buf;
-        if (newSyncBuf) {
-          this.pollSyncBuf = newSyncBuf;
-          this.stateStore?.setSyncBuf(newSyncBuf);
-        }
-
         this.consecutiveFailures = 0;
 
-        for (const msg of response.msgs ?? []) {
-          await this.processMessage(msg).catch((err) => {
+        // The batch is handled BEFORE the cursor moves, and the cursor moves
+        // only if every message in it was handled. `get_updates_buf` is the
+        // only record of what has been consumed and `setSyncBuf` persists it
+        // to disk, so advancing it first made the whole batch at-most-once:
+        // one failure, or one crash, lost every message after it for good.
+        const msgs = response.msgs ?? [];
+        let failed = 0;
+        for (const msg of msgs) {
+          try {
+            await this.processMessage(msg);
+          } catch (err) {
+            // Counted, not swallowed. The message stays unmarked (see
+            // `processMessage`), so it is reprocessed on the next poll.
+            failed += 1;
             console.error('[Weixin] Message processing error:', err);
-          });
+          }
+        }
+
+        if (failed > 0) {
+          // Deliberate trade: at-least-once, not at-most-once. Holding the
+          // cursor costs a redelivery of the messages that DID succeed, which
+          // `processMessage` deduplicates by message id; advancing it would
+          // cost the `failed` messages, and nothing would ever resend those.
+          // A message that fails on every attempt therefore parks the cursor
+          // and is retried each poll rather than being dropped — that
+          // head-of-line stall is the honest failure mode here, because the
+          // alternative is silent loss.
+          //
+          // `console.warn`, not the structured logger, and deliberately so: this
+          // package is bundled as a standalone CJS child process with
+          // `rootDir: ./src`, so it cannot reach the app's logger in
+          // `apps/desktop/src/main/logging/logger.ts`, and it has no dependency
+          // on `@duya/agent` either. This tree logs via `console.*` throughout;
+          // a single call site is not the place to introduce a second
+          // convention. Revisit when the gateway grows a logger of its own.
+          console.warn(
+            `[Weixin] ${failed}/${msgs.length} message(s) failed; holding the sync cursor for redelivery`,
+          );
+        } else {
+          const newSyncBuf = response.get_updates_buf;
+          if (newSyncBuf) {
+            this.pollSyncBuf = newSyncBuf;
+            this.stateStore?.setSyncBuf(newSyncBuf);
+          }
         }
       } catch (err) {
         this.consecutiveFailures++;
@@ -586,8 +620,17 @@ export class WeixinAdapter extends BaseAdapter {
     const msgId = String(msg.message_id ?? msg.MsgId ?? msg.Int64 ?? '');
     if (!msgId || this.isWeixinDup(msgId)) return;
 
-    this.markWeixinDup(msgId);
+    await this.handleMessage(msg, senderId, msgId);
 
+    // Marked on the way OUT, never on the way in. Marking before the work
+    // meant a message that threw mid-flight was already recorded as seen, so
+    // the redelivery that a held poll cursor buys was skipped as a duplicate
+    // and the message was lost anyway. A throw leaves it unmarked, which is
+    // the only reason holding the cursor is worth anything.
+    this.markWeixinDup(msgId);
+  }
+
+  private async handleMessage(msg: WeChatMessage, senderId: string, msgId: string): Promise<void> {
     const hasTextItem = msg.item_list?.some(
       (item) => item.type === MessageItemType.TEXT && item.text_item?.text,
     );

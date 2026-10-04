@@ -77,8 +77,10 @@ function getCachedProviderConfig(): Record<string, unknown> | undefined {
     let gatewayModelSetting = configStore.getByPath('channels.gateway_model') as string | undefined;
     if (!gatewayModelSetting) gatewayModelSetting = fallbackGetSetting('gatewayModel');
     if (!gatewayModelSetting) {
-      // ModelSelectionSection persists the qualified form under the
-      // `modelSelection` JSON key.
+      // The retired ModelSelectionSection used to persist the qualified form
+      // under the `modelSelection` JSON key. That component was removed as a
+      // dead duplicate, so nothing writes this key any more — this read stays
+      // only to resolve values written before its removal.
       const modelSelection = fallbackGetSetting('modelSelection');
       if (modelSelection) {
         try {
@@ -737,6 +739,17 @@ export function handleGatewayMessage(
         platformUserId?: string;
         platformMsgId?: string;
         platformChatId: string;
+        // The thread a reply belongs to, forwarded by the gateway manager
+        // (Feishu `root_id`, Telegram `message_thread_id`, Discord
+        // `thread.id`). The manager omits the key when absent, so a
+        // non-threaded message leaves the payload unchanged.
+        //
+        // Not threaded into the wake envelope below: `ChannelInboundEnvelope`
+        // (packages/agent/src/channels/types.ts) declares only `address`,
+        // `sender`, `text`, `reaction` and `attachments`, so there is no slot
+        // to carry it and no cast is forced here. Reaching the agent turn also
+        // needs `buildChannelInboundWakePrompt` to render it.
+        threadId?: string;
         command?: string;
         args?: string[];
         options?: Record<string, unknown>;
@@ -826,6 +839,31 @@ export function handleGatewayMessage(
       // handleGatewayMessage is synchronous, so the awaited persistence and
       // the wake run in an async IIFE — the message is still never lost if
       // persistence throws (the wake fires without attachments).
+      //
+      // Why this envelope builder coexists with the one in
+      // `connector-runtime.ts:routeInboundToBot` (they are NOT duplicates):
+      //   - Transport differs. This path is fed by the gateway CHILD PROCESS
+      //     over IPC (`gateway:inbound`); the other is fed in-process by the
+      //     long-poll/webhook connectors' `onInbound` callback.
+      //   - Session resolution differs. The gateway resolves the owning session
+      //     itself and passes it in; routeInboundToBot derives
+      //     `getBotSessionId(agentId)` and must `createIfMissing` the bot
+      //     session first. Merging would re-key gateway traffic.
+      //   - Validation differs. This path calls the MODULE-LEVEL
+      //     `wakeForInbound` in `wake/channels.ts`, which deliberately does NOT
+      //     consult the channel store ("channels are session-scoped", see the
+      //     comment there). The connector path calls the
+      //     `ChannelBackgroundWakes.wakeForInbound` method, which DOES verify
+      //     the platform is configured for the agent and drops the message if
+      //     not. Routing one through the other would either silently skip that
+      //     check or start dropping gateway traffic that never had a channel
+      //     store entry.
+      //   - Response/ordering differs. This path additionally persists
+      //     attachments and broadcasts `gateway:agent_busy` to the gateway
+      //     process; the connector path owns no gateway-process protocol.
+      // Both ultimately enqueue into the same `inboundEnvelopeStore` +
+      // `enqueueInboundWake` queue, so the dispatcher ordering contract is
+      // shared. Keep them separate.
       const address: ChannelAddress = {
         platform,
         chat: platformChatId,
@@ -860,6 +898,9 @@ export function handleGatewayMessage(
           text,
           reaction: null,
           attachments: attachments.length > 0 ? attachments : undefined,
+          // Omitted, not `undefined`, when the message is not threaded — the
+          // serialized payload is then byte-identical to a pre-threading one.
+          ...(inboundMsg.threadId ? { threadId: inboundMsg.threadId } : {}),
         };
         wakeForInbound(sessionId, envelope);
 

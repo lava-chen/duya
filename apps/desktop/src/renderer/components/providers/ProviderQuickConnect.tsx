@@ -149,6 +149,11 @@ export function ProviderQuickConnect({
                 headers: existingProvider.headers,
                 extraEnv: existingProvider.extraEnv,
                 notes: existingProvider.notes,
+                // Preserved identity fields — spellings match the reads in
+                // `useProviderEditSave` (`existingDto.createdAt`,
+                // `existingDto.sortOrder`).
+                createdAt: existingProvider.createdAt,
+                sortOrder: existingProvider.sortOrder,
               }
             : undefined,
         },

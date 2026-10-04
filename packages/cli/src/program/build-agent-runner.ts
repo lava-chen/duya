@@ -131,6 +131,48 @@ export interface CliInvocation {
   fromPath?: string;
   scope?: string;
   deleteData?: boolean;
+  // Flags that `descriptors.ts` declares and a command's `run()` reads, but
+  // that this invocation shape did not carry — so they arrived as `undefined`
+  // in the `options` bag while the external `duya` CLI forwarded them. Same
+  // defect on both dispatchers, one key list.
+  /** `channel send` — message text / local file attachment. */
+  text?: string;
+  file?: string;
+  /** `channel send` / `channel connect` — the plain, non-repeating form.
+   *  `configAgents` above is the repeatable `mcp add` form of the same flag. */
+  agent?: string | string[];
+  chat?: string;
+  label?: string;
+  tokenEnv?: string;
+  stdin?: boolean;
+  /** `status` (the `default` subcommand) — poll instead of printing once. */
+  watch?: boolean;
+  interval?: string;
+  /** `backup create` / `backup restore`. `dryRun` used to be dropped, so
+   *  "preview the plan" wrote a real archive. */
+  outputDir?: string;
+  includeWorkspace?: boolean;
+  onlyConfig?: boolean;
+  dryRun?: boolean;
+  verify?: boolean;
+  /** `session export` / `session list`. */
+  q?: string;
+  output?: string;
+  /** `projects cleanup` — dry-run unless `--apply`. */
+  apply?: boolean;
+  archiveDir?: string;
+  /** `security scan`. */
+  deep?: boolean;
+  /** `config set` / `config get` / `config validate`. */
+  key?: string;
+  value?: string;
+  path?: string;
+  /** JSON params payload (`--params`). */
+  params?: string;
+  /** `memory` — backend recommendation / provider / model. */
+  memoryAuto?: boolean;
+  memoryProvider?: string;
+  memoryModel?: string;
 }
 
 export interface CliRunResult {
@@ -300,6 +342,39 @@ export function buildAgentRunner(): (inv: CliInvocation) => Promise<CliRunResult
         fromPath: inv.fromPath,
         scope: inv.scope,
         deleteData: inv.deleteData,
+        // Declared in `descriptors.ts`, read by a command, and previously
+        // missing here. `buildControlPlane`'s bag is the reference list; the
+        // two must carry the same key set or a flag works in the `duya` binary
+        // and silently does nothing in the `duya_cli` agent tool.
+        text: inv.text,
+        file: inv.file,
+        agent: inv.agent,
+        chat: inv.chat,
+        label: inv.label,
+        tokenEnv: inv.tokenEnv,
+        stdin: inv.stdin,
+        watch: inv.watch,
+        interval: inv.interval,
+        outputDir: inv.outputDir,
+        includeWorkspace: inv.includeWorkspace,
+        onlyConfig: inv.onlyConfig,
+        dryRun: inv.dryRun,
+        verify: inv.verify,
+        q: inv.q,
+        // `session export --format <json|md>`. Distinct from `ctx.format`,
+        // which is the normalized text|json envelope format above.
+        format: inv.format,
+        output: inv.output,
+        apply: inv.apply,
+        archiveDir: inv.archiveDir,
+        deep: inv.deep,
+        key: inv.key,
+        value: inv.value,
+        path: inv.path,
+        params: inv.params,
+        memoryAuto: inv.memoryAuto,
+        memoryProvider: inv.memoryProvider,
+        memoryModel: inv.memoryModel,
       },
     };
 

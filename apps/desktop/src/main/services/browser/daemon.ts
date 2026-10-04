@@ -40,6 +40,10 @@ import { decideExtensionTrust } from './extension-trust';
 const DEFAULT_DAEMON_PORT = 19825;
 const PORT = parseInt(process.env.DUYA_DAEMON_PORT ?? String(DEFAULT_DAEMON_PORT), 10);
 const MAX_BODY = 1024 * 1024; // 1 MB
+/** EADDRINUSE reclaim attempts per startBrowserDaemon() call before giving up. */
+const MAX_START_ATTEMPTS = 5;
+/** Delay between EADDRINUSE reclaim retries. */
+const PORT_RECLAIM_RETRY_MS = 500;
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -666,11 +670,14 @@ export function startBrowserDaemon(): Promise<void> {
       return;
     }
 
-    doStartBrowserDaemon().then(resolve).catch(reject);
+    // The attempt counter lives in the entry point, not in the per-listen
+    // `settle` guard: a service that answers /shutdown with 200 but never
+    // frees the port would otherwise restart the cycle every 500ms forever.
+    doStartBrowserDaemon(1).then(resolve).catch(reject);
   });
 }
 
-function doStartBrowserDaemon(): Promise<void> {
+function doStartBrowserDaemon(attempt: number): Promise<void> {
   return new Promise((resolve, reject) => {
     httpServer = createServer((req, res) => {
       handleRequest(req, res).catch(() => {
@@ -688,11 +695,20 @@ function doStartBrowserDaemon(): Promise<void> {
       fn();
     };
 
+    // One server can report the same failure twice: on Windows `listen()`
+    // throws EADDRINUSE synchronously AND the 'error' event is emitted
+    // asynchronously afterwards. `settled` only guards rejection, so without
+    // this flag both paths would start their own retry chain and fight over
+    // the same port, leaving the start promise unsettled.
+    let handled = false;
+
     // Attach the error handler BEFORE listen() so we can catch the synchronous
     // EADDRINUSE that net.Server.setupListenHandle can throw (Node 18.x on
     // Windows, observed in the wild). Without this, the throw escapes through
     // the uncaughtException path and the self-healing retry never runs.
     const onError = (err: NodeJS.ErrnoException) => {
+      if (handled) return;
+      handled = true;
       // Tear down the half-constructed server so the retry path can build a
       // fresh one. Without this, httpServer stays referenced and a second
       // startBrowserDaemon() call would short-circuit on the isRunning check.
@@ -702,15 +718,22 @@ function doStartBrowserDaemon(): Promise<void> {
       try { failedServer.closeAllConnections?.(); } catch {}
 
       if (err.code === 'EADDRINUSE') {
+        if (attempt >= MAX_START_ATTEMPTS) {
+          log('error', `Port ${PORT} still in use after ${attempt} reclaim attempts — giving up`);
+          settle(() => reject(new Error(
+            `Port ${PORT} is in use and could not be reclaimed after ${attempt} attempts. Please close other applications using this port or restart your computer.`,
+          )));
+          return;
+        }
         // Port is occupied by a previous instance that didn't shut down cleanly.
         // Try to connect to it and shut it down via HTTP, then retry.
-        log('warn', `Port ${PORT} already in use — attempting to stop previous daemon`);
+        log('warn', `Port ${PORT} already in use (attempt ${attempt}/${MAX_START_ATTEMPTS}) — attempting to stop previous daemon`);
         const req = httpRequest({ hostname: '127.0.0.1', port: PORT, path: '/shutdown', method: 'POST', headers: { 'X-DUYA': '1' } }, (res) => {
           if (res.statusCode === 200) {
-            log('info', 'Previous daemon stopped, retrying startup in 500ms');
+            log('info', `Previous daemon stopped, retrying startup in ${PORT_RECLAIM_RETRY_MS}ms`);
             setTimeout(() => {
-              doStartBrowserDaemon().then(resolve).catch(reject);
-            }, 500);
+              doStartBrowserDaemon(attempt + 1).then(resolve).catch(reject);
+            }, PORT_RECLAIM_RETRY_MS);
           } else {
             log('error', `Previous daemon returned ${res.statusCode}, cannot reclaim port`);
             settle(() => reject(new Error(`Port ${PORT} is in use and cannot be reclaimed. Please close other applications using this port or restart your computer.`)));
@@ -746,7 +769,9 @@ function doStartBrowserDaemon(): Promise<void> {
       // Some Node versions (and Windows in particular) raise EADDRINUSE
       // synchronously from net.Server.setupListenHandle. The 'error' event
       // will ALSO be emitted asynchronously after this, but we handle it
-      // inline here so the self-healing path runs without waiting.
+      // inline here so the self-healing path runs without waiting — the
+      // `handled` guard in onError keeps that late event from starting a
+      // second retry chain.
       const e = err as NodeJS.ErrnoException;
       if (e?.code === 'EADDRINUSE') {
         onError(e);

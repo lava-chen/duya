@@ -7,9 +7,12 @@
  * ```
  *   RunOrchestrator.openRun          (apps/desktop, real)
  *     -> buildRunManifest            (control-plane/manifest-factory, real)
- *     -> dispatchControlPlaneAction  (control-plane/run-control-plane, real)
- *          -> RunStore               (db/core/run-store, real)
- *               -> better-sqlite3    (real, isolated temp file)
+ *     -> ControlPlaneService.serveWire (control-plane/control-plane-service, real)
+ *          -> authoriseCommandSender (control-plane/command-receipt, real)
+ *          -> dispatchControlPlaneAction  (control-plane/run-control-plane, real)
+ *               -> RunStore         (db/core/run-store, real)
+ *                    -> better-sqlite3    (real, isolated temp file)
+ *          -> receipt.result        (the wire reply agents/db-bridge.ts returns)
  *     -> createWorkerExecutionChannel.dispatch
  *          -> stdin JSON line        (the REAL worker process)
  *               -> handleChatStart   (agent-process-entry, real)
@@ -29,6 +32,27 @@
  * building, SSE parsing, thinking/tool-call assembly and usage extraction all
  * run.
  *
+ * ## The run receipt is part of the path
+ *
+ * This harness used to call `dispatchControlPlaneAction` directly, which is
+ * where production STARTS rather than ends: `serveWire` authorises the sender,
+ * dispatches, and returns the WIRE reply, and `agents/db-bridge.ts` hands that
+ * reply straight to the run layer. Jumping to the free function skipped both
+ * layers, so the receipt contract was never exercised here and this suite was
+ * structurally unable to see a successful `run:create` come back as
+ * `unreadable` — `RunOrchestrator` applies its own `readRunReceipt` to whatever
+ * `dbRequest` returns (`run-orchestrator.ts:399`), so the shape crossing that
+ * seam is the thing under test. It is served for real below.
+ *
+ * The method is `serveWire`, not `serve`, and that distinction is the whole
+ * point. `serve` returns the INTERNAL receipt, whose durable states carry
+ * `state`/`runId` and deliberately not `ok`; returning that here reproduced the
+ * exact F01 defect the harness exists to catch — a successful `run:create`
+ * reported as `unreadable`, `openRun` refusing to dispatch, and the tool turn
+ * silently never running. A harness that steps over the seam it is testing is
+ * worse than no harness, so the call below must stay byte-for-byte the call
+ * `db-bridge.ts` makes.
+ *
  * ## What is NOT claimed
  *
  * `db-bridge.ts` is Electron-coupled, so the chat-session tables are answered
@@ -47,6 +71,16 @@ import { manifestFingerprint, type PermissionPolicyMode } from '@duya/agent-prot
 import { RunOrchestrator, createWorkerExecutionChannel, type ChatStartCommand, type RunTurnIntent } from '../agents/server/run-orchestrator';
 import { normalizeAndObserve, type RouterDeps } from '../agents/server/router';
 import { dispatchControlPlaneAction } from '../control-plane/run-control-plane';
+import {
+  createControlPlane,
+  getControlPlane,
+  _resetControlPlaneForTesting,
+} from '../control-plane/control-plane-service';
+import {
+  createControlPlaneRepository,
+  _resetControlPlaneRepositoryForTesting,
+} from '../control-plane/sqlite-repository';
+import { COMMAND_SCHEMA_VERSION } from '../control-plane/command-receipt';
 import { RunStore } from '../db/core/run-store';
 import { startOfflineProvider, type OfflineProvider, type OfflineProviderScript } from './eval-offline-provider';
 import { startLegacyWorker, type LegacyWorker, type WorkerFrame } from './eval-legacy-worker';
@@ -247,6 +281,67 @@ export async function runLegacyLoop(
     mod._setCoreStoresForTesting({ runs: runStore } as never);
   });
 
+  // The Control Plane, created the way composition creates it
+  // (`main/index.ts:343`): the real service over the real store injected
+  // above, dispatching through the real `request` seam. This is the boundary
+  // the harness used to step over, and stepping over it is what made the run
+  // receipt unobservable here.
+  //
+  // Both bindings are process-wide singletons and this function can run more
+  // than once per process (one namespace per case), so each run rebinds them
+  // to ITS database rather than inheriting the first one's.
+  _resetControlPlaneRepositoryForTesting();
+  _resetControlPlaneForTesting();
+  const core = (await import('../db/core-connection')).getCoreStoresOrNull();
+  if (core === null) {
+    throw new Error('core stores were not injected; the Control Plane cannot be created');
+  }
+  createControlPlane({
+    repository: createControlPlaneRepository({
+      stores: core,
+      // No legacy `duya-main.db` here; the accessor is read per call and
+      // `null` is its documented "not open" value.
+      legacyDatabase: () => null,
+    }),
+    // A host-initiated sender (`senderPid: null`) is admitted by
+    // `authoriseCommandSender` before any origin or pid is consulted, so the
+    // harness needs no spawned-worker bookkeeping to be authorized.
+    senderConfig: { allowedOrigins: [], trustedPids: () => new Set<number>() },
+    request: (action, payload) => dispatchControlPlaneAction(action, payload) as Promise<unknown>,
+  });
+
+  /**
+   * One `db:request`, made the way production makes it: `serveWire` → the WIRE
+   * reply, which is what `db-bridge.ts` hands to the run layer.
+   *
+   * `serveWire` and not `serve` + `receipt.write`. The internal receipt
+   * deliberately omits `ok`, and `RunOrchestrator` runs its own
+   * `readRunReceipt` over whatever comes back, so handing it the internal
+   * shape makes a perfectly successful `run:create` read as `unreadable` —
+   * which is the F01 defect this harness was rewired to be able to see. Keep
+   * this call identical to the one in `db-bridge.ts`.
+   */
+  const serveControlPlane = async (
+    action: string,
+    payload: Record<string, unknown>,
+  ): Promise<unknown> => {
+    const controlPlane = getControlPlane();
+    if (controlPlane === null) {
+      // The refusal `db-bridge.ts` sends when no Control Plane exists.
+      // Unreachable unless the creation above threw.
+      return {
+        ok: false,
+        state: 'unavailable',
+        runId: String(payload.runId ?? ''),
+        reason: 'control_plane_absent',
+      };
+    }
+    return controlPlane.serveWire(
+      { schema: COMMAND_SCHEMA_VERSION, action, payload },
+      { senderPid: null, registeredSessionId: null, role: null },
+    );
+  };
+
   const provider: OfflineProvider = await startOfflineProvider(input.script);
 
   const protocolTrace: ProtocolTraceEntry[] = [];
@@ -271,8 +366,10 @@ export async function runLegacyLoop(
   // the worker's recomputation is what notices the disagreement. Tampering the
   // store instead would make the two agree and the check would never fire.
   const orchestrator = new RunOrchestrator({
+    // Through the service, so the orchestrator is handed the same WIRE reply
+    // production hands it — the one carrying `ok`, not the internal receipt.
     dbRequest: (action, payload) =>
-      dispatchControlPlaneAction(action, payload as Record<string, unknown>) as Promise<unknown>,
+      serveControlPlane(action, payload as Record<string, unknown>),
     channel: createWorkerExecutionChannel({
       dispatch: (command) => {
         sentCommands.push(command);
@@ -293,8 +390,7 @@ export async function runLegacyLoop(
     dbPath,
     namespace,
     sessionId,
-    controlPlane: (action, payload) =>
-      dispatchControlPlaneAction(action, payload) as Promise<unknown>,
+    controlPlane: (action, payload) => serveControlPlane(action, payload),
   });
 
   // The run layer, as the router sees it: the REAL orchestrator, wrapped only
@@ -418,6 +514,12 @@ export async function runLegacyLoop(
   // run fact is read back for `startedRunId`.
   const startedRunId = start.accepted ? String(start.runId) : runId;
 
+  // The report's own read-backs, deliberately NOT served through the seam.
+  // These two want the stored ROW and the event LIST, and they are asserted
+  // against the dispatcher so that a read-shape regression in the service is
+  // not masked by a second copy of the read. The run-receipt path — the one
+  // the orchestrator and the worker cross — goes through `serveControlPlane`
+  // above, which is where the wire contract actually matters.
   const storedRun = (await dispatchControlPlaneAction('run:get', { runId: startedRunId })) as Record<string, unknown> | null;
   const storedEvents = (await dispatchControlPlaneAction('run:events', { runId: startedRunId, afterSeq: 0 })) as unknown[];
   // The run layer's own view of the same run, read through the handle rather

@@ -29,8 +29,17 @@ export function getMaxOutputTokens(model: Model, userMax?: number): number {
 /**
  * Returns the temperature, respecting model.compat.fixedTemperature.
  * If the model has a fixed temperature, it always wins over userTemp.
+ *
+ * Takes `Pick<Model, 'compat'>` because that is all it reads, and a caller that
+ * only has an endpoint's `ModelCompat` bag (a non-streaming request that never
+ * assembles a full `Model`) can still ask the question instead of re-deriving
+ * the rule inline — which is how the same model ended up pinned on one code
+ * path and free on another.
  */
-export function getTemperature(model: Model, userTemp?: number): number | undefined {
+export function getTemperature(
+  model: Pick<Model, 'compat'>,
+  userTemp?: number,
+): number | undefined {
   if (model.compat?.fixedTemperature !== undefined) {
     return model.compat.fixedTemperature;
   }

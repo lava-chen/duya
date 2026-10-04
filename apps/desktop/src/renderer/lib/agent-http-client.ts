@@ -99,6 +99,12 @@ export interface AgentEvent {
   error?: string;
   content?: string;
   reason?: string;
+  /** Structured tool-result metadata forwarded by the worker (e.g.
+   *  `browserResults` for BrowserTool) so the renderer tool rows can render
+   *  rich output instead of falling back to parsing `result`. */
+  metadata?: Record<string, unknown>;
+  /** Tool execution duration reported by the worker, in milliseconds. */
+  duration_ms?: number;
   groupId?: string;
   progressTitle?: string;
   progressSource?: 'provider_commentary' | 'model_progress_tool' | 'tool_fallback';
@@ -118,11 +124,78 @@ export interface AgentEvent {
 
 export type EventHandler = (event: AgentEvent) => void;
 
+/**
+ * Raw `data:` payload of an SSE frame. The Agent Server writes
+ * `{ type, data }` (see the `sseEvent` objects in the chat router);
+ * `sessionId` is not always present, so the mapper falls back to the
+ * session the read loop was opened for.
+ */
+interface RawAgentEventFrame {
+  type?: string;
+  sessionId?: string;
+  data?: unknown;
+}
+
+/**
+ * The single SSE-frame → `AgentEvent` mapping, shared by all three read
+ * loops (the primary POST chat stream, the post-crash-retry POST, and the
+ * attach/replay GET). Keeping one copy is what stops a field from being
+ * added to one path and silently dropped in the others.
+ */
+function toAgentEvent(
+  eventType: string,
+  frame: RawAgentEventFrame,
+  sessionId: string,
+): AgentEvent {
+  const data = frame.data as Record<string, unknown> | undefined;
+  return {
+    type: eventType || frame.type || 'unknown',
+    sessionId: frame.sessionId || sessionId,
+    data: frame.data,
+    id: data?.id as string,
+    name: data?.name as string,
+    input: data?.input,
+    groupId: data?.groupId as string | undefined,
+    progressTitle: data?.progressTitle as string | undefined,
+    progressSource: data?.progressSource as AgentEvent['progressSource'],
+    delta: data?.delta as string | undefined,
+    result: data?.result,
+    error: data?.error as string,
+    content: data?.content as string,
+    reason: data?.reason as string | undefined,
+    metadata: data?.metadata as Record<string, unknown> | undefined,
+    duration_ms: data?.duration_ms as number | undefined,
+    traceId: data?.traceId as string | undefined,
+    taskId: data?.taskId as string | undefined,
+    code: data?.code as string | undefined,
+    message: data?.message as string | undefined,
+  };
+}
+
+/**
+ * Event types that reuse the SAME `data.id` for every fragment in a burst
+ * — the agent emits one `tool_use_delta` per model token, all carrying the
+ * owning `block.id`. Deduplicating those by (type, id) would drop every
+ * fragment after the first, so they are gated on the server's monotonic
+ * SSE frame id instead (see `emit`). Everything else keeps the
+ * (type, id) key.
+ */
+const FRAGMENT_EVENT_TYPES: ReadonlySet<string> = new Set(['tool_use_delta']);
+
 export class AgentServerClient {
   private baseUrl: string | null = null;
   private abortControllers = new Map<string, AbortController>();
   private eventHandlers = new Map<string, Set<EventHandler>>();
   private receivedMessageIds = new Map<string, Set<string>>();
+  /**
+   * Per-session high-water mark of the last SSE frame id seen for each
+   * (fragment event type, `data.id`) pair. Frame ids are strictly increasing
+   * within a run, so `frameId <= mark` means this fragment was already
+   * delivered (SSE replay, or the post-crash-retry POST re-running the turn)
+   * and the consumer already accumulated its bytes. O(1) per tool call,
+   * unlike a Set holding one key per token.
+   */
+  private fragmentFrameMarks = new Map<string, Map<string, number>>();
 
   /**
    * Per-session reconnect attempts. Caps the auto-reconnect budget so a
@@ -285,6 +358,7 @@ export class AgentServerClient {
 
       // Process SSE stream
       let currentEventType = 'message';
+      let currentEventId: number | null = null;
       while (true) {
         const readResult = await reader.read();
         const { done, value } = readResult;
@@ -316,38 +390,30 @@ export class AgentServerClient {
             continue;
           }
 
+          if (line.startsWith('id:')) {
+            // Monotonic per-run frame number (`seqNum` on the server). Only
+            // fragment events key their dedup on it, but every frame carries
+            // one and a frame without an `id:` line must not inherit the
+            // previous frame's value.
+            const parsedId = Number.parseInt(line.slice(3).trim(), 10);
+            currentEventId = Number.isFinite(parsedId) ? parsedId : null;
+            continue;
+          }
+
           if (line.startsWith('data:')) {
             const dataStr = line.slice(5).trim();
             try {
-              const event = JSON.parse(dataStr);
+              const event = JSON.parse(dataStr) as RawAgentEventFrame;
               eventCount++;
               console.log('[agent-http-client] Received event #', eventCount, 'type:', currentEventType, 'data:', JSON.stringify(event).substring(0, 300));
-              const mappedEvent: AgentEvent = {
-                type: currentEventType || event.type || 'unknown',
-                sessionId: event.sessionId || sessionId,
-                data: event.data,
-                id: (event.data as Record<string, unknown>)?.id as string,
-                name: (event.data as Record<string, unknown>)?.name as string,
-                input: (event.data as Record<string, unknown>)?.input,
-                groupId: (event.data as Record<string, unknown>)?.groupId as string | undefined,
-                progressTitle: (event.data as Record<string, unknown>)?.progressTitle as string | undefined,
-                progressSource: (event.data as Record<string, unknown>)?.progressSource as AgentEvent['progressSource'],
-                delta: (event.data as Record<string, unknown>)?.delta as string | undefined,
-                result: (event.data as Record<string, unknown>)?.result,
-                error: (event.data as Record<string, unknown>)?.error as string,
-                content: (event.data as Record<string, unknown>)?.content as string,
-                reason: (event.data as Record<string, unknown>)?.reason as string | undefined,
-                traceId: (event.data as Record<string, unknown>)?.traceId as string | undefined,
-                taskId: (event.data as Record<string, unknown>)?.taskId as string | undefined,
-                code: (event.data as Record<string, unknown>)?.code as string | undefined,
-                message: (event.data as Record<string, unknown>)?.message as string | undefined,
-              };
+              const mappedEvent = toAgentEvent(currentEventType, event, sessionId);
               if (mappedEvent.type === 'done' || mappedEvent.type === 'chat:done' || mappedEvent.type === 'error' || mappedEvent.type === 'chat:error') {
                 terminalEventReceived = true;
               }
-              this.emit(sessionId, mappedEvent);
-              // Reset event type after processing
+              this.emit(sessionId, mappedEvent, currentEventId);
+              // Reset event type / frame id after processing
               currentEventType = 'message';
+              currentEventId = null;
             } catch {
               // Skip invalid JSON
             }
@@ -411,6 +477,7 @@ export class AgentServerClient {
             const decoder = new TextDecoder();
             let buffer = '';
             let currentEventType = 'message';
+            let currentEventId: number | null = null;
 
             while (true) {
               const { done, value } = await reader.read();
@@ -429,32 +496,22 @@ export class AgentServerClient {
                   currentEventType = line.slice(6).trim();
                   continue;
                 }
+                if (line.startsWith('id:')) {
+                  const parsedId = Number.parseInt(line.slice(3).trim(), 10);
+                  currentEventId = Number.isFinite(parsedId) ? parsedId : null;
+                  continue;
+                }
                 if (line.startsWith('data:')) {
                   const dataStr = line.slice(5).trim();
                   try {
-                    const event = JSON.parse(dataStr);
-                    const mappedEvent: AgentEvent = {
-                      type: currentEventType || event.type || 'unknown',
-                      sessionId: event.sessionId || sessionId,
-                      data: event.data,
-                      id: (event.data as Record<string, unknown>)?.id as string,
-                      name: (event.data as Record<string, unknown>)?.name as string,
-                      input: (event.data as Record<string, unknown>)?.input,
-                      delta: (event.data as Record<string, unknown>)?.delta as string | undefined,
-                      result: (event.data as Record<string, unknown>)?.result,
-                      error: (event.data as Record<string, unknown>)?.error as string,
-                      content: (event.data as Record<string, unknown>)?.content as string,
-                      reason: (event.data as Record<string, unknown>)?.reason as string | undefined,
-                      traceId: (event.data as Record<string, unknown>)?.traceId as string | undefined,
-                      taskId: (event.data as Record<string, unknown>)?.taskId as string | undefined,
-                      code: (event.data as Record<string, unknown>)?.code as string | undefined,
-                      message: (event.data as Record<string, unknown>)?.message as string | undefined,
-                    };
+                    const event = JSON.parse(dataStr) as RawAgentEventFrame;
+                    const mappedEvent = toAgentEvent(currentEventType, event, sessionId);
                     if (mappedEvent.type === 'done' || mappedEvent.type === 'chat:done' || mappedEvent.type === 'error' || mappedEvent.type === 'chat:error') {
                       terminalEventReceived = true;
                     }
-                    this.emit(sessionId, mappedEvent);
+                    this.emit(sessionId, mappedEvent, currentEventId);
                     currentEventType = 'message';
+                    currentEventId = null;
                   } catch {
                     // skip invalid JSON
                   }
@@ -564,6 +621,7 @@ export class AgentServerClient {
       const decoder = new TextDecoder();
       let buffer = '';
       let currentEventType = 'message';
+      let currentEventId: number | null = null;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -582,35 +640,25 @@ export class AgentServerClient {
             currentEventType = line.slice(6).trim();
             continue;
           }
+          if (line.startsWith('id:')) {
+            // Replayed frames keep their original run-scoped event id, which
+            // is what lets `emit` recognise a fragment the renderer already
+            // accumulated.
+            const parsedId = Number.parseInt(line.slice(3).trim(), 10);
+            currentEventId = Number.isFinite(parsedId) ? parsedId : null;
+            continue;
+          }
           if (line.startsWith('data:')) {
             const dataStr = line.slice(5).trim();
             try {
-              const event = JSON.parse(dataStr);
-              const mappedEvent: AgentEvent = {
-                type: currentEventType || event.type || 'unknown',
-                sessionId: event.sessionId || sessionId,
-                data: event.data,
-                id: (event.data as Record<string, unknown>)?.id as string,
-                name: (event.data as Record<string, unknown>)?.name as string,
-                input: (event.data as Record<string, unknown>)?.input,
-                groupId: (event.data as Record<string, unknown>)?.groupId as string | undefined,
-                progressTitle: (event.data as Record<string, unknown>)?.progressTitle as string | undefined,
-                progressSource: (event.data as Record<string, unknown>)?.progressSource as AgentEvent['progressSource'],
-                delta: (event.data as Record<string, unknown>)?.delta as string | undefined,
-                result: (event.data as Record<string, unknown>)?.result,
-                error: (event.data as Record<string, unknown>)?.error as string,
-                content: (event.data as Record<string, unknown>)?.content as string,
-                reason: (event.data as Record<string, unknown>)?.reason as string | undefined,
-                traceId: (event.data as Record<string, unknown>)?.traceId as string | undefined,
-                taskId: (event.data as Record<string, unknown>)?.taskId as string | undefined,
-                code: (event.data as Record<string, unknown>)?.code as string | undefined,
-                message: (event.data as Record<string, unknown>)?.message as string | undefined,
-              };
+              const event = JSON.parse(dataStr) as RawAgentEventFrame;
+              const mappedEvent = toAgentEvent(currentEventType, event, sessionId);
               if (mappedEvent.type === 'done' || mappedEvent.type === 'chat:done' || mappedEvent.type === 'error' || mappedEvent.type === 'chat:error') {
                 terminalEventReceived = true;
               }
-              this.emit(sessionId, mappedEvent);
+              this.emit(sessionId, mappedEvent, currentEventId);
               currentEventType = 'message';
+              currentEventId = null;
             } catch {
               // skip invalid JSON
             }
@@ -690,8 +738,11 @@ export class AgentServerClient {
 
   /**
    * Query the agent server's session state. The server's `/status` endpoint
-   * reports the state under `status` (see SessionStatus in agent-sse-client.ts;
-   * the values are the uppercase SessionState strings, e.g. 'STREAMING').
+   * reports `session.state` verbatim under `status`, so the values are the
+   * uppercase `SessionState` members: 'IDLE', 'STREAMING', 'COMPLETING',
+   * 'CRASHED', 'ERROR', 'COMPLETED' (the enum lives in
+   * `apps/desktop/src/main/agents/server/types.ts`; it is not importable from
+   * the renderer, so the field is typed `string` here).
    * Consumers compare it against 'STREAMING' to detect an in-flight run
    * started outside the renderer (e.g. a cron run kicked off by the
    * main-process scheduler) so they can attach to the live SSE stream
@@ -749,24 +800,50 @@ export class AgentServerClient {
     };
   }
 
-  private emit(sessionId: string, event: AgentEvent): void {
+  /**
+   * @param frameId The monotonic SSE frame id (`id:` line) this event
+   *   arrived on, or null when the producer did not send one. Only
+   *   fragment event types use it — see `FRAGMENT_EVENT_TYPES`.
+   */
+  private emit(sessionId: string, event: AgentEvent, frameId: number | null = null): void {
     // Deduplicate by (eventType + id) to avoid duplicates when SSE replays events.
     // Using id alone is incorrect: tool_use and tool_result share the same id
     // (the tool_use_id), so a tool_result would be falsely dropped as duplicate.
+    //
+    // Fragment events are the exception: the agent reuses one `data.id` for
+    // every argument slice, so the (type, id) key would swallow all but the
+    // first fragment and the live file-edit preview could never fill. They are
+    // gated on the monotonic frame id instead, which still drops a replayed
+    // fragment while letting every new one through. A fragment that arrives
+    // without a frame id is always delivered — dropping it would reintroduce
+    // the exact truncation this guard exists to prevent.
     const eventData = event.data as Record<string, unknown> | undefined;
     const rawId = eventData?.id as string | undefined;
     if (rawId) {
       const dedupKey = `${event.type}:${rawId}`;
-      let ids = this.receivedMessageIds.get(sessionId);
-      if (!ids) {
-        ids = new Set();
-        this.receivedMessageIds.set(sessionId, ids);
+      if (FRAGMENT_EVENT_TYPES.has(event.type)) {
+        if (frameId !== null) {
+          let marks = this.fragmentFrameMarks.get(sessionId);
+          if (!marks) {
+            marks = new Map<string, number>();
+            this.fragmentFrameMarks.set(sessionId, marks);
+          }
+          const highWaterMark = marks.get(dedupKey);
+          if (highWaterMark !== undefined && frameId <= highWaterMark) return;
+          marks.set(dedupKey, frameId);
+        }
+      } else {
+        let ids = this.receivedMessageIds.get(sessionId);
+        if (!ids) {
+          ids = new Set();
+          this.receivedMessageIds.set(sessionId, ids);
+        }
+        if (ids.has(dedupKey)) {
+          console.log('[agent-http-client] Skipping duplicate event:', dedupKey);
+          return;
+        }
+        ids.add(dedupKey);
       }
-      if (ids.has(dedupKey)) {
-        console.log('[agent-http-client] Skipping duplicate event:', dedupKey);
-        return;
-      }
-      ids.add(dedupKey);
     }
 
     const handlers = this.eventHandlers.get(sessionId);
@@ -783,6 +860,7 @@ export class AgentServerClient {
 
   private clearMessageIds(sessionId: string): void {
     this.receivedMessageIds.delete(sessionId);
+    this.fragmentFrameMarks.delete(sessionId);
   }
 }
 

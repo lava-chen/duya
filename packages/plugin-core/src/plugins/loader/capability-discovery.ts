@@ -99,6 +99,76 @@ export interface McpServerCapability {
   toolTimeoutSec?: number
   /** Per-tool-call timeout overrides, keyed by tool name, in seconds. */
   toolTimeouts?: Record<string, number>
+  /**
+   * How much of the agent process environment the stdio child inherits.
+   * `allowlist` (the default at the runtime layer) passes only the
+   * permitted variables; `inherit` opts the server into the full parent
+   * environment. Declared by `collect.ts` on the manifest view and
+   * forwarded there, so it has to be filled by BOTH discovery paths.
+   */
+  envPassthrough?: 'allowlist' | 'inherit'
+  /** Run the stdio command through the platform shell instead of exec'ing it. */
+  useShell?: boolean
+}
+
+/**
+ * One shared normaliser for BOTH MCP discovery paths, so the same server
+ * always yields the same field set no matter which file declared it.
+ *
+ * `base` holds the transport-specific fields each path resolves on its
+ * own (stdio `command`/`args`/`env`, or http `url`/`headers`); `raw` is
+ * the on-disk entry and supplies the declaration-level fields that must
+ * survive either path — above all `nameOverride`, because a provider tool
+ * name that changes between the native `mcp/servers.json` and the
+ * Agent Plugins `mcp.json` of one plugin is very hard to debug, plus the
+ * timeout knobs and the two env/shell switches that `collect.ts` declares.
+ */
+function normalizeMcpServer(
+  base: McpServerCapability,
+  raw: Record<string, unknown>,
+): McpServerCapability {
+  const server: McpServerCapability = { ...base }
+
+  if (typeof raw.nameOverride === 'string') {
+    server.nameOverride = raw.nameOverride
+  }
+  if (typeof raw.startupTimeoutSec === 'number') {
+    server.startupTimeoutSec = raw.startupTimeoutSec
+  }
+  if (typeof raw.toolTimeoutSec === 'number') {
+    server.toolTimeoutSec = raw.toolTimeoutSec
+  }
+  const toolTimeouts = numberRecordOrUndefined(raw.toolTimeouts)
+  if (toolTimeouts) server.toolTimeouts = toolTimeouts
+  if (raw.envPassthrough === 'allowlist' || raw.envPassthrough === 'inherit') {
+    server.envPassthrough = raw.envPassthrough
+  }
+  if (typeof raw.useShell === 'boolean') {
+    server.useShell = raw.useShell
+  }
+
+  return server
+}
+
+/** `undefined` rather than `[]` so both paths agree on the field set. */
+function stringArrayOrUndefined(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const out = value.filter((v): v is string => typeof v === 'string')
+  return out.length > 0 ? out : undefined
+}
+
+function stringRecordOrUndefined(value: unknown): Record<string, string> | undefined {
+  const out = stringRecord(value)
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+function numberRecordOrUndefined(value: unknown): Record<string, number> | undefined {
+  if (!isObjectRecord(value)) return undefined
+  const out: Record<string, number> = {}
+  for (const [k, v] of Object.entries(value)) {
+    if (typeof v === 'number') out[k] = v
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 /**
@@ -133,40 +203,19 @@ export function discoverMcpServers(pluginDir: string): McpServerCapability[] {
     if (!isObjectRecord(entry)) continue
     const name = typeof entry.name === 'string' ? entry.name : undefined
     if (!name) continue
-    const server: McpServerCapability = { name }
+    const base: McpServerCapability = { name }
     if (typeof entry.transport === 'string') {
-      server.transport = entry.transport as McpServerCapability['transport']
+      base.transport = entry.transport as McpServerCapability['transport']
     }
-    if (typeof entry.command === 'string') server.command = entry.command
-    if (Array.isArray(entry.args)) {
-      server.args = entry.args.filter((a): a is string => typeof a === 'string')
-    }
-    if (isObjectRecord(entry.env)) {
-      const env: Record<string, string> = {}
-      for (const [k, v] of Object.entries(entry.env)) {
-        if (typeof v === 'string') env[k] = v
-      }
-      server.env = env
-    }
-    if (typeof entry.url === 'string') server.url = entry.url
-    if (isObjectRecord(entry.headers)) {
-      const headers: Record<string, string> = {}
-      for (const [k, v] of Object.entries(entry.headers)) {
-        if (typeof v === 'string') headers[k] = v
-      }
-      server.headers = headers
-    }
-    if (typeof entry.nameOverride === 'string') server.nameOverride = entry.nameOverride
-    if (typeof entry.startupTimeoutSec === 'number') server.startupTimeoutSec = entry.startupTimeoutSec
-    if (typeof entry.toolTimeoutSec === 'number') server.toolTimeoutSec = entry.toolTimeoutSec
-    if (isObjectRecord(entry.toolTimeouts)) {
-      const toolTimeouts: Record<string, number> = {}
-      for (const [k, v] of Object.entries(entry.toolTimeouts)) {
-        if (typeof v === 'number') toolTimeouts[k] = v
-      }
-      server.toolTimeouts = toolTimeouts
-    }
-    servers.push(server)
+    if (typeof entry.command === 'string') base.command = entry.command
+    const args = stringArrayOrUndefined(entry.args)
+    if (args) base.args = args
+    const env = stringRecordOrUndefined(entry.env)
+    if (env) base.env = env
+    if (typeof entry.url === 'string') base.url = entry.url
+    const headers = stringRecordOrUndefined(entry.headers)
+    if (headers) base.headers = headers
+    servers.push(normalizeMcpServer(base, entry))
   }
   return servers
 }
@@ -212,7 +261,7 @@ type PathResolution =
   | { reason: 'opaque'; resolved: undefined }
   | { reason: 'invalid-escape'; resolved: undefined }
 
-function isWithin(parent: string, child: string): boolean {
+export function isWithin(parent: string, child: string): boolean {
   const rel = relative(parent, child)
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
 }
@@ -268,6 +317,13 @@ function stringRecord(value: unknown): Record<string, string> {
  * exactly equal `AGENT_PLUGINS_MCP_SCHEMA`; the three `server.oneOf` types
  * map to `McpServerCapability`. Path placeholders, containment checks, and
  * the `PLUGIN_ROOT`/`PLUGIN_DATA` env injection are applied per the spec.
+ *
+ * The spec defines only the transport fields, so the declaration-level
+ * fields (`nameOverride`, the timeouts, `envPassthrough`, `useShell`) are
+ * not in `mcp.json` by definition — but they are read from the entry when
+ * present, through the same `normalizeMcpServer` the native path uses, so
+ * a server cannot change tool name or timeouts merely by moving between
+ * the two file formats.
  */
 export function discoverAgentPluginsMcpServers(
   pluginDir: string,
@@ -298,9 +354,7 @@ export function discoverAgentPluginsMcpServers(
       if (!command) continue
       const cmdRes = resolveAgentPluginPath(command, pluginDir, pluginDataDir)
       if (cmdRes.reason === 'invalid-escape') continue
-      const args = Array.isArray(raw.args)
-        ? raw.args.filter((a): a is string => typeof a === 'string')
-        : undefined
+      const args = stringArrayOrUndefined(raw.args)
       // The spec forbids authors from writing PLUGIN_ROOT/PLUGIN_DATA, which
       // implies the client must inject them into the stdio process env.
       const env: Record<string, string> = {
@@ -313,31 +367,33 @@ export function discoverAgentPluginsMcpServers(
         if (cwdRes.reason === 'invalid-escape') continue
         if (cwdRes.resolved) env.DUYA_PLUGIN_CWD = cwdRes.resolved
       }
-      servers.push({
-        name,
-        transport: 'stdio',
-        command: cmdRes.resolved ?? command,
-        ...(args?.length ? { args } : {}),
-        env,
-      })
-    } else if (type === 'streamable-http') {
+      servers.push(
+        normalizeMcpServer(
+          {
+            name,
+            transport: 'stdio',
+            command: cmdRes.resolved ?? command,
+            ...(args ? { args } : {}),
+            env,
+          },
+          raw,
+        ),
+      )
+    } else if (type === 'streamable-http' || type === 'sse') {
       const url = typeof raw.url === 'string' && raw.url.length > 0 ? raw.url : undefined
       if (!url) continue
-      servers.push({
-        name,
-        transport: 'streamable-http',
-        url,
-        ...(isObjectRecord(raw.headers) ? { headers: stringRecord(raw.headers) } : {}),
-      })
-    } else if (type === 'sse') {
-      const url = typeof raw.url === 'string' && raw.url.length > 0 ? raw.url : undefined
-      if (!url) continue
-      servers.push({
-        name,
-        transport: 'sse',
-        url,
-        ...(isObjectRecord(raw.headers) ? { headers: stringRecord(raw.headers) } : {}),
-      })
+      const headers = stringRecordOrUndefined(raw.headers)
+      servers.push(
+        normalizeMcpServer(
+          {
+            name,
+            transport: type,
+            url,
+            ...(headers ? { headers } : {}),
+          },
+          raw,
+        ),
+      )
     }
     // Unknown `type` (or a missing one) → server is skipped.
   }

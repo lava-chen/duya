@@ -123,7 +123,7 @@ export class WriteTool extends BaseTool {
 
   /**
    * Plan 550 step 3a — write-path metadata. The orchestrator serialises
-   * any tool_use that targets the same `path` input, so two parallel
+   * any tool_use that targets the same `file_path` input, so two parallel
    * WriteTool calls with disjoint paths stay parallel.
    */
   readonly dependencies: ToolDependencyDeclaration = Object.freeze({
@@ -135,7 +135,9 @@ export class WriteTool extends BaseTool {
   });
 
   extractWritePaths(input: Record<string, unknown>): readonly string[] {
-    const path = input.path;
+    // `input_schema` names the field `file_path` (see `required` above);
+    // reading `input.path` resolved every call to UNKNOWN_PATHS.
+    const path = input.file_path;
     return typeof path === 'string' && path.length > 0 ? [path] : UNKNOWN_PATHS;
   }
 

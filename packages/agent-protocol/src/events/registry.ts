@@ -239,6 +239,36 @@ export const EVENT_REGISTRY: EventRegistry = defineEventUnion(EVENT_META);
 
 export const EVENT_TYPES: readonly EventType[] = EVENT_REGISTRY.all;
 
+/**
+ * The two event types that close a run. Everything else is non-terminal.
+ *
+ * Declared, not derived. `EventMeta` has `durability` and `criticality` but no
+ * `terminal` axis, and adding one would put a third axis on the registry for a
+ * fact the ledger already owns (`RunLedger.isTerminalEvent`). Deriving it from
+ * `EVENT_META` would also make a newly added `run.*` event terminal by
+ * default, which is the wrong direction to fail in.
+ *
+ * This is the canonical set, and the three cross-layer consumers that must
+ * agree on it read it rather than re-spelling it: the ledger
+ * (`run-ledger.ts`), the runtime's emitter (`agent-runtime/events/
+ * event-emitter.ts`), and the outcome resolver (`agent-core/run-outcome.ts`).
+ * Adding a third terminal event is then a one-line change here, because
+ * three independent declarations of the same two strings are three places a
+ * future terminal event can be added to one and missed by the others — and a
+ * run that ends on an event one layer calls terminal and another does not is
+ * a run whose fate depends on which layer asked.
+ *
+ * "Canonical" is not "the only place the literals appear". Three sites inside
+ * `agent-runtime` still test the pair inline rather than importing this set
+ * — `events/backpressure.ts` (`isTerminalFrame`), `controller.ts`
+ * (`#enforceBudget`), and `run-session.ts` (`observe`) — so a new terminal
+ * event must be added to those as well until they converge.
+ */
+export const TERMINAL_EVENT_TYPES: ReadonlySet<EventType> = new Set<EventType>([
+  'run.completed',
+  'run.failed',
+]);
+
 export const isEventType = EVENT_REGISTRY.isKnown;
 
 export const eventSpecOf = EVENT_REGISTRY.specOf;

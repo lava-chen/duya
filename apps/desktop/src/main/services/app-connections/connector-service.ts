@@ -466,7 +466,12 @@ export class ConnectorService {
         if (!connector) {
           return failure('unknown_action', `no connector for provider ${conn.provider}`, false);
         }
-        result = await connector.invoke(action, args, tokenResult.data.accessToken);
+        result = await connector.invoke(
+          action,
+          args,
+          tokenResult.data.accessToken,
+          tokenResult.data.tokenType,
+        );
       }
     } catch (err) {
       const elapsedMs = Date.now() - startedAt;

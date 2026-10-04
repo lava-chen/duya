@@ -7,6 +7,7 @@ import type {
   DatabaseQueryResult,
   DatabaseRecordSnapshot,
   DatabaseSourceSnapshot,
+  DatabaseView,
 } from '../../../../../../packages/conductor/src/database/types';
 import { ProjectDatabaseEngine, ProjectDatabaseError } from '../engine';
 import { resolveProjectDatabasePath } from '../service';
@@ -157,6 +158,46 @@ describe('ProjectDatabaseEngine', () => {
     expect(visible.records).toHaveLength(0);
     expect(all.records).toHaveLength(1);
     expect(all.records[0].record.archivedAt).not.toBeNull();
+
+    engine.closeAll();
+  });
+
+  it('rejects stale view updates the same way it rejects stale record updates', () => {
+    const { dbPath } = tempProject();
+    const engine = new ProjectDatabaseEngine();
+    const source = engine.invoke(dbPath, { type: 'source.create', name: 'Tasks' }) as DatabaseSourceSnapshot;
+    const viewId = source.views[0].id;
+
+    const updated = engine.invoke(dbPath, {
+      type: 'view.update',
+      sourceId: source.source.id,
+      viewId,
+      expectedRevision: 1,
+      name: 'Renamed',
+    }) as DatabaseView;
+    expect(updated.revision).toBe(2);
+    expect(updated.name).toBe('Renamed');
+
+    try {
+      engine.invoke(dbPath, {
+        type: 'view.update',
+        sourceId: source.source.id,
+        viewId,
+        expectedRevision: 1,
+        name: 'Stale overwrite',
+      });
+      throw new Error('Expected a revision conflict');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProjectDatabaseError);
+      expect((error as ProjectDatabaseError).code).toBe('CONFLICT');
+    }
+
+    const survivor = (engine.invoke(dbPath, {
+      type: 'view.list',
+      sourceId: source.source.id,
+    }) as DatabaseView[]).find((view) => view.id === viewId);
+    expect(survivor?.name).toBe('Renamed');
+    expect(survivor?.revision).toBe(2);
 
     engine.closeAll();
   });

@@ -45,23 +45,19 @@
  */
 
 import type { LifecycleViolationCode, RunEvent, RunEventEnvelope } from '@duya/agent-protocol';
-import { EVENT_REGISTRY, LifecycleViolation, checkRequiredFields, isEventType, verdictForUnknownType } from '@duya/agent-protocol';
+import { EVENT_REGISTRY, LifecycleViolation, TERMINAL_EVENT_TYPES, checkRequiredFields, isEventType, verdictForUnknownType } from '@duya/agent-protocol';
 import type { EventType } from '@duya/agent-protocol';
 import type { RunSession } from '../run-session.js';
 
 /**
- * The event types that close a run.
+ * True when an event closes the run.
  *
- * Spelled out here rather than derived from the registry because the registry
- * has no `terminal` field, and adding one would put a third axis next to
- * `durability` and `critical` for a fact the ledger already owns
- * (`RunLedger.isTerminalEvent`). Two places naming the same two strings is
- * checkable — the census test asserts they agree; a third declaration axis is
- * not.
+ * The set itself is declared ONCE, in `@duya/agent-protocol`
+ * (`TERMINAL_EVENT_TYPES`), and read here rather than re-spelled. This module
+ * used to own a private copy alongside `RunLedger.isTerminalEvent` and
+ * `run-outcome.ts`'s copy — three declarations of the same two strings, with a
+ * census test that could only compare two of the three.
  */
-const TERMINAL_EVENT_TYPES: ReadonlySet<EventType> = new Set<EventType>(['run.completed', 'run.failed']);
-
-/** True when an event closes the run. */
 export function isTerminalEventType(type: EventType): boolean {
   return TERMINAL_EVENT_TYPES.has(type);
 }

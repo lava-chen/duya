@@ -102,25 +102,40 @@ function buildDisplayKey(pluginId: string, kind: CapabilityDTO['kind'], name: st
 }
 
 /**
- * Compute the effectiveEnabled / blockedReason pair for a plugin-declared
- * capability.
+ * Compute the effectiveEnabled / blockedReason pair.
  *
- * Phase 1A rule (Rev 3 修订 1):
- *   - ownEnabled is always null
- *   - providerEnabled=false → effectiveEnabled=false, blockedReason='plugin-disabled'
- *   - providerEnabled=true  → effectiveEnabled=null (no blockedReason)
+ * Single source of truth for BOTH capability paths (`cross-source.ts` and this
+ * module). These were two separate implementations with different signatures,
+ * so the same underlying state reported a different `blockedReason` depending
+ * on which path produced it. One rule, one signature:
  *
- * Phase 1A does NOT derive blockedReason from MCP connection errors
- * (Rev 3 修订 4); connection error is reserved for mcp.connectionStatus /
- * mcp.lastIssue only.
+ *   ownEnabled === false                -> false, blockedReason='user-disabled'
+ *   providerEnabled === false           -> false, blockedReason='plugin-disabled'
+ *   ownEnabled === null (own unknown)   -> null,  no blockedReason
+ *   both true                           -> true,  no blockedReason
+ *
+ * `ownEnabled === null` means "the own override was not read", which is the
+ * documented meaning of a null `effectiveEnabled` in `CapabilityDTO`. A user
+ * opt-out still wins over an enabled provider, so `user-disabled` is checked
+ * before `plugin-disabled`.
+ *
+ * `blockedReason` is deliberately NOT derived from MCP connection errors
+ * (Rev 3 revision 4) — that stays in `mcp.connectionStatus` / `mcp.lastIssue`.
  */
-function computeEffective(
+export function computeEffective(
+  ownEnabled: boolean | null,
   providerEnabled: boolean,
 ): { effectiveEnabled: boolean | null; blockedReason?: CapabilityDTO['blockedReason'] } {
-  if (!providerEnabled) {
+  if (ownEnabled === false) {
+    return { effectiveEnabled: false, blockedReason: 'user-disabled' };
+  }
+  if (providerEnabled === false) {
     return { effectiveEnabled: false, blockedReason: 'plugin-disabled' };
   }
-  return { effectiveEnabled: null };
+  if (ownEnabled === null) {
+    return { effectiveEnabled: null };
+  }
+  return { effectiveEnabled: true };
 }
 
 const EMPTY_MCP: CapabilityMcpFields = { connectionStatus: 'unknown' };
@@ -144,7 +159,7 @@ export function toPluginDeclaredCapabilities(
   const providerPluginId = view.id;
 
   for (const skill of capabilities.skills ?? []) {
-    const eff = computeEffective(providerEnabled);
+    const eff = computeEffective(null, providerEnabled);
     out.push({
       displayKey: buildDisplayKey(providerPluginId, 'skill', skill),
       kind: 'skill',
@@ -159,7 +174,7 @@ export function toPluginDeclaredCapabilities(
   }
 
   for (const mcp of capabilities.mcpServers ?? []) {
-    const eff = computeEffective(providerEnabled);
+    const eff = computeEffective(null, providerEnabled);
     const mcpFields: CapabilityMcpFields = { ...EMPTY_MCP };
     out.push({
       displayKey: buildDisplayKey(providerPluginId, 'mcp', mcp.name),
@@ -176,7 +191,7 @@ export function toPluginDeclaredCapabilities(
   }
 
   for (const cli of capabilities.cli ?? []) {
-    const eff = computeEffective(providerEnabled);
+    const eff = computeEffective(null, providerEnabled);
     const cliFields: CapabilityCliFields = { command: cli.command, args: cli.args };
     out.push({
       displayKey: buildDisplayKey(providerPluginId, 'cli', cli.name),
@@ -193,7 +208,7 @@ export function toPluginDeclaredCapabilities(
   }
 
   for (const ui of capabilities.ui ?? []) {
-    const eff = computeEffective(providerEnabled);
+    const eff = computeEffective(null, providerEnabled);
     const uiFields: CapabilityUiFields = { id: ui.id, type: ui.type };
     out.push({
       displayKey: buildDisplayKey(providerPluginId, 'ui', ui.id),
@@ -210,7 +225,7 @@ export function toPluginDeclaredCapabilities(
   }
 
   for (const hook of capabilities.hooks ?? []) {
-    const eff = computeEffective(providerEnabled);
+    const eff = computeEffective(null, providerEnabled);
     const hookFields: CapabilityHookFields = { event: hook.event, handler: hook.handler };
     out.push({
       displayKey: buildDisplayKey(providerPluginId, 'hook', `${hook.event}:${hook.handler}`),

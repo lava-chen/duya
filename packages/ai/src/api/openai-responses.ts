@@ -49,6 +49,35 @@ const PRIOR_THINKING_OPEN = '<|prior-thinking|>';
 const PRIOR_THINKING_CLOSE = '<|/prior-thinking|>';
 
 // =============================================================================
+// Tool choice
+// =============================================================================
+
+/**
+ * Map the shared `toolChoice` option onto the Responses API's `tool_choice`.
+ *
+ * The shared option is declared in `types.ts` with the Anthropic vocabulary
+ * (`'none' | 'auto' | 'any' | { type: 'tool', name }`) and documented as
+ * forwarding "the native tool_choice shape". Two differences from the
+ * Anthropic vocabulary and one from the Chat Completions API:
+ *
+ *  - `'any'` is `'required'` here, as on Chat Completions.
+ *  - a named tool is `{ type: 'function', name }` — FLAT. The Chat Completions
+ *    API nests the name under `function`, so the two mappers cannot be shared.
+ *
+ * `'none'` maps to `undefined` on purpose: it is Plan 523 P4's omit-the-tools
+ * guard, and a `tool_choice: 'none'` with no `tools` field is redundant at best
+ * and a 400 on several OpenAI-compatible providers.
+ */
+export function toResponsesToolChoice(
+  toolChoice: 'none' | 'auto' | 'any' | { type: 'tool'; name: string } | undefined,
+): NonNullable<OpenAI.Responses.ResponseCreateParamsStreaming['tool_choice']> | undefined {
+  if (toolChoice === undefined || toolChoice === 'none') return undefined;
+  if (toolChoice === 'auto') return 'auto';
+  if (toolChoice === 'any') return 'required';
+  return { type: 'function', name: toolChoice.name };
+}
+
+// =============================================================================
 // Reasoning resolver
 // =============================================================================
 
@@ -714,6 +743,11 @@ export function createOpenAIResponsesClient(options: AIClientOptions): AIClient 
                 parameters: t.input_schema,
                 strict: false,
               })),
+              // Only meaningful alongside a `tools` field, and omitted with it:
+              // a `tool_choice` naming a tool the request never declared is a 400.
+              ...(toResponsesToolChoice(chatOptions?.toolChoice) !== undefined
+                ? { tool_choice: toResponsesToolChoice(chatOptions?.toolChoice) }
+                : {}),
             }
           : {}),
       };
@@ -852,8 +886,10 @@ export function createOpenAIResponsesClient(options: AIClientOptions): AIClient 
         ...(chatOptions?.systemPrompt
           ? { instructions: chatOptions.systemPrompt }
           : {}),
-        ...(chatOptions?.temperature !== undefined
-          ? { temperature: chatOptions.temperature }
+        // Same rule as the streaming path above: a model that pins its
+        // temperature must not be sent the caller's.
+        ...(getTemperature(model, chatOptions?.temperature) !== undefined
+          ? { temperature: getTemperature(model, chatOptions?.temperature) }
           : {}),
       });
 

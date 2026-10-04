@@ -1536,3 +1536,14 @@ html[data-theme="light"] .ask-question-option.selected {
 .permission-prompt-resolved.denied {
   color: #ef4444;
 }
+
+/* Expired deadline: the request was settled as a denial by the agent, so the
+   card stays for context but carries no live controls. */
+.permission-prompt-expired {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  color: var(--muted);
+}

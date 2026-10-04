@@ -70,6 +70,125 @@ function normalizeElement(el: CanvasElement): CanvasElement {
 type ModelInfo = ConductorModelInfo;
 
 /**
+ * The single normalisation path for every element array entering the store.
+ *
+ * A canvas load (`setSnapshot`), a full widget-hydration patch and `setElements`
+ * all deliver rows in the same shape, so all three must go through here: when
+ * `setSnapshot` assigned the raw rows while `setElements` normalised them, an
+ * element's position / permission / metadata defaults depended on whether it
+ * arrived via a patch or via a reload, and the same canvas rendered two ways.
+ */
+function normalizeElements(elements: CanvasElement[]): CanvasElement[] {
+  return elements.map(normalizeElement);
+}
+
+/** `set` as Zustand exposes it inside the store factory. */
+type SetState = (
+  partial: Partial<ConductorState> | ((state: ConductorState) => Partial<ConductorState>),
+) => void;
+
+/**
+ * Undo/redo cursor. Seeded from the persisted `snapshot.actionCursor` and moved
+ * only by confirmed evidence — a snapshot load, a patch for an action the
+ * backend already persisted, or an IPC result that reported success.
+ */
+interface HistoryCursor {
+  /** Actions applied and not yet reverted. */
+  undoDepth: number;
+  /** Actions reverted and not yet reapplied. */
+  redoDepth: number;
+}
+
+/**
+ * The one writer of `canUndo` / `canRedo`.
+ *
+ * Previously each call site set the two booleans itself, so a single undo
+ * hard-disabled Undo and a *failed* undo still enabled Redo. Deriving both
+ * flags from the cursor means a failed action cannot move the cursor, and the
+ * flags can never disagree with each other.
+ */
+function commitHistory(set: SetState, mutate: (cursor: HistoryCursor) => HistoryCursor): void {
+  set((state) => {
+    const history = mutate(state.history);
+    return {
+      history,
+      canUndo: history.undoDepth > 0,
+      canRedo: history.redoDepth > 0,
+    };
+  });
+}
+
+/**
+ * Cursor step for an action the backend has already persisted and broadcast.
+ * A newly applied action extends the undo branch and invalidates the redo
+ * branch, which is what the old unconditional `canUndo: true, canRedo: false`
+ * was trying to express.
+ */
+function noteAppliedAction(cursor: HistoryCursor): HistoryCursor {
+  return { undoDepth: cursor.undoDepth + 1, redoDepth: 0 };
+}
+
+/** Ids a connector config points at, across every persisted endpoint shape. */
+function connectorEndpointNodeIds(config: Record<string, unknown>): string[] {
+  const ids: string[] = [];
+  for (const key of ["source", "target"] as const) {
+    const endpoint = config[key];
+    if (!endpoint || typeof endpoint !== "object") continue;
+    const nodeId = (endpoint as { nodeId?: unknown }).nodeId;
+    if (typeof nodeId === "string" && nodeId) ids.push(nodeId);
+  }
+  return ids;
+}
+
+/** Ids a group config claims as members. */
+function groupMemberIds(config: Record<string, unknown>): string[] {
+  const memberIds = config.memberIds;
+  return Array.isArray(memberIds) ? memberIds.filter((id): id is string => typeof id === "string") : [];
+}
+
+/**
+ * Collect every id that must disappear with `rootId`: the element itself, the
+ * connectors bound to it, and any group left with no live member.
+ *
+ * The set is expanded to a fixed point before anything is deleted, so a
+ * connector bound to a node that is itself being removed is collected exactly
+ * once and never re-entered — a per-element recursive delete would visit it
+ * twice and emit a second delete for an already-deleted id.
+ */
+function collectRemovals(elements: CanvasElement[], rootId: string): Set<string> {
+  const removedIds = new Set<string>([rootId]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const el of elements) {
+      if (removedIds.has(el.id)) continue;
+      if (el.elementKind === "native/connector") {
+        // A connector whose endpoint node is gone resolves to `null` in
+        // connector-renderer and draws nothing, but it stayed in `elements[]`
+        // and reappeared if the id was ever reused.
+        if (connectorEndpointNodeIds(el.config).some((id) => removedIds.has(id))) {
+          removedIds.add(el.id);
+          grew = true;
+        }
+        continue;
+      }
+      if (el.elementKind === "native/group") {
+        const members = groupMemberIds(el.config);
+        if (members.length === 0) continue;
+        const hasLiveMember = members.some(
+          (id) => !removedIds.has(id) && elements.some((m) => m.id === id),
+        );
+        if (!hasLiveMember) {
+          removedIds.add(el.id);
+          grew = true;
+        }
+      }
+    }
+  }
+  return removedIds;
+}
+
+/**
  * Shared spatial index for the active canvas. Kept in sync with
  * elements[] on every create/move/resize/delete via the store
  * actions. UI reads from this index for hit-test and
@@ -111,8 +230,14 @@ interface ConductorState {
   lastElementMutationActor: Actor | null;
   snapshot: ConductorSnapshot | null;
   editMode: boolean;
+  /**
+   * Derived from `history` by `commitHistory` — the only writer. `canUndo` is
+   * read by `RefinePanel`; `canRedo` has no reader yet but is kept in step with
+   * the same cursor so a future redo control cannot read a stale value.
+   */
   canUndo: boolean;
   canRedo: boolean;
+  history: HistoryCursor;
   actions: ConductorAction[];
   actorFilter: Actor | "all";
   widgetFilter: string | null;
@@ -232,7 +357,6 @@ interface ConductorState {
   // Undo/Redo
   undo: () => Promise<void>;
   redo: () => Promise<void>;
-  setUndoRedo: (canUndo: boolean, canRedo: boolean) => void;
   autoLayout: () => void;
 
   // History
@@ -276,6 +400,7 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
   editMode: true,
   canUndo: false,
   canRedo: false,
+  history: { undoDepth: 0, redoDepth: 0 },
   actions: [],
   actorFilter: "all",
   widgetFilter: null,
@@ -308,8 +433,19 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
 
   setCanvases: (canvases) => set({ canvases }),
 
+  // Idempotent by canvas id. `conductor:canvas:changed` broadcasts a `create`
+  // that can race the renderer's own initial list load, and a blind append
+  // produced two rows with the same id — which React then reported as
+  // duplicate keys in CanvasLibraryView / CanvasSelector. A repeated
+  // broadcast refreshes the existing row instead of adding a second one.
   addCanvas: (canvas) =>
-    set((state) => ({ canvases: [...state.canvases, canvas] })),
+    set((state) => {
+      const index = state.canvases.findIndex((c) => c.id === canvas.id);
+      if (index === -1) return { canvases: [...state.canvases, canvas] };
+      const next = [...state.canvases];
+      next[index] = canvas;
+      return { canvases: next };
+    }),
 
   removeCanvas: (canvasId) =>
     set((state) => ({
@@ -424,13 +560,18 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
   },
 
   setSnapshot: (snapshot) => {
-    const elements = (snapshot as any).elements ?? [];
-    set({
-      snapshot,
-      widgets: snapshot.widgets,
-      elements,
-    });
+    // Same normalisation path as `setElements` and the hydration patch — see
+    // `normalizeElements`.
+    const raw = (snapshot as ConductorSnapshot & { elements?: CanvasElement[] }).elements ?? [];
+    const elements = normalizeElements(raw);
+    set({ snapshot, widgets: snapshot.widgets, elements });
     canvasSpatialIndex.rebuild(elements);
+    // The action log's real extent, as persisted. Nothing here moves the
+    // cursor afterwards except a confirmed outcome.
+    commitHistory(set, () => ({
+      undoDepth: Math.max(0, snapshot.actionCursor ?? 0),
+      redoDepth: 0,
+    }));
   },
 
   setWidgets: (widgets) => set({ widgets }),
@@ -477,7 +618,7 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
     }),
 
   setElements: (elements) => {
-    const normalized = elements.map(normalizeElement);
+    const normalized = normalizeElements(elements);
     set({ elements: normalized });
     canvasSpatialIndex.rebuild(normalized);
   },
@@ -509,10 +650,35 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
   },
 
   removeElement: (elementId) => {
+    const { elements } = get();
+    const removedIds = collectRemovals(elements, elementId);
+    if (removedIds.size === 0) return;
     set((state) => ({
-      elements: state.elements.filter((e) => e.id !== elementId),
+      elements: state.elements
+        .filter((e) => !removedIds.has(e.id))
+        // Surviving groups drop the deleted ids from their member list, so a
+        // group cannot keep listing members that no longer exist.
+        .map((e) => {
+          if (e.elementKind !== "native/group") return e;
+          const members = groupMemberIds(e.config);
+          if (!members.some((id) => removedIds.has(id))) return e;
+          return {
+            ...e,
+            config: {
+              ...e.config,
+              memberIds: members.filter((id) => !removedIds.has(id)),
+            },
+            updatedAt: Date.now(),
+          };
+        }),
+      selectedElementId: state.selectedElementId && removedIds.has(state.selectedElementId)
+        ? null
+        : state.selectedElementId,
+      selectedElementIds: state.selectedElementIds.filter((id) => !removedIds.has(id)),
     }));
-    canvasSpatialIndex.remove(elementId);
+    for (const id of removedIds) {
+      canvasSpatialIndex.remove(id);
+    }
   },
 
   connectBridge: (canvasId) => {
@@ -545,16 +711,19 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
 
       // Full widget list hydration patch
       if (patch.widgets && Array.isArray(patch.widgets)) {
-        const hydratedElements = (patch as any).elements ?? [];
+        // Same normalisation path as a snapshot load — see `normalizeElements`.
+        const hydrated = normalizeElements(
+          (patch as unknown as { elements?: CanvasElement[] }).elements ?? [],
+        );
         set({
           widgets: patch.widgets as ConductorWidget[],
-          elements: hydratedElements,
-          canUndo: true,
-          canRedo: false,
+          elements: hydrated,
           uiStatus: "idle",
           syncStatusText: "",
         });
-        canvasSpatialIndex.rebuild(hydratedElements);
+        canvasSpatialIndex.rebuild(hydrated);
+        // A re-hydration says nothing about the action log, so the cursor is
+        // left as loaded rather than guessed at.
         return;
       }
 
@@ -565,11 +734,10 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
         if (!exists) {
           set({
             widgets: [...widgets, incoming],
-            canUndo: true,
-            canRedo: false,
             uiStatus: "idle",
             syncStatusText: "",
           });
+          commitHistory(set, noteAppliedAction);
         }
       }
 
@@ -582,13 +750,12 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
           const normalized = normalizeElement(incoming);
           set({
             elements: [...elements, normalized],
-            canUndo: true,
-            canRedo: false,
             uiStatus: "idle",
             syncStatusText: "",
             lastElementMutationActor: patch.actor === "agent" ? "agent" : "user",
           });
           canvasSpatialIndex.upsert(normalized);
+          commitHistory(set, noteAppliedAction);
         }
         // Dual-write handled — skip standalone element.create check below
         return;
@@ -599,11 +766,10 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
         get().removeWidget(patch.widgetId as string);
         get().removeElement(patch.widgetId as string);
         set({
-          canUndo: true,
-          canRedo: false,
           uiStatus: "idle",
           syncStatusText: "",
         });
+        commitHistory(set, noteAppliedAction);
         return;
       }
 
@@ -625,11 +791,10 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
           updatedAt: Date.now(),
         });
         set({
-          canUndo: true,
-          canRedo: false,
           uiStatus: "idle",
           syncStatusText: "",
         });
+        commitHistory(set, noteAppliedAction);
         return;
       }
 
@@ -644,11 +809,10 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
           updatedAt: Date.now(),
         });
         set({
-          canUndo: true,
-          canRedo: false,
           uiStatus: "idle",
           syncStatusText: "",
         });
+        commitHistory(set, noteAppliedAction);
         return;
       }
 
@@ -669,11 +833,10 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
           updatedAt: Date.now(),
         });
         set({
-          canUndo: true,
-          canRedo: false,
           uiStatus: "idle",
           syncStatusText: "",
         });
+        commitHistory(set, noteAppliedAction);
       }
 
       // element.batch_create -> append ALL elements, then focus on the
@@ -686,11 +849,9 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
         const existingIds = new Set(existing.map((e) => e.id));
         const fresh = incoming.filter((e) => !existingIds.has(e.id));
         if (fresh.length > 0) {
-          const freshNormalized = fresh.map(normalizeElement);
+          const freshNormalized = normalizeElements(fresh);
           set({
             elements: [...existing, ...freshNormalized],
-            canUndo: true,
-            canRedo: false,
             uiStatus: "idle",
             syncStatusText: "",
             lastElementMutationActor: patch.actor === "agent" ? "agent" : "user",
@@ -698,6 +859,7 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
           for (const el of freshNormalized) {
             canvasSpatialIndex.upsert(el);
           }
+          commitHistory(set, noteAppliedAction);
           // Auto-focus on the first newly created element so the user
           // sees the agent's work appear in view.
           if (patch.actor === 'agent') {
@@ -720,13 +882,12 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
           const normalized = normalizeElement(incoming);
           set({
             elements: [...elements, normalized],
-            canUndo: true,
-            canRedo: false,
             uiStatus: "idle",
             syncStatusText: "",
             lastElementMutationActor: patch.actor === "agent" ? "agent" : "user",
           });
           canvasSpatialIndex.upsert(normalized);
+          commitHistory(set, noteAppliedAction);
           // Auto-focus on agent-created elements so the user can see
           // what the agent is working on. Skip when actor is 'user'
           // (user drags place the element where they want it).
@@ -745,12 +906,54 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
       if (resultPatch?.deletedElement && patch.elementId) {
         get().removeElement(patch.elementId as string);
         set({
-          canUndo: true,
-          canRedo: false,
           uiStatus: "idle",
           syncStatusText: "",
           lastElementMutationActor: patch.actor === "agent" ? "agent" : "user",
         });
+        commitHistory(set, noteAppliedAction);
+        return;
+      }
+
+      // element.arrange -> apply the persisted layout to the live elements.
+      // `db-service.arrangeElements` / `layoutGridElements` write every
+      // position and broadcast `resultPatch: { layout }`; without this branch
+      // the arrangement was persisted and never read, so the canvas stayed
+      // put until an unrelated snapshot reload. An arrange carries no single
+      // `elementId` — the ids live in the array — so this keys on `layout`
+      // alone and is placed before the single-element position branch.
+      const layoutPatch = (resultPatch?.layout !== undefined
+        ? resultPatch.layout
+        : (resultPatch?.changes as Record<string, unknown> | undefined)?.layout) as
+        | Array<{ elementId?: unknown; position?: unknown }>
+        | undefined;
+      if (Array.isArray(layoutPatch) && layoutPatch.length > 0) {
+        const { elements: currentElements } = get();
+        const known = new Set(currentElements.map((e) => e.id));
+        let applied = 0;
+        for (const item of layoutPatch) {
+          const targetId = typeof item?.elementId === "string" ? item.elementId : null;
+          if (!targetId || !known.has(targetId)) continue;
+          const position = item.position;
+          if (!position || typeof position !== "object") continue;
+          get().updateElement(targetId, {
+            position: normalizePosition({
+              // Preserve zIndex / rotation: the layout payload only carries
+              // the geometry the packer computed.
+              ...currentElements.find((e) => e.id === targetId)?.position,
+              ...(position as Partial<CanvasPosition>),
+            }),
+            updatedAt: Date.now(),
+          });
+          applied += 1;
+        }
+        if (applied > 0) {
+          set({
+            uiStatus: "idle",
+            syncStatusText: "",
+            lastElementMutationActor: patch.actor === "agent" ? "agent" : "user",
+          });
+          commitHistory(set, noteAppliedAction);
+        }
         return;
       }
 
@@ -770,11 +973,10 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
           updatedAt: Date.now(),
         });
         set({
-          canUndo: true,
-          canRedo: false,
           uiStatus: "idle",
           syncStatusText: "",
         });
+        commitHistory(set, noteAppliedAction);
         return;
       }
 
@@ -822,11 +1024,10 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
         }
         get().updateElement(patch.elementId as string, elementPatch);
         set({
-          canUndo: true,
-          canRedo: false,
           uiStatus: "idle",
           syncStatusText: "",
         });
+        commitHistory(set, noteAppliedAction);
       }
     });
 
@@ -861,11 +1062,17 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
         }
         set({ uiStatus: "idle", syncStatusText: "" });
         get().setUiError(null);
+        // Only a confirmed revert moves the cursor. Previously the flags were
+        // rewritten after the if/else, so one undo disabled Undo outright and
+        // a *failed* undo still turned Redo on.
+        commitHistory(set, (cursor) => ({
+          undoDepth: Math.max(0, cursor.undoDepth - 1),
+          redoDepth: cursor.redoDepth + 1,
+        }));
       } else {
         set({ uiStatus: "error", syncStatusText: "Failed to revert action" });
         get().setUiError("Undo failed");
       }
-      set({ canUndo: false, canRedo: true });
     } catch {
       set({ uiStatus: "error", syncStatusText: "Failed to revert action" });
       get().setUiError("Undo failed");
@@ -889,18 +1096,20 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
         }
         set({ uiStatus: "idle", syncStatusText: "" });
         get().setUiError(null);
+        // Same rule as undo: the cursor follows the confirmed outcome only.
+        commitHistory(set, (cursor) => ({
+          undoDepth: cursor.undoDepth + 1,
+          redoDepth: Math.max(0, cursor.redoDepth - 1),
+        }));
       } else {
         set({ uiStatus: "error", syncStatusText: "Failed to reapply action" });
         get().setUiError("Redo failed");
       }
-      set({ canUndo: true, canRedo: false });
     } catch {
       set({ uiStatus: "error", syncStatusText: "Failed to reapply action" });
       get().setUiError("Redo failed");
     }
   },
-
-  setUndoRedo: (canUndo, canRedo) => set({ canUndo, canRedo }),
 
   setActions: (actions) => set({ actions }),
 
@@ -976,60 +1185,115 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
   setUiError: (uiError) => set({ uiError }),
 
   autoLayout: () => {
-    const { widgets, activeCanvasId } = get();
-    if (!activeCanvasId || widgets.length === 0) return;
+    const { widgets, elements, activeCanvasId } = get();
+    if (!activeCanvasId) return;
 
-    const cols = 12;
-    let row = 0;
-    let col = 0;
-
-    const newWidgets = widgets.map((w) => {
-      const pos = { ...w.position };
-
-      if (col + pos.w > cols) {
-        col = 0;
-        row++;
+    // Both collections are laid out. `elements` is what the canvas actually
+    // renders (`ElementRenderer` dispatches on `native/*`); `widgets` is the
+    // legacy parallel list still rendered for widget kinds. The old version
+    // bailed out when `widgets` was empty and never touched `elements`, so on
+    // any canvas that had migrated to elements the button did nothing at all.
+    const COLS = 12;
+    const pack = (items: Array<{ id: string; position: { w: number } }>) => {
+      const placed: Array<{ id: string; x: number; y: number }> = [];
+      let row = 0;
+      let col = 0;
+      for (const item of items) {
+        const w = Number.isFinite(item.position.w) && item.position.w > 0 ? item.position.w : 1;
+        if (col + w > COLS) {
+          col = 0;
+          row += 1;
+        }
+        placed.push({ id: item.id, x: col, y: row });
+        col += w;
+        if (col >= COLS) {
+          col = 0;
+          row += 1;
+        }
       }
+      return placed;
+    };
 
-      pos.x = col;
-      pos.y = row;
-      col += pos.w;
+    const newWidgets = pack(widgets);
+    // Connectors are excluded, matching the backend layout: their geometry is
+    // derived from their endpoints, so a position move is a no-op that would
+    // only add an action-log entry per connector.
+    const newElements = pack(elements.filter((e) => e.elementKind !== "native/connector"));
+    if (newWidgets.length === 0 && newElements.length === 0) return;
 
-      if (col >= cols) {
-        col = 0;
-        row++;
-      }
-
-      return { id: w.id, position: pos };
-    });
-
-    const updated = widgets.map((w) => {
-      const layout = newWidgets.find((nw) => nw.id === w.id);
-      return layout ? { ...w, position: layout.position, updatedAt: Date.now() } : w;
-    });
-
+    // Optimistic local move, exactly as before for widgets and now for
+    // elements too, so the canvas responds without waiting for the round trip.
+    const widgetMoves = new Map(newWidgets.map((m) => [m.id, m]));
+    const elementMoves = new Map(newElements.map((m) => [m.id, m]));
     set({
-      widgets: updated,
+      widgets: widgets.map((w) => {
+        const move = widgetMoves.get(w.id);
+        return move ? { ...w, position: { ...w.position, x: move.x, y: move.y }, updatedAt: Date.now() } : w;
+      }),
       uiStatus: "syncing",
       syncStatusText: "Applying automatic layout...",
     });
-
-    for (const { id, position } of newWidgets) {
-      executeAction({
-        action: "widget.move",
-        widgetId: id,
-        canvasId: activeCanvasId,
-        position,
-      })
-        .then(() => {
-          set({ uiStatus: "idle", syncStatusText: "" });
-          get().setUiError(null);
-        })
-        .catch(() => {
-          set({ uiStatus: "error", syncStatusText: "Failed to apply automatic layout" });
-          get().setUiError("Auto layout failed");
-        });
+    for (const move of newElements) {
+      get().updateElement(move.id, {
+        position: normalizePosition({
+          ...elements.find((e) => e.id === move.id)?.position,
+          x: move.x,
+          y: move.y,
+        }),
+      });
     }
+
+    // Sequential, not a concurrent burst. Every move appends to one action log
+    // and broadcasts its own patch, so firing them all at once let the first
+    // `.then` clear `uiStatus` while the rest were still in flight and let a
+    // late rejection overwrite an already-successful run with an error state.
+    const moves: Array<{ id: string; x: number; y: number }> = [...newElements, ...newWidgets];
+    const run = async (): Promise<void> => {
+      let failed = 0;
+      for (const move of moves) {
+        try {
+          if (elementMoves.has(move.id)) {
+            // `element.move` needs the full CanvasPosition, so normalize from
+            // the stored one to keep zIndex / rotation.
+            await executeAction({
+              action: "element.move",
+              elementId: move.id,
+              canvasId: activeCanvasId,
+              position: normalizePosition({
+                ...elements.find((e) => e.id === move.id)?.position,
+                x: move.x,
+                y: move.y,
+              }),
+            });
+          } else {
+            const source = widgets.find((w) => w.id === move.id);
+            await executeAction({
+              action: "widget.move",
+              widgetId: move.id,
+              canvasId: activeCanvasId,
+              position: {
+                x: move.x,
+                y: move.y,
+                w: source?.position.w ?? 1,
+                h: source?.position.h ?? 1,
+              },
+            });
+          }
+        } catch {
+          failed += 1;
+        }
+      }
+      // One status write, after the whole sequence, from the aggregate
+      // outcome — nothing in flight can still clobber it.
+      if (failed > 0) {
+        set({ uiStatus: "error", syncStatusText: "Failed to apply automatic layout" });
+        get().setUiError(`Auto layout failed for ${failed} of ${moves.length} items`);
+      } else {
+        set({ uiStatus: "idle", syncStatusText: "" });
+        get().setUiError(null);
+      }
+    };
+    void run();
   },
 
   fetchConductorModels: async () => {

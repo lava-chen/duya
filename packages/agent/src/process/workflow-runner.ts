@@ -47,7 +47,7 @@ import {
   type WorkflowRunSse,
 } from './worker-protocol.js';
 import { SavedWorkflowStore } from '../modes/workflow/dwf/store.js';
-import { runDwfScript, compileDwfScript, DwfCompileError, type DwfHostPorts } from '../modes/workflow/dwf/runtime.js';
+import { runDwfScript, compileDwfScript, DwfCompileError, priorApprovalFromJournal, type DwfHostPorts } from '../modes/workflow/dwf/runtime.js';
 import { Journal, type JournalRecord, type JournalSink } from '../modes/workflow/journal.js';
 import {
   runGuiNode,
@@ -660,6 +660,16 @@ function buildHostPorts(
       });
       return { decision: decision === 'allow' ? 'approve' : 'deny' };
     },
+
+    /**
+     * Resume path: reuse the decision already on record instead of raising a
+     * second card for a question the user already answered. The ledger is this
+     * run's journal, which a resume seeds from the prior run BEFORE the script
+     * starts, so the record read here is the prior run's own answer.
+     */
+    async lookupPriorApproval({ prompt }) {
+      return priorApprovalFromJournal(gui.journal, prompt);
+    },
   };
 }
 
@@ -932,6 +942,10 @@ export async function launchSavedWorkflow(
       runId: req.runId,
       journal,
       args,
+      // A resume seeds the journal from the prior run, so `wf.approve` can
+      // reuse the prior decision instead of re-asking. Absent on a fresh
+      // launch — where the pre-existing behaviour (always ask) is correct.
+      ...(req.resumeFromRunId !== undefined ? { resuming: true } : {}),
       ...(req.model !== undefined ? { agentModel: req.model } : {}),
     });
     await transport.finishRun(req.runId, {

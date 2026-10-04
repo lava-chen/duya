@@ -341,6 +341,16 @@ export interface PairingState {
 
 export interface FeishuAdapterOptions {
   config: FeishuConfig;
+  /**
+   * Inbound text message.
+   *
+   * `threadId` carries the thread a reply belongs to (`thread_id` /
+   * `root_id` / `parent_id`) so thread context reaches the consumer instead
+   * of being discarded; it is `undefined` for a message that is not a reply.
+   * It is the ONLY inbound text callback: a threaded message is the same
+   * event with a thread, not a separate kind, and routing it elsewhere
+   * dropped it whenever nothing was registered on the other side.
+   */
   onMessage: (chatId: string, userId: string, text: string, messageId: string, threadId?: string, mentions?: FeishuMention[]) => Promise<void>;
   /**
    * Inbound image message. `localPath` carries the channel's best-effort
@@ -367,7 +377,6 @@ export interface FeishuAdapterOptions {
   onMemberAdded: (chatId: string, userIds: string[]) => Promise<void>;
   onMemberRemoved: (chatId: string, userId: string) => Promise<void>;
   onMessageRecalled: (messageId: string, chatId: string) => Promise<void>;
-  onThreadMessage?: (parentMessageId: string, chatId: string, userId: string, text: string, messageId: string) => Promise<void>;
   onBotInvited?: (chatId: string, inviterId: string) => Promise<void>;
   onBotRemoved?: (chatId: string, removerId: string) => Promise<void>;
   onStatusChange?: (status: 'connected' | 'disconnected' | 'error') => void;

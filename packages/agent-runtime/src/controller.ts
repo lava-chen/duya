@@ -55,7 +55,7 @@ import { DEFAULT_LIMITS, EVENT_REGISTRY, LifecycleViolation, manifestFingerprint
 import type { LifecycleViolationCode } from '@duya/agent-protocol';
 import type { RunSpend } from '@duya/agent-core';
 import { RunEventStream, RunSession, type RunPersistence, type RunTranscriptReader } from './run-session.js';
-import { RunEventEmitter } from './events/event-emitter.js';
+import { RunEventEmitter, type EmitRejection } from './events/event-emitter.js';
 import { projectToLegacyFrame } from './project/legacy-sse-projector.js';
 import type { LegacySseFrame } from './legacy-sse-contract.js';
 import { translateFrame, type RawFrame, type TranslateContext } from './translate/chat-event-translator.js';
@@ -641,6 +641,13 @@ export class RunController implements AgentRuntimeApi {
               message: `refused an inbound envelope: ${inbound.rejection.message}`,
               data: { code: inbound.rejection.code, observedType: inbound.rejection.observedType },
             });
+            // Same escalation the frame arm applies, and for the same reason: an
+            // unknown reserved-namespace event is a message this runtime cannot
+            // act on, so recording it and letting the run carry on to
+            // `completed` is the exact outcome `observeFrame` refuses. The
+            // emitter's own `requiresTerminal` is the verdict, so the two doors
+            // cannot disagree about what a refusal means for the run.
+            this.#escalateRejection(active, inbound.rejection);
             return;
           }
           if (inbound.producerSeqDisagreed) {
@@ -843,14 +850,7 @@ export class RunController implements AgentRuntimeApi {
           // A critical message this runtime cannot act on. Recording it as a
           // diagnostic and carrying on is the "unknown critical event quietly
           // becomes success" outcome, so the run is failed instead.
-          active.emitter.emit({
-            type: 'run.failed',
-            error: {
-              code: 'invalid_event_frame',
-              message: emitted.message,
-              cause: { system: 'runtime', code: emitted.code },
-            },
-          });
+          this.#escalateRejection(active, emitted);
         }
         return { legacy: null, envelope: null, forwardOnly: false, internal: false };
       }
@@ -1127,6 +1127,35 @@ export class RunController implements AgentRuntimeApi {
   }
 
   /**
+   * Turn a refusal the emitter flagged `requiresTerminal` into the run's
+   * terminal.
+   *
+   * Shared by both refusal arms — a translated frame and an inbound envelope —
+   * because the two doors used to answer the same question differently: the
+   * frame arm failed the run, the envelope arm logged and continued, so an
+   * unknown `run.*_critical` from an executor could still reach `completed`.
+   * The verdict is the emitter's, not this method's, so it is read rather than
+   * re-derived: a refusal that does not require a terminal is a peer that kept
+   * talking after the run closed, and synthesising a second terminal for it
+   * would be refused by the ledger anyway.
+   *
+   * Deliberately not settled here. The run now HAS a terminal, so contract §C is
+   * satisfied, and `settle` still runs off the executor's `end` — the same
+   * backstop the frame arm relies on.
+   */
+  #escalateRejection(active: ActiveRun, rejection: EmitRejection): void {
+    if (!rejection.requiresTerminal) return;
+    active.emitter.emit({
+      type: 'run.failed',
+      error: {
+        code: 'invalid_event_frame',
+        message: rejection.message,
+        cause: { system: 'runtime', code: rejection.code },
+      },
+    });
+  }
+
+  /**
    * Turn a lifecycle violation into the run's terminal state.
    *
    * Deliberately not re-thrown. The ledger throws because continuing to
@@ -1174,7 +1203,11 @@ export class RunController implements AgentRuntimeApi {
       // event was already recorded. Nothing further can be appended.
       return { legacy: null, envelope: null, forwardOnly: false, internal: false, violation: code };
     }
-    active.stream.push(envelope);
+    // NO stream push here. `emit` reaches `RunEventEmitter.#mint`, which is the
+    // single publish point, so this envelope is already on the run's stream with
+    // its minted `seq`. Pushing it a second time put the same terminal in every
+    // `events()` reader twice, under one sequence number — a duplicate a
+    // consumer cannot distinguish from two distinct events it must both apply.
     void this.settle(active.session.runId).catch(() => undefined);
     const legacy = projectToLegacyFrame(envelope);
     return { legacy, envelope, forwardOnly: false, internal: false, violation: code };

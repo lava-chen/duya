@@ -80,6 +80,9 @@ export interface DatabaseView {
   filter: DatabaseFilterNode | null;
   sorts: DatabaseSortRule[];
   layout: Record<string, unknown>;
+  /** Optimistic-lock counter — pass it back as `expectedRevision` on
+   *  `view.update`. Mirrors `DatabaseRecord.revision`. */
+  revision: number;
   createdAt: number;
   updatedAt: number;
   archivedAt: number | null;
@@ -231,6 +234,7 @@ export const ProjectDatabaseCommandSchema = z.discriminatedUnion('type', [
     type: z.literal('view.update'),
     sourceId: z.string().min(1),
     viewId: z.string().min(1),
+    expectedRevision: z.number().int().positive(),
     name: z.string().trim().min(1).max(120).optional(),
     filter: FilterNodeSchema.nullable().optional(),
     sorts: z.array(DatabaseSortRuleSchema).max(20).optional(),

@@ -29,6 +29,14 @@ export interface Migration {
 
 const CHECKPOINT_INTERVAL_MS = 60_000;
 const SCHEMA_VERSION_KEY = 'schema_version';
+/**
+ * JSON array of the migration ids this database has already been offered.
+ * `schema_version` alone cannot tell "already applied" from "lost", because
+ * every aggregate shares the one counter; this key records the set so a
+ * migration authored at an id the counter has already passed is reported
+ * instead of skipped in silence.
+ */
+const APPLIED_IDS_KEY = 'applied_migration_ids';
 
 /**
  * Start a 60s PASSIVE WAL checkpoint scheduler on the given database.
@@ -109,6 +117,33 @@ export class CoreDatabase {
     `);
   }
 
+  private readAppliedIds(): Set<number> | null {
+    const row = this.db
+      .prepare('SELECT value FROM meta WHERE key = ?')
+      .get(APPLIED_IDS_KEY) as { value?: string } | undefined;
+    if (!row?.value) return null;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.value) as unknown;
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(parsed)) return null;
+    const ids: unknown[] = parsed;
+    return new Set(ids.filter((id): id is number => typeof id === 'number' && Number.isInteger(id)));
+  }
+
+  private recordAppliedIds(ids: Set<number>): void {
+    const value = JSON.stringify([...ids].sort((a, b) => a - b));
+    const existing = this.db
+      .prepare('SELECT value FROM meta WHERE key = ?')
+      .get(APPLIED_IDS_KEY) as { value?: string } | undefined;
+    if (existing?.value === value) return;
+    this.db
+      .prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+      .run(APPLIED_IDS_KEY, value);
+  }
+
   private runMigrations(migrations: Migration[]): void {
     const logger = getLogger();
     const sorted = [...migrations].sort((a, b) => a.id - b.id);
@@ -135,8 +170,32 @@ export class CoreDatabase {
     }
 
     const current = this.schemaVersion;
+    // Startup assertion: every migration this DB was not already offered must
+    // have `id > current`, otherwise the shared-counter guard below skips it
+    // forever. The registry has permanent gaps (3, 19, 20, 21, 27), so a
+    // migration later authored at one of those ids lands below the counter and
+    // is dropped with no trace at all — the same silent loss that took
+    // `session_runtime_locks.origin` and `message_search`. The recorded id set
+    // is what keeps this precise: without it every already-applied migration
+    // looks like a lost one and this would fire on every boot. A DB predating
+    // the key is presumed to have applied everything at or below `current`, so
+    // its first boot only establishes the baseline.
+    const applied = this.readAppliedIds() ?? new Set<number>(
+      sorted.filter((migration) => migration.id <= current).map((migration) => migration.id),
+    );
     for (const migration of sorted) {
-      if (migration.id <= current) continue;
+      if (migration.id <= current) {
+        if (!applied.has(migration.id)) {
+          logger.error(
+            `Core migration ${migration.id} (${migration.name}) was never applied but schema_version is already ${current} — it can never run. Re-number it above ${current}.`,
+            undefined,
+            undefined,
+            LogComponent.DBMigration,
+          );
+          applied.add(migration.id);
+        }
+        continue;
+      }
       logger.info(`Running core migration ${migration.id}: ${migration.name}`, undefined, LogComponent.DBMigration);
       const txn = this.db.transaction(() => {
         migration.up(this.db);
@@ -146,6 +205,7 @@ export class CoreDatabase {
       });
       try {
         txn();
+        applied.add(migration.id);
         logger.info(`Core migration ${migration.id} completed`, undefined, LogComponent.DBMigration);
       } catch (error) {
         logger.error(
@@ -157,5 +217,6 @@ export class CoreDatabase {
         throw error;
       }
     }
+    this.recordAppliedIds(applied);
   }
 }

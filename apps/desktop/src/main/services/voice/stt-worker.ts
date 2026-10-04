@@ -100,12 +100,32 @@ export class SttWorker {
       if (line) this.logger.warn('STT worker stderr', { line }, LogComponent.Voice);
     });
     child.on('message', (resp: WorkerResponse) => this.handleResponse(resp));
+    // A failed fork (bad execPath, ENOENT, spawn EAGAIN) emits 'error'; an
+    // unhandled 'error' on an EventEmitter is rethrown and would take the
+    // whole Electron main process down with it.
+    child.on('error', (err) => {
+      this.logger.error('STT worker error', err, { workerPath }, LogComponent.Voice);
+      this.ready = false;
+      // `pid` is declared `number` but Node leaves it undefined when the
+      // process could not be spawned at all — in that case there is nothing
+      // to keep a reference to, so a later spawn() retries cleanly.
+      const pid: number | undefined = child.pid;
+      if (pid === undefined) {
+        this.child = null;
+      }
+      const message = `STT worker error: ${err.message}`;
+      const pending = this.takePendingInit();
+      if (pending) {
+        pending.reject(new Error(message));
+      } else {
+        this.callbacks.onError(message, 'worker-error');
+      }
+    });
     child.on('exit', (code, signal) => {
       this.logger.info('STT worker exited', { code, signal }, LogComponent.Voice);
       this.child = null;
       this.ready = false;
-      const pendingInit = this.pendingInit;
-      this.pendingInit = null;
+      const pendingInit = this.takePendingInit();
       if (pendingInit) {
         pendingInit.reject(new Error('STT worker exited before init completed'));
       }
@@ -116,7 +136,13 @@ export class SttWorker {
   }
 
   init(payload: SttWorkerInitPayload): Promise<boolean> {
-    return new Promise((resolve, reject) => {
+    // Idempotent while an init is in flight: a second call must get the SAME
+    // promise. Overwriting `pendingInit` used to orphan the first promise's
+    // resolver, so that caller's await never settled.
+    if (this.pendingInitPromise) {
+      return this.pendingInitPromise;
+    }
+    const promise = new Promise<boolean>((resolve, reject) => {
       this.pendingInit = { resolve, reject };
       try {
         this.send({ type: 'init', payload });
@@ -125,6 +151,16 @@ export class SttWorker {
         reject(err);
       }
     });
+    this.pendingInitPromise = promise;
+    // Drop the shared handle once it settles so a later init() issues a
+    // fresh round trip.
+    const clear = (): void => {
+      if (this.pendingInitPromise === promise) {
+        this.pendingInitPromise = null;
+      }
+    };
+    void promise.then(clear, clear);
+    return promise;
   }
 
   push(chunk: Int16Array): void {
@@ -160,10 +196,19 @@ export class SttWorker {
     reject: (err: Error) => void;
   } | null = null;
 
+  /** The in-flight init() promise, shared by concurrent callers. */
+  private pendingInitPromise: Promise<boolean> | null = null;
+
+  /** Read and clear the pending init, so only one path ever settles it. */
+  private takePendingInit(): { resolve: (ready: boolean) => void; reject: (err: Error) => void } | null {
+    const pending = this.pendingInit;
+    this.pendingInit = null;
+    return pending;
+  }
+
   private handleResponse(resp: WorkerResponse): void {
     if (resp.kind === 'init_result') {
-      const pending = this.pendingInit;
-      this.pendingInit = null;
+      const pending = this.takePendingInit();
       if (pending) {
         this.ready = resp.ok && resp.ready;
         pending.resolve(this.ready);

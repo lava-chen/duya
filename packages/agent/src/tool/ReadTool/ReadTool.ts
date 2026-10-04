@@ -239,9 +239,9 @@ export class ReadTool extends BaseTool {
 
   /**
    * Plan 550 step 3a — declarative read-side metadata. The new
-   * DependencyGraphOrchestrator uses the resolved `path` set to serialise
-   * this read against any writer that targets the same path. Reads
-   * against disjoint paths remain parallel.
+   * DependencyGraphOrchestrator uses the resolved `file_path` set to
+   * serialise this read against any writer that targets the same path.
+   * Reads against disjoint paths remain parallel.
    */
   readonly dependencies: ToolDependencyDeclaration = Object.freeze({
     readPaths: ['__from_input__'],
@@ -252,7 +252,9 @@ export class ReadTool extends BaseTool {
   });
 
   extractReadPaths(input: Record<string, unknown>): readonly string[] {
-    const path = input.path;
+    // `input_schema` names the field `file_path` (see `required` above);
+    // reading `input.path` resolved every call to UNKNOWN_PATHS.
+    const path = input.file_path;
     return typeof path === 'string' && path.length > 0 ? [path] : UNKNOWN_PATHS;
   }
 

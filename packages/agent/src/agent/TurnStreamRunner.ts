@@ -88,8 +88,20 @@ export interface TurnStreamRunnerDeps {
   signal: AbortSignal;
   /** Per-turn counter used in the `chat:retry` chip payload. */
   turnCount: number;
-  /** True iff the agent has already committed an assistant message in this turn. */
-  turnCommitted: boolean;
+  /**
+   * True iff the agent has already committed an assistant message in
+   * this turn.
+   *
+   * Evaluated once per attempt (inside the catch), NOT when this deps
+   * object is built: a caller whose flag is flipped by the consumer
+   * loop must pass a thunk (`() => boolean`), because a plain boolean
+   * is a snapshot taken before that loop ever runs — which left the
+   * post-`done` guard permanently `false` and made a transport
+   * failure after `done` replay the whole turn (re-queueing the
+   * already-dispatched tool calls). A literal boolean stays accepted
+   * for callers whose value is fixed for the lifetime of the deps.
+   */
+  turnCommitted: boolean | (() => boolean);
   /** Per-attempt refresh for the declared-tools snapshot. */
   refreshDeclaredTools: RefreshDeclaredToolsHook;
   /** Per-retry reset for the caller's per-attempt accumulators. */
@@ -153,10 +165,18 @@ export async function* runTurnStream(
       yield* deps.llmClient.streamChat(deps.llmMessages, streamOptions);
       return;
     } catch (streamError) {
+      // Re-read the committed guard for THIS attempt: a failure after
+      // the `done` event already committed the assistant message and
+      // its tool results, so replaying would duplicate them (and
+      // re-queue the dispatched tool calls).
+      const turnCommitted =
+        typeof deps.turnCommitted === 'function'
+          ? deps.turnCommitted()
+          : deps.turnCommitted;
       if (
         !shouldReplayStreamAfterError(streamError, {
           aborted: deps.signal.aborted,
-          turnCommitted: deps.turnCommitted,
+          turnCommitted,
           attemptsUsed: attempt,
         })
       ) {

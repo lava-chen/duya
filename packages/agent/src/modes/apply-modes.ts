@@ -9,8 +9,11 @@
  *   4. Merges `toolUseContextPatch` into the base ToolUseContext
  *   5. Runs `beforeStream` hooks and merges their StreamOptionsPatch
  *
- * `onExit` is NOT called here — it fires after the agent loop finishes
- * (only for `kind: 'message'` modes). Use {@link runExitHooks} for that.
+ * Lifecycle: `onEnter` runs here (once per turn, for every resolved mode).
+ * `onExit` is dispatched from the boundary that matches the mode's `kind` —
+ * `runExitHooks` covers `kind: 'message'` modes at the run boundary, and
+ * session modes are settled inside `applyModes` when they leave the
+ * resolved set (see {@link sessionEntered}).
  */
 
 import type {
@@ -43,8 +46,58 @@ export interface ApplyModesResult {
   ctx: ModeModifierContext;
 }
 
+/**
+ * Session-scoped lifecycle ledger: `sessionId` → the modifiers whose
+ * `onEnter` has run for that session and which are still part of the last
+ * resolved set.
+ *
+ * Why this exists: `onEnter` runs on EVERY turn (applyModes is per
+ * streamChat), but the run-boundary dispatch {@link runExitHooks} only
+ * reaches `kind: 'message'` modifiers. A session mode's `onExit` therefore
+ * had no reachable call site at all — computer-use's
+ * `OSContextBridge.disable()` and its sticky-trigger reset never ran.
+ *
+ * The ledger gives the session half of the lifecycle a real trigger: a
+ * session mode that was active last turn and is absent from this turn's
+ * resolved set has been toggled off (or displaced by an exclusive mode), so
+ * its `onExit` is owed exactly once, before the new turn's `onEnter` hooks
+ * run. A mode that is still active is left alone — it must keep its
+ * resources between turns.
+ */
+const sessionEntered = new Map<string, ModeModifier[]>();
+
 export async function applyModes(input: ApplyModesInput): Promise<ApplyModesResult> {
   const { basePrompt, baseTools, baseToolUseContext, ctx, resolved } = input;
+
+  // 0. Session lifecycle: settle `onExit` for session modes that left the
+  //    resolved set since the last turn on this session. Skipped for an
+  //    empty sessionId — every id-less turn would share one ledger key and
+  //    fire another session's exit hooks.
+  const previousEntered = ctx.sessionId ? sessionEntered.get(ctx.sessionId) : undefined;
+  if (ctx.sessionId) {
+    if (resolved.modes.length > 0) {
+      sessionEntered.set(ctx.sessionId, resolved.modes);
+    } else {
+      // Nothing active → nothing is owed; drop the entry so the map cannot
+      // grow without bound across a long-lived worker.
+      sessionEntered.delete(ctx.sessionId);
+    }
+  }
+  if (previousEntered) {
+    const stillActive = new Set(resolved.modes.map((mod) => mod.id));
+    for (const mod of previousEntered) {
+      if (mod.kind !== 'session' || stillActive.has(mod.id)) continue;
+      const onExit = mod.hooks?.onExit;
+      if (!onExit) continue;
+      // Fail-open, mirroring runExitHooks: a failing exit hook must never
+      // take the next turn down with it.
+      try {
+        await onExit(ctx);
+      } catch {
+        // Ignored on purpose — the mode is already deactivated.
+      }
+    }
+  }
 
   // 1. Run onEnter hooks in registration order. Modes may mutate ctx.state
   //    and set ctx.toolUseContextPatch (e.g. conductor resolves canvasId).
@@ -72,27 +125,35 @@ export async function applyModes(input: ApplyModesInput): Promise<ApplyModesResu
   }
 
   // 4. Compose final tool set.
-  //    - overrideFilter=true: profile filtering is bypassed; injected tools
-  //      are appended unconditionally. (Conductor needs this so canvas tools
-  //      survive even under the `code` profile.)
-  //    - otherwise: blocked tools are removed, allow-list is applied, then
-  //      injected tools are appended.
-  let tools: ToolRegistration[];
-  if (resolved.tools.overrideFilter) {
-    tools = [...baseTools, ...injectedTools];
-  } else {
-    const blocked = new Set(resolved.tools.blocked);
-    let baseFiltered = baseTools.filter((t) => !blocked.has(t.definition.name));
-    if (resolved.tools.allowed) {
-      const allowSet = new Set(resolved.tools.allowed);
-      // Injected tools are NOT subject to the allow-list — modes that
-      // inject tools expect them to remain visible even under a tight
-      // whitelist. (If a mode wants to also whitelist its own injections,
-      // it should not declare `allow`.)
-      baseFiltered = baseFiltered.filter((t) => allowSet.has(t.definition.name));
-    }
-    tools = [...baseFiltered, ...injectedTools];
+  //
+  //    The declared `block` / `allow` filters are applied to the BASE
+  //    profile tools in every case. `overrideFilter` does NOT mean "ignore
+  //    block": per `ModeModifierTools` it only exempts a mode's OWN injected
+  //    tools from profile filtering, so a mode can keep its canvas / research
+  //    / goal tools under a restrictive base profile while still blocking
+  //    write tools. The previous `if (overrideFilter)` branch skipped the
+  //    filters entirely, and because `resolve()` ORs the flag across every
+  //    active mode, goal+plan-task (goal declares `overrideFilter: true`,
+  //    plan-task declares the write-tool `block` list) and research alone
+  //    both advertised bash/edit/write to the model while the coordinator
+  //    refused to run them.
+  //
+  //    Both halves are load-bearing and must not be collapsed:
+  //    this list is what the model is BELIEVED it has, while the
+  //    call-time check in `ModeCoordinator.gateWriteTool` is what actually
+  //    refuses. A stale advertised list is a lie the model acts on; a
+  //    missing call-time check is a hole. Keep both.
+  const blocked = new Set(resolved.tools.blocked);
+  let baseFiltered = baseTools.filter((t) => !blocked.has(t.definition.name));
+  if (resolved.tools.allowed) {
+    const allowSet = new Set(resolved.tools.allowed);
+    // Injected tools are NOT subject to the allow-list — modes that inject
+    // tools expect them to remain visible even under a tight whitelist. (If
+    // a mode wants to also whitelist its own injections, it should not
+    // declare `allow`.)
+    baseFiltered = baseFiltered.filter((t) => allowSet.has(t.definition.name));
   }
+  const tools: ToolRegistration[] = [...baseFiltered, ...injectedTools];
 
   // 5. Merge toolUseContextPatch from ctx. All onEnter hooks share the
   //    same ctx, so the final patch reflects whatever the last writer
@@ -119,9 +180,15 @@ export async function applyModes(input: ApplyModesInput): Promise<ApplyModesResu
 
 /**
  * Run `onExit` hooks for all `kind: 'message'` modes. Called by the
- * agent after the stream completes (success or abort). Session-level
- * modes are excluded — their onExit fires when the user toggles the
- * mode off, not after every message.
+ * agent after the stream completes (success or abort).
+ *
+ * Session-level modes are deliberately NOT run here: a session mode is
+ * still active after the run ends, and its `onExit` is about DEACTIVATION
+ * (toggled off, or displaced by an exclusive mode) — running it at every run
+ * boundary would tear down state the mode is still entitled to use (e.g.
+ * computer-use would disable its OS context bridge and clear its sticky
+ * triggers after every single message). Those modes are settled by
+ * `applyModes` when they drop out of the resolved set.
  */
 export async function runExitHooks(
   resolved: ResolvedMode,

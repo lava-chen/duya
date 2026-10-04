@@ -46,7 +46,12 @@ import { homedir } from 'node:os';
 
 export type ScheduleKind = 'at' | 'every' | 'cron';
 export type CronStatus = 'enabled' | 'disabled' | 'error';
-export type ConcurrencyPolicy = 'skip' | 'parallel' | 'queue' | 'replace';
+// This used to list `'queue'`, which no other layer implemented: neither
+// `automation/types.ts` nor `renderer/types/automation.ts` accepts it, and
+// passing it through fell through to UNBOUNDED concurrency — the opposite of
+// what "queue" asks for. The runtime union is the single declaration; this
+// local copy must not be the one that decides what is allowed.
+export type ConcurrencyPolicy = 'skip' | 'parallel' | 'replace';
 export type RunStatus = 'pending' | 'running' | 'success' | 'failed' | 'cancelled' | 'skipped';
 
 export interface CronListItemDTO {

@@ -3,26 +3,40 @@
  *
  * Tests the complete agent workflow using real API.
  * Requires ANTHROPIC_API_KEY environment variable.
+ *
+ * ## Why `describe.skipIf` and not a guard inside each test
+ *
+ * This file used to `if (!API_KEY) return;` at the top of every test and
+ * `console.warn` in `beforeEach`. Two things were wrong with that:
+ *
+ *  - A missing key made the assertions VANISH and the test report GREEN. A
+ *    suite that silently stops testing is worse than one that is honestly
+ *    skipped, because the failure mode is invisible.
+ *  - `duyaAgent` was never imported, so on any machine where a key WAS set
+ *    (a local `.env`, which `test-setup.ts` loads through `dotenv`) all twelve
+ *    tests died on `ReferenceError: duyaAgent is not defined`. CI has no key,
+ *    so the guard hid a file that had never once run.
+ *
+ * `describe.skipIf(!API_KEY)` reports the skip, and the import makes the
+ * suite executable when a key is genuinely present. Note that running it then
+ * makes real, billable calls to the configured endpoint — it is opt-in by
+ * virtue of the key, which is how it was always meant to work.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { ToolRegistry } from '../../src/tool/registry.js';
+import { duyaAgent } from '../../src/index.js';
 import type { SSEEvent } from '../../src/types.js';
 
 const API_KEY = process.env.ANTHROPIC_API_KEY;
 const MODEL = process.env.ANTHROPIC_MODEL || 'MiniMax-M2.7';
 const BASE_URL = process.env.ANTHROPIC_BASE_URL;
 
-describe('duyaAgent Integration', () => {
+describe.skipIf(!API_KEY)('duyaAgent Integration', () => {
   let agent: duyaAgent;
   let toolRegistry: ToolRegistry;
 
   beforeEach(() => {
-    if (!API_KEY) {
-      console.warn('⏭️  Skipping: ANTHROPIC_API_KEY not set');
-      return;
-    }
-
     toolRegistry = new ToolRegistry();
 
     toolRegistry.register(
@@ -61,14 +75,13 @@ describe('duyaAgent Integration', () => {
   });
 
   // ───────────────────────────────────────────────────────────────────
-  // NOTE: These tests require ANTHROPIC_API_KEY to be set.
-  // Tests will skip if the key is not available.
+  // NOTE: the whole suite is `describe.skipIf(!API_KEY)`, so every test below
+  // runs for real when a key is present and is reported as skipped when not.
+  // No per-test guard, and no silent pass.
   // ───────────────────────────────────────────────────────────────────
 
   describe('streamChat basic flow', () => {
     it('should yield events from LLM response', async () => {
-      if (!API_KEY) return;
-
       agent = new duyaAgent({
         apiKey: API_KEY,
         provider: 'anthropic',
@@ -87,8 +100,6 @@ describe('duyaAgent Integration', () => {
     }, 60000);
 
     it('should yield tool_use events when LLM requests tool', async () => {
-      if (!API_KEY) return;
-
       agent = new duyaAgent({
         apiKey: API_KEY,
         provider: 'anthropic',
@@ -106,8 +117,6 @@ describe('duyaAgent Integration', () => {
     }, 60000);
 
     it('should handle multiple tool calls', async () => {
-      if (!API_KEY) return;
-
       agent = new duyaAgent({
         apiKey: API_KEY,
         provider: 'anthropic',
@@ -125,8 +134,6 @@ describe('duyaAgent Integration', () => {
     }, 60000);
 
     it('should handle text before tool_use', async () => {
-      if (!API_KEY) return;
-
       agent = new duyaAgent({
         apiKey: API_KEY,
         provider: 'anthropic',
@@ -149,8 +156,6 @@ describe('duyaAgent Integration', () => {
 
   describe('interrupt handling', () => {
     it('should support interrupt via abort controller', async () => {
-      if (!API_KEY) return;
-
       agent = new duyaAgent({
         apiKey: API_KEY,
         provider: 'anthropic',
@@ -173,8 +178,6 @@ describe('duyaAgent Integration', () => {
 
   describe('message management', () => {
     it('should clear messages', async () => {
-      if (!API_KEY) return;
-
       agent = new duyaAgent({
         apiKey: API_KEY,
         provider: 'anthropic',
@@ -187,8 +190,6 @@ describe('duyaAgent Integration', () => {
     });
 
     it('should add single messages', async () => {
-      if (!API_KEY) return;
-
       agent = new duyaAgent({
         apiKey: API_KEY,
         provider: 'anthropic',
@@ -207,8 +208,6 @@ describe('duyaAgent Integration', () => {
     });
 
     it('should report session info', async () => {
-      if (!API_KEY) return;
-
       agent = new duyaAgent({
         apiKey: API_KEY,
         provider: 'anthropic',
@@ -226,8 +225,6 @@ describe('duyaAgent Integration', () => {
 
   describe('context management', () => {
     it('should report context stats', async () => {
-      if (!API_KEY) return;
-
       agent = new duyaAgent({
         apiKey: API_KEY,
         provider: 'anthropic',
@@ -241,8 +238,6 @@ describe('duyaAgent Integration', () => {
     });
 
     it('should check compaction need', async () => {
-      if (!API_KEY) return;
-
       agent = new duyaAgent({
         apiKey: API_KEY,
         provider: 'anthropic',
@@ -256,33 +251,53 @@ describe('duyaAgent Integration', () => {
   });
 
   describe('error handling', () => {
-    it('should handle error events from LLM', async () => {
-      if (!API_KEY) return;
+    // Only meaningful against an endpoint that actually validates model ids.
+    // A gateway or proxy (anything reached via ANTHROPIC_BASE_URL) commonly
+    // accepts an unknown model name and answers normally — measured here: an
+    // `invalid-model-xyz` turn produced a full `turn_start`/`thinking`/…/
+    // `done` sequence, so "bad model => error" is simply not a law there.
+    // Asserting it anyway produced a test that could only ever fail.
+    const realAnthropicEndpoint = BASE_URL === undefined;
 
-      // Use invalid model to trigger error
-      agent = new duyaAgent({
-        apiKey: API_KEY,
-        provider: 'anthropic',
-        model: 'invalid-model-xyz',
-        baseURL: BASE_URL,
-      });
+    it.skipIf(!realAnthropicEndpoint)(
+      'never reports a bad model as a successful turn',
+      async () => {
+        agent = new duyaAgent({
+          apiKey: API_KEY,
+          provider: 'anthropic',
+          model: 'invalid-model-xyz',
+          baseURL: BASE_URL,
+        });
 
-      const events: SSEEvent[] = [];
-      try {
-        for await (const event of agent.streamChat('Hello', { toolRegistry })) {
-          events.push(event);
+        // The contract is "the turn fails, visibly" — not "it fails in this
+        // specific shape". `streamChat` propagates a provider failure as a
+        // thrown error and the router turns that into a `chat:error` frame;
+        // the SSE `error` event is reserved for mode-layer failures
+        // (`DuyaAgent.ts` emits it for an unknown mode and an orchestrator
+        // failure, not for a bad model id). This test used to demand the
+        // `error` event specifically, which the design has never produced — it
+        // passed only because the missing-key guard meant it never executed.
+        const events: SSEEvent[] = [];
+        let threw: unknown = null;
+        try {
+          for await (const event of agent.streamChat('Hello', { toolRegistry })) {
+            events.push(event);
+          }
+        } catch (err) {
+          threw = err;
         }
-      } catch {
-        // Expected: API error
-      }
 
-      const errorEvents = events.filter((e) => e.type === 'error');
-      expect(errorEvents.length).toBeGreaterThan(0);
-    }, 30000);
+        const errorEvents = events.filter((e) => e.type === 'error');
+        const completedNormally = events.some((e) => e.type === 'done');
+        expect(threw !== null || errorEvents.length > 0).toBe(true);
+        // The important half: a provider that rejects the model must never be
+        // reported to the host as a completed turn.
+        expect(completedNormally).toBe(false);
+      },
+      30000,
+    );
 
     it('should yield turn_start events', async () => {
-      if (!API_KEY) return;
-
       agent = new duyaAgent({
         apiKey: API_KEY,
         provider: 'anthropic',

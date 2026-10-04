@@ -8,6 +8,7 @@
  */
 
 import type { ConnectorInputSchema } from '../connector-types.js';
+import { authorizationHeader } from '../connector-types.js';
 import type {
   ConnectorInvokeResult,
   ConnectorModule,
@@ -68,6 +69,7 @@ async function listMessages(
   args: { top?: number; folder?: string },
   accessToken: string,
   fetchImpl: typeof fetch,
+  tokenType?: string,
 ): Promise<ConnectorInvokeResult> {
   const folder = args.folder || 'inbox';
   const top = Math.min(50, Math.max(1, args.top ?? 10));
@@ -76,7 +78,7 @@ async function listMessages(
   url.searchParams.set('$select', 'id,subject,from,receivedDateTime');
 
   const resp = await fetchImpl(url.toString(), {
-    headers: { Authorization: `Bearer ${accessToken}` },
+    headers: { Authorization: authorizationHeader(accessToken, tokenType) },
   });
   if (!resp.ok) {
     return {
@@ -99,10 +101,10 @@ export function createMicrosoft365Connector(fetchImpl: typeof fetch = fetch): Co
     listDescriptors(connectionId: string) {
       return listMicrosoft365Descriptors(connectionId);
     },
-    async invoke(action: string, args: unknown, accessToken: string): Promise<ConnectorInvokeResult> {
+    async invoke(action: string, args: unknown, accessToken: string, tokenType?: string): Promise<ConnectorInvokeResult> {
       if (action === LIST_MESSAGES_ACTION) {
         const typed = (args ?? {}) as { top?: number; folder?: string };
-        return listMessages(typed, accessToken, fetchImpl);
+        return listMessages(typed, accessToken, fetchImpl, tokenType);
       }
       return {
         success: false,

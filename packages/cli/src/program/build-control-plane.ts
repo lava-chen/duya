@@ -12,7 +12,11 @@
 
 import { Command } from '@commander-js/extra-typings';
 import { CLI_DESCRIPTORS } from './descriptors.js';
-import { type CliSubcommand, type CliSubcommandContext } from './registry.js';
+import {
+  type CliSubcommand,
+  type CliSubcommandContext,
+  type CliSubcommandOptions,
+} from './registry.js';
 
 /**
  * Normalize a repeated / comma-separated CLI list value into string[].
@@ -32,6 +36,135 @@ function toList(v: unknown): string[] | undefined {
     return xs.length > 0 ? xs : undefined;
   }
   return undefined;
+}
+
+/** `opts.<name>` as a string, or undefined for an absent / non-string value. */
+function toStr(v: unknown): string | undefined {
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+/**
+ * `--agent` is a plain value on `channel connect` and a repeatable list on
+ * `mcp add`, so both shapes are forwarded and the reading command picks.
+ */
+function toStrOrList(v: unknown): string | string[] | undefined {
+  if (Array.isArray(v)) return toList(v);
+  return toStr(v);
+}
+
+/**
+ * The `options` bag a subcommand's `run()` reads, derived from the parsed
+ * Commander opts.
+ *
+ * ONE builder, shared by both dispatch paths below (a subcommand reached by
+ * name, and the auto-dispatched `default` subcommand). They used to be two
+ * hand-written literals with different key sets, so a flag that
+ * `descriptors.ts` declared and a command read could be missing from one of
+ * them and arrive as `undefined`: `backup create --dry-run` wrote a real
+ * archive, `status --watch` printed once and exited, and `duya status
+ * --watch` (the `default` subcommand) was broken a second time. A flag now
+ * reaches a command because it is listed here, once, for every path.
+ *
+ * Commander camelCases, so `--dry-run` arrives as `dryRun` and
+ * `--token-env` as `tokenEnv`; keep the keys in that spelling.
+ */
+function buildOptionBag(opts: Record<string, unknown>): CliSubcommandOptions {
+  return {
+    yes: opts.yes === true,
+    limit: typeof opts.limit === 'string' ? opts.limit : undefined,
+    offset: typeof opts.offset === 'string' ? opts.offset : undefined,
+    cwd: process.cwd(),
+    fromFile: typeof opts.fromFile === 'string' ? opts.fromFile : undefined,
+    // Plan 99 P3: inline cron body (avoids needing a temp file)
+    cron: typeof opts.cron === 'string' ? opts.cron : undefined,
+    prompt: typeof opts.prompt === 'string' ? opts.prompt : undefined,
+    platform: typeof opts.platform === 'string' ? opts.platform : undefined,
+    text: typeof opts.text === 'string' ? opts.text : undefined,
+    file: typeof opts.file === 'string' ? opts.file : undefined,
+    // Plan 102 — `duya config` argv surface. Commander's
+    // generic option pass-through means all the new flags
+    // are already in `opts`; we just re-type them.
+    configId: typeof opts.server === 'string' ? opts.server : (typeof opts.id === 'string' ? opts.id : undefined),
+    configName: typeof opts.name === 'string' ? opts.name : undefined,
+    configType: typeof opts.command === 'string' ? opts.command : (typeof opts.type === 'string' ? opts.type : undefined),
+    configBaseUrl: typeof opts.baseUrl === 'string' ? opts.baseUrl : undefined,
+    configApiKey: typeof opts.apiKey === 'string' ? opts.apiKey : undefined,
+    configActive: opts.active === true,
+    configEnabled: opts.enabled === true,
+    configModel: typeof opts.model === 'string' ? opts.model : undefined,
+    configProvider: typeof opts.provider === 'string' ? opts.provider : undefined,
+    configMaxTokens: typeof opts.maxTokens === 'string' ? opts.maxTokens : undefined,
+    configTemperature: typeof opts.temperature === 'string' ? opts.temperature : undefined,
+    configTopP: typeof opts.topP === 'string' ? opts.topP : undefined,
+    configTopK: typeof opts.topK === 'string' ? opts.topK : undefined,
+    configEnableThinking: opts.enableThinking === true,
+    configThinkingBudget: typeof opts.thinkingBudget === 'string' ? opts.thinkingBudget : undefined,
+    configCode: typeof opts.code === 'string' ? opts.code : undefined,
+    configUser: typeof opts.user === 'string' ? opts.user : undefined,
+    configStyleId: typeof opts.styleId === 'string' ? opts.styleId : undefined,
+    configInclude: typeof opts.include === 'string' ? opts.include : undefined,
+    configClear: opts.clear === true,
+    configArgs: Array.isArray(opts.arg) ? (opts.arg as string[]) : undefined,
+    configEnv: Array.isArray(opts.env) ? (opts.env as string[]) : undefined,
+    configAgents: Array.isArray(opts.agent) ? (opts.agent as string[]) : undefined,
+    // Plan 431 — `duya memory` argv surface.
+    memoryAuto: opts.auto === true,
+    memoryProvider: typeof opts.provider === 'string' ? opts.provider : undefined,
+    memoryModel: typeof opts.model === 'string' ? opts.model : undefined,
+    // Plan 102 — `duya agent` argv surface.
+    agentId: typeof opts.id === 'string' ? opts.id : undefined,
+    agentName: typeof opts.name === 'string' ? opts.name : undefined,
+    agentDescription: typeof opts.description === 'string' ? opts.description : undefined,
+    agentWorkspace: typeof opts.workspace === 'string' ? opts.workspace : undefined,
+    agentModel: typeof opts.model === 'string' ? opts.model : undefined,
+    agentInstructionsFile:
+      typeof opts.instructionsFile === 'string' ? opts.instructionsFile : undefined,
+    agentToolsProfile: typeof opts.toolsProfile === 'string' ? opts.toolsProfile : undefined,
+    agentAllow: toList(opts.allow),
+    agentDeny: toList(opts.deny),
+    agentPlugins: toList(opts.plugins),
+    // Plan 200 P4 — plugin list / install / uninstall flags.
+    enabled: opts.enabled === true,
+    verbose: opts.verbose === true,
+    fromPath: typeof opts.fromPath === 'string' ? opts.fromPath : undefined,
+    scope: typeof opts.scope === 'string' ? opts.scope : undefined,
+    deleteData: opts.deleteData === true,
+    // ── declared in descriptors.ts, read by a command, previously dropped ──
+    // `status` (--watch / --interval). `status` is a `default` subcommand, so
+    // these were missing from BOTH bags here.
+    watch: opts.watch === true,
+    interval: toStr(opts.interval),
+    // `backup create` / `backup restore` (--output-dir, --include-workspace,
+    // --only-config, --dry-run, --verify). --dry-run used to be dropped, so a
+    // "preview" wrote a real archive.
+    outputDir: toStr(opts.outputDir),
+    includeWorkspace: opts.includeWorkspace === true,
+    onlyConfig: opts.onlyConfig === true,
+    dryRun: opts.dryRun === true,
+    verify: opts.verify === true,
+    // `session export` (--q, --format, --output).
+    q: toStr(opts.q),
+    format: toStr(opts.format),
+    output: toStr(opts.output),
+    // `channel send` / `channel connect` (--chat, --label, --token-env,
+    // --stdin, --agent).
+    chat: toStr(opts.chat),
+    label: toStr(opts.label),
+    tokenEnv: toStr(opts.tokenEnv),
+    stdin: opts.stdin === true,
+    agent: toStrOrList(opts.agent),
+    // `projects cleanup` (--apply, --archive-dir).
+    apply: opts.apply === true,
+    archiveDir: toStr(opts.archiveDir),
+    // `security scan` (--deep).
+    deep: opts.deep === true,
+    // `config set` / `config get` / `config validate` (--key, --value, --path).
+    key: toStr(opts.key),
+    value: toStr(opts.value),
+    path: toStr(opts.path),
+    // `params` payload (commands/extra2.ts).
+    params: toStr(opts.params),
+  };
 }
 
 function buildOptions(cmd: Command, sub: CliSubcommand): void {
@@ -115,66 +248,7 @@ export function buildControlPlane(program: Command): void {
         const ctx: CliSubcommandContext = {
           args: userArgs,
           format: opts.format === 'json' ? 'json' : 'text',
-          options: {
-            yes: opts.yes === true,
-            limit: typeof opts.limit === 'string' ? opts.limit : undefined,
-            offset: typeof opts.offset === 'string' ? opts.offset : undefined,
-            fromFile: typeof opts.fromFile === 'string' ? opts.fromFile : undefined,
-            // Plan 99 P3: inline cron body (avoids needing a temp file)
-            cron: typeof opts.cron === 'string' ? opts.cron : undefined,
-            prompt: typeof opts.prompt === 'string' ? opts.prompt : undefined,
-            platform: typeof opts.platform === 'string' ? opts.platform : undefined,
-            text: typeof opts.text === 'string' ? opts.text : undefined,
-            file: typeof opts.file === 'string' ? opts.file : undefined,
-            // Plan 102 — `duya config` argv surface. Commander's
-            // generic option pass-through means all the new flags
-            // are already in `opts`; we just re-type them.
-            configId: typeof opts.server === 'string' ? opts.server : (typeof opts.id === 'string' ? opts.id : undefined),
-            configName: typeof opts.name === 'string' ? opts.name : undefined,
-            configType: typeof opts.command === 'string' ? opts.command : (typeof opts.type === 'string' ? opts.type : undefined),
-            configBaseUrl: typeof opts.baseUrl === 'string' ? opts.baseUrl : undefined,
-            configApiKey: typeof opts.apiKey === 'string' ? opts.apiKey : undefined,
-            configActive: opts.active === true,
-            configEnabled: opts.enabled === true,
-            configModel: typeof opts.model === 'string' ? opts.model : undefined,
-            configProvider: typeof opts.provider === 'string' ? opts.provider : undefined,
-            configMaxTokens: typeof opts.maxTokens === 'string' ? opts.maxTokens : undefined,
-            configTemperature: typeof opts.temperature === 'string' ? opts.temperature : undefined,
-            configTopP: typeof opts.topP === 'string' ? opts.topP : undefined,
-            configTopK: typeof opts.topK === 'string' ? opts.topK : undefined,
-            configEnableThinking: opts.enableThinking === true,
-            configThinkingBudget: typeof opts.thinkingBudget === 'string' ? opts.thinkingBudget : undefined,
-            configCode: typeof opts.code === 'string' ? opts.code : undefined,
-            configUser: typeof opts.user === 'string' ? opts.user : undefined,
-            configStyleId: typeof opts.styleId === 'string' ? opts.styleId : undefined,
-            configInclude: typeof opts.include === 'string' ? opts.include : undefined,
-            configClear: opts.clear === true,
-            configArgs: Array.isArray(opts.arg) ? (opts.arg as string[]) : undefined,
-            configEnv: Array.isArray(opts.env) ? (opts.env as string[]) : undefined,
-            configAgents: Array.isArray(opts.agent) ? (opts.agent as string[]) : undefined,
-            // Plan 431 — `duya memory` argv surface.
-            memoryAuto: opts.auto === true,
-            memoryProvider: typeof opts.provider === 'string' ? opts.provider : undefined,
-            memoryModel: typeof opts.model === 'string' ? opts.model : undefined,
-            // Plan 102 — `duya agent` argv surface.
-            agentId: typeof opts.id === 'string' ? opts.id : undefined,
-            agentName: typeof opts.name === 'string' ? opts.name : undefined,
-            agentDescription: typeof opts.description === 'string' ? opts.description : undefined,
-            agentWorkspace: typeof opts.workspace === 'string' ? opts.workspace : undefined,
-            agentModel: typeof opts.model === 'string' ? opts.model : undefined,
-            agentInstructionsFile:
-              typeof opts.instructionsFile === 'string' ? opts.instructionsFile : undefined,
-            agentToolsProfile: typeof opts.toolsProfile === 'string' ? opts.toolsProfile : undefined,
-            agentAllow: toList(opts.allow),
-            agentDeny: toList(opts.deny),
-            agentPlugins: toList(opts.plugins),
-            // Plan 200 P4 — plugin list / install / uninstall flags.
-            enabled: opts.enabled === true,
-            verbose: opts.verbose === true,
-            fromPath: typeof opts.fromPath === 'string' ? opts.fromPath : undefined,
-            scope: typeof opts.scope === 'string' ? opts.scope : undefined,
-            deleteData: opts.deleteData === true,
-          },
+          options: buildOptionBag(opts),
         };
         const code = await sub.run(ctx);
         if (code !== 0) process.exit(code);
@@ -196,15 +270,10 @@ export function buildControlPlane(program: Command): void {
         const ctx: CliSubcommandContext = {
           args: userArgs,
           format: opts.format === 'json' ? 'json' : 'text',
-          options: {
-            yes: opts.yes === true,
-            limit: typeof opts.limit === 'string' ? opts.limit : undefined,
-            offset: typeof opts.offset === 'string' ? opts.offset : undefined,
-            fromFile: typeof opts.fromFile === 'string' ? opts.fromFile : undefined,
-            cron: typeof opts.cron === 'string' ? opts.cron : undefined,
-            prompt: typeof opts.prompt === 'string' ? opts.prompt : undefined,
-            platform: typeof opts.platform === 'string' ? opts.platform : undefined,
-          },
+          // The SAME bag the named-subcommand path builds. This path used to
+          // forward seven keys, so every flag outside them was silently
+          // dropped for a `default` subcommand — `duya status --watch` included.
+          options: buildOptionBag(opts),
         };
         const code = await defaultSub.run(ctx);
         if (code !== 0) process.exit(code);

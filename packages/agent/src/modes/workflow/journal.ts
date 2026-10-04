@@ -12,11 +12,14 @@
  * `params` changes only touch the reqHash of nodes that reference them.
  * BudgetExceeded / Cancelled terminate WITHOUT journal records (a re-run
  * with a raised budget replays cleanly); `pruneTrailingFailures()` cuts
- * the failed tail sentinel off a Failed run so the failing call truly
- * re-executes on resume.
+ * the failed tail sentinel off a Failed run in memory so the failing call
+ * re-runs on a clean tail (on the append-only sinks the sentinel stays —
+ * see the method for why that costs nothing).
  */
 
 import { createHash } from 'node:crypto';
+
+import { logger } from '../../utils/logger.js';
 
 export type JournalKind = 'node_result' | 'decision' | 'approval' | 'artifact' | 'phase';
 
@@ -202,6 +205,17 @@ export class Journal {
   /**
    * Drop the trailing failure sentinel(s) of a Failed run (415 §5.3) so
    * the failing call re-executes on resume. Succeeded cache entries stay.
+   *
+   * Returns the number of records ACTUALLY removed from the sink, which is
+   * only ever non-zero for the in-memory sink. `JournalSink` has no
+   * truncate primitive, and the append-only sinks (JSONL file, core-db
+   * blob) cannot gain one without mutating the audit trail this journal
+   * exists to keep — so for those the trailing failures stay where they
+   * are and the count is 0. The gap is reported rather than hidden.
+   *
+   * Losing the trim costs nothing on replay: only `succeeded` records are
+   * ever cached (see the constructor), so a failed sentinel can never
+   * become a cache hit and its node re-executes regardless.
    */
   pruneTrailingFailures(): number {
     const records = this.all();
@@ -211,14 +225,20 @@ export class Journal {
       else break;
     }
     if (cut === 0) return 0;
-    // Rebuild the sink without the failed tail (memory sink: rewrite the
-    // store; file sink: caller persists the trimmed snapshot via Phase 4).
-    const kept = records.slice(0, records.length - cut);
-    if (this.sink instanceof MemoryJournalSink) {
-      const fresh = new MemoryJournalSink();
-      for (const r of kept) fresh.append(r);
-      this.sink = fresh;
+    if (!(this.sink instanceof MemoryJournalSink)) {
+      logger.warn('[WorkflowJournal] trailing failures not pruned: sink is append-only', {
+        sink: this.sink.constructor.name,
+        trailingFailures: cut,
+      });
+      return 0;
     }
+    // Rebuild the sink without the failed tail. `seq` moves with it: the
+    // rebuilt store ends at `kept.length - 1`, so the counter has to resume
+    // from there or the next append reuses a seq the store already holds.
+    const kept = records.slice(0, records.length - cut);
+    const fresh = new MemoryJournalSink();
+    for (const r of kept) fresh.append(r);
+    this.sink = fresh;
     this.seq = kept.length;
     return cut;
   }

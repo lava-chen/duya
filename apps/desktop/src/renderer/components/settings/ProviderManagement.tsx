@@ -12,10 +12,11 @@
  *     flows are now separate pages (`ProviderPickerView` →
  *     `ProviderEditView`), dispatched via the settings-tab
  *     store.
- *   - The delete confirmation modal is gone too — `ProviderEditView`
- *     dispatches a `duya:provider-delete` window event when the
- *     user clicks delete on an edit page; this component listens
- *     and routes to `useDeleteProviderMutation`.
+ *   - The delete confirmation modal is gone too. Each delete entry point
+ *     owns its own confirm and calls `useDeleteProviderMutation` directly;
+ *     `ProviderEditView` (a separate component-tree branch) no longer
+ *     relies on a window event that this component may not be mounted
+ *     to receive.
  *   - The save / open logic is centralized in the
  *     `useProviderEditSave` hook (consumed by `ProviderEditView`).
  *
@@ -33,7 +34,7 @@
  * duplicate.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { ProviderList } from '@/components/providers/ProviderList';
 import { ProviderAddButton } from '@/components/providers/ProviderAddButton';
 import { useSetDefaultProviderMutation } from '@/lib/providers/hooks/useSetDefaultProviderMutation';
@@ -82,23 +83,6 @@ export function ProviderManagement({ appId = 'duya' }: ProviderManagementProps) 
   // to delete the provider that is currently the default.
   const defaultId = useDefaultProviderId(appId);
 
-  // Listen for delete events emitted by `ProviderEditView` when
-  // the user clicks the delete button on the edit page. We need
-  // a custom event here because the edit page is rendered
-  // elsewhere (different component tree branch) and doesn't have
-  // a direct prop path to this component.
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent<{ id: string }>).detail;
-      if (detail?.id) {
-        void doDelete(detail.id);
-      }
-    };
-    window.addEventListener('duya:provider-delete', handler);
-    return () => window.removeEventListener('duya:provider-delete', handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // ── switch (set the soft default) ──
   const handleSwitch = useCallback(
     async (id: string) => {
@@ -124,7 +108,19 @@ export function ProviderManagement({ appId = 'duya' }: ProviderManagementProps) 
   const doDelete = useCallback(
     async (id: string) => {
       const target = providers.find((p) => p.id === id);
-      if (!target) return;
+      if (!target) {
+        // Never fail silently: a missing row means the list is cold or
+        // stale, and returning here looked identical to a successful
+        // delete from the user's side.
+        setBanner({
+          kind: 'error',
+          text:
+            locale === 'zh'
+              ? '找不到要删除的服务商，请刷新后重试。'
+              : 'Could not find the provider to delete. Refresh and try again.',
+        });
+        return;
+      }
       // Plan 209: when the user deletes the current default
       // provider, the system would be left with no default
       // provider at all. Confirm explicitly so the user
@@ -187,12 +183,7 @@ export function ProviderManagement({ appId = 'duya' }: ProviderManagementProps) 
       {bannerAutoDismiss && (
         <div
           role="status"
-          className={
-            'rounded-lg border p-3 text-sm ' +
-            (bannerAutoDismiss.kind === 'success'
-              ? 'border-green-500/50 bg-green-500/10 text-green-600'
-              : 'border-destructive/50 bg-destructive/10 text-destructive')
-          }
+          className={`settings-status-banner ${bannerAutoDismiss.kind === 'success' ? 'success' : 'error'}`}
         >
           {bannerAutoDismiss.kind === 'success' ? (
             <span className="inline-flex items-center gap-2">

@@ -5,8 +5,14 @@ import { app } from 'electron';
 import { getLogger, LogComponent } from '../logging/logger';
 import { GatewayInitConfig } from './types';
 
-const BACKOFF_MAX_MS = 5_000;
 const RESTART_DELAY_MS = 3_000;
+/**
+ * Crash-restart backoff. The floor is RESTART_DELAY_MS and the cap is a
+ * 16x multiple of it, so consecutive crashes really do escalate
+ * (3s -> 6s -> 12s -> 24s -> 48s). A cap below RESTART_DELAY_MS * 2 would
+ * pin every crash to the same delay and make the escalation a no-op.
+ */
+const BACKOFF_MAX_MS = RESTART_DELAY_MS * 16;
 const MAX_RESTARTS_PER_WINDOW = 5;
 
 let gatewayProcess: ChildProcess | null = null;
@@ -134,7 +140,10 @@ function onGatewayExit(
   setTimeout(onRestart, backoffMs);
 }
 
-export function startGatewayProcess(initConfig: GatewayInitConfig): ChildProcess {
+export function startGatewayProcess(
+  initConfig: GatewayInitConfig,
+  opts: { crashRestart?: boolean } = {},
+): ChildProcess {
   const gatewayPath = getGatewayProcessPath();
   const agentServerPort = initConfig.agentServerPort ?? (process.env.DUYA_AGENT_SERVER_PORT ? parseInt(process.env.DUYA_AGENT_SERVER_PORT, 10) : 0);
   getLogger().info('Starting gateway process', { path: gatewayPath, platforms: initConfig.platforms?.length ?? 0 }, LogComponent.Gateway);
@@ -171,7 +180,14 @@ export function startGatewayProcess(initConfig: GatewayInitConfig): ChildProcess
   }
 
   stopRequested = false;
-  backoffMs = RESTART_DELAY_MS;
+  // Invariant for the crash backoff: it escalates across consecutive crashes
+  // and is reset ONLY by a start that actually reached `ready`. A deliberate
+  // start (first boot, settings reload) resets to the floor; a crash restart
+  // keeps the escalated value, which the previous unconditional assignment
+  // here silently discarded — the reason the backoff never grew.
+  if (!opts.crashRestart) {
+    backoffMs = RESTART_DELAY_MS;
+  }
 
   const envVars: Record<string, string> = {
     DUYA_GATEWAY_TEMP_DIR: initConfig.tempDir || process.env.DUYA_GATEWAY_TEMP_DIR || '',
@@ -203,9 +219,21 @@ export function startGatewayProcess(initConfig: GatewayInitConfig): ChildProcess
 
   gatewayProcess = child;
 
+  if (opts.crashRestart) {
+    // Only a start that reached `ready` counts as a successful start, so the
+    // escalated backoff resets here. A process that dies again before this
+    // message keeps (and grows) the backoff on the next crash.
+    const onReadyMessage = (msg: Record<string, unknown>): void => {
+      if (msg.type !== 'gateway:ready' && msg.type !== 'gateway:init:complete') return;
+      backoffMs = RESTART_DELAY_MS;
+      child.removeListener('message', onReadyMessage);
+    };
+    child.on('message', onReadyMessage);
+  }
+
   child.on('exit', (code, signal) => {
     onGatewayExit(code, signal, () => {
-      startGatewayProcess(initConfig);
+      startGatewayProcess(initConfig, { crashRestart: true });
     });
   });
 

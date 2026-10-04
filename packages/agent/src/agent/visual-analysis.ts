@@ -57,9 +57,17 @@ export class VisualAnalysisService {
   /**
    * Analyze an image using the configured vision model.
    * Returns text description of the image.
-   * Throws an error if vision is unavailable or the API call fails.
+   *
+   * `signal` cancels the provider request. Every other outbound call in the
+   * agent threads one (see the compaction summarizer in DuyaAgent, which
+   * links a child controller to the turn's `abortController`), and a vision
+   * pass bills exactly like the main turn — without it, Stop during image
+   * analysis leaves the provider streaming to completion.
+   *
+   * Throws an error if vision is unavailable, the request is aborted, or the
+   * API call fails.
    */
-  async analyzeImage(imageBase64: string, mediaType: string, customPrompt?: string): Promise<string> {
+  async analyzeImage(imageBase64: string, mediaType: string, customPrompt?: string, signal?: AbortSignal): Promise<string> {
     logger.debug('[VisualAnalysis] analyzeImage called', {
       hasVisionClient: !!this.visionClient,
       visionConfig: this.visionConfig,
@@ -71,6 +79,11 @@ export class VisualAnalysisService {
     if (!this.visionClient) {
       logger.warn('[VisualAnalysis] analyzeImage: No vision client configured');
       throw new Error('Vision model is not configured. Please configure a vision model in Settings > Vision Model.');
+    }
+
+    // Cheap guard so a cancelled turn never opens a new provider request.
+    if (signal?.aborted) {
+      throw new Error('Vision analysis cancelled.');
     }
 
     const prompt = customPrompt || 'Please describe this image in detail. What do you see? Include any text, colors, shapes, objects, people, and the overall scene.';
@@ -93,6 +106,7 @@ export class VisualAnalysisService {
       const stream = this.visionClient.streamChat([userMessage], {
         maxTokens: 2048,
         temperature: 0,
+        signal,
       });
 
       let eventCount = 0;
@@ -115,6 +129,12 @@ export class VisualAnalysisService {
       }
       logger.debug(`[VisualAnalysis] Vision stream finished, events: ${eventCount}`);
     } catch (err) {
+      // A cancelled pass is not an API failure: re-throw as-is so the caller
+      // can tell "the user pressed Stop" from "the provider rejected us".
+      if (signal?.aborted) {
+        logger.debug('[VisualAnalysis] Vision analysis cancelled');
+        throw err;
+      }
       const errMsg = err instanceof Error ? err.message : String(err);
       logger.warn(`[VisualAnalysis] Vision analysis failed: ${errMsg}`);
       throw new Error(`Vision model API error: ${errMsg}`);

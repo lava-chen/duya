@@ -139,9 +139,13 @@ export function useStreamingActions(sessionId: string): ActionItem[] {
   // frame: reference equality cannot tell whether an in-place event changed.
   const latestEventsRef = useRef<StreamingEvent[] | null>(null);
   const frameRef = useRef<number | null>(null);
-  // Plan 437: re-read the toggle on every render so a mid-round toggle
-  // change in Settings → Hooks takes effect on the next animation frame flush.
+  // Plan 437: the Settings → Hooks toggle. The subscription below is
+  // registered once per session, so the value is held in a ref and read
+  // at flush time — otherwise `flush` would keep using whatever the
+  // toggle was when the effect last ran and a mid-turn change would not
+  // take effect until the next turn.
   const showHookInvocations = useShowHookInvocations();
+  const showHookInvocationsRef = useRef(showHookInvocations);
 
   // Plan 447: subtract the durable-covered prefix of the streaming timeline
   // (plan 441 persists rounds to the DB mid-turn, so switching back to an
@@ -163,6 +167,14 @@ export function useStreamingActions(sessionId: string): ActionItem[] {
     scheduleFlushRef.current?.();
   }, [durableIds]);
 
+  // Same for the hooks toggle: a mid-turn change must drop the hook rows
+  // that are already on screen, not just the ones still to arrive. No new
+  // stream event is guaranteed to follow, so schedule a flush here.
+  useEffect(() => {
+    showHookInvocationsRef.current = showHookInvocations;
+    scheduleFlushRef.current?.();
+  }, [showHookInvocations]);
+
   useEffect(() => {
     // Reset on sessionId change so a new session starts fresh.
     latestEventsRef.current = null;
@@ -177,7 +189,7 @@ export function useStreamingActions(sessionId: string): ActionItem[] {
         // mid-round toggle takes effect immediately.
         // Plan 447: drop events already covered by durable DB rows first.
         const pending = subtractDurableStreamingEvents(events, durableIdsRef.current);
-        setActions(streamingEventsToActionsFiltered(pending, showHookInvocations));
+        setActions(streamingEventsToActionsFiltered(pending, showHookInvocationsRef.current));
       }
     };
 

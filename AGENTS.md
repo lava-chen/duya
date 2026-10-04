@@ -429,6 +429,13 @@ gh release view <tag>                  # verify release exists
 
 Use the structured logger from `apps/desktop/src/main/logging/logger.ts`. **Never use `console.log/warn/error`** directly.
 
+> **Scope.** This rule binds `apps/desktop/src/main/**` and the `packages/*/src/**`
+> modules that ship inside the main process. `packages/gateway/` is a standalone
+> CJS child-process bundle built with `rootDir: ./src`; it cannot import the app's
+> logger and has no `@duya/agent` dependency, so it logs through `console.*`
+> throughout. Leave that tree on `console.*` until it grows a logger of its own
+> — do not add a second logging convention for a single call site.
+
 ```typescript
 import { initLogger, getLogger, LogComponent } from '../logging/logger';
 

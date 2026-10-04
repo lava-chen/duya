@@ -1,3 +1,22 @@
+/**
+ * Hosts whose scripts a widget document is allowed to load.
+ *
+ * This list is the single source of truth for BOTH halves of the receiver
+ * document's CDN policy:
+ *   - `isAllowedCdnScriptSrc` decides whether a `<script src>` is preserved as a
+ *     real tag or dropped;
+ *   - `SCRIPT_SRC_ALLOWLIST` expands the same entries into the per-document
+ *     `script-src` list of the CSP injected by `buildReceiverSrcdoc`.
+ * They must agree: a preserved tag whose origin the CSP does not name is
+ * silently refused by the browser, and a tag the CSP would allow but the
+ * allow-list drops is a difference the reader cannot reason about. Both are
+ * derived from this array so they cannot drift.
+ *
+ * (`workbench-runtime.ts` builds a *different* document — the workbench
+ * srcdoc — and deliberately drops every external `src` there because that
+ * document has no network. The two policies are intentionally different; only
+ * the receiver srcdoc is governed by this list.)
+ */
 const CDN_ALLOWLIST = [
   'cdnjs.cloudflare.com',
   'cdn.jsdelivr.net',
@@ -5,7 +24,42 @@ const CDN_ALLOWLIST = [
   'esm.sh',
 ];
 
-const SCRIPT_SRC_ALLOWLIST = CDN_ALLOWLIST.map(domain => `https://${domain}`).join(' ');
+/** Exact origins (`https://host`) derived from the host allow-list. */
+const CDN_ALLOWED_ORIGINS: ReadonlySet<string> = new Set(
+  CDN_ALLOWLIST.map((domain) => `https://${domain}`),
+);
+
+const SCRIPT_SRC_ALLOWLIST = [...CDN_ALLOWED_ORIGINS].join(' ');
+
+/**
+ * True only when `src` is an absolute `https:` URL whose origin is exactly one
+ * of the allow-listed CDN origins.
+ *
+ * This MUST be a parsed origin comparison, never a substring test: matching
+ * `src.includes('cdn.jsdelivr.net')` also accepts
+ * `https://cdn.jsdelivr.net.evil.example/x.js` (an attacker-registered host
+ * that merely embeds an allow-listed name) and
+ * `https://evil.example/next?u=cdn.jsdelivr.net` (the name in a query), either
+ * of which the CSP then has to catch. Only the URL parser's host/origin can
+ * tell the real host from attacker-controlled text, and the scheme is pinned to
+ * `https:` so an allow-listed host cannot be reached over plaintext or via
+ * `data:`/`blob:` tricks. The comparison is per-origin, not per-path: any path
+ * under an allow-listed host is permitted, so no path prefix is checked.
+ *
+ * Anything that is not an absolute https URL on the list — including a
+ * scheme-relative `//unpkg.com/x.js`, which has no host until it is resolved —
+ * is rejected here and dropped, exactly as before; the CSP remains the
+ * backstop for whatever survives.
+ */
+function isAllowedCdnScriptSrc(src: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(src);
+  } catch {
+    return false;
+  }
+  return parsed.protocol === 'https:' && CDN_ALLOWED_ORIGINS.has(parsed.origin);
+}
 
 const STRIP_TAGS_RE = /<\/(?:iframe|object|embed|form|meta|link|base|script)(?:\s[^>]*)?>/gi;
 const STRIP_OPEN_TAGS_RE = /<(?:iframe|object|embed|form|meta|link|base|script)(?:\s[^>]*)?\/?>/gi;
@@ -280,8 +334,8 @@ function extractScripts(widgetCode: string): { cdnTags: string[]; inlineCode: st
       const srcMatch = tag.match(/<script[^>]*\ssrc\s*=\s*["']([^"']+)["'][^>]*>/i);
       if (srcMatch) {
         const src = srcMatch[1];
-        const isCdn = CDN_ALLOWLIST.some(d => src.includes(d));
-        if (isCdn) {
+        // Parsed origin check, not a substring test — see isAllowedCdnScriptSrc.
+        if (isAllowedCdnScriptSrc(src)) {
           cdnTags.push(`<script src="${src}"></script>`);
           continue;
         }

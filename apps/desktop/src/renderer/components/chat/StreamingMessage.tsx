@@ -175,7 +175,6 @@ const StreamingTools = React.memo(function StreamingTools({
   isStreaming,
   streamingToolOutput,
   agentProgressEvents,
-  totalDurationMs,
   liveStartedAt,
   focusMode,
 }: {
@@ -184,8 +183,9 @@ const StreamingTools = React.memo(function StreamingTools({
   streamingToolOutput: string;
   agentProgressEvents?: import('@/hooks/useStreamingAgentProgress').AgentProgressEventWithMeta[];
   /** Live elapsed ms from stream start; lets the summary show the real
-   *  response time ticking up instead of summed tool durations. */
-  totalDurationMs?: number | null;
+   *  response time ticking up. The finished-round value lives on the
+   *  persisted assistant message (`message.durationMs`) and is supplied
+   *  by `MessageItem`, which owns the message list. */
   liveStartedAt?: number | null;
   focusMode?: boolean;
 }) {
@@ -196,7 +196,6 @@ const StreamingTools = React.memo(function StreamingTools({
       isStreaming={isStreaming}
       streamingToolOutput={streamingToolOutput}
       agentProgressEvents={agentProgressEvents}
-      totalDurationMs={totalDurationMs}
       liveStartedAt={liveStartedAt}
       focusMode={focusMode}
     />

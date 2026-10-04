@@ -603,5 +603,17 @@ async function writeFileAtomic(path: string, content: string): Promise<void> {
   await mkdir(dir, { recursive: true });
   const tmpPath = `${path}.tmp.${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   await writeFile(tmpPath, content, 'utf-8');
-  await rename(tmpPath, path);
+  try {
+    await rename(tmpPath, path);
+  } catch (err) {
+    // A failed rename (EPERM/EBUSY are routine on Windows while a scanner
+    // or indexer holds the target) would otherwise leave the temp file
+    // behind. Drop it, then rethrow unchanged.
+    try {
+      await rm(tmpPath, { force: true });
+    } catch {
+      // best effort — the original error is the one that matters
+    }
+    throw err;
+  }
 }

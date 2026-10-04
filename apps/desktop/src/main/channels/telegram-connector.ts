@@ -460,7 +460,12 @@ export class TelegramChannelConnector {
 
     const envelope: ChannelInboundEnvelope = {
       address: { platform: 'telegram', chat: String(msg.chat.id) },
-      sender: msg.from?.username ?? msg.from?.first_name ?? 'unknown',
+      // The SAME identity `filterAllows` judged above, not a second
+      // derivation: the previous expression here dropped the numeric id, so a
+      // username-less sender was allow-listed as "12345" and then attributed
+      // to a different (first-name) identity downstream. One resolved
+      // `sender`, used for the gate, the envelope and the log.
+      sender,
       text: routedText,
       reaction: null,
       ...(attachments.length > 0 ? { attachments } : {}),

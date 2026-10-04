@@ -56,9 +56,10 @@ export function useCanvasManagement(): void {
 
         switch (event.operation) {
           case "create":
-            // De-duplicate in case the broadcast races the renderer's own
-            // initial list load; addCanvas otherwise appends, which can
-            // produce duplicate entries after a re-mount.
+            // Idempotent by id — `addCanvas` refreshes an existing entry rather
+            // than appending, because this broadcast can race the renderer's
+            // own initial list load and a blind append produced duplicate ids
+            // (and duplicate React keys in the canvas lists).
             addCanvas(canvas);
             if (event.currentCanvasId === canvas.id) {
               setActiveCanvas(canvas.id);

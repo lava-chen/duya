@@ -149,8 +149,29 @@ export interface GuiRunOptions {
 
 const SUSPECTED_NOOP_LIMIT = 2;
 
+/**
+ * Identity of one declared step for the replay cache.
+ *
+ * EVERY field the backend can act on has to take part: a hash built from
+ * `nodeId / step / do / text` alone made steps that differ only in `key`
+ * (`Enter` vs `F5`), `direction` (`down` vs `up`), `amount`, `element` or
+ * `verify` collide, and `if (hit) continue` then silently skipped a real
+ * action as a replay of an earlier one. `text` arrives separately because
+ * the caller passes it already interpolated against the run scope, while
+ * `step` is the raw declared step.
+ */
 function stepReqHash(nodeId: string, index: number, step: GuiStep, text?: string): string {
-  return computeReqHash('node_result', { nodeId, step: index, do: step.do, ...(text !== undefined ? { text } : {}) });
+  return computeReqHash('node_result', {
+    nodeId,
+    step: index,
+    do: step.do,
+    ...('element' in step ? { element: step.element } : {}),
+    ...('key' in step ? { key: step.key } : {}),
+    ...('direction' in step ? { direction: step.direction } : {}),
+    ...('amount' in step ? { amount: step.amount } : {}),
+    ...('verify' in step ? { verify: step.verify } : {}),
+    ...(text !== undefined ? { text } : {}),
+  });
 }
 
 /**

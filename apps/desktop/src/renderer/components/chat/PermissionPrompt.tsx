@@ -41,6 +41,48 @@ interface PermissionPromptProps {
 const MAX_INPUT_LINES = 8;
 const MAX_INPUT_CHARS = 500;
 
+/**
+ * The card's own `expiresAt` is the single deadline for a permission request.
+ * This hook ticks once a second and reports whether that deadline has passed,
+ * so the card can visibly retire itself even if the worker's
+ * `permission_expired` event never arrives (SSE drop, reconnect). The worker
+ * enforces the same value, so the two can only ever agree on the answer.
+ */
+function useIsExpired(pending: PermissionRequestEvent | null): boolean {
+  const [now, setNow] = useState(() => Date.now());
+  // Depend on the request's identity, not the object: a fresh
+  // `PermissionRequestEvent` is minted on every re-render of the parent, and
+  // depending on it would restart the ticker on every frame.
+  const requestId = pending?.id;
+  const expiresAt = pending?.expiresAt;
+  useEffect(() => {
+    if (expiresAt === undefined) return;
+    setNow(Date.now());
+    const remaining = expiresAt - Date.now();
+    // Already past: no timer needed, the render below is already terminal.
+    if (remaining <= 0) return;
+    // setInterval cannot fire earlier than this, so an early wake-up is
+    // harmless — the state update re-reads the clock.
+    const handle = setInterval(() => setNow(Date.now()), Math.min(1000, remaining));
+    return () => clearInterval(handle);
+  }, [requestId, expiresAt]);
+  if (expiresAt === undefined) return false;
+  return now >= expiresAt;
+}
+
+/**
+ * Terminal-state banner. Once the deadline passes the request is already
+ * settled as a denial on the agent side, so the card says so instead of
+ * looking live.
+ */
+function ExpiredNotice({ t }: { t: (key: TranslationKey) => string }) {
+  return (
+    <p className="permission-prompt-expired" role="status">
+      {t('permission.expired')}
+    </p>
+  );
+}
+
 function summarizePermission(request: PermissionRequestEvent): { title: string; summary: string } {
   const input = request.toolInput || {};
   const filePath = (input.file_path || input.path) ? String(input.file_path || input.path) : null;
@@ -220,10 +262,12 @@ function ToolParamsDisplay({ params }: { params: Array<{ name: string; label: st
 function GenericPermissionPrompt({
   pendingPermission,
   onPermissionResponse,
+  expired,
   t,
 }: {
   pendingPermission: PermissionRequestEvent;
   onPermissionResponse: (decision: 'allow' | 'allow_session' | 'deny') => void;
+  expired: boolean;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -265,6 +309,7 @@ function GenericPermissionPrompt({
         <Button
           variant="danger"
           className="permission-prompt-btn permission-prompt-btn-danger"
+          disabled={expired}
           onClick={() => onPermissionResponse('deny')}
         >
           {t('permission.deny')}
@@ -272,6 +317,7 @@ function GenericPermissionPrompt({
         <Button
           variant="secondary"
           className="permission-prompt-btn"
+          disabled={expired}
           onClick={() => onPermissionResponse('allow')}
         >
           {t('permission.allowOnce')}
@@ -280,7 +326,7 @@ function GenericPermissionPrompt({
           <Button
             variant="secondary"
             className="permission-prompt-btn"
-            disabled={alwaysAllowState === 'saving'}
+            disabled={expired || alwaysAllowState === 'saving'}
             onClick={async () => {
               setAlwaysAllowState('saving');
               try {
@@ -301,6 +347,7 @@ function GenericPermissionPrompt({
         <Button
           variant="primary"
           className="permission-prompt-btn permission-prompt-btn-primary"
+          disabled={expired}
           onClick={() => onPermissionResponse('allow_session')}
         >
           {t('permission.allowForSession')}
@@ -325,10 +372,12 @@ function GenericPermissionPrompt({
 function AskUserQuestionUI({
   toolInput,
   onSubmit,
+  expired,
   t,
 }: {
   toolInput: Record<string, unknown>;
   onSubmit: (decision: 'allow', updatedInput: Record<string, unknown>) => void;
+  expired: boolean;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
 }) {
   const questions = (toolInput.questions || []) as Array<{
@@ -355,8 +404,9 @@ function AskUserQuestionUI({
   const feedback = feedbacks[current.question] || '';
   const hasSelection = currentAnswer.length > 0;
   const hasFeedback = feedback.trim().length > 0;
-  // canSubmit requires either: an option selected, or the "tell duya" textarea filled
-  const canSubmit = hasSelection || hasFeedback;
+  // canSubmit requires either: an option selected, or the "tell duya" textarea filled.
+  // A lapsed deadline counts as "cannot submit": the agent already denied it.
+  const canSubmit = !expired && (hasSelection || hasFeedback);
   const isLast = currentIdx === total - 1;
   const isMulti = current.multiSelect;
 
@@ -454,6 +504,9 @@ function AskUserQuestionUI({
   // Document-level keyboard shortcuts: ESC dismiss, Enter submit
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Past the deadline the request is settled as a denial; a late
+      // dismissal would submit an answer nobody can act on.
+      if (expired) return;
       // Don't hijack typing in the feedback textarea or in the chat input
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' ||
@@ -478,7 +531,7 @@ function AskUserQuestionUI({
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canSubmit, feedbackOpen, feedback, answers, currentIdx]);
+  }, [canSubmit, feedbackOpen, feedback, answers, currentIdx, expired]);
 
   return (
     <div className="ask-question-sheet">
@@ -645,12 +698,14 @@ function ExitPlanModeUI({
   onApprove,
   onDeny,
   onDenyWithMessage,
+  expired,
   t,
 }: {
   pendingPermission: PermissionRequestEvent;
   onApprove: () => void;
   onDeny: () => void;
   onDenyWithMessage: (message: string) => void;
+  expired: boolean;
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
 }) {
   const [feedback, setFeedback] = useState('');
@@ -699,6 +754,7 @@ function ExitPlanModeUI({
           <Button
             variant="danger"
             className="permission-prompt-btn permission-prompt-btn-danger"
+            disabled={expired}
             onClick={onDeny}
           >
             {t('permission.reject')}
@@ -706,6 +762,7 @@ function ExitPlanModeUI({
           <Button
             variant="primary"
             className="permission-prompt-btn permission-prompt-btn-primary"
+            disabled={expired}
             onClick={onApprove}
           >
             {t('permission.approveExecute')}
@@ -716,8 +773,10 @@ function ExitPlanModeUI({
             type="text"
             placeholder={t('permission.provideFeedback')}
             value={feedback}
+            disabled={expired}
             onChange={(e) => setFeedback(e.target.value)}
             onKeyDown={(e) => {
+              if (expired) return;
               if (e.key === 'Enter' && feedback.trim()) {
                 onDenyWithMessage(feedback.trim());
               }
@@ -728,9 +787,10 @@ function ExitPlanModeUI({
             variant="secondary"
             className="permission-prompt-btn"
             onClick={() => {
+              if (expired) return;
               if (feedback.trim()) onDenyWithMessage(feedback.trim());
             }}
-            disabled={!feedback.trim()}
+            disabled={expired || !feedback.trim()}
           >
             {t('permission.doThisInstead')}
           </Button>
@@ -780,6 +840,12 @@ export function PermissionPrompt({
   autoModeInfo,
 }: PermissionPromptProps) {
   const { t } = useTranslation();
+  // The card's own `expiresAt` is authoritative: once it passes, the request
+  // is settled as a denial on the agent side, so every control goes dead even
+  // if the worker's `permission_expired` event is still in flight (or lost).
+  // Declared before the early returns below so the hook order stays stable:
+  // full-access mode and the empty state both bail out early.
+  const expired = useIsExpired(pendingPermission);
 
   const isInteractiveQuestion =
     pendingPermission?.toolName === 'AskUserQuestion' ||
@@ -794,6 +860,7 @@ export function PermissionPrompt({
 
   const isResolved = !!permissionResolved;
   const toolName = pendingPermission?.toolName;
+  const showExpiredNotice = !isResolved && expired;
 
   // Resolved-only rendering: smaller, fully rounded card
   if (isResolved && !pendingPermission) {
@@ -823,25 +890,34 @@ export function PermissionPrompt({
         {isResolved ? (
           <ResolvedStatus toolName={toolName} permissionResolved={permissionResolved} t={t} />
         ) : toolName === 'AskUserQuestion' ? (
-          <AskUserQuestionUI
-            toolInput={pendingPermission.toolInput as Record<string, unknown>}
-            onSubmit={(decision, updatedInput) => onPermissionResponse(decision, updatedInput)}
-            t={t}
-          />
+          <>
+            {showExpiredNotice && <ExpiredNotice t={t} />}
+            <AskUserQuestionUI
+              toolInput={pendingPermission.toolInput as Record<string, unknown>}
+              onSubmit={(decision, updatedInput) => onPermissionResponse(decision, updatedInput)}
+              expired={expired}
+              t={t}
+            />
+          </>
         ) : toolName === 'ExitPlanMode' ? (
           <ExitPlanModeUI
             pendingPermission={pendingPermission}
             onApprove={() => onPermissionResponse('allow')}
             onDeny={() => onPermissionResponse('deny')}
             onDenyWithMessage={(msg) => onPermissionResponse('deny', undefined, msg)}
+            expired={expired}
             t={t}
           />
         ) : (
-          <GenericPermissionPrompt
-            pendingPermission={pendingPermission}
-            onPermissionResponse={(decision) => onPermissionResponse(decision)}
-            t={t}
-          />
+          <>
+            {showExpiredNotice && <ExpiredNotice t={t} />}
+            <GenericPermissionPrompt
+              pendingPermission={pendingPermission}
+              onPermissionResponse={(decision) => onPermissionResponse(decision)}
+              expired={expired}
+              t={t}
+            />
+          </>
         )}
       </div>
     </div>

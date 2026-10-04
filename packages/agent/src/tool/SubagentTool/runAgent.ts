@@ -588,6 +588,21 @@ export async function* runAgent({
           errorMessage = 'Sub-agent cancelled after the parent task was aborted'
           onProgress?.({ type: 'error', data: errorMessage, agentId })
           terminalProgressEmitted = true
+          // Same cleanup as the stall branch above: without closing the
+          // iterator the sub-agent's SSE reader keeps its socket and
+          // listener alive after the parent has already moved on.
+          // `interrupt()` is guarded separately because it can throw, and
+          // an unguarded throw would skip the iterator close below.
+          try {
+            subAgent.interrupt()
+          } catch (err) {
+            logger.warn('[SubAgent] subAgent.interrupt threw on abort', { err })
+          }
+          try {
+            await eventIterator.return?.()
+          } catch {
+            // best effort cleanup
+          }
           break
         }
 

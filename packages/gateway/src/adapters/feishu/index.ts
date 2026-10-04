@@ -496,11 +496,12 @@ export class FeishuChannel extends EventEmitter {
     switch (msgType) {
       case 'text': {
         const richText = content ? extractRichText(content, message.mentions) : { raw: message.content, content: message.content, mentions: [] };
-        if (threadId) {
-          await this._options.onThreadMessage?.(threadId, chatId, userId, richText.content, message.message_id);
-        } else {
-          await this._options.onMessage(chatId, userId, richText.content, message.message_id, threadId, richText.mentions);
-        }
+        // A reply or a threaded message carries `root_id` / `thread_id` /
+        // `parent_id`, and it reaches the agent as `onMessage`'s `threadId`
+        // argument — the same field the `post` branch below already used. It
+        // used to be diverted to `onThreadMessage`, which no caller ever
+        // registered, so every threaded message was silently dropped.
+        await this._options.onMessage(chatId, userId, richText.content, message.message_id, threadId, richText.mentions);
         break;
       }
       case 'post': {

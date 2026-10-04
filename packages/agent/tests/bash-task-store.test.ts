@@ -37,10 +37,15 @@ function makeTask(overrides: Partial<BashBackgroundTask> = {}): BashBackgroundTa
   };
 }
 
-function withTempDir<T>(fn: (dir: string) => Promise<T> | T): Promise<T> | T {
+// `await fn(dir)` is load-bearing: fn is async, so returning its promise
+// directly let the `finally` below delete the temp directory while rehydrate
+// was still awaiting its readFile. The catch in rehydrate then swallowed the
+// ENOENT and returned [], which failed the liveness cases under load and passed
+// them when the machine was idle — a race, not a behaviour under test.
+async function withTempDir<T>(fn: (dir: string) => Promise<T> | T): Promise<T> {
   const dir = mkdtempSync(join(tmpdir(), 'duya-bash-store-'));
   try {
-    return fn(dir);
+    return await fn(dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

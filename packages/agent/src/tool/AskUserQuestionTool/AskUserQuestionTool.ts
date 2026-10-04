@@ -131,6 +131,15 @@ export type AskUserQuestionInput = z.infer<typeof askUserQuestionInputSchema>;
 // map carries the answer data the retried Phase-2 execute() reads.
 const pendingAnswers = new Map<string, Record<string, string>>();
 
+// The edited tool input the user approved, keyed by the same permission
+// request id (= toolUseId). `pendingAnswers` above is flat by necessity — the
+// renderer sends the answers as `Record<string, string>` — so an edit to a
+// STRUCTURED argument (AskUserQuestion's `questions[]`, a connector tool's
+// nested payload) had nowhere to cross and was dropped by the worker. This
+// map is that missing channel: the approved replacement for the tool input
+// the retry would otherwise re-run on. Same one-shot lifetime as the answers.
+const pendingToolInputs = new Map<string, Record<string, unknown>>();
+
 /**
  * Store resolved answers keyed by permission request id.
  * Called from agent-process-entry when permission:resolve arrives with updatedInput.
@@ -139,8 +148,25 @@ export function storePendingAnswer(permissionId: string, answers: Record<string,
   pendingAnswers.set(permissionId, answers);
 }
 
+/**
+ * Store the tool input the user edited and approved, keyed by permission
+ * request id. Read one-shot by StreamingToolExecutor at the retry, which uses
+ * it INSTEAD of the original model-supplied `tool.block.input`.
+ */
+export function storePendingToolInput(permissionId: string, toolInput: Record<string, unknown>): void {
+  pendingToolInputs.set(permissionId, toolInput);
+}
+
+/** One-shot read of the approved edited tool input (see `takePendingAnswer`). */
+export function takePendingToolInput(permissionId: string): Record<string, unknown> | undefined {
+  const toolInput = pendingToolInputs.get(permissionId);
+  if (toolInput) pendingToolInputs.delete(permissionId);
+  return toolInput;
+}
+
 export function clearPendingAnswer(permissionId: string): void {
   pendingAnswers.delete(permissionId);
+  pendingToolInputs.delete(permissionId);
 }
 
 /**

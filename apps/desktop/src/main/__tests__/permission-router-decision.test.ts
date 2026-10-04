@@ -164,11 +164,16 @@ describe('an unknown action fails closed', () => {
   });
 });
 
-describe('a refused durable write degrades rather than losing the answer', () => {
-  it('reports refused when the store throws, so the caller still delivers', async () => {
-    // The alternative is a tool call hanging until its deadline because an
-    // audit table was locked. A missing audit row is recoverable; a lost answer
-    // is not.
+describe('a refused durable write authorises nothing', () => {
+  it('reports refused when the store throws, so the caller knows not to deliver', async () => {
+    // This title used to read "so the caller still delivers" — that was the
+    // defect, not a rationale. Forwarding after a failed durable write is what
+    // let an unrecorded authorisation reach the worker: a refusal means the
+    // store may already hold a DIFFERENT decision for this prompt, and
+    // first-wins is a claim about the store, not about this process. The
+    // outcome keeps its exact shape; what changed is that the router now
+    // returns on it instead of proceeding to `sendCommand` (pinned in the
+    // source-wiring block below).
     const { dbRequest } = makeBridge({ throwOnResolve: true });
     const outcome = await recordPermissionDecision(dbRequest, { ...base, surface: 'worker_http', decision: 'allow' });
 
@@ -202,6 +207,41 @@ describe('the router calls this before it forwards (source wiring)', () => {
 
     expect(duplicateBranch).toContain('sendJson(res, 200');
     expect(returns).toBeLessThan(duplicateBranch.indexOf('workerManager.sendCommand'));
+  });
+
+  it('does not forward when the durable write was refused', () => {
+    // The F02 fix. `refused` means nothing was recorded, and nothing recorded
+    // must mean nothing delivered — otherwise a locked audit table silently
+    // turns into an authorisation that no record can ever contradict. This is
+    // the assertion the old "degrades rather than losing the answer" title
+    // implied and the code did not have.
+    const source = readFileSync(ROUTER, 'utf8');
+    const refusedBranch = source.slice(source.indexOf("durable.status === 'refused'"));
+    const returns = refusedBranch.indexOf('return;');
+
+    expect(refusedBranch.length).toBeGreaterThan(0);
+    // It answers 503 and marks the failure retryable rather than pretending.
+    expect(refusedBranch).toContain('sendJson(res, 503');
+    expect(refusedBranch).toContain('permission_decision_not_recorded');
+    expect(refusedBranch).toContain('retryable: true');
+    // And it never reaches the worker.
+    expect(returns).toBeGreaterThan(-1);
+    expect(returns).toBeLessThan(refusedBranch.indexOf('workerManager.sendCommand'));
+  });
+
+  it('separates a defer from a failed write, and settles neither', () => {
+    // `defer` means "not yet". It is read from the vocabulary module rather
+    // than from `durable.reason`, because a reason string is a diagnostic and
+    // the vocabulary table is the declared fact. It answers 200 and delivers
+    // nothing, which is what keeps the prompt open.
+    const source = readFileSync(ROUTER, 'utf8');
+    const refusedBranch = source.slice(source.indexOf("durable.status === 'refused'"));
+
+    expect(refusedBranch).toContain("translate('worker_http', decision)?.action === 'defer'");
+    expect(refusedBranch).toContain('deferred: true');
+    // A defer must not be reported as a store failure, or the UI would offer
+    // the user a retry that cannot help.
+    expect(refusedBranch.slice(0, refusedBranch.indexOf('deferred: true'))).not.toContain('permission_decision_not_recorded');
   });
 
   it('takes its verb whitelist from the vocabulary, not an inline list', () => {

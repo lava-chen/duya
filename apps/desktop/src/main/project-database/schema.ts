@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 
-const PROJECT_DATABASE_SCHEMA_VERSION = 1;
+const PROJECT_DATABASE_SCHEMA_VERSION = 2;
 
 export function initializeProjectDatabaseSchema(db: Database.Database): void {
   db.pragma('foreign_keys = ON');
@@ -91,6 +91,7 @@ export function initializeProjectDatabaseSchema(db: Database.Database): void {
       sort_json TEXT,
       quick_filters_json TEXT,
       layout_json TEXT NOT NULL DEFAULT '{}',
+      revision INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       archived_at INTEGER
@@ -157,6 +158,17 @@ export function initializeProjectDatabaseSchema(db: Database.Database): void {
   `);
 
   const version = Number(db.pragma('user_version', { simple: true }));
+  if (version < 2) {
+    // v2: optimistic-lock column for `db_views`, so `view.update` can reject a
+    // stale write instead of silently overwriting a concurrent edit. The
+    // column check keeps this idempotent — a database created after this
+    // release already has it via the CREATE TABLE above, and re-running the
+    // migration must not fail on the duplicate column.
+    const columns = (db.prepare('PRAGMA table_info(db_views)').all() as Array<{ name: string }>).map((column) => column.name);
+    if (!columns.includes('revision')) {
+      db.exec('ALTER TABLE db_views ADD COLUMN revision INTEGER NOT NULL DEFAULT 1');
+    }
+  }
   if (version < PROJECT_DATABASE_SCHEMA_VERSION) {
     db.pragma(`user_version = ${PROJECT_DATABASE_SCHEMA_VERSION}`);
   }

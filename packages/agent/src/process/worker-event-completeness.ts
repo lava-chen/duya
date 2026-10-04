@@ -124,3 +124,37 @@ type MissingFromUnion = Exclude<EveryWorkerEventInterface, WorkerEvent>;
 export type WorkerEventUnionIsComplete = [MissingFromUnion] extends [never] ? true : false;
 
 export const WORKER_EVENT_UNION_IS_COMPLETE: WorkerEventUnionIsComplete = true;
+
+/**
+ * The compile-time half of the `chat:research_*` guard.
+ *
+ * ## The hole this closes
+ *
+ * `EveryWorkerEventInterface` above can only see events that are DECLARED as a
+ * `*Event` interface in `./worker-protocol.ts`. A `chat:research_*` type that is
+ * written straight into a frame — which is what `convertSSEToAgentMessage` and
+ * `sendToMain(msg: Record<string, unknown>)` both permit — declares nothing, so
+ * neither this file nor the source-parsing test could ever have seen it. That
+ * is how 21 fine-grained `chat:research_*` types accumulated in the converter
+ * with no producer and no way for the guard to object: the bypass was the
+ * untyped record, not the union.
+ *
+ * They have been removed. This pin keeps them removed, and keeps the namespace
+ * honest: `WorkerEvent` carries exactly one `chat:research_*` member, the
+ * declared `ResearchUpdatedEvent`, so a consumer narrowing on the union sees the
+ * real research surface. Adding a second research event to the union is allowed
+ * but must be acknowledged here, which is the point — the next author gets a
+ * compile error naming the event instead of shipping an undeclared frame.
+ */
+type ResearchNamespaceMembers = Extract<WorkerEvent, { type: `chat:research_${string}` }>;
+
+/** Research-namespace members in the union that this pin does not account for. */
+type UnaccountedResearchMember = Exclude<ResearchNamespaceMembers, ResearchUpdatedEvent>;
+
+/**
+ * Fails to COMPILE while the union carries a `chat:research_*` member beyond
+ * the one declared interface. `never` when the namespace is pinned.
+ */
+export type ResearchEventNamespaceIsPinned = [UnaccountedResearchMember] extends [never] ? true : false;
+
+export const RESEARCH_EVENT_NAMESPACE_IS_PINNED: ResearchEventNamespaceIsPinned = true;

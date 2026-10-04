@@ -6,6 +6,13 @@
  * noop), map + when primitives, journal-driven breakpoint resume, and
  * a run-level lifecycle state machine sharing vocabulary with goal via
  * the small kernel in `engine/run-lifecycle-tracker.ts`.
+ *
+ * The `WorkflowDef` execution engine and its run manager (`engine.ts`,
+ * `manager.ts`) were removed: nothing in the repo constructed either class
+ * outside their own unit tests, so the YAML node kinds below are reached
+ * only through the DWF runtime (`./dwf/runtime.js`, wired by
+ * `process/workflow-runner.ts`). `node-runner.ts` therefore has no
+ * production caller left either and is the next candidate.
  */
 
 export * from './schema.js';
@@ -27,6 +34,4 @@ export * from './planner.js';
 export * from './converter.js';
 export * from './element-matcher.js';
 export * from './verify.js';
-export * from './engine.js';
-export * from './manager.js';
 export * from './workflow-files.js';

@@ -86,6 +86,21 @@ const SAME_SITE_MAP: Record<number, 'no_restriction' | 'lax' | 'strict'> = {
 const CHROME_TO_UNIX_OFFSET = 11644473600000000;
 
 /**
+ * True when a Chrome `expires_utc` value means "session cookie / no expiry"
+ * rather than a real timestamp.
+ *
+ * Chromium stores a session cookie's `expires_utc` as 0. Both the expiry check
+ * and the Electron mapper must agree on this predicate: `expirationDate` is an
+ * ABSOLUTE expiry, so treating the sentinel as a timestamp hands the cookie API
+ * a bogus date and Electron silently drops the cookie on write (the user sees
+ * a dropped login). Non-positive covers the sentinel and any negative/garbage
+ * value, which would otherwise convert to a far-past Unix time.
+ */
+function isSessionCookieExpiry(expiresUtc: number): boolean {
+  return !(expiresUtc > 0);
+}
+
+/**
  * Which cipher a profile's v10/v11 records use. Windows derives an AES-256-GCM
  * key from Local State; macOS derives an AES-128-CBC key from the Keychain's
  * "Safe Storage" secret. Defaults to the Windows mode for backwards
@@ -115,9 +130,9 @@ export function mapChromeCookieToElectron(row: ChromeCookieRow, decryptedValue: 
     path: row.path,
     secure,
     httpOnly: row.is_httponly === 1,
-    expirationDate: row.expires_utc > 0
-      ? Math.floor((row.expires_utc - CHROME_TO_UNIX_OFFSET) / 1000000)
-      : undefined,
+    expirationDate: isSessionCookieExpiry(row.expires_utc)
+      ? undefined
+      : Math.floor((row.expires_utc - CHROME_TO_UNIX_OFFSET) / 1000000),
     sameSite: SAME_SITE_MAP[row.samesite] ?? 'no_restriction',
   };
 }
@@ -165,7 +180,9 @@ export function mapLiveBrowserCookies(cookies: unknown[]): ElectronCookie[] {
 }
 
 export function isCookieExpired(expiresUtc: number): boolean {
-  if (expiresUtc === 0) return false;
+  // A session cookie has no expiry, so it is never "expired" — it simply ends
+  // with the browser session. Same predicate as `mapChromeCookieToElectron`.
+  if (isSessionCookieExpiry(expiresUtc)) return false;
   const unixSeconds = Math.floor((expiresUtc - CHROME_TO_UNIX_OFFSET) / 1000000);
   return unixSeconds < Math.floor(Date.now() / 1000);
 }

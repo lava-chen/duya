@@ -86,18 +86,30 @@ export function MemoryRagCard() {
     if (disabled || rebuildState === "running") return;
     setRebuildState("running");
     setRebuildMessage(null);
-    const res = await ragRebuildMemoryIPC();
-    if (res.ok) {
-      setRebuildState("done");
-      setRebuildMessage(
-        t("settings.memory.ragRebuildDone", {
-          documents: res.documents ?? 0,
-          embedded: res.embedded ?? 0,
-        }),
-      );
-    } else {
+    try {
+      const res = await ragRebuildMemoryIPC();
+      if (res.ok) {
+        setRebuildState("done");
+        setRebuildMessage(
+          t("settings.memory.ragRebuildDone", {
+            documents: res.documents ?? 0,
+            embedded: res.embedded ?? 0,
+          }),
+        );
+      } else {
+        setRebuildState("error");
+        setRebuildMessage(res.error ?? t("settings.memory.ragRebuildFailed"));
+      }
+    } catch (err) {
+      // A rejected IPC used to leave the state on "running", which
+      // disabled the button forever and threw unhandled. Restore a
+      // truthful state and show the reason.
       setRebuildState("error");
-      setRebuildMessage(res.error ?? t("settings.memory.ragRebuildFailed"));
+      setRebuildMessage(
+        err instanceof Error && err.message
+          ? err.message
+          : t("settings.memory.ragRebuildFailed"),
+      );
     }
   };
 

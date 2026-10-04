@@ -280,6 +280,10 @@ export function registerAppConnectionHandlers(): void {
           clientId: payload.corpid,
           clientSecret: payload.corpsecret,
         });
+        // Same broadcast as the OAuth path: without it a renderer waiting on
+        // a pending `connector_auth_required` only learns about the new
+        // connection by polling.
+        broadcastConnectionConnected(dto.provider, dto.id);
         return { success: true, data: dto };
       } catch (err) {
         const errorCode = getErrorCode(err);
@@ -313,6 +317,8 @@ export function registerAppConnectionHandlers(): void {
           email: payload.email,
           authCode: payload.authCode,
         });
+        // Same broadcast as the OAuth path (see connectWeCom above).
+        broadcastConnectionConnected(dto.provider, dto.id);
         return { success: true, data: dto };
       } catch (err) {
         const errorCode = getErrorCode(err);

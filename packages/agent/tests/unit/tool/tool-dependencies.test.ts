@@ -80,7 +80,7 @@ describe('ReadTool dependency declaration', () => {
   });
 
   it('extractReadPaths returns the input path as the read set', () => {
-    expect(tool.extractReadPaths?.({ path: '/tmp/foo.txt' })).toEqual([
+    expect(tool.extractReadPaths?.({ file_path: '/tmp/foo.txt' })).toEqual([
       '/tmp/foo.txt',
     ]);
   });
@@ -90,7 +90,7 @@ describe('ReadTool dependency declaration', () => {
   });
 
   it('extractWritePaths is empty (read-only tool)', () => {
-    expect(tool.extractWritePaths?.({ path: '/tmp/foo.txt' })).toEqual([]);
+    expect(tool.extractWritePaths?.({ file_path: '/tmp/foo.txt' })).toEqual([]);
   });
 });
 
@@ -103,7 +103,7 @@ describe('WriteTool dependency declaration', () => {
   });
 
   it('extractWritePaths returns the input path as the write set', () => {
-    expect(tool.extractWritePaths?.({ path: '/tmp/foo.txt' })).toEqual([
+    expect(tool.extractWritePaths?.({ file_path: '/tmp/foo.txt' })).toEqual([
       '/tmp/foo.txt',
     ]);
   });
@@ -113,7 +113,7 @@ describe('WriteTool dependency declaration', () => {
   });
 
   it('extractReadPaths is empty (pure writer)', () => {
-    expect(tool.extractReadPaths?.({ path: '/tmp/foo.txt' })).toEqual([]);
+    expect(tool.extractReadPaths?.({ file_path: '/tmp/foo.txt' })).toEqual([]);
   });
 });
 

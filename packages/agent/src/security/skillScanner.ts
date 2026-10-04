@@ -468,11 +468,67 @@ export function scanSkill(
   // If files content is provided, scan each
   if (files) {
     const allFindings: SkillFinding[] = [];
+    // The four structural bounds below (MAX_FILE_COUNT, MAX_TOTAL_SIZE_KB,
+    // MAX_SINGLE_FILE_KB, SUSPICIOUS_BINARY_EXTENSIONS) used to be declared
+    // and never read, so `scanSkill` walked an unbounded file list. Every
+    // bound fails CLOSED: skipping content silently would let a skill push
+    // its payload past the cap and still be reported `safe`, so each
+    // violation is recorded as a finding. `high` degrades a community skill
+    // to `caution`, which `INSTALL_POLICY.community` blocks.
+    let scannedCount = 0;
+    let scannedKb = 0;
+    let boundReached = false;
+
     for (const [filename, content] of files) {
-      if (isScannableFile(filename)) {
-        allFindings.push(...scanSkillFile(content, filename));
+      if (boundReached) break;
+
+      const extension = fileExtension(filename);
+      if (SUSPICIOUS_BINARY_EXTENSIONS.has(extension)) {
+        allFindings.push(structuralFinding(
+          'suspicious_binary_file',
+          filename,
+          `Skill ships a "${extension}" binary, which the text scanner cannot examine`,
+        ));
+        continue;
       }
+
+      if (!isScannableFile(filename)) continue;
+
+      const sizeKb = Buffer.byteLength(content, 'utf8') / 1024;
+      if (sizeKb > MAX_SINGLE_FILE_KB) {
+        allFindings.push(structuralFinding(
+          'oversized_file',
+          filename,
+          `File is ${Math.round(sizeKb)} KB, above the ${MAX_SINGLE_FILE_KB} KB per-file limit; its content was NOT scanned`,
+        ));
+        continue;
+      }
+
+      if (scannedCount >= MAX_FILE_COUNT) {
+        allFindings.push(structuralFinding(
+          'too_many_files',
+          filename,
+          `Skill ships more than ${MAX_FILE_COUNT} scannable files; this file and the remainder were NOT scanned`,
+        ));
+        boundReached = true;
+        continue;
+      }
+
+      if (scannedKb + sizeKb > MAX_TOTAL_SIZE_KB) {
+        allFindings.push(structuralFinding(
+          'scan_size_limit_exceeded',
+          filename,
+          `Scanned content would exceed the ${MAX_TOTAL_SIZE_KB} KB total limit; this file and the remainder were NOT scanned`,
+        ));
+        boundReached = true;
+        continue;
+      }
+
+      scannedCount += 1;
+      scannedKb += sizeKb;
+      allFindings.push(...scanSkillFile(content, filename));
     }
+
     return makeResult(skillName, source, trustLevel, allFindings);
   }
 
@@ -570,11 +626,45 @@ function resolveTrustLevel(source: string): TrustLevel['level'] {
   return 'community';
 }
 
+/**
+ * Build a `structural` finding for a violated scan bound. `line` is 0 because
+ * a bound is a property of the skill as a whole, not of one line.
+ */
+function structuralFinding(
+  patternId: string,
+  file: string,
+  description: string,
+): SkillFinding {
+  return {
+    patternId,
+    severity: 'high',
+    category: 'structural',
+    file,
+    line: 0,
+    match: '',
+    description,
+  };
+}
+
+/**
+ * Lowercased extension including the dot, or `''` when the filename has none.
+ * Case-insensitive on purpose: skill payloads ship as `payload.SH` and
+ * `hook.PY` on case-insensitive filesystems, and an exact-case match skipped
+ * those files entirely — the scan then reported `safe` and the community
+ * install policy (`INSTALL_POLICY.community[0] === 'allow'`) installed the
+ * skill unexamined.
+ */
+function fileExtension(filename: string): string {
+  const lower = filename.toLowerCase();
+  const dot = lower.lastIndexOf('.');
+  return dot === -1 ? '' : lower.substring(dot);
+}
+
 function isScannableFile(filename: string): boolean {
   const lower = filename.toLowerCase();
   // SKILL.md always scannable even if extension not in list
-  if (filename === 'SKILL.md' || filename.endsWith('.md')) return true;
-  return SCANNABLE_EXTENSIONS.has(filename.substring(filename.lastIndexOf('.')));
+  if (lower === 'skill.md' || lower.endsWith('.md')) return true;
+  return SCANNABLE_EXTENSIONS.has(fileExtension(lower));
 }
 
 function makeResult(

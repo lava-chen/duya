@@ -1081,7 +1081,22 @@ function collectWorkspacePathCandidates(
   return paths
 }
 
-/** The roots a tool is allowed to touch for the current turn. */
+/**
+ * The roots a tool is allowed to touch for the current turn.
+ *
+ * Deliberately narrow: the workspace subtree plus the additional working
+ * directories the user granted. This set used to also contain the workspace's
+ * PARENT directory and the whole `~/.duya` tree, which auto-allowed every
+ * sibling of the workspace (e.g. `E:\Projects\other\.env`) at pipeline step 7
+ * with no prompt and no classifier, and directly cancelled the DUYA self-config
+ * protection in `checkPathSafety` / `ReadTool`. A directory is a root only
+ * because the user granted it — never because it happens to contain or
+ * contain the workspace.
+ *
+ * Single source of truth for "the roots a turn may touch": both
+ * `isToolWithinWorkspace` and `isWorkspaceEscapingCommand` derive their
+ * allowed set from here, so the two can never drift apart again.
+ */
 function collectAllowedRoots(context: ToolPermissionContext): string[] {
   const allowedDirs: string[] = []
 
@@ -1091,12 +1106,10 @@ function collectAllowedRoots(context: ToolPermissionContext): string[] {
 
   if (context.defaultWorkspaceDirectory) {
     allowedDirs.push(path.resolve(context.defaultWorkspaceDirectory))
-    allowedDirs.push(path.resolve(path.join(context.defaultWorkspaceDirectory, '..')))
   } else {
     const homeDir = process.env.HOME || process.env.USERPROFILE || ''
     if (homeDir) {
       allowedDirs.push(path.resolve(path.join(homeDir, '.duya', 'workspace')))
-      allowedDirs.push(path.resolve(path.join(homeDir, '.duya')))
     }
   }
 
@@ -1165,13 +1178,13 @@ export function isWorkspaceEscapingCommand(
 ): boolean {
   if (!command.trim()) return true;
 
-  const allowedDirs: string[] = [];
-  for (const [dirPath] of context.additionalWorkingDirectories) {
-    allowedDirs.push(path.resolve(dirPath));
-  }
-  if (context.defaultWorkspaceDirectory) {
-    allowedDirs.push(path.resolve(context.defaultWorkspaceDirectory));
-  }
+  // Same root set as `isToolWithinWorkspace` / `collectAllowedRoots`, read
+  // through that one function on purpose: the two callers must agree on what
+  // "inside the workspace" means, and a second copy of the list is exactly
+  // how they drifted before (this function used to omit the `~/.duya/workspace`
+  // fallback, so with no workspace configured every absolute path argument
+  // looked like an escape and auto mode escalated every shell command).
+  const allowedDirs = collectAllowedRoots(context);
   const isWithin = (target: string): boolean => {
     const resolved = path.resolve(target);
     return allowedDirs.some((allowed) => {
@@ -1263,7 +1276,7 @@ export function riskTierToBehavior(
   mode: PermissionMode,
 ): 'allow' | 'ask' | 'strong-confirm' | undefined {
   const effectiveTier = tier ?? DEFAULT_MISSING_TIER;
-  const isBypassMode = mode === 'bypassPermissions' || mode === 'dontAsk';
+  const isBypass = isBypassMode(mode);
 
   switch (effectiveTier) {
     case 'read':
@@ -1271,7 +1284,7 @@ export function riskTierToBehavior(
       return undefined;
     case 'write':
     case 'modify':
-      if (isBypassMode) return undefined;
+      if (isBypass) return undefined;
       return 'ask';
     case 'destructive':
       return 'strong-confirm';
@@ -1400,9 +1413,20 @@ export function getModeColor(mode: PermissionMode): ModeColorKey {
 }
 
 /**
- * Check if the current permission mode is bypassPermissions or plan mode
- * with bypass available. In these modes, tools should skip their internal
- * safety checks (like working directory restrictions).
+ * The single definition of "this session never asks the user again".
+ *
+ * `bypassPermissions` is the explicit "never prompt me" mode and `dontAsk`
+ * is the headless / background mode used by the CLI and automation
+ * surfaces. In both, tools skip their internal safety checks (like working
+ * directory restrictions).
+ *
+ * Every consumer must go through this one predicate — the main permission
+ * pipeline (step 5 plus the host-switch precedence at step 4.8), the
+ * headless `ask` resolution in `askWithoutUser.ts`, and `riskTierToBehavior`
+ * below — so the two can never disagree about which modes qualify. `plan`
+ * is deliberately NOT a member: it is a read-only planning mode, and
+ * including it let the pipeline allow every tool while all three
+ * ask-fallbacks denied the same call.
  */
 export function isBypassMode(mode: string | PermissionMode | undefined): boolean {
   return mode === 'bypassPermissions' || mode === 'dontAsk'

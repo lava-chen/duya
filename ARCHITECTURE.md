@@ -1,8 +1,13 @@
 # Architecture
 
-> Last updated: 2026-09
+> Last updated: 2026-10
 
 ## Overview
+
+Duya is a cross-platform desktop AI agent client built as an npm-workspaces
+monorepo: one application under `apps/` and eleven capability packages under
+`packages/`. The renderer, preload, and Electron main process live together in
+`apps/desktop`; every process boundary is a separately published package.
 
 Monorepo / Agent Harness changes follow the single execution plan
 [587](./docs/exec-plans/active/587-agent-harness-monorepo/README.md).
@@ -10,30 +15,58 @@ Its contracts and phase gates define the target; this document describes
 the current implementation. Historical RFCs and migration schedules are
 centralized in that plan's reference directory.
 
-DUYA is a Windows desktop AI agent client with a modular architecture:
+> **Migration status (2026-10).** The repository layout, the
+> `protocol → core → runtime` layered packages, and the architecture gate are in
+> place. The harness migration is **not** production-accepted: `@duya/agent` and
+> `@duya/ai` are still the execution path, and the open production gaps (db
+> bridge receipt parsing, durable-first approval, event-stream durability) are
+> tracked in the plan's [progress
+> review](./docs/exec-plans/active/587-agent-harness-monorepo/13-progress-review-2026-10-04.md).
+> "Merged" and "accepted" are separate facts — read this document as a map of
+> the code, not as a claim of harness completion.
 
-- **Frontend**: Vite + React 19 + Zero Router (Electron renderer)
-- **Desktop Shell**: Electron 44 (Main Process)
-- **Agent Core**: `@duya/agent` workspace package
-- **AI Layer**: `@duya/ai` multi-protocol adapter
+- **Desktop app**: `@duya/desktop` — `main` / `preload` / `renderer` + shared `contracts`
+- **Agent layer**: `@duya/agent-protocol` → `@duya/agent-core` → `@duya/agent-runtime`
+- **Execution**: `@duya/agent` (tools, prompts, modes) + `@duya/ai` (multi-protocol adapter)
+- **Capability packages**: `@duya/cli`, `@duya/computer-use`, `@duya/conductor`, `@duya/gateway`, `@duya/plugin-core`, `@duya/voice`
 - **Database**: SQLite via better-sqlite3
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|------------|
+| Repository | npm workspaces (`apps/*`, `packages/*`) |
 | Frontend | Vite 6, React 19, Zero Router, Tailwind |
 | Desktop Shell | Electron 44 |
-| Build | esbuild, electron-builder |
+| Build | tsc (packages), esbuild (Electron), electron-builder |
 | Agent Core | TypeScript |
 | Database | better-sqlite3 (FTS5, trigram) |
-| Testing | Vitest, Playwright |
+| Testing | Vitest, Playwright, architecture gate |
 
 ## System Architecture
 
+### Repository Topology
+
+```
+apps/desktop/          @duya/desktop — main · preload · renderer · contracts
+packages/              @duya/* — agent-protocol → agent-core → agent-runtime
+                       agent · ai · cli · computer-use · conductor
+                       gateway · plugin-core · voice
+scripts/               build-packages · build-electron · build-agent-bundle
+                       architecture/ (boundary gate)
+```
+
+Packages are compiled by `scripts/build-packages.mjs` in an order derived from
+the `@duya/*` import edges, so `typecheck:web` / `typecheck:electron` /
+`typecheck:cli` and the test suites all run against fresh `dist/`. The root
+`package.json` orchestrates the workspaces; there is no second source of
+workspace truth.
+
+### Process Layers
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Process layer 1 - Electron Main Process                    │
+│  Process layer 1 - Electron Main Process (@duya/desktop)   │
 │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐            │
 │  │  Core   │ │ Config  │ │ Memory  │ │ Agents  │            │
 │  │   DB    │ │  Store  │ │  State  │ │ Manager │            │
@@ -77,6 +110,35 @@ Renderer → preload → IPC Channel → Main Process Handler → SQLite/FileSys
 ```
 
 Channels: `db:*`, `config:*`, `gateway:*`, `automation:*`, `logger:*`
+
+#### The `db:*` duplication, and the eleven channels that stay duplicated
+
+`apps/desktop/src/main/ipc/db-handlers.ts` and
+`apps/desktop/src/main/agents/db-bridge.ts` both answer `db:*` requests, and
+they are not two views of one table: the handler module exposes 86 channels to
+the renderer, the bridge answers 210 cases from the worker, and **46 actions
+exist in both**. For an overlapping action the behaviour is now written once, in
+`dispatchDbAction` (`apps/desktop/src/main/agents/db-bridge.ts:329`), and the
+renderer-side handler is a thin forwarder into it. Note the direction: the
+bridge owns the switch, and `db-handlers.ts` imports from the bridge — the
+reverse would re-create an import cycle, which is why the `getDatabase` import
+lives in `db/index.ts` rather than the handler module.
+
+Eleven overlapping actions are **deliberately still duplicated**, because in
+each case the two copies differ for a reason and converging them would be
+change without benefit:
+
+| Action | Why it stays duplicated |
+| --- | --- |
+| `lock:release` | The handler version carries a wake side effect the bridge version has no notion of |
+| `session:create` / `session:update` | Genuinely different ext-key sets |
+| `message:replace` | Different bodies |
+| `toolApproval:resolve` | Different failure key names |
+| `setting:*` (6 actions) | The handler set is a superset, not a duplicate |
+| `project:getGroups` | Groups a different set of records |
+
+Duplicate-but-correct beats converged-but-changed. Retiring any of these is its
+own change, with its own evidence.
 
 ### 2. Agent Server (HTTP + SSE)
 
@@ -353,13 +415,18 @@ Separate SQLite file (`memory-state.db`, next to `duya-main.db` in the same boot
 
 ### Entry Points
 
-- `packages/agent/src/agent/DuyaAgent.ts` - Main agent class
-- `packages/agent/src/session/MessageSession.ts` - Session management
-- `packages/agent/src/session/TaskStore.ts` - Task state
+- `packages/agent/src/process/agent-process-entry.ts` — worker subprocess entry,
+  bundled to `agent-process-entry.js`
+- `packages/agent/src/agent/DuyaAgent.ts` — main agent class
+- `packages/agent/src/agent/TurnAssembler.ts` / `TurnStreamRunner.ts` — turn
+  assembly and streaming
+- `packages/agent/src/agent/SessionFinalizer.ts` — terminal + cleanup for a
+  finished session
+- `packages/agent/src/session/task-store.ts` — task state
 
 ### Tool System
 
-- `packages/agent/src/tools/` - Built-in tools
+- `packages/agent/src/tool/` - Built-in tools
 - `packages/agent/src/mcp/` - MCP server integration
 - Tool protocol adapter layer (Plan 418)
 
@@ -676,9 +743,7 @@ worker is no longer resident, which the panel treats as a no-op rather than an e
 rendering. A background launch receipt is a *successful* result that says nothing about the child —
 it must never be read as completion.
 
-## Package Workspace
-
-### Canvas Workbench Runtime (Plan 570)
+## Canvas Workbench Runtime (Plan 570)
 
 Turns a canvas into a long-running workbench (stock consoles / learning
 dashboards / project boards). The "backend" is the **Electron main process**:
@@ -715,8 +780,11 @@ apps need nothing extra.
 ## Package Workspace
 
 ```
+apps/
+└── desktop/              @duya/desktop - Electron app (main/preload/renderer/contracts)
+
 packages/
-├── agent/                @duya/agent - Agent core
+├── agent/                @duya/agent - Agent core (tools, prompts, modes)
 ├── agent-core/           @duya/agent-core - Run reasoning (zero IO)
 ├── agent-protocol/       @duya/agent-protocol - Transport-neutral wire contract
 ├── agent-runtime/        @duya/agent-runtime - Run execution engine
@@ -728,13 +796,55 @@ packages/
 ├── plugin-core/          @duya/plugin-core - Plugin system
 └── voice/                @duya/voice - Voice component
 
-apps/
-└── desktop/              @duya/desktop - Electron app (main/preload/renderer)
+scripts/                  Build, bundle, packaging, diagnostics, architecture gate
+evals/                    Agent behaviour evals (offline worker harness)
+e2e/                      Playwright _electron specs
+docs/                     Architecture, execution plans, release notes
 ```
 
-`agent-protocol`, `agent-core`, and `agent-runtime` are the plan 587
-`managed: true` boundaries (`architecture-policy.yaml`) — zero tolerance, never
-baselined.
+The root `package.json` declares `workspaces: ["packages/*", "apps/*"]` and owns
+every cross-workspace command. `apps/desktop/package.json` points `main` at
+`src/main/index.ts` and contributes three tsconfigs (`main`, `preload`,
+`renderer`) so the split process roots type-check independently.
+
+### Layered Agent Boundary
+
+`agent-protocol` → `agent-core` → `agent-runtime` is the plan 587 layering.
+`agent-protocol` carries only the transport-neutral wire contract; `agent-core`
+holds run reasoning with **zero external IO**; `agent-runtime` owns run
+execution and must not reach into Electron or the renderer. `plugin-core`
+publishes explicit subpaths (`.`, `./mcp/core/*`, `./security/*`, …) instead of
+one wide entry, so a consumer imports the slice it needs.
+
+`@duya/agent` and `@duya/ai` are still the production execution path. The
+layered packages are the target shape, not yet a replacement for it.
+
+### Shared Contracts
+
+`apps/desktop/src/contracts/` holds the DTOs that cross the main ↔ preload ↔
+renderer boundary (`git.ts`, `import.ts`), so one definition is consumed by the
+handler, the preload bridge, and the renderer instead of three copies.
+
+### Architecture Gate
+
+`architecture-policy.yaml` + `scripts/architecture/` enforce the boundaries:
+
+- `npm run architecture:check` — module-dependency, layer purity, slice
+  classification, and identity audits. `managed: true` modules
+  (`agent-protocol`, `agent-core`, `agent-runtime`) carry **zero tolerance**;
+  legacy debt is tolerated only while it matches a fingerprint in
+  `.architecture-baseline.json`.
+- The baseline is a **ratchet**, not a wish list: each migration step flips one
+  module to `managed: true` and deletes its fingerprints, so debt shrinks
+  monotonically instead of being cleared in one unreviewable sweep.
+- `npm run architecture:baseline` rewrites the baseline; `npm run
+  architecture:self-test` proves the checker itself still fires. Review the
+  baseline diff — a grown baseline is a blocked boundary, not a pass.
+- `npm run architecture:slice-graph` prints the import graph when a boundary
+  decision needs evidence.
+
+Import-boundary changes require `typecheck:all`, `architecture:check`, and an
+Electron build before push.
 
 ## Frontend Architecture
 
@@ -845,6 +955,20 @@ Filterable by component: `LogComponent` constants (AgentProcess, IPC, DB, etc.)
 
 ## Build System
 
+### Workspace Packages
+
+- Orchestrator: `scripts/build-packages.mjs` (`npm run build:packages`)
+- Order is derived from the `@duya/*` import edges — `agent-protocol` →
+  `agent-core` → `agent-runtime` → the rest
+- Per-package entry: `npm run -w @duya/<pkg> build`; typecheck equivalents
+  (`typecheck:protocol`, `typecheck:core`, `typecheck:runtime`, …) live in each
+  package and are chained by `typecheck:all`
+- `typecheck:web` / `typecheck:electron` / `typecheck:agent` and every `test*`
+  entry point build packages first (`pretest` → `build:packages`), so a stale
+  `dist/` is never mistaken for a code failure. `typecheck:cli` builds only
+  `@duya/plugin-core`, and the three layered packages typecheck their own
+  sources without a build.
+
 ### Frontend
 
 - Vite 6: `vite.config.ts`
@@ -853,64 +977,136 @@ Filterable by component: `LogComponent` constants (AgentProcess, IPC, DB, etc.)
 ### Electron
 
 - esbuild: `scripts/build-electron.mjs`
-- Output: `dist-electron/`
+- Entries: `apps/desktop/src/main/index.ts` (→ `dist-electron/main.js`),
+  `apps/desktop/src/preload/index.ts` (→ `preload.js`),
+  `apps/desktop/src/main/agents/server/index.ts` (→ `agent-server.js`),
+  `apps/desktop/src/main/project-database/worker.ts` (→ `project-database-worker.js`)
+- Output: `dist-electron/`; the root `package.json` `main` is `dist-electron/main.js`
 
 ### Agent Bundle
 
+- `npm run bundle:agent` = `build:packages` + `scripts/build-agent-bundle.mjs`
 - Format: CommonJS
 - Entry: `packages/agent/bundle/agent-process-entry.js`
 - Production: `resources/agent-bundle/agent-process-entry.js`
+- Only native/worker modules stay external: `better-sqlite3` (packaged to
+  `resources/better-sqlite3/`, path passed via `DUYA_BETTER_SQLITE3_PATH`) and
+  `BashWorker.js` (packaged to `resources/agent-bundle/BashTool/`)
+- esbuild does **not** type-check — `npm run typecheck:all` is the real gate
+
+### Architecture Gate
+
+- `architecture-policy.yaml` + `scripts/architecture/` (see
+  [Architecture Gate](#architecture-gate))
+- `npm run architecture:check`, `architecture:self-test`, `architecture:baseline`
 
 ### Packaging
 
 - electron-builder: `electron-builder.yml`
 - Output: `release/win-unpacked/`, `release/win/`
+- No `node_modules` copying in `afterPack` — the bundles are self-contained
 
 ## Testing
 
 ### Unit Tests
 
 - Vitest: `vitest.config.ts`
-- Run: `npm run test`
+- One root project covers the whole workspace: `apps/desktop/src/{renderer,
+  main,contracts}/**`, `packages/*/tests/**`, plus per-package `src`/`test`
+  globs. Renderer `.tsx` specs are included too.
+- `packages/plugin-core` and `packages/agent-protocol` are aliased to **this
+  checkout's** `dist` / `src`, so a worktree never tests the primary checkout's
+  build output.
+- Run: `npm run test` (builds packages first via `pretest`)
+
+### Architecture Tests
+
+- `scripts/architecture/*.test.ts` — layer purity, slice classification, cut
+  list, import graph. `vitest.config.ts` includes `scripts/**/*.test.ts`, so
+  these run as part of `npm run test`: a boundary regression fails as a test,
+  not only when someone remembers to run `architecture:check`.
+- `npm run test:rules` — `tests/rules-compliance.test.mjs`, run directly by
+  node (not part of the Vitest project).
+
+### Behaviour Evals
+
+- `evals/` + `npm run eval:agent:smoke` / `eval:agent:extended`
+- Runs a real bundled worker against an offline provider and asserts on real
+  artifacts. It is **not** a substitute for the production bridge / Electron /
+  packaged paths — see the plan's open items.
 
 ### E2E Tests
 
-- Playwright `_electron` API
-- Run: `npm run test:e2e`
+- Playwright `_electron` API, `e2e/playwright.config.ts`
+- Each spec passes `--duya-namespace=<name>` so userData and SQLite are fresh
+- Run: `npm run test:e2e` (requires `npm run electron:build` first)
 
 ### UI Verification
 
 - Playwright MCP
 - Requires: `npm run dev` + MCP tools
+- Browser-only Vite cannot validate the preload path — preload behaviour needs a
+  real Electron renderer
+
+### Repo Gates
+
+`npm run typecheck:all` chains: encoding, manifest keys, test-coverage
+discovery, no-ts-suppress, the package typechecks, and the Electron ratchet
+gate. Known pre-existing debt is recorded in
+`scripts/typecheck-electron-baseline.txt` — the Electron gate is a ratchet over
+known errors, not a zero-error main-process typecheck. Full-suite redness is
+tracked in the active plan; a new failure is never historic debt.
 
 ## Development Commands
 
 ```bash
 # Dev
 npm run dev                    # Vite dev server only (port 3000)
-npm run electron:dev           # Vite + Electron together
+npm run electron:dev           # Bundle agent + CLI, build Electron, run Vite + Electron
 
 # Build
 npm run build                  # Production build (Vite)
-npm run build:web             # Web frontend only
-npm run build:agent           # Build @duya/agent workspace (tsc)
-npm run bundle:agent          # Bundle Agent subprocess entry (esbuild)
-npm run electron:build         # Build Agent + bundle + Vite + Electron
+npm run build:web              # Web frontend only
+npm run build:packages         # All workspace packages, in dependency order
+npm run build:agent            # Alias of build:packages
+npm run build:cli              # @duya/cli
+npm run bundle:agent           # Agent subprocess entry (esbuild, CommonJS)
+npm run build:cli-bundle       # CLI bundle
+npm run bundle:gateway         # Gateway bundle
+npm run electron:build         # bundle:agent + CLI + gateway + Vite + Electron
 
 # Typecheck
-npm run typecheck:all         # Frontend + Agent
+npm run typecheck:all          # Encoding, manifest keys, coverage, ts-suppress,
+                               # then every package + Electron gate + evals
+npm run typecheck:web          # Renderer
+npm run typecheck:electron     # Main + preload against the known-error baseline
+npm run typecheck:protocol     # @duya/agent-protocol
+npm run typecheck:core         # @duya/agent-core
+npm run typecheck:runtime      # @duya/agent-runtime
+npm run typecheck:agent        # @duya/agent
+npm run typecheck:cli          # @duya/cli
+
+# Architecture
+npm run architecture:check          # Boundary policy vs baseline
+npm run architecture:self-test      # Prove the checker still fires
+npm run architecture:slice-graph    # Print the import graph
+npm run architecture:baseline       # Rewrite .architecture-baseline.json
 
 # Test
-npm run test                   # Vitest tests
-npm run test:watch            # Vitest watch mode
-npm run test:coverage         # Tests with coverage
-npm run test:e2e              # E2E tests
+npm run test                   # Vitest across the workspace
+npm run test:watch             # Vitest watch mode
+npm run test:coverage          # Tests with coverage
+npm run test:rules             # Repo rules compliance
+npm run test:e2e               # Playwright _electron (needs electron:build)
+npm run eval:agent:smoke       # Real worker, offline provider
+npm run eval:agent:extended    # Extended behaviour evals
 
 # Package
 npm run electron:pack         # Package current platform
 npm run electron:pack:win     # Windows (.exe installer)
 npm run electron:pack:mac     # macOS (.dmg)
 npm run electron:pack:linux   # Linux (AppImage, .deb, .rpm)
+npm run electron:verify:packaged  # Check packaged resource parity
 ```
 
 ## Data Flow Examples
@@ -981,6 +1177,46 @@ titles use bounded, allowlisted display data and localized generic labels.
 - Clear dependency boundaries
 - Can be published separately
 - TypeScript strict mode per package
+
+### Why does `packages/gateway` log through `console.*`?
+
+`packages/gateway` is bundled as a standalone CJS child process with
+`rootDir: ./src` (`scripts/build-gateway-bundle.mjs`). It cannot import the
+app's logger (`apps/desktop/src/main/logging/logger.ts`) and declares no
+`@duya/agent` dependency to reach one through, so it logs via `console.*`
+throughout. The "never use `console.*` in main-process code" rule therefore
+binds `apps/desktop/src/main/**` and the `packages/*/src/**` modules that ship
+inside the main process — **not** this tree. Introducing a second logging
+convention for a single call site would be the larger debt; the gateway gets a
+logger when it grows one.
+
+### Why are there two face engines?
+
+`apps/desktop/src/renderer/components/agent-face/` and
+`apps/desktop/src/renderer/orb/bot/` are two ports of the same small vendored
+(bloub) engine. They are not merged, and should not be. `git --follow` shows
+`agent-face` is the newer copy and a verbatim port, and the two have since
+diverged on the duya side in *opposite* directions — `orb/bot` grew
+`repere.ts` and `pointer-mood.ts`, `agent-face` grew `tile.ts`, `clock.ts`,
+`status.ts` and `AgentFace.tsx`. A merge would produce a union that neither
+copy can be diffed against upstream, i.e. a superset, not a convergence. Two
+ports of a small vendored engine is the cheaper debt. See
+`components/agent-face/README.md`.
+
+### Why are there two inbound-IM consumers?
+
+`apps/desktop/src/main/gateway/message-bus.ts` and
+`apps/desktop/src/main/channels/connector-runtime.ts` both build a
+`ChannelInboundEnvelope` and both feed the same background-wake queue, which is
+what makes them look like duplicates. They are not. They differ in transport
+(gateway child process over IPC vs in-process `onInbound` callbacks), in how the
+owning session is resolved (the gateway resolves it itself; `routeInboundToBot`
+derives `getBotSessionId(agentId)` and must create the session first), in which
+validation runs (the gateway path calls the module-level `wakeForInbound`, which
+deliberately skips the channel store; the connector path calls the
+`ChannelBackgroundWakes` method, which verifies the platform is configured), and
+in who owns the response path. Merging them would either start dropping valid
+gateway traffic or bypass the platform check.
 
 ## Glossary
 

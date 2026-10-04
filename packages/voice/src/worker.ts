@@ -38,6 +38,16 @@ export type WorkerResponse =
 
 let engine: SttEngine | null = null;
 
+/**
+ * Refusal for a `push` / `finalize` that arrives with no engine.
+ *
+ * `model_not_ready` is one of the codes the host's `normalizeErrorCode` keeps
+ * (`no_speech`, `permission_denied`, `model_not_ready`, `network`, `internal`),
+ * so the refusal survives normalization instead of degrading to `internal`.
+ */
+const NO_ENGINE_CODE = 'model_not_ready';
+const NO_ENGINE_MESSAGE = 'STT worker received audio before init completed, or after dispose';
+
 const reply = (msg: WorkerResponse): void => {
   if (!process.send) return;
   process.send(msg);
@@ -61,7 +71,12 @@ function handle(req: WorkerRequest): void {
     }
     case 'push': {
       const eng = engine;
-      if (!eng) return;
+      if (!eng) {
+        // Answered, not swallowed. A silent return here told the parent
+        // nothing, so the audio was dropped with no trace of it anywhere.
+        reply({ ok: false, kind: 'error', message: NO_ENGINE_MESSAGE, code: NO_ENGINE_CODE });
+        return;
+      }
       const chunk = req.payload?.chunk;
       if (!chunk || chunk.length === 0) return;
       eng.push(chunk)
@@ -73,7 +88,15 @@ function handle(req: WorkerRequest): void {
     }
     case 'finalize': {
       const eng = engine;
-      if (!eng) return;
+      if (!eng) {
+        // This is the branch that hung the recorder. `finalize` is the request
+        // the host is waiting on for `voice:final`, and a silent return meant
+        // neither `final` nor `error` ever came back, so the pending
+        // transcription never settled. An explicit refusal reaches the parent's
+        // `!resp.ok` path and surfaces as `voice:error`.
+        reply({ ok: false, kind: 'error', message: NO_ENGINE_MESSAGE, code: NO_ENGINE_CODE });
+        return;
+      }
       eng.finalize()
         .then((r) => {
           if (r.done) reply({ ok: true, kind: 'final', text: r.text });

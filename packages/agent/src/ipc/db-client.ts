@@ -6,6 +6,13 @@
  */
 
 import { ChildProcess } from 'child_process';
+import type {
+  ResearchActivityRow,
+  ResearchCitationRow,
+  ResearchEventRow,
+  ResearchReportRow,
+  ResearchSourceRow,
+} from '../session/research-rows.js';
 
 // IPC message types
 interface DbRequest {
@@ -452,6 +459,14 @@ export const taskDb = {
     status?: string;
     active_form?: string;
     owner?: string;
+    // The graph edges and metadata. `TaskStore.create` used to pin these to
+    // `[]`/`[]`/`{}` in its VALUES list, so a caller could never seed them and
+    // `task:block` — the very next action — depended on edges nobody could
+    // write. Sending them here means a create no longer needs a second
+    // round trip to attach its first dependency.
+    blocks?: unknown[];
+    blocked_by?: unknown[];
+    metadata?: Record<string, unknown>;
   }) => sendDbRequest('task:create', data),
 
   get: (id: string) => sendDbRequest('task:get', { id }),
@@ -490,30 +505,15 @@ export const settingDb = {
 };
 
 // ==================== Provider Operations ====================
-
-export const providerDb = {
-  getAll: () => sendDbRequest('provider:getAll', {}),
-
-  get: (id: string) => sendDbRequest('provider:get', { id }),
-
-  getActive: () => sendDbRequest('provider:getActive', {}),
-
-  upsert: (data: {
-    id: string;
-    name: string;
-    providerType?: string;
-    baseUrl?: string;
-    apiKey?: string;
-    isActive?: boolean;
-  }) => sendDbRequest('provider:upsert', data),
-
-  update: (id: string, data: Record<string, unknown>) =>
-    sendDbRequest('provider:update', { id, ...data }),
-
-  delete: (id: string) => sendDbRequest('provider:delete', { id }),
-
-  activate: (id: string) => sendDbRequest('provider:activate', { id }),
-};
+// REMOVED: `providerDb` (provider:getAll / :get / :getActive / :upsert /
+// :update / :delete / :activate). Two independent reasons it was dead:
+// `dispatchDbAction` has no `case 'provider:…'` at all — the provider
+// capability is served under the `config:provider:…` names by `configDb` — so
+// every call here would have thrown `Unknown DB action`; and nothing in the
+// repo called `providerDb` (searched every *.ts/*.tsx for the identifier; the
+// only hit was this definition). It was an interface that could neither be
+// serviced nor used. Re-add it against `config:provider:*` if a caller
+// appears.
 
 // ==================== Permission Operations ====================
 
@@ -729,24 +729,195 @@ export const researchPlanStepDb = {
     sendDbRequest('researchPlanStep:deleteByRunId', { runId }),
 };
 
+// ==================== Research Row Normalisation ====================
+
+/**
+ * The main process answers research queries with the camelCase DTOs declared
+ * in `apps/desktop/src/main/db/core/research-store.ts`, while every consumer
+ * inside the agent reads the snake_case rows declared in
+ * `session/research-rows.ts`. Both describe the same columns, so the DTO is
+ * translated here, once, at the process boundary, and the `research*Db`
+ * namespaces below hand back real rows. Putting it here rather than in the
+ * callers is the point: the
+ * `as unknown as ...Row` casts this replaces all sat in `session/db.ts`, and
+ * each one asserted a shape the value did not have, so in IPC mode every field
+ * read back `undefined` while still type-checking. A caller of the namespaces
+ * below cannot forget the conversion because there is nowhere else to do it.
+ *
+ * The wire shapes are declared here, like `DbRequest`/`DbResponse` above,
+ * because the DTOs live in the main process and the agent package must not
+ * import from it.
+ */
+interface ResearchEventDto {
+  id: string;
+  runId: string;
+  sequence: number;
+  eventType: string;
+  payloadJson: string;
+  visibility: string;
+  createdAt: number;
+}
+
+interface ResearchActivityDto {
+  id: string;
+  runId: string;
+  sequence: number;
+  kind: string;
+  title: string;
+  detail: string | null;
+  visibility: string;
+  createdAt: number;
+}
+
+interface ResearchSourceDto {
+  id: string;
+  runId: string;
+  title: string;
+  url: string | null;
+  canonicalUrl: string | null;
+  sourceType: string;
+  allowedByPolicy: boolean;
+  reliabilityJson: string | null;
+  dedupeKey: string | null;
+  rejectedReason: string | null;
+  metadataJson: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface ResearchCitationDto {
+  id: string;
+  runId: string;
+  reportId: string | null;
+  sourceId: string;
+  findingId: string | null;
+  claim: string;
+  locatorJson: string | null;
+  quotedEvidence: string | null;
+  createdAt: number;
+}
+
+interface ResearchReportDto {
+  id: string;
+  runId: string;
+  title: string | null;
+  markdown: string;
+  outlineJson: string | null;
+  sourceIdsJson: string;
+  citationIdsJson: string;
+  activitySummaryJson: string | null;
+  exportMetadataJson: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * `visibility` is `TEXT NOT NULL DEFAULT 'user'` on both tables with no CHECK
+ * constraint, and every writer stores one of the two known states, so anything
+ * else is a data bug. Fall back to the column default rather than inventing a
+ * third state. The DTO widens the column to `string`, hence the narrowing.
+ */
+function toResearchVisibility(value: string): 'user' | 'debug' {
+  return value === 'debug' ? 'debug' : 'user';
+}
+
+function toResearchEventRow(dto: ResearchEventDto): ResearchEventRow {
+  return {
+    id: dto.id,
+    run_id: dto.runId,
+    sequence: dto.sequence,
+    event_type: dto.eventType,
+    payload_json: dto.payloadJson,
+    visibility: toResearchVisibility(dto.visibility),
+    created_at: dto.createdAt,
+  };
+}
+
+function toResearchActivityRow(dto: ResearchActivityDto): ResearchActivityRow {
+  return {
+    id: dto.id,
+    run_id: dto.runId,
+    sequence: dto.sequence,
+    kind: dto.kind,
+    title: dto.title,
+    detail: dto.detail,
+    visibility: toResearchVisibility(dto.visibility),
+    created_at: dto.createdAt,
+  };
+}
+
+function toResearchSourceRow(dto: ResearchSourceDto): ResearchSourceRow {
+  return {
+    id: dto.id,
+    run_id: dto.runId,
+    title: dto.title,
+    url: dto.url,
+    canonical_url: dto.canonicalUrl,
+    source_type: dto.sourceType,
+    // The row stores the SQLite integer flag; the DTO hands back a boolean.
+    allowed_by_policy: dto.allowedByPolicy ? 1 : 0,
+    reliability_json: dto.reliabilityJson,
+    dedupe_key: dto.dedupeKey,
+    rejected_reason: dto.rejectedReason,
+    metadata_json: dto.metadataJson,
+    created_at: dto.createdAt,
+    updated_at: dto.updatedAt,
+  };
+}
+
+function toResearchCitationRow(dto: ResearchCitationDto): ResearchCitationRow {
+  return {
+    id: dto.id,
+    run_id: dto.runId,
+    report_id: dto.reportId,
+    source_id: dto.sourceId,
+    finding_id: dto.findingId,
+    claim: dto.claim,
+    locator_json: dto.locatorJson,
+    quoted_evidence: dto.quotedEvidence,
+    created_at: dto.createdAt,
+  };
+}
+
+function toResearchReportRow(dto: ResearchReportDto): ResearchReportRow {
+  return {
+    id: dto.id,
+    run_id: dto.runId,
+    title: dto.title,
+    markdown: dto.markdown,
+    outline_json: dto.outlineJson,
+    source_ids_json: dto.sourceIdsJson,
+    citation_ids_json: dto.citationIdsJson,
+    activity_summary_json: dto.activitySummaryJson,
+    export_metadata_json: dto.exportMetadataJson,
+    created_at: dto.createdAt,
+    updated_at: dto.updatedAt,
+  };
+}
+
 // ==================== Research Activity Operations ====================
 
 export const researchActivityDb = {
   create: (data: {
     id: string;
-    run_id: string;
+    // camelCase on the wire: every research READ path already sends
+    // `runId`, and the bridge reads the payload key from one place.
+    runId: string;
     sequence: number;
     kind: string;
     title: string;
     detail?: string;
     visibility?: 'user' | 'debug';
-  }) => sendDbRequest('researchActivity:create', data),
+  }): Promise<ResearchActivityRow> =>
+    sendDbRequest('researchActivity:create', data).then(raw => toResearchActivityRow(raw as ResearchActivityDto)),
 
   getByRunId: (runId: string, options?: {
     visibility?: 'user' | 'debug';
     limit?: number;
     afterSequence?: number;
-  }) => sendDbRequest('researchActivity:getByRunId', { runId, ...options }),
+  }): Promise<ResearchActivityRow[]> =>
+    sendDbRequest('researchActivity:getByRunId', { runId, ...options })
+      .then(raw => (raw as ResearchActivityDto[]).map(toResearchActivityRow)),
 
   getMaxSequence: (runId: string) =>
     sendDbRequest('researchActivity:getMaxSequence', { runId }),
@@ -760,18 +931,25 @@ export const researchActivityDb = {
 export const researchEventDb = {
   create: (data: {
     id: string;
-    run_id: string;
+    runId: string;
     sequence: number;
     event_type: string;
     payload_json: string;
     visibility?: 'user' | 'debug';
-  }) => sendDbRequest('researchEvent:create', data),
+  }): Promise<ResearchEventRow> =>
+    // The `as` below views the reply as the DTO the main process documents;
+    // the converter then reads it field by field, so the value is never
+    // spread into the row unchecked. Trusting the sender is the point: this is
+    // our own main process, reached over structured-clone IPC.
+    sendDbRequest('researchEvent:create', data).then(raw => toResearchEventRow(raw as ResearchEventDto)),
 
   getByRunId: (runId: string, options?: {
     visibility?: 'user' | 'debug';
     limit?: number;
     afterSequence?: number;
-  }) => sendDbRequest('researchEvent:getByRunId', { runId, ...options }),
+  }): Promise<ResearchEventRow[]> =>
+    sendDbRequest('researchEvent:getByRunId', { runId, ...options })
+      .then(raw => (raw as ResearchEventDto[]).map(toResearchEventRow)),
 
   getMaxSequence: (runId: string) =>
     sendDbRequest('researchEvent:getMaxSequence', { runId }),
@@ -780,7 +958,7 @@ export const researchEventDb = {
 export const researchSourceDb = {
   upsert: (data: {
     id: string;
-    run_id: string;
+    runId: string;
     title: string;
     url?: string | null;
     canonical_url?: string | null;
@@ -790,32 +968,36 @@ export const researchSourceDb = {
     dedupe_key?: string | null;
     rejected_reason?: string | null;
     metadata_json?: string | null;
-  }) => sendDbRequest('researchSource:upsert', data),
+  }): Promise<ResearchSourceRow> =>
+    sendDbRequest('researchSource:upsert', data).then(raw => toResearchSourceRow(raw as ResearchSourceDto)),
 
-  getByRunId: (runId: string) =>
-    sendDbRequest('researchSource:getByRunId', { runId }),
+  getByRunId: (runId: string): Promise<ResearchSourceRow[]> =>
+    sendDbRequest('researchSource:getByRunId', { runId })
+      .then(raw => (raw as ResearchSourceDto[]).map(toResearchSourceRow)),
 };
 
 export const researchCitationDb = {
   create: (data: {
     id: string;
-    run_id: string;
+    runId: string;
     report_id?: string | null;
     source_id: string;
     finding_id?: string | null;
     claim: string;
     locator_json?: string | null;
     quoted_evidence?: string | null;
-  }) => sendDbRequest('researchCitation:create', data),
+  }): Promise<ResearchCitationRow> =>
+    sendDbRequest('researchCitation:create', data).then(raw => toResearchCitationRow(raw as ResearchCitationDto)),
 
-  getByRunId: (runId: string, reportId?: string) =>
-    sendDbRequest('researchCitation:getByRunId', { runId, reportId }),
+  getByRunId: (runId: string, reportId?: string): Promise<ResearchCitationRow[]> =>
+    sendDbRequest('researchCitation:getByRunId', { runId, reportId })
+      .then(raw => (raw as ResearchCitationDto[]).map(toResearchCitationRow)),
 };
 
 export const researchReportDb = {
   upsert: (data: {
     id: string;
-    run_id: string;
+    runId: string;
     title?: string | null;
     markdown: string;
     outline_json?: string | null;
@@ -823,10 +1005,12 @@ export const researchReportDb = {
     citation_ids_json?: string;
     activity_summary_json?: string | null;
     export_metadata_json?: string | null;
-  }) => sendDbRequest('researchReport:upsert', data),
+  }): Promise<ResearchReportRow> =>
+    sendDbRequest('researchReport:upsert', data).then(raw => toResearchReportRow(raw as ResearchReportDto)),
 
-  getLatest: (runId: string) =>
-    sendDbRequest('researchReport:getLatest', { runId }),
+  getLatest: (runId: string): Promise<ResearchReportRow | null> =>
+    sendDbRequest('researchReport:getLatest', { runId })
+      .then(raw => (raw == null ? null : toResearchReportRow(raw as ResearchReportDto))),
 };
 
 // ==================== Research Memory Operations ====================
@@ -1127,24 +1311,14 @@ export const configDb = {
   healthGatewayStatus: () =>
     sendDbRequest('health:gatewayStatus', {}),
 
-  logsTail: (lines: number) =>
-    sendDbRequest('logs:tail', { lines }),
-
-  logsErrors: (lines: number) =>
-    sendDbRequest('logs:errors', { lines }),
-
-  pairingListPending: () => sendDbRequest('pairing:listPending', {}),
-
-  pairingListApproved: (platform?: string) => sendDbRequest('pairing:listApproved', { platform }),
-
-  pairingApprove: (platform: string, code: string) =>
-    sendDbRequest('pairing:approve', { platform, code }),
-
-  pairingRevoke: (platform: string, platformUserId: string) =>
-    sendDbRequest('pairing:revoke', { platform, platformUserId }),
-
-  pairingIsApproved: (platform: string, platformUserId: string) =>
-    sendDbRequest('pairing:isApproved', { platform, platformUserId }),
+  // REMOVED: logsTail / logsErrors (logs:tail, logs:errors) and
+  // pairingListPending / pairingListApproved / pairingApprove / pairingRevoke /
+  // pairingIsApproved (pairing:listPending, :listApproved, :approve, :revoke,
+  // :isApproved). `dispatchDbAction` has no `case` for any of the seven, so
+  // each would have thrown `Unknown DB action`, and a repo-wide search of every
+  // *.ts/*.tsx for the seven identifiers returned only these definitions. Both
+  // facts have to hold for an action to be real: a `case` in the bridge AND a
+  // caller.
 };
 
 // Initialize client on module load

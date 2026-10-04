@@ -238,6 +238,21 @@ export interface ChannelInboundEnvelope {
    * omitted — callers surface that via a skipped note in `text`.
    */
   readonly attachments?: readonly ChannelInboundAttachment[];
+  /**
+   * Conversation thread this message arrived in, when the platform has one
+   * (Feishu `thread_id`/`root_id`/`parent_id`, Telegram `message_thread_id`,
+   * Discord threads). `undefined` for a plain top-level chat message.
+   *
+   * Carried so the value survives the inbound boundary instead of being
+   * dropped at the adapter. It is deliberately NOT rendered into the wake
+   * prompt: `buildChannelInboundWakePrompt` tells the model to copy the `from`
+   * address exactly, and `ChannelAddress` cannot express a thread — no
+   * outbound path (`sendTextMessage(chatId, content, replyTo)` and friends)
+   * takes one either. Advertising a thread the reply cannot target would be a
+   * promise the send path cannot keep. Until outbound thread targeting lands,
+   * a reply to a threaded message lands in its parent chat.
+   */
+  readonly threadId?: string;
 }
 
 /**

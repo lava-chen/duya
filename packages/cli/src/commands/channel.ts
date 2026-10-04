@@ -535,8 +535,10 @@ export const runChannelCommand = {
       typeof ctx.options.platform === 'string' ? ctx.options.platform : undefined;
     const label =
       typeof ctx.options.label === 'string' ? ctx.options.label : undefined;
-    const tokenEnv =
-      typeof ctx.options['token-env'] === 'string' ? ctx.options['token-env'] : undefined;
+    // Commander camelCases, so `--token-env` arrives as `tokenEnv`. Reading
+    // `ctx.options['token-env']` asked for a key no parse ever produces, and
+    // the flag silently fell back to DUYA_CHANNEL_TOKEN.
+    const tokenEnv = typeof ctx.options.tokenEnv === 'string' ? ctx.options.tokenEnv : undefined;
     const fromStdin = ctx.options.stdin === true;
     return connectAgentChannel(ctx.format, agentId ?? '', platform ?? '', label, tokenEnv, fromStdin);
   },

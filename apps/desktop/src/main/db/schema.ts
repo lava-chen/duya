@@ -2188,6 +2188,21 @@ export const migrations: Migration[] = [
         .filter((name) => rebuildColumns.includes(name));
       const quoted = copyColumns.map((n) => `"${n}"`).join(', ');
 
+      // The rebuilt table tightens kind to 'queued' / 'followup' /
+      // 'background_notification', but a legacy table can still hold rows whose
+      // kind is retired ('correction', 'constraint', 'stop', 'abort_and_replace').
+      // Copying those verbatim would violate the new CHECK, and since the ledger
+      // marks a migration applied only on success, that abort would repeat on
+      // every boot. Project them onto 'followup' instead — the same collapse the
+      // guidance/control kinds deserve — so the copy is total and no row is lost.
+      const selectList = copyColumns
+        .map((name) =>
+          name === 'kind'
+            ? `CASE WHEN "kind" IN ('queued','followup','background_notification') THEN "kind" ELSE 'followup' END`
+            : `"${name}"`,
+        )
+        .join(', ');
+
       // runMigrations already wraps each migration in a transaction, so the
       // rebuild below runs atomically without an explicit BEGIN/COMMIT here.
       // LEGACY FROZEN — agent_mailbox moved to duya-core.db (plan 326-329);
@@ -2234,7 +2249,7 @@ export const migrations: Migration[] = [
         );
 
         INSERT INTO agent_mailbox (${quoted})
-          SELECT ${quoted} FROM agent_mailbox_old;
+          SELECT ${selectList} FROM agent_mailbox_old;
 
         DROP TABLE agent_mailbox_old;
 
@@ -2250,104 +2265,6 @@ export const migrations: Migration[] = [
           ON agent_mailbox(session_id, client_msg_id)
           WHERE client_msg_id IS NOT NULL;
       `);
-    },
-  },
-  {
-    id: 46,
-    name: 'mailbox-kind-tighten-followup-notification',
-    migrate(db: BetterSqlite3Db): void {
-      // Tighten the agent_mailbox.kind CHECK to only 'queued', 'followup' and
-      // 'background_notification'. The 'correction' / 'constraint' guidance
-      // kinds collapse into followup, and 'stop' / 'abort_and_replace' control
-      // signals run through the dedicated chat:interrupt channel, not the
-      // mailbox. SQLite cannot ALTER a CHECK constraint, so rebuild the table
-      // when a formerly-legal stale kind is present or the 'queued' kind is
-      // missing. Idempotent: a table whose SQL already uses the target kinds
-      // is left untouched.
-      const sql = (
-        db.prepare(
-          "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_mailbox'",
-        ).get() as { sql?: string } | undefined
-      )?.sql;
-      // LEGACY FROZEN — agent_mailbox moved to duya-core.db (plan 326-329). On a
-      // fresh legacy DB the table no longer exists, so there is nothing to tighten.
-      if (!sql) return;
-      if (!sql.includes("'queued'") || /'correction'|'constraint'|'stop'|'abort_and_replace'/.test(sql)) {
-        const tableInfo = db.prepare('PRAGMA table_info(agent_mailbox)').all() as Array<{ name: string; pk: number }>;
-        const rebuildColumns = [
-          'id','session_id','submitted_during_run_id','content','kind','status',
-          'priority','constraints_json','attachments_json','source','client_msg_id',
-          'created_at','claim_token','claim_expires_at','observed_at',
-          'observed_at_checkpoint','observed_by_run_id','claim_attempts',
-          'last_claim_error','edit_locked_at','apply_mode','applied_at',
-          'applied_at_checkpoint','applied_summary','resulting_user_msg_id',
-          'failure_reason','edit_history_json','cancelled_at','cancelled_by',
-          'cancel_reason',
-        ];
-        const copyColumns = tableInfo
-          .map((col) => col.name)
-          .filter((name) => rebuildColumns.includes(name));
-        const quoted = copyColumns.map((n) => `"${n}"`).join(', ');
-
-        db.exec(`
-          ALTER TABLE agent_mailbox RENAME TO agent_mailbox_old;
-
-          CREATE TABLE agent_mailbox (
-            id                     TEXT PRIMARY KEY,
-            session_id             TEXT NOT NULL,
-            submitted_during_run_id TEXT NOT NULL,
-            content                TEXT NOT NULL,
-            kind                   TEXT NOT NULL,
-            status                 TEXT NOT NULL,
-            priority               INTEGER NOT NULL DEFAULT 100,
-            constraints_json       TEXT,
-            attachments_json       TEXT,
-            source                 TEXT NOT NULL DEFAULT 'ui',
-            client_msg_id          TEXT,
-            created_at             INTEGER NOT NULL,
-            claim_token            TEXT,
-            claim_expires_at       INTEGER,
-            observed_at            INTEGER,
-            observed_at_checkpoint TEXT,
-            observed_by_run_id     TEXT,
-            claim_attempts         INTEGER NOT NULL DEFAULT 0,
-            last_claim_error       TEXT,
-            edit_locked_at         INTEGER,
-            apply_mode             TEXT,
-            applied_at             INTEGER,
-            applied_at_checkpoint  TEXT,
-            applied_summary        TEXT,
-            resulting_user_msg_id  TEXT,
-            failure_reason         TEXT,
-            edit_history_json      TEXT,
-            cancelled_at           INTEGER,
-            cancelled_by           TEXT,
-            cancel_reason          TEXT,
-            CHECK (kind IN ('queued','followup','background_notification')),
-            CHECK (status IN ('pending','observed','applied','cancelled')),
-            CHECK (apply_mode IS NULL OR apply_mode IN
-              ('promote_to_user_message','runtime_instruction','tool_guard',
-               'permission_context','interrupt_signal','deferred_to_next_turn'))
-          );
-
-          INSERT INTO agent_mailbox (${quoted})
-            SELECT ${quoted} FROM agent_mailbox_old;
-
-          DROP TABLE agent_mailbox_old;
-
-          CREATE INDEX IF NOT EXISTS idx_mailbox_claim_ready
-            ON agent_mailbox(session_id, status, priority, created_at)
-            WHERE status = 'pending'
-               OR (status = 'observed' AND claim_expires_at IS NOT NULL);
-
-          CREATE INDEX IF NOT EXISTS idx_mailbox_session_recent
-            ON agent_mailbox(session_id, created_at DESC);
-
-          CREATE UNIQUE INDEX IF NOT EXISTS uq_mailbox_client_msg
-            ON agent_mailbox(session_id, client_msg_id)
-            WHERE client_msg_id IS NOT NULL;
-        `);
-      }
     },
   },
   {

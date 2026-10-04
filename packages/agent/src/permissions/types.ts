@@ -431,6 +431,13 @@ export type ToolPermissionContext = {
   readonly alwaysAllowRules: ToolPermissionRulesBySource
   readonly alwaysDenyRules: ToolPermissionRulesBySource
   readonly alwaysAskRules: ToolPermissionRulesBySource
+  /**
+   * @deprecated No longer read by the permission pipeline. Bypass behavior is
+   * derived from `PermissionMode` through `isBypassMode` (i.e. `bypassPermissions`
+   * or `dontAsk`), not from this flag, so branching on it has no effect. New
+   * code must not read this field; the declaration is kept only so existing
+   * `ToolPermissionContext` literals (and the test suite) keep compiling.
+   */
   readonly isBypassPermissionsModeAvailable: boolean
   readonly strippedDangerousRules?: ToolPermissionRulesBySource
   readonly shouldAvoidPermissionPrompts?: boolean

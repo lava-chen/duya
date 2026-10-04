@@ -16,15 +16,30 @@
  *      killing a two-minute build mid-flight would be strictly worse than
  *      letting it finish and reporting the result. Anything longer than that
  *      must be started with `run_in_background: true`, which is unbounded.
+ *
+ * Single source of truth: the three timeout values are resolved from
+ * `utils/timeouts.ts`, which reads `BASH_DEFAULT_TIMEOUT_MS` /
+ * `BASH_MAX_FOREGROUND_TIMEOUT_MS` / `BASH_MAX_TIMEOUT_MS` from the
+ * environment. An operator can therefore actually change them; the previous
+ * hard-coded literals here silently ignored the env overrides that module
+ * already implemented.
  */
+
+import {
+  getDefaultBashTimeoutMs,
+  getMaxBashTimeoutMs,
+  getMaxForegroundBashTimeoutMs,
+} from '../../utils/timeouts.js';
 
 /**
  * Default timeout when the model omits `timeout`. Restores the historical
  * 120s bound so interactive/blocking foreground commands (e.g. `lark-cli auth
  * login`) cannot hang forever. Background tasks are intentionally NOT bounded
  * by this constant.
+ *
+ * Override with the `BASH_DEFAULT_TIMEOUT_MS` env var.
  */
-export const BASH_DEFAULT_TIMEOUT_MS = 120_000;
+export const BASH_DEFAULT_TIMEOUT_MS = getDefaultBashTimeoutMs();
 
 /**
  * Hard cap on the `timeout` field for FOREGROUND commands. The runtime will
@@ -32,8 +47,10 @@ export const BASH_DEFAULT_TIMEOUT_MS = 120_000;
  * {@link BASH_SOFT_YIELD_MS} without restarting the process, so increasing
  * timeout beyond 5 minutes is almost always the wrong choice — opt into
  * `run_in_background: true` for longer commands instead.
+ *
+ * Override with the `BASH_MAX_FOREGROUND_TIMEOUT_MS` env var.
  */
-export const BASH_MAX_FOREGROUND_TIMEOUT_MS = 300_000;
+export const BASH_MAX_FOREGROUND_TIMEOUT_MS = getMaxForegroundBashTimeoutMs();
 
 /**
  * Soft yield threshold. Foreground commands that do not complete within this
@@ -49,5 +66,7 @@ export const BASH_SOFT_YIELD_MS = 15_000;
  * BACKGROUND commands (foreground uses {@link BASH_MAX_FOREGROUND_TIMEOUT_MS}).
  * Matches the historical ceiling so existing long-running background flows
  * keep working.
+ *
+ * Override with the `BASH_MAX_TIMEOUT_MS` env var.
  */
-export const BASH_MAX_TIMEOUT_MS = 600_000;
+export const BASH_MAX_TIMEOUT_MS = getMaxBashTimeoutMs();

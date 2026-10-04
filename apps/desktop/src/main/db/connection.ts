@@ -24,6 +24,7 @@ import { getLogger, LogComponent } from '../logging/logger';
 import { initializeSchema, selfCheckAndRepairSchema } from './schema';
 import { startWalCheckpoint as startSharedWalCheckpoint } from './core/database';
 import { getCoreStoresOrNull } from './core-connection';
+import { SESSION_LIST_UNLIMITED } from './core/session-store';
 
 type BetterSqlite3 = InstanceType<typeof import('better-sqlite3')>;
 
@@ -295,7 +296,9 @@ export function getDatabaseStats(): DatabaseStats | null {
   const stores = getCoreStoresOrNull();
   if (stores) {
     try {
-      sessionCount = stores.sessions.list({ includeDeleted: true }).length;
+      // A boot-time count, not a page: opt out of `list`'s default cap so a
+      // large history does not report a capped number as the total.
+      sessionCount = stores.sessions.list({ includeDeleted: true, limit: SESSION_LIST_UNLIMITED }).length;
     } catch {
       // best-effort
     }

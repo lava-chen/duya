@@ -38,6 +38,21 @@ export async function runRefineLoop(opts: RunLoopOptions): Promise<void> {
   let consecutiveFailures = 0;
   let lastUserRequest = session.iterations.at(-1)?.userRequest ?? "";
 
+  /**
+   * Live mirror of the persisted `session.iterations` array.
+   *
+   * `patchSession` REPLACES `iterations` (see `stores/refine-store.ts`), so
+   * building the next value from `session.iterations` — the snapshot captured
+   * when this loop was entered — overwrote the store with a single-element
+   * array on every round and the panel showed only the last iteration. Each
+   * round therefore appends to the array this loop last persisted instead.
+   */
+  let iterations: RefineIteration[] = [...session.iterations];
+  const appendIteration = (iteration: RefineIteration): void => {
+    iterations = [...iterations, iteration];
+    patchSession({ iterations });
+  };
+
   for (let iter = session.iterations.length; iter < session.maxIterations; iter++) {
     if (signal?.aborted) {
       patchSession({ status: "stopped" });
@@ -85,9 +100,7 @@ export async function runRefineLoop(opts: RunLoopOptions): Promise<void> {
         diffSummary: "",
         errorMessage: msg,
       };
-      patchSession({
-        iterations: [...session.iterations, iteration],
-      });
+      appendIteration(iteration);
       consecutiveFailures += 1;
       if (consecutiveFailures >= 2) {
         patchSession({ status: "error", errorMessage: `LLM failed twice: ${msg}` });
@@ -114,17 +127,15 @@ export async function runRefineLoop(opts: RunLoopOptions): Promise<void> {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       iteration.errorMessage = `Apply failed: ${msg}`;
+      appendIteration(iteration);
       patchSession({
-        iterations: [...session.iterations, iteration],
         status: "error",
         errorMessage: msg,
       });
       return;
     }
 
-    patchSession({
-      iterations: [...session.iterations, iteration],
-    });
+    appendIteration(iteration);
 
     if (response.done) {
       patchSession({ status: "done" });

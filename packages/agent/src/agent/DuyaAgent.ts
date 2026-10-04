@@ -1502,6 +1502,15 @@ export class duyaAgent implements AgentRuntime {
     this.resolvedModes = activeModeIds.length > 0
       ? modeModifierRegistry.resolve(activeModeIds)
       : undefined;
+    // `modeResult.toolUseContext` used to be dropped on the floor: a mode's
+    // `toolUseContextPatch` was computed and then never read, so conductor
+    // resolved a `conductorCanvasId` that no canvas tool ever saw. Declared out
+    // here, at method scope, because the turn loop below consumes it and the
+    // mode block below is conditional. It is merged into the turn's
+    // ToolUseContext BEFORE the agent's own fields, so a mode can add keys but
+    // can never clobber `abortController` / `getAppState` / `setAppState` and
+    // break the executor — those are not mode-negotiable.
+    let modeToolUseContext: Record<string, unknown> = {};
     if (this.resolvedModes && this.resolvedModes.modes.length > 0) {
       // Capture the pre-mode system prompt BEFORE applyModes applies
       // prefixes. The per-turn refresh loop re-evaluates function-form
@@ -1550,6 +1559,8 @@ export class duyaAgent implements AgentRuntime {
       // mode-applied versions.
       tools = modeResult.tools.map((t) => t.definition);
       systemPromptContent = modeResult.systemPrompt;
+
+      modeToolUseContext = modeResult.toolUseContext;
 
       // applyModes filters the direct tool list. Mirror those decisions in
       // the catalog too, or a deferred target could bypass a mode block via
@@ -1939,6 +1950,9 @@ export class duyaAgent implements AgentRuntime {
       // "approve then retry" semantics silently dead on the main path.
       let turnAppState: AppState = {};
       const toolUseContext: ToolUseContext = {
+        // Mode-supplied fields first, so the agent's own fields below always
+        // win. See the comment where `modeToolUseContext` is declared.
+        ...modeToolUseContext,
         toolUseId: crypto.randomUUID(),
         abortController: this.abortController,
         getAppState: () => turnAppState,
@@ -1975,7 +1989,9 @@ export class duyaAgent implements AgentRuntime {
             activeAgents: agentDefinitions,
             allAgents: agentDefinitions,
           },
-          analyzeImage: this.visualAnalysis.analyzeImage.bind(this.visualAnalysis),
+          // Resolved per call so the vision pass is scoped to the turn that is
+          // running now — a Stop mid-analysis reaches the provider request.
+          analyzeImage: (b64, mimeType, prompt) => this.analyzeImageForCurrentTurn(b64, mimeType, prompt),
           // Phase 2A worker closure: providerName -> internalKey
           // resolver. StreamingToolExecutor consults this for
           // every model-returned tool name. The closure is
@@ -2335,18 +2351,41 @@ export class duyaAgent implements AgentRuntime {
         // dropped if compaction/clear changed the timeline while it was in flight.
         const requestEpoch = this.compactionManager.getContextEpoch();
         catalogView.currentRound = turnCount;
+        // Per-request output cap. Every provider resolves
+        // `totalOutputBudget ?? maxOutputTokens ?? maxTokens` with no
+        // `min()` (see packages/ai/src/api/anthropic-messages.ts:1898,
+        // openai-completions.ts:783, google-generative-ai.ts:425), so a
+        // `maxOutputTokens` capability value silently overrode a tighter
+        // per-request `maxTokens` — and applying the `min()` to
+        // `maxTokens` alone cannot fix it, because that is the field
+        // that loses. Resolve the effective cap here and send it in
+        // BOTH fields so whichever one a provider reads carries the
+        // tighter of the two. With no caller cap the model ceiling
+        // still wins (pi-mono governance: a known model runs at full
+        // output capability rather than the 8192 protocol fallback).
+        const capabilityMaxTokens = this.runtimeConfig?.modelCapabilities?.maxOutputTokens;
+        const effectiveMaxTokens =
+          options?.maxTokens !== undefined
+            ? Math.min(options.maxTokens, capabilityMaxTokens ?? Infinity)
+            : capabilityMaxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
         const streamGenerator = runTurnStream({
           llmClient: this.llmClient,
           llmMessages,
           systemPromptContent,
           tools,
-          maxTokens: options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+          maxTokens: effectiveMaxTokens,
           temperature: options?.temperature ?? 1,
           effort: options?.effort,
-          maxOutputTokens: this.runtimeConfig?.modelCapabilities?.maxOutputTokens,
+          maxOutputTokens: effectiveMaxTokens,
           signal: requestSignal,
           turnCount,
-          turnCommitted: doneEventHandled,
+          // Read per attempt, not once here: this deps object is built
+          // BEFORE the consumer loop below sets `doneEventHandled`, so a
+          // plain boolean snapshot was always `false` and
+          // `stream-retry`'s `turnCommitted` guard never fired — a
+          // transport failure after `done` replayed the whole turn and
+          // re-queued the already-dispatched tool calls.
+          turnCommitted: () => doneEventHandled,
           refreshDeclaredTools: () => {
             declaredToolsForRequest = new Set(tools.map((t) => t.name));
             return declaredToolsForRequest;
@@ -2658,7 +2697,13 @@ export class duyaAgent implements AgentRuntime {
               );
               executor.discard();
               for (const use of truncatedUses) {
-                messages.push({
+                // Durable push (not `messages.push`): the assistant
+                // `tool_use` was already journaled at the `done`
+                // handler, so a transient result would leave the
+                // persisted history with a `tool_use` that has no
+                // `tool_result` and the provider's strict validation
+                // 400s on the next turn after a reload.
+                this._pushDurable(messages, {
                   id: crypto.randomUUID(),
                   role: 'tool',
                   tool_call_id: use.id,
@@ -3037,6 +3082,12 @@ export class duyaAgent implements AgentRuntime {
             if (used > 0 && this.modeCoordinator) {
               void this.modeCoordinator.reportGoalTokenUsage(used);
             }
+            // Token-trace: the previous anchor must be read BEFORE the
+            // round-max assignment below mutates `roundResultUsage` —
+            // reading it afterwards made `prev` always equal
+            // `candidate`, so the off-by-one this diagnostic exists to
+            // spot could never be spotted.
+            const prevVolume = resultPromptVolume(roundResultUsage);
             roundResultUsage =
               resultPromptVolume(usage) >= resultPromptVolume(roundResultUsage) ? usage : roundResultUsage;
             // Anchor compaction decisions on real provider usage. Keeps the
@@ -3049,7 +3100,6 @@ export class duyaAgent implements AgentRuntime {
             // the log diff (the previous value is reported alongside the new
             // candidate so an off-by-one is easy to spot).
             const candidateVolume = resultPromptVolume(usage);
-            const prevVolume = roundResultUsage ? candidateVolume : 0;
             // Plan 577 §2: Observation-layer feed — input and output travel
             // separately; the manager owns the round-max defense on the
             // input slot and output never inflates the anchor.
@@ -3288,10 +3338,22 @@ export class duyaAgent implements AgentRuntime {
           }
         }
 
-        // Plan 550 step 2e (StreamFinalizer): the cleanup +
-        // AbortError synthetic tool_result injection + Plan 462
-        // error-code mapping is delegated to the finalizer so the
-        // catch block stays focused on the retry orchestration.
+        // Plan 550 step 2e (StreamFinalizer): the cleanup + AbortError
+        // synthetic tool_result injection + Plan 462 error-code mapping
+        // is delegated to the finalizer so the catch block stays focused
+        // on the retry orchestration.
+        //
+        // Plan 587: a Stop pressed while the stream is running lands
+        // here as an `AbortError`, and it must take the SAME contract as
+        // the between-turns interrupt below — the durable repair (every
+        // unmatched `tool_use` paired with an "Interrupted by user"
+        // result, which only this finalizer has the wiring for) plus
+        // Stop + SessionEnd + done(aborted). It is therefore routed
+        // through this one call site rather than `finalizeAbort()`:
+        // the two paths share the finalizer's `dispatchStopAndSessionEnd`
+        // helper, so the hooks fire exactly once either way, and
+        // `finalizeAbort` alone would drop the history repair and leave
+        // a partially drained assistant `tool_use` unpaired.
         const errorFinalizer = new SessionFinalizer({
           messages,
           turnCount,
@@ -3626,7 +3688,11 @@ export class duyaAgent implements AgentRuntime {
       // Align claim tokens with the guidance (non-empty) rows.
       const guidanceTokens = guidanceRows.map((row) => claim.claimTokens[claim.rows.indexOf(row)]);
       const adapted = await prepareMailboxGuidance(guidanceRows, guidanceTokens, {
-        seqIndex, imageInputSupported, analyzeImage: this.visualAnalysis.analyzeImage.bind(this.visualAnalysis),
+        seqIndex,
+        imageInputSupported,
+        // Per-call resolution: the guidance pass runs inside a turn, so this
+        // links to that turn's abort scope rather than a process-lifetime one.
+        analyzeImage: (b64, mimeType, prompt) => this.analyzeImageForCurrentTurn(b64, mimeType, prompt),
       });
       for (const ctx of adapted) {
         const projected = projectRuntimeContextToProviderMessage(ctx);
@@ -4349,6 +4415,40 @@ export class duyaAgent implements AgentRuntime {
   }
 
   // === end streamChat helpers ===========================================
+
+  /**
+   * Run a vision pass under the abort scope of the turn executing RIGHT NOW.
+   *
+   * `visualAnalysis` is built in the constructor, long before
+   * `abortController` exists (it is re-created at the top of every
+   * `streamChat`, so it is genuinely per-turn, not process-lifetime).
+   * A signal therefore cannot be captured at construction time. Resolving
+   * it inside this wrapper — which the tool layer calls at execution time —
+   * is what makes Stop during image analysis actually cancel the provider
+   * request instead of letting it stream to completion. The child
+   * controller mirrors the compaction summarizer (see `summarizeConversation`).
+   */
+  private analyzeImageForCurrentTurn(
+    imageBase64: string,
+    mediaType: string,
+    prompt?: string,
+  ): Promise<string> {
+    const turnController = this.abortController;
+    if (!turnController) {
+      // No turn in flight (a one-shot or background caller that never went
+      // through streamChat). There is nothing to link to, so run un-cancellable
+      // rather than fail an analysis the user never interrupted.
+      return this.visualAnalysis.analyzeImage(imageBase64, mediaType, prompt);
+    }
+    const childController = createChildAbortController(turnController);
+    return this.visualAnalysis
+      .analyzeImage(imageBase64, mediaType, prompt, childController.signal)
+      .finally(() => {
+        // Drop the parent abort listener once the pass settles.
+        const disposable = childController as AbortController & { dispose?: () => void };
+        disposable.dispose?.();
+      });
+  }
 
   /**
    * 涓柇褰撳墠瀵硅瘽

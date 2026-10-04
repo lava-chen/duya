@@ -65,7 +65,11 @@ describe('createHasPermissionsToUseTool', () => {
     })
   })
 
-  it('ignores user deny rules for internal canvas tools', async () => {
+  it('honours user deny rules for internal canvas tools', async () => {
+    // Regression: the deny-rule lookup used to sit BELOW the internal-tool
+    // safety gate, so a user who explicitly denied `canvas_manage` still had
+    // it silently allowed. A deny rule the user configured must win for every
+    // tool, internal or not — same as the non-internal case above.
     const result = await hasPermissions(
       'canvas_manage',
       { action: 'list' },
@@ -73,11 +77,7 @@ describe('createHasPermissionsToUseTool', () => {
         alwaysDenyRules: { userSettings: ['canvas_manage'] },
       }),
     )
-    expect(result.behavior).toBe('allow')
-    expect(result.decisionReason).toMatchObject({
-      type: 'safetyCheck',
-      reason: 'canvas_manage is an internal canvas operation.',
-    })
+    expect(result.behavior).toBe('deny')
   })
 
   it.each(['AskUserQuestion', 'read_module', 'show_widget', 'LSP', 'task', 'Agent', 'Task', 'send_artifact'])('allows internal tool %s in default mode', async (toolName) => {
@@ -150,13 +150,27 @@ describe('createHasPermissionsToUseTool', () => {
     expect(result.behavior).toBe('deny')
   })
 
-  it('ignores user deny rules for internal state-only tools', async () => {
+  it('honours user deny rules for internal state-only tools', async () => {
+    // Same regression as the canvas case: the internal-tool allow gate used
+    // to run before the deny lookup, making an explicit user deny rule a
+    // no-op for every tool on the internal allowlist.
     const result = await hasPermissions(
       'AskUserQuestion',
       {},
       createContext('default', {
         alwaysDenyRules: { userSettings: ['AskUserQuestion'] },
       }),
+    )
+    expect(result.behavior).toBe('deny')
+  })
+
+  it('still allows internal tools when no deny rule is configured', async () => {
+    // The inversion above must not turn the internal allowlist off: with no
+    // user deny rule the safety gate is still what allows these.
+    const result = await hasPermissions(
+      'AskUserQuestion',
+      {},
+      createContext('default'),
     )
     expect(result.behavior).toBe('allow')
     expect(result.decisionReason).toMatchObject({

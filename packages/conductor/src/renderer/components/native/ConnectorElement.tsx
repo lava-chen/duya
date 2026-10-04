@@ -38,9 +38,23 @@ const DEFAULT_ARROW_LENGTH = 10.5;
 const DEFAULT_ARROW_HALF_WIDTH = 5.5;
 const BOLD_ARROW_LENGTH = 23;
 const BOLD_ARROW_HALF_WIDTH = 12;
-const ELBOW_STUB_LENGTH = 40;
 const ELBOW_CLEARANCE = 28;
 const ENDPOINT_CLEARANCE_PX = 6;
+
+/**
+ * Single source of truth for elbow connector geometry defaults.
+ *
+ * `ELBOW_STUB_LENGTH` is the committed/persisted stub; `ELBOW_CORNER_RADIUS` is
+ * the default corner radius applied when `config.cornerRadius` is absent.
+ *
+ * The draft preview in `CanvasArea.tsx` MUST import these same values. It
+ * previously called `computeElbowRoutePoints` / `computeRoundedElbowPath`
+ * without arguments, so it fell back to the domain defaults (stub 32, corner
+ * radius 14) while this file used 40 / 12 — the connector visibly "jumped"
+ * on commit because the geometry the user dragged was not the geometry saved.
+ */
+export const ELBOW_STUB_LENGTH = 40;
+export const ELBOW_CORNER_RADIUS = 12;
 
 const HEX_CONNECTOR_COLOR = /^#[0-9a-f]{6}$/i;
 
@@ -324,7 +338,7 @@ export function getComputedConnectorData(
       chooseElbowRoute(srcPoint, srcDir, tgtPoint, tgtDir, waypoints, obstacles),
     );
     return {
-      path: computeRoundedElbowPath(points, Number(connector.config.cornerRadius ?? 12)),
+      path: computeRoundedElbowPath(points, Number(connector.config.cornerRadius ?? ELBOW_CORNER_RADIUS)),
       srcPoint,
       tgtPoint,
       sourceCenter,
@@ -566,7 +580,7 @@ export const ConnectorPath: React.FC<ConnectorPathProps> = ({
     computedData,
     sourceLineEnd,
     targetLineEnd,
-    Number(connector.config.cornerRadius ?? 12),
+    Number(connector.config.cornerRadius ?? ELBOW_CORNER_RADIUS),
     arrowLength,
   );
   const elbowHandles = computedData.elbowPoints?.slice(0, -1).flatMap((point, segmentIndex) => {

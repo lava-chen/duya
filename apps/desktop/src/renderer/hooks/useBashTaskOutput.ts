@@ -55,9 +55,15 @@ export function useBashTaskOutput(task: BashBackgroundTaskSnapshot | null): UseB
   // Reset state when the target file changes (task switch). The ref skips
   // the mount pass so the poll effect below doesn't run twice on mount.
   const prevFileRef = useRef<string | null>(null);
+  // The file the view is currently showing. `disposedRef` only guards
+  // unmount, so a read still in flight when the task switches would
+  // otherwise resolve and paint the previous task's output under the new
+  // task's header.
+  const currentFileRef = useRef<string | null>(outputFile);
   useEffect(() => {
     if (prevFileRef.current === outputFile) return;
     prevFileRef.current = outputFile;
+    currentFileRef.current = outputFile;
     setOutput('');
     setError(null);
     setLoading(outputFile !== null);
@@ -71,6 +77,7 @@ export function useBashTaskOutput(task: BashBackgroundTaskSnapshot | null): UseB
     try {
       const result = await window.electronAPI?.bashTasks?.readOutput(outputFile);
       if (disposedRef.current) return;
+      if (currentFileRef.current !== outputFile) return;
       if (!result || !result.ok) {
         setError(result?.error ?? 'read failed');
         return;
@@ -78,10 +85,10 @@ export function useBashTaskOutput(task: BashBackgroundTaskSnapshot | null): UseB
       setError(null);
       setOutput(result.output ?? '');
     } catch {
-      if (!disposedRef.current) setError('read failed');
+      if (!disposedRef.current && currentFileRef.current === outputFile) setError('read failed');
     } finally {
       inFlightRef.current = false;
-      if (!disposedRef.current) setLoading(false);
+      if (!disposedRef.current && currentFileRef.current === outputFile) setLoading(false);
     }
   }, [outputFile]);
 

@@ -7,6 +7,7 @@
  */
 
 import type { ConnectorInputSchema } from '../connector-types.js';
+import { authorizationHeader } from '../connector-types.js';
 import type {
   ConnectorInvokeResult,
   ConnectorModule,
@@ -118,7 +119,7 @@ export function listGoogleDescriptors(connectionId: string): ConnectorToolDescri
   ];
 }
 
-async function searchDriveFiles(args: unknown, accessToken: string, fetchImpl: typeof fetch): Promise<ConnectorInvokeResult> {
+async function searchDriveFiles(args: unknown, accessToken: string, fetchImpl: typeof fetch, tokenType?: string): Promise<ConnectorInvokeResult> {
   const input = asRecord(args);
   const query = stringValue(input.query);
   const folderId = stringValue(input.folderId);
@@ -147,7 +148,7 @@ async function searchDriveFiles(args: unknown, accessToken: string, fetchImpl: t
   url.searchParams.set('fields', 'nextPageToken,incompleteSearch,files(' + DRIVE_FILE_FIELDS + ')');
   url.searchParams.set('supportsAllDrives', 'true');
   url.searchParams.set('includeItemsFromAllDrives', 'true');
-  const response = await fetchImpl(url.toString(), { headers: { Authorization: 'Bearer ' + accessToken } });
+  const response = await fetchImpl(url.toString(), { headers: { Authorization: authorizationHeader(accessToken, tokenType) } });
   if (!response.ok) return googleFailure('search files', response.status);
   const data = (await response.json()) as { files?: GoogleDriveFile[]; nextPageToken?: string; incompleteSearch?: boolean };
   return {
@@ -163,20 +164,20 @@ async function searchDriveFiles(args: unknown, accessToken: string, fetchImpl: t
   };
 }
 
-async function getDriveFile(args: unknown, accessToken: string, fetchImpl: typeof fetch): Promise<ConnectorInvokeResult> {
+async function getDriveFile(args: unknown, accessToken: string, fetchImpl: typeof fetch, tokenType?: string): Promise<ConnectorInvokeResult> {
   const fileId = resolveFileId(args);
   if (!fileId.success) return fileId.result;
-  const result = await fetchDriveFile(fileId.data, accessToken, fetchImpl);
+  const result = await fetchDriveFile(fileId.data, accessToken, fetchImpl, tokenType);
   if (!result.success) return result.result;
   const source = toSource(result.data);
   return source ? { success: true, data: source } : invalidArguments('Google Drive did not return a valid file record');
 }
 
-async function readDriveFile(args: unknown, accessToken: string, fetchImpl: typeof fetch): Promise<ConnectorInvokeResult> {
+async function readDriveFile(args: unknown, accessToken: string, fetchImpl: typeof fetch, tokenType?: string): Promise<ConnectorInvokeResult> {
   const fileId = resolveFileId(args);
   if (!fileId.success) return fileId.result;
   const maxCharacters = clampNumber(asRecord(args).maxCharacters, 20_000, 1_000, 50_000);
-  const fileResult = await fetchDriveFile(fileId.data, accessToken, fetchImpl);
+  const fileResult = await fetchDriveFile(fileId.data, accessToken, fetchImpl, tokenType);
   if (!fileResult.success) return fileResult.result;
   const source = toSource(fileResult.data);
   if (!source) return invalidArguments('Google Drive did not return a valid file record');
@@ -185,7 +186,7 @@ async function readDriveFile(args: unknown, accessToken: string, fetchImpl: type
   }
   const readUrl = buildReadUrl(source.id, source.mimeType);
   if (!readUrl) return unsupportedFile('Unsupported file type for text reading: ' + source.mimeType);
-  const response = await fetchImpl(readUrl, { headers: { Authorization: 'Bearer ' + accessToken } });
+  const response = await fetchImpl(readUrl, { headers: { Authorization: authorizationHeader(accessToken, tokenType) } });
   if (!response.ok) return googleFailure('read file', response.status);
   const content = await response.text();
   return {
@@ -199,11 +200,11 @@ async function readDriveFile(args: unknown, accessToken: string, fetchImpl: type
   };
 }
 
-async function fetchDriveFile(fileId: string, accessToken: string, fetchImpl: typeof fetch): Promise<{ success: true; data: GoogleDriveFile } | { success: false; result: ConnectorInvokeResult }> {
+async function fetchDriveFile(fileId: string, accessToken: string, fetchImpl: typeof fetch, tokenType?: string): Promise<{ success: true; data: GoogleDriveFile } | { success: false; result: ConnectorInvokeResult }> {
   const url = new URL('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(fileId));
   url.searchParams.set('fields', DRIVE_FILE_FIELDS);
   url.searchParams.set('supportsAllDrives', 'true');
-  const response = await fetchImpl(url.toString(), { headers: { Authorization: 'Bearer ' + accessToken } });
+  const response = await fetchImpl(url.toString(), { headers: { Authorization: authorizationHeader(accessToken, tokenType) } });
   if (!response.ok) return { success: false, result: googleFailure('get file', response.status) };
   return { success: true, data: (await response.json()) as GoogleDriveFile };
 }
@@ -329,10 +330,10 @@ export function createGoogleConnector(fetchImpl: typeof fetch = fetch): Connecto
     listDescriptors(connectionId: string) {
       return listGoogleDescriptors(connectionId);
     },
-    async invoke(action: string, args: unknown, accessToken: string): Promise<ConnectorInvokeResult> {
-      if (action === DRIVE_SEARCH_ACTION) return searchDriveFiles(args, accessToken, fetchImpl);
-      if (action === DRIVE_GET_ACTION) return getDriveFile(args, accessToken, fetchImpl);
-      if (action === DRIVE_READ_ACTION) return readDriveFile(args, accessToken, fetchImpl);
+    async invoke(action: string, args: unknown, accessToken: string, tokenType?: string): Promise<ConnectorInvokeResult> {
+      if (action === DRIVE_SEARCH_ACTION) return searchDriveFiles(args, accessToken, fetchImpl, tokenType);
+      if (action === DRIVE_GET_ACTION) return getDriveFile(args, accessToken, fetchImpl, tokenType);
+      if (action === DRIVE_READ_ACTION) return readDriveFile(args, accessToken, fetchImpl, tokenType);
       return {
         success: false,
         error: { code: 'unknown_action', message: 'Unknown google action: ' + action, retriable: false },

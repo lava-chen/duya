@@ -58,6 +58,15 @@ export interface TaskCreateInput {
   status?: string;
   activeForm?: string | null;
   owner?: string | null;
+  /**
+   * Seed dependency edges. Optional so existing callers are unaffected;
+   * `create` binds them (defaulting to the column defaults `[]` / `{}`)
+   * instead of hardcoding empty values, so a caller that already knows the
+   * graph does not need a follow-up `update` before `task:block`.
+   */
+  blocks?: string[];
+  blockedBy?: string[];
+  metadata?: Record<string, unknown>;
 }
 
 export interface TaskUpdateInput {
@@ -125,7 +134,7 @@ export class TaskStore {
           status, blocks, blocked_by, metadata, created_at, updated_at
         ) VALUES (
           @id, @session_id, @subject, @description, @active_form, @owner,
-          @status, '[]', '[]', '{}', @created_at, @updated_at
+          @status, @blocks, @blocked_by, @metadata, @created_at, @updated_at
         )`,
       )
       .run({
@@ -136,10 +145,20 @@ export class TaskStore {
         status: input.status ?? 'pending',
         active_form: input.activeForm ?? null,
         owner: input.owner ?? null,
+        // Dependency edges are seeded, not hardcoded: `task:block` writes
+        // blocks/blocked_by right after create, so a caller that already knows
+        // its edges must be able to write them in one INSERT. The empty-value
+        // defaults below are the column defaults, so callers that pass nothing
+        // keep the previous hardcoded behaviour.
+        blocks: JSON.stringify(input.blocks ?? []),
+        blocked_by: JSON.stringify(input.blockedBy ?? []),
+        metadata: JSON.stringify(input.metadata ?? {}),
         created_at: now,
         updated_at: now,
       });
-    return this.get(input.id)!;
+    const created = this.get(input.id);
+    if (!created) throw new Error(`task create failed: row not readable after insert (id=${input.id})`);
+    return created;
   }
 
   get(id: string): CoreTask | null {
@@ -388,8 +407,12 @@ export class PermissionLedger {
         status: input.status,
         decision: input.decision ?? input.status,
         message: input.message ?? null,
-        updated_permissions: input.updatedPermissions ? JSON.stringify(input.updatedPermissions) : null,
-        updated_input: input.updatedInput ? JSON.stringify(input.updatedInput) : null,
+        // `!== undefined`, not truthiness: `updatedPermissions: []` and
+        // `updatedInput: {}` are real, editable values (the user cleared the
+        // tool set / emptied the arguments) and must persist as '[]' / '{}'.
+        // Only an omitted field clears the column to NULL.
+        updated_permissions: input.updatedPermissions !== undefined ? JSON.stringify(input.updatedPermissions) : null,
+        updated_input: input.updatedInput !== undefined ? JSON.stringify(input.updatedInput) : null,
         resolved_at: now,
       });
     return this.get(id);
@@ -656,7 +679,11 @@ export class GoalStore {
         created_at: now,
         updated_at: now,
       });
-    return this.get(input.sessionId)!;
+    const created = this.get(input.sessionId);
+    if (!created) {
+      throw new Error(`goal create failed: row not readable after insert (sessionId=${input.sessionId})`);
+    }
+    return created;
   }
 
   /** Get the goal for a session (null if no row or session missing). */
@@ -940,7 +967,11 @@ export class SpawnEdgeStore {
         spawn_type: input.spawnType ?? 'subagent',
         spawned_at: Date.now(),
       });
-    return this.get(id)!;
+    const recorded = this.get(id);
+    if (!recorded) {
+      throw new Error(`spawn edge record failed: row not readable after insert (id=${id})`);
+    }
+    return recorded;
   }
 
   get(id: string): SpawnEdge | null {

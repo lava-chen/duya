@@ -9,7 +9,8 @@
  *   `${...}` 模板插值   → JS 表达式（params.x → args.x，nodeId.f → var?.f）
  *   when 表达式         → if 条件（比较/逻辑/count/any/all 的受限翻译）
  *   六类节点            → wf.tool / gui / approve / decide / agent / log
- *   map                 → wf.map + 回调
+ *   map                 → wf.map + 回调（prompt/input 取 map.* 优先，
+ *                         parallel:false 降级为 concurrency:1）
  *   on_error: skip      → try/catch 继续；retry → 有界重试循环；fail → 默认抛出
  *   triggers            → 无对应（frontmatter 只有 description/whenToUse/args）——
  *                         丢弃并产出 warning
@@ -137,7 +138,18 @@ function objectToExpr(value: unknown, level: number): string {
 
 // ─── 节点编译（层级 L：0 = 函数体顶层） ───
 
-/** 单个 gui step → 对象字面量（text 字段插值）。 */
+/**
+ * 单个 gui step → 对象字面量。
+ *
+ * Only `text` is interpolated. That is the declared template surface of a gui
+ * step: `validate.ts` scans `step.text` and nothing else, and the recorder
+ * (converter.ts) stores every recorded value literally, so `key` /
+ * `element` are literal by contract. Interpolating `key` here would compile a
+ * hypothetical `${...}` into a runtime expression the def validator never
+ * promised — and `gui-runner` deep-interpolates the whole step at replay time
+ * anyway, so the runtime already owns that concern. Deliberate, not an
+ * oversight.
+ */
 function guiStepToExpr(step: GuiStep, level: number): string {
   const parts = Object.entries(step).map(([k, v]) => {
     if (k === 'text' && typeof v === 'string') return `${lit(k)}: ${textToExpr(v)}`;
@@ -240,15 +252,32 @@ function mapCallLines(node: WorkflowNode, varName: string, L: number, warnings: 
         .replace(new RegExp(`\\$\\{\\s*${map.as}((?:\\.[a-zA-Z0-9_]+)*)\\s*\\}`, 'g'), (_m, rest: string) => `\${${asVar}${rest}}`),
     );
 
+  // The map primitive owns its body, and `validate.ts` scans BOTH
+  // `map.prompt` / `map.input` (validate.ts §map) and the node-level
+  // `node.prompt` / `node.input` as the template surface of a fan-out. The
+  // planner emits the former, the recorder the latter, so honour the more
+  // specific declaration and say so when they disagree. Dropping both (the old
+  // behaviour) compiled a map+agent node into `wf.agent(type, '')`, which the
+  // runtime rejects with "prompt must be a non-empty string" at run time.
+  const mapPrompt = map.prompt;
+  const nodePrompt = node.prompt;
+  if (mapPrompt !== undefined && nodePrompt !== undefined && mapPrompt !== nodePrompt) {
+    warnings.push(
+      `map node "${node.id}" declares both map.prompt and prompt with different values — map.prompt wins`,
+    );
+  }
+  const bodyPrompt = mapPrompt ?? nodePrompt ?? '';
+  const bodyInput = map.input ?? node.input;
+
   let innerLines: string[];
   if (node.agent) {
     const opts: string[] = [];
     if (node.model) opts.push(`model: ${lit(node.model)}`);
     if (node.output_schema) opts.push(`outputSchema: ${objectToExpr(node.output_schema, L + 1)}`);
     const optsArg = opts.length > 0 ? `, { ${opts.join(', ')} }` : '';
-    innerLines = [`return await wf.agent(${lit(node.agent)}, ${rewrite(node.prompt ?? '')}${optsArg});`];
+    innerLines = [`return await wf.agent(${lit(node.agent)}, ${rewrite(bodyPrompt)}${optsArg});`];
   } else if (node.tool) {
-    const input = node.input ? objectToExpr(node.input, L + 1) : undefined;
+    const input = bodyInput ? objectToExpr(bodyInput, L + 1) : undefined;
     innerLines = [`return await wf.tool(${lit(node.tool)}${input !== undefined ? `, ${input}` : ''});`];
   } else {
     warnings.push(`map node "${node.id}" wraps neither agent nor tool — emitted as a log stub`);
@@ -256,11 +285,28 @@ function mapCallLines(node: WorkflowNode, varName: string, L: number, warnings: 
   }
 
   const pad = '  '.repeat(L);
-  const concurrency = map.concurrency !== undefined ? `, { concurrency: ${map.concurrency} }` : '';
+  // `parallel: false` is an explicit SERIAL fan-out. dwf.map has no serial
+  // switch, so it lowers to a concurrency of 1 — the same semaphore path with
+  // one permit, which still honours the abort-on-failure contract in runMap.
+  // Dropping the flag (the old behaviour) silently turned a declared serial
+  // fan-out concurrent, which is the exact opposite of what was asked for and
+  // matters for any item with side effects.
+  const opts: string[] = [];
+  if (map.parallel === false) {
+    if (map.concurrency !== undefined) {
+      warnings.push(
+        `map node "${node.id}" declares parallel: false together with concurrency: ${map.concurrency} — the serial declaration wins and concurrency is ignored`,
+      );
+    }
+    opts.push('concurrency: 1');
+  } else if (map.concurrency !== undefined) {
+    opts.push(`concurrency: ${map.concurrency}`);
+  }
+  const mapOpts = opts.length > 0 ? `, { ${opts.join(', ')} }` : '';
   return [
     `const ${varName} = await wf.map(${items}, async (${asVar}, i) => {`,
     ...innerLines.map((l) => `${pad}  ${l}`),
-    `${pad}}${concurrency});`,
+    `${pad}}${mapOpts});`,
   ];
 }
 

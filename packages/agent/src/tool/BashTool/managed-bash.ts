@@ -172,8 +172,15 @@ export async function startManagedBash(params: StartManagedBashParams): Promise<
     }
   };
 
+  // The deadline that is actually armed right now. `promoteToBackground`
+  // re-arms the watchdog with BASH_MAX_TIMEOUT_MS without touching `params`,
+  // so reporting `params.foregroundTimeoutMs` understated the real ceiling
+  // for every auto-promoted command.
+  let armedTimeoutMs: number | null = null;
+
   const armWatchdog = (ms: number | null): void => {
     clearWatchdog();
+    armedTimeoutMs = ms;
     if (ms === null || !Number.isFinite(ms) || ms <= 0) return;
     if (scope.disposed) return;
     watchdog = scope.setTimeout(() => {
@@ -210,7 +217,7 @@ export async function startManagedBash(params: StartManagedBashParams): Promise<
 
     const error =
       spawnError ??
-      (timedOut ? `Timed out after ${params.foregroundTimeoutMs}ms` : undefined) ??
+      (timedOut ? `Timed out after ${armedTimeoutMs ?? params.foregroundTimeoutMs}ms` : undefined) ??
       (canceled ? 'Cancelled' : undefined);
 
     const text = readOutputTail(outputFile, MANAGED_BASH_RESULT_READ_BYTES);

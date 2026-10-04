@@ -22,6 +22,7 @@
 import { existsSync } from 'fs';
 import { resolve as pathResolve, isAbsolute } from 'path';
 
+import { isWithin } from '../plugins/loader/capability-discovery';
 import {
   expandMcpServerConfig,
 } from './env-expansion';
@@ -450,7 +451,7 @@ function staticPathCheck(
         if (c.pluginRoot) {
           const normalizedResolved = pathResolve(resolved);
           const normalizedRoot = pathResolve(c.pluginRoot);
-          if (!normalizedResolved.startsWith(normalizedRoot)) {
+          if (!isWithin(normalizedRoot, normalizedResolved)) {
             return {
               status: 'allowed_paths_violation',
               issue: allowedPathsViolationIssue(c, inventoryId, scriptArg),

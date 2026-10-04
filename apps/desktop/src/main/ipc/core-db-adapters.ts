@@ -826,6 +826,9 @@ export function ipcTaskToCoreCreate(data: {
   status?: string;
   active_form?: string | null;
   owner?: string | null;
+  blocks?: string[];
+  blocked_by?: string[];
+  metadata?: Record<string, unknown>;
 }): TaskCreateInput {
   return {
     id: data.id,
@@ -835,6 +838,11 @@ export function ipcTaskToCoreCreate(data: {
     status: data.status ?? 'pending',
     activeForm: data.active_form ?? null,
     owner: data.owner ?? null,
+    // Dependency edges / metadata are part of the create input; omitting them
+    // made a caller that already knew the graph seed an empty one.
+    ...(data.blocks !== undefined ? { blocks: data.blocks } : {}),
+    ...(data.blocked_by !== undefined ? { blockedBy: data.blocked_by } : {}),
+    ...(data.metadata !== undefined ? { metadata: data.metadata } : {}),
   };
 }
 

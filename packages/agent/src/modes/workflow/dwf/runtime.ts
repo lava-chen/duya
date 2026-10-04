@@ -67,6 +67,15 @@ export interface DwfHostPorts {
   runAsk?(question: string, ctx: HostCallContext): Promise<{ answer: string | null }>;
   /** Human approval（498 卡管线）。resolve approve/deny/timeout。 */
   requestApproval(spec: { prompt: string; timeoutMs?: number }, ctx: HostCallContext): Promise<{ decision: 'approve' | 'deny' | 'timeout' }>;
+  /**
+   * Resume-only: the decision already on record for this run's approval, if
+   * any. Consulted by `wf.approve` when `DwfRunOptions.resuming` is set, so a
+   * run that suspended ON this approval does not raise a second card for a
+   * question the user already answered. Return `undefined` when nothing is on
+   * record and the caller should ask. Omit the port to keep the pre-resume
+   * behaviour (always ask).
+   */
+  lookupPriorApproval?(spec: { runId: string; prompt: string }): Promise<{ decision: 'approve' | 'deny' | 'timeout' } | undefined>;
   /** 551 DecisionService 桥。缺席 = 决策面不可用（走 onLowConfidence 路径）。 */
   decide?: DwfDecisionPort;
   /** 产物通道。缺席时 publish 只落 journal；返回 descriptor 时其 ref/relPath 进 journal（产物可点）。 */
@@ -84,9 +93,13 @@ export interface DwfHostPorts {
 export class DwfApprovalDeniedError extends Error {
   constructor(
     readonly prompt: string,
-    readonly kind: 'denied' | 'escalate',
+    readonly kind: 'denied' | 'timed_out_fail' | 'timed_out_escalate',
   ) {
-    super(kind === 'denied' ? `approval denied: ${prompt}` : `approval timed out (escalate): ${prompt}`);
+    super(
+      kind === 'denied'
+        ? `approval denied: ${prompt}`
+        : `approval timed out (on_timeout=${kind === 'timed_out_fail' ? 'fail' : 'escalate'}): ${prompt}`,
+    );
     this.name = 'DwfApprovalDeniedError';
   }
 }
@@ -200,7 +213,11 @@ export interface DwfApi {
    *   摘要，天然不与首轮撞缓存。
    */
   agent(agentType: string | DwfAgentObjectSpec, prompt?: string, opts?: { model?: string; outputSchema?: Record<string, unknown>; sticky?: string }): Promise<unknown>;
-  /** 人在环审批。deny 抛错；timeout 按 onTimeout：fail=抛错、skip=返回 null、escalate=抛 escalate。 */
+  /**
+   * 人在环审批。deny 抛错（与 onTimeout 无关）。timeout 按 onTimeout 三态，
+   * 三态互不折叠：skip=返回 null、fail=抛 timed_out_fail、
+   * escalate=重新问询一次后再一个等待窗口，仍未答复则抛 timed_out_escalate。
+   */
   approve(prompt: string, opts: { timeoutHours?: number; onTimeout: 'fail' | 'skip' | 'escalate' }): Promise<null | undefined>;
   /**
    * 升级问询（plan 565 Phase D，ZCode escalate 的对应物）：把自由文本问题投给
@@ -228,13 +245,66 @@ export interface DwfApi {
 
 // ─── 运行 ───
 
+/** What `wf.approve` writes into the journal, per attempt (see `wf.approve`). */
+const APPROVAL_REQ_HASH = (prompt: string): string =>
+  computeReqHash('approval', { prompt });
+
+/**
+ * The prior decision for this exact `wf.approve` prompt, read off the journal.
+ *
+ * This is the ledger `wf.approve` already writes: every attempt appends a
+ * `kind:'approval'` / `action:'approve'` / `nodeKind:'human'` record whose
+ * `reqHash` is `computeReqHash('approval', { prompt })`. Matching on the
+ * reqHash (not the truncated `inputSummary`) is what makes this exact: two
+ * different prompts in one script never collide, and the same prompt always
+ * matches.
+ *
+ * Only a TERMINAL record counts. A trailing `running` record is the shape a
+ * suspended run leaves behind — there the user never answered, so there is
+ * no decision to reuse and the caller must ask again.
+ *
+ * `succeeded` carries the literal result: `'approved'` / `'skipped'`
+ * (an `onTimeout:'skip'` timeout), or `null`/absent for the other shapes.
+ * Anything that did not succeed is not an approval, and the two failure
+ * shapes the runtime raises (`denied` and the two `timed_out_*` kinds) are
+ * collapsed to `deny`: the port's contract is "what should `askHost` answer",
+ * and refusing is the only answer that keeps a resume fail-closed.
+ */
+export function priorApprovalFromJournal(
+  journal: Journal,
+  prompt: string,
+): { decision: 'approve' | 'deny' } | undefined {
+  const reqHash = APPROVAL_REQ_HASH(prompt);
+  const terminal = journal
+    .all()
+    .filter(
+      (r) =>
+        r.kind === 'approval' &&
+        r.action === 'approve' &&
+        r.nodeKind === 'human' &&
+        r.reqHash === reqHash &&
+        (r.status === 'succeeded' || r.status === 'failed'),
+    )
+    // Last write wins: an escalated re-ask appends a second terminal record.
+    .pop();
+  if (!terminal) return undefined;
+  if (terminal.status === 'succeeded' && terminal.result === 'approved') {
+    return { decision: 'approve' };
+  }
+  return { decision: 'deny' };
+}
+
 export interface DwfRunOptions {
   runId: string;
   journal: Journal;
   budget?: BudgetLedger;
   /** 脚本 args（frontmatter 声明）。缺省值在这里应用。 */
   args?: Record<string, unknown>;
-  /** resume 判定：true 时 approve 走宿主的既有决定（缓存/已批准）直接放行。 */
+  /**
+   * resume 判定：true 时 approve 先问宿主既有决定（`lookupPriorApproval`），
+   * 命中就直接放行；宿主未实现该端口时退回「重新发卡」（旧行为）。
+   * journal 缓存只认 succeeded 的调用，因此它救不了「卡在审批上挂起」这一种。
+   */
   resuming?: boolean;
   /**
    * Run 级 agent 模型（plan 568）：`wf.agent` 未显式传 `opts.model` 时的默认。
@@ -433,13 +503,34 @@ async function runMap<T, R>(
   const lane = new Semaphore(limit);
   const results: R[] = new Array(items.length);
   let nextIndex = 0;
+  // Shared by every worker below: the arrow functions are all created in this
+  // scope, so a plain `let` is enough — no atomics, no per-worker copy.
+  //
+  // INVARIANT: once `aborted` is set, NO worker may start another `fn` call.
+  // A rejection from one item rejects `Promise.all` and takes the run terminal
+  // upstream (`runDwfScript` → `failFrame` → `finishRun({status:'failed'})`), so
+  // a sibling that keeps pulling indices would keep invoking tools — with real
+  // side effects — after the run was already terminal. A call already in flight
+  // cannot be recalled (there is no cancellation channel into the host), so the
+  // guarantee is "no NEW invocation starts", not "nothing runs at all".
+  let aborted = false;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
     for (;;) {
+      if (aborted) return;
       const index = nextIndex++;
       if (index >= items.length) return;
       const release = await lane.acquire();
       try {
+        // Re-check after the semaphore wait: a sibling may have failed while
+        // this worker was parked, and the index is already consumed.
+        if (aborted) return;
         results[index] = await fn(items[index]!, index);
+      } catch (err) {
+        // Abort BEFORE rethrowing, so siblings stop pulling indices while the
+        // rejection is still propagating (a worker parked on `lane.acquire()`
+        // would otherwise wake up and start the next item).
+        aborted = true;
+        throw err;
       } finally {
         release();
       }
@@ -696,16 +787,57 @@ export function createDwfApi(ports: DwfHostPorts, opts: DwfRunOptions): DwfApi {
     },
 
     async approve(prompt, approveOpts) {
-      const { value } = await cachedCall('approval', 'approve', 'human', { prompt }, async () => {
+      // `fresh` = the escalation re-ask: it must go to the user again, never
+      // back to the stored decision the resume path just replayed.
+      const askHost = async (fresh = false): Promise<'approve' | 'deny' | 'timeout'> => {
+        // Resume path: the journal only replays calls that already SUCCEEDED,
+        // so an approval that was still in flight when the run suspended is
+        // re-asked on resume even though the host may already hold the user's
+        // decision. A host that can answer from storage implements
+        // `lookupPriorApproval` and is consulted first; without it this falls
+        // through to a fresh card (unchanged behaviour).
+        if (!fresh && opts.resuming === true && ports.lookupPriorApproval) {
+          const prior = await ports.lookupPriorApproval({ runId: ctx.runId, prompt });
+          if (prior) return prior.decision;
+        }
         const res = await ports.requestApproval(
           { prompt, ...(approveOpts.timeoutHours !== undefined ? { timeoutMs: approveOpts.timeoutHours * 3_600_000 } : {}) },
           ctx,
         );
-        if (res.decision === 'approve') return { value: 'approved' as const };
-        if (res.decision === 'deny') throw new DwfApprovalDeniedError(prompt, 'denied');
-        // timeout → 按 onTimeout 三态（YAML human 节点同一条语义）。
+        return res.decision;
+      };
+
+      /** Record which timeout policy actually fired — the journal is the only
+       *  durable trace of the three-way split. */
+      const noteTimeoutPolicy = (policy: 'fail' | 'escalate'): void => {
+        journal.append({
+          kind: 'node_result',
+          nodeId: callNodeId(callSeq++, `approve:${policy}`),
+          attempt: 1,
+          status: 'running',
+          nodeKind: 'human',
+          action: 'approve',
+          inputSummary: `approval timed out — onTimeout: ${policy}`,
+        });
+      };
+
+      const { value } = await cachedCall('approval', 'approve', 'human', { prompt }, async () => {
+        const decision = await askHost();
+        if (decision === 'approve') return { value: 'approved' as const };
+        if (decision === 'deny') throw new DwfApprovalDeniedError(prompt, 'denied');
+        // timeout → onTimeout 三态，每态各自可辨（YAML human 节点同一条语义）。
         if (approveOpts.onTimeout === 'skip') return { value: 'skipped' as const };
-        throw new DwfApprovalDeniedError(prompt, 'escalate');
+        if (approveOpts.onTimeout === 'fail') {
+          noteTimeoutPolicy('fail');
+          throw new DwfApprovalDeniedError(prompt, 'timed_out_fail');
+        }
+        // escalate = 一次重新问询 + 再一个等待窗口，之后才失败——与
+        // human-runner 的 escalate 契约一致；有界为恰好一次重问。
+        noteTimeoutPolicy('escalate');
+        const escalated = await askHost(true);
+        if (escalated === 'approve') return { value: 'approved' as const };
+        if (escalated === 'deny') throw new DwfApprovalDeniedError(prompt, 'denied');
+        throw new DwfApprovalDeniedError(prompt, 'timed_out_escalate');
       });
       // skip 的 timeout 在 journal 里是 succeeded('skipped')，对脚本呈现为 null。
       return value === 'skipped' ? null : undefined;

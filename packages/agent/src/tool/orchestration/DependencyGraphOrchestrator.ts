@@ -11,8 +11,9 @@
  * `ToolDependencyDeclaration` from 3a and computes a topologically
  * ordered execution plan. Tools with no dependencies run in parallel
  * up to `maxConcurrency`; tools that share a `writePaths` set
- * serialise against each other; tools that declare `requires` wait
- * for the named tools.
+ * serialise against each other; a tool's `readPaths` serialise it
+ * against any writer touching the same path (reads stay parallel with
+ * each other); tools that declare `requires` wait for the named tools.
  *
  * This file is the **minimum viable** implementation: pure scheduling
  * logic over an in-memory graph. StreamingToolExecutor wiring (3c)
@@ -89,15 +90,20 @@ export const DEFAULT_MAX_CONCURRENCY = 5;
  *
  *   1. Build a name-keyed index of every tool-use in the batch (for
  *      `requires` lookups). Missing names make the tool "unresolved".
- *   2. Resolve the runtime write-path set for each tool-use via
- *      `extractWritePaths(input)`; tools without an extractor inherit
- *      the static `writePaths` array. The `__from_input__` sentinel
- *      means "compute from input"; `UNKNOWN_PATHS` means "could not".
+ *   2. Resolve the runtime write-path and read-path sets for each tool-use
+ *      via `extractWritePaths(input)` / `extractReadPaths(input)`; tools
+ *      without an extractor inherit the static array. The `__from_input__`
+ *      sentinel means "compute from input"; `UNKNOWN_PATHS` means "could
+ *      not", and acts as a wildcard against every other path.
  *   3. Greedily schedule tool-uses into waves. A tool-use is ready when:
  *        - Every name in its `requires` set has been scheduled in an
  *          earlier wave.
  *        - It does not share a write-path with any tool-use already
  *          scheduled in the current wave.
+ *        - It does not read a path that a writer in the current wave
+ *          touches, and does not write a path that a reader in the
+ *          current wave touches. Reads never conflict with reads, so
+ *          read-only batches pack exactly as before.
  *   4. When no tool-use is ready but the batch is not empty, the batch
  *      has a cycle — the offending tool-uses move to `unresolved` and
  *      the planner returns.
@@ -132,9 +138,36 @@ export function planExecution(
     return extracted ?? UNKNOWN_PATHS;
   };
 
+  // Same resolution on the read side. This used to be plumbed all the way
+  // from ToolExecutionPipeline and then never read, which made the
+  // documented read/write serialisation a silent no-op.
+  const readPathsFor = (toolUse: OrchestrationToolUse): readonly string[] => {
+    const decl = normaliseDependencies(toolUse.dependencies);
+    if (decl.readPaths.length === 0) return [];
+    const hasFromInput = decl.readPaths.includes('__from_input__');
+    if (!hasFromInput) return decl.readPaths;
+    const extracted = toolUse.extractReadPaths?.(toolUse.input);
+    return extracted ?? UNKNOWN_PATHS;
+  };
+
+  /**
+   * True when `paths` touches anything already claimed by `claimed`, with
+   * `UNKNOWN_PATHS` acting as a wildcard on either side: a path we could not
+   * resolve conflicts with everything, exactly like the write-side rule.
+   */
+  const conflictsWith = (paths: readonly string[], claimed: ReadonlySet<string>): boolean => {
+    if (paths.length === 0 || claimed.size === 0) return false;
+    if (paths.includes(UNKNOWN_PATHS[0])) return true;
+    for (const path of claimed) {
+      if (path === UNKNOWN_PATHS[0] || paths.includes(path)) return true;
+    }
+    return false;
+  };
+
   while (scheduled.size < toolUses.length) {
     const wave: OrchestrationToolUse[] = [];
     const waveWritePaths = new Set<string>();
+    const waveReadPaths = new Set<string>();
 
     for (const toolUse of toolUses) {
       if (scheduled.has(toolUse.toolUseId)) continue;
@@ -161,17 +194,26 @@ export function planExecution(
       // Write-path serialisation: this tool-use may not share a write
       // path with anything already in the current wave.
       const myWrites = writePathsFor(toolUse);
-      if (
-        myWrites.length > 0 &&
-        Array.from(waveWritePaths).some((path) =>
-          myWrites.includes(path) || myWrites.includes(UNKNOWN_PATHS[0]),
-        )
-      ) {
+      if (conflictsWith(myWrites, waveWritePaths)) {
+        continue;
+      }
+
+      // Read/write serialisation: a read may not share a path with a
+      // writer already in the wave, and a writer may not clobber a path a
+      // reader in this wave is about to observe. Reads never block other
+      // reads — two reads of the same file are safe in parallel — so the
+      // existing read-only batching is untouched.
+      const myReads = readPathsFor(toolUse);
+      if (conflictsWith(myReads, waveWritePaths)) {
+        continue;
+      }
+      if (conflictsWith(myWrites, waveReadPaths)) {
         continue;
       }
 
       wave.push(toolUse);
       for (const path of myWrites) waveWritePaths.add(path);
+      for (const path of myReads) waveReadPaths.add(path);
     }
 
     if (wave.length === 0) {

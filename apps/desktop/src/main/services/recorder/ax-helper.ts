@@ -36,6 +36,7 @@ import {
   type AxForegroundInfo,
   type AxAppInfo,
   type AxEnumeratedElement,
+  type AxHelperError,
   type AxHelperErrorCode,
   type AxHelperRequest,
   type AxHelperResponse,

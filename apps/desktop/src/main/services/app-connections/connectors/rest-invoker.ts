@@ -31,7 +31,7 @@ import type {
   AppToolDeclaration,
   RestInvokeDeclaration,
 } from '@duya/plugin-core/connectors/app-schema';
-import type { ConnectorInvokeResult } from '../connector-types.js';
+import { authorizationHeader, type ConnectorInvokeResult } from '../connector-types.js';
 
 const DEFAULT_RETRYABLE_STATUS = [502, 503, 504];
 
@@ -122,10 +122,7 @@ function buildHeaders(invoke: RestInvokeDeclaration, ctx: RestInvokeContext): Re
     (key) => key.toLowerCase() === 'authorization',
   );
   if (!hasAuth && ctx.accessToken) {
-    const scheme = ctx.tokenType && ctx.tokenType.toLowerCase() !== 'bearer'
-      ? ctx.tokenType
-      : 'Bearer';
-    headers.Authorization = `${scheme} ${ctx.accessToken}`;
+    headers.Authorization = authorizationHeader(ctx.accessToken, ctx.tokenType);
   }
   return headers;
 }

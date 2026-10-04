@@ -10,10 +10,18 @@
  * camelCase `AutomationCron` type. Persistence mirrors `ConfigStore`:
  * `@iarna/toml` stringify + `write-file-atomic` (mode 0o600).
  *
- * Dedupe contract: `createCron` is idempotent on `(name, schedule fingerprint,
- * normalized workingDirectory)` — re-submitting the same job returns the existing
- * row instead of appending a duplicate. `dedupeCrons` collapses legacy duplicates
- * that pre-date this guarantee, keeping the oldest row by `created_at`.
+ * Dedupe contract: `createCron` is idempotent on the routine identity key
+ * (`cronIdentityKey`: name, schedule fingerprint, normalized workingDirectory,
+ * event listeners, bot binding) — re-submitting the same job returns the
+ * existing row instead of appending a duplicate. `dedupeCrons` groups by that
+ * SAME key, collapsing legacy duplicates that pre-date this guarantee and
+ * keeping the oldest row by `created_at`; routines that differ in listeners or
+ * bot binding are distinct and are never collapsed.
+ *
+ * Concurrency: only the policies in `CONCURRENCY_POLICIES` are implemented
+ * (`skip` / `parallel` / `replace`). Anything else — including the `queue`
+ * value the CLI DTO type still advertises — is rejected on write and coerced
+ * to `skip` on read, so an unimplemented mode can never mean "unbounded".
  */
 
 import * as fs from 'node:fs';
@@ -22,6 +30,7 @@ import { randomUUID } from 'node:crypto';
 import { parse, stringify } from '@iarna/toml';
 import writeFileAtomic from 'write-file-atomic';
 import { resolveConfigRoot } from '../config/compass';
+import { getLogger, LogComponent } from '../logging/logger';
 import type {
   AutomationCron,
   ConcurrencyPolicy,
@@ -73,6 +82,19 @@ function normalizeAgentBinding(agent: string | null | undefined): string | null 
 }
 
 /**
+ * Optional provider pin for a routine (`model_provider_id`). Unset / blank
+ * means "unpinned" and returns null; the run then resolves the default
+ * provider. The value is a provider-store id, not a free-form model string,
+ * and is only trimmed here — a stale id simply fails to resolve at run time,
+ * where `resolveLlmProvider` falls back to the default.
+ */
+function normalizeModelProviderId(value: string | null | undefined): string | null {
+  if (value === undefined || value === null) return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+/**
  * Stable string key for a `CronSchedule`. Normalizes wire-side variants
  * (everyMs vs every, cronExpr vs expr, ms vs "5m") so logically identical
  * schedules collide even when written through different code paths. Used by
@@ -107,6 +129,86 @@ function scheduleNeedsCreatedAtAnchor(schedule: CronSchedule | null | undefined)
   return schedule?.kind === 'cron';
 }
 
+/**
+ * Identity of a routine: the ONE key that decides whether two cron rows are
+ * the same job. Both `createCron` (idempotency on create) and `dedupeCrons`
+ * (collapse legacy duplicates) derive from it, so the two can never disagree
+ * — the previous split let `dedupeCrons` collapse two rows that `createCron`
+ * deliberately keeps apart.
+ *
+ * The key covers every field that changes what the routine *is*, not how it
+ * runs: name, normalized workspace, schedule fingerprint, event listeners
+ * and bot binding. Two routines that differ only in listeners or in the agent
+ * they fire into are DIFFERENT routines and must survive `cron dedupe`.
+ * Runtime/knob fields (concurrency, retries, enabled, effort, last_run_at)
+ * are deliberately excluded: a later re-tune of one row must not make it a
+ * different job.
+ */
+export function cronIdentityKey(job: {
+  name?: string;
+  schedule?: CronSchedule | null;
+  working_directory?: string;
+  event_triggers?: RoutineEventTrigger[] | null;
+  agent?: string | null;
+}): string {
+  return [
+    job.name ?? '',
+    scheduleFingerprint(job.schedule ?? null),
+    resolveAutomationWorkspace(job.working_directory ?? ''),
+    JSON.stringify(job.event_triggers ?? []),
+    (job.agent ?? '').trim(),
+  ].join('\u0001');
+}
+
+/** Build the same key from a create/update input (already normalized fields). */
+function cronIdentityKeyFromInput(input: {
+  name: string;
+  schedule: CronSchedule | null;
+  workingDirectory: string;
+  eventTriggers: RoutineEventTrigger[] | null | undefined;
+  agent: string | null;
+}): string {
+  return cronIdentityKey({
+    name: input.name,
+    schedule: input.schedule,
+    working_directory: input.workingDirectory,
+    event_triggers: input.eventTriggers ?? null,
+    agent: input.agent,
+  });
+}
+
+/**
+ * Concurrency policies the scheduler actually implements. `'queue'`
+ * (serialise behind the previous run) is NOT implemented, so a stored or
+ * requested value is rejected on the write path and coerced to the safe
+ * `'skip'` on the read path — never to `'parallel'`, which would turn an
+ * unimplemented mode into unbounded concurrency.
+ */
+const CONCURRENCY_POLICIES = new Set<ConcurrencyPolicy>(['skip', 'parallel', 'replace']);
+
+function assertConcurrencyPolicy(value: unknown): ConcurrencyPolicy {
+  if (typeof value === 'string' && CONCURRENCY_POLICIES.has(value as ConcurrencyPolicy)) {
+    return value as ConcurrencyPolicy;
+  }
+  throw new Error(
+    `unsupported concurrency policy: ${JSON.stringify(value)} (expected one of ${[...CONCURRENCY_POLICIES].join(', ')})`,
+  );
+}
+
+/** Read-side counterpart: unknown/absent values become 'skip' with a WARN. */
+function readConcurrencyPolicy(value: unknown, cronId: string): ConcurrencyPolicy {
+  if (value === undefined || value === null) return 'skip';
+  if (typeof value === 'string' && CONCURRENCY_POLICIES.has(value as ConcurrencyPolicy)) {
+    return value as ConcurrencyPolicy;
+  }
+  getLogger().warn(
+    'cronjob.toml: unsupported concurrency policy; falling back to skip',
+    { cronId, value },
+    LogComponent.Automation,
+  );
+  return 'skip';
+}
+
 /** On-disk TOML shape (snake_case); the public API is camelCase `AutomationCron`. */
 export interface CronJobFile {
   id?: string;
@@ -117,6 +219,13 @@ export interface CronJobFile {
   schedule?: CronSchedule;
   working_directory?: string;
   model?: string;
+  /**
+   * Provider store id `model` belongs to. Absent = unpinned, resolved against
+   * the default provider at run time. Deliberately NOT part of
+   * `cronIdentityKey` / `cron dedupe`: re-pinning a routine to another vendor
+   * re-tunes the same routine, it does not make a new one.
+   */
+  model_provider_id?: string;
   /** Per-cron session permission profile (plan 574); absent = 'auto' at run time. */
   permission_mode?: string;
   /** Per-cron reasoning effort (plan 574); absent = 'off' at run time. */
@@ -263,24 +372,29 @@ export class CronFileStore {
     const name = input.name.trim();
     const prompt = input.prompt.trim();
     const workingDirectory = resolveAutomationWorkspace(input.workingDirectory);
-    const fingerprint = scheduleFingerprint(input.schedule ?? null);
-    const triggersFingerprint = JSON.stringify(eventTriggers ?? []);
     // Plan 476 P2.3a: optional bot binding — validate eagerly so a bad slug
     // never reaches the file.
     const agent = normalizeAgentBinding(input.agent);
+    // Optional provider pin (model_provider_id). Blank = unpinned.
+    const modelProviderId = normalizeModelProviderId(input.modelProviderId);
+    // A concurrency policy the scheduler does not implement is a config
+    // error, not something to silently round to 'parallel'.
+    const concurrencyPolicy =
+      input.concurrencyPolicy === undefined ? 'skip' : assertConcurrencyPolicy(input.concurrencyPolicy);
 
-    // Idempotency: a create request that matches an existing job on
-    // (name, schedule, workingDirectory, agent, triggers) returns the
-    // existing row. This makes repeated "create in chat" / agent-tool calls
-    // collapse into a single job instead of stacking duplicates.
-    const existing = this.doc.jobs.find(
-      (j) =>
-        j.name === name &&
-        resolveAutomationWorkspace(j.working_directory) === workingDirectory &&
-        scheduleFingerprint(j.schedule ?? null) === fingerprint &&
-        JSON.stringify(j.event_triggers ?? []) === triggersFingerprint &&
-        (j.agent ?? null) === agent,
-    );
+    // Idempotency: a create request that matches an existing job's identity
+    // key (see `cronIdentityKey` — name, workspace, schedule, listeners, bot
+    // binding) returns the existing row. This makes repeated "create in chat"
+    // / agent-tool calls collapse into a single job instead of stacking
+    // duplicates, and it is the same key `dedupeCrons` groups by.
+    const identityKey = cronIdentityKeyFromInput({
+      name,
+      schedule: input.schedule ?? null,
+      workingDirectory,
+      eventTriggers,
+      agent,
+    });
+    const existing = this.doc.jobs.find((j) => cronIdentityKey(j) === identityKey);
     if (existing) {
       // Bump `updated_at` so a repeated "create" still surfaces as the
       // freshest row in `listCrons` — mirrors the UX of an actual insert
@@ -299,11 +413,12 @@ export class CronFileStore {
       ...(input.schedule != null ? { schedule: input.schedule } : {}),
       working_directory: workingDirectory,
       model: input.model?.trim() || undefined,
+      ...(modelProviderId ? { model_provider_id: modelProviderId } : {}),
       permission_mode: normalizeCronPermissionMode(input.permissionMode),
       effort: normalizeCronEffort(input.effort),
       ...(agent ? { agent } : {}),
       ...(eventTriggers && eventTriggers.length ? { event_triggers: eventTriggers } : {}),
-      concurrency: input.concurrencyPolicy ?? 'skip',
+      concurrency: concurrencyPolicy,
       max_retries: input.maxRetries ?? DEFAULT_MAX_RETRIES,
       last_run_at: 0,
       last_error: null,
@@ -317,21 +432,21 @@ export class CronFileStore {
   }
 
   /**
-   * Collapse legacy duplicates: group jobs by (name, schedule fingerprint,
-   * normalized workingDirectory), keep the oldest job in each group, drop
+   * Collapse legacy duplicates: group jobs by the shared routine identity key
+   * (`cronIdentityKey` — name, normalized workspace, schedule fingerprint,
+   * event listeners, bot binding), keep the oldest job in each group, drop
    * the rest. Returns the ids that were removed so callers can audit-log
    * the cleanup. Runtime state (last_run_at / last_error / retry_count)
    * stays on the kept row; drops only discard the redundant row entries.
+   *
+   * Sharing `createCron`'s key is the point: two rows that createCron treats
+   * as the same job are the duplicates, and two routines that differ in their
+   * listeners or bot binding are NOT duplicates and survive.
    */
   dedupeCrons(): { removedIds: string[]; kept: number } {
     const groups = new Map<string, CronJobFile[]>();
     for (const job of this.doc.jobs) {
-      const key =
-        job.name +
-        '\u0001' +
-        scheduleFingerprint(job.schedule ?? null) +
-        '\u0001' +
-        resolveAutomationWorkspace(job.working_directory);
+      const key = cronIdentityKey(job);
       const list = groups.get(key);
       if (list) list.push(job);
       else groups.set(key, [job]);
@@ -379,6 +494,12 @@ export class CronFileStore {
     }
     if (patch.workingDirectory !== undefined) job.working_directory = resolveAutomationWorkspace(patch.workingDirectory);
     if (patch.model !== undefined) job.model = patch.model.trim() || undefined;
+    if (patch.modelProviderId !== undefined) {
+      // Empty string / null unpins the routine (back to the default provider).
+      const pinned = normalizeModelProviderId(patch.modelProviderId);
+      if (pinned) job.model_provider_id = pinned;
+      else delete job.model_provider_id;
+    }
     if (patch.permissionMode !== undefined) {
       // Invalid values clear the field (falling back to the run-time default) rather than persisting garbage.
       job.permission_mode = normalizeCronPermissionMode(patch.permissionMode);
@@ -387,7 +508,7 @@ export class CronFileStore {
       // Empty string resets the effort to the legacy default ('off' at run time).
       job.effort = normalizeCronEffort(patch.effort);
     }
-    if (patch.concurrencyPolicy !== undefined) job.concurrency = patch.concurrencyPolicy;
+    if (patch.concurrencyPolicy !== undefined) job.concurrency = assertConcurrencyPolicy(patch.concurrencyPolicy);
     if (patch.maxRetries !== undefined) job.max_retries = patch.maxRetries;
     if (patch.enabled !== undefined) job.enabled = patch.enabled;
     if (patch.agent !== undefined) {
@@ -474,10 +595,17 @@ export class CronFileStore {
       schedule: job.schedule ?? null,
       workingDirectory: job.working_directory ?? '',
       model: job.model ?? '',
+      modelProviderId: normalizeModelProviderId(job.model_provider_id) ?? null,
       permissionMode: (job.permission_mode ?? null) as AutomationCron['permissionMode'],
       effort: job.effort ?? null,
       enabled: job.enabled !== false,
-      concurrencyPolicy: job.concurrency ?? 'skip',
+      // Read-side fail-closed: a stored value outside the implemented set
+      // (e.g. a hand-written `concurrency = "queue"`) must not reach the
+      // scheduler, where an unrecognised policy falls through to unbounded
+      // parallel execution. 'skip' is the conservative choice — the fire is
+      // dropped while one is in flight rather than doubled up. WARN, not
+      // throw: one stray field must not make the whole file unloadable.
+      concurrencyPolicy: readConcurrencyPolicy(job.concurrency, job.id ?? ''),
       maxRetries: job.max_retries ?? DEFAULT_MAX_RETRIES,
       lastRunAt: lastRunAt > 0 ? lastRunAt : null,
       lastError: job.last_error ?? null,

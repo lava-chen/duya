@@ -24,11 +24,19 @@ export interface ToolInvokeDispatcherDeps {
   registry: ToolRegistry;
   /** The exact immutable catalog view that the current request exposed. */
   getSnapshot?: () => ToolSnapshot | undefined;
-  /** Schema detail reads scoped to this request/session. */
+  /**
+   * @deprecated Vestigial. These three were the injection site of a
+   * revision/round-based schema-staleness guard that decision 06e5617a
+   * removed in favour of validating against the LIVE schema on every dispatch
+   * (`tests/unit/tool-catalog.test.ts` documents that removal and pins the
+   * live-validator behaviour instead). Nothing here reads them; removing the
+   * members requires the same change at the `DuyaAgent.streamChat` injection
+   * site, which passes all three.
+   */
   getLoadedSchemaRevision?: (toolId: string) => string | undefined;
-  /** Provider round in which each schema result became visible to the model. */
+  /** @deprecated See {@link ToolInvokeDispatcherDeps.getLoadedSchemaRevision}. */
   getLoadedSchemaRound?: (toolId: string) => number | undefined;
-  /** Current provider round, used to prevent same-response detail + invoke batches. */
+  /** @deprecated See {@link ToolInvokeDispatcherDeps.getLoadedSchemaRevision}. */
   getCurrentRound?: () => number;
   /** Current-turn profile/mode/allowlist eligibility by stable tool ID. */
   isEligibleTool?: (toolId: string) => boolean;
@@ -121,6 +129,9 @@ export function createToolInvokeDispatcherFromRegistry(
       // Validate against the live schema before permission checks and execution.
       // A catalog detail read is optional: valid arguments can be dispatched
       // immediately, and schema changes are handled by live validation.
+      // This validator IS the staleness guard, by decision 06e5617a — the
+      // three `getLoadedSchema*` deps below are the vestigial injection site
+      // of the earlier revision-based check (see their doc comment).
       try {
         const validate = getCatalogValidator(current);
         if (!validate(args)) {

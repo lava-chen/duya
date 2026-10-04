@@ -60,11 +60,9 @@ describe('isToolWithinWorkspace (workspace boundary)', () => {
   // ever removes an auto-allow fast path (this function answers "may we skip
   // the prompt?"), never a hard gate, so a missing root degrades to "ask the
   // user" rather than to "allowed".
-  // TWO separate temp trees. The root set deliberately includes the
-  // workspace's PARENT directory (so a subdirectory-of-a-repo workspace
-  // still works), which means anything under the parent is legitimately
-  // in-bounds. To demonstrate a real escape the target has to live outside
-  // the parent tree too.
+  // TWO separate temp trees. The root set is exactly the workspace itself
+  // plus the additional working directories — the workspace's PARENT is no
+  // longer a root — so a target anywhere outside the workspace tree escapes.
   const workspaceRoot = mkdtempSync(path.join(tmpdir(), 'duya-ws-'));
   const outsiderRoot = mkdtempSync(path.join(tmpdir(), 'duya-out-'));
   const workspace = path.join(workspaceRoot, 'project');
@@ -136,7 +134,7 @@ describe('isToolWithinWorkspace (workspace boundary)', () => {
     expect(isToolWithinWorkspace('TodoWrite', {}, context)).toBe(false);
   });
 
-  it('returns false when neither the workspace nor its parent exists', () => {
+  it('returns false when the workspace does not exist', () => {
     // `isPathWithinRoots` realpaths each root and skips one that does not
     // exist, so a workspace that was never created yields no anchor at all.
     // This only removes an auto-allow fast path: the call still falls through

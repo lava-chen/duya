@@ -98,7 +98,14 @@ export class DecisionService {
           if (answer.kind === 'noul') {
             this.calibration.log('noul', id, answer.p, options?.outcome);
           } else {
-            const conf = answer.confidence ?? Object.values(answer.distribution)[0];
+            // Confidence for the calibration record is the LIKELIEST
+            // candidate, not the first one declared — the old
+            // `Object.values(distribution)[0]` recorded declaration order,
+            // so tuning the thresholds off these records was fitting the
+            // wrong probability. `topCandidates` sorts descending and
+            // `Array.prototype.sort` is stable, so ties break on
+            // declaration order and the value is reproducible.
+            const conf = answer.confidence ?? topCandidates(answer.distribution, 1)[0]?.p;
             if (typeof conf === 'number') this.calibration.log(q.kind, id, conf, options?.outcome);
           }
         }

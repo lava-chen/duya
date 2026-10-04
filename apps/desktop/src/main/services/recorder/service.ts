@@ -70,6 +70,21 @@ export type RecorderStatus =
   | 'recording'
   | 'stopping';
 
+/**
+ * Thrown when a start cannot produce a live session. Carries a
+ * machine-readable `reason` so the renderer/IPC layer can route to the
+ * permission card instead of showing a generic failure.
+ */
+export class RecorderStartError extends Error {
+  constructor(
+    public readonly reason: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'RecorderStartError';
+  }
+}
+
 export interface RecorderStatusSnapshot {
   status: RecorderStatus;
   sessionId: string | null;
@@ -232,7 +247,30 @@ export class RecorderService {
       await this.startInFlight;
       return this.getSnapshot();
     }
-    this.startInFlight = this.doStart();
+    this.startInFlight = this.doStart().catch(async (err) => {
+      // A failed start must never report itself as in-progress. Unwind the
+      // half-started session through the normal stop path (store, tracker,
+      // worker, timers) so no orphan survives, then rethrow the real reason.
+      try {
+        await this.stop();
+      } catch (stopErr) {
+        logger.error(
+          'recorder cleanup after failed start failed',
+          stopErr instanceof Error ? stopErr : new Error(String(stopErr)),
+          undefined,
+          LogComponent.ComputerUse,
+        );
+      }
+      // doStop normally lands on 'idle'; force it if the unwinding itself
+      // threw part-way, otherwise the next Start would be swallowed by the
+      // 'starting' short-circuit at the top of this method.
+      if (this.status !== 'idle') {
+        this.sessionId = null;
+        this.startedAt = null;
+        this.setStatus('idle');
+      }
+      throw err;
+    });
     try {
       await this.startInFlight;
     } finally {
@@ -333,22 +371,27 @@ export class RecorderService {
       onFailed: (reason) => this.handleWorkerFailed(reason),
     };
     // plan 572 Phase 4 (macOS): the hook tap needs Accessibility +
-    // Input Monitoring. A missing grant would silently produce an
-    // empty event stream — surface a structured failure instead.
+    // Input Monitoring. A missing grant means the session would record
+    // ZERO input events, so this branch must not report 'recording' —
+    // fail the start instead and let the UI route to the permission card
+    // (start() unwinds the store/tracker back to 'idle').
     if (this.opts.permissionGate) {
       try {
         const gate = await this.opts.permissionGate();
         if (!gate.ok) {
-          this.degraded = true;
-          this.setStatus('recording');
+          const reason = gate.reason ?? 'permission-denied';
           logger.warn(
-            'recorder started degraded: permissions missing',
-            undefined,
+            'recorder start refused: permissions missing',
+            { reason },
             LogComponent.ComputerUse,
           );
-          return; // recording surface exists; worker + tracker skipped
+          throw new RecorderStartError(
+            reason,
+            `recorder start refused: permissions missing (${reason})`,
+          );
         }
-      } catch {
+      } catch (err) {
+        if (err instanceof RecorderStartError) throw err;
         // gate unavailable → keep going; the hook worker reports its own failures
       }
     }

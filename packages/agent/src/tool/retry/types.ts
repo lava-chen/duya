@@ -45,10 +45,12 @@ export interface RetryStrategy {
   /** Whether this strategy only applies to specific tools */
   toolFilter?: (toolName: string) => boolean
   /**
-   * When true, the RETRY action is only issued for idempotent tools.
-   * For non-idempotent tools (write/edit/bash/...), a retry could
-   * double-execute side effects, so the executor skips RETRY and falls
-   * through to FALLBACK (if available) or ABORT instead.
+   * Declares that this strategy is only meaningful for side-effect-free
+   * tools. The executor already refuses to issue RETRY for the built-in
+   * non-idempotent tools (write/edit/bash/powershell/...) unconditionally,
+   * so this flag is a redundant, self-documenting hint rather than a switch:
+   * keep it set on strategies that re-run a tool in place, and expect a
+   * FALLBACK or ABORT for the side-effectful ones.
    */
   idempotentOnly?: boolean
 }

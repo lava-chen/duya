@@ -6,6 +6,7 @@
  */
 
 import type { ConnectorInputSchema } from '../connector-types.js';
+import { authorizationHeader } from '../connector-types.js';
 import type {
   ConnectorInvokeResult,
   ConnectorModule,
@@ -83,7 +84,7 @@ export function listCalendarDescriptors(connectionId: string): ConnectorToolDesc
   ];
 }
 
-async function listCalendarEvents(args: unknown, accessToken: string, fetchImpl: typeof fetch): Promise<ConnectorInvokeResult> {
+async function listCalendarEvents(args: unknown, accessToken: string, fetchImpl: typeof fetch, tokenType?: string): Promise<ConnectorInvokeResult> {
   const input = asRecord(args);
   const query = stringValue(input.query);
   const timeMin = resolveIso(input.timeMin, new Date().toISOString());
@@ -100,7 +101,7 @@ async function listCalendarEvents(args: unknown, accessToken: string, fetchImpl:
   if (timeMax) url.searchParams.set('timeMax', timeMax);
   if (query) url.searchParams.set('q', query);
 
-  const response = await fetchImpl(url.toString(), { headers: { Authorization: 'Bearer ' + accessToken } });
+  const response = await fetchImpl(url.toString(), { headers: { Authorization: authorizationHeader(accessToken, tokenType) } });
   if (!response.ok) return calendarFailure('list events', response.status);
   const data = (await response.json()) as { items?: CalendarEvent[] };
   return {
@@ -111,7 +112,7 @@ async function listCalendarEvents(args: unknown, accessToken: string, fetchImpl:
   };
 }
 
-async function createCalendarEvent(args: unknown, accessToken: string, fetchImpl: typeof fetch): Promise<ConnectorInvokeResult> {
+async function createCalendarEvent(args: unknown, accessToken: string, fetchImpl: typeof fetch, tokenType?: string): Promise<ConnectorInvokeResult> {
   const input = asRecord(args);
   const summary = stringValue(input.summary);
   const start = resolveIso(input.start, undefined);
@@ -135,7 +136,7 @@ async function createCalendarEvent(args: unknown, accessToken: string, fetchImpl
   const response = await fetchImpl('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
     method: 'POST',
     headers: {
-      Authorization: 'Bearer ' + accessToken,
+      Authorization: authorizationHeader(accessToken, tokenType),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
@@ -205,9 +206,9 @@ export function createCalendarConnector(fetchImpl: typeof fetch = fetch): Connec
     listDescriptors(connectionId: string) {
       return listCalendarDescriptors(connectionId);
     },
-    async invoke(action: string, args: unknown, accessToken: string): Promise<ConnectorInvokeResult> {
-      if (action === CALENDAR_LIST_ACTION) return listCalendarEvents(args, accessToken, fetchImpl);
-      if (action === CALENDAR_CREATE_ACTION) return createCalendarEvent(args, accessToken, fetchImpl);
+    async invoke(action: string, args: unknown, accessToken: string, tokenType?: string): Promise<ConnectorInvokeResult> {
+      if (action === CALENDAR_LIST_ACTION) return listCalendarEvents(args, accessToken, fetchImpl, tokenType);
+      if (action === CALENDAR_CREATE_ACTION) return createCalendarEvent(args, accessToken, fetchImpl, tokenType);
       return {
         success: false,
         error: { code: 'unknown_action', message: 'Unknown calendar action: ' + action, retriable: false },

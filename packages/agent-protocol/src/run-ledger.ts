@@ -35,6 +35,7 @@
  */
 
 import type { RunEvent, EventType } from './events/registry.js';
+import { TERMINAL_EVENT_TYPES } from './events/registry.js';
 import type { RunEventEnvelope } from './envelope.js';
 import { eventKey, SEQ_CONTRACT } from './envelope.js';
 import { TOOL_LIFECYCLE_EVENTS } from './resume.js';
@@ -150,8 +151,16 @@ export class RunLedger {
     return this.#permissions.get(requestId);
   }
 
+  /**
+   * True when `type` closes the run.
+   *
+   * Reads `TERMINAL_EVENT_TYPES` — the protocol's single declaration of the
+   * pair. The strings used to be written out here as well, which is how a third
+   * terminal event could be added to the registry and be accepted here while
+   * the outcome resolver in `agent-core` still called the run unfinished.
+   */
   isTerminalEvent(type: EventType): boolean {
-    return type === 'run.completed' || type === 'run.failed';
+    return TERMINAL_EVENT_TYPES.has(type);
   }
 
   /**

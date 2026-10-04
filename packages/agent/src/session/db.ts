@@ -305,73 +305,25 @@ export interface ResearchPlanStepRow {
   completed_at: number | null;
 }
 
-/** Research activity row */
-export interface ResearchActivityRow {
-  id: string;
-  run_id: string;
-  sequence: number;
-  kind: string;
-  title: string;
-  detail: string | null;
-  visibility: 'user' | 'debug';
-  created_at: number;
-}
+// The research artifact row shapes are declared in `./research-rows.js` and
+// re-exported here so this module's public surface is unchanged. They cannot
+// stay declared here: `ipc/db-client.ts` needs them to normalise the main
+// process DTOs, and this module already imports that client.
+import type {
+  ResearchActivityRow,
+  ResearchCitationRow,
+  ResearchEventRow,
+  ResearchReportRow,
+  ResearchSourceRow,
+} from './research-rows.js';
 
-/** Persisted user-facing research event for replay and recovery. */
-export interface ResearchEventRow {
-  id: string;
-  run_id: string;
-  sequence: number;
-  event_type: string;
-  payload_json: string;
-  visibility: 'user' | 'debug';
-  created_at: number;
-}
-
-/** Canonical source row for a research run. */
-export interface ResearchSourceRow {
-  id: string;
-  run_id: string;
-  title: string;
-  url: string | null;
-  canonical_url: string | null;
-  source_type: string;
-  allowed_by_policy: number;
-  reliability_json: string | null;
-  dedupe_key: string | null;
-  rejected_reason: string | null;
-  metadata_json: string | null;
-  created_at: number;
-  updated_at: number;
-}
-
-/** Citation edge from a report claim back to a source/finding. */
-export interface ResearchCitationRow {
-  id: string;
-  run_id: string;
-  report_id: string | null;
-  source_id: string;
-  finding_id: string | null;
-  claim: string;
-  locator_json: string | null;
-  quoted_evidence: string | null;
-  created_at: number;
-}
-
-/** Final report artifact for a research run. */
-export interface ResearchReportRow {
-  id: string;
-  run_id: string;
-  title: string | null;
-  markdown: string;
-  outline_json: string | null;
-  source_ids_json: string;
-  citation_ids_json: string;
-  activity_summary_json: string | null;
-  export_metadata_json: string | null;
-  created_at: number;
-  updated_at: number;
-}
+export type {
+  ResearchActivityRow,
+  ResearchCitationRow,
+  ResearchEventRow,
+  ResearchReportRow,
+  ResearchSourceRow,
+};
 
 // ============================================================
 // Database Initialization
@@ -1099,38 +1051,17 @@ export function extractAttachmentsFromContent(
 export function storeAttachments(attachments: ExtractedAttachment[], sessionId: string): void {
   if (attachments.length === 0) return;
 
-  if (USE_IPC_MODE && getIpcClient()) {
-    // Forward to IPC client
-    const db = getDb();
-    const txn = db.transaction(() => {
-      // Batch delete using prepared statement
-      const messageIds = [...new Set(attachments.map(a => a.messageId))];
-      if (messageIds.length > 0) {
-        const placeholders = messageIds.map(() => '?').join(',');
-        db.prepare(`DELETE FROM message_attachments WHERE message_id IN (${placeholders})`).run(...messageIds);
-      }
-      // Insert new attachments using prepared statement
-      const stmt = db.prepare(`
-        INSERT INTO message_attachments (id, message_id, session_id, attachment_type, mime_type, data, original_url, created_at)
-        VALUES (@id, @message_id, @session_id, @attachment_type, @mime_type, @data, @original_url, @created_at)
-      `);
-      for (const att of attachments) {
-        stmt.run({
-          id: `${att.messageId}-${att.index}`,
-          message_id: att.messageId,
-          session_id: sessionId,
-          attachment_type: 'image',
-          mime_type: att.mimeType,
-          data: att.base64Data,
-          original_url: att.originalUrl || null,
-          created_at: Date.now(),
-        });
-      }
-    });
-    txn();
-    return;
-  }
-
+  // No IPC branch, deliberately. This used to sit behind
+  // `if (USE_IPC_MODE && getIpcClient())` with a body byte-identical to the
+  // one below — it called `getDb()` and never touched the IPC client, so the
+  // flag guarded nothing and the comment above it claimed a forward that
+  // never happened. The IPC client does expose `attachment:store`, but that
+  // writes the core `attachments` store (plan 332) while the reads in this
+  // file still select the legacy `message_attachments` table, so routing
+  // here would move the rows out from under `getAttachmentsForMessage` /
+  // `getAttachmentsForSession`. Until plan 329 imports the legacy rows, one
+  // local write path is the honest option: it writes exactly the same
+  // connection the old "IPC" branch wrote, so no data moves.
   const db = getDb();
   const txn = db.transaction(() => {
     // Delete existing attachments for these messages using batch DELETE
@@ -2090,7 +2021,7 @@ export function deleteResearchPlanSteps(runId: string): number {
 // Research Activities CRUD
 // =============================================================================
 
-export function createResearchActivity(data: {
+export async function createResearchActivity(data: {
   id: string;
   run_id: string;
   sequence: number;
@@ -2098,9 +2029,13 @@ export function createResearchActivity(data: {
   title: string;
   detail?: string;
   visibility?: 'user' | 'debug';
-}): ResearchActivityRow {
+}): Promise<ResearchActivityRow> {
   if (USE_IPC_MODE && getIpcClient()) {
-    return getIpcClient()!.researchActivityDb.create(data) as unknown as ResearchActivityRow;
+    // The wire key is `runId`; the domain object and the SQLite column are
+    // `run_id`. Mapping here keeps the IPC contract camelCase without forcing
+    // every caller to rename its database-shaped object. The reply is a row
+    // already: `researchActivityDb` normalises the main-process DTO.
+    return await getIpcClient()!.researchActivityDb.create({ ...data, runId: data.run_id });
   }
 
   const db = getDb();
@@ -2132,12 +2067,12 @@ export function createResearchActivity(data: {
   };
 }
 
-export function getResearchActivities(
+export async function getResearchActivities(
   runId: string,
   options?: { visibility?: 'user' | 'debug'; limit?: number; afterSequence?: number },
-): ResearchActivityRow[] {
+): Promise<ResearchActivityRow[]> {
   if (USE_IPC_MODE && getIpcClient()) {
-    return getIpcClient()!.researchActivityDb.getByRunId(runId, options) as unknown as ResearchActivityRow[];
+    return await getIpcClient()!.researchActivityDb.getByRunId(runId, options);
   }
 
   const db = getDb();
@@ -2195,16 +2130,20 @@ export function deleteResearchActivities(runId: string): number {
 // Research Events / Sources / Citations / Reports CRUD
 // =============================================================================
 
-export function createResearchEvent(data: {
+export async function createResearchEvent(data: {
   id: string;
   run_id: string;
   sequence: number;
   event_type: string;
   payload_json: string;
   visibility?: 'user' | 'debug';
-}): ResearchEventRow | Promise<ResearchEventRow> {
+}): Promise<ResearchEventRow> {
   if (USE_IPC_MODE && getIpcClient()) {
-    return getIpcClient()!.researchEventDb.create(data) as Promise<ResearchEventRow>;
+    // The IPC branch is a real round trip over process.send, so this function is
+    // async on both branches; the local branch just resolves synchronously.
+    // The reply is a row already: `researchEventDb` normalises the
+    // main-process DTO into the canonical row shape.
+    return await getIpcClient()!.researchEventDb.create({ ...data, runId: data.run_id });
   }
 
   const db = getDb();
@@ -2216,9 +2155,9 @@ export function createResearchEvent(data: {
   return db.prepare('SELECT * FROM research_events WHERE run_id = ? AND sequence = ?').get(data.run_id, data.sequence) as ResearchEventRow;
 }
 
-export function getResearchEvents(runId: string, options?: { afterSequence?: number; limit?: number; visibility?: 'user' | 'debug' }): ResearchEventRow[] {
+export async function getResearchEvents(runId: string, options?: { afterSequence?: number; limit?: number; visibility?: 'user' | 'debug' }): Promise<ResearchEventRow[]> {
   if (USE_IPC_MODE && getIpcClient()) {
-    return getIpcClient()!.researchEventDb.getByRunId(runId, options) as unknown as ResearchEventRow[];
+    return await getIpcClient()!.researchEventDb.getByRunId(runId, options);
   }
 
   const db = getDb();
@@ -2245,7 +2184,7 @@ export async function getResearchEventMaxSequence(runId: string): Promise<number
   return result?.max_seq ?? 0;
 }
 
-export function upsertResearchSource(data: {
+export async function upsertResearchSource(data: {
   id: string;
   run_id: string;
   title: string;
@@ -2257,9 +2196,9 @@ export function upsertResearchSource(data: {
   dedupe_key?: string | null;
   rejected_reason?: string | null;
   metadata_json?: string | null;
-}): ResearchSourceRow {
+}): Promise<ResearchSourceRow> {
   if (USE_IPC_MODE && getIpcClient()) {
-    return getIpcClient()!.researchSourceDb.upsert(data) as unknown as ResearchSourceRow;
+    return await getIpcClient()!.researchSourceDb.upsert({ ...data, runId: data.run_id });
   }
 
   const db = getDb();
@@ -2298,16 +2237,16 @@ export function upsertResearchSource(data: {
   return db.prepare('SELECT * FROM research_sources WHERE id = ?').get(data.id) as ResearchSourceRow;
 }
 
-export function getResearchSources(runId: string): ResearchSourceRow[] {
+export async function getResearchSources(runId: string): Promise<ResearchSourceRow[]> {
   if (USE_IPC_MODE && getIpcClient()) {
-    return getIpcClient()!.researchSourceDb.getByRunId(runId) as unknown as ResearchSourceRow[];
+    return await getIpcClient()!.researchSourceDb.getByRunId(runId);
   }
 
   const db = getDb();
   return db.prepare('SELECT * FROM research_sources WHERE run_id = ? ORDER BY created_at ASC').all(runId) as ResearchSourceRow[];
 }
 
-export function createResearchCitation(data: {
+export async function createResearchCitation(data: {
   id: string;
   run_id: string;
   report_id?: string | null;
@@ -2316,9 +2255,9 @@ export function createResearchCitation(data: {
   claim: string;
   locator_json?: string | null;
   quoted_evidence?: string | null;
-}): ResearchCitationRow {
+}): Promise<ResearchCitationRow> {
   if (USE_IPC_MODE && getIpcClient()) {
-    return getIpcClient()!.researchCitationDb.create(data) as unknown as ResearchCitationRow;
+    return await getIpcClient()!.researchCitationDb.create({ ...data, runId: data.run_id });
   }
 
   const db = getDb();
@@ -2341,9 +2280,9 @@ export function createResearchCitation(data: {
   return db.prepare('SELECT * FROM research_citations WHERE id = ?').get(data.id) as ResearchCitationRow;
 }
 
-export function getResearchCitations(runId: string, reportId?: string): ResearchCitationRow[] {
+export async function getResearchCitations(runId: string, reportId?: string): Promise<ResearchCitationRow[]> {
   if (USE_IPC_MODE && getIpcClient()) {
-    return getIpcClient()!.researchCitationDb.getByRunId(runId, reportId) as unknown as ResearchCitationRow[];
+    return await getIpcClient()!.researchCitationDb.getByRunId(runId, reportId);
   }
 
   const db = getDb();
@@ -2353,7 +2292,7 @@ export function getResearchCitations(runId: string, reportId?: string): Research
   return db.prepare('SELECT * FROM research_citations WHERE run_id = ? ORDER BY created_at ASC').all(runId) as ResearchCitationRow[];
 }
 
-export function upsertResearchReport(data: {
+export async function upsertResearchReport(data: {
   id: string;
   run_id: string;
   title?: string | null;
@@ -2363,9 +2302,9 @@ export function upsertResearchReport(data: {
   citation_ids_json?: string;
   activity_summary_json?: string | null;
   export_metadata_json?: string | null;
-}): ResearchReportRow {
+}): Promise<ResearchReportRow> {
   if (USE_IPC_MODE && getIpcClient()) {
-    return getIpcClient()!.researchReportDb.upsert(data) as unknown as ResearchReportRow;
+    return await getIpcClient()!.researchReportDb.upsert({ ...data, runId: data.run_id });
   }
 
   const db = getDb();
@@ -2400,9 +2339,9 @@ export function upsertResearchReport(data: {
   return db.prepare('SELECT * FROM research_reports WHERE id = ?').get(data.id) as ResearchReportRow;
 }
 
-export function getLatestResearchReport(runId: string): ResearchReportRow | null {
+export async function getLatestResearchReport(runId: string): Promise<ResearchReportRow | null> {
   if (USE_IPC_MODE && getIpcClient()) {
-    return getIpcClient()!.researchReportDb.getLatest(runId) as unknown as ResearchReportRow | null;
+    return await getIpcClient()!.researchReportDb.getLatest(runId);
   }
 
   const db = getDb();

@@ -38,7 +38,7 @@ import { resolveProviderBlockOutbound, summarizeProviderBlock } from './degrade.
 import { getDeferredToolNames, splitDeferredTools } from '../utils/deferred-tools.js';
 import { emitSSE } from './emit-sse.js';
 import { sanitizeSurrogates } from '../utils/sanitize-unicode.js';
-import { collectDiagnostics } from '../utils/simple-options.js';
+import { collectDiagnostics, getTemperature } from '../utils/simple-options.js';
 import { checkCacheEligibility, applyCacheControl, applyCacheControlToSystem, applyCacheControlToTools } from '../utils/prompt-caching.js';
 import { sortToolsByName } from '../utils/tool-order.js';
 import { isToolSchemaMismatchError } from '../utils/errors.js';
@@ -267,6 +267,45 @@ export function getMiniMaxAnthropicMaxTokens(model: string, configuredMaxTokens?
   return typeof configuredMaxTokens === 'number' && configuredMaxTokens > 0
     ? Math.min(configuredMaxTokens, ceiling)
     : ceiling;
+}
+
+/**
+ * The per-request option bag, derived rather than re-declared.
+ *
+ * `AIClient.streamChat` declares it inline in `types.ts`, and a second copy
+ * here would be a second thing to widen when an option is added.
+ */
+type ChatRequestOptions = NonNullable<Parameters<AIClient['streamChat']>[1]>;
+
+/** The output ceiling used when the caller sets none. */
+const DEFAULT_MAX_TOKENS = 4096;
+
+/**
+ * Resolve `max_tokens` — the ONE rule for this file.
+ *
+ * Anthropic's `max_tokens` is the TOTAL output budget (thinking + text), so
+ * `totalOutputBudget` takes precedence over `maxOutputTokens` over `maxTokens`,
+ * and MiniMax-compatible endpoints reject a request above their per-model
+ * ceiling, so the result is clamped for them.
+ *
+ * Both request paths go through here. They did not before: the streaming path
+ * used the precedence above plus the MiniMax clamp and a 4096 default, while
+ * `chat()` used `maxTokens ?? 1024` raw — ignoring `totalOutputBudget`,
+ * ignoring `maxOutputTokens`, and never clamping. Two derivations of one wire
+ * field is a field whose value depends on which method the caller happened to
+ * reach for, and 1024 is below the 4096 floor the thinking-budget clamps assume.
+ */
+export function resolveMaxTokens(
+  chatOptions: ChatRequestOptions | undefined,
+  model: string,
+  isMiniMax: boolean,
+): number {
+  const requested = chatOptions?.totalOutputBudget
+    ?? chatOptions?.maxOutputTokens
+    ?? chatOptions?.maxTokens
+    ?? DEFAULT_MAX_TOKENS;
+  if (!isMiniMax) return requested;
+  return Math.min(requested, getMiniMaxAnthropicMaxTokens(model, chatOptions?.maxOutputTokens));
 }
 
 // =============================================================================
@@ -1892,19 +1931,12 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
       }
 
       // 4. Resolve thinking config from model + effort.
-      // totalOutputBudget takes precedence over maxOutputTokens/maxTokens.
-      // For Anthropic, max_tokens is the TOTAL output (thinking + text).
-      // MiniMax rejects max_tokens above its per-model ceiling, so clamp.
-      const requestedMaxTokens = chatOptions?.totalOutputBudget
-        ?? chatOptions?.maxOutputTokens
-        ?? chatOptions?.maxTokens
-        ?? 4096;
-      const maxTokens = isMiniMax
-        ? Math.min(
-            requestedMaxTokens,
-            getMiniMaxAnthropicMaxTokens(options.model, chatOptions?.maxOutputTokens),
-          )
-        : requestedMaxTokens;
+      // `max_tokens` is resolved by the one rule in `resolveMaxTokens`, shared
+      // with `chat()` below: totalOutputBudget > maxOutputTokens > maxTokens,
+      // then the MiniMax ceiling. For Anthropic, max_tokens is the TOTAL output
+      // (thinking + text), which is also why the thinking-budget clamps below
+      // are all relative to it.
+      const maxTokens = resolveMaxTokens(chatOptions, options.model, isMiniMax);
 
       // reasoningSettings takes precedence over the simple effort field.
       const effectiveEffort = chatOptions?.reasoningSettings?.intensity
@@ -2043,8 +2075,10 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
         max_tokens: maxTokens,
         // Temperature is incompatible with extended/adaptive thinking on the
         // Anthropic protocol (the official harness omits it whenever thinking
-        // is active) — only send it for non-thinking requests.
-        ...(thinking ? {} : { temperature: chatOptions?.temperature ?? 1 }),
+        // is active) — only send it for non-thinking requests. The value comes
+        // from `getTemperature`, the one owner of the `fixedTemperature` rule,
+        // so a model that pins it cannot be sent a temperature it rejects.
+        ...(thinking ? {} : { temperature: getTemperature(model, chatOptions?.temperature) ?? 1 }),
         system: systemForRequest,
         messages: anthropicMessages,
         tools: requestTools.length ? toolsForRequest : undefined,
@@ -2143,7 +2177,9 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
           max_tokens: isMiniMax2013
             ? Math.min(maxTokens, MINIMAX_RECOVERY_MAX_TOKENS)
             : maxTokens,
-          temperature: chatOptions?.temperature ?? 1,
+          // Same rule as the first attempt: a model that pins its temperature
+          // rejects anything else, on the recovery request too.
+          temperature: getTemperature(model, chatOptions?.temperature) ?? 1,
           system: systemForRequest,
           messages: anthropicMessages,
           tools: requestTools.length ? toolsForRequest : undefined,
@@ -2308,8 +2344,12 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
 
       const response = await client.messages.create({
         model: options.model,
-        max_tokens: chatOptions?.maxTokens ?? 1024,
-        temperature: chatOptions?.temperature ?? 1,
+        // The same resolver the streaming path uses. `chat()` used to read
+        // `maxTokens ?? 1024` raw here, so a caller that set only
+        // `totalOutputBudget` got 1024 on this path and the real budget on the
+        // other one.
+        max_tokens: resolveMaxTokens(chatOptions, options.model, isMiniMax),
+        temperature: getTemperature(model, chatOptions?.temperature) ?? 1,
         system: applyCacheControlToSystem(
           chatOptions?.systemPrompt || '',
           cacheEligibility,

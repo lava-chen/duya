@@ -8,6 +8,7 @@ import {
 } from './sourceFingerprint';
 import type { AgentType, ScopeKind } from './schema';
 import type { SessionStore, CoreSession } from '../db/core';
+import { SESSION_LIST_UNLIMITED } from '../db/core/session-store';
 import { writeSystemLog } from '../../../../../packages/agent/src/memory-state/system_log';
 
 /**
@@ -404,7 +405,17 @@ export function syncAllFromMainDb(opts: {
   // syncOneSession below was unreachable and its rollout_catalog row kept
   // `source_status='active'` forever -- the memory layer would go on
   // treating an archived session as live.
-  const coreSessions = opts.sessions.list({ includeDeleted: true, includeArchived: true });
+  //
+  // SESSION_LIST_UNLIMITED: this sync materialises a row per session and
+  // must reach EVERY one of them, so it opts out of `list`'s default cap.
+  // A cap here would under-count rather than fail, which is worse than a
+  // slow read -- and it would re-break the archived case above for
+  // anything outside the most recent 100 sessions.
+  const coreSessions = opts.sessions.list({
+    includeDeleted: true,
+    includeArchived: true,
+    limit: SESSION_LIST_UNLIMITED,
+  });
   const sessions = coreSessions.map(coreSessionToChatRow);
 
   for (const session of sessions) {

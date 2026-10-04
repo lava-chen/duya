@@ -121,6 +121,13 @@ class IPCTaskStore implements TaskStore {
     // any session, fail loudly rather than silently overwriting it.
     const id = task.id ?? crypto.randomUUID();
     try {
+      // snake_case, matching `ipcTaskToCoreCreate`. `blocks` / `blocked_by` /
+      // `metadata` are declared on `Task` and accepted by
+      // `TaskCreateInput`, but `taskDb.create` (ipc/db-client.ts) has not
+      // widened its parameter type yet, so they cannot be sent from here
+      // without a cast. Seed the dependency edges through the update path
+      // instead of dropping them: one extra round trip only when a caller
+      // actually declares them.
       await ipc.taskDb.create({
         id,
         session_id: this.sessionId,
@@ -130,6 +137,13 @@ class IPCTaskStore implements TaskStore {
         active_form: task.activeForm,
         owner: task.owner,
       });
+      const carry: Partial<Task> = {};
+      if (task.blocks !== undefined) carry.blocks = task.blocks;
+      if (task.blockedBy !== undefined) carry.blockedBy = task.blockedBy;
+      if (task.metadata !== undefined) carry.metadata = task.metadata;
+      if (Object.keys(carry).length > 0) {
+        await this.updateTask(id, carry);
+      }
     } catch (err) {
       if (isUniqueConstraintError(err)) {
         throw new Error(`Task id "${id}" already exists. Pick a different id, or use the existing row's update path.`);
@@ -143,7 +157,23 @@ class IPCTaskStore implements TaskStore {
 
   async updateTask(taskId: string, updates: Partial<Task>): Promise<Task | null> {
     const ipc = getIpcClient()!;
-    await ipc.taskDb.update(taskId, { ...updates, session_id: this.sessionId });
+    // The wire contract is snake_case: `ipcTaskToUpdate` (core-db-adapters.ts)
+    // reads `active_form` / `blocked_by`, so spreading `Partial<Task>`
+    // (camelCase) silently dropped both — the row updated, the field did not.
+    // Translate explicitly instead. `id` is dropped on purpose: the IPC
+    // request is `{ id, ...data }`, so an `id` inside `data` would override
+    // the task being updated.
+    const { id: _ignoredId, ...rest } = updates;
+    const payload: Record<string, unknown> = { session_id: this.sessionId };
+    if (rest.subject !== undefined) payload.subject = rest.subject;
+    if (rest.description !== undefined) payload.description = rest.description;
+    if (rest.status !== undefined) payload.status = rest.status;
+    if (rest.activeForm !== undefined) payload.active_form = rest.activeForm;
+    if (rest.owner !== undefined) payload.owner = rest.owner;
+    if (rest.blocks !== undefined) payload.blocks = rest.blocks;
+    if (rest.blockedBy !== undefined) payload.blocked_by = rest.blockedBy;
+    if (rest.metadata !== undefined) payload.metadata = rest.metadata;
+    await ipc.taskDb.update(taskId, payload);
     return this.getTask(taskId);
   }
 

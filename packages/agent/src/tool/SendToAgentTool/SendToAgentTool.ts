@@ -157,11 +157,14 @@ export class SendToAgentTool implements Tool {
     // bot can DM itself.
     const selfAgentId = parseAgentIdFromBotSession(fromAgentId) ?? fromAgentId;
     if (toAgentId === selfAgentId) {
+      // `error: true` — the rejection is a real failure, not a note. Reporting
+      // it as a success made the retry loop treat the self-send as delivered
+      // and immediately re-issue the same call.
       return {
         id: randomUUID(),
         name: this.name,
         result: "Error: An agent cannot message itself. Use a different toAgentId.",
-        error: false,
+        error: true,
       };
     }
 
@@ -173,13 +176,12 @@ export class SendToAgentTool implements Tool {
     // context session id is `bot:<agentId>`; strip before the lookup). The
     // id-derived fallback name flows into the envelope and the receiver's
     // marker metadata — a bare id there rendered the wrong peer label.
-    const selfRosterId = parseAgentIdFromBotSession(fromAgentId) ?? fromAgentId;
-    const fromAgentName = agents[selfRosterId]?.name || this.resolveAgentName(fromAgentId);
+    const fromAgentName = agents[selfAgentId]?.name || this.resolveAgentName(fromAgentId);
 
     if (!targetConfig) {
       // Target agent not found in roster - show available agents
       const availableAgents = Object.entries(agents)
-        .filter(([id]) => id !== fromAgentId)
+        .filter(([id]) => id !== selfAgentId)
         .map(([id, cfg]) => `${id}${cfg.name ? ` (${cfg.name})` : ""}`)
         .join(", ");
       const msg = `Error: Agent "${toAgentId}" not found. Available agents: ${availableAgents || "none configured"}.`;

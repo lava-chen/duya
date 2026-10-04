@@ -12,17 +12,21 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildPermissions } from '../PermissionsGate.js';
 import type { PermissionsGateDeps } from '../PermissionsGate.js';
 import { TurnContext } from '../TurnContext.js';
+import type { ApprovalLedger } from '../TurnContext.js';
 import type { ModeCoordinator } from '../modes/engine/index.js';
 import type { AIClient } from '@duya/ai';
 
-function makeTurn(workingDirectory = '/wd'): TurnContext {
+function makeTurn(
+  workingDirectory = '/wd',
+  approval: Partial<ApprovalLedger> = {},
+): TurnContext {
   return new TurnContext({
     turnId: { sequence: 1, id: 'turn-1' },
     sessionId: 'sess-1',
     workingDirectory,
     permissionMode: 'default',
     additionalWorkingDirectories: new Map(),
-    approval: { alwaysAllowTools: new Set<string>() },
+    approval: { alwaysAllowTools: new Set<string>(), ...approval },
     mentions: { skills: [], plugins: [], contexts: [] },
     promptText: '',
   });
@@ -161,5 +165,81 @@ describe('buildPermissions deny-reason propagation', () => {
     expect(result.behavior).toBe('deny');
     expect(result.message).toContain('fail-closed');
     expect(result.message).toContain('Aborted');
+  });
+});
+
+/**
+ * The gate's early-allow paths used to run BEFORE the deny lookup, so a
+ * blanket grant silently outranked an explicit deny rule. A deny rule is the
+ * user's most recent and most specific statement of intent, and it must win.
+ */
+describe('buildPermissions orders explicit deny above every grant', () => {
+  const denyBash = { alwaysDenyRules: { userSettings: ['Bash'] } } as const;
+
+  it('an always-allow grant does not override a deny rule', async () => {
+    const engine = vi.fn(async () => ({ behavior: 'allow' as const }));
+    const { canUseTool } = buildPermissions(
+      makeDeps({ ...denyBash, hasPermissionsToUseTool: engine }),
+      makeTurn('/wd', { alwaysAllowTools: new Set(['Bash']) }),
+      undefined,
+    );
+
+    const result = await canUseTool('Bash', { command: 'rm -rf /' });
+    expect(result.allowed).toBe(false);
+    expect(result.behavior).toBe('deny');
+    // The grant must not even be consulted — an approval card cannot consume
+    // itself on a tool the user has since denied.
+    expect(engine).not.toHaveBeenCalled();
+  });
+
+  it('a one-shot approval does not override a deny rule', async () => {
+    const engine = vi.fn(async () => ({ behavior: 'allow' as const }));
+    const consumeApprovedEffect = vi.fn(async () => true);
+    const { canUseTool } = buildPermissions(
+      makeDeps({ ...denyBash, hasPermissionsToUseTool: engine }),
+      makeTurn('/wd', { consumeApprovedEffect }),
+      undefined,
+    );
+
+    const result = await canUseTool('Bash', { command: 'rm -rf /' });
+    expect(result.allowed).toBe(false);
+    expect(result.behavior).toBe('deny');
+    // Not consumed: a denied tool must leave its approval card unclaimed, or
+    // the card is silently burned by a call that never ran.
+    expect(consumeApprovedEffect).not.toHaveBeenCalled();
+    expect(engine).not.toHaveBeenCalled();
+  });
+
+  it('still honours an always-allow grant when no deny rule matches', async () => {
+    // The positive control for the two cases above. Without it, a gate that
+    // denied everything would also pass them.
+    const engine = vi.fn(async () => ({ behavior: 'ask' as const }));
+    const { canUseTool } = buildPermissions(
+      makeDeps({
+        alwaysDenyRules: { userSettings: ['Write'] },
+        hasPermissionsToUseTool: engine,
+      }),
+      makeTurn('/wd', { alwaysAllowTools: new Set(['Bash']) }),
+      undefined,
+    );
+
+    const result = await canUseTool('Bash', { command: 'ls' });
+    expect(result).toEqual({ allowed: true, behavior: 'allow' });
+    // ...and without dragging the ask/classifier path in behind it, which
+    // would turn a remembered grant back into a prompt.
+    expect(engine).not.toHaveBeenCalled();
+  });
+
+  it('leaves an unrelated tool to the normal engine path', async () => {
+    const engine = vi.fn(async () => ({ behavior: 'ask' as const }));
+    const { canUseTool } = buildPermissions(
+      makeDeps({ ...denyBash, hasPermissionsToUseTool: engine }),
+      makeTurn('/wd', { alwaysAllowTools: new Set(['Bash']) }),
+      undefined,
+    );
+
+    const result = await canUseTool('Read', { file_path: '/wd/a.txt' });
+    expect(result).toEqual({ allowed: true, behavior: 'ask' });
+    expect(engine).toHaveBeenCalledOnce();
   });
 });

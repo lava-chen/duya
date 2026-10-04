@@ -323,6 +323,27 @@ export interface AgentPermissionEvent {
   };
 }
 
+/**
+ * Emitted when a `chat:permission` request passes its own `expiresAt`
+ * unanswered. The worker settles the pending promise as a denial and sends
+ * this so the host can retire the card: without it the approval card stays
+ * clickable for the rest of its countdown and a late answer is silently
+ * discarded, which reads to the user as "allow" doing nothing.
+ *
+ * The `expiresAt` echoed here is the same value the card counted down against
+ * — the request's own deadline, which is the single source of truth.
+ */
+export interface AgentPermissionExpiredEvent {
+  type: 'chat:permission_expired';
+  sessionId: string;
+  request: {
+    id: string;
+    toolName: string;
+    /** Absent when the caller never supplied a deadline. */
+    expiresAt?: number;
+  };
+}
+
 export interface AgentDoneEvent {
   type: 'chat:done';
   sessionId: string;
@@ -797,6 +818,7 @@ export type WorkerEvent =
   | SubagentToolResultEvent
   | SubagentToolProgressEvent
   | AgentPermissionEvent
+  | AgentPermissionExpiredEvent
   | AgentDoneEvent
   | AgentErrorEvent
   | AgentStatusEvent

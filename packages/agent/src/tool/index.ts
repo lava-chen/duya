@@ -32,7 +32,7 @@ export { enterPlanModeTool } from './EnterPlanModeTool/EnterPlanModeTool.js';
 export { exitPlanModeTool } from './ExitPlanModeTool/ExitPlanModeTool.js';
 export { skillTool } from './SkillTool/SkillTool.js';
 export { briefTool } from './BriefTool/BriefTool.js';
-export { AskUserQuestionTool, askUserQuestionTool, storePendingAnswer, clearPendingAnswer } from './AskUserQuestionTool/AskUserQuestionTool.js';
+export { AskUserQuestionTool, askUserQuestionTool, storePendingAnswer, clearPendingAnswer, storePendingToolInput, takePendingToolInput } from './AskUserQuestionTool/AskUserQuestionTool.js';
 
 // Retry system exports
 export { ToolRetryExecutor } from './retry/ToolRetryExecutor.js';

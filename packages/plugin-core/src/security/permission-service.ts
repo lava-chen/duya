@@ -15,6 +15,14 @@
  * `recordGrantedPermissions` to make the actual semantics explicit.
  * No deprecation alias is kept; the only known callers (audit on
  * 2026-06-04) are in `electron/plugins/PluginManager.ts`.
+ *
+ * Scope semantics: `domains`/`paths` on a grant are a narrowing and are
+ * enforced in `checkPermission` against the requested values. A grant
+ * that declares NEITHER is unscoped and covers the whole permission —
+ * that is the shape install-time grants have today, because the plugin
+ * manifest permission type is `{ name, scope?, domains? }` and both
+ * `recordGrantedPermissions` call sites in `PluginManager` pass exactly
+ * those fields.
  */
 import type { PluginTrustInfo, PluginTrustLevel } from './trust-engine';
 
@@ -35,6 +43,57 @@ export interface GrantedPermission extends PermissionRequest {
 export interface PermissionCheckResult {
   allowed: boolean;
   reason?: string;
+}
+
+/**
+ * True when a grant covers every value the request touches on one
+ * list-shaped axis.
+ *
+ * A grant that declares no value is UNSCOPED and therefore covers any
+ * request: install-time grants are built from
+ * `{ name, scope?, domains? }` (`PluginManager`), so an omitted
+ * `domains` is the ordinary "whole permission" case and must keep
+ * working. A grant that DOES declare values is a narrowing, so every
+ * requested value has to be inside it, and a request that names no value
+ * cannot be shown to sit inside a narrowing — that case is refused.
+ */
+function coversList(granted: string[] | undefined, requested: string[] | undefined): boolean {
+  if (!granted || granted.length === 0) return true;
+  if (!requested || requested.length === 0) return false;
+  return requested.every((value) => granted.includes(value));
+}
+
+/** Normalize separators so a `\`-authored grant still covers a `/` request. */
+function normalizeScopePath(value: string): string {
+  return value.replace(/\\/g, '/');
+}
+
+/**
+ * A granted path covers a requested path on exact match or on a
+ * directory-prefix boundary: `/srv/data` covers `/srv/data/x.json` but
+ * never `/srv/data-other` or `/srv/database`.
+ */
+function coversPath(granted: string, requested: string): boolean {
+  const scope = normalizeScopePath(granted);
+  const candidate = normalizeScopePath(requested);
+  if (scope === candidate) return true;
+  const prefix = scope.endsWith('/') ? scope : `${scope}/`;
+  return candidate.startsWith(prefix);
+}
+
+/**
+ * Enforce the scope a grant actually declared. The narrowing is read
+ * from the GRANT, not from the request: keying the check on
+ * `request.domains`/`request.paths` let a scoped grant be used as if it
+ * were unscoped whenever the caller stayed silent about the axis.
+ */
+function grantCovers(grant: GrantedPermission, request: PermissionRequest): boolean {
+  if (!coversList(grant.domains, request.domains)) return false;
+
+  const grantedPaths = grant.paths;
+  if (!grantedPaths || grantedPaths.length === 0) return true;
+  if (!request.paths || request.paths.length === 0) return false;
+  return request.paths.every((p) => grantedPaths.some((g) => coversPath(g, p)));
 }
 
 export class PermissionService {
@@ -85,9 +144,12 @@ export class PermissionService {
         continue;
       }
 
-      if (request.domains && grant.domains) {
-        const allowed = request.domains.every((d) => grant.domains!.includes(d));
-        if (!allowed) continue;
+      // `paths` was declared on the grant but never enforced, and the
+      // domain check was skipped whenever the request did not name a
+      // domain — a grant narrowed to a few paths/domains was evaluated
+      // as though the user had granted the whole permission.
+      if (!grantCovers(grant, request)) {
+        continue;
       }
 
       return { allowed: true };

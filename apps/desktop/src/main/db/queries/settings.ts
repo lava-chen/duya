@@ -15,9 +15,40 @@ function db(): BetterSqlite3 {
   return d;
 }
 
+/**
+ * Read a string setting.
+ *
+ * The renderer picks the write shape by the value's runtime type
+ * (`useSettings.ts` save(): `typeof value === 'string'` -> `settingsDb.set`,
+ * anything else -> `settingsDb.setJson`), so a string-typed key can be
+ * legitimately in EITHER shape: stored verbatim, or stored as a
+ * JSON-encoded string. A raw read returns the JSON form's quotes and
+ * escapes, which silently corrupts every string consumer — a `workspaceDir`
+ * of `C:\ws` arrives as `"C:\\ws"` and is handed to the worker verbatim.
+ *
+ * So unwrap exactly the JSON-encoded-STRING case, the same tolerance the
+ * renderer read path already applies to `locale` / `gatewayModel` /
+ * `agentLanguage` (see `parseAppSettings`). Every other stored value —
+ * including secrets, paths and anything merely wrapped in quotes that is
+ * not valid JSON — is returned byte-identical.
+ *
+ * Non-string settings (object / array / number / boolean / null) are NOT
+ * handled here: this contract returns `string | null`, so a key written
+ * with `setJson` for such a value must be read with `getJsonSetting`.
+ */
 export function getSetting(key: string): string | null {
   const row = db().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
-  return row?.value ?? null;
+  if (!row) return null;
+  const raw = row.value;
+  if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
+    try {
+      const decoded: unknown = JSON.parse(raw);
+      if (typeof decoded === 'string') return decoded;
+    } catch {
+      // Not valid JSON after all — a raw value that merely looks quoted.
+    }
+  }
+  return raw;
 }
 
 // ============================================================================

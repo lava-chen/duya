@@ -20,16 +20,22 @@
  *
  * ## What is being decided, not just tested
  *
- * On a client disconnect this path answers `{ events, status: 'interrupted',
- * run }` and settles the run as `cancelled`, and it does NOT interrupt the
- * worker. Both halves are deliberate and both are asserted below:
+ * On a client disconnect this path writes NOTHING and settles NOTHING, and it
+ * does NOT interrupt the worker. All three halves are deliberate and all three
+ * are asserted below:
  *
  *  - The worker keeps running, because contract §D separates disconnect from
  *    cancel and says Desktop keeps its old adapter behaviour. Stopping it would
  *    be a silent behaviour change to a path that never did.
- *  - The run is still closed, as `cancelled` rather than `runtime_crash`.
- *    Silence here means "the client went away", and recording it as a crash
- *    would accuse the runtime of something this handler did.
+ *  - The run stays OPEN. It used to be closed here as `cancelled`, which made a
+ *    turn that was still executing look finished — and the worker's later tool
+ *    calls and results then landed after a run the database had already closed.
+ *  - No response is written, because the response that would carry it is the
+ *    one that just went away.
+ *
+ * The run is still closed, eventually, by the worker's real terminal frame —
+ * which is a fact about the run rather than about the socket. An explicit stop
+ * is a different request and goes through `cancelSession`.
  *
  * These tests drive the handler with a fake child stdout and a real HTTP
  * response double. They do NOT need a worker process, a provider key, or an
@@ -194,39 +200,63 @@ describe('R2.1 — the non-SSE chat turn is inside the run boundary', () => {
     expect(run.runId).toBe(start.accepted ? start.runId : null);
   });
 
-  it('settles a disconnected turn as cancelled and leaves the worker running', async () => {
-    // The behaviour decision, asserted in both halves so neither can drift.
-    const { orchestrator, commands } = makeOrchestrator();
+  it('settles nothing on disconnect, and still keeps the worker running', async () => {
+    // The behaviour decision, asserted in every part so none can drift.
+    //
+    // This used to assert the opposite: a disconnect answered
+    // `{ status: 'interrupted', events }` and persisted the run as
+    // `cancelled`, with a comment calling that "honest". It was not. The
+    // worker kept running either way, so a turn that was still executing was
+    // recorded as finished, and its later tool calls and results landed after
+    // a run the database had already closed.
+    //
+    // A disconnect is a CONNECTION fact. It changes what may still be
+    // WRITTEN, never what the run is. The real terminal frame settles the run.
+    const seen: string[] = [];
+    const { orchestrator, commands } = makeOrchestrator((event) => seen.push(event.payload.type));
     const { res, body } = fakeResponse();
     const { child, emit } = fakeChild();
     const req = new EventEmitter() as IncomingMessage;
 
     handlePostChatNonSSE('session-1', req, res, child as never, depsFor(orchestrator));
-    await orchestrator.openRun('session-1', intent);
+    const start = await orchestrator.openRun('session-1', intent);
+    expect(start.accepted).toBe(true);
 
     emit(JSON.stringify({ type: 'chat:turn_start', data: { turnCount: 1 } }));
     await drain();
+    expect(seen).toContain('run.started');
 
     // The client goes away mid-turn.
     req.emit('close');
     await drain();
 
-    const payload = body();
-    // Old contract preserved verbatim: still `interrupted`, still carrying the
-    // events collected so far.
-    expect(payload['status']).toBe('interrupted');
-    expect(Array.isArray(payload['events'])).toBe(true);
+    // Nothing was written. The response this would have written is the one
+    // that just went away, and aiming a body at it surfaces as a stream error
+    // on a socket nobody owns.
+    expect(body()).toEqual({});
+    expect(res.writableEnded).toBe(false);
 
-    // NEW: the run is closed, and honestly. `cancelled`, not `runtime_crash` —
-    // this handler stopped observing, and `resolveRunOutcome` reads a
-    // host-requested stop as a cancellation rather than a runtime failure.
-    const run = payload['run'] as { status?: string };
-    expect(run.status).toBe('cancelled');
+    // The run was NOT closed. `run.started` is still the only run event, so
+    // there is no terminal of any kind — cancelled, crashed or completed —
+    // manufactured out of a socket closing.
+    expect(seen.filter((type) => type.startsWith('run.'))).toEqual(['run.started']);
 
-    // And the worker was NOT interrupted. Contract §D separates disconnect from
-    // cancel; Desktop keeps its old adapter behaviour here. An `interrupt` in
-    // this list would be a silent behaviour change to a path that never had one.
+    // And the worker was NOT interrupted. Contract §D separates disconnect
+    // from cancel; Desktop keeps its old adapter behaviour here. An
+    // `interrupt` in this list would be a silent behaviour change to a path
+    // that never had one. An explicit stop is a different request and goes
+    // through `cancelSession`.
     expect(commands).not.toContain('interrupt');
+
+    // The turn still finishes, on the worker's own verdict, recorded into the
+    // run that stayed open for it.
+    emit(JSON.stringify({ type: 'chat:done' }));
+    await drain();
+    expect(seen).toContain('run.completed');
+
+    // ...and still writes nothing, because there is no longer anyone to read
+    // it. Settling the run and answering the client are separate acts.
+    expect(body()).toEqual({});
   });
 
   it('answers a session with no run with no fabricated receipt', async () => {

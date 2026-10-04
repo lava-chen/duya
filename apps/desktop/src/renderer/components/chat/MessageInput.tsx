@@ -1296,7 +1296,7 @@ export function MessageInput({
           // with a layered fallback. The order is:
           //   1. options.enabled_models (the authoritative list
           //      written by ProviderEditView)
-          //   2. options.defaultModel (written by the legacy
+          //   2. options.defaultModel (written by the now-removed
           //      ModelSelectionSection — the only field that
           //      existed before Plan 205)
           //   3. (no preset fallback here; the model list must
@@ -1304,7 +1304,7 @@ export function MessageInput({
           //
           // Without this fallback, providers whose only persisted
           // option is `defaultModel` (e.g. set via the global
-          // ModelSelectionSection) appear with no models in the
+          // ModelSelectionSection before it was removed) appear with no models in the
           // dropdown even though a working model is configured.
           let enabledModels: string[] = [];
           try {

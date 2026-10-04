@@ -453,6 +453,20 @@ describe('db-handlers (core store thin forward)', () => {
     // preserving their default implementations (set in vi.hoisted).
     vi.clearAllMocks();
     mocks.captured.handle.clear();
+    // The renderer channels now forward to the shared dispatcher in
+    // `agents/db-bridge.ts` instead of carrying their own bodies, and that
+    // dispatcher opens with a `getDatabase()` guard before it reaches the core
+    // stores. So the legacy handle is a real dependency of the forwarded path
+    // and the mock has to supply one — without it every case below fails with
+    // "Database not initialized" before it reaches the store it is about.
+    // Cases that exercise the legacy DB replace this with a stateful double.
+    vi.mocked(getDatabase).mockReturnValue({
+      prepare: () => ({
+        run: () => ({ changes: 0, lastInsertRowid: 0 }),
+        get: () => undefined,
+        all: () => [],
+      }),
+    } as never);
     registerDbHandlers();
   });
 
@@ -574,7 +588,12 @@ describe('db-handlers (core store thin forward)', () => {
       ]);
       const result = (await invokeHandler('db:session:list', {})) as unknown[];
 
-      expect(mocks.stores.sessions.list).toHaveBeenCalledWith({});
+      // The channel forwards to the shared dispatcher, which calls
+      // `sessions.list()` with no argument and lets the store apply its own
+      // `filter: SessionListFilter = {}` default. That is the same call this
+      // test used to see spelled `list({})` — the filter object was never a
+      // value anyone was choosing, it was the default written out longhand.
+      expect(mocks.stores.sessions.list).toHaveBeenCalledTimes(1);
       expect(mocks.adapters.coreSessionToIpcRow).toHaveBeenCalledTimes(2);
       expect(result).toHaveLength(2);
       expect((result[0] as Record<string, unknown>).id).toBe('s1');
@@ -713,12 +732,17 @@ describe('db-handlers (core store thin forward)', () => {
         'l1',
         'owner-1',
       );
-      // Default ttlSec is 300.
+      // Default ttlSec is 300. The fifth argument is the run origin (Plan 500
+      // P1); this channel does not send one, so it arrives undefined. The
+      // assertion used to stop at four arguments, which only held while the
+      // renderer carried its own body instead of forwarding to the shared
+      // dispatcher.
       expect(mocks.stores.locks.acquire).toHaveBeenCalledWith(
         's1',
         'l1',
         'owner-1',
         300,
+        undefined,
       );
       expect(result).toBe(true);
     });
@@ -730,6 +754,7 @@ describe('db-handlers (core store thin forward)', () => {
         'l1',
         'owner-1',
         60,
+        undefined,
       );
     });
 

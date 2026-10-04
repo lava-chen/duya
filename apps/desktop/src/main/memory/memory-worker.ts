@@ -710,17 +710,28 @@ function createWorker(
 
     const settled = await Promise.allSettled(extractPromises);
     let extracted = 0;
+    let producedOutput = 0;
+    let noOutput = 0;
     let skippedNoop = 0;
     for (const result of settled) {
       if (result.status !== 'fulfilled') continue;
       const r = result.value as { status: string };
-      if (r.status === 'committed' || r.status === 'succeeded_no_output') {
+      if (r.status === 'committed') {
         extracted += 1;
+        // Only a committed turn produced memory. `succeeded_no_output` is a
+        // deliberate "nothing worth remembering" verdict: it must not reset
+        // the extract cooldown (that would let no-op turns suppress real
+        // extraction for the whole cooldown window) and must not trigger a
+        // curation cycle (nothing new to promote — it would burn an LLM pass).
+        producedOutput += 1;
+      } else if (r.status === 'succeeded_no_output') {
+        extracted += 1;
+        noOutput += 1;
       } else if (r.status === 'noop_skipped' || r.status === 'stale_source') {
         skippedNoop += 1;
       }
     }
-    if (extracted > 0) {
+    if (producedOutput > 0) {
       state.lastExtractAt = Date.now();
     }
 
@@ -789,13 +800,21 @@ function createWorker(
     // without waiting for the next interval. The quorum gate inside
     // curationTick still applies on non-forced ticks, so an empty queue is a
     // cheap no-op.
-    if ((extracted > 0 || (options.force && cfg.consolidatorOnForceSweep)) && deps.curation) {
+    // Triggered by `producedOutput`, not `extracted`: a turn that
+    // deliberately produced no memory leaves the curation queue unchanged, so
+    // running the cycle would be a full LLM pass over the same inputs.
+    if ((producedOutput > 0 || (options.force && cfg.consolidatorOnForceSweep)) && deps.curation) {
       curationTick({ force: options.force }).catch(() => { /* logged inside */ });
     }
 
     const tickSummary = {
       selected: eligible.length,
       extracted,
+      // Turn outcomes split out so a no-output verdict is visible: it counts
+      // as an executed extract (so the tick is observable) but never as
+      // output for the cooldown / curation gates above.
+      noOutput,
+      producedOutput,
       skippedNoop,
       outboxDrained,
       // Status of the most recently completed curation cycle (any trigger).

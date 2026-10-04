@@ -37,10 +37,19 @@ function resolveLlmProvider(providerId?: string): ApiProvider {
 
 /**
  * Resolve the active LLM provider + model for a cron run.
+ *
+ * `providerId` is the routine's own pin (`AutomationCron.modelProviderId`).
+ * Forwarded so a routine pinned to one vendor's model resolves against THAT
+ * provider instead of the default, which matters as soon as two providers
+ * offer the same model name. Unset keeps the pre-existing behaviour (default
+ * provider). The model itself is never encoded with the provider: it is
+ * returned verbatim, so an unknown id degrades to "wrong vendor, right
+ * model" rather than a bogus model name.
+ *
  * Throws 'no active provider configured' when no provider exists at all.
  */
-export function resolveCronProvider(jobModel?: string): ResolvedCronProvider {
-  const provider = resolveLlmProvider();
+export function resolveCronProvider(jobModel?: string, providerId?: string | null): ResolvedCronProvider {
+  const provider = resolveLlmProvider(providerId ?? undefined);
   const model = resolveCronModel(jobModel, provider);
   if (!model) throw new Error('cron model is not configured');
   return { provider, model };

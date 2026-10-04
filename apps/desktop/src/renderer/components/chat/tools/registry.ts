@@ -35,6 +35,7 @@ import {
   describeMcpProviderName,
   humanizeToolLabel,
 } from './invoke-identity';
+import { basenameFromPath } from '@/lib/projectPaths';
 import type { ToolAction, ToolRendererDef } from './types';
 
 /**
@@ -49,10 +50,12 @@ export function getFilePath(input: unknown): string {
 }
 
 /** Last path segment — used by row summary when the full path would
- *  overflow the chrome. */
+ *  overflow the chrome. Delegates to `basenameFromPath`, which already
+ *  handles `\`, drive letters, trailing separators and UNC shares; the
+ *  agent prompt asks for an absolute `file_path`, so on Windows the
+ *  path arrives backslash-separated. */
 export function extractFilename(path: string): string {
-  const parts = path.split('/');
-  return parts[parts.length - 1] || path;
+  return basenameFromPath(path) || path;
 }
 
 /** Truncate a long path for the collapsed chrome's right slot. */
@@ -150,9 +153,12 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
   },
   {
     // TodoTool (todo/todowrite) — manages an internal task list with
-    // `todos[] + merge` interface. This entry is a fallback used only
-    // when the dedicated TodoToolRow is not matched (shouldn't happen
-    // in practice since ToolActionRow routes todo/todowrite to
+    // `todos[] + merge` interface. This is the only todo entry:
+    // `getRenderer` resolves with `find`, so a second todo matcher would
+    // be unreachable. The `3/5 completed` summary is the one that has
+    // always rendered, so it is the one kept. This entry is a fallback
+    // used only when the dedicated TodoToolRow is not matched (shouldn't
+    // happen in practice since ToolActionRow routes todo/todowrite to
     // TodoToolRow before falling through to the registry).
     match: (n) => ['todo', 'todowrite'].includes(n.toLowerCase()),
     icon: ListChecksIcon,
@@ -232,25 +238,6 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
-    // TodoTool — manages an internal task list (aligned to Grok
-    // `todo_write`). The summary renders the count of updated items so
-    // the chrome reads as natural language instead of the raw JSON dump.
-    // Each todo gets routed to TaskToolRow which renders the chrome
-    // summary and the JSON envelope body.
-    match: (n) => n.toLowerCase() === 'todo' || n.toLowerCase() === 'todowrite',
-    icon: ListChecksIcon,
-    labelKey: null,
-    getSummary: (input) => {
-      const inp = (input || {}) as Record<string, unknown>;
-      const todos = Array.isArray(inp.todos) ? inp.todos : [];
-      if (todos.length === 0) return 'todo';
-      const first = todos[0] as Record<string, unknown> | undefined;
-      const firstContent = typeof first?.content === 'string' ? first.content.trim() : '';
-      if (firstContent) return firstContent.length > 60 ? `${firstContent.slice(0, 57)}...` : firstContent;
-      return todos.length === 1 ? 'todo' : `${todos.length} todos`;
-    },
-  },
-  {
     // MessageSession — sends a message to another session's agent.
     // The registry summary only carries the message preview; the
     // target session *title* is resolved inside MessageSessionToolRow
@@ -301,7 +288,7 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
       }
       const imagePath = typeof inp.image_path === 'string' ? inp.image_path : '';
       if (imagePath) {
-        const name = imagePath.split(/[/\\]/).pop() || imagePath;
+        const name = extractFilename(imagePath);
         return name.length > 60 ? name.slice(0, 57) + '…' : name;
       }
       return 'vision';

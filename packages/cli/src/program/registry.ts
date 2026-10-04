@@ -127,6 +127,46 @@ export interface CliSubcommandOptions {
   agentAllow?: string | string[];
   agentDeny?: string | string[];
   agentPlugins?: string | string[];
+  // Flags declared in `descriptors.ts` and read by a command's `run()`.
+  // They are named here as well as carried by the open index signature below,
+  // because the signature is what let them go missing from a dispatcher's bag
+  // without a type error: `backup create --dry-run` wrote a real archive
+  // because no bag forwarded `dryRun`. Both `buildControlPlane` and
+  // `buildAgentRunner` must populate every key listed between here and the
+  // index signature. Commander camelCases, so these are the spellings.
+  /** `channel send` — message text and local file attachment. */
+  text?: string;
+  file?: string;
+  /** `channel connect` (plain) / `mcp add` (repeatable, see `configAgents`). */
+  agent?: string | string[];
+  chat?: string;
+  label?: string;
+  tokenEnv?: string;
+  stdin?: boolean;
+  /** `status` — poll every `interval` ms instead of printing once. */
+  watch?: boolean;
+  interval?: string;
+  /** `backup create` / `backup restore`. `dryRun` is a preview, not a write. */
+  outputDir?: string;
+  includeWorkspace?: boolean;
+  onlyConfig?: boolean;
+  dryRun?: boolean;
+  verify?: boolean;
+  /** `session list` / `session export`. */
+  q?: string;
+  format?: string;
+  output?: string;
+  /** `projects cleanup` — a dry run unless `apply` is set. */
+  apply?: boolean;
+  archiveDir?: string;
+  /** `security scan`. */
+  deep?: boolean;
+  /** `config set` / `config get` / `config validate`. */
+  key?: string;
+  value?: string;
+  path?: string;
+  /** JSON params payload. */
+  params?: string;
   [key: string]: string | boolean | string[] | undefined;
 }
 

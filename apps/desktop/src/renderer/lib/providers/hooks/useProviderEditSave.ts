@@ -91,6 +91,12 @@ export interface ProviderEditFormData {
     headers?: string;
     extraEnv?: string;
     notes?: string;
+    /** Renderer-DTO creation timestamp. Preserved so re-saving a provider
+     *  does not reset `meta.createdAt` (which drives list ordering / age). */
+    createdAt?: number;
+    /** Renderer-DTO list position. Preserved as `meta.sortIndex`; the edit
+     *  view never reorders, so re-saving must not move the entry. */
+    sortOrder?: number;
   };
 }
 
@@ -206,9 +212,26 @@ export function useProviderEditSave(): UseProviderEditSaveResult {
       };
       // Plan 209: preserve `meta`, `headers`, and `extraEnv`
       // across edits. The pre-Plan-209 implementation rebuilt
-      // `meta` on every save, which silently dropped the
-      // `active` tag and re-created timestamps.
+      // `meta` on every save, which re-created timestamps. `meta.tags`
+      // is still not preserved — see the `meta` literal below for why
+      // that is not fixable from this file alone.
       const existingDto = data.existing_provider_dto;
+      const now = Date.now();
+      // Only `updatedAt` moves on an edit. `createdAt` and the list position
+      // are the provider's identity in the config store — rebuilding them
+      // re-stamps the creation date and reorders the entry on every save.
+      const createdAt = existingDto?.createdAt ?? now;
+      const sortIndex = existingDto?.sortOrder ?? 0;
+      // `notes` was declared on the form and sent by both call sites but
+      // never read here, so the Notes field was discarded on every save.
+      // Prefer the live form value, fall back to what the DTO already holds
+      // (a caller that does not manage notes leaves it untouched).
+      const notes = data.notes?.trim() || existingDto?.notes?.trim() || undefined;
+      // `extra_env` carries the provider's env overrides as a JSON string.
+      // The DTO is authoritative when it has them; otherwise the form value
+      // is used, which is how a brand-new provider inherits the preset's
+      // `defaultEnvOverrides`.
+      const extraEnvJson = existingDto?.extraEnv || data.extra_env;
       const sharedMeta = {
         id: editingId ?? '',
         name: data.name,
@@ -225,12 +248,23 @@ export function useProviderEditSave(): UseProviderEditSaveResult {
         // user's model selections and the chat fails with
         // "No model configured in provider".
         meta: {
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          sortIndex: 0,
+          createdAt,
+          updatedAt: now,
+          sortIndex,
+          ...(notes ? { notes } : {}),
+          // `meta.tags` is NOT preserved on edit. It used to sit behind an
+          // `existingDto?.tags` branch that could never fire: the renderer DTO
+          // (`RendererLlmProviderDTO`) has no `tags` field — it surfaces the
+          // same information as `isDefault` — so neither call site
+          // (`ProviderEditView.tsx`, `ProviderQuickConnect.tsx`) could supply
+          // one, and every edit silently dropped the tags the store keeps
+          // (`provider-store.ts` writes the `active` tag,
+          // `ModelSyncService` reads a preset key out of them). Making tags
+          // round-trip needs the DTO plus those two call sites to change
+          // together; until then this is a known drop, not a silent one.
         },
         headers: existingDto ? safeParse(existingDto.headers) : {},
-        extraEnv: existingDto ? safeParse(existingDto.extraEnv) : {},
+        extraEnv: safeParse(extraEnvJson),
         ...(data.options && Object.keys(data.options).length > 0
           ? { options: data.options }
           : {}),

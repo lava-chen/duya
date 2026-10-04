@@ -271,6 +271,14 @@ interface EditorState {
   name: string;
   prompt: string;
   model: string;
+  /**
+   * Provider that exposes `model`. Kept alongside the model name because
+   * the selector is provider-grouped: the same model id can live under two
+   * providers, and a bare raw id resolves back to whichever group happens
+   * to come first. Mirrors `use-bot-contact-form`, which keeps the same
+   * `providerId` from `fromSelectorModelId`.
+   */
+  modelProviderId: string;
   workingDirectory: string;
   permissionMode: CronPermissionMode;
   effort: string;
@@ -282,6 +290,9 @@ function editorStateFromCron(cron: AutomationCron): EditorState {
     name: cron.name,
     prompt: cron.prompt,
     model: cron.model,
+    // The persisted provider pin, so a reopened routine keeps the vendor the
+    // user picked instead of falling back to group-order resolution.
+    modelProviderId: cron.modelProviderId ?? '',
     workingDirectory: cron.workingDirectory || '',
     permissionMode: cron.permissionMode ?? 'auto',
     effort: cron.effort ?? '',
@@ -293,6 +304,7 @@ const DEFAULT_EDITOR: EditorState = {
   name: '',
   prompt: '',
   model: '',
+  modelProviderId: '',
   workingDirectory: '',
   // Legacy cron sessions run with 'auto'; keep that as the create default so
   // existing behavior is preserved unless the user picks another profile.
@@ -362,9 +374,11 @@ export function CronEditorModal({
   const providerGroups = useMemo(() => buildBotModelGroups(providers), [providers]);
 
   // cron.model stores the raw model id; the selector speaks prefixed ids.
+  // The configured provider is preferred so a model offered by two
+  // providers round-trips to the one the user actually picked.
   const selectedSelectorModelId = useMemo(
-    () => toSelectorModelId(editor.model, undefined, providerGroups),
-    [editor.model, providerGroups],
+    () => toSelectorModelId(editor.model, editor.modelProviderId || undefined, providerGroups),
+    [editor.model, editor.modelProviderId, providerGroups],
   );
 
   // Effort options for the run — same shape as the composer's fallback list
@@ -455,6 +469,9 @@ export function CronEditorModal({
         prompt: editor.prompt.trim(),
         schedule: editorDraftToSchedule(schedule),
         model: editor.model.trim(),
+        // Pin the routine to the provider group the user actually picked. Sent
+        // as '' to clear an existing pin (falls back to the default provider).
+        modelProviderId: editor.modelProviderId,
         workingDirectory: editor.workingDirectory.trim() || undefined,
         concurrencyPolicy: cron?.concurrencyPolicy ?? 'skip',
         maxRetries: cron?.maxRetries ?? 3,
@@ -675,9 +692,14 @@ export function CronEditorModal({
             <ModelProviderSelector
               providerGroups={providerGroups}
               selectedModelId={selectedSelectorModelId}
-              onSelectModel={(selectorId) =>
-                setEditor((prev) => ({ ...prev, model: fromSelectorModelId(selectorId, providerGroups).raw }))
-              }
+              onSelectModel={(selectorId) => {
+                const { raw, providerId } = fromSelectorModelId(selectorId, providerGroups);
+                setEditor((prev) => ({
+                  ...prev,
+                  model: raw,
+                  modelProviderId: providerId ?? '',
+                }));
+              }}
               effortValue={editor.effort}
               effortOptions={effortOptions}
               onSelectEffort={(value) => setEditor((prev) => ({ ...prev, effort: value ?? '' }))}

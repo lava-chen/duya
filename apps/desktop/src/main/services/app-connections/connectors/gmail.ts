@@ -9,6 +9,7 @@
  */
 
 import type { ConnectorInputSchema } from '../connector-types.js';
+import { authorizationHeader } from '../connector-types.js';
 import type {
   ConnectorInvokeResult,
   ConnectorModule,
@@ -159,7 +160,7 @@ export function listGmailDescriptors(connectionId: string): ConnectorToolDescrip
   ];
 }
 
-async function searchGmailMessages(args: unknown, accessToken: string, fetchImpl: typeof fetch): Promise<ConnectorInvokeResult> {
+async function searchGmailMessages(args: unknown, accessToken: string, fetchImpl: typeof fetch, tokenType?: string): Promise<ConnectorInvokeResult> {
   const input = asRecord(args);
   const query = stringValue(input.query);
   const maxResults = clampNumber(input.maxResults, 10, 1, 50);
@@ -167,12 +168,17 @@ async function searchGmailMessages(args: unknown, accessToken: string, fetchImpl
   url.searchParams.set('maxResults', String(maxResults));
   // format=metadata returns the key headers (From/To/Subject/Date) so we can
   // present a useful list without issuing a full request per message.
+  // `metadataHeaders` is a repeated parameter: `set` REPLACES the previous
+  // value, so all three calls must be `append` — with `set` only Date reached
+  // the wire and headerValue() below always returned undefined.
+  // Wire order is From, Subject, Date; the consumer looks headers up by name
+  // (case-insensitive), so the order only has to be deterministic.
   url.searchParams.set('format', 'metadata');
-  url.searchParams.set('metadataHeaders', 'From');
-  url.searchParams.set('metadataHeaders', 'Subject');
-  url.searchParams.set('metadataHeaders', 'Date');
+  url.searchParams.append('metadataHeaders', 'From');
+  url.searchParams.append('metadataHeaders', 'Subject');
+  url.searchParams.append('metadataHeaders', 'Date');
   if (query) url.searchParams.set('q', query);
-  const response = await fetchImpl(url.toString(), { headers: { Authorization: 'Bearer ' + accessToken } });
+  const response = await fetchImpl(url.toString(), { headers: { Authorization: authorizationHeader(accessToken, tokenType) } });
   if (!response.ok) return gmailFailure('search messages', response.status);
   const data = (await response.json()) as { messages?: MessageListEntry[] };
   return {
@@ -190,13 +196,13 @@ async function searchGmailMessages(args: unknown, accessToken: string, fetchImpl
   };
 }
 
-async function readGmailMessage(args: unknown, accessToken: string, fetchImpl: typeof fetch): Promise<ConnectorInvokeResult> {
+async function readGmailMessage(args: unknown, accessToken: string, fetchImpl: typeof fetch, tokenType?: string): Promise<ConnectorInvokeResult> {
   const input = asRecord(args);
   const id = stringValue(input.id);
   if (!id || !isGmailId(id)) return invalidArguments('id must be a valid Gmail message ID');
   const url = new URL('https://gmail.googleapis.com/gmail/v1/users/me/messages/' + encodeURIComponent(id));
   url.searchParams.set('format', 'full');
-  const response = await fetchImpl(url.toString(), { headers: { Authorization: 'Bearer ' + accessToken } });
+  const response = await fetchImpl(url.toString(), { headers: { Authorization: authorizationHeader(accessToken, tokenType) } });
   if (!response.ok) return gmailFailure('read message', response.status);
   const message = (await response.json()) as GmailMessage;
   if (!message.payload) return invalidArguments('Gmail did not return message content');
@@ -216,7 +222,7 @@ async function readGmailMessage(args: unknown, accessToken: string, fetchImpl: t
   };
 }
 
-async function sendGmailEmail(args: unknown, accessToken: string, fetchImpl: typeof fetch): Promise<ConnectorInvokeResult> {
+async function sendGmailEmail(args: unknown, accessToken: string, fetchImpl: typeof fetch, tokenType?: string): Promise<ConnectorInvokeResult> {
   const input = asRecord(args);
   const to = stringArray(input.to);
   const subject = stringValue(input.subject);
@@ -229,7 +235,7 @@ async function sendGmailEmail(args: unknown, accessToken: string, fetchImpl: typ
   const response = await fetchImpl('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
     method: 'POST',
     headers: {
-      Authorization: 'Bearer ' + accessToken,
+      Authorization: authorizationHeader(accessToken, tokenType),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ raw: Buffer.from(raw, 'utf8').toString('base64url') }),
@@ -247,7 +253,7 @@ async function sendGmailEmail(args: unknown, accessToken: string, fetchImpl: typ
   };
 }
 
-async function draftGmailEmail(args: unknown, accessToken: string, fetchImpl: typeof fetch): Promise<ConnectorInvokeResult> {
+async function draftGmailEmail(args: unknown, accessToken: string, fetchImpl: typeof fetch, tokenType?: string): Promise<ConnectorInvokeResult> {
   const input = asRecord(args);
   const to = stringArray(input.to);
   const subject = stringValue(input.subject);
@@ -261,7 +267,7 @@ async function draftGmailEmail(args: unknown, accessToken: string, fetchImpl: ty
   const response = await fetchImpl('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
     method: 'POST',
     headers: {
-      Authorization: 'Bearer ' + accessToken,
+      Authorization: authorizationHeader(accessToken, tokenType),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
@@ -280,7 +286,7 @@ async function draftGmailEmail(args: unknown, accessToken: string, fetchImpl: ty
   };
 }
 
-async function markGmailRead(args: unknown, accessToken: string, fetchImpl: typeof fetch): Promise<ConnectorInvokeResult> {
+async function markGmailRead(args: unknown, accessToken: string, fetchImpl: typeof fetch, tokenType?: string): Promise<ConnectorInvokeResult> {
   const input = asRecord(args);
   const id = stringValue(input.id);
   const threadId = stringValue(input.threadId);
@@ -292,7 +298,7 @@ async function markGmailRead(args: unknown, accessToken: string, fetchImpl: type
     {
       method: 'POST',
       headers: {
-        Authorization: 'Bearer ' + accessToken,
+        Authorization: authorizationHeader(accessToken, tokenType),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ removeLabelIds: ['UNREAD'] }),
@@ -405,12 +411,12 @@ export function createGmailConnector(fetchImpl: typeof fetch = fetch): Connector
     listDescriptors(connectionId: string) {
       return listGmailDescriptors(connectionId);
     },
-    async invoke(action: string, args: unknown, accessToken: string): Promise<ConnectorInvokeResult> {
-      if (action === GMAIL_SEARCH_ACTION) return searchGmailMessages(args, accessToken, fetchImpl);
-      if (action === GMAIL_READ_ACTION) return readGmailMessage(args, accessToken, fetchImpl);
-      if (action === GMAIL_SEND_ACTION) return sendGmailEmail(args, accessToken, fetchImpl);
-      if (action === GMAIL_DRAFT_ACTION) return draftGmailEmail(args, accessToken, fetchImpl);
-      if (action === GMAIL_MARK_READ_ACTION) return markGmailRead(args, accessToken, fetchImpl);
+    async invoke(action: string, args: unknown, accessToken: string, tokenType?: string): Promise<ConnectorInvokeResult> {
+      if (action === GMAIL_SEARCH_ACTION) return searchGmailMessages(args, accessToken, fetchImpl, tokenType);
+      if (action === GMAIL_READ_ACTION) return readGmailMessage(args, accessToken, fetchImpl, tokenType);
+      if (action === GMAIL_SEND_ACTION) return sendGmailEmail(args, accessToken, fetchImpl, tokenType);
+      if (action === GMAIL_DRAFT_ACTION) return draftGmailEmail(args, accessToken, fetchImpl, tokenType);
+      if (action === GMAIL_MARK_READ_ACTION) return markGmailRead(args, accessToken, fetchImpl, tokenType);
       return {
         success: false,
         error: { code: 'unknown_action', message: 'Unknown gmail action: ' + action, retriable: false },

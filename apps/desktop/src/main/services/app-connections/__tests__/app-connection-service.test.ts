@@ -386,9 +386,14 @@ describe('AppConnectionService — silent reconnect (remote-mcp-silent-reconnect
     vault.set('r-good', fakeToken());
     vault.set('r-bad', fakeToken());
 
-    remoteMcp.ensureSession
-      .mockResolvedValueOnce({ connectionId: 'r-good', test: [] } as never)
-      .mockRejectedValueOnce(new Error('transient'));
+    // Dispatch on connectionId, not call order: `r-good` and `r-bad` are both
+    // error rows for the same provider, so which one rehydrate visits first is
+    // a storage detail, not a contract. Ordering the mock by call sequence made
+    // this test pass or fail on SQLite row order alone.
+    remoteMcp.ensureSession.mockImplementation(async (connectionId: string) => {
+      if (connectionId === 'r-bad') throw new Error('transient');
+      return { connectionId, test: [] } as never;
+    });
 
     await service.rehydrateRemoteMcpConnections();
 

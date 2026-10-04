@@ -452,16 +452,19 @@ describe('SessionFinalizer.finalizeStreamError (Plan 550 2e)', () => {
     expect(persisted.find((m) => m.id === 'a1')).toBeDefined();
   });
 
-  it('skips synthetic tool_result injection when the trailing assistant is spliced out by cleanup (parity with legacy behaviour)', async () => {
-    // The pre-refactor inline code spliced the trailing assistant
-    // before the AbortError branch's synthetic-injection loop could
-    // see it, so injection was a no-op for fully-orphan trailing
-    // assistants. `finalizeStreamError` preserves that ordering.
+  it('injects a synthetic tool_result for an orphan trailing assistant on abort, BEFORE cleanup could splice it out', async () => {
+    // Regression: the pre-fix code ran `cleanupIncompleteToolUse` first,
+    // which spliced the trailing assistant away, so the AbortError branch's
+    // injection loop could never see a `tool_use` and step 6 of the
+    // finalizeStreamError contract was unreachable. The persisted history
+    // then held a `tool_use` with no `tool_result`, which the provider
+    // rejects with a strict-validation 400 on the next turn.
+    // Injection now precedes cleanup, so the pair is always completed.
     const toolUseBlock: ToolUseContent = {
       type: 'tool_use',
       id: 'orphan-abort-1',
       name: 'read',
-      input: { path: '/tmp/x' },
+      input: { file_path: '/tmp/x' },
     };
     const messages: Message[] = [
       {
@@ -489,7 +492,21 @@ describe('SessionFinalizer.finalizeStreamError (Plan 550 2e)', () => {
       f.finalizeStreamError(Object.assign(new Error('aborted'), { name: 'AbortError' })),
     );
 
-    expect(pushDurable).not.toHaveBeenCalled();
+    expect(pushDurable).toHaveBeenCalledTimes(1);
+    const [pushedMessages, pushedRow] = pushDurable.mock.calls[0] as [Message[], Message];
+    expect(pushedMessages).toBe(messages);
+    expect(pushedRow.role).toBe('user');
+    expect(pushedRow.content).toEqual([
+      {
+        type: 'tool_result',
+        tool_use_id: 'orphan-abort-1',
+        content: 'Interrupted by user',
+        is_error: true,
+      },
+    ]);
+    // The assistant `tool_use` is still in the array: the abort path keeps
+    // the pair rather than dropping the whole turn.
+    expect(messages[0]!.content).toEqual([toolUseBlock]);
     expect(events).toEqual([{ type: 'done', reason: 'aborted' }]);
   });
 

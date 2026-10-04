@@ -159,6 +159,10 @@ const UNMAPPED: ReadonlyArray<readonly [string, string]> = [
     'DECIDED (G-2): the runtime owns classification and the clock. An adapter must not derive kind/mode from toolName; until a coordinator exists the runtime withholds the event rather than inventing expiresAt.',
   ],
   [
+    'AgentPermissionExpiredEvent',
+    'The runtime now derives the approval deadline from the request own expiresAt and announces the lapse, so a card stops being clickable instead of swallowing a late click. It reaches the host as an SSE event (router maps it to permission_expired) and is not a protocol payload: the run ledger does not own an approval lifecycle, so there is nothing for it to record. The deadline the card counts down is the same expiresAt this event echoes, which is the single source of truth.',
+  ],
+  [
     'AgentDoneEvent',
     'DECIDED (G-5): a stateful aggregator may build run.completed, but only from observed sources. A field with no source stays absent rather than filled.',
   ],

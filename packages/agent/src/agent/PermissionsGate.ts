@@ -28,6 +28,10 @@ import type { Message } from '../types.js';
 import type { CanUseToolFn } from '../tool/StreamingToolExecutor.js';
 import type { ToolRegistry } from '../tool/registry.js';
 import type { ToolPermissionCheckContext } from '../permissions/permissions.js';
+// Value import: the engine's own step-1 deny lookup, reused here so the gate
+// and `hasPermissionsToUseTool` can never disagree about which tools the user
+// has explicitly denied.
+import { getDenyRuleForTool } from '../permissions/permissions.js';
 import type {
   AdditionalWorkingDirectory,
   LocalToolPermission,
@@ -123,6 +127,10 @@ function makeRiskTierLookup(
  *     after the ledger was drained
  *   - the plan-mode exact-path gate consults `getModeCoordinator()`
  *     lazily (the coordinator is rebuilt per streamChat)
+ *   - explicit user deny rules are evaluated BEFORE the pre-granted
+ *     approvals (`consumeApprovedEffect` / `alwaysAllowTools`) and before
+ *     the plan-mode gate, so a blanket grant can never override a deny
+ *     that the engine itself would refuse
  *   - `workingDirectory` for the gate comes from the turn context (the
  *     stream-chat-local cwd), not from the session-scope field
  *   - classifier failures fail-closed (deny) so a broken permission
@@ -163,10 +171,31 @@ export function buildPermissions(
     toolInput?: Record<string, unknown>,
   ) => {
     try {
+      // Deny rules first, and always. A configured deny rule is the user's
+      // most specific statement of intent, so it is authoritative over every
+      // grant below: the one-shot approval ledger, the `alwaysAllowTools`
+      // blanket grant, the plan-mode gate and the engine's own allow steps.
+      // This is the same lookup the engine performs as step 1 of
+      // `hasPermissionsToUseTool`, so a tool denied there can never be
+      // resurrected here by an approval that was granted earlier.
+      const denyRule = getDenyRuleForTool(
+        permissionContext.getAppState().toolPermissionContext,
+        toolName,
+      );
+      if (denyRule) {
+        const message = `Permission to use ${toolName} has been denied.`;
+        logger.warn(`[Permissions] tool denied by explicit deny rule: ${toolName}`, {
+          source: denyRule.source,
+        });
+        return { allowed: false, behavior: 'deny' as const, message };
+      }
+
       // Plan 498 one-shot approval ledger: a persisted approval card that
       // was granted ('approved') and not yet consumed authorizes exactly
       // this (toolName, toolInput) pair. Consume is a CAS — a replay can
-      // never double-execute an approval.
+      // never double-execute an approval. Reached only because no explicit
+      // deny rule matched the tool above: deny is authoritative, so an
+      // earlier grant cannot survive a later deny.
       const consumeApproved = turn.approval.consumeApprovedEffect;
       if (consumeApproved) {
         const preApproved = await consumeApproved(toolName, toolInput);
@@ -175,7 +204,10 @@ export function buildPermissions(
         }
       }
       // Plan 498: "Always allow this tool" grants from persisted approval
-      // cards (per bot/session scope, seeded by the worker per turn).
+      // cards (per bot/session scope, seeded by the worker per turn). Also
+      // checked after the deny rules: a blanket allow grant never overrides
+      // an explicit deny for the same tool, but it still short-circuits the
+      // ask/classifier path below when nothing is denied.
       if (turn.approval.alwaysAllowTools.has(toolName)) {
         return { allowed: true, behavior: 'allow' as const };
       }
@@ -183,7 +215,9 @@ export function buildPermissions(
       // Plan-mode exact-path gating: when a plan tracker is active, write
       // tools are only allowed when they target the session plan file.
       // `'allow'`/`'deny'` are authoritative; `null` falls through to the
-      // normal permission flow below.
+      // normal permission flow below. Sits after the deny rules so its
+      // `'allow'` verdict cannot skip a configured deny either — the gate is
+      // plan-scoped, an explicit deny rule is user-scoped and broader.
       const gate = deps.getModeCoordinator()?.gateWriteTool(
         toolName,
         toolInput ?? {},

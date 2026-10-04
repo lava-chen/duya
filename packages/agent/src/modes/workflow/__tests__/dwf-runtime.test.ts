@@ -349,7 +349,13 @@ describe('dwf runtime — wf primitives', () => {
     expect(skipped).toEqual({ out: null });
   });
 
-  it('approve timeout with onTimeout fail escalates via DwfApprovalDeniedError', async () => {
+  it("approve timeout with onTimeout fail reports a failed approval, not an escalation", async () => {
+    // This test used to assert `kind === 'escalate'` for `onTimeout: 'fail'`.
+    // That was the aliasing: the runtime only special-cased `'skip'`, so every
+    // other policy — including a genuine `'escalate'` — collapsed into the same
+    // outcome, and a failed approval was reported as having been escalated to
+    // a human. The three policies are now distinct outcomes and each says
+    // which one it was.
     const script = `
       export default async function (wf) {
         try { await wf.approve("Delete prod?", { onTimeout: 'fail' }); return 'passed'; }
@@ -361,7 +367,34 @@ describe('dwf runtime — wf primitives', () => {
       { runId: 'r1', journal: Journal.memory() },
     )) as Record<string, unknown>;
     expect(result.name).toBe('DwfApprovalDeniedError');
-    expect(result.kind).toBe('escalate');
+    expect(result.kind).toBe('timed_out_fail');
+  });
+
+  it('approve timeout with onTimeout escalate asks once more before giving up', async () => {
+    // The positive control for the case above: if `'fail'` and `'escalate'`
+    // still produced the same result, this would pass for the same reason the
+    // old assertion did.
+    const script = `
+      export default async function (wf) {
+        try { await wf.approve("Delete prod?", { onTimeout: 'escalate' }); return 'passed'; }
+        catch (e) { return { name: e.name, kind: e.kind }; }
+      }`;
+    let asked = 0;
+    const result = (await runDwfScript(
+      script,
+      fakePorts({
+        async requestApproval() {
+          asked += 1;
+          return { decision: 'timeout' as const };
+        },
+      }),
+      { runId: 'r1e', journal: Journal.memory() },
+    )) as Record<string, unknown>;
+
+    expect(result.name).toBe('DwfApprovalDeniedError');
+    expect(result.kind).toBe('timed_out_escalate');
+    // Escalation is only meaningful if it actually re-notifies someone.
+    expect(asked).toBeGreaterThan(1);
   });
 
   it('decide uses the backend when available', async () => {

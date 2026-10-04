@@ -47,7 +47,13 @@ export function shouldContinueParentWork(
   const skip = Math.max(0, prior.length - PRIOR_EXEC_LOOKBACK)
   const recentPrior = prior.slice(skip)
   if (recentPrior.some((a) => blobHasExec(a))) return true
-  if (blobHasExec(last) && (blobIsDelegate(last) || blobIsDelegate(child))) return true
+  // Exec work in the latest ask counts only when the delegated child job is
+  // not the whole ask. `blobIsDelegate(last)` used to be OR'd in here, which
+  // collapsed both branches below into `blobHasExec(last)` and made a
+  // purely-delegated ask ("spawn an agent to deploy the service") look like
+  // leftover parent work — telling the parent to keep working instead of
+  // yielding, the opposite of the documented intent.
+  if (blobHasExec(last) && blobIsDelegate(child)) return true
   if (blobHasExec(last) && !blobIsDelegate(last)) return true
   // "while waiting, spawn …" — parent still has the waiting work.
   const lastLower = last.toLowerCase()

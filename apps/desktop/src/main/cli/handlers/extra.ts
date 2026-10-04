@@ -23,6 +23,7 @@ import { existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { app } from 'electron';
 import { getCoreStores } from '../../db/core-connection';
+import { SESSION_LIST_UNLIMITED } from '../../db/core/session-store';
 import { ipcMessageToNewEvent } from '../../ipc/core-db-adapters';
 import { syncBundledSkills } from '../../../../../../packages/agent/src/skills/skillsSync';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
@@ -455,7 +456,9 @@ export async function handleChannelDisconnect(
   if (!agentId) {
     try {
       const { sessions } = getCoreStores();
-      const allSessions = sessions.list();
+      // Scans for a primary session across the whole table; a capped page
+      // would just pick a different (wrong) "primary" once it is full.
+      const allSessions = sessions.list({ limit: SESSION_LIST_UNLIMITED });
       const primarySession = allSessions.find(s => s.status !== 'deleted' && s.agentProfileId);
       agentId = primarySession?.agentProfileId ?? null;
     } catch {

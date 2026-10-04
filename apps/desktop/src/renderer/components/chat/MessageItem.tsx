@@ -622,7 +622,11 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
         (a) => a.kind !== 'file' && !isImageAttachment(a),
       ),
     };
-  }, [message.content, message.displayContent, message.msgType, message.role]);
+    // `message.attachments` feeds `decodeMessageAttachments` above. It was
+    // missing from the deps, so an attachment list that changed without the
+    // content / role / msgType / displayContent scalars changing left the
+    // parsed text, pasted contents and ref attachments stale.
+  }, [message.content, message.displayContent, message.msgType, message.role, message.attachments]);
 
   // Build ordered action items from all messages in this round
   const { notices, actions, finalText, allPastedContents } = useMemo(() => {
@@ -729,7 +733,11 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
       finalText: joinMarkdownFragments(finalFragments),
       allPastedContents: allPasted,
     };
-  }, [message, mergedMessages, toolResultMap, pastedContents]);
+    // Plan 437: `showHookInvocations` gates the `hook_invocation` skip in the
+    // loop above. Without it in the deps, toggling the hook visibility in
+    // Settings → Hooks left this memo stale until an unrelated dependency
+    // (message / mergedMessages / toolResultMap / pastedContents) changed.
+  }, [message, mergedMessages, toolResultMap, pastedContents, showHookInvocations]);
 
   // Extract the deep-research report from the `research_report` tool action
   // (if present). When found, it renders as a standalone card (ResearchReportCard)

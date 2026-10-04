@@ -154,15 +154,36 @@ describe('same-path writes are serialised', () => {
   it('runs different paths at the same time rather than behind one global lock', async () => {
     const files = ['one.md', 'two.md', 'three.md'].map((name) => join(root, name));
 
-    const started = Date.now();
     await Promise.all(files.map((file, i) => readModifyWrite(file, `P${i}`)));
-    const elapsed = Date.now() - started;
 
-    // Each body sleeps 15ms, so three bodies sharing one lock would need at least
-    // 45ms. The bound is deliberately loose: it is a floor for "was serialised",
-    // not a timing benchmark, and a loaded machine cannot make a genuinely
-    // parallel run look serial.
-    expect(elapsed).toBeLessThan(45);
+    // Overlap is proved by the INTERLEAVING LOG, not by a timer — which is what
+    // this file's own header says it does ("the final file contents decide the
+    // row rather than a timer"), and which the old version of this test
+    // contradicted. It asserted `elapsed < 45`, where 45ms is exactly the
+    // floor for three serialised 15ms bodies: the bound had no headroom, so a
+    // genuinely parallel run on a loaded machine measured 56ms and failed. A
+    // wall clock cannot separate "parallel" from "serial" under load, because
+    // load inflates both.
+    //
+    // Serialised, each body's three steps would be contiguous. Parallel, some
+    // other token's step lands between them — which is exactly the inverse of
+    // the contiguity assertion the same-path test above makes.
+    const tokens = ['P0', 'P1', 'P2'];
+    for (const token of tokens) {
+      const indexes = log
+        .map((entry, index) => (entry.startsWith(`${token}:`) ? index : -1))
+        .filter((index) => index >= 0);
+      expect(indexes).toHaveLength(3);
+      const span = indexes.slice(1);
+      const overlapped = span.some((index) =>
+        log.slice(indexes[0]! + 1, index).some((entry) => !entry.startsWith(`${token}:`)),
+      );
+      expect(
+        overlapped,
+        `${token}'s steps were contiguous, so the three bodies did not overlap: ${JSON.stringify(log)}`,
+      ).toBe(true);
+    }
+
     for (const [i, file] of files.entries()) {
       expect(readFileSync(file, 'utf8')).toBe(`|P${i}`);
     }

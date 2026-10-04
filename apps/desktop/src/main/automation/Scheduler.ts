@@ -175,7 +175,7 @@ export class AutomationScheduler {
     // Resolve provider + create the session row synchronously so provider
     // errors surface immediately to the caller instead of vanishing into a
     // background failure. runCronInSession reuses the row (idempotent create).
-    const { provider, model } = resolveCronProvider(job.model);
+    const { provider, model } = resolveCronProvider(job.model, job.modelProviderId);
     createCronSessionRow({
       sessionId,
       title: `[Cron] ${job.name}`,
@@ -256,11 +256,22 @@ export class AutomationScheduler {
     // Manually-triggered runs (existing handle) bypass the concurrency policy:
     // the user explicitly asked to run now.
     if (!manual && runningList && runningList.size > 0) {
-      if (job.concurrencyPolicy === 'skip') return;
-      if (job.concurrencyPolicy === 'replace') {
+      const policy = job.concurrencyPolicy;
+      if (policy === 'skip') return;
+      if (policy === 'replace') {
         for (const sid of runningList) interruptCronSession(sid);
+      } else if (policy !== 'parallel') {
+        // Fail closed. 'parallel' falls through to a concurrent session; any
+        // other value must NOT, because falling through IS unbounded
+        // concurrency. `CronFileStore` coerces stored values to the
+        // implemented set already; this is the second gate for a job object
+        // assembled in memory.
+        getLogger().warn('Unknown cron concurrency policy; skipping this fire', {
+          cronId: job.id,
+          concurrencyPolicy: policy,
+        }, LogComponent.Automation);
+        return;
       }
-      // 'parallel' → fall through and allow concurrent sessions.
     }
 
     const runId = existing?.runId ?? randomUUID();

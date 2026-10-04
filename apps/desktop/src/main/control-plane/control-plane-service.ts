@@ -270,6 +270,52 @@ export class ControlPlaneService {
       result: handled,
     };
   }
+
+  /**
+   * Serve one command and answer with the WIRE reply.
+   *
+   * ## Why this exists beside `serve`
+   *
+   * `serve` returns the INTERNAL receipt: a discriminated union whose durable
+   * states carry `state` / `runId` / `committed` and deliberately do NOT carry
+   * `ok`, `written` or `applied`. Those exist only in the serialised form the
+   * dispatcher produced, and parsing the wire reply in order to validate it and
+   * then throwing the parsed copy away is what made the bridge answer
+   * `{ state: 'created', runId }` where the consumer's `readRunReceipt` requires
+   * `ok: true` — so a perfectly successful `run:create` was reported as
+   * `unreadable`, `openRun` refused to dispatch, and the request then waited for
+   * a `chat:done` that nothing was going to send. Patching an `ok` back on by
+   * hand does not work: `run:append` also needs `written`, and a read action
+   * has no receipt at all to patch.
+   *
+   * So the encoding is decided ONCE, here, and the bridge just returns it.
+   * There is no per-action switch: the dispatcher already draws the line. A
+   * durable WRITE's reply IS a wire receipt, so it is forwarded byte for byte
+   * and every existing consumer keeps reading exactly what it read before C6.1
+   * — `readRunReceipt` in `run-orchestrator.ts`, the eval harness, the
+   * closed-loop tests. A READ's reply is the result itself (a row, an array,
+   * `null`) and is forwarded as that, because a read forced through the
+   * write-receipt parser could only ever come back `unreadable`, which is the
+   * other half of the same defect. A REFUSAL answers `ok: false` with the
+   * storage state when there is one (`busy`, `conflict`, …) and the typed
+   * refusal when there is not, so a caller can still tell "not a decision
+   * anybody made" from "the database is locked".
+   */
+  async serveWire(envelope: CommandEnvelope, sender: CommandSenderFacts): Promise<unknown> {
+    const receipt = await this.serve(envelope, sender);
+    if (receipt.outcome === 'rejected') {
+      return {
+        ok: false,
+        // A rejection that happened before storage has no storage state to
+        // report, and `invalid` is the receipt state that says exactly that.
+        state: receipt.write?.state ?? 'invalid',
+        runId: typeof envelope.payload.runId === 'string' ? envelope.payload.runId : '',
+        reason: receipt.reason,
+        refusal: receipt.refusal,
+      };
+    }
+    return receipt.result;
+  }
 }
 
 // ── the process-wide instance, created by composition ─────────────────────

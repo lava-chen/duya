@@ -569,6 +569,7 @@ const zh: Record<TranslationKey, string> = {
   'permission.answerSubmitted': '答案已提交',
   'permission.allowed': '已允许',
   'permission.denied': '已拒绝',
+  'permission.expired': '此请求已超时并被拒绝，请重新发起请求。',
   'permission.tellDuyaWhatToDoDifferently': '不,告诉 duya 怎么改进',
   'permission.feedbackPlaceholder': '告诉 duya 怎么改进...',
   'permission.continueHint': '继续',

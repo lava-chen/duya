@@ -826,6 +826,27 @@
   cursor: not-allowed;
 }
 
+/* Save/auto-dismiss status banner (ProviderManagement).
+   The border is ALWAYS the default `--border` token at `--border-width` — the
+   success/error distinction lives in the text and fill only, so the banner
+   reads correctly in both themes without a hard-coded rgba/hex border. */
+.settings-status-banner {
+  border: var(--border-width) solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  font-size: 0.875rem;
+}
+
+.settings-status-banner.success {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.settings-status-banner.error {
+  background: var(--error-soft);
+  color: var(--error);
+}
+
 /* Empty State */
 .skill-path-empty {
   display: flex;

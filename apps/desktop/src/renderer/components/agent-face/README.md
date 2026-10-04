@@ -20,6 +20,26 @@ French comments kept as-is so the files stay diffable against upstream):
   attributes via refs (no React re-render while animating), IntersectionObserver
   pulls offscreen faces off the clock.
 
+## Two copies of this engine — deliberately not merged
+
+`apps/desktop/src/renderer/orb/bot/` holds the same bloub engine, and a
+duplication sweep flagged it for convergence. It was reviewed and **left
+alone on purpose**:
+
+- This copy is the newer one. `git --follow` on the shared files shows
+  `components/agent-face/` as the destination of the move, and the engine
+  files here are a verbatim port of bloub with French comments kept intact.
+- The two have diverged on the duya side in opposite directions. `orb/bot/`
+  grew `repere.ts` and `pointer-mood.ts` (orb-specific pointer tracking);
+  `agent-face/` grew `tile.ts`, `clock.ts`, `status.ts` and `AgentFace.tsx`
+  (the fixed superellipse and the shared clock).
+- Merging them would therefore produce a union that neither copy's upstream
+  can be diffed against — a superset, not a convergence. Two ports of one
+  small vendored engine is a smaller cost than losing diffability against
+  upstream.
+
+Revisit this only if one of the two call sites is retired.
+
 ## Adaptations vs upstream
 
 - `eyefit.ts` adds `registerEyeFitShape(radii)`: upstream builds its eye-offset

@@ -28,21 +28,24 @@
  * transport that produced the events.
  */
 
-import type { ProtocolErrorInfo, RunStatus, RunTerminalState, StopReason } from '@duya/agent-protocol';
-import type { RunEvent } from '@duya/agent-protocol';
-
-/** The two event types that end a run. Everything else is non-terminal. */
-const TERMINAL_TYPES = new Set<RunEvent['type']>(['run.completed', 'run.failed']);
+import type { ProtocolErrorInfo, RunEvent, RunStatus, RunTerminalState, StopReason } from '@duya/agent-protocol';
+import { TERMINAL_EVENT_TYPES } from '@duya/agent-protocol';
 
 /**
  * True when `type` ends a run.
  *
- * Kept as a function over the two literal strings rather than a re-derived
- * table: `EVENT_META` describes events, it does not decide run lifecycle, and
- * a registry lookup here would make an added event silently terminal.
+ * Reads the protocol's single declaration of the pair
+ * (`TERMINAL_EVENT_TYPES`) rather than a private copy. This module used to
+ * declare its own `Set`, and the runtime emitter declared a third: a third
+ * terminal event could have been added to the protocol and recognised by the
+ * ledger while this resolver still reported the run as unfinished.
+ *
+ * Kept as a function over the set rather than a re-derived table:
+ * `EVENT_META` describes events, it does not decide run lifecycle, and a
+ * registry lookup here would make an added event silently terminal.
  */
 export function isTerminalEventType(type: RunEvent['type']): boolean {
-  return TERMINAL_TYPES.has(type);
+  return TERMINAL_EVENT_TYPES.has(type);
 }
 
 /** Why a run was stopped, when the caller knows something the stream does not. */

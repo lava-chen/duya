@@ -28,6 +28,12 @@
  * Record, then deliver. A decision the worker acts on but the store never
  * learned about leaves an audit that claims a question was answered when
  * nothing was recorded -- worse than the answer having been lost.
+ *
+ * Which means the order is a REFUSAL, not a preference. When this returns
+ * `refused` the caller delivers nothing at all: the whole point of writing the
+ * decision first is that the worker is not told about an answer the durable
+ * record does not have, and "the user should not have to wait" is not a reason
+ * to authorise a tool on the strength of a write that failed.
  */
 
 import { translate, type PermissionSurface } from './permission-vocabulary.js';
@@ -46,10 +52,16 @@ export type RecordOutcome =
   /**
    * Nothing was recorded.
    *
-   * NOT a reason to drop the answer: a tool call waiting on a decision that
-   * never arrives is denied by a deadline rather than by a person, which is a
-   * worse outcome than a missing audit row. The caller delivers and says the
-   * decision was not recorded.
+   * NOT a reason to authorise anyway. A tool call waiting on a decision that
+   * never arrives is denied by a deadline rather than by a person, and that is
+   * the lesser evil: a decision the store never learned about leaves an audit
+   * claiming a question was answered when nothing was recorded, and it cannot
+   * even be established that this answer was the FIRST one — a missing row
+   * means a possible opposite decision nobody can read back. So the caller
+   * reports a retryable refusal and delivers nothing. The caller distinguishes
+   * the two refusals with `translate` (a `defer` is a decision nobody made, a
+   * failed write is a fact about the database) rather than by sniffing this
+   * string.
    */
   | { readonly status: 'refused'; readonly reason: string };
 
@@ -82,6 +94,16 @@ export async function recordPermissionDecision(
     readonly requestId: string;
     readonly sessionId: string;
     readonly decision: string;
+    /**
+     * The tool input the user EDITED before answering.
+     *
+     * Part of the decision, not a side channel: the worker runs the edited
+     * call, so the one-shot ledger burns on the hash of the edited input and the
+     * durable row has to say so in the same write that claims the row. Omitting
+     * it is not a default — it would leave the row describing a tool call that
+     * is never going to run.
+     */
+    readonly updatedInput?: Record<string, unknown>;
   },
 ): Promise<RecordOutcome> {
   const translated = translate(input.surface, input.decision);
@@ -107,7 +129,13 @@ export async function recordPermissionDecision(
     const result = (await dbRequest('toolApproval:resolve', {
       id: input.requestId,
       decision: storeDecision,
+      // The session is not decoration: the bridge REFUSES a claim whose row
+      // belongs to another session, so a caller that cannot name its own
+      // session cannot decide anything.
       sessionId: input.sessionId,
+      // Forwarded only when the caller actually edited the input, so the
+      // payload for an unedited answer is exactly the three keys it always was.
+      ...(input.updatedInput === undefined ? {} : { updatedInput: input.updatedInput }),
     })) as
       | { ok?: boolean; claimed?: boolean; error?: string; row?: { decision?: string | null } }
       | undefined;

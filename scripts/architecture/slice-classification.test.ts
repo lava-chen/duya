@@ -92,21 +92,21 @@ const EXPECTED = {
   counts: {
     wire: 47,
     pure: 6,
-    'runtime-coordination': 286,
-    'capability-adapter': 1173,
+    'runtime-coordination': 287,
+    'capability-adapter': 1169,
     'cp-durable': 166,
-    'host-ui': 1204,
+    'host-ui': 1202,
   } as Record<Category, number>,
   fingerprints: {
     wire: 'b455186a9ef9f6f6',
     pure: '08339d25e58ae23c',
-    'runtime-coordination': '31181831e6e2bacd',
-    'capability-adapter': '1e37536496c92b54',
+    'runtime-coordination': '570adb2991dd7384',
+    'capability-adapter': 'b600876a1a0b554d',
     'cp-durable': '42e519be19fed167',
-    'host-ui': '5f4fdca6f9f9092c',
+    'host-ui': '73e499da1b9ed5f6',
   } as Record<Category, string>,
-  // 3253 source files walked, 2882 classified, 371 under a stated exclusion.
-  total: 2882,
+  // 3248 source files walked, 2877 classified, 371 under a stated exclusion.
+  total: 2877,
   unclassified: 371,
 } as {
   counts: Record<Category, number>;

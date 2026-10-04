@@ -7,6 +7,7 @@
  */
 
 import type { ConnectorInputSchema } from '../connector-types.js';
+import { authorizationHeader } from '../connector-types.js';
 import type {
   ConnectorInvokeResult,
   ConnectorModule,
@@ -65,13 +66,14 @@ async function searchMessages(
   args: { query: string; count?: number },
   accessToken: string,
   fetchImpl: typeof fetch,
+  tokenType?: string,
 ): Promise<ConnectorInvokeResult> {
   const url = new URL('https://slack.com/api/search.messages');
   url.searchParams.set('query', args.query);
   url.searchParams.set('count', String(Math.min(100, Math.max(1, args.count ?? 20))));
 
   const resp = await fetchImpl(url.toString(), {
-    headers: { Authorization: `Bearer ${accessToken}` },
+    headers: { Authorization: authorizationHeader(accessToken, tokenType) },
   });
   if (!resp.ok) {
     return {
@@ -104,7 +106,7 @@ export function createSlackConnector(fetchImpl: typeof fetch = fetch): Connector
     listDescriptors(connectionId: string) {
       return listSlackDescriptors(connectionId);
     },
-    async invoke(action: string, args: unknown, accessToken: string): Promise<ConnectorInvokeResult> {
+    async invoke(action: string, args: unknown, accessToken: string, tokenType?: string): Promise<ConnectorInvokeResult> {
       if (action === SEARCH_MESSAGES_ACTION) {
         const typed = (args ?? {}) as { query: string; count?: number };
         if (!typed.query) {
@@ -113,7 +115,7 @@ export function createSlackConnector(fetchImpl: typeof fetch = fetch): Connector
             error: { code: 'missing_query', message: 'query is required', retriable: false },
           };
         }
-        return searchMessages(typed, accessToken, fetchImpl);
+        return searchMessages(typed, accessToken, fetchImpl, tokenType);
       }
       return {
         success: false,

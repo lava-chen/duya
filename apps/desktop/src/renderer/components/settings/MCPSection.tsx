@@ -115,6 +115,22 @@ function formDataToServer(formData: MCPServerFormData, connectionId?: string): M
   };
 }
 
+/**
+ * Transport of a configured server. `MCPServerConfig` in the renderer is a
+ * narrow view of the mcp.toml entry, so read the field defensively and
+ * default to `stdio` — the backwards-compatible on-disk default.
+ */
+function serverTransport(server: MCPServerConfig | null | undefined): 'stdio' | 'streamable-http' {
+  const raw = (server as { transport?: unknown } | null | undefined)?.transport;
+  return raw === 'streamable-http' ? 'streamable-http' : 'stdio';
+}
+
+/** HTTPS endpoint of a configured server, or '' when unset. */
+function serverUrl(server: MCPServerConfig | null | undefined): string {
+  const raw = (server as { url?: unknown } | null | undefined)?.url;
+  return typeof raw === 'string' ? raw.trim() : '';
+}
+
 // ============================================================================
 // Phase 3 (MCP runtime status UI) helpers
 // ============================================================================
@@ -372,8 +388,15 @@ export function MCPSection() {
       errors.name = "Name can only contain letters, numbers, hyphens, and underscores";
     }
 
-    if (!formData.command.trim()) {
-      errors.command = "Command is required";
+    // Transport decides which endpoint field is mandatory: a stdio server
+    // is spawned locally and needs a command; a streamable-HTTP server is
+    // remote and needs a URL. New entries (no `editingServer`) are stdio.
+    if (serverTransport(editingServer) === 'stdio') {
+      if (!formData.command.trim()) {
+        errors.command = "Command is required";
+      }
+    } else if (!serverUrl(editingServer)) {
+      errors.url = "URL is required for a streamable HTTP server";
     }
 
     // Check for duplicate names when adding new server
@@ -395,9 +418,13 @@ export function MCPSection() {
     let newServers: MCPServerConfig[];
 
     if (editingServer) {
-      // Update existing server
+      // Merge onto the stored entry rather than replacing it. The form only
+      // covers name/command/args/env/enabled/allowedAgentIds, so rebuilding
+      // the object from the form erased every other mcp.toml field
+      // (transport, url, headers, nameOverride, the three timeout knobs, …).
+      // mcp.toml is the writable source, so those losses were permanent.
       newServers = servers.map((s) =>
-        s.name === editingServer.name ? newServer : s
+        s.name === editingServer.name ? { ...s, ...newServer } : s
       );
     } else {
       // Add new server
@@ -1136,6 +1163,13 @@ export function MCPSection() {
                   <p className="text-sm text-red-500 mt-1">{formErrors.command}</p>
                 )}
               </div>
+
+              {/* A streamable-HTTP server has no editable URL in this panel,
+                  so surface its "url required" error here rather than
+                  blocking the save with nothing on screen. */}
+              {formErrors.url && (
+                <p className="text-sm text-red-500">{formErrors.url}</p>
+              )}
 
               <div>
                 <label className="block text-sm font-medium mb-1.5">

@@ -218,6 +218,27 @@ function fileExistsNonEmpty(filePath: string): boolean {
 /**
  * Route an inbound envelope into the owning bot's persistent session:
  * ensure `bot:<agentId>` exists, then enqueue the hidden wake turn.
+ *
+ * Why this envelope builder coexists with the one in
+ * `gateway/message-bus.ts` (`gateway:inbound` case) — they are NOT duplicates:
+ *   - Transport differs. This is the `onInbound` callback of the in-process
+ *     Telegram/Feishu/Weixin connectors; the other is fed by the gateway CHILD
+ *     PROCESS over IPC.
+ *   - Session resolution differs. This path derives `getBotSessionId(agentId)`
+ *     and must `createIfMissing` the bot session first; the gateway resolves
+ *     the owning session itself. Merging would re-key one of the two.
+ *   - Validation differs. `getChannelBackgroundWakes().wakeForInbound` is the
+ *     `ChannelBackgroundWakes` METHOD, which verifies the platform is actually
+ *     configured for this agent and drops the message otherwise. The gateway
+ *     path calls the MODULE-LEVEL `wakeForInbound`, which deliberately skips
+ *     that check (channels are session-scoped there). Unifying them would
+ *     either drop legitimate gateway traffic or bypass this platform check.
+ *   - Response/ordering differs. This path owns no gateway-process protocol
+ *     (the gateway path additionally broadcasts `gateway:agent_busy` and
+ *     persists attachment refs).
+ *
+ * Both enqueue into the same `inboundEnvelopeStore` + `enqueueInboundWake`
+ * queue, so downstream ordering/dedup is shared. Keep them separate.
  */
 function routeInboundToBot(agentId: string, envelope: ChannelInboundEnvelope): void {
   const sessionId = getBotSessionId(agentId);

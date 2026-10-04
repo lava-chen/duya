@@ -35,8 +35,16 @@ export const DEFAULT_TOOL_OUTPUT_BYTES = 40_000;
 /** Default timeout (ms) used by WaitTasksTool when caller doesn't pass one. */
 export const DEFAULT_WAIT_TIMEOUT_MS = 60_000;
 
-export function isTerminalStatus(s: TaskStatus): boolean {
-  return s === 'completed' || s === 'failed' || s === 'killed';
+/**
+ * Terminal statuses for a task lookup, including the synthetic `not_found`
+ * the tool returns for an unknown id. `not_found` is not part of the
+ * persisted `TaskStatus` vocabulary — it only exists on this result path —
+ * so it is handled here rather than being forced into the closed union.
+ */
+export type TaskOutputStatus = TaskStatus | 'not_found';
+
+export function isTerminalStatus(s: TaskOutputStatus): boolean {
+  return s === 'completed' || s === 'failed' || s === 'killed' || s === 'not_found';
 }
 
 /**
@@ -114,7 +122,7 @@ export function formatTaskOutput(rec: TaskRecord): string {
 
 interface TaskOutputResult {
   task_id: string;
-  status: TaskStatus;
+  status: TaskOutputStatus;
   output: string;
 }
 
@@ -158,7 +166,7 @@ export class GetTaskOutputTool implements Tool, ToolExecutor {
       const rec = lifecycle.getSnapshot(id);
       if (!rec) {
         const bashTask = bashRegistry.getTask(id);
-        if (!bashTask) return { task_id: id, status: 'not_found' as TaskStatus, output: '' };
+        if (!bashTask) return { task_id: id, status: 'not_found', output: '' };
         return {
           task_id: id,
           status: mapBashTaskStatus(bashTask.status),

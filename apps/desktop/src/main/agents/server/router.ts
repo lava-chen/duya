@@ -17,7 +17,7 @@ import { Logger } from './logger';
 import { toLLMProvider, type ApiProvider } from '../../config/provider-types';
 import { calculateMaxConcurrentWorkers, getWorkerMemoryThreshold } from './worker-limits';
 import { acquireChatLock, releaseChatLock, type ChatLockOrigin } from './chat-runtime-lock';
-import { acceptedVerbs } from '../../control-plane/permission-vocabulary';
+import { acceptedVerbs, translate } from '../../control-plane/permission-vocabulary';
 import { recordPermissionDecision } from '../../control-plane/permission-decision-record';
 import type { RunOrchestrator } from './run-orchestrator';
 import { parseAgentIdFromBotSession } from '../../wake/bot-session-id';
@@ -531,6 +531,14 @@ export function normalizeWorkerEvent(event: Record<string, unknown>): Record<str
       type: 'permission',
       data: event.request,
     };
+  } else if (msgType === 'chat:permission_expired') {
+    // The request's own `expiresAt` lapsed unanswered. Forward the id so the
+    // renderer can retire exactly that card instead of leaving a live-looking
+    // approval whose late click would be dropped.
+    sseEvent = {
+      type: 'permission_expired',
+      data: event.request,
+    };
   } else if (msgType === 'chat:token_usage') {
     sseEvent = {
       type: 'token_usage',
@@ -821,11 +829,20 @@ async function handlePostChat(
     void releaseChatLock(dbRequest, sessionId).catch(() => {});
     // Plan 586 backstop: a run whose terminal frame never arrived still has to
     // reach a terminal state. On a normal turn this is a no-op — the `done`
-    // frame already settled the run and `settle` is idempotent — and on the
-    // disconnect path above it is a no-op too, because that handler already
-    // claimed the session's run. What it catches is a stream that closed with
-    // the worker still producing.
-    void deps.runOrchestrator?.settleSession(sessionId).catch(() => {});
+    // frame already settled the run and `settle` is idempotent.
+    //
+    // It is NOT the place a CLIENT DISCONNECT is decided. `!writableEnded` is
+    // exactly that case, and the branch handler that owns the response already
+    // owns the decision: the SSE branch interrupts the worker and then cancels,
+    // and the non-SSE branch deliberately does not stop it (F04). Settling here
+    // as well would decide a run's terminal twice, and on the non-SSE path the
+    // second decision is the dishonest one — `resolveRunOutcome` reads a still
+    // executing run as a `runtime_crash` manufactured by the host that
+    // disconnected, which is the same defect as the false `cancelled` it was
+    // added next to.
+    if (res.writableEnded) {
+      void deps.runOrchestrator?.settleSession(sessionId).catch(() => {});
+    }
   });
 
   let body = '';
@@ -1813,25 +1830,23 @@ function handlePostChatSSE(
  * **Old:** respond `{ events, status: 'interrupted' }`, leave the worker
  * running, record nothing.
  *
- * **New:** respond `{ events, status: 'interrupted', run }` and settle the run
- * as `cancelled`, still leaving the worker running.
+ * **New:** no response — the connection that would read it is gone — and NO
+ * settle. The worker keeps executing, the observation site stays attached, and
+ * the run records what actually happened and settles on the real terminal
+ * frame.
  *
- * Two deliberate choices:
+ * One deliberate choice:
  *
- * 1. **The worker is NOT stopped.** Contract §D separates disconnect from
- *    cancel and says Desktop keeps its old adapter behaviour. Stopping it here
- *    would be a silent behaviour change to a path that never did.
- * 2. **The run is settled `cancelled`, not left to settle as
- *    `runtime_crash`.** Silence used to mean "crashed"; here it means "the
- *    client went away". `resolveRunOutcome` reads a host-requested stop as
- *    `cancelled`, and that is the truth. The alternative — letting it settle as
- *    a crash — is a false accusation against the runtime for something this
- *    handler did.
- *
- * The worker may still emit frames afterwards. They are recorded as `late` by
- * R1.2's receipt map and appended to nothing: the terminal is already durable
- * and a decided terminal is immutable. That is the honest shape of "the
- * connection went away but the work did not".
+ * - **A disconnect settles nothing.** The previous version answered
+ *   `{ events, status: 'interrupted', run }` and settled the run as
+ *   `cancelled`, still leaving the worker running, and called that terminal
+ *   honest because the host had stopped reading the turn. It is not honest:
+ *   the worker was deliberately NOT stopped, so the turn is still running, and
+ *   recording `cancelled` made a live turn indistinguishable from a stopped one
+ *   and let tool calls and file writes land after the database said the run was
+ *   finished. §D's keep-executing policy is preserved; the cancel fact it used
+ *   to imply is not manufactured. An explicit stop is a different request and
+ *   goes through the runtime's own cancel arbiter (`cancelSession`).
  *
  * Exported for tests only; the router calls it and nothing else does. The
  * reason is the same as `normalizeAndObserve`: "the non-SSE turn is inside the
@@ -1850,6 +1865,14 @@ export function handlePostChatNonSSE(
   httpLogger.info('Non-SSE chat started', { sessionId });
   let allEvents: unknown[] = [];
   let doneReceived = false;
+  /**
+   * The client went away before the terminal frame arrived.
+   *
+   * A CONNECTION fact, and it is kept separate from `doneReceived` on purpose:
+   * it changes what may still be WRITTEN, never what the run is. A run that is
+   * still executing is not a cancelled run, so nothing here settles one.
+   */
+  let clientDetached = false;
   let nonSseBuffer = '';
   // M5: multiLineBuffer promoted to outer scope
   let multiLineBuffer = '';
@@ -1858,24 +1881,21 @@ export function handlePostChatNonSSE(
    * Settle the run and answer with what it recorded.
    *
    * `settleSession` awaits a settlement already in flight rather than opening a
-   * second one, and `resultFor` is a READ that never settles — so calling this
-   * on both the `chat:done` path and the disconnect path cannot end the turn
-   * twice.
+   * second one, and `resultFor` is a READ that never settles — so this cannot
+   * end the turn twice. The only caller is the `chat:done` / `chat:error` path,
+   * so `status` is no longer a parameter: there is exactly one terminal now, and
+   * it is the one the worker reported.
    */
-  const respond = async (status: 'done' | 'interrupted'): Promise<void> => {
-    // `cancelRequested` on the interrupted path, and ONLY that path. It is not
-    // an interrupt of the worker — this handler deliberately does not stop it —
-    // it is the statement that the HOST chose to stop observing the turn.
-    // Without it `resolveRunOutcome` reads the silence as `runtime_crash`, which
-    // accuses the runtime of a failure this handler caused.
-    const terminal = await (runOrchestrator?.settleSession(
-      sessionId,
-      status === 'interrupted' ? { cancelRequested: true } : undefined,
-    ) ?? null);
+  const respond = async (): Promise<void> => {
+    const terminal = await (runOrchestrator?.settleSession(sessionId) ?? null);
     const run = await (runOrchestrator?.resultFor(sessionId) ?? null);
+    // A disconnected client has nothing to read this. The run was still settled
+    // above — the terminal frame is a fact about the run, not about the
+    // connection — but the write is skipped rather than aimed at a destroyed
+    // response, which would surface as a stream error on a socket nobody owns.
+    if (clientDetached || res.writableEnded || res.destroyed) return;
     sendJson(res, 200, {
       events: allEvents,
-      ...(status === 'interrupted' ? { status } : {}),
       // Present whenever a run was opened. `null` when this host has no
       // orchestrator, which is the "run layer not wired" case every existing
       // embedder is entitled to — it is reported as absent rather than
@@ -1935,7 +1955,7 @@ export function handlePostChatNonSSE(
 
         if (event.type === 'chat:done' || event.type === 'chat:error') {
           doneReceived = true;
-          void respond('done');
+          void respond();
           return;
         }
       } catch {
@@ -1945,13 +1965,30 @@ export function handlePostChatNonSSE(
   });
 
   req.on('close', () => {
-    if (!doneReceived) {
-      // `cancelRequested` because THIS HOST is stopping its observation of the
-      // turn, which is what §D's disconnect rule means. It is deliberately NOT
-      // `interruptWorker`: that would change what the worker does, and the old
-      // behaviour is what the contract says to preserve here.
-      void respond('interrupted');
-    }
+    if (doneReceived || clientDetached) return;
+    clientDetached = true;
+    // A DISCONNECT is a connection-state fact, not an execution-state fact.
+    //
+    // This used to call `settleSession({ cancelRequested: true })` — which
+    // persists the run as `cancelled` — while deliberately NOT stopping the
+    // worker, and then called the resulting terminal "honest" in a comment. It
+    // is not: the worker keeps running, its tool calls and results can still
+    // land after a run the database says is finished, and the cancel state
+    // stops describing whether anything is executing. A turn that is still
+    // running is not a cancelled turn.
+    //
+    // So nothing is settled here. The `child.stdout` listener above stays
+    // attached, the run keeps recording what the worker actually does, and the
+    // real terminal frame settles it — through `normalizeAndObserve`, whose
+    // `observe` settles on the `run.completed` / `run.failed` envelope it gets
+    // from that same frame. §D's "keep executing" policy is preserved; the
+    // cancel fact it used to imply is not manufactured. An explicit stop is a
+    // different request and goes through `cancelSession` (see
+    // `handleDeleteChat`).
+    //
+    // There is also nothing to answer: the response this would have written is
+    // the one that just went away, which is what `respond` now checks for.
+    httpLogger.info('Non-SSE chat client disconnected; the run keeps executing', { sessionId });
   });
 }
 
@@ -2204,8 +2241,8 @@ function handlePostPermission(
       cmd.message = message;
     }
 
-    // Plan 587 R2.4: record the decision BEFORE the worker is told, and refuse
-    // to deliver a decision that was not recorded.
+    // Plan 587 R2.4: record the decision BEFORE the worker is told, and do NOT
+    // tell it about a decision that was not recorded.
     //
     // On master this forwarded the command and answered `{ ok: true }` for
     // EVERY POST, including the tenth double-click on a prompt the first click
@@ -2213,24 +2250,63 @@ function handlePostPermission(
     // tool ran twice -- but the router itself had no guard, wrote no audit, and
     // could not tell a host that its answer was late.
     //
-    // `permissionLedger` is the one place the durable decision is made. A
-    // refused durable write degrades to the old forward with a recorded reason
-    // rather than dropping the user's answer on the floor: a tool call must
-    // never hang because the audit table was locked.
+    // Then it kept forwarding when the DURABLE WRITE ITSELF failed, on the
+    // grounds that "a tool call must never hang because the audit table was
+    // locked". That is the ordering this file exists to enforce being used
+    // against it: a refused write means the store may already hold a DIFFERENT
+    // decision for this prompt (a missing row cannot prove it does not), and
+    // first-wins is a claim about the store, not about this process. So a
+    // refusal authorises nothing and is reported as retryable instead — the
+    // deadline is the lesser evil next to an unrecorded authorisation.
     const durable = await recordPermissionDecision(deps.dbRequest, {
       surface: 'worker_http',
       requestId: id,
       sessionId,
       decision,
+      ...(updatedInput === undefined ? {} : { updatedInput }),
     });
     if (durable.status === 'refused') {
-      httpLogger.warn('Permission decision not recorded; delivering without an audit row', {
+      // `defer` is "not yet", not a failed write: nobody decided anything, the
+      // prompt stays open until its own deadline, and retrying the same click
+      // changes nothing. Taken from the vocabulary module rather than from
+      // `durable.reason`, because a reason string is a diagnostic and the
+      // vocabulary table is the declared fact.
+      const isDefer = translate('worker_http', decision)?.action === 'defer';
+      if (isDefer) {
+        // Answered, and deliberately NOT forwarded. The worker now understands
+        // `defer` and treats it as non-settling
+        // (`agent-process-entry.ts` returns before it mutates the pending
+        // entry), so forwarding would be harmless — but it would be a second
+        // way to say the same thing, and this route is the one that decides
+        // what the worker is told. Not delivering is what keeps the prompt
+        // open, which is the whole of what a defer means.
+        httpLogger.info('Permission deferred; nothing recorded and nothing delivered', {
+          sessionId,
+          id,
+          decision,
+        });
+        sendJson(res, 200, { ok: true, recorded: false, deferred: true, firstDecision: false });
+        return;
+      }
+      httpLogger.warn('Permission decision not recorded; the worker was NOT told', {
         sessionId,
         id,
         decision,
         reason: durable.reason,
       });
-    } else if (durable.status === 'duplicate') {
+      sendJson(res, 503, {
+        ok: false,
+        error: 'permission_decision_not_recorded',
+        reason: durable.reason,
+        // The honest label: the identical request may land, and the UI can say
+        // so instead of showing a failure the user cannot act on.
+        retryable: true,
+        recorded: false,
+        firstDecision: false,
+      });
+      return;
+    }
+    if (durable.status === 'duplicate') {
       // A late or duplicate answer. The first decision stands and the worker is
       // NOT told again -- re-delivering is how a prompt gets answered twice.
       sendJson(res, 200, {
@@ -2249,11 +2325,10 @@ function handlePostPermission(
 
     sendJson(res, 200, {
       ok: true,
-      // `recorded` says whether the audit row exists, which is the question a
-      // host actually has after a degraded write. It is NOT the same as
-      // `firstDecision`: a refused write is still the answer being delivered
-      // for the first time.
-      recorded: durable.status === 'recorded',
+      // `recorded` says whether the durable decision exists, which is the
+      // question a host actually has. Reaching this line means it does: the
+      // branch above returns for every outcome in which it does not.
+      recorded: true,
       firstDecision: true,
     });
   });

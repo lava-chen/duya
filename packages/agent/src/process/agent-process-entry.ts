@@ -88,7 +88,7 @@ import { runWorkflowRuntimeChild } from './workflow-runtime-child.js';
 import { MemoryArtifactStore } from '../modes/workflow/gui-artifacts.js';
 import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
 import { applyMCPConfiguration, type MCPApplyResult } from '../mcp/apply.js';
-import { storePendingAnswer, takePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
+import { storePendingAnswer, storePendingToolInput, takePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
 import { isCDNImageUrl } from '../utils/urlSafety.js';
 import { isModelLikelyMultimodal } from '../utils/multimodal-detection.js';
 import { detectModelCapability } from '../utils/model-capability-cache.js';
@@ -336,6 +336,18 @@ let chatInProgress = false;
 let currentSecurityScanEnabled = true;
 let lastInterruptTime = 0;
 const DOUBLE_INTERRUPT_WINDOW_MS = 3000;
+
+/**
+ * Abort handle for the vision pre-analysis / `vision_analyze` fallback that
+ * runs BEFORE `agent.streamChat()`.
+ *
+ * Those two passes bill and stream like any other provider request, but the
+ * turn's own `AbortController` does not exist yet at that point — it is
+ * created at the top of `streamChat`, which has not been called — so
+ * `agent.interrupt()` cannot reach a vision request. This handle is the
+ * phase's own scope, and `chat:interrupt` aborts it.
+ */
+let visionPhaseAbort: AbortController | null = null;
 
 /**
  * What THIS build can do, for manifest verification (plan 587 R2.2).
@@ -2237,62 +2249,18 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
       }
       return null;
     }
-    // Research mode events
-    case 'research_phase':
-      return { type: 'chat:research_phase', ...(event.data as object) };
-    case 'research_complexity':
-      return { type: 'chat:research_complexity', ...(event.data as object) };
-    case 'research_questions':
-      return { type: 'chat:research_questions', ...(event.data as object) };
-    case 'research_iteration':
-      return { type: 'chat:research_iteration', ...(event.data as object) };
-    case 'research_finding':
-      return { type: 'chat:research_finding', ...(event.data as object) };
-    case 'research_progress':
-      return { type: 'chat:research_progress', ...(event.data as object) };
-    case 'research_synthesis_chunk':
-      return { type: 'chat:research_synthesis_chunk', ...(event.data as object) };
-    case 'research_complete':
-      return { type: 'chat:research_complete', ...(event.data as object) };
-    case 'research_error':
-      // Surface as chat:research_error so the stream-session-manager routes
-      // it to handleResearchErrorEvent instead of terminating the entire
-      // chat session. The orchestrator's own error event is research-scoped.
-      return { type: 'chat:research_error', ...(event.data as object) };
-    case 'report_complete': {
-      const { type: _t, ...rest } = event as Record<string, unknown>;
-      return { type: 'chat:research_report', ...rest };
-    }
-    case 'evidence_chain_response': {
-      const { type: _t, ...rest } = event as Record<string, unknown>;
-      return { type: 'chat:research_evidence', ...rest };
-    }
-    case 'continue_research_start': {
-      const { type: _t, ...rest } = event as Record<string, unknown>;
-      return { type: 'chat:research_continue', ...rest };
-    }
-    case 'research_source_found':
-      return { type: 'chat:research_source_found', ...(event.data as object) };
-    case 'research_source_rejected':
-      return { type: 'chat:research_source_rejected', ...(event.data as object) };
-    case 'research_gap_detected':
-      return { type: 'chat:research_gap_detected', ...(event.data as object) };
-    case 'research_next_action':
-      return { type: 'chat:research_next_action', ...(event.data as object) };
-    case 'research_conflict_detected':
-      return { type: 'chat:research_conflict_detected', ...(event.data as object) };
-    case 'research_stop_decision':
-      return { type: 'chat:research_stop_decision', ...(event.data as object) };
+    // Research mode: the one research event the worker actually produces is
+    // `chat:research_updated`, and the research tools send it straight to
+    // `sendEvent` — it never travels through this converter. The 21
+    // fine-grained `chat:research_*` mappings that used to sit here had no
+    // producer anywhere in the repo: nothing emitted the orchestrator events
+    // they converted, so they could only ever be reached from a frame that
+    // was never sent. They were invisible to the completeness guard because
+    // this function returns an untyped `Record<string, unknown>`. See
+    // `RESEARCH_EVENT_NAMESPACE_IS_PINNED` in `./worker-event-completeness.ts`
+    // for the compile-time half of that.
     case 'plan_delta':
       return { type: 'chat:plan_delta', ...(event.data as object) };
-    case 'complexity_classified':
-      return { type: 'chat:research_complexity', ...(event.data as object) };
-    case 'run_status':
-      return { type: 'chat:research_run_status', ...(event.data as object) };
-    case 'activity':
-      return { type: 'chat:research_activity', ...(event.data as object) };
-    case 'plan_steps_created':
-      return { type: 'chat:research_plan_steps', ...(event.data as object) };
     // Internal events: debug panel only, silently skip for now
     case 'research_quality_snapshot':
     case 'query_deduplicated':
@@ -2323,6 +2291,13 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
   }
 }
 
+/**
+ * Fallback lifetime for a permission request that carries no usable
+ * `expiresAt`. Only a safety net: the request's own deadline is the single
+ * source of truth (see {@link createPermissionHandler}).
+ */
+const DEFAULT_PERMISSION_TTL_MS = 300_000;
+
 // Create permission handler for streaming
 function createPermissionHandler(sessId: string): (request: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt: number; metadata?: { toolParamsDisplay?: Array<{ name: string; label: string; value: string }> } }) => Promise<'allow' | 'deny'> {
   return async (request) => {
@@ -2331,22 +2306,43 @@ function createPermissionHandler(sessId: string): (request: { id: string; toolNa
       const key = pendingPermissionKey(sessId, request.id);
 
       // Duplicate request: the renderer (or main) is replaying the same id
-      // (SSE reconnect, sub-agent fork, race with the 5min timer, etc.).
+      // (SSE reconnect, sub-agent fork, race with the deadline timer, etc.).
       // We must NOT overwrite the existing pending entry — doing so would
-      // orphan the first promise and create a stuck prompt. The 5min
-      // timeout is still armed on the original entry; leave it alone.
+      // orphan the first promise and create a stuck prompt. The deadline
+      // timer is still armed on the original entry; leave it alone.
       if (pendingPermissions.has(key)) {
         warn('[Agent-Process] Duplicate permission request, ignoring:', { sessionId: sessId, id: request.id });
         return;
       }
 
+      // ONE deadline per request, taken from the card's own `expiresAt` — the
+      // field the host already derives from the caller's requested timeout
+      // (workflow-runner sends a 10-minute `wf.ask` card, the tool pipeline 5
+      // minutes). A second, hardcoded 5-minute timer here auto-denied while the
+      // card still counted down, and the user's click in that window was
+      // dropped on the floor. The card's deadline is the single source of
+      // truth; this timer only enforces it.
+      const expiresAtMs =
+        typeof request.expiresAt === 'number' && Number.isFinite(request.expiresAt) && request.expiresAt > 0
+          ? request.expiresAt
+          : Date.now() + DEFAULT_PERMISSION_TTL_MS;
+      const ttlMs = Math.max(0, expiresAtMs - Date.now());
       const timeoutHandle = setTimeout(() => {
         const entry = pendingPermissions.get(key);
         if (entry) {
           pendingPermissions.delete(key);
+          // Expiry settles the promise as a denial, but without an event the
+          // renderer has no way to learn the request is over: the card stays
+          // clickable for the rest of its countdown and a late "allow" looks
+          // like it did nothing. Emit the expiry so the card can be retired.
+          sendToMain({
+            type: 'chat:permission_expired',
+            sessionId: sessId,
+            request: { id: request.id, toolName: request.toolName, expiresAt: request.expiresAt },
+          });
           entry.resolve('deny');
         }
-      }, 300000);
+      }, ttlMs);
       // Don't keep the agent process alive solely for this timer — if the
       // process is otherwise idle (e.g. permission prompt is the only thing
       // outstanding), let it exit gracefully.
@@ -2716,6 +2712,11 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     if (imageFiles.length > 0 && hasVisionAnalyzer && modelIsMultimodal) {
       log('[Image-Processing] Skipping vision pre-analysis because main model accepts image input directly');
     }
+    // One phase scope for every vision request below (pre-analysis AND the
+    // vision_analyze fallback). Created only when a vision pass can actually
+    // run, and released once the phase is over.
+    visionPhaseAbort = imageFiles.length > 0 && hasVisionAnalyzer ? new AbortController() : null;
+    const visionPhaseSignal = visionPhaseAbort?.signal;
     if (shouldUseVisionPreAnalysis) {
       sendI18nStatus('streaming.visionAnalyzingStart');
     }
@@ -2735,10 +2736,11 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             ? `Briefly analyze this image for the user's request: ${msg.prompt.trim()}. `
               + 'Return concise key points only, include critical text/OCR if relevant.'
             : 'Provide a concise image summary with key objects and critical text only.';
-          const result = await (agent as unknown as { analyzeImage: (b64: string, mt: string, prompt?: string) => Promise<string> }).analyzeImage(
+          const result = await (agent as unknown as { analyzeImage: (b64: string, mt: string, prompt?: string, signal?: AbortSignal) => Promise<string> }).analyzeImage(
             cached.base64,
             cached.mediaType,
             quickVisionPrompt,
+            visionPhaseSignal,
           );
           preAnalysisText += `\n\n[Image: "${file.name}"]\n${result}`;
           analyzedImageNames.add(file.name);
@@ -2796,14 +2798,14 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             }
             // For data: URLs and already-read files, use analyzeImage directly
             // with the cached base64 to avoid double-read
-            const analyzeImage = (agent as unknown as { analyzeImage?: (b64: string, mt: string, prompt?: string) => Promise<string> })?.analyzeImage?.bind(agent);
+            const analyzeImage = (agent as unknown as { analyzeImage?: (b64: string, mt: string, prompt?: string, signal?: AbortSignal) => Promise<string> })?.analyzeImage?.bind(agent);
             if (!analyzeImage) {
               continue;
             }
             const question = msg.prompt?.trim()
               ? `Analyze this image for the user's request: ${msg.prompt.trim()}`
               : 'Describe this image in detail.';
-            const analysis = await analyzeImage(cached.base64, cached.mediaType, question);
+            const analysis = await analyzeImage(cached.base64, cached.mediaType, question, visionPhaseSignal);
             toolResult = { result: analysis };
           } else if (imagePath && !imagePath.startsWith('data:')) {
             visionTool ??= new (await import('../tool/VisionTool/VisionTool.js')).VisionTool();
@@ -2817,7 +2819,15 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
               undefined,
               {
                 options: {
-                  analyzeImage: (agent as unknown as { analyzeImage?: (b64: string, mt: string, prompt?: string) => Promise<string> })?.analyzeImage?.bind(agent),
+                  // VisionTool calls this with three arguments, so the phase
+                  // signal is bound here rather than threaded through the
+                  // tool's own signature.
+                  analyzeImage: (b64: string, mimeType: string, prompt?: string) => {
+                    const call = (agent as unknown as { analyzeImage?: (b64: string, mt: string, prompt?: string, signal?: AbortSignal) => Promise<string> })?.analyzeImage;
+                    return call
+                      ? call.call(agent, b64, mimeType, prompt, visionPhaseSignal)
+                      : Promise.reject(new Error('Vision model is not available.'));
+                  },
                 },
               } as unknown as import('../types.js').ToolUseContext,
             );
@@ -2861,6 +2871,23 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         preAnalysisText = fallbackText;
         visionAnalysisFailed = false;
       }
+    }
+
+    // The vision phase is over; nothing below can still be cancelled through
+    // its handle. A Stop pressed during image analysis must end the turn here
+    // rather than fall through to a full provider request whose prompt has no
+    // image analysis attached. The terminal frame is the same one an aborted
+    // turn emits from the stream loop (`done(aborted)`) — not a `chat:error`,
+    // because the user cancelling is not a failure.
+    visionPhaseAbort = null;
+    if (visionPhaseSignal?.aborted) {
+      logger.info(
+        'Image pre-analysis cancelled by user; ending the turn before the provider request',
+        { sessionId: msg.sessionId, fileCount: imageFiles.length },
+        'ImageProcessing',
+      );
+      sendToMain({ type: 'chat:done', sessionId: msg.sessionId, reason: 'aborted' });
+      return;
     }
 
     // Single source of truth for the [System: ...] block that explains to
@@ -4403,6 +4430,11 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           log('[Agent-Process] Received chat:interrupt, chatInProgress:', chatInProgress);
 
           if (chatInProgress) {
+            // The vision phase runs before `streamChat` creates the turn's own
+            // AbortController, so `agent.interrupt()` below cannot reach an
+            // in-flight image analysis. Abort the phase handle explicitly;
+            // otherwise Stop during image analysis does nothing at all.
+            visionPhaseAbort?.abort();
             // First press: abort current chat
             if (agent && agent.interrupt) {
               agent.interrupt();
@@ -4411,8 +4443,13 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             break;
           }
 
-          // Second press within window OR no chat running: clear queued messages
-          if (hasCommandsInQueue() && (now - lastInterruptTime < DOUBLE_INTERRUPT_WINDOW_MS || !chatInProgress)) {
+          // Second ESC inside the double-interrupt window: drop the WHOLE
+          // queue. The in-progress case already returned above, so this is
+          // the "user pressed ESC again" branch and nothing else — the
+          // previous `|| !chatInProgress` disjunct was always true here and
+          // swallowed every idle press into a full queue wipe, which is why
+          // the pop-one branch below could never be the thing that ran.
+          if (hasCommandsInQueue() && now - lastInterruptTime < DOUBLE_INTERRUPT_WINDOW_MS) {
             log('[Agent-Process] Double interrupt: clearing command queue');
             clearCommandQueue();
             lastInterruptTime = 0;
@@ -4601,7 +4638,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           // Handle permission resolution from main — resolve the pending permission promise.
           // sessionId is required to keep sessions isolated (B4): a stray resolve
           // from a sub-agent/fork must not unlock a top-level session's prompt.
-          const { id, decision, updatedInput, sessionId: resolveSessionId } = msg as {
+          const { id, decision, updatedInput, message, sessionId: resolveSessionId } = msg as {
             id: string;
             decision: string;
             updatedInput?: Record<string, unknown>;
@@ -4616,9 +4653,64 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
 
           log('[Agent-Process] Permission resolved:', resolveSessionId, id, decision, updatedInput ? 'with updatedInput' : '');
 
-          // Store answers for AskUserQuestion tool retry
+          // `message` is the user's own words: the reason typed on a deny, or
+          // the note that rides along with an edit. It used to be declared
+          // here and never read, so every reason the user typed was dropped
+          // on the floor. There is no field on the `requestPermission`
+          // contract ('allow' | 'deny' | 'paused', see `types.ts`) to hand
+          // it to the tool, so it is recorded here — at minimum it must not
+          // vanish without a trace.
+          if (message?.trim()) {
+            log('[Agent-Process] Permission resolve carries a user message:', resolveSessionId, id, message);
+          }
+
+          // `defer` is "not yet", not an answer, and it must NOT settle the
+          // request. It is one of the accepted `worker_http` verbs (see
+          // `acceptedVerbs('worker_http')` in the main-process vocabulary
+          // module), and the branch below treats every verb that is not an
+          // allow as a denial — so without this guard a defer records a
+          // terminal `deny` nobody made. Returning here also leaves the map
+          // entry and its deadline timer untouched, which is what keeps a
+          // LATER real `allow` from resolving an already-settled promise: the
+          // request stays pending until somebody answers it or it expires on
+          // its own 5-minute timeout.
+          if (decision === 'defer') {
+            log('[Agent-Process] Permission deferred; still pending:', resolveSessionId, id);
+            break;
+          }
+
+          // Store answers for AskUserQuestion tool retry. This is the ONLY
+          // payload channel the worker has back into a pending call:
+          // `storePendingAnswer` is keyed by the permission id (= toolUseId)
+          // and read by the tool's Phase 2 `execute()`.
           if (updatedInput?.answers) {
             storePendingAnswer(id, updatedInput.answers as Record<string, string>);
+          }
+          // The rest of `updatedInput` is the user's EDIT of the tool input.
+          // It used to be dropped: `requestPermission` resolves with a bare
+          // 'allow' | 'deny' | 'paused' (see `types.ts`) and the retry
+          // re-executed the ORIGINAL `tool.block.input`, so the user approved
+          // something the tool never ran. `storePendingToolInput` is the
+          // missing half of the same channel — keyed by the same id, consumed
+          // one-shot by StreamingToolExecutor at the retry — so the approved
+          // edit is what actually executes.
+          //
+          // `answers` is the renderer's own transport key, not a tool
+          // argument: AskUserQuestionInput is `.strict()` on `{ questions }`,
+          // so forwarding it would make the tool reject its own approved
+          // retry. It is stripped here, exactly as the branch above consumes
+          // it separately.
+          if (updatedInput && Object.keys(updatedInput).length > 0) {
+            const { answers: _answers, ...editedToolInput } = updatedInput;
+            if (Object.keys(editedToolInput).length > 0) {
+              storePendingToolInput(id, editedToolInput);
+              log(
+                '[Agent-Process] Permission resolve carries an edited tool input; the retry will execute it:',
+                resolveSessionId,
+                id,
+                Object.keys(editedToolInput),
+              );
+            }
           }
 
           const key = pendingPermissionKey(resolveSessionId, id);
@@ -5067,6 +5159,20 @@ async function handleCompactMessage(msg: unknown): Promise<void> {
     // chat:start messages can proceed. Without this, a thrown
     // error would deadlock the worker until process restart.
     chatInProgress = false;
+    // Compaction holds the same turn lock a chat turn holds, so a
+    // `chat:start` that arrived while it ran is sitting in the priority
+    // queue. Releasing the lock without draining it left that command
+    // stranded: it neither ran nor errored, and only an unrelated later
+    // prompt would have flushed it. Same shape as the chat:start `finally`.
+    //
+    // "Drain on a failure path" therefore means exactly this: hand the queue
+    // off, never run it here. The drain is deferred with `setImmediate` so no
+    // turn starts inside a catch/finally, and `drainQueuedChatStart` re-checks
+    // `chatInProgress` itself, so a compaction that finishes while another turn
+    // has already claimed the lock is a no-op rather than a double start.
+    setImmediate(() => {
+      void drainQueuedChatStart();
+    });
   }
 }
 

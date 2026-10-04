@@ -156,8 +156,61 @@ export class TokenVault {
   /** Store or replace the token set for a connection. */
   set(connectionId: string, tokens: TokenSet): void {
     this.load();
-    this.cache.tokens[connectionId] = { ...tokens };
-    this.flush();
+    const hadPrevious = connectionId in this.cache.tokens;
+    const previous = this.cache.tokens[connectionId];
+    this.commitOrRollback(
+      () => {
+        this.cache.tokens[connectionId] = { ...tokens };
+      },
+      () => {
+        if (hadPrevious && previous !== undefined) this.cache.tokens[connectionId] = { ...previous };
+        else delete this.cache.tokens[connectionId];
+      },
+      { connectionId },
+    );
+  }
+
+  /**
+   * The single mutate → flush → roll-back cycle every writer in this class
+   * uses.
+   *
+   * Ordering invariant: mutate, flush, and on failure restore BOTH the cache
+   * and the file to the previous value before rethrowing. Without the
+   * rollback the caller is told "vault unavailable" while the rejected value
+   * still sits in the cache, and some later, unrelated vault write persists
+   * it — a credential the user believes was never stored.
+   *
+   * The re-flush inside the catch matters because `writeFileAtomic` can fail
+   * after the file has already been replaced; without it the rejected value
+   * would survive on disk until the next write. A failing rollback is logged
+   * (never swallowed into the caller's error) and the ORIGINAL error is what
+   * propagates.
+   */
+  private commitOrRollback(
+    mutate: () => void,
+    restore: () => void,
+    logContext: Record<string, unknown>,
+  ): void {
+    mutate();
+    try {
+      this.flush();
+    } catch (err) {
+      restore();
+      try {
+        this.flush();
+      } catch (rollbackErr) {
+        this.logger.error(
+          'Token vault rollback after a failed write failed; the rejected value may still be on disk',
+          rollbackErr instanceof Error ? rollbackErr : new Error(String(rollbackErr)),
+          {
+            ...logContext,
+            cause: err instanceof Error ? err.message : String(err),
+          },
+          COMPONENT,
+        );
+      }
+      throw err;
+    }
   }
 
   /** Read a connection's token set (main-process callers only). */
@@ -179,11 +232,21 @@ export class TokenVault {
   /** Store a user-owned OAuth application configuration in the encrypted vault. */
   setOAuthClient(provider: ProviderId, credentials: { clientId: string; clientSecret?: string }): void {
     this.load();
-    this.cache.oauthClients[provider] = {
-      clientId: credentials.clientId,
-      ...(credentials.clientSecret ? { clientSecret: credentials.clientSecret } : {}),
-    };
-    this.flush();
+    const hadPrevious = provider in this.cache.oauthClients;
+    const previous = this.cache.oauthClients[provider];
+    this.commitOrRollback(
+      () => {
+        this.cache.oauthClients[provider] = {
+          clientId: credentials.clientId,
+          ...(credentials.clientSecret ? { clientSecret: credentials.clientSecret } : {}),
+        };
+      },
+      () => {
+        if (hadPrevious && previous !== undefined) this.cache.oauthClients[provider] = { ...previous };
+        else delete this.cache.oauthClients[provider];
+      },
+      { provider },
+    );
   }
 
   /** Main-process-only OAuth application configuration. */
@@ -223,8 +286,18 @@ export class TokenVault {
     },
   ): void {
     this.load();
-    this.cache.mcpOAuth[connectionId] = { ...state };
-    this.flush();
+    const hadPrevious = connectionId in this.cache.mcpOAuth;
+    const previous = this.cache.mcpOAuth[connectionId];
+    this.commitOrRollback(
+      () => {
+        this.cache.mcpOAuth[connectionId] = { ...state };
+      },
+      () => {
+        if (hadPrevious && previous !== undefined) this.cache.mcpOAuth[connectionId] = { ...previous };
+        else delete this.cache.mcpOAuth[connectionId];
+      },
+      { connectionId },
+    );
   }
 
   removeMcpOAuth(connectionId: string): void {

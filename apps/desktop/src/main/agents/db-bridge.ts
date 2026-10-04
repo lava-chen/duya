@@ -8,14 +8,23 @@
 import { randomUUID } from 'crypto';
 import * as path from 'path';
 import { BrowserWindow } from 'electron';
-import { getDatabase } from '../ipc/db-handlers';
+// `getDatabase` comes from the db barrel, NOT from `ipc/db-handlers`. That
+// handler module re-exports it "for backward compatibility", but importing it
+// from there made this file depend on `ipc/db-handlers` — which in turn
+// forwards its overlapping `db:*` channels into `dispatchDbAction` below, so
+// the two modules would have imported each other. The barrel is the real
+// definition site and has no dependency back on the ipc layer, so the cycle
+// does not exist.
+import { getDatabase } from '../db/index';
 import {
   consumeApprovedToolApproval,
   createToolApproval,
+  getToolApproval,
   listToolApprovalRules,
   resolveToolApproval,
   toolApprovalInputHash,
   upsertToolApprovalRule,
+  type ToolApprovalRow,
 } from '../db/toolApprovalState';
 import { getProviderStore } from '../services/providers/provider-store-electron';
 import { getConfigStore } from '../config/store-instance';
@@ -34,6 +43,7 @@ import { readPluginManifest } from '../plugins/manifest';
 import { resolvePermissionProfile } from '../db/permission-resolver';
 import type { PermissionProfile } from '../lib/permission-profile';
 import { getCoreStores } from '../db/core-connection';
+import { SESSION_LIST_UNLIMITED } from '../db/core/session-store';
 import { dispatchControlPlaneAction } from '../control-plane/run-control-plane';
 import { getControlPlane } from '../control-plane/control-plane-service';
 import { COMMAND_SCHEMA_VERSION, type CommandSenderFacts } from '../control-plane/command-receipt';
@@ -269,6 +279,34 @@ export interface DbResponse {
 }
 
 // Dispatch DB action directly to database
+
+/**
+ * The research run id, whichever spelling the caller used.
+ *
+ * ## Why this exists
+ *
+ * The research writes and the research reads have been using two DIFFERENT
+ * payload keys for the same fact: `db-client.ts` sends `run_id` on every
+ * `research{Activity,Event,Source,Citation,Report}:create` / `:upsert` (they
+ * mirror a row, so they mirror its column spelling) and `runId` on every
+ * `…:getByRunId` / `:getLatest` / `:getMaxSequence` / `:deleteByRunId` (they
+ * take an argument, and arguments are camelCase everywhere else in this
+ * client). Both are internally consistent, which is exactly why the split
+ * never showed up as a broken read: a write that used the read side's spelling
+ * would have written `run_id: undefined` instead of failing loudly, and the
+ * activity would then have been filed under no run at all.
+ *
+ * `runId` wins when both are present, because that is the spelling the store's
+ * own methods are named for. The store column is unaffected — this is a
+ * payload-key question only.
+ *
+ * The real fix belongs in the producer (one spelling for one fact); that file
+ * is outside this bridge's ownership, so both are accepted here instead.
+ */
+function readResearchRunId(p: Record<string, unknown>): string {
+  return (p.runId ?? p.run_id) as string;
+}
+
 /**
  * A `db:request` whose transport did not say who sent it.
  *
@@ -328,16 +366,22 @@ export async function dispatchDbAction(
       if (controlPlane === null) {
         return { ok: false, state: 'unavailable', runId: String(p.runId ?? ''), reason: RUN_UNAVAILABLE_REASON };
       }
-      const receipt = await controlPlane.serve(
+      const receipt = await controlPlane.serveWire(
         { schema: COMMAND_SCHEMA_VERSION, action, payload: p },
         // A `db:request` is never host-initiated: the agent server is a fork,
         // so a missing sender means the transport did not thread its facts
         // through. `noSender` is refused rather than treated as the host.
         sender ?? UNATTRIBUTED_SENDER,
       );
-      // The wire shape is unchanged — R1.3's `readRunReceipt` is what every
-      // existing consumer reads, and the receipt is in `write`.
-      return receipt.write;
+      // `serveWire`, not `serve`. The service is the one place that knows how a
+      // command is encoded for the wire: a durable write answers with the
+      // dispatcher's own receipt (`ok`, `state`, `runId`, `written`, `applied`,
+      // `committed`) and a read answers with its result. Returning
+      // `CommandReceipt.write` here handed the consumer the INTERNAL parsed
+      // receipt, which has no `ok` and no `written`, so `readRunReceipt` on the
+      // other side of `db:request` called every success `unreadable` — and a
+      // read, which is not a receipt at all, came back as a discarded row.
+      return receipt;
     }
 
     // ==================== Session actions (core store thin forward) ====================
@@ -731,11 +775,22 @@ export async function dispatchDbAction(
       // restart with no message history but a persisted goal row. Return
       // the existing row instead of letting the INSERT violate the
       // constraint (which surfaced as noisy ERROR spam in the worker).
-      const existing = goals.get(p.sessionId as string);
+      //
+      // The lookup reads `session_id` because THAT is the key the producer
+      // sends (`db-client.ts` `goalDb.create` builds `{ id, session_id,
+      // goal_text, token_budget }`, all snake_case, matching the row it
+      // mirrors). It used to read `p.sessionId` here while reading
+      // `p.session_id` two lines below, so `goals.get(undefined)` matched
+      // nothing, the UNIQUE guard never fired, and the repeat create hit the
+      // constraint — the exact ERROR spam the comment above claims to avoid.
+      // The camelCase spelling is accepted as a fallback so a caller that
+      // uses the `goal:get` / `goal:updateBudget` spelling still matches.
+      const sessionId = (p.session_id ?? p.sessionId) as string;
+      const existing = goals.get(sessionId);
       if (existing) return coreGoalToIpcRow(existing);
       const goal = goals.create({
         id: p.id as string,
-        sessionId: p.session_id as string,
+        sessionId,
         goalText: (p.goal_text as string | null | undefined) ?? null,
         tokenBudget: (p.token_budget as number | null | undefined) ?? null,
       });
@@ -951,11 +1006,24 @@ export async function dispatchDbAction(
     // the decision to the worker and record nothing, so a decision that reached
     // a tool call had no row saying it had been made.
     //
-    // `resolveToolApproval`'s CAS is the whole late/duplicate guard: the first
-    // answer wins and claims, every later one is told `claimed: false` and is
-    // answered with the row that is already on record. Returns
-    // `{ ok: false, error: 'not_found' }` rather than `undefined` so the caller
-    // can tell "no such request" from "the bridge does not know this action".
+    // `resolveToolApproval`'s CAS is the late/duplicate guard: the first answer
+    // wins and claims, every later one is told `claimed: false` and is answered
+    // with the row that is already on record.
+    //
+    // ## The claim is also SESSION-SCOPED
+    //
+    // Both callers already send `sessionId` (`router.ts:2196` because the
+    // worker keys its pending prompts per session, `permission-decision-record.ts:110`
+    // because the row it claims is), and this read neither of them — so the CAS
+    // was keyed on the approval id ALONE. Any session that learned an id could
+    // claim another session's prompt, which is precisely what `router.ts:2193`
+    // says the session id is there to prevent. The check is made here, INSIDE
+    // the same transaction as the claim, so "belongs to this session" and "this
+    // answer won" are one atomic fact rather than a read that a second claim
+    // could interleave with.
+    //
+    // Returns `{ ok: false, error }` rather than `undefined` so the caller can
+    // tell "no such request" from "the bridge does not know this action".
     case 'toolApproval:resolve': {
       const db = getDatabase();
       if (!db) return { ok: false, error: 'db_unavailable' };
@@ -963,9 +1031,52 @@ export async function dispatchDbAction(
       if (decision !== 'allow' && decision !== 'always' && decision !== 'deny') {
         return { ok: false, error: 'invalid_decision' };
       }
-      const claimed = resolveToolApproval(db, p.id as string, decision);
-      if (!claimed) return { ok: false, error: 'not_found' };
-      return { ok: true, claimed: claimed.claimed, row: claimed.row };
+      // Required, not advisory. Without it there is nothing to check the row
+      // against, and "claim whatever id you were handed" is the hole.
+      const sessionId = typeof p.sessionId === 'string' ? p.sessionId : '';
+      if (sessionId === '') return { ok: false, error: 'missing_session' };
+
+      // An edited tool input is a real answer: the worker runs the EDITED call,
+      // so the one-shot ledger burns on the hash of the edited input. Validated
+      // here (it is about to be hashed and stored) and persisted below as part
+      // of the same record, inside the same transaction as the claim.
+      let updatedInput: Record<string, unknown> | undefined;
+      if (p.updatedInput !== undefined) {
+        const candidate = p.updatedInput;
+        if (typeof candidate !== 'object' || candidate === null || Array.isArray(candidate)) {
+          return { ok: false, error: 'invalid_updated_input' };
+        }
+        updatedInput = candidate as Record<string, unknown>;
+      }
+
+      const id = p.id as string;
+      const claim = db.transaction(():
+        | { readonly ok: false; readonly error: string }
+        | { readonly ok: true; readonly claimed: boolean; readonly row: ToolApprovalRow } => {
+        const current = getToolApproval(db, id);
+        if (current === undefined) return { ok: false, error: 'not_found' };
+        if (current.session_id !== sessionId) return { ok: false, error: 'session_mismatch' };
+
+        const resolved = resolveToolApproval(db, id, decision);
+        if (resolved === undefined) return { ok: false, error: 'not_found' };
+        if (!resolved.claimed || updatedInput === undefined || decision === 'deny') {
+          return { ok: true, claimed: resolved.claimed, row: resolved.row };
+        }
+        // Only the WINNING claim rewrites the input. A late duplicate must not
+        // be able to change what was approved, and a denial leaves the original
+        // question on record because nothing is ever going to run it.
+        db.prepare('UPDATE tool_approval_state SET tool_input_json = ?, input_hash = ? WHERE id = ?').run(
+          JSON.stringify(updatedInput),
+          toolApprovalInputHash(updatedInput),
+          id,
+        );
+        const settled = getToolApproval(db, id);
+        if (settled === undefined) return { ok: false, error: 'not_found' };
+        return { ok: true, claimed: true, row: settled };
+      })();
+
+      if (!claim.ok) return { ok: false, error: claim.error };
+      return { ok: true, claimed: claim.claimed, row: claim.row };
     }
 
     case 'message:getCount': {
@@ -1523,7 +1634,9 @@ export async function dispatchDbAction(
       // root (paths[0]); sessions in projects without an entity keep the
       // per-path grouping.
       const { sessions } = getCoreStores();
-      const all = sessions.list();
+      // Aggregates over EVERY row — a cap here would under-count per-path
+      // thread counts rather than fail.
+      const all = sessions.list({ limit: SESSION_LIST_UNLIMITED });
       const normalizeForMatch = (value: string): string =>
         value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 
@@ -2179,7 +2292,7 @@ export async function dispatchDbAction(
     case 'researchActivity:create': {
       return research.createActivity({
         id: p.id as string,
-        runId: p.run_id as string,
+        runId: readResearchRunId(p),
         sequence: p.sequence as number,
         kind: p.kind as string,
         title: p.title as string,
@@ -2210,7 +2323,7 @@ export async function dispatchDbAction(
     case 'researchEvent:create': {
       return research.createEvent({
         id: p.id as string,
-        runId: p.run_id as string,
+        runId: readResearchRunId(p),
         sequence: p.sequence as number,
         eventType: p.event_type as string,
         payloadJson: p.payload_json as string,
@@ -2233,7 +2346,7 @@ export async function dispatchDbAction(
     case 'researchSource:upsert': {
       return research.upsertSource({
         id: p.id as string,
-        runId: p.run_id as string,
+        runId: readResearchRunId(p),
         title: p.title as string,
         url: p.url as string | null,
         canonicalUrl: (p.canonical_url ?? p.url) as string | null,
@@ -2253,7 +2366,7 @@ export async function dispatchDbAction(
     case 'researchCitation:create': {
       return research.createCitation({
         id: p.id as string,
-        runId: p.run_id as string,
+        runId: readResearchRunId(p),
         reportId: p.report_id as string | null,
         sourceId: p.source_id as string,
         findingId: p.finding_id as string | null,
@@ -2270,7 +2383,7 @@ export async function dispatchDbAction(
     case 'researchReport:upsert': {
       return research.upsertReport({
         id: p.id as string,
-        runId: p.run_id as string,
+        runId: readResearchRunId(p),
         title: p.title as string | null,
         markdown: p.markdown as string,
         outlineJson: p.outline_json as string | null,

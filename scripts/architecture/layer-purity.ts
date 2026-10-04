@@ -56,6 +56,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { stripComments } from './strip-comments.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -150,14 +151,22 @@ export const IO_PRIMITIVES: readonly { readonly name: string; readonly re: RegEx
   { name: 'process.binding', re: /process\s*\.\s*(binding|dlopen)\s*\(/ },
 ];
 
-// Comment stripping is INLINED in `findIoSites` rather than factored out,
-// because it cannot be factored out: the stripped copy has to keep the original
-// line numbering (see the comment there). It is deliberately naive, and
-// deliberately so — a naive strip can only ever produce a FALSE POSITIVE (a
-// regex left inside a stripped comment still matches), never a false negative,
-// and `layer-purity.test.ts` pins the behaviour on real fixtures.
-// `strip-comments.mjs` is the rigorous implementation; this is a local copy so
-// this module has no import cycle with the checker.
+// Comment stripping is delegated to `strip-comments.mjs`, the tokenizer-grade
+// stripper the audit scripts already share. This module used to carry its own
+// regex copy with a comment claiming the naive version "can only ever produce a
+// FALSE POSITIVE ... never a false negative". That claim was false, and the
+// false negative was the expensive direction: a `//` inside a string literal
+// started a line comment that ran to end of line, so everything after it on
+// that line was blanked — including real code. Executed probe:
+//
+//   const label = "//"; const r = fetch(url);
+//
+// The old copy stripped that to `const label = "` and reported NO finding, i.e.
+// IO hidden behind a string literal was invisible to this gate, which is
+// precisely the smuggled input the gate exists to catch. The copy was also
+// unnecessary: `strip-comments.mjs` imports nothing, so importing it creates no
+// cycle (the reason originally given for the copy), and `slice-cut-list.ts`
+// already imports its sibling `import-graph.mjs` the same way.
 
 export interface IoSite {
   /** Repo-relative, forward-slashed. */
@@ -216,20 +225,25 @@ function normalize(abs: string): string {
  *
  * Line numbers come from the original file even though matching runs on the
  * stripped copy, because a finding that cannot be opened at the line it names
- * is a finding nobody can act on. The two are kept in sync by replacing
- * stripped-out characters with newlines rather than spaces, so offsets
- * survive.
+ * is a finding nobody can act on. `stripComments` keeps the two in sync by
+ * replacing a removed comment with spaces and leaving newlines alone, so
+ * offsets survive.
  */
 export function findIoSites(absPath: string): IoSite[] {
   const original = fs.readFileSync(absPath, 'utf8');
-  // Preserve line structure: collapse each removed comment to the same number
-  // of newlines, so stripped[i] still corresponds to original line i+1.
-  const stripped = original
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
-    .replace(/(^|[^:])\/\/[^\n]*/g, (m) => m.replace(/\/\/[^\n]*/g, (s) => ' '.repeat(s.length)));
+  // The shared stripper preserves byte offsets (a removed comment becomes
+  // spaces, newlines stay newlines), so `stripped[i]` is still original line
+  // i+1 and a finding can be opened at the line it names.
+  //
+  // `unterminated` means the stripper hit a string or comment that never closes
+  // — a file that does not parse. Falling back to the RAW text is the safe
+  // direction there: a gate must over-report on a broken file rather than scan
+  // a half-stripped one and call it clean.
+  const { text: stripped, unterminated } = stripComments(original);
+  const scanText = unterminated ? original : stripped;
 
   const sites: IoSite[] = [];
-  const lines = stripped.split('\n');
+  const lines = scanText.split('\n');
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? '';
     // A type-only import is erased at compile time and creates no runtime

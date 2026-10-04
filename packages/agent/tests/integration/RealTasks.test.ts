@@ -279,8 +279,17 @@ describe('Real Tasks Integration', () => {
   });
 
   describe('StreamingToolExecutor Real Scenarios', () => {
-    it('should execute multiple tools in sequence', async () => {
-      // Create test files
+    it('completes every queued tool, each with its own result', async () => {
+      // Two reads of DIFFERENT files do not conflict, so the orchestrator runs
+      // them in one parallel wave rather than behind a single global lock — that
+      // is the point of `readPathsFor`/`conflictsWith` actually being read (they
+      // used to be threaded all the way through and then ignored, which made
+      // read/write serialisation a silent no-op).
+      //
+      // So this asserts the two RESULTS, not their order. It used to assert
+      // `results[0]` was a.txt and `results[1]` was b.txt, which was only true
+      // while everything was serialised; it became a coin flip the moment
+      // non-conflicting work was allowed to overlap.
       await writeFile(join(tempDir, 'a.txt'), 'Content A');
       await writeFile(join(tempDir, 'b.txt'), 'Content B');
 
@@ -312,10 +321,12 @@ describe('Real Tasks Integration', () => {
         }
       }
 
-      // Both reads should complete with content
+      // Both reads complete, each with its own file's content. Matched as a set
+      // because the two run in the same wave and completion order is not part of
+      // the contract.
       expect(results.length).toBe(2);
-      expect(results[0]).toContain('Content A');
-      expect(results[1]).toContain('Content B');
+      expect(results.filter((r) => r.includes('Content A'))).toHaveLength(1);
+      expect(results.filter((r) => r.includes('Content B'))).toHaveLength(1);
     });
 
     it('should handle concurrent-safe tools', async () => {

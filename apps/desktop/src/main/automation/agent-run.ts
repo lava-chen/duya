@@ -190,6 +190,12 @@ export function runPromptInSession(opts: RunPromptInSessionOptions): Promise<Run
   });
 
   return new Promise((resolve, reject) => {
+    // Hoisted out of the response callback: a request-level error (socket
+    // refused, DNS) fires before the response exists, and it must disarm the
+    // timeout too — otherwise the timer would wake up minutes later on an
+    // already-rejected run and interrupt whatever run owns the session now.
+    let settled = false;
+    let timeout: NodeJS.Timeout | null = null;
     const req = http.request(
       {
         method: 'POST',
@@ -215,16 +221,28 @@ export function runPromptInSession(opts: RunPromptInSessionOptions): Promise<Run
         const chunks: string[] = [];
         const events: RunPromptResult['events'] = [];
         let sseBuffer = '';
-        let settled = false;
-        const timeout = setTimeout(() => {
+        timeout = setTimeout(() => {
           if (settled) return;
           settled = true;
+          // A bare reject leaves the HTTP stream open, so the agent keeps
+          // running while Scheduler.executeCron's catch arms a 30s retry —
+          // the same cron then executes twice at once. Tear the transport
+          // down and ask the server to abort the run: destroying the socket
+          // stops the SSE stream here, and the DELETE (the same mechanism the
+          // `replace` policy uses) stops the in-flight turn on the agent.
+          req.destroy();
+          res.destroy();
+          interruptCronSession(opts.sessionId);
+          getLogger().warn('Cron run timed out; aborted in-flight run', {
+            sessionId: opts.sessionId,
+            timeoutMs,
+          }, LogComponent.Automation);
           reject(new Error('cron run timeout'));
         }, timeoutMs);
         const finish = (fn: () => void): void => {
           if (settled) return;
           settled = true;
-          clearTimeout(timeout);
+          if (timeout) clearTimeout(timeout);
           fn();
         };
 
@@ -265,7 +283,14 @@ export function runPromptInSession(opts: RunPromptInSessionOptions): Promise<Run
       },
     );
 
-    req.on('error', (e: Error) => reject(e));
+    req.on('error', (e: Error) => {
+      // Disarm the timeout first (see the hoisted `settled`): this run is
+      // over, so the timeout must not fire an abort against a later run.
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      reject(e);
+    });
     req.write(body);
     req.end();
   });
@@ -293,7 +318,7 @@ export function interruptCronSession(sessionId: string): void {
  * POST the prompt to the main agent channel, collect the reply.
  */
 export async function runCronInSession(job: AutomationCron, sessionId: string): Promise<RunPromptResult> {
-  const { provider, model } = resolveCronProvider(job.model);
+  const { provider, model } = resolveCronProvider(job.model, job.modelProviderId);
   const workingDirectory = prepareAutomationWorkspace(job.workingDirectory);
   const permissionMode = normalizeSessionPermissionMode(job.permissionMode);
   // Per-cron reasoning effort (plan 574); unset/empty = legacy 'off'.

@@ -4,7 +4,7 @@
  * Adds input validation and security checks
  */
 
-import { readFile, writeFile, rename, stat } from 'node:fs/promises';
+import { readFile, writeFile, rename, stat, unlink } from 'node:fs/promises';
 import { resolve, isAbsolute } from 'node:path';
 import { diffLines } from 'diff';
 import type { ToolResult } from '../../types.js';
@@ -727,7 +727,20 @@ export async function executeEdit(
       // file in place of the original.
       const tmpPath = `${resolvedPath}.tmp.${Date.now()}`;
       await writeFile(tmpPath, result, 'utf-8');
-      await rename(tmpPath, resolvedPath);
+      try {
+        await rename(tmpPath, resolvedPath);
+      } catch (err) {
+        // A failed rename (EPERM/EBUSY are routine on Windows while a
+        // scanner or indexer holds the target) would otherwise leave the
+        // temp file next to the source, littering the directory on every
+        // retried edit. Drop it, then rethrow unchanged.
+        try {
+          await unlink(tmpPath);
+        } catch {
+          // best effort — the original error is the one that matters
+        }
+        throw err;
+      }
 
       // Re-anchor the read state to this tool's own write so consecutive
       // edits in the same session are not rejected as stale (plan 428).

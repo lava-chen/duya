@@ -4,6 +4,7 @@
 
 import type { PermissionMode } from './types.js';
 import { INTERNAL_PERMISSION_MODES } from './types.js';
+import { isBypassMode } from './policy.js';
 
 export interface AskWithoutUserOutcome {
   /**
@@ -43,7 +44,13 @@ export function readPermissionMode(
  * no consent at all — a declaration/implementation divergence, not a policy.
  *
  * The permission mode is the one signal that already answers "will a human
- * ever see this prompt?", so the mode decides the outcome:
+ * ever see this prompt?", so the mode decides the outcome. The membership
+ * test is NOT restated here: `isBypassMode` (`policy.ts`) is the single
+ * definition of "this session never asks again", and it is the same predicate
+ * the main pipeline uses for its step-5 short-circuit. Both sites previously
+ * spelled the set out independently, and the pipeline additionally treated
+ * `plan` as bypass while this module treated it as asking — so in `plan` mode
+ * one returned `allow` and the other `deny` for the same call.
  *
  *   - `dontAsk` is documented in `permissions.ts` step 5 as the headless /
  *     background mode for the CLI and automation surfaces, and
@@ -69,7 +76,7 @@ export function resolveAskWithoutUser(
       ? mode
       : undefined;
 
-  if (known === 'dontAsk' || known === 'bypassPermissions') {
+  if (isBypassMode(known)) {
     return {
       behavior: 'allow',
       message:

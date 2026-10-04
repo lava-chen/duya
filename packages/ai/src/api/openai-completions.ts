@@ -23,7 +23,7 @@ import { transformMessages } from './transform-messages.js';
 import { summarizeProviderBlock } from './degrade.js';
 import { emitSSE } from './emit-sse.js';
 import { ThinkTagParser } from '../utils/think-tag-parser.js';
-import { collectDiagnostics } from '../utils/simple-options.js';
+import { collectDiagnostics, getTemperature } from '../utils/simple-options.js';
 import { withIdleTimeout } from '../utils/idle-timeout.js';
 import { sortToolsByName } from '../utils/tool-order.js';
 import { localRuntimeApiKeyOrPlaceholder } from './local-runtime.js';
@@ -149,6 +149,36 @@ export function detectOpenAICompatDefaults(
     return { openAIThinkingFormat: 'openrouter-style' };
   }
   return {};
+}
+
+// =============================================================================
+// Tool choice
+// =============================================================================
+
+/**
+ * Map the shared `toolChoice` option onto OpenAI Chat Completions'
+ * `tool_choice`.
+ *
+ * The shared option is declared in `types.ts` with the Anthropic vocabulary
+ * (`'none' | 'auto' | 'any' | { type: 'tool', name }`) and documented as
+ * forwarding "the native tool_choice shape". The two vocabularies differ in two
+ * places, which is why this is a function and not a cast:
+ *
+ *  - `'any'` is `'required'` on OpenAI. There is no `'any'`.
+ *  - a named tool is `{ type: 'function', function: { name } }` — NESTED under
+ *    `function`, unlike the Responses API's flat `{ type: 'function', name }`.
+ *
+ * `'none'` maps to `undefined` on purpose: it is Plan 523 P4's omit-the-tools
+ * guard, and a `tool_choice: 'none'` with no `tools` field is redundant at best
+ * and a 400 on several OpenAI-compatible providers.
+ */
+export function toOpenAIToolChoice(
+  toolChoice: 'none' | 'auto' | 'any' | { type: 'tool'; name: string } | undefined,
+): OpenAI.Chat.ChatCompletionToolChoiceOption | undefined {
+  if (toolChoice === undefined || toolChoice === 'none') return undefined;
+  if (toolChoice === 'auto') return 'auto';
+  if (toolChoice === 'any') return 'required';
+  return { type: 'function', function: { name: toolChoice.name } };
 }
 
 // =============================================================================
@@ -776,19 +806,32 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
       const thinkParser = useThinkTagParser ? new ThinkTagParser() : null;
 
       // 6. Build request params.
-      // totalOutputBudget takes precedence. For OpenAI, max_tokens (or
-      // max_completion_tokens for reasoning models) is the total output budget.
+      // totalOutputBudget takes precedence. For OpenAI, the field carrying the
+      // total output budget is `max_completion_tokens` on the reasoning models
+      // and `max_tokens` on everything else — see the branch below.
       // reasoningBudget is intentionally not used here: OpenAI's reasoning_effort
       // controls the reasoning budget implicitly.
       const maxTokens = chatOptions?.totalOutputBudget
         ?? chatOptions?.maxOutputTokens
         ?? chatOptions?.maxTokens
         ?? 4096;
+      // The `openai-standard` shape IS the OpenAI reasoning surface (o-series,
+      // gpt-5), and those endpoints reject `max_tokens` outright — the budget
+      // moved to `max_completion_tokens`, reasoning tokens included. The test
+      // is the model's own declared wire shape, not `thinkingParams`, because a
+      // run with thinking explicitly off sends no `reasoning_effort` and is
+      // still a model the API refuses `max_tokens` from. Every other
+      // OpenAI-compatible reasoning format (deepseek-style, qwen-style,
+      // glm-style, ...) speaks plain `max_tokens`, so this must not be keyed on
+      // `model.reasoning` alone.
+      const usesCompletionTokenField = resolvedCompat.openAIThinkingFormat === 'openai-standard';
       const params: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
         model: options.model,
         messages: openaiMessages,
-        max_tokens: maxTokens,
-        temperature: chatOptions?.temperature,
+        ...(usesCompletionTokenField
+          ? { max_completion_tokens: maxTokens }
+          : { max_tokens: maxTokens }),
+        temperature: getTemperature(model, chatOptions?.temperature),
         stream: true,
         stream_options: { include_usage: true },
         // Plan 523 P4: `toolChoice: 'none'` omits the tools field so the
@@ -803,6 +846,11 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
                   parameters: t.input_schema,
                 },
               })),
+              // Only meaningful alongside a `tools` field, and omitted with it:
+              // a `tool_choice` naming a tool the request never declared is a 400.
+              ...(toOpenAIToolChoice(chatOptions?.toolChoice) !== undefined
+                ? { tool_choice: toOpenAIToolChoice(chatOptions?.toolChoice) }
+                : {}),
             }
           : {}),
         ...thinkingParams,
@@ -1073,7 +1121,11 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
         model: options.model,
         messages: openaiMessages,
         max_tokens: chatOptions?.maxTokens ?? 1024,
-        temperature: chatOptions?.temperature ?? 1,
+        // Same rule as the streaming path above. `chat()` never assembles a
+        // full `Model`, so the compat bag the streaming path reads as
+        // `model.compat` is passed directly — `getTemperature` reads nothing
+        // else.
+        temperature: getTemperature({ compat: options.modelCapabilities }, chatOptions?.temperature) ?? 1,
       });
       const providerName = (response as unknown as OpenRouterProviderMeta).provider?.name;
       return {
