@@ -272,9 +272,16 @@ describe('ApplyPatchTool execute', () => {
 });
 
 describe('ApplyPatchTool write permission gating', () => {
-  // Catastrophic Windows prefix; isCatastrophicPath matches it on every
-  // platform, mirroring permissions.test.ts usage of the same prefix.
-  const deniedPath = 'C:\\Windows\\System32\\duya-apply-patch-test.ini';
+  // A path `isCatastrophicPath` rejects on THIS host. The old fixture was a
+  // hardcoded `C:\Windows\System32\...`, which is only a system path on
+  // Windows: the policy expands with host semantics, so on POSIX that string
+  // is an ordinary relative filename and the write was correctly allowed.
+  // Pick the host's own catastrophic root so the gating is exercised
+  // everywhere instead of only where the fixture happened to be rooted.
+  const deniedPath =
+    process.platform === 'win32'
+      ? 'C:\\Windows\\System32\\duya-apply-patch-test.ini'
+      : '/boot/duya-apply-patch-test.ini';
 
   function makePermissionContext(mode: ToolPermissionContext['mode']): ToolPermissionContext {
     return {
