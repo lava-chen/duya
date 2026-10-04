@@ -29,6 +29,48 @@
 - [ ] subagent运行作为parentchildrun关联；profile/workspace隔离和backgroundoutput沿同合同；worktree能力由496拥有其具体Git实现。
 - [ ] HTTP/subprocess/in-process同合同回归；CLI非交互approval拒绝/timeout或使用显式policy，不能自动allow。
 
+### H8.2 测量记录（2026-10-04，未完成迁移）
+
+入口普查已落为可重算的测试 `apps/desktop/src/main/__tests__/h8-2-consumer-inventory.test.ts`：
+每个 `.streamChat(` 生产站点要么登记为 turn entry、要么登记为 look-alike，新增未登记站点直接失败。
+因此下列数字可被测试复核，不是散文声明。
+
+| 站点 | consumer | 经CP? | 判定 |
+| --- | --- | --- | --- |
+| `packages/agent/src/process/agent-process-entry.ts:3127` | desktop | 是 | 唯一经 `openRun` 的 turn |
+| `packages/agent/src/cli/index.ts:509` | cli (REPL) | 否 | 直接 `new duyaAgent` |
+| `packages/agent/src/cli/index.ts:549` | cli (`--task`) | 否 | 同上 |
+| `packages/agent/src/cli/index.ts:749` | cli (`--print`) | 否 | 同上 |
+| `packages/agent/src/tool/SubagentTool/runAgent.ts:499` | subagent | 否 | worker 内嵌套 loop |
+
+**非CP turn entry = 4**（H8.3 退役闸门的计数对象）；另有 7 个 look-alike（compaction/side-question/
+TurnStreamRunner/vision/memory/title/search，同名 `AIClient.streamChat`），刻意不计入。
+
+逐条结论：
+
+- **automation/wake：已经在CP上。** `agent-run.ts` POST 到与渲染器同一个
+  `POST /sessions/:id/chat`，router 走 `deps.runOrchestrator.openRun`（`router.ts:1256`），
+  cancel 走 `DELETE` → `handleDeleteChat` → `cancelSession`。
+  `NON_DESKTOP_CONSUMERS` 里「runId 只活在 session id 字符串里、从不进 runs 表」的记录**已过期**。
+  剩余缺口只有一个：它读 SSE `done` 收尾，**没有读 `RunResult`**。
+- **workflow `wf.agent`：没有第二条 loop。** 560 的 Go/No-Go 走了 Go（方案 A），
+  `workflow-runner.ts` 的 `runAgent` port 绑到 `SUBAGENT_TOOL_NAME`，因此与 subagent **共用同一条私有路径**。
+  身份是自建表的 `workflowRunId`，与 `agentRunId` 尚无关联。**未改动。**
+- **subagent：`runAgent.ts:499` 在父 worker 内直接 `streamChat`**，是嵌套 loop 而非 child run，
+  身份 `taskId`/`subAgentSessionId` 都不是 runId，**无 `parentRunId`**。
+  worktree 仍消费 496 的 `SubagentTool/worktree.ts`，未重实现 Git 行为。
+- **CLI 非交互 approval：不自动放行。** CLI 不传 `permissionMode`（`DuyaAgent.ts:851` 落回 `'default'`）、
+  不接 `requestPermission`，故 `ask` 落到 `resolveAskWithoutUser` → `deny`。
+  行为级断言（含「工具未被执行」的 spy）见 `packages/agent/tests/permissions/cli-approval-safety.test.ts`，
+  关闭 fail-closed 分支会使其 8 条失败，已验证非空断言。
+  遗留产品缺陷：`duya setup` 写 `permission_profile`（含 `bypassPermissions`/`dontAsk`），
+  但 CLI 运行期**无人读它**（唯一读取点是 setup 自身的回显），该设置静默无效。
+  方向是 fail-closed（更安全，不是越权），但属配置漂移，需独立决策后再接线。
+
+**PR #178（H8.1）截至 2026-10-04 仍为 OPEN / CONFLICTING，未合入 master**：
+`packages/agent/src/process/headless-run-host.ts` 在 `origin/master` 上不存在，
+CLI 的 3 个 `streamChat` 站点因此仍在树内。H8.2 的 CLI 改造以 #178 落地为前置。
+
 ## H8.3 清理与兼容窗口
 
 - [ ] 消费者清单逐项归零：agent旧exports、aiwire再导出、CLI旧barrel、legacyworkercommands、main→agent实现、router自有seq/ring/双dispatch。
