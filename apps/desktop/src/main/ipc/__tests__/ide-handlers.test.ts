@@ -65,6 +65,17 @@ import {
   canExtractIcon,
 } from '../ide-handlers';
 
+/**
+ * The vscode candidate for THIS host, and the marker that identifies it.
+ *
+ * `openInIde` and `findExecutableOnPath` both resolve against
+ * `process.platform` (they take no platform argument), so the install probe
+ * has to be driven with a path the host actually looks for. Deriving it from
+ * `buildIdeCandidates` keeps the test honest on Windows, macOS and Linux
+ * instead of hardcoding the Windows `Code.exe` spelling.
+ */
+const HOST_VSCODE = buildIdeCandidates().vscode[0];
+
 describe('ide-handlers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -108,11 +119,16 @@ describe('ide-handlers', () => {
     });
 
     it('falls back to PATH CLI lookup when no candidate exists', async () => {
-      mocks.stdout = 'C:\\bin\\trae.exe\n';
+      mocks.stdout = `${HOST_VSCODE}\n`;
       const exe = await resolveIdeExecutable('trae', 'win32');
-      expect(exe).toBe('C:\\bin\\trae.exe');
+      expect(exe).toBe(HOST_VSCODE);
+      // `findExecutableOnPath` picks `where` on Windows and `which` on Unix
+      // from `process.platform`, independently of the `platform` argument
+      // threaded through candidate resolution, so the expected command has
+      // to be the host's.
+      const pathLookup = process.platform === 'win32' ? 'where.exe' : 'which';
       expect(mocks.execFile).toHaveBeenCalledWith(
-        'where.exe',
+        pathLookup,
         ['trae'],
         { timeout: 3000 },
         expect.any(Function),
@@ -212,18 +228,18 @@ describe('ide-handlers', () => {
     });
 
     it('launches the IDE executable with the target path', async () => {
-      mocks.fs.existsSync.mockImplementation((p: string) => p.includes('Code.exe'));
+      mocks.fs.existsSync.mockImplementation((p: string) => p === HOST_VSCODE);
       const result = await openInIde('vscode', 'C:/repo/src/main.ts');
       expect(result).toBe('');
       expect(mocks.execFile).toHaveBeenCalledWith(
-        expect.stringContaining('Code.exe'),
+        HOST_VSCODE,
         ['C:/repo/src/main.ts'],
         expect.any(Function),
       );
     });
 
     it('returns the error message when the launch fails', async () => {
-      mocks.fs.existsSync.mockImplementation((p: string) => p.includes('Code.exe'));
+      mocks.fs.existsSync.mockImplementation((p: string) => p === HOST_VSCODE);
       mocks.execFile.mockImplementation((_cmd: string, _args: string[], ...rest: unknown[]) => {
         const cb = (rest[rest.length - 1] as (err: Error | null, data: { stdout: string; stderr: string }) => void);
         cb(new Error('spawn ENOENT'), { stdout: '', stderr: '' });
@@ -233,6 +249,8 @@ describe('ide-handlers', () => {
     });
 
     it('reports when the IDE is not installed', async () => {
+      // No candidate is present, so resolution falls through to the PATH
+      // lookup, which the default mock leaves empty.
       const result = await openInIde('zed', 'C:/repo/main.ts');
       expect(result).toContain('not installed');
     });

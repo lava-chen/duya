@@ -78,12 +78,31 @@ describe('checkPathSafety read (write:false)', () => {
       path.join(HOME, '.git-credentials'),
       path.join(HOME, '.netrc'),
       path.join(HOME, '.password-store', 'entry.gpg'),
-      'C:/Users/user/AppData/Local/Google/Chrome/User Data/Default/Cookies',
-      'C:/Users/user/AppData/Local/Microsoft/Edge/User Data/Default/Cookies',
-      'C:/Users/user/AppData/Roaming/Mozilla/Firefox/Profiles/abc/cookies.sqlite',
-      'C:/Users/user/AppData/Roaming/Microsoft/Credentials/abc',
     ];
     for (const filePath of sensitive) {
+      const result = read(filePath);
+      expect(result.allowed).toBe(true, `${filePath} must be allowed (read-only)`);
+      expect(result.requiresUserConfirmation).toBe(true, `${filePath} must require confirmation`);
+    }
+
+    // Browser cookie stores and the Windows credential vault are matched by
+    // path SHAPE, not by $HOME: the patterns require a literal
+    // `user data` / `microsoft/credentials` segment, which is the Windows
+    // AppData layout. A POSIX `C:/Users/...` literal is not even absolute
+    // there, and Chromium on Linux keeps its profile under
+    // `~/.config/google-chrome`, which no pattern covers today. So these are
+    // asserted only where the product can actually recognise them; the
+    // credential-store coverage above stays active on every platform.
+    const windowsOnlySensitive =
+      process.platform === 'win32'
+        ? [
+            'C:/Users/user/AppData/Local/Google/Chrome/User Data/Default/Cookies',
+            'C:/Users/user/AppData/Local/Microsoft/Edge/User Data/Default/Cookies',
+            'C:/Users/user/AppData/Roaming/Mozilla/Firefox/Profiles/abc/cookies.sqlite',
+            'C:/Users/user/AppData/Roaming/Microsoft/Credentials/abc',
+          ]
+        : [];
+    for (const filePath of windowsOnlySensitive) {
       const result = read(filePath);
       expect(result.allowed).toBe(true, `${filePath} must be allowed (read-only)`);
       expect(result.requiresUserConfirmation).toBe(true, `${filePath} must require confirmation`);

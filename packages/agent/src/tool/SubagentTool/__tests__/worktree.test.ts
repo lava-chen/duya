@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createIsolatedWorktree, slugifyWorktreeName, WorktreeError } from '../worktree.js';
@@ -15,8 +15,19 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 }
 
+/**
+ * Create a throwaway repo under the OS temp dir, returned as a CANONICAL path.
+ *
+ * `createIsolatedWorktree` derives `repoRoot` from `git rev-parse
+ * --show-toplevel`, which reports the fully resolved path. On Windows the
+ * temp dir is frequently reached through an 8.3 short name
+ * (`C:\Users\RUNNER~1\AppData\Local\Temp`), so the raw `mkdtempSync` result
+ * and git's answer are the same directory spelled two different ways. Resolve
+ * the fixture up front so both sides are canonical. This is a no-op on POSIX
+ * apart from following a `/tmp` symlink, which git also resolves.
+ */
 function makeRepo(): string {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'duya-wt-repo-'));
+  const dir = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'duya-wt-repo-')));
   git(dir, 'init', '-q', '-b', 'main');
   git(dir, 'config', 'user.email', 'test@duya.local');
   git(dir, 'config', 'user.name', 'duya test');
@@ -40,7 +51,9 @@ describe('slugifyWorktreeName', () => {
 });
 
 describe('createIsolatedWorktree', () => {
-  const duyaRoot = mkdtempSync(path.join(os.tmpdir(), 'duya-wt-root-'));
+  // Canonical for the same reason as makeRepo(): the containment assertion
+  // below compares this prefix against the worktree path git reports.
+  const duyaRoot = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'duya-wt-root-')));
   const previousDuyaPath = process.env.DUYA_APP_DATA_PATH;
   process.env.DUYA_APP_DATA_PATH = duyaRoot;
 
