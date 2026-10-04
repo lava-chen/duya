@@ -35,6 +35,8 @@ import { resolvePermissionProfile } from '../db/permission-resolver';
 import type { PermissionProfile } from '../lib/permission-profile';
 import { getCoreStores } from '../db/core-connection';
 import { dispatchControlPlaneAction } from '../control-plane/run-control-plane';
+import { getControlPlane } from '../control-plane/control-plane-service';
+import { COMMAND_SCHEMA_VERSION, type CommandSenderFacts } from '../control-plane/command-receipt';
 import type { WorkflowRunSnapshot, WorkflowRunStatus, WorkflowTriggerKind } from '../db/core/workflow-store';
 import {
   createWidgetPending,
@@ -267,7 +269,30 @@ export interface DbResponse {
 }
 
 // Dispatch DB action directly to database
-export async function dispatchDbAction(action: string, payload: unknown): Promise<unknown> {
+/**
+ * A `db:request` whose transport did not say who sent it.
+ *
+ * Deliberately not "the host". `senderPid: null` means host-initiated, and a
+ * `db:request` never is — the agent server is a fork. So a missing sender is
+ * given a pid the spawn registry can never contain, which the Control Plane
+ * refuses. Defaulting it to the host would have made the sender check pass for
+ * exactly the case it exists to catch.
+ */
+const UNATTRIBUTED_SENDER: CommandSenderFacts = {
+  senderPid: -1,
+  registeredSessionId: null,
+  role: null,
+};
+
+/** The wire refusal when composition never created a Control Plane. */
+const RUN_UNAVAILABLE_REASON =
+  'this host created no Control Plane, so it has no durable owner for a run; call initCoreDatabase() and createControlPlane() at composition';
+
+export async function dispatchDbAction(
+  action: string,
+  payload: unknown,
+  sender?: CommandSenderFacts,
+): Promise<unknown> {
   const db = getDatabase();
   if (!db) {
     throw new Error('Database not initialized');
@@ -280,22 +305,39 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
   switch (action) {
     // ==================== Control Plane / run actions (plan 586) ====================
     // Handled by the Control Plane dispatcher rather than inline, because these
-    // four actions are the run layer's entire view of storage and inlining them
+    // actions are the run layer's entire view of storage and inlining them
     // here would scatter the schema knowledge back across the bridge. The
     // dispatcher returns `undefined` for an action it does not own, so the
     // fallthrough below still runs for everything else.
     //
     // The agent-server is a FORK, so this is the only route from a run to
     // `duya-core.db`. It is the same channel `lock:acquire` already uses.
+    //
+    // Plan 587 C6.1: the dispatcher is the one composition created, reached
+    // through `getControlPlane()` — falling back to the free function only when
+    // the Control Plane was never created (a headless or test host), and saying
+    // so on the wire rather than dispatching through an owner that does not
+    // exist. `run:unavailable` is a refusal, not a silent success.
     case 'run:create':
     case 'run:append':
     case 'run:complete':
     case 'run:get':
     case 'run:events':
     case 'run:list-session': {
-      const handled = await dispatchControlPlaneAction(action, p);
-      if (handled !== undefined) return handled;
-      break;
+      const controlPlane = getControlPlane();
+      if (controlPlane === null) {
+        return { ok: false, state: 'unavailable', runId: String(p.runId ?? ''), reason: RUN_UNAVAILABLE_REASON };
+      }
+      const receipt = await controlPlane.serve(
+        { schema: COMMAND_SCHEMA_VERSION, action, payload: p },
+        // A `db:request` is never host-initiated: the agent server is a fork,
+        // so a missing sender means the transport did not thread its facts
+        // through. `noSender` is refused rather than treated as the host.
+        sender ?? UNATTRIBUTED_SENDER,
+      );
+      // The wire shape is unchanged — R1.3's `readRunReceipt` is what every
+      // existing consumer reads, and the receipt is in `write`.
+      return receipt.write;
     }
 
     // ==================== Session actions (core store thin forward) ====================
@@ -2853,11 +2895,11 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
 }
 
 // Handle DB request from Agent
-export async function handleDbRequest(msg: DbRequest): Promise<DbResponse> {
+export async function handleDbRequest(msg: DbRequest, sender?: CommandSenderFacts): Promise<DbResponse> {
   const { id, action, payload } = msg;
 
   try {
-    const result = await dispatchDbAction(action, payload);
+    const result = await dispatchDbAction(action, payload, sender);
     return { type: 'db:response', id, success: true, result };
   } catch (error) {
     getLogger().error(`DB request failed: ${action}`, error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.AgentCommunicator);

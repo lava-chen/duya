@@ -25,6 +25,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { createWorkerEnvironment } from './worker-manager';
+import { registerSpawnedWorker, unregisterSpawnedWorker } from '../../control-plane/spawned-workers';
 import { getWorkerMaxMemoryMB } from './worker-limits';
 import type { Logger } from './logger';
 import type { JournalRecord } from '../../../../../../packages/agent/src/modes/workflow/journal';
@@ -483,6 +484,10 @@ export class WorkflowRuntimeManager {
       stdoutBuffer: '',
     };
     this.runs.set(runId, entry);
+    // Plan 587 C6.1: this host spawned it, so the Control Plane must be able to
+    // authorise a `db:request` from it. Unregistered, a workflow runtime's
+    // commands are refused with no useful diagnosis.
+    registerSpawnedWorker(child.pid, 'workflow-runtime', child);
 
     entry.handshakeTimer = setTimeout(() => {
       this.settleHandshake(entry, {
@@ -669,6 +674,10 @@ export class WorkflowRuntimeManager {
   }
 
   private onChildExit(entry: RunEntry, code: number | null, signal: string | null): void {
+    // Plan 587 C6.1: the child is gone, so it is no longer a process this host
+    // holds. Keyed by the child handle, so a recycled pid's predecessor
+    // arriving late cannot unregister the process that holds the pid now.
+    unregisterSpawnedWorker(entry.child.pid, entry.child);
     if (entry.handshakeTimer !== undefined) {
       clearTimeout(entry.handshakeTimer);
       entry.handshakeTimer = undefined;

@@ -54,3 +54,63 @@ export {
   type ToolGrantScope,
   type TranslatedDecision,
 } from './permission-vocabulary';
+
+// Plan 587 C6.1 — ownership. The repository port, the SQLite binding that
+// reuses the connections composition already opened, the service composition
+// creates and the bridge serves, and the command receipt that carries a
+// schema, a sender and a typed failure.
+export type {
+  ApprovalRepository,
+  ArtefactRepository,
+  CheckpointIndexRepository,
+  ConnectionOwner,
+  ControlPlaneRepository,
+  GoalTaskRepository,
+  RepositoryOwnership,
+  RunRepository,
+} from './repository-port';
+
+export {
+  createControlPlaneRepository,
+  getControlPlaneRepository,
+  CORE_OWNERSHIP,
+  _resetControlPlaneRepositoryForTesting,
+  type CoreStoreAggregates,
+  type CreateRepositoryOptions,
+  type LegacyDatabaseAccessor,
+} from './sqlite-repository';
+
+export {
+  ControlPlaneService,
+  HostMap,
+  createControlPlane,
+  getControlPlane,
+  _resetControlPlaneForTesting,
+  type ControlPlaneServiceOptions,
+  type WorkerBinding,
+} from './control-plane-service';
+
+export {
+  assertCommandAccepted,
+  authoriseCommandSender,
+  describeCommandReceipt,
+  isCommandDurable,
+  readCommandEnvelope,
+  rejectCommand,
+  roleOrigin,
+  COMMAND_SCHEMA_VERSION,
+  type CommandEnvelope,
+  type CommandRefusal,
+  type CommandReceipt,
+  type CommandSchemaVersion,
+  type CommandSenderConfig,
+  type CommandSenderFacts,
+} from './command-receipt';
+
+export {
+  liveSpawnedWorkerPids,
+  registerSpawnedWorker,
+  spawnedWorkerRole,
+  unregisterSpawnedWorker,
+  _resetSpawnedWorkersForTesting,
+} from './spawned-workers';

@@ -103,7 +103,18 @@ export class MessageRouter {
     }
 
     try {
-      const response = await handleDbRequest(msg as unknown as { type: 'db:request'; id: string; action: string; payload: unknown });
+      // Plan 587 C6.1: the sender is threaded from the transport, because this
+      // is the only place the host actually knows which child sent the message.
+      // The pid is the spawn-registered one, so the Control Plane can check it
+      // against the list of processes this host started.
+      const response = await handleDbRequest(
+        msg as unknown as { type: 'db:request'; id: string; action: string; payload: unknown },
+        {
+          senderPid: proc?.child.pid ?? null,
+          registeredSessionId: sessionId,
+          role: 'chat',
+        },
+      );
       const child = proc?.child;
       if (child && !child.killed) {
         try {
