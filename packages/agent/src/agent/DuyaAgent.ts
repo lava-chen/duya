@@ -2411,7 +2411,22 @@ export class duyaAgent implements AgentRuntime {
         //
         // Absent publisher means no engine is bound to this run, which is the
         // pre-plan case (the CLI, the sub-agent tool) and is not an error.
-        options?.modelLegs?.publish(buildTurnModelLeg({ turn: turnCount, deps: turnStreamDeps }));
+        //
+        // The abort controller handed over is the one that OWNS
+        // `requestSignal`, which is the signal `runTurnStream` passes to the
+        // client: the per-request child when a request timeout is configured,
+        // otherwise the run's own controller. Captured here, at publish time,
+        // because `disposeRequestController()` nulls the child on the way out
+        // and a later read would hand the leg a controller that no longer
+        // governs anything.
+        const turnAbortController = requestController ?? this.abortController;
+        options?.modelLegs?.publish(
+          buildTurnModelLeg({
+            turn: turnCount,
+            deps: turnStreamDeps,
+            abortController: turnAbortController,
+          }),
+        );
 
         const streamGenerator = runTurnStream(turnStreamDeps);
         

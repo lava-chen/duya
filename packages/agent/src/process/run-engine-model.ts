@@ -418,33 +418,58 @@ export function createLegacyModelPort(sources: LegacyModelSources): ModelPort {
  *
  * ## What this port does NOT do
  *
- * It does not apply `request` or `signal`, and that is deliberate rather than
- * unfinished-in-disguise. The request for a turn is already fixed: `systemPrompt`,
- * the messages, the tools and the sampling options are the ones the legacy loop
- * is sending right now, and overriding them from the engine would change what
- * today's users are sent while the legacy generator still drives the same turn.
- * The turn's own `requestSignal` (`leg.signal`) governs the stream — which is
- * what `runTurnStream` was given — and the engine's `signal` cannot reach the
- * provider through it: the leg exposes that signal READ-ONLY, and the
- * `AbortController` behind it is a local of the turn, so there is nothing
- * outside the generator that can fire it.
+ * It does not apply `request`. That is deliberate rather than
+ * unfinished-in-disguise: the request for a turn is already fixed —
+ * `systemPrompt`, the messages, the tools and the sampling options are the ones
+ * the legacy loop is sending right now, and overriding them from the engine
+ * would change what today's users are sent while the legacy generator still
+ * drives the same turn. Owning the request is the CUTOVER's job.
  *
- * Owning the request and the signal is the CUTOVER's job. This port exists so
- * that when the cutover happens the port is already on the right side of the
- * envelope.
+ * It DOES apply `signal`, and that is the difference between a stop that stops
+ * and a stop that only reports. The engine hands every port a signal its own
+ * `handle.stop` aborts (`run-engine.ts:259`), but the provider request is driven
+ * by the TURN's signal — the one inside the `streamChat` closure. Ignoring the
+ * engine's signal here therefore left the stop reaching nothing: the run
+ * stopped, the provider kept streaming, and nothing said so. So it is forwarded
+ * to `publisher.abortTurn`, which refuses loudly rather than cancelling a stale
+ * or already-finished turn (`model-leg.ts`).
  */
 export function createTurnLegModelPort(publisher: ModelLegPublisher): ModelPort {
   return {
     async *stream(
       _request: ModelRequest,
-      _signal: AbortSignal,
+      signal: AbortSignal,
     ): AsyncIterable<ModelFrame> {
       // Refuses rather than yielding nothing: an empty stream here would be
       // indistinguishable from a model that chose to produce nothing.
       const leg = publisher.requireLeg();
-      for await (const event of leg.open()) {
-        const frame = toModelFrame(event);
-        if (frame !== null) yield frame;
+
+      // Forwarded BEFORE the first event is pulled: the provider request is
+      // opened by the first `next()`, so a listener attached afterwards would
+      // miss a stop that lands while the request is in flight — which is
+      // exactly the case this whole path exists for.
+      //
+      // `{ once: true }`, plus the removal below: the engine's signal belongs to
+      // the RUN and outlives this stream, so a listener left attached would fire
+      // against a later turn and abort a request the engine never meant to stop.
+      // Same stale-abort hazard the publisher's refusals exist for, so it is not
+      // left to chance.
+      const forwardAbort = (): void => {
+        publisher.abortTurn(signal.reason);
+      };
+      if (signal.aborted) {
+        forwardAbort();
+      } else {
+        signal.addEventListener('abort', forwardAbort, { once: true });
+      }
+
+      try {
+        for await (const event of leg.open()) {
+          const frame = toModelFrame(event);
+          if (frame !== null) yield frame;
+        }
+      } finally {
+        signal.removeEventListener('abort', forwardAbort);
       }
     },
   };

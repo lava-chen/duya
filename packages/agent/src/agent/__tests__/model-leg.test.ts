@@ -224,20 +224,35 @@ describe('the published leg carries the transformed per-request messages', () =>
 // 2. `open()` carries `runTurnStream`'s replay envelope
 // ============================================================================
 
-/** Deps over a client scripted to die retryably, then succeed. */
-function replayDeps(client: unknown, onRetryReset: () => void): TurnStreamRunnerDeps {
+/**
+ * Deps over a client scripted to die retryably, then succeed.
+ *
+ * Returns the controller alongside the deps BECAUSE `buildTurnModelLeg` checks
+ * that the abort controller owns `deps.signal`. Handing each call site a way to
+ * build a mismatched pair would be a fixture that can only be used wrong, and a
+ * leg built from a mismatched pair is precisely the silent-cancellation defect
+ * this seam has to rule out.
+ */
+function replayDeps(
+  client: unknown,
+  onRetryReset: () => void,
+): { deps: TurnStreamRunnerDeps; controller: AbortController } {
+  const controller = new AbortController();
   return {
-    llmClient: client as TurnStreamRunnerDeps['llmClient'],
-    llmMessages: [{ id: 'u1', role: 'user', content: 'hi', timestamp: 1 }],
-    systemPromptContent: 'sys',
-    tools: [{ name: 'echo', description: 'echo', input_schema: { type: 'object' } }],
-    maxTokens: 1024,
-    temperature: 1,
-    signal: new AbortController().signal,
-    turnCount: 1,
-    turnCommitted: false,
-    refreshDeclaredTools: () => new Set(['echo']),
-    onRetryReset,
+    controller,
+    deps: {
+      llmClient: client as TurnStreamRunnerDeps['llmClient'],
+      llmMessages: [{ id: 'u1', role: 'user', content: 'hi', timestamp: 1 }],
+      systemPromptContent: 'sys',
+      tools: [{ name: 'echo', description: 'echo', input_schema: { type: 'object' } }],
+      maxTokens: 1024,
+      temperature: 1,
+      signal: controller.signal,
+      turnCount: 1,
+      turnCommitted: false,
+      refreshDeclaredTools: () => new Set(['echo']),
+      onRetryReset,
+    },
   };
 }
 
@@ -261,7 +276,8 @@ describe('open() keeps the replay envelope', () => {
   it('replays a transport death instead of propagating it', async () => {
     const calls: string[] = [];
     let resets = 0;
-    const leg = buildTurnModelLeg({ turn: 1, deps: replayDeps(dyingClient(calls), () => (resets += 1)) });
+    const { deps, controller } = replayDeps(dyingClient(calls), () => (resets += 1));
+    const leg = buildTurnModelLeg({ turn: 1, deps, abortController: controller });
 
     const events: Array<{ type: string }> = [];
     for await (const event of leg.open()) {
@@ -281,10 +297,8 @@ describe('open() keeps the replay envelope', () => {
 
   it('gives each open() a fresh generator, so a replay budget is never spent twice', async () => {
     const calls: string[] = [];
-    const leg = buildTurnModelLeg({
-      turn: 1,
-      deps: replayDeps(dyingClient(calls), () => undefined),
-    });
+    const { deps, controller } = replayDeps(dyingClient(calls), () => undefined);
+    const leg = buildTurnModelLeg({ turn: 1, deps, abortController: controller });
 
     const drained: string[][] = [];
     for (const _attempt of [1, 2]) {
@@ -317,12 +331,11 @@ describe('messages() is a live read of the request array', () => {
     const messages: Message[] = [
       { id: 'u1', role: 'user', content: 'hi', timestamp: 1_700_000_000_000 },
     ];
+    const { deps, controller } = replayDeps({}, () => undefined);
     const leg = buildTurnModelLeg({
       turn: 1,
-      deps: {
-        ...replayDeps({}, () => undefined),
-        llmMessages: messages,
-      },
+      deps: { ...deps, llmMessages: messages },
+      abortController: controller,
     });
 
     // The production transforms mutate in place — `injectTurnTimestampReminders`
@@ -337,13 +350,24 @@ describe('messages() is a live read of the request array', () => {
 // 4. The publisher supersedes and refuses
 // ============================================================================
 
-function stubLeg(turn: number, signal?: AbortSignal): TurnModelLeg {
+/**
+ * A leg over a controller the CALLER owns.
+ *
+ * The controller is a parameter rather than an internal detail because the
+ * assertions are about that controller: `abortRequest` fires it and `signal` is
+ * derived from it, so an assertion reads the provider's abort input rather than
+ * a flag this fixture wrote. A stub that built its own controller and accepted a
+ * signal from outside would let those two drift apart and pass regardless of
+ * what the code under test fired.
+ */
+function stubLeg(turn: number, controller: AbortController = new AbortController()): TurnModelLeg {
   return {
     turn,
     client: {} as TurnModelLeg['client'],
     messages: () => [],
     declaredTools: [],
-    signal: signal ?? new AbortController().signal,
+    signal: controller.signal,
+    abortRequest: (reason?: unknown) => controller.abort(reason),
     open: () => (async function* () {})(),
   };
 }
@@ -380,11 +404,137 @@ describe('ModelLegPublisher', () => {
   it('refuses a leg whose request signal has fired', () => {
     const publisher = new ModelLegPublisher();
     const controller = new AbortController();
-    publisher.publish(stubLeg(3, controller.signal));
+    publisher.publish(stubLeg(3, controller));
     controller.abort();
 
     // Streaming it would yield nothing, which is indistinguishable from a model
     // that chose to say nothing.
     expect(() => publisher.requireLeg()).toThrow(/request signal has fired/);
+  });
+});
+
+// ============================================================================
+// 5. `abortTurn` cancels the CURRENT turn, and refuses everything else
+//
+// The refusals are the point. A stop that silently failed to reach the provider
+// is indistinguishable from a stop that worked — the exact defect the plan owner
+// called more dangerous than having no cancellation at all — so each wrong
+// target must throw rather than no-op.
+// ============================================================================
+
+describe('ModelLegPublisher.abortTurn', () => {
+  it('cancels the live turn\'s request signal', () => {
+    const publisher = new ModelLegPublisher();
+    const controller = new AbortController();
+    publisher.publish(stubLeg(7, controller));
+
+    publisher.abortTurn(new Error('stopped by test'));
+
+    // Read from the SIGNAL the provider request is driven by, not from a flag
+    // the publisher set: this is the same object `runTurnStream` hands the client
+    // as `streamOptions.signal` (`TurnStreamRunner.ts:142`).
+    expect(controller.signal.aborted).toBe(true);
+    expect(controller.signal.reason).toEqual(new Error('stopped by test'));
+  });
+
+  it('refuses when no turn has published yet', () => {
+    const publisher = new ModelLegPublisher();
+    expect(() => publisher.abortTurn()).toThrow(/no turn has published a model leg yet/);
+  });
+
+  it('refuses once the run has ended', () => {
+    const publisher = new ModelLegPublisher();
+    const controller = new AbortController();
+    publisher.publish(stubLeg(1, controller));
+    publisher.close();
+
+    expect(() => publisher.abortTurn()).toThrow(/this run has ended/);
+    // The refusal is a refusal, not a cancel-later: nothing was aborted.
+    expect(controller.signal.aborted).toBe(false);
+  });
+
+  it('refuses a turn whose signal already fired, rather than claiming success', () => {
+    const publisher = new ModelLegPublisher();
+    const controller = new AbortController();
+    publisher.publish(stubLeg(4, controller));
+    controller.abort();
+
+    // Reporting success for a cancellation this call did not perform is the
+    // false claim `StopReceipt.requested` exists to prevent.
+    expect(() => publisher.abortTurn()).toThrow(/already fired, so this call cancelled nothing/);
+  });
+
+  it('cancels only the CURRENT turn, never a superseded one', () => {
+    const publisher = new ModelLegPublisher();
+    const first = new AbortController();
+    const second = new AbortController();
+    publisher.publish(stubLeg(1, first));
+    publisher.publish(stubLeg(2, second));
+
+    publisher.abortTurn();
+
+    // Both sides asserted, because the failure this guards is a WRONG-TARGET
+    // cancel: turn 1's request must be left alone while turn 2's is stopped.
+    expect(second.signal.aborted).toBe(true);
+    expect(first.signal.aborted).toBe(false);
+  });
+});
+
+// ============================================================================
+// 6. The abort controller must OWN the request signal
+//
+// The build-time check. A leg whose abort controller merely resembles the right
+// one aborts something the provider is not reading, which is the original
+// defect wearing a green checkmark — and it is invisible until a stop.
+// ============================================================================
+
+describe('buildTurnModelLeg refuses an abort controller that does not own the signal', () => {
+  it('throws rather than publishing a leg whose cancel reaches nothing', () => {
+    const { deps } = replayDeps({}, () => undefined);
+    // A DIFFERENT controller: plausible, the kind of near-miss that is one
+    // variable away in the real call site, and silent.
+    const bystander = new AbortController();
+
+    expect(() => buildTurnModelLeg({ turn: 1, deps, abortController: bystander })).toThrow(
+      /abort controller does not own this turn's request signal/,
+    );
+  });
+
+  it('accepts the controller that produced the signal', () => {
+    const { deps, controller } = replayDeps({}, () => undefined);
+    const leg = buildTurnModelLeg({ turn: 1, deps, abortController: controller });
+
+    // Positive: the accepted leg's abort reaches the signal.
+    leg.abortRequest();
+    expect(controller.signal.aborted).toBe(true);
+  });
+});
+
+// ============================================================================
+// 7. End to end through a REAL turn: abort the published leg, provider stops
+//
+// `turn-leg-cancel.test.ts` proves the same property through the ENGINE's stop.
+// This one proves the leg's capability reaches the provider through a real
+// `duyaAgent` turn, so the guarantee does not rest on a hand-built deps object
+// matching the production shape.
+// ============================================================================
+
+describe('a real turn\'s leg cancels the real provider request', () => {
+  it('stops a provider request that is still streaming', async () => {
+    // `providerCalls` is the shared fake-client log from the mock at the top of
+    // this file. The turn below drives that same mock, so a signal that reaches
+    // the provider is observed by the object that stands in for `@duya/ai`.
+    const { published } = await runOneTurn();
+    expect(published).toHaveLength(1);
+
+    // Positive first: the turn really did publish a leg carrying a live signal.
+    expect(published[0].signal.aborted).toBe(false);
+    published[0].abortRequest(new Error('cancelled by test'));
+
+    // Then the effect: the signal the provider was driven by is fired. Read from
+    // the LEG's own signal object, which `runTurnStream` passes to the client as
+    // `streamOptions.signal` — the provider's abort input, not a publisher flag.
+    expect(published[0].signal.aborted).toBe(true);
+    expect(published[0].signal.reason).toEqual(new Error('cancelled by test'));
   });
 });

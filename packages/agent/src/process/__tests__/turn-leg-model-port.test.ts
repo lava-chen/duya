@@ -51,19 +51,25 @@ function dyingClient() {
   } as unknown as TurnStreamRunnerDeps['llmClient'];
 }
 
-function depsFor(client: TurnStreamRunnerDeps['llmClient']): TurnStreamRunnerDeps {
+function depsFor(
+  client: TurnStreamRunnerDeps['llmClient'],
+): { deps: TurnStreamRunnerDeps; abortController: AbortController } {
+  const controller = new AbortController();
   return {
-    llmClient: client,
-    llmMessages: [{ id: 'u1', role: 'user', content: 'hi', timestamp: 1 }],
-    systemPromptContent: 'sys',
-    tools: [{ name: 'Read', description: 'read a file', input_schema: { type: 'object' } }],
-    maxTokens: 1024,
-    temperature: 1,
-    signal: new AbortController().signal,
-    turnCount: 1,
-    turnCommitted: false,
-    refreshDeclaredTools: () => new Set(['Read']),
-    onRetryReset: () => undefined,
+    abortController: controller,
+    deps: {
+      llmClient: client,
+      llmMessages: [{ id: 'u1', role: 'user', content: 'hi', timestamp: 1 }],
+      systemPromptContent: 'sys',
+      tools: [{ name: 'Read', description: 'read a file', input_schema: { type: 'object' } }],
+      maxTokens: 1024,
+      temperature: 1,
+      signal: controller.signal,
+      turnCount: 1,
+      turnCommitted: false,
+      refreshDeclaredTools: () => new Set(['Read']),
+      onRetryReset: () => undefined,
+    },
   };
 }
 
@@ -71,7 +77,7 @@ describe('createTurnLegModelPort', () => {
   it('replays a transport death instead of propagating it', async () => {
     const client = dyingClient();
     const publisher = new ModelLegPublisher();
-    publisher.publish(buildTurnModelLeg({ turn: 1, deps: depsFor(client) }));
+    publisher.publish(buildTurnModelLeg({ turn: 1, ...depsFor(client) }));
 
     const port = createTurnLegModelPort(publisher);
     const frames = [];
@@ -106,7 +112,7 @@ describe('createTurnLegModelPort', () => {
 
   it('refuses once the run has ended', async () => {
     const publisher = new ModelLegPublisher();
-    publisher.publish(buildTurnModelLeg({ turn: 1, deps: depsFor(dyingClient()) }));
+    publisher.publish(buildTurnModelLeg({ turn: 1, ...depsFor(dyingClient()) }));
     publisher.close();
 
     const port = createTurnLegModelPort(publisher);
