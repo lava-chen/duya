@@ -78,7 +78,7 @@ import { loadSkills, getSkillRegistry, getAgentSkillDirectory } from '../skills/
 import { browserTool } from '../tool/builtin.js';
 import { modeModifierRegistry } from '../modes/index.js';
 import { verifyRunManifestBinding, manifestRejectionProtocolCode, type WorkerCapabilitySet } from './run-manifest-verification.js';
-import type { RunManifest } from '@duya/agent-protocol';
+import { FIRST_EPOCH, GROUND_FENCE, type RunManifest } from '@duya/agent-protocol';
 import { getBashTaskRegistry } from '../session/bash-task-registry.js';
 import { hookTaskRegistry } from '../hooks/task-registry.js';
 import { backgroundAgentLifecycle } from '../lifecycle/BackgroundAgentLifecycle.js';
@@ -100,6 +100,13 @@ import type {
   ModelMessage,
 } from '@duya/agent-runtime';
 import { buildEnginePorts, type SideEffectLookup } from './run-engine-ports.js';
+// Plan 600 S2, step 2: the durable side-effect ledger the engine takes a dispatch
+// ticket from. `FIRST_EPOCH` / `GROUND_FENCE` come from `@duya/agent-protocol`
+// with the ledger, since a fence and the epoch it belongs to are one decision.
+import { createToolSideEffectLedger, defaultLedgerDir } from './tool-side-effect-ledger.js';
+// Plan 600 S2, step 1: the per-run publisher each turn's pipeline is published
+// into, so the engine's `queueTool` can reach the live turn.
+import { TurnPipelinePublisher } from '../tool/turn-pipeline-publisher.js';
 import { applyMCPConfiguration, type MCPApplyResult } from '../mcp/apply.js';
 import { storePendingAnswer, takePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
 import { isCDNImageUrl } from '../utils/urlSafety.js';
@@ -2392,7 +2399,37 @@ function runWithEngine(input: {
   const controller = new AbortController();
   const engine = new RunEngineImpl({ now: () => Date.now() });
 
-  const ports = buildEnginePorts(input.sources);
+  // Plan 600 S2, step 2: the side-effect ledger, attached here rather than at the
+  // call site because the fence is a property of THIS execution, not of the
+  // caller's sources bag.
+  //
+  // The epoch and fence are the first attempt's (`FIRST_EPOCH`,
+  // `GROUND_FENCE`), and that is not a simplification — the worker does not
+  // recover, so every execution it starts genuinely IS a first attempt. A
+  // recovered attempt has to take the next fence from what the store committed
+  // (`recoverRun`, `checkpoint-store.ts:258-267`), which is a Control Plane
+  // decision and is not wired here. Claiming a higher epoch here would be a
+  // fence no recovery would honour.
+  const ledger = createToolSideEffectLedger({
+    dir: defaultLedgerDir(),
+    runId: input.manifest.runId,
+    runEpoch: FIRST_EPOCH,
+    fence: {
+      runId: input.manifest.runId,
+      runEpoch: FIRST_EPOCH,
+      token: GROUND_FENCE.token,
+    },
+  });
+
+  const ports = buildEnginePorts({
+    ...input.sources,
+    // Both halves, because `buildEnginePorts` attaches `sideEffects` only when
+    // both are present (`run-engine-ports.ts:230`): one without the other would
+    // leave the engine with no ledger at all, and `begin` alone would make
+    // `#drainOutcomes` skip the settle.
+    beginTicket: (call) => ledger.begin(call),
+    settleTicket: (input2) => ledger.settle(input2),
+  });
   const handle = engine.execute({
     manifest: input.manifest,
     signal: controller.signal,
@@ -2599,6 +2636,18 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         `catalog=${verdict.catalogRevision.worker}, adopted=${String(verdict.catalogRevision.adopted)})`,
     );
   }
+
+  // Plan 600 S2, step 1: where this run's turns publish their tool pipeline.
+  //
+  // Declared OUTSIDE the try so the `finally` can close it, and PER RUN rather
+  // than at module scope because the worker serves sessions concurrently — a
+  // module-level "current pipeline" would let one session's engine dispatch into
+  // another session's turn. The same instance is handed to `streamChat` (which
+  // publishes each turn's freshly built pipeline) and to the engine's
+  // `queueTool` (which dispatches through whatever turn is live), which is the
+  // whole of the mechanism: a per-turn pipeline, reachable from outside the
+  // generator, never hoisted.
+  const turnPipelines = new TurnPipelinePublisher();
 
   try {
     startChatHeartbeat();
@@ -3194,14 +3243,20 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       options: (msg.options ?? {}) as Readonly<Record<string, unknown>>,
       sources: {
         openModelStream: () => emptyModelStream(),
-        queueTool: () => {
-          // The pipeline is not reachable from outside `streamChat` yet. Queuing
-          // a call here would silently drop a tool the model asked for, so the
-          // call is refused instead: a loud failure now beats a quiet one that
-          // only shows up as a missing side effect.
-          throw new Error(
-            'the engine cannot dispatch a tool yet: ToolExecutionPipeline is still owned by DuyaAgent.streamChat',
-          );
+        queueTool: (call) => {
+          // Plan 600 S2, step 1: the current turn's pipeline is now REACHABLE,
+          // so this no longer refuses unconditionally. It still refuses loudly
+          // whenever the turn it would reach is the wrong one — nothing
+          // published yet, the run over, or a turn whose pipeline has been
+          // discarded — and those refusals are thrown by the publisher, not
+          // swallowed here.
+          //
+          // Note what is NOT true yet: `openModelStream` below still yields
+          // nothing, so the engine never reaches this line. Binding it is the
+          // next slice, and it is the slice where "one pipeline, one driver"
+          // stops being theoretical — the legacy generator below still drains
+          // this same pipeline itself.
+          turnPipelines.queue({ id: call.callId, name: call.name, input: call.input });
         },
         drainTools: () => emptyToolDrain(),
         discardTools: () => {},
@@ -3309,6 +3364,10 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       // persist only the single-call usageBlock (roundResultUsage),
       // losing the per-turn sum and last_call forever.
       cumulativeTokenUsageRef,
+      // Plan 600 S2, step 1: each turn publishes its freshly built pipeline here,
+      // which is what gives the engine's `queueTool` above a handle that is
+      // correct for the live turn and correct again on the next one.
+      turnPipelines,
     });
 
     log('[Agent-Process] streamChat started, agentProfileId:', msg.options?.agentProfileId || '(none)', 'iterating events...');
@@ -3870,6 +3929,11 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // previous session's row -- a grant that follows the process instead of
     // the conversation, which is the exact failure §E forbids.
     permissionScopes.delete(msg.sessionId);
+    // Plan 600 S2, step 1: the run is over, so no turn holds a pipeline. Closed
+    // on BOTH paths — a dispatch that arrives after this now throws rather than
+    // reaching a pipeline whose turn finished long ago. Publishing after a
+    // close is refused too, so a late turn cannot resurrect it.
+    turnPipelines.close();
   }
 }
 
