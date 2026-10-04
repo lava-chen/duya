@@ -86,6 +86,23 @@
 - ~~**AGENTS.md 声明的预发布产物与构建脚本不一致**~~ —— **已由 upstream 修复，本条作废。** 我在旧基线（`5b1b447f`）上实测 `bundle:agent` 后发现 `packages/agent/bundle/BashTool/BashWorker.js` 并不存在，而 AGENTS.md 要求它存在。合并 `origin/master` 后查明：upstream 的 PR #191（`fix/587-bashworker-artifact`，提交 `701e0011`）已给 `scripts/build-agent-bundle.mjs` 增加第二个 esbuild entry（`BashTool/BashWorker.ts`），并新增 `scripts/check-packaged-artifacts.mjs` 门禁与 `packaged-artifact-baseline.json`。该修复已随 auto-merge 进入本分支。**教训：任何基于旧基线的"既有偏差"结论，在合入前都必须重新核实 —— 本次审计中"21 个 `chat:research_*` case 无生产者"也是同类情况，upstream 的 `router.ts` 已为其建立 `worker → sse-frame-codec → router` 完整链路，删掉反而会破坏新功能。**
 
 
+### 未修 / 未改项总账：14 条
+
+**"170 条全部修复"是不准确的表述。** 准确说法是：170 条已定位缺陷中 **172 个实际行项**完成修复或
+经取证判定为不应变更，其余 **14 条**明确未动，逐条列在下表 —— 没有任何一条是"没来得及"或"忘了看"。
+
+| # | 类别 | 条数 | 说明 |
+| --- | --- | --- | --- |
+| 1 | 有意保留的重复实现 | 9 | P1-2 三个注入依赖、补-7 `session/db.ts` IPC 分支、补-13 `defaultShell` ComSpec 判断、§3-31 `message_search`、§3-36 `done_change`、§3-41 两份 face 引擎、§3-51 三处 `normalizePath`、§14-4 gui 步骤、§14-17 遗留 bezier 覆盖层。每条都附了决策凭证（详见上文「有意保留」表） |
+| 2 | 论证后不改 | 2 | §3-49 preload 缺 22 个通道封装（加了就是 22 个无人调用的方法）、§3-56 入站 IM 两份消费实现（合并会导致网关侧合法流量被丢弃或绕过平台校验） |
+| 3 | 新发现、未修 | 3 | `researchPlanStepDb` 形状分叉（需先做契约决策）、`pruneTrailingFailures` 零调用者（函数是否保留待定）、`clearPendingAnswer` 零调用者 |
+| | **合计** | **14** | |
+
+另有 **1 条作废**（`BashTool/BashWorker.js` 缺失）—— 合并后查明 upstream PR #191 已修，该结论本身
+不成立，故从账上划掉而非计入未修。
+
+第 2 类中的 preload 一条同时出现在「论证后不改」与「新发现未修」两处，**只计一次**。
+
 ### 合并到当前 master（重要）
 
 本修复最初落在 `5b1b447f` 上。收尾核对时发现 `origin/master` 已推进到 `7b6c7f38`
