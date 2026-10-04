@@ -42,6 +42,12 @@ import { RecapService } from './services/recap/recap-service';
 import { registerRecapHandlers } from './ipc/recap-handlers';
 import { registerNextStepHandlers } from './ipc/next-step-handlers';
 import { initAgentProcessPool, getAgentProcessPool, AgentProcessPool } from './agents/process-pool/agent-process-pool';
+// Plan 587 C6.1. Statically imported (not dynamically) because this module
+// pulls in nothing Electron-specific — it reaches the logger only — so
+// `collectSpawnedWorkerPids` can read the registry at module scope. The
+// Control Plane service itself IS created via a dynamic import below, because
+// its sibling `run-control-plane` reaches the core-stores singleton.
+import { liveSpawnedWorkerPids } from './control-plane/spawned-workers';
 import { startBrowserDaemon, stopBrowserDaemon, getBrowserExtensionStatus, setAllowedExtensionIds, setBrowserMaxTabs, DEFAULT_MAX_WEBVIEW_SESSIONS } from './services/browser/daemon';
 import { attachBrowserDownloadHandler } from './services/browser/cookie-writer';
 import { getAutomationScheduler, initAutomationScheduler } from './automation/Scheduler';
@@ -328,7 +334,6 @@ if (gotTheLock) {
       const { createControlPlane } = await import('./control-plane/control-plane-service');
       const { dispatchControlPlaneAction } = await import('./control-plane/run-control-plane');
       const { roleOrigin } = await import('./control-plane/command-receipt');
-      const { liveSpawnedWorkerPids } = await import('./control-plane/spawned-workers');
       const core = getCoreStoresOrNull();
       if (core) {
         const repository = createControlPlaneRepository({

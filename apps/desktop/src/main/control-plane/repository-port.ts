@@ -51,17 +51,17 @@ import type { RunEventEnvelope, RunTerminalState } from '@duya/agent-protocol';
 
 import type {
   AttachmentWithData,
+  ClaimBatchResult,
   ClaimBatchInput,
   CoreAttachment,
   CoreTask,
+  CreateRunInput,
   GoalBudgetDelta,
   GoalCreateInput,
   GoalStatus,
-  MailboxClaimBatchResult,
   MailboxItem,
   PermissionRequest,
   PermissionResolveInput,
-  RunCreateInput,
   RunEventRow,
   RunOpenOutcome,
   RunRow,
@@ -126,7 +126,7 @@ export interface RepositoryOwnership {
  * land".
  */
 export interface RunRepository {
-  createRun(input: RunCreateInput): RunOpenOutcome;
+  createRun(input: CreateRunInput): RunOpenOutcome;
   appendEvents(envelopes: readonly RunEventEnvelope[]): number;
   settleRun(runId: string, terminal: RunTerminalState, metrics?: unknown): RunSettleOutcome;
   getRun(id: string): RunRow | null;
@@ -244,7 +244,7 @@ export interface CheckpointIndexRepository {
   listPending(sessionId: string): MailboxItem[];
   getItem(id: string): MailboxItem | null;
   /** Claim up to `limit` pending items for delivery. */
-  claimBatch(input: ClaimBatchInput): MailboxClaimBatchResult;
+  claimBatch(input: ClaimBatchInput): ClaimBatchResult;
   /**
    * The run ids durably associated with a session's pending work: which run
    * submitted it, and which run reserved it for injection.

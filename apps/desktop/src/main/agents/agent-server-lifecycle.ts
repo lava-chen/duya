@@ -163,7 +163,11 @@ export function spawnAgentServer(): Promise<number> {
         // Threading its pid and role is what lets the Control Plane authorise it
         // rather than refuse it.
         handleDbRequest(msg, {
-          senderPid: child.pid,
+          // `child.pid` is `number | undefined`; the sender contract wants
+          // `null` for "no pid", and `undefined` would read as a present but
+          // unusable value. A child that never got a pid is not a process this
+          // host holds, which is exactly what `null` must mean.
+          senderPid: child.pid ?? null,
           registeredSessionId: null,
           role: 'agent-server',
         }).then((response) => {

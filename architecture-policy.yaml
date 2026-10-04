@@ -821,7 +821,45 @@ selfTest:
   # Attributed BY MEASUREMENT: the new test file reverted ALONE, edge set against
   # edge set, exactly 1 added and 0 removed. `.architecture-baseline.json` was not
   # touched and `--write` was not run.
-  module-dependency-permitted: 124
+  #
+  # 124 -> 126 (plan 587 C6.1): TWO further permitted edges, 0 removed, layered on
+  # top of R1.4's one rather than replacing it. R1.4's attribution above is
+  # unchanged.
+  #
+  # Measured on the rebased tree. C6.1 was originally built on `c0253805`, which
+  # predates E4.2 and R1.4, and a self-test run there reported `expected 123,
+  # counted 125`. That bare figure is stale in the SAME way R1.4's 119 -> 120 was:
+  # it measures a base that does not contain the other two increments, so the two
+  # numbers cannot be added. The branch was rebased onto `dc46dac4` and the value
+  # below is measured on the tree that actually contains E4.2, R1.4 and C6.1.
+  #
+  # Both edges are `electron-main -> pkg:agent-protocol`, target
+  # `packages/agent-protocol/src/index.ts`, and BOTH are `import type` — erased at
+  # runtime, so neither adds a load-time dependency. They are:
+  #
+  #   + apps/desktop/src/main/control-plane/repository-port.ts
+  #       (RunEventEnvelope, RunTerminalState — the port must alias R1.3's own
+  #        outcome types rather than restate them, or two declarations of one
+  #        fact drift the first time a field is added to one of them)
+  #   + apps/desktop/src/main/control-plane/control-plane-service.ts
+  #       (RunHandle — the host map's value type)
+  #
+  # Direction is correct and matches the 21 pre-existing edges of the same pair:
+  # both owning modules already declare `agent-protocol` in their `requires`
+  # lists, and the protocol package remains a leaf with no dependency of its own.
+  # `agent-protocol` is the one managed module that is not itself a cross-boundary
+  # edge here, so no zero-tolerance module is affected.
+  #
+  # `module-dependency` is UNCHANGED at 559, and that remains the load-bearing
+  # half: no edge became a NON-permitted dependency. `module-dependency-permitted`
+  # is counted, never blocking, and never consults the baseline.
+  #
+  # Attributed BY MEASUREMENT, not by reasoning: `git reset --hard origin/master`
+  # captured the baseline edge set, `git reset --hard <sha>` captured the branch's,
+  # and `audit-imports.mjs --json` was diffed edge set against edge set —
+  # 683 -> 685 `crossBoundaryEdges`, exactly 2 added and 0 removed.
+  # `.architecture-baseline.json` was not touched and `--write` was NOT run.
+  module-dependency-permitted: 126
   forbidden-dependency: 16
   # 161 -> 162: one more relative-path escape into packages/agent, from the
   # plan-583 stack. Now 126 agent / 16 plugin-core / 13 gateway / 7 conductor.
