@@ -6,7 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
 import { getLogger, LogComponent } from '../../logging/logger';
-import { safeMarketplaceDirName } from '../../../../../../packages/plugin-core/src/marketplace/source-parse';
+import { safeMarketplaceDirName } from '@duya/plugin-core/marketplace/source-parse';
 
 const COMPONENT = 'PluginMarketplaceGit' as LogComponent;
 const GIT_TIMEOUT_MS = 120_000;

@@ -105,6 +105,21 @@ describe('computeNextRunAt', () => {
     expect(computeNextRunAt(schedule, Date.UTC(2026, 7, 9, 9, 0, 0), now)).toBeNull();
   });
 
+  it('cron: the schedule timezone changes the result, not the expression', () => {
+    // Relocated from packages/agent/tests/unit/automationScheduler.test.ts,
+    // which reached into this module by relative path from the agent package
+    // (plan 587 M5.2, the last `pkg:agent -> electron-main` value edge). The
+    // other four cases it held were already pinned here; this is the one that
+    // was not, so it moved with the file rather than being dropped.
+    const baseExpr = '0 9 * * *';
+    const utcNext = computeNextRunAt({ kind: 'cron', expr: baseExpr, tz: 'UTC' }, 0, now);
+    const shanghaiNext = computeNextRunAt({ kind: 'cron', expr: baseExpr, tz: 'Asia/Shanghai' }, 0, now);
+
+    expect(utcNext).not.toBeNull();
+    expect(shanghaiNext).not.toBeNull();
+    expect(utcNext).not.toBe(shanghaiNext);
+  });
+
   it('respects endAt', () => {
     expect(computeNextRunAt({ kind: 'every', every: '1h', endAt: '2026-08-11T01:00:00Z' }, 0, now)).toBe(now + 3_600_000);
     expect(computeNextRunAt({ kind: 'every', every: '1h', endAt: '2026-08-10T00:00:00Z' }, 0, now)).toBeNull();

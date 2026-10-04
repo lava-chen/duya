@@ -76,35 +76,6 @@ export interface CutEdge {
  */
 export const CUT_LIST: readonly CutEdge[] = [
   {
-    id: 'agent-to-host-reverse-edges',
-    rank: 1,
-    pair: 'pkg:agent -> electron-main',
-    edges: 15,
-    because: 'a',
-    why: 'The PARENT of the two entries below it. All 15 edges in this direction are relative paths out of `packages/agent` into the host, and every one starts in a TEST file. Two directories, one defect: host-owned state (SQL migrations, the automation schedule owner) is owned by, or tested through, the agent package. Because the whole set is test-only, cutting it moves no production code — which is why it is rank 1 and unblocks M5.2 immediately.',
-    cut: 'M5.2. The two subsets below say which half goes where.',
-  },
-  {
-    id: 'agent-to-host-memory-state-migrations',
-    rank: 1,
-    pair: 'pkg:agent -> electron-main',
-    edges: 14,
-    subsetOf: 'agent-to-host-reverse-edges',
-    because: 'a',
-    why: 'SUBSET of the 15, broken out because it is the bulk and has its own owner. All 14 land in `apps/desktop/src/main/memory-state/migrations/*.sql.ts`, which the inventory classifies `cp-durable` while `packages/agent/src/memory-state` claims ownership. The migration files are host SQL; the agent suite should not reach into them by relative path to build a fixture.',
-    cut: 'M5.2: move migration ownership to the Control Plane, or give the agent test a fixture that does not import host SQL.',
-  },
-  {
-    id: 'agent-to-host-automation',
-    rank: 1,
-    pair: 'pkg:agent -> electron-main',
-    edges: 1,
-    subsetOf: 'agent-to-host-reverse-edges',
-    because: 'a',
-    why: 'SUBSET of the same 15, the fifteenth edge. `packages/agent/tests/unit/automationScheduler.test.ts` reaches into `apps/desktop/src/main/automation/{schedule,types}` — host code the agent suite tests through a relative path. Same mis-ownership as the migrations, different directory and a different owner, so it is named separately so neither is lost when the other is fixed.',
-    cut: 'M5.2, with `automationtypes`: schema and config DTO go to a legitimate public layer; SQL migration and schedule ownership go to the host or CP.',
-  },
-  {
     id: 'evals-to-main',
     rank: 3,
     pair: 'evals -> electron-main',
@@ -162,6 +133,48 @@ export interface NonCut {
   readonly why: string;
 }
 
+/**
+ * A cut-list entry that has been CLOSED, with the measurement that closed it.
+ *
+ * ## Why closing does not mean deleting
+ *
+ * The verifier re-derives every count from the live graph on every run, so a
+ * closed pair that measured zero can no longer carry an entry: `CUT_LIST` is
+ * for edges that still EXIST. Deleting the entry silently would therefore be
+ * indistinguishable from never having found it, which is exactly the rot this
+ * file exists to prevent.
+ *
+ * So a closure is recorded here instead, with `edgesAfter` pinned to the same
+ * measurement the open entries use. If the pair ever regains an edge, the
+ * `closed edges stay closed` test fails and names it.
+ */
+export interface ClosedEdge {
+  readonly id: string;
+  /** The owner pair, e.g. `pkg:agent -> electron-main`. */
+  readonly pair: string;
+  readonly edgesBefore: number;
+  /** Measured count after the cut. The verifier re-derives this. */
+  readonly edgesAfter: number;
+  /** The slice that closed it. */
+  readonly slice: string;
+  /** What moved, and where it moved to. */
+  readonly moved: string;
+  /** Edges the cut deliberately ADDED, with the reason they are not a regression. */
+  readonly paidFor?: string;
+}
+
+export const CLOSED: readonly ClosedEdge[] = [
+  {
+    id: 'agent-to-host-reverse-edges',
+    pair: 'pkg:agent -> electron-main',
+    edgesBefore: 15,
+    edgesAfter: 0,
+    slice: '587 M5.2',
+    moved: 'All 15 edges were relative paths out of `packages/agent` into host code, and every one started in a test file, so no production code moved. 14 reached `apps/desktop/src/main/memory-state/migrations/*.sql.ts` from two files: `packages/agent/src/memory-state/__tests__/fixture.ts` and `packages/agent/src/memory-rollout/__tests__/extractor.retry.test.ts`. The agent package now states the schema it REQUIRES in its own `packages/agent/src/memory-state/__tests__/schema-ddl.ts`, materialised by the fixture, and the host pins that copy to its own migrations in `apps/desktop/src/main/memory-state/__tests__/agent-fixture-drift.test.ts`. The 15th edge, `packages/agent/tests/unit/automationScheduler.test.ts` -> `apps/desktop/src/main/automation/schedule.ts`, was a test for host code living in the agent package: the test moved to the host, where the implementation already lives. Four of its five cases were ALREADY pinned by `apps/desktop/src/main/automation/schedule.test.ts`; the one unique case (the schedule timezone changing the result) was relocated with the file, so no case was dropped.',
+    paidFor: 'NOTHING. The first version of the drift test imported the agent DDL, which `architecture:check` correctly reported as a new `package-boundary-escape` (162 -> 163) and refused. Importing it would only have traded this cut for the same coupling pointing the other way, so the test READS the agent file as text by path instead: no import, no edge, and the `paidFor` slot exists precisely so that a cut which does cost an edge has to say so out loud. Net cross-package value edges 177 -> 163 after this cut, and `electron-main -> pkg:agent` stayed at 91.',
+  },
+];
+
 export const NOT_CUT: readonly NonCut[] = [
   {
     subject: 'the 42-member and 14-member SCCs',
@@ -172,8 +185,8 @@ export const NOT_CUT: readonly NonCut[] = [
     why: 'That is a baseline fingerprint count over SCCs, and it moves when the resolver changes as much as when the code does. It is not a migration target and is not promised to move.',
   },
   {
-    subject: 'the 91 `electron-main -> pkg:agent` edges taken as a block',
-    why: 'Size is not a reason. The set must shrink, but several edges are legitimate host composition of the runtime. Promising all 91 would be promising an outcome this slice cannot justify edge by edge.',
+    subject: 'the 92 `electron-main -> pkg:agent` edges taken as a block',
+    why: 'Size is not a reason. The set must shrink, but several edges are legitimate host composition of the runtime. Promising all 92 would be promising an outcome this slice cannot justify edge by edge.',
   },
   {
     subject: 'test-to-test edges inside one package',
@@ -190,9 +203,19 @@ export const NOT_CUT: readonly NonCut[] = [
 export const CUT_LIST_INVARIANTS = {
   /** Every workspace -> host VALUE edge is a cut candidate, by construction. */
   workspaceToHostIsAlwaysCut: true,
-  /** The list names at least one edge from each direction the plan targets. */
+  /**
+   * Directions the plan targets that are still OPEN, and so still need an
+   * entry in `CUT_LIST`.
+   *
+   * `pkg:agent -> electron-main` was here when M5.1 wrote this and was removed
+   * by M5.2 because it measured zero; it now lives in `CLOSED`. Leaving it here
+   * would be a phantom obligation, which the verifier rejects on purpose: a cut
+   * that cannot be closed is worse than one that was never promised. It cannot
+   * be forgotten either — if an edge reappears in that direction, the
+   * `accounts for every workspace -> host value edge in the list` test fails
+   * because the pair would be measured again and named by nothing.
+   */
   requiredPairs: [
-    'pkg:agent -> electron-main',
     'electron-main -> src-renderer',
     'electron-main -> pkg:agent',
     'src-renderer -> electron-main',

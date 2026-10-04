@@ -111,7 +111,7 @@ vi.mock('./cache/version-resolver', () => ({
   resolvePluginVersion: vi.fn(() => '0.1.0'),
 }));
 
-vi.mock('../../../../../packages/plugin-core/src', () => ({
+vi.mock('@duya/plugin-core', () => ({
   TrustEngine: class {
     determineTrustLevel() {
       return { level: 'official' };
@@ -134,7 +134,7 @@ vi.mock('../../../../../packages/plugin-core/src', () => ({
   withPluginError: async (_pluginId: string, _action: string, fn: () => Promise<unknown>) => fn(),
 }));
 
-vi.mock('../../../../../packages/plugin-core/src/security/path-validator', () => ({
+vi.mock('@duya/plugin-core/security/path-validator', () => ({
   PathSafetyValidator: class {},
 }));
 

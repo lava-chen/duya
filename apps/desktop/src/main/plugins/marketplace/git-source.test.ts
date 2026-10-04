@@ -24,7 +24,7 @@ import {
 } from './git-source';
 import { readMarketplaceManifest } from './manifest';
 import { MarketplaceSourceError } from
-  '../../../../../../packages/plugin-core/src/marketplace/source-parse';
+  '@duya/plugin-core/marketplace/source-parse';
 
 // `git` must exist (duya dev machines all have it; the marketplace feature
 // itself shells out to git, so testing without it is meaningless).

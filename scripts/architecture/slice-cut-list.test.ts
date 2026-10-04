@@ -21,7 +21,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { CUT_LIST, CUT_LIST_INVARIANTS, NOT_CUT } from './slice-cut-list';
+import { CLOSED, CUT_LIST, CUT_LIST_INVARIANTS, NOT_CUT } from './slice-cut-list';
 import { buildGraphs } from './import-graph.mjs';
 
 const g = buildGraphs();
@@ -142,6 +142,57 @@ describe('the list is complete against the direction the plan targets', () => {
     ];
     const named = CUT_LIST.map((c) => c.pair);
     expect(reversePairs.filter((p) => !named.includes(p))).toEqual([]);
+  });
+});
+
+describe('a closed entry stays closed, and cannot rot into a fresh claim', () => {
+  it('states a measured edge count that still matches the graph', () => {
+    // The same discipline the open entries get, applied to the ones already cut.
+    // A closure whose `edgesAfter` drifts is a closure that quietly reopened,
+    // and the failure mode it prevents is the one this file exists for: a
+    // number that reads as a fresh measurement when nothing re-measured it.
+    const wrong = CLOSED.map((c) => ({
+      id: c.id,
+      pair: c.pair,
+      stated: c.edgesAfter,
+      measured: PAIRS.get(c.pair) ?? 0,
+    })).filter((c) => c.stated !== c.measured);
+    expect(wrong).toEqual([]);
+  });
+
+  it('records a real reduction, and a slice that closed it', () => {
+    // A closure that did not reduce anything is not a closure.
+    const notReduced = CLOSED.filter((c) => c.edgesAfter >= c.edgesBefore).map((c) => c.id);
+    expect(notReduced).toEqual([]);
+    const unexplained = CLOSED.filter(
+      (c) => c.slice.trim().length === 0 || c.moved.trim().length === 0,
+    );
+    expect(unexplained.map((c) => c.id)).toEqual([]);
+  });
+
+  it('names any edge the cut added, rather than absorbing it silently', () => {
+    // The reverse direction of a cut is where a regression hides. If closing a
+    // pair added an edge somewhere else, the entry has to say so.
+    const undeclared = CLOSED.filter(
+      (c) => c.paidFor === undefined || c.paidFor.trim().length === 0,
+    );
+    expect(undeclared.map((c) => c.id)).toEqual([]);
+  });
+
+  it('has no closed pair that is also still an open obligation', () => {
+    // One pair, one home. An entry in both lists would let a future edit
+    // satisfy the open entry while the closure went stale, or the reverse.
+    const closedPairs = new Set(CLOSED.map((c) => c.pair));
+    const both = CUT_LIST.map((c) => c.pair).filter((p) => closedPairs.has(p));
+    expect(both).toEqual([]);
+  });
+
+  it('does not list a closed pair as a direction the plan still asks to cut', () => {
+    // `requiredPairs` means "still open", so a closed pair must be gone from it
+    // or the open list is asking for a cut that has already happened.
+    const closedPairs = new Set(CLOSED.map((c) => c.pair));
+    const stillOpen = CUT_LIST_INVARIANTS.requiredPairs.filter((p) => closedPairs.has(p));
+    expect(stillOpen).toEqual([]);
   });
 });
 

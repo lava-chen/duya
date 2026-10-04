@@ -25,8 +25,8 @@ import {
   withPluginError,
   withPluginErrorSync,
   type PluginResult,
-} from '../../../../../packages/plugin-core/src';
-import { PathSafetyValidator } from '../../../../../packages/plugin-core/src/security/path-validator';
+} from '@duya/plugin-core';
+import { PathSafetyValidator } from '@duya/plugin-core/security/path-validator';
 import {
   getPluginErrorMessage,
   getPluginErrorSeverity,
@@ -42,7 +42,7 @@ import type {
   PluginRuntimeHealth,
 } from './types';
 import { PluginScope } from './types';
-import type { PluginError } from '../../../../../packages/plugin-core/src/types';
+import type { PluginError } from '@duya/plugin-core/types';
 
 function removeDirSafe(targetPath: string): void {
   if (fs.existsSync(targetPath)) {
