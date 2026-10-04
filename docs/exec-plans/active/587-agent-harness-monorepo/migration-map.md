@@ -94,4 +94,6 @@ apps/agent-server/               # only when a real second host warrants composi
 
 模板：`sliceId → oldFiles → newPublicEntry → callers → removedEdges → shim/release → tests/artifacts → commit/PR → merged/runtimeVerified → remaining`。
 
+**本表不承载逐切片完成记录。** 记录实际在两处：切片级证据按阶段写进各 `0x-*.md` 阶段文件，commit/PR/命令退出码/能力边界/下一任务写进[执行日志](11-execution-log.md)。M5.1 的**机器可检**分类与切除列表不在本目录：`scripts/architecture/{slice-classification,slice-cut-list,import-graph}.ts` 加 `docs/architecture/m5-1-slice-inventory.md`（#166 起，随后由 #174 更正、#193 改为属性断言）。
+
 无consumer表、未跑真实caller或“文件已搬”都不等于切片完成。为下一agent记录具体剩余文件，不写“继续重构”。

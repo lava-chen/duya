@@ -1,8 +1,10 @@
 # R1 — Run 结果、事件与存储正确性
 
-前置：G0。目标：result可信，不因读取或未完成写入制造终态。Next：R1.3。完整验收前不扩展能力。
+前置：G0。目标：result可信，不因读取或未完成写入制造终态。Next：**无——R1 已完成**（#168 自评 "closes phase R1"）。完整验收前不扩展能力。
+>
+> **阶段状态（2026-10-04 对 `55384c55` 核对）**：R1.1–R1.4 全部合并，**Done**。#147（R1.1）、#149（R1.2）、#162（R1.3）、#168（R1.4）。原始证据在 `.tmp-validation/587-r1-2-fix/`。
 
-> **R1.1 与 R1.2 已完成**（PR #147、#149）。R1.3（ack/CAS/幂等与生产ledger）、R1.4（结果与生产ledger）仍开放。原始证据在 `.tmp-validation/587-r1-2-fix/`。
+> **R1.1 与 R1.2 已完成**（PR #147、#149）。R1.3（ack/CAS/幂等与生产ledger）与 R1.4（结果与生产ledger）**也已合并**（#162、#168）——本段是 G0/G0.1 时期的记录，两条子标题下的勾选已按 #162/#168 补齐。原始证据在 `.tmp-validation/587-r1-2-fix/`。
 > R1.1 让 `run-session.ts` **先决定、等 durable barrier、再发布**：公共终态与 `result()` 不再越过持久化屏障，`persistence.complete` 被拒时降级为 `{status:'failed', error:{code:'persistence_failed'}}` 而非 reject（因为 `RunHandle.terminal` 是 `Promise<RunTerminalState>`，reject 会让只 await 成功分支的 host 变成 unhandled rejection）。`controller.ts` 穿入 `manifest.budget` 并拆掉硬编码的 `{status:'completed'}`；`run-orchestrator.ts` 校验 `{ok, applied}`。`RunLedger` 从 `agent-protocol/src/testing/` 搬到生产入口。
 > R1.2 每 run 一条串行写队列（含 `observe()` 那个 fire-and-forget flush 的静默丢数据路径）、有界重试；terminal 决策与提交 Promise 分离，重复 settle/result 共享同一 Promise；**只选一种实现**——append 确认后再 complete，因为事务形式是 adapter 的属性，选它会让内存测试 adapter 与 Desktop SQLite adapter 按不同规则提交终态，而 R1.2 明令禁止这种分歧；崩溃时前者至少留下已决定的终态可供对账，回滚的事务只留一行 `running`。durable `started` 确认后才 dispatch；每种异常退出都有明确终态；late frame 被拒并清理 controller/session map/timer/subscription；cancel race 走单一 arbiter。
 > **R1.2 有意未做**：重试无退避（需要注入时钟，属 R1.3 的 retry 策略）；仅 `complete` 自身失败时行仍停在 `running`，属 R1.3 的 DB 故障状态。
@@ -50,17 +52,29 @@
 
 ## R1.3 Ack、CAS 与幂等
 
-- [ ] dbRequest adapter逐项验证ok/payload/applied；统一typedreceipt，跨IPC服务不throw的结果不能当成功。
-- [ ] 相同runId+manifest/inputhash复用；不同内容拒绝，活跃map不被覆盖。
-- [ ] event相同(run,seq)payload重试幂等；不同payload拒绝。`INSERT OR IGNORE`不应隐藏内容冲突。
-- [ ] terminalCAS失败读取已提交terminal验证一致；不一致返回conflict，不覆盖。
-- [ ] SQLtransaction失败、busy、worker退出时的state明确。聊天fallback仅保留显式观察层降级，durablerun不返回虚假成功。
+> 已完成，PR #162（`fe18abb5`）。5 项全部 done。
+
+- [x] dbRequest adapter逐项验证ok/payload/applied；统一typedreceipt，跨IPC服务不throw的结果不能当成功。
+  `control-plane/run-receipt.ts:84,295` + `run-control-plane.ts:56` + `run-orchestrator.ts:285,304`；`run-receipt-contract.test.ts`（17），含"degrades a run whose `run:complete` reply cannot be read"。
+- [x] 相同runId+manifest/inputhash复用；不同内容拒绝，活跃map不被覆盖。
+  `run-store.ts:120,282,564` + migration 37 `:215`；`run-store-idempotency.test.ts`（6），含"refuses a second run for a session that already has a live one"。
+- [x] event相同(run,seq)payload重试幂等；不同payload拒绝。`INSERT OR IGNORE`不应隐藏内容冲突。
+  **#162 证明这条此前是错的**：`run-store.ts:207` 用 `INSERT OR IGNORE` + `written += changes`，于是重投与**内容矛盾**同样报 `0`，`run:append` 回 `{ok:true, written}`——不同内容重试看起来是干净成功。改为 `ON CONFLICT DO NOTHING` 加 `envelope_json` 读回比较（**绝不**比较 `created_at`），抛 `RunEventConflictError` 并回滚整批。测试"REFUSES the same `(run, seq)` carrying different content"**在 master 上失败**、修复后通过。
+- [x] terminalCAS失败读取已提交terminal验证一致；不一致返回conflict，不覆盖。
+  `run-store.ts:137,413` + `run-control-plane.ts:206`；"reports `reconciled` when another writer committed the SAME terminal"。
+- [x] SQLtransaction失败、busy、worker退出时的state明确。聊天fallback仅保留显式观察层降级，durablerun不返回虚假成功。
+  `run-receipt.ts:56,235` + `run-control-plane.ts:98,168`；`classifySqlFailure`；"an unaccepted start dispatches nothing"（5 个 case）。
 
 ## R1.4 结果与生产 ledger
 
-- [ ] RunLedger/lifecycle状态归core或runtime生产入口；testing只留fixture/断言。
-- [ ] result的transcript/permissionAudit依当前能力返回真实引用/读回；若暂不支持，capability明确unsupported，不能用空数组表示没有发生。
-- [ ] budget传入session，usage字段缺失标unknown；运行期stop在R2实现。本阶段测试不得只改最终标签假称预算执行完成。
+> 已完成，PR #168（`4b195fe0`）。自评 "closes phase R1"。
+
+- [x] RunLedger/lifecycle状态归core或runtime生产入口；testing只留fixture/断言。
+  `agent-runtime/src/run-ledger.ts` + `src/index.ts:48` + `src/testing/index.ts:24`——**R1.1 已完成**（#147 把 `RunLedger`/`LifecycleViolation` 移出 `/testing` 子路径），`lifecycle-invariants.test.ts`（26）为既有守卫。
+- [x] result的transcript/permissionAudit依当前能力返回真实引用/读回；若暂不支持，capability明确unsupported，不能用空数组表示没有发生。
+  `RunSurface`（`agent-protocol/src/run.ts:134`）+ `run-session.ts:748`；`run-result-surface.test.ts:189` 断言 transcript 为 `unsupported` 时 `Array.isArray(...)` 为 false。**判据是 run 里的证据，不是标志位**：没问过 → `read`；问了并回答 → `read`；**问了但没人答** → `unsupported`（runtime 里根本没有 `permission.resolved` 发射者，恒 `read` 的审计会是一层更深的谎）。
+- [x] budget传入session，usage字段缺失标unknown；运行期stop在R2实现。本阶段测试不得只改最终标签假称预算执行完成。
+  `MeasuredTokens`（`run.ts:200`）+ `run-session.ts:795`：未测量时**没有 `total` 键**；测量与未测量是不同的值。budget 穿入 session 属 R1.1（#147）。运行期 stop 在 R2 实现（#154），本阶段未声称。
 
 ## 验收场景
 

@@ -1,6 +1,8 @@
 # E4 — 真实行为基准与 Evals
 
-前置：R2；三adapter比较需T3。E4.1–E4.3 已合并（E4.1 #160、E4.2 #164、E4.3 #163）。Next：E4.4（E4.4-A renderer/preload 真实 turn、E4.4-B 打包门禁，两条在途，均未验收）。必须在M5大规模迁移前建立，防止只有新包脚本测试。
+前置：R2；三adapter比较需T3。E4.1–E4.3 已合并（E4.1 #160、E4.2 #164、E4.3 #163）。Next：**E4.4 第1条的两条陈旧断言**（`e2e/turn/electron-turn.spec.ts:384`、`:430`）。必须在M5大规模迁移前建立，防止只有新包脚本测试。
+>
+> **阶段状态（2026-10-04 对 `55384c55` 核对）**：E4 仍是 **In progress**。#179 之后 E4.4 又落了 #180/#181/#188/#190/#191/#195，四条**都有证据、没有一条验收**——逐条状态见下方 E4.4 状态块。E4.3 最后一条（CI 固定少量高价值 case）仍未接线：`.github/workflows/` 下只有 `release.yml` 与 `test.yml`，**没有任何 job 调用 `eval:agent:smoke` / `eval:agent:extended`**。
 
 ## E4.1 真实旧执行器闭环
 
@@ -45,12 +47,13 @@
 - [ ] 每次lazy/moduleboundary变化打包检查agentbundle/assets/BashWorker/nativeSQLite；firstchat到ready，无modulemissing。
 - [ ] Playwright对涉及UI的变更验证light/dark、pending/terminal/approval；浏览器mock只验证视觉，bridge必须Electron。
 
-状态：四条全部未验收，记blocked/unverified，不是通过。origin/master（5dc45fcf）上没有任何E4.4产物。
+状态：**四条都有证据，没有一条验收。** 记 blocked/unverified，不是通过。下列状态由本文件在 `55384c55` 上重新核对（#179 写的"四条全部未验收 / 第4条未开始"已过时）。
 
-- 第1条：E4.4-A在途（真实Electron renderer/preload turn到durable terminal），未合并、未验证。
-- 第2条：需要真实provider key。离线provider不算过；按本文件规定不能用offline替代P6，无key即记blocked。
-- 第3条：E4.4-B在途（packaged agent-bundle/BashWorker/nativeSQLite门禁）。整包检查需要磁盘与一次真实打包，未跑。
-- 第4条：依赖第1条，未开始。
+- **第1条：部分成立。** 真实 Electron renderer/preload turn 已落地并**跑到 durable terminal**——#188 取消 `test.fixme` 后合同**真的跑了、真的是红的**，失败在两条陈旧断言上：`electron-turn.spec.ts:384` 断言末帧是 `done`，真实末帧是 `title_generated`（session 标题在 turn 完成后生成）；`:430` 查 `assistant.message_finalized`，而真实完成的 turn 持久化的是 `assistant.text_block` 事件（**0 行**）。从同一 namespace 的 SQLite 读回可证 `status=completed terminal=completed`、`run.started` 居首并携带该行 `manifestHash`、`run.completed` 居末且一致——#182 修掉的那类缺陷穿过真实 preload 边界确实消失了。**`#188` 之后该文件未再被任何提交修改**（`git log 23864623..origin/master -- <file>` 为空），所以两条断言仍开着；`:430` 被 `:384` 挡在后面，从未执行到，但同样与真实事件名不符。下一动作：末帧改断言 `title_generated`（或断言"`done` 之后无终态"），事件查找改到 `assistant.text_block`，然后运行 `npm run test:e2e:turn`，预期转绿。
+- **第2条：unsupported——需要真实 provider key。** 按本文件规定离线 provider 不能替代 P6，无 key 即记 blocked。#181/#195 的模型都是 `127.0.0.1` 上的 loopback provider，**不是 live provider**。未用代理冒充。
+- **第3条：门禁落地，真实包在 CI 产出过，但打包应用从未被运行。** #180 把 `AGENTS.md` 预发布清单里只由人读注释断言的三条路径变成机器门禁（`check:packaged-artifacts`，三模式拆开），`typecheck:all` 每次都跑；#191 补上了 `BashTool/BashWorker.js` 这个**清单里有、构建里没有**的产物，并删掉 known-defect 条目（满足它自己记录的移除条件）。
+  **本机从未跑过 `electron:pack`/`electron:build`**（磁盘；#191 记录 E 盘曾两次被打满到 0.27 GB / 0.42 GB）。**但 CI 的 macOS `build` job 真的跑了 electron-builder**：`test.yml` 有 macOS-only 的 `Package (macOS only)` → `npm run electron:pack:mac`，在 `#192` 的 run `37194425248` 里它产出了 `release/mac-arm64/DUYA.app`、DMG 与 zip，而 `afterPack` 对**包内**文件做了真实验证并通过——`agent-process-entry.js`（5.06 MB）与 `BashTool/BashWorker.js`（11.24 KB）。**该 job 随后 exit 1**，卡在 electron-builder 的 publish 阶段：`electron-builder.yml` 有 `publish: [{provider: github}]` 而 runner 没有 `GH_TOKEN`；因此紧随其后的 `verify-packaged-parity.mjs --platform mac` **从未执行**。**仍然未验证**：打包应用被启动、打包后的 chat turn 到达 Agent `ready`、`app.log` 无 `ERR_MODULE_NOT_FOUND`——`check:packaged-artifacts --packaged` 在三个 test job 里每次都打印 `UNVERIFIED`。下一动作（属代码/CI 改动，不属本计划文档切片）：给 `electron:pack:mac` 加 `--publish never`，让 parity 脚本真的跑；然后在有空间的机器上跑一次 `check:packaged-artifacts:packaged` 并接进 release workflow。
+- **第4条：已落地并 4/4 绿。** #195 新增 `e2e/ui-states/`（注册为 `ui-states` Playwright project，脚本 `test:e2e:ui-states`），4 个测试：**light/dark**（点应用自己的侧栏主题按钮，断言渲染出的 `data-theme` 等于持久化的 `settings.theme`、两个 token 解析到另一主题的声明值、真实元素上解析出的 `background-color` 也跟着变、SQLite 独立读回、点击回反方向、无点击 reload 落在存储值上）、**pending**（真实 turn，loopback provider **握住 socket** 使"在飞"成为观察而非竞态；断言 `status='running'`、`terminal IS NULL`、`finished_at IS NULL`、`manifest_hash` 非空、账本非空且无终态事件）、**terminal**（同一真实 turn 驱动到终点，行/有序账本/renderer 收到的文本三者一致，`seq` 单调唯一，`finished_at >= started_at`；文本在帧**到达时**读，不在流关闭时读）、**approval**（`persistApprovalCard` 造的同一行真实 durable 行，经 preload 双向 + CAS 转换 + 两侧读回一致）。#195 记录 `npm run test:e2e:ui-states` 对真实 `npm run electron:build` 为 **4 passed (1.3m)**。**明确未声称**：审批**卡片被画出来**——卡片渲染在 bot-direct chat 面里，在全新隔离 namespace 里打开一个 session 绑定面需要一次本切片没解决的导航；测试停在最后一个能诚实跨过的边界。**另注**：`typecheck:all` **不覆盖 `e2e/`**（仓库 18 个 tsconfig 无一引用 `e2e/`），所以 #195 额外单独用 `tsc --strict` 检查了该 spec。
 
 在E4.4落地前，P6证据不得称完成。
 
