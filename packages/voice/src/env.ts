@@ -7,7 +7,7 @@
  * one-click install is available.
  */
 import { existsSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, posix, win32 } from 'node:path';
 import {
   runtimeAssetForPlatform,
   WHISPER_BINARY_NAMES,
@@ -155,7 +155,7 @@ export function detectWhisperBinary(
   // Only the unambiguous whisper.cpp names qualify here -- see
   // PATH_SAFE_BINARY_NAMES.
   for (const name of PATH_SAFE_BINARY_NAMES) {
-    const fromPath = findOnPath(name);
+    const fromPath = findOnPath(name, platform);
     if (fromPath) return { found: true, path: fromPath, source: 'path' };
   }
   for (const p of candidatePaths(platform)) {
@@ -172,13 +172,22 @@ function isFile(p: string): boolean {
   }
 }
 
-/** Minimal PATH lookup (respects PATHEXT on Windows). */
-function findOnPath(bin: string): string | undefined {
+/**
+ * Minimal PATH lookup (respects PATHEXT on Windows).
+ *
+ * The entry separator comes from the target `platform`, not from the host.
+ * PATH is ';'-joined on Windows and ':'-joined everywhere else, so splitting
+ * on a hardcoded ';' yields one garbage entry on Linux/macOS and the lookup
+ * can never succeed there. Deriving it from the host instead (`path.delimiter`)
+ * would fix the dead lookup but still answer for the host rather than for the
+ * platform the caller asked about, so the platform is threaded through.
+ */
+function findOnPath(bin: string, platform: NodeJS.Platform = process.platform): string | undefined {
   const pathEnv = process.env.PATH || '';
-  const exts = process.platform === 'win32'
-    ? (process.env.PATHEXT || '.EXE;.CMD;.BAT').split(';')
+  const exts = platform === 'win32'
+    ? (process.env.PATHEXT || '.EXE;.CMD;.BAT').split(win32.delimiter)
     : [''];
-  for (const dir of pathEnv.split(';')) {
+  for (const dir of pathEnv.split(platform === 'win32' ? win32.delimiter : posix.delimiter)) {
     if (!dir) continue;
     for (const ext of exts) {
       const full = join(dir, bin.toLowerCase().endsWith(ext.toLowerCase()) ? bin : bin + ext);
