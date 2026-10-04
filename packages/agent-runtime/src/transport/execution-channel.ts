@@ -121,7 +121,32 @@ export interface ExecutionHandle {
   stop(request: StopRequest): Promise<StopReceipt>;
 }
 
-/** Receives frames from the executor as they are produced. */
+/**
+ * Receives frames from the executor as they are produced.
+ *
+ * ## Why `frame` may return a promise
+ *
+ * This is the awaitable hop the backpressure chain was missing, and it is
+ * ADDITIVE rather than a signature change: `void | Promise<void>` still accepts
+ * every existing synchronous sink, so nothing that implements this interface
+ * today has to change.
+ *
+ * The chain it completes, in order, is
+ * `executor -> ExecutionSink.frame -> acceptInbound -> EventPublisher.push`,
+ * and every hop on it used to be `void`. That is why the byte bound on the queue
+ * was advisory: the queue reported `paused` and handed out `whenWritable()`, and
+ * no producer had anywhere to await a promise. `RunEventEmitter.publish` (added
+ * on the sibling backpressure branch) is the point in the middle that CAN await;
+ * this arm is what lets a producer get there.
+ *
+ * ## The obligation this creates, and why it is not optional in practice
+ *
+ * A sink that returns a promise has told its caller that backpressure applies,
+ * and the caller must await it. Awaiting is the whole mechanism: a producer that
+ * fires and forgets has the same unbounded behaviour as before, so the arm only
+ * helps if the producer awaits. `awaitMaybe` below exists so that obligation is
+ * one call rather than a type check at every frame site.
+ */
 export interface ExecutionSink {
   /**
    * One raw frame from the executor.
@@ -130,12 +155,29 @@ export interface ExecutionSink {
    * is a property of the run layer rather than of the transport. An executor
    * that already speaks the protocol may push envelopes through
    * {@link ExecutionSink.envelope} instead.
+   *
+   * May return a promise when this sink applies backpressure. See the interface
+   * doc comment.
    */
-  frame(raw: RawFrame): void;
+  frame(raw: RawFrame): void | Promise<void>;
   /** An event the runtime already built (a `run.started`, a synthetic failure). */
-  envelope?(envelope: RunEventEnvelope): void;
+  envelope?(envelope: RunEventEnvelope): void | Promise<void>;
   /** The executor's stream ended without a terminal frame. */
   end(): void;
+}
+
+/**
+ * Await a sink call whether or not it produced a promise.
+ *
+ * The point is that a caller cannot accidentally skip the wait: `frame` is typed
+ * `void | Promise<void>` precisely so that a bare `sink.frame(x)` still compiles
+ * while silently discarding a backpressure signal. Routing every await through
+ * this function makes "did I honour the bound" a single greppable place instead
+ * of a judgement call at each of the dozens of frame sites.
+ */
+export async function awaitMaybe(work: void | Promise<void>): Promise<void> {
+  if (work === undefined) return;
+  await work;
 }
 
 /** Everything an executor needs to know about the turn it is about to run. */
