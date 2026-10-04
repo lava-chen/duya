@@ -97,6 +97,7 @@ describe.skipIf(!nativeSqliteAvailable)('workflow console handlers', () => {
   it('registers exactly the console channels', () => {
     expect(registered.sort()).toEqual(
       [
+        'workflow:artifact-path',
         'workflow:cancel',
         'workflow:defs:create',
         'workflow:defs:delete',
