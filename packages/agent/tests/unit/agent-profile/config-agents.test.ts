@@ -6,6 +6,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
 import { readConfigAgents, toAgentProfile } from '../../../src/agent-profile/config-agents.js';
+import { BOT_TOOLSET } from '../../../src/agent-profile/bot-toolset.js';
 
 // `import * as os` is a non-configurable namespace in ESM, so we mock the
 // whole module and redirect `homedir` to a per-test temp dir via a hoisted
@@ -73,8 +74,20 @@ plugins = ["mcp:github"]
     expect(profile.userVisible).toBe(true);
     expect(profile.isPreset).toBe(false);
     expect(profile.isEnabled).toBe(true);
-    // Explicit allow overrides the profile's allow list.
-    expect(profile.allowedTools).toEqual(['file:*']);
+    // Explicit allow overrides the profile's allow list. The `coding` base is
+    // ['file:*', 'search:*', 'exec:*', 'process:*', 'git:*']; an explicit
+    // `allow = ["file:*"]` must REPLACE it, not merge with it — so none of the
+    // base profile's other patterns may leak in.
+    expect(profile.allowedTools).toContain('file:*');
+    for (const baseOnly of ['search:*', 'exec:*', 'process:*', 'git:*']) {
+      expect(profile.allowedTools).not.toContain(baseOnly);
+    }
+    // Plan 481 P1.2: every bot profile additionally gets the bot collaboration
+    // toolset appended (applyBotToolset). Deny still wins downstream, so this
+    // grant is bounded by `disallowedTools` below.
+    for (const botTool of BOT_TOOLSET) {
+      expect(profile.allowedTools).toContain(botTool);
+    }
     // Deny merges the coding-profile deny list with the explicit deny.
     expect(profile.disallowedTools).toContain('browser:*');
     expect(profile.disallowedTools).toContain('gateway:*');

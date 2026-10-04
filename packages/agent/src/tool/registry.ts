@@ -366,7 +366,15 @@ export class ToolRegistry {
     // ReplaceableOwner already excludes 'non-mcp' at the type level; this
     // runtime guard covers callers that bypass the static type (e.g. JS
     // callers or untyped IPC payloads).
-    if ((ownerId as ToolOwner) === 'non-mcp') {
+    //
+    // It validates the FULL owner union ('mcp' | `connector:${string}`), not
+    // just the 'non-mcp' case. Rejecting only 'non-mcp' left the documented
+    // constraint unenforced: an unrecognised owner sailed through validation
+    // and then, in Phase 3, committed its prepared entries under an owner
+    // string no replace-set can ever target again — permanently orphaning
+    // them in the catalog. A typo'd bucket name ('connectr:slack') was worse,
+    // because the removal it was asked to perform silently did nothing.
+    if (ownerId !== 'mcp' && !ownerId.startsWith('connector:')) {
       throw new MCPRegistryReplaceError(
         `replaceByOwner: ownerId must be 'mcp' or 'connector:<connectionId>' (got '${ownerId}')`,
       );

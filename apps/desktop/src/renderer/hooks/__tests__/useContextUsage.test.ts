@@ -221,21 +221,32 @@ describe('useContextUsage', () => {
     // Plan 443: worker frames without a real usage anchor (fresh session
     // estimate, post-compaction unknown) must not drive the ring, or the
     // displayed number swings when the first authoritative result lands.
+    const messages: Message[] = [
+      makeAssistantMessage(), // persisted anchor still exists
+    ];
+
+    // Baseline: the persisted scan, with no live frame at all. Asserting
+    // against this rather than a hard-coded token count keeps the case
+    // meaningful when the shared estimator's arithmetic changes.
+    const { result: baseline } = renderHook(() =>
+      useContextUsage(messages, 'claude-sonnet', 200_000, 'sess-1'),
+    );
+    expect(baseline.current.hasData).toBe(true);
+    expect(baseline.current.used).toBeGreaterThan(0);
+
     useContextUsageStore.getState().setLive('sess-1', {
       usedTokens: 15_000,
       inputTokens: 14_000,
       outputTokens: 1000,
       anchored: false,
     });
-    const messages: Message[] = [
-      makeAssistantMessage(), // persisted anchor still exists
-    ];
     const { result } = renderHook(() =>
       useContextUsage(messages, 'claude-sonnet', 200_000, 'sess-1'),
     );
     // Falls through to the persisted scan (anchored), not the live guess.
     expect(result.current.hasData).toBe(true);
-    expect(result.current.used).toBe(9200);
+    expect(result.current.used).toBe(baseline.current.used);
+    expect(result.current.used).not.toBe(15_000);
   });
 
 

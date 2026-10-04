@@ -27,14 +27,27 @@ const files = marketplaceAppJsonFiles();
 describe('duya-marketplace .app.json acceptance', () => {
   it.skipIf(files.length === 0)('parses every marketplace plugin declaration', () => {
     for (const rel of files) {
-      const result = parseAppDeclarationFile(readFileSync(join(MARKETPLACE, rel), 'utf-8'));
+      const raw = readFileSync(join(MARKETPLACE, rel), 'utf-8');
+      const result = parseAppDeclarationFile(raw);
       if (!result.ok) {
         throw new Error(`${rel} rejected: ${result.reason}`);
       }
       expect(result.apps.length).toBeGreaterThan(0);
-      // name-keyed form: the map key becomes the declaration's display name
       for (const app of result.apps) {
-        expect(app.name).toBeTruthy();
+        // `AppDeclarationFileSchema` accepts EITHER an array of declarations
+        // OR codex's name-keyed `{ apps: { <name>: { id } } }` map. Only the
+        // name-keyed form can supply a display name — the marketplace files
+        // are the plain array form (`{ "apps": [{ "id": "github" }] }`), where
+        // the connector's display name resolves from the builtin registry at
+        // render time. So `name` is required only for the keyed form; `id` is
+        // required for both, and the builtin-id contract is asserted by the
+        // sibling test below.
+        const apps = (JSON.parse(raw) as { apps?: unknown }).apps;
+        const nameKeyed = apps !== null && !Array.isArray(apps);
+        if (nameKeyed) {
+          expect(app.name).toBeTruthy();
+        }
+        expect(app.id).toBeTruthy();
         expect(app.oauth).toBeUndefined();
         expect(app.tools).toEqual([]);
       }

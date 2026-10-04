@@ -1266,7 +1266,14 @@ describe('Case 12: MCP tools exposed by default + permission gate flow', () => {
     expect(requestPermission).toHaveBeenCalledTimes(1);
   });
 
-  it('no approval channel implicitly allows in background/headless contexts', async () => {
+  // Plan 583 / ISS-11. This case used to fail OPEN — the gate called the tool
+  // through whenever `requestPermission` was absent, on the theory that a
+  // headless/background context has nobody to answer a prompt. That made a
+  // merely-unwired hook indistinguishable from consent: third-party MCP tools
+  // executed with no approval at all (see permissions/askWithoutUser.ts and
+  // the gate in mcp/apply.ts). The gate now fails CLOSED and lets the session
+  // permission mode decide, so these cases pin the new contract.
+  it('no approval channel and no declared mode denies (unwired hook fails closed)', async () => {
     const agent = makeFakeAgent();
     const { internalKey } = await applyPluginServer(agent);
     const entry = agent._toolEntries().get(internalKey)!;
@@ -1275,9 +1282,62 @@ describe('Case 12: MCP tools exposed by default + permission gate flow', () => {
       undefined,
       gateContext('tu-headless-1'),
     );
-    // No interactive user can answer a prompt in a headless / background /
-    // sub-agent context, so the gate lets the call through instead of
-    // dead-locking on a dialog nobody can respond to.
+    expect(r.error).toBe(true);
+    expect(r.result).toMatch(/\[MCP permission gate\]/);
+    expect(r.result).toMatch(/no interactive user to ask/);
+    // The refusal must be actionable, and must not silently allow instead.
+    expect(r.result).toMatch(/dontAsk.*bypassPermissions|bypassPermissions.*dontAsk/);
+  });
+
+  it('no approval channel denies in an interactive permission mode', async () => {
+    // `default` means the user WANTS to be asked. With nobody to ask, deny.
+    const agent = {
+      ...makeFakeAgent(),
+      getPermissionMode: () => 'default' as const,
+    };
+    const { internalKey } = await applyPluginServer(agent);
+    const entry = agent._toolEntries().get(internalKey)!;
+    const r = await entry.executor.execute(
+      { q: 1 },
+      undefined,
+      gateContext('tu-default-1'),
+    );
+    expect(r.error).toBe(true);
+    expect(r.result).toMatch(/no interactive user to ask/);
+    expect(r.result).toMatch(/permission mode: `default`/);
+  });
+
+  // `dontAsk` is the documented headless / background mode: honouring `ask`
+  // there is not a bypass, because the user already answered every future
+  // prompt with "allow".
+  it('no approval channel allows in dontAsk mode', async () => {
+    const agent = {
+      ...makeFakeAgent(),
+      getPermissionMode: () => 'dontAsk' as const,
+    };
+    const { internalKey } = await applyPluginServer(agent);
+    const entry = agent._toolEntries().get(internalKey)!;
+    const r = await entry.executor.execute(
+      { q: 1 },
+      undefined,
+      gateContext('tu-dontask-1'),
+    );
+    expect(r.error).toBeFalsy();
+    expect(r.result).toBe('stub result');
+  });
+
+  it('no approval channel allows in bypassPermissions mode', async () => {
+    const agent = {
+      ...makeFakeAgent(),
+      getPermissionMode: () => 'bypassPermissions' as const,
+    };
+    const { internalKey } = await applyPluginServer(agent);
+    const entry = agent._toolEntries().get(internalKey)!;
+    const r = await entry.executor.execute(
+      { q: 1 },
+      undefined,
+      gateContext('tu-bypass-1'),
+    );
     expect(r.error).toBeFalsy();
     expect(r.result).toBe('stub result');
   });

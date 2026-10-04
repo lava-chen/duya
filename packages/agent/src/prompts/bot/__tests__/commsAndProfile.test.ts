@@ -40,8 +40,13 @@ describe('botCommsRules (P2.2)', () => {
 
   it('stays within its budget', () => {
     const text = renderBotCommsRules({ botAgentId: 'alpha' })!
-    // 1500 (pre-style-port) + ~2900 for the grok "Reply length and shape" port.
-    expect(text.length).toBeLessThanOrEqual(4600)
+    // ~1500 pre-style-port + ~2900 for the grok "Reply length and shape"
+    // port + ~700 for the proactivity pair ("Proactivity has two layers" and
+    // "Wakes and quiet work") that 23c79112 added on 2026-09-26. The previous
+    // 4600 ceiling predated those two sections and was left behind by that
+    // commit. Headroom here (~180) is in line with the ~140 the original
+    // ceiling carried, so accidental bloat is still caught.
+    expect(text.length).toBeLessThanOrEqual(5300)
   })
 
   it('renders the reply length and shape style rules (grok 0.18 port)', () => {
