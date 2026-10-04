@@ -71,7 +71,7 @@ export const SSE_EVENT_TO_PROTOCOL: Readonly<
   Record<LegacySseEventType, readonly EventType[]>
 > = {
   // Today the declared type says `data: string` while the router actually sends
-  // `data.content` (router.ts:461-465) and the renderer reads
+  // `data.content` (router.ts:455-462) and the renderer reads
   // `event.data.content` (:444-446). The declared type was a lie.
   text: ['assistant.text_block'],
   text_delta: ['assistant.text_delta'],
@@ -85,9 +85,9 @@ export const SSE_EVENT_TO_PROTOCOL: Readonly<
   // that differ only in the `type` discriminant). The difference is ORDER, not
   // shape: `tool_use_started` is the provisional announcement while arguments
   // still stream; `tool_use` is the authoritative re-emission —
-  // DuyaAgent.ts:2394-2397 says so in as many words. Consumers collapse the
-  // pair into ONE upsert slot keyed by id
-  // (agent-sse-client.ts:452-453, stream-session-manager.ts:2013-2014), which
+  // DuyaAgent.ts:2443 says so in as many words — the authoritative input
+  // arrives with `tool_use`. The consumer collapses the pair into ONE upsert
+  // slot keyed by id (stream-session-manager.ts:2522-2533), which
   // is precisely why the protocol has to split them: one slot, two
   // durabilities, and no way to tell a duplicate from a correction.
   // Neither carries a result: completion arrives on `tool_result` below.

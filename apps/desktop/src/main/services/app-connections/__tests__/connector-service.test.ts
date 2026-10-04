@@ -14,7 +14,6 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { asAppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
 const GOOGLE = asAppConnectorId('google');
 const SLACK = asAppConnectorId('slack');
-import Database from 'better-sqlite3';
 import type { Database as DatabaseType } from 'better-sqlite3';
 
 vi.mock('../../../logging/logger', () => ({
@@ -34,24 +33,10 @@ import { TokenService } from '../token-service';
 import { AppConnectionService } from '../app-connection-service';
 import { ConnectorService } from '../connector-service';
 import type { AppConnection, TokenSet } from '../types';
+import { makeAppConnectionsDb } from './app-connections-db';
 
 function makeDb(): DatabaseType {
-  const db = new Database(':memory:') as unknown as DatabaseType;
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS app_connections (
-      id TEXT PRIMARY KEY,
-      provider TEXT NOT NULL,
-      account_label TEXT NOT NULL DEFAULT '',
-      account_id TEXT NOT NULL DEFAULT '',
-      scopes TEXT NOT NULL DEFAULT '[]',
-      status TEXT NOT NULL DEFAULT 'disconnected',
-      expires_at INTEGER,
-      last_error TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    )
-  `);
-  return db;
+  return makeAppConnectionsDb();
 }
 
 class FakeVault {
@@ -60,6 +45,12 @@ class FakeVault {
   get(id: string): TokenSet | undefined { const v = this.map.get(id); return v ? { ...v } : undefined; }
   remove(id: string) { this.map.delete(id); }
   clear() { this.map.clear(); }
+  /**
+   * TokenService consults this before every read: a vault that cannot be
+   * decrypted must report `vault_unavailable` rather than be treated as
+   * empty. This fake is always readable, so it is never unavailable.
+   */
+  isUnavailable() { return false; }
 }
 
 function seedConnection(db: DatabaseType, overrides: Partial<AppConnection> = {}): void {
@@ -164,7 +155,16 @@ describe('ConnectorService', () => {
     });
 
     expect(result.success).toBe(true);
-    expect(result.data).toMatchObject({ files: [{ id: 'file-1', name: 'test.txt' }] });
+    // Search results are normalized into citable source records rather than
+    // raw Drive rows, so the model can always cite a stable `url`.
+    expect(result.data).toMatchObject({
+      files: [{
+        id: 'file-1',
+        title: 'test.txt',
+        url: 'https://drive.google.com/open?id=file-1',
+        mimeType: 'application/octet-stream',
+      }],
+    });
     // Verify the fetch was called with the access token
     expect(calls.some((c) => c.url.includes('drive/v3/files'))).toBe(true);
   });
@@ -192,9 +192,9 @@ describe('ConnectorService', () => {
     expect(result.error!.code).toBe('provider_error');
   });
 
-  it('invoke with no token (vault empty) returns token error', async () => {
+  it('invoke with no token (vault empty) returns an actionable auth error', async () => {
     vault.remove('c-google');
-    const { fakeFetch } = makeFakeFetch({});
+    const { fakeFetch, calls } = makeFakeFetch({});
     connectorService = new ConnectorService({ service, fetchImpl: fakeFetch as unknown as typeof fetch });
 
     const result = await connectorService.invoke({
@@ -203,8 +203,14 @@ describe('ConnectorService', () => {
       args: {},
     });
     expect(result.success).toBe(false);
-    // Token service returns connection_revoked when vault entry is missing
-    expect(result.error!.code).toBe('connection_revoked');
+    // TokenService reports `connection_revoked` for a missing vault entry;
+    // ConnectorService remaps that (and a mid-session
+    // `connection_not_available`) onto `connector_auth_required` so the
+    // renderer can raise a re-authorization card instead of surfacing a
+    // dead-end error the user cannot act on.
+    expect(result.error!.code).toBe('connector_auth_required');
+    // The provider must not have been called at all.
+    expect(calls).toHaveLength(0);
   });
 
   it('invoke with connector API error returns provider_error', async () => {

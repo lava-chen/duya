@@ -10,7 +10,6 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { asAppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
 const GOOGLE = asAppConnectorId('google');
 const SLACK = asAppConnectorId('slack');
-import Database from 'better-sqlite3';
 import type { Database as DatabaseType } from 'better-sqlite3';
 
 vi.mock('../../../logging/logger', () => ({
@@ -27,24 +26,11 @@ vi.mock('../../../logging/logger', () => ({
   },
 }));
 
+import { ConnectionStore } from '../connection-store';
+import { makeAppConnectionsDb } from './app-connections-db';
+
 function makeDb(): DatabaseType {
-  const db = new Database(':memory:') as unknown as DatabaseType;
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS app_connections (
-      id TEXT PRIMARY KEY,
-      provider TEXT NOT NULL,
-      account_label TEXT NOT NULL DEFAULT '',
-      account_id TEXT NOT NULL DEFAULT '',
-      scopes TEXT NOT NULL DEFAULT '[]',
-      status TEXT NOT NULL DEFAULT 'disconnected',
-      expires_at INTEGER,
-      last_error TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      connection_slug TEXT NOT NULL DEFAULT ''
-    )
-  `);
-  return db;
+  return makeAppConnectionsDb();
 }
 
 describe('ConnectionStore', () => {

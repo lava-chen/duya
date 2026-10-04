@@ -12,6 +12,7 @@ import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from 'vitest
 import * as http from 'node:http';
 import * as os from 'node:os';
 import { AddressInfo } from 'node:net';
+import * as path from 'node:path';
 import { executeHook, executeHookCommand, executeHttpHook, executeProcessHook, resolveProcessSpawn } from '../executor.js';
 import { createConfiguredLoopHooks } from '../config-loop.js';
 import { LoopHookBus } from '../loop.js';
@@ -153,14 +154,17 @@ describe('executeHookBackground', () => {
       { ...baseInput(), hook_event_name: 'Stop' },
       { cwd: CWD },
     );
-    // With shell:true the shell reports the missing binary as exit 1, so
-    // the task settles as error (fail-open, like bash background tasks).
+    // With shell:true the shell reports the missing binary as 1 on Windows
+    // (cmd) and 127 on POSIX (sh, "command not found"), so the task settles
+    // as error either way (fail-open, like bash background tasks).
     expect(result.ok).toBe(true);
     expect(result.backgroundTaskId).toBeDefined();
     const taskId = result.backgroundTaskId!;
     await waitFor(() => hookTaskRegistry.getTask(taskId)?.status !== 'running');
     expect(hookTaskRegistry.getTask(taskId)?.status).toBe('error');
-    expect(hookTaskRegistry.getTask(taskId)?.exitCode).toBe(1);
+    expect(hookTaskRegistry.getTask(taskId)?.exitCode).toBe(
+      process.platform === 'win32' ? 1 : 127,
+    );
   });
 });
 
@@ -176,7 +180,12 @@ describe('resolveProcessSpawn', () => {
   });
 
   it('handles node.exe and case variants', () => {
-    for (const cmd of ['node.exe', 'NODE.EXE', 'C:\\Tools\\node.exe']) {
+    // `resolveProcessSpawn` matches on the HOST `path.basename`, so an
+    // absolute path has to be built with the host separator: a literal
+    // `C:\Tools\node.exe` is one filename on POSIX, not a path, and is
+    // correctly left untouched there.
+    const absoluteNode = path.join(path.sep, 'Tools', 'node.exe');
+    for (const cmd of ['node.exe', 'NODE.EXE', absoluteNode]) {
       const resolved = resolveProcessSpawn({ command: cmd, args: [], shell: false });
       expect(resolved.command).toBe(process.execPath);
       expect(resolved.env?.ELECTRON_RUN_AS_NODE).toBe('1');

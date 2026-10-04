@@ -98,102 +98,128 @@ vi.mock('../../services/cua/window-restore.js', () => ({
 
 import { __resetCuaService, dispatchCuaTool } from '../cua-handlers.js';
 
-describe('dispatchCuaTool — top-level app_ref → nested appRef translation', () => {
+// `dispatchCuaTool` refuses every tool on non-Windows hosts with a
+// STRUCTURED_STATE_UNAVAILABLE envelope (cua-handlers.ts, plan 575: the CUA
+// channel is implemented on Windows only). The arg-translation contract is
+// therefore only reachable on win32, so it lives in a narrow guarded group
+// and the off-Windows contract is asserted explicitly below.
+describe.skipIf(process.platform !== 'win32')(
+    'dispatchCuaTool — top-level app_ref → nested appRef translation',
+    () => {
+    beforeEach(() => {
+      __resetCuaService();
+      vi.clearAllMocks();
+      mocks.calls.leftClick.length = 0;
+      mocks.calls.leftClickDrag.length = 0;
+      mocks.calls.setValue.length = 0;
+      mocks.calls.selectText.length = 0;
+      mocks.calls.performAction.length = 0;
+      mocks.calls.getAppState.length = 0;
+    });
+
+    it('left_click: top-level pid reaches the service as appRef.pid', async () => {
+      const out = await dispatchCuaTool({
+        tool: 'left_click',
+        args: { target: { type: 'element', index: 9 }, pid: 48412 },
+        sessionId: 's1',
+      });
+      expect(out.success).toBe(true);
+      expect(mocks.calls.leftClick).toHaveLength(1);
+      expect(mocks.calls.leftClick[0]).toMatchObject({
+        target: { type: 'element', index: 9 },
+        appRef: { pid: 48412 },
+      });
+    });
+
+    it('set_value: top-level name reaches the service as appRef.name', async () => {
+      await dispatchCuaTool({
+        tool: 'set_value',
+        args: { target: { type: 'element', index: 3 }, name: 'QQ', value: 'hi' },
+      });
+      expect(mocks.calls.setValue[0]).toMatchObject({
+        value: 'hi',
+        appRef: { name: 'QQ' },
+      });
+    });
+
+    it('perform_action: top-level windowId reaches the service as appRef.windowId', async () => {
+      await dispatchCuaTool({
+        tool: 'perform_action',
+        args: { target: { type: 'element', index: 0 }, windowId: 62459564, action: 'AXPress' },
+      });
+      expect(mocks.calls.performAction[0]).toMatchObject({
+        action: 'AXPress',
+        appRef: { windowId: 62459564 },
+      });
+    });
+
+    it('left_click_drag: top-level refs reach the service', async () => {
+      await dispatchCuaTool({
+        tool: 'left_click_drag',
+        args: {
+          from: { type: 'element', index: 1 },
+          to: { type: 'coordinate', x: 10, y: 10 },
+          name: 'B',
+        },
+      });
+      expect(mocks.calls.leftClickDrag[0]).toMatchObject({ appRef: { name: 'B' } });
+    });
+
+    it('select_text: top-level pid reaches the service', async () => {
+      await dispatchCuaTool({
+        tool: 'select_text',
+        args: { target: { type: 'element', index: 2 }, pid: 7, text: 'needle' },
+      });
+      expect(mocks.calls.selectText[0]).toMatchObject({ appRef: { pid: 7 } });
+    });
+
+    it('no ref fields → appRef undefined (the service falls back to the single observed window)', async () => {
+      await dispatchCuaTool({
+        tool: 'left_click',
+        args: { target: { type: 'element', index: 0 } },
+      });
+      const passed = mocks.calls.leftClick[0] as { appRef?: unknown };
+      expect(passed.appRef).toBeUndefined();
+    });
+
+    it('junk ref values (pid=0, blank name) do not fabricate an appRef', async () => {
+      await dispatchCuaTool({
+        tool: 'left_click',
+        args: { target: { type: 'element', index: 0 }, pid: 0, name: '   ', windowId: -3 },
+      });
+      const passed = mocks.calls.leftClick[0] as { appRef?: unknown };
+      expect(passed.appRef).toBeUndefined();
+    });
+
+    it('get_app_state keeps its explicit top-level field mapping', async () => {
+      await dispatchCuaTool({
+        tool: 'get_app_state',
+        args: { pid: 5, includeScreenshot: true, fresh: true, maxElements: 100 },
+      });
+      expect(mocks.calls.getAppState[0]).toEqual({
+        pid: 5,
+        includeScreenshot: true,
+        fresh: true,
+        maxElements: 100,
+      });
+    });
+  },
+);
+
+describe.skipIf(process.platform === 'win32')('dispatchCuaTool off Windows', () => {
   beforeEach(() => {
     __resetCuaService();
     vi.clearAllMocks();
-    mocks.calls.leftClick.length = 0;
-    mocks.calls.leftClickDrag.length = 0;
-    mocks.calls.setValue.length = 0;
-    mocks.calls.selectText.length = 0;
-    mocks.calls.performAction.length = 0;
-    mocks.calls.getAppState.length = 0;
   });
 
-  it('left_click: top-level pid reaches the service as appRef.pid', async () => {
+  it('answers STRUCTURED_STATE_UNAVAILABLE instead of dispatching', async () => {
     const out = await dispatchCuaTool({
       tool: 'left_click',
       args: { target: { type: 'element', index: 9 }, pid: 48412 },
       sessionId: 's1',
     });
-    expect(out.success).toBe(true);
-    expect(mocks.calls.leftClick).toHaveLength(1);
-    expect(mocks.calls.leftClick[0]).toMatchObject({
-      target: { type: 'element', index: 9 },
-      appRef: { pid: 48412 },
-    });
-  });
-
-  it('set_value: top-level name reaches the service as appRef.name', async () => {
-    await dispatchCuaTool({
-      tool: 'set_value',
-      args: { target: { type: 'element', index: 3 }, name: 'QQ', value: 'hi' },
-    });
-    expect(mocks.calls.setValue[0]).toMatchObject({
-      value: 'hi',
-      appRef: { name: 'QQ' },
-    });
-  });
-
-  it('perform_action: top-level windowId reaches the service as appRef.windowId', async () => {
-    await dispatchCuaTool({
-      tool: 'perform_action',
-      args: { target: { type: 'element', index: 0 }, windowId: 62459564, action: 'AXPress' },
-    });
-    expect(mocks.calls.performAction[0]).toMatchObject({
-      action: 'AXPress',
-      appRef: { windowId: 62459564 },
-    });
-  });
-
-  it('left_click_drag: top-level refs reach the service', async () => {
-    await dispatchCuaTool({
-      tool: 'left_click_drag',
-      args: {
-        from: { type: 'element', index: 1 },
-        to: { type: 'coordinate', x: 10, y: 10 },
-        name: 'B',
-      },
-    });
-    expect(mocks.calls.leftClickDrag[0]).toMatchObject({ appRef: { name: 'B' } });
-  });
-
-  it('select_text: top-level pid reaches the service', async () => {
-    await dispatchCuaTool({
-      tool: 'select_text',
-      args: { target: { type: 'element', index: 2 }, pid: 7, text: 'needle' },
-    });
-    expect(mocks.calls.selectText[0]).toMatchObject({ appRef: { pid: 7 } });
-  });
-
-  it('no ref fields → appRef undefined (the service falls back to the single observed window)', async () => {
-    await dispatchCuaTool({
-      tool: 'left_click',
-      args: { target: { type: 'element', index: 0 } },
-    });
-    const passed = mocks.calls.leftClick[0] as { appRef?: unknown };
-    expect(passed.appRef).toBeUndefined();
-  });
-
-  it('junk ref values (pid=0, blank name) do not fabricate an appRef', async () => {
-    await dispatchCuaTool({
-      tool: 'left_click',
-      args: { target: { type: 'element', index: 0 }, pid: 0, name: '   ', windowId: -3 },
-    });
-    const passed = mocks.calls.leftClick[0] as { appRef?: unknown };
-    expect(passed.appRef).toBeUndefined();
-  });
-
-  it('get_app_state keeps its explicit top-level field mapping', async () => {
-    await dispatchCuaTool({
-      tool: 'get_app_state',
-      args: { pid: 5, includeScreenshot: true, fresh: true, maxElements: 100 },
-    });
-    expect(mocks.calls.getAppState[0]).toEqual({
-      pid: 5,
-      includeScreenshot: true,
-      fresh: true,
-      maxElements: 100,
-    });
+    expect(out.success).toBe(false);
+    expect(JSON.stringify(out)).toContain('STRUCTURED_STATE_UNAVAILABLE');
+    expect(mocks.calls.leftClick).toHaveLength(0);
   });
 });

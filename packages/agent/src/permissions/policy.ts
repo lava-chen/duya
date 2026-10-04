@@ -687,10 +687,28 @@ const READ_SENSITIVE_PATH_PATTERNS: RegExp[] = [
   /\/\.duya\/mcp\.toml$/,
   // Windows credential vault / DPAPI
   /\/microsoft\/credentials(\/|$)/,
-  // Browser cookie databases
-  /\/google\/chrome(?:\/[^/]*)?\/user data\/[^/]+\/cookies$/,
-  /\/microsoft\/edge(?:\/[^/]*)?\/user data\/[^/]+\/cookies$/,
-  /\/mozilla\/firefox\/profiles\/[^/]+\/cookies\.sqlite$/
+  // Browser cookie databases. The shapes are the layouts the cookie importer
+  // actually resolves (`browserUserDataPath` + `resolveCookieFilePath` in
+  // apps/desktop/src/main/services/browser/cookie-importer.ts): a browser user
+  // data directory, a profile name, then `Cookies` or `Network/Cookies`,
+  // because Chromium moved the database under `Network/` in M96+ and the
+  // importer tries `Network/Cookies` first.
+  //
+  // `user data` is the Windows AppData segment ALONE -- macOS keeps the profile
+  // under `Library/Application Support/Google/Chrome` and Linux under
+  // `~/.config/google-chrome`, `chromium` or `microsoft-edge` -- so requiring
+  // it left the read policy unable to recognise a browser cookie database on
+  // either of those platforms. Same for Firefox, whose Linux profile dir is
+  // dot-prefixed (`~/.mozilla/firefox/...`).
+  //
+  // These carry the `i` flag because Chromium capitalises those directories on
+  // macOS and `isSensitiveReadPath` only lowercases its target on Windows;
+  // without it the Windows literals themselves stop matching on POSIX hosts.
+  /\/(?:google\/chrome|microsoft\/edge|google-chrome|chromium|microsoft-edge|microsoft edge)(?:\/user data)?\/[^/]+\/(?:network\/)?cookies$/i,
+  // Firefox is `Mozilla/Firefox` on Windows, `Firefox` on macOS and
+  // `.mozilla/firefox` on Linux -- match the `firefox/profiles` tail and skip
+  // the vendor prefix rather than pinning one of the three.
+  /\/firefox\/profiles\/[^/]+\/cookies\.sqlite$/i
 ];
 
 function isSoftBlockedPath(resolvedPath: string): boolean {

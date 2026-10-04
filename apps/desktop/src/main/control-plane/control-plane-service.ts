@@ -310,7 +310,13 @@ export class ControlPlaneService {
         // report, and `invalid` is the receipt state that says exactly that.
         state: receipt.write?.state ?? 'invalid',
         runId: typeof envelope.payload.runId === 'string' ? envelope.payload.runId : '',
-        reason: receipt.reason,
+        // The refusal code goes INTO `reason`, not beside it. The reader
+        // (`readRunReceipt`) reads `reason` and nothing else, so a sibling
+        // `refusal` field is information the reader throws away — and a refusal
+        // the reader can only describe as `unreadable` is exactly the failure
+        // this wire shape exists to prevent. `refusal` is kept below as well, so
+        // a caller that wants the code separately still has it.
+        reason: `${receipt.refusal}: ${receipt.reason}`,
         refusal: receipt.refusal,
       };
     }

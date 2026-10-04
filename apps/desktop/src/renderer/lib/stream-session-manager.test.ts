@@ -337,8 +337,14 @@ describe('StreamSessionManager State Machine', () => {
       await streamSessionManager.resumeBackgroundTask('background-resume');
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-      const request = mockFetch.mock.calls[1]?.[1] as RequestInit;
+      // Each turn issues TWO requests: the SSE `chat` call and a `status`
+      // poll. The case is about the RESUME turn, so select the resume's chat
+      // request explicitly instead of counting every fetch.
+      const chatCalls = mockFetch.mock.calls.filter(
+        (c) => String(c[0]).endsWith('/chat'),
+      );
+      expect(chatCalls).toHaveLength(2);
+      const request = chatCalls[1]?.[1] as RequestInit;
       const body = JSON.parse(String(request.body)) as {
         prompt: string;
         options: { backgroundTaskResume?: boolean; agentProfileId?: string | null; mode?: string };

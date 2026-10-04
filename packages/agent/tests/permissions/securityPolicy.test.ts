@@ -27,6 +27,18 @@ import type { ToolPermissionContext } from '../../src/permissions/types'
 // Helpers
 // ----------------------------------------------------------------------------
 
+/**
+ * A catastrophic path that is genuinely rooted on THIS host.
+ *
+ * The policy expands every path with HOST semantics before matching, so a
+ * `C:\...` fixture is only a system directory on Windows. Picking the host's
+ * own catastrophic root keeps the mode / file-tool wiring asserted on every
+ * platform instead of only where the hardcoded fixture happens to resolve.
+ */
+function catastrophicPath(): string {
+  return process.platform === 'win32' ? 'C:\\Windows\\System32\\evil.dll' : '/boot/vmlinuz'
+}
+
 function ctx(
   mode: ToolPermissionContext['mode'],
   overrides?: Partial<ToolPermissionContext>,
@@ -120,10 +132,49 @@ describe('isUNCPath', () => {
 // ----------------------------------------------------------------------------
 
 describe('isCatastrophicPath', () => {
-  it('flags Windows System32 as catastrophic', () => {
-    expect(isCatastrophicPath('C:\\Windows\\System32\\evil.dll')).toBe(true)
-    expect(isCatastrophicPath('C:\\Windows\\SysWOW64\\evil.dll')).toBe(true)
-    expect(isCatastrophicPath('C:\\System32\\evil.dll')).toBe(true)
+  // ─── Windows path semantics ───
+  //
+  // `isCatastrophicPath` runs the path through `expandPath`, which resolves
+  // with HOST semantics. A drive letter is only a root on Windows, so on
+  // POSIX `C:\Windows\System32\evil.dll` is an ordinary relative *filename*
+  // (backslashes are legal filename characters there) and resolving it
+  // against the CWD correctly does not reach a catastrophic prefix. The
+  // product is right; these inputs are only Windows paths on Windows.
+  //
+  // Each Windows assertion is therefore paired with the POSIX assertion of
+  // the same contract below, so the behaviour stays covered on both hosts
+  // rather than being dropped.
+  describe.skipIf(process.platform !== 'win32')('Windows-shaped paths', () => {
+    it('flags Windows System32 as catastrophic', () => {
+      expect(isCatastrophicPath('C:\\Windows\\System32\\evil.dll')).toBe(true)
+      expect(isCatastrophicPath('C:\\Windows\\SysWOW64\\evil.dll')).toBe(true)
+      expect(isCatastrophicPath('C:\\System32\\evil.dll')).toBe(true)
+    })
+
+    it('flags UNC paths as catastrophic (credential leak vector)', () => {
+      // `isCatastrophicPath` expands the path BEFORE `isUNCPath` sees it, so
+      // both UNC spellings only survive expansion on Windows: on POSIX
+      // `//attacker/share/payload` collapses to `/attacker/share/payload`
+      // and the double-slash host marker is gone.
+      expect(isCatastrophicPath('\\\\attacker\\share\\payload')).toBe(true)
+      expect(isCatastrophicPath('//attacker/share/payload')).toBe(true)
+    })
+
+    it('is case-insensitive on Windows paths', () => {
+      expect(isCatastrophicPath('c:\\windows\\system32\\foo')).toBe(true)
+      expect(isCatastrophicPath('C:\\WINDOWS\\SYSTEM32\\foo')).toBe(true)
+    })
+  })
+
+  describe.skipIf(process.platform === 'win32')('POSIX-shaped paths', () => {
+    it('treats a Windows-shaped string as an ordinary relative filename, not catastrophic', () => {
+      // The POSIX counterpart of "flags Windows System32 as catastrophic":
+      // there is no drive letter, so `C:\Windows\System32\evil.dll` resolves
+      // to `<cwd>/C:\Windows\System32\evil.dll`, which is not under any
+      // catastrophic prefix and must NOT be blocked.
+      expect(isCatastrophicPath('C:\\Windows\\System32\\evil.dll')).toBe(false)
+      expect(isCatastrophicPath('c:\\windows\\system32\\foo')).toBe(false)
+    })
   })
 
   it('flags catastrophic Unix paths', () => {
@@ -131,16 +182,6 @@ describe('isCatastrophicPath', () => {
     expect(isCatastrophicPath('/dev/sda')).toBe(true)
     expect(isCatastrophicPath('/dev/nvme0n1')).toBe(true)
     expect(isCatastrophicPath('/dev/disk/by-id/xxx')).toBe(true)
-  })
-
-  it('flags UNC paths as catastrophic (credential leak vector)', () => {
-    expect(isCatastrophicPath('\\\\attacker\\share\\payload')).toBe(true)
-    expect(isCatastrophicPath('//attacker/share/payload')).toBe(true)
-  })
-
-  it('is case-insensitive on Windows paths', () => {
-    expect(isCatastrophicPath('c:\\windows\\system32\\foo')).toBe(true)
-    expect(isCatastrophicPath('C:\\WINDOWS\\SYSTEM32\\foo')).toBe(true)
   })
 
   it('does NOT flag soft-blocked paths as catastrophic', () => {
@@ -259,13 +300,15 @@ describe('isCatastrophicCommand', () => {
 
 describe('checkPathSafety', () => {
   it('denies catastrophic paths even in bypass mode', () => {
-    const result = checkPathSafety('C:\\Windows\\System32\\evil.dll', undefined, BYPASS, { write: true })
+    // A catastrophic path for THIS host, so the mode contract is asserted on
+    // every platform rather than only where the fixture happens to be rooted.
+    const result = checkPathSafety(catastrophicPath(), undefined, BYPASS, { write: true })
     expect(result.allowed).toBe(false)
     expect(result.reason).toMatch(/catastrophic/i)
   })
 
   it('denies catastrophic paths in default mode', () => {
-    const result = checkPathSafety('\\\\attacker\\share\\payload', undefined, DEFAULT, { write: true })
+    const result = checkPathSafety(catastrophicPath(), undefined, DEFAULT, { write: true })
     expect(result.allowed).toBe(false)
   })
 
@@ -497,24 +540,40 @@ describe('isCatastrophicToolCall', () => {
   })
 
   it('flags catastrophic Write paths', () => {
-    expect(isCatastrophicToolCall('Write', { file_path: 'C:\\Windows\\System32\\evil.dll' })).toBe(true)
+    // `catastrophicPath()` is rooted for this host, so the file-tool wiring is
+    // asserted everywhere; the Windows-only spellings live in the guarded
+    // group above and are mirrored by its POSIX counterpart.
+    expect(isCatastrophicToolCall('Write', { file_path: catastrophicPath() })).toBe(true)
     expect(isCatastrophicToolCall('Write', { file_path: '/boot/vmlinuz' })).toBe(true)
-    expect(isCatastrophicToolCall('Write', { file_path: '\\\\attacker\\share\\payload' })).toBe(true)
   })
 
   it('flags catastrophic Edit paths', () => {
-    expect(isCatastrophicToolCall('Edit', { file_path: 'C:\\Windows\\SysWOW64\\evil.dll' })).toBe(true)
+    expect(isCatastrophicToolCall('Edit', { file_path: catastrophicPath() })).toBe(true)
   })
 
-  it('flags catastrophic Read paths (Read is a file tool — UNC reads leak credentials)', () => {
-    // isCatastrophicToolCall includes 'read' in isFileTool, so
-    // catastrophic path checks apply to Read too. This is intentional:
-    //   - Read from \\attacker\share → credential leak (NTLM relay)
-    //   - Read from C:\Windows\System32 → denied (conservative; reads
-    //     are harmless but the central check does not distinguish
-    //     read vs write for catastrophic paths)
-    expect(isCatastrophicToolCall('Read', { file_path: 'C:\\Windows\\System32\\foo.dll' })).toBe(true)
-    expect(isCatastrophicToolCall('Read', { file_path: '\\\\attacker\\share\\payload' })).toBe(true)
+  it('flags catastrophic Read paths (Read is a file tool — reads are checked too)', () => {
+    // isCatastrophicToolCall includes 'read' in isFileTool, so catastrophic
+    // path checks apply to Read too. This is intentional: reads from a
+    // UNC share leak credentials (NTLM relay), and reads of a system binary
+    // are denied conservatively — the central check does not distinguish
+    // read vs write for catastrophic paths.
+    expect(isCatastrophicToolCall('Read', { file_path: catastrophicPath() })).toBe(true)
+  })
+
+  describe.skipIf(process.platform !== 'win32')('Windows-shaped paths', () => {
+    it('flags UNC reads (credential leak vector)', () => {
+      expect(isCatastrophicToolCall('Read', { file_path: '\\\\attacker\\share\\payload' })).toBe(true)
+    })
+  })
+
+  describe.skipIf(process.platform === 'win32')('POSIX-shaped paths', () => {
+    it('does not flag a Windows-shaped path string, which is just a filename here', () => {
+      // The POSIX contract: `C:\Windows\System32\evil.dll` has no drive
+      // letter on POSIX, expands to `<cwd>/C:\Windows\System32\evil.dll`,
+      // and is not under any catastrophic prefix.
+      expect(isCatastrophicToolCall('Write', { file_path: 'C:\\Windows\\System32\\evil.dll' })).toBe(false)
+      expect(isCatastrophicToolCall('Read', { file_path: '\\\\attacker\\share\\payload' })).toBe(false)
+    })
   })
 
   it('does NOT flag soft-dangerous Bash commands', () => {

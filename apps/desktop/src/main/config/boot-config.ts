@@ -121,16 +121,49 @@ export function writeBootConfig(config: BootConfig): boolean {
 }
 
 /**
+ * True when this process is a test run scoped to one namespace.
+ *
+ * A test run's userData root is per-CHECKOUT: `e2e/helpers.ts` passes
+ * `--user-data-dir=<repo>/.e2e-userdata/<ns>`, so it dies with the worktree.
+ * The config that decides the database path is not: `compass.resolveConfigRoot`
+ * keys `~/.duya/test-namespaces/<ns>/config.toml` on the namespace NAME ALONE,
+ * so that file lives outside every worktree and outlives the checkout that wrote
+ * it. Any `storage.database_path` inside it is therefore an absolute path
+ * inherited from whichever checkout booted that namespace LAST.
+ *
+ * Honouring such a pin lets a removed worktree silently redirect a later run's
+ * entire database set, which surfaces as a missing `<ns>/databases` directory
+ * and a path error that reads like a product bug. So a namespaced test run
+ * derives its database from its own userData instead, and never persists the
+ * result — the pin can no longer outlive the run that produced it.
+ *
+ * Scoped deliberately to `DUYA_TEST=1` plus a valid namespace, the same
+ * condition `resolveConfigRoot` uses to pick the test-namespaces root. A test
+ * run with no namespace reads the real user config and keeps honouring its
+ * pin, so this never silently discards a user's own configuration.
+ */
+function isNamespacedTestRun(): boolean {
+  return process.env.DUYA_TEST === '1' && readTestNamespace() !== null;
+}
+
+/**
  * Resolve the database path with full fallback chain:
  * 1. config.toml `storage.database_path` (if set and valid)
  * 2. Legacy duya-config.json (migration)
  * 3. Default path (userData/databases/duya-main.db)
  *
  * Also handles backward compatibility for old duya.db filename.
+ *
+ * A namespaced test run skips step 1 and suppresses the boot write, so its
+ * database is always derived from this run's own `--user-data-dir`. Every
+ * caller (getDatabasePath, resolveCoreDatabasePath) inherits that, which keeps
+ * the whole test database set on one run's root.
  */
 export function resolveDatabasePath(): { dbPath: string; needsBootWrite: boolean; needsDbRename: boolean } {
+  const testScopedRun = isNamespacedTestRun();
+
   // Step 1: Check config.toml storage.database_path
-  const configured = resolveDatabasePathFromConfigToml();
+  const configured = testScopedRun ? '' : resolveDatabasePathFromConfigToml();
   if (configured && configured.trim()) {
     const dbPath = configured;
 
@@ -141,12 +174,14 @@ export function resolveDatabasePath(): { dbPath: string; needsBootWrite: boolean
     return { dbPath, needsBootWrite: false, needsDbRename };
   }
 
-  // Step 2: Check legacy config
+  // Step 2: Check legacy config. This reads under the run's own userData, so it
+  // is already run-scoped and cannot outlive a checkout; only the boot write
+  // has to be suppressed so the test namespace does not grow a stale pin.
   const legacyPath = migrateFromLegacyConfig();
   if (legacyPath) {
     const oldDbPath = legacyPath.replace('duya-main.db', 'duya.db');
     const needsDbRename = !fs.existsSync(legacyPath) && fs.existsSync(oldDbPath);
-    return { dbPath: legacyPath, needsBootWrite: true, needsDbRename };
+    return { dbPath: legacyPath, needsBootWrite: !testScopedRun, needsDbRename };
   }
 
   // Step 3: Default path
@@ -156,7 +191,7 @@ export function resolveDatabasePath(): { dbPath: string; needsBootWrite: boolean
   const oldDefaultPath = path.join(getDefaultDatabaseDir(), 'duya.db');
   const needsDbRename = !fs.existsSync(defaultPath) && fs.existsSync(oldDefaultPath);
 
-  return { dbPath: defaultPath, needsBootWrite: true, needsDbRename };
+  return { dbPath: defaultPath, needsBootWrite: !testScopedRun, needsDbRename };
 }
 
 /**

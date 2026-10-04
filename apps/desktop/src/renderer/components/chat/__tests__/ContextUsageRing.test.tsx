@@ -23,9 +23,12 @@ function renderRing() {
   const shell = view.container.querySelector(
     '.context-usage-ring-stats-shell',
   ) as HTMLElement | null;
+  const breakdown = view.container.querySelector(
+    '.context-composition-popover',
+  ) as HTMLElement | null;
   const trigger = view.getByRole('button', { name: 'Context usage' });
-  if (!wrap || !shell) throw new Error('ring structure missing');
-  return { view, wrap, shell, trigger };
+  if (!wrap || !shell || !breakdown) throw new Error('ring structure missing');
+  return { view, wrap, shell, breakdown, trigger };
 }
 
 /** Pin the ring: hover in + click, then hover out so only `pinned` holds it open. */
@@ -53,16 +56,23 @@ describe('ContextUsageRing', () => {
   });
 
   it('expands on hover and collapses after the hide delay', () => {
-    const { wrap, shell } = renderRing();
+    const { wrap, shell, breakdown } = renderRing();
     fireEvent.mouseEnter(wrap);
-    expect(shell.getAttribute('aria-hidden')).toBe('false');
+    // Hovering the ring opens the COMPOSITION BREAKDOWN popover
+    // (showBreakdown = hovered && !pinned && …), and while that is showing the
+    // slide-out stats line is deliberately suppressed
+    // (statsExpanded = … && !showBreakdown). They are two distinct surfaces;
+    // the breakdown is the one hover reveals.
+    expect(breakdown.getAttribute('aria-hidden')).toBe('false');
+    expect(shell.getAttribute('aria-hidden')).toBe('true');
+
     fireEvent.mouseLeave(wrap);
     // Grace period: still visible immediately after leave.
-    expect(shell.getAttribute('aria-hidden')).toBe('false');
+    expect(breakdown.getAttribute('aria-hidden')).toBe('false');
     act(() => {
       vi.advanceTimersByTime(HIDE_DELAY_MS + 50);
     });
-    expect(shell.getAttribute('aria-hidden')).toBe('true');
+    expect(breakdown.getAttribute('aria-hidden')).toBe('true');
   });
 
   it('click pins the stats line open across mouse-leave', () => {
@@ -107,31 +117,30 @@ describe('ContextUsageRing', () => {
 
   // popup variant (bot composer): hover opens the stats CARD instead of
   // the slide-out line; no data yet → "?" placeholder row.
-  it('popup variant: shows the stats card on hover and hides it on leave', () => {
+  it('popup variant: shows the composition breakdown on hover and hides it on leave', () => {
     const view = render(<ContextUsageRing messages={[]} variant="popup" />);
     const wrap = view.container.querySelector(
       '.context-usage-ring-wrap',
     ) as HTMLElement | null;
-    const popover = view.container.querySelector(
-      '.context-usage-popover',
+    // In popup mode the hovered surface is the composition breakdown
+    // (.context-composition-popover); the .context-usage-popover stats card is
+    // gated on statsExpanded, which is suppressed while the breakdown shows.
+    const breakdown = view.container.querySelector(
+      '.context-composition-popover',
     ) as HTMLElement | null;
-    if (!wrap || !popover) throw new Error('popup structure missing');
-    // No slide-out line in popup mode.
-    expect(
-      view.container.querySelector('.context-usage-ring-stats-shell'),
-    ).toBeNull();
+    if (!wrap || !breakdown) throw new Error('popup structure missing');
 
-    expect(popover.getAttribute('aria-hidden')).toBe('true');
+    expect(breakdown.getAttribute('aria-hidden')).toBe('true');
     fireEvent.mouseEnter(wrap);
-    expect(popover.getAttribute('aria-hidden')).toBe('false');
-    expect(popover.textContent).toContain('Context');
-    expect(popover.textContent).toContain('?');
+    expect(breakdown.getAttribute('aria-hidden')).toBe('false');
+    // No data yet → "?" placeholder rather than a fabricated number.
+    expect(breakdown.textContent).toContain('?');
 
     fireEvent.mouseLeave(wrap);
     act(() => {
       vi.advanceTimersByTime(HIDE_DELAY_MS + 50);
     });
-    expect(popover.getAttribute('aria-hidden')).toBe('true');
+    expect(breakdown.getAttribute('aria-hidden')).toBe('true');
   });
 
   // panel variant (chat composer): the ring is a bare controlled trigger —

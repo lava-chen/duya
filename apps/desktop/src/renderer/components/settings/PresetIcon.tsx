@@ -1,23 +1,33 @@
 "use client";
 
-import Anthropic from "@lobehub/icons/es/Anthropic";
-import OpenRouter from "@lobehub/icons/es/OpenRouter";
-import Zhipu from "@lobehub/icons/es/Zhipu";
-import Kimi from "@lobehub/icons/es/Kimi";
-import Moonshot from "@lobehub/icons/es/Moonshot";
-import Minimax from "@lobehub/icons/es/Minimax";
-import Bedrock from "@lobehub/icons/es/Bedrock";
-import Google from "@lobehub/icons/es/Google";
-import Volcengine from "@lobehub/icons/es/Volcengine";
-import Bailian from "@lobehub/icons/es/Bailian";
-import Ollama from "@lobehub/icons/es/Ollama";
-import LmStudio from "@lobehub/icons/es/LmStudio";
-import DeepSeek from "@lobehub/icons/es/DeepSeek";
-import Stepfun from "@lobehub/icons/es/Stepfun";
-import XAI from "@lobehub/icons/es/XAI";
-import Arcee from "@lobehub/icons/es/Arcee";
-import OpenAI from "@lobehub/icons/es/OpenAI";
-import Qwen from "@lobehub/icons/es/Qwen";
+// Import each brand mark's `Mono` module directly instead of the package
+// entry point. `@lobehub/icons/es/<Name>` is a barrel that eagerly re-exports
+// `.Text` and `.Avatar`; `Avatar` pulls in `features/IconAvatar`, which imports
+// the whole `@lobehub/ui` barrel for a single `Center` primitive. `@lobehub/ui`
+// then ships a package.json-less `es/node_modules/@base-ui/react` shadow tree
+// that shadows the hoisted `@base-ui/react`, and the bare
+// `@base-ui/react/merge-props` specifier inside it stops resolving — killing
+// every suite that transitively renders this component at collection time.
+// `Mono` is the default export of all 18 entries, so the rendered output is
+// unchanged; this only drops the unused Avatar/Text edges.
+import Anthropic from "@lobehub/icons/es/Anthropic/components/Mono";
+import OpenRouter from "@lobehub/icons/es/OpenRouter/components/Mono";
+import Zhipu from "@lobehub/icons/es/Zhipu/components/Mono";
+import Kimi from "@lobehub/icons/es/Kimi/components/Mono";
+import Moonshot from "@lobehub/icons/es/Moonshot/components/Mono";
+import Minimax from "@lobehub/icons/es/Minimax/components/Mono";
+import Bedrock from "@lobehub/icons/es/Bedrock/components/Mono";
+import Google from "@lobehub/icons/es/Google/components/Mono";
+import Volcengine from "@lobehub/icons/es/Volcengine/components/Mono";
+import Bailian from "@lobehub/icons/es/Bailian/components/Mono";
+import Ollama from "@lobehub/icons/es/Ollama/components/Mono";
+import LmStudio from "@lobehub/icons/es/LmStudio/components/Mono";
+import DeepSeek from "@lobehub/icons/es/DeepSeek/components/Mono";
+import Stepfun from "@lobehub/icons/es/Stepfun/components/Mono";
+import XAI from "@lobehub/icons/es/XAI/components/Mono";
+import Arcee from "@lobehub/icons/es/Arcee/components/Mono";
+import OpenAI from "@lobehub/icons/es/OpenAI/components/Mono";
+import Qwen from "@lobehub/icons/es/Qwen/components/Mono";
 import { GlobeIcon, ServerIcon } from "@/components/icons";
 
 interface PresetIconProps {

@@ -32,9 +32,11 @@ vi.mock('./tools/chrome/ActionRowChrome', () => ({
     canExpand,
     icon,
     rightSlot,
-    // The real chrome resolves verbKey through t() and renders the verb
-    // before the children; mirror that contract so collapsed-label
-    // assertions exercise what users actually see.
+    // The real chrome resolves the label as
+    // `verbText ?? (verbKey ? t(verbKey) : null)` and renders it before the
+    // children. CompactSummary moved to the pre-resolved `verbText` prop, so
+    // this stub must mirror BOTH branches or the collapsed label vanishes.
+    verbText,
     verbKey,
   }: {
     children: React.ReactNode;
@@ -43,19 +45,21 @@ vi.mock('./tools/chrome/ActionRowChrome', () => ({
     canExpand: boolean;
     icon?: React.ReactNode;
     rightSlot?: React.ReactNode;
+    verbText?: string;
     verbKey?: string;
-  }) => (
-    <div data-testid="chrome" data-status={status} data-can-expand={canExpand ? '1' : '0'}>
-      {icon}
-      {verbKey ? (
-        <span data-testid="chrome-verb">{verbKey}</span>
-      ) : null}
-      <button data-testid="chrome-button" onClick={onClick}>
-        {children}
-      </button>
-      {rightSlot}
-    </div>
-  ),
+  }) => {
+    const verb = verbText ?? verbKey ?? null;
+    return (
+      <div data-testid="chrome" data-status={status} data-can-expand={canExpand ? '1' : '0'}>
+        {icon}
+        {verb ? <span data-testid="chrome-verb">{verb}</span> : null}
+        <button data-testid="chrome-button" onClick={onClick}>
+          {children}
+        </button>
+        {rightSlot}
+      </div>
+    );
+  },
 }));
 
 import { CompactSummary } from './CompactSummary';

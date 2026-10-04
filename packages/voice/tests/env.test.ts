@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   checkModel,
   detectWhisperBinary,
@@ -33,6 +33,43 @@ describe('detectWhisperBinary — PATH lookup', () => {
         // PATH hit must win over hardcoded candidate locations.
         expect(result.found).toBe(true);
         expect(result.path?.toLowerCase()).toBe(binPath.toLowerCase());
+        expect(result.source).toBe('path');
+      } finally {
+        if (prevPath === undefined) delete process.env.PATH;
+        else process.env.PATH = prevPath;
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Plan 587 family F: the PATH lookup split PATH on a hardcoded ';', which is
+  // the Windows delimiter. POSIX PATH is ':' joined, so on Linux/macOS the
+  // split produced a single garbage entry and the lookup could never succeed
+  // there. The separator has to follow the platform the caller asked about
+  // rather than the host running the code -- which is also what lets a Windows
+  // host assert the POSIX branch instead of leaving it untested.
+  //
+  // The PATH entry is relative on purpose: a ':'-joined PATH cannot carry a
+  // Windows absolute path, because the drive letter's ':' IS the POSIX
+  // separator ('C:\tmp\x:C:\Windows' splits into ['C', '\tmp\x', 'C', ...]).
+  // join() + existsSync() resolve a relative entry against the cwd exactly as
+  // they resolve an absolute POSIX entry, so the separator is still what is
+  // under test. `.tmp-test/` is gitignored and sits on the cwd drive, which is
+  // what keeps the entry relative on every platform.
+  it('finds the binary when PATH is ":" joined (POSIX separator)', () => {
+    mkdirSync('.tmp-test', { recursive: true });
+    const dir = mkdtempSync(join('.tmp-test', 'duya-voice-env-'));
+    try {
+      const binPath = join(dir, 'whisper-cli');
+      writeFileSync(binPath, 'fake binary');
+
+      const prevPath = process.env.PATH;
+      process.env.PATH = `${dir}:${prevPath ?? ''}`;
+      try {
+        const result = detectWhisperBinary('linux');
+        expect(result.found).toBe(true);
+        expect(result.path ? resolve(result.path) : null).toBe(resolve(binPath));
         expect(result.source).toBe('path');
       } finally {
         if (prevPath === undefined) delete process.env.PATH;

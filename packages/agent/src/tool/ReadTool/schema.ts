@@ -74,7 +74,7 @@ export const readInputSchema = z.object({
   cell_range: cellRangeSchema
     .optional()
     .describe(
-      'Optional cell range for Jupyter notebooks (.ipynb). Retained for input compatibility; notebook parsing is no longer built in.',
+      'Optional cell range for Jupyter notebooks (.ipynb). Applies only to .ipynb files; on any other file it is ignored and the file is read as text. Cell numbers are 1-based across the whole notebook.',
     ),
   max_tokens: z
     .number()

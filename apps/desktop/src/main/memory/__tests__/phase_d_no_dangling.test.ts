@@ -2,9 +2,18 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 
+// This file sits six levels below the repo root
+// (apps/desktop/src/main/memory/__tests__), so every path that leaves the
+// desktop app needs six `..`. ce9366c9 moved electron/ and src/ under
+// apps/desktop and left these at the old depth, which resolved into
+// apps/desktop/src/... instead. The `consolidator.ts` case failed silently:
+// the wrong path did not exist either, so `expect(existsSync).toBe(false)`
+// passed without ever checking the real file.
+const REPO_ROOT = path.join(__dirname, '../../../../../..');
+
 describe('Phase D retire — no dangling imports', () => {
   it('consolidator.ts is deleted', () => {
-    const p = path.join(__dirname, '../../../packages/agent/src/memory-state/consolidator.ts');
+    const p = path.join(REPO_ROOT, 'packages/agent/src/memory-state/consolidator.ts');
     expect(fs.existsSync(p)).toBe(false);
   });
 
@@ -16,7 +25,7 @@ describe('Phase D retire — no dangling imports', () => {
   });
 
   it('reconcile.ts no longer imports Phase 2 renderers from projectionContent', () => {
-    const p = path.join(__dirname, '../../../packages/agent/src/memory-state/reconcile.ts');
+    const p = path.join(REPO_ROOT, 'packages/agent/src/memory-state/reconcile.ts');
     const content = fs.readFileSync(p, 'utf8');
     // renderRolloutSummaryFile MUST still be imported (Stage 1 keeps it).
     expect(content).toMatch(/renderRolloutSummaryFile/);
@@ -31,7 +40,7 @@ describe('Phase D retire — no dangling imports', () => {
   });
 
   it('projectionContent.ts still exports renderRolloutSummaryFile', () => {
-    const p = path.join(__dirname, '../../../packages/agent/src/memory-state/projectionContent.ts');
+    const p = path.join(REPO_ROOT, 'packages/agent/src/memory-state/projectionContent.ts');
     const content = fs.readFileSync(p, 'utf8');
     expect(content).toMatch(/export function renderRolloutSummaryFile/);
   });
@@ -44,7 +53,7 @@ describe('Phase D retire — no dangling imports', () => {
   });
 
   it('scripts/reconcile-memory-projections.mjs no longer imports runConsolidator', () => {
-    const p = path.join(__dirname, '../../../scripts/reconcile-memory-projections.mjs');
+    const p = path.join(REPO_ROOT, 'scripts/reconcile-memory-projections.mjs');
     const content = fs.readFileSync(p, 'utf8');
     expect(content).not.toMatch(/runConsolidator/);
     expect(content).not.toMatch(/consolidator\.js/);

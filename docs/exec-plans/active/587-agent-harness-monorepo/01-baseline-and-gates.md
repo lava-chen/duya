@@ -1,6 +1,8 @@
 # G0 — 当前基线与可信治理
 
-前置：无。出口：后续实施可辨别新回归。Next：G0.1。复用现有gate，不另造同功能脚本。
+前置：无。出口：后续实施可辨别新回归。Next：**G0.2 合同/迁移测试独立 CI job**（`test.yml` 现只有 `architecture`/`test`/`build`），其后才是 required checks。复用现有gate，不另造同功能脚本。
+>
+> **阶段状态（2026-10-04 对 `55384c55` 核对）**：G0.1–G0.4 的交付项都已合并；**本阶段仍是 In progress**，因为 G0.2 剩两件事没做——合同/迁移测试没有独立 job，required status checks 仍是空的（`gh api` 实测：ruleset `17257193` 的规则仍只有 `deletion` + `non_fast_forward`）。G0.2 曾经把 `architecture` 设为 required 又**回滚**，回滚原因（跨平台假阳性）已由 #146 修好，但**规则集没有再次落**。#193 把 slice inventory 从冻结树改成属性断言，陈旧记录漂移随之消解；`architecture:baseline --write` 仍从未运行。
 
 ## G0.1 接管与可重复基线
 
@@ -31,7 +33,7 @@
 
 - [x] 将architecturecheck作为独立可读CI job；resolver变化运行self-test。保持managed三包zero新增容忍。
   PR #140（`42cef0f0`）新增独立`architecture` job（ubuntu），跑`architecture:check` + 按路径过滤的`self-test`（`scripts/architecture/**`、policy、baseline变更时触发，base sha不可用时fail-safe为运行）。**实测该门禁不需要`dist/`**：resolver读的是各package.json声明的`exports`，不是构建产物；clean树上`check`=0（802/802/802）、`self-test`=0（548/35/16/162/25/16/0）。因此该job刻意**不**先build——先build只会增加耗时，并把将来意外的dist依赖藏进缓存命中后面。零容忍managed模块仍为**4个**（含`legacy-plugin-core`），一个都没放松；`architecture:baseline`（`--write`）未出现在CI任何位置。
-- [ ] 在cleanjob验证从无dist/tsbuildinfo状态构建；显式topologicalscripts或projectreferences二选一维护，不引入并存的不同顺序。
+- [x] 在cleanjob验证从无dist/tsbuildinfo状态构建；显式topologicalscripts或projectreferences二选一维护，不引入并存的不同顺序。
   **已定方向：显式topological scripts，不引入TS project references。** 三条实测依据：①真正的消费点是esbuild——`scripts/build-agent-bundle.mjs`与`scripts/build-electron.mjs`都无alias，经`node_modules`解析到`dist/*.js`，且都不对消费端跑tsc，`tsc -b`的次序对它们是装饰性的；②`packages/agent/src/journal/Journal.ts:29`自引用`@duya/agent/message`（解析到自身`dist/message/index.d.ts`），project references无法表达该环；③`apps/desktop/src/main`有约153处`packages/agent/src/...`源码相对深引，绕过任何tsconfig图。另：11个包中4个已`composite: true`、7个没有，且无任何`references`——这个半迁移状态正是计划禁止的"并存的不同顺序"，不得扩大。仓库无turbo/nx/lerna/npm-run-all。
   目标不是"顺序写对"，而是**每个入口自给自足**：`typecheck:electron`、`bundle:agent`、`npm test`、`npm run electron:build`都必须能在无任何`dist/`的树上单独跑通。同时修两处实证缺陷：`build:agent`漏掉`voice`与`gateway`（现由electron脚本临时构建），`bundle:agent`只build了`ai`而esbuild还要解析`plugin-core`/`cli/contract`/`computer-use`，clean树下**必然失败**。
   **已完成（PR #143，`adb7b78c`）。** 顺序的唯一事实源是`scripts/build-packages.mjs`的`BUILD_ORDER`数组（4层：L1 `ai/agent-protocol/plugin-core/conductor/gateway/voice`；L2 `agent-core/computer-use/cli`；L3 `agent-runtime`；L4 `agent`），每包仍用自己package.json里的`build`脚本，命令与次序分离。未加`references`、未加新的`composite`、未引入turbo/nx/lerna。
@@ -42,12 +44,14 @@
 - [ ] 将合同/迁移相关测试接入独立job，保持完整testjob的红色真实可见。
   PR #140已让`test` job与`build`解耦，`npm test`的红色保持完整可见（未减少collect、未加`|| true`/glob跳过）。合同/迁移测试的独立job仍待做。
 - [ ] 处理既有测试债并收敛fullsuite；在此之前如需迁移ratchet，必须以具体失败签名比较且对新增失败失败，不能`|| true`、glob跳过或只比较总数。
-  尚未开始。基线为G0.1建立的45文件/101测试/103 tuple（77 deterministic / 25 env-infra / 1已证flake）。
+  **未完成，且已从"尚未开始"推进很远。** G0.1 的基线是 45 文件/101 测试/103 tuple（Windows warm）。CI 口径（master push，collect 三OS相同才可比）：ubuntu **72 文件/216 测试 → 19/42**，macos **80/247 → 28/80**，windows **49/123 → 13/34**。驱动的合并切片：#183（`build` job heap + 测试前 `bundle:agent`）、#184（族A 跨平台夹具，20 文件 93 个失败）、#185（族C/D/E）、#186（POSIX 产品缺陷 `env.ts` 分隔符 + cookie 路径）、#187（恢复 notebook 读取）、#189（族F/G/I/J1）、#192（J3/J4/J5 + 两个真实产品缺陷）、#193（inventory 属性断言）。
+  **仍是红的，且 macOS 是最差的一条腿**（80 vs ubuntu 42）。已证确定性、需产品决定而**刻意未修**的：WorkflowPanel 12（面板被重写成 legacy stub）、plan315 2 + plan486 2（投影路径行为回归）、permissions-gate 2、sync-protection 1（`44109a68` 造成 plugin 与 plain-bundled 同分 2 的真实 tie）。未归因：族A 剩余文件 + `git-handlers.test.ts`（1，`git:review-diff` 错误文本不同）。**本条不因数字下降而勾选**——fullsuite 未绿。
 - [ ] required checks采用可稳定通过且不能掩盖回归的job。仓库设置变更前先给出具体job名和rulesetdiff，按权限工具执行；没有管理权限标blocked并保留本地/CI实施证据，不能称强制合并门禁已完成。
   **权限已确认**：`gh api repos/lava-chen/duya` 返回 `admin: true`，本项**不blocked**。现状：仓库已有1条active ruleset `Protect master branch`（id `17257193`，target `~DEFAULT_BRANCH`，规则仅 `deletion` + `non_fast_forward`），**required status checks 为空**。
   **已加过一次并回滚。** 按用户确认在既有ruleset上追加 `required_status_checks: [{context: "architecture"}]`（未另建ruleset）。随后master最新提交 `026d3c1e` 的 `architecture` job **failure**——该job在真实runner上**不是稳定绿**，按本条"可稳定通过"的判据本就不该设required。**已把ruleset回滚为原状**（只剩 `deletion` + `non_fast_forward`），仓库未被卡住。本项保持开放。
   **回滚原因是一个真发现**：`architecture:check` **Windows 绿（802/802/802零新增）而 ubuntu 红（801 tolerated + 1个新增违规）**。定位为门禁自身的跨平台解析缺陷（详见下方"跨平台门禁缺陷"）。在新 `architecture` job 成为 required 之前必须先修好它，否则一个假阳性会变成永久阻断所有合并的门禁。
-  **修好后的执行方案**：仍只把 `architecture` 设为required。`test` 现在就是红的（41–45文件既有债），设为required会永久阻断合并；不设它不隐藏任何东西，红色仍完整可见，只是当前无法当门禁。执行前仍先给出job名与rulesetdiff。
+  **修好后的执行方案**：仍只把 `architecture` 设为required。`test` 现在就是红的，设为required会永久阻断合并；不设它不隐藏任何东西，红色仍完整可见，只是当前无法当门禁。执行前仍先给出job名与rulesetdiff。
+  **2026-10-04 复核：前置已满足，规则集仍未落。** #146 修掉了那个跨平台假阳性（`[^"']` 允许跨 CR/LF，六份正则副本统一后另加一条在旧代码上会失败的回归测试），`architecture` job 自 #140 起在真实 runner 上稳定绿（最近一次已结束 run 的 `architecture` job = `success`）。`gh api repos/lava-chen/duya/rulesets` 复核：仍只有 `17257193` 一条，**required status checks 为空**。下一动作明确：把 `required_status_checks: [{context: "architecture"}]` 追加到既有 ruleset（不新建），然后用一次 master push 复核该 job 仍绿。
 - [x] 故意新增一条禁止import和一个新增失败fixture验证gate失败；清除探针后恢复。artifact保存实际检查了多少测试和文件，零collection必须失败。
   PR #140已做。**边界探针**：在`packages/agent-protocol`（managed、`requires: []`）内`import { isTerminal } from "@duya/agent-core"` → `architecture:check` exit 1，并指名文件、两条规则与原因。**测试探针**：`expect(1+1).toBe(3)` → `npm test` exit 1，collect由1009→1010文件。**两探针均已删除**，`git status`只剩`test.yml`，两个路径`Test-Path`为False，两个architecture门禁回到0。
   零collection防护：`architecture-check.mjs`只要`blocking.length===0`就exit 0，而这在**完全没扫到任何东西时同样成立**——若将来模块根匹配被打坏，`total`塌成0，门禁会一边报告"OK 无新增违规"一边什么都没拦。两个新job都断言非零扫描；test侧还覆盖"12文件但0测试"与摘要不可读两种情形。architecture侧guard还区分了checker的exit 1（查到违规，上一步已红）与exit 2（引擎故障），避免在真实失败上再叠一个更含糊的红。
@@ -57,18 +61,27 @@
 
 ## G0.3 审计与baseline纪律
 
-- [ ] 分清package build DAG、type graph、runtimevalue graph、host import。现有SCC仅是扫描口径，不能要求每个小PR都严格少一个SCC。
-- [ ] 对resolver变更导出旧/新fingerprints分类：解析变化、移除债、真实新增。先修真实新增；审查后再更新selftest与baseline，不能整批`--write`吸收新违规。
+- [x] 分清package build DAG、type graph、runtimevalue graph、host import。现有SCC仅是扫描口径，不能要求每个小PR都严格少一个SCC。
+  #143 把 build DAG 收成唯一事实源（`scripts/build-packages.mjs` 的 `BUILD_ORDER`，4 层），并明说不用 TS project references（`packages/agent/src/journal/Journal.ts:29` 自引用成环，project references 表达不了）；#166 导出 value call graph 与跨包边；#173 把 layer-IO 变成可执行门禁而不是 M5.1 的手写清单。
+- [x] 对resolver变更导出旧/新fingerprints分类：解析变化、移除债、真实新增。先修真实新增；审查后再更新selftest与baseline，不能整批`--write`吸收新违规。
+  #148 第2项做了完整分类：两条不再触发的指纹证明是**移除债**而非解析变化（复现 pre-#147 状态确认指纹当时存在），且**手工删除**而非 `--write`——因为 `--write` 会连带吸收 #147 新增的两条 `module-dependency-permitted`（该规则从不阻断，记录它们正是本条禁止的整批吸收）。801 → 799，违规数不变、blocking 0。
 - [ ] 协议预算测试的walker复用可信workspace/exportsresolver与剥注释逻辑。leaf指protocol没有反向实现依赖，不是没有consumer；core/runtime/CLI/host正常公开import必须允许。
-- [ ] 跨平台失败按Windows/Linux/macOS各自HEAD与具体签名记录；优先核对权限行为差异和AGENTS加载相对路径收敛，不以修改安全断言或删测试修绿色。
-- [ ] protocol/core/runtime零容忍；legacy允许旧baseline但不得引入新增反向边。新port/slice的graph有明确方向。
+  未完成：没有任何切片动过协议预算测试的 walker。#171 S4 处理的是 `package-boundary-escape`（162 → 146）与 `deep-import`（持平 25），不是这条预算测试的 walker 复用。
+- [x] 跨平台失败按Windows/Linux/macOS各自HEAD与具体签名记录；优先核对权限行为差异和AGENTS加载相对路径收敛，不以修改安全断言或删测试修绿色。
+  #184 是本条的样板：族A 20 个文件的夹具改为经 `os.tmpdir()` / `vi.importActual` 解析 temp、盘符夹具按平台派生、host 语义改为派生；四处 `describe.skipIf` 每一处都**配一个新的对偶合同断言**，没有 `.skip`、没有 xfail、没有文件排除；#186 修的是**产品**（`packages/voice/src/env.ts:190` 硬编码 `;`、`permissions/policy.ts:707` 只认 AppData 布局），测试被**故意留红**直到产品修好。跨平台 CI 数字按OS分别记录（见 G0.2 测试债条）。
+- [x] protocol/core/runtime零容忍；legacy允许旧baseline但不得引入新增反向边。新port/slice的graph有明确方向。
+  2026-10-04 在 `55384c55` 实测：`architecture:check` exit 0，total **874** = tolerated **874** = baseline **811**，**零新增**；`architecture:self-test` exit 0（460/227/0/146/25/16/0）。零容忍 managed 模块仍是 4 个（`agent-protocol`、`agent-core`、`agent-runtime`、`legacy-plugin-core`），#143/#171/#173/#175 都没放松过任何一个。**131** 条基线指纹不再触发，`--write` 仍从未运行。
 - [ ] publicexport对应真实消费者与runtimebuild。Nodepackage `exports`限制package-name访问；相对越界需resolver管，不能用`main:src`解释全部问题。
+  未完成：#171 S4 只把 plugin-core 的 **16** 处 host 相对越界改到 7 个已声明 subpath（escape 162 → 146）；其余包的 public export 与真实消费者/runtime build 的逐项对应没有系统核对。
 
 ## G0.4 文档事实与交接
 
-- [ ] 修正rootAGENTS及ARCHITECTURE中的CItrigger、mainratchet、Electron版本、server子进程和当前observer状态；源码为准，runtime能力未实现不写完成。
-- [ ] ledger登记旧ISS与PP接管情况，区分already-landed、needs-revalidation、open、deferred/external、disproved。没有证据不继承历史“MERGEABLE/全绿”。
-- [ ] 每次PR更新日志和主Next；本次计划整合本身不勾选G0运行期验收。
+- [x] 修正rootAGENTS及ARCHITECTURE中的CItrigger、mainratchet、Electron版本、server子进程和当前observer状态；源码为准，runtime能力未实现不写完成。
+  #139 改了 Electron 版本（28 → 44）、Agent Server 实为 spawn 子进程的进程拓扑、包图；#148 第4项把 `CLAUDE.md:483` 的陈旧 ABI 断言按**实测**更正（解出缓存的 `electron-v44.2.0-win32-x64.zip` 跑 `ELECTRON_RUN_AS_NODE=1` 得 `modules: 149`，本地 Node 137）——必须实测，因为 `scripts/ensure-sqlite-abi.mjs:166-173` 是**探测**目标二进制而非查表。
+- [ ] ledger登记旧ISS与PP接管情况，区分already-landed、needs-revalidation、open、deferred/external、disproved。没有证据不继承历史"MERGEABLE/全绿"。
+  未完成：[接管表](10-legacy-crosswalk.md) 与 [旧任务清单](legacy-task-inventory.md) 已建立**归属映射**，但四类状态（already-landed / needs-revalidation / open / deferred-external / disproved）尚未逐条标注。已按本条精神处理过两例：#148 第3项删除了不可复现的 "112 tests" 而不是替换它并写明理由；诊断自身的两个数字漂移（`..` 深度、`@lobehub/ui` 归因）被 #185/#189 证伪后**记录在案**而没有抹掉。
+- [x] 每次PR更新日志和主Next；本次计划整合本身不勾选G0运行期验收。
+  过程规则，已实际执行：[执行日志](11-execution-log.md) 逐切片记录 commit/PR、命令退出码、环境口径、能力边界与下一任务；本文件与各阶段文件的 `Next：` 随合并推进。G0 的**运行期**验收仍未勾选（见上）。
 
 ## 推荐 PR
 

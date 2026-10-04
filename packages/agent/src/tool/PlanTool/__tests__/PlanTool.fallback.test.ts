@@ -17,12 +17,18 @@ const mocks = vi.hoisted(() => ({
   planStatus: vi.fn(),
   planComplete: vi.fn(),
   planSearch: vi.fn(),
+  resolveProjectsRoot: vi.fn(() => '/tmp/duya-plans-root/projects'),
 }));
 
 vi.mock('../storage.js', () => ({
   planStatus: mocks.planStatus,
   planSearch: mocks.planSearch,
   planComplete: mocks.planComplete,
+  // formatComplete() -> projectPlansDir() calls this to print the plans
+  // directory in its footer. The mock factory predates that call, so the
+  // import resolved to undefined, the TypeError was swallowed by execute()'s
+  // catch, and the successful `complete` fallback surfaced as error: true.
+  resolveProjectsRoot: mocks.resolveProjectsRoot,
   PlansError: class PlansError extends Error {
     constructor(message: string, public code: string) {
       super(message);

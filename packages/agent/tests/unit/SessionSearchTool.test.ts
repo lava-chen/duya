@@ -35,8 +35,20 @@ describe('SessionSearchTool', () => {
       expect(tool.input_schema.type).toBe('object');
       expect(tool.input_schema.properties).toHaveProperty('query');
       expect(tool.input_schema.properties).toHaveProperty('limit');
-      expect(tool.input_schema.properties).toHaveProperty('roleFilter');
       expect(tool.input_schema.properties).toHaveProperty('scope');
+    });
+
+    // `roleFilter` used to be advertised here. It became a silent no-op when
+    // the search moved to IPC (see searchSessions: "roleFilter is accepted for
+    // API compatibility but is no longer applied — the IPC search does not
+    // support per-role filtering"), so the schema no longer declares it.
+    // Advertising a parameter the tool ignores would make the model emit
+    // `roleFilter` and receive unfiltered results as if they were filtered, so
+    // the honest contract is the ABSENCE of the key. The tolerant
+    // `execute({ roleFilter })` case is still covered under
+    // "execute with various inputs" for back-compat.
+    it('should not advertise roleFilter, which the tool no longer applies', () => {
+      expect(tool.input_schema.properties).not.toHaveProperty('roleFilter');
     });
   });
 

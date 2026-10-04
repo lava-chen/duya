@@ -47,6 +47,7 @@ import { SESSION_LIST_UNLIMITED } from '../db/core/session-store';
 import { dispatchControlPlaneAction } from '../control-plane/run-control-plane';
 import { getControlPlane } from '../control-plane/control-plane-service';
 import { COMMAND_SCHEMA_VERSION, type CommandSenderFacts } from '../control-plane/command-receipt';
+import { writeRunReceiptOnWire } from '../control-plane/run-receipt';
 import type { WorkflowRunSnapshot, WorkflowRunStatus, WorkflowTriggerKind } from '../db/core/workflow-store';
 import {
   createWidgetPending,
@@ -362,9 +363,10 @@ export async function dispatchDbAction(
     case 'run:get':
     case 'run:events':
     case 'run:list-session': {
+      const runId = String(p.runId ?? '');
       const controlPlane = getControlPlane();
       if (controlPlane === null) {
-        return { ok: false, state: 'unavailable', runId: String(p.runId ?? ''), reason: RUN_UNAVAILABLE_REASON };
+        return writeRunReceiptOnWire({ state: 'unavailable', runId, reason: RUN_UNAVAILABLE_REASON });
       }
       const receipt = await controlPlane.serveWire(
         { schema: COMMAND_SCHEMA_VERSION, action, payload: p },
@@ -381,6 +383,22 @@ export async function dispatchDbAction(
       // receipt, which has no `ok` and no `written`, so `readRunReceipt` on the
       // other side of `db:request` called every success `unreadable` — and a
       // read, which is not a receipt at all, came back as a discarded row.
+      //
+      // A REFUSAL is answered by `serveWire` too, in the same wire vocabulary,
+      // so there is nothing left here to translate: it replies `ok: false` with
+      // the storage state when the command got that far (`busy`, `unavailable`,
+      // …) and `invalid` — the "refused before it reached storage" state — when
+      // it did not, carrying the producer's reason. `readRunReceipt` reads that
+      // reply as the refusal it is instead of relabelling it `unreadable`, so
+      // the reason still reaches whoever has to act on it.
+      //
+      // Testing `receipt.outcome === 'rejected'` here would therefore be dead
+      // code twice over, and the second way is the one that bites: `serveWire`
+      // answers with the WIRE reply, not the internal `CommandReceipt`, so no
+      // reply this arm can see carries `outcome` (or `write`, or `refusal`) at
+      // all. The refusal code rides beside the reason in `refusal` rather than
+      // being folded into the reason text, which is the one place the two
+      // implementations differ.
       return receipt;
     }
 

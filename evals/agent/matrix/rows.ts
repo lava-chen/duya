@@ -139,6 +139,28 @@ export const MATRIX: readonly MatrixRow[] = [
   },
   {
     group: 'lifecycle',
+    row: 'desktop-chat-durable-dispatch',
+    scenario: 'Desktop 聊天派发 / the desktop chat path opens a durable run and dispatches the turn',
+    assertion:
+      'A turn sent through the desktop `POST /chat` entry point gets a `run:create` whose reply the agent-server can read, the worker is sent exactly one `chat:start` carrying the canonical run id, and the run reaches a terminal with `run_events` written.',
+    status: 'proved-real',
+    evidence: [
+      {
+        file: 'apps/desktop/src/main/__tests__/run-create-ack-real-bridge.test.ts',
+        name: 'dispatches chat:start and reaches a durable terminal with events written',
+        why: 'drives the real `db:request` entry point (`handleDbRequest`) with the real bridge, the real `ControlPlaneService`, the real dispatcher and a real `RunStore` on a real sqlite file, then reads the `runs` and `run_events` tables directly',
+      },
+      {
+        file: 'apps/desktop/src/main/__tests__/run-create-ack-real-bridge.test.ts',
+        name: 'closes a row that was written by a run:create whose reply was unreadable',
+        why: 'reproduces the dropped turn deliberately — a real row plus the reply shape that shipped — and shows the row is settled with a terminal event instead of left at `terminal=NULL`',
+      },
+    ],
+    divergence:
+      'The bridge, the Control Plane, the store, the orchestrator, the router tee and the dispatch are all real, and the worker is a real execution channel — but it is NOT a real child process, and no live provider is called. So two things remain unproven: that a REAL forked worker answers the `chat:start` this path sends, and that the 500 body the router now returns on a refusal is rendered as the error a user sees. Both need a packaged Electron run against a live provider; `eval-legacy-loop.test.ts` proves the executor half but reaches storage without crossing this bridge, which is exactly the seam that broke. This row is also why the earlier rows were not sufficient: every component was proved, and the composition was not, so a green suite and a product that dropped every turn agreed with each other.',
+  },
+  {
+    group: 'lifecycle',
     row: 'model-stream-disconnect',
     scenario: 'model stream 断开 / the provider stream dies mid-turn',
     assertion:

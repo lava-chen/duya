@@ -150,8 +150,8 @@ describe('project-entity-handlers', () => {
         name: 'duya',
         description: 'main repo',
         paths: [
-          { path: 'E:/Projects/duya' },
-          { path: 'E:/Projects/duya-website', description: 'website' },
+          { path: fx('E:/Projects/duya') },
+          { path: fx('E:/Projects/duya-website'), description: 'website' },
         ],
       }) as { success: true; projectId: string; project: { paths: ProjectPathEntry[] } };
       expect(createResult.success).toBe(true);
@@ -166,8 +166,8 @@ describe('project-entity-handlers', () => {
       // canonical even if the user typed an uppercase drive.
       expect(Array.isArray(listResult.projects[0].paths)).toBe(true);
       expect(listResult.projects[0].paths).toEqual([
-        { path: 'e:/Projects/duya', description: null },
-        { path: 'e:/Projects/duya-website', description: 'website' },
+        { path: fx('e:/Projects/duya'), description: null },
+        { path: fx('e:/Projects/duya-website'), description: 'website' },
       ]);
     });
   });
@@ -181,7 +181,7 @@ describe('project-entity-handlers', () => {
     it('returns success with the project row when it exists', async () => {
       const createResult = await invoke('projects:register', {}, {
         name: 'duya',
-        paths: [{ path: 'E:/Projects/duya' }],
+        paths: [{ path: fx('E:/Projects/duya') }],
       }) as { success: true; projectId: string };
       const projectId = createResult.projectId;
 
@@ -189,7 +189,7 @@ describe('project-entity-handlers', () => {
       expect(result.success).toBe(true);
       expect(result.project).not.toBeNull();
       expect(result.project!.project_id).toBe(projectId);
-      expect(result.project!.paths).toEqual([{ path: 'e:/Projects/duya', description: null }]);
+      expect(result.project!.paths).toEqual([{ path: fx('e:/Projects/duya'), description: null }]);
     });
 
     it('rejects empty-string projectId with INVALID_INPUT', async () => {
@@ -215,8 +215,8 @@ describe('project-entity-handlers', () => {
         name: 'duya',
         description: 'main repo',
         paths: [
-          { path: 'E:/Projects/duya' },
-          { path: 'E:/Projects/duya/docs', description: 'design notes' },
+          { path: fx('E:/Projects/duya') },
+          { path: fx('E:/Projects/duya/docs'), description: 'design notes' },
         ],
       }) as { success: true; projectId: string; project: { project_id: string; paths: ProjectPathEntry[] } };
       expect(result.success).toBe(true);
@@ -225,8 +225,8 @@ describe('project-entity-handlers', () => {
       // Stored form is the canonical normalized path (lowercased
       // drive letter on Windows).
       expect(result.project.paths).toEqual([
-        { path: 'e:/Projects/duya', description: null },
-        { path: 'e:/Projects/duya/docs', description: 'design notes' },
+        { path: fx('e:/Projects/duya'), description: null },
+        { path: fx('e:/Projects/duya/docs'), description: 'design notes' },
       ]);
     });
 
@@ -241,7 +241,7 @@ describe('project-entity-handlers', () => {
 
     it('rejects missing name with INVALID_INPUT', async () => {
       const result = await invoke('projects:register', {}, {
-        paths: [{ path: 'E:/Projects/duya' }],
+        paths: [{ path: fx('E:/Projects/duya') }],
       });
       expect(result).toEqual({
         success: false,
@@ -266,7 +266,7 @@ describe('project-entity-handlers', () => {
       const result = await invoke('projects:register', {}, {
         name: 'duya',
         paths: [
-          { path: 'E:/Projects/duya' },
+          { path: fx('E:/Projects/duya') },
           { path: '' },
         ],
       });
@@ -289,11 +289,13 @@ describe('project-entity-handlers', () => {
     it('L1 hardening: rejects a `..`-laden path', async () => {
       const result = await invoke('projects:register', {}, {
         name: 'duya',
-        paths: [{ path: 'E:/Projects/duya/../../Windows/System32' }],
+        paths: [{ path: fx('E:/Projects/duya/../../Windows/System32') }],
       });
       // `..` segments are blocked at the IPC boundary so the
       // renderer cannot ask the worker to treat the resolved form
-      // (`e:/Windows/System32`) as a writable root.
+      // (`e:/Windows/System32` on Windows, `/Windows/System32` on
+      // POSIX) as a writable root. The check is on the raw string,
+      // before any path resolution, so it holds on every platform.
       expect(result).toMatchObject({ success: false, code: 'INVALID_INPUT' });
       expect((result as { error: string }).error).toMatch(/`..` segments/);
     });
@@ -317,7 +319,7 @@ describe('project-entity-handlers', () => {
     });
 
     it('L1 hardening: rejects paths longer than MAX_PROJECT_PATH_LENGTH', async () => {
-      const tooLong = 'E:/' + 'a'.repeat(4096);
+      const tooLong = fx('E:/') + 'a'.repeat(4096);
       const result = await invoke('projects:register', {}, {
         name: 'duya',
         paths: [{ path: tooLong }],
@@ -338,7 +340,7 @@ describe('project-entity-handlers', () => {
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         'corrupted-1',
-        'E:/Projects/corrupted',
+        fx('E:/Projects/corrupted'),
         'corrupted',
         null,
         'this is not valid json [[[',
@@ -360,7 +362,7 @@ describe('project-entity-handlers', () => {
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         'corrupted-2',
-        'E:/Projects/corrupted',
+        fx('E:/Projects/corrupted'),
         'corrupted',
         null,
         '<<<not json>>>',
@@ -375,3 +377,18 @@ describe('project-entity-handlers', () => {
     });
   });
 });
+
+/**
+ * Map a Windows-style fixture path onto the current platform.
+ *
+ * The resolver calls the HOST `path.resolve`, so a drive letter is not a
+ * root on POSIX: such a path is relative, gets rebased onto the runner CWD,
+ * and the suite then compares a cwd-prefixed path against a raw fixture
+ * string. `fx` returns the Windows form on win32 (so drive-letter handling
+ * stays asserted) and a genuine absolute path everywhere else.
+ */
+const IS_WIN = process.platform === 'win32';
+function fx(p: string): string {
+  if (IS_WIN) return p;
+  return '/' + p.replace(/^[A-Za-z]:[\\/]/, '').replace(/\\/g, '/');
+}

@@ -56,6 +56,10 @@ import {
   type OrchestrationToolUse,
 } from './orchestration/DependencyGraphOrchestrator.js';
 import type { ToolDependencyDeclaration } from './dependencies.js';
+import {
+  createRealpathCanonicaliser,
+  type PathCanonicaliser,
+} from './orchestration/canonical-path.js';
 
 export type {
   CanUseToolFn,
@@ -142,6 +146,7 @@ export class ToolExecutionPipeline implements IToolExecutionPipeline {
   private readonly dependencyResolver: DependencyResolver | undefined;
   private readonly writePathResolver: PathExtractorResolver | undefined;
   private readonly readPathResolver: PathExtractorResolver | undefined;
+  private readonly canonicaliser: PathCanonicaliser;
   private plan: ExecutionPlan | null = null;
   private planEmittedUnresolved = false;
 
@@ -154,6 +159,13 @@ export class ToolExecutionPipeline implements IToolExecutionPipeline {
       dependencyResolver?: DependencyResolver;
       extractWritePaths?: PathExtractorResolver;
       extractReadPaths?: PathExtractorResolver;
+      /**
+       * Path canonicalisation for the dependency planner. Defaults to
+       * the realpath-backed canonicaliser so that two spellings of one
+       * file -- a symlink or Windows junction and its target -- serialise
+       * against each other. Tests inject a pure lexical stand-in.
+       */
+      canonicaliser?: PathCanonicaliser;
     },
   ) {
     this.toolRegistry = toolRegistry;
@@ -161,6 +173,7 @@ export class ToolExecutionPipeline implements IToolExecutionPipeline {
     this.dependencyResolver = options?.dependencyResolver;
     this.writePathResolver = options?.extractWritePaths;
     this.readPathResolver = options?.extractReadPaths;
+    this.canonicaliser = options?.canonicaliser ?? createRealpathCanonicaliser();
   }
 
   addTool(block: ToolUse): void {
@@ -286,7 +299,9 @@ export class ToolExecutionPipeline implements IToolExecutionPipeline {
       };
     });
 
-    this.plan = planExecution(orchestrationInputs);
+    this.plan = planExecution(orchestrationInputs, undefined, {
+      canonicaliser: this.canonicaliser,
+    });
     // Keep the buffer around only long enough for the planner to read
     // it; the executor's own queue owns scheduling from here on.
     this.pendingTools.length = 0;

@@ -60,6 +60,16 @@ const EXTERNAL_PREFIXES = ['crates/common/xai-tool-protocol/'];
 const SKIP_DIRS = new Set([
   'node_modules', '.git', 'dist', 'dist-electron', 'release', 'bundle',
   'coverage', '.claude',
+  // Gitignored scratch roots, and the reason this test is not hermetic
+  // without them. `.tmp-validation/` holds full copies of this checkout left
+  // behind by verification runs — 300k+ files at last count — so indexing it
+  // made every bare basename in the package ambiguous: `router.ts` resolved
+  // to two candidates (the real one and the copy), and 20 citations that had
+  // been unique became `ambiguous`, which then dropped out of the anchored
+  // count and took the coverage floor with it. Nothing tracked lives under
+  // these names (see `.gitignore`), and CI never has them, so skipping them
+  // removes a local-only failure without weakening what the gate checks.
+  '.tmp-validation', '.tmp-test',
 ]);
 
 const SOURCE_EXT = new Set(['.ts', '.tsx', '.mts', '.rs', '.py', '.md']);

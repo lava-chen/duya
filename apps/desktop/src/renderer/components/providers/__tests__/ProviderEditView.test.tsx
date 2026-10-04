@@ -25,6 +25,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ProviderEditView } from '../ProviderEditView';
 import { useConversationStore } from '@/stores/conversation-store';
 import { providersQueryKey } from '@/lib/providers/hooks/queryKeys';
+import { deleteLlmProviderIPC } from '@/lib/ipc-client';
 import type { RendererLlmProviderDTO } from '@/lib/providers/ipc-types';
 
 // Spy on the save hook so we can assert the 3-state contract
@@ -251,5 +252,59 @@ describe('ProviderEditView — masked-key state machine', () => {
     const call = saveMock.mock.calls[0];
     const data = call[0] as { api_key: string | undefined };
     expect(data.api_key).toBeUndefined();
+  });
+
+  it('deletes through the mutation from the edit page itself', async () => {
+    // This coverage moved here with the code. The edit page used to have no
+    // delete button at all: it dispatched a `duya:provider-delete` window
+    // event and `ProviderManagement` owned the mutation, so deleting from the
+    // edit page only worked while a provider list happened to be mounted
+    // somewhere in the tree. The page now calls the mutation directly, and
+    // the coverage for "delete from the edit page reaches the server" has to
+    // live with it — asserting it from the management component tested a
+    // protocol that no longer exists.
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    try {
+      vi.mocked(deleteLlmProviderIPC).mockResolvedValue(true);
+      vi.mocked(deleteLlmProviderIPC).mockClear();
+      const { wrapper, qc } = makeWrapper();
+      qc.setQueryData<RendererLlmProviderDTO[]>(providersQueryKey(), [makeProvider()]);
+
+      render(<ProviderEditView />, { wrapper });
+
+      const deleteBtn = await screen.findByTestId('provider-edit-delete');
+      fireEvent.click(deleteBtn);
+
+      await waitFor(() => {
+        expect(deleteLlmProviderIPC).toHaveBeenCalledWith('minimax-cn');
+      });
+      // The confirm is what makes an irreversible action non-accidental, and
+      // this page is a delete entry point like any other.
+      expect(confirmSpy).toHaveBeenCalled();
+    } finally {
+      confirmSpy.mockRestore();
+    }
+  });
+
+  it('keeps the page and does not delete when the confirm is declined', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    try {
+      vi.mocked(deleteLlmProviderIPC).mockClear();
+      const { wrapper, qc } = makeWrapper();
+      qc.setQueryData<RendererLlmProviderDTO[]>(providersQueryKey(), [makeProvider()]);
+
+      render(<ProviderEditView />, { wrapper });
+
+      const deleteBtn = await screen.findByTestId('provider-edit-delete');
+      fireEvent.click(deleteBtn);
+
+      // A tick is enough — `handleDelete` returns synchronously on a decline.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(deleteLlmProviderIPC).not.toHaveBeenCalled();
+      // Still on the edit page, so the user can back out of the prompt.
+      expect(screen.getByTestId('provider-edit-save')).toBeInTheDocument();
+    } finally {
+      confirmSpy.mockRestore();
+    }
   });
 });

@@ -15,7 +15,7 @@
  *     suite verifies the template honors them.
  */
 
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HbsPromptSystem } from '../../hbs/HbsPromptSystem.js';
 import type { PromptContext } from '../../types.js';
@@ -35,6 +35,7 @@ import {
 } from '../skillsMetadata.js';
 
 const ASSETS_ROOT = resolve(__dirname, '../../assets');
+const sep = process.platform === 'win32' ? '\\' : '/';
 
 function makeSkill(overrides: Partial<PromptSkill> = {}): PromptSkill {
   return {
@@ -45,7 +46,10 @@ function makeSkill(overrides: Partial<PromptSkill> = {}): PromptSkill {
     isHidden: false,
     disableModelInvocation: false,
     isConditional: false,
-    skillRoot: 'E:\\skills\\pdf',
+    // An absolute skill root on THIS host. `skillLocation` joins the root with
+    // the host separator, so a hardcoded `E:\skills\pdf` rendered as
+    // `E:\skills\pdf/SKILL.md` off Windows and never matched the catalog.
+    skillRoot: join(sep, 'skills', 'pdf'),
     ...overrides,
   };
 }
@@ -236,7 +240,7 @@ describe('skills-metadata.hbs render (Plan 560 native template)', () => {
     expect(out).toContain('<skill>');
     expect(out).toContain('<name>pdf</name>');
     expect(out).toContain('<description>Create and inspect PDF documents.</description>');
-    expect(out).toContain('<location>E:\\skills\\pdf\\SKILL.md</location>');
+    expect(out).toContain(`<location>${skillLocation(makeSkill())}</location>`);
     expect(out).toContain('</available_skills>');
     expect(out).toContain('complete, authoritative list of installed skills');
     expect(out).toContain('do not run CLI commands (such as `duya skill list`)');

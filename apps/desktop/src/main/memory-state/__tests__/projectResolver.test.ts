@@ -9,6 +9,21 @@ import { parseProjectPaths } from '../schema';
 import { addWorkspaceOverride } from '../workspaceOverrides';
 import { createTempDbDir, type TempDbDir } from './fixture';
 
+/**
+ * Map a Windows-style fixture path onto the current platform.
+ *
+ * `normalizePath` always calls the HOST `path.resolve`, so a drive-letter
+ * path is only absolute on Windows — on POSIX it is a relative segment and
+ * gets rebased onto the runner's CWD. `fx` keeps the original Windows form
+ * on win32 (so drive-letter lowercasing is still asserted) and maps it to a
+ * genuine absolute path elsewhere.
+ */
+const IS_WIN = process.platform === 'win32';
+function fx(p: string): string {
+  if (IS_WIN) return p;
+  return '/' + p.replace(/^[A-Za-z]:[\\/]/, '').replace(/\\/g, '/');
+}
+
 const mocks = vi.hoisted(() => ({
   logger: {
     debug: vi.fn(),
@@ -111,16 +126,16 @@ describe('project resolver', () => {
   }
 
   it('1. two cwd values inside same project (D:/duya, D:/duya/packages/agent) without override → DIFFERENT project_ids (D5)', () => {
-    const r1 = resolveProject(makeInput({ workingDirectory: 'D:/duya' }));
-    const r2 = resolveProject(makeInput({ workingDirectory: 'D:/duya/packages/agent' }));
+    const r1 = resolveProject(makeInput({ workingDirectory: fx('D:/duya') }));
+    const r2 = resolveProject(makeInput({ workingDirectory: fx('D:/duya/packages/agent') }));
     expect(r1.project_id).not.toBe(r2.project_id);
     expect(r1.resolution_source).toBe('working_directory');
     expect(r2.resolution_source).toBe('working_directory');
   });
 
   it('2. same workingDirectory called twice → same project_id (idempotent)', () => {
-    const r1 = resolveProject(makeInput({ workingDirectory: 'D:/duya' }));
-    const r2 = resolveProject(makeInput({ workingDirectory: 'D:/duya' }));
+    const r1 = resolveProject(makeInput({ workingDirectory: fx('D:/duya') }));
+    const r2 = resolveProject(makeInput({ workingDirectory: fx('D:/duya') }));
     expect(r1.project_id).toBe(r2.project_id);
     // Idempotent: only one project row and one path entry.
     expect(countProjects()).toBe(1);
@@ -129,14 +144,14 @@ describe('project resolver', () => {
 
   it('3. workspace override wins — override project_id returned; working_directory alias added', () => {
     addWorkspaceOverride(
-      { canonical_root: 'D:/projects/alpha', project_id: 'override-uuid-alpha' },
+      { canonical_root: fx('D:/projects/alpha'), project_id: 'override-uuid-alpha' },
       { configPath: overridesPath, platform: 'win32' }
     );
-    const r = resolveProject(makeInput({ workingDirectory: 'D:/projects/alpha/subdir' }));
+    const r = resolveProject(makeInput({ workingDirectory: fx('D:/projects/alpha/subdir') }));
     expect(r.project_id).toBe('override-uuid-alpha');
     expect(r.resolution_source).toBe('override');
     expect(r.alias_kind).toBe('workspace_override');
-    expect(r.canonical_root).toBe('d:/projects/alpha');
+    expect(r.canonical_root).toBe(fx('d:/projects/alpha'));
 
     // The working_directory path should be registered on the override project.
     const hit = getProjectForPath(r.absolute_normalized_path);
@@ -145,19 +160,19 @@ describe('project resolver', () => {
   });
 
   it('4. git root matches cwd — cwd path used, git never changes identity (D5)', () => {
-    const gitProbe = vi.fn(() => ({ root: 'D:/duya' }));
-    const r = resolveProject(makeInput({ workingDirectory: 'D:/duya', gitProbe }));
+    const gitProbe = vi.fn(() => ({ root: fx('D:/duya') }));
+    const r = resolveProject(makeInput({ workingDirectory: fx('D:/duya'), gitProbe }));
     expect(r.resolution_source).toBe('working_directory');
-    expect(r.canonical_root).toBe('d:/duya');
-    expect(gitProbe).toHaveBeenCalledWith('D:/duya');
+    expect(r.canonical_root).toBe(fx('d:/duya'));
+    expect(gitProbe).toHaveBeenCalledWith(fx('D:/duya'));
   });
 
   it('5. git root differs from cwd (subdir) — cwd path used, NOT git root (D5)', () => {
-    const gitProbe = vi.fn(() => ({ root: 'D:/parent-repo' }));
-    const r = resolveProject(makeInput({ workingDirectory: 'D:/parent-repo/subdir', gitProbe }));
-    expect(r.canonical_root).toBe('d:/parent-repo/subdir');
+    const gitProbe = vi.fn(() => ({ root: fx('D:/parent-repo') }));
+    const r = resolveProject(makeInput({ workingDirectory: fx('D:/parent-repo/subdir'), gitProbe }));
+    expect(r.canonical_root).toBe(fx('d:/parent-repo/subdir'));
     // D5: the subdir does NOT merge into the parent repo's project.
-    const parent = resolveProject(makeInput({ workingDirectory: 'D:/parent-repo' }));
+    const parent = resolveProject(makeInput({ workingDirectory: fx('D:/parent-repo') }));
     expect(r.project_id).not.toBe(parent.project_id);
 
     // Git root is NOT persisted as a path entry of the subdir project
@@ -165,8 +180,8 @@ describe('project resolver', () => {
     // projects). Note: `d:/parent-repo` DOES have a path entry from
     // the second resolveProject call above — that is expected, and it
     // belongs to the parent project, not the subdir's.
-    expect(gitProbe).toHaveBeenCalledWith('D:/parent-repo/subdir');
-    const parentHit = getProjectForPath('d:/parent-repo');
+    expect(gitProbe).toHaveBeenCalledWith(fx('D:/parent-repo/subdir'));
+    const parentHit = getProjectForPath(fx('d:/parent-repo'));
     expect(parentHit?.project_id).toBe(parent.project_id);
     expect(parentHit?.project_id).not.toBe(r.project_id);
   });
@@ -176,8 +191,8 @@ describe('project resolver', () => {
     // rights. Instead, pass a non-existent path and verify the resolver
     // does not throw. The realpathSync.native will throw ENOENT, and
     // normalizePath falls back to the lexical path.
-    const r = resolveProject(makeInput({ workingDirectory: 'D:/nonexistent/path/loop' }));
-    expect(r.canonical_root).toBe('d:/nonexistent/path/loop');
+    const r = resolveProject(makeInput({ workingDirectory: fx('D:/nonexistent/path/loop') }));
+    expect(r.canonical_root).toBe(fx('d:/nonexistent/path/loop'));
     expect(r.resolution_source).toBe('working_directory');
   });
 
@@ -186,9 +201,9 @@ describe('project resolver', () => {
     // The lexical path IS the identity — we never walk up the
     // filesystem. The project_id must be stable across calls and
     // must NOT collide with other non-existent paths.
-    const deepPath = 'D:/nonexistent/a/b/c/d';
+    const deepPath = fx('D:/nonexistent/a/b/c/d');
     const r = resolveProject(makeInput({ workingDirectory: deepPath }));
-    expect(r.canonical_root).toBe('d:/nonexistent/a/b/c/d');
+    expect(r.canonical_root).toBe(fx('d:/nonexistent/a/b/c/d'));
     expect(r.resolution_source).toBe('working_directory');
 
     // Same path called again → same project_id.
@@ -196,56 +211,56 @@ describe('project resolver', () => {
     expect(r.project_id).toBe(r2.project_id);
 
     // Different non-existent path → different project_id (no merge).
-    const r3 = resolveProject(makeInput({ workingDirectory: 'D:/nonexistent/a/b/c/e' }));
+    const r3 = resolveProject(makeInput({ workingDirectory: fx('D:/nonexistent/a/b/c/e') }));
     expect(r3.project_id).not.toBe(r.project_id);
   });
 
   it('8. gitProbe returns null (timeout) — cwd fallback path used, no exception', () => {
     const gitProbe = vi.fn(() => null);
-    const r = resolveProject(makeInput({ workingDirectory: 'D:/duya', gitProbe }));
-    expect(r.canonical_root).toBe('d:/duya');
+    const r = resolveProject(makeInput({ workingDirectory: fx('D:/duya'), gitProbe }));
+    expect(r.canonical_root).toBe(fx('d:/duya'));
     expect(r.resolution_source).toBe('working_directory');
     expect(gitProbe).toHaveBeenCalled();
   });
 
   it('9. two overrides prefix-match — longest canonical_root wins', () => {
     addWorkspaceOverride(
-      { canonical_root: 'D:/projects/alpha', project_id: 'short-uuid' },
+      { canonical_root: fx('D:/projects/alpha'), project_id: 'short-uuid' },
       { configPath: overridesPath, platform: 'win32' }
     );
     addWorkspaceOverride(
-      { canonical_root: 'D:/projects/alpha/nested', project_id: 'long-uuid' },
+      { canonical_root: fx('D:/projects/alpha/nested'), project_id: 'long-uuid' },
       { configPath: overridesPath, platform: 'win32' }
     );
-    const r = resolveProject(makeInput({ workingDirectory: 'D:/projects/alpha/nested/deep' }));
+    const r = resolveProject(makeInput({ workingDirectory: fx('D:/projects/alpha/nested/deep') }));
     expect(r.project_id).toBe('long-uuid');
-    expect(r.canonical_root).toBe('d:/projects/alpha/nested');
+    expect(r.canonical_root).toBe(fx('d:/projects/alpha/nested'));
   });
 
   it('10. D:/foo/bar and D:/foo/bar2 both in cwd history → two distinct project_ids', () => {
-    const r1 = resolveProject(makeInput({ workingDirectory: 'D:/foo/bar' }));
-    const r2 = resolveProject(makeInput({ workingDirectory: 'D:/foo/bar2' }));
+    const r1 = resolveProject(makeInput({ workingDirectory: fx('D:/foo/bar') }));
+    const r2 = resolveProject(makeInput({ workingDirectory: fx('D:/foo/bar2') }));
     expect(r1.project_id).not.toBe(r2.project_id);
   });
 
   it('11. git metadata is probed but never persisted — never changes project identity or merges projects', () => {
-    const gitProbe = vi.fn(() => ({ root: 'D:/shared-git-root' }));
-    const r1 = resolveProject(makeInput({ workingDirectory: 'D:/dir-a', gitProbe }));
-    const r2 = resolveProject(makeInput({ workingDirectory: 'D:/dir-b', gitProbe }));
+    const gitProbe = vi.fn(() => ({ root: fx('D:/shared-git-root') }));
+    const r1 = resolveProject(makeInput({ workingDirectory: fx('D:/dir-a'), gitProbe }));
+    const r2 = resolveProject(makeInput({ workingDirectory: fx('D:/dir-b'), gitProbe }));
     expect(r1.project_id).not.toBe(r2.project_id);
 
     // Git root is NOT persisted (D5). Both sessions remain distinct
     // projects; the shared git root is debug metadata only and never
     // lands in any project's paths.
     expect(gitProbe).toHaveBeenCalledTimes(2);
-    expect(getProjectForPath('d:/shared-git-root')).toBeUndefined();
-    expect(getProjectForPath('d:/dir-a')?.project_id).toBe(r1.project_id);
-    expect(getProjectForPath('d:/dir-b')?.project_id).toBe(r2.project_id);
+    expect(getProjectForPath(fx('d:/shared-git-root'))).toBeUndefined();
+    expect(getProjectForPath(fx('d:/dir-a'))?.project_id).toBe(r1.project_id);
+    expect(getProjectForPath(fx('d:/dir-b'))?.project_id).toBe(r2.project_id);
   });
 
   it('12. same canonical_root called twice — second call returns existing row, NOT a duplicate', () => {
-    const r1 = resolveProject(makeInput({ workingDirectory: 'D:/duya' }));
-    const r2 = resolveProject(makeInput({ workingDirectory: 'D:/duya' }));
+    const r1 = resolveProject(makeInput({ workingDirectory: fx('D:/duya') }));
+    const r2 = resolveProject(makeInput({ workingDirectory: fx('D:/duya') }));
     expect(r1.project_id).toBe(r2.project_id);
     expect(countProjects()).toBe(1);
     expect(countPathEntries()).toBe(1);
@@ -254,57 +269,57 @@ describe('project resolver', () => {
   it('13. override requests an existing project ID at a new path — alias is added; canonical root unchanged', () => {
     // First, register a project at D:/projects/alpha with a known UUID.
     addWorkspaceOverride(
-      { canonical_root: 'D:/projects/alpha', project_id: 'shared-uuid' },
+      { canonical_root: fx('D:/projects/alpha'), project_id: 'shared-uuid' },
       { configPath: overridesPath, platform: 'win32' }
     );
-    const r1 = resolveProject(makeInput({ workingDirectory: 'D:/projects/alpha' }));
+    const r1 = resolveProject(makeInput({ workingDirectory: fx('D:/projects/alpha') }));
     expect(r1.project_id).toBe('shared-uuid');
-    expect(r1.canonical_root).toBe('d:/projects/alpha');
+    expect(r1.canonical_root).toBe(fx('d:/projects/alpha'));
 
     // Now call with a different path that maps to the same override.
-    const r2 = resolveProject(makeInput({ workingDirectory: 'D:/projects/alpha/subdir' }));
+    const r2 = resolveProject(makeInput({ workingDirectory: fx('D:/projects/alpha/subdir') }));
     expect(r2.project_id).toBe('shared-uuid');
     // canonical_root remains the override's canonical_root (not the subdir).
-    expect(r2.canonical_root).toBe('d:/projects/alpha');
+    expect(r2.canonical_root).toBe(fx('d:/projects/alpha'));
   });
 
   it('14. override path conflicts with another project alias — registration fails with structured error', () => {
     // First, register D:/projects/alpha as a working_directory (creates project A).
-    const r1 = resolveProject(makeInput({ workingDirectory: 'D:/projects/alpha' }));
+    const r1 = resolveProject(makeInput({ workingDirectory: fx('D:/projects/alpha') }));
     const projectAId = r1.project_id;
 
     // Now add an override that tries to claim the same path with a different UUID.
     addWorkspaceOverride(
-      { canonical_root: 'D:/projects/alpha', project_id: 'different-uuid' },
+      { canonical_root: fx('D:/projects/alpha'), project_id: 'different-uuid' },
       { configPath: overridesPath, platform: 'win32' }
     );
 
     // Calling resolveProject again should throw ProjectAliasConflictError because
     // the alias is already registered to projectAId but the override asks for different-uuid.
-    expect(() => resolveProject(makeInput({ workingDirectory: 'D:/projects/alpha' }))).toThrow(
+    expect(() => resolveProject(makeInput({ workingDirectory: fx('D:/projects/alpha') }))).toThrow(
       ProjectAliasConflictError
     );
     // Verify the error has structured fields.
     try {
-      resolveProject(makeInput({ workingDirectory: 'D:/projects/alpha' }));
+      resolveProject(makeInput({ workingDirectory: fx('D:/projects/alpha') }));
     } catch (err) {
       expect(err).toBeInstanceOf(ProjectAliasConflictError);
       const e = err as ProjectAliasConflictError;
       expect(e.existing_project_id).toBe(projectAId);
       expect(e.requested_project_id).toBe('different-uuid');
-      expect(e.absolute_normalized_path).toBe('d:/projects/alpha');
+      expect(e.absolute_normalized_path).toBe(fx('d:/projects/alpha'));
     }
   });
 
   it('15. explicit_workspace_root wins when it matches an override exactly', () => {
     addWorkspaceOverride(
-      { canonical_root: 'D:/projects/alpha', project_id: 'explicit-uuid' },
+      { canonical_root: fx('D:/projects/alpha'), project_id: 'explicit-uuid' },
       { configPath: overridesPath, platform: 'win32' }
     );
     const r = resolveProject(
       makeInput({
-        workingDirectory: 'D:/somewhere/else',
-        explicit_workspace_root: 'D:/projects/alpha',
+        workingDirectory: fx('D:/somewhere/else'),
+        explicit_workspace_root: fx('D:/projects/alpha'),
       })
     );
     expect(r.project_id).toBe('explicit-uuid');
@@ -312,10 +327,10 @@ describe('project resolver', () => {
   });
 
   it('16. cwd fallback used when working_directory is empty', () => {
-    const r = resolveProject(makeInput({ workingDirectory: '', cwd: 'D:/cwd-fallback' }));
+    const r = resolveProject(makeInput({ workingDirectory: '', cwd: fx('D:/cwd-fallback') }));
     expect(r.resolution_source).toBe('cwd');
     expect(r.alias_kind).toBe('cwd');
-    expect(r.canonical_root).toBe('d:/cwd-fallback');
+    expect(r.canonical_root).toBe(fx('d:/cwd-fallback'));
   });
 
   it('17. throws when no working_directory, no cwd, no override', () => {
@@ -324,24 +339,24 @@ describe('project resolver', () => {
 
   it('18. override exact match — matchedPath is the working directory', () => {
     addWorkspaceOverride(
-      { canonical_root: 'D:/projects/alpha', project_id: 'exact-uuid' },
+      { canonical_root: fx('D:/projects/alpha'), project_id: 'exact-uuid' },
       { configPath: overridesPath, platform: 'win32' }
     );
-    const r = resolveProject(makeInput({ workingDirectory: 'D:/projects/alpha' }));
+    const r = resolveProject(makeInput({ workingDirectory: fx('D:/projects/alpha') }));
     expect(r.project_id).toBe('exact-uuid');
     // The path entry registered on the override project is the working directory's normalized form.
-    const hit = getProjectForPath('d:/projects/alpha');
+    const hit = getProjectForPath(fx('d:/projects/alpha'));
     expect(hit).toBeDefined();
     expect(hit?.project_id).toBe('exact-uuid');
   });
 
   it('19. override prefix does NOT match similar-but-distinct paths (D:/foo vs D:/foobar)', () => {
     addWorkspaceOverride(
-      { canonical_root: 'D:/foo', project_id: 'foo-uuid' },
+      { canonical_root: fx('D:/foo'), project_id: 'foo-uuid' },
       { configPath: overridesPath, platform: 'win32' }
     );
     // D:/foobar should NOT match the D:/foo override — it's a different path segment.
-    const r = resolveProject(makeInput({ workingDirectory: 'D:/foobar' }));
+    const r = resolveProject(makeInput({ workingDirectory: fx('D:/foobar') }));
     expect(r.project_id).not.toBe('foo-uuid');
     expect(r.resolution_source).toBe('working_directory');
   });
@@ -349,19 +364,19 @@ describe('project resolver', () => {
   it('20. registerProject without memoryDb throws', () => {
     expect(() =>
       registerProject({
-        canonical_root: 'd:/test',
+        canonical_root: fx('d:/test'),
         alias_kind: 'working_directory',
-        absolute_normalized_path: 'd:/test',
+        absolute_normalized_path: fx('d:/test'),
       })
     ).toThrow(/memoryDb handle/);
   });
 
   it('21. agent_profile_id is provenance only — does not affect project_id', () => {
     const r1 = resolveProject(
-      makeInput({ workingDirectory: 'D:/duya', agent_profile_id: 'profile-A' })
+      makeInput({ workingDirectory: fx('D:/duya'), agent_profile_id: 'profile-A' })
     );
     const r2 = resolveProject(
-      makeInput({ workingDirectory: 'D:/duya', agent_profile_id: 'profile-B' })
+      makeInput({ workingDirectory: fx('D:/duya'), agent_profile_id: 'profile-B' })
     );
     expect(r1.project_id).toBe(r2.project_id);
   });

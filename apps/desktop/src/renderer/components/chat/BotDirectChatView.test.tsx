@@ -402,7 +402,11 @@ describe('BotDirectChatView', () => {
     const { container } = render(
       <BotDirectChatView {...baseProps} isStreaming messages={[]} />,
     );
-    expect(container.querySelector('.bot-chat-typing')).not.toBeNull();
+    // The static 3-dot `.bot-chat-typing` pill was replaced by
+    // BotActivityIndicator, which narrates the live step
+    // (role="status" / aria-live="polite") instead of a bare spinner.
+    expect(container.querySelector('.bot-chat-activity')).not.toBeNull();
+    expect(container.querySelector('.bot-chat-typing')).toBeNull();
     expect(screen.getByLabelText('bot.chat.stop')).toBeDefined();
   });
 

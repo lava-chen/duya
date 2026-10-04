@@ -282,9 +282,12 @@ describe('Real Tasks Integration', () => {
     it('completes every queued tool, each with its own result', async () => {
       // Two reads of DIFFERENT files do not conflict, so the orchestrator runs
       // them in one parallel wave rather than behind a single global lock — that
-      // is the point of `readPathsFor`/`conflictsWith` actually being read (they
+      // is the point of the read-path extraction being consumed for real (it
       // used to be threaded all the way through and then ignored, which made
-      // read/write serialisation a silent no-op).
+      // read/write serialisation a silent no-op). As of the 587 refactor the
+      // names are `footprintFor` / `footprintsConflict` rather than
+      // `readPathsFor` / `conflictsWith`; the assertion below is on behaviour,
+      // so it tracks whichever design is live.
       //
       // So this asserts the two RESULTS, not their order. It used to assert
       // `results[0]` was a.txt and `results[1]` was b.txt, which was only true

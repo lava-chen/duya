@@ -83,10 +83,100 @@
 - **`preload` 22 个通道无渲染层封装** —— 见上文「论证后不改」，待产品决策。
 - **`pruneTrailingFailures` 全仓零调用者**（仅 `node-runner.ts:388` 的注释提及），已改为诚实返回未裁剪，但函数本身是否还应保留待定。
 - **`clearPendingAnswer` 无调用者**：审批被拒后未重试的 tool-input override 会残留，与现有 `pendingAnswers` 行为一致。
-- **AGENTS.md 声明的预发布产物与构建脚本不一致（既有偏差，未修）**：AGENTS.md 要求 `resources/agent-bundle/BashTool/BashWorker.js` 存在，但 `scripts/build-agent-bundle.mjs` 只产出 `agent-process-entry.js` 与 `assets`，`electron-builder.yml:59-60` 只是把整个 `packages/agent/bundle/` 原样拷过去。实测 `bundle:agent` 成功（exit 0，5.06 MB）而 `packages/agent/bundle/BashTool/` 不存在 —— 该 worker 只由 `tsc` 编译到 `packages/agent/dist/tool/BashTool/BashWorker.js`。本次未触碰任何构建脚本或 `electron-builder.yml`，故判定为既有偏差；它影响的是打包预发布检查，而非 typecheck / architecture / test 三个 CI job。
+- ~~**AGENTS.md 声明的预发布产物与构建脚本不一致**~~ —— **已由 upstream 修复，本条作废。** 我在旧基线（`5b1b447f`）上实测 `bundle:agent` 后发现 `packages/agent/bundle/BashTool/BashWorker.js` 并不存在，而 AGENTS.md 要求它存在。合并 `origin/master` 后查明：upstream 的 PR #191（`fix/587-bashworker-artifact`，提交 `701e0011`）已给 `scripts/build-agent-bundle.mjs` 增加第二个 esbuild entry（`BashTool/BashWorker.ts`），并新增 `scripts/check-packaged-artifacts.mjs` 门禁与 `packaged-artifact-baseline.json`。该修复已随 auto-merge 进入本分支。**教训：任何基于旧基线的"既有偏差"结论，在合入前都必须重新核实 —— 本次审计中"21 个 `chat:research_*` case 无生产者"也是同类情况，upstream 的 `router.ts` 已为其建立 `worker → sse-frame-codec → router` 完整链路，删掉反而会破坏新功能。**
 
+
+### 合并到当前 master（重要）
+
+本修复最初落在 `5b1b447f` 上。收尾核对时发现 `origin/master` 已推进到 `7b6c7f38`
+（merge base 仍是 `5b1b447f`）—— **领先 102 个提交**，其中 56 个是 test、10 个 fix、
+3 个 feat（主要是 587 计划：H8.1 抽出 `sse-frame-codec.ts`、M5.4 重写依赖图为
+`PathFootprint`、`849b46df` 废弃计数式分类门禁、PR #191 补上 BashWorker 产物）。
+
+因此上述所有门禁结论最初都是**针对旧基线**的，已全部在合并结果上重跑。
+合并产生 8 个冲突 hunk、集中在 4 个文件，逐个解决如下：
+
+| 文件 | 冲突 | 解决方式 |
+| --- | --- | --- |
+| `DependencyGraphOrchestrator.ts` | 5 处，均为 upstream 把 `writePathsFor`/`waveWritePaths` 重构为 `PathFootprint`/`footprintsConflict`/`waveFootprints` | 采用 upstream 设计。并额外清掉两个 git auto-merge 漏掉的死声明（`readPathsFor`/`conflictsWith`，零调用、`noUnusedLocals` 下会炸）。本次对 `extractReadPaths` 的修复已被 upstream 在 `footprintFor` 热路径上实质取代，且 upstream 更严格（刻意分离 unknownRead/unknownWrite 以保留读并行） |
+| `agent-process-entry.ts` | 1 处：upstream 抽出 207 行的内联 `convertSSEToAgentMessage`，而本分支仍带着它 | 采用 upstream 结构，import 共享 codec；本分支的 4 项修复（视觉阶段 abort、审批改参、defer 守卫、compact 排空队列）全部在 hunk 之外，已存活 |
+| `db-bridge.ts` | 1 处：双方**修了同一个 P0-13**，本分支从 `serveWire` 侧修、upstream 在 bridge 侧加 `receipt.outcome === 'rejected'` | 保留 `serveWire`。upstream 那段是照 `serve` 写的、读 `CommandReceipt` 字段，而 `serveWire` 返回 wire reply，这些字段根本不存在，双重不可达；其**行为**已由 `serveWire` 内部承担 |
+| `slice-classification.test.ts` | 1 处：本分支重录了 `EXPECTED` 计数表，upstream 已把它当"跑步机"删除，换成冻结的 per-file census + `RULE_TABLE_FINGERPRINT` | 采用 upstream 门禁。本分支的删除通过 upstream 自己的 `RECORDED_LOSSES` 逐条记录（6 个文件，各附理由），而不是恢复计数表 |
+
+### 合并后新查出的 2 项真回归，1 项 upstream 自带测试漂移
+
+冲突解决完、门禁在合并结果上跑起来之后，失败文件从旧基线的 44 降到 11。其中 **2 项是本次合并
+自身引入的真回归**（都是"本分支的修复与 upstream 的结构相撞"），1 项是 upstream 自带测试的清单
+漂移。逐个处理如下。
+
+| 现象 | 根因 | 处理 |
+| --- | --- | --- |
+| `run-create-ack-real-bridge.test.ts` 报 `Database not initialized` | 本分支为打破循环把 `db-bridge.ts` 的 `getDatabase` 导入从 `../ipc/db-handlers` 改成 `../db/index`（`db-handlers` 反向 import `db-bridge`，成环），而该测试仍 `vi.mock('../ipc/db-handlers', ...)` —— double 挂不上，被测代码走了真实 `getDatabase()` | 改测试的 mock 路径为 `../db/index`，**不改回导入**（那会把循环重新引回来）。8/8 通过 |
+| `h8-2-consumer-inventory.test.ts` 4/8 失败 | 该文件按行号 pin 住 `.streamChat(` 清单，而 upstream 的 H8.1 把 CLI 的 3 个 turn 站点抽进了 `headless-run-host.ts`，行号整体漂移；另有若干未记录站点 | 逐条复测后：4 条是行号漂移，1 条是 abort-signal 落到了既有调用上（不是新增），1 条是字符串字面量里的散文（look-alike）；真正新增的是 `headless-run-host.ts:251`（host executor，CLI 三个入口现已全部收敛到它）。非 CP turn 4→2、cli 3→1、`NOT_TURN_ENTRIES` 7→8。8/8 通过 |
+| `headless-retirement.test.ts` 一直是绿的 | 它本身坏了 —— 见下一节 | 修门禁 + 改 registry。7/7 通过 |
+
+### 一个不会失败的门禁
+
+`headless-retirement.test.ts` 的第一个用例叫「re-derives the consumer count from the source」，
+文件头也写着 "re-derives the CONSUMER COUNT from the source and fails if the registry's number
+disagrees"。但它的期望值是用 `measured.length` **自己**拼出来的：
+
+```ts
+expect({ count: registry.remainingConsumers, sites: sites, measured: measured.length })
+  .toEqual({ count: sites, sites, measured: measured.length });
+//                                          ^^^^^^^^^^^^^^^^^^^^ 两侧同一个表达式，恒等
+```
+
+`measured` 这个键在两侧是同一个表达式，`sites` 两侧也是同一个表达式，只有 `count === sites` 是
+真检查。**所以这个门禁在 registry 声称 7、scanner 实测 3 的状态下一直是绿的** —— 它拦不住任何东西，
+包括它自己声称要拦的那件事。
+
+把期望值改成拿 `measured` 与 registry 比之后，它立刻失败，并牵出 registry 本身两处不实：
+
+1. **scanner 的口径和 registry 自述的口径不是一回事。** scanner 用 `/\b(agent|subAgent|this)\.streamChat\(/`
+   过滤接收者；registry 的 rationale 却写「seven call sites on a duyaAgent/subAgent receiver …
+   excluding @duya/ai client calls」。实测 7 个里有 5 个是 `@duya/ai` 的 `AIClient` 调用
+   （`llmClient` / `compactClient` / 构造时 bind 到 extractor 上的 `streamChat`），**同一句话里
+   "是 agent receiver" 和 "排除 client 调用" 两半互相否定**。
+2. **按真实口径实测是 9 个，registry 只列了 7 个。** 真实口径 = `packages/agent/src` 内除注释行、
+   除 headless host 之外的全部 `.streamChat(`。漏掉的是 `visual-analysis.ts`（`visionClient`）与
+   `SessionSearchTool.ts`（自建 `AIClient` 做检索结果摘要）—— 两者都因为接收者名字不叫
+   `agent`/`subAgent`/`this` 而被旧 scanner 滤掉，于是从清单里一并消失。
+
+处理：registry 按真实口径改写为 9（每个站点标注性质，2 个真 turn / 7 个一次性 model 调用，后者
+全部走 `@duya/ai` 而非 shim），scanner 同步到该口径，并**新增一条按多重集比对的用例**——只比数量
+不够，文件数对、文件错了同样会过。清单里的 `:line` 全部去掉：registry 里的行号是任何一次上方编辑
+都会打脸的断言（原本 `DuyaAgent.ts:4426` 已经漂到 4526），而这里不需要行号就足够可审计。7/7 通过。
+
+### 门禁跑起来之后，又查出 3 项
+
+这三项都不是"跑不过"，是**跑过了但结论不可信**，或**只在合并后才成立**。它们的共同点是：只看
+"失败文件数"会全部漏掉。
+
+| 现象 | 真实归属 | 处理 |
+| --- | --- | --- |
+| `ProviderManagement.test.tsx` 挂 1 项 | **本分支引入**。本分支删掉了 `ProviderManagement` 监听 `duya:provider-delete` 的代码（改由 `ProviderEditView` 直接调 mutation），而 upstream 的 102 个提交新增的测试正是测这个 window 事件。逐字搜索确认合并后**全仓已无任何生产代码派发该事件** | 该用例的前提在本分支上已反转。改为断言"该事件无人响应"（防止有人只把监听加回来），并把删代码时一起删掉的覆盖补到 `ProviderEditView.test.tsx`（删除成功 / 用户取消两条）。12/12 通过 |
+| `13-citation-drift.test.ts` 从挂 1 项变成挂 3 项 | **本机工作区产物**，非代码缺陷。该测试索引 `REPO_ROOT` 下的文件并按 basename 建表，而工作区里 gitignore 的 `.tmp-validation/` 存着整棵 checkout 的副本（**312,826 个文件**），于是每个 bare basename 都变成"2 个候选"，20 条原本唯一的引用被判 `ambiguous`，`resolved` 变 `null` 后又被逐条排除在 anchor 检查之外，连带把覆盖下限也拖垮 | `SKIP_DIRS` 补上 `.tmp-validation` / `.tmp-test`（该文件本就 skip `.claude`，同一性质；两者都被 `.gitignore` 声明，CI 上根本不存在）。补完后反而**多暴露出 5 条真实失效引用** |
+| 上述 5 条 + 1 条越界引用 | **1 条是本分支造成，5 条是 upstream 造成**。本分支把 `agent-sse-client.ts` 从 886 行删到 240 行 —— 删的是 `AgentSSEClient`，它是 `agent-http-client.ts` 里 `AgentServerClient` 的**无调用者弱化副本**（事件去重规则更差），删除本身有据；但 `sse-event.ts` 里指向它 452-453 行的引用就此越界。另 5 条是 102 个提交把 `router.ts` 等文件挪动后失效的旧行号 | 逐条实测新行号后重指：`let seqNum = 0` 1329→1574、replay 写 `eventId` 2412-2423→2986-2997、`handleDeleteChat` 1670→2067、`isRetryable` 177→190、`data.content` 461-465→455-462，以及 `DuyaAgent.ts:2394` 那条**门禁结构上看不见但语义已失效**的引用（该行无反引号锚点 → `anchor` 为 `null` → 被排除），改指 2443。6/6 通过 |
+
+第一条尤其值得记：**我把一段代码删对了，却忘了 upstream 会在同一个协议上新增测试。**
+判定归属的方法是干净的 —— 在 `7b6c7f38` 建一个干净 worktree 跑同一个测试（7/7 通过），
+再全仓 grep 确认该事件已无生产者。两个独立证据都指向"是本分支的改动让 upstream 的新测试失真"，
+而不是"upstream 自己坏了"。`useDeleteProviderMutation` 本身已处理 Plan 209 的默认服务商清理，
+所以直连 mutation 没有丢掉任何行为 —— 这也是为什么改测试而不是回滚代码是对的。
+
+### 两条基于旧基线的结论，在合并后被证明是错的
+
+这是本次收尾最值得记下的教训 —— **修复 campaign 会在旧基线上形成"事实"，而那些事实可能已被 upstream 推翻**：
+
+1. **"AGENTS.md 要求的 `BashTool/BashWorker.js` 不存在"** —— 我在旧基线上实测 `bundle:agent` 后判定为构建脚本缺陷。upstream 的 PR #191 已给 `build-agent-bundle.mjs` 增加第二个 esbuild entry 并新增 `check-packaged-artifacts.mjs` 门禁。**该条已作废。**
+2. **"21 个 `chat:research_*` case 无生产者，可删"** —— 合并后发现 upstream 已在 `router.ts:586-596` 建立 `worker → sse-frame-codec → router` 的完整路由链路。**当初若坚持删除，反而会破坏 upstream 的 research 功能。** 冲突解决时它们随 codec 一并保留，是正确的。
+
+同理，upstream 已将 `EXPECTED` 视为需要淘汰的跑步机，若我坚持"重录数字"就是逆向而行 —— 该判断由解决冲突的 agent 提出并纠正了我。
 
 ### 门禁结果
+
+**合并前**（对照旧基线 `5b1b447f`）：
 
 | 门禁 | 基线（`5b1b447f`） | 修复后 | 结论 |
 | --- | --- | --- | --- |
@@ -94,7 +184,28 @@
 | `npx vitest run` | 44 个失败文件 | 40 个失败文件 | **0 新增**，且修好 4 个（`eval-legacy-loop`、`eval-baseline-comparison`、`run-suite`、`GrepTool`） |
 | 全仓行尾一致性 | — | 0 噪音 | 每个文件比对 `--numstat` 与 `--ignore-cr-at-eol --numstat` |
 
-vitest 余下 40 个失败文件经基线 worktree 对照确认为 **HEAD 既有欠债**，与本次修复无关。
+**合并后**（在 merge 结果上重跑，这才是有意义的数字）：
+
+| 门禁 | 结果 | 结论 |
+| --- | --- | --- |
+| `npm run typecheck:all` | exit 0，299 known / 147 keys | 0 新增（含 upstream 新增的 `check-packaged-artifacts`） |
+| `npm run architecture:check` | exit 0，cycle 16，total 879，tolerated 879 | 0 新增边界违规 |
+| `npm run bundle:agent` | exit 0，`agent-process-entry.js` + `BashTool/BashWorker.js` 均产出 | 印证旧基线上"BashWorker 缺失"那条结论已作废 |
+| `npx vitest run` | 1098 文件：1082 通过 / **8 失败** / 8 跳过 | **0 回归**（见下） |
+
+**8 个失败文件的甄别结论**（逐个隔离复跑 + 与基线 worktree 同文件集差分）：
+
+| 文件 | 归属 |
+| --- | --- |
+| `workflow-store`、`WorkflowPanel`、`sync-protection`、`DuyaAgent.plan315`、`DuyaAgent.plan486`、`permissions-gate`、`AgentTool` | 基线 worktree 上同样失败（27 个用例）→ **既有欠债** |
+| `os-context/watcher` | 隔离复跑 6/6 通过，双方分支均未触碰该文件或其被测源 → **满负载 debounce 时序抖动** |
+
+差分方法：把两个 run 输出里所有失败用例名（`✗ <suite> > <case>`）取集合差。`22（合并后） vs 27（基线同集）`，
+差集为"不再失败 7 项 / 新增失败 2 项"，其中新增 2 项经隔离复跑全部通过（`watcher` debounce 与
+`runAgentSync` 的无 API key 用例）→ **真实回归 0**。
+
+顺带修好的 7 项里，6 项是 upstream 自己在 102 个提交里修好的（`AgentTool` 的
+`getSubagentToolDefinition` 系列），1 项是本次订正的 citation 引用。
 
 ### 满负载下会抖、但判定为非回归的测试
 

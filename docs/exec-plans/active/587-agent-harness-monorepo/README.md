@@ -1,12 +1,14 @@
 # 587 — Agent Harness / Monorepo 架构重构主计划
 
-> Status: Active — R1/R2/T3 两段完成、E4.1–E4.3 完成、M5.1 完成；R1.4 与 C6.1 收尾中。G0.2 测试债与 G0.3 余项留开。
+> Status: Active — R1 与 T3 完成；R2、M5、C6、D7 全部切片已合并但各有自评 partial 余项；E4 停在 E4.4（四条都有证据，无一条验收）；H8.1 在 PR #178 **未合并**。G0 的门禁债仍在收敛，测试门禁按设计仍然红。
 > Created: 2026-10-03. Priority: P0. 唯一执行队列：本文件。
-> Current task: **R1.4 合并后进入 M5.2（切 host / CLI 边）**，与 **C6.1（repository / approval / scheduler 单一 owner）** 并行。
-> **R 阶段两段已完成**：四接缝修复、持久化序列与终态、typed receipt 与 CAS 对账、结果面区分「无活动」与「未实现」、注入 delay 的有界退避（25ms 翻倍、每次等 250ms、每 run 500ms 上限，按**毫秒**而非次数设界，因为 `settle` 要等写队列才发布终态）。
-> **M5.1 只交地图与验证器，不搬家**：2867/3232 文件已分类，365 个未分类各自带书面理由，零个无解释；切除列表按载荷排序，`NOT_CUT` 记录拒绝承诺的项。已发现真实纯度违规——`packages/ai` 被声明为 `core` 却在 `ollama-chat.ts:329,618` 做网络 fetch、在 `bedrock-converse.ts:35` 用 `node:crypto`。
+> Current task: **合并 PR #178（H8.1 headless CLI 走共享 Run API）**——它是 H8 的唯一 Ready 切片，且它的退出条件里就写着"没有 packaged host smoke"。在它落地前，其余阶段只剩各 PR 自评 partial 的余项，**没有一条可以宣称完成**。
+> **本表的证据基准**：`origin/master` = `55384c55`，合并 PR #138–#195（#165/#170 closed-unmerged，#178 open）。状态与 PR 的对应逐条列在下表"完成证据"列；CI 数字只取 master push 的已结束 run。
+> **R1 与 T3 已完成**：R1 四个接缝修复、串行写队列与终态 barrier、typed receipt 与 CAS 对账、结果面区分"无活动"与"未实现"（注入 delay 的有界退避 25ms 翻倍、每 run 500ms 上限，按毫秒设界，因为 `settle` 要等写队列才发布终态）。T3 单一词汇 owner、单一 emit 入口、seq/cursor/replay、coalescing、三 transport。
+> **R2/M5/C6/D7 是"切片全合并、余项自评 partial"，不是 Done**：#153 第4项（运行期 catalog 刷新）、#154 第3a/4项（预算抢占、在跑工具）、#155 第5项（cancel 关审批/唯一 deadline）、#169"跨 run start/terminal owner"、#171 S3（CLI contract）、#175（自述"头部迁移未做"）都由交付 PR 自己标注 partial，见各阶段文件的逐条理由。
+> **E4.4 四条都有证据、都没有验收**：第1条真实 Electron turn 成立，但 `e2e/turn/electron-turn.spec.ts` 两条陈旧断言仍开着（#188 之后该文件未再被修改）；第2条 **unsupported**（无 live provider key，离线 provider 按本文件规定不能替代 P6）；第3条 macOS CI **真的产出过 electron-builder 包**且 `afterPack` 校验了包内 agent-bundle 与 BashWorker，但打包应用**从未被运行**，`check:packaged-artifacts --packaged` 每次仍打印 `UNVERIFIED`；第4条 #195 三个状态 + 主题共 4 个测试全绿走真实 Electron 桥。
 > 已知待决：`better-sqlite3@13` 随 tarball 附带 N-API prebuild → V8-ABI swap 路径可能大部分冗余。
-> 本次交付为完整计划整合；不代表运行时修复或架构迁移已经完成。
+> 本次交付为**计划状态对齐**（只改本目录文档）；不代表运行时修复或架构迁移已经完成。
 
 ## 1. 执行 agent 从这里开始
 
@@ -31,15 +33,21 @@
 
 | 阶段 | 状态 | 前置 | 本阶段下一任务 | 完成证据 |
 | --- | --- | --- | --- | --- |
-| G0 [基线与治理](01-baseline-and-gates.md) | **In progress** | — | G0.2 测试债收敛 / G0.3 余项 | clean build、可信 required gate、失败债可辨别 |
-| R1 [Run 结果与存储](02-run-correctness.md)  | **Done**（R1.1–R1.4） | G0 | R1.4 结果面与生产ledger | result 等待，durable barrier，ack/CAS确认 |
-| R2 [真实 worker 控制](03-worker-control.md) | **In progress**（R2.1 已合并） | R1 | R2.2 manifest 实际生效 | canonical ID、真实输入、dispatch/stop/审批/预算 |
-| T3 [协议与事件传输](04-protocol-and-streams.md)  | **Done**（T3.1–T3.5） | R2 | T3.5 三adapter与capability | 同一seq、lossless、背压、capability |
-| E4 [行为基准与 evals](05-behavior-and-evals.md)  | **In progress**（E4.1–E4.3 已合并） | R2；传输比较需T3 | E4.2 行为矩阵 / E4.4 Electron smoke | 故障、工具、mode、mailbox、Desktop证据 |
-| M5 [包与 host 迁移](06-package-and-host-migration.md)  | **In progress**（M5.1 地图已交） | G0、T3、E4 | M5.2 切 host/CLI 边 | 纯 core、可执行 runtime、host contracts与迁移归零 |
-| C6 [ControlPlane / Workspace](07-control-plane-and-workspace.md)  | **In progress**（C6.1 进行中） | R2、E4；整体替换需M5 | C6.1 repository/approval/scheduler owner | 跨run协调、durable Workspace、Project兼容迁移 |
-| D7 [恢复与长期工作](08-recovery-and-long-running.md) | Pending | T3、C6 | D7.1 checkpoint/副作用状态机 | kill/restart恢复、lease/fence、安全重试 |
-| H8 [多 host 与退役](09-headless-and-retirement.md) | Pending | M5、C6、D7 | H8.1 headless composition / host验收 | CLI/automation共用API；旧agent退役；打包smoke |
+| G0 [基线与治理](01-baseline-and-gates.md) | **In progress** | — | G0.2 合同/迁移测试独立 job（`.github/workflows/test.yml` 现只有 `architecture`/`test`/`build`）；随后才谈 required checks | 可重复基线 #138、文档事实 #139、CI 接线 #140、构建次序 #143、跨平台门禁 #146、G0.3/G0.4 收尾 #148、electron 二进制 #151；CI 债波 A #183–#187、波 B #189/#192、inventory 断言 #193 |
+| R1 [Run 结果与存储](02-run-correctness.md)  | **Done**（R1.1–R1.4） | G0 | 无。#168 自评 "closes phase R1" | #147 R1.1、#149 R1.2、#162 R1.3、#168 R1.4 |
+| R2 [真实 worker 控制](03-worker-control.md) | **In progress**（R2.1–R2.4 已合并） | R1 | 四条自评 partial：manifest 运行期 catalog 刷新（#153-4）、预算抢占 + 在跑工具（#154-3a/4）、cancel 关审批/唯一 deadline（#155-5） | #150 R2.1、#153 R2.2、#154 R2.3、#155 R2.4 |
+| T3 [协议与事件传输](04-protocol-and-streams.md)  | **Done**（T3.1–T3.5） | R2 | 无。**例外**：T3.1 的"可验证兼容发布窗口"对 `private: true` 包不成立，shim 退出条件只能是消费者归零（#156 明确拒绝声称有窗口） | #156 T3.1、#157 T3.2、#158 T3.3、#159 T3.4、#161 T3.5 |
+| E4 [行为基准与 evals](05-behavior-and-evals.md)  | **In progress**（E4.1–E4.3 已合并；E4.4 四条均有证据、均未验收） | R2；传输比较需T3 | E4.4 第1条：修 `e2e/turn/electron-turn.spec.ts:384`（末帧是 `title_generated` 不是 `done`）与 `:430`（真实事件是 `assistant.text_block`） | E4.1 #160、E4.3 #163、E4.2 #164、对账 #179、打包门禁 #180/#191、真实 turn #181/#188、namespace 隔离 #190、三状态+主题 #195 |
+| M5 [包与 host 迁移](06-package-and-host-migration.md)  | **In progress**（M5.1–M5.5 已合并） | G0、T3、E4 | M5.2-S3 CLI contract 拆分（#171 自评 not done）；M5.3 纯岛四项一项未迁；M5.4 头部迁移（#175 自述"not done"） | M5.1 #166、M5.2 #171、M5.5 #172、M5.3 纯度门禁 #173、M5.4 #175；分类更正 #174 |
+| C6 [ControlPlane / Workspace](07-control-plane-and-workspace.md)  | **In progress**（C6.1–C6.2 已合并） | R2、E4；整体替换需M5 | C6.1 跨 run start/terminal 单一 owner（#169 自评 partial，只有 HostMap）；C6.3 resolver 五条未开始 | C6.1 #169、C6.2 #176 |
+| D7 [恢复与长期工作](08-recovery-and-long-running.md) | **In progress**（D7.1 已合并；D7.2–D7.4 未开始） | T3、C6 | D7.2 lease/fence/recovery attempt——`#177` 只交付 D7.1，resume/determinism/pause 仍显式 unsupported | #177 |
+| H8 [多 host 与退役](09-headless-and-retirement.md) | **In progress**（H8.1 **未合并**；H8.2 在飞未推） | M5、C6、D7 | 审并合并 PR #178（`feat/587-h8-1-headless-run-api`，5 项中 4 项 done，evals runner 共享组合自评 partial） | **无 merged PR。** H8.1 证据只存在于分支与 open PR #178 |
+
+### 3.1 表内数字的实测口径
+
+- **CI（唯一可与历史比较的口径，取 master push 的已结束 run）**：`#192`（`1ffabfc9`，run `37194425248`）三OS **collect 完全相同**（1096 文件 / 13016 测试）——ubuntu **19 失败文件 / 42 失败测试**、macos **28 / 80**、windows **13 / 34**。对照 `5dc45fcf`（587 之前，ubuntu 72 / 216）与 `#190`（ubuntu 37 / 66、macos 47 / 105）：**macOS 始终是最差的一条腿**，只在 ubuntu 上验证会少算。`#192` 之后没有已结束的 run，`#195` 的 run `37199119040` 写作时仍在跑。
+- **架构门禁（本文件写作时在 `55384c55` 亲自跑，纯 `node` 脚本、不需要 `node_modules`）**：`architecture:self-test` exit 0，460 / 227 / 0 / 146 / 25 / 16 / 0；`architecture:check` exit 0，total **874** = tolerated **874**、baseline **811**、**131** 条基线指纹不再触发。与执行日志在 #191 记录的数字**逐项一致**，没有漂移。
+- **未跑的**：`npm run architecture:baseline --write` **从未运行**，本切片也没有运行。`typecheck:all` / `npm test` / `npm run electron:build` **本切片未跑**（本切片是纯文档，不安装依赖）。`electron:pack` **本机从未跑过**（磁盘），但**CI 的 macOS `build` job 真的跑过**——见 [05 阶段文件](05-behavior-and-evals.md) E4.4 第3条。
 
 设计、夹具和无冲突的纯叶子预备工作可以提前准备；**前置没有通过时不切换生产路径，也不把阶段标成完成**。E4 的运行行为测试可以在 T3 完成前启动。C6 的纯 resolver/模型设计可与 M5 的无交集切片交错，不并行修改同一 owner。
 

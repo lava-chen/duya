@@ -86,10 +86,14 @@ describe('Plan 53 Regression — Agent Server Integration', () => {
       expect(() => manager.transitionState('s1', SessionState.CRASHED)).toThrow();
     });
 
-    it('rejects invalid transition: STREAMING → IDLE', () => {
+    // The v0.4.0 stability audit (a15c3885) made IDLE a legal reset target
+    // from every active state, so a mid-stream abort/reset can return the
+    // session to idle instead of stranding it in STREAMING.
+    it('allows the STREAMING → IDLE reset', () => {
       manager.createSession('s1');
       manager.transitionState('s1', SessionState.STREAMING);
-      expect(() => manager.transitionState('s1', SessionState.IDLE)).toThrow();
+      const s = manager.transitionState('s1', SessionState.IDLE);
+      expect(s.state).toBe(SessionState.IDLE);
     });
 
     it('rejects invalid transition: COMPLETED → CRASHED', () => {
@@ -169,13 +173,20 @@ describe('Plan 53 Regression — Agent Server Integration', () => {
       expect(isValidTransition(SessionState.CRASHED, SessionState.IDLE)).toBe(true);
       expect(isValidTransition(SessionState.ERROR, SessionState.IDLE)).toBe(true);
       expect(isValidTransition(SessionState.COMPLETED, SessionState.STREAMING)).toBe(true);
+      // v0.4.0 stability audit: IDLE is a reset target from every active state.
+      expect(isValidTransition(SessionState.STREAMING, SessionState.IDLE)).toBe(true);
+      expect(isValidTransition(SessionState.COMPLETING, SessionState.IDLE)).toBe(true);
+      expect(isValidTransition(SessionState.IDLE, SessionState.COMPLETING)).toBe(true);
+      expect(isValidTransition(SessionState.COMPLETED, SessionState.COMPLETING)).toBe(true);
     });
 
     it('returns false for invalid transitions', () => {
       expect(isValidTransition(SessionState.IDLE, SessionState.CRASHED)).toBe(false);
-      expect(isValidTransition(SessionState.STREAMING, SessionState.IDLE)).toBe(false);
       expect(isValidTransition(SessionState.COMPLETED, SessionState.CRASHED)).toBe(false);
       expect(isValidTransition(SessionState.ERROR, SessionState.STREAMING)).toBe(false);
+      // A reset target is not a universal target: the reverse edge stays closed.
+      expect(isValidTransition(SessionState.IDLE, SessionState.IDLE)).toBe(false);
+      expect(isValidTransition(SessionState.CRASHED, SessionState.STREAMING)).toBe(false);
     });
   });
 

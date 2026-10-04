@@ -23,12 +23,32 @@ export interface DomainBlockerConfig {
 /**
  * Check if a URL is blocked based on the domain list and SSRF protection.
  * Also checks against private IP ranges to prevent SSRF attacks.
+ *
+ * The SSRF step only applies to http(s). `isSafeUrlSync` rejects every other
+ * scheme as "Unsupported protocol", and this function is the general
+ * "should this navigation be blocked" gate, so that check used to block
+ * `file://` unconditionally — which made FallbackBrowser.navigateLocalFile
+ * (working-directory confinement + HTML allowlist) unreachable and reported
+ * the misleading "is in the domain blocklist" for URLs no domain list had
+ * even been consulted about. Non-http(s) schemes are not remote-fetch
+ * targets, so SSRF (private IPs, loopback, DNS rebinding) does not apply to
+ * them; each is governed by its own per-scheme confinement instead.
  */
 export function isUrlBlocked(url: string, blockedDomains: string[]): boolean {
-  // First check SSRF protection (private IPs, loopback, etc.)
-  const safetyResult = isSafeUrlSync(url);
-  if (!safetyResult.safe) {
-    return true;
+  let protocol: string;
+  try {
+    protocol = new URL(url).protocol.toLowerCase();
+  } catch {
+    // Unparseable: leave it to the caller's own validation.
+    return false;
+  }
+
+  if (protocol === 'http:' || protocol === 'https:') {
+    // First check SSRF protection (private IPs, loopback, etc.)
+    const safetyResult = isSafeUrlSync(url);
+    if (!safetyResult.safe) {
+      return true;
+    }
   }
 
   if (!blockedDomains || blockedDomains.length === 0) {

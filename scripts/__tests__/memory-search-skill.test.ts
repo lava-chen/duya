@@ -86,7 +86,13 @@ function runScript(
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn('node', [SCRIPT, ...args], {
-      env: { ...process.env, DUYA_RAG_CONFIG_DIR: configDir },
+      // DUYA_MEMORY_ENABLED pins the hook-mode memory toggle ON. The script's
+      // `isMemoryDisabled()` gate (memory-search.mjs) defaults to DISABLED
+      // unless DUYA_DEV=1 and, in hook mode, exits with an empty stdout before
+      // it ever reads stdin. Inheriting the ambient environment made the hook
+      // contract test below depend on the developer's shell. CLI-mode runs
+      // (the other tests) are unaffected — the gate sits after the CLI branch.
+      env: { ...process.env, DUYA_RAG_CONFIG_DIR: configDir, DUYA_MEMORY_ENABLED: '1' },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let out = '';
@@ -187,12 +193,22 @@ describe('memory-search skill script', () => {
       { root: path.join(configDir, 'memory'), rel: 'global/areas/hydrology.md', title: 'Hydrology', content: 'dam crest elevation notes' },
     ]);
 
-    const { code, stdout } = await runScript(
+    const { code, stdout, stderr } = await runScript(
       [],
       JSON.stringify({ session_id: 's', cwd: '/', hook_event_name: 'UserPromptSubmit', prompt: 'dam crest hydrology' }),
     );
     expect(code).toBe(0);
-    const parsed = JSON.parse(stdout) as { additionalContext: string };
+    // The script fails open, so an empty stdout carries no diagnosis. Surface
+    // the exit code and stderr instead of a bare "Unexpected end of JSON input".
+    let parsed: { additionalContext: string };
+    try {
+      parsed = JSON.parse(stdout) as { additionalContext: string };
+    } catch (err) {
+      throw new Error(
+        `memory-search.mjs produced no parseable stdout (${err instanceof Error ? err.message : String(err)}).\n` +
+          `exit code: ${code}\nstdout: ${JSON.stringify(stdout)}\nstderr: ${JSON.stringify(stderr)}`,
+      );
+    }
     expect(parsed.additionalContext).toContain('Hydrology');
   });
 });

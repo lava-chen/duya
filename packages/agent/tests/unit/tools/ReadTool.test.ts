@@ -1,11 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   validateReadInput,
   ReadTool,
-  _resetSharedParser,
 } from '../../../src/tool/ReadTool/ReadTool.js';
 
 describe('ReadTool', () => {
@@ -167,10 +166,6 @@ describe('ReadTool', () => {
 });
 
 describe('ReadTool .ipynb dispatch', () => {
-  beforeEach(() => {
-    _resetSharedParser();
-  });
-
   it('routes .ipynb through the document parser (not text mode)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'read-ipynb-'));
     const path = join(dir, 'foo.ipynb');
@@ -265,6 +260,105 @@ describe('ReadTool .ipynb dispatch', () => {
       expect(result.result).toContain(
         '<cell id="exec-1"><language>python</language><execution_count>1</execution_count>print("hi")\n\nOutput:\nhi</cell id="exec-1">',
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a clear error for a .ipynb that is not valid JSON', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'read-ipynb-bad-'));
+    const path = join(dir, 'broken.ipynb');
+    writeFileSync(path, '{ "cells": [ oops');
+    try {
+      const tool = new ReadTool();
+      const result = await tool.execute({ file_path: path });
+      expect(result.error).toBe(true);
+      // Names the real problem instead of leaking a stack trace.
+      expect(result.result).toContain('invalid notebook JSON');
+      expect(result.result).not.toMatch(/at Object\.|at Module\._compile|\.ts:\d+:\d+/);
+      // And is not a silent empty read.
+      expect(result.result).not.toContain('<cell id=');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a clear error for a .ipynb that is JSON but not a notebook', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'read-ipynb-bad-'));
+    try {
+      const tool = new ReadTool();
+      // Valid JSON, wrong shape entirely.
+      const objectPath = join(dir, 'object.ipynb');
+      writeFileSync(objectPath, JSON.stringify({ hello: 'world' }));
+      const objectResult = await tool.execute({ file_path: objectPath });
+      expect(objectResult.error).toBe(true);
+      expect(objectResult.result).toContain('unsupported nbformat');
+      expect(objectResult.result).not.toContain('<cell id=');
+
+      // Valid JSON, top-level array.
+      const arrayPath = join(dir, 'array.ipynb');
+      writeFileSync(arrayPath, JSON.stringify(['not', 'a', 'notebook']));
+      const arrayResult = await tool.execute({ file_path: arrayPath });
+      expect(arrayResult.error).toBe(true);
+      expect(arrayResult.result).toContain('unsupported nbformat');
+      expect(arrayResult.result).not.toContain('<cell id=');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a cell_range that does not fit the notebook', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'read-ipynb-'));
+    const path = join(dir, 'short.ipynb');
+    const nb = {
+      nbformat: 4,
+      cells: [
+        { cell_type: 'code', source: 'a=1', outputs: [], execution_count: 1 },
+        { cell_type: 'code', source: 'b=2', outputs: [], execution_count: 2 },
+      ],
+    };
+    writeFileSync(path, JSON.stringify(nb));
+    try {
+      const tool = new ReadTool();
+      // start past the last cell
+      const past = await tool.execute({ file_path: path, cell_range: { start: 9, end: -1 } });
+      expect(past.error).toBe(true);
+      expect(past.result).toContain('cell_range');
+      expect(past.result).toContain('exceeds notebook size');
+      // end before start
+      const inverted = await tool.execute({ file_path: path, cell_range: { start: 2, end: 1 } });
+      expect(inverted.error).toBe(true);
+      expect(inverted.result).toContain('cell_range');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('bounds a large notebook at ~50KB and names the cell to continue from', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'read-ipynb-big-'));
+    const path = join(dir, 'big.ipynb');
+    const cells = Array.from({ length: 400 }, (_, i) => ({
+      cell_type: 'code',
+      source: `print("cell number ${i + 1} with enough padding text to matter")`,
+      outputs: [],
+      execution_count: i + 1,
+    }));
+    writeFileSync(path, JSON.stringify({ nbformat: 4, nbformat_minor: 5, cells }));
+    try {
+      const tool = new ReadTool();
+      const result = await tool.execute({ file_path: path });
+      expect(result.error).toBeFalsy();
+      expect(result.result).toContain('File:');
+      expect(result.result).toMatch(/\[Read metadata: returned \d+ of 400 cells in the requested range/);
+      expect(result.result).toMatch(/use cell_range to continue from cell \d+/);
+      // Bounded, and whole cells only: the cap never cuts mid-tag, so every
+      // opening cell tag has its matching close.
+      expect(result.result.length).toBeLessThan(60_000);
+      const opens = result.result.match(/<cell id="/g) ?? [];
+      const closes = result.result.match(/<\/cell id="/g) ?? [];
+      expect(opens.length).toBe(closes.length);
+      expect(opens.length).toBeGreaterThan(0);
+      expect(result.metadata).toMatchObject({ truncated: true, totalCells: 400 });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

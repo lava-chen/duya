@@ -35,7 +35,7 @@ import type { RunEventEnvelope, RunTerminalState } from '@duya/agent-protocol';
 import { getCoreStores } from '../db/core-connection';
 import { getLogger, LogComponent } from '../logging/logger';
 import { RunEventConflictError } from '../db/core/run-store';
-import { classifySqlFailure, isDurableWrite, type RunWriteReceipt } from './run-receipt';
+import { classifySqlFailure, writeRunReceiptOnWire, type RunWriteReceipt } from './run-receipt';
 
 /** The db-bridge request shape (`chat-runtime-lock.ts:36`). */
 export type ControlPlaneRequest = (
@@ -48,33 +48,14 @@ const logger = () => getLogger();
 /**
  * Put a receipt on the wire.
  *
- * The shape crosses a process boundary, so it is built once here and read once
- * by `readRunReceipt` on the other side. `ok` is present on every reply because
- * a consumer that only reads `state` and one that only reads `ok` must not be
- * able to disagree about whether the call succeeded.
+ * A thin forward to `run-receipt.ts`, which owns BOTH halves of this contract
+ * for the reason in that file's header: the reader (`readRunReceipt`) and the
+ * serialiser have to change together, and the consumer side of the boundary
+ * needs the serialiser too. Keeping a second copy here is what let the reply
+ * shape drift in the first place.
  */
 function onWire(receipt: RunWriteReceipt, extra?: Record<string, unknown>): Record<string, unknown> {
-  const durable = isDurableWrite(receipt);
-  return {
-    ok: durable,
-    state: receipt.state,
-    runId: receipt.runId,
-    // `committed` is emitted only when there IS one. A `run:create` or
-    // `run:append` conflict has no committed terminal, and emitting the key with
-    // an `undefined` value would leave the reader to guess whether the producer
-    // meant "none" or "I forgot".
-    ...(receipt.state === 'conflict'
-      ? { reason: receipt.reason, ...(receipt.committed === undefined ? {} : { committed: receipt.committed }) }
-      : {}),
-    ...(receipt.state === 'reconciled' ? { committed: receipt.committed } : {}),
-    // `applied` is the "BY ME" claim, and it is carried by the `applied` state
-    // alone. A `reconciled` receipt deliberately omits it: this call did not
-    // write the terminal, another writer did. Emitting `applied: true` there
-    // would erase the one distinction the state exists to make.
-    ...(receipt.state === 'applied' ? { applied: true } : {}),
-    ...(receipt.state === 'conflict' ? { applied: false } : {}),
-    ...(extra ?? {}),
-  };
+  return writeRunReceiptOnWire(receipt, extra);
 }
 
 // ── run:create ──────────────────────────────────────────────────────────

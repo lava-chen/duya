@@ -1,8 +1,10 @@
 # R2 — 单一 Run 入口接管真实 worker
 
-前置：R1。Next：R2.2。接入旧DuyaAgent，不重写模型循环。runtime主控制、host负责执行transport。
-
-> **R2.1 已完成**（PR #150）。R2.2 开工中；R2.3（cancel与预算）、R2.4（审批真实回传）仍开放。
+前置：R1。Next：**R2.2 第4项（运行期 catalog 刷新以 revision 事件记录）、R2.3 第3a/4项、R2.4 第5项**——这四条是交付 PR 自己标注 partial 的余项。接入旧DuyaAgent，不重写模型循环。runtime主控制、host负责执行transport。
+>
+> **阶段状态（2026-10-04 对 `55384c55` 核对）**：R2.1–R2.4 **全部合并**（#150、#153、#154、#155），但**不是 Done**——四个 PR 各留下一条自评 partial（下文逐条标出）。本阶段未合并的**没有**一项是靠"没时间"留开的，每一条都是交付方给出的精确阻塞。
+>
+> **R2.1 已完成**（PR #150）。R2.2/#153、R2.3/#154、R2.4/#155 已合并。
 > 入口普查已完成并作为 R2.1 第一项交付物记录在 `run-orchestrator.ts:679-763`（`NON_DESKTOP_CONSUMERS` / `RUN_ENTRY_DIVERGENCES`），且有测试断言**每条登记路径在磁盘上真实存在**——首版三处路径写错，是该测试抓出来的。
 > **与计划描述不符之处**：`packages/cli` 当前**根本不启动 agent run**，全是 HTTP CRUD；真正在跑的是 `packages/agent/src/cli/index.ts` 直接构造 `DuyaAgent`。计划把 CLI 列为 consumer 与代码不符，已按实际登记给 H8，未臆造工作。
 
@@ -35,26 +37,46 @@ Desktop `agents/server/{router,index,run-orchestrator}.ts`、worker-manager/proc
 
 ## R2.2 Manifest 实际生效
 
-- [ ] 从当前配置拿真实profile/modes/model/effort、budget、permission、roots、toolsnapshot与connectorbindings，记录版本来源。
-- [ ] 输入包含真实prompt及attachment引用，移除controller收到空prompt而由旁路传真实input的双事实源。
-- [ ] worker校验manifesthash/version及inputbinding；拒绝未知requiredcapability、非法cwd，不能静默替换配置。
+> 已合并，PR #153（`af8b0eb0`）。5 项中 4 项 done、第 2 项"proved already fixed"、**第 4 项自评 partial**。
+
+- [x] 从当前配置拿真实profile/modes/model/effort、budget、permission、roots、toolsnapshot与connectorbindings，记录版本来源。
+  `manifest-factory.ts:166` + `router.ts:1260` + `agent-protocol/src/manifest.ts:104`；`run-manifest-config.test.ts`（14）。provenance 记在 `RunManifest.provenance`（逐字段 `source`/`sourceVersion?`/`synthesised`），**键集是封闭的**——未归因的 manifest 字段是编译错误而不是静默遗漏，且 `unsupported ⇒ synthesised: true` 是测试断言的不变量。
+- [x] 输入包含真实prompt及attachment引用，移除controller收到空prompt而由旁路传真实input的双事实源。
+  **#153 判定为"proved already fixed"**（不是本切片改的）：`run-manifest-verification.ts:246`；`run-manifest-config.test.ts:159` 钉住单事实源。
+- [x] worker校验manifesthash/version及inputbinding；拒绝未知requiredcapability、非法cwd，不能静默替换配置。
+  `run-manifest-verification.ts`（新增）+ `agent-process-entry.ts:2477`；`run-manifest-verification.test.ts`（16）。这正是 R2.1 交接里"worker 携带但不校验"的那一跳。
 - [ ] 配置变化仅作用于未来run或显式动态policyrevocation；运行期catalog刷新以revision事件记录，不能暗改snapshot。
-- [ ] publicmanifest不带secret；当前privateproviderdelivery保证受控且脱敏。未完成secretbroker不假称全局无凭证跨进程。
+  **#153 自评 partial**：`manifest-factory.ts:346` 只做到了"配置变化不改动正在运行的 run"（`run-manifest-config.test.ts:181,190`），**运行期 catalog 刷新要以 revision 事件记录**这一半没做。下一动作：在 T3.2 已建的 control-plane census（21 行，`control-plane-census.ts:118`）里为 catalog 刷新补一条 producer/sink 行，让刷新成为可观察事件而不是快照差异。
+- [x] publicmanifest不带secret；当前privateproviderdelivery保证受控且脱敏。未完成secretbroker不假称全局无凭证跨进程。
+  `run-orchestrator.ts:851` + `agent-process-entry.ts:216`；`12-no-secret-in-manifest.test.ts`（8）。#153 明确"未完成 secret broker"这件事本身要如实陈述，不假装跨进程无凭证。
 
 ## R2.3 Cancel 与预算
 
-- [ ] ExecutionHandle.stop连接真实interrupt，清理timer，grace后平台processadapter执行kill/fence；等待有界，不await永不resolve句柄。
-- [ ] 控制路由和worker终态同arbiter；cancel确认描述requested/applied/terminal，已结束返回appliedfalse。
+> 已合并，PR #154（`9803b5fd`）。5 项中 1/2/5 done、3b done，**3a 与 4 自评 partial**。
+
+- [x] ExecutionHandle.stop连接真实interrupt，清理timer，grace后平台processadapter执行kill/fence；等待有界，不await永不resolve句柄。
+  `worker-manager.ts:324-405` + `execution-channel.ts:104-124` + `controller.ts:836-889`；`run-cancel-budget.test.ts:281`——一个永不答的 stop 仍然 resolve 并报 `escalated`。
+- [x] 控制路由和worker终态同arbiter；cancel确认描述requested/applied/terminal，已结束返回appliedfalse。
+  `controller.ts:718-790` + `run.ts:71-104` + `router.ts:1956-2040` + `run-orchestrator.ts:615-651`；`run-cancel-budget.test.ts:258`、`run-cancel-stop-path.test.ts:224,242`。
 - [ ] turn/tool启动前检查预算，usage后检查tokens/cost，wallclocktimer可触发stop。maxTurns=1不启动第2次模型请求。
+  **#154 把本条拆成 3a/3b，3b done、3a partial。** 3b wallclock timer 已落地（`controller.ts:519-546`，在 `settle` 的 `controller.ts:702-706` 清除；`run-cancel-budget.test.ts:363,409` 断言 run 结束后不泄漏 stop）。3a 的阻塞是结构性的：**runtime 只在帧**返回**时才得知 `turn.started`，即在 provider 调用之后**，因此无法撤回已发出的第 2 次请求。下一动作：预算判定要下沉到发出请求**之前**的那一跳（ModelClient 入口），并为"预算在请求发出瞬间被耗尽"补一条断言。
 - [ ] cancel阻断排队tool；在跑tool正确完成或标unknown；sideeffect账本恢复在D7，不能把kill等于撤销工具。
-- [ ] 请求连接关闭保持明确旧行为；backgroundcontinueopt-in，断线与用户stop分别测试。
+  **#154 自评 partial（runtime 侧）**：`run-ledger.ts:127-146` + `run-session.ts:583-617`；`run-cancel-budget.test.ts:438,475`。在跑工具的 `unknown` 记账在 D7.1 落地（#177 的 toolattempt 状态机 + `retry:false, code:'non_retryable'`），本条剩余的是"cancel 阻断**排队** tool"这一跳。
+- [x] 请求连接关闭保持明确旧行为；backgroundcontinueopt-in，断线与用户stop分别测试。
+  `router.ts:1523-1543` 未改；`run-cancel-budget.test.ts:509` 与 `run-entry-non-sse.test.ts:217` 分别测断线与 stop。
 
 ## R2.4 审批真实回传
 
-- [ ] controllerrespondToPermission接入现有审批路径；CP写durabledecision再投递worker，requestId/runId一致。
-- [ ] 统一一次/会话grant、timeout/defer/deny；更新input重新校验。迟到/重复应答返回receipt不重复执行。
+> 已合并，PR #155（`9a37112c`）。6 个子项中 1/2/3/4/6 done，**第 5 项自评 partial**。
+
+- [x] controllerrespondToPermission接入现有审批路径；CP写durabledecision再投递worker，requestId/runId一致。
+  `controller.ts:1029` + `control-plane/permission-coordinator.ts:432`；`run-permission-respond.test.ts`（9），含"records the decision, and the recorded row exists by the time the worker is told"。
+- [x] 统一一次/会话grant、timeout/defer/deny；更新input重新校验。迟到/重复应答返回receipt不重复执行。
+  `permission-vocabulary.ts:130-190` + `permission-decision-record.ts:52-66`（未知动词返回 null，**由调用方 fail closed**；旧动词上错 surface 被拒）+ `router.ts:2205-2240` + `permission-decision-record.ts:74-92`；`permission-router-decision.test.ts`（16）。会话 grant 不靠进程巧合：`agent-process-entry.ts:4595-4626` + `db-bridge.ts:888-902` + `approvals.ts:1-40`；`toolApprovalState-grant-scope.test.ts`（7，真实 SQLite）、`sessionGrantScope.test.ts`（9）。`defer` 可达：decided nothing、delivered nothing、请求保持打开（`permission-coordinator.ts:392-405`）。
 - [ ] cancel关闭所有pendingrequests并audit；privateapproval引用不携secret到SSE。
+  **#155 第5项自评 partial**。已做的一半在 `controller.ts:857-862` 与 `permission-coordinator.ts:120-137,470-492`（每个打开的请求以 cancelled 原因被拒、且只在该值上装**一个** timer）；"private approval 引用不携 secret 到 SSE"没有对应断言。下一动作：为 private approval 引用补一条"序列化后的 SSE 帧不含 secret 值"的断言，并核对 cancel 时 audit 记录对**每一个**打开请求都落行。
 - [ ] timerownership仅一个权威deadline；workerrecycle/session变化不会继承不该存在的grant。
+  未完成：#155 证明了"只装一个 timer"与"会话 grant 不因进程巧合生效"，但**worker recycle / session 变化时的 grant 继承**没有独立断言。下一动作：补一条"worker recycle 后新请求不得看到上一个进程的 grant"的真实 SQLite 用例。
 
 ## 验收矩阵
 

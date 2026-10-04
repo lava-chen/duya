@@ -124,8 +124,8 @@ describe('MemoryRagCard', () => {
     expect(await screen.findByLabelText('settings.memory.ragEnabled')).toBeChecked();
     expect(screen.getByText('~/notes')).toBeInTheDocument();
 
-    // Provider options live inside the collapsed advanced section.
-    fireEvent.click(screen.getByRole('button', { name: /settings.memory.ragAdvanced/ }));
+    // Provider options are inline: the card has no collapsed "advanced"
+    // disclosure (that toggle and its orphaned i18n keys are gone).
     expect(screen.getByText('Ollama')).toBeInTheDocument();
     expect(screen.getByText('OpenAI')).toBeInTheDocument();
   });
@@ -182,23 +182,34 @@ describe('MemoryRagCard', () => {
     });
   });
 
-  it('browse button picks a folder through the native dialog and adds it', async () => {
-    const openFolder = vi.fn(async () => ({ canceled: false, filePaths: ['D:/archives'] }));
+  // The native folder picker (`settings.memory.ragBrowse` + electronAPI
+  // dialog.openFolder) was removed: scan paths are typed into the add input
+  // and committed with the Add button, which "adds a scan path" above covers.
+  // What still matters is that the card has no native-dialog dependency at
+  // all, so a headless renderer can never hang on a picker.
+  it('adds a path without any native folder dialog', async () => {
+    const openFolder = vi.fn(async () => ({ canceled: true, filePaths: [] }));
     (window as unknown as { electronAPI: unknown }).electronAPI = { dialog: { openFolder } };
 
     const { MemoryRagCard } = await import('../MemoryRagCard');
     render(<MemoryRagCard />);
     await screen.findByLabelText('settings.memory.ragEnabled');
 
-    fireEvent.click(screen.getByRole('button', { name: 'settings.memory.ragBrowse' }));
+    // No browse affordance is rendered any more.
+    expect(screen.queryByRole('button', { name: 'settings.memory.ragBrowse' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /settings.memory.ragAdvanced/ })).toBeNull();
+
+    const addInput = screen.getByPlaceholderText('settings.memory.ragAddPath');
+    fireEvent.change(addInput, { target: { value: 'D:/archives' } });
+    fireEvent.click(screen.getByText('common.add'));
 
     await waitFor(() => {
-      expect(openFolder).toHaveBeenCalled();
       expect(mocks.setConfig).toHaveBeenCalledWith(
         'memoryRag',
         expect.objectContaining({ scan_paths: ['~/notes', 'D:/archives'] }),
       );
     });
+    expect(openFolder).not.toHaveBeenCalled();
   });
 
   it('changing the provider writes embedding_provider', async () => {
@@ -206,7 +217,6 @@ describe('MemoryRagCard', () => {
     render(<MemoryRagCard />);
     await screen.findByLabelText('settings.memory.ragEnabled');
 
-    fireEvent.click(screen.getByRole('button', { name: /settings.memory.ragAdvanced/ }));
     const select = screen.getByRole('combobox');
     fireEvent.change(select, { target: { value: 'ollama' } });
     await waitFor(() => {
@@ -219,7 +229,6 @@ describe('MemoryRagCard', () => {
     render(<MemoryRagCard />);
     await screen.findByLabelText('settings.memory.ragEnabled');
 
-    fireEvent.click(screen.getByRole('button', { name: /settings.memory.ragAdvanced/ }));
     const modelInput = screen.getByPlaceholderText('bge-m3 / text-embedding-3-small');
     fireEvent.change(modelInput, { target: { value: 'bge-m3' } });
     fireEvent.blur(modelInput);

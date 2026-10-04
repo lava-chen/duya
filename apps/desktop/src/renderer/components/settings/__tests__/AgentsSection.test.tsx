@@ -126,7 +126,7 @@ describe('AgentsSection Config Agents CRUD', () => {
     expect(screen.getByText('frontend-expert')).toBeInTheDocument();
   });
 
-  it('creates a new agent: entering a name and saving calls create with a slug id', async () => {
+  it('creates a new agent: entering a name and saving delegates id minting to main', async () => {
     const { AgentsSection } = await import('../AgentsSection');
     render(<AgentsSection />);
 
@@ -139,8 +139,12 @@ describe('AgentsSection Config Agents CRUD', () => {
 
     fireEvent.click(screen.getByText('common.save'));
 
+    // The id is minted by the MAIN process from the display name, not in the
+    // renderer: saveAgent passes '' as a hint (agent-profile-ipc.createConfigAgent
+    // documents ids as never user-authored, single minting point, grok parity).
+    // The renderer deriving a slug itself is what this case used to assert.
     await waitFor(() => {
-      expect(configAgentsMock.create).toHaveBeenCalledWith('frontend-expert', {
+      expect(configAgentsMock.create).toHaveBeenCalledWith('', {
         name: 'Frontend Expert',
         description: undefined,
         workspace: undefined,

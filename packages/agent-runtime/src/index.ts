@@ -264,6 +264,23 @@ export {
   negotiateEventAdmission,
   probeRuntimeCapabilities,
 } from './transport/capability-probe.js';
+// Plan 587 D7.1 — the checkpoint / side-effect state machine, and the fence.
+export { InMemoryCheckpointStore, recoverRun } from './checkpoint/checkpoint-store.js';
+export type {
+  CheckpointStore,
+  CommitReceipt,
+  EmittedSeqProbe,
+  RecoveryOutcome,
+  RecoveryRefusal,
+  RecoveryResult,
+  StoredCheckpoint,
+} from './checkpoint/checkpoint-store.js';
+export { planBranch } from './checkpoint/branch-plan.js';
+export type { BranchPlan, BranchResult, InheritedEvent } from './checkpoint/branch-plan.js';
+// What D7.1 did NOT build, declared in code so a consumer can read the gap
+// rather than infer it from an absent function.
+export { SUPPORTED_AFTER_D71, UNSUPPORTED_AFTER_D71, unsupportedSummary } from './checkpoint/unsupported.js';
+export type { UnsupportedCapability } from './checkpoint/unsupported.js';
 export type {
   AdmissionReport,
   CapabilityProbeErrorDetail,

@@ -137,6 +137,69 @@ export function isDurableWrite(receipt: RunWriteReceipt): boolean {
   return DURABLE_STATES.has(receipt.state);
 }
 
+/**
+ * Put a receipt on the wire — the exact shape {@link readRunReceipt} reads.
+ *
+ * ## Why this lives here and not in the producer
+ *
+ * This function used to be a private `onWire` in `run-control-plane.ts`, so
+ * only the MAIN-process producer could build a wire receipt. The consumer side
+ * of the same boundary had no way to build one, and when C6.1 introduced a
+ * second, in-process hop (`ControlPlaneService.serve`, whose `write` is the
+ * TYPED `RunWriteReceipt` union) the bridge began returning that typed object
+ * verbatim. The typed union has no `ok` member, so every reply lost the boolean
+ * `readRunReceipt` requires and came back `unreadable` — which is how a fully
+ * written run row turned into "the run was never created" and dropped every
+ * desktop chat turn. See `db-bridge.ts`'s `run:*` arm.
+ *
+ * The reader and the serialiser are therefore declared in ONE file, next to
+ * each other, exactly as this file's header already argues: a receipt crosses a
+ * process boundary, so a second declaration of its shape is a second contract,
+ * and the two drift the first time a field moves.
+ *
+ * `ok` is present on every reply because a consumer that reads only `state` and
+ * one that reads only `ok` must not be able to disagree about whether the call
+ * succeeded. `committed` is emitted only when there IS one — a `run:create` or
+ * `run:append` conflict has no committed terminal, and emitting the key with an
+ * `undefined` value would leave the reader to guess whether the producer meant
+ * "none" or "I forgot".
+ *
+ * `reason` is emitted for EVERY state that has one, which is every state except
+ * the four that are a statement rather than a refusal (`applied`, `created`,
+ * `reused`, `reconciled`). It used to be emitted for `conflict` alone, so
+ * `busy`, `unavailable`, `sql_failed`, `absent`, `invalid` and `unreadable`
+ * reached the reader with no reason at all — and the reader, which prefers the
+ * producer's words, fell back to synthesising `run:create reported
+ * unavailable`. That defeats the point of the typed receipt: the state names
+ * the KIND of problem and the reason names the REMEDY, and the six states that
+ * most need a remedy were the six that lost theirs.
+ */
+export function writeRunReceiptOnWire(
+  receipt: RunWriteReceipt,
+  extra?: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    ok: isDurableWrite(receipt),
+    state: receipt.state,
+    runId: receipt.runId,
+    // The producer's own sentence. `'reason' in receipt` is the union's own
+    // discriminator — every arm that carries a reason declares it, and every arm
+    // that does not, does not.
+    ...('reason' in receipt ? { reason: receipt.reason } : {}),
+    ...(receipt.state === 'reconciled' ? { committed: receipt.committed } : {}),
+    ...(receipt.state === 'conflict' && receipt.committed !== undefined
+      ? { committed: receipt.committed }
+      : {}),
+    // `applied` is the "BY ME" claim, and it is carried by the `applied` state
+    // alone. A `reconciled` receipt deliberately omits it: this call did not
+    // write the terminal, another writer did. Emitting `applied: true` there
+    // would erase the one distinction the state exists to make.
+    ...(receipt.state === 'applied' ? { applied: true } : {}),
+    ...(receipt.state === 'conflict' ? { applied: false } : {}),
+    ...(extra ?? {}),
+  };
+}
+
 /** The one diagnostic line for a receipt, for a log or an acceptance reason. */
 export function describeReceipt(receipt: RunWriteReceipt): string {
   switch (receipt.state) {

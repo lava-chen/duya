@@ -597,8 +597,7 @@ export class GrepTool extends BaseTool {
     let timedOut = false;
 
     try {
-      await this.walkDirectory(searchPath, async (filePath) => {
-        if (maxResults && matches.length >= maxResults) return;
+      const scanFile = async (filePath: string): Promise<void> => {
         if (outOfTime()) {
           timedOut = true;
           return;
@@ -617,9 +616,15 @@ export class GrepTool extends BaseTool {
             lines.pop();
           }
 
+          // The match budget bounds RETAINED matches, not counting: the scan
+          // keeps walking and keeps incrementing `total` so the report stays
+          // accurate once `maxResults` is hit. This mirrors the ripgrep engine,
+          // which runs rg to completion and counts every match line while
+          // retaining only the first `maxResults`. Stopping the walk at the
+          // budget (as this used to) reported `total === maxResults` and
+          // `truncated: false` — a silently lossy answer that claimed nothing
+          // had been dropped.
           for (let i = 0; i < lines.length; i++) {
-            if (maxResults && matches.length >= maxResults) break;
-
             const line = lines[i];
             const effectivePattern = literal
               ? pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -629,7 +634,7 @@ export class GrepTool extends BaseTool {
 
             while ((match = localRegex.exec(line)) !== null) {
               total++;
-              if (maxResults && matches.length >= maxResults) break;
+              if (maxResults && matches.length >= maxResults) continue;
               const entry: GrepMatch = {
                 file: filePath,
                 line: i + 1,
@@ -655,7 +660,20 @@ export class GrepTool extends BaseTool {
         } catch {
           // Ignore read errors
         }
-      });
+      };
+
+      // The search path may be a single file, not a directory. walkDirectory
+      // readdir()s its argument and swallows the ENOTDIR failure, so a bare
+      // file path used to yield zero matches reported as a clean
+      // "No matches found" — a false negative the model could not distinguish
+      // from a real miss. ripgrep scans a file path happily, so the fallback
+      // must too.
+      const info = await stat(searchPath).catch(() => null);
+      if (info?.isFile()) {
+        await scanFile(searchPath);
+      } else {
+        await this.walkDirectory(searchPath, scanFile);
+      }
     } catch {
       // Directory not found, etc. The top-level search path is
       // existence-checked in execute() before we get here, so this only

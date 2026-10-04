@@ -23,19 +23,28 @@ const mocks = vi.hoisted(() => {
 /**
  * Mock the module `orb-insert-tab.ts` ACTUALLY imports.
  *
- * This used to mock `@duya/agent/context/os-context`, a specifier the
- * module never imports: `orb-insert-tab.ts:27` reaches into the built
- * output through a raw relative path. `vi.mock` matches on the resolved
- * module, so the mock silently never applied, the real bridge was used,
- * and every case short-circuited on `isEnabled() === false` and reported
+ * `orb-insert-tab.ts:27` reaches into the built output through a raw
+ * relative path, five levels up from `apps/desktop/src/main/services/`. This
+ * test file sits one level deeper, so it has to name the same module with
+ * six.
+ *
+ * This previously mocked `../../../packages/agent/dist/context/os-context/index.js`
+ * — three levels, which resolves to `apps/desktop/src/packages/...`, a path no
+ * module ever resolves to. `vi.mock` matches on the resolved module, so the
+ * mock silently never applied, the real bridge was used, and every case
+ * short-circuited on `isEnabled() === false` and reported
  * `os-context-bridge-disabled` instead of the reason under test.
  *
- * The same wrong specifier appears in other electron tests; the real fix
- * is for electron to import `@duya/agent/context/os-context` and let a
- * vitest alias resolve it to agent source (as ISS-02 did for
- * `allowedRoots`), so tests stop depending on a prior `dist` build.
+ * An earlier revision of this file had mocked `@duya/agent/context/os-context`,
+ * a specifier the module does not import at all, with the same result.
+ *
+ * The remaining wart is that the source points at `dist/`, so this suite only
+ * collects after the agent package is built. The real fix is for electron to
+ * import `@duya/agent/context/os-context` and let a vitest alias resolve it to
+ * agent source (as ISS-02 did for `allowedRoots`), so tests stop depending on a
+ * prior `dist` build.
  */
-vi.mock('../../../packages/agent/dist/context/os-context/index.js', () => ({
+vi.mock('../../../../../../packages/agent/dist/context/os-context/index.js', () => ({
   getOSContextBridge: () => mocks.osContextBridge,
 }));
 

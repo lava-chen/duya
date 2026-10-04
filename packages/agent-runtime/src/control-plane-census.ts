@@ -96,25 +96,29 @@ export const CONTROL_PLANE_CENSUS: readonly CensusRow[] = [
   {
     message: 'run.start',
     plane: 'control',
-    producer: 'apps/desktop/src/main/agents/server/router.ts (chat POST handler)',
+    producer:
+      'apps/desktop/src/main/agents/server/router.ts (chat POST handler) and ' +
+      'packages/agent/src/process/headless-run-host.ts:HeadlessRunHost.start (H8.1)',
     handler: 'packages/agent-runtime/src/controller.ts:RunController.start',
     consumer: 'packages/agent-protocol/src/events/registry.ts:CONTROL_GATE',
     schema: 'packages/agent-protocol/src/manifest.ts:RunManifest',
     since: '1.0 (schema rev 1), no capability',
     authority: 'protocol',
-    note: 'R2.1/R2.2. The manifest is the frozen decision; a start that cannot be recorded is not a start (RunStartError).',
+    note: 'R2.1/R2.2. The manifest is the frozen decision; a start that cannot be recorded is not a start (RunStartError). H8.1 added a SECOND producer: the headless CLI, which opens a run through the same controller over the in-process transport rather than a worker pipe. Two producers, one entry.',
   },
   // ── cancel ──────────────────────────────────────────────────────────────
   {
     message: 'run.cancel',
     plane: 'control',
-    producer: 'apps/desktop/src/main/agents/server/router.ts (interrupt path)',
+    producer:
+      'apps/desktop/src/main/agents/server/router.ts (interrupt path) and ' +
+      'packages/agent/src/process/headless-run-host.ts:HeadlessRun.cancel (H8.1)',
     handler: 'packages/agent-runtime/src/controller.ts:RunController.cancel',
     consumer: 'packages/agent-runtime/src/transport/execution-channel.ts:ExecutionHandle.stop',
     schema: 'packages/agent-protocol/src/run.ts:StopDisposition',
     since: '1.0 (schema rev 1), no capability',
     authority: 'protocol',
-    note: 'R2.3. Reports requested/applied/terminal. A stop nobody answered is `escalated`, never success.',
+    note: 'R2.3. Reports requested/applied/terminal. A stop nobody answered is `escalated`, never success. H8.1 added a second producer: the headless CLI cancels through the same controller, and the in-process channel maps the stop onto the agent interrupt.',
   },
   {
     message: 'run.completed',
@@ -227,7 +231,7 @@ export const CONTROL_PLANE_CENSUS: readonly CensusRow[] = [
     schema: 'packages/agent-protocol/src/capabilities.ts:RuntimeCapabilities',
     since: '1.0 (schema rev 1), no capability',
     authority: 'protocol',
-    note: 'Cancellation, permission, event replay, execution resume and determinism are enumerated as separate booleans so an absent one is a declared absence.',
+    note: 'Cancellation, permission, event replay, execution resume and determinism are enumerated as separate booleans so an absent one is a declared absence. H8.1 added a second HOST that probes through the same builder (the headless CLI), which reports NO_RESUME and `deterministic: false` — the same refusals — plus `permissionExpiryClock: \'absent\'` because a headless host has no permission coordinator.',
   },
   {
     message: 'run.paused',
@@ -250,18 +254,29 @@ export const CONTROL_PLANE_CENSUS: readonly CensusRow[] = [
     schema: 'packages/agent-protocol/src/resume.ts',
     since: '1.0 (schema rev 1), requires replay',
     authority: 'protocol',
-    note: 'UNSUPPORTED and it says so: resume() throws with the reason. A resume that accepted a manifest without comparing fingerprints would be the "silently different run" the protocol exists to prevent.',
+    note: 'UNSUPPORTED and it says so: resume() throws with the reason. Plan 587 D7.1 built the checkpoint SCHEMA, the side-effect ledger and the fence, and proved a real kill leaves a recoverable record — but nothing READS that record to continue an execution, so the probe still refuses every resume boundary. A resume that accepted a manifest without comparing fingerprints would be the "silently different run" the protocol exists to prevent.',
   },
   {
     message: 'checkpoint.saved',
     plane: 'event',
     producer: 'NOT YET WIRED',
     handler: 'packages/agent-protocol/src/run-ledger.ts:RunLedger.emit',
-    consumer: 'NOT YET WIRED',
+    consumer: 'packages/agent-runtime/src/checkpoint/checkpoint-store.ts:InMemoryCheckpointStore',
     schema: 'packages/agent-protocol/src/events/required.ts:REQUIRED_FIELDS',
     since: '1.0 (schema rev 1), requires checkpoint_resume',
     authority: 'protocol',
-    note: 'CRITICAL. The ledger rejects a checkpoint pointing at a seq this run never emitted, so a resume cannot restore an unverified state.',
+    note: 'CRITICAL. The ledger rejects a checkpoint pointing at a seq this run never emitted, and D7.1 adds the store-side half of the same rule (a commit naming an uncommitted seq is refused). NO PRODUCER yet: the payload, its digest and the fence exist, but no run emits this event yet, because nothing produces checkpoints on the live path. Listed because a critical event with a consumer and no producer is a gap, and gaps are what this census is for.',
+  },
+  {
+    message: 'checkpoint.recovered',
+    plane: 'control',
+    producer: 'packages/agent-runtime/src/checkpoint/checkpoint-store.ts:recoverRun',
+    handler: 'packages/agent-runtime/src/checkpoint/checkpoint-store.ts:recoverRun',
+    consumer: 'NOT YET WIRED (no host calls recoverRun yet — execution resume is D7.3)',
+    schema: 'packages/agent-runtime/src/checkpoint/checkpoint-store.ts:RecoveryOutcome',
+    since: 'unsupported as a control-plane message',
+    authority: 'adapter',
+    note: 'D7.1. ADAPTER, not a protocol event: recovery forms a new attempt/epoch with a monotonic fence and returns a typed refusal when the digest or manifest fingerprint disagrees. It is proven by fault injection against a real killed process (apps/desktop/src/main/__tests__/d71-kill-recovery.test.ts) but has NO production caller, so it is declared here rather than presented as a shipped capability.',
   },
   // ── workflow ────────────────────────────────────────────────────────────
   {
