@@ -39,6 +39,13 @@
  * What is deliberately NOT exercised: `agent-process-entry.ts` still binds
  * `openModelStream: () => emptyModelStream()`, so no production composition
  * reaches this path yet. That is the cutover, which this slice does not perform.
+ *
+ * "Does not reach this path yet" is NOT the same as "one line away". The leg's
+ * `open()` IS the call `DuyaAgent.streamChat` already makes, so binding this port
+ * while that generator drives the turn produces two provider requests for one
+ * turn rather than one — measured, with the composition and the count, in
+ * `turn-leg-cutover-ordering.test.ts`. Read that before treating this file's
+ * green as "the remaining work is wiring".
  */
 
 import { describe, expect, it } from 'vitest';

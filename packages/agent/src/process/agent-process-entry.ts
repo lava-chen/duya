@@ -3237,6 +3237,34 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // the engine's per-turn legs are reached through the bridge further down.
     // Lifting the pipeline out is the named blocker for the next slice; it is a
     // refactor of `DuyaAgent.streamChat`, not a wiring change.
+    //
+    // MEASURED (2026-10-05, `__tests__/turn-leg-cutover-ordering.test.ts`): the
+    // model leg cannot be bound FIRST either, so "wire it, then remove it" is
+    // not available as an order. Two facts, both observed rather than reasoned:
+    //
+    //  1. `buildTurnModelLeg`'s `open()` IS `runTurnStream(params.deps)`
+    //     (`model-leg.ts:216`), and that is the same call `DuyaAgent.streamChat`
+    //     makes at its own `:2431`. Binding `openModelStream` to a published leg
+    //     therefore does not lend the engine one turn of the running loop — it
+    //     gives the engine the WHOLE cycle (`run-engine.ts:307` is a
+    //     self-contained `for`: assemble, `#streamModel` at `:382`, drain at
+    //     `:392`, decide, repeat) while the generator keeps running that same
+    //     cycle. The test drives both callers over one leg and counts TWO
+    //     provider requests for one turn. Two attempts also share one set of
+    //     per-turn accumulators, so a transport death under either one calls
+    //     `onRetryReset` -> `executor.discard()` underneath the other.
+    //  2. `#streamModel` is called unconditionally at the top of the cycle, so
+    //     there is no "wait for the legacy driver to hand me a turn" position to
+    //     wait at. If the engine wins the race, `ModelLegPublisher.requireLeg`
+    //     refuses and the run ends `failed`; if the generator wins, fact 1
+    //     applies. Which one happens is decided by microtask scheduling, so
+    //     publishing a leg earlier is a RACE, not a fix.
+    //
+    // Consequence for the next slice: the model port, the tool drain and the
+    // `chat:*` projection all become correct in the SAME change that stops the
+    // generator from driving the turn — and the generator is what owns the
+    // durable transcript write, the tool-result frames and the
+    // `PostToolUseFailure` hook. They land together or the turn loses them.
     const engineRun = runWithEngine({
       manifest: msg.manifest ?? workerFallbackManifest(msg),
       prompt: { role: 'user', id: msg.id, content: toEngineContent(messageContent) },
