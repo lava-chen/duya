@@ -77,27 +77,37 @@ function bucket(): Map<Category, string[]> {
  * and copy the reported values. Every number here was measured on the tree this
  * file landed on; a change to any of them is a change to the MAP, and the diff
  * in the commit message is the record of why.
+ *
+ * DO NOT re-record on a red run without reading WHY it is red first. The test
+ * reports the values it measured, and pasting them in turns the gate green in
+ * one step whatever produced them — including a map whose own reasoning is
+ * wrong, in which case the wrong answer is what gets recorded and the
+ * misclassification becomes the verified baseline. Read the failing assertion,
+ * decide whether the tree drifted or the MAP is wrong, fix the map if it is, and
+ * then record. And itemise: a number that moved is a set of files, and the
+ * commit that says so is the only reason a reviewer can tell an honest addition
+ * from a silent reclassification.
  */
 const EXPECTED = {
   counts: {
-    wire: 55,
-    pure: 5,
-    'runtime-coordination': 276,
-    'capability-adapter': 1169,
-    'cp-durable': 158,
+    wire: 47,
+    pure: 6,
+    'runtime-coordination': 286,
+    'capability-adapter': 1173,
+    'cp-durable': 166,
     'host-ui': 1204,
   } as Record<Category, number>,
   fingerprints: {
-    wire: 'bb11ee6ec2033b94',
-    pure: '49526bee62466d06',
-    'runtime-coordination': 'f0d61fbaf3bd0cd5',
-    'capability-adapter': '9b88a1dd7bd88227',
-    'cp-durable': '8c04c08a84a8bfd8',
-    'host-ui': 'f00892c81029ae55',
+    wire: 'b455186a9ef9f6f6',
+    pure: '08339d25e58ae23c',
+    'runtime-coordination': '31181831e6e2bacd',
+    'capability-adapter': '1e37536496c92b54',
+    'cp-durable': '42e519be19fed167',
+    'host-ui': '5f4fdca6f9f9092c',
   } as Record<Category, string>,
-  // 3232 source files walked, 2867 classified, 365 under a stated exclusion.
-  total: 2867,
-  unclassified: 365,
+  // 3253 source files walked, 2882 classified, 371 under a stated exclusion.
+  total: 2882,
+  unclassified: 371,
 } as {
   counts: Record<Category, number>;
   fingerprints: Record<Category, string>;
