@@ -786,8 +786,18 @@ async function waitForNoModalOverlay(page: Page, budgetMs = 30_000): Promise<voi
  * 30s timeout that says nothing about where the button was.
  */
 async function clickThemeToggle(page: Page): Promise<void> {
-  await waitForNoModalOverlay(page);
-  const index = await page.evaluate(() => {
+  // Retried because the modal is a RACE, not a fixed obstacle: it can mount
+  // after the readiness check and before the click lands, and Playwright's
+  // click then reports "intercepts pointer events" against the button. Each
+  // attempt re-waits for the overlay, so the loop only ever clicks the real
+  // control with nothing on top of it. The theme assertions are untouched by
+  // this - a run that cannot get an unobstructed click fails either way.
+  const deadline = Date.now() + 90_000;
+  let lastError = '';
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await waitForNoModalOverlay(page, 15_000);
+      const index = await page.evaluate(() => {
     const nodes = Array.from(
       document.querySelectorAll('button.theme-toggle, button.rail-btn'),
     ) as HTMLButtonElement[];
@@ -804,7 +814,19 @@ async function clickThemeToggle(page: Page): Promise<void> {
   }
   const toggle = page.locator('button.theme-toggle, button.rail-btn').nth(index);
   await toggle.scrollIntoViewIfNeeded();
-  await toggle.click({ timeout: 30_000 });
+  await toggle.click({ timeout: 15_000 });
+      return;
+    } catch (err) {
+      lastError = (err as Error).message.split('\n')[0];
+      if (Date.now() > deadline) {
+        throw new Error(
+          `could not get an unobstructed click on the theme toggle after ${attempt} attempt(s): ` +
+            `${lastError}; candidates: ${await describeThemeToggles(page)}`,
+        );
+      }
+      await page.waitForTimeout(500);
+    }
+  }
 }
 
 async function waitForSettledTheme(page: Page, namespace: string): Promise<void> {
