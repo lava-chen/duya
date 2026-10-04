@@ -43,10 +43,13 @@ describe('HoverPopover', () => {
 
     const popover = screen.getByRole('tooltip');
     expect(popover).toBeTruthy();
-    // After the auto-flip upgrade the popover is portaled to <body>, not
-    // nested inside the wrapper. This is what lets fixed-positioned
-    // floating-ui coordinates escape `overflow: hidden` ancestors.
-    expect(popover.parentElement).toBe(document.body);
+    // The popover renders INLINE as a direct child of the relative wrapper,
+    // not portaled to <body>. The earlier portal was deliberately reverted:
+    // portaling detached the popover from the wrapper's hover region, so the
+    // cursor lost hover crossing the 10px placement gap and the popover
+    // closed before it could be reached. Inline keeps the gap traversable and
+    // the absolute positioning anchored to the trigger.
+    expect(popover.parentElement).toBe(wrapper);
     expect(popover.textContent).toContain('popover body');
   });
 
