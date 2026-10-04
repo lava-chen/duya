@@ -248,19 +248,32 @@ describe("WorkflowRunCard", () => {
     // stopPropagation keeps them open for the assertion below).
     fireEvent.click(container.querySelector("[data-workflow-card]")!);
     fireEvent.click(screen.getByRole("button", { name: "项目解读员" }));
-    // The agent chip enters the child session's chat view in the main column.
-    expect(setActiveThread).toHaveBeenCalledWith("child-1");
-    // Neither the run detail nor a node detail opens — the chat view replaced them.
-    expect(runEvents).toHaveLength(0);
+    // Every node chip now enters the SAME run-detail route with the selected
+    // node in the detail; agent nodes render the child session as an embedded
+    // READ-ONLY chat inside that view (see openChip: "Every node chip enters
+    // the same run-detail route. The selected node is shown below the graph,
+    // where agent nodes use the embedded read-only chat."). The card no longer
+    // calls setActiveThread to swap the main column into the child's view.
+    expect(setActiveThread).not.toHaveBeenCalled();
+    expect(runEvents).toHaveLength(1);
+    expect(runEvents[0]!.detail.runId).toBe("run-steps-1");
+    expect(runEvents[0]!.detail.nodeId).toBe("a1");
     expect(nodeEvents).toHaveLength(0);
     window.removeEventListener("duya:open-workflow-run-panel", runListener);
     window.removeEventListener("duya:open-workflow-node-panel", nodeListener);
   });
 
-  it("a per-kind chip (decision) opens the node's dedicated detail view", () => {
+  it("a per-kind chip (decision) opens the run detail scoped to that node", () => {
+    // `duya:open-workflow-node-panel` is gone: the per-kind chips no longer
+    // have their own detail route. Every node chip dispatches
+    // `duya:open-workflow-run-panel` with the node id, and the run-detail view
+    // resolves the node (see openChip in WorkflowRunCard).
+    const runEvents: Array<CustomEvent<{ runId?: string; nodeId?: string }>> = [];
     const nodeEvents: Array<CustomEvent<{ runId?: string; nodeId?: string }>> = [];
-    const listener = (e: Event) => nodeEvents.push(e as CustomEvent<{ runId?: string; nodeId?: string }>);
-    window.addEventListener("duya:open-workflow-node-panel", listener);
+    const runListener = (e: Event) => runEvents.push(e as CustomEvent<{ runId?: string; nodeId?: string }>);
+    const nodeListener = (e: Event) => nodeEvents.push(e as CustomEvent<{ runId?: string; nodeId?: string }>);
+    window.addEventListener("duya:open-workflow-run-panel", runListener);
+    window.addEventListener("duya:open-workflow-node-panel", nodeListener);
     const withDecision: WorkflowRunSse = {
       ...steppedRun,
       steps: [
@@ -271,10 +284,12 @@ describe("WorkflowRunCard", () => {
     const { container } = render(<WorkflowRunCard run={withDecision} />);
     fireEvent.click(container.querySelector("[data-workflow-card]")!);
     fireEvent.click(screen.getByRole("button", { name: "workflow.nodeKind.decision" }));
-    expect(nodeEvents).toHaveLength(1);
-    expect(nodeEvents[0]!.detail.runId).toBe("run-steps-1");
-    expect(nodeEvents[0]!.detail.nodeId).toBe("d1");
-    window.removeEventListener("duya:open-workflow-node-panel", listener);
+    expect(runEvents).toHaveLength(1);
+    expect(runEvents[0]!.detail.runId).toBe("run-steps-1");
+    expect(runEvents[0]!.detail.nodeId).toBe("d1");
+    expect(nodeEvents).toHaveLength(0);
+    window.removeEventListener("duya:open-workflow-run-panel", runListener);
+    window.removeEventListener("duya:open-workflow-node-panel", nodeListener);
   });
 
   it("clicking an artifact chip resolves its ref and opens the file preview", async () => {
