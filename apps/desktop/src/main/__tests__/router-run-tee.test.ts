@@ -82,6 +82,45 @@ describe('the router tee: the SSE frame is the pre-586 frame', () => {
     expect(written).toStrictEqual({ type: 'text', data: { content: 'hello' } });
   });
 
+  it('tees the finalized-message frame to the run layer, and to nobody else', () => {
+    // The Desktop half of `assistant.message_finalized`. The worker subprocess
+    // now writes a `chat:message_finalized` frame on the done boundary, and the
+    // run layer is the only thing that turns it into the protocol event — so if
+    // the router did not hand this frame to `observe`, the Desktop host would be
+    // the one host that could not produce the event.
+    //
+    // It relies on the tee forwarding a frame it does not reshape, which is the
+    // DEFAULT arm rather than a listed case. That is deliberate and it is
+    // asserted here rather than assumed: an unlisted frame the tee swallowed
+    // would look exactly like a translator with no arm, and the two failures
+    // live in different files.
+    const observe = vi.fn(noopObserve);
+    const raw = {
+      type: 'chat:message_finalized',
+      sessionId: 's1',
+      messageId: 'msg-final-1',
+      content: [{ type: 'text', text: 'hello' }],
+      stopReason: 'completed',
+    };
+
+    // Nothing for the renderer: the message is already in the transcript rows
+    // it reads, and the frame would repeat the whole assistant text on a stream
+    // that already streamed it. `E4.1`'s baseline capture is what proves this
+    // stayed true — it fails the moment a frame reaches SSE that the pre-R2
+    // tree did not send.
+    const written = normalizeAndObserve('s1', raw, depsWith(observe) as unknown as RouterDeps);
+
+    expect(written).toBeNull();
+    expect(serialize(written)).toBe('');
+    // Observed anyway, with the payload intact — this is the half that matters.
+    // A tee that suppressed the frame BEFORE observing it would produce the same
+    // empty SSE stream and a run with no finalized message at all.
+    expect(observe).toHaveBeenCalledTimes(1);
+    const [, observed] = observe.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(observed).toStrictEqual(raw);
+    expect((observed['content'] as { text: string }[])[0]?.text).toBe('hello');
+  });
+
   it('is inert when no orchestrator is wired', () => {
     // `RouterDeps.runOrchestrator?` is optional on purpose: any embedder that
     // never installs the run layer must behave exactly as it did before.

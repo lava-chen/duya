@@ -139,6 +139,118 @@ describe('translateFrame — the producer vocabulary', () => {
     expect(event).toEqual({ type: 'run.completed', status: 'completed' });
   });
 
+  it('maps the finalized frame onto the run-scoped message id, not the producer own', () => {
+    // The consumer keys its block map and its finalized map by `messageId` and
+    // treats the finalized entry as superseding the blocks "for that message".
+    // A frame that carried the worker's own uuid would put one message in the
+    // transcript under two identities and the supersession would never join.
+    const { event } = roundTrip({
+      type: 'chat:message_finalized',
+      sessionId: 's-1',
+      messageId: 'worker-own-uuid',
+      content: [{ type: 'text', text: 'hello', phase: 'final_answer' }],
+      stopReason: 'completed',
+    });
+    expect(event).toMatchObject({
+      type: 'assistant.message_finalized',
+      messageId: 'msg-1',
+      stopReason: 'completed',
+    });
+    // And it carries the same id the per-block events in this run use, which is
+    // the whole point of reading it off the context.
+    const block = roundTrip({ type: 'text', data: { content: 'hello' } });
+    expect((block.event as { messageId: string }).messageId).toBe(
+      (event as { messageId: string }).messageId,
+    );
+  });
+
+  it('refuses a finalized frame whose stop reason the event union cannot state', () => {
+    // `max_turns`, `tool_use` and `repeated_tool_calls` are the runtime's own
+    // loop outcomes and the six-value `StopReason` has no word for any of them.
+    // `stopReason` is REQUIRED, so the only alternatives were omitting it or
+    // writing a word that means something else.
+    for (const stopReason of ['max_turns', 'tool_use', 'repeated_tool_calls', '', undefined]) {
+      const result = translateFrame(
+        {
+          type: 'chat:message_finalized',
+          content: [{ type: 'text', text: 'hi' }],
+          ...(stopReason === undefined ? {} : { stopReason }),
+        },
+        ctx,
+      );
+      expect(result, `stopReason ${JSON.stringify(stopReason)} must be refused`).toMatchObject({
+        ok: false,
+        reason: 'unmapped',
+      });
+    }
+    // The one the payload's own comment names as the normalisation: providers
+    // report `max_tokens`, the event union spells it `length`.
+    expect(
+      translateFrame(
+        { type: 'chat:message_finalized', content: [{ type: 'text', text: 'hi' }], stopReason: 'max_tokens' },
+        ctx,
+      ),
+    ).toMatchObject({ ok: true, event: { stopReason: 'length' } });
+  });
+
+  it('preserves a block the event union cannot type instead of dropping it', () => {
+    // The transcript vocabulary has six content kinds and the event payload
+    // four. `image` and `provider_block` have no counterpart, and the
+    // classification record states that narrowing the union "would silently
+    // lose" them — so they are kept verbatim where a consumer can see them.
+    const { event } = roundTrip({
+      type: 'chat:message_finalized',
+      stopReason: 'completed',
+      content: [
+        { type: 'text', text: 'hello' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAA' } },
+        { type: 'provider_block', origin: 'anthropic', kind: 'web_search_tool_result', payload: { n: 1 } },
+      ],
+    });
+    const payload = event as unknown as { content: { type: string }[]; providerMeta?: Record<string, unknown> };
+    expect(payload.content.map((b) => b.type)).toEqual(['text']);
+    const kept = payload.providerMeta?.['untranslatedBlocks'] as { type: string }[];
+    expect(kept.map((b) => b.type)).toEqual(['image', 'provider_block']);
+  });
+
+  it('reads a finalized tool result status off is_error, the field this vocabulary spells it with', () => {
+    // The legacy `chat:tool_result` frame says `error`; the transcript block
+    // says `is_error`. Passing the block through unchanged would have produced
+    // `indeterminate` for a tool that plainly succeeded — a false unknown on a
+    // durable record.
+    const { event } = roundTrip({
+      type: 'chat:message_finalized',
+      stopReason: 'completed',
+      content: [
+        { type: 'tool_result', tool_use_id: 'call-1', content: 'contents', is_error: false },
+        { type: 'tool_result', tool_use_id: 'call-2', content: 'boom', is_error: true },
+        { type: 'tool_result', tool_use_id: 'call-3', content: 'unknown' },
+      ],
+    });
+    const content = (event as unknown as { content: { outcome: { outcome: string } }[] }).content;
+    expect(content.map((b) => b.outcome.outcome)).toEqual(['success', 'tool_error', 'indeterminate']);
+  });
+
+  it('keeps a tool result whose content is blocks rather than narrowing it to a string', () => {
+    // `ToolResultContent.content` is `string | MessageContent[]`, and the
+    // classification record names narrowing it as the specific loss the
+    // inventory exists to prevent. So the whole block is preserved instead.
+    const { event } = roundTrip({
+      type: 'chat:message_finalized',
+      stopReason: 'completed',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'call-1',
+          content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAA' } }],
+        },
+      ],
+    });
+    const payload = event as unknown as { content: unknown[]; providerMeta?: Record<string, unknown> };
+    expect(payload.content).toEqual([]);
+    expect(payload.providerMeta?.['untranslatedBlocks']).toHaveLength(1);
+  });
+
   it('splits agent_progress three ways on the worker own discriminator', () => {
     const started = roundTrip({ type: 'agent_progress', data: { agentEventType: 'subagent_started', subagentId: 's9', agentName: 'a' } });
     expect(started.event.type).toBe('subagent.started');

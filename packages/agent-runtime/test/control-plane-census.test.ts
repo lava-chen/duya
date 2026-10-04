@@ -152,16 +152,18 @@ describe('a declared-but-unemitted event is a named gap, not silence', () => {
    * A registry entry that no path produces is a contract the runtime does not
    * keep. It is survivable ONLY while it is written down: a reader can then see
    * a gap and price it, whereas an undeclared one reads as an oversight and
-   * gets re-discovered by a failing test a quarter later. So the two properties
+   * gets re-discovered by a failing test a quarter later. So the properties
    * asserted here are:
    *
    *   1. every durable assistant event has a row (via CENSUS_SCOPE above), and
-   *   2. one with no producer is REACHABLE through `censusGaps()`.
+   *   2. the set of durable assistant events with no producer is EXACT, so a
+   *      new one is a test failure somebody has to read rather than a silently
+   *      growing number nobody looks at.
    *
-   * (2) is what stops the row from being "fixed" by deletion. Removing the
-   * `assistant.message_finalized` row would leave the scope assertion above
-   * red, but deleting the row AND the scope entry would otherwise look like a
-   * tidy-up; this test fails in that case too, and says which event vanished.
+   * (2) is what stops a row from being "fixed" by deletion. Removing the
+   * `assistant.message_finalized` row leaves the scope assertion above red, but
+   * deleting the row AND the scope entry would otherwise look like a tidy-up;
+   * this test fails in that case too, and says which event vanished.
    */
   it('every durable assistant event has a census row', () => {
     expect(DURABLE_ASSISTANT_EVENTS.length).toBeGreaterThan(0);
@@ -171,22 +173,42 @@ describe('a declared-but-unemitted event is a named gap, not silence', () => {
     }
   });
 
-  it('the unproduced durable assistant event is a discoverable gap, not an absence', () => {
+  it('no durable assistant event is left unproduced', () => {
     const unproduced = DURABLE_ASSISTANT_EVENTS.filter(
       (type) => !isComplete(CONTROL_PLANE_CENSUS.find((r) => r.message === type) as CensusRow),
     );
-    // Today exactly one: the finalized message. Written as an exact set so that
-    // ADDING a second unproduced event is a test failure that has to be read,
-    // rather than a silently growing number nobody looks at.
-    expect(unproduced).toEqual(['assistant.message_finalized']);
+    // `assistant.message_finalized` WAS this set, as a single-element list, and
+    // a test that had merely deleted the assertion would have let the row go
+    // back to `NOT YET WIRED` unnoticed. The list is now empty, which is the
+    // same shape of assertion pointed the other way: adding a second
+    // unproduced event is a failure that has to be read.
+    expect(unproduced).toEqual([]);
 
+    // And the row that used to be the gap is no longer reachable as one —
+    // `censusGaps()` is the only thing that decides "this is a gap", so a
+    // producer field that still said NOT YET would put it back on that list.
     const gap = censusGaps().find((row) => row.message === 'assistant.message_finalized');
-    expect(gap, 'assistant.message_finalized must be reachable through censusGaps()').toBeDefined();
-    // A gap row that says only "NOT YET" is an oversight wearing a gap's
-    // clothes. This one has to name the seam that is missing, or the next
-    // reader cannot act on it.
-    expect(gap?.producer).toMatch(/NOT YET WIRED/);
-    expect(gap?.note).toMatch(/chat:done/);
+    expect(gap, 'assistant.message_finalized is produced and must not be a gap any more').toBeUndefined();
+  });
+
+  it('the finalized message names BOTH frame producers, not just the shared translator', () => {
+    const row = CONTROL_PLANE_CENSUS.find((r) => r.message === 'assistant.message_finalized');
+    // The trap this guards is the flattering half-truth: the TRANSLATION is one
+    // seam, but the frame is written in two places (the worker subprocess and
+    // the in-process host behind the headless CLI), and a row naming only the
+    // translator would read as though one edit covered every host.
+    expect(row?.producer).toContain('agent-process-entry.ts');
+    expect(row?.producer).toContain('headless-run-host.ts');
+    expect(row?.producer).not.toMatch(/NOT YET/);
+  });
+
+  it('the finalized row states the two narrowings it performs rather than hiding them', () => {
+    const row = CONTROL_PLANE_CENSUS.find((r) => r.message === 'assistant.message_finalized');
+    // A durable event that quietly drops a block kind, or quietly coerces a
+    // stop reason, is the failure this whole row exists to prevent. Both
+    // narrowings are real, so both are named here.
+    expect(row?.note).toMatch(/untranslatedBlocks/);
+    expect(row?.note).toMatch(/REFUSED/);
   });
 });
 

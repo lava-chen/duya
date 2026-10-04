@@ -91,6 +91,7 @@ import type {
 } from '@duya/agent-protocol';
 import { manifestFingerprint } from '@duya/agent-protocol';
 import { convertSSEToAgentMessage } from './sse-frame-codec.js';
+import { buildMessageFinalizedEvent } from './worker-protocol.js';
 
 /** The runtime this host reports in `run.started` and in its probe. */
 const RUNTIME_IDENTITY = { name: 'duya-headless-run-host', version: '0.1.0' } as const;
@@ -100,6 +101,23 @@ const PROTOCOL = { major: 1, minor: 0 } as const;
 
 /** The schema revision the probe reports. Bumped only with the protocol. */
 const SCHEMA_REVISION = 1;
+
+/**
+ * The assistant message an agent's `streamChat` RETURNS when the turn ends.
+ *
+ * Structurally the two fields the finalized frame reads, and nothing more: the
+ * agent is reached through the `HeadlessAgent` port, so this host depends on
+ * "something that ends by handing back its final message", not on the class
+ * that produces it.
+ */
+export type HeadlessFinalMessage = Readonly<{ id?: string; content?: unknown }>;
+
+/** The generator's return value, when it is an object rather than `undefined`. */
+function isFinalMessage(value: unknown): HeadlessFinalMessage | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as HeadlessFinalMessage)
+    : null;
+}
 
 /**
  * The slice of `duyaAgent` this host drives.
@@ -112,10 +130,24 @@ const SCHEMA_REVISION = 1;
  * what makes the same adapter reusable by a host that has a real model.
  */
 export interface HeadlessAgent {
+  /**
+   * The generator's RETURN value is the authoritative assistant message, and
+   * the host reads it to emit `chat:message_finalized`.
+   *
+   * `| void` is what keeps this an honest port rather than a new requirement:
+   * the real `duyaAgent.streamChat` resolves to the `AssistantMessage` it
+   * built, while a double — or a host whose agent produces none — may
+   * legitimately return nothing, and then the frame is simply absent, which is
+   * the correct wire for "there was no message to finalise".
+   */
   streamChat(
     prompt: string,
     options?: Readonly<Record<string, unknown>>,
-  ): AsyncGenerator<{ readonly type: string; readonly data?: unknown }, void, unknown>;
+  ): AsyncGenerator<
+    { readonly type: string; readonly data?: unknown },
+    HeadlessFinalMessage | void,
+    unknown
+  >;
   /** Stop the in-flight turn. The host maps this onto the run layer's cancel. */
   interrupt(): void;
 }
@@ -248,12 +280,54 @@ export function createAgentExecutionChannel(agent: HeadlessAgent): ExecutionChan
       // here would make a cancel impossible to issue for the duration of it.
       void (async (): Promise<void> => {
         try {
-          for await (const event of agent.streamChat(input.prompt, options)) {
+          // Driven with an explicit iterator rather than `for await`, for one
+          // reason: the agent's `streamChat` RETURNS the authoritative assistant
+          // message, and `for await...of` discards a generator's return value.
+          // That value is the only place the finalized message exists on this
+          // path — the in-process host has no `chat:done` producer upstream of
+          // it, and the worker's message log is a different process.
+          const iterator = agent.streamChat(input.prompt, options);
+          let stopReason: string | undefined;
+          // `chat:done` is HELD, not forwarded inline, for the same reason the
+          // worker subprocess holds it: the authoritative assistant message is
+          // only known when the generator finishes, which is AFTER the `done`
+          // event has already been seen. Forwarding `done` first would put
+          // `run.completed` into the ledger ahead of the message it finalises,
+          // and the run would already have terminated by the time the finalized
+          // frame arrived — the run layer would drop it as a late frame and the
+          // message would never reach the ledger at all.
+          let heldDone: Record<string, unknown> | null = null;
+          for (;;) {
+            const next = await iterator.next();
+            if (next.done === true) {
+              // The producer's own stop reason, read off the frame the codec
+              // built rather than off the raw event, so the reason that travels
+              // with the finalized message is the one the terminal frame
+              // carries.
+              const finalMessage = isFinalMessage(next.value);
+              const finalized = buildMessageFinalizedEvent(
+                input.sessionId,
+                finalMessage,
+                stopReason,
+              );
+              if (finalized !== null) {
+                sink.frame(finalized as unknown as Record<string, unknown>);
+              }
+              if (heldDone !== null) sink.frame(heldDone);
+              break;
+            }
             // The WORKER's codec, not a second one. See `sse-frame-codec.ts`:
             // two frame producers is the case the transport equivalence test
             // cannot catch, because it compares transports and not producers.
-            const frame = convertSSEToAgentMessage(event);
-            if (frame !== null) sink.frame(frame);
+            const frame = convertSSEToAgentMessage(next.value);
+            if (frame === null) continue;
+            if (frame['type'] === 'chat:done') {
+              const reason = frame['reason'];
+              if (typeof reason === 'string' && reason !== '') stopReason = reason;
+              heldDone = frame;
+              continue;
+            }
+            sink.frame(frame);
           }
         } catch (error) {
           // A turn that threw is a FAILED run, not a silent one. The runtime

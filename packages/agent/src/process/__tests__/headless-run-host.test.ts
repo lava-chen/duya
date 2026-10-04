@@ -17,7 +17,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { enumerateProbe, translateFrame } from '@duya/agent-runtime';
-import { manifestFingerprint, type RunId } from '@duya/agent-protocol';
+import { manifestFingerprint, EVENT_META, type EventType, type RunId } from '@duya/agent-protocol';
 import {
   HeadlessRunHost,
   buildHeadlessManifest,
@@ -70,6 +70,36 @@ const TURN = [
   { type: 'text', data: 'done' },
   { type: 'done' },
 ] as const;
+
+/**
+ * The same double, plus the turn's ENDING: `streamChat` returns the
+ * authoritative assistant message, which is where the finalized event's content
+ * comes from on this path.
+ *
+ * A real `duyaAgent.streamChat` resolves to the `AssistantMessage` it built. The
+ * plain `scriptedAgent` above deliberately does not, so the pair covers both
+ * halves of the contract: a message is recorded when one exists, and nothing is
+ * invented when it does not.
+ */
+function finalizingAgent(final: { id?: string; content?: unknown }): HeadlessAgent {
+  // The `done` event carries a `reason` here and does not in `TURN`, and that
+  // difference is the point rather than an accident of the fixture: the
+  // finalized event REQUIRES a stop reason, and the translator refuses a frame
+  // that has none rather than writing a plausible one. A real agent always
+  // yields one (`{ type: 'done', reason: 'completed' }` on a normal finish).
+  const events = [...TURN.slice(0, -1), { type: 'done', reason: 'completed' }];
+  return {
+    async *streamChat(): AsyncGenerator<
+      { readonly type: string; readonly data?: unknown },
+      { readonly id?: string; readonly content?: unknown },
+      unknown
+    > {
+      for (const event of events) yield event;
+      return final;
+    },
+    interrupt(): void {},
+  };
+}
 
 const INTENT = {
   prompt: 'read a.ts and summarise it',
@@ -132,6 +162,67 @@ describe('H8.1 — the headless host runs on the real run layer', () => {
     expect(types).toContain('assistant.text_block');
     expect(types).toContain('tool.call_started');
     expect(types).toContain('tool.call_completed');
+  });
+
+  it('records the authoritative message in the DURABLE ledger, between the blocks and the terminal', async () => {
+    // The whole path is real here — the real host, the real in-process
+    // transport, the real RunController, the real `translateFrame` and the
+    // real emitter that mints `seq`. The only substituted part is the executor,
+    // which is what this file has always done.
+    //
+    // The property is an ORDER property, and order is the part that is easy to
+    // get wrong: the message stops changing strictly before the run ends, so the
+    // finalized event has to land after the per-block events it supersedes and
+    // before `run.completed`. A host that forwarded `chat:done` inline would
+    // put the terminal in the ledger first, the run would already be settled by
+    // the time the finalized frame arrived, and the run layer would drop it as a
+    // late frame — the message would silently never be recorded at all.
+    const final = {
+      id: 'msg-final-1',
+      content: [
+        { type: 'text', text: 'hello 中文' },
+        { type: 'text', text: ' done' },
+      ],
+    };
+    const run = await host(finalizingAgent(final)).start(INTENT);
+    const events = await collect(run);
+
+    const durable = events.filter(
+      (e) => EVENT_META[e.payload.type as EventType]?.durability === 'durable',
+    );
+    const types = durable.map((e) => e.payload.type);
+
+    expect(types).toContain('assistant.message_finalized');
+    // After the blocks, before the terminal.
+    expect(types.indexOf('assistant.message_finalized')).toBeGreaterThan(
+      types.lastIndexOf('assistant.text_block'),
+    );
+    expect(types.indexOf('assistant.message_finalized')).toBeLessThan(types.indexOf('run.completed'));
+    // The terminal is still last and the run still completes: wiring the message
+    // in must not have displaced the run's own ending.
+    expect(types[types.length - 1]).toBe('run.completed');
+    expect((await run.terminal).status).toBe('completed');
+    // The seq the runtime minted is monotonic and unique across the run.
+    const seqs = events.map((e) => e.seq);
+    expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+    expect(new Set(seqs).size).toBe(seqs.length);
+
+    // And the durable TEXT is the message, not the per-block projection of it —
+    // which is the comparison E4.4 makes between a renderer's stream and the
+    // ledger in one database.
+    const finalized = durable.find((e) => e.payload.type === 'assistant.message_finalized');
+    const content = (finalized?.payload as unknown as { content: { type: string; text?: string }[] })
+      .content;
+    expect(content.filter((b) => b.type === 'text').map((b) => b.text).join('')).toBe('hello 中文 done');
+  });
+
+  it('records nothing when the agent produced no assistant message', async () => {
+    // The absence has to be honest too. A turn that never built a message is a
+    // real state, and the frame for it is no frame — not one carrying an empty
+    // `content`, which would read as "the model answered with nothing".
+    const run = await host(scriptedAgent(TURN)).start(INTENT);
+    const events = await collect(run);
+    expect(events.map((e) => e.payload.type)).not.toContain('assistant.message_finalized');
   });
 
   it('reaches a terminal the RUNTIME decided, from the executor stream ending', async () => {

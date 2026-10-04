@@ -328,6 +328,110 @@ export interface AgentDoneEvent {
   sessionId: string;
 }
 
+/**
+ * The authoritative assistant message, carried on the done boundary.
+ *
+ * ## Why this frame had to be added rather than read
+ *
+ * `assistant.message_finalized` is `durable` in the registry and REQUIRES
+ * `content` and `stopReason` (`events/required.ts:94`), and the protocol ships a
+ * written reason for its own existence (`legacy/sse-event.ts:185-186`): the
+ * legacy surface "never marked the point where the message stopped changing,
+ * which is why compaction had to guess a boundary".
+ *
+ * Until this frame the only terminal frame the worker sent was `chat:done` =
+ * `{ sessionId }`, which carries neither required field. So no host could emit
+ * that event without inventing the two facts it exists to record.
+ *
+ * ## Its own frame, not a field on `chat:done`
+ *
+ * `chat:done` already means `run.completed` (see the `done` arm in
+ * `chat-event-translator.ts`), and `translateFrame` is a pure one-frame to
+ * one-event function. Folding this payload into `chat:done` would pit the
+ * authoritative message and the run terminal against each other for the single
+ * event that frame can produce.
+ *
+ * A separate frame also fixes the ORDER honestly: the message stops changing
+ * strictly before the run ends, so this frame is emitted AHEAD of `chat:done`
+ * and the ledger records them in that order. `transcript-snapshot.ts` reads the
+ * finalized message as superseding the per-block events of the same message, so
+ * it has to land after them and before the terminal.
+ */
+export interface AgentMessageFinalizedEvent {
+  type: 'chat:message_finalized';
+  sessionId: string;
+  /**
+   * The producer's own message id, when it wrote one.
+   *
+   * NOT the id the protocol event carries. The runtime owns the run-scoped
+   * message id its `assistant.text_block` events use (`ctx.messageId`), and the
+   * finalized message has to join those blocks rather than arrive beside them
+   * under a second identity — the consumer keys both maps by `messageId`.
+   */
+  messageId?: string;
+  /**
+   * The message's blocks, verbatim, in the transcript content vocabulary the
+   * agent already produces.
+   *
+   * Deliberately the WIDE vocabulary, not the event payload's four-member
+   * union. Narrowing is a judgement (`is_error` becomes a `ToolCallOutcome`,
+   * a tool result's `content` may be blocks rather than a string) and the
+   * translator is where judgements about wire fields belong. Collapsing it here
+   * would put a lossy projection in the producer, where nothing checks it.
+   */
+  content: readonly WorkerMessageBlock[];
+  /**
+   * The producer's own stop reason, verbatim.
+   *
+   * `string` and not the transcript union because this is untrusted JSON off a
+   * pipe. The translator narrows it to the event vocabulary's closed
+   * `StopReason` and REFUSES a value that union cannot state, rather than
+   * coercing `max_turns` or `repeated_tool_calls` into a word that means
+   * something else.
+   */
+  stopReason?: string;
+  /** Provider observability metadata, when the producer captured any. */
+  providerMeta?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * One block of the finalized message, as it crosses the worker pipe.
+ *
+ * Structurally open on purpose: it is JSON that arrived from a child process,
+ * and the translator narrows each block by its `type` tag. Typing it as
+ * `Record<string, unknown>` here would be a claim about the wire that the
+ * transcript interfaces cannot make (they are interfaces, so they carry no
+ * implicit index signature).
+ */
+export type WorkerMessageBlock = Readonly<Record<string, unknown>>;
+
+/**
+ * Build the worker `chat:message_finalized` frame.
+ *
+ * Returns `null` — and the caller sends nothing — when there is no message to
+ * finalise or the message carries no block array. A turn that produced no
+ * assistant message is a real state (an abort before the first block, an error
+ * path), and the honest wire for it is the absence of this frame, not a frame
+ * with an empty `content` that reads as "the model answered with nothing".
+ */
+export function buildMessageFinalizedEvent(
+  sessionId: string,
+  message: Readonly<{ id?: string; content?: unknown }> | null | undefined,
+  stopReason?: string,
+  providerMeta?: Readonly<Record<string, unknown>>,
+): AgentMessageFinalizedEvent | null {
+  if (message === null || message === undefined) return null;
+  if (!Array.isArray(message.content)) return null;
+  return {
+    type: 'chat:message_finalized',
+    sessionId,
+    ...(typeof message.id === 'string' && message.id !== '' ? { messageId: message.id } : {}),
+    content: message.content as readonly WorkerMessageBlock[],
+    ...(typeof stopReason === 'string' && stopReason !== '' ? { stopReason } : {}),
+    ...(providerMeta !== undefined ? { providerMeta } : {}),
+  };
+}
+
 export interface AgentErrorEvent {
   type: 'chat:error';
   sessionId: string;
@@ -798,6 +902,7 @@ export type WorkerEvent =
   | SubagentToolProgressEvent
   | AgentPermissionEvent
   | AgentDoneEvent
+  | AgentMessageFinalizedEvent
   | AgentErrorEvent
   | AgentStatusEvent
   | AgentModeChangedEvent

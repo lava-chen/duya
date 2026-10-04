@@ -84,7 +84,19 @@ const FRAMES = {
   toolUse: { type: 'chat:tool_use', id: 'call-1', name: 'Read', input: { path: 'a.ts' } },
   toolResult: { type: 'chat:tool_result', id: 'call-1', data: { result: 'file contents' } },
   toolProgress: { type: 'chat:tool_progress', id: 'call-1', data: { elapsedSeconds: 2 } },
-  done: { type: 'chat:done' },
+  // The worker carries the authoritative assistant message on the done
+  // boundary, ahead of `done`. See `worker-protocol.ts:AgentMessageFinalizedEvent`.
+  messageFinalized: {
+    type: 'chat:message_finalized',
+    sessionId: 'session-finalized',
+    messageId: 'msg-final-1',
+    content: [
+      { type: 'text', text: 'Hello from the worker' },
+      { type: 'tool_use', id: 'call-1', name: 'Read', input: { path: 'a.ts' } },
+    ],
+    stopReason: 'completed',
+  },
+  done: { type: 'chat:done', reason: 'completed' },
 } satisfies Record<string, Record<string, unknown>>;
 
 /**
@@ -132,6 +144,7 @@ async function runTurn(sessionId: string): Promise<string | null> {
     FRAMES.toolUse,
     FRAMES.toolProgress,
     FRAMES.toolResult,
+    FRAMES.messageFinalized,
     FRAMES.done,
   ]) {
     normalizeAndObserve(sessionId, frame, deps);
@@ -207,6 +220,44 @@ describe('the Reference Run, closed', () => {
       expect(seqs[i]!).toBeGreaterThan(seqs[i - 1]!); // strictly increasing
     }
     expect(new Set(seqs).size).toBe(seqs.length); // never repeated
+
+    // The authoritative assistant message is in the DURABLE ledger, read back
+    // out of the real `run_events` table — the same read E4.4's assertion makes
+    // against a real Electron renderer. It is here because the frame crossed
+    // the REAL router tee, the real orchestrator, the real translator and the
+    // real emitter, so a break anywhere on that path loses the row.
+    //
+    // Order is the part worth asserting: `transcript-snapshot.ts` reads the
+    // finalized message as superseding the per-block events of the SAME message,
+    // so it has to land after them and before the run's terminal.
+    expect(types).toContain('assistant.message_finalized');
+    expect(types.indexOf('assistant.message_finalized')).toBeGreaterThan(
+      types.lastIndexOf('assistant.text_block'),
+    );
+    expect(types.indexOf('assistant.message_finalized')).toBeLessThan(types.indexOf('run.completed'));
+    // The `messageId` is the runtime's run-scoped one, not the frame's own, so
+    // the finalized message joins the text block it supersedes instead of
+    // sitting beside it under a second identity.
+    const textBlock = events.find((e) => e['event_type'] === 'assistant.text_block')!;
+    const finalizedRow = events.find((e) => e['event_type'] === 'assistant.message_finalized')!;
+    const textBlockId = (
+      JSON.parse(String(textBlock['envelope_json'])) as { payload: { messageId: string } }
+    ).payload.messageId;
+    const finalizedPayload = (
+      JSON.parse(String(finalizedRow['envelope_json'])) as {
+        payload: { messageId: string; stopReason: string; content: { type: string; text?: string }[] };
+      }
+    ).payload;
+    expect(finalizedPayload.messageId).toBe(textBlockId);
+    expect(finalizedPayload.stopReason).toBe('completed');
+    // And the durable TEXT is the message — the property E4.4 compares against
+    // what the renderer streamed.
+    expect(
+      finalizedPayload.content
+        .filter((b) => b.type === 'text')
+        .map((b) => b.text ?? '')
+        .join(''),
+    ).toBe('Hello from the worker');
 
     // Exactly one sequence number went to a non-durable event (`tool.progress`),
     // and every other number in 1..max landed as a row. If this drifts, either
