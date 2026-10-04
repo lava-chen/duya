@@ -30,6 +30,11 @@ import type { RendererLlmProviderDTO } from '@/lib/providers/ipc-types';
 
 vi.mock('@/lib/ipc-client', () => ({
   listProvidersIPC: vi.fn(),
+  // useProvidersQuery resolves the default provider alongside the list and
+  // projects it into `RendererLlmProviderDTO.isDefault`. The mock factory
+  // predated that second call, so the hook's queryFn threw a TypeError and
+  // every card assertion below rendered the empty state instead.
+  getDefaultLlmProviderIPC: vi.fn(),
   setDefaultLlmProviderIPC: vi.fn(),
   deleteLlmProviderIPC: vi.fn(),
   upsertLlmProviderIPC: vi.fn(),
@@ -79,6 +84,11 @@ function makeWrapper() {
 describe('ProviderList', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // No default provider unless a case opts in. The "current provider" is
+    // `getDefaultLlmProviderIPC()`'s id — the legacy `Provider.isActive` flag
+    // is NOT read any more (useProviderCardState treats active and default as
+    // one notion, and the DTO derives `isDefault` from the default id).
+    vi.mocked(ipcClient.getDefaultLlmProviderIPC).mockResolvedValue(null);
   });
 
   it('renders one card per provider', async () => {
@@ -94,34 +104,43 @@ describe('ProviderList', () => {
     expect(await screen.findByTestId('provider-card-p-3')).toBeInTheDocument();
   });
 
-  it('marks the active provider with an "Active" badge', async () => {
+  it('marks the current provider with a disabled "Default" main button instead of a badge', async () => {
     vi.mocked(ipcClient.listProvidersIPC).mockResolvedValue([
-      makeProvider({ id: 'p-1', isActive: false }),
-      makeProvider({ id: 'p-2', isActive: true }),
+      makeProvider({ id: 'p-1' }),
+      makeProvider({ id: 'p-2' }),
     ]);
+    vi.mocked(ipcClient.getDefaultLlmProviderIPC).mockResolvedValue({ id: 'p-2' } as never);
     const { wrapper } = makeWrapper();
     render(<ProviderList appId="duya" onSwitch={() => {}} onEdit={() => {}} onDelete={() => {}} onOpenWebsite={() => {}} />, { wrapper });
-    // The active provider's "Active" badge is rendered with a
-    // testid that includes the id.
-    const badge = await screen.findByTestId('provider-active-p-2');
-    expect(badge).toHaveTextContent('Active');
-    // The non-active provider should not have the badge.
-    expect(screen.queryByTestId('provider-active-p-1')).not.toBeInTheDocument();
+    // The current provider is signalled by its main action: a disabled
+    // "Default" button (a non-current card offers "Enable" instead). The
+    // separate "Active" badge was deliberately removed — ProviderList
+    // documents that the tint + ring + main button carry that state — so
+    // there is no provider-active-* testid to assert any more.
+    const p2 = await screen.findByTestId('provider-card-p-2');
+    const currentBtn = p2.querySelector('button[title="Default"]') as HTMLButtonElement;
+    expect(currentBtn).toBeInTheDocument();
+    expect(currentBtn.disabled).toBe(true);
+    // The non-current provider is not marked.
+    const p1 = await screen.findByTestId('provider-card-p-1');
+    expect(p1.querySelector('button[title="Default"]')).toBeNull();
   });
 
   it('wires onSwitch with the right id when the main button is clicked', async () => {
     vi.mocked(ipcClient.listProvidersIPC).mockResolvedValue([
-      makeProvider({ id: 'p-1', isActive: false }),
-      makeProvider({ id: 'p-2', isActive: true }),
+      makeProvider({ id: 'p-1' }),
+      makeProvider({ id: 'p-2' }),
     ]);
     const { wrapper } = makeWrapper();
     const onSwitch = vi.fn();
     render(<ProviderList appId="duya" onSwitch={onSwitch} onEdit={() => {}} onDelete={() => {}} onOpenWebsite={() => {}} />, { wrapper });
-    // p-1 is non-current → its main button is "Enable" and clickable.
+    // A non-current card's main action is "Set as default" (it used to be
+    // labelled "Enable"; getMainButtonState now offers the default-family
+    // label). p-2 is the current one, so p-1 is the clickable card.
     const p1 = await screen.findByTestId('provider-card-p-1');
-    const enableBtn = p1.querySelector('button[title="Enable"]') as HTMLButtonElement;
-    expect(enableBtn).toBeInTheDocument();
-    fireEvent.click(enableBtn);
+    const mainBtn = p1.querySelector('button[title="Set as default"]') as HTMLButtonElement;
+    expect(mainBtn).toBeInTheDocument();
+    fireEvent.click(mainBtn);
     expect(onSwitch).toHaveBeenCalledWith('p-1');
   });
 
@@ -133,7 +152,10 @@ describe('ProviderList', () => {
     const onEdit = vi.fn();
     render(<ProviderList appId="duya" onSwitch={() => {}} onEdit={onEdit} onDelete={() => {}} onOpenWebsite={() => {}} />, { wrapper });
     const p1 = await screen.findByTestId('provider-card-p-1');
-    const editBtn = p1.querySelector('button[title="Edit"]') as HTMLButtonElement;
+    // The edit action's title is an i18n key (ProviderActions renders
+    // t('provider.tooltip.edit')), not the literal "Edit" the suite used.
+    const editBtn = p1.querySelector('button[title="provider.tooltip.edit"]') as HTMLButtonElement;
+    expect(editBtn).toBeInTheDocument();
     fireEvent.click(editBtn);
     expect(onEdit).toHaveBeenCalledWith(expect.objectContaining({ id: 'p-1' }));
   });
@@ -146,15 +168,17 @@ describe('ProviderList', () => {
     const onDelete = vi.fn();
     render(<ProviderList appId="duya" onSwitch={() => {}} onEdit={() => {}} onDelete={onDelete} onOpenWebsite={() => {}} />, { wrapper });
     const p1 = await screen.findByTestId('provider-card-p-1');
-    const deleteBtn = p1.querySelector('button[title="Delete"]') as HTMLButtonElement;
+    const deleteBtn = p1.querySelector('[data-testid="provider-action-delete"]') as HTMLButtonElement;
+    expect(deleteBtn).toBeInTheDocument();
     fireEvent.click(deleteBtn);
     expect(onDelete).toHaveBeenCalledWith('p-1');
   });
 
-  it('the default card does not render a clickable "Default" main button', async () => {
+  it('the current card does not render a clickable "Default" main button', async () => {
     vi.mocked(ipcClient.listProvidersIPC).mockResolvedValue([
-      makeProvider({ id: 'p-1', isActive: true }),
+      makeProvider({ id: 'p-1' }),
     ]);
+    vi.mocked(ipcClient.getDefaultLlmProviderIPC).mockResolvedValue({ id: 'p-1' } as never);
     const { wrapper } = makeWrapper();
     const onSwitch = vi.fn();
     render(<ProviderList appId="duya" onSwitch={onSwitch} onEdit={() => {}} onDelete={() => {}} onOpenWebsite={() => {}} />, { wrapper });
@@ -172,10 +196,12 @@ describe('ProviderList', () => {
   it('renders the empty state when the query returns an empty array', async () => {
     vi.mocked(ipcClient.listProvidersIPC).mockResolvedValue([]);
     const { wrapper } = makeWrapper();
-    render(<ProviderList appId="duya" onSwitch={() => {}} onEdit={() => {}} onDelete={() => {}} onOpenWebsite={() => {}} />, { wrapper });
-    expect(
-      await screen.findByText(/No connected providers/i),
-    ).toBeInTheDocument();
+    // `onAdd` selects the full empty state (ProviderEmptyState) over the
+    // inline "no providers" line, and gives it stable test ids. The copy is
+    // i18n-driven, so asserting an English sentence is no longer meaningful.
+    render(<ProviderList appId="duya" onSwitch={() => {}} onEdit={() => {}} onDelete={() => {}} onOpenWebsite={() => {}} onAdd={() => {}} />, { wrapper });
+    expect(await screen.findByTestId('provider-empty-state')).toBeInTheDocument();
+    expect(screen.getByTestId('provider-empty-state-add')).toBeInTheDocument();
   });
 
   it('reads from the existing providersQueryKey cache when the parent has already populated it', async () => {
