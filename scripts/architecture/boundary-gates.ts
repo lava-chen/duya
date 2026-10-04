@@ -131,13 +131,35 @@ export interface LayerDef {
 }
 
 /**
- * The layer order. A layer may import any layer at a LOWER index and its own
+ * Layer order. A layer may import any layer at a LOWER index and its own
  * package siblings. Anything else is a reverse edge.
  *
  * `agent` sits at the runtime index because that is where its code executes
  * today; plan 600 S3 moves its execution code into `runtime` proper and S7
  * deletes it. It is listed explicitly rather than omitted, so the gate can
  * report "agent reached upward" instead of silently not looking.
+ *
+ * ## Sub-path granularity, and why `@duya/cli` is the reason
+ *
+ * A layer is assigned to a PACKAGE only when every entry point of that package
+ * belongs to one layer. `@duya/cli` is the case that breaks the rule: its
+ * `contract/` entry point (descriptors, registry, `buildAgentRunner`) is a
+ * legitimate runtime dependency, while the bare entry point (`index.ts`,
+ * `api/client.ts`, `commands/*`) is a host adapter that speaks HTTP to
+ * `127.0.0.1` and reads the filesystem. Classifying the whole package as `host`
+ * made the gate report four findings for `DuyaCliTool` importing
+ * `@duya/cli/contract` — a false positive, and a gate that cries wolf on a
+ * correct edge trains people to ignore it.
+ *
+ * So `SUBPATH_LAYERS` overrides the package default per export path. Only paths
+ * listed there get a different layer from their package; everything else falls
+ * back to the package's layer.
+ *
+ * The precedent for splitting a package into a contract face and an app face is
+ * written into `packages/cli/src/contract/index.ts:24-27`: the contract module
+ * "MUST NOT import any agent runtime". That rule is load-bearing — it is what
+ * makes the dependency from `@duya/agent` legitimate rather than merely
+ * tolerated.
  */
 export const LAYERS: readonly LayerDef[] = [
   { name: 'protocol', packages: ['@duya/agent-protocol'] },
@@ -148,6 +170,16 @@ export const LAYERS: readonly LayerDef[] = [
   },
   { name: 'host', packages: ['@duya/desktop', '@duya/cli', '@duya/gateway'] },
 ];
+
+/**
+ * Export-path overrides. Key is the full specifier prefix; the longest matching
+ * prefix wins, so `@duya/cli/contract` beats the package default `@duya/cli`.
+ */
+export const SUBPATH_LAYERS: ReadonlyMap<string, string> = new Map([
+  // The command-descriptor contract the agent's DuyaCliTool dispatches
+  // through. Pure data + an in-process dispatcher; no IO, no agent runtime.
+  ['@duya/cli/contract', 'runtime'],
+]);
 
 /** Capability packages that must not be reachable FROM tooling (600 G7). */
 export const CAPABILITY_PACKAGES: readonly string[] = [
@@ -167,6 +199,29 @@ export interface ReverseEdge {
 function layerOf(pkg: string): string | undefined {
   for (const layer of LAYERS) if (layer.packages.includes(pkg)) return layer.name;
   return undefined;
+}
+
+/**
+ * The layer a given IMPORT SPECIFIER belongs to.
+ *
+ * A sub-path override wins over the package default, matched longest-prefix so
+ * that a deeper path cannot be shadowed by a shallower one. Returns the
+ * package's layer when no override matches.
+ */
+export function layerOfSpecifier(spec: string): string | undefined {
+  let best: { prefix: string; layer: string } | undefined;
+  for (const [prefix, layer] of SUBPATH_LAYERS) {
+    if (spec === prefix || spec.startsWith(`${prefix}/`)) {
+      if (!best || prefix.length > best.prefix.length) best = { prefix, layer };
+    }
+  }
+  if (best) return best.layer;
+  // Fall back to the owning package. Longest package prefix wins, so
+  // `@duya/plugin-core/mcp/x` resolves to plugin-core rather than nothing.
+  const owner = [...LAYERS.flatMap((l) => l.packages)]
+    .filter((name) => spec === name || spec.startsWith(`${name}/`))
+    .sort((a, b) => b.length - a.length)[0];
+  return owner ? layerOf(owner) : undefined;
 }
 
 /** Workspace package name -> source dir, for packages that exist on disk. */
@@ -197,12 +252,11 @@ export function findReverseEdges(roots: Map<string, string> = packageRoots()): R
     for (const file of walk(srcDir)) {
       for (const spec of importSpecifiers(file)) {
         if (!spec.startsWith('@duya/')) continue;
-        // Longest-prefix match: `@duya/plugin-core/mcp/x` belongs to plugin-core.
-        const target = [...roots.keys()]
-          .filter((name) => spec === name || spec.startsWith(`${name}/`))
-          .sort((a, b) => b.length - a.length)[0];
-        if (!target) continue;
-        const toLayer = layerOf(target);
+        const fromIndex = LAYERS.findIndex((l) => l.name === fromLayer);
+        // The sub-path's own layer decides, not the package's: `@duya/cli/contract`
+        // is a runtime contract while `@duya/cli` is a host adapter, and only
+        // the second one is a reverse edge for a runtime importer.
+        const toLayer = layerOfSpecifier(spec);
         if (!toLayer) continue;
         const toIndex = LAYERS.findIndex((l) => l.name === toLayer);
         // Allowed: same layer, or strictly downward.
@@ -210,7 +264,7 @@ export function findReverseEdges(roots: Map<string, string> = packageRoots()): R
         findings.push({
           file: rel(file),
           from: pkg,
-          to: target,
+          to: spec,
           fromLayer,
           toLayer,
         });

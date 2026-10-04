@@ -44,6 +44,7 @@ import {
   findRuntimeHostLeaks,
   findSessionRootedTables,
   findWorkerSeamBypasses,
+  layerOfSpecifier,
   workerImplementsExecutionChannel,
 } from './boundary-gates.js';
 
@@ -127,14 +128,18 @@ describe('G1 — no reverse dependency edge between layers', () => {
     expect(findReverseEdges(roots)).toEqual([]);
   });
 
-  it('resolves a subpath import to its owning package', () => {
+  it('resolves a subpath import to its owning layer', () => {
     const roots = fixtureWorkspace({
       '@duya/agent-core': { 'a.ts': "import { c } from '@duya/agent-runtime/transport/x';\n" },
       '@duya/agent-runtime': { 't.ts': 'export const c = 1;\n' },
     });
     const findings = findReverseEdges(roots);
     expect(findings).toHaveLength(1);
-    expect(findings[0]!.to).toBe('@duya/agent-runtime');
+    // `to` is the full specifier, not the owning package: with sub-path layer
+    // overrides the two are no longer the same thing, and collapsing them would
+    // hide which entry point actually crossed the boundary.
+    expect(findings[0]!.to).toBe('@duya/agent-runtime/transport/x');
+    expect(findings[0]!.toLayer).toBe('runtime');
   });
 
   it('does not report a relative import as a layer edge', () => {
@@ -154,6 +159,62 @@ describe('G1 — no reverse dependency edge between layers', () => {
       '@duya/agent-runtime': { 'r.ts': 'export const x = 1;\n' },
     });
     expect(findReverseEdges(roots)).toEqual([]);
+  });
+});
+
+describe('G1 — a sub-path can have a different layer from its package', () => {
+  // The regression this encodes: `@duya/cli` is a host adapter (its
+  // `api/client.ts` fetches `127.0.0.1` and its commands read the filesystem),
+  // but `@duya/cli/contract` is a pure descriptor contract the agent's
+  // DuyaCliTool legitimately dispatches through. Classifying the whole package
+  // as host made the gate report four findings for a correct edge. A gate that
+  // cries wolf on a correct edge is worse than no gate.
+  it('resolves the contract sub-path to the runtime layer', () => {
+    expect(layerOfSpecifier('@duya/cli/contract')).toBe('runtime');
+  });
+
+  it('resolves the bare package to the host layer', () => {
+    expect(layerOfSpecifier('@duya/cli')).toBe('host');
+  });
+
+  it('resolves a deeper path under the contract to the runtime layer', () => {
+    expect(layerOfSpecifier('@duya/cli/contract/commands/agent')).toBe('runtime');
+  });
+
+  it('does not let a sub-path override shadow a longer package name', () => {
+    // `@duya/cli` must not win over `@duya/cli/contract` by prefix length in the
+    // wrong direction: the more specific override has to take precedence.
+    expect(layerOfSpecifier('@duya/cli/contract')).not.toBe(layerOfSpecifier('@duya/cli'));
+  });
+
+  it('allows a runtime module to import the contract sub-path', () => {
+    const roots = fixtureWorkspace({
+      '@duya/agent': { 'tool.ts': "import { CLI_DESCRIPTORS } from '@duya/cli/contract';\n" },
+      '@duya/cli': { 'index.ts': 'export const runCli = 1;\n' },
+    });
+    // The importer resolves the specifier to the runtime layer via
+    // SUBPATH_LAYERS, so the edge is allowed regardless of where the target
+    // file physically sits inside the package.
+    expect(findReverseEdges(roots)).toEqual([]);
+  });
+
+  it('still flags a runtime module importing the host app face', () => {
+    // The other half of the rule: the override must not become a blanket
+    // exemption for the whole package.
+    const roots = fixtureWorkspace({
+      '@duya/agent': { 'tool.ts': "import { runCli } from '@duya/cli';\n" },
+      '@duya/cli': { 'index.ts': 'export const runCli = 1;\n' },
+    });
+    const findings = findReverseEdges(roots);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ to: '@duya/cli', toLayer: 'host' });
+  });
+
+  it('the live DuyaCliTool contract imports are not reported', () => {
+    // Measured on the real tree: all four `@duya/cli` references in
+    // packages/agent go through `/contract`, so G1 must be clean.
+    const offenders = findReverseEdges().filter((f) => f.from === '@duya/agent');
+    expect(offenders).toEqual([]);
   });
 });
 
