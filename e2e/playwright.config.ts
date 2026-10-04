@@ -49,6 +49,14 @@ export default defineConfig({
       name: 'ui',
       testMatch: /conductor\/.*\.spec\.ts/,
     },
+    {
+      // Plan 587 E4.4: the theme switch and the pending/terminal/approval run
+      // states, asserted on the rendered DOM rather than on the SSE frames.
+      // Its own project because it is a state-matrix slice, not a canvas
+      // geometry set like `ui`, and because it drives real turns.
+      name: 'ui-states',
+      testMatch: /ui-states\/.*\.spec\.ts/,
+    },
   ],
   webServer: {
     command: 'npm run dev',
