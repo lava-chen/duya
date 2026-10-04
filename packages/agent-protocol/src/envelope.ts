@@ -14,18 +14,18 @@
  * ## `seq` ownership moved from the host to the runtime
  *
  * The id space is PER-SESSION but the counter is PER-TURN. Every POST reopens
- * the stream with `let seqNum = 0` (router.ts:1329) and increments from there
- * (:1568), writing that value as the SSE `id:` and pushing it into the
- * session-wide ring via `updateLastEventId` / `recordEvent` (:1569-1570).
+ * the stream with `let seqNum = 0` (router.ts:1557) and increments from there
+ * (router.ts:1801), writing that value as the SSE `id:` and pushing it into the
+ * session-wide ring via `updateLastEventId` / `recordEvent` (router.ts:1802-1803).
  * `session.lastEventId` and the ring are never reset between turns, so **turn
  * two re-mints ids 1..M that turn one already used.**
  *
  * The reconnect path is NOT the broken part — it was already fixed. Replay
- * writes each record's original `eventId` (router.ts:2412-2423) and the live
- * counter resumes from `session.lastEventId` (:2437, with the regression note
- * at :2432-2436 recording the `let seqNum = 0` bug that preceded it). What
+ * writes each record's original `eventId` (router.ts:2910-2923) and the live
+ * counter resumes from `session.lastEventId` (router.ts:2936, with the regression note
+ * at router.ts:2931-2935 recording the `let seqNum = 0` bug that preceded it). What
  * breaks is the collision above: `getEventsSince(sessionId, lastEventId)`
- * (:2411) filters on `eventId > lastEventId`, so after a second turn a
+ * (router.ts:2910) filters on `eventId > lastEventId`, so after a second turn a
  * reconnecting client can be handed turn-one events, or be handed nothing at
  * all, depending on which turn wrote last.
  *
