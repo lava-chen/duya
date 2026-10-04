@@ -362,8 +362,32 @@ jobs:
         # Run the full electron-builder packaging on macOS so afterPack path
         # bugs (which only manifest inside the .app bundle) are caught on
         # every PR, not only on release tags.
+        #
+        # `--publish never` is the fix, and it is load-bearing rather than
+        # decoration. electron-builder.yml declares a `github` publish provider,
+        # and with NO publish flag on the command line PublishManager infers
+        # one: on a push event `isPullRequest()` is false (GITHUB_BASE_REF is
+        # unset), `getCiTag()` is null for a branch build, so `isCI` promotes
+        # the policy to `onTagOrDraft` and every produced artifact is scheduled
+        # for upload. Constructing the GitHub publisher then throws
+        # "GitHub Personal Access Token is not set" and the job exits 1 —
+        # AFTER the .app/DMG/zip exist and afterPack has verified the agent
+        # bundle inside the package, so the parity step below never ran once.
+        # Run 37194425248 is exactly that failure.
+        #
+        # A verification run has no business publishing, so publishing is
+        # removed from the run rather than tolerated in it: no GH_TOKEN is
+        # added, and the exit code stays the packaging exit code. release.yml
+        # passes the symmetric `--publish always` alongside GH_TOKEN for the
+        # real release, so the release path is untouched.
+        #
+        # electron-builder is invoked directly, the same shape release.yml uses
+        # after its own `Build application` step. That drops the second
+        # `npm run electron:build` that `npm run electron:pack:mac` re-ran on
+        # top of the `Build application` step above: same build output, same
+        # artifacts and same afterPack verification, one build instead of two.
         if: matrix.os == 'macos-latest'
-        run: npm run electron:pack:mac
+        run: npx electron-builder --mac --config electron-builder.yml --publish never
 
       - name: Verify packaged artifacts (macOS only)
         if: matrix.os == 'macos-latest'

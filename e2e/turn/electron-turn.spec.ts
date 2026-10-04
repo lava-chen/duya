@@ -65,30 +65,72 @@
  * forked worker subprocess. So `fixme` is gone: the contract is asserted, not
  * described.
  *
- * ## The state of the contract test: red, and why
+ * ## The state of the contract test: one assertion fixed, one adjudicated
  *
- * Deleting `fixme` made it run, and it fails on TWO assertions. Both state a
+ * Deleting `fixme` made it run, and it failed on TWO assertions. Both stated a
  * shape of the stream or the ledger that the real product does not have, and
- * neither is a symptom of the defect #182 fixed.
+ * neither was a symptom of the defect #182 fixed. They have since been
+ * adjudicated SEPARATELY, because they are not the same kind of wrong:
  *
  *  1. `expect(turn.frameTypes[turn.frameTypes.length - 1]).toBe('done')` —
  *     received `title_generated`. The real terminal sequence is
  *     `ready, appConnection:listDescriptors, status, token_usage, status,
  *     text, text, token_usage, token_usage, db_persisted, done,
- *     title_generated`: the turn completes and the session title is generated
- *     afterwards, so `done` is not the last frame on the wire.
+ *     title_generated`. **This assertion was wrong and has been corrected.**
+ *     `title_generated` is a legitimate post-terminal HOST frame: title
+ *     generation is a separate async LLM call the worker does not await before
+ *     `chat:done`, and the product deliberately keeps reading past the terminal
+ *     to collect it (`router.ts:1708-1715`), force-closing the stream after a
+ *     configurable window if it never arrives (`router.ts:1716-1726`). The
+ *     protocol spec agrees it is not a run event at all — host-only
+ *     (`07-agent-protocol-spec.md:278`, `:313`) — and the translator leaves it
+ *     unmapped and forward-only. The runtime is NOT emitting out of contract;
+ *     the test was. It is now repointed at the invariant that actually holds
+ *     (terminal present; only the title frame may follow it) rather than at the
+ *     literal last element, which would be flaky on the timeout path.
+ *
  *  2. The `assistant.message_finalized` lookup — the ledger holds 0 such rows.
- *     A real completed turn persists `assistant.text_block` events instead
+ *     **This assertion is RIGHT and the product is short, so it is left red.**
+ *     A real completed turn persists `assistant.text_block` instead
  *     (`1:run.started 3:assistant.usage 5:assistant.text_block
  *     6:assistant.text_block 7:assistant.usage 8:assistant.usage
- *     9:run.completed`), so the "durable authoritative message" this assertion
- *     reads is not an event this run writes.
+ *     9:run.completed`), and the event it wants has no producer on ANY path —
+ *     desktop, headless, CLI and subagent all funnel through the one
+ *     `translateFrame` seam, which has no arm for it.
+ *
+ *     It is tempting to conclude the declaration is stale and repoint this at
+ *     `assistant.text_block`. That would be wrong, and the registry is the
+ *     evidence. The event carries a written rationale for its own existence
+ *     (`legacy/sse-event.ts:185-186` — the legacy surface "never marked the
+ *     point where the message stopped changing, which is why compaction had to
+ *     guess a boundary"), the spec derives its payload from `AssistantMessage`
+ *     (`07-agent-protocol-spec.md:244`), contract §F requires reconnect
+ *     recovery from a "message snapshot" rather than from discarded deltas, and
+ *     the consumer already treats it as authoritative and superseding
+ *     (`transcript-snapshot.ts:28-31`). None of that is the shape of a leftover.
+ *
+ *     Nor is it a one-line translator fix. `content` and `stopReason` are both
+ *     REQUIRED, and the only terminal frame the worker sends is `chat:done` =
+ *     `{ sessionId }` (`worker-protocol.ts:326-329`), which carries neither;
+ *     `translateFrame` is a pure per-frame function, so producing the event
+ *     today would mean inventing the two facts it exists to record. Closing
+ *     this is a wire extension — the agent has to carry the finalized message —
+ *     which is a larger slice than an assertion change and is not this file's
+ *     to land. The gap is recorded as a first-class row in the control-plane
+ *     census (`control-plane-census.ts`, `assistant.message_finalized`,
+ *     `producer: NOT YET WIRED`) with a gate that makes the whole class
+ *     undroppable.
+ *
+ *     An earlier draft of this header proposed repointing the lookup to
+ *     `assistant.text_block`. That advice is withdrawn: it would have frozen a
+ *     contract violation into a green test, which is the exact outcome this
+ *     file exists to prevent.
  *
  * Why the previous author could not have known: while `openRun` refused, the
  * stream stopped at `ready`. No text, no terminal, no ledger — so the frame
  * order and the event names were never observable, and both assertions were
- * guesses. The contract was written to fail, correctly; it also guessed wrong
- * about the far end, which only a real turn could reveal.
+ * guesses. The contract was written to fail, correctly; one of them also
+ * guessed wrong about the far end, which only a real turn could reveal.
  *
  * What IS proven, read back from the same namespace SQLite after that run:
  *   - `status=completed`, `terminal=completed`, `finished_at >= started_at`;
@@ -98,11 +140,9 @@
  *
  * The #182 defect class is therefore genuinely gone through the real boundary:
  * the worker receives `chat:start`, the turn reaches a terminal, and the
- * durable terminal event agrees with the row. What is still red is the
- * contract's description of the stream tail and of the ledger's event names —
- * a question about which assertions are CORRECT, not about whether turns
- * finish. Answering it means changing this contract, which belongs to whoever
- * owns E4.4.
+ * durable terminal event agrees with the row. What remains red is the durable
+ * AUTHORITATIVE MESSAGE the contract names, and it is red because the product
+ * does not emit it — not because the contract misdescribes it.
  *
  * ## What this file still does NOT prove
  *
@@ -363,14 +403,21 @@ test.describe('E4.4 — a real Electron turn', () => {
    *
    * This was `test.fixme` while the `run:create` reply was unreadable, so
    * `openRun` refused, nothing was dispatched, and none of this could hold.
-   * PR #182 fixed that, so these assertions now run for real — and two of them
-   * are red, for reasons the file header sets out with the evidence behind
-   * each.
+   * PR #182 fixed that, so these assertions now run for real. Two of them were
+   * red, and they were adjudicated differently: the frame-ordering one was a
+   * wrong expectation and has been corrected to the invariant that actually
+   * holds, while the `assistant.message_finalized` one is a correct expectation
+   * the product does not yet satisfy. The file header carries the evidence and
+   * the reasoning for each.
    *
-   * It is left RED on purpose. Do not re-`fixme` it, and do not narrow the
-   * assertions down to whatever happens to pass: a contract trimmed to the
-   * green is a rubber stamp, and this failure is information about which
-   * expectations are wrong rather than noise to be silenced.
+   * It therefore stays RED on purpose, on ONE assertion. Do not re-`fixme` it,
+   * and do not narrow the assertions down to whatever happens to pass: a
+   * contract trimmed to the green is a rubber stamp. In particular, do NOT
+   * repoint the finalized lookup at `assistant.text_block` — that would turn a
+   * contract violation into a passing test, which is the one outcome this file
+   * exists to make impossible. The remaining red is a real product gap, and it
+   * is tracked as a `NOT YET WIRED` row in the control-plane census rather than
+   * being deleted from here.
    */
   test('E4.4 contract: events, terminal and UI agreement', async () => {
     const { turn, sessionId } = await runRealTurn({ readBudgetMs: 120_000 });
@@ -381,7 +428,36 @@ test.describe('E4.4 — a real Electron turn', () => {
       expect(turn.streamStalled, `frames: ${turn.frameTypes.join(',') || '<none>'}`).toBe(false);
       expect(turn.error).toBeNull();
       expect(turn.text).toBe(EXPECTED_TEXT);
-      expect(turn.frameTypes[turn.frameTypes.length - 1]).toBe('done');
+      // `done` is the TERMINAL, and it is NOT the last frame on the wire.
+      // Title generation is a separate async LLM call the worker does not
+      // await before `chat:done`, so the product deliberately keeps reading
+      // past the terminal to collect the title (`router.ts:1708-1715`), under a
+      // configurable window — default 5s — that force-closes the stream if the
+      // title never arrives (`router.ts:1716-1726`). `title_generated` is
+      // host-only by the protocol spec (`07-agent-protocol-spec.md:278` and
+      // `:313`): it is deliberately NOT a protocol event, and the translator
+      // leaves it unmapped and forward-only, which is why it reaches this test
+      // at all.
+      //
+      // So the contract is not "the last frame is `done`" — and it is equally
+      // not "the last frame is `title_generated`", because the title is
+      // OPTIONAL: the timeout path ends the stream without it, so a literal
+      // last-element assertion would be flaky. What is invariant is the SHAPE
+      // of the tail: the terminal exists, and nothing but the host's title
+      // frame follows it. That is strictly stronger than what it replaces — it
+      // fails on a duplicated `done`, on an `error` arriving after the
+      // terminal, and on any other frame the run layer emits past the point it
+      // finished, all of which the old single-element check waved through.
+      const doneAt = turn.frameTypes.lastIndexOf('done');
+      expect(doneAt, `frames: ${turn.frameTypes.join(',') || '<none>'}`).toBeGreaterThanOrEqual(0);
+      // `chat:done` is always forwarded with its payload (`router.ts:601-602`),
+      // so a terminal frame carrying no data is a defect, not a shape.
+      expect(turn.done, 'the done frame carried no payload').not.toBeNull();
+      const afterTerminal = turn.frameTypes.slice(doneAt + 1);
+      expect(
+        afterTerminal.filter((type) => type !== 'title_generated'),
+        `frames after the terminal: ${afterTerminal.join(',') || '<none>'}`,
+      ).toEqual([]);
       // The model boundary was really crossed, not simulated around.
       expect(provider?.requests.length ?? 0).toBeGreaterThanOrEqual(1);
       expect(provider?.authHeadersSeen ?? []).toContain(LOOPBACK_API_KEY);
@@ -427,6 +503,21 @@ test.describe('E4.4 — a real Electron turn', () => {
       // is the protocol's DURABLE authoritative message, so this compares the
       // renderer's stream against the ledger in one database. A turn whose
       // stream and ledger disagree is a run nobody can replay.
+      //
+      // THIS ASSERTION IS CURRENTLY RED, AND IT IS CORRECT TO BE. The product
+      // emits no `assistant.message_finalized` on any path; a real turn writes
+      // `assistant.text_block` instead. The event is not a stale declaration —
+      // the registry ships a rationale for it, the spec derives it from
+      // `AssistantMessage`, contract §F names it as the reconnect-recovery
+      // snapshot, and the consumer already treats it as authoritative. So the
+      // gap is the product's, and it is recorded as a `NOT YET WIRED` row in
+      // `packages/agent-runtime/src/control-plane-census.ts` with a gate that
+      // keeps the whole declared-but-unproduced class findable.
+      //
+      // Do not "fix" this by looking up `assistant.text_block` instead. That
+      // would delete the only executable statement of the contract, replace it
+      // with a description of current behaviour, and turn this file green for
+      // the wrong reason.
       const finalized = events.filter((e) => e.event_type === 'assistant.message_finalized');
       expect(finalized.length).toBeGreaterThan(0);
       const durableText = finalized

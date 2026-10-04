@@ -49,13 +49,37 @@ function isComplete(row: CensusRow): boolean {
   return !row.producer.includes(NOT_YET) && !row.handler.includes(NOT_YET);
 }
 
+/**
+ * Every DURABLE `assistant.*` event, derived from the registry rather than
+ * listed by hand.
+ *
+ * ## Why this family specifically
+ *
+ * These are the events the assistant transcript is rebuilt FROM, and they are
+ * what the E4.4 contract reads back out of `run_events` to check that the
+ * renderer's stream and the durable ledger agree. That makes an unproducible
+ * one in this family a live contradiction between a passing test and the
+ * product — which is exactly what happened with
+ * `assistant.message_finalized` (E4.4 asserts it; a real turn persists
+ * `assistant.text_block` instead; nothing recorded the gap).
+ *
+ * The set is computed, not enumerated, so declaring a new durable assistant
+ * event brings it into scope automatically instead of requiring someone to
+ * remember to add it. `assistant.status` is listed separately because it is
+ * volatile and is in scope for being a control-plane message rather than for
+ * being durable.
+ */
+const DURABLE_ASSISTANT_EVENTS: readonly string[] = EVENT_TYPES.filter(
+  (type) => type.startsWith('assistant.') && EVENT_META[type].durability === 'durable',
+);
+
 /** The event types the census claims to cover, by the task's own families. */
 const CENSUS_SCOPE: readonly string[] = [
   ...EVENT_TYPES.filter((type) =>
     (CRITICAL_NAMESPACES as readonly string[]).some((ns) => type.startsWith(`${ns}.`)),
   ),
+  ...DURABLE_ASSISTANT_EVENTS,
   'assistant.status',
-  'assistant.goal_updated',
   'extension.custom',
 ];
 
@@ -118,6 +142,51 @@ describe('the census covers what it claims to cover', () => {
       // legacy vocabulary carried forward, and must SAY so.
       expect(row.authority, `${row.message} is an event-plane row the registry does not define`).toBe('adapter');
     }
+  });
+});
+
+describe('a declared-but-unemitted event is a named gap, not silence', () => {
+  /**
+   * The class of defect this file's durable-assistant scope exists to catch.
+   *
+   * A registry entry that no path produces is a contract the runtime does not
+   * keep. It is survivable ONLY while it is written down: a reader can then see
+   * a gap and price it, whereas an undeclared one reads as an oversight and
+   * gets re-discovered by a failing test a quarter later. So the two properties
+   * asserted here are:
+   *
+   *   1. every durable assistant event has a row (via CENSUS_SCOPE above), and
+   *   2. one with no producer is REACHABLE through `censusGaps()`.
+   *
+   * (2) is what stops the row from being "fixed" by deletion. Removing the
+   * `assistant.message_finalized` row would leave the scope assertion above
+   * red, but deleting the row AND the scope entry would otherwise look like a
+   * tidy-up; this test fails in that case too, and says which event vanished.
+   */
+  it('every durable assistant event has a census row', () => {
+    expect(DURABLE_ASSISTANT_EVENTS.length).toBeGreaterThan(0);
+    for (const type of DURABLE_ASSISTANT_EVENTS) {
+      const row = CONTROL_PLANE_CENSUS.find((r) => r.message === type);
+      expect(row, `${type} is durable and in scope but has no census row`).toBeDefined();
+    }
+  });
+
+  it('the unproduced durable assistant event is a discoverable gap, not an absence', () => {
+    const unproduced = DURABLE_ASSISTANT_EVENTS.filter(
+      (type) => !isComplete(CONTROL_PLANE_CENSUS.find((r) => r.message === type) as CensusRow),
+    );
+    // Today exactly one: the finalized message. Written as an exact set so that
+    // ADDING a second unproduced event is a test failure that has to be read,
+    // rather than a silently growing number nobody looks at.
+    expect(unproduced).toEqual(['assistant.message_finalized']);
+
+    const gap = censusGaps().find((row) => row.message === 'assistant.message_finalized');
+    expect(gap, 'assistant.message_finalized must be reachable through censusGaps()').toBeDefined();
+    // A gap row that says only "NOT YET" is an oversight wearing a gap's
+    // clothes. This one has to name the seam that is missing, or the next
+    // reader cannot act on it.
+    expect(gap?.producer).toMatch(/NOT YET WIRED/);
+    expect(gap?.note).toMatch(/chat:done/);
   });
 });
 

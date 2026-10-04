@@ -570,10 +570,57 @@ Rollback/data compatibility: 不适用（只改测试）
 Remaining blocker:
   - 刻意不做：**没有收窄任何断言**且**没有重新引入`fixme`**。被裁到绿的合同是橡皮图章，而这次失败是关于**哪些期望错了**的信息，不是该消音的噪声
   - 刻意不做：**没有改任何生产代码**。解决那两处不匹配是**对E4.4合同本身**的改动，属于拥有该bullet的人
-Next task: 修正 `e2e/turn/electron-turn.spec.ts:375` 起的两条陈旧断言——末帧改断言 `title_generated`（或断言"`done`之后无终态"）并把事件查找改到 `assistant.text_block`；durable状态本身已正确，改完该测试应转绿
+Next task: ~~修正 `e2e/turn/electron-turn.spec.ts:375` 起的两条陈旧断言——末帧改断言 `title_generated`（或断言"`done`之后无终态"）并把事件查找改到 `assistant.text_block`；durable状态本身已正确，改完该测试应转绿~~ **已执行并部分撤回该建议**（详见下条记录）：末帧那条**测试错、产品对**，已改为断言真正成立的不变量；事件查找那条**断言对、产品缺**，故**不得**改到 `assistant.text_block`——那会把契约违规冻成绿灯
 ```
 
-## 未闭合项：路由的失败、在飞的切片、缺失的证据
+## `assistant.message_finalized`：哪一边错了，以及为什么不是"陈旧声明"（E4.4 bullet 1 裁定）
+
+```text
+Task: 裁定 `e2e/turn/electron-turn.spec.ts` 两条红断言各自谁错；不得靠改测试迁就现状
+Status: 已裁定。末帧那条**测试错**，已修；finalized 那条**产品缺**，断言保留为红。缺口已入册并加门禁
+Measurement（用生产 translator 喂真实帧序，非猜测）:
+  - 帧序 `ready, appConnection:listDescriptors, status, token_usage, status, text, text,
+    token_usage, token_usage, db_persisted, done, title_generated`
+  - 产出协议事件 `assistant.status x2, assistant.usage x3, assistant.text_block x2, run.completed`
+  - durable 子序列与E4.4读回的台账逐条一致（run_events 7 行，seq 有洞 = 合同 §F 的稀疏语义）
+  - `assistant.message_finalized` 产出=false
+  - 全树**没有任何构造点**：desktop / headless / CLI / subagent 全部汇入 `controller.ts:821` 的
+    单一 `translateFrame` 接缝，故**无一条路径**产出它。统一缺失，不是部分路径缺失
+Evidence for "registry 是对的，产品是缺的":
+  - `registry.ts:202` 声明 durable；`required.ts:94` 要求 content+stopReason
+  - `sse-event.ts:185-186` 自带存在理由："旧表面从不标记消息停止变化的那一点，所以 compaction
+    只能猜边界" ——陈旧声明不会带理由
+  - `07-agent-protocol-spec.md:244` 从 `AssistantMessage` 推导 payload
+  - 合同 §F:64 要求断线文本靠 message snapshot + cursor 恢复
+  - 消费者已按 authoritative 且 superseding 实现：`transcript-snapshot.ts:28-31, 195-200`
+Why NOT a one-line translator fix:
+  - `chat-event-translator.ts` 三条不可谈判规则第一条是"nothing is defaulted into existence"，
+    且 `done` 分支注释明写 stopReason 缺失是观察、填一个就是编造
+  - 唯一终态帧 `chat:done` = `{sessionId}`（`worker-protocol.ts:326-329`），两个 REQUIRED 字段都没有
+  - 故补齐 = **扩 wire**（agent 必须带 finalized message），不是加分支
+title_generated 裁定:
+  - `router.ts:1708-1715` 注释明写"标题生成是 worker 里另一次不被 await 的异步 LLM 调用"
+  - `router.ts:1716-1726` 5s 窗口后强关流 → 标题**可选**，故"末帧字面量"两种写法都不可靠
+  - 规格 `07-agent-protocol-spec.md:278`、`:313` 归 host-only；translator 对它 unmapped
+  - 结论：**运行时没有越契约，是断言写错了**。改为断言不变量（终态存在+带payload+其后只允许标题帧）
+Fix: census 加 durable assistant 族 4 行 + 门禁（scope 从 registry 派生，非手列）
+Gate mutation table:
+  - M1 删掉 message_finalized 行 → RED（3 failed，点名该事件）
+  - M2 声明一个新的 durable assistant 事件且不给行 → RED（3 failed，证明 scope 是派生的）
+  - M3 把 NOT YET producer 改成真实文件 → RED（1 failed，unproduced 集合变空）
+  - 三次还原全部 `git checkout HEAD -- <file>`，无 stash；还原后 70/70 绿
+Still unsupported/unverified:
+  - **spec 断言变更未经执行**：本轮未跑 `electron:build`（磁盘禁令），故
+    `npm run test:e2e:turn` 未跑。已用 `tsc --strict` 单独类型检查该文件（exit 0），并用探针文件
+    证明该检查非空（真类型错误 → exit 2）。**类型通过 ≠ 断言通过**
+  - 仓库 **16个tsconfig无一**引用 `e2e/`，故 `typecheck:all` 对本文件**不构成任何证据**
+  - 既有失败（与本切片无关，clean origin/master 上复现）：`13-citation-drift` 1 failed —
+    5 条引用指向 monorepo 迁移前的 `router.ts` / `ai/src/types.ts` 路径
+Next task: 补 `assistant.message_finalized` 需要**扩 worker wire**（让 agent 在 done 边界带上
+finalized message），再在 translator 加分支；这是独立大切片，不属断言修正
+```
+
+
 
 ```text
 Task: 状态盘点 / open items after the E4 exit and the CI arc

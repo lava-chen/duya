@@ -219,6 +219,38 @@ expect({ count: registry.remainingConsumers, sites: sites, measured: measured.le
 
 ---
 
+### 收尾时 origin/master 又前进了 9 个提交 —— 我丢掉了自己的一半修复
+
+第一次合并落地（`b40fa596`，基线 `7b6c7f38`）之后核对分叉，发现 `origin/master` 已推进到
+`d20e31ae`，比我合入的基线**又多 9 个提交**（PR #199 / #200 / #201）。合入它们时产生 3 处冲突，
+而这 3 处**恰好全在我上一轮刚改过的文件上**：
+
+| upstream 提交 | 内容 |
+| --- | --- |
+| `b310313f` | `test(h8): anchor the H8.2 inventory instead of pinning line numbers` |
+| `6a936784` | `fix(h8): make the retirement test hold the registry to its claim` |
+
+也就是说，**我上一轮独立发现的"重言式门禁"，upstream 同时也发现了并修了**。其文件注释写的
+是"the registry sat at `7` while the tree held `2` facade call sites"——与我实测出的
+"声明 7、实测 3"指向同一个缺陷。三处冲突因此**全部采用 upstream 版本**，我在这 3 个文件上的
+修复被严格取代。逐项对比后确认 upstream 的方案更优：
+
+1. **识别"伪装的 facade 调用"用了正向证据。** `Stage1Extractor.streamChat` 是
+   `llmClient.streamChat.bind(llmClient)` 绑上去的 `@duya/ai` 方法，签名和 facade 调用一模一样。
+   upstream 用"该文件出现 `AIClient['streamChat']` 绑定"来排除，而不是像我那样按接收者名过滤 ——
+   后者会把未来某个 `DuyaAgent` 子类里真实的 `this.streamChat` 一起漏掉。
+2. **registry 收窄为 2 而非我改的 9。** upstream 把"一次性 model 调用"正确地排除在
+   `consumers` 之外（它们本来就不是 shim 的调用者，删掉 shim 不会影响它们），rationale 因此恢复自洽；
+   我则把口径扩大到"全部 `.streamChat(`"并把 7 改成 9。两种解法各自自洽，但 upstream 的更贴合这条
+   entry 的主题（"duyaAgent.streamChat 作为 CLI TURN 入口"），且不虚增退役阻塞项。
+3. **h8-2 改成锚定而非按行号 pin。** 我上一轮正是用"把记录的行号从 1137 改到 1150"绕过漂移的 ——
+   那恰恰是这种脆弱性本身。upstream 直接消除了它。
+
+**教训**：两处独立团队在同一个门禁上撞出同一个缺陷时，先做的那一份很可能不如后做的那份，
+而"我已经修过了"不是保留它的理由。可验证的做法就是逐项比设计，而不是比谁先提交。
+剩下 4 项修复（`run-create-ack` 的 mock 路径、`ProviderManagement` 的事件用例、
+`13-citation-drift` 的非 hermetic、6 条失效引用）不在这 3 个文件里，全部存活。
+
 ## 0. 结论摘要
 
 共 **170 条**已定位缺陷：**P0 16 条、P1 61 条、P2 93 条**。另有 7 条 587 计划既有发现（F01–F09）在当前 HEAD 复核后确认**仍然存在**。
