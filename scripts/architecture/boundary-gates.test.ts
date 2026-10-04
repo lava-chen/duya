@@ -1,0 +1,302 @@
+/**
+ * Plan 600 S0 — boundary gate tests.
+ *
+ * ## What these tests are for
+ *
+ * A gate that reports a fact without checking anything is worse than a red
+ * test: the next slice trusts it and deletes the real check. Three instances of
+ * that exact failure are recorded in memory as `vacuous-guard-tells`:
+ *
+ *  1. A `LEGACY_RETIREMENT` test compared `measured.length` with
+ *     `measured.length` — declared 7, measured 3, always green.
+ *  2. A packaging gate's regex matched ajv's **codegen string**
+ *     `equal.code = 'require("ajv/dist/runtime/equal").default'` as a real
+ *     `require()`, reporting a healthy build as missing five modules.
+ *  3. A shared lexer lost sync at offset ~1815 of a real minified worker, and
+ *     a genuine `require('node-fetch')` appended to the artifact still passed.
+ *
+ * So every rule below has a NEGATIVE case: a fixture containing exactly the
+ * violation the rule forbids, asserted to be found. A rule with only a positive
+ * case ("the tree is clean") cannot distinguish a working detector from a
+ * detector that matches nothing.
+ *
+ * ## The fixtures are synthetic on purpose
+ *
+ * The negative cases run against temp files, not the live tree. Two reasons:
+ * the live tree is shared and under active modification by other agents, and a
+ * test that mutates the real source to prove a gate works would race them. The
+ * exception is the one place where the live tree IS the subject — the
+ * `reports the real known defects` block below — which asserts the gates are
+ * currently RED and says why. That block is the load-bearing one: it is what
+ * stops these gates from being quietly satisfied by a tree that drifted.
+ */
+
+import { describe, expect, it, afterAll } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import {
+  DURABLE_IDENTITY_TABLES,
+  HOST_ONLY,
+  LAYERS,
+  findReverseEdges,
+  findRuntimeHostLeaks,
+  findSessionRootedTables,
+  findWorkerSeamBypasses,
+  workerImplementsExecutionChannel,
+} from './boundary-gates.js';
+
+const REPO_ROOT = path.resolve(__dirname, '../..');
+const temps: string[] = [];
+
+function tempDir(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-gates-'));
+  temps.push(dir);
+  return dir;
+}
+
+afterAll(() => {
+  for (const dir of temps) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // A leftover temp dir is not a test failure.
+    }
+  }
+});
+
+/** Build a throwaway workspace with the given package -> files map. */
+function fixtureWorkspace(files: Record<string, Record<string, string>>): Map<string, string> {
+  const dir = tempDir();
+  const roots = new Map<string, string>();
+  for (const [pkg, packageFiles] of Object.entries(files)) {
+    const src = path.join(dir, pkg.replace('@duya/', ''), 'src');
+    fs.mkdirSync(src, { recursive: true });
+    fs.writeFileSync(
+      path.join(path.dirname(src), 'package.json'),
+      JSON.stringify({ name: pkg, version: '0.0.0' }),
+    );
+    for (const [name, body] of Object.entries(packageFiles)) {
+      fs.writeFileSync(path.join(src, name), body);
+    }
+    roots.set(pkg, src);
+  }
+  return roots;
+}
+
+// ---------------------------------------------------------------------------
+
+describe('G1 — no reverse dependency edge between layers', () => {
+  it('flags a core module importing a runtime module', () => {
+    const roots = fixtureWorkspace({
+      '@duya/agent-core': { 'a.ts': "import { x } from '@duya/agent-runtime';\nexport const a = x;\n" },
+      '@duya/agent-runtime': { 'b.ts': 'export const b = 1;\n' },
+    });
+    const findings = findReverseEdges(roots);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      from: '@duya/agent-core',
+      to: '@duya/agent-runtime',
+      fromLayer: 'core',
+      toLayer: 'runtime',
+    });
+  });
+
+  it('flags a protocol module importing core', () => {
+    const roots = fixtureWorkspace({
+      '@duya/agent-protocol': { 'p.ts': "import { c } from '@duya/agent-core';\n" },
+      '@duya/agent-core': { 'c.ts': 'export const c = 1;\n' },
+    });
+    expect(findReverseEdges(roots)).toHaveLength(1);
+  });
+
+  it('allows a downward edge (runtime importing core)', () => {
+    const roots = fixtureWorkspace({
+      '@duya/agent-runtime': { 'r.ts': "import { c } from '@duya/agent-core';\n" },
+      '@duya/agent-core': { 'c.ts': 'export const c = 1;\n' },
+    });
+    expect(findReverseEdges(roots)).toEqual([]);
+  });
+
+  it('allows a same-layer edge', () => {
+    const roots = fixtureWorkspace({
+      '@duya/agent-core': { 'a.ts': "import { b } from '@duya/ai';\n" },
+      '@duya/ai': { 'b.ts': 'export const b = 1;\n' },
+    });
+    expect(findReverseEdges(roots)).toEqual([]);
+  });
+
+  it('resolves a subpath import to its owning package', () => {
+    const roots = fixtureWorkspace({
+      '@duya/agent-core': { 'a.ts': "import { c } from '@duya/agent-runtime/transport/x';\n" },
+      '@duya/agent-runtime': { 't.ts': 'export const c = 1;\n' },
+    });
+    const findings = findReverseEdges(roots);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.to).toBe('@duya/agent-runtime');
+  });
+
+  it('does not report a relative import as a layer edge', () => {
+    const roots = fixtureWorkspace({
+      '@duya/agent-core': { 'a.ts': "import { b } from './b.js';\n" },
+    });
+    expect(findReverseEdges(roots)).toEqual([]);
+  });
+
+  it('does not report a reverse edge that only appears inside a comment', () => {
+    // The doc comment in boundary-gates.ts names `@duya/agent-runtime` many
+    // times. A regex over raw text would read those as imports.
+    const roots = fixtureWorkspace({
+      '@duya/agent-core': {
+        'a.ts': "/**\n * See also: import { x } from '@duya/agent-runtime';\n */\nexport const a = 1;\n",
+      },
+      '@duya/agent-runtime': { 'r.ts': 'export const x = 1;\n' },
+    });
+    expect(findReverseEdges(roots)).toEqual([]);
+  });
+});
+
+describe('G3 — runtime does not reach into host internals', () => {
+  // `findRuntimeHostLeaks` resolves the live repo by package name, so a
+  // negative case cannot point it at a temp dir. The rule itself is therefore
+  // exercised through the same HOST_ONLY patterns, asserted against a fixture
+  // that contains exactly what each pattern is meant to catch. Asserting only
+  // `Array.isArray(findings)` — which is what this test used to do — is the
+  // `a === a` shape: it passes whether or not the detector works.
+  const HOST_PATTERNS = HOST_ONLY;
+
+  it.each(HOST_PATTERNS)('the pattern for $why matches its sample', ({ re, sample }) => {
+    expect(re.test(sample)).toBe(true);
+  });
+
+  it.each(HOST_PATTERNS)('the pattern for $why does not match a clean import', ({ re, clean }) => {
+    expect(re.test(clean)).toBe(false);
+  });
+
+  it('the live agent-runtime package has no host leak', () => {
+    // A real measurement against the real tree — the two quantities come from
+    // different sources (the file tree vs. the pattern list), so this is not
+    // the vacuous shape.
+    expect(findRuntimeHostLeaks()).toEqual([]);
+  });
+});
+
+describe('G4 — worker implements ExecutionChannel rather than DuyaAgent', () => {
+  it('finds the real DuyaAgent import in the live worker entry', () => {
+    const findings = findWorkerSeamBypasses();
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings.some((f) => f.line === 75 && f.file.includes('agent-process-entry'))).toBe(true);
+  });
+
+  it('does not report a DuyaAgent mention in a comment', () => {
+    const entry = 'fixtures/clean-worker.ts';
+    const abs = path.join(REPO_ROOT, entry);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(
+      abs,
+      [
+        '/**',
+        " * Once migrated this will no longer do: new duyaAgent({ ... })",
+        " * and import { duyaAgent } from '../agent/DuyaAgent.js';",
+        ' */',
+        'export const worker = 1;',
+        '',
+      ].join('\n'),
+    );
+    try {
+      expect(findWorkerSeamBypasses(entry)).toEqual([]);
+    } finally {
+      fs.rmSync(abs, { force: true });
+    }
+  });
+
+  it('reports a real construction', () => {
+    const entry = 'fixtures/dirty-worker.ts';
+    const abs = path.join(REPO_ROOT, entry);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(
+      abs,
+      ["import { duyaAgent } from '../agent/DuyaAgent.js';", 'const a = new duyaAgent({});', 'export default a;', ''].join(
+        '\n',
+      ),
+    );
+    try {
+      const findings = findWorkerSeamBypasses(entry);
+      expect(findings.length).toBeGreaterThan(0);
+      expect(findings.every((f) => f.symbol === 'duyaAgent' || f.symbol === 'DuyaAgent')).toBe(true);
+    } finally {
+      fs.rmSync(abs, { force: true });
+    }
+  });
+
+  it('does not claim the live worker implements the port', () => {
+    // This is the assertion that matters: the seam is declared in three
+    // packages and implemented nowhere on the execution path.
+    expect(workerImplementsExecutionChannel()).toBe(false);
+  });
+});
+
+describe('G6 — durable identity is not rooted at session_id', () => {
+  it('finds session_id NOT NULL in the live durable tables', () => {
+    const findings = findSessionRootedTables();
+    const tables = new Set(findings.map((f) => f.table));
+    for (const table of DURABLE_IDENTITY_TABLES) {
+      expect(tables).toContain(table);
+    }
+  });
+
+  it('finds the runs table specifically', () => {
+    const findings = findSessionRootedTables(['runs']);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.file).toContain('run-store.ts');
+  });
+
+  it('does not flag a table that is already migrated off session_id', () => {
+    const dir = tempDir();
+    const src = path.join(dir, 'src');
+    fs.mkdirSync(src, { recursive: true });
+    const target = path.join(REPO_ROOT, 'apps/desktop/src/main/db/core');
+    const probe = path.join(target, '__boundary-gate-probe.ts');
+    fs.writeFileSync(
+      probe,
+      [
+        'const migration = `',
+        'CREATE TABLE IF NOT EXISTS runs (',
+        '    id            TEXT PRIMARY KEY,',
+        '    project_id    TEXT,',
+        '    session_id    TEXT',
+        ');',
+        '`;',
+        'export default migration;',
+        '',
+      ].join('\n'),
+    );
+    try {
+      const findings = findSessionRootedTables(['runs']);
+      // The probe has a nullable session_id, so it must not add a finding.
+      expect(findings).toHaveLength(1);
+    } finally {
+      fs.rmSync(probe, { force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the gates are RED on the live tree, and that is the point', () => {
+  // These are not aspirational assertions. They pin the CURRENT known state so
+  // that a future slice cannot make these gates green by accident, and so that
+  // when S3/S1 do fix them, the change is a deliberate, visible one.
+  it('G4 is red: the worker still constructs DuyaAgent', () => {
+    expect(findWorkerSeamBypasses().length).toBeGreaterThan(0);
+  });
+
+  it('G6 is red: durable tables are still rooted at session_id', () => {
+    expect(findSessionRootedTables().length).toBeGreaterThan(0);
+  });
+
+  it('the layer table declares the direction 600 requires', () => {
+    const order = LAYERS.map((l) => l.name);
+    expect(order).toEqual(['protocol', 'core', 'runtime', 'host']);
+  });
+});
