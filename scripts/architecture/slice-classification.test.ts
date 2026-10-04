@@ -14,7 +14,11 @@
  *
  *   - a source file exists that no rule classifies   (a file was ADDED)
  *   - a rule classifies nothing                      (a directory was REMOVED)
- *   - a category's file fingerprint moves            (a file was RECATEGORISED)
+ *   - a recorded file left the bucket it was recorded in
+ *                                                      (RECATEGORISED, RENAMED
+ *                                                       or DELETED)
+ *   - RULES / FILE_OVERRIDES / UNCLASSIFIED_PREFIXES changed
+ *                                                      (the MAP was edited)
  *   - a rule is shadowed by a broader rule above it  (the map has a dead rule)
  *   - a category in the closed vocabulary is unused   (the map lost a bucket)
  *
@@ -22,15 +26,61 @@
  * declared list, a closed vocabulary, and a verifier that reads the repo rather
  * than the declaration.
  *
- * ## The fingerprint, and why it is a count and not a full file list
+ * ## Why this file no longer freezes a count, and what replaced it
  *
- * A full list of 3232 paths would be a second copy of the tree inside the test
- * suite, and it would be a list nobody reads. The fingerprint is a sorted,
- * newline-joined path list hashed per category: it changes when a file is
- * added, removed or moved between categories, and the failure message names the
- * CATEGORY that moved and how many files it holds, which is the fact a reviewer
- * needs. The exact path is available from the other assertions in this file,
- * which report real paths.
+ * It used to. `EXPECTED` held a whole-tree `total`, a per-category `count` and a
+ * per-category fingerprint, and it was correct that all of them had to be
+ * re-recorded — the gate could not tell an honest addition from a silent
+ * recategorisation, so it made every slice prove both.
+ *
+ * That produced a treadmill, and the treadmill was the bug:
+ *
+ *   1. Slice N adds a file. `total` no longer matches, so the gate is red.
+ *   2. Slice N re-records. Re-recording is one paste, and it absorbs EVERY
+ *      drift on the branch — including files slice N-1, N-2 and every slice
+ *      merged alongside them, none of which slice N read.
+ *   3. Slice N+1 lands and drifts the freshly-pasted numbers again.
+ *
+ * Two re-records of this file in a row (`a97353b3`, `83508431`) each had to
+ * itemise in a comment that the moves were not their own — which is the
+ * signature of a record that cannot be trusted to mean what it says. The
+ * aggregate number was the mechanism: it made every slice responsible for
+ * everyone else's drift, and the cheapest way to discharge that
+ * responsibility was to paste the number.
+ *
+ * So the recorded state is no longer a count. It is `slice-census.txt`: the
+ * per-file classification, frozen, with the property
+ *
+ *     every path in the census is STILL in the bucket it was recorded in
+ *
+ * a subset check rather than an equality check, and that one change separates
+ * the two events the equality check could not:
+ *
+ *   - ADDING a file cannot make it red. `classify()` is a pure function of a
+ *     path, so a new file changes no other file's category; it is only checked
+ *     for being EXPLAINED, by the orphan assertion above, which is already
+ *     treadmill-free. Nothing to re-record, so nothing to absorb.
+ *   - REMOVING, RENAMING or MOVING a recorded file makes it red, and the
+ *     failure prints the exact path. A recategorisation is a file leaving a
+ *     bucket, which is precisely the subset property.
+ *
+ * The second half of the safety property is the map itself, which the census
+ * cannot see: editing a rule reclassifies files without touching a single path.
+ * That is `RULE_TABLE_FINGERPRINT` below.
+ *
+ * ## The residue, and why a recorded hash is irreducible here
+ *
+ * `RULE_TABLE_FINGERPRINT` is a recorded number, and it is the only one left.
+ * It is irreducible because the map is a CLAIM, and a claim cannot be checked
+ * against the repo — the repo is what the claim is about. A valid rule change
+ * (a new directory that needs a category) must be allowed and must be
+ * deliberate, and the only way to make "deliberate" mean something to a
+ * reviewer is to make the reviewer's attention a build failure. A hash of the
+ * classification-determining inputs is the smallest such tripwire: it changes
+ * only when a prefix, a category, a rule's position, an override or an
+ * exclusion changes — never when a file is added, and never when somebody
+ * edits a rule's `why`, because prose is required to exist by its own
+ * assertion and is not part of what `classify` reads.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -55,11 +105,19 @@ const SOURCE_FILES = ROOTS.flatMap((r) => walk(path.join(REPO_ROOT, r)))
   .map((p) => rel(p))
   .sort();
 
-function fingerprintOf(files: readonly string[]): string {
-  return createHash('sha256').update(files.join('\n')).digest('hex').slice(0, 16);
-}
+/**
+ * The buckets the census is held to: the closed vocabulary, plus the
+ * deliberately-excluded one.
+ *
+ * `unclassified` is a first-class bucket here, NOT a gap. The old gate
+ * recorded its size as a bare count, which is why a source file could be
+ * moved under a `tests/` prefix and only the total noticed. Held as a set, a
+ * file entering or leaving that bucket is a named path.
+ */
+const BUCKETS = [...CATEGORIES, 'unclassified'] as const;
+type Bucket = (typeof BUCKETS)[number];
 
-/** Every classified file, bucketed by category. */
+/** Every classified file, bucketed by category. Unclassified files are `null`. */
 function bucket(): Map<Category, string[]> {
   const out = new Map<Category, string[]>();
   for (const category of CATEGORIES) out.set(category, []);
@@ -70,75 +128,140 @@ function bucket(): Map<Category, string[]> {
   return out;
 }
 
+/** The current census: the same buckets, read from the real tree. */
+function currentCensus(): Map<Bucket, string[]> {
+  const out = new Map<Bucket, string[]>();
+  for (const b of BUCKETS) out.set(b, []);
+  for (const file of SOURCE_FILES) {
+    const category = classify(file);
+    out.get(category === null ? 'unclassified' : category)!.push(file);
+  }
+  return out;
+}
+
+const CURRENT = currentCensus();
+
 /**
- * The recorded state of the inventory.
+ * The recorded census, parsed.
  *
- * Regenerate with `npx vitest run scripts/architecture/slice-classification`
- * and copy the reported values. Every number here was measured on the tree this
- * file landed on; a change to any of them is a change to the MAP, and the diff
- * in the commit message is the record of why.
- *
- * DO NOT re-record on a red run without reading WHY it is red first. The test
- * reports the values it measured, and pasting them in turns the gate green in
- * one step whatever produced them — including a map whose own reasoning is
- * wrong, in which case the wrong answer is what gets recorded and the
- * misclassification becomes the verified baseline. Read the failing assertion,
- * decide whether the tree drifted or the MAP is wrong, fix the map if it is, and
- * then record. And itemise: a number that moved is a set of files, and the
- * commit that says so is the only reason a reviewer can tell an honest addition
- * from a silent reclassification.
+ * `shape` holds everything the parser could not make sense of. It is asserted
+ * on rather than thrown, because a parser that throws turns a malformed
+ * baseline into an unrunnable suite, and an unrunnable suite is not a gate.
  */
-const EXPECTED = {
-  counts: {
-    wire: 47,
-    pure: 6,
-    'runtime-coordination': 287,
-    'capability-adapter': 1174,
-    'cp-durable': 173,
-    'host-ui': 1204,
-  } as Record<Category, number>,
-  fingerprints: {
-    wire: 'b455186a9ef9f6f6',
-    pure: '08339d25e58ae23c',
-    'runtime-coordination': 'b330f5ae968a045b',
-    'capability-adapter': '4f223dc18410c009',
-    'cp-durable': '45a1db9875f8fab7',
-    'host-ui': '5f4fdca6f9f9092c',
-  } as Record<Category, string>,
-  // 3264 source files walked, 2891 classified, 373 under a stated exclusion.
-  //
-  // 2882 -> 2891 (+9) and 371 -> 373 (+2), itemised because a number that
-  // moved is a set of files. FOUR of the moves are not this change:
-  // a97353b3 re-recorded this file, and the two commits that landed after
-  // it each added one source file and one test file without re-recording.
-  //
-  //   runtime-coordination  286 -> 287  packages/agent/src/agent/turnShape.ts
-  //   capability-adapter  1173 -> 1174  packages/agent/src/tool/orchestration/canonical-path.ts
-  //   unclassified          371 -> 373  packages/agent/tests/unit/agent/turn-shape.test.ts
-  //                                       packages/agent/tests/unit/tool/orchestration/dependency-graph-serialisation.test.ts
-  //
-  //   (446721e3 and 86f5fe3e. The two test files sit under the
-  //   packages/*/tests exclusion, which is why they move unclassified
-  //   rather than a category.)
-  //
-  // The remaining +7 are this change, all in cp-durable and all classified
-  // by the existing rules. No rule was edited to accommodate them.
-  //
-  //   cp-durable           166 -> 173  apps/desktop/src/main/db/core/workspace-store.ts
-  //                                       apps/desktop/src/main/db/core/workspace-identity.ts
-  //                                       apps/desktop/src/main/db/core/workspace-resolver.ts
-  //                                       apps/desktop/src/main/db/core/__tests__/workspace-store.test.ts
-  //                                       apps/desktop/src/main/db/core/__tests__/workspace-identity.test.ts
-  //                                       apps/desktop/src/main/db/core/__tests__/workspace-resolver.test.ts
-  //                                       apps/desktop/src/main/db/core/__tests__/workspace-rehearsal.test.ts
-  total: 2891,
-  unclassified: 373,
-} as {
-  counts: Record<Category, number>;
-  fingerprints: Record<Category, string>;
-  total: number;
-  unclassified: number;
-};
+interface ParsedCensus {
+  readonly paths: Map<Bucket, string[]>;
+  /** Bucket name -> the count written in its own `[bucket] (n)` header. */
+  readonly declaredCounts: Map<string, number>;
+  /** Every line that was neither blank, a comment, a header, nor a path. */
+  readonly shapeErrors: string[];
+  /** Every `[header]` name, in file order. */
+  readonly headers: string[];
+}
+
+const CENSUS_PATH = path.join(REPO_ROOT, 'scripts/architecture/slice-census.txt');
+
+function parseCensus(): ParsedCensus {
+  const paths = new Map<Bucket, string[]>();
+  for (const b of BUCKETS) paths.set(b, []);
+  const declaredCounts = new Map<string, number>();
+  const shapeErrors: string[] = [];
+  const headers: string[] = [];
+
+  // A MISSING census must not throw here. This module's top level runs at
+  // collection time, so a throw would abort the file before a single test is
+  // registered — and a suite that reports "no tests" is GREEN with the
+  // protection deleted, which is the one outcome worse than a red run. It is
+  // the same trap the encoding footgun records: a file that cannot load
+  // reports success. So a missing or unreadable census is reported as a shape
+  // error and asserted on, which is red.
+  let raw: string;
+  try {
+    raw = fs.readFileSync(CENSUS_PATH, 'utf8');
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return {
+      paths,
+      declaredCounts,
+      shapeErrors: [`cannot read ${CENSUS_PATH}: ${detail}`],
+      headers,
+    };
+  }
+
+  let current: string | null = null;
+  const header = /^\[([^\]]+)\]\s*(?:\((\d+)\))?$/;
+
+  for (const line of raw.split('\n')) {
+    const text = line.trim();
+    if (text.length === 0 || text.startsWith('#')) continue;
+    const asHeader = header.exec(text);
+    if (asHeader) {
+      current = asHeader[1];
+      headers.push(current);
+      declaredCounts.set(current, asHeader[2] === undefined ? -1 : Number(asHeader[2]));
+      // A header for a bucket nothing checks would make its paths vacuous, so
+      // the path is filed under the literal name and asserted to be illegal.
+      paths.set(current as Bucket, paths.get(current as Bucket) ?? []);
+      continue;
+    }
+    if (current === null) {
+      shapeErrors.push(`path before any bucket header: ${text}`);
+      continue;
+    }
+    paths.get(current as Bucket)!.push(text);
+  }
+  return { paths, declaredCounts, shapeErrors, headers };
+}
+
+const CENSUS = parseCensus();
+
+/**
+ * Paths retired from the census, one decision per path.
+ *
+ * This list, and not an edit to the census, is how a recorded file that was
+ * genuinely deleted, renamed or moved is accounted for. The distinction
+ * matters because the census is frozen: bulk-editing it is indistinguishable
+ * from the treadmill this file used to run, whereas an entry here is a
+ * reviewable claim about one specific path — and it goes stale on its own,
+ * because an entry for a file that is still in its bucket fails the
+ * "retires only paths that have actually left" assertion below. So the list
+ * cannot accumulate into a blanket permission.
+ *
+ * Empty, and that is the honest state: the census was frozen from a tree the
+ * previous record still described path-for-path, with no departures.
+ */
+interface RecordedLoss {
+  /** The path exactly as the census listed it. */
+  readonly path: string;
+  /** The bucket it was recorded in. */
+  readonly from: Bucket;
+  /** Why it left: deleted, renamed, or moved to another bucket. */
+  readonly why: string;
+}
+
+const RECORDED_LOSSES: readonly RecordedLoss[] = [];
+
+/**
+ * A fingerprint of everything `classify()` reads, and nothing else.
+ *
+ * RULE ORDER IS PART OF THE HASH, deliberately: first match wins, so moving a
+ * rule reclassifies files without changing any prefix or category, and a
+ * fingerprint that ignored position would not notice.
+ *
+ * `why` is NOT part of the hash. Prose is required to be non-empty by its own
+ * assertion; folding it in would turn every rewording of a comment into a red
+ * run, which is the same treadmill in a new place.
+ */
+function ruleTableFingerprint(): string {
+  const parts: string[] = [`categories:${CATEGORIES.join(',')}`];
+  for (const r of RULES) parts.push(`rule:${r.prefix}=${r.category}`);
+  for (const key of Object.keys(FILE_OVERRIDES).sort()) {
+    parts.push(`override:${key}=${FILE_OVERRIDES[key]}`);
+  }
+  for (const u of UNCLASSIFIED_PREFIXES) parts.push(`exclude:${u.prefix}`);
+  return createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 16);
+}
+
+const RULE_TABLE_FINGERPRINT = 'da1aee7a34878c48';
 
 describe('the classification is a partition of the source tree', () => {
   it('classifies every source file except the deliberately unclassified ones', () => {
@@ -146,22 +269,28 @@ describe('the classification is a partition of the source tree', () => {
     const explained = orphans.filter(isUnclassifiedPrefix);
     const unexplained = orphans.filter((f) => !isUnclassifiedPrefix(f));
     // A file no rule claims and no exclusion explains is a file the map does not
-    // describe. Reported by path so the fix is obvious, not a count.
+    // describe. Reported by path so the fix is obvious, not a count. This is
+    // the assertion that has to carry the "a file was ADDED" event now that
+    // the census no longer trips on additions — and it is the right shape for
+    // it, because a new file inside a classified directory is green here with
+    // no re-record, while a new directory that nobody classified is red by
+    // path.
     expect(unexplained).toEqual([]);
     expect(explained.length).toBeGreaterThan(0);
   });
 
-  it('excludes exactly the stated number of files', () => {
-    // The gap is part of the deliverable, so its SIZE is a recorded fact. A
-    // silently shrinking exclusion set is how a real source directory ends up
-    // excused as "tests".
-    const excluded = SOURCE_FILES.filter(
-      (f) => classify(f) === null && isUnclassifiedPrefix(f),
+  it('excludes only through prefixes that are stated and reachable', () => {
+    // Replaces the recorded exclusion COUNT. A count could not say WHICH file
+    // stopped being excluded, so a source file quietly relocated under a
+    // `tests/` prefix only moved a total; the census holds the same bucket as
+    // a set, so that file is now a named path. What is left to assert here is
+    // the part a count never checked: that no exclusion is dead. An exclusion
+    // nested inside a classified directory is unreachable, because the broader
+    // rule claims the file first and the exclusion quietly describes nothing.
+    const coveredByRule = UNCLASSIFIED_PREFIXES.filter((u) =>
+      RULES.some((r) => u.prefix === r.prefix || u.prefix.startsWith(`${r.prefix}/`)),
     );
-    expect({ excluded: excluded.length, recorded: EXPECTED.unclassified }).toEqual({
-      excluded: EXPECTED.unclassified,
-      recorded: EXPECTED.unclassified,
-    });
+    expect(coveredByRule.map((u) => u.prefix)).toEqual([]);
   });
 
   it('states a reason for every unclassified prefix, so a gap is a decision', () => {
@@ -188,36 +317,115 @@ describe('the classification is a partition of the source tree', () => {
   });
 });
 
-describe('the recorded inventory still describes the tree', () => {
-  const b = bucket();
-
-  it('classifies the same number of files as when it was recorded', () => {
-    // ADD or REMOVE a file anywhere and this moves.
-    const total = [...b.values()].reduce((n, files) => n + files.length, 0);
-    expect({ total, recorded: EXPECTED.total }).toEqual({
-      total: EXPECTED.total,
-      recorded: EXPECTED.total,
+describe('the map is the one a human agreed to', () => {
+  it('still holds the reviewed rule table', () => {
+    // The census cannot see this event: editing a rule reclassifies files
+    // without changing a path, so the subset property stays green while the
+    // map's meaning moves underneath it. This is the tripwire, and it is the
+    // one recorded number left in this file. See the header for why it cannot
+    // be derived from the repo.
+    //
+    // A valid map change is ALLOWED — re-record this hash, and say in the
+    // commit which prefix moved and why, because the diff of the map is the
+    // review and this assertion is only the thing that forces it to be read.
+    expect({ fingerprint: ruleTableFingerprint() }).toEqual({
+      fingerprint: RULE_TABLE_FINGERPRINT,
     });
   });
+});
 
-  for (const category of CATEGORIES) {
-    it(`holds the recorded number of ${category} files`, () => {
-      expect({ category, count: b.get(category)!.length }).toEqual({
-        category,
-        count: EXPECTED.counts[category],
-      });
-    });
-
-    it(`holds the recorded ${category} fingerprint`, () => {
-      // RECATEGORISE a file, or rename one, and this moves: the fingerprint is
-      // over the sorted path list, so it is sensitive to both.
-      const actual = fingerprintOf(b.get(category)!);
-      expect({ category, fingerprint: actual }).toEqual({
-        category,
-        fingerprint: EXPECTED.fingerprints[category],
-      });
+describe('the recorded census still describes the tree', () => {
+  for (const name of BUCKETS) {
+    it(`still holds every recorded ${name} file in ${name}`, () => {
+      // THE SAFETY PROPERTY, and the reason this file is not a treadmill.
+      //
+      // Asserted as a subset, not an equality, and that is the whole design:
+      //
+      //   recorded MINUS current = empty   -> nothing ever left this bucket
+      //   current MINUS recorded = ignored  -> new files are free
+      //
+      // So RECATEGORISE (a file leaves for another bucket), RENAME (the old
+      // path leaves) and DELETE (the path leaves) all fail here, naming the
+      // exact path, while ADD costs nothing. The previous equality check could
+      // not tell those apart, so it made every addition pay for them.
+      const retired = new Set(
+        RECORDED_LOSSES.filter((l) => l.from === name).map((l) => l.path),
+      );
+      const nowInBucket = new Set(CURRENT.get(name)!);
+      const departed = CENSUS.paths
+        .get(name)!
+        .filter((p) => !nowInBucket.has(p) && !retired.has(p));
+      expect(departed, `${name}: these recorded paths are no longer ${name}`).toEqual([]);
     });
   }
+});
+
+describe('the census is a well-formed baseline, not a stale copy', () => {
+  it('uses exactly the closed vocabulary plus the excluded bucket', () => {
+    // A misspelled `[bucket]` header would file its paths under a name no
+    // subset assertion loops over, and the whole section would pass
+    // vacuously. A baseline that cannot fail is worse than no baseline.
+    expect(CENSUS.headers).toEqual([...BUCKETS]);
+  });
+
+  it('lists only paths, never a malformed line', () => {
+    expect(CENSUS.shapeErrors).toEqual([]);
+  });
+
+  it('records each bucket size in its own header', () => {
+    // Catches a truncated or duplicated line, which would otherwise silently
+    // shorten the subset check for that bucket.
+    const wrong: string[] = [];
+    for (const name of BUCKETS) {
+      const declared = CENSUS.declaredCounts.get(name);
+      const listed = CENSUS.paths.get(name)!.length;
+      if (declared !== listed) wrong.push(`${name}: header says ${declared}, lists ${listed}`);
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it('never lists the same path in two buckets', () => {
+    // A path in two buckets is in neither, for the subset check: it would be
+    // excused from one by the other. The map is a partition and the baseline
+    // has to be one too.
+    const seen = new Map<string, Bucket>();
+    const dupes: string[] = [];
+    for (const name of BUCKETS) {
+      for (const p of CENSUS.paths.get(name)!) {
+        const first = seen.get(p);
+        if (first === undefined) seen.set(p, name);
+        else if (first !== name) dupes.push(`${p} is in both ${first} and ${name}`);
+      }
+    }
+    expect(dupes).toEqual([]);
+  });
+});
+
+describe('retiring a recorded path is a per-path decision with a reason', () => {
+  it('gives every retired path a bucket and a reason', () => {
+    const bare = RECORDED_LOSSES.filter(
+      (l) => l.why.trim().length === 0 || !BUCKETS.includes(l.from),
+    );
+    expect(bare.map((l) => l.path)).toEqual([]);
+  });
+
+  it('never retires the same path twice', () => {
+    const counts = new Map<string, number>();
+    for (const l of RECORDED_LOSSES) counts.set(l.path, (counts.get(l.path) ?? 0) + 1);
+    expect([...counts.entries()].filter(([, n]) => n > 1).map(([p]) => p)).toEqual([]);
+  });
+
+  it('retires only paths that have actually left their bucket', () => {
+    // What stops RECORDED_LOSSES from decaying into a blanket permission. An
+    // entry is only a claim about a file that is GONE from its bucket, so an
+    // entry for a file that is still sitting there is a live permission for
+    // nothing and fails here. The list therefore has to be pruned as the tree
+    // comes back, and cannot be used to excuse a file wholesale.
+    const stale = RECORDED_LOSSES.filter((l) =>
+      CURRENT.get(l.from)!.includes(l.path),
+    ).map((l) => `${l.path} never left ${l.from}`);
+    expect(stale).toEqual([]);
+  });
 });
 
 describe('the rules are ordered and none of them is dead', () => {
