@@ -573,6 +573,22 @@ export const FILE_OVERRIDES: Readonly<Record<string, Category>> = {
  * than claimed, and an unclassified file must be visible rather than hidden. A
  * file under one of these prefixes makes the verifier FAIL, so the gap is
  * loud and has to be closed deliberately.
+ *
+ * ONE CONSTRAINT ON WHAT CAN GO HERE, because it is not a matter of taste. A
+ * prefix is only ever consulted for a file no RULE claims — that is the single
+ * place `isUnclassifiedPrefix` is asked. So a prefix nested inside a classified
+ * directory is unreachable however many files it holds: the broader rule claims
+ * them first, and the exclusion quietly describes nothing.
+ *
+ * Three were exactly that and have been removed: `main/agents/tests`,
+ * `main/agents/__tests__` and `renderer/components/__tests__` all held real
+ * files and none could ever be excluded, because `main/agents` and `renderer`
+ * are classified directories. The convention that follows is the tree's actual
+ * one and is now the whole rule: a `__tests__` directory under a classified
+ * directory is classified WITH it. That is why the sixty-odd `__tests__`
+ * directories under `apps/desktop/src` are in the census, and why
+ * `main/__tests__` is the only live host exclusion — no rule claims bare
+ * `apps/desktop/src/main`.
  */
 export const UNCLASSIFIED_PREFIXES: readonly { prefix: string; why: string }[] = [
   {
@@ -611,18 +627,7 @@ export const UNCLASSIFIED_PREFIXES: readonly { prefix: string; why: string }[] =
     prefix: 'apps/desktop/src/main/__tests__',
     why: 'Host tests. Same reasoning as the agent suite.',
   },
-  {
-    prefix: 'apps/desktop/src/main/agents/tests',
-    why: 'Host agent tests. Same reasoning.',
-  },
-  {
-    prefix: 'apps/desktop/src/main/agents/__tests__',
-    why: 'Host agent tests. Same reasoning.',
-  },
-  {
-    prefix: 'apps/desktop/src/renderer/components/__tests__',
-    why: 'Renderer tests. Same reasoning.',
-  },
+
   {
     prefix: 'evals',
     why: 'The eval harness. It is the REGRESSION ANCHOR for M5, so it is deliberately outside the map it is used to check — classifying the measuring instrument alongside the measured is how the two get confused.',
@@ -724,7 +729,7 @@ export const PORTS: readonly PortDeclaration[] = [
     name: 'TranscriptRepository',
     method: 'interface',
     target: 'apps/desktop/src/main/control-plane (port), SQLite implements',
-    now: 'split: packages/agent-protocol/src/transcript owns the shape, host db owns the storage',
+    now: 'still undeclared: packages/agent-protocol/src/transcript owns the shape, host db owns the storage (run-store.ts, message-log.ts). C6.1 landed a host port in `main/control-plane/repository-port.ts` and it declares five surfaces — Run, Artefact, Approval, GoalTask, CheckpointIndex — none of them a transcript one.',
   },
   {
     name: 'PermissionBroker',
@@ -748,7 +753,7 @@ export const PORTS: readonly PortDeclaration[] = [
     name: 'ProcessScope',
     method: 'interface',
     target: 'packages/agent-runtime/src (port); BashWorker/worker pool reuse it',
-    now: 'packages/agent/src/utils/processTreeKill.ts, called directly',
+    now: 'EXTRACTED to packages/agent-runtime/src/process/process-scope.ts (M5.5), which owns the bookkeeping and takes the kill strategy as an injected `ProcessTreeKiller`. `agent/src/utils/processTreeKill.ts` stays as that implementation by decision and is still called directly by three sites: session/bash-task-registry.ts, tool/WorkerPool.ts, tool/BashTool/managed-bash.ts.',
   },
   {
     name: 'SecretResolver',
