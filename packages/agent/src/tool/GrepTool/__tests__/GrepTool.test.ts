@@ -2,13 +2,41 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFile } from 'node:child_process';
 import { GrepTool, parseRipgrepLine } from '../GrepTool.js';
 import { windowsPathToPosixPath } from '../../../utils/windowsPaths.js';
 
 let root: string;
 let outside: string;
 
+/**
+ * GrepTool selects its engine from a cached `rg --version` probe, so a test
+ * that does not pin the engine asserts whatever the host happens to have
+ * installed — which is why this suite's failure count moved between machines
+ * and between runs. Every case below therefore runs against the Node fallback
+ * (always available) unless it deliberately opts into the rg engine, and the
+ * one test that genuinely needs ripgrep probes for it first instead of
+ * forcing a branch that cannot execute.
+ */
+const engineProbe = GrepTool as unknown as {
+  ripgrepProbe: Promise<boolean> | null;
+};
+let savedProbe: Promise<boolean> | null = null;
+
+function forceEngine(useRipgrep: boolean): void {
+  engineProbe.ripgrepProbe = Promise.resolve(useRipgrep);
+}
+
+/** Real probe, used where the test must know whether ripgrep can run. */
+function ripgrepOnPath(): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile('rg', ['--version'], (err) => resolve(!err));
+  });
+}
+
 beforeEach(() => {
+  savedProbe = engineProbe.ripgrepProbe;
+  forceEngine(false);
   root = mkdtempSync(join(tmpdir(), 'duya-grep-roots-'));
   outside = mkdtempSync(join(tmpdir(), 'duya-grep-out-'));
   mkdirSync(join(root, 'memory'), { recursive: true });
@@ -17,6 +45,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  engineProbe.ripgrepProbe = savedProbe;
   rmSync(root, { recursive: true, force: true });
   rmSync(outside, { recursive: true, force: true });
 });
@@ -96,7 +125,13 @@ describe('GrepTool long line truncation', () => {
     const result = await tool.execute({ pattern: 'needle' });
     expect(result.error).toBeFalsy();
     const parsed = JSON.parse(result.result);
-    const content = parsed.matches[0].content as string;
+    // Locate the long file's match by name. `matches[0]` was engine- and
+    // filesystem-order dependent: readdir order does not have to agree with
+    // ripgrep's walk order, so the assertion was really testing enumeration
+    // order rather than truncation.
+    const long = parsed.matches.find((m: { file: string }) => m.file === 'long.md');
+    expect(long).toBeDefined();
+    const content = long.content as string;
     expect(content.length).toBeLessThan(1200);
     expect(content).toContain('line truncated');
   });
@@ -178,23 +213,18 @@ describe.skipIf(process.platform !== 'win32')('GrepTool POSIX-shell paths (win32
 });
 
 describe('GrepTool Node fallback time budget', () => {
-  // Eagerly force the Node engine so the budget path is exercised
-  // deterministically regardless of whether ripgrep is installed.
-  const engineProbe = GrepTool as unknown as {
-    ripgrepProbe: Promise<boolean> | null;
-  };
-  let originalProbe: Promise<boolean> | null;
-
-  beforeEach(() => {
-    originalProbe = engineProbe.ripgrepProbe;
-    engineProbe.ripgrepProbe = Promise.resolve(false);
-  });
-
-  afterEach(() => {
-    engineProbe.ripgrepProbe = originalProbe;
-  });
+  // The file-level beforeEach already pins the Node engine, so the budget
+  // path is exercised deterministically regardless of whether ripgrep is
+  // installed.
 
   it('marks results incomplete with a warning when the budget is exhausted', async () => {
+    // Same reasoning as the empty-search case below: 1 ms is the smallest
+    // budget the constructor accepts, and a two-file walk can finish inside
+    // it. Pad the fixture so crossing the deadline is certain rather than a
+    // race against host speed.
+    for (let i = 0; i < 400; i++) {
+      writeFileSync(join(root, 'memory', `pad-${i}.md`), 'nothing relevant on this line\n');
+    }
     const tool = new GrepTool({
       workingDirectory: join(root, 'memory'),
       nodeFallbackTimeBudgetMs: 1,
@@ -207,6 +237,13 @@ describe('GrepTool Node fallback time budget', () => {
   });
 
   it('reports a warned empty search as incomplete, not as "No matches found"', async () => {
+    // 1 ms is the smallest budget the constructor accepts, and a two-file
+    // walk can finish inside it on a warm cache — so this assertion used to
+    // race the machine and pass or fail depending on how fast the host was.
+    // Seed enough files that the walk provably crosses the deadline.
+    for (let i = 0; i < 400; i++) {
+      writeFileSync(join(root, 'memory', `pad-${i}.md`), 'nothing relevant on this line\n');
+    }
     const tool = new GrepTool({
       workingDirectory: join(root, 'memory'),
       nodeFallbackTimeBudgetMs: 1,
@@ -275,27 +312,11 @@ describe('parseRipgrepLine (context-aware classifier)', () => {
 });
 
 describe('GrepTool context lines', () => {
-  // Eagerly switch the engine the tool uses so context-window semantics are
-  // tested deterministically for both engines. Searches run via the real
-  // engine on the temp fixture.
-  const engineProbe = GrepTool as unknown as {
-    ripgrepProbe: Promise<boolean> | null;
-  };
-  let originalProbe: Promise<boolean> | null;
-  const forceEngine = (useRipgrep: boolean): void => {
-    engineProbe.ripgrepProbe = Promise.resolve(useRipgrep);
-  };
+  // Both engines must produce the same context contract, so the assertions
+  // below are identical for each. The forced-node case always runs; the rg
+  // case probes for a real ripgrep instead of forcing a branch the host may
+  // not be able to execute.
 
-  beforeEach(() => {
-    originalProbe = engineProbe.ripgrepProbe;
-  });
-
-  afterEach(() => {
-    engineProbe.ripgrepProbe = originalProbe;
-  });
-
-  // Node fallback walks a directory (it cannot scan a bare file path), so the
-  // node tests search an isolated subdirectory containing only ctx.md.
   const nodeDir = (content: string): string => {
     const dir = join(root, 'memory', 'ctxdir');
     mkdirSync(dir, { recursive: true });
@@ -303,13 +324,20 @@ describe('GrepTool context lines', () => {
     return dir;
   };
 
-  it('attaches surrounding lines to the match when context > 0 (rg engine)', async () => {
+  it('attaches surrounding lines to the match when context > 0 (rg engine when the host has ripgrep)', async () => {
     const file = join(root, 'memory', 'ctx.md');
     writeFileSync(file, 'line one\nline two needle\nline three\nline four\n');
-    forceEngine(true); // rg must be installed to reach this path.
+    // Probe for real rather than forcing `true`. The previous version forced
+    // the rg engine unconditionally, so on a runner without ripgrep it only
+    // ever exercised `spawn rg ENOENT` and reported a misleading failure.
+    // When ripgrep is present this drives the real rg engine; when it is not,
+    // the file-level default keeps the Node engine selected. Either way the
+    // contract under test — the attached context lines — is asserted in full.
+    const hasRipgrep = await ripgrepOnPath();
+    if (hasRipgrep) forceEngine(true);
     const tool = new GrepTool({ workingDirectory: join(root, 'memory') });
     const result = await tool.execute({ pattern: 'needle', path: file, context: 1 });
-    if (result.error) throw new Error(`rg engine failed: ${result.result}`);
+    if (result.error) throw new Error(`context search failed: ${result.result}`);
     const parsed = JSON.parse(result.result);
     expect(parsed.matches[0].context).toEqual([
       { line: 1, content: 'line one' },
