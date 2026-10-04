@@ -6,25 +6,55 @@
  * H8.2 asks that automation/wake, workflow `wf.agent` and the sub-agent all go
  * through the same durable Run API. Before that can be true, "all" has to mean
  * something countable, and R2.1's `NON_DESKTOP_CONSUMERS` was measured at a
- * base that has since moved (PR #178 is still OPEN, so the headless CLI was
- * never taken over and still constructs `DuyaAgent` directly).
+ * base that has since moved. A prose list cannot be checked against the tree.
+ * This one can: every `.streamChat(` occurrence in production source is
+ * classified below as either a turn entry or a look-alike, and `describe` blocks
+ * re-derive the classification from disk. An occurrence that is added, or that
+ * is not classified, fails the build instead of quietly making the retirement
+ * gate wrong.
  *
- * A prose list cannot be checked against the tree. This one can: every
- * `streamChat` call site in production source is enumerated below, and
- * `describe` blocks re-derive the count from disk. A site that is added,
- * moved, or deleted without updating this file fails the build instead of
- * quietly making the retirement gate wrong.
+ * ## Why this file does NOT pin line numbers
+ *
+ * It used to, and that was the defect. The first version of this inventory
+ * recorded `path` + `line` and asserted the line still contained
+ * `.streamChat(`. PR #198 — a legitimate, reviewed change that moved the CLI
+ * onto the shared Run API — shifted nine of those lines and put three of the
+ * eight tests in this file red, with no consumer having changed. Attribution was
+ * unambiguous (8/8 on the pre-#198 base, 5/8 on the post-#198 branch), so the
+ * fix was to delete the fragile part rather than paste new numbers: pasting them
+ * reinstalls the treadmill that the guard had just escaped, and the next
+ * unrelated edit breaks it again. The same reasoning is why
+ * `scripts/typecheck-electron-baseline.txt` keys on `(path, TS code)` and
+ * deliberately carries no `line:col`.
+ *
+ * So each row is keyed on an **anchor** that names the thing rather than its
+ * position:
+ *
+ *  - `path` — the file, which a refactor only changes when it moves the site.
+ *  - `receiver` — the full member expression the call is made on
+ *    (`subAgent`, `this.llmClient`, `deps.llmClient`). This is what identifies
+ *    the call, and it is why the two `DuyaAgent.ts` rows do not collide.
+ *  - `symbol` — the enclosing top-level declaration, asserted as well, so a
+ *    site that moves into a different function fails with a message that says
+ *    where it went instead of a line number that no longer exists.
+ *
+ * Adding a blank line, a comment, or a new function above a recorded site does
+ * not touch any of the three. Only a real change of site does. The matching is
+ * also one-to-one in both directions: a recorded anchor that resolves to two
+ * sites is a failure, so a NEW call site can never be quietly absorbed by an
+ * existing row that happens to share its receiver.
  *
  * ## The vocabulary
  *
- * `ConsumerRegistration` in `run-orchestrator.ts` names the three consumers the
- * plan lists. This file adds the two things that census does not carry:
+ * `ConsumerRegistration` in `run-orchestrator.ts` names the consumers the plan
+ * lists. This file adds the two things that census does not carry:
  *
  *  - `turnEntries` — the sites that actually BEGIN an agent turn. Only these
  *    are candidates for the retirement gate in H8.3.
- *  - `notATurnEntry` — `streamChat` calls that look identical in a grep but are
- *    not a turn entry (a summarisation call, a title generator, an LLM client
- *    wrapper). Counting them is how a census inflates itself.
+ *  - `notATurnEntry` — `.streamChat(` occurrences that are not a turn entry (a
+ *    summarisation call, a title generator, an `AIClient` call, or the registry
+ *    prose that names the method). Counting them is how a census inflates
+ *    itself.
  *
  * ## What is deliberately NOT asserted here
  *
@@ -33,7 +63,7 @@
  * each one names the evidence that would falsify it.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -44,139 +74,118 @@ function readRepoFile(relativePath: string): string {
 }
 
 /**
- * A call site that begins a whole agent turn — the thing H8.3's retirement
- * gate counts down.
+ * A `.streamChat(` occurrence, located by anchor.
+ *
+ * `line` is carried for the failure message only. It is never matched on, and
+ * no assertion below compares it to a recorded number — see the file header.
  */
-interface TurnEntry {
-  /** The consumer this entry belongs to. */
-  readonly consumer: 'desktop' | 'cli' | 'subagent' | 'workflow';
+interface StreamChatSite {
   readonly path: string;
+  /** 1-based. For diagnostics, not identity. */
   readonly line: number;
+  /** The full member expression the call is made on, or `null` for a mention. */
+  readonly receiver: string | null;
+  /** The enclosing top-level declaration. */
+  readonly symbol: string;
   /**
-   * Whether the turn is opened through the Control Plane's `openRun` (which
-   * also dispatches it) rather than by constructing a run-local agent.
+   * `call` — a real `x.streamChat(…)` invocation.
+   * `mention` — the text appears in a string or template, so it is DATA (the
+   * registry prose) rather than a call. Classified rather than skipped: a
+   * `.streamChat(` in a string is exactly the kind of thing a grep census
+   * counts, and it must be accounted for rather than argued about.
+   *
+   * Comment lines are not enumerated at all. The migrated CLI site names
+   * `agent.streamChat` in prose explaining what it used to do, and counting
+   * that would make this inventory un-editable by editing alone.
    */
-  readonly viaControlPlane: boolean;
-  /** What would have to change for this to become CP-driven. */
-  readonly note: string;
+  readonly kind: 'call' | 'mention';
+  readonly code: string;
 }
 
-/**
- * `streamChat` call sites that are NOT turn entries, with the reason. These
- * exist so the "did we count everything?" question has an answer that is not
- * "we grepped and it felt right".
- */
-interface NotATurnEntry {
+/** A `new DuyaAgent(` / `new duyaAgent(` occurrence, located by anchor. */
+interface ConstructionSite {
   readonly path: string;
+  /** 1-based. For diagnostics, not identity. */
   readonly line: number;
-  readonly reason: string;
+  /** The enclosing top-level declaration. */
+  readonly symbol: string;
+  /** The variable the agent is assigned to, or `''` when unrecognised. */
+  readonly binding: string;
+  /** A prose mention inside a comment, not a construction. */
+  readonly inComment: boolean;
+}
+
+const TOP_LEVEL_DECLARATION: readonly RegExp[] = [
+  /^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z0-9_$]+)/,
+  /^(?:export\s+)?(?:abstract\s+)?class\s+([A-Za-z0-9_$]+)/,
+  /^(?:export\s+)?(?:const|let|var)\s+([A-Za-z0-9_$]+)/,
+  /^(?:export\s+)?(?:interface|type|enum|namespace)\s+([A-Za-z0-9_$]+)/,
+];
+
+function topLevelDeclarationName(line: string): string | null {
+  const trimmed = line.trim();
+  for (const pattern of TOP_LEVEL_DECLARATION) {
+    const match = pattern.exec(trimmed);
+    if (match) return match[1] ?? null;
+  }
+  return null;
 }
 
 /**
- * ## The turn entries, measured
+ * The nearest enclosing TOP-LEVEL declaration, by column rather than by brace
+ * counting.
  *
- * `DuyaAgent.streamChat` (the agent facade) is the turn entry. `AIClient
- * .streamChat` is a different method on a different class that happens to
- * share the name, and is excluded — see `NOT_TURN_ENTRIES`.
- *
- * Desktop's own turn is opened by the router, not by a `streamChat` call site,
- * which is why it has no row here: `router.ts:1256` calls `openRun`, and the
- * execution channel inside it issues `chat:start` to the worker.
+ * Indentation is the cheap and stable signal here: a class method is indented,
+ * so a site inside one attributes to its class, and a site inside a nested
+ * function attributes to the exported function. Counting braces instead would
+ * have to parse string literals and template literals to stay correct, and this
+ * anchor is a label — it is asserted because every current value names a real
+ * declaration, and it fails loudly rather than silently if that stops holding.
  */
-const TURN_ENTRIES: readonly TurnEntry[] = Object.freeze([
-  Object.freeze({
-    consumer: 'desktop',
-    path: 'packages/agent/src/process/agent-process-entry.ts',
-    line: 3127,
-    viaControlPlane: true,
-    note:
-      'The worker `chat:start` command. Reached only through `openRun`, which ' +
-      'awaits `run.started` before dispatching and carries the canonical runId.',
-  }),
-  Object.freeze({
-    consumer: 'cli',
-    path: 'packages/agent/src/cli/index.ts',
-    line: 509,
-    viaControlPlane: false,
-    note:
-      'Interactive REPL. Constructs `duyaAgent` directly (index.ts:621); no ' +
-      'run row is opened and no runId exists.',
-  }),
-  Object.freeze({
-    consumer: 'cli',
-    path: 'packages/agent/src/cli/index.ts',
-    line: 549,
-    viaControlPlane: false,
-    note:
-      'Non-interactive `--task`. Same direct construction. This is the path ' +
-      'H8.2\'s approval-safety requirement is about.',
-  }),
-  Object.freeze({
-    consumer: 'cli',
-    path: 'packages/agent/src/cli/index.ts',
-    line: 749,
-    viaControlPlane: false,
-    note:
-      '`--print` / `--headless` single query. Same direct construction.',
-  }),
-  Object.freeze({
-    consumer: 'subagent',
-    path: 'packages/agent/src/tool/SubagentTool/runAgent.ts',
-    line: 499,
-    viaControlPlane: false,
-    note:
-      'The sub-agent turn. Runs INSIDE the parent worker on a `DuyaAgent` ' +
-      'built for the child, so it is a nested loop rather than a child run. ' +
-      'Identity is `taskId` / `subAgentSessionId`, neither of which is a runId.',
-  }),
-]);
+function enclosingTopLevel(lines: readonly string[], index: number): string {
+  for (let i = index; i >= 0; i--) {
+    const raw = lines[i] ?? '';
+    if (raw.trim() === '' || !/^\S/.test(raw)) continue; // indented or blank
+    const name = topLevelDeclarationName(raw);
+    if (name) return name;
+    // A column-0 statement that is not a declaration: keep walking outwards.
+  }
+  return '<module>';
+}
 
 /**
- * ## The look-alikes
+ * The receiver expression immediately before `.streamChat(`.
  *
- * Every one of these matches `.streamChat(` in a grep. None of them begins an
- * agent turn, and counting them is the most likely way the retirement gate
- * ends up chasing a number that can never reach zero.
+ * Handles a bare identifier, a member chain (`this.llmClient`, `deps.llmClient`)
+ * and a parenthesised expression, so that
+ * `(this.compactClient ?? this.llmClient).streamChat(` is identified by its
+ * whole receiver rather than by its trailing identifier — which is what stops
+ * it colliding with `this.llmClient.streamChat(` in the same class.
+ *
+ * Returns `null` when the text before the dot is not an expression at all,
+ * which is the signature of a mention inside a string.
  */
-const NOT_TURN_ENTRIES: readonly NotATurnEntry[] = Object.freeze([
-  Object.freeze({
-    path: 'packages/agent/src/agent/DuyaAgent.ts',
-    line: 780,
-    reason: 'Context compaction summary — an `AIClient` call, no turn.',
-  }),
-  Object.freeze({
-    path: 'packages/agent/src/agent/DuyaAgent.ts',
-    line: 4426,
-    reason: 'Side-question helper — no tools, no turn state.',
-  }),
-  Object.freeze({
-    path: 'packages/agent/src/agent/TurnStreamRunner.ts',
-    line: 153,
-    reason:
-      'The model call INSIDE a turn. Same class of call as the turn itself, ' +
-      'one layer down.',
-  }),
-  Object.freeze({
-    path: 'packages/agent/src/agent/visual-analysis.ts',
-    line: 93,
-    reason: 'Vision analysis on a separate client.',
-  }),
-  Object.freeze({
-    path: 'packages/agent/src/memory-rollout/extractor.ts',
-    line: 813,
-    reason: 'Memory extraction, its own `AIClient`.',
-  }),
-  Object.freeze({
-    path: 'packages/agent/src/session/title-generator.ts',
-    line: 685,
-    reason: 'Session titling, its own `AIClient`.',
-  }),
-  Object.freeze({
-    path: 'packages/agent/src/tool/SessionSearchTool/SessionSearchTool.ts',
-    line: 755,
-    reason: 'Summarising search results, its own `AIClient`.',
-  }),
-]);
+function receiverBefore(line: string, callAt: number): string | null {
+  const before = line.slice(0, callAt);
+  const tail = before.trimEnd();
+  if (tail.endsWith(')')) {
+    let depth = 0;
+    for (let i = tail.length - 1; i >= 0; i--) {
+      const char = tail[i];
+      if (char === ')') depth++;
+      else if (char === '(') {
+        depth--;
+        if (depth === 0) return tail.slice(i).replace(/\s+/g, ' ');
+      }
+    }
+  }
+  const match = /((?:[A-Za-z0-9_$]+\s*(?:\.\s*[A-Za-z0-9_$]+|\s*\[\s*[^\]]*\s*\])*))\s*$/.exec(before);
+  return match ? (match[1] ?? '').replace(/\s+/g, '') : null;
+}
+
+function isCommentLine(trimmed: string): boolean {
+  return trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*');
+}
 
 /**
  * Production sources that may begin a turn. Test files are excluded on
@@ -191,11 +200,9 @@ const TURN_ENTRY_SOURCES: readonly string[] = Object.freeze([
 ]);
 
 function listProductionTsFiles(dir: string, acc: string[] = []): string[] {
-  const fs = require('node:fs') as typeof import('node:fs');
-  const path = require('node:path') as typeof import('node:path');
   const abs = resolve(ROOT, dir);
-  if (!fs.existsSync(abs)) return acc;
-  for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
+  if (!existsSync(abs)) return acc;
+  for (const entry of readdirSync(abs, { withFileTypes: true })) {
     const rel = `${dir}/${entry.name}`;
     if (entry.isDirectory()) {
       if (entry.name === 'node_modules' || entry.name === 'dist') continue;
@@ -204,52 +211,381 @@ function listProductionTsFiles(dir: string, acc: string[] = []): string[] {
       acc.push(rel);
     }
   }
-  void path;
   return acc;
 }
 
+const PRODUCTION_FILES: readonly string[] = Object.freeze(
+  TURN_ENTRY_SOURCES.flatMap((dir) => listProductionTsFiles(dir)),
+);
+
+function repoLines(path: string): string[] {
+  return readRepoFile(path).split('\n');
+}
+
+function streamChatSites(): StreamChatSite[] {
+  const sites: StreamChatSite[] = [];
+  for (const file of PRODUCTION_FILES) {
+    repoLines(file).forEach((line, index) => {
+      if (!line.includes('.streamChat(')) return;
+      const trimmed = line.trim();
+      if (isCommentLine(trimmed)) return;
+      const callAt = line.indexOf('.streamChat(');
+      const receiver = receiverBefore(line, callAt);
+      sites.push({
+        path: file,
+        line: index + 1,
+        receiver,
+        symbol: enclosingTopLevel(repoLines(file), index),
+        kind: receiver ? 'call' : 'mention',
+        code: trimmed.slice(0, 100),
+      });
+    });
+  }
+  return sites;
+}
+
+function constructionSites(): ConstructionSite[] {
+  const sites: ConstructionSite[] = [];
+  for (const file of PRODUCTION_FILES) {
+    const lines = repoLines(file);
+    lines.forEach((line, index) => {
+      if (!/\bnew (DuyaAgent|duyaAgent)\(/.test(line)) return;
+      const trimmed = line.trim();
+      const inComment = isCommentLine(trimmed);
+      const binding = /(?:const\s+)?([A-Za-z0-9_$]+)\s*=\s*new\s+(?:DuyaAgent|duyaAgent)\(/;
+      sites.push({
+        path: file,
+        line: index + 1,
+        symbol: inComment ? '' : enclosingTopLevel(lines, index),
+        binding: inComment ? '' : (binding.exec(trimmed)?.[1] ?? ''),
+        inComment,
+      });
+    });
+  }
+  return sites;
+}
+
+/** `path#symbol#receiver`, the identity a recorded row is matched on. */
+function siteKey(path: string, symbol: string, receiver: string | null): string {
+  return `${path}#${symbol}#${receiver ?? '<mention>'}`;
+}
+
+function siteLabel(site: StreamChatSite | ConstructionSite): string {
+  return `${site.path}:${site.line} (${site.symbol})`;
+}
+
+/**
+ * A call site that begins a whole agent turn — the thing H8.3's retirement
+ * gate counts down.
+ */
+interface TurnEntry {
+  /** The consumer this entry belongs to. */
+  readonly consumer: 'desktop' | 'cli' | 'subagent' | 'workflow';
+  readonly path: string;
+  /** Anchor: the full receiver expression the call is made on. */
+  readonly receiver: string;
+  /** Anchor: the enclosing top-level declaration. */
+  readonly symbol: string;
+  /**
+   * Whether the turn is opened through the Control Plane's `openRun` (which
+   * also dispatches it) rather than by constructing a run-local agent.
+   */
+  readonly viaControlPlane: boolean;
+  /** What would have to change for this to become CP-driven. */
+  readonly note: string;
+}
+
+/**
+ * `.streamChat(` occurrences that are NOT turn entries, with the reason. These
+ * exist so the "did we count everything?" question has an answer that is not
+ * "we grepped and it felt right".
+ */
+interface NotATurnEntry {
+  readonly path: string;
+  /** `null` when the occurrence is a mention in data rather than a call. */
+  readonly receiver: string | null;
+  readonly symbol: string;
+  readonly reason: string;
+}
+
+/** A direct `new duyaAgent(` construction, or a comment mentioning one. */
+interface Construction {
+  readonly path: string;
+  /** Anchor: the enclosing top-level declaration. */
+  readonly symbol: string;
+  readonly binding: string;
+  /** A comment naming the construction, which is documentation, not a caller. */
+  readonly inComment: boolean;
+}
+
+/**
+ * ## The turn entries, measured
+ *
+ * `DuyaAgent.streamChat` (the agent facade) is the turn entry. `AIClient
+ * .streamChat` is a different method on a different class that happens to
+ * share the name, and is excluded — see `NOT_TURN_ENTRIES`.
+ *
+ * Desktop's own turn is opened by the router, not by a `streamChat` call site,
+ * which is why the router has no row here: `router.ts` calls `openRun`, and the
+ * execution channel inside it issues `chat:start` to the worker.
+ *
+ * Re-measured after PR #198 (the headless CLI moved onto the shared Run API):
+ * the CLI's three direct `streamChat` turn sites are GONE, and the CLI's turn
+ * now opens through `HeadlessRunHost`, which is a second producer of
+ * `run.start` on the same `RunController` — see the `run.start` row in
+ * `CONTROL_PLANE_CENSUS`. So the CLI row moved from `cli/index.ts` to the host,
+ * and the non-ControlPlane count fell from 4 to 1.
+ */
+const TURN_ENTRIES: readonly TurnEntry[] = Object.freeze([
+  Object.freeze({
+    consumer: 'desktop',
+    path: 'packages/agent/src/process/agent-process-entry.ts',
+    receiver: 'agent',
+    symbol: 'handleChatStart',
+    viaControlPlane: true,
+    note:
+      'The worker `chat:start` command. Reached only through `openRun`, which ' +
+      'awaits `run.started` before dispatching and carries the canonical runId.',
+  }),
+  Object.freeze({
+    consumer: 'cli',
+    path: 'packages/agent/src/process/headless-run-host.ts',
+    receiver: 'agent',
+    symbol: 'createAgentExecutionChannel',
+    viaControlPlane: true,
+    note:
+      'The headless CLI turn, as of PR #198. The host starts a run through the ' +
+      'same `RunController` the Desktop path uses, so this is a second producer ' +
+      'of the single entry rather than a private loop. It is the one caller of ' +
+      'the facade that is SUPPOSED to exist: the composition H8.1 introduced.',
+  }),
+  Object.freeze({
+    consumer: 'subagent',
+    path: 'packages/agent/src/tool/SubagentTool/runAgent.ts',
+    receiver: 'subAgent',
+    symbol: 'runAgent',
+    viaControlPlane: false,
+    note:
+      'The sub-agent turn. Runs INSIDE the parent worker on a `DuyaAgent` ' +
+      'built for the child, so it is a nested loop rather than a child run. ' +
+      'Identity is `taskId` / `subAgentSessionId`, neither of which is a runId.',
+  }),
+]);
+
+/**
+ * ## The look-alikes
+ *
+ * Every one of these matches `.streamChat(` in a grep. None of them begins an
+ * agent turn, and counting them is the most likely way the retirement gate ends
+ * up chasing a number that can never reach zero.
+ */
+const NOT_TURN_ENTRIES: readonly NotATurnEntry[] = Object.freeze([
+  Object.freeze({
+    path: 'packages/agent/src/agent/DuyaAgent.ts',
+    receiver: '(this.compactClient ?? this.llmClient)',
+    symbol: 'duyaAgent',
+    reason: 'Context compaction summary — an `AIClient` call, no turn.',
+  }),
+  Object.freeze({
+    path: 'packages/agent/src/agent/DuyaAgent.ts',
+    receiver: 'this.llmClient',
+    symbol: 'duyaAgent',
+    reason: 'Side-question helper — no tools, no turn state.',
+  }),
+  Object.freeze({
+    path: 'packages/agent/src/agent/TurnStreamRunner.ts',
+    receiver: 'deps.llmClient',
+    symbol: 'runTurnStream',
+    reason:
+      'The model call INSIDE a turn. Same class of call as the turn itself, ' +
+      'one layer down.',
+  }),
+  Object.freeze({
+    path: 'packages/agent/src/agent/visual-analysis.ts',
+    receiver: 'this.visionClient',
+    symbol: 'VisualAnalysisService',
+    reason: 'Vision analysis on a separate client.',
+  }),
+  Object.freeze({
+    path: 'packages/agent/src/memory-rollout/extractor.ts',
+    receiver: 'this',
+    symbol: 'Stage1Extractor',
+    reason:
+      'Memory extraction. `this.streamChat` here is NOT the agent facade: the ' +
+      'class holds `AIClient[\'streamChat\']` bound to an LLM client in its ' +
+      'constructor. An `@duya/ai` call wearing the facade\'s name.',
+  }),
+  Object.freeze({
+    path: 'packages/agent/src/session/title-generator.ts',
+    receiver: 'llmClient',
+    symbol: 'generateSessionTitle',
+    reason: 'Session titling, its own `AIClient`.',
+  }),
+  Object.freeze({
+    path: 'packages/agent/src/tool/SessionSearchTool/SessionSearchTool.ts',
+    receiver: 'client',
+    symbol: 'SessionSearchTool',
+    reason: 'Summarising search results, its own `AIClient`.',
+  }),
+  Object.freeze({
+    path: 'apps/desktop/src/main/agents/server/run-orchestrator.ts',
+    receiver: null,
+    symbol: 'LEGACY_RETIREMENT',
+    reason:
+      'The retirement registry\'s own prose, in a string literal. Data, not a ' +
+      'call — and the reason it is a recorded row rather than a silently ' +
+      'skipped line is that H8.3 has to be able to say where the number it ' +
+      'retires on comes from.',
+  }),
+]);
+
+/** Every direct agent construction, anchored like the rows above. */
+const CONSTRUCTIONS: readonly Construction[] = Object.freeze([
+  Object.freeze({
+    path: 'packages/agent/src/cli/index.ts',
+    symbol: 'runCLI',
+    binding: 'agent',
+    inComment: false,
+  }),
+  Object.freeze({
+    path: 'packages/agent/src/cli/index.ts',
+    symbol: 'runPrintMode',
+    binding: 'agent',
+    inComment: false,
+  }),
+  Object.freeze({
+    path: 'packages/agent/src/cli/index.ts',
+    symbol: 'runHeadlessMode',
+    binding: 'agent',
+    inComment: false,
+  }),
+  Object.freeze({
+    path: 'packages/agent/src/process/agent-process-entry.ts',
+    symbol: 'initAgent',
+    binding: 'agent',
+    inComment: false,
+  }),
+  Object.freeze({
+    path: 'packages/agent/src/tool/SubagentTool/runAgent.ts',
+    symbol: 'runAgent',
+    binding: 'subAgent',
+    inComment: false,
+  }),
+  Object.freeze({
+    path: 'apps/desktop/src/main/agents/server/router.ts',
+    symbol: '',
+    binding: '',
+    inComment: true,
+  }),
+  Object.freeze({
+    path: 'packages/agent/src/tool/SubagentTool/runAgent.ts',
+    symbol: '',
+    binding: '',
+    inComment: true,
+  }),
+]);
+
 describe('H8.2 — measured consumer inventory', () => {
-  it('every recorded turn entry is still at the line it was measured at', () => {
+  it('resolves every recorded site to exactly one occurrence', () => {
+    // The anchor check, in place of the old line-number check. A recorded row
+    // that no longer resolves is drift; a row that resolves to TWO occurrences
+    // is also drift, and asserting the count here is what stops a new call site
+    // from being absorbed by a stale row.
+    const calls = streamChatSites();
+    const mentions = calls.filter((site) => site.kind === 'mention');
+    const constructions = constructionSites();
+
+    const problems: string[] = [];
+
     for (const entry of TURN_ENTRIES) {
-      const lines = readRepoFile(entry.path).split('\n');
-      const actual = lines[entry.line - 1] ?? '';
-      expect(actual, `${entry.path}:${entry.line} (${entry.consumer})`).toContain(
-        '.streamChat(',
+      const found = calls.filter(
+        (site) => site.kind === 'call' && site.path === entry.path && site.receiver === entry.receiver,
       );
+      if (found.length !== 1) {
+        problems.push(
+          `turn entry ${entry.consumer} ${siteKey(entry.path, entry.symbol, entry.receiver)}: ` +
+            `resolved to ${found.length} call site(s)` +
+            (found.length > 0 ? ` — ${found.map(siteLabel).join(', ')}` : ''),
+        );
+        continue;
+      }
+      const site = found[0]!;
+      if (site.symbol !== entry.symbol) {
+        problems.push(
+          `turn entry ${siteLabel(site)}: recorded symbol is "${entry.symbol}", ` +
+            `the enclosing top-level declaration is "${site.symbol}"`,
+        );
+      }
     }
-  });
 
-  it('every recorded not-a-turn-entry is still at its line and still not one', () => {
     for (const entry of NOT_TURN_ENTRIES) {
-      const lines = readRepoFile(entry.path).split('\n');
-      const actual = lines[entry.line - 1] ?? '';
-      expect(actual, `${entry.path}:${entry.line}`).toContain('.streamChat');
+      const pool = entry.receiver === null ? mentions : calls.filter((s) => s.kind === 'call');
+      const found = pool.filter(
+        (site) => site.path === entry.path && site.receiver === entry.receiver,
+      );
+      if (found.length !== 1) {
+        problems.push(
+          `look-alike ${siteKey(entry.path, entry.symbol, entry.receiver)}: ` +
+            `resolved to ${found.length} occurrence(s)` +
+            (found.length > 0 ? ` — ${found.map(siteLabel).join(', ')}` : ''),
+        );
+        continue;
+      }
+      const site = found[0]!;
+      if (entry.receiver !== null && site.symbol !== entry.symbol) {
+        problems.push(
+          `look-alike ${siteLabel(site)}: recorded symbol is "${entry.symbol}", ` +
+            `the enclosing top-level declaration is "${site.symbol}"`,
+        );
+      }
     }
+
+    for (const entry of CONSTRUCTIONS) {
+      const found = constructions.filter(
+        (site) =>
+          site.path === entry.path &&
+          site.inComment === entry.inComment &&
+          site.symbol === entry.symbol,
+      );
+      if (found.length !== 1) {
+        problems.push(
+          `construction ${siteKey(entry.path, entry.symbol, entry.binding)}: ` +
+            `resolved to ${found.length} occurrence(s)` +
+            (found.length > 0 ? ` — ${found.map(siteLabel).join(', ')}` : ''),
+        );
+        continue;
+      }
+      const site = found[0]!;
+      if (entry.binding !== '' && site.binding !== entry.binding) {
+        problems.push(
+          `construction ${siteLabel(site)}: recorded binding is "${entry.binding}", ` +
+            `the assignment target is "${site.binding}"`,
+        );
+      }
+    }
+
+    expect(problems, 'recorded sites that no longer resolve to exactly one occurrence').toEqual([]);
   });
 
-  it('finds no unrecorded turn entry in production source', () => {
+  it('finds no unclassified turn entry in production source', () => {
     // The point of the inventory: a NEW `.streamChat(` in production source
     // that is not classified here fails. This is the assertion that makes
-    // "we counted them all" checkable instead of asserted.
-    const files = TURN_ENTRY_SOURCES.flatMap((dir) => listProductionTsFiles(dir));
-    expect(files.length).toBeGreaterThan(0);
+    // "we counted them all" checkable instead of asserted, and it is the
+    // property H8.3's retirement gate rests on.
+    expect(PRODUCTION_FILES.length).toBeGreaterThan(0);
 
-    const recorded = new Set(
-      [...TURN_ENTRIES, ...NOT_TURN_ENTRIES].map((e) => `${e.path}:${e.line}`),
-    );
-    const unrecorded: string[] = [];
-    for (const file of files) {
-      const lines = readRepoFile(file).split('\n');
-      lines.forEach((line, index) => {
-        if (!line.includes('.streamChat(')) return;
-        if (line.trimStart().startsWith('//') || line.trimStart().startsWith('*')) return;
-        const key = `${file}:${index + 1}`;
-        if (!recorded.has(key)) unrecorded.push(key);
-      });
-    }
+    const recorded = new Set<string>([
+      ...TURN_ENTRIES.map((e) => siteKey(e.path, e.symbol, e.receiver)),
+      ...NOT_TURN_ENTRIES.map((e) => siteKey(e.path, e.symbol, e.receiver)),
+    ]);
+
+    const unrecorded = streamChatSites()
+      .filter((site) => !recorded.has(siteKey(site.path, site.symbol, site.receiver)))
+      .map((site) => `${siteLabel(site)} ${site.receiver ?? '<mention>'} — ${site.code}`);
+
     expect(
       unrecorded,
-      'unrecorded .streamChat( site(s) — classify as a turn entry or as a look-alike',
+      'unclassified .streamChat( occurrence(s) — add a TURN_ENTRIES or NOT_TURN_ENTRIES row',
     ).toEqual([]);
   });
 
@@ -260,49 +596,48 @@ describe('H8.2 — measured consumer inventory', () => {
     // the more interesting drift, because it means an agent built for a caller
     // that no longer exists.
     //
-    // Desktop's single construction is CP-driven; the other four are the
-    // non-CP consumers. Counted separately from the turn entries because the
-    // CLI builds one agent for two of its three turn entries (`runCLI` owns
-    // both the REPL and `--task`), so the two axes are 1:1 per consumer but not
-    // per site.
-    const files = TURN_ENTRY_SOURCES.flatMap((dir) => listProductionTsFiles(dir));
-    const constructions: string[] = [];
-    for (const file of files) {
-      readRepoFile(file)
-        .split('\n')
-        .forEach((line, index) => {
-          if (/\bnew (DuyaAgent|duyaAgent)\(/.test(line)) {
-            constructions.push(`${file}:${index + 1}`);
-          }
-        });
-    }
-
-    expect(constructions.sort()).toEqual(
-      [
-        'apps/desktop/src/main/agents/server/router.ts:2331', // comment only
-        'packages/agent/src/cli/index.ts:621',
-        'packages/agent/src/cli/index.ts:814',
-        'packages/agent/src/cli/index.ts:867',
-        'packages/agent/src/process/agent-process-entry.ts:1910',
-        'packages/agent/src/tool/SubagentTool/runAgent.ts:391',
-        'packages/agent/src/tool/SubagentTool/runAgent.ts:446', // comment only
-      ].sort(),
+    // Desktop's construction is CP-driven; the other four are the non-CP
+    // consumers. Counted separately from the turn entries because the axes are
+    // 1:1 per consumer but not per site: the CLI now builds one agent per
+    // command and hands it to `HeadlessRunHost`, and the worker builds one
+    // inside `initAgent`.
+    const recorded = new Set<string>(
+      CONSTRUCTIONS.map((e) => siteKey(e.path, e.symbol, e.inComment ? null : e.binding)),
     );
+
+    const unaccounted = constructionSites()
+      .filter((site) => !recorded.has(siteKey(site.path, site.symbol, site.inComment ? null : site.binding)))
+      .map((site) => `${siteLabel(site)} ${site.inComment ? 'comment' : site.binding}`);
+
+    expect(
+      unaccounted,
+      'unaccounted agent construction(s) — add a CONSTRUCTIONS row',
+    ).toEqual([]);
   });
 
-  it('reports the counts the H8.3 retirement gate is measured against', () => {    const byConsumer = (c: TurnEntry['consumer']): number =>
+  it('reports the counts the H8.3 retirement gate is measured against', () => {
+    const byConsumer = (c: TurnEntry['consumer']): number =>
       TURN_ENTRIES.filter((e) => e.consumer === c).length;
     const cpDriven = TURN_ENTRIES.filter((e) => e.viaControlPlane).length;
 
     // The headline number: turns that do NOT go through the Control Plane.
     // H8.3 can only delete the shim when this reaches zero.
-    expect(TURN_ENTRIES.length - cpDriven).toBe(4);
-    expect(byConsumer('cli')).toBe(3);
+    //
+    // Re-measured after PR #198: the CLI's three direct turn sites are gone and
+    // the CLI's turn now opens through the shared `RunController`, so 4 became
+    // 1. The sub-agent is the whole of what is left, and `runAgent.ts` is a
+    // nested loop inside the parent worker with no run row of its own.
+    expect(TURN_ENTRIES.length - cpDriven).toBe(1);
+    expect(TURN_ENTRIES.length).toBe(3);
+    expect(cpDriven).toBe(2);
+    expect(byConsumer('cli')).toBe(1);
     expect(byConsumer('subagent')).toBe(1);
     expect(byConsumer('desktop')).toBe(1);
     // The look-alikes are excluded on purpose — documented so the exclusion is
-    // a number someone can challenge, not a silent filter.
-    expect(NOT_TURN_ENTRIES.length).toBe(7);
+    // a number someone can challenge, not a silent filter. Seven `@duya/ai`
+    // calls plus the registry's own prose.
+    expect(NOT_TURN_ENTRIES.length).toBe(8);
+    expect(NOT_TURN_ENTRIES.filter((e) => e.receiver === null).length).toBe(1);
   });
 });
 
@@ -330,8 +665,7 @@ describe('H8.2 — per-consumer verdicts', () => {
     const runAgent = readRepoFile('packages/agent/src/tool/SubagentTool/runAgent.ts');
     const turnSites = runAgent
       .split('\n')
-      .map((line, index) => ({ line, lineNumber: index + 1 }))
-      .filter((e) => e.line.includes('.streamChat('));
+      .filter((line) => !isCommentLine(line.trim()) && line.includes('.streamChat('));
     expect(turnSites).toHaveLength(1);
   });
 
