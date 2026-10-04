@@ -229,10 +229,10 @@ describe("WorkflowRunCard", () => {
     expect(screen.getByRole("button", { name: "workflow.nodeKind.tool" })).toBeTruthy();
   });
 
-  it("an agent chip with a child session enters the session chat view (setActiveThread)", () => {
-    const runEvents: Array<CustomEvent<{ runId?: string }>> = [];
+  it("an agent chip with a child session opens the run detail scoped to that node", () => {
+    const runEvents: Array<CustomEvent<{ runId?: string; nodeId?: string }>> = [];
     const nodeEvents: Array<CustomEvent<{ runId?: string; nodeId?: string }>> = [];
-    const runListener = (e: Event) => runEvents.push(e as CustomEvent<{ runId?: string }>);
+    const runListener = (e: Event) => runEvents.push(e as CustomEvent<{ runId?: string; nodeId?: string }>);
     const nodeListener = (e: Event) => nodeEvents.push(e as CustomEvent<{ runId?: string; nodeId?: string }>);
     window.addEventListener("duya:open-workflow-run-panel", runListener);
     window.addEventListener("duya:open-workflow-node-panel", nodeListener);
