@@ -78,7 +78,7 @@ import { loadSkills, getSkillRegistry, getAgentSkillDirectory } from '../skills/
 import { browserTool } from '../tool/builtin.js';
 import { modeModifierRegistry } from '../modes/index.js';
 import { verifyRunManifestBinding, manifestRejectionProtocolCode, type WorkerCapabilitySet } from './run-manifest-verification.js';
-import { FIRST_EPOCH, GROUND_FENCE, type RunManifest } from '@duya/agent-protocol';
+import { type RunManifest } from '@duya/agent-protocol';
 import { getBashTaskRegistry } from '../session/bash-task-registry.js';
 import { hookTaskRegistry } from '../hooks/task-registry.js';
 import { backgroundAgentLifecycle } from '../lifecycle/BackgroundAgentLifecycle.js';
@@ -88,24 +88,22 @@ import { launchSavedWorkflow } from './workflow-runner.js';
 import { runWorkflowRuntimeChild } from './workflow-runtime-child.js';
 import { MemoryArtifactStore } from '../modes/workflow/gui-artifacts.js';
 import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
-// Plan 600 S2: the run execution engine, and the port bundle the worker binds
-// its existing machinery to. The engine OWNS the turn loop; this file supplies
-// mechanisms and forwards events, which is the whole of the worker's job under
-// `04-runtime-owns-execution.md` section 2 item 3.
-import { RunEngineImpl } from '@duya/agent-runtime';
-import type {
-  ApprovalVerdict,
-  AssembledTurn,
-  ModelContentBlock,
-  ModelMessage,
-} from '@duya/agent-runtime';
-import { buildEnginePorts, type SideEffectLookup } from './run-engine-ports.js';
-// Plan 600 S2, step 2: the durable side-effect ledger the engine takes a dispatch
-// ticket from. `FIRST_EPOCH` / `GROUND_FENCE` come from `@duya/agent-protocol`
-// with the ledger, since a fence and the epoch it belongs to are one decision.
-import { createToolSideEffectLedger, defaultLedgerDir } from './tool-side-effect-ledger.js';
-// Plan 600 S2, step 1: the per-run publisher each turn's pipeline is published
-// into, so the engine's `queueTool` can reach the live turn.
+// Plan 600 S2: the run execution engine and its port contracts. The engine OWNS
+// the turn loop; this file supplies mechanisms and forwards events, which is the
+// whole of the worker's job under `04-runtime-owns-execution.md` section 2 item 3.
+//
+// It NO LONGER RUNS ONE. The `RunEngineImpl` construction and the
+// `buildEnginePorts` bundle that went with it were removed with the phantom run
+// (see the `chat:start` handler), because a run whose model port yields nothing
+// cannot be completed by wiring it better -- and leaving it live meant every
+// `chat:start` also minted a failed terminal for a run that never spoke.
+// `ModelContentBlock` is still needed for `toEngineContent`; the rest of the
+// engine's types moved out with their last use.
+import type { ModelContentBlock } from '@duya/agent-runtime';
+// Plan 600 S2: the per-run publisher each turn's pipeline is published into, so
+// a `ToolPort` can reach the live turn once the cutover binds one. Nothing
+// publishes into it today -- `DuyaAgent.streamChat` still builds and drains the
+// pipeline itself -- so it is retained as the seam, not as a live mechanism.
 import { TurnPipelinePublisher } from '../tool/turn-pipeline-publisher.js';
 import { applyMCPConfiguration, type MCPApplyResult } from '../mcp/apply.js';
 import { storePendingAnswer, takePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
@@ -356,21 +354,6 @@ let chatInProgress = false;
 let currentSecurityScanEnabled = true;
 let lastInterruptTime = 0;
 const DOUBLE_INTERRUPT_WINDOW_MS = 3000;
-
-/**
- * The engine's live handle for the run in flight, or null when idle.
- *
- * Plan 600 S2. `chat:interrupt` used to reach the agent through
- * `agent.interrupt()`, which is a method on the class that OWNS the loop. It now
- * reaches the thing that owns the loop, which is the only way a stop can be
- * reported as applied rather than merely delivered — see `RunExecutionHandle.stop`
- * and the `StopReceipt` it returns.
- *
- * Null while idle, which is what lets the interrupt branch tell "stopped a live
- * run" from "there was nothing to stop" instead of reporting a cooperative stop
- * for a run that had already ended.
- */
-let activeEngineRun: { stop(reason: string): Promise<unknown> } | null = null;
 
 /**
  * What THIS build can do, for manifest verification (plan 587 R2.2).
@@ -2247,221 +2230,6 @@ function toEngineContent(content: string | MessageContent[]): string | ModelCont
   return blocks;
 }
 
-/**
- * A model stream with nothing in it.
- *
- * Used as the engine's `ModelPort` while the pipeline is still owned by
- * `streamChat`. It is EMPTY and says so — a port that fabricated frames would let
- * the engine's loop advance on events no provider produced, which is the failure
- * mode a scripted test double creates and a production path must not.
- */
-function emptyModelStream(): AsyncIterable<never> {
-  return (async function* (): AsyncIterable<never> {
-    // Intentionally yields nothing: `RunEngineImpl` treats a frameless stream as a
-    // transport that died and ends the run as `failed`, which is the honest
-    // reading while the real stream is still owned by the legacy generator.
-  })();
-}
-
-/** A tool drain with nothing in it, for the same reason as {@link emptyModelStream}. */
-function emptyToolDrain(): AsyncIterable<never> {
-  return (async function* (): AsyncIterable<never> {
-    // Nothing dispatched through the engine yet, so nothing to yield.
-  })();
-}
-
-/**
- * The side-effect lookup the engine resolves tool classes through.
- *
- * Empty on purpose until the pipeline moves. An EMPTY lookup resolves every tool
- * to `undeclared` (see `resolveSideEffectClass`), which is the conservative
- * answer: the engine refuses to dispatch a class it cannot verify, rather than
- * assuming `read_only` for a tool nobody described.
- */
-function workerSideEffectLookup(): SideEffectLookup {
-  return {
-    sideEffectOf: () => null,
-    toolNames: () => [],
-    describe: () => null,
-  };
-}
-
-/**
- * The payload the engine hands the model port while the real one is legacy-owned.
- *
- * `systemPrompt` is typed as possibly-absent rather than defaulted to `''`,
- * because an absent system prompt and an empty one are different facts: the
- * first is a host that supplied none, the second is a host that supplied an
- * empty one. The runtime's `AssembledTurn` requires a string, so the absence is
- * made explicit here instead of being papered over.
- */
-function workerAssembledTurn(systemPrompt: string | undefined): AssembledTurn {
-  return {
-    systemPrompt: systemPrompt ?? '',
-    messages: [],
-    tools: [],
-    catalogRevision: 'worker-unbound',
-    revision: 'worker-unbound',
-  };
-}
-
-/**
- * The manifest a producer that sent none is given.
- *
- * Only for the producers not yet migrated (automation, the workflow runtime, the
- * sub-agent tool) — the same population `verifyRunManifestBinding` explicitly
- * does NOT refuse (`agent-process-entry.ts:2297`). A producer that DID send one
- * has it verified above and this is never reached.
- *
- * `synthesised: true` on every field, so a reader can tell from the record that
- * nothing here was resolved rather than trusting an invented value.
- */
-function workerFallbackManifest(msg: ChatStartMessage): RunManifest {
-  const unsupported = { source: 'unsupported', synthesised: true } as const;
-  const runId = msg.runId ?? crypto.randomUUID();
-  return {
-    version: 1,
-    runId,
-    projectId: null,
-    workspaceId: 'worker',
-    roots: [process.cwd()],
-    cwd: process.cwd(),
-    permissionPolicy: { mode: 'default', hostSwitch: 'ask', defaultTimeoutMs: 300_000 },
-    capabilities: { profiles: [], modes: [], tools: [] },
-    connectorBindings: [],
-    // NO SECRETS. The engine hashes whatever it is given into every event it
-    // emits, so a manifest carrying an API key would put it in the durable log.
-    env: { ref: 'env:worker', hash: 'e3b0c44298fc1c149afbf4c8996fb924' },
-    agent: {
-      profileId: null,
-      // Resolved from the AGENT, not from `msg.options`: the options bag carries
-      // a model *configuration* (`{ model: string; baseURL: string; ... }`, see
-      // `ChatStartMessage.options` at :288), not a model id. Reading
-      // `msg.options.model` as a string would put an object into a field the
-      // runtime hashes, and the hash would be of a configuration object rather
-      // than of a model.
-      model: typeof agent?.model === 'string' ? agent.model : '',
-      providerId: typeof agent?.provider === 'string' ? agent.provider : '',
-    },
-    budget:
-      typeof msg.options?.maxTurns === 'number' ? { maxTurns: msg.options.maxTurns } : {},
-    deterministic: false,
-    provenance: {
-      roots: unsupported,
-      cwd: unsupported,
-      permissionPolicy: unsupported,
-      capabilities: unsupported,
-      connectorBindings: unsupported,
-      env: unsupported,
-      agent: unsupported,
-      budget: unsupported,
-      workspaceId: unsupported,
-      deterministic: unsupported,
-    },
-  };
-}
-
-/**
- * Construct the engine and run one execution through it.
- *
- * ## Why this is not `agent.streamChat` behind a different name
- *
- * `RunEngineImpl` owns the `model -> tool -> backfill -> next turn` loop. Every
- * decision on that spine is made inside `@duya/agent-runtime`; this function
- * supplies mechanisms through `buildEnginePorts` and forwards what the engine
- * reports. It contains no turn counter, no stop decision, and no `while` over
- * turns — which is the property plan 600 `04` section 2 item 3 asks for and the
- * property the old acceptance gate could not see.
- *
- * ## What the worker still owns
- *
- * Assembly (catalog resolution, skills, MCP handshake, attachment decode) and
- * frame fan-out. Both are host facts: the first needs registries that live above
- * the runtime layer, and the second is a property of being a subprocess
- * (`sendEvent` writes IPC and stdout, `agent-process-entry.ts:2093-2096`).
- *
- * ## Cancellation
- *
- * The caller's `AbortController` is created HERE, before assembly, and handed to
- * the engine. That is the correction `ports.ts` makes to `DuyaAgent`, whose own
- * controller is created at the first line of `streamChat` (`DuyaAgent.ts:963`)
- * and therefore covers none of the setup in front of it. Creating it before the
- * ports exist is what makes that region cancellable.
- */
-function runWithEngine(input: {
-  readonly manifest: RunManifest;
-  readonly prompt: ModelMessage;
-  readonly options: Readonly<Record<string, unknown>>;
-  readonly sources: Parameters<typeof buildEnginePorts>[0];
-}): { readonly stop: (reason: string) => Promise<unknown>; readonly completed: Promise<void> } {
-  // Created BEFORE the ports are built, so a stop can reach assembly and the
-  // first model call rather than only the turns that follow them.
-  const controller = new AbortController();
-  const engine = new RunEngineImpl({ now: () => Date.now() });
-
-  // Plan 600 S2, step 2: the side-effect ledger, attached here rather than at the
-  // call site because the fence is a property of THIS execution, not of the
-  // caller's sources bag.
-  //
-  // The epoch and fence are the first attempt's (`FIRST_EPOCH`,
-  // `GROUND_FENCE`), and that is not a simplification — the worker does not
-  // recover, so every execution it starts genuinely IS a first attempt. A
-  // recovered attempt has to take the next fence from what the store committed
-  // (`recoverRun`, `checkpoint-store.ts:258-267`), which is a Control Plane
-  // decision and is not wired here. Claiming a higher epoch here would be a
-  // fence no recovery would honour.
-  const ledger = createToolSideEffectLedger({
-    dir: defaultLedgerDir(),
-    runId: input.manifest.runId,
-    runEpoch: FIRST_EPOCH,
-    fence: {
-      runId: input.manifest.runId,
-      runEpoch: FIRST_EPOCH,
-      token: GROUND_FENCE.token,
-    },
-  });
-
-  const ports = buildEnginePorts({
-    ...input.sources,
-    // Both halves, because `buildEnginePorts` attaches `sideEffects` only when
-    // both are present (`run-engine-ports.ts:230`): one without the other would
-    // leave the engine with no ledger at all, and `begin` alone would make
-    // `#drainOutcomes` skip the settle.
-    beginTicket: (call) => ledger.begin(call),
-    settleTicket: (input2) => ledger.settle(input2),
-  });
-  const handle = engine.execute({
-    manifest: input.manifest,
-    signal: controller.signal,
-    ports,
-    input: {
-      revision: '',
-      prompt: input.prompt,
-      history: { kind: 'inline', value: [] },
-      attachments: { kind: 'inline', value: [] },
-      catalog: { kind: 'by_ref', digest: '', locator: 'catalog://worker' },
-      steering: [],
-      options: input.options,
-    },
-  });
-
-  // Published so `chat:interrupt` can reach the OWNER of the loop. The WRAPPER
-  // is published rather than the raw handle, so the interrupt branch cannot
-  // reach a `stop` that takes a request object while every other caller here
-  // passes a reason string — a second stop shape in one file is how one of them
-  // ends up reporting the wrong disposition.
-  //
-  // Nulled on completion, so a stop arriving afterwards is reported as reaching
-  // no live run instead of as a clean cooperative stop.
-  const published = { stop: (reason: string) => handle.stop({ graceMs: 0, reason }) };
-  activeEngineRun = published;
-  const completed = handle.completed().finally(() => {
-    if (activeEngineRun === published) activeEngineRun = null;
-  });
-
-  return { completed, stop: published.stop };
-}
-
 // ============================================================================
 // Chat Handler
 // ============================================================================
@@ -3215,137 +2983,59 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       current: null,
     };
 
-    // ── Plan 600 S2: the run engine ──────────────────────────────────────────
-    // The engine is CONSTRUCTED AND CALLED on the live path, before the legacy
-    // generator, and its decisions are the ones that reach the run layer.
+    // ── Plan 600 S2: where the turn is driven, and why it is still HERE ─────
     //
-    // What is bound TODAY, and what is not, is stated rather than implied:
+    // This used to construct and run a `RunEngineImpl` on every `chat:start`,
+    // with `openModelStream: () => emptyModelStream()`. That was a PHANTOM run,
+    // and it is gone as of this commit. It was removed rather than completed,
+    // because a run the engine cannot serve is not a neutral placeholder.
     //
-    //  - BOUND: approval (this file's own `requestPermission`), the side-effect
-    //    class resolution, the cancellation signal, and the terminal proposal.
-    //    The stop decision, the turn ceiling, the budget verdict and the subtask
-    //    sweep are therefore the engine's, reached from a real `chat:start`.
-    //  - NOT YET BOUND: the tool pipeline. `ToolExecutionPipeline` is
-    //    constructed INSIDE `DuyaAgent.streamChat` per turn
-    //    (`DuyaAgent.ts:2036`), against a per-turn `toolUseContext` built from
-    //    closure state this file cannot see. There is no handle to bind a
-    //    `ToolPort` to, and faking one would be exactly the `headless-run-host`
-    //    shape `04` section 0 rejects: a real controller around an executor that
-    //    still holds the loop.
+    // MEASURED consequences of that phantom run, observed rather than reasoned
+    // (see `__tests__/live-turn-single-driver.test.ts`):
     //
-    // So the legacy generator below still drives the model and tool calls, and
-    // the engine's per-turn legs are reached through the bridge further down.
-    // Lifting the pipeline out is the named blocker for the next slice; it is a
-    // refactor of `DuyaAgent.streamChat`, not a wiring change.
+    //  - It asked the provider ZERO times and dispatched ZERO tools, then ended
+    //    `failed` on `sawFrame === false` (`run-engine.ts:490`) and proposed that
+    //    failure as the run's terminal. `RunSession.settle` is the single writer
+    //    of a real terminal, so the proposal was logged and discarded: a second
+    //    account of a run that had not happened, minted once per `chat:start`.
+    //  - NONE of the decisions the removed comment claimed for it were reachable.
+    //    `buildEnginePorts` attaches no `budget`, no `attempt` and no `subtasks`
+    //    (`run-engine-ports.ts:280`), so `#budgetExhausted` was constantly false,
+    //    the fence was always null, and `#reclaimSubtasks` always returned 0. The
+    //    old claim that "the stop decision, the turn ceiling, the budget verdict
+    //    and the subtask sweep are therefore the engine's" was false in all four
+    //    parts, and is not restated here as if it were true.
     //
-    // MEASURED (2026-10-05, `__tests__/turn-leg-cutover-ordering.test.ts`): the
-    // model leg cannot be bound FIRST either, so "wire it, then remove it" is
-    // not available as an order. Two facts, both observed rather than reasoned:
+    // The turn is driven HERE, by `DuyaAgent.streamChat`, and by nothing else.
+    //
+    // Why the model leg cannot simply be bound instead -- measured in
+    // `__tests__/turn-leg-cutover-ordering.test.ts`, and unchanged by this commit,
+    // because that test drives the engine directly and so still describes the
+    // hazard the NEXT slice creates if the leg is bound while this runs:
     //
     //  1. `buildTurnModelLeg`'s `open()` IS `runTurnStream(params.deps)`
     //     (`model-leg.ts:216`), and that is the same call `DuyaAgent.streamChat`
     //     makes at its own `:2431`. Binding `openModelStream` to a published leg
-    //     therefore does not lend the engine one turn of the running loop — it
-    //     gives the engine the WHOLE cycle (`run-engine.ts:307` is a
-    //     self-contained `for`: assemble, `#streamModel` at `:382`, drain at
-    //     `:392`, decide, repeat) while the generator keeps running that same
-    //     cycle. The test drives both callers over one leg and counts TWO
-    //     provider requests for one turn. Two attempts also share one set of
-    //     per-turn accumulators, so a transport death under either one calls
-    //     `onRetryReset` -> `executor.discard()` underneath the other.
+    //     does not lend the engine one turn of the running loop -- it gives the
+    //     engine the WHOLE cycle (`run-engine.ts:307` is a self-contained `for`:
+    //     assemble, `#streamModel` at `:382`, drain at `:392`, decide, repeat)
+    //     while this generator keeps running that same cycle. Two callers, two
+    //     provider requests, one set of per-attempt accumulators -- so a transport
+    //     death under either attempt calls `onRetryReset` -> `executor.discard()`
+    //     underneath the other.
     //  2. `#streamModel` is called unconditionally at the top of the cycle, so
     //     there is no "wait for the legacy driver to hand me a turn" position to
-    //     wait at. If the engine wins the race, `ModelLegPublisher.requireLeg`
-    //     refuses and the run ends `failed`; if the generator wins, fact 1
-    //     applies. Which one happens is decided by microtask scheduling, so
-    //     publishing a leg earlier is a RACE, not a fix.
+    //     wait at. Publishing a leg earlier is a RACE, not a fix.
     //
-    // Consequence for the next slice: the model port, the tool drain and the
-    // `chat:*` projection all become correct in the SAME change that stops the
-    // generator from driving the turn — and the generator is what owns the
-    // durable transcript write, the tool-result frames and the
-    // `PostToolUseFailure` hook. They land together or the turn loses them.
-    const engineRun = runWithEngine({
-      manifest: msg.manifest ?? workerFallbackManifest(msg),
-      prompt: { role: 'user', id: msg.id, content: toEngineContent(messageContent) },
-      options: (msg.options ?? {}) as Readonly<Record<string, unknown>>,
-      sources: {
-        openModelStream: () => emptyModelStream(),
-        queueTool: (call) => {
-          // Plan 600 S2, step 1: the current turn's pipeline is now REACHABLE,
-          // so this no longer refuses unconditionally. It still refuses loudly
-          // whenever the turn it would reach is the wrong one — nothing
-          // published yet, the run over, or a turn whose pipeline has been
-          // discarded — and those refusals are thrown by the publisher, not
-          // swallowed here.
-          //
-          // Note what is NOT true yet: `openModelStream` below still yields
-          // nothing, so the engine never reaches this line. Binding it is the
-          // next slice, and it is the slice where "one pipeline, one driver"
-          // stops being theoretical — the legacy generator below still drains
-          // this same pipeline itself.
-          turnPipelines.queue({ id: call.callId, name: call.name, input: call.input });
-        },
-        drainTools: () => emptyToolDrain(),
-        discardTools: () => {},
-        lookup: workerSideEffectLookup(),
-        assembleTurn: () => Promise.resolve(workerAssembledTurn(effectiveSystemPrompt)),
-        askApproval: async (request, signal) => {
-          // A stop before the ask is a refusal, not a wait: the user pressing
-          // stop while a permission card is open must not leave the run parked
-          // on a prompt nobody will ever answer.
-          if (signal.aborted) return { allowed: false, reason: 'cancelled' };
-          // An absent handler is `unavailable`, NOT `denied`. The distinction is
-          // the whole reason `ApprovalVerdict` has three reasons: a denial is a
-          // user decision and belongs in the transcript, while an unreachable
-          // approver is a failure of the surface, and conflating them makes a
-          // broken bridge look like a user saying no.
-          if (requestPermission === undefined) return { allowed: false, reason: 'unavailable' };
-          const decision = await requestPermission({
-            toolName: request.toolName,
-            input: request.input,
-            sessionId: msg.sessionId,
-            toolUseId: request.callId,
-            ...(request.permissionMode === 'default'
-              ? {}
-              : { permissionMode: request.permissionMode }),
-          } as never);
-          // `paused` is NOT an allow. The legacy surface can park a run awaiting
-          // a later answer, and mapping that to `allowed` would let a tool run
-          // with no decision behind it — which is precisely the class of bug
-          // F02 (`router.ts:2313-2352`) was fixed to prevent.
-          return decision === 'allow'
-            ? { allowed: true, scope: 'once' }
-            : { allowed: false, reason: 'denied' };
-        },
-        publishEvent: () => {
-          // The run layer's ledger is the Control Plane's. Publishing a protocol
-          // event from here would mint a second account of the same run, so the
-          // frames the engine's presence produces are deliberately not invented.
-          //
-          // Plan 600 S2, turn-output slice: binding this is the CUTOVER's job,
-          // not this port's. It means owning the `chat:*` projection for engine
-          // events -- the `WorkerAdapterSurface` codec -- while the legacy
-          // generator below is still emitting the same frames from the same
-          // turn, so a bound publisher would double them. The port that carries
-          // a landed tool result (`TurnOutputPort`) is likewise unbound here:
-          // every effect it names is performed inside `DuyaAgent.streamChat`'s
-          // closure today, and there is nothing to bind until the cutover lifts
-          // them out. See `run-engine-ports.ts` (`LegacyEngineSources`).
-        },
-        proposeTerminal: (candidate) => {
-          // Reported, not decided. `RunSession.settle` remains the single writer
-          // of the terminal (`run-session.ts:519,527`).
-          log(
-            `[Agent-Process] engine proposed terminal: ${candidate.state.status} (${candidate.reason})`,
-          );
-        },
-      },
-    });
-    // Awaited so the run's engine legs complete before the legacy frames are
-    // drained; not awaited for its frames, because it emits none yet.
-    void engineRun.completed.catch(() => {});
-
+    // So the model port, the tool drain, `TurnOutputPort` and the `chat:*`
+    // projection all become correct in the SAME change that stops this generator
+    // from driving the turn -- and this generator is what owns the durable
+    // transcript write, the tool-result frames and the `PostToolUseFailure` hook
+    // (the eleven rows `__tests__/engine-drain-carryover.test.ts` enumerates).
+    // They land together or the turn loses them. That change is a REFACTOR of
+    // `DuyaAgent.streamChat` -- its body has to become port calls, because
+    // `packages/agent-runtime` may not import `packages/agent` -- and it is the
+    // whole of the remaining cutover.
     const eventGen = agent.streamChat(messageContent, {
       systemPrompt: effectiveSystemPrompt,
       requestPermission,
@@ -4655,17 +4345,19 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           if (chatInProgress) {
             // First press: abort current chat.
             //
-            // The ENGINE is asked first, because it owns the loop and is the only
-            // component that can report whether the stop was applied. The agent
-            // is still asked, because the legacy path's own controller drives
-            // provider calls the engine's signal does not reach on its own.
+            // ONE path, and it is the agent's. This used to ask the run engine
+            // first and the agent second, which was two mechanisms for one
+            // symptom: the engine run that `activeEngineRun` pointed at was the
+            // phantom run removed above, so its `stop` could only ever abort a
+            // controller that no provider request was reading. Two callers, one
+            // of which provably cancelled nothing.
             //
-            // Both are called, and the order matters: the engine first, so a
-            // stop that reaches the loop is recorded before the legacy abort
-            // unwinds the machinery underneath it.
-            if (activeEngineRun) {
-              void activeEngineRun.stop('user pressed stop');
-            }
+            // `agent.interrupt()` is what actually stops the in-flight turn: it
+            // fires `this.abortController`, which is the signal `runTurnStream`
+            // hands the client, so the provider request is aborted rather than
+            // merely orphaned. That remains true after the cutover lands, and it
+            // is why this line is the one the cutover's cancellation slice
+            // removes -- not before, and not after a partial handover.
             if (agent && agent.interrupt) {
               agent.interrupt();
             }
