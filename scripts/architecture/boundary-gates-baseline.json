@@ -1,0 +1,15 @@
+{
+  "$comment": "Plan 600 boundary-gate baseline. Entries are KNOWN findings, recorded so the gate can fail only on NEW ones while G4/G6 are still open. Regenerate with `npm run architecture:boundaries -- --write` after a fix, and review the diff: a shrinking entry set is a real fix, an unchanged one means nothing moved.",
+  "gate": "plan-600-boundaries",
+  "entries": [
+    "G4|packages/agent/src/process/agent-process-entry.ts|1922|duyaAgent",
+    "G4|packages/agent/src/process/agent-process-entry.ts|75|DuyaAgent",
+    "G4|packages/agent/src/process/agent-process-entry.ts|75|duyaAgent",
+    "G6|apps/desktop/src/main/db/core/run-store.ts|173|session_id NOT NULL",
+    "G6|apps/desktop/src/main/db/core/stores.ts|105|session_id NOT NULL",
+    "G6|apps/desktop/src/main/db/core/stores.ts|634|session_id NOT NULL",
+    "G6|apps/desktop/src/main/db/schema.ts|165|session_id NOT NULL",
+    "G6|apps/desktop/src/main/db/schema.ts|402|session_id NOT NULL",
+    "G6|apps/desktop/src/main/db/schema.ts|415|session_id NOT NULL"
+  ]
+}

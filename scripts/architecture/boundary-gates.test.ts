@@ -40,12 +40,15 @@ import {
   DURABLE_IDENTITY_TABLES,
   HOST_ONLY,
   LAYERS,
+  evaluate,
   findReverseEdges,
   findRuntimeHostLeaks,
   findSessionRootedTables,
   findWorkerSeamBypasses,
+  fingerprint,
   layerOfSpecifier,
   workerImplementsExecutionChannel,
+  type BoundaryReport,
 } from './boundary-gates.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
@@ -378,5 +381,70 @@ describe('the gates are RED on the live tree, and that is the point', () => {
   it('the layer table declares the direction 600 requires', () => {
     const order = LAYERS.map((l) => l.name);
     expect(order).toEqual(['protocol', 'core', 'runtime', 'host']);
+  });
+});
+
+describe('baseline — a known defect must not block, a new one must fail', () => {
+  // The whole reason the baseline exists: G4 and G6 report real defects, so a
+  // plain non-zero exit would block every unrelated change until S1/S3 land.
+  // But a gate that is baselined into permanent silence is exactly the failure
+  // recorded as `vacuous-guard-tells`. These tests pin both halves.
+
+  const report = (findings: unknown[]): BoundaryReport => ({
+    gate: 'GX',
+    title: 'test',
+    findings,
+  });
+
+  it('treats a finding already in the baseline as known, not new', () => {
+    const finding = { file: 'a.ts', line: 3, why: 'x' };
+    const key = fingerprint(report([finding]), finding);
+    const outcome = evaluate([report([finding])], new Set([key]))[0]!;
+    expect(outcome.known).toBe(1);
+    expect(outcome.newFindings).toEqual([]);
+  });
+
+  it('treats a finding absent from the baseline as new', () => {
+    const finding = { file: 'b.ts', line: 9, why: 'y' };
+    const outcome = evaluate([report([finding])], new Set())[0]!;
+    expect(outcome.newFindings).toHaveLength(1);
+    expect(outcome.known).toBe(0);
+  });
+
+  it('distinguishes two findings of the same kind in different files', () => {
+    // This is the case a shape-only comparison would miss: identical `why`,
+    // different location. A gate keyed on the message alone would treat the
+    // second one as already-known and let a regression through.
+    const a = { file: 'a.ts', line: 3, why: 'same' };
+    const b = { file: 'b.ts', line: 3, why: 'same' };
+    const keyA = fingerprint(report([a]), a);
+    const keyB = fingerprint(report([b]), b);
+    expect(keyA).not.toBe(keyB);
+    const outcome = evaluate([report([a, b])], new Set([keyA]))[0]!;
+    expect(outcome.known).toBe(1);
+    expect(outcome.newFindings).toEqual([keyB]);
+  });
+
+  it('distinguishes the same file at two different lines', () => {
+    const a = { file: 'a.ts', line: 3, why: 'same' };
+    const b = { file: 'a.ts', line: 4, why: 'same' };
+    expect(fingerprint(report([a]), a)).not.toBe(fingerprint(report([b]), b));
+  });
+
+  it('reports a baseline entry that is no longer produced as fixed', () => {
+    const gone = { file: 'gone.ts', line: 1, why: 'z' };
+    const key = fingerprint(report([gone]), gone);
+    const outcome = evaluate([report([])], new Set([key]))[0]!;
+    expect(outcome.stale).toEqual([key]);
+    expect(outcome.newFindings).toEqual([]);
+  });
+
+  it('the live tree is fully baselined, so the gate exits clean', () => {
+    // This is the assertion that keeps the baseline honest in both directions:
+    // the recorded file must actually cover every current finding.
+    const outcomes = evaluate();
+    for (const outcome of outcomes) {
+      expect({ gate: outcome.gate, new: outcome.newFindings }).toEqual({ gate: outcome.gate, new: [] });
+    }
   });
 });
