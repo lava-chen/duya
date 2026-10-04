@@ -46,7 +46,6 @@
 
 import type {
   LifecycleViolationCode,
-  RunCompletedPayload,
   RunEvent,
   RunEventEnvelope,
   RunTerminalState,
@@ -95,13 +94,25 @@ function terminalStateOf(event: RunEvent): RunTerminalState {
   if (event.type === 'run.failed') {
     return { status: 'failed', error: event.error };
   }
-  // The narrowing above leaves exactly `run.completed`, whose `status` is
-  // `RunStatus` — a member of the `RunTerminalState` status union, so this is a
-  // projection and not a widening.
-  const completed: RunCompletedPayload = event;
-  return completed.stopReason === undefined
-    ? { status: completed.status }
-    : { status: completed.status, stopReason: completed.stopReason };
+  // `RunEvent` is a ~37-member union and `run.failed` is only one of them, so
+  // returning early does NOT narrow `event` to `run.completed` — an early
+  // return proves "not run.failed", not "is run.completed". A second check is
+  // what narrows it.
+  //
+  // This arm is unreachable at runtime: the only caller sits behind
+  // `isTerminalEventType`, whose set is exactly `{run.completed, run.failed}`.
+  // It exists because the type system cannot see that, and unreachable code
+  // that the type system REQUIRES is not the same as unreachable code that
+  // hides a mistake. It is a narrowing assertion, not a defensive check — do
+  // not add a test that exercises it, and do not "simplify" it away.
+  if (event.type !== 'run.completed') {
+    throw new Error(
+      `terminalStateOf called with a non-terminal event '${event.type}'; a run that has not ended has no terminal state`,
+    );
+  }
+  return event.stopReason === undefined
+    ? { status: event.status }
+    : { status: event.status, stopReason: event.stopReason };
 }
 
 /**
