@@ -133,9 +133,10 @@ export const PRIMARY_AGENT_ENTRY = 'agent-bundle/agent-process-entry.js';
  *
  * Each entry pairs the relative path with the source that resolves it. The
  * gate then asks the question nothing else asks: does a build step actually
- * emit that file into the bundle directory? `assets/` is produced by
- * `build-agent-bundle.mjs`; `BashTool/BashWorker.js` is not produced by
- * anything, which is the open defect recorded in the baseline.
+ * emit that file into the bundle directory? Both are produced by
+ * `build-agent-bundle.mjs` — `assets/` by a directory copy, and
+ * `BashTool/BashWorker.js` by a second esbuild entry, because WorkerPool
+ * spawns the worker as its own process and esbuild cannot inline that.
  */
 export const BUNDLE_FILE_CONTRACTS = [
   {
@@ -150,9 +151,24 @@ export const BUNDLE_FILE_CONTRACTS = [
     relativePath: 'BashTool/BashWorker.js',
     kind: 'file',
     resolvedBy: 'packages/agent/src/tool/WorkerPool.ts',
-    producer: '(none found)',
+    producer: 'scripts/build-agent-bundle.mjs',
   },
 ];
+
+/**
+ * The BashWorker's path inside the bundle directory, as path segments.
+ *
+ * Read from the contract table above rather than re-spelled, so the existence
+ * check and the self-containment check can never drift onto different paths.
+ * A missing entry throws at load time instead of silently checking nothing.
+ */
+export const BASH_WORKER_CONTRACT_PATH = (() => {
+  const contract = BUNDLE_FILE_CONTRACTS.find((c) => c.id === 'bash-worker');
+  if (!contract) {
+    throw new Error('BUNDLE_FILE_CONTRACTS lost its bash-worker entry');
+  }
+  return contract.relativePath.split('/');
+})();
 
 /**
  * Build and packaging sources scanned when asking "does a producer emit this
@@ -318,6 +334,121 @@ export function classifyRequires(bundleText, externals) {
   });
 
   return result;
+}
+
+/**
+ * Externals the BashTool worker build is allowed to leave unbundled: none.
+ *
+ * This is deliberately NOT `ALLOWED_EXTERNALS`. The worker is not a module of
+ * the bundle, it is a separate program WorkerPool spawns with
+ * `spawn(process.execPath, [workerPath])` — no NODE_PATH, no execArgv, no
+ * node_modules of its own. In a packaged app it sits at
+ * `resources/agent-bundle/BashTool/BashWorker.js`, where the only node_modules
+ * is the one after-pack.js copies for the ENTRY's externals. So a require the
+ * entry may legitimately keep is a require the worker cannot resolve.
+ *
+ * Today the worker's transitive closure is Node builtins only, so the build
+ * passes `external: []` and the output is self-contained. This list is the
+ * ratchet that keeps it that way.
+ */
+export const BASH_WORKER_ALLOWED_EXTERNALS = [];
+
+/**
+ * Every literal `require("...")` specifier in a built BashWorker.js, found by
+ * plain text scan rather than by the lexer.
+ *
+ * This exists because `classifyRequires` cannot be trusted as the ONLY witness
+ * for this file. Its lexer desynchronizes partway through the real minified
+ * worker and silently stops reporting every `require` after that point — a
+ * third-party require appended to the end of the built file is not reported at
+ * all. That blind spot is inherited from the shared helper and is not fixed
+ * here; it is avoided instead, by cross-checking the worker with a scan that
+ * has no state to lose.
+ *
+ * A raw regex over-reports in general (it can match text inside a string), which
+ * is why the entry uses the lexer: the entry inlines ajv, whose runtime keyword
+ * modules paste `require("ajv/dist/runtime/equal")` into a string for a code
+ * generator at validation time, and a raw scan would accuse a healthy bundle.
+ * The worker is a small, dependency-free, single-purpose file with no code
+ * generator, so here the safe direction is the loud one: report the specifier
+ * and let a human see it. A false report costs one look; a missed require ships
+ * a broken Bash tool.
+ *
+ * @param {string} text
+ * @returns {string[]} unique specifiers, in first-seen order
+ */
+export function scanBashWorkerSpecifiers(text) {
+  const found = [];
+  for (const match of text.matchAll(/require\(\s*["']([^"'\n]+)["']\s*\)/g)) {
+    if (!found.includes(match[1])) found.push(match[1]);
+  }
+  return found;
+}
+
+/**
+ * Prove a built BashWorker.js resolves nothing at runtime.
+ *
+ * Existence is not enough. A worker file that `require`s a third-party package
+ * passes a presence check and still dies on the first Bash call in an installed
+ * app, because the node_modules that satisfies it in the workspace is not
+ * shipped. This is the same reasoning as the entry's `bundle-self-contained`
+ * check, applied with the stricter allowlist the worker's process model forces.
+ *
+ * The non-builtin specifiers are decided by the state-free scan above, not by
+ * the lexer, so this check cannot be silenced by the lexer's desync. The lexer
+ * is still consulted for relative and computed requires.
+ *
+ * @param {string} workerText emitted worker source
+ * @param {string} workerPath path, used only in messages
+ * @returns {Finding[]}
+ */
+export function checkBashWorkerSelfContained(workerText, workerPath) {
+  /** @type {Finding[]} */
+  const findings = [];
+  const builtins = new Set(builtinModules);
+  const specifiers = scanBashWorkerSpecifiers(workerText);
+
+  const unresolvable = specifiers.filter((spec) => {
+    if (spec.startsWith('node:') || builtins.has(spec)) return false;
+    if (BASH_WORKER_ALLOWED_EXTERNALS.some((e) => spec === e || spec.startsWith(`${e}/`))) return false;
+    return true;
+  });
+
+  if (unresolvable.length > 0) {
+    const relative = unresolvable.filter((s) => s.startsWith('.') || path.isAbsolute(s));
+    const thirdParty = unresolvable.filter((s) => !relative.includes(s));
+    for (const [label, list] of [['requires', thirdParty], ['still requires relative paths', relative]]) {
+      if (list.length === 0) continue;
+      findings.push({
+        check: 'bash-worker-self-contained',
+        kind: 'missing',
+        message: `the built BashWorker ${label} ${list.join(', ')}, which resolves only through a `
+          + 'node_modules the package does not ship next to the worker',
+        evidence: `${workerPath} — the worker is spawned as its own process, so the entry's `
+          + 'externals allowlist does not apply to it; every literal require in it: '
+          + `${specifiers.join(', ') || '(none)'}`,
+      });
+    }
+  }
+
+  // Only what the state-free scan cannot see is left to the lexer: a computed
+  // require has no string literal to match. Its literal-specifier findings are
+  // not used, because the scan above already covers them without a desync risk
+  // and reporting both would double-count the same defect.
+  const classified = classifyRequires(workerText, BASH_WORKER_ALLOWED_EXTERNALS);
+  if (classified.dynamic > 0) {
+    // Same reasoning as the entry: a computed require cannot be resolved
+    // statically, so it is surfaced rather than assumed safe by silence.
+    findings.push({
+      check: 'bash-worker-self-contained',
+      kind: 'missing',
+      message: `${classified.dynamic} non-literal require(s) in the built BashWorker cannot be `
+        + 'checked statically; self-containment is proven only for the literal ones',
+      evidence: workerPath,
+    });
+  }
+
+  return findings;
 }
 
 /**
@@ -676,6 +807,14 @@ export function runBundleChecks(options = {}) {
     }
   }
 
+  // Presence of the worker is not sufficient: it is spawned as its own
+  // process, so anything it requires at runtime must already be inlined.
+  // Skipped when absent — the contract finding above already reports that.
+  const workerAbs = path.join(bundleDir, ...BASH_WORKER_CONTRACT_PATH);
+  if (existsSync(workerAbs)) {
+    findings.push(...checkBashWorkerSelfContained(readFileSync(workerAbs, 'utf8'), workerAbs));
+  }
+
   return { findings, bundleDir };
 }
 
@@ -812,6 +951,13 @@ export function runPackagedChecks(options = {}) {
           + `(${classified.relative.slice(0, 5).join(', ')}), which esbuild should have inlined`,
       });
     }
+  }
+
+  // The worker gets the stricter treatment: it is spawned as its own process,
+  // so the entry's externals allowlist cannot help it resolve anything.
+  const packagedWorker = path.join(resourcesDir, 'agent-bundle', ...BASH_WORKER_CONTRACT_PATH);
+  if (existsSync(packagedWorker) && statSync(packagedWorker).size > 0) {
+    findings.push(...checkBashWorkerSelfContained(readFileSync(packagedWorker, 'utf8'), packagedWorker));
   }
 
   // Native ABI: load it with the packaged runtime, or say why we could not.

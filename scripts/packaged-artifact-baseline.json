@@ -1,22 +1,5 @@
 {
   "version": 1,
   "note": "Known defects for scripts/check-packaged-artifacts.mjs. An entry here downgrades a finding to KNOWN-DEFECT: it is printed loudly and counted, but does not fail the run. A known defect is NEVER counted as a pass. Delete the entry once the defect is actually fixed, so the gate can start enforcing it.",
-  "defects": [
-    {
-      "id": "BASHWORKER-NOT-BUNDLED",
-      "check": "bundle-file-contract:bash-worker",
-      "summary": "AGENTS.md's pre-release checklist names resources/agent-bundle/BashTool/BashWorker.js, but no build step emits it, so a packaged app cannot spawn the bash worker.",
-      "status": "open on master 5dc45fcf; found by E4.4-B, not introduced by it",
-      "evidence": [
-        "packages/agent/src/tool/WorkerPool.ts:52 tries path.join(dirname, 'BashTool', 'BashWorker.js') first, i.e. inside the bundle directory.",
-        "scripts/build-agent-bundle.mjs writes only agent-process-entry.js, the CommonJS marker package.json, and the prompts assets/ tree. It never writes BashTool/.",
-        "scripts/after-pack.js verifies the agent entry, better_sqlite3.node and playwright, and FATALs when any is missing. It does not check BashWorker.js.",
-        "scripts/verify-packaged-parity.mjs does not list BashWorker.js either.",
-        "electron-builder.yml extraResources ships packages/agent/bundle/ and packages/agent/skills/ only; there is no resources/agent/tool/ tree, so the four fallback candidates in resolveBashWorkerPath() cannot resolve either.",
-        "Net effect: resolveBashWorkerPath() logs a warning and returns a path that does not exist, and WorkerPool then fails to spawn the child."
-      ],
-      "proposedFix": "Emit the worker next to the bundle. BashWorker.ts is a separate process entry that cannot be inlined by the agent-bundle build, so build-agent-bundle.mjs should esbuild it to packages/agent/bundle/BashTool/BashWorker.js (its own entry point, CJS, its own externals), after-pack.js should verify it, and this baseline entry should be deleted.",
-      "removalCriterion": "packages/agent/bundle/BashTool/BashWorker.js is emitted by a build step, after-pack.js FATALs when it is missing, and this entry is deleted from the baseline."
-    }
-  ]
+  "defects": []
 }

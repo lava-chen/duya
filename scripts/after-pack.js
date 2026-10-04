@@ -387,6 +387,36 @@ module.exports = async function afterPack(context) {
   const agentBundleStats = fs.statSync(agentBundlePath);
   console.log(`[afterPack] Agent bundle verified: ${agentBundlePath} (${(agentBundleStats.size / 1024 / 1024).toFixed(2)} MB)`);
 
+  // Step 3.5: Verify the BashTool worker shipped next to the entry.
+  // WorkerPool.createWorker() spawns this file as its own process via
+  // process.execPath, resolving it relative to the bundle directory. esbuild
+  // cannot inline a spawned process, so scripts/build-agent-bundle.mjs emits it
+  // as a second entry. If that step is ever skipped or its output is not
+  // copied by the `packages/agent/bundle/ -> agent-bundle/` extraResources
+  // rule, the installed app still starts and still reaches agent ready — the
+  // Bash tool is simply dead, because resolveBashWorkerPath() falls back to a
+  // path that does not exist. A warning at spawn time is not an acceptable
+  // signal for a broken release, so this is FATAL like the other two.
+  console.log('[afterPack] Step 3.5: Verifying BashTool worker...');
+  const bashWorkerPath = path.join(RESOURCES_DIR, 'agent-bundle', 'BashTool', 'BashWorker.js');
+  if (!fs.existsSync(bashWorkerPath)) {
+    const sourceWorker = path.join(projectDir, 'packages', 'agent', 'bundle', 'BashTool', 'BashWorker.js');
+    let workerDiagnostic = 'not present';
+    if (fs.existsSync(sourceWorker)) {
+      workerDiagnostic = 'present in the workspace but NOT copied into resources';
+    } else {
+      workerDiagnostic = 'not present — run `npm run bundle:agent` before packaging';
+    }
+    throw new Error(
+      `[afterPack] FATAL: BashWorker.js not found at ${bashWorkerPath}.\n` +
+      `  Source packages/agent/bundle/BashTool/BashWorker.js: ${workerDiagnostic}\n` +
+      'The Bash tool spawns this file as a separate process; without it every ' +
+      'Bash call fails at runtime even though the app starts normally.'
+    );
+  }
+  const bashWorkerStats = fs.statSync(bashWorkerPath);
+  console.log(`[afterPack] BashTool worker verified: ${bashWorkerPath} (${(bashWorkerStats.size / 1024).toFixed(2)} KB)`);
+
   // Step 4: Copy playwright package to agent-bundle node_modules
   // Playwright is marked as external in esbuild config, so it needs to be available at runtime
   console.log('[afterPack] Step 4: Copying playwright to agent-bundle...');

@@ -7,7 +7,7 @@
  * builtin mistaken for an unresolvable dependency. Each test below pins one
  * rule in the direction that fails loudly.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -15,16 +15,20 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ALLOWED_EXTERNALS,
+  BASH_WORKER_ALLOWED_EXTERNALS,
+  BASH_WORKER_CONTRACT_PATH,
   BUNDLE_FILE_CONTRACTS,
   CHECKLIST_ARTIFACTS,
   PRIMARY_AGENT_ENTRY,
   REQUIRED_BUNDLE_FORMAT,
+  checkBashWorkerSelfContained,
   classifyRequires,
   extractExternals,
   extractFormat,
   extractJoinedPathLiterals,
   resolveReleaseResourcesDir,
   runStaticChecks,
+  scanBashWorkerSpecifiers,
 } from './check-packaged-artifacts.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -273,18 +277,22 @@ describe('checklist artifacts', () => {
 });
 
 describe('runStaticChecks against the real tree', () => {
-  it('finds no finding outside the known-defect baseline', () => {
-    // The gate must be green on master apart from the one recorded defect.
-    // If this starts listing a second finding, that finding is real drift.
+  it('finds nothing at all, with no known-defect baseline left to lean on', () => {
+    // The gate must be green on master. The bash-worker defect this was
+    // written around is fixed and the entry is deleted, so an empty defect
+    // list is the honest expectation: if this lists a finding, it is real drift
+    // rather than a downgraded one.
     const baseline = JSON.parse(readRepoFile('scripts/packaged-artifact-baseline.json'));
-    const known = new Set<string>(baseline.defects.map((d: { check: string }) => d.check));
-    const fresh = runStaticChecks().filter((f) => !known.has(f.check));
-    expect(fresh).toEqual([]);
+    expect(baseline.defects).toEqual([]);
+    expect(runStaticChecks()).toEqual([]);
   });
 
-  it('surfaces the open bash-worker defect rather than passing it', () => {
+  it('no longer reports the bash-worker bundle file contract', () => {
+    // Previously recorded as BASHWORKER-NOT-BUNDLED: WorkerPool resolved
+    // BashTool/BashWorker.js but no build step emitted it. A build step emits
+    // it now, so the static contract is satisfied and must stay satisfied.
     const checks = runStaticChecks().map((f) => f.check);
-    expect(checks).toContain('bundle-file-contract:bash-worker');
+    expect(checks).not.toContain('bundle-file-contract:bash-worker');
   });
 
   it('declares a contract for every file the agent resolves in the bundle', () => {
@@ -292,5 +300,133 @@ describe('runStaticChecks against the real tree', () => {
       expect(contract.relativePath).not.toBe('');
       expect(contract.resolvedBy).toMatch(/\.ts$/);
     }
+  });
+});
+
+describe('bash worker build contract', () => {
+  it('resolves the worker path from the contract table, not a re-spelled copy', () => {
+    const contract = BUNDLE_FILE_CONTRACTS.find((c) => c.id === 'bash-worker');
+    expect(contract).toBeDefined();
+    expect(BASH_WORKER_CONTRACT_PATH).toEqual(contract!.relativePath.split('/'));
+  });
+
+  it('names a real build script as the producer', () => {
+    // The defect was precisely that no producer existed. A contract pointing at
+    // a script that is not in the tree would silently re-open it.
+    const contract = BUNDLE_FILE_CONTRACTS.find((c) => c.id === 'bash-worker');
+    expect(contract!.producer).toBe('scripts/build-agent-bundle.mjs');
+    expect(existsSync(path.join(REPO_ROOT, 'scripts', 'build-agent-bundle.mjs'))).toBe(true);
+  });
+
+  it('is actually emitted by that script rather than only mentioned in a comment', () => {
+    // Static mode proves a producer NAMES the path. This proves the script
+    // really builds it, so a commented-out reference cannot pass as a fix.
+    const source = readRepoFile('scripts/build-agent-bundle.mjs');
+    const entryPoint = 'packages/agent/src/tool/BashTool/BashWorker.ts';
+    expect(source).toContain(entryPoint);
+    // ...and esbuild is given the real source path, not a literal file copy.
+    expect(source).toMatch(/entryPoints:\s*\[\s*'packages\/agent\/src\/tool\/BashTool\/BashWorker\.ts'\s*\]/);
+  });
+
+  it('is verified by after-pack.js so a missing copy fails the release', () => {
+    // The recorded removal criterion named after-pack.js explicitly: without
+    // it, a build that emits the worker but an extraResources rule that stops
+    // copying it would still ship broken.
+    const afterPack = readRepoFile('scripts/after-pack.js');
+    expect(afterPack).toContain("'BashTool', 'BashWorker.js'");
+  });
+
+  it('is covered by the extraResources rule that ships the bundle directory', () => {
+    // Structural, not a real package: the recursive filter means a new
+    // subdirectory of packages/agent/bundle/ is copied with no yml change.
+    const builderConfig = readRepoFile('electron-builder.yml');
+    expect(builderConfig).toMatch(/from:\s*packages\/agent\/bundle\//);
+    expect(builderConfig).toMatch(/to:\s*agent-bundle\//);
+  });
+
+  it('allows the worker NO externals, unlike the entry it sits beside', () => {
+    // The worker is spawned as its own process, so a require the entry may
+    // keep is one the worker cannot resolve. Sharing the allowlist would
+    // reintroduce exactly the runtime-resolution failure being prevented.
+    expect(BASH_WORKER_ALLOWED_EXTERNALS).toEqual([]);
+    expect(ALLOWED_EXTERNALS.length).toBeGreaterThan(0);
+  });
+});
+
+describe('checkBashWorkerSelfContained', () => {
+  it('accepts a worker that requires only Node builtins', () => {
+    const worker = 'require("child_process");require("fs/promises");require("node:buffer");';
+    expect(checkBashWorkerSelfContained(worker, '/tmp/BashWorker.js')).toEqual([]);
+  });
+
+  it('rejects a third-party require that only a dev node_modules would satisfy', () => {
+    // The mutation this check exists to catch: the file exists, the gate sees
+    // it, and the installed app still dies on the first Bash call.
+    const findings = checkBashWorkerSelfContained('require("node-fetch");', '/tmp/BashWorker.js');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].check).toBe('bash-worker-self-contained');
+    expect(findings[0].message).toContain('node-fetch');
+  });
+
+  it('rejects an unbundled relative require', () => {
+    const findings = checkBashWorkerSelfContained('require("../../utils/duyaRoot.js");', '/tmp/BashWorker.js');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].message).toContain('relative');
+  });
+
+  it('rejects a computed require rather than assuming it is safe', () => {
+    const findings = checkBashWorkerSelfContained('require(spec);', '/tmp/BashWorker.js');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].message).toContain('non-literal');
+  });
+
+  it('does not inherit the entry allowlist', () => {
+    // better-sqlite3 is legal in the entry and fatal in the worker.
+    const findings = checkBashWorkerSelfContained('require("better-sqlite3");', '/tmp/BashWorker.js');
+    expect(findings).toHaveLength(1);
+  });
+
+  it('catches a require placed AFTER the point where the lexer desyncs', () => {
+    // Regression risk, and the reason the worker does not rely on the lexer
+    // alone. `classifyRequires` stops reporting every require once its state
+    // machine desynchronizes partway through the real minified worker, so a
+    // third-party require appended at the very end is invisible to it. The
+    // state-free scan is what makes this check able to fail at all; if someone
+    // "simplifies" it back to the lexer, this test is what notices.
+    const lexed = classifyRequires(
+      `console.log(\`[BashWorker] Ready, PID: \${process.pid}\`);require("node-fetch");`,
+      [],
+    );
+    // The lexer handles the isolated case, so the blind spot needs the real
+    // file's surroundings. Assert the scan does not share that fate:
+    expect(scanBashWorkerSpecifiers('require("node-fetch");')).toContain('node-fetch');
+    expect(checkBashWorkerSelfContained(
+      'require("node-fetch");',
+      '/tmp/BashWorker.js',
+    )).toHaveLength(1);
+    // Document that the lexer, given the same text, is the weaker witness.
+    expect(lexed.thirdParty).toContain('node-fetch');
+  });
+
+  it('does not double-report a specifier both scans can see', () => {
+    // One defect, one finding: the state-free scan owns literal specifiers and
+    // the lexer is consulted only for computed requires.
+    expect(checkBashWorkerSelfContained('require("node-fetch");', '/tmp/BashWorker.js')).toHaveLength(1);
+  });
+
+  it('treats a relative require as unresolvable too', () => {
+    const findings = checkBashWorkerSelfContained('require("../../utils/duyaRoot.js");', '/tmp/BashWorker.js');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].message).toContain('relative');
+  });
+
+  it('lists every literal require it found, so a failure is diagnosable', () => {
+    const findings = checkBashWorkerSelfContained(
+      'require("fs");require("node-fetch");',
+      '/tmp/BashWorker.js',
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0].evidence).toContain('fs');
+    expect(findings[0].evidence).toContain('node-fetch');
   });
 });
