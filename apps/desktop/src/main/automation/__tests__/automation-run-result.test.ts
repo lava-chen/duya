@@ -67,7 +67,7 @@ vi.mock('../compact-config', () => ({
 }));
 
 /** The verdict the fake Control Plane will serve for the run. */
-type ServedStatus = 'completed' | 'cancelled' | 'budget_exhausted' | 'failed' | 'absent';
+type ServedStatus = 'completed' | 'cancelled' | 'budget_exhausted' | 'failed' | 'absent' | 'garbage';
 
 let server: Server;
 /** Requests the client made, so the file can assert it really read the result. */
@@ -100,6 +100,13 @@ const serverHandler = (req: IncomingMessage, res: ServerResponse): void => {
       if (served.status === 'absent') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ runId: null, run: null }));
+        return;
+      }
+      if (served.status === 'garbage') {
+        // A body that is present but carries a terminal outside the known
+        // vocabulary. The reader must refuse it rather than believe it.
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ runId: RUN_ID, run: { runId: RUN_ID, status: 'exploded' } }));
         return;
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -201,6 +208,16 @@ describe('H8.2 — automation reads the RunResult instead of trusting the done f
     // `done` frame arrived; with no `RunResult` there is nothing to confirm,
     // so this rejects instead of reporting the frame's opinion as success.
     served.status = 'absent';
+
+    await expect(runPromptInSession(baseOpts)).rejects.toThrow(/no RunResult|cannot be confirmed/i);
+  });
+
+  it('refuses a receipt whose terminal it cannot read, instead of believing it', async () => {
+    // The read narrows the body rather than casting it, so a terminal outside
+    // the known vocabulary is "no receipt" rather than a success. This is the
+    // fail-closed direction: a protocol change must not be able to turn into
+    // a silent wake.
+    served.status = 'garbage';
 
     await expect(runPromptInSession(baseOpts)).rejects.toThrow(/no RunResult|cannot be confirmed/i);
   });

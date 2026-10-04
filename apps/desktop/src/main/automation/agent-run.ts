@@ -31,7 +31,6 @@ import { resolveCompactModelConfig } from './compact-config';
 export type { CronProviderConfig } from './provider-config';
 import { prepareAutomationWorkspace } from './workspace';
 import type { AutomationCron } from './types.js';
-import type { RunResult } from '@duya/agent-protocol';
 
 const RUN_TIMEOUT_MS = 10 * 60_000;
 
@@ -84,7 +83,80 @@ export interface RunPromptResult {
    * run results, which is reported rather than papered over: see
    * {@link readRunResult}.
    */
-  run: RunResult | null;
+  run: AutomationRunResult | null;
+}
+
+/**
+ * The part of the protocol's `RunResult` that automation actually reads.
+ *
+ * ## Why this is a local type and not `@duya/agent-protocol`'s
+ *
+ * Two reasons, and the second is the real one.
+ *
+ * The dependency is a cost. `automation` is an `electron-main` module and
+ * `@duya/agent-protocol` is a separate package; importing it here adds a
+ * cross-boundary edge to a module that needs three fields, and the accepted
+ * `module-dependency-permitted` budget is a ratchet rather than a suggestion.
+ * Contract §B also asks consumers to depend on the DTO they use rather than
+ * on whole shared `types.ts` barrels.
+ *
+ * More importantly, the value arrives as PARSED JSON. The alternative was
+ * `run as RunResult` — a cast asserting a structure nothing had checked, from
+ * a body this function never inspected. A local type next to a runtime
+ * narrowing is strictly more honest than the protocol type next to a blind
+ * cast: the fields are validated, and a body that does not carry them is
+ * reported as unreadable rather than silently believed.
+ *
+ * The cost is stated rather than hidden: if the protocol's terminal
+ * vocabulary grows, this union has to grow with it. `RUN_RESULT_STATUSES` is
+ * the single place that happens, and `runResultFailure`'s `default` arm turns
+ * an unrecognised value into a failure rather than a success, so a vocabulary
+ * that outruns this type degrades safely.
+ */
+export type AutomationRunStatus = 'completed' | 'cancelled' | 'budget_exhausted' | 'failed';
+
+const RUN_RESULT_STATUSES: readonly AutomationRunStatus[] = [
+  'completed',
+  'cancelled',
+  'budget_exhausted',
+  'failed',
+];
+
+export interface AutomationRunResult {
+  readonly runId: string;
+  readonly status: AutomationRunStatus;
+  readonly stopReason?: string;
+  readonly error?: { readonly message?: string };
+}
+
+/**
+ * Narrow a parsed run-result body to the fields above, or `null` if it is not
+ * one.
+ *
+ * Returning `null` for an unrecognisable body is the fail-closed choice: the
+ * caller treats `null` as "no receipt" and refuses the run, so a shape this
+ * function cannot read becomes a refusal rather than a guess. The
+ * alternative — defaulting `status` to `completed` — would turn a protocol
+ * change into a silent success, which is the one outcome this whole change
+ * exists to prevent.
+ */
+function narrowRunResult(value: unknown): AutomationRunResult | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const { runId, status, stopReason, error } = record;
+  if (typeof runId !== 'string' || runId === '') return null;
+  if (typeof status !== 'string') return null;
+  if (!RUN_RESULT_STATUSES.includes(status as AutomationRunStatus)) return null;
+  return {
+    runId,
+    status: status as AutomationRunStatus,
+    ...(typeof stopReason === 'string' && stopReason !== '' ? { stopReason } : {}),
+    ...(typeof error === 'object' &&
+    error !== null &&
+    typeof (error as { message?: unknown }).message === 'string'
+      ? { error: { message: (error as { message: string }).message } }
+      : {}),
+  };
 }
 
 /**
@@ -126,7 +198,7 @@ const RUN_RESULT_READ_TIMEOUT_MS = 15_000;
  * consumer to refuse an unconfirmed success, so the caller treats this as a
  * failure to confirm rather than defaulting to the frame's opinion.
  */
-export function readRunResult(sessionId: string): Promise<RunResult | null> {
+export function readRunResult(sessionId: string): Promise<AutomationRunResult | null> {
   const port = getAgentServerPort();
   if (!port) return Promise.resolve(null);
   const requestPath = `/sessions/${encodeURIComponent(sessionId)}/run-result`;
@@ -175,7 +247,10 @@ export function readRunResult(sessionId: string): Promise<RunResult | null> {
             finish(() => resolve(null));
             return;
           }
-          finish(() => resolve(run as RunResult));
+          // Narrowed, not cast. A body that is present but unreadable is
+          // treated exactly like an absent one, so the caller refuses rather
+          // than believing a shape nothing checked.
+          finish(() => resolve(narrowRunResult(run)));
         });
       },
     );
@@ -201,7 +276,7 @@ export function readRunResult(sessionId: string): Promise<RunResult | null> {
  * different operational facts, and a scheduler that cannot tell them apart
  * retries the wrong one.
  */
-function runResultFailure(run: RunResult): Error | null {
+function runResultFailure(run: AutomationRunResult): Error | null {
   switch (run.status) {
     case 'completed':
       return null;
@@ -214,8 +289,10 @@ function runResultFailure(run: RunResult): Error | null {
         `automation run ${run.runId} failed${run.error?.message ? `: ${run.error.message}` : ''}`,
       );
     default:
-      // Unreachable against the protocol's union, and treated as a failure on
-      // purpose: an unrecognised terminal must not be laundered into success.
+      // Unreachable, because `narrowRunResult` refuses a status outside the
+      // union rather than admitting it. Kept so that if the protocol's
+      // vocabulary ever outruns this module's, an unrecognised terminal is
+      // still a failure rather than a success.
       return new Error(`automation run ${run.runId} reported an unrecognised terminal`);
   }
 }
