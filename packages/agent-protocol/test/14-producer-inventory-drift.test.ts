@@ -138,6 +138,26 @@ const PAIRS: readonly Pair[] = [
     },
     renames: { message: 'error' },
   },
+  {
+    // The wire extension that makes `assistant.message_finalized` producible at
+    // all. Before this frame the only terminal frame was `chat:done` =
+    // `{ sessionId }`, which carries neither of the two REQUIRED fields, so no
+    // host could emit the event without inventing them.
+    //
+    // No `renames` and no `classified`: every field here reaches the payload
+    // under its own name. That is deliberate and worth stating, because the
+    // ADAPTER still narrows two of them — the transcript content union into the
+    // payload's four-member one, and the runtime's nine stop reasons into the
+    // payload's six. Those narrowings are decisions about this package's own
+    // two vocabularies, so they are recorded where the vocabularies are:
+    // `23-wire-field-classification.test.ts` ("the event payload vocabulary is
+    // NARROWER than the transcript one, by design"). What the adapter does
+    // with them — preserving a block it cannot type under
+    // `providerMeta.untranslatedBlocks`, refusing a reason it cannot state — is
+    // asserted in the runtime's `translator-projector.test.ts`.
+    worker: 'AgentMessageFinalizedEvent',
+    protocol: 'AssistantMessageFinalizedPayload',
+  },
 ];
 
 /**

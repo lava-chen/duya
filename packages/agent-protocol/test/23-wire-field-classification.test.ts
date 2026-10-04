@@ -50,6 +50,7 @@ import {
   MESSAGE_FIELDS,
   PERMISSION_REQUEST_MODES,
   STOP_REASON_MEMBERS,
+  STOP_REASONS,
   TOOL_RESULT_METADATA_DIVERGENCE,
   TOOL_RESULT_WIRE_FIELDS,
   TOOL_USE_CONTENT_FIELDS,
@@ -61,6 +62,10 @@ import type {
   PermissionRequestEvent,
   StopReason,
 } from '../src/transcript/index.js';
+import type {
+  MessageContent as EventMessageContent,
+  StopReason as EventStopReason,
+} from '../src/events/payloads.js';
 
 /** Every classification table, flattened to `Type.field -> class`. */
 const flatEntries = (): Array<[string, string]> =>
@@ -304,5 +309,60 @@ describe('drift #23: union member inventories match their types', () => {
       metadata: { k: 'v' },
     };
     expect(Object.keys(message)).toHaveLength(3);
+  });
+});
+
+describe('the event payload vocabulary is NARROWER than the transcript one, by design', () => {
+  /**
+   * These two gaps are the reason `assistant.message_finalized` needs a
+   * translator that refuses rather than coerces, and they are pinned HERE
+   * because they are facts about this package's own two vocabularies rather
+   * than about any adapter's behaviour.
+   *
+   * The consumer of the gap is `14-producer-inventory-drift.test.ts`, whose
+   * `classified` entries for `AgentMessageFinalizedEvent.content` and
+   * `.stopReason` name this file as the decision that governs them. So this is
+   * not a restatement of the adapters — it is the record those two entries
+   * point at, and if someone widened either union the entries would be
+   * describing a narrowing that no longer exists.
+   */
+  it('the payload content union has four members and the transcript one has six', () => {
+    const eventMembers: readonly EventMessageContent['type'][] = ['text', 'thinking', 'tool_use', 'tool_result'];
+    const transcriptMembers: readonly MessageContent['type'][] = MESSAGE_CONTENT_TYPES;
+
+    expect(eventMembers).toHaveLength(4);
+    expect(transcriptMembers).toHaveLength(6);
+    // The two that have no counterpart in the event union. These are the
+    // blocks an adapter MUST NOT drop when it narrows an assistant message
+    // into `AssistantMessageFinalizedPayload.content`; `image` is the one the
+    // classification record names as "the field that makes the event
+    // vocabulary's four-member union insufficient".
+    const withNoCounterpart = transcriptMembers.filter(
+      (t) => !(eventMembers as readonly string[]).includes(t),
+    );
+    expect(withNoCounterpart).toEqual(['image', 'provider_block']);
+  });
+
+  it('the event StopReason cannot state three of the runtime nine reasons', () => {
+    const stateable: readonly EventStopReason[] = [
+      'completed',
+      'end_turn',
+      'stop_sequence',
+      'aborted',
+      'error',
+      // The one normalisation the payload's own comment documents: providers
+      // report `max_tokens`, this union spells it `length`.
+      'length',
+    ];
+    expect(stateable).toHaveLength(6);
+    // The runtime's own three loop outcomes. `StopReason` here is REQUIRED on
+    // the payload, so an adapter holding one of these has no honest value to
+    // write: `completed` would claim a normal finish and `length` is
+    // specifically a token or context ceiling. The recorded decision is to
+    // REFUSE the frame, not to pick the nearest word.
+    const unstateable = STOP_REASONS.filter(
+      (r) => !stateable.includes(r as EventStopReason) && r !== 'max_tokens',
+    );
+    expect(unstateable).toEqual(['max_turns', 'tool_use', 'repeated_tool_calls']);
   });
 });

@@ -160,7 +160,6 @@ describe('E4.1 — the pre-R2 baseline vs the current run layer', () => {
         // 1. The behaviour that must NOT have changed. Each of these was
         //    MEASURED on the pre-R2 tree, not assumed to be stable.
         expect(current.terminalStatus).toBe(PRE_R2_BASELINE.terminalStatus);
-        expect(current.frameTypes).toEqual(PRE_R2_BASELINE.frameTypes);
         expect(current.providerRequestCount).toBe(PRE_R2_BASELINE.providerRequestCount);
         expect(current.usage).toEqual(PRE_R2_BASELINE.usage);
         expect(current.toolAttempts).toEqual(PRE_R2_BASELINE.toolAttempts);
@@ -178,6 +177,40 @@ describe('E4.1 — the pre-R2 baseline vs the current run layer', () => {
         //        layer appends durable events for the turn.
         expect(current.runEventKinds.length).toBeGreaterThan(0);
         expect(current.manifestDecisions).not.toEqual({});
+
+        //    (a2) ONE new frame on the worker's stdout channel, and only one.
+        //
+        //        `chat:message_finalized` is a wire extension: the worker now
+        //        carries the authoritative assistant message on the done
+        //        boundary, because `chat:done` carried neither of the two fields
+        //        the protocol's `assistant.message_finalized` REQUIRES. That is
+        //        a deliberate change to the worker's output, so it is named here
+        //        rather than folded into the "must not have changed" list above.
+        //
+        //        The pre-R2 capture is left EXACTLY as measured. Writing the
+        //        new frame into a constant called `PRE_R2_BASELINE` would make
+        //        the baseline say the pre-R2 tree emitted something it did not,
+        //        and the next reader would have no way to tell a real capture
+        //        from an edited one.
+        expect(PRE_R2_BASELINE.frameTypes).not.toContain('chat:message_finalized');
+        expect(current.frameTypes).toEqual([
+          ...PRE_R2_BASELINE.frameTypes.slice(0, PRE_R2_BASELINE.frameTypes.indexOf('chat:done')),
+          'chat:message_finalized',
+          ...PRE_R2_BASELINE.frameTypes.slice(PRE_R2_BASELINE.frameTypes.indexOf('chat:done')),
+        ]);
+        // Ahead of the terminal, because the message stops changing strictly
+        // before the run ends — the ordering `transcript-snapshot.ts` needs to
+        // read the message before the run is over.
+        expect(current.frameTypes.indexOf('chat:message_finalized')).toBeLessThan(
+          current.frameTypes.indexOf('chat:done'),
+        );
+        // And it is NOT an assistant-visible change: the router observes this
+        // frame into the run layer and declines to write it to SSE, so the
+        // renderer's stream is byte-for-byte the pre-R2 stream. That is pinned
+        // in `router-run-tee.test.ts` ("tees the finalized-message frame to the
+        // run layer, and to nobody else"). `frameTypes` reads the worker's
+        // stdout channel, which is why it moves while the assistant's view does
+        // not.
 
         //    (b) A REAL behavioural difference, found by this comparison and
         //        kept rather than normalised away:
