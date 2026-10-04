@@ -1,11 +1,11 @@
 # 587 — Agent Harness / Monorepo 架构重构主计划
 
-> Status: Active — G0 全阶段完成、R1.1/R1.2/R2.1 已合并（G0.3/G0.4 部分留开）；runtime phases not accepted.
+> Status: Active — R1/R2/T3 两段完成、E4.1–E4.3 完成、M5.1 完成；R1.4 与 C6.1 收尾中。G0.2 测试债与 G0.3 余项留开。
 > Created: 2026-10-03. Priority: P0. 唯一执行队列：本文件。
-> Current task: **R2.2** — manifest 真正生效：真实来源+来源标注、单一 input 事实源、worker 校验 hash/version 与 input binding、拒绝未知 required capability 与非法 cwd。
-> R2.1 的交接已写进代码：worker 目前**携带** `manifestHash`/`inputRevision` 但**不校验**，R2.2 就是补这一段。
-> 已知待决：`better-sqlite3@13.0.3` 随 tarball 附带 N-API prebuild，同一份在 Node ABI 137 与 Electron ABI 149 下都加载成功 → V8-ABI 前提对 v13 已不成立，`ensure-sqlite-abi` 的 swap 路径可能大部分冗余。
-> G0.1 已建立按 (file, test, signature) 的可比失败集合；`npm ci` 在本机因 node-pty MSB8040 未取得 exit 0，属环境阻塞，已具名留开。
+> Current task: **R1.4 合并后进入 M5.2（切 host / CLI 边）**，与 **C6.1（repository / approval / scheduler 单一 owner）** 并行。
+> **R 阶段两段已完成**：四接缝修复、持久化序列与终态、typed receipt 与 CAS 对账、结果面区分「无活动」与「未实现」、注入 delay 的有界退避（25ms 翻倍、每次等 250ms、每 run 500ms 上限，按**毫秒**而非次数设界，因为 `settle` 要等写队列才发布终态）。
+> **M5.1 只交地图与验证器，不搬家**：2867/3232 文件已分类，365 个未分类各自带书面理由，零个无解释；切除列表按载荷排序，`NOT_CUT` 记录拒绝承诺的项。已发现真实纯度违规——`packages/ai` 被声明为 `core` 却在 `ollama-chat.ts:329,618` 做网络 fetch、在 `bedrock-converse.ts:35` 用 `node:crypto`。
+> 已知待决：`better-sqlite3@13` 随 tarball 附带 N-API prebuild → V8-ABI swap 路径可能大部分冗余。
 > 本次交付为完整计划整合；不代表运行时修复或架构迁移已经完成。
 
 ## 1. 执行 agent 从这里开始
@@ -32,12 +32,12 @@
 | 阶段 | 状态 | 前置 | 本阶段下一任务 | 完成证据 |
 | --- | --- | --- | --- | --- |
 | G0 [基线与治理](01-baseline-and-gates.md) | **In progress** | — | G0.2 测试债收敛 / G0.3 余项 | clean build、可信 required gate、失败债可辨别 |
-| R1 [Run 结果与存储](02-run-correctness.md) | **In progress**（R1.1/R1.2 已合并） | G0 | R1.3 ack/CAS/幂等与生产ledger | result 等待，durable barrier，ack/CAS确认 |
+| R1 [Run 结果与存储](02-run-correctness.md)  | **Done**（R1.1–R1.4） | G0 | R1.4 结果面与生产ledger | result 等待，durable barrier，ack/CAS确认 |
 | R2 [真实 worker 控制](03-worker-control.md) | **In progress**（R2.1 已合并） | R1 | R2.2 manifest 实际生效 | canonical ID、真实输入、dispatch/stop/审批/预算 |
-| T3 [协议与事件传输](04-protocol-and-streams.md) | Pending | R2 | T3.1 wire 数据与内部对象分层 | 同一 seq/cursor、lossless兼容、背压、capability |
-| E4 [行为基准与 evals](05-behavior-and-evals.md) | Pending | R2；传输比较需T3 | E4.1 真实旧worker+offline provider闭环 | 故障、工具、mode、mailbox、Desktop证据 |
-| M5 [包与 host 迁移](06-package-and-host-migration.md) | Pending | G0、T3、E4 | M5.1 当前依赖与切片清单 | 纯 core、可执行 runtime、host contracts与迁移归零 |
-| C6 [ControlPlane / Workspace](07-control-plane-and-workspace.md) | Pending | R2、E4；整体替换需M5 | C6.1 repository/approval/scheduler owner接管 | 跨run协调、durable Workspace、Project兼容迁移 |
+| T3 [协议与事件传输](04-protocol-and-streams.md)  | **Done**（T3.1–T3.5） | R2 | T3.5 三adapter与capability | 同一seq、lossless、背压、capability |
+| E4 [行为基准与 evals](05-behavior-and-evals.md)  | **In progress**（E4.1–E4.3 已合并） | R2；传输比较需T3 | E4.2 行为矩阵 / E4.4 Electron smoke | 故障、工具、mode、mailbox、Desktop证据 |
+| M5 [包与 host 迁移](06-package-and-host-migration.md)  | **In progress**（M5.1 地图已交） | G0、T3、E4 | M5.2 切 host/CLI 边 | 纯 core、可执行 runtime、host contracts与迁移归零 |
+| C6 [ControlPlane / Workspace](07-control-plane-and-workspace.md)  | **In progress**（C6.1 进行中） | R2、E4；整体替换需M5 | C6.1 repository/approval/scheduler owner | 跨run协调、durable Workspace、Project兼容迁移 |
 | D7 [恢复与长期工作](08-recovery-and-long-running.md) | Pending | T3、C6 | D7.1 checkpoint/副作用状态机 | kill/restart恢复、lease/fence、安全重试 |
 | H8 [多 host 与退役](09-headless-and-retirement.md) | Pending | M5、C6、D7 | H8.1 headless composition / host验收 | CLI/automation共用API；旧agent退役；打包smoke |
 
