@@ -91,7 +91,8 @@ import { normalizeCanUseToolDecision } from './toolInvokePermission.js';
 import { CompactionCoordinator, type CompactionRunResult } from './CompactionCoordinator.js';
 import { DeadLoopTracker, resolveDeadLoopConfig } from './TurnLoopTracker.js';
 import { SessionFinalizer } from './SessionFinalizer.js';
-import { runTurnStream } from './TurnStreamRunner.js';
+import { runTurnStream, type TurnStreamRunnerDeps } from './TurnStreamRunner.js';
+import { buildTurnModelLeg } from './model-leg.js';
 import { PendingHookMessages } from './PendingHookMessages.js';
 import { deriveSingleCallUsage } from '../process/seed-token-usage.js';
 import { settingsJsonToRules } from '../permissions/rules.js';
@@ -2348,7 +2349,11 @@ export class duyaAgent implements AgentRuntime {
         // dropped if compaction/clear changed the timeline while it was in flight.
         const requestEpoch = this.compactionManager.getContextEpoch();
         catalogView.currentRound = turnCount;
-        const streamGenerator = runTurnStream({
+        // Plan 600 S2, model-leg slice: named so this turn's deps can be
+        // PUBLISHED rather than buried in the call below. One object, two
+        // readers -- the legacy loop and the engine's model leg -- so the leg
+        // cannot drift from the stream the turn is actually running.
+        const turnStreamDeps: TurnStreamRunnerDeps = {
           llmClient: this.llmClient,
           llmMessages,
           systemPromptContent,
@@ -2384,7 +2389,31 @@ export class duyaAgent implements AgentRuntime {
             modeSwitchToolIds.clear();
             deadLoopTracker.reset();
           },
-        });
+        };
+
+        // Plan 600 S2: hand this turn's MODEL leg to the run engine.
+        //
+        // Published HERE, after `llmMessages` is bound, because that is the
+        // only step of the chain above that can REBIND the array:
+        // `compressProjectedToolMessages` returns a fresh array when it changes
+        // anything and the SAME reference when it does not (the reference change
+        // is the projection-shrink signal read a few lines above). The four
+        // transforms after it cannot rebind -- they receive the reference and
+        // mutate entries in place (`injectTurnTimestampReminders` replaces
+        // `messages[i]`, `_injectRuntimeContext` and `injectOSContextFragment`
+        // push or rewrite `content`) -- so publishing the same reference earlier
+        // would still observe their output at request time. Publishing
+        // `prePruneMessages` instead would not.
+        //
+        // `get messages()` is NOT a substitute at any point: it recomputes the
+        // durable projection from the timeline, so it carries none of the four.
+        // `model-leg.test.ts` pins that by reading the same turn three ways.
+        //
+        // Absent publisher means no engine is bound to this run, which is the
+        // pre-plan case (the CLI, the sub-agent tool) and is not an error.
+        options?.modelLegs?.publish(buildTurnModelLeg({ turn: turnCount, deps: turnStreamDeps }));
+
+        const streamGenerator = runTurnStream(turnStreamDeps);
         
         logger.info(`[Agent] Turn ${turnCount}: Stream generator created, starting iteration...`);
         for await (const event of streamGenerator) {
