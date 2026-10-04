@@ -37,6 +37,7 @@ import { getCoreStores } from '../db/core-connection';
 import { dispatchControlPlaneAction } from '../control-plane/run-control-plane';
 import { getControlPlane } from '../control-plane/control-plane-service';
 import { COMMAND_SCHEMA_VERSION, type CommandSenderFacts } from '../control-plane/command-receipt';
+import { writeRunReceiptOnWire } from '../control-plane/run-receipt';
 import type { WorkflowRunSnapshot, WorkflowRunStatus, WorkflowTriggerKind } from '../db/core/workflow-store';
 import {
   createWidgetPending,
@@ -324,9 +325,10 @@ export async function dispatchDbAction(
     case 'run:get':
     case 'run:events':
     case 'run:list-session': {
+      const runId = String(p.runId ?? '');
       const controlPlane = getControlPlane();
       if (controlPlane === null) {
-        return { ok: false, state: 'unavailable', runId: String(p.runId ?? ''), reason: RUN_UNAVAILABLE_REASON };
+        return writeRunReceiptOnWire({ state: 'unavailable', runId, reason: RUN_UNAVAILABLE_REASON });
       }
       const receipt = await controlPlane.serve(
         { schema: COMMAND_SCHEMA_VERSION, action, payload: p },
@@ -335,9 +337,49 @@ export async function dispatchDbAction(
         // through. `noSender` is refused rather than treated as the host.
         sender ?? UNATTRIBUTED_SENDER,
       );
-      // The wire shape is unchanged — R1.3's `readRunReceipt` is what every
-      // existing consumer reads, and the receipt is in `write`.
-      return receipt.write;
+
+      if (receipt.outcome === 'rejected') {
+        // Refused before storage, so there is no producer reply to forward and
+        // no `write` receipt to serialise. The refusal is reported IN the
+        // receipt vocabulary — `invalid` is its own "refused before it reached
+        // storage" state — with C6.1's refusal code kept verbatim in `reason`.
+        // A refusal the reader can only call `unreadable` loses the reason,
+        // which is the whole of what a refusal has to say.
+        if (receipt.write !== undefined) {
+          return writeRunReceiptOnWire(receipt.write);
+        }
+        return writeRunReceiptOnWire({
+          state: 'invalid',
+          runId,
+          reason: `${receipt.refusal}: ${receipt.reason}`,
+        });
+      }
+
+      // The producer's own reply, verbatim.
+      //
+      // It used to return `receipt.write` here — the TYPED `RunWriteReceipt`.
+      // Two fields do not survive that trip, and both are load-bearing:
+      //
+      //  - the typed union has no `ok` member, so every reply lost the boolean
+      //    `readRunReceipt` requires and came back `unreadable`. That is the
+      //    dropped chat turn: the row was written, `openRun` was told the run
+      //    did not exist, and the worker was never sent `chat:start`.
+      //  - the typed union has no `written` member either, so `run:append` lost
+      //    the count the reader validates, and the first `run.started` append
+      //    was refused as `started_not_durable` — a second, quieter instance of
+      //    the same drift.
+      //
+      // `serve` only reaches this arm for an `accepted` command, and it accepts
+      // one only after reading `result` with `readRunReceipt`, so `result` IS a
+      // wire receipt by construction. Forwarding it loses nothing; rebuilding
+      // it from the parsed form is what dropped the fields.
+      //
+      // A READ answers here too, and needs no special case: its `result` is the
+      // run row or the event list, which is exactly what the caller asked for.
+      // Handing a read back a receipt instead — which is what returning
+      // `receipt.write` for every action in this arm did — hands the caller a
+      // `{state:'unreadable'}` object where a run row was asked for.
+      return receipt.result;
     }
 
     // ==================== Session actions (core store thin forward) ====================

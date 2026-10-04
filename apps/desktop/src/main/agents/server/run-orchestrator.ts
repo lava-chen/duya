@@ -55,6 +55,8 @@ import { randomUUID } from 'node:crypto';
 import {
   manifestFingerprint,
   type CancelOutcome,
+  type ErrorCode,
+  type ProtocolErrorInfo,
   type RunManifest,
   type RunResult,
   type RunTerminalState,
@@ -422,11 +424,23 @@ export class RunOrchestrator {
         // log line below, and a host branching on this reason is reading what
         // the Control Plane actually said.
         const reason = reasonOf(createdReceipt);
-        logger.warn('Control Plane refused the run — chat proceeds without a durable record', {
+        logger.warn('Control Plane refused the run — the chat turn has no durable record', {
           sessionId,
           runId,
           reason: describeReceipt(createdReceipt),
         });
+        // This is the one path where a row CAN be stranded, and it is the shape
+        // the dropped desktop turns had: `run:create` wrote the row, and the
+        // reply came back unreadable, so the caller learned "no run" while a
+        // `running` row with `terminal=NULL` sat in the table with nothing that
+        // would ever move it. The controller is never reached on this path, so
+        // there is no `#failStart` to have closed it.
+        //
+        // Whether the row actually landed is not guessed here — `run:complete`
+        // answers `absent` when it matched nothing, which is the truth for a
+        // create that failed before its write. Both answers are logged, and
+        // neither invents a run.
+        await this.#closeAbandonedRun(runId, sessionId, 'run_not_created', reason);
         return { accepted: false, runId: null, stage: 'run_not_created', reason };
       }
 
@@ -466,7 +480,13 @@ export class RunOrchestrator {
         // `start_failed` is the code, and it is not the same incident as a
         // refused row: the row exists, the run did not open, and the executor
         // was never dispatched. Saying so is the whole value of the code.
-        logger.warn(`${error.code}: the run was not dispatched — chat proceeds without a durable record`, {
+        //
+        // NO terminal is synthesised here. The controller's own `#failStart`
+        // already emitted the `run.failed` and settled the run before it threw
+        // this, and contract C allows exactly one writer for a terminal — a
+        // second one here would be refused as a `conflict` and would report a
+        // settled run as a stranded one.
+        logger.warn(`${error.code}: the run was not dispatched — the run layer is degraded`, {
           sessionId,
           runId,
           stage: error.stage,
@@ -483,11 +503,147 @@ export class RunOrchestrator {
         sessionId,
         error: reason,
       });
+      await this.#closeAbandonedRun(runId, sessionId, 'unknown', reason);
       return { accepted: false, runId, stage: 'unknown', reason };
     } finally {
       // The one cleanup that has to cover every exit, including the early
       // `run_not_created` return above. See the note at the top of this method.
       this.#pendingSessionByRun.delete(runId);
+    }
+  }
+
+  /**
+   * Give a run that was created and then abandoned a real terminal.
+   *
+   * ## Why this is not optional
+   *
+   * On the `run_not_created` path `run:create` has already been sent, and a
+   * refusal or an unreadable reply does not tell us whether its row landed. If
+   * it did, nothing will ever execute that run — the controller is never
+   * reached, so its `#failStart` never runs — and the row stays
+   * `status='running'` with `terminal=NULL` and `finished_at=NULL` and no
+   * process that will ever move it. Contract C requires exactly this case
+   * ("dispatch failure must synthesise an explicit terminal event"), because a
+   * stranded row is a run the Control Plane can never answer for, and a
+   * reconciler reading `running` forever is told a story that is not what
+   * happened.
+   *
+   * ## `run:complete` is asked to be the authority, not a guess
+   *
+   * This does not decide whether the row exists. It asks, and `completeRun`
+   * answers `absent` when the write matched nothing, so a `run:create` that
+   * failed before its row landed reports "there was nothing to close" instead
+   * of inventing a terminal for a run that does not exist. The two answers are
+   * different incidents and are logged differently. A `conflict` is the third:
+   * somebody else already decided a terminal, so this run is NOT stranded and
+   * this call has nothing to add.
+   *
+   * ## Not called for a `RunStartError`
+   *
+   * The controller's `#failStart` emits the `run.failed` and settles the run
+   * before it throws, and contract C allows one writer for a terminal. This is
+   * only the path the controller does not reach.
+   *
+   * Never throws: `openRun` does not throw by contract, and a failure to record
+   * this failure must not become a second failure the caller cannot see. A
+   * terminal that could not be committed is reported at ERROR, which is the
+   * loudest thing available for a row that stays stranded — and R1.2's
+   * deliberate "only `complete` itself failing leaves the row at `running`"
+   * remains true, now with a log line naming it instead of silence.
+   */
+  async #closeAbandonedRun(runId: string, sessionId: string, stage: RunStartStage, reason: string): Promise<void> {
+    const error = {
+      code: abandonedRunErrorCode(stage),
+      message: `the run was created and then abandoned (${stage}): ${reason}`,
+    };
+    // The terminal EVENT as well as the terminal STATE.
+    //
+    // Settling the row alone leaves `run_events` with no record of how the run
+    // ended, which is the state R1.2 calls out as the worst outcome: "a
+    // transaction that rolls back leaves one `running` row and zero clues about
+    // how it ended". Appending first is also R1.2's chosen order — append
+    // confirmed, THEN complete — so a crash between the two still leaves the
+    // decided terminal in the log for a reconciler to find. One order, both
+    // adapters, no divergence.
+    const appended = await this.#appendTerminalEvent(runId, sessionId, error);
+    if (!appended) {
+      // The log could not take the event. The row is still settled below, so
+      // this is a degraded transcript rather than a stranded run, and saying so
+      // is the honest report.
+      logger.warn('the abandoned run\'s terminal event could not be appended — the transcript is degraded', {
+        runId,
+        stage,
+      });
+    }
+    const terminal: RunTerminalState = { status: 'failed', error };
+    try {
+      const reply = await this.#options.dbRequest('run:complete', { runId, terminal });
+      const receipt = readRunReceipt(reply, 'run:complete', runId);
+      if (isDurableWrite(receipt)) {
+        logger.warn('a run row that was created and never executed has been given a terminal', {
+          runId,
+          stage,
+          state: receipt.state,
+        });
+        return;
+      }
+      if (receipt.state === 'absent') {
+        // Nothing was stranded: the create never landed either. Said plainly so
+        // the two incidents stay distinguishable in the log.
+        logger.info('no run row to close — the create never landed either', { runId, stage });
+        return;
+      }
+      if (receipt.state === 'conflict') {
+        // Not stranded: another writer already recorded a terminal for this
+        // run, so the row is decided and this call has nothing to add.
+        logger.info('another writer already recorded a terminal for this run', {
+          runId,
+          stage,
+          committed: receipt.committed?.status,
+        });
+        return;
+      }
+      logger.error('a run row was left with no terminal and the attempt to record one was refused', new Error(describeReceipt(receipt)), {
+        runId,
+        stage,
+      });
+    } catch (error) {
+      logger.error('a run row was left with no terminal and the attempt to record one threw', error instanceof Error ? error : new Error(String(error)), {
+        runId,
+        stage,
+      });
+    }
+  }
+
+  /**
+   * Append the one `run.failed` envelope for a run that never executed.
+   *
+   * `seq` is read back from the run's own log rather than assumed to be 1: the
+   * protocol's sequence is per-run and strictly increasing, and a run whose
+   * `run.started` landed before the failure already has events. Guessing would
+   * collide with an existing `(runId, seq)` and the store would refuse the whole
+   * batch as a content conflict.
+   */
+  async #appendTerminalEvent(
+    runId: string,
+    sessionId: string,
+    error: ProtocolErrorInfo,
+  ): Promise<boolean> {
+    try {
+      const existing = await this.#options.dbRequest('run:events', { runId, afterSeq: 0 });
+      const rows = Array.isArray(existing) ? (existing as Array<{ seq?: unknown }>) : [];
+      const highest = rows.reduce((max, row) => (typeof row.seq === 'number' && row.seq > max ? row.seq : max), 0);
+      const reply = await this.#options.dbRequest('run:append', {
+        runId,
+        events: [{ runId, sessionId, seq: highest + 1, payload: { type: 'run.failed', error } }],
+      });
+      return isDurableWrite(readRunReceipt(reply, 'run:append', runId));
+    } catch (thrown) {
+      logger.warn('appending the abandoned run\'s terminal event failed', {
+        runId,
+        reason: thrown instanceof Error ? thrown.message : String(thrown),
+      });
+      return false;
     }
   }
 
@@ -924,6 +1080,31 @@ function describeCause(cause: unknown): string {
   if (cause instanceof Error) return cause.message;
   if (typeof cause === 'string') return cause;
   return String(cause);
+}
+
+/**
+ * The protocol error code for a run that was created and then abandoned.
+ *
+ * Mapped from the stage onto codes `agent-protocol` already defines, because the
+ * point of this terminal is to be READ by a consumer that already knows the
+ * vocabulary. A new code here would be a second vocabulary, and the stage is
+ * carried in the message either way.
+ */
+function abandonedRunErrorCode(stage: RunStartStage): ErrorCode {
+  switch (stage) {
+    // The row was created but the run cannot be shown to have begun: its
+    // `run.started` never became durable, or the create's own reply was not
+    // readable. The record is the thing that is wrong.
+    case 'run_not_created':
+    case 'started_not_durable':
+      return 'persistence_failed';
+    // The executor was not there to be told to work. Retrying after one spawns
+    // is the remedy, which is what `runtime_unavailable` says.
+    case 'dispatch_refused':
+      return 'runtime_unavailable';
+    default:
+      return 'internal';
+  }
 }
 
 
