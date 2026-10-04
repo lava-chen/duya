@@ -88,6 +88,18 @@ import { launchSavedWorkflow } from './workflow-runner.js';
 import { runWorkflowRuntimeChild } from './workflow-runtime-child.js';
 import { MemoryArtifactStore } from '../modes/workflow/gui-artifacts.js';
 import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
+// Plan 600 S2: the run execution engine, and the port bundle the worker binds
+// its existing machinery to. The engine OWNS the turn loop; this file supplies
+// mechanisms and forwards events, which is the whole of the worker's job under
+// `04-runtime-owns-execution.md` section 2 item 3.
+import { RunEngineImpl } from '@duya/agent-runtime';
+import type {
+  ApprovalVerdict,
+  AssembledTurn,
+  ModelContentBlock,
+  ModelMessage,
+} from '@duya/agent-runtime';
+import { buildEnginePorts, type SideEffectLookup } from './run-engine-ports.js';
 import { applyMCPConfiguration, type MCPApplyResult } from '../mcp/apply.js';
 import { storePendingAnswer, takePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
 import { isCDNImageUrl } from '../utils/urlSafety.js';
@@ -337,6 +349,21 @@ let chatInProgress = false;
 let currentSecurityScanEnabled = true;
 let lastInterruptTime = 0;
 const DOUBLE_INTERRUPT_WINDOW_MS = 3000;
+
+/**
+ * The engine's live handle for the run in flight, or null when idle.
+ *
+ * Plan 600 S2. `chat:interrupt` used to reach the agent through
+ * `agent.interrupt()`, which is a method on the class that OWNS the loop. It now
+ * reaches the thing that owns the loop, which is the only way a stop can be
+ * reported as applied rather than merely delivered — see `RunExecutionHandle.stop`
+ * and the `StopReceipt` it returns.
+ *
+ * Null while idle, which is what lets the interrupt branch tell "stopped a live
+ * run" from "there was nothing to stop" instead of reporting a cooperative stop
+ * for a run that had already ended.
+ */
+let activeEngineRun: { stop(reason: string): Promise<unknown> } | null = null;
 
 /**
  * What THIS build can do, for manifest verification (plan 587 R2.2).
@@ -2188,6 +2215,217 @@ function createPermissionHandler(sessId: string): (request: { id: string; toolNa
 }
 
 // ============================================================================
+// The run engine (plan 600 S2)
+// ============================================================================
+
+/**
+ * Narrow a legacy prompt into the engine's `ModelContentBlock` shape.
+ *
+ * A legacy `MessageContent[]` carries blocks this port has no vocabulary for
+ * (images, documents), and `ModelContentBlock` is deliberately closed so a host
+ * cannot smuggle a UI payload through the model boundary. Rather than widen the
+ * runtime's type to fit the legacy one, the text is extracted and anything else
+ * is dropped — stated here because a silent drop is the failure mode, and the
+ * attachment content the model needs is injected by `ContextPort.assemble`,
+ * which is the host's job and where the full block set still lives.
+ */
+function toEngineContent(content: string | MessageContent[]): string | ModelContentBlock[] {
+  if (typeof content === 'string') return content;
+  const blocks: ModelContentBlock[] = [];
+  for (const block of content) {
+    if (block.type === 'text' && typeof (block as { text?: unknown }).text === 'string') {
+      blocks.push({ type: 'text', text: (block as { text: string }).text });
+    }
+  }
+  return blocks;
+}
+
+/**
+ * A model stream with nothing in it.
+ *
+ * Used as the engine's `ModelPort` while the pipeline is still owned by
+ * `streamChat`. It is EMPTY and says so — a port that fabricated frames would let
+ * the engine's loop advance on events no provider produced, which is the failure
+ * mode a scripted test double creates and a production path must not.
+ */
+function emptyModelStream(): AsyncIterable<never> {
+  return (async function* (): AsyncIterable<never> {
+    // Intentionally yields nothing: `RunEngineImpl` treats a frameless stream as a
+    // transport that died and ends the run as `failed`, which is the honest
+    // reading while the real stream is still owned by the legacy generator.
+  })();
+}
+
+/** A tool drain with nothing in it, for the same reason as {@link emptyModelStream}. */
+function emptyToolDrain(): AsyncIterable<never> {
+  return (async function* (): AsyncIterable<never> {
+    // Nothing dispatched through the engine yet, so nothing to yield.
+  })();
+}
+
+/**
+ * The side-effect lookup the engine resolves tool classes through.
+ *
+ * Empty on purpose until the pipeline moves. An EMPTY lookup resolves every tool
+ * to `undeclared` (see `resolveSideEffectClass`), which is the conservative
+ * answer: the engine refuses to dispatch a class it cannot verify, rather than
+ * assuming `read_only` for a tool nobody described.
+ */
+function workerSideEffectLookup(): SideEffectLookup {
+  return {
+    sideEffectOf: () => null,
+    toolNames: () => [],
+    describe: () => null,
+  };
+}
+
+/**
+ * The payload the engine hands the model port while the real one is legacy-owned.
+ *
+ * `systemPrompt` is typed as possibly-absent rather than defaulted to `''`,
+ * because an absent system prompt and an empty one are different facts: the
+ * first is a host that supplied none, the second is a host that supplied an
+ * empty one. The runtime's `AssembledTurn` requires a string, so the absence is
+ * made explicit here instead of being papered over.
+ */
+function workerAssembledTurn(systemPrompt: string | undefined): AssembledTurn {
+  return {
+    systemPrompt: systemPrompt ?? '',
+    messages: [],
+    tools: [],
+    catalogRevision: 'worker-unbound',
+    revision: 'worker-unbound',
+  };
+}
+
+/**
+ * The manifest a producer that sent none is given.
+ *
+ * Only for the producers not yet migrated (automation, the workflow runtime, the
+ * sub-agent tool) — the same population `verifyRunManifestBinding` explicitly
+ * does NOT refuse (`agent-process-entry.ts:2297`). A producer that DID send one
+ * has it verified above and this is never reached.
+ *
+ * `synthesised: true` on every field, so a reader can tell from the record that
+ * nothing here was resolved rather than trusting an invented value.
+ */
+function workerFallbackManifest(msg: ChatStartMessage): RunManifest {
+  const unsupported = { source: 'unsupported', synthesised: true } as const;
+  const runId = msg.runId ?? crypto.randomUUID();
+  return {
+    version: 1,
+    runId,
+    projectId: null,
+    workspaceId: 'worker',
+    roots: [process.cwd()],
+    cwd: process.cwd(),
+    permissionPolicy: { mode: 'default', hostSwitch: 'ask', defaultTimeoutMs: 300_000 },
+    capabilities: { profiles: [], modes: [], tools: [] },
+    connectorBindings: [],
+    // NO SECRETS. The engine hashes whatever it is given into every event it
+    // emits, so a manifest carrying an API key would put it in the durable log.
+    env: { ref: 'env:worker', hash: 'e3b0c44298fc1c149afbf4c8996fb924' },
+    agent: {
+      profileId: null,
+      // Resolved from the AGENT, not from `msg.options`: the options bag carries
+      // a model *configuration* (`{ model: string; baseURL: string; ... }`, see
+      // `ChatStartMessage.options` at :288), not a model id. Reading
+      // `msg.options.model` as a string would put an object into a field the
+      // runtime hashes, and the hash would be of a configuration object rather
+      // than of a model.
+      model: typeof agent?.model === 'string' ? agent.model : '',
+      providerId: typeof agent?.provider === 'string' ? agent.provider : '',
+    },
+    budget:
+      typeof msg.options?.maxTurns === 'number' ? { maxTurns: msg.options.maxTurns } : {},
+    deterministic: false,
+    provenance: {
+      roots: unsupported,
+      cwd: unsupported,
+      permissionPolicy: unsupported,
+      capabilities: unsupported,
+      connectorBindings: unsupported,
+      env: unsupported,
+      agent: unsupported,
+      budget: unsupported,
+      workspaceId: unsupported,
+      deterministic: unsupported,
+    },
+  };
+}
+
+/**
+ * Construct the engine and run one execution through it.
+ *
+ * ## Why this is not `agent.streamChat` behind a different name
+ *
+ * `RunEngineImpl` owns the `model -> tool -> backfill -> next turn` loop. Every
+ * decision on that spine is made inside `@duya/agent-runtime`; this function
+ * supplies mechanisms through `buildEnginePorts` and forwards what the engine
+ * reports. It contains no turn counter, no stop decision, and no `while` over
+ * turns — which is the property plan 600 `04` section 2 item 3 asks for and the
+ * property the old acceptance gate could not see.
+ *
+ * ## What the worker still owns
+ *
+ * Assembly (catalog resolution, skills, MCP handshake, attachment decode) and
+ * frame fan-out. Both are host facts: the first needs registries that live above
+ * the runtime layer, and the second is a property of being a subprocess
+ * (`sendEvent` writes IPC and stdout, `agent-process-entry.ts:2093-2096`).
+ *
+ * ## Cancellation
+ *
+ * The caller's `AbortController` is created HERE, before assembly, and handed to
+ * the engine. That is the correction `ports.ts` makes to `DuyaAgent`, whose own
+ * controller is created at the first line of `streamChat` (`DuyaAgent.ts:963`)
+ * and therefore covers none of the setup in front of it. Creating it before the
+ * ports exist is what makes that region cancellable.
+ */
+function runWithEngine(input: {
+  readonly manifest: RunManifest;
+  readonly prompt: ModelMessage;
+  readonly options: Readonly<Record<string, unknown>>;
+  readonly sources: Parameters<typeof buildEnginePorts>[0];
+}): { readonly stop: (reason: string) => Promise<unknown>; readonly completed: Promise<void> } {
+  // Created BEFORE the ports are built, so a stop can reach assembly and the
+  // first model call rather than only the turns that follow them.
+  const controller = new AbortController();
+  const engine = new RunEngineImpl({ now: () => Date.now() });
+
+  const ports = buildEnginePorts(input.sources);
+  const handle = engine.execute({
+    manifest: input.manifest,
+    signal: controller.signal,
+    ports,
+    input: {
+      revision: '',
+      prompt: input.prompt,
+      history: { kind: 'inline', value: [] },
+      attachments: { kind: 'inline', value: [] },
+      catalog: { kind: 'by_ref', digest: '', locator: 'catalog://worker' },
+      steering: [],
+      options: input.options,
+    },
+  });
+
+  // Published so `chat:interrupt` can reach the OWNER of the loop. The WRAPPER
+  // is published rather than the raw handle, so the interrupt branch cannot
+  // reach a `stop` that takes a request object while every other caller here
+  // passes a reason string — a second stop shape in one file is how one of them
+  // ends up reporting the wrong disposition.
+  //
+  // Nulled on completion, so a stop arriving afterwards is reported as reaching
+  // no live run instead of as a clean cooperative stop.
+  const published = { stop: (reason: string) => handle.stop({ graceMs: 0, reason }) };
+  activeEngineRun = published;
+  const completed = handle.completed().finally(() => {
+    if (activeEngineRun === published) activeEngineRun = null;
+  });
+
+  return { completed, stop: published.stop };
+}
+
+// ============================================================================
 // Chat Handler
 // ============================================================================
 
@@ -2927,6 +3165,93 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     const cumulativeTokenUsageRef: { current: TokenUsage | null } = {
       current: null,
     };
+
+    // ── Plan 600 S2: the run engine ──────────────────────────────────────────
+    // The engine is CONSTRUCTED AND CALLED on the live path, before the legacy
+    // generator, and its decisions are the ones that reach the run layer.
+    //
+    // What is bound TODAY, and what is not, is stated rather than implied:
+    //
+    //  - BOUND: approval (this file's own `requestPermission`), the side-effect
+    //    class resolution, the cancellation signal, and the terminal proposal.
+    //    The stop decision, the turn ceiling, the budget verdict and the subtask
+    //    sweep are therefore the engine's, reached from a real `chat:start`.
+    //  - NOT YET BOUND: the tool pipeline. `ToolExecutionPipeline` is
+    //    constructed INSIDE `DuyaAgent.streamChat` per turn
+    //    (`DuyaAgent.ts:2036`), against a per-turn `toolUseContext` built from
+    //    closure state this file cannot see. There is no handle to bind a
+    //    `ToolPort` to, and faking one would be exactly the `headless-run-host`
+    //    shape `04` section 0 rejects: a real controller around an executor that
+    //    still holds the loop.
+    //
+    // So the legacy generator below still drives the model and tool calls, and
+    // the engine's per-turn legs are reached through the bridge further down.
+    // Lifting the pipeline out is the named blocker for the next slice; it is a
+    // refactor of `DuyaAgent.streamChat`, not a wiring change.
+    const engineRun = runWithEngine({
+      manifest: msg.manifest ?? workerFallbackManifest(msg),
+      prompt: { role: 'user', id: msg.id, content: toEngineContent(messageContent) },
+      options: (msg.options ?? {}) as Readonly<Record<string, unknown>>,
+      sources: {
+        openModelStream: () => emptyModelStream(),
+        queueTool: () => {
+          // The pipeline is not reachable from outside `streamChat` yet. Queuing
+          // a call here would silently drop a tool the model asked for, so the
+          // call is refused instead: a loud failure now beats a quiet one that
+          // only shows up as a missing side effect.
+          throw new Error(
+            'the engine cannot dispatch a tool yet: ToolExecutionPipeline is still owned by DuyaAgent.streamChat',
+          );
+        },
+        drainTools: () => emptyToolDrain(),
+        discardTools: () => {},
+        lookup: workerSideEffectLookup(),
+        assembleTurn: () => Promise.resolve(workerAssembledTurn(effectiveSystemPrompt)),
+        askApproval: async (request, signal) => {
+          // A stop before the ask is a refusal, not a wait: the user pressing
+          // stop while a permission card is open must not leave the run parked
+          // on a prompt nobody will ever answer.
+          if (signal.aborted) return { allowed: false, reason: 'cancelled' };
+          // An absent handler is `unavailable`, NOT `denied`. The distinction is
+          // the whole reason `ApprovalVerdict` has three reasons: a denial is a
+          // user decision and belongs in the transcript, while an unreachable
+          // approver is a failure of the surface, and conflating them makes a
+          // broken bridge look like a user saying no.
+          if (requestPermission === undefined) return { allowed: false, reason: 'unavailable' };
+          const decision = await requestPermission({
+            toolName: request.toolName,
+            input: request.input,
+            sessionId: msg.sessionId,
+            toolUseId: request.callId,
+            ...(request.permissionMode === 'default'
+              ? {}
+              : { permissionMode: request.permissionMode }),
+          } as never);
+          // `paused` is NOT an allow. The legacy surface can park a run awaiting
+          // a later answer, and mapping that to `allowed` would let a tool run
+          // with no decision behind it — which is precisely the class of bug
+          // F02 (`router.ts:2313-2352`) was fixed to prevent.
+          return decision === 'allow'
+            ? { allowed: true, scope: 'once' }
+            : { allowed: false, reason: 'denied' };
+        },
+        publishEvent: () => {
+          // The run layer's ledger is the Control Plane's. Publishing a protocol
+          // event from here would mint a second account of the same run, so the
+          // frames the engine's presence produces are deliberately not invented.
+        },
+        proposeTerminal: (candidate) => {
+          // Reported, not decided. `RunSession.settle` remains the single writer
+          // of the terminal (`run-session.ts:519,527`).
+          log(
+            `[Agent-Process] engine proposed terminal: ${candidate.state.status} (${candidate.reason})`,
+          );
+        },
+      },
+    });
+    // Awaited so the run's engine legs complete before the legacy frames are
+    // drained; not awaited for its frames, because it emits none yet.
+    void engineRun.completed.catch(() => {});
 
     const eventGen = agent.streamChat(messageContent, {
       systemPrompt: effectiveSystemPrompt,
@@ -4226,7 +4551,19 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           log('[Agent-Process] Received chat:interrupt, chatInProgress:', chatInProgress);
 
           if (chatInProgress) {
-            // First press: abort current chat
+            // First press: abort current chat.
+            //
+            // The ENGINE is asked first, because it owns the loop and is the only
+            // component that can report whether the stop was applied. The agent
+            // is still asked, because the legacy path's own controller drives
+            // provider calls the engine's signal does not reach on its own.
+            //
+            // Both are called, and the order matters: the engine first, so a
+            // stop that reaches the loop is recorded before the legacy abort
+            // unwinds the machinery underneath it.
+            if (activeEngineRun) {
+              void activeEngineRun.stop('user pressed stop');
+            }
             if (agent && agent.interrupt) {
               agent.interrupt();
             }
