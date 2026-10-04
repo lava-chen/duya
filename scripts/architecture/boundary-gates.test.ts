@@ -301,7 +301,7 @@ describe('G4 — worker implements ExecutionChannel rather than DuyaAgent', () =
 describe('G6 — durable identity is not rooted at session_id', () => {
   it('finds session_id NOT NULL in the live durable tables', () => {
     const findings = findSessionRootedTables();
-    const tables = new Set(findings.map((f) => f.table));
+    const tables = new Set(findings.filter((f) => f.live).map((f) => f.table));
     for (const table of DURABLE_IDENTITY_TABLES) {
       expect(tables).toContain(table);
     }
@@ -311,12 +311,32 @@ describe('G6 — durable identity is not rooted at session_id', () => {
     const findings = findSessionRootedTables(['runs']);
     expect(findings).toHaveLength(1);
     expect(findings[0]!.file).toContain('run-store.ts');
+    expect(findings[0]!.live).toBe(true);
+  });
+
+  it('distinguishes the live core.db tasks table from the dead main.db one', () => {
+    // Measured, not assumed: every prepared statement against `tasks` lives in
+    // db/core/stores.ts and db/core/legacy-import.ts, and db-bridge.ts:1432
+    // dispatches task:create through getCoreStores(). The main.db definition in
+    // db/schema.ts is created on every boot and never read — 587 §08 calls it
+    // DEAD. A gate that merged the two would point S1 at a table nobody uses.
+    const findings = findSessionRootedTables(['tasks']);
+    const live = findings.filter((f) => f.live);
+    const dead = findings.filter((f) => !f.live);
+
+    expect(live).toHaveLength(1);
+    expect(live[0]).toMatchObject({ file: expect.stringContaining('core/stores.ts'), database: 'core.db' });
+
+    // The dead one is defined more than once in schema.ts; all of them must be
+    // marked dead so the migration does not treat them as the target.
+    expect(dead.length).toBeGreaterThan(0);
+    for (const d of dead) {
+      expect(d.file).toContain('db/schema.ts');
+      expect(d.database).toBe('main.db');
+    }
   });
 
   it('does not flag a table that is already migrated off session_id', () => {
-    const dir = tempDir();
-    const src = path.join(dir, 'src');
-    fs.mkdirSync(src, { recursive: true });
     const target = path.join(REPO_ROOT, 'apps/desktop/src/main/db/core');
     const probe = path.join(target, '__boundary-gate-probe.ts');
     fs.writeFileSync(
@@ -339,7 +359,6 @@ describe('G6 — durable identity is not rooted at session_id', () => {
       expect(findings).toHaveLength(1);
     } finally {
       fs.rmSync(probe, { force: true });
-      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

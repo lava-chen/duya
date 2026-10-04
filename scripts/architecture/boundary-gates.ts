@@ -392,11 +392,51 @@ export function workerImplementsExecutionChannel(entryRel = WORKER_ENTRY): boole
  */
 export const DURABLE_IDENTITY_TABLES: readonly string[] = ['runs', 'tasks', 'session_goals'];
 
+/**
+ * Which database each table definition belongs to.
+ *
+ * This distinction is not cosmetic. `tasks` is defined TWICE on disk:
+ *
+ *   apps/desktop/src/main/db/core/stores.ts:103  -> core.db, and it is LIVE.
+ *     Every read and write reaches it: stores.ts has 20+ prepared statements
+ *     against it, and `db-bridge.ts:1432` dispatches `task:create` through
+ *     `getCoreStores().tasks.create(...)`.
+ *   apps/desktop/src/main/db/schema.ts:163/402/415 -> main.db, and it is DEAD.
+ *     `initializeSchema` still creates it (connection.ts:160/221), so the DDL
+ *     runs on every boot, but nothing ever reads or writes it. This matches the
+ *     adjudication in 587 §08, which classified `schema.ts:163` main.db `tasks`
+ *     as DEAD.
+ *
+ * A gate that reported both as one bucket would send S1 to migrate a table
+ * nobody uses while the live one keeps its `session_id NOT NULL`. So the
+ * finding records which database it came from, and the live one is what the
+ * migration has to fix.
+ */
+export type Database = 'core.db' | 'main.db';
+
+/** Which database a given source file's DDL belongs to. */
+export function databaseOfFile(relFile: string): Database {
+  // `db/core/**` is duya-core.db; everything else under db/ is duya-main.db.
+  // Deriving it from the file rather than from the table name is the point:
+  // `tasks` is defined in both, and a per-table map reported the dead main.db
+  // definition as core.db, which is exactly the mislabeling this rule exists
+  // to prevent.
+  return /(^|\/)db\/core\//.test(relFile) || relFile.includes('/db/core/') ? 'core.db' : 'main.db';
+}
+
+/** Definitions that exist but have no reader or writer. */
+export const DEAD_TABLE_DEFINITIONS: readonly { file: string; table: string; database: Database }[] = [
+  { file: 'apps/desktop/src/main/db/schema.ts', table: 'tasks', database: 'main.db' },
+];
+
 export interface SessionRootedTable {
   readonly table: string;
   readonly file: string;
   readonly line: number;
   readonly column: string;
+  readonly database: Database;
+  /** False for a DDL block nothing reads or writes. */
+  readonly live: boolean;
 }
 
 /** Find a `session_id TEXT NOT NULL` inside a CREATE TABLE for the given name. */
@@ -405,6 +445,8 @@ export function findSessionRootedTables(
 ): SessionRootedTable[] {
   const findings: SessionRootedTable[] = [];
   const dbDir = path.join(REPO_ROOT, 'apps', 'desktop', 'src', 'main');
+  const isDead = (file: string, table: string): boolean =>
+    DEAD_TABLE_DEFINITIONS.some((d) => d.file === file && d.table === table);
   for (const file of walk(dbDir)) {
     const raw = readSource(file);
     for (const table of tables) {
@@ -416,13 +458,17 @@ export function findSessionRootedTables(
       while ((m = create.exec(raw)) !== null) {
         const body = m[1]!;
         const bodyStartLine = raw.slice(0, m.index).split(/\r?\n/).length;
+        const fileRel = rel(file);
+        const database = databaseOfFile(fileRel);
         body.split(/\r?\n/).forEach((row, i) => {
           if (/^\s*session_id\s+TEXT\s+NOT\s+NULL/i.test(row)) {
             findings.push({
               table,
-              file: rel(file),
+              file: fileRel,
               line: bodyStartLine + i,
               column: 'session_id NOT NULL',
+              database,
+              live: !isDead(fileRel, table),
             });
           }
         });
