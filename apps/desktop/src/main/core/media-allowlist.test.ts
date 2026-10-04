@@ -52,7 +52,10 @@ vi.mock('node:os', async (importOriginal) => {
 // Imported after the mocks so the module picks up the stubbed roots.
 import { checkMediaPath, getMediaRoots } from './media-allowlist';
 
-const realTemp = process.env.TEMP || process.env.TMP || 'C:\\Windows\\Temp';
+// The real temp dir, NOT the mocked one: `node:os` is stubbed above, so the
+// fake app roots have to be created under the real platform temp location
+// (`TMPDIR` on POSIX, `TEMP`/`TMP` on Windows) to stay outside the allowed root.
+const realTemp = (await vi.importActual<typeof import('node:os')>('node:os')).tmpdir();
 
 let tmpBase: string;
 
