@@ -860,95 +860,51 @@ selfTest:
   # Attributed BY MEASUREMENT: the new test file reverted ALONE, edge set against
   # edge set, exactly 1 added and 0 removed. `.architecture-baseline.json` was not
   # touched and `--write` was not run.
-  # Plan 587 M5.2, whole-slice record ───────────────────────────────────────
   #
-  # Every number below was measured on the SAME tree, one
-  # `architecture-check.mjs` run with the slice stashed and one without, and
-  # attributed per edge rather than inferred.
+  # 124 -> 126 (plan 587 C6.1): TWO further permitted edges, 0 removed, layered on
+  # top of R1.4's one rather than replacing it. R1.4's attribution above is
+  # unchanged.
   #
-  #   rule                        master   M5.2   delta
-  #   module-dependency             559    460     -99
-  #   module-dependency-permitted   124    216     +92
-  #   forbidden-dependency           16      0     -16
-  #   package-boundary-escape       162    146     -16
-  #   deep-import                    25     25       0
-  #   cycle                          16     16       0
-  #   total                         902    863     -39
+  # Measured on the rebased tree. C6.1 was originally built on `c0253805`, which
+  # predates E4.2 and R1.4, and a self-test run there reported `expected 123,
+  # counted 125`. That bare figure is stale in the SAME way R1.4's 119 -> 120 was:
+  # it measures a base that does not contain the other two increments, so the two
+  # numbers cannot be added. The branch was rebased onto `dc46dac4` and the value
+  # below is measured on the tree that actually contains E4.2, R1.4 and C6.1.
   #
-  # HALF 1 — the `pkg:agent -> electron-main` cut (rank 1, 15 value edges).
-  # 14 migration edges plus 1 automation edge, every one of them out of a TEST
-  # file, so no production code moved. `module-dependency` 559 -> 543 (-16) and
-  # `forbidden-dependency` 16 -> 0, which is the first time that rule has
-  # reached zero. The count is 16 rather than 15 because `module-dependency`
-  # counts import STATEMENTS, so the one type-only import that went with the
-  # relocated test file counts here even though the value graph ignores it.
+  # Both edges are `electron-main -> pkg:agent-protocol`, target
+  # `packages/agent-protocol/src/index.ts`, and BOTH are `import type` — erased at
+  # runtime, so neither adds a load-time dependency. They are:
   #
-  # Nothing was ADDED in this half, and one candidate addition was rejected
-  # rather than absorbed. The first version of the agent-fixture drift test
-  # IMPORTED `packages/agent/src/memory-state/__tests__/schema-ddl.ts`, which
-  # `architecture:check` correctly reported as a new
-  # `package-boundary-escape` (162 -> 163) and exited 1. Importing it would have
-  # traded the cut for the same coupling pointing the other way, so the test
-  # READS that file as text by path instead. That is why this half leaves
-  # `package-boundary-escape` and `module-dependency-permitted` untouched, and
-  # it is the evidence the fix cost no budget.
+  #   + apps/desktop/src/main/control-plane/repository-port.ts
+  #       (RunEventEnvelope, RunTerminalState — the port must alias R1.3's own
+  #        outcome types rather than restate them, or two declarations of one
+  #        fact drift the first time a field is added to one of them)
+  #   + apps/desktop/src/main/control-plane/control-plane-service.ts
+  #       (RunHandle — the host map's value type)
   #
-  # HALF 2 — the plugin-core subpaths. 16 host imports that reached into
-  # `packages/plugin-core/src` by relative path now name the package's DECLARED
-  # subpaths, each backed by a real `exports` entry added in this slice.
-  # `package-boundary-escape` 162 -> 146 (-16) and `deep-import` is UNCHANGED at
-  # 25, which is the load-bearing half: the subpaths became public rather than
-  # merely differently spelled. (The first attempt kept the NodeNext `.js`
-  # suffix, which is valid only for relative paths; 8 of the 16 were still
-  # classified `deep` until it was stripped, and that is what the flat 25 proves
-  # was fixed.)
+  # Direction is correct and matches the 21 pre-existing edges of the same pair:
+  # both owning modules already declare `agent-protocol` in their `requires`
+  # lists, and the protocol package remains a leaf with no dependency of its own.
+  # `agent-protocol` is the one managed module that is not itself a cross-boundary
+  # edge here, so no zero-tolerance module is affected.
   #
-  # READ THIS BEFORE ACCEPTING `module-dependency-permitted` 124 -> 203 (+79).
-  # That +79 is a RECLASSIFICATION, not new debt, and it is the one place this
-  # slice relaxes a rule. `requires` operates at MODULE granularity, so adding
-  # `legacy-plugin-core` to `desktop-host` permits every
-  # `apps/desktop -> packages/plugin-core` edge, and 79 of them were ALREADY
-  # baselined violations counted under the blocking `module-dependency` rule.
-  # They move bucket; they are not added, and `total` is 854 either way, so the
-  # baseline was never asked to absorb anything. The honest reading is that the
-  # host has always depended on plugin-core and the dependency was previously
-  # invisible to the declared-dependency rule. It is nonetheless a 79-edge
-  # relaxation of a BLOCKING rule taken in a slice about cutting edges, and it
-  # is the figure most worth a second opinion.
+  # `module-dependency` is UNCHANGED at 559, and that remains the load-bearing
+  # half: no edge became a NON-permitted dependency. `module-dependency-permitted`
+  # is counted, never blocking, and never consults the baseline.
   #
-  # HALF 3 — the contracts directory (`apps/desktop/src/contracts`).
-  # `main/ipc/git-types.ts` -> `contracts/git.ts` and
-  # `renderer/types/import.ts` -> `contracts/import.ts`, with every consumer
-  # repointed. Measured: `src-renderer -> electron-main` 4 -> 2 and
-  # `electron-main -> src-renderer` 33 -> 32. Both remaining renderer->main
-  # edges are recorded in NOT_CUT with their reasons; the 32 main->renderer
-  # edges are the behavioural share and are M5.5's, not a DTO's.
-  #
-  # `total` RISES here, 854 -> 863, and that is the honest reading rather than
-  # a regression: 13 host -> contracts edges became VISIBLE. They were
-  # unclassifiable before, because `audit-imports.mjs`'s `ownerOf` had never
-  # heard of `apps/desktop/src/contracts` and returned `other` — an owner with
-  # no `requires` list, so those edges could not be permitted by any policy
-  # entry and were reported as blocking. `import-graph.mjs` already returned
-  # `desktop-contracts` and listed it in `HOST_BOUNDARIES`; the two owner maps
-  # disagreed. Both are fixed, `ownerToRoot` in `architecture-check.mjs` now
-  # knows the label, and a `desktop-contracts` module entry declares it. A
-  # boundary that cannot see its own contract directory is a hole, and closing
-  # it necessarily reports more.
-  #
-  #   rule                        after H1+H2   +H3   final
-  #   module-dependency                   464    -4     460
-  #   module-dependency-permitted         203   +13     216
-  #   forbidden-dependency                   0     0       0
-  #   package-boundary-escape             146     0     146
-  #   deep-import                          25     0      25
-  #   total                               854     9     863
-  #
-  # `.architecture-baseline.json` was not touched and `--write` was not run.
-  module-dependency-permitted: 216
-  # 16 -> 0: every `forbidden-dependency` in the tree was one of the 16
-  # `pkg:agent` -> `apps/desktop` statements removed above.
+  # Attributed BY MEASUREMENT, not by reasoning: `git reset --hard origin/master`
+  # captured the baseline edge set, `git reset --hard <sha>` captured the branch's,
+  # and `audit-imports.mjs --json` was diffed edge set against edge set —
+  # 683 -> 685 `crossBoundaryEdges`, exactly 2 added and 0 removed.
+  # `.architecture-baseline.json` was not touched and `--write` was NOT run.
+  module-dependency-permitted: 218
+  # 16 -> 0, MEASURED on the merged tree: every forbidden-dependency in the
+  # tree was one of the statements M5.2 removed, so the protocol/core leaf
+  # boundary now has zero violations. Re-measured after merging #169 rather than
+  # computed from two different bases.
   forbidden-dependency: 0
+
   # 161 -> 162: one more relative-path escape into packages/agent, from the
   # plan-583 stack. Now 126 agent / 16 plugin-core / 13 gateway / 7 conductor.
   # 162 -> 146 by plan 587 M5.2: the 16 host imports that reached into
