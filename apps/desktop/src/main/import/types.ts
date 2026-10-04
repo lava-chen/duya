@@ -10,4 +10,4 @@ export type {
   ImportBatch,
   ImportItemRecord,
   SessionImportItem,
-} from '../../renderer/types/import';
+} from '../../contracts/import';

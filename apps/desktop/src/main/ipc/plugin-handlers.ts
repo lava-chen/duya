@@ -45,14 +45,14 @@ import type {
   PluginSetupFieldDef,
   PluginSetupLoadResult,
 } from '../../renderer/lib/plugin-types';
-import type { PluginError } from '../../../../../packages/plugin-core/src/types';
+import type { PluginError } from '@duya/plugin-core/types';
 // Plan 311 — workflow template discovery & summary projection.
-import { discoverWorkflows, discoverSkills } from '../../../../../packages/plugin-core/src/plugins/loader/capability-discovery.js';
+import { discoverWorkflows, discoverSkills } from '@duya/plugin-core/plugins/loader/capability-discovery';
 import {
   toWorkflowSummary,
   type WorkflowTemplate,
   type WorkflowTemplateSummary,
-} from '../../../../../packages/plugin-core/src/workflows/schema.js';
+} from '@duya/plugin-core/workflows/schema';
 import { readPluginManifest } from '../plugins/manifest.js';
 
 const COMPONENT = 'PluginHandlers' as LogComponent;

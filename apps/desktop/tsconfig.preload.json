@@ -19,6 +19,6 @@
       "@duya/plugin-core/*": ["../../packages/plugin-core/dist/*"]
     }
   },
-  "include": ["src/preload/**/*.ts"],
+  "include": ["src/contracts/**/*.ts", "src/preload/**/*.ts"],
   "exclude": ["node_modules", "**/*.test.ts"]
 }

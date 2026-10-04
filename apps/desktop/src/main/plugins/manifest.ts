@@ -24,13 +24,13 @@
 import fs from 'fs';
 import path from 'path';
 import type { PluginCapabilityKind, PluginInterface, PluginManifest } from './types';
-import { discoverAllCapabilities } from '../../../../../packages/plugin-core/src/plugins/loader/capability-discovery.js';
-import { parseAppDeclarationFile } from '../../../../../packages/plugin-core/src/connectors/app-schema.js';
+import { discoverAllCapabilities } from '@duya/plugin-core/plugins/loader/capability-discovery';
+import { parseAppDeclarationFile } from '@duya/plugin-core/connectors/app-schema';
 import {
   allPluginManifestPaths,
   isNativeManifestPath,
   normalizePluginManifest,
-} from '../../../../../packages/plugin-core/src/formats/registry.js';
+} from '@duya/plugin-core/formats/registry';
 
 // ----------------------------------------------------------------------------
 // Shared low-level helpers

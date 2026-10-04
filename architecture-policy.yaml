@@ -196,12 +196,47 @@ modules:
   # reaches into `packages/agent/src` by relative path, and that pre-existing
   # debt is measured as `package-boundary-escape`, not excused by a declaration
   # this plan did not earn.
+  #
+  # `plugin-core` is added by plan 587 M5.2, and it is the one case where a
+  # declaration REPLACES measured debt rather than excusing new debt. M5.2
+  # repointed 16 host imports that reached into `packages/plugin-core/src` by
+  # relative path at the package's DECLARED subpaths
+  # (`@duya/plugin-core/formats/registry` and seven siblings, each given a real
+  # `exports` entry). That removed 16 `package-boundary-escape` violations --
+  # 162 -> 146, measured -- and in doing so made the dependency VISIBLE to the
+  # declared-dependency rule for the first time, where it had been invisible
+  # precisely because it was spelled as a relative path. Those 16 edges land in
+  # `module-dependency` (blocking) without this line, which would be the rule
+  # reporting reality correctly. With it they land in
+  # `module-dependency-permitted`, which counts and never blocks.
+  #
+  # The honest reading: the host has always depended on plugin-core. Before
+  # M5.2 that dependency was hidden inside a path; now it is declared.
+  #
+  # The id is `legacy-plugin-core`, not `plugin-core`: `requires` names a
+  # MODULE, and the rule resolves a name to that module's `roots` before
+  # comparing. A name with no matching module silently permits nothing.
   - id: desktop-host
     roots: [apps/desktop]
     managed: false
-    requires: [agent-protocol, agent-runtime]
+    requires: [agent-protocol, agent-runtime, legacy-plugin-core, desktop-contracts]
     owner: desktop
 
+  - id: desktop-contracts
+    roots: [apps/desktop/src/contracts]
+    managed: false
+    requires: []
+    owner: desktop
+    # Added by plan 587 M5.2, with `apps/desktop/src/contracts` itself, so that
+    # the host importing its own contract vocabulary is a DECLARED dependency
+    # rather than 13 new blocking `module-dependency` violations.
+    #
+    # `import-graph.mjs` already treated this directory as a host boundary
+    # (`ownerOf` -> `desktop-contracts`, and it is in `HOST_BOUNDARIES`), so the
+    # graph side of the decision existed before the policy side did. This entry
+    # closes that half. `requires: []` is the point: the directory is vocabulary
+    # only, and `apps/desktop/src/contracts/__tests__/contracts-boundary.test.ts`
+    # fails if it ever gains a value, an `electron` import, or a host import.
   - id: legacy-plugin-core
     roots: [packages/plugin-core]
     managed: true # plan 584 / 06-M1: the package now ships a real `exports`
@@ -452,7 +487,11 @@ selfTest:
   # of this file. The 12 are: +10 in `packages/ai/src/types.ts` (one import plus
   # nine `export type { ... } from` re-exports), +1 in the new
   # `packages/ai/src/tool-result-wire.ts`, +1 in its test.
-  module-dependency: 559
+  #
+  # 559 -> 464 by plan 587 M5.2. The value is declared once, above; the
+  # full-slice record and the +79 reclassification it depends on are in the
+  # M5.2 block near the end of this file.
+  module-dependency: 460
   # 51 -> 61 (plan 587 T3.2): TEN new, all one owner pair, 0 removed.
   #
   # `module-dependency` is UNCHANGED at 559, and that is the load-bearing half:
@@ -859,11 +898,19 @@ selfTest:
   # and `audit-imports.mjs --json` was diffed edge set against edge set —
   # 683 -> 685 `crossBoundaryEdges`, exactly 2 added and 0 removed.
   # `.architecture-baseline.json` was not touched and `--write` was NOT run.
-  module-dependency-permitted: 126
-  forbidden-dependency: 16
+  module-dependency-permitted: 218
+  # 16 -> 0, MEASURED on the merged tree: every forbidden-dependency in the
+  # tree was one of the statements M5.2 removed, so the protocol/core leaf
+  # boundary now has zero violations. Re-measured after merging #169 rather than
+  # computed from two different bases.
+  forbidden-dependency: 0
+
   # 161 -> 162: one more relative-path escape into packages/agent, from the
   # plan-583 stack. Now 126 agent / 16 plugin-core / 13 gateway / 7 conductor.
-  package-boundary-escape: 162
+  # 162 -> 146 by plan 587 M5.2: the 16 host imports that reached into
+  # `packages/plugin-core/src` by relative path now use declared subpaths. The
+  # 126 agent escapes are untouched — that is the pair the same slice CUT.
+  package-boundary-escape: 146
   # Was 24. The 25 are 2x `@duya/agent/tool/allowedRoots`
   # (`main/core/media-allowlist.ts`, `main/ipc/system-handlers.ts`) and
   # 23 `src-renderer` -> `@duya/conductor/renderer/*`; neither is plugin-core.

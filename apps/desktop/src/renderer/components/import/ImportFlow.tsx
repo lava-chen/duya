@@ -8,7 +8,7 @@ import { PreviewStep } from "./steps/PreviewStep";
 import { ConflictStep } from "./steps/ConflictStep";
 import { CompleteStep } from "./steps/CompleteStep";
 import { Button } from "@/components/ui/Button";
-import type { ImportSource, ImportItem, ScanResult, ImportManifest, ConflictResolution, SessionImportItem } from "@/types/import";
+import type { ImportSource, ImportItem, ScanResult, ImportManifest, ConflictResolution, SessionImportItem } from "../../../contracts/import";
 
 interface ImportFlowProps {
   onComplete?: () => void;

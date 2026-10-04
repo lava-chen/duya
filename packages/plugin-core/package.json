@@ -68,6 +68,34 @@
     "./security/path-validator": {
       "types": "./dist/security/path-validator.d.ts",
       "default": "./dist/security/path-validator.js"
+    },
+    "./security/policy-engine": {
+      "types": "./dist/security/policy-engine.d.ts",
+      "default": "./dist/security/policy-engine.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "default": "./dist/types.js"
+    },
+    "./formats/registry": {
+      "types": "./dist/formats/registry.d.ts",
+      "default": "./dist/formats/registry.js"
+    },
+    "./marketplace/source-parse": {
+      "types": "./dist/marketplace/source-parse.d.ts",
+      "default": "./dist/marketplace/source-parse.js"
+    },
+    "./plugins/loader/capability-discovery": {
+      "types": "./dist/plugins/loader/capability-discovery.d.ts",
+      "default": "./dist/plugins/loader/capability-discovery.js"
+    },
+    "./plugins/loader/official-assets": {
+      "types": "./dist/plugins/loader/official-assets.d.ts",
+      "default": "./dist/plugins/loader/official-assets.js"
+    },
+    "./workflows/schema": {
+      "types": "./dist/workflows/schema.d.ts",
+      "default": "./dist/workflows/schema.js"
     }
   },
   "scripts": {

@@ -35,7 +35,7 @@ vi.mock('../../../logging/logger', () => ({
 
 import { riskTierToBehavior, normalizeRiskTier, DEFAULT_MISSING_TIER } from '../../../../../../../packages/agent/src/permissions/policy.js';
 import { redactSecrets } from '../../../../renderer/lib/errors/extractErrorMessage.js';
-import { PolicyEngine, DEFAULT_POLICY } from '../../../../../../../packages/plugin-core/src/security/policy-engine.js';
+import { PolicyEngine, DEFAULT_POLICY } from '@duya/plugin-core/security/policy-engine';
 import { toStatusDTO } from '../types';
 import type { AppConnection } from '../types';
 import { AppConnectionService } from '../app-connection-service';

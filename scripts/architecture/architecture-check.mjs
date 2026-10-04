@@ -146,6 +146,15 @@ function ownerToRoot(owner) {
   if (owner.startsWith("pkg:")) return `packages/${owner.slice(4)}`;
   if (owner === "electron-main") return "electron";
   if (owner === "src-renderer") return "src";
+  // Plan 587 M5.2. `import-graph.mjs` grew a `desktop-contracts` owner when the
+  // contracts directory was created, but this map was not taught it, so every
+  // host edge into `apps/desktop/src/contracts` fell through to
+  // `moduleDependencyPermitted`'s `toRoot === null` and was reported as a
+  // blocking `module-dependency` violation no `requires` entry could ever
+  // permit. Mapped to the monorepo path rather than a legacy one, because the
+  // `electron` / `src` roots above are the PRE-monorepo locations and
+  // `pathRootCovers` is bidirectional.
+  if (owner === "desktop-contracts") return "apps/desktop/src/contracts";
   return null;
 }
 

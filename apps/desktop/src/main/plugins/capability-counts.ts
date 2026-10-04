@@ -10,7 +10,7 @@
 // this with the builtin cache root so counts always agree with the
 // on-disk `skills/`, `workflows/`, and `mcp/servers.json` files.
 
-import { discoverAllCapabilities } from '../../../../../packages/plugin-core/src/plugins/loader/capability-discovery.js';
+import { discoverAllCapabilities } from '@duya/plugin-core/plugins/loader/capability-discovery';
 import type { PluginCatalogEntry } from './types';
 
 export interface CapabilityCounts {

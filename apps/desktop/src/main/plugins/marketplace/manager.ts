@@ -11,7 +11,7 @@ import {
   MarketplaceSourceError,
   parseMarketplaceSource,
   safeMarketplaceDirName,
-} from '../../../../../../packages/plugin-core/src/marketplace/source-parse';
+} from '@duya/plugin-core/marketplace/source-parse';
 import {
   cloneMarketplace,
   getMarketplaceCloneDir,

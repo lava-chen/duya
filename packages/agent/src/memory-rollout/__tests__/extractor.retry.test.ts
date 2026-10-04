@@ -5,7 +5,7 @@
  * re-compacts the transcript with a halved budget and retries once before
  * recording the lease failure. Transport-class failures (refusal, timeout,
  * provider errors) must NOT retry. These tests run against a real
- * memory-state schema (migrations 0001-0008) with a scripted LLM.
+ * memory-state schema with a scripted LLM.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
@@ -19,13 +19,12 @@ const agentRequire = createRequire(path.resolve(__dirname, '../../../package.jso
 const Database = agentRequire('better-sqlite3') as typeof import('better-sqlite3');
 import type { Database as BetterSqlite3Database } from 'better-sqlite3';
 
-import { migration0001 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0001_init.sql';
-import { migration0002 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0002_lease_stage1.sql';
-import { migration0003 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0003_outbox.sql';
-import { migration0005 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0005_phase2.sql';
-import { migration0006 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0006_people_areas.sql';
-import { migration0007 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0007_lifecycle_scope.sql';
-import { migration0008 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0008_curation_runs.sql';
+// The DDL below is the schema this package requires, owned by this package.
+// These tests used to import the host's migration files by relative path,
+// which was a `pkg:agent -> electron-main` value edge (plan 587 M5.2). The host
+// owns the real schema; `apps/desktop/src/main/memory-state/__tests__/
+// agent-fixture-drift.test.ts` pins the two together.
+import { MEMORY_STATE_FIXTURE_DDL } from '../../memory-state/__tests__/schema-ddl';
 import { Stage1Extractor, type MessageRowShape } from '../extractor.js';
 import type { AIClient } from '@duya/ai';
 
@@ -43,8 +42,8 @@ function createFixture(): Fixture {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stage1-retry-root-'));
   const db = new Database(path.join(dbDir, 'memory-state.db'));
   db.pragma('journal_mode = WAL');
-  for (const m of [migration0001, migration0002, migration0003, migration0005, migration0006, migration0007, migration0008]) {
-    db.exec(m.sql);
+  for (const statement of MEMORY_STATE_FIXTURE_DDL) {
+    db.exec(statement);
   }
   db.prepare(
     `INSERT INTO rollout_catalog (

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { applyImportIPC, rollbackImportIPC } from "@/lib/import-ipc";
 import { Button } from "@/components/ui/Button";
-import type { ImportSource, ImportItem, ImportManifest, ConflictResolution, SessionImportItem } from "@/types/import";
+import type { ImportSource, ImportItem, ImportManifest, ConflictResolution, SessionImportItem } from "../../../../contracts/import";
 
 interface CompleteStepProps {
   items: ImportItem[];

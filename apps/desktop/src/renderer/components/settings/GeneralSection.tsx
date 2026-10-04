@@ -38,7 +38,7 @@ import {
 } from "@/components/settings/ui";
 import { ImportFlow } from "@/components/import/ImportFlow";
 import { historyImportIPC, detectImportIPC } from "@/lib/import-ipc";
-import type { ImportSource } from "@/types/import";
+import type { ImportSource } from "../../../contracts/import";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 

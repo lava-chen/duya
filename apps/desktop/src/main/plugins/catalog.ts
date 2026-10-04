@@ -18,7 +18,7 @@ import { app } from 'electron';
 import type { PluginCatalogEntry, PluginCategory, PluginManifest } from './types';
 import { listCapabilityKinds, readAppConnectionDeclarations, readPluginManifest } from './manifest';
 import { getLogger, LogComponent } from '../logging/logger';
-import { getOfficialPluginAssets } from '../../../../../packages/plugin-core/src/plugins/loader/official-assets.js';
+import { getOfficialPluginAssets } from '@duya/plugin-core/plugins/loader/official-assets';
 import { deriveCapabilityCounts } from './capability-counts.js';
 import { parseSkillFrontmatter } from '../utils/skill-parser';
 import { readMarketplaceManifest, resolvePluginEntryDir } from './marketplace/manifest';

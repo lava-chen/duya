@@ -5,7 +5,7 @@ import { useTranslation } from "@/hooks/useTranslation";
 import { scanImportIPC } from "@/lib/import-ipc";
 import { ArrowRightIcon, ArrowLeftIcon } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
-import type { ImportSource, ScanResult } from "@/types/import";
+import type { ImportSource, ScanResult } from "../../../../contracts/import";
 
 interface ScanResultStepProps {
   source: ImportSource;

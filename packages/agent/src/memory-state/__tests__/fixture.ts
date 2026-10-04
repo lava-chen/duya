@@ -5,25 +5,21 @@ import * as path from 'path';
 import Database from 'better-sqlite3';
 import type { Database as BetterSqlite3Database } from 'better-sqlite3';
 
-// Test-only import of the authoritative migration DDL. The migration
-// `.sql.ts` files import nothing but `crypto`, so pulling them across
-// the package boundary is safe in vitest (production code in
-// packages/agent MUST NOT import from electron/).
-import { migration0001 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0001_init.sql';
-import { migration0002 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0002_lease_stage1.sql';
-import { migration0003 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0003_outbox.sql';
-import { migration0005 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0005_phase2.sql';
-import { migration0006 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0006_people_areas.sql';
-import { migration0007 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0007_lifecycle_scope.sql';
-import { migration0008 } from '../../../../../apps/desktop/src/main/memory-state/migrations/0008_curation_runs.sql';
+// The DDL this fixture applies is the schema the agent's memory-state modules
+// REQUIRE, owned by this package (see `schema-ddl.ts`). The host owns the real
+// schema in apps/desktop/src/main/memory-state/migrations; this file used to
+// import those host migration files by relative path, which is 14 of the 15
+// `pkg:agent -> electron-main` value edges cut in plan 587 M5.2. Drift between
+// the two is pinned by the host's own drift test.
+import { MEMORY_STATE_FIXTURE_DDL } from './schema-ddl';
 
 /**
  * Shared test fixture for packages/agent memory-state modules
  * (lease / eligibility / outbox / reconcile).
  *
  * Each fixture creates:
- *   - a file-based temp SQLite DB with migrations 0001-0003 and
- *     0005-0007 applied (file-based, not `:memory:`, so WAL mode and
+ *   - a file-based temp SQLite DB with the fixture DDL applied (file-based,
+ *     not `:memory:`, so WAL mode and
  *     cross-handle concurrency behave like production)
  *   - a temp directory standing in for `~/.duya/memory` so outbox /
  *     reconcile tests can exercise the path allowlist without touching
@@ -45,13 +41,9 @@ export function createMemoryStateFixture(): MemoryStateFixture {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
-  db.exec(migration0001.sql);
-  db.exec(migration0002.sql);
-  db.exec(migration0003.sql);
-  db.exec(migration0005.sql);
-  db.exec(migration0006.sql);
-  db.exec(migration0007.sql);
-  db.exec(migration0008.sql);
+  for (const statement of MEMORY_STATE_FIXTURE_DDL) {
+    db.exec(statement);
+  }
   return {
     db,
     dbDir,

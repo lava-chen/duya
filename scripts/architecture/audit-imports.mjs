@@ -47,6 +47,13 @@ const rel = (p) => path.relative(ROOT, p).split(path.sep).join("/");
 function ownerOf(relPath) {
   if (relPath.startsWith("apps/desktop/src/renderer/")) return "src-renderer";
   if (relPath.startsWith("apps/desktop/src/preload/")) return "electron-preload";
+  // Plan 587 M5.2. `import-graph.mjs` already returned `desktop-contracts` here
+  // and listed it in `HOST_BOUNDARIES`; this function did not, so the two owner
+  // maps disagreed and every contracts file counted as `other`. That is a hole
+  // rather than a cosmetic difference: `other` has no `requires` list, so each
+  // host edge into the contracts directory was reported as a blocking
+  // `module-dependency` violation that no policy entry could permit.
+  if (relPath.startsWith("apps/desktop/src/contracts/")) return "desktop-contracts";
   if (relPath.startsWith("apps/desktop/src/main/")) return "electron-main";
   const m = relPath.match(/^packages\/([^/]+)\//);
   if (m) return `pkg:${m[1]}`;

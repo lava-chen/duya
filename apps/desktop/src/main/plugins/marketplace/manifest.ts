@@ -13,7 +13,7 @@ import {
   allCatalogPaths,
   normalizeCatalogPolicy,
   normalizeCatalogSource,
-} from '../../../../../../packages/plugin-core/src/formats/registry';
+} from '@duya/plugin-core/formats/registry';
 
 /**
  * Catalog search order. Plan 531: derived from the format adapter registry
