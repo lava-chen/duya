@@ -90,27 +90,69 @@ function bucket(): Map<Category, string[]> {
  */
 const EXPECTED = {
   counts: {
-    wire: 47,
+    wire: 48,
     pure: 6,
-    'runtime-coordination': 290,
+    'runtime-coordination': 293,
     'capability-adapter': 1174,
     'cp-durable': 173,
     'host-ui': 1204,
   } as Record<Category, number>,
   fingerprints: {
-    wire: 'b455186a9ef9f6f6',
+    wire: '42dac67979ff83d1',
     pure: '08339d25e58ae23c',
-    'runtime-coordination': 'a45183545093de49',
+    'runtime-coordination': 'ebfac2679efe2cf4',
     'capability-adapter': '4f223dc18410c009',
     'cp-durable': '45a1db9875f8fab7',
     'host-ui': '5f4fdca6f9f9092c',
   } as Record<Category, string>,
-  // 3264 source files walked, 2891 classified, 373 under a stated exclusion.
+  // 3278 source files walked, 2898 classified, 380 under a stated exclusion.
   //
-  // 2882 -> 2891 (+9) and 371 -> 373 (+2), itemised because a number that
-  // moved is a set of files. FOUR of the moves are not this change:
-  // a97353b3 re-recorded this file, and the two commits that landed after
-  // it each added one source file and one test file without re-recording.
+  // 2894 -> 2898 (+4) and 374 -> 380 (+6): the D7.1 merge (master #177), measured
+  // on the MERGED tree rather than on either side of it. Nothing in this delta is
+  // H8.1's own work — the four files H8.1 added were already inside the 2894/374
+  // reading and the merge does not move them — so the whole delta is D7.1's ten
+  // new files.
+  //
+  // WHICH RULE claimed each one, rather than only which category it landed in,
+  // because "it moved" is not an attribution and "a rule already recorded claimed
+  // it, so nothing was edited to accommodate it" is:
+  //
+  //   wire                   47 ->  48 (+1)
+  //     packages/agent-protocol/src/checkpoint.ts
+  //       claimed by `packages/agent-protocol/src` [wire]
+  //
+  //   runtime-coordination  290 -> 293 (+3)
+  //     packages/agent-runtime/src/checkpoint/branch-plan.ts
+  //     packages/agent-runtime/src/checkpoint/checkpoint-store.ts
+  //     packages/agent-runtime/src/checkpoint/unsupported.ts
+  //       all three claimed by `packages/agent-runtime/src` [runtime-coordination]
+  //
+  //   unclassified           374 -> 380 (+6)
+  //     apps/desktop/src/main/__tests__/headless-retirement.test.ts   (H8.1)
+  //     apps/desktop/src/main/__tests__/d71-kill-recovery.test.ts
+  //     packages/agent-runtime/test/checkpoint-branch.test.ts
+  //     packages/agent-runtime/test/checkpoint-side-effects.test.ts
+  //     packages/agent-runtime/test/checkpoint-store.test.ts
+  //     packages/agent-runtime/test/checkpoint-unsupported.test.ts
+  //
+  // The six are unclassified for the SAME reason, and it is a stated exclusion
+  // rather than a hole: the four `packages/agent-runtime/test` files sit under the
+  // `packages/agent-runtime/test` prefix `UNCLASSIFIED_PREFIXES` already carries
+  // with a reason, and the two `apps/desktop/src/main/__tests__` files sit under a
+  // `__tests__` exclusion. So the counter moved WITHOUT a rule being added, which
+  // is the distinction worth keeping: a reclassify-to-fit would have needed a
+  // NEW prefix here, and a new prefix is visible in the diff of the map itself —
+  // which is what `RULE_TABLE_FINGERPRINT` below now checks on every run.
+  //
+  // `capability-adapter` 1174, `cp-durable` 173, `host-ui` 1204, `pure` 6 and
+  // their four fingerprints are byte-identical to the previous recording, which is
+  // the evidence that the merge touched nothing outside the two categories and the
+  // exclusion set named above.
+  //
+  // 2882 -> 2891 (+9) and 371 -> 373 (+2): plan 587 M5.1's own re-record. FOUR of
+  // the moves were not that change: a97353b3 re-recorded this file, and the two
+  // commits that landed after it each added one source file and one test file
+  // without re-recording.
   //
   //   runtime-coordination  286 -> 287  packages/agent/src/agent/turnShape.ts
   //   capability-adapter  1173 -> 1174  packages/agent/src/tool/orchestration/canonical-path.ts
@@ -151,14 +193,66 @@ const EXPECTED = {
   // `sse-frame-codec.ts` counts here despite being an EXTRACTION rather than an
   // addition: it is a new file, and the classification is over paths, not over
   // lines of novel code.
-  total: 2894,
-  unclassified: 374,
+  total: 2898,
+  unclassified: 380,
 } as {
   counts: Record<Category, number>;
   fingerprints: Record<Category, string>;
   total: number;
   unclassified: number;
 };
+
+/**
+ * A fingerprint over the MAP itself, not over the files it classifies.
+ *
+ * ## Why this exists, given that the counts above already exist
+ *
+ * The counts and the per-category fingerprints are snapshots of the TREE, so
+ * they go red whenever a legitimate file is added — which is most slices, and
+ * has now cost three of them a re-record-and-attribute cycle. They are kept
+ * anyway, because they catch something the properties do not: a file being
+ * RECATEGORISED. But that value is currently entangled with the treadmill: when
+ * a slice adds a file AND a rule is quietly edited to match it, both facts
+ * arrive as the same red count, and the edit hides in the noise.
+ *
+ * This fingerprint separates the two. It hashes the rule table — every rule's
+ * prefix, category and reason, every stated exclusion prefix and reason, and
+ * every file override — so:
+ *
+ *  - a slice that adds files and edits nothing goes GREEN here, which is the
+ *    treadmill removed for the case it is safe to remove it for;
+ *  - a slice that edits the map goes RED here, naming the map as the thing that
+ *    moved, even when the tree also moved and the counts cannot say which.
+ *
+ * ## What it deliberately does NOT do
+ *
+ * It does not replace the counts. Detecting a recategorisation needs something
+ * recorded that a legitimate addition does not also change, and the only such
+ * thing is a per-file record of which rule claimed it — which is a second copy
+ * of the tree inside the test suite, and the header above rejects that on
+ * purpose. So the two requirements are in direct tension, this resolves the half
+ * that can be resolved safely, and the counts stay for the half that cannot.
+ *
+ * Re-record with:
+ *   npx vite-node scripts/architecture/measure-rule-table.mts
+ * Measured 2026-10-04 on the tree carrying plan 587 D7.1 (master #177) and H8.1:
+ * 85 rules, 10 stated exclusions, 6 file overrides. The values are a property of
+ * the MAP, so unlike the counts they only move when somebody changes the
+ * classification itself.
+ */
+const RULE_TABLE_FINGERPRINT = 'f9af22a1ce0173f2';
+
+/** The map, serialised in a way that is stable across reordering of nothing. */
+function ruleTableFingerprint(): string {
+  const table = [
+    ...RULES.map((r) => `rule\t${r.prefix}\t${r.category}\t${r.why.trim()}`),
+    ...UNCLASSIFIED_PREFIXES.map((u) => `unclassified\t${u.prefix}\t${u.why.trim()}`),
+    ...Object.keys(FILE_OVERRIDES)
+      .sort()
+      .map((f) => `override\t${f}\t${FILE_OVERRIDES[f]}`),
+  ].join('\n');
+  return createHash('sha256').update(table).digest('hex').slice(0, 16);
+}
 
 describe('the classification is a partition of the source tree', () => {
   it('classifies every source file except the deliberately unclassified ones', () => {
@@ -241,6 +335,32 @@ describe('the recorded inventory still describes the tree', () => {
 });
 
 describe('the rules are ordered and none of them is dead', () => {
+  it('has not changed the MAP since it was recorded', () => {
+    // The addition-tolerant half of the inventory check. Every assertion in this
+    // file that reads the TREE goes red when a file is added, which is why the
+    // re-record treadmill exists; this one reads the MAP, so a slice that adds
+    // legitimate files and touches no rule is green, and a slice that edits a
+    // rule to make a new file fit is red HERE rather than only in a count that
+    // may also be red for an unrelated reason.
+    //
+    // Additive on purpose: the count snapshots above are untouched, because
+    // recategorisation detection still needs them and this does not replace it.
+    expect({ fingerprint: ruleTableFingerprint() }).toEqual({
+      fingerprint: RULE_TABLE_FINGERPRINT,
+    });
+  });
+
+  it('names the shape it hashed, so a mismatch says which map moved', () => {
+    // A fingerprint with no description is a hash a reader has to guess at. These
+    // three numbers are the map's size, and they are what makes the failure
+    // above legible without opening the file.
+    expect({
+      rules: RULES.length,
+      exclusions: UNCLASSIFIED_PREFIXES.length,
+      overrides: Object.keys(FILE_OVERRIDES).length,
+    }).toEqual({ rules: 85, exclusions: 10, overrides: 6 });
+  });
+
   it('never lets a broader rule shadow a narrower one', () => {
     // Most-specific-first is what makes "first match wins" correct. A broader
     // rule above a narrower one makes the narrower one unreachable, and an

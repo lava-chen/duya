@@ -1060,7 +1060,12 @@ selfTest:
   # measured — the load-bearing halves, since a permitted edge that landed in the
   # BLOCKING rule or closed a loop would be a real regression. `.architecture-baseline.json`
   # was not touched and `--write` was not run.
-  module-dependency-permitted: 226
+  # 226 -> 233: MEASURED on the merged tree, not computed by adding two
+  # slices' increments. D7.1 landed +7 and H8.1 landed +7 on its own base, but
+  # those were measured on different trees. This is the first reading that
+  # contains both, and it is the one recorded. Two independently measured
+  # deltas from different bases do not add up.
+  module-dependency-permitted: 233
   # 16 -> 0: every `forbidden-dependency` in the tree was one of the 16
   # `pkg:agent` -> `apps/desktop` statements removed above.
   forbidden-dependency: 0
