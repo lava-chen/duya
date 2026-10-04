@@ -49,6 +49,16 @@ import { stripComments } from "./strip-comments.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const SRC_EXTS = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]);
+// KNOWN BLIND SPOT, recorded rather than fixed: the match is on the directory
+// NAME at any depth, not on its path. Nothing here is scoped to the repo root,
+// so a SOURCE directory that happens to be called `build`, `release` or
+// `coverage` anywhere under apps/, packages/ or evals/ would be dropped from the
+// walk silently — and every census, fingerprint and count derived from it would
+// agree with itself while missing the files. `release/` is the live example: it
+// is already a package build-output name AND a plausible source name. Fixing it
+// means anchoring each entry to its well-known build locations, which is a
+// change to the walk itself rather than to the inventory, so it is left alone
+// here and stated where someone changing SKIP_DIRS will read it.
 const SKIP_DIRS = new Set([
   "node_modules", "dist", "dist-electron", "bundle", "build", "release",
   ".git", "coverage", "storybook-static", ".e2e-userdata",

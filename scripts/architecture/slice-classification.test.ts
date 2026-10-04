@@ -77,27 +77,37 @@ function bucket(): Map<Category, string[]> {
  * and copy the reported values. Every number here was measured on the tree this
  * file landed on; a change to any of them is a change to the MAP, and the diff
  * in the commit message is the record of why.
+ *
+ * DO NOT re-record on a red run without reading WHY it is red first. The test
+ * reports the values it measured, and pasting them in turns the gate green in
+ * one step whatever produced them — including a map whose own reasoning is
+ * wrong, in which case the wrong answer is what gets recorded and the
+ * misclassification becomes the verified baseline. Read the failing assertion,
+ * decide whether the tree drifted or the MAP is wrong, fix the map if it is, and
+ * then record. And itemise: a number that moved is a set of files, and the
+ * commit that says so is the only reason a reviewer can tell an honest addition
+ * from a silent reclassification.
  */
 const EXPECTED = {
   counts: {
-    wire: 55,
-    pure: 5,
-    'runtime-coordination': 276,
-    'capability-adapter': 1169,
-    'cp-durable': 158,
+    wire: 47,
+    pure: 6,
+    'runtime-coordination': 286,
+    'capability-adapter': 1173,
+    'cp-durable': 166,
     'host-ui': 1204,
   } as Record<Category, number>,
   fingerprints: {
-    wire: 'bb11ee6ec2033b94',
-    pure: '49526bee62466d06',
-    'runtime-coordination': 'f0d61fbaf3bd0cd5',
-    'capability-adapter': '9b88a1dd7bd88227',
-    'cp-durable': '8c04c08a84a8bfd8',
-    'host-ui': 'f00892c81029ae55',
+    wire: 'b455186a9ef9f6f6',
+    pure: '08339d25e58ae23c',
+    'runtime-coordination': '31181831e6e2bacd',
+    'capability-adapter': '1e37536496c92b54',
+    'cp-durable': '42e519be19fed167',
+    'host-ui': '5f4fdca6f9f9092c',
   } as Record<Category, string>,
-  // 3232 source files walked, 2867 classified, 365 under a stated exclusion.
-  total: 2867,
-  unclassified: 365,
+  // 3253 source files walked, 2882 classified, 371 under a stated exclusion.
+  total: 2882,
+  unclassified: 371,
 } as {
   counts: Record<Category, number>;
   fingerprints: Record<Category, string>;
@@ -190,17 +200,35 @@ describe('the rules are ordered and none of them is dead', () => {
     // Most-specific-first is what makes "first match wins" correct. A broader
     // rule above a narrower one makes the narrower one unreachable, and an
     // unreachable rule is a claim about code that nothing reads.
+    //
+    // ADJACENCY IS NOT THE TEST, and treating it as one is how this gate came to
+    // pass vacuously. It once reported a dead rule only when the broader rule
+    // sat DIRECTLY above the narrower one — which held for none of the six rules
+    // this map actually shadowed, because the exceptions to
+    // `packages/agent-protocol/src` are 14 slots below it and carry their own
+    // category. The gate meant to catch dead rules caught none.
+    //
+    // So the question asked per rule is the real one: is the NEAREST rule above
+    // it that covers its whole prefix also the first rule able to claim it? If
+    // nothing between them covers it, the rule is dead no matter how far above
+    // the shadower sits — which is why the loop walks upward from `j` rather
+    // than testing neighbours.
+    const covers = (upper: string, lower: string): boolean =>
+      lower === upper || lower.startsWith(`${upper}/`);
     const shadowed: string[] = [];
-    for (let i = 0; i < RULES.length; i++) {
-      for (let j = i + 1; j < RULES.length; j++) {
-        const upper = RULES[i].prefix;
-        const lower = RULES[j].prefix;
-        if (lower === upper || lower.startsWith(`${upper}/`)) {
-          // `lower` is narrower. It is only reachable if no rule BETWEEN them
-          // intercepts it; the simple case is `upper` directly above it, which
-          // is what a reader would trip over.
-          if (j === i + 1) shadowed.push(`${upper} shadows ${lower}`);
+    for (let j = 0; j < RULES.length; j++) {
+      const lower = RULES[j].prefix;
+      for (let i = j - 1; i >= 0; i--) {
+        if (!covers(RULES[i].prefix, lower)) continue;
+        // Nearest covering rule found, so stop: anything further up is shadowed
+        // BY this one and could not claim the prefix before it either.
+        const intercepted = RULES.slice(i + 1, j).some((k) => covers(k.prefix, lower));
+        if (!intercepted) {
+          shadowed.push(
+            `${lower} [rule ${j}, ${RULES[j].category}] is shadowed by ${RULES[i].prefix} [rule ${i}, ${RULES[i].category}]`,
+          );
         }
+        break;
       }
     }
     expect(shadowed).toEqual([]);
