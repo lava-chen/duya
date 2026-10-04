@@ -1023,7 +1023,44 @@ selfTest:
   # module-dependency is UNCHANGED at 460, which is the load-bearing half: no edge became
   # a NON-permitted dependency, so no managed module zero tolerance is affected.
   # .architecture-baseline.json was not touched and --write was not run.
-  module-dependency-permitted: 220
+  #
+  # 220 -> 226 (plan 587 H8.1): SIX further permitted edges, 0 removed, measured on
+  # this branch over origin/master @ 902cff84. Attribution by two
+  # audit-imports.mjs --json runs, the first taken in a scratch worktree pinned at
+  # the pristine base (so the new files could not contaminate it) and the two whole
+  # edge sets diffed pair by pair:
+  #
+  #   crossBoundaryEdges   680 -> 685   (+5)
+  #   deepImportEdges        25 ->  25
+  #   packageBoundaryEscapes 146 -> 146
+  #   unresolved              9 ->   9
+  #
+  # The 5 cross-boundary additions, one per import statement, are the two pairs
+  # pkg:agent -> pkg:agent-runtime and pkg:agent -> pkg:agent-protocol:
+  #
+  #   cli/index.ts                      -> @duya/agent-runtime   1
+  #   process/headless-run-host.ts      -> @duya/agent-runtime   1
+  #   process/headless-run-host.ts      -> @duya/agent-protocol  1
+  #   process/__tests__/headless-run-host.test.ts
+  #                                     -> @duya/agent-runtime   1
+  #   process/__tests__/headless-run-host.test.ts
+  #                                     -> @duya/agent-protocol  1
+  #
+  # The SIXTH edge is intra-package and therefore not in that cross-boundary set:
+  # `process/sse-frame-codec.ts` -> `process/worker-protocol.js`. It is counted
+  # here because it is a real import the extraction introduced; it is an
+  # INTERNAL edge, so it moves the permitted counter without moving
+  # `crossBoundaryEdges`. That is the only reason the two numbers differ by one,
+  # and it is why both are quoted rather than reconciled by inspection.
+  #
+  # The direction is the sanctioned one and is already declared: `legacy-agent.requires`
+  # carries `[agent-protocol, agent-runtime]` (M5.5 added the runtime for
+  # `ProcessScope`), so these edges are permitted, counted, never blocking.
+  # `module-dependency` is UNCHANGED at 460 and `cycle` is UNCHANGED at 16, both
+  # measured — the load-bearing halves, since a permitted edge that landed in the
+  # BLOCKING rule or closed a loop would be a real regression. `.architecture-baseline.json`
+  # was not touched and `--write` was not run.
+  module-dependency-permitted: 226
   # 16 -> 0: every `forbidden-dependency` in the tree was one of the 16
   # `pkg:agent` -> `apps/desktop` statements removed above.
   forbidden-dependency: 0
@@ -1153,3 +1190,52 @@ selfTest:
 #
 # `@duya/agent-protocol` stays a true leaf: `forbidden-dependency` is unchanged
 # at 16 and no edge has `packages/agent-protocol/src/replay.ts` as its source.
+# Re-measured 2026-10-04 (plan 587 H8.1, branch feat/587-h8-1-headless-run-api,
+# on top of origin/master @ 902cff84): one headless run host, five edges
+#
+# The headless host (packages/agent/src/process/headless-run-host.ts) is the
+# first HOST outside pps/desktop to compose @duya/agent-runtime. It is also
+# the first packages/agent file to import the runtime as a VALUE dependency
+# rather than only a type-level one: createHeadlessRunHost needs the real
+# RunController, the real InProcessTransport, the real InMemoryRunEventStore,
+# the real probeRuntimeCapabilities and the real projectToLegacyFrame, because
+# the whole point of the slice is that the CLI runs on the same run layer rather
+# than on a copy of it.
+#
+# ATTRIBUTED BY MEASUREMENT, not inferred. Two udit-imports.mjs --json runs,
+# whole edge sets diffed pair by pair. The FIRST run was taken on a pristine
+# worktree of origin/master (the new files could not have contaminated it); the
+# second on this branch:
+#
+#   crossBoundaryEdges             680 -> 685   (+5)
+#   deepImportEdges                25 ->  25   (unchanged)
+#   packageBoundaryEscapeEdges    146 -> 146   (unchanged)
+#   unresolved                      9 ->   9   (unchanged)
+#
+# The +5, named one by one from the edge-set diff (0 removed):
+#
+#   packages/agent/src/cli/index.ts                     -> @duya/agent-runtime  (1)
+#   packages/agent/src/process/headless-run-host.ts      -> @duya/agent-runtime  (1)
+#   packages/agent/src/process/headless-run-host.ts      -> @duya/agent-protocol  (1)
+#   packages/agent/src/process/__tests__/headless-run-host.test.ts
+#                                                          -> @duya/agent-runtime  (1)
+#   packages/agent/src/process/__tests__/headless-run-host.test.ts
+#                                                          -> @duya/agent-protocol  (1)
+#
+# Every one is pkg:agent -> pkg:agent-runtime or pkg:agent -> pkg:agent-protocol.
+# legacy-agent.requires already declares [agent-protocol, agent-runtime] (M5.5
+# added the runtime for ProcessScope), so these land in
+# module-dependency-permitted and module-dependency is UNCHANGED at 460 -- and
+# that is the load-bearing half: no edge became a NON-permitted dependency, so no
+# managed module zero-tolerance is affected. M5.5 measured the same direction for
+# the same reason.
+#
+# packages/agent/src/process/sse-frame-codec.ts contributes ZERO cross-boundary
+# edges: it was EXTRACTED from gent-process-entry.ts rather than added, and both
+# of its imports (../utils/logger.js, ./worker-protocol.js) are intra-package.
+# The extraction is the point, not a side effect -- see that file for why one frame
+# producer matters more than one transport.
+#
+# WHAT WAS NOT TOUCHED, measured rather than asserted: cycle stays 16 (the new
+# files sit inside packages/agent and import nothing that imports back), and
+# orbidden-dependency stays 0 with @duya/agent-protocol still a true leaf.

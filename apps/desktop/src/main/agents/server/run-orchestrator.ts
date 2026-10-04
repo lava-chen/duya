@@ -870,11 +870,21 @@ export const NON_DESKTOP_CONSUMERS: readonly ConsumerRegistration[] = Object.fre
  * Where the plan and the repository disagree, recorded rather than papered over.
  *
  * `packages/cli` is listed by plan 587 §R2.1 as a consumer of the single run
- * entry. It is not one: it exposes HTTP CRUD and never constructs an agent run.
- * The headless path that DOES construct one is
- * `packages/agent/src/cli/index.ts`, which builds a `DuyaAgent` directly and so
- * never passes through `chat:start` — it cannot be brought under this boundary
- * by the Desktop adapter at all, and needs its own decision.
+ * entry. It is not one, and it never was: it exposes HTTP CRUD against the
+ * agent-server and constructs no run at all. That half of the finding still
+ * stands and is still recorded, because a reader who checks only the second
+ * half would conclude the plan's claim is now satisfied.
+ *
+ * The headless path that DOES construct a run is
+ * `packages/agent/src/cli/index.ts`, and H8.1 moved it: it now starts its turn
+ * through `HeadlessRunHost`, which composes the same `RunController` and the
+ * same in-process transport this module uses, so the CLI's turn carries a
+ * canonical `runId`, a runtime-minted `seq`, and a terminal the runtime decided.
+ * What it does NOT share with Desktop is the `chat:start` wire — it runs in
+ * process, so the frame vocabulary is produced by the shared codec rather than
+ * read off a pipe. That is a transport difference, not a run-layer one, and it
+ * is the reason this list records the shape rather than declaring the migration
+ * finished.
  *
  * Recorded here so the next slice inherits the finding instead of
  * rediscovering it, and so nobody reports the CLI as migrated on the strength
@@ -885,11 +895,108 @@ export const RUN_ENTRY_DIVERGENCES: readonly { readonly claim: string; readonly 
     Object.freeze({
       claim: 'plan 587 §R2.1 lists packages/cli as a consumer of the single run entry',
       reality:
-        'packages/cli starts no agent run (HTTP CRUD only); the headless entry is ' +
-        'packages/agent/src/cli/index.ts, which constructs DuyaAgent directly and ' +
-        'never passes through chat:start. It needs its own R2 slice.',
+        'packages/cli starts no agent run (HTTP CRUD only) and never did; the headless entry is ' +
+        'packages/agent/src/cli/index.ts. H8.1 moved that entry onto the real Run API via ' +
+        'HeadlessRunHost (packages/agent/src/process/headless-run-host.ts), which composes the same ' +
+        'RunController and in-process transport as the Desktop path. It does not pass through ' +
+        'chat:start, because it runs in process rather than over a pipe — a transport difference, ' +
+        'not a run-layer one.',
     }),
   ]);
+
+/**
+ * What H8.1 made obsolete, and the condition for removing it.
+ *
+ * ## Why this is data and not a plan-file line
+ *
+ * "Delete the old path once nothing uses it" is unfalsifiable: nothing counts
+ * the users, so the count is whatever the last reader believed. Here the count
+ * is a number in a typechecked file, and `headless-retirement.test.ts` fails if
+ * it stops matching the code — which turns "is it safe to delete yet?" from a
+ * review question into a test.
+ *
+ * ## Why the count is not zero
+ *
+ * `duyaAgent.streamChat` still has callers, and none of them is this slice's to
+ * move: the sub-agent turn stream, the compaction summariser, the side-question
+ * path, the title generator, the memory-rollout extractor and the worker's own
+ * subprocess entry are all in-process or worker-side model calls that are not
+ * Desktop chat turns. Several of them are genuinely turns — the sub-agent runner
+ * most of all — and moving those is a later slice with its own census row
+ * (`NON_DESKTOP_CONSUMERS` above), not something H8.1 could finish honestly.
+ * The CLI's three turn call sites ARE gone, and that is the part H8.1 owned.
+ *
+ * The number is MEASURED, not estimated: it is the count of `.streamChat(` call
+ * sites on a `duyaAgent`/`subAgent` receiver in `packages/agent/src`, excluding
+ * `@duya/ai` client calls (which are a different type with no run semantics at
+ * all) and excluding comments. `headless-retirement.test.ts` re-derives it from
+ * the source and fails if the two disagree, so this number cannot go stale
+ * without a red test.
+ *
+ * ## What would retire the shim
+ *
+ * All three, and the third is the one this slice could not evidence:
+ *
+ *  1. every remaining `streamChat` caller is a non-turn model call, named here;
+ *  2. packaging and host smoke pass — a packaged Electron build reaching the
+ *     agent-server `ready`, which H8's exit condition names explicitly;
+ *  3. the compatibility window is evidenced rather than assumed.
+ *
+ * Condition 2 is NOT met by this slice. It cannot be: a packaged Electron host
+ * is not buildable in the environment H8.1 ran in, and an unevidenced claim of
+ * host smoke is exactly the failure this registry exists to prevent. So the
+ * shim stays, and the window is recorded here rather than assumed away.
+ */
+export interface LegacyRetirement {
+  /** The export or path that is now obsolete. */
+  readonly obsolete: string;
+  /** How many callers still reach it. `0` is necessary, not sufficient. */
+  readonly remainingConsumers: number;
+  /** Who each remaining consumer is, so the count is auditable. */
+  readonly consumers: readonly string[];
+  /** What each remaining consumer legitimately is, and why it is not a turn. */
+  readonly consumerRationale: string;
+  /** What still has to be true before the shim is deleted. */
+  readonly removalConditions: readonly string[];
+  /** Whether every condition is currently met. `false` keeps the shim. */
+  readonly removable: boolean;
+  /** Why it is not, stated rather than left to the flag. */
+  readonly blockedOn: string;
+}
+
+export const LEGACY_RETIREMENT: readonly LegacyRetirement[] = Object.freeze([
+  Object.freeze({
+    obsolete: 'duyaAgent.streamChat as a CLI TURN entry (packages/agent/src/cli/index.ts)',
+    remainingConsumers: 7,
+    consumers: Object.freeze([
+      'packages/agent/src/tool/SubagentTool/runAgent.ts (sub-agent turn)',
+      'packages/agent/src/agent/TurnStreamRunner.ts (sub-agent turn stream)',
+      'packages/agent/src/process/agent-process-entry.ts (worker subprocess chat:start)',
+      'packages/agent/src/agent/DuyaAgent.ts:780 (compaction summariser)',
+      'packages/agent/src/agent/DuyaAgent.ts:4426 (side question)',
+      'packages/agent/src/session/title-generator.ts (title generation)',
+      'packages/agent/src/memory-rollout/extractor.ts (memory extraction)',
+    ]),
+    consumerRationale:
+      'Measured, not estimated: seven `.streamChat(` call sites on a duyaAgent/subAgent receiver ' +
+      'remain in packages/agent/src, excluding @duya/ai client calls (a different type with no run ' +
+      'semantics) and comments. Of those, the sub-agent runner and the worker entry ARE turns and ' +
+      'belong to later slices with their own NON_DESKTOP_CONSUMERS rows; the rest are one-shot ' +
+      'model calls with no session, no run identity and no terminal, and giving them a run would ' +
+      'mean minting runs for work that is not a run. The CLI turn call sites — the part H8.1 ' +
+      'owned — are gone, and the CLI now starts its turns through HeadlessRunHost.',
+    removalConditions: Object.freeze([
+      'every remaining streamChat caller is a named non-turn model call, or has been moved',
+      'packaging and host smoke pass: a packaged Electron build reaches agent-server ready',
+      'the compatibility window is evidenced rather than assumed',
+    ]),
+    removable: false,
+    blockedOn:
+      'Host smoke is not evidenced. H8.1 ran where a packaged Electron build cannot be produced, ' +
+      'and H8\'s exit condition names host smoke explicitly. The remaining consumers are also ' +
+      'non-zero, so the shim stays on both counts rather than on one.',
+  }),
+]);
 
 /**
  * Log a durability receipt that was not a durable write.

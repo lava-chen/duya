@@ -92,7 +92,7 @@ const EXPECTED = {
   counts: {
     wire: 47,
     pure: 6,
-    'runtime-coordination': 287,
+    'runtime-coordination': 290,
     'capability-adapter': 1174,
     'cp-durable': 173,
     'host-ui': 1204,
@@ -100,7 +100,7 @@ const EXPECTED = {
   fingerprints: {
     wire: 'b455186a9ef9f6f6',
     pure: '08339d25e58ae23c',
-    'runtime-coordination': 'b330f5ae968a045b',
+    'runtime-coordination': 'a45183545093de49',
     'capability-adapter': '4f223dc18410c009',
     'cp-durable': '45a1db9875f8fab7',
     'host-ui': '5f4fdca6f9f9092c',
@@ -131,8 +131,28 @@ const EXPECTED = {
   //                                       apps/desktop/src/main/db/core/__tests__/workspace-identity.test.ts
   //                                       apps/desktop/src/main/db/core/__tests__/workspace-resolver.test.ts
   //                                       apps/desktop/src/main/db/core/__tests__/workspace-rehearsal.test.ts
-  total: 2891,
-  unclassified: 373,
+  //
+  // 2891 -> 2894 (+3) and 373 -> 374 (+1): plan 587 H8.1, measured, not asserted.
+  // Four files, and the split between the two counters is the record of WHICH
+  // of them the existing rules put where:
+  //
+  //   runtime-coordination  287 -> 290  packages/agent/src/process/headless-run-host.ts
+  //                                       packages/agent/src/process/sse-frame-codec.ts
+  //                                       packages/agent/src/process/__tests__/headless-run-host.test.ts
+  //   unclassified          373 -> 374  apps/desktop/src/main/__tests__/headless-retirement.test.ts
+  //
+  // No rule was edited to accommodate them, which is the load-bearing half:
+  // the three `packages/agent/src/**` files classify as runtime coordination
+  // under the rules already recorded, and the Desktop test file falls under
+  // the `apps/desktop/src/main/__tests__` exclusion — so it moves the
+  // UNCLASSIFIED counter rather than a category, exactly as the two test files
+  // in the block above did.
+  //
+  // `sse-frame-codec.ts` counts here despite being an EXTRACTION rather than an
+  // addition: it is a new file, and the classification is over paths, not over
+  // lines of novel code.
+  total: 2894,
+  unclassified: 374,
 } as {
   counts: Record<Category, number>;
   fingerprints: Record<Category, string>;
