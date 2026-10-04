@@ -84,26 +84,26 @@ describe('paths migration (Plan 525 Phase 2)', () => {
   describe('buildPathsByProject', () => {
     it('1. merges duplicate (project, path) rows across kinds, keeps first non-empty description', () => {
       const rows: LegacyAliasRow[] = [
-        { project_id: 'p1', absolute_normalized_path: 'd:/duya', relative_path: null, alias_kind: 'cwd', first_seen_at: 1, last_seen_at: 2 },
-        { project_id: 'p1', absolute_normalized_path: 'd:/duya', relative_path: null, alias_kind: 'working_directory', first_seen_at: 3, last_seen_at: 4, description: 'main repo' },
-        { project_id: 'p1', absolute_normalized_path: 'd:/duya', relative_path: null, alias_kind: 'git_root', first_seen_at: 5, last_seen_at: 6 },
+        { project_id: 'p1', absolute_normalized_path: fx('d:/duya'), relative_path: null, alias_kind: 'cwd', first_seen_at: 1, last_seen_at: 2 },
+        { project_id: 'p1', absolute_normalized_path: fx('d:/duya'), relative_path: null, alias_kind: 'working_directory', first_seen_at: 3, last_seen_at: 4, description: 'main repo' },
+        { project_id: 'p1', absolute_normalized_path: fx('d:/duya'), relative_path: null, alias_kind: 'git_root', first_seen_at: 5, last_seen_at: 6 },
       ];
       const merged = buildPathsByProject(rows);
-      expect(merged.get('p1')).toEqual([{ path: 'd:/duya', description: 'main repo' }]);
+      expect(merged.get('p1')).toEqual([{ path: fx('d:/duya'), description: 'main repo' }]);
     });
 
     it('2. rows without descriptions land as NULL, groups stay independent', () => {
       const rows: LegacyAliasRow[] = [
-        { project_id: 'p1', absolute_normalized_path: 'd:/a', relative_path: null, alias_kind: 'cwd', first_seen_at: 1, last_seen_at: 2 },
-        { project_id: 'p1', absolute_normalized_path: 'd:/b', relative_path: 'sub', alias_kind: 'working_directory', first_seen_at: 1, last_seen_at: 2 },
-        { project_id: 'p2', absolute_normalized_path: 'd:/a', relative_path: null, alias_kind: 'cwd', first_seen_at: 1, last_seen_at: 2 },
+        { project_id: 'p1', absolute_normalized_path: fx('d:/a'), relative_path: null, alias_kind: 'cwd', first_seen_at: 1, last_seen_at: 2 },
+        { project_id: 'p1', absolute_normalized_path: fx('d:/b'), relative_path: 'sub', alias_kind: 'working_directory', first_seen_at: 1, last_seen_at: 2 },
+        { project_id: 'p2', absolute_normalized_path: fx('d:/a'), relative_path: null, alias_kind: 'cwd', first_seen_at: 1, last_seen_at: 2 },
       ];
       const merged = buildPathsByProject(rows);
       expect(merged.get('p1')).toEqual([
-        { path: 'd:/a', description: null },
-        { path: 'd:/b', description: null },
+        { path: fx('d:/a'), description: null },
+        { path: fx('d:/b'), description: null },
       ]);
-      expect(merged.get('p2')).toEqual([{ path: 'd:/a', description: null }]);
+      expect(merged.get('p2')).toEqual([{ path: fx('d:/a'), description: null }]);
     });
   });
 
@@ -116,11 +116,11 @@ describe('paths migration (Plan 525 Phase 2)', () => {
     });
 
     it('4. reports per-project merge counts and pre-existing path entries', () => {
-      insertProject('p1', 'd:/duya', JSON.stringify([{ path: 'd:/already-there', description: 'manual' }]));
-      insertProject('p2', 'd:/other');
-      insertAlias({ project_id: 'p1', path: 'd:/duya' });
-      insertAlias({ project_id: 'p1', path: 'd:/duya-site' });
-      insertAlias({ project_id: 'p2', path: 'd:/other' });
+      insertProject('p1', fx('d:/duya'), JSON.stringify([{ path: fx('d:/already-there'), description: 'manual' }]));
+      insertProject('p2', fx('d:/other'));
+      insertAlias({ project_id: 'p1', path: fx('d:/duya') });
+      insertAlias({ project_id: 'p1', path: fx('d:/duya-site') });
+      insertAlias({ project_id: 'p2', path: fx('d:/other') });
 
       // Note: the alias table's PK is the path itself, so a real table
       // never holds duplicate paths — same-path merging is only
@@ -146,9 +146,9 @@ describe('paths migration (Plan 525 Phase 2)', () => {
     });
 
     it('5. flags alias rows whose project row is missing as orphans', () => {
-      insertProject('p1', 'd:/duya');
-      insertAlias({ project_id: 'p1', path: 'd:/duya' });
-      insertAlias({ project_id: 'ghost', path: 'd:/ghost-path' });
+      insertProject('p1', fx('d:/duya'));
+      insertAlias({ project_id: 'p1', path: fx('d:/duya') });
+      insertAlias({ project_id: 'ghost', path: fx('d:/ghost-path') });
 
       const report = dryRunPathsMigration(db);
       expect(report.orphan_project_ids).toEqual(['ghost']);
@@ -165,9 +165,9 @@ describe('paths migration (Plan 525 Phase 2)', () => {
 
   describe('applyPathsMigration', () => {
     it('7. writes merged paths JSON and drops the alias table', () => {
-      insertProject('p1', 'd:/duya');
-      insertAlias({ project_id: 'p1', path: 'd:/duya' });
-      insertAlias({ project_id: 'p1', path: 'd:/duya-site' });
+      insertProject('p1', fx('d:/duya'));
+      insertAlias({ project_id: 'p1', path: fx('d:/duya') });
+      insertAlias({ project_id: 'p1', path: fx('d:/duya-site') });
 
       const result = applyPathsMigration(db);
       expect(result).toEqual({ updated_projects: 1, dropped_table: true });
@@ -176,8 +176,8 @@ describe('paths migration (Plan 525 Phase 2)', () => {
         paths: string;
       };
       expect(parseProjectPaths(row.paths)).toEqual([
-        { path: 'd:/duya', description: null },
-        { path: 'd:/duya-site', description: null },
+        { path: fx('d:/duya'), description: null },
+        { path: fx('d:/duya-site'), description: null },
       ]);
       const table = db
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'project_path_aliases'")
@@ -188,26 +188,26 @@ describe('paths migration (Plan 525 Phase 2)', () => {
     it('8. unions with pre-existing paths entries; existing entries win on collision', () => {
       insertProject(
         'p1',
-        'd:/duya',
-        JSON.stringify([{ path: 'd:/duya', description: 'user label' }])
+        fx('d:/duya'),
+        JSON.stringify([{ path: fx('d:/duya'), description: 'user label' }])
       );
-      insertAlias({ project_id: 'p1', path: 'd:/duya' });
-      insertAlias({ project_id: 'p1', path: 'd:/duya-extra' });
+      insertAlias({ project_id: 'p1', path: fx('d:/duya') });
+      insertAlias({ project_id: 'p1', path: fx('d:/duya-extra') });
 
       applyPathsMigration(db);
       const row = db.prepare('SELECT paths FROM projects WHERE project_id = ?').get('p1') as {
         paths: string;
       };
       expect(parseProjectPaths(row.paths)).toEqual([
-        { path: 'd:/duya', description: 'user label' },
-        { path: 'd:/duya-extra', description: null },
+        { path: fx('d:/duya'), description: 'user label' },
+        { path: fx('d:/duya-extra'), description: null },
       ]);
     });
 
     it('9. refuses to run with orphan alias rows and leaves data untouched', () => {
-      insertProject('p1', 'd:/duya');
-      insertAlias({ project_id: 'p1', path: 'd:/duya' });
-      insertAlias({ project_id: 'ghost', path: 'd:/ghost-path' });
+      insertProject('p1', fx('d:/duya'));
+      insertAlias({ project_id: 'p1', path: fx('d:/duya') });
+      insertAlias({ project_id: 'ghost', path: fx('d:/ghost-path') });
 
       expect(() => applyPathsMigration(db)).toThrow(/orphan|missing projects/i);
 
@@ -220,20 +220,20 @@ describe('paths migration (Plan 525 Phase 2)', () => {
     });
 
     it('10. throws on a second run — the table is gone', () => {
-      insertProject('p1', 'd:/duya');
-      insertAlias({ project_id: 'p1', path: 'd:/duya' });
+      insertProject('p1', fx('d:/duya'));
+      insertAlias({ project_id: 'p1', path: fx('d:/duya') });
       applyPathsMigration(db);
       expect(() => applyPathsMigration(db)).toThrow(/already migrated|not found/);
     });
   });
 
   it('11. resolver works against migrated data — same path resolves to the same project', () => {
-    insertProject('p1', 'd:/duya');
-    insertAlias({ project_id: 'p1', path: 'd:/duya' });
+    insertProject('p1', fx('d:/duya'));
+    insertAlias({ project_id: 'p1', path: fx('d:/duya') });
     applyPathsMigration(db);
 
     const r = resolveProject({
-      workingDirectory: 'D:/duya',
+      workingDirectory: fx('D:/duya'),
       memoryDb: db,
       platform: 'win32',
     });
@@ -242,10 +242,25 @@ describe('paths migration (Plan 525 Phase 2)', () => {
 
     // And registering a NEW path still works post-migration.
     const r2 = resolveProject({
-      workingDirectory: 'D:/duya-website',
+      workingDirectory: fx('D:/duya-website'),
       memoryDb: db,
       platform: 'win32',
     });
     expect(r2.project_id).not.toBe('p1');
   });
 });
+
+/**
+ * Map a Windows-style fixture path onto the current platform.
+ *
+ * The resolver calls the HOST `path.resolve`, so a drive letter is not a
+ * root on POSIX: such a path is relative, gets rebased onto the runner CWD,
+ * and the suite then compares a cwd-prefixed path against a raw fixture
+ * string. `fx` returns the Windows form on win32 (so drive-letter handling
+ * stays asserted) and a genuine absolute path everywhere else.
+ */
+const IS_WIN = process.platform === 'win32';
+function fx(p: string): string {
+  if (IS_WIN) return p;
+  return '/' + p.replace(/^[A-Za-z]:[\\/]/, '').replace(/\\/g, '/');
+}
