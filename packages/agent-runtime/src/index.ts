@@ -40,7 +40,7 @@ export type {
 export type { RunHandle } from '@duya/agent-protocol';
 
 export { RunEventStream, RunSession, isTerminal } from './run-session.js';
-export type { ObserveResult, RunPersistence, RunSessionOptions } from './run-session.js';
+export type { ObserveResult, RunPersistence, RunSessionOptions, RunTranscriptReader } from './run-session.js';
 
 // Plan 587 T3.2 — the single emit entry point, the structural dispatch that
 // decides what a peer may say, and the control-plane census.
