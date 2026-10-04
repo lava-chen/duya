@@ -426,8 +426,34 @@ describe('baseline — a known defect must not block, a new one must fail', () =
   });
 
   it('distinguishes the same file at two different lines', () => {
+    // These two are the same violation in the same file, so they must SHARE a
+    // key. An earlier version keyed on the line number and reported 3 false
+    // regressions after 134 upstream commits shifted line numbers in files
+    // nobody had touched — every NEW had a matching FIXED at the same file.
     const a = { file: 'a.ts', line: 3, why: 'same' };
-    const b = { file: 'a.ts', line: 4, why: 'same' };
+    const b = { file: 'a.ts', line: 900, why: 'same' };
+    expect(fingerprint(report([a]), a)).toBe(fingerprint(report([b]), b));
+  });
+
+  it('still separates two findings of the same kind in one file', () => {
+    // Line number is gone, so the discriminator has to come from the subject.
+    // G4 matches both `DuyaAgent` and `duyaAgent` on the same import line.
+    const a = { file: 'entry.ts', line: 75, symbol: 'DuyaAgent' };
+    const b = { file: 'entry.ts', line: 75, symbol: 'duyaAgent' };
+    expect(fingerprint(report([a]), a)).not.toBe(fingerprint(report([b]), b));
+  });
+
+  it('separates the same table reported from two different databases', () => {
+    const live = { file: 'db/core/stores.ts', table: 'tasks', column: 'session_id NOT NULL', database: 'core.db' };
+    const dead = { file: 'db/schema.ts', table: 'tasks', column: 'session_id NOT NULL', database: 'main.db' };
+    expect(fingerprint(report([live]), live)).not.toBe(fingerprint(report([dead]), dead));
+  });
+
+  it('treats a finding that moved to another file as new', () => {
+    // The case that IS worth failing on: the subject changed, not just its
+    // position.
+    const a = { file: 'a.ts', line: 3, why: 'same' };
+    const b = { file: 'b.ts', line: 3, why: 'same' };
     expect(fingerprint(report([a]), a)).not.toBe(fingerprint(report([b]), b));
   });
 

@@ -261,15 +261,38 @@ export function collectBoundaryReport() {
 
 export const BASELINE_PATH = path.join(REPO_ROOT, 'scripts', 'architecture', 'boundary-gates-baseline.json');
 
-/** gate | file | line | identity — location matters, so a moved violation is new. */
+/**
+ * Identity for one finding, used as the baseline key.
+ *
+ * ## The line number is deliberately NOT part of this
+ *
+ * An earlier version keyed on `gate|file|line|identity`, reasoning that a
+ * moved violation is a rewritten table and S1 should look at it. Measured
+ * against 134 upstream commits that reasoning was wrong: every one of those
+ * commits shifted line numbers in files nobody had touched, and the gate
+ * reported 3 regressions where the real change was 0. Every NEW had a
+ * matching FIXED at the same file — pure drift, reported as breakage.
+ *
+ * A line number is not an identity. What identifies a violation is WHAT it
+ * is and WHERE the subject is: which gate, which file, and which of the
+ * few discriminating attributes (the imported symbol, the table, the column).
+ * That is stable across reformatting and upstream churn, and it still
+ * distinguishes the two findings in the same file that a message-only
+ * comparison would merge.
+ *
+ * If a violation genuinely moves to a different file or changes its subject,
+ * the key changes and the gate fails — which is the case worth failing on.
+ */
 export function fingerprint(report, finding) {
   const f = finding ?? {};
-  return [
-    report.gate,
-    String(f.file ?? f.table ?? '?'),
-    String(f.line ?? '-'),
-    String(f.to ?? f.column ?? f.symbol ?? f.why ?? ''),
-  ].join('|');
+  // G4 reports two findings on one line (`DuyaAgent` and `duyaAgent` are both
+  // matched); G6 can report the same table from the same file twice. The
+  // symbol disambiguates the first, the database the second. Without it they
+  // would collapse into one key and the second occurrence would be invisible.
+  const discriminator = f.symbol ?? f.database ?? '';
+  return [report.gate, String(f.file ?? f.table ?? '?'), String(f.to ?? f.column ?? f.why ?? ''), discriminator]
+    .filter(Boolean)
+    .join('|');
 }
 
 function readBaseline() {
@@ -282,10 +305,13 @@ export function evaluate(reports = collectBoundaryReport(), override) {
   const baseline = override ?? readBaseline();
   const seen = new Set();
   const outcomes = reports.map((report) => {
+    // Dedupe by key: two findings that resolve to the same key are one
+    // subject, and counting them twice would report "known: 3" for a defect
+    // that exists once.
+    const keys = [...new Set(report.findings.map((f) => fingerprint(report, f)))];
     const known = [];
     const newFindings = [];
-    for (const finding of report.findings) {
-      const key = fingerprint(report, finding);
+    for (const key of keys) {
       seen.add(key);
       (baseline.has(key) ? known : newFindings).push(key);
     }
@@ -298,7 +324,11 @@ export function evaluate(reports = collectBoundaryReport(), override) {
 }
 
 export function writeBaseline(reports = collectBoundaryReport()) {
-  const entries = reports.flatMap((r) => r.findings.map((f) => fingerprint(r, f))).sort();
+  // A Set, not a sort: the same key can be produced more than once (G4 matches
+  // two symbol spellings on one import line, G6 finds the same table declared
+  // in two databases), and writing the duplicate would imply two independent
+  // findings where there is one subject.
+  const entries = [...new Set(reports.flatMap((r) => r.findings.map((f) => fingerprint(r, f))))].sort();
   fs.writeFileSync(
     BASELINE_PATH,
     `${JSON.stringify(
