@@ -2039,6 +2039,19 @@ export class duyaAgent implements AgentRuntime {
         toolUseContext
       );
 
+      // Plan 600 S2: hand this turn's pipeline to the run engine.
+      //
+      // Published per turn, beside the construction, and NOT hoisted: a hoisted
+      // pipeline goes permanently mute after the first `discard()` on the
+      // model-retry path (`:2359`) and fails silently, which
+      // `tool-pipeline-turn-lifetime.test.ts` pins. The publisher supersedes the
+      // previous turn rather than retaining it, so no long-lived instance is
+      // reachable from here.
+      //
+      // Absent publisher means no engine is bound to this run, which is the
+      // pre-plan case (the CLI, the sub-agent tool) and is not an error.
+      options?.turnPipelines?.publish(turnCount, executor);
+
       // Per-turn state
       const assistantContent: MessageContent[] = [];
       const privateProgressCalls: Array<{ id: string; title?: string }> = [];

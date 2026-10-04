@@ -239,6 +239,25 @@ export class ToolExecutionPipeline implements IToolExecutionPipeline {
     return this.executor.getMemoryUsageMB();
   }
 
+  /**
+   * Can this pipeline still run a tool?
+   *
+   * False once `discard()` has run, and it never comes back: the executor's
+   * latch is one-way and its abort controller is already aborted. See
+   * `StreamingToolExecutor.isDiscarded` for why there is deliberately no reset.
+   *
+   * The reason this exists on the pipeline and not only on the executor is that
+   * the pipeline buffers `addTool` calls until the plan is computed (`:179`),
+   * so an `addTool` into a discarded pipeline SUCCEEDS and the tool is simply
+   * never run. A caller that has to decide whether handing over a tool is even
+   * meaningful needs to ask before handing it over -- `TurnPipelinePublisher`
+   * does exactly that, and refuses loudly rather than accepting a tool that
+   * would vanish.
+   */
+  isUsable(): boolean {
+    return !this.executor.isDiscarded();
+  }
+
   discard(): void {
     // Drop any buffered addTool calls so a discarded executor does
     // not run tools whose plan was never consumed. The agent calls

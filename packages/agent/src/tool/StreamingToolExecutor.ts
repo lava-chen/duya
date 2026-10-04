@@ -722,6 +722,31 @@ export class StreamingToolExecutor {
   }
 
   /**
+   * Has `discard()` already run on this instance?
+   *
+   * ## Why this is a read and not a reset
+   *
+   * `discarded` is a ONE-WAY latch: nothing in the class clears it, and the
+   * ABORTED `siblingAbortController` it aborts (`:733`) breaks the drain loop
+   * on its own. So an executor that answers `true` here can never run another
+   * tool, no matter what a caller does afterwards. A `resetDiscarded()` beside
+   * this would be a trap that reads as a fix -- it would revive a pipeline whose
+   * abort controller is already aborted, which is the exact "tidying" change
+   * `tool-pipeline-turn-lifetime.test.ts` exists to catch.
+   *
+   * ## Why anything needs to ask
+   *
+   * A discarded executor fails SILENTLY: `addTool` still buffers, and the drain
+   * still iterates -- it simply yields nothing (`StreamingToolExecutor.ts:2004`,
+   * `:2052` short-circuit on this flag). So a caller about to hand it a tool
+   * cannot learn the tool was dropped by looking at the result. This read is how
+   * a caller turns that silence into a refusal it can report.
+   */
+  isDiscarded(): boolean {
+    return this.discarded
+  }
+
+  /**
    * Discards all pending and in-progress tools
    */
   discard(): void {
