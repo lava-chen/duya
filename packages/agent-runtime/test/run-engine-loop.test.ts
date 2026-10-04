@@ -18,7 +18,7 @@
  *    next turn` spine, and it is observable only from the engine.
  *  - that a stop decision is derived from the engine's OWN counters, which
  *    means the test can only move the run's ending by changing the engine's
- *    inputs — never by telling the engine what to conclude.
+ *    inputs 鈥?never by telling the engine what to conclude.
  *
  * Every assertion compares two INDEPENDENT sources. The call log is what the
  * scripted ports observed; the expectation is what the loop contract says must
@@ -41,7 +41,7 @@ import type {
   ToolCallRequest,
   ToolDescriptor,
   ToolDispatchTicket,
-  ToolOutcome,
+  ToolDrainItem,
   TransientContextFragment,
 } from '../src/engine/ports.js';
 import type { RunEvent, RunId } from '@duya/agent-protocol';
@@ -85,7 +85,7 @@ interface Harness {
   /** Whether `assemble` was called at all before the first model call. */
   assembleCalls(): number;
   /** Queue a result for the next drain, keyed by callId. */
-  queueOutcome(outcome: ToolOutcome): void;
+  queueOutcome(item: ToolDrainItem): void;
 }
 
 function harness(options: {
@@ -108,7 +108,7 @@ function harness(options: {
   const sentMessages: ModelMessage[][] = [];
   const sweeps: string[] = [];
   const released: number[] = [];
-  const queued: ToolOutcome[] = [];
+  const queued: ToolDrainItem[] = [];
   let assembles = 0;
   let turnIndex = 0;
 
@@ -138,6 +138,11 @@ function harness(options: {
         // A dispatched call produces a result, unless the test wants it to hang.
         if (call.name !== 'hang') {
           queued.push({
+            // Plan 600 S2 drain contract: `kind` is now required, so a result
+            // says it IS one. Deliberate, visible churn -- the alternative is an
+            // item with no content satisfying `ToolOutcome` and being settled
+            // into the ledger as one.
+            kind: 'tool_result',
             callId: call.callId,
             content: `result of ${call.name}`,
             isError: false,
@@ -145,7 +150,7 @@ function harness(options: {
           });
         }
       },
-      async *drain(): AsyncIterable<ToolOutcome> {
+      async *drain(): AsyncIterable<ToolDrainItem> {
         log.push('tools.drain');
         for (const outcome of queued.splice(0, queued.length)) yield outcome;
       },
@@ -265,8 +270,8 @@ function harness(options: {
     sweeps,
     released,
     assembleCalls: () => assembles,
-    queueOutcome(outcome: ToolOutcome): void {
-      queued.push(outcome);
+    queueOutcome(item: ToolDrainItem): void {
+      queued.push(item);
     },
   };
 }
@@ -346,11 +351,11 @@ async function run(
 }
 
 // ============================================================================
-// Acceptance 1 — the loop exists here and it is the four-step spine
+// Acceptance 1 鈥?the loop exists here and it is the four-step spine
 // ============================================================================
 
 describe('the engine owns the model -> tool -> backfill -> next turn loop', () => {
-  it('runs model, then dispatch, then backfill, then the next turn — in that order', async () => {
+  it('runs model, then dispatch, then backfill, then the next turn 鈥?in that order', async () => {
     const h = harness({
       turns: [
         {
@@ -379,7 +384,7 @@ describe('the engine owns the model -> tool -> backfill -> next turn loop', () =
     // for the whole run and no per-turn drain at all.
     //
     // `turn.started` is published BEFORE its stream opens, and the drain for a
-    // turn follows its dispatch — the two orderings that make the count rules in
+    // turn follows its dispatch 鈥?the two orderings that make the count rules in
     // `run-budget.ts:18-24` true.
     expect(h.log).toEqual([
       'context.assemble',
@@ -471,12 +476,12 @@ describe('the engine owns the model -> tool -> backfill -> next turn loop', () =
 });
 
 // ============================================================================
-// Acceptance 2 — budget is decided INSIDE the engine
+// Acceptance 2 鈥?budget is decided INSIDE the engine
 // ============================================================================
 
 describe('the engine enforces the budget', () => {
   it('stops before a model call the budget already forbade', async () => {
-    // maxTurns: 1, and the model asks for a tool — so the run NEEDS a second
+    // maxTurns: 1, and the model asks for a tool 鈥?so the run NEEDS a second
     // turn to finish. The engine must refuse to open it.
     const h = harness({
       turns: [
@@ -556,7 +561,7 @@ describe('the engine enforces the budget', () => {
 });
 
 // ============================================================================
-// Acceptance 3 — cancellation propagates INTO the engine
+// Acceptance 3 鈥?cancellation propagates INTO the engine
 // ============================================================================
 
 describe('cancellation reaches the engine', () => {
@@ -604,7 +609,7 @@ describe('cancellation reaches the engine', () => {
 
     // The stream parks until the signal aborts, so the abort provably lands
     // while the run is LIVE. The engine detaches its abort listener once the run
-    // settles — correct, since a listener outliving its run is the leak — so an
+    // settles 鈥?correct, since a listener outliving its run is the leak 鈥?so an
     // abort issued afterwards would prove nothing about propagation.
     h.ports.model.stream = (async function* (_request: ModelRequest, signal: AbortSignal) {
       portSignals.push(signal);
@@ -627,7 +632,7 @@ describe('cancellation reaches the engine', () => {
     await handle.completed();
 
     expect(portSignals).toHaveLength(1);
-    // The port's signal is deliberately NOT the caller's object — a port cannot
+    // The port's signal is deliberately NOT the caller's object 鈥?a port cannot
     // abort a signal it was given, so the engine owns one controller and
     // forwards the caller's abort into it. Asserting identity would pin an
     // implementation detail and would forbid the engine from honouring its own
@@ -635,7 +640,7 @@ describe('cancellation reaches the engine', () => {
     expect(portSignals[0]).not.toBe(controller.signal);
 
     // The propagation itself: the signal the model port received aborted when
-    // the caller's did. Two independent observations — the caller's own state,
+    // the caller's did. Two independent observations 鈥?the caller's own state,
     // and the state observed inside the port.
     expect(controller.signal.aborted).toBe(true);
     expect(portSignals[0]!.aborted).toBe(true);
@@ -696,7 +701,7 @@ describe('cancellation reaches the engine', () => {
 });
 
 // ============================================================================
-// Acceptance 4 — subtask reclamation is the engine's
+// Acceptance 4 鈥?subtask reclamation is the engine's
 // ============================================================================
 
 describe('the engine reclaims subtasks', () => {
@@ -893,7 +898,7 @@ describe('a binding veto reopens the turn without taking the loop over', () => {
     await run(engineWith(clock, 2), h);
 
     // The veto stopped `shouldStop` from returning `completed`, so the loop
-    // went round again — and the CEILING, which is not negotiable, ended it.
+    // went round again 鈥?and the CEILING, which is not negotiable, ended it.
     expect(h.log.filter((e) => e.startsWith('model.stream'))).toEqual([
       'model.stream:1',
       'model.stream:2',

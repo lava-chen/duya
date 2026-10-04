@@ -84,6 +84,7 @@ import type {
   ToolSideEffectClass,
 } from '@duya/agent-protocol';
 import type { BudgetBreach, RunSpend } from '@duya/agent-core';
+import type { AgentProgressEvent } from '@duya/agent-protocol/transcript';
 import type { StopReceipt, StopRequest } from '../transport/execution-channel.js';
 
 // ============================================================================
@@ -205,13 +206,147 @@ export interface ToolDescriptor {
   readonly inputSchema: Readonly<Record<string, unknown>>;
 }
 
-/** The result of one tool call, in the shape the model is given back. */
+/**
+ * The result of one tool call, in the shape the model is given back.
+ *
+ * ## `kind` is REQUIRED, and that is the whole point of the sibling union below
+ *
+ * `kind: 'tool_result'` makes a real tool result one MEMBER of `ToolDrainItem`
+ * rather than the only thing the drain can produce. The alternative -- leaving
+ * `ToolOutcome` bare and adding two optional fields beside it -- is what made
+ * the drain lossy in the first place: an item with no `content` and no `callId`
+ * still satisfied `ToolOutcome`, so a binding adapter had nowhere to complain
+ * and every non-result item was silently treated as a result.
+ *
+ * Requiring the discriminant costs every existing `ToolOutcome` literal one
+ * field. That is the intended price: the cost of the alternative is paid later,
+ * as a dropped deferred context or a false ledger settle, far from its cause.
+ *
+ * ## Everything here is MODEL-VISIBLE
+ *
+ * `#drainOutcomes` turns an outcome's `content` into a message the next turn
+ * sends, so a field on this interface is by construction something the model
+ * reads. The two things the legacy drain loop reads that must NOT reach the
+ * model -- a deferred context and a sub-agent's intermediate output -- are
+ * therefore NOT fields here. They are the other two members of `ToolDrainItem`,
+ * where "not a tool result" is a type-level fact rather than a convention.
+ */
 export interface ToolOutcome {
+  readonly kind: 'tool_result';
   readonly callId: ToolCallId;
   readonly content: string;
   readonly isError: boolean;
   readonly durationMs: number;
+  /**
+   * The producer's own metadata, carried verbatim.
+   *
+   * Not optional sugar: the legacy loop reads it for two things that have no
+   * other source. `recordToolCatalogSchemaRead(catalogView, metadata)`
+   * (`DuyaAgent.ts:2715`) updates the catalog's read-tracking, and the value is
+   * forwarded into the `tool_result` frame's `metadata` field
+   * (`DuyaAgent.ts:2750`) so the renderer can build previews -- a browser
+   * screenshot, a `vision_analyze` result. Both consumers read keys this layer
+   * cannot enumerate, so the payload is carried whole and the vocabulary stays
+   * with the producer.
+   */
+  readonly metadata?: Readonly<Record<string, unknown>>;
 }
+
+/**
+ * A tool's follow-up payload, still PENDING, for the next turn only.
+ *
+ * ## Why this is not a `ToolOutcome` with the text filled in
+ *
+ * The legacy shape is a bare `Promise<unknown>` (`StreamingToolExecutor.ts:169`,
+ * drained at `:2194`), and `_injectRuntimeContext` awaits it on the NEXT
+ * provider turn (`DuyaAgent.ts:4204-4224`). An adapter that resolved the promise
+ * inside `drain` would not be adapting -- it would move the await into the
+ * drain loop, so a follow-up review that never settles would stall the turn
+ * that is draining instead of the one that would have consumed it.
+ *
+ * ## Why `Promise<unknown>` and not `Promise<string>`
+ *
+ * Because the legacy value is genuinely untyped: it may be a string or a
+ * structure, and `_injectRuntimeContext` does the `typeof === 'string'` branch
+ * itself (`DuyaAgent.ts:4209-4210`). Narrowing here would make the adapter's job
+ * the type's job, and the branch would then have to be re-implemented wherever
+ * the value is finally read. A rejection is a SKIP, never a failure -- that is
+ * the legacy rule at `:4215` and it is reproduced in `#modelRequest`.
+ */
+export interface DeferredToolContext {
+  readonly kind: 'deferred_context';
+  /** The call this belongs to. Correlation only; it is not a ledger key. */
+  readonly callId: ToolCallId;
+  readonly toolName: string;
+  readonly pending: Promise<unknown>;
+}
+
+/**
+ * One sub-agent progress frame, observed but NOT a model input.
+ *
+ * ## Where this has to end up, and why it is not a field
+ *
+ * The legacy loop reads `result.message.metadata.agentEvent`
+ * (`DuyaAgent.ts:2687-2696`) and yields it as an `agent_progress` frame so the
+ * UI can show activity. It is a DURABLE-TRANSCRIPT-EXCLUDED, RENDERER-FACING
+ * fact, and the protocol already says where such things go: `Durability` is a
+ * machine-readable field on every registry entry (`events/registry.ts:53`), so
+ * "this is not authoritative state" is something the event type can assert and
+ * an outcome field cannot.
+ *
+ * The destinations already exist. `agent_progress` splits three ways --
+ * `subagent.started`, `subagent.completed`, `hook.invoked`
+ * (`translate/chat-event-translator.ts:481`) -- and the three-way split is
+ * already argued in the payload that names it
+ * (`events/payloads.ts:601-615`).
+ *
+ * **The split cannot be done here, and the reason is load-bearing.** The
+ * translator is fed a loose `RawFrame` and reads `subagentId`/`id`,
+ * `agentEventType` and a FLAT hook payload. The event the drain actually carries
+ * is the typed `AgentProgressEvent`, which has `agentId` (not `subagentId`),
+ * no `agentEventType`, and a NESTED `hookEvent`
+ * (`transcript/permission-progress.ts:94-120`). Fed to the translator as-is, a
+ * `started` frame finds no `subagentId` and is dropped as unmapped, a `done`
+ * frame matches neither `completed` nor `failed` and is misfiled as
+ * `hook.invoked`, and a `hook_invoked` frame arrives with empty hook names.
+ *
+ * So the un-split event travels, and the host projects it. See
+ * `RunEventStorePort.projectSubagentProgress` for why that is a port method and
+ * not a field, and what happens when it is absent.
+ */
+export interface SubagentProgressItem {
+  readonly kind: 'subagent_progress';
+  /** The tool call whose sub-agent produced this frame. */
+  readonly callId: ToolCallId;
+  readonly event: AgentProgressEvent;
+}
+
+/**
+ * One item off the drain -- which is NOT the same as one tool result.
+ *
+ * ## The closed set
+ *
+ * `kind` discriminates all three members, so the engine's `switch` is checked
+ * for exhaustiveness and a fourth kind becomes a compile error at the drain
+ * rather than a value silently folded into the `tool_result` arm. The set is
+ * asserted in `port-guards.ts`.
+ *
+ * ## What the legacy drain reads, and where it lands here
+ *
+ * The loop at `DuyaAgent.ts:2677-2698` reads four things off each update, and
+ * every one of them has a member here:
+ *
+ * | Legacy read | Lands on |
+ * | --- | --- |
+ * | `result.deferredContext` (`:2681`) | `DeferredToolContext.pending` |
+ * | `metadata.type === 'agent_progress'` (`:2687`) | `SubagentProgressItem` |
+ * | `metadata.agentEvent` (`:2690`) | `SubagentProgressItem.event` |
+ * | `result.message` (`:2685`, `:2701`+) | `ToolOutcome.content` / `.metadata` |
+ *
+ * An update carrying none of them maps to `null` in the adapter rather than to
+ * an item, so "nothing to report" is a value the port can express.
+ */
+export type ToolDrainItem = ToolOutcome | DeferredToolContext | SubagentProgressItem;
 
 /** Contract 1a -- the model. */
 export interface ModelPort {
@@ -266,8 +401,19 @@ export interface ToolPort {
    * concurrently. `drain` is where their results come back.
    */
   dispatch(call: ToolCallRequest, ticket: ToolDispatchTicket): void;
-  /** Yield results as they settle. Must not block on the slowest call forever. */
-  drain(signal: AbortSignal): AsyncIterable<ToolOutcome>;
+  /**
+   * Yield items as they settle. Must not block on the slowest call forever.
+   *
+   * Yields `ToolDrainItem`, not `ToolOutcome`, because the legacy channel
+   * interleaves two things that are not results -- a pending deferred context
+   * and a sub-agent progress frame (`StreamingToolExecutor.getRemainingResults`
+   * drains all three, `DuyaAgent.ts:2677`). A `drain` typed `ToolOutcome` cannot
+   * name them, which is what pushed an adapter to smelt them into a string.
+   *
+   * Widening the element type is backward-compatible for an implementor: an
+   * existing `AsyncIterable<ToolOutcome>` still satisfies it.
+   */
+  drain(signal: AbortSignal): AsyncIterable<ToolDrainItem>;
   /**
    * Drop everything queued and not yet started.
    *
@@ -298,10 +444,15 @@ export interface ContextPort {
   /**
    * Queue a fragment for the NEXT turn, never for the durable timeline.
    *
-   * This is where everything the current code smelzes through tool results
-   * lands instead: deferred review payloads (`DuyaAgent.ts:2681`) and
-   * `agent_progress` rows (`:2687`). Both are engine-visible today and neither
-   * is a model input, which is why `ToolOutcome` above carries neither.
+   * This is where deferred review payloads land
+   * (`deferredContexts.push(result.deferredContext)`, `DuyaAgent.ts:2682`).
+   *
+   * A `pending` fragment is accepted as-is: the host holds the promise and
+   * resolves it when it assembles the next turn, which is the point at which the
+   * legacy code resolves it too (`DuyaAgent.ts:4206`). A host that cannot hold
+   * one must say so by rejecting, not by awaiting inside `defer` -- an await
+   * here happens on the turn that produced the result, which is the stall
+   * `DeferredToolContext` exists to avoid.
    */
   defer(fragment: TransientContextFragment): void;
 }
@@ -338,13 +489,72 @@ export interface AssembledTurn {
   readonly revision: string;
 }
 
-/** A fragment that exists for one turn's request and is never persisted. */
-export interface TransientContextFragment {
-  readonly kind: 'deferred_tool_context' | 'hook_context' | 'advisory' | 'os_context';
-  readonly text: string;
+/** The kinds a transient fragment may be. Closed, and unrelated to `kind` on `ToolOutcome`. */
+export type TransientFragmentKind =
+  | 'deferred_tool_context'
+  | 'hook_context'
+  | 'advisory'
+  | 'os_context';
+
+/** What a resolved and a pending fragment agree on. */
+export interface TransientFragmentBase {
+  readonly kind: TransientFragmentKind;
   /** A stable key, so a repeated fragment replaces rather than stacks. */
   readonly key: string;
 }
+
+/**
+ * A fragment whose text is already known.
+ *
+ * `pending?: undefined` is declared rather than omitted so that a literal
+ * cannot set both, and the union below is discriminated by presence instead of
+ * by a second field that a producer could get wrong.
+ */
+export interface ResolvedTransientContextFragment extends TransientFragmentBase {
+  readonly text: string;
+  readonly pending?: undefined;
+}
+
+/**
+ * A fragment whose text does not exist yet.
+ *
+ * ## Why the fragment type had to widen
+ *
+ * `deferred_tool_context` is produced by a tool that hands back a follow-up
+ * payload it has not finished computing (`StreamingToolExecutor.ts:2194`), and
+ * the legacy code awaits it during the NEXT turn's context assembly
+ * (`DuyaAgent.ts:4206`). A fragment type whose only text is `string` cannot
+ * express that state, so the only way to honour the contract was to resolve
+ * early -- which moves the await, as `DeferredToolContext` argues.
+ *
+ * ## The hazard this does NOT fix
+ *
+ * A `pending` that never settles stalls the turn that resolves it, because
+ * `#modelRequest` waits on all of them (`Promise.allSettled`, mirroring
+ * `DuyaAgent.ts:4206`). That is the legacy behaviour reproduced exactly, and it
+ * is a pre-existing property of the deferred-review design rather than
+ * something this port introduces. A cap belongs where the timeout already
+ * exists for the sibling path -- `drainPendingExtraResults` races a 30s
+ * `SAFETY_CAP_MS` (`StreamingToolExecutor.ts:2152`) while
+ * `drainPendingDeferredContexts` does not. Recorded, not silently changed.
+ */
+export interface PendingTransientContextFragment extends TransientFragmentBase {
+  readonly text?: undefined;
+  /** Resolves to the value; a rejection is a SKIP, never a failure. */
+  readonly pending: Promise<unknown>;
+}
+
+/**
+ * A fragment that exists for one turn's request and is never persisted.
+ *
+ * A union rather than a type with an optional `pending`, so "the text is
+ * `string | undefined`" is unrepresentable: a consumer narrows on the presence
+ * of `pending` and gets a `string` in the other arm, instead of shipping
+ * `undefined` to a provider as message content.
+ */
+export type TransientContextFragment =
+  | ResolvedTransientContextFragment
+  | PendingTransientContextFragment;
 
 /** Contract 1d -- approval. */
 export interface ApprovalPort {
@@ -407,6 +617,35 @@ export interface RunEventStorePort {
    * engine has not seen yet, a lost dispatch, a server-side stop.
    */
   proposeTerminal(candidate: TerminalCandidate): void;
+  /**
+   * Project one sub-agent progress frame into the protocol vocabulary.
+   *
+   * ## Why the host projects it, rather than the engine
+   *
+   * `publish` takes a `RunEvent`, and the registry has no member for a
+   * sub-agent's intermediate output -- the three destinations
+   * (`subagent.started`, `subagent.completed`, `hook.invoked`) cover a
+   * transition and a hook, not a `'text'` frame. `SubagentProgressItem`
+   * documents why the existing translator cannot be reused as-is: the typed
+   * event has `agentId` rather than `subagentId`, no `agentEventType`, and a
+   * nested `hookEvent`.
+   *
+   * So the mapping is not derivable here, and inventing a fourth registry
+   * member from inside the engine would be a protocol change made as a side
+   * effect of binding a port. It is the host's, and `null` is the honest
+   * answer for a frame with no destination yet.
+   *
+   * ## What absence costs, stated exactly
+   *
+   * When this is absent -- or returns `null` -- the engine publishes one
+   * `diagnostic` per frame naming the unmapped `type`. That is deliberate: a
+   * dropped progress frame is invisible in a test that only checks the model's
+   * input and in a run whose sub-agent finished correctly, and the plan's
+   * whole objection to the lossy adapter is that it fails nowhere near its
+   * cause. A counted diagnostic is a failure someone can see; a dropped frame
+   * is not a failure at all.
+   */
+  projectSubagentProgress?(event: AgentProgressEvent): RunEvent | null;
 }
 
 /** What the engine believes ended the run. Never the decision itself. */

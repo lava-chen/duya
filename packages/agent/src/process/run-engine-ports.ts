@@ -58,12 +58,24 @@ import type {
   ToolDescriptor,
   ToolDispatchTicket,
   ToolDiscardReason,
+  ToolDrainItem,
   ToolOutcome,
   ToolPort,
   TransientContextFragment,
   TurnAssemblyInput,
 } from '@duya/agent-runtime';
 import type { ToolSideEffectClass } from '@duya/agent-protocol';
+import type {
+  AgentProgressEvent,
+  Message,
+  MessageContent,
+  ToolResultContent,
+} from '@duya/agent-protocol/transcript';
+// The one place in this file that names the tool system's own type, and the
+// reason is that `toDrainItem` IS the coupling: an adapter that cannot see the
+// producer's shape cannot tell a deferred context from a result. Everything
+// else here stays structural, per `SideEffectLookup` below.
+import type { MessageUpdate } from '../tool/StreamingToolExecutor.js';
 
 // ============================================================================
 // The side-effect lookup
@@ -249,4 +261,158 @@ export function toProviderMessages(
   messages: readonly ModelMessage[],
 ): ReadonlyArray<{ role: string; content: unknown }> {
   return messages.map((message) => ({ role: message.role, content: message.content }));
+}
+
+// ============================================================================
+// The drain adapter
+// ============================================================================
+
+/**
+ * One legacy `MessageUpdate` -> one `ToolDrainItem`, or `null` for nothing.
+ *
+ * ## Why this is a pure exported function
+ *
+ * The loop this replaces reads the same four things off each update
+ * (`DuyaAgent.ts:2677-2698`), and the reason a binding adapter would have been
+ * lossy is that those four reads were spread across 20 lines of a generator
+ * mixed with SSE yields, hook dispatch and history writes. A pure function is
+ * the only shape in which "did the adapter drop anything" is a question a test
+ * can answer, and it is exported so `packages/agent`'s test can drive it with
+ * the REAL update shapes without a pipeline, a registry or a model.
+ *
+ * ## The four reads, in the legacy order
+ *
+ * | Legacy read | Returns |
+ * | --- | --- |
+ * | `result.deferredContext` (`:2681`) | `deferred_context`, promise carried PENDING |
+ * | `metadata.type === 'agent_progress'` (`:2687`) | `subagent_progress` |
+ * | `result.message` that is a tool result (`:2702`) | `tool_result` |
+ * | neither | `null` |
+ *
+ * Order matters and is the legacy order, because the three cases are mutually
+ * exclusive by construction: a progress update has no `tool_result` content, and
+ * an update with `deferredContext` has no `message` at all
+ * (`StreamingToolExecutor.ts:2194` yields `{ deferredContext }` alone).
+ *
+ * `null` is a first-class answer rather than a throw: the legacy loop
+ * `continue`s past an update it does not recognise (`:2683`, `:2697`), so a
+ * stream that produced one must not abort the drain.
+ */
+export function toDrainItem(update: MessageUpdate): ToolDrainItem | null {
+  // 1. The deferred context wins, and it is checked FIRST because it is the
+  //    only case with no `message`. The promise is carried unresolved: see
+  //    `DeferredToolContext` in `ports.ts` for why resolving it here would move
+  //    the await into the drain loop.
+  if (update.deferredContext !== undefined) {
+    return {
+      kind: 'deferred_context',
+      // The producer's `toolUseId` IS the call id; there is no other source for
+      // it on this update, so an empty one is passed through rather than
+      // invented -- a fabricated id would collide with a real result's key in
+      // the host's keyed fragment map.
+      callId: update.deferredContext.toolUseId,
+      toolName: update.deferredContext.toolName,
+      pending: update.deferredContext.promise,
+    };
+  }
+
+  const message = update.message;
+  if (message === undefined) return null;
+
+  // 2. A sub-agent progress frame. NOT a tool result: the legacy loop
+  //    `continue`s past it without pushing it to history (`:2697`), so mapping
+  //    it to a `tool_result` would both persist it and show it to the model.
+  const progress = readAgentProgress(message);
+  if (progress !== null) {
+    return { kind: 'subagent_progress', callId: progress.callId, event: progress.event };
+  }
+
+  // 3. A real tool result, by the legacy's own two-format test (`:2702-2705`):
+  //    `role === 'tool'`, or a content array whose first block is a
+  //    `tool_result`. Anything else is not a result.
+  if (!isToolResultMessage(message)) return null;
+  const { content, isError, callId } = readToolResultPayload(message);
+  return {
+    kind: 'tool_result',
+    callId,
+    content,
+    isError,
+    durationMs: message.duration_ms ?? 0,
+    // Carried whole. Two consumers read keys this layer cannot enumerate --
+    // `recordToolCatalogSchemaRead` (`:2715`) and the renderer's preview path
+    // (`:2750`) -- so the payload travels and the vocabulary stays upstream.
+    ...(message.metadata === undefined ? {} : { metadata: message.metadata }),
+  };
+}
+
+/**
+ * The progress event on a message, or `null` if it carries none.
+ *
+ * The discriminant is `metadata.type === 'agent_progress'`, which is what the
+ * producer stamps (`StreamingToolExecutor.ts:2311`) and what the legacy loop
+ * reads (`DuyaAgent.ts:2687`).
+ *
+ * The legacy reads `metadata.agentEvent` and yields ONLY if it is present
+ * (`:2691`) -- a progress message with no `agentEvent` is skipped entirely
+ * rather than yielded with an undefined payload. Preserved: returning `null`
+ * makes such a message fall through to the "not a result" branch, which is
+ * where the legacy left it.
+ */
+function readAgentProgress(message: Message): { callId: string; event: AgentProgressEvent } | null {
+  const metadata = message.metadata as
+    | { type?: unknown; agentEvent?: unknown; toolId?: unknown }
+    | undefined;
+  if (metadata?.type !== 'agent_progress') return null;
+  const event = metadata.agentEvent as AgentProgressEvent | undefined;
+  if (event === undefined || event === null) return null;
+  // `toolId` is the tool use id on this shape (`StreamingToolExecutor.ts:2312`);
+  // `tool_call_id` is absent, so it is read before the generic path would.
+  return {
+    callId: typeof metadata.toolId === 'string' ? metadata.toolId : (message.tool_call_id ?? ''),
+    event,
+  };
+}
+
+/** The legacy two-format tool-result test (`DuyaAgent.ts:2702-2705`). */
+function isToolResultMessage(message: Message): boolean {
+  if (message.role === 'tool') return true;
+  const content = message.content;
+  return (
+    Array.isArray(content) && content.length > 0 && content[0]?.type === 'tool_result'
+  );
+}
+
+/**
+ * The call id, the result text and the error flag, from whichever of the two
+ * formats it is.
+ *
+ * All three are read TOGETHER because all three are format-dependent, and
+ * splitting them is how a field gets dropped: an earlier version of this
+ * function read `callId` from `message.tool_call_id` for both formats, which is
+ * empty for the old content-array format -- the id lives on the block
+ * (`DuyaAgent.ts:2733`). An empty call id is not a visible failure; it becomes a
+ * fragment keyed `tool_result:` and a tool result the ledger cannot attribute to
+ * a call.
+ *
+ * The error rule differs between the formats and the difference is load-bearing:
+ * a `role: 'tool'` message infers it from a `<tool_error>` marker in the text
+ * (`:2729`), while a `tool_result` block carries it as a field (`:2737`).
+ * Reading both through one rule would either miss a real error or invent one.
+ */
+function readToolResultPayload(message: Message): {
+  content: string;
+  isError: boolean;
+  callId: string;
+} {
+  const content = message.content;
+  if (message.role === 'tool') {
+    const text = typeof content === 'string' ? content : JSON.stringify(content);
+    return { content: text, isError: text.includes('<tool_error>'), callId: message.tool_call_id ?? '' };
+  }
+  const block = (content as MessageContent[])[0] as ToolResultContent;
+  return {
+    content: typeof block.content === 'string' ? block.content : JSON.stringify(block.content),
+    isError: block.is_error ?? false,
+    callId: block.tool_use_id,
+  };
 }

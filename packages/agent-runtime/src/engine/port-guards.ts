@@ -36,6 +36,7 @@ import type {
   RunEventStorePort,
   RunExecutionRequest,
   SubtaskTerminationReason,
+  ToolDrainItem,
   ToolOutcome,
 } from './ports.js';
 
@@ -59,7 +60,7 @@ const MINIMAL_PORTS: RunEnginePorts = {
   tools: {
     dispatch() {},
     drain() {
-      return (async function* (): AsyncIterable<ToolOutcome> {
+      return (async function* (): AsyncIterable<ToolDrainItem> {
         // an empty drain is a legal turn
       })();
     },
@@ -176,6 +177,68 @@ const RUN_EVENT_CARRIES_NO_SEQ: SeqOn<RunEvent> = 'seq';
 /** Same rule for the tool outcome the engine feeds back to the model. */
 // @ts-expect-error - a `ToolOutcome` is a model input, never an ordered event
 const TOOL_OUTCOME_CARRIES_NO_SEQ: SeqOn<ToolOutcome> = 'seq';
+
+// ---------------------------------------------------------------------------
+// Contract 1b / the drain: the union is CLOSED, and only one member is a result
+// ---------------------------------------------------------------------------
+
+/**
+ * The drained kinds are exactly these three.
+ *
+ * Phrased so that a FOURTH kind is red, not "there are three today". `#drainOutcomes`
+ * switches on `item.kind` with no `default`, so a new member turns the engine's
+ * own typecheck red at the drain -- which is the whole reason the union is
+ * discriminated instead of being three optional fields on one interface.
+ *
+ * The polarity matches the `SeqOn` guards above and is worth stating, because
+ * getting it backwards produces a guard that is green in BOTH states: the
+ * conditional yields `never` while the set is closed, so the assignment is an
+ * error and the directive is used; add a kind and the conditional yields
+ * `'unexpected-kind'`, the assignment becomes legal, the directive goes unused
+ * and the build fails.
+ */
+type DrainKindGuard = ToolDrainItem['kind'] extends
+  | 'tool_result'
+  | 'deferred_context'
+  | 'subagent_progress'
+  ? never
+  : 'unexpected-kind';
+// @ts-expect-error - a fourth drained kind must break the engine's switch
+const DRAIN_KIND_SET_IS_CLOSED: DrainKindGuard = 'unexpected-kind';
+
+/**
+ * A progress frame carries no `content`, so it cannot become model input.
+ *
+ * This is the leak guard at the type level rather than the behavioural one in
+ * `test/tool-drain-contract.test.ts`. `content` is what `#drainOutcomes` turns
+ * into a message for the model, so a member that lacked it could not be fed
+ * back even by an adapter that ignored `kind` -- and an adapter that ignored
+ * `kind` would already have no `content` to forward.
+ */
+type ProgressCarriesContent = Extract<ToolDrainItem, { kind: 'subagent_progress' }> extends {
+  content: unknown;
+}
+  ? true
+  : false;
+// @ts-expect-error - a `subagent_progress` item has no `content` to feed the model
+const SUBAGENT_PROGRESS_HAS_NO_CONTENT: ProgressCarriesContent = true;
+
+/**
+ * A deferred context cannot be handed over already resolved.
+ *
+ * The rule is not stylistic. `TransientContextFragment` has both a `text` and a
+ * `pending` arm precisely so that a caller states which one it has; an adapter
+ * that filled in `text` from an `await` would have moved the wait into the
+ * drain loop, and the guard makes that a build error rather than a stalled turn
+ * found in production.
+ */
+type DeferredIsResolved = Extract<ToolDrainItem, { kind: 'deferred_context' }> extends {
+  pending: Promise<unknown>;
+}
+  ? true
+  : false;
+// @ts-expect-error - a deferred context must stay pending until the next assembly
+const DEFERRED_CONTEXT_IS_PENDING: DeferredIsResolved = false;
 
 /**
  * The store's surface has no seq allocator, so an executor cannot even name one.

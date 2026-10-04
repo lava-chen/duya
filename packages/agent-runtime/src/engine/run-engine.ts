@@ -122,6 +122,7 @@ import type {
   TerminalCandidate,
   ToolCallRequest,
   ToolDispatchTicket,
+  ToolDrainItem,
   ToolOutcome,
   TransientContextFragment,
   TurnAssemblyInput,
@@ -365,7 +366,7 @@ export class RunEngineImpl implements RunEngine {
         // time, so a host that injects on `defer` would hand the model the same
         // result twice — invisible in a single-turn run and wrong in every
         // multi-turn one.
-        const modelRequest = this.#modelRequest(ctx, assembled, deferred);
+        const modelRequest = await this.#modelRequest(ctx, assembled, deferred);
         // Consumed: the fragments belong to the request that just carried them
         // and must not ride the next one. Left in place they would accumulate
         // turn after turn, so turn 5 would resend turns 1-4's results and the
@@ -569,38 +570,102 @@ export class RunEngineImpl implements RunEngine {
    * did not distinguishable after a crash. `unknown` is a legal state and the
    * honest one: the call was made and no authority has said whether its effect
    * landed.
+   *
+   * ## Why the switch, and not "handle the extra fields"
+   *
+   * Two of the three drained kinds are not results, and both used to arrive
+   * through the same arm. A progress frame would be settled into the ledger as
+   * `succeeded` with the sub-agent's text as its detail, and deferred as a
+   * `deferred_tool_context` fragment -- which is fed to the MODEL on the next
+   * turn. One mis-typed adapter would therefore write a false ledger row AND
+   * leak a sub-agent's internal stream into the context window.
+   *
+   * Narrowing on `kind` makes both impossible: a fourth kind is a compile error
+   * here rather than a value that reaches the ledger arm by default.
+   *
+   * Measured, because the obvious alternative is not the silent one. Folding the
+   * kinds in THIS switch fails loudly -- a progress item has no `content`, so
+   * the arm's `content.slice` raises and the run dies (that mutation turns 9 of
+   * 9 tests in `tool-drain-contract.test.ts` red with a TypeError). The silent
+   * shape is the ADAPTER's, where a `JSON.stringify` produces a `content` that
+   * satisfies every field the old type asked for; that one is proven red in
+   * `packages/agent/src/process/__tests__/run-engine-ports-drain.test.ts`. Both
+   * halves are pinned, because either alone is a regression.
    */
   async #drainOutcomes(ctx: RunContext, deferred: TransientContextFragment[]): Promise<void> {
     const { ports, signal } = ctx;
-    for await (const outcome of ports.tools.drain(signal) as AsyncIterable<ToolOutcome>) {
+    for await (const item of ports.tools.drain(signal) as AsyncIterable<ToolDrainItem>) {
       if (isAborted(signal)) {
         ports.tools.discard('abandoned');
         return;
       }
-      if (ports.sideEffects !== undefined) {
-        // Settle against the key the LEDGER minted at dispatch, not against the
-        // callId. A ledger that namespaces its keys (`key:<callId>`, as
-        // `InMemoryCheckpointStore` does) would otherwise record a settle
-        // against a row that does not exist, leaving every call permanently
-        // `dispatched` — an effect a crash could never classify.
-        const ticket = ctx.tickets.get(outcome.callId) ?? SYNTHETIC_TICKET;
-        await ports.sideEffects.settle({
-          attemptKey: ticket.attemptKey,
-          state: outcome.isError ? 'failed' : 'succeeded',
-          detail: outcome.content.slice(0, LEDGER_DETAIL_LIMIT),
-        });
+      switch (item.kind) {
+        case 'tool_result': {
+          if (ports.sideEffects !== undefined) {
+            // Settle against the key the LEDGER minted at dispatch, not against
+            // the callId. A ledger that namespaces its keys (`key:<callId>`, as
+            // `InMemoryCheckpointStore` does) would otherwise record a settle
+            // against a row that does not exist, leaving every call permanently
+            // `dispatched` — an effect a crash could never classify.
+            const ticket = ctx.tickets.get(item.callId) ?? SYNTHETIC_TICKET;
+            await ports.sideEffects.settle({
+              attemptKey: ticket.attemptKey,
+              state: item.isError ? 'failed' : 'succeeded',
+              detail: item.content.slice(0, LEDGER_DETAIL_LIMIT),
+            });
+          }
+          const fragment: TransientContextFragment = {
+            kind: 'deferred_tool_context',
+            text: item.content,
+            key: `tool_result:${item.callId}`,
+          };
+          // Both: `defer` hands it to the host for the next assembly, and the
+          // local list carries it into this run's own message seed. One write,
+          // two readers, no second copy of the text.
+          ports.context.defer(fragment);
+          deferred.push(fragment);
+          await this.#contribute(ctx, 'after_tool', { outcome: item });
+          break;
+        }
+        case 'deferred_context': {
+          // PENDING, deliberately: resolving here would move the await into the
+          // drain loop, so a follow-up review that never settles would stall
+          // this turn instead of the next one (`ports.ts`,
+          // `DeferredToolContext`).
+          //
+          // Keyed by call, and NOT `tool_result:` — that prefix is what
+          // `#drainOutcomes` uses for a real result, and sharing it would let a
+          // deferred context overwrite a result for the same call in the host's
+          // keyed map, silently losing one of the two.
+          const fragment: TransientContextFragment = {
+            kind: 'deferred_tool_context',
+            key: `deferred:${item.callId}`,
+            pending: item.pending,
+          };
+          ports.context.defer(fragment);
+          deferred.push(fragment);
+          break;
+        }
+        case 'subagent_progress': {
+          // Not a model input and not a ledger event. It is projected into the
+          // protocol vocabulary by the host, and an unmapped frame becomes a
+          // diagnostic rather than a silence (`RunEventStorePort`'s
+          // `projectSubagentProgress`).
+          const project = ports.events.projectSubagentProgress;
+          const mapped = project === undefined ? null : project.call(ports.events, item.event);
+          if (mapped === null) {
+            ports.events.publish({
+              type: 'diagnostic',
+              level: 'warn',
+              message: `subagent progress frame "${item.event.type}" has no protocol destination`,
+              data: { callId: item.callId, agentEvent: item.event },
+            });
+          } else {
+            ports.events.publish(mapped);
+          }
+          break;
+        }
       }
-      const fragment: TransientContextFragment = {
-        kind: 'deferred_tool_context',
-        text: outcome.content,
-        key: `tool_result:${outcome.callId}`,
-      };
-      // Both: `defer` hands it to the host for the next assembly, and the local
-      // list carries it into this run's own message seed. One write, two
-      // readers, no second copy of the text.
-      ports.context.defer(fragment);
-      deferred.push(fragment);
-      await this.#contribute(ctx, 'after_tool', { outcome });
     }
   }
 
@@ -740,17 +805,52 @@ export class RunEngineImpl implements RunEngine {
   }
 
   /**
+   * Turn fragments into the user messages that carry them.
+   *
+   * ## Why this awaits, and why a rejection is a skip
+   *
+   * A `pending` fragment is a tool's follow-up payload that was still being
+   * computed when the drain handed it over, so its text does not exist yet. The
+   * legacy code resolves it at the same point -- inside context assembly for the
+   * next turn (`DuyaAgent.ts:4204-4224`) -- and treats a rejection as
+   * `continue`, i.e. the fragment simply does not appear (`DuyaAgent.ts:4215`).
+   * Both rules are reproduced here, because the alternative is a failed fragment
+   * failing a turn whose model call had nothing to do with it.
+   *
+   * The `typeof === 'string'` branch is also the legacy one
+   * (`DuyaAgent.ts:4209-4210`): the value is `Promise<unknown>`, so a structured
+   * payload is stringified rather than sent as an object.
+   *
+   * The unbounded wait is inherited, not introduced: see
+   * `PendingTransientContextFragment`'s doc comment.
+   */
+  async #fragmentMessages(
+    idPrefix: string,
+    fragments: readonly TransientContextFragment[],
+  ): Promise<readonly ModelMessage[]> {
+    const settled = await Promise.allSettled(
+      fragments.map(async (fragment) => ({ key: fragment.key, text: await fragmentText(fragment) })),
+    );
+    const messages: ModelMessage[] = [];
+    for (const item of settled) {
+      if (item.status !== 'fulfilled') continue;
+      messages.push({ role: 'user', id: `${idPrefix}:${item.value.key}`, content: item.value.text });
+    }
+    return messages;
+  }
+
+  /**
    * The messages the model is given this turn.
    *
    * The prompt goes in on the FIRST turn only. Later turns are continuations
    * after tool results, and re-appending the prompt every turn is how a
    * conversation teaches a model to repeat itself.
    */
-  #modelRequest(
+  async #modelRequest(
     ctx: RunContext,
     assembled: AssembledTurn,
     deferred: readonly TransientContextFragment[],
-  ): ModelRequest {
+  ): Promise<ModelRequest> {
     const { input, manifest } = ctx;
     // A `by_ref` history is the HOST's to resolve; the engine hands the locator
     // back rather than re-resolving it, which is what keeps exactly one
@@ -758,19 +858,14 @@ export class RunEngineImpl implements RunEngine {
     const history: readonly ModelMessage[] =
       input.history.kind === 'inline' ? input.history.value : assembled.messages;
 
-    const steering = input.steering
-      .filter((directive) => directive.effectiveFromTurn <= ctx.turn)
-      .map((directive): ModelMessage => ({
-        role: 'user',
-        id: `steering:${directive.payload.key}`,
-        content: directive.payload.text,
-      }));
+    const steering = await this.#fragmentMessages(
+      'steering',
+      input.steering
+        .filter((directive) => directive.effectiveFromTurn <= ctx.turn)
+        .map((directive) => directive.payload),
+    );
 
-    const carried: readonly ModelMessage[] = deferred.map((fragment): ModelMessage => ({
-      role: 'user',
-      id: `fragment:${fragment.key}`,
-      content: fragment.text,
-    }));
+    const carried = await this.#fragmentMessages('fragment', deferred);
 
     // The prompt goes in on the FIRST turn only. Later turns are continuations
     // after tool results, and re-appending the prompt every turn is how a
@@ -1017,6 +1112,21 @@ const SYNTHETIC_TICKET: ToolDispatchTicket = Object.freeze({
 
 /** Ledger details are for diagnosis, not for transporting a tool's whole output. */
 const LEDGER_DETAIL_LIMIT = 512;
+
+/**
+ * One fragment's text, resolved.
+ *
+ * The `typeof === 'string'` branch is the legacy one
+ * (`DuyaAgent.ts:4209-4210`): a deferred tool context carries
+ * `Promise<unknown>`, so a structured payload is stringified here rather than
+ * handed to a provider as an object. Rejects with whatever the tool rejected
+ * with, so the caller's `allSettled` decides the policy.
+ */
+async function fragmentText(fragment: TransientContextFragment): Promise<string> {
+  if (fragment.pending === undefined) return fragment.text;
+  const value = await fragment.pending;
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
 
 /**
  * Extension rule 2, enforced by the engine.
