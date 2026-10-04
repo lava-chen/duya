@@ -53,6 +53,7 @@ export type {
   InboundAcceptance,
   InboundResult,
   RunEventEmitterPorts,
+  TerminalRelease,
 } from './events/event-emitter.js';
 
 export { classifyMessageKind, dispatchMessage } from './events/structural-dispatch.js';
