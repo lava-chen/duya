@@ -48,7 +48,9 @@ import type {
   ErrorCode,
   ErrorCauseSystem,
   GoalState,
+  MessageContent as FinalizedBlock,
   RunEvent,
+  StopReason,
   ToolCallOutcome,
 } from '@duya/agent-protocol';
 import { isKnownCode } from '@duya/agent-protocol';
@@ -400,6 +402,10 @@ export function translateFrame(
     case 'chat:agent_progress':
       return translateAgentProgress(data);
 
+    case 'message_finalized':
+    case 'chat:message_finalized':
+      return translateMessageFinalized(data, ctx);
+
     case 'done':
     case 'chat:done':
       // `stopReason` is DELIBERATELY ABSENT. The worker sends no fields on
@@ -511,6 +517,168 @@ function translateAgentProgress(data: Readonly<Record<string, unknown>>): Transl
     ...optionalString('backgroundTaskId', data['backgroundTaskId']),
     ...optionalString('errorMessage', data['errorMessage']),
     ...optionalString('toolName', data['toolName']),
+  });
+}
+
+/**
+ * The producer's stop reason -> the event vocabulary's `StopReason`.
+ *
+ * ## Three runtime reasons have NO counterpart here, and that is deliberate
+ *
+ * `max_turns`, `tool_use` and `repeated_tool_calls` are the runtime's own loop
+ * outcomes. The event union is six values and none of them means "the agent
+ * loop stopped" — `completed` would claim a normal finish, and `length` is
+ * specifically a token or context ceiling. Coercing any of the three would put
+ * a word in a durable record that means something else, so they are absent
+ * here and the caller refuses instead.
+ *
+ * `max_tokens` IS present, as `length`, and that is the normalisation
+ * `events/payloads.ts` documents: "some report `max_tokens` where this reports
+ * `length`".
+ */
+const STOP_REASON_TO_EVENT: Readonly<Record<string, StopReason>> = {
+  completed: 'completed',
+  end_turn: 'end_turn',
+  stop_sequence: 'stop_sequence',
+  aborted: 'aborted',
+  error: 'error',
+  max_tokens: 'length',
+};
+
+/** The one the event union can state, or `null` when it cannot state this one. */
+function mapStopReason(raw: unknown): StopReason | null {
+  const value = str(raw);
+  if (value === '') return null;
+  return STOP_REASON_TO_EVENT[value] ?? null;
+}
+
+/**
+ * One transcript content block -> the event payload's block, or `null` when the
+ * event union has no shape for it.
+ *
+ * `null` means PRESERVED, not dropped: the caller keeps the original block
+ * verbatim under `providerMeta.untranslatedBlocks`. The event payload's
+ * `MessageContent` has four members and the transcript vocabulary has six
+ * (`transcript/content.ts:159-165`), and the classification record states
+ * outright that "the event vocabulary's four-member union would silently lose"
+ * `ImageContent` and `ProviderBlockContent`. This is the seam where that
+ * difference is paid, so it is paid visibly.
+ */
+function translateContentBlock(raw: unknown): FinalizedBlock | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const block = raw as Readonly<Record<string, unknown>>;
+  switch (str(block['type'])) {
+    case 'text':
+      return {
+        type: 'text',
+        text: str(block['text']),
+        ...optionalString('textSignature', block['textSignature']),
+        ...optionalString('phase', block['phase']),
+      };
+
+    case 'thinking':
+      return {
+        type: 'thinking',
+        thinking: str(block['thinking']),
+        ...optionalString('thinkingSignature', block['thinkingSignature']),
+        // `redacted` is a boolean in both vocabularies.
+        ...(typeof block['redacted'] === 'boolean' ? { redacted: block['redacted'] } : {}),
+        // `encrypted` is a `string` (the opaque payload) in the transcript
+        // vocabulary and a `boolean` (whether it exists) in the event one.
+        // The flag is the whole of what the event union can hold, so the
+        // payload itself has no home and the block is not claimed to carry it.
+        ...(typeof block['encrypted'] === 'string' ? { encrypted: true } : {}),
+      };
+
+    case 'tool_use':
+      return {
+        type: 'tool_use',
+        // `ToolUseContent.id` and the event `ToolUse.id` are the same concept,
+        // so the correlation id survives the translation unchanged.
+        id: str(block['id']),
+        name: str(block['name']),
+        input: obj(block['input']),
+      };
+
+    case 'tool_result': {
+      // The transcript block's `content` is `string | MessageContent[]` and the
+      // event block's is `string`. The array form exists so a tool result can
+      // carry image blocks to a vision model, and
+      // `transcript/classification.ts:151-159` records that narrowing it is
+      // "the specific field loss this inventory exists to prevent" — so an
+      // array is not narrowed, the whole block is preserved instead.
+      if (typeof block['content'] !== 'string') return null;
+      return {
+        type: 'tool_result',
+        // One concept, one name: `tool_use_id` here, `toolCallId` in the event.
+        toolCallId: str(block['tool_use_id']),
+        content: block['content'],
+        // The same `is_error` -> `ToolCallOutcome` judgement the
+        // `tool.call_completed` arm already makes, and by the same function so
+        // there is one place that decides the outcome vocabulary. The status
+        // bit is RENAMED onto the field that classifier reads: the legacy
+        // `chat:tool_result` frame spells it `error` and this vocabulary spells
+        // it `is_error`, and a caller that passed the block through unchanged
+        // would get `indeterminate` for a tool that plainly succeeded.
+        outcome: classifyToolOutcome({
+          error: block['is_error'],
+          result: block['content'],
+        }),
+        ...optionalNumber('durationMs', block['duration_ms']),
+      };
+    }
+
+    default:
+      return null;
+  }
+}
+
+/**
+ * `chat:message_finalized` -> `assistant.message_finalized`.
+ *
+ * ## The message id is the runtime's, not the producer's
+ *
+ * `ctx.messageId` is the same run-scoped id every `assistant.text_block` and
+ * `assistant.thinking_block` in this run already carries. It has to be: the
+ * consumer keys its block map and its finalized map by `payload.messageId` and
+ * treats the finalized entry as superseding the blocks "for that message"
+ * (`replay/transcript-snapshot.ts:28-31,195-200`). A frame that carried the
+ * worker's own uuid would put one message in the transcript under two
+ * identities, and the supersession would silently never join.
+ *
+ * ## A stop reason the event union cannot state is a refusal
+ *
+ * `stopReason` is REQUIRED (`events/required.ts:94`). With no value the event
+ * union can state, the only ways forward are to omit a required field or to
+ * write a word that did not happen, so the frame is left unmapped. The run
+ * still reaches its terminal through the `chat:done` frame that follows it.
+ */
+function translateMessageFinalized(
+  data: Readonly<Record<string, unknown>>,
+  ctx: TranslateContext,
+): TranslateResult {
+  const stopReason = mapStopReason(data['stopReason']);
+  if (stopReason === null) return unmapped(data);
+  if (!Array.isArray(data['content'])) return unmapped(data);
+
+  const content: FinalizedBlock[] = [];
+  const untranslated: unknown[] = [];
+  for (const raw of data['content'] as readonly unknown[]) {
+    const block = translateContentBlock(raw);
+    if (block === null) untranslated.push(raw);
+    else content.push(block);
+  }
+
+  const producerMeta = obj(data['providerMeta']);
+  const providerMeta: Record<string, unknown> = { ...producerMeta };
+  if (untranslated.length > 0) providerMeta['untranslatedBlocks'] = untranslated;
+
+  return ok({
+    type: 'assistant.message_finalized',
+    messageId: ctx.messageId,
+    content,
+    stopReason,
+    ...(Object.keys(providerMeta).length > 0 ? { providerMeta } : {}),
   });
 }
 

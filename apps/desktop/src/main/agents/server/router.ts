@@ -451,6 +451,36 @@ export function parsePath(url: string): { pathname: string; parts: string[] } {
 }
 
 /**
+ * Frames the run layer consumes and the renderer has no consumer for.
+ *
+ * ## Why a frame can have two different fates
+ *
+ * `chat:message_finalized` is the run layer's input: the run layer is what
+ * turns it into the durable `assistant.message_finalized` event. The renderer
+ * has nothing to do with it — the message it carries is already in the
+ * transcript rows the renderer reads, and the frame repeats the whole
+ * assistant text on a stream that already streamed it.
+ *
+ * So this frame is OBSERVED and NOT WRITTEN, which is not the same thing as
+ * dropped. It is the same asymmetry the projector already has: the ledger is
+ * the record of the run and the SSE stream is a projection of it, and a
+ * projection is allowed to omit what it has no use for. `run.started` and
+ * `run.completed` behave the same way in the other direction — they are in the
+ * ledger and are not legacy frames.
+ *
+ * The alternative was to let the frame through and widen the E4.1 baseline
+ * capture. That would have made "the UI does not change" true only in the sense
+ * that the renderer happens to ignore an event type it has never heard of, and
+ * it would have paid for the duplicate text on every turn.
+ */
+const RUN_LAYER_ONLY_FRAMES: ReadonlySet<string> = new Set(['chat:message_finalized']);
+
+/** True when the frame is normalised but must not reach an SSE client. */
+export function isRunLayerOnlyFrame(normalized: Record<string, unknown> | null): boolean {
+  return normalized !== null && RUN_LAYER_ONLY_FRAMES.has(String(normalized['type']));
+}
+
+/**
  * Normalize a worker event (a JSON line parsed from the worker's stdout) into
  * the SSE-serializable `{ type, data }` contract consumed by every agent-server
  * client. Both the renderer's POST chat (`handlePostChatSSE`) and its GET
@@ -717,6 +747,9 @@ export function normalizeAndObserve(
       error: err instanceof Error ? err.message : String(err),
     }, LogComponent.Main);
   }
+  // Observed above, and deliberately NOT written. See `RUN_LAYER_ONLY_FRAMES`:
+  // this frame is the run layer's input, and a renderer has no consumer for it.
+  if (isRunLayerOnlyFrame(normalized)) return null;
   return normalized;
 }
 
@@ -2973,6 +3006,11 @@ function handleGetChat(
         const event = JSON.parse(line);
         const sse = normalizeWorkerEvent(event);
         if (!sse) continue;
+        // The reconnect view is a projection too, so it omits the frames the
+        // run layer alone consumes. See `RUN_LAYER_ONLY_FRAMES`. `seqNum` is
+        // left alone: it numbers what is WRITTEN, and skipping a frame must not
+        // renumber the ones the renderer does see.
+        if (isRunLayerOnlyFrame(sse)) continue;
 
         const eventType = sse.type || 'unknown';
         seqNum++;

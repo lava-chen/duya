@@ -82,7 +82,7 @@ import type { RunManifest } from '@duya/agent-protocol';
 import { getBashTaskRegistry } from '../session/bash-task-registry.js';
 import { hookTaskRegistry } from '../hooks/task-registry.js';
 import { backgroundAgentLifecycle } from '../lifecycle/BackgroundAgentLifecycle.js';
-import { sendEvent, parseStdin, type WorkerCommand, buildWorkflowRunEvent, type WorkflowRunCommand } from './worker-protocol.js';
+import { sendEvent, parseStdin, type WorkerCommand, buildWorkflowRunEvent, buildMessageFinalizedEvent, type WorkflowRunCommand } from './worker-protocol.js';
 import { convertSSEToAgentMessage } from './sse-frame-codec.js';
 import { launchSavedWorkflow } from './workflow-runner.js';
 import { runWorkflowRuntimeChild } from './workflow-runtime-child.js';
@@ -3235,10 +3235,18 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       warn('[Agent-Process] Failed to persist hook messages:', hookErr instanceof Error ? hookErr : new Error(String(hookErr)));
     }
 
+    // The turn's authoritative assistant message, captured here at the one
+    // point this function already looks for it. Held (not scoped to the
+    // `tokenUsage` branch below) because the done boundary further down reads
+    // it again to build `chat:message_finalized` — a second lookup would be
+    // the same query written twice, and the two could disagree if the message
+    // list grew between them.
+    let lastAssistant: (typeof agentMessages)[number] | undefined;
+
     log(`[Agent-Process] Stream ended, tokenUsage present=${!!tokenUsage}, agentMessages=${agentMessages.length}, existingMessageCount=${existingMessageCount}`);
     if (agentMessages.length > 0) {
       if (tokenUsage) {
-        const lastAssistant = [...agentMessages].reverse().find(m => m.role === 'assistant');
+        lastAssistant = [...agentMessages].reverse().find(m => m.role === 'assistant');
         if (lastAssistant) {
           // Plan 445: the cumulative tokenUsage + last_call are already
           // attached to `pushed.tokenUsage` BEFORE _pushDurable runs
@@ -3358,6 +3366,17 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       messageCount: agentMessages.length,
     });
     if (deferredDone) {
+      // AHEAD of `chat:done`, deliberately. `assistant.message_finalized` is the
+      // point where the message stopped changing, and the run terminal is a
+      // later fact; the ledger has to record them in that order for a consumer
+      // rebuilding a transcript to read the message before the run ends. The
+      // frame is emitted only when there IS an assistant message — a turn that
+      // produced none is a real state, and its honest wire is the absence of
+      // this frame rather than one with an empty `content`.
+      const finalized = buildMessageFinalizedEvent(msg.sessionId, lastAssistant, turnEndReason);
+      if (finalized !== null) {
+        sendToMain(finalized as unknown as Record<string, unknown>);
+      }
       sendToMain({
         type: 'chat:done',
         sessionId: msg.sessionId,
