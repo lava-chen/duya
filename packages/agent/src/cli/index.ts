@@ -19,11 +19,13 @@ import { readFileSync, existsSync } from 'fs';
 import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { Command } from '@commander-js/extra-typings';
+import { readTextContent, type LegacySseFrame } from '@duya/agent-runtime';
 import { duyaAgent } from '../agent/DuyaAgent.js';
+import { createHeadlessRunHost, type HeadlessRunHost } from '../process/headless-run-host.js';
 import { COMPACTION_CHECKPOINT_ID_SUFFIX } from '../message/index.js';
 import { createBuiltinRegistry } from '../tool/builtin.js';
 import { sessionSearchTool, type SummaryLLMConfig } from '../tool/SessionSearchTool/index.js';
-import type { AgentOptions, Message, SSEEvent } from '../types.js';
+import type { AgentOptions, Message } from '../types.js';
 import type { ToolRegistry } from '../tool/registry.js';
 import { loadSkills, getSkillRegistry } from '../skills/index.js';
 import { Colors, color } from './colors.js';
@@ -219,11 +221,28 @@ function getToolDisplayMode(): 'verbose' | 'compact' {
 }
 
 /**
- * Handle SSE events from the agent and print formatted output
+ * Handle the run's legacy frames and print formatted output.
+ *
+ * ## What changed in H8.1, and why it is not cosmetic
+ *
+ * This used to take `agent.streamChat(prompt)` — the agent's own SSE union,
+ * straight from the executor, with no run around it. That is the shape R2.1's
+ * census recorded as a DIVERGENCE: the CLI was a second run loop, deciding for
+ * itself when a turn was over and what its terminal was.
+ *
+ * It now takes the run's LEGACY FRAMES, produced by the runtime's own projector
+ * from the run's own events. So the strings printed below are the same strings
+ * the Desktop renderer prints, derived from the same run, numbered by the same
+ * ledger. The CLI's job is unchanged — it renders — but the thing it renders is
+ * now the run layer's output rather than a private stream it happened to own.
+ *
+ * `readTextContent` rather than a bare `data` read, because `text` arrives as
+ * `{ content }` on this path where it arrived as a bare string on the old one.
+ * The runtime ships that reader for exactly this two-shape situation.
  */
 async function handleStreamEvents(
   agent: duyaAgent,
-  eventGen: AsyncGenerator<SSEEvent, void, unknown>,
+  frames: AsyncGenerator<LegacySseFrame, void, unknown>,
   sessionLogger: SessionLogger,
   sessionId?: string,
   userMessageId?: string
@@ -236,101 +255,135 @@ async function handleStreamEvents(
   const displayMode = getToolDisplayMode();
   const isCompact = displayMode === 'compact';
 
-  for await (const event of eventGen) {
-    switch (event.type) {
+  for await (const frame of frames) {
+    // A LOCAL view over the frame, not a cast to `SSEEvent`.
+    //
+    // The switch narrows on `frame.type` (a plain `string`), so casting the
+    // frame to the agent's declared union would not narrow at all — the union's
+    // discriminant would be the cast's, not the switch's. Reading through one
+    // shape keeps every field access total and keeps the switch the single
+    // place that decides what a frame means.
+    const payload = (typeof frame.data === 'object' && frame.data !== null
+      ? frame.data
+      : {}) as Readonly<Record<string, unknown>>;
+    const str = (value: unknown): string => (typeof value === 'string' ? value : '');
+    switch (frame.type) {
       case 'text':
-        currentText += event.data;
+        currentText += readTextContent(frame);
         break;
 
       case 'thinking':
         // Signature-only events carry empty data — don't clobber the buffer.
-        if (event.data) {
-          thinkingBuffer = event.data;
+        if (readTextContent(frame)) {
+          thinkingBuffer = readTextContent(frame);
         }
         break;
 
-      case 'tool_use':
+      case 'tool_use': {
         if (currentText) {
           console.log(currentText);
           currentText = '';
         }
         stepToolCount++;
+        const name = str(payload['name']);
+        // Narrowed to a record, not asserted: a frame whose `input` is a bare
+        // string is a frame the tool never sent, and an empty record is the
+        // honest reading of it (the preview then finds no key and returns '').
+        const input =
+          typeof payload['input'] === 'object' && payload['input'] !== null && !Array.isArray(payload['input'])
+            ? (payload['input'] as Record<string, unknown>)
+            : {};
 
         if (isCompact) {
           // Compact mode: show tool name with preview only
-          const preview = buildToolPreview(event.data.name, event.data.input);
+          const preview = buildToolPreview(name, input);
           if (preview) {
-            console.log(`${Colors.DIM}  → ${event.data.name}: ${preview}${Colors.RESET}`);
+            console.log(`${Colors.DIM}  → ${name}: ${preview}${Colors.RESET}`);
           } else {
-            console.log(`${Colors.DIM}  → ${event.data.name}${Colors.RESET}`);
+            console.log(`${Colors.DIM}  → ${name}${Colors.RESET}`);
           }
         } else {
           // Verbose mode: show full tool call details
-          console.log(`\n${Colors.BRIGHT_YELLOW}${Colors.TOOL} Tool Call:${Colors.RESET} ${Colors.BOLD}${Colors.CYAN}${event.data.name}${Colors.RESET}`);
+          console.log(`\n${Colors.BRIGHT_YELLOW}${Colors.TOOL} Tool Call:${Colors.RESET} ${Colors.BOLD}${Colors.CYAN}${name}${Colors.RESET}`);
           console.log(`${Colors.DIM}   Arguments:${Colors.RESET}`);
           try {
-            const argsJson = JSON.stringify(event.data.input, null, 2);
+            const argsJson = JSON.stringify(input, null, 2);
             const lines = argsJson.split('\n');
             for (const line of lines) {
               console.log(`   ${Colors.DIM}${line}${Colors.RESET}`);
             }
           } catch {
-            console.log(`   ${Colors.DIM}${JSON.stringify(event.data.input)}${Colors.RESET}`);
+            console.log(`   ${Colors.DIM}${JSON.stringify(input)}${Colors.RESET}`);
           }
         }
         // Log tool use
-        sessionLogger.logTool(event.data.name, event.data.input);
+        sessionLogger.logTool(name, input);
         break;
+      }
 
-      case 'tool_result':
+      case 'tool_result': {
         if (currentText) {
           console.log(currentText);
           currentText = '';
         }
-        if (event.data.error) {
+        const result = str(payload['result']);
+        if (payload['error']) {
           if (isCompact) {
             console.log(`${Colors.DIM}    ${Colors.RED}✗ Error${Colors.RESET}`);
           } else {
-            console.log(`${Colors.BRIGHT_RED}${Colors.ERROR} Error:${Colors.RESET} ${Colors.RED}${event.data.result}${Colors.RESET}`);
+            console.log(`${Colors.BRIGHT_RED}${Colors.ERROR} Error:${Colors.RESET} ${Colors.RED}${result}${Colors.RESET}`);
           }
         } else {
           if (isCompact) {
             // Compact mode: show success indicator with truncated result
-            const result = event.data.result.length > 60
-              ? event.data.result.slice(0, 57) + '...'
-              : event.data.result;
-            console.log(`${Colors.DIM}    ${Colors.GREEN}✓${Colors.RESET} ${Colors.DIM}${result}${Colors.RESET}`);
+            const shown = result.length > 60 ? result.slice(0, 57) + '...' : result;
+            console.log(`${Colors.DIM}    ${Colors.GREEN}✓${Colors.RESET} ${Colors.DIM}${shown}${Colors.RESET}`);
           } else {
             // Verbose mode: show full result
-            const result = event.data.result.length > 300
-              ? event.data.result.slice(0, 300) + `${Colors.DIM}...${Colors.RESET}`
-              : event.data.result;
-            console.log(`${Colors.BRIGHT_GREEN}${Colors.SUCCESS} Result:${Colors.RESET} ${result}`);
+            const shown = result.length > 300 ? result.slice(0, 300) + `${Colors.DIM}...${Colors.RESET}` : result;
+            console.log(`${Colors.BRIGHT_GREEN}${Colors.SUCCESS} Result:${Colors.RESET} ${shown}`);
           }
         }
         break;
+      }
 
       case 'tool_progress':
         break;
 
       case 'tool_timeout':
         if (isCompact) {
-          console.log(`${Colors.DIM}    ${Colors.YELLOW}⏱ timeout (${event.data.elapsedSeconds}s)${Colors.RESET}`);
+          console.log(`${Colors.DIM}    ${Colors.YELLOW}⏱ timeout (${str(payload['elapsedSeconds'])}s)${Colors.RESET}`);
         } else {
-          console.log(`${Colors.BRIGHT_YELLOW}${Colors.TIMEOUT} Tool timed out: ${event.data.toolName} (${event.data.elapsedSeconds}s)${Colors.RESET}`);
+          console.log(`${Colors.BRIGHT_YELLOW}${Colors.TIMEOUT} Tool timed out: ${str(payload['toolName'])} (${str(payload['elapsedSeconds'])}s)${Colors.RESET}`);
         }
         break;
 
-      case 'error':
-        console.error(`${Colors.BRIGHT_RED}${Colors.ERROR} Error:${Colors.RESET} ${event.data}`);
-        sessionLogger.logError(event.data);
+      case 'error': {
+        // `run.failed` projects to `{ message, code }`, where the agent's own
+        // `error` event carried a bare string. Read the field rather than
+        // interpolating the object, so the CLI prints the sentence and not
+        // `[object Object]`.
+        const message =
+          typeof frame.data === 'object' && frame.data !== null
+            ? String((frame.data as { message?: unknown }).message ?? '')
+            : String(frame.data ?? '');
+        console.error(`${Colors.BRIGHT_RED}${Colors.ERROR} Error:${Colors.RESET} ${message}`);
+        sessionLogger.logError(message);
         break;
+      }
 
-      case 'result':
-        if (event.data.total_tokens) {
-          console.log(`${Colors.DIM}Token usage: ${event.data.total_tokens}${Colors.RESET}`);
+      // The agent's raw usage event was `result`; the runtime projects
+      // `assistant.usage` to `token_usage`, which is the name the wire uses
+      // everywhere else. Accepting only the new name is deliberate: a silent
+      // fallback to `result` would be a second vocabulary, which is the thing
+      // H8.1 exists to remove.
+      case 'token_usage': {
+        const total = (frame.data as { total_tokens?: number } | undefined)?.total_tokens;
+        if (total) {
+          console.log(`${Colors.DIM}Token usage: ${total}${Colors.RESET}`);
         }
         break;
+      }
 
       case 'done':
         if (currentText) {
@@ -419,6 +472,12 @@ async function runInteractive(
   });
   console.log(`${Colors.DIM}Session created: ${sessionId.slice(0, 8)}...${Colors.RESET}`);
 
+  // The run host, built once for the REPL's lifetime (plan 587 H8.1). The
+  // controller is stateless between runs, so this is a composition rather than
+  // a per-turn object, and building it per turn would be a second place for the
+  // run wiring to live.
+  const host: HeadlessRunHost = createHeadlessRunHost({ agent });
+
   // Track messages for persistence
   let pendingUserMessage: { id: string; content: string } | null = null;
   let pendingAssistantMessage: { id: string; content: string } | null = null;
@@ -506,8 +565,19 @@ async function runInteractive(
       repl.printBlank();
 
       try {
-        const eventGen = agent.streamChat(trimmed, { toolRegistry: registry });
-        await handleStreamEvents(agent, eventGen, sessionLogger, sessionId, pendingUserMessage.id);
+        // Through the run layer (plan 587 H8.1). This used to be
+        // `agent.streamChat(trimmed, ...)`, which made the CLI a second run
+        // loop: it decided for itself when a turn ended and what the terminal
+        // was. The host owns the run; the CLI renders its frames.
+        const run = await host.start({
+          prompt: trimmed,
+          sessionId: sessionId ?? 'cli-interactive',
+          cwd: workspace,
+          model: model || '',
+          providerId: 'cli',
+          toolRegistry: registry,
+        });
+        await handleStreamEvents(agent, run.frames(), sessionLogger, sessionId, pendingUserMessage.id);
       } catch (error) {
         repl.printColored(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`, 'RED');
         sessionLogger.logError(error instanceof Error ? error : String(error));
@@ -538,7 +608,8 @@ async function runTask(
   agent: duyaAgent,
   registry: ToolRegistry,
   task: string,
-  sessionLogger: SessionLogger
+  sessionLogger: SessionLogger,
+  runHost: HeadlessRunHost = createHeadlessRunHost({ agent })
 ): Promise<void> {
   console.log(`${Colors.BRIGHT_CYAN}Executing task...${Colors.RESET}\n`);
 
@@ -546,8 +617,15 @@ async function runTask(
   sessionLogger.logUser(task);
 
   try {
-    const eventGen = agent.streamChat(task, { toolRegistry: registry });
-    await handleStreamEvents(agent, eventGen, sessionLogger, '', '');
+    const run = await runHost.start({
+      prompt: task,
+      sessionId: 'cli-task',
+      cwd: process.cwd(),
+      model: '',
+      providerId: 'cli',
+      toolRegistry: registry,
+    });
+    await handleStreamEvents(agent, run.frames(), sessionLogger, '', '');
   } catch (error) {
     console.error(`${Colors.BRIGHT_RED}Error: ${error instanceof Error ? error.message : 'Unknown error'}${Colors.RESET}`);
     sessionLogger.logError(error instanceof Error ? error : String(error));
@@ -743,12 +821,24 @@ async function runPrintQuery(
   agent: duyaAgent,
   prompt: string,
   format: string | undefined,
+  runHost: HeadlessRunHost = createHeadlessRunHost({ agent })
 ): Promise<void> {
   let tokenUsage: { total_tokens?: number } = {};
   try {
-    for await (const event of agent.streamChat(prompt)) {
-      if (event.type === 'result' && event.data.total_tokens) {
-        tokenUsage = event.data;
+    // Through the run layer (plan 587 H8.1). The usage number is now read off
+    // the run's own `token_usage` frame rather than off the executor's private
+    // `result` event, so `--format json` reports what the run recorded.
+    const run = await runHost.start({
+      prompt,
+      sessionId: 'cli-print',
+      cwd: process.cwd(),
+      model: '',
+      providerId: 'cli',
+    });
+    for await (const frame of run.frames()) {
+      if (frame.type === 'token_usage') {
+        const data = frame.data as { total_tokens?: number } | undefined;
+        if (data?.total_tokens) tokenUsage = data;
       }
     }
   } catch (error) {

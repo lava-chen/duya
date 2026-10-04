@@ -1069,7 +1069,57 @@ selfTest:
   #
   # `.architecture-baseline.json` was not touched and `architecture:baseline`
   # (`--write`) was not run.
-  module-dependency-permitted: 227
+  #
+  # 227 -> 233 (plan 587 H8.1, replayed onto this base): SIX new, 0 removed.
+  # This is a REPLAY of PR #178 (commit 1e5e821b), which was opened against
+  # 902cff84 and never merged. The +6 is the size that slice measured then,
+  # RE-DERIVED on the current base rather than carried over.
+  #
+  # ATTRIBUTED BY MEASUREMENT. Two `audit-imports.mjs --json` runs, whole edge
+  # SETS diffed pair by pair, the first taken with this worktree DETACHED at
+  # origin/master @ 08065a7c so the four new files could not contaminate it.
+  # Deliberately NOT `git stash`: `refs/stash` is per-repository, so a
+  # clean-tree stash push is a silent no-op whose later pop would steal another
+  # session's stash.
+  #
+  #   crossBoundaryEdges              687 ->  693   +6, 0 removed
+  #   deepImportEdges                  25 ->   25
+  #   packageBoundaryEscapeEdges      146 ->  146
+  #   unresolved                        9 ->    9
+  #
+  # The six, one per import statement, all the two sanctioned downward pairs
+  # pkg:agent -> pkg:agent-runtime and pkg:agent -> pkg:agent-protocol:
+  #
+  #   cli/index.ts                     -> @duya/agent-runtime  1
+  #   process/headless-run-host.ts     -> @duya/agent-runtime  1
+  #   process/headless-run-host.ts     -> @duya/agent-protocol 2
+  #                                                 (one `import type`, one value
+  #                                                  import for `manifestFingerprint`)
+  #   process/__tests__/headless-run-host.test.ts
+  #                                      -> @duya/agent-runtime  1
+  #   process/__tests__/headless-run-host.test.ts
+  #                                      -> @duya/agent-protocol  1
+  #
+  # `legacy-agent.requires` already carries `[agent-protocol, agent-runtime]`
+  # (M5.5 added the runtime for `ProcessScope`), so these land in
+  # `module-dependency-permitted` and `module-dependency` is UNCHANGED at 460 --
+  # the load-bearing half: no edge became a NON-permitted dependency, so no
+  # managed module's zero tolerance is affected. `module-dependency-permitted` is
+  # in `MEASUREMENT_RULES` (architecture-check.mjs:482): counted and reported,
+  # never blocking.
+  #
+  # DIFFERENCE FROM WHAT PR #178 RECORDED, stated rather than reconciled by
+  # inspection. That slice measured its +6 as FIVE cross-boundary edges plus one
+  # intra-package edge (`sse-frame-codec.ts` -> `worker-protocol.js`). On this
+  # base the whole +6 is cross-boundary, because the edge set carries
+  # `headless-run-host.ts` -> `@duya/agent-protocol` TWICE (a type-only import and
+  # a value import) where it carried it once. The SUM and the DIRECTION are
+  # unchanged; only the split between the two sets differs. `cycle` is UNCHANGED
+  # at 16, measured.
+  #
+  # `.architecture-baseline.json` was not touched and `architecture:baseline`
+  # (`--write`) was not run.
+  module-dependency-permitted: 233
   # 16 -> 0: every `forbidden-dependency` in the tree was one of the 16
   # `pkg:agent` -> `apps/desktop` statements removed above.
   forbidden-dependency: 0
