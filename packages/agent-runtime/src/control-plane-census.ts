@@ -348,15 +348,20 @@ export const CONTROL_PLANE_CENSUS: readonly CensusRow[] = [
   {
     message: 'assistant.message_finalized',
     plane: 'event',
-    // The producer field is the whole finding, so it is stated as a fact about
-    // the wire rather than as an apology. See the note.
-    producer: 'NOT YET WIRED (no path emits it: the worker wire carries no finalized-message frame)',
+    // Two producers, because there are two frame producers in this codebase and
+    // the translation being shared does not make the production shared. The
+    // Desktop path's frame is written by the worker subprocess; the headless
+    // path's (and therefore the CLI's) by the in-process host. Naming only the
+    // translator would have been the more flattering half of the truth.
+    producer:
+      'packages/agent/src/process/agent-process-entry.ts:handleChatCommand (worker subprocess) and ' +
+      'packages/agent/src/process/headless-run-host.ts:createAgentExecutionChannel (headless + CLI)',
     handler: 'packages/agent-protocol/src/run-ledger.ts:RunLedger.emit',
     consumer: 'packages/agent-runtime/src/replay/transcript-snapshot.ts:buildTranscriptSnapshot',
     schema: 'packages/agent-protocol/src/events/required.ts:REQUIRED_FIELDS',
     since: '1.0 (schema rev 1)',
     authority: 'protocol',
-    note: 'DECLARED, DURABLE, CONTRACTED, AND UNPRODUCED. `content` and `stopReason` are REQUIRED, and the only terminal frame the worker sends is `chat:done` = {sessionId} (worker-protocol.ts:326-329), which carries neither; translateFrame is a pure per-frame function, so producing this event today would mean inventing both facts it exists to record. This is NOT a stale declaration: the registry ships a written rationale for the event (legacy/sse-event.ts:185-186, the legacy surface never marked where the message stopped changing), the spec derives it from AssistantMessage (07-agent-protocol-spec.md:244), contract F requires reconnect recovery from a message snapshot rather than from discarded deltas, and the consumer already treats it as authoritative (transcript-snapshot.ts:28-31). Measured against a real completed Electron turn: 0 rows, while assistant.text_block rows are written. E4.4 asserts this event and is RIGHT to; the product is short. The fix is a wire extension (the agent must carry the finalized message), not a translator arm.',
+    note: 'Durable. Produced on the wire as `chat:message_finalized` (worker-protocol.ts:AgentMessageFinalizedEvent) and translated at the ONE seam every host crosses (`translateFrame`), so Desktop, headless and CLI all emit it. The frame exists because `chat:done` carries neither required field: before it, no host could produce this event without inventing the two facts it exists to record. It is emitted AHEAD of `chat:done` — the message stops changing before the run ends — and `messageId` is the runtime\'s run-scoped `ctx.messageId`, NOT the producer\'s own id, so the finalized message joins the per-block events it supersedes in transcript-snapshot.ts. KNOWN NARROWING, stated rather than hidden: the payload\'s `MessageContent` has four members and the transcript vocabulary has six, so `image` and `provider_block` blocks are preserved verbatim under `providerMeta.untranslatedBlocks` instead of being dropped; and a stop reason the event union cannot state (`max_turns`, `tool_use`, `repeated_tool_calls`) is REFUSED rather than coerced, so those turns carry no finalized event.',
   },
   {
     message: 'extension.custom',
