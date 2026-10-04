@@ -660,5 +660,146 @@ Next task: 读 `run 37194425248`（`1ffabfc9`，`#192`）的 ubuntu 与 macos te
 7. **`push` 事件可靠地产生CI run；`pull_request` 事件不产生。** 本计划的CI数字只能从master push的run里取。
 8. **worktree纪律**：**绝不在worktree里`git stash`**（本仓库有两个来自其他会话的既有stash）；**绝不在worktree里建指向共享检出的junction/symlink**；删除worktree只经 `scripts/remove-worktree.sh <name> [--delete-branch]` 且必须用 `C:\Program Files\Git\bin\bash.exe`（**不是** `C:\WINDOWS\system32\bash.exe`）。本轮未删除任何工作树，共享检出自始至终未被触碰。
 9. **`fixme` 不是 `skip`。** #181对"修复bridge就会变绿"的合同用`test.fixme`而非`test.skip`表达：skip读成"无信息"，而`fixme`是一个有名字的可复现失败。#188删掉`fixme`并运行它，得到**红的合同**——那两条断言是在行为**不可观测**的时期写的猜测。
+10. **两个PR碰同一个被引用的文件时，后者的行号会让前者的门禁失效，且发生在同一个合并窗口内。** #202按`d20e31ae`把协议包注释里的5条行号锚点重指好、门禁6/6；#203随后给`router.ts`加38行；两者都进master后，那些锚点整体后移+33，`13-citation-drift`重新变红。**"这次会需要再做一遍"不是一个待办，是可以精确复现的既成事实。** 本仓库已有的耐久写法是**符号锚点**：`typecheck-electron-baseline.txt`按`(path, TS code)`索引、#199的H8普查用`path`+`receiver`+`symbol`三件套，两者都不记行号。**门禁自己_assert_行号，就必然会被下一处行漂移打回。**
 
 不要用"已定位/已改文件/已merge"替代runtimeverified。修改主Next时同步阶段入口，阻塞描述给下一agent一条具体可实施动作。
+
+## 计划状态对齐：#196–#203 八个PR的记录（纯文档切片）
+
+```text
+Task: 计划状态对齐 / 把 H8 与 E4.4 的记录改回真实状态（本文件此前对这8个PR零记录）
+State: 无代码改动。纯文档切片，只改本目录4个文件
+Head / branch / PR: 2a375c1c / docs/587-h8-plan-truth / 见PR
+Changed files and public entry: `README.md`、`09-headless-and-retirement.md`、
+  `05-behavior-and-evals.md`、`01-baseline-and-gates.md`、`11-execution-log.md`（本条）。
+  **无代码、无测试、无配置、无 workflow、无 package.json。**
+Old caller → new caller / ownership: 不适用（文档）
+Baseline failure set and new failure diff: 不适用（本切片不改任何可执行文件）
+Checks（本切片亲自跑，不是引用交付PR的自报）:
+  - `architecture:self-test` exit 0 → 460 / **233** / 0 / 146 / 25 / 16 / 0
+  - `architecture:check`    exit 0 → total **880** = tolerated **880**、baseline **811**、
+    **131** 条基线指纹不再触发
+  - H8三门禁 `npx vitest run` → **22/22 绿**
+    （`h8-2-consumer-inventory` 7 + `headless-retirement` 7 + `run-entry-single-dispatch` 8）
+  - `cli-approval-safety` **10/10 绿**、`control-plane-census` **73/73** 绿
+  - **`13-citation-drift` 1 failed / 5 passed（6）——红。见下"亲跑发现"。**
+  - 未跑：`npm ci`（工作树无 node_modules，但嵌套在主检出内，Node 解析逐级向上走到主检出
+    的 node_modules；**未建任何 junction/symlink**）、`typecheck:all`、`npm test` 全量、
+    `electron:build`、`electron:pack`、`architecture:baseline --write`（**禁用，从未运行**）
+Capabilities actually verified / still unsupported:
+  - 已验证（合并状态，逐条 `gh pr view`）：**#178 = CLOSED 未合并**
+    （`mergedAt=null`、`closedAt=2026-10-04T12:29:11Z`），被 #198（`12:27:49Z` 合并）取代；
+    原提交 `1e5e821b` **至今仍非 master 祖先**（`merge-base --is-ancestor` exit 1）。
+  - 已验证：#196 `d244509e`、#197 `08065a7c`、#198 `7b6c7f38`、#199 `2f797c3e`、
+    #200 `c59b3cfd`、#201 `d20e31ae`、#202 `2a375c1c`、#203 `b81b3c64` 均在 `origin/master`。
+  - 已验证：`headless-run-host.ts` **在 master 上存在**（#178 的那条"不存在"已作废）。
+  - 已验证：H8.2 普查实测为 **3 个 turn entry（2 经CP / 1 非CP）**，
+    退役登记 `remainingConsumers: 2`、`removable: false`、`blockedOn` 仍写 host smoke 无证据。
+  - 已验证：census 的 `assistant.message_finalized` 行**不再是 `NOT YET WIRED`**，
+    改为点名**两个**帧生产者。
+  - 已验证：`duya setup` 的 `permission_profile` 漂移属实——`packages/agent/src/cli/**`
+    全目录只有 `:439` 读、`:450` 写，**运行期无任何读取点**。
+  - 仍不支持/未验证：**E4.4 第1条的 E2E spec 至今一次都没有被真正执行**。
+    `npm run test:e2e:turn` 需真实 `electron:build`，本机磁盘不允许，#201/#203 均明写。
+    **断言改了（#201）、产品缺口补了（#203），但断言未经运行——本条仍未验收。**
+    另注：仓库 16 个 tsconfig **无一**引用 `e2e/`，`typecheck:all` 对该文件不构成任何证据。
+  - 仍不支持/未验证：E4.4 第2条 `unsupported`（无 live provider key）；第3条打包应用
+    **从未被运行**，`check:packaged-artifacts --packaged` 每次仍打印 `UNVERIFIED`。
+  - 仍不支持/未验证：**H8.2 的 subagent 与 workflow 两项仍未合并。**（本条写于
+    `2a375c1c`；其后 **#205 合并，automation 一项已闭合**——见下方"#205 复核"条。）
+    在 `2a375c1c` 上本切片复核：`agent-run.ts` 仍在 SSE `done` 上收尾、`RunResult` 只存在于
+    CP 一侧；subagent 是父 worker 内嵌套 loop。**subagent 仍不得记为已迁。**
+  - 仍不支持/未验证：H8.3 / H8.4 **未开始**。退役条件2（packaged host smoke）、
+    条件3（兼容窗口有证据）均未满足。
+  - 仍不支持/未验证：#200 的 macOS 修复**未经运行验证**——它是"该job会转绿"的论证，
+    且其自身的 `pull_request` run 不能作为证据，要等下一次 push 到 master。
+亲跑发现（本切片新发现，非任何PR的自报）:
+  **`13-citation-drift` 在 `2a375c1c` 上是红的，7 条 tier-3 锚点失败。**
+  #202 把它修成 6/6，但那是它自己的基线 `d20e31ae`；#203（提交 `6db75eb6`）在同一合并
+  窗口给 `router.ts` 加了 **38 行**（`git diff --stat d20e31ae 2a375c1c` 实测），
+  把 #202 重指的每个 `router.ts:NNNN` 整体后移。实测后移量**均匀 +33**：
+  `let seqNum = 0` 引作 1557 / 实在 **1590**；`handleDeleteChat` 引作 2030 / 实在 **2063**；
+  `session.lastEventId` 引作 2936 / 实在 **2969**。
+  **本切片是纯文档，不修它**（修它要改 `packages/agent-protocol/src/**` 的注释）。
+  这同时把跨切片流程规则第 10 条从"经验"升级为"已复现事实"。
+结构性缺口（本切片只记录，未修）:
+  该门禁的 scope **只有 `packages/agent-protocol/src/**/*.ts`**（`13-citation-drift.test.ts:52`
+  的 `SRC = join(PKG_ROOT,'src')`，`packageSources()` 只收 `.ts`）——**它从不读任何计划
+  markdown**。本计划目录实测 **915 条** `file:line` 引用、分布 29 个文件，**没有任何门禁在看**；
+  其中 `reference/07-agent-protocol-spec.md` 单文件 95 条里，**22 条指向的文件已不存在**
+  （多为 monorepo 迁前路径）。**判断：值得独立切片，但优先级低于上面那次回归修复**——
+  详见 `01-baseline-and-gates.md` G0.2 的两条新项与其下一动作。
+Shim consumers + removal criterion: 不适用（本切片未动 shim；退役状态原样记录为 2 / `removable: false`）
+Rollback/data compatibility: 不适用（纯 markdown，无数据面）
+Remaining blocker:
+  1. H8.2 consumer 迁移在**另一个切片**进行中，尚未合并 → 不要在本计划里提前记为已迁。
+  2. `13-citation-drift` 红 → 归协议包注释的 owner，按符号重指（不是行号）。
+  3. 计划 reference 文档引用无门禁 → 独立切片。
+  4. 共享检出的未提交编辑属**另一个工作流**（`ARCHITECTURE.md`、root `README*.md`、
+     本计划 `README.md`、新的 `13-progress-review-2026-10-04.md`）。本切片全部证据取自
+     **`origin/master`**，共享检出自始至终未读作事实源、未被触碰。
+Next task: 在有空间的机器上跑一次 `npm run test:e2e:turn`，把实际 pass/fail 计数写回
+  `05-behavior-and-evals.md` E4.4 第1条。理由：那是 E4.4 四条里唯一一条"证据齐了但从未
+  执行"的线，其余三条分别卡在无 key、packaged 未运行、H8.2 未迁。该动作是执行现有 spec，
+  不需要新设计。
+```
+
+## #205 复核：automation 一项已闭合，本计划随之改基线
+
+```text
+Task: 复核 #205（`46967fa2`）落地后本计划哪些记录被推翻，并解决与它的冲突
+State: 无代码改动。纯文档切片。**#205 合并于本切片工作期间**（14:56:59Z），
+  故 `origin/master` 由 `2a375c1c` 前移到 `46967fa2`
+Head / branch / PR: 46967fa2 / docs/587-h8-plan-truth / #204（同一分支 force-push，未开第二个PR）
+#205 推翻了什么（本切片逐条复核，不是转述）:
+  - **automation/wake：已闭合。** 新增 `GET /sessions/:id/run-result`（`router.ts` 的
+    `handleGetRunResult`）暴露既有 `RunOrchestrator.resultFor`；`runPromptInSession` 按
+    `RunResult` 判定终态。本切片在 `46967fa2` 上复核 `agent-run.ts`：确有 `readRunResult`
+    与 `RunResult` 收窄（`AutomationRunResult`），**不再是 SSE `done` 收尾**。
+    → 本计划原写的"缺口未变，仍未读 `RunResult`""consumer 一个都还没迁"**作废，已改**。
+  - **subagent：仍未迁，但阻塞点比本计划原先记的更靠下。** 原写"`parentRunId` 需要铺"。
+    实测反了：`parentRunId` **已端到端就位**，缺的是 **worker→CP 的开 run 通道**——
+    run 生命周期在 main 进程，worker 的 `db-client` 约 230 个 action 里**一个 `run:*` 都没有**。
+    且 child run 会跑在**另一个** worker，故进度投影（worker 本地 `chat:agent_progress` 帧）、
+    后台续跑（`run_in_background` = worker 内 `BackgroundAgentLifecycle`）、
+    `subagent:kill`（停的是子生命周期控制器，不是 run）**三样都得改挂 run id**。
+    → **本计划的下一动作已按此重写**，并加了一句"不要只开通道不迁合同"：半套 child run
+    会把自己吊死，比它替换掉的嵌套 loop 更糟。
+  - **非CP turn entry 仍是 1，且这是正确结果。** #205 改的是「读」不是「入口」——
+    automation 从来不调 `.streamChat(`。本切片实测 `h8-2-consumer-inventory` **7/7 绿**、
+    无行号被重钉。
+  - **`duya setup` 的 `permission_profile`：仍无运行期读取点。** 本切片复核
+    `packages/agent/src/cli/**` 全目录仍**只有 2 处**（读 + 写），与 #205 的复核一致。
+  - 退役登记本切片复核仍为 `remainingConsumers: 2`、`removable: false`。
+冲突怎么解决的（刻意，不是整边取用）:
+  只有 `09-headless-and-retirement.md` 冲突（两个切片都插在同一个 checkbox 后面）。
+  - **保留 #205 的「H8.2 进度」整段原文**——它是 automation 闭合的权威记录，本切片
+    没有比它更准的说法，重写只会产生第二份计划事实。
+  - **保留本切片的开放项表，但删掉 automation 行**（已闭合，上面已勾），
+    并**重写 subagent 行为上面那条实测接缝**。workflow 行补上"它与 subagent 共用
+    `SUBAGENT_TOOL_NAME` 执行器，故跟着一起动、不能先动"。
+  - 其余 4 个文件（README / 05 / 01 / 本文件）自动合并，无冲突。
+本切片在 `46967fa2` 上亲跑的检查:
+  - `architecture:self-test` exit 0 → 460 / **233** / 0 / 146 / 25 / 16 / 0
+  - `architecture:check`    exit 0 → total **880** = tolerated **880**、baseline **811**、
+    **131** 条不再触发
+    —— **与 `2a375c1c` 那次逐项一致**。#205 曾把 `module-dependency-permitted` 顶到 234，
+    是**主动退回 233** 的（把协议类型 import 换成运行期收窄而非重录 ratchet），故数字没变。
+  - H8 三门禁 22/22、`cli-approval-safety` 10/10、`control-plane-census` 73/73、
+    #205 的 `run-result-read` 5/5 —— 合计 **105/105**
+  - **`13-citation-drift` 在新基线上仍红，且仍是同样 7 条**——#205 没碰那些锚点，
+    本切片那条回归记录**继续成立**，未被 #205 推翻
+  - **#205 的 `automation-run-result.test.ts` 在本工作树跑不起来**：
+    `packages/plugin-core/dist` 未构建 → `@duya/plugin-core/mcp/core/alias` 解析失败。
+    **这是未构建工作树的环境问题（就是那条已知 `pretest`/`bundle:agent` 陷阱），
+    不是测试缺陷**，故本切片对它**不作任何断言**，也不据此质疑 #205
+  - 未跑：`npm ci`、`npm test` 全量、`typecheck:all`、`electron:build`、`electron:pack`、
+    `architecture:baseline --write`（**禁用，从未运行**）
+仍未跨过的线（#205 没有触及）:
+  - **E4.4 第1条的 E2E spec 仍一次都没有被真正执行**，本条仍未验收。
+  - E4.4 第2条 `unsupported`；第3条打包应用从未被运行。
+  - H8.3 / H8.4 未开始；退役条件2（packaged host smoke）、条件3（兼容窗口）未满足。
+Next task: 不变——在有空间的机器上跑一次 `npm run test:e2e:turn`，把真实 pass/fail 写回
+  `05-behavior-and-evals.md`。H8.2 侧的主 Next 已随 #205 收敛到 **subagent 的
+  worker→CP 开 run 通道 + 三样合同改挂**（workflow 随它一起动）。
+```
