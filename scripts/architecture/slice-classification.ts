@@ -99,9 +99,14 @@ export const RULES: readonly ClassificationRule[] = [
     why: 'The preload bridge is the renderer-facing half of the host IPC contract: it is a boundary, not a domain.',
   },
   {
+    prefix: 'apps/desktop/src/contracts',
+    category: 'wire',
+    why: 'The host contract vocabulary, and the prediction the `renderer/types` rule above made in M5.1: "Candidates for `apps/desktop/src/contracts` once a second consumer exists (00-contracts.md §A)." Plan 587 M5.2 is that second consumer. `main/ipc/git-types.ts` and `renderer/types/import.ts` moved here so the main process, the preload bridge and the renderer can share a type without any of them importing another. Wire because that is what it is by function — a boundary vocabulary, not domain logic — and `contracts-boundary.test.ts` fails if it ever gains a value, an `electron` import, or a host import.',
+  },
+  {
     prefix: 'apps/desktop/src/renderer/types',
     category: 'wire',
-    why: 'Renderer-side DTO shapes. Candidates for `apps/desktop/src/contracts` once a second consumer exists (00-contracts.md §A).',
+    why: 'Renderer-side DTO shapes. M5.1 recorded these as "candidates for `apps/desktop/src/contracts` once a second consumer exists"; M5.2 moved `import.ts` there for exactly that reason. What is left here is renderer-only vocabulary with no second consumer yet.',
   },
   {
     prefix: 'apps/desktop/src/renderer/data',
