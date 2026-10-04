@@ -99,6 +99,7 @@ import type {
   ToolCallRequest,
 } from '@duya/agent-runtime';
 import type { Message } from '@duya/agent-protocol/transcript';
+import type { ModelLegPublisher } from '../agent/model-leg.js';
 
 // ============================================================================
 // The narrowing
@@ -384,6 +385,64 @@ export function createLegacyModelPort(sources: LegacyModelSources): ModelPort {
       });
 
       for await (const event of stream) {
+        const frame = toModelFrame(event);
+        if (frame !== null) yield frame;
+      }
+    },
+  };
+}
+
+/**
+ * Build the model port over a run's PUBLISHED turn leg.
+ *
+ * ## Why this exists beside `createLegacyModelPort`
+ *
+ * `createLegacyModelPort` drives `llmClient.streamChat` itself. That is the
+ * right shape for a caller that owns the client and the request, and it is what
+ * `run-engine-model-frames.test.ts` exercises. It is the WRONG shape for the
+ * worker entry, because the four sources it wants are closure state inside
+ * `DuyaAgent.streamChat` — and because calling the client directly throws away
+ * `runTurnStream`'s envelope.
+ *
+ * That envelope is the replay-on-transport-death layer: on a transport failure
+ * `runTurnStream` calls `onRetryReset`, which in `streamChat` does
+ * `executor.discard()` and clears every per-attempt accumulator, then emits the
+ * `chat:retry` chip and re-issues the request. `onRetryReset` closes over the
+ * turn's `executor` and accumulators, so it cannot be reconstructed from
+ * outside — a port that called the client directly would lose it silently, and
+ * the loss only shows up as a failed turn after an upstream hiccup.
+ *
+ * So this port takes the leg, whose `open()` IS `runTurnStream` over the turn's
+ * real deps, and narrows what comes out. The retry path is preserved by
+ * construction rather than by convention.
+ *
+ * ## What this port does NOT do
+ *
+ * It does not apply `request` or `signal`, and that is deliberate rather than
+ * unfinished-in-disguise. The request for a turn is already fixed: `systemPrompt`,
+ * the messages, the tools and the sampling options are the ones the legacy loop
+ * is sending right now, and overriding them from the engine would change what
+ * today's users are sent while the legacy generator still drives the same turn.
+ * The turn's own `requestSignal` (`leg.signal`) governs the stream — which is
+ * what `runTurnStream` was given — and the engine's `signal` cannot reach the
+ * provider through it: the leg exposes that signal READ-ONLY, and the
+ * `AbortController` behind it is a local of the turn, so there is nothing
+ * outside the generator that can fire it.
+ *
+ * Owning the request and the signal is the CUTOVER's job. This port exists so
+ * that when the cutover happens the port is already on the right side of the
+ * envelope.
+ */
+export function createTurnLegModelPort(publisher: ModelLegPublisher): ModelPort {
+  return {
+    async *stream(
+      _request: ModelRequest,
+      _signal: AbortSignal,
+    ): AsyncIterable<ModelFrame> {
+      // Refuses rather than yielding nothing: an empty stream here would be
+      // indistinguishable from a model that chose to produce nothing.
+      const leg = publisher.requireLeg();
+      for await (const event of leg.open()) {
         const frame = toModelFrame(event);
         if (frame !== null) yield frame;
       }
