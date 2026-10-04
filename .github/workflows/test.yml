@@ -347,6 +347,15 @@ jobs:
         run: npm ci
 
       - name: Build application
+        # `vite build` aborts with `Abort trap: 6` (exit 134) on the macOS
+        # runner under the default ~2 GB V8 heap — runner memory, not a build
+        # error; ubuntu and windows pass this identical step at the default
+        # heap. Same value and same reasoning as the release workflow's
+        # identical step (release.yml), and as this job's typecheck step
+        # above (5bf3220a). Raise it for all platforms so one value works
+        # across the matrix.
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
         run: npm run electron:build
 
       - name: Package (macOS only)
