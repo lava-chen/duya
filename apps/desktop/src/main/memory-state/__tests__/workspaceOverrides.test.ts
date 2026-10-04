@@ -9,6 +9,21 @@ import {
   type WorkspaceOverride,
 } from '../workspaceOverrides';
 
+/**
+ * Map a Windows-style fixture path onto the current platform.
+ *
+ * `normalizePath` always calls the HOST `path.resolve`, so a drive-letter
+ * path is only absolute on Windows — on POSIX it is a relative segment and
+ * gets rebased onto the runner's CWD. `fx` keeps the original Windows form
+ * on win32 (so drive-letter lowercasing is still asserted) and maps it to a
+ * genuine absolute path elsewhere.
+ */
+const IS_WIN = process.platform === 'win32';
+function fx(p: string): string {
+  if (IS_WIN) return p;
+  return '/' + p.replace(/^[A-Za-z]:[\\/]/, '').replace(/\\/g, '/');
+}
+
 const mocks = vi.hoisted(() => ({
   logger: {
     debug: vi.fn(),
@@ -68,28 +83,28 @@ describe('workspace overrides', () => {
 
   it('3. add override then load — appears in list', () => {
     const override = addWorkspaceOverride(
-      { canonical_root: 'D:/projects/alpha' },
+      { canonical_root: fx('D:/projects/alpha') },
       { configPath: configPath(), platform: 'win32' }
     );
     expect(override.project_id).toMatch(/^[0-9a-f-]{36}$/);
-    expect(override.canonical_root).toBe('d:/projects/alpha');
+    expect(override.canonical_root).toBe(fx('d:/projects/alpha'));
 
     const loaded = loadWorkspaceOverrides({ configPath: configPath() });
     expect(loaded).toHaveLength(1);
     expect(loaded[0]).toMatchObject({
       project_id: override.project_id,
-      canonical_root: 'd:/projects/alpha',
+      canonical_root: fx('d:/projects/alpha'),
     });
   });
 
   it('4. add then remove — absent in subsequent load', () => {
     addWorkspaceOverride(
-      { canonical_root: 'D:/projects/alpha' },
+      { canonical_root: fx('D:/projects/alpha') },
       { configPath: configPath(), platform: 'win32' }
     );
     expect(loadWorkspaceOverrides({ configPath: configPath() })).toHaveLength(1);
 
-    const removed = removeWorkspaceOverride('D:/projects/alpha', {
+    const removed = removeWorkspaceOverride(fx('D:/projects/alpha'), {
       configPath: configPath(),
       platform: 'win32',
     });
@@ -98,7 +113,7 @@ describe('workspace overrides', () => {
   });
 
   it('5. remove returns false when no matching entry exists', () => {
-    const removed = removeWorkspaceOverride('D:/never/exists', {
+    const removed = removeWorkspaceOverride(fx('D:/never/exists'), {
       configPath: configPath(),
       platform: 'win32',
     });
@@ -107,11 +122,11 @@ describe('workspace overrides', () => {
 
   it('6. add same canonical_root twice — replaces, not duplicates', () => {
     const first = addWorkspaceOverride(
-      { canonical_root: 'D:/projects/alpha' },
+      { canonical_root: fx('D:/projects/alpha') },
       { configPath: configPath(), platform: 'win32' }
     );
     const second = addWorkspaceOverride(
-      { canonical_root: 'D:/projects/alpha', project_id: 'custom-uuid' },
+      { canonical_root: fx('D:/projects/alpha'), project_id: 'custom-uuid' },
       { configPath: configPath(), platform: 'win32' }
     );
     expect(second.project_id).toBe('custom-uuid');
@@ -124,22 +139,22 @@ describe('workspace overrides', () => {
 
   it('7. multiple overrides persist and round-trip through JSON', () => {
     addWorkspaceOverride(
-      { canonical_root: 'D:/projects/alpha' },
+      { canonical_root: fx('D:/projects/alpha') },
       { configPath: configPath(), platform: 'win32' }
     );
     addWorkspaceOverride(
-      { canonical_root: 'D:/projects/beta' },
+      { canonical_root: fx('D:/projects/beta') },
       { configPath: configPath(), platform: 'win32' }
     );
     addWorkspaceOverride(
-      { canonical_root: 'D:/projects/gamma' },
+      { canonical_root: fx('D:/projects/gamma') },
       { configPath: configPath(), platform: 'win32' }
     );
 
     const loaded = loadWorkspaceOverrides({ configPath: configPath() });
     expect(loaded).toHaveLength(3);
     const roots = loaded.map((o) => o.canonical_root).sort();
-    expect(roots).toEqual(['d:/projects/alpha', 'd:/projects/beta', 'd:/projects/gamma']);
+    expect(roots).toEqual([fx('d:/projects/alpha'), fx('d:/projects/beta'), fx('d:/projects/gamma')]);
   });
 
   it('8. corrupt JSON file logs error and returns empty array', () => {
@@ -158,7 +173,7 @@ describe('workspace overrides', () => {
 
   it('10. provided project_id is preserved', () => {
     const override = addWorkspaceOverride(
-      { canonical_root: 'D:/projects/alpha', project_id: 'my-fixed-uuid-1234' },
+      { canonical_root: fx('D:/projects/alpha'), project_id: 'my-fixed-uuid-1234' },
       { configPath: configPath(), platform: 'win32' }
     );
     expect(override.project_id).toBe('my-fixed-uuid-1234');
@@ -168,7 +183,7 @@ describe('workspace overrides', () => {
     const nestedConfig = path.join(tempDir, 'nested', 'sub', 'workspace-overrides.json');
     expect(fs.existsSync(path.dirname(nestedConfig))).toBe(false);
     addWorkspaceOverride(
-      { canonical_root: 'D:/projects/alpha' },
+      { canonical_root: fx('D:/projects/alpha') },
       { configPath: nestedConfig, platform: 'win32' }
     );
     expect(fs.existsSync(nestedConfig)).toBe(true);
@@ -176,10 +191,10 @@ describe('workspace overrides', () => {
 
   it('12. path normalization lowercases drive letter on Windows', () => {
     const override = addWorkspaceOverride(
-      { canonical_root: 'D:\\Projects\\Alpha' },
+      { canonical_root: fx('D:\\Projects\\Alpha') },
       { configPath: configPath(), platform: 'win32' }
     );
-    expect(override.canonical_root).toBe('d:/Projects/Alpha');
+    expect(override.canonical_root).toBe(fx('d:/Projects/Alpha'));
   });
 
   it('13. case is preserved on Linux (skipped on Windows — path.resolve is drive-rooted)', () => {
@@ -190,11 +205,11 @@ describe('workspace overrides', () => {
       // Verify the Windows behavior instead: case is preserved for
       // the non-drive-letter portion of the path.
       const override = addWorkspaceOverride(
-        { canonical_root: 'D:/Users/Foo/Bar' },
+        { canonical_root: fx('D:/Users/Foo/Bar') },
         { configPath: configPath(), platform: 'win32' }
       );
       // Drive letter lowercased, case preserved otherwise.
-      expect(override.canonical_root).toBe('d:/Users/Foo/Bar');
+      expect(override.canonical_root).toBe(fx('d:/Users/Foo/Bar'));
       return;
     }
     const override = addWorkspaceOverride(
@@ -206,7 +221,7 @@ describe('workspace overrides', () => {
 
   it('14. file shape is { "overrides": WorkspaceOverride[] }', () => {
     addWorkspaceOverride(
-      { canonical_root: 'D:/projects/alpha' },
+      { canonical_root: fx('D:/projects/alpha') },
       { configPath: configPath(), platform: 'win32' }
     );
     const raw = fs.readFileSync(configPath(), 'utf8');
