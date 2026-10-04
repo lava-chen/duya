@@ -170,6 +170,20 @@ export function isCookieExpired(expiresUtc: number): boolean {
   return unixSeconds < Math.floor(Date.now() / 1000);
 }
 
+/**
+ * Chromium user data directory per platform, or null where the product does
+ * not read that platform's profile. Linux is deliberately absent: Chromium
+ * keeps its profile under `~/.config/<browser>` and the importer has no Linux
+ * key derivation, so `detectCookieProfiles` returns empty there.
+ *
+ * Cross-reference: the agent's read-permission policy matches these same
+ * layouts from the other side, in `READ_SENSITIVE_PATH_PATTERNS`
+ * (packages/agent/src/permissions/policy.ts). Architecture policy forbids
+ * packages/** -> apps/desktop/**, so that list cannot import this function and
+ * the two are kept aligned by the layout cases in
+ * packages/agent/src/permissions/__tests__/policy-read-permission.test.ts.
+ * Adding a platform here means adding its shape there.
+ */
 export function browserUserDataPath(browser: 'chrome' | 'edge'): string | null {
   if (process.platform === 'win32') {
     const localAppData = process.env.LOCALAPPDATA;

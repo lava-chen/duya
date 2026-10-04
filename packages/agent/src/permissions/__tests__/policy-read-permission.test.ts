@@ -86,23 +86,39 @@ describe('checkPathSafety read (write:false)', () => {
     }
 
     // Browser cookie stores and the Windows credential vault are matched by
-    // path SHAPE, not by $HOME: the patterns require a literal
-    // `user data` / `microsoft/credentials` segment, which is the Windows
-    // AppData layout. A POSIX `C:/Users/...` literal is not even absolute
-    // there, and Chromium on Linux keeps its profile under
-    // `~/.config/google-chrome`, which no pattern covers today. So these are
-    // asserted only where the product can actually recognise them; the
-    // credential-store coverage above stays active on every platform.
-    const windowsOnlySensitive =
-      process.platform === 'win32'
-        ? [
-            'C:/Users/user/AppData/Local/Google/Chrome/User Data/Default/Cookies',
-            'C:/Users/user/AppData/Local/Microsoft/Edge/User Data/Default/Cookies',
-            'C:/Users/user/AppData/Roaming/Mozilla/Firefox/Profiles/abc/cookies.sqlite',
-            'C:/Users/user/AppData/Roaming/Microsoft/Credentials/abc',
-          ]
-        : [];
-    for (const filePath of windowsOnlySensitive) {
+    // path SHAPE, not by $HOME. The Chromium shapes are the layouts the cookie
+    // importer actually resolves (`browserUserDataPath` +
+    // `resolveCookieFilePath` in
+    // apps/desktop/src/main/services/browser/cookie-importer.ts): a browser
+    // user data directory, a profile name, then `Cookies` or `Network/Cookies`,
+    // since Chromium moved the database under `Network/` in M96+.
+    //
+    // `user data` is the Windows AppData segment ALONE. macOS keeps the profile
+    // under `Library/Application Support/Google/Chrome` and Linux under
+    // `~/.config/google-chrome`, `chromium` or `microsoft-edge`, so gating
+    // these assertions on Windows is precisely what let the other two layouts
+    // go unrecognised by the read policy. Every layout is asserted on every
+    // platform now.
+    const sensitiveByShape = [
+      // Windows
+      'C:/Users/user/AppData/Local/Google/Chrome/User Data/Default/Cookies',
+      'C:/Users/user/AppData/Local/Google/Chrome/User Data/Profile 1/Network/Cookies',
+      'C:/Users/user/AppData/Local/Microsoft/Edge/User Data/Default/Cookies',
+      'C:/Users/user/AppData/Local/Microsoft/Edge/User Data/Profile 1/Network/Cookies',
+      'C:/Users/user/AppData/Roaming/Mozilla/Firefox/Profiles/abc/cookies.sqlite',
+      'C:/Users/user/AppData/Roaming/Microsoft/Credentials/abc',
+      // macOS -- no `user data` segment
+      '/Users/user/Library/Application Support/Google/Chrome/Default/Cookies',
+      '/Users/user/Library/Application Support/Google/Chrome/Default/Network/Cookies',
+      '/Users/user/Library/Application Support/Microsoft Edge/Default/Cookies',
+      // Linux -- no `user data` segment
+      '/home/user/.config/google-chrome/Default/Cookies',
+      '/home/user/.config/google-chrome/Profile 1/Network/Cookies',
+      '/home/user/.config/chromium/Default/Cookies',
+      '/home/user/.config/microsoft-edge/Default/Cookies',
+      '/home/user/.mozilla/firefox/profiles/abc.default-release/cookies.sqlite',
+    ];
+    for (const filePath of sensitiveByShape) {
       const result = read(filePath);
       expect(result.allowed).toBe(true, `${filePath} must be allowed (read-only)`);
       expect(result.requiresUserConfirmation).toBe(true, `${filePath} must require confirmation`);
