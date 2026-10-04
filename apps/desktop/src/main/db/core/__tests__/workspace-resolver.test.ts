@@ -23,6 +23,21 @@ import {
 } from '../workspace-resolver';
 import type { SqliteDatabase } from '../database';
 
+/**
+ * Map a Windows-style fixture path onto the current platform.
+ *
+ * The resolver calls the HOST `path.resolve`, so a drive letter is not a
+ * root on POSIX: such a path is relative, gets rebased onto the runner CWD,
+ * and the suite then compares a cwd-prefixed path against a raw fixture
+ * string. `fx` returns the Windows form on win32 (so drive-letter handling
+ * stays asserted) and a genuine absolute path everywhere else.
+ */
+const IS_WIN = process.platform === 'win32';
+function fx(p: string): string {
+  if (IS_WIN) return p;
+  return '/' + p.replace(/^[A-Za-z]:[\\/]/, '').replace(/\\/g, '/');
+}
+
 let nativeSqliteAvailable = true;
 try {
   new Database(':memory:').close();
@@ -55,31 +70,31 @@ describe.skipIf(!nativeSqliteAvailable)('workspace compatibility resolver', () =
   function seedMultiPathProject(): void {
     projects.insert({
       project_id: 'p-multi',
-      canonical_root: 'E:/repos/duya',
+      canonical_root: fx('E:/repos/duya'),
       name: 'duya',
       paths: serializeProjectPaths([
-        { path: 'E:/repos/duya', description: 'main' },
-        { path: 'E:/repos/duya-site', description: 'site' },
+        { path: fx('E:/repos/duya'), description: 'main' },
+        { path: fx('E:/repos/duya-site'), description: 'site' },
       ]),
     });
     applyWorkspaceIdentity(db);
   }
 
   it('relativePathWithin splits a cwd into root + relative path', () => {
-    expect(relativePathWithin('E:/repos/duya', 'E:/repos/duya')).toBe('');
-    expect(relativePathWithin('E:/repos/duya', 'E:/repos/duya/apps/desktop')).toBe('apps/desktop');
-    expect(relativePathWithin('E:/repos/duya', 'E:/elsewhere')).toBe('');
+    expect(relativePathWithin(fx('E:/repos/duya'), fx('E:/repos/duya'))).toBe('');
+    expect(relativePathWithin(fx('E:/repos/duya'), fx('E:/repos/duya/apps/desktop'))).toBe('apps/desktop');
+    expect(relativePathWithin(fx('E:/repos/duya'), fx('E:/elsewhere'))).toBe('');
   });
 
   it('absolutePathFromRoot rejoins a root and a relative path', () => {
-    expect(absolutePathFromRoot('E:/repos/duya', '')).toBe('E:/repos/duya');
-    expect(absolutePathFromRoot('E:/repos/duya', 'apps/desktop')).toBe('E:/repos/duya/apps/desktop');
+    expect(absolutePathFromRoot(fx('E:/repos/duya'), '')).toBe(fx('E:/repos/duya'));
+    expect(absolutePathFromRoot(fx('E:/repos/duya'), 'apps/desktop')).toBe(fx('E:/repos/duya/apps/desktop'));
   });
 
   // ─── case: a session with no Project ───
 
   it('leaves a session with no Project unbound and does not invent a workspace', () => {
-    const result = resolveWorkspaceBinding({ db, sessionId: 's-orphan', cwd: 'E:/nowhere/at/all' });
+    const result = resolveWorkspaceBinding({ db, sessionId: 's-orphan', cwd: fx('E:/nowhere/at/all') });
     expect(result.status).toBe('no_workspace');
     expect(result.binding).toBeNull();
     expect(result.workspace).toBeNull();
@@ -97,7 +112,7 @@ describe.skipIf(!nativeSqliteAvailable)('workspace compatibility resolver', () =
 
   it('binds a legacy session on first resolution and marks it legacy', () => {
     seedMultiPathProject();
-    const result = resolveWorkspaceBinding({ db, sessionId: 's-1', cwd: 'E:/repos/duya/apps/desktop' });
+    const result = resolveWorkspaceBinding({ db, sessionId: 's-1', cwd: fx('E:/repos/duya/apps/desktop') });
     expect(result.status).toBe('bound');
     expect(result.binding!.binding_kind).toBe('legacy');
     expect(result.binding!.project_id).toBe('p-multi');
@@ -107,8 +122,8 @@ describe.skipIf(!nativeSqliteAvailable)('workspace compatibility resolver', () =
 
   it('a second resolution of the same session returns the same binding and writes nothing', () => {
     seedMultiPathProject();
-    const first = resolveWorkspaceBinding({ db, sessionId: 's-1', cwd: 'E:/repos/duya/apps/desktop' });
-    const second = resolveWorkspaceBinding({ db, sessionId: 's-1', cwd: 'E:/repos/duya/apps/desktop' });
+    const first = resolveWorkspaceBinding({ db, sessionId: 's-1', cwd: fx('E:/repos/duya/apps/desktop') });
+    const second = resolveWorkspaceBinding({ db, sessionId: 's-1', cwd: fx('E:/repos/duya/apps/desktop') });
     expect(first.status).toBe('bound');
     expect(second.status).toBe('existing');
     expect(second.binding!.session_id).toBe(first.binding!.session_id);
@@ -120,21 +135,21 @@ describe.skipIf(!nativeSqliteAvailable)('workspace compatibility resolver', () =
 
   it('grants every root of a multi-path project with its provenance', () => {
     seedMultiPathProject();
-    const result = resolveWorkspaceBinding({ db, sessionId: 's-1', cwd: 'E:/repos/duya' });
+    const result = resolveWorkspaceBinding({ db, sessionId: 's-1', cwd: fx('E:/repos/duya') });
     const sources = result.granted_roots
       .map((r) => `${r.canonical_realpath}:${r.access}:${r.access_source}`)
       .sort();
     expect(sources).toEqual(
       [
-        'E:/repos/duya:write:project_canonical_root',
-        'E:/repos/duya-site:write:project_additional_path',
+        `${fx('E:/repos/duya')}:write:project_canonical_root`,
+        `${fx('E:/repos/duya-site')}:write:project_additional_path`,
       ].sort(),
     );
   });
 
   it('binds a session whose cwd sits under a non-primary root', () => {
     seedMultiPathProject();
-    const result = resolveWorkspaceBinding({ db, sessionId: 's-2', cwd: 'E:/repos/duya-site' });
+    const result = resolveWorkspaceBinding({ db, sessionId: 's-2', cwd: fx('E:/repos/duya-site') });
     expect(result.status).toBe('bound');
     expect(result.root!.access_source).toBe('project_additional_path');
   });
@@ -142,15 +157,15 @@ describe.skipIf(!nativeSqliteAvailable)('workspace compatibility resolver', () =
   it('prefers the longest matching root when roots are nested', () => {
     projects.insert({
       project_id: 'p-nested',
-      canonical_root: 'E:/nest',
+      canonical_root: fx('E:/nest'),
       paths: serializeProjectPaths([
-        { path: 'E:/nest', description: null },
-        { path: 'E:/nest/inner', description: null },
+        { path: fx('E:/nest'), description: null },
+        { path: fx('E:/nest/inner'), description: null },
       ]),
     });
     applyWorkspaceIdentity(db);
-    const result = resolveWorkspaceBinding({ db, sessionId: 's-3', cwd: 'E:/nest/inner/deep' });
-    expect(result.root!.canonical_realpath).toBe('E:/nest/inner');
+    const result = resolveWorkspaceBinding({ db, sessionId: 's-3', cwd: fx('E:/nest/inner/deep') });
+    expect(result.root!.canonical_realpath).toBe(fx('E:/nest/inner'));
     expect(result.binding!.relative_path).toBe('deep');
   });
 
@@ -158,31 +173,31 @@ describe.skipIf(!nativeSqliteAvailable)('workspace compatibility resolver', () =
 
   it('a relocate keeps the workspace, the root and the binding, and only bumps the revision', () => {
     seedMultiPathProject();
-    const before = resolveWorkspaceBinding({ db, sessionId: 's-1', cwd: 'E:/repos/duya/apps/desktop' });
+    const before = resolveWorkspaceBinding({ db, sessionId: 's-1', cwd: fx('E:/repos/duya/apps/desktop') });
     const rootId = before.root!.root_id;
     const workspaceId = before.workspace!.workspace_id;
     const projectId = before.workspace!.project_id;
 
-    const revision = workspaces.relocateRoot(rootId, 'E:/moved/duya');
+    const revision = workspaces.relocateRoot(rootId, fx('E:/moved/duya'));
 
     expect(revision).toBe(2);
-    const after = resolveWorkspaceBinding({ db, sessionId: 's-1', cwd: 'E:/repos/duya/apps/desktop' });
+    const after = resolveWorkspaceBinding({ db, sessionId: 's-1', cwd: fx('E:/repos/duya/apps/desktop') });
     expect(after.status).toBe('existing');
     expect(after.workspace!.workspace_id).toBe(workspaceId);
     expect(after.workspace!.project_id).toBe(projectId);
     expect(after.root!.root_id).toBe(rootId);
     expect(after.binding!.relative_path).toBe('apps/desktop');
     // The old cwd now resolves to the NEW location of the same root.
-    expect(after.resolved_cwd).toBe('E:/moved/duya/apps/desktop');
+    expect(after.resolved_cwd).toBe(fx('E:/moved/duya/apps/desktop'));
     expect(workspaces.listWorkspaces()).toHaveLength(1);
   });
 
   it('a session that had not resolved yet follows the new location on first resolution', () => {
     seedMultiPathProject();
     const root = workspaces.listRoots(workspaces.listWorkspaces()[0].workspace_id)[0];
-    workspaces.relocateRoot(root.root_id, 'E:/moved/duya');
+    workspaces.relocateRoot(root.root_id, fx('E:/moved/duya'));
 
-    const result = resolveWorkspaceBinding({ db, sessionId: 's-new', cwd: 'E:/moved/duya/apps/desktop' });
+    const result = resolveWorkspaceBinding({ db, sessionId: 's-new', cwd: fx('E:/moved/duya/apps/desktop') });
     expect(result.status).toBe('bound');
     expect(result.workspace!.revision).toBe(2);
     expect(result.binding!.revision_seen).toBe(2);
@@ -194,15 +209,15 @@ describe.skipIf(!nativeSqliteAvailable)('workspace compatibility resolver', () =
   it('keeps the binding for a root that no longer exists on disk', () => {
     projects.insert({
       project_id: 'p-missing',
-      canonical_root: 'E:/deleted/root',
-      paths: serializeProjectPaths([{ path: 'E:/deleted/root', description: null }]),
+      canonical_root: fx('E:/deleted/root'),
+      paths: serializeProjectPaths([{ path: fx('E:/deleted/root'), description: null }]),
     });
     applyWorkspaceIdentity(db);
 
     const result = resolveWorkspaceBinding({
       db,
       sessionId: 's-gone',
-      cwd: 'E:/deleted/root',
+      cwd: fx('E:/deleted/root'),
       probeFilesystem: true,
     });
 
@@ -210,7 +225,7 @@ describe.skipIf(!nativeSqliteAvailable)('workspace compatibility resolver', () =
     expect(result.root_missing).toBe(true);
     expect(result.workspace!.project_id).toBe('p-missing');
     // The identity survives: the root row is still there.
-    expect(workspaces.getRoot(result.root!.root_id)!.canonical_realpath).toBe('E:/deleted/root');
+    expect(workspaces.getRoot(result.root!.root_id)!.canonical_realpath).toBe(fx('E:/deleted/root'));
   });
 
   it('keeps the binding for a session whose cwd directory was deleted', () => {
@@ -246,27 +261,27 @@ describe.skipIf(!nativeSqliteAvailable)('workspace compatibility resolver', () =
   it('reports a revoked root and excludes it from the granted roots', () => {
     seedMultiPathProject();
     const ws = workspaces.listWorkspaces()[0];
-    const site = workspaces.listRoots(ws.workspace_id).find((r) => r.canonical_realpath === 'E:/repos/duya-site')!;
+    const site = workspaces.listRoots(ws.workspace_id).find((r) => r.canonical_realpath === fx('E:/repos/duya-site'))!;
 
     workspaces.setAccess(site.root_id, 'none', 'revoked');
 
-    const result = resolveWorkspaceBinding({ db, sessionId: 's-rev', cwd: 'E:/repos/duya-site' });
+    const result = resolveWorkspaceBinding({ db, sessionId: 's-rev', cwd: fx('E:/repos/duya-site') });
     expect(result.status).toBe('bound');
     expect(result.root_revoked).toBe(true);
     expect(result.notes.join(' ')).toMatch(/revoked/);
-    expect(result.granted_roots.map((r) => r.canonical_realpath)).toEqual(['E:/repos/duya']);
+    expect(result.granted_roots.map((r) => r.canonical_realpath)).toEqual([fx('E:/repos/duya')]);
     // The root row is retained — revocation never re-keys.
-    expect(workspaces.getRoot(site.root_id)!.canonical_realpath).toBe('E:/repos/duya-site');
+    expect(workspaces.getRoot(site.root_id)!.canonical_realpath).toBe(fx('E:/repos/duya-site'));
   });
 
   it('a revoked root that is later re-granted returns to the granted set', () => {
     seedMultiPathProject();
     const ws = workspaces.listWorkspaces()[0];
-    const site = workspaces.listRoots(ws.workspace_id).find((r) => r.canonical_realpath === 'E:/repos/duya-site')!;
+    const site = workspaces.listRoots(ws.workspace_id).find((r) => r.canonical_realpath === fx('E:/repos/duya-site'))!;
     workspaces.setAccess(site.root_id, 'none', 'revoked');
     workspaces.setAccess(site.root_id, 'write', 'user_grant');
 
-    const result = resolveWorkspaceBinding({ db, sessionId: 's-rev2', cwd: 'E:/repos/duya' });
+    const result = resolveWorkspaceBinding({ db, sessionId: 's-rev2', cwd: fx('E:/repos/duya') });
     expect(result.root_revoked).toBe(false);
     expect(result.granted_roots.find((r) => r.root_id === site.root_id)!.access_source).toBe('user_grant');
   });
@@ -276,12 +291,12 @@ describe.skipIf(!nativeSqliteAvailable)('workspace compatibility resolver', () =
   it('mints a workspace on first resolution for a project that was never bulk-migrated', () => {
     projects.insert({
       project_id: 'p-lazy',
-      canonical_root: 'E:/lazy',
-      paths: serializeProjectPaths([{ path: 'E:/lazy', description: null }]),
+      canonical_root: fx('E:/lazy'),
+      paths: serializeProjectPaths([{ path: fx('E:/lazy'), description: null }]),
     });
     expect(workspaces.listWorkspaces()).toEqual([]);
 
-    const result = resolveWorkspaceBinding({ db, sessionId: 's-lazy', cwd: 'E:/lazy' });
+    const result = resolveWorkspaceBinding({ db, sessionId: 's-lazy', cwd: fx('E:/lazy') });
     expect(result.status).toBe('bound');
     expect(result.notes.join(' ')).toMatch(/created one on first resolution/);
     expect(workspaces.listWorkspaces()).toHaveLength(1);
@@ -291,11 +306,11 @@ describe.skipIf(!nativeSqliteAvailable)('workspace compatibility resolver', () =
   it('does not write a second workspace when two sessions resolve the same cwd', () => {
     projects.insert({
       project_id: 'p-two',
-      canonical_root: 'E:/two',
-      paths: serializeProjectPaths([{ path: 'E:/two', description: null }]),
+      canonical_root: fx('E:/two'),
+      paths: serializeProjectPaths([{ path: fx('E:/two'), description: null }]),
     });
-    const a = resolveWorkspaceBinding({ db, sessionId: 's-a', cwd: 'E:/two' });
-    const b = resolveWorkspaceBinding({ db, sessionId: 's-b', cwd: 'E:/two' });
+    const a = resolveWorkspaceBinding({ db, sessionId: 's-a', cwd: fx('E:/two') });
+    const b = resolveWorkspaceBinding({ db, sessionId: 's-b', cwd: fx('E:/two') });
     expect(a.workspace!.workspace_id).toBe(b.workspace!.workspace_id);
     expect(workspaces.listWorkspaces()).toHaveLength(1);
     expect(workspaces.listBindings(a.workspace!.workspace_id)).toHaveLength(2);

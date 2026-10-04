@@ -20,6 +20,21 @@ import { resolveWorkspaceBinding } from '../workspace-resolver';
 import { normalizePath } from '../../../memory-state/pathUtils';
 import type { SqliteDatabase } from '../database';
 
+/**
+ * Map a Windows-style fixture path onto the current platform.
+ *
+ * The resolver calls the HOST `path.resolve`, so a drive letter is not a
+ * root on POSIX: such a path is relative, gets rebased onto the runner CWD,
+ * and the suite then compares a cwd-prefixed path against a raw fixture
+ * string. `fx` returns the Windows form on win32 (so drive-letter handling
+ * stays asserted) and a genuine absolute path everywhere else.
+ */
+const IS_WIN = process.platform === 'win32';
+function fx(p: string): string {
+  if (IS_WIN) return p;
+  return '/' + p.replace(/^[A-Za-z]:[\\/]/, '').replace(/\\/g, '/');
+}
+
 let nativeSqliteAvailable = true;
 try {
   new Database(':memory:').close();
@@ -69,33 +84,33 @@ describe.skipIf(!nativeSqliteAvailable)('workspace migration rehearsal', () => {
 
     projects.insert({
       project_id: 'p-multi',
-      canonical_root: 'E:/repos/duya',
+      canonical_root: fx('E:/repos/duya'),
       name: 'duya',
       description: 'main monorepo',
       paths: serializeProjectPaths([
-        { path: 'E:/repos/duya', description: 'primary' },
-        { path: 'E:/repos/duya-site', description: 'marketing site' },
-        { path: 'E:/repos/duya', description: 'duplicate entry' },
+        { path: fx('E:/repos/duya'), description: 'primary' },
+        { path: fx('E:/repos/duya-site'), description: 'marketing site' },
+        { path: fx('E:/repos/duya'), description: 'duplicate entry' },
       ]),
     });
     projects.insert({
       project_id: 'p-single',
-      canonical_root: 'E:/repos/solo',
+      canonical_root: fx('E:/repos/solo'),
       name: 'solo',
-      paths: serializeProjectPaths([{ path: 'E:/repos/solo', description: null }]),
+      paths: serializeProjectPaths([{ path: fx('E:/repos/solo'), description: null }]),
     });
-    projects.insert({ project_id: 'p-bare', canonical_root: 'E:/repos/bare', name: 'bare' });
+    projects.insert({ project_id: 'p-bare', canonical_root: fx('E:/repos/bare'), name: 'bare' });
     projects.insert({
       project_id: 'p-missing',
-      canonical_root: 'E:/repos/unmounted',
-      paths: serializeProjectPaths([{ path: 'E:/repos/unmounted', description: null }]),
+      canonical_root: fx('E:/repos/unmounted'),
+      paths: serializeProjectPaths([{ path: fx('E:/repos/unmounted'), description: null }]),
     });
     projects.insert({
       project_id: 'p-clash',
-      canonical_root: 'E:/repos/shared',
+      canonical_root: fx('E:/repos/shared'),
       paths: serializeProjectPaths([
-        { path: 'E:/repos/shared', description: null },
-        { path: 'E:/repos/duya', description: 'borrowed' },
+        { path: fx('E:/repos/shared'), description: null },
+        { path: fx('E:/repos/duya'), description: 'borrowed' },
       ]),
     });
     projects.insert({
@@ -128,9 +143,9 @@ describe.skipIf(!nativeSqliteAvailable)('workspace migration rehearsal', () => {
     expect(plan.would_create_roots).toBe(8);
     expect(plan.total_roots).toBe(8);
 
-    expect(plan.duplicate_paths.map((d) => d.path)).toContain('E:/repos/duya');
+    expect(plan.duplicate_paths.map((d) => d.path)).toContain(fx('E:/repos/duya'));
     expect(
-      plan.duplicate_paths.find((d) => d.path === 'E:/repos/duya')!.project_ids.sort(),
+      plan.duplicate_paths.find((d) => d.path === fx('E:/repos/duya'))!.project_ids.sort(),
     ).toEqual(['p-clash', 'p-multi']);
 
     // One entry per mapped root that is not on disk. The corpus has no `E:/`
@@ -190,20 +205,20 @@ describe.skipIf(!nativeSqliteAvailable)('workspace migration rehearsal', () => {
     const oldProjects = new ProjectStore(db);
     const multi = oldProjects.get('p-multi')!;
     expect(multi.paths).toBe(pathsBefore.get('p-multi'));
-    expect(multi.canonical_root).toBe('E:/repos/duya');
+    expect(multi.canonical_root).toBe(fx('E:/repos/duya'));
     expect(parseProjectPaths(multi.paths)).toEqual([
-      { path: 'E:/repos/duya', description: 'primary' },
-      { path: 'E:/repos/duya-site', description: 'marketing site' },
-      { path: 'E:/repos/duya', description: 'duplicate entry' },
+      { path: fx('E:/repos/duya'), description: 'primary' },
+      { path: fx('E:/repos/duya-site'), description: 'marketing site' },
+      { path: fx('E:/repos/duya'), description: 'duplicate entry' },
     ]);
     // The old reverse lookup still answers exactly as before.
-    expect(oldProjects.findByPath('E:/repos/duya')!.project_id).toBe('p-multi');
-    expect(oldProjects.findByPath('E:/repos/duya-site')!.project_id).toBe('p-multi');
-    expect(oldProjects.findByPath('E:/repos/solo')!.project_id).toBe('p-single');
+    expect(oldProjects.findByPath(fx('E:/repos/duya'))!.project_id).toBe('p-multi');
+    expect(oldProjects.findByPath(fx('E:/repos/duya-site'))!.project_id).toBe('p-multi');
+    expect(oldProjects.findByPath(fx('E:/repos/solo'))!.project_id).toBe('p-single');
     // The old additionalDirectories fan-out is unchanged. Mirrors the dedupe
     // in `projects:resolveAdditionalRoots`, so the duplicate entry collapses.
     const allPaths = parseProjectPaths(multi.paths).map((e) => e.path);
-    const cwdNorm = 'E:/repos/duya';
+    const cwdNorm = fx('E:/repos/duya');
     const seen = new Set([cwdNorm.toLowerCase()]);
     const additionalRoots: string[] = [];
     for (const p of allPaths) {
@@ -211,7 +226,7 @@ describe.skipIf(!nativeSqliteAvailable)('workspace migration rehearsal', () => {
       seen.add(p.toLowerCase());
       additionalRoots.push(p);
     }
-    expect(additionalRoots).toEqual(['E:/repos/duya-site']);
+    expect(additionalRoots).toEqual([fx('E:/repos/duya-site')]);
 
     // ── 2. NEW reader, before reopen ────────────────────────────────────
     const wsStore = new WorkspaceStore(db);
@@ -219,16 +234,16 @@ describe.skipIf(!nativeSqliteAvailable)('workspace migration rehearsal', () => {
     expect(ws).not.toBeNull();
     expect(ws.revision).toBe(1);
     const roots = wsStore.listRoots(ws.workspace_id);
-    expect(roots.map((r) => r.canonical_realpath).sort()).toEqual(['E:/repos/duya', 'E:/repos/duya-site']);
+    expect(roots.map((r) => r.canonical_realpath).sort()).toEqual([fx('E:/repos/duya'), fx('E:/repos/duya-site')]);
     expect(roots.find((r) => r.role === 'primary')!.access_source).toBe('project_canonical_root');
     expect(roots.find((r) => r.role === 'primary')!.description).toBe('primary');
 
-    const bound = resolveWorkspaceBinding({ db, sessionId: 'rehearsal-1', cwd: 'E:/repos/duya/apps/desktop' });
+    const bound = resolveWorkspaceBinding({ db, sessionId: 'rehearsal-1', cwd: fx('E:/repos/duya/apps/desktop') });
     expect(bound.status).toBe('bound');
     expect(bound.binding!.project_id).toBe('p-multi');
     expect(bound.binding!.relative_path).toBe('apps/desktop');
 
-    const orphaned = resolveWorkspaceBinding({ db, sessionId: 'rehearsal-none', cwd: 'E:/totally/unrelated' });
+    const orphaned = resolveWorkspaceBinding({ db, sessionId: 'rehearsal-none', cwd: fx('E:/totally/unrelated') });
     expect(orphaned.status).toBe('no_workspace');
 
     db.close();
@@ -240,14 +255,14 @@ describe.skipIf(!nativeSqliteAvailable)('workspace migration rehearsal', () => {
 
     // Old reader after reopen.
     expect(reopenedProjects.get('p-multi')!.paths).toBe(pathsBefore.get('p-multi'));
-    expect(reopenedProjects.findByPath('E:/repos/duya-site')!.project_id).toBe('p-multi');
+    expect(reopenedProjects.findByPath(fx('E:/repos/duya-site'))!.project_id).toBe('p-multi');
     expect(reopenedProjects.list()).toHaveLength(6);
 
     // New reader after reopen — the binding survived the close/reopen.
     const reopenedBound = resolveWorkspaceBinding({
       db,
       sessionId: 'rehearsal-1',
-      cwd: 'E:/repos/duya/apps/desktop',
+      cwd: fx('E:/repos/duya/apps/desktop'),
     });
     expect(reopenedBound.status).toBe('existing');
     expect(reopenedBound.workspace!.workspace_id).toBe(ws.workspace_id);
@@ -256,27 +271,27 @@ describe.skipIf(!nativeSqliteAvailable)('workspace migration rehearsal', () => {
 
     // ── 4. RELOCATE a root ──────────────────────────────────────────────
     const primaryRoot = roots.find((r) => r.role === 'primary')!;
-    const revision = reopenedWs.relocateRoot(primaryRoot.root_id, 'E:/repos/duya-renamed');
+    const revision = reopenedWs.relocateRoot(primaryRoot.root_id, fx('E:/repos/duya-renamed'));
     expect(revision).toBe(2);
 
     // Identity did not move.
     expect(reopenedWs.getWorkspace(ws.workspace_id)!.project_id).toBe('p-multi');
-    expect(reopenedWs.getRoot(primaryRoot.root_id)!.canonical_realpath).toBe('E:/repos/duya-renamed');
+    expect(reopenedWs.getRoot(primaryRoot.root_id)!.canonical_realpath).toBe(fx('E:/repos/duya-renamed'));
     const afterRelocate = resolveWorkspaceBinding({
       db,
       sessionId: 'rehearsal-1',
-      cwd: 'E:/repos/duya/apps/desktop',
+      cwd: fx('E:/repos/duya/apps/desktop'),
     });
     expect(afterRelocate.status).toBe('existing');
     expect(afterRelocate.workspace!.workspace_id).toBe(ws.workspace_id);
     expect(afterRelocate.root!.root_id).toBe(primaryRoot.root_id);
-    expect(afterRelocate.resolved_cwd).toBe('E:/repos/duya-renamed/apps/desktop');
+    expect(afterRelocate.resolved_cwd).toBe(fx('E:/repos/duya-renamed/apps/desktop'));
     expect(reopenedWs.listWorkspaces()).toHaveLength(6);
 
     // Old reader after relocate: `projects` is still exactly as it was, so a
     // downgrade to the old binary keeps working off the old path list.
     expect(reopenedProjects.get('p-multi')!.paths).toBe(pathsBefore.get('p-multi'));
-    expect(reopenedProjects.findByPath('E:/repos/duya')!.project_id).toBe('p-multi');
+    expect(reopenedProjects.findByPath(fx('E:/repos/duya'))!.project_id).toBe('p-multi');
 
     db.close();
   });
