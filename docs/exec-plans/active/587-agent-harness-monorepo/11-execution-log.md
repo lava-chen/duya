@@ -900,3 +900,33 @@ Next task: 下一切片 = **补 main 侧「为一次 run spawn worker + 泵 stdo
   workflow `wf.agent` 随 subagent 一起动（共用 `SUBAGENT_TOOL_NAME` 执行器）。
 ```
 
+## document-parser 退役收尾：三条永久 optional 检查与死壳清理
+
+```text
+Task: retirement residue / verify-packaged-parity + after-pack + diagnose-env + useFileParsing
+State: 本条为代码切片；PR 见 Changed files 下方
+Changed files and public entry: `scripts/verify-packaged-parity.mjs`（删3条CHECKS + 删`OPTIONAL_CHECKS`机制本身 + 删`missingItems`死变量）、`scripts/after-pack.js`（删Step 5）、`scripts/diagnose-env.mjs`（删`document-parser/`行 + `docParserDir`）、`apps/desktop/src/renderer/hooks/useFileParsing.ts`（删从未被调用的`useFileParsing()`门面 + 从未被引用的`FileAttachment`类型再导出 + 改模块头注释）
+Old caller → new caller / ownership: `86f68e9e`（2026-09-09，"chore: remove document parser service and Office panel"）删掉sidecar；#187只从历史恢复了notebook reader，**没有**恢复sidecar。故sidecar确已退役，但仓库仍在三处描述它
+Capabilities actually verified / still unsupported:
+  - **本切片的核心结论（产品能力，需用户知悉）**：**PDF/DOCX/PPTX抽取在打包构建里不可用，且这从来不是本切片造成的。**
+    - `ReadTool.ts:434` 的注释写着"The built-in document parser (PDF/DOCX/PPTX extraction) was removed"；`:208` 的工具description对模型advertise"Binary office formats (PDF, .docx, .pptx, .xlsx) are **not parsed** — use the matching skill instead"；`:234` 的`page_range`标注"Retained for compatibility; PDF parsing is no longer built in"。`dispatch()`对`.pdf/.docx/.pptx`走unsupported-binary拒绝（`:444`）
+    - **"the matching skill"只在插件里存在**：`packages/plugin-core/src/plugins/builtin/pdf/skills/pdf/SKILL.md`是一个**plugin builtin**，依赖Python库（pypdf/pdfplumber）；而打包的agent只带`packages/agent/skills/.system/*`（computer-use / memory-search / plugin-mcp-builder / self-config / self-knowledge / visual-component-verify / workflow），**没有xlsx skill，也没有pdf skill**。故在默认打包构建里，那句提示无处可去
+    - `.xlsx/.xls/.xlsm`另有分支（`ReadTool.ts:376` `SKILL_ROUTED_EXTENSIONS`）指向`xlsx` skill——**该skill同样不在已发布的skills里**，属同一个已记录的平台缺口
+  - **已验证：`NodeFileParser`根本不存在。** `verify-packaged-parity.mjs`与`after-pack.js`都写着"The main path uses NodeFileParser (in-process)"——这是**假注释**。全仓grep只命中docs/release-notes、这两处注释自身，以及`ReadTool.test.ts:5/:174`的describe名。全仓无该类的定义或引用。#187已如实记录notebook是唯一恢复的读取路径
+  - **已验证（`useFileParsing.ts`为何不删）**：它**不是死文件**。`useAttachments.ts:28-31`从它import `resolveFilePath` / `isBinaryDocumentFile` / `readFileAsDataURL`，并在`:334`、`:336`、`:356`、`:370`实际调用。**只删其中确死部分**：`useFileParsing()`门面（grep全仓仅命中自身定义，零调用）与`FileAttachment`类型再导出（无人从本模块import该类型）。**未重命名文件**——`scripts/architecture/slice-census.txt:2424`按路径登记了它，而本切片不得改census，重命名会制造我无权修复的census漂移
+  - **已验证（`OPTIONAL_CHECKS`只服务这三条）**：全仓grep该符号只命中`verify-packaged-parity.mjs`自身的4处。删净，无第二个使用者——空豁免机制是给下一个人的陷阱，故机制本身删除
+  - **已验证（14 → 11，实测非推断）**：用合成resources目录跑两份脚本。`origin/master`版 `--list` → `Listed 14 expected artifacts.`（含`▸ document-parser`三条）；本分支版 → `Listed 11 expected artifacts.`。`git diff --no-index`显示**11条留存CHECKS条目零改动**，只有3条document-parser行被删
+  - **已验证（未削弱门禁）**：对同一个空resources目录，修改前 = `✗ 9 check(s) failed out of 14` + `ℹ 3 optional item(s) also missing (non-fatal)`、exit 1；修改后 = `✗ 9 check(s) failed out of 11`、exit 1、**全文无"optional"字样**。failed数与退出码完全相同，差别只是3条幽灵条目不再被永久豁免
+  - **已验证（CI 侧真实缺席）**：run `37211803922`（macOS）报`All 14 checks passed. ℹ 3 optional item(s) missing (non-fatal)`，列出的正是这三条——**真实包里没有它们**，是实测
+  - 仍不支持/未验证：**打包复跑未执行、未证实**。本机磁盘不够且被明令禁止跑`electron:pack`/`electron:build`，故"真实包仍能通过11项检查"是**推理**，不是测量。CI 的`test.yml:394`与`release.yml:145-148`三处调用点**未改动**
+  - 仍不支持/未验证：`packages/agent/package.json:60,62`仍声明`jszip@^3.10.1`与`pdf-parse@^1.1.1`，而两者在`packages/agent/src/**/*.ts`中**均无import**（`pdf-parse`全仓仅命中package.json/package-lock/`audit-modules.mjs`的`"E-DOC"`分类器/docs）。**本切片未动依赖**：改manifest要同步lockfile且牵动agent bundle的externals，属于另一个residue类，**上报而非顺手删**
+  - 仍不支持/未验证：`AGENTS.md`预发布清单（`:564-570`）**本就干净**——只有agent-bundle / BashWorker / better-sqlite3 / ready / app.log，无document-parser。故第4项是已证实的no-op，未改
+  - 仍不支持/未验证：`electron-builder.yml:123`留有一条**准确**的"sidecar was removed"注释（陈述已发生的事实，非虚假承诺），故保留未删
+  - 仍不支持/未验证：未跑`electron:pack` / `electron:build`；**从未运行**`architecture:baseline --write`，`.architecture-baseline.json`与`architecture-policy.yaml`均未改
+  - 仍不支持/未验证：未碰CI配置、workflow、E4.4 specs、control-plane census、`architecture-policy.yaml`
+Shim consumers + removal criterion: 无shim。`OPTIONAL_CHECKS`机制连同其三条豁免一并删除——若将来真出现"可缺席但仍要报告"的产物，应按#191的方式**让它真的被构建**并变成硬失败，而不是重新引入一个豁免集合
+Rollback/data compatibility: 无schema变更、无数据迁移。回退即恢复这4个文件
+Remaining blocker: 无技术阻塞。**待用户决定**：(1) 是否接受"PDF/Office抽取在打包构建不可用"作为已记录的产品事实；(2) `ReadTool` description里"use the matching skill instead"在默认包里指向不存在的skill，是否改文案或把plugin builtin随包发布；(3) `pdf-parse`/`jszip`未用依赖是否另起一切片清理
+Next task: 上述(2)(3)需产品决定，不属本切片
+```
+
