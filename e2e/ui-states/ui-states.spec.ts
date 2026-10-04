@@ -69,6 +69,23 @@
  * the ledger and the terminal are the executor's work. The fixture holds the
  * response open only so "in flight" is an observation rather than a race.
  *
+ * ## A harness bug this file already had, kept fixed on purpose
+ *
+ * An earlier version of the turn driver called a MODULE-SCOPE helper from
+ * inside `page.evaluate`. Playwright serialises the callback and runs it in the
+ * page, so that helper does not exist there: the `fetch` fired (a real run was
+ * created and completed) and the reader then threw a `ReferenceError` that the
+ * floating `void (async ...)()` swallowed. The symptom was `frames=[]` and a
+ * durable run that completed - which reads exactly like "the product sent no
+ * frames", and was briefly reported as a product defect. The bullet-1 spec
+ * passed against the same build the whole time, which is what disproved it.
+ *
+ * Two things are therefore deliberate here: every function the page runs is
+ * self-contained, and the page-side promise carries a `.catch` that records
+ * `pageError`, so a throw in the renderer is named instead of looking like
+ * silence. `e2e/turn/electron-turn.spec.ts` is the known-good precedent for the
+ * self-contained shape.
+ *
  * ## What this file does NOT claim
  *
  * Named here rather than left for a reader to assume:
@@ -736,6 +753,31 @@ async function describeThemeToggles(page: Page): Promise<string> {
 }
 
 /**
+ * Wait until no modal overlay is covering the shell.
+ *
+ * A fresh isolated namespace intermittently shows a modal (the onboarding
+ * wizard) over the sidebar. Playwright's click auto-wait retries for 30s and
+ * then reports "intercepts pointer events", which reads as a broken toggle
+ * rather than as an overlay in the way. This waits the overlay out and, if it
+ * persists, says so with the on-screen text - which names which modal it was.
+ */
+async function waitForNoModalOverlay(page: Page, budgetMs = 30_000): Promise<void> {
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    const overlays = await page.evaluate(
+      () => document.querySelectorAll('div.fixed.inset-0.z-50').length,
+    );
+    if (overlays === 0) return;
+    await page.waitForTimeout(250);
+  }
+  const onScreen = await page.evaluate(() => (document.body.innerText ?? '').slice(0, 200));
+  throw new Error(
+    `a modal overlay (div.fixed.inset-0.z-50) still covers the shell after ${budgetMs}ms; ` +
+      `on-screen text: ${onScreen}`,
+  );
+}
+
+/**
  * Click the app's own theme switch.
  *
  * Picks the candidate that is actually on screen, scrolls it into view, and
@@ -744,6 +786,7 @@ async function describeThemeToggles(page: Page): Promise<string> {
  * 30s timeout that says nothing about where the button was.
  */
 async function clickThemeToggle(page: Page): Promise<void> {
+  await waitForNoModalOverlay(page);
   const index = await page.evaluate(() => {
     const nodes = Array.from(
       document.querySelectorAll('button.theme-toggle, button.rail-btn'),
@@ -882,10 +925,10 @@ async function startChatTurnInBackground(
         httpStatus: number;
         frames: string[];
         text: string;
-        result: ChatTurnResult | null;
+        pageError: string | null;
       };
     };
-    w.__e44 = { done: false, httpStatus: 0, frames: [], text: '', result: null };
+    w.__e44 = { done: false, httpStatus: 0, frames: [], text: '', pageError: null };
     void (async () => {
       const response = await fetch(
         `${a.baseUrl}/sessions/${encodeURIComponent(a.sessionId)}/chat`,
@@ -910,24 +953,63 @@ async function startChatTurnInBackground(
       // Recorded before the stream is read, so a probe can tell "the route has
       // not answered" from "the turn is running".
       w.__e44.httpStatus = response.status;
-      await readChatStream(response, (partial) => {
-        // Published incrementally. A real turn does NOT end its stream when the
-        // run reaches a terminal: the app makes a second model call for the
-        // session title afterwards, so the socket stays open well past the
-        // durable terminal. Waiting for `done` would therefore measure the
-        // title call, not the turn this spec is about.
-        w.__e44.frames = partial.frameTypes;
-        w.__e44.text = partial.text;
-      });
-      w.__e44.result = {
-        httpStatus: w.__e44.httpStatus,
-        frameTypes: w.__e44.frames,
-        text: w.__e44.text,
-        error: null,
-        streamStalled: false,
-      };
+      // Everything the page needs lives INSIDE this callback, on purpose.
+      // `page.evaluate` serialises the function and runs it in the page, so a
+      // reference to a module-scope helper is a ReferenceError THERE - and the
+      // floating `void (async ...)()` below swallows it, which presents
+      // exactly like "the product sent no frames". This spec hit that bug: the
+      // fetch fired (a real run was created and completed) and then the reader
+      // threw, leaving `frames=[]` and reading as a product defect. The
+      // try/catch makes any such failure name itself instead.
+      const reader = response.body?.getReader();
+      if (reader) {
+        const decoder = new TextDecoder();
+        const frames: Array<{ type: string; data: Record<string, unknown> }> = [];
+        let buffer = '';
+        // Published after every chunk. Waiting for the stream to CLOSE would
+        // measure the session-title model call that follows the terminal, not
+        // the turn this spec is about.
+        const publish = (): void => {
+          w.__e44.frames = frames.map((f) => f.type);
+          w.__e44.text = frames
+            .filter((f) => f.type === 'text')
+            .map((f) => (typeof f.data.content === 'string' ? f.data.content : ''))
+            .join('');
+        };
+        for (;;) {
+          const next = await Promise.race([
+            reader.read(),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 5_000)),
+          ]);
+          if (next === null) continue; // no chunk in this window
+          const { done, value } = next;
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const chunks = buffer.split('\n\n');
+          buffer = chunks.pop() ?? '';
+          for (const chunk of chunks) {
+            const dataLine = chunk.split('\n').find((line) => line.startsWith('data: '));
+            if (!dataLine) continue;
+            try {
+              const parsed = JSON.parse(dataLine.slice(6)) as {
+                type?: string;
+                data?: Record<string, unknown>;
+              };
+              if (typeof parsed.type === 'string') frames.push({ type: parsed.type, data: parsed.data ?? {} });
+            } catch {
+              // A partial frame; the next read completes it.
+            }
+          }
+          publish();
+        }
+        publish();
+      }
       w.__e44.done = true;
-    })();
+    })().catch((err: unknown) => {
+      // A page-side throw must not be invisible: it would look like silence.
+      w.__e44.pageError = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+      w.__e44.done = true;
+    });
   }, {
     baseUrl: args.baseUrl,
     sessionId: args.sessionId,
@@ -948,7 +1030,12 @@ async function startChatTurnInBackground(
  */
 async function waitForTurnText(page: Page, budgetMs: number): Promise<ChatTurnResult> {
   const deadline = Date.now() + budgetMs;
-  let last = { frames: [] as string[], text: '', error: null as Record<string, unknown> | null };
+  let last = {
+    frames: [] as string[],
+    text: '',
+    httpStatus: 0,
+    pageError: null as string | null,
+  };
   while (Date.now() < deadline) {
     const state = await page.evaluate(() => {
       const w = window as unknown as {
@@ -957,7 +1044,7 @@ async function waitForTurnText(page: Page, budgetMs: number): Promise<ChatTurnRe
           httpStatus: number;
           frames: string[];
           text: string;
-          result: ChatTurnResult | null;
+          pageError: string | null;
         };
       };
       return {
@@ -965,73 +1052,28 @@ async function waitForTurnText(page: Page, budgetMs: number): Promise<ChatTurnRe
         httpStatus: w.__e44.httpStatus,
         frames: w.__e44.frames,
         text: w.__e44.text,
-        error: w.__e44.result ? w.__e44.result.error : null,
+        pageError: w.__e44.pageError,
       };
     });
     last = state;
+    // A page-side throw is a harness failure, and is reported as one rather
+    // than as a product that sent nothing.
+    if (state.pageError) {
+      throw new Error(`the page-side stream reader threw: ${state.pageError}`);
+    }
     if (state.text === EXPECTED_TEXT || (state.done && state.frames.length > 0)) {
       return {
         httpStatus: state.httpStatus,
         frameTypes: state.frames,
         text: state.text,
-        error: state.error,
+        error: null,
         streamStalled: false,
       };
     }
     await page.waitForTimeout(250);
   }
   throw new Error(
-    `the turn's text never arrived within ${budgetMs}ms; frames=[${last.frames.join(',')}]`,
+    `the turn's text never arrived within ${budgetMs}ms; httpStatus=${last.httpStatus} ` +
+      `frames=[${last.frames.join(',')}] pageError=${String(last.pageError)}`,
   );
-}
-
-/**
- * Read the renderer's own chat response as an SSE stream. Runs inside the page,
- * so the request originates in the real renderer and crosses the real loopback
- * socket into the real Agent Server.
- */
-async function readChatStream(
-  response: Response,
-  onPartial: (partial: { frameTypes: string[]; text: string }) => void,
-): Promise<void> {
-  const frames: Array<{ type: string; data: Record<string, unknown> }> = [];
-  const reader = response.body?.getReader();
-  if (reader) {
-    const decoder = new TextDecoder();
-    let buffer = '';
-    for (;;) {
-      const next = await Promise.race([
-        reader.read(),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 5_000)),
-      ]);
-      if (next === null) continue; // no chunk in this window
-      const { done, value } = next;
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const chunks = buffer.split('\n\n');
-      buffer = chunks.pop() ?? '';
-      for (const chunk of chunks) {
-        const dataLine = chunk.split('\n').find((line) => line.startsWith('data: '));
-        if (!dataLine) continue;
-        try {
-          const parsed = JSON.parse(dataLine.slice(6)) as {
-            type?: string;
-            data?: Record<string, unknown>;
-          };
-          if (typeof parsed.type === 'string') frames.push({ type: parsed.type, data: parsed.data ?? {} });
-        } catch {
-          // A partial frame; the next read completes it.
-        }
-      }
-      // Publish after every chunk so a caller can observe the frames the
-      // renderer has actually received, without waiting for the socket to close.
-      onPartial({
-        frameTypes: frames.map((f) => f.type),
-        text: frames
-          .filter((f) => f.type === 'text')
-          .map((f) => (typeof f.data.content === 'string' ? f.data.content : ''))
-          .join(''),
-      });
-    }
-  }
 }
