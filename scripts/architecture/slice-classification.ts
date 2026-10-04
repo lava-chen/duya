@@ -84,8 +84,39 @@ export interface ClassificationRule {
  *
  * Ordering is load-bearing and the verifier checks it: a broader rule above a
  * narrower one makes the narrower one dead, and a dead rule is a lie.
+ *
+ * The precise invariant, because the precise one is the one that bites: a rule
+ * must come before ANY rule whose prefix contains it, not merely before its
+ * immediate neighbour. `classify` returns the first match, so a broader rule
+ * anywhere above a narrower one claims every file the narrower rule was written
+ * to describe. The section headers below group rules by category for reading;
+ * they do not override this.
  */
 export const RULES: readonly ClassificationRule[] = [
+  // ── exceptions to the wire rule ─────────────────────────────────────────
+  // These three carve one file and two directories OUT of the
+  // `packages/agent-protocol/src` rule at the head of the wire section, so they
+  // have to precede it. Their position is load-bearing rather than stylistic:
+  // below that rule they are unreachable, and each `why` states a classification
+  // the map does not actually apply. This is the case the dead-rule check missed,
+  // because it only reported a shadowed rule when the two were adjacent and these
+  // sat 14 slots below.
+  {
+    prefix: 'packages/agent-protocol/src/codecs.ts',
+    category: 'pure',
+    why: 'Encode/decode is a total function over data — no IO, no clock, no ambient state. Wire because it defines the wire format, pure because performing it touches nothing. A FILE, not a directory.',
+  },
+  {
+    prefix: 'packages/agent-protocol/src/transcript',
+    category: 'runtime-coordination',
+    why: 'EXCEPTION to the wire rule below, and deliberately so. The transcript vocabulary is wire DATA, but its transformation functions (compaction transforms, projection) are pure algorithms over it. M5.3 splits these; until then the rule keeps the directory whole and says so.',
+  },
+  {
+    prefix: 'packages/agent-protocol/src/events',
+    category: 'runtime-coordination',
+    why: 'EXCEPTION to the wire rule below. The event REGISTRY is wire metadata, but `verdictForUnknownType` and the criticality boundary are decisions about how to handle an event at runtime.',
+  },
+
   // ── wire ────────────────────────────────────────────────────────────────
   // The protocol package is the single owner of the wire vocabulary (T3.1).
   {
@@ -112,6 +143,13 @@ export const RULES: readonly ClassificationRule[] = [
     prefix: 'apps/desktop/src/renderer/data',
     category: 'wire',
     why: 'Renderer transport shapes and the fetch layer that speaks them.',
+  },
+  // Ahead of the broader `memory-state` rule below it carves out of, for the
+  // reachability reason stated at the head of RULES.
+  {
+    prefix: 'apps/desktop/src/main/memory-state/migrations',
+    category: 'cp-durable',
+    why: 'EXCEPTION and a genuine ownership defect. SQL migrations live in the HOST but are owned by `packages/agent/src/memory-state`. M5.2 moves the owner; until then the rule records the host location and the mis-ownership.',
   },
   {
     prefix: 'apps/desktop/src/main/memory-state',
@@ -160,27 +198,12 @@ export const RULES: readonly ClassificationRule[] = [
     category: 'pure',
     why: 'Terminal-state resolution, budget accounting, durability policy, capability negotiation. Data in, decision out. Verified clean: imports only `@duya/agent-protocol`.',
   },
-  {
-    prefix: 'packages/agent-protocol/src/codecs.ts',
-    category: 'pure',
-    why: 'Encode/decode is a total function over data — no IO, no clock, no ambient state. Wire because it defines the wire format, pure because performing it touches nothing. A FILE, not a directory.',
-  },
 
   // ── runtime coordination ────────────────────────────────────────────────
   {
     prefix: 'packages/agent-runtime/src',
     category: 'runtime-coordination',
     why: 'The run execution engine: transports, event emission, replay cursors, backpressure, control channels. Async coordination with no host dependency.',
-  },
-  {
-    prefix: 'packages/agent-protocol/src/transcript',
-    category: 'runtime-coordination',
-    why: 'EXCEPTION to the wire rule above, and deliberately so. The transcript vocabulary is wire DATA, but its transformation functions (compaction transforms, projection) are pure algorithms over it. M5.3 splits these; until then the rule keeps the directory whole and says so.',
-  },
-  {
-    prefix: 'packages/agent-protocol/src/events',
-    category: 'runtime-coordination',
-    why: 'EXCEPTION to the wire rule. The event REGISTRY is wire metadata, but `verdictForUnknownType` and the criticality boundary are decisions about how to handle an event at runtime.',
   },
   {
     prefix: 'packages/agent/src/agent',
@@ -247,16 +270,9 @@ export const RULES: readonly ClassificationRule[] = [
     category: 'runtime-coordination',
     why: 'Agent-side wake scheduling and its store. Pairs with the host wake directory; both coordinate a timed trigger.',
   },
-  {
-    prefix: 'apps/desktop/src/main/agents',
-    category: 'runtime-coordination',
-    why: 'Host-side agent session management, server lifecycle and the db bridge. The `server/` and `process-pool/` subdirectories have their own narrower rules above.',
-  },
-  {
-    prefix: 'apps/desktop/src/main/index.ts',
-    category: 'runtime-coordination',
-    why: 'Main-process entry: wires the runtime and its adapters together. Composition, which is coordination by function.',
-  },
+  // Ahead of the broader `agents` rule below it carves out of, for the
+  // reachability reason stated at the head of RULES. Both carry the same
+  // category, so the ordering costs nothing and makes the rules reachable.
   {
     prefix: 'apps/desktop/src/main/agents/server',
     category: 'runtime-coordination',
@@ -266,6 +282,16 @@ export const RULES: readonly ClassificationRule[] = [
     prefix: 'apps/desktop/src/main/agents/process-pool',
     category: 'runtime-coordination',
     why: 'Pool scheduling for agent child processes. The pool decides; each worker is an adapter.',
+  },
+  {
+    prefix: 'apps/desktop/src/main/agents',
+    category: 'runtime-coordination',
+    why: 'Host-side agent session management, server lifecycle and the db bridge. The `server/` and `process-pool/` subdirectories have their own narrower rules above.',
+  },
+  {
+    prefix: 'apps/desktop/src/main/index.ts',
+    category: 'runtime-coordination',
+    why: 'Main-process entry: wires the runtime and its adapters together. Composition, which is coordination by function.',
   },
   {
     prefix: 'apps/desktop/src/main/channels',
@@ -430,11 +456,6 @@ export const RULES: readonly ClassificationRule[] = [
     prefix: 'apps/desktop/src/main/project-database',
     category: 'cp-durable',
     why: 'Per-project database access. Same durable substrate, separate database.',
-  },
-  {
-    prefix: 'apps/desktop/src/main/memory-state/migrations',
-    category: 'cp-durable',
-    why: 'EXCEPTION and a genuine ownership defect. SQL migrations live in the HOST but are owned by `packages/agent/src/memory-state`. M5.2 moves the owner; until then the rule records the host location and the mis-ownership.',
   },
   {
     prefix: 'apps/desktop/src/main/automation',
