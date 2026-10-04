@@ -46,7 +46,6 @@
 
 import type {
   LifecycleViolationCode,
-  RunCompletedPayload,
   RunEvent,
   RunEventEnvelope,
   RunTerminalState,
@@ -73,6 +72,34 @@ export function isTerminalEventType(type: EventType): boolean {
 }
 
 /**
+ * The two events that close a run, as objects rather than as type strings.
+ *
+ * Derived from the same two literals {@link TERMINAL_EVENT_TYPES} names, so
+ * there is still exactly one declaration of the set.
+ */
+type TerminalRunEvent = Extract<RunEvent, { readonly type: 'run.completed' | 'run.failed' }>;
+
+/**
+ * True when the EVENT closes the run, narrowing it to {@link TerminalRunEvent}.
+ *
+ * ## Why this exists next to {@link isTerminalEventType}
+ *
+ * `isTerminalEventType` answers the same question about a `type` STRING, and
+ * TypeScript cannot propagate that answer to the object the string was read
+ * from. A caller that guarded with it therefore still held the full union --
+ * every one of the 37 `RunEvent` members -- so {@link terminalStateOf} was
+ * handed a `run.started` at compile time and had to assert otherwise.
+ *
+ * The assertion is what broke the build: excluding `run.failed` does NOT leave
+ * `run.completed`, it leaves 36 other members, so the project was a widening
+ * dressed as a narrowing. Narrowing at the EVENT is what makes the projection
+ * total, and it costs one boolean call at the one call site.
+ */
+function isTerminalRunEvent(event: RunEvent): event is TerminalRunEvent {
+  return isTerminalEventType(event.type);
+}
+
+/**
  * A terminal that has been persisted and is waiting for the durable barrier.
  *
  * `declared` is the verdict the RUN minted, read back off the event it emitted,
@@ -91,17 +118,16 @@ interface HeldTerminal {
  * {@link RunEventEmitter.publishCommittedTerminal} compares the run's own record
  * against the barrier's answer and never a value passed in beside them.
  */
-function terminalStateOf(event: RunEvent): RunTerminalState {
+function terminalStateOf(event: TerminalRunEvent): RunTerminalState {
   if (event.type === 'run.failed') {
     return { status: 'failed', error: event.error };
   }
-  // The narrowing above leaves exactly `run.completed`, whose `status` is
-  // `RunStatus` — a member of the `RunTerminalState` status union, so this is a
-  // projection and not a widening.
-  const completed: RunCompletedPayload = event;
-  return completed.stopReason === undefined
-    ? { status: completed.status }
-    : { status: completed.status, stopReason: completed.stopReason };
+  // Narrowed to `run.completed`, whose `status` is `RunStatus` — a member of
+  // the `RunTerminalState` status union, so this is a projection and not a
+  // widening.
+  return event.stopReason === undefined
+    ? { status: event.status }
+    : { status: event.status, stopReason: event.stopReason };
 }
 
 /**
@@ -527,7 +553,7 @@ export class RunEventEmitter {
     const durability = EVENT_REGISTRY.specOf(event.type)?.durability ?? 'volatile';
     try {
       const envelope = this.#ports.session.observe(event);
-      if (isTerminalEventType(event.type)) {
+      if (isTerminalRunEvent(event)) {
         // Persisted and numbered, NOT pushed. A run's ending is the one frame a
         // consumer acts on — it closes the UI, stops the spinner, writes the
         // receipt — and announcing it before `settle` has flushed the transcript
