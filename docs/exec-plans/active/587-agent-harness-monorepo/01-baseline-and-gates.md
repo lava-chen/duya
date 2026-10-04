@@ -46,7 +46,24 @@
 - [ ] 处理既有测试债并收敛fullsuite；在此之前如需迁移ratchet，必须以具体失败签名比较且对新增失败失败，不能`|| true`、glob跳过或只比较总数。
   **未完成，且已从"尚未开始"推进很远。** G0.1 的基线是 45 文件/101 测试/103 tuple（Windows warm）。CI 口径（master push，collect 三OS相同才可比）：ubuntu **72 文件/216 测试 → 19/42**，macos **80/247 → 28/80**，windows **49/123 → 13/34**。驱动的合并切片：#183（`build` job heap + 测试前 `bundle:agent`）、#184（族A 跨平台夹具，20 文件 93 个失败）、#185（族C/D/E）、#186（POSIX 产品缺陷 `env.ts` 分隔符 + cookie 路径）、#187（恢复 notebook 读取）、#189（族F/G/I/J1）、#192（J3/J4/J5 + 两个真实产品缺陷）、#193（inventory 属性断言）。
   **仍是红的，且 macOS 是最差的一条腿**（80 vs ubuntu 42）。已证确定性、需产品决定而**刻意未修**的：WorkflowPanel 12（面板被重写成 legacy stub）、plan315 2 + plan486 2（投影路径行为回归）、permissions-gate 2、sync-protection 1（`44109a68` 造成 plugin 与 plain-bundled 同分 2 的真实 tie）。未归因：族A 剩余文件 + `git-handlers.test.ts`（1，`git:review-diff` 错误文本不同）。**本条不因数字下降而勾选**——fullsuite 未绿。
+- [ ] 引用漂移门禁（`13-citation-drift`）恢复绿，并把本计划自己的 reference 文档纳入同一口径。
+  **本切片在 `2a375c1c` 上亲跑，该门禁是红的**：6 个测试里 1 个失败，tier-3"反引号锚点真的出现在它引用的区间内"报出 **7 条**。这不是新缺陷，是**一次可完整复现的回归**：
+  - #202 修了 `packages/agent-protocol/src/**` 注释里 5 条**行号**锚点（外加 6 条门禁结构上看不见的裸 `:NNNN` 续行），并把它自己的门禁跑到 **6/6**——但它的基线是 `d20e31ae`。
+  - #203 在**同一个合并窗口**给 `router.ts` 加了 **38 行**（`git diff --stat d20e31ae 2a375c1c -- .../router.ts` → `38 +++++`，提交 `6db75eb6`）。#202 重指的那些 `router.ts:NNNN` 因此整体后移。
+  - 实测后移量是**均匀的 +33**：`let seqNum = 0` 被引作 1557、实在 **1590**；`handleDeleteChat` 被引作 2030、实在 **2063**；`session.lastEventId` 被引作 2936、实在 **2969**。
+  - **在 `46967fa2`（#205 之后）复跑仍是同样 7 条红**：#205 没有碰这些锚点，故这条记录**未被推翻**，也没有自行愈合。
+  - #202 自己写过"这还需要再做一遍——这些仍是行号"。**这句话在一个合并窗口内就兑现了**：这不是预测，是已发生的事实，且 #202 已把"真正耐久的修法是解析符号而不是行号"留作 follow-up。
+  - **本切片是纯文档，不修它**——修它要动 `packages/agent-protocol/src/**` 的注释（那是别的 owner 的文件）。下一动作：把 `router.ts` 上那 7 条锚点按符号重指（`let seqNum = 0` → 1590、`handleDeleteChat` → 2063、`session.lastEventId` → 2969，其余逐条实测），并把该门禁改成按符号解析，才不会在下一个碰 `router.ts` 的 PR 里第三次变红。
+- [ ] 本计划 reference 文档的引用与代码注释**同一口径**（当前结构性缺口）。
+  该门禁的 scope **只有 `packages/agent-protocol/src/**/*.ts`**：`13-citation-drift.test.ts:52` 是 `SRC = join(PKG_ROOT, 'src')`，`packageSources()` 只收 `.ts`。**它从不读任何计划 markdown**，所以计划文档里的引用漂移**没有任何门禁在看**——本切片已复核该事实。
+  本切片的量化（脚本只解析、不改文件；口径：全仓 basename 索引 + `endsWith` 前缀匹配，数字是**下界**）：
+  - 本计划目录 **915 条** `file:line` 引用，分布在 **29 个文件**（根 295 / `reference/` 316 / `history/` 304）。
+  - 被点名的 `reference/07-agent-protocol-spec.md` 单文件 **95 条**：**50 条**在界内且唯一解析、**23 条**basename 歧义、**22 条**指向的文件在树上**已不存在**（多为 monorepo 迁前路径，如 `electron/agents/server/router.ts`、`ai/types.ts`）。
+  - 另有 3 条行号已越界（如 `CDPClient.ts:1515`，该文件只有 1512 行）。
+  **为什么这不是"顺手修一下"**：门禁按设计只看协议包的注释；把它扩到计划 markdown 是**改门禁**，不是改注释。而且 `reference/` 按本计划 README §4 的定位是"旧设计和评审，仅用于证据"，其中相当一部分引用指向的历史路径**本来就该指向历史**。真正吃紧的是**活文档引用 reference 文档行号**的地方——例如本计划 `05-behavior-and-evals.md` 引用 `07-agent-protocol-spec.md:244/:278/:313`，reference 一漂，活文档的论证就跟着失效。
+  **本切片的判断：值得一个独立切片，但优先级低于 #202 那次回归修复。** 理由是它有真实成本却**没有任何测试会红**（静默失败），而且 #202 已经用 `path`+符号锚点（#199 在 H8 普查里用的同一套办法）在代码注释侧证明了这套模式可行。切片建议：(1) 先按符号把**活文档**（根目录 16 个文件、295 条引用）里指向已迁路径的引用修掉；(2) `history/` 与 `reference/` 里指向历史路径的引用**显式标注为 archival**，不要逐条修——修它们既无收益又会制造假的"已验证"；(3) 门禁扩 scope 单独一步，先只对根目录 `0x-*.md` + `README.md` 开 tier-1/tier-2，别一上来就要求 tier-3 锚点。
 - [ ] required checks采用可稳定通过且不能掩盖回归的job。仓库设置变更前先给出具体job名和rulesetdiff，按权限工具执行；没有管理权限标blocked并保留本地/CI实施证据，不能称强制合并门禁已完成。
+
   **权限已确认**：`gh api repos/lava-chen/duya` 返回 `admin: true`，本项**不blocked**。现状：仓库已有1条active ruleset `Protect master branch`（id `17257193`，target `~DEFAULT_BRANCH`，规则仅 `deletion` + `non_fast_forward`），**required status checks 为空**。
   **已加过一次并回滚。** 按用户确认在既有ruleset上追加 `required_status_checks: [{context: "architecture"}]`（未另建ruleset）。随后master最新提交 `026d3c1e` 的 `architecture` job **failure**——该job在真实runner上**不是稳定绿**，按本条"可稳定通过"的判据本就不该设required。**已把ruleset回滚为原状**（只剩 `deletion` + `non_fast_forward`），仓库未被卡住。本项保持开放。
   **回滚原因是一个真发现**：`architecture:check` **Windows 绿（802/802/802零新增）而 ubuntu 红（801 tolerated + 1个新增违规）**。定位为门禁自身的跨平台解析缺陷（详见下方"跨平台门禁缺陷"）。在新 `architecture` job 成为 required 之前必须先修好它，否则一个假阳性会变成永久阻断所有合并的门禁。
