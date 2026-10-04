@@ -627,6 +627,14 @@ describe('H8.2 — measured consumer inventory', () => {
     // the CLI's turn now opens through the shared `RunController`, so 4 became
     // 1. The sub-agent is the whole of what is left, and `runAgent.ts` is a
     // nested loop inside the parent worker with no run row of its own.
+    //
+    // Unchanged by the H8.2 automation work, and deliberately so. Automation
+    // was never counted here: it does not call `.streamChat(` at all, it POSTs
+    // to the same `POST /sessions/:id/chat` the renderer uses. What H8.2 fixed
+    // was the half this file cannot see — automation settling on the worker's
+    // `done` FRAME instead of reading the `RunResult`. Fixing a read cannot
+    // move an entry count, and a number that moved because a read changed
+    // would mean the count had been measuring the wrong thing.
     expect(TURN_ENTRIES.length - cpDriven).toBe(1);
     expect(TURN_ENTRIES.length).toBe(3);
     expect(cpDriven).toBe(2);
