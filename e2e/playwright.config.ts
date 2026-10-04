@@ -39,6 +39,13 @@ export default defineConfig({
       testMatch: /ipc\/.*\.spec\.ts/,
     },
     {
+      // Plan 587 E4.4: a full turn through the real boundary, which needs a
+      // loopback provider and a live worker, so it is its own project rather
+      // than a member of the channel-probing `ipc` set.
+      name: 'turn',
+      testMatch: /turn\/.*\.spec\.ts/,
+    },
+    {
       name: 'ui',
       testMatch: /conductor\/.*\.spec\.ts/,
     },
