@@ -614,6 +614,25 @@ export const UNCLASSIFIED_PREFIXES: readonly { prefix: string; why: string }[] =
  * M5.1 §4: "禁止 core 输入中藏 IO 函数却宣称纯". These are the cases where a
  * module the policy calls `core` performs IO. They are findings: this slice
  * produces a map, and moving them is M5.3's work.
+ *
+ * ── M5.3 update: the layer declaration was wrong, so the declaration is fixed
+ *    and the finding is retired at its cause.
+ *
+ * M5.1 recorded these three as "`ai` is declared layer `core`, therefore IO in
+ * `ai` is a violation by definition". M5.3 measured the package and reached a
+ * different conclusion: `ai` is genuinely core-SHAPED (see the long note at
+ * `architecture-policy.yaml`'s `core` line — the two packages that actually
+ * carry the contract, `agent-protocol` and `agent-core`, import nothing from
+ * it at all), and what was actually missing was not a re-label but a GATE.
+ *
+ * So `declaredLayer` below no longer reads `core`: these files are inside a
+ * package whose core-declared half is pure, and they are the declared
+ * capability carve-out inside it. They are still listed here, still re-read at
+ * their cited lines by `slice-classification.test.ts`, and still inventoried in
+ * `layer-purity.ts` `CORE_MODULES` — so the evidence stays live and checked.
+ *
+ * What changed is that the next one cannot be added silently: `layer-purity.ts`
+ * fails on any IO site in a `core` root that is not in its carve-out.
  */
 export interface PurityViolation {
   readonly file: string;
@@ -627,23 +646,23 @@ export const PURE_VIOLATIONS: readonly PurityViolation[] = [
   {
     file: 'packages/ai/src/api/ollama-chat.ts',
     line: 329,
-    declaredLayer: 'core (architecture-policy.yaml layers)',
+    declaredLayer: 'capability carve-out inside legacy-ai (architecture-policy.yaml layers)',
     evidence: "await fetch(`${this.baseURL}/api/chat`, {",
-    why: 'A `core` module performing network IO. `ai` is declared layer `core`, so this is the violation by definition, not by judgement.',
+    why: 'A network call inside a core-declared package. NOT relabelled: see the `core` note in architecture-policy.yaml. This file should take an injected transport — the pattern already exists twice in the same package (system-one/client.ts:166 and api/google-generative-ai.ts:398 both resolve a `fetch` default into an injectable seam).',
   },
   {
     file: 'packages/ai/src/api/ollama-chat.ts',
     line: 618,
-    declaredLayer: 'core (architecture-policy.yaml layers)',
+    declaredLayer: 'capability carve-out inside legacy-ai (architecture-policy.yaml layers)',
     evidence: "const response = await fetch(`${this.baseURL}/api/embed`, {",
-    why: 'Second network call in the same file; a separate capability from the chat completion.',
+    why: 'Second network call in the same file; a separate capability from the chat completion, and the same injected-transport fix covers both.',
   },
   {
     file: 'packages/ai/src/api/bedrock-converse.ts',
     line: 35,
-    declaredLayer: 'core (architecture-policy.yaml layers)',
+    declaredLayer: 'capability carve-out inside legacy-ai (architecture-policy.yaml layers)',
     evidence: "} from 'node:crypto';",
-    why: 'A `core` module importing a Node builtin. Lazy-loaded at line 69, so the renderer can import this file — the import is still a core-layer dependency on a host primitive, and the laziness defers the load without removing the coupling.',
+    why: 'A `core`-shaped module importing a Node builtin. Lazy-loaded at line 69, so the renderer can import this file — the import is still a coupling, and the laziness defers the load without removing it. NOTE the `import type` on this line is erased at compile time and is NOT itself a capability; `layer-purity.ts` skips type-only imports for exactly this reason and flags the real `require` at line 69 instead.',
   },
 ];
 

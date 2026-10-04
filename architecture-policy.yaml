@@ -65,7 +65,44 @@ global:
 # ── Dependency layers: a module may only depend downward ───────────────────
 layers:
   - protocol # agent-protocol, shared
-  - core # agent-core, agent-tools, ai
+  - core # agent-core, ai
+  #
+  # M5.3: this line was `core # agent-core, agent-tools, ai` and was
+  # DECORATIVE — `architecture-check.mjs` never reads the `layers:` block
+  # (verified: grepping it for `layer` returns zero matches), so "a core module
+  # performs no IO" was a claim with no machinery behind it. Two things changed.
+  #
+  # 1. `agent-tools` was REMOVED because no such package exists on disk
+  #    (measured: `Test-Path packages/agent-tools` -> False). It named a
+  #    boundary that was never built, which is how a layer list starts lying.
+  #
+  # 2. `ai` STAYS core, deliberately, and the reason is measured rather than
+  #    argued:
+  #      - `packages/agent-protocol` and `packages/agent-core` import NOTHING
+  #        from `@duya/ai` (measured). `agent-core.requires` lists `ai`, but no
+  #        such edge exists, so nothing at layer `core` can reach `ai`'s IO
+  #        through a declared dependency.
+  #      - the overwhelming majority of `packages/ai` is pure wire-shape
+  #        translation: of its source subtrees, `providers/`, `system-one/` and
+  #        `utils/` have zero network/crypto sites.
+  #    Relabelling `ai` non-core would have been the WORSE option: it would have
+  #    made a package that can `fetch` reachable from `core` by declaration
+  #    while calling it something other than core. That is precisely the
+  #    "IO smuggled in through an input" the plan exists to remove.
+  #
+  #    Instead the IO is INVENTORIED and WATCHED.
+  #    `scripts/architecture/layer-purity.ts` walks every core root and asserts
+  #    the set of IO-performing files is exactly a declared carve-out. Adding a
+  #    `fetch(` to a `core` root now fails `npx vitest run scripts/architecture`.
+  #    Proven by mutation: inserting one `fetch(` into
+  #    `packages/ai/src/providers/minimax.models.ts` fails with
+  #    "fetch in a layer-legacy-ai module, which declares no IO".
+  #
+  #    The carve-out is 6 files, and running the gate is what FOUND three of
+  #    them (the host-clock sites) that M5.1's hand-kept list of three did not
+  #    contain. A hand-kept list stops finding the fourth; a gate does not.
+  #    Each entry, and the follow-on port that retires it, is recorded in
+  #    `layer-purity.ts` `CORE_MODULES`.
   - runtime # agent-runtime
   - host # desktop, cli, gateway
 # harness/ lives outside the workspace and is validated separately (05 §4.4).
