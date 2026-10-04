@@ -354,6 +354,38 @@ export function classifyRequires(bundleText, externals) {
 export const BASH_WORKER_ALLOWED_EXTERNALS = [];
 
 /**
+ * Every literal `require("...")` specifier in a built BashWorker.js, found by
+ * plain text scan rather than by the lexer.
+ *
+ * This exists because `classifyRequires` cannot be trusted as the ONLY witness
+ * for this file. Its lexer desynchronizes partway through the real minified
+ * worker and silently stops reporting every `require` after that point — a
+ * third-party require appended to the end of the built file is not reported at
+ * all. That blind spot is inherited from the shared helper and is not fixed
+ * here; it is avoided instead, by cross-checking the worker with a scan that
+ * has no state to lose.
+ *
+ * A raw regex over-reports in general (it can match text inside a string), which
+ * is why the entry uses the lexer: the entry inlines ajv, whose runtime keyword
+ * modules paste `require("ajv/dist/runtime/equal")` into a string for a code
+ * generator at validation time, and a raw scan would accuse a healthy bundle.
+ * The worker is a small, dependency-free, single-purpose file with no code
+ * generator, so here the safe direction is the loud one: report the specifier
+ * and let a human see it. A false report costs one look; a missed require ships
+ * a broken Bash tool.
+ *
+ * @param {string} text
+ * @returns {string[]} unique specifiers, in first-seen order
+ */
+export function scanBashWorkerSpecifiers(text) {
+  const found = [];
+  for (const match of text.matchAll(/require\(\s*["']([^"'\n]+)["']\s*\)/g)) {
+    if (!found.includes(match[1])) found.push(match[1]);
+  }
+  return found;
+}
+
+/**
  * Prove a built BashWorker.js resolves nothing at runtime.
  *
  * Existence is not enough. A worker file that `require`s a third-party package
@@ -362,6 +394,10 @@ export const BASH_WORKER_ALLOWED_EXTERNALS = [];
  * shipped. This is the same reasoning as the entry's `bundle-self-contained`
  * check, applied with the stricter allowlist the worker's process model forces.
  *
+ * The non-builtin specifiers are decided by the state-free scan above, not by
+ * the lexer, so this check cannot be silenced by the lexer's desync. The lexer
+ * is still consulted for relative and computed requires.
+ *
  * @param {string} workerText emitted worker source
  * @param {string} workerPath path, used only in messages
  * @returns {Finding[]}
@@ -369,27 +405,37 @@ export const BASH_WORKER_ALLOWED_EXTERNALS = [];
 export function checkBashWorkerSelfContained(workerText, workerPath) {
   /** @type {Finding[]} */
   const findings = [];
-  const classified = classifyRequires(workerText, BASH_WORKER_ALLOWED_EXTERNALS);
+  const builtins = new Set(builtinModules);
+  const specifiers = scanBashWorkerSpecifiers(workerText);
 
-  if (classified.thirdParty.length > 0) {
-    findings.push({
-      check: 'bash-worker-self-contained',
-      kind: 'missing',
-      message: `the built BashWorker requires ${classified.thirdParty.join(', ')}, which resolves `
-        + 'only through a node_modules the package does not ship next to the worker',
-      evidence: `${workerPath} — the worker is spawned as its own process, so the entry's `
-        + 'externals allowlist does not apply to it',
-    });
+  const unresolvable = specifiers.filter((spec) => {
+    if (spec.startsWith('node:') || builtins.has(spec)) return false;
+    if (BASH_WORKER_ALLOWED_EXTERNALS.some((e) => spec === e || spec.startsWith(`${e}/`))) return false;
+    return true;
+  });
+
+  if (unresolvable.length > 0) {
+    const relative = unresolvable.filter((s) => s.startsWith('.') || path.isAbsolute(s));
+    const thirdParty = unresolvable.filter((s) => !relative.includes(s));
+    for (const [label, list] of [['requires', thirdParty], ['still requires relative paths', relative]]) {
+      if (list.length === 0) continue;
+      findings.push({
+        check: 'bash-worker-self-contained',
+        kind: 'missing',
+        message: `the built BashWorker ${label} ${list.join(', ')}, which resolves only through a `
+          + 'node_modules the package does not ship next to the worker',
+        evidence: `${workerPath} — the worker is spawned as its own process, so the entry's `
+          + 'externals allowlist does not apply to it; every literal require in it: '
+          + `${specifiers.join(', ') || '(none)'}`,
+      });
+    }
   }
-  if (classified.relative.length > 0) {
-    findings.push({
-      check: 'bash-worker-self-contained',
-      kind: 'missing',
-      message: `the built BashWorker still requires relative paths `
-        + `(${classified.relative.slice(0, 5).join(', ')}), which esbuild should have inlined`,
-      evidence: workerPath,
-    });
-  }
+
+  // Only what the state-free scan cannot see is left to the lexer: a computed
+  // require has no string literal to match. Its literal-specifier findings are
+  // not used, because the scan above already covers them without a desync risk
+  // and reporting both would double-count the same defect.
+  const classified = classifyRequires(workerText, BASH_WORKER_ALLOWED_EXTERNALS);
   if (classified.dynamic > 0) {
     // Same reasoning as the entry: a computed require cannot be resolved
     // statically, so it is surfaced rather than assumed safe by silence.

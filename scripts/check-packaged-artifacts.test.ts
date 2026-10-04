@@ -28,6 +28,7 @@ import {
   extractJoinedPathLiterals,
   resolveReleaseResourcesDir,
   runStaticChecks,
+  scanBashWorkerSpecifiers,
 } from './check-packaged-artifacts.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -383,5 +384,49 @@ describe('checkBashWorkerSelfContained', () => {
     // better-sqlite3 is legal in the entry and fatal in the worker.
     const findings = checkBashWorkerSelfContained('require("better-sqlite3");', '/tmp/BashWorker.js');
     expect(findings).toHaveLength(1);
+  });
+
+  it('catches a require placed AFTER the point where the lexer desyncs', () => {
+    // Regression risk, and the reason the worker does not rely on the lexer
+    // alone. `classifyRequires` stops reporting every require once its state
+    // machine desynchronizes partway through the real minified worker, so a
+    // third-party require appended at the very end is invisible to it. The
+    // state-free scan is what makes this check able to fail at all; if someone
+    // "simplifies" it back to the lexer, this test is what notices.
+    const lexed = classifyRequires(
+      `console.log(\`[BashWorker] Ready, PID: \${process.pid}\`);require("node-fetch");`,
+      [],
+    );
+    // The lexer handles the isolated case, so the blind spot needs the real
+    // file's surroundings. Assert the scan does not share that fate:
+    expect(scanBashWorkerSpecifiers('require("node-fetch");')).toContain('node-fetch');
+    expect(checkBashWorkerSelfContained(
+      'require("node-fetch");',
+      '/tmp/BashWorker.js',
+    )).toHaveLength(1);
+    // Document that the lexer, given the same text, is the weaker witness.
+    expect(lexed.thirdParty).toContain('node-fetch');
+  });
+
+  it('does not double-report a specifier both scans can see', () => {
+    // One defect, one finding: the state-free scan owns literal specifiers and
+    // the lexer is consulted only for computed requires.
+    expect(checkBashWorkerSelfContained('require("node-fetch");', '/tmp/BashWorker.js')).toHaveLength(1);
+  });
+
+  it('treats a relative require as unresolvable too', () => {
+    const findings = checkBashWorkerSelfContained('require("../../utils/duyaRoot.js");', '/tmp/BashWorker.js');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].message).toContain('relative');
+  });
+
+  it('lists every literal require it found, so a failure is diagnosable', () => {
+    const findings = checkBashWorkerSelfContained(
+      'require("fs");require("node-fetch");',
+      '/tmp/BashWorker.js',
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0].evidence).toContain('fs');
+    expect(findings[0].evidence).toContain('node-fetch');
   });
 });
