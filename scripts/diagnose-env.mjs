@@ -183,12 +183,10 @@ function diagnoseExtraResources() {
   const publicDir = path.join(resDir, 'public');
   const extensionDir = path.join(resDir, 'extension');
   const assetsDir = path.join(resDir, 'assets');
-  const docParserDir = path.join(resDir, 'document-parser');
 
   addResult('Extra Resources', 'agent/skills/', 'packages/agent/skills/', 'packages/agent/skills/', `resources/agent/skills/`, checkFile(skillsDir, 'skills').status);
   addResult('Extra Resources', 'public/', 'public/', 'public/', `resources/public/`, checkFile(publicDir, 'public').status);
   addResult('Extra Resources', 'assets/', 'assets/', 'assets/', `resources/assets/`, checkFile(assetsDir, 'assets').status);
-  addResult('Extra Resources', 'document-parser/', 'build/document-parser/', 'build/document-parser/', `resources/document-parser/`, checkFile(docParserDir, 'doc-parser').status);
 
   if (fs.existsSync(extensionDir)) {
     addResult('Extra Resources', 'browser-extension/', 'resources/browser-extension/', 'resources/browser-extension/', `resources/extension/`, 'ok');

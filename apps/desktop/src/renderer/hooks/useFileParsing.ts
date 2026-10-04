@@ -7,9 +7,11 @@
  * data-URL reading. Non-image files are attached as-is (path + text when
  * the agent can read them directly); there is no client-side document
  * parsing pipeline anymore.
+ *
+ * This is a plain helper module, not a hook: the former `useFileParsing`
+ * facade was never called by anything, so it is gone. The three exported
+ * helpers are imported directly by `useAttachments.ts`.
  */
-
-import type { FileAttachment } from '@/types/message';
 
 /**
  * Resolve a real filesystem path for a File. Electron < 32 sets `file.path`,
@@ -56,18 +58,3 @@ export function isBinaryDocumentFile(filename: string): boolean {
   const ext = '.' + filename.split('.').pop()?.toLowerCase();
   return BINARY_DOC_EXTS.has(ext);
 }
-
-/**
- * Hook stub — exposes only the helpers above. The original
- * `useFileAttachments` parsing logic is now invoked as plain functions,
- * so no React state is needed at this layer.
- */
-export function useFileParsing() {
-  return { resolveFilePath, isBinaryDocumentFile, readFileAsDataURL };
-}
-
-/**
- * Re-export the small subset of legacy `FileAttachment`-related types
- * so this file can stand alone as the attachment helper API surface.
- */
-export type { FileAttachment };

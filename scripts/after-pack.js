@@ -462,18 +462,5 @@ module.exports = async function afterPack(context) {
   verifyPlaywright('playwright');
   verifyPlaywright('playwright-core');
 
-  // Step 5: Document parser payload is OPTIONAL as of plan 106.
-  // The main path uses NodeFileParser (in-process) — no sidecar needed.
-  // The Python sidecar remains available as an opt-in fallback for
-  // legacy .doc parsing, but it is no longer built or shipped by
-  // default. We only verify presence here, never copy.
-  console.log('[afterPack] Step 5: Checking document-parser resources (optional)...');
-  const documentParserTarget = path.join(RESOURCES_DIR, 'document-parser');
-  if (fs.existsSync(documentParserTarget)) {
-    console.log('[afterPack] document-parser resources present (legacy .doc fallback shipped)');
-  } else {
-    console.log('[afterPack] document-parser resources absent (NodeFileParser-only build)');
-  }
-
   console.log('[afterPack] Done');
 };
