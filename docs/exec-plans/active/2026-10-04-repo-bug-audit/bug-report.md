@@ -184,28 +184,36 @@ expect({ count: registry.remainingConsumers, sites: sites, measured: measured.le
 | `npx vitest run` | 44 个失败文件 | 40 个失败文件 | **0 新增**，且修好 4 个（`eval-legacy-loop`、`eval-baseline-comparison`、`run-suite`、`GrepTool`） |
 | 全仓行尾一致性 | — | 0 噪音 | 每个文件比对 `--numstat` 与 `--ignore-cr-at-eol --numstat` |
 
-**合并后**（在 merge 结果上重跑，这才是有意义的数字）：
+**合并后**（在最终 merge 结果 `4ad23b9e` = `b40fa596` + `d20e31ae` 上重跑，这才是有意义的数字）：
 
 | 门禁 | 结果 | 结论 |
 | --- | --- | --- |
-| `npm run typecheck:all` | exit 0，299 known / 147 keys | 0 新增（含 upstream 新增的 `check-packaged-artifacts`） |
+| `npm run typecheck:all` | exit 0，299 known / 147 keys | 0 新增 |
 | `npm run architecture:check` | exit 0，cycle 16，total 879，tolerated 879 | 0 新增边界违规 |
 | `npm run bundle:agent` | exit 0，`agent-process-entry.js` + `BashTool/BashWorker.js` 均产出 | 印证旧基线上"BashWorker 缺失"那条结论已作废 |
-| `npx vitest run` | 1098 文件：1082 通过 / **8 失败** / 8 跳过 | **0 回归**（见下） |
+| `npx vitest run` | 1099 文件：1083 通过 / **8 失败** / 8 跳过 | **0 回归**（见下） |
 
-**8 个失败文件的甄别结论**（逐个隔离复跑 + 与基线 worktree 同文件集差分）：
+**8 个失败文件 / 24 个失败用例的甄别**：
 
-| 文件 | 归属 |
-| --- | --- |
-| `workflow-store`、`WorkflowPanel`、`sync-protection`、`DuyaAgent.plan315`、`DuyaAgent.plan486`、`permissions-gate`、`AgentTool` | 基线 worktree 上同样失败（27 个用例）→ **既有欠债** |
-| `os-context/watcher` | 隔离复跑 6/6 通过，双方分支均未触碰该文件或其被测源 → **满负载 debounce 时序抖动** |
+差分方法：把两次 run 输出里所有失败用例名（`✗ <suite> > <case>`）取集合差，得
+`24（合并后） vs 27（基线同文件集）`。差集里"新增失败 4 项"逐个隔离复跑：
 
-差分方法：把两个 run 输出里所有失败用例名（`✗ <suite> > <case>`）取集合差。`22（合并后） vs 27（基线同集）`，
-差集为"不再失败 7 项 / 新增失败 2 项"，其中新增 2 项经隔离复跑全部通过（`watcher` debounce 与
-`runAgentSync` 的无 API key 用例）→ **真实回归 0**。
+| 用例 | 隔离复跑 | 判定 |
+| --- | --- | --- |
+| `envelope-frame-parity` 的 3 项 F05 token-ceiling | 6/6 通过 | 满负载时序抖动。该文件此刻**还是未跟踪的新文件**（另一条工作线正在写），双方分支均未触碰 |
+| `runAgentSync > should return error when no API key` | 通过 | 满负载顺序依赖，依赖环境变量 |
+| `os-context/watcher > debounces rapid writes` | 6/6 通过 | 满负载 debounce 时序抖动，双方分支均未触碰 |
 
-顺带修好的 7 项里，6 项是 upstream 自己在 102 个提交里修好的（`AgentTool` 的
+→ **真实回归 0**。其余失败文件（`workflow-store`、`WorkflowPanel`、`sync-protection`、
+`DuyaAgent.plan315`、`DuyaAgent.plan486`、`permissions-gate`、`AgentTool`）在基线 worktree
+上同样失败，确认为既有欠债。旧基线是 44 个失败文件。
+
+顺带修好的 7 项里，6 项是 upstream 自己在其 102+9 个提交里修好的（`AgentTool` 的
 `getSubagentToolDefinition` 系列），1 项是本次订正的 citation 引用。
+
+> ⚠️ **一处方法论缺陷，如实记录**：上表的集合差分把"基线那次跑里根本没跑到的文件"也算成
+> "基线通过"。`F05` 那一组就是因此被误列为回归的 —— 它在基线时还不存在于 git 里。
+> 差分只在**两次运行覆盖同一批文件**时有效，跨批次的"新增失败"必须先确认该文件当时是否被跑到。
 
 ### 满负载下会抖、但判定为非回归的测试
 
