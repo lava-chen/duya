@@ -220,6 +220,13 @@ export {
   parseNdjsonLine,
 } from './transport/line-codec.js';
 
+// Plan 600 S2 -- the awaitable hop on the executor-facing sink.
+//
+// Exported together with the type it serves, because a producer that cannot name
+// `awaitMaybe` cannot be expected to await, and a producer that does not await
+// leaves the byte bound exactly as advisory as it was before.
+export { awaitMaybe } from './transport/execution-channel.js';
+
 export type {
   RawFrameIntake,
   RuntimeTransport,
@@ -328,3 +335,65 @@ export type {
   TRANSPORT_ERROR_CATEGORIES_ARE_EXHAUSTIVE,
   TRANSPORT_PORTS_CARRY_NO_RUN_STATE,
 } from './transport/transport-guards.js';
+
+// Plan 600 S2 -- the RunEngine port contract, and the engine that implements it.
+//
+// The ports and the implementation are exported TOGETHER on purpose. Exporting
+// the interface alone would let `headless-run-host.ts` reach for it and believe
+// the loop had moved, which is the exact acceptance-gate failure `04` section 0
+// records: a real controller around an executor that still calls
+// `duyaAgent.streamChat` passes the old gate while the loop never moved. What a
+// consumer needs in order to be honest about execution is BOTH the shape and the
+// thing that drives it.
+export { RunEngineImpl } from './engine/run-engine.js';
+export type { EngineExit, EngineExitReason, EngineRunReport, RunEngineOptions } from './engine/run-engine.js';
+
+export type {
+  ApprovalPort,
+  ApprovalRequest,
+  ApprovalScope,
+  ApprovalVerdict,
+  AssembledTurn,
+  AttemptLeasePort,
+  BudgetPort,
+  CheckpointPort,
+  ContextPort,
+  ExtensionContext,
+  ExtensionContribution,
+  ExtensionContributor,
+  ExtensionPhase,
+  ExtensionPort,
+  ModelContentBlock,
+  ModelFrame,
+  ModelMessage,
+  ModelPort,
+  ModelRequest,
+  ModelStopReason,
+  ResolvedPart,
+  RunEngine,
+  RunEnginePorts,
+  RunEventStorePort,
+  RunExecutionHandle,
+  RunExecutionRequest,
+  RunInputSnapshot,
+  SteeringDirective,
+  SubtaskHandle,
+  SubtaskRegistration,
+  SubtaskRegistry,
+  SubtaskSweepRule,
+  SubtaskTermination,
+  SubtaskTerminationReason,
+  TerminalCandidate,
+  ToolAttemptRecord,
+  ToolCallRequest,
+  ToolDescriptor,
+  ToolDispatchTicket,
+  ToolDiscardReason,
+  ToolOutcome,
+  ToolPort,
+  ToolSideEffectLedger,
+  TransientContextFragment,
+  TurnAssemblyInput,
+  WorkerAdapterSurface,
+} from './engine/ports.js';
+export type { AttachmentInput } from './engine/ports.js';

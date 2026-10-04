@@ -1,4 +1,4 @@
-﻿/**
+/**
  * The `RunEngine` port is IMPLEMENTABLE.
  *
  * ## What this file is, and what it is not
