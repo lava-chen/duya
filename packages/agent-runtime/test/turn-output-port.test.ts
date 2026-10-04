@@ -50,6 +50,7 @@ import { RunEngineImpl } from '@duya/agent-runtime';
 import type {
   ApprovalVerdict,
   AssembledTurn,
+  EngineRunReport,
   ModelFrame,
   ModelMessage,
   ModelPort,
@@ -144,6 +145,14 @@ interface Harness {
   readonly ledger: string[];
   readonly deferred: TransientContextFragment[];
   readonly terminals: string[];
+  /**
+   * Every `onReport` payload, in order.
+   *
+   * The engine's OWN account of how the run ended, read from the `onReport`
+   * hook rather than reconstructed. Asserting on `terminals` alone would not see
+   * the refusal MESSAGE, which is the half that names the lost call.
+   */
+  readonly reports: EngineRunReport[];
   modelSawText(): string;
   completed: Promise<void>;
 }
@@ -165,6 +174,7 @@ function harness(options: HarnessOptions = {}): Harness {
   const ledger: string[] = [];
   const deferred: TransientContextFragment[] = [];
   const terminals: string[] = [];
+  const reports: EngineRunReport[] = [];
   const modelRequests: ModelMessage[][] = [];
   const controller = new AbortController();
 
@@ -269,6 +279,9 @@ function harness(options: HarnessOptions = {}): Harness {
   const engine = new RunEngineImpl({
     now: () => 1_000,
     defaultMaxTurns: options.maxTurns ?? 3,
+    onReport: (report) => {
+      reports.push(report);
+    },
   });
   const handle = engine.execute({
     manifest: MANIFEST,
@@ -285,6 +298,7 @@ function harness(options: HarnessOptions = {}): Harness {
     ledger,
     deferred,
     terminals,
+    reports,
     modelSawText: () =>
       modelRequests
         .flat()
@@ -536,25 +550,87 @@ describe('the summary is reported even when the drain is abandoned', () => {
 });
 
 // ============================================================================
-// 5. Absence costs exactly the host effects, and is stated rather than assumed
+// 5. A landed result with no port is REFUSED, never silently dropped
 // ============================================================================
 
-describe('a run with no output port still carries the result to the model', () => {
-  it('completes, shows the model the answer, and calls the host zero times', async () => {
-    // The live worker's state today (`agent-process-entry.ts:3236`), and the
-    // correct one while the legacy loop still performs the six effects itself.
-    // Asserting it is what keeps the port OPTIONAL honest: it is absent because
-    // the effects have not moved yet, not because they have no consumer.
-    const drained = result('call-1', RESULT_SENTINEL);
+describe('a host that binds no output port cannot lose a result quietly', () => {
+  it('fails the run, naming the call whose durable write would be lost', async () => {
+    // The obligation this pins. The five effects `TurnOutputPort` names are all
+    // DURABLE writes on the host side, and a run that skips them while still
+    // showing the model the answer produces the one divergence a turn loop must
+    // never produce: the model holds a result the transcript does not contain,
+    // so a replay from that transcript shows it asking a question it was already
+    // answered.
+    //
+    // POSITIVE, and the two sides come from different sources: the message is the
+    // engine's own refusal text, and the call id is the one the MODEL asked for
+    // on its `tool_use` frame. An assertion of the form "the host was called zero
+    // times" would pass just as well on an engine that dropped everything, which
+    // is the regression this replaced.
     const run = harness({
       calls: [READ_CALL],
-      batches: [[drained]],
+      batches: [[result('call-1', RESULT_SENTINEL)]],
       withoutOutputPort: true,
     });
     await run.completed;
 
-    expect(run.modelSawText()).toContain(RESULT_SENTINEL);
+    // A thrown drain is a FAILED run, reported through the terminal.
+    expect(run.terminals).toEqual(['failed']);
+    expect(run.reports[0]?.exit.message ?? '').toContain('refusing to drop tool result');
+    // And it names WHICH call, so the operator is not left guessing which of a
+    // parallel turn's results went missing.
+    expect(run.reports[0]?.exit.message ?? '').toContain('call-1');
+  });
+
+  it('settles the ledger and hands the host the fragment BEFORE refusing', async () => {
+    // The ordering a host cannot reconstruct for itself, and the reason the
+    // refusal does not make recovery harder than it has to be.
+    //
+    // The settle and the `defer` both happen BEFORE the throw, so the durable
+    // record of the effect exists and the fragment reached the context port even
+    // though the turn-output port refused. Without this the refusal would leave
+    // every call of the turn permanently `dispatched` in the ledger -- the one
+    // state a crash cannot classify.
+    //
+    // NOTE what is deliberately NOT asserted here: that the model still saw the
+    // answer. It did not, and cannot. The throw ends the run, so no further turn
+    // is requested and the deferred fragment is never carried into a request.
+    // That is the honest outcome rather than a gap -- a run that cannot record
+    // what it did must not keep talking to the model as though it had.
+    const run = harness({
+      calls: [READ_CALL],
+      batches: [[result('call-1', RESULT_SENTINEL)]],
+      withoutOutputPort: true,
+    });
+    await run.completed;
+
+    // The ledger row was written before the refusal.
     expect(run.ledger).toEqual(['begin:call-1', 'settle:key:call-1:succeeded']);
+    // The fragment reached the context port before the refusal.
+    expect(run.deferred.map((fragment) => fragment.key)).toEqual(['tool_result:call-1']);
+    // The host was called zero times -- the loss being refused, asserted only
+    // because the failure above already distinguishes "refused" from "dropped".
+    expect(run.records).toHaveLength(0);
+    expect(run.summaries).toHaveLength(0);
+    // And no second turn asked the model anything, which is why the answer was
+    // not carried forward.
+    expect(run.reports[0]?.spend.turns).toBe(1);
+  });
+
+  it('completes a turn that landed no result, because nothing was lost', async () => {
+    // The guard on the refusal. A tool-free turn with no port loses no durable
+    // write, so refusing there would fail every tool-free turn for a loss that
+    // did not happen -- and the live worker binds no port while the legacy loop
+    // remains the only consumer, so that failure would be immediate and total.
+    //
+    // `withoutOutputPort` with an EMPTY batch is the live worker's shape, and it
+    // must still reach `completed`. The two sides are the engine's own terminal
+    // and the harness's dispatched list, not a self-comparison.
+    const run = harness({ calls: [READ_CALL], batches: [[]], withoutOutputPort: true });
+    await run.completed;
+
     expect(run.terminals).toEqual(['completed']);
+    expect(run.dispatched.map((call) => call.callId)).toEqual(['call-1']);
+    expect(run.reports[0]?.exit.reason).toBe('completed');
   });
 });

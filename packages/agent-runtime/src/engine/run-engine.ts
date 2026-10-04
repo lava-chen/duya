@@ -663,18 +663,50 @@ export class RunEngineImpl implements RunEngine {
             // two readers, no second copy of the text.
             ports.context.defer(fragment);
             deferred.push(fragment);
+            // A landed result with no output port is a REFUSAL, not a skip.
+            //
+            // Every effect `TurnOutputPort` names is a durable write on the host
+            // side -- the transcript append, the `tool_result` frame, the
+            // catalog read-tracking, the failure hook. Skipping them would let
+            // the model carry on holding an answer that no transcript contains,
+            // which is the one divergence a turn loop must never produce: a
+            // replay from the durable timeline would show the model asking a
+            // question it was already answered.
+            //
+            // So this throws rather than publishes a diagnostic. The frame IS
+            // representable, the obligation is not optional, and a warning a
+            // consumer may ignore is exactly the silent loss being refused.
+            // A thrown drain is a FAILED run (`:408-411`), which is the honest
+            // outcome for a run that cannot record what it did.
+            //
+            // The settle and the `defer` above have already run, so the effect
+            // is not left permanently `dispatched` in the ledger and the context
+            // port has the fragment. What the throw DOES end is the run: no
+            // further turn is requested, so the deferred fragment is never
+            // carried into a model request. That is intended -- a run that
+            // cannot record what it did must not keep talking to the model as
+            // though it had -- and it is why the fragment is pushed before the
+            // refusal rather than relied on afterwards.
+            //
+            // This is reachable only once a host binds a real drain; the live
+            // worker binds an empty one today, so no result arrives here and the
+            // legacy loop remains the only consumer. That is what makes the
+            // refusal safe to add BEFORE the cutover rather than after it.
             const turnOutput = ports.turnOutput;
-            if (turnOutput !== undefined) {
-              await turnOutput.recordToolResult({
-                turn: ctx.turn,
-                // BY IDENTITY, so what the host is handed is exactly what the
-                // model will see next turn -- see `ToolResultRecord`.
-                outcome: item,
-                // `''` when this run never dispatched the call, which is the
-                // legacy fallback verbatim (`DuyaAgent.ts:2771`).
-                toolName: ctx.toolNames.get(item.callId) ?? '',
-              });
+            if (turnOutput === undefined) {
+              throw new Error(
+                `refusing to drop tool result '${item.callId}': this run landed a tool result with no TurnOutputPort bound, so the durable transcript write, the tool_result frame and the catalog read-tracking would all be lost`,
+              );
             }
+            await turnOutput.recordToolResult({
+              turn: ctx.turn,
+              // BY IDENTITY, so what the host is handed is exactly what the
+              // model will see next turn -- see `ToolResultRecord`.
+              outcome: item,
+              // `''` when this run never dispatched the call, which is the
+              // legacy fallback verbatim (`DuyaAgent.ts:2771`).
+              toolName: ctx.toolNames.get(item.callId) ?? '',
+            });
             await this.#contribute(ctx, 'after_tool', { outcome: item });
             break;
           }
@@ -724,6 +756,19 @@ export class RunEngineImpl implements RunEngine {
         }
       }
     } finally {
+      // `finally`, so the abort path reports too -- the legacy ran its
+      // `toolResultMessageCount > 0` work after the loop closed
+      // (`DuyaAgent.ts:2858`) with no abort guard of its own, so a result that
+      // landed before the stop still counted.
+      //
+      // NOT guarded on `results > 0` here, and deliberately: a `tool_result` that
+      // reached this block with no port bound has already thrown above, so the
+      // only way to arrive here unbound is a drain that landed nothing. There is
+      // no record to drop and no obligation to refuse, so a tool-free turn on a
+      // host with no port still completes -- which is the live worker's state
+      // today, where the legacy loop remains the only consumer. Refusing
+      // unconditionally would fail every tool-free turn for a loss that did not
+      // happen.
       const turnOutput = ports.turnOutput;
       if (turnOutput !== undefined) {
         await turnOutput.finishTurn({

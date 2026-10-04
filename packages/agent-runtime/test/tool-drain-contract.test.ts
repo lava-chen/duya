@@ -214,6 +214,16 @@ function harness(options: {
         ? {}
         : { projectSubagentProgress: (event: AgentProgressEvent) => options.project!(event) }),
     } as RunEventStorePort,
+    // A landing pad, not a subject. This suite is about the DRAIN contract, but
+    // the engine refuses a drained `tool_result` when no `TurnOutputPort` is
+    // bound (`run-engine.ts`, the `case 'tool_result'` arm) -- five durable host
+    // effects would be lost. So the harness accepts the results and records
+    // nothing this file asserts on; the port's own behaviour is covered by
+    // `turn-output-port.test.ts`.
+    turnOutput: {
+      async recordToolResult(): Promise<void> {},
+      async finishTurn(): Promise<void> {},
+    },
     ...(options.noLedger === true
       ? {}
       : {

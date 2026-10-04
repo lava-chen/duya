@@ -660,14 +660,19 @@ export type ApprovalScope = 'once' | 'always' | 'session';
  * ## What absence costs, stated exactly
  *
  * When `RunEnginePorts.turnOutput` is absent -- which is the live worker's
- * state today, and correctly so (`agent-process-entry.ts:3236`) -- the engine
- * still settles the ledger, still defers the fragment and still shows the model
- * the answer, and NONE of the six host effects happen. That is not a defect to
- * paper over: the legacy loop still performs them, and performing them twice is
- * the failure a half-bound port would cause. **The obligation the cutover slice
- * must discharge is: before the legacy loop is removed, a host that loses a
- * tool result must be impossible, which means this port has to be bound by
- * something other than `DuyaAgent.streamChat`'s own closure.**
+ * state today, and correctly so, because its `drainTools` is an empty stream
+ * and the legacy loop inside `DuyaAgent.streamChat` still performs every effect
+ * below itself -- the engine settles the ledger, defers the fragment and shows
+ * the model the answer, and NONE of the six host effects happen. That is not a
+ * defect to paper over: the legacy loop still performs them, and performing
+ * them twice is the failure a half-bound port would cause.
+ *
+ * **A landed result is the boundary.** The engine REFUSES rather than skipping
+ * when a `tool_result` actually arrives with no port bound -- see the
+ * `case 'tool_result'` arm in `run-engine.ts`. So the absence is only reachable
+ * on a drain that lands nothing, and the obligation the cutover slice must
+ * discharge is discharged by construction: a host that loses a tool result is
+ * impossible, because the run fails and names the call instead.
  */
 export interface TurnOutputPort {
   /**
@@ -838,12 +843,19 @@ export interface RunEnginePorts {
   /**
    * Where a landed tool result goes. See `TurnOutputPort`.
    *
-   * OPTIONAL, and the absence is the live worker's state today rather than an
-   * oversight: every effect this port names is currently performed by the
-   * legacy drain loop inside `DuyaAgent.streamChat`, and binding them here as
-   * well would perform each of them TWICE. Making it required before the cutover
-   * would break every composition for no gain; making it required AT the cutover
-   * is the obligation `TurnOutputPort` states in its own doc comment.
+   * OPTIONAL as a TYPE, and that is a statement about the wiring, not a
+   * licence: the engine REFUSES a drained `tool_result` when this is absent
+   * (`run-engine.ts`, the `case 'tool_result'` arm), because all five effects
+   * named above are durable writes and a missing port would drop every one of
+   * them without saying so. So the port may be omitted, but only by a host whose
+   * drain never lands a result -- which is the live worker's state today, where
+   * `drainTools` is an empty stream and `DuyaAgent.streamChat` remains the only
+   * consumer.
+   *
+   * The obligation this states is therefore discharged at the cutover: the day
+   * the legacy loop stops consuming, the engine's drain becomes the only
+   * consumer, and a forgotten binding here stops being a silent loss of five
+   * durable effects and becomes a FAILED run naming the call.
    */
   readonly turnOutput?: TurnOutputPort;
   /** Present only under budget option (a). See `BudgetPort`. */
