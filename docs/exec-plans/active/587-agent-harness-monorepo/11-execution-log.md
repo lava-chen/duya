@@ -803,3 +803,100 @@ Next task: 不变——在有空间的机器上跑一次 `npm run test:e2e:turn`
   `05-behavior-and-evals.md`。H8.2 侧的主 Next 已随 #205 收敛到 **subagent 的
   worker→CP 开 run 通道 + 三样合同改挂**（workflow 随它一起动）。
 ```
+
+```
+Task: H8.2 subagent child run —— 重测接缝，并决定 full 还是 scoped
+State: **scoped：没有开通道。** 一个新测试（纯测量，零生产代码改动）+ 两处计划记录更正。
+  `origin/master` 在本切片开工时已由 `46967fa2` 前移到 `49b4b15e`（#204 docs 合并），
+  本切片基于 `49b4b15e`。
+Head / branch / PR: 49b4b15e / feat/587-subagent-child-run / 见 PR
+本切片实测推翻了 #205 的四条发现里的一条:
+  #205 写「worker 的 `db-client` 约 230 个 action 里**一个 `run:*` 都没有**——从 subagent 到 CP
+  根本没有路」「缺的是一条 worker→CP 的开 run 通道，不是字段」。
+  **前半句对、后半句错。** 逐段实测（真 SQLite、真 bridge）：
+  - worker → agent-server：`db-client` 用 `process.send` 发 `db:request`；agent-server 在
+    `server/router.ts:1039`（另加 interagent / workflow / compact-lazy 三处同形）**原样转发**。
+  - agent-server → main：`agent-server-lifecycle.ts:160-181` 收下，并串上
+    `{senderPid: <agent-server pid>, registeredSessionId: null, role: 'agent-server'}`。
+  - main 路由：`db-bridge.ts:322-327` **早已**把 `run:create`/`run:append`/`run:complete`/
+    `run:get`/`run:events`/`run:list-session` 路由进 `controlPlane.serve(...)`。
+  - 授权：`agent-server-lifecycle.ts:616` `registerSpawnedWorker(child.pid,'agent-server',child)`，
+    且 `main/index.ts:351-355` 的生产 `allowedOrigins` 里**就有** `roleOrigin('agent-server')`。
+  → **通道、授权、`parentRunId`（`parent_run_id` 列 + `idx_runs_parent`，migration 35）三样都已就位。**
+    「`db-client` 没有 `run:*` helper」这句仍然成立——那说的是**类型化客户端表面**，不是路。
+  → 真正缺的是 `openRun` 的**另一半**：`openRun` 是「开 run **并且**派发」，派发是
+    `workerManager.sendCommand(command.sessionId, ...)`（`server/index.ts:334`），**按 session 绑定**，
+    且要 `handlePostChat` 先 spawn 了 worker、并有 SSE 消费者把帧 tee 进 `observe` 才成立。
+    worker 发起的 child run 两样都没有。`handlePostChat` 减去 SSE 写出**在树内不是一个可复用组件**。
+为什么是 scoped 而不是 full（这是本切片的核心判断）:
+  #205 的警告成立：**不要只开通道不迁合同**。本切片能证明「通道与闸门就位」，
+  证明不了「三样合同能一起迁走」——后者依赖的 dispatch 路径不存在。
+  在通道已就位的前提下硬开，等于把一个**没有 dispatch** 的 `run:create` 交给 subagent，
+  那正是 #205 说的「把自己吊死」。故**不开通道**，改为把接缝测准并写进计划。
+三样合同各自的接缝（逐条测过 owner，**均未迁移**）:
+  1. `chat:agent_progress`：13 个文件，含**渲染层**（`stream-session-manager.ts`、
+     `subagent-live-transcript.ts`、`renderer/types/hooks.ts`）。child run 在**另一个 worker**，
+     其帧不再经过父 worker 的 `onProgress`；进度须改由 `run:events`（已在 `db:request` 上可达）投影，
+     渲染层按 `runId` 而非 `taskId` 订阅。**三样里最大的一条。**
+  2. `run_in_background`：归 worker 内 `lifecycle/BackgroundAgentLifecycle.ts`，消费者是
+     `GetTaskOutputTool.ts`/`KillTaskTool.ts`。须由 CP 拥有（§D disconnect≠cancel），
+     worker 只保留触发；查询面走已可达的 `run:list-session`。
+  3. `subagent:kill`：今天停的是子生命周期控制器。须改为对 child run 发 cancel，落到
+     `WorkerExecutionBinding.interrupt`（`workerManager.interruptWorker`）这条**既有**唯一 stop 路径；
+     payload 带 `runId` 而非 `taskId`。
+权限与预算不可绕过的断言（真 SQLite 上成立）:
+  闸门在**任何写入之前**跑，且是两段独立检查，三种 refusal 都断言了「表里没有行」：
+  - 未 spawn 的 pid → `unknown_window`（"pid 9999 is not a process this host spawned"）
+  - 生产名单外的 role → `foreign_origin`（"frame origin https://conductor-executor.duya-agent.internal
+    is not an app origin"）
+  - sender 未串（`UNATTRIBUTED_SENDER`）→ 同样被拒（"pid -1 is not a process this host spawned"）
+  child 路径上不存在「先建 run 再问权限」的位置：**建 run 本身就要过这道闸**。
+非空转（两次突变，均精确命中）:
+  - 从本测试的 `allowedOrigins` 里去掉 `roleOrigin('agent-server')` → **恰好挂 3 条**正向用例，
+    失败信息就是闸门自己的句子（`untrusted_sender: foreign_origin: frame origin
+    https://agent-server.duya-agent.internal is not an app origin`）。6 条负向/tripwire 仍绿。
+  - 去掉 `parentRunId` → **恰好挂 1 条**持久化用例（`expected null to be 'run-parent'`），
+    证明父子关系是真的从磁盘读出来的，不是推断的。
+本切片亲跑的检查（基于 `49b4b15e` + 本切片）:
+  - `npx vitest run`（本切片 3 个文件）: **24/24 绿**（新增 9 + census 7 + 既有 real-bridge 8）
+  - `h8-2-consumer-inventory` **7/7**，无行号被重钉
+  - `architecture:self-test` exit 0 → 460 / **233** / 0 / 146 / 25 / 16 / 0
+  - `architecture:check`    exit 0 → total **880** = tolerated **880**、baseline **811**、**131** 条不再触发
+    —— **与基线逐项一致**：本切片零生产代码改动、只用相对路径 import，`module-dependency-permitted`
+    **没有**被顶到 234（这正是 #205 踩过并退回的边）
+  - **非CP turn entry 仍 = 1**（3 个 turn entry，2 个经 CP，1 个非 CP = subagent）。
+    本切片未增删任何 `.streamChat(` 站点，所以计数不变是**正确结果**而非漂移。
+`typecheck:all` 看不到什么，以及本切片怎么补的:
+  `apps/desktop/tsconfig.main.json` 的 `exclude` 含 `**/__tests__/**`，所以
+  `apps/desktop/src/main/**/__tests__` **整体在 `typecheck:all` 之外**（与 #205 记录的一致）。
+  本切片的新测试正在这个盲区里，故显式补了一次严格检查：`extends` 该 tsconfig、只把
+  `include` 指向这一个文件、`noEmit`（这样 tsc 仍会沿 import 校验真实模块），结果
+  **本文件 0 error**。同一 program 里另有 **120 个既有 error**（`db-bridge.ts`、
+  `router-run-tee.test.ts` 等），它们由 `typecheck-electron-gate` 的 baseline 容忍，不是本切片的。
+  **该检查非空转**：临时插入 `const NON_VACUITY_PROBE: number = 'not a number'` 后，
+  在**它自己那一行**报出 `error TS2322`（第 125 行），随即删除。
+  （**没有**用 `as unknown as` —— 那是合法断言，证明不了任何事；上一批切片就是在这里翻的车。）
+  复现用的 tsconfig 内容（本切片未提交它，因为它是校验工具不是交付物）：
+  `{"extends":"./tsconfig.main.json","compilerOptions":{"noEmit":true,"types":["node"]},
+    "include":["src/main/__tests__/h8-2-worker-run-channel-seam.test.ts"],"exclude":["node_modules"]}`
+本切片**没有**做:
+  - **没有开通道**，subagent 仍是父 worker 内的嵌套 loop，仍无 run id。
+    新测试最后两条把这件事钉成 tripwire：一旦有人给 `db-client` 加了 `run:*` helper，
+    该文件会立刻红，强制下一切片补上三样合同的迁移证据 + 真跨进程测试。
+  - **没有写平行引擎**：`WorkflowRuntimeManager`（862 行，自己 spawn/pump/settle、写自己的
+    `workflowRun:create` 表）**只被读作形状参考**，未被复用——复用它就是 587 禁止的平行引擎。
+  - **没有动 plan 496 的 worktree Git 行为**，**没有重开 plan 560 的 Go/No-Go**。
+  - **没有退役或删除任何 shim**，`removable` 仍 `false`（H8.3 拥有退役）。
+  - **没有碰** CI 配置 / workflow / 其他测试文件 / E4.4 specs（`e2e/turn/`、`e2e/ui-states/`）。
+  - 未跑 `electron:pack` / `electron:build`。**从未运行** `architecture:baseline --write`，
+    `.architecture-baseline.json` 与 `architecture-policy.yaml` 均未改。
+仍未跨过的线:
+  - E4.4 第1条的 E2E spec 仍一次都没有被真正执行；第2条 `unsupported`；第3条打包应用从未运行。
+  - H8.3 / H8.4 未开始；退役条件2（packaged host smoke）、条件3（兼容窗口）未满足。
+  - **本切片没有跨真进程边界**：新测试证明的是**通道与闸门**，不是「fork 出来的 worker 的
+    `process.send` 真的能到达」。后者是下一切片要跨的那条线。
+Next task: 下一切片 = **补 main 侧「为一次 run spawn worker + 泵 stdout 进 `observe` + 结算、
+  但不写 HTTP 响应」这条 dispatch 路径**，然后才动 subagent，并把三样合同一起改挂到 run id。
+  workflow `wf.agent` 随 subagent 一起动（共用 `SUBAGENT_TOOL_NAME` 执行器）。
+```
+
