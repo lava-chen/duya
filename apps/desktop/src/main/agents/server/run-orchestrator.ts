@@ -1073,21 +1073,40 @@ export const RUN_ENTRY_DIVERGENCES: readonly { readonly claim: string; readonly 
  *
  * ## Why the count is not zero
  *
- * `duyaAgent.streamChat` still has callers, and none of them is this slice's to
- * move: the sub-agent turn stream, the compaction summariser, the side-question
- * path, the title generator, the memory-rollout extractor and the worker's own
- * subprocess entry are all in-process or worker-side model calls that are not
- * Desktop chat turns. Several of them are genuinely turns — the sub-agent runner
- * most of all — and moving those is a later slice with its own census row
- * (`NON_DESKTOP_CONSUMERS` above), not something H8.1 could finish honestly.
- * The CLI's three turn call sites ARE gone, and that is the part H8.1 owned.
+ * Two callers still reach the facade, and neither is this slice's to move: the
+ * worker subprocess entry (`agent-process-entry.ts:handleChatStart`, reached only
+ * through `openRun`) and the sub-agent turn (`runAgent.ts:runAgent`, a nested
+ * loop inside the parent worker). Moving either is a later slice with its own
+ * census row, not something H8.1 could finish honestly.
+ *
+ * Everything else that matches `.streamChat(` in `packages/agent/src` is an
+ * `@duya/ai` client call that never touches the agent facade — the compaction
+ * summariser, the side-question path, the model call inside a turn, the vision
+ * client, the title generator, the memory-rollout extractor and the search
+ * summariser — plus this registry's own prose, which is data rather than a
+ * call. Counting those is how a census inflates itself and how a retirement
+ * gate ends up chasing a number that can never reach zero. `Stage1Extractor` is
+ * the sharpest case: it holds a field named `streamChat` that is
+ * `AIClient['streamChat']` bound to an LLM client, so a receiver-name census
+ * counts it as a caller of the facade and a reader concludes the shim is pinned
+ * by a class that is not even an agent.
+ *
+ * The one caller deliberately NOT counted is `headless-run-host.ts`, which is
+ * the composition H8.1 introduced: the sanctioned path, not a legacy consumer.
  *
  * The number is MEASURED, not estimated: it is the count of `.streamChat(` call
  * sites on a `duyaAgent`/`subAgent` receiver in `packages/agent/src`, excluding
- * `@duya/ai` client calls (which are a different type with no run semantics at
- * all) and excluding comments. `headless-retirement.test.ts` re-derives it from
- * the source and fails if the two disagree, so this number cannot go stale
- * without a red test.
+ * `@duya/ai` client calls (a different type with no run semantics at all),
+ * excluding comments, and excluding the sanctioned headless host.
+ * `headless-retirement.test.ts` re-derives it from the source and fails if the
+ * two disagree, so this number cannot go stale without a red test.
+ *
+ * It was declared `7` until the re-derivation was made to actually compare. The
+ * test that should have caught that compared `measured.length` against
+ * `measured.length`, so it passed whatever the number was; the 7 counted the
+ * `@duya/ai` calls listed above, which the definition excludes. The declared
+ * value is now what the definition measures. The CLI's own turn call sites — the
+ * part H8.1 owned — were already gone and stay gone.
  *
  * ## What would retire the shim
  *
@@ -1123,24 +1142,22 @@ export interface LegacyRetirement {
 export const LEGACY_RETIREMENT: readonly LegacyRetirement[] = Object.freeze([
   Object.freeze({
     obsolete: 'duyaAgent.streamChat as a CLI TURN entry (packages/agent/src/cli/index.ts)',
-    remainingConsumers: 7,
+    remainingConsumers: 2,
     consumers: Object.freeze([
-      'packages/agent/src/tool/SubagentTool/runAgent.ts (sub-agent turn)',
-      'packages/agent/src/agent/TurnStreamRunner.ts (sub-agent turn stream)',
-      'packages/agent/src/process/agent-process-entry.ts (worker subprocess chat:start)',
-      'packages/agent/src/agent/DuyaAgent.ts:780 (compaction summariser)',
-      'packages/agent/src/agent/DuyaAgent.ts:4426 (side question)',
-      'packages/agent/src/session/title-generator.ts (title generation)',
-      'packages/agent/src/memory-rollout/extractor.ts (memory extraction)',
+      'packages/agent/src/tool/SubagentTool/runAgent.ts (sub-agent turn: a nested loop in the parent worker)',
+      'packages/agent/src/process/agent-process-entry.ts (worker chat:start, reached only through openRun)',
     ]),
     consumerRationale:
-      'Measured, not estimated: seven `.streamChat(` call sites on a duyaAgent/subAgent receiver ' +
-      'remain in packages/agent/src, excluding @duya/ai client calls (a different type with no run ' +
-      'semantics) and comments. Of those, the sub-agent runner and the worker entry ARE turns and ' +
-      'belong to later slices with their own NON_DESKTOP_CONSUMERS rows; the rest are one-shot ' +
-      'model calls with no session, no run identity and no terminal, and giving them a run would ' +
-      'mean minting runs for work that is not a run. The CLI turn call sites — the part H8.1 ' +
-      'owned — are gone, and the CLI now starts its turns through HeadlessRunHost.',
+      'Measured, not estimated: two `.streamChat(` call sites on a duyaAgent/subAgent receiver remain ' +
+      'in packages/agent/src, excluding @duya/ai client calls (a different type with no run ' +
+      'semantics), excluding comments, and excluding the sanctioned headless host. Of the two, the ' +
+      'worker entry is already reached only through openRun and the sub-agent runner is a nested ' +
+      'loop whose identity is taskId/subAgentSessionId, so neither belongs to later slices with ' +
+      'their own NON_DESKTOP_CONSUMERS rows rather than to H8.1. Every other call of that method ' +
+      'in the package is a one-shot model call with no session, no run identity and no terminal — ' +
+      'giving those a run would mean minting runs for work that is not a run. The CLI turn call ' +
+      'sites — the part H8.1 owned — are gone, and the CLI now starts its turns through ' +
+      'HeadlessRunHost.',
     removalConditions: Object.freeze([
       'every remaining streamChat caller is a named non-turn model call, or has been moved',
       'packaging and host smoke pass: a packaged Electron build reaches agent-server ready',

@@ -13,14 +13,25 @@
  * than a flag somebody set once and forgot. A registry that said `true` here
  * would be a claim that host smoke passed, and this file refuses to let it say
  * that without every condition being met.
+ *
+ * The first version of the count assertion compared `measured.length` with
+ * `measured.length`, so it passed whatever the number was: the registry sat at
+ * `7` while the tree held `2` facade call sites — `3` by the receiver-name rule
+ * this file used, which counted a bound `AIClient` method as a caller of the
+ * facade. It now compares the DECLARED number to the MEASURED one, checks the
+ * list that backs the number, and checks it in both directions — a measured
+ * site no entry names is as much a failure as a named entry that no longer
+ * exists. Non-vacuity is demonstrated by perturbation, not asserted: setting the
+ * declared count to a wrong number turns this file red.
  */
 
 import { describe, expect, it } from 'vitest';
-import { readFileSync, readdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import { join, resolve } from 'path';
 import { LEGACY_RETIREMENT, RUN_ENTRY_DIVERGENCES } from '../agents/server/run-orchestrator';
 
-const AGENT_SRC = resolve(__dirname, '../../../../../packages/agent/src');
+const ROOT = resolve(__dirname, '../../../../..');
+const AGENT_SRC = resolve(ROOT, 'packages/agent/src');
 
 /** Every `.ts` under `packages/agent/src`, recursively. */
 function sourceFiles(dir: string = AGENT_SRC): string[] {
@@ -33,33 +44,68 @@ function sourceFiles(dir: string = AGENT_SRC): string[] {
   return out;
 }
 
+/** One remaining call of the agent facade's `streamChat`. */
+interface FacadeCallSite {
+  /** Repo-relative path, so a failure names the file rather than a temp dir. */
+  readonly path: string;
+  readonly line: number;
+  readonly receiver: string;
+}
+
+function describeSites(sites: readonly FacadeCallSite[]): string {
+  return sites.length === 0
+    ? '(none)'
+    : sites.map((site) => `${site.path}:${site.line} (${site.receiver})`).join(', ');
+}
+
 /**
- * Call sites of `.streamChat(` on a `duyaAgent`/`subAgent` receiver.
+ * Call sites of `.streamChat(` that reach the `DuyaAgent` facade.
  *
  * Excluded on purpose, and the exclusions are the whole difficulty:
  *
- *  - `@duya/ai` client calls (`this.llmClient.streamChat`, `visionClient`,
- *    `compactClient`) are a different type with no run semantics, so counting
- *    them would overstate what is left to migrate.
+ *  - `@duya/ai` client calls (`llmClient.streamChat`, `this.visionClient`,
+ *    `deps.llmClient`, `client`) are a different type with no run semantics, so
+ *    counting them would overstate what is left to migrate.
+ *  - `Stage1Extractor.streamChat` is the sharp case: `this.streamChat` looks
+ *    exactly like a facade call, but the class holds
+ *    `private readonly streamChat: AIClient['streamChat']` and assigns it
+ *    `llmClient.streamChat.bind(llmClient)`. It is an `@duya/ai` call wearing
+ *    the facade's name, and a receiver-name census cannot tell the difference —
+ *    so the exclusion is made on positive evidence (the file binds an AIClient
+ *    method under that name) rather than by dropping `this` from the pattern,
+ *    which would have gone blind to a real `this.streamChat` in a future
+ *    DuyaAgent subclass. The limitation is deliberate and local: the evidence is
+ *    per file, so a file that both binds a client method and calls the facade
+ *    through `this` would hide the latter. No such file exists today, and the
+ *    assertion below names the exclusion so it cannot be quietly forgotten.
  *  - comment lines, because the migrated CLI site now NAMES `agent.streamChat`
  *    in prose explaining what it used to do. Counting that would make the
  *    registry un-deletable by editing alone.
  *  - the headless host itself, which is the ONE caller that is supposed to
- *    exist: it is the composition H8.1 introduced.
+ *    exist: it is the composition H8.1 introduced, and it is named in the
+ *    registry rather than counted as a legacy consumer.
  */
-function remainingAgentStreamChatCallSites(): string[] {
-  const found: string[] = [];
+function remainingAgentStreamChatCallSites(): FacadeCallSite[] {
+  const found: FacadeCallSite[] = [];
   for (const file of sourceFiles()) {
     const text = readFileSync(file, 'utf8');
-    const lines = text.split(/\r?\n/);
-    lines.forEach((line, index) => {
+    const rel = file.replace(/\\/g, '/');
+    const relative = rel.split('/packages/agent/')[1] ? `packages/agent/${rel.split('/packages/agent/')[1]}` : rel;
+    const bindsLlmStreamChat = text.includes("AIClient['streamChat']");
+    text.split(/\r?\n/).forEach((line, index) => {
       const trimmed = line.trim();
       if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) return;
-      if (!/\.streamChat\(/.test(line)) return;
+      const match = /\b([A-Za-z0-9_$]+)\.streamChat\(/.exec(line);
+      if (!match) return;
+      const receiver = match[1]!;
       // A receiver that is an agent, not an @duya/ai client.
-      if (!/\b(agent|subAgent|this)\.streamChat\(/.test(line)) return;
-      if (file.replace(/\\/g, '/').endsWith('process/headless-run-host.ts')) return;
-      found.push(`${file.replace(/\\/g, '/').split('/packages/agent/')[1] ?? file}:${index + 1}`);
+      const isFacadeReceiver =
+        receiver === 'agent' ||
+        receiver === 'subAgent' ||
+        (receiver === 'this' && !bindsLlmStreamChat);
+      if (!isFacadeReceiver) return;
+      if (relative === 'packages/agent/src/process/headless-run-host.ts') return;
+      found.push({ path: relative, line: index + 1, receiver });
     });
   }
   return found;
@@ -73,25 +119,67 @@ describe('H8.1 — the retirement registry matches the code', () => {
     // If these ever disagree, one of them is wrong. The registry is the number a
     // reader trusts, so it is the one that has to move — and a test that fails
     // here is the mechanism that stops it going stale.
-    expect({
-      count: registry.remainingConsumers,
-      sites: registry.consumers.length,
-      measured: measured.length,
-    }).toEqual({
-      count: registry.consumers.length,
-      sites: registry.consumers.length,
-      measured: measured.length,
-    });
+    //
+    // This assertion used to compare `measured.length` with `measured.length`,
+    // so it passed whatever the number was: the registry sat at 7 while the
+    // tree held 2 facade call sites. It now compares the DECLARED number to the
+    // MEASURED one, and the message names both sides so a reader does not have
+    // to re-run anything to learn which one is wrong.
+    expect(
+      registry.remainingConsumers,
+      `LEGACY_RETIREMENT.remainingConsumers is ${registry.remainingConsumers}, but the tree has ` +
+        `${measured.length} remaining facade call site(s): ${describeSites(measured)}`,
+    ).toBe(measured.length);
+
+    // The count and the list that backs it are the same claim, so they are
+    // compared against each other as well.
+    expect(
+      registry.consumers.length,
+      `LEGACY_RETIREMENT lists ${registry.consumers.length} consumer(s) but declares ` +
+        `${registry.remainingConsumers}`,
+    ).toBe(registry.remainingConsumers);
   });
 
-  it('names every remaining consumer as a real file', () => {
-    for (const consumer of LEGACY_RETIREMENT[0]!.consumers) {
-      // `path:line` or `path` — the test asserts the FILE resolves, because a
-      // consumer that names a file which moved is exactly the drift this file
-      // exists to catch.
+  it('names every remaining consumer, and names nothing else', () => {
+    const registry = LEGACY_RETIREMENT[0]!;
+    const measured = remainingAgentStreamChatCallSites();
+
+    // `path:line` or `path`, optionally annotated. The test asserts the FILE
+    // resolves, because a consumer that names a file which moved is exactly the
+    // drift this file exists to catch.
+    for (const consumer of registry.consumers) {
       const path = consumer.replace(/:\d+(\s|$).*$/, '').replace(/\s*\(.*\)$/, '');
       expect(path.startsWith('packages/agent/src/'), consumer).toBe(true);
+      expect(
+        existsSync(resolve(ROOT, path)),
+        `LEGACY_RETIREMENT names ${path}, which does not exist`,
+      ).toBe(true);
     }
+
+    // And the other direction, which is the one that made this list an audit
+    // trail rather than decoration: a measured site that no entry names is a
+    // consumer nobody can check.
+    for (const site of measured) {
+      expect(
+        registry.consumers.some((consumer) => consumer.startsWith(site.path)),
+        `${site.path}:${site.line} (${site.receiver}) is a remaining facade call site but no ` +
+          `entry in LEGACY_RETIREMENT.consumers names it`,
+      ).toBe(true);
+    }
+  });
+
+  it('excludes an @duya/ai call that wears the facade name, and shows why', () => {
+    // The exclusion above is a claim about a real file, so it is asserted
+    // against that file rather than left in a comment where it can rot.
+    const extractor = readFileSync(join(AGENT_SRC, 'memory-rollout', 'extractor.ts'), 'utf8');
+    expect(extractor).toContain("AIClient['streamChat']");
+    expect(extractor).toMatch(/this\.streamChat\s*=\s*llmClient\.streamChat\.bind\(/);
+    expect(extractor).toContain('this.streamChat([userMessage]');
+
+    // So it is genuinely not in the measured set.
+    expect(
+      remainingAgentStreamChatCallSites().map((site) => site.path),
+    ).not.toContain('packages/agent/src/memory-rollout/extractor.ts');
   });
 
   it('does not claim removability while a removal condition is unmet', () => {
