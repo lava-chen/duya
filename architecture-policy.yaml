@@ -1023,7 +1023,53 @@ selfTest:
   # module-dependency is UNCHANGED at 460, which is the load-bearing half: no edge became
   # a NON-permitted dependency, so no managed module zero tolerance is affected.
   # .architecture-baseline.json was not touched and --write was not run.
-  module-dependency-permitted: 220
+  #
+  # 220 -> 227 (plan 587 D7.1): SEVEN new, 0 removed, measured on the tree
+  # carrying the checkpoint / side-effect state machine.
+  #
+  # ATTRIBUTED BY MEASUREMENT, not inferred. Two `audit-imports.mjs --json`
+  # runs, whole-output diffed as edge SETS, with every D7.1 file removed for
+  # the first (reverted via `git stash push -u`, so the base run saw the tree
+  # at 9045e445 with no D7.1 file present at all):
+  #
+  #   cross-boundary edges (deduplicated)   571 -> 577   +6
+  #   ADDED 6, REMOVED 0. Every one is the single pair
+  #   `pkg:agent-runtime -> pkg:agent-protocol`:
+  #     src/checkpoint/checkpoint-store.ts     2 statements
+  #     src/checkpoint/branch-plan.ts         1
+  #     test/checkpoint-store.test.ts          1
+  #     test/checkpoint-side-effects.test.ts   1
+  #     test/checkpoint-branch.test.ts         1
+  #     test/checkpoint-unsupported.test.ts    1
+  #
+  # The counter reads +7 while the edge SET moves +6, and the difference is
+  # not a rounding artefact: `module-dependency-permitted` counts import
+  # STATEMENTS, and `checkpoint-store.ts` has two naming the same target (a
+  # type-only import and a value import). The deduplicated set therefore has
+  # one fewer entry than the counter. Recorded because a future reader who
+  # re-runs the diff will hit the same 7-vs-6 discrepancy and should not have
+  # to re-derive it.
+  #
+  # Three files contribute NO edge, and that is measured rather than assumed:
+  # `src/checkpoint/unsupported.ts` imports nothing from the protocol;
+  # `d71-kill-recovery.test.ts` imports the runtime only; and
+  # `d71-kill-worker.mjs` reaches the built protocol through a computed
+  # `path.join(...)` + `pathToFileURL`, which is not a static specifier and so
+  # produces no edge for the resolver to see.
+  #
+  # The load-bearing half: `module-dependency` is UNCHANGED at 460, so no edge
+  # became a NON-permitted dependency and no managed module's zero tolerance is
+  # affected. `module-dependency-permitted` is in `MEASUREMENT_RULES` -- it is
+  # counted, never blocking, and never consults the baseline. The direction is
+  # correct rather than merely tolerated: `agent-runtime` is layer `runtime` and
+  # `agent-protocol` is layer `protocol`, so these edges point DOWNWARD, and
+  # `pkg:agent-runtime` already declares `agent-protocol` in its `requires`
+  # list. `cycle` is UNCHANGED at 16, which is the same statement about
+  # acyclicity the M5.5 block above makes.
+  #
+  # `.architecture-baseline.json` was not touched and `architecture:baseline`
+  # (`--write`) was not run.
+  module-dependency-permitted: 227
   # 16 -> 0: every `forbidden-dependency` in the tree was one of the 16
   # `pkg:agent` -> `apps/desktop` statements removed above.
   forbidden-dependency: 0
