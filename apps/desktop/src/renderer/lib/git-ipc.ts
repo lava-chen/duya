@@ -2,7 +2,7 @@
 // Renderer-side wrapper around the `git:*` IPC channels.
 //
 // The shapes are NOT hand-written here. They are re-exported from
-// `apps/desktop/src/main/ipc/git-types.ts`, which is the single source of
+// `apps/desktop/src/contracts/git.ts`, which is the single source of
 // truth shared by `git-handlers.ts` and the preload bridge and carries the
 // per-field docs. This file used to keep its own copy of all 19 of them,
 // justified by "we deliberately don't import from the preload bridge
@@ -35,7 +35,7 @@ export type {
   GitBranchRef,
   GitListBranchesResult,
   GitRepositoryState,
-} from '../../main/ipc/git-types';
+} from '../../contracts/git';
 
 // The types this file's own signatures reference. `export type { … }` above
 // re-exports without binding locally, so the body needs its own import.
@@ -48,7 +48,7 @@ import type {
   GitStatusResult,
   GitTurnHistoryResult,
   ReviewScopeParams,
-} from '../../main/ipc/git-types';
+} from '../../contracts/git';
 
 export async function getGitStatus(cwd: string): Promise<GitStatusResult> {
   // Default to `isGitRepo: false` when the bridge isn't present so

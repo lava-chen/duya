@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { ArrowRightIcon, ArrowLeftIcon } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
-import type { ImportItem, ScanResult, SessionImportItem } from "@/types/import";
+import type { ImportItem, ScanResult, SessionImportItem } from "../../../../contracts/import";
 
 interface PreviewStepProps {
   scanResult: ScanResult;

@@ -29,7 +29,7 @@ import type {
   GitAPI,
   GitListBranchesResult,
   GitRepositoryState,
-} from '../main/ipc/git-types'
+} from '../contracts/git'
 
 /** Plan 525 Phase 2.5 — wire shape of a `projects` row. Mirrors the DB
  *  row (ProjectRow) but with `paths` decoded from JSON to an array. */

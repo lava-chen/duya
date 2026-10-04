@@ -4,7 +4,7 @@ import type {
   ApplyImportParams,
   ImportManifest,
   ImportBatch,
-} from '@/types/import';
+} from '../../contracts/import';
 
 export interface DetectResult {
   claude: boolean;

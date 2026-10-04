@@ -219,9 +219,24 @@ modules:
   - id: desktop-host
     roots: [apps/desktop]
     managed: false
-    requires: [agent-protocol, agent-runtime, legacy-plugin-core]
+    requires: [agent-protocol, agent-runtime, legacy-plugin-core, desktop-contracts]
     owner: desktop
 
+  - id: desktop-contracts
+    roots: [apps/desktop/src/contracts]
+    managed: false
+    requires: []
+    owner: desktop
+    # Added by plan 587 M5.2, with `apps/desktop/src/contracts` itself, so that
+    # the host importing its own contract vocabulary is a DECLARED dependency
+    # rather than 13 new blocking `module-dependency` violations.
+    #
+    # `import-graph.mjs` already treated this directory as a host boundary
+    # (`ownerOf` -> `desktop-contracts`, and it is in `HOST_BOUNDARIES`), so the
+    # graph side of the decision existed before the policy side did. This entry
+    # closes that half. `requires: []` is the point: the directory is vocabulary
+    # only, and `apps/desktop/src/contracts/__tests__/contracts-boundary.test.ts`
+    # fails if it ever gains a value, an `electron` import, or a host import.
   - id: legacy-plugin-core
     roots: [packages/plugin-core]
     managed: true # plan 584 / 06-M1: the package now ships a real `exports`
@@ -476,7 +491,7 @@ selfTest:
   # 559 -> 464 by plan 587 M5.2. The value is declared once, above; the
   # full-slice record and the +79 reclassification it depends on are in the
   # M5.2 block near the end of this file.
-  module-dependency: 464
+  module-dependency: 460
   # 51 -> 61 (plan 587 T3.2): TEN new, all one owner pair, 0 removed.
   #
   # `module-dependency` is UNCHANGED at 559, and that is the load-bearing half:
@@ -852,13 +867,13 @@ selfTest:
   # attributed per edge rather than inferred.
   #
   #   rule                        master   M5.2   delta
-  #   module-dependency             559    464     -95
-  #   module-dependency-permitted   124    203     +79
+  #   module-dependency             559    460     -99
+  #   module-dependency-permitted   124    216     +92
   #   forbidden-dependency           16      0     -16
   #   package-boundary-escape       162    146     -16
   #   deep-import                    25     25       0
   #   cycle                          16     16       0
-  #   total                         902    854     -48
+  #   total                         902    863     -39
   #
   # HALF 1 — the `pkg:agent -> electron-main` cut (rank 1, 15 value edges).
   # 14 migration edges plus 1 automation edge, every one of them out of a TEST
@@ -901,8 +916,36 @@ selfTest:
   # relaxation of a BLOCKING rule taken in a slice about cutting edges, and it
   # is the figure most worth a second opinion.
   #
+  # HALF 3 — the contracts directory (`apps/desktop/src/contracts`).
+  # `main/ipc/git-types.ts` -> `contracts/git.ts` and
+  # `renderer/types/import.ts` -> `contracts/import.ts`, with every consumer
+  # repointed. Measured: `src-renderer -> electron-main` 4 -> 2 and
+  # `electron-main -> src-renderer` 33 -> 32. Both remaining renderer->main
+  # edges are recorded in NOT_CUT with their reasons; the 32 main->renderer
+  # edges are the behavioural share and are M5.5's, not a DTO's.
+  #
+  # `total` RISES here, 854 -> 863, and that is the honest reading rather than
+  # a regression: 13 host -> contracts edges became VISIBLE. They were
+  # unclassifiable before, because `audit-imports.mjs`'s `ownerOf` had never
+  # heard of `apps/desktop/src/contracts` and returned `other` — an owner with
+  # no `requires` list, so those edges could not be permitted by any policy
+  # entry and were reported as blocking. `import-graph.mjs` already returned
+  # `desktop-contracts` and listed it in `HOST_BOUNDARIES`; the two owner maps
+  # disagreed. Both are fixed, `ownerToRoot` in `architecture-check.mjs` now
+  # knows the label, and a `desktop-contracts` module entry declares it. A
+  # boundary that cannot see its own contract directory is a hole, and closing
+  # it necessarily reports more.
+  #
+  #   rule                        after H1+H2   +H3   final
+  #   module-dependency                   464    -4     460
+  #   module-dependency-permitted         203   +13     216
+  #   forbidden-dependency                   0     0       0
+  #   package-boundary-escape             146     0     146
+  #   deep-import                          25     0      25
+  #   total                               854     9     863
+  #
   # `.architecture-baseline.json` was not touched and `--write` was not run.
-  module-dependency-permitted: 203
+  module-dependency-permitted: 216
   # 16 -> 0: every `forbidden-dependency` in the tree was one of the 16
   # `pkg:agent` -> `apps/desktop` statements removed above.
   forbidden-dependency: 0

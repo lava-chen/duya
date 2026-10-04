@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { ArrowRightIcon } from "@/components/icons";
 import { detectImportIPC } from "@/lib/import-ipc";
-import type { ImportSource } from "@/types/import";
+import type { ImportSource } from "../../../../contracts/import";
 
 interface SelectSourceStepProps {
   onSelect: (source: ImportSource, projectPath?: string) => void;

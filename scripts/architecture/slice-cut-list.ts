@@ -88,10 +88,10 @@ export const CUT_LIST: readonly CutEdge[] = [
     id: 'main-to-renderer-value',
     rank: 1,
     pair: 'electron-main -> src-renderer',
-    edges: 33,
+    edges: 32,
     because: 'b',
-    why: 'The main process importing renderer modules as VALUES. This is the direction the policy calls backwards and the one the 33 value edges make concrete: they are not type-only imports that a DTO could satisfy, they are runtime loads. 00-contracts.md §A says a DTO in `apps/desktop/src/contracts` is the fix, and a DTO is only a fix for the type-shaped share of these.',
-    cut: 'M5.2 splits the type share into `apps/desktop/src/contracts` and leaves the genuinely behavioural share for M5.5. The split is measured per file by this repository, not estimated.',
+    why: 'The main process importing renderer modules as VALUES. This is the direction the policy calls backwards and the one the value edges make concrete: they are not type-only imports that a DTO could satisfy, they are runtime loads. 00-contracts.md §A says a DTO in `apps/desktop/src/contracts` is the fix, and a DTO is only a fix for the type-shaped share of these.',
+    cut: 'M5.2 took the type share. `renderer/types/import.ts` moved to `apps/desktop/src/contracts/import.ts` and both sides now read it from there, which removed this edge: 33 -> 32. The remaining 32 are the genuinely behavioural share — `providers/legacy.ts` (13), the provider services (9), `providers/index.ts` (2), `plugin-types.ts` / `plugin-error-messages.ts` (3), a test importing a renderer manager (3), and a test importing a renderer helper (1). Those are M5.5\'s consolidation behind ports, not a DTO, and none of them can be moved without moving behaviour.',
   },
   {
     id: 'main-to-agent-value',
@@ -106,10 +106,10 @@ export const CUT_LIST: readonly CutEdge[] = [
     id: 'renderer-to-main-value',
     rank: 2,
     pair: 'src-renderer -> electron-main',
-    edges: 4,
+    edges: 2,
     because: 'b',
-    why: 'The renderer importing main-process modules. The policy already forbids this direction (`from: src/** to: apps/desktop/src/main/**`) and these 4 are tolerated baseline debt. Small, and entirely type-shaped in intent, so a contracts module plausibly removes all of them.',
-    cut: 'M5.2, with the public bridge contracts. Verify against the preload/renderer/main triple rather than the renderer alone.',
+    why: 'The renderer importing main-process modules. The policy already forbids this direction (`from: src/** to: apps/desktop/src/main/**`) and these are tolerated baseline debt. Small, and entirely type-shaped in intent, so a contracts module plausibly removes all of them.',
+    cut: 'M5.2 took the type share: `main/ipc/git-types.ts` moved to `apps/desktop/src/contracts/git.ts`, which the renderer now reads by a host-internal relative path, so 4 -> 2. The 2 that remain are NOT the same kind of thing and are recorded in NOT_CUT rather than left to look like oversights: `app-connection-ipc.ts` -> `main/services/app-connections/types.ts` is one DTO module that is 95% types and 1 function (`toStatusDTO`), so it needs the file split before it can move without moving a mapper, and `permission-profile.contract.test.ts` is a deliberate contract test. Neither is closed by this slice.',
   },
   {
     id: 'main-to-gateway-value',
@@ -191,6 +191,10 @@ export const NOT_CUT: readonly NonCut[] = [
   {
     subject: 'test-to-test edges inside one package',
     why: 'A test importing a sibling fixture creates no runtime coupling. `audit-modules.mjs` already excludes test files from its cycle graph for exactly this reason, and the value graph here inherits that judgement.',
+  },
+  {
+    subject: 'the 2 `src-renderer -> electron-main` edges left after M5.2',
+    why: 'Recorded separately so they do not read as oversights. One is `permission-profile.contract.test.ts` importing `main/lib/permission-profile` on purpose: that test exists to hold the preload, main and renderer to the same behaviour, so the edge IS the mechanism and cutting it would delete the check. The other, `app-connection-ipc.ts` -> `main/services/app-connections/types.ts`, is a DTO module that is not yet movable because it also exports the `toStatusDTO` mapper; moving the types without the mapper means splitting the file, which belongs with the preload/main/renderer DTO work rather than in a slice that was already carrying two cuts.',
   },
 ];
 

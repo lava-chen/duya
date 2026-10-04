@@ -39,7 +39,7 @@ import type {
   GitBranchRef,
   GitRepositoryState,
   GitCommitDetailResult,
-} from './git-types';
+} from '../../contracts/git';
 
 function isGitRepoDir(cwd: string): boolean {
   try {

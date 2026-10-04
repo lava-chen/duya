@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { ArrowRightIcon, ArrowLeftIcon } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
-import type { ConflictResolution } from "@/types/import";
+import type { ConflictResolution } from "../../../../contracts/import";
 
 interface ConflictStepProps {
   resolutions: ConflictResolution[];
