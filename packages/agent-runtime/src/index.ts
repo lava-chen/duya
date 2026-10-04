@@ -159,6 +159,20 @@ export type {
 
 export type { CoalescingGuards } from './events/coalesce-guards.js';
 
+// Plan 587 M5.5 -- the one owner of a spawned child's lifetime. See
+// `process/process-scope.ts` for why the platform kill strategy is an injected
+// port rather than a function this package owns.
+export { createProcessScope } from './process/process-scope.js';
+export type {
+  ProcessScope,
+  ProcessScopeOptions,
+  ProcessSpawner,
+  ProcessTreeKiller,
+  ScopedCloser,
+  ScopedProcess,
+  ScopedTimer,
+} from './process/process-scope.js';
+
 export {
   translateFrame,
   classifyToolOutcome,

@@ -172,7 +172,26 @@ modules:
     # implementation of the digest is a second source of truth for exactly the
     # value whose whole purpose is to be checked. So the edge is declared
     # rather than avoided.
-    requires: [agent-protocol]
+    #
+    # Plan 587 M5.5: `agent-runtime` is added, for `ProcessScope` ONLY
+    # (`agent-runtime/src/process/process-scope.ts`). The three sites that owned
+    # a spawned child's lifetime -- `tool/BashTool/managed-bash.ts`,
+    # `tool/WorkerPool.ts`, `tool/BashTool/BashWorker.ts` -- each carried its own
+    # timer/listener/descriptor bookkeeping, and `WorkerPool` and `BashWorker`
+    # each re-implemented the Windows `taskkill /F /T` escalation that
+    # `utils/processTreeKill.ts` already owns and tests. The port that fixes
+    # that has to be reachable from here.
+    #
+    # The direction is the one the migration wants, not the one it fears:
+    # `agent-runtime` requires only `agent-protocol` and `agent-core`, so this
+    # edge is acyclic and points from the legacy executor TOWARDS the engine
+    # that is meant to replace it. Measured: no new `cycle` finding.
+    #
+    # What is NOT taken: `ProcessScope` deliberately does not own the platform
+    # kill strategy, so this edge buys a lifetime abstraction and not a
+    # relocation of `processTreeKill` -- which stays put, with its test and its
+    # `evals/agent` matrix row, because moving it would have been churn.
+    requires: [agent-protocol, agent-runtime]
     owner: agent
     migrateTo: agent-core
 
@@ -945,7 +964,45 @@ selfTest:
   #   total                               854     9     863
   #
   # `.architecture-baseline.json` was not touched and `--write` was not run.
-  module-dependency-permitted: 216
+  #
+  # 216 -> 218 (plan 587 M5.5): the `ProcessScope` port and the two declaration
+  # statements that make it reachable from `packages/agent`.
+  #
+  #   rule                        M5.2 final   M5.5   final
+  #   module-dependency                  460     0     460
+  #   module-dependency-permitted        216    +2     218
+  #   package-boundary-escape           146     0     146
+  #   deep-import                        25     0      25
+  #   cycle                              16     0      16
+  #   total                             863    +2     865
+  #
+  # ATTRIBUTED BY MEASUREMENT, not inferred. Two `audit-imports.mjs --json`
+  # runs, whole edge sets diffed pair by pair with the new source files removed
+  # for the first run (the first attempt was contaminated by the new TEST file
+  # still being on disk, which is why the clean run is the one quoted here):
+  #
+  #   pkg:agent -> pkg:agent-runtime   0 -> 2   (+1 target, 2 import statements)
+  #   every other cross-boundary pair   unchanged
+  #   deepImportEdges                  25 -> 25
+  #   packageBoundaryEscapeEdges      146 -> 146
+  #   unresolved                        9 -> 9
+  #
+  # The +2 is two import statements naming the SAME target
+  # `packages/agent-runtime/src/index.ts`: one production
+  # (`tool/BashTool/managed-bash.ts`) and one test
+  # (`tool/BashTool/__tests__/managed-bash.test.ts`). Both land here rather than
+  # in blocking `module-dependency` because `agent-runtime` was added to
+  # `legacy-agent.requires` -- which is why `module-dependency` did not move at
+  # all. `cycle` staying at 16 is the load-bearing half: `agent-runtime` requires
+  # only `agent-protocol` and `agent-core`, so this edge is acyclic and does not
+  # close a loop through the legacy executor.
+  #
+  # This is an INCREASE, recorded rather than absorbed. The alternative was to
+  # leave `packages/agent` unable to reach the port, which would have meant
+  # either three more copies of the same lifetime bookkeeping or a relocation
+  # of `processTreeKill` that the eval matrix row
+  # `evals/agent/matrix/rows.ts` pins by path.
+  module-dependency-permitted: 218
   # 16 -> 0: every `forbidden-dependency` in the tree was one of the 16
   # `pkg:agent` -> `apps/desktop` statements removed above.
   forbidden-dependency: 0
