@@ -28,12 +28,15 @@
  * ## What this file deliberately does NOT prove
  *
  * The other half -- that the ENGINE consumes all three kinds without leaking or
- * double-settling -- needs a real `RunEngineImpl`, and importing
- * `@duya/agent-runtime` at run time from this worktree resolves to a different
- * worktree's built `dist` (see the junction note in the handoff). So that half
- * is pinned in `packages/agent-runtime/test/tool-drain-contract.test.ts`, where
- * the engine's own source is what loads. The two compose; the composition is
- * verified when the workspace junctions point at one tree.
+ * double-settling -- needs a real `RunEngineImpl`. This file used to claim that
+ * half was unreachable from here because "@duya/agent-runtime resolves to a
+ * different worktree's built `dist`"; that claim is FALSE and has been retired.
+ * The composition runs in one process, and
+ * `packages/agent/src/process/__tests__/engine-drain-carryover.test.ts` drives
+ * these REAL producer shapes through the REAL adapter and the REAL engine in a
+ * single test, with the first test in that file asserting the claim as behaviour
+ * rather than as a file path. `packages/agent-runtime/test/tool-drain-contract.test.ts`
+ * pins the engine's own half from the other side.
  */
 
 import { describe, expect, it } from 'vitest';

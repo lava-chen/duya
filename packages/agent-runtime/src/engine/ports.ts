@@ -88,7 +88,7 @@ import type { AgentProgressEvent } from '@duya/agent-protocol/transcript';
 import type { StopReceipt, StopRequest } from '../transport/execution-channel.js';
 
 // ============================================================================
-// Contract 1 -- the engine, and the five ports it is injected
+// Contract 1 -- the engine, the five ports it REQUIRES, and the ones it does not
 // ============================================================================
 
 /**
@@ -593,6 +593,143 @@ export type ApprovalVerdict =
 
 export type ApprovalScope = 'once' | 'always' | 'session';
 
+// ============================================================================
+// Contract 1f -- the turn's OUTPUT, projected to the host and never ledgered
+// ============================================================================
+
+/**
+ * What the host does about a tool result that has landed.
+ *
+ * ## Why this is a port and not a field on `ToolOutcome`
+ *
+ * Six effects hang off the single moment a tool result lands, and the engine
+ * performed NONE of them: the legacy loop did, inline
+ * (`DuyaAgent.ts:2721-2823`). Every one of them needs something this layer does
+ * not have -- a transcript to append to, a renderer to project to, a hook bus,
+ * a catalog view, a mode vocabulary -- so the engine's only honest move was to
+ * name the moment and let the host decide what it means.
+ *
+ * ## The boundary rules, restated rather than inherited
+ *
+ * The four things the engine may not have are listed at the top of this file
+ * (`:44-55`). This port carries:
+ *
+ *  - **no `runId`** -- the PORT is bound to one run, exactly as `events` is.
+ *    `RunExecutionRequest.ports` is "supplied per run, not per process"
+ *    (`RunExecutionRequest`), so a run-scoped binding already exists and a
+ *    run id on every call would be a second, forgeable copy of it.
+ *  - **no `seq`** -- the host's transcript mints ordering from `turn`, the same
+ *    way the ledger mints `seq` for `RunEvent`s. The legacy
+ *    `result.message.seq_index = seqIndex` (`DuyaAgent.ts:2723`) reads a counter
+ *    the transcript owns; reproducing it here would be a second authority for
+ *    "where does this message sit".
+ *  - **no `id`** -- `?? crypto.randomUUID()` (`DuyaAgent.ts:2724-2726`) is the
+ *    writer's job, and `_pushDurable` (`:3515`) is the writer. Durable identity
+ *    is minted where it is stored.
+ *  - **no terminal decision** -- that stays with `RunSession.settle`, and this
+ *    port has no method that could express one.
+ *
+ * So: **a projection host, not a ledger.** The durable barrier is still not
+ * reachable from here, exactly as for `RunEventStorePort` -- nothing on this
+ * port may be awaited as an acknowledgement that the result is durably stored.
+ *
+ * ## Why these are TWO methods and not one
+ *
+ * `recordToolResult` is per RESULT and `finishTurn` is per DRAIN, and the split
+ * is the legacy ordering reproduced rather than tidied: the legacy loop ran
+ * `PostToolUseFailure` inside the per-result arm (`:2770`) and `PostToolUse`
+ * plus the compaction probe AFTER the loop closed, gated on a count
+ * (`:2858`, `:2935`). One method would force a host to guess when the drain
+ * ended, which is the same "collected during assembly, never read back" shape
+ * this port exists to prevent.
+ *
+ * ## The result count is NOT the dispatch count
+ *
+ * `TurnOutputSummary` carries both, and they are different quantities:
+ * `TurnWork.dispatched` counts calls the engine put on their way
+ * (`run-engine.ts:569`), while `results` counts answers that came back. The
+ * legacy gate at `:2858` is `toolResultMessageCount > 0` -- RESULTS
+ * (`DuyaAgent.ts:2722`) -- and a turn can dispatch two calls and receive one
+ * answer. Gating `PostToolUse` or a compaction probe on `dispatched` fires both
+ * where the legacy fired neither and skips them where it fired both.
+ *
+ * `dispatched` is carried anyway, so the divergence is VISIBLE at the call site
+ * rather than something a reader has to take on trust: a host that gates on the
+ * wrong number can now be seen doing it.
+ *
+ * ## What absence costs, stated exactly
+ *
+ * When `RunEnginePorts.turnOutput` is absent -- which is the live worker's
+ * state today, and correctly so (`agent-process-entry.ts:3236`) -- the engine
+ * still settles the ledger, still defers the fragment and still shows the model
+ * the answer, and NONE of the six host effects happen. That is not a defect to
+ * paper over: the legacy loop still performs them, and performing them twice is
+ * the failure a half-bound port would cause. **The obligation the cutover slice
+ * must discharge is: before the legacy loop is removed, a host that loses a
+ * tool result must be impossible, which means this port has to be bound by
+ * something other than `DuyaAgent.streamChat`'s own closure.**
+ */
+export interface TurnOutputPort {
+  /**
+   * One tool result landed. Called once per drained `tool_result`, in drain
+   * order, BEFORE `finishTurn` for the same turn.
+   *
+   * Awaited, because one of the six effects is a hook the legacy code
+   * `yield*`-ed from inside the drain arm (`DuyaAgent.ts:2772-2784`) and a hook
+   * that injects context has to have landed before the next request is built. A
+   * host whose projections are all synchronous may still return a resolved
+   * promise; one whose hook bus is asynchronous must be awaited rather than
+   * raced.
+   */
+  recordToolResult(record: ToolResultRecord): Promise<void>;
+  /**
+   * The turn's drain ended, whether it ended by exhausting the stream or by
+   * aborting mid-drain. Reported with the results seen SO FAR in the abort case.
+   *
+   * This is the host's "results are committed" moment -- the one the legacy
+   * `PostToolUse` dispatch and the preflight compaction probe are gated on
+   * (`DuyaAgent.ts:2858`, `:2935`).
+   */
+  finishTurn(summary: TurnOutputSummary): Promise<void>;
+}
+
+/**
+ * One landed tool result, as the host is handed it.
+ *
+ * `outcome` is the drained `ToolOutcome` BY IDENTITY, not a re-read of it. That
+ * is what makes "the host saw exactly what the model will see" a checkable
+ * claim rather than a convention: the engine passes the item it narrowed, so a
+ * record and the item the drain produced are the same object, and a host that
+ * re-derived `content` or `isError` would break that identity.
+ */
+export interface ToolResultRecord {
+  /** 1-based. Where the host's transcript places the record; never a `seq`. */
+  readonly turn: number;
+  readonly outcome: ToolOutcome;
+  /**
+   * The name of the call this answer belongs to.
+   *
+   * From the engine's own dispatch record, so a host does not have to keep a
+   * second `callId -> name` map to answer "which tool failed" -- which is
+   * exactly what the legacy hook payload needed
+   * (`turnToolCallIds.get(toolResultId) ?? ''`, `DuyaAgent.ts:2771`).
+   *
+   * `''` when the engine did not dispatch this call, which is the legacy
+   * fallback verbatim: an empty name reaches a hook bus that filters on it,
+   * rather than a fabricated one that would match a matcher nobody wrote.
+   */
+  readonly toolName: string;
+}
+
+/** What one turn's drain ended having produced. */
+export interface TurnOutputSummary {
+  readonly turn: number;
+  /** RESULTS that landed. The legacy `toolResultMessageCount`. */
+  readonly results: number;
+  /** Calls the engine dispatched. NEVER a substitute for `results`. */
+  readonly dispatched: number;
+}
+
 /**
  * Contract 1e -- the event store, as the ENGINE sees it.
  *
@@ -698,6 +835,17 @@ export interface RunEnginePorts {
   readonly context: ContextPort;
   readonly approval: ApprovalPort;
   readonly events: RunEventStorePort;
+  /**
+   * Where a landed tool result goes. See `TurnOutputPort`.
+   *
+   * OPTIONAL, and the absence is the live worker's state today rather than an
+   * oversight: every effect this port names is currently performed by the
+   * legacy drain loop inside `DuyaAgent.streamChat`, and binding them here as
+   * well would perform each of them TWICE. Making it required before the cutover
+   * would break every composition for no gain; making it required AT the cutover
+   * is the obligation `TurnOutputPort` states in its own doc comment.
+   */
+  readonly turnOutput?: TurnOutputPort;
   /** Present only under budget option (a). See `BudgetPort`. */
   readonly budget?: BudgetPort;
   /** Present only when this run is a recovery. See `AttemptLeasePort`. */

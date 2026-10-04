@@ -25,11 +25,14 @@
  * | `ContextPort` | the agent's prompt/catalog assembly | needs skills, connectors and project instructions, all above this layer |
  * | `ApprovalPort` | `requestPermission` | the durable write is the Control Plane's (`router.ts:2298`) |
  * | `RunEventStorePort` | the worker's frame fan-out | `sendEvent` writes to IPC AND stdout (`agent-process-entry.ts:2093-2096`); that is a property of how the worker is hosted |
+ * | `TurnOutputPort` | the legacy drain loop's per-result effects | all six live in `DuyaAgent.streamChat`'s closure, and they are performed there today |
  *
- * The last row is the one worth stating: the event port does NOT translate to
- * `chat:*`. `WorkerAdapterSurface` (`ports.ts`) keeps that projection in the
+ * The last two rows are the ones worth stating. The event port does NOT translate
+ * to `chat:*`. `WorkerAdapterSurface` (`ports.ts`) keeps that projection in the
  * adapter, and this file projects through the worker's own existing codec rather
- * than inventing a second one.
+ * than inventing a second one. And `TurnOutputPort` is offered as a seam and
+ * supplied by nobody: see `LegacyEngineSources.turnOutput` for why binding it
+ * before the cutover would double every tool result.
  *
  * ## The side-effect class is resolved HERE, once, at assembly
  *
@@ -61,8 +64,10 @@ import type {
   ToolDrainItem,
   ToolOutcome,
   ToolPort,
+  ToolResultRecord,
   TransientContextFragment,
   TurnAssemblyInput,
+  TurnOutputSummary,
 } from '@duya/agent-runtime';
 import type { ToolSideEffectClass } from '@duya/agent-protocol';
 import type {
@@ -153,6 +158,58 @@ export interface LegacyEngineSources {
     readonly state: 'succeeded' | 'failed' | 'unknown';
     readonly detail?: string;
   }) => Promise<void>;
+  /**
+   * Where a landed tool result goes. Both halves or neither.
+   *
+   * ## The live worker supplies NEITHER, and that is not an oversight
+   *
+   * Every effect `TurnOutputPort` names is performed today by the legacy drain
+   * loop INSIDE `DuyaAgent.streamChat`'s own closure -- `_pushDurable` writes to
+   * a `messages` array the worker has no handle to (`:2730`), the
+   * `tool_result` frame is a `yield` from that same generator (`:2753`),
+   * `recordToolCatalogSchemaRead` needs the loop's `catalogView` (`:2728`) and
+   * `dispatchHooks` is local to the loop (`:2770`). There is nothing to bind
+   * until the cutover lifts them out, and binding a projection while the legacy
+   * loop still emits the same one is how a tool result reaches the renderer
+   * twice.
+   *
+   * So the seam exists and is exercised by this package's tests, and the cutover
+   * is the slice that fills it in.
+   */
+  readonly turnOutput?: TurnOutputSources;
+  /**
+   * Collects a fragment the engine deferred for the NEXT turn.
+   *
+   * ## What this REPLACED, and why the replacement is not a silent shrink
+   *
+   * `context.defer` used to push into a closure array in `buildEnginePorts`
+   * that nothing ever read. That array looked like a carrier and
+   * was not one: a fragment handed to `defer` was written to it, and the next
+   * `assembleTurn` did not see it -- so the code claimed a host obligation and
+   * performed none.
+   *
+   * Reading it back inside `assemble` is NOT done here on purpose. It would
+   * have to pick a side of a decision `ports.ts` deliberately leaves open --
+   * whether the engine re-reads history itself or is handed a locator
+   * ("Undecided, deliberately", `RunInputSnapshot`) -- because with a `by_ref`
+   * history `#modelRequest` uses `assembled.messages` AND the engine's own
+   * deferred list, so injecting here would hand the model the same result
+   * twice. That is precisely the duplication `:362-368` records as having
+   * already happened once.
+   *
+   * What is left is a named seam and the reason it is empty. A host with a
+   * durable timeline collects the fragments itself and consumes them at
+   * assembly; a host that assembles from the engine's own seed needs nothing.
+   */
+  readonly deferFragment?: (fragment: TransientContextFragment) => void;
+}
+
+/** The two `TurnOutputPort` methods, as the legacy package supplies them. */
+export interface TurnOutputSources {
+  /** One landed result. Wraps the legacy `tool_result` frame and its writes. */
+  readonly onToolResult: (record: ToolResultRecord) => Promise<void> | void;
+  /** The drain ended. Wraps the legacy `toolResultMessageCount` gates. */
+  readonly onTurnResults: (summary: TurnOutputSummary) => Promise<void> | void;
 }
 
 /**
@@ -165,8 +222,6 @@ export interface LegacyEngineSources {
  * per-RUN facts rather than per-turn ones.
  */
 export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
-  const deferred: TransientContextFragment[] = [];
-
   const model: ModelPort = {
     stream: (request, signal) => sources.openModelStream(request, signal),
   };
@@ -191,13 +246,13 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
   const context: ContextPort = {
     assemble: (input) => sources.assembleTurn(input),
     defer(fragment) {
-      // Keyed, so a repeated fragment REPLACES rather than stacks. The legacy
-      // code enforced the same rule with `applyHookInjection(..., key, ...)`
-      // (`DuyaAgent.ts:2461`); a list that only appended would grow the payload
-      // every turn a tool re-ran.
-      const existing = deferred.findIndex((held) => held.key === fragment.key);
-      if (existing >= 0) deferred[existing] = fragment;
-      else deferred.push(fragment);
+      // Forwarded, and NOT collected here. The previous closure array was
+      // write-only, which read as a carrier that did not exist; the engine
+      // already seeds the next request from its own deferred list
+      // (`run-engine.ts:665,936`), so anything this adapter adds here would be a
+      // second copy of the same text rather than a recovery of a lost one.
+      // `LegacyEngineSources.deferFragment` says where a host collects them.
+      sources.deferFragment?.(fragment);
     },
   };
 
@@ -220,6 +275,7 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
   // the assertion this file refuses to make elsewhere.
   const beginTicket = sources.beginTicket;
   const settleTicket = sources.settleTicket;
+  const turnOutput = sources.turnOutput;
 
   return {
     model,
@@ -227,6 +283,18 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
     context,
     approval,
     events,
+    // All-or-nothing, for the same reason `sideEffects` is: half a port is a
+    // port whose missing half is indistinguishable from one that was never
+    // asked. `finishTurn` without `recordToolResult` would report counts for
+    // results the host was never handed.
+    ...(turnOutput === undefined
+      ? {}
+      : {
+          turnOutput: {
+            recordToolResult: (record) => Promise.resolve(turnOutput.onToolResult(record)),
+            finishTurn: (summary) => Promise.resolve(turnOutput.onTurnResults(summary)),
+          },
+        }),
     ...(beginTicket === undefined || settleTicket === undefined
       ? {}
       : {

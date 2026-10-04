@@ -11,7 +11,7 @@
  *
  * ## It RETIRES a caveat that was false
  *
- * `run-engine-ports-drain.test.ts:28-36` states that importing
+ * `run-engine-ports-drain.test.ts` used to state that importing
  * `@duya/agent-runtime` at run time from that test "resolves to a different
  * worktree's built `dist`", so the adapter half and the engine half could not be
  * composed in one process. That claim is FALSE here: the workspace junction for
@@ -24,42 +24,61 @@
  * The two sides of every assertion come from different code paths: the update is
  * built the way `StreamingToolExecutor` builds it, mapped by the real
  * `toDrainItem`, consumed by the real `RunEngineImpl`, and the expectation is
- * read off the model's REQUEST (produced by `#modelRequest`) or the ledger
- * (produced by `#drainOutcomes`). A self-comparison would survive both sides
- * being wrong together.
+ * read off the model's REQUEST (produced by `#modelRequest`), the ledger
+ * (produced by `#drainOutcomes`), or the record the engine handed the host port.
+ * A self-comparison would survive both sides being wrong together.
  *
- * ## The enumeration, and the three gaps
+ * ## The enumeration, and the gaps -- now CLOSED by `TurnOutputPort`
  *
  * The legacy loop body (`DuyaAgent.ts:2690-2826`) does eleven distinct things
- * per update. They do NOT all land in the engine's drain, so removing the legacy
- * consumer today would drop the ones marked NOT CARRIED. Each is asserted below
- * in the negative, with the reason, because an unasserted gap is a gap nobody
- * reads:
+ * per update. Three of them landed in the engine's drain when this file was
+ * written; the other eight did not, and removing the legacy consumer would have
+ * dropped them. `TurnOutputPort` (`packages/agent-runtime/src/engine/ports.ts`)
+ * is what closed them: the engine still owns the MOMENT, and the host now owns
+ * the six effects that hung off it. Every row is asserted below in the
+ * POSITIVE, with the reason, because an unasserted gap is a gap nobody reads --
+ * and because an assertion made only by absence cannot see a deletion.
  *
  * | legacy read | line | engine destination | carried |
  * | --- | --- | --- | --- |
  * | `result.deferredContext` | `:2694` | `deferred_context` -> `context.defer` | engine yes, live wiring NO |
  * | `metadata.agentEvent` -> SSE | `:2705` | `subagent_progress` -> `projectSubagentProgress` | engine yes, live wiring NO |
- * | `result.message` (tool result) | `:2713` | `tool_result` -> ledger + fragment | PARTIAL |
- * | `seq_index` / `id` assignment | `:2723` | -- | NOT CARRIED |
- * | `recordToolCatalogSchemaRead` | `:2728` | -- | NOT CARRIED |
- * | `_pushDurable` (history write) | `:2730` | -- | NOT CARRIED |
- * | `tool_result` SSE frame | `:2753` | -- | NOT CARRIED |
- * | `PostToolUseFailure` hook | `:2770` | -- | NOT CARRIED |
- * | `mode_changed` SSE frame | `:2813` | -- | NOT CARRIED |
- * | `toolResultMessageCount` gate | `:2722` | `TurnWork` counts DISPATCHES, not results | NOT EQUIVALENT |
+ * | `result.message` (tool result) | `:2713` | `tool_result` -> fragment + ledger | engine yes |
+ * | `seq_index` / id assignment | `:2723` | `TurnOutputPort.recordToolResult.turn`; the id stays host-minted | via the port |
+ * | `recordToolCatalogSchemaRead` | `:2728` | `record.outcome.metadata` | via the port |
+ * | `_pushDurable` (history write) | `:2730` | `recordToolResult` | via the port |
+ * | `tool_result` SSE frame | `:2753` | `recordToolResult` -> the host's projection | via the port |
+ * | `PostToolUseFailure` hook | `:2770` | `recordToolResult`; the host fires it | via the port |
+ * | `mode_changed` SSE frame | `:2813` | `record.toolName`, which is the fact the filter reads | via the port |
+ * | `toolResultMessageCount` gate | `:2722` | `TurnOutputPort.finishTurn().results` | via the port, distinct from dispatches |
  *
- * The last row is the subtle one and is why a test that only asserted "the
- * engine drains it" would have been worthless: the engine counts a different
- * thing, so it looks like coverage and is not.
+ * The last row is still the subtle one. `TurnWork.dispatched` counts DISPATCHES
+ * and the legacy gate counted RESULTS, so the port carries both, and the test
+ * below drives a run where they differ -- which is the only way to show the gate
+ * was not quietly replaced.
  *
- * ## The two live-wiring gaps are asserted, not assumed
+ * ## `agent_progress` has exactly ONE projection path, on purpose
  *
- * `buildEnginePorts` collects `context.defer` into a local array
- * (`run-engine-ports.ts:168-201`) that NOTHING reads back, and the worker's
- * `publishEvent` is a no-op (`agent-process-entry.ts:3293`). Both are asserted
- * here by driving the real exported functions, so each turns red the moment it
- * is fixed -- which is the moment the cutover becomes safe.
+ * The legacy `:2705` frame and the `:2753` / `:2813` frames are all `chat:`
+ * vocabulary, but only the progress frame already had a home: the protocol
+ * projection `RunEventStorePort.projectSubagentProgress`, asserted below.
+ * Routing it through `TurnOutputPort` as well would be two mechanisms for one
+ * symptom, which is how a frame ends up emitted twice instead of emitted once.
+ *
+ * ## What is still NOT closed, and belongs to the cutover slice
+ *
+ * The two live-wiring gaps at the bottom are both adapter facts, and neither is
+ * a port's business:
+ *
+ *  - `context.defer`'s collection. The write-only closure array is GONE, replaced
+ *    by a named seam (`LegacyEngineSources.deferFragment`), because reading it
+ *    back inside `assemble` would pick a side of a decision `ports.ts` leaves
+ *    open (inline vs `by_ref` history) and could hand the model the same result
+ *    twice. What the engine's own seed carries is asserted below.
+ *  - the worker's `publishEvent` no-op (`agent-process-entry.ts:3293`). Binding
+ *    it means owning the `chat:*` projection for engine events -- the
+ *    `WorkerAdapterSurface` codec -- which cannot be done while the legacy
+ *    generator still drives the same frames.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -78,11 +97,14 @@ import type {
   ToolDescriptor,
   ToolDispatchTicket,
   ToolDrainItem,
+  ToolResultRecord,
   TransientContextFragment,
+  TurnOutputSummary,
 } from '@duya/agent-runtime';
 import type { RunEvent, RunId } from '@duya/agent-protocol';
 import type { AgentProgressEvent, Message } from '@duya/agent-protocol/transcript';
 import { buildEnginePorts, toDrainItem } from '../run-engine-ports.js';
+import type { TurnOutputSources } from '../run-engine-ports.js';
 import type { MessageUpdate } from '../../tool/StreamingToolExecutor.js';
 
 // ============================================================================
@@ -95,6 +117,8 @@ const RESULT_SENTINEL = 'tool-answer-the-model-must-see';
 const PROGRESS_SENTINEL = 'SUBAGENT-INTERNAL-STREAM-MUST-NOT-LEAK';
 /** A follow-up review payload, still pending when the drain ends. */
 const DEFERRED_SENTINEL = 'follow-up-review-verdict';
+/** The only name in the run, and it lives on the MODEL's request, not the item. */
+const TOOL_NAME = 'Task';
 
 const RUN_ID = 'run-cutover' as RunId;
 
@@ -112,6 +136,10 @@ function toolResultMessage(content: string): Message {
     content,
     tool_call_id: 'call-1',
     duration_ms: 42,
+    // The producer stamps this, and two legacy consumers read it:
+    // `recordToolCatalogSchemaRead(catalogView, metadata)` (`:2728`) and the
+    // renderer's preview path (`:2763`).
+    metadata: { previewToken: RESULT_SENTINEL },
   } as unknown as Message;
 }
 
@@ -147,6 +175,16 @@ interface Composition {
   readonly modelRequests: ModelMessage[][];
   /** Every fragment the engine handed to `context.defer`, in order. */
   readonly deferred: TransientContextFragment[];
+  /** Every record the engine handed `TurnOutputPort.recordToolResult`, in order. */
+  readonly records: ToolResultRecord[];
+  /** Every turn summary the engine handed `TurnOutputPort.finishTurn`, in order. */
+  readonly summaries: TurnOutputSummary[];
+  /**
+   * Interleaving markers from three DIFFERENT ports, in call order: the ledger,
+   * the context port and the turn-output port. One recorder per port, so the
+   * order cannot be an artefact of a single call site.
+   */
+  readonly order: string[];
   /** Every string the model was ever sent, joined. */
   modelSawText(): string;
   /** Every published event, joined. */
@@ -158,28 +196,42 @@ interface Composition {
  *
  * The drain port is fed the adapter's output, so the chain under test is
  * producer -> `toDrainItem` -> `#drainOutcomes` -> model request / ledger /
- * events, with no hand-written drain item anywhere in it.
+ * turn-output port / events, with no hand-written drain item anywhere in it.
  */
-async function runThroughAdapter(updates: readonly MessageUpdate[]): Promise<Composition> {
+async function runThroughAdapter(
+  updates: readonly MessageUpdate[],
+  options: { calls?: number } = {},
+): Promise<Composition> {
   const mapped = updates.map((update) => toDrainItem(update));
   const events: RunEvent[] = [];
   const ledger: string[] = [];
   const modelRequests: ModelMessage[][] = [];
   const deferred: TransientContextFragment[] = [];
+  const records: ToolResultRecord[] = [];
+  const summaries: TurnOutputSummary[] = [];
+  const order: string[] = [];
   const pending = mapped.filter((item) => item !== null);
+  const callCount = options.calls ?? 1;
   let turn = 0;
 
   const model: ModelPort = {
     async *stream(request: ModelRequest): AsyncIterable<ModelFrame> {
       turn += 1;
       modelRequests.push([...request.messages]);
-      // Ask for one tool on turn 1 so the drain runs against a real dispatch,
-      // and stop cleanly so the engine reaches decision 4.
+      // Ask for tools on turn 1 so the drain runs against real dispatches, and
+      // stop cleanly so the engine reaches decision 4.
       if (turn === 1) {
-        yield {
-          type: 'tool_use',
-          call: { callId: 'call-1', name: 'Task', input: {}, sideEffect: 'read_only' },
-        };
+        for (let index = 0; index < callCount; index += 1) {
+          yield {
+            type: 'tool_use',
+            call: {
+              callId: index === 0 ? 'call-1' : `call-${index + 1}`,
+              name: TOOL_NAME,
+              input: {},
+              sideEffect: 'read_only',
+            },
+          };
+        }
       }
       yield { type: 'turn_stopped', reason: 'end_turn' };
     },
@@ -196,7 +248,7 @@ async function runThroughAdapter(updates: readonly MessageUpdate[]): Promise<Com
       },
       discard(): void {},
       describe: (): readonly ToolDescriptor[] => [
-        { name: 'Task', description: 'delegate', inputSchema: {} },
+        { name: TOOL_NAME, description: 'delegate', inputSchema: {} },
       ],
     },
     context: {
@@ -204,12 +256,13 @@ async function runThroughAdapter(updates: readonly MessageUpdate[]): Promise<Com
         return {
           systemPrompt: 'test',
           messages: [],
-          tools: [{ name: 'Task', description: 'delegate', inputSchema: {} }],
+          tools: [{ name: TOOL_NAME, description: 'delegate', inputSchema: {} }],
           catalogRevision: 'cat-1',
           revision: 'rev-1',
         };
       },
       defer(fragment: TransientContextFragment): void {
+        order.push('defer');
         deferred.push(fragment);
       },
     },
@@ -235,11 +288,24 @@ async function runThroughAdapter(updates: readonly MessageUpdate[]): Promise<Com
         };
       },
       async settle(input): Promise<void> {
+        order.push('settle');
         ledger.push(`settle:${input.attemptKey}:${input.state}`);
       },
       async reconcile(): Promise<void> {},
       async read() {
         return [];
+      },
+    },
+    // The port under test. A recorder, not a mock: it keeps what it was handed
+    // so the expectations below are read off the engine's OWN calls.
+    turnOutput: {
+      async recordToolResult(record: ToolResultRecord): Promise<void> {
+        order.push('record');
+        records.push(record);
+      },
+      async finishTurn(summary: TurnOutputSummary): Promise<void> {
+        order.push('finish');
+        summaries.push(summary);
       },
     },
   };
@@ -277,6 +343,9 @@ async function runThroughAdapter(updates: readonly MessageUpdate[]): Promise<Com
     ledger,
     modelRequests,
     deferred,
+    records,
+    summaries,
+    order,
     modelSawText: () =>
       modelRequests
         .flat()
@@ -429,99 +498,151 @@ describe('what the engine drain carries from the legacy loop', () => {
 });
 
 // ============================================================================
-// 2. The gaps -- asserted in the negative, each with its reason
+// 2. The six effects the port closed, asserted in the POSITIVE
+//
+// Each of these was asserted in the NEGATIVE when this file was written, and a
+// negative assertion cannot tell "not carried" from "carried and then deleted":
+// a mutation that removed the call entirely left every one of them green. Each
+// row below now asserts that the fact ARRIVES, with its value read off the
+// engine's own call.
 // ============================================================================
 
-describe('what the engine drain does NOT carry, so the cutover is not safe yet', () => {
-  it('emits no tool_result frame, so the renderer would lose every tool result', async () => {
-    // `DuyaAgent.ts:2753` yields a `tool_result` SSE frame carrying id, result,
-    // error, duration and metadata. The engine's drain publishes no such event,
-    // so a UI subscribed to `chat:tool_result` goes silent.
+describe('the six legacy effects, carried to the host by TurnOutputPort', () => {
+  it('reaches the host once per result, with the exact answer the model will see', async () => {
+    // `:2730` `_pushDurable` + `:2753` the `tool_result` frame. The durable
+    // append and the frame are the host's two writes; what the engine owes is
+    // that it happened, once, with this content. A `not.toContain` assertion
+    // would pass on a run where `recordToolResult` was never called at all.
     const c = await runThroughAdapter([{ message: toolResultMessage(RESULT_SENTINEL) }]);
 
-    expect(c.publishedText()).not.toContain('tool_result');
-    expect(c.publishedText()).not.toContain(RESULT_SENTINEL);
+    expect(c.records).toHaveLength(1);
+    expect(c.records[0].outcome.content).toBe(RESULT_SENTINEL);
+    expect(c.records[0].outcome.callId).toBe('call-1');
+    // `tool_resultId` was `message.tool_call_id` (`:2739`) and `duration_ms`
+    // was forwarded whole (`:2760`); both are fields the renderer reads.
+    expect(c.records[0].outcome.durationMs).toBe(42);
+    // The turn, which is what the host orders by instead of a `seq` it cannot
+    // mint here (`:2723`).
+    expect(c.records[0].turn).toBe(1);
   });
 
-  it('writes nothing durable, so a tool result would never enter the transcript', async () => {
-    // `DuyaAgent.ts:2730` calls `_pushDurable`. The engine's drain has no
-    // durable-write port at all -- `context.defer` is explicitly transient
-    // (`ports.ts:547`). The model would see the answer on the next turn and the
-    // transcript would not contain it, which is the failure this pins.
+  it('carries the producer metadata, which is the ONLY channel to the catalog read-tracking', async () => {
+    // `:2728` `recordToolCatalogSchemaRead(catalogView, result.message.metadata)`.
+    // The sentinel is the one the PRODUCER stamped on the message, and the
+    // assertion reads it off the record -- so a `metadata` dropped between the
+    // drain and the port turns this red, which an assertion on `isError` alone
+    // would not have done.
     const c = await runThroughAdapter([{ message: toolResultMessage(RESULT_SENTINEL) }]);
 
-    // The engine asked the host to carry it as a fragment; nothing else happened.
-    expect(c.modelSawText()).toContain(RESULT_SENTINEL);
-    expect(c.events.filter((event) => event.type === 'diagnostic')).toHaveLength(0);
+    expect(c.records[0].outcome.metadata).toMatchObject({ previewToken: RESULT_SENTINEL });
   });
 
-  it('fires no PostToolUseFailure hook, so a failed tool stops reaching the hook bus', async () => {
-    // `DuyaAgent.ts:2770` dispatches `PostToolUseFailure` for an errored
-    // result. The engine's drain settles the ledger and moves on.
+  it('hands over the error flag AND the tool name a PostToolUseFailure hook needs', async () => {
+    // `:2770` fires the hook, whose payload is built from `toolResultError` and
+    // `turnToolCallIds.get(toolResultId)` (`:2771`). The engine has no hook bus
+    // and the host has no `callId -> name` map, so BOTH facts have to arrive or
+    // the hook goes out with an empty tool name and filters on nothing.
     const c = await runThroughAdapter([
       { message: toolResultMessage('<tool_error>boom</tool_error>') },
     ]);
 
-    // The error IS classified -- proving the item was read, not skipped.
+    expect(c.records[0].outcome.isError).toBe(true);
+    expect(c.records[0].toolName).toBe(TOOL_NAME);
+    // Read from the engine's own dispatch, so the classifier agrees with the
+    // ledger rather than being re-derived from the text.
     expect(c.ledger).toEqual(['begin:call-1', 'settle:key:call-1:failed']);
-    // And no hook-shaped anything was published for it.
-    expect(c.publishedText()).not.toContain('PostToolUseFailure');
+  });
+
+  it('hands over the tool name the mode_changed filter reads, and nothing else about modes', async () => {
+    // `:2793` looks the call up in `modeSwitchToolIds` and `:2799-2807` decides
+    // the next mode from the tool's NAME. Both are host facts: the runtime layer
+    // must not learn the word `plan`. So the port carries the name and stops,
+    // and the host filters on it. Asserted positively because a host that
+    // received `''` here would silently never emit `mode_changed`.
+    const c = await runThroughAdapter([{ message: toolResultMessage(RESULT_SENTINEL) }]);
+
+    expect(c.records[0].toolName).toBe(TOOL_NAME);
+    // And the mode vocabulary really is absent from what crossed the port.
+    expect(Object.keys(c.records[0]).sort()).toEqual(['outcome', 'toolName', 'turn']);
+  });
+
+  it('reports a RESULT count, which a dispatch count would have got wrong', async () => {
+    // `:2722` `toolResultMessageCount` gates `PostToolUse` (`:2858`) and the
+    // preflight compaction probe (`:2935`). Two calls dispatched, ONE answer
+    // drained: the legacy gate was false and a dispatch-count gate would be
+    // true. This is the assertion that cannot be faked by counting dispatches.
+    const c = await runThroughAdapter([{ message: toolResultMessage(RESULT_SENTINEL) }], {
+      calls: 2,
+    });
+
+    expect(c.summaries[0]).toEqual({ turn: 1, results: 1, dispatched: 2 });
+    // Turn 2 drained nothing and still reported: "this turn landed nothing" is
+    // an answer the host needs, not a silence.
+    expect(c.summaries).toHaveLength(2);
+    expect(c.summaries[1]).toEqual({ turn: 2, results: 0, dispatched: 0 });
+  });
+
+  it('writes the ledger row before the host is told, and the summary after every record', async () => {
+    // The ordering a host cannot reconstruct for itself: the durable record of an
+    // effect exists before the effect is visible anywhere, and the host's "results
+    // are committed" moment is after every per-result call. Read from three
+    // different ports -- the ledger, `context.defer`, and the turn-output port --
+    // each with its own recorder, so it cannot be an artefact of one call site.
+    const c = await runThroughAdapter([{ message: toolResultMessage(RESULT_SENTINEL) }]);
+
+    // Turn 1: ledger, then the model seed, then the host, then the summary. Turn
+    // 2 drained nothing and still reported, which is why 'finish' appears twice.
+    expect(c.order).toEqual(['settle', 'defer', 'record', 'finish', 'finish']);
   });
 });
+
+/**
+ * A port bundle from the REAL `buildEnginePorts`, optionally with the host's
+ * fragment collector bound.
+ *
+ * `collector` is the array the test owns, which is what makes the assertion
+ * distinguishable from anything the adapter might hold privately.
+ */
+function realPorts(
+  collector?: TransientContextFragment[],
+  turnOutput?: TurnOutputSources,
+): RunEnginePorts {
+  return buildEnginePorts({
+    openModelStream: () => (async function* () {})(),
+    queueTool: () => {},
+    drainTools: () => (async function* () {})(),
+    discardTools: () => {},
+    lookup: { sideEffectOf: () => null, toolNames: () => [], describe: () => null },
+    assembleTurn: () =>
+      Promise.resolve({
+        systemPrompt: 'p',
+        messages: [],
+        tools: [],
+        catalogRevision: 'c',
+        revision: 'r',
+      }),
+    askApproval: () => Promise.resolve({ allowed: true, scope: 'once' as const }),
+    publishEvent: () => {},
+    proposeTerminal: () => {},
+    ...(collector === undefined ? {} : { deferFragment: (fragment) => collector.push(fragment) }),
+    ...(turnOutput === undefined ? {} : { turnOutput }),
+  });
+}
 
 // ============================================================================
 // 3. The two LIVE-WIRING gaps, driven through the real exported functions
 // ============================================================================
 
-describe('buildEnginePorts collects deferred fragments that nothing reads back', () => {
-  /** A port bundle whose `context.defer` records what it was handed. */
-  function portsRecordingDefer(deferred: TransientContextFragment[]): RunEnginePorts {
-    const built = buildEnginePorts({
-      openModelStream: () => (async function* () {})(),
-      queueTool: () => {},
-      drainTools: () => (async function* () {})(),
-      discardTools: () => {},
-      lookup: { sideEffectOf: () => null, toolNames: () => [], describe: () => null },
-      assembleTurn: () =>
-        Promise.resolve({
-          systemPrompt: 'p',
-          messages: [],
-          tools: [],
-          catalogRevision: 'c',
-          revision: 'r',
-        }),
-      askApproval: () => Promise.resolve({ allowed: true, scope: 'once' as const }),
-      publishEvent: () => {},
-      proposeTerminal: () => {},
-    });
-    // Wrap, do not replace: the real `defer` still runs, so this observes the
-    // production path rather than standing in for it. The recorded array is
-    // built HERE, by the test, which is what makes the positive assertion
-    // below distinguishable from the engine's own.
-    return {
-      ...built,
-      context: {
-        ...built.context,
-        defer(fragment: TransientContextFragment): void {
-          deferred.push(fragment);
-          built.context.defer(fragment);
-        },
-      },
-    };
-  }
-
-  it('does collect the fragment -- the array is written, and keyed', () => {
-    // The POSITIVE half, and the one that keeps the negative half honest.
-    //
-    // A first version of this file asserted only that the fragment does NOT
-    // reappear in the next assembly. That assertion is INSENSITIVE to a
-    // mutation that makes `defer` drop everything: dropping the fragment and
-    // never reading it back are indistinguishable from outside, so the guard
-    // stayed green against a real regression. Asserting that `defer` received
-    // the fragment, by identity, is what makes "collected but unread" a
-    // two-sided claim instead of one.
-    const seen: TransientContextFragment[] = [];
-    const ports = portsRecordingDefer(seen);
+describe('buildEnginePorts no longer pretends to carry a deferred fragment', () => {
+  it('forwards a deferred fragment to the host collector, by identity', () => {
+    // The POSITIVE half, and the one that keeps the negative half honest. The
+    // engine DID hand the host the fragment -- the two sides of `toBe` are the
+    // object this test made and the object the collector received -- so
+    // "collected but unread" is now a claim about a NAMED seam
+    // (`LegacyEngineSources.deferFragment`) rather than about a private array
+    // nobody outside could observe.
+    const forwarded: TransientContextFragment[] = [];
+    const ports = realPorts(forwarded);
 
     const fragment: TransientContextFragment = {
       kind: 'deferred_tool_context',
@@ -530,18 +651,20 @@ describe('buildEnginePorts collects deferred fragments that nothing reads back',
     };
     ports.context.defer(fragment);
 
-    expect(seen).toHaveLength(1);
-    // Identity, not equality: the object handed over is the object stored.
-    expect(seen[0]).toBe(fragment);
+    expect(forwarded).toHaveLength(1);
+    expect(forwarded[0]).toBe(fragment);
   });
 
-  it('a fragment handed to context.defer does not reappear in the next assembly', async () => {
-    // `buildEnginePorts` holds `deferred` in a closure array
-    // (`run-engine-ports.ts:168-201`) and `assembleTurn` never sees it. So even
-    // the cases the engine DOES carry do not reach the model on the live
-    // wiring, where `assembleTurn` is `workerAssembledTurn` returning
-    // `messages: []`.
-    const ports = portsRecordingDefer([]);
+  it('a fragment handed to context.defer does NOT reappear in the next assembly', async () => {
+    // Re-asserted, with the reason changed. It used to read "the adapter's array
+    // is never read back", which is true of a by-ref host but was a misleading
+    // reason: on this wiring the model gets the fragment from the ENGINE's own
+    // seed (asserted in the test above), and `#modelRequest` reads
+    // `assembled.messages` only for a `by_ref` history. Injecting here would
+    // therefore have been inert for this input and DOUBLE for a by-ref one --
+    // which is the duplication `run-engine.ts:365-371` records as having
+    // already happened once.
+    const ports = realPorts();
 
     const fragment: TransientContextFragment = {
       kind: 'deferred_tool_context',
@@ -560,9 +683,52 @@ describe('buildEnginePorts collects deferred fragments that nothing reads back',
       digest: 'rev-1',
     });
 
-    // The fragment the engine just handed over is absent from what the host
-    // assembles. This turns red the day `assembleTurn` is wired to read the
-    // array -- which is the day the cutover becomes safe.
     expect(JSON.stringify(assembled.messages)).not.toContain(RESULT_SENTINEL);
+  });
+});
+
+describe('buildEnginePorts binds the turn-output seam all-or-nothing', () => {
+  it('builds NO turnOutput port when the host supplies none', () => {
+    // The live worker's state, asserted structurally rather than inferred from a
+    // missing effect. A port that existed and did nothing would look identical
+    // from the outside and would swallow the obligation the cutover has to
+    // discharge; `undefined` is the honest answer and it is checkable.
+    expect(realPorts().turnOutput).toBeUndefined();
+  });
+
+  it('forwards BOTH halves to the host, and awaits them', async () => {
+    // All-or-nothing because a half-bound port is indistinguishable from one that
+    // was never asked: `finishTurn` without `recordToolResult` would report
+    // counts for results the host was never handed. Both members are checked, and
+    // the record that comes out the far side is the one that went in.
+    const records: ToolResultRecord[] = [];
+    const summaries: TurnOutputSummary[] = [];
+    const ports = realPorts(undefined, {
+      onToolResult: (record) => {
+        records.push(record);
+      },
+      onTurnResults: (summary) => {
+        summaries.push(summary);
+      },
+    });
+    const output = ports.turnOutput;
+    expect(output).toBeDefined();
+
+    const record: ToolResultRecord = {
+      turn: 1,
+      toolName: TOOL_NAME,
+      outcome: {
+        kind: 'tool_result',
+        callId: 'call-1',
+        content: RESULT_SENTINEL,
+        isError: false,
+        durationMs: 42,
+      },
+    };
+    await output?.recordToolResult(record);
+    await output?.finishTurn({ turn: 1, results: 1, dispatched: 2 });
+
+    expect(records).toEqual([record]);
+    expect(summaries).toEqual([{ turn: 1, results: 1, dispatched: 2 }]);
   });
 });

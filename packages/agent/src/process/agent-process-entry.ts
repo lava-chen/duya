@@ -3294,6 +3294,16 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           // The run layer's ledger is the Control Plane's. Publishing a protocol
           // event from here would mint a second account of the same run, so the
           // frames the engine's presence produces are deliberately not invented.
+          //
+          // Plan 600 S2, turn-output slice: binding this is the CUTOVER's job,
+          // not this port's. It means owning the `chat:*` projection for engine
+          // events -- the `WorkerAdapterSurface` codec -- while the legacy
+          // generator below is still emitting the same frames from the same
+          // turn, so a bound publisher would double them. The port that carries
+          // a landed tool result (`TurnOutputPort`) is likewise unbound here:
+          // every effect it names is performed inside `DuyaAgent.streamChat`'s
+          // closure today, and there is nothing to bind until the cutover lifts
+          // them out. See `run-engine-ports.ts` (`LegacyEngineSources`).
         },
         proposeTerminal: (candidate) => {
           // Reported, not decided. `RunSession.settle` remains the single writer

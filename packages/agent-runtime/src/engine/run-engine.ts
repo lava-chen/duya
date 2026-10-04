@@ -289,6 +289,8 @@ export class RunEngineImpl implements RunEngine {
     const deferred: TransientContextFragment[] = [];
     /** Dispatch tickets, so a settle names the key its own `begin` minted. */
     const tickets = new Map<string, ToolDispatchTicket>();
+    /** Dispatched tool names, so a landing result can name the call behind it. */
+    const toolNames = new Map<string, string>();
 
     let exit: EngineExit = { reason: 'completed' };
     // Declared OUTSIDE the try so the `finally` can release a lease that was
@@ -333,6 +335,7 @@ export class RunEngineImpl implements RunEngine {
           spend,
           fence,
           tickets,
+          toolNames,
           turnWork: new TurnWork(),
         };
 
@@ -556,6 +559,11 @@ export class RunEngineImpl implements RunEngine {
     await this.#contribute(ctx, 'before_tool', { call });
     ports.tools.dispatch(call, ticket);
     ctx.tickets.set(call.callId, ticket);
+    // The name only, and only for a call that is actually on its way: the
+    // landing result needs it to name the tool it belongs to
+    // (`TurnOutputPort.recordToolResult`), and a denied or budget-refused call
+    // has no result to name.
+    ctx.toolNames.set(call.callId, call.name);
     // Recorded only once the call is actually on its way, so a denied or
     // budget-refused call does not count as work the next turn must answer.
     ctx.turnWork.record();
@@ -591,80 +599,140 @@ export class RunEngineImpl implements RunEngine {
    * satisfies every field the old type asked for; that one is proven red in
    * `packages/agent/src/process/__tests__/run-engine-ports-drain.test.ts`. Both
    * halves are pinned, because either alone is a regression.
+   *
+   * ## The ORDER inside the `tool_result` arm, and why it is this one
+   *
+   * Four steps, and each one is placed against the rule that the DURABLE record
+   * of an effect is written before the effect is visible anywhere:
+   *
+   * 1. `sideEffects.settle` -- the crash-accountability row (contract 4).
+   * 2. `context.defer` + the local list -- the model's next input. Ahead of the
+   *    host projection because it is the one effect the engine itself owns and
+   *    a host that fails to store a result must not also cost the model its
+   *    answer.
+   * 3. `turnOutput.recordToolResult` -- the six host effects the legacy loop
+   *    performed inline (`DuyaAgent.ts:2721-2823`). After the ledger, never
+   *    before: a host appending to its transcript must not be able to record a
+   *    result whose ledger row does not exist yet.
+   * 4. `#contribute('after_tool')` -- extension contributions. Last, because the
+   *    legacy analogue (`PostToolUse`, `:2866`) ran after every result in the
+   *    turn was committed, not after the first one.
    */
   async #drainOutcomes(ctx: RunContext, deferred: TransientContextFragment[]): Promise<void> {
     const { ports, signal } = ctx;
-    for await (const item of ports.tools.drain(signal) as AsyncIterable<ToolDrainItem>) {
-      if (isAborted(signal)) {
-        ports.tools.discard('abandoned');
-        return;
+    // RESULTS that landed, counted here and NOT read off `TurnWork`.
+    //
+    // The legacy gate is `toolResultMessageCount` (`DuyaAgent.ts:2722`), and a
+    // dispatch is not an answer: two calls can come back with one. `finally`
+    // rather than a tail statement, because the abort path returns from the
+    // middle of the loop and the legacy ran its `toolResultMessageCount > 0`
+    // work after that loop too (`:2858`).
+    let results = 0;
+    try {
+      for await (const item of ports.tools.drain(signal) as AsyncIterable<ToolDrainItem>) {
+        if (isAborted(signal)) {
+          ports.tools.discard('abandoned');
+          return;
+        }
+        switch (item.kind) {
+          case 'tool_result': {
+            // Counted at the TOP of the arm, where the legacy counted it
+            // (`:2722`) -- before any of the effects, so a host effect that
+            // throws does not retroactively un-count a result that landed.
+            results += 1;
+            if (ports.sideEffects !== undefined) {
+              // Settle against the key the LEDGER minted at dispatch, not against
+              // the callId. A ledger that namespaces its keys (`key:<callId>`, as
+              // `InMemoryCheckpointStore` does) would otherwise record a settle
+              // against a row that does not exist, leaving every call permanently
+              // `dispatched` — an effect a crash could never classify.
+              const ticket = ctx.tickets.get(item.callId) ?? SYNTHETIC_TICKET;
+              await ports.sideEffects.settle({
+                attemptKey: ticket.attemptKey,
+                state: item.isError ? 'failed' : 'succeeded',
+                detail: item.content.slice(0, LEDGER_DETAIL_LIMIT),
+              });
+            }
+            const fragment: TransientContextFragment = {
+              kind: 'deferred_tool_context',
+              text: item.content,
+              key: `tool_result:${item.callId}`,
+            };
+            // Both: `defer` hands it to the host for the next assembly, and the
+            // local list carries it into this run's own message seed. One write,
+            // two readers, no second copy of the text.
+            ports.context.defer(fragment);
+            deferred.push(fragment);
+            const turnOutput = ports.turnOutput;
+            if (turnOutput !== undefined) {
+              await turnOutput.recordToolResult({
+                turn: ctx.turn,
+                // BY IDENTITY, so what the host is handed is exactly what the
+                // model will see next turn -- see `ToolResultRecord`.
+                outcome: item,
+                // `''` when this run never dispatched the call, which is the
+                // legacy fallback verbatim (`DuyaAgent.ts:2771`).
+                toolName: ctx.toolNames.get(item.callId) ?? '',
+              });
+            }
+            await this.#contribute(ctx, 'after_tool', { outcome: item });
+            break;
+          }
+          case 'deferred_context': {
+            // PENDING, deliberately: resolving here would move the await into the
+            // drain loop, so a follow-up review that never settles would stall
+            // this turn instead of the next one (`ports.ts`,
+            // `DeferredToolContext`).
+            //
+            // Keyed by call, and NOT `tool_result:` — that prefix is what
+            // `#drainOutcomes` uses for a real result, and sharing it would let a
+            // deferred context overwrite a result for the same call in the host's
+            // keyed map, silently losing one of the two.
+            const fragment: TransientContextFragment = {
+              kind: 'deferred_tool_context',
+              key: `deferred:${item.callId}`,
+              pending: item.pending,
+            };
+            ports.context.defer(fragment);
+            deferred.push(fragment);
+            break;
+          }
+          case 'subagent_progress': {
+            // Not a model input and not a ledger event. It is projected into the
+            // protocol vocabulary by the host, and an unmapped frame becomes a
+            // diagnostic rather than a silence (`RunEventStorePort`'s
+            // `projectSubagentProgress`).
+            //
+            // Deliberately NOT also routed through `turnOutput`: this frame
+            // already has exactly one projection path, and a second one would be
+            // two mechanisms for one symptom -- which is how a frame ends up
+            // emitted twice instead of emitted once.
+            const project = ports.events.projectSubagentProgress;
+            const mapped = project === undefined ? null : project.call(ports.events, item.event);
+            if (mapped === null) {
+              ports.events.publish({
+                type: 'diagnostic',
+                level: 'warn',
+                message: `subagent progress frame "${item.event.type}" has no protocol destination`,
+                data: { callId: item.callId, agentEvent: item.event },
+              });
+            } else {
+              ports.events.publish(mapped);
+            }
+            break;
+          }
+        }
       }
-      switch (item.kind) {
-        case 'tool_result': {
-          if (ports.sideEffects !== undefined) {
-            // Settle against the key the LEDGER minted at dispatch, not against
-            // the callId. A ledger that namespaces its keys (`key:<callId>`, as
-            // `InMemoryCheckpointStore` does) would otherwise record a settle
-            // against a row that does not exist, leaving every call permanently
-            // `dispatched` — an effect a crash could never classify.
-            const ticket = ctx.tickets.get(item.callId) ?? SYNTHETIC_TICKET;
-            await ports.sideEffects.settle({
-              attemptKey: ticket.attemptKey,
-              state: item.isError ? 'failed' : 'succeeded',
-              detail: item.content.slice(0, LEDGER_DETAIL_LIMIT),
-            });
-          }
-          const fragment: TransientContextFragment = {
-            kind: 'deferred_tool_context',
-            text: item.content,
-            key: `tool_result:${item.callId}`,
-          };
-          // Both: `defer` hands it to the host for the next assembly, and the
-          // local list carries it into this run's own message seed. One write,
-          // two readers, no second copy of the text.
-          ports.context.defer(fragment);
-          deferred.push(fragment);
-          await this.#contribute(ctx, 'after_tool', { outcome: item });
-          break;
-        }
-        case 'deferred_context': {
-          // PENDING, deliberately: resolving here would move the await into the
-          // drain loop, so a follow-up review that never settles would stall
-          // this turn instead of the next one (`ports.ts`,
-          // `DeferredToolContext`).
-          //
-          // Keyed by call, and NOT `tool_result:` — that prefix is what
-          // `#drainOutcomes` uses for a real result, and sharing it would let a
-          // deferred context overwrite a result for the same call in the host's
-          // keyed map, silently losing one of the two.
-          const fragment: TransientContextFragment = {
-            kind: 'deferred_tool_context',
-            key: `deferred:${item.callId}`,
-            pending: item.pending,
-          };
-          ports.context.defer(fragment);
-          deferred.push(fragment);
-          break;
-        }
-        case 'subagent_progress': {
-          // Not a model input and not a ledger event. It is projected into the
-          // protocol vocabulary by the host, and an unmapped frame becomes a
-          // diagnostic rather than a silence (`RunEventStorePort`'s
-          // `projectSubagentProgress`).
-          const project = ports.events.projectSubagentProgress;
-          const mapped = project === undefined ? null : project.call(ports.events, item.event);
-          if (mapped === null) {
-            ports.events.publish({
-              type: 'diagnostic',
-              level: 'warn',
-              message: `subagent progress frame "${item.event.type}" has no protocol destination`,
-              data: { callId: item.callId, agentEvent: item.event },
-            });
-          } else {
-            ports.events.publish(mapped);
-          }
-          break;
-        }
+    } finally {
+      const turnOutput = ports.turnOutput;
+      if (turnOutput !== undefined) {
+        await turnOutput.finishTurn({
+          turn: ctx.turn,
+          results,
+          // Carried so the two numbers can be seen diverging at the call site;
+          // see `TurnOutputSummary`.
+          dispatched: ctx.turnWork.dispatched,
+        });
       }
     }
   }
@@ -1041,6 +1109,21 @@ interface RunContext {
    * to a synthetic key — a settle against no row at all.
    */
   readonly tickets: Map<string, ToolDispatchTicket>;
+  /**
+   * Dispatched tool NAME per callId, for the lifetime of the run.
+   *
+   * Recorded for the same reason `tickets` is, and with the same lifetime: a
+   * result can land in a later turn than the call that produced it, and a
+   * lookup that had already forgotten would report "no tool name" for a call
+   * this engine made.
+   *
+   * The NAME only, not the whole `ToolCallRequest`. A `Write` call's input is
+   * the file's contents, so retaining whole calls for the length of a run would
+   * hold every argument payload a session ever passed -- and nothing needs it:
+   * the legacy hook payload sent `tool_input: {}` (`DuyaAgent.ts:2780`) and
+   * asked only which tool failed (`:2771`).
+   */
+  readonly toolNames: Map<string, string>;
   /** Mutable, per turn. Replaced at the top of each iteration. */
   turnWork: TurnWork;
 }

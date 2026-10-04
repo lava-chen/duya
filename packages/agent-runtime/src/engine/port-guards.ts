@@ -38,6 +38,9 @@ import type {
   SubtaskTerminationReason,
   ToolDrainItem,
   ToolOutcome,
+  ToolResultRecord,
+  TurnOutputPort,
+  TurnOutputSummary,
 } from './ports.js';
 
 // ---------------------------------------------------------------------------
@@ -142,6 +145,10 @@ const FULL_PORTS: RunEnginePorts = {
     settle: () => Promise.resolve(),
     reconcile: () => Promise.resolve(),
     read: () => Promise.resolve([]),
+  },
+  turnOutput: {
+    recordToolResult: () => Promise.resolve(),
+    finishTurn: () => Promise.resolve(),
   },
 };
 
@@ -325,3 +332,105 @@ export const SUBTASK_REASONS_COVER_PARENT_FAILURE: Extract<
  */
 // @ts-expect-error - `user_kill` is a UI action, not a `SubtaskTerminationReason`
 const NO_USER_KILL_REASON: Extract<SubtaskTerminationReason, 'user_kill'> = 'user_kill';
+
+// --- Contract 1f: the turn output is a PROJECTION, never a ledger entry -----
+
+/**
+ * Positive half first, for the same reason `MINIMAL_PORTS` exists: a negative
+ * assertion over a type that cannot be built would pass for the wrong reason.
+ *
+ * Every member here is a promise the engine makes to the host. `recordToolResult`
+ * is AWAITED by `#drainOutcomes`, so the `Promise<void>` is load-bearing rather
+ * than an erased async marker -- a host that returned `void` where the engine
+ * awaits would typecheck only if the method were declared differently, which is
+ * the change this case is here to catch.
+ */
+export const TURN_OUTPUT_PORT_IS_CONSTRUCTIBLE: TurnOutputPort = {
+  recordToolResult: () => Promise.resolve(),
+  finishTurn: () => Promise.resolve(),
+};
+
+/**
+ * No `seq` on either payload.
+ *
+ * The legacy assigns `result.message.seq_index = seqIndex`
+ * (`DuyaAgent.ts:2723`), and reproducing that field here would make the runtime
+ * a second authority for "where does this message sit" -- the same reason
+ * `RunEvent` carries no `seq` (`ports.ts:46-49`). Ordering is the host's, derived
+ * from `turn`.
+ */
+type SeqOnToolResultRecord = Extract<KeysOfEveryMember<ToolResultRecord>, 'seq'>;
+
+// @ts-expect-error - a landed result is not an ordered ledger event
+const TOOL_RESULT_RECORD_CARRIES_NO_SEQ: SeqOnToolResultRecord = 'seq';
+// @ts-expect-error - the turn summary is not an ordered ledger event either
+const TURN_OUTPUT_SUMMARY_CARRIES_NO_SEQ: Extract<KeysOfEveryMember<TurnOutputSummary>, 'seq'> =
+  'seq';
+
+/**
+ * No `runId`: the PORT is bound to one run, exactly as `events` is.
+ *
+ * `RunExecutionRequest.ports` is documented as "supplied per run, not per
+ * process", so the binding already carries the identity. A `runId` parameter
+ * would be a second, independently-passable copy of it -- and the one a caller
+ * could get wrong.
+ */
+// @ts-expect-error - the port binding names the run; the payload need not repeat it
+const TOOL_RESULT_RECORD_CARRIES_NO_RUN_ID: Extract<
+  KeysOfEveryMember<ToolResultRecord>,
+  'runId'
+> = 'runId';
+// @ts-expect-error - nor does the summary
+const TURN_OUTPUT_SUMMARY_CARRIES_NO_RUN_ID: Extract<KeysOfEveryMember<TurnOutputSummary>, 'runId'> =
+  'runId';
+
+/**
+ * No `id`, so durable identity stays with the writer that stores it.
+ *
+ * The legacy mints `crypto.randomUUID()` when a result has no id
+ * (`DuyaAgent.ts:2724-2726`) and then hands the message to `_pushDurable`
+ * (`:3515`), which is the thing that journals it. An engine that minted the id
+ * would put the identity's authority in a layer that cannot see whether the
+ * write landed.
+ */
+// @ts-expect-error - a durable message id belongs to the durable writer
+const TOOL_RESULT_RECORD_CARRIES_NO_ID: Extract<KeysOfEveryMember<ToolResultRecord>, 'id'> = 'id';
+
+/**
+ * The surface cannot express a terminal decision.
+ *
+ * Positive rather than negative, for the reason `STORE_SURFACE_IS_EXACT` gives:
+ * "the port offers no settle" is a claim about an ABSENCE, and a conditional
+ * type is what turns that absence into a build failure the day a method named
+ * `settle`/`proposeTerminal`/`finalize` appears.
+ */
+type TurnOutputCannotSettle =
+  keyof TurnOutputPort extends 'settle' | 'proposeTerminal' | 'finalize' | 'complete' ? never : true;
+
+// @ts-expect-error - only a projection host; the terminal stays with `RunSession.settle`
+export const TURN_OUTPUT_SURFACE_CANNOT_SETTLE: TurnOutputCannotSettle = false;
+
+/**
+ * The two counts are separate FIELDS, not one aliased number.
+ *
+ * `results` is the legacy `toolResultMessageCount` (`DuyaAgent.ts:2722`) and
+ * `dispatched` is `TurnWork.dispatched` (`run-engine.ts:569`); they diverge the
+ * moment a turn dispatches two calls and one answers. Collapsing them into one
+ * field would make the host's gate a dispatch count with no way to tell.
+ */
+type SummaryCountsResults = 'results' extends keyof TurnOutputSummary ? true : false;
+
+// @ts-expect-error - `results` is a RESULT count; `dispatched` is not a substitute
+export const TURN_SUMMARY_COUNTS_RESULTS: SummaryCountsResults = false;
+
+/**
+ * And the metadata the two host consumers read is reachable.
+ *
+ * `recordToolCatalogSchemaRead(catalogView, metadata)` (`:2728`) and the
+ * renderer's preview path (`:2763`) read keys this layer cannot enumerate, so
+ * `outcome.metadata` is the channel. If a rewrite of `ToolOutcome` dropped it,
+ * both consumers would receive `undefined` and neither would fail.
+ */
+type OutcomeCarriesMetadata = 'metadata' extends keyof ToolOutcome ? true : false;
+
+export const RESULT_METADATA_REACHES_THE_HOST: OutcomeCarriesMetadata = true;

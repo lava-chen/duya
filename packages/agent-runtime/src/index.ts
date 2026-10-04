@@ -393,6 +393,7 @@ export type {
   ToolDrainItem,
   ToolOutcome,
   ToolPort,
+  ToolResultRecord,
   ToolSideEffectLedger,
   TransientContextFragment,
   TransientFragmentKind,
@@ -401,6 +402,8 @@ export type {
   ResolvedTransientContextFragment,
   SubagentProgressItem,
   TurnAssemblyInput,
+  TurnOutputPort,
+  TurnOutputSummary,
   WorkerAdapterSurface,
 } from './engine/ports.js';
 export type { AttachmentInput } from './engine/ports.js';
