@@ -190,17 +190,35 @@ describe('the rules are ordered and none of them is dead', () => {
     // Most-specific-first is what makes "first match wins" correct. A broader
     // rule above a narrower one makes the narrower one unreachable, and an
     // unreachable rule is a claim about code that nothing reads.
+    //
+    // ADJACENCY IS NOT THE TEST, and treating it as one is how this gate came to
+    // pass vacuously. It once reported a dead rule only when the broader rule
+    // sat DIRECTLY above the narrower one — which held for none of the six rules
+    // this map actually shadowed, because the exceptions to
+    // `packages/agent-protocol/src` are 14 slots below it and carry their own
+    // category. The gate meant to catch dead rules caught none.
+    //
+    // So the question asked per rule is the real one: is the NEAREST rule above
+    // it that covers its whole prefix also the first rule able to claim it? If
+    // nothing between them covers it, the rule is dead no matter how far above
+    // the shadower sits — which is why the loop walks upward from `j` rather
+    // than testing neighbours.
+    const covers = (upper: string, lower: string): boolean =>
+      lower === upper || lower.startsWith(`${upper}/`);
     const shadowed: string[] = [];
-    for (let i = 0; i < RULES.length; i++) {
-      for (let j = i + 1; j < RULES.length; j++) {
-        const upper = RULES[i].prefix;
-        const lower = RULES[j].prefix;
-        if (lower === upper || lower.startsWith(`${upper}/`)) {
-          // `lower` is narrower. It is only reachable if no rule BETWEEN them
-          // intercepts it; the simple case is `upper` directly above it, which
-          // is what a reader would trip over.
-          if (j === i + 1) shadowed.push(`${upper} shadows ${lower}`);
+    for (let j = 0; j < RULES.length; j++) {
+      const lower = RULES[j].prefix;
+      for (let i = j - 1; i >= 0; i--) {
+        if (!covers(RULES[i].prefix, lower)) continue;
+        // Nearest covering rule found, so stop: anything further up is shadowed
+        // BY this one and could not claim the prefix before it either.
+        const intercepted = RULES.slice(i + 1, j).some((k) => covers(k.prefix, lower));
+        if (!intercepted) {
+          shadowed.push(
+            `${lower} [rule ${j}, ${RULES[j].category}] is shadowed by ${RULES[i].prefix} [rule ${i}, ${RULES[i].category}]`,
+          );
         }
+        break;
       }
     }
     expect(shadowed).toEqual([]);
