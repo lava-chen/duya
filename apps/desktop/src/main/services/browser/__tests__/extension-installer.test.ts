@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
 
 /**
  * extension-installer.test.ts
@@ -149,13 +150,20 @@ describe('resolveExtensionInstallDir', () => {
   it('returns packaged path relative to process.execPath when packaged', () => {
     mocks.appIsPackaged.value = true;
     const originalExec = process.execPath;
+    // This case fakes `process.platform = 'win32'`, but `path.dirname` still
+    // uses the HOST separator, so a literal `C:\...` execPath has no directory
+    // component off Windows and the install dir collapsed to the relative
+    // `resources/extension`. Build the fake install layout from the host
+    // separator; on Windows it is byte-identical to the original fixture.
+    const sep = process.platform === 'win32' ? '\\' : '/';
+    const fakeExe = join(sep, 'Program Files', 'DUYA', 'DUYA.exe');
     Object.defineProperty(process, 'execPath', {
-      value: 'C:\\Program Files\\DUYA\\DUYA.exe',
+      value: fakeExe,
       configurable: true,
     });
     try {
       expect(resolveExtensionInstallDir()).toBe(
-        'C:\\Program Files\\DUYA\\resources\\extension',
+        join(sep, 'Program Files', 'DUYA', 'resources', 'extension'),
       );
     } finally {
       Object.defineProperty(process, 'execPath', {
