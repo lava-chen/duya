@@ -92,22 +92,47 @@ const EXPECTED = {
   counts: {
     wire: 47,
     pure: 6,
-    'runtime-coordination': 286,
-    'capability-adapter': 1173,
-    'cp-durable': 166,
+    'runtime-coordination': 287,
+    'capability-adapter': 1174,
+    'cp-durable': 173,
     'host-ui': 1204,
   } as Record<Category, number>,
   fingerprints: {
     wire: 'b455186a9ef9f6f6',
     pure: '08339d25e58ae23c',
-    'runtime-coordination': '31181831e6e2bacd',
-    'capability-adapter': '1e37536496c92b54',
-    'cp-durable': '42e519be19fed167',
+    'runtime-coordination': 'b330f5ae968a045b',
+    'capability-adapter': '4f223dc18410c009',
+    'cp-durable': '45a1db9875f8fab7',
     'host-ui': '5f4fdca6f9f9092c',
   } as Record<Category, string>,
-  // 3253 source files walked, 2882 classified, 371 under a stated exclusion.
-  total: 2882,
-  unclassified: 371,
+  // 3264 source files walked, 2891 classified, 373 under a stated exclusion.
+  //
+  // 2882 -> 2891 (+9) and 371 -> 373 (+2), itemised because a number that
+  // moved is a set of files. FOUR of the moves are not this change:
+  // a97353b3 re-recorded this file, and the two commits that landed after
+  // it each added one source file and one test file without re-recording.
+  //
+  //   runtime-coordination  286 -> 287  packages/agent/src/agent/turnShape.ts
+  //   capability-adapter  1173 -> 1174  packages/agent/src/tool/orchestration/canonical-path.ts
+  //   unclassified          371 -> 373  packages/agent/tests/unit/agent/turn-shape.test.ts
+  //                                       packages/agent/tests/unit/tool/orchestration/dependency-graph-serialisation.test.ts
+  //
+  //   (446721e3 and 86f5fe3e. The two test files sit under the
+  //   packages/*/tests exclusion, which is why they move unclassified
+  //   rather than a category.)
+  //
+  // The remaining +7 are this change, all in cp-durable and all classified
+  // by the existing rules. No rule was edited to accommodate them.
+  //
+  //   cp-durable           166 -> 173  apps/desktop/src/main/db/core/workspace-store.ts
+  //                                       apps/desktop/src/main/db/core/workspace-identity.ts
+  //                                       apps/desktop/src/main/db/core/workspace-resolver.ts
+  //                                       apps/desktop/src/main/db/core/__tests__/workspace-store.test.ts
+  //                                       apps/desktop/src/main/db/core/__tests__/workspace-identity.test.ts
+  //                                       apps/desktop/src/main/db/core/__tests__/workspace-resolver.test.ts
+  //                                       apps/desktop/src/main/db/core/__tests__/workspace-rehearsal.test.ts
+  total: 2891,
+  unclassified: 373,
 } as {
   counts: Record<Category, number>;
   fingerprints: Record<Category, string>;
