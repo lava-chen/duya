@@ -39,6 +39,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AddressInfo } from 'node:net';
+import type { RunPromptInSessionOptions } from '../agent-run';
+import { runPromptInSession } from '../agent-run';
 
 const mocks = vi.hoisted(() => ({
   port: 0 as number,
@@ -63,8 +65,6 @@ vi.mock('../../db/core-connection', () => ({
 vi.mock('../compact-config', () => ({
   resolveCompactModelConfig: () => null,
 }));
-
-const { runPromptInSession } = await import('../agent-run');
 
 /** The verdict the fake Control Plane will serve for the run. */
 type ServedStatus = 'completed' | 'cancelled' | 'budget_exhausted' | 'failed' | 'absent';
@@ -144,12 +144,12 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-const baseOpts = {
+const baseOpts: RunPromptInSessionOptions = {
   sessionId: 'session-1',
   prompt: 'do the thing',
   workingDirectory: '/repo',
-  providerConfig: { provider: { id: 'p', apiKey: 'k' }, model: 'claude-opus' },
-} as Parameters<typeof runPromptInSession>[0];
+  providerConfig: { apiKey: 'k', model: 'claude-opus', provider: 'p', authStyle: 'api_key' },
+};
 
 describe('H8.2 — automation reads the RunResult instead of trusting the done frame', () => {
   it('resolves a completed run and reports the RunResult it read', async () => {

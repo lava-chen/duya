@@ -107,17 +107,21 @@ function fakeResponse(): {
 } {
   let payload: Record<string, unknown> = {};
   let code = 0;
+  // `headersSent` / `writableEnded` are readonly on `ServerResponse`, so the
+  // double tracks them on a loose local and is handed to the handler as the
+  // type it expects. Assigning through the cast would be a type error the
+  // package's own config never sees — these test files are excluded from
+  // `typecheck:all` — so the looseness is kept in one place and named.
+  const flags = { headersSent: false, writableEnded: false };
   const res = {
-    headersSent: false,
-    writableEnded: false,
     writeHead: (statusCode: number) => {
       code = statusCode;
-      res.headersSent = true;
+      flags.headersSent = true;
       return res;
     },
     end: (chunk: string) => {
       payload = JSON.parse(chunk) as Record<string, unknown>;
-      res.writableEnded = true;
+      flags.writableEnded = true;
       return res;
     },
     write: () => true,
