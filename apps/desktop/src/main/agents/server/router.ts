@@ -1210,12 +1210,6 @@ async function handlePostChat(
       // which is what makes the start feel responsive (pi-style) rather than a
       // multi-second blank wait.
       try {
-        if (wantsSSE) {
-          handlePostChatSSE(sessionId, req, res, child, deps);
-        } else {
-          handlePostChatNonSSE(sessionId, req, res, child, deps);
-        }
-
         // Plan 587 R2.1: ONE entry. `openRun` opens the run AND dispatches the
         // turn — the `chat:start` command below is issued from inside it, by the
         // execution channel, carrying the canonical run id, the manifest hash
@@ -1226,6 +1220,20 @@ async function handlePostChat(
         // the reason to await it — a run whose row does not exist yet is a run
         // that cannot be recovered, and `openRun` awaits `run.started` (with
         // its manifest hash) landing before anything is dispatched.
+        //
+        // It runs BEFORE the response is handed to a stream handler, and that
+        // order is the fix for a turn that is dropped rather than answered.
+        // `openRun` dispatches the work, so a refusal means NOBODY will ever
+        // send `chat:done` or `chat:error` — the two frames a stream handler
+        // ends its response on. Handing the response over first and only then
+        // logging the refusal is what left the turn hanging until the socket
+        // timed out, with a run row stranded at `terminal=NULL`. Deciding
+        // first means the refusal is still answerable, so it is answered here.
+        // Nothing is lost by the reordering: the worker's stdout is a paused
+        // Readable that buffers until a listener attaches (the `init` command
+        // above is already sent before any handler exists), so a dispatch that
+        // produces frames immediately is still delivered when the handler
+        // attaches a moment later.
         //
         // NOT gated on `wantsSSE` any more. Both branches route frames through
         // `normalizeAndObserve` now, so the non-SSE branch records a faithful
@@ -1307,18 +1315,55 @@ async function handlePostChat(
             requiredCapabilities: ['streaming'],
           });
           if (!start.accepted) {
-            // Reported, not thrown. Losing the durable record is a degradation;
-            // refusing the user's message would be a regression. The stream
-            // handlers already own the response and will close it when the
-            // worker says `chat:error`, which is the same non-SSE behaviour as
-            // a dispatch that was never delivered.
-            httpLogger.warn('chat turn dispatched without a durable run', {
+            // The refusal is ANSWERED, not logged.
+            //
+            // The previous comment here claimed the stream handlers "will close
+            // it when the worker says `chat:error`". That is false for exactly
+            // this case: `accepted: false` means nothing was dispatched, so there
+            // is no worker turn that will ever emit `chat:error`. The claim is
+            // true of a dispatch that was delivered and then failed, and this is
+            // not one — which is why the turn hung to the socket timeout instead
+            // of showing an error.
+            //
+            // So the response is answered here, while it is still this router's
+            // to answer. `openRun` has already given the run row a terminal, so
+            // the failure is durable as well as visible, and the stage travels
+            // in the body because an operator reading the log needs to know
+            // which of the five refusals this was.
+            httpLogger.error('chat turn could not be dispatched — answering the request', new Error(start.reason), {
               sessionId,
               runId: start.runId ?? undefined,
               stage: start.stage,
               reason: start.reason,
             });
+            // The streaming lock is taken for a turn that will never stream, so
+            // it is released here exactly as the `catch` below releases it.
+            revertStreamingLock();
+            sendJson(res, 500, {
+              error: `this turn could not be started: ${start.reason}`,
+              stage: start.stage,
+              ...(start.runId === null ? {} : { runId: start.runId }),
+            });
+            return;
           }
+        }
+
+        // The run is open and the turn is dispatched, so the response can be
+        // handed to the stream handler that owns it.
+        //
+        // Open the SSE stream and send chat:start immediately instead of
+        // blocking the HTTP response on waitForReady. The worker queues
+        // chat:start while it is still initializing, and surfaces init failures
+        // through the stream itself (a `ready` error frame, a queued chat:start
+        // emitting `chat:error` when the agent is null, or the process-level
+        // error/exit handlers in handlePostChatSSE). Removing the gate lets the
+        // client connect and show immediate feedback while the worker spins up,
+        // which is what makes the start feel responsive (pi-style) rather than a
+        // multi-second blank wait.
+        if (wantsSSE) {
+          handlePostChatSSE(sessionId, req, res, child, deps);
+        } else {
+          handlePostChatNonSSE(sessionId, req, res, child, deps);
         }
 
         // The `chat:start` command is NOT sent here.
