@@ -23,13 +23,25 @@ function sha(content: string): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
+/**
+ * An absolute file path on THIS host.
+ *
+ * The extractor gates on `path.isAbsolute`, and a hardcoded `C:\work\a.ts`
+ * is not absolute on POSIX, so the ref was silently dropped off Windows.
+ * Joining from `path.sep` yields an absolute path on every platform.
+ */
+function absPath(...segments: string[]): string {
+  return path.join(path.sep, ...segments);
+}
+
 describe('extractPreImagesFromMetadata', () => {
   it('extracts Edit/Write shape (filePath + preImageSha)', () => {
+    const target = absPath('work', 'a.ts');
     const refs = extractPreImagesFromMetadata({
-      filePath: 'C:\\work\\a.ts',
+      filePath: target,
       preImageSha: sha('old'),
     });
-    expect(refs).toEqual([{ filePath: 'C:\\work\\a.ts', sha: sha('old') }]);
+    expect(refs).toEqual([{ filePath: target, sha: sha('old') }]);
   });
 
   it('extracts ApplyPatch multi-file shape', () => {
