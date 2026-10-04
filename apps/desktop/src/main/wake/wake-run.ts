@@ -113,7 +113,21 @@ export async function runWakePromptInExistingSession(
     },
   })
     .then((result) => ({ output: result.output, events: result.events }))
-    .catch(() => ({ output: '', events: [] }))
+    .catch((error: unknown) => {
+      // The best-effort contract (never throw for a notification that was
+      // already persisted) is unchanged, but the REASON is now worth keeping.
+      // `runPromptInSession` settles on the run's `RunResult`, so this catch
+      // can be a budget ceiling, a cancellation, or a run whose terminal could
+      // not be confirmed — all of which used to arrive as a silent empty
+      // output, because the old code treated the worker's `done` frame as the
+      // verdict. A wake that stopped short must be visible to whoever reads
+      // the logs, or the move bought nothing.
+      getLogger().warn('Wake run did not complete', {
+        sessionId,
+        reason: error instanceof Error ? error.message : String(error),
+      }, LogComponent.Automation);
+      return { output: '', events: [] };
+    })
 }
 
 /**
@@ -173,5 +187,15 @@ export async function runUserTurnInSession(
     },
   })
     .then((result) => ({ output: result.output, events: result.events }))
-    .catch(() => ({ output: '', events: [] }))
+    .catch((error: unknown) => {
+      // Same reasoning as the wake path above: the caller must not throw, but
+      // a queued user turn that was cancelled, hit a budget ceiling, or never
+      // produced a confirmable terminal is not the same as one that simply had
+      // nothing to say.
+      getLogger().warn('Queued user-turn fallback did not complete', {
+        sessionId,
+        reason: error instanceof Error ? error.message : String(error),
+      }, LogComponent.Automation);
+      return { output: '', events: [] };
+    })
 }

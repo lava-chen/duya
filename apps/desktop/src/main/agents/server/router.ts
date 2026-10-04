@@ -2893,6 +2893,74 @@ async function handlePostCompact(
   });
 }
 
+/**
+ * `GET /sessions/:id/run-result` — the run's `RunResult`, as the run layer
+ * decided it.
+ *
+ * ## Why this route exists
+ *
+ * Plan 587 H8.2 asks that automation/wake "submit the durable intent to the CP
+ * and read the `RunResult`". Automation already submits through the same
+ * `POST /sessions/:id/chat` the renderer uses, so that half was true. What was
+ * missing is the other half: `agent-run.ts` settled on the worker's SSE `done`
+ * FRAME, so its verdict was the executor's opinion rather than the run's
+ * terminal.
+ *
+ * The two disagree in exactly the cases that matter to a scheduler. A turn that
+ * was cancelled, or that stopped on a budget ceiling, or that failed inside the
+ * runtime, can still be followed by a `done` frame — and a consumer that treats
+ * "the stream said done" as success records a successful wake for a run that
+ * did not succeed. Reading the `RunResult` makes the terminal the authority,
+ * which is the same authority Desktop already renders from.
+ *
+ * ## What it is NOT
+ *
+ * It is a READ. `resultFor` is documented on the orchestrator as a read that
+ * "waits on the runtime's completion promise and never settles the run", so
+ * calling it here cannot become a second thing that ends a turn — contract §C's
+ * "`result()` only waits; it must not settle" is satisfied by construction
+ * rather than by discipline at the call site.
+ *
+ * It is not a permission or budget surface. Nothing here consults, widens or
+ * bypasses either: the run already passed through the same gate the renderer
+ * goes through, and this route can only report the verdict that gate produced.
+ *
+ * ## Absent is reported, never fabricated
+ *
+ * `run: null` means "this host has no run for that session" — a host with no
+ * orchestrator wired, or a session that never ran. It is deliberately NOT
+ * reported as `status: 'completed'`: a durable/headless consumer that cannot
+ * confirm a terminal must not be handed a success (contract §C).
+ */
+export async function handleGetRunResult(
+  sessionId: string,
+  res: http.ServerResponse,
+  deps: RouterDeps,
+): Promise<void> {
+  const { runOrchestrator, httpLogger } = deps;
+  if (!runOrchestrator) {
+    // "This build does not expose run results" is a different answer from
+    // "that run completed", and conflating them is the exact failure this
+    // route is here to remove.
+    sendJson(res, 501, { error: 'Run results are not available on this host', run: null });
+    return;
+  }
+  let run: Awaited<ReturnType<typeof runOrchestrator.resultFor>> = null;
+  try {
+    run = await runOrchestrator.resultFor(sessionId);
+  } catch (error) {
+    // `result()` rejects only when the run layer failed to reach a terminal it
+    // could record. That is a failure to confirm, and it is reported as one
+    // rather than as an empty success.
+    httpLogger.error('run result read failed', error instanceof Error ? error : new Error(String(error)), {
+      sessionId,
+    });
+    sendJson(res, 500, { error: 'Run result unavailable', run: null });
+    return;
+  }
+  sendJson(res, 200, { runId: run?.runId ?? null, run });
+}
+
 function handleGetChat(
   sessionId: string,
   req: http.IncomingMessage,
@@ -3290,6 +3358,15 @@ function handleSessionsRoute(
     }
     if (pathParts.length === 3 && pathParts[2] === 'chat') {
       handleGetChat(sessionId, req, res, deps);
+      return;
+    }
+    if (pathParts.length === 3 && pathParts[2] === 'run-result') {
+      // A read, so it answers without a worker and without touching the
+      // session's live-run binding. `run-result` is a single path segment, so
+      // it cannot shadow the three-segment routes above it.
+      void handleGetRunResult(sessionId, res, deps).catch(() => {
+        if (!res.writableEnded) sendJson(res, 500, { error: 'Run result unavailable', run: null });
+      });
       return;
     }
   }

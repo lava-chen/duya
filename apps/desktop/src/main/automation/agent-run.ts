@@ -31,6 +31,7 @@ import { resolveCompactModelConfig } from './compact-config';
 export type { CronProviderConfig } from './provider-config';
 import { prepareAutomationWorkspace } from './workspace';
 import type { AutomationCron } from './types.js';
+import type { RunResult } from '@duya/agent-protocol';
 
 const RUN_TIMEOUT_MS = 10 * 60_000;
 
@@ -74,6 +75,149 @@ export interface RunPromptInSessionOptions {
 export interface RunPromptResult {
   output: string;
   events: Array<{ type: string; data?: unknown }>;
+  /**
+   * The run's `RunResult`, read back from the Control Plane after the stream
+   * closed.
+   *
+   * This is the authority on whether the run succeeded — `output` is only the
+   * text the stream happened to carry. `null` when the host does not expose
+   * run results, which is reported rather than papered over: see
+   * {@link readRunResult}.
+   */
+  run: RunResult | null;
+}
+
+/**
+ * How long the post-stream `RunResult` read may take.
+ *
+ * Separate from `RUN_TIMEOUT_MS` on purpose. That budget covers the TURN; this
+ * one covers a single local HTTP GET issued after the turn already ended. A
+ * budget that spans both would let a turn that consumed the whole allowance
+ * make its own receipt unreadable, which is how a scheduler loses the verdict
+ * on the runs that took longest.
+ */
+const RUN_RESULT_READ_TIMEOUT_MS = 15_000;
+
+/**
+ * Read the run's `RunResult` back from the agent server.
+ *
+ * ## Why automation reads it at all
+ *
+ * The stream's `done` frame is the WORKER's statement that it finished
+ * emitting. The `RunResult` is the RUN LAYER's statement of how the run
+ * ended. For a scheduler these are not the same claim: a turn that was
+ * cancelled, stopped on a budget ceiling, or failed inside the runtime can
+ * still be followed by a `done` frame, and treating that as success records a
+ * successful wake for a run that did not succeed.
+ *
+ * ## It cannot widen the gate
+ *
+ * This is a read of a verdict that has already been decided. It carries no
+ * permission decision, no grant and no budget of its own, so reading it cannot
+ * make a tool run that the policy would have stopped — the run it describes
+ * already went through the same coordinator the renderer goes through. The
+ * value of reading it is the opposite of a bypass: it is how automation learns
+ * that the gate said no.
+ *
+ * ## Absent is never success
+ *
+ * `null` means the host could not produce a receipt — no orchestrator wired, no
+ * run for the session, or a read that failed. Contract §C requires a durable
+ * consumer to refuse an unconfirmed success, so the caller treats this as a
+ * failure to confirm rather than defaulting to the frame's opinion.
+ */
+export function readRunResult(sessionId: string): Promise<RunResult | null> {
+  const port = getAgentServerPort();
+  if (!port) return Promise.resolve(null);
+  const requestPath = `/sessions/${encodeURIComponent(sessionId)}/run-result`;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+    const req = http.request(
+      {
+        method: 'GET',
+        hostname: '127.0.0.1',
+        port,
+        path: requestPath,
+        headers: { Accept: 'application/json' },
+      },
+      (res) => {
+        let body = '';
+        res.on('data', (chunk: Buffer) => (body += chunk.toString()));
+        res.on('end', () => {
+          // 501 is the honest "this host has no run layer" answer. It is not
+          // an error to throw over a cron job, and it is deliberately not
+          // turned into a success either.
+          if (res.statusCode === 501) {
+            finish(() => resolve(null));
+            return;
+          }
+          if (res.statusCode !== 200) {
+            finish(() => reject(new Error(`run result read failed: HTTP ${res.statusCode}`)));
+            return;
+          }
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(body);
+          } catch {
+            finish(() => reject(new Error('run result read returned unparseable JSON')));
+            return;
+          }
+          const run = (parsed as { run?: unknown } | null)?.run;
+          if (run === undefined || run === null) {
+            // A 200 with no run is "the run layer has nothing for this
+            // session", which is a failure to confirm rather than a success.
+            finish(() => resolve(null));
+            return;
+          }
+          finish(() => resolve(run as RunResult));
+        });
+      },
+    );
+    const timer = setTimeout(() => {
+      // Destroy the socket so the read cannot outlive its budget and hold the
+      // cron worker open after the turn it was waiting on is long finished.
+      req.destroy();
+      finish(() => reject(new Error('run result read timed out')));
+    }, RUN_RESULT_READ_TIMEOUT_MS);
+    req.on('error', (e: Error) => finish(() => reject(e)));
+    req.end();
+  });
+}
+
+/**
+ * Turn a `RunResult` into the error a caller should see, or `null` when the
+ * run completed.
+ *
+ * The mapping is total and closed on purpose: a status this function does not
+ * recognise is treated as a FAILURE, because the alternative is reporting an
+ * unexamined status as a success. `budget_exhausted` and `cancelled` each get
+ * their own message because "the run stopped" and "the run was stopped" are
+ * different operational facts, and a scheduler that cannot tell them apart
+ * retries the wrong one.
+ */
+function runResultFailure(run: RunResult): Error | null {
+  switch (run.status) {
+    case 'completed':
+      return null;
+    case 'cancelled':
+      return new Error(`automation run ${run.runId} was cancelled${run.stopReason ? ` (${run.stopReason})` : ''}`);
+    case 'budget_exhausted':
+      return new Error(`automation run ${run.runId} stopped on its budget ceiling`);
+    case 'failed':
+      return new Error(
+        `automation run ${run.runId} failed${run.error?.message ? `: ${run.error.message}` : ''}`,
+      );
+    default:
+      // Unreachable against the protocol's union, and treated as a failure on
+      // purpose: an unrecognised terminal must not be laundered into success.
+      return new Error(`automation run ${run.runId} reported an unrecognised terminal`);
+  }
 }
 
 /**
@@ -216,6 +360,18 @@ export function runPromptInSession(opts: RunPromptInSessionOptions): Promise<Run
         const events: RunPromptResult['events'] = [];
         let sseBuffer = '';
         let settled = false;
+        /**
+         * True once the worker has said `done`.
+         *
+         * Separate from `settled` because the two now answer different
+         * questions. `done` means "the stream is finished"; `settled` means
+         * "this promise has an answer". Between them sits the `RunResult`
+         * read, so the socket's own `end` — which fires moments after `done`,
+         * since that is how an SSE stream closes — must no longer be read as a
+         * missing terminal. Collapsing the two would reject every run in this
+         * window, so the flag is kept explicit.
+         */
+        let doneSeen = false;
         const timeout = setTimeout(() => {
           if (settled) return;
           settled = true;
@@ -227,6 +383,13 @@ export function runPromptInSession(opts: RunPromptInSessionOptions): Promise<Run
           clearTimeout(timeout);
           fn();
         };
+        /**
+         * Settle with a rejection. Split from `finish` so the two failure
+         * shapes stay distinguishable at the call site: `finish` guards on
+         * `settled`, which is exactly the guard needed when an async read
+         * resolves after some other path already answered.
+         */
+        const fail = (error: Error): void => finish(() => reject(error));
 
         res.on('data', (chunk: Buffer) => {
           sseBuffer += chunk.toString();
@@ -250,18 +413,65 @@ export function runPromptInSession(opts: RunPromptInSessionOptions): Promise<Run
               opts.onText?.(content);
             } else if (event.type === 'error') {
               const message = typeof event.data?.message === 'string' ? event.data.message : 'agent error';
-              finish(() => reject(new Error(message)));
+              // The worker's error frame is reported as-is. It is a
+              // statement about the TURN, and the `RunResult` is still read
+              // by the run layer on its own account — this path is not where
+              // the run's terminal verdict gets decided, and a caller that
+              // wants that verdict reads it for a run that did not raise an
+              // error frame.
+              fail(new Error(message));
               return;
             } else if (event.type === 'done') {
+              // The `done` frame is the WORKER saying it stopped emitting. It
+              // is not the run's verdict, so it is no longer what this
+              // function settles on: the stream is done, and the Control
+              // Plane's `RunResult` decides the outcome.
+              //
+              // The outer turn timeout is cleared HERE rather than in
+              // `finish`, because a long turn can legitimately consume the
+              // whole `RUN_TIMEOUT_MS` and still have a readable receipt a
+              // moment later. Leaving that timer armed would race this read
+              // and reject a run that actually completed.
+              doneSeen = true;
+              clearTimeout(timeout);
               const output = chunks.join('').trim() || `completed in ${Date.now() - startedAt}ms`;
-              finish(() => resolve({ output, events }));
+              void readRunResult(opts.sessionId).then(
+                (run) => {
+                  if (run === null) {
+                    // No receipt. Contract §C: a durable consumer refuses an
+                    // unconfirmed success, so this rejects rather than
+                    // falling back to the frame's opinion.
+                    fail(
+                      new Error(
+                        `automation run produced no RunResult, so its outcome cannot be confirmed (session ${opts.sessionId})`,
+                      ),
+                    );
+                    return;
+                  }
+                  const failure = runResultFailure(run);
+                  if (failure !== null) {
+                    fail(failure);
+                    return;
+                  }
+                  finish(() => resolve({ output, events, run }));
+                },
+                (error: unknown) => {
+                  fail(error instanceof Error ? error : new Error(String(error)));
+                },
+              );
               return;
             }
           }
         });
 
-        res.on('error', (e: Error) => finish(() => reject(e)));
-        res.on('end', () => finish(() => reject(new Error('stream ended without done'))));
+        res.on('error', (e: Error) => fail(e));
+        res.on('end', () => {
+          // A stream that ends after `done` is the NORMAL shape of an SSE
+          // response, not a truncated turn. Rejecting here would race the
+          // `RunResult` read that `done` started and fail every completed run.
+          if (doneSeen) return;
+          fail(new Error('stream ended without done'));
+        });
       },
     );
 
