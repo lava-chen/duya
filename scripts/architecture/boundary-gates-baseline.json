@@ -5,7 +5,21 @@
     "G4|packages/agent/src/process/agent-process-entry.ts|worker constructs the legacy agent directly instead of through ExecutionChannel|DuyaAgent",
     "G4|packages/agent/src/process/agent-process-entry.ts|worker constructs the legacy agent directly instead of through ExecutionChannel|duyaAgent",
     "G6|apps/desktop/src/main/db/core/run-store.ts|session_id NOT NULL|core.db",
+    "G6|apps/desktop/src/main/db/core/run-store.ts|the durable entity is read through its session, so its identity is derived from a Session|session-keyed-read",
+    "G6|apps/desktop/src/main/db/core/run-store.ts|the durable store requires a session key, so the entity cannot exist without a Session|required-session-key",
+    "G6|apps/desktop/src/main/db/core/stores.ts|deleting the durable entity is scoped to a session, so a Session cleanup can drop it|session-scoped-delete",
+    "G6|apps/desktop/src/main/db/core/stores.ts|one durable row per Session caps the table, so the entity cannot exist without consuming the Session slot|session-unique-constraint",
     "G6|apps/desktop/src/main/db/core/stores.ts|session_id NOT NULL|core.db",
-    "G6|apps/desktop/src/main/db/schema.ts|session_id NOT NULL|main.db"
+    "G6|apps/desktop/src/main/db/core/stores.ts|the durable entity is read through its session, so its identity is derived from a Session|session-keyed-read",
+    "G6|apps/desktop/src/main/db/core/stores.ts|the durable store requires a session key, so the entity cannot exist without a Session|required-session-key",
+    "G6|apps/desktop/src/main/db/schema.ts|session_id NOT NULL|main.db",
+    "G7|packages/agent/src/agent/DuyaAgent.ts|the worker entry can still reach a model/tool/next-turn loop implementation|packages/agent/src/process/agent-process-entry.ts",
+    "G8|packages/agent/src|@duya/agent-runtime owns the turn loop; this package still holds one|@duya/agent",
+    "G9|packages/ai/src/api/bedrock-converse.ts|node:crypto|@duya/ai",
+    "G9|packages/ai/src/api/ollama-chat.ts|fetch+setTimeout/setInterval|@duya/ai",
+    "G9|packages/ai/src/auth/oauth/device-code.ts|fetch+setTimeout/setInterval|@duya/ai",
+    "G9|packages/ai/src/system-one/client.ts|setTimeout/setInterval|@duya/ai",
+    "G9|packages/ai/src/utils/backoff.ts|setTimeout/setInterval|@duya/ai",
+    "G9|packages/ai/src/utils/idle-timeout.ts|setTimeout/setInterval|@duya/ai"
   ]
 }

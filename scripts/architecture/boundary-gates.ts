@@ -42,25 +42,60 @@ export {
   BASELINE_PATH,
   DURABLE_IDENTITY_TABLES,
   DEAD_TABLE_DEFINITIONS,
+  EXECUTION_OWNER_PACKAGE,
+  HOST_DB_DIR,
   HOST_ONLY,
+  IO_PRIMITIVES,
   LAYERS,
+  LIFECYCLE_COUPLINGS,
   SUBPATH_LAYERS,
+  TURN_LOOP_SHAPE,
   WORKER_ENTRY,
   collectBoundaryReport,
   databaseOfFile,
   evaluate,
+  findCoreIoReach,
+  findLifecycleCouplings,
+  findLoopMisownership,
   findReverseEdges,
   findRuntimeHostLeaks,
   findSessionRootedTables,
+  findWorkerLoopReach,
   findWorkerSeamBypasses,
   fingerprint,
+  ioPrimitivesIn,
+  isTestPath,
+  isTurnLoopModule,
   layerOfSpecifier,
+  reachabilityFrom,
   rel,
+  resolveRepoSpecifier,
   workerImplementsExecutionChannel,
   writeBaseline,
 } from './boundary-gates.mjs';
 
 export type Database = 'core.db' | 'main.db';
+
+/** How tightly a coupling rule is allowed to match. See `LIFECYCLE_COUPLINGS`. */
+export type CouplingScope = 'file' | 'statement-table';
+
+export interface LifecycleCouplingRule {
+  readonly id: string;
+  readonly scope: CouplingScope;
+  readonly re: RegExp;
+  readonly why: string;
+}
+
+export interface LifecycleCoupling {
+  /** The durable table this exact statement names; null for `scope: 'file'` rules. */
+  readonly table: string | null;
+  /** Every durable table the containing file declares, so a null stays readable. */
+  readonly scopedTo: string;
+  readonly file: string;
+  readonly coupling: string;
+  readonly column: string;
+  readonly database: Database;
+}
 
 export interface LayerDef {
   readonly name: string;
@@ -98,10 +133,48 @@ export interface SessionRootedTable {
   readonly live: boolean;
 }
 
+/** G7 — a loop implementation the worker entry can still reach. */
+export interface WorkerLoopReach {
+  readonly file: string;
+  /** The worker entry the closure was walked from. */
+  readonly from: string;
+  /** The module on the shortest discovered path to `file`. */
+  readonly via: string;
+  readonly why: string;
+}
+
+/** G8 — a package that still holds a turn-loop implementation. */
+export interface LoopMisownership {
+  /** The package's `src` root, which is the subject the key is built on. */
+  readonly file: string;
+  /** The package, as named in its `package.json`. */
+  readonly table: string;
+  readonly to: string;
+  readonly owners: readonly string[];
+}
+
+/** G9 — an IO-performing module reachable from a `core` package's entry. */
+export interface CoreIoReach {
+  readonly file: string;
+  /** The `core` package the reachability was measured from. */
+  readonly from: string;
+  /** The sorted, `+`-joined IO primitives the module calls. */
+  readonly to: string;
+  readonly why: string;
+}
+
 export interface BoundaryReport {
   readonly gate: string;
   readonly title: string;
-  readonly findings: readonly unknown[];
+  /**
+   * Mutable on purpose. `scripts/` is in no `typecheck:*` project, so this file
+   * is checked by nothing in the repo's gates and the four `evaluate(reports)`
+   * call sites in the test file were failing a standalone `tsc --strict` run
+   * against a `readonly` array while `evaluate`'s inferred parameter is mutable.
+   * `unknown[]` is both narrower than the `any[]` inference it replaces and
+   * true: every finding array here is built by `push`.
+   */
+  findings: unknown[];
 }
 
 export interface GateOutcome {
