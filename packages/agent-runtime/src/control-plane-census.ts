@@ -96,25 +96,29 @@ export const CONTROL_PLANE_CENSUS: readonly CensusRow[] = [
   {
     message: 'run.start',
     plane: 'control',
-    producer: 'apps/desktop/src/main/agents/server/router.ts (chat POST handler)',
+    producer:
+      'apps/desktop/src/main/agents/server/router.ts (chat POST handler) and ' +
+      'packages/agent/src/process/headless-run-host.ts:HeadlessRunHost.start (H8.1)',
     handler: 'packages/agent-runtime/src/controller.ts:RunController.start',
     consumer: 'packages/agent-protocol/src/events/registry.ts:CONTROL_GATE',
     schema: 'packages/agent-protocol/src/manifest.ts:RunManifest',
     since: '1.0 (schema rev 1), no capability',
     authority: 'protocol',
-    note: 'R2.1/R2.2. The manifest is the frozen decision; a start that cannot be recorded is not a start (RunStartError).',
+    note: 'R2.1/R2.2. The manifest is the frozen decision; a start that cannot be recorded is not a start (RunStartError). H8.1 added a SECOND producer: the headless CLI, which opens a run through the same controller over the in-process transport rather than a worker pipe. Two producers, one entry.',
   },
   // ── cancel ──────────────────────────────────────────────────────────────
   {
     message: 'run.cancel',
     plane: 'control',
-    producer: 'apps/desktop/src/main/agents/server/router.ts (interrupt path)',
+    producer:
+      'apps/desktop/src/main/agents/server/router.ts (interrupt path) and ' +
+      'packages/agent/src/process/headless-run-host.ts:HeadlessRun.cancel (H8.1)',
     handler: 'packages/agent-runtime/src/controller.ts:RunController.cancel',
     consumer: 'packages/agent-runtime/src/transport/execution-channel.ts:ExecutionHandle.stop',
     schema: 'packages/agent-protocol/src/run.ts:StopDisposition',
     since: '1.0 (schema rev 1), no capability',
     authority: 'protocol',
-    note: 'R2.3. Reports requested/applied/terminal. A stop nobody answered is `escalated`, never success.',
+    note: 'R2.3. Reports requested/applied/terminal. A stop nobody answered is `escalated`, never success. H8.1 added a second producer: the headless CLI cancels through the same controller, and the in-process channel maps the stop onto the agent interrupt.',
   },
   {
     message: 'run.completed',
@@ -227,7 +231,7 @@ export const CONTROL_PLANE_CENSUS: readonly CensusRow[] = [
     schema: 'packages/agent-protocol/src/capabilities.ts:RuntimeCapabilities',
     since: '1.0 (schema rev 1), no capability',
     authority: 'protocol',
-    note: 'Cancellation, permission, event replay, execution resume and determinism are enumerated as separate booleans so an absent one is a declared absence.',
+    note: 'Cancellation, permission, event replay, execution resume and determinism are enumerated as separate booleans so an absent one is a declared absence. H8.1 added a second HOST that probes through the same builder (the headless CLI), which reports NO_RESUME and `deterministic: false` — the same refusals — plus `permissionExpiryClock: \'absent\'` because a headless host has no permission coordinator.',
   },
   {
     message: 'run.paused',
