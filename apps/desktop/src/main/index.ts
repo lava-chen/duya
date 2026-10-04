@@ -42,6 +42,12 @@ import { RecapService } from './services/recap/recap-service';
 import { registerRecapHandlers } from './ipc/recap-handlers';
 import { registerNextStepHandlers } from './ipc/next-step-handlers';
 import { initAgentProcessPool, getAgentProcessPool, AgentProcessPool } from './agents/process-pool/agent-process-pool';
+// Plan 587 C6.1. Statically imported (not dynamically) because this module
+// pulls in nothing Electron-specific — it reaches the logger only — so
+// `collectSpawnedWorkerPids` can read the registry at module scope. The
+// Control Plane service itself IS created via a dynamic import below, because
+// its sibling `run-control-plane` reaches the core-stores singleton.
+import { liveSpawnedWorkerPids } from './control-plane/spawned-workers';
 import { startBrowserDaemon, stopBrowserDaemon, getBrowserExtensionStatus, setAllowedExtensionIds, setBrowserMaxTabs, DEFAULT_MAX_WEBVIEW_SESSIONS } from './services/browser/daemon';
 import { attachBrowserDownloadHandler } from './services/browser/cookie-writer';
 import { getAutomationScheduler, initAutomationScheduler } from './automation/Scheduler';
@@ -181,6 +187,18 @@ app.on('second-instance', () => {
  * to the next macrotask when the renderer already settled —
  * `did-finish-load` may fire while `await createWindow()` resolves.
  */
+/**
+ * Every worker process this host currently holds.
+ *
+ * Plan 587 C6.1. Read live from the ONE registry (`control-plane/spawned-workers.ts`)
+ * rather than by asking each manager: three managers means three chances to
+ * forget a spawn site, and a `db:request` refused because someone forgot is a
+ * refusal with no useful diagnosis. A spawn site joins the list by registering.
+ */
+function collectSpawnedWorkerPids(): ReadonlySet<number> {
+  return liveSpawnedWorkerPids();
+}
+
 function runAfterWindowReady(fn: () => void): void {
   const win = getMainWindow();
   if (win && !win.isDestroyed() && win.webContents.isLoading()) {
@@ -302,6 +320,60 @@ if (gotTheLock) {
       initCoreDatabase(sqliteCtor);
     } else {
       logger.warn('Skipping core database init — better-sqlite3 not loaded', undefined, 'Main');
+    }
+
+    // Plan 587 C6.1: create the Control Plane here, once, now that both
+    // connections it decides over are open. It used to be free functions
+    // reaching for the core-stores singleton on every call, so there was no
+    // moment at which the durable decision owner became initialised and
+    // therefore nothing to assert. `db:request` handlers reach THIS instance
+    // through `getControlPlane()`.
+    try {
+      const { getCoreStoresOrNull } = await import('./db/core-connection');
+      const { createControlPlaneRepository } = await import('./control-plane/sqlite-repository');
+      const { createControlPlane } = await import('./control-plane/control-plane-service');
+      const { dispatchControlPlaneAction } = await import('./control-plane/run-control-plane');
+      const { roleOrigin } = await import('./control-plane/command-receipt');
+      const core = getCoreStoresOrNull();
+      if (core) {
+        const repository = createControlPlaneRepository({
+          stores: core,
+          legacyDatabase: getDatabase,
+        });
+        createControlPlane({
+          repository,
+          // Every role the host actually spawns. A `db:request` from a pid this
+          // process did not spawn is refused before dispatch.
+          senderConfig: {
+            // Every role a spawn site in this host registers. A `db:request`
+            // from a role not on this list is refused, as is one from a pid
+            // this host never spawned.
+            allowedOrigins: [
+              roleOrigin('chat'),
+              roleOrigin('workflow-runtime'),
+              roleOrigin('agent-server'),
+            ],
+            // Read at CHECK time, not snapshotted at boot: a worker spawned
+            // after this point is still a worker this host spawned.
+            trustedPids: collectSpawnedWorkerPids,
+          },
+          request: (action, payload) => dispatchControlPlaneAction(action, payload) as Promise<unknown>,
+        });
+        logger.info('Control Plane created', { tables: repository.ownership.tables.length }, 'Main');
+      } else {
+        logger.warn('Control Plane not created — core stores are unavailable', undefined, 'Main');
+      }
+    } catch (err) {
+      // Not fatal to boot: the app is a chat client without a Control Plane, and
+      // every run action will report `repository_unbound` rather than crash a
+      // turn. Loud, because a run that cannot be recorded is a run that cannot
+      // be settled.
+      logger.error(
+        'Control Plane creation failed',
+        err instanceof Error ? err : new Error(String(err)),
+        undefined,
+        'Main',
+      );
     }
 
     // Plan 560 §6.2 — crash reconciliation. This process has just booted, so no
