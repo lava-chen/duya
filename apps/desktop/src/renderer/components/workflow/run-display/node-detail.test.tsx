@@ -24,9 +24,33 @@ vi.mock("@/i18n", () => ({
 }));
 
 const { setActiveThread } = vi.hoisted(() => ({ setActiveThread: vi.fn() }));
-vi.mock("@/stores/conversation-store", () => ({
-  useConversationStore: { getState: () => ({ setActiveThread }) },
-}));
+// Selector-aware mock, and it must serve BOTH call styles this tree uses:
+//   - `node-detail.tsx` reads the store imperatively
+//     (`useConversationStore.getState().setActiveThread(...)`);
+//   - the agent node body transitively renders `ReadOnlySessionChat`, which
+//     subscribes with the zustand selector form
+//     (`useConversationStore((state) => state.messages[sessionId])`).
+// The previous mock only provided the `getState` object, so rendering the
+// agent body threw "(0, useConversationStore) is not a function" before the
+// open-session click could be observed. Same shape as ThreadListItem.test.tsx.
+vi.mock("@/stores/conversation-store", () => {
+  const state = {
+    setActiveThread,
+    // ReadOnlySessionChat subscribes to both of these on mount; without them
+    // the selector returns undefined and the transcript body throws. The real
+    // `loadThreadMessages` is async (ReadOnlySessionChat chains `.then` on
+    // its return), so the stub must resolve rather than return undefined.
+    messages: {} as Record<string, unknown>,
+    loadThreadMessages: vi.fn().mockResolvedValue(undefined),
+  };
+  const useConversationStore = (selector?: (s: typeof state) => unknown) =>
+    selector ? selector(state) : state;
+  return {
+    useConversationStore: Object.assign(useConversationStore, {
+      getState: () => state,
+    }),
+  };
+});
 
 import {
   NodeDetailView,
