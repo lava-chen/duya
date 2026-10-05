@@ -605,43 +605,4 @@ export class RunEventEmitter {
   ): EmitRejection {
     return { ok: false, code, message, observedType, issues, requiresTerminal, violation };
   }
-
-  /**
-   * Emit one event, waiting first for the publisher to have room.
-   *
-   * This is the enforcement point the queue has always been missing. The queue
-   * reports `paused` and hands out `whenWritable()`, and until a producer AWAITED
-   * that promise the pause was advisory: a model loop under a slow reader kept
-   * minting, persisting and publishing durable frames, so the bytes the bound was
-   * supposed to cap kept accumulating. A producer that uses this method stops
-   * instead, which is the contract's pause-the-producer arm.
-   *
-   * The wait is BEFORE {@link RunEventEmitter.emit}, not after it, and that order
-   * is the whole point: the seq is minted inside `emit`, by the session's ledger.
-   * Parking after minting would let a stalled producer burn seq numbers that
-   * never reached a consumer, leaving exactly the kind of hole in a live stream
-   * that coalescing upstream exists to prevent. Waiting first means a paused
-   * producer has minted nothing, published nothing, and persisted nothing.
-   *
-   * ## No production caller yet, and why
-   *
-   * Every hop from an executor's output to this class is synchronous `void`:
-   * `ExecutionSink.frame` / `.envelope` (`transport/execution-channel.ts`), then
-   * `acceptInbound` and `#mint` here, then `EventPublisher.push`. There is no
-   * async frame anywhere on that chain to await a promise in, so no production
-   * producer can reach this method until the executor-facing sink in
-   * `transport/execution-channel.ts` grows an awaitable arm. That file is not
-   * part of this change.
-   *
-   * Until then the honest state is: the pause is enforceable by any producer that
-   * can await, and un-enforced on the synchronous path that production still
-   * uses. `emit` is left exactly as it was rather than made to wait, because
-   * making it wait would block `run.cancel` and `permission.respond` - the
-   * control channel's whole guarantee is that it does not queue behind event
-   * frames (`events/control-channel.ts`).
-   */
-  async publish(event: RunEvent): Promise<EmitResult> {
-    await this.#ports.stream.whenWritable?.();
-    return this.emit(event);
-  }
 }
