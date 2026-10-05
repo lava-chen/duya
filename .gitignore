@@ -199,6 +199,13 @@ probe-desktop-capture*.png
 .tmp-diag.ps1
 .tmp-kill.ps1
 
+# Local-only parallel docs workspace (163 files, ~3.2 MB, 0 tracked). A
+# scratch surface that shadows the tracked `docs/` tree: agent-runs, research,
+# prototypes, generated, skills. Nothing here is source — `docs/` remains the
+# versioned location, so this must never be negated the way `docs/*/` rules
+# are for product-specs / release-notes / recovered-plans.
+docs-local/
+
 # Plan 572: Swift AX helper build artifacts (source + build script are committed)
 resources/ax-helper/bin/
 resources/ax-helper/.build/
