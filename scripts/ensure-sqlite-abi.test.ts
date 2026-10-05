@@ -188,4 +188,42 @@ describe('ensure-sqlite-abi marker cache', () => {
     expect(res.status).toBe(2);
     expect(res.stderr).toContain('usage:');
   });
+
+  it('re-probes when a binding is replaced in place, not only when it disappears', () => {
+    const fixture = makeFixture({ prebuild: true });
+    expect(run(fixture, 'node').status).toBe(0);
+
+    // Same path, different content: presence is unchanged, so a key that only
+    // records presence would still match and the stale marker would survive.
+    fs.writeFileSync(fixture.prebuild, 'a-different-binding-of-a-different-size', 'utf8');
+
+    // The two sides of this comparison come from different sources: the marker
+    // is written by the spawned script, the size is stat'ed here.
+    const st = fs.statSync(fixture.prebuild);
+    expect(st.size).not.toBe('prebuilt-binding'.length);
+    expect(run(fixture, 'node').status).toBe(0);
+
+    const entry = String(readMarker(fixture).binding)
+      .split(',')
+      .find((part) => part.startsWith(`prebuilds/${process.platform}-${process.arch}.node~`));
+    expect(entry).toBeDefined();
+    expect(entry).toMatch(/~\d+$/);
+    expect(entry?.endsWith(`~${st.size}`)).toBe(true);
+  });
+
+  it('re-probes when a node-gyp install loses its only binding', () => {
+    // The other healthy install shape: no `prebuilds/` at all, the node-gyp
+    // output under `build/Release` is the only loadable artifact.
+    const fixture = makeFixture({ nodeGyp: true });
+    const built = path.join(fixture.root, 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node');
+    expect(fs.existsSync(built)).toBe(true);
+    expect(fs.existsSync(path.join(fixture.root, 'node_modules', 'better-sqlite3', 'prebuilds'))).toBe(false);
+
+    expect(run(fixture, 'node').status).toBe(0);
+    fs.rmSync(built);
+
+    const res = run(fixture, 'node');
+    expect(res.status).not.toBe(0);
+    expect(res.stderr).toContain('better-sqlite3 does not load under node');
+  });
 });
