@@ -21,8 +21,8 @@
  * ## The four properties, and how each one can fail
  *
  *  1. **The text is aggregated correctly, and only once.** The summarizer joins
- *     `text` events (`DuyaAgent.ts:804-805`); the side question concatenates
- *     them (`:4491-4492`). A dropped event loses a sentence, and a
+ *     `text` events; the side question concatenated them the same way. A
+ *     dropped event loses a sentence, and a
  *     double-counted one is the same bug wearing the opposite sign -- which is
  *     why `text_delta` is in the script below rather than only in a comment.
  *  2. **The caller's `AbortSignal` reaches the provider.** This is the property
@@ -30,11 +30,10 @@
  *     wrapped or freshly built signal aborts nobody, and the summarizer's
  *     parent-linked child controller (`:776-780`) is the only thing that makes
  *     an interrupt reach it.
- *  3. **A failure is never an empty string.** The legacy summarizer `break`s on
- *     an `error` frame and returns the accumulated text (`:807-818`), so a
- *     provider that failed on its first token stores `''` as a summary. An
- *     empty answer and a dead provider are different facts and get different
- *     `kind`s.
+ *  3. **A failure is never an empty string.** The pre-b2 summarizer `break`ed on
+ *     an `error` frame and returned the accumulated text, so a provider that
+ *     failed on its first token stored `''` as a summary. An empty answer and a
+ *     dead provider are different facts and get different `kind`s.
  *  4. **An unnamed ceiling stays the CLIENT's.** Same reasoning as
  *     `run-engine-model.ts:378-384`: a default invented here is a limit no
  *     caller agreed to, and it would be applied without anything in the request
@@ -53,8 +52,9 @@
  *
  * ## What this file does NOT prove
  *
- * That either call site uses this port. Nothing in `DuyaAgent.ts` is touched by
- * this slice, so G7 and G8 stay at one finding each; the cutover is step b2.
+ * That either call site USES this port. This file tests the port in isolation;
+ * the cutover, and the gate-regex assertion that it really happened, live in
+ * `packages/agent/tests/unit/agent/one-shot-calls.test.ts` (step b2).
  */
 
 import { describe, expect, it } from 'vitest';
@@ -66,7 +66,7 @@ import type { SSEEvent } from '@duya/ai';
 // Fixtures — shaped the way the PRODUCER builds them
 // ============================================================================
 
-/** The summarizer's system prompt, verbatim (`DuyaAgent.ts:790`). */
+/** The summarizer's system prompt, verbatim (`DuyaAgent.ts:793`). */
 const SUMMARIZER_SYSTEM_PROMPT =
   'You are a summarization assistant. Follow the instructions embedded in the user message.';
 
@@ -157,7 +157,7 @@ describe('createOneShotTextPort — the aggregated answer', () => {
       { type: 'text', data: '- dropped the noise' },
       OK,
       // The provider said it was done. Anything after this is not part of the
-      // answer, and the legacy loop breaks on `done` too (`DuyaAgent.ts:807`).
+      // answer, and the pre-b2 loop broke on `done` too.
       { type: 'text', data: 'TEXT AFTER DONE' },
     ]);
 
@@ -172,8 +172,8 @@ describe('createOneShotTextPort — the aggregated answer', () => {
   it('counts each piece ONCE, so a text_delta cannot double the answer', async () => {
     // No provider emits the SSE `text_delta`: the internal event system carries
     // one (`packages/ai/src/types.ts:415`) and the single funnel into the SSE
-    // vocabulary maps it to `text` (`emit-sse.ts:23-27`). The side question
-    // reads both arms anyway (`DuyaAgent.ts:4491`), so an implementation that
+    // vocabulary maps it to `text` (`emit-sse.ts:23-27`). The side question used
+    // to read both arms before step b2, so an implementation that
     // accumulated both would double every answer the day a provider started
     // emitting one. The expected text is built from the `text` events ALONE.
     const client = oneShotClient([
@@ -189,7 +189,7 @@ describe('createOneShotTextPort — the aggregated answer', () => {
   });
 
   it('returns the text UNTRIMMED, because trimming is the caller\'s storage decision', async () => {
-    // Both legacy call sites trim (`DuyaAgent.ts:818`, `:4501`) and both are
+    // Both call sites trim (`DuyaAgent.ts:814`, `:4526`) and both are
     // right to: a trim belongs to whoever stores or displays the answer. A port
     // that trimmed would fold "the model emitted only whitespace" into the same
     // `''` as "the model emitted nothing" -- the one distinction the `kind` on
@@ -239,8 +239,8 @@ describe('createOneShotTextPort — what reaches the provider', () => {
   it('forbids tool calling, and sends no tool set at all', async () => {
     // The reason this port exists rather than a `ModelRequest` with
     // `tools: []`: plan 523 P4.1 added `toolChoice: 'none'` because the
-    // summarizer was emitting tool-call tokens instead of a summary
-    // (`DuyaAgent.ts:791-793`), and the provider implements it by omitting the
+    // summarizer was emitting tool-call tokens instead of a summary, and the
+    // provider implements it by omitting the
     // tools field from the wire payload (`packages/ai/src/types.ts:497-502`).
     // "No tools available" is a weaker promise than "tools forbidden".
     const client = oneShotClient([{ type: 'text', data: 'x' }, OK]);
@@ -265,8 +265,8 @@ describe('createOneShotTextPort — what reaches the provider', () => {
   });
 
   it('forwards the caller\'s ceiling and temperature when it named both', async () => {
-    // The summarizer's real pair (`DuyaAgent.ts:797-798`), so this doubles as
-    // evidence that both legacy call sites fit the port with no default needed.
+    // The summarizer's real pair (`DuyaAgent.ts:802-803`), so this doubles as
+    // evidence that both call sites fit the port with no default needed.
     const client = oneShotClient([{ type: 'text', data: 'x' }, OK]);
 
     await portFor(client).complete(
@@ -312,9 +312,9 @@ describe('createOneShotTextPort — the caller\'s signal reaches the provider', 
     const result = await portFor(client).complete(REQUEST, controller.signal);
 
     // `'half a '` is real text the provider produced, and it is deliberately
-    // NOT the answer: the legacy summarizer stores whatever it had accumulated
-    // when it stopped (`DuyaAgent.ts:807-818`), which is how a half-written
-    // summary becomes a durable record.
+    // NOT the answer: the pre-b2 summarizer stored whatever it had accumulated
+    // when it stopped, which is how a half-written
+    // summary became a durable record.
     expect(result).toEqual({ kind: 'cancelled' });
   });
 
@@ -353,7 +353,7 @@ describe('createOneShotTextPort — a failure is not an empty answer', () => {
     const result = await portFor(client).complete(REQUEST, live());
 
     // `data` IS the provider's message (`packages/ai/src/types.ts:190`) and it is
-    // the string the side question rethrows today (`DuyaAgent.ts:4493-4494`).
+    // the string the side question rethrows (`DuyaAgent.ts:4532`).
     // The partial text is not carried on the failure, so nothing here can be
     // mistaken for a summary.
     expect(result).toEqual({ kind: 'failed', error: { message: 'context_length_exceeded' } });

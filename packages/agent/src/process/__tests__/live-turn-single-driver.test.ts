@@ -251,17 +251,23 @@ describe('G7/G8 are measured against the real gate module, not a copy of it', ()
     )) as typeof import('../../../../scripts/architecture/boundary-gates.mjs');
   }
 
-  it('records that removing the turn loop alone would NOT have cleared the gate', () => {
+  it('records that the turn loop never matched, and that step b2 removed what did', () => {
     // This is the finding that reshaped the stage, so it is asserted rather than
     // only reported.
     //
     // `TURN_LOOP_SHAPE.modelStream` is `/\.streamChat\s*\(/`, and the turn loop
     // calls `runTurnStream`, NOT `.streamChat(`. In `DuyaAgent.ts` that pattern
-    // matches the compaction summarizer and the side-question one-shot -- two
+    // matched the compaction summarizer and the side-question one-shot -- two
     // places that are not the loop at all. So the brief's premise that the
-    // `runTurnStream` call leaving `DuyaAgent.ts` takes G7/G8 to zero does not
+    // `runTurnStream` call leaving `DuyaAgent.ts` takes G7/G8 to zero did not
     // hold, and a cutover built on that premise would have finished the loop
     // removal and still been RED.
+    //
+    // Step b2 moved both of those onto `OneShotTextPort`, so the match count is
+    // now zero. Both halves matter: the count proves the two one-shot sites are
+    // gone, and the loop still being present proves the count dropped because
+    // THEY were re-shaped rather than because the loop was deleted (b3's job,
+    // and still undone).
     return loadGates().then(({ TURN_LOOP_SHAPE }) => {
       const duya = fs.readFileSync(
         path.join(HERE, '..', '..', 'agent', 'DuyaAgent.ts'),
@@ -273,18 +279,22 @@ describe('G7/G8 are measured against the real gate module, not a copy of it', ()
         .filter(({ line }) => TURN_LOOP_SHAPE.modelStream.test(line))
         .map(({ number }) => number);
 
-      // Two matches, and NEITHER is the turn loop (which is 1795-3300).
-      expect(modelStreamLines).toHaveLength(2);
-      expect(modelStreamLines.every((n) => n < 1795 || n > 3300)).toBe(true);
+      expect(modelStreamLines).toEqual([]);
+      // The loop itself is still here, and it is still the one calling
+      // `runTurnStream` rather than `.streamChat(`. If this ever fails, the gate
+      // went quiet for the wrong reason.
+      expect(duya).toContain('runTurnStream');
     });
   });
 
   it('names every source file in @duya/agent that still satisfies the loop predicate', () => {
-    // G8 is reported per PACKAGE with a list of owning files, and the list has
-    // two entries, not one. `agent-process-entry.ts` matches through its own
-    // `agent.streamChat(` call -- which this commit KEEPS, because it is the one
-    // real driver. So G8 cannot be zeroed by this stage even in principle, and
-    // the honest report is the two owners rather than a claim of one.
+    // G8 is reported per PACKAGE with a list of owning files. Step b2 removed
+    // `agent/DuyaAgent.ts` from that list -- the two one-shot sites were its only
+    // `modelStream` matches, and both now go through `OneShotTextPort`.
+    // `agent-process-entry.ts` still matches through its own
+    // `agent.streamChat(` call -- which is KEPT, because it is the one real
+    // driver and moving it is step b5. So G8 stays at exactly one finding, and
+    // it is b5's to close, not this stage's.
     return loadGates().then(async ({ isTurnLoopModule, TURN_LOOP_SHAPE }) => {
       const isTestPath = (rel: string): boolean =>
         /(?:^|\/)(?:__tests__|tests?|e2e)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/.test(rel);
@@ -312,7 +322,7 @@ describe('G7/G8 are measured against the real gate module, not a copy of it', ()
         .map(({ rel }) => rel)
         .sort();
 
-      expect(owners).toEqual(['agent/DuyaAgent.ts', 'process/agent-process-entry.ts']);
+      expect(owners).toEqual(['process/agent-process-entry.ts']);
 
       // Sanity: the predicate really is the conjunction of all three shapes, so
       // this test is measuring the gate and not a weaker local approximation.

@@ -58,11 +58,13 @@
  * Two of those deserve their reason stated, because they look droppable and are
  * not:
  *
- *  - `text_delta` / `thinking_delta`. The legacy loop reads BOTH
- *    (`DuyaAgent.ts:4434`) but only in the side-question summarizer, which is
- *    not this port. In the main turn loop the branch is `event.type === 'text'`
- *    (`:2515`) and there is no `text_delta` arm anywhere in `:2377-3120` — so
- *    mapping them to `null` matches what the loop this replaces actually does.
+ *  - `text_delta` / `thinking_delta`. Before step b2 the side-question
+ *    summarizer read BOTH arms and this file's `createOneShotTextPort` replaced
+ *    it with a `text`-only read (`run-engine-model.ts:643`), so the second arm
+ *    is now unreachable by construction. In the main turn loop the branch is
+ *    `event.type === 'text'` and there is no `text_delta` arm anywhere in its
+ *    body — so mapping them to `null` matches what the loop this replaces
+ *    actually does.
  *    Mapping them into `text` would DOUBLE the assistant content.
  *  - `tool_result`. A tool result is not a model output; it comes back through
  *    the DRAIN (`ToolDrainItem`), which is where `run-engine.ts:595` reads it.
@@ -507,6 +509,56 @@ export function toProviderMessages(
   }));
 }
 
+/**
+ * The reverse crossing: a host's `Message[]` -> the runtime's `ModelMessage[]`.
+ *
+ * ## Why it exists
+ *
+ * `OneShotTextRequest.messages` is `readonly ModelMessage[]`
+ * (`ports.ts:1504-1509`), and both one-shot call sites already hold
+ * `@duya/agent-protocol`'s `Message[]` -- the summarizer builds a one-element
+ * array (`DuyaAgent.ts:769-774`) and the side question reuses the projected
+ * timeline (`DuyaAgent.ts:4506-4509`). Neither can be passed as-is, so this is
+ * the one adapter on that path. It is the exact inverse of `toProviderMessages`
+ * above and lives beside it for that reason: the pair is the model boundary, and
+ * only the composition of both is a round trip.
+ *
+ * ## Why it is an identity projection
+ *
+ * `toProviderMessages` copies `role`, `content` and `id` straight across and
+ * touches nothing inside `content`, so this direction copies them straight back
+ * and the two cancel. That is what makes the three assertions below
+ * behaviour-preserving rather than a laundering step, and it is why a narrower
+ * `ModelMessage` is not a narrower REQUEST:
+ *
+ *  - `role` -- `MessageRole` adds `'system'` (`transcript/content.ts:72`) and
+ *    the runtime omits it because a system turn is prompt, not a message. No
+ *    one-shot array can contain one: the summarizer's single user turn, and the
+ *    side question's array, which `_projectModelMessages` already reduced to
+ *    user/assistant/tool by extracting system content into the prompt
+ *    (`DuyaAgent.ts:4938-4946`).
+ *  - `content` -- the runtime vocabulary is a strict SUBSET
+ *    (`ports.ts:120-124`): `MessageContent` also has `image` and
+ *    `provider_block` (`transcript/content.ts:159-165`). The subset is narrower
+ *    but the ELEMENTS are passed by reference and never rebuilt, so an `image`
+ *    block reaches the provider byte-identical -- the cast describes the type,
+ *    it does not drop a variant.
+ *  - `id` -- required on `ModelMessage` (`ports.ts:136`) and optional on
+ *    `Message` (`transcript/content.ts:262`). Preserved verbatim, including
+ *    absent, because no wire payload carries a message id: the Anthropic
+ *    projection rebuilds each message as `{ role, content }`
+ *    (`api/anthropic-messages.ts:1609`) and the OpenAI one as
+ *    `{ role, content, type }` (`api/openai-responses.ts:189`). It is a replay
+ *    and thread-quoting key, not a request field.
+ */
+export function fromProviderMessages(messages: readonly Message[]): ModelMessage[] {
+  return messages.map((message) => ({
+    role: message.role as ModelMessage['role'],
+    content: message.content as ModelMessage['content'],
+    id: message.id as string,
+  }));
+}
+
 // ============================================================================
 // The one-shot text port's implementation
 // ============================================================================
@@ -522,7 +574,7 @@ export function toProviderMessages(
  * (`ports.ts`, `OneShotTextRequest`), so the only thing left to supply is the
  * client that opens the request. A `sources` wrapper with one member would be a
  * shape with no decision in it -- and the two call sites need DIFFERENT clients
- * anyway (`DuyaAgent.ts:781` reads `compactClient ?? llmClient`, `:4483` reads
+ * anyway (`DuyaAgent.ts:783` reads `compactClient ?? llmClient`, `:4513` reads
  * `llmClient`), which is a per-call choice the caller makes by calling this
  * factory twice.
  *
@@ -563,12 +615,12 @@ export function createOneShotTextPort(client: AIClient): OneShotTextPort {
           systemPrompt: request.systemPrompt,
           // NOT `tools: []`. Plan 523 P4.1 added `toolChoice: 'none'` because
           // the summarizer was emitting tool-call tokens instead of a summary
-          // (`DuyaAgent.ts:791-793`), and the provider implements it by
-          // omitting the tools field from the wire payload
-          // (`packages/ai/src/types.ts:497-502`). "No tools available" is a
-          // weaker promise than "tools forbidden", and this port is the second
-          // one -- the side question's `tools: []` (`DuyaAgent.ts:4485`) is
-          // covered by it as a consequence.
+          // (the flag the summarizer used to pass at `DuyaAgent.ts:799-801`),
+          // and the provider implements it by omitting the tools field from the
+          // wire payload (`packages/ai/src/types.ts:497-502`). "No tools
+          // available" is a weaker promise than "tools forbidden", and this port
+          // is the second one -- the side question's `tools: []`, which it has
+          // replaced, is covered by it as a consequence.
           toolChoice: 'none',
           // Optional for the same reason `ModelRequest`'s are
           // (`run-engine-model.ts:378-384`): absent means the CLIENT's default
@@ -585,20 +637,20 @@ export function createOneShotTextPort(client: AIClient): OneShotTextPort {
           // `text_delta` (`packages/ai/src/types.ts:415`) but the ONE funnel into
           // the SSE wire vocabulary maps it to `text`
           // (`packages/ai/src/api/emit-sse.ts:23-27`), so no provider emits a
-          // `text_delta` event. The side question reads both
-          // (`DuyaAgent.ts:4491`) and the second arm is unreachable; reading
-          // only `text` is therefore behaviour-preserving for both call sites,
-          // and adding the other arm would DOUBLE the text the moment a provider
+          // `text_delta` event. The side question used to read both arms before
+          // step b2 and the second arm was unreachable; reading only `text` is
+          // therefore behaviour-preserving for both call sites, and adding the
+          // other arm would DOUBLE the text the moment a provider
           // started emitting one.
           if (event.type === 'text') {
             text += event.data;
             continue;
           }
-          // Terminal, like the legacy loop's `break` on `done` or `error`
-          // (`DuyaAgent.ts:807-809`). Reported rather than accumulated: the
-          // summarizer's copy returns the partial text as a summary, and an
-          // empty partial summary is the same stored value as a real empty
-          // answer.
+          // Terminal, like the pre-b2 legacy loop's `break` on `done` or
+          // `error`, which this file replaced. Reported rather than
+          // accumulated: the summarizer used to return the partial text as a
+          // summary, and an empty partial summary is the same stored value as a
+          // real empty answer.
           if (event.type === 'error') {
             return signal.aborted
               ? { kind: 'cancelled' }

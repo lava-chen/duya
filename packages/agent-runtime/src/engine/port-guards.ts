@@ -445,12 +445,12 @@ export const RESULT_METADATA_REACHES_THE_HOST: OutcomeCarriesMetadata = true;
 /**
  * `OneShotTextRequest` has no tool surface, and adding one turns this file red.
  *
- * This is the load-bearing assertion of the whole port. The summarizer passes
- * `toolChoice: 'none'` today (`DuyaAgent.ts:793`) because plan 523 P4.1 found it
- * emitting tool-call tokens instead of a summary, and `ModelRequest` cannot
- * express that flag (`ports.ts:372-391`) -- so a `tools` field here is the only
- * way a caller could ask for tools, and its absence is what makes "this port
- * generates text and nothing else" a build-time fact instead of a convention.
+ * This is the load-bearing assertion of the whole port. The summarizer needs
+ * `toolChoice: 'none'` because plan 523 P4.1 found it emitting tool-call tokens
+ * instead of a summary, and `ModelRequest` cannot express that flag
+ * (`ports.ts:372-391`) -- so a `tools` field here is the only way a caller
+ * could ask for tools, and its absence is what makes "this port generates text
+ * and nothing else" a build-time fact instead of a convention.
  *
  * Probed through `keyof` rather than through a value, so a field added to the
  * interface is what goes red, and the three spellings are listed because the
@@ -501,11 +501,11 @@ export const ONE_SHOT_OUTCOMES_ARE_CLOSED: OneShotResultKindGuard = 'unexpected-
  * An empty answer is REPRESENTABLE, and it is not a failure.
  *
  * Positive first, for the reason `MINIMAL_PORTS` exists: the negative half of
- * this section is only meaningful if the value the legacy summarizer silently
- * produced -- `''` after a provider died on the first token
- * (`DuyaAgent.ts:807-809,818`) -- can still be produced as a SUCCESS. A port
- * that could not express `completed` with empty text would push every empty
- * answer into the error path, which is a different lie in the other direction.
+ * this section is only meaningful if the value the pre-b2 summarizer silently
+ * produced -- `''` after a provider died on the first token -- can still be
+ * produced as a SUCCESS. A port that could not express `completed` with empty
+ * text would push every empty answer into the error path, which is a different
+ * lie in the other direction.
  */
 export const ONE_SHOT_EMPTY_ANSWER_IS_A_COMPLETION: OneShotTextResult = {
   kind: 'completed',
@@ -527,7 +527,8 @@ export const ONE_SHOT_PORT_IS_CONSTRUCTIBLE: OneShotTextPort = {
  * the caller already has, and the one a caller could get wrong -- the same
  * reason `TOOL_RESULT_RECORD_CARRIES_NO_RUN_ID` gives. There is no ledger to
  * write to and no `seq` to mint: the summarizer's output is stored by
- * `CompactionManager` under its own key (`DuyaAgent.ts:821-825`).
+ * `CompactionManager` under its own key (the summarizer is installed at
+ * `DuyaAgent.ts:764`).
  */
 type OneShotCarriesNoRunIdentity = Extract<keyof OneShotTextRequest, 'runId' | 'runEpoch' | 'seq'>;
 // @ts-expect-error - a one-shot generation is not a run and cannot claim to be one

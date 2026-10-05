@@ -95,6 +95,7 @@ import { runTurnStream, type TurnStreamRunnerDeps } from './TurnStreamRunner.js'
 import { buildTurnModelLeg } from './model-leg.js';
 import { PendingHookMessages } from './PendingHookMessages.js';
 import { deriveSingleCallUsage } from '../process/seed-token-usage.js';
+import { createOneShotTextPort, fromProviderMessages } from '../process/run-engine-model.js';
 import { settingsJsonToRules } from '../permissions/rules.js';
 import { permissionRuleValueToString } from '../permissions/rules.js';
 import { logger } from '../utils/logger.js';
@@ -772,50 +773,79 @@ export class duyaAgent implements AgentRuntime {
         },
       ];
 
-      const result: string[] = [];
       // Use a child abort controller linked to the agent's main
       // abortController so user interrupts also cancel the summarizer.
       const childController = this.abortController
         ? createChildAbortController(this.abortController)
         : new AbortController();
-      const stream = (this.compactClient ?? this.llmClient).streamChat(summaryMessages, {
-        // Do NOT pass `prompt` here. The prompt already carries the full
-        // <conversation> transcript + instructions, and Plan 523 P4.2 puts it
-        // in the user message (summaryMessages above) so gateways that weaken
-        // the `system` field still see the contract. Duplicating it into
-        // `system` doubled the summarizer request size (~2x the conversation),
-        // so near the window limit the summarizer itself failed with
-        // context_length_exceeded on every attempt — compaction could never
-        // succeed and the session wedged at usage_limited (bot:duya, 2026-09-23).
-        systemPrompt: 'You are a summarization assistant. Follow the instructions embedded in the user message.',
-        // Plan 523 P4.1: disable tool calling so the summarizer cannot emit
-        // DSML/tool-call tokens instead of a summary.
-        toolChoice: 'none',
-        // Plan 523 P4.3: 4096 clipped long-session summaries (unclosed-tag
-        // producer). 8192 + self-trim instruction in the prompt guards the
-        // new ceiling.
-        maxTokens: 8192,
-        temperature: 0.3,
-        signal: childController.signal,
-      });
 
       try {
-        for await (const event of stream) {
-          if (event.type === 'text') {
-            result.push(event.data);
-          }
-          if (event.type === 'done' || event.type === 'error') {
-            break;
-          }
+        const result = await createOneShotTextPort(this.compactClient ?? this.llmClient).complete(
+          {
+            // Do NOT pass `prompt` here. The prompt already carries the full
+            // <conversation> transcript + instructions, and Plan 523 P4.2 puts it
+            // in the user message (summaryMessages above) so gateways that weaken
+            // the `system` field still see the contract. Duplicating it into
+            // `system` doubled the summarizer request size (~2x the conversation),
+            // so near the window limit the summarizer itself failed with
+            // context_length_exceeded on every attempt — compaction could never
+            // succeed and the session wedged at usage_limited (bot:duya, 2026-09-23).
+            systemPrompt: 'You are a summarization assistant. Follow the instructions embedded in the user message.',
+            messages: fromProviderMessages(summaryMessages),
+            // Plan 523 P4.3: 4096 clipped long-session summaries (unclosed-tag
+            // producer). 8192 + self-trim instruction in the prompt guards the
+            // new ceiling.
+            //
+            // Plan 523 P4.1's `toolChoice: 'none'` is no longer passed here: the
+            // port sends it unconditionally, and it omits `tools` entirely
+            // (`run-engine-model.ts:612-631`), which is the stronger promise.
+            maxOutputTokens: 8192,
+            temperature: 0.3,
+          },
+          // The port threads this to the provider UNWRAPPED, so the linkage
+          // above is what a user interrupt travels along.
+          childController.signal,
+        );
+
+        if (result.kind === 'completed') {
+          // The trim stays here: it is a storage decision (what to persist as
+          // the compaction summary), and the port deliberately returns the
+          // provider's text untrimmed.
+          return result.text.trim();
         }
+        if (result.kind === 'failed') {
+          // BEHAVIOUR CHANGE, owner ruling requested (plan 600 S2 step b2).
+          //
+          // This arm used to `break` and return the text accumulated so far,
+          // so a provider `error` frame mid-summary stored a truncated
+          // summary. `OneShotTextResult` carries no partial text on `failed`
+          // (`ports.ts:1519-1522`), so the partial value is no
+          // longer reachable, and the only remaining options were "throw" or
+          // "return a bare ''". b1 chose throw (`ports.ts:1447-1450`).
+          //
+          // What that changes, measured through the retry ladder
+          // (`compact/summaryRetry.ts:199-242`): an `error` frame after usable
+          // text used to be `outcome: 'success'` and stored. Now it is
+          // classified by the provider's own words, so `context_length_exceeded`
+          // still shrinks the input and retries, but an unmarked message
+          // (`'upstream_error'`) is `fatal` and escalates to the suppression
+          // machine instead of storing a partial summary. A transport throw was
+          // already on that path, so this makes the frame case join it.
+          throw new Error(result.error.message);
+        }
+        // `cancelled`: the provider's AbortError used to propagate out of the
+        // `for await`, so re-raising keeps the ladder's classification (an
+        // abort message matches no retryable marker -> `fatal`) and keeps an
+        // interrupt from reading as an outage.
+        throw childController.signal.reason instanceof Error
+          ? childController.signal.reason
+          : new Error('Compaction summarization was cancelled');
       } finally {
         // Dispose the parent handler to avoid leaking it on the
         // main abortController's signal.
         const disposable = childController as AbortController & { dispose?: () => void };
         disposable.dispose?.();
       }
-
-      return result.join('').trim();
     });
 
     // Wire a memory-flush sink: after each compaction, persist the summary to
@@ -4432,9 +4462,10 @@ export class duyaAgent implements AgentRuntime {
    *
    * This deliberately bypasses the main turn loop: it does NOT mutate the
    * timeline / `this.messages`, does NOT register or expose tools, and does
-   * NOT enter the prompt queue. It runs one independent `llmClient.streamChat`
-   * call with the projected history, so it can complete while the primary
-   * agent turn is still streaming.
+   * NOT enter the prompt queue. It runs one independent one-shot generation
+   * over the projected history (`OneShotTextPort`, see
+   * `run-engine-model.ts:createOneShotTextPort`), so it can complete while the
+   * primary agent turn is still streaming.
    */
   async sideQuestion(question: string): Promise<string> {
     const trimmed = question.trim();
@@ -4478,27 +4509,37 @@ export class duyaAgent implements AgentRuntime {
     ];
 
     const abortController = new AbortController();
-    let answer = '';
     try {
-      const stream = this.llmClient.streamChat(llmMessagesWithQuestion, {
-        systemPrompt: systemPromptContent,
-        tools: [],
-        maxTokens: DEFAULT_MAX_OUTPUT_TOKENS,
-        temperature: 0.7,
-        signal: abortController.signal,
-      });
-      for await (const event of stream) {
-        if (event.type === 'text' || event.type === 'text_delta') {
-          answer += event.data;
-        } else if (event.type === 'error') {
-          throw new Error(event.data);
-        }
+      const result = await createOneShotTextPort(this.llmClient).complete(
+        {
+          systemPrompt: systemPromptContent,
+          messages: fromProviderMessages(llmMessagesWithQuestion),
+          maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+          temperature: 0.7,
+        },
+        abortController.signal,
+      );
+
+      if (result.kind === 'completed') {
+        // The trim is the caller's, as it was: this value is returned to the
+        // renderer, not stored.
+        return result.text.trim();
       }
+      if (result.kind === 'failed') {
+        // Preserved: the legacy loop threw `new Error(event.data)` on an error
+        // frame (`:4493-4494`), and `failed.error.message` IS that `data`
+        // (`ports.ts:1438-1440`).
+        throw new Error(result.error.message);
+      }
+      // `cancelled`. The old `finally` aborted only AFTER the loop settled, so
+      // nothing cancelled this call in flight and an abort could not surface
+      // here; the arm is reachable now solely because the port reports it.
+      throw abortController.signal.reason instanceof Error
+        ? abortController.signal.reason
+        : new Error('Side question was cancelled');
     } finally {
       abortController.abort();
     }
-
-    return answer.trim();
   }
 
   /**

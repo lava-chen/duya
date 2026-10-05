@@ -1358,18 +1358,20 @@ export interface WorkerAdapterSurface {
  * Two call sites open a provider stream outside the agentic turn loop, and both
  * are single-shot, tool-free text generation:
  *
- * | Site | What it generates | Opens the stream at |
+ * | Site | What it generates | Calls the port at |
  * | --- | --- | --- |
- * | compaction summarizer | a summary of the transcript, stored | `DuyaAgent.ts:781` |
- * | side question | a concise answer to a detached question, returned | `DuyaAgent.ts:4483` |
+ * | compaction summarizer | a summary of the transcript, stored | `DuyaAgent.ts:783` |
+ * | side question | a concise answer to a detached question, returned | `DuyaAgent.ts:4513` |
  *
  * Neither loops, dispatches, nor feeds a tool result back: the summarizer
- * accumulates `text` into a string and returns it (`:802-818`), and the side
- * question concatenates the same events and returns one string (`:4490-4501`).
+ * trims and returns the port's text (`:814`), and the side question trims and
+ * returns the same (`:4526`).
  * `TURN_LOOP_SHAPE.modelStream` in the boundary gate is `/\.streamChat\s*\(/`
- * and these two lines are the only ones it matches in `DuyaAgent.ts` -- so
- * closing G7/G8 is a re-shape of those lines, not a deletion of a loop, and
- * this port is the shape they become.
+ * and these two lines were the only ones it matched in `DuyaAgent.ts` -- so
+ * closing G7 was a re-shape of those lines, not a deletion of a loop, and this
+ * port is the shape they became (step b2). It also emptied
+ * `isTurnLoopModule(DuyaAgent.ts)`, which is why G7 is closed while G8 stays
+ * open on `agent-process-entry.ts` (step b5's territory).
  *
  * It is NOT a `RunEnginePorts` member. The engine never calls it: there is no
  * turn, no attempt, no budget and no drain behind a summarizer, and adding it
@@ -1378,10 +1380,11 @@ export interface WorkerAdapterSurface {
  *
  * ## Why `ModelPort` cannot serve it
  *
- * `ModelRequest` has no `toolChoice` (`:372-391`). The summarizer passes
- * `toolChoice: 'none'` deliberately: plan 523 P4.1 added it because the
- * summarizer was emitting tool-call tokens instead of a summary
- * (`DuyaAgent.ts:791-793`). `tools: []` is close, and it is a DIFFERENT promise:
+ * `ModelRequest` has no `toolChoice` (`:372-391`). The summarizer needs
+ * `toolChoice: 'none'`: plan 523 P4.1 added it because the summarizer was
+ * emitting tool-call tokens instead of a summary, and it used to pass the flag
+ * at the call site (`DuyaAgent.ts:799-801` now records that the port supplies
+ * it). `tools: []` is close, and it is a DIFFERENT promise:
  * "no tools are available" still leaves a model free to try, while `'none'` is
  * "tool calling is forbidden for this request", implemented by omitting the
  * tools field from the wire payload (`packages/ai/src/types.ts:497-502`).
@@ -1427,11 +1430,11 @@ export interface WorkerAdapterSurface {
  *
  * ## Why the outcome is a THREE-way union
  *
- * `text` alone is not enough, and the gap is measurable. Today the summarizer
- * `break`s on an `error` frame and returns whatever it had accumulated
- * (`DuyaAgent.ts:807-809`), so a provider that failed on the first token
- * returns `''` -- the same value a model that legitimately answered nothing
- * returns, and that value goes into storage as a compaction summary. So:
+ * `text` alone is not enough, and the gap is measurable. Before step b2 the
+ * summarizer `break`ed on an `error` frame and returned whatever it had
+ * accumulated, so a provider that failed on the first token returned `''` --
+ * the same value a model that legitimately answered nothing returns, and that
+ * value went into storage as a compaction summary. So:
  *
  * - `completed` with `text: ''` is a REAL empty answer, and it is a different
  *   `kind` from every failure, so it is never confused with one.
@@ -1467,7 +1470,7 @@ export interface WorkerAdapterSurface {
  * Retries. `ModelPort`'s doc (`:364-366`) places transient retries inside the
  * engine's attempt, and a one-shot call has no attempt. Whether a failed
  * summarizer is retried is the compaction manager's call
- * (`DuyaAgent.ts:763`).
+ * (`DuyaAgent.ts:764`).
  */
 export interface OneShotTextPort {
   /**
@@ -1491,13 +1494,13 @@ export interface OneShotTextPort {
  * which is the difference between "no tools this time" and "this port is not
  * about tools". `systemPrompt` and `messages` are the caller's, verbatim: the
  * summarizer builds a one-message payload with the transcript and the
- * instructions inside the USER turn on purpose (`DuyaAgent.ts:764-790`), and
+ * instructions inside the USER turn on purpose (`DuyaAgent.ts:769-793`), and
  * this port must not be the thing that relocates them.
  *
  * `maxOutputTokens` and `temperature` are optional for the same reason they are
  * on `ModelRequest` (`:387-390`): absent means the CLIENT'S default stays, and
  * a fabricated default here would be a ceiling and a sampling rate that nobody
- * named. Both existing call sites do pass them (`:797-798`, `:4486-4487`), so
+ * named. Both call sites do pass them (`DuyaAgent.ts:802-803`, `:4517-4518`), so
  * the values they choose survive the crossing -- the default is a contract for
  * future callers, not a claim about these two.
  */
