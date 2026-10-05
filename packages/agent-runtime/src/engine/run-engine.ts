@@ -485,32 +485,37 @@ export class RunEngineImpl implements RunEngine {
       // stream completed has no message, and `#finalizeLastMessage` returns
       // without publishing -- absence, not an empty finalized message.
       this.#finalizeLastMessage(ports, lastMessage);
-      // The engine PROPOSES and does not publish. Publishing `run.completed` /
-      // `run.failed` here is the obvious next step and it is WRONG today, for a
-      // reason this file does not own.
+      // The engine PROPOSES and does not publish `run.completed` / `run.failed`.
       //
-      // `RunSession.#settleOnce` runs `#closeDanglingTools` FIRST and says why
-      // (`run-session.ts:537-541`): a tool call that started and never reported
-      // an outcome is a fact about the transcript, so it is closed BEFORE the
-      // verdict. That close calls `observe` DIRECTLY, not through the emitter,
-      // and its stated invariant is "`observe` throws only if a terminal event
-      // already exists". That is true solely because the engine publishes no
-      // terminal: the one that appears is the one
-      // `#synthesizeTerminalEvent` creates, downstream of the close.
+      // ## The ordering hazard that used to block this is GONE
       //
-      // Publish here and a run with an unanswered tool call writes its
-      // synthesised `tool.call_completed` AFTER the run's own terminal, the
-      // ledger refuses it as `event_after_terminal`, and the throw escapes
-      // `settle` -- so `RunController.settle` never reaches
-      // `publishCommittedTerminal`, the held terminal is never released, and
-      // the run's ending is never announced at all. That is a strictly worse
-      // hole than the one publishing it would close.
+      // This site previously said publishing here was "WRONG today" because
+      // `RunSession.#settleOnce` closed dangling tools FIRST and stated the
+      // invariant "`observe` throws only if a terminal event already exists" --
+      // true only because the engine published no terminal. Publish here and a
+      // run with an unanswered tool call wrote its synthesised
+      // `tool.call_completed` AFTER the run's own terminal, the ledger refused
+      // it as `event_after_terminal`, the throw escaped `settle`, and the held
+      // terminal was never released.
       //
-      // Measured, not reasoned: `engine-publication.test.ts` drives both
-      // orderings and this is the assertion that fails. Fixing it means giving
-      // the session the closing of dangling tools ahead of the engine's
-      // terminal, which is a change to `run-session.ts`'s ownership rather than
-      // to this loop.
+      // That is fixed, and not by this file. `RunSession.observe` now closes
+      // dangling tools the moment it is about to mint a terminal
+      // (`run-session.ts:478-480`), so the close lands BELOW the terminal in
+      // the ledger and `settle` runs to the barrier instead of throwing out of
+      // it. Measured by `engine-publication.test.ts` and
+      // `terminal-ordering.test.ts`, which now drive the terminal-FIRST
+      // ordering and assert it completes.
+      //
+      // ## The reason this site still does not publish is OWNERSHIP
+      //
+      // The deadlock was never the real constraint. Contract 1e makes
+      // `proposeTerminal` report a CANDIDATE and names `RunSession.settle` the
+      // single writer of the terminal (`ports.ts:50-52,914-937`), and
+      // `port-guards.ts:447-451` makes a settle-capable port surface a BUILD
+      // FAILURE so this cannot quietly change. The engine already computes the
+      // terminal state it would publish (`#terminalCandidate`), so nothing here
+      // is missing to implement it -- moving the publication is a contract
+      // change, and contracts are the cutover's to make, not this loop's.
       ports.events.proposeTerminal(this.#terminalCandidate(exit));
       this.#options.onReport?.({
         runId,
@@ -639,6 +644,33 @@ export class RunEngineImpl implements RunEngine {
             // Announces a call, is not one. Legacy pushes the block on `tool_use`
             // (`DuyaAgent.ts:2576`), so a `tool_use_started` that never completed
             // must not put a block in the message.
+            //
+            // The announcement is still a real producer fact and the protocol has
+            // a durable home for it: `ToolCallPreviewPayload` is the "something
+            // is coming" case -- a tool named, arguments still streaming,
+            // `provisional: true` always (`events/payloads.ts:408-418`). That is
+            // EXACTLY this frame, and it was the one step of the model's tool-call
+            // lifecycle the engine dropped: the stream is
+            // `tool_use_started` -> `tool_use_delta`* -> `tool_use`, and only the
+            // last two were ever published, so a host watching a call being
+            // written saw raw argument fragments with no event saying a call was
+            // coming.
+            //
+            // Published BEFORE `#dispatchCall`, so the "coming" signal strictly
+            // precedes the authoritative `tool.call_started` intent record the
+            // dispatch writes. One preview per announcement: a provider that
+            // sends only the complete `tool_use` produces none, which is the
+            // honest count -- there was no provisional window to see.
+            ctx.ports.events.publish({
+              type: 'tool.call_preview',
+              toolCallId: frame.call.callId,
+              toolName: frame.call.name,
+              // The announcement's own best-effort input, verbatim. This is a
+              // partial view of a call still being generated; the authoritative
+              // arguments arrive on the later `tool_use` frame.
+              arguments: frame.call.input,
+              provisional: true,
+            });
             await this.#dispatchCall(ctx, frame.call);
             break;
           case 'text':
