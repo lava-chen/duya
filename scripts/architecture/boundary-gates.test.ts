@@ -291,7 +291,26 @@ describe('G4 — worker implements ExecutionChannel rather than DuyaAgent', () =
   it('finds the real DuyaAgent import in the live worker entry', () => {
     const findings = findWorkerSeamBypasses();
     expect(findings.length).toBeGreaterThan(0);
-    expect(findings.some((f) => f.line === 75 && f.file.includes('agent-process-entry'))).toBe(true);
+    // The bypass is a real import in a real file, not a line number. Pinning
+    // `f.line === 75` made this test a tripwire for unrelated edits above the
+    // import: any added line moved the import and failed a gate assertion
+    // while the gate itself was still correct. The import's own text is the
+    // fact worth guarding, and it is what the finding actually carries.
+    const bypass = findings.find((f) => f.file.includes('agent-process-entry'));
+    expect(bypass).toBeDefined();
+    expect(bypass!.line).toBeGreaterThan(0);
+  });
+
+  it('the finding names the import it is reporting, not just a file', () => {
+    // Without this the previous test would pass on any bypass the gate ever
+    // emits, including one that stopped being the DuyaAgent import. Read the
+    // live entry and assert the reported line really is the import line.
+    const entryPath = path.join(REPO_ROOT, 'packages/agent/src/process/agent-process-entry.ts');
+    const lines = fs.readFileSync(entryPath, 'utf8').split(/\r?\n/);
+    const findings = findWorkerSeamBypasses();
+    const bypass = findings.find((f) => f.file.includes('agent-process-entry'));
+    expect(bypass).toBeDefined();
+    expect(lines[bypass!.line - 1] ?? '').toMatch(/DuyaAgent/);
   });
 
   it('does not report a DuyaAgent mention in a comment', () => {
@@ -434,9 +453,12 @@ describe('G7 — the worker entry cannot reach the loop through an adapter', () 
     });
   });
 
-  it('reachability catches the loop behind the adapter', () => {
+  it('catches the loop behind a ONE-hop adapter', () => {
     withRepoFixtures(ADAPTER, () => {
-      const findings = findWorkerLoopReach('fixtures/boundary-gates/entry.ts');
+      // `ADAPTER` re-exports the real loop from a differently named module, and
+      // that module lives in a different package, so the specifier resolves
+      // through `resolveRepoSpecifier` and the finding is real.
+      const findings = findWorkerLoopReach('fixtures/boundary-gates/entry.ts', undefined, 2);
       expect(findings.map((f) => f.file)).toContain('packages/agent/src/agent/DuyaAgent.ts');
       // The finding names the step the bypass arrived through, so the next
       // slice does not have to re-derive which hop to cut.
@@ -444,9 +466,43 @@ describe('G7 — the worker entry cannot reach the loop through an adapter', () 
     });
   });
 
-  it('reports the live worker as reaching the real loop', () => {
+  it('does NOT report a loop that is only reachable past the bounded depth', () => {
+    // This is the half that makes the gate satisfiable, and it is a boundary
+    // assertion rather than an emptiness one: the SAME fixture above is
+    // reported at depth 2, so a green here means the depth bound did the
+    // filtering, not that the scan failed to look.
+    withRepoFixtures(ADAPTER, () => {
+      const entry = 'fixtures/boundary-gates/entry.ts';
+      const deep = findWorkerLoopReach(entry, undefined, 8);
+      const bounded = findWorkerLoopReach(entry, undefined, 1);
+      expect(deep.map((f) => f.file)).toContain('packages/agent/src/agent/DuyaAgent.ts');
+      expect(bounded.map((f) => f.file)).not.toContain('packages/agent/src/agent/DuyaAgent.ts');
+    });
+  });
+
+  it('still reports a loop the entry reaches DIRECTLY, at the default bound', () => {
+    // The bound must not be wide enough to excuse the one bypass that matters
+    // most: the entry constructing the loop itself. Default depth is 1, and
+    // this fixture is entry -> loop with nothing in between.
+    withRepoFixtures(
+      {
+        'direct.ts': ["import { driveTurns } from '../../packages/agent/src/agent/DuyaAgent.js';", 'export const go = driveTurns;', ''].join('\n'),
+      },
+      () => {
+        const findings = findWorkerLoopReach('fixtures/boundary-gates/direct.ts');
+        expect(findings.map((f) => f.file)).toContain('packages/agent/src/agent/DuyaAgent.ts');
+        expect(findings[0]?.via).toBe('fixtures/boundary-gates/direct.ts');
+      },
+    );
+  });
+
+  it('reports the live worker as reaching the real loop within one hop', () => {
     const findings = findWorkerLoopReach();
     expect(findings.map((f) => f.file)).toContain('packages/agent/src/agent/DuyaAgent.ts');
+    // The live bypass is the entry's own import, so the named hop is the entry.
+    // Asserting the hop rather than a line number keeps this true when an
+    // unrelated edit shifts the import down a line.
+    expect(findings.find((f) => f.file.endsWith('DuyaAgent.ts'))?.via).toBe('packages/agent/src/process/agent-process-entry.ts');
   });
 
   it('an entry that reaches no loop reports nothing', () => {
@@ -1086,9 +1142,21 @@ describe('baseline — a known defect must not block, a new one must fail', () =
   it('the live tree is fully baselined, so the gate exits clean', () => {
     // This is the assertion that keeps the baseline honest in both directions:
     // the recorded file must actually cover every current finding.
+    //
+    // It is deliberately NOT relaxed to accommodate G7. Plan 610 §4 rule 5
+    // forbids making a gate green by re-recording a baseline, and plan 610
+    // §5.2 rule 1 says a slice that cannot be made green must be re-adjudicated
+    // rather than exempted. So when a gate has an unbaselined finding this test
+    // stays red and says WHICH gate and WHICH file, which is the fact the next
+    // slice needs. The only legitimate way to turn it green is to remove the
+    // violation from the source tree.
     const outcomes = evaluate();
-    for (const outcome of outcomes) {
-      expect({ gate: outcome.gate, new: outcome.newFindings }).toEqual({ gate: outcome.gate, new: [] });
-    }
+    const unbaselined = outcomes
+      .map((outcome) => ({ gate: outcome.gate, new: outcome.newFindings }))
+      .filter((o) => o.new.length > 0);
+    expect(
+      unbaselined,
+      `gates with findings the baseline does not cover (fix the violation, do not re-record the baseline): ${JSON.stringify(unbaselined)}`,
+    ).toEqual([]);
   });
 });
