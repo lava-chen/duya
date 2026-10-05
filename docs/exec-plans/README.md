@@ -264,10 +264,27 @@ ends with a *different* set of failures, that is on you.
 - main/preload已纳入 `typecheck:electron` 棘轮（在 `typecheck:all` 内），不是零错误硬门禁；main变更补 `build:electron` 和相关测试，模块/打包变化补 `electron:build`。
 - 历史统计与最新CI分别记录。禁止用暖产物、通过的baseline或CI取消步骤声称clean/全面通过。
 
+### Headless Control Plane (601) — 2026-10-05
+
+[601-headless-control-plane](./active/601-headless-control-plane/README.md) 把控制平面从
+Electron main 里摘出来,变成独立纯 Node 进程。Electron / CLI / Web / 小程序全部降级为
+它的客户端;agent runtime 可注册到远端电脑。**唯一 next action:写门禁 A1 并证明它现在
+是红的**(见 [01 §1](./active/601-headless-control-plane/01-headless-control-plane.md#1-唯一-next-action))。
+
+- **Phase A 不需要等架构重构** —— 它只碰 6 个 CLI handler、`boot-config.ts` 与 Agent Server
+  的启动参数,与 587 的切片无文件重叠。
+- **Phase B / C 需要等** Control Plane 成为真实分层。
+- 601 **推翻**了 600 `README.md:128` 的「`apps/web/` 本系列不建」裁决。
+  该裁决无任何机器强制(`apps/web` 在所有 declared root 之外,
+  `architecture-check.mjs:186-187` 对未分类目标默认放行),推翻它不需要先改门禁。
+- **已知缺口:600 的 11 份计划文档不在任何分支上。** `46c36d9d` 的 `active/` 只有 587,
+  本索引也没提 600。600 的**代码**(S0 门禁, PR #209)已合并,**文档**只在本地未跟踪。
+  601 因此自带全部前提,不以 600 文档为依据。上表的「架构重构唯一入口是 587」一句
+  **已过期** —— 但更正它属于 600 文档落地时的动作,不由 601 代劳。
 
 ***
 
-## Active Plans (35)
+## Active Plans (36)
 
 > 架构与 Agent Harness 主线已收束为 **587 一项**（接管429、550、583–586及Workspace Phase0）。
 > 其他产品计划保留独立范围；本次未擅自取消。架构执行顺序以587为准，不能从历史编号另排队列。
@@ -322,6 +339,7 @@ Four were wrong and are corrected below; these five were checked and are
 | Plan | Priority | Next action |
 | --- | --- | --- |
 | [587-agent-harness-monorepo](./active/587-agent-harness-monorepo/README.md) | P0 | **唯一架构重构入口：G0.1** 核对当前HEAD、clean build、完整测试失败集合和CI；按主计划阶段表执行，旧429/550/583–586已接管 |
+| [601-headless-control-plane](./active/601-headless-control-plane/README.md) | P0 | **写门禁 A1 并证明它现在红** —— 在 `require('electron')` 会抛的子进程里真加载完整 handler 图；确认红之后才允许改那 6 个 handler |
 | [08-31-multi-agent-profile-design](./active/2026-08-31-multi-agent-profile-design.md) | P1 | Implement plan 7.2 memory partition by profile (migration + `[memory] partition` toggle) _(section C partially done via 481/477)_ |
 | [popover-autoflip](./active/237-popover-autoflip.md) | P1 | Migrate `HoverPopover` to `usePopoverPlacement`, then `SlashCommandPopover` / `ModelSelector` |
 | [permission-decision-bus](./active/419-permission-decision-bus.md) | P0 | Add `checkPermissions` + `riskTier` to the MCP tool registration path _(P0/P2 done; P1 open)_ |
