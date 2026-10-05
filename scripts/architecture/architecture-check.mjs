@@ -155,6 +155,18 @@ function ownerToRoot(owner) {
   // `electron` / `src` roots above are the PRE-monorepo locations and
   // `pathRootCovers` is bidirectional.
   if (owner === "desktop-contracts") return "apps/desktop/src/contracts";
+  // `import-graph.mjs:ownerOf` labels the repository tooling tree `scripts`.
+  // Mapping it here lets a product test that imports a gate detector be
+  // recognised as a declared edge instead of a permanent false positive.
+  if (owner === "scripts") return "scripts";
+  // A specifier that resolves to a real file but that the audit could not give
+  // an owner label arrives as `UNRESOLVED:<specifier>`. Those are not absent
+  // edges -- they are edges with an unknown owner, so matching on the path the
+  // specifier names is what lets a declared `requires` entry permit them. The
+  // `UNRESOLVED:` prefix is stripped first because it is a marker, not part of
+  // any path.
+  const unresolved = owner.startsWith("UNRESOLVED:") ? owner.slice("UNRESOLVED:".length) : null;
+  if (unresolved && unresolved.includes("scripts/")) return "scripts";
   return null;
 }
 
@@ -185,6 +197,13 @@ function moduleDependencyPermitted(fromFile, toOwner) {
   if (from === null) return false;
   const toRoot = ownerToRoot(toOwner);
   if (toRoot === null) return false;
+  // The `repo-tooling` module exists so that a PRODUCT test importing a gate
+  // detector is a recognised edge. It must not become a source-side blind
+  // spot: with `requires: []` every edge OUT of `scripts/` was permitted,
+  // which is exactly the "reports facts but checks nothing" shape this gate
+  // family exists to prevent. Tooling is still held to the same
+  // forbidden-dependency rules as any other source, so a gate script reaching
+  // into a product package is still reported.
   return (from.requires ?? []).some((id) => {
     const target = modules.find((m) => m.id === id);
     return target?.roots.some((r) => pathRootCovers(r, toRoot) || pathRootCovers(toRoot, r)) ?? false;

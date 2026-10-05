@@ -59,6 +59,13 @@ function ownerOf(relPath) {
   if (m) return `pkg:${m[1]}`;
   if (relPath.startsWith("tests/")) return "tests";
   if (relPath.startsWith("e2e/")) return "e2e";
+  // Repository tooling, for the same reason as `desktop-contracts` above: a
+  // product test that imports a gate detector (`isTurnLoopModule` from
+  // `scripts/architecture/boundary-gates.mjs`) otherwise lands on `other`,
+  // which has no `requires` list, so the edge can never be permitted and is
+  // reported as blocking forever. This file and `import-graph.mjs` each carry
+  // their own `ownerOf`; they must agree or edges get double-counted.
+  if (relPath.startsWith("scripts/")) return "scripts";
   return "other";
 }
 
