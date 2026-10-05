@@ -276,10 +276,13 @@ Electron main 里摘出来,变成独立纯 Node 进程。Electron / CLI / Web / 
 - 601 **推翻**了 600 `README.md:128` 的「`apps/web/` 本系列不建」裁决。
   该裁决无任何机器强制(`apps/web` 在所有 declared root 之外,
   `architecture-check.mjs:186-187` 对未分类目标默认放行),推翻它不需要先改门禁。
-- **已知缺口:600 的 11 份计划文档不在任何分支上。** `46c36d9d` 的 `active/` 只有 587,
-  本索引也没提 600。600 的**代码**(S0 门禁, PR #209)已合并,**文档**只在本地未跟踪。
-  601 因此自带全部前提,不以 600 文档为依据。上表的「架构重构唯一入口是 587」一句
-  **已过期** —— 但更正它属于 600 文档落地时的动作,不由 601 代劳。
+- **~~已知缺口:600 的 11 份计划文档不在任何分支上。~~ 已由 610 更正 —— 这句话是错的。**
+  那 11 份文档**一直在 `docs/600-plan-archive` 分支上**(1 commit ahead / 0 behind),
+  并没有丢。当时只查了 `origin/*` 与工作区就下了结论。
+  [610](./active/610-architecture-series/README.md) 已把它们落回 master 的
+  `active/600-layered-architecture/`,600 README §4 冻结为历史契约。
+- 上表「架构重构唯一入口是 587」一句**已过期**:600 的 S0 门禁与 S2 栈均已合并。
+  当前的唯一 next action 由 **610** 声明,不再由 587 声明。
 
 ### SQLite 驱动迁移 (602) — 2026-10-05
 
@@ -355,7 +358,8 @@ Four were wrong and are corrected below; these five were checked and are
 
 | Plan | Priority | Next action |
 | --- | --- | --- |
-| [587-agent-harness-monorepo](./active/587-agent-harness-monorepo/README.md) | P0 | **唯一架构重构入口：G0.1** 核对当前HEAD、clean build、完整测试失败集合和CI；按主计划阶段表执行，旧429/550/583–586已接管 |
+| [610-architecture-series](./active/610-architecture-series/README.md) | **P0** | **唯一 next action:A1 修 `isTurnLoopModule`** —— G7 现在认不出真正的 turn loop、反而把 worker 入口报成违规,先把它修成双向可信,A2–A7 的验收才有判据 |
+| [587-agent-harness-monorepo](./active/587-agent-harness-monorepo/README.md) | P0 | G0.1 核对当前HEAD、clean build、完整测试失败集合和CI；按主计划阶段表执行，旧429/550/583–586已接管。**已不再是架构重构的唯一入口** —— 600 的 S0/S2 已合并,当前顺序见 610 |
 | [601-headless-control-plane](./active/601-headless-control-plane/README.md) | P0 | **写门禁 A1 并证明它现在红** —— 在 `require('electron')` 会抛的子进程里真加载完整 handler 图；确认红之后才允许改那 6 个 handler |
 | [602-sqlite-abi](./active/602-sqlite-abi/README.md) | P0 | **写探针 `scripts/sqlite-compat-probe.mjs`** — 本地 node 与 Electron 主进程各跑一次，验 9 项能力边界；`close()` 语义与回滚路径两项任一不过就停下 |
 | [08-31-multi-agent-profile-design](./active/2026-08-31-multi-agent-profile-design.md) | P1 | Implement plan 7.2 memory partition by profile (migration + `[memory] partition` toggle) _(section C partially done via 481/477)_ |
