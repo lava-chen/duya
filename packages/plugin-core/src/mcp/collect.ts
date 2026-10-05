@@ -7,9 +7,16 @@
 // adapters fetch their own data and feed this engine a
 // `MCPCollectorInput`.
 //
-// This module imports Node builtins (`fs`, `path`) and is therefore
-// NOT re-exported from the barrel (same policy as `./resolve`). Node
-// side imports it directly by path.
+// This module is browser-safe. It imports only TYPES (`import type` is
+// erased at compile time and creates no runtime coupling), so unlike
+// `./resolve` there is no reason to keep its functions out of the barrel.
+// Measured by plan 610's G10 gate: `collect.ts` is inside the desktop
+// renderer's value-import closure and contributes zero Node built-ins.
+// The two comments above this one used to claim the opposite — they said this
+// module imports `fs` and `path` and must stay off the barrel — which had
+// drifted from the code. Corrected rather than deleted, because the policy
+// itself (keep Node-touching loaders off the barrel) is still right; it just
+// does not apply to this file.
 
 import type { MCPCandidate, MCPCollectionResult } from './discovery';
 

@@ -712,10 +712,18 @@ export function findLifecycleCouplings(tables = DURABLE_IDENTITY_TABLES, dbDir =
  * Duplicated rather than imported because `layer-purity.ts` is TypeScript and
  * this gate must run under plain `node` (there is no `tsx` in this repo). The
  * duplication is deliberate and bounded: both lists encode the same published
- * definition, and the cross-check that matters is measured, not assumed — G9 and
- * G2 independently find the SAME six `@duya/ai` files, by different routes
- * (transitive reachability vs. a direct scan), which is the evidence that the
- * two have not drifted apart in a way that hides IO.
+ * definition, and the cross-check that matters is measured, not assumed — G9
+ * and `layer-purity.ts`'s `CORE_MODULES` list independently name the SAME
+ * `@duya/ai` files, by different routes (transitive reachability vs. a direct
+ * scan), which is the evidence that the two have not drifted apart in a way
+ * that hides IO.
+ *
+ * The list was FIVE files as of plan 610 A0, not six: A0 moved the Bedrock
+ * SigV4 signer from `node:crypto` to `globalThis.crypto.subtle`, so
+ * `packages/ai/src/api/bedrock-converse.ts` stopped reaching a Node built-in and
+ * was retired from both this gate's test and `layer-purity.ts`'s carve-out
+ * list. `layer-purity.ts`'s `findStaleCarveOuts` test fails if a record there
+ * outlives its file, so the two lists cannot silently diverge on this.
  *
  * `this.fetchFn(` is deliberately NOT matched: an injected transport is the
  * point of the exercise, and `system-one/client.ts` is the working example.
