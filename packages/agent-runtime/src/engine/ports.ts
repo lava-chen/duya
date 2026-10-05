@@ -73,6 +73,7 @@
  */
 
 import type {
+  CompactionId,
   RunBudget,
   RunEpoch,
   RunEvent,
@@ -1023,6 +1024,23 @@ export interface RunEnginePorts {
    * classify -- which is exactly the `unknown` state that blocks recovery.
    */
   readonly sideEffects?: ToolSideEffectLedger;
+  /**
+   * Where a transcript gets REPLACED. See `CompactionPort`.
+   *
+   * OPTIONAL, and the absence is the live worker's state today for the same
+   * reason `turnOutput` is: the legacy loop still decides and runs every
+   * compaction itself (16 call sites in the loop body, `DuyaAgent.ts:1825-3404`
+   * -- `onTurnStart` at `:1835`, the pre-turn coordinator at `:2155`, the
+   * preflight probe and run at `:3018`/`:3022`, the usage anchors at
+   * `:3154-3167`, and the emergency path at `:3330`/`:3360`). Binding it now
+   * would compact twice.
+   *
+   * Unlike `turnOutput`, a forgotten binding here is NOT harmless the way a
+   * forgotten guardrail is: it means no transcript is ever replaced and the
+   * five compaction frames have no producer at all. That cost is stated at
+   * length on `CompactionPort`, and it is the obligation the cutover inherits.
+   */
+  readonly compaction?: CompactionPort;
 }
 
 /** What a host needs in order to run one execution to completion. */
@@ -1063,7 +1081,7 @@ export interface RunExecutionRequest {
    * ## Why a field here and not in `input.options`
    *
    * `RunInputSnapshot.options` is `Readonly<Record<string, unknown>>`
-   * (`ports.ts:1165`) and is the only route this value could otherwise have
+   * (`ports.ts:1183`) and is the only route this value could otherwise have
    * taken -- the legacy reads the same fact out of an `options` bag. It is
    * rejected for the reason the rest of this file argues shapes rather than
    * bags: an untyped read cannot be validated, and the one coercion that matters
@@ -1738,4 +1756,249 @@ export type OneShotTextResult =
  */
 export interface OneShotTextFailure {
   readonly message: string;
+}
+
+// ============================================================================
+// Compaction -- the seam that must REPLACE the transcript, not veto it
+// ============================================================================
+
+/**
+ * Why a compaction was considered. Mirrors the legacy option's five values.
+ *
+ * `CompactOptions.trigger` already spells these out
+ * (`packages/agent/src/compact/types.ts:63`), and the four that reach a
+ * `compactProactive` call are all of them: `auto` from the coordinator
+ * (`CompactionCoordinator.ts:263`), `emergency` from the context-length path
+ * (`DuyaAgent.ts:3360`), `preflight_overflow` from the preflight probe
+ * (`:3022`), `model_switch` from the window-change path (`:1488`).
+ *
+ * The protocol's `compaction.started` narrows this to `'auto' | 'manual' |
+ * 'threshold'` (`events/payloads.ts:550`), so three of the five have no wire
+ * spelling today. The narrowing is the PROJECTOR's and stays there; this union
+ * keeps the host's own vocabulary rather than pre-squashing it into three.
+ */
+export type CompactionTrigger = 'auto' | 'manual' | 'emergency' | 'preflight_overflow' | 'model_switch';
+
+/**
+ * What the port is asked at a decision point.
+ *
+ * ## Why the request carries the transcript rather than a token count
+ *
+ * The legacy gate is a measured threshold, and it is computed by the manager
+ * from the PROJECTED messages, not from the raw list
+ * (`CompactionProbe.tokens`, `CompactionManager.ts`), fed by
+ * `compactionController.projectInputMessages()` at both in-loop probe sites
+ * (`DuyaAgent.ts:3011`, `:3331`). A probe that received only a number would
+ * have to trust that number, which is the "verifiable rather than trusted"
+ * distinction `ResolvedPart` draws. So the messages travel, and the port
+ * measures them.
+ */
+export interface CompactionDecisionInput {
+  /** 1-based. The engine counts turns; it does not invent their identities. */
+  readonly turn: number;
+  /** The transcript as it stands BEFORE any compaction this turn. */
+  readonly transcript: readonly ModelMessage[];
+  /** Which decision point this is. The legacy has three; they differ. */
+  readonly trigger: CompactionTrigger;
+  /**
+   * What the caller observed, when it observed anything.
+   *
+   * Optional because one of the three sites has no observation to report: the
+   * pre-turn coordinator is a PROACTIVE guess (`DuyaAgent.ts:2155`), while the
+   * other two follow real evidence -- a preflight overflow probe (`:3018`) and
+   * a provider `context_length_exceeded` classification (`:3330`,
+   * `compactErrors.ts`). A required field would make the proactive caller
+   * fabricate an observation, which is the "announced success for work that
+   * did not happen" shape this file's header is written against.
+   */
+  readonly observation?: CompactionObservation;
+}
+
+/** Real evidence, where there is any. Never inferred by the engine. */
+export interface CompactionObservation {
+  /** True when the provider itself claimed the context was too long. */
+  readonly contextLengthExceeded?: boolean;
+  /** A preflight overflow probe already ran and said yes. */
+  readonly overTriggerLine?: boolean;
+  /** The probe's own token estimate, when one was taken. */
+  readonly tokens?: number;
+}
+
+/**
+ * The verdict, and DECLINING is a value.
+ *
+ * A three-way union rather than a boolean, because the legacy has three
+ * outcomes and two of them are not errors: `probeCompaction` returns a probe
+ * and the callers COMPARE it against a line (`DuyaAgent.ts:3018`, `:3330`),
+ * `compactProactive` returns `null` for "nothing to compact" without throwing
+ * (`CompactionCoordinator.ts:266`), and a strategy that declines leaves its
+ * input unchanged (`CompactOptions.force` documents exactly that early
+ * return, `types.ts:66-71`). A `boolean` would fold "no, and that was the
+ * right answer" into `false`-is-an-error.
+ */
+export type CompactionDecision =
+  | { readonly kind: 'compact'; readonly trigger: CompactionTrigger }
+  | { readonly kind: 'skip'; readonly reason: string };
+
+/**
+ * One compaction's outcome, including the TRANSCRIPT it produced.
+ *
+ * ## `replacement` is the load-bearing field
+ *
+ * `replacement` is `readonly ModelMessage[] | null`, and it is null for every
+ * arm except `replaced`. That is the whole reason this is a port rather than an
+ * extension phase, and the measurement is in this package's own engine:
+ * `ExtensionPhase` has five values (`ports.ts:1432-1437`) and the one that runs
+ * last, `before_finalize`, can only VETO -- `#shouldStop` reads
+ * `contribution.binding && 'veto' in contribution.content` and returns `null`
+ * to keep the loop open (`#shouldStop`, `run-engine.ts:1151-1155`). A veto is a
+ * DECISION to run again. Compaction is not a decision to run again; it is a NEW
+ * INPUT for
+ * the run that continues, and it has to reach the next
+ * `ports.context.assemble(...)` (`run-engine.ts:421`) rather than the next
+ * loop iteration. No member of `ExtensionContribution` can carry a transcript:
+ * its `content` is a transient fragment or a veto (`ports.ts:1443`), and a
+ * fragment is a string that gets folded into one message, not a replacement
+ * for the history.
+ *
+ * So the five phases are the wrong shape for this, and the port is the right
+ * one: a port method returns a value the engine USES, which is what "replace
+ * the transcript the next request is built from" requires.
+ */
+export type CompactionOutcome =
+  | {
+      readonly kind: 'replaced';
+      /** The transcript the NEXT request must be built from. Never null. */
+      readonly replacement: readonly ModelMessage[];
+      readonly boundaryId: string;
+      readonly compactedMessageIds: readonly string[];
+      readonly strategy?: string;
+      readonly tokensRemoved?: number;
+      readonly tokensRetained?: number;
+    }
+  | { readonly kind: 'declined'; readonly reason: string }
+  | { readonly kind: 'failed'; readonly error: { readonly code: string; readonly message: string } }
+  | { readonly kind: 'cancelled' };
+
+/** Progress reported DURING a compaction, not only after it. */
+export type CompactionProgress =
+  | {
+      readonly kind: 'step';
+      readonly step: number;
+      readonly phase: string;
+      readonly messageCount?: number;
+      readonly tokensBefore?: number;
+      readonly tokensEstimated?: number;
+      readonly filesCached?: number;
+    }
+  | {
+      readonly kind: 'over_threshold';
+      readonly tokensRetained: number;
+      readonly available: number;
+    };
+
+/**
+ * Contract 1g -- compaction: decide, run, and hand back a transcript.
+ *
+ * ## Why this is NOT an extension phase
+ *
+ * Measured, and the reason is the veto. `ports.extensions` has five phases and
+ * `before_finalize` is the only one that can affect the OUTCOME; it does so by
+ * VETO, which `#shouldStop` turns into "do not stop" (`run-engine.ts:1151-1155`).
+ * Compaction needs two things a veto cannot express:
+ *
+ *  1. **replace an input, not a decision.** A veto re-runs the same turn with
+ *     the same transcript. Compaction changes what the next
+ *     `ports.context.assemble(...)` reads (`run-engine.ts:416-421`), which is
+ *     a different input, not another iteration.
+ *  2. **report a set of frames while running.** `ExtensionContribution.content`
+ *     is one fragment or one veto (`ports.ts:1443`); there is nowhere to put a
+ *     `compaction.step` sequence, an `over_threshold` reading, or the
+ *     `boundaryId` a `compaction.completed` frame requires
+ *     (`events/required.ts:181`).
+ *
+ * ## Why the summarization is NOT re-declared here
+ *
+ * It already has a runtime-side port and compaction should not add a second.
+ * `OneShotTextPort` (`ports.ts:1697`) was built for exactly this call: it is
+ * TOOL-FREE (`toolChoice: 'none'` unconditionally, the plan-523 P4.1 fix the
+ * summarizer needed), it is CANCELLABLE via a caller-owned signal, and it
+ * answers with a three-way union so a provider that died mid-summary is a
+ * `failed` rather than a silent empty string (`ports.ts:1653-1677`). The
+ * summarizer is installed through it today (`DuyaAgent.ts:783`, wired at
+ * `:764`), so a compaction port that carried its own model call would be a
+ * duplicate of a port that already exists and already has the harder tests.
+ *
+ * So `CompactionPort` has no model method, and a host implements `run` with a
+ * `OneShotTextPort` it already holds. `@duya/agent-runtime` imports nothing
+ * from `@duya/agent` (G1); it imports nothing from `@duya/ai` either, and the
+ * summarizer's provider client stays host-side exactly as b1 left it.
+ *
+ * ## What the summarization steps become
+ *
+ * `onProgress` exists because the summarizer takes MINUTES: the legacy streams
+ * `compact:*` out of a live pump precisely so the renderer sees progress during
+ * it rather than a burst afterwards (`DuyaAgent.ts:2144-2151`). An
+ * outcome-only port would force that buffering back in, which is the bug that
+ * pump was written to fix.
+ *
+ * ## What absence costs, stated exactly
+ *
+ * An unbound `CompactionPort` means NO transcript is ever replaced. The five
+ * compaction frames are then not merely unpublished -- they are unreachable,
+ * because the engine can only learn a compaction happened FROM this port's
+ * answer. Classification, against the b3a/b3b precedent: **a forgotten binding
+ * loses data**, not a guardrail. The transcript keeps growing past the window
+ * with nothing to shed it, the provider returns `context_length_exceeded`, and
+ * the emergency compaction that exists to recover from exactly that
+ * (`DuyaAgent.ts:3360`) has no port to call. That is the legacy's failure mode
+ * reproduced with no seam, and the run ends in an error a user sees. A
+ * forgotten GUARDRAIL would be a port that is bound and ignored -- also wrong,
+ * but nothing is lost, because the legacy loop is still driving every turn and
+ * still compacting on its own today. That is why the port is OPTIONAL here and
+ * why it is the obligation the cutover inherits.
+ */
+export interface CompactionPort {
+  /**
+   * Whether to compact at this point. A `skip` is a valid answer.
+   *
+   * Separate from `run` because the legacy DECIDES and then RUNS at two
+   * different places: the preflight path probes (`:3018`) and compacts (`:3022`)
+   * with a decision in between, and the emergency path only runs once a
+   * provider error has been classified (`:3330`, `:3360`). One method would
+   * force one of those callers to run a compaction it had already decided not
+   * to run, or to decide twice.
+   */
+  decide(input: CompactionDecisionInput): Promise<CompactionDecision>;
+  /**
+   * Compact, and hand back the transcript the next request is built from.
+   *
+   * `signal` is the CALLER's, for the reason `ModelPort.stream` and
+   * `OneShotTextPort.complete` both take one: the summarizer is the long part,
+   * and a run that cannot stop during it is a run that cannot stop at all. The
+   * legacy links a child controller for precisely this
+   * (`DuyaAgent.ts:776-780`).
+   *
+   * `reporter` is how progress reaches the host DURING the run. It is a
+   * parameter rather than a field on the port because a port bound for one run
+   * serving several compactions needs a fresh reporter per compaction, and
+   * because the legacy's own contract is exactly this shape -- `onEvent`
+   * (`CompactionCoordinator.ts:153`), buffer when absent (`:246-253`).
+   */
+  run(
+    input: CompactionDecisionInput,
+    reporter: (progress: CompactionProgress) => void,
+    signal: AbortSignal,
+  ): Promise<CompactionOutcome>;
+  /**
+   * Mint the id the five frames share.
+   *
+   * `compactionId` is REQUIRED on four of the five payloads
+   * (`events/required.ts:168-187`) and absent on the fifth
+   * (`over_threshold`), so the identity has to exist before `run` starts. It is
+   * the HOST's to mint for the same reason `seq` is the ledger's: four frames
+   * correlate on it, and an engine that minted its own would be a second
+   * authority for "which compaction is this".
+   */
+  nextCompactionId(): CompactionId;
 }

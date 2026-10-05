@@ -561,7 +561,7 @@ export function toProviderMessages(
  * ## Why it exists
  *
  * `OneShotTextRequest.messages` is `readonly ModelMessage[]`
- * (`ports.ts:1667-1672`), and both one-shot call sites already hold
+ * (`ports.ts:1685-1690`), and both one-shot call sites already hold
  * `@duya/agent-protocol`'s `Message[]` -- the summarizer builds a one-element
  * array (`DuyaAgent.ts:769-774`) and the side question reuses the projected
  * timeline (`DuyaAgent.ts:4506-4509`). Neither can be passed as-is, so this is

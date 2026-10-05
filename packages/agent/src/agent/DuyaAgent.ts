@@ -819,9 +819,9 @@ export class duyaAgent implements AgentRuntime {
           // This arm used to `break` and return the text accumulated so far,
           // so a provider `error` frame mid-summary stored a truncated
           // summary. `OneShotTextResult` carries no partial text on `failed`
-          // (`ports.ts:1682-1685`), so the partial value is no
+          // (`ports.ts:1700-1703`), so the partial value is no
           // longer reachable, and the only remaining options were "throw" or
-          // "return a bare ''". b1 chose throw (`ports.ts:1610-1613`).
+          // "return a bare ''". b1 chose throw (`ports.ts:1628-1631`).
           //
           // What that changes, measured through the retry ladder
           // (`compact/summaryRetry.ts:199-242`): an `error` frame after usable
@@ -4528,7 +4528,7 @@ export class duyaAgent implements AgentRuntime {
       if (result.kind === 'failed') {
         // Preserved: the legacy loop threw `new Error(event.data)` on an error
         // frame (`:4493-4494`), and `failed.error.message` IS that `data`
-        // (`ports.ts:1601-1603`).
+        // (`ports.ts:1619-1621`).
         throw new Error(result.error.message);
       }
       // `cancelled`. The old `finally` aborted only AFTER the loop settled, so

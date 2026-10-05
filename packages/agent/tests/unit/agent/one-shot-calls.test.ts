@@ -28,9 +28,9 @@
  * The summarizer used to `break` on an `error` frame and return the text it
  * had accumulated, so a provider
  * that died mid-summary stored a truncated summary. `OneShotTextResult` carries
- * no partial text on `failed` (`ports.ts:1682-1685`), so that value is no
+ * no partial text on `failed` (`ports.ts:1700-1703`), so that value is no
  * longer reachable and the summarizer now raises the provider's message --
- * which is what b1 specified (`ports.ts:1610-1613`). "Surfaces provider errors"
+ * which is what b1 specified (`ports.ts:1628-1631`). "Surfaces provider errors"
  * below asserts the new contract, and the surrounding comment records the old
  * one. This is a behaviour change pending the owner's ruling, not a
  * restatement.

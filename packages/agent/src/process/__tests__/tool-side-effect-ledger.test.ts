@@ -139,7 +139,7 @@ describe('a dispatch requires a durable side-effect pre-write', () => {
   });
 
   it('refuses a SECOND begin for the same attemptKey, and does not overwrite', async () => {
-    // `ports.ts:1060-1063`: one attempt has exactly one record, and a second begin
+    // `ports.ts:1078-1081`: one attempt has exactly one record, and a second begin
     // is a caller bug that must REJECT rather than overwrite -- the record is the
     // one place the effect is accounted for.
     const ledger = makeLedger();

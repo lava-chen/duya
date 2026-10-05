@@ -349,6 +349,23 @@ export type {
 export { RunEngineImpl } from './engine/run-engine.js';
 export type { EngineExit, EngineExitReason, EngineRunReport, RunEngineOptions } from './engine/run-engine.js';
 
+// Plan 600 S2 step b4c -- the compaction seam. Exported as VALUES, unlike the
+// one-shot port beside it: the frames are the POINT of this slice, and a
+// type-only export would leave the five `compaction.*` members with a port
+// declaration and still no producer.
+export {
+  completedFrame,
+  failedFrame,
+  progressFrame,
+  runCompactionPass,
+  startedFrame,
+} from './engine/compaction.js';
+export type {
+  CompactionPassInput,
+  CompactionPassResult,
+  CompletedFacts,
+} from './engine/compaction.js';
+
 export type {
   ApprovalPort,
   ApprovalRequest,
@@ -360,6 +377,17 @@ export type {
   AttemptLeasePort,
   BudgetPort,
   CheckpointPort,
+  // Plan 600 S2 step b4c -- the compaction port. The only port whose result
+  // REPLACES an input rather than reporting a decision, because a veto cannot
+  // change what the next request is built from; see its doc comment for the
+  // measurement. Type-only, for the same G1 reason as `OneShotTextPort`.
+  CompactionDecision,
+  CompactionDecisionInput,
+  CompactionObservation,
+  CompactionOutcome,
+  CompactionPort,
+  CompactionProgress,
+  CompactionTrigger,
   ContextPort,
   ExtensionContext,
   ExtensionContribution,

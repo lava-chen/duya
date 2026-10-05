@@ -31,7 +31,11 @@ import type { RunEvent } from '@duya/agent-protocol';
 import type {
   ApprovalVerdict,
   AssistantMessageRecord,
+  CompactionOutcome,
+  CompactionPort,
+  CompactionProgress,
   ModelFrame,
+  ModelMessage,
   ModelRequest,
   OneShotTextPort,
   OneShotTextRequest,
@@ -646,3 +650,198 @@ type CancellationPortAbsent = Extract<
 
 // @ts-expect-error - a cap is configuration the caller already has, not a capability it supplies
 export const REQUEST_CAP_IS_NOT_A_PORT: CancellationPortAbsent = 'unexpected-port';
+
+// ---------------------------------------------------------------------------
+// Compaction: a port, because a VETO cannot replace a transcript -- and the
+// transcript replacement is observable, not an assertion about intent.
+// ---------------------------------------------------------------------------
+
+/**
+ * The port is CONSTRUCTIBLE with the smallest legal members.
+ *
+ * Positive first, for the reason `MINIMAL_PORTS` exists: the negative cases
+ * below are only meaningful if a real implementation can satisfy the
+ * contract. `replacement` is `readonly ModelMessage[]` here and NOT null,
+ * because `replaced` is the one arm of `CompactionOutcome` that may carry a
+ * replacement, and an arm that could be null would make the load-bearing field
+ * optional in the very case it exists for.
+ */
+export const COMPACTION_PORT_IS_CONSTRUCTIBLE: CompactionPort = {
+  decide: () => Promise.resolve({ kind: 'skip', reason: 'cooldown' } as const),
+  run: () =>
+    Promise.resolve({
+      kind: 'replaced' as const,
+      replacement: [],
+      boundaryId: 'b-0',
+      compactedMessageIds: [],
+    }),
+  nextCompactionId: () => 'cmp-0',
+};
+
+/**
+ * THE load-bearing assertion of this slice: the port can RETURN A TRANSCRIPT,
+ * and on the `replaced` arm it MUST.
+ *
+ * A `CompactionOutcome` whose `replaced` arm has no `replacement` would still
+ * satisfy the five frames -- `compaction.completed` needs a `boundaryId` and
+ * an id list, not the messages themselves -- so every frame would publish
+ * correctly and the next request would still be built from the ORIGINAL
+ * history. That is the exact failure the port exists to prevent, and it is
+ * invisible to any test that only asserts on events.
+ *
+ * ## The polarity, and why the obvious version of this case is a no-op
+ *
+ * Written the other way round -- a POSITIVE literal that supplies
+ * `replacement: []` -- this guard is green in BOTH states, which was measured
+ * rather than assumed: an earlier draft asserted the arm by constructing it,
+ * and making `replacement` optional left the build exit 0. It cannot fail,
+ * because `exactOptionalPropertyTypes` still accepts a supplied value for an
+ * optional property, so the literal satisfies the arm either way. That is the
+ * "guard that is green in both states" this file's header warns about, and it
+ * is the same mistake `A_RUN_MAY_NAME_NO_CAP` documents at length.
+ *
+ * So the absence is asserted instead, NEGATIVE: the literal below OMITS
+ * `replacement`, which today is a compile error (the directive is used), and
+ * becomes legal the moment the field goes optional -- at which point TypeScript
+ * reports the directive as unused (TS2578) and `npm run typecheck:runtime`
+ * fails. Self-policing in both directions.
+ */
+// @ts-expect-error - a `replaced` outcome MUST carry the transcript it produced
+export const COMPACTION_REPLACEMENT_IS_REQUIRED: Extract<CompactionOutcome, { kind: 'replaced' }> = {
+  kind: 'replaced',
+  boundaryId: 'b-1',
+  compactedMessageIds: [],
+};
+
+/**
+ * And the replacement is REACHABLE and typed, positive half of the pair above.
+ *
+ * Needed because a negative case alone is only meaningful if the positive one
+ * is constructible -- for the reason `MINIMAL_PORTS` exists. This also pins
+ * the element type: `readonly ModelMessage[]`, so a port cannot hand back a
+ * bare `string[]` and leave the engine to re-derive message shape.
+ */
+export const COMPACTION_RESULT_CARRIES_A_TRANSCRIPT: Extract<CompactionOutcome, { kind: 'replaced' }> = {
+  kind: 'replaced',
+  replacement: [],
+  boundaryId: 'b-1',
+  compactedMessageIds: [],
+};
+
+/**
+ * And NO OTHER ARM may carry one, so "the transcript was replaced" stays a
+ * fact about exactly one outcome rather than something a decline or a failure
+ * can quietly also do.
+ *
+ * Polarity matches `SeqOn<ToolResultRecord>` above, for the same reason: a
+ * fourth member carrying a `replacement` would make this conditional yield
+ * `true`, the directive would go unused, and the build would fail.
+ */
+type ReplacementOnlyOnReplaced = Extract<CompactionOutcome, { replacement: readonly ModelMessage[] }> extends {
+  readonly kind: 'replaced';
+}
+  ? true
+  : false;
+// @ts-expect-error - only a REPLACEMENT replaces the transcript; a decline cannot
+export const REPLACEMENT_BELONGS_TO_REPLACED_ALONE: ReplacementOnlyOnReplaced = false;
+
+/**
+ * Declining is a VALUE with a reason, not an error and not an absence.
+ *
+ * Positive, and the polarity is the point: the legacy declines without
+ * throwing in three places (`probeCompaction` compares a probe,
+ * `DuyaAgent.ts:3018`; `compactProactive` returns null, `:3022`;
+ * `CompactOptions.force` documents the nothing-to-summarize early return,
+ * `types.ts:66-71`). A port that could not express a declined outcome would
+ * force every one of those to either throw or fabricate a compaction, and the
+ * fabricate branch is the one that loses messages.
+ */
+export const COMPACTION_DECLINAL_IS_A_COMPLETION: CompactionOutcome = {
+  kind: 'declined',
+  reason: 'nothing to compact',
+};
+
+/**
+ * The four outcomes are CLOSED, so a consumer's `switch` stays exhaustive and
+ * a fifth becomes a build error there.
+ *
+ * Same polarity and same reason as `DRAIN_KIND_SET_IS_CLOSED`.
+ */
+type CompactionOutcomeKindGuard = CompactionOutcome['kind'] extends
+  | 'replaced'
+  | 'declined'
+  | 'failed'
+  | 'cancelled'
+  ? never
+  : 'unexpected-kind';
+// @ts-expect-error - a fifth outcome must break the consumer's switch
+export const COMPACTION_OUTCOMES_ARE_CLOSED: CompactionOutcomeKindGuard = 'unexpected-kind';
+
+/**
+ * The port carries NO model method, because the summarization already has one.
+ *
+ * `OneShotTextPort.complete` is the tool-free, cancellable one-shot request the
+ * summarizer needs (`ports.ts`, and `DuyaAgent.ts:783` where it is already
+ * installed). A second model-shaped method here would either duplicate that
+ * surface or -- worse -- reintroduce the tool-calling summarizer that
+ * plan 523 P4.1 had to forbid with `toolChoice: 'none'`, a flag `ModelRequest`
+ * cannot express. So the probe is over the KEY SET, which covers
+ * `complete`/`stream`/`summarize` rather than one spelling.
+ */
+type CompactionCarriesNoModelCall = Extract<
+  keyof CompactionPort,
+  'complete' | 'stream' | 'summarize' | 'summarise' | 'generate' | 'callModel'
+>;
+// @ts-expect-error - the summarization is `OneShotTextPort`'s, not this port's
+export const COMPACTION_PORT_CARRIES_NO_MODEL_CALL: CompactionCarriesNoModelCall = 'complete';
+
+/**
+ * And it exposes no settle-shaped method, for the reason the store's surface
+ * guard (`STORE_SURFACE_IS_EXACT`) gives: a compaction is not a terminal
+ * decision, and a method named `settle`/`finalize`/`complete` on this port
+ * would read as one. Probed POSITIVELY so the absence is what fails.
+ */
+type CompactionCannotSettle = keyof CompactionPort extends 'settle' | 'finalize' | 'complete' ? never : true;
+export const COMPACTION_SURFACE_CANNOT_SETTLE: CompactionCannotSettle = true;
+
+/**
+ * The progress union is CLOSED, so a sixth progress reading is a build error at
+ * the consumer rather than a silently ignored value.
+ *
+ * `over_threshold` is a MEMBER rather than a field on the step reading because
+ * the two arrive on different cadences and carry disjoint required facts: a
+ * step has `step` + `phase` (`events/required.ts:169-176`) while
+ * `over_threshold` has `tokensRetained` + `available` and no `compactionId` at
+ * all (`:188`). One object with optional fields would let a caller publish
+ * `{ kind: 'step' }` with neither `step` nor `phase`.
+ */
+type CompactionProgressKindGuard = CompactionProgress['kind'] extends 'step' | 'over_threshold' ? never : 'unexpected-kind';
+// @ts-expect-error - a third progress kind must break the consumer's switch
+export const COMPACTION_PROGRESS_KINDS_ARE_CLOSED: CompactionProgressKindGuard = 'unexpected-kind';
+
+/**
+ * A step carries its `phase`, and it is REQUIRED.
+ *
+ * The wire requires it (`events/required.ts:171`), and the legacy always sends
+ * one (`CompactionCoordinator.ts:106` forwards `event.phase`). If `phase`
+ * became optional the projector would fall back to the step number
+ * (`chat-event-translator.ts:711`) -- a `phase` of `"3"` -- which is a string
+ * that looks like data and is not.
+ */
+export const COMPACTION_STEP_NAMED_ITS_PHASE: Extract<CompactionProgress, { kind: 'step' }> = {
+  kind: 'step',
+  step: 1,
+  phase: 'summarize',
+};
+
+/**
+ * The port set DID grow a compaction member, which is what makes the
+ * `CancellationPortAbsent` probe above a statement about that probe rather than
+ * a statement about the port set as a whole.
+ *
+ * Kept adjacent to that probe on purpose: one file asserting "no port grew"
+ * and another asserting "one grew" is a contradiction a reader has to
+ * reconcile, so both live here and the reader sees them together.
+ */
+type CompactionPortIsBound = Extract<keyof RunEnginePorts, 'compaction'>;
+export const COMPACTION_IS_AN_OPTIONAL_PORT: CompactionPortIsBound = 'compaction';

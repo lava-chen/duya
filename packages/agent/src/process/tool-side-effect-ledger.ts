@@ -42,7 +42,7 @@
  *
  * The first is a duplicated side effect on the user's disk. The second is a
  * blocked run. So the ledger is biased toward "it might have happened", which is
- * exactly what the contract's own wording asks for (`ports.ts:1058`: "Record a
+ * exactly what the contract's own wording asks for (`ports.ts:1076`: "Record a
  * call as `planned`, then as `dispatched`, then resolve with a ticket") and why
  * `unknown` is a legal, honest state rather than a bug.
  *
@@ -168,7 +168,7 @@ export function createToolSideEffectLedger(options: LedgerOptions): ToolSideEffe
    *
    * Seeded from the file, so a RESTARTED worker refuses to re-begin a call the
    * previous process already recorded. That is what makes "exactly one record per
-   * attemptKey" (`ports.ts:1060`) survive the only event that could break it: the
+   * attemptKey" (`ports.ts:1078`) survive the only event that could break it: the
    * process that wrote the record dying.
    */
   const begun = new Set<string>();
