@@ -3009,24 +3009,31 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     //
     // The turn is driven HERE, by `DuyaAgent.streamChat`, and by nothing else.
     //
-    // Why the model leg cannot simply be bound instead -- measured in
-    // `__tests__/turn-leg-cutover-ordering.test.ts`, and unchanged by this commit,
-    // because that test drives the engine directly and so still describes the
-    // hazard the NEXT slice creates if the leg is bound while this runs:
+    // Why a PUBLISHED LEG cannot be what the engine's model port reads --
+    // measured before it was made unconstructible, and the reason the port was
+    // deleted rather than kept. The port that pulled one,
+    // `createTurnLegModelPort`, ignored the `ModelRequest` the engine assembles
+    // and streamed the leg instead -- and the leg's `open()` IS
+    // `runTurnStream(params.deps)` (`model-leg.ts:258`), the same call this
+    // generator makes at its own `:2461`. Binding it therefore did not lend the
+    // engine one turn of the running loop; it handed it the WHOLE cycle
+    // (`run-engine.ts:354` is a self-contained `for`: assemble, `#streamModel`
+    // at `:439`, drain at `:449`, decide, repeat) while this generator kept
+    // running that same cycle. Two callers, two provider requests, one set of
+    // per-attempt accumulators -- a transport death under either attempt called
+    // `onRetryReset` -> `executor.discard()` underneath the other. Measured as
+    // `entered === 2`; `__tests__/engine-model-port.test.ts` now measures the
+    // engine's own share as 1 and re-points the two-driver case at the
+    // request-owned port.
     //
-    //  1. `buildTurnModelLeg`'s `open()` IS `runTurnStream(params.deps)`
-    //     (`model-leg.ts:216`), and that is the same call `DuyaAgent.streamChat`
-    //     makes at its own `:2431`. Binding `openModelStream` to a published leg
-    //     does not lend the engine one turn of the running loop -- it gives the
-    //     engine the WHOLE cycle (`run-engine.ts:353` is a self-contained `for`:
-    //     assemble, `#streamModel` at `:382`, drain at `:392`, decide, repeat)
-    //     while this generator keeps running that same cycle. Two callers, two
-    //     provider requests, one set of per-attempt accumulators -- so a transport
-    //     death under either attempt calls `onRetryReset` -> `executor.discard()`
-    //     underneath the other.
-    //  2. `#streamModel` is called unconditionally at the top of the cycle, so
-    //     there is no "wait for the legacy driver to hand me a turn" position to
-    //     wait at. Publishing a leg earlier is a RACE, not a fix.
+    // The engine's model port is `createClientModelPort`: it opens the request
+    // the engine assembled and threads the engine's own scoped signal into the
+    // provider call, so cancellation no longer has to be AIMED at a controller
+    // this generator owns. The leg itself is now a publication with no reader --
+    // `DuyaAgent.streamChat` still publishes per turn (`DuyaAgent.ts:2453`) and
+    // nothing consumes it, because no live caller passes `modelLegs`. The
+    // publish site stays only because it sits inside the turn body this comment
+    // says must become port calls; removing it belongs to that rewrite.
     //
     // So the model port, the tool drain, `TurnOutputPort` and the `chat:*`
     // projection all become correct in the SAME change that stops this generator

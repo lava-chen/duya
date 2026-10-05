@@ -104,7 +104,6 @@ import type {
   ToolCallRequest,
 } from '@duya/agent-runtime';
 import type { Message } from '@duya/agent-protocol/transcript';
-import type { ModelLegPublisher } from '../agent/model-leg.js';
 
 // ============================================================================
 // The narrowing
@@ -366,14 +365,136 @@ export interface LegacyModelSources {
 }
 
 /**
- * Build the model port over a real provider client.
+ * Build the model port over a real provider client, with the REQUEST owned by
+ * the engine.
  *
- * `signal` is the ENGINE's, and it is threaded into the client call rather than
- * wrapped. That is the whole reason `ModelPort.stream` takes one
- * (`ports.ts:379-388`): `DuyaAgent.streamChat` builds its own controller at its
- * first line (`:963`), so everything in front of the loop — history assembly,
- * attachment decode, approval prompts — sits outside cancellation's reach.
- * Here the engine's caller-owned signal reaches the provider directly.
+ * ## What this is, and what it replaced
+ *
+ * This is the port `createTurnLegModelPort` used to be the opposite of. That
+ * factory took a `ModelLegPublisher`, called `requireLeg()`, and streamed
+ * whatever turn the LEGACY loop had published — it ignored the `ModelRequest`
+ * the engine handed it entirely, and it opened the provider request through
+ * `runTurnStream`, which is the same call `DuyaAgent.streamChat` already makes.
+ * Two callers, one turn, two provider requests over one set of per-attempt
+ * accumulators, and a transport death under either one calling `onRetryReset`
+ * to `executor.discard()` the other's turn. That was measured, not feared:
+ * `__tests__/turn-leg-cutover-ordering.test.ts` recorded `entered === 2` before
+ * this factory existed.
+ *
+ * The direction is now the plain one. The engine assembles a `ModelRequest`
+ * (`ports.ts:398`), and this port turns THAT object into the provider call.
+ * There is no second caller, no publication to wait for, and nothing to refuse:
+ * a missing leg used to throw, and the only reason it had to is gone.
+ *
+ * ## Why the request is used WHOLE, including the messages
+ *
+ * `createLegacyModelPort` below applies the request's `systemPrompt`, sampling
+ * options and model selection, but takes the messages and the tools from the
+ * host's own sources. That is the right shape for a caller that owns a mutable
+ * context and a catalog; it is the WRONG shape for a port whose job is to open
+ * the request the ENGINE assembled, because then the two most load-bearing
+ * members — the history and the tool surface — would still be the host's to
+ * disagree with. So both come from `request` here, and
+ * `__tests__/engine-model-port.test.ts` pins it by making the assembled
+ * request observably different from anything a legacy source could produce.
+ *
+ * ## The tool schema is a RENAME, and it is the same class as `usage`
+ *
+ * `ToolDescriptor.inputSchema` is camelCase (`ports.ts:232`) and the provider's
+ * option is `input_schema` (`packages/ai/src/types.ts:496`). Passing the field
+ * across unchanged would typecheck — both sides are `Record<string, unknown>` —
+ * and send a provider no properties, which is the silent class of defect the
+ * header's `usage` paragraph is about.
+ *
+ * ## The `signal` is the engine's SCOPED one, threaded rather than wrapped
+ *
+ * `#streamModel` opens the per-request scope and passes `scope.signal`
+ * (`run-engine.ts:542-546`), not the run's `signal`. This port forwards exactly
+ * what it was given and adds no listener, no controller and no wrapper of its
+ * own, so the object the provider reads is the object the engine armed. With no
+ * cap configured the scope hands over the run signal ITSELF
+ * (`request-scope.ts:105` returns the same object, deliberately), and with a cap
+ * it is the child — which is why a request timeout can end the call without
+ * ending the run, and why identity is the assertion worth making rather than
+ * `aborted` equalling `aborted`.
+ *
+ * "The run signal" is the ENGINE's, and it is not the caller's. `execute`
+ * builds its own controller and relays the caller's abort into it
+ * (`run-engine.ts:237-240`), because `handle.stop` has to reach the run through
+ * the same authority a caller can abort. So the object the provider holds is
+ * never the one the caller passed in, and that is a property of the engine
+ * rather than of this port — stated here because the two are easy to conflate
+ * when reading the identity assertion in the test.
+ *
+ * ## What this does NOT carry
+ *
+ * `runTurnStream`'s replay envelope: on a transport death its `onRetryReset`
+ * discards the turn's `executor` and clears the per-attempt accumulators, then
+ * emits `chat:retry` and re-issues. One call to `streamChat` cannot reconstruct
+ * that from outside, because it closes over the legacy turn's accumulators. So
+ * THIS PORT OPENS EXACTLY ONE PROVIDER REQUEST per `stream()`, and a within-
+ * attempt retry is the ENGINE's to make (`ports.ts:390-392`) — which it does
+ * not make yet. Stated rather than hidden: the difference is real, and until
+ * the engine retries, a transport death here ends the turn instead of
+ * replaying it. The legacy loop keeps its own envelope because the legacy loop
+ * still drives every turn, so nothing in production is affected today.
+ */
+export function createClientModelPort(client: AIClient): ModelPort {
+  return {
+    async *stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelFrame> {
+      const stream = client.streamChat(toProviderMessages(request.messages), {
+        systemPrompt: request.systemPrompt,
+        tools: request.tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          input_schema: tool.inputSchema,
+        })),
+        // The optional members are the same CONDITIONAL spreads
+        // `createLegacyModelPort` uses, for the same reason: `undefined` means
+        // "the manifest named no ceiling", and passing it explicitly would
+        // replace the client's own default with an invented one. Absent fields
+        // are OMITTED rather than named as `undefined` because the client
+        // cannot tell the two apart on the wire.
+        ...(request.maxOutputTokens === undefined ? {} : { maxTokens: request.maxOutputTokens }),
+        ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
+        // Forwarded, never wrapped. See the header.
+        signal,
+        ...(request.model === undefined ? {} : { model: request.model }),
+        ...(request.provider === undefined ? {} : { provider: request.provider }),
+      });
+
+      for await (const event of stream) {
+        const frame = toModelFrame(event);
+        if (frame !== null) yield frame;
+      }
+    },
+  };
+}
+
+/**
+ * Build the model port over a real provider client and a host-owned context.
+ *
+ * ## How this differs from `createClientModelPort`
+ *
+ * Messages and tools come from the HOST here, and are re-read on every call.
+ * That is what a caller with a mutable context needs — the legacy loop's
+ * `runTurnStream` re-reads `deps.llmMessages` per attempt for the same reason
+ * (`TurnStreamRunner.ts:78`) — and it is why this port is the wrong one to
+ * hand an engine that has already assembled a request. Kept because
+ * `__tests__/run-engine-model-frames.test.ts` pins the re-read, and because
+ * deleting it would be a change to the legacy path this slice must not make.
+ *
+ * `turnCount` is carried but unread: the retry chip that used it lives in
+ * `runTurnStream`, which this port does not call. It is left in the interface
+ * rather than removed because the sources object is how a host hands over its
+ * turn state, and a field this port ignores is a smaller problem than a host
+ * that has to be told which fields are load-bearing.
+ *
+ * ## The `signal` is the ENGINE's, and it is threaded into the client call
+ *
+ * Same rule as `createClientModelPort` above, for the same reason: the caller
+ * that owns the controller is the only one that can arm it, so the port
+ * forwards the signal it was handed rather than inventing a scope.
  */
 export function createLegacyModelPort(sources: LegacyModelSources): ModelPort {
   return {
@@ -400,89 +521,6 @@ export function createLegacyModelPort(sources: LegacyModelSources): ModelPort {
       for await (const event of stream) {
         const frame = toModelFrame(event);
         if (frame !== null) yield frame;
-      }
-    },
-  };
-}
-
-/**
- * Build the model port over a run's PUBLISHED turn leg.
- *
- * ## Why this exists beside `createLegacyModelPort`
- *
- * `createLegacyModelPort` drives `llmClient.streamChat` itself. That is the
- * right shape for a caller that owns the client and the request, and it is what
- * `run-engine-model-frames.test.ts` exercises. It is the WRONG shape for the
- * worker entry, because the four sources it wants are closure state inside
- * `DuyaAgent.streamChat` — and because calling the client directly throws away
- * `runTurnStream`'s envelope.
- *
- * That envelope is the replay-on-transport-death layer: on a transport failure
- * `runTurnStream` calls `onRetryReset`, which in `streamChat` does
- * `executor.discard()` and clears every per-attempt accumulator, then emits the
- * `chat:retry` chip and re-issues the request. `onRetryReset` closes over the
- * turn's `executor` and accumulators, so it cannot be reconstructed from
- * outside — a port that called the client directly would lose it silently, and
- * the loss only shows up as a failed turn after an upstream hiccup.
- *
- * So this port takes the leg, whose `open()` IS `runTurnStream` over the turn's
- * real deps, and narrows what comes out. The retry path is preserved by
- * construction rather than by convention.
- *
- * ## What this port does NOT do
- *
- * It does not apply `request`. That is deliberate rather than
- * unfinished-in-disguise: the request for a turn is already fixed —
- * `systemPrompt`, the messages, the tools and the sampling options are the ones
- * the legacy loop is sending right now, and overriding them from the engine
- * would change what today's users are sent while the legacy generator still
- * drives the same turn. Owning the request is the CUTOVER's job.
- *
- * It DOES apply `signal`, and that is the difference between a stop that stops
- * and a stop that only reports. The engine hands every port a signal its own
- * `handle.stop` aborts (`run-engine.ts:259`), but the provider request is driven
- * by the TURN's signal — the one inside the `streamChat` closure. Ignoring the
- * engine's signal here therefore left the stop reaching nothing: the run
- * stopped, the provider kept streaming, and nothing said so. So it is forwarded
- * to `publisher.abortTurn`, which refuses loudly rather than cancelling a stale
- * or already-finished turn (`model-leg.ts`).
- */
-export function createTurnLegModelPort(publisher: ModelLegPublisher): ModelPort {
-  return {
-    async *stream(
-      _request: ModelRequest,
-      signal: AbortSignal,
-    ): AsyncIterable<ModelFrame> {
-      // Refuses rather than yielding nothing: an empty stream here would be
-      // indistinguishable from a model that chose to produce nothing.
-      const leg = publisher.requireLeg();
-
-      // Forwarded BEFORE the first event is pulled: the provider request is
-      // opened by the first `next()`, so a listener attached afterwards would
-      // miss a stop that lands while the request is in flight — which is
-      // exactly the case this whole path exists for.
-      //
-      // `{ once: true }`, plus the removal below: the engine's signal belongs to
-      // the RUN and outlives this stream, so a listener left attached would fire
-      // against a later turn and abort a request the engine never meant to stop.
-      // Same stale-abort hazard the publisher's refusals exist for, so it is not
-      // left to chance.
-      const forwardAbort = (): void => {
-        publisher.abortTurn(signal.reason);
-      };
-      if (signal.aborted) {
-        forwardAbort();
-      } else {
-        signal.addEventListener('abort', forwardAbort, { once: true });
-      }
-
-      try {
-        for await (const event of leg.open()) {
-          const frame = toModelFrame(event);
-          if (frame !== null) yield frame;
-        }
-      } finally {
-        signal.removeEventListener('abort', forwardAbort);
       }
     },
   };
@@ -631,7 +669,7 @@ export function createOneShotTextPort(client: AIClient): OneShotTextPort {
           // replaced, is covered by it as a consequence.
           toolChoice: 'none',
           // Optional for the same reason `ModelRequest`'s are
-          // (`run-engine-model.ts:378-384`): absent means the CLIENT's default
+          // (`run-engine-model.ts:443-450`): absent means the CLIENT's default
           // stays. A default invented here would be a ceiling and a sampling
           // rate no caller named, and it would be a silent one -- the provider
           // would apply it without anything in the request record showing it.

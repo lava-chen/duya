@@ -119,6 +119,48 @@
  * run-level abort (`interrupt()`, `DuyaAgent.ts:4398`) fires
  * `this.abortController`, and `createChildAbortController` propagates that to
  * the child. Both callers are still needed until the cutover decides otherwise.
+ *
+ * ## What this is after step b3c: a publication with no reader
+ *
+ * Step b3c removed the port that READ a leg. `createTurnLegModelPort` called
+ * `requireLeg()`, ignored the `ModelRequest` the engine assembles, and streamed
+ * the legacy turn instead — two drivers for one turn over one set of
+ * per-attempt accumulators. The engine's model port is now
+ * `createClientModelPort` (`run-engine-model.ts`), which opens the request the
+ * engine assembled and threads the engine's own scoped signal into the provider
+ * call. Nothing in `packages/agent-runtime` imports this module, and no live
+ * caller passes a publisher: `options.modelLegs` is declared at `types.ts:567`
+ * and read at `DuyaAgent.ts:2453`, and nothing constructs one.
+ *
+ * ### What became of the three refusals
+ *
+ * All three were real defects when they were written. None of them is reachable
+ * from the engine any more, and each is moot for a stated reason:
+ *
+ *  - `requireLeg`'s "no turn has published a model leg yet" refusal existed
+ *    because an empty stream there is indistinguishable from a model that chose
+ *    to produce nothing. The engine's port no longer consults a leg, so it
+ *    never has to tell those two apart: it opens the request it was given, and
+ *    a provider that produces nothing is the provider's own frame stream, which
+ *    the engine already reads as `sawFrame === false` (`run-engine.ts:604`).
+ *  - `abortTurn`'s three refusals existed to stop a stop AIMING at the wrong
+ *    thing: a hoisted leg, a run that had ended, a request already cancelled.
+ *    There is no longer any aiming. The engine's port hands the provider the
+ *    signal the engine itself armed, so the provider reads the very object the
+ *    stop fires, and a wrong-target abort is unrepresentable rather than
+ *    refused.
+ *  - `buildTurnModelLeg`'s identity check — the abort controller must OWN
+ *    `deps.signal` — guarded a leg whose cancellation would land beside the
+ *    provider request instead of on it. That is still a true statement about a
+ *    leg, and it still guards the one construction path this module has.
+ *
+ * They are kept rather than deleted, and the reason is scope rather than
+ * sentiment: the publish site is INSIDE `DuyaAgent.streamChat`'s turn body,
+ * which is the code the cutover has to rewrite into port calls. Removing this
+ * module is part of that rewrite, and removing it earlier would leave a
+ * `buildTurnModelLeg` call in a loop the rest of the plan is mid-way through
+ * changing. `model-leg.test.ts` therefore still tests all of it, and the
+ * end-to-end half of that test still drives a REAL turn.
  */
 
 import type { AIClient, Message, SSEEvent } from '@duya/ai';

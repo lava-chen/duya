@@ -513,10 +513,11 @@ describe('buildTurnModelLeg refuses an abort controller that does not own the si
 // ============================================================================
 // 7. End to end through a REAL turn: abort the published leg, provider stops
 //
-// `turn-leg-cancel.test.ts` proves the same property through the ENGINE's stop.
-// This one proves the leg's capability reaches the provider through a real
-// `duyaAgent` turn, so the guarantee does not rest on a hand-built deps object
-// matching the production shape.
+// `__tests__/engine-model-port.test.ts` proves cancellation reaches the
+// provider through the ENGINE's own port, over the request the engine
+// assembled. This one proves the leg's capability reaches the provider through
+// a real `duyaAgent` turn, so the guarantee does not rest on a hand-built deps
+// object matching the production shape.
 // ============================================================================
 
 describe('a real turn\'s leg cancels the real provider request', () => {
