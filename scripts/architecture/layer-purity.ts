@@ -233,10 +233,10 @@ export function findIoSites(absPath: string): IoSite[] {
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? '';
     // A type-only import is erased at compile time and creates no runtime
-    // coupling, so it is not a capability. `packages/ai/src/api/bedrock-converse.ts`
-    // does exactly this at lines 32-35: `import type { createHash } from
-    // 'node:crypto'` to NAME the signer types, next to a real lazy `require`
-    // at line 69 that actually needs the module.
+    // coupling, so it is not a capability. `packages/ai/src/auth/oauth/pkce.ts`
+    // is the live example: it names WebCrypto types and calls
+    // `crypto.subtle.digest` through the ambient handle, with no specifier for
+    // a bundler to externalize at all.
     if (/^\s*import\s+type\b/.test(line)) continue;
 
     for (const { name, re } of IO_PRIMITIVES) {
@@ -307,11 +307,6 @@ export const CORE_MODULES: readonly CoreModule[] = [
         file: 'packages/ai/src/api/ollama-chat.ts',
         why: 'Calls `fetch` directly against the local Ollama HTTP server for /api/chat and /api/embed instead of taking an injected transport. Should become an injected port (M5.3 follow-on); it is the largest of the three and the only one reachable from the renderer path that talks to a user-installed local model.',
         expects: ['fetch'],
-      },
-      {
-        file: 'packages/ai/src/api/bedrock-converse.ts',
-        why: 'Hand-rolled AWS SigV4 signing requires `node:crypto` (lazy `require` at call time, so the renderer can still import the module). The request SHAPING here is pure; only the digest/HMAC are not. Should take an injected signer.',
-        expects: ['require(node:crypto)'],
       },
       {
         file: 'packages/ai/src/auth/oauth/device-code.ts',

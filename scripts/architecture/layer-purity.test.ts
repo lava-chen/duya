@@ -58,9 +58,11 @@ describe('the IO detector has teeth', () => {
   });
 
   it('does NOT flag a type-only node builtin import, which is erased at compile time', () => {
-    // `packages/ai/src/api/bedrock-converse.ts:32-35` does exactly this: an
-    // `import type` of `node:crypto` to name the signer types, plus a lazy
-    // runtime `require`. Only the require is a capability.
+    // `packages/ai/src/api/bedrock-converse.ts:32-35` did exactly this before
+    // plan 610 A0: an `import type` of `node:crypto` to name the signer types,
+    // plus a lazy runtime `require`. A0 removed the require (WebCrypto instead),
+    // but the type-only case is still the behaviour under test here, so the
+    // fixture stands on its own rather than citing a file that no longer has it.
     const dir = scratchTree({
       'src/c.ts': "import type { createHash } from 'node:crypto';\nexport type H = typeof createHash;\n",
     });
