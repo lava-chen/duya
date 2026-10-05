@@ -238,11 +238,37 @@ export function workerImplementsExecutionChannel(entryRel = WORKER_ENTRY) {
  * file name: a cycle of model request, tool execution, result backfill, and
  * next turn. So it is detected by SHAPE — a module that (a) iterates, (b) opens
  * a model stream, and (c) dispatches tools, because a cycle is exactly those
- * three things. Measured on
- * this tree the predicate selects 3 of 3270 source files: the real loop, the
- * worker entry (which genuinely drives the loop today, and must stop), and one
- * integration test. That selectivity is the evidence the predicate has teeth;
- * a predicate matching 400 files would be a grep with extra steps.
+ * three things.
+ *
+ * ### Clause (b) had drifted to a spelling, not the responsibility (2026-10-05)
+ *
+ * It used to be `/\.streamChat\s*\(/` alone, and the docstring above it claimed
+ * the predicate selected "the real loop, the worker entry, and one integration
+ * test". Re-measured on this tree it selected **only the worker entry**:
+ * slice S2 moved the model request behind the `model-leg` seam
+ * (`buildTurnModelLeg` / `createTurnLegModelPort`), so `DuyaAgent.ts` no longer
+ * contains a literal `.streamChat(` call, while `agent-process-entry.ts` still
+ * does. A gate that fires on the entry and not on the loop is worse than no
+ * gate: it points the next slice at the wrong file.
+ *
+ * So (b) now also accepts the *seam* that opens the turn's model stream, not
+ * only a direct call. Selectivity was measured rather than assumed — over the
+ * 2194 non-test source files under `packages/`, `apps/desktop/src`, `electron/`
+ * and `scripts/`, requiring all three clauses together:
+ *
+ *   | (b) variant                | files matched |
+ *   | -------------------------- | ------------- |
+ *   | `streamChat(` only (old)   | 1 — the entry, NOT the loop |
+ *   | `+ model-leg seam`         | 3 — the loop, the entry, `agent-runtime/src/engine/ports.ts` |
+ *   | `+ llmClient / AIClient`   | 5 — starts matching unrelated files |
+ *
+ * `agent-runtime/src/engine/ports.ts` is the known over-read: it DECLARES the
+ * loop's ports, so it carries (a) and (c) and names the seam. It is reported
+ * rather than hidden, because the same "report more, never less" rule that
+ * governs the limits below applies to an ambiguous shape.
+ *
+ * The selectivity is the evidence the predicate has teeth; a variant matching
+ * hundreds of files would be a grep with extra steps.
  *
  * ## What this still cannot see
  *
@@ -257,8 +283,14 @@ export function workerImplementsExecutionChannel(entryRel = WORKER_ENTRY) {
 export const TURN_LOOP_SHAPE = {
   /** A repetition construct: the next turn of the cycle. */
   repetition: /\b(?:while|for)\s*\(/,
-  /** Opening a model stream: the model request. */
-  modelStream: /\.streamChat\s*\(/,
+  /**
+   * Opening a model stream: the model request — either called directly, or
+   * through the per-turn model-leg seam that slice S2 introduced. Accepting
+   * the seam is what keeps this clause on the RESPONSIBILITY; pinning it to
+   * one method name is what let it drift off the real loop entirely.
+   */
+  modelStream:
+    /\.streamChat\s*\(|\b(?:buildTurnModelLeg|createTurnLegModelPort|TurnModelLeg|ModelPort)\b/,
   /** Dispatching a tool: the tool execution and its backfill. */
   toolExecution: /\.execute(?:All)?\s*\(|ToolExecutionPipeline|getRemainingResults/,
 };
