@@ -148,7 +148,7 @@ duya/
 
 **`apps/web/` 与 `apps/server/` 本系列不建,但"不建"的原因已改写(2026-10-05)。**
 
-原裁决是"纯 Electron 应用,要么从目标树划掉,要么单独立项"。**[601](../601-headless-control-plane/README.md)
+原裁决是"纯 Electron 应用,要么从目标树划掉,要么单独立项"。**[601](../02-headless-control-plane/README.md)
 就是那个"单独立项",该句作废** —— 601 把控制平面倒置成纯 Node 进程后,web 端不再是"没人写前端",
 而是**原本就需要 `app.getPath('userData')` 的控制平面挡住了它**。601 `README.md:50-57` 记录了这次推翻
 及其依据:该裁决**没有任何机器强制**,`apps/web` 在 `architecture-policy.yaml` 的 declared root 之外,
@@ -205,7 +205,7 @@ codex-rs 的 `ext/extension-api/src/registry.rs` 注册的是**十几个不同�
 ## 4. 阶段与唯一 Next action
 
 > **⚠️ 本节已于 2026-10-05 冻结为历史契约,当前状态与推进顺序改由
-> [610 架构收口系列](../610-architecture-series/README.md) 持有。**
+> [610 架构收口系列](README.md) 持有。**
 > 原因很实际:本文件长期只存在于 `docs/600-plan-archive` 分支上,
 > 而 `docs/exec-plans/README.md` 与 601 §8.2 都据此写下过「600 的文档不在任何分支上」——
 > **一条关于计划存在性的错误事实,在索引里被引用了三轮。**

@@ -91,11 +91,29 @@ npm run architecture:self-test                      # OK
 
 ## 3. 对三份输入计划的更正
 
-### 3.1 600 的文档已回到 master
+### 3.1 三份计划已收成本系列的三章
 
-600 的 11 份文档随本系列落到 `docs/exec-plans/active/600-layered-architecture/`。
-600 README §4 已标注**冻结为历史契约**,当前状态以本文件为准 —— 避免两处都声称是真相。
-`docs/600-plan-archive` 分支保留,不再作为"唯一存在处"。
+**2026-10-05 起,600 / 601 / 602 不再是独立计划。** 它们此前各有编号空间
+(`S0–S7` / `A–C` / `Phase 0–3`)、各声明一个"唯一 next action"、且互不引用对方的顺序约束。
+那不是三份计划,是**三个互相不知情的真相源** —— 索引里并排列了三行,
+任何人读索引都会拿到三个互相矛盾的"下一步"。
+
+现在的结构:
+
+```
+docs/exec-plans/active/610-architecture-series/
+  README.md                        ← 唯一入口,唯一 next action
+  01-layered-architecture/         ← 原 600,11 份。README §4 已冻结为历史契约
+  02-headless-control-plane/       ← 原 601,6 份
+  03-sqlite-driver/                ← 原 602,4 份
+  10-slice-a1-g7-loop-detection.md
+  11-slice-a0-client-runtime-axis.md
+  90-execution-log.md
+```
+
+章节内的相对链接全部保持有效(同目录兄弟文件互相引用),跨章引用已逐条重写并**实测零断链**。
+
+`docs/600-plan-archive` 分支保留,不再是任何东西的"唯一存在处"。
 
 ### 3.2 602 退出关键路径,S6 解封
 
@@ -158,7 +176,7 @@ npm run architecture:self-test                      # OK
 
 **关键路径:A1 → A2 → A3 → A4 → A5 → A6 → A7。**
 **A0 是唯一不做架构改造也能做的一片**,产出是让 Web 从"被耦合卡住"变成"差一个 `apps/web` 骨架",
-建议与 A1 并行启动 —— 见 [02 客户端与运行时轴](02-client-runtime-axis.md)。
+建议与 A1 并行启动 —— 见 [02 客户端与运行时轴](11-slice-a0-client-runtime-axis.md)。
 B 线在 B1 之后才与 A5 交汇;C 线全程可并行且不阻塞任何人。
 
 ### 5.1 每片的唯一 next action
@@ -209,11 +227,15 @@ B 线在 B1 之后才与 A5 交汇;C 线全程可并行且不阻塞任何人。
 
 ---
 
-## 7. 支持资料
+## 7. 本系列的全部文件
 
-- [600 分层架构落地](../600-layered-architecture/README.md) — 契约与推导(§4 已冻结)
-- [01 切片 A1:G7 循环识别](01-slice-a1-g7-loop-detection.md) — 当前唯一 next action,**进行中未完成**
-- [02 切片 A0:客户端与运行时轴](02-client-runtime-axis.md) — 一个核心如何同时驱动 CLI / Web / Desktop
-- [601 Headless Control Plane](../601-headless-control-plane/README.md)
-- [602 SQLite 驱动迁移](../602-sqlite-abi/README.md)(前提更正见其 §0)
-- [90 执行日志](90-execution-log.md)
+**这就是架构工作的全部。`docs/exec-plans/active/` 下另有 587,其合同已被第 01 章接管,不再单独排期。**
+
+| 文件 | 作用 |
+| --- | --- |
+| [01-layered-architecture/](./01-layered-architecture/README.md) | 分层落地契约(原 600,11 份)。§4 已冻结为历史契约 |
+| [02-headless-control-plane/](./02-headless-control-plane/README.md) | 控制平面倒置(原 601,6 份)= B 线 |
+| [03-sqlite-driver/](./03-sqlite-driver/README.md) | SQLite 驱动(原 602,4 份)= C 线可选旁支,前提已更正见其 §0 |
+| [10-slice-a1-g7-loop-detection.md](./10-slice-a1-g7-loop-detection.md) | 切片 A1 契约 —— **当前唯一 next action** |
+| [11-slice-a0-client-runtime-axis.md](./11-slice-a0-client-runtime-axis.md) | 切片 A0 契约 —— 客户端运行时轴 |
+| [90-execution-log.md](./90-execution-log.md) | 执行日志与未决项 |
