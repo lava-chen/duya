@@ -134,7 +134,7 @@ worktree:`.claude/worktrees/601-headless-control-plane`,分支
 
 | # | 问题 | 归属 |
 | --- | --- | --- |
-| 1 | **600 的 11 份计划文档不在任何分支上。** `origin/master` 的 `active/` 只有 587,`docs/exec-plans/README.md` 完全没提 600。600 的**代码**已合并(PR #209),**文档**只在本地未跟踪。按 `docs/exec-plans/README.md:41`"A plan becomes tracked when it is written",600 违反了自己的规则 | **不在 601 范围**,已上报 |
+| 1 | ~~**600 的 11 份计划文档不在任何分支上。**~~ **已解决 —— 这条结论是错的。** 文档一直在 `docs/600-plan-archive`(1 ahead / 0 behind),并已于 2026-10-05 随 PR #218 落回 master 的 `active/600-layered-architecture/`。当时只查了 `origin/*` 与工作区,没查本地分支 | **已关闭**,见 [610 §3.1](../610-architecture-series/README.md) |
 | 2 | Agent Server 真实路由数未数清。只确认了 `router.ts` 的顶层 `parts[0]` 谓词,子 handler 内路由未统计。**6 是下限不是总数** | Phase A 开工前补 |
 | 3 | 6 个硬 import handler 各自需要 `app` 做什么未逐项确认(可能只需 `getPath`,可能碰 `getVersion`/`dialog`) | Phase A §2.1 |
 | 4 | 客户端 bearer 单进程共享(`cli-api-server.ts:158`)在多节点下不可沿用 | Phase C §2.2 |
