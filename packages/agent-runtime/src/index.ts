@@ -370,6 +370,15 @@ export type {
   ModelPort,
   ModelRequest,
   ModelStopReason,
+  // Plan 600 S2 step b1 -- the one-shot text port. Exported as a TYPE only,
+  // beside `ModelPort` rather than beside `RunEngineImpl`, because the client
+  // that drives it is the HOST's: `@duya/agent-runtime` may not import
+  // `@duya/ai` (G1), so the implementation lives in `packages/agent` beside
+  // `createLegacyModelPort` and this package only owns the shape.
+  OneShotTextFailure,
+  OneShotTextPort,
+  OneShotTextRequest,
+  OneShotTextResult,
   ResolvedPart,
   RunEngine,
   RunEnginePorts,

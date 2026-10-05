@@ -1345,3 +1345,190 @@ export interface WorkerAdapterSurface {
   /** The legacy codec, shared with the headless path. Adapter-owned. */
   readonly legacyFrameCodec: unknown;
 }
+
+// ============================================================================
+// The one-shot text port -- a model call that is NOT a turn
+// ============================================================================
+
+/**
+ * One model call, one answer, no turn.
+ *
+ * ## What this is for, counted rather than assumed
+ *
+ * Two call sites open a provider stream outside the agentic turn loop, and both
+ * are single-shot, tool-free text generation:
+ *
+ * | Site | What it generates | Opens the stream at |
+ * | --- | --- | --- |
+ * | compaction summarizer | a summary of the transcript, stored | `DuyaAgent.ts:781` |
+ * | side question | a concise answer to a detached question, returned | `DuyaAgent.ts:4483` |
+ *
+ * Neither loops, dispatches, nor feeds a tool result back: the summarizer
+ * accumulates `text` into a string and returns it (`:802-818`), and the side
+ * question concatenates the same events and returns one string (`:4490-4501`).
+ * `TURN_LOOP_SHAPE.modelStream` in the boundary gate is `/\.streamChat\s*\(/`
+ * and these two lines are the only ones it matches in `DuyaAgent.ts` -- so
+ * closing G7/G8 is a re-shape of those lines, not a deletion of a loop, and
+ * this port is the shape they become.
+ *
+ * It is NOT a `RunEnginePorts` member. The engine never calls it: there is no
+ * turn, no attempt, no budget and no drain behind a summarizer, and adding it
+ * to `RunEnginePorts` would put a port in the engine's required set that the
+ * engine has no use for.
+ *
+ * ## Why `ModelPort` cannot serve it
+ *
+ * `ModelRequest` has no `toolChoice` (`:372-391`). The summarizer passes
+ * `toolChoice: 'none'` deliberately: plan 523 P4.1 added it because the
+ * summarizer was emitting tool-call tokens instead of a summary
+ * (`DuyaAgent.ts:791-793`). `tools: []` is close, and it is a DIFFERENT promise:
+ * "no tools are available" still leaves a model free to try, while `'none'` is
+ * "tool calling is forbidden for this request", implemented by omitting the
+ * tools field from the wire payload (`packages/ai/src/types.ts:497-502`).
+ * Fitting the summarizer into a `ModelRequest` would either drop the one field
+ * that does the work, or force `ModelPort` to grow a `toolChoice` the engine has
+ * no way to honour -- a tool turn the engine cannot drain is a phantom turn,
+ * which is the exact failure `agent-process-entry.ts:3196` already shipped once.
+ *
+ * `createLegacyModelPort` cannot serve it either, and not over the tool set: it
+ * hardcodes `sources.llmMessages()` and `sources.declaredTools()`
+ * (`packages/agent/src/process/run-engine-model.ts:371,373`), so it serves ONE
+ * turn's assembly out of a host-owned mutable context. A one-shot call has no
+ * turn -- its messages are an argument, not a snapshot read at request time.
+ *
+ * ## Why there is NO `tools` field
+ *
+ * Its absence is the contract, and it is the one property that could not be
+ * added later without a decision. A `tools` field here would be a promise this
+ * port cannot keep: `toolChoice` is inexpressible in the request (above), and a
+ * `ToolDescriptor[]` handed to a summarizer is the plan-523 bug the flag was
+ * added to prevent. An implementation therefore sends `toolChoice: 'none'`
+ * unconditionally, which is exactly what the summarizer asks for (`:793`) and
+ * strictly stronger than the side question's `tools: []` (`:4485`). The
+ * compile-time half lives in `port-guards.ts`: a `tools` key added to
+ * `OneShotTextRequest` turns `npm run typecheck:runtime` red.
+ *
+ * ## Why ONE returned value, not a stream
+ *
+ * Both call sites want the same thing and it arrives by accumulation: the
+ * summarizer joins its `text` events (`:804-805`, `:818`) and the side question
+ * concatenates them (`:4491-4492`, `:4501`). Neither renders incrementally -- one
+ * result is stored as a single summary string, the other is returned as a single
+ * answer.
+ *
+ * A stream would hand each caller its own aggregation loop, and every copy of
+ * that loop is a place where `done`, `error` and cancellation get handled
+ * differently -- today they already differ, and the summarizer's copy is the
+ * one that loses the error (below). Worse, a stream makes the RESULT optional: a
+ * caller may stop iterating early and never learn whether the answer was
+ * complete, which is the "announced success for work that did not land" shape
+ * this file's header is written against. For a one-shot generation the honest
+ * return is the generation.
+ *
+ * ## Why the outcome is a THREE-way union
+ *
+ * `text` alone is not enough, and the gap is measurable. Today the summarizer
+ * `break`s on an `error` frame and returns whatever it had accumulated
+ * (`DuyaAgent.ts:807-809`), so a provider that failed on the first token
+ * returns `''` -- the same value a model that legitimately answered nothing
+ * returns, and that value goes into storage as a compaction summary. So:
+ *
+ * - `completed` with `text: ''` is a REAL empty answer, and it is a different
+ *   `kind` from every failure, so it is never confused with one.
+ * - `failed` carries the provider's own words. The `error` frame's `data` IS the
+ *   provider message (`packages/ai/src/types.ts:190`), and the side question
+ *   already rethrows exactly that (`:4493-4494`).
+ * - `cancelled` is separate from `failed` because an interrupt and an outage
+ *   call for opposite handling, and the summarizer builds a CHILD of the
+ *   agent's main controller for exactly this reason (`:776-780`). Folding
+ *   cancellation into `failed` would report a user pressing stop as a broken
+ *   provider, which is the same confusion one layer up.
+ *
+ * An error is REPORTED, not thrown: this port answers a question, so an
+ * answerable question gets an answer. A caller that needs a rejection to
+ * propagate (`setSummarizer`'s signature is `Promise<string>`) raises its own
+ * from `failed`, and it can say which of the two it is raising.
+ *
+ * `completed` carries the text UNTRIMMED. Both call sites trim (`:818`, `:4501`)
+ * and the trim is theirs: it is a storage/display decision, and a port that
+ * trimmed would fold "the model emitted only whitespace" into the same `''` as
+ * "the model emitted nothing" -- the one distinction this union exists to keep.
+ *
+ * ## Why the signal is a parameter
+ *
+ * Same reason, and the same correction, as `ModelPort.stream` (`:353-362`): a
+ * port that built its own `AbortController` would abort nobody, because the work
+ * this port exists to make cancellable happens BEFORE the request is opened. The
+ * summarizer's child controller (`:778-780`) is that linkage and it belongs to
+ * the caller, so the signal travels in and reaches the provider un-wrapped.
+ *
+ * ## What this port does NOT decide
+ *
+ * Retries. `ModelPort`'s doc (`:364-366`) places transient retries inside the
+ * engine's attempt, and a one-shot call has no attempt. Whether a failed
+ * summarizer is retried is the compaction manager's call
+ * (`DuyaAgent.ts:763`).
+ */
+export interface OneShotTextPort {
+  /**
+   * Generate one answer.
+   *
+   * `signal` is the CALLER's and is threaded into the provider request rather
+   * than wrapped -- see the section above. The implementation asks
+   * `signal.aborted` on every exit path, which makes the caller's signal the
+   * authority on cancellation rather than the provider's error class: a
+   * provider that ignored the signal and answered anyway is reported as
+   * `cancelled`, because the caller asked to stop and cannot detect that fact
+   * on its own.
+   */
+  complete(request: OneShotTextRequest, signal: AbortSignal): Promise<OneShotTextResult>;
+}
+
+/**
+ * One one-shot generation's request.
+ *
+ * A subset of `ModelRequest` with the tool surface REMOVED rather than emptied,
+ * which is the difference between "no tools this time" and "this port is not
+ * about tools". `systemPrompt` and `messages` are the caller's, verbatim: the
+ * summarizer builds a one-message payload with the transcript and the
+ * instructions inside the USER turn on purpose (`DuyaAgent.ts:764-790`), and
+ * this port must not be the thing that relocates them.
+ *
+ * `maxOutputTokens` and `temperature` are optional for the same reason they are
+ * on `ModelRequest` (`:387-390`): absent means the CLIENT'S default stays, and
+ * a fabricated default here would be a ceiling and a sampling rate that nobody
+ * named. Both existing call sites do pass them (`:797-798`, `:4486-4487`), so
+ * the values they choose survive the crossing -- the default is a contract for
+ * future callers, not a claim about these two.
+ */
+export interface OneShotTextRequest {
+  readonly systemPrompt: string;
+  readonly messages: readonly ModelMessage[];
+  readonly maxOutputTokens?: number;
+  readonly temperature?: number;
+}
+
+/**
+ * What came back, and whether there was anything.
+ *
+ * The `kind` is the whole point: `completed` with an empty `text` and a failure
+ * are different values, so "the model said nothing" cannot be read as "the
+ * provider said nothing useful". See the section above for the two legacy loops
+ * this replaces and the one that loses the error today.
+ */
+export type OneShotTextResult =
+  | { readonly kind: 'completed'; readonly text: string }
+  | { readonly kind: 'failed'; readonly error: OneShotTextFailure }
+  | { readonly kind: 'cancelled' };
+
+/**
+ * A provider failure, as the provider worded it.
+ *
+ * `message` and not a code set: the `error` frame's `code` is optional and
+ * unset on the funnel that produces these events
+ * (`packages/ai/src/api/emit-sse.ts:122`), so a port that promised one would
+ * hand callers a field that is `undefined` on every real failure.
+ */
+export interface OneShotTextFailure {
+  readonly message: string;
+}

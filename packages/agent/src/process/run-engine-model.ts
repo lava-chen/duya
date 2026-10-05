@@ -96,6 +96,9 @@ import type {
   ModelPort,
   ModelRequest,
   ModelStopReason,
+  OneShotTextPort,
+  OneShotTextRequest,
+  OneShotTextResult,
   ToolCallRequest,
 } from '@duya/agent-runtime';
 import type { Message } from '@duya/agent-protocol/transcript';
@@ -502,4 +505,127 @@ export function toProviderMessages(
     content: message.content as Message['content'],
     id: message.id,
   }));
+}
+
+// ============================================================================
+// The one-shot text port's implementation
+// ============================================================================
+
+/**
+ * Build the one-shot text port over a real provider client.
+ *
+ * ## Why a client and not a sources object
+ *
+ * `createLegacyModelPort` takes four sources because it serves a TURN: the
+ * mutable message context, the catalog, the attempt counter. This port serves a
+ * CALL, and the call's messages and system prompt arrive as an argument
+ * (`ports.ts`, `OneShotTextRequest`), so the only thing left to supply is the
+ * client that opens the request. A `sources` wrapper with one member would be a
+ * shape with no decision in it -- and the two call sites need DIFFERENT clients
+ * anyway (`DuyaAgent.ts:781` reads `compactClient ?? llmClient`, `:4483` reads
+ * `llmClient`), which is a per-call choice the caller makes by calling this
+ * factory twice.
+ *
+ * ## The `signal`, threaded rather than wrapped
+ *
+ * Same rule as `createLegacyModelPort` above: the caller's signal reaches the
+ * provider request directly, so an interrupt that lands before the request is
+ * opened is an interrupt the provider can see. See `ports.ts`, "Why the signal
+ * is a parameter", for why that is a correction rather than a style choice.
+ *
+ * ## Why the cancellation decision is `signal.aborted`, and not the error class
+ *
+ * Every exit path asks the CALLER's signal first. Two reasons, and the second
+ * is the one that matters:
+ *
+ *  1. An abort arrives as whatever the provider throws -- `AbortError` from a
+ *     `fetch`, a provider-specific error, or nothing at all -- so classifying on
+ *     the thrown value is a guess about a third party. The signal is a fact.
+ *  2. A provider that IGNORES its signal and streams a full answer anyway must
+ *     still be reported as `cancelled`, because the caller asked to stop and has
+ *     no way to detect that on its own. Keying off the thrown value instead
+ *     would report that run as a success the user cancelled.
+ *
+ * The cost of the rule is stated rather than hidden: a caller who aborts in the
+ * same tick the answer arrives gets `cancelled` and not the text. That is the
+ * safe direction -- the alternative is handing back an answer the caller
+ * already walked away from.
+ */
+export function createOneShotTextPort(client: AIClient): OneShotTextPort {
+  return {
+    async complete(
+      request: OneShotTextRequest,
+      signal: AbortSignal,
+    ): Promise<OneShotTextResult> {
+      let text = '';
+      try {
+        const stream = client.streamChat(toProviderMessages(request.messages), {
+          systemPrompt: request.systemPrompt,
+          // NOT `tools: []`. Plan 523 P4.1 added `toolChoice: 'none'` because
+          // the summarizer was emitting tool-call tokens instead of a summary
+          // (`DuyaAgent.ts:791-793`), and the provider implements it by
+          // omitting the tools field from the wire payload
+          // (`packages/ai/src/types.ts:497-502`). "No tools available" is a
+          // weaker promise than "tools forbidden", and this port is the second
+          // one -- the side question's `tools: []` (`DuyaAgent.ts:4485`) is
+          // covered by it as a consequence.
+          toolChoice: 'none',
+          // Optional for the same reason `ModelRequest`'s are
+          // (`run-engine-model.ts:378-384`): absent means the CLIENT's default
+          // stays. A default invented here would be a ceiling and a sampling
+          // rate no caller named, and it would be a silent one -- the provider
+          // would apply it without anything in the request record showing it.
+          ...(request.maxOutputTokens === undefined ? {} : { maxTokens: request.maxOutputTokens }),
+          ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
+          signal,
+        });
+
+        for await (const event of stream) {
+          // `text` ONLY, and not `text_delta`. The internal event system carries
+          // `text_delta` (`packages/ai/src/types.ts:415`) but the ONE funnel into
+          // the SSE wire vocabulary maps it to `text`
+          // (`packages/ai/src/api/emit-sse.ts:23-27`), so no provider emits a
+          // `text_delta` event. The side question reads both
+          // (`DuyaAgent.ts:4491`) and the second arm is unreachable; reading
+          // only `text` is therefore behaviour-preserving for both call sites,
+          // and adding the other arm would DOUBLE the text the moment a provider
+          // started emitting one.
+          if (event.type === 'text') {
+            text += event.data;
+            continue;
+          }
+          // Terminal, like the legacy loop's `break` on `done` or `error`
+          // (`DuyaAgent.ts:807-809`). Reported rather than accumulated: the
+          // summarizer's copy returns the partial text as a summary, and an
+          // empty partial summary is the same stored value as a real empty
+          // answer.
+          if (event.type === 'error') {
+            return signal.aborted
+              ? { kind: 'cancelled' }
+              : { kind: 'failed', error: { message: event.data } };
+          }
+          if (event.type === 'done') break;
+        }
+      } catch (thrown) {
+        return signal.aborted ? { kind: 'cancelled' } : { kind: 'failed', error: { message: messageOf(thrown) } };
+      }
+
+      return signal.aborted ? { kind: 'cancelled' } : { kind: 'completed', text };
+    },
+  };
+}
+
+/**
+ * A thrown value -> the words a caller can show.
+ *
+ * `unknown`, not `Error`. The stream is an async generator over a provider, so
+ * what lands here is whatever the transport threw: an `Error` for a `fetch`
+ * failure, a string for a provider that rejects with one, an object for a
+ * structured payload. Narrowing to `Error` first would replace a provider's own
+ * message with a placeholder, and the whole point of the `failed` arm is that
+ * the message is the provider's.
+ */
+function messageOf(thrown: unknown): string {
+  if (thrown instanceof Error) return thrown.message;
+  return typeof thrown === 'string' ? thrown : String(thrown);
 }

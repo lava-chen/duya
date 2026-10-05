@@ -31,6 +31,9 @@ import type { RunEvent } from '@duya/agent-protocol';
 import type {
   ApprovalVerdict,
   ModelFrame,
+  OneShotTextPort,
+  OneShotTextRequest,
+  OneShotTextResult,
   RunEngine,
   RunEnginePorts,
   RunEventStorePort,
@@ -434,3 +437,98 @@ export const TURN_SUMMARY_COUNTS_RESULTS: SummaryCountsResults = false;
 type OutcomeCarriesMetadata = 'metadata' extends keyof ToolOutcome ? true : false;
 
 export const RESULT_METADATA_REACHES_THE_HOST: OutcomeCarriesMetadata = true;
+
+// ---------------------------------------------------------------------------
+// The one-shot port: TOOL-FREE, cancellable, and never a silent empty string
+// ---------------------------------------------------------------------------
+
+/**
+ * `OneShotTextRequest` has no tool surface, and adding one turns this file red.
+ *
+ * This is the load-bearing assertion of the whole port. The summarizer passes
+ * `toolChoice: 'none'` today (`DuyaAgent.ts:793`) because plan 523 P4.1 found it
+ * emitting tool-call tokens instead of a summary, and `ModelRequest` cannot
+ * express that flag (`ports.ts:372-391`) -- so a `tools` field here is the only
+ * way a caller could ask for tools, and its absence is what makes "this port
+ * generates text and nothing else" a build-time fact instead of a convention.
+ *
+ * Probed through `keyof` rather than through a value, so a field added to the
+ * interface is what goes red, and the three spellings are listed because the
+ * provider spells it `toolChoice` (`packages/ai/src/types.ts:502`) and a
+ * hand-written `tool_choice` would be the quiet way to smuggle it back.
+ */
+type OneShotToolSurface = Extract<
+  keyof OneShotTextRequest,
+  'tools' | 'toolChoice' | 'tool_choice'
+>;
+
+// @ts-expect-error - a one-shot generation is tool-free; the field is the bug
+const ONE_SHOT_REQUEST_CARRIES_NO_TOOLS: OneShotToolSurface = 'tools';
+
+// @ts-expect-error - nor under the wire spelling
+const ONE_SHOT_REQUEST_CARRIES_NO_TOOL_CHOICE: OneShotToolSurface = 'tool_choice';
+
+/**
+ * The signal is REQUIRED, so an implementor cannot own cancellation.
+ *
+ * Same rule and same reason as `SIGNAL_IS_REQUIRED` above, reached from the
+ * other side: that one proves the engine is HANDED a signal, this one proves an
+ * implementation cannot decide to make its own. A port that built its own
+ * controller would abort nobody, because everything worth cancelling here
+ * happens before the provider request is opened.
+ */
+type OneShotSignalIsSecond = Parameters<OneShotTextPort['complete']>;
+// @ts-expect-error - `complete` takes (request, signal); a one-argument call is not the port
+const ONE_SHOT_TAKES_A_SIGNAL: OneShotSignalIsSecond = [{ systemPrompt: '', messages: [] }];
+
+/**
+ * The outcome union is CLOSED, so a consumer's `switch` stays exhaustive.
+ *
+ * Same polarity as `DRAIN_KIND_SET_IS_CLOSED`, and for the same reason: "there
+ * are three outcomes" is a claim about today, whereas this turns a FOURTH one
+ * into a build error at the consumer.
+ */
+type OneShotResultKindGuard = OneShotTextResult['kind'] extends
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  ? never
+  : 'unexpected-kind';
+// @ts-expect-error - a fourth outcome must break the consumer's switch
+export const ONE_SHOT_OUTCOMES_ARE_CLOSED: OneShotResultKindGuard = 'unexpected-kind';
+
+/**
+ * An empty answer is REPRESENTABLE, and it is not a failure.
+ *
+ * Positive first, for the reason `MINIMAL_PORTS` exists: the negative half of
+ * this section is only meaningful if the value the legacy summarizer silently
+ * produced -- `''` after a provider died on the first token
+ * (`DuyaAgent.ts:807-809,818`) -- can still be produced as a SUCCESS. A port
+ * that could not express `completed` with empty text would push every empty
+ * answer into the error path, which is a different lie in the other direction.
+ */
+export const ONE_SHOT_EMPTY_ANSWER_IS_A_COMPLETION: OneShotTextResult = {
+  kind: 'completed',
+  text: '',
+};
+
+/**
+ * And the port is constructible, so the negative cases above are not passing
+ * because the contract is unimplementable.
+ */
+export const ONE_SHOT_PORT_IS_CONSTRUCTIBLE: OneShotTextPort = {
+  complete: () => Promise.resolve({ kind: 'completed', text: '' }),
+};
+
+/**
+ * The request carries no run identity, because a one-shot call is not a run.
+ *
+ * A `runId` here would be a second, independently-passable copy of an identity
+ * the caller already has, and the one a caller could get wrong -- the same
+ * reason `TOOL_RESULT_RECORD_CARRIES_NO_RUN_ID` gives. There is no ledger to
+ * write to and no `seq` to mint: the summarizer's output is stored by
+ * `CompactionManager` under its own key (`DuyaAgent.ts:821-825`).
+ */
+type OneShotCarriesNoRunIdentity = Extract<keyof OneShotTextRequest, 'runId' | 'runEpoch' | 'seq'>;
+// @ts-expect-error - a one-shot generation is not a run and cannot claim to be one
+const ONE_SHOT_REQUEST_CARRIES_NO_RUN_IDENTITY: OneShotCarriesNoRunIdentity = 'runId';
