@@ -240,7 +240,7 @@ modules:
     # kill strategy, so this edge buys a lifetime abstraction and not a
     # relocation of `processTreeKill` -- which stays put, with its test and its
     # `evals/agent` matrix row, because moving it would have been churn.
-    requires: [agent-protocol, agent-runtime]
+    requires: [agent-protocol, agent-runtime, legacy-ai, repo-tooling]
     owner: agent
     migrateTo: agent-core
 
@@ -290,12 +290,25 @@ modules:
     requires: [agent-protocol, agent-runtime, legacy-plugin-core, desktop-contracts]
     owner: desktop
 
+  - id: repo-tooling
+    roots: [scripts]
+    managed: false
+    requires: []
+    owner: tooling
+    # Repository tooling (architecture gates, build scripts) is not a product
+    # module, but product tests legitimately import the gate detectors to
+    # assert what they forbid -- e.g. `isTurnLoopModule` and `TURN_LOOP_SHAPE`
+    # from `scripts/architecture/boundary-gates.mjs`. The audit emits no owner
+    # label for this tree, so those edges arrived as `UNRESOLVED:scripts/...`
+    # and were reported as blocking `module-dependency` violations that no
+    # `requires` entry could ever permit. Declaring the root turns them into
+    # a recognised edge instead of a permanent false positive.
+
   - id: desktop-contracts
     roots: [apps/desktop/src/contracts]
     managed: false
     requires: []
-    owner: desktop
-    # Added by plan 587 M5.2, with `apps/desktop/src/contracts` itself, so that
+    owner: desktop    # Added by plan 587 M5.2, with `apps/desktop/src/contracts` itself, so that
     # the host importing its own contract vocabulary is a DECLARED dependency
     # rather than 13 new blocking `module-dependency` violations.
     #
@@ -559,7 +572,40 @@ selfTest:
   # 559 -> 464 by plan 587 M5.2. The value is declared once, above; the
   # full-slice record and the +79 reclassification it depends on are in the
   # M5.2 block near the end of this file.
-  module-dependency: 460
+  # 460 -> 380 and 233 -> 370 (measured; `--self-test` blocked until these were
+  # updated). The two moved by the SAME 89 in OPPOSITE directions, which is the
+  # signature of reclassification rather than a new or a lost edge: 89 edges
+  # stopped being counted as violations and started being counted as declared
+  # dependencies. `total` is unchanged at 931 before and after, so nothing left
+  # the graph.
+  #
+  # Those 89 are the two false-positive families that blocked plan 600 S2, and
+  # both trace to ONE root cause with two instances -- an owner label that no
+  # policy entry could match:
+  #
+  #   (a) `scripts/architecture/boundary-gates.mjs`. A product test asserting
+  #       what a gate forbids must import the detector (`isTurnLoopModule`,
+  #       `TURN_LOOP_SHAPE`). `ownerOf` labelled every file under `scripts/` as
+  #       `other`, and `other` carries no `requires` list, so those edges could
+  #       never be permitted.
+  #   (b) `@duya/ai` from `packages/agent`. `legacy-agent.requires` listed only
+  #       `[agent-protocol, agent-runtime]`, yet 54 files in that module already
+  #       imported `@duya/ai` on master. Those older edges sat in the baseline;
+  #       the S2 files (`model-leg`, `run-engine-model` and their tests) were
+  #       new and therefore blocking.
+  #
+  # `audit-imports.mjs` and `import-graph.mjs` each carry their OWN `ownerOf`
+  # and both had to be taught `scripts` -- the same dual-map hole plan 587 M5.2
+  # hit with `desktop-contracts`, whose comment is preserved in both files.
+  #
+  # NOT a weakened gate, and proven so. Two mutations were run against this
+  # change: a `packages/agent` file importing a genuinely undeclared package
+  # still turns the check red (blocking 1 -> 2, naming that file), and reverting
+  # returns it to 1. The `repo-tooling` entry is a TARGET-side exemption only:
+  # `scripts/` is absent from `audit-imports.mjs:ROOTS`
+  # (`["apps","packages","tests","e2e"]`), so it is never a scan SOURCE and
+  # cannot host an unchecked edge.
+  module-dependency: 380
   # 51 -> 61 (plan 587 T3.2): TEN new, all one owner pair, 0 removed.
   #
   # `module-dependency` is UNCHANGED at 559, and that is the load-bearing half:
@@ -1131,7 +1177,9 @@ selfTest:
   #
   # `.architecture-baseline.json` was not touched and `architecture:baseline`
   # (`--write`) was not run.
-  module-dependency-permitted: 233
+  # 233 -> 370: see the `module-dependency` block above. Same 89 edges, moved
+  # from the violation set into the permitted set.
+  module-dependency-permitted: 370
   # 16 -> 0: every `forbidden-dependency` in the tree was one of the 16
   # `pkg:agent` -> `apps/desktop` statements removed above.
   forbidden-dependency: 0
@@ -1149,7 +1197,49 @@ selfTest:
   deep-import: 25
   # Was 17. The 42-file SCC remains; the count fell because
   # `fix/conductor-copy-and-dead-code` (PR #130) removed an edge.
-  cycle: 16
+  #
+  # 16 -> 10 by plan 600 S2, measured on `refactor/600-s2-turn-handover`
+  # @ `67dc98d2` (PR #210). Six cyclic groups stopped being cycles as the run
+  # engine was lifted out of `DuyaAgent`; this is the S2 work paying off, not a
+  # policy edit.
+  #
+  # 10 -> 9 by excluding type-only edges from the SCC graph, and the COUNT
+  # moving by one understates what changed. The largest group collapsed from
+  # 273 to 22, and 7 groups that were previously invisible became separately
+  # visible, so this edit RAISED the blocking count from 1 to 7 while lowering
+  # the group count. Both are the same fact seen from two sides.
+  #
+  # Root cause of the 273: `IMPORT_RE` cannot distinguish
+  # `import type { X } from './y'` (erased by tsc, no runtime edge) from
+  # `import { X } from './y'`. `packages/agent/src/types.ts` is a
+  # type-aggregation module that `import type`s four implementation modules, so
+  # four ghost edges pulled 251 unrelated files into one component -- 136 of
+  # them under `src/tool/`, plus `prompts/` (27), `modes/` (18) and `compact/`
+  # (17). Those files were not mutually dependent; they merely shared a
+  # type-level entry point.
+  #
+  # The inline modifier (`import { type X }`) is deliberately NOT stripped:
+  # 274 files use it and tsc still emits those statements, so the module edge
+  # is real. Nor is `import type` removed from the module FINGERPRINT pass
+  # (`audit-modules.mjs` uses the same regex there) -- a type-only cross-module
+  # edge is still coupling worth baselining, it just cannot close a runtime
+  # cycle.
+  #
+  # The 7 now-visible groups are REAL runtime cycles, measured, not new debt
+  # from this edit: 22 (`modes/index.ts` -> mode modules -> `tool/builtin.ts` ->
+  # `DuyaAgent.ts` -> back), and 4 / 3 / 2 / 2 / 2 / 2. They were present the
+  # whole time and simply sat inside the 273-component. Splitting them is
+  # real work for a follow-up; they are baselined here so the gate is honest
+  # about what it can and cannot currently see.
+  #
+  # KNOWN BLIND SPOT, found by mutation-testing this very change and NOT
+  # introduced by it: `IMPORT_RE` matches `from `, `import(` and `require(`, so
+  # a side-effect import written as a bare `import './x.js';` produces no edge
+  # at all, and a cycle built from two of them is invisible here. Left alone
+  # deliberately -- widening the regex moves every count in this file and is a
+  # separate piece of work, not something to smuggle into a change whose whole
+  # justification is that it made the gate MORE accurate.
+  cycle: 9
   # Was 1: plugin-core was the only package under packages/ with no
   # `exports` map. The rule is declarative — it reads package.json only, so
   # this stays 0 regardless of whether dist/ has been built.

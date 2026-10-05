@@ -192,6 +192,13 @@ export function ownerOf(relPath) {
   const m = relPath.match(/^packages\/([^/]+)\//);
   if (m) return `pkg:${m[1]}`;
   if (relPath.startsWith("evals/")) return "evals";
+  // Repository tooling. Without this the whole tree fell through to "other",
+  // and `architecture-check.mjs` cannot map "other" to a root, so a product
+  // test importing a gate detector (e.g. `isTurnLoopModule` from
+  // `scripts/architecture/boundary-gates.mjs`) became a blocking
+  // `module-dependency` violation that no policy `requires` entry could ever
+  // permit. Same failure mode as the `desktop-contracts` owner added above.
+  if (relPath.startsWith("scripts/")) return "scripts";
   return "other";
 }
 

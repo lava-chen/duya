@@ -127,11 +127,25 @@ describe('a legal unknown extension is kept, and does not cost the run its termi
     expect(seen.map((e) => e.payload.type)).toEqual(['diagnostic']);
   });
 
-  it('lets the run still reach its own terminal afterwards', () => {
+  it('lets the run still reach its own terminal afterwards', async () => {
     const { options, seen } = setup();
     dispatchMessage(native({ type: 'acme.noise' }), options);
     const done = dispatchMessage(native({ type: 'run.completed', status: 'ok' }), options);
     expect(done.admitted).toBe(true);
+
+    // DISPATCHED: the extension was announced with its diagnostic; the terminal
+    // was not. A run's ending is held for the durable barrier, so the stream —
+    // not the ledger — carries the diagnostic alone. An extension that had cost
+    // the run its terminal would leave the same empty stream, which is why the
+    // held slot is read from its own source rather than inferred from `seen`.
+    expect(seen.map((e) => e.payload.type)).toEqual(['diagnostic']);
+    expect(options.emitter.hasHeldTerminal).toBe(true);
+
+    // RELEASED: the barrier committed the very verdict the run declared, so the
+    // held terminal reaches the stream, after the diagnostic that preceded it.
+    const release = await options.emitter.publishCommittedTerminal({ status: 'ok' });
+    expect(release.outcome).toBe('published');
+    expect(options.emitter.hasHeldTerminal).toBe(false);
     expect(seen.map((e) => e.payload.type)).toEqual(['diagnostic', 'run.completed']);
   });
 });

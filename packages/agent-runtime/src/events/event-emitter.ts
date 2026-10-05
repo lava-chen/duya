@@ -44,7 +44,12 @@
  * the diagnostic so the disagreement is visible instead of silent.
  */
 
-import type { LifecycleViolationCode, RunEvent, RunEventEnvelope } from '@duya/agent-protocol';
+import type {
+  LifecycleViolationCode,
+  RunEvent,
+  RunEventEnvelope,
+  RunTerminalState,
+} from '@duya/agent-protocol';
 import { EVENT_REGISTRY, LifecycleViolation, checkRequiredFields, isEventType, verdictForUnknownType } from '@duya/agent-protocol';
 import type { EventType } from '@duya/agent-protocol';
 import type { RunSession } from '../run-session.js';
@@ -64,6 +69,82 @@ const TERMINAL_EVENT_TYPES: ReadonlySet<EventType> = new Set<EventType>(['run.co
 /** True when an event closes the run. */
 export function isTerminalEventType(type: EventType): boolean {
   return TERMINAL_EVENT_TYPES.has(type);
+}
+
+/**
+ * The two events that close a run, as objects rather than as type strings.
+ *
+ * Derived from the same two literals {@link TERMINAL_EVENT_TYPES} names, so
+ * there is still exactly one declaration of the set.
+ */
+type TerminalRunEvent = Extract<RunEvent, { readonly type: 'run.completed' | 'run.failed' }>;
+
+/**
+ * True when the EVENT closes the run, narrowing it to {@link TerminalRunEvent}.
+ *
+ * ## Why this exists next to {@link isTerminalEventType}
+ *
+ * `isTerminalEventType` answers the same question about a `type` STRING, and
+ * TypeScript cannot propagate that answer to the object the string was read
+ * from. A caller that guarded with it therefore still held the full union --
+ * every one of the 37 `RunEvent` members -- so {@link terminalStateOf} was
+ * handed a `run.started` at compile time and had to assert otherwise.
+ *
+ * The assertion is what broke the build: excluding `run.failed` does NOT leave
+ * `run.completed`, it leaves 36 other members, so the project was a widening
+ * dressed as a narrowing. Narrowing at the EVENT is what makes the projection
+ * total, and it costs one boolean call at the one call site.
+ */
+function isTerminalRunEvent(event: RunEvent): event is TerminalRunEvent {
+  return isTerminalEventType(event.type);
+}
+
+/**
+ * A terminal that has been persisted and is waiting for the durable barrier.
+ *
+ * `declared` is the verdict the RUN minted, read back off the event it emitted,
+ * and `committed` is the verdict the barrier later answered. They are kept
+ * separately because the whole point of the hold is that they can disagree.
+ */
+interface HeldTerminal {
+  readonly envelope: RunEventEnvelope;
+  readonly declared: RunTerminalState;
+}
+
+/**
+ * The verdict a terminal EVENT carries, as a `RunTerminalState`.
+ *
+ * Projected off the event rather than taken from a caller, so the comparison in
+ * {@link RunEventEmitter.publishCommittedTerminal} compares the run's own record
+ * against the barrier's answer and never a value passed in beside them.
+ */
+function terminalStateOf(event: TerminalRunEvent): RunTerminalState {
+  if (event.type === 'run.failed') {
+    return { status: 'failed', error: event.error };
+  }
+  // Narrowed to `run.completed`, whose `status` is `RunStatus` — a member of
+  // the `RunTerminalState` status union, so this is a projection and not a
+  // widening.
+  return event.stopReason === undefined
+    ? { status: event.status }
+    : { status: event.status, stopReason: event.stopReason };
+}
+
+/**
+ * Did the barrier agree with the verdict the run announced?
+ *
+ * `status` is the whole comparison, plus the failure CODE on the failed arm.
+ * The message and the details are not compared: a barrier that failed for its
+ * own reasons still reports `persistence_failed`, and a degraded terminal that
+ * merely re-words a failure is the same failure. What must not be tolerated is
+ * a `completed` that became a `failed` — that is the downgrade, and it is the
+ * one case where publishing the held frame would announce an ending the run did
+ * not reach.
+ */
+function terminalAgrees(declared: RunTerminalState, committed: RunTerminalState): boolean {
+  if (declared.status !== committed.status) return false;
+  if (declared.status !== 'failed' || committed.status !== 'failed') return true;
+  return declared.error.code === committed.error.code;
 }
 
 /** What the emitter refuses to do, as a machine-readable code. */
@@ -111,9 +192,32 @@ export interface EmitAcceptance {
   readonly durable: boolean;
   /** True when this event closed the run. */
   readonly terminal: boolean;
+  /**
+   * True when a terminal is PERSISTED but not yet announced.
+   *
+   * Distinct from `terminal` on purpose: `terminal` says what the event is,
+   * `held` says whether anyone has been told. A held terminal is in storage and
+   * on the ledger, and is on the public stream only after
+   * {@link RunEventEmitter.publishCommittedTerminal} releases it.
+   */
+  readonly held: boolean;
 }
 
 export type EmitResult = EmitAcceptance | EmitRejection;
+
+/**
+ * What the durable barrier answered about a held terminal.
+ *
+ * `published` and `discarded` are the two real outcomes and neither is an
+ * error. `none` means the run reached the barrier with nothing held — the
+ * common case for a run whose terminal event was never minted through this
+ * emitter, and reported rather than treated as a failure so a caller can tell
+ * "nothing to release" from "released and dropped".
+ */
+export type TerminalRelease =
+  | { readonly outcome: 'published'; readonly envelope: RunEventEnvelope }
+  | { readonly outcome: 'discarded'; readonly declared: RunTerminalState; readonly committed: RunTerminalState; readonly reason: string }
+  | { readonly outcome: 'none' };
 
 /**
  * The one thing the emitter needs from a stream.
@@ -127,6 +231,20 @@ export type EmitResult = EmitAcceptance | EmitRejection;
  */
 export interface EventPublisher {
   push(envelope: RunEventEnvelope): void;
+  /**
+   * Wait until this publisher can take another envelope.
+   *
+   * OPTIONAL and additive: a publisher with no bound simply omits it, and
+   * {@link RunEventEmitter.publish} awaits the optional call rather than
+   * requiring one. That is deliberate — a bound the emitter cannot observe is
+   * worse than no bound, because the emitter would look like it honours
+   * backpressure while awaiting nothing.
+   *
+   * The real `RunEventStream` does NOT implement this. Until it does, this is
+   * the seam a bounded queue binds to, and the tests bind a gate to prove the
+   * await is real rather than decorative.
+   */
+  whenWritable?(): void | Promise<void>;
 }
 
 /**
@@ -178,6 +296,16 @@ export type InboundResult =
  */
 export class RunEventEmitter {
   readonly #ports: RunEventEmitterPorts;
+  /**
+   * The terminal this run minted and has NOT announced.
+   *
+   * At most one, and that is not an optimisation: the ledger refuses a second
+   * terminal event, so a second held terminal could only be a bug. The slot is
+   * cleared BEFORE anything is pushed in `publishCommittedTerminal`, so a
+   * re-entrant or repeated settle cannot announce a second ending even if the
+   * push itself throws.
+   */
+  #heldTerminal: HeldTerminal | null = null;
 
   constructor(ports: RunEventEmitterPorts) {
     this.#ports = ports;
@@ -185,6 +313,80 @@ export class RunEventEmitter {
 
   get runId(): string {
     return this.#ports.runId;
+  }
+
+  /**
+   * True while a terminal is persisted but unannounced.
+   *
+   * Exposed so a caller (and a test) can ask whether the barrier still owes this
+   * run its ending, without inferring it from the stream — the stream being
+   * empty is also what a run with no terminal at all looks like, and those two
+   * states need different handling.
+   */
+  get hasHeldTerminal(): boolean {
+    return this.#heldTerminal !== null;
+  }
+
+  /**
+   * Emit one event, honouring the publisher's bound first.
+   *
+   * This is the awaitable arm of {@link RunEventEmitter.emit}, and it exists
+   * because every hop from a producer to the queue used to be `void`: nothing
+   * downstream had anywhere to await a promise, so the queue's byte bound was
+   * advisory and a slow reader accumulated durable events without pausing
+   * anyone. Awaiting `whenWritable` here is what turns the bound into a pause.
+   *
+   * The await happens BEFORE the mint, not after: a frame that is minted and
+   * then held back is already on the ledger and already consumed a sequence
+   * number, so waiting afterwards would bound the queue while letting the
+   * durable log grow — the opposite of the property being added.
+   */
+  async publish(event: RunEvent): Promise<EmitResult> {
+    await this.#ports.stream.whenWritable?.();
+    return this.emit(event);
+  }
+
+  /**
+   * Release the held terminal, now that the durable barrier has answered.
+   *
+   * ## The two invariants
+   *
+   * **Exactly once.** The slot is cleared before the push, so a second call —
+   * from a repeated `settle`, a retry, or a re-entrant path — finds nothing held
+   * and returns `none`. Clearing after the push would leave a window in which
+   * the held terminal is both released and still held.
+   *
+   * **The downgrade arm.** When the barrier's committed terminal contradicts
+   * what the run announced, the held terminal is DISCARDED and nothing is
+   * published in its place. Publishing a `run.failed` instead would be a second
+   * decision taken here: the barrier already decided, and the only honest
+   * reading of a run that announced `completed` and then failed to persist is a
+   * run whose ending nobody can vouch for, which the receipt
+   * ({@link RunSession.terminal$}) is where that gets said. The persisted log
+   * still holds the original terminal event, so nothing is erased — it simply is
+   * not announced.
+   *
+   * The push is bounded like every other publication, so releasing a terminal
+   * cannot be the moment the queue's bound is bypassed.
+   */
+  async publishCommittedTerminal(committed: RunTerminalState): Promise<TerminalRelease> {
+    const held = this.#heldTerminal;
+    // BEFORE the await and before the push. See the exactly-once note above.
+    this.#heldTerminal = null;
+    if (held === null) return { outcome: 'none' };
+
+    if (!terminalAgrees(held.declared, committed)) {
+      return {
+        outcome: 'discarded',
+        declared: held.declared,
+        committed,
+        reason: `the run announced "${held.declared.status}" and the barrier committed "${committed.status}"`,
+      };
+    }
+
+    await this.#ports.stream.whenWritable?.();
+    this.#ports.stream.push(held.envelope);
+    return { outcome: 'published', envelope: held.envelope };
   }
 
   /**
@@ -342,6 +544,7 @@ export class RunEventEmitter {
       envelope: minted.envelope,
       durable: false,
       terminal: false,
+      held: false,
     };
   }
 
@@ -350,12 +553,29 @@ export class RunEventEmitter {
     const durability = EVENT_REGISTRY.specOf(event.type)?.durability ?? 'volatile';
     try {
       const envelope = this.#ports.session.observe(event);
+      if (isTerminalRunEvent(event)) {
+        // Persisted and numbered, NOT pushed. A run's ending is the one frame a
+        // consumer acts on — it closes the UI, stops the spinner, writes the
+        // receipt — and announcing it before `settle` has flushed the transcript
+        // and written the terminal row is how a run reports success it never
+        // reached. The hold is here rather than at the call sites so that no
+        // door into a run (emit, acceptInbound, a controller failure) can skip it.
+        this.#heldTerminal = { envelope, declared: terminalStateOf(event) };
+        return {
+          ok: true,
+          envelope,
+          durable: durability === 'durable',
+          terminal: true,
+          held: true,
+        };
+      }
       this.#ports.stream.push(envelope);
       return {
         ok: true,
         envelope,
         durable: durability === 'durable',
-        terminal: isTerminalEventType(event.type),
+        terminal: false,
+        held: false,
       };
     } catch (error) {
       if (!(error instanceof LifecycleViolation)) throw error;

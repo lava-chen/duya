@@ -432,6 +432,16 @@ export class RunSession {
   /**
    * Append one event to the run.
    *
+   * ## A terminal closes whatever is still open, first
+   *
+   * A terminal event writes the run's ENDING and the ledger refuses every write
+   * after one, so a terminal minted while a tool call is still unanswered makes
+   * that call's close illegal -- and an unanswered call in a durable log is a
+   * transcript nobody can trust. `observe` closes the open calls before it mints
+   * the terminal, so the close lands at the seq below it and never after. See
+   * the note at the call site for why the ordering lives here rather than in
+   * `settle`.
+   *
    * @throws {LifecycleViolation} when the event breaks a run invariant. The
    *   throw is deliberate and matches the ledger: a run that has already
    *   violated an invariant is not one whose remaining events can be
@@ -439,6 +449,35 @@ export class RunSession {
    *   caller turns this into `run.failed` rather than swallowing it.
    */
   observe(event: RunEvent): RunEventEnvelope {
+    // A terminal EVENT closes the run, and the ledger refuses every write after
+    // it. So a terminal minted while a tool call is still open makes the run's
+    // own closing of that call impossible -- and the close is not optional. A
+    // dangling call is a fact about the transcript (`RunLedger.danglingToolCalls`
+    // says so in its own header), and a terminal that contradicts it is a
+    // transcript nobody can trust: a host reading `run.completed` ahead of an
+    // unanswered `tool.call_started` cannot tell a run that finished from one
+    // whose tool is still in flight.
+    //
+    // Closing HERE, before the mint, is what makes both true at once. The close
+    // writes at the seq below the terminal, the ledger still has no terminal
+    // while it writes, and the engine's terminal then takes effect at the seq
+    // after it. The run's ending is still the run's own, and the durable log
+    // still ends with every question answered.
+    //
+    // Why here and not in `settle`: `settle` is the LAST writer in a run, and a
+    // terminal published by an executor has already been minted by the time it
+    // is reached. A close that runs there can no longer write, and the throw
+    // that says so escapes `settle` whole -- the barrier never answers, the held
+    // terminal is never released, and the run's ending is never announced. That
+    // is the deadlock this ordering removes, and it is a deadlock because the two
+    // writers disagreed about which of them goes first.
+    //
+    // Guarded by `terminal === null` so the refusal for a SECOND terminal is
+    // still the ledger's own `duplicate_terminal`, raised by the mint below with
+    // no extra events written ahead of it.
+    if (this.#ledger.terminal === null && this.#ledger.isTerminalEvent(event.type)) {
+      this.#closeDanglingTools('the run reached its terminal event before this call reported');
+    }
     const envelope = this.#ledger.emit(event, this.#options.now());
     this.#counters = countEvent(this.#counters, event);
     this.#spend = accumulate(event, this.#spend);
@@ -536,8 +575,14 @@ export class RunSession {
     const wallClockMs = this.#options.clock() - this.#options.startedAt;
     // Before the verdict, not after it: a dangling tool call is a fact about the
     // run's transcript, and a terminal that contradicts it is a transcript
-    // nobody can trust. `observe` throws only if a terminal event already
-    // exists, and this runs before `#synthesizeTerminalEvent` can create one.
+    // nobody can trust.
+    //
+    // This is now the BACKSTOP, not the only close. `observe` already closed
+    // whatever was open when the run's own terminal event was minted, so for a
+    // run that declared an ending there is nothing left here to do -- which is
+    // what lets this line exist at all: a run that produced no terminal event
+    // has no other writer that could answer an open question, and its terminal
+    // is the one `#synthesizeTerminalEvent` creates two lines below.
     this.#closeDanglingTools(intent?.requestedReason ?? 'no stop was requested');
     const decided = resolveRunOutcome(this.#terminalEvents, {
       ...(intent === undefined ? {} : { intent }),
@@ -906,6 +951,16 @@ export class RunSession {
    * `cancelled` would tell every downstream reader — the cost dashboard, the
    * transcript, D7's eventual reconciler — that nothing happened. A kill is not
    * an undo, and this is the place that would otherwise quietly claim it was.
+   *
+   * ## The two callers, and why the second is not redundant
+   *
+   * `observe` calls it ahead of every terminal mint, because the close has to be
+   * the last write the ledger still accepts. `#settleOnce` calls it for every
+   * run, and for a run whose terminal `observe` already minted it finds nothing
+   * to close -- which is exactly the point: a run that produced no terminal
+   * event has no other writer that could answer an open question. The two
+   * callers differ only in the reason they record, which is what the note
+   * below carries into the transcript.
    */
   #closeDanglingTools(reason: string): void {
     const now = this.#options.clock();

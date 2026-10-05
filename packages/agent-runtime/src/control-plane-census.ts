@@ -315,24 +315,28 @@ export const CONTROL_PLANE_CENSUS: readonly CensusRow[] = [
   {
     message: 'assistant.text_block',
     plane: 'event',
-    producer: 'packages/agent-runtime/src/translate/chat-event-translator.ts:translateFrame',
+    producer:
+      'packages/agent-runtime/src/translate/chat-event-translator.ts:translateFrame and ' +
+      'packages/agent-runtime/src/engine/run-engine.ts:RunEngineImpl.#publishBlocks (engine, outbound)',
     handler: 'packages/agent-protocol/src/run-ledger.ts:RunLedger.emit',
     consumer: 'packages/agent-runtime/src/replay/transcript-snapshot.ts:buildTranscriptSnapshot',
     schema: 'packages/agent-protocol/src/events/required.ts:REQUIRED_FIELDS',
     since: '1.0 (schema rev 1)',
     authority: 'protocol',
-    note: 'Durable. The complete block, distinct from the ephemeral `assistant.text_delta`. This is the event a real completed turn actually persists, and it is what the E4.4 ledger carries today.',
+    note: 'Durable. The complete block, distinct from the ephemeral `assistant.text_delta`. This is the event a real completed turn actually persists, and it is what the E4.4 ledger carries today. TWO producers, and they are genuinely different producers: the inbound translator maps one legacy `chat:text` frame at a time at `index: 0` because that is all it ever sees, while the engine indexes the blocks of the message it just assembled and keeps counting across the run\'s turns. The engine side is what makes `assistant.message_finalized`\'s identity checkable, since a consumer keys its block map by `payload.messageId` and the finalized entry has to join the blocks it supersedes.',
   },
   {
     message: 'assistant.thinking_block',
     plane: 'event',
-    producer: 'packages/agent-runtime/src/translate/chat-event-translator.ts:translateFrame',
+    producer:
+      'packages/agent-runtime/src/translate/chat-event-translator.ts:translateFrame and ' +
+      'packages/agent-runtime/src/engine/run-engine.ts:RunEngineImpl.#publishBlocks (engine, outbound)',
     handler: 'packages/agent-protocol/src/run-ledger.ts:RunLedger.emit',
     consumer: 'packages/agent-runtime/src/replay/transcript-snapshot.ts:buildTranscriptSnapshot',
     schema: 'packages/agent-protocol/src/events/required.ts:REQUIRED_FIELDS',
     since: '1.0 (schema rev 1)',
     authority: 'protocol',
-    note: 'Durable. Indexed within its OWN content array, so a message that reasons and then answers carries both without either overwriting the other.',
+    note: 'Durable. Indexed within its OWN content array, so a message that reasons and then answers carries both without either overwriting the other. The engine-side event also carries `encrypted` as a BOOLEAN, because the payload vocabulary has a flag and not the opaque payload (`events/payloads.ts:118`); the payload itself reaches a host through `TurnOutputPort.recordAssistantMessage` in the transcript vocabulary, where it is a string.',
   },
   {
     message: 'assistant.usage',
@@ -354,14 +358,15 @@ export const CONTROL_PLANE_CENSUS: readonly CensusRow[] = [
     // path's (and therefore the CLI's) by the in-process host. Naming only the
     // translator would have been the more flattering half of the truth.
     producer:
-      'packages/agent/src/process/agent-process-entry.ts:handleChatCommand (worker subprocess) and ' +
-      'packages/agent/src/process/headless-run-host.ts:createAgentExecutionChannel (headless + CLI)',
+      'packages/agent/src/process/agent-process-entry.ts:handleChatCommand (worker subprocess), ' +
+      'packages/agent/src/process/headless-run-host.ts:createAgentExecutionChannel (headless + CLI) and ' +
+      'packages/agent-runtime/src/engine/run-engine.ts:RunEngineImpl.#finalizeLastMessage (engine, outbound)',
     handler: 'packages/agent-protocol/src/run-ledger.ts:RunLedger.emit',
     consumer: 'packages/agent-runtime/src/replay/transcript-snapshot.ts:buildTranscriptSnapshot',
     schema: 'packages/agent-protocol/src/events/required.ts:REQUIRED_FIELDS',
     since: '1.0 (schema rev 1)',
     authority: 'protocol',
-    note: 'Durable. Produced on the wire as `chat:message_finalized` (worker-protocol.ts:AgentMessageFinalizedEvent) and translated at the ONE seam every host crosses (`translateFrame`), so Desktop, headless and CLI all emit it. The frame exists because `chat:done` carries neither required field: before it, no host could produce this event without inventing the two facts it exists to record. It is emitted AHEAD of `chat:done` — the message stops changing before the run ends — and `messageId` is the runtime\'s run-scoped `ctx.messageId`, NOT the producer\'s own id, so the finalized message joins the per-block events it supersedes in transcript-snapshot.ts. KNOWN NARROWING, stated rather than hidden: the payload\'s `MessageContent` has four members and the transcript vocabulary has six, so `image` and `provider_block` blocks are preserved verbatim under `providerMeta.untranslatedBlocks` instead of being dropped; and a stop reason the event union cannot state (`max_turns`, `tool_use`, `repeated_tool_calls`) is REFUSED rather than coerced, so those turns carry no finalized event.',
+    note: 'Durable. Produced on the wire as `chat:message_finalized` (worker-protocol.ts:AgentMessageFinalizedEvent) and translated at the ONE seam every host crosses (`translateFrame`), so Desktop, headless and CLI all emit it. The frame exists because `chat:done` carries neither required field: before it, no host could produce this event without inventing the two facts it exists to record. It is emitted AHEAD of `chat:done` — the message stops changing before the run ends — and `messageId` is the runtime\'s run-scoped `ctx.messageId`, NOT the producer\'s own id, so the finalized message joins the per-block events it supersedes in transcript-snapshot.ts. KNOWN NARROWING, stated rather than hidden: the payload\'s `MessageContent` has four members and the transcript vocabulary has six, so `image` and `provider_block` blocks are preserved verbatim under `providerMeta.untranslatedBlocks` instead of being dropped; and a stop reason the event union cannot state (`max_turns`, `tool_use`, `repeated_tool_calls`) is REFUSED rather than coerced, so those turns carry no finalized event. THIRD PRODUCER (plan 600 S2 b3a): the engine emits it OUTBOUND, once per run, for the turn the loop stopped on — a per-turn emission would collide in `buildTranscriptSnapshot`\'s `messageId`-keyed map and drop every turn but the last. Same two rules apply to it, and its `usage` is the single-call snapshot rather than a turn sum, because `usage` is the in-memory anchor every context estimator scans (plan 546). A per-message `modelAttribution` and a durable row `id`/`seq_index` are NOT on this event: the payload has no field for the first, and the latter two belong to the writer that stores the row, so they reach a host through `TurnOutputPort.recordAssistantMessage` instead.',
   },
   {
     message: 'extension.custom',

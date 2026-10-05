@@ -150,6 +150,7 @@ apps/desktop/src/main/services/voice/index.ts TS2783 1
 apps/desktop/src/main/wake/wake-rearm.ts TS2537 2
 apps/desktop/src/main/wake/wake-rearm.ts TS2551 3
 packages/agent/src/agentsmd/nested-loader.ts TS7016 1
+packages/agent/src/process/agent-process-entry.ts TS1343 1
 packages/agent/src/prompts/bot/basicPrompt.ts TS1343 1
 packages/agent/src/prompts/hbs/HbsPromptSystem.ts TS1343 1
 packages/agent/src/session/db.ts TS1343 1

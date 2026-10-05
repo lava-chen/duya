@@ -21,6 +21,7 @@ import { readFile } from 'node:fs/promises';
 import { appendFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { appendMessages, storeParsedDocumentAttachment } from '../session/db.js';
 import { COMPACTION_CHECKPOINT_ID_SUFFIX } from '../message/index.js';
 
@@ -78,7 +79,7 @@ import { loadSkills, getSkillRegistry, getAgentSkillDirectory } from '../skills/
 import { browserTool } from '../tool/builtin.js';
 import { modeModifierRegistry } from '../modes/index.js';
 import { verifyRunManifestBinding, manifestRejectionProtocolCode, type WorkerCapabilitySet } from './run-manifest-verification.js';
-import type { RunManifest } from '@duya/agent-protocol';
+import { type RunManifest } from '@duya/agent-protocol';
 import { getBashTaskRegistry } from '../session/bash-task-registry.js';
 import { hookTaskRegistry } from '../hooks/task-registry.js';
 import { backgroundAgentLifecycle } from '../lifecycle/BackgroundAgentLifecycle.js';
@@ -88,6 +89,23 @@ import { launchSavedWorkflow } from './workflow-runner.js';
 import { runWorkflowRuntimeChild } from './workflow-runtime-child.js';
 import { MemoryArtifactStore } from '../modes/workflow/gui-artifacts.js';
 import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
+// Plan 600 S2: the run execution engine and its port contracts. The engine OWNS
+// the turn loop; this file supplies mechanisms and forwards events, which is the
+// whole of the worker's job under `04-runtime-owns-execution.md` section 2 item 3.
+//
+// It NO LONGER RUNS ONE. The `RunEngineImpl` construction and the
+// `buildEnginePorts` bundle that went with it were removed with the phantom run
+// (see the `chat:start` handler), because a run whose model port yields nothing
+// cannot be completed by wiring it better -- and leaving it live meant every
+// `chat:start` also minted a failed terminal for a run that never spoke.
+// `ModelContentBlock` is still needed for `toEngineContent`; the rest of the
+// engine's types moved out with their last use.
+import type { ModelContentBlock } from '@duya/agent-runtime';
+// Plan 600 S2: the per-run publisher each turn's pipeline is published into, so
+// a `ToolPort` can reach the live turn once the cutover binds one. Nothing
+// publishes into it today -- `DuyaAgent.streamChat` still builds and drains the
+// pipeline itself -- so it is retained as the seam, not as a live mechanism.
+import { TurnPipelinePublisher } from '../tool/turn-pipeline-publisher.js';
 import { applyMCPConfiguration, type MCPApplyResult } from '../mcp/apply.js';
 import { storePendingAnswer, takePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
 import { isCDNImageUrl } from '../utils/urlSafety.js';
@@ -2188,6 +2206,32 @@ function createPermissionHandler(sessId: string): (request: { id: string; toolNa
 }
 
 // ============================================================================
+// The run engine (plan 600 S2)
+// ============================================================================
+
+/**
+ * Narrow a legacy prompt into the engine's `ModelContentBlock` shape.
+ *
+ * A legacy `MessageContent[]` carries blocks this port has no vocabulary for
+ * (images, documents), and `ModelContentBlock` is deliberately closed so a host
+ * cannot smuggle a UI payload through the model boundary. Rather than widen the
+ * runtime's type to fit the legacy one, the text is extracted and anything else
+ * is dropped — stated here because a silent drop is the failure mode, and the
+ * attachment content the model needs is injected by `ContextPort.assemble`,
+ * which is the host's job and where the full block set still lives.
+ */
+function toEngineContent(content: string | MessageContent[]): string | ModelContentBlock[] {
+  if (typeof content === 'string') return content;
+  const blocks: ModelContentBlock[] = [];
+  for (const block of content) {
+    if (block.type === 'text' && typeof (block as { text?: unknown }).text === 'string') {
+      blocks.push({ type: 'text', text: (block as { text: string }).text });
+    }
+  }
+  return blocks;
+}
+
+// ============================================================================
 // Chat Handler
 // ============================================================================
 
@@ -2361,6 +2405,18 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         `catalog=${verdict.catalogRevision.worker}, adopted=${String(verdict.catalogRevision.adopted)})`,
     );
   }
+
+  // Plan 600 S2, step 1: where this run's turns publish their tool pipeline.
+  //
+  // Declared OUTSIDE the try so the `finally` can close it, and PER RUN rather
+  // than at module scope because the worker serves sessions concurrently — a
+  // module-level "current pipeline" would let one session's engine dispatch into
+  // another session's turn. The same instance is handed to `streamChat` (which
+  // publishes each turn's freshly built pipeline) and to the engine's
+  // `queueTool` (which dispatches through whatever turn is live), which is the
+  // whole of the mechanism: a per-turn pipeline, reachable from outside the
+  // generator, never hoisted.
+  const turnPipelines = new TurnPipelinePublisher();
 
   try {
     startChatHeartbeat();
@@ -2928,6 +2984,66 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       current: null,
     };
 
+    // ── Plan 600 S2: where the turn is driven, and why it is still HERE ─────
+    //
+    // This used to construct and run a `RunEngineImpl` on every `chat:start`,
+    // with `openModelStream: () => emptyModelStream()`. That was a PHANTOM run,
+    // and it is gone as of this commit. It was removed rather than completed,
+    // because a run the engine cannot serve is not a neutral placeholder.
+    //
+    // MEASURED consequences of that phantom run, observed rather than reasoned
+    // (see `__tests__/live-turn-single-driver.test.ts`):
+    //
+    //  - It asked the provider ZERO times and dispatched ZERO tools, then ended
+    //    `failed` on `sawFrame === false` (`run-engine.ts:584`) and proposed that
+    //    failure as the run's terminal. `RunSession.settle` is the single writer
+    //    of a real terminal, so the proposal was logged and discarded: a second
+    //    account of a run that had not happened, minted once per `chat:start`.
+    //  - NONE of the decisions the removed comment claimed for it were reachable.
+    //    `buildEnginePorts` attaches no `budget`, no `attempt` and no `subtasks`
+    //    (`run-engine-ports.ts:280`), so `#budgetExhausted` was constantly false,
+    //    the fence was always null, and `#reclaimSubtasks` always returned 0. The
+    //    old claim that "the stop decision, the turn ceiling, the budget verdict
+    //    and the subtask sweep are therefore the engine's" was false in all four
+    //    parts, and is not restated here as if it were true.
+    //
+    // The turn is driven HERE, by `DuyaAgent.streamChat`, and by nothing else.
+    //
+    // Why a PUBLISHED LEG cannot be what the engine's model port reads --
+    // measured before it was made unconstructible, and the reason the port was
+    // deleted rather than kept. The port that pulled one,
+    // `createTurnLegModelPort`, ignored the `ModelRequest` the engine assembles
+    // and streamed the leg instead -- and the leg's `open()` IS
+    // `runTurnStream(params.deps)` (`model-leg.ts:258`), the same call this
+    // generator makes at its own `:2461`. Binding it therefore did not lend the
+    // engine one turn of the running loop; it handed it the WHOLE cycle
+    // (`run-engine.ts:354` is a self-contained `for`: assemble, `#streamModel`
+    // at `:439`, drain at `:449`, decide, repeat) while this generator kept
+    // running that same cycle. Two callers, two provider requests, one set of
+    // per-attempt accumulators -- a transport death under either attempt called
+    // `onRetryReset` -> `executor.discard()` underneath the other. Measured as
+    // `entered === 2`; `__tests__/engine-model-port.test.ts` now measures the
+    // engine's own share as 1 and re-points the two-driver case at the
+    // request-owned port.
+    //
+    // The engine's model port is `createClientModelPort`: it opens the request
+    // the engine assembled and threads the engine's own scoped signal into the
+    // provider call, so cancellation no longer has to be AIMED at a controller
+    // this generator owns. The leg itself is now a publication with no reader --
+    // `DuyaAgent.streamChat` still publishes per turn (`DuyaAgent.ts:2453`) and
+    // nothing consumes it, because no live caller passes `modelLegs`. The
+    // publish site stays only because it sits inside the turn body this comment
+    // says must become port calls; removing it belongs to that rewrite.
+    //
+    // So the model port, the tool drain, `TurnOutputPort` and the `chat:*`
+    // projection all become correct in the SAME change that stops this generator
+    // from driving the turn -- and this generator is what owns the durable
+    // transcript write, the tool-result frames and the `PostToolUseFailure` hook
+    // (the eleven rows `__tests__/engine-drain-carryover.test.ts` enumerates).
+    // They land together or the turn loses them. That change is a REFACTOR of
+    // `DuyaAgent.streamChat` -- its body has to become port calls, because
+    // `packages/agent-runtime` may not import `packages/agent` -- and it is the
+    // whole of the remaining cutover.
     const eventGen = agent.streamChat(messageContent, {
       systemPrompt: effectiveSystemPrompt,
       requestPermission,
@@ -2984,6 +3100,10 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       // persist only the single-call usageBlock (roundResultUsage),
       // losing the per-turn sum and last_call forever.
       cumulativeTokenUsageRef,
+      // Plan 600 S2, step 1: each turn publishes its freshly built pipeline here,
+      // which is what gives the engine's `queueTool` above a handle that is
+      // correct for the live turn and correct again on the next one.
+      turnPipelines,
     });
 
     log('[Agent-Process] streamChat started, agentProfileId:', msg.options?.agentProfileId || '(none)', 'iterating events...');
@@ -3545,6 +3665,11 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // previous session's row -- a grant that follows the process instead of
     // the conversation, which is the exact failure §E forbids.
     permissionScopes.delete(msg.sessionId);
+    // Plan 600 S2, step 1: the run is over, so no turn holds a pipeline. Closed
+    // on BOTH paths — a dispatch that arrives after this now throws rather than
+    // reaching a pipeline whose turn finished long ago. Publishing after a
+    // close is refused too, so a late turn cannot resurrect it.
+    turnPipelines.close();
   }
 }
 
@@ -4226,7 +4351,21 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           log('[Agent-Process] Received chat:interrupt, chatInProgress:', chatInProgress);
 
           if (chatInProgress) {
-            // First press: abort current chat
+            // First press: abort current chat.
+            //
+            // ONE path, and it is the agent's. This used to ask the run engine
+            // first and the agent second, which was two mechanisms for one
+            // symptom: the engine run that `activeEngineRun` pointed at was the
+            // phantom run removed above, so its `stop` could only ever abort a
+            // controller that no provider request was reading. Two callers, one
+            // of which provably cancelled nothing.
+            //
+            // `agent.interrupt()` is what actually stops the in-flight turn: it
+            // fires `this.abortController`, which is the signal `runTurnStream`
+            // hands the client, so the provider request is aborted rather than
+            // merely orphaned. That remains true after the cutover lands, and it
+            // is why this line is the one the cutover's cancellation slice
+            // removes -- not before, and not after a partial handover.
             if (agent && agent.interrupt) {
               agent.interrupt();
             }
@@ -4893,7 +5032,7 @@ async function handleCompactMessage(msg: unknown): Promise<void> {
   }
 }
 
-async function main(): Promise<void> {
+async function main(options: AgentProcessStartOptions = {}): Promise<void> {
   log('Process started, session:', process.env.SESSION_ID);
   log('cwd:', process.cwd());
 
@@ -4925,7 +5064,10 @@ async function main(): Promise<void> {
   });
 
   try {
-    for await (const msg of parseStdin()) {
+    // The injection seam, same shape as runWorkflowRuntimeChild's `commands`:
+    // production takes the `parseStdin()` branch and a test supplies its own
+    // stream, so both drive THIS loop rather than a test-only variant.
+    for await (const msg of options.commands ?? parseStdin()) {
       await handleCommand(msg);
     }
   } catch (err) {
@@ -4993,25 +5135,9 @@ function exitAfterCleanup(code: number): void {
   });
 }
 
-// Handle termination signals
-// Note: On Windows, Node.js child processes do NOT receive SIGTERM/SIGINT
-// from parent.kill(). We rely primarily on 'disconnect' event.
-process.on('SIGTERM', () => {
-  log('[Agent-Process] Received SIGTERM');
-  exitAfterCleanup(0);
-});
-
-process.on('SIGINT', () => {
-  log('[Agent-Process] Received SIGINT');
-  exitAfterCleanup(0);
-});
-
-// Handle disconnect from parent (Electron main process exited)
-// This is the PRIMARY shutdown mechanism on Windows.
-process.on('disconnect', () => {
-  log('[Agent-Process] Parent disconnected, shutting down...');
-  exitAfterCleanup(0);
-});
+// The termination-signal, parent-disconnect and output-stream handlers used to
+// sit here at module scope, which made importing this file install them. They
+// are now in installProcessLifecycleHandlers() below, called by the start path.
 
 // Persist the full error to a file so the crash is diagnosable even though
 // the process pool only retains the first 5 stderr lines. Called from both
@@ -5051,19 +5177,115 @@ const swallowPipeError = (err: unknown): void => {
   writeAgentCrashLog(err, 'output-stream');
   exitAfterCleanup(1);
 };
-process.stdout.on('error', swallowPipeError);
-process.stderr.on('error', swallowPipeError);
 
-// Handle uncaught errors to avoid zombie processes
-process.on('uncaughtException', (err) => {
-  log('[Agent-Process] Uncaught exception:', err);
-  writeAgentCrashLog(err, 'uncaught-exception');
-  exitAfterCleanup(1);
-});
+// ============================================================================
+// Process Startup
+// ============================================================================
 
-process.on('unhandledRejection', (reason) => {
-  log('[Agent-Process] Unhandled rejection:', reason);
-});
+/** Options for the one process start path. */
+export interface AgentProcessStartOptions {
+  /** Injection seam for tests — defaults to the real stdin command stream. */
+  commands?: AsyncIterable<WorkerCommand>;
+}
 
-// Start the main loop
-void main();
+/**
+ * Register the process-level lifecycle handlers: the two termination signals,
+ * the parent-disconnect path, the two output-stream error handlers, and the
+ * two crash reporters.
+ *
+ * These were module-scope statements, so merely IMPORTING this file installed
+ * seven handlers as a side effect — which is what made the live chat path
+ * impossible to test. They are registered here instead, by the start path,
+ * synchronously before main() reaches its first await and in the same order
+ * as before, so a crash during async startup still reaches exitAfterCleanup.
+ */
+function installProcessLifecycleHandlers(): void {
+  // Handle termination signals
+  // Note: On Windows, Node.js child processes do NOT receive SIGTERM/SIGINT
+  // from parent.kill(). We rely primarily on 'disconnect' event.
+  process.on('SIGTERM', () => {
+    log('[Agent-Process] Received SIGTERM');
+    exitAfterCleanup(0);
+  });
+
+  process.on('SIGINT', () => {
+    log('[Agent-Process] Received SIGINT');
+    exitAfterCleanup(0);
+  });
+
+  // Handle disconnect from parent (Electron main process exited)
+  // This is the PRIMARY shutdown mechanism on Windows.
+  process.on('disconnect', () => {
+    log('[Agent-Process] Parent disconnected, shutting down...');
+    exitAfterCleanup(0);
+  });
+
+  process.stdout.on('error', swallowPipeError);
+  process.stderr.on('error', swallowPipeError);
+
+  // Handle uncaught errors to avoid zombie processes
+  process.on('uncaughtException', (err) => {
+    log('[Agent-Process] Uncaught exception:', err);
+    writeAgentCrashLog(err, 'uncaught-exception');
+    exitAfterCleanup(1);
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    log('[Agent-Process] Unhandled rejection:', reason);
+  });
+}
+
+/**
+ * True only when this module IS the program Node was started with.
+ *
+ * Both production launchers put the bundle's own path in argv[1]:
+ * `fork(workerPath, ...)` in apps/desktop/.../server/worker-manager.ts and
+ * `spawn(process.execPath, [agentPath])` in
+ * apps/desktop/.../process-pool/process-manager.ts. Under a test runner
+ * argv[1] is the runner, so the import stays inert.
+ *
+ * This is an identity check, NOT an environment sniff: a packaged run that
+ * happens to carry NODE_ENV=test still self-starts, because nothing here
+ * reads the environment.
+ */
+function isProcessEntryPoint(): boolean {
+  // `import.meta.url` must stay the literal expression below. esbuild's
+  // `import.meta.url` define in scripts/build-agent-bundle.mjs (CJS output,
+  // banner polyfill `pathToFileURL(__filename)`) only matches this exact
+  // syntactic shape; the same constraint is documented on WorkerPool's
+  // resolveDirname().
+  const selfUrl = import.meta.url;
+  const entryArg = process.argv[1];
+  if (typeof selfUrl !== 'string' || selfUrl.length === 0 || !entryArg) {
+    return false;
+  }
+  let selfPath: string;
+  try {
+    selfPath = fileURLToPath(selfUrl);
+  } catch {
+    return false;
+  }
+  const resolvedSelf = path.resolve(selfPath);
+  const resolvedEntry = path.resolve(entryArg);
+  // Windows paths compare case-insensitively: the parent's spelling of the
+  // path is not guaranteed to match the child's.
+  return process.platform === 'win32'
+    ? resolvedSelf.toLowerCase() === resolvedEntry.toLowerCase()
+    : resolvedSelf === resolvedEntry;
+}
+
+/**
+ * The one process start path. Production reaches it through the
+ * isProcessEntryPoint() guard at the bottom of this file; a test calls it
+ * directly. Both run the same code.
+ */
+export async function startAgentProcess(options: AgentProcessStartOptions = {}): Promise<void> {
+  installProcessLifecycleHandlers();
+  await main(options);
+}
+
+// Start the main loop — only when this file is the process entry point, so
+// that importing it (tests, tooling) does not boot the agent.
+if (isProcessEntryPoint()) {
+  void startAgentProcess();
+}

@@ -53,6 +53,7 @@ export type {
   InboundAcceptance,
   InboundResult,
   RunEventEmitterPorts,
+  TerminalRelease,
 } from './events/event-emitter.js';
 
 export { classifyMessageKind, dispatchMessage } from './events/structural-dispatch.js';
@@ -220,6 +221,13 @@ export {
   parseNdjsonLine,
 } from './transport/line-codec.js';
 
+// Plan 600 S2 -- the awaitable hop on the executor-facing sink.
+//
+// Exported together with the type it serves, because a producer that cannot name
+// `awaitMaybe` cannot be expected to await, and a producer that does not await
+// leaves the byte bound exactly as advisory as it was before.
+export { awaitMaybe } from './transport/execution-channel.js';
+
 export type {
   RawFrameIntake,
   RuntimeTransport,
@@ -328,3 +336,113 @@ export type {
   TRANSPORT_ERROR_CATEGORIES_ARE_EXHAUSTIVE,
   TRANSPORT_PORTS_CARRY_NO_RUN_STATE,
 } from './transport/transport-guards.js';
+
+// Plan 600 S2 -- the RunEngine port contract, and the engine that implements it.
+//
+// The ports and the implementation are exported TOGETHER on purpose. Exporting
+// the interface alone would let `headless-run-host.ts` reach for it and believe
+// the loop had moved, which is the exact acceptance-gate failure `04` section 0
+// records: a real controller around an executor that still calls
+// `duyaAgent.streamChat` passes the old gate while the loop never moved. What a
+// consumer needs in order to be honest about execution is BOTH the shape and the
+// thing that drives it.
+export { RunEngineImpl } from './engine/run-engine.js';
+export type { EngineExit, EngineExitReason, EngineRunReport, RunEngineOptions } from './engine/run-engine.js';
+
+// Plan 600 S2 step b4c -- the compaction seam. Exported as VALUES, unlike the
+// one-shot port beside it: the frames are the POINT of this slice, and a
+// type-only export would leave the five `compaction.*` members with a port
+// declaration and still no producer.
+export {
+  completedFrame,
+  failedFrame,
+  progressFrame,
+  runCompactionPass,
+  startedFrame,
+} from './engine/compaction.js';
+export type {
+  CompactionPassInput,
+  CompactionPassResult,
+  CompletedFacts,
+} from './engine/compaction.js';
+
+export type {
+  ApprovalPort,
+  ApprovalRequest,
+  ApprovalScope,
+  ApprovalVerdict,
+  AssembledTurn,
+  AssistantContentBlock,
+  AssistantMessageRecord,
+  AttemptLeasePort,
+  BudgetPort,
+  CheckpointPort,
+  // Plan 600 S2 step b4c -- the compaction port. The only port whose result
+  // REPLACES an input rather than reporting a decision, because a veto cannot
+  // change what the next request is built from; see its doc comment for the
+  // measurement. Type-only, for the same G1 reason as `OneShotTextPort`.
+  CompactionDecision,
+  CompactionDecisionInput,
+  CompactionObservation,
+  CompactionOutcome,
+  CompactionPort,
+  CompactionProgress,
+  CompactionTrigger,
+  ContextPort,
+  ExtensionContext,
+  ExtensionContribution,
+  ExtensionContributor,
+  ExtensionPhase,
+  ExtensionPort,
+  ModelContentBlock,
+  ModelFrame,
+  ModelMessage,
+  ModelPort,
+  ModelRequest,
+  ModelStopReason,
+  // Plan 600 S2 step b1 -- the one-shot text port. Exported as a TYPE only,
+  // beside `ModelPort` rather than beside `RunEngineImpl`, because the client
+  // that drives it is the HOST's: `@duya/agent-runtime` may not import
+  // `@duya/ai` (G1), so the implementation lives in `packages/agent` beside
+  // `createLegacyModelPort` and this package only owns the shape.
+  OneShotTextFailure,
+  OneShotTextPort,
+  OneShotTextRequest,
+  OneShotTextResult,
+  ResolvedPart,
+  RunEngine,
+  RunEnginePorts,
+  RunEventStorePort,
+  RunExecutionHandle,
+  RunExecutionRequest,
+  RunInputSnapshot,
+  SteeringDirective,
+  SubtaskHandle,
+  SubtaskRegistration,
+  SubtaskRegistry,
+  SubtaskSweepRule,
+  SubtaskTermination,
+  SubtaskTerminationReason,
+  TerminalCandidate,
+  ToolAttemptRecord,
+  ToolCallRequest,
+  ToolDescriptor,
+  ToolDispatchTicket,
+  ToolDiscardReason,
+  ToolDrainItem,
+  ToolOutcome,
+  ToolPort,
+  ToolResultRecord,
+  ToolSideEffectLedger,
+  TransientContextFragment,
+  TransientFragmentKind,
+  DeferredToolContext,
+  PendingTransientContextFragment,
+  ResolvedTransientContextFragment,
+  SubagentProgressItem,
+  TurnAssemblyInput,
+  TurnOutputPort,
+  TurnOutputSummary,
+  WorkerAdapterSurface,
+} from './engine/ports.js';
+export type { AttachmentInput } from './engine/ports.js';

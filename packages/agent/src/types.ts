@@ -5,6 +5,8 @@
 // Import AgentDefinition from loadAgentsDir for unified access
 import type { AgentDefinition } from './tool/SubagentTool/loadAgentsDir.js';
 import type { PermissionMode, LocalToolPermission } from './permissions/types.js';
+import type { TurnPipelinePublisher } from './tool/turn-pipeline-publisher.js';
+import type { ModelLegPublisher } from './agent/model-leg.js';
 
 // Re-export shared types from @duya/ai (spec §6.1).
 //
@@ -527,6 +529,42 @@ export interface ChatOptions {
    * breaking the persisted anchor (which prefers `last_call`).
    */
   cumulativeTokenUsageRef?: { current: TokenUsage | null };
+  /**
+   * Plan 600 S2: where this run publishes each turn's `ToolExecutionPipeline`.
+   *
+   * WORKER-OWNED, not renderer-supplied -- `agent-process-entry.ts` creates one
+   * per `chat:start` and passes the SAME instance to `streamChat` (which
+   * publishes into it) and to the run engine's `queueTool` (which dispatches
+   * through it). That pairing is the whole point: a publisher reached through
+   * `msg.options` could be replaced by the renderer, which would aim a run's
+   * tool calls wherever the caller liked.
+   *
+   * It is per-RUN rather than a module-level "current pipeline" because the
+   * worker serves sessions concurrently. Absent means "this turn publishes
+   * nowhere", which is the pre-plan behaviour: the pipeline stays owned by the
+   * generator and the engine's `queueTool` keeps refusing.
+   *
+   * See `tool/turn-pipeline-publisher.ts` for why publication is per-turn and
+   * why a hoisted pipeline is wrong.
+   */
+  turnPipelines?: TurnPipelinePublisher;
+  /**
+   * Plan 600 S2: where this run publishes each turn's MODEL leg.
+   *
+   * WORKER-OWNED for the same reason as `turnPipelines` above, and handed over
+   * the same way: one publisher per `chat:start`, passed to `streamChat` (which
+   * publishes into it) and to whatever binds the engine's `ModelPort`.
+   *
+   * What a leg carries is the client, the TRANSFORMED per-request messages, the
+   * declared tool surface, the turn number, and `open()` -- which is
+   * `runTurnStream` over that turn's real deps, so the turn-level replay
+   * envelope cannot be left behind. Absent means "this turn publishes nowhere",
+   * which is the pre-plan behaviour: the model leg stays owned by the generator
+   * and the engine's `openModelStream` keeps yielding nothing.
+   *
+   * See `agent/model-leg.ts` for why the four sources alone were not enough.
+   */
+  modelLegs?: ModelLegPublisher;
 }
 
 // 会话信息

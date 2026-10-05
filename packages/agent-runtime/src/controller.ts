@@ -910,6 +910,20 @@ export class RunController implements AgentRuntimeApi {
             : undefined
           : { ...intent, ...(active.cancelRequested ? { cancelRequested: true } : {}) };
       const terminal = await active.session.settle(merged);
+      // The terminal is RELEASED here, and before the stream closes, because
+      // `settle` is where the durable barrier answered: the emitter held the
+      // terminal event rather than announcing it, and this is the first moment
+      // the run's ending is known to be durable. Closing first would drop the
+      // frame — `RunEventStream.push` is a no-op once closed — and a run that
+      // ended without anyone being told is the exact hole the hold exists to
+      // close.
+      //
+      // Every terminal path funnels through this one method, so this is the only
+      // place a release has to happen. A run whose terminal event was never
+      // minted through the emitter (an executor that exited silently, where
+      // `RunSession.settle` synthesises the event itself) has nothing held, and
+      // the release says so rather than inventing a frame.
+      await active.emitter.publishCommittedTerminal(terminal);
       active.stream.close();
       return terminal;
     })();
@@ -1174,9 +1188,16 @@ export class RunController implements AgentRuntimeApi {
       // event was already recorded. Nothing further can be appended.
       return { legacy: null, envelope: null, forwardOnly: false, internal: false, violation: code };
     }
-    active.stream.push(envelope);
-    void this.settle(active.session.runId).catch(() => undefined);
+    // NO `stream.push` here. `emitter.emit` already published this envelope,
+    // and pushing it a second time handed every observer the same terminal
+    // twice — `RunEventStream` has no seq dedupe, so both copies reached the
+    // wire. It mattered more once the terminal became HELD: the emitter
+    // deliberately does not announce a terminal, so this line would have been
+    // the one path that announced it early, and the hold would not have held.
+    // The frame is still projected to the legacy view below, which is a
+    // projection and not a publication.
     const legacy = projectToLegacyFrame(envelope);
+    void this.settle(active.session.runId).catch(() => undefined);
     return { legacy, envelope, forwardOnly: false, internal: false, violation: code };
   }
 
