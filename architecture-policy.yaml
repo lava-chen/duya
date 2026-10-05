@@ -1201,19 +1201,45 @@ selfTest:
   # 16 -> 10 by plan 600 S2, measured on `refactor/600-s2-turn-handover`
   # @ `67dc98d2` (PR #210). Six cyclic groups stopped being cycles as the run
   # engine was lifted out of `DuyaAgent`; this is the S2 work paying off, not a
-  # policy edit. See `audit-modules.mjs` for the per-group members.
+  # policy edit.
   #
-  # CAVEAT, and it is the reason `cycle` remains the ONE blocking finding on
-  # this tree: the largest group grew from 42 to 273. Fewer groups, one of them
-  # much bigger, is not the same as less debt. The 273-group's members are
-  # dominated by `packages/agent/src/tool/*` reaching each other through
-  # `session/room-db.ts`; none of the S2 files (`run-engine-*`, `model-*`,
-  # `turn-output-*`) are in it, so it is pre-existing tool-directory debt that S2
-  # exposed rather than created. `audit-modules.mjs` prints only 3 of the groups
-  # and truncates members at 21 with `... (N more)`, so the full member list is
-  # NOT yet recoverable from the tooling -- that has to be fixed before the group
-  # can be split deliberately.
-  cycle: 10
+  # 10 -> 9 by excluding type-only edges from the SCC graph, and the COUNT
+  # moving by one understates what changed. The largest group collapsed from
+  # 273 to 22, and 7 groups that were previously invisible became separately
+  # visible, so this edit RAISED the blocking count from 1 to 7 while lowering
+  # the group count. Both are the same fact seen from two sides.
+  #
+  # Root cause of the 273: `IMPORT_RE` cannot distinguish
+  # `import type { X } from './y'` (erased by tsc, no runtime edge) from
+  # `import { X } from './y'`. `packages/agent/src/types.ts` is a
+  # type-aggregation module that `import type`s four implementation modules, so
+  # four ghost edges pulled 251 unrelated files into one component -- 136 of
+  # them under `src/tool/`, plus `prompts/` (27), `modes/` (18) and `compact/`
+  # (17). Those files were not mutually dependent; they merely shared a
+  # type-level entry point.
+  #
+  # The inline modifier (`import { type X }`) is deliberately NOT stripped:
+  # 274 files use it and tsc still emits those statements, so the module edge
+  # is real. Nor is `import type` removed from the module FINGERPRINT pass
+  # (`audit-modules.mjs` uses the same regex there) -- a type-only cross-module
+  # edge is still coupling worth baselining, it just cannot close a runtime
+  # cycle.
+  #
+  # The 7 now-visible groups are REAL runtime cycles, measured, not new debt
+  # from this edit: 22 (`modes/index.ts` -> mode modules -> `tool/builtin.ts` ->
+  # `DuyaAgent.ts` -> back), and 4 / 3 / 2 / 2 / 2 / 2. They were present the
+  # whole time and simply sat inside the 273-component. Splitting them is
+  # real work for a follow-up; they are baselined here so the gate is honest
+  # about what it can and cannot currently see.
+  #
+  # KNOWN BLIND SPOT, found by mutation-testing this very change and NOT
+  # introduced by it: `IMPORT_RE` matches `from `, `import(` and `require(`, so
+  # a side-effect import written as a bare `import './x.js';` produces no edge
+  # at all, and a cycle built from two of them is invisible here. Left alone
+  # deliberately -- widening the regex moves every count in this file and is a
+  # separate piece of work, not something to smuggle into a change whose whole
+  # justification is that it made the gate MORE accurate.
+  cycle: 9
   # Was 1: plugin-core was the only package under packages/ with no
   # `exports` map. The rule is declarative — it reads package.json only, so
   # this stays 0 regardless of whether dist/ has been built.

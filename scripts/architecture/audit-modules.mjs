@@ -70,6 +70,20 @@ function resolveFile(base) {
 // shared test copy — see strip-comments.mjs and strip-comments.test.ts.
 const IMPORT_RE = /(?:from\s+|import\s*\(|require\s*\()\s*["']([^"'\r\n]+)["']/g;
 
+// A whole-statement `import type { X } from './y'` is erased by tsc, so it is
+// not a runtime edge and cannot close a cycle. The module graph below is
+// therefore built from a copy with those statements removed.
+//
+// Why this matters here rather than being a cosmetic distinction: `IMPORT_RE`
+// cannot tell the two forms apart, and `packages/agent/src/types.ts` -- a
+// type-aggregation module -- `import type`s four implementation modules back
+// into the graph. Those four ghost edges fused 251 unrelated files into one
+// 273-member component, so the rule reported one enormous cycle where the
+// runtime coupling was 22. The `type` INLINE modifier (`import { type X }`)
+// is deliberately NOT stripped: tsc still emits that statement, so the module
+// edge is real.
+const TYPE_ONLY_STMT_RE = /^[ \t]*import\s+type\s[^\n]*$/gm;
+
 // ── 1. intra-package module graph over packages/ ──────────────────────
 const pkgFiles = walk(path.join(ROOT, "packages"));
 const graph = new Map();
@@ -77,9 +91,10 @@ for (const f of pkgFiles) {
   // Comments are prose, not code — see strip-comments.mjs. A cycle counted
   // from a commented-out import is a cycle that does not exist.
   const { text } = stripComments(fs.readFileSync(f, "utf8"));
+  const runtimeText = text.replace(TYPE_ONLY_STMT_RE, "");
   const deps = [];
   let m; IMPORT_RE.lastIndex = 0;
-  while ((m = IMPORT_RE.exec(text))) {
+  while ((m = IMPORT_RE.exec(runtimeText))) {
     const spec = m[1];
     if (!spec.startsWith(".")) continue;
     const t = resolveFile(path.resolve(path.dirname(f), spec));

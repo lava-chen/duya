@@ -4,7 +4,7 @@
   "note": "Frozen legacy boundary debt. Only violations listed here are tolerated; anything new blocks. Delete entries as their migration lands — never add an entry to silence a new violation.",
   "meta": {
     "counts": {
-      "cycle": 10,
+      "cycle": 9,
       "deep-import": 25,
       "module-dependency": 380,
       "module-dependency-permitted": 370,
@@ -12,15 +12,15 @@
     }
   },
   "violations": [
+    "059f2a67496fb1c0",
     "271a422e8508d5ba",
+    "33b38b25ab12ab30",
     "73108a713caaceec",
-    "826cb0aa9bc9f69f",
-    "8850c4b611194298",
-    "91eda34d649e9863",
-    "ab81b4427ffdaaba",
-    "b7c3a2389c686323",
-    "d0eb57a57c8f720c",
-    "f98bfd707611a393",
+    "801a181274d5d8d1",
+    "960828429ae4cc1e",
+    "963aa6e77e7846cf",
+    "a38d6e0288d88505",
+    "ab25516d0ce41748",
     "0e944c33a2c5f0c6",
     "1e2f8b5a911b6120",
     "2783d13c797df66a",
