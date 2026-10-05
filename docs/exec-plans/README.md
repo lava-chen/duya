@@ -54,11 +54,34 @@ Rules:
 
 ## Verified baseline (2026-10-03 · `master @ 1e6d0b0e`)
 
-**Read this before picking up any plan.** Every number here was measured, not
-copied from a plan file. `npm test` was measured **twice, on two platforms** —
-they do not agree, and the CI number is the one that matters.
+> ⚠️ **本节整体已过期(scope-bound),不要拿它当今天的基线(2026-10-06 标注)。**
+> 它标的是 `1e6d0b0e`,此后至少并入了 PR #219(A1,`205a4cd4`)与 PR #222(A2,`a046cdf6`)。
+> **下表保留原文是为了留下当时的判断,不是现状。**
+>
+> **尤其不要用 `npm test` 的失败文件数当门禁**:两次对同一个 pristine HEAD 的运行给出
+> **17** 与 **19** 个失败文件 —— 它连在**同一棵树**上都不自洽,因此在这里不是可用判据。
+> 需要当前可信事实时,请用下面 §Verified-now 那张表,**每个数字都带 scope**。
 
-### Gates
+### Verified-now (2026-10-06 · `205a4cd4` · 实测,每条带 scope)
+
+| Command | State | Scope |
+| --- | --- | --- |
+| `npm run architecture:check` | `930/930 tolerated, no new boundary violations` | 整仓门禁,`205a4cd4` |
+| `node scripts/architecture/mutation-proof-a1.mjs` | `5/5` | A1 变异证明,`205a4cd4`(含反向) |
+| `npx vitest run scripts/` | `281/284 in scripts (14 files)` | `scripts/` 目录,`205a4cd4`;3 红分布在 2 个文件 |
+
+> `281/284` 那 3 条红的构成:2 条在 `boundary-gates.test.ts`(一条是 `:294` 把行号钉死在
+> **75**、现测 **76** 的漂移;另一条是「live tree 已全基线化」—— **它转绿正是 A3 的成功信号**),
+> 1 条是切片分类。**逐条归属见
+> [610 §5.1](./active/610-architecture-series/README.md#51-每片的唯一-next-action)。**
+
+> ⚠️ **本次没跑 vitest,也没装 `node_modules`。** 上表 `281/284` 一行**未经本次复跑验证**,
+> 保留是因为它已带 scope 且来自同一次勘察;引用前请自行复跑。
+> **`npm run architecture:check` 的「无新增」在无 `node_modules` 的检出上测不出来**
+> (`core-io` 扫描会报 `vite-node not found` 并自造一条未基线化 finding)。
+> **门禁数字离开自己的工具链就没有意义。**
+
+### Gates（历史值,`1e6d0b0e`,已过期）
 
 | Command | State | Note |
 | --- | --- | --- |
@@ -266,8 +289,8 @@ ends with a *different* set of failures, that is on you.
 | [01 分层架构落地](./active/610-architecture-series/01-layered-architecture/README.md) | 600（`S0`–`S7`） | A 线主干。README §4 已冻结为历史契约 |
 | [02 Headless Control Plane](./active/610-architecture-series/02-headless-control-plane/README.md) | 601（`A`/`B`/`C`） | B 线 |
 | [03 SQLite 驱动](./active/610-architecture-series/03-sqlite-driver/README.md) | 602（`Phase 0`–`3`） | C 线，**可选旁支**，已退出关键路径 |
-| [10 切片 A1 契约](./active/610-architecture-series/10-slice-a1-g7-loop-detection.md) | — | 当前唯一 next action |
-| [11 切片 A0 契约](./active/610-architecture-series/11-slice-a0-client-runtime-axis.md) | — | 客户端运行时轴 |
+| [10 切片 A1 契约](./active/610-architecture-series/10-slice-a1-g7-loop-detection.md) | — | **已完成(PR #219)**,未决问题已答 |
+| [11 切片 A0 契约](./active/610-architecture-series/11-slice-a0-client-runtime-axis.md) | — | 客户端运行时轴,**可与 A3 并行** |
 
 **推进顺序、每片的唯一 next action 与完成标志、放弃条件，只在 610 里回答一次。**
 587 的合同与历史推导已被第 01 章接管，不再单独排期。
@@ -340,7 +363,7 @@ Four were wrong and are corrected below; these five were checked and are
 
 | Plan | Priority | Next action |
 | --- | --- | --- |
-| **[610-architecture-series](./active/610-architecture-series/README.md)** | **P0** | **唯一的架构计划。** 600 / 601 / 602 已收为它的三章,不再各自独立。**唯一 next action:A1** —— 修 `isTurnLoopModule`,让 G7 认出真正的 turn loop 而不是把 worker 入口报成违规;A2–A7 的验收都挂在它上面 |
+| **[610-architecture-series](./active/610-architecture-series/README.md)** | **P0** | **唯一的架构计划。** 600 / 601 / 602 已收为它的三章,不再各自独立。**A1 已合并**(PR #219 / `205a4cd4`)、**A2 已落地**(PR #222 / `a046cdf6`)。**当前 next action 是 A3**:迁走 `DuyaAgent.ts` 的 `streamChat` 轮次循环,使 `isTurnLoopModule` 变 false(门禁已如实报出这条真违规,归 A3);A0 可并行 |
 | [587-agent-harness-monorepo](./active/587-agent-harness-monorepo/README.md) | P1 | 合同与历史推导已被 610 第 01 章接管(`01-layered-architecture/10-takeover-from-587.md`)。**不再单独排期**,只作为查证来源 |
 
 > **只有一个架构计划。** 610 的切片表 A0–A7 / B1–B3 / C1 是全部的架构工作,

@@ -4,6 +4,19 @@
 > **纪律:** Moved / Typechecked / Tested / Merged / RuntimeVerified **分别记录,不合并**。
 > 门禁必须附**变异证明**记录(见 [README §5](README.md#5-门禁每条边界都要能变红))。
 
+> ⚠️ **本文件里的 `file:line` 引用是「当轮冻结值」,不要当成当前行号读(2026-10-06 标注)。**
+> 这是历史执行日志:每一轮记录的是**那一轮**的行号,代码此后一直在动。
+> **本轮刻意没有逐条改写它们** —— 把历史日志的行号改成今天的,等于伪造历史。
+> 当前行号以 [610 §1.2](../README.md#12-当前已核实的事实2026-10-06在-205a4cd4-上现测) 为准,
+> 已知漂移的样例:
+>
+> | 本日志中的旧引用 | `205a4cd4` 现值 | 怎么测的 |
+> | --- | --- | --- |
+> | `DuyaAgent.ts` = **5011 行** | **5295 行 / 255371 字节** | `Get-Content .Count` + `Get-Item .Length` |
+> | `ToolExecutionPipeline` 构造在 `:2036` / `:2052` | **`:2067`**(唯一构造),`:76` 是值 import | `Select-String 'ToolExecutionPipeline'` |
+> | `isTurnLoopModule` 在 `boundary-gates.mjs:274` | **`:306`** | `Select-String 'export function isTurnLoopModule'` |
+> | S2 引擎文件「在 `agent-runtime`」 | 在 **`packages/agent/src/process/`** | 目录列举 + `git log --all --diff-filter=A` |
+
 ---
 
 ## 2026-10-04 — 计划建立
