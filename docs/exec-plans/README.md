@@ -265,7 +265,6 @@ ends with a *different* set of failures, that is on you.
 - 历史统计与最新CI分别记录。禁止用暖产物、通过的baseline或CI取消步骤声称clean/全面通过。
 
 ### Headless Control Plane (601) — 2026-10-05
-
 [601-headless-control-plane](./active/601-headless-control-plane/README.md) 把控制平面从
 Electron main 里摘出来,变成独立纯 Node 进程。Electron / CLI / Web / 小程序全部降级为
 它的客户端;agent runtime 可注册到远端电脑。**唯一 next action:写门禁 A1 并证明它现在
@@ -282,9 +281,27 @@ Electron main 里摘出来,变成独立纯 Node 进程。Electron / CLI / Web / 
   601 因此自带全部前提,不以 600 文档为依据。上表的「架构重构唯一入口是 587」一句
   **已过期** —— 但更正它属于 600 文档落地时的动作,不由 601 代劳。
 
+### SQLite 驱动迁移 (602) — 2026-10-05
+
+[602-sqlite-abi](./active/602-sqlite-abi/README.md) 把 `better-sqlite3` 换成 Node 内置的
+`node:sqlite`，删掉 `ensure-sqlite-abi.mjs`(286 行)、14 个 `pre-` 钩子和
+`resources/better-sqlite3/` 整条打包链路。**唯一 next action:写探针脚本
+`scripts/sqlite-compat-probe.mjs`，在本地 node 与 Electron 主进程两个运行时里
+实测 9 项能力边界**（见 [01 §0.2](./active/602-sqlite-abi/01-migration-map.md#02-探针必须覆盖的项)）。
+
+- 成立前提已核实：**Electron 44.2.0 内置 Node v24.20.0**，而 `node:sqlite` 要求 ≥ 22.5。
+  `node:sqlite` 不是原生模块，所以 ABI 问题是被**删除**，不是被绕过。
+- 引用面实测：**177 个文件**、`db.close()` 73 次、`.pragma(` 51 文件、
+  FTS5+trigram 合计 12 文件。
+- **最大的未决项是 `.close()`**：`DatabaseSync` 没有 `close()`，
+  73 处调用会**静默变成 no-op**。Phase 0 必须先给出答案。
+- **唯一不可逆风险**是回滚路径：新驱动写的文件，better-sqlite3 能否打开。
+  探针第 9 项若不通过，本计划停下重新设计。
+- 与 601 / 600 正交，可并行。
+
 ***
 
-## Active Plans (36)
+## Active Plans (37)
 
 > 架构与 Agent Harness 主线已收束为 **587 一项**（接管429、550、583–586及Workspace Phase0）。
 > 其他产品计划保留独立范围；本次未擅自取消。架构执行顺序以587为准，不能从历史编号另排队列。
@@ -340,6 +357,7 @@ Four were wrong and are corrected below; these five were checked and are
 | --- | --- | --- |
 | [587-agent-harness-monorepo](./active/587-agent-harness-monorepo/README.md) | P0 | **唯一架构重构入口：G0.1** 核对当前HEAD、clean build、完整测试失败集合和CI；按主计划阶段表执行，旧429/550/583–586已接管 |
 | [601-headless-control-plane](./active/601-headless-control-plane/README.md) | P0 | **写门禁 A1 并证明它现在红** —— 在 `require('electron')` 会抛的子进程里真加载完整 handler 图；确认红之后才允许改那 6 个 handler |
+| [602-sqlite-abi](./active/602-sqlite-abi/README.md) | P0 | **写探针 `scripts/sqlite-compat-probe.mjs`** — 本地 node 与 Electron 主进程各跑一次，验 9 项能力边界；`close()` 语义与回滚路径两项任一不过就停下 |
 | [08-31-multi-agent-profile-design](./active/2026-08-31-multi-agent-profile-design.md) | P1 | Implement plan 7.2 memory partition by profile (migration + `[memory] partition` toggle) _(section C partially done via 481/477)_ |
 | [popover-autoflip](./active/237-popover-autoflip.md) | P1 | Migrate `HoverPopover` to `usePopoverPlacement`, then `SlashCommandPopover` / `ModelSelector` |
 | [permission-decision-bus](./active/419-permission-decision-bus.md) | P0 | Add `checkPermissions` + `riskTier` to the MCP tool registration path _(P0/P2 done; P1 open)_ |
