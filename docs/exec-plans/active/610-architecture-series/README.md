@@ -161,6 +161,43 @@ npm run architecture:self-test                      # OK
 建议与 A1 并行启动 —— 见 [02 客户端与运行时轴](02-client-runtime-axis.md)。
 B 线在 B1 之后才与 A5 交汇;C 线全程可并行且不阻塞任何人。
 
+### 5.1 每片的唯一 next action
+
+> 上表只有名字与依赖,**这张表才回答"从哪下手"**。
+> 一片只有一个入口动作,做完才有下一句 —— 写成清单会让人同时开工四片,四片都半途。
+
+| 片 | 唯一 next action | 完成标志 |
+| --- | --- | --- |
+| **A1** | 查清 G7 判据变准后新增的 finding 是**真违规**还是 `ports.ts` 已知过读 | 4+1 现有红全绿;`architecture:check` 无新增;**变异证明**(三层 adapter fixture 必须能弄红它) |
+| **A0** | 给 `conductor` 的 `exports` 补 `./renderer` 子路径,并加门禁 **G10** | 浏览器入口 import 闭包 0 个 Node 内建;G10 能被 `security/path-validator` 弄红 |
+| **A2** | 合 PR #214,**合之前先跑一次** `architecture:check` | `module-dependency-permitted` 375 条无新增;`packages/agent-runtime` 632/632 |
+| **A3** | 把 `ToolExecutionPipeline` 移出 `DuyaAgent.ts:2036` 闭包,**先定边界再搬代码** | G7 在 live tree 上转绿,findings 指向迁出后的真实归属 |
+| **A4** | 按 `04-runtime-owns-execution.md` §Step 4 逐场景做,**从"工具报错"起**(最易复现) | 6 场景逐个可复跑;每场景一条测试 |
+| **A5** | 先迁 `data`(纯 I/O、无业务决策),再 `capabilities`,最后 `memory` | 每迁一块:旧依赖归零 + 真实消费者仍绿 |
+| **A6** | 先产出回填/恢复脚本,再改 schema | 三份证据齐备才删旧关系 |
+| **A7** | `packages/agent` 消费者归零检查 | `architecture:check` 的 module-dependency 降到预期值 |
+| **B1** | 写门禁并**证明它现在红**,再改那 6 个 handler | 门禁红→绿;`require('electron')` 会抛的子进程里能加载完整 handler 图 |
+| **B2** | 先把控制平面搬成独立进程,**不改客户端** | Electron main 不再拥有控制平面;CLI 与 main 进程内加载 L3 |
+| **B3** | 远端注册表 + 认证 | — |
+| **C1** | 写探针,两个 runtime 各跑一次 | 9 项能力边界;`close()` 与回滚路径任一不过就停 |
+
+**A0 与 A1 都会改 `scripts/architecture/`** —— 两者并行会冲突。
+**约定:先合 A1,再动 A0 的 G10。** A0 的 `conductor` 子路径部分不碰门禁,可先行。
+
+### 5.2 放弃条件
+
+没有放弃条件的计划序列会无限膨胀。以下任一条成立时,**停下并重新裁决**,不要继续往下做:
+
+| # | 触发条件 | 为什么该停 |
+| --- | --- | --- |
+| 1 | **A3 连做两片仍不能把 G7 弄绿** | 说明"循环"这个目标本身定义错了(可能是 S2 的 `run-engine-model.ts` 已经是循环,那 G7 的判据该改而不是代码该搬) |
+| 2 | **A5 迁完一个包,门禁新增违规 > 3 条** | 迁移方式有问题,不是包有问题。继续迁只会放大 |
+| 3 | **任何一片无法做变异证明** | 该片不算完成(§4 第 2 条)。做不出变异证明的守卫等于没有守卫 |
+| 4 | **A2 合并 #214 后 `architecture:check` 新增 > 5 条** | PR #214 混了 S1a + S3 两件事,需要拆开重做 |
+| 5 | **连续两片的关键路径净变更 < 20 行** | 说明在做重构姿势而不是推进,应该回到"哪条边界还红"这个问题 |
+
+> 第 5 条是刻意的粗糙判据。**它的作用不是精确,而是阻止"看起来一直在忙"的假进度。**
+
 ---
 
 ## 6. 边界
