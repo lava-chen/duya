@@ -255,59 +255,41 @@ ends with a *different* set of failures, that is on you.
 
 `e2e` was **not** run — it needs `npm run electron:build` first.
 
-### Architecture / Harness execution authority
+### 架构计划：**只有一个**，是 [610 架构收口系列](./active/610-architecture-series/README.md)
 
-架构重构只执行 [587 主计划](./active/587-agent-harness-monorepo/README.md)。它接管旧 M/PP/C 排序，给出当前合同、阶段依赖、文件范围、故障验收、回退和完整旧任务映射。
+**2026-10-05 起，600 / 601 / 602 不再是独立计划，而是 610 的三章。**
+它们此前各有编号空间（`S0–S7` / `A–C` / `Phase 0–3`）、各声明一个"唯一 next action"、
+且互不引用对方的顺序约束 —— 那不是三份计划，是**三个互相不知情的真相源**。
 
-- 先可信baseline/gates，再run结果与真实worker控制，再协议/行为基准，之后逐切片迁移。
-- 不要求无关SCC全部归零；每切片必须切断实际跨层valueedge并验证真实consumer。
-- main/preload已纳入 `typecheck:electron` 棘轮（在 `typecheck:all` 内），不是零错误硬门禁；main变更补 `build:electron` 和相关测试，模块/打包变化补 `electron:build`。
-- 历史统计与最新CI分别记录。禁止用暖产物、通过的baseline或CI取消步骤声称clean/全面通过。
+| 章 | 原来是什么 | 现在 |
+| --- | --- | --- |
+| [01 分层架构落地](./active/610-architecture-series/01-layered-architecture/README.md) | 600（`S0`–`S7`） | A 线主干。README §4 已冻结为历史契约 |
+| [02 Headless Control Plane](./active/610-architecture-series/02-headless-control-plane/README.md) | 601（`A`/`B`/`C`） | B 线 |
+| [03 SQLite 驱动](./active/610-architecture-series/03-sqlite-driver/README.md) | 602（`Phase 0`–`3`） | C 线，**可选旁支**，已退出关键路径 |
+| [10 切片 A1 契约](./active/610-architecture-series/10-slice-a1-g7-loop-detection.md) | — | 当前唯一 next action |
+| [11 切片 A0 契约](./active/610-architecture-series/11-slice-a0-client-runtime-axis.md) | — | 客户端运行时轴 |
 
-### Headless Control Plane (601) — 2026-10-05
-[601-headless-control-plane](./active/601-headless-control-plane/README.md) 把控制平面从
-Electron main 里摘出来,变成独立纯 Node 进程。Electron / CLI / Web / 小程序全部降级为
-它的客户端;agent runtime 可注册到远端电脑。**唯一 next action:写门禁 A1 并证明它现在
-是红的**(见 [01 §1](./active/601-headless-control-plane/01-headless-control-plane.md#1-唯一-next-action))。
+**推进顺序、每片的唯一 next action 与完成标志、放弃条件，只在 610 里回答一次。**
+587 的合同与历史推导已被第 01 章接管，不再单独排期。
 
-- **Phase A 不需要等架构重构** —— 它只碰 6 个 CLI handler、`boot-config.ts` 与 Agent Server
-  的启动参数,与 587 的切片无文件重叠。
-- **Phase B / C 需要等** Control Plane 成为真实分层。
-- 601 **推翻**了 600 `README.md:128` 的「`apps/web/` 本系列不建」裁决。
-  该裁决无任何机器强制(`apps/web` 在所有 declared root 之外,
-  `architecture-check.mjs:186-187` 对未分类目标默认放行),推翻它不需要先改门禁。
-- **~~已知缺口:600 的 11 份计划文档不在任何分支上。~~ 已由 610 更正 —— 这句话是错的。**
-  那 11 份文档**一直在 `docs/600-plan-archive` 分支上**(1 commit ahead / 0 behind),
-  并没有丢。当时只查了 `origin/*` 与工作区就下了结论。
-  [610](./active/610-architecture-series/README.md) 已把它们落回 master 的
-  `active/600-layered-architecture/`,600 README §4 冻结为历史契约。
-- 上表「架构重构唯一入口是 587」一句**已过期**:600 的 S0 门禁与 S2 栈均已合并。
-  当前的唯一 next action 由 **610** 声明,不再由 587 声明。
+三条本轮实测的更正（都曾推错方向）：
 
-### SQLite 驱动迁移 (602) — 2026-10-05
-
-[602-sqlite-abi](./active/602-sqlite-abi/README.md) 把 `better-sqlite3` 换成 Node 内置的
-`node:sqlite`，删掉 `ensure-sqlite-abi.mjs`(286 行)、14 个 `pre-` 钩子和
-`resources/better-sqlite3/` 整条打包链路。**唯一 next action:写探针脚本
-`scripts/sqlite-compat-probe.mjs`，在本地 node 与 Electron 主进程两个运行时里
-实测 9 项能力边界**（见 [01 §0.2](./active/602-sqlite-abi/01-migration-map.md#02-探针必须覆盖的项)）。
-
-- 成立前提已核实：**Electron 44.2.0 内置 Node v24.20.0**，而 `node:sqlite` 要求 ≥ 22.5。
-  `node:sqlite` 不是原生模块，所以 ABI 问题是被**删除**，不是被绕过。
-- 引用面实测：**177 个文件**、`db.close()` 73 次、`.pragma(` 51 文件、
-  FTS5+trigram 合计 12 文件。
-- **最大的未决项是 `.close()`**：`DatabaseSync` 没有 `close()`，
-  73 处调用会**静默变成 no-op**。Phase 0 必须先给出答案。
-- **唯一不可逆风险**是回滚路径：新驱动写的文件，better-sqlite3 能否打开。
-  探针第 9 项若不通过，本计划停下重新设计。
-- 与 601 / 600 正交，可并行。
+- **602 的立论前提被推翻。** `better-sqlite3@13.0.3` 依赖 `node-addon-api`，是 **N-API 插件**；
+  同一个 `prebuilds/win32-x64.node` 在 Node 24.16.0（ABI 137）与 Electron 44.2.0（ABI 149）下
+  **都加载成功**。所以 602 的理由从「逃出 ABI 问题」变成「删掉一个原生依赖」，
+  600 的「S6 等 602 Phase 2」约束随之撤销。
+- **~~600 的 11 份计划文档不在任何分支上~~ 这句话是错的。** 它们一直在
+  `docs/600-plan-archive`（1 ahead / 0 behind），并没有丢。当时只查了 `origin/*` 与工作区，
+  把「不在 master 上」读成了「不在任何分支上」，并据此推了三轮计划。
+- **601 推翻了 600「`apps/web/` 本系列不建」的裁决。** 该裁决无机器强制
+  （`apps/web` 在所有 declared root 之外），推翻它不需要先改门禁。
 
 ***
 
 ## Active Plans (37)
 
-> 架构与 Agent Harness 主线已收束为 **587 一项**（接管429、550、583–586及Workspace Phase0）。
-> 其他产品计划保留独立范围；本次未擅自取消。架构执行顺序以587为准，不能从历史编号另排队列。
+> 架构主线已收束为 **610 一项**（原 600/601/602 已收为其三章；587 的合同被其第 01 章接管）。
+> 其他产品计划保留独立范围。**架构执行顺序以 610 为准**，不能从历史编号另排队列。
 
 ### The dependency shape, which the table below does not show
 
@@ -358,10 +340,14 @@ Four were wrong and are corrected below; these five were checked and are
 
 | Plan | Priority | Next action |
 | --- | --- | --- |
-| [610-architecture-series](./active/610-architecture-series/README.md) | **P0** | **唯一 next action:A1 修 `isTurnLoopModule`** —— G7 现在认不出真正的 turn loop、反而把 worker 入口报成违规,先把它修成双向可信,A2–A7 的验收才有判据 |
-| [587-agent-harness-monorepo](./active/587-agent-harness-monorepo/README.md) | P0 | G0.1 核对当前HEAD、clean build、完整测试失败集合和CI；按主计划阶段表执行，旧429/550/583–586已接管。**已不再是架构重构的唯一入口** —— 600 的 S0/S2 已合并,当前顺序见 610 |
-| [601-headless-control-plane](./active/601-headless-control-plane/README.md) | P0 | **写门禁 A1 并证明它现在红** —— 在 `require('electron')` 会抛的子进程里真加载完整 handler 图；确认红之后才允许改那 6 个 handler |
-| [602-sqlite-abi](./active/602-sqlite-abi/README.md) | P0 | **写探针 `scripts/sqlite-compat-probe.mjs`** — 本地 node 与 Electron 主进程各跑一次，验 9 项能力边界；`close()` 语义与回滚路径两项任一不过就停下 |
+| **[610-architecture-series](./active/610-architecture-series/README.md)** | **P0** | **唯一的架构计划。** 600 / 601 / 602 已收为它的三章,不再各自独立。**唯一 next action:A1** —— 修 `isTurnLoopModule`,让 G7 认出真正的 turn loop 而不是把 worker 入口报成违规;A2–A7 的验收都挂在它上面 |
+| [587-agent-harness-monorepo](./active/587-agent-harness-monorepo/README.md) | P1 | 合同与历史推导已被 610 第 01 章接管(`01-layered-architecture/10-takeover-from-587.md`)。**不再单独排期**,只作为查证来源 |
+
+> **只有一个架构计划。** 610 的切片表 A0–A7 / B1–B3 / C1 是全部的架构工作,
+> 每一片的唯一下一动作与完成标志见
+> [610 §5.1](./active/610-architecture-series/README.md#51-每片的唯一-next-action)。
+> 本表此前并排列 600/601/602 三行,三行各自声明一个"唯一 next action"而互不引用对方 ——
+> 那不是三份计划,是**三个互相不知情的真相源**。现已消除。
 | [08-31-multi-agent-profile-design](./active/2026-08-31-multi-agent-profile-design.md) | P1 | Implement plan 7.2 memory partition by profile (migration + `[memory] partition` toggle) _(section C partially done via 481/477)_ |
 | [popover-autoflip](./active/237-popover-autoflip.md) | P1 | Migrate `HoverPopover` to `usePopoverPlacement`, then `SlashCommandPopover` / `ModelSelector` |
 | [permission-decision-bus](./active/419-permission-decision-bus.md) | P0 | Add `checkPermissions` + `riskTier` to the MCP tool registration path _(P0/P2 done; P1 open)_ |

@@ -55,7 +55,7 @@
 - G4 和 G6 **现在就是红的**(`agent-process-entry.ts:75` 的 import;`runs.session_id NOT NULL`)—— 这是本系列要修的真实缺陷,不是门禁配置问题。
 - Session 解耦的 3 个未决问题见 [01 §1.5](01-migration-map.md#15-未决问题实施前必须回答),Phase 3(contract)不可 `git revert`,需单独评审。
 - `memory-rollout/wakeup.ts` 与 CP `wake/` 同名不同 subject,归属裁决见 [06 §4.1](06-six-new-packages.md#41-wakeup-的归属歧义实施前必须裁决)。
-- ~~`apps/web/` 不建,需从目标树划掉或单独立项。~~ **已裁决(2026-10-05):[601](../601-headless-control-plane/README.md) 就是那个"单独立项"。** 见第二十六轮。
+- ~~`apps/web/` 不建,需从目标树划掉或单独立项。~~ **已裁决(2026-10-05):[601](../02-headless-control-plane/README.md) 就是那个"单独立项"。** 见第二十六轮。
 
 ### 门禁实测
 
@@ -2411,7 +2411,7 @@ gate exists to prevent." **这个 suite 拒绝静默 skip,所以它是响亮地�
 
 ### 裁决一:`apps/web/` 不建 —— 已被 601 推翻
 
-[601](../601-headless-control-plane/README.md) `README.md:50-57`:
+[601](../02-headless-control-plane/README.md) `README.md:50-57`:
 
 > 推翻 600 的 `apps/web/` 不建裁决。600 `README.md:128` 写的是"要么从目标树划掉,要么单独立项"。
 > **本系列就是那个"单独立项",该句作废。**

@@ -3,12 +3,39 @@
 > **把 `better-sqlite3` 换成 Node 内置的 `node:sqlite`。**
 > 删掉 `ensure-sqlite-abi.mjs`、14 个 `pre-` 钩子,以及"不能同时跑测试和 Electron"这条禁令。
 
+## ⚠️ 前提更正(2026-10-05,实测)
+
+**本文 §0 的核心论断已被推翻,§1 的对比表也据此失效。动手前请先读这一节。**
+
+§0 写「今天 `better-sqlite3` 是 **V8-ABI 原生模块**」。**不是。** 实测:
+
+| 事实 | 证据 |
+| --- | --- |
+| 13.0.3 依赖 `node-addon-api`,即 **N-API** 插件 | `node_modules/better-sqlite3/package.json` → `dependencies: { "node-addon-api": "^8.0.0" }` |
+| 预编译文件名里**没有 ABI** | `lib/binding.js` 解析 `prebuilds/<platform>-<arch>.node` |
+| loader **先读** `prebuilds/`,才回退 `build/` | `getBinding()` 里 `getPrebuildPath()` 在 `build/Release` 之前 return |
+| 同一个二进制跨 runtime 可用 | Node 24.16.0(`modules` 137)与 Electron 44.2.0(`modules` 149)都成功 `new Database(':memory:')`,加载的是同一个 `prebuilds/win32-x64.node` |
+
+**结论:N-API 本身就是 ABI 稳定的。** §1 表里"napi-rs 仍需按平台发二进制"这一栏是对的,
+但它拿来对比的 `better-sqlite3` **自己现在就是 N-API**,所以那一栏的对照组已经不存在了。
+"Node 与 Electron 需要两份不同的构建、不能同时跑"这条禁令,在当前依赖版本上**已经不成立**。
+
+**这不等于本计划作废,但结论的理由必须换掉。** 迁移到 `node:sqlite` 仍然可能值得做,
+只是理由不再是「逃出 ABI 牢笼」,而是「删掉一个原生依赖 + 删掉整条
+`prebuild-install` / `resources/better-sqlite3/` / ABI marker 缓存链路」。
+**这两个理由的强度差得很远,是否还值得做需要重新裁决 —— 本文件其余部分没有替你做这个裁决。**
+
+> 顺带:§0 那句「ABI 问题不是被绕过,是被删除」在今天读起来像是在说"更彻底的方案",
+> 而实际上当前版本**本来就没有这个问题**。所以别把这句当成紧迫性的论据。
+
+---
+
 ## 0. 决策(2026-10-05)
 
 > **ABI 问题不是被绕过,是被删除。**
 
-今天 `better-sqlite3` 是 **V8-ABI 原生模块**,Node 和 Electron 的
-`process.versions.modules` 一旦不同,那份 `.node` 就加载不了。
+今天 `better-sqlite3` 是 ~~**V8-ABI 原生模块**~~ **N-API 插件（见上文更正）**,
+Node 和 Electron 的 `process.versions.modules` 不同**也照样能加载同一份 `.node`**。
 
 `node:sqlite` **不是原生模块** —— 它编译进 Node 运行时本身。
 **换过去之后,根本不存在"ABI"这个东西。** 没有重编,没有 `prebuild-install`,

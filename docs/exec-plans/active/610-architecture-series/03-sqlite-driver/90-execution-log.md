@@ -52,7 +52,7 @@
 
 ---
 
-## 本轮推翻的两个结论
+## 本轮推翻的四个结论
 
 ### ① 上一轮给的路线 A 建议是错的
 
@@ -141,6 +141,45 @@ Node 文档原文:Node-API "is ABI stable across versions of Node.js",
 
 ---
 
+## 2026-10-05 — 前提更正轮
+
+### ⑤ 计划的核心前提被推翻:`better-sqlite3` 现在**就是** N-API
+
+撰写本计划时断言「今天 `better-sqlite3` 是 V8-ABI 原生模块,Node 与 Electron 需要
+两份不同的构建」。**这条是错的**,而且错在方向上 —— 它把"更彻底的方案"论证在了
+一个**当下并不存在的问题**上。
+
+| 断言 | 实测证据 |
+| --- | --- |
+| 是 N-API 插件,不是 V8-ABI 模块 | `better-sqlite3@13.0.3` 的 `dependencies` 只有 `{ "node-addon-api": "^8.0.0" }` |
+| 预编译文件名不含 ABI | `lib/binding.js` 解析 `prebuilds/${platform}-${arch}.node` |
+| loader 优先用 prebuild | `getBinding()` 中 `getPrebuildPath()` 在 `build/Release` 之前 `return` |
+| 同一份二进制跨 runtime 通用 | Node 24.16.0(`modules` 137)与 Electron 44.2.0(`modules` 149)各自 `new Database(':memory:')` 成功,加载的都是同一个 `prebuilds/win32-x64.node`,SQLite 3.53.4 |
+
+**因此 [README §1](README.md#1-为什么不是换-rust-驱动) 的对比表也失效**:该表用
+"napi-rs 仍需按平台发二进制"来贬低 N-API 路线,但**对照组 `better-sqlite3` 自己
+就是 N-API**,那条贬低不成立。
+
+### 本轮实际动的手(小)
+
+没有动迁移方案本身,只做了两件不依赖裁决的事:
+
+1. **修了一个假绿门禁**(PR #217)。`ensure-sqlite-abi.mjs` 的 marker 缓存按
+   `mtime || 0` 取键,而 `existsSync(p) ? mtimeMs : 0` 让「不存在」与「epoch mtime」
+   无法区分 —— 绑定不可用时写下的 marker 会**永远匹配**,于是每次 `pretest` 都为一个
+   打不开的数据库报 ABI 绿。改成按全部候选绑定的存在性 + mtime + size 取键。
+2. **更正 `AGENTS.md` 的脚注**与 [README §0](README.md#0-决策2026-10-05) 的表述。
+
+### 这个发现对计划的影响(结论留给裁决)
+
+迁移到 `node:sqlite` 的**理由**必须换掉:不再是「逃出 ABI 牢笼」,而是
+「删掉一个原生依赖 + 删掉整条 `prebuild-install` / `resources/better-sqlite3/` /
+ABI marker 缓存链路」。**两个理由的强度差得很远**,所以
+[01 §0.1](01-migration-map.md#01-唯一-next-action)的探针脚本仍值得写,
+但**先做一次收益评估**,不要直接进入 Phase 0。
+
+---
+
 ## 未决
 
 | # | 问题 | 归属 |
@@ -153,10 +192,13 @@ Node 文档原文:Node-API "is ABI stable across versions of Node.js",
 | 6 | `.function()` 能否在 FTS5 触发器/索引表达式中调用 | Phase 0 第 7 项 |
 | 7 | 根 `npx vitest run` 在本仓库不确定,需先测出可信 baseline | Phase 3 |
 | 8 | PR #211(601)未合,602 与其正交 | 不影响 602 |
+| 9 | **ABI 理由失效后,这条迁移还值不值得做?** 需重新裁决,见上方"前提更正轮" | **动手前** |
 
 > **第 1 项与第 5 项是可能推翻整个计划的两项。**
 > 第 1 项有替代方案(评估后可能终止计划);
 > **第 5 项没有替代 —— 它涉及用户数据文件的可读性。**
+>
+> **第 9 项现在排在最前面**:前两项问的是"能不能换",第 9 项问的是"该不该换"。
 
 ---
 
