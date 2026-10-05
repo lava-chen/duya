@@ -400,6 +400,19 @@ describe('the engine owns the model -> tool -> backfill -> next turn loop', () =
     // `model.stream` and everything that turn went on to do, which is only
     // possible from inside the loop. The block for that turn still follows the
     // whole spine, so delta and block are both present and the block is last.
+    //
+    // The b4d `tool.call_completed` entry is here for the same reason, and its
+    // POSITION is the specification rather than a side effect: it sits between
+    // `ledger.settle` and the next `context.assemble`. That is the four-step
+    // order at `#drainOutcomes` -- the durable record of the effect exists
+    // before the effect is visible anywhere. Publishing it before the settle
+    // would put a durable "it worked" ahead of the ledger row that proves it.
+    //
+    // `run.completed` is deliberately ABSENT from this list, and its absence is
+    // asserted in `engine-publication.test.ts`: the engine proposes a terminal
+    // and does not publish one, because publishing it here would make
+    // `RunSession.#closeDanglingTools` write a `tool.call_completed` after the
+    // run's own terminal.
     expect(h.log).toEqual([
       'context.assemble',
       'events.publish:turn.started',
@@ -412,6 +425,7 @@ describe('the engine owns the model -> tool -> backfill -> next turn loop', () =
       'events.publish:assistant.text_block',
       'tools.drain',
       'ledger.settle:key:call-1:succeeded',
+      'events.publish:tool.call_completed',
       'context.assemble',
       'events.publish:turn.started',
       'model.stream:2',

@@ -554,8 +554,17 @@ describe('the engine emits the model answer, in the shape the legacy loop produc
       'terminal',
     ]);
     // The finalized event is the LAST thing published, because it is emitted
-    // ahead of the terminal proposal (`agent-process-entry.ts:3482-3488`).
+    // ahead of the terminal proposal (`agent-process-entry.ts:3482-3488`) and
+    // the engine publishes no terminal of its own.
+    //
+    // That second clause is a b4d measurement rather than a restatement: the
+    // engine proposed publishing `run.completed` here and does not, because
+    // doing so makes `RunSession.#closeDanglingTools` write after the run's own
+    // terminal. Asserted explicitly so the day the engine does publish one, this
+    // test says so instead of the ordering quietly changing underneath it.
     expect(result.events[result.events.length - 1]?.type).toBe('assistant.message_finalized');
+    expect(types(result.events)).not.toContain('run.completed');
+    expect(types(result.events)).not.toContain('run.failed');
   });
 
   it('emits no message for a turn whose stream died before producing a frame', async () => {

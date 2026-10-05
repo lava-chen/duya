@@ -262,7 +262,24 @@ export interface ToolOutcome {
   readonly kind: 'tool_result';
   readonly callId: ToolCallId;
   readonly content: string;
-  readonly isError: boolean;
+  /**
+   * What the producer SAID, tri-state.
+   *
+   * `undefined` is not "false" and must not be collapsed into it. The legacy
+   * wire carries the failure bit in three places and all three are OPTIONAL
+   * (`error?` on the worker's `chat:tool_result`, `is_error?` on `@duya/ai`'s
+   * `ToolResultContent`, and nothing at all on the stored rows), so a widened
+   * port is the only place the absence can still be told from a stated success
+   * BEFORE an adapter rounds it off. `ToolCallOutcome` exists for the same
+   * reason (`payloads.ts:157-166`): an absent bit is indistinguishable from a
+   * successful call, which is why the protocol gives absence its own outcome
+   * rather than a defaulted boolean.
+   *
+   * This does NOT weaken the ledger. `sideEffects.settle` still needs a binary
+   * state, and `#drainOutcomes` resolves the ambiguity there, explicitly, at
+   * the one place that wants a two-valued answer.
+   */
+  readonly isError: boolean | undefined;
   readonly durationMs: number;
   /**
    * The producer's own metadata, carried verbatim.

@@ -82,7 +82,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { RunEngineImpl } from '@duya/agent-runtime';
+import { RunEngineImpl, RunEventEmitter, RunSession } from '@duya/agent-runtime';
 import type {
   ApprovalVerdict,
   AssembledTurn,
@@ -101,7 +101,7 @@ import type {
   TransientContextFragment,
   TurnOutputSummary,
 } from '@duya/agent-runtime';
-import type { RunEvent, RunId } from '@duya/agent-protocol';
+import type { RunEvent, RunEventEnvelope, RunId } from '@duya/agent-protocol';
 import type { AgentProgressEvent, Message } from '@duya/agent-protocol/transcript';
 import { buildEnginePorts, toDrainItem } from '../run-engine-ports.js';
 import type { TurnOutputSources } from '../run-engine-ports.js';
@@ -619,10 +619,18 @@ describe('the six legacy effects, carried to the host by TurnOutputPort', () => 
  *
  * `collector` is the array the test owns, which is what makes the assertion
  * distinguishable from anything the adapter might hold privately.
+ *
+ * `emitted` collects whatever reaches the EMITTER. It is not a `publishEvent`
+ * stand-in that the adapter could satisfy with a bare array push: the point of
+ * the b4d binding change is that a host hands over an emitter, and a recorder
+ * shaped like one is the closest honest thing a test can supply. The tests
+ * below that assert on `emitted` are the ones that make the difference
+ * observable.
  */
 function realPorts(
   collector?: TransientContextFragment[],
   turnOutput?: TurnOutputSources,
+  emitted?: RunEvent[],
 ): RunEnginePorts {
   return buildEnginePorts({
     openModelStream: () => (async function* () {})(),
@@ -639,16 +647,123 @@ function realPorts(
         revision: 'r',
       }),
     askApproval: () => Promise.resolve({ allowed: true, scope: 'once' as const }),
-    publishEvent: () => {},
+    // A REAL `RunEventEmitter`, not a recorder shaped like one and not the
+    // `publishEvent: () => {}` this replaced. The difference is the whole point
+    // of the b4d binding change: a host now hands over the object that mints,
+    // field-checks and HOLDS a terminal, so a direct stream push is not a
+    // binding the adapter can express. A recorder would satisfy the type while
+    // testing none of that.
+    emitter: realEmitter(emitted),
     proposeTerminal: () => {},
     ...(collector === undefined ? {} : { deferFragment: (fragment) => collector.push(fragment) }),
     ...(turnOutput === undefined ? {} : { turnOutput }),
   });
 }
 
+/**
+ * A real emitter over a real session, with persistence that accepts everything.
+ *
+ * `emitted` receives the EVENT payloads, which is what lets a test assert that
+ * a publish reached the run layer at all. The stream records separately,
+ * because the difference between "minted" and "announced" is precisely what the
+ * terminal tests are about.
+ */
+function realEmitter(emitted?: RunEvent[]): RunEventEmitter {
+  const persistence = {
+    append: async () => undefined,
+    complete: async () => undefined,
+  };
+  const session = new RunSession({
+    runId: 'run-real-1',
+    sessionId: 'sess-real-1',
+    now: () => 1_000,
+    startedAt: 0,
+    clock: () => 0,
+    persistence,
+    flushEvery: 1,
+  });
+  return new RunEventEmitter({
+    runId: 'run-real-1',
+    session,
+    stream: {
+      push: (envelope: RunEventEnvelope) => {
+        if (emitted !== undefined) emitted.push(envelope.payload);
+      },
+    },
+  });
+}
+
 // ============================================================================
 // 3. The two LIVE-WIRING gaps, driven through the real exported functions
 // ============================================================================
+
+describe('buildEnginePorts routes every published event through the run s emitter', () => {
+  it('a terminal published through the REAL adapter is HELD, never announced', async () => {
+    // The pin for the b4d binding change, and the property the whole terminal
+    // story rests on.
+    //
+    // `LegacyEngineSources.publishEvent` used to be a bare
+    // `(event) => void`, which a host could satisfy with a direct stream push.
+    // A terminal pushed straight at a stream is announced before the durable
+    // barrier has flushed the transcript and written the terminal row -- a run
+    // reporting success it never reached, which is the defect `8b62fc82` fixed.
+    // The port now requires an EMITTER, and this asserts what that buys: the
+    // run's ending is minted, numbered and held, and the stream is untouched.
+    //
+    // Driven through `buildEnginePorts` rather than a hand-built port object,
+    // because the binding under test is the adapter's.
+    const announced: RunEventEnvelope[] = [];
+    const session = new RunSession({
+      runId: 'run-bind-1',
+      sessionId: 'sess-bind-1',
+      now: () => 1_000,
+      startedAt: 0,
+      clock: () => 0,
+      persistence: { append: async () => undefined, complete: async () => undefined },
+      flushEvery: 1,
+    });
+    const emitter = new RunEventEmitter({
+      runId: 'run-bind-1',
+      session,
+      stream: {
+        push: (envelope: RunEventEnvelope): void => {
+          announced.push(envelope);
+        },
+      },
+    });
+    const ports = buildEnginePorts({
+      openModelStream: () => (async function* () {})(),
+      queueTool: () => {},
+      drainTools: () => (async function* () {})(),
+      discardTools: () => {},
+      lookup: { sideEffectOf: () => null, toolNames: () => [], describe: () => null },
+      assembleTurn: () =>
+        Promise.resolve({
+          systemPrompt: 'p',
+          messages: [],
+          tools: [],
+          catalogRevision: 'c',
+          revision: 'r',
+        }),
+      askApproval: () => Promise.resolve({ allowed: true, scope: 'once' as const }),
+      emitter,
+      proposeTerminal: () => {},
+    });
+
+    ports.events.publish({ type: 'run.completed', status: 'completed' });
+
+    // Not announced. That is the entire claim.
+    expect(announced).toEqual([]);
+    expect(emitter.hasHeldTerminal).toBe(true);
+
+    // And the release is the controller's to make, not the adapter's.
+    const committed = await session.settle();
+    const release = await emitter.publishCommittedTerminal(committed);
+    expect(release.outcome).toBe('published');
+    expect(announced.map((e) => e.payload.type)).toEqual(['run.completed']);
+    expect(announced[0]?.runId).toBe('run-bind-1');
+  });
+});
 
 describe('buildEnginePorts no longer pretends to carry a deferred fragment', () => {
   it('forwards a deferred fragment to the host collector, by identity', () => {

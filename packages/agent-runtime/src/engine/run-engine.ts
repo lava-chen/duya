@@ -104,6 +104,7 @@ import type {
   RunStatus,
   StopReason,
   TokenUsage,
+  ToolCallOutcome,
 } from '@duya/agent-protocol';
 import { isBudgetExhausted, type RunSpend } from '@duya/agent-core';
 import type { StopReceipt, StopRequest } from '../transport/execution-channel.js';
@@ -484,6 +485,32 @@ export class RunEngineImpl implements RunEngine {
       // stream completed has no message, and `#finalizeLastMessage` returns
       // without publishing -- absence, not an empty finalized message.
       this.#finalizeLastMessage(ports, lastMessage);
+      // The engine PROPOSES and does not publish. Publishing `run.completed` /
+      // `run.failed` here is the obvious next step and it is WRONG today, for a
+      // reason this file does not own.
+      //
+      // `RunSession.#settleOnce` runs `#closeDanglingTools` FIRST and says why
+      // (`run-session.ts:537-541`): a tool call that started and never reported
+      // an outcome is a fact about the transcript, so it is closed BEFORE the
+      // verdict. That close calls `observe` DIRECTLY, not through the emitter,
+      // and its stated invariant is "`observe` throws only if a terminal event
+      // already exists". That is true solely because the engine publishes no
+      // terminal: the one that appears is the one
+      // `#synthesizeTerminalEvent` creates, downstream of the close.
+      //
+      // Publish here and a run with an unanswered tool call writes its
+      // synthesised `tool.call_completed` AFTER the run's own terminal, the
+      // ledger refuses it as `event_after_terminal`, and the throw escapes
+      // `settle` -- so `RunController.settle` never reaches
+      // `publishCommittedTerminal`, the held terminal is never released, and
+      // the run's ending is never announced at all. That is a strictly worse
+      // hole than the one publishing it would close.
+      //
+      // Measured, not reasoned: `engine-publication.test.ts` drives both
+      // orderings and this is the assertion that fails. Fixing it means giving
+      // the session the closing of dangling tools ahead of the engine's
+      // terminal, which is a change to `run-session.ts`'s ownership rather than
+      // to this loop.
       ports.events.proposeTerminal(this.#terminalCandidate(exit));
       this.#options.onReport?.({
         runId,
@@ -854,6 +881,22 @@ export class RunEngineImpl implements RunEngine {
     const message = lastMessage.current;
     if (message === null) return;
     if (!message.hasContent) return;
+    // ONCE PER TURN, and AHEAD of the stop-reason branch below, so a turn whose
+    // stop reason the union cannot state still reports what it spent.
+    //
+    // Per FRAME would be the obvious mistake and it is wrong twice over:
+    // `addUsage` is last-wins-never-summed (`run-engine.ts` `addUsage`), so the
+    // value here is the run's final total, and a per-frame publication would
+    // emit every PREFIX of it and then double count the sum on the host that
+    // adds them up. The withholding question is separate and is NOT answered
+    // here: `assistant.usage` is gated on the `usage_accounting` capability
+    // (`registry.ts:203`), `RunExecutionRequest` carries no capability set, and
+    // the emit path consults no gate (`structural-dispatch.ts:262` checks
+    // METHODS, not events). Deciding that is the caller's job, and this engine
+    // cannot make the decision in either direction.
+    if (message.usage !== undefined) {
+      ports.events.publish({ type: 'assistant.usage', usage: message.usage });
+    }
     const stopReason = message.eventStopReason;
     if (stopReason === null) {
       ports.events.publish({
@@ -1028,10 +1071,34 @@ export class RunEngineImpl implements RunEngine {
               const ticket = ctx.tickets.get(item.callId) ?? SYNTHETIC_TICKET;
               await ports.sideEffects.settle({
                 attemptKey: ticket.attemptKey,
-                state: item.isError ? 'failed' : 'succeeded',
+                // The LEDGER's question is binary -- did this attempt fail? -- and
+                // that is why the widened `isError` is resolved HERE, by the one
+                // consumer that needs two values, rather than narrowed in the
+                // adapter. `=== true` rather than truthiness: a call whose
+                // producer said nothing is not evidence of a failure, and the
+                // ledger's `succeeded` is a claim about the EFFECT landing, not
+                // about the tool having reported a status.
+                state: item.isError === true ? 'failed' : 'succeeded',
                 detail: item.content.slice(0, LEDGER_DETAIL_LIMIT),
               });
             }
+            // The result as an EVENT, in the slot the four-step order fixes:
+            // AFTER the ledger settle and BEFORE `context.defer`, so the durable
+            // record of the effect exists before the effect is visible anywhere.
+            //
+            // `durationMs` and `metadata` are the PRODUCER's, carried verbatim
+            // from the same drain item (`ports.ts` `ToolOutcome`) rather than
+            // measured here: the engine did not time the call and must not claim
+            // to. The outcome is projected, never defaulted -- see
+            // `toolOutcomeOf`.
+            ports.events.publish({
+              type: 'tool.call_completed',
+              toolCallId: item.callId,
+              content: item.content,
+              outcome: toolOutcomeOf(item),
+              durationMs: item.durationMs,
+              ...(item.metadata === undefined ? {} : { metadata: item.metadata }),
+            });
             const fragment: TransientContextFragment = {
               kind: 'deferred_tool_context',
               text: item.content,
@@ -1937,6 +2004,59 @@ const SYNTHETIC_TICKET: ToolDispatchTicket = Object.freeze({
 
 /** Ledger details are for diagnosis, not for transporting a tool's whole output. */
 const LEDGER_DETAIL_LIMIT = 512;
+
+/** An error `message` is a summary, not a transcript of the tool's whole output. */
+const TOOL_ERROR_MESSAGE_LIMIT = 512;
+
+/**
+ * The `ToolCallOutcome` a drained result projects to.
+ *
+ * ## Three arms in, three arms out, and the fourth is a non-answer
+ *
+ * `ToolOutcome.isError` is a tri-state, and each of its three values maps to
+ * exactly one arm of the five-arm union in `payloads.ts:157-166`:
+ *
+ *  - `true` -- the producer STATED a failure. `tool_error`, carrying the
+ *    producer's own text as the message. `tool_failed` is a real member of the
+ *    closed `ErrorCode` taxonomy (`errors.ts:61`) and says exactly what was
+ *    stated; inventing a narrower code from the message text would be a guess
+ *    about a tool the engine has never seen.
+ *  - `false` -- the producer stated the call did NOT fail. `success`.
+ *  - `undefined` -- the producer said nothing. `indeterminate`, which the
+ *    protocol calls the ONLY correct way to pass an absence through. This is
+ *    the arm that must never be rounded to `success`.
+ *
+ * ## The two arms that are unreachable, and why that is correct
+ *
+ * `timeout` needs an elapsed bound the producer reported and `cancelled` needs
+ * a reason string. `ToolOutcome` carries neither, and a timeout the ENGINE
+ * imposed is already published as `tool.timed_out` by `#dispatchCall` with the
+ * tool's name and the elapsed time. Emitting `timeout` here from
+ * `durationMs` would be a category derived from a duration rather than from
+ * anything that happened.
+ */
+function toolOutcomeOf(item: ToolOutcome): ToolCallOutcome {
+  if (item.isError === undefined) {
+    return {
+      outcome: 'indeterminate',
+      note: 'the producer completed this call without stating whether it failed',
+    };
+  }
+  if (item.isError === true) {
+    const detail = item.content.trim();
+    return {
+      outcome: 'tool_error',
+      error: {
+        code: 'tool_failed',
+        message:
+          detail === ''
+            ? 'the producer stated this call failed and supplied no text'
+            : detail.slice(0, TOOL_ERROR_MESSAGE_LIMIT),
+      },
+    };
+  }
+  return { outcome: 'success' };
+}
 
 /**
  * One fragment's text, resolved.

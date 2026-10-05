@@ -57,6 +57,7 @@ import type {
   ModelPort,
   ModelRequest,
   RunEnginePorts,
+  RunEventEmitter,
   RunEventStorePort,
   ToolCallRequest,
   ToolDescriptor,
@@ -147,8 +148,30 @@ export interface LegacyEngineSources {
   readonly assembleTurn: (input: TurnAssemblyInput) => Promise<AssembledTurn>;
   /** Asks the user. Resolves; never throws for a refusal. */
   readonly askApproval: (request: ApprovalRequest, signal: AbortSignal) => Promise<ApprovalVerdict>;
-  /** Reports one protocol event to the run's ledger. */
-  readonly publishEvent: (event: Parameters<RunEventStorePort['publish']>[0]) => void;
+  /**
+   * The run's emitter. REQUIRED, and the reason is the terminal hold.
+   *
+   * This used to be `publishEvent: (event) => void` -- a bare caller-supplied
+   * function with no emitter in its type, which meant a host could satisfy it
+   * with a direct stream push. The engine publishes `run.completed` /
+   * `run.failed` at propose time, and a run's ending is the one frame a
+   * consumer acts on: it closes the UI, stops the spinner, writes the receipt.
+   * Announcing it before `RunController.settle` has flushed the transcript and
+   * written the terminal row is how a run reports success it never reached, and
+   * that is the defect `8b62fc82` fixed.
+   *
+   * The hold survives that only because `RunEventEmitter.#mint` keys it on the
+   * EVENT (`event-emitter.ts:556`) rather than on the publisher. So the port
+   * now names the emitter itself: a host that wants its events published must
+   * hand over the object that mints, holds and orders them, and the dangerous
+   * binding is unrepresentable rather than merely discouraged. `emit`'s
+   * `EmitResult` return is part of that contract -- a function that pushes to a
+   * stream cannot satisfy it.
+   *
+   * The engine cannot read the verdict: `RunEventStorePort.publish` is `void`,
+   * so a refusal is the emitter's to report, not the engine's.
+   */
+  readonly emitter: Pick<RunEventEmitter, 'emit'>;
   /** Reports what the engine believes ended the run. A CANDIDATE, never a decision. */
   readonly proposeTerminal: (candidate: Parameters<RunEventStorePort['proposeTerminal']>[0]) => void;
   /** Resolves the side-effect ticket. Omitted when the host runs no ledger. */
@@ -282,7 +305,14 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
   };
 
   const events: RunEventStorePort = {
-    publish: (event) => sources.publishEvent(event),
+    // Through the emitter, always. `RunController` binds its own emissions the
+    // same way (`controller.ts:832,846,1176`) and says why at `:1191`:
+    // "NO `stream.push` here. `emitter.emit` already published this envelope."
+    // That is the precedent this port follows, and it is what makes the
+    // engine's terminal HELD rather than announced -- see `LegacyEngineSources`.
+    publish: (event) => {
+      void sources.emitter.emit(event);
+    },
     proposeTerminal: (candidate) => sources.proposeTerminal(candidate),
   };
 
@@ -492,18 +522,35 @@ function isToolResultMessage(message: Message): boolean {
  */
 function readToolResultPayload(message: Message): {
   content: string;
-  isError: boolean;
+  isError: boolean | undefined;
   callId: string;
 } {
   const content = message.content;
   if (message.role === 'tool') {
     const text = typeof content === 'string' ? content : JSON.stringify(content);
-    return { content: text, isError: text.includes('<tool_error>'), callId: message.tool_call_id ?? '' };
+    // The marker arm is an INFERENCE, so only its POSITIVE result is evidence.
+    // No `<tool_error>` in the text is not a statement that the call succeeded --
+    // it is the absence of a marker in a format that carries no status field --
+    // so it resolves to `undefined` and reaches the protocol's `indeterminate`
+    // arm. `text.includes(...)` used to hand back a bare `false` here, which
+    // read downstream as a producer that said "did not fail".
+    return {
+      content: text,
+      isError: text.includes('<tool_error>') ? true : undefined,
+      callId: message.tool_call_id ?? '',
+    };
   }
   const block = (content as MessageContent[])[0] as ToolResultContent;
+  // Passed through AS IS. `block.is_error ?? false` was the line that destroyed
+  // the distinction the protocol goes to some trouble to keep
+  // (`payloads.ts:157-166`): `is_error` is optional on `ToolResultContent`
+  // (`@duya/agent-protocol/src/transcript/content.ts:120`), so a producer that omitted it
+  // produced `false` -- a success nobody stated. The `@duya/ai` copies at
+  // `types.ts` are re-exports of the protocol's own type now, which is why the
+  // citation moved off that file.
   return {
     content: typeof block.content === 'string' ? block.content : JSON.stringify(block.content),
-    isError: block.is_error ?? false,
+    isError: block.is_error,
     callId: block.tool_use_id,
   };
 }
