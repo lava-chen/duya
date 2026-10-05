@@ -401,16 +401,22 @@ describe('the engine publishes assistant.usage ONCE per turn', () => {
 // ============================================================================
 
 /**
- * These two are the slice's one refusal, and it is measured rather than
- * asserted.
+ * The engine still proposes rather than publishes, and the reason is measured
+ * rather than asserted -- but the reason CHANGED, and the tests below carry the
+ * current one.
  *
- * The specification was to publish the terminal pair eagerly at propose time,
- * from the same candidate the proposal carries. That is implementable and it is
- * wrong, for a reason in a file this slice does not own. The test below drives
- * the real collision rather than describing it, so the next worker to consider
- * this change inherits the failure instead of rediscovering it.
+ * Publishing the terminal pair at propose time used to be unsafe for a reason
+ * in a file this slice does not own: `RunSession.observe` closed dangling tool
+ * calls ahead of the verdict, the close wrote through a ledger that refuses
+ * every write after a terminal, and the throw escaped `settle` -- so the held
+ * terminal was never released and the run's ending was never announced. That
+ * deadlock is gone: `observe` now closes whatever is open BEFORE it mints a
+ * terminal, which is the ordering this slice's second test drives. What is left
+ * for this slice is narrower and stated in `terminal-ordering.test.ts`: the
+ * engine publishes through the port, and the session decides what a held
+ * terminal means.
  */
-describe('the engine does NOT publish a terminal, and the reason is measured', () => {
+describe('the engine does NOT publish a terminal, and the proposal is measured', () => {
   it('a run that dispatched a call and never got a result closes the call BEFORE the verdict', async () => {
     // The premise. `batch: []` with a real `tool_use` frame means `Read` is
     // dispatched and never answered, so the ledger has a dangling call.
@@ -441,47 +447,52 @@ describe('the engine does NOT publish a terminal, and the reason is measured', (
     expect(committed.status).toBe('failed');
   });
 
-  it('publishing a terminal FIRST makes the settle path throw event_after_terminal', async () => {
-    // The mutation proof, in the only direction that matters: put the terminal
-    // in the run BEFORE the barrier has closed its dangling tool call and the
-    // refusal is observable. This is what the engine's publish would do, so it
-    // is asserted rather than warned about in a comment.
+  it('publishing a terminal FIRST no longer breaks the close -- it is what closes it', async () => {
+    // This test used to assert the OPPOSITE, and the flip is the whole slice:
+    // emitting a terminal ahead of the barrier used to make `settle` throw
+    // `event_after_terminal` and the held terminal was never released. It is
+    // driven by hand here for the same reason as before -- the engine genuinely
+    // does not publish one -- so the ordering is the one a real publish creates.
     //
-    // It is driven by hand here (`emitter.emit` of a terminal the engine did
-    // NOT publish) because the engine genuinely does not publish one. The
-    // event is the engine's own belief -- same shape, same emitter -- so the
-    // ordering it creates is the ordering a real publish creates.
+    // It is kept rather than deleted because the ordering it measures is now
+    // the load-bearing one: the terminal lands, the close lands BELOW it, and
+    // the settle path runs to the barrier instead of throwing out of it.
     const h = harness({ batch: [] });
     await h.completed;
 
     // Ahead of the barrier, exactly where the proposal site sits.
     const verdict = h.emitter.emit({ type: 'run.completed', status: 'completed' });
     expect(verdict.ok).toBe(true);
-    // It was HELD, not announced -- so the hold itself works, which is why
-    // this failure is about ORDERING and not about the hold.
+    // It is HELD, not announced -- so the hold itself still works, and the
+    // release below is still the only way anyone hears about it.
     expect(h.emitter.hasHeldTerminal).toBe(true);
     expect(h.announced.map((e) => e.payload.type)).not.toContain('run.completed');
 
-    // And now the barrier cannot close what it must close, and the throw
-    // escapes `settle` -- so `RunController.settle` never reaches
-    // `publishCommittedTerminal` and the held terminal is never released.
-    await expect(h.session.settle()).rejects.toThrow(/event_after_terminal/);
+    // And the barrier can still close what it must close: the terminal is
+    // answered by a close at a LOWER seq, and the settle path completes.
+    const committed = await h.session.settle();
+    expect(committed.status).toBe('completed');
+    const stored = h.appended.flat();
+    const closed = stored.find((e) => e.payload.type === 'tool.call_completed');
+    const terminal = stored.find((e) => e.payload.type === 'run.completed');
+    expect(closed).toBeDefined();
+    expect(terminal).toBeDefined();
+    expect(closed?.seq ?? Number.MAX_SAFE_INTEGER).toBeLessThan(terminal?.seq ?? 0);
+    // Nothing open at the end, in the ledger's own terms.
+    expect(h.session.danglingToolCalls()).toEqual([]);
   });
 
   it('with NO terminal from the engine, the barrier records even a clean run as runtime_crash', async () => {
-    // The other half of the blocker, and the reason this is a deadlock rather
-    // than a simple omission.
+    // The other half, and it is UNCHANGED by the ordering: `resolveRunOutcome`
+    // reads terminal EVENTS, and a run with none is `IMPLICIT_CRASH`
+    // (`run-outcome.ts:90`), so a run that dispatched a call, got its result and
+    // finished cleanly is recorded as `failed`.
     //
-    // `resolveRunOutcome` reads terminal EVENTS, and a run with none is
-    // `IMPLICIT_CRASH` (`run-outcome.ts:90`): "the run stream ended with no
-    // terminal event". A run that dispatched a call, got its result and
-    // finished cleanly is nevertheless recorded as `failed` -- because the
-    // engine published no terminal for it to read.
-    //
-    // So the two facts are: the engine MUST publish a terminal, or every
-    // engine-driven run is a crash at the barrier; and it CANNOT publish one
-    // until `#closeDanglingTools` runs ahead of it. That is why the pair is
-    // left alone rather than landed.
+    // What changed is only WHY that is no longer a deadlock. It used to be read
+    // as "the engine must publish a terminal and cannot"; it is now "the engine
+    // has not published one yet", which is a slice that owns `engine/*` rather
+    // than an ordering this runtime cannot express. See
+    // `terminal-ordering.test.ts` for the case where it does publish.
     const h = harness({ batch: [outcome()] });
     await h.completed;
 

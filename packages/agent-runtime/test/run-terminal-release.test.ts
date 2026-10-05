@@ -238,6 +238,58 @@ describe('the run announces its ending only after the durable barrier answers', 
     expect(terminalOf(seen)).toHaveLength(1);
   });
 
+  it('a run whose tool never answered still releases its terminal exactly once', async () => {
+    // The case the hold was untested for, and the one the ordering in
+    // `RunSession.observe` exists to keep possible: the run declared its ending
+    // while a tool call was still open. A terminal minted first used to make
+    // that close impossible, the throw escaped `settle`, and this release never
+    // ran at all.
+    const persistence = new GatedPersistence();
+    const controller = buildController(persistence);
+    const handle = await controller.start(buildManifest('run-dangling', {}), {
+      prompt: 'p',
+      sessionId: 'session-1',
+    });
+    const seen: RunEventEnvelope[] = [];
+    const draining = collect(handle, seen);
+
+    controller.observeFrame('run-dangling', { type: 'turn_start', data: { turnCount: 1 } });
+    controller.observeFrame('run-dangling', {
+      type: 'tool_use',
+      data: { id: 'call-dangling', name: 'Read', input: { path: 'a.txt' } },
+    });
+    // The ending, from the same producer every run's terminal comes from.
+    controller.observeFrame('run-dangling', { type: 'done', data: {} });
+
+    const settling = controller.settle('run-dangling');
+    await tick(40);
+    // The barrier is shut, so the terminal is held rather than announced. Read
+    // from what the consumer received, which is the side the hold governs.
+    expect(terminalOf(seen)).toHaveLength(0);
+
+    persistence.open();
+    const terminal = await settling;
+    await draining;
+
+    expect(terminal.status).toBe('completed');
+    // Exactly one ending announced, and the barrier answered with the same
+    // verdict the run declared -- otherwise this would be a discard.
+    expect(terminalOf(seen)).toHaveLength(1);
+    expect(persistence.completed).toHaveLength(1);
+    expect(persistence.completed[0]?.status).toBe('completed');
+
+    // RECORDED, and in this order: the unanswered call was closed at a seq
+    // BELOW the terminal, so the durable log never says the run ended while a
+    // question of its own was still open.
+    const closes = persistence.appended.filter((e) => e.payload.type === 'tool.call_completed');
+    const declared = persistence.appended.find((e) => e.payload.type === 'run.completed');
+    expect(closes).toHaveLength(1);
+    expect(declared).toBeDefined();
+    expect(closes[0]?.seq ?? Number.MAX_SAFE_INTEGER).toBeLessThan(declared?.seq ?? 0);
+    if (closes[0]?.payload.type !== 'tool.call_completed') throw new Error('expected a close');
+    expect(closes[0].payload.outcome.outcome).toBe('indeterminate');
+  });
+
   it('a lifecycle violation does not push the terminal a second time by hand', async () => {
     const persistence = new GatedPersistence();
     const controller = buildController(persistence);
