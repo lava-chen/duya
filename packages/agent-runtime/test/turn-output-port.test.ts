@@ -528,7 +528,7 @@ describe('the result count is not the dispatch count', () => {
   it('reports ZERO results for two dispatches, and still takes another turn', async () => {
     // The case that proves the two numbers are not the same variable on their way
     // to the same place. The engine's own stop decision is `dispatched > 0`
-    // (`run-engine.ts:1018`): a call is on its way and may yet answer, so the
+    // (`run-engine.ts:1161`): a call is on its way and may yet answer, so the
     // model gets another turn. A host reading `results` instead would fire
     // nothing, and a gate that had been switched to `results` would end the run
     // with an unanswered call still in flight.

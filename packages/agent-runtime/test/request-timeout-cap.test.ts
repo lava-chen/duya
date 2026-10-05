@@ -190,7 +190,7 @@ function harness(options: HarnessOptions = {}): Harness {
           return;
         case 'tool-then-answer':
           // A dispatched call is what makes the loop take a second request
-          // (`run-engine.ts:1047`): a turn that dispatched nothing has nothing
+          // (`run-engine.ts:1161`): a turn that dispatched nothing has nothing
           // to feed back, so the run stops instead of asking again.
           if (observations.length === 1) {
             yield { type: 'tool_use', call: READ_CALL };
@@ -482,7 +482,7 @@ describe('the scope is released when the request settles', () => {
   it('does not leave a second request at the mercy of the first request timer', async () => {
     vi.useFakeTimers();
     // Two requests in one run: turn 1 dispatches a read, so the loop asks again
-    // (`run-engine.ts:1047`). Each request is capped, and each opens its own
+    // (`run-engine.ts:1161`). Each request is capped, and each opens its own
     // scope -- so the first request's timer must be gone before the second one
     // opens, and neither request may be aborted by the other's deadline.
     const h = harness({ mode: 'tool-then-answer', maxTurns: 5 });

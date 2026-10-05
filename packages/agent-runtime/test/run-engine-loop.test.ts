@@ -394,10 +394,17 @@ describe('the engine owns the model -> tool -> backfill -> next turn loop', () =
     // BEFORE `proposeTerminal`, because the message stops changing strictly
     // before the run ends (`agent-process-entry.ts:3482-3488`). One per run, not
     // one per turn; see `RunEngineImpl.#finalizeLastMessage`.
+    //
+    // The b4a `assistant.text_delta` entries are in this list for the same
+    // reason, and their position is the b4a claim: each one lands BETWEEN its
+    // `model.stream` and everything that turn went on to do, which is only
+    // possible from inside the loop. The block for that turn still follows the
+    // whole spine, so delta and block are both present and the block is last.
     expect(h.log).toEqual([
       'context.assemble',
       'events.publish:turn.started',
       'model.stream:1',
+      'events.publish:assistant.text_delta',
       'approval.authorize:write',
       'ledger.begin:write',
       'events.publish:tool.call_started',
@@ -408,6 +415,7 @@ describe('the engine owns the model -> tool -> backfill -> next turn loop', () =
       'context.assemble',
       'events.publish:turn.started',
       'model.stream:2',
+      'events.publish:assistant.text_delta',
       'events.publish:assistant.text_block',
       'tools.drain',
       'events.publish:assistant.message_finalized',

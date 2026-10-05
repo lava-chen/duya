@@ -517,6 +517,42 @@ export class RunEngineImpl implements RunEngine {
    * message. The frames are still decision-free here; they are no longer
    * discarded.
    *
+   * ## The deltas are published from INSIDE this loop, and the blocks are not
+   *
+   * `#publishBlocks` runs after the `for await`, so an engine that published its
+   * text there alone made a turn's answer appear all at once when the stream
+   * closed. The projector has arms for `assistant.text_delta`,
+   * `assistant.thinking_delta` and `tool.arguments_delta`
+   * (`project/legacy-sse-projector.ts:65-88`) and this engine emitted none of
+   * them, so a projector could not be written against events that were never
+   * published. The three `#publish*Delta` calls below sit in the frame switch for
+   * that reason, and the block events are untouched: the consumer treats the
+   * finalized entry as superseding the blocks for that message
+   * (`replay/transcript-snapshot.ts:28-31`), which is only checkable if both
+   * families carry one `messageId`. Delta plus block, not delta instead of block.
+   *
+   * ## The deltas are EPHEMERAL, and the choice of TYPE is the whole of it
+   *
+   * There is no durability flag to pass: `RunEventEmitter.#mint` reads it off
+   * the registry by event type (`events/event-emitter.ts:553`), which marks
+   * `assistant.text_delta` ephemeral and `assistant.text_block` durable
+   * (`events/registry.ts:198-202`). Publishing the fragments as blocks would write
+   * every delta of every answer into `run_events`, which is the storage blow-up
+   * the ephemeral bucket exists to prevent -- the same reason the inbound
+   * translator keeps its two arms apart
+   * (`translate/chat-event-translator.ts:230-234`).
+   *
+   * ## A delta's index is the index of the block that supersedes it
+   *
+   * `DeltaCursor` starts at the same base `#publishBlocks` reads and advances on
+   * the same boundary `TurnMessage.addText` opens a block on, so a consumer can
+   * accumulate a fragment under `(messageId, index)` and then find the completed
+   * block already sitting under that key. One divergence is deliberate and is not
+   * a numbering bug: a text block that follows a tool call is stored with a
+   * leading newline (`DuyaAgent.ts:2610-2620`) while the published fragment is the
+   * raw frame, so a block's deltas concatenate to its text minus that separator.
+   * The block is the authority; the deltas are for progressive display.
+   *
    * ## Why the message is handed over HERE and not at the end of the turn
    *
    * The order is the legacy one and it is a provider requirement, not a taste:
@@ -542,6 +578,11 @@ export class RunEngineImpl implements RunEngine {
     const scope = openRequestScope(signal, ctx.modelRequestTimeoutMs);
     try {
       const message = new TurnMessage(ctx.messageId, ctx.turn);
+      // Numbering for the fragments published from INSIDE this loop. Opened here
+      // rather than lazily on the first text frame so a stream that opens with a
+      // tool call numbers its later text block from the same base
+      // `#publishBlocks` will read after the loop.
+      const cursor = new DeltaCursor(ctx.blockIndex);
       let sawFrame = false;
       for await (const frame of ports.model.stream(request, scope.signal)) {
         if (isAborted(signal)) {
@@ -557,6 +598,14 @@ export class RunEngineImpl implements RunEngine {
         switch (frame.type) {
           case 'tool_use':
             message.addToolUse(frame.call);
+            // AFTER `addToolUse`, because that is the frame that closes the text
+            // run: the next `addText` cannot merge into a `tool_use` block, so
+            // the next fragment must open a new index. Closing it on the
+            // `tool_use_delta` frames instead would split the numbering in half
+            // for every call whose arguments arrive as fragments, and the
+            // completed block would land one index below the fragments that
+            // belong to it.
+            cursor.endText();
             await this.#dispatchCall(ctx, frame.call);
             break;
           case 'tool_use_started':
@@ -566,16 +615,24 @@ export class RunEngineImpl implements RunEngine {
             await this.#dispatchCall(ctx, frame.call);
             break;
           case 'text':
+            // BEFORE `addText`, and inside the loop: a frame that arrives at t is
+            // published at t, which is the entire point of the delta family.
+            this.#publishTextDelta(ctx, cursor, frame.text);
             message.addText(frame.text);
             break;
           case 'thinking':
+            this.#publishThinkingDelta(ctx, cursor, frame.text);
             message.addThinking(frame);
             break;
           case 'tool_use_delta':
             // Argument fragments, and the complete `tool_use` frame carries the
-            // whole input. Legacy ignores them for the message too (there is no
+            // whole input. Legacy ignores them for the MESSAGE too (there is no
             // `tool_use_delta` arm in its `done` handler), so accumulating them
-            // here would DOUBLE the arguments on every call.
+            // into the block would DOUBLE the arguments on every call. Publishing
+            // them is the other half of that: the host can watch a call being
+            // written, and the durable record still comes from the `tool_use`
+            // frame alone.
+            this.#publishArgumentDelta(ctx, frame);
             break;
           case 'usage':
             spend.addTokens(frame.totalTokens ?? frame.inputTokens + frame.outputTokens);
@@ -628,6 +685,63 @@ export class RunEngineImpl implements RunEngine {
       // of the run.
       scope.dispose();
     }
+  }
+
+  /**
+   * One streamed text fragment, published where it arrives.
+   *
+   * The index is taken BEFORE the empty check, which looks like a wasted
+   * iteration and is not: the index belongs to the BLOCK, and an empty frame
+   * still opens one (`TurnMessage.addText` pushes it), so skipping the publish
+   * must not skip the numbering or the two schemes drift apart.
+   */
+  #publishTextDelta(ctx: RunContext, cursor: DeltaCursor, text: string): void {
+    const index = cursor.text();
+    if (text === '') return;
+    ctx.ports.events.publish({
+      type: 'assistant.text_delta',
+      messageId: ctx.messageId,
+      index,
+      delta: text,
+    });
+  }
+
+  /**
+   * One streamed reasoning fragment, published where it arrives.
+   *
+   * The index needs no bookkeeping: a message assembles AT MOST ONE thinking
+   * block however many frames produced it (`TurnMessage.eachBlock`), so every
+   * fragment of a turn shares the one index `#publishBlocks` will hand the
+   * completed block.
+   */
+  #publishThinkingDelta(ctx: RunContext, cursor: DeltaCursor, text: string): void {
+    if (text === '') return;
+    ctx.ports.events.publish({
+      type: 'assistant.thinking_delta',
+      messageId: ctx.messageId,
+      index: cursor.thinking(),
+      delta: text,
+    });
+  }
+
+  /**
+   * One fragment of a tool call's arguments, published where it arrives.
+   *
+   * `toolCallId` and nothing else, because `ToolArgumentsDeltaPayload` holds
+   * exactly those two fields (`events/payloads.ts:457-460`) -- a partial call
+   * has no name and no parsed arguments yet, and inventing either would put a
+   * value in the event that the provider never sent.
+   */
+  #publishArgumentDelta(
+    ctx: RunContext,
+    frame: Extract<ModelFrame, { readonly type: 'tool_use_delta' }>,
+  ): void {
+    if (frame.delta === '') return;
+    ctx.ports.events.publish({
+      type: 'tool.arguments_delta',
+      toolCallId: frame.callId,
+      delta: frame.delta,
+    });
   }
 
   /**
@@ -1427,6 +1541,66 @@ interface RunContext {
  * collide.
  */
 type BlockIndex = { text: number; thinking: number };
+
+/**
+ * Where this turn's STREAMED fragments are numbered.
+ *
+ * ## Why the engine needs a second numbering of the same blocks
+ *
+ * `ctx.blockIndex` is the run-scoped counter `#publishBlocks` consumes after the
+ * stream, and a delta cannot wait that long: the whole point of publishing from
+ * inside the loop is that the fragment reaches the host while the loop is still
+ * open. So this opens on the same base and walks forward on the same boundary
+ * `TurnMessage.addText` opens a body block on, which is what makes the two
+ * numbering schemes agree index for index.
+ *
+ * ## It does not advance `ctx.blockIndex`
+ *
+ * One writer per counter. If this mutated the run-scoped cell, the completed
+ * block would be published one index too high for every turn after the first,
+ * and the supersession that `replay/transcript-snapshot.ts:28-31` describes would
+ * quietly stop joining. `#publishBlocks` remains the only writer, and the
+ * agreement is a property of the two starting at the same value, not of shared
+ * state.
+ */
+class DeltaCursor {
+  /** The index the next text block will be published under. */
+  #nextText: number;
+  /** The index of the text block currently streaming; `null` between blocks. */
+  #openText: number | null = null;
+  /** The one thinking index this turn's fragments share. */
+  readonly #thinking: number;
+
+  constructor(base: BlockIndex) {
+    this.#nextText = base.text;
+    this.#thinking = base.thinking;
+  }
+
+  /** The index a streamed text fragment belongs under, opening a block if needed. */
+  text(): number {
+    if (this.#openText === null) {
+      this.#openText = this.#nextText;
+      this.#nextText += 1;
+    }
+    return this.#openText;
+  }
+
+  /**
+   * Close the open text block, so the next fragment opens a new one.
+   *
+   * Called on the `tool_use` frame, because `TurnMessage.addToolUse` pushes a
+   * block and the next `addText` therefore cannot merge into the last body entry.
+   * `tool_use_started` does NOT close it: that frame announces a call without
+   * putting one in the message, so the merge rule it sees is unchanged.
+   */
+  endText(): void {
+    this.#openText = null;
+  }
+
+  thinking(): number {
+    return this.#thinking;
+  }
+}
 
 /**
  * A value whose lifetime is one `#run` rather than one iteration of its loop.
