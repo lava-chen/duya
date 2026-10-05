@@ -17,7 +17,8 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { app } from 'electron';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import {
   checkForUpdates,
   downloadUpdate,
@@ -26,14 +27,41 @@ import {
 } from '../../services/updater';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
 
+interface ElectronApp {
+  getPath(name: 'userData'): string;
+  getVersion(): string;
+}
+
+/**
+ * Electron is OPTIONAL in this layer: the same handler graph has to load in a
+ * process that has no Electron runtime
+ * (`01-headless-control-plane.md` §2.1). A module-scope
+ * `import { app } from 'electron'` is evaluated when the module is and throws
+ * THERE, taking the whole graph with it, so `app` is resolved through a
+ * guarded require and reported as absent instead.
+ */
+function electronApp(): ElectronApp | undefined {
+  try {
+    const { app } = require('electron') as { app?: ElectronApp };
+    return app;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * `DUYA_CLI_USER_DATA_DIR` is the existing headless entry point
+ * (`handlers/plugins.ts:170`) and wins whenever it is set. Without Electron,
+ * `~/.duya` is the same directory the sessions / attachments paths already
+ * use; returning `''` instead would resolve the audit path below against the
+ * process cwd, which is not a directory anyone chose.
+ */
 function getUserDataDir(): string {
   const envOverride = process.env.DUYA_CLI_USER_DATA_DIR;
   if (envOverride && envOverride.trim().length > 0) return envOverride;
-  try {
-    return app.getPath('userData');
-  } catch {
-    return '';
-  }
+  const app = electronApp();
+  if (app && typeof app.getPath === 'function') return app.getPath('userData');
+  return join(homedir(), '.duya');
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -43,6 +71,23 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
     'Content-Length': Buffer.byteLength(text),
   });
   res.end(text);
+}
+
+/**
+ * The updater updates the INSTALLED DESKTOP APP: it resolves a feed through
+ * `electron-updater` and `installUpdate` quits the running app. A headless
+ * process has no installed app, so these endpoints have no counterpart there
+ * and say so explicitly (501) instead of reporting a check that can never
+ * succeed — `01-headless-control-plane.md` §2.1: a capability with no
+ * headless equivalent must return "unsupported", never degrade silently.
+ */
+function sendUnsupportedWithoutDesktop(res: ServerResponse): void {
+  sendJson(res, 501, {
+    error: {
+      code: 'unsupported_without_desktop',
+      message: 'Auto-update targets an installed Electron desktop app; this control plane has none.',
+    },
+  });
 }
 
 function readInvokedByHeader(
@@ -86,6 +131,11 @@ async function recordAudit(
  * GET /v1/update/status — current updater state.
  */
 export function handleGetUpdateStatus(_req: IncomingMessage, res: ServerResponse): void {
+  const app = electronApp();
+  if (!app) {
+    sendUnsupportedWithoutDesktop(res);
+    return;
+  }
   try {
     const state = getUpdaterState();
     const body = {
@@ -118,6 +168,11 @@ export async function handleUpdateCheck(
   res: ServerResponse,
   correlationId?: string,
 ): Promise<void> {
+  const app = electronApp();
+  if (!app) {
+    sendUnsupportedWithoutDesktop(res);
+    return;
+  }
   try {
     const result = await checkForUpdates();
     await recordAudit(req, correlationId, 'update.check', 'desktop', result.error);
@@ -141,6 +196,10 @@ export async function handleUpdateDownload(
   res: ServerResponse,
   correlationId?: string,
 ): Promise<void> {
+  if (!electronApp()) {
+    sendUnsupportedWithoutDesktop(res);
+    return;
+  }
   try {
     const result = await downloadUpdate();
     await recordAudit(req, correlationId, 'update.download', 'desktop', result.error);
@@ -164,6 +223,10 @@ export async function handleUpdateInstall(
   res: ServerResponse,
   correlationId?: string,
 ): Promise<void> {
+  if (!electronApp()) {
+    sendUnsupportedWithoutDesktop(res);
+    return;
+  }
   try {
     await recordAudit(req, correlationId, 'update.install', 'desktop');
     // Respond first so the CLI gets an ack; then quitAndInstall kills us.
