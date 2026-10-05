@@ -175,8 +175,8 @@ B 线在 B1 之后才与 A5 交汇;C 线全程可并行且不阻塞任何人。
 ## 7. 支持资料
 
 - [600 分层架构落地](../600-layered-architecture/README.md) — 契约与推导(§4 已冻结)
-- [02 客户端与运行时轴](02-client-runtime-axis.md) — **一个核心如何同时驱动 CLI / Web / Desktop;A0 的依据**
+- [01 切片 A1:G7 循环识别](01-slice-a1-g7-loop-detection.md) — 当前唯一 next action,**进行中未完成**
+- [02 切片 A0:客户端与运行时轴](02-client-runtime-axis.md) — 一个核心如何同时驱动 CLI / Web / Desktop
 - [601 Headless Control Plane](../601-headless-control-plane/README.md)
 - [602 SQLite 驱动迁移](../602-sqlite-abi/README.md)(前提更正见其 §0)
-- [01 A1 切片契约](01-slice-a1-g7-loop-detection.md)
 - [90 执行日志](90-execution-log.md)
