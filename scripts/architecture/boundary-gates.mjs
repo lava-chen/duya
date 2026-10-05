@@ -302,8 +302,22 @@ export function isTestPath(relFile) {
   return TEST_PATH.test(relFile);
 }
 
-/** Does this module's CODE have the shape of the model/tool/next-turn cycle? */
+/**
+ * Does this module's CODE have the shape of the model/tool/next-turn cycle?
+ *
+ * The input is expected to be comment-stripped, and every caller here does
+ * that. It matters, and the reason is measured rather than theoretical:
+ * `packages/agent-runtime/src/engine/ports.ts` is a types-and-docs-only module
+ * (every import in it is `import type`) whose five clause hits are all prose --
+ * "the four lines" for `repetition`, an `interface ModelPort` line, a
+ * `getRemainingResults` mention in a doc comment. `isTurnLoopModule(rawSource)`
+ * returns **true** for it; `isTurnLoopModule(stripComments(raw).text)` returns
+ * **false**. The two live call sites already pass the stripped text, so no gate
+ * verdict changes; this guard only stops a future caller that forgets from
+ * silently getting an answer about documentation rather than about code.
+ */
 export function isTurnLoopModule(src) {
+  if (typeof src !== 'string' || src.length === 0) return false;
   return (
     TURN_LOOP_SHAPE.repetition.test(src) &&
     TURN_LOOP_SHAPE.modelStream.test(src) &&

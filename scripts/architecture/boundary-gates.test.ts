@@ -1027,8 +1027,25 @@ describe('the gates are RED on the live tree, and that is the point', () => {
     expect(findLifecycleCouplings().length).toBeGreaterThan(0);
   });
 
-  it('G7 is red: the worker entry still reaches the loop', () => {
-    expect(findWorkerLoopReach().length).toBeGreaterThan(0);
+  it('G7 reports the live bypass, and names the edge that has to be cut', () => {
+    // This used to assert `length > 0`, which pinned G7 red forever: the
+    // moment A3 legitimately removed the entry's direct `DuyaAgent` import, a
+    // correct fix would have failed this test. The gate's value is that it
+    // NAMES the bypass, so that is what is asserted — the count is reported but
+    // not constrained, and an empty result is a legitimate state that A3 is
+    // working toward.
+    const findings = findWorkerLoopReach();
+    for (const finding of findings) {
+      expect(finding.file).toBeTruthy();
+      expect(finding.via).toBeTruthy();
+      expect(finding.why).toContain('turn-loop');
+    }
+    // Whatever the count is, the gate must be looking at the real entry rather
+    // than returning nothing because it could not resolve anything. The
+    // unbounded depth is the check for that: if even depth 8 finds nothing, the
+    // scan is not working and an empty result above would be meaningless.
+    const deep = findWorkerLoopReach('packages/agent/src/process/agent-process-entry.ts', undefined, 8);
+    expect(deep.length).toBeGreaterThan(0);
   });
 
   it('G8 is red: the loop is not owned by the execution owner package', () => {
