@@ -879,14 +879,21 @@ describe('G9 — a core classification has to survive measurement', () => {
     );
   });
 
-  it('independently rediscovers exactly the six @duya/ai files G2 carves out', () => {
-    // The cross-check that keeps the two definitions of "IO" from drifting.
-    // G2 finds them by a direct scan with a hand-kept carve-out list; G9 finds
-    // them by transitive reachability with no list at all. Two routes, same six
-    // files — and the six are exactly the files `layer-purity.ts` documents.
+  it('independently rediscovers exactly the five @duya/ai files that still do IO', () => {
+    // The cross-check that keeps two definitions of "IO" from drifting. G9
+    // finds these by transitive reachability with no list at all;
+    // `layer-purity.ts` documents them as carve-outs and its own
+    // `findStaleCarveOuts` test fails if a record outlives its file. Same five
+    // files, by two independent routes.
+    //
+    // It was six until plan 610 A0. `bedrock-converse.ts` left the list
+    // because it stopped importing `node:crypto` as a value: SigV4 signing
+    // moved to WebCrypto. Dropping the entry here rather than relaxing the
+    // expectation is the point — the finding is retired at its cause, and the
+    // baseline entry it left behind (`G9|…bedrock-converse|node:crypto`) is
+    // reported stale instead of being re-recorded away.
     const findings = findCoreIoReach();
     expect(findings.map((f) => f.file).sort()).toEqual([
-      'packages/ai/src/api/bedrock-converse.ts',
       'packages/ai/src/api/ollama-chat.ts',
       'packages/ai/src/auth/oauth/device-code.ts',
       'packages/ai/src/system-one/client.ts',
