@@ -186,15 +186,15 @@ B 线在 B1 之后才与 A5 交汇;C 线全程可并行且不阻塞任何人。
 
 | 片 | 唯一 next action | 完成标志 |
 | --- | --- | --- |
-| **A1** | 查清 G7 判据变准后新增的 finding 是**真违规**还是 `ports.ts` 已知过读 | 4+1 现有红全绿;`architecture:check` 无新增;**变异证明**(三层 adapter fixture 必须能弄红它) |
-| **A0** | 给 `conductor` 的 `exports` 补 `./renderer` 子路径,并加门禁 **G10** | 浏览器入口 import 闭包 0 个 Node 内建;G10 能被 `security/path-validator` 弄红 |
-| **A2** | 合 PR #214,**合之前先跑一次** `architecture:check` | `module-dependency-permitted` 375 条无新增;`packages/agent-runtime` 632/632 |
-| **A3** | 把 `ToolExecutionPipeline` 移出 `DuyaAgent.ts:2036` 闭包,**先定边界再搬代码** | G7 在 live tree 上转绿,findings 指向迁出后的真实归属 |
+| **A1** | ✅ **已合并**(PR #219 / `908b5baf`)。原 open 项已答:新增 finding 是**真违规**,不是 `ports.ts` 过读(实测该文件只满足 1/3 子句,两处正则命中都在注释里) | `mutation-proof-a1.mjs` **5/5**;`architecture:check` 无新增 |
+| **A0** | ✅ §3.1 + §3.3 + 门禁 **G10** 已落。§3.2 plugin-core 二分**未做**:实测它对 renderer 闭包贡献 21 文件、**0** Node 内建,barrel 已排除真正碰 Node 的三个模块 —— 是独立切片不是本片尾巴 | 浏览器入口闭包 **0/789** Node 内建;G10 变异证明 `FAIL 2/790` → 回退 `PASS 0/789` |
+| **A2** | ✅ **已合并**(PR #222 / `a046cdf6`)。顺带修掉 #214 的 `TS2393` 重复 `publish` | `935/935 tolerated`(baseline 930 未动);`644/652 in packages/agent-runtime` 与 master 同一失败集;`typecheck:all` exit 0 |
+| **A3** | **判据已重定义**(见 [执行日志](90-execution-log.md))。原描述"把 `ToolExecutionPipeline` 移出闭包"**已证明做不成**:三个探针显示搬去 `packages/agent` 或 `agent-runtime` 都让 G7 从 1 变 2。G7 现按**深度 0/1** 判定。**下一步:切断 `agent-process-entry.ts:76` 那条直接边** | G7 depth-1 finding 转绿;`mutation-proof-a1.mjs` 仍 5/5 |
 | **A4** | 按 `04-runtime-owns-execution.md` §Step 4 逐场景做,**从"工具报错"起**(最易复现) | 6 场景逐个可复跑;每场景一条测试 |
 | **A5** | 先迁 `data`(纯 I/O、无业务决策),再 `capabilities`,最后 `memory` | 每迁一块:旧依赖归零 + 真实消费者仍绿 |
 | **A6** | 先产出回填/恢复脚本,再改 schema | 三份证据齐备才删旧关系 |
 | **A7** | `packages/agent` 消费者归零检查 | `architecture:check` 的 module-dependency 降到预期值 |
-| **B1** | 写门禁并**证明它现在红**,再改那 6 个 handler | 门禁红→绿;`require('electron')` 会抛的子进程里能加载完整 handler 图 |
+| **B1** | ✅ 门禁(静态 A1a + 行为 A1b)已红→绿,6 个 handler 已改软 require。**A1b-full 仍红且故意保留**:45 个层外模块仍硬 import electron(`window-manager` / `ipc/*` / `boot-config` / `db/connection` 等),已逐次打印在门禁输出里 | 图层内 `GREEN`;变异证明双向;层外清单是**下一步的输入**,不是已完成 |
 | **B2** | 先把控制平面搬成独立进程,**不改客户端** | Electron main 不再拥有控制平面;CLI 与 main 进程内加载 L3 |
 | **B3** | 远端注册表 + 认证 | — |
 | **C1** | 写探针,两个 runtime 各跑一次 | 9 项能力边界;`close()` 与回滚路径任一不过就停 |
