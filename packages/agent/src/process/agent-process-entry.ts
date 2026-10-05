@@ -21,6 +21,7 @@ import { readFile } from 'node:fs/promises';
 import { appendFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { appendMessages, storeParsedDocumentAttachment } from '../session/db.js';
 import { COMPACTION_CHECKPOINT_ID_SUFFIX } from '../message/index.js';
 
@@ -5024,7 +5025,7 @@ async function handleCompactMessage(msg: unknown): Promise<void> {
   }
 }
 
-async function main(): Promise<void> {
+async function main(options: AgentProcessStartOptions = {}): Promise<void> {
   log('Process started, session:', process.env.SESSION_ID);
   log('cwd:', process.cwd());
 
@@ -5056,7 +5057,10 @@ async function main(): Promise<void> {
   });
 
   try {
-    for await (const msg of parseStdin()) {
+    // The injection seam, same shape as runWorkflowRuntimeChild's `commands`:
+    // production takes the `parseStdin()` branch and a test supplies its own
+    // stream, so both drive THIS loop rather than a test-only variant.
+    for await (const msg of options.commands ?? parseStdin()) {
       await handleCommand(msg);
     }
   } catch (err) {
@@ -5124,25 +5128,9 @@ function exitAfterCleanup(code: number): void {
   });
 }
 
-// Handle termination signals
-// Note: On Windows, Node.js child processes do NOT receive SIGTERM/SIGINT
-// from parent.kill(). We rely primarily on 'disconnect' event.
-process.on('SIGTERM', () => {
-  log('[Agent-Process] Received SIGTERM');
-  exitAfterCleanup(0);
-});
-
-process.on('SIGINT', () => {
-  log('[Agent-Process] Received SIGINT');
-  exitAfterCleanup(0);
-});
-
-// Handle disconnect from parent (Electron main process exited)
-// This is the PRIMARY shutdown mechanism on Windows.
-process.on('disconnect', () => {
-  log('[Agent-Process] Parent disconnected, shutting down...');
-  exitAfterCleanup(0);
-});
+// The termination-signal, parent-disconnect and output-stream handlers used to
+// sit here at module scope, which made importing this file install them. They
+// are now in installProcessLifecycleHandlers() below, called by the start path.
 
 // Persist the full error to a file so the crash is diagnosable even though
 // the process pool only retains the first 5 stderr lines. Called from both
@@ -5182,19 +5170,115 @@ const swallowPipeError = (err: unknown): void => {
   writeAgentCrashLog(err, 'output-stream');
   exitAfterCleanup(1);
 };
-process.stdout.on('error', swallowPipeError);
-process.stderr.on('error', swallowPipeError);
 
-// Handle uncaught errors to avoid zombie processes
-process.on('uncaughtException', (err) => {
-  log('[Agent-Process] Uncaught exception:', err);
-  writeAgentCrashLog(err, 'uncaught-exception');
-  exitAfterCleanup(1);
-});
+// ============================================================================
+// Process Startup
+// ============================================================================
 
-process.on('unhandledRejection', (reason) => {
-  log('[Agent-Process] Unhandled rejection:', reason);
-});
+/** Options for the one process start path. */
+export interface AgentProcessStartOptions {
+  /** Injection seam for tests — defaults to the real stdin command stream. */
+  commands?: AsyncIterable<WorkerCommand>;
+}
 
-// Start the main loop
-void main();
+/**
+ * Register the process-level lifecycle handlers: the two termination signals,
+ * the parent-disconnect path, the two output-stream error handlers, and the
+ * two crash reporters.
+ *
+ * These were module-scope statements, so merely IMPORTING this file installed
+ * seven handlers as a side effect — which is what made the live chat path
+ * impossible to test. They are registered here instead, by the start path,
+ * synchronously before main() reaches its first await and in the same order
+ * as before, so a crash during async startup still reaches exitAfterCleanup.
+ */
+function installProcessLifecycleHandlers(): void {
+  // Handle termination signals
+  // Note: On Windows, Node.js child processes do NOT receive SIGTERM/SIGINT
+  // from parent.kill(). We rely primarily on 'disconnect' event.
+  process.on('SIGTERM', () => {
+    log('[Agent-Process] Received SIGTERM');
+    exitAfterCleanup(0);
+  });
+
+  process.on('SIGINT', () => {
+    log('[Agent-Process] Received SIGINT');
+    exitAfterCleanup(0);
+  });
+
+  // Handle disconnect from parent (Electron main process exited)
+  // This is the PRIMARY shutdown mechanism on Windows.
+  process.on('disconnect', () => {
+    log('[Agent-Process] Parent disconnected, shutting down...');
+    exitAfterCleanup(0);
+  });
+
+  process.stdout.on('error', swallowPipeError);
+  process.stderr.on('error', swallowPipeError);
+
+  // Handle uncaught errors to avoid zombie processes
+  process.on('uncaughtException', (err) => {
+    log('[Agent-Process] Uncaught exception:', err);
+    writeAgentCrashLog(err, 'uncaught-exception');
+    exitAfterCleanup(1);
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    log('[Agent-Process] Unhandled rejection:', reason);
+  });
+}
+
+/**
+ * True only when this module IS the program Node was started with.
+ *
+ * Both production launchers put the bundle's own path in argv[1]:
+ * `fork(workerPath, ...)` in apps/desktop/.../server/worker-manager.ts and
+ * `spawn(process.execPath, [agentPath])` in
+ * apps/desktop/.../process-pool/process-manager.ts. Under a test runner
+ * argv[1] is the runner, so the import stays inert.
+ *
+ * This is an identity check, NOT an environment sniff: a packaged run that
+ * happens to carry NODE_ENV=test still self-starts, because nothing here
+ * reads the environment.
+ */
+function isProcessEntryPoint(): boolean {
+  // `import.meta.url` must stay the literal expression below. esbuild's
+  // `import.meta.url` define in scripts/build-agent-bundle.mjs (CJS output,
+  // banner polyfill `pathToFileURL(__filename)`) only matches this exact
+  // syntactic shape; the same constraint is documented on WorkerPool's
+  // resolveDirname().
+  const selfUrl = import.meta.url;
+  const entryArg = process.argv[1];
+  if (typeof selfUrl !== 'string' || selfUrl.length === 0 || !entryArg) {
+    return false;
+  }
+  let selfPath: string;
+  try {
+    selfPath = fileURLToPath(selfUrl);
+  } catch {
+    return false;
+  }
+  const resolvedSelf = path.resolve(selfPath);
+  const resolvedEntry = path.resolve(entryArg);
+  // Windows paths compare case-insensitively: the parent's spelling of the
+  // path is not guaranteed to match the child's.
+  return process.platform === 'win32'
+    ? resolvedSelf.toLowerCase() === resolvedEntry.toLowerCase()
+    : resolvedSelf === resolvedEntry;
+}
+
+/**
+ * The one process start path. Production reaches it through the
+ * isProcessEntryPoint() guard at the bottom of this file; a test calls it
+ * directly. Both run the same code.
+ */
+export async function startAgentProcess(options: AgentProcessStartOptions = {}): Promise<void> {
+  installProcessLifecycleHandlers();
+  await main(options);
+}
+
+// Start the main loop — only when this file is the process entry point, so
+// that importing it (tests, tooling) does not boot the agent.
+if (isProcessEntryPoint()) {
+  void startAgentProcess();
+}
