@@ -1,0 +1,182 @@
+# 610 — 架构收口系列
+
+> **把 600(分层落地)、601(控制平面倒置)、602(持久层)合并成一条可执行的主线。**
+> 本文件是这三者的**唯一状态源**。600/601/602 各自的 README 保留为契约与推导过程,
+> 但"现在做到哪、下一步做什么"只在这里回答,且只回答一次。
+
+## 0. 为什么需要这一份
+
+三份计划各自声明了**一个**"唯一 next action",而它们之间没有共同的编号空间:
+
+| 计划 | 编号空间 | 声明的 next action | 文档在哪 |
+| --- | --- | --- | --- |
+| 600 | `S0`–`S7` | S2 循环迁出 | **只在 `docs/600-plan-archive` 分支上** |
+| 601 | `A` / `B` / `C` | 写门禁 A1 并证明它现在红 | master |
+| 602 | `Phase 0`–`3` | 写探针 `sqlite-compat-probe.mjs` | master |
+
+三个后果,都是实测出来的,不是推演:
+
+1. **`docs/exec-plans/README.md` 与 601 §8.2 里那句「600 的 11 份计划文档不在任何分支上」是错的。**
+   它们在 `docs/600-plan-archive` 上,一直好好的。**一条关于"资料是否存在"的假事实,
+   在索引里被引用了三轮计划。** 本系列把 600 文档落回 master,就是为了消灭这个单点。
+2. **三份计划互相看不见对方的顺序约束。** 600 的 S6 被 602 的 Phase 2 卡住,
+   而 601 声称 Phase B/C 要等 600 的分层 —— 但没有任何一处列出三者合起来后的**全局**顺序。
+3. **602 的立论前提已经不成立**(见 §3),但它对 S6 的阻塞仍然编码在 600 的阶段表里。
+
+---
+
+## 1. 实测基线(2026-10-05,`origin/master @ 0967b2ee`)
+
+所有数字都带 scope,都是本次现测,不是从对话记忆或旧工作树抄的。
+
+| 断言 | 实测值 | 怎么测的 |
+| --- | --- | --- |
+| 分层门禁 | `932/932` tolerated,`architecture:self-test` OK | `npm run architecture:check` / `architecture:self-test` |
+| 边界门禁单测 | **4 条红**(`boundary-gates.test.ts` G4/G7) | `npx vitest run scripts/architecture/boundary-gates.test.ts` |
+| 切片分类 | **1 条红**(`compaction-seam.test.ts` 未分类) | `npx vitest run scripts/architecture/slice-classification.test.ts` |
+| S2 引擎已落地 | `run-engine-model.ts` 36 KB + `run-engine-ports.ts` 27 KB 在 master | 文件实测 |
+| S2 循环**未**迁出 | `DuyaAgent.ts` **255 KB**,仍在 `packages/agent/src/agent/` | 文件实测 |
+| S1a 接缝 | `run-routing.ts` **不在 master**,在 PR #214 | 文件实测 |
+| S5 六个新包 | `capabilities/connectors/memory/tooling/data/ui` **六个都不存在** | 目录实测 |
+| better-sqlite3 | **N-API 插件**,非 V8-ABI;同一 prebuild 跨 Node/Electron 通用 | `package.json` + 双 runtime 实跑 |
+| 600 计划文档 | 在 `docs/600-plan-archive`(1 ahead / 0 behind) | `git ls-tree` |
+
+### 1.1 真正的瓶颈:门禁 G7 指错了方向
+
+`boundary-gates.test.ts` 里 G7 的两条红**不是"S2 还没做完所以红"**,是**门禁本身坏了**。
+`reachability catches the loop behind the adapter` 是用合成 fixture 测检测器自身的用例,它也红。
+
+直接调用检测器得到的实况:
+
+```
+输入:fixture 的 entry.ts -> adapter.ts -> packages/agent/src/agent/DuyaAgent.ts
+可达闭包: 含有 DuyaAgent.ts(确实可达)
+findWorkerLoopReach() 的 finding:
+    packages/agent/src/process/agent-process-entry.ts   <-- 入口自己
+    via packages/agent/src/tool/MessageSessionTool/MessageSessionTool.ts
+```
+
+两件事同时成立:
+
+- **`isTurnLoopModule` 认不出真正的循环**(`DuyaAgent.ts` 可达却不是 finding);
+- **它反而认出了 `agent-process-entry.ts`**,而那正是门禁要保护的那个入口。
+
+于是 S2 的完成定义挂在 G7 上,等于挂在一个**指错方向的判据**上:
+G7 既不能证明循环迁出了,也会把入口报成违规。这个状态下继续堆 S2 的代码,产出的"完成"不可信。
+
+---
+
+## 2. 唯一 Next action
+
+> **A1 — 修 `isTurnLoopModule`,让 G7 能真正识别 turn loop 且不误报 worker 入口。**
+
+选它的理由不是它最简单,而是**其余每一片的验收都依赖它的可信度**:
+
+- S2 完成的定义是 G7 转绿;G7 现在指错方向,这一定义不成立。
+- 它无前置,改动面小,可变异证明。
+- 本系列自己在 §4 立了"门禁必须能变红也必须能变绿"的规矩,第一片就得先让自己合规。
+
+**完成标志(全部可复跑):**
+
+```bash
+npx vitest run scripts/architecture/                 # 4+1 现有红全部转绿
+npm run architecture:check                          # 932/932 tolerated,无新增
+npm run architecture:self-test                      # OK
+```
+
+**必须做的变异证明:** 造一个"真循环藏在三层 adapter 后面"的 fixture,确认 G7 变红;
+撤掉后确认恢复绿。只证明"当前 fixture 变绿"不算数。
+
+---
+
+## 3. 对三份输入计划的更正
+
+### 3.1 600 的文档已回到 master
+
+600 的 11 份文档随本系列落到 `docs/exec-plans/active/600-layered-architecture/`。
+600 README §4 已标注**冻结为历史契约**,当前状态以本文件为准 —— 避免两处都声称是真相。
+`docs/600-plan-archive` 分支保留,不再作为"唯一存在处"。
+
+### 3.2 602 退出关键路径,S6 解封
+
+600 原文有一条「S6 排在 602 Phase 2 之后」,理由是:602 Phase 2 要把 **177 个文件**
+改成从兼容层 import(纯机械),而 S6 要改同一批文件的业务逻辑(语义),
+机械在前语义在后,S6 改的每行才不会被 602 再动一次。
+
+**该约束的唯一目的就是这个。** 而 602 的前提已被实测推翻:
+
+| 602 的前提 | 实测 |
+| --- | --- |
+| `better-sqlite3` 是 V8-ABI 原生模块 | **它是 N-API 插件**(依赖 `node-addon-api`) |
+| Node 与 Electron 需要两份不同的 `.node` | 同一个 `prebuilds/win32-x64.node` 在 Node 24.16.0(ABI 137)与 Electron 44.2.0(ABI 149)下**都加载成功**,SQLite 3.53.4 |
+| 需要 `ensure-sqlite-abi.mjs` 来回换二进制 | `lib/binding.js` 先读 `prebuilds/`,而 `build/Release` 在标准 `npm ci` 后**根本不存在** |
+
+**结论:602 剩下的价值只是"删掉一个原生依赖",不再是"逃出 ABI 牢笼"。**
+约束失去了存在理由,**S6 不再被 602 阻塞**。600 README 已就地标注撤销。
+
+602 本身**不取消**,降级为可选旁支 C1(见 §5)。它是"值得做",不是"挡着别人"。
+
+### 3.3 索引里的过期论断
+
+`docs/exec-plans/README.md` 表格里「587 — **唯一架构重构入口:G0.1**」一句已过期。
+600 的门禁 S0 与 S2 栈都已合并,该入口说法连同"600 文档不在任何分支上"一并更正。
+
+---
+
+## 4. 本系列自己的门禁规矩
+
+从 587/600 一路踩下来的,写在这里对本系列生效:
+
+1. **门禁数字必须带 scope**,格式 `<通过>/<总数> in <scope>`。裸数字不可判读。
+2. **每条门禁必须做变异证明**:制造它要防的那种回归 → 确认变红 → 完全回退 → 确认树干净。
+   没做变异证明的门禁**不算存在**。
+3. **拒绝恒等式断言**。断言里出现 `a === a` 形状的比较(拿测量值比测量值)就是红旗。
+4. **绿不得等于"没检查到"**。`ok=0 bad=0` 往往意味着没检查到任何东西,不是全部通过。
+5. **门禁必须能变红也必须能变绿**。只会红的门禁挡不住绕过;只会绿的门禁没有意义。
+   G7 现在违反的是第 5 条的后半段(它红,但红在错误的文件上)。
+
+---
+
+## 5. 切片表
+
+`A` 线是主线(执行归属),`B` 线是控制平面倒置,`C` 线是可选旁支。
+
+| 切片 | 内容 | 前置 | 门禁 / 验收 |
+| --- | --- | --- | --- |
+| **A1** | 修 `isTurnLoopModule`,G7 双向可信 | — | `scripts/architecture/` 全绿 + 变异证明 |
+| **A0** | **客户端运行时轴**:`@duya/ai` 去掉 `node:crypto`、`@duya/plugin-core` 二分为 schema/loader、`conductor` 开 `./renderer` 子路径 + 门禁 **G10** | 无(可与 A1 并行) | 从浏览器入口出发的 import 闭包不含 Node 内建;须能变红 |
+| **A2** | 合 PR #214(S1a 接缝 + S3 背压) | — | `architecture:check` 无新增;`packages/agent-runtime` 632/632 |
+| **A3** | S2 循环迁出:`ToolExecutionPipeline` 出 `DuyaAgent.ts` 闭包 | A1, A2 | **G7 在 live tree 上转绿**,且 finding 指向迁出后的真实归属 |
+| **A4** | S4 同引擎接 CLI / eval | A3 | 多轮、工具报错、取消、存储拒绝、worker 退出、慢消费者 |
+| **A5** | S5 六包逐切片迁移(L3 宿主) | A4, **A0** | 每迁一块切断旧依赖并验证真实消费者 |
+| **A6** | S6 Session data contract | A5(**不再等 602**) | 回填 / 恢复 / 兼容证据齐备后才删旧关系 |
+| **A7** | S7 facade 退役 | A6 | `packages/agent` 消费者归零后删除 |
+| **B1** | 601-A 门禁:6 个 handler 的模块加载期 Electron 依赖 | 无(可与 A 线并行) | 门禁 A1 先证明现在是红的 |
+| **B2** | 601-B 控制平面倒置成纯 Node 进程 | A5, B1, **A0** | Electron / CLI / Web / 小程序全部降级为它的客户端;CLI 与 main 进程内加载 L3,Web 走 HTTP |
+| **B3** | 601-C agent runtime 注册到远端 | B2 | — |
+| **C1** | 602 Phase 0 探针(可选) | 无 | 9 项能力边界;`close()` 语义与回滚路径任一不过就停下 |
+
+**关键路径:A1 → A2 → A3 → A4 → A5 → A6 → A7。**
+**A0 是唯一不做架构改造也能做的一片**,产出是让 Web 从"被耦合卡住"变成"差一个 `apps/web` 骨架",
+建议与 A1 并行启动 —— 见 [02 客户端与运行时轴](02-client-runtime-axis.md)。
+B 线在 B1 之后才与 A5 交汇;C 线全程可并行且不阻塞任何人。
+
+---
+
+## 6. 边界
+
+- 本系列**不改** 600/601/602 的目标架构裁决,只重排顺序、更正被实测推翻的前提。
+- 本系列**不取消** 602,只把它移出关键路径。
+- 本系列**不接管** `packages/agent-runtime` 等已完成切片的历史记录,那些在各自执行日志里。
+- 本系列自己也要遵守 §4;若某片做不到变异证明,**该片不完成**。
+
+---
+
+## 7. 支持资料
+
+- [600 分层架构落地](../600-layered-architecture/README.md) — 契约与推导(§4 已冻结)
+- [02 客户端与运行时轴](02-client-runtime-axis.md) — **一个核心如何同时驱动 CLI / Web / Desktop;A0 的依据**
+- [601 Headless Control Plane](../601-headless-control-plane/README.md)
+- [602 SQLite 驱动迁移](../602-sqlite-abi/README.md)(前提更正见其 §0)
+- [01 A1 切片契约](01-slice-a1-g7-loop-detection.md)
+- [90 执行日志](90-execution-log.md)
