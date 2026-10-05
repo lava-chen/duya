@@ -134,6 +134,7 @@ import type {
   TransientContextFragment,
   TurnAssemblyInput,
 } from './ports.js';
+import { openRequestScope } from './request-scope.js';
 
 // ============================================================================
 // Public shape
@@ -374,6 +375,13 @@ export class RunEngineImpl implements RunEngine {
           runId,
           turn,
           signal,
+          // The conditional spread, not a plain assignment, because this package
+          // compiles with `exactOptionalPropertyTypes`: naming the field with an
+          // `undefined` value is not the same as omitting it, and a request that
+          // named no cap must omit it. Same idiom as the model selection below.
+          ...(request.modelRequestTimeoutMs === undefined
+            ? {}
+            : { modelRequestTimeoutMs: request.modelRequestTimeoutMs }),
           ports,
           input,
           manifest,
@@ -521,83 +529,105 @@ export class RunEngineImpl implements RunEngine {
   async #streamModel(ctx: RunContext, request: ModelRequest): Promise<EngineExit | null> {
     const { ports, signal, spend } = ctx;
 
-    const message = new TurnMessage(ctx.messageId, ctx.turn);
-    let sawFrame = false;
-    for await (const frame of ports.model.stream(request, signal)) {
-      if (isAborted(signal)) {
-        // A stop mid-stream must not dispatch whatever the model was in the
-        // middle of asking for, and `discard` is what drops it: without it a
-        // replay of this turn would double-dispatch calls the first attempt
-        // already sent.
-        ports.tools.discard('abandoned');
-        return { reason: 'cancelled' };
+    // The per-request cap, opened here because THIS is the request, and released
+    // in the `finally` below rather than at each exit.
+    //
+    // The split is the load-bearing part, so it is stated where a reader will
+    // hit it first: `signal` remains the RUN signal for every `isAborted` check
+    // in this method, and ONLY the port call receives the scope's signal. A
+    // timeout then ends the request and nothing else, so the run keeps the
+    // authority it needs to stop itself and to arm the next request. Reading
+    // the scope's signal in the `isAborted` checks would report a slow request
+    // as a cancelled run.
+    const scope = openRequestScope(signal, ctx.modelRequestTimeoutMs);
+    try {
+      const message = new TurnMessage(ctx.messageId, ctx.turn);
+      let sawFrame = false;
+      for await (const frame of ports.model.stream(request, scope.signal)) {
+        if (isAborted(signal)) {
+          // A stop mid-stream must not dispatch whatever the model was in the
+          // middle of asking for, and `discard` is what drops it: without it a
+          // replay of this turn would double-dispatch calls the first attempt
+          // already sent.
+          ports.tools.discard('abandoned');
+          return { reason: 'cancelled' };
+        }
+        sawFrame = true;
+
+        switch (frame.type) {
+          case 'tool_use':
+            message.addToolUse(frame.call);
+            await this.#dispatchCall(ctx, frame.call);
+            break;
+          case 'tool_use_started':
+            // Announces a call, is not one. Legacy pushes the block on `tool_use`
+            // (`DuyaAgent.ts:2576`), so a `tool_use_started` that never completed
+            // must not put a block in the message.
+            await this.#dispatchCall(ctx, frame.call);
+            break;
+          case 'text':
+            message.addText(frame.text);
+            break;
+          case 'thinking':
+            message.addThinking(frame);
+            break;
+          case 'tool_use_delta':
+            // Argument fragments, and the complete `tool_use` frame carries the
+            // whole input. Legacy ignores them for the message too (there is no
+            // `tool_use_delta` arm in its `done` handler), so accumulating them
+            // here would DOUBLE the arguments on every call.
+            break;
+          case 'usage':
+            spend.addTokens(frame.totalTokens ?? frame.inputTokens + frame.outputTokens);
+            message.addUsage(frame);
+            break;
+          case 'error':
+            // A fatal frame ends the run. `retryable` is the provider's claim and
+            // the engine does not second-guess it: within-attempt retry belongs to
+            // the model port (04 section 3.1) and the cross-run decision belongs
+            // to the Control Plane, which this port cannot express.
+            if (!frame.retryable) {
+              ports.tools.discard('model_retry');
+              return { reason: 'failed', message: frame.message };
+            }
+            break;
+          case 'turn_stopped':
+            if (frame.reason === 'cancelled') {
+              ports.tools.discard('abandoned');
+              return { reason: 'cancelled' };
+            }
+            message.stop(frame.reason);
+            break;
+        }
       }
-      sawFrame = true;
 
-      switch (frame.type) {
-        case 'tool_use':
-          message.addToolUse(frame.call);
-          await this.#dispatchCall(ctx, frame.call);
-          break;
-        case 'tool_use_started':
-          // Announces a call, is not one. Legacy pushes the block on `tool_use`
-          // (`DuyaAgent.ts:2576`), so a `tool_use_started` that never completed
-          // must not put a block in the message.
-          await this.#dispatchCall(ctx, frame.call);
-          break;
-        case 'text':
-          message.addText(frame.text);
-          break;
-        case 'thinking':
-          message.addThinking(frame);
-          break;
-        case 'tool_use_delta':
-          // Argument fragments, and the complete `tool_use` frame carries the
-          // whole input. Legacy ignores them for the message too (there is no
-          // `tool_use_delta` arm in its `done` handler), so accumulating them
-          // here would DOUBLE the arguments on every call.
-          break;
-        case 'usage':
-          spend.addTokens(frame.totalTokens ?? frame.inputTokens + frame.outputTokens);
-          message.addUsage(frame);
-          break;
-        case 'error':
-          // A fatal frame ends the run. `retryable` is the provider's claim and
-          // the engine does not second-guess it: within-attempt retry belongs to
-          // the model port (04 section 3.1) and the cross-run decision belongs
-          // to the Control Plane, which this port cannot express.
-          if (!frame.retryable) {
-            ports.tools.discard('model_retry');
-            return { reason: 'failed', message: frame.message };
-          }
-          break;
-        case 'turn_stopped':
-          if (frame.reason === 'cancelled') {
-            ports.tools.discard('abandoned');
-            return { reason: 'cancelled' };
-          }
-          message.stop(frame.reason);
-          break;
+      if (!sawFrame) {
+        // A stream that produced no frames and no error is a transport that died
+        // quietly. Treating that as a completed turn would let the stop decision
+        // below return "completed" for a run that never spoke.
+        return { reason: 'failed', message: 'the model stream produced no frames' };
       }
-    }
 
-    if (!sawFrame) {
-      // A stream that produced no frames and no error is a transport that died
-      // quietly. Treating that as a completed turn would let the stop decision
-      // below return "completed" for a run that never spoke.
-      return { reason: 'failed', message: 'the model stream produced no frames' };
+      // AFTER the `sawFrame` check and not before: a dead transport produced no
+      // answer, and a message assembled from nothing is not one.
+      this.#publishBlocks(ctx, message);
+      await this.#handOffMessage(ctx, message, request);
+      // Held for `#finalizeLastMessage`, which publishes the
+      // `assistant.message_finalized` event. Set on every turn, so the run's
+      // authoritative message is the one the loop actually stopped on rather than
+      // whichever turn happened to be first.
+      ctx.lastMessage.current = message;
+      return null;
+    } finally {
+      // Both the completing path and the throwing one, which is the legacy's
+      // shape (`try` at `DuyaAgent.ts:2268`, `finally` calling
+      // `disposeRequestController` at `:3398-3403`). A `finally` rather than a
+      // call at each `return` because there are five exits here and a sixth
+      // would be the one that leaks: a pending timer holds the process open, and
+      // the parent's `abort` listener keeps this request reachable for the life
+      // of the run.
+      scope.dispose();
     }
-
-    // AFTER the `sawFrame` check and not before: a dead transport produced no
-    // answer, and a message assembled from nothing is not one.
-    this.#publishBlocks(ctx, message);
-    await this.#handOffMessage(ctx, message, request);
-    // Held for `#finalizeLastMessage`, which publishes the
-    // `assistant.message_finalized` event. Set on every turn, so the run's
-    // authoritative message is the one the loop actually stopped on rather than
-    // whichever turn happened to be first.
-    ctx.lastMessage.current = message;
-    return null;
   }
 
   /**
@@ -1330,6 +1360,15 @@ interface RunContext {
   readonly runId: RunId;
   readonly turn: number;
   readonly signal: AbortSignal;
+  /**
+   * The run's per-REQUEST cap, forwarded from `RunExecutionRequest`.
+   *
+   * Copied onto the context rather than re-read from the request because
+   * `#streamModel` receives only the context, and a field re-read from two
+   * places is a field that can disagree with itself. `undefined` means no cap,
+   * and that is every run's state today.
+   */
+  readonly modelRequestTimeoutMs?: number;
   readonly ports: RunEnginePorts;
   readonly input: RunInputSnapshot;
   readonly manifest: RunManifest;

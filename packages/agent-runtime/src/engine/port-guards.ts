@@ -32,6 +32,7 @@ import type {
   ApprovalVerdict,
   AssistantMessageRecord,
   ModelFrame,
+  ModelRequest,
   OneShotTextPort,
   OneShotTextRequest,
   OneShotTextResult,
@@ -565,3 +566,83 @@ export const ONE_SHOT_PORT_IS_CONSTRUCTIBLE: OneShotTextPort = {
 type OneShotCarriesNoRunIdentity = Extract<keyof OneShotTextRequest, 'runId' | 'runEpoch' | 'seq'>;
 // @ts-expect-error - a one-shot generation is not a run and cannot claim to be one
 const ONE_SHOT_REQUEST_CARRIES_NO_RUN_IDENTITY: OneShotCarriesNoRunIdentity = 'runId';
+
+// ---------------------------------------------------------------------------
+// The per-request cap: CONFIGURATION on the request, never a port, never a
+// payload field the model port could enforce on its own.
+// ---------------------------------------------------------------------------
+
+/**
+ * The cap is constructible where it is declared, and a number.
+ *
+ * Positive first, for the reason `MINIMAL_PORTS` exists: a negative half over a
+ * field that cannot be set would pass for the wrong reason. This case is also
+ * the one that carries the TYPE -- `number`, not `unknown` and not `string` --
+ * because the whole argument for putting it here rather than in
+ * `RunInputSnapshot.options` (`ports.ts`, the `options` bag is
+ * `Readonly<Record<string, unknown>>`) is that the runtime can read it without
+ * coercing, and a widened type here would delete that argument silently.
+ */
+export const REQUEST_CAP_IS_A_TYPED_FIELD: Pick<RunExecutionRequest, 'modelRequestTimeoutMs'> = {
+  modelRequestTimeoutMs: 5_000,
+};
+
+/**
+ * And it is OPTIONAL, because "absent = no per-request cap" is the legacy rule
+ * (`DuyaAgent.ts:2255` arms the timer only when the option is set and positive)
+ * and the state every run is in today. Making it required would force every
+ * composition to state a policy none of them has.
+ *
+ * POSITIVE, and the polarity matters: an earlier draft of this case was written
+ * as `@ts-expect-error` over the empty literal, and it is green in BOTH states
+ * -- omitting an optional property is legal, so there was no error to suppress
+ * and the directive went unused (`tsc` TS2578). That is the "guard that is green
+ * in both states" this file's own header warns about, and it is why the absence
+ * is asserted by construction instead: if the field ever becomes required, the
+ * empty literal stops satisfying this `Pick` and the build fails.
+ */
+export const A_RUN_MAY_NAME_NO_CAP: Pick<RunExecutionRequest, 'modelRequestTimeoutMs'> = {};
+
+/**
+ * The cap is NOT on `ModelRequest`, so the model port cannot own the timer.
+ *
+ * This is the "one enforcer" rule `BudgetPort` argues at length
+ * (`ports.ts:961-983`): two sides enforcing one ceiling is the failure both
+ * contracts are written to prevent. A cap on `ModelRequest` would invite a
+ * bound port to arm its own deadline from the request, at which point the
+ * engine's timer and the port's would both be live and the request would be
+ * killed at whichever fired first -- with no way to tell from outside which.
+ *
+ * The signal is the enforcement point, not the payload: `ModelPort.stream`
+ * already receives one (`ports.ts:394`) and the engine already owns the only
+ * controller that can abort it.
+ */
+type CapOnModelRequest = Extract<keyof ModelRequest, 'modelRequestTimeoutMs'>;
+// @ts-expect-error - the cap lives on the execution request; a payload field would allow a second enforcer
+const MODEL_REQUEST_CARRIES_NO_CAP: CapOnModelRequest = 'modelRequestTimeoutMs';
+
+/**
+ * And the port set did not grow a cancellation port to carry it.
+ *
+ * Polarity matches `DRAIN_KIND_SET_IS_CLOSED` for the reason given there: this
+ * yields `'no-port'` while the port set is unchanged, so the assignment below is
+ * an error and the directive is used; add a member and the conditional yields
+ * `'unexpected-port'`, the assignment becomes legal, the directive goes unused
+ * and `npm run typecheck:runtime` fails.
+ *
+ * This is the b3a lesson made structural. b3a made `recordAssistantMessage` a
+ * METHOD of `TurnOutputPort` rather than a sibling port because a second optional
+ * binding is a second way for a host to lose the answer silently. The cap does
+ * not carry that risk -- an absent cap costs a guardrail, not data -- so it is a
+ * field. This probe is what keeps that reasoning from being re-litigated by a
+ * well-meaning later change that reaches for the port shape first.
+ */
+type CancellationPortAbsent = Extract<
+  keyof RunEnginePorts,
+  'requestCancellation' | 'requestScope' | 'cancellation'
+> extends never
+  ? 'no-port'
+  : 'unexpected-port';
+
+// @ts-expect-error - a cap is configuration the caller already has, not a capability it supplies
+export const REQUEST_CAP_IS_NOT_A_PORT: CancellationPortAbsent = 'unexpected-port';

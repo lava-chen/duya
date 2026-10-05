@@ -1042,6 +1042,47 @@ export interface RunExecutionRequest {
   readonly manifest: RunManifest;
   readonly input: RunInputSnapshot;
   readonly signal: AbortSignal;
+  /**
+   * Wall-clock ceiling on ONE model call, in ms. Optional; absent = no cap.
+   *
+   * ## What it buys, and why the run's own signal cannot
+   *
+   * It aborts a single model call that overruns EVEN WHILE ITS STREAM IS STILL
+   * PRODUCING DATA -- a thinking stream that never converges -- so a hung turn
+   * fails fast instead of consuming the whole run budget. That is the legacy
+   * option's own statement (`DuyaAgent.ts:2246-2251`, declared
+   * `llmRequestTimeoutMs` at `types.ts:506` and handed in at
+   * `agent-process-entry.ts:3081`), and it is not expressible with `signal`
+   * alone: the run's signal outlives every request inside it, so using it would
+   * end the RUN at the first slow request rather than the request.
+   *
+   * The engine builds the child signal and the timer itself, in
+   * `engine/request-scope.ts`. A host supplies the POLICY; it never supplies,
+   * and never holds, the controller.
+   *
+   * ## Why a field here and not in `input.options`
+   *
+   * `RunInputSnapshot.options` is `Readonly<Record<string, unknown>>`
+   * (`ports.ts:1165`) and is the only route this value could otherwise have
+   * taken -- the legacy reads the same fact out of an `options` bag. It is
+   * rejected for the reason the rest of this file argues shapes rather than
+   * bags: an untyped read cannot be validated, and the one coercion that matters
+   * here fails SILENTLY. A host that passed `"5000"` from a config file would
+   * yield the string `"5000"`, which compares false against `> 0` and would
+   * leave the request uncapped -- a cap that was configured, visible in the
+   * host's config, and not enforced, with nothing anywhere reporting it. A typed
+   * optional field moves that coercion to the host's boundary, where the host
+   * already validates, and leaves the runtime reading a `number`.
+   *
+   * ## Why not a port
+   *
+   * See `engine/request-scope.ts` for the full argument. Short form: a port is a
+   * capability, this is configuration, and the b3a rule against second optional
+   * bindings protects against a forgotten binding LOSING DATA -- which an
+   * absent cap does not do. `port-guards.ts` asserts the decision so the port
+   * shape cannot return quietly.
+   */
+  readonly modelRequestTimeoutMs?: number;
   /** The ports for this run. Supplied per run, not per process. */
   readonly ports: RunEnginePorts;
 }
