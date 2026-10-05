@@ -1179,7 +1179,19 @@ selfTest:
   # (`--write`) was not run.
   # 233 -> 370: see the `module-dependency` block above. Same 89 edges, moved
   # from the violation set into the permitted set.
-  module-dependency-permitted: 370
+  #
+  # 370 -> 375 by plan 600 S1a (`rescue/600-lost-slices`): the recovered
+  # `packages/agent-runtime/src/transport/run-routing.ts` reaches
+  # `@duya/agent-protocol` twice and `./execution-channel.js` once, and
+  # `agent-runtime` declares all three, so they are permitted rather than
+  # blocking. 5 more edges, all declared.
+  #
+  # The same file also shows a SECOND blind spot in `strip-comments`, found by
+  # the same measurement: `run-routing.ts:73` is a line inside a JSDoc block,
+  # and stripping leaves `go and find it`, which `IMPORT_RE` then captures as
+  # a specifier. Not fixed here for the same reason as the bare-`import` gap
+  # above -- it is a distinct defect in a different script.
+  module-dependency-permitted: 375
   # 16 -> 0: every `forbidden-dependency` in the tree was one of the 16
   # `pkg:agent` -> `apps/desktop` statements removed above.
   forbidden-dependency: 0
