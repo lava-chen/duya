@@ -32,8 +32,14 @@ describe('signBedrockRequest (SigV4)', () => {
     });
     expect(h.Authorization).toMatch(/^AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE\/20260105\/us-east-1\/bedrock\/aws4_request, SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date, Signature=[a-f0-9]{64}$/);
     expect(h['x-amz-date']).toBe('20260105T103000Z');
+    // This used to compare `x-amz-content-sha256` against ITSELF — a ternary
+    // whose two branches were both `h['x-amz-content-sha256']` — so it passed
+    // whatever the signer produced and asserted nothing at all. The value
+    // below is the real SHA-256 of `body`, and it is the same constant
+    // `bedrock-sigv4-webcrypto.test.ts` pins for these exact inputs, so the two
+    // files cannot drift into agreeing on a wrong digest.
     expect(h['x-amz-content-sha256']).toBe(
-      '4f8b2a9b3c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f'.length === 64 ? h['x-amz-content-sha256'] : h['x-amz-content-sha256'],
+      '5e4ce7b36ba37b78a5d5f9fd08e6b7b54ba6879d651aa46ec9e1d6fa24ebe30a',
     );
   });
 
