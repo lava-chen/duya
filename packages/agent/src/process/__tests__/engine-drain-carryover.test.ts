@@ -75,8 +75,16 @@
  *    back inside `assemble` would pick a side of a decision `ports.ts` leaves
  *    open (inline vs `by_ref` history) and could hand the model the same result
  *    twice. What the engine's own seed carries is asserted below.
- *  - the worker's `publishEvent` no-op (`agent-process-entry.ts:3293`). Binding
- *    it means owning the `chat:*` projection for engine events -- the
+ *  - the event port's LIVE binding. b4d replaced the
+ *    `publishEvent: (event) => void` no-op with a required
+ *    `emitter: Pick<RunEventEmitter, 'emit'>`, because a caller-supplied
+ *    function with no emitter in its type could be satisfied with a direct
+ *    stream push and an announced terminal reports success before the durable
+ *    barrier has answered. NO host supplies one: `buildEnginePorts` has no
+ *    production caller, and `agent-process-entry.ts` constructs no
+ *    `RunController`, `RunSession` or `RunEventEmitter` at all. Supplying a
+ *    real emitter is therefore part of the cutover, and it is the same work as
+ *    owning the `chat:*` projection for engine events -- the
  *    `WorkerAdapterSurface` codec -- which cannot be done while the legacy
  *    generator still drives the same frames.
  */
