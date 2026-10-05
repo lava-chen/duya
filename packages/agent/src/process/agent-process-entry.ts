@@ -2995,7 +2995,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // (see `__tests__/live-turn-single-driver.test.ts`):
     //
     //  - It asked the provider ZERO times and dispatched ZERO tools, then ended
-    //    `failed` on `sawFrame === false` (`run-engine.ts:490`) and proposed that
+    //    `failed` on `sawFrame === false` (`run-engine.ts:584`) and proposed that
     //    failure as the run's terminal. `RunSession.settle` is the single writer
     //    of a real terminal, so the proposal was logged and discarded: a second
     //    account of a run that had not happened, minted once per `chat:start`.
@@ -3018,7 +3018,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     //     (`model-leg.ts:216`), and that is the same call `DuyaAgent.streamChat`
     //     makes at its own `:2431`. Binding `openModelStream` to a published leg
     //     does not lend the engine one turn of the running loop -- it gives the
-    //     engine the WHOLE cycle (`run-engine.ts:307` is a self-contained `for`:
+    //     engine the WHOLE cycle (`run-engine.ts:353` is a self-contained `for`:
     //     assemble, `#streamModel` at `:382`, drain at `:392`, decide, repeat)
     //     while this generator keeps running that same cycle. Two callers, two
     //     provider requests, one set of per-attempt accumulators -- so a transport

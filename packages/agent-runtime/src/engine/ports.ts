@@ -80,11 +80,12 @@ import type {
   RunId,
   RunManifest,
   RunTerminalState,
+  TokenUsage,
   ToolCallId,
   ToolSideEffectClass,
 } from '@duya/agent-protocol';
 import type { BudgetBreach, RunSpend } from '@duya/agent-core';
-import type { AgentProgressEvent } from '@duya/agent-protocol/transcript';
+import type { AgentProgressEvent, MessageContent as TranscriptMessageContent } from '@duya/agent-protocol/transcript';
 import type { StopReceipt, StopRequest } from '../transport/execution-channel.js';
 
 // ============================================================================
@@ -164,7 +165,32 @@ export type ModelStopReason =
  */
 export type ModelFrame =
   | { readonly type: 'text'; readonly text: string }
-  | { readonly type: 'thinking'; readonly text: string; readonly signature?: string; readonly redacted?: boolean }
+  | {
+      readonly type: 'thinking';
+      readonly text: string;
+      readonly signature?: string;
+      readonly redacted?: boolean;
+      /**
+       * The opaque encrypted reasoning payload, when the provider redacted it.
+       *
+       * Added by plan 600 S2 b3a, and the reason is a MEASURED loss rather than
+       * a design preference. `SSEEvent.thinking` carries it
+       * (`packages/ai/src/types.ts:188`), the legacy loop reads it
+       * (`DuyaAgent.ts:3094-3095`) and the assembled message cannot be replayed
+       * without it (`packages/ai/src/api/anthropic-messages.ts:1669-1670` sends
+       * it back as a native `redacted_thinking` block). A `redacted: true` frame
+       * with no payload here is a block the engine cannot rebuild, and the
+       * redacted block must LEAD the assistant turn for Anthropic thinking-mode
+       * validation -- so dropping it breaks the next request outright rather
+       * than degrading it.
+       *
+       * Optional-and-therefore-possibly-absent, because a provider that does
+       * not redact has no payload to send. The engine emits a redacted block
+       * only when this is a non-empty string, which is the legacy rule
+       * verbatim (`DuyaAgent.ts:3094`).
+       */
+      readonly encrypted?: string;
+    }
   | { readonly type: 'tool_use_started'; readonly call: ToolCallRequest }
   | { readonly type: 'tool_use_delta'; readonly callId: ToolCallId; readonly delta: string }
   | { readonly type: 'tool_use'; readonly call: ToolCallRequest }
@@ -633,7 +659,7 @@ export type ApprovalScope = 'once' | 'always' | 'session';
  * reachable from here, exactly as for `RunEventStorePort` -- nothing on this
  * port may be awaited as an acknowledgement that the result is durably stored.
  *
- * ## Why these are TWO methods and not one
+ * ## Why these are THREE methods and not one
  *
  * `recordToolResult` is per RESULT and `finishTurn` is per DRAIN, and the split
  * is the legacy ordering reproduced rather than tidied: the legacy loop ran
@@ -643,11 +669,20 @@ export type ApprovalScope = 'once' | 'always' | 'session';
  * ended, which is the same "collected during assembly, never read back" shape
  * this port exists to prevent.
  *
+ * `recordAssistantMessage` is a THIRD cadence again -- per ASSEMBLED MESSAGE,
+ * and before both of the others -- because the model stopped producing at a
+ * different point than the tools did. The legacy built it at the `done`
+ * boundary (`:2645-2678`) and pushed it before any tool result, because OpenAI
+ * rejects a transcript ordered the other way round (`:2641-2642`). Folding it
+ * into `recordToolResult` would make a turn that dispatched nothing a turn that
+ * never had a message, which is exactly the model answer this port was extended
+ * to carry.
+ *
  * ## The result count is NOT the dispatch count
  *
  * `TurnOutputSummary` carries both, and they are different quantities:
  * `TurnWork.dispatched` counts calls the engine put on their way
- * (`run-engine.ts:569`), while `results` counts answers that came back. The
+ * (`run-engine.ts:805`), while `results` counts answers that came back. The
  * legacy gate at `:2858` is `toolResultMessageCount > 0` -- RESULTS
  * (`DuyaAgent.ts:2722`) -- and a turn can dispatch two calls and receive one
  * answer. Gating `PostToolUse` or a compaction probe on `dispatched` fires both
@@ -668,6 +703,14 @@ export type ApprovalScope = 'once' | 'always' | 'session';
  * must discharge is: before the legacy loop is removed, a host that loses a
  * tool result must be impossible, which means this port has to be bound by
  * something other than `DuyaAgent.streamChat`'s own closure.**
+ *
+ * The same is true of the ASSISTANT MESSAGE, and the loss is the one that would
+ * not be visible until someone read the transcript: with no binding, the engine
+ * still emits `assistant.message_finalized` and the per-block events (those go
+ * through `RunEventStorePort`, which is required), but nothing is pushed to the
+ * host's durable row. The message stops being lost from the EVENT STREAM at
+ * plan 600 S2 b3a; it stops being lost from the TRANSCRIPT when the legacy loop
+ * goes away and this port is bound.
  */
 export interface TurnOutputPort {
   /**
@@ -683,6 +726,39 @@ export interface TurnOutputPort {
    */
   recordToolResult(record: ToolResultRecord): Promise<void>;
   /**
+   * The turn's assistant message is ASSEMBLED, and it is the model's actual
+   * answer. Called once per turn, at the end of that turn's model stream, and
+   * BEFORE `recordToolResult` for the same turn.
+   *
+   * Awaited for the reason `recordToolResult` is: one of the host effects is a
+   * hook that injects context, and it has to land before the next request is
+   * built. A host whose projections are all synchronous may still return a
+   * resolved promise.
+   *
+   * ## Why this is a THIRD method here and not a sibling port
+   *
+   * Because it is the same obligation `recordToolResult` discharges, at a
+   * different point in the same turn. The legacy loop assembled the message
+   * inline at the `done` boundary (`DuyaAgent.ts:2645-2678`) and pushed it
+   * durable, in the same closure, with the same six host effects a tool result
+   * gets. A sibling port would mean a second optional binding a host could
+   * forget -- and this port's own doc comment already names forgetting as the
+   * one way the cutover fails ("a host that loses a tool result must be
+   * impossible"). Two optional ports double the ways to lose the answer, which
+   * is the exact loss this method exists to prevent.
+   *
+   * ## Why the ORDER against `recordToolResult` is load-bearing
+   *
+   * The legacy comment at `DuyaAgent.ts:2641-2642` is explicit: the assistant
+   * message goes in BEFORE the tool results, because OpenAI requires
+   * `assistant (tool_calls) -> tool (result)` and a transcript that stores them
+   * the other way round is rejected on the next request. The engine reaches
+   * that order structurally rather than by convention -- `#streamModel` hands
+   * the message over as the stream ends, and `#drainOutcomes` cannot run before
+   * it returns.
+   */
+  recordAssistantMessage(record: AssistantMessageRecord): Promise<void>;
+  /**
    * The turn's drain ended, whether it ended by exhausting the stream or by
    * aborting mid-drain. Reported with the results seen SO FAR in the abort case.
    *
@@ -692,6 +768,93 @@ export interface TurnOutputPort {
    */
   finishTurn(summary: TurnOutputSummary): Promise<void>;
 }
+
+/**
+ * The turn's assembled assistant message, as the host is handed it.
+ *
+ * ## The content is the TRANSCRIPT vocabulary, not the event one
+ *
+ * `AssistantContentBlock` is `@duya/agent-protocol/transcript`'s `MessageContent`
+ * narrowed to the three kinds a model stream can produce, and that is a
+ * deliberate choice over the event payload's four-member union. The host's job
+ * is to persist this row and replay it, and replay needs facts the event
+ * vocabulary cannot hold: `ThinkingContent.encrypted` is a `string` in the
+ * transcript (the opaque payload to send back as `redacted_thinking`) and only
+ * a `boolean` in the event (`events/payloads.ts:118`). Narrowing it to the
+ * event shape here would hand the host a flag with nothing behind it, and
+ * `transformMessages` would then downgrade the next request's reasoning --
+ * silently, and only on the second turn.
+ *
+ * The engine emits the EVENT in the event vocabulary; the projection between
+ * the two is in `run-engine.ts`, and it is the same narrowing the inbound
+ * translator performs (`translate/chat-event-translator.ts:567`).
+ *
+ * ## What is NOT on this record, and where each of those things lives
+ *
+ *  - **`id`, `timestamp`, `seq_index`** -- the writer's, exactly as
+ *    `ToolResultRecord` says: `?? crypto.randomUUID()` (`DuyaAgent.ts:2678`) is
+ *    minted where it is stored, and `ports.ts`'s no-`seq` rule is a second
+ *    authority for "where does this message sit".
+ *  - **`modelAttribution`** -- the HOST's. `...this.modelAttribution`
+ *    (`DuyaAgent.ts:2678`) reads a field on the agent instance that records
+ *    which model this session is bound to; the engine has no session and must
+ *    not invent one. `model`/`providerId` below are the turn's own request
+ *    facts, carried so the host can decide without re-deriving them, and the
+ *    event payload has no field for either (measured, see `run-engine.ts`).
+ *  - **`usage` in the row's own shape** -- the host's row is snake_case
+ *    (`transcript/content.ts`: `input_tokens`); the engine's numbers are
+ *    camelCase because `ModelFrame.usage` is (`ports.ts`). The record carries
+ *    the engine's own shape and the host maps it, rather than this port
+ *    prescribing a storage shape it cannot see.
+ */
+export interface AssistantMessageRecord {
+  /** 1-based. Where the host's transcript places the record; never a `seq`. */
+  readonly turn: number;
+  /**
+   * The run-scoped CORRELATION id -- the same value every `assistant.text_block`
+   * and `assistant.thinking_block` of this run carries.
+   *
+   * Not the durable row id, and the distinction is the reason the field can
+   * exist where `ToolResultRecord` is forbidden an `id`: this one identifies a
+   * message inside the EVENT STREAM so a consumer can join the finalized
+   * message to the blocks it supersedes
+   * (`replay/transcript-snapshot.ts:28-31,195-200`), while the row id is minted
+   * by whoever stores the row. A frame carrying the producer's own uuid would
+   * put one message in the transcript under two identities, and the
+   * supersession would silently never join.
+   */
+  readonly messageId: string;
+  /** Redacted block first, then thinking, then text and `tool_use` in stream order. */
+  readonly content: readonly AssistantContentBlock[];
+  /**
+   * The turn's SINGLE-CALL usage snapshot, never a turn sum.
+   *
+   * Plan 546: `pushed.usage` is the in-memory anchor `computeContextEstimate`
+   * scans, and a turn-cumulative value there overlaps the per-call ledger the
+   * result handler also walks -- so a sum here would double-count every
+   * consumer that reads it. With several `usage` frames in one turn the LAST
+   * one wins, which is what the provider's final usage report is and what the
+   * legacy `roundResultUsage` held (`DuyaAgent.ts:2703`).
+   */
+  readonly usage?: TokenUsage;
+  /** The model this turn actually asked, when the request named one. */
+  readonly model?: string;
+  /** The provider this turn actually asked, when the request named one. */
+  readonly providerId?: string;
+}
+
+/**
+ * The blocks a model stream can produce, in the TRANSCRIPT vocabulary.
+ *
+ * The three arms are the transcript's own `TextContent`, `ThinkingContent` and
+ * `ToolUseContent` types rather than copies of them, so a host can hand
+ * `content` straight to the store it already uses. See
+ * `AssistantMessageRecord`'s doc comment for why this is not the event union.
+ */
+export type AssistantContentBlock = Extract<
+  TranscriptMessageContent,
+  { readonly type: 'text' | 'thinking' | 'tool_use' }
+>;
 
 /**
  * One landed tool result, as the host is handed it.

@@ -3,13 +3,13 @@
  *
  * ## Why this exists
  *
- * `RunEngineImpl.#ticket` (`run-engine.ts:757`) refuses to dispatch anything
+ * `RunEngineImpl.#ticket` (`run-engine.ts:1061`) refuses to dispatch anything
  * that is not `read_only` when no ledger is attached, and the reason it is phrased
  * as a refusal is the whole point: "no ledger" means "no tool with a side effect
  * may be dispatched", NOT "assume none exist". Without a ledger the engine has
  * nowhere to write the `dispatched` record, so every call it makes is one a
  * crash cannot classify -- which is `unknown`, the state that blocks recovery
- * (`ports.ts:708-714`).
+ * (`ports.ts:871-877`).
  *
  * The live adapter resolved every tool to `undeclared` (an empty
  * `SideEffectLookup`), so every dispatch would have been refused. Attaching a
@@ -42,7 +42,7 @@
  *
  * The first is a duplicated side effect on the user's disk. The second is a
  * blocked run. So the ledger is biased toward "it might have happened", which is
- * exactly what the contract's own wording asks for (`ports.ts:895`: "Record a
+ * exactly what the contract's own wording asks for (`ports.ts:1058`: "Record a
  * call as `planned`, then as `dispatched`, then resolve with a ticket") and why
  * `unknown` is a legal, honest state rather than a bug.
  *
@@ -144,7 +144,7 @@ export function ledgerFile(options: {
  * A ledger that admits a call only after the record is on disk.
  *
  * `begin` throws rather than returning a ticket it could not persist, and
- * `run-engine.ts:548` awaits it BEFORE `ports.tools.dispatch` — so a failure here
+ * `run-engine.ts:787` awaits it BEFORE `ports.tools.dispatch` — so a failure here
  * means no dispatch happened, which is the property this whole file exists to
  * provide.
  */
@@ -168,7 +168,7 @@ export function createToolSideEffectLedger(options: LedgerOptions): ToolSideEffe
    *
    * Seeded from the file, so a RESTARTED worker refuses to re-begin a call the
    * previous process already recorded. That is what makes "exactly one record per
-   * attemptKey" (`ports.ts:897`) survive the only event that could break it: the
+   * attemptKey" (`ports.ts:1060`) survive the only event that could break it: the
    * process that wrote the record dying.
    */
   const begun = new Set<string>();
@@ -214,7 +214,7 @@ export function createToolSideEffectLedger(options: LedgerOptions): ToolSideEffe
 
   return {
     async begin(call: ToolCallRequest): Promise<ToolDispatchTicket> {
-      // Minted HERE and never by the engine (`run-engine.ts:746`): the ledger is
+      // Minted HERE and never by the engine (`run-engine.ts:1071`): the ledger is
       // the single writer of attempt keys, so two attempts cannot collide on one.
       const attemptKey = `${options.runId}/${options.runEpoch}/${call.callId}`;
 

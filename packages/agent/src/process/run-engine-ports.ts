@@ -50,6 +50,7 @@ import type {
   ApprovalRequest,
   ApprovalVerdict,
   AssembledTurn,
+  AssistantMessageRecord,
   ContextPort,
   ModelFrame,
   ModelMessage,
@@ -204,10 +205,26 @@ export interface LegacyEngineSources {
   readonly deferFragment?: (fragment: TransientContextFragment) => void;
 }
 
-/** The two `TurnOutputPort` methods, as the legacy package supplies them. */
+/** The three `TurnOutputPort` methods, as the legacy package supplies them. */
 export interface TurnOutputSources {
   /** One landed result. Wraps the legacy `tool_result` frame and its writes. */
   readonly onToolResult: (record: ToolResultRecord) => Promise<void> | void;
+  /**
+   * The turn's assembled assistant message -- the model's actual answer.
+   *
+   * OPTIONAL, and for the same reason `LegacyEngineSources.turnOutput` is: the
+   * legacy loop still builds and pushes this message itself
+   * (`DuyaAgent.ts:2645-2678`), so a source that supplied one would push the
+   * same message twice. The port requires the METHOD; whether a host has
+   * anything to do with it is the host's business, and a source with nothing to
+   * do hands over a resolved promise.
+   *
+   * The record's `content` is in the TRANSCRIPT vocabulary, so the natural
+   * implementation is a push of the same row the legacy built -- redacted block
+   * first, thinking with its signature, then text and `tool_use` in stream
+   * order.
+   */
+  readonly onAssistantMessage?: (record: AssistantMessageRecord) => Promise<void> | void;
   /** The drain ended. Wraps the legacy `toolResultMessageCount` gates. */
   readonly onTurnResults: (summary: TurnOutputSummary) => Promise<void> | void;
 }
@@ -249,7 +266,7 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
       // Forwarded, and NOT collected here. The previous closure array was
       // write-only, which read as a carrier that did not exist; the engine
       // already seeds the next request from its own deferred list
-      // (`run-engine.ts:665,936`), so anything this adapter adds here would be a
+      // (`run-engine.ts:900,1172`), so anything this adapter adds here would be a
       // second copy of the same text rather than a recovery of a lost one.
       // `LegacyEngineSources.deferFragment` says where a host collects them.
       sources.deferFragment?.(fragment);
@@ -276,6 +293,7 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
   const beginTicket = sources.beginTicket;
   const settleTicket = sources.settleTicket;
   const turnOutput = sources.turnOutput;
+  const onAssistantMessage = turnOutput?.onAssistantMessage;
 
   return {
     model,
@@ -286,12 +304,17 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
     // All-or-nothing, for the same reason `sideEffects` is: half a port is a
     // port whose missing half is indistinguishable from one that was never
     // asked. `finishTurn` without `recordToolResult` would report counts for
-    // results the host was never handed.
+    // results the host was never handed, and a host that never learned the
+    // model's answer would have no way to notice.
     ...(turnOutput === undefined
       ? {}
       : {
           turnOutput: {
             recordToolResult: (record) => Promise.resolve(turnOutput.onToolResult(record)),
+            // Optional at the SOURCE, required by the port: a source that has
+            // nothing to do with the message still gets a resolved promise
+            // rather than a `!` or a silent skip in the engine.
+            recordAssistantMessage: (record) => Promise.resolve(onAssistantMessage?.(record)),
             finishTurn: (summary) => Promise.resolve(turnOutput.onTurnResults(summary)),
           },
         }),

@@ -209,6 +209,12 @@ function harness(options: HarnessOptions = {}): Harness {
             records.push(record);
             if (options.gateResult !== undefined) await options.gateResult(record);
           },
+          // The assembled assistant message. Present because the port requires
+          // it (b3a); this harness asserts nothing about it, and the file that
+          // does is `assistant-message-emission.test.ts`.
+          async recordAssistantMessage(): Promise<void> {
+            order.push('assistant');
+          },
           async finishTurn(summary: TurnOutputSummary): Promise<void> {
             order.push('finish');
             summaries.push(summary);
@@ -433,9 +439,24 @@ describe('the runtime-side order is settle, defer, record, then finish', () => {
     });
     await run.completed;
 
-    // Turn 1's four steps, then turn 2's summary for an empty drain -- which the
-    // host needs too, because "this turn landed nothing" is an answer.
-    expect(run.order).toEqual(['settle', 'defer', 'record', 'finish', 'finish']);
+    // Turn 1's assembled message, then its four steps, then turn 2's message and
+    // summary for an empty drain -- which the host needs too, because "this turn
+    // landed nothing" is an answer.
+    //
+    // 'assistant' LEADS each turn, and that is the OpenAI ordering rule from
+    // `DuyaAgent.ts:2641-2642` rather than a cosmetic choice: the assistant
+    // message has to be stored before any tool result or the next request is
+    // rejected. It cannot be otherwise here, because the message exists only
+    // once the stream ends and the drain cannot begin before that.
+    expect(run.order).toEqual([
+      'assistant',
+      'settle',
+      'defer',
+      'record',
+      'finish',
+      'assistant',
+      'finish',
+    ]);
   });
 
   it('parks the drain until the host says the result is stored', async () => {
@@ -468,8 +489,18 @@ describe('the runtime-side order is settle, defer, record, then finish', () => {
     gate.open();
     await run.completed;
 
-    // And once it opens, the rest of the turn proceeds in order.
-    expect(run.order).toEqual(['settle', 'defer', 'record', 'finish', 'finish']);
+    // And once it opens, the rest of the turn proceeds in order. The message
+    // already went out before the gate opened, because the stream had ended by
+    // then -- the gate holds the RESULT, not the stream.
+    expect(run.order).toEqual([
+      'assistant',
+      'settle',
+      'defer',
+      'record',
+      'finish',
+      'assistant',
+      'finish',
+    ]);
     expect(run.summaries[0]).toEqual({ turn: 1, results: 1, dispatched: 1 });
   });
 });
@@ -497,7 +528,7 @@ describe('the result count is not the dispatch count', () => {
   it('reports ZERO results for two dispatches, and still takes another turn', async () => {
     // The case that proves the two numbers are not the same variable on their way
     // to the same place. The engine's own stop decision is `dispatched > 0`
-    // (`run-engine.ts:782`): a call is on its way and may yet answer, so the
+    // (`run-engine.ts:1018`): a call is on its way and may yet answer, so the
     // model gets another turn. A host reading `results` instead would fire
     // nothing, and a gate that had been switched to `results` would end the run
     // with an unanswered call still in flight.

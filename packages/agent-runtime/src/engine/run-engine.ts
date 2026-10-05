@@ -95,24 +95,31 @@
  */
 
 import type {
+  MessageContent as EventContent,
   ProtocolErrorInfo,
   RunEvent,
   RunFence,
   RunId,
   RunManifest,
   RunStatus,
+  StopReason,
+  TokenUsage,
 } from '@duya/agent-protocol';
 import { isBudgetExhausted, type RunSpend } from '@duya/agent-core';
 import type { StopReceipt, StopRequest } from '../transport/execution-channel.js';
 import type {
   ApprovalVerdict,
+  AssistantContentBlock,
+  AssistantMessageRecord,
   AssembledTurn,
   BudgetPort,
   ExtensionContext,
   ExtensionContribution,
   ExtensionPhase,
+  ModelFrame,
   ModelMessage,
   ModelRequest,
+  ModelStopReason,
   RunEngine,
   RunEnginePorts,
   RunExecutionHandle,
@@ -291,6 +298,45 @@ export class RunEngineImpl implements RunEngine {
     const tickets = new Map<string, ToolDispatchTicket>();
     /** Dispatched tool names, so a landing result can name the call behind it. */
     const toolNames = new Map<string, string>();
+    /**
+     * The run-scoped message id every assistant event of this run carries.
+     *
+     * RUN-scoped, and deliberately so: it is the identity
+     * `buildTranscriptSnapshot` keys its block map and its finalized map by
+     * (`replay/transcript-snapshot.ts:175-200`), and a per-turn id would leave
+     * the blocks of a message the finalized event does not name, so the
+     * supersession would never join. The inbound path mints one per run for the
+     * same reason (`translate/chat-event-translator.ts:639-647`), and a
+     * component that minted a new one per block would make every block look like
+     * a separate message to anything that groups by id.
+     *
+     * DERIVED from the run id rather than random, so a replayed attempt produces
+     * the same identity and two attempts at one run cannot be mistaken for two
+     * messages -- the same reasoning as `turnId` at `#turnStartedEvent`.
+     */
+    const messageId = `${runId}:message`;
+    /**
+     * Which turn the run stopped on, for the one `assistant.message_finalized`
+     * this run emits.
+     *
+     * A CELL rather than a field copied forward, and the lifetime is the point:
+     * `RunContext` is rebuilt every iteration, so a per-turn field would forget
+     * the previous turn the moment the next one started. Declared here, beside
+     * `tickets` and `toolNames`, because that is where this module already keeps
+     * the state that outlives one turn -- not on the engine, which is shared.
+     */
+    const lastMessage: RunScoped<{ current: TurnMessage | null }> = { current: null };
+    /**
+     * The next block index per KIND, for the whole run.
+     *
+     * Run-scoped for the same reason the message id is: the blocks of every turn
+     * share ONE id, and a consumer keys them by (id, index)
+     * (`replay/transcript-snapshot.ts:175-193`). A per-turn counter restarts at 0,
+     * so turn 2's first text block would land on turn 1's index and OVERWRITE it
+     * in that map -- which is the silent loss the shared id is supposed to make
+     * impossible. A counter per kind, because the two are indexed independently.
+     */
+    const blockIndex: RunScoped<BlockIndex> = { text: 0, thinking: 0 };
 
     let exit: EngineExit = { reason: 'completed' };
     // Declared OUTSIDE the try so the `finally` can release a lease that was
@@ -337,6 +383,9 @@ export class RunEngineImpl implements RunEngine {
           tickets,
           toolNames,
           turnWork: new TurnWork(),
+          messageId,
+          lastMessage,
+          blockIndex,
         };
 
         if (isAborted(signal)) {
@@ -421,6 +470,12 @@ export class RunEngineImpl implements RunEngine {
       // with a synthetic one over a bookkeeping failure destroys the record of
       // what actually happened.
       await this.#releaseFence(ports, fence, exit);
+      // AHEAD of the terminal proposal, on the legacy frame's own reasoning: the
+      // message stops changing strictly before the run ends
+      // (`agent-process-entry.ts:3482-3488`). A run that failed before any
+      // stream completed has no message, and `#finalizeLastMessage` returns
+      // without publishing -- absence, not an empty finalized message.
+      this.#finalizeLastMessage(ports, lastMessage);
       ports.events.proposeTerminal(this.#terminalCandidate(exit));
       this.#options.onReport?.({
         runId,
@@ -435,15 +490,38 @@ export class RunEngineImpl implements RunEngine {
   // ── Decision 1 ────────────────────────────────────────────────────────────
 
   /**
-   * Open the model stream and dispatch whatever it asks for.
+   * Open the model stream and dispatch whatever it asks for, assembling the
+   * turn's assistant message as the frames arrive.
    *
    * Returns a non-null exit when the turn ended for a reason the loop must not
    * second-guess: the caller's signal, or a fatal model frame. `null` means the
    * stream completed and the run continues to drain.
+   *
+   * ## The frames that "decide nothing" are still the answer
+   *
+   * `text`, `thinking` and `tool_use_delta` fell through this switch as
+   * narration for a long time, and that was correct for DECISION purposes and
+   * fatal for the transcript: they are the only place the model's actual answer
+   * exists. The legacy loop accumulated all three into
+   * `finalAssistantContent` and pushed it durable at the `done` boundary
+   * (`DuyaAgent.ts:2645-2678`), so a turn loop migrated onto this engine
+   * without the assembly below would keep every decision and lose every
+   * message. The frames are still decision-free here; they are no longer
+   * discarded.
+   *
+   * ## Why the message is handed over HERE and not at the end of the turn
+   *
+   * The order is the legacy one and it is a provider requirement, not a taste:
+   * the assistant message must reach the host BEFORE any tool result, because
+   * OpenAI requires `assistant (tool_calls) -> tool (result)`
+   * (`DuyaAgent.ts:2641-2642`). `#drainOutcomes` cannot run before this method
+   * returns, so placing the hand-off at the end of the stream makes the ordering
+   * structural -- there is no code path that reaches a tool result first.
    */
   async #streamModel(ctx: RunContext, request: ModelRequest): Promise<EngineExit | null> {
     const { ports, signal, spend } = ctx;
 
+    const message = new TurnMessage(ctx.messageId, ctx.turn);
     let sawFrame = false;
     for await (const frame of ports.model.stream(request, signal)) {
       if (isAborted(signal)) {
@@ -458,11 +536,30 @@ export class RunEngineImpl implements RunEngine {
 
       switch (frame.type) {
         case 'tool_use':
-        case 'tool_use_started':
+          message.addToolUse(frame.call);
           await this.#dispatchCall(ctx, frame.call);
+          break;
+        case 'tool_use_started':
+          // Announces a call, is not one. Legacy pushes the block on `tool_use`
+          // (`DuyaAgent.ts:2576`), so a `tool_use_started` that never completed
+          // must not put a block in the message.
+          await this.#dispatchCall(ctx, frame.call);
+          break;
+        case 'text':
+          message.addText(frame.text);
+          break;
+        case 'thinking':
+          message.addThinking(frame);
+          break;
+        case 'tool_use_delta':
+          // Argument fragments, and the complete `tool_use` frame carries the
+          // whole input. Legacy ignores them for the message too (there is no
+          // `tool_use_delta` arm in its `done` handler), so accumulating them
+          // here would DOUBLE the arguments on every call.
           break;
         case 'usage':
           spend.addTokens(frame.totalTokens ?? frame.inputTokens + frame.outputTokens);
+          message.addUsage(frame);
           break;
         case 'error':
           // A fatal frame ends the run. `retryable` is the provider's claim and
@@ -479,10 +576,7 @@ export class RunEngineImpl implements RunEngine {
             ports.tools.discard('abandoned');
             return { reason: 'cancelled' };
           }
-          break;
-        default:
-          // `text`, `thinking` and `tool_use_delta` are narration. They reach a
-          // host through the event store if it wants them; they decide nothing.
+          message.stop(frame.reason);
           break;
       }
     }
@@ -493,7 +587,148 @@ export class RunEngineImpl implements RunEngine {
       // below return "completed" for a run that never spoke.
       return { reason: 'failed', message: 'the model stream produced no frames' };
     }
+
+    // AFTER the `sawFrame` check and not before: a dead transport produced no
+    // answer, and a message assembled from nothing is not one.
+    this.#publishBlocks(ctx, message);
+    await this.#handOffMessage(ctx, message, request);
+    // Held for `#finalizeLastMessage`, which publishes the
+    // `assistant.message_finalized` event. Set on every turn, so the run's
+    // authoritative message is the one the loop actually stopped on rather than
+    // whichever turn happened to be first.
+    ctx.lastMessage.current = message;
     return null;
+  }
+
+  /**
+   * The per-block durable events for this turn's message.
+   *
+   * ## Why the engine emits these at all
+   *
+   * Because `assistant.message_finalized` is DEFINED as superseding them
+   * (`replay/transcript-snapshot.ts:28-31`), an event whose identity cannot be
+   * checked against them is an identity claim with nothing to check it against.
+   * The consumer keys both maps by `payload.messageId`, so the two families have
+   * to carry the same one -- and the only way to know they do is for the same
+   * component to emit both.
+   *
+   * The index is per KIND, and continuous across the run's turns, so a second
+   * turn's text does not overwrite the first's under a shared run-scoped id.
+   * The inbound path cannot do that -- it maps every block to `index: 0`
+   * (`translate/chat-event-translator.ts:226`) because it only ever sees a
+   * delta at a time -- so this is strictly more information, not a different
+   * convention.
+   */
+  #publishBlocks(ctx: RunContext, message: TurnMessage): void {
+    const { ports } = ctx;
+    message.eachBlock((block) => {
+      if (block.kind === 'text') {
+        ports.events.publish({
+          type: 'assistant.text_block',
+          messageId: message.messageId,
+          index: ctx.blockIndex.text,
+          text: block.text,
+        });
+        ctx.blockIndex.text += 1;
+        return;
+      }
+      ports.events.publish({
+        type: 'assistant.thinking_block',
+        messageId: message.messageId,
+        index: ctx.blockIndex.thinking,
+        thinking: block.thinking,
+        ...(block.thinkingSignature === undefined ? {} : { thinkingSignature: block.thinkingSignature }),
+        // `encrypted` is a BOOLEAN here: the event vocabulary cannot hold the
+        // payload, only the fact that one exists
+        // (`events/payloads.ts:118`). The payload itself reaches the host
+        // through `recordAssistantMessage`, in the transcript vocabulary where
+        // it is a string.
+        ...(block.encrypted === undefined ? {} : { encrypted: true }),
+      });
+      ctx.blockIndex.thinking += 1;
+    });
+  }
+
+  /**
+   * Hand the assembled message to the host, and remember it for the run's
+   * finalized event.
+   *
+   * Absent binding: the engine still emits the events (they go through the
+   * REQUIRED `events` port) and only the host's durable row is skipped, which
+   * is the same absence `TurnOutputPort` states for a tool result.
+   */
+  async #handOffMessage(ctx: RunContext, message: TurnMessage, request: ModelRequest): Promise<void> {
+    const turnOutput = ctx.ports.turnOutput;
+    if (turnOutput === undefined) return;
+    const record = message.toRecord({
+      ...(request.model === undefined ? {} : { model: request.model }),
+      ...(request.provider === undefined ? {} : { providerId: request.provider }),
+    });
+    await turnOutput.recordAssistantMessage(record);
+  }
+
+  /**
+   * `assistant.message_finalized`, once per run, for the turn the loop stopped
+   * on.
+   *
+   * ## Once per RUN, and not once per turn
+   *
+   * Two reasons, and the second is the binding one.
+   *
+   *  - It is the existing wire's shape. The worker's frame is built from
+   *    `lastAssistant` and sent ONCE at the `chat:done` boundary
+   *    (`agent-process-entry.ts:3489`), so a per-turn emission would be a second
+   *    cadence for an event the product already emits once.
+   *  - The consumer cannot represent more. `buildTranscriptSnapshot` keeps
+   *    finalized messages in a map keyed by `messageId`
+   *    (`replay/transcript-snapshot.ts:197`), and this run's `messageId` is
+   *    run-scoped, so a second finalized event with the same id would REPLACE
+   *    the first rather than sit beside it. Emitting per turn would silently
+   *    drop every turn but the last from the rebuild.
+   *
+   * Nothing is lost to that: every turn's blocks went out as durable block
+   * events above, and the host's own row is per turn via
+   * `recordAssistantMessage`.
+   *
+   * ## A stop reason the event union cannot state is a refusal
+   *
+   * `stopReason` is REQUIRED (`events/required.ts:94`). `ModelStopReason` has a
+   * member the protocol's six-value `StopReason` does not -- `tool_use` means
+   * "the loop is going round again", and `completed` would claim a normal
+   * finish that did not happen. So the event is not emitted, and a `diagnostic`
+   * says which turn lost it: the same counted-diagnostic-instead-of-a-silence
+   * rule the unmapped sub-agent progress frame follows. The turn's message is
+   * NOT lost -- `recordAssistantMessage` already handed it to the host, and the
+   * block events are durable.
+   *
+   * Published BEFORE `proposeTerminal` for the same reason the legacy frame is
+   * sent ahead of `chat:done` (`agent-process-entry.ts:3482-3488`): the message
+   * stops changing strictly before the run ends, so the ledger has to record
+   * them in that order.
+   */
+  #finalizeLastMessage(ports: RunEnginePorts, lastMessage: RunScoped<{ current: TurnMessage | null }>): void {
+    const message = lastMessage.current;
+    if (message === null) return;
+    if (!message.hasContent) return;
+    const stopReason = message.eventStopReason;
+    if (stopReason === null) {
+      ports.events.publish({
+        type: 'diagnostic',
+        level: 'warn',
+        message: `turn ${message.turn} ended with a stop reason the event union cannot state (${
+          message.rawStopReason ?? 'none reported'
+        }); no assistant.message_finalized for it`,
+        data: { turn: message.turn, messageId: message.messageId, stopReason: message.rawStopReason ?? null },
+      });
+      return;
+    }
+    ports.events.publish({
+      type: 'assistant.message_finalized',
+      messageId: message.messageId,
+      content: message.toEventContent(),
+      stopReason,
+      ...(message.usage === undefined ? {} : { usage: message.usage }),
+    });
   }
 
   // ── Decision 2 ────────────────────────────────────────────────────────────
@@ -1126,7 +1361,301 @@ interface RunContext {
   readonly toolNames: Map<string, string>;
   /** Mutable, per turn. Replaced at the top of each iteration. */
   turnWork: TurnWork;
+  /**
+   * The run-scoped message id, derived in `#run` and shared by every assistant
+   * event of the run so the finalized message joins the blocks it supersedes.
+   */
+  readonly messageId: string;
+  /**
+   * Which turn the run stopped on. A CELL, because it outlives the per-turn
+   * `RunContext` it is reached through -- see its declaration in `#run`.
+   */
+  readonly lastMessage: RunScoped<{ current: TurnMessage | null }>;
+  /**
+   * The next block index per kind, for the whole run. A CELL, because the
+   * `messageId` the indexes sit under is run-scoped too -- see its declaration
+   * in `#run`.
+   */
+  readonly blockIndex: RunScoped<BlockIndex>;
 }
+
+/**
+ * The next `assistant.*_block` index per kind.
+ *
+ * Separate counters because the consumer keys a block by
+ * `(messageId, kind, index)` (`replay/transcript-snapshot.ts:256`), so a shared
+ * counter would make a message's first text block and its first thinking block
+ * collide.
+ */
+type BlockIndex = { text: number; thinking: number };
+
+/**
+ * A value whose lifetime is one `#run` rather than one iteration of its loop.
+ *
+ * Named because "this object is shared and mutable" is exactly the property a
+ * reader has to be told about: `tickets` and `toolNames` are per run for the
+ * same reason, and the engine object itself is deliberately NOT one of these
+ * (see this file's header, "No shared mutable state").
+ */
+type RunScoped<T> = T;
+
+/**
+ * One turn's assembled assistant message.
+ *
+ * ## The ORDER is the legacy order, and it is a provider requirement
+ *
+ * `DuyaAgent.ts:2645-2668` builds the content in this sequence and the sequence
+ * is load-bearing at both ends:
+ *
+ *  1. **the redacted block first.** Anthropic's thinking-mode validation wants
+ *     the encrypted payload to LEAD the assistant turn, and the block is
+ *     `{ thinking: '', redacted: true, encrypted }` -- empty text, because the
+ *     provider will not give the reasoning back.
+ *  2. **then thinking, with its signature.** The signature is what lets
+ *     `transformMessages` replay the block natively on the next request instead
+ *     of downgrading it to text, so dropping it degrades EVERY later turn
+ *     silently.
+ *  3. **then text and `tool_use` in stream order**, with consecutive text
+ *     merged and a newline prefix on a text block that follows a tool call
+ *     (`:2606-2620`) so block-level markdown is not swallowed.
+ *
+ * ## The two vocabularies it is read in
+ *
+ * `toRecord` speaks the TRANSCRIPT one, because the host stores and replays
+ * that row and replay needs the encrypted payload as a string. `toEventContent`
+ * speaks the EVENT one, because `events/payloads.ts` cannot hold it. The
+ * projection between them is the same narrowing the inbound translator performs
+ * (`translate/chat-event-translator.ts:567`); it is duplicated rather than
+ * shared because that function reads a loose wire frame's `Record<string,
+ * unknown>` and this one reads blocks it built itself.
+ */
+class TurnMessage {
+  readonly messageId: string;
+  readonly turn: number;
+  /** Stream-ordered text and `tool_use` blocks; thinking is held separately. */
+  readonly #body: AssistantContentBlock[] = [];
+  #thinking = '';
+  #thinkingSignature: string | undefined;
+  #redactedPayload: string | undefined;
+  #usage: TokenUsage | undefined;
+  #rawStopReason: ModelStopReason | undefined;
+
+  constructor(messageId: string, turn: number) {
+    this.messageId = messageId;
+    this.turn = turn;
+  }
+
+  get hasContent(): boolean {
+    return this.#body.length > 0 || this.#thinking !== '' || this.#redactedPayload !== undefined;
+  }
+
+  /** What the provider said, or `undefined` when it said nothing. */
+  get rawStopReason(): ModelStopReason | undefined {
+    return this.#rawStopReason;
+  }
+
+  /** The one the event union can state, or `null` when it cannot state this one. */
+  get eventStopReason(): StopReason | null {
+    return this.#rawStopReason === undefined ? null : STOP_REASON_TO_EVENT[this.#rawStopReason];
+  }
+
+  get usage(): TokenUsage | undefined {
+    return this.#usage;
+  }
+
+  stop(reason: ModelStopReason): void {
+    this.#rawStopReason = reason;
+  }
+
+  addText(text: string): void {
+    // Merge into the previous block when it is also text, which is the legacy
+    // rule (`DuyaAgent.ts:2606-2608`) and not a tidiness: one streamed answer
+    // arrives as many frames, and a row per frame is markdown split down the
+    // middle.
+    const last = this.#body[this.#body.length - 1];
+    if (last !== undefined && last.type === 'text') {
+      this.#body[this.#body.length - 1] = { type: 'text', text: last.text + text };
+      return;
+    }
+    // A text block after a tool call or a piece of thinking needs a leading
+    // newline, or `...text\n### heading` spanning that boundary renders as one
+    // inline paragraph (`:2610-2620`).
+    const prefix = this.#body.length > 0 ? '\n' : '';
+    this.#body.push({ type: 'text', text: prefix + text });
+  }
+
+  addToolUse(call: ToolCallRequest): void {
+    this.#body.push({ type: 'tool_use', id: call.callId, name: call.name, input: { ...call.input } });
+  }
+
+  addThinking(frame: Extract<ModelFrame, { readonly type: 'thinking' }>): void {
+    // The redacted payload is taken ONLY when it is a real payload, which is the
+    // legacy condition verbatim (`DuyaAgent.ts:3094`): a `redacted: true` frame
+    // with nothing encrypted behind it is a provider that redacted without
+    // giving the blob back, and the block cannot be replayed without it.
+    if (frame.redacted === true && typeof frame.encrypted === 'string' && frame.encrypted !== '') {
+      this.#redactedPayload = frame.encrypted;
+    }
+    if (frame.text === '') return;
+    this.#thinking += frame.text;
+    if (frame.signature !== undefined) this.#thinkingSignature = frame.signature;
+  }
+
+  /**
+   * The LAST usage frame of the turn wins, never the sum.
+   *
+   * A provider reports usage more than once per request (`message_start` and
+   * `message_delta` both carry it), and the last report is the turn's total
+   * while the earlier ones are prefixes of it. Summing them would inflate
+   * `usage` by the prompt, and plan 546 makes `usage` the single-call anchor
+   * every context estimator scans -- so an inflated anchor is a context window
+   * that fills early. The legacy held the last report too (`roundResultUsage`).
+   */
+  addUsage(frame: Extract<ModelFrame, { readonly type: 'usage' }>): void {
+    const inputTokens = frame.inputTokens;
+    const outputTokens = frame.outputTokens;
+    this.#usage = {
+      inputTokens,
+      outputTokens,
+      totalTokens: frame.totalTokens ?? inputTokens + outputTokens,
+    };
+  }
+
+  /** The message as the host is handed it. Transcript vocabulary throughout. */
+  toRecord(extra: { readonly model?: string; readonly providerId?: string }): AssistantMessageRecord {
+    return {
+      turn: this.turn,
+      messageId: this.messageId,
+      content: this.#transcriptContent(),
+      ...(this.#usage === undefined ? {} : { usage: this.#usage }),
+      ...(extra.model === undefined ? {} : { model: extra.model }),
+      ...(extra.providerId === undefined ? {} : { providerId: extra.providerId }),
+    };
+  }
+
+  /**
+   * The message in the EVENT vocabulary, in the assembled order.
+   *
+   * Redacted first, then thinking, then the body -- the same order
+   * `#transcriptContent` uses, because the two must not disagree about which
+   * block leads.
+   */
+  toEventContent(): readonly EventContent[] {
+    return this.#transcriptContent().map(toEventBlock);
+  }
+
+  /**
+   * Every block, for the per-block events.
+   *
+   * NO INDEX: the index is run-scoped rather than per-message, because the
+   * message id is run-scoped too and a consumer keys a block by
+   * `(messageId, kind, index)` (`replay/transcript-snapshot.ts:256`). Handing the
+   * index out from here would make it a per-turn counter that restarts and
+   * overwrites the previous turn's block, so `#publishBlocks` owns it.
+   *
+   * A redacted block is reported as a thinking block with empty text, because
+   * that is what it is: a reasoning block whose text the provider withheld.
+   * Thinking is reported ONCE however many frames produced it, so the durable
+   * block is the assembled block rather than a frame.
+   */
+  eachBlock(visit: (block: TurnMessageBlock) => void): void {
+    if (this.#redactedPayload !== undefined || this.#thinking !== '') {
+      visit({
+        kind: 'thinking',
+        thinking: this.#thinking,
+        ...(this.#thinkingSignature === undefined ? {} : { thinkingSignature: this.#thinkingSignature }),
+        ...(this.#redactedPayload === undefined ? {} : { encrypted: this.#redactedPayload }),
+      });
+    }
+    for (const block of this.#body) {
+      if (block.type !== 'text') continue;
+      visit({ kind: 'text', text: block.text });
+    }
+  }
+
+  #transcriptContent(): AssistantContentBlock[] {
+    const content: AssistantContentBlock[] = [];
+    if (this.#redactedPayload !== undefined) {
+      content.push({ type: 'thinking', thinking: '', redacted: true, encrypted: this.#redactedPayload });
+    }
+    if (this.#thinking !== '') {
+      content.push({
+        type: 'thinking',
+        thinking: this.#thinking,
+        ...(this.#thinkingSignature === undefined ? {} : { thinkingSignature: this.#thinkingSignature }),
+      });
+    }
+    content.push(...this.#body);
+    return content;
+  }
+}
+
+/** One durable block, as `#publishBlocks` reads it back. */
+type TurnMessageBlock =
+  | { readonly kind: 'text'; readonly text: string }
+  | {
+      readonly kind: 'thinking';
+      readonly thinking: string;
+      readonly thinkingSignature?: string;
+      readonly encrypted?: string;
+    };
+
+/**
+ * The transcript block -> the event block.
+ *
+ * `null` is impossible by construction: `AssistantContentBlock` is the three
+ * arms the event `MessageContent` also has, and a fourth (`tool_result`) can
+ * only be produced by a drain rather than a model stream. The throw is here so
+ * that claim fails loudly if the union ever widens -- a block the event
+ * vocabulary cannot state has to be preserved under
+ * `providerMeta.untranslatedBlocks` like the inbound path does, not dropped.
+ */
+function toEventBlock(block: AssistantContentBlock): EventContent {
+  switch (block.type) {
+    case 'text':
+      return { type: 'text', text: block.text };
+    case 'thinking':
+      return {
+        type: 'thinking',
+        thinking: block.thinking,
+        ...(block.thinkingSignature === undefined ? {} : { thinkingSignature: block.thinkingSignature }),
+        ...(block.redacted === undefined ? {} : { redacted: block.redacted }),
+        // A STRING here, a boolean in the event: the payload has no home in
+        // `events/payloads.ts` and the flag is the whole of what it can hold
+        // (`translate/chat-event-translator.ts:586-590`).
+        ...(block.encrypted === undefined ? {} : { encrypted: true }),
+      };
+    case 'tool_use':
+      return { type: 'tool_use', id: block.id, name: block.name, input: block.input };
+  }
+}
+
+/**
+ * The engine's stop reason -> the event vocabulary's `StopReason`.
+ *
+ * ## `tool_use` is ABSENT, and that is the load-bearing row
+ *
+ * It means "the loop is going round again", and none of the six protocol values
+ * says that: `completed` would claim a normal finish that did not happen and
+ * `length` is specifically a token or context ceiling. Coercing it would put a
+ * word in a durable record that means something else, so `tool_use` is absent
+ * and `eventStopReason` returns `null` -- the caller refuses to publish rather
+ * than inventing. This is the same refusal the inbound path makes
+ * (`translate/chat-event-translator.ts:526-533`) and for the same reason.
+ *
+ * The table is duplicated rather than imported because that one is keyed on
+ * arbitrary PRODUCER strings read off the wire, while this one is keyed on the
+ * runtime's own closed `ModelStopReason` union. Merging them would mean
+ * accepting an untrusted string to answer a question about a trusted one.
+ */
+const STOP_REASON_TO_EVENT: Readonly<Record<ModelStopReason, StopReason | null>> = Object.freeze({
+  end_turn: 'end_turn',
+  max_tokens: 'length',
+  stop_sequence: 'stop_sequence',
+  cancelled: 'aborted',
+  error: 'error',
+  tool_use: null,
+});
 
 /**
  * The engine's own counters.

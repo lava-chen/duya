@@ -4,9 +4,9 @@
  *
  * ## What this pins
  *
- * `RunEngineImpl.#ticket` (`run-engine.ts:757`) refuses to dispatch anything that
+ * `RunEngineImpl.#ticket` (`run-engine.ts:1061`) refuses to dispatch anything that
  * is not `read_only` when no ledger is attached, and it awaits
- * `ledger.begin(call)` BEFORE `ports.tools.dispatch` (`run-engine.ts:548,557`).
+ * `ledger.begin(call)` BEFORE `ports.tools.dispatch` (`run-engine.ts:787,557`).
  * That ordering is the whole guarantee: a dispatch is unreachable without a
  * record, so a process that dies mid-tool leaves an attempt somebody can
  * classify rather than an effect nobody recorded.
@@ -59,7 +59,7 @@ const CALL: ToolCallRequest = {
   input: { path: 'a.txt', content: 'hello' },
   // NOT `read_only`: that is the whole point of the ledger. A `read_only` call
   // would be admitted by `SYNTHETIC_TICKET` with no ledger at all
-  // (`run-engine.ts:760-765`) and this file would prove nothing.
+  // (`run-engine.ts:1064-1069`) and this file would prove nothing.
   sideEffect: 'writes_files',
 };
 
@@ -129,7 +129,7 @@ describe('a dispatch requires a durable side-effect pre-write', () => {
     // The write fails because the parent is a FILE, so the journal's directory
     // cannot be prepared. A `begin` that swallowed this and returned a ticket
     // would let the engine dispatch a tool with no record anywhere -- the precise
-    // state `ports.ts:708-714` refuses to allow.
+    // state `ports.ts:871-877` refuses to allow.
     const fileInTheWay = path.join(dir, 'not-a-dir');
     writeFileSync(fileInTheWay, 'occupied');
 
@@ -139,7 +139,7 @@ describe('a dispatch requires a durable side-effect pre-write', () => {
   });
 
   it('refuses a SECOND begin for the same attemptKey, and does not overwrite', async () => {
-    // `ports.ts:897-900`: one attempt has exactly one record, and a second begin
+    // `ports.ts:1060-1063`: one attempt has exactly one record, and a second begin
     // is a caller bug that must REJECT rather than overwrite -- the record is the
     // one place the effect is accounted for.
     const ledger = makeLedger();

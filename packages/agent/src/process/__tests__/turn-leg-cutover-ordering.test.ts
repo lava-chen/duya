@@ -7,7 +7,7 @@
  * `drainTools` (step 2), bind `TurnOutputPort` and the `chat:*` projection
  * (step 3), and only THEN remove the legacy consumer (step 4) and the legacy
  * `agent.interrupt()` (step 5). The order was chosen because the engine's drain
- * lives at `run-engine.ts:392`, AFTER `#streamModel` returns non-null, so a stub
+ * lives at `run-engine.ts:441`, AFTER `#streamModel` returns non-null, so a stub
  * model stream never reaches it.
  *
  * That reasoning is correct about the drain and wrong about the model stream.
@@ -21,7 +21,7 @@
  * attached to a loop somebody else is already running:
  *
  * ```
- * for (let turn = 1; ; turn++) {          // run-engine.ts:307
+ * for (let turn = 1; ; turn++) {          // run-engine.ts:353
  *   ... assemble, #modelRequest ...
  *   const outcome = await this.#streamModel(ctx, modelRequest);   // :382
  *   if (outcome !== null) { exit = outcome; break; }
@@ -343,7 +343,7 @@ describe('the engine reaches the model port before the legacy loop can publish a
     //
     // `max_turns`, not `completed`, and that is the real reading rather than a
     // loosened expectation: `defaultMaxTurns: 1` spends the budget on turn 1,
-    // so the gate at `run-engine.ts:320` stops the cycle before turn 2. The
+    // so the gate at `run-engine.ts:366` stops the cycle before turn 2. The
     // property under test is that the run got PAST `#streamModel` at all, and
     // `max_turns` is only reachable from a turn that did.
     expect(withLeg.reason).toBe('max_turns');

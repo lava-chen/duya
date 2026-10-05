@@ -5,7 +5,7 @@
  * ## What this file is the proof of
  *
  * `RunEngineImpl`'s first decision is `ports.model.stream(...)`
- * (`run-engine.ts:445`). Until this adapter existed, production bound a stream
+ * (`run-engine.ts:526`). Until this adapter existed, production bound a stream
  * that yields nothing (`agent-process-entry.ts:3196`), so a real `chat:start`
  * ran a phantom turn that failed on `sawFrame === false` and was only logged.
  *
@@ -30,7 +30,7 @@
  * The two cancellation tests are the strongest here and are NOT identity: they
  * abort a real controller and assert the provider observed it, once through the
  * port and once through a full `RunEngineImpl` whose `handle.stop` is the only
- * thing that can abort it. `ports.ts:214-228` states that the signal a port
+ * thing that can abort it. `ports.ts:215-229` states that the signal a port
  * receives must not be the caller's own object, so an `===` on identity would
  * be asserting the opposite of the contract.
  *
@@ -129,7 +129,7 @@ describe('toModelFrame — every event the legacy loop branches on survives', ()
   });
 
   it('renames the provider `id` to the runtime `callId` on a delta', () => {
-    // `types.ts:182` spells it `id`; `ports.ts:169` spells it `callId`. These
+    // `types.ts:182` spells it `id`; `ports.ts:195` spells it `callId`. These
     // are the same value under different names, and `ToolCallId` is a string
     // alias — so a `callId: event.data.callId` typo compiles and yields
     // `undefined` at run time.
@@ -149,7 +149,7 @@ describe('toModelFrame — every event the legacy loop branches on survives', ()
   });
 
   it('stamps `undeclared` and NEVER `read_only` on a call the model named', () => {
-    // The load-bearing assertion of this file. `run-engine.ts:760` grants a
+    // The load-bearing assertion of this file. `run-engine.ts:1064` grants a
     // synthetic ledger ticket to exactly `read_only` when no ledger is attached,
     // so a fabricated `read_only` would authorise a side effect nobody
     // declared. `resolveSideEffectClass` overwrites it at dispatch
@@ -163,9 +163,9 @@ describe('toModelFrame — every event the legacy loop branches on survives', ()
 describe('toModelFrame — usage reads the SNAKE_CASE fields', () => {
   it('maps the provider token fields onto the runtime camelCase ones', () => {
     // `TokenUsage` is `input_tokens` (`content.ts:352`); `ModelFrame.usage` is
-    // `inputTokens` (`ports.ts:171`). Reading the camelCase spelling off the
+    // `inputTokens` (`ports.ts:197`). Reading the camelCase spelling off the
     // provider event yields `undefined`, which reaches `spend.addTokens(NaN)`
-    // (`run-engine.ts:462`) — a silently corrupt ledger, not a crash.
+    // (`run-engine.ts:561`) — a silently corrupt ledger, not a crash.
     const frame = toModelFrame({
       type: 'result',
       data: { input_tokens: 120, output_tokens: 30, total_tokens: 150 },
@@ -174,7 +174,7 @@ describe('toModelFrame — usage reads the SNAKE_CASE fields', () => {
   });
 
   it('omits totalTokens when the provider sent none, so the engine can fall back', () => {
-    // `run-engine.ts:462` computes `input + output` when `totalTokens` is
+    // `run-engine.ts:561` computes `input + output` when `totalTokens` is
     // absent. Inventing `0` replaces a correct fallback with a wrong number,
     // and budget accounting is the thing that decides whether a run continues.
     const frame = toModelFrame({ type: 'result', data: { input_tokens: 7, output_tokens: 3 } });
@@ -196,7 +196,7 @@ describe('toModelFrame — the two decisions', () => {
   });
 
   it('maps aborted to cancelled, which is what makes a stop discard queued calls', () => {
-    // `run-engine.ts:475` discards and returns `cancelled` on this exact value.
+    // `run-engine.ts:577` discards and returns `cancelled` on this exact value.
     // Mapping `aborted` to `end_turn` instead leaves every tool the model had
     // already asked for queued, and a replay dispatches them twice.
     expect(toModelFrame(done('aborted'))).toEqual({ type: 'turn_stopped', reason: 'cancelled' });
@@ -204,7 +204,7 @@ describe('toModelFrame — the two decisions', () => {
 
   it('maps the host-level stop reasons to end_turn, because the ENGINE owns them', () => {
     // `max_turns` and `repeated_tool_calls` are a run ceiling and a loop guard —
-    // host facts. The engine derives both itself (`run-engine.ts:697`), so
+    // host facts. The engine derives both itself (`run-engine.ts:1001`), so
     // claiming them through the model port would be a host decision arriving
     // through the wrong door.
     expect(toModelFrame(done('max_turns'))).toEqual({ type: 'turn_stopped', reason: 'end_turn' });
@@ -212,7 +212,7 @@ describe('toModelFrame — the two decisions', () => {
   });
 
   it('treats a non-retryable error as a FAILED RUN', () => {
-    // `run-engine.ts:469` returns `failed` when `retryable` is false. An error
+    // `run-engine.ts:805` returns `failed` when `retryable` is false. An error
     // frame with no `isRetryable` is an error nobody promised was transient,
     // so it must not be laundered into a retryable one.
     expect(toModelFrame({ type: 'error', data: 'boom' })).toEqual({
@@ -241,7 +241,7 @@ describe('toModelFrame — the two decisions', () => {
     // The green-mutation trap in miniature: `metadata?.isRetryable === true`
     // and `metadata?.isRetryable ?? false` agree on every input EXCEPT an
     // explicit `false`, and `?? true` would turn that into a retryable error
-    // the engine then ignores (`run-engine.ts:474`). Assert the explicit false.
+    // the engine then ignores (`run-engine.ts:571`). Assert the explicit false.
     const frame = toModelFrame({
       type: 'error',
       data: 'hard failure',
@@ -289,7 +289,7 @@ describe('toModelFrame — renderer projections are not frames', () => {
   });
 
   it('drops tool_result, because a result comes back through the DRAIN', () => {
-    // A tool result is a drain item (`run-engine.ts:595`), not a model output.
+    // A tool result is a drain item (`run-engine.ts:868`), not a model output.
     // Mapping it here would let a result reach the model with no dispatch.
     expect(
       toModelFrame({
@@ -376,7 +376,7 @@ function fakeClient(script: readonly SSEEvent[]) {
  *
  * Needed because the engine really does loop: a turn that dispatched a tool has
  * work the model has not seen, so `#shouldStop` returns `null`
- * (`run-engine.ts:714`) and the next turn runs. A client that replays one
+ * (`run-engine.ts:1018`) and the next turn runs. A client that replays one
  * `tool_use` script on every call therefore dispatches forever — an infinite
  * loop that exhausts the heap rather than failing an assertion. Modelling the
  * real shape (ask for a tool, then answer) is both correct and terminating.
@@ -437,7 +437,7 @@ describe('createLegacyModelPort', () => {
   });
 
   it('omits maxTokens and temperature when the manifest named neither', async () => {
-    // `ports.ts:387-390` makes both optional because `RunManifest.agent` is.
+    // `ports.ts:413-416` makes both optional because `RunManifest.agent` is.
     // A fabricated default would be a ceiling the manifest never agreed to.
     const client = fakeClient([{ type: 'text', data: 'x' }]);
     const port = createLegacyModelPort(sourcesFor(client));
@@ -457,7 +457,7 @@ describe('createLegacyModelPort', () => {
   });
 
   it('gives the provider the CALLER\'s signal, un-wrapped', async () => {
-    // `ports.ts:353-362`: the signal is injected rather than created here so
+    // `ports.ts:379-388`: the signal is injected rather than created here so
     // cancellation reaches context assembly and the FIRST model call, which is
     // the gap `DuyaAgent.ts:963` leaves open by building its controller too
     // late to cover them. A port that created its own would abort nobody.
@@ -587,12 +587,12 @@ const ASSEMBLED = {
 describe('the engine drives a turn through the real model adapter', () => {
   it('streams from the provider, dispatches the tool it asked for, and completes', async () => {
     // The point of the whole leg. `emptyModelStream()` yields nothing, so the
-    // engine reported `failed` on `sawFrame === false` (`run-engine.ts:487`)
+    // engine reported `failed` on `sawFrame === false` (`run-engine.ts:584`)
     // and every `chat:start` produced a phantom run. Here the SAME engine
     // object is handed a port backed by a real client and reaches `completed`
     // with a tool dispatched — which is what a real turn looks like.
     // TWO turns, because the engine genuinely loops: turn 1 dispatches a tool,
-    // so `#shouldStop` returns `null` (`run-engine.ts:714`) and turn 2 runs to
+    // so `#shouldStop` returns `null` (`run-engine.ts:1018`) and turn 2 runs to
     // answer it. A single-turn script would dispatch forever.
     const client = scriptedClient([
       [
@@ -629,7 +629,7 @@ describe('the engine drives a turn through the real model adapter', () => {
         approval: { authorize: () => Promise.resolve({ allowed: true, scope: 'once' } as const) },
         sideEffects: {
           // Attached deliberately, and this is a FINDING rather than test
-          // furniture. `#ticket` (`run-engine.ts:757-768`) REFUSES any call whose
+          // furniture. `#ticket` (`run-engine.ts:1061-1072`) REFUSES any call whose
           // class is not `read_only` when no ledger is attached — and this
           // adapter stamps `undeclared` on every call, correctly. So a model
           // leg wired without a side-effect ledger refuses every tool the model
@@ -712,7 +712,7 @@ describe('the engine drives a turn through the real model adapter', () => {
 
   it('records the provider\'s tokens into the run spend', async () => {
     // `usage` is the frame that makes budget accounting possible at all
-    // (`run-engine.ts:462`). With the snake_case reading removed this reports
+    // (`run-engine.ts:561`). With the snake_case reading removed this reports
     // `NaN`, which is not an error — it is a budget that never exhausts.
     const client = fakeClient([
       { type: 'result', data: { input_tokens: 100, output_tokens: 20, total_tokens: 120 } },
@@ -752,8 +752,8 @@ describe('the engine drives a turn through the real model adapter', () => {
   });
 
   it('a stop during the turn aborts the PROVIDER, not just the engine loop', async () => {
-    // The whole reason `ModelPort.stream` takes a signal (`ports.ts:353-362`).
-    // `run-engine.ts:214-232` forwards the caller\'s signal into one internal
+    // The whole reason `ModelPort.stream` takes a signal (`ports.ts:379-388`).
+    // `run-engine.ts:221-239` forwards the caller\'s signal into one internal
     // controller and hands THAT to the ports, so the signal a provider sees is
     // deliberately not the caller\'s own object. Asserting the abort REACHED
     // the provider is therefore the only honest form of this assertion — an

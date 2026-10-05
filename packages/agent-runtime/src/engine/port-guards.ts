@@ -30,6 +30,7 @@
 import type { RunEvent } from '@duya/agent-protocol';
 import type {
   ApprovalVerdict,
+  AssistantMessageRecord,
   ModelFrame,
   OneShotTextPort,
   OneShotTextRequest,
@@ -151,6 +152,7 @@ const FULL_PORTS: RunEnginePorts = {
   },
   turnOutput: {
     recordToolResult: () => Promise.resolve(),
+    recordAssistantMessage: () => Promise.resolve(),
     finishTurn: () => Promise.resolve(),
   },
 };
@@ -346,10 +348,12 @@ const NO_USER_KILL_REASON: Extract<SubtaskTerminationReason, 'user_kill'> = 'use
  * is AWAITED by `#drainOutcomes`, so the `Promise<void>` is load-bearing rather
  * than an erased async marker -- a host that returned `void` where the engine
  * awaits would typecheck only if the method were declared differently, which is
- * the change this case is here to catch.
+ * the change this case is here to catch. `recordAssistantMessage` is awaited the
+ * same way and for the same reason.
  */
 export const TURN_OUTPUT_PORT_IS_CONSTRUCTIBLE: TurnOutputPort = {
   recordToolResult: () => Promise.resolve(),
+  recordAssistantMessage: () => Promise.resolve(),
   finishTurn: () => Promise.resolve(),
 };
 
@@ -359,7 +363,7 @@ export const TURN_OUTPUT_PORT_IS_CONSTRUCTIBLE: TurnOutputPort = {
  * The legacy assigns `result.message.seq_index = seqIndex`
  * (`DuyaAgent.ts:2723`), and reproducing that field here would make the runtime
  * a second authority for "where does this message sit" -- the same reason
- * `RunEvent` carries no `seq` (`ports.ts:46-49`). Ordering is the host's, derived
+ * `RunEvent` carries no `seq` (`ports.ts:47-50`). Ordering is the host's, derived
  * from `turn`.
  */
 type SeqOnToolResultRecord = Extract<KeysOfEveryMember<ToolResultRecord>, 'seq'>;
@@ -400,6 +404,34 @@ const TURN_OUTPUT_SUMMARY_CARRIES_NO_RUN_ID: Extract<KeysOfEveryMember<TurnOutpu
 const TOOL_RESULT_RECORD_CARRIES_NO_ID: Extract<KeysOfEveryMember<ToolResultRecord>, 'id'> = 'id';
 
 /**
+ * The same three absences hold for the ASSISTANT MESSAGE record, and the
+ * third one is the one that is easy to get wrong.
+ *
+ * `messageId` is not `id`. It is a run-scoped CORRELATION id -- the value the
+ * event stream keys its block map and its finalized map by
+ * (`replay/transcript-snapshot.ts:195-200`) -- while the durable row's id is
+ * `?? crypto.randomUUID()` (`DuyaAgent.ts:2678`) and belongs to whoever stores
+ * the row. Asserting on the exact member name rather than "no id-ish field" is
+ * what keeps the two from drifting into one another: a rename of the
+ * correlation field to plain `id` is what these probes are here to catch.
+ */
+// @ts-expect-error - the assembled message is not an ordered ledger event
+const ASSISTANT_MESSAGE_RECORD_CARRIES_NO_SEQ: Extract<
+  KeysOfEveryMember<AssistantMessageRecord>,
+  'seq'
+> = 'seq';
+// @ts-expect-error - nor does the record repeat the port binding's run id
+const ASSISTANT_MESSAGE_RECORD_CARRIES_NO_RUN_ID: Extract<
+  KeysOfEveryMember<AssistantMessageRecord>,
+  'runId'
+> = 'runId';
+// @ts-expect-error - `messageId` correlates events; the row id is the writer's
+const ASSISTANT_MESSAGE_RECORD_CARRIES_NO_ID: Extract<
+  KeysOfEveryMember<AssistantMessageRecord>,
+  'id'
+> = 'id';
+
+/**
  * The surface cannot express a terminal decision.
  *
  * Positive rather than negative, for the reason `STORE_SURFACE_IS_EXACT` gives:
@@ -417,7 +449,7 @@ export const TURN_OUTPUT_SURFACE_CANNOT_SETTLE: TurnOutputCannotSettle = false;
  * The two counts are separate FIELDS, not one aliased number.
  *
  * `results` is the legacy `toolResultMessageCount` (`DuyaAgent.ts:2722`) and
- * `dispatched` is `TurnWork.dispatched` (`run-engine.ts:569`); they diverge the
+ * `dispatched` is `TurnWork.dispatched` (`run-engine.ts:805`); they diverge the
  * moment a turn dispatches two calls and one answers. Collapsing them into one
  * field would make the host's gate a dispatch count with no way to tell.
  */
@@ -448,7 +480,7 @@ export const RESULT_METADATA_REACHES_THE_HOST: OutcomeCarriesMetadata = true;
  * This is the load-bearing assertion of the whole port. The summarizer needs
  * `toolChoice: 'none'` because plan 523 P4.1 found it emitting tool-call tokens
  * instead of a summary, and `ModelRequest` cannot express that flag
- * (`ports.ts:372-391`) -- so a `tools` field here is the only way a caller
+ * (`ports.ts:398-417`) -- so a `tools` field here is the only way a caller
  * could ask for tools, and its absence is what makes "this port generates text
  * and nothing else" a build-time fact instead of a convention.
  *

@@ -98,7 +98,7 @@ describe('the live chat:start path no longer runs a phantom engine run', () => {
   it('binds no model port that yields nothing', () => {
     // `openModelStream: () => emptyModelStream()` is what made the run a
     // phantom: the engine asked the provider zero times, saw no frames, and
-    // ended `failed` on `sawFrame === false` (`run-engine.ts:490`).
+    // ended `failed` on `sawFrame === false` (`run-engine.ts:584`).
     expect(occurrences(/\bemptyModelStream\b/)).toBe(0);
     expect(occurrences(/\bemptyToolDrain\b/)).toBe(0);
     // And no surviving port builder that could stand in for it.

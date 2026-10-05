@@ -355,6 +355,8 @@ export type {
   ApprovalScope,
   ApprovalVerdict,
   AssembledTurn,
+  AssistantContentBlock,
+  AssistantMessageRecord,
   AttemptLeasePort,
   BudgetPort,
   CheckpointPort,

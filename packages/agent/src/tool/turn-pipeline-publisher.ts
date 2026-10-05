@@ -45,7 +45,7 @@
  *    the mute one, and it is the reason `isUsable()` exists.
  *
  * Every refusal is an `Error` naming the turn, because the caller is the engine
- * and a thrown dispatch is a FAILED run (`run-engine.ts:405-408`) rather than a
+ * and a thrown dispatch is a FAILED run (`run-engine.ts:454-457`) rather than a
  * dropped tool.
  *
  * ## Why one instance per run, and not a module-level `let`

@@ -14,7 +14,7 @@
  * avoid is SILENT: a tool the model asked for, buffered into a pipeline that can
  * never run it, with no error anywhere. So each test below asserts that the
  * wrong turn is REFUSED, loudly and distinguishably, because a refusal is
- * something the engine turns into a failed run (`run-engine.ts:405-408`) instead
+ * something the engine turns into a failed run (`run-engine.ts:454-457`) instead
  * of a hole in the context.
  *
  * ## Why these are not `a === a`

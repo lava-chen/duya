@@ -28,9 +28,9 @@
  * The summarizer used to `break` on an `error` frame and return the text it
  * had accumulated, so a provider
  * that died mid-summary stored a truncated summary. `OneShotTextResult` carries
- * no partial text on `failed` (`ports.ts:1519-1522`), so that value is no
+ * no partial text on `failed` (`ports.ts:1682-1685`), so that value is no
  * longer reachable and the summarizer now raises the provider's message --
- * which is what b1 specified (`ports.ts:1447-1450`). "Surfaces provider errors"
+ * which is what b1 specified (`ports.ts:1610-1613`). "Surfaces provider errors"
  * below asserts the new contract, and the surrounding comment records the old
  * one. This is a behaviour change pending the owner's ruling, not a
  * restatement.
@@ -456,7 +456,7 @@ describe('fromProviderMessages — the crossing into the runtime vocabulary', ()
 
   it('carries an image block through untouched', () => {
     // The one content variant the runtime vocabulary does NOT have
-    // (`ports.ts:120-124` vs `transcript/content.ts:159-165`). It survives
+    // (`ports.ts:121-125` vs `transcript/content.ts:159-165`). It survives
     // because the cast describes the type and not the value: the block is
     // passed by reference and never rebuilt. If a future implementation maps
     // content block by block, this is what it would drop -- a user attaching a

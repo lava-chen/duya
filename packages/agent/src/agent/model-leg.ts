@@ -332,7 +332,7 @@ export class ModelLegPublisher {
       // The request is ALREADY cancelled, so this is not a silent failure — but
       // reporting success for a cancellation this call did not perform is the
       // same false claim `StopReceipt.requested` exists to prevent
-      // (`run-engine.ts:234-238`), so it refuses instead.
+      // (`run-engine.ts:241-245`), so it refuses instead.
       throw new Error(
         `refusing to abort turn ${turn}: its request signal has already fired, so this call cancelled nothing`,
       );

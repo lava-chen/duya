@@ -386,6 +386,14 @@ describe('the engine owns the model -> tool -> backfill -> next turn loop', () =
     // `turn.started` is published BEFORE its stream opens, and the drain for a
     // turn follows its dispatch 鈥?the two orderings that make the count rules in
     // `run-budget.ts:18-24` true.
+    //
+    // The three assistant entries are the b3a emissions, and their POSITIONS are
+    // the claim: each turn's `assistant.text_block` lands as its stream closes
+    // and BEFORE that turn's drain (the OpenAI ordering, `DuyaAgent.ts:2641`),
+    // and the single `assistant.message_finalized` lands after the last drain but
+    // BEFORE `proposeTerminal`, because the message stops changing strictly
+    // before the run ends (`agent-process-entry.ts:3482-3488`). One per run, not
+    // one per turn; see `RunEngineImpl.#finalizeLastMessage`.
     expect(h.log).toEqual([
       'context.assemble',
       'events.publish:turn.started',
@@ -394,12 +402,15 @@ describe('the engine owns the model -> tool -> backfill -> next turn loop', () =
       'ledger.begin:write',
       'events.publish:tool.call_started',
       'tools.dispatch:write',
+      'events.publish:assistant.text_block',
       'tools.drain',
       'ledger.settle:key:call-1:succeeded',
       'context.assemble',
       'events.publish:turn.started',
       'model.stream:2',
+      'events.publish:assistant.text_block',
       'tools.drain',
+      'events.publish:assistant.message_finalized',
       'events.proposeTerminal',
     ]);
   });

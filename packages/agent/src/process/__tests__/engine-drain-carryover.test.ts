@@ -303,6 +303,12 @@ async function runThroughAdapter(
         order.push('record');
         records.push(record);
       },
+      // Required by the port since b3a and not what this file is about; the
+      // assistant message is asserted in
+      // `packages/agent-runtime/test/assistant-message-emission.test.ts`.
+      async recordAssistantMessage(): Promise<void> {
+        order.push('assistant');
+      },
       async finishTurn(summary: TurnOutputSummary): Promise<void> {
         order.push('finish');
         summaries.push(summary);
@@ -590,9 +596,20 @@ describe('the six legacy effects, carried to the host by TurnOutputPort', () => 
     // each with its own recorder, so it cannot be an artefact of one call site.
     const c = await runThroughAdapter([{ message: toolResultMessage(RESULT_SENTINEL) }]);
 
-    // Turn 1: ledger, then the model seed, then the host, then the summary. Turn
-    // 2 drained nothing and still reported, which is why 'finish' appears twice.
-    expect(c.order).toEqual(['settle', 'defer', 'record', 'finish', 'finish']);
+    // Turn 1: the assembled assistant message, then ledger, then the model seed,
+    // then the host, then the summary. Turn 2 drained nothing and still
+    // reported, which is why 'finish' appears twice. The leading 'assistant' is
+    // the OpenAI ordering rule (`DuyaAgent.ts:2641-2642`): the message is stored
+    // before any tool result, and it can only be assembled once the stream ends.
+    expect(c.order).toEqual([
+      'assistant',
+      'settle',
+      'defer',
+      'record',
+      'finish',
+      'assistant',
+      'finish',
+    ]);
   });
 });
 
@@ -662,7 +679,7 @@ describe('buildEnginePorts no longer pretends to carry a deferred fragment', () 
     // seed (asserted in the test above), and `#modelRequest` reads
     // `assembled.messages` only for a `by_ref` history. Injecting here would
     // therefore have been inert for this input and DOUBLE for a by-ref one --
-    // which is the duplication `run-engine.ts:365-371` records as having
+    // which is the duplication `run-engine.ts:414-420` records as having
     // already happened once.
     const ports = realPorts();
 

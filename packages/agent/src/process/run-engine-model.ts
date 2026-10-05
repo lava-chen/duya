@@ -5,17 +5,17 @@
  * ## Why this file is the model leg
  *
  * `RunEngineImpl` owns the turn loop and makes its first decision by calling
- * `ports.model.stream(...)` (`run-engine.ts:445`). Nothing in production
+ * `ports.model.stream(...)` (`run-engine.ts:526`). Nothing in production
  * implemented that port: `agent-process-entry.ts:3196` bound
  * `openModelStream: () => emptyModelStream()`, a stream that yields nothing, so
  * every real `chat:start` ran a phantom turn that immediately failed and was
  * only logged. The tool leg had the same shape at `:3197`
  * (`queueTool` throws).
  *
- * The missing piece is the NARROWING. `ports.ts:161-163` says so directly:
+ * The missing piece is the NARROWING. `ports.ts:162-164` says so directly:
  * "The adapter that narrows `SSEEvent` to these frames is part of the move, not
  * part of this contract." `SSEEvent` (`packages/ai/src/types.ts:174`) is a
- * 25-member provider-plus-renderer hybrid; `ModelFrame` (`ports.ts:165`) is an
+ * 25-member provider-plus-renderer hybrid; `ModelFrame` (`ports.ts:166`) is an
  * 8-member subset. This file is that subset's boundary.
  *
  * ## Why a pure function, and why it is exported
@@ -29,8 +29,8 @@
  *
  * `null` is a first-class answer, not a failure. The legacy loop `continue`s
  * past an event it does not branch on, and the engine's `#streamModel` switch
- * ignores `text`/`thinking`/`tool_use_delta` for DECISION purposes while a host
- * may still want them (`run-engine.ts:480-483`). So the mapping distinguishes
+ * ACCUMULATES `text`/`thinking`/`tool_use_delta` without letting any of them
+ * decide anything (`run-engine.ts:548-560`). So the mapping distinguishes
  * two different things, and conflating them is the bug:
  *
  *  - a frame the ENGINE acts on -> a `ModelFrame`
@@ -67,17 +67,17 @@
  *    actually does.
  *    Mapping them into `text` would DOUBLE the assistant content.
  *  - `tool_result`. A tool result is not a model output; it comes back through
- *    the DRAIN (`ToolDrainItem`), which is where `run-engine.ts:595` reads it.
+ *    the DRAIN (`ToolDrainItem`), which is where `run-engine.ts:868` reads it.
  *    Mapping it here would let a result reach the model without a dispatch.
  *
  * ## Why `usage` is read off the SNAKE_CASE fields
  *
  * `SSEEvent`'s `result` carries `TokenUsage` (`content.ts:352`), which is
  * `input_tokens` / `output_tokens` / `total_tokens`. `ModelFrame.usage` is
- * camelCase (`ports.ts:171`). These are two different types that both call
+ * camelCase (`ports.ts:197`). These are two different types that both call
  * themselves token usage, and `content.ts:349-350` says so explicitly. Reading
  * `inputTokens` off the provider event yields `undefined`, which reaches
- * `spend.addTokens(NaN)` (`run-engine.ts:462`) — a silently corrupt ledger
+ * `spend.addTokens(NaN)` (`run-engine.ts:561`) — a silently corrupt ledger
  * rather than a crash.
  *
  * ## Why `sideEffect` on a model frame is a placeholder
@@ -88,7 +88,7 @@
  * (`checkpoint.ts:80`) and is OVERWRITTEN by `resolveSideEffectClass` at
  * dispatch (`run-engine-ports.ts:180`). It is not `read_only`: a fabricated
  * `read_only` would authorise a side effect nobody declared, and `engine#ticket`
- * grants a synthetic ticket to exactly that class (`run-engine.ts:760`).
+ * grants a synthetic ticket to exactly that class (`run-engine.ts:1064`).
  */
 
 import type { AIClient, SSEEvent, ToolUse } from '@duya/ai';
@@ -129,12 +129,20 @@ export function toModelFrame(event: SSEEvent): ModelFrame | null {
       return {
         type: 'thinking',
         text: event.data,
-        // Both optional-and-therefore-possibly-`undefined`. `redacted` is
+        // All three optional-and-therefore-possibly-`undefined`. `redacted` is
         // carried because a redacted thinking block has EMPTY text, so a host
         // that saw `text: ''` with no flag could not tell "the provider
         // redacted this" from "the model thought nothing".
         ...(event.signature === undefined ? {} : { signature: event.signature }),
         ...(event.redacted === undefined ? {} : { redacted: event.redacted }),
+        // Plan 600 S2 b3a. The payload itself, not just the flag, and this arm
+        // used to drop it while the legacy loop kept it
+        // (`DuyaAgent.ts:3094-3095` reads `event.encrypted` into
+        // `redactedEncrypted`). Without it the engine cannot build the redacted
+        // block at all, and that block has to LEAD the assistant turn for
+        // Anthropic thinking-mode validation -- so the loss was not a degraded
+        // replay, it was a rejected request on the next turn.
+        ...(event.encrypted === undefined ? {} : { encrypted: event.encrypted }),
       };
 
     // ── Tool calls ────────────────────────────────────────────────────────
@@ -142,7 +150,7 @@ export function toModelFrame(event: SSEEvent): ModelFrame | null {
       return { type: 'tool_use_started', call: toToolCall(event.data) };
     case 'tool_use_delta':
       // `callId`, not `id`. The provider spells it `id` (`types.ts:182`) and the
-      // runtime spells it `callId` (`ports.ts:169`); these are the same value,
+      // runtime spells it `callId` (`ports.ts:195`); these are the same value,
       // and a `callId: event.data.id` typo would compile only because
       // `ToolCallId` is a string alias.
       return { type: 'tool_use_delta', callId: event.data.id, delta: event.data.delta };
@@ -155,7 +163,7 @@ export function toModelFrame(event: SSEEvent): ModelFrame | null {
         type: 'usage',
         inputTokens: event.data.input_tokens,
         outputTokens: event.data.output_tokens,
-        // Only when the provider sent one. `run-engine.ts:462` falls back to
+        // Only when the provider sent one. `run-engine.ts:561` falls back to
         // `input + output` when absent, so inventing `0` here would REPLACE a
         // correct fallback with a wrong number.
         ...(event.data.total_tokens === undefined ? {} : { totalTokens: event.data.total_tokens }),
@@ -169,7 +177,7 @@ export function toModelFrame(event: SSEEvent): ModelFrame | null {
         type: 'error',
         message: event.data,
         ...(event.code === undefined ? {} : { code: event.code }),
-        // NOT `false` by default. `run-engine.ts:469` treats a non-retryable
+        // NOT `false` by default. `run-engine.ts:805` treats a non-retryable
         // error as a FAILED RUN, so defaulting to `true` would swallow a real
         // provider failure and let the run continue as if the turn were fine.
         // `isRetryable === true` is the only value that claims retryability;
@@ -234,10 +242,10 @@ function toToolCall(data: ToolUse): ToolCallRequest {
  * `ModelStopReason`.
  *
  * A narrowing with no default, because the two unions do not correspond:
- * `content.ts:422` has nine values and `ports.ts:140` has six, and the extra
+ * `content.ts:422` has nine values and `ports.ts:141` has six, and the extra
  * ones are the interesting ones (`max_turns`, `repeated_tool_calls`). Those two
  * are HOST facts — a run-level ceiling and a loop guard — and the engine
- * derives both itself (`run-engine.ts:697` for the ceiling). So they map to
+ * derives both itself (`run-engine.ts:1001` for the ceiling). So they map to
  * `end_turn`: the model genuinely stopped producing, and claiming anything
  * stronger from the model port would be a host decision arriving through the
  * wrong door.
@@ -332,7 +340,7 @@ export const STOP_REASON_VALUE_IS_MAPPED: UnmappedStopReason extends never ? tru
  *
  * ## Why this is a factory and not a class
  *
- * A `ModelPort` is per-RUN state by construction (`run-engine.ts:203-205`), so
+ * A `ModelPort` is per-RUN state by construction (`run-engine.ts:210-212`), so
  * the request travels as an argument to `stream` rather than living on an
  * instance. An instance here would hold one turn's worth of accumulators in a
  * field, which is the shape the engine's own header warns against
@@ -362,7 +370,7 @@ export interface LegacyModelSources {
  *
  * `signal` is the ENGINE's, and it is threaded into the client call rather than
  * wrapped. That is the whole reason `ModelPort.stream` takes one
- * (`ports.ts:353-362`): `DuyaAgent.streamChat` builds its own controller at its
+ * (`ports.ts:379-388`): `DuyaAgent.streamChat` builds its own controller at its
  * first line (`:963`), so everything in front of the loop — history assembly,
  * attachment decode, approval prompts — sits outside cancellation's reach.
  * Here the engine's caller-owned signal reaches the provider directly.
@@ -377,7 +385,7 @@ export function createLegacyModelPort(sources: LegacyModelSources): ModelPort {
           description: tool.description,
           input_schema: tool.input_schema,
         })),
-        // `ModelRequest.maxOutputTokens` is OPTIONAL (`ports.ts:389`) because
+        // `ModelRequest.maxOutputTokens` is OPTIONAL (`ports.ts:415`) because
         // the manifest's agent selection is optional. Passing `undefined`
         // leaves the client's own default in place, which is the correct
         // reading of "the host named no ceiling" — the alternative is a
@@ -493,7 +501,7 @@ export function createTurnLegModelPort(publisher: ModelLegPublisher): ModelPort 
  * frames, so only a test that reads the request back can catch it.
  *
  * `role` is narrowed rather than cast. `ModelMessage.role` is `'user' |
- * 'assistant' | 'tool'` (`ports.ts:133`) and `MessageRole` adds `'system'`
+ * 'assistant' | 'tool'` (`ports.ts:134`) and `MessageRole` adds `'system'`
  * (`content.ts:72`), so the mapping is a widening that is always sound — the
  * runtime's three values are a subset, and no `'system'` can arrive from here.
  * `id` is carried because the transcript persists it and a provider replay
@@ -515,7 +523,7 @@ export function toProviderMessages(
  * ## Why it exists
  *
  * `OneShotTextRequest.messages` is `readonly ModelMessage[]`
- * (`ports.ts:1504-1509`), and both one-shot call sites already hold
+ * (`ports.ts:1667-1672`), and both one-shot call sites already hold
  * `@duya/agent-protocol`'s `Message[]` -- the summarizer builds a one-element
  * array (`DuyaAgent.ts:769-774`) and the side question reuses the projected
  * timeline (`DuyaAgent.ts:4506-4509`). Neither can be passed as-is, so this is
@@ -538,12 +546,12 @@ export function toProviderMessages(
  *    user/assistant/tool by extracting system content into the prompt
  *    (`DuyaAgent.ts:4938-4946`).
  *  - `content` -- the runtime vocabulary is a strict SUBSET
- *    (`ports.ts:120-124`): `MessageContent` also has `image` and
+ *    (`ports.ts:121-125`): `MessageContent` also has `image` and
  *    `provider_block` (`transcript/content.ts:159-165`). The subset is narrower
  *    but the ELEMENTS are passed by reference and never rebuilt, so an `image`
  *    block reaches the provider byte-identical -- the cast describes the type,
  *    it does not drop a variant.
- *  - `id` -- required on `ModelMessage` (`ports.ts:136`) and optional on
+ *  - `id` -- required on `ModelMessage` (`ports.ts:137`) and optional on
  *    `Message` (`transcript/content.ts:262`). Preserved verbatim, including
  *    absent, because no wire payload carries a message id: the Anthropic
  *    projection rebuilds each message as `{ role, content }`

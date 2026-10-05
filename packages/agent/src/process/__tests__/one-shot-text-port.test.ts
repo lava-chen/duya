@@ -11,7 +11,7 @@
  * (`/\.streamChat\s*\(/`), so they are what G7 and G8 are still open on.
  *
  * `ModelPort` cannot serve either of them -- `ModelRequest` has no
- * `toolChoice` (`ports.ts:372-391`) and the summarizer needs
+ * `toolChoice` (`ports.ts:398-417`) and the summarizer needs
  * `toolChoice: 'none'` deliberately (plan 523 P4.1) -- and `createLegacyModelPort`
  * cannot either, because it hardcodes `sources.llmMessages()` and
  * `sources.declaredTools()` (`run-engine-model.ts:371,373`) and serves ONE turn's
