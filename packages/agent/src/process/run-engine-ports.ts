@@ -396,38 +396,88 @@ export function buildInterTurnPort(sources: InterTurnSources): InterTurnInputPor
  * block becomes a text block on one side of a compaction and stays a thinking
  * block on the other.
  *
- * ## The two vocabularies, and why the narrow one is safe HERE
+ * ## It has TWO callers, and they are not the same request
+ *
+ * | Caller | What it projects |
+ * | --- | --- |
+ * | `buildInterTurnPort` | the mailbox capture array -- rows the claim pushed, all of them runtime-context injections |
+ * | `run-engine-compaction.ts` | the compaction REPLACEMENT -- a re-projection of the whole timeline |
+ *
+ * The mailbox half is why this function was allowed to be narrow, and that
+ * allowance was MEASURED rather than assumed: `projectRuntimeContextToProviderMessage`
+ * builds every injected row as a `user` message with text-only content
+ * (`message-projectors.ts:104-117`, `mailbox-attachment-context.ts:20`), so
+ * forcing `role: 'user'` and degrading every other block changed nothing that
+ * path could observe.
+ *
+ * The compaction half is a whole different question, and it is the one that
+ * matters. `executePreTurn` re-projects the timeline AFTER `compactProactive`
+ * appended the checkpoint entry (`CompactionCoordinator.ts:691-695`), so the
+ * replacement is a real transcript: user turns, ASSISTANT turns and tool rows
+ * (`toModelBoundary` restores all three roles,
+ * `message-projectors.ts:145-155`). Reading that through a mailbox-shaped
+ * mapping flattened every assistant turn to `role: 'user'` and destroyed every
+ * `tool_use` / `tool_result` block into a text marker -- so on the one path
+ * where `#modelRequest` prefers the replacement over the assembly
+ * (`run-engine.ts:1975-1977`, and `port-guards.ts:1084` makes re-applying the
+ * host's transform a HOST obligation), the model was handed a transcript
+ * claiming it had said everything, with its tool calls replaced by prose.
+ * Measured, not inferred: see `engine-compaction-replacement-fidelity.test.ts`.
+ *
+ * One mapping, faithful for both. The mailbox path keeps its behaviour because
+ * its INPUT already carries `role: 'user'`, not because the mapping forced it.
+ *
+ * ## The two vocabularies, and what is still lossy
  *
  * The transcript content union is six blocks wide (`transcript/content.ts`:
  * text, image, tool_use, tool_result, thinking, provider_block) and
- * `ModelMessage`'s is four (`ports.ts`). So this IS lossy in general, and the
- * loss is stated rather than hidden: a block it cannot express becomes a TEXT
- * block naming its type, so it is still visible to the model and still visible
- * to a reader comparing the two. Silently dropping it would be the one outcome a
- * port adapter must not produce, because the caller could not tell an absent row
- * from a dropped block.
- *
- * In practice the mailbox path produces text only, and that is measured rather
- * than assumed: `prepareMailboxGuidance` builds its content as a single text
- * block with attachment context appended as text
- * (`mailbox-attachment-context.ts:20`), and the background-notification path
- * projects a string (`DuyaAgent.ts:3698-3707`). The marker below is a guard for
- * a future row kind, not a live code path -- stated so nobody reads it as a
- * claim that images survive.
+ * `ModelMessage`'s is four (`ports.ts`). Four of the six now cross intact. The
+ * two that do not -- `image` and `provider_block` -- become a TEXT block naming
+ * its type, so they are still visible to the model and still visible to a reader
+ * comparing the two. Silently dropping them would be the one outcome a port
+ * adapter must not produce, because the caller could not tell an absent row
+ * from a dropped block. That marker remains a guard rather than a live code
+ * path, and is stated so nobody reads it as a claim that images survive.
  */
 export function toRuntimeMessage(message: Message): ModelMessage {
   return {
-    // `projectRuntimeContextToProviderMessage` builds every injected row as a
-    // `user` message (`message-projectors.ts:107`), and a mailbox row is
-    // something the user said, not something the model said.
-    role: 'user',
+    role: toModelRole(message.role),
     // The runtime's id is required and replay keys on it, while the transcript
     // id is optional. A row without one gets a stable id derived from the role
     // rather than a random one, so a replayed attempt produces the same
     // identity -- the reasoning `run-engine.ts` applies to `messageId`.
-    id: message.id ?? `inter-turn:${message.role}`,
+    //
+    // The prefix no longer names a path. Both callers' rows carry a transcript
+    // id (`projectRuntimeContextToProviderMessage` sets one at
+    // `message-projectors.ts:108`, and the compaction projection sets one at
+    // `:154`), so this arm is a type-satisfying guard rather than a live path;
+    // it is named for the FACT (the row is unidentified) instead of for the
+    // one caller it was written next to, and it still collides between two
+    // unidentified rows of the same role. Stated rather than hidden.
+    id: message.id ?? `unidentified:${message.role}`,
     content: toRuntimeContent(message.content),
   };
+}
+
+/**
+ * `MessageRole` -> `ModelMessage['role']`.
+ *
+ * `user`, `assistant` and `tool` cross as themselves. That is the whole point:
+ * flattening them is what made a compacted transcript read as if the user had
+ * said the model's own turns.
+ *
+ * `system` has NO arm in the runtime's union -- the system prompt is a separate
+ * `ModelRequest` field (`ports.ts:132`), not a row -- so it resolves to `user`.
+ * Two things keep that from being a live loss: the model-boundary projector
+ * already EXCLUDES system rows from the messages array and routes their content
+ * into the system prompt (`message-projectors.ts:177-180`), so no caller can
+ * hand this function one; and even if one arrived, its CONTENT still crosses
+ * through `toRuntimeContent` below. The role LABEL is what is lost, and only on
+ * an arm no producer can currently reach.
+ */
+function toModelRole(role: Message['role']): ModelMessage['role'] {
+  if (role === 'assistant' || role === 'tool') return role;
+  return 'user';
 }
 
 /** Transcript content -> runtime content, block by block. */
@@ -448,8 +498,61 @@ function toRuntimeContent(
         ...(block.thinkingSignature === undefined ? {} : { signature: block.thinkingSignature }),
       };
     }
+    // The two blocks a tool-using turn is MADE of. `ModelContentBlock` has an
+    // arm for each, so degrading them was not a narrowing the port forced -- it
+    // was the mapping declining to use arms that exist. Crossed here rather
+    // than at the compaction call site, because the mailbox path produces
+    // neither and would be unaffected either way.
+    if (block.type === 'tool_use') {
+      return {
+        type: 'tool_use',
+        // `id`, not `callId`: that is the field the transcript block carries
+        // (`content.ts:102`) and the runtime renames it. Reading `callId` here
+        // would typecheck against nothing and emit `undefined` at runtime.
+        callId: block.id,
+        name: block.name,
+        input: block.input,
+      };
+    }
+    if (block.type === 'tool_result') {
+      return {
+        type: 'tool_result',
+        // The same rename, opposite direction: `tool_use_id` on the transcript
+        // side, `callId` on the runtime side. This is the field that pairs a
+        // result with its call, so a wrong read here is a tool result the
+        // model cannot attribute to anything it asked for.
+        callId: block.tool_use_id,
+        content: flattenToolResultContent(block.content),
+        // `isError` is a REQUIRED boolean on the runtime's block
+        // (`ports.ts:126`) while `is_error` is optional tri-state on the
+        // transcript's (`content.ts:120`). The port shape therefore cannot
+        // carry the absence, and `?? false` is the ONLY value expressible
+        // here. Named because the drain path reached the opposite conclusion
+        // for a tri-state field it COULD widen (`toDrainItem`), and reading
+        // this as a contradiction would be reasonable: widening
+        // `ModelContentBlock` is an `agent-runtime` change, not a host one.
+        isError: block.is_error ?? false,
+      };
+    }
     return { type: 'text', text: `[unprojectable ${block.type} block omitted]` };
   });
+}
+
+/**
+ * A `tool_result`'s content -> the runtime's single `content: string`.
+ *
+ * The transcript lets a result carry BLOCKS (`content.ts:119`) and the runtime
+ * does not (`ports.ts:126`), so a nested result has to be flattened. Text is
+ * taken verbatim; a nested block the runtime cannot express names its type
+ * rather than disappearing, for the reason the marker above gives.
+ */
+function flattenToolResultContent(content: string | MessageContent[]): string {
+  if (typeof content === 'string') return content;
+  return content
+    .map((block) =>
+      block.type === 'text' ? block.text : `[unprojectable ${block.type} block omitted]`,
+    )
+    .join('\n');
 }
 
 // ============================================================================
