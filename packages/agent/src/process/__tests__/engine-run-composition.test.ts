@@ -155,8 +155,14 @@ afterEach(() => {
  * asks the mailbox store. Answering with an EMPTY claim (not a null: the code
  * reads `claim.rows`) is the honest "nothing was queued", and anything other
  * than these two actions is a test-visible failure rather than a hang.
+ *
+ * RETURNS the actions it saw, and that is the point: `mailbox:claimBatch` being
+ * in the list is evidence that the ENGINE's sweep reached the AGENT's claim
+ * reached the STORE. A stubbed claim issues no IPC at all, so the list is empty
+ * and this is a cross-source assertion rather than a restatement.
  */
-function installFakeDbIpc(): void {
+function installFakeDbIpc(): string[] {
+  const actions: string[] = [];
   if (!dbListener) {
     initDbClient();
     const added = process.listeners('message').filter((l) => !PRE_EXISTING.has(l));
@@ -170,12 +176,14 @@ function installFakeDbIpc(): void {
     if (req.action !== 'modeState:get' && req.action !== 'mailbox:claimBatch') {
       throw new Error(`unexpected db action: ${req.action}`);
     }
+    actions.push(req.action);
     const result = req.action === 'mailbox:claimBatch' ? { rows: [], claimTokens: [] } : null;
     setImmediate(() =>
       dbListener?.({ type: 'db:response', id: req.id, success: true, result }),
     );
     return true;
   }) as unknown as typeof process.send;
+  return actions;
 }
 
 let sessionCounter = 0;
@@ -235,6 +243,8 @@ interface Observation {
   readonly sweeps: number;
   /** How many times the host's drain was entered. */
   readonly drainEntries: number;
+  /** The db actions the agent's own IPC bridge issued during the run. */
+  readonly dbActions: readonly string[];
   /** What the composed ports advertise and resolve. */
   readonly ports: RunEnginePorts;
   /** Every string the model was sent, joined. */
@@ -242,7 +252,7 @@ interface Observation {
 }
 
 async function driveComposedRun(turns: readonly ('tool' | 'text')[]): Promise<Observation> {
-  installFakeDbIpc();
+  const dbActions = installFakeDbIpc();
   activeClient = scriptedClient(turns);
 
   const agent = makeAgent();
@@ -422,6 +432,7 @@ async function driveComposedRun(turns: readonly ('tool' | 'text')[]): Promise<Ob
     assemblies,
     sweeps,
     drainEntries,
+    dbActions,
     ports,
     modelSawText: () =>
       activeClient!.requests
@@ -494,15 +505,22 @@ describe('composeLegacyRunPorts supplies every member the engine requires', () =
     expect(sources.lookup.sideEffectOf(TOOL_NAME)).toBeNull();
   });
 
-  it('the derived inter-turn port reaches the agent s own claim', async () => {
-    installFakeDbIpc();
-    const agent = makeAgent();
+  it('the derived inter-turn port reaches the agent s own claim, and the store', async () => {
     const o = await driveComposedRun(['text']);
-    // The sweep ran, and it ran through the agent's claim rather than a stub:
-    // the agent carries a sessionId, so `_claimMailboxAtCheckpoint` took its
-    // real path and the fake IPC answered `mailbox:claimBatch`.
+
+    // THE CROSS-SOURCE ASSERTION, and the reason this is not an identity.
+    //
+    // Left: the ENGINE swept the inter-turn port -- counted at the port, by the
+    // engine's own call. Right: the agent's IPC bridge issued
+    // `mailbox:claimBatch` -- recorded at the process boundary, by the agent's
+    // own claim. Between them sits `agent.claimInterTurn`.
+    //
+    // The agent carries a sessionId, so `_claimMailboxAtCheckpoint` takes its
+    // real path rather than short-circuiting on `!this.sessionId`. A derived
+    // claim that was a stub would sweep and never reach the store, and the right
+    // list would be empty -- which is what the mutation below demonstrated.
     expect(o.sweeps).toBeGreaterThan(0);
-    expect(agent.sessionId).toBeDefined();
+    expect(o.dbActions).toContain('mailbox:claimBatch');
   });
 });
 
