@@ -612,3 +612,187 @@ describe('product turn: an abort mid-turn stops promptly with no background drai
     expect(turn1Texts.length).toBe(0);
   });
 });
+
+// ============================================================================
+// 5. Plan 610 A3-2b2: binding `turnOutput` must not disturb the legacy
+//
+// ============================================================================
+
+describe('product turn: a bound turn-output sink does not change the legacy', () => {
+  /**
+   * Run the SAME turn twice -- once with a sink bound, once without -- and
+   * compare what came OUT.
+   *
+   * The comparison is the point. Asserting only "the sink got nothing" would
+   * pass against a legacy that had been quietly broken, and asserting only
+   * "the events still look right" would pass against a sink that swallowed the
+   * frames while leaving the yields alone. Running both and requiring the
+   * observable output to be IDENTICAL is the only shape that rules out both.
+   *
+   * A FAILING tool is used deliberately: it is the one input that exercises
+   * `PostToolUseFailure` as well as the `tool_result` frame, so the two effects
+   * this slice gave a route to are both in the path.
+   */
+  async function runTwice(sink: ((event: SSEEvent) => void) | null): Promise<{
+    events: SSEEvent[];
+    frames: SSEEvent[];
+    finished: number;
+    transcript: readonly Message[];
+    sinkSaw: SSEEvent[];
+    modelSaw: readonly RequestSnapshot[];
+  }> {
+    const run = async (bind: boolean) => {
+      // Every run installs the fake worker IPC itself: `streamChat` reads mode
+      // state over that bridge before its first request, so a run without it
+      // hands a raw object to the pool worker's own `process.on('message')`.
+      installFakeDbIpc();
+      const { executor } = makeProbeTool('probe_bound', 'PROBE-BOUND-2c8e', { mode: 'error' });
+      const model = scriptedModel([
+        [
+          { type: 'tool_use', data: { id: 't1', name: 'probe_bound', input: { value: 'x' } } },
+          DONE_END_TURN,
+        ],
+        [{ type: 'text', data: 'reported' }, DONE_END_TURN],
+      ]);
+      activeClient = model;
+      const agent = makeAgent();
+      const sinkSaw: SSEEvent[] = [];
+      let finished = 0;
+      if (bind) {
+        agent.bindTurnOutputSink({
+          publish: (event) => sinkSaw.push(event),
+          finishTurn: () => {
+            finished += 1;
+          },
+        });
+      }
+      const registry = registryWith('probe_bound', 'failing probe', executor);
+      const events = await collect(agent, 'run the probe then report', registry);
+      return {
+        events,
+        frames: eventsOfType(events, 'tool_result'),
+        finished,
+        transcript: agent.messages,
+        sinkSaw,
+        modelSaw: model.seen,
+      };
+    };
+
+    if (sink !== null) {
+      const bound = await run(true);
+      const plain = await run(false);
+      // The two runs must agree on everything a consumer of the legacy stream
+      // could see. `frames` is the load-bearing one: it is the frame this slice
+      // refactored into a shared builder.
+      expect(bound.frames).toEqual(plain.frames);
+      expect(bound.events.length).toBe(plain.events.length);
+      expect(bound.modelSaw.map((s) => s.toolResultTexts)).toEqual(
+        plain.modelSaw.map((s) => s.toolResultTexts),
+      );
+      expect(bound.transcript.map((m) => [m.role, typeof m.content])).toEqual(
+        plain.transcript.map((m) => [m.role, typeof m.content]),
+      );
+      return bound;
+    }
+    return run(false);
+  }
+
+  it('the sink receives NOTHING while the legacy drives', async () => {
+    const r = await runTwice(() => undefined);
+
+    // The guard itself. `streamChat` unbinds on entry, so a sink bound before the
+    // legacy started observes nothing at all.
+    expect(r.sinkSaw).toEqual([]);
+    expect(r.finished).toBe(0);
+    // And the legacy really did produce a tool_result frame during that run, so
+    // this is not vacuous: if the loop had emitted no frames, "the sink saw
+    // nothing" would be true for the wrong reason.
+    expect(r.frames.length).toBe(1);
+  });
+
+  it('re-binding the sink after the legacy started is what the composition does', async () => {
+    // The complementary direction, and the one the driver flip depends on: with
+    // the legacy NOT running, the same seam does deliver frames.
+    //
+    // Left: the `tool_result` frame the agent's own `_buildToolResultFrame`
+    // built. Right: what the bound sink collected. The agent never sees the
+    // sink's list, so it cannot have written both sides from one value.
+    installFakeDbIpc();
+    const { executor } = makeProbeTool('probe_seam', 'PROBE-SEAM-91ab', { mode: 'error' });
+    const model = scriptedModel([
+      [
+        { type: 'tool_use', data: { id: 't1', name: 'probe_seam', input: { value: 'y' } } },
+        DONE_END_TURN,
+      ],
+      [{ type: 'text', data: 'reported' }, DONE_END_TURN],
+    ]);
+    activeClient = model;
+
+    const agent = makeAgent();
+    const seen: SSEEvent[] = [];
+    const summaries: unknown[] = [];
+    agent.bindTurnOutputSink({
+      publish: (event) => seen.push(event),
+      finishTurn: (summary) => summaries.push(summary),
+    });
+    const registry = registryWith('probe_seam', 'failing probe', executor);
+
+    await agent.recordTurnToolResult({
+      message: {
+        role: 'tool',
+        tool_call_id: 't1',
+        // The `<tool_error>` marker is not decoration: for a `role: 'tool'` row the
+        // legacy INFERS the error bit from the content rather than reading a
+        // field (`DuyaAgent._readToolResultOutcome`), and this assertion is what
+        // proves the seam uses that same reader instead of trusting the engine's
+        // tri-state. A content without the marker must read as a success.
+        content: '<tool_error>PROBE-SEAM-91ab: simulated tool failure</tool_error>',
+        timestamp: 1,
+      },
+      toolName: 'probe_seam',
+      seqIndex: 42,
+    });
+    agent.finishTurnOutput({ turn: 1, results: 1, dispatched: 1 });
+
+    const toolFrames = seen.filter((e) => e.type === 'tool_result');
+    expect(toolFrames.length).toBe(1);
+    expect((toolFrames[0]?.data as { id: string }).id).toBe('t1');
+    // The error bit came from the agent's own reader, which infers it from the
+    // `<tool_error>` marker in the content exactly as the legacy does.
+    expect((toolFrames[0]?.data as { error: boolean }).error).toBe(true);
+    expect(summaries).toEqual([{ turn: 1, results: 1, dispatched: 1 }]);
+
+    // And the durable row really landed: the timeline is the agent's own, read
+    // back through its public projection, not the value the seam was handed.
+    const toolRows = agent.messages.filter((m) => m.role === 'tool');
+    expect(toolRows.length).toBe(1);
+    expect(toolRows[0]?.seq_index).toBe(42);
+    expect(toolRows[0]?.id).toBeTruthy();
+  });
+
+  it('recordTurnAssistantMessage stamps the attribution the engine cannot supply', async () => {
+    installFakeDbIpc();
+    const agent = makeAgent();
+    agent.recordTurnAssistantMessage({
+      content: [{ type: 'text', text: 'the model answered' }],
+      seqIndex: 7,
+      durationMs: 12,
+      usage: { input_tokens: 3, output_tokens: 5 },
+    });
+
+    const rows = agent.messages.filter((m) => m.role === 'assistant');
+    expect(rows.length).toBe(1);
+    // `AssistantMessageRecord` says `modelAttribution` is the HOST's and the
+    // engine must not invent one; these fields exist only if the agent applied
+    // its own. They are what lets `transformMessages.isSameModel` keep the next
+    // turn's thinking block native instead of downgrading it.
+    const row = rows[0] as Message & { model?: string; providerId?: string };
+    expect(row.model).toBeTruthy();
+    expect(row.providerId).toBeTruthy();
+    expect(row.seq_index).toBe(7);
+    // NOT asserted: `usage`. `agent.messages` is the provider-shaped projection
+    // (`projectTimelinePersistenceMessages`), which is not the row -- the usage
+    // block is asserted where it is actually decided, in the composition's
+    // `toRowUsage`. Asserting it here would be testing the projector.
+  });
+});

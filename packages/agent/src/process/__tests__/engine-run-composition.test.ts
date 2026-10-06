@@ -44,10 +44,9 @@ import type {
   ApprovalVerdict,
   AssembledTurn,
   RunEnginePorts,
-  ToolCallRequest,
   ToolDispatchTicket,
-  ToolOutcome,
   TurnAssemblyInput,
+  TurnOutputSummary,
 } from '@duya/agent-runtime';
 
 // ============================================================================
@@ -128,7 +127,6 @@ const {
   composeLegacyRunPorts,
   composeLegacyRunSources,
 } = await import('../run-composition.js');
-const { toDrainItem } = await import('../run-engine-ports.js');
 
 let dbListener: ((msg: unknown) => void) | null = null;
 let realSend: typeof process.send | undefined;
@@ -229,8 +227,6 @@ const RUN_ID = 'run-composition' as RunId;
 interface Observation {
   /** Provider requests the real client was invoked with. */
   readonly requests: ReadonlyArray<readonly Message[]>;
-  /** Calls the engine dispatched into the real publisher -> pipeline. */
-  readonly dispatched: ToolCallRequest[];
   /** Terminal candidates the engine proposed. */
   readonly terminals: string[];
   /** Events that reached the real emitter. */
@@ -241,8 +237,10 @@ interface Observation {
   readonly assemblies: TurnAssemblyInput[];
   /** Inter-turn sweeps the engine performed. */
   readonly sweeps: number;
-  /** How many times the host's drain was entered. */
-  readonly drainEntries: number;
+  /** Frames the bound turn-output sink received. */
+  readonly turnFrames: readonly SSEEvent[];
+  /** One entry per turn the engine finished. */
+  readonly finishedTurns: readonly TurnOutputSummary[];
   /** The db actions the agent's own IPC bridge issued during the run. */
   readonly dbActions: readonly string[];
   /** What the composed ports advertise and resolve. */
@@ -268,8 +266,8 @@ async function driveComposedRun(turns: readonly ('tool' | 'text')[]): Promise<Ob
     );
   }
 
-  // A REAL pipeline behind a REAL publisher: the tool leg the host hands over is
-  // the same pair `streamChat` builds per turn, not a stand-in.
+  // A REAL pipeline behind a REAL publisher: the tool leg the composition
+  // derives is the same pair `streamChat` builds per turn, not a stand-in.
   const pipelines = new TurnPipelinePublisher();
   const newPipeline = (): InstanceType<typeof ToolExecutionPipeline> =>
     new ToolExecutionPipeline(registry, async () => true, {
@@ -280,23 +278,32 @@ async function driveComposedRun(turns: readonly ('tool' | 'text')[]): Promise<Ob
       options: {},
     } as never);
   let currentTurn = 1;
-  // The host's own handle on the live pipeline. It has to be here rather than
-  // reached through the publisher, and that is a MEASURED property rather than a
-  // shortcut: `TurnPipelinePublisher` exposes `publish`, `close`, `currentTurn`
-  // and `queue` and nothing else -- its `#current` record is module-private, so
-  // `ToolPort.drain` has no route to `getRemainingResults` through it. That is
-  // why `queueTool`, `drainTools` and `discardTools` are three HOST obligations
-  // in `run-composition.ts` rather than one derived member.
-  let current = newPipeline();
-  pipelines.publish(currentTurn, current);
+  // Who publishes a turn's pipeline under the engine is the DRIVER FLIP's job:
+  // `streamChat` does it today by constructing the executor itself
+  // (`DuyaAgent.ts:2097`), and an engine-driven run never enters that generator.
+  // So the harness publishes from `assembleTurn`, which the engine calls once per
+  // turn BEFORE the model request and therefore before any `queueTool`.
+  //
+  // It has to publish a FRESH pipeline every turn, and that is load-bearing
+  // rather than cosmetic: `ToolExecutionPipeline.getRemainingResults` RE-SERVES
+  // its items on a second call, so holding one instance for the whole run
+  // settles the same attempt key twice -- a double ledger row indistinguishable
+  // from a correct one (`engine-drain-carryover.test.ts:332-347`). The
+  // publisher's own one-shot drain refusal is the second line of defence, and
+  // `turn-pipeline-lifetime.test.ts` proves it is not a trivial identity.
+  pipelines.publish(currentTurn, newPipeline());
+  const publishNextTurn = (): void => {
+    currentTurn += 1;
+    pipelines.publish(currentTurn, newPipeline());
+  };
 
-  const dispatched: ToolCallRequest[] = [];
-  const terminals: string[] = [];
   const announced: RunEvent[] = [];
   const ledger: string[] = [];
   const assemblies: TurnAssemblyInput[] = [];
   let sweeps = 0;
-  let drainEntries = 0;
+  const terminals: string[] = [];
+  const turnFrames: SSEEvent[] = [];
+  const finishedTurns: TurnOutputSummary[] = [];
 
   const session = new RunSession({
     runId: RUN_ID,
@@ -320,34 +327,12 @@ async function driveComposedRun(turns: readonly ('tool' | 'text')[]): Promise<Ob
   });
 
   const ports = composeLegacyRunPorts(agent, {
-    queueTool: (call) => {
-      dispatched.push(call);
-      pipelines.queue({ id: call.callId, name: call.name, input: call.input });
-    },
-    // The real pipeline, mapped by the real `toDrainItem`. A hand-written
-    // `ToolDrainItem` would test the engine and not the adapter at all.
-    //
-    // A FRESH pipeline is published for the next turn after each drain, which is
-    // what `streamChat` does and is load-bearing rather than cosmetic: the
-    // engine drains on EVERY turn, and `ToolExecutionPipeline.getRemainingResults`
-    // RE-SERVES its items on a second call. Draining one instance twice therefore
-    // settles the same attempt key twice -- a double ledger row that is
-    // indistinguishable from a correct one
-    // (`engine-drain-carryover.test.ts:332-347` records the hazard, and this
-    // harness reproduced it before the per-turn publication was modelled).
-    // Hoisting one pipeline for the whole run is the "permanently mute" shape
-    // `turn-pipeline-publisher.ts:15-31` exists to prevent.
-    async *drainTools(): AsyncIterable<ToolOutcome> {
-      drainEntries += 1;
-      for await (const update of current.getRemainingResults()) {
-        const item = toDrainItem(update);
-        if (item !== null) yield item;
-      }
-      currentTurn += 1;
-      current = newPipeline();
-      pipelines.publish(currentTurn, current);
-    },
-    discardTools: () => current.discard(),
+    // The whole tool leg is this ONE object now. `queueTool`, `drainTools` and
+    // `discardTools` are derived from it, and the derivation is the thing under
+    // test: three host callbacks that each captured the live executor at their
+    // own moment would let the drain and the dispatch disagree about which
+    // pipeline the turn owns, and only one of them could be right.
+    turnPipelines: pipelines,
     // HOST-SUPPLIED by design: the visible catalog is `_resolveTools`' filtered
     // decision, not the registry. See the module header.
     async assembleTurn(input: TurnAssemblyInput): Promise<AssembledTurn> {
@@ -375,6 +360,26 @@ async function driveComposedRun(turns: readonly ('tool' | 'text')[]): Promise<Ob
     },
     seqIndex: 1_700_000_000_000,
     wakeRun: false,
+    // The bound sink. Two jobs, both of them things the DRIVER FLIP will do in
+    // production, which is why they are here rather than in the composition:
+    //
+    //  1. `finishTurn` is the end-of-turn signal the engine already emits, and
+    //     it is where the next turn's pipeline is published. `streamChat` does
+    //     this at the top of each turn; the engine never enters that generator,
+    //     so the harness stands in for it. The ORDER matters: publish AFTER the
+    //     drain, or turn N's dispatch lands in turn N+1's pipeline and turn N
+    //     drains an empty one.
+    //  2. `publish` records the frames the derived `turnOutput` port emits, so
+    //     the new seam is observed at the only place a frame can be seen.
+    turnOutputSink: {
+      publish: (event) => {
+        turnFrames.push(event);
+      },
+      finishTurn: (summary) => {
+        finishedTurns.push(summary);
+        publishNextTurn();
+      },
+    },
     async beginTicket(call): Promise<ToolDispatchTicket> {
       ledger.push(`begin:${call.callId}`);
       return {
@@ -425,13 +430,13 @@ async function driveComposedRun(turns: readonly ('tool' | 'text')[]): Promise<Ob
 
   return {
     requests: activeClient.requests,
-    dispatched,
     terminals,
     announced,
     ledger,
     assemblies,
     sweeps,
-    drainEntries,
+    turnFrames,
+    finishedTurns,
     dbActions,
     ports,
     modelSawText: () =>
@@ -471,11 +476,11 @@ describe('composeLegacyRunPorts supplies every member the engine requires', () =
       });
     }
     const sources = composeLegacyRunSources(agent, {
-      queueTool: () => undefined,
-      drainTools: async function* () {
-        void 0;
-      },
-      discardTools: () => undefined,
+      // A publisher with nothing published. This call only inspects the derived
+      // `lookup`, and every tool leg now refuses loudly rather than returning a
+      // stand-in, so an unpublished publisher is the honest way to say "this
+      // run has no turn yet".
+      turnPipelines: new TurnPipelinePublisher(),
       assembleTurn: () => Promise.reject(new Error('unused')),
       askApproval: () => Promise.reject(new Error('unused')),
       emitter: { emit: () => Promise.resolve() },
@@ -535,13 +540,20 @@ describe('a real engine runs to completion over the composed bundle', () => {
     // POSITIVE evidence, in order. Each is a fact about a different component,
     // so a composition that lost the chain at any link fails before the
     // cross-source check below is even reached.
-    expect(o.dispatched.map((c) => c.callId)).toEqual([CALL_ID]);
-    // The drain was entered on EVERY turn -- the engine drains unconditionally
-    // (`run-engine.ts`) -- and the second drain RE-SERVED NOTHING, which is the
-    // property the ledger proves. Two identical `settle` rows are exactly what a
-    // correct ledger looks like, so the ledger's exact contents are the only
-    // thing that can tell one settle from two.
-    expect(o.drainEntries).toBeGreaterThan(1);
+    //
+    // The dispatch is read off the LEDGER rather than off a host callback,
+    // because there is no host callback any more: `queueTool` is derived from
+    // the publisher. The ledger row is written by `beginTicket`, which the
+    // engine only reaches after a call has been dispatched, so it is still
+    // evidence of the dispatch rather than of the harness.
+    expect(o.ledger.filter((row) => row.startsWith('begin:'))).toEqual([`begin:${CALL_ID}`]);
+    // The run took MORE than one turn, so the drain really was entered again --
+    // the engine drains unconditionally (`run-engine.ts`) -- and the second
+    // drain RE-SERVED NOTHING, which is the property the ledger proves. Two
+    // identical `settle` rows are exactly what a correct ledger looks like, so
+    // the ledger's exact contents are the only thing that can tell one settle
+    // from two.
+    expect(o.finishedTurns.length).toBeGreaterThan(1);
     expect(o.ledger).toEqual([`begin:${CALL_ID}`, `settle:key:${CALL_ID}:succeeded`]);
     expect(o.announced.length).toBeGreaterThan(0);
     expect(o.terminals.length).toBeGreaterThan(0);
@@ -574,12 +586,26 @@ describe('a real engine runs to completion over the composed bundle', () => {
     expect(o.ports.compaction?.decide).toBeDefined();
   });
 
-  it('emits no turn-output port, and that absence is the documented one', async () => {
+  it('binds the turn-output port, and the frames it publishes reach the sink', async () => {
     const o = await driveComposedRun(['tool', 'text']);
-    // `ports.ts:1019-1029` makes it OPTIONAL and names the absence as the live
-    // worker's state. Asserting it is absent pins the boundary for the driver
-    // flip: a future slice that fills it turns THIS red, which is the point.
-    expect(o.ports.turnOutput).toBeUndefined();
+    // `ports.ts:1019-1029` made the port OPTIONAL because two of its effects
+    // had no route outside `streamChat`'s closure. Plan 610 A3-2b2 gave them one,
+    // so the port is now bound -- and asserting it is BOUND is what pins that
+    // decision, rather than leaving the composition free to drop it again.
+    expect(o.ports.turnOutput).toBeDefined();
+
+    // And it is not a stub: the real `tool_result` frame reached the real sink.
+    // Left: the frame's identity fields, built by the agent's own
+    // `_buildToolResultFrame`. Right: what the sink collected. The engine's
+    // record never names a frame, so it cannot have produced this one.
+    const toolFrames = o.turnFrames.filter((frame) => frame.type === 'tool_result');
+    expect(toolFrames.length).toBeGreaterThan(0);
+    expect((toolFrames[0]?.data as { id: string }).id).toBe(CALL_ID);
+    expect(String((toolFrames[0]?.data as { result: string }).result)).toContain(ANSWER);
+
+    // `finishTurn` ran once per turn, with the counts the legacy's
+    // `toolResultMessageCount` gate reads.
+    expect(o.finishedTurns.map((summary) => summary.results)).toEqual([1, 0]);
   });
 });
 
