@@ -26,13 +26,16 @@
  * | `ApprovalPort` | `requestPermission` | the durable write is the Control Plane's (`router.ts:2298`) |
  * | `RunEventStorePort` | the worker's frame fan-out | `sendEvent` writes to IPC AND stdout (`agent-process-entry.ts:2093-2096`); that is a property of how the worker is hosted |
  * | `TurnOutputPort` | the legacy drain loop's per-result effects | all six live in `DuyaAgent.streamChat`'s closure, and they are performed there today |
+ * | `CompactionPort` | `CompactionManager` plus the gates around it | the probe's token accounting and the suppression ring are one authority; a second copy is a second authority |
  *
  * The last two rows are the ones worth stating. The event port does NOT translate
  * to `chat:*`. `WorkerAdapterSurface` (`ports.ts`) keeps that projection in the
  * adapter, and this file projects through the worker's own existing codec rather
  * than inventing a second one. And `TurnOutputPort` is offered as a seam and
  * supplied by nobody: see `LegacyEngineSources.turnOutput` for why binding it
- * before the cutover would double every tool result.
+ * before the cutover would double every tool result. `CompactionPort` is the
+ * opposite case -- a source a host CAN supply today, required precisely because
+ * omitting it loses the transcript rather than a guardrail.
  *
  * ## The side-effect class is resolved HERE, once, at assembly
  *
@@ -51,6 +54,14 @@ import type {
   ApprovalVerdict,
   AssembledTurn,
   AssistantMessageRecord,
+  // Plan 610 A3-2a -- compaction. Required, and `LegacyEngineSources.compaction`
+  // says why in the same terms `interTurn` does.
+  CompactionDecision,
+  CompactionDecisionInput,
+  CompactionOutcome,
+  CompactionPort,
+  CompactionProgress,
+  CompactionUsageAnchor,
   ContextPort,
   // Plan 610 A3-1 -- inter-turn input. Required, unlike the two optional
   // sources above, and `LegacyEngineSources.interTurn` says why.
@@ -249,6 +260,32 @@ export interface LegacyEngineSources {
    * would be a second authority for which rows this run owns.
    */
   readonly interTurn: InterTurnSources;
+  /**
+   * Where the transcript gets REPLACED. REQUIRED, and the reason is the same
+   * one `interTurn` gives: nothing drives the engine in production, so there is
+   * no window in which binding this would compact twice.
+   *
+   * ## Why this is on the `interTurn` side of the line, and not the `turnOutput` one
+   *
+   * `turnOutput` above is optional because there is NOTHING to bind: all six of
+   * its effects live inside `DuyaAgent.streamChat`'s own closure, and a host that
+   * invented a source for them would emit every tool result twice. `compaction`
+   * has no such obstacle -- `CompactionManager` is a real object the host already
+   * holds, with a probe, a `compact` and an event handler on it
+   * (`CompactionManager.ts:337`, `:703`, `:674`) -- so a source can be written
+   * today and would perform nothing until the engine runs. Supplying it is
+   * therefore free now and REQUIRED after the cutover.
+   *
+   * And the cost of getting it wrong is the asymmetry `ports.ts` draws at
+   * length (`:2059-2073`): a forgotten GUARDRAIL loses a guardrail, but this is
+   * not a guardrail. An unbound compaction port means no transcript is ever
+   * replaced, the run grows until the provider returns
+   * `context_length_exceeded`, and the emergency compaction that exists to
+   * recover from exactly that has no port to call. A member that is cheap to
+   * supply and expensive to omit is required; that is the whole test, and it is
+   * why this is a type error rather than a `?.`.
+   */
+  readonly compaction: CompactionSources;
 }
 
 /**
@@ -394,6 +431,155 @@ function toRuntimeContent(
   });
 }
 
+// ============================================================================
+// Compaction -- the one seam that must REPLACE the transcript
+// ============================================================================
+
+/**
+ * What the worker supplies for compaction, in the LEGACY's vocabulary.
+ *
+ * ## The summarization is NOT re-declared here
+ *
+ * `CompactionPort` has no model method on purpose (`ports.ts:2034-2049`): the
+ * summarization already has a runtime-side port, `OneShotTextPort`
+ * (`ports.ts:1742`), which is tool-free, cancellable and answers with a
+ * three-way union. A compaction source that carried its own model call would be
+ * a second copy of a port that exists and already has the harder tests. So
+ * every member below is a DECISION or a TRANSCRIPT, never a generation.
+ *
+ * The two callbacks are the legacy's own two statements --
+ * `probeCompaction` + the gates around it (`CompactionManager.ts:337`) and
+ * `compact` (`:703`) -- reached through the host rather than reimplemented,
+ * because the probe's token accounting and the manager's suppression ring are
+ * one authority between them and a second copy would be a second authority.
+ */
+export interface CompactionSources {
+  /**
+   * One probe against a trigger line. Resolves; a `skip` is a real answer.
+   *
+   * The legacy DECIDES and then RUNS at two different places -- the preflight
+   * probes and compacts with a verdict between (`DuyaAgent.ts:3018`, `:3022`),
+   * and the emergency path only runs once a provider error has been classified
+   * (`:3330`, `:3360`) -- which is why the port splits them and why this stays
+   * one callback rather than a combined "maybe compact".
+   */
+  readonly decide: (input: CompactionDecisionInput) => Promise<CompactionDecision>;
+  /**
+   * Compact, and hand back the transcript the next request is built from.
+   *
+   * Named for the legacy's own statement (`CompactionManager.compact`,
+   * `:703`) rather than the port's `run`, for the same reason
+   * `InterTurnSources.claim` is not called `sweep`: the source names the
+   * MECHANISM the worker already has and the port names the CAPABILITY the
+   * engine asked for. A host reading this interface should be able to point at
+   * the line of legacy code it satisfies.
+   *
+   * ## `reporter` is LIVE, and that is the load-bearing word
+   *
+   * The engine wires this straight to `events.publish`
+   * (`compaction.ts:150-152`), so a source that collects progress and reports it
+   * after `resolve` puts `compaction.step` AFTER `compaction.completed` -- a
+   * terminal frame describing a compaction that had already finished, with its
+   * progress arriving afterwards as if it were new. The legacy's own pump
+   * streams `compact:*` DURING for the same reason: the summarizer takes
+   * minutes (`DuyaAgent.ts:2144-2151`), and a burst afterwards is the bug that
+   * pump was written to fix. So: call `reporter` as progress happens.
+   */
+  readonly compact: (
+    input: CompactionDecisionInput,
+    reporter: (progress: CompactionProgress) => void,
+    signal: AbortSignal,
+  ) => Promise<CompactionOutcome>;
+  /**
+   * Mint the id four of the five frames share.
+   *
+   * The HOST's to mint for the reason `seq` is the ledger's (`ports.ts:2107`):
+   * four frames correlate on it, and an engine that minted its own would be a
+   * second authority for "which compaction is this".
+   */
+  readonly nextCompactionId: () => string;
+  /**
+   * File the provider's real token usage. OPTIONAL, and the port agrees.
+   *
+   * A source without one gets a port that decides from the transcript it was
+   * handed, which is the estimate path the legacy used before plan 577 §2. That
+   * is a degraded trigger, not a broken port, and it is the same distinction
+   * `ports.ts:2118-2132` draws: skipping `noteUsage` can fire early or late,
+   * skipping the port means nothing is ever replaced.
+   */
+  readonly noteUsage?: (anchor: CompactionUsageAnchor) => void;
+}
+
+/** The one thing the adapter needs from the legacy's compaction. */
+export type CompactionCompact = CompactionSources['compact'];
+
+/**
+ * Build `CompactionPort` over the legacy's own compaction.
+ *
+ * ## This is nearly an identity, and the two parts that are not are the point
+ *
+ * `decide` and `nextCompactionId` cross unchanged because the legacy already
+ * speaks the runtime's vocabulary at those two seams. Two members are adapted:
+ *
+ * 1. **`compact`'s outcome is widened from TWO arms to FOUR.** The legacy's
+ *    `compact` either resolves with a `CompactionResult` or THROWS
+ *    (`CompactionManager.ts:744-748` throws on an empty conversation, and the
+ *    summarizer's own failures propagate). The port cannot express that: a
+ *    thrown compaction would escape `runCompactionPass` -- which has no `try`
+ *    around `port.run` (`compaction.ts:154`) -- and skip `compaction.failed`
+ *    entirely, so a consumer would be left holding a `compaction.started` with
+ *    no terminal. So the throw is CAUGHT and reported as `failed`, which is
+ *    also the arm the engine's proactive site reads to take the run down
+ *    (`run-engine.ts:569-571`). Cancellation is separated from failure for the
+ *    reason `ports.ts:1711-1715` gives: an interrupt and an outage call for
+ *    opposite handling, and folding them together reports a user pressing stop
+ *    as a broken provider.
+ *
+ * 2. **`noteUsage` is all-or-nothing.** A source that has one gets the port
+ *    method; a source that has none gets a port WITHOUT the member, so absence
+ *    is checkable rather than a no-op the engine cannot tell from a real anchor.
+ */
+export function buildCompactionPort(sources: CompactionSources): CompactionPort {
+  // Bound to a local for the same reason `turnOutput`'s halves are: an optional
+  // method reached through its owning object loses its non-nullness the moment
+  // the call is deferred, and the `!` that papers over that is the assertion
+  // this file refuses to make elsewhere.
+  const noteUsage = sources.noteUsage;
+
+  return {
+    decide: (input) => sources.decide(input),
+    async run(input, reporter, signal) {
+      try {
+        // Forwarded, not wrapped: the engine's reporter is already bound to
+        // `events.publish`, so any buffering this adapter added would move the
+        // progress frames after the terminal one.
+        return await sources.compact(input, reporter, signal);
+      } catch (error) {
+        // The caller's signal is the authority on cancellation, not the error
+        // class -- the same rule `OneShotTextPort.complete` applies
+        // (`ports.ts:1746-1752`). A summarizer that ignored the abort and threw
+        // anyway is still a cancellation: the caller asked to stop.
+        if (signal.aborted) return { kind: 'cancelled' };
+        return {
+          kind: 'failed',
+          error: {
+            code: 'compaction_failed',
+            message: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+    },
+    nextCompactionId: () => sources.nextCompactionId(),
+    ...(noteUsage === undefined
+      ? {}
+      : {
+          noteUsage: (anchor: CompactionUsageAnchor) => {
+            noteUsage(anchor);
+          },
+        }),
+  };
+}
+
 /** The three `TurnOutputPort` methods, as the legacy package supplies them. */
 export interface TurnOutputSources {
   /** One landed result. Wraps the legacy `tool_result` frame and its writes. */
@@ -491,6 +677,7 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
   const turnOutput = sources.turnOutput;
   const onAssistantMessage = turnOutput?.onAssistantMessage;
   const interTurn: InterTurnInputPort = buildInterTurnPort(sources.interTurn);
+  const compaction: CompactionPort = buildCompactionPort(sources.compaction);
 
   return {
     model,
@@ -499,6 +686,14 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
     approval,
     events,
     interTurn,
+    // Bound UNCONDITIONALLY, unlike `turnOutput` below, and that is the
+    // difference between the two seams rather than an inconsistency between
+    // them. `turnOutput` is a source nobody can supply yet; `compaction` is one
+    // a host can supply today, and `LegacyEngineSources.compaction` makes
+    // supplying it a type error if it is forgotten. Nothing runs an engine in
+    // production, so this binding performs no side effect until the cutover --
+    // which is exactly why it can land first.
+    compaction,
     // All-or-nothing, for the same reason `sideEffects` is: half a port is a
     // port whose missing half is indistinguishable from one that was never
     // asked. `finishTurn` without `recordToolResult` would report counts for

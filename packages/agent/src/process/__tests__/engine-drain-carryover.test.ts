@@ -112,7 +112,7 @@ import type {
 import type { RunEvent, RunEventEnvelope, RunId } from '@duya/agent-protocol';
 import type { AgentProgressEvent, Message } from '@duya/agent-protocol/transcript';
 import { buildEnginePorts, toDrainItem } from '../run-engine-ports.js';
-import type { TurnOutputSources } from '../run-engine-ports.js';
+import type { CompactionSources, TurnOutputSources } from '../run-engine-ports.js';
 import type { MessageUpdate } from '../../tool/StreamingToolExecutor.js';
 
 // ============================================================================
@@ -677,9 +677,31 @@ function realPorts(
       seqIndex: 0,
       wakeRun: false,
     },
+    // A REQUIRED source since A3-2a, for the same reason `interTurn` above is:
+    // a forgotten binding is a lost transcript rather than a lost guardrail, and
+    // test dirs are excluded from every tsconfig so the compiler would not say
+    // so. INERT here -- `skip` is a real answer, and a harness that is not
+    // testing compaction declines to compact. The binding itself is exercised
+    // in `engine-compaction-binding.test.ts`.
+    compaction: skippingCompaction(),
     ...(collector === undefined ? {} : { deferFragment: (fragment) => collector.push(fragment) }),
     ...(turnOutput === undefined ? {} : { turnOutput }),
   });
+}
+
+/**
+ * A compaction source that always declines, for harnesses that do not test it.
+ *
+ * `skip` rather than a stub that pretends to compact: a harness whose turns are
+ * empty has nothing to compact, and a source that returned a `replaced` outcome
+ * would swap the transcript out from under a test asserting something else.
+ */
+export function skippingCompaction(): CompactionSources {
+  return {
+    decide: () => Promise.resolve({ kind: 'skip', reason: 'not under test' }),
+    compact: () => Promise.resolve({ kind: 'declined', reason: 'not under test' }),
+    nextCompactionId: () => 'cmp-inert',
+  };
 }
 
 /**
@@ -777,6 +799,8 @@ describe('buildEnginePorts routes every published event through the run s emitte
         seqIndex: 0,
         wakeRun: false,
       },
+      // Required since A3-2a. Inert for the same reason as `interTurn` above.
+      compaction: skippingCompaction(),
     });
 
     ports.events.publish({ type: 'run.completed', status: 'completed' });

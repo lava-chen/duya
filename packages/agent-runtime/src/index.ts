@@ -388,6 +388,11 @@ export type {
   CompactionPort,
   CompactionProgress,
   CompactionTrigger,
+  // The OPTIONAL member of `CompactionPort`, and the only reason it is listed
+  // here: a host that wires `noteUsage` has to be able to NAME the anchor it
+  // receives, and the engine is the only thing that builds one. Type-only, for
+  // the same G1 reason as the rest of the family.
+  CompactionUsageAnchor,
   ContextPort,
   ExtensionContext,
   ExtensionContribution,
