@@ -276,9 +276,21 @@ B 线在 B1 之后才与 A5 交汇;C 线全程可并行且不阻塞任何人。
 
 仓库自己已经这么写着:`engine-drain-carryover.test.ts:78-89` ——「**NO host supplies one** … 供给一个真 emitter 本身就是切换的一部分」;计划日志说了三次:「**切换不是换驱动,是要在 5291 行入口里建一整层**」。
 
-**尚未做的五件事(顺序有依赖):** ① 建运行组装层:emitter/session、`LegacyEngineSources` 工厂、manifest/input 装配、`turnOutput` 供给(`turnOutput` 的效果读 `DuyaAgent` 上 `_pushDurable` 等 private 方法,**先例是 #236 加的 public 接缝 `claimInterTurn`**,见 `DuyaAgent.ts:3650`「PUBLIC, and it is the whole reason `_sweepInterTurn` exists」);② 入口驱动引擎;③ 删掉遗留循环;④ 去掉 `agent-process-entry.ts:76` 的值 import(G7 因此转绿,`DuyaAgent.ts` 是全仓唯一匹配 `TURN_LOOP_SHAPE` 的文件);⑤ **重新推导**那 3 条红的断言 —— ⚠️ `live-turn-single-driver.test.ts:130-135` 的 driver 对**今天是通过的**,不是那 3 条之一;那 3 条是 `left the engine package itself untouched` 和两条 `G7/G8 are measured against the real gate module`,反转 driver 对**不会**让它们变绿。
+**尚未做的五件事(顺序有依赖):** ① 建运行组装层:emitter/session、`LegacyEngineSources` 工厂、manifest/input 装配、`turnOutput` 供给(`turnOutput` 的效果读 `DuyaAgent` 上 `_pushDurable` 等 private 方法,**先例是 #236 加的 public 接缝 `claimInterTurn`**,见 `DuyaAgent.ts:3650`「PUBLIC, and it is the whole reason `_sweepInterTurn` exists」);② 入口驱动引擎;③ 删掉遗留循环;④ ~~去掉 `agent-process-entry.ts:76` 的值 import~~ ⚠️ **2026-10-06 再更正:这一步不成立。** 实测入口**自己构造 agent**(`agent = new duyaAgent({...})`,`:1929`),用了 **35 个不同的 `agent.*` 成员共 73 处**(42 处在 `handleChatStart` 之外),而 `composeLegacyRunPorts(agent: duyaAgent, ...)` **把 agent 当第一个参数**。**切换只会让入口更依赖 `duyaAgent`,不是更少。** G7 转绿的原因是 `DuyaAgent.ts` **不再满足循环判据**,不是 import 没了。
 
-**循环删除范围(用 TypeScript 解析器实测,不是手写括号配平):** turn 循环 `while` 块是 **`DuyaAgent.ts:1825-3401`(1577 行)**;此前文档写的 `:3404` **长 3 行**——`3404` 是一行注释。`streamChat` 是 `:990-3420`。`DuyaAgent.ts:3300` 也是**注释**(`// Loop continues - next LLM call will include tool results`),不是 `return`。死掉的 model leg 调用在 `:2452-2453`(不是 `:2454`),import 在 `:95`。 | G7 depth-1 finding 转绿;`mutation-proof-a1.mjs` 仍 **7/7**(PR #232 把 G7 加深后实测);`boundary-gates.test.ts` 全绿;`live-turn-single-driver.test.ts` 仍断言 driver 总数 === 1 |
+**循环删除范围(用 TypeScript 解析器实测,不是手写括号配平 —— ⚠️ 这里有两层嵌套循环,此前只记了内层):**
+
+| 对象 | 范围 |
+| --- | --- |
+| 外层 `while (!this.abortController.signal.aborted)` | **`DuyaAgent.ts:2122-3658`(1537 行)** |
+| 内层 turn 循环 `while` 块 | **`DuyaAgent.ts:1825-3401`(1577 行)** |
+| `streamChat` 方法 | **`:1275-3677`** |
+
+两者都真实存在且**互相嵌套**,切换会把两层一起删掉。此前文档写的 `:3404` **长 3 行**——`3404` 是一行注释,且在**外层循环之外**。`DuyaAgent.ts:3300` 也是**注释**(`// Loop continues - next LLM call will include tool results`)。死掉的 model leg 调用在 `:2452-2453`(不是 `:2454`),import 在 `:95`。
+
+**⚠️ 切换的真实阻塞(实测,非估计):全仓唯一的 `new ToolExecutionPipeline` 生产点在 `DuyaAgent.ts:2364`,就在待删循环内**;`toolUseContext` 声明于 `:2269`(由约 100 行逐轮状态构成),唯一的 `publish` 调用在 `:2381`。删掉循环 → 没有任何东西发布管线 → `turn-pipeline-publisher.ts:138,190,224` 的 `queue`/`drain`/`discard` 全部抛 → **引擎在第一个工具调用就失败**。因此顺序必须是:**先落三条接缝**(逐轮 pipeline 工厂 + `_resolveTools` 支撑的 `assembleTurn` + `compactionManager` 支撑的 `compaction`),**再翻转**。
+
+**另外:`live-turn-single-driver.test.ts` 那 3 条红里有 2 条是过期测试,不是真违规** —— `TURN_LOOP_SHAPE.modelStream` 在 PR #232 后已不存在(现在只有 `{ legs: 2 }`),且该测试的 owners walk 传**原始源码**而门禁读**去注释源码**(`code(abs)`)。 | G7 depth-1 finding 转绿;`mutation-proof-a1.mjs` 仍 **7/7**(PR #232 把 G7 加深后实测);`boundary-gates.test.ts` 全绿;`live-turn-single-driver.test.ts` 仍断言 driver 总数 === 1 |
 > **§4 那个未决问题的答案:真违规,不是 `ports.ts` 已知过读。** 它就是真正的轮次循环,
 > **归属 A3,不归属 A1** —— A1 的活已经干完,红的是 A3 的待办,门禁把它如实报出来,
 > 正是「门禁是事实报告,不是待办清单」的预期行为。
