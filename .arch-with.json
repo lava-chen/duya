@@ -1,0 +1,16 @@
+{
+  "counts": {
+    "cycle": 9,
+    "deep-import": 22,
+    "module-dependency": 380,
+    "module-dependency-permitted": 377,
+    "package-boundary-escape": 146
+  },
+  "total": 934,
+  "blocking": 0,
+  "tolerated": 934,
+  "baselineSize": 930,
+  "resolvedFromBaseline": 3,
+  "scope": null,
+  "violations": []
+}
