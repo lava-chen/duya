@@ -270,30 +270,313 @@ export function workerImplementsExecutionChannel(entryRel = WORKER_ENTRY) {
  * The selectivity is the evidence the predicate has teeth; a variant matching
  * hundreds of files would be a grep with extra steps.
  *
- * ## What this still cannot see
+ * ## What replaced the three name clauses, and why (2026-10-06)
+ *
+ * The three clauses were `repetition` AND `modelStream` AND `toolExecution`,
+ * matched per MODULE over comment-stripped source. Two of the three are NAME
+ * clauses, and a conjunction of name clauses is satisfiable by DELETION. This
+ * repo has already shipped that fake green once, recorded at
+ * `packages/agent-runtime/src/engine/ports.ts:12-15`:
+ *
+ *     headless-run-host.ts:22-28 "wires a real `RunController` around an
+ *     executor that still calls `duyaAgent.streamChat`, and that combination
+ *     passes the old acceptance gate while the loop has not moved at all."
+ *
+ * Measured on this tree, immediately before this change, against
+ * `packages/agent/src/agent/DuyaAgent.ts`: deleting ONLY the model-leg markers
+ * (`buildTurnModelLeg` / `TurnModelLeg` / `ModelPort`) left `repetition` and
+ * `toolExecution` true, flipped `modelStream` false, and turned
+ * `isTurnLoopModule` false — with all 1476 lines of the cycle (`:1825`-`:3300`)
+ * still in place. The other two clauses are deletable the same way. A gate that
+ * reports "clean" when the loop has not moved is worse than a gate that is
+ * always red, because the next slice trusts it and stops looking.
+ *
+ * ## The replacement: ONE loop body driving BOTH legs
+ *
+ * The loop is defined by RESPONSIBILITY, and both responsibilities are visible
+ * in the source as SYNTAX rather than as spelling. One loop body must drive at
+ * least `TURN_LOOP_SHAPE.legs` async streams to exhaustion, i.e. contain that
+ * many `for await (... of ...)` headers. The real cycle does exactly this, and
+ * the two headers are the two legs:
+ *
+ *   - `DuyaAgent.ts:2464`  `for await (const event of streamGenerator)` —
+ *                          the MODEL leg.
+ *   - `DuyaAgent.ts:2764`  `for await (const result of executor.getRemainingResults())`
+ *                          — the TOOL leg.
+ *
+ * Both sit inside the single `while` body opened at `DuyaAgent.ts:1825`.
+ * Requiring them to co-occur in one loop BODY, rather than anywhere in a
+ * 5000-line module, is what makes the clauses inseparable: a module cannot
+ * satisfy the predicate by putting a model call in one function and a tool
+ * dispatch in a different one.
+ *
+ * ## Rename-resistance is a REQUIREMENT of this predicate, not an accident
+ *
+ * The property the next person must preserve: **renaming any identifier in the
+ * loop must not change the verdict.** This predicate contains no identifier at
+ * all — no `streamChat`, no `ToolExecutionPipeline`, no `getRemainingResults`,
+ * no `DuyaAgent`. It reads only `for`, `await`, `{` and `}`. Both
+ * `mutation-proof-a1.mjs` and `boundary-gates.test.ts` assert that directly, by
+ * renaming every identifier in a fixture loop and requiring the gate to still
+ * report it, so the property cannot rot into an accident unnoticed.
+ *
+ * The same property is what closes the deletion hole: there is no marker left to
+ * remove. To make this predicate false you must delete an entire `for await`
+ * stream consumption — that is deleting the behaviour the gate protects, not
+ * editing a spelling.
+ *
+ * The line being drawn, stated so the next person does not have to guess it:
+ * any conjunction can be falsified by deleting a conjunct, so the question is
+ * never "can this be silenced" but "what has to be deleted to silence it". Here
+ * the answer is a driven stream — measured by mutation, deleting the tool leg
+ * at `DuyaAgent.ts:2764` turns both G7 and G8 green. That is accepted because it
+ * deletes real work from the cycle. The hole this replaced was answered
+ * differently: deleting `buildTurnModelLeg` / `TurnModelLeg` / `ModelPort`
+ * silenced the old gate while the cycle ran exactly as before, because that
+ * model leg was already dead code. Behaviour-preserving silence is the failure
+ * mode; behaviour-destroying silence is an architectural change a reviewer can
+ * see in the diff.
+ *
+ * ## Selectivity, measured rather than assumed
+ *
+ * Over the 2250 non-test source files under `packages/`, `apps/desktop/src`,
+ * `electron/` and `scripts/`, requiring two driven streams in one loop body:
+ *
+ *   | predicate                                   | files matched |
+ *   | ------------------------------------------- | ------------- |
+ *   | three name clauses (previous)               | 5             |
+ *   | two driven streams in one loop body (this)  | 1             |
+ *
+ * The single match is `packages/agent/src/agent/DuyaAgent.ts`.
+ * `packages/agent-runtime/src/engine/ports.ts` — the types-and-docs module the
+ * clause docstring above recorded as a known over-read — has no loop body at
+ * all under this scanner, so that over-read is gone rather than tolerated.
+ *
+ * ## What this still cannot see, stated rather than assumed
+ *
+ * A turn loop that drives its two legs as plain `await`ed calls instead of as
+ * consumed streams is NOT reported. The threshold stays at the weakest value
+ * that still means "both legs" on purpose: raising it to `forAwait >= 3` selects
+ * the same single file, so 2 carries no tuning risk, and no lower value has a
+ * defensible meaning. The measured cost of the next step down — accepting one
+ * driven stream plus any other awaited call — is 4 files (`DuyaAgent.ts`,
+ * `SessionSearchTool.ts`, `packages/ai/src/utils/retry.ts`,
+ * `apps/desktop/src/main/services/backup.ts`), i.e. a retry helper and a backup
+ * scan. Whoever widens this must re-measure that column rather than assume it.
  *
  * A COPY of the loop pasted into a new module matches the same shape and is
  * caught as a second owner by G8. A loop reached only through a dynamic
  * `import(variable)` is not resolved — `importsOf` reads static specifiers
- * only, the same documented limit `import-graph.mjs` carries. And the three
- * clauses are matched per MODULE, not per block: a module that iterates for an
- * unrelated reason and separately owns a model stream would match. All three
- * limits make the check report MORE, never less.
+ * only, the same documented limit `import-graph.mjs` carries.
  */
 export const TURN_LOOP_SHAPE = {
-  /** A repetition construct: the next turn of the cycle. */
-  repetition: /\b(?:while|for)\s*\(/,
   /**
-   * Opening a model stream: the model request — either called directly, or
-   * through the per-turn model-leg seam that slice S2 introduced. Accepting
-   * the seam is what keeps this clause on the RESPONSIBILITY; pinning it to
-   * one method name is what let it drift off the real loop entirely.
+   * How many `for await (... of ...)` streams ONE loop body must drive to
+   * exhaustion before the module is taken to own a turn loop. Two is not a
+   * tuned constant fitted to one file: it is the number of legs a turn cycle
+   * has — the model request and the tool-result backfill.
    */
-  modelStream:
-    /\.streamChat\s*\(|\b(?:buildTurnModelLeg|createTurnLegModelPort|TurnModelLeg|ModelPort)\b/,
-  /** Dispatching a tool: the tool execution and its backfill. */
-  toolExecution: /\.execute(?:All)?\s*\(|ToolExecutionPipeline|getRemainingResults/,
+  legs: 2,
 };
+
+/** `for await`, allowing any whitespace run, which is all the grammar allows. */
+const FOR_AWAIT = /\bfor\s+await\b/g;
+
+/** Cheap necessary condition; short-circuits the tokeniser for most files. */
+function countForAwait(src) {
+  FOR_AWAIT.lastIndex = 0;
+  let n = 0;
+  while (FOR_AWAIT.exec(src) !== null) n++;
+  return n;
+}
+
+/**
+ * Tokenise JS/TS source just deeply enough to locate `for await` headers and the
+ * block each one lives in.
+ *
+ * Strings, template literals (including `${}` nesting) and regex literals are
+ * skipped as opaque. That is not tidiness: a `}` inside any of them would
+ * unbalance the block scan and silently truncate the enclosing loop body, which
+ * is precisely the under-reporting direction that makes a gate untrustworthy.
+ * The regex-vs-division heuristic is the one `strip-comments.mjs` uses, for the
+ * same reason and with the same error direction; keep the two in sync.
+ */
+function tokenize(src) {
+  const DIVISION_PRECEDERS = new Set("(,=:[!}&|?{};+-*%~^<>\n".split(''));
+  const REGEX_KEYWORDS = new Set([
+    'return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void',
+    'throw', 'case', 'do', 'else', 'yield', 'await',
+  ]);
+  const out = [];
+  let i = 0;
+  let lastSignificant = '\n';
+  let lastWord = '';
+  const note = (ch) => {
+    lastSignificant = ch;
+    lastWord = /[A-Za-z0-9_$]/.test(ch) ? lastWord + ch : '';
+  };
+  while (i < src.length) {
+    const ch = src[i];
+    if (ch === '"' || ch === "'" || ch === '`') {
+      let k = i + 1;
+      let interpolationDepth = 0;
+      while (k < src.length) {
+        if (src[k] === '\\') { k += 2; continue; }
+        // A `${` opens real code inside a template; its `}` must not be read as
+        // the end of the literal, so the two are counted against each other.
+        if (ch === '`' && src[k] === '$' && src[k + 1] === '{') { interpolationDepth++; k += 2; continue; }
+        if (ch === '`' && src[k] === '}' && interpolationDepth > 0) { interpolationDepth--; k++; continue; }
+        if (src[k] === ch && interpolationDepth === 0) break;
+        k++;
+      }
+      const end = Math.min(k + 1, src.length);
+      out.push({ kind: 'opaque', start: i, end });
+      for (let j = i; j < end; j++) note(src[j]);
+      i = end;
+      continue;
+    }
+    if (ch === '/') {
+      const canBeRegex = REGEX_KEYWORDS.has(lastWord) || DIVISION_PRECEDERS.has(lastSignificant);
+      if (canBeRegex) {
+        let k = i + 1;
+        let inClass = false;
+        let closed = false;
+        while (k < src.length) {
+          const c = src[k];
+          if (c === '\\') { k += 2; continue; }
+          if (c === '\n') break;
+          if (c === '[') inClass = true;
+          else if (c === ']') inClass = false;
+          else if (c === '/' && !inClass) { closed = true; break; }
+          k++;
+        }
+        if (closed) {
+          out.push({ kind: 'opaque', start: i, end: k + 1 });
+          for (let j = i; j <= k; j++) note(src[j]);
+          i = k + 1;
+          continue;
+        }
+      }
+      out.push({ kind: 'op', value: ch, start: i, end: i + 1 });
+      note(ch);
+      i++;
+      continue;
+    }
+    if (/[A-Za-z_$]/.test(ch)) {
+      let k = i;
+      while (k < src.length && /[A-Za-z0-9_$]/.test(src[k])) k++;
+      out.push({ kind: 'id', value: src.slice(i, k), start: i, end: k });
+      lastWord = src.slice(i, k);
+      lastSignificant = 'x';
+      i = k;
+      continue;
+    }
+    if (/\s/.test(ch)) { i++; continue; }
+    if (/[0-9]/.test(ch)) {
+      let k = i;
+      while (k < src.length && /[0-9a-zA-Z_.]/.test(src[k])) k++;
+      out.push({ kind: 'num', value: src.slice(i, k), start: i, end: k });
+      lastWord = '';
+      lastSignificant = '0';
+      i = k;
+      continue;
+    }
+    out.push({ kind: 'op', value: ch, start: i, end: i + 1 });
+    note(ch);
+    i++;
+  }
+  return out;
+}
+
+const CLOSERS = { '{': '}', '(': ')', '[': ']' };
+const OPENERS = { '}': '{', ')': '(', ']': '[' };
+
+/** Index of the bracket closing the one at `openIdx`, or -1 when unbalanced. */
+function matchBracket(tokens, openIdx) {
+  const stack = [];
+  for (let i = openIdx; i < tokens.length; i++) {
+    const value = tokens[i].value;
+    if (CLOSERS[value]) stack.push(CLOSERS[value]);
+    else if (OPENERS[value]) {
+      if (stack.pop() !== value) return -1;
+      if (stack.length === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Index of the `(` that opens the group closed at `closeIdx`, or -1.
+ *
+ * The backwards scan is its own function because the forward one cannot be run
+ * from a closer: `matchBracket(tokens, closerIdx)` would treat the `)` as an
+ * opener and match it against the next `(` in the file, which is how an earlier
+ * draft of this scanner silently found no loops at all.
+ */
+function matchOpenBackwards(tokens, closeIdx) {
+  let depth = 0;
+  for (let i = closeIdx; i >= 0; i--) {
+    const value = tokens[i].value;
+    if (value === ')') depth++;
+    else if (value === '(') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/** 1-based line of a byte offset, so a finding can point at the loop. */
+function lineAt(src, offset) {
+  let line = 1;
+  for (let i = 0; i < offset && i < src.length; i++) if (src[i] === '\n') line++;
+  return line;
+}
+
+/**
+ * Every loop body in the module that drives at least `TURN_LOOP_SHAPE.legs`
+ * async streams, as `{ line, legs }`.
+ *
+ * A block counts as a loop body when the token before its `{` is the `)` that
+ * closes a `while (...)` or `for (...)` header. Testing the header's own keyword
+ * rather than searching for `while`/`for` anywhere is what keeps a call named
+ * `forEach` or a property access from opening a phantom body, and it is why
+ * the rename-resistance property survives: the decision is made from bracket
+ * structure and two keywords, never from an identifier's spelling.
+ *
+ * `for await` headers are counted anywhere inside the body, including nested
+ * blocks, because a turn loop's legs are themselves nested stream pumps — that
+ * is the shape the real cycle has at `DuyaAgent.ts:2464` and `:2764`.
+ */
+export function turnLoopSites(src) {
+  if (typeof src !== 'string' || src.length === 0) return [];
+  if (countForAwait(src) < TURN_LOOP_SHAPE.legs) return [];
+  const tokens = tokenize(src);
+  const sites = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].kind !== 'op' || tokens[i].value !== '{') continue;
+    const prev = tokens[i - 1];
+    if (!prev || prev.kind !== 'op' || prev.value !== ')') continue;
+    const headerOpen = matchOpenBackwards(tokens, i - 1);
+    if (headerOpen < 0) continue;
+    const keyword = tokens[headerOpen - 1];
+    if (!keyword || keyword.kind !== 'id') continue;
+    if (keyword.value !== 'while' && keyword.value !== 'for') continue;
+    const bodyEnd = matchBracket(tokens, i);
+    if (bodyEnd < 0) continue;
+    let legs = 0;
+    for (let k = i; k < bodyEnd; k++) {
+      const t = tokens[k];
+      if (t.kind !== 'id' || t.value !== 'for') continue;
+      const next = tokens[k + 1];
+      if (next && next.kind === 'id' && next.value === 'await') legs++;
+    }
+    if (legs >= TURN_LOOP_SHAPE.legs) {
+      sites.push({ line: lineAt(src, tokens[i].start), legs });
+    }
+  }
+  return sites;
+}
 
 /** Test trees are not the subject: a test may drive a loop legitimately. */
 const TEST_PATH = /(?:^|\/)(?:__tests__|tests?|e2e)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/;
@@ -303,26 +586,24 @@ export function isTestPath(relFile) {
 }
 
 /**
- * Does this module's CODE have the shape of the model/tool/next-turn cycle?
+ * Does this module's CODE drive a turn cycle?
  *
  * The input is expected to be comment-stripped, and every caller here does
- * that. It matters, and the reason is measured rather than theoretical:
- * `packages/agent-runtime/src/engine/ports.ts` is a types-and-docs-only module
- * (every import in it is `import type`) whose five clause hits are all prose --
- * "the four lines" for `repetition`, an `interface ModelPort` line, a
- * `getRemainingResults` mention in a doc comment. `isTurnLoopModule(rawSource)`
- * returns **true** for it; `isTurnLoopModule(stripComments(raw).text)` returns
- * **false**. The two live call sites already pass the stripped text, so no gate
- * verdict changes; this guard only stops a future caller that forgets from
- * silently getting an answer about documentation rather than about code.
+ * that. It matters for the same measured reason it always did, and the reason
+ * still holds under the new predicate: `packages/agent-runtime/src/engine/ports.ts`
+ * is a types-and-docs-only module (every import in it is `import type`) whose
+ * clause hits were all prose. A caller that forgets to strip gets an answer
+ * about documentation rather than about code.
+ *
+ * The verdict is `turnLoopSites(src).length > 0`, i.e. at least one loop body
+ * drives `TURN_LOOP_SHAPE.legs` async streams. See the docstring above
+ * `TURN_LOOP_SHAPE` for the measurement that replaced the three name clauses,
+ * and in particular for the rename-resistance requirement this predicate is
+ * required to keep: no identifier from the loop may appear in it, or deleting
+ * a marker would make the gate green again with the cycle untouched.
  */
 export function isTurnLoopModule(src) {
-  if (typeof src !== 'string' || src.length === 0) return false;
-  return (
-    TURN_LOOP_SHAPE.repetition.test(src) &&
-    TURN_LOOP_SHAPE.modelStream.test(src) &&
-    TURN_LOOP_SHAPE.toolExecution.test(src)
-  );
+  return turnLoopSites(src).length > 0;
 }
 
 /**
@@ -431,6 +712,34 @@ export function reachabilityFrom(entryRel, roots = packageRoots()) {
  * G8 already carries the ownership half (a loop outside `@duya/agent-runtime`
  * is reported per package), so bounded G7 + G8 together still account for both
  * ways the loop can be in the wrong place, and each can actually go green.
+ *
+ * ## Depth 0 is INCLUDED, and that is a decision rather than a skip
+ *
+ * This scan used to open with `if (file === entryRel) continue`. The entry was
+ * therefore never G7's subject, and the exclusion was silent: nothing recorded
+ * why the process root — the one module whose job is to drive the loop — was
+ * exempt from the gate about driving the loop.
+ *
+ * It is now included, on two measured grounds.
+ *
+ *  1. Including it costs nothing today. The entry's 33 loops contain zero
+ *     driven streams, so `turnLoopSites` finds no site in
+ *     `agent-process-entry.ts` and the finding set is unchanged. The entry
+ *     CALLS the loop (`agent-process-entry.ts:3047`, `agent.streamChat(...)`);
+ *     calling a loop is not owning one, and the new predicate says so instead
+ *     of the old one, which matched the entry only because it is a 5292-line
+ *     file that happens to mention the right words.
+ *  2. The exclusion was a hole shaped exactly like the one this slice closed.
+ *     Had the entry grown its own turn cycle — the regression G7 exists to
+ *     catch, in its most direct possible form — the `continue` would have
+ *     hidden it. A gate that skips the module most able to violate it is not a
+ *     narrower gate, it is a gate with a marked exemption nobody wrote down.
+ *
+ * So the entry is now a subject like any other, and the honest report is that
+ * it produces no finding: the bypass this gate reports on the live tree is the
+ * entry's direct value import of the loop module
+ * (`agent-process-entry.ts:76`), which G4 already records in the baseline and
+ * which G7 reports at depth 1.
  */
 export const WORKER_LOOP_MAX_DEPTH = 1;
 
@@ -440,16 +749,18 @@ export function findWorkerLoopReach(entryRel = WORKER_ENTRY, roots = packageRoot
   const depth = importDepthFrom(entryRel, roots, maxDepth);
   const findings = [];
   for (const [file, at] of depth) {
-    if (file === entryRel) continue;
     if (isTestPath(file)) continue;
     const abs = path.join(REPO_ROOT, file);
     if (!fs.existsSync(abs)) continue;
-    if (!isTurnLoopModule(code(abs))) continue;
+    const site = turnLoopSites(code(abs))[0];
+    if (!site) continue;
     findings.push({
       file,
       from: entryRel,
       via: at.via,
-      why: `the worker entry reaches a turn-loop implementation within ${at.depth} import hop(s); the loop belongs to the runtime execution owner, reached through ExecutionChannel`,
+      why: at.depth === 0
+        ? `the worker entry IS the turn loop: it drives ${site.legs} async streams inside one loop body at line ${site.line}; the loop belongs to the runtime execution owner, reached through ExecutionChannel`
+        : `the worker entry reaches a turn-loop implementation within ${at.depth} import hop(s); the loop belongs to the runtime execution owner, reached through ExecutionChannel`,
     });
   }
   return findings;

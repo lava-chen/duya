@@ -70,6 +70,7 @@ export {
   reachabilityFrom,
   rel,
   resolveRepoSpecifier,
+  turnLoopSites,
   workerImplementsExecutionChannel,
   writeBaseline,
 } from './boundary-gates.mjs';

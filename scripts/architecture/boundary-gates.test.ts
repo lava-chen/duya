@@ -61,9 +61,11 @@ import {
   layerOfSpecifier,
   reachabilityFrom,
   resolveRepoSpecifier,
+  turnLoopSites,
   workerImplementsExecutionChannel,
   type BoundaryReport,
 } from './boundary-gates.js';
+import { stripComments } from './strip-comments.mjs';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const temps: string[] = [];
@@ -496,6 +498,53 @@ describe('G7 — the worker entry cannot reach the loop through an adapter', () 
     );
   });
 
+  it('checks the entry ITSELF at depth 0, and reports it when the entry is the loop', () => {
+    // Depth 0 used to be skipped by a bare `if (file === entryRel) continue`,
+    // with nothing recording why the process root — the one module whose job is
+    // to drive the loop — was exempt from the gate about driving the loop. It is
+    // now a subject like any other, and the skip is gone.
+    withRepoFixtures(
+      {
+        'self.ts': [
+          'export async function* worker(request, tools) {',
+          '  let keepGoing = true;',
+          '  while (keepGoing) {',
+          '    for await (const event of tools.modelStream([])) {',
+          '      yield event;',
+          '    }',
+          '    for await (const outcome of tools.dispatch([])) {',
+          '      keepGoing = outcome;',
+          '    }',
+          '  }',
+          '}',
+          '',
+        ].join('\n'),
+      },
+      () => {
+        const findings = findWorkerLoopReach('fixtures/boundary-gates/self.ts');
+        expect(findings.map((f) => f.file)).toEqual(['fixtures/boundary-gates/self.ts']);
+        // Reported as the entry's OWN bypass with its own `why`, so the finding
+        // says which of the two cases it is instead of reading like a
+        // reachability hit on the file that owns the loop.
+        expect(findings[0]?.via).toBe('fixtures/boundary-gates/self.ts');
+        expect(findings[0]?.why).toContain('IS the turn loop');
+      },
+    );
+  });
+
+  it('the live entry CALLS the loop without being one, so depth 0 reports nothing today', () => {
+    // The measurement behind including depth 0. The entry's 33 loops contain no
+    // driven streams, so adding the entry to the subject set changed no verdict
+    // on this tree: it CALLS the loop at `agent-process-entry.ts:3047`, and
+    // calling a loop is not owning one. If this ever goes red, the entry grew a
+    // turn cycle of its own — that is a finding to report, not a test to relax.
+    const entryRel = 'packages/agent/src/process/agent-process-entry.ts';
+    const src = stripComments(fs.readFileSync(path.join(REPO_ROOT, entryRel), 'utf8')).text;
+    expect(turnLoopSites(src)).toEqual([]);
+    expect(isTurnLoopModule(src)).toBe(false);
+    expect(findWorkerLoopReach().map((f) => f.file)).not.toContain(entryRel);
+  });
+
   it('reports the live worker as reaching the real loop within one hop', () => {
     const findings = findWorkerLoopReach();
     expect(findings.map((f) => f.file)).toContain('packages/agent/src/agent/DuyaAgent.ts');
@@ -533,25 +582,122 @@ describe('G7 — the worker entry cannot reach the loop through an adapter', () 
   });
 });
 
-describe('G7/G8 — the loop is located by SHAPE, not by the name DuyaAgent', () => {
+describe('G7/G8 — the loop is located by SHAPE, and the shape contains no names', () => {
+  /**
+   * A turn cycle carrying the two legs the predicate actually reads: the model
+   * request and the tool-result backfill, each consumed as a stream inside ONE
+   * loop body. This mirrors the real cycle at `DuyaAgent.ts:1825` (legs at
+   * `:2464` and `:2764`) instead of inventing a shape no real loop has — the
+   * previous fixture here used plain `for` + `await`, which the shipped
+   * predicate does not and should not match.
+   */
+  const turnLoop = [
+    'export async function* drive(client, tools) {',
+    '  let keepGoing = true;',
+    '  while (keepGoing) {',
+    '    for await (const chunk of client.streamChat([])) {',
+    '      yield chunk;',
+    '    }',
+    '    for await (const outcome of tools.executeAll([])) {',
+    '      keepGoing = outcome;',
+    '    }',
+    '  }',
+    '}',
+    '',
+  ].join('\n');
+
+  /** Every identifier the fixture owns, mapped to a name the predicate has never seen. */
+  const RENAME = {
+    drive: 'alpha',
+    client: 'beta',
+    tools: 'gamma',
+    keepGoing: 'delta',
+    chunk: 'epsilon',
+    outcome: 'zeta',
+    streamChat: 'eta',
+    executeAll: 'theta',
+  };
+
+  const renamed = (src: string): string => {
+    let out = src;
+    for (const [from, to] of Object.entries(RENAME)) out = out.split(from).join(to);
+    return out;
+  };
+
   it('recognises a loop that never mentions DuyaAgent at all', () => {
-    // The decisive test of "structural rather than by name": this module drives
-    // model -> tool -> next turn under completely different identifiers, so a
-    // name-matching gate would never see it.
-    const loop = [
-      'export async function* drive(client, tools) {',
+    expect(turnLoop).not.toMatch(/DuyaAgent|duyaAgent/);
+    expect(isTurnLoopModule(turnLoop)).toBe(true);
+  });
+
+  it('survives renaming EVERY identifier — the property the predicate is required to keep', () => {
+    // This is the regression the 2026-10-06 change exists to prevent. The
+    // previous three-clause version could be silenced by DELETING the
+    // model-leg markers from `DuyaAgent.ts` (`buildTurnModelLeg` /
+    // `TurnModelLeg` / `ModelPort`), which flipped `isTurnLoopModule` to false
+    // with the cycle still in place. A gate that renaming can silence is not a
+    // boundary gate, so rename-resistance is a requirement, not an accident.
+    const rewritten = renamed(turnLoop);
+    // Control first: if the rename did not happen, the assertion below would be
+    // asserting nothing — the exact `vacuous-guard-tells` shape this file's
+    // header warns about.
+    expect(rewritten).not.toMatch(/drive|client|tools|keepGoing|chunk|outcome|streamChat|executeAll/);
+    expect(rewritten).toMatch(/for await/);
+    expect(isTurnLoopModule(rewritten)).toBe(true);
+    // Same site, not merely the same boolean: the predicate still locates the
+    // loop at the same line after every identifier changed.
+    expect(turnLoopSites(rewritten)).toEqual(turnLoopSites(turnLoop));
+  });
+
+  it('is NOT satisfied by one leg alone — one driven stream is not a cycle', () => {
+    // The counterweight to the test above. If a single `for await` were enough,
+    // the gate would be satisfiable by deletion again with a different marker,
+    // and the threshold would be arbitrary in the other direction.
+    const oneLeg = [
+      'export async function* drive(client) {',
       '  let keepGoing = true;',
       '  while (keepGoing) {',
-      '    for (const chunk of client.streamChat([])) {',
+      '    for await (const chunk of client.streamChat([])) {',
       '      yield chunk;',
       '    }',
-      '    keepGoing = await tools.executeAll([]);',
+      '    keepGoing = false;',
       '  }',
       '}',
       '',
     ].join('\n');
-    expect(loop).not.toMatch(/DuyaAgent|duyaAgent/);
-    expect(isTurnLoopModule(loop)).toBe(true);
+    expect(isTurnLoopModule(oneLeg)).toBe(false);
+    expect(isTurnLoopModule(renamed(oneLeg))).toBe(false);
+  });
+
+  it('cannot be silenced by deleting the model-leg markers — the hole this closed', () => {
+    // The exact mutation, measured against the real file, that made G7 go green
+    // with all 1476 lines of the cycle still in place. The model leg at
+    // `DuyaAgent.ts:95` and `:2454` is already dead code — no live caller passes
+    // `modelLegs` — so removing those two identifiers was free, and it used to
+    // be enough to clear the gate.
+    const src = stripComments(
+      fs.readFileSync(path.join(REPO_ROOT, 'packages/agent/src/agent/DuyaAgent.ts'), 'utf8'),
+    ).text;
+    expect(isTurnLoopModule(src)).toBe(true);
+
+    const withoutModelLegMarkers = src
+      .split('buildTurnModelLeg')
+      .join('redactedOne')
+      .split('TurnModelLeg')
+      .join('redactedTwo')
+      .replace(/\bModelPort\b/g, 'redactedThree');
+    // Control: the mutation really removed the markers.
+    expect(withoutModelLegMarkers).not.toMatch(/buildTurnModelLeg|TurnModelLeg|ModelPort/);
+    // The assertion that matters: still red.
+    expect(isTurnLoopModule(withoutModelLegMarkers)).toBe(true);
+
+    // And the tool leg is the same story, so both are pinned rather than one.
+    const withoutToolMarkers = src
+      .split('ToolExecutionPipeline')
+      .join('redactedFour')
+      .split('getRemainingResults')
+      .join('redactedFive');
+    expect(withoutToolMarkers).not.toMatch(/ToolExecutionPipeline|getRemainingResults/);
+    expect(isTurnLoopModule(withoutToolMarkers)).toBe(true);
   });
 
   it('does not recognise a module that iterates but never calls a model', () => {
@@ -584,10 +730,14 @@ describe('G7/G8 — the loop is located by SHAPE, not by the name DuyaAgent', ()
       {
         'g8pkg/package.json': JSON.stringify({ name: '@duya/agent-fixture' }),
         'g8pkg/src/loop.ts': [
-          'export async function* turn(client) {',
+          'export async function* turn(client, tools) {',
           '  while (true) {',
-          '    yield* client.streamChat([]);',
-          '    await client.execute([]);',
+          '    for await (const event of client.streamChat([])) {',
+          '      yield event;',
+          '    }',
+          '    for await (const outcome of tools.executeAll([])) {',
+          '      yield outcome;',
+          '    }',
           '  }',
           '}',
           '',
