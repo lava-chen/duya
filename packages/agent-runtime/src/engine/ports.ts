@@ -77,6 +77,7 @@ import type {
   RunBudget,
   RunEpoch,
   RunEvent,
+  RunEventEnvelope,
   RunFence,
   RunId,
   RunManifest,
@@ -2129,8 +2130,18 @@ export interface CheckpointPort {
  * silent about both channels.
  */
 export interface WorkerAdapterSurface {
-  /** Project engine output into the legacy `chat:*` frames `ExecutionSink` takes. */
-  readonly projectToLegacyFrame: (event: RunEvent) => unknown;
+  /**
+   * Project engine output into the legacy `chat:*` frames `ExecutionSink` takes.
+   *
+   * Takes the ENVELOPE, and plan 610 D2 corrected it from the `RunEvent` this
+   * member used to be declared with. The correction is measured, not stylistic:
+   * `projectToLegacyFrame` (`src/project/legacy-sse-projector.ts:47`) has always
+   * taken an envelope, and the envelope is the only carrier of the minted
+   * `seq` -- a projection built from a bare `RunEvent` would have no sequence
+   * number to be ordered by, and a caller satisfying the old signature had to
+   * FABRICATE an envelope to reach the projector at all.
+   */
+  readonly projectToLegacyFrame: (envelope: RunEventEnvelope) => unknown;
   /** Bind the engine's store to the run's emitter. The emitter mints `seq`. */
   readonly bindEmitter: (store: RunEventStorePort) => RunEventStorePort;
   /** The legacy codec, shared with the headless path. Adapter-owned. */

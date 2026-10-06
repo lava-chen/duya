@@ -184,6 +184,16 @@ export type { RawFrame, TranslateContext, TranslateResult } from './translate/ch
 
 export { projectToLegacyFrame } from './project/legacy-sse-projector.js';
 
+// Plan 610 D2: the ONE implementation of `WorkerAdapterSurface`, the `chat:*`
+// projection the worker adapter owes an engine.
+export { createWorkerAdapterSurface } from './engine/worker-adapter-surface.js';
+export type {
+  LegacyFrameCodec,
+  UsageResultFrame,
+  WorkerAdapter,
+  WorkerAdapterSurfaceOptions,
+} from './engine/worker-adapter-surface.js';
+
 export {
   LEGACY_SSE_TYPES,
   INTERNAL_SSE_TYPES,
