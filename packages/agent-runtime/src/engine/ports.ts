@@ -1094,6 +1094,70 @@ export interface RunEngine {
 }
 
 /**
+ * The host's thresholds for the anti-dead-loop HARD STOP.
+ *
+ * ## What the engine does with it, and what it refuses to do
+ *
+ * The engine counts the streak of consecutive IDENTICAL tool calls it dispatched
+ * (same name, same serialised input) and ends the run with
+ * `reason: 'repeated_tool_calls'` once that count reaches `hardStopAt`. That is
+ * the whole capability, and it is an invariant rather than an extension: it is
+ * enforced by the loop itself, on every run, and no host can veto it.
+ *
+ * It reads the THRESHOLD from here and nowhere else. There is no config file, no
+ * environment variable and no TOML read anywhere on this path, because a run's
+ * ceiling that came from ambient process state is a ceiling the run cannot
+ * replay and cannot report.
+ *
+ * ## ABSENT means the guard is not armed, and that is the honest answer
+ *
+ * There is no default threshold here, and the absence is deliberate. A silent
+ * default like 16 would be a ceiling no host agreed to, enforced against every
+ * run in the product, invisible in every config that omitted it — which is the
+ * objection `RunEngineOptions.defaultMaxTurns` records at length for exactly
+ * this class of value. So a host that wants the guard says so, per run, and a
+ * host that does not is not silently running one.
+ *
+ * **This is the obligation the cutover inherits.** Nothing constructs a
+ * `RunExecutionRequest` in production today (the legacy loop still drives every
+ * run), so an unbound guard costs nothing yet; the moment the legacy's
+ * `DuyaAgent.streamChat` is deleted, the host that assembles the request has to
+ * map its existing `antiDeadLoop` config onto this field or the capability is
+ * gone with no frame reporting the loss. The mapping is
+ * `{ enabled: antiDeadLoop.enabled, hardStopAt: antiDeadLoop.hardStopAt }` off
+ * the host's own resolved config (`packages/agent/src/hooks/config.ts:80`,
+ * which also clamps it).
+ *
+ * ## Why the threshold is NOT clamped here
+ *
+ * Clamping is the host's validation boundary and it already happens
+ * (`hooks/config.ts` clamps `hardStopAt` to 2..100). A second clamp inside the
+ * engine would either silently disagree with the host's own value or duplicate a
+ * rule that lives in one place by design. The engine compares `count >=
+ * hardStopAt` exactly as given.
+ *
+ * ## What is deliberately NOT in this shape
+ *
+ * `nudgeAt` and `hardNudgeAt`. Those drive the soft and hard nudge hooks, which
+ * are a HOST capability — the engine holds no nudge prose and no hook text, and
+ * a field named for them here would invite both. This shape is the hard stop and
+ * nothing else.
+ */
+export interface RepeatedCallStopPolicy {
+  /**
+   * Whether the invariant fires. `false` records the streak and stops nothing.
+   *
+   * Present rather than inferred from `hardStopAt` because "guard off" and
+   * "guard on at a threshold nobody chose" are different host decisions, and
+   * collapsing them would make a disabled guard indistinguishable from a
+   * misconfigured one.
+   */
+  readonly enabled: boolean;
+  /** Consecutive identical dispatched calls at which the run hard-stops. */
+  readonly hardStopAt: number;
+}
+
+/**
  * Everything the engine is given for one run.
  *
  * `manifest` is the frozen decision (plan 600 `00` section B.1) and `input` is
@@ -1146,6 +1210,23 @@ export interface RunExecutionRequest {
    * shape cannot return quietly.
    */
   readonly modelRequestTimeoutMs?: number;
+  /**
+   * The anti-dead-loop HARD STOP for this run. See `RepeatedCallStopPolicy`.
+   *
+   * PER RUN and not on `RunEngineOptions`, and that placement is the whole
+   * design. The legacy resolves this config once per `streamChat` call from the
+   * options it was handed (`DuyaAgent.ts:2847-2848`), so the threshold is a
+   * per-run fact like the model and the catalog; a process-lifetime knob would
+   * silently ignore a user who changed the setting between two chats.
+   * `RunEngineOptions` is for what the engine itself owns (`defaultMaxTurns` is
+   * a fallback for a manifest that names none), and a host-supplied limit is
+   * exactly the thing `modelRequestTimeoutMs` above already establishes as
+   * per-run.
+   *
+   * OPTIONAL, and the absence is a real state rather than a default — see
+   * `RepeatedCallStopPolicy` for why an absent guard is not silently armed.
+   */
+  readonly repeatedCallStop?: RepeatedCallStopPolicy;
   /** The ports for this run. Supplied per run, not per process. */
   readonly ports: RunEnginePorts;
 }
@@ -1481,12 +1562,27 @@ export interface SubtaskHandle {
  * "how can a run end" -- one the compiler could not check against the other.
  * `run-engine.ts` re-exports both types unchanged, so every existing import
  * still resolves and nothing outside this package has to care.
+ *
+ * ## Why `repeated_tool_calls` is a reason rather than a `max_turns`
+ *
+ * It is the anti-dead-loop HARD STOP, and it is a different fact from a turn
+ * ceiling. A run that hit `max_turns` did as many turns as it was allowed; a
+ * run that hit this one asked the same question `hardStopAt` times in a row and
+ * is being stopped because the model is not converging, which is the diagnosis
+ * an operator needs and the one a generic ceiling cannot state.
+ *
+ * The legacy already reports this string -- `DuyaAgent.ts:4273` yields
+ * `{ type: 'done', reason: 'repeated_tool_calls' }` -- so keeping it verbatim
+ * means deleting the legacy loop does not change what a consumer reads.
+ * `chat-event-translator.ts` already names it among the runtime loop outcomes
+ * that have no `StopReason` counterpart and must not be coerced into one.
  */
 export type EngineExitReason =
   | 'completed'
   | 'budget_exhausted'
   | 'max_turns'
   | 'cancelled'
+  | 'repeated_tool_calls'
   | 'failed';
 
 export interface EngineExit {

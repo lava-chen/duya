@@ -153,6 +153,7 @@ import type {
   ModelMessage,
   ModelRequest,
   ModelStopReason,
+  RepeatedCallStopPolicy,
   RunEngine,
   RunEnginePorts,
   RunExecutionHandle,
@@ -392,6 +393,22 @@ export class RunEngineImpl implements RunEngine {
      */
     const finalPollAbsorbs: RunScoped<{ current: number }> = { current: 0 };
     /**
+     * The consecutive-identical-tool-call streak, for the whole run.
+     *
+     * A CELL for the same reason `finalPollAbsorbs` above is one: `#dispatchCall`
+     * writes it and `#shouldStop` reads it, neither of which is the method that
+     * would otherwise hold a `let`, and the engine object must stay stateless.
+     *
+     * RUN-scoped and not per-turn, and that is load-bearing rather than tidiness:
+     * the streak is consecutive ACROSS turns -- a model that asks for the same
+     * call every turn never repeats it within one turn -- and `RunContext` is
+     * rebuilt every iteration. A per-turn counter would reset to 1 on each
+     * iteration and the invariant could never fire at any threshold above 1, which
+     * is the legacy behaviour this replaces reading `shouldHardStop()` off one
+     * tracker for the whole `streamChat` (`DuyaAgent.ts:2847`, `:4271`).
+     */
+    const repeatedCalls: RunScoped<RepeatedCallStreak> = new RepeatedCallStreak();
+    /**
      * Which turn the run stopped on, for the one `assistant.message_finalized`
      * this run emits.
      *
@@ -553,6 +570,9 @@ export class RunEngineImpl implements RunEngine {
           ...(request.modelRequestTimeoutMs === undefined
             ? {}
             : { modelRequestTimeoutMs: request.modelRequestTimeoutMs }),
+          ...(request.repeatedCallStop === undefined
+            ? {}
+            : { repeatedCallStop: request.repeatedCallStop }),
           ports,
           input,
           manifest,
@@ -570,6 +590,7 @@ export class RunEngineImpl implements RunEngine {
           contextEpoch,
           injected,
           finalPollAbsorbs,
+          repeatedCalls,
         };
 
         if (isAborted(signal)) {
@@ -1436,6 +1457,11 @@ export class RunEngineImpl implements RunEngine {
     // Recorded only once the call is actually on its way, so a denied or
     // budget-refused call does not count as work the next turn must answer.
     ctx.turnWork.record();
+    // The anti-dead-loop streak, recorded at the SAME point and for the same
+    // reason: a call that was refused never happened, and counting it would let
+    // a model be hard-stopped for calls it never made. `#shouldStop` reads this
+    // at the end of the turn.
+    ctx.repeatedCalls.record(call.name, call.input);
   }
 
   // ── Decision 3 ────────────────────────────────────────────────────────────
@@ -1669,6 +1695,33 @@ export class RunEngineImpl implements RunEngine {
     // already at its ceiling would spin forever, and an engine that let a
     // contributor override its own ceiling is not enforcing one.
     if (ctx.spend.turns >= this.#maxTurns(ctx.ports)) return { reason: 'max_turns' };
+
+    // ── The anti-dead-loop HARD STOP, second and also non-negotiable ─────────
+    // A model that asks for the same call over and over is not converging, and
+    // each round costs a full model call plus every side effect the call has.
+    // So the loop ends rather than spending the rest of the run budget proving
+    // it.
+    //
+    // HERE, beside the turn ceiling and BEFORE the `before_finalize` phase,
+    // for two reasons. First, it is a CEILING in the same sense `max_turns` is,
+    // and the comment above says a contributor may not reopen one -- a binding
+    // veto that kept a diverging run alive would be the engine choosing not to
+    // enforce its own invariant. Second, stopping before the phase means a run
+    // that is not converging pays no extension round-trip to learn that.
+    //
+    // ORDER: after `max_turns`, so a run that simply used up its turns keeps
+    // reporting `max_turns` and no existing consumer sees a new reason for a
+    // case that already had one. Only a run that no ceiling would have stopped
+    // reaches this, which is precisely the run it exists for.
+    //
+    // The threshold is the HOST's, read from `RunExecutionRequest` and never
+    // from config, env or TOML. Absent policy = the guard is not armed, and no
+    // default is invented here; see `RepeatedCallStopPolicy` for why a silent
+    // default would be a ceiling nobody agreed to.
+    const stopPolicy = ctx.repeatedCallStop;
+    if (stopPolicy !== undefined && stopPolicy.enabled && ctx.repeatedCalls.repeats(stopPolicy.hardStopAt)) {
+      return { reason: 'repeated_tool_calls' };
+    }
 
     // A binding veto keeps the run open even when the model asked for nothing.
     // This is the one place a contributor influences the OUTCOME, and it does so
@@ -2303,6 +2356,17 @@ export class RunEngineImpl implements RunEngine {
         };
       case 'cancelled':
         return { state: { status: 'cancelled' }, reason: 'the run was stopped by its caller' };
+      case 'repeated_tool_calls':
+        // `completed`, and NOT `failed`: the run ended the way it was told it
+        // could end, with every call before it dispatched, recorded and settled.
+        // A status of `failed` would put an error object in the durable record
+        // for a guardrail that did its job -- the same distinction
+        // `max_turns` draws a line above, and the reason the legacy's `done`
+        // event carries this reason rather than an error.
+        return {
+          state: { status: 'completed' },
+          reason: 'the run stopped because the model repeated the same tool call',
+        };
       case 'failed':
         return {
           state: {
@@ -2358,6 +2422,60 @@ class TurnWork {
   }
 }
 
+/**
+ * The consecutive-identical-tool-call streak. The anti-dead-loop HARD STOP's
+ * whole input, and run-scoped because a streak that reset every turn could never
+ * reach a threshold.
+ *
+ * ## The signature is the legacy's, deliberately
+ *
+ * `name` + U+0001 + `JSON.stringify(input)` is exactly what
+ * `packages/agent/src/agent/TurnLoopTracker.ts` composes (`toolCallSignature`),
+ * and it is re-derived here rather than imported. It CANNOT be imported: this
+ * package depends only on `@duya/agent-core` and `@duya/agent-protocol`, and
+ * `@duya/agent` depends on THIS package, so an import would be a cycle. Lifting
+ * the helper into `@duya/agent-protocol` -- the one lower package both sides
+ * already depend on -- would make the two implementations provably the same, and
+ * that is a package-boundary decision this change does not make on its own.
+ *
+ * So the duplication is stated here rather than hidden, and the contract is the
+ * part that matters: identical name AND identical serialised input, with the
+ * separator U+0001 because it cannot occur in either part. Two runs that count
+ * the same streak therefore agree on when it fires.
+ *
+ * `JSON.stringify` is the legacy's own serialiser and it THROWS on a circular
+ * structure. That is kept rather than defended against: `ToolCallRequest.input`
+ * is `Readonly<Record<string, unknown>>` decoded from the provider's JSON, and
+ * the legacy has the identical exposure on the identical path
+ * (`DuyaAgent.ts:3586`). A guard here would make this tracker count differently
+ * from the one it replaces.
+ */
+class RepeatedCallStreak {
+  #lastSignature: string | null = null;
+  #count = 0;
+
+  /** One dispatched call. A different signature starts a new streak at 1. */
+  record(name: string, input: Readonly<Record<string, unknown>>): void {
+    const signature = `${name}\u0001${JSON.stringify(input)}`;
+    if (signature === this.#lastSignature) this.#count += 1;
+    else {
+      this.#lastSignature = signature;
+      this.#count = 1;
+    }
+  }
+
+  /**
+   * Whether the streak has reached the host's threshold.
+   *
+   * `>=`, matching the legacy's own comparison (`shouldHardStop`), so the count
+   * of dispatched calls at which the run ends is `hardStopAt` and not one more
+   * or one fewer.
+   */
+  repeats(threshold: number): boolean {
+    return this.#count >= threshold;
+  }
+}
+
 /** Everything one run needs. Built per `execute`, never shared. */
 interface RunContext {
   readonly runId: RunId;
@@ -2372,6 +2490,21 @@ interface RunContext {
    * and that is every run's state today.
    */
   readonly modelRequestTimeoutMs?: number;
+  /**
+   * The run's anti-dead-loop HARD STOP thresholds, forwarded from
+   * `RunExecutionRequest`. See `RepeatedCallStopPolicy`.
+   *
+   * Copied onto the context rather than re-read from the request for the reason
+   * `modelRequestTimeoutMs` above gives: `#shouldStop` reads the context, and a
+   * fact read from two places is a fact that can disagree with itself.
+   */
+  readonly repeatedCallStop?: RepeatedCallStopPolicy;
+  /**
+   * The consecutive-identical-call streak. A CELL, and run-scoped; see its
+   * declaration in `#run` for why a per-turn value could never reach a
+   * threshold.
+   */
+  readonly repeatedCalls: RunScoped<RepeatedCallStreak>;
   readonly ports: RunEnginePorts;
   readonly input: RunInputSnapshot;
   readonly manifest: RunManifest;
@@ -2995,6 +3128,10 @@ const SUBTASK_REASON_FOR_EXIT: Readonly<Record<EngineExitReason, SubtaskTerminat
   Object.freeze({
     completed: 'completed',
     max_turns: 'completed',
+    // A guardrail that fired is not a parent failure: the run ended on the
+    // engine's own terms, exactly as `max_turns` does, and recording it as
+    // `parent_failure` is the misreading this map exists to prevent.
+    repeated_tool_calls: 'completed',
     budget_exhausted: 'budget_exhausted',
     cancelled: 'parent_cancel',
     failed: 'parent_failure',
