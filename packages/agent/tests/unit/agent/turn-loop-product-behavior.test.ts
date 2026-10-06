@@ -783,6 +783,32 @@ describe('product turn: a bound turn-output sink does not change the legacy', ()
     expect(toolRows[0]?.id).toBeTruthy();
   });
 
+  it('the legacy still yields the FULL tool_result frame after the shared-builder refactor', async () => {
+    const r = await runTwice(null);
+
+    // `runTwice` compares a bound run against an unbound one, so it cannot catch
+    // a field the REFACTOR dropped -- both sides would lose it together. This
+    // pins the frame's key set instead, against the object the loop used to
+    // build inline: `id`, `name`, `result`, `error`, `duration_ms`, `metadata`.
+    //
+    // `metadata` is the one that matters and the one a tidy-up would drop: the
+    // renderer builds its previews from it (a browser screenshot, a
+    // `vision_analyze` result), so a missing key is a silently degraded tool
+    // result rather than an error. Exact keys, not a subset, so an ADDED field
+    // turns this red too.
+    const frame = r.frames[0];
+    expect(frame?.type).toBe('tool_result');
+    const data = frame?.data as Record<string, unknown>;
+    expect(Object.keys(data).sort()).toEqual(
+      ['duration_ms', 'error', 'id', 'metadata', 'name', 'result'].sort(),
+    );
+    expect(data.name).toBe('');
+    // And the values are the legacy's, read from the frame the generator yielded.
+    expect(data.id).toBe('t1');
+    expect(data.error).toBe(true);
+    expect(typeof data.result).toBe('string');
+  });
+
   it('recordTurnAssistantMessage stamps the attribution the engine cannot supply', async () => {
     installFakeDbIpc();
     const agent = makeAgent();
