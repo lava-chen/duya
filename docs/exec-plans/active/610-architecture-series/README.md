@@ -276,17 +276,36 @@ B 线在 B1 之后才与 A5 交汇;C 线全程可并行且不阻塞任何人。
 
 仓库自己已经这么写着:`engine-drain-carryover.test.ts:78-89` ——「**NO host supplies one** … 供给一个真 emitter 本身就是切换的一部分」;计划日志说了三次:「**切换不是换驱动,是要在 5291 行入口里建一整层**」。
 
-**尚未做的五件事(顺序有依赖):** ① 建运行组装层:emitter/session、`LegacyEngineSources` 工厂、manifest/input 装配、`turnOutput` 供给(`turnOutput` 的效果读 `DuyaAgent` 上 `_pushDurable` 等 private 方法,**先例是 #236 加的 public 接缝 `claimInterTurn`**,见 `DuyaAgent.ts:3650`「PUBLIC, and it is the whole reason `_sweepInterTurn` exists」);② 入口驱动引擎;③ 删掉遗留循环;④ ~~去掉 `agent-process-entry.ts:76` 的值 import~~ ⚠️ **2026-10-06 再更正:这一步不成立。** 实测入口**自己构造 agent**(`agent = new duyaAgent({...})`,`:1929`),用了 **35 个不同的 `agent.*` 成员共 73 处**(42 处在 `handleChatStart` 之外),而 `composeLegacyRunPorts(agent: duyaAgent, ...)` **把 agent 当第一个参数**。**切换只会让入口更依赖 `duyaAgent`,不是更少。** G7 转绿的原因是 `DuyaAgent.ts` **不再满足循环判据**,不是 import 没了。
+**尚未做的五件事(顺序有依赖):** ① 建运行组装层:emitter/session、`LegacyEngineSources` 工厂、manifest/input 装配、`turnOutput` 供给(`turnOutput` 的效果读 `DuyaAgent` 上 `_pushDurable` 等 private 方法,**先例是 #236 加的 public 接缝 `claimInterTurn`**,它旁边的注释写着「PUBLIC, and it is the whole reason `_sweepInterTurn` exists」);② 入口驱动引擎;③ 删掉遗留循环;④ ~~去掉 `agent-process-entry.ts` 的 `duyaAgent` 值 import~~ ⚠️ **2026-10-06 再更正:这一步不成立。** 实测入口**自己构造 agent**(`agent = new duyaAgent({...})`),用了 **35 个不同的 `agent.*` 成员共 73 处**(42 处在 `handleChatStart` 之外),而 `composeLegacyRunPorts(agent: duyaAgent, ...)` **把 agent 当第一个参数**。**切换只会让入口更依赖 `duyaAgent`,不是更少。** G7 转绿的原因是 `DuyaAgent.ts` **不再满足循环判据**,不是 import 没了。
 
-**循环删除范围(⚠️ 2026-10-06 第三次更正,前两次都错):全仓只有**一个**轮次循环。** 实测:`while (!this.abortController.signal.aborted)` 打开于 **`DuyaAgent.ts:2122`**;两条 `for await` 腿在 `:2760`(model)与 `:3060`(tool)。`streamChat` 方法是 `:1275-3677`。
+**循环删除范围(⚠️ 2026-10-06 第四次更正,前三次都错):全仓只有**一个**轮次循环。** 判据形状:`while (!this.abortController.signal.aborted)` 打开的那个循环体,内有**恰好两条** `for await` 腿 —— 一条遍历 `streamGenerator`(model 腿),一条遍历 `executor.getRemainingResults()`(tool 腿)。此前所有「N 行、行号在 M」的记载一律作废,包括本文件上一版本自己写的。
 
-此前记载的 `:1825-3401`(内层循环,1577 行)**不成立**:`:1825` 是一行**注释**(`// The resolved modes + ctx are stored on this ...`),`:3401` 在一个表达式中间。**这个错误数字的源头是门禁自己的文档注释** —— `boundary-gates.mjs` 里写着 `DuyaAgent.ts:1825`/`:2464`/`:2764`,三处全过期。那条注释被当成实测结果写进计划文档,又被另外两人**重新"测量"并继续传播**,错了三次且一次比一次显得更有把握。**PR #249 已删除那些行号引用**,改为指向 `turnLoopSites()`。
+**为什么连着错三次:根因是 `turnLoopSites()` 返回的行号不能当文件行号用。** 它被传入的是**去注释**源码(`code(abs)`),内部 `lineAt()` 数的是**去注释后**的行,所以它的输出是**去注释坐标系**的偏移,不是文件里的行号。实测:`turnLoopSites(DuyaAgent 去注释源码)` 报 `line: 1982`,而同一个循环在**真实文件**里不是 1982。**把门禁的输出抄成行号,等于换一种方式重新引入同一个错误。**
 
-**判据自此以 `turnLoopSites()` 为唯一权威,任何文档不要再引用行号。**
+**唯一权威与复现方式** —— 不要引用行号,引用形状。要拿当前位置就跑:
+
+```bash
+node -e "import('./scripts/architecture/boundary-gates.mjs').then(m=>console.log(m.isTurnLoopModule(require('fs').readFileSync('packages/agent/src/agent/DuyaAgent.ts','utf8').replace(/\/\*[\s\S]*?\*\//g,'').replace(/^[ \t]*\/\/.*$/gm,''))))"
+```
+
+实测 `isTurnLoopModule(DuyaAgent 去注释源码) === true`,`agent-process-entry.ts` 同样入参下为 `false` —— 这正是 G7 报 depth-1 的原因(入口一跳到达一个仍然满足循环判据的模块)。**G7 转绿的判据是 `DuyaAgent.ts` 不再满足 `turnLoopSites`,与 import 无关。**
+
+**⚠️ 2026-10-06 实测,这条判据对「引擎的写法」永远不成立,A3-2b6 的验收必须知道:** `TURN_LOOP_SHAPE = { legs: 2 }` 要求**两条 `for await` 出现在循环体内**。实测两侧的写法根本不同:
+
+| | 循环 | 两条 `for await` 在哪 |
+| --- | --- | --- |
+| 遗留 `DuyaAgent` | `for`/`while` 头打开的循环体 | **内联在循环体内** |
+| 引擎 `RunEngineImpl` | `for (let turn = 1; ; turn++) {` | **在 `#streamModel` / `#drainOutcomes` 两个私有方法里,比循环体深一帧** |
+
+实测证据:引擎那个循环体的花括号配平后是 **286 行**,内含 `for await` **0 条**;两条腿分别在 `#streamModel` 与 `#drainOutcomes` 里,被循环体**调用**(调用点在循环体内部)。所以 `turnLoopSites(run-engine.ts 去注释源码) === []` **不是缺陷,是架构的必然结果**:引擎把两条腿**抽成了方法**,门禁的 `legs` 判据只看循环体,于是永远看不见它。
+
+**因此 A3-2b6 之后 G7 会转绿,但那个绿与「循环被删干净了」在结构上无法区分。** 判据对**分解方式**敏感,不对**职责**敏感 —— 一个把轮次循环整个委托出去的模块会被判为「不是轮次循环」。
+
+**A3-2b6 的验收因此必须包含一条正向证明,不能只看门禁变绿:** 引擎在切换后**确实**驱动 ≥2 轮(模型腿 + 工具腿各被调用 ≥1 次),并且有一个**非恒等**的测试证明「循环存在时判据仍能报出」。只有「门禁红→绿」这一条,就是把 `legs: 2` 这个代理指标当成职责本身。
 
 **⚠️ 第四点「去掉 `agent-process-entry.ts:76` 的值 import」同样不成立。** 入口**自己构造 agent**(`new duyaAgent({...})`,`:1929`),用了 **35 个 `agent.*` 成员共 73 处**(42 处在 `handleChatStart` 之外),而 `composeLegacyRunPorts(agent: duyaAgent, ...)` **把 agent 当第一个参数**。**切换让入口更依赖 `duyaAgent`。** G7 转绿的原因是 `DuyaAgent.ts` 不再满足循环判据 —— 判据读**去注释**源码(`code(abs)`),而 `tokenize` 跳过字符串但**不跳注释**,5000 行散文里的花括号会截断块扫描。
 
-**剩余顺序:** ① 压缩缝 —— `compactionManager.compact(` **零生产调用点**(只有三处注释),遗留实际走 `compactionCoordinator.runPreTurn`(`:2595`),而它**已经返回** `{systemPromptContent, messages}` 且 `onEvent` 就是 reporter。所以这条缝是**包装**,不是抽取;遗留的 50ms 生成器轮询泵**只是 async generator 的 transport 产物,引擎不需要**。② 组装缝 —— `systemPromptContent` 是**生成器累加器**(7 个赋值点,3 个在循环中途,1 个派生自工具在流式中改写的 `modeCtx.state`),**没有可抽取的函数**;`assembleTurnContext` 返回 `TurnContext`(身份事实)而非 `AssembledTurn`(模型载荷),**两者不可改造**。因此这条缝是**新写方法 + 等价性测试**(拿遗留自己的输出做对照),不是「忠实抽取」。③ 翻转驱动 + 删 `:2122` 起的循环。 | G7 depth-1 finding 转绿;`mutation-proof-a1.mjs` 仍 **7/7**(PR #232 把 G7 加深后实测);`boundary-gates.test.ts` 全绿;`live-turn-single-driver.test.ts` 仍断言 driver 总数 === 1 |
+**剩余顺序:** ① 压缩缝 —— `compactionManager.compact(` **零生产调用点**(只有三处注释),遗留实际走 `compactionCoordinator.runPreTurn`(`:2595`),而它**已经返回** `{systemPromptContent, messages}` 且 `onEvent` 就是 reporter。所以这条缝是**包装**,不是抽取;遗留的 50ms 生成器轮询泵**只是 async generator 的 transport 产物,引擎不需要**。② 组装缝 —— `systemPromptContent` 是**生成器累加器**(7 个赋值点,3 个在循环中途,1 个派生自工具在流式中改写的 `modeCtx.state`),**没有可抽取的函数**;`assembleTurnContext` 返回 `TurnContext`(身份事实)而非 `AssembledTurn`(模型载荷),**两者不可改造**。因此这条缝是**新写方法 + 等价性测试**(拿遗留自己的输出做对照),不是「忠实抽取」。③ 翻转驱动 + 删掉那个唯一的轮次循环(判据形状见上,**不引用行号**)。 | G7 depth-1 finding 转绿;`mutation-proof-a1.mjs` 仍 **7/7**(PR #232 把 G7 加深后实测);`boundary-gates.test.ts` 全绿;`live-turn-single-driver.test.ts` 仍断言 driver 总数 === 1;**外加上面那条正向证明,否则这个绿是空的** |
 > **§4 那个未决问题的答案:真违规,不是 `ports.ts` 已知过读。** 它就是真正的轮次循环,
 > **归属 A3,不归属 A1** —— A1 的活已经干完,红的是 A3 的待办,门禁把它如实报出来,
 > 正是「门禁是事实报告,不是待办清单」的预期行为。
@@ -306,6 +325,12 @@ B 线在 B1 之后才与 A5 交汇;C 线全程可并行且不阻塞任何人。
 > ⚠️ **A3 的边界此前写错了(2026-10-06 实测)。** 原文是「把 `ToolExecutionPipeline` 移出
 > `DuyaAgent.ts:2036` 闭包」。两处错:
 >
+> ⚠️ **以下 1./2. 是 A1 当时的调查记录,原文保留以便追溯,但其中描述的判据
+> (`repetition` / `modelStream` / `toolExecution` 三子句)**已被 PR #232 换成
+> `TURN_LOOP_SHAPE = { legs: 2 }`,**不再存在**。因此本块里所有行号都是**对已删除判据的
+> 历史命中位置**,对今天的门禁**没有任何指导意义** —— 不要把它们当实测结果读,也不要"更正"它们:
+> 更正一个已不存在的东西,只会再造一批新的过期数字。当前判据见上方「循环删除范围」小节。**
+
 > 1. **行号**:`:2036` 无此构造。唯一的构造在 **`:2067`**(`:76` 是它的值 import)。
 >    怎么测的:`Select-String -Pattern 'ToolExecutionPipeline' packages/agent/src/agent/DuyaAgent.ts`
 >    → 仅 `:76` 与 `:2067` 两行命中。
