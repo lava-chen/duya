@@ -220,6 +220,18 @@ const PHASE_EVENTS: Readonly<Partial<Record<ExtensionPhase, readonly MappedHookE
  */
 function firesOnExit(event: MappedHookEvent, reason: string | undefined): boolean {
   if (reason === 'failed') return false;
+  // Plan 610 D3: `max_turns` is SILENT, matching the legacy, which reaches its
+  // ceiling with `_commitMessages()`, a `done('max_turns')` and a `return` --
+  // never calling a `SessionFinalizer`, so there is no dispatch site left to
+  // fire from. The engine previously fired `SessionEnd` here.
+  //
+  // This is PARITY, and the legacy's silence on a normal terminal is a known
+  // question that is deliberately NOT addressed by it. A teardown hook that
+  // silently skips a normal ending is arguably a legacy bug; changing it
+  // belongs in its own change, not folded into a driver swap where a bisect
+  // could no longer attribute a regression. A hook that must run on every
+  // terminal should NOT rely on this event.
+  if (reason === 'max_turns') return false;
   if (event === 'Stop') return reason === 'cancelled';
   return true;
 }

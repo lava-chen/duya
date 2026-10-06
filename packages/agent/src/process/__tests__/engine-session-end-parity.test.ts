@@ -18,7 +18,7 @@
  *   aborted (loop exit)      Stop, SessionEnd         Stop, SessionEnd  yes
  *   aborted (model leg)      (nothing)                Stop, SessionEnd  NO
  *   stream error             (nothing)                (nothing)         yes
- *   max_turns                (nothing)                SessionEnd        NO
+ *   max_turns                (nothing)                (nothing)         yes
  *
  * Three rows agreed and two did not, and the two pointed in OPPOSITE
  * directions: on a cancellation the engine said LESS than the legacy, and at
@@ -32,12 +32,16 @@
  * is what `SessionFinalizer.finalizeAbort` does and what a user who pressed stop
  * expects.
  *
- * The model-leg row became a divergence in the OPPOSITE direction as a
- * consequence, and is recorded in its own test rather than papered over: the
- * engine has one `cancelled` reason and cannot observe which of the legacy's two
- * abort routes it is standing in for.
+ * **Plan 610 D3 closed the ceiling row**, by removing the `SessionEnd` the engine
+ * fired there. It restores parity with the legacy and is deliberate: the legacy's
+ * silence on a NORMAL terminal is a known question that is deliberately NOT
+ * addressed by this change, because folding a behaviour change into a driver swap
+ * means a bisect can no longer attribute a regression. A hook that must run on
+ * every terminal must not rely on this event.
  *
- * The `max_turns` row is untouched by D2 and still open; see the D3 test.
+ * The model-leg row is a divergence in the OPPOSITE direction, recorded in its
+ * own test rather than papered over: the engine has one `cancelled` reason and
+ * cannot observe which of the legacy's two abort routes it is standing in for.
  *
  * ## Why the legacy is silent where it is silent
  *
@@ -483,6 +487,16 @@ interface EngineRun {
   readonly exitEvents: readonly string[];
   /** Hook names the product reported having actually RUN. */
   readonly invokedHooks: readonly string[];
+  /**
+   * How many `after_finalize` contributors the engine actually INVOKED.
+   *
+   * Not the same question as `exitEvents`, and the difference is what makes an
+   * empty `exitEvents` readable. Zero contributors could mean the phase never
+   * ran; two contributors with no dispatch means they ran and chose silence.
+   * Counted at the seam (`createLegacyHookSource`'s own `list` result) rather
+   * than inferred from the events.
+   */
+  readonly contributorCount: number;
   readonly reason: string;
 }
 
@@ -504,6 +518,25 @@ async function runEngine(mode: 'completed' | 'max_turns' | 'cancelled' | 'failed
   const invokedHooks: string[] = [];
   const reasons: string[] = [];
   const controller = new AbortController();
+  // Counted by wrapping the seam's own `list`, so the number is the phase's real
+  // contributor count and not a constant this file chose. Wrapping rather than
+  // replacing, so the engine reads exactly the list it would have read.
+  let contributorCount = 0;
+  const hookSource = createLegacyHookSource({
+    cwd: process.cwd(),
+    sessionId: `s-d3-${engineSessionCounter}`,
+    prompt: 'say something and stop',
+    settings: HOOK_SETTINGS,
+    onHookInvoked: (event) => invokedHooks.push(event.hookEventName),
+  });
+  const countedHookSource = {
+    ...hookSource,
+    list(phase: Parameters<typeof hookSource.list>[0]) {
+      const contributors = hookSource.list(phase);
+      if (phase === 'after_finalize') contributorCount = contributors.length;
+      return contributors;
+    },
+  };
 
   const model: ModelPort = {
     async *stream(): AsyncIterable<ModelFrame> {
@@ -552,13 +585,7 @@ async function runEngine(mode: 'completed' | 'max_turns' | 'cancelled' | 'failed
       proposeTerminal(): void {},
     },
     // The product's own binding of config-hook events onto engine phases.
-    extensions: createLegacyHookSource({
-      cwd: process.cwd(),
-      sessionId: `s-d3-${engineSessionCounter}`,
-      prompt: 'say something and stop',
-      settings: HOOK_SETTINGS,
-      onHookInvoked: (event) => invokedHooks.push(event.hookEventName),
-    }),
+    extensions: countedHookSource,
   };
 
   const engine = new RunEngineImpl({
@@ -581,7 +608,12 @@ async function runEngine(mode: 'completed' | 'max_turns' | 'cancelled' | 'failed
   } finally {
     recorder.stop();
   }
-  return { exitEvents: exitEvents(recorder.events), invokedHooks, reason: reasons[0] ?? 'none' };
+  return {
+    exitEvents: exitEvents(recorder.events),
+    invokedHooks,
+    contributorCount,
+    reason: reasons[0] ?? 'none',
+  };
 }
 
 // ============================================================================
@@ -699,10 +731,22 @@ describe('per-path exit hook events, measured on BOTH paths', () => {
     expect(engine.exitEvents).toEqual(['Stop', 'SessionEnd']);
   });
 
-  it('max_turns: the legacy dispatches NOTHING and the engine dispatches SessionEnd', async () => {
-    // THE DIVERGENCE. Unrecorded anywhere before this file, and the reason the
-    // two comments disagreed: one of them quietly assumed the legacy's silence
-    // here was a designed coverage list.
+  it('max_turns: NEITHER path dispatches, which is parity the flip chose deliberately', async () => {
+    // Plan 610 D3 CLOSED this row. The engine used to dispatch `SessionEnd` when
+    // a run ended on the turn ceiling; the legacy dispatches nothing, because it
+    // reaches that exit with a `done('max_turns')` and a `return` and never calls
+    // a `SessionFinalizer` at all.
+    //
+    // ALIGNED TO THE LEGACY rather than the other way round, and that is a real
+    // trade: a teardown hook silently skipping a NORMAL terminal is arguably a
+    // legacy bug, and this change leaves it in place. It is left in place on
+    // purpose -- folding a behaviour change into a driver swap means a bisect
+    // can no longer attribute a regression, and a refactor that also changes
+    // behaviour is two changes wearing one commit. The legacy's silence on a
+    // normal terminal is a known question, deliberately NOT addressed here.
+    //
+    // The operational consequence, stated so it is not rediscovered as a bug:
+    // a hook that must run on EVERY terminal must not rely on this event.
     const legacy = await runLegacy({
       frames: [
         { type: 'tool_use', data: { id: 't1', name: 'probe_end', input: { value: 'x' } } },
@@ -714,13 +758,17 @@ describe('per-path exit hook events, measured on BOTH paths', () => {
 
     // Both really ended at the ceiling. `maxTurns: 1` with a tool call on turn 1
     // is the only way the legacy reaches this exit, and the engine's own
-    // `#shouldStop` ceiling arm is the only way it reaches its one.
+    // `#shouldStop` ceiling arm is the only way it reaches its one. Without
+    // this an empty engine record could be a run that ended some other way.
     expect(legacy.terminal).toBe('max_turns');
     expect(engine.reason).toBe('max_turns');
 
-    // The divergence, asserted on both sides rather than described.
     expect(legacy.exitEvents).toEqual([]);
-    expect(engine.exitEvents).toEqual(['SessionEnd']);
-    expect(engine.invokedHooks).toEqual(['SessionEnd']);
+    expect(engine.exitEvents).toEqual([]);
+    // Non-vacuity in the OTHER direction: the engine really reached the exit
+    // contributors and really ran them, and they dispatched nothing. This is
+    // what distinguishes "aligned" from "the hook source is not wired here".
+    expect(engine.contributorCount).toBe(2);
+    expect(engine.invokedHooks).toEqual([]);
   });
 });
