@@ -1945,6 +1945,31 @@ export class RunEngineImpl implements RunEngine {
       }
     }
 
+    // ── The `before_commit` phase: the legacy's `PostTurn` slot ─────────────
+    // Here, and not in the `finally` beside `after_finalize`, because position
+    // is the whole of the legacy's semantics. `SessionFinalizer.finalize` runs
+    // `pollFinalMailbox` -> `PreFinalize` -> `PostTurn` -> `runExitHooks` ->
+    // `_commitMessages` -> `SessionEnd`, and `PostTurn` is the one step that both
+    // (a) sits INSIDE the run, before the commit, and (b) is reached only on the
+    // success path. `after_finalize` satisfies neither: it fires in the
+    // `finally`, so a FAILED and a CANCELLED run reach it too, and by then the
+    // loop has broken and nothing is committed afterwards.
+    //
+    // This is the LAST thing before the run is allowed to end, which is the
+    // faithful position: the model has finished its work, the polls have run, and
+    // the engine is still inside the decision that ends the run.
+    //
+    // GATED, and the gate is the requirement rather than an optimisation: a run
+    // with no contributor registered must gain NO scheduling point here, because
+    // an unconditional `await` at the end of a run is a microtask that every
+    // other run used to skip -- which is exactly the regression that moved a
+    // scheduling point and broke a stop-aborts-the-provider test in this plan.
+    // Same rule and same shape as `on_start` and `after_finalize`.
+    if ((ctx.ports.extensions?.list('before_commit') ?? []).length > 0) {
+      const committed = await this.#contribute(ctx, 'before_commit', {});
+      await this.#commitContributions(ctx, committed);
+    }
+
     return { reason: 'completed' };  }
 
   // ── helpers ───────────────────────────────────────────────────────────────
@@ -2300,6 +2325,108 @@ export class RunEngineImpl implements RunEngine {
       if ('veto' in contribution.content) continue;
       deferred.push(contribution.content);
       ports.context.defer(contribution.content);
+    }
+  }
+
+  /**
+   * COMMIT a `before_commit` phase's text contributions to the durable record.
+   *
+   * ## Why this exists at all, and what it is NOT
+   *
+   * The gap it closes is measurable. A contributor had exactly one way to put
+   * work in the transcript, and neither existing path could reach the durable
+   * record at end of turn:
+   *
+   *  - `before_finalize` can only VETO. `#shouldStop` reads a binding veto as
+   *    "run again", and its text contributions go through `#adopt` onto the
+   *    deferred rail, so they reach the model only if ANOTHER turn happens. A
+   *    run that finalizes ends with them unread -- which is the legacy's own
+   *    position for a non-vetoing `PreFinalize` inject
+   *    (`SessionFinalizer.ts:220`).
+   *  - `after_finalize` runs in the run's `finally`, after the loop has broken,
+   *    and its contributions are deliberately NOT adopted (see its call site).
+   *    That behaviour is documented and was reviewed; this method does not
+   *    change it and does not adopt anything on its behalf.
+   *
+   * The legacy had a third thing, and this is it: `PostTurn` applies its effects
+   * to the working `messages` array and `_commitMessages` persists the array
+   * immediately afterwards (`SessionFinalizer.ts:226`, then `:245`). So a
+   * `PostTurn` contribution reaches the timeline, the durable record, and a
+   * later turn -- all three -- and that is the capability that had no engine
+   * phase.
+   *
+   * ## Why it does not go through `#adopt`
+   *
+   * Because `#adopt` defers, and a run that finalizes has no next request. A
+   * fragment handed to `ports.context.defer` and pushed onto `ctx.deferred` here
+   * would be written to the host for a list nothing will ever read, which is a
+   * side effect claiming a delivery that did not happen -- the precise
+   * objection `after_finalize`'s call site raises about itself.
+   *
+   * ## A veto here is IGNORED, deliberately
+   *
+   * There is no loop left to keep open: this runs after every veto test and
+   * after the polls, and the run is about to return `completed`. Honouring a
+   * veto would mean this method decides the run's outcome, which is the line
+   * `00-contracts.md` section F rule 2 draws between contributing a decision and
+   * taking the loop over. A contributor that wants to keep the run alive
+   * registers for `before_finalize`, which is the phase whose veto means exactly
+   * that. Said here because a silently-ignored veto is indistinguishable from a
+   * dropped one in a frame.
+   *
+   * ## WHY A THROWING HOST IS FATAL HERE, and it is the one exception to rule 3
+   *
+   * Because this is the commit. Every other extension phase is fail-open by
+   * contract, and a skipped phase loses a hook's SIDE EFFECT -- `after_finalize`
+   * says outright that the phase is still worth running when all it does is
+   * cleanup. Here the phase's entire output IS the record, so swallowing a
+   * rejected `recordInjectedMessage` would end the run having published a
+   * success and lost the row: a claim of durability with nothing behind it. The
+   * run fails loudly instead. The contributor's own throw is still swallowed
+   * upstream by `#contribute`, which is rule 3's own boundary -- this catch is
+   * about the HOST's store, not the contributor.
+   */
+  async #commitContributions(
+    ctx: RunContext,
+    contributions: readonly ExtensionContribution[],
+  ): Promise<void> {
+    if (contributions.length === 0) return;
+    // `undefined` means the host bound no `turnOutput`, which is the live
+    // worker's state today. It is the same absence that loses the run's own
+    // assistant row, so it is NOT reported as a failure here: inventing a
+    // diagnostic would claim the engine is broken when the obligation is the
+    // cutover's, and the obligation is already written down in `TurnOutputPort`.
+    const turnOutput = ctx.ports.turnOutput;
+    if (turnOutput === undefined) return;
+
+    // Text only, and the same discriminator `#adopt` uses: `binding` is not the
+    // discriminator, because a contributor may return advisory text marked
+    // binding and a veto that is not.
+    const text = contributions.filter((contribution) => !('veto' in contribution.content));
+    // A `pending` fragment is a payload still being computed. Resolved with the
+    // engine's own `fragmentText` -- the same function `#modelRequest` uses -- so
+    // a committed row and a row the model would have seen are the same string
+    // rather than two implementations agreeing. A rejection is a SKIP, which is
+    // `#fragmentMessages`' own `allSettled` policy, applied for the same reason:
+    // one contributor's dead payload must not fail the commit of the rest.
+    const resolved = await Promise.allSettled(
+      text.map(async (contribution) => ({
+        key: contribution.key,
+        text: await fragmentText(contribution.content as TransientContextFragment),
+      })),
+    );
+    for (const outcome of resolved) {
+      if (outcome.status === 'rejected') continue;
+      // An empty contribution commits nothing. Recording it would put a row with
+      // no content in the durable transcript, and a transcript rebuilt from rows
+      // would then show a message the user never received.
+      if (outcome.value.text.trim() === '') continue;
+      await turnOutput.recordInjectedMessage({
+        runId: ctx.runId,
+        turn: ctx.turn,
+        key: outcome.value.key,
+        text: outcome.value.text,
+      });
     }
   }
 

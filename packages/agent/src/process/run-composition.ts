@@ -178,6 +178,9 @@ import type { RunTurnAssembly, TurnOutputSink, duyaAgent } from '../agent/DuyaAg
 import type { TurnPipelinePublisher } from '../tool/turn-pipeline-publisher.js';
 import { createClientModelPort } from './run-engine-model.js';
 import { createLegacyCommandPort } from './command-port.js';
+import { renderSystemReminder } from '../agent/reminders.js';
+import { adaptLoopNudgeContext } from '../message/runtime-context-adapters.js';
+import { projectRuntimeContextToProviderMessage } from '../message/message-projectors.js';
 import { buildEnginePorts, toDrainItem } from './run-engine-ports.js';
 import type { CompactionSources, LegacyEngineSources } from './run-engine-ports.js';
 
@@ -656,6 +659,39 @@ export function composeLegacyRunSources(
         }),
       onTurnResults: (summary) => {
         agent.finishTurnOutput(summary);
+      },
+      // Plan 610 D1. DERIVED, and it is the leg that makes a `before_commit`
+      // contributor's work durable rather than merely executed.
+      //
+      // The row is built by the LEGACY'S OWN projection chain, not by a row
+      // written here: `renderSystemReminder` wraps the text, `adaptLoopNudgeContext`
+      // gives it source and visibility, and `projectRuntimeContextToProviderMessage`
+      // projects the provider `user` turn. Those are the three calls
+      // `applyLoopHookEffect` makes for a `PostTurn` inject
+      // (`hooks/loop.ts:229-233`), so a contributor's committed row and a legacy
+      // `PostTurn` row are the same row produced by the same code -- which is the
+      // only way "the engine path reaches the product's behaviour" is true for
+      // the COMMIT as well as for the dispatch.
+      //
+      // `'custom'` is the honest `RuntimeContextSource`: the union has no member
+      // meaning "an extension contributor", and inventing one would change what
+      // an existing consumer matches on. It is the member the union already
+      // reserves for a source the framework does not otherwise name.
+      //
+      // `agent.addMessage` is the agent's OWN append onto its own timeline, and
+      // that timeline is what the legacy's `_commitMessages` persists -- the same
+      // seam `recordTurnToolResult` and `recordTurnAssistantMessage` are derived
+      // from, for the same reason: a projection written here instead would be a
+      // second authority for what the transcript contains.
+      onInjectedMessage: (record) => {
+        const projected = projectRuntimeContextToProviderMessage(
+          adaptLoopNudgeContext(
+            renderSystemReminder(record.text, 'loop_nudge'),
+            'custom',
+            { seqIndex: host.seqIndex },
+          ),
+        );
+        agent.addMessage(projected);
       },
     },
     ...(host.deferFragment === undefined ? {} : { deferFragment: host.deferFragment }),

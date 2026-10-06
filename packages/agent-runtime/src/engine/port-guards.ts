@@ -170,6 +170,7 @@ const FULL_PORTS: RunEnginePorts = {
     recordToolResult: () => Promise.resolve(),
     recordAssistantMessage: () => Promise.resolve(),
     finishTurn: () => Promise.resolve(),
+    recordInjectedMessage: () => Promise.resolve(),
   },
 };
 
@@ -371,6 +372,7 @@ export const TURN_OUTPUT_PORT_IS_CONSTRUCTIBLE: TurnOutputPort = {
   recordToolResult: () => Promise.resolve(),
   recordAssistantMessage: () => Promise.resolve(),
   finishTurn: () => Promise.resolve(),
+  recordInjectedMessage: () => Promise.resolve(),
 };
 
 /**

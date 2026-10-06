@@ -785,6 +785,40 @@ export interface TurnOutputPort {
    * (`DuyaAgent.ts:2858`, `:2935`).
    */
   finishTurn(summary: TurnOutputSummary): Promise<void>;
+  /**
+   * A `before_commit` contributor's work reached the transcript, and the run is
+   * about to end. Called once per committed contribution, IN CONTRIBUTOR ORDER,
+   * after the stop decision was `completed` and before the run's terminal is
+   * proposed.
+   *
+   * ## Why this is a FOURTH method here and not a sibling port
+   *
+   * The same argument `recordAssistantMessage` gives above: a sibling port is a
+   * second optional binding a host can forget, and this port's own header names
+   * forgetting as the one way the cutover fails. A host that implements
+   * `TurnOutputPort` and has no way to record an injected row cannot satisfy
+   * this interface, which is the point -- a contributor whose work is silently
+   * dropped at the end of every run is the defect `before_commit` exists to
+   * remove, and it should not be expressible.
+   *
+   * ## Why it is NOT `context.defer`
+   *
+   * Because deferring is the thing this phase must not do. `defer` collects a
+   * fragment for the NEXT model request, and a run that finalizes has no next
+   * request: a deferred fragment is written to the host and to the run's own list
+   * and read by nobody. The legacy's `PostTurn` injections are the opposite --
+   * `applyLoopHookEffect` PUSHES them onto the working `messages` array
+   * (`hooks/loop.ts:252`) so that `_commitMessages`, which runs immediately after
+   * (`SessionFinalizer.ts:245`), persists them. A deferred rail reproduces the
+   * injection and loses the commit.
+   *
+   * ## Awaited, for the reason the other two are
+   *
+   * The host's row has to land before the run's terminal is proposed, or a
+   * consumer that reads the transcript after seeing `run.completed` can read it
+   * before the row is there.
+   */
+  recordInjectedMessage(record: InjectedMessageRecord): Promise<void>;
 }
 
 /**
@@ -873,6 +907,70 @@ export type AssistantContentBlock = Extract<
   TranscriptMessageContent,
   { readonly type: 'text' | 'thinking' | 'tool_use' }
 >;
+
+/**
+ * One `before_commit` contribution, as the host is handed it.
+ *
+ * ## What this row IS, in the legacy's terms
+ *
+ * The legacy's `PostTurn` dispatch runs at
+ * `SessionFinalizer.finalize`'s one point where an effect is applied to the
+ * working `messages` array BEFORE `_commitMessages` persists it
+ * (`SessionFinalizer.ts:226` then `:245`), and the effect it applies is
+ * `applyLoopHookEffect`, which pushes a projected provider `user` turn
+ * (`hooks/loop.ts:252`). So the legacy's `PostTurn` row is: a text contribution,
+ * written into the transcript as a `user`-role row, committed with the rest.
+ * This record carries the facts of that row and nothing else.
+ *
+ * ## Why `text` is resolved by the ENGINE and not left as a fragment
+ *
+ * Because a fragment is a promise (`TransientContextFragment.pending` is how a
+ * tool's follow-up payload arrives), and a port that handed the host an
+ * unresolved promise would make "the row is committed" a claim the host has to
+ * re-establish. The engine already owns the one resolver -- `fragmentText`,
+ * the same function `#modelRequest` uses -- so a committed row and a row the
+ * model would have seen are the same string by construction rather than by
+ * agreement between two implementations. A rejected `pending` is a SKIP, which
+ * is `fragmentMessages`' own `allSettled` policy.
+ *
+ * ## What is NOT here, and why
+ *
+ *  - **`role`** -- it is always the transcript's injected/`user` row. A field
+ *    with one legal value is a field whose only reader is the type, which is
+ *    the defect `InterTurnSweep` is documented against at length.
+ *  - **`id`, `timestamp`, `seq_index`** -- the writer's, for the reason
+ *    `AssistantMessageRecord` gives: they are minted where the row is stored,
+ *    and a second authority for "where does this row sit" is a second authority
+ *    that can disagree with the store.
+ *  - **`source` / `dedupKey`** -- the legacy's `LoopHookInjectEffect` carries
+ *    both because the legacy pushes into an array it owns. The engine's
+ *    contributor already carries a `key` on its contribution, and that is what
+ *    travels here, so a host that wants replace-by-key has one.
+ */
+export interface InjectedMessageRecord {
+  /** The run this row belongs to. Forwarded, never minted. */
+  readonly runId: RunId;
+  /**
+   * The turn the run stopped on, or `0`.
+   *
+   * The same honest value `after_finalize` receives: `RunSpendLedger.beginTurn`
+   * assigns rather than increments, so this is the last turn that BEGAN, and it
+   * is `0` for a run that refused one at the budget check. It is a position in
+   * the transcript, not an ordering key.
+   */
+  readonly turn: number;
+  /**
+   * The contributor's own key, so a host can dedup or replace rather than stack.
+   *
+   * Carried from `ExtensionContribution.key` verbatim. Two contributors that
+   * return the same key are asking for one row, and only the host's store can
+   * honour that -- the engine does not merge them, because merging two
+   * contributors' text is a decision about whose words they are.
+   */
+  readonly key: string;
+  /** The contribution's text, already resolved. Never empty-by-accident: see below. */
+  readonly text: string;
+}
 
 /**
  * One landed tool result, as the host is handed it.
@@ -1694,7 +1792,7 @@ export interface EngineExit {
  * contributor, and does not widen this union. Plan 600 `02` section 1.2 makes
  * this the load-bearing shape (thirteen separate `Vec`s, not one `register`).
  *
- * ## The five TURN phases and the two RUN phases
+ * ## The five TURN phases, the two RUN phases, and the one COMMIT phase
  *
  * Five of these are per-turn and were there from the start. `on_start` and
  * `after_finalize` are per-RUN, and they are not decoration: the legacy cycle
@@ -1712,17 +1810,22 @@ export interface EngineExit {
  * `assistant.message_finalized` (so a contributor sees the final message rather
  * than a run still changing).
  *
- * ## The three phases with no config-hook event behind them YET
+ * `before_commit` is the eighth member and the only one whose contributions are
+ * COMMITTED rather than deferred. See `TurnOutputPort.recordInjectedMessage`
+ * and the phase's own comment in `run-engine.ts` for why the legacy needed one.
  *
- * `before_turn`, `before_model` and `before_finalize` are the engine's OWN
- * phases, and nothing in `packages/agent/src/process/hook-source.ts` maps them:
- * the legacy's `PreTurn` / `PreFinalize` / `PostTurn` are `LoopHookEvent`s
- * dispatched on the loop bus (`hooks/loop.ts`), not config-runner events, and the
- * bus is not something the extension port can reach. Leaving them unmapped is
- * stated rather than implied: a contributor registered for them is called and
- * has nothing to fire from the legacy side yet.
+ * ## The phases with no config-hook event behind them YET
  *
- * ## Two of those three events ARE dispatched today
+ * `before_turn`, `before_model`, `before_finalize` and `before_commit` are the
+ * engine's OWN phases, and nothing in
+ * `packages/agent/src/process/hook-source.ts` maps them: the legacy's
+ * `PreTurn` / `PreFinalize` / `PostTurn` are `LoopHookEvent`s dispatched on the
+ * loop bus (`hooks/loop.ts`), not config-runner events, and the bus is not
+ * something the extension port can reach. Leaving them unmapped is stated rather
+ * than implied: a contributor registered for them is called and has nothing to
+ * fire from the legacy side yet.
+ *
+ * ## Two of those four events ARE dispatched today
  *
  * Worth being precise, because the previous version of this comment implied the
  * whole trio was unwritten. All four loop-bus events have live dispatch sites
@@ -1734,11 +1837,11 @@ export interface EngineExit {
  * `PreFinalize` and `PostTurn` in `SessionFinalizer.finalize`. What is missing is
  * not the dispatch but a phase to hang it on, and the mapping is not one-to-one:
  * `before_turn` and `before_finalize` are the natural homes for `PreTurn` and
- * `PreFinalize`, but `PostTurn` has NO engine phase at all -- the run's last
- * phase is `after_finalize`, which fires in the engine's `finally` and is
- * therefore reached by FAILED and CANCELLED runs too, whereas `PostTurn` is
- * dispatched only on the success path. Mapping `PostTurn` onto `after_finalize`
- * unchanged would fire it on runs the legacy never fired it for.
+ * `PreFinalize`, `before_commit` is the home for `PostTurn` -- whose position is
+ * the one phase position that was otherwise unrepresentable, because the only
+ * run-scoped phase left was `after_finalize`, which fires in the engine's
+ * `finally` and is therefore reached by FAILED and CANCELLED runs too, whereas
+ * `PostTurn` is dispatched only on the success path.
  */
 export type ExtensionPhase =
   | 'on_start'
@@ -1747,6 +1850,7 @@ export type ExtensionPhase =
   | 'before_tool'
   | 'after_tool'
   | 'before_finalize'
+  | 'before_commit'
   | 'after_finalize';
 
 /** One contribution. Data or a decision, never a loop. */

@@ -72,6 +72,7 @@ import type {
   InterTurnCheckpoint,
   InterTurnDecision,
   InterTurnInputPort,
+  InjectedMessageRecord,
   ModelContentBlock,
   ModelFrame,
   ModelMessage,
@@ -762,6 +763,25 @@ export interface TurnOutputSources {
   readonly onAssistantMessage?: (record: AssistantMessageRecord) => Promise<void> | void;
   /** The drain ended. Wraps the legacy `toolResultMessageCount` gates. */
   readonly onTurnResults: (summary: TurnOutputSummary) => Promise<void> | void;
+  /**
+   * A `before_commit` contributor's work, to be written into the transcript.
+   *
+   * OPTIONAL, and the reason is the one that governs this whole interface: the
+   * legacy loop still owns the commit (`_commitMessages`,
+   * `SessionFinalizer.ts:245`), so nothing may push a row here while the legacy
+   * drives -- a source that supplied one would put the same row in the durable
+   * transcript twice. The PORT requires the method; a source with nothing to do
+   * hands over a resolved promise, and one that cannot yet commit simply omits
+   * it.
+   *
+   * The record is in the RUNTIME's vocabulary, so the natural implementation is
+   * the legacy's own push: `applyLoopHookEffect` wraps the text in a
+   * `<system-reminder>` and projects a provider `user` turn
+   * (`hooks/loop.ts:229-252`). The engine resolves the text and the HOST decides
+   * the row's shape, because the row's shape is a storage fact the runtime does
+   * not have.
+   */
+  readonly onInjectedMessage?: (record: InjectedMessageRecord) => Promise<void> | void;
 }
 
 /**
@@ -836,6 +856,7 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
   const settleTicket = sources.settleTicket;
   const turnOutput = sources.turnOutput;
   const onAssistantMessage = turnOutput?.onAssistantMessage;
+  const onInjectedMessage = turnOutput?.onInjectedMessage;
   const interTurn: InterTurnInputPort = buildInterTurnPort(sources.interTurn);
   const compaction: CompactionPort = buildCompactionPort(sources.compaction);
   const extensions = sources.extensions;
@@ -881,6 +902,11 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
             // rather than a `!` or a silent skip in the engine.
             recordAssistantMessage: (record) => Promise.resolve(onAssistantMessage?.(record)),
             finishTurn: (summary) => Promise.resolve(turnOutput.onTurnResults(summary)),
+            // Same optional-at-the-source shape as the message above, and for the
+            // same reason: the legacy still owns the commit while it drives, so a
+            // source that cannot commit yet omits this and the engine still gets
+            // a resolved promise rather than a `!` or a silent skip.
+            recordInjectedMessage: (record) => Promise.resolve(onInjectedMessage?.(record)),
           },
         }),
     ...(beginTicket === undefined || settleTicket === undefined

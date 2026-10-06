@@ -396,6 +396,11 @@ export type {
   ContextPort,
   ExtensionContext,
   ExtensionContribution,
+  // The row a `before_commit` contributor's work is committed as. Exported for
+  // the same reason `AssistantMessageRecord` and `ToolResultRecord` are: the
+  // engine builds it, so a host that binds `TurnOutputPort` has to be able to
+  // name what it is handed.
+  InjectedMessageRecord,
   ExtensionContributor,
   ExtensionPhase,
   ExtensionPort,
