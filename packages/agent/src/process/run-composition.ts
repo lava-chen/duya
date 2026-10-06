@@ -533,13 +533,24 @@ export function composeLegacyRunPorts(agent: duyaAgent, host: LegacyRunHost): Ru
  *   `ModelMessage` carries only those two plus an `id`. Nothing is invented:
  *   the dropped fields are metadata the model never saw.
  *
- * ## `messages` comes from the AGENT, not from the engine's input
+ * ## `messages` is the PROJECTION, and the agent is no longer a parameter
  *
- * `TurnAssemblyInput.messages` is the legacy transcript the turn is built from,
- * and the agent owns that transcript. The engine's `input.history` is what the
- * host pushed into it, so reading it back off the agent is the same rows by
- * identity -- and reading the engine's own array instead would be a second
- * account of one transcript that could disagree with what the tools wrote.
+ * Plan 610 A3-2b9 (S4b-2). This function used to take the agent and read
+ * `agent.getMessages()` for both the assembly input and the returned messages,
+ * justified in the comment this replaces with "the agent owns that transcript".
+ *
+ * Owning it is not the same as projecting it. The agent's raw timeline still
+ * carries `legacy_system` rows and thread metadata, and the model's boundary
+ * projection exists to lift system content into the system prompt, strip
+ * `replyToId` / `branched`, and exclude the branched layer. A raw array handed
+ * to a provider smuggles a system row in as a bogus user turn and leaks thread
+ * metadata into the request body.
+ *
+ * So the messages come from `handle.projection` -- the seam's own model-boundary
+ * projection, the same one `streamChat` uses -- and `agent` became an unused
+ * parameter and was removed rather than left binding a name nothing reads. The
+ * engine's `input.history` is still the wrong source for the same reason: it is
+ * what the host pushed in, not what the agent's timeline projected to.
  *
  * ## `revision` and `catalogRevision` are reported, not computed here
  *
@@ -548,26 +559,44 @@ export function composeLegacyRunPorts(agent: duyaAgent, host: LegacyRunHost): Ru
  * registry's own counter, stringified for the port.
  */
 export function createLegacyAssembleTurn(
-  agent: duyaAgent,
   handle: RunTurnAssembly,
 ): (input: TurnAssemblyInput) => Promise<AssembledTurn> {
   return async (input: TurnAssemblyInput): Promise<AssembledTurn> => {
     // The assembly is driven by what the ENGINE asked for (the turn number) and
-    // by the run's own current state (the prompt the run holds, the transcript
-    // the agent holds). `input.digest` and `input.turn` come from the engine;
-    // nothing else in the request has a legacy counterpart, and inventing one
-    // would be the host deciding what belongs in the payload -- which is the
+    // by the run's own current state (the prompt the run holds, the projected
+    // transcript the handle holds). `input.digest` and `input.turn` come from the
+    // engine; nothing else in the request has a legacy counterpart, and inventing
+    // one would be the host deciding what belongs in the payload -- which is the
     // engine's job and `ports.ts:482-486` says so.
+    // Re-projected PER TURN, not read off `handle.projection.messages`. The
+    // engine re-assembles every turn, and the tool rows it needs to see were
+    // written to the agent's timeline by the previous turn -- so a run-scoped
+    // snapshot hands turn 2 a transcript that ends at turn 1. The legacy gets
+    // this for free by pushing into one working array; the engine has to ask.
+    const messages = handle.projectTurnMessages();
     const assembly = handle.assemble({
       turn: input.turn,
       systemPrompt: handle.systemPrompt,
-      messages: agent.getMessages() as Message[],
+      messages,
       tools: handle.tools as Tool[],
     });
 
     return {
       systemPrompt: assembly.systemPrompt,
-      messages: toModelMessages(agent.getMessages()),
+      // The PROJECTED messages, not `agent.getMessages()`.
+      //
+      // This is the S4b-2 change and it is the whole slice. `getMessages()` is
+      // the agent's RAW timeline: it still carries `legacy_system` rows and
+      // thread metadata, and the model's boundary projection exists precisely to
+      // lift system content into the system prompt, strip thread metadata, and
+      // drop branched-layer messages. Handing a provider the raw array smuggles
+      // a system row in as a bogus turn and reintroduces `replyToId` into the
+      // request body.
+      //
+      // The previous version of this line justified reading the agent directly
+      // with "the agent owns that transcript" -- true, and the point of the fix
+      // is that owning it is not the same as projecting it.
+      messages: toModelMessages(messages),
       tools: assembly.tools.map(toToolDescriptor),
       catalogRevision: String(handle.resolved.registry.getCatalogRevision()),
       revision: input.digest,

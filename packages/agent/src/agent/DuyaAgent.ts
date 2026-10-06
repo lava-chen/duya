@@ -429,6 +429,28 @@ export interface LegacyTurnDelta {
 }
 
 /**
+ * Plan 610 A3-2b9 (S4b-2): the run's MODEL-BOUNDARY projection.
+ *
+ * Both halves are what `_projectModelMessages` produced, and both are needed:
+ *
+ *  - `systemPrompt` is the run's base prompt with the `## Conversation Context`
+ *    block appended -- the legacy system segments and the compaction-reinjected
+ *    context, lifted OUT of the message array and into the system prompt. It is
+ *    the PRE-mode prompt; `applyTurnModes` layers prefixes on top of it, which is
+ *    the legacy's order and the reason the projection has to run first.
+ *  - `messages` is the provider-facing message list: `legacy_system` roles
+ *    removed, thread metadata stripped, branched-layer messages excluded. The
+ *    agent's RAW `getMessages()` is NOT this, and handing a host the raw array
+ *    is how a system row reaches a provider as a bogus turn.
+ */
+export interface TurnModelProjection {
+  /** Base prompt WITH the projected context block, before any mode prefix. */
+  readonly systemPrompt: string;
+  /** Provider-facing messages. A projection, never the raw timeline. */
+  readonly messages: Message[];
+}
+
+/**
  * Plan 610 A3-2b8 (S2): the run-scoped handle. Once built, a turn is one call.
  *
  * ## Why this had to exist before anything outside the loop could own a turn
@@ -459,8 +481,44 @@ export interface RunTurnAssembly {
   readonly turnContext: TurnContext;
   /** The tool surface the run started with. Promotion replaces it per turn. */
   readonly tools: readonly Tool[];
-  /** The run's base system prompt, before any per-turn mode prefix. */
+  /** The run's system prompt, with modes applied. The pre-mode base is `projection.systemPrompt`. */
   readonly systemPrompt: string;
+  /**
+   * The run's model-boundary projection. See `TurnModelProjection`.
+   *
+   * A MEMBER rather than something each caller recomputes, because the two
+   * callers disagree about who owns the transcript: `streamChat` wants the
+   * projected messages for its turn loop, and an engine-driven host wants the
+   * same array for `ContextPort.assemble`. Two recomputations is two accounts
+   * of one projection, and the hook-context rail inside it is stateful.
+   */
+  readonly projection: TurnModelProjection;
+  /**
+   * Re-project the CURRENT timeline into provider messages.
+   *
+   * ## Why the messages half is per-turn and the prompt half is not
+   *
+   * The legacy projects ONCE per run and then PUSHES each turn's tool result
+   * into the resulting working array (`DuyaAgent.ts:2712` onwards), so its
+   * message list grows within the run. The engine has no such array: it
+   * re-assembles every turn and asks for the conversation again, so a run-scoped
+   * snapshot would show turn 2 a transcript that ends at turn 1 -- which is
+   * exactly the failure `engine-real-agent-proof.test.ts` "feeds the tool result
+   * BACK to the model on the second request" was written to catch, and it went
+   * red when this was first written as a single run-scoped pair.
+   *
+   * The PROMPT half must stay run-scoped for the opposite reason: it merges a
+   * `## Conversation Context` block into the base prompt, and re-merging into an
+   * already-merged prompt duplicates the block every turn.
+   *
+   * ## Why the base prompt argument is EMPTY
+   *
+   * Because the prompt half of the result is DISCARDED here, and passing the
+   * live prompt would compute a merged prompt nobody reads while looking like
+   * it meant something. `projectModelMessages` derives messages from the
+   * timeline alone, so the two halves are independent and only one is wanted.
+   */
+  projectTurnMessages(): Message[];
   /**
    * Re-snapshot the tools DECLARED on the provider request about to be opened,
    * and return the new set.
@@ -1058,33 +1116,6 @@ export class duyaAgent implements AgentRuntime {
     };
   }
 
-  /**
-   * Re-anchor the mode refresh to the caller's POST-PROJECTION prompt.
-   *
-   * ## Why this exists, and why it is not optional
-   *
-   * `refreshTurnSystemPrompt` rebuilds the prompt as
-   * `prefix + this.baseSystemPromptWithoutModes` (`${prefix}\n\n${base}`), and
-   * that base is captured by `applyTurnModes` -- which runs inside the seam,
-   * BEFORE `_projectModelMessages`. So without this call the stored base is the
-   * UNPROJECTED prompt, and from turn 2 onward every assembly would drop the
-   * `## Conversation Context` block the projection appended: the context would
-   * be present on turn 1 and silently gone on every turn after.
-   *
-   * A no-op when no mode is active, which is the common case and the reason it
-   * is safe for a caller that knows nothing about modes.
-   *
-   * PUBLIC because the caller is a generator that owns the projection, not
-   * because a caller may choose to skip it -- the same lift
-   * `invalidateTurnCatalogSchemaReads` (S1) exists for. The engine path never
-   * calls it, and does not need to: it performs no projection (that gap is
-   * separate and is not closed by this slice), so its base is already the whole
-   * prompt.
-   */
-  rebaseTurnSystemPrompt(projected: string): void {
-    if (this.resolvedModes === undefined) return;
-    this.baseSystemPromptWithoutModes = projected;
-  }
 
   /**
    * Plan 610 A3-2b7 (S1): the catalog half of the schema-read protocol --
@@ -1172,15 +1203,35 @@ export class duyaAgent implements AgentRuntime {
       ? `${systemPrompt}\n\n${TOOL_GROUP_PROGRESS_INSTRUCTIONS}`
       : TOOL_GROUP_PROGRESS_INSTRUCTIONS;
 
-    // Plan 610 A3-2b9 (S4b-1): the run's mode modifiers, applied HERE so an
-    // engine-driven run advertises the same prompt and tool surface the legacy
-    // does. The legacy's inline block at `:2457` was removed and it reads these
-    // values off this handle instead, so there is one implementation and one
-    // call site -- see `applyTurnModes`.
+    // Plan 610 A3-2b9 (S4b-2): the `options.messages` fallback, MOVED here.
+    // It used to run at `:2676`, inside `streamChat` and AFTER this seam, and it
+    // seeds the TRANSCRIPT -- so a projection performed in the seam would have
+    // seen an empty timeline and missed every message the CLI / harness path
+    // passes. Run-scoped transcript seeding is this seam's job anyway.
+    if (this.messages.length === 0 && options?.messages?.length) {
+      this.setMessages([...options.messages]);
+    }
+
+    // Plan 610 A3-2b9 (S4b-2): the model-boundary projection, and it runs
+    // BEFORE the modes. That order is the legacy's exactly (`:2684` projected,
+    // then `applyModes` layered prefixes on the projected base), and it is
+    // load-bearing rather than cosmetic: `applyTurnModes` stores the PRE-mode
+    // base that `refreshTurnSystemPrompt` rebuilds from every turn, so
+    // projecting afterwards would store an unprojected base and the per-turn
+    // refresh would drop the `## Conversation Context` block from turn 2 on.
+    const projected = this._projectModelMessages(systemPrompt, { injectHookContexts: true });
+    const projection: TurnModelProjection = {
+      systemPrompt: projected.systemPromptContent,
+      messages: projected.messages,
+    };
+
+    // Plan 610 A3-2b9 (S4b-1): the run's mode modifiers, ON the projected base.
+    // The legacy's inline block at `:2457` was removed and it reads these values
+    // off this handle instead, so there is one implementation and one call site.
     const moded = await this.applyTurnModes({
       options,
       turnContext,
-      systemPrompt,
+      systemPrompt: projection.systemPrompt,
       resolved: resolvedBase,
     });
     systemPrompt = moded.systemPrompt;
@@ -1258,6 +1309,10 @@ export class duyaAgent implements AgentRuntime {
       turnContext,
       tools: resolvedTools,
       systemPrompt,
+      projection,
+      projectTurnMessages: (): Message[] =>
+        // The prompt half is discarded on purpose -- see the interface's doc.
+        this._projectModelMessages('', { injectHookContexts: true }).messages,
       refreshDeclaredTools: () => {
         declaredToolsForRequest = new Set(currentTools.map((t) => t.name));
         return declaredToolsForRequest;
@@ -2672,25 +2727,21 @@ export class duyaAgent implements AgentRuntime {
     }
     this._lastSeenModel = this._model;
 
-    // Handle options.messages fallback (CLI / harness scenarios)
-    if (this.messages.length === 0 && options?.messages?.length) {
-      this.setMessages([...options.messages]);
-    }
-
-    // Plan 315: project the timeline to the model boundary. System content
-    // from legacy system messages and compaction reinjected context is
-    // extracted into PromptSegments and merged into the system prompt. The
-    // resulting messages array contains only user/assistant/tool roles.
-    const projected = this._projectModelMessages(systemPromptContent, { injectHookContexts: true });
-    systemPromptContent = projected.systemPromptContent;
-    let messages = projected.messages;
-
-    // Plan 610 A3-2b9 (S4b-1): re-anchor the mode refresh to the PROJECTED
-    // prompt. The seam applied modes before this projection ran, so the base it
-    // stored is the unprojected one; without this the per-turn rebuild would
-    // drop `## Conversation Context` from every turn after the first. A no-op
-    // when no mode is active. See `rebaseTurnSystemPrompt`.
-    this.rebaseTurnSystemPrompt(systemPromptContent);
+    // Plan 610 A3-2b9 (S4b-2): the `options.messages` fallback and the Plan 315
+    // timeline projection that used to live here are BOTH GONE, and the
+    // `rebaseTurnSystemPrompt` call that compensated for them went with them.
+    //
+    // They ran at `:2676` and `:2684`, i.e. AFTER `beginTurnAssembly` at `:2543`,
+    // and both are things a host driving the engine must also get: the fallback
+    // seeds the transcript, and the projection lifts legacy system segments and
+    // compaction-reinjected context OUT of the message array INTO the system
+    // prompt. A run that skipped them advertised no `## Conversation Context`
+    // and could hand a provider a raw `system` row as a bogus turn.
+    //
+    // The seam now does all three, in the legacy's own order: seed, project,
+    // then layer mode prefixes onto the PROJECTED base. That order is why
+    // `rebaseTurnSystemPrompt` is no longer needed -- see `applyTurnModes`.
+    let messages = runAssembly.projection.messages;
 
     // Plan 610 A3-2b9 (S4b-1): the mode block that used to live here is GONE.
     // It ran at `:2457`, after `beginTurnAssembly` at `:2312`, so the seam

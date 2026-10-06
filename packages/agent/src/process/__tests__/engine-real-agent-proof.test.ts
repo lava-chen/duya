@@ -280,6 +280,12 @@ const S4B_MODE_ID = 's4b-1-probe';
 const S4B_PREFIX = 'S4B-1-MODE-PROMPT-PREFIX';
 const S4B_INJECTED = 's4b_1_mode_injected';
 
+// S4b-2 -- the two segment sources the model-boundary projection lifts OUT of
+// the message array and INTO the system prompt. Distinct markers, because they
+// come from different places and the second mutation drops only one of them.
+const LEGACY_SYSTEM_MARKER = 'S4B2-LEGACY-SYSTEM-SEGMENT';
+const REINJECTED_MARKER = 'S4B2-COMPACTION-REINJECTED-SEGMENT';
+
 /**
  * How many times the mode's prompt PREFIX function ran.
  *
@@ -365,9 +371,18 @@ interface Proof {
    * `applyModes`, plus 1 per assembled turn from `refreshTurnSystemPrompt`.
    */
   readonly prefixCalls: () => number;
+  /**
+   * The roles the AGENT's raw timeline holds, for the S4b-2 cross-source
+   * compare. This is the array the pre-S4b-2 binding handed the provider
+   * verbatim; the difference between it and what actually reached the wire is
+   * the whole slice.
+   */
+  readonly rawRoles: readonly string[];
 }
 
-async function runThroughEngine(runOptions: { readonly mode?: string } = {}): Promise<Proof> {
+async function runThroughEngine(
+  runOptions: { readonly mode?: string; readonly seedContext?: boolean } = {},
+): Promise<Proof> {
   installFakeDbIpc();
   if (runOptions.mode !== undefined) {
     await registerS4bMode();
@@ -407,6 +422,33 @@ async function runThroughEngine(runOptions: { readonly mode?: string } = {}): Pr
   // engine assembles its first turn.
   const userMessage = { id: 'p1', role: 'user', content: prompt, timestamp: Date.now(), seq_index: 0 };
   agent.setMessages([...agent.getMessages(), userMessage as never]);
+
+  // S4b-2: the seeded context goes in AFTER the harness's own user message, so
+  // `setMessages` rebuilds the timeline with it and `buildAgentContext` sees it.
+  if (runOptions.seedContext === true) {
+    agent.setMessages([
+      ...agent.getMessages(),
+      { id: 'sys1', role: 'system', content: LEGACY_SYSTEM_MARKER, timestamp: Date.now() } as never,
+    ]);
+    // AFTER `setMessages`, which REBUILDS the timeline -- so an entry appended
+    // before it would be discarded. `appendCompaction` is public on the
+    // timeline; the agent's own field is not, hence the cast (the same one the
+    // `abortController` setup above already uses).
+    (agent as unknown as {
+      timeline: { appendCompaction: (entry: unknown) => void };
+    }).timeline.appendCompaction({
+      type: 'compaction',
+      id: 'cmp-s4b2',
+      parentId: null,
+      createdAt: Date.now(),
+      summary: 'S4b-2 fixture compaction',
+      firstKeptMessageId: 'p1',
+      compactedMessageIds: [],
+      tokensBefore: 10,
+      strategy: 'fixture',
+      reinjectedSystemMessages: [REINJECTED_MARKER],
+    });
+  }
 
   // The publisher must EXIST before the handle is established, because
   // `buildTurnPipeline` publishes each turn's pipeline into it and the engine's
@@ -484,7 +526,7 @@ async function runThroughEngine(runOptions: { readonly mode?: string } = {}): Pr
   const host: LegacyRunHost = {
     turnPipelines,
     // The production binding from A3-2b9, over the REAL handle.
-    assembleTurn: createLegacyAssembleTurn(agent, observedHandle),
+    assembleTurn: createLegacyAssembleTurn(observedHandle),
     askApproval: async () => ({ allowed: true, scope: 'once' }),
     emitter,
     proposeTerminal: (candidate) => terminals.push(candidate),
@@ -552,6 +594,7 @@ async function runThroughEngine(runOptions: { readonly mode?: string } = {}): Pr
     advertised: handle.tools.map((t) => t.name).sort(),
     hooks,
     prefixCalls: () => s4bPrefixCalls,
+    rawRoles: agent.getMessages().map((m) => m.role),
   };
 }
 
@@ -748,6 +791,75 @@ describe('an engine-driven run applies the mode modifiers the legacy applies', (
     expect(proof.runs()).toBe(1);
     expect(proof.assembledTurns).toEqual([1, 2]);
     expect(proof.terminals[0].state.status).toBe('completed');
+  });
+});
+
+// ============================================================================
+// S4b-2 -- the model-boundary projection
+// ============================================================================
+
+describe('an engine-driven run projects the timeline to the model boundary', () => {
+  it('lifts the legacy system segment INTO the prompt and OUT of the messages', async () => {
+    const proof = await runThroughEngine({ seedContext: true });
+
+    // ON THE WIRE. The seeded `role: 'system'` row reached the agent's timeline
+    // and the ONLY thing that can move its content into the system prompt is
+    // `_projectModelMessages` -- nothing in the harness puts it there.
+    for (const request of proof.seen) {
+      expect(request.systemPrompt).toContain('## Conversation Context');
+      expect(request.systemPrompt).toContain(LEGACY_SYSTEM_MARKER);
+    }
+
+    // AND the system row is NOT in the message array. A `system` row reaching a
+    // provider as a turn is the specific damage the projection exists to
+    // prevent, so it is asserted as an absence rather than inferred from the
+    // prompt assertion above.
+    expect(proof.seen[0].roles).not.toContain('system');
+
+    // CROSS-SOURCE, and the reason this file can detect the gap at all: the
+    // agent's RAW timeline still holds the system row. So "the wire has no
+    // system turn" is not a fixture that never created one -- it is the
+    // projection having removed a row that demonstrably exists.
+    expect(proof.rawRoles).toContain('system');
+    expect(proof.rawRoles).not.toEqual(proof.seen[0].roles);
+  });
+
+  it('carries the compaction-reinjected segment, which a different code path supplies', async () => {
+    const proof = await runThroughEngine({ seedContext: true });
+
+    // A SEPARATE marker, because it comes from the other half of
+    // `extractLegacySystemSegments`: a `CompactionEntry`'s
+    // `reinjectedSystemMessages`, not a `legacy_system` row. Dropping that half
+    // leaves the assertion above green, so the two need their own proof.
+    for (const request of proof.seen) {
+      expect(request.systemPrompt).toContain(REINJECTED_MARKER);
+    }
+  });
+
+  it('re-projects per turn, so turn 2 sees the rows turn 1 wrote', async () => {
+    const proof = await runThroughEngine({ seedContext: true });
+
+    // The fixture is a REAL conversation, not a degenerate one: the compaction
+    // keeps `p1`, so the prompt is still in the array the model is given. Asserted
+    // because a `firstKeptMessageId` that resolved to nothing would silently drop
+    // the prompt, and every other assertion in this block would still pass.
+    expect(proof.seen[0].roles).toContain('user');
+
+    // The run-scoped half (the prompt) and the per-turn half (the messages) are
+    // different lifetimes for a reason, and this is the test for the per-turn
+    // one: the assistant's tool_use and the tool result were written to the
+    // timeline DURING turn 1, so a run-scoped message snapshot would show turn 2
+    // a conversation that ends at turn 1.
+    expect(proof.seen[0].roles).not.toContain('assistant');
+    expect(proof.seen[1].roles).toContain('assistant');
+    expect(proof.seen[1].roles).toContain('tool');
+
+    // And the context block is present on BOTH turns, which is what a per-turn
+    // re-merge of the prompt would have broken by duplicating it. Positive
+    // count, not an absence: exactly one block per request.
+    for (const request of proof.seen) {
+      expect(request.systemPrompt.split('## Conversation Context')).toHaveLength(2);
+    }
   });
 });
 
