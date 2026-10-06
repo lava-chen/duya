@@ -99,11 +99,33 @@ export class TurnPipelinePublisher {
    * pipeline is constructed. The previous record is dropped, NOT retained: a
    * publisher that kept a handle to turn N-1 would be the hoisted instance this
    * class exists to avoid, reachable one refactor away.
+   *
+   * REFUSES the same instance twice, which is the other half of that: a fresh
+   * record for a pipeline that already has one resets this record's `drained`
+   * latch and hands out a second drain of a pipeline that re-serves. See the
+   * body for why the latch alone cannot see it.
    */
   publish(turn: number, pipeline: ToolExecutionPipeline): void {
     if (this.#closed) {
       throw new Error(
         `refusing to publish turn ${turn}: this run's pipeline publication is closed, so its turns are over`,
+      );
+    }
+    // The per-turn lifetime, enforced here rather than trusted to every caller.
+    //
+    // `drained` below is a PER-RECORD latch and `publish` is what clears it, so
+    // re-publishing one instance would reset that latch and hand the engine a
+    // second drain of a pipeline that RE-SERVES -- two `settle:key:…:succeeded`
+    // rows that no test could tell from one correct row. The `drained` guard
+    // therefore cannot catch this shape; it is invisible to it by construction.
+    //
+    // The only defence is to refuse the instance itself, here, where "which
+    // turn owns this pipeline" is decided. Building per turn is the contract
+    // `buildTurnPipeline` is written to keep (it constructs, and caches
+    // nothing), and a memoised pipeline would otherwise be one `??=` away.
+    if (this.#current !== null && this.#current.pipeline === pipeline) {
+      throw new Error(
+        `refusing to publish turn ${turn}: that pipeline is already published as turn ${this.#current.turn}. A published pipeline re-serves its results on a second drain, so one pipeline cannot own two turns -- construct a fresh one`,
       );
     }
     this.#current = { turn, pipeline, drained: false };
