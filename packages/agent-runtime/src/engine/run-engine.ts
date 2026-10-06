@@ -1965,54 +1965,91 @@ export class RunEngineImpl implements RunEngine {
     // other run used to skip -- which is exactly the regression that moved a
     // scheduling point and broke a stop-aborts-the-provider test in this plan.
     // Same rule and same shape as `on_start` and `after_finalize`.
+    //
+    // Plan 610 D5: a mode's `onExit` runs BETWEEN the `before_commit`
+    // contribution and its commit, so the `else` branch below exists and the
+    // call is NOT after the gate. The gate covers only the two phase awaits,
+    // which is what keeps the no-contributor run free of a scheduling point;
+    // the mode exit was already unconditional before this slice and stays
+    // unconditional. Measured by `engine-mode-exit-order.test.ts`, which is an
+    // ORDERED observation rather than a pair of existence checks -- an
+    // implementation that ran the teardown after `#commitContributions`
+    // satisfied "the contributor ran" and "the mode exited" while doing the
+    // opposite of what this comment claims, which is the defect that shape
+    // cannot see.
     if ((ctx.ports.extensions?.list('before_commit') ?? []).length > 0) {
       const committed = await this.#contribute(ctx, 'before_commit', {});
+      await this.#runModeExits(ctx);
       await this.#commitContributions(ctx, committed);
-    }
-
-    // ── A mode's `onExit`: the legacy's `runExitHooks` slot ──────────────────
-    // BETWEEN the `before_commit` contribution and its commit, which is the
-    // legacy's own order and not an arbitrary one: `SessionFinalizer.finalize`
-    // runs `PostTurn` -> `runExitHooks` -> `_commitMessages`
-    // (`SessionFinalizer.ts:226`, `:235`, `:245`), so a mode's teardown observes
-    // the `PostTurn` effects and precedes the durable write of them. Folding it
-    // in after the commit would let a mode read a timeline the run has already
-    // persisted; folding it in before the contribution would invert both.
-    //
-    // NOT a phase, and the reason is measured rather than stylistic: a mode's
-    // `onExit` returns `void` and its real work is a host side effect
-    // (`computer-use-mode.ts:199-210` clears a per-session trigger and disables
-    // the OS bridge). There is no `ExtensionContribution` that means "nothing,
-    // but I ran" -- expressing it as one would be a contribution whose value is
-    // discarded, which is the `ExtensionPort` doc's own failure. See
-    // `ModeExitPort` for the full enumeration of why `after_finalize` is not
-    // this channel despite a comment in `DuyaAgent.ts:961` saying it is.
-    //
-    // SUCCESS PATH ONLY, and that is what makes it not `after_finalize`:
-    // `runExitHooks` is reached from `finalizeSuccess` alone
-    // (`SessionFinalizer.ts:235`); `finalizeAbort` and `finalizeStreamError`
-    // never call it. A mode that disables an OS bridge on exit must not do so for
-    // a run that failed before finishing a turn.
-    //
-    // FAIL-OPEN, reproducing `SessionFinalizer.ts:233-241` rather than
-    // delegating the policy: a mode whose teardown throws must not replace a
-    // `completed` terminal the run has already earned. The engine owns the
-    // outcome, so the engine swallows this -- the same rule 3 applies to every
-    // extension phase, and the same reason `#commitContributions` above is the
-    // single documented exception (there the phase's output IS the record).
-    if (ctx.ports.modeExit !== undefined) {
-      try {
-        await ctx.ports.modeExit.onRunExit();
-      } catch {
-        // Deliberately silent. The legacy logs this at WARN through
-        // `electron/logging/logger.ts`, which `@duya/agent-runtime` may not
-        // import (G1), and the engine has no logger of its own. The throw is
-        // swallowed rather than surfaced because the run's answer is already
-        // produced: a mode's teardown failing is not the run failing.
-      }
+    } else {
+      // No contributor, so there is nothing to observe and nothing to commit,
+      // but the teardown still belongs to every successful run. See the block
+      // below for why this is not `after_finalize`.
+      await this.#runModeExits(ctx);
     }
 
     return { reason: 'completed' };
+  }
+
+  // ── A mode's run-boundary teardown ────────────────────────────────────────
+
+  /**
+   * Run every `kind: 'message'` mode's `onExit` hook, once, for THIS run.
+   *
+   * ## BETWEEN the `before_commit` contribution and its commit, which is the
+   * legacy's own order and not an arbitrary one
+   *
+   * `SessionFinalizer.finalizeSuccess` runs `PostTurn` -> `runExitHooks` ->
+   * `_commitMessages` -- the loop-bus `PostTurn` dispatch, then `runExitHooks`,
+   * then the `host._commitMessages()` that persists the working array. So a
+   * mode's teardown OBSERVES the `PostTurn` effects and PRECEDES the durable
+   * write of them. Folding it in after the commit would let a mode read a
+   * timeline the run has already persisted; folding it in before the
+   * contribution would invert both.
+   *
+   * Measured rather than restated: `engine-mode-exit-order.test.ts` drives a
+   * real `RunEngineImpl` over real composed ports and asserts the ORDER of the
+   * three finalize-boundary effects. The comment above it once described a
+   * position the code did not have.
+   *
+   * ## NOT a phase, and the reason is measured rather than stylistic
+   *
+   * A mode's `onExit` returns `void` and its real work is a host side effect
+   * (`computer-use-mode.ts` clears a per-session trigger and disables the OS
+   * bridge). There is no `ExtensionContribution` that means "nothing, but I
+   * ran" -- expressing it as one would be a contribution whose value is
+   * discarded, which is the `ExtensionPort` doc's own failure. See
+   * `ModeExitPort` for the full enumeration of why `after_finalize` is not
+   * this channel despite a comment in `DuyaAgent.ts` claiming it is.
+   *
+   * ## SUCCESS PATH ONLY, and that is what makes it not `after_finalize`
+   *
+   * `runExitHooks` is reached from `finalizeSuccess` alone; `finalizeAbort`
+   * and `finalizeStreamError` never call it. A mode that disables an OS bridge
+   * on exit must not do so for a run that failed before finishing a turn. The
+   * engine inherits that by CALLING this only from the success position, so
+   * the property does not depend on a caller remembering.
+   *
+   * ## FAIL-OPEN, reproducing `SessionFinalizer.finalizeSuccess` rather than
+   * delegating the policy
+   *
+   * A mode whose teardown throws must not replace a `completed` terminal the
+   * run has already earned. The engine owns the outcome, so the engine
+   * swallows this -- the same rule 3 applies to every extension phase, and the
+   * same reason `#commitContributions` is the single documented exception
+   * (there the phase's output IS the record).
+   */
+  async #runModeExits(ctx: RunContext): Promise<void> {
+    if (ctx.ports.modeExit === undefined) return;
+    try {
+      await ctx.ports.modeExit.onRunExit();
+    } catch {
+      // Deliberately silent. The legacy logs this at WARN through
+      // `electron/logging/logger.ts`, which `@duya/agent-runtime` may not
+      // import (G1), and the engine has no logger of its own. The throw is
+      // swallowed rather than surfaced because the run's answer is already
+      // produced: a mode's teardown failing is not the run failing.
+    }
   }
 
   // ── helpers ───────────────────────────────────────────────────────────────
