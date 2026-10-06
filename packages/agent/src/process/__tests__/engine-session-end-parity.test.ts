@@ -1,5 +1,6 @@
 /**
- * Plan 610 D3: which of the two `SessionEnd` claims is wrong?
+ * Plan 610: which `SessionEnd` claim was wrong, and what the flip decided about
+ * each path.
  *
  * ## The dispute, in the tree, in two sentences each
  *
@@ -9,25 +10,34 @@
  * path". Both cannot be true, and neither mentioned the paths where the two
  * sides plainly differ.
  *
- * ## The measured answer, per path
+ * ## The measured table, per path
  *
  *   path                     legacy `streamChat`      engine            agree?
  *   ------------------------ ------------------------ ----------------- ------
  *   completed                SessionEnd               SessionEnd        yes
- *   aborted (loop exit)      Stop, SessionEnd         (nothing)         NO
- *   aborted (model leg)      (nothing)                (nothing)         yes
+ *   aborted (loop exit)      Stop, SessionEnd         Stop, SessionEnd  yes
+ *   aborted (model leg)      (nothing)                Stop, SessionEnd  NO
  *   stream error             (nothing)                (nothing)         yes
  *   max_turns                (nothing)                SessionEnd        NO
  *
- * Three rows agree and two do not. The two that do not are the rows no comment
- * in the tree recorded, and they point in OPPOSITE directions: on a cancellation
- * the engine says LESS than the legacy, and at the ceiling it says MORE.
+ * Three rows agreed and two did not, and the two pointed in OPPOSITE
+ * directions: on a cancellation the engine said LESS than the legacy, and at
+ * the ceiling it said MORE.
  *
- * The cancellation row has a cause, and it is not the exit-reason mapping. The
- * hook source's contributor tests `signal.aborted` BEFORE it consults the exit
- * reason (`hook-source.ts`, the `if (signal.aborted) return []` guard), so on a
- * cancelled run every `after_finalize` contributor returns empty. The `Stop` arm
- * of the exit-reason test is unreachable, not merely unexercised.
+ * **Plan 610 D2 closed the cancellation row.** The cause was an ORDER in
+ * `hook-source.ts`'s `contributorsFor`, not the exit-reason mapping: the
+ * `signal.aborted` guard returned before `firesOnExit` was consulted, so `Stop`
+ * was unreachable rather than unused. The guard is now tested second and
+ * narrowed to the in-turn phases. A cancelled run runs its cleanup hooks, which
+ * is what `SessionFinalizer.finalizeAbort` does and what a user who pressed stop
+ * expects.
+ *
+ * The model-leg row became a divergence in the OPPOSITE direction as a
+ * consequence, and is recorded in its own test rather than papered over: the
+ * engine has one `cancelled` reason and cannot observe which of the legacy's two
+ * abort routes it is standing in for.
+ *
+ * The `max_turns` row is untouched by D2 and still open; see the D3 test.
  *
  * ## Why the legacy is silent where it is silent
  *
@@ -45,31 +55,9 @@
  * `finalizeAbort` -- the one that dispatches `Stop` and `SessionEnd` -- is
  * reached only when the loop's own `while` condition goes false.
  *
- * None of that is a contract, and none of it is reproducible on the engine: the
- * legacy's ceiling exits and its early exits collapse onto one engine reason
- * (`max_turns` and `completed` respectively), and its two abort routes collapse
- * onto one too. An engine that claimed parity here would be claiming to
- * reproduce distinctions it cannot observe.
- *
- * ## The verdict this file exists to pin
- *
- * The engine's behaviour -- `SessionEnd` on every non-failure exit that is not a
- * cancellation -- is KEPT, and the two comments that contradicted each other are
- * corrected rather than reconciled, because one of them was simply false.
- * `SessionEnd` not firing on a failed run matches the legacy exactly, so the
- * failure case is NOT a divergence.
- *
- * The two real divergences are recorded here and in the flip's checklist rather
- * than "fixed" by changing behaviour, because each is a product decision rather
- * than a defect:
- *
- *  - At the ceiling the engine tells a session's cleanup hooks about a run that
- *    ended; the legacy never did. Suppressing that would ship a run that ends at
- *    its ceiling without telling anyone.
- *  - On a cancellation the engine tells nobody, because of the `signal.aborted`
- *    guard, while the legacy told `Stop` + `SessionEnd` on one of its two abort
- *    routes. Which of the two is right is a decision for the flip, and it is
- *    recorded there with both numbers.
+ * None of that is a contract. The legacy's ceiling exits and its early exits
+ * collapse onto one engine reason (`max_turns` and `completed` respectively),
+ * and its two abort routes collapse onto one too.
  *
  * ## What is real, and what is faked, line by line
  *
@@ -618,16 +606,20 @@ describe('per-path exit hook events, measured on BOTH paths', () => {
     expect(engine.invokedHooks).toEqual(['SessionEnd']);
   });
 
-  it('aborted at the loop boundary: the legacy dispatches Stop then SessionEnd and the engine dispatches nothing', async () => {
-    // DIVERGENCE 1 of 2, and the one with a cause. The legacy reaches
-    // `SessionFinalizer.finalizeAbort` when its loop's own `while` condition
-    // goes false, and that method dispatches unconditionally.
+  it('aborted at the loop boundary: BOTH dispatch Stop then SessionEnd', async () => {
+    // Plan 610 D2 CLOSED this row. It used to be a divergence: the legacy
+    // dispatches `Stop` then `SessionEnd` from
+    // `SessionFinalizer.finalizeAbort`, and the engine dispatched NOTHING.
     //
-    // The engine's `after_finalize` contributor never gets that far on a
-    // cancelled run: `hook-source.ts`'s contributor tests `signal.aborted`
-    // BEFORE it consults the exit reason, so it returns empty and neither event
-    // is dispatched. The `Stop` arm of the exit test is therefore unreachable,
-    // not merely unused.
+    // The cause was not the exit-reason mapping but an ORDER in
+    // `hook-source.ts`'s `contributorsFor`: the `signal.aborted` guard returned
+    // BEFORE `firesOnExit` was consulted, and `signal.aborted` is necessarily
+    // true on every cancelled run, so `firesOnExit`'s `Stop` arm was
+    // unreachable rather than unused. The guard is now tested second, and only
+    // narrowed to the in-turn phases.
+    //
+    // A cancelled run runs its cleanup hooks, which is the legacy's position and
+    // the one a user who pressed stop expects.
     const legacy = await runLegacy({
       frames: [
         { type: 'tool_use', data: { id: 't1', name: 'probe_end', input: { value: 'hold' } } },
@@ -644,9 +636,15 @@ describe('per-path exit hook events, measured on BOTH paths', () => {
 
     // The ORDER is part of the legacy's claim: `Stop` announces the stop and
     // `SessionEnd` closes the session, so a source that swapped them would
-    // still satisfy a `toContain` on either name.
+    // still satisfy a `toContain` on either name. Asserted on BOTH sides for
+    // that reason, not only on the legacy's.
     expect(legacy.exitEvents).toEqual(['Stop', 'SessionEnd']);
-    expect(engine.exitEvents).toEqual([]);
+    expect(engine.exitEvents).toEqual(['Stop', 'SessionEnd']);
+
+    // NON-VACUITY on the engine side from the product's own channel: the two
+    // dispatches above were real work, real subprocesses, not empty calls. A
+    // hook that did not run would satisfy the spy alone.
+    expect(engine.invokedHooks).toEqual(['Stop', 'SessionEnd']);
   });
 
   it('failed: NEITHER path dispatches an exit event at all', async () => {
@@ -669,12 +667,25 @@ describe('per-path exit hook events, measured on BOTH paths', () => {
     expect(engine.exitEvents).toEqual([]);
   });
 
-  it('aborted at the MODEL LEG: the same terminal and the same silence on both paths', async () => {
-    // The second abort route, and the one that makes the "same three paths"
-    // claim unrecoverable: `finalizeStreamError` maps an `AbortError` onto the
-    // SAME `done('aborted')` terminal `finalizeAbort` uses, then returns before
-    // any dispatch. Two exits, one terminal event, opposite hook coverage -- and
-    // the two paths only agree here by coincidence, for different reasons.
+  it('aborted at the MODEL LEG: the legacy is silent and the engine now dispatches, and that is recorded', async () => {
+    // The second abort route, and the one that makes the legacy's coverage
+    // unreproducible: `finalizeStreamError` maps an `AbortError` onto the SAME
+    // `done('aborted')` terminal `finalizeAbort` uses, then returns before any
+    // dispatch. Two exits, one terminal event, opposite hook coverage.
+    //
+    // Plan 610 D2 makes this row a DIVERGENCE, in the opposite direction from
+    // the row it closed. It was a match before only because the engine said
+    // nothing on either route; the engine now says `Stop` + `SessionEnd` on
+    // both, because it has ONE `cancelled` reason and cannot observe which
+    // route it took -- `handle.stop()` and a caller's abort both land on it.
+    //
+    // RECORDED rather than closed, and deliberately: matching the legacy here
+    // would mean reproducing an accident of where the abort landed rather than
+    // a policy about what a cancelled run tells its cleanup hooks. The legacy's
+    // silence is a consequence of `finalizeStreamError` returning early, not a
+    // decision anyone made about cancellation. Aligning to it would mean a user
+    // who stops a run during a model call gets no teardown, which is the defect
+    // D2 exists to remove. This row is the cost of that decision, stated.
     const legacy = await runLegacy({
       frames: [{ type: 'text', data: 'never read' }],
       abortAtModelLeg: true,
@@ -684,11 +695,8 @@ describe('per-path exit hook events, measured on BOTH paths', () => {
     expect(legacy.terminal).toBe('aborted');
     expect(engine.reason).toBe('cancelled');
 
-    // Same terminal, same silence. This row is a MATCH and it is asserted as
-    // one: a test that only recorded the divergences would leave a reader
-    // thinking the engine and the legacy always differ.
     expect(legacy.exitEvents).toEqual([]);
-    expect(engine.exitEvents).toEqual([]);
+    expect(engine.exitEvents).toEqual(['Stop', 'SessionEnd']);
   });
 
   it('max_turns: the legacy dispatches NOTHING and the engine dispatches SessionEnd', async () => {

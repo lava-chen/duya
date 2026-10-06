@@ -196,27 +196,27 @@ const PHASE_EVENTS: Readonly<Partial<Record<ExtensionPhase, readonly MappedHookE
  * the signal, because `signal.aborted` is ALSO true for a run that failed after
  * the user had already stopped it.
  *
- * ## The `Stop` arm below is UNREACHABLE today, and the doc that used to claim
- * otherwise was wrong
+ * ## The `Stop` arm is reachable, and it was unreachable by ORDER rather than
+ * by mapping
  *
  * It used to read "`Stop` on a cancelled run, `SessionEnd` on everything except
  * a failure", and to justify itself by saying `SessionFinalizer` "keys its two
  * dispatches off the same three-way split the engine's `EngineExitReason` is".
- * Neither half survives measurement:
+ * That justification was false -- `SessionFinalizer` has THREE methods and
+ * chooses between them by control flow -- but the arm's INTENT matched the
+ * legacy on one of its two abort routes, and the intent was unreachable for a
+ * reason that had nothing to do with this function: `contributorsFor` tested
+ * `signal.aborted` and returned BEFORE calling it, so on a cancelled run every
+ * contributor was already empty.
  *
- *  - `SessionFinalizer` has THREE methods, not one three-way split, and it
- *    chooses between them by control flow rather than by an exit reason.
- *  - The `Stop` arm is never reached, because `contributorsFor` tests
- *    `signal.aborted` and returns BEFORE it calls this function. On a cancelled
- *    run every contributor is already empty, so both events are skipped.
- *
- * The arm is KEPT rather than deleted: removing it would make the cancellation
- * case silently dispatch `SessionEnd` if the guard above is ever reordered, and
- * a guard that decides behaviour by accident is worse than an arm that says so.
- * What is true today is in `engine-session-end-parity.test.ts`: a cancelled run
- * dispatches neither event, and the legacy dispatches `Stop` + `SessionEnd` on
- * one of its two abort routes. Closing that gap is a flip decision, not a
- * silent repair here.
+ * Plan 610 D2 CLOSED that, by testing the exit reason FIRST. A cancelled run
+ * now reaches this function, `Stop` fires, and `SessionEnd` fires after it --
+ * which is what `SessionFinalizer.finalizeAbort` dispatches, and in that order.
+ * Measured on BOTH paths through one `ConfigHooksRunner` dispatch spy in
+ * `engine-session-end-parity.test.ts`; the legacy's second abort route, which
+ * reaches `finalizeStreamError` and dispatches nothing, is recorded there
+ * rather than reproduced, because the engine has one `cancelled` reason and
+ * cannot observe which route it took.
  */
 function firesOnExit(event: MappedHookEvent, reason: string | undefined): boolean {
   if (reason === 'failed') return false;
@@ -364,13 +364,25 @@ export function createLegacyHookSource(options: LegacyHookSourceOptions): Extens
       order: index * 10,
       timeoutMs: CONTRIBUTOR_TIMEOUT_MS,
       async contribute(ctx: ExtensionContext, signal: AbortSignal): Promise<readonly ExtensionContribution[]> {
-        // Rule 4, honoured the only way it can be here: the config runner
-        // spawns its own subprocesses and takes no signal, so a stop cannot be
-        // pushed INTO a running hook. Checking first is what a contributor can
-        // actually do, and the engine's `withDeadline` is what bounds the rest.
-        // Stated rather than implied -- a hook that is mid-flight at a stop runs
-        // to its own timeout.
-        if (signal.aborted) return [];
+        // Plan 610 D2: the exit-reason test comes FIRST, so a run that ends on
+        // `cancelled` still reaches its teardown hooks. It used to come second,
+        // which made `firesOnExit`'s `Stop` arm unreachable rather than merely
+        // unused: `signal.aborted` is necessarily true on every cancelled run,
+        // so the contributor returned empty and dispatched NOTHING.
+        //
+        // The legacy dispatches `Stop` then `SessionEnd` from
+        // `SessionFinalizer.finalizeAbort`, and a user who stops a run still
+        // expects its cleanup hooks to run. Measured on both paths in
+        // `engine-session-end-parity.test.ts`.
+        //
+        // The signal guard is NOT removed, only narrowed to the phases where a
+        // stop actually means "stop working": the four in-turn phases. A
+        // `before_tool` hook must not start new work after a stop, and this is
+        // the only place a contributor can check -- the config runner spawns its
+        // own subprocesses and takes no signal, so a stop cannot be pushed INTO
+        // a running hook. A hook that is mid-flight at a stop runs to the
+        // engine's `withDeadline` timeout; stated rather than implied.
+        if (ctx.exit === undefined && signal.aborted) return [];
         if (ctx.exit !== undefined && !firesOnExit(event, ctx.exit.reason)) return [];
 
         const { input, targets } = payloadFor(event, ctx);
