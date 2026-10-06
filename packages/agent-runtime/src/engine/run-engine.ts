@@ -346,8 +346,30 @@ export class RunEngineImpl implements RunEngine {
      * DERIVED from the run id rather than random, so a replayed attempt produces
      * the same identity and two attempts at one run cannot be mistaken for two
      * messages -- the same reasoning as `turnId` at `#turnStartedEvent`.
+     *
+     * ## `m-`, not `:`, and why the separator is not a stylistic choice
+     *
+     * This id is a COMPONENT of a merge key, not just a correlation label.
+     * `coalesceKeyId` joins `runId`, `eventType` and the scope with `:` and
+     * REFUSES any component that already contains one (`events/coalesce.ts:181`),
+     * because a `messageId` holding the separator is indistinguishable from a
+     * different id plus a different block index - the doc comment's `ma12`
+     * collision. That refusal is load-bearing and is not relaxed here.
+     *
+     * So the separator is kept OUT of the id instead, which is also what the two
+     * sibling hosts already mint for the same value:
+     * `run-orchestrator.ts:924` and `headless-run-host.ts:474` both use
+     * `` `m-${runId}` ``. This id was the lone outlier, and it is the reason a
+     * run streaming a `text_delta` into a real `BoundedEventQueue` used to die
+     * `failed` on its first delta with "a merge key cannot be built". One
+     * spelling for one value is the point: three producers of the same
+     * run-scoped identity that agree.
+     *
+     * (`turnId` above keeps its colons. It is not a key component, so it is out
+     * of this constraint, and changing it would move an id that other things
+     * already read for no gain.)
      */
-    const messageId = `${runId}:message`;
+    const messageId = `m-${runId}`;
     /**
      * How many times the finalize-boundary poll has kept this run open.
      *
