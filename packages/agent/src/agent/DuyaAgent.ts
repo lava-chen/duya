@@ -481,6 +481,16 @@ export interface RunTurnAssembly {
   readonly turnContext: TurnContext;
   /** The tool surface the run started with. Promotion replaces it per turn. */
   readonly tools: readonly Tool[];
+  /**
+   * The name the private progress tool was actually advertised under.
+   *
+   * A MEMBER rather than recomputed by each reader, for the reason the tool's
+   * name is a `while` loop: the suffix that avoids a collision with a real tool
+   * is decided ONCE, and a reader that recomputed it could land on a different
+   * name than the surface carries. `streamChat` matches model calls against this
+   * to intercept them before dispatch.
+   */
+  readonly progressToolName: string;
   /** The run's system prompt, with modes applied. The pre-mode base is `projection.systemPrompt`. */
   readonly systemPrompt: string;
   /**
@@ -1283,7 +1293,29 @@ export class duyaAgent implements AgentRuntime {
       resolved: resolvedBase,
     });
     systemPrompt = moded.systemPrompt;
-    const resolved: ResolvedTurnTools = moded.resolved;
+    // Plan 610 D1: the private progress tool, MOVED here from `streamChat`.
+    //
+    // It used to be appended to the loop's OWN `tools` local, which is created
+    // AFTER this method has already returned `resolved.tools` on the handle and
+    // seeded `currentTools` from it. So it reached neither the surface the seam
+    // advertises nor the visibility guard that snapshots the same list -- an
+    // engine-driven run could neither offer the tool nor accept its call.
+    //
+    // AFTER `applyTurnModes`, deliberately: that call pairs every tool with
+    // `registry.getExecutor(name)!`, and this tool is deliberately NOT registered
+    // (the loop intercepts its calls with `readProgressUpdateCall` before they
+    // reach a dispatcher). Appending earlier would trip that non-null assertion.
+    let progressToolName = PROGRESS_UPDATE_TOOL_NAME;
+    while (moded.resolved.tools.some((tool) => tool.name === progressToolName)) {
+      progressToolName = `duya_${progressToolName}`;
+    }
+    // A NEW `resolved`, not a mutation of the mode-applied one: the mode block
+    // returns a fresh object precisely so a caller holding the old reference
+    // cannot see it change underneath, and this is the same shape.
+    const resolved: ResolvedTurnTools = {
+      ...moded.resolved,
+      tools: [...moded.resolved.tools, { ...PROGRESS_UPDATE_TOOL, name: progressToolName }],
+    };
     const resolvedTools: Tool[] = resolved.tools;
 
     const { canUseTool } = buildPermissions(
@@ -1356,6 +1388,7 @@ export class duyaAgent implements AgentRuntime {
       resolved,
       turnContext,
       tools: resolvedTools,
+      progressToolName,
       systemPrompt,
       projection,
       projectTurnMessages: (): Message[] =>
@@ -2905,11 +2938,11 @@ export class duyaAgent implements AgentRuntime {
     // no second application.
 
 
-    let progressToolName = PROGRESS_UPDATE_TOOL_NAME;
-    while (tools.some((tool) => tool.name === progressToolName)) {
-      progressToolName = `duya_${progressToolName}`;
-    }
-    tools = [...tools, { ...PROGRESS_UPDATE_TOOL, name: progressToolName }];
+    // Plan 610 D1: the progress tool is appended by `beginTurnAssembly` now, so
+    // it is part of `runAssembly.resolved.tools` -- the surface the seam
+    // advertises AND the set the visibility guard snapshots. This loop reads the
+    // name it was advertised under rather than deciding it again.
+    const progressToolName = runAssembly.progressToolName;
 
     // Plan 413d: build the mode state-machine coordinator only when a
     // session-level mode with a tracker is active. Rebuilt per streamChat

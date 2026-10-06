@@ -58,16 +58,19 @@
  *    projection (`by_ref` history re-projected per turn, S3 finding 3), not
  *    the seam's, which is why the turn-2 assertion is on CONTENT (`assistant`
  *    and `tool` present) rather than on an exact role list.
- *  - **`progress_update` is missing from the advertised surface.** MEASURED:
- *    the legacy advertises four tools, the engine three. The cause is in the
- *    source -- `streamChat` appends `PROGRESS_UPDATE_TOOL` to its own `tools`
- *    local, AFTER `beginTurnAssembly` has published the run's surface on the
- *    handle, so the seam never sees it. It is missing from the VISIBILITY GUARD
- *    too, and that is the half that makes it a flip blocker: `assemble`
- *    replaces the guard's snapshot with whatever the seam forwards, so
- *    advertising the tool alone would still leave its call refused.
- *    This is a real cutover gap, pinned by a failing-if-fixed assertion so the
- *    flip cannot lose it quietly.
+ *  - **`progress_update` WAS missing from the advertised surface.** MEASURED:
+ *    the legacy advertised four tools, the engine three, because `streamChat`
+ *    appended `PROGRESS_UPDATE_TOOL` to its own `tools` local AFTER
+ *    `beginTurnAssembly` had published the run's surface on the handle. It was
+ *    missing from the VISIBILITY GUARD as well, and that is the half that made
+ *    it a flip blocker: `assemble` replaces the guard's snapshot with whatever
+ *    the seam forwards, so advertising the tool alone would still have left its
+ *    call refused.
+ *
+ *    **Plan 610 D1 CLOSED that.** The append moved into `beginTurnAssembly`, so
+ *    the tool is in `resolved.tools` before the handle is built and BOTH owners
+ *    derive from one list. The frozen `PRE_REFACTOR_TOOL_NAMES` is now asserted
+ *    whole, on the advertised surface and on the guard's own live set.
  *
  * What DOES survive verbatim is the seam's own half: the system prompt's
  * length is stable across turns (95275 on the engine and on the legacy, the
@@ -554,55 +557,49 @@ describe('the seam did not change what the cycle sends the model', () => {
     expect(run.seen[0].roles).not.toEqual(PRE_REFACTOR_TURN1_ROLES);
   });
 
-  it('does NOT reproduce the legacy tool list, and the gap is located on BOTH owners, not assumed', async () => {
-    // The honest half of the repoint, and the reason the frozen
-    // `PRE_REFACTOR_TOOL_NAMES` cannot be asserted against the engine.
+  it('reproduces the legacy tool list EXACTLY, on the surface AND on the guard', async () => {
+    // Plan 610 D1 CLOSED the gap this file used to pin.
     //
-    // MEASURED: the legacy advertises
+    // It used to read the other way round: the legacy advertised
     // `['probe_ok', 'progress_update', 'tool_catalog', 'tool_invoke']` and the
-    // engine advertises the same list MINUS `progress_update`. The cause is
-    // located in the source rather than inferred from the numbers:
-    // `DuyaAgent.streamChat` appends the tool to its OWN `tools` local, and it
-    // does so AFTER `beginTurnAssembly` has already published `tools` on the
-    // handle -- so the seam never sees it and an engine-driven run cannot
-    // advertise it.
+    // engine advertised the same list MINUS `progress_update`, because
+    // `streamChat` appended `PROGRESS_UPDATE_TOOL` to its own `tools` local
+    // AFTER `beginTurnAssembly` had published the surface on the handle. The
+    // VISIBILITY GUARD was missing it too, which is the half that made it a flip
+    // blocker rather than a cosmetic difference: `RunTurnAssembly.assemble`
+    // replaces the guard's snapshot with whatever the seam forwards, so
+    // advertising the tool alone would leave a model told about a tool whose
+    // call the guard refuses.
     //
-    // ## The gap is on the GUARD as well as on the surface, which is the part
-    // that makes it a flip blocker rather than a cosmetic difference
-    //
-    // `beginTurnAssembly` seeds the handle's `currentTools` from the resolved
-    // surface, and `RunTurnAssembly.assemble` REPLACES it with whatever the
-    // caller forwards -- which, through `createLegacyAssembleTurn`, is
-    // `handle.tools`. So the visibility guard snapshots the same list the
-    // surface advertises, and `progress_update` is absent from both. Fixing
-    // only the advertised list would leave a model that is told about a tool
-    // whose call the guard refuses.
-    //
-    // This is a REAL cutover gap, not a fixture artifact, and it is asserted
-    // here so it stays visible: when the flip gives the seam one owner for the
-    // surface, this goes red and the assertions below are the thing to update.
+    // The append now lives in `beginTurnAssembly`, so the tool is in
+    // `resolved.tools` before the handle is built, and both owners derive from
+    // that one list. The whole frozen list is now asserted, because there is
+    // nothing left to except.
     const run = await runThroughEngine();
 
-    expect(run.advertised).not.toContain('progress_update');
-    expect(run.advertised).toHaveLength(PRE_REFACTOR_TOOL_NAMES.length - 1);
-    // The rest of the frozen list IS reproduced, which is what localises the
-    // difference to this one tool rather than to a wholesale surface change.
-    for (const name of PRE_REFACTOR_TOOL_NAMES) {
-      if (name === 'progress_update') continue;
-      expect(run.advertised).toContain(name);
-    }
+    // The surface, against the observation recorded from the pre-refactor
+    // CYCLE -- an independent source, not the engine compared with itself.
+    expect(run.advertised).toEqual([...PRE_REFACTOR_TOOL_NAMES]);
+    expect(run.advertised).toContain('progress_update');
 
-    // The SECOND owner, measured rather than assumed, and it is the assertion
-    // that decides whether the gap is one line or two.
-    expect(run.declared).not.toContain('progress_update');
+    // The SECOND owner, read from the guard's own live set rather than inferred
+    // from the advertised list. A surface that advertised the tool while the
+    // guard denied it would look fixed from the model's side and still refuse
+    // the call, which is the failure the previous version of these assertions
+    // existed to catch.
+    expect(run.declared).toContain('progress_update');
     expect(run.declared).toEqual(run.advertised);
 
-    // The owner, pinned at the SOURCE so the gap cannot be forgotten by a
-    // reader who only sees the assertion above: the tool is added inside
-    // `streamChat`, past the seam, and by exactly one statement -- a second
-    // owner would be the thing this file exists to prevent.
+    // The owner, pinned at the SOURCE. The claim is that there is exactly ONE
+    // append and that it is inside `beginTurnAssembly` -- a second owner is the
+    // thing this file exists to prevent, and an append left in `streamChat`
+    // would put the tool back outside both owners.
     expect(code()).toContain('PROGRESS_UPDATE_TOOL');
-    expect(occurrences(/tools = \[\.\.\.tools, \{ \.\.\.PROGRESS_UPDATE_TOOL/)).toBe(1);
+    expect(occurrences(/tools: \[\.\.\.moded\.resolved\.tools, \{ \.\.\.PROGRESS_UPDATE_TOOL/)).toBe(1);
+    // The consumer reads the name off the handle rather than deciding it again:
+    // two `while` loops over the same collision are two answers that can differ.
+    expect(occurrences(/PROGRESS_UPDATE_TOOL_NAME/)).toBe(2);
+    expect(occurrences(/const progressToolName = runAssembly\.progressToolName/)).toBe(1);
   });
 });
 
