@@ -302,8 +302,22 @@ export function isTestPath(relFile) {
   return TEST_PATH.test(relFile);
 }
 
-/** Does this module's CODE have the shape of the model/tool/next-turn cycle? */
+/**
+ * Does this module's CODE have the shape of the model/tool/next-turn cycle?
+ *
+ * The input is expected to be comment-stripped, and every caller here does
+ * that. It matters, and the reason is measured rather than theoretical:
+ * `packages/agent-runtime/src/engine/ports.ts` is a types-and-docs-only module
+ * (every import in it is `import type`) whose five clause hits are all prose --
+ * "the four lines" for `repetition`, an `interface ModelPort` line, a
+ * `getRemainingResults` mention in a doc comment. `isTurnLoopModule(rawSource)`
+ * returns **true** for it; `isTurnLoopModule(stripComments(raw).text)` returns
+ * **false**. The two live call sites already pass the stripped text, so no gate
+ * verdict changes; this guard only stops a future caller that forgets from
+ * silently getting an answer about documentation rather than about code.
+ */
 export function isTurnLoopModule(src) {
+  if (typeof src !== 'string' || src.length === 0) return false;
   return (
     TURN_LOOP_SHAPE.repetition.test(src) &&
     TURN_LOOP_SHAPE.modelStream.test(src) &&
@@ -378,16 +392,54 @@ export function reachabilityFrom(entryRel, roots = packageRoots()) {
 }
 
 /**
- * G7 — the worker entry must not reach a turn-loop implementation.
+ * G7 — the worker entry must not DIRECTLY own a turn-loop implementation.
  *
- * RED today on `DuyaAgent.ts`, and the finding is the loop, not the spelling.
+ * ## Why this is not plain reachability
+ *
+ * The first version of this gate reported every turn-loop-shaped module in the
+ * entry's value-import closure. That predicate is not satisfiable, and the
+ * measurement is the reason: the worker entry is the process root, so any
+ * module the running worker loads by static value import is in its closure BY
+ * DEFINITION. Three probes measured it, each injected and reverted:
+ *
+ *   - loop moved into `packages/agent/**` and value-imported  -> 1 -> 2 findings
+ *   - loop moved into `agent-runtime/**` (the owner G8 names) -> 1 -> 2 findings,
+ *     because `agent-runtime/src/index.ts` is already in the closure via
+ *     `packages/agent/src/process/run-engine-model.ts`
+ *   - the entry's direct `DuyaAgent` import removed (G4 fixed) -> still 2,
+ *     because `MessageSessionTool.ts:7` value-imports the entry
+ *
+ * Relocating the loop therefore made the gate WORSE, and the only ways to make
+ * a reachability predicate go green were a dynamic `import()` (which
+ * `importsOf` cannot see, and which would be gaming the gate rather than
+ * changing the architecture) or moving the loop into another process.
+ *
+ * ## What is actually checkable here
+ *
+ * The regression this gate exists to catch is the one plan 600 S1a described:
+ * the worker entry CONSTRUCTS the loop itself instead of driving the
+ * `ExecutionChannel` the runtime owns. That is a statement about the entry and
+ * its immediate collaborators, not about the whole graph. So the predicate is
+ * now bounded by depth:
+ *
+ *   - depth 0 (the entry itself) and depth 1 (a module the entry imports
+ *     directly) are checked. A loop there is a bypass.
+ *   - beyond depth 1 the module is loaded BY the loop's own caller chain, which
+ *     is normal and expected: the loop calls tools, tools call back into the
+ *     entry, and every real turn goes through that graph.
+ *
+ * G8 already carries the ownership half (a loop outside `@duya/agent-runtime`
+ * is reported per package), so bounded G7 + G8 together still account for both
+ * ways the loop can be in the wrong place, and each can actually go green.
  */
-export function findWorkerLoopReach(entryRel = WORKER_ENTRY, roots = packageRoots()) {
+export const WORKER_LOOP_MAX_DEPTH = 1;
+
+export function findWorkerLoopReach(entryRel = WORKER_ENTRY, roots = packageRoots(), maxDepth = WORKER_LOOP_MAX_DEPTH) {
   const ifAbsent = path.join(REPO_ROOT, entryRel);
   if (!fs.existsSync(ifAbsent)) return [];
-  const reachable = reachabilityFrom(entryRel, roots);
+  const depth = importDepthFrom(entryRel, roots, maxDepth);
   const findings = [];
-  for (const file of reachable.keys()) {
+  for (const [file, at] of depth) {
     if (file === entryRel) continue;
     if (isTestPath(file)) continue;
     const abs = path.join(REPO_ROOT, file);
@@ -396,12 +448,42 @@ export function findWorkerLoopReach(entryRel = WORKER_ENTRY, roots = packageRoot
     findings.push({
       file,
       from: entryRel,
-      via: reachable.get(file) ?? entryRel,
-      why: 'the worker entry can still reach a model/tool/next-turn loop implementation',
+      via: at.via,
+      why: `the worker entry reaches a turn-loop implementation within ${at.depth} import hop(s); the loop belongs to the runtime execution owner, reached through ExecutionChannel`,
     });
   }
   return findings;
 }
+
+/**
+ * Files within `maxDepth` VALUE-import hops of `entryRel`, as
+ * `file -> { via, depth }`.
+ *
+ * Breadth-first so the first hop recorded is the shortest, which is the hop a
+ * finding has to name for the next slice to know which edge to cut.
+ */
+function importDepthFrom(entryRel, roots, maxDepth) {
+  const seen = new Map([[entryRel, { via: entryRel, depth: 0 }]]);
+  let frontier = [entryRel];
+  for (let d = 1; d <= maxDepth; d += 1) {
+    const next = [];
+    for (const current of frontier) {
+      const abs = path.join(REPO_ROOT, current);
+      if (!fs.existsSync(abs)) continue;
+      for (const { spec, typeOnly } of importsOf(abs)) {
+        if (typeOnly) continue;
+        const target = resolveRepoSpecifier(spec, current, roots);
+        if (!target || target === entryRel) continue;
+        if (seen.has(target)) continue;
+        seen.set(target, { via: current, depth: d });
+        next.push(target);
+      }
+    }
+    frontier = next;
+  }
+  return seen;
+}
+
 
 /**
  * The package that is supposed to OWN the loop once plan 600 S2 lands.
@@ -644,10 +726,18 @@ export function findLifecycleCouplings(tables = DURABLE_IDENTITY_TABLES, dbDir =
  * Duplicated rather than imported because `layer-purity.ts` is TypeScript and
  * this gate must run under plain `node` (there is no `tsx` in this repo). The
  * duplication is deliberate and bounded: both lists encode the same published
- * definition, and the cross-check that matters is measured, not assumed — G9 and
- * G2 independently find the SAME six `@duya/ai` files, by different routes
- * (transitive reachability vs. a direct scan), which is the evidence that the
- * two have not drifted apart in a way that hides IO.
+ * definition, and the cross-check that matters is measured, not assumed — G9
+ * and `layer-purity.ts`'s `CORE_MODULES` list independently name the SAME
+ * `@duya/ai` files, by different routes (transitive reachability vs. a direct
+ * scan), which is the evidence that the two have not drifted apart in a way
+ * that hides IO.
+ *
+ * The list was FIVE files as of plan 610 A0, not six: A0 moved the Bedrock
+ * SigV4 signer from `node:crypto` to `globalThis.crypto.subtle`, so
+ * `packages/ai/src/api/bedrock-converse.ts` stopped reaching a Node built-in and
+ * was retired from both this gate's test and `layer-purity.ts`'s carve-out
+ * list. `layer-purity.ts`'s `findStaleCarveOuts` test fails if a record there
+ * outlives its file, so the two lists cannot silently diverge on this.
  *
  * `this.fetchFn(` is deliberately NOT matched: an injected transport is the
  * point of the exercise, and `system-one/client.ts` is the working example.

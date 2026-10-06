@@ -81,11 +81,16 @@ export {
   // dep optimizer. Node-side consumers import them directly:
   //   import { parseUserMcpToml } from '@duya/plugin-core/mcp/user-config'
 } from './mcp';
-// MCP collector input types — type-only re-export. The FUNCTIONS
-// (buildMCPCandidates, etc.) live in './mcp/collect' which imports Node
-// builtins ('fs', 'path') and are therefore NOT re-exported here (same
-// policy as './mcp/resolve'). Node-side consumers import them directly:
-//   import { buildMCPCandidates } from '@duya/plugin-core/mcp/collect'
+// MCP collector input types — type-only re-export. `./mcp/collect` is itself
+// browser-safe (it uses `import type` only, so it has no Node builtin in its
+// runtime closure — measured by plan 610's G10 gate, which walks the desktop
+// renderer's value-import closure), but the FUNCTIONS are still not re-exported
+// from the barrel today, and this change does not alter that. The comments
+// here previously claimed collect.ts imports `fs` and `path` and therefore
+// cannot be re-exported; that had drifted from the code. The exclusion policy
+// itself is unchanged and still applies to './mcp/resolve',
+// './mcp/user-config' and './security/path-validator', which do import Node
+// builtins.
 export type {
   MCPCollectorSettingsItem,
   MCPCollectorPluginEntry,

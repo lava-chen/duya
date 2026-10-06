@@ -126,3 +126,138 @@ active/610-architecture-series/
 那份变异证明 5/5 通过,并且记录了一个我没写的已知缺口(判据匹配名字而非职责)。
 **采用它,丢弃本会话工作树里的副本。** A1 的合并应以那份分支为准。
 
+---
+
+## 2026-10-06 — A3 判据重定义轮
+
+### 本轮最重要的一件事:G7 的目标定义本身是错的
+
+A1 修好了判据,**门禁变准了,于是它开始报出真违规** —— 而真违规指向的那个边界,
+按原计划搬代码**只会让门禁更红**。这不是"还没做完",是"目标写错了"。
+
+三个探针,每个都注入 → 实测 → 回退 → `git status` 空:
+
+| 探针 | G7 findings | 为什么 |
+| --- | --- | --- |
+| 循环搬进 `packages/agent/**`,被 value-import | **1 → 2** | 新模块仍在入口闭包内,立刻成为新 finding |
+| 循环搬进 `agent-runtime/**`(G8 认的归属) | **1 → 2** | `agent-runtime/src/index.ts` 已经 `run-engine-model.ts:105` 在闭包内 |
+| 修 G4(去掉入口直接 import) | **仍 2** | `MessageSessionTool.ts:7` value-import 入口,`DuyaAgent` 仍可达 |
+
+**根因:worker 入口是进程根。** 运行中的 worker 按静态 value import 加载的模块,
+按定义就在它的闭包里 —— 而循环必须被加载才能运行。
+所以"入口不得可达循环"这个判据**不可满足**,且唯一的出路是动态 `import()`
+(扫描器看不见 = 骗门禁)或换进程。
+
+**唯一的诚实出路是改判据。** 已落地(`68e39283`):
+
+- G7 改为**深度有界**:查 depth 0/1,即入口自己拥有或直接 import 的循环。
+  这正是 S1a 描述的那个回归(入口自己构造循环而不是驱动 `ExecutionChannel`)。
+- depth 1 之外的模块是**循环自己的调用链**加载的,正常。G8 已经按包判归属,
+  两者合起来仍覆盖"循环放错地方"的两种方式,而且**各自都能真的转绿**。
+- 变异证明:注入一个满足三子句的模块到入口 → `new 1 → 2` 并指名文件;
+  回退 → `1`。双向已验。
+
+### A3 第二轮:判据可判读了,但那条边**切不断**(未提交代码)
+
+判据改成深度有界之后,A3 的真实问题浮出水面 —— 它不是"还没搬完",是**搬不动**。
+
+**新实测(纠正上一轮的过期前提):**
+
+| 上一轮说 | 实测 |
+| --- | --- |
+| `agent-runtime/src/index.ts` 在 depth 1,所以搬过去也会被报 | **它在 depth 3**(经 `run-engine-model.ts`,而后者不在 depth-1 集合里)。**"1 → 2" 的结论前提已失效** |
+| `MessageSessionTool.ts:7` 造出第二条边 | 它**根本不在入口的可达集里** |
+| 入口有 44 个 depth-1 模块 | 45 个,其中**只有 `:76` 一个** value-import `DuyaAgent` |
+
+于是剩下的机制只有四种,逐一评估:
+
+1. **工厂/适配器接缝** —— 入口照样拿到 `duyaAgent`、照样 `.streamChat()`。
+   **这个仓库已经这么干过并记录在案**:`packages/agent-runtime/src/engine/ports.ts:12-15`
+   写着 `headless-run-host.ts` "wires a real RunController around an executor that
+   still calls duyaAgent.streamChat, and that combination **passes the old
+   acceptance gate while the loop has not moved at all**"。工厂就是它换了个名字。**否决。**
+2. **动态 `import()`** —— 骗门禁。**否决。**
+3. **子进程边界** —— 门禁 docstring 自己列的答案,代价是整套启动路径。
+4. **把循环搬到 `ExecutionChannel` 后面** —— 真解,但**它要的东西不存在**:
+   `ports.ts:7` 明写 "Types and interfaces only. No implementation, no wiring",
+   `workerImplementsExecutionChannel()` 返回 **false**。
+
+**结论:A3 交的不是一个待搬的代码块,是一个缺失的实现。** 在 `ExecutionChannel`
+落地之前,G7 的绿只能靠隐藏循环 —— 而那正是本仓库已经付过学费的假绿。
+
+**未提交任何代码。** 树干净在 `34068b44`。
+
+### 这一轮抓到的两个门禁自身缺陷
+
+1. **`boundary-gates.test.ts:1031` 把 G7 钉死为红**(`toBeGreaterThan(0)`)。
+   这让 A3 **无论怎么正确修复都会红**。已改为断言"每条 finding 都有文件、
+   `via` 和理由",并用一次**无界深度调用必须找得到东西**来证明扫描非空转 ——
+   空结果于是成为 A3 正在争取的合法状态,而不是被禁止的状态。
+2. **`isTurnLoopModule` 传未剥注释的源码会答非所问。** 实测
+   `packages/agent-runtime/src/engine/ports.ts`(每个 import 都是 `import type`
+   的纯类型+文档模块,五处命中全是散文):`isTurnLoopModule(raw)` = **true**,
+   `isTurnLoopModule(stripComments(raw))` = **false**。
+   两个 live 调用点都已传 stripped,所以**门禁判定没变**;已加守卫与这段实测说明,
+   防止下一个调用者踩同一个坑。
+
+> 这两条的共同形状:**门禁在断言"当前结论"而不是"判据本身"时,就再也无法被修复。**
+> 与 610 §4 第 5 条同源 —— 门禁必须**能红也能绿**。
+
+### A3 的未决(需要裁决)
+
+| 问题 | 为什么必须先答 |
+| --- | --- |
+| A3 是继续"让 G7 变绿",还是改为"让 G7 **可绿**" —— 接受绿会随 S2 的循环迁移一起来,把 A3 花在**实现缺失的 `ExecutionChannel`** 上? | 其余全部工作都压在这个判断上。工厂接缝已证明是假解 |
+| 选子进程边界,还是补 `ExecutionChannel`? | 前者改启动路径,后者是 S2 本体;周期与风险差一个量级 |
+
+
+
+### 变异证明抓到了我自己
+
+改完判据后 `mutation-proof-a1.mjs` 从 5/5 掉到 **2/5** —— 因为它的 fixture 是
+4 跳 adapter 链,超过新的深度上界。**这就是变异证明的价值:它抓的是"门禁悄悄不再检查"。**
+已改为显式传深度(4,实测跳数,不是猜的),5/5 恢复。
+顺带:那条"live tree is fully baselined"的红,已改成会**指名哪个门禁哪个文件**,
+而不是一个无信息的布尔。它**故意保持红** —— 那是 A3 剩下的活。
+
+### 判据修正不能靠重录 baseline 抹掉
+
+610 §4 第 5 条禁止"为了让门禁变绿而加豁免"。G7 那条 finding 是真的,
+所以正确处置是**让红信息更可判读**,而不是让它消失。
+
+### 另一个真缺陷:门禁能全绿而 `typecheck:all` 是红的
+
+PR #214 的 `a7193092` 给 `RunEventEmitter` 追加了一个与既有**逐字节相同**的
+`async publish` → `TS2393`。**esbuild 不做类型检查,vitest 让后声明的赢**,
+于是 `architecture:check` 绿、运行时测试绿、只有 `typecheck:all` 红。
+原样合并会落下一个过不了自己 pre-commit 门禁的 master。已在 `70f3a85e` 修掉。
+
+### 被实测推翻的数字(又一次)
+
+我自己用 `node:` 前缀正则统计"某包碰 Node 内建的文件数",**两个都反了**:
+`@duya/ai` 报 3 实为 **1**(两个 `auth/oauth` 的 `node:crypto` 只在文档注释里,
+早就用 `crypto.subtle`);`plugin-core` 报 2 实为 **5**(另外 3 个写的是**裸** `fs`/`path`,
+正则锚定 `node:` 完全匹配不到)。
+
+**差点据此去"修正"一份准确的计划文档。** 正则带前缀锚点时先问:
+**有没有人写成裸名字?** 统计这类东西要用仓库现成的解析器(`importsOf`),不要临时写 grep。
+
+### 本轮实测门禁
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run architecture:check` | **935/935 tolerated,无新增**,baseline 930 **未动** |
+| `npm run architecture:self-test` | OK |
+| `node scripts/architecture/mutation-proof-a1.mjs` | **5/5**,含负向对照 |
+| `npx vitest run packages/plugin-core` | **22/22**(22 文件) |
+
+### 未决
+
+| # | 问题 | 归属 |
+| --- | --- | --- |
+| 1 | G7 的 depth 1 finding 仍在,红且**应当红**。转绿需要真正切断 `agent-process-entry.ts:76` 那条边 | A3 下一步 |
+| 2 | B1:6 个 handler 自身的图层已可无 Electron 加载,但它们的依赖图里仍有 45 个层外硬 import(实测),A1 的"全图可加载"版本不在 B1 所有权内 | B1 续 |
+| 3 | A0 §3.2 plugin-core 二分未做 —— 实测它对 renderer 闭包贡献 21 个文件、**0** 个 Node 内建,barrel 已排除真正碰 Node 的三个模块 | 独立切片 |
+| 4 | 602/C1 是否值得做(理由已从"逃 ABI"降为"删原生依赖") | C1 |
+
+

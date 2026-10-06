@@ -104,13 +104,31 @@ function check(label, condition, detail) {
 
 // ---------------------------------------------------------------- direction 1
 // The loop IS reachable through three adapters. The gate MUST report it.
+//
+// The depth argument is explicit rather than left at the default. G7's default
+// bound is 1 hop (a loop the entry reaches DIRECTLY), because the worker entry
+// is the process root and an unbounded reachability predicate can never go
+// green — plan 610 §5.2 rule 1. This proof deliberately asks about the full
+// chain, which is the property the bound does NOT give up: when a caller raises
+// the bound, the gate still resolves a multi-hop chain and still names the hop.
+// Leaving the default here would silently turn this proof into an assertion
+// that the gate reports nothing, which is the failure mode §4 rule 2 exists to
+// prevent.
+//
+// The number is the MEASURED hop count of the fixture above, not a guess:
+// entry -> hop-1 -> hop-2 -> hop-3 -> session-runner is four edges. Setting it
+// lower is exactly how this proof goes quietly vacuous: the gate reports
+// nothing, and "nothing" satisfies a `Boolean(hit)` check only if the caller
+// forgets to look at the count. The negative direction below is what catches
+// that, which is why both directions must run.
+const PROOF_DEPTH = 4;
 writeTree();
 let findings = [];
 try {
-  findings = findWorkerLoopReach(REL_ENTRY);
+  findings = findWorkerLoopReach(REL_ENTRY, undefined, PROOF_DEPTH);
   const hit = findings.find((f) => f.file === REL_LOOP);
   check(
-    'a loop behind 3 adapters is reported',
+    `a loop behind 3 adapters is reported (depth ${PROOF_DEPTH})`,
     Boolean(hit),
     hit ? `reported via ${hit.via}` : `findings = ${JSON.stringify(findings.map((f) => f.file))}`
   );
@@ -137,7 +155,7 @@ try {
 // ---------------------------------------------------------------- direction 2
 // The SAME gate, same call, with the chain gone. It MUST now report nothing.
 // Without this, direction 1 could pass by the gate always returning findings.
-const afterRemoval = findWorkerLoopReach(REL_ENTRY);
+const afterRemoval = findWorkerLoopReach(REL_ENTRY, undefined, PROOF_DEPTH);
 check(
   'the same gate reports nothing once the chain is removed',
   afterRemoval.length === 0,
