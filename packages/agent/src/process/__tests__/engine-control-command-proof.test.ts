@@ -43,8 +43,9 @@
  * identity the moment both sides drift together, which is worth nothing.
  */
 
-import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { RunEngineImpl, RunEventEmitter, RunSession } from '@duya/agent-runtime';
@@ -125,6 +126,20 @@ const PRE_EXISTING = new Set(process.listeners('message'));
 const { duyaAgent } = await import('../../agent/DuyaAgent.js');
 const { TurnPipelinePublisher } = await import('../../tool/turn-pipeline-publisher.js');
 const { initDbClient } = await import('../../ipc/db-client.js');
+// The PRODUCT's own recognition predicates, imported rather than re-described.
+// These are the two functions `createLegacyCommandPort` calls, and the two the
+// CLI registry and `DuyaAgent.streamChat` call. Importing them here is what
+// makes the verb table below a comparison against the product rather than a
+// second opinion about the product.
+//
+// DYNAMIC, for the same reason the imports above are: `PRE_EXISTING` is
+// captured above, and a STATIC import of this module would evaluate the goal
+// tracker's persistence chain -- and therefore the db client's own `message`
+// listener -- before that snapshot was taken. `installFakeDbIpc` then looks for
+// a listener that is not already in the snapshot, finds none, and every test in
+// this file fails on a harness error that has nothing to do with the claim.
+const { isGoalControlCommand } = await import('../../modes/goal/goal-commands.js');
+const { isTranscriptControlCommand } = await import('../../session/transcript-commands.js');
 const { composeLegacyRunPorts, createLegacyAssembleTurn, buildLegacyRunManifest, buildLegacyRunInput } =
   await import('../run-composition.js');
 import type { LegacyRunFacts, LegacyRunHost } from '../run-composition.js';
@@ -505,6 +520,169 @@ describe('a prompt that is not a registered command', () => {
 
     expect(proof.calls()).toBe(1);
     expect(seenRequests[0].contents).toContain('/goal ship the release by friday');
+  });
+});
+
+// ============================================================================
+// The verb TABLE -- the engine's resolution against the product's own predicate
+// ============================================================================
+
+/**
+ * Read the `CONTROL_VERBS` set a product module DECLARES.
+ *
+ * ## Why the declaration and not a list written here
+ *
+ * The claim this table holds is "the engine path reaches the PRODUCT's
+ * implementation", so the verbs compared must be the verbs the PRODUCT declares.
+ * A list typed into this file would be a THIRD copy of that table -- the exact
+ * thing `command-port.ts` exists to prevent -- and it would go stale silently: a
+ * verb added to `goal-commands.ts` would be a verb this test never probes, and
+ * the next slice to write a second parser would then be free to diverge on
+ * exactly that verb.
+ *
+ * `CONTROL_VERBS` is not exported from either module, and neither module is
+ * writable by this slice, so reading the `new Set([...])` literal is the only
+ * route to "every verb in the product's set" that is not a copy.
+ *
+ * ## Why this THROWS rather than degrading to an empty list
+ *
+ * Because an empty list makes every comparison in this file vacuously true: no
+ * rows, no disagreements, green. A derivation that cannot find the declaration
+ * is a broken derivation, and a silent one is the exact failure the block exists
+ * to catch. So it is a thrown error at module load, where it cannot be mistaken
+ * for "there are no control verbs".
+ */
+function declaredControlVerbs(modulePath: string): readonly string[] {
+  const source = readFileSync(modulePath, 'utf-8');
+  const literal = /const\s+CONTROL_VERBS\s*=\s*new\s+Set(?:\s*<[^>]*>)?\s*\(\s*\[([^\]]*)\]\s*\)/.exec(source);
+  if (literal === null) {
+    throw new Error(`no CONTROL_VERBS set literal is declared in ${modulePath}; the derivation is broken`);
+  }
+  return [...literal[1]!.matchAll(/'([^']*)'/g)].map((match) => match[1]!);
+}
+
+const GOAL_MODULE = fileURLToPath(new URL('../../modes/goal/goal-commands.ts', import.meta.url));
+const TRANSCRIPT_MODULE = fileURLToPath(new URL('../../session/transcript-commands.ts', import.meta.url));
+
+const GOAL_VERBS = declaredControlVerbs(GOAL_MODULE);
+const TRANSCRIPT_VERBS = declaredControlVerbs(TRANSCRIPT_MODULE);
+
+/** One prompt to drive through the engine, and what to call it in a failure. */
+interface ResolutionCase {
+  readonly label: string;
+  readonly prompt: string;
+}
+
+/**
+ * The product's own recognition predicate for a prompt, in the product's order.
+ *
+ * `command-port.ts` tests `/goal` first and the transcript family second, and
+ * that is the legacy's order (`DuyaAgent.streamChat`), so it is reproduced here
+ * for the same reason it is reproduced there.
+ *
+ * This is the EXPECTED side of every comparison below. It is the same function
+ * the engine path calls, reached directly -- so a second parser installed in
+ * `command-port.ts` disagrees with it, which is what makes the table able to go
+ * red. An expectation computed from the engine's own resolution would agree with
+ * it by construction and prove nothing.
+ */
+function productClaims(prompt: string): boolean {
+  return (
+    (prompt.startsWith('/goal') && isGoalControlCommand(prompt)) || isTranscriptControlCommand(prompt)
+  );
+}
+
+/** Throwaway target for the `/export` row, which the product really does write. */
+const VERB_TABLE_DIR = mkdtempSync(path.join(os.tmpdir(), 'duya-d0-verb-'));
+afterAll(() => {
+  rmSync(VERB_TABLE_DIR, { recursive: true, force: true });
+});
+
+/**
+ * Every prompt the product's two verb sets make a control command.
+ *
+ * Built from the DERIVED verb lists, plus the bare `/goal` -- which the
+ * predicate answers through its own `rest === ''` arm and which is therefore
+ * NOT a member of `CONTROL_VERBS`, so a table built from the sets alone would
+ * silently miss the one form the product handles most often.
+ */
+const CONTROL_ROWS: readonly ResolutionCase[] = [
+  { label: '/goal (bare)', prompt: '/goal' },
+  ...GOAL_VERBS.map((verb): ResolutionCase => ({ label: `/goal ${verb}`, prompt: `/goal ${verb}` })),
+  ...TRANSCRIPT_VERBS.map(
+    (verb): ResolutionCase => ({
+      label: `/${verb}`,
+      // `/export` WRITES A FILE once the product recognises it, so a bare
+      // `/export` would drop a transcript into the repository root. What this
+      // table compares is the VERB, so the row carries a throwaway target and
+      // says so rather than depending on the working directory.
+      prompt: verb === 'export' ? `/export ${path.join(VERB_TABLE_DIR, 'table.md')}` : `/${verb}`,
+    }),
+  ),
+];
+
+/**
+ * The other half of the same failure: a parser that recognises too MUCH.
+ *
+ * `start` is here by name and not by derivation. It is the verb a plausible
+ * re-implementation adds -- `/goal start` reads exactly like a command -- and it
+ * is semantically the OPPOSITE of one, because the product treats
+ * `/goal <anything else>` as an OBJECTIVE the model starts through `goal_start`
+ * (`goal-commands.ts`, module header). A parser that claimed it would answer an
+ * objective with usage text and start nothing.
+ *
+ * The remainder are derived near misses, one suffixed form per declared verb, so
+ * a parser matching on a prefix instead of the exact verb is caught for every
+ * verb rather than for whichever one was typed into a literal.
+ */
+const IMPOSTOR_ROWS: readonly ResolutionCase[] = [
+  ...GOAL_VERBS.map(
+    (verb): ResolutionCase => ({ label: `/goal ${verb}x (near miss)`, prompt: `/goal ${verb}x` }),
+  ),
+  ...TRANSCRIPT_VERBS.map(
+    (verb): ResolutionCase => ({ label: `/${verb}x (near miss)`, prompt: `/${verb}x` }),
+  ),
+  ...['start', 'begin', 'run', 'show', 'set', 'new'].map(
+    (verb): ResolutionCase => ({ label: `/goal ${verb} (unclaimed verb)`, prompt: `/goal ${verb}` }),
+  ),
+];
+
+describe('the engine path resolves every control verb the way the product does', () => {
+  // The derivation's own precondition. Without it a regex that stopped matching
+  // would leave both tables empty and every row below would silently vanish.
+  it('derives a non-empty verb set from each of the product\'s two modules', () => {
+    expect(GOAL_VERBS.length).toBeGreaterThan(0);
+    expect(TRANSCRIPT_VERBS.length).toBeGreaterThan(0);
+  });
+
+  it('covers every verb the product declares, and the bare /goal form', () => {
+    const prompts = CONTROL_ROWS.map((row) => row.prompt);
+    for (const verb of GOAL_VERBS) expect(prompts).toContain(`/goal ${verb}`);
+    for (const verb of TRANSCRIPT_VERBS) {
+      expect(prompts.some((prompt) => prompt === `/${verb}` || prompt.startsWith(`/${verb} `))).toBe(true);
+    }
+    // The `+ 1` is the bare form, and it is pinned so that dropping it from the
+    // table is a visible change rather than a quieter coverage loss.
+    expect(CONTROL_ROWS).toHaveLength(GOAL_VERBS.length + TRANSCRIPT_VERBS.length + 1);
+  });
+
+  // THE CLAIM, one row per verb. A second parser that drops a verb, renames one,
+  // or spells one differently fails the row for that verb and names it.
+  it.each(CONTROL_ROWS)('claims $label, exactly as the product does', async ({ prompt }) => {
+    // EXPECTED, from the product's own predicate.
+    expect(productClaims(prompt)).toBe(true);
+    // ACTUAL, observed on a real run: zero provider calls, positively counted by
+    // a mock that can see a call.
+    const proof = await runThroughEngine(prompt);
+    expect(proof.calls()).toBe(0);
+  });
+
+  it.each(IMPOSTOR_ROWS)('does not claim $label, exactly as the product does not', async ({ prompt }) => {
+    expect(productClaims(prompt)).toBe(false);
+    const proof = await runThroughEngine(prompt);
+    // A MODEL CALL, positively counted: the engine reached the provider instead
+    // of swallowing a prompt the product sends onward.
+    expect(proof.calls()).toBe(1);
   });
 });
 
