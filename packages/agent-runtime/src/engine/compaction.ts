@@ -8,13 +8,20 @@
  * `packages/agent-runtime/src/engine/ports.ts` declares `CompactionPort`; this
  * file is what an engine (or a host driving the port directly) calls to get a
  * transcript replacement and the frames that describe it. It is deliberately a
- * standalone module with no dependency on `RunEngineImpl`, because the loop
- * call site that will consume it is not in this slice -- see "The engine call
- * site this slice does NOT make" below, which names the exact file and method.
+ * standalone module with no dependency on `RunEngineImpl`, so the two properties
+ * this file must make testable without a run at all stay testable: that a
+ * REPLACEMENT reaches the next request, and that each of the five frames has a
+ * producer.
  *
- * Keeping it separate is also what makes the two properties this slice must
- * prove testable without a run at all: that a REPLACEMENT reaches the next
- * request, and that each of the five frames has a producer.
+ * ## The loop call site that now exists
+ *
+ * `RunEngineImpl` calls this at three points through `#compact`
+ * (`run-engine.ts`), matching the legacy's three: between context assembly and
+ * the model request, after the drain, and on a failed model stream. Each site
+ * applies its OWN failure policy and only the `replaced` arm is acted on --
+ * this function reports, the loop decides. The separation is what lets a host
+ * drive the port directly, and what keeps a test of the frames from having to
+ * construct a run.
  *
  * ## The five frames, and where each one comes from
  *

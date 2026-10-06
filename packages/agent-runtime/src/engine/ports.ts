@@ -1044,18 +1044,23 @@ export interface RunEnginePorts {
   /**
    * Where a transcript gets REPLACED. See `CompactionPort`.
    *
-   * OPTIONAL, and the absence is the live worker's state today for the same
-   * reason `turnOutput` is: the legacy loop still decides and runs every
-   * compaction itself (16 call sites in the loop body, `DuyaAgent.ts:1825-3404`
-   * -- `onTurnStart` at `:1835`, the pre-turn coordinator at `:2155`, the
-   * preflight probe and run at `:3018`/`:3022`, the usage anchors at
-   * `:3154-3167`, and the emergency path at `:3330`/`:3360`). Binding it now
-   * would compact twice.
+   * OPTIONAL, and the absence is still the live worker's state today: the legacy
+   * loop still decides and runs every compaction itself (16 call sites in the
+   * loop body, `DuyaAgent.ts:1825-3404`), so a host that binds this WHILE the
+   * legacy drives still compacts twice.
    *
-   * Unlike `turnOutput`, a forgotten binding here is NOT harmless the way a
-   * forgotten guardrail is: it means no transcript is ever replaced and the
-   * five compaction frames have no producer at all. That cost is stated at
-   * length on `CompactionPort`, and it is the obligation the cutover inherits.
+   * The ENGINE now calls it at all three decision points the legacy owns --
+   * between assembly and the model request, after the drain, and on a failed
+   * model stream -- but the legacy is still what runs a turn today, which is
+   * why this stays OPTIONAL. `run-engine.ts` and the legacy cycle are both
+   * live: a bound port with the legacy still driving is the double compaction
+   * above, and an unbound one leaves the legacy's own compactions as the only
+   * producer. The cutover is what makes it required.
+   *
+   * A forgotten binding is NOT harmless the way a forgotten guardrail is: it
+   * means no transcript is ever replaced and the five compaction frames have no
+   * producer at all. That cost is stated at length on `CompactionPort`, and it
+   * is the obligation the cutover inherits.
    */
   readonly compaction?: CompactionPort;
 }
@@ -1831,8 +1836,35 @@ export interface CompactionDecisionInput {
   readonly observation?: CompactionObservation;
 }
 
-/** Real evidence, where there is any. Never inferred by the engine. */
+/**
+ * Real evidence, where there is any. Never inferred by the engine.
+ *
+ * ## Why the provider's error text crosses the port rather than a verdict on it
+ *
+ * The emergency path is a CLASSIFICATION, and the legacy classifies with
+ * `classifyContextLengthError` (`DuyaAgent.ts:3320`, `compactErrors.ts`),
+ * whose dual-evidence gate is deliberate: an explicit provider claim compacts on
+ * its own, while weak wording compacts ONLY alongside local corroboration, and
+ * a failed probe is no evidence at all (`:3311-3319`). That rule is a property
+ * of how the provider phrases the error, and the providers are the HOST's --
+ * `@duya/agent-runtime` imports nothing from `@duya/ai` (G1), so the engine has
+ * no catalog of their wordings and must not grow a second copy of the rule.
+ *
+ * So the engine forwards the message VERBATIM and the port decides. This is the
+ * same split `#modelRequest` already uses for the same reason (`:1401-1405`: a
+ * `by_ref` history is the host's to resolve), and it is why the engine sets no
+ * other member of this interface: it holds no probe, no threshold and no
+ * provider vocabulary, and a field it filled in would be a fact it invented.
+ */
 export interface CompactionObservation {
+  /**
+   * The provider's error text, verbatim, when this decision follows one.
+   *
+   * The only member the ENGINE supplies, and it supplies it as a quotation: the
+   * `error` frame's `message` (`ModelFrame`, `ports.ts:200`) copied without
+   * inspection. What it MEANS is the port's to work out.
+   */
+  readonly providerError?: string;
   /** True when the provider itself claimed the context was too long. */
   readonly contextLengthExceeded?: boolean;
   /** A preflight overflow probe already ran and said yes. */
@@ -1896,6 +1928,48 @@ export type CompactionOutcome =
   | { readonly kind: 'declined'; readonly reason: string }
   | { readonly kind: 'failed'; readonly error: { readonly code: string; readonly message: string } }
   | { readonly kind: 'cancelled' };
+
+/**
+ * What the provider ACTUALLY charged for one request.
+ *
+ * ## Why this exists at all, since the engine could have estimated
+ *
+ * Because an estimate and a measurement are different quantities, and the legacy
+ * moved off the estimate deliberately. `setObservedUsageForEpoch` is the
+ * observation layer of plan 577 §2 (`DuyaAgent.ts:3166-3172`, fed from the
+ * `result` event's own `input_tokens`), and its stated purpose is to keep the
+ * LARGEST prompt of a turn from collapsing mid-turn when a provider re-reports
+ * per-round cache reads. `CompactionDecisionInput.transcript` cannot carry it:
+ * the messages are the host's to project, and re-measuring them in the engine
+ * would mean a second token estimator next to the port's own — the duplication
+ * `ports.ts:1802-1811` refuses when it insists the port measures the messages.
+ *
+ * So the real number is handed over, once per request, and the port owns the
+ * high-water mark (`CompactionManager.ts:71`, `:502`).
+ */
+export interface CompactionUsageAnchor {
+  /** 1-based, the turn the request belonged to. */
+  readonly turn: number;
+  /** The provider's own `input_tokens`. The port applies the round-max rule. */
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  /**
+   * The context generation the request was BUILT in, captured before it opened.
+   *
+   * Load-bearing, and the legacy is explicit about why: the epoch is read at
+   * `DuyaAgent.ts:2380` -- before the stream -- and the result is filed against
+   * THAT epoch at `:3167`, because compaction rewrites the context lineage and
+   * opens a new generation (`CompactionManager.ts:918-921`). Filing a
+   * pre-compaction request's tokens into the post-compaction generation would
+   * anchor the new epoch to a size it never had.
+   *
+   * The engine keeps this counter itself rather than reading the host's: it is
+   * the engine that knows which requests a compaction was interleaved with, and
+   * the run epoch on `RunExecutionRequest` is a DIFFERENT generation (attempt
+   * recovery), not this one.
+   */
+  readonly epoch: number;
+}
 
 /** Progress reported DURING a compaction, not only after it. */
 export type CompactionProgress =
@@ -2018,4 +2092,26 @@ export interface CompactionPort {
    * authority for "which compaction is this".
    */
   nextCompactionId(): CompactionId;
+  /**
+   * The provider's real token usage for a request that just completed.
+   *
+   * OPTIONAL, and absent is a DEGRADED but working port rather than a broken
+   * one -- which is why this is the one member here that is not required. A port
+   * without it decides from the transcript it is handed, which is the estimate
+   * path the legacy used before plan 577 §2. Compaction still fires and still
+   * replaces the transcript, so nothing is LOST; what is lost is the anchor, and
+   * an unanchored decision can fire early or late against the trigger line.
+   *
+   * That is the opposite of an absent `compaction` binding itself, and the
+   * distinction is why this one is optional and that one is not: skipping
+   * `noteUsage` degrades WHEN a compaction fires, skipping the port means no
+   * transcript is ever replaced. A degraded trigger is a tuning loss; a missing
+   * port is the run growing until the provider rejects it.
+   *
+   * It is a plain `void` method and not a field for the reason `reporter` is a
+   * parameter on `run`: a port bound for one run serving several requests needs
+   * a fresh report per request, and the engine is the only component that knows
+   * when a request ended.
+   */
+  noteUsage?(anchor: CompactionUsageAnchor): void;
 }
