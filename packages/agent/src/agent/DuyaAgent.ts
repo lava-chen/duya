@@ -97,6 +97,8 @@ import { buildTurnModelLeg } from './model-leg.js';
 import { PendingHookMessages } from './PendingHookMessages.js';
 import { deriveSingleCallUsage } from '../process/seed-token-usage.js';
 import { createOneShotTextPort, fromProviderMessages } from '../process/run-engine-model.js';
+import { buildCoordinatorCompactionSources } from '../process/run-engine-compaction.js';
+import type { CompactionSources } from '../process/run-engine-ports.js';
 import { settingsJsonToRules } from '../permissions/rules.js';
 import { permissionRuleValueToString } from '../permissions/rules.js';
 import { logger } from '../utils/logger.js';
@@ -4257,6 +4259,58 @@ export class duyaAgent implements AgentRuntime {
       options?.wakeRun === true,
       options?.imageInputSupported,
     );
+  }
+
+  /**
+   * The engine's `CompactionSources`, bound to THIS agent's compaction.
+   *
+   * PUBLIC, and the fourth instance of the same seam the module already
+   * documents: `readModelClient` (`:295`), `claimInterTurn` (`:4226`) and the
+   * turn-output sink (`:589`) each lift one thing out of `streamChat`'s closure
+   * so a run composition can bind the port that needs it. Compaction is the
+   * fourth because `compactionCoordinator` is private and the loop's
+   * `systemPromptContent` / `messages` live in the generator's own frame --
+   * neither is reachable from outside without this.
+   *
+   * ## What the two accessors are, and why they are accessors
+   *
+   * They are the legacy loop's per-turn values, and `streamChat` hands the
+   * coordinator exactly these two (`DuyaAgent.ts:2597-2598`). They are read at
+   * CALL TIME because a compaction re-projects them mid-run
+   * (`DuyaAgent.ts:2630-2631`): a snapshot taken when the run's ports were
+   * built would hand turn two turn one's transcript.
+   *
+   * ## Why this is a SOURCE and not the PORT
+   *
+   * `buildCompactionPort` is the adapter, and `process/run-engine-compaction.ts`
+   * is what knows how the legacy's compaction fits `CompactionPort`'s decide /
+   * run split. What only this class can supply is the coordinator and the
+   * usage-ledger call -- both private, both already owned here.
+   */
+  engineCompactionSources(input: {
+    readonly systemPromptContent: () => string;
+    readonly messages: () => readonly Message[];
+    readonly nextCompactionId?: () => string;
+  }): CompactionSources {
+    return buildCoordinatorCompactionSources({
+      coordinator: this.compactionCoordinator,
+      systemPromptContent: input.systemPromptContent,
+      messages: input.messages,
+      ...(input.nextCompactionId === undefined
+        ? {}
+        : { nextCompactionId: input.nextCompactionId }),
+      // The provider's real usage, epoch-tagged exactly as the loop files it
+      // (`:3565`). WITHOUT this the port would carry no `noteUsage` at all and
+      // the engine could not tell an anchored trigger from an estimated one
+      // (`run-engine-ports.ts:518-526`), so it is bound rather than optional.
+      noteUsage: (anchor) => {
+        this.compactionManager.setObservedUsageForEpoch(
+          anchor.inputTokens,
+          anchor.outputTokens,
+          anchor.epoch,
+        );
+      },
+    });
   }
 
   private async _claimMailboxAtCheckpoint(

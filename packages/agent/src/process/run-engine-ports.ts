@@ -391,6 +391,11 @@ export function buildInterTurnPort(sources: InterTurnSources): InterTurnInputPor
 /**
  * One transcript `Message` -> one `ModelMessage`.
  *
+ * EXPORTED (plan 610 A3-2b5) so the compaction source reuses it rather than
+ * deriving a second mapping of the same union: two mappings is how a `thinking`
+ * block becomes a text block on one side of a compaction and stays a thinking
+ * block on the other.
+ *
  * ## The two vocabularies, and why the narrow one is safe HERE
  *
  * The transcript content union is six blocks wide (`transcript/content.ts`:
@@ -410,7 +415,7 @@ export function buildInterTurnPort(sources: InterTurnSources): InterTurnInputPor
  * a future row kind, not a live code path -- stated so nobody reads it as a
  * claim that images survive.
  */
-function toRuntimeMessage(message: Message): ModelMessage {
+export function toRuntimeMessage(message: Message): ModelMessage {
   return {
     // `projectRuntimeContextToProviderMessage` builds every injected row as a
     // `user` message (`message-projectors.ts:107`), and a mailbox row is
