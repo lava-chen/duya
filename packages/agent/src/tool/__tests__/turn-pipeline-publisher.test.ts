@@ -199,3 +199,128 @@ describe('TurnPipelinePublisher routes to the live turn and refuses the others',
     expect(runs.count).toBe(1);
   });
 });
+
+// ============================================================================
+// drain() / discard(): the route, and the per-turn lifetime it has to protect
+//
+// Added in plan 610 A3-2b2. `queue` alone is not a tool leg: without a route to
+// `getRemainingResults` the composition could only take a host's own handle on
+// the live executor, and a handle CAN be held across turns. That is the whole
+// hazard, and it is measured rather than theoretical -- see below.
+// ============================================================================
+
+/** Drain THROUGH THE PUBLISHER, counting results. The route under test. */
+async function drainThroughPublisher(publisher: TurnPipelinePublisher): Promise<string[]> {
+  const texts: string[] = [];
+  for await (const update of publisher.drain()) {
+    const content = update.message?.content;
+    if (typeof content === 'string') texts.push(content);
+  }
+  return texts;
+}
+
+describe('TurnPipelinePublisher.drain is a route with a per-turn lifetime', () => {
+  it('drains the published turn, and the tool really ran', async () => {
+    const runs = { count: 0 };
+    const publisher = new TurnPipelinePublisher();
+    publisher.publish(1, pipelineFor(runs));
+
+    publisher.queue(use('d1'));
+
+    // Not "the tool arrives" -- the effect is observable, so a drain wired to a
+    // mute or discarded instance fails here rather than passing on structure.
+    expect(await drainThroughPublisher(publisher)).toHaveLength(1);
+    expect(runs.count).toBe(1);
+  });
+
+  it('REFUSES a second drain of one publication, because the pipeline RE-SERVES', async () => {
+    // THE HAZARD, named. `ToolExecutionPipeline.getRemainingResults` yields its
+    // items again on a second call -- measured in `engine-drain-carryover.test.ts`
+    // as a real double `settle:key:…:succeeded`, which is indistinguishable from a
+    // correct ledger. In production it is harmless ONLY because `streamChat`
+    // publishes a fresh pipeline every turn.
+    //
+    // The engine drains on EVERY turn, so "one publication, two drains" is
+    // exactly "one pipeline held across two turns" expressed at the publisher.
+    // The refusal is what makes it unrepresentable.
+    const runs = { count: 0 };
+    const publisher = new TurnPipelinePublisher();
+    publisher.publish(1, pipelineFor(runs));
+    publisher.queue(use('d2'));
+
+    expect(await drainThroughPublisher(publisher)).toHaveLength(1);
+    await expect(drainThroughPublisher(publisher)).rejects.toThrow(
+      /RE-SERVES its results on a second drain/,
+    );
+  });
+
+  it('a NEW publication may be drained, so the refusal is per-turn and not a latch', async () => {
+    // The contrast that keeps the refusal honest. Same publisher, same
+    // registry, same tool; only a second `publish` differs. Without it the test
+    // above would pass against a publisher that simply refused every second
+    // call forever -- which is the "discarded is a one-way latch" failure mode
+    // `tool-pipeline-turn-lifetime.test.ts` exists to prevent.
+    const runs = { count: 0 };
+    const publisher = new TurnPipelinePublisher();
+    publisher.publish(1, pipelineFor(runs));
+    publisher.queue(use('d3'));
+    expect(await drainThroughPublisher(publisher)).toHaveLength(1);
+
+    publisher.publish(2, pipelineFor(runs));
+    publisher.queue(use('d4'));
+
+    expect(publisher.currentTurn()).toBe(2);
+    expect(await drainThroughPublisher(publisher)).toHaveLength(1);
+    expect(runs.count).toBe(2);
+  });
+
+  it('REFUSES to drain a discarded turn, rather than yielding nothing', async () => {
+    // The silent shape. A discarded pipeline accepts `queue` and drains NOTHING,
+    // with no error anywhere -- a turn that silently loses every tool result.
+    // `drain` must therefore refuse, exactly as `queue` does.
+    const runs = { count: 0 };
+    const publisher = new TurnPipelinePublisher();
+    const pipeline = pipelineFor(runs);
+    publisher.publish(3, pipeline);
+
+    publisher.discard();
+
+    expect(pipeline.isUsable()).toBe(false);
+    await expect(drainThroughPublisher(publisher)).rejects.toThrow(
+      /pipeline has been discarded, so the drain would yield nothing/,
+    );
+  });
+
+  it('REFUSES before any turn has published, and after the run is closed', async () => {
+    const publisher = new TurnPipelinePublisher();
+    await expect(drainThroughPublisher(publisher)).rejects.toThrow(
+      /no turn has published a pipeline yet/,
+    );
+
+    publisher.publish(1, pipelineFor({ count: 0 }));
+    publisher.close();
+    await expect(drainThroughPublisher(publisher)).rejects.toThrow(/this run has ended/);
+  });
+
+  it('discard() drops the live turn queued calls, and refuses the same three states', async () => {
+    const runs = { count: 0 };
+    const publisher = new TurnPipelinePublisher();
+    publisher.publish(1, pipelineFor(runs));
+    publisher.queue(use('d5'));
+
+    publisher.discard();
+
+    // Nothing ran -- the max_tokens fail-fast shape the agent calls this for.
+    // Read through the PUBLISHER rather than off a handle on the pipeline,
+    // because the whole point of the drain route is that no such handle exists:
+    // a `drain()` that exposed the executor would let one be kept across turns,
+    // which is the hazard the one-shot refusal above is there to stop.
+    await expect(drainThroughPublisher(publisher)).rejects.toThrow(/has been discarded/);
+    expect(runs.count).toBe(0);
+
+    const empty = new TurnPipelinePublisher();
+    expect(() => empty.discard()).toThrow(/no turn has published a pipeline yet/);
+    publisher.close();
+    expect(() => publisher.discard()).toThrow(/this run has ended/);
+  });
+});

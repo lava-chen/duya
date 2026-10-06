@@ -65,6 +65,7 @@ import { classifyContextLengthError } from '../compact/compactErrors.js';
 import { createAIClient, createAIClientWithRetry, inferProvider, findModelCompat, estimateContextTextTokens } from '@duya/ai';
 import type { AIClient, AIClientOptions, RetryConfig, ApiFormat } from '@duya/ai';
 import { resolveDefaultBaseURL, resolveLlmClientDiscriminator } from '@duya/ai';
+import type { TurnOutputSummary } from '@duya/agent-runtime';
 import { sleep, createRetryEvent, createLLMAPIError, extractProviderErrorMessage, APIErrorType } from '@duya/ai';
 import {
   shouldReplayStreamAfterError,
@@ -118,6 +119,11 @@ import {
 import { createBuiltinLoopHooks } from '../hooks/builtin.js';
 import { createConfiguredLoopHooks } from '../hooks/config-loop.js';
 import { ConfigHooksRunner } from '../hooks/events.js';
+import type {
+  EventHookInput,
+  EventHookMatcherTargets,
+  EventHookRunResult,
+} from '../hooks/events.js';
 import { readHooksConfig } from '../hooks/config.js';
 import type { BaseHookInput } from '../hooks/types.js';
 import path from 'node:path';
@@ -211,6 +217,53 @@ import {
 import { VisualAnalysisService } from './visual-analysis.js';
 
 /**
+ * One drained tool result, read into the three values both frame builders need.
+ *
+ * Deliberately a VALUE rather than the message: `isError` is derived from the
+ * content in one shape (`'<tool_error>'` inside the text) and read as a flag in
+ * the other, and a caller that re-derived it would be free to get it wrong.
+ */
+interface ToolResultOutcome {
+  /** The `tool_use` id this answers. `''` when the row carried none. */
+  readonly id: string;
+  /** The result body, stringified exactly as the legacy stringified it. */
+  readonly content: string;
+  readonly isError: boolean;
+}
+
+/**
+ * Where a run receives the frames the legacy `streamChat` generator yields.
+ *
+ * ## Why this is a sink rather than a callback on each record
+ *
+ * The frames are `yield`s of the generator, and a caller outside `streamChat`
+ * cannot consume a `yield`. Rather than change what the generator yields -- the
+ * legacy's own consumer (`agent-process-entry.ts`) must keep seeing exactly the
+ * frames it sees today -- the run binds a receiver and the generator's
+ * counterparts publish to it through shared builders.
+ *
+ * ## The binding is exclusive with the legacy, and that is enforced
+ *
+ * `streamChat` clears the binding on entry (`duyaAgent.ts`, the `currentTurnId`
+ * reset). Whoever starts the legacy generator OWNS the frames for that run, so a
+ * bound sink and a legacy-driven run are mutually exclusive by construction
+ * rather than by convention. See the seam block inside the class.
+ */
+export interface TurnOutputSink {
+  /**
+   * One frame the legacy would have yielded.
+   *
+   * `SSEEvent`, deliberately and not a narrowed union: the legacy yields the
+   * whole event vocabulary (`agent_progress`, `tool_group_progress`, `turn_start`,
+   * …) and a sink that only accepted two of them would be a second, partial
+   * rendering of a stream the renderer already knows how to read.
+   */
+  readonly publish: (event: SSEEvent) => void;
+  /** The drain ended; carries the counts the legacy's gates read. */
+  readonly finishTurn: (summary: TurnOutputSummary) => void;
+}
+
+/**
  * duyaAgent 绫? */
 export class duyaAgent implements AgentRuntime {
   // Plan 550 step 2a-3: implements the structural read-only interface the
@@ -294,6 +347,208 @@ export class duyaAgent implements AgentRuntime {
    */
   readModelClient(): AIClient {
     return this.llmClient;
+  }
+
+  // ==========================================================================
+  // Plan 610 A3-2b2: the turn-output seam.
+  //
+  // `ports.ts:1019-1029` makes `RunEnginePorts.turnOutput` optional and names
+  // the live worker's state as the reason, and two of the effects it names had
+  // NO reachable seam at all: `PostToolUseFailure` was dispatched through
+  // `dispatchHooks`, a closure local of the `streamChat` generator, and the
+  // `tool_result` / `mode_changed` frames are `yield`s of that same generator.
+  // A composition cannot consume a `yield`.
+  //
+  // So this is the third instance of the same shape as `claimInterTurn` (`:3689`)
+  // and `readModelClient` (`:295`): lift what the composition needs out of the
+  // generator's closure onto a method it can call. The difference here is that
+  // the lifted effect has TWO halves -- a durable write the host owns and a frame
+  // the renderer sees -- and only one of them is a method call.
+  //
+  // ## The sink exists because the frame half cannot be a return value
+  //
+  // `_pushDurable` and `modelAttribution` are private, and the engine's
+  // `AssistantMessageRecord` doc says so in the host's voice: "modelAttribution
+  // -- the HOST's ... the engine has no session and must not invent one"
+  // (`agent-runtime/src/engine/ports.ts:816-821`). So the durable half becomes
+  // methods (`recordTurnAssistantMessage`, `recordTurnToolResult`) and the FRAME
+  // half becomes a sink the run binds, because the renderer consumes those frames
+  // today as generator yields and a caller outside the generator has no other way
+  // to receive one.
+  //
+  // ## Why the legacy cannot duplicate a frame, and why the unbind is still there
+  //
+  // Two separate facts, because only one of them is a guard and conflating them
+  // would make a dead line look load-bearing.
+  //
+  //  - NO DUPLICATION is structural: nothing inside `streamChat` publishes to the
+  //    sink. The legacy's frames are `yield`s of the generator and its consumer
+  //    is unchanged, so there is exactly one writer per frame whatever the sink
+  //    is bound to. `turn-output-seam.test.ts` asserts the observable half.
+  //  - LIFETIME is the unbind: the agent is long-lived and a sink is a per-run
+  //    object, so a binding left behind by an engine-driven run would make a
+  //    LATER legacy run address a finished run's receiver. Removing the unbind
+  //    turns that file red, so it is a real guard rather than a precaution.
+  // ==========================================================================
+
+  /**
+   * Bind (or unbind, with `null`) this run's receiver for the frames the legacy
+   * generator yields.
+   *
+   * PUBLIC, for the reason the header gives. Deliberately a BIND rather than a
+   * subscription a caller can observe without asking: a run either owns the
+   * frames or it does not, and two observers of one run's frames is the
+   * double-render this seam would otherwise permit.
+   */
+  bindTurnOutputSink(sink: TurnOutputSink | null): void {
+    this.turnOutputSink = sink;
+  }
+
+  /** The bound sink, or `null`. Diagnostics and assertions. */
+  readTurnOutputSink(): TurnOutputSink | null {
+    return this.turnOutputSink;
+  }
+
+  /**
+   * One landed tool result: the durable write, the `tool_result` frame, the
+   * `mode_changed` frame, and `PostToolUseFailure` when it failed.
+   *
+   * The four effects in the order the legacy performs them
+   * (`:2824-2926`), each routed through the SAME private helper the legacy's
+   * own `yield` uses. That is the property worth having: the frame the engine's
+   * port publishes and the frame the legacy publishes are built by one function,
+   * so a second copy of this logic cannot drift away from the product's.
+   *
+   * ## What it deliberately does NOT do
+   *
+   * `recordToolCatalogSchemaRead` (`:2831`) is skipped. It needs `catalogView`,
+   * which is a per-turn local built inside `_resolveTools` (`:4014`) and rebound
+   * every turn; there is no field holding it and hoisting one is the driver
+   * flip's decision, not a seam's. Stated here rather than left to be
+   * discovered, because a schema-read ledger that silently stops recording is
+   * exactly the class of defect this method's other doc comments keep refusing.
+   *
+   * Nor does it push into the legacy's `messages` array. That array is the
+   * generator's working context and the engine seeds its own next request from
+   * `assembled.messages` (`run-engine.ts:900`), so there is nothing for this to
+   * push into -- and the durable half, `_commitDurable`, is the part that is
+   * real.
+   */
+  async recordTurnToolResult(input: {
+    readonly message: Message;
+    /** `ToolResultRecord.toolName`; `''` when the engine did not dispatch it. */
+    readonly toolName: string;
+    readonly seqIndex: number;
+  }): Promise<void> {
+    const { message } = input;
+    message.seq_index = input.seqIndex;
+    if (!message.id) message.id = crypto.randomUUID();
+    this._commitDurable(message);
+
+    const outcome = this._readToolResultOutcome(message);
+    this._publishTurnFrame(this._buildToolResultFrame(message, outcome));
+
+    // Plan 426 follow-up. The legacy reads the failed tool's name off its own
+    // per-turn map (`turnToolCallIds`, `:2874`); the engine carries it on the
+    // record instead, which `ToolResultRecord.toolName` documents as the same
+    // value including the `''` fallback.
+    if (outcome.isError) {
+      await this.dispatchPostToolUseFailure({
+        session_id: this.sessionId ?? '',
+        cwd: this.workingDirectory ?? '',
+        hook_event_name: 'PostToolUseFailure',
+        tool_name: input.toolName,
+        tool_input: {},
+        tool_use_id: outcome.id,
+        error: outcome.content.slice(0, 2048),
+      }, { toolName: input.toolName || undefined });
+    }
+
+    const modeChanged = this._buildModeChangedFrame(input.toolName, outcome);
+    if (modeChanged !== null) this._publishTurnFrame(modeChanged);
+  }
+
+  /**
+   * One turn's assistant message, in the transcript's own vocabulary.
+   *
+   * PUBLIC, and the reason is the one `AssistantMessageRecord` gives: `id`,
+   * `timestamp` and `seq_index` are "the writer's" and `modelAttribution` is
+   * "the HOST's" (`agent-runtime/src/engine/ports.ts:810-826`). The engine
+   * carries content and usage; the row's identity and its model attribution come
+   * from here, so this is the only place that can assemble a row the next
+   * request's `transformMessages.isSameModel` will recognise.
+   */
+  recordTurnAssistantMessage(input: {
+    readonly content: MessageContent[];
+    readonly usage?: AssistantMessage['usage'];
+    readonly seqIndex: number;
+    readonly durationMs?: number;
+  }): void {
+    const row: Message = {
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: input.content,
+      timestamp: Date.now(),
+      duration_ms: input.durationMs ?? 0,
+      seq_index: input.seqIndex,
+      ...this.modelAttribution,
+    };
+    if (input.usage !== undefined) (row as AssistantMessage).usage = input.usage;
+    this._commitDurable(row);
+  }
+
+  /**
+   * The drain ended. Forwards `TurnOutputSummary` to the bound sink.
+   *
+   * PUBLIC because `TurnOutputPort.finishTurn` is a port method, and it is a
+   * forwarding seam rather than a decision: the legacy's `toolResultMessageCount`
+   * gate reads the count the SINK reported, and there is no count to compute here.
+   * A sink-less call is a no-op, which is the state of every run today.
+   */
+  finishTurnOutput(summary: TurnOutputSummary): void {
+    this.turnOutputSink?.finishTurn(summary);
+  }
+
+  /**
+   * Dispatch `PostToolUseFailure` for a caller that is not the generator.
+   *
+   * PUBLIC, and the same lift as the three above: the legacy dispatches through
+   * `dispatchHooks` (`:1134`), a closure local holding a `ConfigHooksRunner` built
+   * per `streamChat`. Without this the failure hook is unreachable outside the
+   * generator, and a tool that fails under the engine would run no hook at all --
+   * a silent behavioural difference from the legacy, and the kind nobody notices
+   * until a hook's whole job was gating something.
+   *
+   * Fail-open and one-way, matching `dispatchHooks`: a hook that throws logs WARN
+   * and yields `null` rather than failing the turn. The `prompt` var the legacy
+   * passes is NOT reproduced -- an outside caller has no prompt -- and it is named
+   * rather than defaulted to a value that would let a matcher read an empty
+   * string as if it were the user's words.
+   */
+  async dispatchPostToolUseFailure(
+    input: EventHookInput,
+    targets?: EventHookMatcherTargets,
+  ): Promise<EventHookRunResult | null> {
+    const runner = new ConfigHooksRunner({
+      cwd: this.workingDirectory ?? process.cwd(),
+      vars: { sessionId: this.sessionId ?? '', cwd: this.workingDirectory ?? '' },
+    });
+    try {
+      return await runner.run('PostToolUseFailure', input, targets);
+    } catch (err) {
+      logger.warn(
+        `[Hooks] PostToolUseFailure dispatch failed (skipped): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /** The frames this run's sink receives. Bound per run; see the header. */
+  private turnOutputSink: TurnOutputSink | null = null;
+
+  /** Hand one frame to the bound sink. A no-op while the legacy drives. */
+  private _publishTurnFrame(event: SSEEvent): void {
+    this.turnOutputSink?.publish(event);
   }
 
   private llmClient: AIClient;
@@ -1030,6 +1285,18 @@ export class duyaAgent implements AgentRuntime {
     // Plan 486: reset the fork-turn marker every streamChat call (see the
     // field doc for semantics).
     this.forkTurn = null;
+    // Plan 610 A3-2b2: the legacy OWNS this run's frames, so any turn-output
+    // sink a caller bound beforehand is taken away here.
+    //
+    // Not about duplication -- nothing in this generator publishes to the sink,
+    // so a frame has one writer either way (see the seam block's header). This
+    // is the LIFETIME half: the agent outlives the run, and a sink is a per-run
+    // object, so a binding that survived here would leave a later legacy turn
+    // addressing a finished run's receiver.
+    //
+    // Same placement and same reason as the two resets above: whoever starts the
+    // generator owns the turn.
+    this.turnOutputSink = null;
     // Plan 498: per-turn approval-ledger consume + always-allow grants.
     this._consumeApprovedEffect = options?.consumeApprovedEffect;
     this._turnAlwaysAllowTools = new Set(options?.approvedAlwaysAllowTools ?? []);
@@ -2832,40 +3099,16 @@ export class duyaAgent implements AgentRuntime {
                   }
                   this._pushDurable(messages, result.message);
 
-                  // Yield tool result event
-                  let toolResultId = '';
-                  let toolResultContent = '';
-                  let toolResultError = false;
+                  // Yield tool result event. The frame is built by the SAME
+                  // helper `recordTurnToolResult` publishes through, so the
+                  // engine's port and this yield cannot drift into two
+                  // renderings of one event (plan 610 A3-2b2).
+                  const toolResultOutcome = this._readToolResultOutcome(result.message);
+                  const toolResultId = toolResultOutcome.id;
+                  const toolResultContent = toolResultOutcome.content;
+                  const toolResultError = toolResultOutcome.isError;
 
-                  if (result.message.role === 'tool') {
-                    // New format: role: 'tool' with string content
-                    toolResultId = result.message.tool_call_id || '';
-                    toolResultContent = typeof messageContent === 'string' ? messageContent : JSON.stringify(messageContent);
-                    // Check if content indicates an error
-                    toolResultError = toolResultContent.includes('<tool_error>');
-                  } else {
-                    // Old format: content array with tool_result block
-                    const contentBlock = (messageContent as MessageContent[])[0] as ToolResultContent;
-                    toolResultId = contentBlock.tool_use_id;
-                    toolResultContent = typeof contentBlock.content === 'string'
-                      ? contentBlock.content
-                      : JSON.stringify(contentBlock.content);
-                    toolResultError = contentBlock.is_error ?? false;
-                  }
-
-                  yield {
-                    type: 'tool_result',
-                    data: {
-                      id: toolResultId,
-                      name: '',
-                      result: toolResultContent,
-                      error: toolResultError,
-                      duration_ms: result.message.duration_ms,
-                      // Forward tool-result metadata so renderer ToolResultInfo
-                      // can surface previews (browser screenshot / vision_analyze).
-                      metadata: result.message.metadata,
-                    },
-                  };
+                  yield this._buildToolResultFrame(result.message, toolResultOutcome);
 
                   // Plan 426 follow-up: PostToolUseFailure 鈥?fired when a
                   // tool result is an error (fail-open; matchers filter on
@@ -2893,35 +3136,19 @@ export class duyaAgent implements AgentRuntime {
                   // JSON result and emit a `mode_changed` SSE event so
                   // the renderer can sync the input-box chip + glow.
                   // Skip on error 鈥?failed switches leave the mode unchanged.
+                  //
+                  // The map holds the tool NAME, which is the whole of what the
+                  // mode switch is derived from (`modeSwitchToolIds` is filtered
+                  // on the three mode tools at `:2620-2626`), so
+                  // `_buildModeChangedFrame` takes the name and is callable from
+                  // outside the generator as well.
                   const modeSwitchToolName = modeSwitchToolIds.get(toolResultId);
                   if (modeSwitchToolName && !toolResultError) {
-                    let nextMode: AgentRuntimeMode | undefined;
-                    let reason: string | undefined;
-                    try {
-                      const parsed = JSON.parse(toolResultContent) as Record<string, unknown>;
-                      if (modeSwitchToolName === 'SwitchMode') {
-                        nextMode = parsed.currentMode as AgentRuntimeMode | undefined;
-                        reason = parsed.reason as string | undefined;
-                      } else if (modeSwitchToolName === 'EnterPlanMode') {
-                        const planMode = parsed.planMode;
-                        nextMode = planMode ? 'plan' : 'general';
-                      } else if (modeSwitchToolName === 'ExitPlanMode') {
-                        const planMode = parsed.planMode;
-                        nextMode = planMode ? 'plan' : 'general';
-                      }
-                    } catch {
-                      // Malformed JSON result 鈥?leave nextMode undefined.
-                    }
-                    if (nextMode) {
-                      yield {
-                        type: 'mode_changed',
-                        data: {
-                          mode: nextMode,
-                          source: 'agent',
-                          reason,
-                        },
-                      };
-                    }
+                    const modeChanged = this._buildModeChangedFrame(
+                      modeSwitchToolName,
+                      toolResultOutcome,
+                    );
+                    if (modeChanged !== null) yield modeChanged;
                     modeSwitchToolIds.delete(toolResultId);
                   }
                 }
@@ -3614,6 +3841,145 @@ export class duyaAgent implements AgentRuntime {
    * results each get their own deterministic id via `Journal`.
    */
   private _pushDurable(messages: Message[], message: Message): void {
+    messages.push(message);
+    this._commitDurable(message);
+  }
+
+  /**
+   * Read one drained tool result's id / content / error-ness.
+   *
+   * ## Why this is a method and not inline code at the two call sites
+   *
+   * Plan 610 A3-2b2. Both the legacy's `yield` and `recordTurnToolResult` need
+   * this reading, and the two message shapes it bridges (the `role: 'tool'` row
+   * and the older `tool_result` content block) are exactly the kind of
+   * "both sides are `Record<string, unknown>`" mismatch that typechecks either
+   * way. One reader, two callers, is the only way the two can be guaranteed to
+   * agree -- and an error-ness read that disagreed would show the renderer a
+   * success frame for a failed tool.
+   */
+  private _readToolResultOutcome(message: Message): ToolResultOutcome {
+    const content = message.content;
+    if (message.role === 'tool') {
+      // New format: role: 'tool' with string content
+      const text = typeof content === 'string' ? content : JSON.stringify(content);
+      return {
+        id: message.tool_call_id || '',
+        content: text,
+        // Check if content indicates an error
+        isError: text.includes('<tool_error>'),
+      };
+    }
+    // Old format: content array with tool_result block
+    const contentBlock = (content as MessageContent[])[0] as ToolResultContent;
+    return {
+      id: contentBlock.tool_use_id,
+      content: typeof contentBlock.content === 'string'
+        ? contentBlock.content
+        : JSON.stringify(contentBlock.content),
+      isError: contentBlock.is_error ?? false,
+    };
+  }
+
+  /**
+   * The `tool_result` SSE frame for one drained result.
+   *
+   * Built here rather than at either call site so the legacy's `yield` and the
+   * turn-output sink publish the SAME object shape. `name: ''` is the legacy's
+   * own value, kept: the renderer's `ToolResultInfo` resolves the name from the
+   * preceding `tool_use`, and filling it from the record would be a second
+   * answer to a question the stream already answered.
+   */
+  private _buildToolResultFrame(message: Message, outcome: ToolResultOutcome): SSEEvent {
+    return {
+      type: 'tool_result',
+      data: {
+        id: outcome.id,
+        name: '',
+        result: outcome.content,
+        error: outcome.isError,
+        duration_ms: message.duration_ms,
+        // Forward tool-result metadata so renderer ToolResultInfo
+        // can surface previews (browser screenshot / vision_analyze).
+        metadata: message.metadata,
+      },
+    } as SSEEvent;
+  }
+
+  /**
+   * The `mode_changed` frame for a mode-switch tool's result, or `null`.
+   *
+   * ## Why the tool NAME is enough
+   *
+   * Because `modeSwitchToolIds` carries nothing else: the legacy fills it only
+   * for `EnterPlanMode` / `ExitPlanMode` / `SwitchMode` and stores the name
+   * (`:2620-2626`). So the switch is a pure function of (name, result JSON), and
+   * a caller outside the generator can compute the same frame rather than
+   * re-deriving the rule.
+   *
+   * `null` covers all three ways there is nothing to say: not a mode-switch
+   * tool, malformed JSON (fail-open, exactly as the legacy's `catch`), and a
+   * result that names no mode.
+   */
+  private _buildModeChangedFrame(toolName: string, outcome: ToolResultOutcome): SSEEvent | null {
+    // Skip on error 鈥?failed switches leave the mode unchanged.
+    if (outcome.isError) return null;
+    if (
+      toolName !== 'SwitchMode' &&
+      toolName !== 'EnterPlanMode' &&
+      toolName !== 'ExitPlanMode'
+    ) {
+      return null;
+    }
+    let nextMode: AgentRuntimeMode | undefined;
+    let reason: string | undefined;
+    try {
+      const parsed = JSON.parse(outcome.content) as Record<string, unknown>;
+      if (toolName === 'SwitchMode') {
+        nextMode = parsed.currentMode as AgentRuntimeMode | undefined;
+        reason = parsed.reason as string | undefined;
+      } else {
+        const planMode = parsed.planMode;
+        nextMode = planMode ? 'plan' : 'general';
+      }
+    } catch {
+      // Malformed JSON result 鈥?leave nextMode undefined.
+      return null;
+    }
+    if (!nextMode) return null;
+    return {
+      type: 'mode_changed',
+      data: { mode: nextMode, source: 'agent', reason },
+    } as SSEEvent;
+  }
+
+  /**
+   * The DURABLE half of `_pushDurable`: fork tagging, timeline, journal.
+   *
+   * ## Why this is a separate method rather than inlined above
+   *
+   * Plan 610 A3-2b2. `_pushDurable` does two things that have different owners:
+   * it pushes into the LEGACY's working `messages` array (the generator builds
+   * the next request from that array, and it is the generator's alone), and it
+   * makes the row durable. Only the second half is something a host binding
+   * `RunEnginePorts.turnOutput` needs, because the engine seeds its own next
+   * request from `assembled.messages` (`run-engine.ts:900`) and does not read
+   * the legacy's.
+   *
+   * Splitting it means the legacy's array push and the durable write are ONE
+   * implementation with two callers -- the `claimInterTurn` / `_sweepInterTurn`
+   * shape -- instead of a seam that re-implements the journal emits and can drift
+   * from them.
+   *
+   * ## Why the fork tag moved below the array push
+   *
+   * Because the array holds the SAME object, and nothing reads `messages` between
+   * the push and the tag: the tag is applied in place and is visible to every
+   * reader of the array afterwards, exactly as it was when the tag ran first.
+   * Keeping the tagging in both places would have been the alternative, and a
+   * guard-guarded second copy of a merge is a second copy that can drift.
+   */
+  private _commitDurable(message: Message): void {
     // Plan 486: during an active fork turn every assistant/tool message that
     // closes a boundary is tagged branched against the fork's user message, so
     // the whole exchange stays on the thread layer (never in the main
@@ -3625,7 +3991,6 @@ export class duyaAgent implements AgentRuntime {
         branched: true,
       });
     }
-    messages.push(message);
     this._appendMessageToTimeline(message);
     if (this.journal && message.id) {
       switch (message.role) {

@@ -34,28 +34,27 @@
  * | `openModelStream` | DERIVED, `agent.readModelClient()` | the provider client is the agent's (`DuyaAgent.ts:269`, private) and the port that consumes it already exists (`createClientModelPort`) |
  * | `lookup` | DERIVED, `agent.activeMCPRegistry` | already public (`DuyaAgent.ts:553`) |
  * | `interTurn` | DERIVED, `agent.claimInterTurn` | the public seam PR #236 added for exactly this (`DuyaAgent.ts:3689`) |
- * | `queueTool` / `drainTools` / `discardTools` | HOST | the per-turn pipeline is a `streamChat` local; see "the tool leg" below |
+ * | `queueTool` / `drainTools` / `discardTools` | DERIVED, `host.turnPipelines` | one publisher is the authority for "which turn owns this pipeline" |
  * | `assembleTurn` | HOST | the visible catalog is the FILTERED one; see "context assembly" below |
  * | `askApproval` | HOST | `ChatOptions.requestPermission`, a caller-supplied callback |
  * | `emitter` / `proposeTerminal` | HOST | the run's own `RunSession` / `RunController` |
  * | `compaction` | HOST | the gates are three decisions inside the loop; see "compaction" below |
- * | `turnOutput` | absent, by contract | `ports.ts:1019-1029` makes the port OPTIONAL and names the absence as the live worker's state today |
+ * | `turnOutput` | DERIVED, the agent's turn-output seams | `ports.ts:1019-1029` made the port optional only because these had no route; see "turnOutput" below |
  *
- * ## The tool leg: `TurnPipelinePublisher` can queue but cannot drain
+ * ## The tool leg: one publisher, three methods
  *
- * The publisher is the seam the tool leg was meant to bind, and it is real
- * (`turn-pipeline-publisher.ts`). It exposes `publish`, `close`, `currentTurn` and
- * `queue` -- and nothing else. `ToolPort.drain` needs
+ * `TurnPipelinePublisher` (`tool/turn-pipeline-publisher.ts`) is the seam the
+ * tool leg binds, and before plan 610 A3-2b2 it exposed `publish`, `close`,
+ * `currentTurn` and `queue` -- and nothing else. `ToolPort.drain` needs
  * `ToolExecutionPipeline.getRemainingResults` and `ToolPort.discard` needs
- * `discard()`, and NEITHER is reachable through the publisher: its `#current`
- * record is module-private and there is no accessor. A composition that reached
- * past the publisher would be a second authority for "which turn owns this
- * pipeline", which is the exact hazard `TurnPipelinePublisher`'s own header names
- * ("a hoisted pipeline is wrong, and silently so").
+ * `discard()`, and NEITHER was reachable: the `#current` record is module-private
+ * with no accessor.
  *
- * So all three tool-leg members are host-supplied together, as one obligation. A
- * host that cannot drain has no run, and saying so at composition time is the
- * property this file preserves.
+ * So `drain` and `discard` were added to the publisher rather than worked around
+ * here. The alternative -- each host obligation capturing the live executor at
+ * its own moment -- is three answers to "which pipeline is this turn's", and two
+ * of them can be wrong while every test still passes. One publisher, three
+ * methods that all read the same `#current`, cannot disagree.
  *
  * ## Context assembly: the FILTERED catalog is not the registry
  *
@@ -87,22 +86,38 @@
  * `LegacyEngineSources.compaction` exists to prevent. It is host-supplied, and
  * required, exactly as `ports.ts` requires it.
  *
- * ## Why `turnOutput` is absent and not merely empty
+ * ## `turnOutput` is DERIVED now, and what it is derived FROM
  *
- * `LegacyEngineSources.turnOutput` is OPTIONAL, and `ports.ts:1019-1029` states
- * the absence is the live worker's state "rather than an oversight", with the
- * reason: every effect the port names is still performed by the legacy drain loop
- * inside `DuyaAgent.streamChat`, so binding it as well would perform each of them
- * twice. Two of those effects have no seam at all today --
- * `PostToolUseFailure` is dispatched through `dispatchHooks`, a closure local of
- * the generator (`DuyaAgent.ts:1104`), and the `tool_result` / `mode_changed`
- * frames are `yield`s of that same generator. Lifting them is the driver flip's
- * work, and this file does not pretend to have done it.
+ * `LegacyEngineSources.turnOutput` is OPTIONAL, and `ports.ts:1019-1029` made it
+ * optional because every effect the port names was still performed by the legacy
+ * drain loop inside `DuyaAgent.streamChat` -- so binding it as well would perform
+ * each of them twice. The load-bearing half of that sentence was "two of those
+ * effects have no seam at all": `PostToolUseFailure` went through
+ * `dispatchHooks`, a closure local of the generator, and the `tool_result` /
+ * `mode_changed` frames were `yield`s of that same generator.
  *
- * Supplying a partial `turnOutput` is the one thing this file will not do: the
- * port binds all-or-nothing (`run-engine-ports.ts:702-713`), and a half-bound
- * seam is a seam whose missing half is indistinguishable from one that was never
- * asked.
+ * Plan 610 A3-2b2 gave both a route, in the shape PR #236 used for
+ * `claimInterTurn`: the effect is lifted out of the closure onto a public method,
+ * and the legacy's own call site is routed through the SAME implementation so
+ * there is one of each rather than two. The port is therefore bound unconditionally
+ * here, and the legacy still performs every effect exactly once -- because
+ * nothing in `streamChat` publishes to the bound sink at all, so a frame has one
+ * writer whichever path produced it. `streamChat` does unbind the sink on entry,
+ * which is the LIFETIME half (an agent outlives a run, a sink does not).
+ *
+ * ### What the binding does and does not reproduce
+ *
+ * Reproduced, through the agent's own code and not a second rendering of it: the
+ * durable row (fork tag, timeline, journal), the `tool_result` and `mode_changed`
+ * frames, and `PostToolUseFailure`. The legacy's own `yield` builds those frames
+ * with the same two private helpers this path uses.
+ *
+ * NOT reproduced, and named rather than left to be discovered:
+ * `recordToolCatalogSchemaRead` (needs `catalogView`, a per-turn local of
+ * `_resolveTools` with no field holding it) and the legacy's working `messages`
+ * push (the engine seeds its own next request from `assembled.messages`). Both
+ * belong to the driver flip, and both are stated on
+ * `duyaAgent.recordTurnToolResult` itself.
  */
 
 import type { AIClient } from '@duya/ai';
@@ -118,19 +133,79 @@ import type {
   TerminalCandidate,
   ToolCallRequest,
   ToolDescriptor,
-  ToolDiscardReason,
   ToolDrainItem,
   ToolDispatchTicket,
   ToolOutcome,
   TransientContextFragment,
   TurnAssemblyInput,
 } from '@duya/agent-runtime';
-import type { RunId, RunManifest } from '@duya/agent-protocol';
+import type { RunId, RunManifest, TokenUsage } from '@duya/agent-protocol';
+// Types come from the agent's OWN types module, which re-exports them, rather
+// than from `@duya/ai`: the import audit counts every import statement --
+// type-only included -- as a cross-boundary edge, so sourcing them from inside
+// `pkg:agent` is what keeps this file from moving the
+// `module-dependency-permitted` count. Same reason
+// `turn-loop-product-behavior.test.ts:87-92` gives.
+import type { AssistantMessage, Message, MessageContent } from '../types.js';
 import type { Tool } from '../types.js';
-import type { duyaAgent } from '../agent/DuyaAgent.js';
+import type { TurnOutputSink, duyaAgent } from '../agent/DuyaAgent.js';
+import type { TurnPipelinePublisher } from '../tool/turn-pipeline-publisher.js';
 import { createClientModelPort } from './run-engine-model.js';
-import { buildEnginePorts } from './run-engine-ports.js';
-import type { CompactionSources, LegacyEngineSources, TurnOutputSources } from './run-engine-ports.js';
+import { buildEnginePorts, toDrainItem } from './run-engine-ports.js';
+import type { CompactionSources, LegacyEngineSources } from './run-engine-ports.js';
+
+// ============================================================================
+// The two host-owned projections the `turnOutput` binding needs
+// ============================================================================
+
+/**
+ * `ToolOutcome` -> the `role: 'tool'` row the legacy already stores.
+ *
+ * ## Why the host builds this and not the agent
+ *
+ * Because `ToolOutcome` is the engine's vocabulary and a `Message` is the
+ * transcript's, and `ports.ts` is explicit that a projection between them is the
+ * host's: `ToolResultRecord.outcome` is the drained `ToolOutcome` "BY IDENTITY"
+ * so that "the host saw exactly what the model will see" stays checkable
+ * (`agent-runtime/src/engine/ports.ts:880-884`). Building the row here keeps that
+ * identity intact up to the row and makes the mapping one readable place.
+ *
+ * `id`, `timestamp` and `seq_index` are left for the agent's seam, which is what
+ * `ToolResultRecord` says they are ("the writer's",
+ * `agent-runtime/src/engine/ports.ts:810-815`).
+ */
+function toToolResultMessage(outcome: ToolOutcome): Message {
+  const row: Message = {
+    role: 'tool',
+    tool_call_id: outcome.callId,
+    content: outcome.content,
+    timestamp: Date.now(),
+    duration_ms: outcome.durationMs,
+    ...(outcome.metadata === undefined ? {} : { metadata: outcome.metadata }),
+  };
+  return row;
+}
+
+/**
+ * `TokenUsage` -> the usage block an assistant row stores.
+ *
+ * The engine's numbers are camelCase (`ports.ts`'s `ModelFrame.usage`) and the
+ * stored row's are snake_case (`transcript/content.ts`), and
+ * `AssistantMessageRecord` says so and leaves the mapping here rather than
+ * prescribing a storage shape this layer cannot see (`:822-826`).
+ *
+ * Only the two fields the legacy's own block carries. The cache counters are
+ * dropped rather than defaulted to `0`: a zero is a claim that no cache read
+ * happened, which is different from not knowing, and `computeContextEstimate`
+ * reads these numbers.
+ */
+function toRowUsage(usage: TokenUsage): AssistantMessage['usage'] {
+  return {
+    input_tokens: usage.inputTokens,
+    output_tokens: usage.outputTokens,
+    ...(usage.totalTokens === undefined ? {} : { total_tokens: usage.totalTokens }),
+  } as AssistantMessage['usage'];
+}
 
 // ============================================================================
 // What the host owns for one run
@@ -147,26 +222,21 @@ import type { CompactionSources, LegacyEngineSources, TurnOutputSources } from '
  */
 export interface LegacyRunHost {
   /**
-   * Hand one tool call to this run's live pipeline.
+   * This run's per-turn pipeline publication.
    *
-   * `TurnPipelinePublisher.queue` is the production implementation, and it is
-   * the right one: it refuses a dispatch into a turn that has no pipeline, a
-   * closed run, or a discarded pipeline, and all three refusals are load-bearing
-   * (`turn-pipeline-publisher.ts:33-49`).
-   */
-  readonly queueTool: (call: ToolCallRequest) => void;
-  /**
-   * Yield this run's settled tool results, mapped by the real `toDrainItem`.
+   * REQUIRED, and the whole tool leg now hangs off it. The host builds the
+   * pipelines -- `streamChat` does, one per turn -- and publishes each one into
+   * this instance; the composition reads the current one through `queue`,
+   * `drain` and `discard`.
    *
-   * NOT reachable through `TurnPipelinePublisher` today -- see the header's "the
-   * tool leg". The host must not synthesise a stand-in: an adapter that hands
-   * the engine an empty drain passes every engine-only test and loses every tool
-   * result on the way to the model, which is the mis-implementation
-   * `engine-scenario-host-assembly.test.ts:388-391` was written to catch.
+   * One object rather than three callbacks, because three callbacks each
+   * capturing the live executor at their own moment is three answers to "which
+   * pipeline is this turn's" and only one of them can be right. `drain`'s
+   * one-shot-per-publication latch is what keeps a caller from holding one
+   * publication across two engine turns -- the re-serve that produces a double
+   * ledger row is documented on `TurnPipelinePublisher.drain`.
    */
-  readonly drainTools: (signal: AbortSignal) => AsyncIterable<ToolOutcome>;
-  /** Drop queued, unstarted calls. `ToolExecutionPipeline.discard`. */
-  readonly discardTools: (reason: ToolDiscardReason) => void;
+  readonly turnPipelines: TurnPipelinePublisher;
   /**
    * Build this turn's provider payload against the FILTERED catalog.
    *
@@ -217,16 +287,20 @@ export interface LegacyRunHost {
     readonly detail?: string;
   }) => Promise<void>;
   /**
-   * Where a landed tool result goes.
+   * Receives the frames this run's `turnOutput` port would publish.
    *
-   * OPTIONAL, and left unset by this composition. See the header's "why
-   * `turnOutput` is absent": the port is optional by contract, two of its
-   * effects have no reachable seam outside `streamChat`'s closure, and a partial
-   * binding is refused by `buildEnginePorts` anyway. This member exists so the
-   * driver-flip slice has ONE place to fill it, and so its absence is a visible
-   * hole in this interface rather than a fact discovered later.
+   * OPTIONAL, and optional for one reason: the sink is what carries a frame to a
+   * renderer, and a run with no renderer is a legitimate state (the CLI, the
+   * sub-agent tool, a test driving the engine directly). Omitting it does NOT
+   * disable the other two effects -- the durable row and `PostToolUseFailure`
+   * still run, because they are the agent's own writes and not a frame's fate.
+   *
+   * Left unset while the LEGACY drives, and that needs no discipline from a
+   * caller: nothing in `streamChat` publishes to a sink, so a frame has one
+   * writer whichever path produced it, and `streamChat` unbinds the sink on
+   * entry so a finished run's receiver is not left on a long-lived agent.
    */
-  readonly turnOutput?: TurnOutputSources;
+  readonly turnOutputSink?: TurnOutputSink;
   /** Collects a fragment the engine deferred for the next turn. */
   readonly deferFragment?: (fragment: TransientContextFragment) => void;
 }
@@ -249,16 +323,30 @@ export interface LegacyRunHost {
  * ## What "complete" means here, precisely
  *
  * Every REQUIRED member of `LegacyEngineSources` is supplied, and
- * `interTurn` and `compaction` -- the two the runtime's own `RunEnginePorts`
- * cannot do without -- are bound unconditionally. `turnOutput` is the one
- * documented absence, and `deferFragment`, `beginTicket` and `settleTicket` are
- * optional at the SOURCE by contract, so their absence is checkable rather than
- * a no-op.
+ * `interTurn`, `compaction` and `turnOutput` -- the three the runtime's own
+ * `RunEnginePorts` treats as load-bearing -- are bound unconditionally.
+ * `deferFragment`, `beginTicket` and `settleTicket` are optional at the SOURCE by
+ * contract, so their absence is checkable rather than a no-op.
+ *
+ * ## Why the tool leg is derived here and not handed over
+ *
+ * `host.turnPipelines` is the ONE thing the host owns about tools, and all three
+ * legs read it. `drain` is where the reason lives: the publisher refuses to
+ * drain the same publication twice, because a second drain of a published
+ * pipeline RE-SERVES its results and would settle the same attempt key a second
+ * time. An engine drains on every turn, so that refusal is the only thing
+ * standing between the composition and a double ledger row that no test could
+ * tell from a correct one.
  */
 export function composeLegacyRunSources(
   agent: duyaAgent,
   host: LegacyRunHost,
 ): LegacyEngineSources {
+  // Bound once, and read AT CALL TIME by every leg below. A member reached
+  // through `host` inside a deferred closure would re-read a property that a
+  // caller could have replaced mid-run; the publisher's own `#current` is what
+  // decides, and this only decides where to ask.
+  const pipelines = host.turnPipelines;
   return {
     // DERIVED. `createClientModelPort` opens exactly the request the engine
     // assembled and threads the engine's own scoped signal into the provider
@@ -266,9 +354,23 @@ export function composeLegacyRunSources(
     // turn (`run-engine-model.ts:429-441`).
     openModelStream: (request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelFrame> =>
       createClientModelPort(agent.readModelClient()).stream(request, signal),
-    queueTool: host.queueTool,
-    drainTools: host.drainTools,
-    discardTools: host.discardTools,
+    queueTool: (call: ToolCallRequest) =>
+      pipelines.queue({ id: call.callId, name: call.name, input: call.input }),
+    // The real publisher's real drain, mapped by the real `toDrainItem`. A
+    // hand-written `ToolDrainItem` would test the engine and not the adapter,
+    // and an EMPTY drain would pass every engine-only test while losing every
+    // tool result on the way to the model -- the mis-implementation
+    // `engine-scenario-host-assembly.test.ts:388-391` was written to catch.
+    //
+    // All THREE arms travel, including the deferred-context and sub-agent
+    // progress ones the engine handles separately (`run-engine.ts:1481-1513`).
+    async *drainTools(): AsyncIterable<ToolDrainItem> {
+      for await (const update of pipelines.drain()) {
+        const item = toDrainItem(update);
+        if (item !== null) yield item;
+      }
+    },
+    discardTools: () => pipelines.discard(),
 
     // DERIVED from the one public catalog the agent exposes. `describe` reads
     // the registry's own definitions, so the descriptor the engine advertises is
@@ -310,7 +412,39 @@ export function composeLegacyRunSources(
       imageInputSupported: host.imageInputSupported,
     },
     compaction: host.compaction,
-    ...(host.turnOutput === undefined ? {} : { turnOutput: host.turnOutput }),
+    // DERIVED, and the reason it can be bound unconditionally at all: every
+    // effect the port names is the agent's OWN code, and the legacy's own call
+    // site for each of them runs through the same implementation. `streamChat`
+    // unbinds the sink on entry, so while the legacy drives none of this is
+    // reachable and nothing is performed twice.
+    turnOutput: {
+      onToolResult: (record) =>
+        agent.recordTurnToolResult({
+          // The host's row shape, which is the shape the legacy already stores:
+          // a `role: 'tool'` message. `ToolOutcome` is the engine's FLAT
+          // projection of that row, so this mapping is the host's job rather than
+          // a loss of information -- every field the legacy's row carries is
+          // either copied here or carried in `metadata` verbatim.
+          message: toToolResultMessage(record.outcome),
+          toolName: record.toolName,
+          seqIndex: host.seqIndex,
+        }),
+      // Provided rather than omitted: `AssistantMessageRecord` names
+      // `modelAttribution` as the HOST's field and says the engine "must not
+      // invent one" (`agent-runtime/src/engine/ports.ts:816-821`), and this is
+      // the only place that can supply it. The usage block is mapped from the
+      // engine's camelCase into the ROW's snake_case here, which is the mapping
+      // `AssistantMessageRecord` explicitly leaves to the host (`:822-826`).
+      onAssistantMessage: (record) =>
+        agent.recordTurnAssistantMessage({
+          content: record.content as unknown as MessageContent[],
+          seqIndex: host.seqIndex,
+          ...(record.usage === undefined ? {} : { usage: toRowUsage(record.usage) }),
+        }),
+      onTurnResults: (summary) => {
+        agent.finishTurnOutput(summary);
+      },
+    },
     ...(host.deferFragment === undefined ? {} : { deferFragment: host.deferFragment }),
     ...(host.beginTicket === undefined || host.settleTicket === undefined
       ? {}
@@ -324,8 +458,21 @@ export function composeLegacyRunSources(
  * A named step rather than a call to `buildEnginePorts` at the driver-flip site,
  * so that "the ports were composed from a real agent" is one grep away and the
  * driver flip has exactly one thing to wire.
+ *
+ * ## Why the sink is bound HERE and not inside `composeLegacyRunSources`
+ *
+ * Because the two functions answer different questions. `composeLegacyRunSources`
+ * answers "what would this run's sources be", and binding a receiver is a
+ * mutation of the agent rather than a description of it -- a caller that wanted
+ * to inspect the composition without starting anything could not. This function
+ * answers "start this run", and starting a run is exactly when the run's frames
+ * need somewhere to go.
+ *
+ * It is still a small, deliberate side effect on a shared object, and it is
+ * undone the moment anything drives the legacy: `streamChat` unbinds on entry.
  */
 export function composeLegacyRunPorts(agent: duyaAgent, host: LegacyRunHost): RunEnginePorts {
+  agent.bindTurnOutputSink(host.turnOutputSink ?? null);
   return buildEnginePorts(composeLegacyRunSources(agent, host));
 }
 
