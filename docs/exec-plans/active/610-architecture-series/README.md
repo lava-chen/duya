@@ -208,6 +208,27 @@ docs/exec-plans/active/610-architecture-series/
    **写门禁测试时,断言判据(每条 finding 都有文件与来源、有界深度必须找得到东西),
    不要断言当前结论(现在恰好是红的)。**
 
+6. **判据必须抗改名。** **这条是本系列自己踩出来的,代价是连续两轮返工。**
+
+   G7 曾经是三个**名字**子句的合取(`repetition` ∧ `modelStream` ∧ `toolExecution`)。
+   合取可以被**删除**满足 —— 实测:只删掉 model-leg 的名字标记
+   (`buildTurnModelLeg` / `TurnModelLeg` / `ModelPort`),`isTurnLoop` 就变 false,
+   **而 1476 行循环原封不动**。那个 model leg 本来就是死代码
+   (`agent-process-entry.ts:3032-3036` 记录没有活跃调用方传 `modelLegs`),
+   所以那次删除是行为保持的 —— 也就是说,门禁被一行改名骗过了。
+
+   这与 `ports.ts:12-15` 记录的假绿是**同一个东西**:
+   "passes the old acceptance gate while the loop has not moved at all"。
+
+   **判据一旦由名字构成,它的强度上限就是"对方不去改那个名字"。**
+   所以:能结构性判定就不要用名字判定。
+   现在的 G7 判据是**一个循环体里至少驱动两条 async 流到耗尽**
+   (同一个 `{}` 内 ≥2 个 `for await`),**不含任何标识符** ——
+   只读 `for` / `await` / `{` / `}`。选择度 2250 个源文件里命中 1 个。
+
+   **写完门禁必须做的一件事:把它的标识符全改掉,确认它仍然报。**
+   这一步跳过,门禁就只是"看起来在检查"。
+
    **已消解(2026-10-06):A1 修好判据后,G7 红的文件是对的** —— 它现在红在真正的轮次循环
    `DuyaAgent.ts` 上。那条 finding 属 A3,且**不应该用 `--write` 吞掉**(§4 第 4 条)。
 
