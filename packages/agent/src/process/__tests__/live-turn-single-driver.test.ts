@@ -56,6 +56,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ENTRY = path.join(HERE, '..', 'agent-process-entry.ts');
+const DUYA = path.join(HERE, '..', '..', 'agent', 'DuyaAgent.ts');
 const SOURCE = fs.readFileSync(ENTRY, 'utf8');
 
 /**
@@ -219,8 +220,18 @@ describe('the seams the next stage binds were not collaterally removed', () => {
     );
     // The loop is still the engine's, and still self-contained: the `for` and
     // the unconditional `#streamModel` that made binding the leg a race.
+    //
+    // The `requestEpoch` argument is part of the pinned call and is NOT
+    // incidental: the epoch is what makes a retried request distinguishable
+    // from the request it replaced (`run-engine.ts:2193`). An earlier revision
+    // of this assertion pinned the two-argument call and had been failing ever
+    // since that parameter landed -- it was reading a shape the file stopped
+    // having while the property it guards (the engine drives its own model leg,
+    // inside its own loop) had not changed.
     expect(engine).toMatch(/for \(let turn = 1; ; turn\+\+\)/);
-    expect(engine).toMatch(/const outcome = await this\.#streamModel\(ctx, modelRequest\)/);
+    expect(engine).toMatch(
+      /const outcome = await this\.#streamModel\(ctx, modelRequest, requestEpoch\)/,
+    );
   });
 });
 
@@ -234,68 +245,87 @@ describe('G7/G8 are measured against the real gate module, not a copy of it', ()
    * copy of these three regexes would drift from the thing it claims to measure,
    * and the drift would be invisible: a regex that stopped matching would make
    * this file's numbers look BETTER, not worse.
+   *
+   * `stripComments` is imported from the gate's own sibling module, and for the
+   * SAME reason. The gate feeds `isTurnLoopModule` STRIPPED text
+   * (`boundary-gates.mjs:52`, applied at `:830`), so a walk that hands the
+   * predicate raw source measures a different program than the one CI runs.
+   * That is not hypothetical: it is what this file did, and it is why the walk
+   * below reported `[]` for `agent/DuyaAgent.ts` -- a module G7 names. The
+   * predicate's tokeniser skips strings but NOT comments, so prose braces in
+   * that module's thousands of lines of documentation unbalanced the block scan
+   * and truncated the enclosing loop body, which is precisely the direction that
+   * makes a gate untrustworthy.
    */
   async function loadGates() {
-    return (await import(
-      /* @vite-ignore */ path.join(
-        HERE,
-        '..',
-        '..',
-        '..',
-        '..',
-        '..',
-        'scripts',
-        'architecture',
-        'boundary-gates.mjs',
-      )
+    const dir = path.join(HERE, '..', '..', '..', '..', '..', 'scripts', 'architecture');
+    const gates = (await import(
+      /* @vite-ignore */ path.join(dir, 'boundary-gates.mjs'),
     )) as typeof import('../../../../scripts/architecture/boundary-gates.mjs');
+    const strip = (await import(
+      /* @vite-ignore */ path.join(dir, 'strip-comments.mjs'),
+    )) as typeof import('../../../../scripts/architecture/strip-comments.mjs');
+    return { ...gates, stripComments: strip.stripComments };
   }
 
-  it('records that the turn loop never matched, and that step b2 removed what did', () => {
-    // This is the finding that reshaped the stage, so it is asserted rather than
-    // only reported.
+  it('still reports the turn loop in DuyaAgent.ts, and for the right reason', () => {
+    // The claim this test used to make described a predicate the gate no longer
+    // has. `TURN_LOOP_SHAPE` is `{ legs: 2 }` (asserted in the next test) and
+    // `isTurnLoopModule` is `turnLoopSites(src).length > 0` -- a loop body that
+    // drives two `for await` streams to exhaustion. `TURN_LOOP_SHAPE.modelStream`
+    // is `undefined`, so the old `.modelStream.test(line)` THREW rather than
+    // measuring anything: it was reading a key step A1 had removed, not the loop
+    // it was written to watch.
     //
-    // `TURN_LOOP_SHAPE.modelStream` is `/\.streamChat\s*\(/`, and the turn loop
-    // calls `runTurnStream`, NOT `.streamChat(`. In `DuyaAgent.ts` that pattern
-    // matched the compaction summarizer and the side-question one-shot -- two
-    // places that are not the loop at all. So the brief's premise that the
-    // `runTurnStream` call leaving `DuyaAgent.ts` takes G7/G8 to zero did not
-    // hold, and a cutover built on that premise would have finished the loop
-    // removal and still been RED.
+    // What survives of the original intent is the part that was load-bearing: the
+    // gate must be RED because the loop EXISTS, never because a marker was
+    // deleted. So this measures the real predicate against the real module and
+    // requires exactly one loop body carrying both legs.
     //
-    // Step b2 moved both of those onto `OneShotTextPort`, so the match count is
-    // now zero. Both halves matter: the count proves the two one-shot sites are
-    // gone, and the loop still being present proves the count dropped because
-    // THEY were re-shaped rather than because the loop was deleted (b3's job,
-    // and still undone).
-    return loadGates().then(({ TURN_LOOP_SHAPE }) => {
-      const duya = fs.readFileSync(
-        path.join(HERE, '..', '..', 'agent', 'DuyaAgent.ts'),
-        'utf8',
-      );
-      const modelStreamLines = duya
-        .split(/\r?\n/)
-        .map((line, index) => ({ line, number: index + 1 }))
-        .filter(({ line }) => TURN_LOOP_SHAPE.modelStream.test(line))
-        .map(({ number }) => number);
+    // The reported line is MATCHED against the `while` in the same text rather
+    // than hard-coded. Pinning a literal would make this file go red the next
+    // time anything above the loop is edited -- a failure that says nothing about
+    // the property being guarded.
+    return loadGates().then(({ turnLoopSites, stripComments }) => {
+      const duya = stripComments(fs.readFileSync(DUYA, 'utf8')).text;
 
-      expect(modelStreamLines).toEqual([]);
-      // The loop itself is still here, and it is still the one calling
-      // `runTurnStream` rather than `.streamChat(`. If this ever fails, the gate
-      // went quiet for the wrong reason.
+      const sites = turnLoopSites(duya);
+      expect(sites).toHaveLength(1);
+      expect(sites[0].legs).toBe(2);
+
+      const loopLine = duya
+        .split(/\r?\n/)
+        .findIndex((line) =>
+          /^\s*while\s*\(!this\.abortController\.signal\.aborted\)/.test(line),
+        );
+      expect(loopLine).toBeGreaterThan(-1);
+      expect(sites[0].line).toBe(loopLine + 1);
+
+      // The loop is still the one calling `runTurnStream` rather than
+      // `.streamChat(`. If this ever fails, the gate went quiet for the wrong
+      // reason.
       expect(duya).toContain('runTurnStream');
     });
   });
 
   it('names every source file in @duya/agent that still satisfies the loop predicate', () => {
-    // G8 is reported per PACKAGE with a list of owning files. Step b2 removed
-    // `agent/DuyaAgent.ts` from that list -- the two one-shot sites were its only
-    // `modelStream` matches, and both now go through `OneShotTextPort`.
-    // `agent-process-entry.ts` still matches through its own
-    // `agent.streamChat(` call -- which is KEPT, because it is the one real
-    // driver and moving it is step b5. So G8 stays at exactly one finding, and
-    // it is b5's to close, not this stage's.
-    return loadGates().then(async ({ isTurnLoopModule, TURN_LOOP_SHAPE }) => {
+    // G8 is reported per PACKAGE with a list of owning files, and it is
+    // measured here the way the gate measures it: comment-stripped, through the
+    // real predicate.
+    //
+    // The expected list changed, and BOTH halves of that change are load-bearing:
+    //
+    //  - The owner is `agent/DuyaAgent.ts`, NOT `process/agent-process-entry.ts`.
+    //    Under the shipped predicate the entry has ONE `for await` leg (its
+    //    `for await (const event of eventGen)`), one short of
+    //    `TURN_LOOP_SHAPE.legs`, so it does not satisfy the predicate at all.
+    //  - The owner is visible only AFTER stripping. Read raw, the predicate
+    //    returns `[]` here -- the discrepancy `loadGates` documents.
+    //
+    // So this list is a MEASUREMENT of the gate rather than a restatement of what
+    // G7 reported when an older predicate was in force, and it moves the day the
+    // loop is deleted -- which is the point.
+    return loadGates().then(({ isTurnLoopModule, TURN_LOOP_SHAPE, stripComments }) => {
       const isTestPath = (rel: string): boolean =>
         /(?:^|\/)(?:__tests__|tests?|e2e)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/.test(rel);
 
@@ -318,19 +348,18 @@ describe('G7/G8 are measured against the real gate module, not a copy of it', ()
       const owners = walk(agentSrc)
         .map((file) => ({ file, rel: path.relative(agentSrc, file).split(path.sep).join('/') }))
         .filter(({ rel }) => !isTestPath(rel))
-        .filter(({ file }) => isTurnLoopModule(fs.readFileSync(file, 'utf8')))
+        .filter(({ file }) =>
+          isTurnLoopModule(stripComments(fs.readFileSync(file, 'utf8')).text),
+        )
         .map(({ rel }) => rel)
         .sort();
 
-      expect(owners).toEqual(['process/agent-process-entry.ts']);
+      expect(owners).toEqual(['agent/DuyaAgent.ts']);
 
-      // Sanity: the predicate really is the conjunction of all three shapes, so
-      // this test is measuring the gate and not a weaker local approximation.
-      expect(Object.keys(TURN_LOOP_SHAPE).sort()).toEqual([
-        'modelStream',
-        'repetition',
-        'toolExecution',
-      ]);
+      // Sanity: the predicate really is the two-leg loop body and nothing else, so
+      // this test is measuring the gate and not a weaker local approximation. A
+      // hand-typed copy here would let the two drift apart invisibly.
+      expect(Object.keys(TURN_LOOP_SHAPE).sort()).toEqual(['legs']);
     });
   });
 });

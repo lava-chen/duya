@@ -157,6 +157,7 @@ import {
 } from '../context/os-context/index.js';
 import { injectTurnTimestampReminders } from './turn-time-reminder.js';
 import type { AgentDefinition } from '../tool/SubagentTool/index.js';
+import type { TurnPipelinePublisher } from '../tool/turn-pipeline-publisher.js';
 import { CompactionManager, createCompactionManager, type CompactionProbe } from '../compact/CompactionManager.js';
 import { resolveCompactionContextWindow } from '../compact/contextWindow.js';
 import {
@@ -265,6 +266,61 @@ export interface TurnOutputSink {
 
 /**
  * duyaAgent 绫? */
+/**
+ * What `_resolveTools` decided was VISIBLE for a run, plus the three handles it
+ * built beside that decision.
+ *
+ * EXTRACTED as a name because the per-turn tool-pipeline factory needs all
+ * seven and must not be able to reach one of them by a different route: the
+ * whole point of routing the factory through `_resolveTools`' result is that
+ * profile allow/deny, exposure policy and the 8KB provider projection have
+ * already been applied. Rebuilding any of it from `activeMCPRegistry` would
+ * compile, run, and send users a different tool surface.
+ */
+export interface ResolvedTurnTools {
+  readonly tools: Tool[];
+  readonly registry: ToolRegistry;
+  readonly agentDefinitions: AgentDefinition[];
+  readonly constraints: ToolVisibilityConstraints;
+  readonly catalogTool: ToolCatalogTool;
+  readonly catalogView: ToolCatalogView;
+  readonly toolInvokeExecutor: ToolInvokeTool;
+}
+
+/**
+ * Everything `buildTurnPipeline` needs for one turn.
+ *
+ * Split per-run (`resolved`, `canUseTool`, `toolInvokeDispatcher`) from
+ * per-turn (`turn`, `messages`, `tools`) because that is exactly the split
+ * the engine needs: it re-assembles the payload every turn and resolves tools
+ * once per run.
+ *
+ * `bindToolUseContext` is a callback rather than a returned handle because the
+ * legacy's `turnToolUseContext` is a closure local its own meta-tool dispatcher
+ * closes over. Returning the context and leaving the caller to wire it would
+ * put that wiring in two places, and the two copies can disagree about which
+ * turn is current -- the bug the surrounding comment at the call site records.
+ */
+export interface TurnPipelineRequest {
+  /** 1-based turn number, as `publish` records it. */
+  readonly turn: number;
+  /** The transcript this turn is built from. Read fresh every turn. */
+  readonly messages: Message[];
+  /** The tool surface for this turn -- possibly promoted since the run began. */
+  readonly tools: Tool[];
+  /** `_resolveTools`'s decision. Never rebuilt here. */
+  readonly resolved: ResolvedTurnTools;
+  readonly turnContext: TurnContext;
+  readonly options: ChatOptions | undefined;
+  /** The assembled permission gate, including the declared-tools guard. */
+  readonly canUseTool: CanUseToolFn;
+  readonly toolInvokeDispatcher: ReturnType<typeof createToolInvokeDispatcherFromRegistry>;
+  /** Absent when no engine is bound to this run (the CLI, the sub-agent tool). */
+  readonly publisher: TurnPipelinePublisher | undefined;
+  /** Receives this turn's context so the caller's own dispatcher can read it. */
+  readonly bindToolUseContext: (context: ToolUseContext) => void;
+}
+
 export class duyaAgent implements AgentRuntime {
   // Plan 550 step 2a-3: implements the structural read-only interface the
   // `TurnAssembler` consumes. Every method delegates to the existing
@@ -347,6 +403,185 @@ export class duyaAgent implements AgentRuntime {
    */
   readModelClient(): AIClient {
     return this.llmClient;
+  }
+
+  /**
+   * Build this turn's tool pipeline, and publish it for the run engine.
+   *
+   * ## Why this is PUBLIC, and why it is a factory rather than a getter
+   *
+   * `ToolExecutionPipeline` was a `const` local of the `streamChat`
+   * generator, so nothing outside that generator could produce one. Once the
+   * engine owns the turn loop the legacy stops being the only thing that
+   * constructs a pipeline, and the tool leg would have no producer at all:
+   * `TurnPipelinePublisher` exposes `queue`/`drain`/`discard`, which all
+   * read one `#current` record, and that record is only ever written by
+   * `publish`. No producer, no record, and a model that asks for a tool gets
+   * a thrown refusal instead.
+   *
+   * A factory and not an accessor is the load-bearing choice. A getter over a
+   * field would make the pipeline LONG-LIVED, and `discard()` is a one-way
+   * latch: `StreamingToolExecutor.discarded` is never reset and `discard()`
+   * also aborts the sibling controller, so a hoisted instance goes permanently
+   * mute after the first model-retry `discard()` -- accepting tools, draining
+   * nothing, raising no error. This method constructs a NEW pipeline on every
+   * call and holds nothing on `this`, so the per-turn lifetime is structural
+   * rather than a convention someone has to remember.
+   *
+   * ## One implementation, two callers
+   *
+   * The generator calls THIS, and the composition's host calls THIS. Routing
+   * the legacy through the same method is what keeps it from having two: a
+   * separate engine-side builder would be a second place that decides what a
+   * turn's permission gate and tool-use context are, and two answers that can
+   * differ is the failure this repository keeps paying for.
+   *
+   * ## The FILTERED catalog, not the registry
+   *
+   * `request.resolved` is `_resolveTools`' decision -- profile allow/deny,
+   * exposure policy and the 8KB provider projection all happen there. Building
+   * a tool-use context from `activeMCPRegistry` instead would compile, run,
+   * and send users a different tool surface, which is the silent class of
+   * defect `run-composition.ts` documents at length.
+   */
+  buildTurnPipeline(request: TurnPipelineRequest): ToolExecutionPipeline {
+    const { resolved, turnContext, options } = request;
+
+    // `streamChat` assigns this on entry and clears it on exit, so it is
+    // non-null for every turn of a live run -- and the generator relied on
+    // that narrowing without stating it. A method does not inherit it, so it
+    // is stated here, and stated as a THROW rather than a default: silently
+    // substituting a fresh controller would build a tool-use context wired
+    // to a signal the caller cannot abort.
+    const abortController = this.abortController;
+    if (!abortController) {
+      throw new Error(
+        'buildTurnPipeline called with no run in progress: the abort controller has already been cleared',
+      );
+    }
+
+    // Plan 419 P0: the tool-use AppState lives here as a real per-call object.
+    // StreamingToolExecutor marks `_approvedToolUses[toolUseId]` into it after
+    // a user approves a permission prompt, and the throw-path re-entry reads it
+    // back to skip a second prompt. The previous no-op implementations
+    // (`() => ({})` / `() => {}`) made "approve then retry" semantics
+    // silently dead on the main path.
+    let turnAppState: AppState = {};
+    const toolUseContext: ToolUseContext = {
+      toolUseId: crypto.randomUUID(),
+      abortController: abortController,
+      getAppState: () => turnAppState,
+      setAppState: (updater) => { turnAppState = updater(turnAppState); },
+      widgetStyleHistory: this.widgetStyleHistory,
+      canvasFreshness: this.canvasFreshness,
+      // Plan 536 L1: session-bound projectId. Project-scoped tools (plan tool,
+      // etc.) read this as a fallback when the model omits projectId from its
+      // input. null when cwd is outside any registered duya project.
+      currentProjectId: this.currentProjectId ?? null,
+      options: {
+        recentImageAttachments: collectRecentImageAttachments(request.messages),
+        tools: request.tools,
+        commands: [],
+        mainLoopModel: this._model,
+        mcpClients: [],
+        apiKey: this.apiKey,
+        baseURL: this.baseURL,
+        authStyle: this.authStyle,
+        provider: this.provider,
+        sessionId: turnContext.sessionId ?? undefined, // Pass sessionId for task persistence
+        // Plan 481: bot identity for identity-bound tools (update_state).
+        agentProfileId: options?.agentProfileId ?? null,
+        workingDirectory: turnContext.workingDirectory ?? undefined, // Pass working directory for tool execution
+        // Plan 525 / 408 follow-up: project-entity home directory propagated
+        // into the ToolUseContext so sub-agents spawned from this turn (via
+        // the SubagentTool) can hand it down into their own
+        // promptSystem.buildContext -> preBuildHook -> initializeAgentsMd.
+        // Undefined when no project is bound.
+        projectHome: this.projectHome,
+        language: turnContext.language ?? undefined, // Propagate language preference to sub-agents
+        agentDefinitions: {
+          activeAgents: resolved.agentDefinitions,
+          allAgents: resolved.agentDefinitions,
+        },
+        analyzeImage: this.visualAnalysis.analyzeImage.bind(this.visualAnalysis),
+        // Phase 2A worker closure: providerName -> internalKey resolver.
+        // StreamingToolExecutor consults this for every model-returned tool
+        // name. The closure is stable for the lifetime of the executor (per
+        // turn), but the underlying map is mutated in place by
+        // setActiveMCPRuntime so reload takes effect for the next turn without
+        // re-creating the executor.
+        resolveMCPProviderToolName: (name: string) =>
+          this.resolveMCPToolNameToInternalKey(name),
+        mcpToolExecutors: this.buildMCPToolExecutors(request.tools),
+      },
+      // Permission callback - passed from ChatOptions by API route
+      requestPermission: options?.requestPermission,
+      // IPC for conductor executor communication. sendToMain powers the
+      // connector elicitation cards (connect_app / reauth) -- always injected
+      // by agent-process-entry (plan 312), forwarded here so bot sessions can
+      // surface a connect card (plan 503).
+      sendToMain: options?.conductorIpc?.sendToMain,
+      // IPC for conductor executor communication
+      ipcRequest: options?.conductorIpc?.ipcRequest,
+      // Plan 224 Phase 3: mode modifiers surface fields like
+      // `conductorCanvasId` via `toolUseContextPatch` (populated by
+      // `conductorMode.hooks.onEnter`). Spread it here so every canvas tool
+      // sees the bound canvasId without the LLM passing it explicitly. Falls
+      // back to the legacy `options.conductorCanvasId` for safety when no
+      // mode modifier is active.
+      conductorCanvasId:
+        (this.modeCtx?.toolUseContextPatch?.conductorCanvasId as string | undefined) ??
+        options?.conductorCanvasId,
+      canvasTarget: {
+        canvasId:
+          (this.modeCtx?.toolUseContextPatch?.conductorCanvasId as string | undefined) ??
+          options?.conductorCanvasId,
+      },
+      // Propagate canvas_manage's switch/create-with-switchTo back into the
+      // persistent modeCtx so the NEXT turn's toolUseContextPatch reflects
+      // the new target. Without this, intra-run cross-turn canvas switches
+      // revert to the canvas bound at streamChat start.
+      updateModeCanvasId: this.modeCtx
+        ? (canvasId: string) => {
+            this.modeCtx!.state.conductorCanvasId = canvasId;
+            this.modeCtx!.toolUseContextPatch = {
+              ...(this.modeCtx!.toolUseContextPatch ?? {}),
+              conductorCanvasId: canvasId,
+            };
+          }
+        : undefined,
+    };
+
+    // Hand this turn's context to the meta-tool dispatcher wired before the
+    // turn loop. Reassigned every turn so `tool_invoke` always sees the
+    // CURRENT context (abortController, appState and sessionId are per-turn).
+    request.bindToolUseContext(toolUseContext);
+    resolved.catalogTool.setContextView(toolUseContext, resolved.catalogView);
+    resolved.toolInvokeExecutor.setDispatcherForContext(
+      toolUseContext,
+      request.toolInvokeDispatcher,
+    );
+
+    const executor = new ToolExecutionPipeline(
+      resolved.registry,
+      request.canUseTool,
+      toolUseContext,
+    );
+
+    // Plan 600 S2: hand this turn's pipeline to the run engine.
+    //
+    // Published per turn, beside the construction, and NOT hoisted: a hoisted
+    // pipeline goes permanently mute after the first `discard()` on the
+    // model-retry path and fails silently, which
+    // `tool-pipeline-turn-lifetime.test.ts` pins. The publisher supersedes
+    // the previous turn rather than retaining it, so no long-lived instance is
+    // reachable from here.
+    //
+    // Absent publisher means no engine is bound to this run, which is the
+    // pre-plan case (the CLI, the sub-agent tool) and is not an error.
+    request.publisher?.publish(request.turn, executor);
+
+    return executor;
   }
 
   // ==========================================================================
@@ -2258,127 +2493,34 @@ export class duyaAgent implements AgentRuntime {
         }
       }
 
-      // Create executor for this turn.
-      // Plan 419 P0: the tool-use AppState lives here as a real per-call
-      // object. StreamingToolExecutor marks `_approvedToolUses[toolUseId]`
-      // into it after a user approves a permission prompt, and the
-      // throw-path re-entry reads it back to skip a second prompt. The
-      // previous no-op implementations (`() => ({})` / `() => {}`) made
-      // "approve then retry" semantics silently dead on the main path.
-      let turnAppState: AppState = {};
-      const toolUseContext: ToolUseContext = {
-        toolUseId: crypto.randomUUID(),
-        abortController: this.abortController,
-        getAppState: () => turnAppState,
-        setAppState: (updater) => { turnAppState = updater(turnAppState); },
-        widgetStyleHistory: this.widgetStyleHistory,
-        canvasFreshness: this.canvasFreshness,
-        // Plan 536 L1: session-bound projectId. Project-scoped tools
-        // (plan tool, etc.) read this as a fallback when the model
-        // omits projectId from its input. null when cwd is outside any
-        // registered duya project.
-        currentProjectId: this.currentProjectId ?? null,
-        options: {
-          recentImageAttachments: collectRecentImageAttachments(messages),
-          tools,
-          commands: [],
-          mainLoopModel: this._model,
-          mcpClients: [],
-          apiKey: this.apiKey,
-          baseURL: this.baseURL,
-          authStyle: this.authStyle,
-          provider: this.provider,
-          sessionId: turnContext.sessionId ?? undefined, // Pass sessionId for task persistence
-          // Plan 481: bot identity for identity-bound tools (update_state).
-          agentProfileId: options?.agentProfileId ?? null,
-          workingDirectory: turnContext.workingDirectory ?? undefined, // Pass working directory for tool execution
-          // Plan 525 / 408 follow-up: project-entity home directory
-          // propagated into the ToolUseContext so sub-agents spawned
-          // from this turn (via the SubagentTool) can hand it down
-          // into their own promptSystem.buildContext → preBuildHook →
-          // initializeAgentsMd. Undefined when no project is bound.
-          projectHome: this.projectHome,
-          language: turnContext.language ?? undefined, // Propagate language preference to sub-agents
-          agentDefinitions: {
-            activeAgents: agentDefinitions,
-            allAgents: agentDefinitions,
-          },
-          analyzeImage: this.visualAnalysis.analyzeImage.bind(this.visualAnalysis),
-          // Phase 2A worker closure: providerName -> internalKey
-          // resolver. StreamingToolExecutor consults this for
-          // every model-returned tool name. The closure is
-          // stable for the lifetime of the executor (per turn),
-          // but the underlying map is mutated in place by
-          // setActiveMCPRuntime so reload takes effect for the
-          // next turn without re-creating the executor.
-          resolveMCPProviderToolName: (name: string) =>
-            this.resolveMCPToolNameToInternalKey(name),
-          mcpToolExecutors: this.buildMCPToolExecutors(tools),
+      // Plan 600 S2 / plan 610 A3-2b4: this turn's pipeline is built by the
+      // public factory, so the run engine has a producer once the legacy stops
+      // being the only thing that constructs one. The call site supplies the
+      // per-run bundle and the per-turn values, and routes the binding of this
+      // turn's context back into the loop's own variable -- so there is one
+      // implementation of "what a turn's tool-use context is", not two.
+      const executor = this.buildTurnPipeline({
+        turn: turnCount,
+        messages,
+        tools,
+        resolved: {
+          tools: baseTools,
+          registry,
+          agentDefinitions,
+          constraints,
+          catalogTool,
+          catalogView,
+          toolInvokeExecutor,
         },
-        // Permission callback - passed from ChatOptions by API route
-        requestPermission: options?.requestPermission,
-        // IPC for conductor executor communication. sendToMain powers the
-        // connector elicitation cards (connect_app / reauth) — always
-        // injected by agent-process-entry (plan 312), forwarded here so
-        // bot sessions can surface a connect card (plan 503).
-        sendToMain: options?.conductorIpc?.sendToMain,
-        // IPC for conductor executor communication
-        ipcRequest: options?.conductorIpc?.ipcRequest,
-        // Plan 224 Phase 3: mode modifiers surface fields like
-        // `conductorCanvasId` via `toolUseContextPatch` (populated by
-        // `conductorMode.hooks.onEnter`). Spread it here so every
-        // canvas tool sees the bound canvasId without the LLM passing
-        // it explicitly. Falls back to the legacy `options.conductorCanvasId`
-        // for safety when no mode modifier is active.
-        conductorCanvasId:
-          (this.modeCtx?.toolUseContextPatch?.conductorCanvasId as string | undefined) ??
-          options?.conductorCanvasId,
-        canvasTarget: {
-          canvasId:
-            (this.modeCtx?.toolUseContextPatch?.conductorCanvasId as string | undefined) ??
-            options?.conductorCanvasId,
+        turnContext,
+        options,
+        canUseTool: guardedCanUseTool,
+        toolInvokeDispatcher,
+        publisher: options?.turnPipelines,
+        bindToolUseContext: (context) => {
+          turnToolUseContext = context;
         },
-        // Propagate canvas_manage's switch/create-with-switchTo back into
-        // the persistent modeCtx so the NEXT turn's toolUseContextPatch
-        // reflects the new target. Without this, intra-streamChat
-        // cross-turn canvas switches revert to the canvas bound at
-        // streamChat start.
-        updateModeCanvasId: this.modeCtx
-          ? (canvasId: string) => {
-              this.modeCtx!.state.conductorCanvasId = canvasId;
-              this.modeCtx!.toolUseContextPatch = {
-                ...(this.modeCtx!.toolUseContextPatch ?? {}),
-                conductorCanvasId: canvasId,
-              };
-            }
-          : undefined,
-      };
-
-      // Hand this turn's context to the meta-tool dispatcher wired above.
-      // Reassigned every turn so `tool_invoke` always sees the CURRENT
-      // context (abortController, appState and sessionId are per-turn).
-      turnToolUseContext = toolUseContext;
-      catalogTool.setContextView(toolUseContext, catalogView);
-      toolInvokeExecutor.setDispatcherForContext(toolUseContext, toolInvokeDispatcher);
-
-      const executor = new ToolExecutionPipeline(
-        registry,
-        guardedCanUseTool,
-        toolUseContext
-      );
-
-      // Plan 600 S2: hand this turn's pipeline to the run engine.
-      //
-      // Published per turn, beside the construction, and NOT hoisted: a hoisted
-      // pipeline goes permanently mute after the first `discard()` on the
-      // model-retry path (`:2359`) and fails silently, which
-      // `tool-pipeline-turn-lifetime.test.ts` pins. The publisher supersedes the
-      // previous turn rather than retaining it, so no long-lived instance is
-      // reachable from here.
-      //
-      // Absent publisher means no engine is bound to this run, which is the
-      // pre-plan case (the CLI, the sub-agent tool) and is not an error.
-      options?.turnPipelines?.publish(turnCount, executor);
+      });
 
       // Per-turn state
       const assistantContent: MessageContent[] = [];
@@ -4284,15 +4426,7 @@ export class duyaAgent implements AgentRuntime {
   private async _resolveTools(
     options?: ChatOptions,
     appliedProfile?: AgentProfile,
-  ): Promise<{
-    tools: Tool[];
-    registry: ToolRegistry;
-    agentDefinitions: AgentDefinition[];
-    constraints: ToolVisibilityConstraints;
-    catalogTool: ToolCatalogTool;
-    catalogView: ToolCatalogView;
-    toolInvokeExecutor: ToolInvokeTool;
-  }> {
+  ): Promise<ResolvedTurnTools> {
     logger.info(`[Agent] streamChat: Loading tools...`);
     let registry = options?.toolRegistry;
     if (!registry) {
