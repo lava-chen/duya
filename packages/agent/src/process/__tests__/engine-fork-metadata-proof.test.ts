@@ -2,58 +2,54 @@
  * Plan 610 (fork / reply metadata): what the engine-driven path actually does
  * with `threadMeta`, measured rather than assumed.
  *
- * ## Why this file exists, and what it CHANGED about the plan
+ * ## What this file was, and what it is now
  *
- * The slice this file closes was briefed as "the engine path has no fork /
- * reply metadata, wire it up". Measuring all six channels first says something
- * different, and the difference is the whole value of the file:
+ * The file began as the PRE-FIX DIAGNOSIS. It measured all six channels and
+ * concluded that the durable-write half was already wired -- `recordTurnToolResult`
+ * and `recordTurnAssistantMessage` both call the agent's own `_commitDurable`,
+ * which is the one function that runs `mergeThreadMetadata`
+ * (`DuyaAgent.ts:4706-4711`) -- while the INPUT was missing: `forkTurn` was a
+ * `private` field written only inside `streamChat` (`:3055`) and reset at the
+ * top of every `streamChat` (`:2277`), neither of which the engine reaches. The
+ * capability was present and starved, not absent.
  *
- *  - The durable-write half was ALREADY WIRED. `recordTurnToolResult` and
- *    `recordTurnAssistantMessage` both call the agent's own `_commitDurable`,
- *    and `_commitDurable` is the ONE function that runs `mergeThreadMetadata`
- *    (`DuyaAgent.ts:4706-4711`). So on an engine-driven run the merge really
- *    does execute -- once per durable row. Building a second tagging mechanism
- *    in `run-composition.ts` would have produced exactly the double-tag the
- *    plan has spent slices preventing.
- *  - What is genuinely missing is the INPUT, not the merge: `forkTurn` is a
- *    `private` field, written only inside `streamChat` (`DuyaAgent.ts:3055`)
- *    and reset at the top of every `streamChat` (`:2277`). The engine never
- *    calls `streamChat`, so on an engine-driven run `forkTurn` is ALWAYS null
- *    and the merge is always a no-op. The capability is present and starved,
- *    not absent.
+ * Plan 610 D1 has now landed `bindRunForkMarker`, and `composeLegacyRunPorts`
+ * binds `host.runFork ?? null` at run start. So this file is the PROOF plus the
+ * REGRESSION, and two things changed deliberately rather than quietly:
  *
- * So the wiring this slice owes the next one is a way to SET that marker, and
- * this file pins the current behaviour precisely enough that the fix is a
- * red-to-green change rather than a guess.
+ *  - The harness no longer reaches into the private. It sets `host.runFork`, the
+ *    way a production host does. The old `as unknown as { forkTurn }` cast was the
+ *    experiment ("the mechanism is live, only the input is missing"); with the
+ *    seam in place the cast is not just unnecessary, it would hide a broken
+ *    seam by writing the field directly.
+ *  - The diagnostic test `reaches the same run with or without a fork, which is
+ *    the visible symptom` is REPLACED, not deleted and not inverted. It asserted
+ *    that a forked engine run was indistinguishable from a plain one, which was
+ *    true before D1 and is false after it. A gate that only knows how to go green
+ *    by being softened is not a gate, so it now asserts the FIXED behaviour. The
+ *    replacement is `a forked engine run is now distinguishable from a plain one`.
  *
- * ## The three claims, each asserted from a DIFFERENT source than the code
+ * ## The claim under test is about the LEAK, not the tagging
  *
- * The rule this file is built on: if both sides of a comparison come from the
- * same computation, the assertion is an identity. So:
- *
- *  1. TAGGING. Asserted on `agent.getMessages()` -- the agent's OWN durable
- *     persistence projection, rebuilt from the timeline -- while the code under
- *     test is the engine's `turnOutput` port. The engine never sees
- *     `getMessages()`; it can only reach `_commitDurable` through
- *     `recordTurn*`. A composition that dropped the metadata on the floor would
- *     show an untagged row here.
- *  2. THE MARKER'S ABSENCE. Asserted by reading the PRIVATE `forkTurn` off the
- *     instance the run actually used. This is the one place a private read is
- *     correct: the claim is about a private's value, so the test IS the probe.
- *  3. THE PROVIDER BOUNDARY. Asserted on what the scripted provider was
- *     handed (`contents`), cross-checked against `readThreadMeta` on the raw
- *     timeline -- so "no `threadMeta` on the wire" is distinguishable from "the
- *     fixture never had one".
+ * The tagging assertions are straightforward and were already implied by the
+ * pre-fix file. The load-bearing risk of this seam is different: `duyaAgent` is
+ * a long-LIVED object, so a marker that outlived its run would branch every
+ * later run on that instance -- silent, cross-conversation data corruption,
+ * because a branched row is filtered out of the model projection
+ * (`message-projectors.ts:84`) and simply vanishes from the user's history with
+ * no error anywhere. That is why the marker is CLEARED unconditionally at run
+ * start rather than set conditionally, and why the two-run test below drives
+ * run B through the SAME instance run A used.
  *
  * ## What is deliberately NOT asserted
  *
- * No assertion here claims the engine path strips or prepends reply metadata.
- * It does not: `_applyProviderThreadBoundary` is `private` and called only from
- * `streamChat` (`:3314`), and the engine's provider port never goes through it.
- * That is measured and recorded in the D3 test below rather than papered over,
- * because the strip on the engine path is already performed by a DIFFERENT
- * function (`projectModelMessages`, via `stripThreadMeta`) -- which is why the
- * gap is narrower than "the boundary is missing" and is exactly one call site.
+ * No assertion claims the engine path prepends the reply quote. It does not:
+ * `_applyProviderThreadBoundary` is `private` and reached only from `streamChat`
+ * (`:3314`), and the engine's provider port never goes through it. That is
+ * measured in the D3 section below rather than papered over. The STRIP, by
+ * contrast, is already satisfied on this path by `projectModelMessages`
+ * (`stripThreadMeta`), which is why the gap is narrower than "the boundary is
+ * missing" and is exactly one call site.
  */
 
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
@@ -180,31 +176,47 @@ afterEach(() => {
 
 const PROBE = 'probe_ok';
 const RUN_ID = 'run-fork-proof' as RunId;
+/** The marker the legacy sets, verbatim (`DuyaAgent.ts:3055-3058`). */
+const FORK_MARKER = { replyToId: 'root-1', userId: 'fork-1' } as const;
 
 interface Proof {
   /** What the provider was handed, request by request. */
   readonly seen: readonly Seen[];
-  /** The agent's OWN durable rows, rebuilt from its timeline. */
+  /** Every durable row on the agent, including any a previous run left. */
   readonly durable: readonly Message[];
-  /** The value of the PRIVATE fork marker on the instance this run used. */
-  readonly forkTurnAfterRun: unknown;
+  /** ONLY the rows THIS run appended. The leak assertion needs this. */
+  readonly written: readonly Message[];
+  /** The marker in force after the run, read through the public seam. */
+  readonly markerAfterRun: unknown;
   /** POSITIVE COUNT: how many times the tool really executed. */
   readonly probeRuns: () => number;
   readonly terminals: readonly TerminalCandidate[];
 }
 
-async function runThroughEngine(seedFork: boolean, bindForkTurn = false): Promise<Proof> {
+/**
+ * Drive one real `RunEngineImpl` run against a real agent.
+ *
+ * `shared` is how the leak is exercised: passing an agent that a previous run
+ * already used means run B sees exactly the state run A left behind.
+ */
+async function runThroughEngine(
+  seedFork: boolean,
+  forked = false,
+  shared?: InstanceType<typeof duyaAgent>,
+): Promise<Proof> {
   installFakeDbIpc();
 
   let sessionSeq = 0;
-  const agent = new duyaAgent({
-    apiKey: 'test-key',
-    model: 'claude-test',
-    provider: 'anthropic',
-    sessionId: `s-fork-proof-${(sessionSeq += 1)}`,
-    workingDirectory: process.cwd(),
-    permissionMode: 'bypassPermissions',
-  });
+  const agent =
+    shared ??
+    new duyaAgent({
+      apiKey: 'test-key',
+      model: 'claude-test',
+      provider: 'anthropic',
+      sessionId: `s-fork-proof-${(sessionSeq += 1)}`,
+      workingDirectory: process.cwd(),
+      permissionMode: 'bypassPermissions',
+    });
 
   (agent as unknown as { abortController: AbortController }).abortController = new AbortController();
 
@@ -230,46 +242,31 @@ async function runThroughEngine(seedFork: boolean, bindForkTurn = false): Promis
   // Seed a MAIN-LINE user message the fork can point at, so `resolveReplyMeta`
   // has a real target to validate against -- an unknown target is silently
   // stripped, and a fixture whose target never existed would make the tagging
-  // assertions vacuous.
-  agent.setMessages([
-    { id: 'root-1', role: 'user', content: 'the root of the thread', timestamp: Date.now(), seq_index: 0 } as never,
-  ]);
-
-  // The fork's OWN user message, carrying exactly the metadata the legacy
-  // stamps at construction (`DuyaAgent.ts:3049`): the same pure
-  // `mergeThreadMetadata` the product uses, so the fixture is not a
-  // hand-rolled imitation of the thing under test.
+  // assertions vacuous. Only on a fresh agent: a shared one already has them.
   const { mergeThreadMetadata } = await import('../../message/threads.js');
-  const forkUser = {
-    id: 'fork-1',
-    role: 'user',
-    content: prompt,
-    timestamp: Date.now(),
-    seq_index: 1,
-    ...(seedFork ? { metadata: mergeThreadMetadata(undefined, { replyToId: 'root-1', branched: true }) } : {}),
-  } as Message;
-  agent.setMessages([...agent.getMessages(), forkUser as never]);
-
-  // THE POSITIVE PROOF'S SETUP, and the only cast in this file.
-  //
-  // `forkTurn` is `private` and written only inside `streamChat`
-  // (`DuyaAgent.ts:3055-3058`). Writing it here is not a shortcut around the
-  // boundary -- it IS the experiment: the legacy's exact assignment, replayed
-  // by a host, and nothing else changed. If the engine-driven durable rows come
-  // out tagged under this, then every step between the engine's
-  // `recordToolResult` / `recordAssistantMessage` calls and the fork merge is
-  // ALREADY WIRED, and the one missing thing is a way for a host to perform
-  // this assignment without reaching into a private.
-  //
-  // The shape is the legacy's verbatim: `replyToId` is the resolved target,
-  // `userId` is the fork's own user message -- the id `_commitDurable` stamps
-  // onto every non-user row (`DuyaAgent.ts:4708`).
-  if (bindForkTurn) {
-    (agent as unknown as { forkTurn: { replyToId: string; userId: string } | null }).forkTurn = {
-      replyToId: 'root-1',
-      userId: 'fork-1',
-    };
+  if (!shared) {
+    agent.setMessages([
+      { id: 'root-1', role: 'user', content: 'the root of the thread', timestamp: Date.now(), seq_index: 0 } as never,
+    ]);
+    // The fork's OWN user message, carrying exactly the metadata the legacy
+    // stamps at construction (`DuyaAgent.ts:3049`): the same pure
+    // `mergeThreadMetadata` the product uses, so the fixture is not a
+    // hand-rolled imitation of the thing under test.
+    agent.setMessages([
+      ...agent.getMessages(),
+      {
+        id: 'fork-1',
+        role: 'user',
+        content: prompt,
+        timestamp: Date.now(),
+        seq_index: 1,
+        ...(seedFork ? { metadata: mergeThreadMetadata(undefined, { replyToId: 'root-1', branched: true }) } : {}),
+      } as Message,
+    ]);
   }
+
+  // Everything the agent held BEFORE this run, so `written` can be isolated.
+  const before = agent.getMessages().length;
 
   const turnPipelines = new TurnPipelinePublisher();
 
@@ -342,6 +339,10 @@ async function runThroughEngine(seedFork: boolean, bindForkTurn = false): Promis
     wakeRun: false,
     beginTicket: (call) => ledger.begin(call),
     settleTicket: (input) => ledger.settle(input),
+    // The D1 input, supplied the way a production host supplies it. OMITTED
+    // (not `undefined`, not a null marker) on a plain run -- and the omission is
+    // what makes `composeLegacyRunPorts` bind `null` and clear the marker.
+    ...(forked ? { runFork: FORK_MARKER } : {}),
   };
 
   const ports: RunEnginePorts = composeLegacyRunPorts(agent, host);
@@ -372,150 +373,302 @@ async function runThroughEngine(seedFork: boolean, bindForkTurn = false): Promis
 
   turnPipelines.close();
 
+  const durable = agent.getMessages();
   return {
     seen: active.seen,
-    durable: agent.getMessages(),
-    // The claim under test IS about this private's value, so reading it is the
-    // probe rather than a way around the boundary.
-    forkTurnAfterRun: (agent as unknown as { forkTurn: unknown }).forkTurn,
+    durable,
+    written: durable.slice(before),
+    markerAfterRun: agent.readRunForkMarker(),
     probeRuns: () => runs,
     terminals,
   };
 }
 
+/** The rows the ENGINE wrote, i.e. everything but a host-seeded user row. */
+function engineWritten(proof: Proof): Message[] {
+  return proof.written.filter((m) => m.role === 'assistant' || m.role === 'tool');
+}
+
 // ============================================================================
-// D2 -- durable tagging: the merge runs on the engine path, with no input
+// D1 -- the host hands the engine run its fork marker
 // ============================================================================
 
-describe('an engine-driven run reaches the fork-tagging merge, but has no marker to give it', () => {
-  it('writes durable assistant AND tool rows through _commitDurable', async () => {
-    const proof = await runThroughEngine(true);
+describe('the host supplies the fork marker the engine path needs', () => {
+  it('TAGS every engine-written row exactly as a forked legacy run does', async () => {
+    const proof = await runThroughEngine(true, true);
 
     // POSITIVE COUNTS first. Everything below reads the agent's OWN durable
     // projection, so a run that stopped writing rows would make a tagging
-    // assertion pass vacuously. These four are the guard against that.
+    // assertion pass vacuously.
     expect(proof.probeRuns()).toBe(1);
     expect(proof.seen).toHaveLength(2);
     expect(proof.terminals).toHaveLength(1);
     expect(proof.terminals[0].state.status).toBe('completed');
 
-    const roles = proof.durable.map((m) => m.role);
-    // The engine's `recordAssistantMessage` and `recordToolResult` both landed.
-    expect(roles.filter((r) => r === 'assistant').length).toBeGreaterThanOrEqual(2);
-    expect(roles.filter((r) => r === 'tool').length).toBeGreaterThanOrEqual(1);
+    // CROSS-SOURCE: `agent.getMessages()` is the agent's own persistence
+    // projection, rebuilt from the timeline, while the code under test is the
+    // engine's `turnOutput` port. The engine never sees `getMessages()`; it can
+    // only reach `_commitDurable` through `recordTurn*`.
+    const { readThreadMeta } = await import('../../message/threads.js');
+    const produced = engineWritten(proof);
+    expect(produced.length).toBeGreaterThanOrEqual(3);
+
+    // The exact triple, not just "has a tag": `userId`, not `replyToId`, is
+    // what `_commitDurable` stamps (`:4708`) -- rows descend from the fork's
+    // user message, not from the message it replies to.
+    for (const row of produced) {
+      expect(readThreadMeta(row)).toEqual({ replyToId: 'fork-1', branched: true });
+    }
+
+    // And the rows are rows the engine really wrote, not the seeded fixture.
+    expect(produced.filter((m) => m.role === 'assistant').length).toBeGreaterThanOrEqual(2);
+    expect(produced.filter((m) => m.role === 'tool').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('leaves every engine-written durable row UNTAGGED, because the fork marker is null', async () => {
-    const proof = await runThroughEngine(true);
+  it('leaves every engine-written row UNTAGGED when the host supplies no marker', async () => {
+    const proof = await runThroughEngine(true, false);
 
-    // CROSS-SOURCE, and the reason this assertion has teeth: the fork's own
-    // user message IS tagged, by the same `mergeThreadMetadata` the product
-    // uses, and it survives into the timeline. So "no assistant/tool row is
-    // tagged" is a projection that removed them -- not a fixture that never
-    // carried thread metadata in the first place.
+    // CROSS-SOURCE CONTROL: the fork's own user message IS tagged, by the same
+    // `mergeThreadMetadata` the product uses, and it survives into the timeline.
+    // So "no assistant/tool row is tagged" is a projection that removed them --
+    // not a fixture that never carried thread metadata in the first place.
     const { readThreadMeta, isBranchedMessage } = await import('../../message/threads.js');
     const forkUser = proof.durable.find((m) => m.id === 'fork-1');
     expect(forkUser).toBeDefined();
     expect(readThreadMeta(forkUser)?.branched).toBe(true);
     expect(readThreadMeta(forkUser)?.replyToId).toBe('root-1');
 
-    // THE MEASUREMENT. The assistant and tool rows the engine wrote carry no
-    // thread metadata at all.
-    const produced = proof.durable.filter((m) => m.role === 'assistant' || m.role === 'tool');
+    const produced = engineWritten(proof);
     expect(produced.length).toBeGreaterThanOrEqual(3);
     for (const row of produced) {
       expect(readThreadMeta(row)).toBeUndefined();
       expect(isBranchedMessage(row)).toBe(false);
     }
   });
+});
 
-  it('leaves the private fork marker null, which is WHY the rows are untagged', async () => {
-    const proof = await runThroughEngine(true);
+// ============================================================================
+// THE LEAK -- the acceptance criterion, on one long-lived agent instance
+// ============================================================================
 
-    // THE ROOT CAUSE, asserted rather than inferred. `forkTurn` is written only
-    // inside `streamChat` (`DuyaAgent.ts:3055`) and reset at the top of every
-    // `streamChat` (`:2277`); the engine never calls `streamChat`, so after a
-    // complete engine-driven run the marker is still null.
-    //
-    // This is the assertion that makes the two above a DIAGNOSIS rather than a
-    // pair of symptoms: change this line's expectation and the untagged rows
-    // stop being a mystery.
-    expect(proof.forkTurnAfterRun).toBeNull();
-  });
+describe('the marker cannot outlive the run that set it', () => {
+  it('a plain run AFTER a forked run writes untagged rows and reads the marker back as null', async () => {
+    // ONE agent instance, driven by TWO engine runs. `duyaAgent` is long-lived
+    // and reused across runs, which is the whole hazard: a marker that survived
+    // run A would branch every row run B writes, and because a branched row is
+    // filtered out of the model projection (`message-projectors.ts:84`) those
+    // rows would disappear from the user's history with nothing reporting an
+    // error. It is silent, cross-conversation corruption.
+    const shared = new duyaAgent({
+      apiKey: 'test-key',
+      model: 'claude-test',
+      provider: 'anthropic',
+      sessionId: 's-shared',
+      workingDirectory: process.cwd(),
+      permissionMode: 'bypassPermissions',
+    });
 
-  it('TAGS every engine-written row once the marker is set, so the channel is live', async () => {
-    // THE POSITIVE PROOF, and the load-bearing test in this file.
-    //
-    // Everything above establishes that a forked engine run writes UNTAGGED
-    // rows. That is equally consistent with two very different worlds:
-    //
-    //  (a) the tagging mechanism is ABSENT from the engine path, and the next
-    //      slice must build it; or
-    //  (b) the mechanism is PRESENT and reachable, and only the marker is
-    //      missing -- so the fix is one assignment, not a mechanism.
-    //
-    // Those worlds need opposite fixes, and an absence assertion cannot tell
-    // them apart. This run replays the legacy's own `forkTurn` assignment and
-    // then changes NOTHING else: same agent, same ports, same real engine, same
-    // real two-turn tool run. So a tagged row here can only have been tagged by
-    // `_commitDurable` -- reached through the engine's `turnOutput` port.
-    //
-    // The conclusion is (b), and it is what makes D1/D2 a wiring task rather
-    // than a rebuild.
-    const proof = await runThroughEngine(true, true);
-
-    // The marker the legacy sets, verbatim.
-    expect(proof.forkTurnAfterRun).toEqual({ replyToId: 'root-1', userId: 'fork-1' });
-
-    // The run was the SAME complete multi-turn tool run as the untagged one, so
-    // the rows below were written by the engine rather than by a fixture.
-    expect(proof.probeRuns()).toBe(1);
-    expect(proof.seen).toHaveLength(2);
-    expect(proof.terminals[0].state.status).toBe('completed');
-
-    // AND EVERY non-user durable row the engine wrote now carries the branch
-    // tag. `userId`, not `replyToId`, is what `_commitDurable` stamps
-    // (`DuyaAgent.ts:4708`): rows descend from the fork's user message, not
-    // from the message it replies to. Asserting the exact triple catches both a
-    // dropped tag and a wrong-value tag.
     const { readThreadMeta } = await import('../../message/threads.js');
-    const produced = proof.durable.filter((m) => m.role === 'assistant' || m.role === 'tool');
-    expect(produced.length).toBeGreaterThanOrEqual(3);
-    for (const row of produced) {
-      expect(readThreadMeta(row)).toEqual({ replyToId: 'fork-1', branched: true });
+
+    // ---- RUN A: forked. Its rows MUST carry the tag, or this proves nothing.
+    const a = await runThroughEngine(true, true, shared);
+    expect(a.markerAfterRun).toEqual(FORK_MARKER);
+    const aRows = engineWritten(a);
+    expect(aRows.length).toBeGreaterThanOrEqual(3);
+    expect(aRows.every((row) => readThreadMeta(row)?.branched === true)).toBe(true);
+
+    // ---- RUN B: plain, SAME instance, `runFork` omitted.
+    const b = await runThroughEngine(false, false, shared);
+    expect(b.markerAfterRun).toBeNull();
+
+    // POSITIVE COUNT before the tagging assertion: run B was a real run that
+    // really wrote rows, so "untagged" is not "empty".
+    expect(b.probeRuns()).toBe(1);
+    expect(b.seen).toHaveLength(2);
+    expect(b.terminals[0].state.status).toBe('completed');
+
+    // The load-bearing assertion. ISOLATED TO RUN B's rows: `shared` still holds
+    // run A's tagged rows, so `durable` alone would report them and the
+    // assertion would be measuring the wrong thing.
+    const bRows = engineWritten(b);
+    expect(bRows.length).toBeGreaterThanOrEqual(3);
+    for (const row of bRows) {
+      expect(readThreadMeta(row)).toBeUndefined();
     }
 
-    // The user row is NOT re-tagged by the merge -- `_commitDurable` guards on
-    // `message.role !== 'user'` (`:4706`) -- so it keeps the metadata it was
-    // constructed with.
-    const forkUser = proof.durable.find((m) => m.id === 'fork-1');
-    expect(readThreadMeta(forkUser)).toEqual({ replyToId: 'root-1', branched: true });
-
-    // MEASURED LIMIT OF THIS FILE, recorded because it is a fact about the
-    // ENGINE path rather than about the product: the `message.role !== 'user'`
-    // guard is NOT load-bearing here, and dropping it changes nothing this file
-    // can see. `_commitDurable` has exactly three call sites -- `:1436` (the
-    // engine's `recordTurnToolResult`), `:1487` (its `recordTurnAssistantMessage`)
-    // and `:4563` (`_pushDurable`) -- and only the third ever sees a `user`
-    // row, and `_pushDurable` is called solely from inside `streamChat`. The
-    // engine never commits a user row: the host seeds it.
-    //
-    // So the guard protects the LEGACY's user-message write and is unreachable
-    // from here. That is why this file asserts the user row's metadata but does
-    // not claim the guard is exercised -- an assertion that a mutation cannot
-    // turn red is not evidence, and saying so here is cheaper than a reader
-    // rediscovering it.
+    // AND run A's rows are still tagged, so run B did not retroactively clear
+    // the record -- the reset is a marker, not a rewrite of history.
+    for (const row of aRows) {
+      expect(readThreadMeta(row)).toEqual({ replyToId: 'fork-1', branched: true });
+    }
   });
 
-  it('excludes the newly branched rows from the main projection on the NEXT turn', async () => {
+  it('an explicit null marker clears a marker a previous run set', async () => {
+    // The API accepts `null` as an ordinary value, so a host that tracks the
+    // marker explicitly (rather than omitting the field) clears it through the
+    // same call. Same property, the other spelling.
+    const shared = new duyaAgent({
+      apiKey: 'test-key',
+      model: 'claude-test',
+      provider: 'anthropic',
+      sessionId: 's-explicit-null',
+      workingDirectory: process.cwd(),
+      permissionMode: 'bypassPermissions',
+    });
+
+    const a = await runThroughEngine(true, true, shared);
+    expect(a.markerAfterRun).toEqual(FORK_MARKER);
+
+    const b = await runThroughEngine(false, false, shared);
+    expect(b.markerAfterRun).toBeNull();
+  });
+
+  it('the legacy resets the marker too, so a bound marker cannot reach a legacy turn', async () => {
+    // The seam is a HOST-side input, and the legacy still owns the production
+    // turn loop. `streamChat` nulls `forkTurn` at `:2277` on entry, so a marker
+    // bound for an engine run cannot tag a later legacy turn. Asserted through
+    // the public reader rather than by reaching for the private.
+    const agent = new duyaAgent({
+      apiKey: 'test-key',
+      model: 'claude-test',
+      provider: 'anthropic',
+      sessionId: 's-legacy-reset',
+      workingDirectory: process.cwd(),
+      permissionMode: 'bypassPermissions',
+    });
+
+    agent.bindRunForkMarker(FORK_MARKER);
+    expect(agent.readRunForkMarker()).toEqual(FORK_MARKER);
+
+    // Entering the legacy is enough; no turn needs to complete for the reset to
+    // have happened, because `:2277` runs before the generator's first yield.
+    for await (const _event of agent.streamChat('a plain prompt', {
+      turnId: 'legacy-reset-turn',
+    } as never)) {
+      // drain
+    }
+
+    expect(agent.readRunForkMarker()).toBeNull();
+  });
+});
+
+// ============================================================================
+// D1 REGRESSION -- the replacement for the diagnostic that D1 falsified
+// ============================================================================
+
+describe('a forked engine run is now distinguishable from a plain one', () => {
+  it('tags the forked run\'s rows and leaves the plain run\'s rows alone', async () => {
+    // REPLACES `reaches the same run with or without a fork, which is the
+    // visible symptom`. That test asserted `forked.seen.length ===
+    // plain.seen.length` and `forked.probeRuns() === plain.probeRuns()` -- a
+    // fork changed nothing observable, which was the defect stated as a
+    // measurement. D1 makes it false, so keeping the assertion would have
+    // meant deleting the evidence that the slice worked.
+    //
+    // The equality that test pinned STILL holds, and deliberately so: D1 is a
+    // DURABLE-write change, and the wire is unchanged by it. What changed is
+    // the transcript, which is where the fork's meaning lives. So the
+    // regression asserts the axis that actually moved, and the surviving
+    // equality is asserted explicitly below so a future slice that changes the
+    // wire knows this test saw the opportunity.
+    const forked = await runThroughEngine(true, true);
+    const plain = await runThroughEngine(false, false);
+
+    const { readThreadMeta } = await import('../../message/threads.js');
+
+    // Both were real, complete, two-turn tool runs.
+    expect(forked.probeRuns()).toBe(1);
+    expect(plain.probeRuns()).toBe(1);
+    expect(forked.seen).toHaveLength(2);
+    expect(plain.seen).toHaveLength(2);
+
+    // THE FIX. Same run shape, opposite durable outcome.
+    const forkedRows = engineWritten(forked);
+    const plainRows = engineWritten(plain);
+    expect(forkedRows.length).toBeGreaterThanOrEqual(3);
+    expect(plainRows.length).toBeGreaterThanOrEqual(3);
+
+    for (const row of forkedRows) {
+      expect(readThreadMeta(row)).toEqual({ replyToId: 'fork-1', branched: true });
+    }
+    for (const row of plainRows) {
+      expect(readThreadMeta(row)).toBeUndefined();
+    }
+
+    // And the marker itself, read through the public seam.
+    expect(forked.markerAfterRun).toEqual(FORK_MARKER);
+    expect(plain.markerAfterRun).toBeNull();
+
+    // The request COUNT and the dispatch count are unchanged by D1 -- the two
+    // equalities the old diagnostic pinned, and they are asserted here
+    // deliberately so a future slice knows this test saw the opportunity.
+    expect(forked.seen.length).toBe(plain.seen.length);
+    expect(forked.probeRuns()).toBe(plain.probeRuns());
+
+    // But the wire's message COMPOSITION now differs, and not in the fork's
+    // favour: on a forked run turn 2 loses the tool row turn 1 produced. That is
+    // the projection-scope defect measured in the next describe block, pinned
+    // from this side too because "distinguishable" is exactly what it costs.
+    expect(forked.seen[1].roles).not.toEqual(plain.seen[1].roles);
+    expect(plain.seen[1].roles).toContain('tool');
+    expect(forked.seen[1].roles).not.toContain('tool');
+  });
+});
+
+// ============================================================================
+// MEASURED DEFECT -- what D1 exposes on the provider boundary
+// ============================================================================
+
+describe('a forked run loses its own tool result before the next turn', () => {
+  it('turn 2 of a forked run is projected WITHOUT the tool row turn 1 produced', async () => {
+    // MEASURED, AND PINNED DELIBERATELY AS THE WRONG ANSWER. Asserted as an
+    // absence in the same spirit as the D3 quote test below: it is the honest
+    // description of today's behaviour, and the slice that fixes it turns this
+    // red, which is the correct direction for a behaviour change.
+    //
+    // WHAT HAPPENS. `createLegacyAssembleTurn` re-projects PER TURN through
+    // `handle.projectTurnMessages()` (`run-composition.ts:576`), and
+    // `projectModelMessages` drops every branched row
+    // (`message-projectors.ts:84`). Tagging is what D1 adds -- so the rows turn
+    // 1 just produced become branched, and turn 2's projection removes the very
+    // tool result the model asked for. Measured roles on turn 2:
+    //   plain run  -> ["user","assistant","tool","user"]
+    //   forked run -> ["user","user"]
+    //
+    // WHY THE LEGACY DOES NOT HAVE THIS. `streamChat` pushes into one working
+    // array and only projects at the START of a call, so within a forked turn
+    // the legacy's turn 2 still carries the tool result. The engine has to ask
+    // for a fresh projection each turn, and the projection has no notion of
+    // "this run's own rows".
+    //
+    // WHY IT IS NOT FIXED HERE. The fix belongs in the projection's SCOPE --
+    // exclude branched rows from before this run, include this run's own -- and
+    // the projection is the agent's (`projectTurnMessages`), not this file's.
+    // Rebuilding it in the composition would be the second projection the S4b-2
+    // comment explicitly rules out ("owning it is not the same as projecting
+    // it"). Reported for the driver flip rather than papered over.
+    const forked = await runThroughEngine(true, true);
+    const plain = await runThroughEngine(true, false);
+
+    // CROSS-SOURCE: asserted on what the provider was HANDED, not on the tag,
+    // so this goes red if the tag is applied but the projection stops
+    // honouring it, or the other way round.
+    expect(plain.seen[1].roles).toContain('tool');
+    expect(forked.seen[1].roles).not.toContain('tool');
+
+    // Both runs were complete and both really dispatched, so the absence above
+    // is about the projection rather than about a run that never happened.
+    expect(forked.probeRuns()).toBe(1);
+    expect(plain.probeRuns()).toBe(1);
+    expect(forked.seen).toHaveLength(2);
+    expect(plain.seen).toHaveLength(2);
+  });
+
+  it('the branched rows are excluded from the main projection, which is why the tag exists', async () => {
     // THE CONSEQUENCE, which is why the tag matters beyond bookkeeping: a
     // branched row is filtered out of the model boundary by `projectModelMessages`
     // (`isBranchedMessage`, `message-projectors.ts:84`). So tagging is not
     // cosmetic -- it is what keeps a fork's traffic out of the main context.
-    //
-    // Asserted on what the provider was handed rather than on the tag itself,
-    // so this would go red if the tag were applied but the projection stopped
-    // honouring it.
     const proof = await runThroughEngine(true, true);
 
     const onWire = proof.seen.map((r) => r.contents.join('\n')).join('\n');
@@ -533,7 +686,7 @@ describe('an engine-driven run reaches the fork-tagging merge, but has no marker
 
 describe('the engine path never routes provider requests through the reply boundary', () => {
   it('sends no threadMeta on the wire, but for a DIFFERENT reason than the legacy', async () => {
-    const proof = await runThroughEngine(true);
+    const proof = await runThroughEngine(true, false);
 
     // CROSS-SOURCE CONTROL. The raw timeline really does hold thread metadata
     // -- the seeded fork user message carries it -- so "nothing on the wire" is
@@ -557,8 +710,8 @@ describe('the engine path never routes provider requests through the reply bound
     }
   });
 
-  it('does NOT prepend the reply quote, and the run is otherwise indistinguishable from a plain one', async () => {
-    const proof = await runThroughEngine(true);
+  it('does NOT prepend the reply quote, which stays D2', async () => {
+    const proof = await runThroughEngine(true, false);
 
     // MEASURED ABSENCE, stated rather than left to be discovered. The legacy
     // renders `[In reply to <id>: "<quote>"]` at the per-request call site via
@@ -570,6 +723,9 @@ describe('the engine path never routes provider requests through the reply bound
     // Asserted as an ABSENCE deliberately: it is the honest description of
     // today's behaviour, and a later slice that wires the boundary turns this
     // red, which is the correct direction for a behaviour change.
+    //
+    // D1 does NOT close this, and the distinction matters: D1 tags DURABLE rows,
+    // whereas the quote is a per-request RENDERING of the same metadata.
     const onWire = proof.seen.map((r) => r.contents.join('\n')).join('\n');
     expect(onWire).not.toContain('[In reply to');
 
@@ -577,26 +733,5 @@ describe('the engine path never routes provider requests through the reply bound
     // above is about the boundary rather than about a run that never happened.
     expect(proof.probeRuns()).toBe(1);
     expect(proof.seen[1].roles).toContain('tool');
-  });
-
-  it('reaches the same run with or without a fork, which is the visible symptom', async () => {
-    const forked = await runThroughEngine(true);
-    const plain = await runThroughEngine(false);
-
-    // The fork changes NOTHING observable on the wire today -- same request
-    // count, same tool dispatch. That equality is the defect stated as a
-    // measurement: a forked run is currently indistinguishable from a plain one
-    // at the provider boundary, which is exactly what D3 has to change.
-    expect(forked.seen.length).toBe(plain.seen.length);
-    expect(forked.probeRuns()).toBe(plain.probeRuns());
-
-    // But the durable rows DIFFER, because the fork's user message is tagged at
-    // construction. So the transcript does record a fork even though the model
-    // leg and the assistant/tool rows do not -- the seam is exactly one layer
-    // deep, and this is the evidence for where it sits.
-    const { readThreadMeta } = await import('../../message/threads.js');
-    const taggedIn = (proof: Proof): number =>
-      proof.durable.filter((m) => readThreadMeta(m) !== undefined).length;
-    expect(taggedIn(forked)).toBeGreaterThan(taggedIn(plain));
   });
 });

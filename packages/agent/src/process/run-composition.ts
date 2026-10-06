@@ -303,6 +303,22 @@ export interface LegacyRunHost {
    * entry so a finished run's receiver is not left on a long-lived agent.
    */
   readonly turnOutputSink?: TurnOutputSink;
+  /**
+   * This run's fork marker, when the run's opening message is a branched fork.
+   *
+   * Plan 610 D1. OPTIONAL, and optional is the RESET: a run with no fork is the
+   * common case, and `composeLegacyRunPorts` binds `host.runFork ?? null`
+   * unconditionally, so omitting this member CLEARS the marker. That is the
+   * property the leak test pins -- the agent is long-lived, and a marker that
+   * outlived its run would branch every later run on the same instance, because
+   * a branched row is filtered out of the main projection
+   * (`message-projectors.ts:84`) and would simply disappear from the transcript.
+   *
+   * Declared structurally rather than by importing a type from the agent so
+   * that this file keeps depending on the agent only through its public
+   * surface; `bindRunForkMarker` accepts exactly this shape.
+   */
+  readonly runFork?: { readonly replyToId: string; readonly userId: string };
   /** Collects a fragment the engine deferred for the next turn. */
   readonly deferFragment?: (fragment: TransientContextFragment) => void;
   /**
@@ -493,9 +509,28 @@ export function composeLegacyRunSources(
  *
  * It is still a small, deliberate side effect on a shared object, and it is
  * undone the moment anything drives the legacy: `streamChat` unbinds on entry.
+ *
+ * ## The fork marker is bound HERE for the same reason, and it is UNCONDITIONAL
+ *
+ * Plan 610 D1. Same placement as the sink -- this function is "start this run",
+ * and the run's fork marker is a fact about the run rather than a description
+ * of the agent. It is NOT on `RunExecutionRequest`, because the engine never
+ * touches thread metadata: it hands records to `ports.turnOutput` and the
+ * agent's own `_commitDurable` does the tagging, so putting fork state on the
+ * engine's request type would be the wrong layer -- the engine could only pass
+ * it back out to the host that owns it.
+ *
+ * `?? null` is the load-bearing half, and it is why this is ONE line rather
+ * than a conditional: every run performs the assignment, so a run with no fork
+ * CLEARS the marker. Written as `if (host.runFork) agent.bindRunForkMarker(...)`
+ * a later plain run would leave the previous forked run's marker in force on a
+ * long-lived agent, and every durable row it wrote would be filtered out of the
+ * main projection. Same obligation as the legacy's `:2277` reset, met by the
+ * same mechanism: one unconditional write per run.
  */
 export function composeLegacyRunPorts(agent: duyaAgent, host: LegacyRunHost): RunEnginePorts {
   agent.bindTurnOutputSink(host.turnOutputSink ?? null);
+  agent.bindRunForkMarker(host.runFork ?? null);
   return buildEnginePorts(composeLegacyRunSources(agent, host));
 }
 

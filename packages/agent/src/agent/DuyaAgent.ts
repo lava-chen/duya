@@ -1400,6 +1400,61 @@ export class duyaAgent implements AgentRuntime {
   }
 
   /**
+   * Set (or CLEAR, with `null`) the fork marker for the run that is starting.
+   *
+   * Plan 610 D1. `_commitDurable` already applies `mergeThreadMetadata` to
+   * every non-user durable row while `forkTurn` is set (`:4706-4711`), and the
+   * engine reaches that same function through `recordTurnAssistantMessage`
+   * (`:1487`) and `recordTurnToolResult` (`:1436`). So the tagging mechanism is
+   * PRESENT on the engine path and only its INPUT was missing: `forkTurn` is
+   * written at `:3055`, inside `streamChat`, which the engine never calls. This
+   * is the same shape as `claimInterTurn` and the A3-2b2 lifted effects: lift
+   * the one assignment a composition needs onto a method it can call. It is NOT
+   * a second tagging mechanism -- duplicating the merge here is exactly the
+   * double-tag the plan has spent slices preventing.
+   *
+   * ## WHY ONE METHOD AND NOT A `setForkTurn` PLUS A `clearForkTurn`
+   *
+   * Because the load-bearing failure is a LEAK, and a leak is what a caller
+   * gets from forgetting a SECOND call rather than from passing the wrong value
+   * to the first. `forkTurn` lives on a long-LIVED agent (the field doc at
+   * `:4539-4547` says the legacy nulls it at the top of every `streamChat`
+   * precisely because the agent outlives the run), so one forked run that fails
+   * to clear would branch EVERY later run on that instance -- silent,
+   * cross-conversation data corruption, because a forked row is filtered out
+   * of the main projection by `projectModelMessages`
+   * (`message-projectors.ts:84`) and simply vanishes from the user's history.
+   *
+   * With ONE method, "set" and "clear" are the same operation on the same code
+   * path: there is no second call to forget, and `null` needs no argument to
+   * express. The composition (`run-composition.ts`) therefore calls this
+   * UNCONDITIONALLY at run start with `host.runFork ?? null`, so every run --
+   * forked or not -- performs the assignment, and a plain run clears by
+   * construction. The residual risk is a caller that drives the engine without
+   * going through the composition; that caller also has no marker to set, so
+   * the field stays null and the run is untagged rather than mis-tagged.
+   *
+   * The argument is COPIED field by field, so a caller mutating its own object
+   * afterwards cannot retarget a run already under way.
+   */
+  bindRunForkMarker(marker: { readonly replyToId: string; readonly userId: string } | null): void {
+    this.forkTurn = marker === null ? null : { replyToId: marker.replyToId, userId: marker.userId };
+  }
+
+  /**
+   * The fork marker currently in force, or `null`. Diagnostics and assertions.
+   *
+   * PUBLIC for the reason `readTurnOutputSink` is: the claim a leak test makes
+   * is about this field's value, so reading it IS the probe rather than a way
+   * around the boundary. It is the only way to assert the per-run reset
+   * directly -- an assertion over durable rows alone would also pass on a run
+   * that simply wrote no rows.
+   */
+  readRunForkMarker(): { readonly replyToId: string; readonly userId: string } | null {
+    return this.forkTurn === null ? null : { replyToId: this.forkTurn.replyToId, userId: this.forkTurn.userId };
+  }
+
+  /**
    * One landed tool result: the durable write, the `tool_result` frame, the
    * `mode_changed` frame, and `PostToolUseFailure` when it failed.
    *
