@@ -48,6 +48,17 @@
  * and a thrown dispatch is a FAILED run (`run-engine.ts:454-457`) rather than a
  * dropped tool.
  *
+ * ## What the class exposes, and why it is a complete tool leg
+ *
+ * `queue` / `drain` / `discard` -- hand work over, collect it, throw it away.
+ * `drain` and `discard` were added in plan 610 A3-2b2, and the reason is that
+ * `queue` alone is not a tool leg: without them the composition had no route to
+ * `getRemainingResults`, so the host handed over its OWN handle on the live
+ * executor and `ToolPort` cost three independent obligations that could disagree
+ * with each other. Three methods that all read the same `#current` record cannot
+ * disagree; three host callbacks that each captured a pipeline at a different
+ * moment could. See `drain` for the one property that makes the route safe.
+ *
  * ## Why one instance per run, and not a module-level `let`
  *
  * The worker serves sessions concurrently, so a module-level "current pipeline"
@@ -59,12 +70,21 @@
  */
 
 import type { ToolExecutionPipeline } from './ToolExecutionPipeline.js';
+import type { MessageUpdate } from './StreamingToolExecutor.js';
 import type { ToolUse } from '../types.js';
 
 /** What a turn published, and the turn it belonged to. */
 interface PublishedTurn {
   readonly turn: number;
   readonly pipeline: ToolExecutionPipeline;
+  /**
+   * Whether THIS publication has already been drained.
+   *
+   * The re-serve guard, and the reason it lives on the record rather than on
+   * the publisher: `publish` builds a fresh record per turn, so "drained" is a
+   * property of one published turn and dies with it. See `drain`.
+   */
+  drained: boolean;
 }
 
 export class TurnPipelinePublisher {
@@ -86,7 +106,7 @@ export class TurnPipelinePublisher {
         `refusing to publish turn ${turn}: this run's pipeline publication is closed, so its turns are over`,
       );
     }
-    this.#current = { turn, pipeline };
+    this.#current = { turn, pipeline, drained: false };
   }
 
   /**
@@ -129,5 +149,90 @@ export class TurnPipelinePublisher {
       );
     }
     pipeline.addTool(block);
+  }
+
+  /**
+   * Drain the live turn's pipeline, ONCE.
+   *
+   * ## The route this adds, and the one hazard it has to survive
+   *
+   * `queue` could already reach a pipeline but `drain` could not, so `ToolPort.drain`
+   * had no route to `ToolExecutionPipeline.getRemainingResults` through the
+   * publisher and the composition had to take a host's own handle on the live
+   * executor -- three host obligations (`queueTool` / `drainTools` /
+   * `discardTools`) where one publisher is the truth. This is that route, and it
+   * deliberately hands out an ITERABLE rather than the pipeline itself: a caller
+   * cannot retain the executor, so it cannot reach next turn's pipeline through a
+   * stale reference.
+   *
+   * The hazard is measured, not hypothetical.
+   * `ToolExecutionPipeline.getRemainingResults` RE-SERVES its items on a second
+   * call. In production that is harmless only because `streamChat` publishes a
+   * FRESH pipeline every turn, so turn 2 drains a different instance. An engine
+   * drains on EVERY turn, so a publisher that let one publication be drained
+   * twice would settle the same attempt key twice -- two `settle:key:…:succeeded`
+   * rows that are indistinguishable from one correct row
+   * (`engine-drain-carryover.test.ts:332-347` records the measurement).
+   *
+   * So the refusal is structural rather than advisory:
+   *
+   *  - `#current` is read AT CALL TIME, never handed out. There is no handle to
+   *    hold across turns, which is what makes "one pipeline for two turns"
+   *    unrepresentable instead of merely discouraged.
+   *  - `drained` is a per-record latch, set here and cleared only by `publish`.
+   *    A second drain of the SAME publication throws.
+   *
+   * Throws rather than returning a status for the same reason `queue` does: a
+   * swallowed refusal here is a turn that silently receives no tool results.
+   */
+  async *drain(): AsyncGenerator<MessageUpdate, void, unknown> {
+    if (this.#current === null) {
+      throw new Error(
+        this.#closed
+          ? 'refusing to drain tools: this run has ended, so no turn holds a pipeline'
+          : 'refusing to drain tools: no turn has published a pipeline yet',
+      );
+    }
+    const { turn, pipeline } = this.#current;
+    if (!pipeline.isUsable()) {
+      throw new Error(
+        `refusing to drain turn ${turn}'s tools: its pipeline has been discarded, so the drain would yield nothing and the turn would silently lose every result`,
+      );
+    }
+    if (this.#current.drained) {
+      throw new Error(
+        `refusing to drain turn ${turn} twice: a published pipeline RE-SERVES its results on a second drain, so this would settle the same calls a second time. Publish the next turn's pipeline instead`,
+      );
+    }
+    // Latched BEFORE the first `yield`, not after the drain finishes. An
+    // abandoned drain (a consumer that breaks out early, a throw upstream) has
+    // still consumed the publication, and re-entering it is exactly the
+    // double-serve this refuses.
+    this.#current.drained = true;
+    yield* pipeline.getRemainingResults();
+  }
+
+  /**
+   * Drop the live turn's queued, unstarted calls.
+   *
+   * The third leg, and it closes the tool-leg obligation set: `queue` hands work
+   * over, `drain` collects it, `discard` throws it away. Same refusals as the
+   * other two, because a `discard` into the wrong turn is the same defect.
+   */
+  discard(): void {
+    if (this.#current === null) {
+      throw new Error(
+        this.#closed
+          ? 'refusing to discard tools: this run has ended, so no turn holds a pipeline'
+          : 'refusing to discard tools: no turn has published a pipeline yet',
+      );
+    }
+    const { turn, pipeline } = this.#current;
+    if (!pipeline.isUsable()) {
+      throw new Error(
+        `refusing to discard turn ${turn}'s tools: its pipeline has already been discarded, so there is nothing queued that could run`,
+      );
+    }
+    pipeline.discard();
   }
 }

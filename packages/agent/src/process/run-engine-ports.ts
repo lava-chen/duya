@@ -155,8 +155,24 @@ export interface LegacyEngineSources {
   readonly openModelStream: (request: ModelRequest, signal: AbortSignal) => AsyncIterable<ModelFrame>;
   /** Queues one tool call. Wraps `ToolExecutionPipeline.addTool`. */
   readonly queueTool: (call: ToolCallRequest) => void;
-  /** Yields settled tool results. Wraps `getRemainingResults`. */
-  readonly drainTools: (signal: AbortSignal) => AsyncIterable<ToolOutcome>;
+  /**
+   * Yields settled tool results. Wraps `getRemainingResults`.
+   *
+   * `ToolDrainItem`, not `ToolOutcome` (plan 610 A3-2b2). It was declared
+   * `ToolOutcome`, and `ToolOutcome` IS a member of `ToolDrainItem`, so the
+   * narrowing typechecked and any host could in fact yield all three arms -- the
+   * declaration simply under-described what the runtime's own `ToolPort.drain`
+   * consumes (`agent-runtime/src/engine/ports.ts:460`).
+   *
+   * That mattered the moment a composition started DERIVING this leg: a derived
+   * drain runs the real `toDrainItem`, whose other two arms are a deferred tool
+   * context and a sub-agent progress frame, and the engine handles both
+   * (`run-engine.ts:1481-1513`). Under the narrower declaration those two were
+   * either dropped by the composition or had to be laundered through a cast. A
+   * declared type that under-describes its own channel is how a follow-up review
+   * payload goes missing silently.
+   */
+  readonly drainTools: (signal: AbortSignal) => AsyncIterable<ToolDrainItem>;
   /** Drops queued, unstarted calls. Wraps `ToolExecutionPipeline.discard`. */
   readonly discardTools: (reason: ToolDiscardReason) => void;
   /** The catalog snapshot this run advertises. */
