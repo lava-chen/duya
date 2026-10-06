@@ -153,6 +153,7 @@ import type {
   ModelMessage,
   ModelRequest,
   RunEnginePorts,
+  RunCommandPort,
   RunEventEmitter,
   RunInputSnapshot,
   TerminalCandidate,
@@ -176,6 +177,7 @@ import type { Tool } from '../types.js';
 import type { RunTurnAssembly, TurnOutputSink, duyaAgent } from '../agent/DuyaAgent.js';
 import type { TurnPipelinePublisher } from '../tool/turn-pipeline-publisher.js';
 import { createClientModelPort } from './run-engine-model.js';
+import { createLegacyCommandPort } from './command-port.js';
 import { buildEnginePorts, toDrainItem } from './run-engine-ports.js';
 import type { CompactionSources, LegacyEngineSources } from './run-engine-ports.js';
 
@@ -389,6 +391,26 @@ export interface LegacyRunHost {
    * silently mis-orders them against real transcript rows.
    */
   readonly seqIndex: number;
+  /**
+   * Plan 610 D1. This run's `turnContext.sessionId`, for the command port.
+   *
+   * Not optional, and the reason is asymmetry rather than ceremony: the OTHER
+   * command facts are derivable from the agent (`messages` is
+   * `agent.getMessages()`), but the session id and the working directory live
+   * on `turnContext`, a per-run local of `streamChat` this layer cannot see --
+   * the same reason `assembleTurn` is host-supplied rather than derived. A
+   * defaulted `sessionId` would be a command answered against a session nobody
+   * named, and `/goal pause` would then mutate whichever goal that id resolved
+   * to.
+   *
+   * `sessionId` may still be `undefined` at runtime (the legacy passes
+   * `turnContext.sessionId ?? undefined`), and the command port handles that
+   * honestly; what is required is that the host SAYS which it is rather than the
+   * composition inventing one.
+   */
+  readonly sessionId?: string;
+  /** This run's `turnContext.workingDirectory`. `/export` resolves against it. */
+  readonly workingDirectory?: string;
   /** `options.wakeRun === true`: an `agent_dm` row is already in the prompt. */
   readonly wakeRun: boolean;
   /** Whether the model accepts images, for the mailbox guidance attachment path. */
@@ -448,6 +470,26 @@ export interface LegacyRunHost {
    * only thing that knows how a `HookEvent` maps onto an `ExtensionPhase`.
    */
   readonly extensions?: ExtensionPort;
+  /**
+   * Plan 610 D1. Where the run's control commands are answered.
+   *
+   * OPTIONAL, and optional here for the same reason it is optional on
+   * `RunEnginePorts`: a host with no command surface is a legitimate host, and
+   * `composeLegacyRunSources` omits the port entirely rather than binding an
+   * empty one -- "this host has no commands" and "this host never bound one"
+   * must stay distinguishable, exactly as `extensions` argues.
+   *
+   * OMITTING IT IS THE REGRESSION, and that asymmetry is deliberate and worth
+   * stating plainly: unlike `turnOutput` (which nothing can supply yet) or
+   * `compaction` (a capability whose absence loses a transcript), the desktop
+   * product HAS control commands today. They work because `streamChat`
+   * intercepts them; after the cutover nothing does, and `/goal` reaches the
+   * provider as literal text. So the composition DERIVES this rather than
+   * asking the host for it -- the facts it needs (`sessionId`, the working
+   * directory, the transcript) are the same ones the assembly seam already
+   * takes -- and only a host that supplies its own overrides the derivation.
+   */
+  readonly command?: RunCommandPort;
 }
 
 // ============================================================================
@@ -624,6 +666,27 @@ export function composeLegacyRunSources(
     // contributors". Omitted rather than defaulted so that "no hooks" and "no
     // hook source bound" stay distinguishable.
     ...(host.extensions === undefined ? {} : { extensions: host.extensions }),
+    // Plan 610 D1. DERIVED unless the host overrode it, and deriving is the
+    // point: the product HAS control commands, so a composition that could
+    // silently drop them is a composition that ships the regression this slice
+    // exists to prevent. `agent.getMessages()` is read AT CALL TIME (it is a
+    // live getter), so a command answered on turn 1 sees the transcript as it
+    // is then -- the same rule the `pipelines` binding above follows.
+    //
+    // `host.command` wins when supplied, so a host with its own command surface
+    // (the CLI's own registry, a test) can replace the product's rather than
+    // fight it.
+    command:
+      host.command ??
+      createLegacyCommandPort({
+        get messages(): readonly Message[] {
+          return agent.getMessages();
+        },
+        ...(host.sessionId === undefined ? {} : { sessionId: host.sessionId }),
+        ...(host.workingDirectory === undefined
+          ? {}
+          : { workingDirectory: host.workingDirectory }),
+      }),
     ...(host.beginTicket === undefined || host.settleTicket === undefined
       ? {}
       : { beginTicket: host.beginTicket, settleTicket: host.settleTicket }),

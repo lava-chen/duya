@@ -156,6 +156,7 @@ import type {
   RepeatedCallStopPolicy,
   RepeatedToolCallStreak,
   RunEngine,
+  RunCommandOutcome,
   RunEnginePorts,
   RunExecutionHandle,
   RunExecutionRequest,
@@ -503,6 +504,37 @@ export class RunEngineImpl implements RunEngine {
       // outside would be a second authority that cannot be refused.
       fence = ports.attempt === undefined ? null : await ports.attempt.acquire(runId);
 
+      // ── The control-command gate: once per RUN, before turn 1 ─────────────
+      // BEFORE the `on_start` phase and before the loop, for two reasons that
+      // point the same way. First, an `on_start` contributor cannot express
+      // this: the only outcome a contribution carries is a binding veto, and
+      // `#shouldStop` reads a veto as "keep the loop open" -- the opposite of a
+      // command that has already answered the user. Second, this decides whether
+      // there IS a turn, so it belongs outside the turn loop; a check inside
+      // `before_turn` would be re-evaluated on turn 2 for a prompt consumed on
+      // turn 1.
+      //
+      // A recognised command ends the run HERE, and `command !== null` then
+      // short-circuits the `on_start` phase and the loop below to zero
+      // iterations. That reproduces the legacy's position rather than inventing
+      // a difference: it returns from `streamChat` before its turn loop AND
+      // before the ConfigHooksRunner is built (`DuyaAgent.ts:2411-2438` against
+      // `:2447`), so `UserPromptSubmit` / `SessionStart` never fire for a
+      // control command there either.
+      //
+      // The `?.` is the honest absence -- no port means no command surface,
+      // which is every host's state before this member existed -- and a `null`
+      // from the port means "not a command", so the run reaches the model
+      // exactly as before. That is what keeps an unregistered `/`-prefixed
+      // prompt behaving as the legacy behaves.
+      const command = ports.command === undefined
+        ? null
+        : await ports.command.resolve({ runId, prompt: input.prompt });
+      if (command !== null) {
+        await this.#answerCommand(ports, command, messageId, lastMessage);
+        exit = { reason: 'completed' };
+      }
+
       // ── The `on_start` phase: once per RUN, before turn 1 ────────────────
       // AFTER the fence, because a contributor that runs before its attempt is
       // leased has produced work that no epoch attributes -- the same reason
@@ -531,7 +563,11 @@ export class RunEngineImpl implements RunEngine {
       // A host that configures no hooks therefore gets byte-for-byte the
       // scheduling it had before S4a, and a host that DOES configure hooks is
       // the one that asked for work before its first turn.
-      if ((ports.extensions?.list('on_start') ?? []).length > 0) {
+      //
+      // `command === null` is the other half of the gate above: a run already
+      // answered by the product never reaches a model, and the legacy never
+      // dispatched `SessionStart` for one either.
+      if (command === null && (ports.extensions?.list('on_start') ?? []).length > 0) {
         // Adopted: `deferred` is still empty here, so these ride turn 1's
         // request, and on turn 1 `#modelRequest` places `carried` before the
         // history -- a session-start context is context the model must have read
@@ -544,7 +580,13 @@ export class RunEngineImpl implements RunEngine {
         this.#adopt(ports, await this.#contribute({ runId, turn: 0, signal, ports, repeatedCalls }, 'on_start', {}), deferred.current);
       }
 
-      for (let turn = 1; ; turn++) {
+      // ZERO iterations when the run was answered by a control command, which is
+      // the whole point: `#modelRequest` and `ports.model.stream` live inside
+      // this loop, so a handled command cannot reach a provider. Written as the
+      // loop's CONDITION rather than an early `break` so the "no turn ran" fact
+      // is the same one fact the budget-exhausted arm above already expresses by
+      // `break`ing before `spend.beginTurn`.
+      for (let turn = 1; command === null; turn++) {
         // ── Budget, BEFORE this turn is counted and BEFORE the model request ──
         // Checked here rather than after the turn, because a check after the
         // spend it should have prevented is an accounting report, not a ceiling.
@@ -1264,33 +1306,61 @@ export class RunEngineImpl implements RunEngine {
    * convention.
    */
   #publishBlocks(ctx: RunContext, message: TurnMessage): void {
-    const { ports } = ctx;
+    this.#publishBlocksFor(ctx.ports, ctx.blockIndex, message);
+  }
+
+  /**
+   * `#publishBlocks`, narrowed to the two things it reads off the context.
+   *
+   * A context-shaped parameter would force the command path to fabricate a
+   * `RunContext` -- a dozen fields it does not have and would have to invent --
+   * which is the "second authority" shape `ports.ts` refuses elsewhere: a
+   * literal that can disagree with the real one. `ports` and the block index
+   * are the whole dependency, so they are the parameters, and the per-turn
+   * caller passes `ctx.ports` / `ctx.blockIndex` unchanged. There is ONE
+   * implementation of this publication; the command path and the model path
+   * differ only in where their block counter starts, which is why a control
+   * command's answer cannot drift from a model's answer on the wire.
+   */
+  #publishBlocksFor(
+    ports: RunEnginePorts,
+    blockIndex: { text: number; thinking: number },
+    message: TurnMessage,
+  ): void {
     message.eachBlock((block) => {
       if (block.kind === 'text') {
         ports.events.publish({
           type: 'assistant.text_block',
           messageId: message.messageId,
-          index: ctx.blockIndex.text,
+          index: blockIndex.text,
           text: block.text,
         });
-        ctx.blockIndex.text += 1;
+        blockIndex.text += 1;
         return;
       }
       ports.events.publish({
         type: 'assistant.thinking_block',
         messageId: message.messageId,
-        index: ctx.blockIndex.thinking,
+        index: blockIndex.thinking,
         thinking: block.thinking,
         ...(block.thinkingSignature === undefined ? {} : { thinkingSignature: block.thinkingSignature }),
         // `encrypted` is a BOOLEAN here: the event vocabulary cannot hold the
-        // payload, only the fact that one exists
-        // (`events/payloads.ts:118`). The payload itself reaches the host
-        // through `recordAssistantMessage`, in the transcript vocabulary where
-        // it is a string.
+        // payload, only the fact that one exists (`events/payloads.ts:118`).
+        // The payload itself reaches the host through `recordAssistantMessage`,
+        // in the transcript vocabulary where it is a string.
         ...(block.encrypted === undefined ? {} : { encrypted: true }),
       });
-      ctx.blockIndex.thinking += 1;
+      blockIndex.thinking += 1;
     });
+  }
+
+  /** `#handOffMessage`, narrowed the same way: no request, no context. */
+  async #handOffMessageFor(ports: RunEnginePorts, message: TurnMessage): Promise<void> {
+    const turnOutput = ports.turnOutput;
+    if (turnOutput === undefined) return;
+    // No `model` / `providerId`: no model ran, and attributing this message to
+    // one would record a resolution the run never performed.
+    await turnOutput.recordAssistantMessage(message.toRecord({}));
   }
 
   /**
@@ -1309,6 +1379,69 @@ export class RunEngineImpl implements RunEngine {
       ...(request.provider === undefined ? {} : { providerId: request.provider }),
     });
     await turnOutput.recordAssistantMessage(record);
+  }
+
+  /**
+   * Publish a control command's reply as this run's assistant message.
+   *
+   * ## Why the command's text goes through the SAME steps a model's does
+   *
+   * Because a consumer cannot tell them apart, and that is the point. The
+   * engine's contract is that a run which answered produces an assistant
+   * message: `assistant.text_block`, then once per run
+   * `assistant.message_finalized`, plus the durable row through
+   * `TurnOutputPort`. A command answer published by some other route -- a
+   * bespoke event, a host-side stream push -- would leave every transcript
+   * rebuilt from `assistant.message_finalized` with a hole exactly where the
+   * user typed a command, which is the silent class of regression this plan
+   * exists to prevent.
+   *
+   * So this REUSES `TurnMessage` and the run's own `messageId` rather than
+   * minting an identity, and reuses `#publishBlocksFor` / `#handOffMessageFor`
+   * -- the same two calls `#streamModel` makes. One publication path, two
+   * producers, and they cannot drift.
+   *
+   * ## Why the stop reason is `end_turn`, and why that is honest
+   *
+   * `TurnMessage.eventStopReason` reads `null` for an unset reason and the
+   * finalize step then publishes a `diagnostic` and NO finalized message. So a
+   * command message needs a reason, and `end_turn` is the truthful one: the
+   * answer is complete and nothing further is coming. It is also what the
+   * legacy's `{ type: 'done', reason: 'completed' }` becomes on this wire --
+   * `completed` is the run's exit, `end_turn` is the message's stop, and the
+   * two are different vocabularies for different facts.
+   *
+   * ## `turn` is 1, not 0
+   *
+   * `TurnMessage.turn` reaches the host through
+   * `TurnOutputPort.recordAssistantMessage`, and 1 is the honest value: this run
+   * DID produce an answer, it simply did not ask a model for one. Zero is
+   * reserved for "no turn began" and is what `spend.turns` reports, which is
+   * the accounting, not the message.
+   */
+  async #answerCommand(
+    ports: RunEnginePorts,
+    outcome: RunCommandOutcome,
+    messageId: string,
+    lastMessage: RunScoped<{ current: TurnMessage | null }>,
+  ): Promise<void> {
+    const message = new TurnMessage(messageId, 1);
+    message.addText(outcome.reply);
+    message.stop('end_turn');
+    // A fresh zero counter rather than the run's own `blockIndex`: a run that
+    // never entered the loop has published nothing, so its counter is already
+    // zero, and `#publishBlocksFor` increments what it is handed.
+    this.#publishBlocksFor(ports, { text: 0, thinking: 0 }, message);
+    await this.#handOffMessageFor(ports, message);
+    // THE run's own `lastMessage` cell, handed in rather than re-minted: the
+    // `finally`'s `#finalizeLastMessage` reads that exact object, so this is
+    // what makes it publish `assistant.message_finalized` for the command's
+    // answer. Without it the run proposes a terminal having published no
+    // finalized message at all, and a consumer rebuilding the transcript
+    // silently loses what the user typed. A cell stored on the ENGINE instead
+    // would be shared state across concurrent runs, which this file's header
+    // forbids outright.
+    lastMessage.current = message;
   }
 
   /**

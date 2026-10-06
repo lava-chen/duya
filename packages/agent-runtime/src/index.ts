@@ -424,6 +424,12 @@ export type {
   OneShotTextResult,
   ResolvedPart,
   RunEngine,
+  // Plan 610 D1 -- the control-command gate. A host that owns product commands
+  // (`/goal`, `/export`) binds this so a recognised command is answered by the
+  // product and ends the run before any model call. Type-only, for the same G1
+  // reason as the rest of the family.
+  RunCommandOutcome,
+  RunCommandPort,
   RunEnginePorts,
   RunEventStorePort,
   RunExecutionHandle,

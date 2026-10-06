@@ -228,7 +228,22 @@ describe('the seams the next stage binds were not collaterally removed', () => {
     // since that parameter landed -- it was reading a shape the file stopped
     // having while the property it guards (the engine drives its own model leg,
     // inside its own loop) had not changed.
-    expect(engine).toMatch(/for \(let turn = 1; ; turn\+\+\)/);
+    // The loop header is pinned as "a `for` over turns starting at one", not as
+    // its exact spelling. Plan 610 D1 added a control-command guard to the
+    // condition -- `for (let turn = 1; command === null; turn++)`, so a run
+    // already answered by the product performs zero iterations -- which is the
+    // FIRST time this assertion's subject has legitimately changed. The property
+    // it guards is unchanged by that: the loop is still the engine's own, and
+    // the `#streamModel` call below is still unconditional within it, so the
+    // model leg is still driven from inside the loop rather than unbound and
+    // re-bound from outside.
+    //
+    // This is the same correction the comment below records for the two-argument
+    // `#streamModel` call: the pinned SHAPE drifted while the guarded property
+    // did not. Widening the pattern to the loop's identity (`turn = 1` and
+    // `turn++`) keeps it able to fail -- an engine that deleted its loop, or
+    // moved it into a helper, no longer matches.
+    expect(engine).toMatch(/for \(let turn = 1;[^)]*; turn\+\+\)/);
     expect(engine).toMatch(
       /const outcome = await this\.#streamModel\(ctx, modelRequest, requestEpoch\)/,
     );

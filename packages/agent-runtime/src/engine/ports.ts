@@ -1042,6 +1042,24 @@ export interface RunEnginePorts {
    */
   readonly sideEffects?: ToolSideEffectLedger;
   /**
+   * Where a control command the PRODUCT answers is recognised. See
+   * `RunCommandPort`.
+   *
+   * OPTIONAL, and the absence is the pre-existing behaviour rather than a
+   * gap: until this member existed the engine sent every prompt to the model
+   * and no channel existed to say otherwise, so "no command port" is exactly
+   * what every host had.
+   *
+   * Optional rather than required because a run with no control commands is a
+   * legitimate run (the CLI's own `--headless` script mode, a sub-agent, a
+   * test driving the engine directly), and forcing every one of them to build a
+   * no-op port to satisfy a type would buy nothing. The composition
+   * (`run-composition.ts`) binds it unconditionally for the same reason it
+   * binds `turnOutput`: the desktop product HAS control commands, and a
+   * forgotten binding there is the regression this member exists to prevent.
+   */
+  readonly command?: RunCommandPort;
+  /**
    * Where a transcript gets REPLACED. See `CompactionPort`.
    *
    * OPTIONAL, and the absence is still the live worker's state today: the legacy
@@ -1091,6 +1109,84 @@ export interface RunEnginePorts {
 /** What a host needs in order to run one execution to completion. */
 export interface RunEngine {
   execute(request: RunExecutionRequest): RunExecutionHandle;
+}
+
+/**
+ * Contract 1h -- control commands the PRODUCT answers, before any model call.
+ *
+ * ## Why this is a PORT and not an extension phase
+ *
+ * Measured against the two alternatives, because both were plausible and one
+ * of them is actively wrong:
+ *
+ * - **`on_start` cannot do this.** A contributor's contract is to CONTRIBUTE
+ *   (`ports.ts`, "Data or a decision, never a loop"), and the only outcome a
+ *   contribution can express is a binding VETO -- which `#shouldStop` reads as
+ *   "keep the loop open" (`run-engine.ts`, Decision 4). A veto is a decision to
+ *   run AGAIN. There is no contribution shape that says "this run is finished
+ *   and here is its text", so an `on_start` command handler could add context
+ *   and keep going but could never end the run without a model call -- which is
+ *   the entire regression. A veto-based abort would also fire `Stop` /
+ * `SessionEnd` for a prompt the user never sent to a model.
+ * - **The host `assembleTurn` seam cannot say so either.** It is host-owned and
+ *   it does run before the model, which is why it was the first candidate. But
+ *   `AssembledTurn` is a PAYLOAD (`systemPrompt` / `messages` / `tools` /
+ *   revisions) and it is produced per TURN, while this is a once-per-RUN
+ *   decision about whether there is a turn at all. Widening it would mean the
+ *   engine learns "stop" by reading a field off a payload it was about to send
+ *   to a provider -- and it is still evaluated on turn 2, 3 and N for a prompt
+ *   that was consumed on turn 1. A separate pre-loop port is the honest shape:
+ *   consulted ONCE, before turn 1, returning a decision.
+ *
+ * ## What the port returns, and why it is not `void`
+ *
+ * `resolve` returns the product's OWN reply text, and the engine publishes it
+ * as this run's assistant message. That is deliberate: the alternative --
+ * returning a boolean and having the host publish the text by some other route
+ * -- would mean two paths write the run's assistant message depending on
+ * whether a model was called, and a consumer that reconstructs the transcript
+ * from `assistant.message_finalized` would see a gap for exactly the runs a
+ * user typed a command into.
+ *
+ * ## Why the engine does NOT interpret the text
+ *
+ * `resolve` is the whole product-side command surface behind one method. The
+ * engine never inspects the prompt for `/`, never holds a verb table, and never
+ * formats a reply. Whether `/goal` pauses a goal is decided by the code the
+ * CLI and the legacy already call, so there is one implementation of the
+ * command rather than one per driver.
+ */
+export interface RunCommandPort {
+  /**
+   * Answer the run's prompt, or report that it is an ordinary prompt.
+   *
+   * `null` is the ordinary answer and MUST mean "run the model": an
+   * unregistered `/`-prefixed prompt is not a command, and the legacy sends it
+   * to the model verbatim (`DuyaAgent.streamChat` falls through both
+   * `isGoalControlCommand` and `isTranscriptControlCommand` failures). A port
+   * that returned a reply for every prompt beginning with `/` would swallow
+   * every unregistered command, which is a behaviour change users can see.
+   */
+  resolve(input: {
+    readonly runId: RunId;
+    readonly prompt: ModelMessage;
+  }): Promise<RunCommandOutcome | null>;
+}
+
+/**
+ * A recognised command: the product's OWN reply, already formatted.
+ *
+ * One field, and the narrowness is deliberate. `/copy` also produces clipboard
+ * text, but the engine must not act on it: the clipboard is the HOST's
+ * channel (`chat:clipboard_write`, `worker-protocol.ts`) and the runtime knows
+ * nothing about it, so the host performs that write inside its own `resolve`
+ * and reports only the reply here. An outcome field the engine never reads
+ * would be a second description of the channel, which is the "declared type
+ * that does not describe its own channel" defect this file refuses elsewhere.
+ */
+export interface RunCommandOutcome {
+  /** The user-facing text, already formatted by the command implementation. */
+  readonly reply: string;
 }
 
 /**

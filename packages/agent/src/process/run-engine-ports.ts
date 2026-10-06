@@ -80,6 +80,7 @@ import type {
   RunEnginePorts,
   RunEventEmitter,
   RunEventStorePort,
+  RunCommandPort,
   ToolCallRequest,
   ToolDescriptor,
   ToolDispatchTicket,
@@ -320,6 +321,23 @@ export interface LegacyEngineSources {
    * that a `HookEvent` exists.
    */
   readonly extensions?: ExtensionPort;
+  /**
+   * Where a control command the product answers is recognised.
+   *
+   * Plan 610 D1. OPTIONAL on the source and on the port, and the two are the
+   * same decision: a host with no command surface must not build a no-op port
+   * to satisfy a type, and the engine's `?.` treats an absent one as "no port,
+   * every prompt goes to the model" -- which was every host's behaviour before
+   * this member existed.
+   *
+   * The source is a HOST concern and stays one. `createLegacyCommandPort`
+   * (`command-port.ts`) is the binding that routes to the product's existing
+   * `isGoalControlCommand` / `handleGoalCommand` /
+   * `isTranscriptControlCommand` / `handleTranscriptCommand`, so the engine
+   * learns nothing about verbs, `/`-prefixes or the goal state machine -- and
+   * cannot grow a second copy of them.
+   */
+  readonly command?: RunCommandPort;
 }
 
 /**
@@ -821,6 +839,7 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
   const interTurn: InterTurnInputPort = buildInterTurnPort(sources.interTurn);
   const compaction: CompactionPort = buildCompactionPort(sources.compaction);
   const extensions = sources.extensions;
+  const command = sources.command;
 
   return {
     model,
@@ -842,6 +861,11 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
     // "this host never bound one" look the same to anything reading the ports,
     // and the omission is what `#contribute`'s `?? []` already handles.
     ...(extensions === undefined ? {} : { extensions }),
+    // Plan 610 D1. Same omitted-not-empty treatment as `extensions` above, and
+    // for the same reason: a bound-but-empty command port would claim a command
+    // surface that answers nothing, which is indistinguishable from "this host
+    // has no commands" -- and the engine's `?.` already handles the absence.
+    ...(command === undefined ? {} : { command }),
     // All-or-nothing, for the same reason `sideEffects` is: half a port is a
     // port whose missing half is indistinguishable from one that was never
     // asked. `finishTurn` without `recordToolResult` would report counts for
