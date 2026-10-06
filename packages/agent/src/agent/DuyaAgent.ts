@@ -323,6 +323,65 @@ export interface TurnPipelineRequest {
   readonly bindToolUseContext: (context: ToolUseContext) => void;
 }
 
+/**
+ * Plan 610 A3-2b7 (S1): what ONE turn's assembly needs.
+ *
+ * The same per-run / per-turn split `TurnPipelineRequest` draws, and for the
+ * same reason: the engine re-assembles every turn and resolves tools once per
+ * run, so a request that conflated the two would force the engine to re-resolve
+ * per turn or to cache what it must not cache.
+ *
+ * `systemPrompt` is the run's CURRENT prompt rather than the run's base one, and
+ * that is load-bearing. The legacy reassigns the local whenever a compaction
+ * returns a replacement (`DuyaAgent.ts:2632`, `:3760`), so the value entering a
+ * turn is not the value the run started with. A seam that recomputed from the
+ * base every turn would silently undo a compaction's prompt replacement on the
+ * next turn -- a regression that shows up as a prompt that grows back after a
+ * compaction, which no single-turn test can see.
+ */
+export interface TurnAssemblyRequest {
+  /** 1-based, as the publisher records it and as the catalog round is stamped. */
+  readonly turn: number;
+  /** The prompt as the run currently holds it. See the note above. */
+  readonly systemPrompt: string;
+  /** The transcript this turn is built from. Read fresh every turn. */
+  readonly messages: Message[];
+  /** The tool surface for this turn -- possibly promoted since the run began. */
+  readonly tools: Tool[];
+  /** `_resolveTools`'s decision. Never rebuilt here. */
+  readonly resolved: ResolvedTurnTools;
+  readonly turnContext: TurnContext;
+  readonly options: ChatOptions | undefined;
+  /** The assembled permission gate, including the declared-tools guard. */
+  readonly canUseTool: CanUseToolFn;
+  readonly toolInvokeDispatcher: ReturnType<typeof createToolInvokeDispatcherFromRegistry>;
+  /** Absent when no engine is bound to this run (the CLI, the sub-agent tool). */
+  readonly publisher: TurnPipelinePublisher | undefined;
+  /** Receives this turn's context so the caller's own dispatcher can read it. */
+  readonly bindToolUseContext: (context: ToolUseContext) => void;
+}
+
+/**
+ * What one turn's assembly produced.
+ *
+ * `catalogView` is returned LIVE, not copied: `createToolInvokeDispatcherFromRegistry`
+ * closes over the same object (`DuyaAgent.ts:1931-1942`) and reads
+ * `currentRound`, `loadedSchemaRevisions` and `loadedSchemaRounds` on every
+ * `tool_invoke`. A snapshot would satisfy a caller that only wanted to read the
+ * advertised set while the dispatcher kept consulting a different object -- the
+ * two-views failure the `discarded` hazard has the same shape as.
+ */
+export interface TurnAssembly {
+  /** The system prompt this turn advertises, after the mode-prefix refresh. */
+  readonly systemPrompt: string;
+  /** The tool surface this turn advertises. */
+  readonly tools: readonly Tool[];
+  /** This turn's pipeline, published for the engine. Fresh per turn by construction. */
+  readonly pipeline: ToolExecutionPipeline;
+  /** The live catalog view, already advanced to this turn. */
+  readonly catalogView: ToolCatalogView;
+}
+
 export class duyaAgent implements AgentRuntime {
   // Plan 550 step 2a-3: implements the structural read-only interface the
   // `TurnAssembler` consumes. Every method delegates to the existing
@@ -584,6 +643,160 @@ export class duyaAgent implements AgentRuntime {
     request.publisher?.publish(request.turn, executor);
 
     return executor;
+  }
+
+  /**
+   * Plan 610 A3-2b7 (S1): assemble ONE turn.
+   *
+   * ## Why this exists
+   *
+   * The engine calls `ContextPort.assemble` once per turn
+   * (`ports.ts:487`) and needs the provider payload for that turn. Every
+   * `assembleTurn` implementation that existed was a test stub: measured over
+   * `packages/`, the port had TWO declarations, TWO forwarders and ELEVEN
+   * implementations, and all eleven were inside `__tests__`. The port the engine
+   * calls once per turn had no production body at all, so "bind the ports and
+   * flip the driver" was never a wiring change -- the assembly had to exist
+   * first. This is that body.
+   *
+   * ## One implementation, two callers
+   *
+   * The generator calls THIS, and the composition's host will call THIS. Same
+   * argument as `buildTurnPipeline` (`:449`) and for the same reason: a
+   * separate engine-side assembler would be a second place that decides what a
+   * turn advertises, and two answers that can differ is the failure this
+   * repository keeps paying for. Routing the legacy through the seam is what
+   * keeps there being one.
+   *
+   * ## The catalog round moves HERE, and that is the substance
+   *
+   * `catalogView.currentRound` used to be assigned mid-loop, immediately before
+   * the provider request was assembled. It is assigned here instead, at the top
+   * of the turn, which is the same VALUE at every point that reads it: nothing
+   * between assembly and the old assignment site dispatches a tool, so
+   * `recordToolCatalogSchemaRead` (`:3242`) -- the only reader, and it reads on
+   * the drain -- still stamps the turn the model is actually in.
+   *
+   * It moved because a round that the engine cannot set is a round the engine
+   * cannot honour: `tool_invoke` asks `getCurrentRound()`, and a tool dispatched
+   * on an engine-driven turn would otherwise be stamped with whatever round the
+   * last legacy turn happened to leave behind.
+   *
+   * ## What is deliberately NOT here
+   *
+   * First-turn prompt admission (`DuyaAgent.ts:2414-2496`) is loop bookkeeping,
+   * not assembly. It decides whether the user's prompt is a NEW transcript row
+   * or a re-write of the last one, which is a question about the durable
+   * timeline; the engine owns its own history and admits its own prompt. Lifting
+   * it here would give the engine two owners for one decision.
+   */
+  assembleTurn(request: TurnAssemblyRequest): TurnAssembly {
+    const systemPrompt = this.refreshTurnSystemPrompt(request.systemPrompt);
+
+    // The catalog round this turn advertises. BEFORE the pipeline is built, so
+    // `catalogTool.setContextView` (inside the factory) hands the catalog tool a
+    // view that is already stamped with the turn that is about to run.
+    request.resolved.catalogView.currentRound = request.turn;
+
+    const pipeline = this.buildTurnPipeline({
+      turn: request.turn,
+      messages: request.messages,
+      tools: request.tools,
+      resolved: request.resolved,
+      turnContext: request.turnContext,
+      options: request.options,
+      canUseTool: request.canUseTool,
+      toolInvokeDispatcher: request.toolInvokeDispatcher,
+      publisher: request.publisher,
+      bindToolUseContext: request.bindToolUseContext,
+    });
+
+    return {
+      systemPrompt,
+      tools: request.tools,
+      pipeline,
+      catalogView: request.resolved.catalogView,
+    };
+  }
+
+  /**
+   * Re-evaluate the function-form mode prompt prefixes for this turn.
+   *
+   * Plan 224 Phase 3: mode state that mutates DURING the stream has to reach
+   * the prompt without rebuilding the whole base prompt -- conductor's
+   * `widgetStyleHistory` grows as canvas tools push new signatures, so a prompt
+   * built once at run start goes stale within the run.
+   *
+   * The four-clause guard is kept EXACTLY as the loop had it, including the
+   * asymmetry that the recomputed prefix REPLACES rather than appends to the
+   * incoming prompt. That is deliberate: the prefixes are function-valued, so
+   * re-running them against a growing base would duplicate the base on every
+   * turn. The guard is reproduced rather than improved because a seam that
+   * "fixed" it would change what the model is sent, which is not this slice's
+   * mandate.
+   *
+   * `baseSystemPrompt` is the run's base; it is NOT `request.systemPrompt`. The
+   * mode layer is applied on top of the base every turn, which is why the two
+   * differ and why passing the incoming prompt here would nest them.
+   */
+  private refreshTurnSystemPrompt(systemPrompt: string): string {
+    if (
+      !this.resolvedModes ||
+      !this.modeCtx ||
+      this.baseSystemPromptWithoutModes === undefined ||
+      this.resolvedModes.prompt.prefixes.length === 0
+    ) {
+      return systemPrompt;
+    }
+
+    // Refresh ctx.state with the latest rolling state so prefix builders read
+    // current values.
+    this.modeCtx.state.widgetStyleHistory = this.widgetStyleHistory;
+    let prefix = '';
+    for (const p of this.resolvedModes.prompt.prefixes) {
+      prefix += typeof p === 'function' ? p(this.modeCtx, this.baseSystemPromptWithoutModes) : p;
+    }
+    return `${prefix}\n\n${this.baseSystemPromptWithoutModes}`;
+  }
+
+  /**
+   * Plan 610 A3-2b7 (S1): the catalog half of the schema-read protocol --
+   * drop what compaction took out of provider-visible history.
+   *
+   * ## Why it is a method and not the bare free function at the call sites
+   *
+   * The three compaction sites (proactive `:2630`, preflight `:3431`, emergency
+   * `:3758`) each reached for `invalidateToolCatalogSchemaReads(catalogView)`
+   * directly, and the round that decides what those maps MEAN was assigned by
+   * hand a fourth time. Four hand-reached pieces of one protocol is the shape
+   * that lets a seam skip one of them and pass every structural test: nothing
+   * malformed is produced, the dispatcher simply keeps serving a schema it
+   * believes was loaded in a round whose history no longer exists.
+   *
+   * So the protocol gets one owner. The free function stays the implementation
+   * -- this is not a reimplementation of it -- and what lives here is the
+   * decision of WHEN, which is what the loop was actually expressing.
+   *
+   * `resolved` rather than a bare view, for the same reason `assembleTurn` takes
+   * it: the view is reached through the run's resolved-tools decision, so a
+   * caller cannot pair a view from one run with a round from another.
+   */
+  invalidateTurnCatalogSchemaReads(resolved: ResolvedTurnTools): void {
+    invalidateToolCatalogSchemaReads(resolved.catalogView);
+  }
+
+  /**
+   * Plan 610 A3-2b7 (S1): the drain half of the schema-read protocol.
+   *
+   * `recordToolCatalogSchemaRead` is called only for a committed tool-role
+   * result, and only a real `tool_catalog` receipt counts -- the legacy's
+   * `if (result.message.role === 'tool')` guard is INSIDE this method rather
+   * than at the call site, because "is this row a tool result" is part of the
+   * protocol's answer and a caller that had to remember it could forget it.
+   */
+  recordTurnCatalogSchemaRead(resolved: ResolvedTurnTools, message: Message): boolean {
+    if (message.role !== 'tool') return false;
+    return recordToolCatalogSchemaRead(resolved.catalogView, message.metadata);
   }
 
   // ==========================================================================
@@ -1836,15 +2049,18 @@ export class duyaAgent implements AgentRuntime {
     // `this.messages` together 鈥?a single bridge between helper output
     // and the main loop.
 
+    const resolvedTools = await this._resolveTools(options, appliedProfile);
+    // Only what this loop still reads after plan 610 A3-2b7. `agentDefinitions`,
+    // `catalogTool` and `toolInvokeExecutor` were read only by the per-turn
+    // pipeline literal that `assembleTurn` replaced; they are reached through
+    // `resolvedTools` now. Kept narrow deliberately: a destructuring that binds
+    // names nothing reads is a second, silently-stale account of the bundle.
     const {
       tools: baseTools,
       registry,
-      agentDefinitions,
       constraints,
-      catalogTool,
       catalogView,
-      toolInvokeExecutor,
-    } = await this._resolveTools(options, appliedProfile);
+    } = resolvedTools;
     let tools = baseTools;
 
     // The catalog snapshot and per-context dispatchers are prepared by
@@ -2381,26 +2597,13 @@ export class duyaAgent implements AgentRuntime {
       // constraints. Config-driven 'array' delivery was retired — this
       // promotion is the only remaining merge path.
 
-      // Plan 224 Phase 3: re-evaluate function-form mode prompt prefixes
-      // each turn so mode state that mutates during the stream (e.g.
-      // conductor's `widgetStyleHistory` grows as canvas tools push new
-      // signatures) is reflected in the system prompt without rebuilding
-      // the entire base prompt.
-      if (
-        this.resolvedModes &&
-        this.modeCtx &&
-        this.baseSystemPromptWithoutModes !== undefined &&
-        this.resolvedModes.prompt.prefixes.length > 0
-      ) {
-        // Refresh ctx.state with the latest rolling state so prefix
-        // builders read current values.
-        this.modeCtx.state.widgetStyleHistory = this.widgetStyleHistory;
-        let prefix = '';
-        for (const p of this.resolvedModes.prompt.prefixes) {
-          prefix += typeof p === 'function' ? p(this.modeCtx, this.baseSystemPromptWithoutModes) : p;
-        }
-        systemPromptContent = prefix + '\n\n' + this.baseSystemPromptWithoutModes;
-      }
+      // Plan 610 A3-2b7 (S1): the per-turn system-prompt refresh and this
+      // turn's pipeline now come from ONE call, `assembleTurn`. It used to be
+      // the inline mode-prefix block above plus a `buildTurnPipeline` call
+      // further down, and the catalog round was assigned a third time between
+      // them. Three hand-reached pieces of one turn's assembly is the shape that
+      // lets an engine-driven turn get two of the three; the seam is the answer
+      // to that, so the loop routes through it rather than beside it.
 
       // Plan 426 Phase 3: the mid-turn buffered-activation flush and the
       // per-turn mode reminders moved into the mode-coordinator PreTurn hook
@@ -2495,25 +2698,20 @@ export class duyaAgent implements AgentRuntime {
         }
       }
 
-      // Plan 600 S2 / plan 610 A3-2b4: this turn's pipeline is built by the
-      // public factory, so the run engine has a producer once the legacy stops
-      // being the only thing that constructs one. The call site supplies the
-      // per-run bundle and the per-turn values, and routes the binding of this
-      // turn's context back into the loop's own variable -- so there is one
-      // implementation of "what a turn's tool-use context is", not two.
-      const executor = this.buildTurnPipeline({
+      // Plan 610 A3-2b7 (S1): ONE call assembles this turn -- the mode-prefix
+      // prompt refresh, the catalog round, and the pipeline.
+      //
+      // `resolvedTools` is passed LIVE rather than reconstructed from the
+      // destructured consts. The fields are the same either way, but identity is
+      // not: a per-turn copy would be a bundle the seam could not tell apart from
+      // a previous turn's, and a stale resolved bundle is the failure the catalog
+      // round exists to prevent.
+      const assembly = this.assembleTurn({
         turn: turnCount,
+        systemPrompt: systemPromptContent,
         messages,
         tools,
-        resolved: {
-          tools: baseTools,
-          registry,
-          agentDefinitions,
-          constraints,
-          catalogTool,
-          catalogView,
-          toolInvokeExecutor,
-        },
+        resolved: resolvedTools,
         turnContext,
         options,
         canUseTool: guardedCanUseTool,
@@ -2523,6 +2721,12 @@ export class duyaAgent implements AgentRuntime {
           turnToolUseContext = context;
         },
       });
+      // The refreshed prompt REPLACES the run's current one for the rest of the
+      // turn, exactly as the inline block it replaces did. Compaction reassigns
+      // `systemPromptContent` later in the turn and the next assembly reads that
+      // value back in, so a compaction's replacement is not undone.
+      systemPromptContent = assembly.systemPrompt;
+      const executor = assembly.pipeline;
 
       // Per-turn state
       const assistantContent: MessageContent[] = [];
@@ -2627,7 +2831,7 @@ export class duyaAgent implements AgentRuntime {
       if (!settledRun) {
         throw compactionFailure ?? new Error('Compaction run did not settle');
       }
-      if (settledRun.didCompact) invalidateToolCatalogSchemaReads(catalogView);
+      if (settledRun.didCompact) this.invalidateTurnCatalogSchemaReads(resolvedTools);
       for (const ev of settledRun.events) yield ev;
       systemPromptContent = settledRun.systemPromptContent;
       messages = settledRun.messages;
@@ -2818,7 +3022,12 @@ export class duyaAgent implements AgentRuntime {
         // the same prompt bytes, so it must retain this generation and be
         // dropped if compaction/clear changed the timeline while it was in flight.
         const requestEpoch = this.compactionManager.getContextEpoch();
-        catalogView.currentRound = turnCount;
+        // Plan 610 A3-2b7 (S1): `catalogView.currentRound` is assigned by
+        // `assembleTurn` at the top of this turn, not here. The value a reader
+        // sees is unchanged -- nothing between the two points dispatches a tool,
+        // and the drain that reads it (:3444) is downstream of both -- but the
+        // round is now something the ENGINE can set rather than something only
+        // this loop can advance.
         // Plan 600 S2, model-leg slice: named so this turn's deps can be
         // PUBLISHED rather than buried in the call below. One object, two
         // readers -- the legacy loop and the engine's model leg -- so the leg
@@ -3238,9 +3447,11 @@ export class duyaAgent implements AgentRuntime {
                   if (!result.message.id) {
                     result.message.id = crypto.randomUUID();
                   }
-                  if (result.message.role === 'tool') {
-                    recordToolCatalogSchemaRead(catalogView, result.message.metadata);
-                  }
+                  // Plan 610 A3-2b7 (S1): the `role === 'tool'` test moved
+                  // INTO the seam method, because "is this row a tool result"
+                  // is part of the protocol's answer rather than a precondition
+                  // a caller has to remember.
+                  this.recordTurnCatalogSchemaRead(resolvedTools, result.message);
                   this._pushDurable(messages, result.message);
 
                   // Yield tool result event. The frame is built by the SAME
@@ -3428,7 +3639,7 @@ export class duyaAgent implements AgentRuntime {
                   });
                   const compactEntry = overflowRun.entry;
                   if (compactEntry) {
-                    invalidateToolCatalogSchemaReads(catalogView);
+                    this.invalidateTurnCatalogSchemaReads(resolvedTools);
                     logger.info(
                       `[Agent] Turn ${turnCount}: Preflight overflow compaction fired, retained=${compactEntry.tokensAfter ?? 0} tokens`,
                       undefined,
@@ -3755,7 +3966,7 @@ export class duyaAgent implements AgentRuntime {
             });
             const compactEntry = emergencyRun.entry;
             if (compactEntry) {
-              invalidateToolCatalogSchemaReads(catalogView);
+              this.invalidateTurnCatalogSchemaReads(resolvedTools);
               logger.info(`[Agent] Turn ${turnCount}: Compaction succeeded, strategy=${compactEntry.strategy}, retained=${compactEntry.tokensAfter ?? 0} tokens`);
               systemPromptContent = emergencyRun.systemPromptContent;
               messages = emergencyRun.messages;
