@@ -35,36 +35,30 @@
  * run still reaches a terminal candidate rather than dying. Both are measurable
  * against the queue's own state and the engine's own proposals.
  *
- * ## A DEFECT THIS SLICE FOUND ON THIS PATH, and did not fix
+ * ## A DEFECT THIS SLICE FOUND ON THIS PATH, since FIXED
  *
- * `RunEngineImpl` derives its run-scoped message id as
- * `` `${runId}:message` `` (`run-engine.ts:349`). The queue's merge path builds
- * a coalescing key with `coalesceKeyId` (`coalesce.ts:171`), which REFUSES any
- * component containing the key separator `:` (`coalesce.ts:181-187`) rather
- * than produce a key that decodes as another. `BoundedEventQueue.mergeIntoQueued`
- * calls it (`backpressure.ts:425`) on the first ephemeral frame that arrives
- * while the queue is over its bound.
+ * `RunEngineImpl` derived its run-scoped message id as
+ * `` `${runId}:message` ``. The queue's merge path builds a coalescing key
+ * with `coalesceKeyId` (`coalesce.ts:171`), which REFUSES any component
+ * containing the key separator `:` (`coalesce.ts:181-187`) rather than
+ * produce a key that decodes as another. `BoundedEventQueue.mergeIntoQueued`
+ * calls it (`backpressure.ts:425`).
  *
  * Measured consequence, on this tree: a run that streams text deltas into a
- * real `BoundedEventQueue` whose consumer has stopped reading DIES on the first
- * over-bound delta. The throw escapes `ports.events.publish`, unwinds
- * `#streamModel`, is caught by `#run` (`run-engine.ts:684`) and the run ends
- * `failed` with
- * `a merge key cannot be built: "<runId>:message" contains the key separator ":"`.
+ * real `BoundedEventQueue` DIED `failed`. The throw escaped
+ * `ports.events.publish`, unwound `#streamModel`, and was caught by `#run`.
+ * It fires on the run's FIRST `text_delta`, with the queue at 435 bytes and
+ * `paused: false` - it does not need the queue to be over its bound, so it is
+ * a cutover blocker rather than a slow-consumer edge case.
  *
- * This is a CUT-OVER BLOCKER, not a test artifact:
+ * Fixed in `run-engine.ts` by minting the id as `` `m-${runId}` ``, the shape
+ * the two sibling hosts already use (`run-orchestrator.ts:924`,
+ * `headless-run-host.ts:474`). The `coalesceKeyId` refusal is deliberately
+ * NOT relaxed: it is what keeps a `messageId` holding the separator from
+ * colliding with a different id and block index.
  *
- *  - it is unreachable today only because no host binds a `BoundedEventQueue`
- *    to the engine's emitter -- the emitter's own doc says the real
- *    `RunEventStream` does not implement `whenWritable` (`event-emitter.ts:243`).
- *    It becomes live the moment the backpressure the plan's section 5 requires
- *    is actually wired, which is the same work.
- *  - it is in `run-engine.ts`, which this slice does not own, and fixing it
- *    changes the engine's message identity, which is a cutover decision.
- *
- * So it is reported, not patched, and the test below is scoped to the durable
- * path -- the part of the slow-consumer scenario that is decided today. See the
- * slice report for the exact repro.
+ * This file stays scoped to the DURABLE path, and the delta half now lives
+ * beside it in `engine-scenario-slow-consumer-delta.test.ts`.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -97,10 +91,11 @@ const CALLS_PER_TURN = 2;
  * The durable event types this scenario measures.
  *
  * Read off the two families a tool call produces. Text is deliberately NOT
- * among them, and the reason is the defect in this file's header: a text frame
- * also produces an EPHEMERAL delta, and the first over-bound delta is what
- * currently throws. The tool path produces durable frames only, so it is the
- * half of the slow-consumer scenario that is decidable on this tree.
+ * among them, because this file measures what a stopped reader costs the
+ * DURABLE transcript specifically: a text frame also produces an EPHEMERAL
+ * delta, and asserting on the durable families keeps that question separate.
+ * The delta half of the same scenario is
+ * `engine-scenario-slow-consumer-delta.test.ts`.
  */
 const DURABLE_TYPES = new Set(['turn.started', 'tool.call_started', 'tool.call_completed']);
 

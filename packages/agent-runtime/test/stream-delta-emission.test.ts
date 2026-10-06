@@ -381,7 +381,7 @@ describe('a delta reaches the host while the model stream is still open', () => 
     // derives from the run id, and the fragment this file fed the port.
     expect(collected.events).toContainEqual({
       type: 'assistant.text_delta',
-      messageId: 'run-open:message',
+      messageId: 'm-run-open',
       index: 0,
       delta: ANSWER_HEAD,
     });
@@ -565,7 +565,7 @@ describe('the blocks still finalize, and the deltas did not replace them', () =>
       { type: 'turn_stopped', reason: 'tool_use' },
     ];
     // Turn 2: one more text block. The message id is RUN-scoped
-    // (`${runId}:message`), so the block index has to carry on rather than
+    // (`m-${runId}`), so the block index has to carry on rather than
     // restarting at 0 under the same id.
     const turnTwo: ModelFrame[] = [
       { type: 'text', text: ' and again' },
@@ -577,7 +577,7 @@ describe('the blocks still finalize, and the deltas did not replace them', () =>
     // One message per run, and every family carries it -- that shared id is the
     // whole mechanism by which a finalized entry supersedes the blocks for its
     // message (`replay/transcript-snapshot.ts:28-31`).
-    const messageId = 'run-ids:message';
+    const messageId = 'm-run-ids';
     for (const event of collected.events) {
       if (event.type === 'assistant.text_delta' || event.type === 'assistant.text_block') {
         expect(event.messageId, `${event.type} carried a different messageId`).toBe(messageId);
