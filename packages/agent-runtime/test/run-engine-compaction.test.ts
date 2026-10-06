@@ -29,6 +29,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import type { RunEvent } from '@duya/agent-protocol';
 import { RunEngineImpl } from '../src/engine/run-engine.js';
 import type {
   AssembledTurn,
@@ -51,24 +52,6 @@ import type {
   ToolDrainItem,
   TransientContextFragment,
 } from '../src/engine/ports.js';
-/**
- * What the engine published, taken from the PORT rather than from
- * `@duya/agent-protocol`.
- *
- * Most tests in this directory import `RunEvent` from the protocol directly, and
- * that is the better default. This one derives it from `RunEventStorePort`
- * because a second cross-package import statement adds one
- * `module-dependency-permitted` edge, and `architecture-policy.yaml`'s `selfTest`
- * block pins that count at 375 -- so a new test file that reaches for the
- * protocol fails `npm run architecture:self-test` even though the edge is
- * permitted and correct.
- *
- * Deriving it is not a workaround with no cost: the assertion in this file is
- * about what the engine published THROUGH the port, so the port is the right
- * vocabulary, and the type tracks the port if the protocol widens. Do not "fix"
- * this to a direct protocol import without re-recording the policy count.
- */
-type PublishedEvent = Parameters<RunEventStorePort['publish']>[0];
 // ============================================================================
 // Scripted ports
 // ============================================================================
@@ -98,7 +81,7 @@ interface Harness {
   /** Messages the model was actually sent, per call, in order. */
   readonly sentMessages: ModelMessage[][];
   /** Events the engine published, in order. */
-  readonly events: PublishedEvent[];
+  readonly events: RunEvent[];
   /** `tools.discard:<reason>`, in order. */
   readonly discards: string[];
   /** Terminals the engine proposed, in order. */
@@ -140,7 +123,7 @@ function harness(options: {
   const anchors: CompactionUsageAnchor[] = [];
   const progress: CompactionProgress[] = [];
   const sentMessages: ModelMessage[][] = [];
-  const events: PublishedEvent[] = [];
+  const events: RunEvent[] = [];
   const discards: string[] = [];
   const terminals: { state: string; reason: string }[] = [];
   const queued: ToolDrainItem[] = [];
@@ -256,7 +239,7 @@ function harness(options: {
       authorize: () => Promise.resolve({ allowed: true, scope: 'once' as const }),
     },
     events: {
-      publish(event: PublishedEvent): void {
+      publish(event: RunEvent): void {
         events.push(event);
       },
       proposeTerminal(candidate): void {

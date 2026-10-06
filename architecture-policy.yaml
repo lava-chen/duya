@@ -1191,7 +1191,34 @@ selfTest:
   # and stripping leaves `go and find it`, which `IMPORT_RE` then captures as
   # a specifier. Not fixed here for the same reason as the bare-`import` gap
   # above -- it is a distinct defect in a different script.
-  module-dependency-permitted: 375
+  #
+  # 375 -> NOT PINNED (see `selfTestRelations` below). The constant stood here
+  # from 370 onward and was already stale twice before this edit: recorded 370,
+  # master measured 375, and every later legitimate edge forced a re-record.
+  # 375 is left here as the value this relation was measured against; the
+  # history above it is preserved because the edges it describes are real.
+  #
+  # WHY A RELATION INSTEAD OF A NUMBER. `module-dependency-permitted` is in
+  # `MEASUREMENT_RULES` (`architecture-check.mjs:540`): counted, reported,
+  # never blocking. Pinning a rule whose whole purpose is to stay VISIBLE to a
+  # constant inverted that purpose -- the number could only be kept still by
+  # freezing the codebase, so any contributor writing a test that imported a
+  # public type from another workspace package saw `architecture:self-test`
+  # fail with no violation anywhere in the tree. Measured cost of that, not
+  # asserted: 49 of the 52 test files in `packages/agent-runtime/test/` already
+  # import `@duya/agent-protocol` (39 of them for `RunEvent` itself), and
+  # `run-engine-compaction.test.ts` was pushed into deriving the type from
+  # `RunEventStorePort` to dodge the counter.
+  #
+  # The count is also not a property of PRODUCTION structure alone: of the 375
+  # permitted edges, 149 are test-sourced (113 distinct test files) and 226 are
+  # production. So the constant was pinning a number that no amount of care
+  # about module boundaries could hold still.
+  #
+  # `module-dependency` at 380 below stays a hard constant, and it is the
+  # load-bearing half: an edge that is NOT declared is still caught, in a test
+  # as much as in production. What is given up is only the requirement that a
+  # correctly-permitted edge be paid for with a policy edit.
   # 16 -> 0: every `forbidden-dependency` in the tree was one of the 16
   # `pkg:agent` -> `apps/desktop` statements removed above.
   forbidden-dependency: 0
@@ -1270,6 +1297,29 @@ selfTest:
   # `exports` map. The rule is declarative — it reads package.json only, so
   # this stays 0 regardless of whether dist/ has been built.
   missing-module-artifact: 0
+
+# Relationships the self-test asserts INSTEAD OF a constant, for the rules whose
+# count is expected to move as the codebase grows.
+#
+#   sum:    rules whose counts are added together
+#   equals: the quantity that sum must match
+#
+# `architecture-check.mjs` evaluates each entry and fails the self-test if the
+# two sides differ. The check is meaningful rather than tautological because it
+# is NOT the same computation as the counting: `module-dependency` and
+# `module-dependency-permitted` are assigned per edge by
+# `moduleDependencyPermitted()`, while the right-hand side is the raw edge count
+# the audit reported. An edge that escaped classification, or was counted on
+# both sides, breaks it.
+selfTestRelations:
+  # 380 + 375 = 755, measured against 755 cross-boundary edges on
+  # `origin/master` @ 2902d8aa. Every cross-boundary edge is classified as
+  # exactly one of permitted / not-permitted, so this is the property that was
+  # actually true all along; the 375 constant was a weaker, brittle
+  # restatement of it.
+  - id: permitted-plus-blocking-covers-every-edge
+    sum: [module-dependency, module-dependency-permitted]
+    equals: crossBoundaryEdges
 
 # Re-measured 2026-10-03 (plan 587 T3.1, branch 587/t3-1-wire-single-source
 # on top of master @ 9a37112c): 12 new, all one specifier, 0 removed

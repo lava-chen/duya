@@ -83,6 +83,7 @@ const ruleEnabled = (name) => RULES[name] === true;
 const MANAGED_ONLY = policy.global?.managedOnly !== false;
 const BASELINE_PATH = path.join(ROOT, policy.global?.baselineFile ?? ".architecture-baseline.json");
 const selfTestExpected = policy.selfTest ?? {};
+const selfTestRelations = policy.selfTestRelations ?? [];
 
 // ── glob / prefix matching ────────────────────────────────────────────────
 
@@ -444,8 +445,49 @@ const baseline = readBaseline();
 const counts = new Map();
 for (const v of violations) counts.set(v.rule, (counts.get(v.rule) ?? 0) + 1);
 
+/**
+ * Quantities a policy relation may name that are not rules, so there is no
+ * `counts` entry for them.
+ */
+const derived = new Map([["crossBoundaryEdges", (imports.crossBoundaryEdges ?? []).length]]);
+
+/** A policy expectation resolves to a rule count or to a derived quantity. */
+const measured = (name) => counts.get(name) ?? derived.get(name) ?? 0;
+
 // ── --self-test ───────────────────────────────────────────────────────────
 
+/**
+ * Expectations come in two forms, because one number is not the right shape for
+ * every rule.
+ *
+ * A CONSTANT is right where the count itself is the invariant: any new finding
+ * must move it. `module-dependency` is the load-bearing half of the
+ * permitted/non-permitted split (see `moduleDependencyPermitted`), so it stays
+ * pinned exactly. A file importing a package its own module does not declare
+ * lands there, in a test exactly as in production, and that must fail.
+ *
+ * A RELATIONSHIP is right where the count is EXPECTED to move. Pinning
+ * `module-dependency-permitted` to a constant made this gate a tripwire for
+ * writing a test: `agent-runtime` declares `agent-protocol` in `requires`, so
+ * a test importing a public type from it adds one PERMITTED edge and the
+ * constant failed with no violation anywhere in the tree. That is the wrong
+ * shape for a rule whose documented purpose is to stay visible rather than to
+ * block (`MEASUREMENT_RULES`), and it is why
+ * `packages/agent-runtime/test/run-engine-compaction.test.ts` used to derive
+ * `RunEvent` from a port instead of importing it from the protocol like its 49
+ * sibling test files.
+ *
+ * The relation states what actually has to be true instead: the two halves of
+ * the split account for EVERY cross-boundary edge, so nothing escapes
+ * unclassified and nothing is counted twice. It stays true as permitted edges
+ * are added or removed, which is what makes it a description of the resolver
+ * rather than a snapshot of the codebase.
+ *
+ * Together the two forms still catch the interesting failures. A classification
+ * bug that sent every edge to one side trips the `module-dependency` constant;
+ * an edge dropped from both sides breaks the partition; a resolver that lost
+ * sight of non-permitted edges drops `module-dependency` below its constant.
+ */
 if (SELF_TEST) {
   const problems = [];
   for (const [rule, expected] of Object.entries(selfTestExpected)) {
@@ -453,6 +495,21 @@ if (SELF_TEST) {
     if (actual !== expected) {
       problems.push(`  ${rule.padEnd(26)} expected ${expected}, counted ${actual}`);
     }
+  }
+  const relations = [];
+  for (const rel of selfTestRelations) {
+    const sum = rel.sum.reduce((a, rule) => a + measured(rule), 0);
+    const want = measured(rel.equals);
+    const ok = sum === want;
+    if (!ok) {
+      problems.push(
+        `  ${rel.id.padEnd(38)} ${rel.sum.join(" + ")} = ${sum}, ` +
+          `expected = ${rel.equals} = ${want}`,
+      );
+    }
+    relations.push(
+      `  ${rel.id.padEnd(38)} ${rel.sum.join(" + ")} = ${sum} = ${rel.equals}  ${ok ? "OK" : "MISMATCH"}`,
+    );
   }
   if (problems.length) {
     process.stderr.write(
@@ -471,6 +528,8 @@ if (SELF_TEST) {
       Object.entries(selfTestExpected)
         .map(([rule, n]) => `  ${rule.padEnd(26)} ${n}`)
         .join("\n") +
+      "\n\n  relations\n" +
+      relations.join("\n") +
       "\n",
   );
   process.exit(0);
