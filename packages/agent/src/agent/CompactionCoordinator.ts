@@ -27,6 +27,7 @@
 
 import type { CompactionManager, CompactionProbe } from '../compact/CompactionManager.js';
 import type { MessageCompactionController } from '../message/message-compaction-controller.js';
+import type { CompactionEntry } from '../message/message-framework.js';
 import type { Message, SSEEvent } from '../types.js';
 import { logger } from '../utils/logger.js';
 
@@ -80,6 +81,38 @@ export interface CompactionRunResult {
   messages: Message[];
   /** SSE events the caller must yield in order to surface the lifecycle. */
   events: SSEEvent[];
+  /**
+   * The timeline entry a successful compaction appended, or `null`.
+   *
+   * ADDITIVE (plan 610 A3-2b5). The legacy loop never reads it -- it watches
+   * `didCompact` and the `compact:done` event, and that is enough for it. But
+   * `compact:done` carries `strategy` / `tokensRemoved` / `tokensRetained` and
+   * NOTHING about the boundary, while `compaction.completed` REQUIRES a
+   * `boundaryId` and a `compactedMessageIds` list
+   * (`events/required.ts:184-185`). Those two facts exist only here, so a host
+   * that has to answer the protocol has to reach them without re-deriving them
+   * from the timeline it cannot see.
+   */
+  entry: CompactionEntry | null;
+}
+
+/**
+ * What the pre-turn gate decided, BEFORE anything ran.
+ *
+ * Split out so a host that must DECIDE and then RUN separately can ask this
+ * coordinator for the first half and commit to the second (`executePreTurn`).
+ * `CompactionPort` has exactly that shape (`ports.ts:2086`, `:2102`), and the
+ * gate is one authority: re-deriving it here would put two copies of the
+ * cooldown arithmetic next to each other, which is the failure `ports.ts:2059`
+ * is written against.
+ */
+export interface PreTurnVerdict {
+  /** True when the gates opened and the compaction should run. */
+  readonly fire: boolean;
+  /** True when the image-volume trigger bypassed the cooldown gate. */
+  readonly imageTriggered: boolean;
+  /** Why it declined, when it declined. `null` when `fire`. */
+  readonly declinedBecause: string | null;
 }
 
 /**
@@ -136,24 +169,18 @@ export class CompactionCoordinator {
   constructor(private readonly deps: CompactionCoordinatorDeps) {}
 
   /**
-   * Decide whether to fire a proactive compaction before the next LLM
-   * call, execute it when the cooldown / image gates say so, and emit
-   * the renderer-facing SSE events in lifecycle order.
+   * The gate ALONE: probe, prefire kick, cooldown, rearm, suppression.
    *
-   * `onEvent` (optional): invoked the moment each event is produced so a
-   * live caller can stream `compact:*` to the wire DURING the compaction
-   * (the summarizer LLM call takes minutes). When provided, events are
-   * NOT duplicated into the returned `events` buffer. When omitted, the
-   * historical buffered semantics are preserved.
+   * Synchronous, and that is a fact about the legacy rather than a
+   * simplification: everything `runPreTurn` did before `executeCompaction` was
+   * synchronous already. Nothing is awaited here, so nothing needs to be.
+   *
+   * `runPreTurn` is now `decidePreTurn` + `executePreTurn`, so this code is the
+   * ONE gate implementation and the legacy loop's behaviour is unchanged. See
+   * `PreTurnVerdict` for why a host needs the two halves separately.
    */
-  async runPreTurn(input: {
-    turnCount: number;
-    systemPromptContent: string;
-    messages: Message[];
-    onEvent?: (event: SSEEvent) => void;
-  }): Promise<CompactionRunResult> {
+  decidePreTurn(input: { turnCount: number }): PreTurnVerdict {
     const { turnCount } = input;
-    let { systemPromptContent, messages } = input;
 
     // Plan 495 G1: kick the background pass1 prefire when approaching the
     // threshold — best-effort, never blocks or fails this turn. The seed
@@ -211,37 +238,95 @@ export class CompactionCoordinator {
       this.deps.compactionManager.maybeRearm(probe.tokens)
     }
     const suppressed = this.deps.compactionManager.isSuppressed();
-    if (
-      !cooldownActive &&
-      (imageTriggered ||
-        (!suppressed &&
-          (probe ? probe.overTriggerLine : this.deps.compactionController.shouldCompact())))
-    ) {
-      return await this.executeCompaction(
-        turnCount,
-        systemPromptContent,
-        messages,
-        imageTriggered,
-        input.onEvent,
-      );
-    }
+    const overLine = probe ? probe.overTriggerLine : this.deps.compactionController.shouldCompact();
+    const fire = !cooldownActive && (imageTriggered || (!suppressed && overLine));
 
-    return {
-      didCompact: false,
-      imageTriggered,
-      systemPromptContent,
-      messages,
-      events: [],
-    };
+    // Why it said no, when it said no. ADDITIVE: the legacy loop never reads
+    // this (it only ever learns "it did not compact"), but a host driving the
+    // two halves separately has to report a decline with a reason, and
+    // `CompactionDecision`'s skip arm is `reason: string`
+    // (`ports.ts:1913`). The three arms are the three gates above, in the
+    // order they are consulted.
+    const declinedBecause = fire
+      ? null
+      : cooldownActive
+        ? `cooldown: ${turnsSinceLastCompact} turns / ${Number.isFinite(tokensGrowthSinceCompact) ? tokensGrowthSinceCompact : 'unknown'} tokens since the last compaction`
+        : suppressed && !imageTriggered
+          ? 'suppression active'
+          : 'under the trigger line';
+
+    return { fire, imageTriggered, declinedBecause };
   }
 
-  private async executeCompaction(
-    turnCount: number,
-    systemPromptContent: string,
-    messages: Message[],
-    imageTriggered: boolean,
+  /**
+   * Decide whether to fire a proactive compaction before the next LLM
+   * call, execute it when the cooldown / image gates say so, and emit
+   * the renderer-facing SSE events in lifecycle order.
+   *
+   * `onEvent` (optional): invoked the moment each event is produced so a
+   * live caller can stream `compact:*` to the wire DURING the compaction
+   * (the summarizer LLM call takes minutes). When provided, events are
+   * NOT duplicated into the returned `events` buffer. When omitted, the
+   * historical buffered semantics are preserved.
+   *
+   * ## This is `decidePreTurn` + `executePreTurn`, and stays one gate
+   *
+   * The two halves became public for a host that has to decide and run
+   * separately (`CompactionPort`). Expressing this method as their
+   * composition is what keeps that a SPLIT rather than a FORK: there is one
+   * gate implementation and one place the cooldown arithmetic lives, and a
+   * host cannot get a second opinion by asking a different method.
+   */
+  async runPreTurn(input: {
+    turnCount: number;
+    systemPromptContent: string;
+    messages: Message[];
+    onEvent?: (event: SSEEvent) => void;
+  }): Promise<CompactionRunResult> {
+    const verdict = this.decidePreTurn({ turnCount: input.turnCount });
+    if (!verdict.fire) {
+      return {
+        didCompact: false,
+        imageTriggered: verdict.imageTriggered,
+        systemPromptContent: input.systemPromptContent,
+        messages: input.messages,
+        events: [],
+        entry: null,
+      };
+    }
+    return await this.executePreTurn(
+      {
+        turnCount: input.turnCount,
+        systemPromptContent: input.systemPromptContent,
+        messages: input.messages,
+        verdict,
+      },
+      input.onEvent,
+    );
+  }
+
+  /**
+   * Run the compaction a `decidePreTurn` verdict already authorised.
+   *
+   * `verdict` is REQUIRED and is not re-derived. Re-deriving it here would
+   * probe a second time and leave the decision the caller acted on possibly
+   * different from the one the run acts on -- and the caller is the engine,
+   * which has already published `compaction.started` off the back of it
+   * (`compaction.ts:145`). A host that reaches this without a verdict has to
+   * say so; `verdict` cannot be defaulted to a permissive one.
+   */
+  async executePreTurn(
+    input: {
+      turnCount: number;
+      systemPromptContent: string;
+      messages: Message[];
+      verdict: PreTurnVerdict;
+    },
     onEvent?: (event: SSEEvent) => void,
   ): Promise<CompactionRunResult> {
+    const { turnCount, verdict } = input;
+    let { systemPromptContent, messages } = input;
+    const { imageTriggered } = verdict;
     const events: SSEEvent[] = [];
     // Real-time path: with `onEvent`, events go straight to the caller's
     // queue as they are produced (live SSE pump in streamChat) and the
@@ -264,7 +349,7 @@ export class CompactionCoordinator {
         ...(imageTriggered ? { force: true } : {}),
       });
       if (!compactEntry) {
-        return { didCompact: false, imageTriggered, systemPromptContent, messages, events };
+        return { didCompact: false, imageTriggered, systemPromptContent, messages, events, entry: null };
       }
 
       // Pin the cooldown baseline.
@@ -301,7 +386,7 @@ export class CompactionCoordinator {
         },
       } as unknown as SSEEvent);
 
-      return { didCompact: true, imageTriggered, systemPromptContent, messages, events };
+      return { didCompact: true, imageTriggered, systemPromptContent, messages, events, entry: compactEntry };
     } catch (compactError) {
       const compactErrorMsg =
         compactError instanceof Error ? compactError.message : String(compactError);
@@ -312,7 +397,7 @@ export class CompactionCoordinator {
         type: 'compact:error',
         data: { message: compactErrorMsg },
       } as unknown as SSEEvent);
-      return { didCompact: false, imageTriggered, systemPromptContent, messages, events };
+      return { didCompact: false, imageTriggered, systemPromptContent, messages, events, entry: null };
     }
   }
 }
