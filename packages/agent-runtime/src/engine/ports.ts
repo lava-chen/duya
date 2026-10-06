@@ -1678,6 +1678,46 @@ export interface ExtensionContributor {
   contribute(context: ExtensionContext, signal: AbortSignal): Promise<readonly ExtensionContribution[]>;
 }
 
+/**
+ * The consecutive-identical-tool-call streak, as a hook sees it.
+ *
+ * ## Why the engine re-derives the legacy's `ConsecutiveToolCallStats`
+ *
+ * The legacy hands this fact to its `PostToolUse` loop-hook dispatch as
+ * `LoopHookDispatchContext.consecutiveIdenticalToolCalls`, typed
+ * `ConsecutiveToolCallStats` in `packages/agent/src/hooks/loop.ts`. That type
+ * CANNOT be imported here: `@duya/agent` depends on `@duya/agent-runtime`, so an
+ * import would be a cycle. It is re-derived for the same reason
+ * `RepeatedCallStreak` re-derives the legacy's signature -- see that class's doc
+ * comment, which states the cycle and the alternative that would remove the
+ * duplication (lifting the shared shape into `@duya/agent-protocol`).
+ *
+ * ## Why it carries TWO of the legacy's four fields
+ *
+ * `ConsecutiveToolCallStats` is `{ count, toolName, nudgeAt, hardNudgeAt }`, and
+ * the two thresholds are deliberately NOT reproduced. They are the HOST's nudge
+ * thresholds -- the same reasoning `RepeatedCallStopPolicy` gives for keeping
+ * `nudgeAt` and `hardNudgeAt` out of the hard-stop shape: the engine holds no
+ * nudge prose and no hook text, and a field named for them here would invite
+ * both. A host that owns nudge thresholds joins them onto this shape when it
+ * builds the legacy's `ConsecutiveToolCallStats`; the engine contributes only
+ * the two facts it is the authority for.
+ *
+ * ## The numbers are equal because there is one counter
+ *
+ * Both this and the hard stop are read off ONE `RepeatedCallStreak` per run (see
+ * `RunEngineImpl`'s `repeatedCalls` cell). There is deliberately no second
+ * counter: two counters that agree today are two counters that can disagree
+ * tomorrow, and the disagreement would be a run that hard-stopped at a different
+ * call than the hook nudged at.
+ */
+export interface RepeatedToolCallStreak {
+  /** Consecutive identical dispatched calls: same name AND same serialised input. */
+  readonly count: number;
+  /** The tool name of the current streak. */
+  readonly toolName: string;
+}
+
 export interface ExtensionContext {
   readonly runId: RunId;
   /**
@@ -1697,6 +1737,28 @@ export interface ExtensionContext {
   readonly call?: ToolCallRequest;
   /** Present at `after_tool` only. */
   readonly outcome?: ToolOutcome;
+  /**
+   * The consecutive-identical-call streak as of this dispatch. Present from the
+   * FIRST dispatched call onward, at EVERY phase.
+   *
+   * At `before_tool` it counts the calls made BEFORE this one, because
+   * `#dispatchCall` contributes the phase and only then records into the streak.
+   * At `after_tool` it counts every call dispatched so far this run -- and since
+   * the engine dispatches a whole turn before draining it, that is the turn's
+   * FINAL count on each of that turn's results. Absent before the run has
+   * dispatched anything, which is the same honest `undefined` the legacy's
+   * `DeadLoopTracker.stats()` returns (`TurnLoopTracker.ts`).
+   *
+   * ## Why EVERY phase, and not `after_tool` only
+   *
+   * Because the legacy's `PostToolUse` is not the only reader of this fact in a
+   * future engine-driven run -- a `before_finalize` contributor deciding whether
+   * to veto has the same legitimate interest in "the model asked the same thing
+   * nine times running" that the nudge hook has. Narrowing the field to one
+   * phase would make the engine's own stop decision the one place a contributor
+   * cannot see the evidence for it.
+   */
+  readonly repeatedToolCalls?: RepeatedToolCallStreak;
   /**
    * Why the run is ending. Present at `after_finalize` ONLY.
    *

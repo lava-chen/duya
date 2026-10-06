@@ -61,6 +61,33 @@
  * proof pins the per-result count so the difference cannot drift unnoticed in
  * either direction.
  *
+ * ## `PostToolUseFailure` is DELIBERATELY absent from the table above
+ *
+ * It is absent because it is ALREADY WIRED on the engine path, through a
+ * different seam -- and adding it here would fire every user's failure hook
+ * twice per failed tool.
+ *
+ * The chain, which is the part worth knowing:
+ *
+ *   engine `#drainOutcomes` -> `TurnOutputPort.recordToolResult`
+ *     -> `turnOutput.onToolResult` (the binding below)
+ *     -> `DuyaAgent.recordTurnToolResult`
+ *     -> `DuyaAgent.dispatchPostToolUseFailure`
+ *     -> `ConfigHooksRunner.run('PostToolUseFailure', ...)`
+ *
+ * That is a `ConfigHooksRunner` event and NOT a `LoopHookEvent` member, so it
+ * never passes through the loop bus -- but it does not need to, because the
+ * engine's drain already visits the same moment the legacy's dispatch did. The
+ * error bit and the tool name both arrive on the record
+ * (`ToolResultRecord.outcome` / `.toolName`), which is why the payload a
+ * configured hook receives is complete.
+ *
+ * `packages/agent/src/process/__tests__/engine-post-tool-use-failure.test.ts`
+ * is the proof: a real `RunEngineImpl`, the real agent seam, and a real hook
+ * subprocess that counts its own dispatches. It asserts EXACTLY ONE, so a future
+ * implementer who adds this event to `PHASE_EVENTS` sees two and is corrected
+ * by a test rather than by this comment.
+ *
  * ## What this file does NOT do: adopt the contexts
  *
  * Every contribution returned below is a real `additionalContext` string from a
@@ -144,6 +171,11 @@ type MappedHookEvent = 'UserPromptSubmit' | 'SessionStart' | 'PreToolUse' | 'Pos
  * absent keys are the three phases this source has nothing to fire, and a
  * `Record` that forced them to name a filler event would make "unmapped" and
  * "mapped to a no-op" indistinguishable at every call site.
+ *
+ * `PostToolUseFailure` is absent FROM THIS TABLE but is NOT missing from the
+ * engine path -- it arrives through the `turnOutput` port instead, and adding it
+ * here would double-dispatch it. See the header, "PostToolUseFailure is
+ * DELIBERATELY absent from the table above", for the chain and the proof.
  */
 const PHASE_EVENTS: Readonly<Partial<Record<ExtensionPhase, readonly MappedHookEvent[]>>> = Object.freeze({
   on_start: ['UserPromptSubmit', 'SessionStart'],

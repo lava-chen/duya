@@ -154,6 +154,7 @@ import type {
   ModelRequest,
   ModelStopReason,
   RepeatedCallStopPolicy,
+  RepeatedToolCallStreak,
   RunEngine,
   RunEnginePorts,
   RunExecutionHandle,
@@ -536,7 +537,11 @@ export class RunEngineImpl implements RunEngine {
         // history -- a session-start context is context the model must have read
         // BEFORE the transcript, which is the legacy's position too
         // (`DuyaAgent.ts:2155` routes it through the first-turn context rail).
-        this.#adopt(ports, await this.#contribute({ runId, turn: 0, signal, ports }, 'on_start', {}), deferred.current);
+        // `repeatedCalls` is the run-scoped cell, not a fresh value: it is the
+        // same object `#dispatchCall` records into and `#shouldStop` reads, and
+        // `on_start` contributes before this run has dispatched anything, so its
+        // `stats()` is the legacy's `undefined` -- an absent field, not a zero.
+        this.#adopt(ports, await this.#contribute({ runId, turn: 0, signal, ports, repeatedCalls }, 'on_start', {}), deferred.current);
       }
 
       for (let turn = 1; ; turn++) {
@@ -906,7 +911,11 @@ export class RunEngineImpl implements RunEngine {
         // The phase is still worth running: a `SessionEnd` hook's real work is
         // its side effects (cleanup, notifications, the `hook_invoked` event the
         // runner emits), and those still happen.
-        await this.#contribute({ runId, turn: spend.turns, signal, ports }, 'after_finalize', { exit });
+        // `repeatedCalls` again, and this phase is where it is most informative:
+        // a run that ended as `repeated_tool_calls` reached this contributor
+        // having just been stopped by the very count it is being handed, so the
+        // two cannot be different numbers.
+        await this.#contribute({ runId, turn: spend.turns, signal, ports, repeatedCalls }, 'after_finalize', { exit });
       }
       // The engine PROPOSES and does not publish `run.completed` / `run.failed`.
       //
@@ -2074,7 +2083,27 @@ export class RunEngineImpl implements RunEngine {
     },
   ): Promise<readonly ExtensionContribution[]> {
     const contributors = scope.ports.extensions?.list(phase) ?? [];
-    const context: ExtensionContext = { runId: scope.runId, turn: scope.turn, ...extra };
+    // The streak, off the SAME object `#shouldStop` reads, so a hook is given the
+    // count the engine's own stop decision would use rather than a second,
+    // independently-maintained number. `ExtensionScope` is what makes it
+    // reachable from the two run-scoped call sites as well as the five per-turn
+    // ones: it carries the run-scoped cell, and `RunContext` satisfies it
+    // structurally.
+    //
+    // The conditional spread rather than an assignment: `ExtensionContext` is
+    // `readonly` per field, and an `undefined`-valued member would also be a
+    // DIFFERENT state from an absent one. `undefined` before the run has
+    // dispatched anything is the legacy's own answer
+    // (`DeadLoopTracker.stats`), and the package compiles with
+    // `exactOptionalPropertyTypes`, so "no streak yet" has to be expressed by
+    // omitting the key.
+    const streak = scope.repeatedCalls.stats();
+    const context: ExtensionContext = {
+      runId: scope.runId,
+      turn: scope.turn,
+      ...(streak === undefined ? {} : { repeatedToolCalls: streak }),
+      ...extra,
+    };
     const adopted: ExtensionContribution[] = [];
 
     for (const contributor of contributors) {
@@ -2453,6 +2482,7 @@ class TurnWork {
 class RepeatedCallStreak {
   #lastSignature: string | null = null;
   #count = 0;
+  #currentName: string | null = null;
 
   /** One dispatched call. A different signature starts a new streak at 1. */
   record(name: string, input: Readonly<Record<string, unknown>>): void {
@@ -2462,6 +2492,43 @@ class RepeatedCallStreak {
       this.#lastSignature = signature;
       this.#count = 1;
     }
+    // The streak's NAME, kept separately from the signature so `stats()` can
+    // report it without splitting a string it built for comparison. Recorded on
+    // EVERY call rather than only on a new streak, which is the legacy's own
+    // ordering (`DeadLoopTracker.record` sets `currentName` outside the
+    // branch): within a streak the name cannot change, and across a reset the
+    // branch above has already written the new signature.
+    this.#currentName = name;
+  }
+
+  /**
+   * The streak as a contributor reads it, or `undefined` before the run has
+   * dispatched anything.
+   *
+   * ## Why this is a method and not the two private fields
+   *
+   * Because `#contribute` needs the fact for EVERY phase, and reaching into two
+   * private fields from outside the class would make "was the streak reset or
+   * merely continued" a question each caller has to re-answer. `undefined` is
+   * the legacy's own answer for "nothing recorded yet"
+   * (`DeadLoopTracker.stats`), kept so a hook can short-circuit before any
+   * threshold comparison rather than reading a count of 0.
+   *
+   * ## The same object the hard stop reads
+   *
+   * `repeats` and this method are two views of `#count` on ONE instance, so the
+   * number a nudge hook is given and the number the hard stop fires on cannot
+   * drift. A second counter would be a second authority for "how many identical
+   * calls has this run made", which is exactly the defect that makes a run stop
+   * at a different call than the hook warned about.
+   *
+   * The returned object is a fresh literal per call and typed
+   * `RepeatedToolCallStreak`, which is re-derived rather than imported for the
+   * package-cycle reason its own doc comment states.
+   */
+  stats(): RepeatedToolCallStreak | undefined {
+    if (this.#count === 0 || this.#currentName === null) return undefined;
+    return { count: this.#count, toolName: this.#currentName };
   }
 
   /**
@@ -2606,6 +2673,19 @@ interface ExtensionScope {
   readonly turn: number;
   readonly signal: AbortSignal;
   readonly ports: RunEnginePorts;
+  /**
+   * The run's consecutive-identical-call streak, so `#contribute` can put it on
+   * the context at EVERY phase -- including `on_start` and `after_finalize`,
+   * which have no `RunContext` to read it from.
+   *
+   * Required rather than optional precisely because those two call sites build
+   * their scope as a literal: an optional member would be omitted there, and
+   * `on_start` would silently hand a contributor no streak on a run that had
+   * already dispatched calls, which is a fact a hook cannot recover on its own.
+   * A literal cannot supply a counter it does not own, so both run-scoped sites
+   * pass the same run-scoped cell `#run` allocated.
+   */
+  readonly repeatedCalls: RunScoped<RepeatedCallStreak>;
 }
 
 /**
