@@ -1874,8 +1874,25 @@ export class RunEngineImpl implements RunEngine {
     // Adopted BEFORE the veto test, and deliberately so: a veto is the run being
     // told to CONTINUE, so anything the same phase said is for the continuation.
     // A run that finalizes instead carries the fragments on `deferred` and ends
-    // with them unread -- which is also what the legacy does with a
-    // `PreFinalize` inject that does not veto (`SessionFinalizer.ts:220`).
+    // with them unread.
+    //
+    // PARITY, and it was disputed in this plan, so it is stated with the
+    // mechanism rather than with a resemblance. The legacy's `LoopHookBus`
+    // declares the effect types each event honours, and `PreFinalize` honours
+    // exactly one -- `block_finalize` -- so a handler returning an `inject`
+    // there is discarded BY THE BUS before `SessionFinalizer.finalizeSuccess`
+    // reads the list. `finalizeSuccess` itself then keeps only a veto and drops
+    // the rest. So the legacy cannot deliver a non-vetoing `PreFinalize`
+    // inject to the model on any path, and "unread on a finalizing run" is the
+    // same outcome on both sides rather than a gap in this one.
+    //
+    // The engine is in fact MORE generous: it has no per-event effect filter,
+    // so it accepts an `inject` the legacy's bus would drop. That extra
+    // permissiveness changes no observable outcome, because a non-vetoing
+    // contribution on a finalizing run is read by nobody on either path -- and
+    // widening the legacy's bus to match would be a product behaviour change
+    // nobody asked for. Measured on both paths by
+    // `engine-before-finalize-parity.test.ts`.
     this.#adopt(ctx.ports, contributions, ctx.deferred.current);
     const vetoed = contributions.some(
       (contribution) => contribution.binding && 'veto' in contribution.content,
@@ -2421,8 +2438,10 @@ export class RunEngineImpl implements RunEngine {
    *    "run again", and its text contributions go through `#adopt` onto the
    *    deferred rail, so they reach the model only if ANOTHER turn happens. A
    *    run that finalizes ends with them unread -- which is the legacy's own
-   *    position for a non-vetoing `PreFinalize` inject
-   *    (`SessionFinalizer.ts:220`).
+   *    position too: its `LoopHookBus` honours only `block_finalize` at
+   *    `PreFinalize`, so the legacy cannot carry such an inject to the model
+   *    either. Measured on both paths by
+   *    `engine-before-finalize-parity.test.ts`.
    *  - `after_finalize` runs in the run's `finally`, after the loop has broken,
    *    and its contributions are deliberately NOT adopted (see its call site).
    *    That behaviour is documented and was reviewed; this method does not
