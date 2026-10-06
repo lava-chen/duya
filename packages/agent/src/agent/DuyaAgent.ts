@@ -266,6 +266,36 @@ export class duyaAgent implements AgentRuntime {
     return TurnAssembler.build(this, options, prompt);
   }
 
+  /**
+   * The provider client this agent drives, for a host binding the engine's
+   * `ModelPort`.
+   *
+   * PUBLIC, and the same kind of seam as `claimInterTurn` (`:3689`): the run
+   * composition needs the client, `llmClient` is private, and
+   * `createClientModelPort` (`process/run-engine-model.ts`) already consumes
+   * exactly this type. Without an accessor the model leg has no seam at all --
+   * it is the one leg with no publisher, because `ModelLegPublisher` was removed
+   * in step b3c when its reader went with it
+   * (`agent/model-leg.ts:123-133`).
+   *
+   * ## Why the CLIENT and not a stream
+   *
+   * A stream would be a second driver. `runTurnStream` is the legacy loop's own
+   * provider call and it closes over that turn's accumulators, so handing it out
+   * would give the engine a provider request the legacy had not opened -- two
+   * requests over one set of per-attempt state, which is the ordering defect
+   * `createTurnLegModelPort` was deleted for
+   * (`run-engine-model.ts:374-386`). The client opens a request the CALLER
+   * describes, which is the only shape that cannot race the legacy's own call.
+   *
+   * Read-only by construction: the caller gets the client to call, not the field
+   * to reassign, so a host cannot swap the session's provider out from under a
+   * turn that is already in flight.
+   */
+  readModelClient(): AIClient {
+    return this.llmClient;
+  }
+
   private llmClient: AIClient;
   /** Dedicated compaction client when a `compact_model` is configured. */
   private compactClient?: AIClient;
