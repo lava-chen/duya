@@ -91,7 +91,7 @@
  * grants a synthetic ticket to exactly that class (`run-engine.ts:1064`).
  */
 
-import type { AIClient, SSEEvent, ToolUse } from '@duya/ai';
+import type { AIClient, SSEEvent, TokenUsage, ToolUse } from '@duya/ai';
 import type {
   ModelFrame,
   ModelMessage,
@@ -439,7 +439,57 @@ export interface LegacyModelSources {
  * replaying it. The legacy loop keeps its own envelope because the legacy loop
  * still drives every turn, so nothing in production is affected today.
  */
-export function createClientModelPort(client: AIClient): ModelPort {
+/**
+ * The host-supplied per-call usage tap (plan 610 D3).
+ *
+ * ## What it carries, and why it is the provider's OWN block
+ *
+ * The argument is `TokenUsage` VERBATIM -- the provider's snake_case block,
+ * un-narrowed and un-summed -- so the host bills from the same numbers the
+ * legacy loop billed from, including `cache_hit_tokens` /
+ * `cache_creation_tokens`. One callback per provider `result`, so a tool-heavy
+ * turn fires it once per LLM API call and the host's per-call ledger
+ * (`UsageCall[]`) stays exactly as granular as it is today.
+ *
+ * ## Why this seam and not the `ModelFrame`
+ *
+ * `ModelFrame.usage` carries three counters and cannot carry the cache buckets
+ * (`ports.ts`): it is a runtime-layer contract, and the runtime has no honest
+ * source for a per-call MODEL to stamp. Widening it would push per-call
+ * attribution into the engine, which is the second usage authority the entry
+ * must stay. The engine's own accounting is turn-level BY CONTRACT --
+ * `AssistantMessage.addUsage` is last-wins-never-summed, and `assistant.usage`
+ * is published once in `#finalizeLastMessage` -- so forwarding each usage frame
+ * as a new `RunEvent` would mean changing that contract and registering an
+ * event type, to carry data the HOST already has. This tap carries it instead:
+ * the host owns the hot-swap surface (`agent.model`), so the host is the only
+ * side that can attribute a call to the model that produced it.
+ *
+ * ## Why it is a tap and not a second ledger
+ *
+ * The callback receives the provider's block and nothing else. It stores no
+ * state, invents no number, and re-derives nothing: the billing authority stays
+ * the entry's existing block, and the per-call ledger it pushes is unchanged.
+ * OMITTING the option is a supported run with no per-call accounting at all --
+ * distinct from binding a tap that fires zero times, because a provider that
+ * reported nothing must not be indistinguishable from a host that never asked.
+ */
+export interface ClientModelPortOptions {
+  /**
+   * Called once per provider `result` frame, pre-narrowing.
+   *
+   * OMITTED means the caller wants no per-call usage. An all-zero provider block
+   * is still delivered, because deciding that a report is meaningless is the
+   * billing authority's call (`parseUsageCall` returns `null` for it) and not
+   * this port's.
+   */
+  readonly onPerCallUsage?: (usage: TokenUsage) => void;
+}
+
+export function createClientModelPort(
+  client: AIClient,
+  options?: ClientModelPortOptions,
+): ModelPort {
   return {
     async *stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelFrame> {
       const stream = client.streamChat(toProviderMessages(request.messages), {
@@ -464,6 +514,14 @@ export function createClientModelPort(client: AIClient): ModelPort {
       });
 
       for await (const event of stream) {
+        // Plan 610 D3. The PER-CALL usage tap, taken BEFORE `toModelFrame`
+        // narrows the event, because this is the last point on the path where
+        // the provider's own numbers are still whole. See
+        // `ClientModelPortOptions` for why the narrowing seam is the wrong
+        // place to recover them.
+        if (options?.onPerCallUsage !== undefined && event.type === 'result') {
+          options.onPerCallUsage(event.data);
+        }
         const frame = toModelFrame(event);
         if (frame !== null) yield frame;
       }

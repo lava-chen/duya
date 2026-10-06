@@ -42,9 +42,24 @@
  *
  * So the surface emits it, in `projectUsageResults`, from the ONE event that
  * carries usage. It carries EXACTLY the fields the `assistant.usage` payload
- * holds -- no per-call ledger is invented here, because whether the engine can
- * supply per-call attribution is an open question with billing consequences and
- * is escalated rather than answered here. See the report on D3.
+ * holds.
+ *
+ * ## Per-call attribution: ANSWERED elsewhere, deliberately not here
+ *
+ * This member is TURN-level and stays that way, because `assistant.usage` is
+ * turn-level: `AssistantMessage.addUsage` is last-wins-never-summed and
+ * `#finalizeLastMessage` publishes it once per turn. Turning it into a per-call
+ * stream would mean overriding that contract in the runtime and registering a
+ * new event type, and the runtime has no honest per-call MODEL to stamp -- so a
+ * per-call ledger minted here would bill a whole turn to whichever model was
+ * frozen at run start, which is the wrong model after a mid-turn hot-swap.
+ *
+ * So per-call usage rides the HOST-side tap instead
+ * (`ClientModelPortOptions.onPerCallUsage` in `packages/agent`, which cannot be
+ * imported here): the provider's own block reaches the entry's existing billing
+ * authority before `toModelFrame` narrows it, cache buckets included, and the
+ * host stamps the model. This file keeps the turn-level projection it can
+ * honestly make, and does not grow a second ledger beside it.
  */
 
 import { projectToLegacyFrame } from '../project/legacy-sse-projector.js';
