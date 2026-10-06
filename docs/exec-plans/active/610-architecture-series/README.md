@@ -305,7 +305,20 @@ node -e "import('./scripts/architecture/boundary-gates.mjs').then(m=>console.log
 
 **⚠️ 第四点「去掉 `agent-process-entry.ts:76` 的值 import」同样不成立。** 入口**自己构造 agent**(`new duyaAgent({...})`,`:1929`),用了 **35 个 `agent.*` 成员共 73 处**(42 处在 `handleChatStart` 之外),而 `composeLegacyRunPorts(agent: duyaAgent, ...)` **把 agent 当第一个参数**。**切换让入口更依赖 `duyaAgent`。** G7 转绿的原因是 `DuyaAgent.ts` 不再满足循环判据 —— 判据读**去注释**源码(`code(abs)`),而 `tokenize` 跳过字符串但**不跳注释**,5000 行散文里的花括号会截断块扫描。
 
-**剩余顺序:** ① 压缩缝 —— `compactionManager.compact(` **零生产调用点**(只有三处注释),遗留实际走 `compactionCoordinator.runPreTurn`(`:2595`),而它**已经返回** `{systemPromptContent, messages}` 且 `onEvent` 就是 reporter。所以这条缝是**包装**,不是抽取;遗留的 50ms 生成器轮询泵**只是 async generator 的 transport 产物,引擎不需要**。② 组装缝 —— `systemPromptContent` 是**生成器累加器**(7 个赋值点,3 个在循环中途,1 个派生自工具在流式中改写的 `modeCtx.state`),**没有可抽取的函数**;`assembleTurnContext` 返回 `TurnContext`(身份事实)而非 `AssembledTurn`(模型载荷),**两者不可改造**。因此这条缝是**新写方法 + 等价性测试**(拿遗留自己的输出做对照),不是「忠实抽取」。③ 翻转驱动 + 删掉那个唯一的轮次循环(判据形状见上,**不引用行号**)。 | G7 depth-1 finding 转绿;`mutation-proof-a1.mjs` 仍 **7/7**(PR #232 把 G7 加深后实测);`boundary-gates.test.ts` 全绿;`live-turn-single-driver.test.ts` 仍断言 driver 总数 === 1;**外加上面那条正向证明,否则这个绿是空的** |
+**剩余顺序(2026-10-06 第七次更正;①② 已落,此前列的三条依据有两条被实测推翻):**
+
+**① 压缩缝 —— ✅ 已落(#251 + #253)。** 原判「包装不是抽取」成立:`compactionManager.compact(` **零生产调用点**,遗留实际走 `compactionCoordinator.runPreTurn`,它**已经返回** `{systemPromptContent, messages}` 且 `onEvent` 就是 reporter。#251 把 `decide`/`run` 的切分**做在 coordinator 上**(`decidePreTurn` + `executePreTurn`),因为整个 `runPreTurn` 包成 `run` 会让 `decide` 无条件返回 `compact`,而 `runCompactionPass` 在两者之间发 `compaction.started` —— **每一轮都会发一个没有终态的 started**。
+
+**#253 补齐了另外两条路径。** 原判它们「被按名字 decline」,实测**更糟:它们根本不是任何 port 能够到的东西** —— 两段各约 55 行**内联**在 `streamChat` 循环体里,唯一出路是把它们抬到 coordinator 上。现在是三道闸,因为是三个不同的问题:`decidePreTurn`(触发线 + 冷却)、`decidePreflightOverflow`(**硬**上限 + 无冷却)、`decideEmergency`(provider 错误文本 + 探针,不重置冷却)。`DuyaAgent` 的两个内联点现在调**同一批** coordinator 方法,一份权威而不是两份。
+**保留而非「顺手整理」的三处决定(各自都有变异证明):** ① preflight 用**硬**上限而不是触发线 —— 那正是这条路径存在的意义;② image 分支保留 `force: true` + `trigger: 'auto'`,因为抑制环只对 `auto` 折叠失败;③ emergency 在探针抛异常时**fail closed**。
+
+**② 组装缝 —— 原判三条依据有两条被推翻,剩下的一条才是真的。**
+- ~~「`injectTurnTimestampReminders` 在 sweep 之前跑,会漏掉 mailbox 注入的消息」~~ **不成立。** `isHumanTurnUserMessage` 在 `metadata.runtimeContext === true` 时返回 false,而遗留在投影之后追加的每一条消息都带这个标记 —— **它们在遗留里本来就没有 reminder**。实测四个后续变换全部产出该标记。
+- ~~「引擎在重试路径上不重新 assemble」~~ **不成立。** 引擎走 `turn -= 1; continue` 回到 `assemble`,遗留同样对称。#254 已加测试钉住。
+- ~~「加一个 `ContextPort.finalize` 钩子」~~ **建不出来。** 那条规则读**七个**字段,而 `ModelMessage` 只带**两个**(`role`、`content`),其余在边界上已经没了。#254 用一条**反向的 `@ts-expect-error` 类型守卫**把这个事实钉住(字段一变 `typecheck` 就红)。
+- **真的那条:`assemble` 的产物在压缩替换 transcript 时被丢弃。** 这是宿主侧的工作,在 `run-engine-ports.ts` 与 `run-engine-compaction.ts`。
+
+**③ 翻转驱动 + 删掉那个唯一的轮次循环(判据形状见上,不引用行号)。** | G7 depth-1 finding 转绿;`mutation-proof-a1.mjs` 仍 **7/7**;`live-turn-single-driver.test.ts` 仍断言 driver 总数 === 1;**外加上面那条正向证明,否则这个绿是空的**。**#252 已先把这个绿变成「挣来的」而不是「看不见」**: 判据现在能看穿「两条腿被抽成方法」的分解形状,`isTurnLoopModule(run-engine.ts)` 已从 `false` 变 `true`,所以删掉遗留循环后的绿是「循环确实搬到了 runtime 包」而不是「没人看得见任何循环」 |
 > **§4 那个未决问题的答案:真违规,不是 `ports.ts` 已知过读。** 它就是真正的轮次循环,
 > **归属 A3,不归属 A1** —— A1 的活已经干完,红的是 A3 的待办,门禁把它如实报出来,
 > 正是「门禁是事实报告,不是待办清单」的预期行为。
