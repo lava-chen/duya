@@ -18,6 +18,12 @@
  * | feed the result back | `drainOutcomes` | `DuyaAgent.ts:2677` drain, `:2717` push |
  * | decide to stop | `shouldStop` | `DuyaAgent.ts:3107`, ceiling at `:3097` |
  *
+ * Compaction is NOT a fifth decision and is deliberately not in that table: it
+ * never decides whether the run continues. It replaces an INPUT for the turn
+ * that is already going to happen, which is why it hangs off `#compact` at the
+ * three points the legacy cycle owns them (`:2155`, `:3018`/`:3022`, `:3330`/
+ * `:3360`) rather than off the stop. See "Compaction" below.
+ *
  * ## Why an implementation and not a port
  *
  * Section 0 of the same document records that a real `RunController` around an
@@ -85,6 +91,29 @@
  * a user cancel. That distinction is the whole reason
  * `SubtaskTerminationReason` was widened in `ports.ts`.
  *
+ * ## Compaction: three call sites, and the one that is not a turn
+ *
+ * `CompactionPort` (`ports.ts`) was declared before anything called it, and
+ * `compaction.ts` could produce a replacement that no loop consumed. The three
+ * sites below are the legacy's three, at the same points in the spine, and the
+ * differences between them are the legacy's rather than this file's:
+ *
+ * | site | trigger | a failure means | retries the turn |
+ * | --- | --- | --- | --- |
+ * | between assembly and the request | `auto` | the RUN fails | no |
+ * | after the drain | `preflight_overflow` | nothing; the turn continues | no |
+ * | on a failed model stream | `emergency` | nothing; the original error stands | YES |
+ *
+ * The third is the only one that is not a plain call, and the reason is in the
+ * legacy: `turnCount--` then `continue` (`DuyaAgent.ts:3369-3370`) re-runs the
+ * same turn against the compacted transcript, which is the entire point of an
+ * emergency compaction -- the request that failed is retried once it can fit.
+ * It is free with respect to the ceiling, because the turn INDEX is reused and
+ * `RunSpendLedger.beginTurn` assigns rather than increments (`:1994-1996`), so
+ * `spend.turns` does not move. That reuse is why `turn.started` can be
+ * published twice with one `turnId`, and it is the legacy's behaviour rather
+ * than a duplication bug.
+ *
  * ## No shared mutable state
  *
  * Everything a run needs is on `RunContext`, built per `execute` call. An
@@ -136,6 +165,7 @@ import type {
   TurnAssemblyInput,
 } from './ports.js';
 import { openRequestScope } from './request-scope.js';
+import { runCompactionPass, type CompactionPassResult } from './compaction.js';
 
 // ============================================================================
 // Public shape
@@ -339,6 +369,49 @@ export class RunEngineImpl implements RunEngine {
      * impossible. A counter per kind, because the two are indexed independently.
      */
     const blockIndex: RunScoped<BlockIndex> = { text: 0, thinking: 0 };
+    /**
+     * The transcript a compaction REPLACED, and null until one has.
+     *
+     * This is the cell that makes a compaction mean anything, and it is here
+     * rather than in the port because `CompactionOutcome.replacement` is a
+     * transcript the engine has to USE (`ports.ts`, "The transcript the NEXT
+     * request must be built from. Never null."). `#modelRequest` prefers it over
+     * both `input.history` and `assembled.messages`, which is the whole
+     * mechanism: without this cell the five frames publish perfectly and the
+     * provider is sent the original history on the next turn, which is the
+     * exact failure `COMPACTION_REPLACEMENT_IS_REQUIRED` in `port-guards.ts`
+     * exists to make visible.
+     *
+     * Pinned for the rest of the run once set, because compaction rewrites the
+     * lineage rather than editing a turn: the next request is the replacement
+     * plus whatever `deferred` carries, which is how the legacy's own
+     * `messages = reProjected.messages` behaves (`DuyaAgent.ts:3041-3042`).
+     */
+    const compacted: RunScoped<{ current: readonly ModelMessage[] | null }> = { current: null };
+    /**
+     * The context generation, bumped by every compaction that replaced the
+     * transcript.
+     *
+     * A local rather than a cell, because it is only ever read at two points and
+     * both are inside this method's call tree: `#streamModel` needs the value
+     * the request was BUILT at, and `#compact` is what advances it. Wrapping it
+     * in a cell would make a counter nobody can reassign look like run-scoped
+     * state that outlives a turn.
+     *
+     * Separate from `RunExecutionRequest`'s run epoch on purpose: that one is
+     * attempt recovery, this one is how many times the conversation has been
+     * rewritten. The legacy keeps the same distinction -- `getContextEpoch` is
+     * the manager's generation counter, bumped by compaction at
+     * `CompactionManager.ts:918-921` and read at `DuyaAgent.ts:2380` BEFORE the
+     * stream so usage can be filed against the generation the request was built
+     * in. Conflating the two would let a recovery attempt rewind a compaction
+     * boundary, which is not what either counter means.
+     *
+     * A cell rather than a `let` for the reason `lastMessage` and `blockIndex`
+     * are cells: `#compact` is a method, and run-scoped state a method writes
+     * is what `RunScoped` is for. The engine object still holds no state.
+     */
+    const contextEpoch: RunScoped<{ current: number }> = { current: 0 };
 
     let exit: EngineExit = { reason: 'completed' };
     // Declared OUTSIDE the try so the `finally` can release a lease that was
@@ -395,6 +468,8 @@ export class RunEngineImpl implements RunEngine {
           messageId,
           lastMessage,
           blockIndex,
+          compacted,
+          contextEpoch,
         };
 
         if (isAborted(signal)) {
@@ -427,6 +502,40 @@ export class RunEngineImpl implements RunEngine {
         // time, so a host that injects on `defer` would hand the model the same
         // result twice — invisible in a single-turn run and wrong in every
         // multi-turn one.
+
+        // ── Compaction site 1 of 3: the proactive pass, before the request ──
+        // HERE and not at the top of the turn, which is where the legacy pumps it
+        // (`DuyaAgent.ts:2155`). Two reasons, and the first is the load-bearing
+        // one: `assemble` is the only point in the spine where the engine HOLDS
+        // a real transcript, and `CompactionDecisionInput.transcript` is
+        // "the messages travel, and the port measures them"
+        // (`ports.ts`, "Why the request carries the transcript rather than a
+        // token count"). At the top of the turn the engine has `input.history`,
+        // which is a `ResolvedPart` and a `by_ref` one is the HOST's to resolve
+        // (`:1401-1405`) -- so a probe asked up there would measure nothing and
+        // decline for the wrong reason.
+        //
+        // The second is the legacy's own order: it pumps at `:2155` and builds
+        // the request at `:2338`, so the replacement feeds the request that
+        // follows. Same sequence, expressed the only way an injected assembly
+        // allows.
+        const proactive = await this.#compact(ctx, {
+          trigger: 'auto',
+          transcript: this.#transcriptFor(ctx, assembled),
+        });
+        // A proactive compaction that FAILS takes the run down, and that is the
+        // legacy's asymmetry rather than a choice: the pump at `:2181` throws
+        // outside the stream's own try (which opens at `:2268`), so a pre-turn
+        // compaction error propagates out of the cycle, while the preflight
+        // (`:3044`) and emergency (`:3372`) ones are caught and swallowed. The
+        // three sites keep that split, because a run that silently kept the
+        // transcript it could not shrink is the failure mode `ports.ts` states
+        // at length: the context grows until the provider rejects it.
+        if (proactive.kind === 'failed') {
+          exit = { reason: 'failed', message: proactive.message };
+          break;
+        }
+
         const modelRequest = await this.#modelRequest(ctx, assembled, deferred);
         // Consumed: the fragments belong to the request that just carried them
         // and must not ride the next one. Left in place they would accumulate
@@ -437,8 +546,91 @@ export class RunEngineImpl implements RunEngine {
 
         ports.events.publish(this.#turnStartedEvent(ctx, modelRequest));
 
-        const outcome = await this.#streamModel(ctx, modelRequest);
+        // Read AFTER the proactive pass and BEFORE the stream opens, which is
+        // the legacy's ordering at `DuyaAgent.ts:2380` and the whole reason the
+        // value is an argument rather than a lookup: the request is filed
+        // against the generation it was BUILT in, and a compaction that opens
+        // during the stream must not inherit the anchor of the request that
+        // happened to still be running.
+        const requestEpoch = ctx.contextEpoch.current;
+
+        const outcome = await this.#streamModel(ctx, modelRequest, requestEpoch);
         if (outcome !== null) {
+          // ── Compaction site 3 of 3: the emergency pass, and the only RETRY ──
+          // Gated on `failed` and not merely on "the turn ended badly", which is
+          // the one thing here that is NOT a transliteration. A `cancelled` exit
+          // arrives here too -- a stop mid-stream, or a `turn_stopped` that says
+          // cancelled -- and compacting on it would start a summarizer that takes
+          // MINUTES (`ports.ts`, "The summarizer takes MINUTES") on a run the
+          // user just asked to stop, with nothing to show for it. The legacy does
+          // not have this hazard because its emergency path lives in a `catch`
+          // (`DuyaAgent.ts:3306`) and an abort is not a throw; an injected
+          // `signal` reaches the exit as a value, so the gate has to be explicit.
+          //
+          // A stop is not a provider error, and saying so is all this gate does.
+          // Whether the error is a CONTEXT-LENGTH one is the port's call, on the
+          // text this hands it.
+          if (outcome.reason !== 'failed') {
+            exit = outcome;
+            break;
+          }
+
+          // The one site that is not a plain call, because the legacy retries
+          // the turn: `turnCount--` then `continue` (`DuyaAgent.ts:3369-3370`)
+          // re-runs the SAME turn against the compacted transcript. That is the
+          // entire point of an emergency compaction -- the request that just
+          // failed is the one that gets another chance, and retrying the NEXT
+          // turn instead would resend the same oversized request once more
+          // before shrinking.
+          //
+          // The reuse is free against the ceiling, and deliberately so:
+          // `beginTurn` assigns rather than increments, so `spend.turns` does
+          // not move and `#shouldStop`'s `>= maxTurns` test is unchanged. It
+          // does mean `turn.started` is published twice under one `turnId`,
+          // which is what the legacy does too (it yields `turn_start` at
+          // `:2136` on the re-entry).
+          const emergency = await this.#compact(ctx, {
+            trigger: 'emergency',
+            // Composed rather than taken from `assembled`: the results this turn
+            // drained are in `deferred` and are exactly the payload that
+            // overflowed, so a probe that could not see them would decline
+            // against a transcript the provider had already rejected.
+            transcript: this.#transcriptFor(ctx, assembled, deferred),
+            // The provider's own words, forwarded verbatim. The engine does not
+            // classify them: the dual-evidence gate is a property of how each
+            // provider phrases the error and those providers are the host's
+            // (`ports.ts`, `CompactionObservation.providerError`).
+            ...(outcome.message === undefined ? {} : { providerError: outcome.message }),
+          });
+          if (emergency.kind === 'replaced') {
+            // Only a REPLACEMENT earns the retry. A decline, a failure and a
+            // cancel all leave the transcript as it was, and re-running an
+            // unchanged request would burn a turn to fail identically -- the
+            // legacy's `if (compactEntry)` at `:3361` is the same test.
+            //
+            // `model_retry`, and not a new reason: this IS a model-stream retry
+            // -- the same turn is about to be re-issued -- and `ToolDiscardReason`
+            // is a closed union whose `model_retry` member is documented as
+            // exactly this case (`ports.ts`: "The engine calls this on a
+            // model-stream retry"). Widening it for a synonym would make a
+            // consumer switch on a value it had no reason to expect.
+            //
+            // Redundant on the `error` frame path, where `#streamModel` already
+            // discarded, and kept anyway because the other `failed` exit does not:
+            // a stream that produced no frames returns at `:720-725` without ever
+            // reaching the error arm. The port's own reason for the call is the
+            // one that does not depend on which exit fired -- "a replayed model
+            // call would double-dispatch calls the first attempt already sent" --
+            // and it is a ONE-WAY latch, so closing it late is closing it never
+            // (`StreamingToolExecutor.ts:479`, never cleared at `:729-732`). That
+            // is also why the pipeline lifetime stays per-turn.
+            ports.tools.discard('model_retry');
+            turn -= 1;
+            continue;
+          }
+          // Everything else falls through to the original failure, which is the
+          // legacy's asymmetry again: `:3372` catches a compaction error and
+          // still runs `finalizeStreamError` on the ORIGINAL error (`:3396`).
           exit = outcome;
           break;
         }
@@ -448,6 +640,32 @@ export class RunEngineImpl implements RunEngine {
         // results, so these are two decisions at one point in the spine.
         const turnWork = ctx.turnWork;
         await this.#drainOutcomes(ctx, deferred);
+
+        // ── Compaction site 2 of 3: the preflight overflow check ────────────
+        // After the drain and BEFORE the stop decision, which is the legacy's
+        // position (`:3009` sits inside the `done` handler, ahead of
+        // `if (!needsFollowUp)` at `:3107`). The reason to be here rather than
+        // at the top of the next turn is in the legacy's own comment: a single
+        // tool call can blow past the 78% threshold by itself, and waiting for
+        // the next turn's check "risks a `context_length_exceeded` round-trip"
+        // (`:3001-3008`). Compacting here is cheaper than retrying the turn.
+        //
+        // Gated on the drain having produced something, exactly as `:3009`
+        // gates on `toolResultMessageCount > 0` -- with nothing new the
+        // transcript is the one the proactive pass already measured this turn,
+        // and asking again would re-run the same decision against the same
+        // input.
+        if (turnWork.drained > 0) {
+          // Best-effort by construction: a failure here is swallowed rather
+          // than raised, matching `:3044-3056`, and the turn proceeds on the
+          // transcript it already has. The `await` is inside the call so the
+          // compaction cannot be left unawaited, and the RESULT is dropped on
+          // purpose -- that asymmetry is the point of the table in the header.
+          await this.#compact(ctx, {
+            trigger: 'preflight_overflow',
+            transcript: this.#transcriptFor(ctx, assembled, deferred),
+          });
+        }
 
         // ── Decision 4: decide to stop ───────────────────────────────────────
         if (isAborted(signal)) {
@@ -594,7 +812,7 @@ export class RunEngineImpl implements RunEngine {
    * returns, so placing the hand-off at the end of the stream makes the ordering
    * structural -- there is no code path that reaches a tool result first.
    */
-  async #streamModel(ctx: RunContext, request: ModelRequest): Promise<EngineExit | null> {
+  async #streamModel(ctx: RunContext, request: ModelRequest, epoch: number): Promise<EngineExit | null> {
     const { ports, signal, spend } = ctx;
 
     // The per-request cap, opened here because THIS is the request, and released
@@ -696,6 +914,15 @@ export class RunEngineImpl implements RunEngine {
           case 'usage':
             spend.addTokens(frame.totalTokens ?? frame.inputTokens + frame.outputTokens);
             message.addUsage(frame);
+            // The compaction anchor, from the provider's own numbers. Fed HERE,
+            // on the frame, rather than accumulated and reported once at the end
+            // of the stream: the legacy feeds it per `result` event
+            // (`DuyaAgent.ts:3166-3172`) and the round-max defence belongs to the
+            // port, which is the only side that knows about epochs
+            // (`CompactionManager.ts:502`). A guard, not a call the engine may
+            // skip when it feels like it -- `spend` above is the same kind of
+            // fact and is never optional.
+            this.#anchorUsage(ctx, epoch, frame.inputTokens, frame.outputTokens);
             break;
           case 'error':
             // A fatal frame ends the run. `retryable` is the provider's claim and
@@ -1212,6 +1439,10 @@ export class RunEngineImpl implements RunEngine {
           dispatched: ctx.turnWork.dispatched,
         });
       }
+      // Published even when the drain returned early on an abort, because
+      // `results` is what actually landed and the preflight gate asks about
+      // landed results rather than about whether the loop ran to the end.
+      ctx.turnWork.drained = results;
     }
   }
 
@@ -1260,6 +1491,141 @@ export class RunEngineImpl implements RunEngine {
     if (turnWork.dispatched > 0) return null;
 
     return { reason: 'completed' };  }
+
+  // ── helpers ───────────────────────────────────────────────────────────────
+
+  // ── Compaction ─────────────────────────────────────────────────────────────
+
+  /**
+   * Run one compaction pass, and adopt its replacement if it produced one.
+   *
+   * Delegated to `runCompactionPass`, which owns the frame ordering and the
+   * `unbound` case; this method owns the two things the loop is for -- applying
+   * the replacement, and advancing the generation.
+   *
+   * ## Applying the replacement is the entire point
+   *
+   * A pass that publishes `compaction.completed` and is then ignored leaves the
+   * provider sending the original history forever, so the two assignments below
+   * are the load-bearing lines rather than bookkeeping:
+   *
+   *  - `compacted.current` is what `#modelRequest` builds the next request from.
+   *  - `contextEpoch += 1` retires the generation the just-finished request
+   *    belonged to, so a later `noteUsage` cannot anchor the new one to a size it
+   *    never had. The legacy bumps on the same event (`CompactionManager.ts:918`).
+   *
+   * ## Why the failure policy is NOT here
+   *
+   * The three sites apply three different ones -- the legacy's, not this
+   * method's: a proactive failure ends the run, a preflight and an emergency
+   * failure are swallowed. Collapsing that into one policy would either fail runs
+   * over a best-effort check or hide a compaction that could not shrink a
+   * transcript it was asked to shrink. So the pass reports and the site decides.
+   */
+  async #compact(
+    ctx: RunContext,
+    input: {
+      readonly trigger: 'auto' | 'preflight_overflow' | 'emergency';
+      readonly transcript: readonly ModelMessage[];
+      readonly providerError?: string;
+    },
+  ): Promise<CompactionPassResult> {
+    const result = await runCompactionPass({
+      port: ctx.ports.compaction,
+      events: ctx.ports.events,
+      decision: {
+        turn: ctx.turn,
+        transcript: input.transcript,
+        trigger: input.trigger,
+        // Spread, and not a named `observation: undefined`: the decision input
+        // compiles with `exactOptionalPropertyTypes`, so naming the field with
+        // no value is not the same as omitting it. The proactive site has no
+        // observation at all and `ports.ts` says so explicitly -- it is a guess,
+        // and forcing one would be the "announced success for work that did not
+        // happen" shape.
+        ...(input.providerError === undefined
+          ? {}
+          : { observation: { providerError: input.providerError } }),
+      },
+      signal: ctx.signal,
+    });
+
+    if (result.kind === 'replaced') {
+      ctx.compacted.current = result.transcript;
+      // The generation is retired by the compaction that replaced the lineage,
+      // and nowhere else. A cell rather than a local for the reason `lastMessage`
+      // and `blockIndex` are cells: this method has to write run-scoped state,
+      // and the engine object must stay stateless.
+      ctx.contextEpoch.current += 1;
+    }
+    return result;
+  }
+
+  /**
+   * The transcript to hand the port at a decision point.
+   *
+   * Three inputs, in precedence order, and the order is the whole argument:
+   *
+   * 1. a compaction's replacement, when one exists. It is not optional: the
+   *    legacy re-projects after every compaction precisely so the next
+   *    iteration "sees the compacted projection" (`DuyaAgent.ts:3034-3036`).
+   * 2. the fragments drained this turn whose text already exists. They are the
+   *    payload a preflight probe exists to catch, and they are not yet in the
+   *    assembly.
+   * 3. the assembled messages, which is the last point the engine holds a real
+   *    transcript rather than a `ResolvedPart` the host still has to resolve.
+   *
+   * ## Why this is NOT `#fragmentMessages`, and why it is not async
+   *
+   * `#fragmentMessages` AWAITS a `pending` fragment, correctly, because the
+   * next turn's request genuinely has to carry it and the port's own doc scopes
+   * that wait: "A `pending` that never settles stalls the turn that resolves it"
+   * is a recorded property of the deferred-review design, tied to
+   * `#modelRequest` (`ports.ts`, `PendingTransientContextFragment`).
+   *
+   * A compaction probe is not that turn. It runs after the drain and, on the
+   * emergency path, after a stream has already FAILED -- so awaiting there would
+   * park a recovery on a promise the host may not settle until the very request
+   * that is being recovered from. It is also the wrong FACT: a pending fragment
+   * has not been written anywhere yet, so the host's own projection would not
+   * contain it either. Including it would claim a transcript larger than the real
+   * one, and a probe that over-reports its input compacts early.
+   *
+   * So a pending fragment is left out rather than awaited, and the method stays
+   * synchronous. Pinned by `run-engine-compaction.test.ts`, "probes without
+   * waiting on a deferred context that never settles" -- the promise in that
+   * fixture never resolves, so an awaiting implementation can only reach the
+   * suite timeout.
+   *
+   * ## This is a composition, not a re-projection
+   *
+   * The legacy calls `projectInputMessages` at both post-request sites (`:3011`,
+   * `:3331`) and that method is the HOST's -- it reads the durable timeline,
+   * which lives above this layer. So the port measures this candidate, and a
+   * host whose timeline disagrees with it is disagreeing about a fact the engine
+   * cannot see. Stated here because a compaction that fires against the wrong
+   * transcript is the one failure mode worse than not firing.
+   */
+  #transcriptFor(
+    ctx: RunContext,
+    assembled: AssembledTurn,
+    drained?: readonly TransientContextFragment[],
+  ): readonly ModelMessage[] {
+    const base = ctx.compacted.current ?? assembled.messages;
+    if (drained === undefined) return base;
+    // Narrowed on the presence of `pending`, which is what makes "the text is
+    // `string | undefined`" unrepresentable (`ports.ts`, the fragment union).
+    const settled = drained.filter((fragment) => fragment.pending === undefined);
+    if (settled.length === 0) return base;
+    return [
+      ...base,
+      ...settled.map((fragment) => ({
+        role: 'user' as const,
+        id: `fragment:${fragment.key}`,
+        content: fragment.text,
+      })),
+    ];
+  }
 
   // ── helpers ───────────────────────────────────────────────────────────────
 
@@ -1401,8 +1767,20 @@ export class RunEngineImpl implements RunEngine {
     // A `by_ref` history is the HOST's to resolve; the engine hands the locator
     // back rather than re-resolving it, which is what keeps exactly one
     // derivation of "the same input" (ports.ts contract 2).
+    //
+    // A compaction's replacement OUTRANKS both, and that precedence is the whole
+    // mechanism by which a compaction does anything. `CompactionOutcome.replacement`
+    // is documented as "the transcript the NEXT request must be built from"
+    // (`ports.ts`), and the two sources below cannot honour that on their own:
+    // an `inline` history is frozen at run start, so it would resend the
+    // pre-compaction messages on every later turn, and `assembled.messages`
+    // reflects the host's timeline rather than a transcript the port has
+    // already rewritten. This is the same limitation `RunInputSnapshot.steering`
+    // has and for the same reason -- the snapshot is fixed at run start, so
+    // nothing that changes mid-run can ride it.
     const history: readonly ModelMessage[] =
-      input.history.kind === 'inline' ? input.history.value : assembled.messages;
+      ctx.compacted.current ??
+      (input.history.kind === 'inline' ? input.history.value : assembled.messages);
 
     const steering = await this.#fragmentMessages(
       'steering',
@@ -1435,6 +1813,28 @@ export class RunEngineImpl implements RunEngine {
       ...(selection?.model === undefined ? {} : { model: selection.model }),
       ...(selection?.providerId === undefined ? {} : { provider: selection.providerId }),
     };
+  }
+
+  /**
+   * Hand the provider's real token count to the compaction port.
+   *
+   * Two gates, and both are load-bearing rather than defensive:
+   *
+   *  - **no port, no anchor.** There is nothing to hand it to, and inventing a
+   *    local estimator next to the port's own would be the second token counter
+   *    `ports.ts` refuses.
+   *  - **zero input tokens are not an observation.** The legacy guards the same
+   *    way at `:3166` (`if (observedInput > 0)`), and the reason is that many
+   *    providers report a `usage` frame with an input count of 0 for a request
+   *    that was pure cache read. Filing that as "the prompt was empty" would
+   *    collapse the anchor to zero and make the next decision fire immediately.
+   *    A port that WANTS the zero has the transcript to measure.
+   */
+  #anchorUsage(ctx: RunContext, epoch: number, inputTokens: number, outputTokens: number): void {
+    const port = ctx.ports.compaction;
+    if (port === undefined) return;
+    if (inputTokens <= 0) return;
+    port.noteUsage?.({ turn: ctx.turn, inputTokens, outputTokens, epoch });
   }
 
   /**
@@ -1562,6 +1962,18 @@ export class RunEngineImpl implements RunEngine {
  */
 class TurnWork {
   dispatched = 0;
+  /**
+   * Tool RESULTS that landed this turn, as opposed to calls dispatched.
+   *
+   * The two are different quantities and the preflight compaction site needs
+   * the second: its gate is the legacy's `toolResultMessageCount > 0`
+   * (`DuyaAgent.ts:3009`), and a dispatch is not an answer -- two calls can come
+   * back with one result, and a `discard` can leave a dispatched call with none.
+   * Counted in the same place the legacy counted it (the top of the
+   * `tool_result` arm, `:2722`) so a host effect that throws cannot un-count a
+   * result that did land.
+   */
+  drained = 0;
 
   record(): void {
     this.dispatched += 1;
@@ -1629,6 +2041,18 @@ interface RunContext {
    * in `#run`.
    */
   readonly blockIndex: RunScoped<BlockIndex>;
+  /**
+   * The transcript a compaction replaced, or null. A CELL for the same reason
+   * `lastMessage` is one: `#compact` writes it and `#modelRequest` reads it, and
+   * neither is the method that declared it. See its declaration in `#run`.
+   */
+  readonly compacted: RunScoped<{ current: readonly ModelMessage[] | null }>;
+  /**
+   * How many compactions have rewritten the context lineage. A CELL, because
+   * `#compact` is the only writer. See its declaration in `#run` for why this is
+   * not the run epoch.
+   */
+  readonly contextEpoch: RunScoped<{ current: number }>;
 }
 
 /**
