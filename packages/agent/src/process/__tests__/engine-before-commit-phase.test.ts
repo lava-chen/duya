@@ -53,6 +53,7 @@ import type {
   RunEnginePorts,
   RunInputSnapshot,
   TerminalCandidate,
+  TransientContextFragment,
 } from '@duya/agent-runtime';
 import type { RunFence, RunId, RunManifest } from '@duya/agent-protocol';
 import type { Message, SSEEvent } from '../../types.js';
@@ -247,6 +248,17 @@ interface Observation {
   readonly terminals: readonly TerminalCandidate[];
   /** The rows the host's turn-output port recorded, as `{ key, text }`. */
   readonly injectedRows: readonly InjectedMessageRecord[];
+  /**
+   * Every fragment the ENGINE handed the host through `ports.context.defer`.
+   *
+   * THE ACTION, not the result. This is the tap that makes "a phase did not
+   * adopt" observable independently of whether anything downstream would have
+   * read what it adopted: a contribution that is deferred is a SIDE EFFECT the
+   * host performed, and a run whose loop has already broken will never surface
+   * it in the transcript. See the `after_finalize` test for why asserting the
+   * consequence alone is the weaker claim.
+   */
+  readonly deferredFragments: readonly TransientContextFragment[];
 }
 
 /**
@@ -370,8 +382,23 @@ async function runOnce(options: {
   // engine, and it is what the no-contributor arm compares between its two
   // configurations.
   const listCalls: string[] = [];
+  const deferredFragments: TransientContextFragment[] = [];
+  // The `defer` tap, wrapped AROUND the product's own port exactly as
+  // `turnOutput` is below -- the engine still calls the composed port, and the
+  // tap only records what the host was handed. Asserting on this rather than on
+  // the transcript is what separates "the engine did not adopt" from "nothing
+  // read the adoption anyway", which are the same observation today and not the
+  // same claim.
+  const context = composed.context;
   const ports: RunEnginePorts = {
     ...composed,
+    context: {
+      ...context,
+      defer: (fragment) => {
+        deferredFragments.push(fragment);
+        return context.defer(fragment);
+      },
+    },
     turnOutput: {
       ...turnOutput,
       recordInjectedMessage: (record) => {
@@ -421,6 +448,7 @@ async function runOnce(options: {
     terminals,
     injectedRows,
     listCalls,
+    deferredFragments,
   };
 }
 
@@ -485,20 +513,67 @@ describe('a before_commit contributor', () => {
 describe('the phases this one does not replace', () => {
   it('leaves after_finalize\'s deliberate no-adopt behaviour alone', async () => {
     const probe = textContributor('af:1', 'after_finalize', 'after_finalize said this');
-    
+
     const run = await runOnce({ extensions: portFor([probe]) });
 
     // DISPATCHED -- the phase still runs, because a `SessionEnd` hook's real
     // work is its side effects.
     expect(probe.calls()).toBe(1);
-    // AND STILL NOT ADOPTED. Its contributions are neither deferred nor
-    // committed, which is the documented, reviewed behaviour this slice does not
-    // change. A contributor that wants a commit registers for `before_commit`.
+
+    // THE CLAIM, asserted as an ACTION rather than as a consequence.
+    //
+    // The previous version of this assertion read the transcript and the
+    // injected rows, which is a CONSEQUENCE of adoption, and that is the weaker
+    // claim for a phase that fires in the run's `finally`: every read of
+    // `deferred.current` is inside the turn loop (`#transcriptFor` and
+    // `#modelRequest` are its only readers), and by the time this phase runs
+    // the loop has broken. So a `#adopt` here would push a fragment and call
+    // `ports.context.defer` -- a real side effect on the host, writing to a
+    // list nothing will ever read -- and every consequence-based assertion here
+    // would still pass. The behaviour would have changed while the test stayed
+    // green, which is the specific reason the assertion is on the tap.
+    //
+    // This is the defect `after_finalize`'s own call-site comment warns
+    // against (`run-engine.ts:941-951`): a side effect claiming a delivery that
+    // did not happen.
+    expect(run.deferredFragments).toHaveLength(0);
     expect(run.injectedRows).toHaveLength(0);
+    // Stated as its own assertion so a future reader does not "simplify" the
+    // pair into the consequence alone: the text must not be in the transcript
+    // either. It is kept because it is the user-visible half, and it is
+    // strengthened rather than replaced by the action above.
     const leaked = run.transcript().filter((message) =>
       typeof message.content === 'string' ? message.content.includes('after_finalize said this') : false,
     );
     expect(leaked).toHaveLength(0);
+  });
+
+  it('proves the defer tap is LIVE, so the no-defer assertion above is not vacuous', async () => {
+    // The control, and it is the half that makes the assertion above mean
+    // something. A tap that never fires satisfies `toHaveLength(0)` for every
+    // input, including a run that adopted everything -- which is exactly the
+    // failure the previous version of this test would have had.
+    //
+    // `before_model` is the phase that DOES adopt, so it must appear on the tap
+    // even though the run's loop breaks on the same turn: the tap records the
+    // HOST's side effect, which happens whether or not anything reads it.
+    const adopting = textContributor('bm:1', 'before_model', 'before_model said this');
+    const late = textContributor('af:2', 'after_finalize', 'after_finalize said this');
+
+    const run = await runOnce({ extensions: portFor([adopting, late]) });
+
+    // Both dispatched.
+    expect(adopting.calls()).toBe(1);
+    expect(late.calls()).toBe(1);
+    // EXACTLY ONE fragment on the tap, and it is the adopting phase's. If the
+    // mutation at `run-engine.ts:960` were live this would be 2, and the count
+    // is what localises the failure to the `after_finalize` phase rather than
+    // to the tap.
+    expect(run.deferredFragments).toHaveLength(1);
+    expect(run.deferredFragments[0].key).toBe('bm:1:0');
+    // And the `after_finalize` fragment's own key is absent, by name, so a tap
+    // that recorded the right COUNT of the wrong fragments still fails.
+    expect(run.deferredFragments.map((fragment) => fragment.key)).not.toContain('af:2:0');
   });
 
   it('does not make before_finalize a commit path, which is why this phase exists', async () => {
