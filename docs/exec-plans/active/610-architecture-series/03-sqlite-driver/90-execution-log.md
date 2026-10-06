@@ -180,6 +180,52 @@ ABI marker 缓存链路」。**两个理由的强度差得很远**,所以
 
 ---
 
+## 2026-10-06 — PR #217 收尾轮
+
+### 本轮只动了代码,没有重贴文档更正
+
+**上一轮那两件文档活儿已经在 master 上了,不需要也不应该重做。**
+逐字节核对过(`git diff --no-index`,临时副本,排除 CRLF 差异):
+
+| 602 时期的文件 | 610 路径下的同一份内容 | 结论 |
+| --- | --- | --- |
+| `602-sqlite-abi/README.md` @ `103e1148` | 本目录 `README.md` | **内容逐行相同**(仅 CRLF/LF,245 行) |
+| `602-sqlite-abi/90-execution-log.md` @ `103e1148` | 本文件 | **内容逐行相同**(仅 CRLF/LF,219 行) |
+| `AGENTS.md` 的 `better-sqlite3` 脚注 | `AGENTS.md:618` | **完全一致**(逐字节) |
+
+所以 [README 的「⚠️ 前提更正」](README.md)、[§0 的划线更正](README.md#0-决策2026-10-05)、[上面的 ⑤ 与未决第 9 项](#未决)
+都已经在 610 路径下。**再贴一遍就是同一件事有两个说法** —— 那正是本系列
+一直在拆的"多份真相"。
+
+> 顺带更正本文件的一句历史陈述:上一轮写「2. **更正 `AGENTS.md` 的脚注**」,
+> 读起来像 602 顺手改了 AGENTS.md。实际是 610 搬家时把它一起带过来的,
+> 602 那个目录在 master 上已经不存在。**没有 `active/602-sqlite-abi/` 可删,
+> 本 PR 也没有创建它。**
+
+### PR #217 剩下的、且只有这些:marker 修复
+
+`scripts/ensure-sqlite-abi.mjs` 的 marker 取键(见上)已落地,配
+`scripts/ensure-sqlite-abi.test.ts`。实测:**8/8 in scripts/ensure-sqlite-abi.test.ts**。
+
+变异证明(三种,逐一注入后完全回退):
+
+| 注入的回归 | 结果 |
+| --- | --- |
+| 整个修复反向 patch 回 `mtime \|\| 0` | **3 failed / 5 passed (8)** |
+| 只记存在性,丢掉 mtime + size | **1 failed / 7 passed (8)** —— 原 6 个测试下是 **0 failed / 6 passed** |
+| 只记 `prebuilds/`,丢掉 `build/{Debug,Release}/` | **2 failed / 6 passed (8)** —— 原 6 个测试下是 1 failed / 5 passed |
+
+中间两行是本轮补测试的理由:原先那 6 个测试**没有守住 mtime/size 那一半**,
+`makeFixture` 的 `nodeGyp` 选项更是从来没被任何测试用过。
+
+### 一个被本 PR 弄旧的数字
+
+[README §2.1](README.md#21-依赖与引用面)与本文件开头都写着
+`scripts/ensure-sqlite-abi.mjs` **286 行**。marker 修复加了 51 行,
+现在实测 **337 行**。**§2 的其余基线数字未动**,它们与本 PR 无关。
+
+---
+
 ## 未决
 
 | # | 问题 | 归属 |

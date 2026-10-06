@@ -141,7 +141,53 @@ if (!dir) {
 }
 
 const binPath = path.join(dir, 'build', 'Release', 'better_sqlite3.node');
-const binMtime = fs.existsSync(binPath) ? fs.statSync(binPath).mtimeMs : 0;
+
+/**
+ * Fingerprint every file `lib/binding.js` could actually load, in its own
+ * resolution order.
+ *
+ * better-sqlite3 >= 12 is an N-API addon: it depends on `node-addon-api` and
+ * ships prebuilds named `<platform>-<arch>.node` with no ABI in the name.
+ * `getBinding()` reads `prebuilds/` FIRST and only falls back to the node-gyp
+ * outputs under `build/`. So `build/Release/better_sqlite3.node` is the wrong
+ * thing to key a cache on in both directions:
+ *
+ *   - treated as "absent means broken", it reports a HEALTHY N-API install as
+ *     broken on every run after the first (a stock `npm ci` leaves no
+ *     `build/Release` at all, and the module still loads — verified on both
+ *     Node 24.16.0 and Electron 44.2.0/ABI 149 from the same prebuild);
+ *   - treated as "absent means unchanged" (which is what `mtime || 0` does),
+ *     a marker written while the binding was unloadable keeps matching forever,
+ *     so every `pretest` reports a green ABI for a database that cannot open.
+ *
+ * Recording presence, mtime and size for each candidate lets the fast path
+ * tell "unchanged and present" apart from "unchanged and unloadable".
+ */
+function bindingFingerprint() {
+  const rel = [];
+  const prebuilds = path.join(dir, 'prebuilds');
+  if (fs.existsSync(prebuilds)) {
+    for (const entry of fs.readdirSync(prebuilds)) {
+      if (entry.endsWith('.node')) rel.push(`prebuilds/${entry}`);
+    }
+  }
+  rel.push('build/Release/better_sqlite3.node');
+  rel.push('build/Debug/better_sqlite3.node');
+
+  const parts = [];
+  for (const name of rel.sort()) {
+    const p = path.join(dir, ...name.split('/'));
+    if (!fs.existsSync(p)) {
+      parts.push(`${name}~absent`);
+      continue;
+    }
+    const st = fs.statSync(p);
+    parts.push(`${name}~${st.mtimeMs}~${st.size}`);
+  }
+  return parts.join(',');
+}
+
+const binding = bindingFingerprint();
 const nodeAbi = process.versions.modules;
 const electronVer = electronVersion();
 
@@ -150,10 +196,15 @@ try {
   const marker = JSON.parse(fs.readFileSync(MARKER, 'utf8'));
   if (
     marker.target === target &&
-    marker.mtime === binMtime &&
+    marker.binding === binding &&
     marker.nodeAbi === nodeAbi &&
     marker.electronVersion === electronVer
   ) {
+    // Unchanged since a probe that really ran, and the probe can only have
+    // succeeded while a binding was on disk. The old key (`mtime || 0`) could
+    // not make that claim: `absent` and `mtime === 0` were the same value, so a
+    // marker written against a missing binary matched forever and every `pretest`
+    // reported a green ABI for a database that could not open.
     process.exit(0);
   }
 } catch {
@@ -192,7 +243,7 @@ if (check.ok) {
     fs.mkdirSync(path.dirname(MARKER), { recursive: true });
     fs.writeFileSync(
       MARKER,
-      JSON.stringify({ target, mtime: binMtime, nodeAbi, electronVersion: electronVer }),
+      JSON.stringify({ target, binding, nodeAbi, electronVersion: electronVer }),
       'utf8',
     );
   } catch {
@@ -274,7 +325,7 @@ try {
     MARKER,
     JSON.stringify({
       target,
-      mtime: fs.existsSync(binPath) ? fs.statSync(binPath).mtimeMs : 0,
+      binding: bindingFingerprint(),
       nodeAbi,
       electronVersion: electronVer,
     }),
