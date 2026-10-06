@@ -246,6 +246,11 @@ async function runThroughAdapter(
   };
 
   const ports: RunEnginePorts = {
+    // Required since A3-1. A host with nothing queued SAYS so rather
+    // than leaving the port out, which is a compile error -- the
+    // engine would otherwise skip the sweep and drop mid-run steering
+    // with nothing reporting the loss.
+    interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
     model,
     tools: {
       dispatch(): void {},
@@ -663,6 +668,15 @@ function realPorts(
     // testing none of that.
     emitter: realEmitter(emitted),
     proposeTerminal: () => {},
+    // A REQUIRED source, and the no-op is stated rather than omitted. Nothing
+    // is queued in this harness, and saying so is the contract: the source has
+    // no "absent" state, because a host that forgot to wire inter-turn input
+    // would silently stop honouring mid-run steering.
+    interTurn: {
+      claim: () => Promise.resolve({ action: 'continue', absorbed: false }),
+      seqIndex: 0,
+      wakeRun: false,
+    },
     ...(collector === undefined ? {} : { deferFragment: (fragment) => collector.push(fragment) }),
     ...(turnOutput === undefined ? {} : { turnOutput }),
   });
@@ -756,6 +770,13 @@ describe('buildEnginePorts routes every published event through the run s emitte
       askApproval: () => Promise.resolve({ allowed: true, scope: 'once' as const }),
       emitter,
       proposeTerminal: () => {},
+      // Required source. Inert: this test drives the EVENT binding, not the
+      // turn loop, so nothing is queued and the claim never runs.
+      interTurn: {
+        claim: () => Promise.resolve({ action: 'continue', absorbed: false }),
+        seqIndex: 0,
+        wakeRun: false,
+      },
     });
 
     ports.events.publish({ type: 'run.completed', status: 'completed' });

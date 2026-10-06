@@ -320,6 +320,10 @@ function scripted(
           collected.terminalProposed = true;
         },
       },
+      // Required since A3-1. Nothing is queued in this harness, and saying so
+      // is the point: the port cannot be left out, so a test that does not care
+      // about inter-turn input states that it has none.
+      interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
       turnOutput: {
         async recordAssistantMessage(record: AssistantMessageRecord): Promise<void> {
           collected.records.push(record);

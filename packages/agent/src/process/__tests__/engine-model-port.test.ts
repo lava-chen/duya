@@ -187,6 +187,10 @@ function recordingProvider(mode: 'answer' | 'park-until-abort') {
 function portsFor(model: RunEnginePorts['model'], drainSignals: AbortSignal[] = []): RunEnginePorts {
   return {
     model,
+    // Required since A3-1. This harness measures the MODEL port, so inter-turn
+    // input is deliberately inert -- stated rather than omitted, because a
+    // composition that left the port out is a compile error.
+    interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
     tools: {
       dispatch: () => undefined,
       async *drain(signal: AbortSignal): AsyncIterable<ToolDrainItem> {

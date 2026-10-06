@@ -105,6 +105,11 @@ function harness(turnOneFrames: readonly ModelFrame[]): Harness {
 
   let turn = 0;
   const ports: RunEnginePorts = {
+    // Required since A3-1. A host with nothing queued SAYS so rather
+    // than leaving the port out, which is a compile error -- the
+    // engine would otherwise skip the sweep and drop mid-run steering
+    // with nothing reporting the loss.
+    interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
     model: {
       async *stream(_request: ModelRequest): AsyncIterable<ModelFrame> {
         turn += 1;
