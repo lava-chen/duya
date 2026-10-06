@@ -7,7 +7,7 @@
 
 import { randomUUID } from 'crypto';
 import * as path from 'path';
-import { BrowserWindow } from 'electron';
+import type { BrowserWindow } from 'electron';
 import { getDatabase } from '../ipc/db-handlers';
 import {
   consumeApprovedToolApproval,
@@ -39,6 +39,32 @@ import { getControlPlane } from '../control-plane/control-plane-service';
 import { COMMAND_SCHEMA_VERSION, type CommandSenderFacts } from '../control-plane/command-receipt';
 import { writeRunReceiptOnWire } from '../control-plane/run-receipt';
 import type { WorkflowRunSnapshot, WorkflowRunStatus, WorkflowTriggerKind } from '../db/core/workflow-store';
+
+/**
+ * Electron is OPTIONAL here: this module is inside the value-import closure of
+ * the headless control plane's server entry
+ * (`01-headless-control-plane.md` §2.1). A module-scope
+ * `import { BrowserWindow } from 'electron'` is evaluated when the module is
+ * and throws THERE, taking the whole graph with it, so the class is resolved
+ * through a guarded require at each broadcast site below. The `import type`
+ * above is erased by the compiler and can never throw.
+ *
+ * An absent host yields no windows, which is the same answer the existing
+ * `catch` around each broadcast already produced: there is no renderer to
+ * notify, and the DB row is still the authoritative result.
+ */
+function allBrowserWindows(): BrowserWindow[] {
+  try {
+    const { BrowserWindow } = require('electron') as {
+      BrowserWindow?: { getAllWindows(): BrowserWindow[] };
+    };
+    return BrowserWindow && typeof BrowserWindow.getAllWindows === 'function'
+      ? BrowserWindow.getAllWindows()
+      : [];
+  } catch {
+    return [];
+  }
+}
 import {
   createWidgetPending,
   updateWidgetResponse,
@@ -479,14 +505,12 @@ export async function dispatchDbAction(
       // fork asked for it), so the normal renderer→main sync path never
       // fires. Broadcast so the session list picks the thread up without a
       // manual refresh — same rationale as createCronSessionRow.
-      try {
-        for (const window of BrowserWindow.getAllWindows()) {
-          if (!window.isDestroyed()) {
-            window.webContents.send('sync:threads-changed');
-          }
+      // `allBrowserWindows` yields none on a headless host (no renderer to
+      // notify), which is what the previous catch around this loop reported.
+      for (const window of allBrowserWindows()) {
+        if (!window.isDestroyed()) {
+          window.webContents.send('sync:threads-changed');
         }
-      } catch {
-        // Headless boot / CLI bootstrap has no windows — best-effort.
       }
       return { ok: true, created: true, session: coreSessionToIpcRow(created) };
     }
@@ -586,14 +610,12 @@ export async function dispatchDbAction(
       });
 
       // Surface in the sidebar without a manual refresh (same as session:ensureBot).
-      try {
-        for (const window of BrowserWindow.getAllWindows()) {
-          if (!window.isDestroyed()) {
-            window.webContents.send('sync:threads-changed');
-          }
+      // `allBrowserWindows` yields none on a headless host (no renderer to
+      // notify), which is what the previous catch around this loop reported.
+      for (const window of allBrowserWindows()) {
+        if (!window.isDestroyed()) {
+          window.webContents.send('sync:threads-changed');
         }
-      } catch {
-        // Headless boot / CLI has no windows — best-effort.
       }
 
       // Fire the child run asynchronously. Do NOT await — the tool returns the

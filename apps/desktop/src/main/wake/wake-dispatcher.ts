@@ -52,10 +52,36 @@ import { maybeAutoReturnDmResult, runUsedSendToAgent } from './agent-dm-return'
 import { reviveForInbound } from './channels'
 import { parseAgentIdFromBotSession } from './bot-session-id'
 import { interruptCronSession } from '../automation/agent-run'
-import { BrowserWindow } from 'electron'
+import type { BrowserWindow } from 'electron'
 import { getAutomationScheduler } from '../automation/Scheduler'
 import { buildRoutineWakePrompt } from '../automation/routine-wake'
 import { getLogger, LogComponent } from '../logging/logger'
+
+/**
+ * Electron is OPTIONAL here: this module is inside the value-import closure of
+ * the headless control plane's server entry
+ * (`01-headless-control-plane.md` §2.1). A module-scope
+ * `import { BrowserWindow } from 'electron'` is evaluated when the module is
+ * and throws THERE, taking the whole graph with it, so the class is resolved
+ * through a guarded require. The `import type` above is erased by the
+ * compiler and can never throw.
+ *
+ * An absent host yields no windows, so the scheduled-turn push below reaches
+ * no renderer — which is exactly the "no claim, fallback run takes over"
+ * branch this file already documented for a CLI boot.
+ */
+function allBrowserWindows(): BrowserWindow[] {
+  try {
+    const { BrowserWindow } = require('electron') as {
+      BrowserWindow?: { getAllWindows(): BrowserWindow[] }
+    }
+    return BrowserWindow && typeof BrowserWindow.getAllWindows === 'function'
+      ? BrowserWindow.getAllWindows()
+      : []
+  } catch {
+    return []
+  }
+}
 
 export interface WakeDispatcherDeps {
   /** Busy/idle truth for a session (session_runtime_locks mirror). */
@@ -342,17 +368,12 @@ function currentDeps(): WakeDispatcherDeps {
       runUserTurn: (sessionId, prompt, opts) => runUserTurnInSession(sessionId, prompt, opts),
       pushScheduledTurn: (payload) => {
         // Best-effort: no windows (CLI boot) → no claim, fallback run takes over.
-        try {
-          for (const window of BrowserWindow.getAllWindows()) {
-            if (!window.isDestroyed()) {
-              window.webContents.send('bot:scheduled-turn', payload)
-            }
+        // `allBrowserWindows` yields none when there is no Electron host,
+        // which is the same outcome the previous catch reported.
+        for (const window of allBrowserWindows()) {
+          if (!window.isDestroyed()) {
+            window.webContents.send('bot:scheduled-turn', payload)
           }
-        } catch (err) {
-          getLogger().debug('Scheduled-turn push skipped', {
-            sessionId: payload.sessionId,
-            error: err instanceof Error ? err.message : String(err),
-          }, LogComponent.Automation)
         }
       },
       interruptRun: (sessionId) => interruptCronSession(sessionId),
