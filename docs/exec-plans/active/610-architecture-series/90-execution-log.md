@@ -41,7 +41,7 @@
 | --- | --- | --- | --- |
 | `agent-protocol` | 32 | 0 | ✅ |
 | `agent-core` | 5 | 0 | ✅ |
-| `conductor` | 102 | 0 | ✅(但 `exports` 无 `./renderer`,**不可寻址**) |
+| `conductor` | ~~102~~ → **118**(2026-10-06 更正) | 0 | ✅(但 `exports` 无 `./renderer`,**不可寻址**) |
 | `ai` | 95 | 1(`node:crypto`) | ⚠️ |
 | `plugin-core` | 44 | **5**(`fs`/`net`/`crypto`) | ❌ |
 
@@ -75,7 +75,7 @@
 
 | # | 问题 | 归属 |
 | --- | --- | --- |
-| 1 | G7 判据改准后 live findings 变了,与 baseline 不一致。**新增的是真违规还是 `ports.ts` 的已知过读?** `--write` 会吞掉真违规,禁止 | A1 收尾 |
+| 1 | ~~G7 判据改准后 live findings 变了~~ **已答(2026-10-06):真违规,归 A3。** 详见 [A1 契约的收尾更正](10-slice-a1-g7-loop-detection.md#2026-10-06--收尾更正本文件的状态与未决问题均已过时) | 已关闭 |
 | 2 | 602 是否值得做(理由已从"逃 ABI"降为"删原生依赖") | C1 |
 | 3 | `apps/web` 是否立项、何时建骨架 | B2 |
 
@@ -125,6 +125,8 @@ active/610-architecture-series/
 `boundary-gates.mjs` 改动(逐字节一致),另加一份 191 行的 `mutation-proof-a1.mjs`。
 那份变异证明 5/5 通过,并且记录了一个我没写的已知缺口(判据匹配名字而非职责)。
 **采用它,丢弃本会话工作树里的副本。** A1 的合并应以那份分支为准。
+
+---
 
 ---
 
@@ -260,4 +262,80 @@ PR #214 的 `a7193092` 给 `RunEventEmitter` 追加了一个与既有**逐字节
 | 3 | A0 §3.2 plugin-core 二分未做 —— 实测它对 renderer 闭包贡献 21 个文件、**0** 个 Node 内建,barrel 已排除真正碰 Node 的三个模块 | 独立切片 |
 | 4 | 602/C1 是否值得做(理由已从"逃 ABI"降为"删原生依赖") | C1 |
 
+---
+
+## 2026-10-06 — 数字更正轮(纯文档,零代码改动)
+
+> 起因:A3 的勘察发现本系列若干数字**复现不出来**。本轮把每个数字重新测一遍,
+> 错的改掉,并记下「原值 → 现值 → 怎么测的」。
+> **工作基线 `205a4cd4`(A1 合并点)。本轮不跑 npm install、不改代码、不改 `scripts/`。**
+
+### 更正清单
+
+| # | 原值 | 现值 | 怎么测的 |
+| --- | --- | --- | --- |
+| 1 | `ai` 95 文件 / 1 碰 Node;`plugin-core` 44 / 5 | **不变**(复核通过) | 见下方「§0 复核:两个计数是对的,但数法要写清」 |
+| 2 | `conductor` 102 文件 | **118** | `*.ts` 66 + `*.tsx` 52 |
+| 3 | `ToolExecutionPipeline` 在 `DuyaAgent.ts:2036` / `:2037` | **`:2067`**(唯一构造);`:76` 是值 import | `Select-String 'ToolExecutionPipeline'` → 仅 `:76`、`:2067` |
+| 4 | `DuyaAgent.ts` 5011 行 / 255 KB(两处不一致) | **5295 行 / 255371 字节** | `Get-Content .Count` + `Get-Item .Length` |
+| 5 | S2 两文件「在 master」 | 在 **`packages/agent/src/process/`**:729 行/36122 B、556 行/26986 B | 目录列举;`git log --all --diff-filter=A` 确认从未在 `agent-runtime/src/engine/` 下存在过 |
+| 6 | A2 完成标志「375 条无新增」 | 自相矛盾 → 改为「370 → 375 且 5 条全 declared」 | `architecture-policy.yaml:1182`(`205a4cd4` = 370;`origin/master` = 375) |
+| 7 | A1「进行中、未合并」 | **已合并**(PR #219 / `908b5baf` / `205a4cd4`) | `git log --oneline` |
+| 8 | A3 = 搬 `ToolExecutionPipeline` | 错 → 必须让 `isTurnLoopModule(DuyaAgent.ts)` 变 false | 去注释后逐子句:`DuyaAgent.ts` 3/3,删掉 pipeline 仍 2/3 |
+| 9 | A3 风险清单 | 新增 `discarded` 一次性闩 | `StreamingToolExecutor.ts:479`/`:481`/`:758`/`:729-732`;`discard()` 在 `DuyaAgent.ts:2407`/`:2746`/`:3368` |
+
+### 最重要的一条:`ports.ts` 的「已知过读」是假的
+
+`boundary-gates.mjs:265-268` 的代码注释声称 `agent-runtime/src/engine/ports.ts`
+「带 (a)(c) 又点了缝的名字,因此被报出来」。**实测:`rep=false, model=true, tool=false`
+= 1/3,`isTurnLoopModule` 为 false —— 它今天不发出任何 finding,这条过读是休眠的。**
+它的原始正则命中全在注释里(`:453` 的 `StreamingToolExecutor.getRemainingResults` 就在 JSDoc 中),
+`stripComments` 之后就没了。
+
+**所以 A1 §4 那个未决问题的答案是「真违规」,不是「已知过读」。**
+**本轮不修改该文件**(不归本切片所有),只在此记录:那段注释现在已知是错的。
+
+### 顺带记一条纪律:数法本身会造假
+
+本轮有一处指控是「`ai` 碰 Node 的文件数应为 3,`plugin-core` 应为 2」。**复核后两个都错,
+但错的是数法,不是原文**:
+
+- 只认 `node:` 前缀 → 漏掉裸 `fs`/`path` → `plugin-core` 少算 3 个。
+- 不去注释 → 把注释里提到 `node:crypto` 的文件算进去 → `ai` 多算 2 个
+  (`auth/oauth/*` 用的是 Web Crypto 全局 `crypto.getRandomValues` / `crypto.subtle.digest`)。
+
+**口径固定为:去注释 + 统计真实 import/`require` specifier + `node:` 与裸名都算。**
+原文的 `ai`=1 / `plugin-core`=5 在这个口径下是对的。
+**一个数对不上,先怀疑数法,再怀疑原文** —— 但两种情况都必须留下「怎么数的」,否则下次还会对不上。
+
+### A2 合并时带出的 TS2393(本系列主题的一个标本)
+
+A2 已合并为 **PR #222**(`a046cdf6`,分支 `plan/610-a2-merge-214`)。它同时修掉一个缺陷:
+
+**#214 的 `a7193092` 给 `RunEventEmitter` 追加了一个逐字节相同的第二个 `async publish`。**
+怎么定位的:该 commit 的 diff 只动了 `packages/agent-runtime/src/events/event-emitter.ts`(+39 行),
+其中 `:643` 是新增的 `async publish(event: RunEvent): Promise<EmitResult>`,
+与既有的 `:344` 完全重复 —— TypeScript 报 **`TS2393`**。
+
+**关键在于:`architecture:check` 是绿的,vitest 也是绿的,只有 `typecheck:all` 红。**
+一个检查不到任何东西的门禁照样报绿 —— 这正是本系列 §4 第 4 条说的病,
+也正是 `typecheck:all` 必须在提交前跑的原因。修在 `70f3a85e`。
+**修完的证据:`git diff 205a4cd4 origin/master -- <event-emitter.ts>` 为空 —— 该文件与 A2 之前逐字节相同。**
+
+### 本轮没能测、因此没写进基线的东西
+
+- **`npm run architecture:check` 的「无新增」在无 `node_modules` 的检出上测不出来。**
+  `core-io` 扫描会报 `vite-node not found` 并自造一条未基线化 finding
+  (本次在 `205a4cd4` 上:total 931 / tolerated 930 / new 1,new 的就是这条环境产物)。
+  **门禁数字离开自己的工具链就没有意义。**
+- **vitest 一次都没跑。** 纯文档轮,不装依赖。
+  因此 `boundary-gates.test.ts` 那两条红的**成因是读源码 + 直接跑门禁定出来的,不是跑出来的**,
+  引用时保留这个区别。
+
+### 仍然未决
+
+- **`the live tree is fully baselined` 这条红要等 A3。** 它现在红,正是因为 G7 有了那条真 finding;
+  **它转绿就是 A3 的成功信号**,不许用 `--write` 提前转绿。
+- **`boundary-gates.test.ts:294` 的行号钉死**(断言 75,现测 76)是 `be766fde` 之后的漂移,与 A1 无关。
+- **603/602(C1)** 与 **`apps/web` 是否立项**(B2)照旧未决。
 

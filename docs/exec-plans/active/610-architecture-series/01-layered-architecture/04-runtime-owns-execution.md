@@ -90,7 +90,10 @@ toolExecution:  /\.execute(?:All)?\s*\(|ToolExecutionPipeline|getRemainingResult
 
 **G7/G8 归零的完整条件(取代 §0.4 的说法):**
 
-1. `DuyaAgent.ts` **不再同时具备那三个形状** —— `modelStream` `:781`+`:4483`、`toolExecution` `:76`/`:2037`/`:2734`/`:4397`、`repetition` 37 处(29 处在 turn loop 外)
+1. `DuyaAgent.ts` **不再同时具备那三个形状** —— ⚠️ **行号已于 2026-10-06 复核修正**:
+   `modelStream` **`:95`**(import `buildTurnModelLeg`)+ **`:2454`**(原文写的 `:781`/`:4483` 已不存在,
+   `DuyaAgent.ts` 里字面 `.streamChat(` 现测 **0** 处);`toolExecution` **`:76`**/**`:2067`**/**`:2762`**/**`:2764`**/**`:2902`**/**`:4427`**(原文 4 处,现测 6 行);
+   `repetition` **37 处**(总数实测 37;「29 处在 turn loop 外」是本轮之前的拆分,未重测)
 2. `agent-process-entry.ts` 的 `agent.streamChat(` 移除,改为驱动 runtime 侧入口
 
 > **⚠️ 条件 1 曾被写成"三个形状全灭"并把 29 处 loop 外 `repetition` 列为必须一并迁走的负担。那是过强的表述,已由 §0.7 更正。**
@@ -123,7 +126,7 @@ toolExecution:  /\.execute(?:All)?\s*\(|ToolExecutionPipeline|getRemainingResult
 
 §0.5 条件 1 写成"三个形状全灭",并把 29 处 loop 外 `repetition` 列为必须一并迁走的负担。**那是过强的 —— 且它污染了 §0.6 裁决二的范围描述。**
 
-`isTurnLoopModule`(`boundary-gates.mjs:274`)是**合取**:
+`isTurnLoopModule`(**`boundary-gates.mjs:306`**,原文写的 `:274` 是 A1 改判据前的行号)是**合取**:
 
 ```js
 return TURN_LOOP_SHAPE.repetition.test(src)
@@ -133,16 +136,29 @@ return TURN_LOOP_SHAPE.repetition.test(src)
 
 **清掉任意一个形状,该文件就不再匹配。** 那 29 处 loop 外 `repetition` 全部是**无关**循环 —— 工具注册(`:1608`/`:1632`/`:1703`/`:1735`/`:1742`)、时间线快照(`:3497`/`:5005`)、消息格式化(`:4519`/`:5015`/`:5025`)、skill 注入(`:1164`)、MCP 工具枚举(`:4674`/`:4696`/`:4798`)。**它们不是轮次循环,也不必为过门禁而搬家。**
 
-**最省的一条路是 `toolExecution`:** `DuyaAgent.ts` 命中 4 处 —— `:76`(import `ToolExecutionPipeline`)、`:2037`(构造)、`:2734`(`getRemainingResults`)、`:4397`(`orchestrator.execute`)。`:2037`/`:2734` 随 turn loop 迁移自然消失,**`:4397` 在 loop 外,需单独处理**。
+**最省的一条路是 `toolExecution`:** ⚠️ **这一条已作废(2026-10-06 实测)** ——
+原文写 `DuyaAgent.ts` 命中 4 处 `:76`/`:2037`/`:2734`/`:4397`,并建议打 `toolExecution`。
+现测命中 **6 行**:`:76`、**`:2067`**(构造)、`:2762`、`:2764`、`:2902`、`:4427`。
+**但这条路根本走不通,原因是判据的粒度:三子句是「按模块」的合取,不是按符号。**
+删掉 `ToolExecutionPipeline` 只清掉 `:76`/`:2067`,而 `modelStream`(`:95`/`:2454`)与
+`toolExecution`(`:2762`/`:2764`/`:2902`/`:4427`)仍然为真,**G7 照样报**。
 
-**但必须说清代价:** 靠这条过门禁,意味着"该文件不再同时具备三形状",**不是**"该文件不含轮次逻辑"。`DuyaAgent.ts` 仍持有 `:781`/`:4483` 两处 `streamChat`、仍持有 29 个循环。**门禁绿 ≠ 架构已对。**
+> **要归零,只能让 `isTurnLoopModule(DuyaAgent.ts)` 变 false**,即迁走 `streamChat` 轮次循环本身
+> —— 逐符号打洞是不够的。门禁输出(G7 NEW,new 1,`205a4cd4`)与 `A1 契约` 的收尾更正均记录了这一点。
+
+**但必须说清代价:** 靠这条过门禁,意味着"该文件不再同时具备三形状",**不是**"该文件不含轮次逻辑"。⚠️ `DuyaAgent.ts` 的行号已再次漂移(2026-10-06):字面 `.streamChat(` 现测 **0** 处(原文的 `:781`/`:4483` 已被 model-leg 缝取代),`while`/`for` 共 **37** 处。**门禁绿 ≠ 架构已对。**
 
 **因此两个层次必须分开记账,不得互相冒充:**
 
 | 层次 | 判据 | 达成方式 |
 | --- | --- | --- |
-| **门禁归零** | 任意一个形状不匹配 | 迁 turn loop + 处理 `:4397` |
+| **门禁归零** | `isTurnLoopModule` 为 false(**按模块**,不是任意一个形状不匹配) | 迁走 `streamChat` 轮次循环本体 |
 | **架构到位**(裁决二要求的是这个) | turn loop 真由 runtime 执行;worker 入口不再直连 `agent.streamChat(` | 完整切换 |
+
+> ⚠️ **原文这一行写的是「任意一个形状不匹配」,该表述本身没错(合取里任一条不成立即 false),
+> 但它推导出的「迁 turn loop + 处理 `:4397`」是错的** —— `:4397` 现为 `:4427`,
+> 而且光处理它并不能让门禁转绿(见上方「最省的一条路」更正)。
+> **真正需要迁的是循环本体,不是那几个符号。**
 
 **另有一处对范围的补充实测:** `:781` 是 compaction summarizer、`:4483` 是 side question,**两者都是单发、无工具、一次性的文本生成,本就不是 agentic 轮次**。它们**不该塞进引擎的轮次循环**,而应走一个更窄的一次性文本端口。**这既是正确的架构切法,也比"为了过门禁硬塞进引擎"更诚实。**
 
@@ -359,7 +375,7 @@ G4(worker 不 import `DuyaAgent`)**单独不足以证明任何一条**。它必�
 | --- | --- | --- | --- |
 | b1 | 一次性文本端口(§0.8):`systemPrompt + messages + maxTokens + temperature + signal`,无 tools,返回聚合文本 | 无 | 无 |
 | b2 | `:781` compaction 改走 b1;`:4483` side question 改走 b1 | b1 | `modelStream` 少 2 处 |
-| b3 | turn loop 体转成端口调用并迁出 `DuyaAgent.ts` | 已就位的 12 条腿 | `repetition` 少 8 处、`toolExecution` 少 `:2037`/`:2734` |
+| b3 | turn loop 体转成端口调用并迁出 `DuyaAgent.ts` | 已就位的 12 条腿 | ⚠️ 2026-10-06 实测修正:`toolExecution` 的 `:2037`/`:2734` 现为 `:2067`/`:2762`,且**只清这两处不足以让 G7 转绿**(按模块合取,见 §0.7) |
 | b4 | `:4397` orchestrator `yield*` 整流委托移出本文件 | b3 | **`toolExecution` 归零 → `isTurnLoopModule` false** |
 | b5 | worker 入口 `agent.streamChat(`(`agent-process-entry.ts:3349`)改为驱动 runtime 侧入口 | b3/b4 | G8 第二个 owner 消除 |
 

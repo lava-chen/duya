@@ -217,7 +217,7 @@ codex-rs 的 `ext/extension-api/src/registry.rs` 注册的是**十几个不同�
 | --- | --- | --- | --- |
 | **S0** [边界门禁](01-migration-map.md#s0) | **Done** | — | 已合并 `origin/master`(`46c36d9d`)。9 条门禁在 CI 中生效 |
 | **S1a** [最小 Session 解耦](01-migration-map.md#11-最小解耦先行新-s1a先做) | **In progress** | — | 接缝已显式(`f1bb10af`);**G6 一条未关**(9 条全在 `apps/desktop`,需该树所有者) |
-| **S2** [最小 RunEngine](04-runtime-owns-execution.md#step-1定义-runengine-端口先于任何搬移) | **In progress** | S0 | 引擎已建并被 worker 真实调用(`fa5604b5`);**阻塞:`ToolExecutionPipeline` 在 `DuyaAgent.ts:2036` 闭包内,循环尚未迁出** |
+| **S2** [最小 RunEngine](04-runtime-owns-execution.md#step-1定义-runengine-端口先于任何搬移) | **In progress** | S0 | 引擎已建并被 worker 真实调用(`fa5604b5`);**阻塞:`ToolExecutionPipeline` 在 `DuyaAgent.ts:2067` 闭包内(⚠️ 原写 `:2036`,2026-10-06 复核修正),循环尚未迁出;且搬走它不足以让 G7 转绿** |
 | **S3** [执行可靠性闭合](04-runtime-owns-execution.md#step-3闭合执行可靠性) | **Blocked on S2** | S2 | 背压 `publish()` 已就绪(`b3ae706a`);`ExecutionSink` 可 await 分支已就绪(`fa5604b5`);**终态帧背压待 S2** |
 | **S4** [同引擎接 CLI/eval](04-runtime-owns-execution.md#step-4同一引擎接-cli--eval) | Pending | S3 | 多轮、工具报错、取消、存储拒绝、worker 退出、慢消费者 |
 | **S5** [逐切片迁包](06-six-new-packages.md) | Pending | S4 | 每迁一块切断旧依赖并验证真实消费者 |
@@ -325,7 +325,7 @@ flowchart LR
   > `session_id TEXT NOT NULL` 在建表里、`:186` 有索引、insert 强制要 `sessionId`、还有 `listRunsBySession`。
   > **"关掉"这 6 条 = 把 `runs` 改成以 run id 为键、session 降为可空投影列,那是一次 schema 迁移 + 回填
   > —— 正是 S6 的交付物,不是"谁有权改这个目录"的问题。**
-- [ ] **S2**(核心交付,**未完成**):引擎已建(`run-engine.ts` 1064 行,四个决策点齐全)且 Desktop worker 已真实调用(`agent-process-entry.ts:3191`),执行期预算/取消传播/子任务回收/退出清理四项 DONE。**但 `DuyaAgent.streamChat` 仍持有旧循环** —— `ToolExecutionPipeline` 在 `DuyaAgent.ts:2036` 的闭包内构造,外部无法绑定 `ToolPort`。**`DuyaAgent` 尚未变委托 facade,G7/G8 仍各 1 条 finding。**
+- [ ] **S2**(核心交付,**未完成**):引擎已建(`run-engine.ts` 1064 行,四个决策点齐全)且 Desktop worker 已真实调用(`agent-process-entry.ts:3191`),执行期预算/取消传播/子任务回收/退出清理四项 DONE。**但 `DuyaAgent.streamChat` 仍持有旧循环** —— `ToolExecutionPipeline` 在 `DuyaAgent.ts:2067` 的闭包内构造(⚠️ 原写 `:2036`,2026-10-06 复核修正;`:76` 是它的值 import),外部无法绑定 `ToolPort`。**`DuyaAgent` 尚未变委托 facade,G7/G8 仍各 1 条 finding。** ⚠️ 补充(2026-10-06):G7 是**按模块**的三子句合取,**只搬 `ToolExecutionPipeline` 不会让它转绿**,必须迁走 `streamChat` 循环本体。
 - [ ] **S3**:背压 `publish()` 已就绪(`b3ae706a`),`ExecutionSink` 可 await 分支已就绪(`fa5604b5`)。**终态帧背压未做** —— 需 `publishCommittedTerminal` 改 async,已按裁决挂到 S2。
 - [ ] **S4**:Desktop worker / CLI / eval 用**同一个**执行引擎,验证多轮、工具报错、取消、存储拒绝、worker 退出、慢消费者。
 - [ ] **S5**:逐切片迁 core / tooling / capabilities,每块切断旧依赖并验证真实消费者。

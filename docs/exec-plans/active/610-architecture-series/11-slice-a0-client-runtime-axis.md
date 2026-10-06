@@ -13,8 +13,38 @@
 | 缺口 | 实测 |
 | --- | --- |
 | **`apps/web` 根本不存在** | `apps/` 下只有 `desktop`(1512 个 ts/tsx) |
-| **共享 UI 没有可寻址的入口** | `conductor` 102 个文件 0 个 Node 内建(已同构),但 `exports` 只有 `.` 和 `./ipc`,**没有 `./renderer` 子路径** |
-| **renderer 已经在拖 Node 进来** | `plugin-types.ts` / `useContextUsage.ts` 从 `@duya/plugin-core`、`@duya/ai` import **值**(zod schema、函数),而这两个包分别有 5 个和 1 个文件碰 `node:fs` / `node:net` / `node:crypto` |
+| **共享 UI 没有可寻址的入口** | `conductor` **118** 个文件 0 个 Node 内建(已同构),但 `exports` 只有 `.` 和 `./ipc`,**没有 `./renderer` 子路径** |
+| **renderer 已经在拖 Node 进来** | `plugin-types.ts` / `useContextUsage.ts` 从 `@duya/plugin-core`、`@duya/ai` import **值**(zod schema、函数),而这两个包分别有 **5** 个和 **1** 个文件碰 `node:fs` / `node:net` / `node:crypto` |
+
+> ⚠️ **`conductor` 的文件数此前写 102,现测 118(2026-10-06)。**
+> 怎么测的:`packages/conductor/src` 下 `*.ts` **66** 个 + `*.tsx` **52** 个 = **118**。
+> 原文的 102 只数了 `.ts`,漏掉 52 个 `.tsx` —— 而 `conductor` 恰恰是三端共享 UI 的载体,
+> 少算的一半正是共享组件。**「0 个 Node 内建」这个结论不变**(118 个全部 0 命中)。
+
+> ⚠️ **本表的两处 Node 计数经复核是对的,但「怎么数」必须写清,否则下次会被数错(2026-10-06)。**
+> 本切片一度被怀疑记成 `ai` = 3 / `plugin-core` = 2。**那两个数都是数法错,不是测量错:**
+>
+> - **数法甲:只认 `node:` 前缀。** 会漏掉裸 `fs` / `path` —— 于是 `plugin-core` 少算 3 个
+>   (`mcp/resolve.ts`、`plugins/loader/capability-discovery.ts`、`security/path-validator.ts`
+>   全是裸 `fs`+`path`),得 2。
+> - **数法乙:不去注释。** 会把注释里提到 `node:crypto` 的文件算进去 —— 于是 `ai` 多算 2 个
+>   (`auth/oauth/pkce.ts`、`auth/oauth/device-code.ts`)。**这两个文件用的是 Web Crypto 全局
+>   `crypto.getRandomValues` / `crypto.subtle.digest`,根本没用 `node:crypto`**,注释里那句
+>   "without relying on `node:crypto`" 反而被当成了命中。
+>
+> **正确口径:去注释后,统计真实的 import / `require` specifier,且 `node:` 与裸名都算。**
+> 现测(`packages/<pkg>/src` 下 `.ts`/`.tsx`):
+
+> | 包 | 源文件 | 碰 Node 内建 | 名单 |
+> | --- | --- | --- | --- |
+> | `ai` | 95 | **1** | `api/bedrock-converse.ts`(`node:crypto`,AWS SigV4) |
+> | `plugin-core` | 44 | **5** | `mcp/resolve.ts`(`fs`,`path`)、`plugins/loader/capability-discovery.ts`(`fs`,`path`)、`security/path-validator.ts`(`fs`,`path`)、`marketplace/source-parse.ts`(`node:net`)、`mcp/core/descriptor.ts`(`node:crypto`) |
+> | `conductor` | 118 | **0** | — |
+>
+> 所以 **§3.1「`@duya/ai` 差一个文件」成立,§3.2 的二分也成立** —— 结论不变。
+> 唯一要补的是 §3.2 的名单:原文列了 4 个 loader(全对),**第 5 个
+> `mcp/core/descriptor.ts`(用 `node:crypto` 算 descriptor 的 sha256)不在名单里**,
+> 它属于「同构也要留在控制平面」那一侧。
 
 第三条是关键:桌面 renderer 今天能跑,只是因为 **Electron 的 renderer 带 Node**。
 把同样的代码搬进浏览器就会炸。**所以"能不能有 Web"目前不是一个未做的新功能,
@@ -56,16 +86,25 @@ Desktop main 与 CLI **进程内**加载 L3(不绕 HTTP),Web 走 HTTP。**同一
 
 ### 3.1 `@duya/ai` 差一个文件
 
-95 个文件里只有 `api/bedrock-converse.ts` 碰 `node:crypto`(算签��)。
+95 个文件里只有 `api/bedrock-converse.ts` 碰 `node:crypto`(算签名)。
 把它挪走或把 `crypto` 变成注入的依赖,`@duya/ai` 立刻 100% 浏览器安全,
 而 renderer 现在就想用它的 `findModelById` / `resolveContextWindow` / `computeContextEstimate`。
 **这是投入产出比最高的一处。**
+
+> ⚠️ **「95 个文件里只有 1 个」经 2026-10-06 复核成立**(口径见 §0 的数法说明)。
+> 该文件的 `node:crypto` 已经是**懒加载**的(`bedrock-converse.ts:67-70` 的 `nodeCrypto()`
+> 用 `require('node:crypto')`),注释里写明这是为了让 renderer 能 import 而不让 Vite 外化它。
+> **但懒加载不等于没有**:静态 import 仍在 `:33-35`,依赖图仍会算上它。
+> 移走它的方式应是**把签名能力变成注入的依赖**,而不是继续依赖 `require` 的懒加载 ——
+> 后者在 bundler 侧仍可能被静态分析到。
 
 ### 3.2 `@duya/plugin-core` 必须二分为 schema 与 loader
 
 浏览器要的是**类型与 schema**(`WorkflowTemplateSchema`、`PluginTrustLevel`、provider tool 策略),
 不要的是**加载器**(`mcp/resolve`、`plugins/loader/capability-discovery`、
 `security/path-validator`、`marketplace/source-parse` —— 这 4 个碰 `node:fs` / `node:net`)。
+第 5 个碰 Node 的是 `mcp/core/descriptor.ts`(`node:crypto`,算 descriptor 的 sha256),
+它同样不该进同构的 schema 侧(2026-10-06 补入名单)。
 
 拆成:
 
