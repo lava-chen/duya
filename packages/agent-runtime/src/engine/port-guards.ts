@@ -108,6 +108,25 @@ const MINIMAL_PORTS: RunEnginePorts = {
   interTurn: {
     sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }),
   },
+  // Plan 610 D4: required, and for the same reason `interTurn` above is -- a
+  // missing one loses durable rows and produced frames with nothing reporting
+  // it. The smallest legal port here means "record nothing", which is exactly
+  // what a host that has nowhere to record is saying.
+  turnOutput: {
+    recordToolResult: () => Promise.resolve(),
+    recordAssistantMessage: () => Promise.resolve(),
+    finishTurn: () => Promise.resolve(),
+    recordInjectedMessage: () => Promise.resolve(),
+  },
+  compaction: {
+    decide: () =>
+      Promise.resolve({
+        kind: 'skip' as const,
+        reason: 'nothing under test binds a compaction source',
+      }),
+    run: () => Promise.resolve({ kind: 'declined' as const, reason: 'as above' }),
+    nextCompactionId: () => 'cmp-guards',
+  },
 };
 
 /** An engine is one method returning one handle. */
@@ -121,9 +140,13 @@ const MINIMAL_ENGINE: RunEngine = {
 export const PORT_IS_CONSTRUCTIBLE = [MINIMAL_PORTS, MINIMAL_ENGINE] as const;
 
 /**
- * The optional ports are OPTIONAL, and the required five are the only required
- * ones. Positive half of the split, so the negative half below can be read as
- * "and nothing else became mandatory".
+ * The optional ports are OPTIONAL, and the required ones are exactly the ones
+ * named above. Positive half of the split, so the negative half below can be
+ * read as "and nothing else became mandatory".
+ *
+ * `turnOutput` and `compaction` are NOT here: they were required by plan 610 D4
+ * and are built in `MINIMAL_PORTS`, which is what makes them required -- there
+ * is no shorter legal binding.
  */
 const FULL_PORTS: RunEnginePorts = {
   ...MINIMAL_PORTS,
@@ -166,72 +189,63 @@ const FULL_PORTS: RunEnginePorts = {
     reconcile: () => Promise.resolve(),
     read: () => Promise.resolve([]),
   },
-  turnOutput: {
-    recordToolResult: () => Promise.resolve(),
-    recordAssistantMessage: () => Promise.resolve(),
-    finishTurn: () => Promise.resolve(),
-    recordInjectedMessage: () => Promise.resolve(),
-  },
 };
 
 export const OPTIONAL_PORTS_ARE_OPTIONAL = FULL_PORTS;
 
 // ---------------------------------------------------------------------------
-// The cutover tripwires for the two ports the flip has to make REQUIRED.
+// Plan 610 D4: the two ports the flip had to make REQUIRED, and what replaces
+// their tripwires.
 //
-// ## What these two lines are FOR, since they assert nothing that reads like an
-// assertion
+// ## What the tripwires were
 //
-// `RunEnginePorts.turnOutput` and `.compaction` are optional today and are
-// supposed to become required when the engine starts driving a turn. Nothing
-// enforces that, and the failure is silent in the worst way: the flip makes them
-// optional-forever, a host omits one, and the engine runs a whole session with
-// no compaction and no durable tool rows while every event it publishes looks
-// correct.
+// `turnOutput` and `compaction` carried a `?` because the legacy loop still
+// drove: binding them then would have performed each of their effects TWICE. The
+// `?` was therefore the marker, and this file carried a tripwire per field --
+// `Pick<RunEnginePorts, 'turnOutput'> = {}` compiles only while the field is
+// optional, so making it required turned the build red at a line naming the
+// field. That was the mechanism, and it worked: it fired here the moment D4
+// closed the fields, which is the expected outcome rather than a failure.
 //
-// These constants are the enforcement. Each one assigns an EMPTY object to a
-// single-field PICK of the port binding, which typechecks ONLY while that field
-// is optional:
+// ## What replaces it
 //
-//   - optional `turnOutput?: TurnOutputPort` -> `Pick<..., 'turnOutput'>` is
-//     `{ turnOutput?: ... }`, so `{}` is assignable and this compiles;
-//   - required `turnOutput: TurnOutputPort`  -> the pick demands the field, `{}`
-//     is not assignable, and `npm run typecheck:runtime` fails HERE.
+// A tripwire proves a field is currently OPTIONAL. That is the wrong claim to
+// keep now, so it is replaced by the claim that matters: the field is REQUIRED,
+// and the assertion for that has the same self-policing polarity as the
+// `@ts-expect-error` cases above. Each assigns the EMPTY object to a pick of a
+// port that no longer has an empty legal value -- so if either field is ever
+// widened back to optional, the directive goes UNUSED and the build fails.
 //
-// So the flip does not have to remember to delete anything: making the field
-// required turns this file red at a line that names the field, and the red IS
-// the reminder. That is the same self-policing property the `@ts-expect-error`
-// cases above rely on, with the polarity reversed -- those go unused when a
-// contract WIDENS, these stop compiling when a contract TIGHTENS.
-//
-// ## Why the ports stay optional rather than being flipped now
-//
-// Measured, not assumed: making both required costs THREE files and no
-// composition at all --
-//
-//   - `packages/agent/src/**`, including every test: 0 errors;
-//   - `src/engine/port-guards.ts` (this file), one minimal binding;
-//   - `tests/anti-dead-loop-hard-stop.test.ts`, one minimal binding;
-//   - `tests/engine-hook-loop-facts.test.ts`, one minimal binding.
-//
-// The production composition already binds both unconditionally --
-// `composeLegacyRunSources` passes `compaction: host.compaction` and a derived
-// `turnOutput` object -- and `LegacyRunHost.compaction` is itself required. So
-// nothing is blocked by the `?`; flipping it early would only delete the
-// tripwire and stop the three minimal bindings from proving that the engine is
-// still drivable without the two ports it will need. That is the flip's change
-// to make, not this slice's.
+// The difference from a tripwire is the direction of the failure. A tripwire
+// fires when a contract TIGHTENS; these fire when it LOOSENS. Together, over
+// the plan's history, they have covered both ends of the same field.
 // ---------------------------------------------------------------------------
 
-/** Delete this when `turnOutput` becomes required; the build will say so first. */
-const TURNOUTPUT_IS_OPTIONAL_TILL_CUTOVER: Pick<RunEnginePorts, 'turnOutput'> = {};
+/**
+ * `turnOutput` cannot be omitted.
+ *
+ * A host with nowhere to record a landed tool result must say so with an
+ * implementation that records nothing, not by leaving the field out. The
+ * difference is that the second compiles and produces a run with no durable tool
+ * rows and no `PostToolUseFailure`, while every event it publishes still looks
+ * correct.
+ */
+// @ts-expect-error - `turnOutput` is REQUIRED; assigning `{}` must not compile
+const TURNOUTPUT_IS_REQUIRED: Pick<RunEnginePorts, 'turnOutput'> = {};
 
-/** Delete this when `compaction` becomes required; the build will say so first. */
-const COMPACTION_IS_OPTIONAL_TILL_CUTOVER: Pick<RunEnginePorts, 'compaction'> = {};
+/**
+ * `compaction` cannot be omitted.
+ *
+ * Same shape, same reason, larger blast radius: an unbound compaction port means
+ * no transcript is ever replaced and the five compaction frames have no producer
+ * at all, which no event reports.
+ */
+// @ts-expect-error - `compaction` is REQUIRED; assigning `{}` must not compile
+const COMPACTION_IS_REQUIRED: Pick<RunEnginePorts, 'compaction'> = {};
 
-export const CUTOVER_TRIPWIRES_ARE_ARMED = [
-  TURNOUTPUT_IS_OPTIONAL_TILL_CUTOVER,
-  COMPACTION_IS_OPTIONAL_TILL_CUTOVER,
+export const CUTOVER_PORTS_ARE_REQUIRED = [
+  TURNOUTPUT_IS_REQUIRED,
+  COMPACTION_IS_REQUIRED,
 ] as const;
 
 // ---------------------------------------------------------------------------

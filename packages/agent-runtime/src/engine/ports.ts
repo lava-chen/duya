@@ -1117,29 +1117,23 @@ export interface RunEnginePorts {
   /**
    * Where a landed tool result goes. See `TurnOutputPort`.
    *
-   * OPTIONAL, and the absence is the live worker's state today rather than an
-   * oversight: every effect this port names is currently performed by the
-   * legacy drain loop inside `DuyaAgent.streamChat`, and binding them here as
-   * well would perform each of them TWICE. Making it required before the cutover
-   * would break every composition for no gain; making it required AT the cutover
-   * is the obligation `TurnOutputPort` states in its own doc comment.
+   * REQUIRED as of plan 610 D4. It was OPTIONAL only while the legacy loop
+   * still drove: every effect this port names was performed by the legacy drain
+   * inside `DuyaAgent.streamChat`, so binding it here as well would have
+   * performed each of them TWICE. The `?` was the marker for that window.
    *
-   * ## The "would break every composition" half is MEASURED, and it is wrong
+   * What closing it cost is measured, not assumed: making it required breaks
+   * ZERO compositions. `composeLegacyRunSources` already binds a derived
+   * `turnOutput` unconditionally, and `buildEnginePorts` only omits it for a
+   * source that passed none. Three minimal bindings broke, all of them
+   * synthetic: this package's own `port-guards.ts`, and two test harnesses.
+   * Nothing in `packages/agent/src` is affected, tests included.
    *
-   * Measured by making it required and diffing the compiler's output: the
-   * production composition breaks ZERO times. `composeLegacyRunSources` already
-   * binds a derived `turnOutput` unconditionally, and `buildEnginePorts` only
-   * omits it for a source that passed none. Three minimal bindings break, all
-   * of them synthetic: `port-guards.ts`, `anti-dead-loop-hard-stop.test.ts` and
-   * `engine-hook-loop-facts.test.ts`. Nothing in `packages/agent/src` is
-   * affected, tests included.
-   *
-   * So the reason to leave the `?` on is not that the change is expensive. It is
-   * that the `?` is the marker: `port-guards.ts` carries a tripwire that turns
-   * red the moment this field becomes required, and removing it now would delete
-   * the only thing that tells the flip this field is still its obligation.
+   * A forgotten binding is not a missing feature but a wrong record: without it
+   * the engine runs a whole session with no durable tool rows and no
+   * `PostToolUseFailure`, while every event it publishes still looks correct.
    */
-  readonly turnOutput?: TurnOutputPort;
+  readonly turnOutput: TurnOutputPort;
   /** Present only under budget option (a). See `BudgetPort`. */
   readonly budget?: BudgetPort;
   /** Present only when this run is a recovery. See `AttemptLeasePort`. */
@@ -1175,48 +1169,41 @@ export interface RunEnginePorts {
   /**
    * Where a transcript gets REPLACED. See `CompactionPort`.
    *
-   * OPTIONAL, and the absence is still the live worker's state today: the legacy
-   * loop still decides and runs every compaction itself (16 call sites in the
-   * loop body, `DuyaAgent.ts:1825-3404`), so a host that binds this WHILE the
-   * legacy drives still compacts twice.
+   * REQUIRED as of plan 610 D4, for the same reason as `turnOutput` above and
+   * by the same measurement: `LegacyRunHost.compaction` is ALREADY required and
+   * `composeLegacyRunSources` passes it straight through, so the optionality was
+   * the only place the obligation could be forgotten, and closing it breaks
+   * ZERO compositions.
    *
-   * The ENGINE now calls it at all three decision points the legacy owns --
+   * The engine calls this at all three decision points the legacy owns --
    * between assembly and the model request, after the drain, and on a failed
-   * model stream -- but the legacy is still what runs a turn today, which is
-   * why this stays OPTIONAL. `run-engine.ts` and the legacy cycle are both
-   * live: a bound port with the legacy still driving is the double compaction
-   * above, and an unbound one leaves the legacy's own compactions as the only
-   * producer. The cutover is what makes it required.
+   * model stream -- so an unbound port meant no transcript was ever replaced and
+   * the five compaction frames had no producer at all.
    *
-   * A forgotten binding is NOT harmless the way a forgotten guardrail is: it
-   * means no transcript is ever replaced and the five compaction frames have no
-   * producer at all. That cost is stated at length on `CompactionPort`, and it
-   * is the obligation the cutover inherits.
+   * ## The three call sites, and why they differ
    *
-   * ## What making it required costs, measured the same way as `turnOutput`
-   *
-   * Zero compositions. `LegacyRunHost.compaction` is ALREADY required and
-   * `composeLegacyRunSources` passes it straight through, so this `?` is the
-   * only place the obligation can be forgotten, and the three synthetic bindings
-   * above are the whole cost. The reason it stays is the same as
-   * `turnOutput`'s: the `?` is the marker, and `port-guards.ts` turns red when
-   * it is closed.
+   * Between assembly and the request (`auto`), after the drain
+   * (`preflight_overflow`), and on a failed model stream (`emergency`). Only the
+   * third differs in consequence, and it is a consequence inherited from the
+   * legacy rather than invented: `run-engine.ts`'s emergency arm decrements the
+   * turn and continues, which re-runs the same turn against the compacted
+   * transcript. That is the entire point of an emergency compaction.
    */
-  readonly compaction?: CompactionPort;
+  readonly compaction: CompactionPort;
   /**
    * Where mid-run input arrives. See `InterTurnInputPort`.
    *
-   * REQUIRED, and the only optional-looking member here that is not optional.
-   * The distinction from `turnOutput` and `compaction` above is that both of
-   * those are optional *while the legacy still drives* -- binding them today
-   * performs their effects twice -- whereas nothing drives the engine in
-   * production, so there is no window in which binding this one double-sweeps
-   * and no composition in which omitting it is correct.
+   * REQUIRED, and one of the seven. Each of those names a capability whose
+   * ABSENCE is a wrong result rather than a missing feature, which is why none
+   * of them is a `?.`. `interTurn` loses the user's mid-run correction;
+   * `turnOutput` loses durable tool rows and `PostToolUseFailure`; `compaction`
+   * lets the transcript grow until the provider rejects it; the other four are
+   * the loop's decisions and its output.
    *
    * ## What a missing member would cost, stated as the engine would experience it
    *
-   * Nothing. That is the problem, and it is why this is a type error rather
-   * than a `?.`. `RunInputSnapshot.steering` is frozen at run start, so a
+   * Nothing visible. That is the problem, and it is why this is a type error
+   * rather than a `?.`. `RunInputSnapshot.steering` is frozen at run start, so a
    * message that arrives mid-run has exactly one route into the transcript,
    * and this is it. An engine that skipped the sweep would still call the
    * model, still dispatch tools, still propose a `completed` terminal, and
@@ -1229,25 +1216,21 @@ export interface RunEnginePorts {
   /**
    * Where a mode's run-boundary `onExit` hooks are run. See `ModeExitPort`.
    *
-   * OPTIONAL, and for a different reason than `turnOutput` / `compaction` above.
-   * Those are optional *while the legacy still drives*, because binding them
-   * today performs their effects twice. This one has the same window, so the
-   * same treatment applies: the legacy's `SessionFinalizer` still runs
-   * `runExitHooks` (`SessionFinalizer.ts:235`), and a composition that bound
-   * this port would exit every mode twice once the engine drives.
+   * OPTIONAL, and the LAST member whose optionality the legacy-still-drives
+   * window explains. The legacy's `SessionFinalizer` still runs `runExitHooks`
+   * (`SessionFinalizer.ts:235`), so a composition that bound this port would exit
+   * every mode twice once the engine drives; the flip is what makes it required,
+   * as it made `turnOutput` and `compaction` required in plan 610 D4.
    *
-   * It is NOT required, and the asymmetry with `interTurn` above is the point
-   * rather than an oversight. A missing `interTurn` loses the USER's mid-run
-   * correction, and no frame reports it -- hence a compile error. A missing
-   * `modeExit` loses a mode's teardown side effect, and a run with no active
-   * `kind: 'message'` mode has nothing to lose: `runExitHooks` iterates
+   * It is NOT required yet, and the asymmetry with `interTurn` above is the
+   * point rather than an oversight. A missing `interTurn` loses the USER's
+   * mid-run correction, and no frame reports it -- hence a compile error. A
+   * missing `modeExit` loses a mode's teardown side effect, and a run with no
+   * active `kind: 'message'` mode has nothing to lose: `runExitHooks` iterates
    * `resolved.modes` and a run that resolved none is a no-op even in the legacy
    * (`SessionFinalizer.ts:233` guards on `resolvedModes && modeCtx`). Forcing
    * every composition to build a port that does nothing would buy a type error
    * in exchange for one, and would be a worse trade than the silent case.
-   *
-   * The cutover is what makes it required, for the same reason it makes
-   * `turnOutput` and `compaction` required.
    */
   readonly modeExit?: ModeExitPort;
 }
@@ -2576,8 +2559,13 @@ export type CompactionProgress =
  * reproduced with no seam, and the run ends in an error a user sees. A
  * forgotten GUARDRAIL would be a port that is bound and ignored -- also wrong,
  * but nothing is lost, because the legacy loop is still driving every turn and
- * still compacting on its own today. That is why the port is OPTIONAL here and
- * why it is the obligation the cutover inherits.
+ * still compacting on its own today.
+ *
+ * The BINDING is required as of plan 610 D4, and this classification is the
+ * reason for it. It is the same reasoning that leaves `sideEffects` merely
+ * optional: a bound-and-ignored ledger does lose data too, but "no tool with a
+ * side effect may be dispatched" is a coherent reading of absence, where "no
+ * transcript is ever replaced" is not.
  */
 export interface CompactionPort {
   /**
@@ -2625,12 +2613,14 @@ export interface CompactionPort {
   /**
    * The provider's real token usage for a request that just completed.
    *
+  /**
    * OPTIONAL, and absent is a DEGRADED but working port rather than a broken
-   * one -- which is why this is the one member here that is not required. A port
-   * without it decides from the transcript it is handed, which is the estimate
-   * path the legacy used before plan 577 §2. Compaction still fires and still
-   * replaces the transcript, so nothing is LOST; what is lost is the anchor, and
-   * an unanchored decision can fire early or late against the trigger line.
+   * one -- which is why this is the one member of `CompactionPort` that is not
+   * required. A port without it decides from the transcript it is handed, which
+   * is the estimate path the legacy used before plan 577 §2. Compaction still
+   * fires and still replaces the transcript, so nothing is LOST; what is lost is
+   * the anchor, and an unanchored decision can fire early or late against the
+   * trigger line.
    *
    * That is the opposite of an absent `compaction` binding itself, and the
    * distinction is why this one is optional and that one is not: skipping

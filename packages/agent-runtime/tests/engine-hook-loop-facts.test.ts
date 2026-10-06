@@ -60,6 +60,8 @@ import type {
   ToolDescriptor,
   ToolDrainItem,
   TransientContextFragment,
+  CompactionPort,
+  TurnOutputPort,
 } from '../src/engine/ports.js';
 import type { RunEvent, RunId, RunManifest } from '@duya/agent-protocol';
 import type { EngineRunReport } from '../src/engine/run-engine.js';
@@ -67,6 +69,27 @@ import type { EngineRunReport } from '../src/engine/run-engine.js';
 // ============================================================================
 // Scripted ports
 // ============================================================================
+
+/**
+ * `turnOutput` and `compaction`, bound to their smallest honest answer.
+ *
+ * Required since plan 610 D4. Neither is what this file is about -- it is about
+ * what a `before_finalize` contributor can veto and what the repeated-call streak
+ * looks like to one -- so both say "nothing here" rather than being omitted. The
+ * ports that own durable rows and transcript replacement have their own proofs.
+ */
+const NO_TURNOUTPUT: TurnOutputPort = {
+  recordToolResult: () => Promise.resolve(),
+  recordAssistantMessage: () => Promise.resolve(),
+  finishTurn: () => Promise.resolve(),
+  recordInjectedMessage: () => Promise.resolve(),
+};
+
+const NO_COMPACTION: CompactionPort = {
+  decide: () => Promise.resolve({ kind: 'skip', reason: 'not under test here' }),
+  run: () => Promise.resolve({ kind: 'declined', reason: 'not under test here' }),
+  nextCompactionId: () => 'cmp-hook-facts',
+};
 
 /**
  * A ceiling every case carries, far above any threshold asserted here.
@@ -123,6 +146,8 @@ function harness(
       sweep: () =>
         Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }),
     },
+    turnOutput: NO_TURNOUTPUT,
+    compaction: NO_COMPACTION,
     model,
     tools: {
       dispatch(call: ToolCallRequest): void {

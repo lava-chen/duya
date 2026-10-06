@@ -42,6 +42,7 @@ import { RunEngineImpl } from '../src/engine/run-engine.js';
 import type {
   ApprovalVerdict,
   AssembledTurn,
+  CompactionPort,
   ModelFrame,
   ModelPort,
   RepeatedCallStopPolicy,
@@ -52,9 +53,29 @@ import type {
   ToolDescriptor,
   ToolDrainItem,
   TransientContextFragment,
+  TurnOutputPort,
 } from '../src/engine/ports.js';
 import type { RunEvent, RunId, RunManifest } from '@duya/agent-protocol';
 import type { EngineRunReport } from '../src/engine/run-engine.js';
+
+// ============================================================================
+// The two ports this file does not test, bound to their smallest honest answer
+// ============================================================================
+
+/** "This harness records nothing." A durable-rows proof lives elsewhere. */
+const NO_TURNOUTPUT: TurnOutputPort = {
+  recordToolResult: () => Promise.resolve(),
+  recordAssistantMessage: () => Promise.resolve(),
+  finishTurn: () => Promise.resolve(),
+  recordInjectedMessage: () => Promise.resolve(),
+};
+
+/** "This harness never compacts." A replacement proof lives elsewhere. */
+const NO_COMPACTION: CompactionPort = {
+  decide: () => Promise.resolve({ kind: 'skip', reason: 'not under test here' }),
+  run: () => Promise.resolve({ kind: 'declined', reason: 'not under test here' }),
+  nextCompactionId: () => 'cmp-adl',
+};
 
 // ============================================================================
 // Scripted ports
@@ -109,6 +130,13 @@ function harness(
       sweep: () =>
         Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }),
     },
+    // Plan 610 D4: required since the flip. Neither is under test here, so both
+    // are bound to the smallest honest answer -- "records nothing" and "skips"
+    // -- rather than omitted. The two call sites they own (`TurnOutputPort`'s
+    // durable rows, `CompactionPort`'s transcript replacement) have dedicated
+    // proofs; this file is about the repeated-call invariant.
+    turnOutput: NO_TURNOUTPUT,
+    compaction: NO_COMPACTION,
     model,
     tools: {
       dispatch(call: ToolCallRequest): void {

@@ -242,6 +242,13 @@ export interface LegacyEngineSources {
    *
    * So the seam exists and is exercised by this package's tests, and the cutover
    * is the slice that fills it in.
+   *
+   * OPTIONAL SOURCE, REQUIRED PORT. Plan 610 D4 made the PORT required, and the
+   * asymmetry is deliberate: a host may genuinely have nothing to record
+   * through, which is a fact about the host, while "the engine has no port to
+   * record through" is a type error. `buildEnginePorts` translates the first
+   * into a port whose promises resolve and perform nothing, so the engine never
+   * has to ask whether a host recorded anything.
    */
   readonly turnOutput?: TurnOutputSources;
   /**
@@ -933,28 +940,27 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
     // whose host supplied no `modeExit` source must be observably a run that
     // never exited a mode, not a run that exited zero modes on purpose.
     ...(modeExit === undefined ? {} : { modeExit }),
-    // All-or-nothing, for the same reason `sideEffects` is: half a port is a
-    // port whose missing half is indistinguishable from one that was never
-    // asked. `finishTurn` without `recordToolResult` would report counts for
-    // results the host was never handed, and a host that never learned the
-    // model's answer would have no way to notice.
-    ...(turnOutput === undefined
-      ? {}
-      : {
-          turnOutput: {
-            recordToolResult: (record) => Promise.resolve(turnOutput.onToolResult(record)),
-            // Optional at the SOURCE, required by the port: a source that has
-            // nothing to do with the message still gets a resolved promise
-            // rather than a `!` or a silent skip in the engine.
-            recordAssistantMessage: (record) => Promise.resolve(onAssistantMessage?.(record)),
-            finishTurn: (summary) => Promise.resolve(turnOutput.onTurnResults(summary)),
-            // Same optional-at-the-source shape as the message above, and for the
-            // same reason: the legacy still owns the commit while it drives, so a
-            // source that cannot commit yet omits this and the engine still gets
-            // a resolved promise rather than a `!` or a silent skip.
-            recordInjectedMessage: (record) => Promise.resolve(onInjectedMessage?.(record)),
-          },
-        }),
+    // ALWAYS BOUND, since plan 610 D4 made `turnOutput` a required port. The
+    // SOURCE stays optional -- a host genuinely may have nothing to record
+    // through -- and the difference is what the no-op below is for: a host with
+    // no source gets a port whose promises resolve and perform nothing, which
+    // is a legible answer ("this host records nothing"), where omitting the
+    // member is a type error and a bound-but-empty half-built port would be a
+    // host obligation the engine believed was half met.
+    //
+    // The mapping itself is unchanged: a source that has nothing to do with the
+    // message still gets a resolved promise rather than a `!` or a silent skip
+    // in the engine, which is the same rule `recordInjectedMessage` below
+    // follows for the same reason.
+    turnOutput: {
+      recordToolResult: (record) => Promise.resolve(turnOutput?.onToolResult(record)),
+      recordAssistantMessage: (record) => Promise.resolve(onAssistantMessage?.(record)),
+      finishTurn: (summary) => Promise.resolve(turnOutput?.onTurnResults(summary)),
+      // Same optional-at-the-source shape as the two above: the legacy still
+      // owns the commit while it drives, so a source that cannot commit yet
+      // omits this and the engine still gets a resolved promise.
+      recordInjectedMessage: (record) => Promise.resolve(onInjectedMessage?.(record)),
+    },
     ...(beginTicket === undefined || settleTicket === undefined
       ? {}
       : {

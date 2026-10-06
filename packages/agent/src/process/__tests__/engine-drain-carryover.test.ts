@@ -873,12 +873,43 @@ describe('buildEnginePorts no longer pretends to carry a deferred fragment', () 
 });
 
 describe('buildEnginePorts binds the turn-output seam all-or-nothing', () => {
-  it('builds NO turnOutput port when the host supplies none', () => {
-    // The live worker's state, asserted structurally rather than inferred from a
-    // missing effect. A port that existed and did nothing would look identical
-    // from the outside and would swallow the obligation the cutover has to
-    // discharge; `undefined` is the honest answer and it is checkable.
-    expect(realPorts().turnOutput).toBeUndefined();
+  it('builds a NO-OP turnOutput port when the host supplies none', async () => {
+    // CHANGED by plan 610 D4, which made `RunEnginePorts.turnOutput` REQUIRED.
+    // This used to assert `toBeUndefined()`, and it was right at the time: the
+    // port was optional, and `undefined` was the honest answer because a
+    // bound-but-empty port would have been indistinguishable from "this host
+    // was never asked".
+    //
+    // The requirement moved the honest answer. The engine can no longer ask
+    // whether a host records tool results, so the composition answers for it:
+    // a host with no source gets a port whose promises RESOLVE and perform
+    // nothing, which is legible ("this host records nothing") where `undefined`
+    // is a type error.
+    //
+    // Non-vacuity is the point, so it is asserted as behaviour rather than as a
+    // shape: a port that existed and THREW would look identical to this one from
+    // the outside, and the engine calls all four members on every run.
+    const ports = realPorts();
+    expect(ports.turnOutput).toBeDefined();
+
+    const record: ToolResultRecord = {
+      turn: 1,
+      toolName: TOOL_NAME,
+      outcome: { kind: 'tool_result', content: 'x', isError: false },
+    };
+    await expect(ports.turnOutput.recordToolResult(record)).resolves.toBeUndefined();
+    await expect(
+      ports.turnOutput.recordAssistantMessage({
+        turn: 1,
+        message: { id: 'm', role: 'assistant', content: 'x' },
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      ports.turnOutput.finishTurn({ turns: 1, toolResults: 0 }),
+    ).resolves.toBeUndefined();
+    await expect(
+      ports.turnOutput.recordInjectedMessage({ turn: 1, role: 'user', content: 'x' }),
+    ).resolves.toBeUndefined();
   });
 
   it('forwards BOTH halves to the host, and awaits them', async () => {

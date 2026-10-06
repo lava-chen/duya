@@ -452,7 +452,7 @@ async function driveComposedRun(turns: readonly ('tool' | 'text')[]): Promise<Ob
 // ============================================================================
 
 describe('composeLegacyRunPorts supplies every member the engine requires', () => {
-  it('binds every port the engine reads, including the two the cutover will make required', async () => {
+  it('binds every required port the engine reads, including the two D4 closed', async () => {
     const o = await driveComposedRun(['tool', 'text']);
 
     // POSITIVE evidence first: the run really executed rather than assembling a
@@ -463,9 +463,8 @@ describe('composeLegacyRunPorts supplies every member the engine requires', () =
     // it, which asserted "all six required ports" while naming seven of them
     // and omitting this one. `composeLegacyRunSources` binds it
     // unconditionally, so the assertion was free to make and the gap was not
-    // free to leave: the cutover makes this port REQUIRED, and the one test
-    // that claims to cover the composition's required members did not look at
-    // it.
+    // free to leave: plan 610 D4 made this port REQUIRED, and the one test that
+    // claims to cover the composition's required members did not look at it.
     for (const port of [
       'model',
       'tools',
@@ -478,14 +477,14 @@ describe('composeLegacyRunPorts supplies every member the engine requires', () =
     ] as const) {
       expect(o.ports[port], `port ${port} must be supplied`).toBeDefined();
     }
-    // The two that are REQUIRED in the type today, which is a statement about
-    // the type and not about the value above -- kept separate so that closing
-    // either member in `RunEnginePorts` shows up here as a type error rather
-    // than as a runtime surprise. The previous name asserted that these two
-    // "cannot be optional"; that was measured and it is false for `compaction`,
-    // which can be required at a cost of three synthetic bindings and zero
-    // compositions. See `port-guards.ts`'s cutover tripwires.
+    // The SAME eight are REQUIRED in the type as of D4, so this list is no
+    // longer "required, plus two the cutover will close" -- it is exactly the
+    // required set. The assertion that used to sit here claimed these two
+    // "cannot be optional"; that was measured and it was false at the time, and
+    // D4 is the change that made it true. `port-guards.ts` now carries the
+    // `@ts-expect-error` pair that keeps it true.
     expect(o.ports.interTurn).toBeDefined();
+    expect(o.ports.turnOutput).toBeDefined();
     expect(o.ports.compaction).toBeDefined();
   });
 
