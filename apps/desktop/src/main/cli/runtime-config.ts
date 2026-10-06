@@ -13,7 +13,7 @@
  *   in future phases, but the Phase 0 CLI client ignores it
  */
 
-import { app } from 'electron';
+import { homedir } from 'os';
 import { promises as fs, readdirSync } from 'fs';
 import { join } from 'path';
 import { getLogger } from '../logging/logger';
@@ -29,8 +29,46 @@ export interface CliApiRuntime {
   startedAt: number;
 }
 
+interface ElectronApp {
+  getPath(name: 'userData'): string;
+}
+
+/**
+ * Electron is OPTIONAL here: this module is inside the value-import closure of
+ * the headless control plane's server entry
+ * (`01-headless-control-plane.md` §2.1). A module-scope
+ * `import { app } from 'electron'` is evaluated when the module is and throws
+ * THERE, taking the whole graph with it, so `app` is resolved through a
+ * guarded require and reported as absent instead.
+ */
+function electronApp(): ElectronApp | undefined {
+  try {
+    const { app } = require('electron') as { app?: ElectronApp };
+    return app;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Electron wins whenever it is present: this is the app's own directory and
+ * must not move because the variable below happens to be exported in a dev
+ * shell. `DUYA_CLI_USER_DATA_DIR` (`cli/handlers/plugins.ts`) is the existing
+ * headless entry point and applies only when there is no desktop, where
+ * `~/.duya` is the same root the rollout / attachment paths already use
+ * (`config/boot-config.ts`). Returning `''` instead would resolve this runtime
+ * file against the process cwd, which is not a directory anyone chose.
+ */
+function userDataDir(): string {
+  const app = electronApp();
+  if (app && typeof app.getPath === 'function') return app.getPath('userData');
+  const envOverride = process.env.DUYA_CLI_USER_DATA_DIR;
+  if (envOverride && envOverride.trim().length > 0) return envOverride;
+  return join(homedir(), '.duya');
+}
+
 function runtimeDir(): string {
-  return join(app.getPath('userData'), 'runtime');
+  return join(userDataDir(), 'runtime');
 }
 
 function runtimeFilePath(): string {
