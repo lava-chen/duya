@@ -126,6 +126,7 @@ import type {
   ApprovalVerdict,
   AssembledTurn,
   ModelFrame,
+  ModelMessage,
   ModelRequest,
   RunEnginePorts,
   RunEventEmitter,
@@ -148,7 +149,7 @@ import type { RunId, RunManifest, TokenUsage } from '@duya/agent-protocol';
 // `turn-loop-product-behavior.test.ts:87-92` gives.
 import type { AssistantMessage, Message, MessageContent } from '../types.js';
 import type { Tool } from '../types.js';
-import type { TurnOutputSink, duyaAgent } from '../agent/DuyaAgent.js';
+import type { RunTurnAssembly, TurnOutputSink, duyaAgent } from '../agent/DuyaAgent.js';
 import type { TurnPipelinePublisher } from '../tool/turn-pipeline-publisher.js';
 import { createClientModelPort } from './run-engine-model.js';
 import { buildEnginePorts, toDrainItem } from './run-engine-ports.js';
@@ -474,6 +475,109 @@ export function composeLegacyRunSources(
 export function composeLegacyRunPorts(agent: duyaAgent, host: LegacyRunHost): RunEnginePorts {
   agent.bindTurnOutputSink(host.turnOutputSink ?? null);
   return buildEnginePorts(composeLegacyRunSources(agent, host));
+}
+
+// ============================================================================
+// `ContextPort.assemble`, for a host that drives the engine
+// ============================================================================
+
+/**
+ * Plan 610 A3-2b9 (S3): bind `ContextPort.assemble` to a real run handle.
+ *
+ * ## Why this exists, and why it is a TRANSLATION and not a second assembly
+ *
+ * `LegacyRunHost.assembleTurn` is required and is the engine's one call per
+ * turn, and until plan 610 A3-2b8 it had no possible production body: its
+ * inputs were closure locals of a 2300-line generator. A3-2b7 gave
+ * `assembleTurn` a body and A3-2b8 gave that body a producer
+ * (`beginTurnAssembly`), so a production binding is finally expressible.
+ *
+ * It is a TRANSLATION, and the distinction is the whole safety argument. Every
+ * decision about what a turn advertises -- the filtered catalog, the prompt
+ * refresh, the catalog round, the pipeline -- is made by `handle.assemble`,
+ * which the legacy loop ALSO calls. Nothing is re-derived here. What is
+ * translated is the VOCABULARY: the legacy `Message` / `Tool` shapes into the
+ * runtime's `ModelMessage` / `ToolDescriptor`, which `ports.ts` says is the
+ * host's job because the two are genuinely different types.
+ *
+ * ## The two projections, and what each is faithful to
+ *
+ * - `Tool.input_schema` -> `ToolDescriptor.inputSchema`. A rename, and the
+ *   engine sends it straight back to the provider, so a silent swap here would
+ *   send every model a tool surface whose schema it cannot read. The
+ *   camelCase/snake_case defect class `run-engine-model.ts:73-81` documents is
+ *   exactly this, which is why it is asserted rather than assumed.
+ * - `Message` -> `ModelMessage`. Only `role` and `content` survive, because
+ *   `ModelMessage` carries only those two plus an `id`. Nothing is invented:
+ *   the dropped fields are metadata the model never saw.
+ *
+ * ## `messages` comes from the AGENT, not from the engine's input
+ *
+ * `TurnAssemblyInput.messages` is the legacy transcript the turn is built from,
+ * and the agent owns that transcript. The engine's `input.history` is what the
+ * host pushed into it, so reading it back off the agent is the same rows by
+ * identity -- and reading the engine's own array instead would be a second
+ * account of one transcript that could disagree with what the tools wrote.
+ *
+ * ## `revision` and `catalogRevision` are reported, not computed here
+ *
+ * `revision` is the digest the ENGINE computed over its own input; the host has
+ * no better claim to it and must not invent one. `catalogRevision` is the
+ * registry's own counter, stringified for the port.
+ */
+export function createLegacyAssembleTurn(
+  agent: duyaAgent,
+  handle: RunTurnAssembly,
+): (input: TurnAssemblyInput) => Promise<AssembledTurn> {
+  return async (input: TurnAssemblyInput): Promise<AssembledTurn> => {
+    // The assembly is driven by what the ENGINE asked for (the turn number) and
+    // by the run's own current state (the prompt the run holds, the transcript
+    // the agent holds). `input.digest` and `input.turn` come from the engine;
+    // nothing else in the request has a legacy counterpart, and inventing one
+    // would be the host deciding what belongs in the payload -- which is the
+    // engine's job and `ports.ts:482-486` says so.
+    const assembly = handle.assemble({
+      turn: input.turn,
+      systemPrompt: handle.systemPrompt,
+      messages: agent.getMessages() as Message[],
+      tools: handle.tools as Tool[],
+    });
+
+    return {
+      systemPrompt: assembly.systemPrompt,
+      messages: toModelMessages(agent.getMessages()),
+      tools: assembly.tools.map(toToolDescriptor),
+      catalogRevision: String(handle.resolved.registry.getCatalogRevision()),
+      revision: input.digest,
+    };
+  };
+}
+
+/**
+ * `Message` -> `ModelMessage`, dropping what the model never sees.
+ *
+ * Exported for the reason `toDrainItem` is: a pure projection is the only shape
+ * in which "did the adapter drop something" is a question a test can answer,
+ * and it is answerable without a registry, a model or a pipeline.
+ */
+export function toModelMessages(messages: readonly Message[]): ModelMessage[] {
+  return messages.map((message, index) => ({
+    role: message.role as ModelMessage['role'],
+    content: message.content as ModelMessage['content'],
+    id: message.id ?? `m${index}`,
+  }));
+}
+
+/**
+ * `Tool` -> `ToolDescriptor`. The `input_schema` -> `inputSchema` rename is the
+ * load-bearing line; see this file's header on the defect class it belongs to.
+ */
+export function toToolDescriptor(tool: Tool): ToolDescriptor {
+  return {
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.input_schema as Record<string, unknown>,
+  };
 }
 
 // ============================================================================

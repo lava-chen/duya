@@ -411,7 +411,7 @@ export interface RunAssemblyRequest {
 }
 
 /** What the host knows about the turn it is asking for. */
-export interface TurnAssemblyInput {
+export interface LegacyTurnDelta {
   /** 1-based turn number, as the publisher records it and the catalog is stamped. */
   readonly turn: number;
   /** The transcript this turn is built from. Read fresh every turn. */
@@ -476,7 +476,7 @@ export interface RunTurnAssembly {
    */
   refreshDeclaredTools(): Set<string>;
   /** Assemble one turn: prompt refresh, catalog round, and a FRESH pipeline. */
-  assemble(input: TurnAssemblyInput): TurnAssembly;
+  assemble(input: LegacyTurnDelta): TurnAssembly;
 }
 
 /**
