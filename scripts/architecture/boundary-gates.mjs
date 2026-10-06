@@ -348,15 +348,21 @@ export function workerImplementsExecutionChannel(entryRel = WORKER_ENTRY) {
  *
  * ## Selectivity, measured rather than assumed
  *
- * Over the 2250 non-test source files under `packages/`, `apps/desktop/src`,
+ * Over the 2253 non-test source files under `packages/`, `apps/desktop/src`,
  * `electron/` and `scripts/`, requiring two driven streams in one loop body:
  *
- *   | predicate                                   | files matched |
- *   | ------------------------------------------- | ------------- |
- *   | three name clauses (previous)               | 5             |
- *   | two driven streams in one loop body (this)  | 1             |
+ *   | predicate                                            | files matched |
+ *   | ---------------------------------------------------- | ------------- |
+ *   | three name clauses (previous)                        | 5             |
+ *   | two driven streams in ONE loop body                  | 1             |
+ *   | two driven streams, one CALL FRAME down (current)    | 2             |
  *
- * The single match is `packages/agent/src/agent/DuyaAgent.ts`.
+ * The count went from 1 to 2 and that is the intended movement, not a regression:
+ * the added match is `packages/agent-runtime/src/engine/run-engine.ts`, the
+ * runtime execution owner, which the inline-only rule could not see because its
+ * two legs are private methods the loop body calls. Both matches are loop
+ * implementations, so nothing was absorbed that is not a cycle.
+ *
  * `packages/agent-runtime/src/engine/ports.ts` — the types-and-docs module the
  * clause docstring above recorded as a known over-read — has no loop body at
  * all under this scanner, so that over-read is gone rather than tolerated.
@@ -366,12 +372,20 @@ export function workerImplementsExecutionChannel(entryRel = WORKER_ENTRY) {
  * A turn loop that drives its two legs as plain `await`ed calls instead of as
  * consumed streams is NOT reported. The threshold stays at the weakest value
  * that still means "both legs" on purpose: raising it to `forAwait >= 3` selects
- * the same single file, so 2 carries no tuning risk, and no lower value has a
+ * the same files, so 2 carries no tuning risk, and no lower value has a
  * defensible meaning. The measured cost of the next step down — accepting one
  * driven stream plus any other awaited call — is 4 files (`DuyaAgent.ts`,
  * `SessionSearchTool.ts`, `packages/ai/src/utils/retry.ts`,
  * `apps/desktop/src/main/services/backup.ts`), i.e. a retry helper and a backup
  * scan. Whoever widens this must re-measure that column rather than assume it.
+ *
+ * Exactly ONE call frame is followed, and the limit is real: a loop body that
+ * calls `a()` which calls `b()` which drives both streams is NOT reported,
+ * because the legs are two frames down. A transitive call graph would close that
+ * and is deliberately out of scope — it is a different analysis with a different
+ * false-positive surface. A loop whose legs live in ANOTHER MODULE is likewise
+ * not reported, which is the same limit stated along the import axis rather than
+ * the call one.
  *
  * A COPY of the loop pasted into a new module matches the same shape and is
  * caught as a second owner by G8. A loop reached only through a dynamic
@@ -542,6 +556,217 @@ function lineAt(src, offset) {
   return line;
 }
 
+/** The `{ … }` block opening right after the parameter list that starts at `parenIdx`. */
+function blockAfterParen(tokens, parenIdx) {
+  if (parenIdx < 0 || !tokens[parenIdx] || tokens[parenIdx].value !== '(') return null;
+  const close = matchBracket(tokens, parenIdx);
+  if (close < 0) return null;
+  return blockAfterClose(tokens, close);
+}
+
+/**
+ * The block body whose parameter list closes at `closeIdx`.
+ *
+ * A TypeScript return-type annotation sits between the `)` and the `{` —
+ * `async #drainOutcomes(…): Promise<void> {` — so the `)` alone does not locate
+ * the body. The annotation is skipped rather than parsed: the scan stops at the
+ * first `{` at the top level of the annotation, at `;` or `=`, or after a bounded
+ * number of tokens, and an object-type literal inside the annotation is consumed
+ * with its own braces so its `{` is not mistaken for the body.
+ *
+ * This is the one place the scanner reads TypeScript syntax rather than
+ * JavaScript, and it is bounded on purpose: an exotic annotation this fails to
+ * skip makes the scan UNDER-detect that method's legs, which is the direction
+ * this file treats as dangerous, so the bound is stated rather than implied.
+ */
+function blockAfterClose(tokens, closeIdx) {
+  let i = closeIdx + 1;
+  if (tokens[i] && tokens[i].kind === 'op' && tokens[i].value === ':') {
+    i++;
+    for (let guard = 0; i < tokens.length && guard < 64; guard++) {
+      const t = tokens[i];
+      if (t.kind === 'op' && (t.value === ';' || t.value === '=' || t.value === '=>')) break;
+      if (t.kind === 'op' && t.value === '{') {
+        const inner = matchBracket(tokens, i);
+        // `{ … } {` — the first pair is an object type, the second is the body.
+        if (inner >= 0 && tokens[inner + 1] && tokens[inner + 1].kind === 'op' && tokens[inner + 1].value === '{') {
+          i = inner + 1;
+          continue;
+        }
+        break;
+      }
+      i++;
+    }
+  }
+  const brace = tokens[i];
+  if (!brace || brace.kind !== 'op' || brace.value !== '{') return null;
+  const end = matchBracket(tokens, i);
+  if (end < 0) return null;
+  return { start: i, end };
+}
+
+/**
+ * Words that sit immediately before a `(` and open a block, so the `(` … `)` … `{`
+ * shape is a control-flow HEADER rather than a function definition.
+ *
+ * Without this, `if (…) {` would register a definition named `if` and a loop body
+ * calling any `if (` would count as delegating a leg.
+ */
+const CONTROL_KEYWORDS = new Set([
+  'if', 'for', 'while', 'switch', 'catch', 'with', 'do', 'else', 'return',
+  'typeof', 'new', 'delete', 'void', 'await', 'yield', 'throw', 'case',
+]);
+
+/**
+ * Functions and methods DEFINED in this module, as `name -> [body token range]`.
+ *
+ * Same-module only, and that is the whole design constraint: the delegation the
+ * predicate follows is a CALL into a function the reader can see in the same
+ * file. A callee that lives in another module is deliberately NOT followed —
+ * following it would turn this into a transitive call graph, which is a
+ * different (and much larger) analysis with its own false-positive surface.
+ *
+ * Four declaration shapes are recognised, because that is what real turn-loop
+ * decompositions use: a `function` declaration, a class or object method, a
+ * `#private` method, and a function/arrow expression bound to a name. Each is
+ * found from bracket structure and the `function` keyword — never from an
+ * identifier the loop happens to use — so the rename-resistance requirement
+ * above survives the widening.
+ *
+ * Returns `{ byName, all }`. `all` carries every definition regardless of name,
+ * which is what lets a callee exclude the functions nested inside itself — see
+ * `countForAwaitIn`.
+ */
+function localDefinitions(tokens) {
+  const defs = new Map();
+  const add = (name, block) => {
+    if (!name || !block) return;
+    if (CONTROL_KEYWORDS.has(name)) return;
+    if (!defs.has(name)) defs.set(name, []);
+    const seen = defs.get(name);
+    // `function f(…) {}` is reachable from two of the shapes below, and a
+    // name registered twice would have its legs counted twice.
+    if (seen.some((b) => b.start === block.start && b.end === block.end)) return;
+    seen.push(block);
+  };
+
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+
+    // `function name(…) {` and `async function name(…) {`.
+    if (t.kind === 'id' && t.value === 'function') {
+      let j = i + 1;
+      if (tokens[j] && tokens[j].kind === 'op' && tokens[j].value === '*') j++;
+      const name = tokens[j] && tokens[j].kind === 'id' ? tokens[j].value : null;
+      const paren = tokens[j + 1] && tokens[j + 1].value === '(' ? j + 1 : -1;
+      add(name, blockAfterParen(tokens, paren));
+      continue;
+    }
+
+    if (t.kind !== 'op' || t.value !== '(') continue;
+    const close = matchBracket(tokens, i);
+    if (close < 0) continue;
+
+    // `name(…) {` — a class or object method; `this.#name(…) {` is the same
+    // shape, and the tokeniser splits the `#` off as its own operator.
+    const before = tokens[i - 1];
+    if (before && before.kind === 'id') {
+      add(before.value, blockAfterParen(tokens, i));
+    } else if (
+      before && before.kind === 'op' && before.value === '#' &&
+      tokens[i - 2] && tokens[i - 2].kind === 'id'
+    ) {
+      add(tokens[i - 2].value, blockAfterParen(tokens, i));
+    }
+
+    // `const name = (…) => {`, `const name = async (…) => {`, and
+    // `const name = (x) => {`. The parameter list closes at `close`, `=>` is
+    // the two operators `=` `>` that follow it, and the block opens next. An
+    // arrow returning a parenthesised object has no block body and is skipped.
+    const eq = tokens[close + 1];
+    const gt = tokens[close + 2];
+    const brace = tokens[close + 3];
+    if (!eq || eq.kind !== 'op' || eq.value !== '=') continue;
+    if (!gt || gt.kind !== 'op' || gt.value !== '>') continue;
+    if (!brace || brace.kind !== 'op' || brace.value !== '{') continue;
+    // The bound name is before the parameter list, not inside it: `tokens[i]`
+    // is the `(`, and `async` may sit between the name and the `(`.
+    let back = i - 1;
+    if (tokens[back] && tokens[back].kind === 'id' && tokens[back].value === 'async') back -= 1;
+    if (!tokens[back] || tokens[back].kind !== 'op' || tokens[back].value !== '=') continue;
+    const name = tokens[back - 1];
+    if (!name || name.kind !== 'id') continue;
+    const end = matchBracket(tokens, close + 3);
+    if (end < 0) continue;
+    add(name.value, { start: close + 3, end });
+  }
+  // `all` is every definition in the module regardless of name. It exists so a
+  // callee can tell its OWN legs from the legs of a function declared inside
+  // it; without it the range scan below would silently reach two frames.
+  return { byName: defs, all: [...defs.values()].flat() };
+}
+
+/**
+ * `for await` headers in a token range, skipping any range in `excluded`.
+ *
+ * With no `excluded` this counts the whole range including nested blocks,
+ * which is what the INLINE loop-body count has always done and must keep doing:
+ * a turn loop's own legs are nested stream pumps.
+ */
+function countForAwaitIn(tokens, start, end, excluded = []) {
+  let legs = 0;
+  for (let k = start; k < end; k++) {
+    if (excluded.some((b) => k > b.start && k < b.end)) continue;
+    const t = tokens[k];
+    if (t.kind !== 'id' || t.value !== 'for') continue;
+    const next = tokens[k + 1];
+    if (next && next.kind === 'id' && next.value === 'await') legs++;
+  }
+  return legs;
+}
+
+/**
+ * Names of same-module definitions CALLED from a token range.
+ *
+ * A call is recognised structurally: a callee identifier immediately followed
+ * by `(`, and not preceded by a `.`/`#` that is not `this`. That admits the
+ * three spellings a loop body actually uses — `name(…)`, `this.name(…)` and
+ * `this.#name(…)` — while refusing `other.name(…)`, where the identifier names a
+ * property on an object this scanner cannot see the body of.
+ *
+ * The `#` is its own operator to the tokeniser, so `this.#name(` reads as four
+ * tokens and `this` sits three back, not two. That offset is the difference
+ * between seeing the engine's two private legs and seeing none of them.
+ */
+function calledDefinitions(tokens, start, end, defs) {
+  const called = new Set();
+  for (let k = start; k < end; k++) {
+    const t = tokens[k];
+    if (t.kind !== 'id') continue;
+    const next = tokens[k + 1];
+    if (!next || next.kind !== 'op' || next.value !== '(') continue;
+    if (!defs.has(t.value)) continue;
+    const prev = tokens[k - 1];
+    const prev2 = tokens[k - 2];
+    const prev3 = tokens[k - 3];
+    const isPrivateMember =
+      prev && prev.kind === 'op' && prev.value === '#' &&
+      prev2 && prev2.kind === 'op' && prev2.value === '.' &&
+      prev3 && prev3.kind === 'id' && prev3.value === 'this';
+    const isMember =
+      prev && prev.kind === 'op' && prev.value === '.' &&
+      prev2 && prev2.kind === 'id' && prev2.value === 'this';
+    const chained = prev && (
+      (prev.kind === 'op' && (prev.value === '.' || prev.value === '#' || prev.value === ')' || prev.value === ']')) ||
+      (prev.kind === 'id' && !CONTROL_KEYWORDS.has(prev.value)) ||
+      prev.kind === 'num' || prev.kind === 'opaque'
+    );
+    if (!isPrivateMember && !isMember && chained) continue;
+    called.add(t.value);
+  }
+  return called;
+}
+
 /**
  * Every loop body in the module that drives at least `TURN_LOOP_SHAPE.legs`
  * async streams, as `{ line, legs }`.
@@ -556,11 +781,72 @@ function lineAt(src, offset) {
  * `for await` headers are counted anywhere inside the body, including nested
  * blocks, because a turn loop's legs are themselves nested stream pumps — that
  * is the shape the real cycle has; ask `turnLoopSites()` for where it is today.
+ *
+ * ## A leg one CALL FRAME down counts too, and that is the point (2026-10-06)
+ *
+ * The inline-only count made the predicate sensitive to DECOMPOSITION STYLE
+ * rather than to RESPONSIBILITY, and it was measured doing so. On this tree
+ * `isTurnLoopModule` was false for `packages/agent-runtime/src/engine/run-engine.ts`
+ * — the runtime execution owner, whose turn cycle is the one the whole cutover
+ * is moving towards. Its `for (let turn = 1; ; turn++)` body spans **286 lines
+ * containing zero `for await`**: the two legs live one call frame down, in
+ * `#streamModel` and `#drainOutcomes`, which the body calls. A module that
+ * correctly delegates its cycle to well-named private methods was judged "not a
+ * turn loop".
+ *
+ * The failure that makes this urgent rather than cosmetic: slice A3-2b6 deletes
+ * the legacy `DuyaAgent` cycle, and both G7 and G8 would then go green — but only
+ * because the predicate could not see the engine at all. That green is
+ * structurally indistinguishable from "somebody deleted every turn cycle", and a
+ * reader who trusted it would stop looking.
+ *
+ * So a leg counts when it is EITHER inline in the loop body OR inside a
+ * definition in the SAME module that the body calls, and the count is the sum.
+ * Exactly one call frame is followed, deliberately: a transitive call graph is a
+ * larger analysis with a larger false-positive surface, and the deletion hole
+ * this predicate exists to close is already closed by the one-frame rule (a loop
+ * still has to drive two real streams to reach the threshold).
+ *
+ * The sum cannot double-count. A definition nested INSIDE the loop body is
+ * already inside the inline range, so it is skipped as a delegate and only
+ * counted once; a definition the body calls by name is outside the body, and each
+ * such name contributes its own `for await` count once no matter how many times
+ * it is called.
+ *
+ * ⚠️ **This rule reached TWO frames for one revision, and the docstring was the
+ * only thing claiming otherwise.** The first implementation indexed every
+ * definition in the module and, for each callee, counted `for await` across that
+ * callee's whole block range. A block range textually CONTAINS any function
+ * declared inside it, so a callee that called a leg-bearing helper dragged that
+ * helper's leg into the total — depth two, while the comment above said depth
+ * one. Caught on review, not by a test: the depth-2 test that shipped was built
+ * with BOTH legs two frames down and nothing in between, so it returned 0 and
+ * passed without ever touching the leak.
+ *
+ * The fixture that exposed it is the shape worth remembering — the intermediate
+ * contributes a leg of its OWN:
+ *
+ *     async function outer() {
+ *       for (let t = 0; t < 3; t++) { await middle(); }
+ *     }
+ *     async function middle() {
+ *       async function inner() { for await (const a of s()) {} }
+ *       await inner();                          // depth 2 — must NOT count
+ *       for await (const b of s()) {}           // depth 1 — counts as 1
+ *     }
+ *
+ * `middle` contributes exactly 1, so the module is not a turn loop. A callee now
+ * contributes its OWN inline legs only: `countForAwaitIn` takes an `excluded`
+ * list built from the definitions nested inside that callee. The live engine is
+ * unaffected and was re-measured, not assumed — its loop body calls
+ * `#streamModel` and `#drainOutcomes` DIRECTLY and each holds exactly one inline
+ * `for await`, so one frame is sufficient and `run-engine.ts` still matches.
  */
 export function turnLoopSites(src) {
   if (typeof src !== 'string' || src.length === 0) return [];
   if (countForAwait(src) < TURN_LOOP_SHAPE.legs) return [];
   const tokens = tokenize(src);
+  const { byName: defs, all } = localDefinitions(tokens);
   const sites = [];
   for (let i = 0; i < tokens.length; i++) {
     if (tokens[i].kind !== 'op' || tokens[i].value !== '{') continue;
@@ -573,12 +859,23 @@ export function turnLoopSites(src) {
     if (keyword.value !== 'while' && keyword.value !== 'for') continue;
     const bodyEnd = matchBracket(tokens, i);
     if (bodyEnd < 0) continue;
-    let legs = 0;
-    for (let k = i; k < bodyEnd; k++) {
-      const t = tokens[k];
-      if (t.kind !== 'id' || t.value !== 'for') continue;
-      const next = tokens[k + 1];
-      if (next && next.kind === 'id' && next.value === 'await') legs++;
+    // No exclusions here: the loop body's OWN legs may sit in nested blocks, and
+    // that is the pre-existing inline behaviour this gate shipped with.
+    let legs = countForAwaitIn(tokens, i, bodyEnd);
+    if (legs < TURN_LOOP_SHAPE.legs && defs.size > 0) {
+      for (const name of calledDefinitions(tokens, i, bodyEnd, defs)) {
+        for (const block of defs.get(name)) {
+          // Already inside the body's own range: counted by the inline pass.
+          if (block.start >= i && block.end <= bodyEnd) continue;
+          // A callee contributes its OWN inline legs only. Definitions declared
+          // inside it are a SECOND frame, and counting them is what made this
+          // reach two frames by accident — see the docstring above.
+          const nested = all.filter(
+            (b) => b.start > block.start && b.end < block.end,
+          );
+          legs += countForAwaitIn(tokens, block.start, block.end, nested);
+        }
+      }
     }
     if (legs >= TURN_LOOP_SHAPE.legs) {
       sites.push({ line: lineAt(src, tokens[i].start), legs });
@@ -749,16 +1046,67 @@ export function reachabilityFrom(entryRel, roots = packageRoots()) {
  * entry's direct value import of the loop module
  * (`agent-process-entry.ts:76`), which G4 already records in the baseline and
  * which G7 reports at depth 1.
+ *
+ * ## Modules inside the SANCTIONED EXECUTION OWNER are excluded (2026-10-06)
+ *
+ * A module whose path is inside `EXECUTION_OWNER_PACKAGE` is not a G7 subject.
+ * The reason is a cutover, and it is written down here rather than left as a
+ * silent `continue` — a silent skip is exactly the defect PR #249 and #232 fixed
+ * twice in this same file, and a skip whose reason lives only in the diff is a
+ * skip the next reader cannot audit.
+ *
+ * **What A3-2b6 does.** It deletes the legacy `DuyaAgent` cycle so the runtime
+ * engine becomes the single driver. After that lands the worker entry is
+ * SUPPOSED to construct the engine and drive it — importing it at depth 1 and
+ * calling into it is the intended end state, not the bypass this gate reports.
+ * G8 owns the complementary half ("the cycle must live in the runtime execution
+ * package") and already skips the owner package for exactly that reason
+ * (`if (pkg === ownerPkg) continue` in `findLoopMisownership`). Without the
+ * mirrored exclusion here, A3-2b6 would trade one false red for another: G7
+ * would go red on the very import that is the point of the cutover.
+ *
+ * **What this is NOT.** It is not a mute. G7 still reports a loop in ANY other
+ * package at depth 0 or 1, and the live red today is one of those
+ * (`packages/agent/src/agent/DuyaAgent.ts`, reached at depth 1 from the entry).
+ * The exclusion is scoped to a package path, not to "looks like an engine", so it
+ * cannot absorb a loop that migrates back out of the owner — that is G8's
+ * finding, and G8 does not consult this skip.
+ *
+ * **Measured, and the honest caveat.** On this tree the exclusion moves no
+ * number: G7's depth-<=1 set holds 46 modules and **zero** of them are inside
+ * `packages/agent-runtime/`, because the entry reaches the engine through
+ * `run-engine-model.ts` -> `agent-runtime/src/index.ts`, deeper than the bound.
+ * So the exclusion is a forward-looking guard for A3-2b6 rather than something
+ * that fixed a live false positive. It was added in the same change that made
+ * the engine DETECTABLE, which is the only moment adding it is cheap: had the
+ * predicate widened first, A3-2b6 would have inherited a gate that could not
+ * distinguish the intended import from the bypass it exists to report.
  */
 export const WORKER_LOOP_MAX_DEPTH = 1;
 
-export function findWorkerLoopReach(entryRel = WORKER_ENTRY, roots = packageRoots(), maxDepth = WORKER_LOOP_MAX_DEPTH) {
+/** True when `file` is a source file inside the execution owner package. */
+function isInOwnerPackage(file, ownerPkg, roots) {
+  const ownerSrc = srcRootOf(ownerPkg, roots);
+  if (!ownerSrc) return false;
+  const abs = path.resolve(REPO_ROOT, file);
+  // The trailing separator matters: without it `packages/agent-runtime-legacy`
+  // would count as inside `packages/agent-runtime`.
+  return abs === ownerSrc || abs.startsWith(`${path.resolve(ownerSrc)}${path.sep}`);
+}
+
+export function findWorkerLoopReach(
+  entryRel = WORKER_ENTRY,
+  roots = packageRoots(),
+  maxDepth = WORKER_LOOP_MAX_DEPTH,
+  ownerPkg = EXECUTION_OWNER_PACKAGE,
+) {
   const ifAbsent = path.join(REPO_ROOT, entryRel);
   if (!fs.existsSync(ifAbsent)) return [];
   const depth = importDepthFrom(entryRel, roots, maxDepth);
   const findings = [];
   for (const [file, at] of depth) {
     if (isTestPath(file)) continue;
+    if (isInOwnerPackage(file, ownerPkg, roots)) continue;
     const abs = path.join(REPO_ROOT, file);
     if (!fs.existsSync(abs)) continue;
     const site = turnLoopSites(code(abs))[0];
