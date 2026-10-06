@@ -62,11 +62,12 @@
  *    adapter, and it belongs to whoever changes `CompactionOutcome`.
  *
  * 2. **Two of the three decision points.** `runPreTurn` is the proactive
- *    (`auto`) pass. The legacy's emergency (`DuyaAgent.ts:3756`) and
- *    preflight-overflow (`:3420`) passes are different statements with
- *    different evidence and a different caller, and they are NOT this
- *    coordinator. `decide` declines them by name rather than answering for
- *    them; see `UNCOVERED_TRIGGERS`.
+ *    (`auto`) pass, and A3-2b5 declined the other two BY NAME because the
+ *    logic sat inline in the legacy's cycle body and nothing outside
+ *    `streamChat` could reach it. It is now lifted onto the coordinator
+ *    (`decideEmergency` / `decidePreflightOverflow`) and dispatched per trigger
+ *    below, so all three reach this port. See `SERVED_TRIGGERS` and
+ *    `UNCOVERED_TRIGGERS` for what is served and what is still not.
  *
  * 3. **`compact:summary_outcome`.** The coordinator forwards it
  *    (`CompactionCoordinator.ts:121-131`) and the inbound translator has an arm
@@ -93,34 +94,61 @@
  */
 
 import type { CompactionDecision, CompactionProgress } from '@duya/agent-runtime';
-import type { Message } from '../types.js';
+import type { Message, SSEEvent } from '../types.js';
 import type {
   CompactionCoordinator,
   CompactionRunResult,
   PreTurnVerdict,
+  RecoveryVerdict,
 } from '../agent/CompactionCoordinator.js';
 import type { CompactionSources } from './run-engine-ports.js';
 import { toRuntimeMessage } from './run-engine-ports.js';
 
 /**
- * The triggers this source does not serve, and the reason each one reports.
+ * The triggers this source still does not serve, and the reason each reports.
  *
- * An `emergency` pass is the recovery path for a provider that answered
- * `context_length_exceeded` -- it is the one whose absence lets a run grow
- * until the provider rejects it (`ports.ts:2059-2073`). Declining it BY NAME is
- * therefore a load-bearing behaviour and not a shrug: the reason string is the
- * only place the cutover will see that this seam is partial, and a silent
- * decline would read as "the transcript is fine".
+ * DOWN FROM FOUR TO TWO. `emergency` and `preflight_overflow` were here until
+ * A3-2b6 and are served now, over their own coordinator gates
+ * (`CompactionCoordinator.decideEmergency` / `.decidePreflightOverflow`).
+ *
+ * They are the two that MATTERED, and the reason is worth keeping in the file:
+ * `emergency` is the recovery path for a provider that answered
+ * `context_length_exceeded` (`ports.ts:2059-2073`). A silent decline there
+ * reads as "the transcript is fine" for a run the provider had already
+ * rejected. Leaving the reason string in place while the path is served would
+ * have been the worst outcome -- a decline that names a gap which no longer
+ * exists -- so it is deleted rather than kept as decoration.
+ *
+ * `model_switch` and `manual` remain. `model_switch` fires at the TOP of
+ * `streamChat`, before the turn loop exists (`DuyaAgent.ts:1971-2026`), so the
+ * engine has no spine point that could host it and it is not a
+ * `CompactionPort` trigger at all; `manual` is a slash command handled outside
+ * the loop entirely. Neither is a lost recovery path -- declining them is the
+ * correct answer, and a named reason keeps that honest.
  */
 const UNCOVERED_TRIGGERS: Readonly<Record<string, string>> = {
-  emergency: 'emergency compaction is not served by the pre-turn coordinator',
-  preflight_overflow: 'preflight-overflow compaction is not served by the pre-turn coordinator',
   model_switch: 'model-switch compaction is not served by the pre-turn coordinator',
   manual: 'manual compaction is not served by the pre-turn coordinator',
 };
 
-/** The one trigger `runPreTurn` is. */
-const COVERED_TRIGGER = 'auto' as const;
+/**
+ * The three triggers this source serves, each over its OWN coordinator gate.
+ *
+ * A set rather than three `===` comparisons because `decide` answers "is this
+ * trigger mine?" for FIVE possible values, and a source that served three by
+ * enumeration would silently decline a sixth trigger it had never heard of --
+ * which is the exact silent-decline failure `UNCOVERED_TRIGGERS` exists to
+ * prevent. A name the adapter does not claim gets the NAMED reason, never a
+ * fallthrough to the proactive gate.
+ *
+ * Membership is `Set.has` and NOT `in`: `in` walks an object's own property
+ * keys, so `'emergency' in new Set([...])` is `false` for every value and
+ * EVERY trigger declines -- which is precisely the failure this slice exists
+ * to remove, reintroduced by the membership test itself. Measured, not
+ * asserted: the first run of the recovery suite failed all 24 of its
+ * behavioural cases with the pre-A3-2b6 reason string.
+ */
+const SERVED_TRIGGERS: ReadonlySet<string> = new Set(['auto', 'emergency', 'preflight_overflow']);
 
 /**
  * The per-run values the coordinator needs and the port cannot supply.
@@ -264,12 +292,78 @@ export function buildCoordinatorCompactionSources(
   const noteUsage = options.noteUsage;
   const verdicts = new WeakMap<DecisionInput, PreTurnVerdict>();
 
-  const gate = (input: DecisionInput): PreTurnVerdict =>
-    coordinator.decidePreTurn({ turnCount: input.turn });
+  /**
+   * Ask the coordinator the gate that OWNS this trigger.
+   *
+   * A per-trigger dispatch rather than one wide gate, because the three gates
+   * are genuinely different statements -- `decidePreTurn` is over the trigger
+   * line and behind a cooldown, `decidePreflightOverflow` is over the HARD
+   * limit with no cooldown, `decideEmergency` is a classification of the
+   * provider's own words (`CompactionCoordinator.ts`). Collapsing them into one
+   * input would mean either widening the proactive gate until it fires on
+   * conditions it was never written for, or re-deriving the emergency
+   * classification here, which is the two-copies failure the coordinator's
+   * existence is meant to prevent.
+   *
+   * The provider's text is forwarded VERBATIM and uninspected: the engine
+   * copied it off the `error` frame and the classification is the HOST's rule
+   * about how providers phrase errors (`ports.ts`, `CompactionObservation`).
+   */
+  const gate = (input: DecisionInput): RecoveryVerdict => {
+    if (input.trigger === 'emergency') {
+      return coordinator.decideEmergency({
+        turnCount: input.turn,
+        providerError: input.observation?.providerError,
+      });
+    }
+    if (input.trigger === 'preflight_overflow') {
+      return coordinator.decidePreflightOverflow({ turnCount: input.turn });
+    }
+    return coordinator.decidePreTurn({ turnCount: input.turn });
+  };
+
+  /**
+   * Run the compaction, through the coordinator half that owns the trigger.
+   *
+   * `onEvent` is passed STRAIGHT through to the coordinator, which calls it
+   * synchronously at the moment each event is produced -- including from the
+   * manager's own handler, mid-summarization. Nothing here collects events or
+   * defers a call, so a buffering bug is not something this file can express.
+   *
+   * `force` is read off the verdict rather than hardcoded, because the preflight
+   * image arm is the one case that bypasses the strategy's own guards
+   * (`DuyaAgent.ts:3423-3425`) and the emergency path never forces. Passing the
+   * flag from the verdict keeps the bypass the GATE's decision instead of this
+   * adapter's.
+   */
+  const execute = (
+    input: DecisionInput,
+    verdict: RecoveryVerdict,
+    onEvent: (event: SSEEvent) => void,
+  ): Promise<CompactionRunResult> => {
+    const shared = {
+      turnCount: input.turn,
+      systemPromptContent: systemPromptContent(),
+      messages: [...messages()],
+    };
+    if (input.trigger === 'emergency') {
+      return coordinator.executeRecovery(
+        { ...shared, trigger: 'emergency', force: false },
+        onEvent,
+      );
+    }
+    if (input.trigger === 'preflight_overflow') {
+      return coordinator.executeRecovery(
+        { ...shared, trigger: 'preflight_overflow', force: verdict.imageTriggered },
+        onEvent,
+      );
+    }
+    return coordinator.executePreTurn({ ...shared, verdict }, onEvent);
+  };
 
   return {
     async decide(input): Promise<CompactionDecision> {
-      if (input.trigger !== COVERED_TRIGGER) {
+      if (!SERVED_TRIGGERS.has(input.trigger)) {
         // Named, not silent. See `UNCOVERED_TRIGGERS`.
         const reason =
           UNCOVERED_TRIGGERS[input.trigger] ??
@@ -279,9 +373,9 @@ export function buildCoordinatorCompactionSources(
       const verdict = gate(input);
       verdicts.set(input, verdict);
       if (!verdict.fire) {
-        return { kind: 'skip', reason: verdict.declinedBecause ?? 'the pre-turn gate declined' };
+        return { kind: 'skip', reason: verdict.declinedBecause ?? 'the gate declined' };
       }
-      return { kind: 'compact', trigger: COVERED_TRIGGER };
+      return { kind: 'compact', trigger: input.trigger };
     },
 
     async compact(input, reporter, signal) {
@@ -294,36 +388,30 @@ export function buildCoordinatorCompactionSources(
 
       const verdict = verdicts.get(input) ?? gate(input);
       if (!verdict.fire) {
-        return { kind: 'declined', reason: verdict.declinedBecause ?? 'the pre-turn gate declined' };
+        return { kind: 'declined', reason: verdict.declinedBecause ?? 'the gate declined' };
       }
 
       // Live by construction: `onEvent` calls `reporter` inline and returns.
       // See this file's header -- there is no queue here to buffer into.
       let failure: string | null = null;
-      const run: CompactionRunResult = await coordinator.executePreTurn(
-        {
-          turnCount: input.turn,
-          systemPromptContent: systemPromptContent(),
-          messages: [...messages()],
-          verdict,
-        },
-        (event) => {
-          const wire = event as unknown as CompactionWireEvent;
-          const progress = toProgress(wire);
-          if (progress !== null) {
-            reporter(progress);
-            return;
-          }
-          // `compact:error` is how the legacy reports a failed compaction
-          // (`CompactionCoordinator.ts:311-314`). It becomes the port's
-          // `failed` arm rather than a decline, because a decline means
-          // "chose not to compact" and this one DID try and could not -- and
-          // because `failed` is the arm that publishes the terminal frame, so
-          // a `compaction.started` can never be left without an ending.
-          const message = toErrorMessage(wire);
-          if (message !== null) failure = message;
-        },
-      );
+      const onEvent = (event: SSEEvent): void => {
+        const wire = event as unknown as CompactionWireEvent;
+        const progress = toProgress(wire);
+        if (progress !== null) {
+          reporter(progress);
+          return;
+        }
+        // `compact:error` is how the legacy reports a failed compaction
+        // (`CompactionCoordinator.ts:311-314`). It becomes the port's
+        // `failed` arm rather than a decline, because a decline means
+        // "chose not to compact" and this one DID try and could not -- and
+        // because `failed` is the arm that publishes the terminal frame, so
+        // a `compaction.started` can never be left without an ending.
+        const message = toErrorMessage(wire);
+        if (message !== null) failure = message;
+      };
+
+      const run: CompactionRunResult = await execute(input, verdict, onEvent);
 
       if (failure !== null) {
         return { kind: 'failed', error: { code: 'compaction_failed', message: failure } };

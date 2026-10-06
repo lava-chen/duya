@@ -61,7 +61,7 @@ import { projectForProvider } from '@duya/plugin-core/mcp/core/projection';
 import { buildAppsSystemSection, collectConnectorActivationInjection, collectPluginInjections, collectSkillInjections, extractExplicitSkillMentions, mergeSkillMentionSources } from '../mentions/index.js';
 import { matchSkillsForPrompt, buildSkillSuggestionInjection } from '../skills/index.js';
 import { compressProjectedToolMessages } from '../compact/projectionCompress.js';
-import { classifyContextLengthError } from '../compact/compactErrors.js';
+
 import { createAIClient, createAIClientWithRetry, inferProvider, findModelCompat, estimateContextTextTokens } from '@duya/ai';
 import type { AIClient, AIClientOptions, RetryConfig, ApiFormat } from '@duya/ai';
 import { resolveDefaultBaseURL, resolveLlmClientDiscriminator } from '@duya/ai';
@@ -3407,23 +3407,26 @@ export class duyaAgent implements AgentRuntime {
             // round-trip. Compacting here is cheaper than retrying the
             // whole turn.
             if (toolResultMessageCount > 0) {
-              const projectionForOverflow =
-                this.compactionController.projectInputMessages();
-              // Plan 552: one probe owns both lines — the mid-loop overflow
-              // now compares against the manager's hard limit (full window)
-              // instead of a local `contextWindow` copy that could drift
-              // from the budget. Plan 495 G2: the image trigger is checked
-              // here too, not only at turn start.
-              const overflowProbe =
-                this.compactionManager.probeCompaction(projectionForOverflow);
-              if (overflowProbe.imageTriggered || overflowProbe.overHardLimit) {
+              // Plan 610 A3-2b6: the gate and the compaction moved onto the
+              // coordinator (`CompactionCoordinator.decidePreflightOverflow` /
+              // `.executeRecovery`) so a `CompactionPort` host can reach them.
+              // The probe, the `overHardLimit` comparison, the image arm's
+              // `force` and the re-projection are all still the legacy's
+              // statements -- they are now the coordinator's, and this site
+              // asks the same two methods the port does rather than keeping a
+              // second copy of the decision.
+              const overflowVerdict =
+                this.compactionCoordinator.decidePreflightOverflow({ turnCount });
+              if (overflowVerdict.fire) {
                 try {
-                  const compactEntry =
-                    await this.compactionController.compactProactive({
-                      ...(overflowProbe.imageTriggered
-                        ? { trigger: 'auto' as const, force: true }
-                        : { trigger: 'preflight_overflow' as const }),
-                    });
+                  const overflowRun = await this.compactionCoordinator.executeRecovery({
+                    turnCount,
+                    systemPromptContent,
+                    messages,
+                    trigger: 'preflight_overflow',
+                    force: overflowVerdict.imageTriggered,
+                  });
+                  const compactEntry = overflowRun.entry;
                   if (compactEntry) {
                     invalidateToolCatalogSchemaReads(catalogView);
                     logger.info(
@@ -3434,12 +3437,8 @@ export class duyaAgent implements AgentRuntime {
                     // Re-project model messages from the updated timeline
                     // so the next iteration (if any) and the next turn
                     // see the compacted projection.
-                    const reProjected = this._projectModelMessages(
-                      systemPromptContent,
-                      { injectHookContexts: true },
-                    );
-                    systemPromptContent = reProjected.systemPromptContent;
-                    messages = reProjected.messages;
+                    systemPromptContent = overflowRun.systemPromptContent;
+                    messages = overflowRun.messages;
                   }
                 } catch (overflowError) {
                   // Best-effort: a failed preflight overflow does not
@@ -3715,36 +3714,28 @@ export class duyaAgent implements AgentRuntime {
         //   weak wording            → only with local corroboration
         //     (projected context already over the trigger line); probe
         //     failure = no evidence = no compaction (fail-closed).
-        const contextErrorKind = classifyContextLengthError(errorMessage);
-        let isContextLengthError = false;
-        let evidence: 'explicit' | 'weak+probe' | null = null;
-        // Best-effort probe for BOTH evidence kinds: weak needs it as
-        // corroboration; explicit only uses it for the structured evidence
-        // log (plan 577 review round 2 — these lines become the historical
-        // baseline the Phase 2 ContextLedger is verified against).
-        let evidenceProbe: CompactionProbe | null = null;
-        if (contextErrorKind !== null) {
-          try {
-            evidenceProbe = this.compactionManager.probeCompaction(
-              this.compactionController.projectInputMessages(),
-            );
-          } catch {
-            evidenceProbe = null; // projection failure → no local evidence
-          }
-        }
-        if (contextErrorKind === 'explicit') {
-          isContextLengthError = true;
-          evidence = 'explicit';
-        } else if (contextErrorKind === 'weak' && evidenceProbe?.overTriggerLine) {
-          isContextLengthError = true;
-          evidence = 'weak+probe';
-        }
+        //
+        // Plan 610 A3-2b6: the gate moved onto the coordinator
+        // (`decideEmergency`) so a `CompactionPort` host can reach the recovery
+        // path at all, and the compaction itself onto `executeRecovery`. The
+        // structured log below still reads the classification and the measured
+        // context off the SAME verdict that decided -- plan 577 review round 2
+        // made these lines the historical baseline the ContextLedger is
+        // verified against, so they are preserved rather than re-derived by a
+        // second probe next to the gate.
+        const emergencyVerdict = this.compactionCoordinator.decideEmergency({
+          turnCount,
+          providerError: errorMessage,
+        });
+        const evidenceProbe: CompactionProbe | null = emergencyVerdict.probe ?? null;
 
-        if (isContextLengthError) {
+        if (emergencyVerdict.fire) {
+          const evidence =
+            emergencyVerdict.classification === 'explicit' ? 'explicit' : 'weak+probe';
           logger.warn(
             `[Agent] Turn ${turnCount}: Context length exceeded (evidence=${evidence}), attempting compaction`,
             {
-              classification: contextErrorKind,
+              classification: emergencyVerdict.classification,
               estimatedTokens: evidenceProbe?.tokens ?? null,
               peakInputTokens: evidenceProbe?.peakInputTokens ?? null,
               triggerLine: this.compactionManager.getTriggerLine(),
@@ -3755,13 +3746,19 @@ export class duyaAgent implements AgentRuntime {
             },
           );
           try {
-            const compactEntry = await this.compactionController.compactProactive({ trigger: 'emergency' });
+            const emergencyRun = await this.compactionCoordinator.executeRecovery({
+              turnCount,
+              systemPromptContent,
+              messages,
+              trigger: 'emergency',
+              force: false,
+            });
+            const compactEntry = emergencyRun.entry;
             if (compactEntry) {
               invalidateToolCatalogSchemaReads(catalogView);
               logger.info(`[Agent] Turn ${turnCount}: Compaction succeeded, strategy=${compactEntry.strategy}, retained=${compactEntry.tokensAfter ?? 0} tokens`);
-              const reProjected = this._projectModelMessages(systemPromptContent, { injectHookContexts: true });
-              systemPromptContent = reProjected.systemPromptContent;
-              messages = reProjected.messages;
+              systemPromptContent = emergencyRun.systemPromptContent;
+              messages = emergencyRun.messages;
               // Retry this turn with compacted messages
               executor.discard();
               turnCount--; // Decrement so the next iteration uses the same turn number

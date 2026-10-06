@@ -485,17 +485,23 @@ describe('the coordinator source asks the pre-turn gate, and only that gate', ()
 });
 
 // ============================================================================
-// 3. Two of the three decision points are NOT this coordinator
+// 3. The two triggers that are still NOT served, and why that is correct
 // ============================================================================
 
 describe('the coordinator source declines the triggers it does not serve, by name', () => {
-  for (const trigger of ['emergency', 'preflight_overflow', 'model_switch', 'manual'] as const) {
+  // DOWN FROM FOUR. `emergency` and `preflight_overflow` used to sit in this
+  // list and A3-2b6 removed them, because both are now served over their own
+  // coordinator gates. They are asserted as FIRING in
+  // `engine-compaction-recovery-source.test.ts`.
+  //
+  // What is left is not a shrinking list of debts but the correct answer:
+  // `model_switch` fires at the TOP of `streamChat` before the turn loop exists
+  // (`DuyaAgent.ts:1971-2026`), so there is no spine point that could host it
+  // and it is not a `CompactionPort` trigger; `manual` is a slash command
+  // handled outside the loop. A named decline is right for both, and the
+  // reason keeps the cutover from reading it as a gap.
+  for (const trigger of ['model_switch', 'manual'] as const) {
     it(`declines ${trigger} rather than answering for it`, async () => {
-      // `emergency` is the recovery path for a provider that answered
-      // `context_length_exceeded` (`DuyaAgent.ts:3756`). Answering `compact`
-      // for it and then running the PROACTIVE pass would claim a recovery that
-      // never happened; a SILENT decline would read as "the transcript is
-      // fine". So the reason names the gap, and the cutover can see it.
       const h = harness();
 
       const result = await pass(h, decision({ trigger }));

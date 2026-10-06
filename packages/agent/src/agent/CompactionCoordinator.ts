@@ -22,10 +22,31 @@
  * while the compaction is still running) or via the returned `events`
  * buffer (legacy contract, no `onEvent` provided).
  *
+ * ## The three gates, and why all three live here
+ *
+ * Plan 610 A3-2b6 moved the two recovery gates in from `DuyaAgent`'s inline
+ * cycle body. They were ~55 lines of decision logic written straight into
+ * `streamChat` (`DuyaAgent.ts:3360-3371` emergency, `:3009-3026` preflight), so
+ * nothing outside `streamChat` could ask them anything -- and a
+ * `CompactionPort` host that has to answer `decide` had no option but to
+ * decline by name, which reads at the cutover as "the transcript is fine".
+ * Lifting them here makes them reachable without duplicating them: the inline
+ * sites and the port now ask the SAME method, so there is one authority for
+ * each gate rather than a legacy copy next to a port copy.
+ *
+ * The three differ, and the difference is the point:
+ *
+ * | gate | line it compares | cooldown | evidence |
+ * | --- | --- | --- | --- |
+ * | `decidePreTurn` | `overTriggerLine` | yes | probe |
+ * | `decidePreflightOverflow` | `overHardLimit` | no | probe |
+ * | `decideEmergency` | n/a | no | provider text + probe |
+ *
  * @see docs/exec-plans/active/550-prompt-hbs-and-agent-decomposition.md
  */
 
 import type { CompactionManager, CompactionProbe } from '../compact/CompactionManager.js';
+import { classifyContextLengthError, type ContextLengthErrorKind } from '../compact/compactErrors.js';
 import type { MessageCompactionController } from '../message/message-compaction-controller.js';
 import type { CompactionEntry } from '../message/message-framework.js';
 import type { Message, SSEEvent } from '../types.js';
@@ -113,6 +134,30 @@ export interface PreTurnVerdict {
   readonly imageTriggered: boolean;
   /** Why it declined, when it declined. `null` when `fire`. */
   readonly declinedBecause: string | null;
+}
+
+/**
+ * What the emergency / preflight gates decided, BEFORE anything ran.
+ *
+ * Same three members as `PreTurnVerdict` and deliberately not a distinct
+ * shape: `CompactionPort.decide` returns ONE `CompactionDecision` for all
+ * three triggers (`ports.ts:1911`), so a host that has to cache a verdict per
+ * decision input (`run-engine-compaction.ts`) needs one type to hold. The
+ * `imageTriggered` member is always `false` on these two paths -- it means
+ * "bypassed the cooldown", and neither of these gates HAS a cooldown.
+ *
+ * `evidence` is DIAGNOSTIC and additive: it exists so the legacy's structured
+ * context-length log (`DuyaAgent.ts:3744-3754`, kept because plan 577 review
+ * round 2 made those lines the historical baseline the ContextLedger is
+ * verified against) can read the classification and the measured context off
+ * the SAME gate that decided, rather than re-probing next to it. Nothing reads
+ * it to make the decision -- it is an output, not an input.
+ */
+export interface RecoveryVerdict extends PreTurnVerdict {
+  /** `classifyContextLengthError`'s answer. `null` when it declined. */
+  readonly classification?: ContextLengthErrorKind;
+  /** The probe the gate took, or `null` when it took none / it threw. */
+  readonly probe?: CompactionProbe | null;
 }
 
 /**
@@ -256,6 +301,278 @@ export class CompactionCoordinator {
           : 'under the trigger line';
 
     return { fire, imageTriggered, declinedBecause };
+  }
+
+  /**
+   * The EMERGENCY gate, and it is a dual-evidence statement.
+   *
+   * ## Why this is not `decidePreTurn` with a wider input
+   *
+   * The proactive gate asks "is the transcript over the line, and is the
+   * cooldown over?". The emergency gate asks "did the PROVIDER say it was too
+   * long", and it is reached only after a model stream has already FAILED
+   * (`DuyaAgent.ts:3306`, the `catch` around the stream). Two differences are
+   * load-bearing and both are inherited, not invented here:
+   *
+   * 1. **No cooldown and no suppression.** An emergency compaction is the
+   *    recovery path for a request the provider already rejected; gating it on
+   *    "not too soon after the last compaction" would decline the one
+   *    compaction that can fix the turn. The legacy has no such gate at
+   *    `DuyaAgent.ts:3360` and neither does this.
+   * 2. **The classification is the gate.** `classifyContextLengthError`
+   *    (`compactErrors.ts:41`) is the plan-577 rule: an EXPLICIT provider claim
+   *    compacts on its own, because the local budget may itself be misresolved
+   *    and a probe is not more authoritative than the provider; WEAK wording
+   *    (`"exceeds limit"`, which output/payload/quota errors also produce)
+   *    compacts ONLY alongside a local probe that is over the trigger line; and
+   *    a FAILED probe is no evidence at all, so weak wording with no probe
+   *    declines. Fail-closed on the weak arm, deliberately.
+   *
+   * ## Why the coordinator owns it, rather than the host
+   *
+   * Because the rule is a property of how providers phrase errors and of the
+   * session's own probe, and `CompactionPort` states that the engine forwards
+   * the provider's text VERBATIM precisely so this side decides
+   * (`ports.ts`, `CompactionObservation.providerError`). Re-deriving it in a
+   * host would put two copies of the dual-evidence gate next to each other, and
+   * a copy that lost the fail-closed arm would fire an emergency compaction for
+   * a rate-limit message.
+   *
+   * ## The probe is best-effort and its failure is NOT an exception
+   *
+   * `projectInputMessages()` can throw, and the legacy swallows it into "no
+   * local evidence" (`DuyaAgent.ts:3311-3319`). A throw here would abandon the
+   * one pass that can still recover an explicit claim, so it is caught and
+   * turns into a null probe.
+   */
+  decideEmergency(input: { turnCount: number; providerError: string | undefined }): RecoveryVerdict {
+    const kind = classifyContextLengthError(input.providerError ?? '');
+
+    // Probed for BOTH kinds, exactly as the legacy does: weak NEEDS it as
+    // corroboration, and explicit takes it only so the caller's log can state
+    // the measured context. Probing for explicit is therefore not what makes it
+    // fire.
+    let probe: CompactionProbe | null = null;
+    if (kind !== null) {
+      try {
+        probe = this.deps.compactionManager.probeCompaction(
+          this.deps.compactionController.projectInputMessages(),
+        );
+      } catch {
+        probe = null;
+      }
+    }
+
+    if (kind === 'explicit') {
+      return { fire: true, imageTriggered: false, declinedBecause: null, classification: kind, probe };
+    }
+    if (kind === 'weak' && probe?.overTriggerLine === true) {
+      return { fire: true, imageTriggered: false, declinedBecause: null, classification: kind, probe };
+    }
+
+    const declinedBecause =
+      kind === null
+        ? 'the provider error is not a context-length claim'
+        : kind === 'weak' && probe === null
+          ? 'weak context wording with no local corroboration (fail-closed)'
+          : 'weak context wording, but the local projection is not over the trigger line';
+    return {
+      fire: false,
+      imageTriggered: false,
+      declinedBecause,
+      classification: kind,
+      probe,
+    };
+  }
+
+  /**
+   * The PREFLIGHT-OVERFLOW gate: after tool results land, is the projected
+   * context past the point where one more request would be rejected?
+   *
+   * ## The line is the HARD limit, not the trigger line
+   *
+   * This is the one thing that makes it a different decision from the proactive
+   * gate rather than a second copy of it. `decidePreTurn` compares against
+   * `overTriggerLine` (max minus reserve, 78%); this compares against
+   * `overHardLimit` (the full window). The legacy is explicit about why
+   * (`DuyaAgent.ts:3001-3008`): a single tool call can blow past the 78% line
+   * by itself, and waiting for the next turn's proactive check "risks a
+   * `context_length_exceeded` round-trip" -- compacting here is cheaper than
+   * retrying the turn. Checking the trigger line instead would decline in
+   * exactly the window this path exists to catch.
+   *
+   * ## No cooldown here either, and no suppression
+   *
+   * Same reasoning as the emergency gate, and the same as the legacy: the
+   * image arm below is what bypasses suppression on the PROACTIVE path, and
+   * this path has no suppression ring at all. Nothing is re-pinned after a
+   * compaction either -- `executeRecovery` deliberately does not write the
+   * cooldown baseline, because the legacy's two inline paths do not, and adding
+   * a pin would silently move the proactive gate's arithmetic for the NEXT
+   * turn of the same run.
+   */
+  decidePreflightOverflow(input: { turnCount: number }): RecoveryVerdict {
+    let probe: CompactionProbe | null = null;
+    try {
+      probe = this.deps.compactionManager.probeCompaction(
+        this.deps.compactionController.projectInputMessages(),
+      );
+    } catch {
+      probe = null;
+    }
+
+    // Fail-closed, and the same reason as the emergency gate's weak arm: no
+    // probe means no evidence, and the legacy's `catch` here also falls
+    // through to the next iteration rather than compacting blind.
+    if (probe === null) {
+      return {
+        fire: false,
+        imageTriggered: false,
+        declinedBecause: 'the local projection could not be probed',
+      };
+    }
+    if (probe.imageTriggered || probe.overHardLimit) {
+      return {
+        fire: true,
+        // Carried so `executePreflightOverflow` can pass `force` through
+        // exactly as the legacy does for the image arm (`DuyaAgent.ts:3423`).
+        imageTriggered: probe.imageTriggered,
+        declinedBecause: null,
+      };
+    }
+    return {
+      fire: false,
+      imageTriggered: false,
+      declinedBecause: 'under the hard limit',
+    };
+  }
+
+  /**
+   * Run the compaction a `decideEmergency` / `decidePreflightOverflow` verdict
+   * authorised, and emit the same lifecycle the proactive half does.
+   *
+   * ## Why this is ONE method for two triggers rather than two
+   *
+   * The two paths differ only in the `trigger` they forward and whether the
+   * image arm forces. Everything else -- the event buffer, the entry, the
+   * re-projection -- is one statement in both inline legacy sites, and two
+   * copies of the re-projection is exactly the drift this coordinator exists to
+   * prevent. `force` is threaded rather than hardcoded so the image arm's
+   * bypass is the CALLER's decision, matching `DuyaAgent.ts:3422-3426`.
+   *
+   * ## `force` is threaded rather than hardcoded, and it CHANGES the trigger
+   *
+   * The image arm of the preflight gate is the one case that forces, and the
+   * legacy pairs `force: true` with `trigger: 'auto'` -- not with
+   * `preflight_overflow` (`DuyaAgent.ts:3422-3426`). That pairing is not
+   * cosmetic: `CompactionManager` only folds a failure into the suppression
+   * ring when the trigger is `auto` (`CompactionManager.ts:941`), so an
+   * image-triggered overflow that reported as `preflight_overflow` would stop
+   * arming the ring that the proactive gate consults. `executeRecovery`
+   * therefore derives the manager's trigger the way the legacy chose it, from
+   * `force`, rather than forwarding its own name.
+   *
+   * ## The cooldown baseline is deliberately NOT re-pinned
+   *
+   * `executePreTurn` writes `setLastCompactionTurn` and the observed-token
+   * anchor; this does not. That is not an oversight -- the legacy's emergency
+   * (`:3758`) and preflight (`:3422`) call sites call `compactProactive`
+   * directly and pin nothing. Pinning here would let an emergency compaction
+   * reset the proactive cooldown, so the turn after a recovery could not
+   * compact again for three more turns, on a transcript the provider had just
+   * rejected once. Preserved as measured rather than tidied.
+   */
+  async executeRecovery(
+    input: {
+      turnCount: number;
+      systemPromptContent: string;
+      messages: Message[];
+      trigger: 'emergency' | 'preflight_overflow';
+      force: boolean;
+    },
+    onEvent?: (event: SSEEvent) => void,
+  ): Promise<CompactionRunResult> {
+    const { turnCount, trigger, force } = input;
+    let { systemPromptContent, messages } = input;
+    const events: SSEEvent[] = [];
+    // Identical dual-path emit to `executePreTurn`: live when `onEvent` is
+    // given, buffered otherwise. The live half is what keeps `compaction.step`
+    // between `started` and `completed` -- the summarizer takes MINUTES, so a
+    // buffered reporter would publish the terminal frame first.
+    const emit = (event: SSEEvent) => {
+      if (onEvent) onEvent(event);
+      else events.push(event);
+    };
+
+    logger.info(`[Agent] Turn ${turnCount}: ${trigger} compaction triggered`);
+    emit({ type: 'compact:start' } as unknown as SSEEvent);
+
+    attachCompactionEventBuffer(this.deps.compactionManager, emit);
+    try {
+      const compactEntry = await this.deps.compactionController.compactProactive({
+        // See the header: the legacy pairs `force` with `auto`, and only an
+        // `auto` failure arms the suppression ring (`CompactionManager.ts:941`).
+        ...(force ? { trigger: 'auto' as const, force: true } : { trigger }),
+      });
+      if (!compactEntry) {
+        return {
+          didCompact: false,
+          imageTriggered: false,
+          systemPromptContent,
+          messages,
+          events,
+          entry: null,
+        };
+      }
+
+      logger.info(
+        `[Agent] Turn ${turnCount}: ${trigger} compaction succeeded, strategy=${compactEntry.strategy}, retained=${compactEntry.tokensAfter ?? 0} tokens`,
+      );
+
+      this.deps.onMessagesCompacted?.(this.deps.getMessages().length);
+
+      const reProjected = this.deps.projectModelMessages(systemPromptContent, {
+        injectHookContexts: true,
+      });
+      systemPromptContent = reProjected.systemPromptContent;
+      messages = reProjected.messages;
+
+      emit({
+        type: 'compact:done',
+        data: {
+          strategy: compactEntry.strategy,
+          tokensRemoved: compactEntry.tokensBefore,
+          tokensRetained: compactEntry.tokensAfter ?? 0,
+        },
+      } as unknown as SSEEvent);
+
+      return {
+        didCompact: true,
+        imageTriggered: false,
+        systemPromptContent,
+        messages,
+        events,
+        entry: compactEntry,
+      };
+    } catch (compactError) {
+      const compactErrorMsg =
+        compactError instanceof Error ? compactError.message : String(compactError);
+      logger.error(
+        `[Agent] Turn ${turnCount}: ${trigger} compaction failed: ${compactErrorMsg}`,
+      );
+      emit({
+        type: 'compact:error',
+        data: { message: compactErrorMsg },
+      } as unknown as SSEEvent);
+      return {
+        didCompact: false,
+        imageTriggered: false,
+        systemPromptContent,
+        messages,
+        events,
+        entry: null,
+      };
+    }
   }
 
   /**
