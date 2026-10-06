@@ -384,3 +384,108 @@ A2 已合并为 **PR #222**(`a046cdf6`,分支 `plan/610-a2-merge-214`)。它同�
 - **`boundary-gates.test.ts:294` 的行号钉死**(断言 75,现测 76)是 `be766fde` 之后的漂移,与 A1 无关。
 - **603/602(C1)** 与 **`apps/web` 是否立项**(B2)照旧未决。
 
+---
+
+## 2026-10-07 — A3 翻转:17 个前置切片(分支 `plan/610-final-flip`)
+
+PR #250–#258 已合入 `master @ 7a3e77d7`。翻转工作在分支 `plan/610-final-flip`,
+worktree `E:\Projects\duya\.claude\worktrees\610-final-flip`(junction 复用 `node_modules`,
+**留在原地,禁止 `git worktree remove`**,带不带 `--force` 都不行 —— 会跟随 junction 删掉主检出的
+`node_modules` 与各包 `dist`,本项目已真实发生过两次)。
+
+### 已落地的前置切片
+
+| 切片 | commit | 内容 |
+| --- | --- | --- |
+| S3 | `e3df4a9f` | 正向证明:真 `duyaAgent` + `RunEngineImpl`,两轮两腿均被调用 |
+| S4a | `1164565e` | hook 表面:`on_start` / `after_finalize` + `hook-source.ts` |
+| S4b-1 | `91a07677` | `applyTurnModes` |
+| S4b-2 | `10de6b33` | `_projectModelMessages` 投影 |
+| S4b-3 | `3746a3f2` | 采纳:6/7 phase 采纳 `#contribute` |
+| S4b-4 | `08778183` | anti-dead-loop 硬停(`RepeatedCallStreak` + `RepeatedCallStopPolicy`) |
+| S4b-5 | `131613ca` / `18f9ee64` | loop-bus 事实测定 + `ports.ts` 陈旧注释修正 |
+| S4b-6 | `23e21523` | fork/reply 诊断证明(通道活,但没喂输入) |
+| S4b-6b | `2c46ead0` | fork marker public 接缝 + per-run 重置 |
+| S4b-6c | `5bd4132a` | 修 turn-2 投影饥饿(fork run 丢自己的 tool result) |
+| S4b-7 | `2b70c640` | 控制命令(零模型调用) |
+| S4b-8 | `d528b2b4` / `3b1abb70` | 控制动词表测试 + `before_commit` phase |
+| S4c-a | `bef7f1c8` | 关掉已测缺口(`after_finalize` 动作断言、`ModeExitPort`、特征化重指向) |
+| S4c-b1…b3 | `f8db0faa`…`5090a0cc` | 裁决 4 个矛盾 premise;`progress_update`、中止对齐、端口变必需;`SessionEnd` 两个相反决策;实测驱动面 72 测试 / 14 文件 |
+| S4c-c | `42d4d5fd` | 生产接线层:`createRunEventSpine` + `WorkerAdapterSurface` 实现 |
+
+### 一条必须写下来的判断错误
+
+**前 11 个切片每一个都证明了「引擎能做」,没有一个证明「生产在用」。** 我曾用前者当作后者安全的依据。
+这是实质判断错误,不是措辞问题。S4c-b4 的 worker 实测发现生产接线层**整层不存在**,
+**拒绝实现并上报** —— 那是正确结果,不是失职。
+
+### 主 agent 亲自做的变异(共 8 个,每个都挑 worker 没做的方向)
+
+run-scoped streak 改 per-turn → `2 failed / 5 passed`;去掉 fork 守卫 → `4 failed / 4 passed`;
+streak 限制在 `after_tool` phase → `2 failed / 6 passed`;抽掉遗留 per-run 重置 → `1 failed / 9 passed`;
+`isRunOwnBranchRow` 丢 id 比对 → `3 failed / 9 passed`;循环 `turn = 1` → `0` 验守卫正则 → `1 failed / 11 passed`;
+遗留 `PreFinalize` 总线加 `inject` → 命中 parity 测试。
+
+**第 7 个变异保持绿,并因此发现了一个真测试缺口**(已由 S4c-a 修):把 `after_finalize` 的贡献改成
+采纳到 `deferred.current`,测试**仍然全绿**。原因是该测试断言的是「不在 transcript」(结果),
+而不是「未被采纳」(行为),而两者当前恰好重合。已改为断言 `ports.context.defer` 不被调用,
+并加对照测试证明那个 tap 是活的。
+
+### D3 裁决:`result` 用量路由(选项 **B'**,不是 worker 推荐的 B)
+
+worker 上报的三条事实,主 agent 已逐条独立复核,全部成立:引擎 `assistant.usage` 每轮一次且 last-wins;
+入口按每次 LLM API 调用记账并**实时读** `agent?.model`;`ctx.model` 在 run 开始从 manifest 冻结。
+
+**但根因比上报的更精确,不是「两个权威之争」,而是「收窄处丢字段」。**
+
+| 环节 | 事实 |
+| --- | --- |
+| provider | `packages/ai/src/api/*.ts` 每次 LLM 调用 yield 一个 `{ type: 'result', data: TokenUsage }`,**带 cache 桶** |
+| 遗留 | `DuyaAgent` 原样透传,入口的 `result` 记账块(**每次调用**求和 + 逐次 `calls[]` + 实时 `agent?.model` 归因)今天完全正确 |
+| 引擎 | `ModelFrame.usage`(`packages/agent-runtime/src/engine/ports.ts` 的 `ModelFrame` 联合)只有 `inputTokens` / `outputTokens` / `totalTokens` —— **没有 cache 字段** |
+| 收窄点 | `toModelFrame(event: SSEEvent): ModelFrame | null`,`packages/agent/src/process/run-engine-model.ts` —— **cache 桶就是在这里丢的** |
+| 消费 | `run-engine.ts` 的 `case 'usage':` 交给 `addUsage`,last-wins 覆盖 |
+
+所以丢的是**两样东西**:粒度(只剩最后一次调用)与 cache 桶(在收窄处丢失,下游无法恢复)。
+
+**裁决:**
+
+- **保持逐次调用记账与逐次归因。** 接受轮级归因被否 —— 那会让整个轮次记到 run 开始时冻结的模型上,
+  轮中热切换就记错账。
+- **入口保持唯一归因权威。** 不引入逐调用 `ctx.model` 解析器,不把模型标记搬进引擎,
+  不在引擎里另造一份 `calls` 形状的账本 —— 引擎今天没有逐调用模型的诚实来源,宿主才有(宿主掌握热切换面)。
+- **入口的记账块不需要行为改动。**
+
+被否的选项:**(A) 保留遗留 `result` 通道** —— 不可能,它的生产者是正要被删的那个循环。
+**(C) 轮级归因** —— 记错账。**(B) 原案**(引擎发布逐调用 ledger)—— 需要逐调用 `ctx.model` 解析器
+**加** projector 改动,且是从引擎没有诚实来源的地方**发明**一份账本:同样的数据,更多机制。
+
+机制(宿主侧 `createClientModelPort` 透传,还是收窄后转发)交由 S4c-d1 实测后定。
+
+### 本轮实测门禁
+
+- `architecture:check` 在 `42d4d5fd`:`1009/1009 tolerated, 0 blocking`;self-test cross-boundary edges `832`
+- `mutation-proof-a1`:`7/7`
+- 边界门禁:G1 `known 0, new 0, stale 0`;G3 `known 0, new 0, stale 0`;G4 `known 2, new 0, stale 0`;
+  G6 `known 9, new 0, stale 0`;**G7 `known 0, new 1, stale 0`**(预期稳态,就是 A3 要转绿的那面红旗);
+  G8 `known 1, new 0, stale 0`;G9 `known 5, new 0, stale 1`(既有 stale)
+- `packages/agent-runtime`:`711/711 in 59 files`(必须单独跑,本机并发下会 flaky)
+- `packages/agent/src/process`:`398/398 in 35 files`
+- `npm run typecheck:all`:exit 0
+
+**既有失败(不是本系列造成的,不要顺手修):**
+`packages/agent/tests/unit/agent` `181/190 in 23 files`(9 个既有失败);
+`packages/agent/tests/integration` `35/36 in 4 files`(1 个既有失败,隔离下稳定,非超时)。
+
+**根 `npm test` 不是可用门禁** —— 同一 pristine HEAD 两次跑出 17–19 个失败文件。
+`npx vitest run packages/agent` 是**子串过滤**,不是基线。
+
+### 仍然未决
+
+- **翻转本体尚未开始。** `agent-process-entry.ts` 仍有 1 处 `agent.streamChat(` 调用,`DuyaAgent.ts`
+  的遗留轮次循环仍在,G7 仍红。
+- **翻转还缺的生产接线**(实测宿主侧义务为 0):`composeLegacyRunPorts` 的生产调用方、
+  `beginTicket` / `settleTicket` / `turnOutputSink` / `deferFragment` 的宿主生产者。
+- **网络仍断**(需用户在机器上重启代理客户端):`gh api rate_limit` 持续 EOF,
+  所有 HTTPS 失败。32 个 commit 已在本地,**未推送**。恢复后先 probe 再推,绝不盲推。
+
