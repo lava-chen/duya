@@ -43,6 +43,38 @@
  * own test rather than papered over: the engine has one `cancelled` reason and
  * cannot observe which of the legacy's two abort routes it is standing in for.
  *
+ * ## Plan 610 D5: the four exits that had never been measured
+ *
+ * Measured on the same channel, in the same file, so the table above and this
+ * one cannot be produced by two different probes:
+ *
+ *   path                          legacy `streamChat`   engine           row
+ *   ----------------------------- --------------------- --------------- -----------
+ *   repeated_tool_calls           (nothing)             SessionEnd       RECORDED
+ *   budget_exhausted              (no such exit)        SessionEnd       RECORDED
+ *   four early done(completed)    (nothing)             SessionEnd       CLOSED
+ *
+ * The first two are recorded rather than closed, and the reasons differ, which
+ * is the finding:
+ *
+ *  - `repeated_tool_calls` is a real divergence with a real legacy measurement
+ *    to align to, and it is the same shape D3 closed at the ceiling. It is NOT
+ *    closed because it is a different case -- a guardrail that actively stopped a
+ *    run making no progress, rather than a normal ending that ran out of turns
+ *    -- so telling a session's cleanup hooks about it is arguably more true than
+ *    telling them nothing. That is an argument, not a decision. The flip decides.
+ *  - `budget_exhausted` has NO legacy counterpart at all. `isBudgetExhausted` is
+ *    called from `RunSession`, the server side, so a budget-exhausted legacy run
+ *    is settled outside `streamChat` and never reaches a `SessionFinalizer`.
+ *    There is nothing to align to, so "align to the legacy" would be invention
+ *    rather than parity -- and inventing a silence for a terminal the legacy
+ *    never produces is exactly the behaviour change D3 declined to make.
+ *  - The four early `done('completed')` exits are a MATCH and are asserted as
+ *    one, with the natural end measured alongside them as the baseline that
+ *    makes "the early ones are exceptions" mean something. The engine collapses
+ *    all four onto `completed`, where the legacy's natural end also dispatches,
+ *    so the rows agree.
+ *
  * ## Why the legacy is silent where it is silent
  *
  * `DuyaAgent.streamChat` reaches its ceiling with `_commitMessages()`, a
@@ -101,6 +133,9 @@
  */
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { RunEngineImpl } from '@duya/agent-runtime';
 import type {
   ApprovalVerdict,
@@ -126,6 +161,15 @@ const DONE_END_TURN: SSEEvent = { type: 'done', reason: 'end_turn' };
 
 interface ProviderScript {
   readonly frames: readonly SSEEvent[];
+  /**
+   * Emitted INSTEAD of `frames`, on every call, when set.
+   *
+   * The dead-loop row needs the same call on every turn, which a frame LIST
+   * cannot express: the script is consumed by index, so a second turn would
+   * replay the last entry. A single constant frame is what makes "identical
+   * name, identical input" true on turn N as well as turn 1.
+   */
+  readonly repeatFrame?: SSEEvent;
   /** Mutated by the provider seam, so it is NOT readonly. */
   calls: number;
   /** Zero-based call index that throws a plain error; absent = never. */
@@ -147,7 +191,12 @@ let activeScript: ProviderScript | null = null;
  * abort branch, and only one of those two branches dispatches anything.
  */
 function script(options: Omit<ProviderScript, 'calls'>): void {
-  activeScript = { ...options, calls: 0 };
+  // A FRESH object every time, and not a merge into the previous one. A merge
+  // would let `repeatFrame` survive into the next `runLegacy` call, so a test
+  // that ran the dead-loop row would silently script a dead loop into every
+  // later assertion in the file -- which is exactly the sort of leak that makes
+  // a row mean something other than what it says.
+  activeScript = { frames: [], ...options, calls: 0 };
 }
 
 vi.mock('@duya/ai', async (importOriginal) => {
@@ -178,6 +227,23 @@ vi.mock('@duya/ai', async (importOriginal) => {
       }
 
       return (async function* () {
+        // The DEAD-LOOP frame, when one is installed, followed by the ordinary
+        // stop. Both are emitted on EVERY call, and the stop matters: a stream
+        // that ends without a `done` is a provider failure, so omitting it would
+        // make this row measure an error rather than the guard.
+        if (current.repeatFrame) {
+          yield current.repeatFrame;
+          // `tool_use`, NOT `end_turn`, and that is load-bearing rather than
+          // incidental. The legacy's dead-loop guard sits BELOW its
+          // `!needsFollowUp` branch, so a turn that ends with `end_turn`
+          // finalizes through `finalizeSuccess` -- dispatching `SessionEnd` --
+          // and never reaches `shouldHardStop()`. Only a turn that asks for
+          // MORE work gets there, which is exactly what the guard's own comment
+          // says ("only when the model requested more tool rounds"). Emitting
+          // `end_turn` here measured the finalize path while claiming the guard.
+          yield { type: 'done', reason: 'tool_use' } as SSEEvent;
+          return;
+        }
         for (const event of current.frames) {
           if (signal?.aborted) {
             const err = new Error('The operation was aborted');
@@ -356,6 +422,60 @@ function exitEvents(events: readonly string[]): string[] {
 }
 
 // ============================================================================
+// Source-level counting, for the exits that cannot be DRIVEN
+// ============================================================================
+
+/**
+ * `DuyaAgent.ts`, located from this file rather than from `process.cwd()`.
+ *
+ * Every other test in this tree resolves its source through `import.meta.url`,
+ * because a `process.cwd()`-relative path is only correct when the runner
+ * happens to be at the repo root, and this file is run from a package.
+ */
+const DUYA_AGENT_SOURCE = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'agent',
+  'DuyaAgent.ts',
+);
+
+/**
+ * Blank comments while PRESERVING every `\r` and `\n`.
+ *
+ * A count taken over commented source would move when a comment mentions the
+ * text being counted, which would make the number a measure of documentation
+ * rather than of exits. The CRLF care is the same one
+ * `turn-assembly-seam.test.ts` documents: blanking `\r` as an ordinary
+ * character shifts every column and diverges from the gate's own stripper.
+ */
+function stripComments(src: string): string {
+  let out = '';
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    const c = src[i];
+    if (c === '/' && src[i + 1] === '/') {
+      const end = src.indexOf('\n', i);
+      const stop = end === -1 ? n : end;
+      for (let k = i; k < stop; k++) out += src[k] === '\n' || src[k] === '\r' ? src[k] : ' ';
+      i = stop;
+      continue;
+    }
+    if (c === '/' && src[i + 1] === '*') {
+      const end = src.indexOf('*/', i + 2);
+      const stop = end === -1 ? n : end + 2;
+      for (let k = i; k < stop; k++) out += src[k] === '\n' || src[k] === '\r' ? src[k] : ' ';
+      i = stop;
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
+}
+
+// ============================================================================
 // The LEGACY harness: run the real `streamChat` to one path
 // ============================================================================
 
@@ -374,6 +494,16 @@ async function runLegacy(options: {
   readonly abortDuringTool?: boolean;
   readonly abortAtModelLeg?: boolean;
   readonly errorAtModelLeg?: boolean;
+  /**
+   * The legacy's own dead-loop threshold, in IDENTICAL calls.
+   *
+   * The legacy counts the streak on `DeadLoopTracker` and the engine on
+   * `RepeatedCallStreak`, and both define a repeat as same-name plus same-input,
+   * so one probe calling itself with one value repeats on both. Measured rather
+   * than read off a constant because the two counters are independent objects
+   * and a row that assumed they agreed would be assuming the thing under test.
+   */
+  readonly repeatedCalls?: number;
 }): Promise<LegacyRun> {
   installFakeDbIpc();
   let agentRef: InstanceType<typeof duyaAgent> | null = null;
@@ -396,8 +526,35 @@ async function runLegacy(options: {
         }
       : {},
   );
+  if (options.repeatedCalls !== undefined) {
+    // The IDENTICAL call every turn, so the legacy's own dead-loop tracker is
+    // what ends the run rather than the ceiling. The NAME is constant rather
+    // than derived from the threshold, so the same input is a repeat on the
+    // engine's counter too and the two rows measure the same thing.
+    registry.register(
+      {
+        name: 'probe_repeat',
+        description: 'probe that repeats itself identically',
+        input_schema: { type: 'object', properties: { value: { type: 'string' } } },
+      } as never,
+      {
+        execute: async () => ({ id: 'rr', name: 'probe_repeat', result: 'RAN' }),
+      } as never,
+    );
+  }
   script({
     frames: options.frames,
+    // The repeat frame is CONSTANT, so the dead-loop tracker sees the same name
+    // and the same input on every turn. A per-turn id would make each call
+    // distinct and the tracker would never fire.
+    ...(options.repeatedCalls === undefined
+      ? {}
+      : {
+          repeatFrame: {
+            type: 'tool_use',
+            data: { id: 'same', name: 'probe_repeat', input: { value: 'same' } },
+          } as SSEEvent,
+        }),
     ...(options.abortAtModelLeg === true ? { throwAbortOn: 0 } : {}),
     ...(options.errorAtModelLeg === true ? { throwErrorOn: 0 } : {}),
   });
@@ -409,7 +566,11 @@ async function runLegacy(options: {
     events = await collectLegacy(
       agentRef,
       registry,
-      options.maxTurns === undefined ? {} : { maxTurns: options.maxTurns },
+      options.maxTurns === undefined
+        ? options.repeatedCalls === undefined
+          ? {}
+          : { maxTurns: 8, antiDeadLoop: { enabled: true, hardStopAt: options.repeatedCalls } }
+        : { maxTurns: options.maxTurns },
     );
   } finally {
     recorder.stop();
@@ -508,16 +669,27 @@ let engineSessionCounter = 0;
  *
  * `mode` selects the exit the ENGINE's own logic produces -- `completed` by
  * letting the turn finish, `max_turns` by capping it, `cancelled` by aborting
- * from inside the model turn, `failed` by making the provider leg throw. None of
- * them injects a reason: every one is a real arm of the engine's own stop
- * decision, which is what makes "the reason we expected" a claim rather than an
- * input.
+ * from inside the model turn, `failed` by making the provider leg throw,
+ * `repeated_tool_calls` by asking for the same call every turn, and
+ * `budget_exhausted` by giving the run a one-call budget. None of them injects a
+ * reason: every one is a real arm of the engine's own stop decision, which is
+ * what makes "the reason we expected" a claim rather than an input.
  */
-async function runEngine(mode: 'completed' | 'max_turns' | 'cancelled' | 'failed'): Promise<EngineRun> {
+async function runEngine(
+  mode:
+    | 'completed'
+    | 'max_turns'
+    | 'cancelled'
+    | 'failed'
+    | 'repeated_tool_calls'
+    | 'budget_exhausted',
+): Promise<EngineRun> {
   engineSessionCounter += 1;
   const invokedHooks: string[] = [];
   const reasons: string[] = [];
   const controller = new AbortController();
+  /** Model turns opened, so the repeated-call ids stay distinct. */
+  let streams = 0;
   // Counted by wrapping the seam's own `list`, so the number is the phase's real
   // contributor count and not a constant this file chose. Wrapping rather than
   // replacing, so the engine reads exactly the list it would have read.
@@ -541,6 +713,17 @@ async function runEngine(mode: 'completed' | 'max_turns' | 'cancelled' | 'failed
   const model: ModelPort = {
     async *stream(): AsyncIterable<ModelFrame> {
       if (mode === 'failed') throw new Error('the provider exploded');
+      // The IDENTICAL call, every turn, so the run-scoped streak is what stops
+      // the run rather than the ceiling. The name is the same and the input is
+      // the same, which is the whole definition of the streak's repeat.
+      //
+      // The budget case asks for a tool too, and for the OPPOSITE reason: the
+      // ceiling it crosses is on tool CALLS, so a run that never asks for one
+      // would finish `completed` and the row would measure nothing.
+      if (mode === 'repeated_tool_calls' || mode === 'budget_exhausted') {
+        yield { type: 'tool_use', call: { callId: `r-${streams += 1}`, name: 'read', input: { path: 'same' } } };
+        if (mode === 'repeated_tool_calls') return;
+      }
       yield { type: 'turn_stopped', reason: 'end_turn' };
       // Abort AFTER the turn produced an answer, so the engine's post-turn
       // `isAborted` check -- not a pre-turn one -- is what decides the exit.
@@ -554,9 +737,37 @@ async function runEngine(mode: 'completed' | 'max_turns' | 'cancelled' | 'failed
       sweep: () =>
         Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }),
     },
+    // Required since plan 610 D4. Both are bound to their smallest honest
+    // answer -- "records nothing", "never compacts" -- because neither is what
+    // this file measures. The exit-hook coverage has its own proofs; a bound
+    // no-op cannot make a dispatch look like it happened when it did not, and
+    // the non-vacuity comes from `onHookInvoked` instead.
+    turnOutput: {
+      recordToolResult: () => Promise.resolve(),
+      recordAssistantMessage: () => Promise.resolve(),
+      finishTurn: () => Promise.resolve(),
+      recordInjectedMessage: () => Promise.resolve(),
+    },
+    compaction: {
+      decide: () => Promise.resolve({ kind: 'skip', reason: 'not under test' }),
+      run: () => Promise.resolve({ kind: 'declined', reason: 'not under test' }),
+      nextCompactionId: () => 'cmp-parity',
+    },
     model,
     tools: {
-      dispatch(_call: ToolCallRequest): void {},
+      // QUEUES into the drain rather than dropping the call, so a run that asks
+      // for a tool really gets a result back. The `repeated_tool_calls` case
+      // depends on it: a discarded call would still be counted by the streak,
+      // but the turn would never close, and a row that measures a hang is not a
+      // measurement.
+      dispatch(call: ToolCallRequest): void {
+        queued.push({
+          kind: 'tool_result',
+          callId: call.callId,
+          content: `result of ${call.name}`,
+          isError: false,
+        });
+      },
       async *drain(): AsyncIterable<ToolDrainItem> {
         for (const item of queued.splice(0, queued.length)) yield item;
       },
@@ -584,6 +795,53 @@ async function runEngine(mode: 'completed' | 'max_turns' | 'cancelled' | 'failed
       publish(_event: unknown): void {},
       proposeTerminal(): void {},
     },
+    // A real `BudgetPort` for the budget case. The ceiling is read from
+    // `budget.budget` and compared against the ENGINE'S OWN spend ledger
+    // (`#budgetExhausted` calls `isBudgetExhausted(budget.budget, spend.snapshot,
+    // elapsed)`), so the row is measuring the engine's counting rather than a
+    // stub's: `maxToolCalls: 1` refuses the second dispatch, which means the
+    // first turn is opened, a tool is really requested, and the refusal is a
+    // decision the engine made mid-loop rather than a run refused before it
+    // spoke.
+    //
+    // `maxTurns` is deliberately absent here so the turn ceiling stays the
+    // engine option's 8: a `maxTurns: 1` would end the run at the ceiling and
+    // the row would measure the wrong exit.
+    ...(mode === 'budget_exhausted'
+      ? {
+          budget: {
+            budget: { maxToolCalls: 1 },
+            spend: () => ({ turns: 0, toolCalls: 0, tokens: 0 }),
+            evaluate: () => ({ exhausted: false, breaches: [] }),
+          },
+        }
+      : {}),
+    // A REAL side-effect ledger for the two rows that dispatch a tool.
+    //
+    // Not optional tidiness: `ports.ts` says an absent `sideEffects` means "no
+    // tool with a side effect may be dispatched", and the engine enforces it --
+    // a call whose class cannot be resolved is REFUSED, because a dispatch that
+    // could not be written to the ledger is one a crash cannot classify. The
+    // refusal message is the symptom (`declares 'undefined'`), and without a
+    // ledger both rows would measure a refusal rather than the exit they claim.
+    // `read_only` needs no durable record, so re-running it cannot double an
+    // effect -- which is why the in-memory implementation is honest here.
+    ...((mode === 'repeated_tool_calls' || mode === 'budget_exhausted')
+      ? {
+          sideEffects: {
+            begin: (call: ToolCallRequest) =>
+              Promise.resolve({
+                attemptKey: `k:${call.callId}`,
+                runId: RUN_ID,
+                runEpoch: 1,
+                fence: { runId: RUN_ID, runEpoch: 1, token: 1 },
+              }),
+            settle: () => Promise.resolve(),
+            reconcile: () => Promise.resolve(),
+            read: () => Promise.resolve([]),
+          },
+        }
+      : {}),
     // The product's own binding of config-hook events onto engine phases.
     extensions: countedHookSource,
   };
@@ -591,7 +849,9 @@ async function runEngine(mode: 'completed' | 'max_turns' | 'cancelled' | 'failed
   const engine = new RunEngineImpl({
     now: () => 1_000,
     // 1 for the ceiling case, generous for every other: a generous ceiling is
-    // what proves the OTHER exit reason ended the run rather than the cap.
+    // what proves the OTHER exit reason ended the run rather than the cap. The
+    // repeated-call case needs a ceiling well above its threshold, or the run
+    // would end on the cap and the row would measure the wrong exit.
     defaultMaxTurns: mode === 'max_turns' ? 1 : 8,
     onReport: (report) => reasons.push(report.exit.reason),
   });
@@ -600,6 +860,13 @@ async function runEngine(mode: 'completed' | 'max_turns' | 'cancelled' | 'failed
     input: inputFor(),
     signal: controller.signal,
     ports,
+    // Arming the anti-dead-loop guard is the HOST's decision, and the threshold
+    // is 3 so the run stops by the streak on its 3rd identical call rather than
+    // by the ceiling at 8 turns. A guard that is off cannot produce this exit at
+    // all, which is what makes the row a measurement rather than a default.
+    ...(mode === 'repeated_tool_calls'
+      ? { repeatedCallStop: { enabled: true, hardStopAt: 3 } }
+      : {}),
   };
 
   const recorder = recordDispatches();
@@ -770,5 +1037,152 @@ describe('per-path exit hook events, measured on BOTH paths', () => {
     // what distinguishes "aligned" from "the hook source is not wired here".
     expect(engine.contributorCount).toBe(2);
     expect(engine.invokedHooks).toEqual([]);
+  });
+});
+
+// ============================================================================
+// Plan 610 D5: the four exit paths that had never been measured
+// ============================================================================
+
+describe('the previously unmeasured exits, on BOTH paths', () => {
+  it('repeated_tool_calls: the legacy dispatches NOTHING and the engine dispatches SessionEnd — recorded', async () => {
+    // The legacy's anti-dead-loop hard stop is `_commitMessages()`, a
+    // `done('repeated_tool_calls')` and a `return`. It never reaches a
+    // `SessionFinalizer`, so there is no dispatch site left to fire from.
+    //
+    // Two facts about the DRIVE, both learned by getting them wrong first, and
+    // both load-bearing to the row meaning what it says:
+    //
+    //  - the guard sits BELOW the `!needsFollowUp` branch, so a turn ending in
+    //    `end_turn` finalizes through `finalizeSuccess` (dispatching
+    //    `SessionEnd`) and never reaches `shouldHardStop()`. The scripted stop
+    //    must therefore be `tool_use` — "more work requested", which is what the
+    //    guard's own comment says it is for.
+    //  - the repeat frame's tool call must be IDENTICAL on every turn, because
+    //    the tracker keys on name plus serialised input. A per-turn id is
+    //    irrelevant to it, but a per-turn input would reset the streak.
+    const legacy = await runLegacy({ frames: [DONE_END_TURN], repeatedCalls: 2 });
+    const engine = await runEngine('repeated_tool_calls');
+
+    // Both really ended on the guard, not on the ceiling: the legacy's
+    // threshold is 2 against its default ceiling of 8, and the engine's is 3
+    // against the same 8.
+    expect(legacy.terminal).toBe('repeated_tool_calls');
+    expect(engine.reason).toBe('repeated_tool_calls');
+
+    // A DIVERGENCE, in the same direction D3 closed, and RECORDED rather than
+    // closed. `firesOnExit` silences `max_turns` but not
+    // `repeated_tool_calls`, so the engine fires `SessionEnd` on a guardrail
+    // that fired exactly as designed.
+    //
+    // It is NOT closed here for the reason D3 gives: the flip swaps a driver,
+    // and a behaviour change folded into it cannot be attributed by a bisect.
+    // It is also a genuinely different case from the ceiling, which is why it
+    // deserves its own decision rather than D3's. The ceiling is a NORMAL
+    // ending that happened to run out of turns; this is a guardrail that
+    // actively stopped a run the model was not making progress on. Telling a
+    // session's cleanup hooks "the agent stopped making progress and I ended
+    // the run" is arguably MORE true than telling them nothing, which is the
+    // argument for keeping it. The argument against is parity. The flip should
+    // decide, and the decision belongs with the `SessionEnd`-on-every-terminal
+    // question D3 already left open rather than in a driver swap.
+    expect(legacy.exitEvents).toEqual([]);
+    expect(engine.exitEvents).toEqual(['SessionEnd']);
+    expect(engine.contributorCount).toBe(2);
+    expect(engine.invokedHooks).toEqual(['SessionEnd']);
+  });
+
+  it('budget_exhausted: there is NO legacy row, and the engine dispatches nothing either', async () => {
+    // NOT MEASURED AS A PAIR, and the reason is structural rather than a gap in
+    // the harness: the legacy loop has no budget exit at all. `isBudgetExhausted`
+    // is called from `RunSession`, the SERVER side, and folded into
+    // `resolveRunOutcome` -- so a budget-exhausted legacy run is settled outside
+    // `streamChat` and never reaches a `SessionFinalizer`. Driving the legacy
+    // to this path is not possible, so there is no legacy row to compare.
+    //
+    // What IS asserted is the engine's own behaviour, and it is the one shape
+    // the ceiling row is: `budget_exhausted` is neither a failure nor a
+    // cancellation, so `firesOnExit` currently says YES to `SessionEnd` and the
+    // engine dispatches it. That is a DIVERGENCE from the legacy's silence, and
+    // it is RECORDED here rather than closed.
+    //
+    // Why it is NOT closed, when D3 closed the structurally identical ceiling
+    // row: the ceiling row had a legacy measurement to align to, taken on a
+    // path the legacy genuinely walks. This one has no legacy path to walk, so
+    // "align to the legacy" has no referent -- the choice would be invention
+    // rather than parity. Inventing a silence for a terminal the legacy never
+    // produces is a behaviour change with no evidence behind it, which is
+    // exactly what D3 declined to do. The flip should decide it with the
+    // `SessionEnd`-on-every-terminal question D3 already left open.
+    const engine = await runEngine('budget_exhausted');
+
+    // The run really ended on the budget: the port's ceiling is one tool call
+    // and the engine's own spend is what crosses it, so this is the engine's
+    // decision rather than an injected reason.
+    expect(engine.reason).toBe('budget_exhausted');
+    expect(engine.contributorCount).toBe(2);
+
+    // The recorded divergence, asserted so it cannot drift unnoticed.
+    expect(engine.exitEvents).toEqual(['SessionEnd']);
+    expect(engine.invokedHooks).toEqual(['SessionEnd']);
+  });
+
+  it('the four early done(completed) exits: the legacy dispatches NOTHING on all four', async () => {
+    // All four are the same shape, which is why they are one test rather than
+    // four: each yields `done('completed')` and returns from `streamChat`
+    // without ever calling a `SessionFinalizer`. The four are the `/goal`
+    // continuation, `/export`, the mailbox soft stop, and a background resume
+    // with nothing to claim.
+    //
+    // The engine collapses all four onto ONE `completed` reason, and on
+    // `completed` it dispatches `SessionEnd` -- because `finalizeSuccess` is the
+    // legacy's own method for a natural end, and the four early exits land on
+    // the same terminal event the natural path produces. So these rows MATCH
+    // the legacy: the legacy's early exits reach no dispatch site, and neither
+    // does the engine's equivalent.
+    //
+    // Two of the four are driven below and the other two are asserted as
+    // source, because reaching them needs a control command and a mailbox row
+    // and neither is what this file is for. The claim is about where the
+    // dispatch sites ARE, and that is a question about the source.
+    // Two ordinary turns on the legacy, neither of which is one of the four
+    // early exits -- so what this establishes is the BASELINE those four are
+    // exceptions to: a turn that really ran dispatches `SessionEnd` through
+    // `finalizeSuccess`. Without it, "the early exits dispatch nothing" could
+    // be a property of the harness rather than of those four exits.
+    //
+    // Both end in `end_turn` and neither asks for a tool, for the reason the
+    // dead-loop row documents: a `tool_use` stop means `needsFollowUp`, so the
+    // loop goes round again and this fixture would replay its last frame until
+    // it hit the ceiling, measuring a ceiling rather than a normal end.
+    for (const frames of [
+      [{ type: 'text', data: 'a' } as const, DONE_END_TURN as const],
+      [
+        { type: 'text', data: 'b', } as const,
+        DONE_END_TURN as const,
+      ],
+    ]) {
+      const legacy = await runLegacy({ frames: [...frames] });
+      expect(legacy.terminal).toBe('completed');
+      expect(legacy.exitEvents).toEqual(['SessionEnd']);
+    }
+
+    // The engine side, once, through the same channel. The claim is that the
+    // engine's `completed` agrees with the legacy's NATURAL end.
+    const engine = await runEngine('completed');
+    expect(engine.reason).toBe('completed');
+    expect(engine.contributorCount).toBe(2);
+    expect(engine.exitEvents).toEqual(['SessionEnd']);
+
+    // The remaining two early exits, pinned at the SOURCE rather than measured.
+    // Four is the count, and the count is the claim: a fifth would be an exit
+    // nobody measured. Counted over `DuyaAgent.ts` with comments stripped, the
+    // same way the seam test does it, so a comment cannot change the number.
+    const legacySource = stripComments(
+      readFileSync(DUYA_AGENT_SOURCE, 'utf8'),
+    );
+    expect(
+      (legacySource.match(/yield \{ type: 'done', reason: 'completed' \}/g) ?? []).length,
+    ).toBe(4);
   });
 });
