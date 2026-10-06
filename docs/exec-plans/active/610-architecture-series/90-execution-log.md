@@ -489,3 +489,78 @@ worker 上报的三条事实,主 agent 已逐条独立复核,全部成立:引擎
 - **网络仍断**(需用户在机器上重启代理客户端):`gh api rate_limit` 持续 EOF,
   所有 HTTPS 失败。32 个 commit 已在本地,**未推送**。恢复后先 probe 再推,绝不盲推。
 
+---
+
+## 2026-10-07 — S4c-d1 落地;S4c-d2 第二次被拒:翻转是**三个宿主**,不是一个
+
+### d1(逐调用用量路由)已落地并复核
+
+`2388da9e feat(agent): route per-call token usage to the billing authority`。
+机制:**宿主侧 tap**,不是引擎侧 ledger。`createClientModelPort` 新增可选的
+`onPerCallUsage`,在生成器循环内、**`toModelFrame` 收窄之前**拦下每个 provider `result` 帧原样交给宿主。
+engine 侧零改动(`ModelFrame` / `RunEvent` / 事件注册表都没碰)。
+
+主 agent 独立复核:`architecture:check` `1011/1011 tolerated, 0 blocking`;新测试 `6/6`;
+commit 落地、树干净、G7 仍 `known 0, new 1, stale 0`。**主 agent 自做变异**:
+删掉 `event.type === 'result'` 类型守卫 → `1 failed / 5 passed`,完全回退后 `6/6` 绿、树干净。
+
+**worker 抓到了 briefing 的一个真错误**:我写「provider `TokenUsage` 带 `cache_read_tokens`」,
+实测该名字在 `packages/ai` 里**零命中**;真实字段是 `cache_hit_tokens`,
+`cache_read_input_tokens` 是 **Anthropic wire 名**,adapter 会归一化掉。
+**我读了消费路径,没读类型声明 —— 验证了路径不等于验证了字段名。**
+
+### d2 被拒,且拒绝是对的:翻转的对象不是入口,是**三个宿主**
+
+worker **没有提交任何东西**,树干净停在 `2388da9e`。它给出的阻塞事实,主 agent 已独立复核:
+
+**遗留轮次循环是三个生产调用点的唯一驱动,不是入口一个:**
+
+| 调用点 | 它驱动的路径 |
+| --- | --- |
+| `process/agent-process-entry.ts` | `chat:start`(本次分配的 scope) |
+| `process/headless-run-host.ts`(`createAgentExecutionChannel`) | CLI 的 headless 运行 |
+| `tool/SubagentTool/runAgent.ts` | 子代理工具执行 |
+
+复核方式:扫 `packages/agent/src` 全部 `.ts`,排除 `__tests__`,再按接收者剔除 provider 接缝
+(`llmClient` / `client` / `visionClient` / `activeClient` / `deps.llmClient` /
+`sources.llmClient` / `this`)。剩下的 `DuyaAgent.streamChat(` 正好三处。
+(`cli/index.ts` 另有两处命中,但两处都在**注释**里 —— 那是 H8.1 改动的说明文字,不是调用。)
+
+**「先删循环」在没有翻转全部三个宿主之前,会让其中两个路径一个驱动都没有** —— 正是 briefing
+禁止的那个顺序。所以 d2 不能按原 scope 落地。
+
+**次级阻塞,独立于上面那条**:入口无法忠实绑定 `beginTicket` / `settleTicket`。
+入口没有 `runEpoch`,也没有 `RunFence`;runtime 侧唯一的 fence 生产者是 `recoverRun`,
+它为 **epoch+1 的恢复**铸造 fence,并要求已有 committed checkpoint。
+**首次尝试没有 committed state 可言 staleness,因此不存在一个诚实的 epoch-0 fence 可绑。**
+现有全部供给者都在伪造 `FIRST_EPOCH` 和 `GROUND_FENCE`。绑一个假 fence 正是 briefing 警告的 stub。
+
+### worker 的因果探针(值得单独记一笔)
+
+它没有制造一个绿灯来证明自己,而是**证明了它所依赖的因果断言**,然后完全回退:
+把循环体里两条 `for await` 腿中的**模型腿**头改成 `for`(纯空白改动,语义上惰性,只改扫描面),
+**G7 从 `new 1` 变成 `new 0`,状态从 `NEW` 翻成 `BASELINED`** —— 之后完全回退,G7 复原。
+
+这正是 `CUTOVER-BOUNDARY.md` 记载的**假绿**:G7 可以靠「让判据看不见循环」变绿,
+而不是靠「循环真的没了」。worker 明确表示**不采用这条路**,只用它确立因果。
+这条与既有的「门禁形状判据对重构不瞎」互为镜像:那次证明判据禁得住重构,这次证明判据**能被绕过**。
+
+### 三片序列(据此重排)
+
+删除循环只能在三个宿主都翻转之后进行,所以:
+
+| 片 | 内容 | 循环 | G7 |
+| --- | --- | --- | --- |
+| **d2a** | 入口改由引擎驱动 | 保留(headless/subagent 仍用它) | 仍红 |
+| **d2b** | headless 宿主改由引擎驱动 | 保留(subagent 仍用它) | 仍红 |
+| **d2c** | 子代理改由引擎驱动 + **删循环** | 删除 | **转绿** |
+
+每片都安全:任何时刻至少一个宿主仍驱动循环,不存在「零驱动」窗口。
+parity 测试在整个过程中保持双边有效。
+
+### 另一条被实测推翻的记载
+
+`packages/agent/tests/unit/agent` 的既有失败是 **10 failed / 358 passed**(37 文件),
+不是此前记录的 `181/190 in 23 files` / 9 failed —— 后者是**子串过滤**跑法,
+会额外扫进 `unit/AgentTool/`。两次跑的 scope 不同,数字不可互换引用。
+
