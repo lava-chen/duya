@@ -449,15 +449,21 @@ describe('the coordinator source asks the pre-turn gate, and only that gate', ()
     expect(result.kind).toBe('declined');
     expect(result.kind === 'declined' && result.reason).toContain('suppression');
     expect(compactionFrames(h.emitted)).toEqual([]);
+    expect(h.compactCalls()).toBe(0);
   });
 
-  it('declines under the trigger line', async () => {
+  it('declines under the trigger line, and publishes nothing', async () => {
     const h = harness({ overTriggerLine: false, lastCompactionTurn: -99 });
 
     const result = await pass(h);
 
     expect(result.kind).toBe('declined');
     expect(result.kind === 'declined' && result.reason).toContain('trigger line');
+    // A decline from `decide` returns before the engine mints an id, so no
+    // `compaction.started` is published at all. Pinned because the OTHER two
+    // decline arms assert it, and because a `decide` that answered `compact`
+    // here would leave a `started` frame with nothing behind it.
+    expect(compactionFrames(h.emitted)).toEqual([]);
   });
 
   it('still honours the image trigger, which bypasses cooldown AND suppression', async () => {
