@@ -1,6 +1,78 @@
 /**
  * Plan 600 S2 cutover, stage 1: the live `chat:start` path drives a turn ONCE.
  *
+ * ## Plan 610 D3 -- the inversion this file needs AFTER the flip, stated now
+ * because the state it guards still has TWO drivers
+ *
+ * The flip deletes the legacy generator from `agent-process-entry.ts` and makes
+ * `RunEngineImpl` the only driver. Doing that WITHOUT editing this file turns it
+ * RED, which is correct: the assertion `legacyDrivers === 1` is a claim about the
+ * pre-flip state, and post-flip the truth is zero. So this file is not
+ * "already correct for the next slice" -- it is a file the flip is expected to
+ * break, and the break is the signal that the inversion is still owed.
+ *
+ * It is deliberately NOT inverted in this slice, because the assertion it would
+ * replace describes a state that does not exist yet. Inverting now would make
+ * the branch red for a state it does not have.
+ *
+ * **WHAT THE INVERTED FORM MUST ASSERT**, exactly, so the next slice does not
+ * re-derive it:
+ *
+ *  1. `legacyDrivers === 0` -- the entry no longer names `agent.streamChat(`.
+ *  2. `engineDrivers === 1` -- the entry constructs exactly one
+ *     `new RunEngineImpl(`, and it is inside the `chat:start` handler rather
+ *     than reachable only from a helper.
+ *  3. `legacyDrivers + engineDrivers === 1` -- THE PAIR. This is the whole point
+ *     and it survives the inversion unchanged in form: the file's stated reason
+ *     for using a count at all is that "a gate which says no loop here is
+ *     satisfied by a file with no turn at all". A state with ZERO drivers must
+ *     fail, and this sum is what makes it fail. An inversion that dropped it and
+ *     asserted only the two counts separately would reintroduce exactly the
+ *     vacuity the header argues against.
+ *  4. The `emptyModelStream` / `emptyToolDrain` / `runWithEngine` /
+ *     `proposeTerminal` phantom-removal rows stay as they are. After the flip
+ *     they read differently -- `proposeTerminal` and `buildEnginePorts` become
+ *     the LEGITIMATE bindings the entry needs, so those two counts must move
+ *     from 0 to 1 and `occurrences()` must be re-read rather than assumed. That
+ *     is the second mechanical edit, and it is where a naive inversion goes
+ *     wrong: a row that says "the entry binds no engine ports" becomes false the
+ *     moment the engine drives, and leaving it would pin the PRE-flip shape
+ *     under a post-flip name.
+ *  5. `still runs the generator` (`const eventGen = agent.streamChat(` and
+ *     `for await (const event of eventGen)`) is DELETED rather than inverted.
+ *     There is no generator to run, and keeping the row with its count set to
+ *     zero would assert that the entry contains a driver it is forbidden to
+ *     contain.
+ *
+ * **WHERE THE CURRENT FORM WOULD HAVE TO CHANGE**, by symbol, so the diff is
+ * mechanical:
+ *
+ *  - `occurrences(/agent\.streamChat\s*\(/)` at the top of
+ *    `has exactly one driver, and it is the legacy generator` -- the two
+ *    expectations change, the three lines of arithmetic do not.
+ *  - `drives no other model stream from this entry`: the count moves 1 -> 0 and
+ *    its comment must change with it, because "a file with no driver at all
+ *    fails the previous test" is no longer the reason for expecting 0.
+ *  - `binds no model port that yields nothing`: the `emptyModelStream` and
+ *    `emptyToolDrain` arms stay at 0; the `buildEnginePorts` arm moves 0 -> 1
+ *    with a comment saying the entry now OWNS that composition.
+ *  - `proposes no terminal from the worker entry`: `proposeTerminal` moves
+ *    0 -> 1. Its current comment ("the proposal was logged and discarded")
+ *    becomes false and must be replaced, not kept.
+ *  - `the stop press has exactly one cancellation path`: `agent.interrupt()` is
+ *    the legacy's abort route. After the flip the entry must abort through the
+ *    engine's own signal, so this row needs a decision, not a count change --
+ *    it is the one place where "invert the polarity" is the wrong move, because
+ *    the cancellation MECHANISM changes rather than its side.
+ *  - The last two describes (the three `if (chatInProgress)` guards and the two
+ *    `lastInterruptTime` writes) are hand-off UI state and are expected to
+ *    survive; re-measure rather than trust, since the entry loses ~5000 lines
+ *    of loop-adjacent code in the flip.
+ *  - The G7/G8 block at the bottom is the one that goes GREEN: `owners` changes
+ *    from `['agent/DuyaAgent.ts']` to `[]`, and `sites` from length 1 to 0,
+ *    which is the flag the flip exists to turn. It measures the REAL gate module
+ *    and needs no edit beyond its expectations.
+ *
  * ## What this file is
  *
  * The evidence that the phantom run is gone, and that what remains on the live
