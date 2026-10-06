@@ -286,8 +286,8 @@ export function workerImplementsExecutionChannel(entryRel = WORKER_ENTRY) {
  * `packages/agent/src/agent/DuyaAgent.ts`: deleting ONLY the model-leg markers
  * (`buildTurnModelLeg` / `TurnModelLeg` / `ModelPort`) left `repetition` and
  * `toolExecution` true, flipped `modelStream` false, and turned
- * `isTurnLoopModule` false — with all 1476 lines of the cycle (`:1825`-`:3300`)
- * still in place. The other two clauses are deletable the same way. A gate that
+ * `isTurnLoopModule` false — with the whole cycle still in place. The other two
+ * clauses are deletable the same way. A gate that
  * reports "clean" when the loop has not moved is worse than a gate that is
  * always red, because the next slice trusts it and stops looking.
  *
@@ -297,15 +297,24 @@ export function workerImplementsExecutionChannel(entryRel = WORKER_ENTRY) {
  * in the source as SYNTAX rather than as spelling. One loop body must drive at
  * least `TURN_LOOP_SHAPE.legs` async streams to exhaustion, i.e. contain that
  * many `for await (... of ...)` headers. The real cycle does exactly this, and
- * the two headers are the two legs:
+ * the two headers are the two legs.
  *
- *   - `DuyaAgent.ts:2464`  `for await (const event of streamGenerator)` —
- *                          the MODEL leg.
- *   - `DuyaAgent.ts:2764`  `for await (const result of executor.getRemainingResults())`
- *                          — the TOOL leg.
+ * ⚠️ **THE LINE REFERENCES BELOW ARE MEASURED, NOT COPIED — and the previous
+ * version of this comment was copied.** It named `DuyaAgent.ts:1825`, `:2464`
+ * and `:2764`; all three were stale. `:1825` is a *comment line*
+ * (`// The resolved modes + ctx are stored on this ...`), not a loop opener, and
+ * the two leg headers sit elsewhere. That stale comment was read as a
+ * measurement, propagated into the plan document, and then re-measured and
+ * re-propagated by two further people before it was caught — which is why the
+ * numbers below are stated as `turnLoopSites()` output rather than as citations,
+ * and why the plan's own span figures were wrong twice.
  *
- * Both sit inside the single `while` body opened at `DuyaAgent.ts:1825`.
- * Requiring them to co-occur in one loop BODY, rather than anywhere in a
+ * `turnLoopSites()` is the only authority on where the loop is. If you need a
+ * line number, ask the gate; do not read it here.
+ *
+ * Both leg headers sit inside the single `while` body that
+ * `while (!this.abortController.signal.aborted)` opens. Requiring them to
+ * co-occur in one loop BODY, rather than anywhere in a
  * 5000-line module, is what makes the clauses inseparable: a module cannot
  * satisfy the predicate by putting a model call in one function and a tool
  * dispatch in a different one.
@@ -329,7 +338,7 @@ export function workerImplementsExecutionChannel(entryRel = WORKER_ENTRY) {
  * any conjunction can be falsified by deleting a conjunct, so the question is
  * never "can this be silenced" but "what has to be deleted to silence it". Here
  * the answer is a driven stream — measured by mutation, deleting the tool leg
- * at `DuyaAgent.ts:2764` turns both G7 and G8 green. That is accepted because it
+ * turns both G7 and G8 green. That is accepted because it
  * deletes real work from the cycle. The hole this replaced was answered
  * differently: deleting `buildTurnModelLeg` / `TurnModelLeg` / `ModelPort`
  * silenced the old gate while the cycle ran exactly as before, because that
@@ -546,7 +555,7 @@ function lineAt(src, offset) {
  *
  * `for await` headers are counted anywhere inside the body, including nested
  * blocks, because a turn loop's legs are themselves nested stream pumps — that
- * is the shape the real cycle has at `DuyaAgent.ts:2464` and `:2764`.
+ * is the shape the real cycle has; ask `turnLoopSites()` for where it is today.
  */
 export function turnLoopSites(src) {
   if (typeof src !== 'string' || src.length === 0) return [];
