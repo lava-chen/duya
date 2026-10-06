@@ -20,8 +20,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { promises as fs } from 'node:fs';
 import { existsSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { app } from 'electron';
 import { getCoreStores } from '../../db/core-connection';
 import { ipcMessageToNewEvent } from '../../ipc/core-db-adapters';
 import { syncBundledSkills } from '../../../../../../packages/agent/src/skills/skillsSync';
@@ -34,14 +34,40 @@ import { listChannelDirectoryWithBindings } from '../../gateway/channel-director
 // Common helpers
 // ---------------------------------------------------------------------------
 
+interface ElectronApp {
+  getPath(name: 'userData'): string;
+}
+
+/**
+ * Electron is OPTIONAL in this layer: the same handler graph has to load in a
+ * process that has no Electron runtime
+ * (`01-headless-control-plane.md` §2.1). A module-scope
+ * `import { app } from 'electron'` is evaluated when the module is and throws
+ * THERE, taking the whole graph with it, so `app` is resolved through a
+ * guarded require and reported as absent instead.
+ */
+function electronApp(): ElectronApp | undefined {
+  try {
+    const { app } = require('electron') as { app?: ElectronApp };
+    return app;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * `DUYA_CLI_USER_DATA_DIR` is the existing headless entry point
+ * (`handlers/plugins.ts:170`) and wins whenever it is set. Without Electron,
+ * `~/.duya` is the same directory the sessions / attachments paths already
+ * use; returning `''` instead would resolve `join(userData, 'skills', id)`
+ * against the process cwd, which is not a directory anyone chose.
+ */
 function getUserDataDir(): string {
   const envOverride = process.env.DUYA_CLI_USER_DATA_DIR;
   if (envOverride && envOverride.trim().length > 0) return envOverride;
-  try {
-    return app.getPath('userData');
-  } catch {
-    return '';
-  }
+  const app = electronApp();
+  if (app && typeof app.getPath === 'function') return app.getPath('userData');
+  return join(homedir(), '.duya');
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
