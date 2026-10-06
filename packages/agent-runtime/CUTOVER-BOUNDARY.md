@@ -4,37 +4,68 @@ Plan 610 slice A3, step 2. The order the plan sets is 先定边界再搬代码 �
 boundary, then move code. This file is that decision, and it is written BEFORE any
 code moves because the decision is what makes the move safe or unsafe.
 
-Nothing here has been implemented. This file records what a genuine cutover has to
-satisfy, what it has to be given, and the two places where the engine cannot
-currently host the loop at all.
+Nothing here is a to-do list — much of it has since been implemented. This file
+records what a genuine cutover has to satisfy, what it has to be given, and the
+two places where the engine cannot currently host the loop at all.
+
+> ## ⚠️ Every line number below is STALE — do not read one as a measurement
+>
+> This file was written against an early revision of `DuyaAgent.ts` and its
+> positions were **never re-derived**. They have been quoted, "re-measured" and
+> re-propagated by several people across several slices, and were wrong every
+> time — most recently the collaborator count, which had drifted from **29** to
+> **36** and was carried forward as fact.
+>
+> The row-by-row line numbers in the collaborator table are kept only as a
+> record of where those rows *were*. **Do not "correct" them one at a time** —
+> renumbering dead citations mints a fresh batch of stale numbers, which is
+> exactly how the 36 got there.
+>
+> **Re-derive from the code, and cite shape rather than position:**
+
+```bash
+node -e "const fs=require('fs');import('./scripts/architecture/boundary-gates.mjs').then(async g=>{const {stripComments}=await import('./scripts/architecture/strip-comments.mjs');const raw=fs.readFileSync('packages/agent/src/agent/DuyaAgent.ts','utf8');const L=raw.split(/\r?\n/);const h=L.findIndex(l=>/while \(!this\.abortController\.signal\.aborted\)/.test(l));const clean=L.map(l=>stripComments(l).text);let d=0,o=false,e=-1;for(let i=h;i<L.length;i++){for(const c of clean[i]){if(c==='{'){d++;o=true}else if(c==='}'){d--;if(o&&d===0){e=i;break}}}if(e>=0)break}const body=clean.slice(h,e+1).join('\n');const m=new Set([...body.matchAll(/\bthis\.([A-Za-z_\$][\w\$]*)/g)].map(x=>x[1]));console.log('head',h+1,'body',h+1+'..'+(e+1),(e-h+1)+'lines','collaborators',m.size);console.log('engine visible to gate:',g.isTurnLoopModule(stripComments(fs.readFileSync('packages/agent-runtime/src/engine/run-engine.ts','utf8')).text))})"
+```
 
 ## The loop, as measured
 
-The legacy cycle is `while (!this.abortController.signal.aborted)` at
-`packages/agent/src/agent/DuyaAgent.ts:1825`, inside `streamChat` (`:990-3434`).
-The cycle body is `:1825-3404` — 1580 lines — and it references exactly **36**
-distinct `this.<member>` collaborators (counted over the comment-stripped body,
-so prose is excluded).
+**MEASURED 2026-10-06 on `cbf9eebe`,** reusing the architecture scripts' own
+`stripComments` (which distinguishes a regex literal from a division — a naive
+stripper desyncs on the `for await` heads and reports the wrong brace):
 
-> **Correction, measured on this slice.** This file previously said the body was
-> `:1825-3300` and 1476 lines. Both were wrong. The body closes at **`:3404`**,
-> found by brace-matching from the `while` head with comments and string literals
-> stripped; `:3300` is a `return` inside the dead-loop hard stop
-> (`DuyaAgent.ts:3297-3301`), roughly 100 lines short of the real close. The
-> collaborator COUNT of 36 is unaffected and was re-verified independently, so
-> only the span and the line count were stale. The count matters more than the
-> span, and it did not move.
+| | this file used to say | measured |
+| --- | --- | --- |
+| cycle head | `:1825` | **`:2359`**, `while (!this.abortController.signal.aborted)` |
+| cycle body span | `:1825-3404`, 1580 lines | **`:2359..3799`, 1441 lines** |
+| distinct `this.<member>` collaborators | **36** | **29** |
+| model leg | `:2902` | **`:2904`**, iterates `streamGenerator` |
+| tool leg | `:3204` | **`:3204`**, iterates `executor.getRemainingResults()` |
+
+The collaborator count is the one that matters most and it was the one that
+moved: **29, not 36**. It was "re-verified independently" at least twice while
+being wrong, which is the same failure mode this file is now warning about.
+
+`streamChat`'s declaration could not be located by the declaration regex used
+above, so its span is left unstated rather than guessed.
 
 The four decision points it makes are named at `ports.ts:26-31`, and the engine
-already owns all four: `for (let turn = 1; ; turn++)` at
-`packages/agent-runtime/src/engine/run-engine.ts:355`, `ports.model.stream`,
-`ports.tools.dispatch`, `ports.tools.drain`. `packages/agent-runtime` imports
-`@duya/agent` nowhere, which is what makes the move legitimate rather than a
-relocation of coupling.
+already owns all four — its loop header is `for (let turn = 1; ; turn++)`,
+alongside `ports.model.stream`, `ports.tools.dispatch`, `ports.tools.drain`.
+`packages/agent-runtime` imports `@duya/agent` nowhere, which is what makes the
+move legitimate rather than a relocation of coupling.
 
-## All 36 collaborators
+**The engine is now visible to the gate.** `isTurnLoopModule(run-engine.ts)`
+returns `true`: since #252 the predicate counts a `for await` leg one call
+frame down, and the engine's legs live in `#streamModel` / `#drainOutcomes`,
+called from the loop body. Without that, G7 and G8 would have gone green by
+blindness when the legacy cycle is deleted — indistinguishable from "every cycle
+was deleted". G7/G8 are a **consequence** of the cutover, never its acceptance
+signal.
 
-Each row is one `this.<member>` read inside `:1825-3300`. "Host" means the value
+## Collaborators (29, counted over the comment-stripped body)
+
+Each row is one `this.<member>` read inside the cycle body. **The line column is
+a historical record and is stale — see the banner above.** "Host" means the value
 stays where it is and the engine never sees it; "NEW PORT" means no port in
 `ports.ts` can carry it today and one has to be written first.
 
@@ -125,17 +156,24 @@ This port already carries the eleven drain rows enumerated at
 | --- | --- | --- |
 | `_sweepInterTurn` | `:2193` | 3 `this.`-qualified calls, at `:2193` before the model call and at `:3198`/`:3263` around the stop decision |
 
-**Total 12 + 2 + 14 + 2 + 3 + 1 + 1 + 1 = 36.**
+**The per-group breakdown below sums to 36 and is therefore also suspect.** The
+measured total over the body is **29**, so the rows are over-counted somewhere —
+either some rows are not distinct `this.<member>` reads, or the groups overlap.
+Re-derive the breakdown from the code before relying on any single group; the
+grouping is still useful as a checklist of *what kinds* of collaborator exist,
+which is the part that has value.
 
 #### What changed in group H, and what did NOT change in the count
 
-The row was `_claimMailboxAtCheckpoint`. It is now `_sweepInterTurn`, and the
-count is **still 36, not 35**. Measured, and the reason is that this slice
-builds the port rather than deleting anything: the legacy call sites are all
-still there (deleting them is A3-2), and they now name a `this.<member>` that is
-one member either way. The count drops to 35 only when `while (...)` at `:1825`
-goes, because only then does the body stop referencing a host collaborator at
-all.
+The row was `_claimMailboxAtCheckpoint`. It is now `_sweepInterTurn`. This
+paragraph previously argued the count was **36, not 35**, and "measured" that
+way — the count was **29**, so the reasoning was sound and the number was not.
+That is the whole lesson of the banner above: the argument can be correct and
+the figure beside it still wrong.
+
+The count changes when the cycle is deleted, because only then does the body stop
+referencing host collaborators at all. Re-derive it; do not carry this file's
+number forward.
 
 What DID change is the row's meaning, and that is the part A3-2 inherits:
 
