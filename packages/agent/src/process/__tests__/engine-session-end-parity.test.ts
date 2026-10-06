@@ -50,30 +50,45 @@
  *
  *   path                          legacy `streamChat`   engine           row
  *   ----------------------------- --------------------- --------------- -----------
- *   repeated_tool_calls           (nothing)             SessionEnd       RECORDED
- *   budget_exhausted              (no such exit)        SessionEnd       RECORDED
+ *   repeated_tool_calls           (nothing)             (nothing)        D0 CLOSED
+ *   budget_exhausted              (no such exit)        SessionEnd       D0 KEPT
  *   four early done(completed)    (nothing)             SessionEnd       CLOSED
  *
- * The first two are recorded rather than closed, and the reasons differ, which
- * is the finding:
+ * **Plan 610 D0 decided the first two, and the two decisions are OPPOSITE.**
+ * That asymmetry is the finding, and it is not a hedge -- each row has a referent
+ * the other lacks:
  *
- *  - `repeated_tool_calls` is a real divergence with a real legacy measurement
- *    to align to, and it is the same shape D3 closed at the ceiling. It is NOT
- *    closed because it is a different case -- a guardrail that actively stopped a
- *    run making no progress, rather than a normal ending that ran out of turns
- *    -- so telling a session's cleanup hooks about it is arguably more true than
- *    telling them nothing. That is an argument, not a decision. The flip decides.
+ *  - `repeated_tool_calls` had a real legacy measurement to align to, taken on a
+ *    path the legacy genuinely walks (`_commitMessages()`, a
+ *    `done('repeated_tool_calls')` and a `return`, never reaching a
+ *    `SessionFinalizer`), so parity was AVAILABLE and the swap is a driver swap.
+ *    The argument for keeping the dispatch was real -- a guardrail that stopped a
+ *    run making no progress is a more informative thing to tell cleanup hooks
+ *    than silence -- and it lost, because the legacy reaches its ceiling AND its
+ *    guardrail through the same return-without-a-finalizer shape, so the two
+ *    silences are one decision and splitting them would make coverage depend on
+ *    which non-answer the run produced.
  *  - `budget_exhausted` has NO legacy counterpart at all. `isBudgetExhausted` is
  *    called from `RunSession`, the server side, so a budget-exhausted legacy run
  *    is settled outside `streamChat` and never reaches a `SessionFinalizer`.
  *    There is nothing to align to, so "align to the legacy" would be invention
  *    rather than parity -- and inventing a silence for a terminal the legacy
- *    never produces is exactly the behaviour change D3 declined to make.
+ *    never produces is exactly the behaviour change D3 declined to make. Budget
+ *    exhaustion is a normal terminal, consistent with `completed`, so dispatching
+ *    is a NEW CAPABILITY rather than a behaviour change: no user could have
+ *    depended on a silence that was never possible.
  *  - The four early `done('completed')` exits are a MATCH and are asserted as
  *    one, with the natural end measured alongside them as the baseline that
  *    makes "the early ones are exceptions" mean something. The engine collapses
  *    all four onto `completed`, where the legacy's natural end also dispatches,
  *    so the rows agree.
+ *
+ * ## The consequence of the pair, stated once
+ *
+ * `SessionEnd` does NOT fire on every terminal. It fires on `completed`, on
+ * `budget_exhausted` and on a cancelled run; it is silent on `failed`, on
+ * `max_turns` and on `repeated_tool_calls`. A hook that must run on every
+ * terminal must not rely on this event.
  *
  * ## Why the legacy is silent where it is silent
  *
@@ -1045,7 +1060,7 @@ describe('per-path exit hook events, measured on BOTH paths', () => {
 // ============================================================================
 
 describe('the previously unmeasured exits, on BOTH paths', () => {
-  it('repeated_tool_calls: the legacy dispatches NOTHING and the engine dispatches SessionEnd — recorded', async () => {
+  it('repeated_tool_calls: NEITHER path dispatches, which is parity the flip required', async () => {
     // The legacy's anti-dead-loop hard stop is `_commitMessages()`, a
     // `done('repeated_tool_calls')` and a `return`. It never reaches a
     // `SessionFinalizer`, so there is no dispatch site left to fire from.
@@ -1070,29 +1085,41 @@ describe('the previously unmeasured exits, on BOTH paths', () => {
     expect(legacy.terminal).toBe('repeated_tool_calls');
     expect(engine.reason).toBe('repeated_tool_calls');
 
-    // A DIVERGENCE, in the same direction D3 closed, and RECORDED rather than
-    // closed. `firesOnExit` silences `max_turns` but not
-    // `repeated_tool_calls`, so the engine fires `SessionEnd` on a guardrail
-    // that fired exactly as designed.
+    // Plan 610 D0 CLOSED this row. The engine used to dispatch `SessionEnd` when
+    // a run ended on the anti-dead-loop guardrail; the legacy dispatches nothing,
+    // because it reaches that exit with `_commitMessages()`, a
+    // `done('repeated_tool_calls')` and a `return`, never calling a
+    // `SessionFinalizer`.
     //
-    // It is NOT closed here for the reason D3 gives: the flip swaps a driver,
-    // and a behaviour change folded into it cannot be attributed by a bisect.
-    // It is also a genuinely different case from the ceiling, which is why it
-    // deserves its own decision rather than D3's. The ceiling is a NORMAL
-    // ending that happened to run out of turns; this is a guardrail that
-    // actively stopped a run the model was not making progress on. Telling a
-    // session's cleanup hooks "the agent stopped making progress and I ended
-    // the run" is arguably MORE true than telling them nothing, which is the
-    // argument for keeping it. The argument against is parity. The flip should
-    // decide, and the decision belongs with the `SessionEnd`-on-every-terminal
-    // question D3 already left open rather than in a driver swap.
+    // ALIGNED TO THE LEGACY, for the same reason D3 aligned the ceiling rather
+    // than the other way round: the flip swaps a driver, so anything the engine
+    // says where the legacy says nothing is a behaviour change folded into a
+    // refactor, and a bisect can no longer attribute a regression.
+    //
+    // This was DECIDED rather than inherited, and the argument for keeping the
+    // dispatch was real: a guardrail that stopped a run making no progress is a
+    // more informative thing to tell a session's cleanup hooks than silence.
+    // It loses because the legacy's silence on this exit is not an accident of
+    // control flow in the way the guardrail case would have to be -- the legacy
+    // reaches BOTH its ceiling and its guardrail through the same
+    // return-without-a-finalizer shape, so the two silences are one decision,
+    // and splitting them would make the engine's coverage depend on which
+    // non-answer it produced.
+    //
+    // Note the asymmetry with the budget row below, which this same commit
+    // deliberately did NOT close: that terminal has no legacy path at all.
     expect(legacy.exitEvents).toEqual([]);
-    expect(engine.exitEvents).toEqual(['SessionEnd']);
+    expect(engine.exitEvents).toEqual([]);
+    // Non-vacuity in the OTHER direction, and the same check the ceiling row
+    // carries: the engine really reached the exit contributors and really ran
+    // them, and they dispatched nothing. Without it, an empty record could mean
+    // "the hook source is not wired on this path" rather than "they ran and
+    // chose silence" -- two different facts, and only the second one is parity.
     expect(engine.contributorCount).toBe(2);
-    expect(engine.invokedHooks).toEqual(['SessionEnd']);
+    expect(engine.invokedHooks).toEqual([]);
   });
 
-  it('budget_exhausted: there is NO legacy row, and the engine dispatches nothing either', async () => {
+  it('budget_exhausted: there is NO legacy row, and the engine KEEPS dispatching', async () => {
     // NOT MEASURED AS A PAIR, and the reason is structural rather than a gap in
     // the harness: the legacy loop has no budget exit at all. `isBudgetExhausted`
     // is called from `RunSession`, the SERVER side, and folded into
@@ -1100,20 +1127,31 @@ describe('the previously unmeasured exits, on BOTH paths', () => {
     // `streamChat` and never reaches a `SessionFinalizer`. Driving the legacy
     // to this path is not possible, so there is no legacy row to compare.
     //
-    // What IS asserted is the engine's own behaviour, and it is the one shape
-    // the ceiling row is: `budget_exhausted` is neither a failure nor a
-    // cancellation, so `firesOnExit` currently says YES to `SessionEnd` and the
-    // engine dispatches it. That is a DIVERGENCE from the legacy's silence, and
-    // it is RECORDED here rather than closed.
+    // What IS asserted is the engine's own behaviour. `budget_exhausted` is
+    // neither a failure nor a cancellation, so `firesOnExit` says YES to
+    // `SessionEnd` and the engine dispatches it.
     //
-    // Why it is NOT closed, when D3 closed the structurally identical ceiling
-    // row: the ceiling row had a legacy measurement to align to, taken on a
-    // path the legacy genuinely walks. This one has no legacy path to walk, so
-    // "align to the legacy" has no referent -- the choice would be invention
-    // rather than parity. Inventing a silence for a terminal the legacy never
-    // produces is a behaviour change with no evidence behind it, which is
-    // exactly what D3 declined to do. The flip should decide it with the
-    // `SessionEnd`-on-every-terminal question D3 already left open.
+    // Plan 610 D0 KEPT that, and the reason it differs from the row above is the
+    // whole point of the two decisions being opposite: the ceiling and the
+    // guardrail each have a legacy counterpart that was MEASURED on a path the
+    // legacy genuinely walks, so "align to the legacy" is parity available to be
+    // taken. This terminal has no legacy path at all -- the budget check is
+    // invoked from `RunSession`, the server side -- so "align to the legacy"
+    // would have no referent. Silencing it would be INVENTING a silence for a
+    // terminal the legacy cannot produce, which is the behaviour change D3
+    // declined to make and D0 declined to make here.
+    //
+    // Budget exhaustion is a normal terminal, consistent with `completed`, so
+    // dispatching is a NEW CAPABILITY rather than a behaviour change: no user
+    // can have depended on a silence that was never possible. Measured on the
+    // engine's own `#budgetExhausted` arm -- the port's ceiling is one tool call
+    // and the engine's own spend is what crosses it -- so the reason below is the
+    // engine's decision rather than an injected input.
+    //
+    // CONSEQUENCE, stated because the pair above makes it easy to get wrong: a
+    // hook that must run on EVERY terminal must NOT rely on `SessionEnd`. It
+    // fires on `completed`, `budget_exhausted` and a cancelled run, and it is
+    // silent on `failed`, `max_turns` and `repeated_tool_calls`.
     const engine = await runEngine('budget_exhausted');
 
     // The run really ended on the budget: the port's ceiling is one tool call
@@ -1122,7 +1160,9 @@ describe('the previously unmeasured exits, on BOTH paths', () => {
     expect(engine.reason).toBe('budget_exhausted');
     expect(engine.contributorCount).toBe(2);
 
-    // The recorded divergence, asserted so it cannot drift unnoticed.
+    // The decision, asserted so it cannot drift unnoticed. If a later slice decides
+    // budget exhaustion should be silent, this row is where that decision lands
+    // and the reasoning above is what it has to overturn.
     expect(engine.exitEvents).toEqual(['SessionEnd']);
     expect(engine.invokedHooks).toEqual(['SessionEnd']);
   });

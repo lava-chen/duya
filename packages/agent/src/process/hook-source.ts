@@ -192,9 +192,21 @@ const PHASE_EVENTS: Readonly<Partial<Record<ExtensionPhase, readonly MappedHookE
 /**
  * The one event that fires on a condition rather than always.
  *
- * `SessionEnd` on everything except a failure. Read off the exit rather than off
- * the signal, because `signal.aborted` is ALSO true for a run that failed after
- * the user had already stopped it.
+ * `SessionEnd` on everything except a failure, the turn ceiling and the
+ * anti-dead-loop guardrail. Read off the exit rather than off the signal, because
+ * `signal.aborted` is ALSO true for a run that failed after the user had already
+ * stopped it.
+ *
+ * ## The three silences, and why they are not one policy
+ *
+ * `failed` is a real decision: a failed run has no answer to end a session with.
+ * `max_turns` and `repeated_tool_calls` are PARITY -- the legacy reaches both with
+ * a `return` and no `SessionFinalizer`, so there is no dispatch site left to fire
+ * from, and the engine restoring the legacy's coverage is a driver swap rather
+ * than a behaviour change. `budget_exhausted` is NOT in the list because no
+ * legacy path produces it at all. The individual comments below carry that
+ * reasoning; it is collected here because "why is this one listed and that one
+ * not" is the question every reader arrives with.
  *
  * ## The `Stop` arm is reachable, and it was unreachable by ORDER rather than
  * by mapping
@@ -232,6 +244,33 @@ function firesOnExit(event: MappedHookEvent, reason: string | undefined): boolea
   // could no longer attribute a regression. A hook that must run on every
   // terminal should NOT rely on this event.
   if (reason === 'max_turns') return false;
+  // Plan 610 D0: `repeated_tool_calls` is SILENT for the same reason and by the
+  // same measurement -- the legacy's anti-dead-loop hard stop is
+  // `_commitMessages()`, a `done('repeated_tool_calls')` and a `return`, so
+  // there is no `SessionFinalizer` on that path to dispatch from. The engine
+  // previously fired `SessionEnd` here.
+  //
+  // It is a guardrail rather than a normal ending, but that difference does NOT
+  // make it a different DECISION: the legacy dispatches nothing on BOTH its
+  // ceiling and its guardrail, and both are decided by the same return-from-
+  // `streamChat`-without-a-finalizer shape. The flip swaps a driver, so anything
+  // the engine says where the legacy says nothing is a behaviour change folded
+  // into a refactor -- which is the thing this plan has kept refusing.
+  if (reason === 'repeated_tool_calls') return false;
+  // `budget_exhausted` is NOT in this list, and the asymmetry is deliberate.
+  // There is NO legacy budget exit: `isBudgetExhausted` is invoked from
+  // `RunSession` on the server side and folded into `resolveRunOutcome`, so a
+  // budget-exhausted legacy run is settled OUTSIDE `streamChat` and never
+  // reaches a `SessionFinalizer`. There is no legacy silence to align to --
+  // inventing one would be a behaviour change for a terminal the legacy cannot
+  // produce, and no user can have depended on a silence that was never
+  // possible. Budget exhaustion is a normal terminal, consistent with
+  // `completed`, so dispatching `SessionEnd` is a NEW CAPABILITY rather than a
+  // behaviour change.
+  //
+  // THE OPERATIONAL CONSEQUENCE of the pair above, stated so it is not
+  // rediscovered as a bug: `SessionEnd` does not fire on EVERY terminal. A hook
+  // that must run on every terminal must NOT rely on this event.
   if (event === 'Stop') return reason === 'cancelled';
   return true;
 }
