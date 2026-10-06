@@ -1019,3 +1019,84 @@ export const INTER_TURN_CHECKPOINTS_ARE_NAMED: readonly InterTurnCheckpoint[] = 
   'before_model_turn',
   'before_final_answer',
 ];
+
+// ---------------------------------------------------------------------------
+// Contract 1c / the assembly seam: `ModelMessage` is DELIBERATELY LOSSLESS.
+//
+// The whole reason a host applies its per-request transforms inside `assemble`
+// rather than at an engine hook is that the engine boundary has already dropped
+// the fields those transforms read. This guard is what keeps that reason true.
+// ---------------------------------------------------------------------------
+
+/**
+ * ## The measured ordering, and why this guard exists
+ *
+ * The legacy builds one request from one array in this order
+ * (`DuyaAgent.ts`, current line numbers):
+ *
+ *   1. `:2596` proactive compaction, which REPLACES the array at `:2633`
+ *   2. `:2634` mailbox sweep -- pushes `runtimeContext: true` messages
+ *   3. `:2682` PreTurn loop hooks -- pushes `runtimeContext: true` messages
+ *   4. `:2716-2726` prompt swap, then `compressProjectedToolMessages`
+ *   5. `:2746` provider thread boundary
+ *   6. `:2754` runtime context (attachments, deferred tool contexts) --
+ *      `runtimeContext: true`
+ *   7. `:2760` OS context fragment -- in-place, on the prompt message
+ *   8. `:2770` `injectTurnTimestampReminders` -- LAST, over the full array
+ *
+ * Steps 2, 3, 6 and 7 all run BEFORE step 8, so the question "may the host run
+ * step 8 inside `assemble`, which the engine calls at `:554` -- before the
+ * sweep at `:604`?" is the one that decides the seam. It was measured, and the
+ * answer is YES, because `isHumanTurnUserMessage`
+ * (`packages/agent/src/agent/turn-time-reminder.ts:69-83`) excludes exactly the
+ * messages those steps add:
+ *
+ *   - steps 2, 3, 6 stamp `metadata.runtimeContext === true`
+ *     (`message-projectors.ts:112-115`, `hooks/injection.ts:276-281`,
+ *     `DuyaAgent.ts:4990-4996`), and the rule returns `false` for it at
+ *     `turn-time-reminder.ts:74`;
+ *   - step 7 mutates content IN PLACE on the prompt message and adds no message
+ *     (`context/os-context/fragment.ts:120-133`).
+ *
+ * Step 4 is the one link in this chain that rests on the transforms' declared
+ * scope rather than on a read of every body. All five are tool-result
+ * transforms -- reformat, offload, canvas history, micro cleanup, image
+ * truncation (`compact/projectionCompress.ts:44-48`) -- and a `tool_result`
+ * carrier is excluded by the same rule at `turn-time-reminder.ts:79-81`, so on
+ * their declared scope none of them can add or remove a reminder-eligible human
+ * turn. A sixth transform that rewrote a human user message's content WOULD
+ * break the equivalence, and `buildDefaultTransforms` is the place to re-check.
+ *
+ * So every reminder-eligible message lives in the HOST's projected timeline,
+ * which is what `assemble` returns. A host that runs the pass there produces
+ * the same bytes as the legacy, and the sweep does not have to precede it.
+ *
+ * ## Why a post-assembly engine hook would NOT work
+ *
+ * Because the rule reads seven fields and `ModelMessage` carries two of them
+ * (`role` and `content`). `timestamp`, `source`, `metadata.runtimeContext`,
+ * `isCompactSummary` and `compactBoundaryId` are all absent (`ports.ts:134-139`),
+ * so by the time the engine holds a final array the transform is not expressible
+ * against it. A `ContextPort.finalize`-style hook would have to be handed the
+ * durable fields back, which is the lossy boundary re-admitted for one
+ * transform's benefit.
+ *
+ * The one caveat a host must honour: `assemble`'s output is DISCARDED when a
+ * compaction replaces the transcript, because `#modelRequest` prefers
+ * `ctx.compacted.current` (`run-engine.ts:1975-1977`). The legacy has the same
+ * ordering -- it reminds the array AFTER `:2633` -- so a host applies its
+ * transform to the replacement inside its own `CompactionPort` adapter, where it
+ * still holds full-fidelity messages. That is a host-side obligation, not an
+ * engine gap, and it is why no engine call site is added here.
+ */
+type ModelMessageIsDurablyBare =
+  'timestamp' extends keyof ModelMessage
+    ? false
+    : 'source' extends keyof ModelMessage
+      ? false
+      : 'metadata' extends keyof ModelMessage
+        ? false
+        : true;
+// @ts-expect-error - `ModelMessage` carries no durable metadata; a field here
+// would silently make the assembly contract above underivable.
+export const MODEL_MESSAGE_IS_DURABLY_BARE: ModelMessageIsDurablyBare = false;

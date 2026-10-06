@@ -84,6 +84,8 @@ interface Harness {
   readonly events: RunEvent[];
   /** `tools.discard:<reason>`, in order. */
   readonly discards: string[];
+  /** How many times the host was asked to build a turn, in total. */
+  assembleCalls(): number;
   /** Terminals the engine proposed, in order. */
   readonly terminals: { state: string; reason: string }[];
   modelCalls(): number;
@@ -129,6 +131,9 @@ function harness(options: {
   const queued: ToolDrainItem[] = [];
   let turnIndex = 0;
   let ids = 0;
+  // Counted, not logged: the question the assembly seam turns on is how many
+  // TIMES the host is asked to build a turn, not in what order.
+  let assembles = 0;
 
   const model: ModelPort = {
     async *stream(request: ModelRequest): AsyncIterable<ModelFrame> {
@@ -228,6 +233,7 @@ function harness(options: {
     },
     context: {
       async assemble(): Promise<AssembledTurn> {
+        assembles += 1;
         return {
           systemPrompt: 'you are a test',
           messages: options.assembledMessages ?? [
@@ -268,6 +274,7 @@ function harness(options: {
     discards,
     terminals,
     modelCalls: () => turnIndex,
+    assembleCalls: () => assembles,
   };
 }
 
@@ -656,6 +663,52 @@ describe('the emergency path is not the normal path', () => {
     // The run still ended, and ended well.
     expect(h.terminals).toHaveLength(1);
     expect(h.terminals[0]?.state).toBe('completed');
+  });
+
+  it('re-enters the WHOLE turn on retry, so the host is asked to assemble again', async () => {
+    // The counter is the subject; the sent messages above are not. What is
+    // pinned is that the emergency retry re-enters at the TOP of the loop
+    // (`run-engine.ts:713-714`, `turn -= 1; continue`) rather than re-issuing
+    // the request it already built, so `context.assemble` at `:554` runs a
+    // second time inside turn 1.
+    //
+    // This is what makes the assembly seam sound for a HOST that derives a
+    // turn's messages inside `assemble`. The legacy re-runs its whole
+    // request-assembly chain on the same `continue` (`DuyaAgent.ts:3767-3768`
+    // re-projects, then the loop re-enters at `:2716-2770`), so a host's
+    // assemble-time transform is refreshed on the retry exactly as the
+    // legacy's is. An engine that re-streamed the already-built request
+    // instead would hand the model a transcript the host never re-derived.
+    const h = harness({
+      turns: [
+        {
+          frames: [
+            {
+              type: 'error',
+              message: 'prompt is too long: 210000 tokens > 200000 maximum',
+              retryable: false,
+            },
+          ],
+        },
+        { frames: [{ type: 'text', text: 'recovered' }] },
+      ],
+      decide: (input) =>
+        input.trigger === 'emergency' ? { kind: 'compact', trigger: 'emergency' } : SKIP,
+      replacement: replacement(),
+    });
+
+    await run(h);
+
+    // Two assemblies for two model calls, both inside turn 1. Not `1`: that is
+    // the value a re-issued request would produce, and it is what would let a
+    // stale assembly reach the provider on the retry.
+    expect(h.assembleCalls()).toBe(2);
+    expect(h.modelCalls()).toBe(2);
+    // The count is only meaningful next to the turn index, so this is the
+    // left-hand side the count has no meaning without: the host was NOT asked
+    // for turn 2, because the engine never advanced past turn 1.
+    const turnStarts = h.events.filter((e) => e.type === 'turn.started') as Array<{ index: number }>;
+    expect(turnStarts.map((e) => e.index)).toEqual([1, 1]);
   });
 
   it('closes the pipeline itself when the failure path did not', async () => {
