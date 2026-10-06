@@ -175,6 +175,22 @@ function harness(options: {
     // engine would otherwise skip the sweep and drop mid-run steering
     // with nothing reporting the loss.
     interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
+    // The three ports the legacy-still-drives window closed (plan 610 D4, then
+    // D1 for `modeExit`), each the smallest honest answer. The DRAIN is this
+    // file's subject, so a bound sink or mode exit here would consume items or
+    // end the run before the contract under test is reached.
+    turnOutput: {
+      recordToolResult: () => Promise.resolve(),
+      recordAssistantMessage: () => Promise.resolve(),
+      finishTurn: () => Promise.resolve(),
+      recordInjectedMessage: () => Promise.resolve(),
+    },
+    compaction: {
+      decide: () => Promise.resolve({ kind: 'skip' as const, reason: 'not under test' }),
+      run: () => Promise.resolve({ kind: 'declined' as const, reason: 'not under test' }),
+      nextCompactionId: () => 'cmp-drain',
+    },
+    modeExit: { onRunExit: () => Promise.resolve() },
     model,
     tools: {
       dispatch(): void {},

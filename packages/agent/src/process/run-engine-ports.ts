@@ -279,10 +279,10 @@ export interface LegacyEngineSources {
   /**
    * Runs the run's modes' `onExit` hooks. See `ModeExitPort`.
    *
-   * OPTIONAL, and omitted when absent rather than defaulted to a no-op, for the
-   * same reason `extensions` below is: a bound-but-empty port would claim a
-   * lifecycle was run when nothing ran, and the engine's `!== undefined` check
-   * already reads the difference correctly.
+   * OPTIONAL on the SOURCE and REQUIRED on the PORT, and the asymmetry is the
+   * same one `turnOutput` documents: a host genuinely may have no modes to exit,
+   // and the composition binds a port whose promise resolves and runs nothing so
+   * the host does not have to build an inert implementation to satisfy a type.
    *
    * The implementation is the legacy's own `runExitHooks`
    * (`modes/apply-modes.ts:126`) reached through `duyaAgent`, which already
@@ -908,8 +908,17 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
   // only vocabulary involved is the host's: the source is already
   // `() => Promise<void>` and the port is `() => Promise<void>`. Wrapping it
   // would add a frame that exists only to look like the other builders.
-  const modeExit: ModeExitPort | undefined =
-    sources.modeExit === undefined ? undefined : { onRunExit: sources.modeExit.onRunExit };
+  // Plan 610 D1 CLOSED the last optional port, and the composition answers for it
+  // the same way it does for `turnOutput` below: the SOURCE stays optional --
+  // a host genuinely may have no modes to exit -- and the PORT is always bound.
+  // A host with no source gets a port whose promise resolves and runs nothing,
+  // which is legible in the composition ("this host exits no modes"), where an
+  // omitted member is a type error and where a bound-but-half-built port would
+  // be an obligation the engine believed was met.
+  const onRunExit = sources.modeExit?.onRunExit;
+  const modeExit: ModeExitPort = {
+    onRunExit: () => Promise.resolve(onRunExit?.()),
+  };
 
   return {
     model,
@@ -936,10 +945,16 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
     // surface that answers nothing, which is indistinguishable from "this host
     // has no commands" -- and the engine's `?.` already handles the absence.
     ...(command === undefined ? {} : { command }),
-    // Plan 610 D1. Same omitted-not-empty treatment as `command` above: a run
-    // whose host supplied no `modeExit` source must be observably a run that
-    // never exited a mode, not a run that exited zero modes on purpose.
-    ...(modeExit === undefined ? {} : { modeExit }),
+    // ALWAYS BOUND, since plan 610 D1 made `modeExit` required. This is the one
+    // member that moved from the omitted-not-empty treatment of `extensions` and
+    // `command` above to the always-bound treatment of `turnOutput` and
+    // `compaction`, and the move is the point rather than an inconsistency:
+    // absence of `extensions` is a legible answer the engine already reads
+    // (`#contribute`'s `?? []` -- "this host has no hooks"), while absence of
+    // `modeExit` would be indistinguishable from "this run activated no mode",
+    // which the engine cannot see. See `ports.ts` for why that difference is the
+    // test the required members are chosen by.
+    modeExit,
     // ALWAYS BOUND, since plan 610 D4 made `turnOutput` a required port. The
     // SOURCE stays optional -- a host genuinely may have nothing to record
     // through -- and the difference is what the no-op below is for: a host with

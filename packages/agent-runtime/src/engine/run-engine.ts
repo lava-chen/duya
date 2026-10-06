@@ -2079,7 +2079,6 @@ export class RunEngineImpl implements RunEngine {
    * (there the phase's output IS the record).
    */
   async #runModeExits(ctx: RunContext): Promise<void> {
-    if (ctx.ports.modeExit === undefined) return;
     try {
       await ctx.ports.modeExit.onRunExit();
     } catch {

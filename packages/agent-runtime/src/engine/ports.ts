@@ -1216,23 +1216,56 @@ export interface RunEnginePorts {
   /**
    * Where a mode's run-boundary `onExit` hooks are run. See `ModeExitPort`.
    *
-   * OPTIONAL, and the LAST member whose optionality the legacy-still-drives
-   * window explains. The legacy's `SessionFinalizer` still runs `runExitHooks`
-   * (`SessionFinalizer.ts:235`), so a composition that bound this port would exit
-   * every mode twice once the engine drives; the flip is what makes it required,
-   * as it made `turnOutput` and `compaction` required in plan 610 D4.
+   * REQUIRED as of plan 610 D1, and it was the LAST member whose optionality the
+   * legacy-still-drives window explained. The legacy's `SessionFinalizer` still
+   * runs `runExitHooks`, so a composition that bound this port while the legacy
+   * drove would have exited every mode TWICE; the `?` was the marker for that
+   * window, exactly as it was for `turnOutput` and `compaction` in plan 610 D4,
+   * and closing it here is the last half of that work.
    *
-   * It is NOT required yet, and the asymmetry with `interTurn` above is the
-   * point rather than an oversight. A missing `interTurn` loses the USER's
-   * mid-run correction, and no frame reports it -- hence a compile error. A
-   * missing `modeExit` loses a mode's teardown side effect, and a run with no
-   * active `kind: 'message'` mode has nothing to lose: `runExitHooks` iterates
+   * ## Why a missing `modeExit` is a WRONG RESULT and not a missing feature
+   *
+   * The objection that kept this optional -- a run with no active
+   * `kind: 'message'` mode has nothing to lose, since `runExitHooks` iterates
    * `resolved.modes` and a run that resolved none is a no-op even in the legacy
-   * (`SessionFinalizer.ts:233` guards on `resolvedModes && modeCtx`). Forcing
-   * every composition to build a port that does nothing would buy a type error
-   * in exchange for one, and would be a worse trade than the silent case.
+   * -- is a statement about ONE host's inputs, not about the contract. The engine
+   * cannot see whether a mode was activated: it has no member that says so, and
+   * adding one would be a second authority for which modes a run activated,
+   * which `ModeExitPort`'s own doc refuses. So an absent port is not "no mode
+   * was active" and not "this host has no modes"; it is "nothing was run", and
+   * the engine cannot distinguish that from the case it matters in.
+   *
+   * The consequence of getting it wrong is a real teardown loss. A mode whose
+   * `onExit` clears a per-session trigger or disables an OS bridge
+   * (`computer-use-mode.ts`) leaves that state behind for the NEXT run, and
+   * nothing reports it -- the run completed, every frame it published was
+   * correct, and the side effect simply did not happen. A host that genuinely
+   * has nothing to run binds a port whose promise resolves and does nothing,
+   * which is legible in the composition; omitting the member is a type error.
+   *
+   * ## The SEVEN members still optional, each by name
+   *
+   * `budget` (present only under budget option (a) -- a run with no ceiling has
+   * nothing to cross), `attempt` (present only when the run is a recovery, and a
+   * run with nothing to recover acquires nothing), `subtasks` (a run that spawns
+   * no subtask), `extensions` (the headless CLI, a sub-agent and a direct test
+   * drive are all legitimate hosts with no hook surface), `checkpoints`
+   * (durability is not a precondition for correctness), `command` (the same three
+   * have no control surface -- "no command port" is exactly what every host had
+   * before the member existed) and `sideEffects` (ABSENT is coherent here and
+   * only here: it means "no tool with a side effect may be dispatched", which
+   * the engine enforces by refusing such a call, where "no transcript is ever
+   * replaced" is not a coherent reading of absence).
+   *
+   * The shared test is not "is this feature used every run" -- `extensions`
+   * fails that and is still right -- but "is absence a DIFFERENT ANSWER or a
+   * MISSING ONE". A missing `interTurn` loses the user's mid-run correction; a
+   * missing `modeExit` loses a teardown side effect; a missing `turnOutput`
+   * drops durable tool rows and `PostToolUseFailure`; a missing `compaction`
+   * lets the transcript grow until the provider rejects it. Each is an absence no
+   * frame reports, which is what makes them compile errors rather than `?.`s.
    */
-  readonly modeExit?: ModeExitPort;
+  readonly modeExit: ModeExitPort;
 }
 
 /** What a host needs in order to run one execution to completion. */

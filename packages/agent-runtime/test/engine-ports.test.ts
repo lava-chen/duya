@@ -720,7 +720,17 @@ describe('RunEngine port', () => {
   });
 });
 
-/** The five mandatory ports, with the parts each test does not care about. */
+/**
+ * The mandatory ports, with the parts each test does not care about.
+ *
+ * The three the legacy-still-drives window closed (`turnOutput` and
+ * `compaction` in plan 610 D4, `modeExit` in D1) are bound here rather than
+ * per-test, for the same reason `interTurn` is: every spread composition in
+ * this file inherits them, and a port left to each test is a port thirteen
+ * tests would each have to remember. Each is the smallest honest answer --
+ * records nothing, never compacts, exits no modes -- because this file measures
+ * the other ports.
+ */
 function minimalPorts(): RunEnginePorts {
   return {
     model: { stream: () => (async function* (): AsyncIterable<ModelFrame> {})() },
@@ -745,5 +755,17 @@ function minimalPorts(): RunEnginePorts {
     // A sweep that finds nothing is the common answer, so it is stated here
     // rather than left to each test that spreads this.
     interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
+    turnOutput: {
+      recordToolResult: () => Promise.resolve(),
+      recordAssistantMessage: () => Promise.resolve(),
+      finishTurn: () => Promise.resolve(),
+      recordInjectedMessage: () => Promise.resolve(),
+    },
+    compaction: {
+      decide: () => Promise.resolve({ kind: 'skip' as const, reason: 'not under test' }),
+      run: () => Promise.resolve({ kind: 'declined' as const, reason: 'not under test' }),
+      nextCompactionId: () => 'cmp-minimal',
+    },
+    modeExit: { onRunExit: () => Promise.resolve() },
   };
 }

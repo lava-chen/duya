@@ -452,7 +452,7 @@ async function driveComposedRun(turns: readonly ('tool' | 'text')[]): Promise<Ob
 // ============================================================================
 
 describe('composeLegacyRunPorts supplies every member the engine requires', () => {
-  it('binds every required port the engine reads, including the two D4 closed', async () => {
+  it('binds every required port the engine reads, including the three the cutover closed', async () => {
     const o = await driveComposedRun(['tool', 'text']);
 
     // POSITIVE evidence first: the run really executed rather than assembling a
@@ -474,18 +474,26 @@ describe('composeLegacyRunPorts supplies every member the engine requires', () =
       'interTurn',
       'compaction',
       'turnOutput',
+      'modeExit',
     ] as const) {
       expect(o.ports[port], `port ${port} must be supplied`).toBeDefined();
     }
-    // The SAME eight are REQUIRED in the type as of D4, so this list is no
+    // The SAME NINE are REQUIRED in the type as of D4 and D1, so this list is no
     // longer "required, plus two the cutover will close" -- it is exactly the
     // required set. The assertion that used to sit here claimed these two
     // "cannot be optional"; that was measured and it was false at the time, and
     // D4 is the change that made it true. `port-guards.ts` now carries the
-    // `@ts-expect-error` pair that keeps it true.
+    // `@ts-expect-error` triple that keeps it true.
     expect(o.ports.interTurn).toBeDefined();
     expect(o.ports.turnOutput).toBeDefined();
     expect(o.ports.compaction).toBeDefined();
+    // `modeExit` is the ninth and the last, and it is in the list rather than
+    // merely re-asserted because the composition binds it UNCONDITIONALLY now:
+    // `composeLegacyRunPorts` always supplies the source, so this assertion is
+    // free to make -- and the shape it pins is that the no-op arm exists for the
+    // hosts that do not, which `engine-drain-carryover.test.ts` proves by
+    // building a bundle with no source at all.
+    expect(o.ports.modeExit).toBeDefined();
   });
 
   it('the derived catalog reaches the agent s REAL registry, not a copy', async () => {

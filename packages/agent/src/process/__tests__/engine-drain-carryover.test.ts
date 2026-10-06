@@ -112,7 +112,12 @@ import type {
 import type { RunEvent, RunEventEnvelope, RunId } from '@duya/agent-protocol';
 import type { AgentProgressEvent, Message } from '@duya/agent-protocol/transcript';
 import { buildEnginePorts, toDrainItem } from '../run-engine-ports.js';
-import type { CompactionSources, TurnOutputSources } from '../run-engine-ports.js';
+import type {
+  CompactionSources,
+  LegacyEngineSources,
+  ModeExitSources,
+  TurnOutputSources,
+} from '../run-engine-ports.js';
 import type { MessageUpdate } from '../../tool/StreamingToolExecutor.js';
 
 // ============================================================================
@@ -644,9 +649,33 @@ function realPorts(
   collector?: TransientContextFragment[],
   turnOutput?: TurnOutputSources,
   emitted?: RunEvent[],
+  modeExit?: ModeExitSources,
 ): RunEnginePorts {
   return buildEnginePorts({
-    openModelStream: () => (async function* () {})(),
+    ...hostSources(emitted),
+    ...(collector === undefined ? {} : { deferFragment: (fragment) => collector.push(fragment) }),
+    ...(turnOutput === undefined ? {} : { turnOutput }),
+    ...(modeExit === undefined ? {} : { modeExit }),
+  });
+}
+
+/**
+ * Every source `realPorts` supplies, minus the three it parameterises.
+ *
+ * Split out because the mode-exit rows below build a bundle DIRECTLY rather
+ * than through `realPorts`: they need `modeExit` present, and threading it
+ * through a fourth positional parameter to reach a test three hundred lines
+ * away is the kind of indirection that makes a fixture harder to read than the
+ * literal it replaces. `realPorts` stays the common shape so the other rows are
+ * unchanged, and this stays a FUNCTION rather than a constant because the
+ * emitter is per-call: a shared `RunEventEmitter` across runs would hand two
+ * runs one terminal barrier.
+ */
+function hostSources(
+  emitted?: RunEvent[],
+): Omit<LegacyEngineSources, 'deferFragment' | 'turnOutput' | 'modeExit'> {
+  return {
+  openModelStream: () => (async function* () {})(),
     queueTool: () => {},
     drainTools: () => (async function* () {})(),
     discardTools: () => {},
@@ -684,9 +713,7 @@ function realPorts(
     // testing compaction declines to compact. The binding itself is exercised
     // in `engine-compaction-binding.test.ts`.
     compaction: skippingCompaction(),
-    ...(collector === undefined ? {} : { deferFragment: (fragment) => collector.push(fragment) }),
-    ...(turnOutput === undefined ? {} : { turnOutput }),
-  });
+  };
 }
 
 /**
@@ -946,5 +973,66 @@ describe('buildEnginePorts binds the turn-output seam all-or-nothing', () => {
 
     expect(records).toEqual([record]);
     expect(summaries).toEqual([{ turn: 1, results: 1, dispatched: 2 }]);
+  });
+});
+
+describe('buildEnginePorts binds the mode-exit seam the same way', () => {
+  it('builds a NO-OP modeExit port when the host supplies none, and it resolves', async () => {
+    // CHANGED by plan 610 D1, which made `RunEnginePorts.modeExit` REQUIRED --
+    // the last member whose optionality the legacy-still-drives window
+    // explained. `LegacyRunHost.modeExit` stays optional and the composition
+    // answers for the engine, for the same reason it does for `turnOutput`
+    // above: a host genuinely may have no modes to exit, and the engine cannot
+    // tell that apart from "nothing ran", so the member cannot be absent.
+    //
+    // The same distinction the `turnOutput` arm draws, and it is why this is
+    // not the `extensions` treatment: `extensions` may be omitted because its
+    // absence is a legible answer the engine already reads (`#contribute`'s
+    // `?? []`). Here absence would be indistinguishable from "this run
+    // activated no mode", which is precisely the case the engine cannot see.
+    //
+    // Non-vacuity again: a port that existed and THREW would look identical
+    // from outside, and `#runModeExits` calls it on every completed run.
+    const ports = realPorts();
+    expect(ports.modeExit).toBeDefined();
+    await expect(ports.modeExit.onRunExit()).resolves.toBeUndefined();
+  });
+
+  it('forwards the host onRunExit by identity, and swallows its throw', async () => {
+    // Both halves, because the first alone is satisfied by a port that ignores
+    // its source. The throw is the second half's real subject -- the engine
+    // treats a mode's failing teardown as a logged warning and lets the run end
+    // normally, and a composition that let the throw escape would replace a
+    // `completed` terminal the run had already earned.
+    const calls: number[] = [];
+    const built = realPorts();
+    const forwarding = buildEnginePorts({
+      ...hostSources(),
+      modeExit: {
+        onRunExit: async () => {
+          calls.push(1);
+        },
+      },
+    });
+    await forwarding.modeExit.onRunExit();
+    expect(calls).toEqual([1]);
+
+    const throwing = buildEnginePorts({
+      ...hostSources(),
+      modeExit: {
+        onRunExit: async () => {
+          throw new Error('a mode teardown failed');
+        },
+      },
+    });
+    // The port REJECTS -- it is a pass-through and says so -- which is the fact
+    // `#runModeExits` exists to handle. Asserting the rejection here rather than
+    // the swallow is deliberate: the swallow is the engine's, and it is proved
+    // by `engine-mode-exit-port.test.ts` against a real `RunEngineImpl`.
+    await expect(throwing.modeExit.onRunExit()).rejects.toThrow('a mode teardown failed');
+
+    // And the no-op build is a DIFFERENT port from both, so this row cannot be
+    // satisfied by a composition that always forwards to something.
+    expect(built.modeExit).not.toBe(forwarding.modeExit);
   });
 });

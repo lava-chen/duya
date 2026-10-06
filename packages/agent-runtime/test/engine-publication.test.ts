@@ -215,6 +215,23 @@ function harness(options: HarnessOptions = {}): Harness {
     // engine would otherwise skip the sweep and drop mid-run steering
     // with nothing reporting the loss.
     interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
+    // The three ports the legacy-still-drives window closed (plan 610 D4, then
+    // D1 for `modeExit`). Not what this file measures -- it measures what the
+    // engine PUBLISHES versus proposes -- so each is its smallest honest
+    // answer. A bound no-op here cannot turn a proposed terminal into an
+    // announced one, which is the distinction this file draws.
+    turnOutput: {
+      recordToolResult: () => Promise.resolve(),
+      recordAssistantMessage: () => Promise.resolve(),
+      finishTurn: () => Promise.resolve(),
+      recordInjectedMessage: () => Promise.resolve(),
+    },
+    compaction: {
+      decide: () => Promise.resolve({ kind: 'skip' as const, reason: 'not under test' }),
+      run: () => Promise.resolve({ kind: 'declined' as const, reason: 'not under test' }),
+      nextCompactionId: () => 'cmp-publication',
+    },
+    modeExit: { onRunExit: () => Promise.resolve() },
     model: {
       async *stream(request: ModelRequest): AsyncIterable<ModelFrame> {
         void request;
