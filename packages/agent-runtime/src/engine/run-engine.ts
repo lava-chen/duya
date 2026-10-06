@@ -320,8 +320,18 @@ export class RunEngineImpl implements RunEngine {
     const runId = manifest.runId;
     const startedAt = this.#options.now();
     const spend = new RunSpendLedger();
-    /** Fragments produced this turn that the NEXT turn's assembly will carry. */
-    const deferred: TransientContextFragment[] = [];
+/**
+     * Fragments produced this turn that the NEXT turn's assembly will carry.
+     *
+     * A CELL rather than a local, for the same reason `injected` and `compacted`
+     * are: S4b-3 adoption has to reach it from `#streamModel`, `#dispatchCall`
+     * and `#shouldStop`, all of which sit one or two call frames below this
+     * loop. A local threaded through five signatures is a second account waiting
+     * to go stale -- the exact defect `RunScoped` exists to prevent, and the
+     * reason this was ever a local is that nothing below the loop consumed it
+     * before now.
+     */
+    const deferred: RunScoped<{ current: TransientContextFragment[] }> = { current: [] };
     /** Dispatch tickets, so a settle names the key its own `begin` minted. */
     const tickets = new Map<string, ToolDispatchTicket>();
     /** Dispatched tool names, so a landing result can name the call behind it. */
@@ -504,7 +514,12 @@ export class RunEngineImpl implements RunEngine {
       // scheduling it had before S4a, and a host that DOES configure hooks is
       // the one that asked for work before its first turn.
       if ((ports.extensions?.list('on_start') ?? []).length > 0) {
-        await this.#contribute({ runId, turn: 0, signal, ports }, 'on_start', {});
+        // Adopted: `deferred` is still empty here, so these ride turn 1's
+        // request, and on turn 1 `#modelRequest` places `carried` before the
+        // history -- a session-start context is context the model must have read
+        // BEFORE the transcript, which is the legacy's position too
+        // (`DuyaAgent.ts:2155` routes it through the first-turn context rail).
+        this.#adopt(ports, await this.#contribute({ runId, turn: 0, signal, ports }, 'on_start', {}), deferred.current);
       }
 
       for (let turn = 1; ; turn++) {
@@ -546,6 +561,7 @@ export class RunEngineImpl implements RunEngine {
           fence,
           tickets,
           toolNames,
+          deferred,
           turnWork: new TurnWork(),
           messageId,
           lastMessage,
@@ -562,7 +578,10 @@ export class RunEngineImpl implements RunEngine {
           break;
         }
 
-        await this.#contribute(ctx, 'before_turn', {});
+        // Adopted into THIS turn's request: the phase fires before
+        // `#modelRequest` below, so the fragments it defers are read by the very
+        // call the phase is named for.
+        this.#adopt(ctx.ports, await this.#contribute(ctx, 'before_turn', {}), ctx.deferred.current);
 
         // ── Decision 1: call the model ───────────────────────────────────────
         // Assembled by the host (it owns the catalog, the skills and the
@@ -648,13 +667,20 @@ export class RunEngineImpl implements RunEngine {
         // means at `:2232-2234` ("fall through to the LLM call with it in the
         // message history").
 
-        const modelRequest = await this.#modelRequest(ctx, assembled, deferred);
+        const modelRequest = await this.#modelRequest(ctx, assembled);
         // Consumed: the fragments belong to the request that just carried them
         // and must not ride the next one. Left in place they would accumulate
         // turn after turn, so turn 5 would resend turns 1-4's results and the
         // context would grow with copies of answers the model already has.
-        deferred.length = 0;
-        await this.#contribute(ctx, 'before_model', {});
+        ctx.deferred.current.length = 0;
+        // Adopted, and it lands on the NEXT turn's request -- NOT this one. The
+        // phase fires after `#modelRequest` has already been built and after
+        // `deferred.length = 0` consumed the list, so nothing it defers can reach
+        // the call it is named for. That is the engine's existing ordering
+        // rather than a choice made here, and it is the legacy's behaviour too:
+        // `PreFinalize` injects reach the model on the following turn because
+        // the turn it vetoes is over.
+        this.#adopt(ctx.ports, await this.#contribute(ctx, 'before_model', {}), ctx.deferred.current);
 
         ports.events.publish(this.#turnStartedEvent(ctx, modelRequest));
 
@@ -707,7 +733,7 @@ export class RunEngineImpl implements RunEngine {
             // drained are in `deferred` and are exactly the payload that
             // overflowed, so a probe that could not see them would decline
             // against a transcript the provider had already rejected.
-            transcript: this.#transcriptFor(ctx, assembled, deferred),
+            transcript: this.#transcriptFor(ctx, assembled, ctx.deferred.current),
             // The provider's own words, forwarded verbatim. The engine does not
             // classify them: the dual-evidence gate is a property of how each
             // provider phrases the error and those providers are the host's
@@ -751,7 +777,7 @@ export class RunEngineImpl implements RunEngine {
         // Draining is what makes the NEXT turn's request carry the tool
         // results, so these are two decisions at one point in the spine.
         const turnWork = ctx.turnWork;
-        await this.#drainOutcomes(ctx, deferred);
+        await this.#drainOutcomes(ctx);
 
         // ── Compaction site 2 of 3: the preflight overflow check ────────────
         // After the drain and BEFORE the stop decision, which is the legacy's
@@ -775,7 +801,7 @@ export class RunEngineImpl implements RunEngine {
           // purpose -- that asymmetry is the point of the table in the header.
           await this.#compact(ctx, {
             trigger: 'preflight_overflow',
-            transcript: this.#transcriptFor(ctx, assembled, deferred),
+            transcript: this.#transcriptFor(ctx, assembled, ctx.deferred.current),
           });
         }
 
@@ -844,6 +870,21 @@ export class RunEngineImpl implements RunEngine {
       // Same rule as `on_start` above, for the same measured reason: a run with
       // no hook source must not gain a scheduling point in its `finally`.
       if ((ports.extensions?.list('after_finalize') ?? []).length > 0) {
+        // NOT ADOPTED, and this is the one phase of seven whose contributions
+        // cannot reach the model. It runs here -- after the turn loop has broken
+        // and after `assistant.message_finalized` -- so there is no later
+        // `#modelRequest` to carry them. Deferring anyway would write to the
+        // host and to `deferred` for a list nothing will ever read, which is a
+        // side effect claiming delivery that did not happen.
+        //
+        // It is the legacy's position too: `Stop` and `SessionEnd` contexts are
+        // dispatched after the final answer is committed (`SessionFinalizer.ts:226`,
+        // `:248`), so a hook that wanted the model to see them had to say so
+        // through the transcript, not through `additionalContext`.
+        //
+        // The phase is still worth running: a `SessionEnd` hook's real work is
+        // its side effects (cleanup, notifications, the `hook_invoked` event the
+        // runner emits), and those still happen.
         await this.#contribute({ runId, turn: spend.turns, signal, ports }, 'after_finalize', { exit });
       }
       // The engine PROPOSES and does not publish `run.completed` / `run.failed`.
@@ -1380,7 +1421,11 @@ export class RunEngineImpl implements RunEngine {
       arguments: call.input,
       attempt: 1,
     });
-    await this.#contribute(ctx, 'before_tool', { call });
+    // Adopted onto the run's rail, so it reaches the NEXT model request. The one
+    // in flight was built before this phase, which is the legacy's position:
+    // `PreToolUse` injects go onto the working `messages` array
+    // (`DuyaAgent.ts:3375`) and the next request is built from it.
+    this.#adopt(ctx.ports, await this.#contribute(ctx, 'before_tool', { call }), ctx.deferred.current);
     ports.tools.dispatch(call, ticket);
     ctx.tickets.set(call.callId, ticket);
     // The name only, and only for a call that is actually on its way: the
@@ -1442,7 +1487,7 @@ export class RunEngineImpl implements RunEngine {
    *    legacy analogue (`PostToolUse`, `:2866`) ran after every result in the
    *    turn was committed, not after the first one.
    */
-  async #drainOutcomes(ctx: RunContext, deferred: TransientContextFragment[]): Promise<void> {
+  async #drainOutcomes(ctx: RunContext): Promise<void> {
     const { ports, signal } = ctx;
     // RESULTS that landed, counted here and NOT read off `TurnWork`.
     //
@@ -1510,7 +1555,7 @@ export class RunEngineImpl implements RunEngine {
             // local list carries it into this run's own message seed. One write,
             // two readers, no second copy of the text.
             ports.context.defer(fragment);
-            deferred.push(fragment);
+            ctx.deferred.current.push(fragment);
             const turnOutput = ports.turnOutput;
             if (turnOutput !== undefined) {
               await turnOutput.recordToolResult({
@@ -1523,7 +1568,16 @@ export class RunEngineImpl implements RunEngine {
                 toolName: ctx.toolNames.get(item.callId) ?? '',
               });
             }
-            await this.#contribute(ctx, 'after_tool', { outcome: item });
+            // Adopted, and it reaches the NEXT model request -- the current one
+            // is already built. Same position as `before_tool` above and the same
+            // reason; the legacy's `PostToolUse` (loop bus) injects land the same
+            // way, after the turn's results are committed and before the next
+            // request is assembled.
+            this.#adopt(
+              ctx.ports,
+              await this.#contribute(ctx, 'after_tool', { outcome: item }),
+              ctx.deferred.current,
+            );
             break;
           }
           case 'deferred_context': {
@@ -1542,7 +1596,7 @@ export class RunEngineImpl implements RunEngine {
               pending: item.pending,
             };
             ports.context.defer(fragment);
-            deferred.push(fragment);
+            ctx.deferred.current.push(fragment);
             break;
           }
           case 'subagent_progress': {
@@ -1622,6 +1676,12 @@ export class RunEngineImpl implements RunEngine {
     // `00-contracts.md` section F rule 2 draws between contributing a decision
     // and taking the loop over.
     const contributions = await this.#contribute(ctx, 'before_finalize', {});
+    // Adopted BEFORE the veto test, and deliberately so: a veto is the run being
+    // told to CONTINUE, so anything the same phase said is for the continuation.
+    // A run that finalizes instead carries the fragments on `deferred` and ends
+    // with them unread -- which is also what the legacy does with a
+    // `PreFinalize` inject that does not veto (`SessionFinalizer.ts:220`).
+    this.#adopt(ctx.ports, contributions, ctx.deferred.current);
     const vetoed = contributions.some(
       (contribution) => contribution.binding && 'veto' in contribution.content,
     );
@@ -1988,6 +2048,47 @@ export class RunEngineImpl implements RunEngine {
   }
 
   /**
+   * Put a phase's TEXT contributions on the run's deferred-fragment rail.
+   *
+   * ## Why this is a method and not a line at each call site
+   *
+   * Because before this, `#contribute`'s return value was read at exactly ONE of
+   * its seven call sites -- `before_finalize`, and only to ask whether a
+   * contribution was a VETO. Every text contribution at every phase, including
+   * the veto phase's own non-veto siblings, was computed and dropped. A hook
+   * that returned `additionalContext` was executed and its output discarded, and
+   * the run still completed cleanly, so nothing in a frame said so.
+   *
+   * The rail is the one the tool leg already uses (`#drainOutcomes`:
+   * `ports.context.defer(fragment)` plus the same object pushed onto `deferred`),
+   * because there is no second one: `#modelRequest` turns `deferred` into
+   * messages through `#fragmentMessages`, and a fragment that skipped the local
+   * list would reach only the host, never the model.
+   *
+   * ## A veto is NOT text, and is skipped
+   *
+   * `ExtensionContribution.content` is a fragment OR `{ veto: true, reason }`. The
+   * veto is a decision the engine honours by refusing to finalize; there is no
+   * prompt to render it as. Pushing it would hand `#fragmentMessages` an object
+   * with neither `text` nor `pending`, which `fragmentText` resolves to
+   * `undefined` -- a `user` message whose content is the string "undefined".
+   */
+  #adopt(
+    ports: RunEnginePorts,
+    contributions: readonly ExtensionContribution[],
+    deferred: TransientContextFragment[],
+  ): void {
+    for (const contribution of contributions) {
+      // Narrows to `TransientContextFragment`; the `binding` flag is NOT the
+      // discriminator, because a contributor may return advisory text that
+      // happens to be marked binding and a veto that is not.
+      if ('veto' in contribution.content) continue;
+      deferred.push(contribution.content);
+      ports.context.defer(contribution.content);
+    }
+  }
+
+  /**
    * Turn fragments into the user messages that carry them.
    *
    * ## Why this awaits, and why a rejection is a skip
@@ -2032,7 +2133,6 @@ export class RunEngineImpl implements RunEngine {
   async #modelRequest(
     ctx: RunContext,
     assembled: AssembledTurn,
-    deferred: readonly TransientContextFragment[],
   ): Promise<ModelRequest> {
     const { input, manifest } = ctx;
     // A `by_ref` history is the HOST's to resolve; the engine hands the locator
@@ -2060,7 +2160,7 @@ export class RunEngineImpl implements RunEngine {
         .map((directive) => directive.payload),
     );
 
-    const carried = await this.#fragmentMessages('fragment', deferred);
+    const carried = await this.#fragmentMessages('fragment', ctx.deferred.current);
 
     // Host-injected text rides EVERY request from the sweep onward, not just
     // the one that followed it. Concatenated after the history, which is the
@@ -2301,6 +2401,11 @@ interface RunContext {
    * asked only which tool failed (`:2771`).
    */
   readonly toolNames: Map<string, string>;
+/**
+   * Fragments the NEXT turn's request will carry. A CELL, shared with `#run` by
+   * reference -- see its declaration there.
+   */
+  readonly deferred: RunScoped<{ current: TransientContextFragment[] }>;
   /** Mutable, per turn. Replaced at the top of each iteration. */
   turnWork: TurnWork;
   /**

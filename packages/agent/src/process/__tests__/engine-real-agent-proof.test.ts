@@ -73,6 +73,7 @@ import type {
   RunEnginePorts,
   RunInputSnapshot,
   TerminalCandidate,
+  TransientContextFragment,
 } from '@duya/agent-runtime';
 import type { RunFence, RunId, RunManifest } from '@duya/agent-protocol';
 import type { Message, SSEEvent } from '../../types.js';
@@ -86,6 +87,14 @@ interface Seen {
   readonly systemPrompt: string;
   readonly toolNames: string[];
   readonly roles: string[];
+  /**
+   * Every message's content as the provider was handed it, stringified.
+   *
+   * S4b-3 needs this and `roles` is not enough: adoption is proved by TEXT the
+   * hook's own subprocess printed arriving in the request, and a role list
+   * cannot distinguish a delivered context from an ordinary user turn.
+   */
+  readonly contents: readonly string[];
 }
 
 let active: { seen: Seen[] } | null = null;
@@ -110,6 +119,7 @@ vi.mock('@duya/ai', async (importOriginal) => {
         systemPrompt: String((options?.systemPrompt as string) ?? ''),
         toolNames: ((options?.tools as Array<{ name: string }>) ?? []).map((t) => t.name).sort(),
         roles: messages.map((m) => m.role),
+        contents: messages.map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))),
       });
       const script = SCRIPTS[Math.min(index, SCRIPTS.length - 1)] ?? SCRIPTS[SCRIPTS.length - 1];
       const signal = options?.signal as AbortSignal | undefined;
@@ -378,6 +388,18 @@ interface Proof {
    * the whole slice.
    */
   readonly rawRoles: readonly string[];
+  /**
+   * Every fragment the ENGINE handed the host through `context.defer`.
+   *
+   * `contents` proves adoption by TEXT and cannot see the fragment's `kind`:
+   * `fragmentText` reads only `text`/`pending`, so a fragment of the wrong kind
+   * is delivered to the model identically to a right one. `deferFragment` is the
+   * host's own sink and the documented contract for a deferral, so it is the
+   * only place the KIND is observable -- and `hook_context` is the only kind
+   * correct for a hook's contribution, since `advisory` would understate it and
+   * `deferred_tool_context` would misattribute it to the tool leg's rail.
+   */
+  readonly deferred: readonly TransientContextFragment[];
 }
 
 async function runThroughEngine(
@@ -523,6 +545,7 @@ async function runThroughEngine(
 
   const terminals: TerminalCandidate[] = [];
   const hooks: HookInvokedEvent[] = [];
+  const deferred: TransientContextFragment[] = [];
   const host: LegacyRunHost = {
     turnPipelines,
     // The production binding from A3-2b9, over the REAL handle.
@@ -554,6 +577,13 @@ async function runThroughEngine(
       settings: HOOK_SETTINGS,
       onHookInvoked: (event) => hooks.push(event),
     }),
+    // S4b-3: the host's own deferral sink. The engine writes every adopted
+    // contribution here as well as onto its own rail, so what the run deferred
+    // is observable from the host's side of the port rather than only from the
+    // model's. Bound BEFORE adoption existed on purpose -- `composeLegacyRunSources`
+    // omits `deferFragment` when the host has none, so this member is also what
+    // makes the engine's `ports.context.defer` call reach anything at all.
+    deferFragment: (fragment) => deferred.push(fragment),
   };
 
   const ports: RunEnginePorts = composeLegacyRunPorts(agent, host);
@@ -595,6 +625,7 @@ async function runThroughEngine(
     hooks,
     prefixCalls: () => s4bPrefixCalls,
     rawRoles: agent.getMessages().map((m) => m.role),
+    deferred,
   };
 }
 
@@ -646,8 +677,16 @@ describe('the engine drives a real duyaAgent for more than one turn', () => {
 
     // THE cross-leg claim, and the one no per-leg assertion can make: the tool
     // the first turn dispatched actually reached the SECOND turn's request.
-    // Turn 1 is `user, user` (prompt + the agent's transcript copy); turn 2 adds
-    // the assistant's tool_use and the tool result.
+    //
+    // MEASURED, not inferred, because S4b-3 moved these arrays and the
+    // assertions below survived the move for a reason worth recording. Before
+    // it, turn 1 was `user, user` (prompt + the agent's transcript copy) and
+    // turn 2 was `user, assistant, tool, user`. Now turn 1 is FOUR `user`
+    // turns -- prompt, the two adopted `on_start` hook contexts, then the
+    // transcript copy, so the deferred rail sits BETWEEN prompt and history and
+    // not after the history -- and turn 2 appends the two adopted tool-hook
+    // contexts. Both growths are `user` role, which is exactly why the S4b-3
+    // block asserts on `contents`: a role list grew by four and proved nothing.
     expect(proof.seen).toHaveLength(2);
     expect(proof.seen[0].roles).not.toContain('tool');
     expect(proof.seen[1].roles).toContain('assistant');
@@ -860,6 +899,105 @@ describe('an engine-driven run projects the timeline to the model boundary', () 
     for (const request of proof.seen) {
       expect(request.systemPrompt.split('## Conversation Context')).toHaveLength(2);
     }
+  });
+});
+
+// ============================================================================
+// S4b-3 -- adoption: a hook's contribution, and where it lands
+// ============================================================================
+
+describe('an engine-driven run adopts what its hooks contributed', () => {
+  it("carries the run-scoped hook contexts onto the FIRST request", async () => {
+    const proof = await runThroughEngine();
+
+    // ON THE WIRE, by TEXT. Before S4b-3 `#contribute`'s return value was read
+    // at ONE of its seven call sites -- `before_finalize`, and only to ask
+    // whether a contribution was a veto -- so these two fragments were produced
+    // by a real `node` hook subprocess and then dropped on the floor. The run
+    // still completed `completed`, so nothing in a frame said so and no green
+    // suite could have noticed.
+    //
+    // `contents`, not `roles`: both arrive as `user` turns, so a role list
+    // cannot tell a delivered hook context from the prompt.
+    expect(proof.seen[0].contents).toContain('UserPromptSubmit/-/-');
+    expect(proof.seen[0].contents).toContain('SessionStart/-/-');
+  });
+
+  it("carries the tool hook contexts onto the NEXT request, which is the only one open", async () => {
+    const proof = await runThroughEngine();
+
+    // `before_tool` and `after_tool` both fire DURING turn 1, after turn 1's
+    // `#modelRequest` has already been built. So they cannot reach it, and what
+    // S4b-3 changed is that they now land SOMEWHERE rather than nowhere. Both
+    // halves asserted: the absence says the engine did not resend turn 1's
+    // fragments (which would duplicate them), and the presence says turn 2 got
+    // them. This is the engine's pre-existing ordering and the legacy's too.
+    expect(proof.seen[0].contents).not.toContain('PreToolUse/probe_ok/t1');
+    expect(proof.seen[1].contents).toContain('PreToolUse/probe_ok/t1');
+    expect(proof.seen[1].contents).toContain('PostToolUse/probe_ok/t1');
+  });
+
+  it('discards the after_finalize contribution, and the discard is the contract', async () => {
+    const proof = await runThroughEngine();
+
+    // THE ONE PHASE OF SEVEN THAT DOES NOT ADOPT. `after_finalize` runs after
+    // the turn loop has broken and after `assistant.message_finalized`, so there
+    // is no later `#modelRequest` that could carry it; deferring anyway would
+    // write to the host and to the rail for a list nothing will ever read, which
+    // is a side effect claiming delivery that did not happen. The legacy holds
+    // the same position -- `Stop`/`SessionEnd` contexts are dispatched after the
+    // final answer is committed, so a hook wanting the model to see them has to
+    // say so through the transcript.
+    //
+    // Asserted as an ABSENCE rather than left implicit, because "adopt
+    // everywhere" is the obvious over-correction and it is wrong for the reason
+    // above. The phase still runs: the hook executed and its side effects
+    // happened -- the S4a sequence assertion is what covers that half.
+    for (const request of proof.seen) {
+      expect(request.contents).not.toContain('SessionEnd');
+    }
+  });
+
+  it("defers through the host as hook_context, on the tool leg's own rail", async () => {
+    const proof = await runThroughEngine();
+
+    // THROUGH THE HOST. `ports.context.defer` is the host's own contract for a
+    // deferral, and it is the only place the `kind` is observable at all:
+    // `fragmentText` reads `text`/`pending` and nothing else, so a fragment of
+    // the WRONG kind reaches the model byte-identically and every wire assertion
+    // above would stay green. `hook_context` is the only correct kind for a
+    // hook's contribution -- `advisory` understates it and
+    // `deferred_tool_context` would misattribute it to the tool leg's rail.
+    const hookFragments = proof.deferred.filter((fragment) => fragment.kind === 'hook_context');
+
+    // POSITIVE COUNT AND SEQUENCE, so this is not satisfied by a fixture that
+    // deferred nothing: four hooks that ran, in the order the S4a sequence
+    // asserts they ran, and nothing else.
+    expect(hookFragments.map((fragment) => fragment.text)).toEqual([
+      'UserPromptSubmit/-/-',
+      'SessionStart/-/-',
+      `PreToolUse/${PROBE}/t1`,
+      `PostToolUse/${PROBE}/t1`,
+    ]);
+
+    // AND the tool leg's OWN deferral is still on the same rail. Adoption shares
+    // `deferred` rather than introducing a second list, so a change that gave
+    // hooks their own would starve the tool result of it -- and the tool result
+    // is what turn 2 is built from. Positive count again.
+    expect(proof.deferred.filter((fragment) => fragment.kind === 'deferred_tool_context')).toHaveLength(1);
+  });
+
+  it('still runs the tool leg and reaches a terminal, so adoption cost the run nothing', async () => {
+    const proof = await runThroughEngine();
+
+    // The S3 rule, and the reason this block is not just a string match: a run
+    // that adopted a fragment into a request and then stopped dispatching would
+    // satisfy every assertion above.
+    expect(proof.calls()).toBe(2);
+    expect(proof.runs()).toBe(1);
+    expect(proof.assembledTurns).toEqual([1, 2]);
+    expect(proof.terminals).toHaveLength(1);
+    expect(proof.terminals[0].state.status).toBe('completed');
   });
 });
 
