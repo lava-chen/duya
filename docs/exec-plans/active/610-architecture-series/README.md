@@ -278,19 +278,15 @@ B 线在 B1 之后才与 A5 交汇;C 线全程可并行且不阻塞任何人。
 
 **尚未做的五件事(顺序有依赖):** ① 建运行组装层:emitter/session、`LegacyEngineSources` 工厂、manifest/input 装配、`turnOutput` 供给(`turnOutput` 的效果读 `DuyaAgent` 上 `_pushDurable` 等 private 方法,**先例是 #236 加的 public 接缝 `claimInterTurn`**,见 `DuyaAgent.ts:3650`「PUBLIC, and it is the whole reason `_sweepInterTurn` exists」);② 入口驱动引擎;③ 删掉遗留循环;④ ~~去掉 `agent-process-entry.ts:76` 的值 import~~ ⚠️ **2026-10-06 再更正:这一步不成立。** 实测入口**自己构造 agent**(`agent = new duyaAgent({...})`,`:1929`),用了 **35 个不同的 `agent.*` 成员共 73 处**(42 处在 `handleChatStart` 之外),而 `composeLegacyRunPorts(agent: duyaAgent, ...)` **把 agent 当第一个参数**。**切换只会让入口更依赖 `duyaAgent`,不是更少。** G7 转绿的原因是 `DuyaAgent.ts` **不再满足循环判据**,不是 import 没了。
 
-**循环删除范围(用 TypeScript 解析器实测,不是手写括号配平 —— ⚠️ 这里有两层嵌套循环,此前只记了内层):**
+**循环删除范围(⚠️ 2026-10-06 第三次更正,前两次都错):全仓只有**一个**轮次循环。** 实测:`while (!this.abortController.signal.aborted)` 打开于 **`DuyaAgent.ts:2122`**;两条 `for await` 腿在 `:2760`(model)与 `:3060`(tool)。`streamChat` 方法是 `:1275-3677`。
 
-| 对象 | 范围 |
-| --- | --- |
-| 外层 `while (!this.abortController.signal.aborted)` | **`DuyaAgent.ts:2122-3658`(1537 行)** |
-| 内层 turn 循环 `while` 块 | **`DuyaAgent.ts:1825-3401`(1577 行)** |
-| `streamChat` 方法 | **`:1275-3677`** |
+此前记载的 `:1825-3401`(内层循环,1577 行)**不成立**:`:1825` 是一行**注释**(`// The resolved modes + ctx are stored on this ...`),`:3401` 在一个表达式中间。**这个错误数字的源头是门禁自己的文档注释** —— `boundary-gates.mjs` 里写着 `DuyaAgent.ts:1825`/`:2464`/`:2764`,三处全过期。那条注释被当成实测结果写进计划文档,又被另外两人**重新"测量"并继续传播**,错了三次且一次比一次显得更有把握。**PR #249 已删除那些行号引用**,改为指向 `turnLoopSites()`。
 
-两者都真实存在且**互相嵌套**,切换会把两层一起删掉。此前文档写的 `:3404` **长 3 行**——`3404` 是一行注释,且在**外层循环之外**。`DuyaAgent.ts:3300` 也是**注释**(`// Loop continues - next LLM call will include tool results`)。死掉的 model leg 调用在 `:2452-2453`(不是 `:2454`),import 在 `:95`。
+**判据自此以 `turnLoopSites()` 为唯一权威,任何文档不要再引用行号。**
 
-**⚠️ 切换的真实阻塞(实测,非估计):全仓唯一的 `new ToolExecutionPipeline` 生产点在 `DuyaAgent.ts:2364`,就在待删循环内**;`toolUseContext` 声明于 `:2269`(由约 100 行逐轮状态构成),唯一的 `publish` 调用在 `:2381`。删掉循环 → 没有任何东西发布管线 → `turn-pipeline-publisher.ts:138,190,224` 的 `queue`/`drain`/`discard` 全部抛 → **引擎在第一个工具调用就失败**。因此顺序必须是:**先落三条接缝**(逐轮 pipeline 工厂 + `_resolveTools` 支撑的 `assembleTurn` + `compactionManager` 支撑的 `compaction`),**再翻转**。
+**⚠️ 第四点「去掉 `agent-process-entry.ts:76` 的值 import」同样不成立。** 入口**自己构造 agent**(`new duyaAgent({...})`,`:1929`),用了 **35 个 `agent.*` 成员共 73 处**(42 处在 `handleChatStart` 之外),而 `composeLegacyRunPorts(agent: duyaAgent, ...)` **把 agent 当第一个参数**。**切换让入口更依赖 `duyaAgent`。** G7 转绿的原因是 `DuyaAgent.ts` 不再满足循环判据 —— 判据读**去注释**源码(`code(abs)`),而 `tokenize` 跳过字符串但**不跳注释**,5000 行散文里的花括号会截断块扫描。
 
-**另外:`live-turn-single-driver.test.ts` 那 3 条红里有 2 条是过期测试,不是真违规** —— `TURN_LOOP_SHAPE.modelStream` 在 PR #232 后已不存在(现在只有 `{ legs: 2 }`),且该测试的 owners walk 传**原始源码**而门禁读**去注释源码**(`code(abs)`)。 | G7 depth-1 finding 转绿;`mutation-proof-a1.mjs` 仍 **7/7**(PR #232 把 G7 加深后实测);`boundary-gates.test.ts` 全绿;`live-turn-single-driver.test.ts` 仍断言 driver 总数 === 1 |
+**剩余顺序:** ① 压缩缝 —— `compactionManager.compact(` **零生产调用点**(只有三处注释),遗留实际走 `compactionCoordinator.runPreTurn`(`:2595`),而它**已经返回** `{systemPromptContent, messages}` 且 `onEvent` 就是 reporter。所以这条缝是**包装**,不是抽取;遗留的 50ms 生成器轮询泵**只是 async generator 的 transport 产物,引擎不需要**。② 组装缝 —— `systemPromptContent` 是**生成器累加器**(7 个赋值点,3 个在循环中途,1 个派生自工具在流式中改写的 `modeCtx.state`),**没有可抽取的函数**;`assembleTurnContext` 返回 `TurnContext`(身份事实)而非 `AssembledTurn`(模型载荷),**两者不可改造**。因此这条缝是**新写方法 + 等价性测试**(拿遗留自己的输出做对照),不是「忠实抽取」。③ 翻转驱动 + 删 `:2122` 起的循环。 | G7 depth-1 finding 转绿;`mutation-proof-a1.mjs` 仍 **7/7**(PR #232 把 G7 加深后实测);`boundary-gates.test.ts` 全绿;`live-turn-single-driver.test.ts` 仍断言 driver 总数 === 1 |
 > **§4 那个未决问题的答案:真违规,不是 `ports.ts` 已知过读。** 它就是真正的轮次循环,
 > **归属 A3,不归属 A1** —— A1 的活已经干完,红的是 A3 的待办,门禁把它如实报出来,
 > 正是「门禁是事实报告,不是待办清单」的预期行为。
