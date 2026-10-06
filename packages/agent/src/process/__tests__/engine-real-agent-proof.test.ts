@@ -140,6 +140,7 @@ const { composeLegacyRunPorts, createLegacyAssembleTurn, buildLegacyRunManifest,
   await import('../run-composition.js');
 const { createLegacyHookSource, MAPPED_PHASES } = await import('../hook-source.js');
 import type { LegacyRunFacts, LegacyRunHost } from '../run-composition.js';
+import type { ModeModifierContext } from '../../modes/types.js';
 import type { HookInvokedEvent, HooksSettings } from '../../hooks/types.js';
 
 let dbListener: ((m: unknown) => void) | null = null;
@@ -198,6 +199,8 @@ afterEach(() => {
 });
 
 const PROBE = 'probe_ok';
+/** Registered but never called. The S4b-1 mode BLOCKS it, so it must not reach the wire. */
+const BLOCKED = 'probe_blocked';
 
 interface Probe {
   readonly runs: () => number;
@@ -214,19 +217,23 @@ interface Probe {
  */
 function registerProbe(agent: InstanceType<typeof duyaAgent>): Probe {
   let runs = 0;
-  agent.activeMCPRegistry.register(
-    {
-      name: PROBE,
-      description: 'probe that counts its own executions',
+  const definition = (name: string) =>
+    ({
+      name,
+      description: `probe ${name} that counts its own executions`,
       input_schema: { type: 'object', properties: { value: { type: 'string' } } },
-    } as never,
-    {
-      execute: async (input: Record<string, unknown>) => {
-        runs += 1;
-        return { id: String(input.id ?? 'none'), name: PROBE, result: `RAN-${runs}` };
-      },
-    } as never,
-  );
+    }) as never;
+  agent.activeMCPRegistry.register(definition(PROBE), {
+    execute: async (input: Record<string, unknown>) => {
+      runs += 1;
+      return { id: String(input.id ?? 'none'), name: PROBE, result: `RAN-${runs}` };
+    },
+  } as never);
+  // Registered so the S4b-1 mode has something real to BLOCK. Never called by
+  // any script, so its presence cannot affect the tool leg.
+  agent.activeMCPRegistry.register(definition(BLOCKED), {
+    execute: async () => ({ ok: true }),
+  } as never);
   return { runs: () => runs };
 }
 
@@ -265,6 +272,76 @@ const HOOK_SETTINGS: HooksSettings = {
   SessionEnd: [{ hooks: [{ type: 'command', command: HOOK_ECHO }] }],
 };
 
+// ============================================================================
+// S4b-1 -- a REAL mode modifier, reached by the engine-driven path
+// ============================================================================
+
+const S4B_MODE_ID = 's4b-1-probe';
+const S4B_PREFIX = 'S4B-1-MODE-PROMPT-PREFIX';
+const S4B_INJECTED = 's4b_1_mode_injected';
+
+/**
+ * How many times the mode's prompt PREFIX function ran.
+ *
+ * This is what makes the per-turn refresh provable rather than assumed. A
+ * string prefix is applied once and never re-evaluated, so "the prefix is on
+ * the wire" cannot tell a working `refreshTurnSystemPrompt` from a dead one
+ * that happens to be harmless on turn 1 -- the exact failure mode S4b-1 is
+ * about. Counting the function calls separates the two: `applyModes` runs it
+ * once per RUN, `refreshTurnSystemPrompt` once per TURN.
+ */
+let s4bPrefixCalls = 0;
+
+/**
+ * Register the mode ONCE per process.
+ *
+ * `ModeModifierRegistry.register` throws on a duplicate id and has no
+ * unregister, so this is module state rather than a per-test fixture. The
+ * catch is narrow on purpose: an unrelated throw during registration must not
+ * be swallowed into a mode that silently never fires.
+ */
+async function registerS4bMode(): Promise<void> {
+  const { modeModifierRegistry } = await import('../../modes/registry.js');
+  try {
+    modeModifierRegistry.register({
+      id: S4B_MODE_ID,
+      kind: 'message',
+      prompt: {
+        // FUNCTION form deliberately, not a bare string. A string prefix is
+        // applied once by `applyModes` and never re-evaluated; a function is
+        // what `refreshTurnSystemPrompt` re-runs EVERY turn against the latest
+        // base. So a green here proves the per-turn refresh works on the
+        // engine-driven path, which is the half that was silently dead.
+        prefix: (_ctx: ModeModifierContext, base: string) => {
+          s4bPrefixCalls += 1;
+          return `${S4B_PREFIX}\n\n${base}`;
+        },
+      },
+      tools: {
+        // INJECT: a tool the mode adds. Proves `applyModes`' tool half runs and
+        // that `applyTurnModes` registered its executor, since a tool the
+        // registry cannot dispatch would be advertised and then refuse.
+        inject: () => [
+          {
+            definition: {
+              name: S4B_INJECTED,
+              description: 'injected by the S4b-1 mode',
+              input_schema: { type: 'object', properties: {} },
+            },
+            executor: { execute: async () => ({ injected: true }) },
+          },
+        ],
+        // BLOCK: the security-relevant half. Before S4b-1 the mode block was
+        // never applied on the engine path, so a mode that BLOCKS a write tool
+        // did not block it -- silent, and the worst direction to be wrong in.
+        block: [BLOCKED],
+      },
+    } as never);
+  } catch (error) {
+    if (!/already registered/.test(String(error))) throw error;
+  }
+}
+
 interface Proof {
   /** How many times the provider was asked for a request. POSITIVE COUNT. */
   readonly calls: () => number;
@@ -283,10 +360,19 @@ interface Proof {
    * `hook-source.ts`).
    */
   readonly hooks: readonly HookInvokedEvent[];
+  /**
+   * How many times the S4b-1 mode's prompt-prefix FUNCTION ran. 1 per run from
+   * `applyModes`, plus 1 per assembled turn from `refreshTurnSystemPrompt`.
+   */
+  readonly prefixCalls: () => number;
 }
 
-async function runThroughEngine(): Promise<Proof> {
+async function runThroughEngine(runOptions: { readonly mode?: string } = {}): Promise<Proof> {
   installFakeDbIpc();
+  if (runOptions.mode !== undefined) {
+    await registerS4bMode();
+    s4bPrefixCalls = 0;
+  }
 
   let sessionSeq = 0;
   const agent = new duyaAgent({
@@ -308,7 +394,12 @@ async function runThroughEngine(): Promise<Proof> {
   // No `options.toolRegistry`: `_resolveTools` falls back to the agent's own
   // registry, which is where the engine's lookup also looks. The session id is
   // carried in the options rather than read off the agent, which is private.
-  const options = { sessionId: `s-s3-proof-${sessionSeq}` } as never;
+  // `mode` is the S4b-1 lever: `collectActiveModes` reads it, and an engine
+  // path that ignored it would advertise no prefix and no injected tool.
+  const options = {
+    sessionId: `s-s3-proof-${sessionSeq}`,
+    ...(runOptions.mode === undefined ? {} : { mode: runOptions.mode }),
+  } as never;
   const prompt = 'run the probe';
   const turnContext = agent.assembleTurnContext(options, prompt);
 
@@ -460,6 +551,7 @@ async function runThroughEngine(): Promise<Proof> {
     catalogRounds,
     advertised: handle.tools.map((t) => t.name).sort(),
     hooks,
+    prefixCalls: () => s4bPrefixCalls,
   };
 }
 
@@ -582,6 +674,80 @@ describe('an engine-driven turn dispatches the hook events the legacy cycle disp
     // nothing about the three engine-own phases that have no config event yet
     // (`hook-source.ts` header: the loop bus is the orchestrator slice).
     expect([...MAPPED_PHASES].sort()).toEqual(['after_finalize', 'after_tool', 'before_tool', 'on_start']);
+  });
+});
+
+// ============================================================================
+// S4b-1 -- mode dispatch
+// ============================================================================
+
+describe('an engine-driven run applies the mode modifiers the legacy applies', () => {
+  it('sends the mode prompt prefix to the wire, on EVERY turn', async () => {
+    const proof = await runThroughEngine({ mode: S4B_MODE_ID });
+
+    // ON THE WIRE, not on the assembled object. The S3 file's own cross-source
+    // rule: the thing the provider was handed is the only thing that proves a
+    // turn was advertised correctly, and it is the thing a green on
+    // `handle.tools` would have missed.
+    expect(proof.calls()).toBe(2);
+    for (const request of proof.seen) {
+      expect(request.systemPrompt).toContain(S4B_PREFIX);
+    }
+
+    // The base prompt is still there UNDER the prefix. A prefix that replaced
+    // the base would satisfy the assertion above and destroy the turn.
+    expect(proof.seen[0].systemPrompt).toContain('Tool-group progress:');
+
+    // Turn 2 is the one that matters and the one a run-scoped-only fix would
+    // pass: `refreshTurnSystemPrompt` rebuilds the prompt from a stored base,
+    // and if that base were wrong the prefix would be right and the context
+    // gone. Both present on turn 2, not just turn 1.
+    expect(proof.seen[1].systemPrompt).toContain(S4B_PREFIX);
+
+    // AND the prefix function actually RE-RAN, rather than the prefix being
+    // carried forward from turn 1 by a refresh that did nothing. This is the
+    // assertion that would have caught the original gap: a dead
+    // `refreshTurnSystemPrompt` leaves the prefix on the wire (harmless on turn
+    // 1) while never re-evaluating a single mode prompt against fresh state.
+    // The arithmetic is the point -- 1 from `applyModes` for the run, plus one
+    // per turn the engine ACTUALLY assembled, so this fails both when the
+    // refresh dies and when the turn count moves under it.
+    expect(proof.prefixCalls()).toBe(1 + proof.assembledTurns.length);
+  });
+
+  it('advertises the mode\'s INJECTED tool and withholds the one it BLOCKS', async () => {
+    const proof = await runThroughEngine({ mode: S4B_MODE_ID });
+
+    // INJECT reached the provider.
+    expect(proof.seen[0].toolNames).toContain(S4B_INJECTED);
+    // And the agent's own resolved surface agrees -- cross-source, so a source
+    // that built a set of its own instead of applying the mode would fail here
+    // rather than satisfy a hardcoded list.
+    expect(proof.advertised).toContain(S4B_INJECTED);
+    expect(proof.seen[0].toolNames).toEqual([...proof.advertised]);
+
+    // BLOCK reached the provider. This is the half that was silently lost, and
+    // the half whose failure direction is worst: before S4b-1 a mode that
+    // blocked a tool did not block it on an engine-driven run.
+    expect(proof.seen[0].toolNames).not.toContain(BLOCKED);
+    expect(proof.advertised).not.toContain(BLOCKED);
+
+    // The control: the same run WITHOUT the mode advertises the blocked tool.
+    // Without this, `not.toContain(BLOCKED)` would also pass for a fixture that
+    // never registered it -- a negative assertion with nothing behind it.
+    const withoutMode = await runThroughEngine();
+    expect(withoutMode.seen[0].toolNames).toContain(BLOCKED);
+  });
+
+  it('still runs the tool leg, so the mode did not cost the run its work', async () => {
+    const proof = await runThroughEngine({ mode: S4B_MODE_ID });
+
+    // POSITIVE COUNTS, the rule this file is built on: a run that quietly
+    // stopped dispatching would satisfy every prefix/tool assertion above.
+    expect(proof.calls()).toBe(2);
+    expect(proof.runs()).toBe(1);
+    expect(proof.assembledTurns).toEqual([1, 2]);
+    expect(proof.terminals[0].state.status).toBe('completed');
   });
 });
 

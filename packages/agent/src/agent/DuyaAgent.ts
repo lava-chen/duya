@@ -871,6 +871,222 @@ export class duyaAgent implements AgentRuntime {
   }
 
   /**
+   * Plan 610 A3-2b9 (S4b-1): apply the run's mode modifiers, ONCE per run.
+   *
+   * ## Why this was a hole in already-merged S1/S2
+   *
+   * The block this replaces lived in `streamChat` at `:2457-2571`, AFTER
+   * `beginTurnAssembly` (`:2312`). So the seam resolved tools and built a prompt
+   * and then never asked a mode anything: `this.resolvedModes`, `this.modeCtx`
+   * and `this.baseSystemPromptWithoutModes` are assigned ONLY here, so on the
+   * engine path all three stayed `undefined`, and `refreshTurnSystemPrompt`'s
+   * four-clause guard short-circuited and returned the prompt unchanged.
+   *
+   * The net effect was silent and total: an engine-driven run advertised **no
+   * mode prompt prefix and no injected mode tool**, and a mode that BLOCKS a
+   * tool did not block it. The S3 proof could not see it, because it registers
+   * no modes -- a green that never turns the knob on.
+   *
+   * ## ONE call site, and the legacy now goes through it
+   *
+   * Not "the seam also does this": `streamChat` calls `beginTurnAssembly` at
+   * `:2312` and reads the mode-applied values off the handle, so the legacy and
+   * an engine-driven run run the SAME code once. A second call site would apply
+   * modes twice on a legacy run -- double prefixes, double injects.
+   *
+   * ## `applyModes` + `runExitHooks`, and what "mode" means here
+   *
+   * `ModeModifier` is the whole of it. The orchestrator *hosts*
+   * (`run-orchestrator.ts:924`, `agent-shell.ts:448`) resolve modes too, but they
+   * apply ONLY tool injection and manage their own prompt and loop, and they do
+   * not go through this cutover -- they are explicitly out of scope for A3, not
+   * a capability this seam is missing. `runExitHooks` (the run-boundary half) is
+   * NOT here: it fires in `SessionFinalizer`, i.e. after the run, and rides the
+   * engine's `after_finalize` phase instead.
+   *
+   * ## The ONE ordering divergence from the legacy, stated
+   *
+   * The legacy applied modes to the prompt AFTER `_projectModelMessages`, which
+   * APPENDS a `## Conversation Context` block (`:6090`), and `_project` is not
+   * reachable from the seam. So the order here is apply-then-project.
+   *
+   * For every prompt PREFIX that is exactly equivalent -- a prefix prepends and
+   * the projection appends, so the two commute, and the final string is
+   * `prefix + base + context` either way. It differs for a mode registering a
+   * prompt SUFFIX when the timeline contributes system content:
+   * legacy `prefix+base+context+suffix`, here `prefix+base+suffix+context`. No
+   * registered mode declares a suffix today (conductor and plan-task both use
+   * prefixes), so the condition is currently unreachable; it is recorded rather
+   * than engineered away because the fix belongs to the projection gap, not
+   * here.
+   */
+  private async applyTurnModes(input: {
+    readonly options: ChatOptions | undefined;
+    readonly turnContext: TurnContext;
+    readonly systemPrompt: string;
+    readonly resolved: ResolvedTurnTools;
+  }): Promise<{ readonly systemPrompt: string; readonly resolved: ResolvedTurnTools }> {
+    const { options, turnContext } = input;
+    const { registry, constraints, catalogView } = input.resolved;
+
+    // === Plan 224 Phase 3+4: apply declarative mode modifiers ===
+    // Modifier-paradigm modes (conductor, plan-task) inject tools,
+    // prepend prompt prefixes, and merge toolUseContextPatch on top
+    // of the profile-resolved base.
+    //
+    // The resolved modes + ctx are stored on `this` so the per-turn
+    // refresh in `refreshTurnSystemPrompt` can re-evaluate function-form
+    // prompt prefixes (e.g. conductor's anti-slop section) against the
+    // latest `widgetStyleHistory` without re-running `onEnter` hooks.
+    const activeModeIds = collectActiveModes(options ?? {});
+    this.resolvedModes = activeModeIds.length > 0
+      ? modeModifierRegistry.resolve(activeModeIds)
+      : undefined;
+    if (!this.resolvedModes || this.resolvedModes.modes.length === 0) {
+      // No active modes -- clear stored state so per-turn refresh is a no-op.
+      // Also the reason this is not an early return of the INPUT values: a run
+      // whose previous run left state behind must not inherit its prefixes.
+      this.resolvedModes = undefined;
+      this.modeCtx = undefined;
+      this.baseSystemPromptWithoutModes = undefined;
+      return { systemPrompt: input.systemPrompt, resolved: input.resolved };
+    }
+
+    // Capture the pre-mode system prompt BEFORE applyModes applies
+    // prefixes. The per-turn refresh re-evaluates function-form
+    // prefixes against this base each turn.
+    this.baseSystemPromptWithoutModes = input.systemPrompt;
+
+    // Build the mode context. `state` is pre-populated with fields
+    // modes need to read in their hooks / prompt builders:
+    //  - conductorCanvasId: passed by the frontend (4-level priority
+    //    resolution in ChatView.handleConductorChange)
+    //  - widgetStyleHistory: the agent's rolling anti-slop history
+    this.modeCtx = {
+      sessionId: turnContext.sessionId ?? '',
+      workingDirectory: turnContext.workingDirectory ?? '',
+      state: {
+        conductorCanvasId: options?.conductorCanvasId,
+        widgetStyleHistory: this.widgetStyleHistory,
+      },
+    };
+
+    // Build base ToolRegistration[] from the profile-filtered tools.
+    // The registry holds the executors; we look them up by name.
+    const baseToolRegistrations: ToolRegistration[] = input.resolved.tools.map((t) => ({
+      definition: t,
+      executor: registry.getExecutor(t.name)!,
+    }));
+
+    const modeResult = await applyModes({
+      basePrompt: input.systemPrompt,
+      baseTools: baseToolRegistrations,
+      baseToolUseContext: undefined,
+      ctx: this.modeCtx,
+      resolved: this.resolvedModes,
+    });
+
+    // Register injected tool executors into the registry so the
+    // streaming executor can dispatch them. Tools that were already
+    // registered (e.g. by an earlier call) are skipped.
+    for (const tr of modeResult.tools) {
+      if (!registry.has(tr.definition.name)) {
+        registry.register(tr.definition, tr.executor);
+      }
+    }
+
+    // Update the LLM-facing tool list and system prompt with the
+    // mode-applied versions.
+    const tools = modeResult.tools.map((t) => t.definition);
+
+    // applyModes filters the direct tool list. Mirror those decisions in
+    // the catalog too, or a deferred target could bypass a mode block via
+    // tool_invoke. Router wrappers are infrastructure, so a mode allowlist
+    // does not need to name them; explicit mode blocks still apply.
+    const modeToolPolicy = this.resolvedModes.tools;
+    const modeAllowsTarget = (name: string): boolean =>
+      modeToolPolicy.overrideFilter || (
+        !modeToolPolicy.blocked.includes(name) &&
+        (modeToolPolicy.allowed === null || modeToolPolicy.allowed.includes(name))
+      );
+    const modeAllowsRouter = (name: string): boolean =>
+      modeToolPolicy.overrideFilter || !modeToolPolicy.blocked.includes(name);
+    const canCatalog =
+      isToolVisible('tool_catalog', 'eager', EMPTY_DISCOVERED, constraints) &&
+      modeAllowsRouter('tool_catalog');
+    const canInvoke =
+      isToolVisible('tool_invoke', 'eager', EMPTY_DISCOVERED, constraints) &&
+      modeAllowsRouter('tool_invoke');
+    const directNames = new Set(tools.map((tool) => tool.name));
+    const eligibleAfterMode = catalogView.snapshot.catalogEntries.filter((entry) => {
+      if (!catalogView.eligibleToolIds.has(entry.toolId) || !modeAllowsTarget(entry.definition.name)) return false;
+      if (entry.exposure !== 'deferred' || directNames.has(entry.definition.name)) return true;
+      return canCatalog && canInvoke;
+    });
+    catalogView.eligibleToolIds = new Set(eligibleAfterMode.map((entry) => entry.toolId));
+    catalogView.directToolIds = new Set(
+      eligibleAfterMode
+        .filter((entry) => directNames.has(entry.definition.name))
+        .map((entry) => entry.toolId),
+    );
+    const withRouters: Tool[] = [...tools];
+    if (canCatalog && !directNames.has('tool_catalog')) {
+      const definition = catalogView.snapshot.tools.find((tool) => tool.name === 'tool_catalog');
+      if (definition) withRouters.push(definition);
+    }
+    const hasRoutableDeferred = eligibleAfterMode.some(
+      (entry) => entry.exposure === 'deferred' && !directNames.has(entry.definition.name),
+    );
+    if (canInvoke && hasRoutableDeferred && !directNames.has('tool_invoke')) {
+      const definition = catalogView.snapshot.tools.find((tool) => tool.name === 'tool_invoke');
+      if (definition) withRouters.push(definition);
+    }
+
+    logger.info(
+      `[Agent] applyTurnModes: Applied ${this.resolvedModes.modes.length} mode modifier(s): ${this.resolvedModes.modes.map((m) => m.id).join(', ')}`,
+    );
+
+    return {
+      systemPrompt: modeResult.systemPrompt,
+      // A NEW object rather than a mutation: `resolved` is the run's
+      // resolved-tools decision and the legacy reads it by destructuring at
+      // `:2328`, so a caller holding the old reference must not see it change
+      // underneath. `catalogView` is deliberately the SAME reference -- the
+      // mirroring above mutates it in place, exactly as the legacy did, and
+      // `assembleTurn` is handed this one view for the whole run.
+      resolved: { ...input.resolved, tools: withRouters },
+    };
+  }
+
+  /**
+   * Re-anchor the mode refresh to the caller's POST-PROJECTION prompt.
+   *
+   * ## Why this exists, and why it is not optional
+   *
+   * `refreshTurnSystemPrompt` rebuilds the prompt as
+   * `prefix + this.baseSystemPromptWithoutModes` (`${prefix}\n\n${base}`), and
+   * that base is captured by `applyTurnModes` -- which runs inside the seam,
+   * BEFORE `_projectModelMessages`. So without this call the stored base is the
+   * UNPROJECTED prompt, and from turn 2 onward every assembly would drop the
+   * `## Conversation Context` block the projection appended: the context would
+   * be present on turn 1 and silently gone on every turn after.
+   *
+   * A no-op when no mode is active, which is the common case and the reason it
+   * is safe for a caller that knows nothing about modes.
+   *
+   * PUBLIC because the caller is a generator that owns the projection, not
+   * because a caller may choose to skip it -- the same lift
+   * `invalidateTurnCatalogSchemaReads` (S1) exists for. The engine path never
+   * calls it, and does not need to: it performs no projection (that gap is
+   * separate and is not closed by this slice), so its base is already the whole
+   * prompt.
+   */
+  rebaseTurnSystemPrompt(projected: string): void {
+    if (this.resolvedModes === undefined) return;
+    this.baseSystemPromptWithoutModes = projected;
+  }
+
+  /**
    * Plan 610 A3-2b7 (S1): the catalog half of the schema-read protocol --
    * drop what compaction took out of provider-visible history.
    *
@@ -948,13 +1164,28 @@ export class duyaAgent implements AgentRuntime {
   async beginTurnAssembly(request: RunAssemblyRequest): Promise<RunTurnAssembly> {
     const { options, prompt, appliedProfile, publisher, turnContext } = request;
 
-    const resolved = await this._resolveTools(options, appliedProfile);
-    const { registry, catalogView, tools: resolvedTools } = resolved;
+    const resolvedBase = await this._resolveTools(options, appliedProfile);
+    const { registry, catalogView } = resolvedBase;
 
-    let systemPrompt = await this._buildSystemPrompt(resolvedTools, options, appliedProfile);
+    let systemPrompt = await this._buildSystemPrompt(resolvedBase.tools, options, appliedProfile);
     systemPrompt = systemPrompt
       ? `${systemPrompt}\n\n${TOOL_GROUP_PROGRESS_INSTRUCTIONS}`
       : TOOL_GROUP_PROGRESS_INSTRUCTIONS;
+
+    // Plan 610 A3-2b9 (S4b-1): the run's mode modifiers, applied HERE so an
+    // engine-driven run advertises the same prompt and tool surface the legacy
+    // does. The legacy's inline block at `:2457` was removed and it reads these
+    // values off this handle instead, so there is one implementation and one
+    // call site -- see `applyTurnModes`.
+    const moded = await this.applyTurnModes({
+      options,
+      turnContext,
+      systemPrompt,
+      resolved: resolvedBase,
+    });
+    systemPrompt = moded.systemPrompt;
+    const resolved: ResolvedTurnTools = moded.resolved;
+    const resolvedTools: Tool[] = resolved.tools;
 
     const { canUseTool } = buildPermissions(
       {
@@ -2454,121 +2685,27 @@ export class duyaAgent implements AgentRuntime {
     systemPromptContent = projected.systemPromptContent;
     let messages = projected.messages;
 
-    // === Plan 224 Phase 3+4: apply declarative mode modifiers ===
-    // Modifier-paradigm modes (conductor, plan-task) inject tools,
-    // prepend prompt prefixes, and merge toolUseContextPatch on top
-    // of the profile-resolved base. Orchestrator-paradigm modes
-    // (research) are dispatched earlier via `_dispatchOrchestratorMode`
-    // and never reach this path.
+    // Plan 610 A3-2b9 (S4b-1): re-anchor the mode refresh to the PROJECTED
+    // prompt. The seam applied modes before this projection ran, so the base it
+    // stored is the unprojected one; without this the per-turn rebuild would
+    // drop `## Conversation Context` from every turn after the first. A no-op
+    // when no mode is active. See `rebaseTurnSystemPrompt`.
+    this.rebaseTurnSystemPrompt(systemPromptContent);
+
+    // Plan 610 A3-2b9 (S4b-1): the mode block that used to live here is GONE.
+    // It ran at `:2457`, after `beginTurnAssembly` at `:2312`, so the seam
+    // resolved a turn without ever asking a mode anything -- and because
+    // `this.resolvedModes` / `modeCtx` / `baseSystemPromptWithoutModes` are
+    // assigned only by that block, the per-turn refresh short-circuited too
+    // and an engine-driven run advertised no prefix and no injected tool.
     //
-    // The resolved modes + ctx are stored on `this` so the per-turn
-    // refresh loop below can re-evaluate function-form prompt prefixes
-    // (e.g. conductor's anti-slop section) against the latest
-    // `widgetStyleHistory` without re-running `onEnter` hooks.
-    const activeModeIds = collectActiveModes(options ?? {});
-    this.resolvedModes = activeModeIds.length > 0
-      ? modeModifierRegistry.resolve(activeModeIds)
-      : undefined;
-    if (this.resolvedModes && this.resolvedModes.modes.length > 0) {
-      // Capture the pre-mode system prompt BEFORE applyModes applies
-      // prefixes. The per-turn refresh loop re-evaluates function-form
-      // prefixes against this base each turn.
-      this.baseSystemPromptWithoutModes = systemPromptContent;
+    // `applyTurnModes` now runs inside `beginTurnAssembly`, and this generator
+    // reads the result off the handle: `systemPromptContent` is
+    // `runAssembly.systemPrompt` (`:2344`) and `tools` is the mode-applied list
+    // destructured from `runAssembly.resolved.tools` (`:2328`). Both are
+    // already in scope and already mode-applied -- no local shadow here, and
+    // no second application.
 
-      // Build the mode context. `state` is pre-populated with fields
-      // modes need to read in their hooks / prompt builders:
-      //  - conductorCanvasId: passed by the frontend (4-level priority
-      //    resolution in ChatView.handleConductorChange)
-      //  - widgetStyleHistory: the agent's rolling anti-slop history
-      this.modeCtx = {
-        sessionId: turnContext.sessionId ?? '',
-        workingDirectory: turnContext.workingDirectory ?? '',
-        state: {
-          conductorCanvasId: options?.conductorCanvasId,
-          widgetStyleHistory: this.widgetStyleHistory,
-        },
-      };
-
-      // Build base ToolRegistration[] from the profile-filtered tools.
-      // The registry holds the executors; we look them up by name.
-      const baseToolRegistrations: ToolRegistration[] = tools.map((t) => ({
-        definition: t,
-        executor: registry.getExecutor(t.name)!,
-      }));
-
-      const modeResult = await applyModes({
-        basePrompt: systemPromptContent,
-        baseTools: baseToolRegistrations,
-        baseToolUseContext: undefined,
-        ctx: this.modeCtx,
-        resolved: this.resolvedModes,
-      });
-
-      // Register injected tool executors into the registry so the
-      // streaming executor can dispatch them. Tools that were already
-      // registered (e.g. by an earlier call) are skipped.
-      for (const tr of modeResult.tools) {
-        if (!registry.has(tr.definition.name)) {
-          registry.register(tr.definition, tr.executor);
-        }
-      }
-
-      // Update the LLM-facing tool list and system prompt with the
-      // mode-applied versions.
-      tools = modeResult.tools.map((t) => t.definition);
-      systemPromptContent = modeResult.systemPrompt;
-
-      // applyModes filters the direct tool list. Mirror those decisions in
-      // the catalog too, or a deferred target could bypass a mode block via
-      // tool_invoke. Router wrappers are infrastructure, so a mode allowlist
-      // does not need to name them; explicit mode blocks still apply.
-      const modeToolPolicy = this.resolvedModes.tools;
-      const modeAllowsTarget = (name: string): boolean =>
-        modeToolPolicy.overrideFilter || (
-          !modeToolPolicy.blocked.includes(name) &&
-          (modeToolPolicy.allowed === null || modeToolPolicy.allowed.includes(name))
-        );
-      const modeAllowsRouter = (name: string): boolean =>
-        modeToolPolicy.overrideFilter || !modeToolPolicy.blocked.includes(name);
-      const canCatalog =
-        isToolVisible('tool_catalog', 'eager', EMPTY_DISCOVERED, constraints) &&
-        modeAllowsRouter('tool_catalog');
-      const canInvoke =
-        isToolVisible('tool_invoke', 'eager', EMPTY_DISCOVERED, constraints) &&
-        modeAllowsRouter('tool_invoke');
-      const directNames = new Set(tools.map((tool) => tool.name));
-      const eligibleAfterMode = catalogView.snapshot.catalogEntries.filter((entry) => {
-        if (!catalogView.eligibleToolIds.has(entry.toolId) || !modeAllowsTarget(entry.definition.name)) return false;
-        if (entry.exposure !== 'deferred' || directNames.has(entry.definition.name)) return true;
-        return canCatalog && canInvoke;
-      });
-      catalogView.eligibleToolIds = new Set(eligibleAfterMode.map((entry) => entry.toolId));
-      catalogView.directToolIds = new Set(
-        eligibleAfterMode
-          .filter((entry) => directNames.has(entry.definition.name))
-          .map((entry) => entry.toolId),
-      );
-      if (canCatalog && !directNames.has('tool_catalog')) {
-        const definition = catalogView.snapshot.tools.find((tool) => tool.name === 'tool_catalog');
-        if (definition) tools.push(definition);
-      }
-      const hasRoutableDeferred = eligibleAfterMode.some(
-        (entry) => entry.exposure === 'deferred' && !directNames.has(entry.definition.name),
-      );
-      if (canInvoke && hasRoutableDeferred && !directNames.has('tool_invoke')) {
-        const definition = catalogView.snapshot.tools.find((tool) => tool.name === 'tool_invoke');
-        if (definition) tools.push(definition);
-      }
-
-      logger.info(
-        `[Agent] streamChat: Applied ${this.resolvedModes.modes.length} mode modifier(s): ${this.resolvedModes.modes.map((m) => m.id).join(', ')}`,
-      );
-    } else {
-      // No active modes 鈥?clear stored state so per-turn refresh is a no-op.
-      this.resolvedModes = undefined;
-      this.modeCtx = undefined;
-      this.baseSystemPromptWithoutModes = undefined;
-    }
 
     let progressToolName = PROGRESS_UPDATE_TOOL_NAME;
     while (tools.some((tool) => tool.name === progressToolName)) {
