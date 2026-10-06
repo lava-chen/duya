@@ -177,6 +177,64 @@ const FULL_PORTS: RunEnginePorts = {
 export const OPTIONAL_PORTS_ARE_OPTIONAL = FULL_PORTS;
 
 // ---------------------------------------------------------------------------
+// The cutover tripwires for the two ports the flip has to make REQUIRED.
+//
+// ## What these two lines are FOR, since they assert nothing that reads like an
+// assertion
+//
+// `RunEnginePorts.turnOutput` and `.compaction` are optional today and are
+// supposed to become required when the engine starts driving a turn. Nothing
+// enforces that, and the failure is silent in the worst way: the flip makes them
+// optional-forever, a host omits one, and the engine runs a whole session with
+// no compaction and no durable tool rows while every event it publishes looks
+// correct.
+//
+// These constants are the enforcement. Each one assigns an EMPTY object to a
+// single-field PICK of the port binding, which typechecks ONLY while that field
+// is optional:
+//
+//   - optional `turnOutput?: TurnOutputPort` -> `Pick<..., 'turnOutput'>` is
+//     `{ turnOutput?: ... }`, so `{}` is assignable and this compiles;
+//   - required `turnOutput: TurnOutputPort`  -> the pick demands the field, `{}`
+//     is not assignable, and `npm run typecheck:runtime` fails HERE.
+//
+// So the flip does not have to remember to delete anything: making the field
+// required turns this file red at a line that names the field, and the red IS
+// the reminder. That is the same self-policing property the `@ts-expect-error`
+// cases above rely on, with the polarity reversed -- those go unused when a
+// contract WIDENS, these stop compiling when a contract TIGHTENS.
+//
+// ## Why the ports stay optional rather than being flipped now
+//
+// Measured, not assumed: making both required costs THREE files and no
+// composition at all --
+//
+//   - `packages/agent/src/**`, including every test: 0 errors;
+//   - `src/engine/port-guards.ts` (this file), one minimal binding;
+//   - `tests/anti-dead-loop-hard-stop.test.ts`, one minimal binding;
+//   - `tests/engine-hook-loop-facts.test.ts`, one minimal binding.
+//
+// The production composition already binds both unconditionally --
+// `composeLegacyRunSources` passes `compaction: host.compaction` and a derived
+// `turnOutput` object -- and `LegacyRunHost.compaction` is itself required. So
+// nothing is blocked by the `?`; flipping it early would only delete the
+// tripwire and stop the three minimal bindings from proving that the engine is
+// still drivable without the two ports it will need. That is the flip's change
+// to make, not this slice's.
+// ---------------------------------------------------------------------------
+
+/** Delete this when `turnOutput` becomes required; the build will say so first. */
+const TURNOUTPUT_IS_OPTIONAL_TILL_CUTOVER: Pick<RunEnginePorts, 'turnOutput'> = {};
+
+/** Delete this when `compaction` becomes required; the build will say so first. */
+const COMPACTION_IS_OPTIONAL_TILL_CUTOVER: Pick<RunEnginePorts, 'compaction'> = {};
+
+export const CUTOVER_TRIPWIRES_ARE_ARMED = [
+  TURNOUTPUT_IS_OPTIONAL_TILL_CUTOVER,
+  COMPACTION_IS_OPTIONAL_TILL_CUTOVER,
+] as const;
+
+// ---------------------------------------------------------------------------
 // Distributive key probes.
 //
 // `keyof (A | B)` yields only the keys A and B SHARE, so a plain `keyof` over a

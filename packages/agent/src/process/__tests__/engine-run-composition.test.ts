@@ -452,17 +452,39 @@ async function driveComposedRun(turns: readonly ('tool' | 'text')[]): Promise<Ob
 // ============================================================================
 
 describe('composeLegacyRunPorts supplies every member the engine requires', () => {
-  it('binds all six required ports, and the two that cannot be optional', async () => {
+  it('binds every port the engine reads, including the two the cutover will make required', async () => {
     const o = await driveComposedRun(['tool', 'text']);
 
     // POSITIVE evidence first: the run really executed rather than assembling a
     // bundle and being asserted on structurally.
     expect(o.requests.length).toBeGreaterThan(1);
 
-    for (const port of ['model', 'tools', 'context', 'approval', 'events', 'interTurn', 'compaction'] as const) {
+    // `turnOutput` is in this list now and was NOT in the previous version of
+    // it, which asserted "all six required ports" while naming seven of them
+    // and omitting this one. `composeLegacyRunSources` binds it
+    // unconditionally, so the assertion was free to make and the gap was not
+    // free to leave: the cutover makes this port REQUIRED, and the one test
+    // that claims to cover the composition's required members did not look at
+    // it.
+    for (const port of [
+      'model',
+      'tools',
+      'context',
+      'approval',
+      'events',
+      'interTurn',
+      'compaction',
+      'turnOutput',
+    ] as const) {
       expect(o.ports[port], `port ${port} must be supplied`).toBeDefined();
     }
-    // The two the runtime's own type cannot do without.
+    // The two that are REQUIRED in the type today, which is a statement about
+    // the type and not about the value above -- kept separate so that closing
+    // either member in `RunEnginePorts` shows up here as a type error rather
+    // than as a runtime surprise. The previous name asserted that these two
+    // "cannot be optional"; that was measured and it is false for `compaction`,
+    // which can be required at a cost of three synthetic bindings and zero
+    // compositions. See `port-guards.ts`'s cutover tripwires.
     expect(o.ports.interTurn).toBeDefined();
     expect(o.ports.compaction).toBeDefined();
   });

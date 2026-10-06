@@ -1123,6 +1123,21 @@ export interface RunEnginePorts {
    * well would perform each of them TWICE. Making it required before the cutover
    * would break every composition for no gain; making it required AT the cutover
    * is the obligation `TurnOutputPort` states in its own doc comment.
+   *
+   * ## The "would break every composition" half is MEASURED, and it is wrong
+   *
+   * Measured by making it required and diffing the compiler's output: the
+   * production composition breaks ZERO times. `composeLegacyRunSources` already
+   * binds a derived `turnOutput` unconditionally, and `buildEnginePorts` only
+   * omits it for a source that passed none. Three minimal bindings break, all
+   * of them synthetic: `port-guards.ts`, `anti-dead-loop-hard-stop.test.ts` and
+   * `engine-hook-loop-facts.test.ts`. Nothing in `packages/agent/src` is
+   * affected, tests included.
+   *
+   * So the reason to leave the `?` on is not that the change is expensive. It is
+   * that the `?` is the marker: `port-guards.ts` carries a tripwire that turns
+   * red the moment this field becomes required, and removing it now would delete
+   * the only thing that tells the flip this field is still its obligation.
    */
   readonly turnOutput?: TurnOutputPort;
   /** Present only under budget option (a). See `BudgetPort`. */
@@ -1177,6 +1192,15 @@ export interface RunEnginePorts {
    * means no transcript is ever replaced and the five compaction frames have no
    * producer at all. That cost is stated at length on `CompactionPort`, and it
    * is the obligation the cutover inherits.
+   *
+   * ## What making it required costs, measured the same way as `turnOutput`
+   *
+   * Zero compositions. `LegacyRunHost.compaction` is ALREADY required and
+   * `composeLegacyRunSources` passes it straight through, so this `?` is the
+   * only place the obligation can be forgotten, and the three synthetic bindings
+   * above are the whole cost. The reason it stays is the same as
+   * `turnOutput`'s: the `?` is the marker, and `port-guards.ts` turns red when
+   * it is closed.
    */
   readonly compaction?: CompactionPort;
   /**
