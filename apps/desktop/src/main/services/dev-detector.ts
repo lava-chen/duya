@@ -1,11 +1,39 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import * as http from 'http';
-import { app } from 'electron';
 import { initLogger, LogComponent } from '../logging/logger';
 
 const logger = initLogger({ level: 'WARN' });
-const isDev = !app.isPackaged;
+
+interface ElectronApp {
+  isPackaged: boolean;
+}
+
+/**
+ * Electron is OPTIONAL here: this module is inside the value-import closure of
+ * the headless control plane's server entry
+ * (`01-headless-control-plane.md` §2.1). A module-scope
+ * `import { app } from 'electron'` is evaluated when the module is and throws
+ * THERE, taking the whole graph with it, so `app` is resolved through a
+ * guarded require.
+ */
+function electronApp(): ElectronApp | undefined {
+  try {
+    const { app } = require('electron') as { app?: ElectronApp };
+    return app;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A headless control plane runs from a checkout or an install tree, never from
+ * a packaged Electron app, so "not packaged" is the truthful answer and keeps
+ * this detector on its dev branch. Read at module scope on purpose: it was
+ * `!app.isPackaged` there before, and moving it would change when the value is
+ * sampled.
+ */
+const isDev = !electronApp()?.isPackaged;
 
 export function getNodeExecutable(): string {
   // Platform-specific candidate lists. On Windows we look for node.exe in
