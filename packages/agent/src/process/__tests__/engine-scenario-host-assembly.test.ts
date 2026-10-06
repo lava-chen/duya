@@ -290,6 +290,16 @@ async function runThroughRealAssembly(options: RunOptions): Promise<Composition>
       },
     },
     deferFragment(_fragment: TransientContextFragment) {},
+    // Required since A3-2a, and this harness is NOT the place to exercise it:
+    // these scenarios assert the drain translation, and a source that really
+    // compacted would replace the transcript out from under them. `skip` is the
+    // honest answer for a transcript nobody is testing the size of, and it is
+    // the same shape the engine already handles as a declined pass.
+    compaction: {
+      decide: () => Promise.resolve({ kind: 'skip', reason: 'not under test' } as const),
+      compact: () => Promise.resolve({ kind: 'declined', reason: 'not under test' } as const),
+      nextCompactionId: () => 'cmp-scenario',
+    },
   });
 
   // The event port is the adapter's own, so wrap it to RECORD what the engine
