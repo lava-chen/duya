@@ -1616,12 +1616,33 @@ export interface EngineExit {
  * `assistant.message_finalized` (so a contributor sees the final message rather
  * than a run still changing).
  *
- * `before_turn` / `before_model` / `before_finalize` are the engine's OWN
- * phases and have no config-hook event behind them yet -- the legacy's
- * `PreTurn` / `PreFinalize` / `PostTurn` run on the mode coordinator's loop bus
- * (`hooks/loop.ts`), which is a later slice. Leaving them unmapped is stated
- * rather than implied: a contributor registered for them is called and has
- * nothing to contribute from the legacy side yet.
+ * ## The three phases with no config-hook event behind them YET
+ *
+ * `before_turn`, `before_model` and `before_finalize` are the engine's OWN
+ * phases, and nothing in `packages/agent/src/process/hook-source.ts` maps them:
+ * the legacy's `PreTurn` / `PreFinalize` / `PostTurn` are `LoopHookEvent`s
+ * dispatched on the loop bus (`hooks/loop.ts`), not config-runner events, and the
+ * bus is not something the extension port can reach. Leaving them unmapped is
+ * stated rather than implied: a contributor registered for them is called and
+ * has nothing to fire from the legacy side yet.
+ *
+ * ## Two of those three events ARE dispatched today
+ *
+ * Worth being precise, because the previous version of this comment implied the
+ * whole trio was unwritten. All four loop-bus events have live dispatch sites
+ * TODAY -- re-derive them with:
+ *
+ *   grep -rn "loopHooks.dispatch('" packages/agent/src/agent
+ *
+ * which yields `PreTurn` and `PostToolUse` in `DuyaAgent.streamChat`, and
+ * `PreFinalize` and `PostTurn` in `SessionFinalizer.finalize`. What is missing is
+ * not the dispatch but a phase to hang it on, and the mapping is not one-to-one:
+ * `before_turn` and `before_finalize` are the natural homes for `PreTurn` and
+ * `PreFinalize`, but `PostTurn` has NO engine phase at all -- the run's last
+ * phase is `after_finalize`, which fires in the engine's `finally` and is
+ * therefore reached by FAILED and CANCELLED runs too, whereas `PostTurn` is
+ * dispatched only on the success path. Mapping `PostTurn` onto `after_finalize`
+ * unchanged would fire it on runs the legacy never fired it for.
  */
 export type ExtensionPhase =
   | 'on_start'
@@ -2159,15 +2180,14 @@ export type CompactionDecision =
  * `replacement` is `readonly ModelMessage[] | null`, and it is null for every
  * arm except `replaced`. That is the whole reason this is a port rather than an
  * extension phase, and the measurement is in this package's own engine:
- * `ExtensionPhase` has five values (`ports.ts:1432-1437`) and the one that runs
- * last, `before_finalize`, can only VETO -- `#shouldStop` reads
+ * `ExtensionPhase` has SEVEN values (see the union in this file), and the only
+ * one that can influence the run's OUTCOME, `before_finalize`, can only VETO --
+ * `RunEngineImpl`'s `#shouldStop` reads
  * `contribution.binding && 'veto' in contribution.content` and returns `null`
- * to keep the loop open (`#shouldStop`, `run-engine.ts:1151-1155`). A veto is a
- * DECISION to run again. Compaction is not a decision to run again; it is a NEW
- * INPUT for
- * the run that continues, and it has to reach the next
- * `ports.context.assemble(...)` (`run-engine.ts:421`) rather than the next
- * loop iteration. No member of `ExtensionContribution` can carry a transcript:
+ * to keep the loop open. A veto is a DECISION to run again. Compaction is not a
+ * decision to run again; it is a NEW INPUT for the run that continues, and it
+ * has to reach the next `ports.context.assemble(...)` rather than the next loop
+ * iteration. No member of `ExtensionContribution` can carry a transcript:
  * its `content` is a transient fragment or a veto (`ports.ts:1443`), and a
  * fragment is a string that gets folded into one message, not a replacement
  * for the history.
@@ -2255,10 +2275,10 @@ export type CompactionProgress =
  *
  * ## Why this is NOT an extension phase
  *
- * Measured, and the reason is the veto. `ports.extensions` has five phases and
+ * Measured, and the reason is the veto. Of `ExtensionPhase`'s SEVEN values,
  * `before_finalize` is the only one that can affect the OUTCOME; it does so by
- * VETO, which `#shouldStop` turns into "do not stop" (`run-engine.ts:1151-1155`).
- * Compaction needs two things a veto cannot express:
+ * VETO, which `RunEngineImpl`'s `#shouldStop` turns into "do not stop" by
+ * returning `null`. Compaction needs two things a veto cannot express:
  *
  *  1. **replace an input, not a decision.** A veto re-runs the same turn with
  *     the same transcript. Compaction changes what the next
