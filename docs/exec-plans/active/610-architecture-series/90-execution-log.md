@@ -205,14 +205,59 @@ A1 修好了判据,**门禁变准了,于是它开始报出真违规** —— 而
 > 这两条的共同形状:**门禁在断言"当前结论"而不是"判据本身"时,就再也无法被修复。**
 > 与 610 §4 第 5 条同源 —— 门禁必须**能红也能绿**。
 
+### A3 第三轮:不是"缺实现",是"缺一次重构"(未提交代码)
+
+按裁决去实现 `ExecutionChannel` 运行体,**结果发现前提再次被推翻 —— 而且这次是好消息**:
+
+> **`RunEngineImpl` 已经存在,而且它就是一个真实的循环拥有者。**
+
+实测确认:
+
+| 事实 | 证据 |
+| --- | --- |
+| `packages/agent-runtime` **从不** import `@duya/agent` | 全包搜索 `from '@duya/agent'` **零命中**;跨包只有 `@duya/agent-protocol` 与 `@duya/agent-core` |
+| 它**已经有完整循环** | `run-engine.ts:355` `for (let turn = 1; ; turn++)`、`:619` `ports.model.stream`、`:1014` `ports.tools.dispatch`、`:1086` `ports.tools.drain` —— 正是 `ports.ts:26-31` 点名的四个决策点 |
+| 端口已绑定 | `buildEnginePorts`(`run-engine-ports.ts:264`)绑定 model/tools/context/approval/events/sideEffects |
+| `workerImplementsExecutionChannel()` 返回 false | 那是**名字检查**,不是实质 —— 实质已经在了 |
+
+**所以"实现 `ExecutionChannel`"这件事已经做完了。剩下的不是造实现,是把遗留循环改写成端口调用。**
+
+### 剩余工作的精确尺寸(实测)
+
+- 循环体 `DuyaAgent.ts:1825-3300` ≈ **1475 行**
+- 循环内有 **36** 个 `this.<member>` 协作者(压缩协调器、timeline/持久化写、`llmClient`、模式协调器、mailbox claim、fork turn、视觉分析……)
+- 循环内有 **16** 处压缩调用点(`ports.ts:1048-1053`)
+- `TurnOutputPort` 与 `CompactionPort` 被声明为**可选,正因为遗留循环仍在做这些副作用**;在遗留循环停手之前绑定它们,每个副作用会**做两遍**(`ports.ts:1019-1053`)。**切换是全有或全无。**
+- **11** 行 drain-carryover 必须同批落地(`agent-process-entry.ts:3040-3042`)
+
+代码里的注释与这个结论完全一致(`agent-process-entry.ts:3038-3046`):
+> "That change is a REFACTOR of `DuyaAgent.streamChat` -- its body has to become port calls,
+> because `packages/agent-runtime` may not import `packages/agent` -- and it is the whole of
+> the remaining cutover."
+
+### 这个尝试已经失败过一次
+
+入口此前对每次 `chat:start` 跑 `RunEngineImpl`,结果被作为 phantom run 移除
+(`agent-process-entry.ts:2989-3008`);`headless-run-host.ts:22-26` 是那次假绿的记录。
+**所以这不是"没人试过",是"试过、失败了、原因已记录"。**
+
+### 未提交任何代码
+
+树干净在 `fbc055d7`。没有动 baseline、没有动 `scripts/architecture/`、没有碰共享检出。
+
+### 行为证据的一个诚实缺口
+
+`packages/agent-runtime/test/run-engine-loop.test.ts`(20 例)确实覆盖了引擎自己的循环与多轮,
+但**它证明的是引擎的循环,不是产品的轮次** —— 产品轮次仍是 `DuyaAgent.streamChat`。
+**今天全仓库没有任何测试跑过一次真实的多轮工具报错轮次。** 这是切换前最该补的东西。
+
 ### A3 的未决(需要裁决)
 
 | 问题 | 为什么必须先答 |
 | --- | --- |
-| A3 是继续"让 G7 变绿",还是改为"让 G7 **可绿**" —— 接受绿会随 S2 的循环迁移一起来,把 A3 花在**实现缺失的 `ExecutionChannel`** 上? | 其余全部工作都压在这个判断上。工厂接缝已证明是假解 |
-| 选子进程边界,还是补 `ExecutionChannel`? | 前者改启动路径,后者是 S2 本体;周期与风险差一个量级 |
-
-
+| 遗留循环的改写是**一个原子切片**,还是能分批? | `turnOutput` 与 `compaction` 在遗留循环停手前不能绑定 —— `ports.ts:1019-1053` 明说会**每个副作用做两遍**。分批保证重复执行,所以这是全有或全无 |
+| 切换前要不要先补**真实多轮 + 工具报错**的测试? | 今天的测试证明的是**引擎的循环,不是产品的轮次**;产品轮次仍走 `DuyaAgent.streamChat`,全仓库没有一次真实轮次的覆盖。上一轮失败(phantom run)的教训是:门禁能绿而行为已经变了 |
+| 失败兜底:若这次改写仍失败,退回哪条路? | 引擎已经存在且干净,所以**不需要**子进程边界了 —— 那是"没有引擎"时的退路 |
 
 ### 变异证明抓到了我自己
 
