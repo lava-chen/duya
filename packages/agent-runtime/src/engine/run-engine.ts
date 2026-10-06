@@ -1970,7 +1970,50 @@ export class RunEngineImpl implements RunEngine {
       await this.#commitContributions(ctx, committed);
     }
 
-    return { reason: 'completed' };  }
+    // ── A mode's `onExit`: the legacy's `runExitHooks` slot ──────────────────
+    // BETWEEN the `before_commit` contribution and its commit, which is the
+    // legacy's own order and not an arbitrary one: `SessionFinalizer.finalize`
+    // runs `PostTurn` -> `runExitHooks` -> `_commitMessages`
+    // (`SessionFinalizer.ts:226`, `:235`, `:245`), so a mode's teardown observes
+    // the `PostTurn` effects and precedes the durable write of them. Folding it
+    // in after the commit would let a mode read a timeline the run has already
+    // persisted; folding it in before the contribution would invert both.
+    //
+    // NOT a phase, and the reason is measured rather than stylistic: a mode's
+    // `onExit` returns `void` and its real work is a host side effect
+    // (`computer-use-mode.ts:199-210` clears a per-session trigger and disables
+    // the OS bridge). There is no `ExtensionContribution` that means "nothing,
+    // but I ran" -- expressing it as one would be a contribution whose value is
+    // discarded, which is the `ExtensionPort` doc's own failure. See
+    // `ModeExitPort` for the full enumeration of why `after_finalize` is not
+    // this channel despite a comment in `DuyaAgent.ts:961` saying it is.
+    //
+    // SUCCESS PATH ONLY, and that is what makes it not `after_finalize`:
+    // `runExitHooks` is reached from `finalizeSuccess` alone
+    // (`SessionFinalizer.ts:235`); `finalizeAbort` and `finalizeStreamError`
+    // never call it. A mode that disables an OS bridge on exit must not do so for
+    // a run that failed before finishing a turn.
+    //
+    // FAIL-OPEN, reproducing `SessionFinalizer.ts:233-241` rather than
+    // delegating the policy: a mode whose teardown throws must not replace a
+    // `completed` terminal the run has already earned. The engine owns the
+    // outcome, so the engine swallows this -- the same rule 3 applies to every
+    // extension phase, and the same reason `#commitContributions` above is the
+    // single documented exception (there the phase's output IS the record).
+    if (ctx.ports.modeExit !== undefined) {
+      try {
+        await ctx.ports.modeExit.onRunExit();
+      } catch {
+        // Deliberately silent. The legacy logs this at WARN through
+        // `electron/logging/logger.ts`, which `@duya/agent-runtime` may not
+        // import (G1), and the engine has no logger of its own. The throw is
+        // swallowed rather than surfaced because the run's answer is already
+        // produced: a mode's teardown failing is not the run failing.
+      }
+    }
+
+    return { reason: 'completed' };
+  }
 
   // ── helpers ───────────────────────────────────────────────────────────────
 

@@ -67,6 +67,10 @@ import type {
   // it stays optional is that a run with no hooks is a legitimate run: the
   // engine reads `?? []` and runs none, which is what happened before S4a.
   ExtensionPort,
+  // Plan 610 D1 -- the mode lifecycle's run-boundary half. Optional, because a
+  // run that resolved no `kind: 'message'` mode has nothing to exit; see
+  // `ModeExitPort` for why it is a port rather than an `after_finalize` phase.
+  ModeExitPort,
   // Plan 610 A3-1 -- inter-turn input. Required, unlike the two optional
   // sources above, and `LegacyEngineSources.interTurn` says why.
   InterTurnCheckpoint,
@@ -266,6 +270,21 @@ export interface LegacyEngineSources {
    */
   readonly deferFragment?: (fragment: TransientContextFragment) => void;
   /**
+   * Runs the run's modes' `onExit` hooks. See `ModeExitPort`.
+   *
+   * OPTIONAL, and omitted when absent rather than defaulted to a no-op, for the
+   * same reason `extensions` below is: a bound-but-empty port would claim a
+   * lifecycle was run when nothing ran, and the engine's `!== undefined` check
+   * already reads the difference correctly.
+   *
+   * The implementation is the legacy's own `runExitHooks`
+   * (`modes/apply-modes.ts:126`) reached through `duyaAgent`, which already
+   * holds the resolved modes and the mode context as private state assigned in
+   * `applyTurnModes`. A second copy of the iteration would be a second
+   * authority for which modes a run activated.
+   */
+  readonly modeExit?: ModeExitSources;
+  /**
    * Asks whether anything arrived for this run since the last ask.
    *
    * REQUIRED, and the only source here with no "omit it" story. The engine's
@@ -388,6 +407,23 @@ export interface InterTurnSources {
 
 /** The one thing the adapter needs from the legacy's claim. */
 export type InterTurnClaim = InterTurnSources['claim'];
+
+/**
+ * Runs the run's `kind: 'message'` modes' `onExit` hooks, once, on the success
+ * path. See `ModeExitPort` for why this is a port and not an extension phase.
+ *
+ * One method, and it is the legacy's own `runExitHooks` reached through
+ * `duyaAgent` rather than a reimplementation: the agent already holds the
+ * resolved modes and the mode context, and a second copy of the iteration would
+ * be a second authority for which modes a run activated.
+ */
+export interface ModeExitSources {
+  /**
+   * `runExitHooks(resolvedModes, modeCtx)`. MAY throw; `ModeExitPort` states that
+   * the engine swallows it, reproducing `SessionFinalizer.ts:233-241`.
+   */
+  readonly onRunExit: () => Promise<void>;
+}
 
 /**
  * Build `InterTurnInputPort` over the legacy's claim.
@@ -861,6 +897,12 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
   const compaction: CompactionPort = buildCompactionPort(sources.compaction);
   const extensions = sources.extensions;
   const command = sources.command;
+  // Plan 610 D1. A pass-through, not a translation, and the reason is that the
+  // only vocabulary involved is the host's: the source is already
+  // `() => Promise<void>` and the port is `() => Promise<void>`. Wrapping it
+  // would add a frame that exists only to look like the other builders.
+  const modeExit: ModeExitPort | undefined =
+    sources.modeExit === undefined ? undefined : { onRunExit: sources.modeExit.onRunExit };
 
   return {
     model,
@@ -887,6 +929,10 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
     // surface that answers nothing, which is indistinguishable from "this host
     // has no commands" -- and the engine's `?.` already handles the absence.
     ...(command === undefined ? {} : { command }),
+    // Plan 610 D1. Same omitted-not-empty treatment as `command` above: a run
+    // whose host supplied no `modeExit` source must be observably a run that
+    // never exited a mode, not a run that exited zero modes on purpose.
+    ...(modeExit === undefined ? {} : { modeExit }),
     // All-or-nothing, for the same reason `sideEffects` is: half a port is a
     // port whose missing half is indistinguishable from one that was never
     // asked. `finishTurn` without `recordToolResult` would report counts for

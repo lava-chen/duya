@@ -1202,6 +1202,30 @@ export interface RunEnginePorts {
    * file's contracts exist to make unrepresentable.
    */
   readonly interTurn: InterTurnInputPort;
+  /**
+   * Where a mode's run-boundary `onExit` hooks are run. See `ModeExitPort`.
+   *
+   * OPTIONAL, and for a different reason than `turnOutput` / `compaction` above.
+   * Those are optional *while the legacy still drives*, because binding them
+   * today performs their effects twice. This one has the same window, so the
+   * same treatment applies: the legacy's `SessionFinalizer` still runs
+   * `runExitHooks` (`SessionFinalizer.ts:235`), and a composition that bound
+   * this port would exit every mode twice once the engine drives.
+   *
+   * It is NOT required, and the asymmetry with `interTurn` above is the point
+   * rather than an oversight. A missing `interTurn` loses the USER's mid-run
+   * correction, and no frame reports it -- hence a compile error. A missing
+   * `modeExit` loses a mode's teardown side effect, and a run with no active
+   * `kind: 'message'` mode has nothing to lose: `runExitHooks` iterates
+   * `resolved.modes` and a run that resolved none is a no-op even in the legacy
+   * (`SessionFinalizer.ts:233` guards on `resolvedModes && modeCtx`). Forcing
+   * every composition to build a port that does nothing would buy a type error
+   * in exchange for one, and would be a worse trade than the silent case.
+   *
+   * The cutover is what makes it required, for the same reason it makes
+   * `turnOutput` and `compaction` required.
+   */
+  readonly modeExit?: ModeExitPort;
 }
 
 /** What a host needs in order to run one execution to completion. */
@@ -2774,4 +2798,79 @@ export interface InterTurnInputPort {
    * that proceeded without the correction.
    */
   sweep(input: InterTurnSweep): Promise<InterTurnSweepResult>;
+}
+
+// ============================================================================
+// Contract 1i -- mode exit: the run-boundary half of a mode's lifecycle
+// ============================================================================
+
+/**
+ * The host runs a mode's `onExit` hooks at the end of a successful run.
+ *
+ * ## Why this is a PORT and not an extension phase -- MEASURED, not assumed
+ *
+ * The briefing for this slice asserted that mode `onExit` "has no channel in any
+ * port, in `run-engine-ports.ts`, or in `run-composition.ts`". That half is
+ * CORRECT, and it is worth recording what the enumeration actually found, because
+ * two different subsystems both LOOK like the channel and neither is:
+ *
+ *  1. **`after_finalize` does not reach it.** `DuyaAgent.ts:961-963` says
+ *     `runExitHooks` "rides the engine's `after_finalize` phase instead". That
+ *     comment is FALSE, and reading it is how a false premise survives three
+ *     slices. `after_finalize`'s only producer is `createLegacyHookSource`
+ *     (`hook-source.ts:180-185`), whose `PHASE_EVENTS` maps that phase to the
+ *     CONFIG-hook events `Stop` and `SessionEnd`, dispatched through
+ *     `ConfigHooksRunner`. Mode `onExit` is neither: it is reached only from
+ *     `SessionFinalizer.ts:235`, and the two registries are disjoint --
+ *     `hooks/events.ts` (a `HooksSettings` file) and `modes/registry.ts` (a
+ *     `ModeModifierRegistry`). No contributor in `hook-source.ts` can name a
+ *     mode, and no mode can register a contributor. Re-pointing this at
+ *     `after_finalize` would have produced a green test and a silently dead
+ *     capability -- the same failure `hook-source.ts`'s header already records
+ *     for `PostToolUseFailure`, in the opposite direction.
+ *  2. **`before_commit` is the right POSITION but the wrong vocabulary.** The
+ *     ordering below is exactly the legacy's, and it is why this was considered
+ *     as a phase. But a phase's payload is `ExtensionContribution` -- text to
+ *     commit or a veto to read -- and a mode's `onExit` is neither: it returns
+ *     `void`, and its real work is a side effect on host state
+ *     (`computer-use-mode.ts:199-210` clears a per-session trigger and disables
+ *     the OS bridge). Forcing it through a phase would mean inventing a
+ *     contribution shape whose only correct value is "nothing", which is the
+ *     `ExtensionPort` doc's own "collected during assembly, never read back"
+ *     failure wearing a new name.
+ *
+ * So it is a port: a capability with no contribution, which is the same reason
+ * `InterTurnInputPort` and `RunCommandPort` are ports rather than phases.
+ *
+ * ## Position, and why it is the `before_commit` position
+ *
+ * The legacy's `SessionFinalizer.finalize` runs
+ * `pollFinalMailbox` -> `PreFinalize` -> `PostTurn` -> `runExitHooks` ->
+ * `_commitMessages` -> `SessionEnd`. This port is consulted at the same point
+ * `before_commit` is: INSIDE the run, before the commit, on the success path
+ * only. It is NOT `after_finalize`'s position, and that distinction is the whole
+ * reason this is a separate member rather than a phase on that one:
+ * `after_finalize` fires in the run's `finally`, so a FAILED and a CANCELLED
+ * run reach it too, while `runExitHooks` is reached only from `finalizeSuccess`.
+ * A mode that disables an OS bridge on exit must not do so for a run that failed
+ * before it ever finished a turn.
+ *
+ * ## Fail-open, and that is the legacy's own policy
+ *
+ * `SessionFinalizer.ts:233-241` wraps the call in a `try` and only logs. That is
+ * reproduced here by the engine, not delegated: a mode whose `onExit` throws
+ * must not fail a run that has already produced its answer, and the port has no
+ * way to say "I failed" other than by throwing.
+ */
+export interface ModeExitPort {
+  /**
+   * Run every `kind: 'message'` mode's `onExit`, in registration order.
+   *
+   * Called at most ONCE per run, and only on the success path. MAY throw; the
+   * engine treats a throw as a logged warning and lets the run end normally,
+   * because the run's answer is already produced by this point and replacing a
+   * `completed` terminal with a failure over a mode's teardown would be the
+   * engine inventing an outcome the host never asked it to decide.
+   */
+  onRunExit(): Promise<void>;
 }

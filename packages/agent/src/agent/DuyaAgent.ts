@@ -929,6 +929,54 @@ export class duyaAgent implements AgentRuntime {
   }
 
   /**
+   * Run every `kind: 'message'` mode's `onExit` hook, once, for THIS run.
+   *
+   * Plan 610 D1. ADD-ONLY: this method and its doc are the whole of this file's
+   * change. No existing statement is touched, reordered or removed, because the
+   * capability is a new door into state that already existed.
+   *
+   * ## What it is for, and why the door was missing
+   *
+   * `applyTurnModes` (`:981`) assigns `this.resolvedModes` and `this.modeCtx`,
+   * and both are private. That made the mode lifecycle's run-boundary half
+   * reachable only from `SessionFinalizer.ts:235`, i.e. only from the legacy
+   * `streamChat` path. When the driver flips, `runExitHooks` is deleted with it,
+   * and the ONLY registered `onExit` -- `computer-use-mode.ts:199-210`, which
+   * clears the per-session `computer_use_context` trigger and disables the OS
+   * context bridge -- would silently never run again.
+   *
+   * The engine could not have reached it either, and the reason is worth
+   * recording because a comment in this file claimed otherwise until this slice:
+   * `runExitHooks` does NOT ride the engine's `after_finalize` phase. That
+   * phase's only producer is `createLegacyHookSource` (`hook-source.ts:180`),
+   * whose event map is the CONFIG-hook vocabulary (`Stop`, `SessionEnd` via
+   * `ConfigHooksRunner`), while a mode's `onExit` lives in a disjoint registry
+   * (`modeModifierRegistry`). The old claim at `:961-963` has been corrected at
+   * its own call site by the port that now carries this.
+   *
+   * ## Why a method and not a widened existing one
+   *
+   * `applyTurnModes` is per-run and per-seam; `refreshTurnSystemPrompt` is
+   * per-TURN. Neither is a run-end boundary, and folding a teardown call into
+   * either would fire a mode's `onExit` at a moment the mode lifecycle does not
+   * have. A separate method is also what lets the composition bind it as a port
+   * (`run-composition.ts`) without the engine ever learning what a mode is.
+   *
+   * ## Fail-open, and why that is not this method's choice to make
+   *
+   * `SessionFinalizer.ts:233-241` wraps the call in a `try` and only logs. This
+   * method does NOT swallow: it lets a throwing `onExit` propagate, and the
+   * engine's `ModeExitPort` call site catches it. The layer that owns the run's
+   * outcome owns the policy, and duplicating the `try` here would make two
+   * places responsible for one rule. A no-op when no mode is active is not a
+   * swallow -- it is `runExitHooks` iterating an empty list.
+   */
+  async runModeExitHooks(): Promise<void> {
+    if (!this.resolvedModes || !this.modeCtx) return;
+    await runExitHooks(this.resolvedModes, this.modeCtx);
+  }
+
+  /**
    * Plan 610 A3-2b9 (S4b-1): apply the run's mode modifiers, ONCE per run.
    *
    * ## Why this was a hole in already-merged S1/S2

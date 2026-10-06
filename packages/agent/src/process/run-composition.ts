@@ -695,6 +695,23 @@ export function composeLegacyRunSources(
       },
     },
     ...(host.deferFragment === undefined ? {} : { deferFragment: host.deferFragment }),
+    // Plan 610 D1. DERIVED from the agent, and the derivation is the point: the
+    // resolved modes and the mode context are PRIVATE state assigned by
+    // `applyTurnModes` inside `beginTurnAssembly`, so the host cannot read them
+    // and `run-composition` cannot reimplement `runExitHooks` without becoming a
+    // second authority for which modes a run activated.
+    //
+    // `agent.runModeExitHooks()` is that state handed back out. It is the
+    // ADD-ONLY public method on `duyaAgent` this slice is allowed, and it adds a
+    // capability rather than changing a statement.
+    //
+    // OMITTED-when-unavailable is NOT what this does -- it is bound
+    // unconditionally, exactly like `command` below, because a composition that
+    // could silently drop a mode's teardown is the regression the port exists to
+    // prevent. The no-op case is handled INSIDE the agent: a run that resolved no
+    // `kind: 'message'` mode iterates nothing, which is the legacy's own
+    // behaviour (`SessionFinalizer.ts:233` guards, then `runExitHooks` loops).
+    modeExit: { onRunExit: () => agent.runModeExitHooks() },
     // Plan 610 A3-2b10 (S4a). Optional on the host and optional on the ports,
     // and the two are the same decision: a host that configures no hooks must
     // not be forced to build an empty `ExtensionPort` to satisfy a type, and
