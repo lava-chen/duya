@@ -17,6 +17,24 @@
     "./ipc": {
       "types": "./dist/ipc.d.ts",
       "default": "./dist/ipc.js"
+    },
+    "./renderer": {
+      "types": "./src/renderer/index.ts",
+      "default": "./src/renderer/index.ts"
+    },
+    "./renderer/*": {
+      "types": [
+        "./src/renderer/*.ts",
+        "./src/renderer/*.tsx",
+        "./src/renderer/*/index.ts",
+        "./src/renderer/*/index.tsx"
+      ],
+      "default": [
+        "./src/renderer/*.ts",
+        "./src/renderer/*.tsx",
+        "./src/renderer/*/index.ts",
+        "./src/renderer/*/index.tsx"
+      ]
     }
   },
   "scripts": {

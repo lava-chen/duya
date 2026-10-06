@@ -4,10 +4,13 @@
  * Plan 451 Phase 3: AWS Bedrock ConverseStream API protocol.
  *
  * Implements the Bedrock `converse-stream` operation with hand-rolled
- * AWS SigV4 signing (no AWS SDK dependency — uses `node:crypto` and the
- * global `fetch`). Parses SSE events and maps them onto the internal
- * `AssistantMessageEvent` flow; downstream `emit-sse.ts` lowers them
- * to the public `SSEEvent` shape consumed by `DuyaAgent`.
+ * AWS SigV4 signing (no AWS SDK dependency — uses the Web Crypto API and the
+ * global `fetch`; both are available in browsers and in Node 19+, so this
+ * module stays inside the renderer's import closure. See the SigV4 block
+ * comment below for why it is not `node:crypto`.) Parses SSE events and maps
+ * them onto the internal `AssistantMessageEvent` flow; downstream
+ * `emit-sse.ts` lowers them to the public `SSEEvent` shape consumed by
+ * `DuyaAgent`.
  *
  * Scope (Phase 3 MVP):
  *   - Text content blocks (streamed)
@@ -30,10 +33,6 @@
  */
 
 import type {
-  createHash as _createHash,
-  createHmac as _createHmac,
-} from 'node:crypto';
-import type {
   AIClient,
   AIClientOptions,
   AssistantMessage,
@@ -51,52 +50,85 @@ import { transformMessages } from './transform-messages.js';
 import { emitSSE } from './emit-sse.js';
 
 // =============================================================================
-// AWS SigV4 (hand-rolled, node:crypto only)
+// AWS SigV4 (hand-rolled, Web Crypto API)
 //
-// `node:crypto` is lazy-loaded so the file can be imported in the renderer
-// without Vite externalizing it. Vite externalizes bare `node:` specifiers
-// for browser bundles; by deferring the actual `require()` to call time we
-// keep the provider metadata reachable in the renderer while only paying
-// the Node-only cost in the main process (where Bedrock signing runs).
+// Plan 610 §3.1: the renderer reaches this file through the `@duya/ai` barrel
+// (`index.ts` -> `providers/adapters.ts` -> here), so the `node:crypto` import
+// this module used to carry put a Node built-in in the desktop renderer's import
+// closure and failed gate G10. WebCrypto supplies the same two primitives in
+// browsers and in Node >= 19, which is the same trade `auth/oauth/pkce.ts` and
+// `auth/oauth/device-code.ts` already make for PKCE, so no injected dependency
+// was introduced.
+//
+// The cost is that `subtle` is async-only: the signing helpers and
+// `signBedrockRequest` return promises. The single production call site is
+// inside the async `streamChat` generator, and the signing tests already
+// awaited the result, so the async-ness changes no call site's behaviour.
+// `globalThis.crypto` is available without an import, which is what keeps this
+// module free of any specifier a browser bundler would have to externalize.
 // =============================================================================
 
-type CreateHash = typeof _createHash;
-type CreateHmac = typeof _createHmac;
+/**
+ * The ambient WebCrypto handle, or a throw naming the real requirement.
+ *
+ * Deliberately returns the value rather than naming `SubtleCrypto` as a type:
+ * this package compiles with `lib: ["ES2022"]` and no DOM lib, so the bare
+ * global type name is not in scope here, while the value is.
+ */
+function subtleCrypto() {
+  const ambient = globalThis.crypto;
+  if (!ambient?.subtle) {
+    throw new Error(
+      'Web Crypto (globalThis.crypto.subtle) is unavailable. AWS SigV4 signing needs a secure browser context or Node 19+.',
+    );
+  }
+  return ambient.subtle;
+}
 
-/** Lazy require — throws a clear error if called outside Node. */
-function nodeCrypto(): { createHash: CreateHash; createHmac: CreateHmac } {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const mod = require('node:crypto') as typeof import('node:crypto');
-  return { createHash: mod.createHash, createHmac: mod.createHmac };
+const utf8 = new TextEncoder();
+
+/** Lowercase hex of raw bytes. */
+function toHex(bytes: Uint8Array): string {
+  let out = '';
+  for (const b of bytes) out += b.toString(16).padStart(2, '0');
+  return out;
 }
 
 /** SHA-256 hex digest of `body`. */
-function sha256Hex(body: string | Uint8Array): string {
-  const { createHash } = nodeCrypto();
-  return createHash('sha256').update(body).digest('hex');
+async function sha256Hex(body: string | Uint8Array): Promise<string> {
+  const subtle = subtleCrypto();
+  const bytes = typeof body === 'string' ? utf8.encode(body) : body;
+  return toHex(new Uint8Array(await subtle.digest('SHA-256', bytes)));
 }
 
 /** HMAC-SHA256 of `data` with `key`. */
-function hmac(key: Buffer | string, data: string): Buffer {
-  const { createHmac } = nodeCrypto();
-  return createHmac('sha256', key).update(data).digest();
+async function hmac(key: Uint8Array | string, data: string): Promise<Uint8Array> {
+  const subtle = subtleCrypto();
+  const raw = typeof key === 'string' ? utf8.encode(key) : key;
+  const signingKey = await subtle.importKey(
+    'raw',
+    raw,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  return new Uint8Array(await subtle.sign('HMAC', signingKey, utf8.encode(data)));
 }
 
 /**
  * Derive the SigV4 signing key for a given (date, region, service) tuple.
  * Standard AWS SigV4 algorithm: kDate → kRegion → kService → kSigning.
  */
-function getSigningKey(
+async function getSigningKey(
   secretAccessKey: string,
   dateStamp: string,
   region: string,
   service: string,
-): Buffer {
-  const kDate = hmac(`AWS4${secretAccessKey}`, dateStamp);
-  const kRegion = hmac(kDate, region);
-  const kService = hmac(kRegion, service);
-  const kSigning = hmac(kService, 'aws4_request');
-  return kSigning;
+): Promise<Uint8Array> {
+  const kDate = await hmac(`AWS4${secretAccessKey}`, dateStamp);
+  const kRegion = await hmac(kDate, region);
+  const kService = await hmac(kRegion, service);
+  return hmac(kService, 'aws4_request');
 }
 
 export interface SigV4SigningParams {
@@ -123,14 +155,19 @@ export interface SigV4Headers {
 /**
  * Build the AWS SigV4 Authorization header for a Bedrock ConverseStream
  * request. Pure function — exported for tests.
+ *
+ * Async because WebCrypto's `subtle` is promise-based; see the block comment
+ * above `subtleCrypto`.
  */
-export function signBedrockRequest(params: SigV4SigningParams): SigV4Headers {
+export async function signBedrockRequest(
+  params: SigV4SigningParams,
+): Promise<SigV4Headers> {
   const service = params.service ?? 'bedrock';
   const now = params.now ?? new Date();
   const amzDate = formatAmzDate(now);
   const dateStamp = amzDate.slice(0, 8);
 
-  const payloadHash = sha256Hex(params.body);
+  const payloadHash = await sha256Hex(params.body);
   const host = params.host;
   const canonicalUri = params.path || '/';
   const queryParams = params.query ?? {};
@@ -171,16 +208,16 @@ export function signBedrockRequest(params: SigV4SigningParams): SigV4Headers {
     'AWS4-HMAC-SHA256',
     amzDate,
     credentialScope,
-    sha256Hex(canonicalRequest),
+    await sha256Hex(canonicalRequest),
   ].join('\n');
 
-  const signingKey = getSigningKey(
+  const signingKey = await getSigningKey(
     params.secretAccessKey,
     dateStamp,
     params.region,
     service,
   );
-  const signature = hmac(signingKey, stringToSign).toString('hex');
+  const signature = toHex(await hmac(signingKey, stringToSign));
 
   const authorization =
     `AWS4-HMAC-SHA256 Credential=${params.accessKeyId}/${credentialScope}, ` +
@@ -648,7 +685,7 @@ export function createBedrockConverseClient(opts: BedrockConverseClientOptions):
       if (Object.keys(inferenceConfig).length > 0) requestBody.inferenceConfig = inferenceConfig;
 
       const body = JSON.stringify(requestBody);
-      const headers = signBedrockRequest({
+      const headers = await signBedrockRequest({
         accessKeyId: opts.accessKeyId,
         secretAccessKey: opts.secretAccessKey,
         sessionToken: opts.sessionToken,

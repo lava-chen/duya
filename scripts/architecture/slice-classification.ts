@@ -641,6 +641,17 @@ export const UNCLASSIFIED_PREFIXES: readonly { prefix: string; why: string }[] =
  * module the policy calls `core` performs IO. They are findings: this slice
  * produces a map, and moving them is M5.3's work.
  *
+ * ── A0 update (plan 610): the Bedrock signer left this list.
+ *
+ * `packages/ai/src/api/bedrock-converse.ts` was recorded here as a
+ * `core`-shaped module importing `node:crypto`. It no longer does: A0 moved
+ * SigV4 signing to WebCrypto (`globalThis.crypto.subtle`), which is available in
+ * browsers and in Node 19+, so the finding was retired at its cause rather than
+ * relabelled. The record was REMOVED, not re-pointed at another line — a
+ * finding whose file is clean is not a finding at another line number. This is
+ * the opposite of adding an exemption: the debt list got shorter because the
+ * IO is gone.
+ *
  * ── M5.3 update: the layer declaration was wrong, so the declaration is fixed
  *    and the finding is retired at its cause.
  *
@@ -682,13 +693,6 @@ export const PURE_VIOLATIONS: readonly PurityViolation[] = [
     declaredLayer: 'capability carve-out inside legacy-ai (architecture-policy.yaml layers)',
     evidence: "const response = await fetch(`${this.baseURL}/api/embed`, {",
     why: 'Second network call in the same file; a separate capability from the chat completion, and the same injected-transport fix covers both.',
-  },
-  {
-    file: 'packages/ai/src/api/bedrock-converse.ts',
-    line: 35,
-    declaredLayer: 'capability carve-out inside legacy-ai (architecture-policy.yaml layers)',
-    evidence: "} from 'node:crypto';",
-    why: 'A `core`-shaped module importing a Node builtin. Lazy-loaded at line 69, so the renderer can import this file — the import is still a coupling, and the laziness defers the load without removing it. NOTE the `import type` on this line is erased at compile time and is NOT itself a capability; `layer-purity.ts` skips type-only imports for exactly this reason and flags the real `require` at line 69 instead.',
   },
 ];
 

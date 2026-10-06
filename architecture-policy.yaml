@@ -1206,7 +1206,21 @@ selfTest:
   # (`main/core/media-allowlist.ts`, `main/ipc/system-handlers.ts`) and
   # 23 `src-renderer` -> `@duya/conductor/renderer/*`; neither is plugin-core.
   # The second allowedRoots import arrived with the plan-583 stack.
-  deep-import: 25
+  # 25 -> 22 by plan 610 A0, measured on `plan/610-a0-client-axis`. The three
+  # that stopped being violations are the BARE `@duya/conductor/renderer`
+  # specifier — twice in `ModelSelector.tsx` (an `import type` and an
+  # `export type`) and once in `conductor-host-provider.tsx`. A `deep` import is
+  # one that bypasses the target's exports map, and A0 added `./renderer` and
+  # `./renderer/*` to `packages/conductor/package.json`, so these three now
+  # resolve through a declared subpath instead of around one. The other 20
+  # `src-renderer` -> `@duya/conductor/renderer/*` edges in this count were
+  # already resolving to declared subpaths and are untouched; 0 edges were
+  # added. Attributed by diffing `audit-imports.mjs --json` `deepImportEdges`
+  # with and without the manifest change (25 -> 22, 3 removed, 0 added), not by
+  # inspection. This is a MEASUREMENT moving because the coupling is genuinely
+  # gone, not a gate relaxing: the resolver still sees every remaining edge, and
+  # `npm run architecture:baseline` was NOT re-recorded.
+  deep-import: 22
   # Was 17. The 42-file SCC remains; the count fell because
   # `fix/conductor-copy-and-dead-code` (PR #130) removed an edge.
   #
