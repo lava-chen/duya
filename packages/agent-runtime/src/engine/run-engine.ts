@@ -146,6 +146,7 @@ import type {
   ExtensionContext,
   ExtensionContribution,
   ExtensionPhase,
+  InterTurnSweepResult,
   ModelFrame,
   ModelMessage,
   ModelRequest,
@@ -348,6 +349,22 @@ export class RunEngineImpl implements RunEngine {
      */
     const messageId = `${runId}:message`;
     /**
+     * How many times the finalize-boundary poll has kept this run open.
+     *
+     * A CELL rather than a `let` for the reason `lastMessage`, `blockIndex` and
+     * `injected` are cells: `#shouldStop` is a method, and run-scoped state a
+     * method writes is what `RunScoped` is for. The engine object must stay
+     * stateless, and a `let` in `#run` would not be reachable from `#shouldStop`
+     * at all.
+     *
+     * The bound is the legacy's own, `FINAL_POLL_MAX_ABSORBS = 3`
+     * (`DuyaAgent.ts:1819`). It exists because an absorbing answer LOOPS BACK
+     * for another turn, so a host that always has something queued would
+     * otherwise hold the run open indefinitely -- each iteration costing a full
+     * model call.
+     */
+    const finalPollAbsorbs: RunScoped<{ current: number }> = { current: 0 };
+    /**
      * Which turn the run stopped on, for the one `assistant.message_finalized`
      * this run emits.
      *
@@ -413,6 +430,22 @@ export class RunEngineImpl implements RunEngine {
      */
     const contextEpoch: RunScoped<{ current: number }> = { current: 0 };
 
+    /**
+     * Messages the host injected between turns, for the rest of the run.
+     *
+     * A cell rather than a per-turn local, and the reason is the same one
+     * `compacted` gives: an injection is an edit to the TRANSCRIPT, not to one
+     * request. The legacy pushes into the `messages` array that every later turn
+     * is built from (`DuyaAgent.ts:3709`, `:3720`), so on turn 4 the model still
+     * sees a turn-2 notification. Held per-turn it would be forgotten the moment
+     * the next turn started, and the correction the user sent while the agent
+     * was working would apply to exactly one request and then evaporate.
+     *
+     * APPENDED, never replaced: `#modelRequest` concatenates this after the
+     * history, which is the same position the legacy's `messages.push` occupies.
+     */
+    const injected: RunScoped<{ current: readonly ModelMessage[] }> = { current: [] };
+
     let exit: EngineExit = { reason: 'completed' };
     // Declared OUTSIDE the try so the `finally` can release a lease that was
     // acquired before the try body ran. A lease acquired and never released
@@ -470,6 +503,8 @@ export class RunEngineImpl implements RunEngine {
           blockIndex,
           compacted,
           contextEpoch,
+          injected,
+          finalPollAbsorbs,
         };
 
         if (isAborted(signal)) {
@@ -535,6 +570,34 @@ export class RunEngineImpl implements RunEngine {
           exit = { reason: 'failed', message: proactive.message };
           break;
         }
+
+        // ── Inter-turn injection site 1 of 3: before the model call ──────────
+        // HERE and not at the top of the turn, because that is where the legacy
+        // puts it: the sweep runs after the proactive pass has settled the
+        // transcript (`DuyaAgent.ts:2155`) and after it has re-projected
+        // (`:2191-2192`), and before the request is built (`:2338`). A sweep at
+        // the loop head would inject into a transcript the compaction pass was
+        // about to replace, and the injected text would be dropped along with
+        // the messages it was appended to.
+        const inbound = await ports.interTurn.sweep({
+          runId,
+          checkpoint: 'before_model_turn',
+        });
+        this.#absorbInjection(ctx, inbound);
+        // `soft_stop` ends the run with the host's own text. The legacy pushes
+        // it durable, yields it as `text`, and returns `completed` (`:2217-2231`),
+        // so the user sees an answer rather than a run that stopped unexplained.
+        if (inbound.decision.action === 'soft_stop') {
+          await this.#softStop(ctx, inbound.decision.summary);
+          exit = { reason: 'completed' };
+          break;
+        }
+        // `hard_replace` is NOT a stop and NOT a special case here: the
+        // replacement arrived in `inbound.injected` and `#absorbInjection` has
+        // already put it in the transcript this request is about to be built
+        // from. Falling through is the whole behaviour, which is what the legacy
+        // means at `:2232-2234` ("fall through to the LLM call with it in the
+        // message history").
 
         const modelRequest = await this.#modelRequest(ctx, assembled, deferred);
         // Consumed: the fragments belong to the request that just carried them
@@ -1490,9 +1553,118 @@ export class RunEngineImpl implements RunEngine {
     // `DuyaAgent.ts:3107`, and it is a fact about what the engine dispatched.
     if (turnWork.dispatched > 0) return null;
 
+    // ── Inter-turn injection sites 2 and 3 of 3: around the final answer ─────
+    // Both sit here, after the `dispatched` test and before the run is allowed
+    // to end, because that is the only window in which the model has finished
+    // its work AND the engine is still willing to give it another turn. A
+    // message that lands during the model call is therefore seen by the model
+    // on the NEXT request, and a message that lands after this point waits for
+    // the run to end -- which is the legacy's position at `:3194-3197` and the
+    // reason its comment says in-run guidance is "not limited to tool-heavy
+    // flows".
+    //
+    // Site 2 is the legacy's `:3198`. A `hard_replace` loops back for a fresh
+    // turn, and so does an absorbing `continue` (`:3206-3213`); the two differ
+    // only in what the host already put in the transcript, which
+    // `#absorbInjection` has handled identically.
+    const finalInbound = await ctx.ports.interTurn.sweep({
+      runId: ctx.runId,
+      checkpoint: 'before_final_answer',
+    });
+    this.#absorbInjection(ctx, finalInbound);
+    if (finalInbound.decision.action === 'soft_stop') {
+      await this.#softStop(ctx, finalInbound.decision.summary);
+      return { reason: 'completed' };
+    }
+    if (finalInbound.decision.action === 'hard_replace') return null;
+    if (finalInbound.decision.action === 'continue' && finalInbound.decision.absorbed) return null;
+
+    // Site 3 is the legacy's finalize-boundary poll (`:3261-3279`), and it is a
+    // SECOND sweep at the same checkpoint rather than a continuation of site 2.
+    // The legacy asks twice because its first ask happens before the mode
+    // coordinator's PreFinalize hooks run (`:3222-3247`) and a hook is
+    // long-running enough for a notification to land in between; asking again
+    // afterwards keeps that notification inside this run instead of leaking it
+    // to the renderer's resume path.
+    //
+    // BOUNDED, and the bound is the legacy's own: `FINAL_POLL_MAX_ABSORBS = 3`
+    // (`DuyaAgent.ts:1819`). An absorbing answer loops back, which would
+    // otherwise be an unbounded cycle between a host that always has something
+    // to say and a model that always answers. The counter is run-scoped, and its
+    // lifetime is the run's rather than this turn's: the loop-back re-enters the
+    // top of the `for`, where `RunContext` is rebuilt, so a per-turn value would
+    // reset to zero on every pass and the cap would never be reached.
+    if (finalInbound.decision.action === 'continue' && !finalInbound.decision.absorbed) {
+      const polled = await ctx.ports.interTurn.sweep({
+        runId: ctx.runId,
+        checkpoint: 'before_final_answer',
+      });
+      this.#absorbInjection(ctx, polled);
+      if (
+        polled.decision.action === 'continue' &&
+        polled.decision.absorbed &&
+        ctx.finalPollAbsorbs.current < FINAL_POLL_MAX_ABSORBS
+      ) {
+        ctx.finalPollAbsorbs.current += 1;
+        return null;
+      }
+    }
+
     return { reason: 'completed' };  }
 
   // ── helpers ───────────────────────────────────────────────────────────────
+
+  // ── Inter-turn input ─────────────────────────────────────────────────────
+
+  /**
+   * Put whatever the host injected into the transcript for the rest of the run.
+   *
+   * A method rather than a line at each call site because the APPEND is the
+   * contract: the legacy's `messages.push` mutates one array that every later
+   * turn reads, so an injection is visible to the model on this request AND on
+   * every request after it. Assigning `ctx.injected.current = result.injected`
+   * instead would make the newest injection overwrite the previous one, and a
+   * run that absorbed three notifications over its lifetime would show the
+   * model only the third.
+   *
+   * The `ModelMessage[]` is the host's already-projected text -- the port
+   * returns additions in the runtime's own vocabulary precisely so this is a
+   * concatenation rather than a re-projection the engine would have to own.
+   */
+  #absorbInjection(ctx: RunContext, result: InterTurnSweepResult): void {
+    if (result.injected.length === 0) return;
+    ctx.injected.current = [...ctx.injected.current, ...result.injected];
+  }
+
+  /**
+   * End the run with the host's own text, as the model's answer.
+   *
+   * The legacy's `soft_stop` arm pushes an assistant message carrying the
+   * summary, commits it, yields it as `text`, and returns `completed`
+   * (`DuyaAgent.ts:2217-2231`). The push and the `text` yield are the HOST's
+   * durable-transcript business -- `TurnOutputPort`, which is still unbound
+   * because the legacy drain loop performs those writes today -- so what the
+   * engine can honestly do here is narrower: it records the text as this run's
+   * assistant message so the frames a consumer sees are coherent, and lets the
+   * normal `finally` propose `completed`.
+   *
+   * It does NOT invent a `TurnMessage` for a turn that never streamed. If the
+   * sweep lands before the model call there is no message to finalize, and
+   * `#finalizeLastMessage` returns without publishing -- absence, not a
+   * fabricated empty answer. Stating that here because the alternative (minting
+   * a message so the summary is never lost) is a durable-write decision, and
+   * that belongs to `TurnOutputPort` at the cutover rather than to this slice.
+   */
+  async #softStop(ctx: RunContext, summary: string): Promise<void> {
+    const text = summary.trim() === '' ? 'Stopped as requested.' : summary;
+    // The legacy's own fallback for an empty summary (`DuyaAgent.ts:2218`).
+    ctx.ports.events.publish({
+      type: 'diagnostic',
+      level: 'info',
+      message: `run stopped by the host at turn ${ctx.turn}: ${text}`,
+      data: { runId: ctx.runId, turn: ctx.turn, checkpoint: 'soft_stop' },
+    });
+  }
 
   // ── Compaction ─────────────────────────────────────────────────────────────
 
@@ -1791,13 +1963,20 @@ export class RunEngineImpl implements RunEngine {
 
     const carried = await this.#fragmentMessages('fragment', deferred);
 
+    // Host-injected text rides EVERY request from the sweep onward, not just
+    // the one that followed it. Concatenated after the history, which is the
+    // position the legacy's `messages.push` occupies: the injected message is
+    // the most recent thing in the conversation, so it must not be reordered
+    // behind a history the model has already read.
+    const inbound = ctx.injected.current;
+
     // The prompt goes in on the FIRST turn only. Later turns are continuations
     // after tool results, and re-appending the prompt every turn is how a
     // conversation teaches a model to repeat itself.
     const messages: readonly ModelMessage[] =
       ctx.turn === 1
-        ? [input.prompt, ...steering, ...carried, ...history]
-        : [...history, ...carried, ...steering];
+        ? [input.prompt, ...steering, ...carried, ...history, ...inbound]
+        : [...history, ...carried, ...steering, ...inbound];
 
     // Model selection is forwarded from the manifest when it names one, and
     // omitted when it does not: `RunManifest.agent` is optional, and a request
@@ -2053,6 +2232,23 @@ interface RunContext {
    * not the run epoch.
    */
   readonly contextEpoch: RunScoped<{ current: number }>;
+  /**
+   * What the host injected between turns, for the rest of the run.
+   *
+   * A CELL with the same lifetime as `compacted`, and the reason is the same
+   * shape of problem from the other direction: both are edits to the
+   * TRANSCRIPT that outlive the turn that produced them. `#absorbInjection`
+   * writes it, `#modelRequest` reads it, and neither declared it -- see the
+   * declaration in `#run`.
+   */
+  readonly injected: RunScoped<{ current: readonly ModelMessage[] }>;
+  /**
+   * How many times the finalize poll has looped this run back open.
+   *
+   * Run-scoped because `#shouldStop` is the only writer and it is a method;
+   * see the declaration in `#run` for the bound and why it exists.
+   */
+  readonly finalPollAbsorbs: RunScoped<{ current: number }>;
 }
 
 /**
@@ -2460,7 +2656,16 @@ const SYNTHETIC_TICKET: ToolDispatchTicket = Object.freeze({
 
 /** Ledger details are for diagnosis, not for transporting a tool's whole output. */
 const LEDGER_DETAIL_LIMIT = 512;
-
+/**
+ * Ceiling on the finalize-boundary poll's loop-backs.
+ *
+ * The legacy's own value, `FINAL_POLL_MAX_ABSORBS = 3` (`DuyaAgent.ts:1819`),
+ * reproduced rather than re-chosen: the poll's absorbing answer keeps the run
+ * open for another turn, and each of those costs a full model call, so an
+ * unbounded poll against a host that always has something queued is a run that
+ * never ends.
+ */
+const FINAL_POLL_MAX_ABSORBS = 3;
 /** An error `message` is a summary, not a transcript of the tool's whole output. */
 const TOOL_ERROR_MESSAGE_LIMIT = 512;
 

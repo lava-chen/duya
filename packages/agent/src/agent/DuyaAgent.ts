@@ -2190,13 +2190,12 @@ export class duyaAgent implements AgentRuntime {
       for (const ev of settledRun.events) yield ev;
       systemPromptContent = settledRun.systemPromptContent;
       messages = settledRun.messages;
-      const mailboxDecision = await this._claimMailboxAtCheckpoint(
+      const mailboxDecision = await this._sweepInterTurn(
         runId,
         messages,
         seqIndex,
         'before_model_turn',
-        options?.wakeRun === true,
-        options?.imageInputSupported,
+        options,
       );
       // A `backgroundTaskResume` run has no user prompt (the turn-1 push is
       // skipped above). If its FIRST checkpoint claim comes back empty, the
@@ -3195,13 +3194,12 @@ export class duyaAgent implements AgentRuntime {
           // A message can arrive while the model is producing its final text.
           // Re-check before finalising so in-run guidance is not limited to
           // tool-heavy flows that naturally create another model turn.
-          const finalMailboxDecision = await this._claimMailboxAtCheckpoint(
+          const finalMailboxDecision = await this._sweepInterTurn(
             runId,
             messages,
             seqIndex,
             'before_final_answer',
-            options?.wakeRun === true,
-            options?.imageInputSupported,
+            options,
           );
           if (finalMailboxDecision.action === 'hard_replace') {
             // Replacement runtime_context was already pushed by
@@ -3260,13 +3258,12 @@ export class duyaAgent implements AgentRuntime {
             // throws (claim failures degrade to continue/absorbed=false).
             pollFinalMailbox: async () => {
               if (finalPollAbsorbs >= FINAL_POLL_MAX_ABSORBS) return false;
-              const decision = await this._claimMailboxAtCheckpoint(
+              const decision = await this._sweepInterTurn(
                 runId,
                 messages,
                 seqIndex,
                 'before_final_answer',
-                options?.wakeRun === true,
-                options?.imageInputSupported,
+                options,
               );
               const absorbed = decision.action === 'continue' && decision.absorbed;
               if (absorbed) {
@@ -3616,6 +3613,113 @@ export class duyaAgent implements AgentRuntime {
         // stays a typed event rather than a free-form 'system' row.
       }
     }
+  }
+
+  /**
+   * One inter-turn sweep, in the port's shape, against the live transcript.
+   *
+   * ## Why the three call sites go through here
+   *
+   * This is the SEAM, not a wrapper for tidiness. `_claimMailboxAtCheckpoint`
+   * has exactly one implementation and it is private, so the only way for the
+   * engine to reach the same claim is through something the host can bind as
+   * `RunEnginePorts.interTurn` -- and the three in-loop call sites are what
+   * makes that binding the SAME capability rather than a parallel one. Two
+   * code paths claiming the same rows is the failure this method exists to make
+   * impossible: the claim token decides which run owns a row, so a second
+   * claim path is a second authority for that.
+   *
+   * ## Why the signature keeps `messages` rather than a capture array
+   *
+   * Because the legacy OWNS its transcript and can push into it directly, which
+   * is what the claim has always done (`:3709`, `:3720`). The engine cannot:
+   * `assembled.messages` is a `readonly` value the engine did not build
+   * (`run-engine.ts:497`), so `buildInterTurnPort` hands the claim a CAPTURE
+   * array and reports back what landed in it. Two callers, one claim, two
+   * vocabularies -- stated here because the asymmetry looks like an oversight
+   * otherwise, and it is a consequence of who owns the array.
+   *
+   * The injected rows are NOT returned here. They are already in `messages`,
+   * which is the array every later turn is built from, and returning them as
+   * well would push each row twice.
+   */
+  /**
+   * Run one inter-turn sweep against a capture array, for a host binding
+   * `RunEnginePorts.interTurn`.
+   *
+   * PUBLIC, and it is the whole reason `_sweepInterTurn` exists. The claim is
+   * private, so without this the engine could not reach the same rows the legacy
+   * claims -- and two claim paths over one store is a second authority for which
+   * run owns a row (`DuyaAgent.ts:3635`, the claim token).
+   *
+   * ## Why the signature takes a CAPTURE array, while `_sweepInterTurn` does not
+   *
+   * Two callers, two different owners of the transcript, one claim:
+   *
+   *  - the legacy OWNS its `messages` array and can push into it directly, which
+   *    is what the claim has always done (`:3709`, `:3720`). That is
+   *    `_sweepInterTurn`.
+   *  - the engine does NOT: `assembled.messages` is a `readonly` value the engine
+   *    did not build (`run-engine.ts:497`). So it hands over a fresh array and
+   *    reads back what landed in it. The asymmetry is a consequence of who owns
+   *    the array, and it is stated here because it otherwise reads as an
+   *    oversight.
+   *
+   * ## Why this returns the TRANSCRIPT decision
+   *
+   * Because `RuntimeMailboxDecision` is already this file's vocabulary and is
+   * already imported. Returning it keeps the module graph unchanged: naming the
+   * runtime's `InterTurnSweepResult` here would need a new import statement from
+   * this file, and `architecture-policy.yaml` pins the permitted-edge count, so a
+   * port whose only cost was a new edge in a 5295-line file is a bad trade. The
+   * translation to the runtime's shapes happens in `process/run-engine-ports.ts`,
+   * beside the other adapters, and it is the only place that knows both
+   * vocabularies.
+   *
+   * ## Why `seqIndex` is a parameter and not a field
+   *
+   * It is `Date.now()` taken once per `streamChat` call (`:1792`) and threaded
+   * into every durable row the loop writes, so it is per-run state the LEGACY
+   * owns. Mirroring it onto a field would mean inventing state to hold a value
+   * that already exists as a local, and defaulting it would stamp every injected
+   * row with a constant index that silently mis-orders it against real
+   * transcript rows. Whoever binds the port for a run supplies the same value
+   * that run's loop used -- which is why it is required rather than optional.
+   */
+  async claimInterTurn(input: {
+    readonly runId: string;
+    readonly checkpoint: 'before_model_turn' | 'before_final_answer';
+    /** Stand-in for the run's transcript. The claim only ever appends to it. */
+    readonly messages: Message[];
+    readonly seqIndex: number;
+    readonly wakeRun: boolean;
+    readonly imageInputSupported?: boolean;
+  }): Promise<RuntimeMailboxDecision> {
+    return this._claimMailboxAtCheckpoint(
+      input.runId,
+      input.messages,
+      input.seqIndex,
+      input.checkpoint,
+      input.wakeRun,
+      input.imageInputSupported,
+    );
+  }
+
+  private async _sweepInterTurn(
+    runId: string,
+    messages: Message[],
+    seqIndex: number,
+    checkpoint: 'before_model_turn' | 'before_final_answer',
+    options?: ChatOptions,
+  ): Promise<RuntimeMailboxDecision> {
+    return this._claimMailboxAtCheckpoint(
+      runId,
+      messages,
+      seqIndex,
+      checkpoint,
+      options?.wakeRun === true,
+      options?.imageInputSupported,
+    );
   }
 
   private async _claimMailboxAtCheckpoint(

@@ -1063,6 +1063,29 @@ export interface RunEnginePorts {
    * is the obligation the cutover inherits.
    */
   readonly compaction?: CompactionPort;
+  /**
+   * Where mid-run input arrives. See `InterTurnInputPort`.
+   *
+   * REQUIRED, and the only optional-looking member here that is not optional.
+   * The distinction from `turnOutput` and `compaction` above is that both of
+   * those are optional *while the legacy still drives* -- binding them today
+   * performs their effects twice -- whereas nothing drives the engine in
+   * production, so there is no window in which binding this one double-sweeps
+   * and no composition in which omitting it is correct.
+   *
+   * ## What a missing member would cost, stated as the engine would experience it
+   *
+   * Nothing. That is the problem, and it is why this is a type error rather
+   * than a `?.`. `RunInputSnapshot.steering` is frozen at run start, so a
+   * message that arrives mid-run has exactly one route into the transcript,
+   * and this is it. An engine that skipped the sweep would still call the
+   * model, still dispatch tools, still propose a `completed` terminal, and
+   * every event it published would be correct. The user's mid-turn correction
+   * would simply never reach the model, and no frame would be missing for a
+   * consumer to notice. A silently-dropped capability is the one failure this
+   * file's contracts exist to make unrepresentable.
+   */
+  readonly interTurn: InterTurnInputPort;
 }
 
 /** What a host needs in order to run one execution to completion. */
@@ -2114,4 +2137,182 @@ export interface CompactionPort {
    * when a request ended.
    */
   noteUsage?(anchor: CompactionUsageAnchor): void;
+}
+
+// ============================================================================
+// Contract 1h -- inter-turn input: the host may inject between turns
+// ============================================================================
+
+/**
+ * Where the turn runs, named for the moment the host is asked rather than for
+ * the mechanism that answers.
+ *
+ * The legacy passes the literal `'before_model_turn' | 'before_final_answer'`
+ * into `_claimMailboxAtCheckpoint` (`DuyaAgent.ts:3625`) and the two strings
+ * reach the mailbox store, which filters claimable rows by them. They are
+ * reproduced here because they are load-bearing on the HOST side -- a sweep
+ * that arrived under the wrong name would claim rows the store considers
+ * unclaimable at that point, and the rows would sit claimed-but-unread until
+ * the next checkpoint. What is NOT reproduced is the word "mailbox": that is
+ * one host's storage, and this contract is about the capability.
+ */
+export type InterTurnCheckpoint = 'before_model_turn' | 'before_final_answer';
+
+/**
+ * What the host found, and what it wants done about it.
+ *
+ * A three-way union rather than a boolean, because the legacy's three arms
+ * produce three DIFFERENT engine actions and collapsing them would make two of
+ * them unreachable:
+ *
+ *  - `continue` / `absorbed: false` -- nothing to add. The turn proceeds
+ *    exactly as it would have (`DuyaAgent.ts:3648`, the empty-claim arm).
+ *  - `continue` / `absorbed: true` -- the host injected something. The
+ *    messages in `InterTurnSweep.injected` MUST ride the next model request,
+ *    and at `before_final_answer` a non-null decision also keeps the run open
+ *    for another turn (`:3211-3213`).
+ *  - `soft_stop` -- the host wants the run to END now, with text of its own
+ *    (`:2217-2231`). Absorbing a "continue" here instead would spend another
+ *    model call to discover something the host already knew.
+ *  - `hard_replace` -- the host replaced the runtime context the model sees,
+ *    and the turn must be re-issued against the replacement (`:3206-3210`).
+ *
+ * `soft_stop` and `hard_replace` are carried even though the CURRENT host
+ * implementation returns neither: `_claimMailboxAtCheckpoint` returns
+ * `continue` on every one of its five exits (`:3630`, `:3645`, `:3649`,
+ * `:3666`, `:3725`), measured over the comment-stripped body. The arms are
+ * kept because the CALL SITES branch on all three (`:2207`, `:2217`, `:3206`)
+ * and a port that could not express them would force those branches to be
+ * deleted as unreachable, which is a decision about the host's future this
+ * file does not get to make.
+ */
+export type InterTurnDecision =
+  | { readonly action: 'continue'; readonly absorbed: boolean }
+  | { readonly action: 'soft_stop'; readonly summary: string }
+  | { readonly action: 'hard_replace'; readonly replacement: string };
+
+/** One sweep request. Everything here is a fact the ENGINE knows. */
+export interface InterTurnSweep {
+  /**
+   * The run being asked about, forwarded.
+   *
+   * Received, never minted, for the same reason `AttemptLeasePort.acquire` takes
+   * one: the claim is scoped to a run (`mailboxDb.claimBatch` is called with
+   * `{ sessionId, runId, checkpoint }`, `DuyaAgent.ts:3635-3640`), so a host
+   * that invented an identity would be answering a different question than the
+   * one the engine asked. It is also what makes two attempts at one run
+   * distinguishable to the store.
+   */
+  readonly runId: RunId;
+  /** Which moment this is. The host filters claimable rows by it. */
+  readonly checkpoint: InterTurnCheckpoint;
+}
+
+/**
+ * ## Why there is NO turn number on the sweep
+ *
+ * Because nothing consumes one, and this file's rule is that a field with no
+ * reader is a claim the contract makes and does not honour -- the same defect
+ * `LegacyEngineSources.deferFragment` documents at length, where a closure array
+ * "looked like a carrier and was not one".
+ *
+ * The obvious candidate was the turn, on the theory that a host filtering
+ * "notifications that arrived after turn N" would want it. Measured against the
+ * legacy, it does not: the value the legacy threads alongside the checkpoint is
+ * `seqIndex`, and that is `Date.now()` taken once per `streamChat` call
+ * (`DuyaAgent.ts:1792`) -- a per-RUN durable-row index, not a turn counter. So
+ * forwarding the turn would have put a second, differently-meaning number on the
+ * wire next to a host that already closes over the real one, and the two would
+ * be read as the same fact.
+ *
+ * A turn number belongs on the sweep the day a consumer exists for it. Adding it
+ * now would be a field whose only reader is the type.
+ */
+
+/** The answer to one sweep, including what the host wants injected. */
+export interface InterTurnSweepResult {
+  readonly decision: InterTurnDecision;
+  /**
+   * Messages to add to the transcript, in the order they must appear.
+   *
+   * ## Why the port RETURNS messages rather than pushing them
+   *
+   * The legacy mutates a `messages` array it was handed
+   * (`DuyaAgent.ts:3709`, `:3720`) and the array is the live transcript for
+   * the rest of the run. The engine cannot offer that: it holds
+   * `assembled.messages` as a `readonly` value it did not build
+   * (`run-engine.ts:497`), and handing the host a mutable reference to it
+   * would make the transcript a thing two layers both write.
+   *
+   * So the direction is INVERTED: the host projects the rows (that
+   * projection is its own vocabulary -- `projectRuntimeContextToProviderMessage`
+   * returns a transcript `Message`, and the runtime's is `ModelMessage`) and
+   * RETURNS the additions. The engine appends them, which is the same edit
+   * performed once, in the one layer that owns the array.
+   *
+   * Empty is the overwhelmingly common answer and MUST be cheap: a host with
+   * nothing queued returns `[]` and allocates nothing.
+   */
+  readonly injected: readonly ModelMessage[];
+}
+
+/**
+ * The host may inject input between turns.
+ *
+ * ## What this is for
+ *
+ * `RunInputSnapshot.steering` is fixed at run start (`ports.ts:1204`), so a
+ * message that arrives while the run is already going cannot ride it. That
+ * leaves a real capability with no home: the legacy asks for a mailbox sweep
+ * at three points inside its cycle -- before the model call (`DuyaAgent.ts:2193`)
+ * and twice around the stop decision (`:3198`, `:3263`) -- and the engine, as
+ * of this contract, asks for nothing. This is the only port in the set whose
+ * absence makes the engine SILENTLY correct-looking while dropping work.
+ *
+ * ## Why the name is not `MailboxPort`
+ *
+ * The capability is "the host may inject input between turns". A mailbox is one
+ * implementation of it, alongside a queue, a poll of an external channel, or a
+ * mode coordinator's buffered activation. Naming the port after one host's
+ * storage would make every other implementation an adapter of a lie, and would
+ * put the word "mailbox" into a package that has no business knowing it -- the
+ * same reason `ModelPort` is not `LlmClientPort` and `CompactionPort` is not
+ * `CompactionManagerPort`.
+ *
+ * ## Why it is REQUIRED, unlike `turnOutput` and `compaction`
+ *
+ * Both of those are optional *because the legacy is still driving*: binding
+ * them today would perform their effects twice (see `RunEnginePorts`' own
+ * comments). This port has no such window. The engine is not live in
+ * production -- `agent-process-entry.ts:3047` drives the turn through
+ * `DuyaAgent.streamChat`, and the phantom engine run was removed rather than
+ * left half-wired (`:2989-3002`) -- so binding this port cannot double a
+ * sweep, and there is no composition in which it is correct to omit.
+ *
+ * A forgotten binding here is the failure `ports.ts` refuses to accept in
+ * `CompactionPort` and worse in one respect: a run would answer every turn
+ * from a transcript that never receives the user's mid-run correction, and
+ * NOTHING would report it. There is no frame to go missing -- unlike the five
+ * compaction frames, a skipped sweep publishes nothing that a consumer could
+ * notice the absence of. The steering would simply never arrive, and the run
+ * would look like a clean success.
+ *
+ * So absence is a COMPILE error, not a runtime branch. That is affordable
+ * because the composition surface is small and measured: 25 sites build a
+ * `RunEnginePorts` value (1 production `buildEnginePorts`, 2 in
+ * `port-guards.ts`, 22 in tests), and the engine reads the port exactly where
+ * it reads `model` and `tools` -- unconditionally, with no `?.`.
+ */
+export interface InterTurnInputPort {
+  /**
+   * Ask the host whether anything arrived, and take what it hands back.
+   *
+   * MUST NOT throw for "there is nothing": an empty claim is an ordinary
+   * answer, and a host whose claim failed degrades to
+   * `continue` / `absorbed: false` (the legacy's own policy at `:3641-3646`,
+   * stated again at `:3259-3260`). A port that threw would turn a mailbox
+   * outage into a failed run, which is a strictly worse outcome than a turn
+   * that proceeded without the correction.
+   */
+  sweep(input: InterTurnSweep): Promise<InterTurnSweepResult>;
 }

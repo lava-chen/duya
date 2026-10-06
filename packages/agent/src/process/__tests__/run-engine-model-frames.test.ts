@@ -617,6 +617,10 @@ describe('the engine drives a turn through the real model adapter', () => {
       input: INPUT,
       ports: {
         model: createLegacyModelPort(sourcesFor(client)),
+        // Required since A3-1, and inert here on purpose: this harness measures
+        // MODEL frames, so nothing is queued and the port says so rather than
+        // being left out -- leaving it out is a compile error by design.
+        interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
         tools: {
           dispatch(call) {
             dispatched.push({ name: call.name, callId: call.callId });
@@ -685,6 +689,10 @@ describe('the engine drives a turn through the real model adapter', () => {
       input: INPUT,
       ports: {
         model: createLegacyModelPort(sourcesFor(client)),
+        // Required since A3-1, and inert here on purpose: this harness measures
+        // MODEL frames, so nothing is queued and the port says so rather than
+        // being left out -- leaving it out is a compile error by design.
+        interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
         tools: {
           dispatch: (call) => {
             dispatched.push(call.name);
@@ -732,6 +740,10 @@ describe('the engine drives a turn through the real model adapter', () => {
       input: INPUT,
       ports: {
         model: createLegacyModelPort(sourcesFor(client)),
+        // Required since A3-1, and inert here on purpose: this harness measures
+        // MODEL frames, so nothing is queued and the port says so rather than
+        // being left out -- leaving it out is a compile error by design.
+        interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
         tools: {
           dispatch: () => {},
           drain: () => (async function* () {})(),
@@ -779,6 +791,10 @@ describe('the engine drives a turn through the real model adapter', () => {
       input: INPUT,
       ports: {
         model: createLegacyModelPort(sourcesFor(client)),
+        // Required since A3-1, and inert here on purpose: this harness measures
+        // MODEL frames, so nothing is queued and the port says so rather than
+        // being left out -- leaving it out is a compile error by design.
+        interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
         tools: {
           dispatch: () => {},
           drain: () => (async function* () {})(),

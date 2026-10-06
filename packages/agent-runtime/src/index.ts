@@ -394,6 +394,14 @@ export type {
   ExtensionContributor,
   ExtensionPhase,
   ExtensionPort,
+  // Plan 610 A3-1 -- inter-turn input. The one port whose absence makes the
+  // engine silently drop work rather than visibly fail, which is why it is a
+  // REQUIRED member of `RunEnginePorts`. Type-only, for the G1 reason.
+  InterTurnCheckpoint,
+  InterTurnDecision,
+  InterTurnInputPort,
+  InterTurnSweep,
+  InterTurnSweepResult,
   ModelContentBlock,
   ModelFrame,
   ModelMessage,

@@ -34,6 +34,11 @@ import type {
   CompactionOutcome,
   CompactionPort,
   CompactionProgress,
+  ExtensionPort,
+  InterTurnCheckpoint,
+  InterTurnDecision,
+  InterTurnInputPort,
+  InterTurnSweepResult,
   ModelFrame,
   ModelMessage,
   ModelRequest,
@@ -96,6 +101,12 @@ const MINIMAL_PORTS: RunEnginePorts = {
   events: {
     publish() {},
     proposeTerminal() {},
+  },
+  // Required, and deliberately the smallest legal port: a sweep that finds
+  // nothing is the overwhelmingly common answer, so a port cannot express
+  // "absent" -- absence is a compile error, not a value. See `InterTurnInputPort`.
+  interTurn: {
+    sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }),
   },
 };
 
@@ -845,3 +856,166 @@ export const COMPACTION_STEP_NAMED_ITS_PHASE: Extract<CompactionProgress, { kind
  */
 type CompactionPortIsBound = Extract<keyof RunEnginePorts, 'compaction'>;
 export const COMPACTION_IS_AN_OPTIONAL_PORT: CompactionPortIsBound = 'compaction';
+
+// ---------------------------------------------------------------------------
+// Inter-turn input: the one port whose absence costs work SILENTLY, which is
+// why it is required rather than optional-with-a-guard.
+// ---------------------------------------------------------------------------
+
+/**
+ * A port that finds nothing is still a port, and the smallest legal one says so.
+ *
+ * Positive first, for the reason `COMPACTION_PORT_IS_CONSTRUCTIBLE` exists: the
+ * negative cases below only mean something if a real host can satisfy the
+ * contract. `injected: []` is the common answer and it is spelled out rather
+ * than omitted, which is the point -- there is no way to say "this host has no
+ * inter-turn input at all", and that is deliberate.
+ */
+export const INTER_TURN_PORT_IS_CONSTRUCTIBLE: InterTurnInputPort = {
+  sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }),
+};
+
+/**
+ * THE load-bearing assertion of this slice: a composition CANNOT omit the port.
+ *
+ * ## Why this is a negative case about OMISSION rather than a positive one
+ *
+ * The obvious positive form -- "a port set with `interTurn` compiles" -- is
+ * green in both states and therefore checks nothing, for the reason
+ * `A_RUN_MAY_NAME_NO_CAP` documents at length. The assertion that has teeth is
+ * the inverse: a port set WITHOUT it must NOT compile.
+ *
+ * And that assertion is not bookkeeping. It is the whole design. An engine
+ * that treated the sweep as optional would call the model, dispatch tools and
+ * propose a clean `completed` terminal on every turn while silently never
+ * receiving the user's mid-run correction -- `RunInputSnapshot.steering` is
+ * frozen at run start (`ports.ts:1204`), so this port is that correction's only
+ * route in, and no frame would be missing for a consumer to notice the loss.
+ * Compare `compaction` above, whose absence costs five frames that are at
+ * least UNPUBLISHED and therefore detectable: this one costs nothing visible at
+ * all, which is strictly worse and is why it is a type error instead of a
+ * runtime branch.
+ *
+ * Polarity: the literal omits `interTurn`, which is a compile error today (the
+ * directive is used). Making the member optional makes this legal, TypeScript
+ * then reports the directive as unused (TS2578), and `npm run typecheck:runtime`
+ * fails. Self-policing in both directions, like every other case in this file.
+ *
+ * ## Why the annotation is `RunEnginePorts` and NOT `Omit<RunEnginePorts, 'interTurn'>`
+ *
+ * Measured, because the `Omit` version is the natural thing to write and it is
+ * a NO-OP: a mapped type that strips the member produces exactly the type this
+ * literal already satisfies, so the case is legal in BOTH states and the
+ * `@ts-expect-error` sits unused (TS2578) the moment it is added. That is the
+ * "guard that is green in both states" this file's header warns about, reached
+ * the obvious way. The annotation has to be the REAL port set, so that the
+ * missing member is the thing being reported.
+ */
+// @ts-expect-error - a forgotten inter-turn binding drops mid-run steering with nothing to report it
+export const INTER_TURN_PORT_IS_REQUIRED: RunEnginePorts = {
+  model: MINIMAL_PORTS.model,
+  tools: MINIMAL_PORTS.tools,
+  context: MINIMAL_PORTS.context,
+  approval: MINIMAL_PORTS.approval,
+  events: MINIMAL_PORTS.events,
+};
+
+/**
+ * And it is required in the OTHER direction too: the member is not merely
+ * present, it is not optional.
+ *
+ * Written as a probe rather than a second omission case because the two
+ * failures are different bugs. `INTER_TURN_PORT_IS_REQUIRED` catches a
+ * composition that leaves the member out; this catches someone "fixing" the
+ * build for such a composition by appending `?` to the member in `ports.ts`,
+ * which is the reflex this guard exists to make fail. Polarity matches
+ * `CancellationPortAbsent`: while the member is required the conditional yields
+ * `'required'`, the assignment to `'optional'` is an error and the directive is
+ * used; add the `?` and the directive goes unused.
+ */
+type InterTurnPortIsRequired = RunEnginePorts extends { readonly interTurn: InterTurnInputPort }
+  ? 'required'
+  : 'optional';
+// @ts-expect-error - an optional inter-turn binding is the silent-drop this port exists to prevent
+export const INTER_TURN_BINDING_IS_NOT_OPTIONAL: InterTurnPortIsRequired = 'optional';
+
+/**
+ * The three decision arms are all expressible, because the engine branches on
+ * all three.
+ *
+ * Positive, one literal per arm. The engine's `#shouldStop` and the pre-model
+ * site branch on `soft_stop` (end the run with the host's text), `hard_replace`
+ * (loop for a fresh turn) and absorbing `continue` (loop for a fresh turn), and
+ * a port that could not carry one would force the corresponding branch to be
+ * deleted as unreachable. The current host returns only `continue` -- measured
+ * over the comment-stripped body of `_claimMailboxAtCheckpoint`, whose five
+ * exits at `DuyaAgent.ts:3630`, `:3645`, `:3649`, `:3666` and `:3725` are all
+ * `continue` -- so these two arms are what keeps that a property of the host
+ * rather than of the contract.
+ */
+export const INTER_TURN_SOFT_STOP_IS_EXPRESSIBLE: InterTurnDecision = {
+  action: 'soft_stop',
+  summary: 'stopped as requested',
+};
+export const INTER_TURN_HARD_REPLACE_IS_EXPRESSIBLE: InterTurnDecision = {
+  action: 'hard_replace',
+  replacement: '<runtime_context>replaced</runtime_context>',
+};
+
+/**
+ * And no FOURTH arm may be added without a consumer to match it.
+ *
+ * A closed union is the point: every arm is one the engine acts on, so a new arm
+ * would be a decision the engine silently ignores -- the run would continue as
+ * if the host had said nothing.
+ *
+ * Polarity, and the form matters: the check is an `Exclude` of the three known
+ * arms against the FULL action union, NOT an `Extract` of the three. An
+ * `Extract<InterTurnDecision['action'], 'continue' | 'soft_stop' | 'hard_replace'>`
+ * is a no-op -- it yields the same three members whether or not a fourth exists,
+ * so it extends the full union either way and this case is green in BOTH states.
+ * That was measured, not reasoned: the `Extract` form was written first, a fourth
+ * arm was added, and `npm run typecheck:runtime` exited 0.
+ *
+ * `Exclude` yields `never` while the union is exactly the three, so the
+ * conditional is `true` and the assignment to `false` below is an error (the
+ * directive is used). A fourth arm makes the conditional `false`, the assignment
+ * legal, the directive unused, and TypeScript reports TS2578.
+ */
+type InterTurnArmsAreClosed = Exclude<
+  InterTurnDecision['action'],
+  'continue' | 'soft_stop' | 'hard_replace'
+> extends never
+  ? true
+  : false;
+// @ts-expect-error - a fourth decision arm would be one the engine silently ignores
+export const INTER_TURN_DECISION_ARMS_ARE_CLOSED: InterTurnArmsAreClosed = false;
+
+/**
+ * What the host hands back is MESSAGES, and they are required even when empty.
+ *
+ * A result whose `injected` could be omitted would make "the host injected
+ * nothing" and "the host forgot to say" the same value at the type level, which
+ * is the ambiguity the port exists to remove: the legacy pushes onto a live
+ * `messages` array (`DuyaAgent.ts:3709`, `:3720`), and the engine cannot offer
+ * that array, so the additions travel back as a value instead.
+ */
+export const INTER_TURN_RESULT_ALWAYS_CARRIES_INJECTED: InterTurnSweepResult = {
+  decision: { action: 'continue', absorbed: true },
+  injected: [{ role: 'user', id: 'injected:1', content: 'actually, use the other approach' }],
+};
+
+/**
+ * The two checkpoint names are the ones the host's store filters on, so they
+ * are pinned rather than left to a string literal at a call site.
+ *
+ * The legacy passes these literals into `_claimMailboxAtCheckpoint`
+ * (`DuyaAgent.ts:3625`) and they reach the store, which decides what is
+ * claimable when. A sweep arriving under a name the store does not recognise
+ * would claim nothing -- or claim rows it considers unclaimable at that point,
+ * leaving them claimed-but-unread until the next checkpoint.
+ */
+export const INTER_TURN_CHECKPOINTS_ARE_NAMED: readonly InterTurnCheckpoint[] = [
+  'before_model_turn',
+  'before_final_answer',
+];

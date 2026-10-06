@@ -52,6 +52,12 @@ import type {
   AssembledTurn,
   AssistantMessageRecord,
   ContextPort,
+  // Plan 610 A3-1 -- inter-turn input. Required, unlike the two optional
+  // sources above, and `LegacyEngineSources.interTurn` says why.
+  InterTurnCheckpoint,
+  InterTurnDecision,
+  InterTurnInputPort,
+  ModelContentBlock,
   ModelFrame,
   ModelMessage,
   ModelPort,
@@ -226,6 +232,166 @@ export interface LegacyEngineSources {
    * assembly; a host that assembles from the engine's own seed needs nothing.
    */
   readonly deferFragment?: (fragment: TransientContextFragment) => void;
+  /**
+   * Asks whether anything arrived for this run since the last ask.
+   *
+   * REQUIRED, and the only source here with no "omit it" story. The engine's
+   * `RunEnginePorts.interTurn` member is required, so this one is too: a
+   * composition that omitted it would not compile, which is the property the
+   * design turns on. Unlike `turnOutput` there is no window in which supplying
+   * it would double an effect, because nothing drives the engine in production
+   * -- `agent-process-entry.ts:3047` still runs the turn through
+   * `DuyaAgent.streamChat`.
+   *
+   * The implementation is the legacy's own `_claimMailboxAtCheckpoint`, reached
+   * through `duyaAgent` rather than reimplemented: the claim is a transactional
+   * `claimBatch` + `apply` against the mailbox store, and a second copy of it
+   * would be a second authority for which rows this run owns.
+   */
+  readonly interTurn: InterTurnSources;
+}
+
+/**
+ * What the host answers a sweep with.
+ *
+ * The three arms are `RuntimeMailboxDecision`'s three, and the mapping is
+ * one-to-one rather than a translation. The legacy builds that decision at five
+ * sites inside `_claimMailboxAtCheckpoint` and all five are `continue`
+ * (`DuyaAgent.ts:3630`, `:3645`, `:3649`, `:3666`, `:3725`, measured over the
+ * comment-stripped body) -- so the `soft_stop` and `hard_replace` arms are
+ * carried because the CALL SITES branch on them (`:2207`, `:2217`, `:3206`),
+ * not because any current code path produces them.
+ */
+export interface InterTurnSources {
+  /**
+   * One claim, into a capture array.
+   *
+   * Wraps `duyaAgent.claimInterTurn`, which wraps the legacy's private
+   * `_claimMailboxAtCheckpoint`. The result is the TRANSCRIPT decision and the
+   * projected messages are left in the array it was handed; translating both
+   * into the runtime's vocabulary is `buildInterTurnPort`'s job, immediately
+   * below.
+   */
+  readonly claim: (input: {
+    readonly runId: string;
+    readonly checkpoint: InterTurnCheckpoint;
+    readonly messages: Message[];
+    readonly seqIndex: number;
+    readonly wakeRun: boolean;
+    readonly imageInputSupported?: boolean;
+  }) => Promise<InterTurnDecision>;
+  /**
+   * The run's `seqIndex`. REQUIRED, not defaulted.
+   *
+   * It is `Date.now()` taken once per `streamChat` call (`DuyaAgent.ts:1792`) and
+   * threaded into every durable row the loop writes. Defaulting it would stamp
+   * every injected row with a constant index that silently mis-orders it against
+   * real transcript rows, and a host that had no value to offer should not be
+   * building a run's ports at all.
+   */
+  readonly seqIndex: number;
+  /** `options.wakeRun === true`: an `agent_dm` row is already in the prompt. */
+  readonly wakeRun: boolean;
+  /** Whether the model accepts images, for the guidance attachment path. */
+  readonly imageInputSupported?: boolean;
+}
+
+/** The one thing the adapter needs from the legacy's claim. */
+export type InterTurnClaim = InterTurnSources['claim'];
+
+/**
+ * Build `InterTurnInputPort` over the legacy's claim.
+ *
+ * `seqIndex`, `wakeRun` and `imageInputSupported` are closed over rather than
+ * passed per sweep. They describe how the run STARTED, so they are identical for
+ * every sweep in it; and the engine has no `wakeRun` to report -- it reads
+ * `RunInputSnapshot.options`, an untyped bag whose silent coercion `ports.ts`
+ * rejects on principle.
+ *
+ * ## The direction is INVERTED, and that is the whole adapter
+ *
+ * The legacy pushes onto a `messages` array it was handed
+ * (`DuyaAgent.ts:3709`, `:3720`). The engine cannot be offered that array -- it
+ * holds `assembled.messages` as a `readonly` value it did not build
+ * (`run-engine.ts:497`) -- so a fresh capture array goes out and whatever landed
+ * in it comes back as a value.
+ */
+export function buildInterTurnPort(sources: InterTurnSources): InterTurnInputPort {
+  return {
+    async sweep({ runId, checkpoint }) {
+      const capture: Message[] = [];
+      const decision = await sources.claim({
+        runId,
+        checkpoint,
+        messages: capture,
+        seqIndex: sources.seqIndex,
+        wakeRun: sources.wakeRun,
+        imageInputSupported: sources.imageInputSupported,
+      });
+      // Empty is the common answer and allocates nothing beyond the capture
+      // array, which is created per sweep and dropped with it.
+      return { decision, injected: capture.map(toRuntimeMessage) };
+    },
+  };
+}
+
+/**
+ * One transcript `Message` -> one `ModelMessage`.
+ *
+ * ## The two vocabularies, and why the narrow one is safe HERE
+ *
+ * The transcript content union is six blocks wide (`transcript/content.ts`:
+ * text, image, tool_use, tool_result, thinking, provider_block) and
+ * `ModelMessage`'s is four (`ports.ts`). So this IS lossy in general, and the
+ * loss is stated rather than hidden: a block it cannot express becomes a TEXT
+ * block naming its type, so it is still visible to the model and still visible
+ * to a reader comparing the two. Silently dropping it would be the one outcome a
+ * port adapter must not produce, because the caller could not tell an absent row
+ * from a dropped block.
+ *
+ * In practice the mailbox path produces text only, and that is measured rather
+ * than assumed: `prepareMailboxGuidance` builds its content as a single text
+ * block with attachment context appended as text
+ * (`mailbox-attachment-context.ts:20`), and the background-notification path
+ * projects a string (`DuyaAgent.ts:3698-3707`). The marker below is a guard for
+ * a future row kind, not a live code path -- stated so nobody reads it as a
+ * claim that images survive.
+ */
+function toRuntimeMessage(message: Message): ModelMessage {
+  return {
+    // `projectRuntimeContextToProviderMessage` builds every injected row as a
+    // `user` message (`message-projectors.ts:107`), and a mailbox row is
+    // something the user said, not something the model said.
+    role: 'user',
+    // The runtime's id is required and replay keys on it, while the transcript
+    // id is optional. A row without one gets a stable id derived from the role
+    // rather than a random one, so a replayed attempt produces the same
+    // identity -- the reasoning `run-engine.ts` applies to `messageId`.
+    id: message.id ?? `inter-turn:${message.role}`,
+    content: toRuntimeContent(message.content),
+  };
+}
+
+/** Transcript content -> runtime content, block by block. */
+function toRuntimeContent(
+  content: string | MessageContent[],
+): string | readonly ModelContentBlock[] {
+  if (typeof content === 'string') return content;
+  return content.map((block): ModelContentBlock => {
+    if (block.type === 'text') return { type: 'text', text: block.text };
+    if (block.type === 'thinking') {
+      // `thinkingSignature`, not `signature`: the transcript names it that way
+      // and the runtime's `ModelContentBlock` names the same fact `signature`.
+      // A "typo fix" here would drop the field, and a signed thinking block
+      // replayed without its signature is downgraded to text by the provider.
+      return {
+        type: 'thinking',
+        text: block.thinking,
+        ...(block.thinkingSignature === undefined ? {} : { signature: block.thinkingSignature }),
+      };
+    }
+    return { type: 'text', text: `[unprojectable ${block.type} block omitted]` };
+  });
 }
 
 /** The three `TurnOutputPort` methods, as the legacy package supplies them. */
@@ -324,6 +490,7 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
   const settleTicket = sources.settleTicket;
   const turnOutput = sources.turnOutput;
   const onAssistantMessage = turnOutput?.onAssistantMessage;
+  const interTurn: InterTurnInputPort = buildInterTurnPort(sources.interTurn);
 
   return {
     model,
@@ -331,6 +498,7 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
     context,
     approval,
     events,
+    interTurn,
     // All-or-nothing, for the same reason `sideEffects` is: half a port is a
     // port whose missing half is indistinguishable from one that was never
     // asked. `finishTurn` without `recordToolResult` would report counts for

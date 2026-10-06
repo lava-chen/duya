@@ -209,6 +209,11 @@ function harness(options: {
   };
 
   const ports: RunEnginePorts = {
+    // Required since A3-1. A host with nothing queued SAYS so rather
+    // than leaving the port out, which is a compile error -- the
+    // engine would otherwise skip the sweep and drop mid-run steering
+    // with nothing reporting the loss.
+    interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
     model,
     tools: {
       dispatch(call: ToolCallRequest): void {
@@ -588,6 +593,11 @@ describe('the engine does not compact when the port declines', () => {
           },
           approval: { authorize: () => Promise.resolve({ allowed: true, scope: 'once' as const }) },
           events: { publish: () => {}, proposeTerminal: () => {} } as RunEventStorePort,
+          // Required, and deliberately NOT the subject of this test: the claim
+          // under test is that an absent `compaction` is a no-op. `interTurn`
+          // is required precisely so it cannot be absent, and a host with
+          // nothing queued says so.
+          interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
         },
       })
       .completed();

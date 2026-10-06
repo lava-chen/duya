@@ -741,5 +741,9 @@ function minimalPorts(): RunEnginePorts {
       publish() {},
       proposeTerminal() {},
     },
+    // Required since A3-1, and the base every spread composition inherits.
+    // A sweep that finds nothing is the common answer, so it is stated here
+    // rather than left to each test that spreads this.
+    interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
   };
 }
