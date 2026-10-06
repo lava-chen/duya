@@ -382,6 +382,117 @@ export interface TurnAssembly {
   readonly catalogView: ToolCatalogView;
 }
 
+/**
+ * Plan 610 A3-2b8 (S2): what establishing the RUN-scoped half of assembly needs.
+ *
+ * Deliberately almost nothing. Every value that can be derived from the agent
+ * is derived, and the three that cannot -- the resolved-tools decision, the
+ * permission gate and the meta-tool dispatcher -- are all decisions about THIS
+ * run, made once.
+ */
+export interface RunAssemblyRequest {
+  readonly options: ChatOptions | undefined;
+  readonly prompt: string | MessageContent[];
+  /** Resolved once by the caller; `undefined` when no profile was named. */
+  readonly appliedProfile?: AgentProfile;
+  /**
+   * The run's turn context, ASSEMBLED BY THE CALLER and handed in.
+   *
+   * Not derived here, and that is a correction to a first draft of this slice
+   * which built it. `streamChat` assembles the context before it reaches this
+   * point and reads it ~36 times, so the handle building its own would be a
+   * SECOND `TurnAssembler.build` for one run. It is pure, so the two would
+   * agree -- and two agreeing constructions of one run's context is exactly the
+   * kind of second account this seam exists to remove.
+   */
+  readonly turnContext: TurnContext;
+  /** Absent when no engine is bound to this run (the CLI, the sub-agent tool). */
+  readonly publisher: TurnPipelinePublisher | undefined;
+}
+
+/** What the host knows about the turn it is asking for. */
+export interface TurnAssemblyInput {
+  /** 1-based turn number, as the publisher records it and the catalog is stamped. */
+  readonly turn: number;
+  /** The transcript this turn is built from. Read fresh every turn. */
+  readonly messages: Message[];
+  /**
+   * This turn's tool surface, which may have been PROMOTED since the run began.
+   *
+   * Passed per turn rather than read from the handle on purpose: promotion is
+   * the legacy's decision and the reason a handle that answered "the tools"
+   * once would advertise turn 1's surface for the rest of the run.
+   */
+  readonly tools: readonly Tool[];
+  /** The prompt as the run currently holds it -- compaction may have replaced it. */
+  readonly systemPrompt: string;
+}
+
+/**
+ * Plan 610 A3-2b8 (S2): the run-scoped handle. Once built, a turn is one call.
+ *
+ * ## Why this had to exist before anything outside the loop could own a turn
+ *
+ * `assembleTurn` (A3-2b7) was already public and already returned a pipeline,
+ * and it was still unreachable from outside `streamChat`. Its request needs
+ * three things the loop built as CLOSURE LOCALS at run scope and never exposed:
+ * the resolved-tools decision (private `_resolveTools`), the guarded permission
+ * gate (`buildPermissions` plus the declared-tools snapshot), and the meta-tool
+ * dispatcher (`createToolInvokeDispatcherFromRegistry`). Each was a local of a
+ * 2300-line generator, so "the engine assembles its own turn" had no producer
+ * for its own request. This is that producer.
+ *
+ * ## It is a HANDLE, not a builder, and that is the `discarded` defence
+ *
+ * `StreamingToolExecutor.discarded` is a one-way latch: it is never reset and
+ * `discard()` also aborts the sibling controller. A pipeline that outlived its
+ * turn therefore goes permanently mute -- it accepts tools, drains nothing,
+ * raises no error, and passes every structural test. So `assemble` constructs a
+ * FRESH pipeline on every call and this handle holds none: the per-turn lifetime
+ * is structural, not a convention. Nothing here can be "reused" because there
+ * is nothing on it to reuse.
+ */
+export interface RunTurnAssembly {
+  /** `_resolveTools`' decision for this run. Never rebuilt. */
+  readonly resolved: ResolvedTurnTools;
+  /** The run's turn context. Assembled once, like every other run fact. */
+  readonly turnContext: TurnContext;
+  /** The tool surface the run started with. Promotion replaces it per turn. */
+  readonly tools: readonly Tool[];
+  /** The run's base system prompt, before any per-turn mode prefix. */
+  readonly systemPrompt: string;
+  /**
+   * Re-snapshot the tools DECLARED on the provider request about to be opened,
+   * and return the new set.
+   *
+   * Reads the last assembled turn's surface, which is the loop's own semantics:
+   * its version closed over the live `tools` variable and was only ever called
+   * from inside the turn's own provider request.
+   *
+   * Returns `Set`, not `ReadonlySet`, because that is the shape
+   * `TurnStreamRunner`'s `RefreshDeclaredToolsHook` declares. It is the GUARD'S
+   * LIVE set, not a copy: the guard closes over it, so handing back a duplicate
+   * would give a caller a set that protects nothing. Treat it as read-only.
+   */
+  refreshDeclaredTools(): Set<string>;
+  /** Assemble one turn: prompt refresh, catalog round, and a FRESH pipeline. */
+  assemble(input: TurnAssemblyInput): TurnAssembly;
+}
+
+/**
+ * The tool-group progress instructions appended to every run's base prompt.
+ *
+ * Module scope from plan 610 A3-2b8 (S2): the text used to be rebuilt inside
+ * `streamChat` on every run, and `beginTurnAssembly` builds it now. A string
+ * that is re-created per run is a string that can drift between two copies,
+ * so there is exactly one.
+ */
+const TOOL_GROUP_PROGRESS_INSTRUCTIONS = [
+  'Tool-group progress: before a tool batch, provide one concise plain-text title for the work.',
+  'Use the provider structured commentary channel when it is explicitly available; otherwise call the private progress-title tool shown in the available tools with {title}.',
+  'Never derive a title from hidden reasoning or ordinary assistant prose. The progress-title call is private and does not perform work.',
+].join(' ');
+
 export class duyaAgent implements AgentRuntime {
   // Plan 550 step 2a-3: implements the structural read-only interface the
   // `TurnAssembler` consumes. Every method delegates to the existing
@@ -797,6 +908,149 @@ export class duyaAgent implements AgentRuntime {
   recordTurnCatalogSchemaRead(resolved: ResolvedTurnTools, message: Message): boolean {
     if (message.role !== 'tool') return false;
     return recordToolCatalogSchemaRead(resolved.catalogView, message.metadata);
+  }
+
+  /**
+   * Plan 610 A3-2b8 (S2): establish the RUN-scoped half of turn assembly.
+   *
+   * ## One implementation, two callers
+   *
+   * The generator calls THIS and the composition's host will call THIS. The
+   * block this lifts was ~105 lines of closure-local construction at the top of
+   * `streamChat` (measured: `_resolveTools` through
+   * `createToolInvokeDispatcherFromRegistry`), and all of it was unreachable
+   * from outside -- which is why `assembleTurn` being public was not enough for
+   * anything to own a turn.
+   *
+   * ## The three closures, and why each one belongs to the RUN
+   *
+   * - `canUseTool` + the declared-tools guard: the guard's snapshot is
+   *   REPLACED per request rather than per turn (`refreshDeclaredTools`, called
+   *   from `runTurnStream`), so a per-turn handle would rebuild a gate that is
+   *   meant to be one gate per run holding a moving snapshot.
+   * - `toolInvokeDispatcher`: deliberately wired to the UNGUARDED `canUseTool`
+   *   (`DuyaAgent.ts:2134`), because a deferred tool is reached precisely by
+   *   being absent from the declared set. Guarding it would deny every
+   *   `tool_invoke`.
+   * - the turn tool-use context cell: written by `assembleTurn` per turn,
+   *   read by the dispatcher, and read by NOTHING else in the generator
+   *   (measured: 3 uses, all inside this block or the `assembleTurn` call).
+   *   So the cell can move here without the loop losing a handle on it.
+   *
+   * ## `refreshDeclaredTools` reads the LAST ASSEMBLED surface, and why that is the loop's semantics
+   *
+   * The loop's version closed over its live `tools` variable, which promotion
+   * can move. This one reads the surface the most recent `assemble` was given.
+   * They agree because the only caller is the provider request opened for that
+   * turn, and on a model retry `runTurnStream` loops without a new `assemble`
+   * -- so a retry re-snapshots the same turn's surface, exactly as the loop did.
+   */
+  async beginTurnAssembly(request: RunAssemblyRequest): Promise<RunTurnAssembly> {
+    const { options, prompt, appliedProfile, publisher, turnContext } = request;
+
+    const resolved = await this._resolveTools(options, appliedProfile);
+    const { registry, catalogView, tools: resolvedTools } = resolved;
+
+    let systemPrompt = await this._buildSystemPrompt(resolvedTools, options, appliedProfile);
+    systemPrompt = systemPrompt
+      ? `${systemPrompt}\n\n${TOOL_GROUP_PROGRESS_INSTRUCTIONS}`
+      : TOOL_GROUP_PROGRESS_INSTRUCTIONS;
+
+    const { canUseTool } = buildPermissions(
+      {
+        getPermissionMode: () => this.getPermissionMode(),
+        hostToolPermission: this.hostToolPermission,
+        alwaysAllowRules: this.alwaysAllowRules,
+        alwaysDenyRules: this.alwaysDenyRules,
+        alwaysAskRules: this.alwaysAskRules,
+        additionalWorkingDirectories: this.additionalWorkingDirectories,
+        defaultWorkspaceDirectory: this.defaultWorkspaceDirectory,
+        getAbortController: () => this.abortController,
+        llmClient: this.llmClient,
+        model: this.model,
+        getMessages: () => this.messages,
+        hasPermissionsToUseTool: this.hasPermissionsToUseTool,
+        getModeCoordinator: () => this.modeCoordinator,
+      },
+      turnContext,
+      registry,
+    );
+
+    // Declared-tools visibility guard. Snapshot of the tools declared on the
+    // current provider request. Any model call to a name outside that set is
+    // rejected; deferred tools are reached through tool_catalog -> tool_invoke.
+    let declaredToolsForRequest = new Set<string>();
+    const guardedCanUseTool: typeof canUseTool = async (toolName, toolInput) => {
+      const decision = evaluateVisibilityGuard({
+        declaredTools: declaredToolsForRequest,
+        toolName,
+      });
+      if (decision.undeclared) {
+        recordUndeclaredCall(toolName);
+        return {
+          allowed: false,
+          behavior: 'deny' as const,
+          message: decision.message!,
+        };
+      }
+      return canUseTool(toolName, toolInput);
+    };
+
+    // Per-turn context handle for the meta-tool dispatcher. Wired BEFORE any
+    // turn assembles, so the dispatcher takes a getter rather than the object.
+    // Without it, every built-in tool reached through `tool_invoke` executed
+    // with `context === undefined` and sessionId / apiKey / ipcRequest were all
+    // silently dropped.
+    let turnToolUseContext: ToolUseContext | undefined;
+    const toolInvokeDispatcher = createToolInvokeDispatcherFromRegistry({
+      registry,
+      getSnapshot: () => catalogView.snapshot,
+      getLoadedSchemaRevision: (toolId) => catalogView.loadedSchemaRevisions.get(toolId),
+      getLoadedSchemaRound: (toolId) => catalogView.loadedSchemaRounds.get(toolId),
+      getCurrentRound: () => catalogView.currentRound,
+      isEligibleTool: (toolId) => catalogView.eligibleToolIds.has(toolId),
+      workingDirectory: turnContext.workingDirectory ?? undefined,
+      contextProvider: () => turnToolUseContext,
+      // Deliberately the UNGUARDED gate: a deferred tool is reached precisely by
+      // being outside the declared set, so the dispatcher applies its own
+      // `isEligibleTool` check instead of the visibility guard.
+      checkPermission: async (toolName, args) =>
+        normalizeCanUseToolDecision(await canUseTool(toolName, args)),
+    });
+
+    // The surface the next `refreshDeclaredTools()` snapshots. Starts as the
+    // run's resolved surface and is replaced by each turn's own.
+    let currentTools: readonly Tool[] = resolvedTools;
+
+    return {
+      resolved,
+      turnContext,
+      tools: resolvedTools,
+      systemPrompt,
+      refreshDeclaredTools: () => {
+        declaredToolsForRequest = new Set(currentTools.map((t) => t.name));
+        return declaredToolsForRequest;
+      },
+      assemble: (input) => {
+        currentTools = input.tools;
+        const assembly = this.assembleTurn({
+          turn: input.turn,
+          systemPrompt: input.systemPrompt,
+          messages: input.messages,
+          tools: input.tools as Tool[],
+          resolved,
+          turnContext,
+          options,
+          canUseTool: guardedCanUseTool,
+          toolInvokeDispatcher,
+          publisher,
+          bindToolUseContext: (context) => {
+            turnToolUseContext = context;
+          },
+        });
+        return assembly;
+      },
+    };
   }
 
   // ==========================================================================
@@ -2049,12 +2303,28 @@ export class duyaAgent implements AgentRuntime {
     // `this.messages` together 鈥?a single bridge between helper output
     // and the main loop.
 
-    const resolvedTools = await this._resolveTools(options, appliedProfile);
-    // Only what this loop still reads after plan 610 A3-2b7. `agentDefinitions`,
-    // `catalogTool` and `toolInvokeExecutor` were read only by the per-turn
-    // pipeline literal that `assembleTurn` replaced; they are reached through
-    // `resolvedTools` now. Kept narrow deliberately: a destructuring that binds
-    // names nothing reads is a second, silently-stale account of the bundle.
+    // Plan 610 A3-2b8 (S2): ONE call establishes the run-scoped half of
+    // assembly -- the resolved-tools decision, the guarded permission gate and
+    // the meta-tool dispatcher. It used to be ~105 lines of closure-local
+    // construction right here, and all of it was unreachable from outside this
+    // generator, so `assembleTurn` being public was still not enough for
+    // anything but this loop to own a turn.
+    const runAssembly = await this.beginTurnAssembly({
+      options,
+      prompt,
+      appliedProfile,
+      // Handed IN, not rebuilt: `streamChat` assembled this ~36 reads ago, and
+      // a handle that assembled its own would be a second `TurnAssembler.build`
+      // for one run.
+      turnContext,
+      publisher: options?.turnPipelines,
+    });
+    const { resolved: resolvedTools } = runAssembly;
+    // Only what this loop still reads. `registry` and `catalogView` for the
+    // catalog-eligibility block further down, `constraints` for the same
+    // decision, and `baseTools` as the starting value of the LIVE `tools` the
+    // loop promotes through the run. Kept narrow deliberately: a destructuring
+    // that binds names nothing reads is a second, silently-stale account.
     const {
       tools: baseTools,
       registry,
@@ -2071,91 +2341,7 @@ export class duyaAgent implements AgentRuntime {
     console.error(`[Agent-Process] streamChat tools (${tools.length}): conductorMode=${options?.conductorMode}, agentProfileId=${options?.agentProfileId}, mode=${options?.mode}, hasCanvasCreate=${tools.some(t => t.name === 'canvas_create_element')}`);
     // eslint-disable-next-line no-console
     console.error(`[Agent-Process] canvas tools: ${tools.filter(t => t.name.startsWith('canvas_')).map(t => t.name).join(', ') || '(none)'}`);
-    let systemPromptContent = await this._buildSystemPrompt(tools, options, appliedProfile);
-    const toolGroupProgressInstructions = [
-      'Tool-group progress: before a tool batch, provide one concise plain-text title for the work.',
-      'Use the provider structured commentary channel when it is explicitly available; otherwise call the private progress-title tool shown in the available tools with {title}.',
-      'Never derive a title from hidden reasoning or ordinary assistant prose. The progress-title call is private and does not perform work.',
-    ].join(' ');
-    systemPromptContent = systemPromptContent
-      ? `${systemPromptContent}\n\n${toolGroupProgressInstructions}`
-      : toolGroupProgressInstructions;
-    const { permissionContext, canUseTool } = buildPermissions(
-      {
-        getPermissionMode: () => this.getPermissionMode(),
-        hostToolPermission: this.hostToolPermission,
-        alwaysAllowRules: this.alwaysAllowRules,
-        alwaysDenyRules: this.alwaysDenyRules,
-        alwaysAskRules: this.alwaysAskRules,
-        additionalWorkingDirectories: this.additionalWorkingDirectories,
-        defaultWorkspaceDirectory: this.defaultWorkspaceDirectory,
-        getAbortController: () => this.abortController,
-        llmClient: this.llmClient,
-        model: this.model,
-        getMessages: () => this.messages,
-        hasPermissionsToUseTool: this.hasPermissionsToUseTool,
-        getModeCoordinator: () => this.modeCoordinator,
-      },
-      turnContext,
-      registry,
-    );
-    // Declared-tools visibility guard. Snapshot of the tools declared on
-    // the current provider request (filled before each openLLMStream). Any
-    // model call to a tool name outside that set is rejected. Deferred tools
-    // are reached through tool_catalog → tool_invoke.
-    let declaredToolsForRequest = new Set<string>();
-    const guardedCanUseTool: typeof canUseTool = async (toolName, toolInput) => {
-      const decision = evaluateVisibilityGuard({
-        declaredTools: declaredToolsForRequest,
-        toolName,
-      });
-      if (decision.undeclared) {
-        recordUndeclaredCall(toolName);
-        return {
-          allowed: false,
-          behavior: 'deny' as const,
-          message: decision.message!,
-        };
-      }
-      return canUseTool(toolName, toolInput);
-    };
-    // Wire tool_invoke to the registry + permission chain so the model can
-    // execute tools whose schemas it read through tool_catalog.
-    //
-    // Plan 583 ISS-04: `checkPermission` used to call the raw
-    // `hasPermissionsToUseTool` engine directly, which skipped three layers
-    // the direct-tool path always runs: the per-turn approval ledger
-    // (`consumeApprovedEffect`), the standing `alwaysAllowTools` grants, and
-    // the plan-mode `gateWriteTool` write barrier. Any tool reachable
-    // through `tool_invoke` therefore bypassed the plan-mode write barrier
-    // entirely — and a comment here claimed the opposite. Routing through
-    // the assembled `canUseTool` closes that.
-    //
-    // Deliberately `canUseTool` and NOT `guardedCanUseTool`: the visibility
-    // guard denies any name outside `declaredToolsForRequest`, and deferred
-    // tools are reached precisely that way (tool_catalog -> tool_invoke), so
-    // the dispatcher applies its own `isEligibleTool` check instead.
-    //
-    // Per-turn context handle for the meta-tool dispatcher. The dispatcher is
-    // wired HERE — before the turn loop builds its `toolUseContext` — so it
-    // takes a getter instead of the object. Without it, every built-in tool
-    // reached through `tool_invoke` executed with `context === undefined`:
-    // sessionId / apiKey / ipcRequest were all silently dropped (the browser
-    // tool then minted a fresh ephemeral session per call, one Chrome tab
-    // group per page).
-    let turnToolUseContext: ToolUseContext | undefined;
-    const toolInvokeDispatcher = createToolInvokeDispatcherFromRegistry({
-        registry,
-        getSnapshot: () => catalogView.snapshot,
-        getLoadedSchemaRevision: (toolId) => catalogView.loadedSchemaRevisions.get(toolId),
-        getLoadedSchemaRound: (toolId) => catalogView.loadedSchemaRounds.get(toolId),
-        getCurrentRound: () => catalogView.currentRound,
-        isEligibleTool: (toolId) => catalogView.eligibleToolIds.has(toolId),
-        workingDirectory: turnContext.workingDirectory ?? undefined,
-        contextProvider: () => turnToolUseContext,
-        checkPermission: async (toolName, args) =>
-          normalizeCanUseToolDecision(await canUseTool(toolName, args)),
-      });
+    let systemPromptContent = runAssembly.systemPrompt;
     // Plan 522: route the model-switch window check through the same
     // capability → catalog → default resolution as the constructor, so a
     // switch re-bases the compaction budget on the real window instead of
@@ -2698,28 +2884,18 @@ export class duyaAgent implements AgentRuntime {
         }
       }
 
-      // Plan 610 A3-2b7 (S1): ONE call assembles this turn -- the mode-prefix
-      // prompt refresh, the catalog round, and the pipeline.
+      // Plan 610 A3-2b8 (S2): ONE call assembles this turn, through the
+      // run handle -- the mode-prefix prompt refresh, the catalog round, and a
+      // FRESH pipeline.
       //
-      // `resolvedTools` is passed LIVE rather than reconstructed from the
-      // destructured consts. The fields are the same either way, but identity is
-      // not: a per-turn copy would be a bundle the seam could not tell apart from
-      // a previous turn's, and a stale resolved bundle is the failure the catalog
-      // round exists to prevent.
-      const assembly = this.assembleTurn({
+      // `tools` is passed per turn because promotion moves it during a run, and
+      // `systemPromptContent` because compaction replaces it. Neither belongs on
+      // the handle, which is why this call carries them rather than reading them.
+      const assembly = runAssembly.assemble({
         turn: turnCount,
         systemPrompt: systemPromptContent,
         messages,
         tools,
-        resolved: resolvedTools,
-        turnContext,
-        options,
-        canUseTool: guardedCanUseTool,
-        toolInvokeDispatcher,
-        publisher: options?.turnPipelines,
-        bindToolUseContext: (context) => {
-          turnToolUseContext = context;
-        },
       });
       // The refreshed prompt REPLACES the run's current one for the rest of the
       // turn, exactly as the inline block it replaces did. Compaction reassigns
@@ -3045,8 +3221,10 @@ export class duyaAgent implements AgentRuntime {
           turnCount,
           turnCommitted: doneEventHandled,
           refreshDeclaredTools: () => {
-            declaredToolsForRequest = new Set(tools.map((t) => t.name));
-            return declaredToolsForRequest;
+            // Plan 610 A3-2b8 (S2): the snapshot is re-taken from the handle,
+            // which holds the guard. Reading a local here would mean the loop
+            // and the guard could disagree about which tools are declared.
+            return runAssembly.refreshDeclaredTools();
           },
           onRetryReset: () => {
             // Plan 550 step 2e (TurnLoop first slice): the retry envelope lives in
