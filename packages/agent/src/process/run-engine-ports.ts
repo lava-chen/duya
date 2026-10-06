@@ -63,6 +63,10 @@ import type {
   CompactionProgress,
   CompactionUsageAnchor,
   ContextPort,
+  // Plan 610 A3-2b10 (S4a) -- the extension surface. OPTIONAL, and the reason
+  // it stays optional is that a run with no hooks is a legitimate run: the
+  // engine reads `?? []` and runs none, which is what happened before S4a.
+  ExtensionPort,
   // Plan 610 A3-1 -- inter-turn input. Required, unlike the two optional
   // sources above, and `LegacyEngineSources.interTurn` says why.
   InterTurnCheckpoint,
@@ -302,6 +306,20 @@ export interface LegacyEngineSources {
    * why this is a type error rather than a `?.`.
    */
   readonly compaction: CompactionSources;
+  /**
+   * The run's hook source, on the engine's extension port.
+   *
+   * Plan 610 A3-2b10 (S4a). OPTIONAL, and deliberately so: a host that configures
+   * no hooks is a host whose runs must still complete, and the engine's
+   * `#contribute` already reads `?? []`. Making it required would have meant
+   * every existing host grew a no-op port to satisfy a type.
+   *
+   * The source is a HOST concern and stays one. `createLegacyHookSource`
+   * (`hook-source.ts`) is the binding that maps the legacy's `ConfigHooksRunner`
+   * events onto the engine's phases; nothing in `packages/agent-runtime` knows
+   * that a `HookEvent` exists.
+   */
+  readonly extensions?: ExtensionPort;
 }
 
 /**
@@ -802,6 +820,7 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
   const onAssistantMessage = turnOutput?.onAssistantMessage;
   const interTurn: InterTurnInputPort = buildInterTurnPort(sources.interTurn);
   const compaction: CompactionPort = buildCompactionPort(sources.compaction);
+  const extensions = sources.extensions;
 
   return {
     model,
@@ -818,6 +837,11 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
     // production, so this binding performs no side effect until the cutover --
     // which is exactly why it can land first.
     compaction,
+    // OMITTED rather than bound to an empty port, and the difference is worth
+    // stating: a bound-but-empty port makes "this host configured no hooks" and
+    // "this host never bound one" look the same to anything reading the ports,
+    // and the omission is what `#contribute`'s `?? []` already handles.
+    ...(extensions === undefined ? {} : { extensions }),
     // All-or-nothing, for the same reason `sideEffects` is: half a port is a
     // port whose missing half is indistinguishable from one that was never
     // asked. `finishTurn` without `recordToolResult` would report counts for

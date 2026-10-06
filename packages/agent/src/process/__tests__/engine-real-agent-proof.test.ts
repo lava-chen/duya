@@ -138,7 +138,9 @@ const { TurnPipelinePublisher } = await import('../../tool/turn-pipeline-publish
 const { initDbClient } = await import('../../ipc/db-client.js');
 const { composeLegacyRunPorts, createLegacyAssembleTurn, buildLegacyRunManifest, buildLegacyRunInput } =
   await import('../run-composition.js');
+const { createLegacyHookSource, MAPPED_PHASES } = await import('../hook-source.js');
 import type { LegacyRunFacts, LegacyRunHost } from '../run-composition.js';
+import type { HookInvokedEvent, HooksSettings } from '../../hooks/types.js';
 
 let dbListener: ((m: unknown) => void) | null = null;
 const originalEnv = { ...process.env };
@@ -230,6 +232,39 @@ function registerProbe(agent: InstanceType<typeof duyaAgent>): Probe {
 
 const RUN_ID = 'run-s3-proof' as RunId;
 
+// ============================================================================
+// S4a -- the hook source, on the REAL host and the REAL hook runner
+// ============================================================================
+
+/**
+ * A REAL hook, not a spy.
+ *
+ * `ConfigHooksRunner` executes this as a `node` subprocess with the event's
+ * JSON on stdin (`executor.ts:256`), and the child answers with
+ * `<event>/<tool_name>/<tool_use_id>`. So a green assertion here means the
+ * engine dispatched the event AND the source built a payload a real hook could
+ * read -- a hand-rolled `ExtensionPort` that recorded a phase name would pass
+ * neither half of that.
+ */
+const HOOK_ECHO =
+  'node -e "let d=\'\';process.stdin.on(\'data\',c=>d+=c).on(\'end\',()=>{const i=JSON.parse(d);process.stdout.write(JSON.stringify({additionalContext:i.hook_event_name+\'/\'+(i.tool_name||\'-\')+\'/\'+(i.tool_use_id||\'-\')}))})"';
+
+/**
+ * The five events this run can reach.
+ *
+ * `Stop` is deliberately absent. `hook-source.ts` fires it on a CANCELLED run
+ * only, and this run completes -- so registering it would prove nothing and
+ * leaving it registered would let a source that fired `Stop` on every run pass.
+ * It is covered by the `on_start`/`after_finalize` tests below instead.
+ */
+const HOOK_SETTINGS: HooksSettings = {
+  UserPromptSubmit: [{ hooks: [{ type: 'command', command: HOOK_ECHO }] }],
+  SessionStart: [{ hooks: [{ type: 'command', command: HOOK_ECHO }] }],
+  PreToolUse: [{ hooks: [{ type: 'command', command: HOOK_ECHO }] }],
+  PostToolUse: [{ hooks: [{ type: 'command', command: HOOK_ECHO }] }],
+  SessionEnd: [{ hooks: [{ type: 'command', command: HOOK_ECHO }] }],
+};
+
 interface Proof {
   /** How many times the provider was asked for a request. POSITIVE COUNT. */
   readonly calls: () => number;
@@ -241,6 +276,13 @@ interface Proof {
   readonly catalogRounds: readonly number[];
   /** The agent's own resolved tool surface, for the cross-source compare. */
   readonly advertised: readonly string[];
+  /**
+   * The hook events that actually RAN, in order. From the runner's own
+   * `onHookInvoked`, so it is observable whether or not the engine adopts what
+   * the hook said -- which is the only honest channel today (see
+   * `hook-source.ts`).
+   */
+  readonly hooks: readonly HookInvokedEvent[];
 }
 
 async function runThroughEngine(): Promise<Proof> {
@@ -347,6 +389,7 @@ async function runThroughEngine(): Promise<Proof> {
   });
 
   const terminals: TerminalCandidate[] = [];
+  const hooks: HookInvokedEvent[] = [];
   const host: LegacyRunHost = {
     turnPipelines,
     // The production binding from A3-2b9, over the REAL handle.
@@ -367,6 +410,17 @@ async function runThroughEngine(): Promise<Proof> {
     // dispatch at all, because no tool in the product declares a class.
     beginTicket: (call) => ledger.begin(call),
     settleTicket: (input) => ledger.settle(input),
+    // S4a: the host-supplied hook source, on the engine's extension port.
+    // Before S4a this member did not exist and `RunEnginePorts.extensions` was
+    // never bound by anything, so `#contribute` read `?? []` at every call site
+    // and an engine-driven run executed no hook at all.
+    extensions: createLegacyHookSource({
+      cwd: process.cwd(),
+      sessionId: `s-s3-proof-${sessionSeq}`,
+      prompt,
+      settings: HOOK_SETTINGS,
+      onHookInvoked: (event) => hooks.push(event),
+    }),
   };
 
   const ports: RunEnginePorts = composeLegacyRunPorts(agent, host);
@@ -405,6 +459,7 @@ async function runThroughEngine(): Promise<Proof> {
     assembledTurns,
     catalogRounds,
     advertised: handle.tools.map((t) => t.name).sort(),
+    hooks,
   };
 }
 
@@ -462,6 +517,71 @@ describe('the engine drives a real duyaAgent for more than one turn', () => {
     expect(proof.seen[0].roles).not.toContain('tool');
     expect(proof.seen[1].roles).toContain('assistant');
     expect(proof.seen[1].roles).toContain('tool');
+  });
+});
+
+// ============================================================================
+// S4a -- the hook surface
+// ============================================================================
+
+describe('an engine-driven turn dispatches the hook events the legacy cycle dispatches', () => {
+  it('fires the run-scoped hooks once, at the two ends, and nothing in between', async () => {
+    const proof = await runThroughEngine();
+    const fired = proof.hooks.map((h) => h.hookEventName);
+
+    // EXACT SEQUENCE, and in this order for a reason rather than for tidiness.
+    // `UserPromptSubmit` before `SessionStart` is the legacy's own order
+    // (`DuyaAgent.ts:2130` then `:2144`) and both feed the same first-turn
+    // context rail, so a session that starts before the prompt is submitted
+    // inverts the provenance the envelopes carry. `PreToolUse` before
+    // `PostToolUse` is the point of the pair: a hook that gates a tool has to
+    // run before it, and a hook that reports on one after it.
+    //
+    // Counts are implied by the sequence and are therefore not vacuous: a run
+    // that dispatched nothing at all would produce `[]` and fail here.
+    expect(fired).toEqual(['UserPromptSubmit', 'SessionStart', 'PreToolUse', 'PostToolUse', 'SessionEnd']);
+
+    // POSITIVE COUNT, the S3 rule: exactly one run-scoped pair for a run that
+    // began once and ended once. A source that fired `on_start` per TURN would
+    // show two `UserPromptSubmit` here and the sequence above would not hold.
+    expect(fired.filter((name) => name === 'SessionStart')).toHaveLength(1);
+    expect(fired.filter((name) => name === 'SessionEnd')).toHaveLength(1);
+
+    // `Stop` is registered on the run that CANCELLED, never on this one. Its
+    // absence is asserted rather than assumed, because the alternative -- a
+    // source that fires `Stop` on every exit -- would sail through the
+    // sequence above and is exactly the bug `firesOnExit` exists to prevent.
+    expect(fired).not.toContain('Stop');
+  });
+
+  it('hands the tool hook a payload a real hook could read, correlated across both phases', async () => {
+    const proof = await runThroughEngine();
+    const pre = proof.hooks.find((h) => h.hookEventName === 'PreToolUse');
+    const post = proof.hooks.find((h) => h.hookEventName === 'PostToolUse');
+
+    // These are STRINGS a `node` subprocess printed after parsing the event
+    // JSON off stdin, not a value this test handed the source: `PreToolUse/
+    // probe_ok/t1` means the engine dispatched the phase, the source built
+    // `tool_name` and `tool_use_id` from the live `ToolCallRequest`, and a real
+    // hook read them back.
+    expect(pre?.additionalContext).toBe(`PreToolUse/${PROBE}/t1`);
+    // And the POST side named the same call -- which it can only do by
+    // correlating `after_tool`'s bare outcome back to the `before_tool` request,
+    // because `ExtensionContext.outcome` carries no tool name. A source that
+    // dropped the correlation would print `PostToolUse/-/t1` here.
+    expect(post?.additionalContext).toBe(`PostToolUse/${PROBE}/t1`);
+
+    // The probe really ran, so the `PostToolUse` above is about a result that
+    // exists rather than a hook that fired against nothing.
+    expect(proof.runs()).toBe(1);
+  });
+
+  it('maps only the four phases it has events for, and says which', () => {
+    // The MAP, not the fallout. Asserting on what happened to fire would let a
+    // source that mapped `before_turn` to nothing still pass, and would say
+    // nothing about the three engine-own phases that have no config event yet
+    // (`hook-source.ts` header: the loop bus is the orchestrator slice).
+    expect([...MAPPED_PHASES].sort()).toEqual(['after_finalize', 'after_tool', 'before_tool', 'on_start']);
   });
 });
 

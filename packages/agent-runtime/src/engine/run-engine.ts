@@ -143,6 +143,8 @@ import type {
   AssistantMessageRecord,
   AssembledTurn,
   BudgetPort,
+  EngineExit,
+  EngineExitReason,
   ExtensionContext,
   ExtensionContribution,
   ExtensionPhase,
@@ -173,24 +175,17 @@ import { runCompactionPass, type CompactionPassResult } from './compaction.js';
 // ============================================================================
 
 /**
- * Why the engine stopped.
+ * Why the engine stopped, and what it reported about that.
  *
- * Always a CANDIDATE. `RunSession.settle` is the single writer of the terminal
- * (`run-session.ts:519,527`) and may disagree — a budget ceiling the engine has
- * not seen, a lost dispatch, a server-side stop.
+ * `EngineExitReason` / `EngineExit` now LIVE in `ports.ts`, because
+ * `ExtensionContext.exit` has to name them for a contributor reading the
+ * `after_finalize` phase -- and a port file that re-declared a second copy of
+ * the exit union would let the two disagree. They are re-exported here, so
+ * every existing import of `./engine/run-engine.js` (and `index.ts`) is
+ * unchanged; the same move the file already makes for `ProtocolErrorInfo` at
+ * the bottom.
  */
-export type EngineExitReason =
-  | 'completed'
-  | 'budget_exhausted'
-  | 'max_turns'
-  | 'cancelled'
-  | 'failed';
-
-export interface EngineExit {
-  readonly reason: EngineExitReason;
-  /** `failed` only. A message, never a stack. */
-  readonly message?: string;
-}
+export type { EngineExit, EngineExitReason } from './ports.js';
 
 /** What the run reported about its own exit. For a log line or a receipt. */
 export interface EngineRunReport {
@@ -479,6 +474,38 @@ export class RunEngineImpl implements RunEngine {
       // is the only authority that may refuse a write, so a fence supplied from
       // outside would be a second authority that cannot be refused.
       fence = ports.attempt === undefined ? null : await ports.attempt.acquire(runId);
+
+      // ── The `on_start` phase: once per RUN, before turn 1 ────────────────
+      // AFTER the fence, because a contributor that runs before its attempt is
+      // leased has produced work that no epoch attributes -- the same reason
+      // the fence is acquired at all (`ports.ts` contract 3).
+      //
+      // And BEFORE the loop rather than as a first-iteration `before_turn`,
+      // because these are not the same phase and conflating them would make
+      // "once per run" unrepresentable: a run that exhausts its budget at the
+      // top of turn 1 never reaches a first iteration's body, and the legacy
+      // fires `SessionStart` before it can do that too (`DuyaAgent.ts:2144`).
+      //
+      // `turn: 0` is the "no turn has begun" answer documented on
+      // `ExtensionContext.turn`, not a bug in the call site.
+      // A phase with NO contributors must not add a scheduling point, and that
+      // is not an optimisation -- it is the difference between this change
+      // being observable and not. `#run`'s FIRST `await` is a scheduling
+      // point, and `handle.stop()` aborts synchronously from the caller's next
+      // statement; so moving that first await from `before_turn` (inside the
+      // turn loop, after its abort check) out here ahead of the loop means a
+      // stop that arrives immediately is caught by the loop's `isAborted`
+      // instead of reaching the provider. Measured, not assumed:
+      // `run-engine-model-frames.test.ts` "a stop during the turn aborts the
+      // PROVIDER" fails on exactly that and passes again once the await is
+      // conditional.
+      //
+      // A host that configures no hooks therefore gets byte-for-byte the
+      // scheduling it had before S4a, and a host that DOES configure hooks is
+      // the one that asked for work before its first turn.
+      if ((ports.extensions?.list('on_start') ?? []).length > 0) {
+        await this.#contribute({ runId, turn: 0, signal, ports }, 'on_start', {});
+      }
 
       for (let turn = 1; ; turn++) {
         // ── Budget, BEFORE this turn is counted and BEFORE the model request ──
@@ -788,6 +815,37 @@ export class RunEngineImpl implements RunEngine {
       // stream completed has no message, and `#finalizeLastMessage` returns
       // without publishing -- absence, not an empty finalized message.
       this.#finalizeLastMessage(ports, lastMessage);
+      // ── The `after_finalize` phase: once per RUN, at the end ─────────────
+      // In the `finally`, so a FAILED and a CANCELLED run reach it too. The
+      // legacy's `SessionEnd` fires on the same three paths
+      // (`SessionFinalizer.ts:248`, `:274`, plus `Stop` at `:268`), and a hook
+      // that only sees successful runs is a hook that never sees the run a user
+      // actually needs to know about.
+      //
+      // AFTER `#finalizeLastMessage` and not before: the message stops changing
+      // strictly before the run ends, so a contributor that reads the finalized
+      // message here is reading the same bytes every consumer will.
+      //
+      // CANNOT THROW, deliberately. Rule 3's one exception is scoped to
+      // `before_finalize`, so a throwing contributor at this phase is swallowed
+      // by `#contribute` -- which is what makes it safe to await inside a
+      // `finally` without a try, where a throw would replace the real exit with
+      // the exit of a bookkeeping failure.
+      //
+      // `spend.turns` is the last turn that BEGAN (`RunSpendLedger.beginTurn`
+      // assigns rather than increments), and is `0` when the run stopped at the
+      // budget check above turn 1. That is the honest value and the same one
+      // the run's own spend report carries.
+      //
+      // `exit` is handed over, and it is the reason this phase exists: the
+      // legacy fires `SessionEnd` on the success and abort paths and fires
+      // NOTHING on the stream-error path (`SessionFinalizer.ts:248`, `:274`,
+      // `:310-350`), which no phase-only signal can reproduce.
+      // Same rule as `on_start` above, for the same measured reason: a run with
+      // no hook source must not gain a scheduling point in its `finally`.
+      if ((ports.extensions?.list('after_finalize') ?? []).length > 0) {
+        await this.#contribute({ runId, turn: spend.turns, signal, ports }, 'after_finalize', { exit });
+      }
       // The engine PROPOSES and does not publish `run.completed` / `run.failed`.
       //
       // ## The ordering hazard that used to block this is GONE
@@ -1877,20 +1935,39 @@ export class RunEngineImpl implements RunEngine {
    * Run one extension phase, honouring the five rules in `ports.ts`: fixed
    * order, engine-enforced timeout, fail-open on a throw, the caller's signal,
    * and no unloading mid-run.
+   *
+   * ## Why the scope is `ExtensionScope` and not `RunContext`
+   *
+   * Because the two run-scoped phases run OUTSIDE any turn. `RunContext` is
+   * rebuilt every iteration and carries the turn's assembly, spend and work
+   * counters, none of which exist before turn 1 or after the loop has broken --
+   * so a `RunContext` parameter would force the two run-scoped call sites to
+   * mint a context that is a fiction, and every field a future contributor
+   * reads off it would be a plausible-looking zero.
+   *
+   * `ExtensionScope` is exactly the four things `#contribute` reads, and
+   * `RunContext` satisfies it structurally, so the five per-turn call sites are
+   * unchanged by this narrowing. The type is the whole argument: it is what
+   * makes "this phase has no turn context" a compile-time fact rather than a
+   * comment.
    */
   async #contribute(
-    ctx: RunContext,
+    scope: ExtensionScope,
     phase: ExtensionPhase,
-    extra: { readonly call?: ToolCallRequest; readonly outcome?: ToolOutcome },
+    extra: {
+      readonly call?: ToolCallRequest;
+      readonly outcome?: ToolOutcome;
+      readonly exit?: EngineExit;
+    },
   ): Promise<readonly ExtensionContribution[]> {
-    const contributors = ctx.ports.extensions?.list(phase) ?? [];
-    const context: ExtensionContext = { runId: ctx.runId, turn: ctx.turn, ...extra };
+    const contributors = scope.ports.extensions?.list(phase) ?? [];
+    const context: ExtensionContext = { runId: scope.runId, turn: scope.turn, ...extra };
     const adopted: ExtensionContribution[] = [];
 
     for (const contributor of contributors) {
       try {
         for (const contribution of await withDeadline(
-          contributor.contribute(context, ctx.signal),
+          contributor.contribute(context, scope.signal),
           contributor.timeoutMs,
         )) {
           adopted.push(contribution);
@@ -2271,6 +2348,26 @@ interface RunContext {
    * see the declaration in `#run` for the bound and why it exists.
    */
   readonly finalPollAbsorbs: RunScoped<{ current: number }>;
+}
+
+/**
+ * The four things an extension phase actually needs, and the reason two phases
+ * can run without a turn.
+ *
+ * `RunContext` satisfies this structurally, so the five per-turn call sites pass
+ * it unchanged; the two run-scoped ones (`on_start`, `after_finalize`) pass a
+ * four-field literal. See `#contribute` for why the distinction is load-bearing
+ * rather than cosmetic.
+ */
+interface ExtensionScope {
+  readonly runId: RunId;
+  /**
+   * The turn, or `0` for a phase outside one -- see `ExtensionContext.turn`,
+   * which is the value a contributor actually reads and carries the same rule.
+   */
+  readonly turn: number;
+  readonly signal: AbortSignal;
+  readonly ports: RunEnginePorts;
 }
 
 /**

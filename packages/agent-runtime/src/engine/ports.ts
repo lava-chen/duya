@@ -1468,18 +1468,73 @@ export interface SubtaskHandle {
 // ============================================================================
 
 /**
+ * Why the engine stopped.
+ *
+ * Always a CANDIDATE. `RunSession.settle` is the single writer of the terminal
+ * (`run-session.ts:519,527`) and may disagree — a budget ceiling the engine has
+ * not seen, a lost dispatch, a server-side stop.
+ *
+ * ## Why it lives in this file
+ *
+ * Because `ExtensionContext.exit` names it, and a port file that re-declared a
+ * second copy of the union beside the engine's own would be a second answer to
+ * "how can a run end" -- one the compiler could not check against the other.
+ * `run-engine.ts` re-exports both types unchanged, so every existing import
+ * still resolves and nothing outside this package has to care.
+ */
+export type EngineExitReason =
+  | 'completed'
+  | 'budget_exhausted'
+  | 'max_turns'
+  | 'cancelled'
+  | 'failed';
+
+export interface EngineExit {
+  readonly reason: EngineExitReason;
+  /** `failed` only. A message, never a stack. */
+  readonly message?: string;
+}
+
+/**
  * The points the engine consults a contributor at.
  *
  * One narrow interface per phase in practice: adding a capability adds a
  * contributor, and does not widen this union. Plan 600 `02` section 1.2 makes
  * this the load-bearing shape (thirteen separate `Vec`s, not one `register`).
+ *
+ * ## The five TURN phases and the two RUN phases
+ *
+ * Five of these are per-turn and were there from the start. `on_start` and
+ * `after_finalize` are per-RUN, and they are not decoration: the legacy cycle
+ * dispatches two hook events at each end of a run that no turn phase can reach.
+ * `UserPromptSubmit` and `SessionStart` fire once before the first turn
+ * (`DuyaAgent.ts:2130`, `:2144`), and `Stop` / `SessionEnd` fire once after the
+ * last (`SessionFinalizer.ts:268`, `:248`). A run whose engine dispatches only
+ * the five turn phases therefore runs every per-tool hook and none of the
+ * per-session ones, and nothing about that failure is visible in a frame.
+ *
+ * The two sit OUTSIDE the turn loop for the same reason the legacy's do, and the
+ * placement is the contract: `on_start` after the attempt fence is acquired (so
+ * a contributor's work is already attributable to this attempt) and before turn
+ * 1, `after_finalize` in the run's `finally` and after
+ * `assistant.message_finalized` (so a contributor sees the final message rather
+ * than a run still changing).
+ *
+ * `before_turn` / `before_model` / `before_finalize` are the engine's OWN
+ * phases and have no config-hook event behind them yet -- the legacy's
+ * `PreTurn` / `PreFinalize` / `PostTurn` run on the mode coordinator's loop bus
+ * (`hooks/loop.ts`), which is a later slice. Leaving them unmapped is stated
+ * rather than implied: a contributor registered for them is called and has
+ * nothing to contribute from the legacy side yet.
  */
 export type ExtensionPhase =
+  | 'on_start'
   | 'before_turn'
   | 'before_model'
   | 'before_tool'
   | 'after_tool'
-  | 'before_finalize';
+  | 'before_finalize'
+  | 'after_finalize';
 
 /** One contribution. Data or a decision, never a loop. */
 export interface ExtensionContribution {
@@ -1529,11 +1584,37 @@ export interface ExtensionContributor {
 
 export interface ExtensionContext {
   readonly runId: RunId;
+  /**
+   * The turn the phase is running inside, and `0` for the two run-scoped
+   * phases.
+   *
+   * `0` rather than an optional `turn`, because a contributor that reads
+   * `ctx.turn` must not be handed `undefined` and have to narrow first: the
+   * engine counts turns from one, so zero is the one value that cannot be a
+   * real turn index. `on_start` is always `0` -- no turn has begun. On
+   * `after_finalize` it is the turn the run stopped on, or `0` if the run
+   * stopped before one began, which is the same honest answer the budget check
+   * gives when it refuses a run at the top of the loop.
+   */
   readonly turn: number;
   /** Present at `before_tool` only. */
   readonly call?: ToolCallRequest;
   /** Present at `after_tool` only. */
   readonly outcome?: ToolOutcome;
+  /**
+   * Why the run is ending. Present at `after_finalize` ONLY.
+   *
+   * Not a convenience. The legacy's run-scoped hooks are not unconditional:
+   * `SessionFinalizer` dispatches `SessionEnd` on the success and abort paths
+   * (`:248`, `:274`) and dispatches NOTHING on the stream-error path
+   * (`:310-350`), while `Stop` fires on the abort path alone (`:268`). A
+   * contributor that cannot see the exit has to guess between those, and it
+   * guesses wrong on a failed run by firing a "the session ended cleanly" hook
+   * for a run that crashed.
+   *
+   * Always a CANDIDATE, for the reason `EngineExit` says.
+   */
+  readonly exit?: EngineExit;
 }
 
 /** The engine's view of the extension set. */

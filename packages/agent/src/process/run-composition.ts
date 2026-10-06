@@ -125,6 +125,7 @@ import type {
   ApprovalRequest,
   ApprovalVerdict,
   AssembledTurn,
+  ExtensionPort,
   ModelFrame,
   ModelMessage,
   ModelRequest,
@@ -304,6 +305,20 @@ export interface LegacyRunHost {
   readonly turnOutputSink?: TurnOutputSink;
   /** Collects a fragment the engine deferred for the next turn. */
   readonly deferFragment?: (fragment: TransientContextFragment) => void;
+  /**
+   * The run's hook source, for the engine's extension port.
+   *
+   * Plan 610 A3-2b10 (S4a). Host-supplied rather than derived from the agent,
+   * and that placement is the point: which hooks a run raises is a property of
+   * the session's configuration, and `duyaAgent` builds its own
+   * `ConfigHooksRunner` per `streamChat` call (`:2062`) out of `turnContext`
+   * locals this interface cannot see. The engine needs the same runner the
+   * legacy used, and only the host holds those facts.
+   *
+   * Build it with `createLegacyHookSource` (`hook-source.ts`), which is the
+   * only thing that knows how a `HookEvent` maps onto an `ExtensionPhase`.
+   */
+  readonly extensions?: ExtensionPort;
 }
 
 // ============================================================================
@@ -447,6 +462,13 @@ export function composeLegacyRunSources(
       },
     },
     ...(host.deferFragment === undefined ? {} : { deferFragment: host.deferFragment }),
+    // Plan 610 A3-2b10 (S4a). Optional on the host and optional on the ports,
+    // and the two are the same decision: a host that configures no hooks must
+    // not be forced to build an empty `ExtensionPort` to satisfy a type, and
+    // the engine's `#contribute` already treats an absent one as "no
+    // contributors". Omitted rather than defaulted so that "no hooks" and "no
+    // hook source bound" stay distinguishable.
+    ...(host.extensions === undefined ? {} : { extensions: host.extensions }),
     ...(host.beginTicket === undefined || host.settleTicket === undefined
       ? {}
       : { beginTicket: host.beginTicket, settleTicket: host.settleTicket }),
