@@ -910,11 +910,30 @@ export class RunEngineImpl implements RunEngine {
       // without publishing -- absence, not an empty finalized message.
       this.#finalizeLastMessage(ports, lastMessage);
       // ── The `after_finalize` phase: once per RUN, at the end ─────────────
-      // In the `finally`, so a FAILED and a CANCELLED run reach it too. The
-      // legacy's `SessionEnd` fires on the same three paths
-      // (`SessionFinalizer.ts:248`, `:274`, plus `Stop` at `:268`), and a hook
-      // that only sees successful runs is a hook that never sees the run a user
-      // actually needs to know about.
+      // In the `finally`, so a FAILED and a CANCELLED run reach it too. What a
+      // run then DISPATCHES is not this file's decision, and the two paths
+      // differ, so the shape is measured rather than assumed -- by
+      // `engine-session-end-parity.test.ts`, on both paths, through the same
+      // `ConfigHooksRunner` dispatch boundary:
+      //
+      //   path                legacy `streamChat`   this engine
+      //   ------------------- --------------------- --------------------
+      //   completed           SessionEnd            SessionEnd
+      //   aborted (loop exit) Stop, SessionEnd      (nothing)
+      //   aborted (model leg) (nothing)             (nothing)
+      //   stream error        (nothing)             (nothing)
+      //   max_turns           (nothing)             SessionEnd
+      //
+      // An EARLIER version of this comment claimed the legacy fires `SessionEnd`
+      // "on the same three paths". That was FALSE, and forty lines below the same
+      // block said the opposite and correctly. It is removed rather than
+      // reconciled: the legacy's `SessionEnd` comes from exactly two of its
+      // three `SessionFinalizer` methods, and both of its ceiling exits plus its
+      // four early `done('completed')` exits never call a finalizer at all.
+      //
+      // The point of running the phase for failed and cancelled runs survives the
+      // correction: a hook that only sees successful runs never sees the run a
+      // user needs to know about.
       //
       // AFTER `#finalizeLastMessage` and not before: the message stops changing
       // strictly before the run ends, so a contributor that reads the finalized
@@ -931,12 +950,15 @@ export class RunEngineImpl implements RunEngine {
       // budget check above turn 1. That is the honest value and the same one
       // the run's own spend report carries.
       //
-      // `exit` is handed over, and it is the reason this phase exists: the
-      // legacy fires `SessionEnd` on the success and abort paths and fires
-      // NOTHING on the stream-error path (`SessionFinalizer.ts:248`, `:274`,
-      // `:310-350`), which no phase-only signal can reproduce.
-      // Same rule as `on_start` above, for the same measured reason: a run with
-      // no hook source must not gain a scheduling point in its `finally`.
+      // `exit` is handed over, and it is the reason this phase exists: the legacy
+      // fires `SessionEnd` only from `SessionFinalizer.finalizeSuccess` and
+      // `finalizeAbort` and fires NOTHING from `finalizeStreamError`, which no
+      // phase-only signal can reproduce. The one asymmetry that is NOT a
+      // reproduction question is the cancellation row above, which is decided
+      // by the hook source's own `signal.aborted` guard rather than by anything
+      // here -- see `hook-source.ts`'s `contributorsFor`. Same rule as `on_start`
+      // above, for the same measured reason: a run with no hook source must not
+      // gain a scheduling point in its `finally`.
       if ((ports.extensions?.list('after_finalize') ?? []).length > 0) {
         // NOT ADOPTED, and this is the one phase of seven whose contributions
         // cannot reach the model. It runs here -- after the turn loop has broken

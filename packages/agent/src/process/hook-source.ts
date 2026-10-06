@@ -33,13 +33,18 @@
  * that is the orchestrator slice, and a contributor registered for those three
  * phases today is called and has nothing to fire.
  *
- * `after_finalize` is the only phase with per-EVENT conditions, and they are
- * not cosmetic: the legacy dispatches `SessionEnd` on the success and abort
- * paths and dispatches NOTHING on the stream-error path
- * (`SessionFinalizer.ts:310-350`), and `Stop` on the abort path alone. A
- * contributor that cannot read `ExtensionContext.exit` has to guess between
- * those and guesses wrong on a failed run, announcing a clean session end for a
- * run that crashed.
+ * `after_finalize` is the only phase with per-EVENT conditions. What it fires
+ * is narrower than the conditions imply, and the reason is the `signal.aborted`
+ * guard in `contributorsFor` rather than anything about exit reasons: the legacy
+ * dispatches `SessionEnd` from `finalizeSuccess` and from `finalizeAbort`, and
+ * dispatches NOTHING from `finalizeStreamError` -- including when that method
+ * maps an `AbortError` onto the same `done('aborted')` terminal `finalizeAbort`
+ * uses. It also dispatches nothing at all from `streamChat`'s two ceiling exits
+ * and its four early `done('completed')` exits, none of which call a finalizer.
+ * A contributor that cannot read `ExtensionContext.exit` has to guess between
+ * those, and guessing wrong on a failed run announces a clean session end for a
+ * run that crashed. Measured on both paths by
+ * `engine-session-end-parity.test.ts`.
  *
  * ## The ONE difference from the legacy, stated rather than buried
  *
@@ -187,11 +192,31 @@ const PHASE_EVENTS: Readonly<Partial<Record<ExtensionPhase, readonly MappedHookE
 /**
  * The one event that fires on a condition rather than always.
  *
- * `Stop` on a cancelled run, `SessionEnd` on everything except a failure.
- * Read off the exit rather than off the signal, because `signal.aborted` is
- * ALSO true for a run that failed after the user had already stopped it, and
- * `SessionFinalizer` keys its two dispatches off the same three-way split the
- * engine's `EngineExitReason` is.
+ * `SessionEnd` on everything except a failure. Read off the exit rather than off
+ * the signal, because `signal.aborted` is ALSO true for a run that failed after
+ * the user had already stopped it.
+ *
+ * ## The `Stop` arm below is UNREACHABLE today, and the doc that used to claim
+ * otherwise was wrong
+ *
+ * It used to read "`Stop` on a cancelled run, `SessionEnd` on everything except
+ * a failure", and to justify itself by saying `SessionFinalizer` "keys its two
+ * dispatches off the same three-way split the engine's `EngineExitReason` is".
+ * Neither half survives measurement:
+ *
+ *  - `SessionFinalizer` has THREE methods, not one three-way split, and it
+ *    chooses between them by control flow rather than by an exit reason.
+ *  - The `Stop` arm is never reached, because `contributorsFor` tests
+ *    `signal.aborted` and returns BEFORE it calls this function. On a cancelled
+ *    run every contributor is already empty, so both events are skipped.
+ *
+ * The arm is KEPT rather than deleted: removing it would make the cancellation
+ * case silently dispatch `SessionEnd` if the guard above is ever reordered, and
+ * a guard that decides behaviour by accident is worse than an arm that says so.
+ * What is true today is in `engine-session-end-parity.test.ts`: a cancelled run
+ * dispatches neither event, and the legacy dispatches `Stop` + `SessionEnd` on
+ * one of its two abort routes. Closing that gap is a flip decision, not a
+ * silent repair here.
  */
 function firesOnExit(event: MappedHookEvent, reason: string | undefined): boolean {
   if (reason === 'failed') return false;
