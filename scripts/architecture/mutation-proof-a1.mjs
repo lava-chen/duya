@@ -254,22 +254,30 @@ console.log(`\n${results.length - failed}/${results.length} mutation-proof check
  * (`openModelStream` / `runTools`) IS reported, and the cost of the predicate
  * is paid in the other direction.
  *
- * The cost was measured rather than guessed, over 2250 non-test source files:
+ * The cost was measured rather than guessed, over 2253 non-test source files:
  *
  *   | predicate                                            | files selected |
  *   | ---------------------------------------------------- | -------------- |
  *   | previous three name clauses                          | 5              |
- *   | two driven streams in one loop body (shipped)       | 1              |
- *   | one driven stream + any other awaited call          | 4              |
+ *   | two driven streams in one loop body                  | 1              |
+ *   | two driven streams, one call frame down (shipped)    | 2              |
+ *   | one driven stream + any other awaited call           | 4              |
  *
- * The extra three files the last row buys are `SessionSearchTool.ts`,
+ * The count moved 1 -> 2 when the predicate began counting a leg that lives one
+ * CALL FRAME below the loop body, and the added file is
+ * `packages/agent-runtime/src/engine/run-engine.ts` — the execution owner, whose
+ * two legs are private methods the loop body calls. Re-measured, not assumed:
+ * both matches are loop implementations, so the movement bought a real cycle and
+ * absorbed nothing else.
+ *
+ * The extra files the second-to-last row would buy are `SessionSearchTool.ts`,
  * `packages/ai/src/utils/retry.ts` and `apps/desktop/src/main/services/backup.ts`
  * — a tool, a retry helper and a backup scan. Widening to them is a deliberate
  * decision with a measured price, and is recorded here rather than taken.
  */
 console.log(
   `\nKNOWN GAP (recorded, not patched): a turn loop whose two legs are plain awaited calls,\n` +
-    `  not consumed streams, is not reported. The shipped predicate selects 1 of 2250 files;\n` +
+    `  not consumed streams, is not reported. The shipped predicate selects 2 of 2253 files;\n` +
     `  accepting one stream plus any other awaited call would select 4.`
 );
 

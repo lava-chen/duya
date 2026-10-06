@@ -62,6 +62,7 @@ import {
   reachabilityFrom,
   resolveRepoSpecifier,
   turnLoopSites,
+  WORKER_LOOP_MAX_DEPTH,
   workerImplementsExecutionChannel,
   type BoundaryReport,
 } from './boundary-gates.js';
@@ -782,6 +783,316 @@ describe('G7/G8 — the loop is located by SHAPE, and the shape contains no name
         expect(isTestPath('packages/agent/src/agent/DuyaAgent.ts')).toBe(false);
       },
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The legs one CALL FRAME down. See the `turnLoopSites` docstring for why the
+// inline-only rule measured `run-engine.ts` as "not a turn loop", and for the
+// reason this matters before A3-2b6 rather than after it.
+//
+// These fixtures mirror the REAL engine shape — a `for` cycle whose body calls
+// two private methods, each of which drives one `for await` leg — rather than a
+// shape invented for the test. The negatives carry more weight than the
+// positives here, because a widened predicate is exactly the kind of change that
+// goes green by matching everything.
+// ---------------------------------------------------------------------------
+describe('G7/G8 — a leg one call frame down still counts, and the follow stops there', () => {
+  /** The decomposition the runtime engine actually uses. */
+  const DECOMPOSED_LOOP = [
+    'class Engine {',
+    '  async #streamModel(ports: Ports, request: Request): Promise<null> {',
+    '    for await (const frame of ports.model.stream(request)) {',
+    '      use(frame);',
+    '    }',
+    '    return null;',
+    '  }',
+    '',
+    '  async #drainOutcomes(ports: Ports, signal: AbortSignal): Promise<void> {',
+    '    for await (const item of ports.tools.drain(signal)) {',
+    '      use(item);',
+    '    }',
+    '  }',
+    '',
+    '  async run(ports: Ports): Promise<void> {',
+    '    for (let turn = 1; ; turn++) {',
+    '      await this.#streamModel(ports, build(turn));',
+    '      await this.#drainOutcomes(ports, ports.signal);',
+    '    }',
+    '  }',
+    '}',
+    '',
+  ].join('\n');
+
+  it('reports a loop whose two legs live in methods the body CALLS', () => {
+    // The whole point of the change. Before it, this file measured false and
+    // the runtime execution owner was invisible to both G7 and G8.
+    expect(DECOMPOSED_LOOP).not.toMatch(/for\s+await[^\n]*\n[^\n]*\n[^\n]*\n[^\n]*\n[^\n]*\n[^\n]*\n[^\n]*\n[^\n]*\n\s*for\s+await/);
+    expect(isTurnLoopModule(DECOMPOSED_LOOP)).toBe(true);
+    const sites = turnLoopSites(DECOMPOSED_LOOP);
+    expect(sites).toHaveLength(1);
+    // The site is the `for (let turn …)` header, not one of the leg methods:
+    // finding a leg on its own would be the wrong answer.
+    expect(DECOMPOSED_LOOP.split('\n')[sites[0]!.line - 1]).toContain('for (let turn');
+  });
+
+  it('finds the LIVE runtime engine, which the inline-only rule could not see', () => {
+    // The non-vacuity proof against the real tree rather than a fixture: the
+    // module the whole cutover is moving the cycle into.
+    const src = stripComments(
+      fs.readFileSync(path.join(REPO_ROOT, 'packages/agent-runtime/src/engine/run-engine.ts'), 'utf8'),
+    ).text;
+    expect(isTurnLoopModule(src)).toBe(true);
+    // Guard against the assertion becoming vacuous: the loop body really does
+    // carry zero inline legs, so this cannot be passing for the old reason.
+    const bodyLine = turnLoopSites(src)[0]!.line;
+    expect(src.split('\n').slice(bodyLine - 1, bodyLine + 280).join('\n')).not.toMatch(/\bfor\s+await\b/);
+  });
+
+  it('still reports the INLINE shape — the widening did not replace the old rule', () => {
+    const inline = [
+      'export async function* drive(client, tools) {',
+      '  let keepGoing = true;',
+      '  while (keepGoing) {',
+      '    for await (const chunk of client.streamChat([])) {',
+      '      yield chunk;',
+      '    }',
+      '    for await (const outcome of tools.executeAll([])) {',
+      '      keepGoing = outcome;',
+      '    }',
+      '  }',
+      '}',
+      '',
+    ].join('\n');
+    expect(isTurnLoopModule(inline)).toBe(true);
+    expect(turnLoopSites(inline)[0]!.legs).toBe(2);
+  });
+
+  it('does NOT follow the legs into ANOTHER module — no cross-module following', () => {
+    // The negative that bounds the follow along the IMPORT axis. Both legs live
+    // in a different file, so this module has zero legs of its own and must not
+    // be reported. Following the import would make this a transitive call
+    // graph, which is explicitly out of scope.
+    const local = [
+      "import { bothLegs } from './legs.js';",
+      '',
+      'export async function* drive(ports) {',
+      '  for (let turn = 1; ; turn++) {',
+      '    await bothLegs(ports);',
+      '  }',
+      '}',
+      '',
+    ].join('\n');
+    expect(isTurnLoopModule(local)).toBe(false);
+    expect(turnLoopSites(local)).toEqual([]);
+  });
+
+  it('does NOT follow the legs TWO frames down — exactly one call frame', () => {
+    // The negative that bounds the follow along the CALL axis. `inner` drives
+    // both legs and `outer` calls it, but the loop body calls `outer`, so the
+    // legs are two frames from the loop and out of scope by design.
+    const twoFrames = [
+      'async function inner(ports) {',
+      '  for await (const a of ports.model.stream()) { use(a); }',
+      '  for await (const b of ports.tools.drain()) { use(b); }',
+      '}',
+      '',
+      'async function outer(ports) {',
+      '  await inner(ports);',
+      '}',
+      '',
+      'export async function drive(ports) {',
+      '  for (let turn = 1; ; turn++) {',
+      '    await outer(ports);',
+      '  }',
+      '}',
+      '',
+    ].join('\n');
+    expect(isTurnLoopModule(twoFrames)).toBe(false);
+  });
+
+  it('does NOT count a loop with only ONE leg, however it is decomposed', () => {
+    // The threshold counterweight, and the case that would make the gate
+    // satisfiable by deletion again. One driven stream is not a cycle.
+    const oneLegInline = [
+      'export async function* drive(client) {',
+      '  while (true) {',
+      '    for await (const chunk of client.streamChat([])) {',
+      '      yield chunk;',
+      '    }',
+      '  }',
+      '}',
+      '',
+    ].join('\n');
+    expect(isTurnLoopModule(oneLegInline)).toBe(false);
+
+    // Same, one frame down: the body calls two methods but only one has a leg.
+    const oneLegDelegated = [
+      'class Engine {',
+      '  async #model(ports) {',
+      '    for await (const frame of ports.model.stream()) { use(frame); }',
+      '  }',
+      '  async #tools(ports) {',
+      '    use(ports.tools);',
+      '  }',
+      '  async run(ports) {',
+      '    for (let turn = 1; ; turn++) {',
+      '      await this.#model(ports);',
+      '      await this.#tools(ports);',
+      '    }',
+      '  }',
+      '}',
+      '',
+    ].join('\n');
+    expect(isTurnLoopModule(oneLegDelegated)).toBe(false);
+  });
+
+  it('does NOT count a leg from a method the loop body never CALLS', () => {
+    // Sibling method, same class, holding both legs. The body does not call it,
+    // so the cycle it would represent is not the loop's.
+    const uncalled = [
+      'class Engine {',
+      '  async #elsewhere(ports) {',
+      '    for await (const a of ports.model.stream()) { use(a); }',
+      '    for await (const b of ports.tools.drain()) { use(b); }',
+      '  }',
+      '  async run(ports) {',
+      '    for (let turn = 1; ; turn++) {',
+      '      await tick();',
+      '    }',
+      '  }',
+      '}',
+      '',
+    ].join('\n');
+    expect(isTurnLoopModule(uncalled)).toBe(false);
+  });
+
+  it('counts a DELEGATED leg once even when the body calls it twice', () => {
+    // Guards the sum against double-counting: two call sites, one definition.
+    const doubled = [
+      'class Engine {',
+      '  async #model(ports) {',
+      '    for await (const frame of ports.model.stream()) { use(frame); }',
+      '  }',
+      '  async #tools(ports) {',
+      '    for await (const item of ports.tools.drain()) { use(item); }',
+      '  }',
+      '  async run(ports) {',
+      '    for (let turn = 1; ; turn++) {',
+      '      await this.#model(ports);',
+      '      await this.#tools(ports);',
+      '      await this.#model(ports);',
+      '    }',
+      '  }',
+      '}',
+      '',
+    ].join('\n');
+    expect(turnLoopSites(doubled)[0]!.legs).toBe(2);
+  });
+
+  it('survives renaming EVERY identifier of a DECOMPOSED loop', () => {
+    // Rename-resistance applied to the NEW shape. If the widening had started
+    // matching method NAMES, this is where it would show.
+    const renamedSrc = DECOMPOSED_LOOP
+      .split('Engine').join('alpha')
+      .split('streamModel').join('beta')
+      .split('drainOutcomes').join('gamma')
+      .split('build').join('delta')
+      .split('use').join('epsilon')
+      .split('ports').join('zeta')
+      .split('request').join('eta')
+      .split('frame').join('theta')
+      .split('item').join('iota');
+    // Control: the rename really happened and the structural tokens survived.
+    expect(renamedSrc).not.toMatch(/Engine|streamModel|drainOutcomes|build|use|ports/);
+    expect(renamedSrc).toMatch(/for await/);
+    expect(renamedSrc).toMatch(/for \(let turn/);
+    expect(isTurnLoopModule(renamedSrc)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G7's exclusion of the sanctioned execution owner. See the `WORKER_LOOP_MAX_DEPTH`
+// docstring for the cutover this exists for.
+// ---------------------------------------------------------------------------
+describe('G7 — the sanctioned execution owner is excluded, and only that', () => {
+  /** A turn cycle decomposed the way the engine decomposes it. */
+  const DECOMPOSED = [
+    'export async function* drive(ports) {',
+    '  for (let turn = 1; ; turn++) {',
+    '    await streamModel(ports);',
+    '    await drainOutcomes(ports);',
+    '  }',
+    '}',
+    '',
+    'async function streamModel(ports) {',
+    '  for await (const frame of ports.model.stream()) {',
+    '    use(frame);',
+    '  }',
+    '}',
+    '',
+    'async function drainOutcomes(ports) {',
+    '  for await (const item of ports.tools.drain()) {',
+    '    use(item);',
+    '  }',
+    '}',
+    '',
+  ].join('\n');
+
+  const ENTRY = ["import { drive } from './ownerpkg/src/cycle.js';", 'export const go = drive;', ''].join('\n');
+  const CYCLE_REL = 'fixtures/boundary-gates/ownerpkg/src/cycle.ts';
+  /** A package root standing in for the execution owner, declared by parameter. */
+  const OWNER_PKG = '@duya/fixture-owner';
+  const OWNER_SRC = path.join(REPO_ROOT, 'fixtures', 'boundary-gates', 'ownerpkg', 'src');
+
+  it('REPORTS a decomposed cycle in an ordinary package at depth 1 — the positive control', () => {
+    // If this went green the exclusion would be a blanket mute, and the whole
+    // change would be indistinguishable from "matches nothing".
+    withRepoFixtures(
+      { 'entry.ts': ENTRY, 'ownerpkg/src/cycle.ts': DECOMPOSED },
+      () => {
+        const findings = findWorkerLoopReach('fixtures/boundary-gates/entry.ts');
+        expect(findings.map((f) => f.file)).toEqual([CYCLE_REL]);
+        expect(findings[0]?.via).toBe('fixtures/boundary-gates/entry.ts');
+      },
+    );
+  });
+
+  it('does NOT report the same shape once that package is declared the owner', () => {
+    // The negative control. The owner is passed as a PARAMETER rather than
+    // written into `packages/agent-runtime/src`, because this test file's header
+    // forbids mutating the live tree to prove a gate works — another agent is
+    // working in this checkout.
+    withRepoFixtures(
+      { 'entry.ts': ENTRY, 'ownerpkg/src/cycle.ts': DECOMPOSED },
+      () => {
+        // Control: the predicate really does see this file on its own terms, so
+        // the emptiness below is the exclusion and not a broken fixture.
+        const cycleSrc = stripComments(fs.readFileSync(path.join(REPO_ROOT, CYCLE_REL), 'utf8')).text;
+        expect(isTurnLoopModule(cycleSrc)).toBe(true);
+        expect(turnLoopSites(cycleSrc)).toHaveLength(1);
+
+        // Same file, same entry, no owner declared → reported.
+        expect(findWorkerLoopReach('fixtures/boundary-gates/entry.ts').map((f) => f.file)).toEqual([CYCLE_REL]);
+
+        // Same file, same entry, its package declared the owner → not a finding.
+        const asOwner = findWorkerLoopReach(
+          'fixtures/boundary-gates/entry.ts',
+          new Map([[OWNER_PKG, OWNER_SRC]]),
+          WORKER_LOOP_MAX_DEPTH,
+          OWNER_PKG,
+        );
+        expect(asOwner).toEqual([]);
+      },
+    );
+  });
+
+  it('still reports the live red — the exclusion is scoped, not a mute', () => {
+    // `packages/agent/src/agent/DuyaAgent.ts` is reached at depth 1 and is NOT
+    // in the owner package, so G7 keeps its live finding. If this ever went
+    // empty, G7 would be reporting green on a tree that still has a cycle.
+    const findings = findWorkerLoopReach();
+    expect(findings.map((f) => f.file)).toContain('packages/agent/src/agent/DuyaAgent.ts');
   });
 });
 
