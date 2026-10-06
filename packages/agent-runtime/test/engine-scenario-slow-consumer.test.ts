@@ -219,6 +219,11 @@ function startHeldConsumerRun(): SlowRun {
         return { allowed: true, scope: 'once' };
       },
     },
+    // Required since A3-1 (PR #236). See the note in
+    // `engine-scenario-turn-behaviour.test.ts`: test dirs are excluded from
+    // every tsconfig, so an omitted required member is invisible to the
+    // compiler and only shows up as a runtime `failed` run.
+    interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
     sideEffects: {
       async begin(call) {
         return {

@@ -398,6 +398,14 @@ function harness(options: HarnessOptions): Harness {
       },
     } as RunEventStorePort,
     sideEffects,
+    // Required since A3-1 (PR #236). A host with nothing queued SAYS so rather
+    // than leaving the port out, which is a compile error in src/ -- but TEST
+    // dirs are excluded from every tsconfig, so an omitted member here is never
+    // caught by the compiler. It surfaces as a runtime
+    // `Cannot read properties of undefined (reading 'sweep')` that the engine
+    // reports as a `failed` run, which is indistinguishable from a real
+    // scenario outcome. That is why this literal is explicit.
+    interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
     turnOutput: {
       async recordToolResult(record: ToolResultRecord): Promise<void> {
         log.push('turnOutput.recordToolResult');

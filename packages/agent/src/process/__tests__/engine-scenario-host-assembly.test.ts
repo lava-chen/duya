@@ -226,6 +226,18 @@ async function runThroughRealAssembly(options: RunOptions): Promise<Composition>
 
   const ports: RunEnginePorts = buildEnginePorts({
     openModelStream,
+    // Required since A3-1 (PR #236): this file was written against a base that
+    // predates the required member, and test dirs are excluded from every
+    // tsconfig, so nothing but a run would have caught it.
+    //
+    // A SOURCE, not a port: `buildEnginePorts` runs `buildInterTurnPort` over
+    // these. `claim` answers "nothing was queued", and `seqIndex` is required
+    // rather than defaulted because it stamps every durable row the run writes.
+    interTurn: {
+      claim: () => Promise.resolve({ action: 'continue', absorbed: false } as const),
+      seqIndex: 1_700_000_000_000,
+      wakeRun: false,
+    },
     queueTool,
     // THE REAL ADAPTER. The engine is handed whatever `toDrainItem` makes of
     // the executor's own Message, so a lossy translation is visible here and
