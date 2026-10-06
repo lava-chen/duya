@@ -640,6 +640,7 @@ describe('product turn: a bound turn-output sink does not change the legacy', ()
     transcript: readonly Message[];
     sinkSaw: SSEEvent[];
     modelSaw: readonly RequestSnapshot[];
+    agent: InstanceType<typeof duyaAgent>;
   }> {
     const run = async (bind: boolean) => {
       // Every run installs the fake worker IPC itself: `streamChat` reads mode
@@ -675,6 +676,7 @@ describe('product turn: a bound turn-output sink does not change the legacy', ()
         transcript: agent.messages,
         sinkSaw,
         modelSaw: model.seen,
+        agent,
       };
     };
 
@@ -697,17 +699,28 @@ describe('product turn: a bound turn-output sink does not change the legacy', ()
     return run(false);
   }
 
-  it('the sink receives NOTHING while the legacy drives', async () => {
+  it('the sink receives NOTHING while the legacy drives, and the binding is gone after', async () => {
     const r = await runTwice(() => undefined);
 
-    // The guard itself. `streamChat` unbinds on entry, so a sink bound before the
-    // legacy started observes nothing at all.
+    // Two SEPARATE properties, and the second is the load-bearing one.
+    //
+    // (1) The sink saw no frames. This is structural rather than enforced:
+    // nothing inside `streamChat` publishes to the sink, because the legacy's
+    // frames are `yield`s of the generator and its consumer is unchanged. That is
+    // why binding cannot duplicate a frame -- there is no second writer.
+    expect(r.frames.length).toBe(1);
     expect(r.sinkSaw).toEqual([]);
     expect(r.finished).toBe(0);
-    // And the legacy really did produce a tool_result frame during that run, so
-    // this is not vacuous: if the loop had emitted no frames, "the sink saw
-    // nothing" would be true for the wrong reason.
-    expect(r.frames.length).toBe(1);
+
+    // (2) The binding does not outlive the run. The agent is long-lived and the
+    // sink is a per-run object, so a binding left behind by an engine-driven run
+    // would make a LATER legacy run address a finished run's receiver. This is
+    // what the `streamChat` unbind is for, and it is asserted through the agent's
+    // own accessor (left) against the sink's own counter (right) -- a stale
+    // binding is observable only by asking the agent AND then writing to it.
+    expect(r.agent.readTurnOutputSink()).toBeNull();
+    r.agent.finishTurnOutput({ turn: 99, results: 3, dispatched: 3 });
+    expect(r.finished).toBe(0);
   });
 
   it('re-binding the sink after the legacy started is what the composition does', async () => {

@@ -376,18 +376,19 @@ export class duyaAgent implements AgentRuntime {
   // today as generator yields and a caller outside the generator has no other way
   // to receive one.
   //
-  // ## Why `streamChat` UNBINDS the sink, and that is the load-bearing line
+  // ## Why the legacy cannot duplicate a frame, and why the unbind is still there
   //
-  // Binding a sink and ALSO running the legacy would deliver every `tool_result`
-  // twice -- once as the generator's `yield`, once through the sink -- and a
-  // duplicated durable row is indistinguishable from a correct one. Rather than
-  // ask a host to be careful, the generator takes the sink away at the top of
-  // every `streamChat`, next to the `currentTurnId` and `forkTurn` resets it
-  // already does. The rule is then structural: **the legacy generator and the
-  // sink are mutually exclusive for one run**, because whoever starts the legacy
-  // owns the frames. This is asserted, not assumed --
-  // `turn-output-seam.test.ts` binds a sink, drives a real `streamChat`, and
-  // requires the sink to have received nothing.
+  // Two separate facts, because only one of them is a guard and conflating them
+  // would make a dead line look load-bearing.
+  //
+  //  - NO DUPLICATION is structural: nothing inside `streamChat` publishes to the
+  //    sink. The legacy's frames are `yield`s of the generator and its consumer
+  //    is unchanged, so there is exactly one writer per frame whatever the sink
+  //    is bound to. `turn-output-seam.test.ts` asserts the observable half.
+  //  - LIFETIME is the unbind: the agent is long-lived and a sink is a per-run
+  //    object, so a binding left behind by an engine-driven run would make a
+  //    LATER legacy run address a finished run's receiver. Removing the unbind
+  //    turns that file red, so it is a real guard rather than a precaution.
   // ==========================================================================
 
   /**
@@ -1287,13 +1288,11 @@ export class duyaAgent implements AgentRuntime {
     // Plan 610 A3-2b2: the legacy OWNS this run's frames, so any turn-output
     // sink a caller bound beforehand is taken away here.
     //
-    // This is the guard that makes binding `RunEnginePorts.turnOutput` safe to
-    // land while the legacy still drives. Without it, a host that bound a sink
-    // and then ran the legacy would get every `tool_result` TWICE -- once from
-    // the `yield` below and once through the sink -- and a duplicated durable
-    // row is indistinguishable from a correct one. Asserted, not assumed:
-    // `turn-output-seam.test.ts` binds a sink, drives a real `streamChat`, and
-    // requires the sink to have received nothing.
+    // Not about duplication -- nothing in this generator publishes to the sink,
+    // so a frame has one writer either way (see the seam block's header). This
+    // is the LIFETIME half: the agent outlives the run, and a sink is a per-run
+    // object, so a binding that survived here would leave a later legacy turn
+    // addressing a finished run's receiver.
     //
     // Same placement and same reason as the two resets above: whoever starts the
     // generator owns the turn.

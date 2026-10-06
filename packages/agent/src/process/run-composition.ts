@@ -100,9 +100,10 @@
  * `claimInterTurn`: the effect is lifted out of the closure onto a public method,
  * and the legacy's own call site is routed through the SAME implementation so
  * there is one of each rather than two. The port is therefore bound unconditionally
- * here, and the legacy still performs every effect exactly once -- `streamChat`
- * unbinds the run's turn-output sink on entry, so a bound sink and a
- * legacy-driven run are mutually exclusive rather than merely discouraged.
+ * here, and the legacy still performs every effect exactly once -- because
+ * nothing in `streamChat` publishes to the bound sink at all, so a frame has one
+ * writer whichever path produced it. `streamChat` does unbind the sink on entry,
+ * which is the LIFETIME half (an agent outlives a run, a sink does not).
  *
  * ### What the binding does and does not reproduce
  *
@@ -139,7 +140,13 @@ import type {
   TurnAssemblyInput,
 } from '@duya/agent-runtime';
 import type { RunId, RunManifest, TokenUsage } from '@duya/agent-protocol';
-import type { AssistantMessage, Message, MessageContent } from '@duya/ai';
+// Types come from the agent's OWN types module, which re-exports them, rather
+// than from `@duya/ai`: the import audit counts every import statement --
+// type-only included -- as a cross-boundary edge, so sourcing them from inside
+// `pkg:agent` is what keeps this file from moving the
+// `module-dependency-permitted` count. Same reason
+// `turn-loop-product-behavior.test.ts:87-92` gives.
+import type { AssistantMessage, Message, MessageContent } from '../types.js';
 import type { Tool } from '../types.js';
 import type { TurnOutputSink, duyaAgent } from '../agent/DuyaAgent.js';
 import type { TurnPipelinePublisher } from '../tool/turn-pipeline-publisher.js';
@@ -288,9 +295,10 @@ export interface LegacyRunHost {
    * disable the other two effects -- the durable row and `PostToolUseFailure`
    * still run, because they are the agent's own writes and not a frame's fate.
    *
-   * Left unset while the LEGACY drives, and that is structural rather than
-   * advice: `streamChat` unbinds whatever was bound here on entry, so a legacy
-   * turn and this sink can never both be live for one run.
+   * Left unset while the LEGACY drives, and that needs no discipline from a
+   * caller: nothing in `streamChat` publishes to a sink, so a frame has one
+   * writer whichever path produced it, and `streamChat` unbinds the sink on
+   * entry so a finished run's receiver is not left on a long-lived agent.
    */
   readonly turnOutputSink?: TurnOutputSink;
   /** Collects a fragment the engine deferred for the next turn. */
