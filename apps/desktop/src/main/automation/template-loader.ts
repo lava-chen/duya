@@ -1,15 +1,39 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { app } from 'electron';
 import { getLogger, LogComponent } from '../logging/logger';
 import { formatEveryDuration } from './schedule.js';
 import type { AutomationTemplate, CronSchedule } from './types';
 
 const logger = getLogger();
 
+/**
+ * Electron is OPTIONAL here: this module is inside the value-import closure of
+ * the headless control plane's server entry
+ * (`01-headless-control-plane.md` §2.1). A module-scope
+ * `import { app } from 'electron'` is evaluated when the module is and throws
+ * THERE, taking the whole graph with it, so `app` is resolved through a
+ * guarded require and reported as absent instead.
+ */
+function electronAppPath(): string | undefined {
+  try {
+    const { app } = require('electron') as { app?: { getAppPath(): string } };
+    return app && typeof app.getAppPath === 'function' ? app.getAppPath() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveTemplatesPath(): string | null {
+  // `getAppPath()` is the INSTALLED APP's resource root and only exists under
+  // Electron. Without it the remaining candidate is `process.resourcesPath`,
+  // which plain Node does not define either — and templates ship as a bundled
+  // app resource, so a headless control plane that has no app root has no
+  // templates to load. Returning the function's existing "not found" answer is
+  // honest; substituting the cwd would resolve against a directory nobody
+  // chose. The caller already treats null as "no templates configured".
+  const appPath = electronAppPath();
   const candidates = [
-    path.join(app.getAppPath(), 'resources', 'automation-templates', 'templates.json'),
+    ...(appPath ? [path.join(appPath, 'resources', 'automation-templates', 'templates.json')] : []),
     path.join(process.resourcesPath || '', 'automation-templates', 'templates.json'),
   ];
   for (const p of candidates) {

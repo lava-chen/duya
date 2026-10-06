@@ -9,7 +9,6 @@
 
 import type { ChildProcess } from 'child_process';
 import { spawn } from 'child_process';
-import { app } from 'electron';
 import { getLogger, LogComponent } from '../../logging/logger.js';
 import { getProviderStore } from '../../services/providers/provider-store-electron.js';
 import { getConfigStore } from '../../config/store-instance.js';
@@ -20,6 +19,56 @@ import { killProcessTree } from '../../lib/process-cleanup.js';
 import { getPerformanceMonitor } from '../../services/performance-monitor.js';
 import { registerSpawnedWorker, unregisterSpawnedWorker } from '../../control-plane/spawned-workers.js';
 import { hideComputerUseOverlayForSession } from '../../services/computer-use-overlay.js';
+
+interface ElectronApp {
+  getLocale(): string;
+  getLocaleCountryCode(): string;
+}
+
+/**
+ * Electron is OPTIONAL here: this module is inside the value-import closure of
+ * the headless control plane's server entry
+ * (`01-headless-control-plane.md` §2.1). A module-scope
+ * `import { app } from 'electron'` is evaluated when the module is and throws
+ * THERE, taking the whole graph with it, so `app` is resolved through a
+ * guarded require.
+ */
+function electronApp(): ElectronApp | undefined {
+  try {
+    const { app } = require('electron') as { app?: ElectronApp };
+    return app;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * `app.getLocale()` is the OS locale; `Intl` reads the same OS locale from
+ * plain Node, so the headless answer is a faithful reading rather than a
+ * placeholder — and it is the same source the adjacent `timezone` field below
+ * already uses. Electron still wins when present so the desktop value is
+ * unchanged.
+ */
+function systemLocale(): string {
+  const app = electronApp();
+  if (app && typeof app.getLocale === 'function') return app.getLocale();
+  return Intl.DateTimeFormat().resolvedOptions().locale;
+}
+
+/**
+ * `Intl.Locale` narrows the same locale string to its region subtag, which is
+ * what `app.getLocaleCountryCode()` reports. Returns `''` for a locale that
+ * carries no region (e.g. `en`), matching Electron's own empty answer.
+ */
+function systemLocaleCountryCode(): string {
+  const app = electronApp();
+  if (app && typeof app.getLocaleCountryCode === 'function') return app.getLocaleCountryCode();
+  try {
+    return new Intl.Locale(systemLocale()).region ?? '';
+  } catch {
+    return '';
+  }
+}
 
 import {
   calculateMaxConcurrent,
@@ -716,8 +765,8 @@ export class AgentProcessPool {
       sessionId,
       providerConfig,
       systemLocation: {
-        locale: app.getLocale(),
-        localeCountryCode: app.getLocaleCountryCode(),
+        locale: systemLocale(),
+        localeCountryCode: systemLocaleCountryCode(),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       },
       browserBackendMode,

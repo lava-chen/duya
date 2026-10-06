@@ -6,7 +6,6 @@ import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { app } from 'electron';
 import { getConfigStore } from '../../config/store-instance';
 
 export interface RunningProcess {
@@ -44,8 +43,39 @@ export function calculateMaxConcurrent(): number {
   return Math.max(maxConcurrent, 1);
 }
 
+interface ElectronApp {
+  isPackaged: boolean;
+}
+
+/**
+ * Electron is OPTIONAL here: this module is inside the value-import closure of
+ * the headless control plane's server entry
+ * (`01-headless-control-plane.md` §2.1). A module-scope
+ * `import { app } from 'electron'` is evaluated when the module is and throws
+ * THERE, taking the whole graph with it, so `app` is resolved through a
+ * guarded require.
+ */
+function electronApp(): ElectronApp | undefined {
+  try {
+    const { app } = require('electron') as { app?: ElectronApp };
+    return app;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A headless control plane has no packaged Electron app, so `false` is the
+ * truthful answer and selects the dev-bundle candidates below — the same
+ * branch a dev checkout and the Playwright e2e run already take.
+ */
+function isPackagedHost(): boolean {
+  const app = electronApp();
+  return app ? app.isPackaged : false;
+}
+
 export function getAgentProcessPath(): string {
-  if (app.isPackaged) {
+  if (isPackagedHost()) {
     const bundled = path.join(process.resourcesPath, 'agent-bundle', 'agent-process-entry.js');
     if (fs.existsSync(bundled)) return bundled;
 
@@ -81,7 +111,7 @@ export function getAgentRuntimeCommand(
     DUYA_DAEMON_PORT: process.env.DUYA_DAEMON_PORT ?? '19825',
   };
 
-  if (app.isPackaged) {
+  if (isPackagedHost()) {
     const packagedBetterSqlite3 = path.join(process.resourcesPath, 'better-sqlite3');
     const usePackagedBetterSqlite3 = fs.existsSync(packagedBetterSqlite3);
     return {

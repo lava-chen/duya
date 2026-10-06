@@ -1,7 +1,6 @@
 import path from 'path';
 import fs from 'fs';
 import { ChildProcess, spawn } from 'child_process';
-import { app } from 'electron';
 import { getLogger, LogComponent } from '../logging/logger';
 import { GatewayInitConfig } from './types';
 
@@ -30,8 +29,39 @@ export function isGatewayRunning(): boolean {
   return gatewayProcess !== null && !gatewayProcess.killed;
 }
 
+interface ElectronApp {
+  isPackaged: boolean;
+}
+
+/**
+ * Electron is OPTIONAL here: this module is inside the value-import closure of
+ * the headless control plane's server entry
+ * (`01-headless-control-plane.md` §2.1). A module-scope
+ * `import { app } from 'electron'` is evaluated when the module is and throws
+ * THERE, taking the whole graph with it, so `app` is resolved through a
+ * guarded require.
+ */
+function electronApp(): ElectronApp | undefined {
+  try {
+    const { app } = require('electron') as { app?: ElectronApp };
+    return app;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A headless control plane has no packaged Electron app, so `false` is the
+ * truthful answer and routes to the dev-path branch below — the same branch a
+ * dev checkout and the Playwright e2e run already take.
+ */
+function isPackagedHost(): boolean {
+  const app = electronApp();
+  return app ? app.isPackaged : false;
+}
+
 function getGatewayProcessPath(): string {
-  if (app.isPackaged) {
+  if (isPackagedHost()) {
     const bundled = path.join(process.resourcesPath, 'gateway-bundle', 'gateway-process-entry.js');
     if (fs.existsSync(bundled)) return bundled;
 

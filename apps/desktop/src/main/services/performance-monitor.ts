@@ -10,8 +10,10 @@
  * - Prometheus-compatible metrics export
  */
 
-import { app } from 'electron';
-
+// The module-scope `import { app } from 'electron'` this file carried was never
+// read — it existed only as an evaluation-time edge on the control plane's
+// value-import closure (`01-headless-control-plane.md` §2.1). Dropping it
+// changes no behaviour.
 import { isLowPowerEnabled } from './low-power';
 import { getLogger, LogComponent } from '../logging/logger';
 

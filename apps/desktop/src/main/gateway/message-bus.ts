@@ -1,4 +1,3 @@
-import { ipcMain } from 'electron';
 import * as http from 'http';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getDatabase } from '../ipc/db-handlers';
@@ -1258,9 +1257,38 @@ export function getOrBuildInitConfig(): GatewayInitConfig {
   return config;
 }
 
+interface ElectronIpcMain {
+  handle(channel: string, listener: (...args: never[]) => unknown): void;
+}
+
+/**
+ * Electron is OPTIONAL here: this module is inside the value-import closure of
+ * the headless control plane's server entry
+ * (`01-headless-control-plane.md` §2.1). A module-scope
+ * `import { ipcMain } from 'electron'` is evaluated when the module is and
+ * throws THERE, taking the whole graph with it.
+ *
+ * `ipcMain` is the RENDERER bridge: there is no renderer without Electron, so
+ * an absent host means these channels have no counterpart — which is reported
+ * loudly below rather than swallowed, because a silently unregistered handler
+ * looks exactly like a registered one that never fires.
+ */
+function electronIpcMain(): ElectronIpcMain | undefined {
+  try {
+    const { ipcMain } = require('electron') as { ipcMain?: ElectronIpcMain };
+    return ipcMain && typeof ipcMain.handle === 'function' ? ipcMain : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function registerGatewayIpcHandlers(): void {
   // 订阅主进程内的 config-changed 事件：DB 写入完成后触发 gateway 热重启
   // debounce 500ms 以合并快速连续保存（如 BridgeSection 一次保存触发 3 个 updateSetting）
+  //
+  // This subscription is a MAIN-PROCESS event and needs no renderer, so it is
+  // registered before the ipcMain guard below: a headless control plane that
+  // skipped it would silently lose gateway hot-reload.
   let reloadDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   gatewayConfigEvents.onConfigChanged((payload) => {
     if (reloadDebounceTimer) clearTimeout(reloadDebounceTimer);
@@ -1276,6 +1304,16 @@ export function registerGatewayIpcHandlers(): void {
       });
     }, 500);
   });
+
+  const ipcMain = electronIpcMain();
+  if (!ipcMain) {
+    logger.warn(
+      'gateway IPC handlers not registered: no Electron renderer bridge in this host',
+      undefined,
+      LogComponent.Gateway,
+    );
+    return;
+  }
 
   ipcMain.handle('gateway:start', async () => {
     try {

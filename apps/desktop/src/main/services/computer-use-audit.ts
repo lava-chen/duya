@@ -25,8 +25,6 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import { app } from 'electron';
-
 import { getLogger, LogComponent } from '../logging/logger.js';
 
 const logger = getLogger();
@@ -67,7 +65,15 @@ export function getComputerUseAuditDir(): string {
     .mockDir;
   if (mockDir) return mockDir;
   try {
-    // app is only available in the Electron main process.
+    // Electron is OPTIONAL here: this module is inside the value-import closure
+    // of the headless control plane's server entry
+    // (`01-headless-control-plane.md` §2.1). A module-scope
+    // `import { app } from 'electron'` is evaluated when the module is and
+    // throws THERE, taking the whole graph with it, so `app` is resolved
+    // through a guarded require and reported as absent instead — the catch
+    // below is then the behaviour that already existed for CLI runs.
+    const { app } = require('electron') as { app?: { getPath(name: 'logs'): string } };
+    if (!app || typeof app.getPath !== 'function') throw new Error('electron app unavailable');
     return join(app.getPath('logs'), 'computer-use');
   } catch {
     // Fallback for unit tests / CLI runs.
