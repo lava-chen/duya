@@ -17,6 +17,7 @@ import {
   THREAD_METADATA_KEY,
   isBranchedEntry,
   isBranchedMessage,
+  isRunOwnBranchRow,
 } from './threads.js';
 
 /**
@@ -62,6 +63,28 @@ export interface ModelMessageProjection {
 export interface ProjectModelMessagesOptions {
   /** System segments merged into the system prompt. */
   readonly systemSegments?: readonly PromptSegment[];
+  /**
+   * Plan 610: the run THIS projection is for, when the answer is a forked
+   * run's own wire rather than the main line.
+   *
+   * ## Why the scope is an option and not a second projector
+   *
+   * Because there is ONE question being asked -- "which rows does this caller
+   * get to send" -- and the two answers differ only in what they do with a
+   * branched row. A second projector would be a second copy of the role
+   * mapping and the thread-meta strip, free to drift from the one the main
+   * projection uses; here both go through the same loop, so a row restored to
+   * a forked wire is the row a non-forked run would have sent.
+   *
+   * ## What it does and does not buy
+   *
+   * With `runBranch` set, this run's own branched rows SURVIVE
+   * (`isRunOwnBranchRow`, which matches on the fork's user-row id -- see
+   * `threads.ts`) and every other branched row is still dropped. Omitted --
+   * which is every pre-610 caller, and every main-line projection -- the
+   * behaviour is bit-for-bit what it was: all branched rows dropped.
+   */
+  readonly runBranch?: { readonly forkUserId: string };
 }
 
 /**
@@ -74,14 +97,26 @@ export interface ProjectModelMessagesOptions {
  * thread metadata key is stripped from every surviving message so provider
  * message content stays clean (reply context is conveyed via the quote prefix
  * rendered by the caller, not via metadata).
+ *
+ * Plan 610: the one exception is `options.runBranch`, which admits the rows
+ * the named run wrote ITSELF. The exclusion above is what keeps a fork out of
+ * the main transcript and out of every LATER run's projection, and it is
+ * unchanged for every caller that does not ask for a scoped projection; what
+ * the option adds is that a fork is not excluded from its OWN wire either.
  */
 export function projectModelMessages(
   messages: readonly AgentMessage[],
   options: ProjectModelMessagesOptions = {},
 ): ModelMessageProjection {
   const providerMessages: Message[] = [];
+  const forkUserId = options.runBranch?.forkUserId;
   for (const message of messages) {
-    if (isBranchedMessage(message)) continue;
+    if (
+      isBranchedMessage(message) &&
+      (forkUserId === undefined || !isRunOwnBranchRow(message, forkUserId))
+    ) {
+      continue;
+    }
     providerMessages.push(...toModelBoundary(stripThreadMeta(message)));
   }
   const system = mergeSystemSegments(options.systemSegments);

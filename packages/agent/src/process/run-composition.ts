@@ -75,6 +75,29 @@
  * `Record<string, unknown>`"). So `assembleTurn` is required from the host, and
  * the reason is written on the member rather than left in a comment here.
  *
+ * ## The run's SCOPE, and why a fork starves on the engine path but not the legacy
+ *
+ * `assembleTurn` re-projects the transcript once per turn (see
+ * `createLegacyAssembleTurn`), and the model projection drops every branched
+ * row (`message-projectors.ts`). That is the right default and it is what keeps
+ * a fork out of the main transcript -- but a forked run's OWN rows are branched
+ * too (`_commitDurable` tags every non-user row of an active fork turn), so the
+ * per-turn re-projection deleted the tool result the previous turn had just
+ * produced, and turn 2 asked the model to continue without it. Measured before
+ * the scope existed: a forked run sent `["user","user"]` on turn 2 where a
+ * non-forked run sends `["user","assistant","tool","user"]`.
+ *
+ * The legacy never showed this because it projects ONCE per `streamChat` and
+ * pushes into one working array, so its forked turn 2 carried the row
+ * (measured on the production path: `["user","user","assistant","tool"]`).
+ *
+ * So the scope is applied HERE, over the host's own assembled turn, for a
+ * forked run only. Two properties make that the narrowest thing that works:
+ * the rows come from the agent's own projector
+ * (`projectRunOwnModelMessages`), and the main rows are the agent's objects
+ * passed through in the agent's order rather than a second projection built
+ * here. A plain run gets the host's function untouched.
+ *
  * ## Compaction: three gates, three decisions
  *
  * `CompactionSources.decide` is a DECISION, and the legacy makes it at three
@@ -207,6 +230,96 @@ function toRowUsage(usage: TokenUsage): AssistantMessage['usage'] {
     output_tokens: usage.outputTokens,
     ...(usage.totalTokens === undefined ? {} : { total_tokens: usage.totalTokens }),
   } as AssistantMessage['usage'];
+}
+
+/**
+ * Plan 610: put a forked run's OWN rows back on its own wire, in durable order.
+ *
+ * ## Why a restore rather than a projection that keeps them
+ *
+ * Because the rows are already projected. `agent.projectRunOwnModelMessages`
+ * runs the agent's own `projectModelMessages` with the run's scope, so each
+ * restored row carries the same role mapping and the same `threadMeta` strip as
+ * a row of the main projection, and this function decides only WHERE they go.
+ * Re-projecting the durable rows here instead would have been a second
+ * rendering of the same rules, and a `tool` row does not survive it unchanged:
+ * the durable projection re-wraps a plain string body into a `tool_result`
+ * block, which is a different wire shape from the one a non-forked run sends.
+ *
+ * ## Why the main projection is not rebuilt
+ *
+ * Because it is the agent's, and it is the only place the system segments, the
+ * compaction checkpoint rows and the hook-context restoration exist. Rebuilding
+ * it here would put a second copy of all three in this file. So the main rows
+ * are used verbatim, in the agent's order, with the run's own rows dropped into
+ * the positions the timeline gives them -- a tool result lands after the
+ * assistant row that asked for it rather than appended to the end of the
+ * request, and the hook-context blocks the agent injected survive untouched
+ * because those rows are the agent's objects, not copies.
+ *
+ * ## Why `id` is the join key
+ *
+ * Both sides are projections of the same timeline, and `toModelBoundary`
+ * preserves `id` on every row it emits, so a projected row and its durable row
+ * agree. A projected row with no durable counterpart would mean one side
+ * invented a row; rather than drop it -- losing history the run already decided
+ * to send -- it is kept, after the ordered rows.
+ *
+ * ## The scope is the fork's USER row id, and why not the root
+ *
+ * `_commitDurable` stamps every non-user row of an active fork turn with
+ * `forkTurn.userId`, so that id -- not the branch root, which every fork off the
+ * same root shares -- is what tells this run's rows from another fork's
+ * (`threads.ts`, `isRunOwnBranchRow`).
+ */
+function restoreRunOwnRows(
+  agent: duyaAgent,
+  marker: { readonly replyToId: string; readonly userId: string },
+  projected: readonly ModelMessage[],
+): readonly ModelMessage[] {
+  // POSITIVE COUNT before the join: a run that has written no branched row yet
+  // (turn 1, or a marker that never reached the writer) returns the projection
+  // untouched and allocates nothing.
+  //
+  // The ONE cast in this file. The agent's `Message` declares a wider `role`
+  // union than the runtime's `ModelMessage` because the transcript also holds
+  // `system` rows, while `projectModelMessages` only ever emits the three model
+  // roles -- so the rows are model messages, and the wider static type is all
+  // that is being narrowed here.
+  const own = agent.projectRunOwnModelMessages(marker.userId) as readonly ModelMessage[];
+  if (own.length === 0) return projected;
+
+  const ownById = new Map<string, ModelMessage>();
+  for (const row of own) {
+    if (row.id !== undefined) ownById.set(row.id, row);
+  }
+  const mainById = new Map<string, ModelMessage>();
+  for (const row of projected) {
+    if (row.id !== undefined) mainById.set(row.id, row);
+  }
+
+  const merged: ModelMessage[] = [];
+  const placed = new Set<string>();
+  for (const row of agent.getMessages()) {
+    const id = row.id;
+    if (id === undefined) continue;
+    const main = mainById.get(id);
+    if (main !== undefined) {
+      merged.push(main);
+      placed.add(id);
+      continue;
+    }
+    const mine = ownById.get(id);
+    if (mine !== undefined) {
+      merged.push(mine);
+      placed.add(id);
+    }
+  }
+  for (const row of projected) {
+    if (row.id !== undefined && placed.has(row.id)) continue;
+    merged.push(row);
+  }
+  return merged;
 }
 
 // ============================================================================
@@ -379,6 +492,10 @@ export function composeLegacyRunSources(
   // caller could have replaced mid-run; the publisher's own `#current` is what
   // decides, and this only decides where to ask.
   const pipelines = host.turnPipelines;
+  // Plan 610: read ONCE, with the same reasoning as `pipelines` above. The
+  // restore below closes over it, and a host that replaced the member mid-run
+  // would otherwise change the scope half way through a conversation.
+  const runFork = host.runFork;
   return {
     // DERIVED. `createClientModelPort` opens exactly the request the engine
     // assembled and threads the engine's own scoped signal into the provider
@@ -429,7 +546,29 @@ export function composeLegacyRunSources(
       },
     },
 
-    assembleTurn: host.assembleTurn,
+    // Plan 610: `assembleTurn` stays HOST-supplied, and the run's SCOPE is
+    // applied here rather than inside the host's body -- because this is the one
+    // frame where the agent and the run's marker are both in scope
+    // (`createLegacyAssembleTurn` sees only a handle, and the handle's
+    // `projectTurnMessages` re-projects through the MAIN projection, which drops
+    // branched rows). Without this a forked run's turn 2 is sent to the model
+    // without the tool result turn 1 produced: measured `["user","user"]` where
+    // a non-forked run sends `["user","assistant","tool","user"]`.
+    //
+    // The `runFork` check is not an optimisation: an UNSCOPED run must get the
+    // host's own function, both because its own rows are not branched (nothing
+    // to restore) and because a restore that ran anyway would be a second path
+    // through the same binding.
+    assembleTurn:
+      runFork === undefined
+        ? host.assembleTurn
+        : async (input) => {
+            const assembled = await host.assembleTurn(input);
+            return {
+              ...assembled,
+              messages: restoreRunOwnRows(agent, runFork, assembled.messages),
+            };
+          },
     askApproval: host.askApproval,
     emitter: host.emitter,
     proposeTerminal: host.proposeTerminal,

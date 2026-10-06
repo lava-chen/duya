@@ -198,11 +198,24 @@ interface Proof {
  *
  * `shared` is how the leak is exercised: passing an agent that a previous run
  * already used means run B sees exactly the state run A left behind.
+ *
+ * `marker` exists so a SECOND fork off the same root can be driven with a
+ * different `userId`. Scoping by the branch root instead of the fork's own user
+ * row would hand each fork the other's rows, and no other fixture here can see
+ * that: every other test runs at most one fork per agent.
+ *
+ * `probeLabel` exists because the probe's counter is per RUN, so two runs on
+ * one agent both answer `RAN-1` and their tool results are indistinguishable in
+ * a wire payload. The probe's return value is the cross-source witness for
+ * "this run's row reached this run's wire", so a test that compares two runs has
+ * to be able to tell whose answer it is looking at.
  */
 async function runThroughEngine(
   seedFork: boolean,
   forked = false,
   shared?: InstanceType<typeof duyaAgent>,
+  marker: { readonly replyToId: string; readonly userId: string } = FORK_MARKER,
+  probeLabel = 'RAN',
 ): Promise<Proof> {
   installFakeDbIpc();
 
@@ -230,7 +243,7 @@ async function runThroughEngine(
     {
       execute: async () => {
         runs += 1;
-        return { ok: true, result: `RAN-${runs}` };
+        return { ok: true, result: `${probeLabel}-${runs}` };
       },
     } as never,
   );
@@ -342,7 +355,7 @@ async function runThroughEngine(
     // The D1 input, supplied the way a production host supplies it. OMITTED
     // (not `undefined`, not a null marker) on a plain run -- and the omission is
     // what makes `composeLegacyRunPorts` bind `null` and clear the marker.
-    ...(forked ? { runFork: FORK_MARKER } : {}),
+    ...(forked ? { runFork: marker } : {}),
   };
 
   const ports: RunEnginePorts = composeLegacyRunPorts(agent, host);
@@ -387,6 +400,15 @@ async function runThroughEngine(
 /** The rows the ENGINE wrote, i.e. everything but a host-seeded user row. */
 function engineWritten(proof: Proof): Message[] {
   return proof.written.filter((m) => m.role === 'assistant' || m.role === 'tool');
+}
+
+/**
+ * A durable row's content as text, whatever shape it carries. A tool row's
+ * content is a block array, so `String(row.content)` would read `[object
+ * Object]` and assert nothing.
+ */
+function rowText(row: Message): string {
+  return typeof row.content === 'string' ? row.content : JSON.stringify(row.content);
 }
 
 // ============================================================================
@@ -572,7 +594,7 @@ describe('a forked engine run is now distinguishable from a plain one', () => {
     // equality is asserted explicitly below so a future slice that changes the
     // wire knows this test saw the opportunity.
     const forked = await runThroughEngine(true, true);
-    const plain = await runThroughEngine(false, false);
+    const plain = await runThroughEngine(true, false);
 
     const { readThreadMeta } = await import('../../message/threads.js');
 
@@ -605,63 +627,79 @@ describe('a forked engine run is now distinguishable from a plain one', () => {
     expect(forked.seen.length).toBe(plain.seen.length);
     expect(forked.probeRuns()).toBe(plain.probeRuns());
 
-    // But the wire's message COMPOSITION now differs, and not in the fork's
-    // favour: on a forked run turn 2 loses the tool row turn 1 produced. That is
-    // the projection-scope defect measured in the next describe block, pinned
-    // from this side too because "distinguishable" is exactly what it costs.
-    expect(forked.seen[1].roles).not.toEqual(plain.seen[1].roles);
-    expect(plain.seen[1].roles).toContain('tool');
-    expect(forked.seen[1].roles).not.toContain('tool');
+    // And the wire's message COMPOSITION now matches a plain run's on turn 2.
+    //
+    // This line USED to read `not.toEqual(plain.seen[1].roles)` plus two
+    // absences, pinning the projection-scope defect from this side ("a fork is
+    // distinguishable because it is worse off"). Plan 610's scope fixed it, so
+    // the difference is gone: a fork now differs in the DURABLE transcript --
+    // asserted above -- and not in what its own model is shown.
+    //
+    // Cross-run, not an identity: `forked` and `plain` are two independent runs,
+    // so the two sides can genuinely disagree.
+    //
+    // The control is seeded IDENTICALLY (`seedFork: true` on both), and that is
+    // load-bearing rather than tidy: the seeded fork row is branched, so it is
+    // excluded from the plain run's projection and reaches it as the run's
+    // `input.prompt` instead. An unseeded control would carry that same row
+    // UNTAGGED, put it in the projection, and report one extra `user` turn that
+    // has nothing to do with the fork.
+    expect(forked.seen[1].roles).toEqual(plain.seen[1].roles);
   });
 });
 
 // ============================================================================
-// MEASURED DEFECT -- what D1 exposes on the provider boundary
+// THE PROJECTION SCOPE -- a forked run's own rows reach its own wire
 // ============================================================================
 
-describe('a forked run loses its own tool result before the next turn', () => {
-  it('turn 2 of a forked run is projected WITHOUT the tool row turn 1 produced', async () => {
-    // MEASURED, AND PINNED DELIBERATELY AS THE WRONG ANSWER. Asserted as an
-    // absence in the same spirit as the D3 quote test below: it is the honest
-    // description of today's behaviour, and the slice that fixes it turns this
-    // red, which is the correct direction for a behaviour change.
+describe('a forked run keeps its own rows on its own wire', () => {
+  it('turn 2 of a forked run carries the assistant and tool rows turn 1 produced', async () => {
+    // THIS TEST USED TO ASSERT THE OPPOSITE, and the change is the whole slice.
+    // It read `expect(forked.seen[1].roles).not.toContain('tool')`, an absence
+    // pinned deliberately so the defect had a name. It is rewritten, not
+    // deleted and not inverted -- the absence described real behaviour and the
+    // behaviour is now different.
     //
-    // WHAT HAPPENS. `createLegacyAssembleTurn` re-projects PER TURN through
-    // `handle.projectTurnMessages()` (`run-composition.ts:576`), and
-    // `projectModelMessages` drops every branched row
-    // (`message-projectors.ts:84`). Tagging is what D1 adds -- so the rows turn
-    // 1 just produced become branched, and turn 2's projection removes the very
-    // tool result the model asked for. Measured roles on turn 2:
+    // WHAT WAS WRONG. `createLegacyAssembleTurn` re-projects PER TURN through
+    // `handle.projectTurnMessages()`, and `projectModelMessages` drops every
+    // branched row. D1 made the tagging work, so the rows turn 1 produced became
+    // branched, and turn 2's projection removed the very tool result the model
+    // had asked for. Measured roles on turn 2, before the scope:
     //   plain run  -> ["user","assistant","tool","user"]
     //   forked run -> ["user","user"]
     //
-    // WHY THE LEGACY DOES NOT HAVE THIS. `streamChat` pushes into one working
+    // WHY THE LEGACY NEVER SHOWED IT. `streamChat` pushes into one working
     // array and only projects at the START of a call, so within a forked turn
-    // the legacy's turn 2 still carries the tool result. The engine has to ask
-    // for a fresh projection each turn, and the projection has no notion of
-    // "this run's own rows".
+    // the legacy's turn 2 still carries the tool result. Measured on the
+    // production path, a forked legacy run: ["user","user","assistant","tool"].
     //
-    // WHY IT IS NOT FIXED HERE. The fix belongs in the projection's SCOPE --
-    // exclude branched rows from before this run, include this run's own -- and
-    // the projection is the agent's (`projectTurnMessages`), not this file's.
-    // Rebuilding it in the composition would be the second projection the S4b-2
-    // comment explicitly rules out ("owning it is not the same as projecting
-    // it"). Reported for the driver flip rather than papered over.
+    // WHY IT IS NOT A LEAK. The scope is `forkTurn.userId` -- the fork's OWN
+    // user row, which is what `_commitDurable` stamps on the rows this run
+    // writes. The main projection is untouched, so the same rows stay out of the
+    // main line; the two tests below observe that rather than assert it.
     const forked = await runThroughEngine(true, true);
     const plain = await runThroughEngine(true, false);
 
-    // CROSS-SOURCE: asserted on what the provider was HANDED, not on the tag,
-    // so this goes red if the tag is applied but the projection stops
-    // honouring it, or the other way round.
-    expect(plain.seen[1].roles).toContain('tool');
-    expect(forked.seen[1].roles).not.toContain('tool');
-
-    // Both runs were complete and both really dispatched, so the absence above
-    // is about the projection rather than about a run that never happened.
+    // CROSS-SOURCE, and deliberately not a helper: `RAN-1` is the PROBE'S OWN
+    // return value, so it can only be on this wire if the tool really executed
+    // AND the projection carried the row it produced. Nothing on the code under
+    // test computes that string.
     expect(forked.probeRuns()).toBe(1);
-    expect(plain.probeRuns()).toBe(1);
     expect(forked.seen).toHaveLength(2);
-    expect(plain.seen).toHaveLength(2);
+    expect(forked.seen[1].roles).toContain('tool');
+    expect(forked.seen[1].contents.join('\n')).toContain('RAN-1');
+
+    // The assistant turn that ASKED for the tool is there too, and the two sit
+    // in the order the timeline gives them -- a tool result restored to the end
+    // of the request would satisfy the first assertion and still be wrong.
+    expect(forked.seen[1].roles.indexOf('assistant')).toBeLessThan(
+      forked.seen[1].roles.lastIndexOf('tool'),
+    );
+
+    // AND the composition is now the plain run's, row for row. Two independent
+    // runs, so the two sides can disagree; the fork's cost is in the durable
+    // transcript, not on its own wire.
+    expect(forked.seen[1].roles).toEqual(plain.seen[1].roles);
   });
 
   it('the branched rows are excluded from the main projection, which is why the tag exists', async () => {
@@ -669,6 +707,10 @@ describe('a forked run loses its own tool result before the next turn', () => {
     // branched row is filtered out of the model boundary by `projectModelMessages`
     // (`isBranchedMessage`, `message-projectors.ts:84`). So tagging is not
     // cosmetic -- it is what keeps a fork's traffic out of the main context.
+    //
+    // UNCHANGED by the scope, and it is the guard for the half of the change
+    // that must not happen: the rows are now RESTORED for the run that wrote
+    // them, and still dropped for everyone else.
     const proof = await runThroughEngine(true, true);
 
     const onWire = proof.seen.map((r) => r.contents.join('\n')).join('\n');
@@ -677,6 +719,94 @@ describe('a forked run loses its own tool result before the next turn', () => {
     // rather than through the projected transcript.
     expect(onWire).toContain('the root of the thread');
     expect(onWire).not.toContain('threadMeta');
+  });
+
+  it('a LATER run on the same agent sees none of a finished fork\'s rows', async () => {
+    // REQUIREMENT (2), BY OBSERVATION. The other test in this block asserts
+    // what the forked run's own wire contains; this one asserts what a
+    // DIFFERENT run's wire contains, which is the half that cannot be checked
+    // from inside the fork.
+    //
+    // `A-1` / `B-1` are the probe's own return values and the label is per run,
+    // so each string names exactly one run's tool execution. That is what makes
+    // the absence checkable even though both runs replay the same script and
+    // write near-identical assistant text.
+    const shared = new duyaAgent({
+      apiKey: 'test-key',
+      model: 'claude-test',
+      provider: 'anthropic',
+      sessionId: 's-scope-leak',
+      workingDirectory: process.cwd(),
+      permissionMode: 'bypassPermissions',
+    });
+
+    const a = await runThroughEngine(true, true, shared, FORK_MARKER, 'A');
+    // POSITIVE COUNT first: the fork really wrote the rows that must not appear
+    // later, so the absence below is not "the run wrote nothing".
+    const aTool = engineWritten(a).find((row) => row.role === 'tool');
+    expect(aTool).toBeDefined();
+    expect(rowText(aTool as Message)).toContain('A-1');
+
+    // Run B, same long-lived agent, and it is a PLAIN run -- the composition
+    // binds no scope for it, so its projection is the main projection.
+    const b = await runThroughEngine(false, false, shared, FORK_MARKER, 'B');
+    expect(b.markerAfterRun).toBeNull();
+
+    // Turn 1 is the purest observation available: it is projected before B has
+    // written anything, so everything on that wire came out of the projection.
+    for (const request of b.seen) {
+      expect(request.contents.join('\n')).not.toContain('A-1');
+    }
+
+    // AND B was a complete two-turn tool run whose OWN result is on its wire --
+    // so the absence is about the projection, not about a run that never
+    // happened or a tool that never dispatched.
+    expect(b.probeRuns()).toBe(1);
+    expect(b.seen).toHaveLength(2);
+    expect(b.seen[1].roles).toContain('tool');
+    expect(b.seen[1].contents.join('\n')).toContain('B-1');
+  });
+
+  it('a SECOND fork off the same root does not inherit the first fork\'s rows', async () => {
+    // The scope's discriminating power, which the run-above test cannot show:
+    // both forks hang off `root-1`, so a scope keyed on the BRANCH ROOT would
+    // satisfy every other test in this file and still hand fork B fork A's
+    // exchange. `_commitDurable` stamps each run's rows with `forkTurn.userId`
+    // precisely so the two are separable.
+    const shared = new duyaAgent({
+      apiKey: 'test-key',
+      model: 'claude-test',
+      provider: 'anthropic',
+      sessionId: 's-two-forks',
+      workingDirectory: process.cwd(),
+      permissionMode: 'bypassPermissions',
+    });
+
+    const a = await runThroughEngine(true, true, shared, { replyToId: 'root-1', userId: 'fork-A' }, 'A');
+    const aTool = engineWritten(a).find((row) => row.role === 'tool');
+    expect(aTool).toBeDefined();
+    expect(rowText(aTool as Message)).toContain('A-1');
+
+    // Same root, different fork user row.
+    const b = await runThroughEngine(
+      true,
+      true,
+      shared,
+      { replyToId: 'root-1', userId: 'fork-B' },
+      'B',
+    );
+    expect(b.markerAfterRun).toEqual({ replyToId: 'root-1', userId: 'fork-B' });
+
+    // B sees its OWN tool result on turn 2, and neither fork's result leaks into
+    // the other. Asserted per request rather than once over the joined wire, so
+    // the turn-1 absence is stated separately from the turn-2 presence.
+    expect(b.probeRuns()).toBe(1);
+    expect(b.seen).toHaveLength(2);
+    expect(b.seen[1].roles).toContain('tool');
+    expect(b.seen[1].contents.join('\n')).toContain('B-1');
+    for (const request of b.seen) {
+      expect(request.contents.join('\n')).not.toContain('A-1');
+    }
   });
 });
 

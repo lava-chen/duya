@@ -1455,6 +1455,50 @@ export class duyaAgent implements AgentRuntime {
   }
 
   /**
+   * Plan 610: the model-boundary rows THIS run wrote, and nothing else.
+   *
+   * ## The starvation this answers
+   *
+   * A forked run's rows are tagged `branched` by `_commitDurable`, and
+   * `projectModelMessages` drops every branched row -- which is exactly what
+   * keeps a fork out of the main transcript. The engine re-projects ONCE PER
+   * TURN through `beginTurnAssembly`'s `projectTurnMessages`, so on turn 2 the
+   * projection removed the tool result turn 1 had just produced, and the model
+   * was asked to continue without ever having seen it. The legacy never hit
+   * this because it projects once per `streamChat` and pushes into one working
+   * array, so its forked turn 2 still carried the row (measured:
+   * `["user","user","assistant","tool"]`).
+   *
+   * ## Why a SEPARATE method rather than a change to `projectTurnMessages`
+   *
+   * Because the main projection must keep dropping those rows, and one
+   * projection cannot be two answers at once. The scope belongs to whoever
+   * knows which wire it is building, and the only caller that wants a scoped
+   * one is the engine's per-turn re-projection. The legacy's own projections
+   * -- `beginTurnAssembly`'s run-scoped snapshot, `sideQuestion` -- keep calling
+   * the unscoped private, so their behaviour is unchanged.
+   *
+   * ## What it deliberately does NOT return
+   *
+   * The fork's opening user row, which is tagged against the branch root
+   * rather than against itself. That is the right answer, not a gap: the
+   * engine supplies that row as the run's `input.prompt`, and returning it here
+   * too would send the same user turn twice.
+   *
+   * ## One projector, so there is nothing to drift
+   *
+   * The rows go through `projectModelMessages` itself with the scope option, so
+   * they carry the same role mapping and the same `threadMeta` strip as a row
+   * in the main projection. PUBLIC for the reason `readRunForkMarker` is: the
+   * composition is what knows a run is forked, and reading a run's own rows is
+   * the other half of that claim.
+   */
+  projectRunOwnModelMessages(forkUserId: string): Message[] {
+    const context = buildAgentContext(this.timeline.snapshot());
+    return [...projectModelMessages(context.messages, { runBranch: { forkUserId } }).messages];
+  }
+
+  /**
    * One landed tool result: the durable write, the `tool_result` frame, the
    * `mode_changed` frame, and `PostToolUseFailure` when it failed.
    *
