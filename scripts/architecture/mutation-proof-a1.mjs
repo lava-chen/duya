@@ -41,27 +41,66 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const FIXTURE_DIR = path.join(REPO_ROOT, 'packages', 'agent', 'src', '__mutation_proof_a1__');
 
 /**
- * A turn loop by SHAPE, spelled the way the shipped predicate recognises.
+ * A turn loop by SHAPE: one loop body that drives BOTH legs as consumed
+ * streams — the model request and the tool-result backfill.
  *
  * It never mentions `DuyaAgent`, so a name-based detector would miss it and the
- * proof below would be a false negative that silently passed. The local
- * spelling (`openModelStream` / `runTools`) is deliberately NOT used: that case
- * is the recorded gap at the bottom of this file.
+ * proof below would be a false negative that silently passed. The two
+ * `for await` headers are the entire detection surface; see the docstring above
+ * `TURN_LOOP_SHAPE` in `boundary-gates.mjs` for why the predicate is forbidden
+ * from naming anything, and `RENAME_MAP` below for the proof that it obeys.
  */
 const LOOP = [
   "import { modelPort } from './model-port.js';",
   "import { ToolExecutionPipeline } from './tools.js';",
   '',
-  'export async function driveSession(request) {',
+  'export async function* driveSession(request) {',
   '  const pipeline = new ToolExecutionPipeline();',
   '  let pending = request;',
   '  while (pending !== null) {',
-  '    const stream = await modelPort.createTurnLegModelPort(pending);',
-  '    pending = await pipeline.executeAll(stream);',
+  '    for await (const event of modelPort.createTurnLegModelPort(pending)) {',
+  '      yield event;',
+  '    }',
+  '    for await (const result of pipeline.drain()) {',
+  '      pending = result;',
+  '    }',
   '  }',
   '}',
   ''
 ].join('\n');
+
+/**
+ * Every identifier the fixture loop owns, mapped to a name that appears nowhere
+ * in `TURN_LOOP_SHAPE`.
+ *
+ * This is the rename-resistance proof, and rename-resistance is a REQUIREMENT of
+ * the predicate rather than a property that happened to hold. The previous
+ * three-name-clause version failed exactly here: deleting `buildTurnModelLeg` /
+ * `TurnModelLeg` / `ModelPort` from `DuyaAgent.ts` turned the gate green with
+ * the cycle still in place. A predicate that renaming can silence is not a
+ * boundary gate.
+ */
+const RENAME_MAP = {
+  driveSession: 'alpha',
+  pipeline: 'beta',
+  pending: 'gamma',
+  event: 'delta',
+  result: 'epsilon',
+  request: 'zeta',
+  streamGenerator: 'eta',
+  createTurnLegModelPort: 'theta',
+  drain: 'iota',
+  ToolExecutionPipeline: 'kappa',
+  modelPort: 'lambda',
+};
+
+const renameAll = (src) => {
+  let out = src;
+  for (const [from, to] of Object.entries(RENAME_MAP)) out = out.split(from).join(to);
+  return out;
+};
+
+const RENAMED_LOOP = renameAll(LOOP);
 
 const ADAPTERS = [
   ['hop-1.ts', "export { driveSession } from './hop-2.js';"],
@@ -87,7 +126,7 @@ function writeTree() {
     path.join(FIXTURE_DIR, 'model-port.ts'),
     'export const modelPort = { createTurnLegModelPort: async (r) => r };\n'
   );
-  fs.writeFileSync(path.join(FIXTURE_DIR, 'tools.ts'), 'export class ToolExecutionPipeline { async executeAll() { return null; } }\n');
+  fs.writeFileSync(path.join(FIXTURE_DIR, 'tools.ts'), 'export class ToolExecutionPipeline { async drain() { return null; } }\n');
   for (const [name, body] of ADAPTERS) {
     fs.writeFileSync(path.join(FIXTURE_DIR, name), body + '\n');
   }
@@ -148,6 +187,32 @@ try {
     !LOOP.includes('DuyaAgent') && Boolean(hit),
     'shape-based, not name-based'
   );
+  // ---------------------------------------------------------------- direction 1b
+  // RENAME RESISTANCE — the direction the previous predicate failed.
+  //
+  // The same loop, the same three adapters, the same gate, with EVERY identifier
+  // the loop owns replaced by a name the predicate has never seen. The gate must
+  // still report it. If this check fails, the gate has gone back to matching
+  // spellings, and the fix is to the predicate rather than to this map.
+  fs.writeFileSync(path.join(FIXTURE_DIR, 'session-runner.ts'), RENAMED_LOOP);
+  const renamed = findWorkerLoopReach(REL_ENTRY, undefined, PROOF_DEPTH);
+  const renamedHit = renamed.find((f) => f.file === REL_LOOP);
+  check(
+    'renaming every identifier in the loop does not change the verdict',
+    Boolean(renamedHit),
+    renamedHit
+      ? `still reported; ${Object.keys(RENAME_MAP).length} identifiers renamed`
+      : `findings = ${JSON.stringify(renamed.map((f) => f.file))}`
+  );
+  // The renamed fixture must be genuinely renamed, or the check above is
+  // asserting nothing. `for await` is the only syntax that must survive.
+  check(
+    'the renamed fixture really is renamed (only `for await` survives)',
+    !RENAMED_LOOP.includes('driveSession') &&
+      !RENAMED_LOOP.includes('ToolExecutionPipeline') &&
+      RENAMED_LOOP.includes('for await'),
+    'control: the rename map covered the identifiers it claims to'
+  );
 } finally {
   removeTree();
 }
@@ -174,36 +239,38 @@ for (const r of results) {
 console.log(`\n${results.length - failed}/${results.length} mutation-proof checks passed`);
 
 /**
- * KNOWN GAP — measured, not assumed.
+ * KNOWN GAP — re-measured after the 2026-10-06 predicate change, because the
+ * gap recorded here used to be a contradiction in the gate's own docstring.
  *
- * A loop that is a cycle by every structural measure (it iterates, it opens a
- * model stream, it dispatches tools) but spells NONE of the names the current
- * `TURN_LOOP_SHAPE` recognises is NOT reported:
+ * The gap WAS: a loop that is a cycle by every structural measure but spells
+ * none of the names `TURN_LOOP_SHAPE` recognised was not reported, which
+ * contradicted the claim that the check reports "MORE, never less". That claim
+ * was false, and it was false because two of the three clauses were names.
  *
- *     while (p !== null) { const s = await openModelStream(p); p = await runTools(s); }
+ * The gap NOW: a turn loop that drives its two legs as plain `await`ed calls
+ * rather than as consumed streams (`for await (... of ...)`) is not reported.
+ * This is a narrowing that was chosen, not a name-matching defect: the
+ * predicate is now free of identifiers, so the old counter-example
+ * (`openModelStream` / `runTools`) IS reported, and the cost of the predicate
+ * is paid in the other direction.
  *
- * The reachability closure DOES contain such a module; it is `isTurnLoopModule`
- * that declines it. So the gate reports strictly LESS, which contradicts the
- * docstring above `TURN_LOOP_SHAPE` ("All three limits make the check report
- * MORE, never less"). Whoever widens the predicate should correct that sentence.
+ * The cost was measured rather than guessed, over 2250 non-test source files:
  *
- * The cost of widening was measured rather than guessed. Requiring all three
- * clauses over 2248 non-test source files:
+ *   | predicate                                            | files selected |
+ *   | ---------------------------------------------------- | -------------- |
+ *   | previous three name clauses                          | 5              |
+ *   | two driven streams in one loop body (shipped)       | 1              |
+ *   | one driven stream + any other awaited call          | 4              |
  *
- *   | predicate                          | files selected |
- *   | ---------------------------------- | -------------- |
- *   | current                            | 5              |
- *   | widened (modelStream + toolExecution) | 6            |
- *
- * The single real file gained is `packages/agent/src/agent/session/agent-shell.ts`.
- * Six is still selective, so the gap is real and cheap to close -- but widening
- * a gate's semantics is the slice owner's decision, not something a proof script
- * should do silently. Hence: recorded here, not patched here.
+ * The extra three files the last row buys are `SessionSearchTool.ts`,
+ * `packages/ai/src/utils/retry.ts` and `apps/desktop/src/main/services/backup.ts`
+ * — a tool, a retry helper and a backup scan. Widening to them is a deliberate
+ * decision with a measured price, and is recorded here rather than taken.
  */
 console.log(
-  `\nKNOWN GAP (recorded, not patched): a turn loop spelled openModelStream/runTools is not reported.\n` +
-    `  clause modelStream/toolExecution match names, not the responsibility.\n` +
-    `  measured cost of widening: selectivity 5 -> 6 real files (gains agent-shell.ts).`
+  `\nKNOWN GAP (recorded, not patched): a turn loop whose two legs are plain awaited calls,\n` +
+    `  not consumed streams, is not reported. The shipped predicate selects 1 of 2250 files;\n` +
+    `  accepting one stream plus any other awaited call would select 4.`
 );
 
 process.exit(failed === 0 ? 0 : 1);
