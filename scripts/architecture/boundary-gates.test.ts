@@ -887,10 +887,40 @@ describe('G7/G8 — a leg one call frame down still counts, and the follow stops
     expect(turnLoopSites(local)).toEqual([]);
   });
 
-  it('does NOT follow the legs TWO frames down — exactly one call frame', () => {
-    // The negative that bounds the follow along the CALL axis. `inner` drives
-    // both legs and `outer` calls it, but the loop body calls `outer`, so the
-    // legs are two frames from the loop and out of scope by design.
+  it('does NOT follow the legs TWO frames down when the INTERMEDIATE contributes a leg', () => {
+    // The negative that actually bounds the follow along the CALL axis, and the
+    // one the first version of this test failed to reach.
+    //
+    // The shipped depth-2 test put BOTH legs two frames down with nothing in
+    // between, so the intermediate contributed 0 and the fixture returned 0 for
+    // the wrong reason — it never touched the leak. This shape is the one that
+    // caught it: `middle` has ONE inline leg AND calls `inner`, which has
+    // another. A callee that counted its whole block range scored `middle` as 2
+    // and matched the module, i.e. two frames while the contract says one.
+    //
+    // `middle` must contribute exactly 1 (its own `for await`), and `inner`'s
+    // leg is a second frame and must not count, so the total is 1 — under the
+    // threshold of 2.
+    const intermediateContributes = [
+      'async function outer() {',
+      '  for (let t = 0; t < 3; t++) {',
+      '    await middle();',
+      '  }',
+      '}',
+      'async function middle() {',
+      '  async function inner() { for await (const a of s()) {} }',
+      '  await inner();',
+      '  for await (const b of s()) {}',
+      '}',
+      '',
+    ].join('\n');
+    expect(isTurnLoopModule(intermediateContributes)).toBe(false);
+    expect(turnLoopSites(intermediateContributes)).toEqual([]);
+  });
+
+  it('does NOT follow the legs TWO frames down when both sit in the leaf', () => {
+    // The complementary depth-2 shape: both legs are in `inner` and neither
+    // `outer` nor the leaf's caller contributes any.
     const twoFrames = [
       'async function inner(ports) {',
       '  for await (const a of ports.model.stream()) { use(a); }',
@@ -909,6 +939,35 @@ describe('G7/G8 — a leg one call frame down still counts, and the follow stops
       '',
     ].join('\n');
     expect(isTurnLoopModule(twoFrames)).toBe(false);
+  });
+
+  it('still reaches the engine shape: two DIRECT callees, one inline leg each', () => {
+    // The counterweight to the two negatives above, and the reason the one-frame
+    // bound does not cost us the real engine. `run-engine.ts`'s loop body calls
+    // `#streamModel` and `#drainOutcomes` directly and each holds exactly one
+    // `for await`, so one frame is enough — asserted here and against the live
+    // file above rather than assumed from the shape.
+    const directCallees = [
+      'class E {',
+      '  async #streamModel(ports) {',
+      '    for await (const frame of ports.model.stream()) { use(frame); }',
+      '    return null;',
+      '  }',
+      '  async #drainOutcomes(ports) {',
+      '    for await (const item of ports.tools.drain()) { use(item); }',
+      '  }',
+      '  async run(ports) {',
+      '    for (let turn = 1; ; turn++) {',
+      '      await this.#streamModel(ports);',
+      '      await this.#drainOutcomes(ports);',
+      '    }',
+      '  }',
+      '}',
+      '',
+    ].join('\n');
+    const sites = turnLoopSites(directCallees);
+    expect(sites).toHaveLength(1);
+    expect(sites[0]!.legs).toBe(2);
   });
 
   it('does NOT count a loop with only ONE leg, however it is decomposed', () => {

@@ -632,6 +632,10 @@ const CONTROL_KEYWORDS = new Set([
  * found from bracket structure and the `function` keyword — never from an
  * identifier the loop happens to use — so the rename-resistance requirement
  * above survives the widening.
+ *
+ * Returns `{ byName, all }`. `all` carries every definition regardless of name,
+ * which is what lets a callee exclude the functions nested inside itself — see
+ * `countForAwaitIn`.
  */
 function localDefinitions(tokens) {
   const defs = new Map();
@@ -696,13 +700,23 @@ function localDefinitions(tokens) {
     if (end < 0) continue;
     add(name.value, { start: close + 3, end });
   }
-  return defs;
+  // `all` is every definition in the module regardless of name. It exists so a
+  // callee can tell its OWN legs from the legs of a function declared inside
+  // it; without it the range scan below would silently reach two frames.
+  return { byName: defs, all: [...defs.values()].flat() };
 }
 
-/** `for await` headers anywhere in a token range, nested blocks included. */
-function countForAwaitIn(tokens, start, end) {
+/**
+ * `for await` headers in a token range, skipping any range in `excluded`.
+ *
+ * With no `excluded` this counts the whole range including nested blocks,
+ * which is what the INLINE loop-body count has always done and must keep doing:
+ * a turn loop's own legs are nested stream pumps.
+ */
+function countForAwaitIn(tokens, start, end, excluded = []) {
   let legs = 0;
   for (let k = start; k < end; k++) {
+    if (excluded.some((b) => k > b.start && k < b.end)) continue;
     const t = tokens[k];
     if (t.kind !== 'id' || t.value !== 'for') continue;
     const next = tokens[k + 1];
@@ -798,12 +812,41 @@ function calledDefinitions(tokens, start, end, defs) {
  * counted once; a definition the body calls by name is outside the body, and each
  * such name contributes its own `for await` count once no matter how many times
  * it is called.
+ *
+ * ⚠️ **This rule reached TWO frames for one revision, and the docstring was the
+ * only thing claiming otherwise.** The first implementation indexed every
+ * definition in the module and, for each callee, counted `for await` across that
+ * callee's whole block range. A block range textually CONTAINS any function
+ * declared inside it, so a callee that called a leg-bearing helper dragged that
+ * helper's leg into the total — depth two, while the comment above said depth
+ * one. Caught on review, not by a test: the depth-2 test that shipped was built
+ * with BOTH legs two frames down and nothing in between, so it returned 0 and
+ * passed without ever touching the leak.
+ *
+ * The fixture that exposed it is the shape worth remembering — the intermediate
+ * contributes a leg of its OWN:
+ *
+ *     async function outer() {
+ *       for (let t = 0; t < 3; t++) { await middle(); }
+ *     }
+ *     async function middle() {
+ *       async function inner() { for await (const a of s()) {} }
+ *       await inner();                          // depth 2 — must NOT count
+ *       for await (const b of s()) {}           // depth 1 — counts as 1
+ *     }
+ *
+ * `middle` contributes exactly 1, so the module is not a turn loop. A callee now
+ * contributes its OWN inline legs only: `countForAwaitIn` takes an `excluded`
+ * list built from the definitions nested inside that callee. The live engine is
+ * unaffected and was re-measured, not assumed — its loop body calls
+ * `#streamModel` and `#drainOutcomes` DIRECTLY and each holds exactly one inline
+ * `for await`, so one frame is sufficient and `run-engine.ts` still matches.
  */
 export function turnLoopSites(src) {
   if (typeof src !== 'string' || src.length === 0) return [];
   if (countForAwait(src) < TURN_LOOP_SHAPE.legs) return [];
   const tokens = tokenize(src);
-  const defs = localDefinitions(tokens);
+  const { byName: defs, all } = localDefinitions(tokens);
   const sites = [];
   for (let i = 0; i < tokens.length; i++) {
     if (tokens[i].kind !== 'op' || tokens[i].value !== '{') continue;
@@ -816,13 +859,21 @@ export function turnLoopSites(src) {
     if (keyword.value !== 'while' && keyword.value !== 'for') continue;
     const bodyEnd = matchBracket(tokens, i);
     if (bodyEnd < 0) continue;
+    // No exclusions here: the loop body's OWN legs may sit in nested blocks, and
+    // that is the pre-existing inline behaviour this gate shipped with.
     let legs = countForAwaitIn(tokens, i, bodyEnd);
     if (legs < TURN_LOOP_SHAPE.legs && defs.size > 0) {
       for (const name of calledDefinitions(tokens, i, bodyEnd, defs)) {
         for (const block of defs.get(name)) {
           // Already inside the body's own range: counted by the inline pass.
           if (block.start >= i && block.end <= bodyEnd) continue;
-          legs += countForAwaitIn(tokens, block.start, block.end);
+          // A callee contributes its OWN inline legs only. Definitions declared
+          // inside it are a SECOND frame, and counting them is what made this
+          // reach two frames by accident — see the docstring above.
+          const nested = all.filter(
+            (b) => b.start > block.start && b.end < block.end,
+          );
+          legs += countForAwaitIn(tokens, block.start, block.end, nested);
         }
       }
     }
