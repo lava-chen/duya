@@ -441,6 +441,39 @@ export interface LegacyRunHost {
    * is the wrong place to recover them.
    */
   readonly onPerCallUsage?: (usage: TokenUsage) => void;
+  /**
+   * Plan 610 P8: the usage block to PERSIST on this turn's assistant row.
+   *
+   * ## Why the host, and not the engine
+   *
+   * `TurnMessage.addUsage` keeps the LAST usage frame of the turn and never the
+   * sum, on purpose: a provider reports usage more than once per request, and
+   * summing inflates `usage` by the prompt (`run-engine.ts:3253-3261`). That is
+   * right for the frame the engine publishes, and it is WRONG for the durable
+   * row, for two reasons the engine cannot see:
+   *
+   * 1. `addUsage` keeps three counters. The row's block also carries the cache
+   *    buckets, and `normalizePromptTokens` needs them to tell Anthropic's
+   *    `input_tokens`-excludes-cache convention from an OpenAI gateway's
+   *    `prompt_tokens`-includes-it one. Without them the convention guard
+   *    cannot fire and a 24k context with a 500-token non-cached tail reloads
+   *    as 500.
+   * 2. `last_call` is the LARGEST-prompt call of the turn, chosen by anchor
+   *    volume, because some gateways report a near-fresh prefix (input ~0, tiny
+   *    hit) on a later round. "Last frame wins" takes that collapsed reading
+   *    and the ring shrinks permanently after a restart.
+   *
+   * ## Why this is a FUNCTION and not a value
+   *
+   * It is read at the moment the row is written, and the host's per-call ledger
+   * is still being appended to until the final `result` frame. A value captured
+   * when the host was built would be empty for the whole turn.
+   *
+   * OPTIONAL: a host with no ledger (a bare port test, the CLI) returns nothing
+   * and the row gets exactly what it got before this hook existed — the
+   * engine's own block via `toRowUsage`.
+   */
+  readonly turnUsageBlock?: () => AssistantMessage['usage'] | null;
   /** Asks the user. Resolves; never throws for a refusal. `ChatOptions.requestPermission`. */
   readonly askApproval: (request: ApprovalRequest, signal: AbortSignal) => Promise<ApprovalVerdict>;
   /**
@@ -752,12 +785,23 @@ export function composeLegacyRunSources(
       // the only place that can supply it. The usage block is mapped from the
       // engine's camelCase into the ROW's snake_case here, which is the mapping
       // `AssistantMessageRecord` explicitly leaves to the host (`:822-826`).
-      onAssistantMessage: (record) =>
+      //
+      // `LegacyRunHost.turnUsageBlock` WINS over `toRowUsage` when the host has
+      // one, because the row is the persisted anchor and the engine's block is
+      // built for the published frame. Read at write time, not captured: the
+      // row is committed by `recordTurnAssistantMessage` on its first line, so
+      // anything grafted afterwards would decorate an object the store never
+      // sees.
+      onAssistantMessage: (record) => {
+        const hostUsage = host.turnUsageBlock?.() ?? undefined;
+        const usage =
+          hostUsage ?? (record.usage === undefined ? undefined : toRowUsage(record.usage));
         agent.recordTurnAssistantMessage({
           content: record.content as unknown as MessageContent[],
           seqIndex: host.seqIndex,
-          ...(record.usage === undefined ? {} : { usage: toRowUsage(record.usage) }),
-        }),
+          ...(usage === undefined ? {} : { usage }),
+        });
+      },
       onTurnResults: (summary) => {
         agent.finishTurnOutput(summary);
       },

@@ -70,7 +70,7 @@ import type {
   RunTerminalState,
 } from '@duya/agent-protocol';
 import type { LegacyFrameCodec } from '@duya/agent-runtime';
-import type { ChatOptions, MessageContent, SSEEvent, TokenUsage } from '../types.js';
+import type { AssistantMessage, ChatOptions, MessageContent, SSEEvent, TokenUsage } from '../types.js';
 import type { duyaAgent } from '../agent/DuyaAgent.js';
 import type { TurnPipelinePublisher } from '../tool/turn-pipeline-publisher.js';
 import {
@@ -151,6 +151,12 @@ export interface EngineRunDriverRequest {
    * tap and not the `ModelFrame`.
    */
   readonly onPerCallUsage: (usage: TokenUsage) => void;
+  /**
+   * Plan 610 P8. The usage block to persist on each assistant row, read at the
+   * moment the row is written. See `LegacyRunHost.turnUsageBlock` for why the
+   * host owns this and why the engine's own block is not the persisted one.
+   */
+  readonly turnUsageBlock?: () => AssistantMessage['usage'] | null;
   /** Where the run's tool-side-effect journals go. Defaults to the worker's own. */
   readonly ledgerDir?: string;
   /** Durable sink for the spine's events. A run with no Control Plane omits it. */
@@ -595,6 +601,12 @@ export async function driveRunWithEngine(
       // The per-call usage tap. The provider's OWN block, before
       // `toModelFrame` narrows it, so the entry's cache buckets survive.
       onPerCallUsage: request.onPerCallUsage,
+      // Forwarded only when the caller supplied one, so a host object never
+      // carries a key that resolves to `undefined`: `LegacyRunHost` documents
+      // "absent" and "present but empty" as different states.
+      ...(request.turnUsageBlock === undefined
+        ? {}
+        : { turnUsageBlock: request.turnUsageBlock }),
     };
 
     // THE composition: the one assembly path, reached through exactly the

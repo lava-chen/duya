@@ -27,7 +27,7 @@ import { COMPACTION_CHECKPOINT_ID_SUFFIX } from '../message/index.js';
 
 import type { MessageRow, AttachmentRow, ParsedDocumentAttachment } from '../session/db.js';
 import { getAttachmentsForSession, rehydrateContentWithAttachments } from '../session/db.js';
-import type { Message, MessageContent, MCPServerConfig, Tool, TokenUsage, UsageCall, ChatOptions } from '../types.js';
+import type { Message, AssistantMessage, MessageContent, MCPServerConfig, Tool, TokenUsage, UsageCall, ChatOptions } from '../types.js';
 import type { ProviderRuntimeConfig } from '@duya/ai';
 import { logger } from '../utils/logger.js';
 import { parseUsageCall } from './call-usage.js';
@@ -466,6 +466,53 @@ interface LastCallUsageBlock {
   output_tokens?: number;
   cache_hit_tokens?: number;
   cache_creation_tokens?: number;
+}
+
+/**
+ * Plan 610 P8: the turn-cumulative block, with `last_call`, as the assistant row
+ * persists it.
+ *
+ * ## Why this is the entry's and not the engine's
+ *
+ * The engine's `TurnMessage.addUsage` keeps the LAST usage frame of the turn
+ * and never the sum (`agent-runtime/src/engine/run-engine.ts:3253-3261`), which
+ * is right for the published frame and wrong for the durable row on two counts
+ * the engine cannot see:
+ *
+ * 1. It keeps three counters. The cache buckets are what let
+ *    `normalizePromptTokens` tell Anthropic's `input_tokens`-excludes-cache
+ *    convention from an OpenAI gateway's `prompt_tokens`-includes-it one.
+ * 2. It has no `last_call`, and `last_call` is the LARGEST-prompt call chosen by
+ *    anchor volume, not the latest. Some gateways report a near-fresh prefix on
+ *    a later round, and a collapsed anchor shrinks the ring permanently after a
+ *    restart.
+ *
+ * So the row gets the sum plus the anchor, exactly as it did through
+ * `cumulativeTokenUsageRef` before the flip.
+ *
+ * `null` when no provider call reported anything, which leaves the row without
+ * a usage block rather than with a block of zeros: a zero claims no cache read
+ * happened, which is a different statement from not knowing.
+ */
+function persistedUsageBlock(turnUsage: {
+  cumulative: TokenUsage | null;
+  lastCall: (LastCallUsageBlock & { output_tokens: number }) | null;
+}): AssistantMessage['usage'] | null {
+  const cumulative = turnUsage.cumulative;
+  if (cumulative === null) return null;
+  return {
+    input_tokens: cumulative.input_tokens,
+    output_tokens: cumulative.output_tokens,
+    ...(cumulative.total_tokens === undefined ? {} : { total_tokens: cumulative.total_tokens }),
+    ...(cumulative.cache_hit_tokens === undefined
+      ? {}
+      : { cache_hit_tokens: cumulative.cache_hit_tokens }),
+    ...(cumulative.cache_creation_tokens === undefined
+      ? {}
+      : { cache_creation_tokens: cumulative.cache_creation_tokens }),
+    ...(cumulative.calls === undefined ? {} : { calls: cumulative.calls }),
+    ...(turnUsage.lastCall === null ? {} : { last_call: turnUsage.lastCall }),
+  };
 }
 
 // Ring diagnostic trace — pi-style dedicated debug file written directly
@@ -3380,6 +3427,19 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         // tap cannot drift.
         onPerCallUsage: (usage) =>
           handleStreamEvent({ type: 'result', data: usage as unknown }),
+        // Plan 610 P8: the block the assistant ROW persists.
+        //
+        // Read at write time, so it carries the whole turn: `onPerCallUsage`
+        // above has already appended every provider `result` by the time the
+        // engine hands the final message over, and `turnUsage.lastCall` is
+        // recomputed from the ledger on each one.
+        //
+        // This is what `cumulativeTokenUsageRef` used to graft on, and what the
+        // flip dropped: without `last_call`, `normalizePromptTokens` falls back
+        // to the engine's own block, which keeps only the LAST usage frame and
+        // no cache buckets -- so the cache-convention guard cannot fire and a
+        // near-cached context reloads as its non-cached tail.
+        turnUsageBlock: () => persistedUsageBlock(turnUsage),
       },
       // The drain's frames, in the order the surface projects them. A frame the
       // codec drops is dropped by the SAME `handleStreamEvent`, so the held
