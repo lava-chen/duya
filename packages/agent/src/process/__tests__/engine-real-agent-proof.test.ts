@@ -52,8 +52,11 @@
  *  3. **An inline history cannot carry a conversation.** The engine takes
  *     `history` from `input.history` when it is inline
  *     (`run-engine.ts:1975-1977`) and only falls back to `assembled.messages`
- *     for a `by_ref`. `buildLegacyRunInput` always emits inline, and inline is
- *     frozen at run start, so the tool result never reaches turn 2.
+ *     for a `by_ref`. `buildLegacyRunInput` used to emit inline, and inline is
+ *     frozen at run start, so the tool result never reached turn 2. Plan 610 P2
+ *     gave the part the `by_ref` shape the catalog already had; this harness
+ *     still pins its own locator and digest so the transcript it measures is
+ *     unambiguously the agent's own projection.
  *
  * ## The trap this file is built to avoid
  *
@@ -602,8 +605,10 @@ async function runThroughEngine(
   const manifest: RunManifest = buildLegacyRunManifest(facts);
   const input: RunInputSnapshot = {
     ...buildLegacyRunInput(facts, { role: 'user', id: 'p1', content: prompt }, []),
-    // `by_ref`, NOT the inline history `buildLegacyRunInput` emits. See this
-    // file's header, finding 3: inline is frozen at run start, so the tool
+    // This harness's own locator and digest. The builder emits `by_ref` too
+    // (plan 610 P2), and the override is kept so the transcript measured here is
+    // pinned by the FIXTURE rather than by whatever the builder names. Before P2
+    // the builder emitted inline, which is frozen at run start, so the tool
     // result could never reach turn 2 and the run still completed cleanly.
     history: { kind: 'by_ref', digest: 'hist-s3', locator: 'agent://transcript' },
   } as unknown as RunInputSnapshot;

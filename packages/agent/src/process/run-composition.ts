@@ -165,7 +165,22 @@ import type {
   TransientContextFragment,
   TurnAssemblyInput,
 } from '@duya/agent-runtime';
-import type { RunId, RunManifest, TokenUsage } from '@duya/agent-protocol';
+// One statement, and it is deliberately a VALUE import rather than the
+// type-only one this file carried before plan 610 P2: `canonicalJson` /
+// `sha256Hex` live in `@duya/agent-protocol` and `architecture-policy.yaml`
+// states why this module reaches for them instead of hashing locally -- "a
+// worker that could not reach them would have to reimplement canonical JSON and
+// sha256, and a second implementation of the digest is a second source of truth
+// for exactly the value whose whole purpose is to be checked". Merging the two
+// into one statement also keeps the module's cross-boundary edge count where it
+// was, which the import audit measures per STATEMENT.
+import {
+  canonicalJson,
+  sha256Hex,
+  type RunId,
+  type RunManifest,
+  type TokenUsage,
+} from '@duya/agent-protocol';
 // Types come from the agent's OWN types module, which re-exports them, rather
 // than from `@duya/ai`: the import audit counts every import statement --
 // type-only included -- as a cross-boundary edge, so sourcing them from inside
@@ -1024,11 +1039,45 @@ export function buildLegacyRunManifest(facts: LegacyRunFacts): RunManifest {
  * THIRD path for the same fact, and two of the three would be the ones the
  * design already rejects.
  *
- * ## `catalog` is `by_ref`, with the digest, for the reason the port gives
+ * ## `history` is `by_ref`, and it is the SAME decision as the catalog's
  *
- * A `by_ref` part is verifiable rather than trusted (`ports.ts:1200-1207`), and
- * the locator is the catalog revision the run pinned, so a tool surface that
- * changes mid-run is detectable instead of silent.
+ * `ResolvedPart` is a union with no third member, and `RunInputSnapshot.history`
+ * deliberately leaves the choice open ("give `by_ref` and the engine
+ * re-resolves, or give `inline` and it cannot"). The engine then treats the two
+ * shapes differently: `RunEngineImpl.#modelRequest` takes `input.history.value`
+ * when the part is INLINE and falls back to `assembled.messages` for a
+ * `by_ref`. So `inline` cannot carry a conversation at all -- the snapshot is
+ * frozen at run start, and the tool result turn 1 produced can never reach
+ * turn 2. Measured on this composition with a real agent: the tool ran, the run
+ * proposed `completed`, and turn 2's request was `["user"]` where the `by_ref`
+ * shape sends `["user","assistant","tool","user"]`.
+ *
+ * The catalog beside it was already `by_ref`, and for the reason this now
+ * shares: a `by_ref` part is verifiable rather than trusted, and the locator is
+ * what makes a mid-run change detectable instead of silent. History is the part
+ * `ports.ts` names as ALREADY DURABLE and owned by the transcript store, so it
+ * is the one part where an inline copy is both larger and less honest than a
+ * reference.
+ *
+ * ## The locator NAMES the source; the digest is what it resolved to
+ *
+ * `locator` is the durable transcript the host resolves from, keyed by the run's
+ * own `sessionId` -- the same fact `LegacyRunHost.sessionId` already requires,
+ * and the same session the command port answers `/goal` against. Nothing parses
+ * it: `RunEngineImpl` hands a `by_ref` locator BACK to the host rather than
+ * re-resolving it, which is what keeps exactly one derivation of "the same
+ * input" (`ports.ts`, contract 2).
+ *
+ * `digest` is the sha256 of the rows the host resolved that locator to when the
+ * run started, canonicalised with the protocol's own `canonicalJson`. Two runs
+ * over the same prior transcript pin the same digest; a run that begins from a
+ * different one does not. A constant string would satisfy the type and verify
+ * nothing, which is the whole reason `ResolvedPart` makes `digest` required and
+ * forbidden on `inline`.
+ *
+ * `canonicalJson` THROWS on a value it cannot canonicalise rather than dropping
+ * it, and that is kept rather than softened: `runInputRevision` argues the same
+ * way ("dropping the field would let two different inputs hash the same").
  */
 export function buildLegacyRunInput(
   facts: LegacyRunFacts,
@@ -1038,7 +1087,11 @@ export function buildLegacyRunInput(
   return {
     revision: facts.revision,
     prompt: { role: 'user', id: prompt.id, content: prompt.content },
-    history: { kind: 'inline', value: history },
+    history: {
+      kind: 'by_ref',
+      digest: historyDigest(history),
+      locator: `transcript://${facts.sessionId}`,
+    },
     attachments: { kind: 'inline', value: [] },
     catalog: {
       kind: 'by_ref',
@@ -1048,4 +1101,33 @@ export function buildLegacyRunInput(
     steering: [],
     options: {},
   } as unknown as RunInputSnapshot;
+}
+
+/**
+ * The digest a `by_ref` history carries: the transcript as it stood when the run
+ * started.
+ *
+ * ## What is hashed, and why only three fields
+ *
+ * `role`, `id` and `content`, which is what `ModelMessage` carries and therefore
+ * everything the model could have been shown. A projected row's other fields
+ * (`timestamp`, `seq_index`, `replyToId`) are metadata the model never sees, and
+ * a digest that moved when a row was re-timestamped would report drift where
+ * there is none.
+ *
+ * `content` is typed `unknown` here because the caller's rows are whatever the
+ * host projected, and `canonicalJson` is the thing that decides whether a value
+ * is canonicalisable. The ONE cast is to the protocol's `JsonValue`, and
+ * `MessageContent` is a string or an array of plain blocks, so this narrows a
+ * wider static type rather than asserting something new.
+ */
+function historyDigest(
+  history: readonly { role: 'user' | 'assistant' | 'tool'; id: string; content: unknown }[],
+): string {
+  const rows = history.map((row) => ({
+    role: row.role,
+    id: row.id,
+    content: row.content as Parameters<typeof canonicalJson>[0],
+  }));
+  return sha256Hex(canonicalJson(rows));
 }

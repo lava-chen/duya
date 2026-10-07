@@ -473,9 +473,10 @@ async function runThroughEngine(): Promise<{
     catalogRevision: agent.activeMCPRegistry.getCatalogRevision(),
     permissionMode: 'default',
   } as never;
-  // `by_ref`, not the inline history `buildLegacyRunInput` emits: inline is
-  // frozen at run start, so the tool result could never reach turn 2 and the
-  // run would still complete cleanly (S3 finding 3).
+  // The builder's own `by_ref`, restated with THIS fixture's locator and digest
+  // so a reader can see which half of the snapshot the run resolved. Before
+  // plan 610 P2 the builder emitted an INLINE history and this override was what
+  // kept the tool result reaching turn 2 (S3 finding 3).
   const input = {
     ...buildLegacyRunInput(facts, { role: 'user', id: 'p1', content: prompt }, []),
     history: { kind: 'by_ref', digest: 'hist-s1', locator: 'agent://transcript' },

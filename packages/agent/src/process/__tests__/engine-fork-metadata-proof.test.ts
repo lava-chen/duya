@@ -374,9 +374,10 @@ async function runThroughEngine(
   const manifest: RunManifest = buildLegacyRunManifest(facts);
   const input: RunInputSnapshot = {
     ...buildLegacyRunInput(facts, { role: 'user', id: 'fork-1', content: prompt }, []),
-    // `by_ref`, NOT the inline history `buildLegacyRunInput` emits: inline is
-    // frozen at run start, so the tool result could never reach turn 2 (S3
-    // finding 3) and the run would complete cleanly having proven nothing.
+    // This fixture's own locator and digest over the builder's `by_ref` shape.
+    // Before plan 610 P2 the builder emitted an INLINE history, which is frozen
+    // at run start: the tool result could never reach turn 2 (S3 finding 3) and
+    // the run completed cleanly having proven nothing.
     history: { kind: 'by_ref', digest: 'hist-fork', locator: 'agent://transcript' },
   } as unknown as RunInputSnapshot;
 
