@@ -963,4 +963,41 @@ G10 的独有价值是**闭包式检测**(抓传递性的 Node 内建牵引),而
 `apps/desktop/src/main/memory-state/` 是**第二个 SQLite 库**(12 个 `.sql.ts` migration、`schema.ts`、
 `db.ts` 单例)。计划 06 §5 没有把它列为 `data` 的来源。决策书把它划进 `data`,并把
 `control-plane/sqlite-repository.ts` 留在 CP —— 后者自己的文档说「不执行 DDL、不跑 migration、不构造 `Database`」,
-它是**端口绑定**不是持久化。
+它是**端口绑定**不是持久化。### P0:headless / CLI 路径的 prompt 从未到达执行器
+
+d2b 派活前 worker 停下报告:翻转的**对象**前提为假 —— 它没有改任何代码。
+经主 agent 独立复现,属实。这是一个**先于架构收口的产品级缺陷**,不是翻转的副产品。
+
+链条共四跳,每一跳单独看都合理:
+
+1. `HeadlessRunHost.start(intent)` 把真 prompt 交给 `this.#controller.start(manifest, { prompt: intent.prompt, ... })`。
+2. `RunController` 用这份真 input 调它自己的 `channel.start(manifest, input, sink)`。
+3. `headless-run-host.ts` 的 controller 桥接 `start: async (manifest, input, sink) => ...`
+   **接收了 `input` 然后丢弃**,只把 `{ frame, end }` 转给 `this.#transport.start`。
+4. `InProcessTransport.start` 因此自己**捏造** `RunStartInput = { sessionId: '', prompt: '', options: {}, revision: '' }`,
+   再交给 `createAgentExecutionChannel`,后者执行 `agent.streamChat(input.prompt, options)` —— 拿到的是 `''`。
+
+**独立测量**(主 agent 亲自跑,非转述):以 `prompt: 'THE-PROMPT-abc123'` 启动一次 run,
+执行器收到的 prompt 数组为 `[""]`,canary 匹配 `false`。探针已删除,树干净。
+
+**为什么至今没有任何东西变红**:既有测试的 `scriptedAgent` double 声明为 `async *streamChat()`,
+**一个参数都不接**,因此它在结构上无法观测这件事。不是断言写错,是被测替身看不见。
+worker 枚举了 6 条可能的 prompt 通道(controller 的 input / transport 捏造 / RunManifest /
+`HeadlessRunHostOptions` / `InProcessTransportOptions.private` / controller 的 `envelope` 臂),6 条都不通。
+
+**影响面**:`packages/agent/src/cli/index.ts` 的三个 host 站点都走这条路径,含 `runTask` 的
+`runHost.start({ prompt: task, ... })`。桌面端 `apps/desktop/src/main/agents/server/run-orchestrator.ts` 亦引用 `HeadlessRunHost`。
+
+**裁决:P10 独立切片,先于 d2b。** 不并入 d2b 的理由按重要性排序:
+1. 它是**当下就在影响用户**的缺陷,不是 plan 610 的架构债;藏进一个 55 commit 的架构 PR 里会被淹没。
+2. d2b 需要的恰恰是「prompt 能到达执行器」。先修,翻转切片就不必同时夹带 transport 移除这个结构性改动。
+3. 它可独立测试、独立回退。放在 flip 分支上做成一个原子 commit(而非另开分支),
+   是因为 d2b 正在重构同一个文件,两个分支改同一文件必然产生冲突。
+
+**顺带更正两处 briefing 错误(均为我的)**:
+- 我称 `headless-retirement.test.ts` 会钉住该符号 —— **错**。它在扫描时**排除** `headless-run-host.ts`,翻转不会在那里注册。
+  真正会红的是 `h8-2-consumer-inventory.test.ts`:它把一个 `cli` turn 条目**定义成**本文件里的 `agent.streamChat` 调用点。
+- 那两个 desktop 测试**在 pristine HEAD 上就已经是红的**(`4 failed / 10 passed`),原因是树里有 5 处
+  `agent.streamChat(` 而只登记了 2 处,其中 4 处在测试文件里。
+  **因此它们不能作为 d2b 的基线门禁** —— 我在 briefing 里没有把这一条说清,是第二个前提错误。
+
