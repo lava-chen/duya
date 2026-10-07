@@ -515,6 +515,104 @@ function persistedUsageBlock(turnUsage: {
   };
 }
 
+/**
+ * THE CODEC ADMISSION GATE.
+ *
+ * `handleStreamEvent` is reached by FOUR callers and they do NOT agree on
+ * the frame's vocabulary:
+ *
+ *  - the driver's `onFrame` binding, whose frames are ALREADY `chat:*` -- the
+ *    drain in `engine-run-driver.ts` runs `request.legacyFrameCodec` itself
+ *    BEFORE it calls `onFrame` (`engine-run-driver.ts:689-691`);
+ *  - `onPerCallUsage` (`result`), the orchestrator leg, and
+ *    `engineRun.railFrames`, which all pass frames in the PRE-codec legacy
+ *    `SSEEvent` vocabulary.
+ *
+ * So the codec cannot be called unconditionally here, and that is the defect
+ * this gate fixes: the S4c-d3 flip put a codec pass IN FRONT of a handler
+ * that already owned one, and `convertSSEToAgentMessage` has no `chat:*` arm
+ * -- every already-converted frame fell through to the `default:` WARN and
+ * returned `null`. That silenced the frame AND the `deferredDone` latch
+ * behind it, so a run streamed nothing and terminated on the renderer's
+ * `db_persisted` fallback alone.
+ *
+ * The rule is the codec's own postcondition made explicit: a frame already
+ * in the worker's `chat:*` vocabulary is ADMITTED as it stands, and only a
+ * pre-codec frame is converted. Admitting verbatim is COMPLETE rather than
+ * partial: every frame the codec can emit is either `chat:*` (admitted here)
+ * or a `compact:*` type, and the `compact:*` arms are idempotent -- re-encoding
+ * one returns it unchanged. `desktop-chat-codec-once.test.ts` pins that
+ * inventory so a future arm emitting some third vocabulary cannot pass
+ * silently.
+ *
+ * This is deliberately a no-op for the other two `onFrame` consumers
+ * (`headless-run-host.ts`, `SubagentTool/subagent-engine-run.ts`): the
+ * driver's shared contract is untouched, so both keep receiving exactly the
+ * frames they received before.
+ */
+export function admitChatFrame(event: {
+  readonly type: string;
+  readonly [field: string]: unknown;
+}): Record<string, unknown> | null {
+  if (event.type.startsWith('chat:')) return { ...event };
+  return convertSSEToAgentMessage(event);
+}
+
+/**
+ * THE TURN-END HOLD.
+ *
+ * `chat:done` is withheld rather than forwarded inline: the renderer's
+ * terminal handoff only swaps the live stream view for durable rows when a
+ * SUCCESSFUL `db_persisted` ack PRECEDES `done`. The held frame is released
+ * after the flush barrier, behind `assistant.message_finalized`.
+ *
+ * One object rather than two closure variables, because the latch and its
+ * release ARE the turn-end contract and a turn whose `chat:done` was dropped
+ * upstream leaves it permanently unlatched -- which is precisely the failure
+ * the double codec caused, and which no assertion on a frame list alone
+ * would catch.
+ */
+export interface TurnDoneLatch {
+  /** Latch a converted frame. True when it was this turn's `chat:done`. */
+  latch(agentMsg: Record<string, unknown> | null): boolean;
+  /** True once a `chat:done` has been latched. */
+  readonly latched: boolean;
+  /** The latched frame's own stop reason, or `undefined` if it stated none. */
+  readonly reason: string | undefined;
+  /**
+   * The frames the post-flush barrier emits, IN ORDER. Empty when nothing
+   * latched: a turn that produced no `chat:done` must not invent one.
+   */
+  release(sessionId: string, finalized: Record<string, unknown> | null): Record<string, unknown>[];
+}
+
+export function createTurnDoneLatch(): TurnDoneLatch {
+  let latched = false;
+  let reason: string | undefined;
+  return {
+    latch(agentMsg) {
+      if (agentMsg === null || agentMsg['type'] !== 'chat:done') return false;
+      latched = true;
+      const stated = agentMsg['reason'];
+      reason = typeof stated === 'string' ? stated : undefined;
+      return true;
+    },
+    get latched() {
+      return latched;
+    },
+    get reason() {
+      return reason;
+    },
+    release(sessionId, finalized) {
+      if (!latched) return [];
+      return [
+        ...(finalized === null ? [] : [finalized]),
+        { type: 'chat:done', sessionId, reason },
+      ];
+    },
+  };
+}
+
 // Ring diagnostic trace — pi-style dedicated debug file written directly
 // with appendFileSync (see tui-main-screen logRedraw). Deliberately bypasses
 // the stderr -> prefix-classification -> level-filter pipeline, which drops
@@ -3069,14 +3167,13 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // `toModelFrame` narrows it, so `parseUsageCall` reads exactly the numbers
     // the legacy `result` frame carried -- cache buckets included.
     log('[Agent-Process] engine driver starting, agentProfileId:', msg.options?.agentProfileId || '(none)');
-    // Terminal `done` reason from the agent loop (completed / max_turns /
-    // repeated_tool_calls / aborted). Captured from the deferred chat:done
-    // and attached to the final chat:done so the renderer can surface why
-    // the run stopped.
-    let turnEndReason: string | undefined;
-    /** True once a `chat:done` was produced and we held it back for the
-     *  post-flush persistence barrier below. */
-    let deferredDone = false;
+    // The turn-end `chat:done` HOLD, and the stop reason it carries from the
+    // agent loop (completed / max_turns / repeated_tool_calls / aborted). The
+    // reason is latched off the held frame and re-attached to the final
+    // `chat:done` so the renderer can surface why the run stopped; the frame
+    // itself waits for the persistence barrier below. See
+    // `createTurnDoneLatch`.
+    const turnDone = createTurnDoneLatch();
     let eventCount = 0;
     // Stable-boundary persistence baseline: capture the message count at turn
     // start so the single end-of-turn append can persist exactly the messages
@@ -3097,7 +3194,10 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // the point: the frames arriving here are the SAME `{ type, data }` shape the
     // generator produced, because the surface's projector is what produces them
     // (`projectToLegacyFrame` -> `convertSSEToAgentMessage`). Only the SOURCE
-    // changed -- the engine's spine rather than the generator's `yield`.
+    // changed -- the engine's spine rather than the generator's `yield`, and
+    // since S4c-d3 the driver's codec runs BEFORE this function rather than
+    // inside it, so callers now arrive in BOTH vocabularies. `admitChatFrame`
+    // is where that difference is absorbed.
     const handleStreamEvent = (event: {
       type: string;
       data?: unknown;
@@ -3264,7 +3364,10 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         emitTokenUsage();
       }
 
-      const agentMsg = convertSSEToAgentMessage(event);
+      // ONE codec pass, wherever the frame came from. See `admitChatFrame`:
+      // calling this unconditionally is what dropped every `chat:*` frame
+      // the driver had already converted.
+      const agentMsg = admitChatFrame(event);
       if (agentMsg) {
         // Plan 441 follow-up: hold `chat:done` instead of forwarding it
         // inline. The renderer's terminal handoff (App.tsx) only swaps the
@@ -3273,9 +3376,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         // journal flush, the ack could never precede it, and the message
         // list went blank at turn end. The held event is re-emitted after
         // the flush + bookkeeping block below.
-        if (agentMsg.type === 'chat:done') {
-          turnEndReason = (agentMsg as { reason?: string }).reason;
-          deferredDone = true;
+        if (turnDone.latch(agentMsg)) {
           return;
         }
         if (DEBUG_IPC && (
@@ -3621,7 +3722,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       success: true,
       messageCount: agentMessages.length,
     });
-    if (deferredDone) {
+    if (turnDone.latched) {
       // AHEAD of `chat:done`, deliberately. `assistant.message_finalized` is the
       // point where the message stopped changing, and the run terminal is a
       // later fact; the ledger has to record them in that order for a consumer
@@ -3629,15 +3730,13 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       // frame is emitted only when there IS an assistant message — a turn that
       // produced none is a real state, and its honest wire is the absence of
       // this frame rather than one with an empty `content`.
-      const finalized = buildMessageFinalizedEvent(msg.sessionId, lastAssistant, turnEndReason);
-      if (finalized !== null) {
-        sendToMain(finalized as unknown as Record<string, unknown>);
+      const finalized = buildMessageFinalizedEvent(msg.sessionId, lastAssistant, turnDone.reason);
+      for (const frame of turnDone.release(
+        msg.sessionId,
+        finalized as unknown as Record<string, unknown> | null,
+      )) {
+        sendToMain(frame);
       }
-      sendToMain({
-        type: 'chat:done',
-        sessionId: msg.sessionId,
-        reason: turnEndReason,
-      });
     }
 
     // Background title generation: only in first 3 rounds, never regenerate after
