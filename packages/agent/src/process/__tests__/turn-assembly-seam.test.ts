@@ -324,8 +324,9 @@ function makeAgent(): InstanceType<typeof duyaAgent> {
  *
  * The engine arm of the differential below. Deliberately the same shape as
  * `engine-real-agent-proof.test.ts`'s harness (real agent, real handle, real
- * ledger, real composition) including the `observedHandle` workaround for
- * `refreshDeclaredTools`: a proof that differs from a proven harness in its
+ * ledger, real composition), with the handle's OWN `refreshDeclaredTools` bound
+ * as the host's refresh because that is what `composeLegacyRunSources` reads: a
+ * proof that differs from a proven harness in its
  * SETUP proves a different thing than it claims, and an earlier draft of this
  * arm that skipped the ledger ended `failed` with zero model calls -- a green
  * that would have measured nothing.
@@ -398,18 +399,6 @@ async function runThroughEngine(): Promise<{
     turnContext,
     publisher: turnPipelines,
   });
-  const realAssemble = handle.assemble.bind(handle);
-  const observedHandle = {
-    ...handle,
-    assemble(input: Parameters<typeof realAssemble>[0]) {
-      const assembly = realAssemble(input);
-      // Re-snapshot the declared set, or nothing dispatches: the guard starts
-      // EMPTY and the engine never calls `runTurnStream`, which is where the
-      // legacy fills it.
-      observedHandle.refreshDeclaredTools();
-      return assembly;
-    },
-  };
 
   const runId = 'run-s1-engine' as never;
   const session = new RunSession({
@@ -444,7 +433,8 @@ async function runThroughEngine(): Promise<{
 
   const host = {
     turnPipelines,
-    assembleTurn: createLegacyAssembleTurn(observedHandle),
+    assembleTurn: createLegacyAssembleTurn(handle),
+    refreshDeclaredTools: () => handle.refreshDeclaredTools(),
     askApproval: async () => ({ allowed: true, scope: 'once' }),
     emitter,
     proposeTerminal: (candidate: { state: { status: string } }) => terminals.push(candidate),
@@ -501,7 +491,7 @@ async function runThroughEngine(): Promise<{
     // of "what may be called", and the D1 gap has to be measured on both: a
     // surface that advertised `progress_update` while the guard denied it would
     // look fixed from the model's side and still refuse the call.
-    declared: [...observedHandle.refreshDeclaredTools()].sort(),
+    declared: [...handle.refreshDeclaredTools()].sort(),
   };
 }
 

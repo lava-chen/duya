@@ -265,9 +265,9 @@ interface Observation {
  * Drive a real `RunEngineImpl` over `composeLegacyRunPorts` with a real agent.
  *
  * Deliberately the same shape as `engine-control-command-proof.test.ts`'s
- * harness, including the `observedHandle` workaround for
- * `refreshDeclaredTools`: a proof that differs from a proven harness in its
- * SETUP proves a different thing than it claims.
+ * harness, including the handle-bound `refreshDeclaredTools` the model leg
+ * calls per attempt (plan 610 P3): a proof that differs from a proven harness
+ * in its SETUP proves a different thing than it claims.
  *
  * `extensions` is omitted from the ports entirely when `null`, so the
  * "no extension port at all" arm is a genuinely absent port rather than an
@@ -314,15 +314,6 @@ async function runOnce(options: {
     turnContext,
     publisher: turnPipelines,
   });
-  const realAssemble = handle.assemble.bind(handle);
-  const observedHandle = {
-    ...handle,
-    assemble(input: Parameters<typeof realAssemble>[0]) {
-      const assembly = realAssemble(input);
-      observedHandle.refreshDeclaredTools();
-      return assembly;
-    },
-  };
 
   const session = new RunSession({
     runId: RUN_ID,
@@ -355,7 +346,8 @@ async function runOnce(options: {
 
   const host: LegacyRunHost = {
     turnPipelines,
-    assembleTurn: createLegacyAssembleTurn(observedHandle),
+    assembleTurn: createLegacyAssembleTurn(handle),
+    refreshDeclaredTools: () => handle.refreshDeclaredTools(),
     askApproval: async () => ({ allowed: true, scope: 'once' }),
     emitter,
     proposeTerminal: (candidate) => terminals.push(candidate),

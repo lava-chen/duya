@@ -45,10 +45,12 @@
  *     engine REFUSES any non-`read_only` call with no ledger attached
  *     (`run-engine.ts:1866`). Omit `beginTicket`/`settleTicket` and EVERY tool
  *     call is refused: the tool leg is dead on arrival.
- *  2. **Nothing refreshes the declared-tools set.** The visibility guard starts
+ *  2. **Nothing refreshed the declared-tools set.** The visibility guard starts
  *     EMPTY and denies anything outside it; the legacy fills it from inside
- *     `runTurnStream`, which the ENGINE never calls. On the engine-driven path
- *     every dispatch is denied, so tools never run -- while the run completes.
+ *     `runTurnStream`, which the ENGINE never calls, so on the engine-driven
+ *     path every dispatch was denied and no tool ran while the run completed.
+ *     Plan 610 P3 gave the model leg the same per-attempt refresh, and the
+ *     `observedHandle` workaround this harness used to carry is gone.
  *  3. **An inline history cannot carry a conversation.** The engine takes
  *     `history` from `input.history` when it is inline
  *     (`run-engine.ts:1975-1977`) and only falls back to `assembled.messages`
@@ -516,10 +518,6 @@ async function runThroughEngine(
       const assembly = realAssemble(input);
       assembledTurns.push(input.turn);
       catalogRounds.push(assembly.catalogView.currentRound);
-      // Re-snapshot the declared set, or nothing runs. See this file's header,
-      // finding 2: the guard starts EMPTY and the engine never calls
-      // `runTurnStream`, which is where the legacy fills it.
-      observedHandle.refreshDeclaredTools();
       return assembly;
     },
   };
@@ -553,6 +551,9 @@ async function runThroughEngine(
     turnPipelines,
     // The production binding from A3-2b9, over the REAL handle.
     assembleTurn: createLegacyAssembleTurn(observedHandle),
+    // The handle owns the guard and the model leg re-takes its snapshot per
+    // attempt (plan 610 P3); nothing in the harness has to.
+    refreshDeclaredTools: () => handle.refreshDeclaredTools(),
     askApproval: async () => ({ allowed: true, scope: 'once' }),
     emitter,
     proposeTerminal: (candidate) => terminals.push(candidate),

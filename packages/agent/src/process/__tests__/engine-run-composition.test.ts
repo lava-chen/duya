@@ -345,6 +345,11 @@ async function driveComposedRun(turns: readonly ('tool' | 'text')[]): Promise<Ob
         revision: input.digest,
       };
     },
+    // No assembly handle in this arm: it builds the COMPOSITION's members, and
+    // the guard belongs to a handle. What it has to be is the surface this arm
+    // advertises -- an empty snapshot denies every dispatch, so the tool leg
+    // would measure a refusal instead of the ports under test.
+    refreshDeclaredTools: () => new Set([TOOL_NAME]),
     async askApproval(): Promise<ApprovalVerdict> {
       return { allowed: true, scope: 'once' };
     },
@@ -511,6 +516,10 @@ describe('composeLegacyRunPorts supplies every member the engine requires', () =
       // run has no turn yet".
       turnPipelines: new TurnPipelinePublisher(),
       assembleTurn: () => Promise.reject(new Error('unused')),
+      // Never called on this arm -- no model port is opened. Present because the
+      // composition reads it when it binds one, and an absent member would be a
+      // hole the type system cannot see.
+      refreshDeclaredTools: () => new Set<string>(),
       askApproval: () => Promise.reject(new Error('unused')),
       emitter: { emit: () => Promise.resolve() },
       proposeTerminal: () => undefined,

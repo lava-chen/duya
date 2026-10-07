@@ -304,16 +304,6 @@ async function runThroughEngine(
     publisher: turnPipelines,
   });
 
-  const realAssemble = handle.assemble.bind(handle);
-  const observedHandle = {
-    ...handle,
-    assemble(input: Parameters<typeof realAssemble>[0]) {
-      const assembly = realAssemble(input);
-      // Re-snapshot the declared set, or every dispatch is denied (S3 finding 2).
-      observedHandle.refreshDeclaredTools();
-      return assembly;
-    },
-  };
 
   const session = new RunSession({
     runId: RUN_ID,
@@ -339,7 +329,10 @@ async function runThroughEngine(
   const terminals: TerminalCandidate[] = [];
   const host: LegacyRunHost = {
     turnPipelines,
-    assembleTurn: createLegacyAssembleTurn(observedHandle),
+    assembleTurn: createLegacyAssembleTurn(handle),
+    // The handle owns the guard; the host names it and the model leg calls it
+    // per attempt (plan 610 P3). Omitting it left the guard EMPTY.
+    refreshDeclaredTools: () => handle.refreshDeclaredTools(),
     askApproval: async () => ({ allowed: true, scope: 'once' }),
     emitter,
     proposeTerminal: (candidate) => terminals.push(candidate),

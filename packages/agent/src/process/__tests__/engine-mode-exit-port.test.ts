@@ -265,15 +265,6 @@ async function runOnce(options: { readonly mode?: string; readonly failModel?: b
     turnContext,
     publisher: turnPipelines,
   });
-  const realAssemble = handle.assemble.bind(handle);
-  const observedHandle = {
-    ...handle,
-    assemble(input: Parameters<typeof realAssemble>[0]) {
-      const assembly = realAssemble(input);
-      observedHandle.refreshDeclaredTools();
-      return assembly;
-    },
-  };
 
   const session = new RunSession({
     runId: RUN_ID,
@@ -299,7 +290,8 @@ async function runOnce(options: { readonly mode?: string; readonly failModel?: b
   const terminals: TerminalCandidate[] = [];
   const host: LegacyRunHost = {
     turnPipelines,
-    assembleTurn: createLegacyAssembleTurn(observedHandle),
+    assembleTurn: createLegacyAssembleTurn(handle),
+    refreshDeclaredTools: () => handle.refreshDeclaredTools(),
     askApproval: async () => ({ allowed: true, scope: 'once' }),
     emitter,
     proposeTerminal: (candidate) => terminals.push(candidate),
@@ -447,21 +439,24 @@ describe('a mode onExit that throws', () => {
 
     const turnPipelines = new TurnPipelinePublisher();
     const terminals: TerminalCandidate[] = [];
+    // Hoisted out of the host literal because the guard's refresh names the same
+    // handle the assembly does, and two `beginTurnAssembly` calls would be two
+    // guards -- the seam is run-scoped.
+    const exitHandle = await agent.beginTurnAssembly({
+      options: options_,
+      prompt,
+      appliedProfile: undefined,
+      turnContext,
+      publisher: turnPipelines,
+    });
     const host: LegacyRunHost = {
       turnPipelines,
       // No assembly handle: this arm is about the terminal, and a handle the
       // engine never calls would be a fixture pretending to be real. The
       // composition's `assembleTurn` IS the real `createLegacyAssembleTurn`
       // shape, so a real one is used rather than a stub.
-      assembleTurn: createLegacyAssembleTurn(
-        await agent.beginTurnAssembly({
-          options: options_,
-          prompt,
-          appliedProfile: undefined,
-          turnContext,
-          publisher: turnPipelines,
-        }),
-      ),
+      assembleTurn: createLegacyAssembleTurn(exitHandle),
+      refreshDeclaredTools: () => exitHandle.refreshDeclaredTools(),
       askApproval: async () => ({ allowed: true, scope: 'once' }),
       emitter: new RunEventEmitter({
         runId: RUN_ID,

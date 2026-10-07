@@ -380,6 +380,22 @@ export interface LegacyRunHost {
    * (`DuyaAgent.ts:3889`) and is not reproducible from the public registry.
    */
   readonly assembleTurn: (input: TurnAssemblyInput) => Promise<AssembledTurn>;
+  /**
+   * Re-take the run's declared-tools guard snapshot. `RunTurnAssembly.refreshDeclaredTools`.
+   *
+   * REQUIRED, and required for the reason `assembleTurn` is: the guard's live set
+   * is a closure local of `beginTurnAssembly`, so nothing outside the handle can
+   * fill it, and a composition that derived a second copy of "which tools are
+   * declared" would be a second authority for exactly the decision the guard
+   * exists to make.
+   *
+   * The legacy has always called it once per ATTEMPT from inside
+   * `TurnStreamRunner`, immediately before the provider request; the model leg
+   * calls it at the same point in the same sequence (plan 610 P3). Omitting it
+   * was not a no-op: the guard starts EMPTY, so a run without this refresh
+   * denied every tool name and completed having done nothing.
+   */
+  readonly refreshDeclaredTools: () => Set<string>;
   /** Asks the user. Resolves; never throws for a refusal. `ChatOptions.requestPermission`. */
   readonly askApproval: (request: ApprovalRequest, signal: AbortSignal) => Promise<ApprovalVerdict>;
   /**
@@ -561,8 +577,21 @@ export function composeLegacyRunSources(
     // assembled and threads the engine's own scoped signal into the provider
     // call, which is the only model port that does not also consult the legacy
     // turn (`run-engine-model.ts:429-441`).
+    //
+    // Plan 610 P3: `refreshDeclaredTools` is threaded here rather than reached
+    // for inside the port, because the guard's live set belongs to the handle
+    // and this is where the host says which handle. Without it the guard stayed
+    // EMPTY -- it denies anything outside itself -- so every dispatch was refused
+    // and the run still reported `completed` with zero tools executed.
+    //
+    // A port is built PER REQUEST rather than once per run, and that is what
+    // makes the refresh per ATTEMPT observable: `stream()` re-takes the snapshot
+    // however many times it is called, so a host that promoted a tool between
+    // turns gets the next request guarded by the surface that request advertised.
     openModelStream: (request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelFrame> =>
-      createClientModelPort(agent.readModelClient()).stream(request, signal),
+      createClientModelPort(agent.readModelClient(), {
+        refreshDeclaredTools: host.refreshDeclaredTools,
+      }).stream(request, signal),
     queueTool: (call: ToolCallRequest) =>
       pipelines.queue({ id: call.callId, name: call.name, input: call.input }),
     // The real publisher's real drain, mapped by the real `toDrainItem`. A

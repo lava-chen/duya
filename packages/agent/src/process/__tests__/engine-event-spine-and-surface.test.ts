@@ -206,6 +206,7 @@ async function runOnce(): Promise<Proof> {
   const host: LegacyRunHost = {
     turnPipelines,
     assembleTurn: createLegacyAssembleTurn(handle),
+    refreshDeclaredTools: () => handle.refreshDeclaredTools(),
     askApproval: async () => ({ allowed: true, scope: 'once' }),
     // The three members this slice supplies for real.
     emitter: spine.emitter,

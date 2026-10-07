@@ -235,9 +235,9 @@ interface Proof {
  * ORDER the engine performed the three finalize-boundary effects in.
  *
  * Deliberately the same harness shape as `engine-mode-exit-port.test.ts`,
- * including the `observedHandle` workaround for `refreshDeclaredTools`: a proof
- * that differs from a proven harness in its SETUP proves a different thing
- * than it claims.
+ * including the handle-bound `refreshDeclaredTools` the model leg calls per
+ * attempt (plan 610 P3): a proof that differs from a proven harness in its
+ * SETUP proves a different thing than it claims.
  */
 async function runOnce(): Promise<Proof> {
   installFakeDbIpc();
@@ -284,15 +284,6 @@ async function runOnce(): Promise<Proof> {
     turnContext,
     publisher: turnPipelines,
   });
-  const realAssemble = handle.assemble.bind(handle);
-  const observedHandle = {
-    ...handle,
-    assemble(input: Parameters<typeof realAssemble>[0]) {
-      const assembly = realAssemble(input);
-      observedHandle.refreshDeclaredTools();
-      return assembly;
-    },
-  };
 
   const session = new RunSession({
     runId: RUN_ID,
@@ -318,7 +309,8 @@ async function runOnce(): Promise<Proof> {
   const terminals: TerminalCandidate[] = [];
   const host: LegacyRunHost = {
     turnPipelines,
-    assembleTurn: createLegacyAssembleTurn(observedHandle),
+    assembleTurn: createLegacyAssembleTurn(handle),
+    refreshDeclaredTools: () => handle.refreshDeclaredTools(),
     askApproval: async () => ({ allowed: true, scope: 'once' }),
     emitter,
     proposeTerminal: (candidate) => terminals.push(candidate),
@@ -477,15 +469,6 @@ describe('the position of a mode onExit at the finalize boundary', () => {
       turnContext,
       publisher: turnPipelines,
     });
-    const realAssemble = handle.assemble.bind(handle);
-    const observedHandle = {
-      ...handle,
-      assemble(input: Parameters<typeof realAssemble>[0]) {
-        const assembly = realAssemble(input);
-        observedHandle.refreshDeclaredTools();
-        return assembly;
-      },
-    };
 
     const session = new RunSession({
       runId: RUN_ID,
@@ -511,7 +494,8 @@ describe('the position of a mode onExit at the finalize boundary', () => {
     const terminals: TerminalCandidate[] = [];
     const host: LegacyRunHost = {
       turnPipelines,
-      assembleTurn: createLegacyAssembleTurn(observedHandle),
+      assembleTurn: createLegacyAssembleTurn(handle),
+      refreshDeclaredTools: () => handle.refreshDeclaredTools(),
       askApproval: async () => ({ allowed: true, scope: 'once' }),
       emitter,
       proposeTerminal: (candidate) => terminals.push(candidate),

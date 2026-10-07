@@ -27,15 +27,14 @@
  * model that answers on cue -- it only RECORDS what it was handed) and the
  * worker's DB IPC (`modeState:get`, `mailbox:claimBatch`).
  *
- * ## The one manual refresh, and why it is here rather than in the source
+ * ## Nothing is injected
  *
- * The declared-tools guard is a separate gap (plan 610 P3): it starts empty and
- * denies every name outside it, and the engine's model leg does not re-take the
- * snapshot. Without a refresh somewhere, the probe never dispatches, there is no
- * tool result, and this file would be measuring an empty transcript for a
- * different reason. So the harness refreshes it inside `assemble`, exactly as
- * the sibling proof does, and the ONLY thing under test here is where the
- * history comes from. Nothing in the run input is overridden.
+ * This file used to refresh the declared-tools guard itself, because a separate
+ * gap (plan 610 P3) meant nothing else did -- a probe that never dispatches
+ * would leave this file measuring an empty transcript for the wrong reason.
+ * That gap is closed, so the refresh the model leg now performs per attempt is
+ * the only one, and what remains under test is where the history comes from.
+ * Nothing in the run input is overridden either.
  *
  * ## The trap this file is built to avoid
  *
@@ -294,17 +293,6 @@ async function runThroughEngine(): Promise<Proof> {
     publisher: turnPipelines,
   });
 
-  // The ONE manual refresh, and it is the declared-tools gap's to fix rather
-  // than this file's. See the header.
-  const realAssemble = handle.assemble.bind(handle);
-  const observedHandle = {
-    ...handle,
-    assemble(input: Parameters<typeof realAssemble>[0]) {
-      const assembly = realAssemble(input);
-      observedHandle.refreshDeclaredTools();
-      return assembly;
-    },
-  };
 
   const session = new RunSession({
     runId: RUN_ID,
@@ -330,7 +318,8 @@ async function runThroughEngine(): Promise<Proof> {
   const terminals: TerminalCandidate[] = [];
   const host: LegacyRunHost = {
     turnPipelines,
-    assembleTurn: createLegacyAssembleTurn(observedHandle),
+    assembleTurn: createLegacyAssembleTurn(handle),
+    refreshDeclaredTools: () => handle.refreshDeclaredTools(),
     askApproval: async () => ({ allowed: true, scope: 'once' }),
     emitter,
     proposeTerminal: (candidate) => terminals.push(candidate),

@@ -484,6 +484,45 @@ export interface ClientModelPortOptions {
    * this port's.
    */
   readonly onPerCallUsage?: (usage: TokenUsage) => void;
+  /**
+   * Re-take the declared-tools snapshot for the request this call is about to
+   * open. Plan 610 P3.
+   *
+   * ## Why the model leg has to do this, and not the tool leg
+   *
+   * The visibility guard the executor reads (`evaluateVisibilityGuard`) starts
+   * as an EMPTY set and denies any name outside it, and `beginTurnAssembly`
+   * replaces that set only when something calls `refreshDeclaredTools`. On the
+   * legacy path the caller of the provider stream IS the thing that refreshes
+   * it: `TurnStreamRunner.runTurnStream` calls `deps.refreshDeclaredTools()`
+   * inside its attempt loop, immediately before `llmClient.streamChat`. The
+   * engine never enters that runner, so on this path nothing refreshed the
+   * snapshot and every dispatch was denied -- measured: zero tools executed
+   * while the run still reported `completed`.
+   *
+   * So the refresh belongs at the same point in the same sequence here: PER
+   * ATTEMPT, BEFORE the provider request is opened. Before, because the guard
+   * gates what the model is allowed to have asked for, and a snapshot taken
+   * after the request exists is a snapshot of a request already in flight. Per
+   * attempt rather than per turn because the guard's snapshot is REPLACED per
+   * request rather than per turn (`RunTurnAssembly.refreshDeclaredTools`
+   * documents it), so a caller that refreshed once per turn would re-snapshot
+   * one request's surface and open the next on a stale one -- which is the
+   * promotion case, the one where a tool discovered mid-run has to be callable.
+   *
+   * ## It fills the guard; it never widens it
+   *
+   * The hook re-reads the surface the host's own `assemble` was last given, so
+   * the set it produces is the set the turn advertised. Making the guard admit
+   * anything else -- a union with the registry, a constant, an empty-check
+   * bypass -- would be a security regression in the direction that matters:
+   * a name the model was never offered would become callable.
+   *
+   * OMITTED is supported and means "no guard refresh": a caller with no guard to
+   * fill (a bare port test) keeps working, and `composeLegacyRunSources` binds
+   * it unconditionally because a production run always has one.
+   */
+  readonly refreshDeclaredTools?: () => ReadonlySet<string>;
 }
 
 export function createClientModelPort(
@@ -492,6 +531,10 @@ export function createClientModelPort(
 ): ModelPort {
   return {
     async *stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelFrame> {
+      // Plan 610 P3: the same position the legacy attempt loop takes it, and for
+      // the same reason -- see `ClientModelPortOptions.refreshDeclaredTools`.
+      options?.refreshDeclaredTools?.();
+
       const stream = client.streamChat(toProviderMessages(request.messages), {
         systemPrompt: request.systemPrompt,
         tools: request.tools.map((tool) => ({
@@ -547,6 +590,16 @@ export function createClientModelPort(
  * rather than removed because the sources object is how a host hands over its
  * turn state, and a field this port ignores is a smaller problem than a host
  * that has to be told which fields are load-bearing.
+ *
+ * ## No declared-tools refresh here, and why that is not an oversight
+ *
+ * `ClientModelPortOptions` carries one and this port does not take it. A caller
+ * of THIS port brings its own mutable context -- that is what the two `sources`
+ * callbacks are for -- and a context owner is the side that knows when its
+ * surface changed; a caller that wanted the guard filled would refresh it where
+ * it refreshes `declaredTools`, at its own attempt boundary. No composition
+ * builds this port: `composeLegacyRunSources` derives `createClientModelPort`,
+ * which is the model leg the cutover actually runs.
  *
  * ## The `signal` is the ENGINE's, and it is threaded into the client call
  *

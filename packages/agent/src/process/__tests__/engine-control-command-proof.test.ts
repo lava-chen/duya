@@ -226,9 +226,9 @@ interface Proof {
  * Drive a real `RunEngineImpl` over real composed ports with `promptText` as
  * the run's prompt.
  *
- * Mirrors the S3 harness deliberately: the same `observedHandle` workaround for
- * `refreshDeclaredTools` (the visibility guard starts empty and only
- * `runTurnStream` fills it), the same real ledger, the same `by_ref` history,
+ * Mirrors the S3 harness deliberately: the same real ledger, the same `by_ref`
+ * history, and the same handle-bound `refreshDeclaredTools` the model leg calls
+ * per attempt (plan 610 P3) -- nothing else fills the guard,
  * because a proof that differs from the proven harness in its SETUP proves a
  * different thing than it claims.
  */
@@ -272,15 +272,6 @@ async function runThroughEngine(promptText: string): Promise<Proof> {
     publisher: turnPipelines,
   });
 
-  const realAssemble = handle.assemble.bind(handle);
-  const observedHandle = {
-    ...handle,
-    assemble(input: Parameters<typeof realAssemble>[0]) {
-      const assembly = realAssemble(input);
-      observedHandle.refreshDeclaredTools();
-      return assembly;
-    },
-  };
 
   const session = new RunSession({
     runId: RUN_ID,
@@ -311,7 +302,8 @@ async function runThroughEngine(promptText: string): Promise<Proof> {
   const terminals: TerminalCandidate[] = [];
   const host: LegacyRunHost = {
     turnPipelines,
-    assembleTurn: createLegacyAssembleTurn(observedHandle),
+    assembleTurn: createLegacyAssembleTurn(handle),
+    refreshDeclaredTools: () => handle.refreshDeclaredTools(),
     askApproval: async () => ({ allowed: true, scope: 'once' }),
     emitter,
     proposeTerminal: (candidate) => terminals.push(candidate),
