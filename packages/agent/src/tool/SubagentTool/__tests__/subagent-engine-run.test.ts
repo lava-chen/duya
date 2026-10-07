@@ -121,6 +121,42 @@ vi.mock('../../../ipc/db-client.js', () => ({
 
 const { runAgent } = await import('../runAgent.js');
 
+/**
+ * The builtin registry's module load, hoisted OUT of every test's timed body.
+ *
+ * `runAgent` calls `await import('../builtin.js')` on every run, and that module
+ * statically pulls in ~45 tool implementations — browser automation, computer
+ * use, app connectors, the CLI, and their transitive graph. Under Vitest each
+ * of those is transformed on demand by Vite rather than bundled, so the FIRST
+ * run in this file was the one that paid the whole graph inside its own 10s
+ * budget. Measured by timing the phases inside `runAgent`:
+ *
+ *   case 1  `await import('../builtin.js)` 15301ms of a 15517ms first event
+ *   case 2  `await import('../builtin.js')`  5296ms   (the SAME in-flight
+ *                                                       promise — case 1 had
+ *                                                       timed out and was
+ *                                                       abandoned mid-load)
+ *   case 3+ `await import('../builtin.js')`     2-4ms
+ *
+ * Everything else in the same run is single-digit milliseconds, including
+ * `createBuiltinRegistry()` (19ms) and `buildSystemPrompt()` (84ms). So the
+ * 300x outlier was one module load, paid once, and nothing about it is a
+ * retry, a backoff, or a slow-but-correct product path — there is no loop in
+ * `runAgent` between `startTime` and the first event that could spin.
+ *
+ * It is also not a cost production pays: `scripts/build-agent-bundle.mjs`
+ * builds the agent with `bundle: true` and externals limited to native and
+ * optional packages, so `builtin.ts` is inlined and the dynamic import is a
+ * cache hit at runtime.
+ *
+ * Loading it here instead — at module scope, next to the `runAgent` import
+ * that is already there — moves the transform into COLLECTION, which carries
+ * no per-test timeout. The run being measured no longer depends on it.
+ * Measured after this line: first-event wait 41-108ms for every case, against
+ * a 10s budget.
+ */
+await import('../../builtin.js');
+
 // ── workspace ────────────────────────────────────────────────────────────────
 
 const TMP_ROOT = mkdtempSync(join(tmpdir(), 'duya-subagent-engine-'));
