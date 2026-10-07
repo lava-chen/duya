@@ -20,7 +20,7 @@ import type {
 } from '../types.js';
 import type { AgentDefinition } from './loadAgentsDir.js';
 import { getBuiltInAgents } from './builtInAgents.js';
-import { formatAgentLine, getPrompt } from './prompt.js';
+import { formatAgentLine, formatAgentLineForPrompt, getPrompt } from './prompt.js';
 import { runAgent, runAgentSync, type AgentProgressEvent } from './runAgent.js';
 import {
   VERDICT_CONTRACT,
@@ -1118,29 +1118,4 @@ export function getAgentDefinitions(): AgentDefinition[] {
   return getBuiltInAgents();
 }
 
-export function formatAgentLineForPrompt(agent: AgentDefinition): string {
-  const { tools, disallowedTools } = agent;
-  const hasAllowlist = tools && tools.length > 0;
-  const hasDenylist = disallowedTools && disallowedTools.length > 0;
-
-  let toolsDescription: string;
-  if (hasAllowlist && hasDenylist) {
-    const denySet = new Set(disallowedTools);
-    const effectiveTools = tools.filter(t => !denySet.has(t));
-    if (effectiveTools.length === 0) {
-      toolsDescription = 'None';
-    } else {
-      toolsDescription = effectiveTools.join(', ');
-    }
-  } else if (hasAllowlist) {
-    toolsDescription = tools.join(', ');
-  } else if (hasDenylist) {
-    toolsDescription = `All tools except ${disallowedTools.join(', ')}`;
-  } else {
-    toolsDescription = 'All tools';
-  }
-
-  return `- ${agent.agentType}: ${agent.whenToUse} (Tools: ${toolsDescription})`;
-}
-
-export { getPrompt }
+export { getPrompt, formatAgentLineForPrompt }
