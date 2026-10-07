@@ -83,12 +83,25 @@ function readPayloadString(data: unknown, field: string): string | undefined {
  */
 export function convertSSEToAgentMessage(event: AgentStreamEvent): Record<string, unknown> | null {
   switch (event.type) {
+    // The payload lives INSIDE `data`, which is where the ONE producer of
+    // these frames writes it: `projectToLegacyFrame` maps
+    // `assistant.text_block` -> `{ type: 'text', data: { content } }`. The
+    // old `event.data as string` therefore handed the renderer the payload
+    // OBJECT in a field the worker frame declares as `string` -- the same
+    // class of bug `readPayloadString` was extracted to end for `done` and
+    // `error`.
     case 'text':
-      return { type: 'chat:text', content: event.data as string };
+      return { type: 'chat:text', content: readPayloadString(event.data, 'content') ?? '' };
     case 'thinking': {
       // Signature-only thinking events (empty data) carry no renderable
       // content — emitting them would create empty chat:thinking rows.
-      const content = typeof event.data === 'string' ? event.data : '';
+      //
+      // The `typeof data === 'string'` test this replaced was ALWAYS false
+      // for a frame the real producer made, because that producer writes
+      // `data: { content }`. So the arm returned `null` for every thinking
+      // block the product ever published and `chat:thinking` never reached
+      // the renderer at all.
+      const content = readPayloadString(event.data, 'content') ?? '';
       if (!content) return null;
       return { type: 'chat:thinking', content };
     }

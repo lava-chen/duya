@@ -85,11 +85,17 @@ function envelope(payload: RunEvent): RunEventEnvelope {
 
 /** The text the model "streams". Only the real model port can turn this into a block. */
 const STREAMED_TEXT = 'DESKTOP-STREAMED-TEXT';
+/** The thinking block. `chat:thinking` is the frame whose arm was returning null. */
+const STREAMED_THINKING = 'DESKTOP-STREAMED-THINKING';
 const DONE: SSEEvent = { type: 'done', reason: 'end_turn' };
 const SESSION_ID = 's-desktop-codec-once';
 
 const SCRIPTS: readonly (readonly SSEEvent[])[] = [
-  [{ type: 'text', data: STREAMED_TEXT }, DONE],
+  [
+    { type: 'thinking', data: STREAMED_THINKING },
+    { type: 'text', data: STREAMED_TEXT },
+    DONE,
+  ],
 ];
 
 let providerCalls = 0;
@@ -310,15 +316,42 @@ describe('a desktop chat turn survives the codec exactly once', () => {
 
     const textFrames = turn.delivered.filter((f) => f['type'] === 'chat:text');
 
-    // THE assertion. Before the fix this list was EMPTY: the driver had
+    // THE assertion. Before the first fix this list was EMPTY: the driver had
     // already codec'd the frame to `chat:text`, the entry codec'd it AGAIN,
     // and the second pass returned null.
     expect(textFrames.length, 'no chat:text reached the consumer').toBeGreaterThan(0);
 
-    // And it is the model's own text, not an empty or re-wrapped row. The
-    // block the real engine published is what the real projector carried.
-    const contents = textFrames.map((f) => f['content']);
-    expect(contents.some((c) => JSON.stringify(c).includes(STREAMED_TEXT))).toBe(true);
+    // THE PAYLOAD SHAPE. `projectToLegacyFrame` writes
+    // `{ type: 'text', data: { content } }`, and the codec's `text` arm used to
+    // assert the whole `data` OBJECT to `string`, so `content` reached the
+    // renderer as `{ content: '...' }`. The router reads `event.data ||
+    // event.content` and the SSE client reads `content`, so an object here is a
+    // text row that renders as `[object Object]`.
+    for (const frame of textFrames) {
+      expect(typeof frame['content'], `chat:text.content was ${JSON.stringify(frame['content'])}`).toBe('string');
+    }
+
+    // And the value is the model's own words, compared as the string the
+    // renderer will receive. Not a `JSON.stringify` substring match: that is
+    // what let the object-shaped payload pass before.
+    expect(textFrames.map((f) => f['content'])).toContain(STREAMED_TEXT);
+  }, 120_000);
+
+  it('delivers chat:thinking at all, which the codec used to drop', async () => {
+    const turn = await runTurn();
+
+    // The projector writes `{ type: 'thinking', data: { content } }`, and the
+    // arm's `typeof data === 'string'` test was therefore ALWAYS false for a
+    // real frame -- so it took the empty-content branch and returned `null` for
+    // every thinking block the product ever published. Thinking was not merely
+    // malformed; it did not exist on the wire.
+    const thinkingFrames = turn.delivered.filter((f) => f['type'] === 'chat:thinking');
+    expect(thinkingFrames.length, 'no chat:thinking reached the consumer').toBeGreaterThan(0);
+
+    for (const frame of thinkingFrames) {
+      expect(typeof frame['content'], `chat:thinking.content was ${JSON.stringify(frame['content'])}`).toBe('string');
+    }
+    expect(thinkingFrames.map((f) => f['content'])).toContain(STREAMED_THINKING);
   }, 120_000);
 
   it('delivers a frame for every frame the driver produced except the held done', async () => {
