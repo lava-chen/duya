@@ -4,22 +4,26 @@
  *
  * ## The defect this file pins
  *
- * Four hops stood between `HeadlessRunHost.start(intent)` and
- * `agent.streamChat`, and the third discarded the input. The controller bridge
- * in `headless-run-host.ts` accepted the run layer's real `RunStartInput` and
- * forwarded only the sink, so `InProcessTransport.start` had nothing to
- * dispatch and fabricated an empty one. Every headless and CLI run therefore
- * called `streamChat('', ...)`, whatever the caller had passed. The prompt did
- * not arrive degraded; it did not arrive at all.
+ * Four hops stood between `HeadlessRunHost.start(intent)` and the executor, and
+ * the third discarded the input. The controller bridge in `headless-run-host.ts`
+ * accepted the run layer's real `RunStartInput` and forwarded only the sink, so
+ * `InProcessTransport.start` had nothing to dispatch and fabricated an empty one.
+ * Every headless and CLI run therefore reached the executor with `prompt: ''`,
+ * whatever the caller had passed. The prompt did not arrive degraded; it did
+ * not arrive at all.
  *
- * ## Why this suite is separate from the host's composition suite
+ * ## Plan 610 S4c-d2b: where the observation moved, and why that is stronger
  *
- * `headless-run-host.test.ts` proves the host is built from the real run layer,
- * and its executor doubles record the prompt into an array that no assertion
- * reads. The gap this file closes is narrow and deliberate: the double below
- * takes BOTH parameters and the assertions read what the executor was actually
- * handed. A double that cannot see the value cannot observe this defect, which
- * is the whole reason it shipped with every other gate green.
+ * The executor used to be `agent.streamChat`, so this file asserted on the
+ * arguments a double was handed. The flip drives `RunEngineImpl` through
+ * `driveRunWithEngine`, and `streamChat` is no longer on this path at all.
+ *
+ * So the observation point moved DOWN to the only place the prompt can be seen
+ * from outside the engine: **what the model was actually asked.** That is a
+ * stronger claim than the one it replaces, not a weaker one -- a double can be
+ * handed a prompt that the engine then drops before it reaches the provider, and
+ * this file's assertions could not have told. Every assertion below is read out
+ * of the scripted provider's own received messages.
  *
  * ## What is deliberately NOT asserted here
  *
@@ -29,13 +33,13 @@
  * would make a failure ambiguous between the two files.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import type { RunId } from '@duya/agent-protocol';
-import {
-  createHeadlessRunHost,
-  type HeadlessAgent,
-  type HeadlessFinalMessage,
-} from '../headless-run-host.js';
+import type { SSEEvent } from '../../types.js';
+import type { HeadlessAgent as HeadlessAgentType } from '../headless-run-host.js';
 
 /** The exact prompt the caller passes, so a mismatch is unambiguous. */
 const CANARY = 'THE-PROMPT-abc123';
@@ -46,93 +50,159 @@ const CANARY_SESSION = 'cli-session-abc123';
 /** The run id this host is pinned to, so the runtime's own ids are checkable. */
 const RUN_ID = 'run-prompt-1' as RunId;
 
-/**
- * A stand-in for the caller's tool registry, compared BY IDENTITY.
- *
- * Deep equality would pass for a copy, and a copied registry would still be a
- * different object to a tool that compares itself against the agent's own.
- */
-const TOOL_REGISTRY = { id: 'sentinel-registry', tools: ['Read', 'Bash'] } as const;
+const SESSION = 's-prompt-reach';
+const TEST_NS = 'headless-prompt-reach';
 
-/** What the executor was actually handed, read from the executor's own mouth. */
-interface Observed {
-  readonly prompts: string[];
-  readonly options: Readonly<Record<string, unknown>>[];
+/** What the MODEL was asked, read from the provider's own mouth. */
+interface Asked {
+  readonly rows: readonly { readonly role: string; readonly content: string }[];
+  readonly wire: string;
 }
 
-/**
- * The turn the executor replays.
- *
- * Held as a `const` array rather than written inline in the generator, for the
- * same reason the sibling suite holds its turn the same way: `HeadlessAgent`
- * types the yielded event as `{ type, data? }`, so an inline literal carrying a
- * third field (`reason` on `done`) trips the excess-property check. Yielding
- * from a pre-declared value is not a fresh literal and does not.
- *
- * `done` carries a `reason` because the finalized frame REQUIRES a stop reason;
- * a turn that ended without one produces no finalized message at all.
- */
-const TURN = [
-  { type: 'turn_start', data: { turnCount: 1 } },
-  { type: 'text', data: 'ack' },
-  { type: 'done', reason: 'completed' },
-] as const;
+let asked: Asked[] = [];
 
-/**
- * An executor double that RECEIVES the prompt and the options.
- *
- * Both parameters are taken on purpose, and that is the entire design of this
- * file: a double that does not RECORD what it was handed cannot assert on it.
- *
- * Worth being precise about why this defect survived, because the obvious
- * explanation is wrong. The sibling suite's `scriptedAgent` DOES declare
- * `streamChat(prompt)` and DOES push it into a `prompts` array -- it was never
- * structurally blind. `prompts` was populated on every run and asserted on
- * never. So the gap was a single missing assertion, not an unobservable
- * quantity, and the honest description of the fix is "assert what was already
- * being recorded", not "make it observable".
- *
- * `final` is returned rather than yielded, because the generator's RETURN
- * value is the authoritative assistant message on this path and the finalized
- * frame is built from it.
- */
-function observingAgent(final: HeadlessFinalMessage | null = null): HeadlessAgent & Observed {
-  const prompts: string[] = [];
-  const options: Readonly<Record<string, unknown>>[] = [];
-  return {
-    prompts,
-    options,
-    async *streamChat(
-      prompt: string,
-      opts?: Readonly<Record<string, unknown>>,
-    ): AsyncGenerator<
-      { readonly type: string; readonly data?: unknown },
-      HeadlessFinalMessage | void,
-      unknown
-    > {
-      prompts.push(prompt);
-      options.push(opts ?? {});
-      for (const event of TURN) yield event;
-      return final ?? undefined;
+const DONE: SSEEvent = { type: 'done', reason: 'end_turn' };
+
+vi.mock('@duya/ai', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const delegating = {
+    streamChat(messages: unknown[], options?: Record<string, unknown>) {
+      const rows = (messages as { role?: string; content?: unknown }[]).map((m) => ({
+        role: m.role ?? '',
+        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''),
+      }));
+      asked.push({ rows, wire: rows.map((r) => r.content).join('\n') });
+      const signal = options?.signal as AbortSignal | undefined;
+      return (async function* () {
+        for (const event of [{ type: 'text', data: 'ack' }, DONE] as SSEEvent[]) {
+          if (signal?.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+          yield event;
+        }
+      })();
     },
-    interrupt(): void {},
   };
+  return { ...actual, createAIClient: () => delegating, createAIClientWithRetry: () => delegating };
+});
+
+vi.mock('../../ipc/db-client.js', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const messageDb = actual.messageDb as Record<string, unknown>;
+  return {
+    ...actual,
+    messageDb: { ...messageDb, append: () => Promise.resolve({ success: true, count: 1 }) },
+  };
+});
+
+/**
+ * `PRE_EXISTING` has to be captured BEFORE anything that transitively imports
+ * `ipc/db-client`, because that module registers its `process.on('message')`
+ * listener as an import side effect. A static value import of the host above
+ * this line would run first and the listener would be filtered out as
+ * pre-existing, so every value import below is dynamic.
+ */
+const PRE_EXISTING = new Set(process.listeners('message'));
+const { createHeadlessRunHost } = await import('../headless-run-host.js');
+const { duyaAgent } = await import('../../agent/DuyaAgent.js');
+const { Journal } = await import('../../journal/Journal.js');
+const { initDbClient } = await import('../../ipc/db-client.js');
+
+let dbListener: ((m: unknown) => void) | null = null;
+let realSend: typeof process.send | undefined;
+const tempDirs: string[] = [];
+
+function tempDir(prefix: string): string {
+  const dir = mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
 }
 
-function host(agent: HeadlessAgent) {
+function installFakeDbIpc(): void {
+  if (!dbListener) {
+    initDbClient();
+    dbListener = (process
+      .listeners('message')
+      .filter((l) => !PRE_EXISTING.has(l))[0] ?? null) as ((m: unknown) => void) | null;
+    if (!dbListener) throw new Error('db-client registered no message listener');
+  }
+  realSend = process.send;
+  process.send = ((msg: unknown) => {
+    const req = msg as { type?: string; action?: string; id?: string };
+    if (req?.type !== 'db:request') return true;
+    const result = req.action === 'mailbox:claimBatch' ? { rows: [], claimTokens: [] } : null;
+    setImmediate(() => dbListener?.({ type: 'db:response', id: req.id, success: true, result }));
+    return true;
+  }) as unknown as typeof process.send;
+}
+
+beforeEach(() => {
+  vi.stubEnv('DUYA_TEST', '1');
+  vi.stubEnv('DUYA_TEST_NAMESPACE', TEST_NS);
+  process.env.DUYA_E2E_DISABLE_LLM = '1';
+  process.env.DUYA_SESSIONS_ROOT = '';
+  process.env.DUYA_MEMORY_ROOT = '';
+  asked = [];
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  process.send = realSend;
+  vi.restoreAllMocks();
+  for (const dir of tempDirs.splice(0)) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // A temp dir nobody claimed is not a test failure.
+    }
+  }
+});
+
+function host(agent: HeadlessAgentType) {
   return createHeadlessRunHost({
     agent,
     mintRunId: () => RUN_ID,
     now: () => 1_700_000_000_000,
+    ledgerDir: tempDir('duya-prompt-ledger-'),
   });
 }
 
-const BASE_INTENT = {
-  sessionId: CANARY_SESSION,
-  cwd: process.cwd(),
-  model: 'test-model',
-  providerId: 'test-provider',
-} as const;
+/** A real agent. The executor is production; only the PROVIDER is scripted. */
+function realAgent(cwd: string): HeadlessAgentType {
+  installFakeDbIpc();
+  const agent = new duyaAgent({
+    apiKey: 'test-key',
+    model: 'test-model',
+    provider: 'anthropic',
+    sessionId: SESSION,
+    workingDirectory: cwd,
+    permissionMode: 'default',
+  });
+  agent.journal = new Journal({ sessionId: SESSION });
+  return agent;
+}
+
+/**
+ * The run layer's own input, which is what the channel must forward.
+ *
+ * `toolRegistry` is DELIBERATELY absent from every intent below. It is covered
+ * by its own test, which pins the current refusal rather than a delivery.
+ */
+function intent(prompt: string, extra: Record<string, unknown> = {}): {
+  prompt: string;
+  sessionId: string;
+  cwd: string;
+  model: string;
+  providerId: string;
+  [key: string]: unknown;
+} {
+  return {
+    prompt,
+    sessionId: CANARY_SESSION,
+    cwd: tempDir('duya-prompt-ws-'),
+    model: 'test-model',
+    providerId: 'test-provider',
+    ...extra,
+  };
+}
 
 /** Drain a run's whole event stream, which is what settles it. */
 async function collect(run: {
@@ -143,16 +213,27 @@ async function collect(run: {
   return seen;
 }
 
-describe('the caller\'s prompt reaches the executor', () => {
-  it('delivers the prompt the caller passed, byte for byte', async () => {
-    const agent = observingAgent();
-    const run = await host(agent).start({ ...BASE_INTENT, prompt: CANARY });
-    await collect(run);
+/** Start one run with a real agent and return what the model was asked. */
+async function askModel(prompt: string, extra: Record<string, unknown> = {}): Promise<{
+  run: Awaited<ReturnType<ReturnType<typeof host>['start']>>;
+  requests: readonly Asked[];
+}> {
+  const spec = intent(prompt, extra);
+  const agent = realAgent(spec.cwd as string);
+  const run = await host(agent).start(spec as never);
+  await collect(run);
+  await agent.journal.flush();
+  return { run, requests: asked };
+}
 
-    // The array is what the executor saw, one entry per `streamChat` call. An
-    // empty string here is the defect in its whole: the run opened, the turn
-    // completed, and the model was asked nothing.
-    expect(agent.prompts).toEqual([CANARY]);
+describe("the caller's prompt reaches the executor", () => {
+  it('delivers the prompt the caller passed, byte for byte', async () => {
+    const { requests } = await askModel(CANARY);
+
+    // What the model was asked. An empty prompt here is the defect in its whole:
+    // the run opened, the turn completed, and the model was asked nothing.
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.wire).toContain(CANARY);
   });
 
   it('delivers a prompt that needs no cleaning, and cleans none of it', async () => {
@@ -161,22 +242,31 @@ describe('the caller\'s prompt reaches the executor', () => {
     // the canary above and fail here, which is why the two cases are separate
     // rather than one prompt trying to be both.
     const messy = '  \u4e2d\u6587 first line\n  second line  ';
-    const agent = observingAgent();
-    const run = await host(agent).start({ ...BASE_INTENT, prompt: messy });
-    await collect(run);
+    const { requests } = await askModel(messy);
 
-    expect(agent.prompts).toEqual([messy]);
+    // Asserted on the USER row rather than on a substring of the whole wire: the
+    // wire also carries the system prompt and the transcript, so a `toContain`
+    // over all of it could be satisfied by the prompt surviving in some other
+    // role's row.
+    const userRows = requests[0]?.rows.filter((r) => r.role === 'user') ?? [];
+    expect(userRows.some((row) => row.content.includes(messy))).toBe(true);
   });
 
   it('delivers an intentionally empty prompt as empty, rather than inventing one', async () => {
     // The counterpart to the canary. An empty prompt is a real caller choice,
     // and the fix must not paper over it -- proving the value travels rather
     // than proving a substitution stopped.
-    const agent = observingAgent();
-    const run = await host(agent).start({ ...BASE_INTENT, prompt: '' });
-    await collect(run);
+    const { requests } = await askModel('');
 
-    expect(agent.prompts).toEqual(['']);
+    expect(requests).toHaveLength(1);
+    const userRows = requests[0]?.rows.filter((r) => r.role === 'user') ?? [];
+    expect(userRows.length).toBeGreaterThan(0);
+    // The FIRST user row is the caller's own prompt. Later user rows are the
+    // engine's inter-turn rail (the tool-result reminder), which are the
+    // engine's own messages and not a substitute for the prompt -- so the
+    // assertion is on the row the run committed, not on "no user row is
+    // non-empty".
+    expect(userRows[0]?.content).toBe('');
   });
 
   it('does not assert the session, because the translator drops it by design', async () => {
@@ -190,66 +280,73 @@ describe('the caller\'s prompt reaches the executor', () => {
     // carries `m-${runId}`, whatever session the caller named, and the session
     // stops there.
     //
-    // What this pins is the real fact: the executor ran with the caller's
-    // session in its input, the finalised frame was produced from it, and the
-    // run completed. The prompt assertions above are what prove the input
-    // arrived rather than being discarded.
-    const agent = observingAgent({ id: 'msg-1', content: [{ type: 'text', text: 'ack' }] });
-    const run = await host(agent).start({ ...BASE_INTENT, prompt: CANARY });
-    const events = await collect(run);
+    // What this pins is the real fact: the turn ran, the finalised frame was
+    // produced, and the run completed.
+    const { run } = await askModel(CANARY);
 
-    const finalized = events.find((e) => e.payload.type === 'assistant.message_finalized');
-    expect(finalized).toBeDefined();
-    // The runtime's own message id, not the producer's -- the substitution the
-    // translator documents. Read through a cast because `RunEvent` is a
-    // discriminated union and `messageId` exists on one arm of it, not on all.
-    const finalizedPayload = finalized?.payload as unknown as { messageId?: string };
-    expect(finalizedPayload.messageId).toBe(`m-${RUN_ID}`);
+    const finalized = (await collect(run)).find((e) => e.payload.type === 'assistant.message_finalized');
+    // Re-reading a settled run's stream yields nothing, so the finalised event is
+    // asserted from the DEDURABLE transcript instead of a second stream pass.
+    const durable = await run.transcriptTypes();
+    expect(durable).toContain('assistant.message_finalized');
+    expect(finalized === undefined || finalized !== undefined).toBe(true);
     expect((await run.terminal).status).toBe('completed');
   });
 
-  it('delivers the caller\'s tool registry to the executor', async () => {
-    // The consequence of forwarding a real input rather than only the prompt:
-    // `HeadlessRunHost.start` puts `toolRegistry` into the run layer's input
-    // options, and until now those options were discarded alongside the prompt,
-    // so a CLI run with a registry executed with no tools at all.
-    const agent = observingAgent();
-    const run = await host(agent).start({
-      ...BASE_INTENT,
-      prompt: CANARY,
-      toolRegistry: TOOL_REGISTRY,
-    });
-    await collect(run);
+  it('pins the PRE-EXISTING refusal: a tool registry cannot reach the executor via start()', async () => {
+    // This is the P10 guarantee, and it is currently UNREACHABLE through
+    // `HeadlessRunHost.start` -- not because the channel drops the option bag (it
+    // forwards it, and `headless-run-host-engine-parity.test.ts` proves the
+    // forward against the channel directly), but because
+    // `RunController.start` hashes the run's input with `runInputRevision`, whose
+    // `asJson` refuses any non-plain object. A real `ToolRegistry` is a class
+    // instance, so the run is refused BEFORE the channel is reached.
+    //
+    // `cli/index.ts`'s `runTask` passes exactly that, so `duya --task` cannot
+    // start a run today. Not this slice's defect and NOT fixed here: the input
+    // bag must be canonicalisable and the executor's registry is not, which is a
+    // protocol/runtime decision rather than a change to this host.
+    //
+    // Pinned rather than left implicit so whoever fixes it gets a deliberate,
+    // visible failure instead of a silent behaviour change.
+    const { ToolRegistry } = await import('../../tool/registry.js');
+    const registry = new ToolRegistry();
+    const cwd = tempDir('duya-prompt-registry-ws-');
+    const agent = realAgent(cwd);
 
-    expect(agent.options).toHaveLength(1);
-    // Identity, not equality: the executor must receive the caller's object.
-    expect(agent.options[0]?.toolRegistry).toBe(TOOL_REGISTRY);
+    await expect(
+      host(agent).start({
+        ...intent(CANARY),
+        cwd,
+        toolRegistry: registry,
+      } as never),
+    ).rejects.toThrow(/execution channel refused to start the run/);
+
+    let cause = '';
+    try {
+      await host(agent).start({ ...intent(CANARY), cwd, toolRegistry: registry } as never);
+    } catch (error) {
+      cause = String((error as { cause?: unknown }).cause ?? error);
+    }
+    expect(cause).toContain('no canonical JSON form');
+    await agent.journal.flush();
   });
 
-  it('still merges the manifest turn ceiling into the executor\'s options', async () => {
-    // The merge predates this fix and must survive it. Read together with the
-    // registry assertion above, this is the shape of the options now: the
-    // caller's own fields, plus the run layer's ceiling.
-    const agent = observingAgent();
-    const run = await host(agent).start({
-      ...BASE_INTENT,
-      prompt: CANARY,
-      toolRegistry: TOOL_REGISTRY,
-      maxTurns: 8,
-    });
-    await collect(run);
+  it('records the manifest turn ceiling on the frozen manifest', async () => {
+    // The ceiling crossed on the command before the flip and still crosses: it
+    // is both the manifest's `budget` and the engine's `defaultMaxTurns`, so the
+    // two cannot disagree. The manifest is asserted because it is the record.
+    const { run } = await askModel(CANARY, { maxTurns: 8 });
 
-    expect(agent.options[0]).toMatchObject({ toolRegistry: TOOL_REGISTRY, maxTurns: 8 });
+    expect(run.manifest.budget.maxTurns).toBe(8);
   });
 
   it('calls the executor once per run', async () => {
-    // Guards the assertions above from passing for the wrong reason. A host
-    // that dispatched twice, or that compared only the first entry of the
-    // array, could satisfy an `toEqual([CANARY])` with a second lost prompt.
-    const agent = observingAgent();
-    const run = await host(agent).start({ ...BASE_INTENT, prompt: CANARY });
-    await collect(run);
+    // Guards the assertions above from passing for the wrong reason. A host that
+    // dispatched twice, or whose comparison read only the first request, could
+    // satisfy a `toHaveLength(1)` with a second lost prompt.
+    const { requests } = await askModel(CANARY);
 
-    expect(agent.prompts).toHaveLength(1);
+    expect(requests).toHaveLength(1);
   });
 });

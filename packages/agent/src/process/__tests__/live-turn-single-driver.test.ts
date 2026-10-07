@@ -175,6 +175,12 @@ const ENTRY = path.join(HERE, '..', 'agent-process-entry.ts');
  * why the driver count is measured across both files.
  */
 const DRIVER = path.join(HERE, '..', 'engine-run-driver.ts');
+/**
+ * The headless/CLI entry. Plan 610 S4c-d2b flipped it onto the same driver, so
+ * it is measured here for the same reason the entry is: a caller that reached
+ * the driver twice would assemble two turns for one run.
+ */
+const HEADLESS = path.join(HERE, '..', 'headless-run-host.ts');
 const DUYA = path.join(HERE, '..', '..', 'agent', 'DuyaAgent.ts');
 
 /**
@@ -195,6 +201,7 @@ function strip(src: string): string {
 
 const ENTRY_CODE = strip(fs.readFileSync(ENTRY, 'utf8'));
 const DRIVER_CODE = strip(fs.readFileSync(DRIVER, 'utf8'));
+const HEADLESS_CODE = strip(fs.readFileSync(HEADLESS, 'utf8'));
 /**
  * THE LIVE `chat:start` PATH, as one body of text.
  *
@@ -210,17 +217,36 @@ const DRIVER_CODE = strip(fs.readFileSync(DRIVER, 'utf8'));
  */
 const CODE = `${ENTRY_CODE}\n${DRIVER_CODE}`;
 
-/** The driver is reached from the entry and from nowhere else. */
-const DRIVER_IMPORTERS = ((): number => {
+/**
+ * The driver is reached from the two PRODUCTION turn entries, and nowhere else.
+ *
+ * ## Plan 610 S4c-d2b: this count moved from 1 to 2, and the invariant moved too
+ *
+ * It was 1 because the worker entry was the only production caller. S4c-d2b
+ * flipped the SECOND of the plan's three turn call sites -- the headless/CLI
+ * path -- onto the same driver, so `headless-run-host.ts` is now the second
+ * importer. That is the change this row exists to detect, and it is a change in
+ * the tree, not a defect: two ENTRIES driving one driver is the plan's shape,
+ * while two DRIVERS of one turn is what this file rules out.
+ *
+ * So the row was not weakened from `1` to `toBeGreaterThan(0)`. It is now
+ * asserted as the exact SET of importers, so a THIRD caller -- a second driver
+ * of a third turn, or a helper reaching for the driver from somewhere it has no
+ * business owning a turn -- still fails. The single-driver pair in the next
+ * describe is untouched and still measures `new RunEngineImpl(` at 1 over the
+ * entry plus the driver, which is the property that actually rules out two
+ * drivers: two callers of ONE constructor is not two drivers.
+ */
+const DRIVER_IMPORTERS = ((): readonly string[] => {
   const dir = path.join(HERE, '..');
-  let n = 0;
+  const found: string[] = [];
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     if (!e.isFile() || !/\.(ts|tsx)$/.test(e.name)) continue;
     if (e.name === 'engine-run-driver.ts') continue;
     if (strip(fs.readFileSync(path.join(dir, e.name), 'utf8')).includes("'./engine-run-driver.js'"))
-      n += 1;
+      found.push(e.name);
   }
-  return n;
+  return found.sort();
 })();
 
 function occurrences(pattern: RegExp, text: string = CODE): number {
@@ -278,7 +304,7 @@ describe('the live chat:start path no longer runs a phantom engine run', () => {
     expect(occurrences(/proposeTerminal: spine\.proposeTerminal,/)).toBe(1);
   });
 
-  it('reaches the engine through exactly one call site, and one importer', () => {
+  it('reaches the engine through exactly one call site per entry, and only the two entries', () => {
     // THE row that keeps the two-file measurement honest.
     //
     // Counting engines over `entry + driver` is only meaningful while the entry
@@ -287,10 +313,15 @@ describe('the live chat:start path no longer runs a phantom engine run', () => {
     // `chat:start` builds no engine at all. The legacy pair in the next
     // describe would not catch that either: both counts would be consistent and
     // the sum would read 1 for a run with no driver. So the wiring is pinned
-    // here, positively, and so is the driver's importer count: two importers
-    // would mean a second caller of the turn.
+    // here, positively, once PER ENTRY.
     expect(occurrences(/driveRunWithEngine\s*\(/, ENTRY_CODE)).toBe(1);
-    expect(DRIVER_IMPORTERS).toBe(1);
+    // And the headless entry drives it exactly once too, for the same reason:
+    // a headless channel that called the driver twice would assemble two turns
+    // for one run.
+    expect(occurrences(/driveRunWithEngine\s*\(/, HEADLESS_CODE)).toBe(1);
+    // The exact set, so a THIRD importer fails. See `DRIVER_IMPORTERS` for why
+    // the count is a set rather than a number.
+    expect(DRIVER_IMPORTERS).toEqual(['agent-process-entry.ts', 'headless-run-host.ts']);
   });
 });
 
