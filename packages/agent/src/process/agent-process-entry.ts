@@ -4246,11 +4246,20 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             // here (instead of at module top) trims ~1.5 MB off the cold
             // worker parse. The helper itself is gated by DUYA_MEMORY
             // *_ENABLED inside wakeup.ts, so failures are swallowed.
-            void import('../memory-rollout/wakeup.js').then(({ sendMemoryWakeup }) => {
+            void import('@duya/memory/wakeup').then(({ sendMemoryWakeup }) => {
               try {
                 sendMemoryWakeup(
                   (event) => sendToMain(event as unknown as Record<string, unknown>),
-                  { sessionId: sessionId ?? undefined },
+                  {
+                    sessionId: sessionId ?? undefined,
+                    // Plan 610 A5: `wakeup` moved into `@duya/memory` and no
+                    // longer reaches into this package's logger, so the
+                    // warning is reported through a port the caller supplies.
+                    onError: (err) =>
+                      logger.warn('memory:wakeup send failed (shadow mode tolerates this)', {
+                        error: err instanceof Error ? err.message : String(err),
+                      }),
+                  },
                 );
               } catch (wakeupErr) {
                 // Wakeup is best-effort; a failure here must not block

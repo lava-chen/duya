@@ -12,7 +12,7 @@ import {
   insertCatalogRow,
   insertStage1Output,
   type MemoryStateFixture,
-} from './fixture';
+} from '../testing/fixture.js';
 
 /**
  * Eligibility matrix (Plan 302 Phase C, design v3 Scheduler 决策).

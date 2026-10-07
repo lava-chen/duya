@@ -24,7 +24,7 @@ import type { Database as BetterSqlite3Database } from 'better-sqlite3';
 // which was a `pkg:agent -> electron-main` value edge (plan 587 M5.2). The host
 // owns the real schema; `apps/desktop/src/main/memory-state/__tests__/
 // agent-fixture-drift.test.ts` pins the two together.
-import { MEMORY_STATE_FIXTURE_DDL } from '../../memory-state/__tests__/schema-ddl';
+import { MEMORY_STATE_FIXTURE_DDL } from '../testing/schema-ddl.js';
 import { Stage1Extractor, type MessageRowShape } from '../extractor.js';
 import type { AIClient } from '@duya/ai';
 

@@ -194,6 +194,10 @@ function isCommentLine(trimmed: string): boolean {
  */
 const TURN_ENTRY_SOURCES: readonly string[] = Object.freeze([
   'packages/agent/src',
+  // Plan 610 A5: memory moved into its own package. This row has to follow it,
+  // or `Stage1Extractor` leaves the census entirely and the `.streamChat(`
+  // look-alike below stops being a measured exclusion.
+  'packages/memory/src',
   'apps/desktop/src/main',
   'conductor/src',
   'gateway/src',
@@ -407,7 +411,7 @@ const NOT_TURN_ENTRIES: readonly NotATurnEntry[] = Object.freeze([
     reason: 'Vision analysis on a separate client.',
   }),
   Object.freeze({
-    path: 'packages/agent/src/memory-rollout/extractor.ts',
+    path: 'packages/memory/src/extractor.ts',
     receiver: 'this',
     symbol: 'Stage1Extractor',
     reason:

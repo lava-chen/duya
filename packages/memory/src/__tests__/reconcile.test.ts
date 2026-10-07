@@ -13,7 +13,7 @@ import {
   createMemoryStateFixture,
   insertStage1Output,
   type MemoryStateFixture,
-} from './fixture';
+} from '../testing/fixture.js';
 
 /**
  * Reconciliation scenarios (Plan 303 Phase D, design v3 D12).

@@ -21,7 +21,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as yaml from 'yaml';
-import { CLAIM_TYPES, SCOPES } from '../memory-rollout/types.js';
+import { CLAIM_TYPES, SCOPES } from './types.js';
 
 /**
  * Minimal RunInput shape — used to type the validator's `inputs`

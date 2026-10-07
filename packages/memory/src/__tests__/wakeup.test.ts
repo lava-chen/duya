@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   sendMemoryWakeup,
   isMemoryEnabled,
-} from './wakeup';
+} from '../wakeup.js';
 
 describe('sendMemoryWakeup (Plan 305 Phase B)', () => {
   const prevEnv = process.env.DUYA_MEMORY_ENABLED;

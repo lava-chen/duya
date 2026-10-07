@@ -20,7 +20,6 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { AIClient } from '@duya/ai';
-import type { Message } from '../types.js';
 import {
   acquireLease,
   heartbeat,
@@ -28,14 +27,13 @@ import {
   fail,
   HEARTBEAT_DIVISOR,
   DEFAULT_LEASE_TTL_MS,
-} from '../memory-state/lease.js';
+} from './lease.js';
 import { compactMessages, DEFAULT_BUDGET_TOKENS, type MessageEvent } from './compactMessages.js';
 import { STAGE1_USER_PROMPT_TEMPLATE, STAGE1_SYSTEM_PROMPT } from './prompt.js';
 import { loadPolicy, assembleStage1Prompt } from './stage1_prompt_loader.js';
 import { writeRolloutProjection, redactCredentials } from './writer.js';
-import { messageDb } from '../ipc/db-client.js';
-import { parseCanonicalFile } from '../memory-state/canonical_file.js';
-import { writeSystemLog } from '../memory-state/system_log.js';
+import { parseCanonicalFile } from './canonical_file.js';
+import { writeSystemLog } from './system_log.js';
 import {
   TASK_OUTCOMES,
   CONFIDENCE_LEVELS,
@@ -803,7 +801,7 @@ export class Stage1Extractor {
         '{{compacted}}',
         compacted.lines.join('\n'),
       );
-      const userMessage: Message = { role: 'user', content: userContent };
+      const userMessage = { role: 'user' as const, content: userContent };
 
       const abortController = new AbortController();
       const timeoutId = setTimeout(() => abortController.abort(), LLM_TIMEOUT_MS);
@@ -989,13 +987,27 @@ export class Stage1Extractor {
   }
 
   private async readMessages(sessionId: string): Promise<MessageEvent[]> {
-    // Plan 328 Phase 6: read messages via IPC when running in a forked agent
-    // process (process.send available). In-process callers (Electron Main
-    // process MemoryWorker) have no `process.send`, so they supply a
-    // `readMessageRows` override wired to the core store directly.
-    const rows = this.opts?.readMessageRows
-      ? await this.opts.readMessageRows(sessionId)
-      : ((await messageDb.getBySession(sessionId)) as MessageRowShape[]);
+    // Plan 328 Phase 6 read messages through the agent's `messageDb` IPC when
+    // running in a forked agent process, and through a `readMessageRows`
+    // override for in-process callers (Electron Main process MemoryWorker),
+    // which have no `process.send`.
+    //
+    // Plan 610 A5 removed the `messageDb` branch. It was the only edge from
+    // this module out of the memory domain, and it made the memory package
+    // depend on agent IPC infrastructure it has no business knowing about.
+    // Measured before removing it: `readMessageRows` has exactly one
+    // production constructor (`apps/desktop/src/main/memory/worker-bootstrap.ts`),
+    // which always supplies it, and no production file constructs
+    // `Stage1Extractor` inside the agent at all. The branch was unreachable in
+    // production, so removing it changes no live path.
+    const readMessageRows = this.opts?.readMessageRows;
+    if (!readMessageRows) {
+      throw new Error(
+        'Stage1Extractor requires `readMessageRows`: reading a session\'s messages ' +
+          'is a host concern, not a memory one, so the caller supplies the port.',
+      );
+    }
+    const rows = await readMessageRows(sessionId);
 
     return rows.map((row): MessageEvent => {
       const role = row.role as MessageEvent['role'];

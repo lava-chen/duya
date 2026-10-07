@@ -11,7 +11,7 @@ import type { Database as BetterSqlite3Database } from 'better-sqlite3';
 // import those host migration files by relative path, which is 14 of the 15
 // `pkg:agent -> electron-main` value edges cut in plan 587 M5.2. Drift between
 // the two is pinned by the host's own drift test.
-import { MEMORY_STATE_FIXTURE_DDL } from './schema-ddl';
+import { MEMORY_STATE_FIXTURE_DDL } from './schema-ddl.js';
 
 /**
  * Shared test fixture for packages/agent memory-state modules

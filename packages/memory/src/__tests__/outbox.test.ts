@@ -10,7 +10,7 @@ import {
   enqueueProjectionOutbox,
   outboxBackoffMs,
 } from '../outbox';
-import { createMemoryStateFixture, type MemoryStateFixture } from './fixture';
+import { createMemoryStateFixture, type MemoryStateFixture } from '../testing/fixture.js';
 
 /**
  * Projection outbox scenarios (Plan 303 Phase D, design v3 D12).

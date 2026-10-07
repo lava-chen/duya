@@ -131,8 +131,8 @@ import type { BaseHookInput } from '../hooks/types.js';
 import path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
-import { isMemoryEnabled } from '../memory-rollout/wakeup.js';
-import { getDuyaMemoryRoot } from '../memory-state/memory_paths.js';
+import { isMemoryEnabled } from '@duya/memory/wakeup';
+import { getDuyaMemoryRoot } from '@duya/memory/memory_paths';
 
 // Mode System imports (the class is the only consumer in this file;
 // the public re-exports live in src/index.ts).

@@ -37,7 +37,7 @@ import {
   POLICY_SECTION_IDS,
   MAX_EDITS_PER_RUN,
   MAX_RULE_TEXT,
-} from '../../../../../packages/agent/src/memory-rollout/stage1_policy_editor';
+} from '@duya/memory/stage1_policy_editor';
 
 export type CurationOp = 'append' | 'replace' | 'no_op';
 export type CurationDisposition = 'absorbed' | 'no_signal' | 'uncertain';

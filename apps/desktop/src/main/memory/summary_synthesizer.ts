@@ -33,8 +33,8 @@ import { z } from 'zod';
 import type { AIClient } from '@duya/ai';
 
 import { chatWithTimeout } from './curation_single_shot';
-import { generateSummaryMdLive } from '../../../../../packages/agent/src/memory-state/curation_projection_live';
-import { listEntityDirs } from '../../../../../packages/agent/src/memory-state/entity_dirs';
+import { generateSummaryMdLive } from '@duya/memory/curation_projection_live';
+import { listEntityDirs } from '@duya/memory/entity_dirs';
 
 /** Sidecar file that records the canonical hash the current summary was synthesized from. */
 export const SYNTH_HASH_FILENAME = 'summary.md.synth-hash';

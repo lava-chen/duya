@@ -11,7 +11,7 @@ import {
   type PublicationJournal,
   type RecoveryResult,
 } from '../curation_publisher';
-import { generateMemoryMd } from '../../../../../../packages/agent/src/memory-state/curation_projection';
+import { generateMemoryMd } from '@duya/memory/curation_projection';
 
 interface PubEnv {
   stagingDir: string;

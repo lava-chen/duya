@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   writeSystemLog: vi.fn(),
 }));
 
-vi.mock('../../memory-state/system_log.js', () => ({
+vi.mock('../system_log.js', () => ({
   writeSystemLog: mocks.writeSystemLog,
 }));
 

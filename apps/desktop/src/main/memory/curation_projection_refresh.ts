@@ -26,8 +26,8 @@ import * as path from 'path';
 import {
   generateMemoryMdLive,
   generateIndexMdLive,
-} from '../../../../../packages/agent/src/memory-state/curation_projection_live';
-import { listEntityDirsSync } from '../../../../../packages/agent/src/memory-state/entity_dirs';
+} from '@duya/memory/curation_projection_live';
+import { listEntityDirsSync } from '@duya/memory/entity_dirs';
 import { cleanStagingTmps } from './curation_file_writer';
 
 // NOTE: summary.md is intentionally NOT a Phase 2 projection anymore.

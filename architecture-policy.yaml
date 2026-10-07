@@ -240,14 +240,14 @@ modules:
     # kill strategy, so this edge buys a lifetime abstraction and not a
     # relocation of `processTreeKill` -- which stays put, with its test and its
     # `evals/agent` matrix row, because moving it would have been churn.
-    requires: [agent-protocol, agent-runtime, legacy-ai, repo-tooling]
+    requires: [agent-protocol, agent-runtime, legacy-ai, repo-tooling, memory]
     owner: agent
     migrateTo: agent-core
 
   - id: legacy-desktop
     roots: [src, electron]
     managed: false
-    requires: []
+    requires: [memory]
     owner: desktop
     migrateTo: apps/desktop
 
@@ -287,7 +287,7 @@ modules:
   - id: desktop-host
     roots: [apps/desktop]
     managed: false
-    requires: [agent-protocol, agent-runtime, legacy-plugin-core, connectors, desktop-contracts]
+    requires: [agent-protocol, agent-runtime, legacy-plugin-core, connectors, desktop-contracts, memory]
     owner: desktop
 
   - id: repo-tooling
@@ -368,6 +368,30 @@ modules:
       - packages/connectors/src/app-connector-id.ts
       - packages/connectors/src/app-schema.ts
     owner: extensibility
+
+  # Plan 610 A5. `@duya/memory` is the agent-side memory implementation moved
+  # out of `packages/agent/src/{memory-state,memory-rollout}`.
+  #
+  # `managed: true` — zero tolerance from the first commit, like every other
+  # package this series has created. It has exactly one `@duya/*` dependency,
+  # `@duya/ai`, and nothing about it is baselined, so there is no debt here to
+  # be lenient about. A package that starts tolerant has to be tightened later,
+  # and tightening a baseline is the operation this project has forbidden.
+  - id: memory
+    roots: [packages/memory]
+    managed: true
+    # `legacy-ai`, NOT `ai`. `moduleDependencyPermitted` resolves a `requires`
+    # entry by looking up a module whose `id` matches the string exactly, and
+    # the module owning `packages/ai` is named `legacy-ai`. A `requires: [ai]`
+    # finds nothing, `?? false` makes it permit nothing, and the edge it was
+    # meant to allow is reported as a violation instead — which is exactly the
+    # "a `requires` list nobody can satisfy is not a boundary" failure the
+    # header of `architecture-check.mjs` documents.
+    requires: [legacy-ai]
+    publicEntrypoints:
+      - packages/memory/src/index.ts
+      - packages/memory/src/testing/index.ts
+    owner: agent
 
   - id: legacy-ai
     roots: [packages/ai]

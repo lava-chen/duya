@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as crypto from 'crypto';
 import { loadPolicy, writePolicy, STAGE1_HARD_CONTRACT, assembleStage1Prompt } from '../stage1_prompt_loader';
 import { Stage1Extractor } from '../extractor';
-import { createMemoryStateFixture } from '../../memory-state/__tests__/fixture';
+import { createMemoryStateFixture } from '../testing/fixture.js';
 import type { AIClient } from '@duya/ai';
 import type { Database as BetterSqlite3Database } from 'better-sqlite3';
 
@@ -344,7 +344,7 @@ describe('Stage1Extractor with policyPath', () => {
 
     // Verify complete() writes the policy columns by calling it directly
     // with policyVersion + policyHash and reading back the row.
-    const { complete } = await import('../../memory-state/lease');
+    const { complete } = await import('../lease.js');
     // Insert a minimal rollout_catalog row so complete() finds the catalog.
     env.db.prepare(
       `INSERT INTO rollout_catalog (rollout_id, scope_kind, agent_type, working_directory, last_seen_at, first_seen_at) VALUES (?, 'global', 'main', ?, ?, ?)`,

@@ -16,7 +16,7 @@ import type { Database as DatabaseType } from 'better-sqlite3';
 import { runMigrations } from '../migrations';
 import { listTierEntries } from '../tierIndex';
 import { forgetTierFact, writeTierFact, type TierWriteInput } from '../tierWriter';
-import { parseCanonicalFile } from '../../../../../../packages/agent/src/memory-state/canonical_file';
+import { parseCanonicalFile } from '@duya/memory/canonical_file';
 
 const mocks = vi.hoisted(() => ({
   logger: {

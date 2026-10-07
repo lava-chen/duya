@@ -32,22 +32,22 @@ import * as path from 'path';
 import * as os from 'os';
 import { getLogger, LogComponent } from '../logging/logger';
 import type { AIClient } from '@duya/ai';
-import { Stage1Extractor, type MessageRowShape } from '../../../../../packages/agent/src/memory-rollout/extractor.js';
+import { Stage1Extractor, type MessageRowShape } from '@duya/memory/extractor';
 import {
   selectEligible,
   diagnoseEligibility,
   type EligibilityDiagnostic,
   DEFAULT_IDLE_MS,
   DEFAULT_WINDOW_MS,
-} from '../../../../../packages/agent/src/memory-state/eligibility.js';
-import { drainOutbox } from '../../../../../packages/agent/src/memory-state/outbox.js';
+} from '@duya/memory/eligibility';
+import { drainOutbox } from '@duya/memory/outbox';
 import { readConfigAgents } from '../../../../../packages/agent/src/agent-profile/config-agents.js';
 import {
   reconcileProjections,
   purgeDegradedOutputs,
-} from '../../../../../packages/agent/src/memory-state/reconcile.js';
-import { queryEligibleInputs } from '../../../../../packages/agent/src/memory-state/curation_ledger.js';
-import { writeSystemLog } from '../../../../../packages/agent/src/memory-state/system_log.js';
+} from '@duya/memory/reconcile';
+import { queryEligibleInputs } from '@duya/memory/curation_ledger';
+import { writeSystemLog } from '@duya/memory/system_log';
 import { syncAllFromMainDb } from '../memory-state/catalogSync';
 import { runCurationCycle } from './curation_publish_orchestrator';
 import type { ProviderConfig } from './curation_publish_orchestrator';
