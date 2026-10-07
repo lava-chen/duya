@@ -3,7 +3,6 @@ import * as os from 'os';
 import * as path from 'path';
 import type { Database } from 'better-sqlite3';
 import { getCoreStores } from '../core-connection';
-import { getDb as getMemoryStateDb } from '../../memory-state/db';
 import {
   ProjectStore,
   serializeProjectPaths,
@@ -31,6 +30,9 @@ import { normalizeProjectPathEntries, MAX_PROJECT_PATH_LENGTH } from './project-
  * DB routing:
  *   - `projects.*` / `project_bots`  → core ProjectStore (default `getCoreStores()`).
  *   - `rollout_catalog` unbind on delete → memory DB (memory-state catalog).
+ *     That table lives in a SECOND SQLite database, which `db/core` must not
+ *     open: the composition root injects the handle through
+ *     `ProjectServiceOptions.memoryDb`. See `deleteProject`.
  *
  * `normalizeProjectPathEntries` is imported locally (so `createProject` can
  * call it) and re-exported — it remains a public entry point for consumers
@@ -89,8 +91,18 @@ export interface UpdateProjectInput {
 export interface ProjectServiceOptions {
   /** Core projects DB handle. Defaults to `getCoreStores().coreDb.db`. */
   projectsDb?: Database;
-  /** Memory DB handle (rollout_catalog). Defaults to memory-state `getDb()`. */
-  memoryDb?: Database;
+  /**
+   * Handle on the memory-state DB, whose `rollout_catalog` table `deleteProject`
+   * unbinds. Either the handle itself or a zero-arg resolver returning it.
+   *
+   * `db/core` must not import memory-state to obtain this: it is a second
+   * SQLite database that the composition root owns (see
+   * `apps/desktop/src/main/ipc/project-entity-handlers.ts`). The resolver form
+   * exists to preserve the lookup ORDER the service has always had — the
+   * handle is acquired only once an existing project has been confirmed, so a
+   * delete for an unknown id never touches memory-state.
+   */
+  memoryDb?: Database | (() => Database);
   /** Test injection: overrides `~/.duya/projects` (or its test-namespace root). */
   projectsRoot?: string;
 }
@@ -99,13 +111,26 @@ function defaultProjectsDb(): Database {
   return getCoreStores().coreDb.db;
 }
 
-function getMemoryDb(): Database {
-  return getMemoryStateDb();
+/**
+ * Resolve the memory-state handle for the delete-path unbind.
+ *
+ * There is deliberately no module-level default: opening the memory-state
+ * database is the caller's decision, and this module must not reach across
+ * into that subsystem. A missing handle is a programming error and fails
+ * loudly rather than silently skipping the unbind.
+ */
+function resolveMemoryDb(opts?: ProjectServiceOptions): Database {
+  const source = opts?.memoryDb;
+  if (typeof source === 'function') return source();
+  if (source) return source;
+  throw new Error(
+    'projectService: deleteProject requires `memoryDb` — the rollout_catalog ' +
+      'unbind targets the memory-state database, which db/core does not open itself',
+  );
 }
 
 function store(opts?: ProjectServiceOptions): ProjectStore {
-  const pdb = opts?.projectsDb ?? opts?.memoryDb ?? defaultProjectsDb();
-  return new ProjectStore(pdb);
+  return new ProjectStore(opts?.projectsDb ?? defaultProjectsDb());
 }
 
 /**
@@ -593,14 +618,14 @@ export function createProject(input: CreateProjectInput, opts?: ProjectServiceOp
 }
 
 /** List all project rows (raw). */
-export function listProjects(opts?: { projectsDb?: Database; memoryDb?: Database }): ProjectRow[] {
+export function listProjects(opts?: { projectsDb?: Database }): ProjectRow[] {
   return store(opts).list();
 }
 
 /** Fetch a single project row by id. Returns null when not found. */
 export function getProject(
   projectId: string,
-  opts?: { projectsDb?: Database; memoryDb?: Database }
+  opts?: { projectsDb?: Database }
 ): ProjectRow | null {
   return store(opts).get(projectId);
 }
@@ -675,7 +700,10 @@ export function deleteProject(projectId: string, opts?: ProjectServiceOptions): 
   if (!projectId || typeof projectId !== 'string') return false;
   const s = store(opts);
   if (!s.get(projectId)) return false;
-  const memoryDb = opts?.memoryDb ?? getMemoryDb();
+  // Resolved AFTER the existence check so an unknown id never reaches the
+  // memory-state database, and BEFORE the core deletes so a failure there
+  // aborts the whole delete rather than half-applying it.
+  const memoryDb = resolveMemoryDb(opts);
   const txn = memoryDb.transaction(() => {
     memoryDb
       .prepare(
