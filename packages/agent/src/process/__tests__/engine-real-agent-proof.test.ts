@@ -1018,9 +1018,17 @@ describe('the proof is wired to the real seams, not to a double', () => {
     expect(proof.seen).toHaveLength(2);
   });
 
-  it('leaves the legacy driver in place and the entry still on it', async () => {
-    // S3 is proof, not cutover. If proving it required the entry to drive the
-    // engine, the sequence was wrong and this assertion is what would say so.
+  it('proved the engine on the path the ENTRY now takes, not a private one', async () => {
+    // S3 was proof, not cutover, and this row is what said so. The cutover has
+    // now landed (plan 610 S4c-d2a), so the row inverts: the entry drives the
+    // engine this file proved, and no longer drives the legacy generator.
+    //
+    // What makes the inversion honest rather than a renamed copy: the entry
+    // names NO driver of its own and delegates to `engine-run-driver.ts`,
+    // whose assembly is the one `composeLegacyRunPorts` builds -- the same
+    // composition `runThroughEngine` above drives. So the proof still measures
+    // the production path, and a driver that grew a second, private
+    // composition would fail the `composeLegacyRunPorts` count.
     //
     // `import.meta.dirname` rather than `fileURLToPath(import.meta.url)`: the
     // latter needs `node:url`, and importing a module for a path helper in a
@@ -1029,10 +1037,18 @@ describe('the proof is wired to the real seams, not to a double', () => {
     // the ledger's temp dir, so reusing them costs nothing.
     const here = import.meta.dirname;
     if (typeof here !== 'string') throw new Error('import.meta.dirname unavailable');
-    const entry = readFileSync(path.join(here, '..', 'agent-process-entry.ts'), 'utf8');
-    const code = entry.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
-    expect((code.match(/agent\.streamChat\s*\(/g) ?? []).length).toBe(1);
-    expect((code.match(/new RunEngineImpl\s*\(/g) ?? []).length).toBe(0);
+    const code = (file: string): string =>
+      readFileSync(path.join(here, '..', file), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^[ \t]*\/\/.*$/gm, '');
+    const entry = code('agent-process-entry.ts');
+    const driver = code('engine-run-driver.ts');
+    expect((entry.match(/agent\.streamChat\s*\(/g) ?? []).length).toBe(0);
+    expect((entry.match(/driveRunWithEngine\s*\(/g) ?? []).length).toBe(1);
+    // THE composition under proof, counted call-shaped: the import line carries
+    // the name but no `(`. Exactly one, so a driver that also wired a port set
+    // of its own could not hide behind this assertion.
+    expect((driver.match(/composeLegacyRunPorts\s*\(/g) ?? []).length).toBe(1);
   });
 
   it('publishes through the REAL emitter, which is what MINTS the sequence', async () => {

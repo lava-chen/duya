@@ -192,8 +192,24 @@ import {
   sha256Hex,
   type RunId,
   type RunManifest,
-  type TokenUsage,
+  type TokenUsage as ProtocolTokenUsage,
 } from '@duya/agent-protocol';
+// The PROVIDER's usage block, which is what the per-call tap carries -- NOT the
+// protocol's `TokenUsage`. They are different types for the same idea: this one
+// is `@duya/ai`'s snake_case, un-narrowed and un-summed, with the cache buckets
+// the billing ledger reads; the protocol's is the engine's camelCase,
+// turn-level projection. Naming the right one for each is what keeps
+// `ClientModelPortOptions.onPerCallUsage` from being satisfied by a function that
+// cannot accept what the port actually hands it.
+//
+// Sourced from `../types.js` -- which re-exports `@duya/ai`'s own `TokenUsage` --
+// rather than from `@duya/ai` directly, for the reason the block above records
+// for every other type in this file: the import audit counts type-only imports
+// as cross-boundary edges, so a direct `@duya/ai` specifier here adds an edge
+// this package does not own. MEASURED, not assumed -- adding it produced a NEW
+// cross-package cycle (`hooks/builtin.ts`, SCC size 25) that `npm run
+// architecture:check` reports as an unbaselined violation.
+import type { TokenUsage } from '../types.js';
 // Types come from the agent's OWN types module, which re-exports them, rather
 // than from `@duya/ai`: the import audit counts every import statement --
 // type-only included -- as a cross-boundary edge, so sourcing them from inside
@@ -257,7 +273,7 @@ function toToolResultMessage(outcome: ToolOutcome): Message {
  * happened, which is different from not knowing, and `computeContextEstimate`
  * reads these numbers.
  */
-function toRowUsage(usage: TokenUsage): AssistantMessage['usage'] {
+function toRowUsage(usage: ProtocolTokenUsage): AssistantMessage['usage'] {
   return {
     input_tokens: usage.inputTokens,
     output_tokens: usage.outputTokens,
@@ -409,6 +425,22 @@ export interface LegacyRunHost {
    * denied every tool name and completed having done nothing.
    */
   readonly refreshDeclaredTools: () => Set<string>;
+  /**
+   * Plan 610 S4c-d2a. Receives the PROVIDER'S OWN usage block, once per
+   * provider `result` frame, before `toModelFrame` narrows it.
+   *
+   * OPTIONAL, and optional is "this host runs no per-call ledger": a bare port
+   * test and the CLI keep working, and the two states stay distinguishable
+   * because a bound tap that never fires is a fact the host can observe.
+   *
+   * It is a tap rather than a second ledger on purpose. The block arrives
+   * verbatim -- snake_case, un-summed, cache buckets included -- so the host
+   * bills from the same numbers the legacy loop billed from, and the host's
+   * `UsageCall[]` per-call ledger stays exactly as granular as it is today. See
+   * `ClientModelPortOptions.onPerCallUsage` for why the narrowing `ModelFrame`
+   * is the wrong place to recover them.
+   */
+  readonly onPerCallUsage?: (usage: TokenUsage) => void;
   /** Asks the user. Resolves; never throws for a refusal. `ChatOptions.requestPermission`. */
   readonly askApproval: (request: ApprovalRequest, signal: AbortSignal) => Promise<ApprovalVerdict>;
   /**
@@ -604,6 +636,18 @@ export function composeLegacyRunSources(
     openModelStream: (request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelFrame> =>
       createClientModelPort(agent.readModelClient(), {
         refreshDeclaredTools: host.refreshDeclaredTools,
+        // Plan 610 S4c-d2a. The per-call usage tap, threaded HERE rather than
+        // reached for inside the port, because the host owns the billing
+        // authority and the port does not know who it is.
+        //
+        // OMITTED when the host supplies no sink, which is a supported run with
+        // no per-call accounting at all -- distinct from a sink that fires zero
+        // times, because a provider that reported nothing must not be
+        // indistinguishable from a host that never asked. Every existing
+        // hand-built host omits it, so nothing had to change to add it.
+        ...(host.onPerCallUsage === undefined
+          ? {}
+          : { onPerCallUsage: host.onPerCallUsage }),
       }).stream(request, signal),
     queueTool: (call: ToolCallRequest) =>
       pipelines.queue({ id: call.callId, name: call.name, input: call.input }),
