@@ -631,3 +631,61 @@ checkpoint,首次尝试没有。现有供给者全在伪造 `FIRST_EPOCH` + `GRO
 三片都不大,但都必须先有**证明它们真的修好了上述行为**的测试 ——
 现有 harness 会覆盖掉缺口二,所以必须造一个不覆盖的生产形状探针。
 
+---
+
+## 2026-10-07 — P1 / P2 / P3 三片前置全部落地
+
+**这一轮两个 worker 都没有拒绝执行** —— P1 与 P2+P3 各自独立验证了全部前提,没有找到假命题。
+
+| 片 | commit | 内容 |
+| --- | --- | --- |
+| **P2** | `bd8af689` | `buildLegacyRunInput` 的历史改 `by_ref`(digest 为 `sha256Hex(canonicalJson(rows))`,走协议自己的哈希) |
+| **P3** | `99b7ae2e` | `createClientModelPort.stream()` 的**第一条语句**调 `refreshDeclaredTools`,`LegacyRunHost.refreshDeclaredTools` 设为**必需**(可选正是它当初静默的原因) |
+| **P1** | `3b6eeeb8` | `firstAttemptFence` —— `@duya/agent-protocol` 里的首次尝试 fence 生产者 |
+
+### P1 的裁决依据来自仓库自己
+
+`AttemptLeasePort` 的文档(`packages/agent-runtime/src/engine/ports.ts`)早已写明:
+「在别处铸造 fence —— **包括在 Control Plane 上、放进 manifest** —— 会构成第二个权威,
+而真正重要的那个权威是**拒绝写入**的那个」。
+
+所以 (a)「Control Plane 送来 fence」正是仓库自己点名的那个被禁方案。选了 (b):
+`firstAttemptFence({ runId, state })`,其中 `state` 是一个**调用方必须从持久存储里查出来的答案**,
+不是一个它可以断言的值:`{ committed: false } | { committed: true; committedFence: number }`。
+`committed: true` 直接 **throw**,并点名它拒绝复制的那个 fence。
+
+epoch 取 `FIRST_EPOCH` 而非 0,因为 `RunEpoch` 从 1 起算且 `encodeReplayCursor` 拒绝更小的值 ——
+一个携带 epoch 0 的 fence 无法出现在任何 cursor 里,它的 attempt 也就永远无法与别的 run 区分。
+
+### 主 agent 独立复核
+
+三个证明文件 `5 passed (3)`,架构门禁 `1023/1023 tolerated, 0 new blocking`,
+`packages/agent/src/process` `409/409 in 39 files`。三个 worker 并发写进同一棵树,
+整合态由主 agent 亲自跑过。
+
+### 主 agent 自做变异:一个**保持绿**的变异,及其正确解读
+
+把 `firstAttemptFence` 返回的 token 从 `GROUND_FENCE.token` 改成 `+99` ——
+**测试保持 3/3 绿**。
+
+**这不是测试空转,而是测出了保证的精确边界。** 下游**没有任何东西校验 fence 的 token 值**。
+真正的保证是**铸造被门禁**:你无法为「不在首次尝试」的 run 拿到首次尝试 fence,
+因为生产者在 `committed: true` 上会抛。这条是承重的(worker 的 `if (false && …)` 变异 → `1 failed / 2 passed`)。
+
+而对于一次**真正**的首次尝试(没有任何 committed state 可冲突),任何 token 按定义都是 current
+—— `isFenceCurrent` 比的是 `incoming.token >= highest`,而此时 highest 为 0。
+所以我的变异在语义上是**惰性**的,不是它本该变红而没红。
+
+**该记的教训:「诚实的 fence」保证的是「不能凭空铸造」,不是「fence 会被校验」。**
+这两个是不同的性质,写下来时不要混用。
+
+### 下一步
+
+P1–P3 就位,重试 **d2a**(入口改由引擎驱动,不删循环,G7 预期仍红),
+之后 d2b(headless)、d2c(子代理 + 删循环,G7 转绿)。
+
+P1 自己划的范围限制已记录在案:它让诚实的 fence **变得可用**,
+但**没有**把 worker 入口接到账本上 —— 那个绑定需要 Control Plane 的 `runId`,
+属于翻转切片本身。另外 `SqliteCheckpointStore` 在树里只以注释存在(`checkpoint-store.ts:95`),
+没有那个类;所以生产者 `state` 参数正是将来真实存储要回答的那道缝。
+
