@@ -2296,10 +2296,23 @@ export class RunEngineImpl implements RunEngine {
     return isBudgetExhausted(budget.budget, spend.snapshot, this.#options.now() - startedAt).exhausted;
   }
 
+  /**
+ * The mode the manifest pinned, read off the run INPUT.
+ *
+ * Plan 610 P9. This used to be gated on `ports.extensions !== undefined` and to
+ * fall back to `'default'` otherwise. That gate was not about hooks: the mode
+ * is in `input.options`, and reading it needs no extension port. Measured on
+ * the worker entry's composition, `ports.extensions` is ALWAYS omitted (the
+ * entry binds no hook source, and `buildEnginePorts` omits rather than
+ * binds an empty one), so every `ApprovalRequest` carried `'default'`
+ * whatever the session mode was -- a third account of the mode that
+ * disagreed with both the manifest's record and the gate that enforces it.
+ *
+ * Only the LABEL changes. The decision was never made here.
+ */
   #permissionMode(ctx: RunContext): string {
-    return ctx.ports.extensions === undefined
-      ? 'default'
-      : (ctx.input.options['permissionMode'] as string | undefined) ?? 'default';
+    const declared = ctx.input.options['permissionMode'];
+    return typeof declared === 'string' && declared.length > 0 ? declared : 'default';
   }
 
   /**

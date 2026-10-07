@@ -224,6 +224,7 @@ import type { TurnPipelinePublisher } from '../tool/turn-pipeline-publisher.js';
 import { createClientModelPort } from './run-engine-model.js';
 import { createLegacyCommandPort } from './command-port.js';
 import { renderSystemReminder } from '../agent/reminders.js';
+import { normalizeCanUseToolDecision } from '../agent/toolInvokePermission.js';
 import { adaptLoopNudgeContext } from '../message/runtime-context-adapters.js';
 import { projectRuntimeContextToProviderMessage } from '../message/message-projectors.js';
 import { buildEnginePorts, toDrainItem } from './run-engine-ports.js';
@@ -935,6 +936,95 @@ export function composeLegacyRunPorts(agent: duyaAgent, host: LegacyRunHost): Ru
   return buildEnginePorts(composeLegacyRunSources(agent, host));
 }
 
+/**
+ * Plan 610 P9: the engine's approval decision, taken from the RUN'S OWN GATE.
+ *
+ * ## The defect this closes, measured
+ *
+ * `RunEngineImpl.#dispatchCall` asked `ports.approval.authorize` for EVERY tool
+ * call and the composition forwarded that to the host's ask bridge with no
+ * per-mode shortcut. Measured on this composition with the real
+ * `RunEngineImpl`, the real `beginTurnAssembly` pipeline and the real
+ * `PermissionsGate`, one `write` call outside the workspace raised:
+ *
+ * | mode              | legacy cards | engine cards (before) |
+ * |-------------------|--------------|-----------------------|
+ * | `default`         | 1            | 2                     |
+ * | `auto`            | 1            | 2                     |
+ * | `acceptEdits`     | 1            | 2                     |
+ * | `bypassPermissions` | 0          | 1                     |
+ * | `plan`            | 0            | 1                     |
+ *
+ * and one card inside the workspace, where the legacy raises none, in every
+ * mode. The mode in force decided nothing on the engine path.
+ *
+ * ## Why the ASK is not taken here
+ *
+ * Because the legacy does not take it here either. Its gate answers
+ * `{ allowed, behavior }` and an `ask` is NOT a block: `PermissionsGate`
+ * returns `allowed: true` with `behavior: 'ask'`, and the card is raised later
+ * by the tool's own `checkPermissions` inside `StreamingToolExecutor` (the
+ * `canUseBehavior !== 'allow'` guard). That arm is the legacy's ask site, it
+ * runs on the engine path too (it is the drain the dispatch feeds), and it
+ * already reproduces the legacy's counts exactly.
+ *
+ * So this returns the gate's verdict and stops: `allowed: false` for a denial,
+ * and `allowed: true` for both an `allow` and an `ask`. Raising the card here
+ * as well is what produced the second card in the table above -- the pipeline's
+ * arm has no memory of a card answered earlier in the run (`_approvedToolUses`
+ * is read only by the tool-thrown retry path, not by the `checkPermissions`
+ * pre-check), so a forwarded ask would be asked twice.
+ *
+ * ## Why it is the gate and not a mode table
+ *
+ * `assembly.canUseTool` IS the closure every pipeline this run assembles
+ * dispatches against, and it reads the session mode through
+ * `agent.getPermissionMode()` -- the value `setPermissionMode(resolved.agentMode)`
+ * installed. `buildLegacyRunManifest` records `toExternalPermissionMode` of the
+ * SAME `resolved.agentMode`. The recorded mode and the enforced decision are
+ * therefore two readings of one fact rather than two sources that can disagree,
+ * and no mode name is restated here: `auto`'s workspace trust, `bypass`'s
+ * catastrophe boundary and `plan`'s write gate all stay in `permissions.ts`,
+ * where the legacy put them.
+ *
+ * ## The residual gap, stated rather than hidden
+ *
+ * The gate now runs TWICE per call on the engine path (here, and in the drain).
+ * `PermissionsGate`'s first arm is a CAS consume -- plan 498's one-shot approval
+ * ledger -- so a CONTINUATION run replaying a granted call has it consumed here,
+ * and the drain's own consult then finds nothing and can reach `ask`. Measured:
+ * a ledger replay outside the workspace raises 0 cards on the legacy and 1 on
+ * the engine path both before and after this change, so this regresses nothing
+ * but does not close it. Closing it needs the dispatch payload to carry the
+ * already-decided verdict so the pipeline skips its own consult; `ApprovalPort`
+ * as it stands has no way to say "ask, but not here".
+ */
+export function gateRunApproval(
+  assembly: RunTurnAssembly,
+  askApproval: LegacyRunHost['askApproval'],
+): LegacyRunHost['askApproval'] {
+  return async (request, signal) => {
+    const { behavior } = normalizeCanUseToolDecision(
+      await assembly.canUseTool(request.toolName, { ...request.input }),
+    );
+    if (behavior === 'deny') {
+      return { allowed: false, reason: 'denied' } as const;
+    }
+    // `'allow'` and `'ask'` are BOTH allowed here: the legacy's own answer to an
+    // `ask` is `allowed: true` (`PermissionsGate` returns it that way, and the
+    // card is raised afterwards by the tool's own `checkPermissions`).
+    // `askApproval` stays the port's required member and stays the run's ONE ask
+    // bridge -- the pipeline reaches it through `ChatOptions.requestPermission`,
+    // the same callback -- but this slot must not raise a card the legacy would
+    // not have raised. `normalizeCanUseToolDecision` is the repository's own
+    // fail-closed reading of the gate's three shapes, so an unrecognised answer
+    // denies rather than widening access.
+    void askApproval;
+    void signal;
+    return { allowed: true, scope: 'once' } as const;
+  };
+}
+
 // ============================================================================
 // Which leg drives an already-established run
 // ============================================================================
@@ -1302,7 +1392,14 @@ export function buildLegacyRunInput(
       locator: `catalog://${facts.catalogRevision}`,
     },
     steering: [],
-    options: {},
+    // Plan 610 P9. `RunEngineImpl.#permissionMode` reads the mode the manifest
+    // pinned off `input.options.permissionMode` and stamps it on every
+    // `ApprovalRequest` -- so with an empty `options` every approval request
+    // carried `'default'` regardless of the mode actually in force, which is a
+    // THIRD account of the mode next to the manifest's and the gate's. It is
+    // `facts.permissionMode`, the same value the manifest writes, so the label
+    // at the ask and the record of the run are one reading of one fact.
+    options: { permissionMode: facts.permissionMode },
   } as unknown as RunInputSnapshot;
 }
 

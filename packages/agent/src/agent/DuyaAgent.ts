@@ -613,6 +613,29 @@ export interface RunTurnAssembly {
   /** The tool surface the run started with. Promotion replaces it per turn. */
   readonly tools: readonly Tool[];
   /**
+   * THIS RUN'S OWN PERMISSION GATE -- the same `guardedCanUseTool` closure every
+   * pipeline this handle assembles dispatches against, not a second build of
+   * `buildPermissions`.
+   *
+   * ## Why the run handle is where it is exposed
+   *
+   * `RunEngineImpl.#dispatchCall` asks `ports.approval.authorize` for every
+   * tool call BEFORE `ports.tools.dispatch`, and the pipeline's own
+   * `canUseTool` runs only during the drain that `dispatch` feeds. So on the
+   * engine path the gate that decides is reached twice per call, and the
+   * composition has to be able to consult it at the EARLIER of the two points
+   * or it cannot answer the engine honestly -- and it must be THIS closure,
+   * because a second `buildPermissions` would be a second gate over the same
+   * session mode, and two gates over one mode can disagree about whether a
+   * call needs the user.
+   *
+   * Read-only for a host: it decides, it does not prompt. The ASK belongs to
+   * the tool's own `checkPermissions` inside the pipeline, which is where the
+   * legacy put it (the `canUseBehavior !== 'allow'` guard in
+   * `StreamingToolExecutor`).
+   */
+  readonly canUseTool: CanUseToolFn;
+  /**
    * The name the private progress tool was actually advertised under.
    *
    * A MEMBER rather than recomputed by each reader, for the reason the tool's
@@ -1696,6 +1719,10 @@ export class duyaAgent implements AgentRuntime {
       resolved,
       turnContext,
       tools: resolvedTools,
+      // The SAME closure handed to `assembleTurn` below, not a rebuild. A host
+      // that consulted a second gate over the same session mode would be
+      // deciding permissions from a state machine the pipelines never see.
+      canUseTool: guardedCanUseTool,
       progressToolName,
       systemPrompt,
       projection,

@@ -79,6 +79,7 @@ import {
   buildLegacyRunManifest,
   composeLegacyRunPorts,
   createLegacyAssembleTurn,
+  gateRunApproval,
   selectRunDriverLeg,
   type LegacyRunFacts,
   type LegacyRunHost,
@@ -592,7 +593,13 @@ export async function driveRunWithEngine(
       // EMPTY -- it denies anything outside itself -- and the run completes
       // having dispatched nothing.
       refreshDeclaredTools: () => assembly.refreshDeclaredTools(),
-      askApproval: request.askApproval,
+      // Plan 610 P9. The engine asks `ports.approval.authorize` for EVERY call
+      // before it dispatches, so the run's own permission gate has to be
+      // consulted HERE or the mode in force decides nothing on this path.
+      // `gateRunApproval` returns that gate's verdict and deliberately does not
+      // raise a card: the legacy's ask site is the tool's `checkPermissions`
+      // inside the drain this dispatch feeds, and a second ask would double it.
+      askApproval: gateRunApproval(assembly, request.askApproval),
       emitter: spine.emitter,
       // ADVISORY. `createRunEventSpine`'s own recorder, so the run's last
       // candidate is read back off the spine rather than re-derived here; the
