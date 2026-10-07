@@ -689,3 +689,50 @@ P1 自己划的范围限制已记录在案:它让诚实的 fence **变得可用*
 属于翻转切片本身。另外 `SqliteCheckpointStore` 在树里只以注释存在(`checkpoint-store.ts:95`),
 没有那个类;所以生产者 `state` 参数正是将来真实存储要回答的那道缝。
 
+---
+
+## 2026-10-07 — d2a 重试第四次被拒:第五条缺口,**运行生命周期仍私有**
+
+P1–P3 四条前提**全部为真**(worker 逐条对照源码确认),但它发现了一条 briefing 未列的前提为假:
+**`composeLegacyRunPorts` + spine + surface 一旦有了 turn handle 就足够驱动入口 ——
+而没有任何生产路径能不写私有字段就拿到那个 handle。**
+
+### 实测(不是推断)
+
+`assembleTurn` → `buildTurnPipeline` 在 `abortController` 为空时 **throw**:
+
+```ts
+const abortController = this.abortController;
+if (!abortController) {
+  throw new Error('buildTurnPipeline called with no run in progress: the abort controller has already been cleared');
+}
+```
+
+而 `abortController` 是 `private abortController: AbortController | null = null`,
+**只在 `streamChat` 里被赋值与清除**,没有 setter。那段 throw 的注释自己说明了为什么不能给默认值:
+「悄悄替换成一个新 controller 会造出一个调用方无法 abort 的 tool-use context」。
+
+worker 用一次性探针实测两臂:**无 cast → throw**;**有 cast → 3 个工具跑通**。
+现有 **14 个**驱动引擎的 harness 全部用私有字段 cast 绕开,
+其中 `turn-assembly-seam.test.ts` 直接把那个 cast 称作「the honest boundary」。
+
+### 第四条:`streamChat` 的序言还有四件事引擎路径够不着
+
+`_resolveAgentProfile`、`_dispatchOrchestratorMode`(`run-engine.ts` 里**根本没有** orchestrator 概念)、
+`promptContexts` 轨道(skills / plugins / mentions —— `hook-source` **按设计丢弃** context)、
+以及 `currentTurnId`。
+
+**所以「翻转」不是换驱动,是从生成器里把运行生命周期抽成一个公开接缝。**
+直接翻的结果只有两种:入口的每一轮都 throw,或者静默丢掉
+skill/plugin/mention 注入、agent profile、orchestrator 模式和 turn id ——
+**两者都是本系列要防的那类静默失败。**
+
+### 因此新增前置片:`beginRun` 公开接缝
+
+在 `duyaAgent` 上开一个 `beginRun`,接管 `streamChat` 序言所拥有的东西
+(abort controller、profile、turn id、prompt-context 轨道、orchestrator 派发),
+返回 handle 加一个 close。这是**一个方法**,做完入口的翻转才诚实。
+
+先例就在这个仓库里:#236 加的 public 接缝 `claimInterTurn`,它旁边的注释写着
+「PUBLIC, and it is the whole reason `_sweepInterTurn` exists」。
+
