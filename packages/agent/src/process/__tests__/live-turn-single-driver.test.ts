@@ -373,6 +373,19 @@ describe('G7/G8 are measured against the real gate module, not a copy of it', ()
     // than hard-coded. Pinning a literal would make this file go red the next
     // time anything above the loop is edited -- a failure that says nothing about
     // the property being guarded.
+    //
+    // The header is matched by its SHAPE -- a `while` whose condition negates an
+    // aborted-signal read -- rather than by WHICH expression supplies the
+    // controller. That relaxation was forced by plan 610 P4 and is not a
+    // weakening: before it, the regex named `this.abortController` literally, and
+    // P4 binds the loop's controller once from the run handle that owns it
+    // (`beginRun`) instead of re-reading the field, because re-reading would let
+    // a second run re-point this loop's cancellation mid-stream. TypeScript
+    // refuses the field read here outright (the assignment moved out of this
+    // generator, so the narrowing this loop relied on is gone), and the `!`
+    // that would satisfy it does not match the old regex either -- so the text
+    // could not have stayed. What this row still pins is the whole property:
+    // the gate's reported site is the line after a loop gated on an abort signal.
     return loadGates().then(({ turnLoopSites, stripComments }) => {
       const duya = stripComments(fs.readFileSync(DUYA, 'utf8')).text;
 
@@ -383,7 +396,7 @@ describe('G7/G8 are measured against the real gate module, not a copy of it', ()
       const loopLine = duya
         .split(/\r?\n/)
         .findIndex((line) =>
-          /^\s*while\s*\(!this\.abortController\.signal\.aborted\)/.test(line),
+          /^\s*while\s*\(![\w.]+\.signal\.aborted\)/.test(line),
         );
       expect(loopLine).toBeGreaterThan(-1);
       expect(sites[0].line).toBe(loopLine + 1);
