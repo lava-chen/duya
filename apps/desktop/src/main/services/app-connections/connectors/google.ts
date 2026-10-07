@@ -13,7 +13,7 @@ import type {
   ConnectorToolDescriptor,
 } from '../connector-types.js';
 import type { ProviderId } from '../types.js';
-import { asAppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
+import { asAppConnectorId } from '@duya/connectors/app-connector-id';
 
 const PROVIDER = asAppConnectorId('google');
 const DRIVE_SEARCH_ACTION = 'drive.search';

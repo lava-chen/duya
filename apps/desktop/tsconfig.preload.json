@@ -16,7 +16,9 @@
     "paths": {
       "@duya/agent/message": ["../../packages/agent/dist/message/index"],
       "@duya/plugin-core": ["../../packages/plugin-core/dist/index.d.ts"],
-      "@duya/plugin-core/*": ["../../packages/plugin-core/dist/*"]
+      "@duya/plugin-core/*": ["../../packages/plugin-core/dist/*"],
+      "@duya/connectors": ["../../packages/connectors/dist/index.d.ts"],
+      "@duya/connectors/*": ["../../packages/connectors/dist/*"]
     }
   },
   "include": ["src/contracts/**/*.ts", "src/preload/**/*.ts"],

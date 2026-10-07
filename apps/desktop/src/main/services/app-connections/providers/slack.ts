@@ -18,7 +18,7 @@ interface SlackAuthTestResponse {
   error?: string;
 }
 
-import { asAppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
+import { asAppConnectorId } from '@duya/connectors/app-connector-id';
 
 const config = getProviderConfig(asAppConnectorId('slack'));
 if (!config) {

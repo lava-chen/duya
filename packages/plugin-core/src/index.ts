@@ -158,28 +158,9 @@ export type {
   InstantiateResult,
 } from './workflows';
 
-// Plan 455: `.app.json` connector declarations (pure module — safe for any
-// environment; deep imports also work via
-// `@duya/plugin-core/connectors/app-schema.js`).
-export {
-  AppDeclarationFileSchema,
-  OAuthClientDeclarationSchema,
-  AppToolDeclarationSchema,
-  AppDeclarationSchema,
-  RestInvokeDeclarationSchema,
-  parseAppDeclarationFile,
-} from './connectors/app-schema.js';
-export type {
-  AppDeclaration,
-  AppToolDeclaration,
-  OAuthClientDeclaration,
-  RestInvokeDeclaration,
-} from './connectors/app-schema.js';
-export {
-  asAppConnectorId,
-  BUILTIN_CONNECTOR_IDS,
-  isBuiltinConnectorId,
-  isWellFormedConnectorId,
-  pluginConnectorId,
-} from './connectors/app-connector-id.js';
-export type { AppConnectorId } from './connectors/app-connector-id.js';
+// Plan 610 A5: the `.app.json` connector vocabulary moved to
+// `@duya/connectors` (`app-connector-id`, `app-schema`), and is no longer
+// re-exported here. `plugin-core` owns the plugin distribution framework;
+// the connector DECLARATION schema is a separate subject and importing it
+// from here made this package depend on the new one forever. Consumers
+// import `@duya/connectors/app-schema` or `@duya/connectors/app-connector-id`.

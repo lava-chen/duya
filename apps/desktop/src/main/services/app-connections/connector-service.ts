@@ -38,8 +38,8 @@ import {
   getCustomConnectorFactory,
   registerCustomConnector,
 } from './app-connector.js';
-import { asAppConnectorId, type AppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
-import type { AppDeclaration } from '@duya/plugin-core/connectors/app-schema';
+import { asAppConnectorId, type AppConnectorId } from '@duya/connectors/app-connector-id';
+import type { AppDeclaration } from '@duya/connectors/app-schema';
 import type {
   AppConnectionErrorCode,
   AppConnectionResult,

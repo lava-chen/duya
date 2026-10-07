@@ -16,7 +16,7 @@ export interface GoogleAccountIdentity {
   picture?: string;
 }
 
-import { asAppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
+import { asAppConnectorId } from '@duya/connectors/app-connector-id';
 
 const config = getProviderConfig(asAppConnectorId('google'));
 if (!config) {

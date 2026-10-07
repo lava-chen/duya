@@ -287,7 +287,7 @@ modules:
   - id: desktop-host
     roots: [apps/desktop]
     managed: false
-    requires: [agent-protocol, agent-runtime, legacy-plugin-core, desktop-contracts]
+    requires: [agent-protocol, agent-runtime, legacy-plugin-core, connectors, desktop-contracts]
     owner: desktop
 
   - id: repo-tooling
@@ -332,8 +332,6 @@ modules:
     # from this list, so this block is documentation of the intended surface.
     publicEntrypoints:
       - packages/plugin-core/src/index.ts
-      - packages/plugin-core/src/connectors/app-connector-id.ts
-      - packages/plugin-core/src/connectors/app-schema.ts
       - packages/plugin-core/src/mcp/collect.ts
       - packages/plugin-core/src/mcp/user-config.ts
       - packages/plugin-core/src/mcp/resolve.ts
@@ -346,6 +344,29 @@ modules:
       - packages/plugin-core/src/mcp/core/list-tools.ts
       - packages/plugin-core/src/mcp/core/projection.ts
       - packages/plugin-core/src/security/path-validator.ts
+    owner: extensibility
+
+  # Plan 610 A5 — the first of the six new packages.
+  #
+  # `managed: true` from the first commit, on the `agent-protocol` precedent:
+  # a vocabulary leaf with `requires: []` has nothing to baseline, so
+  # baselining it would only buy the appearance of leniency. Measured: zero
+  # `@duya/*` imports — only `zod` and a sibling module.
+  #
+  # Scope note: this declares the App-connector ID and schema ONLY. The
+  # AppConnectionTool / AppConnectorManageTool tools are NOT here — they are
+  # blocked on `Tool` / `ToolUseContext` / `ToolExecutor` / `ToolMetaInput`
+  # living inside `packages/agent`, and on `tooling` and `capabilities`
+  # existing. A name with no matching module silently permits nothing, so
+  # declaring them early would declare a permission nothing can use.
+  - id: connectors
+    roots: [packages/connectors]
+    managed: true
+    requires: []
+    publicEntrypoints:
+      - packages/connectors/src/index.ts
+      - packages/connectors/src/app-connector-id.ts
+      - packages/connectors/src/app-schema.ts
     owner: extensibility
 
   - id: legacy-ai

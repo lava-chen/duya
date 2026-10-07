@@ -7,8 +7,8 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseAppDeclarationFile } from '../src/connectors/app-schema.js';
-import { isBuiltinConnectorId } from '../src/connectors/app-connector-id.js';
+import { parseAppDeclarationFile } from '../src/app-schema.js';
+import { isBuiltinConnectorId } from '../src/app-connector-id.js';
 
 const MARKETPLACE = 'E:/Projects/duya-marketplace/duya-marketplace/plugins';
 
