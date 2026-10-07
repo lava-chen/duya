@@ -1371,16 +1371,17 @@ export class duyaAgent implements AgentRuntime {
    *    per-turn approval ledger, which `buildPermissions` reads through
    *    `readTurnAlwaysAllowTools`.
    *  - `promptContexts` / `promptContextBlocks` / `injectedSkillParts`: the rail
-   *    is RESET here and released by `close`, but its PRODUCERS are NOT lifted.
-   *    The hook half is unreachable by construction -- `UserPromptSubmit` and
-   *    `SessionStart` contexts arrive through `dispatchHooks`, a closure local
-   *    of the generator that is itself reached by `yield*`, and a composition
-   *    cannot consume a `yield`. The skill / plugin / mention half is
-   *    module-level and COULD move, but moving it changes where the legacy's
-   *    prologue sits relative to its hook dispatch (the hook half assigns
-   *    `promptContexts` rather than pushing to it), so it is deliberately not
-   *    done here. A driver that needs those blocks supplies them through its own
-   *    projection; the rail this run owns is the reset half.
+   *    is RESET here and released by `close`, and its PRODUCERS are owned by
+   *    `producePromptContextRail`, which this method's own caller invokes
+   *    between this reset and `beginTurnAssembly`'s drain. Plan 610 P6 lifted
+   *    them; before that the hook half was unreachable by construction
+   *    (`UserPromptSubmit` and `SessionStart` arrived through `dispatchHooks`,
+   *    a closure local reached by `yield*`, and a composition cannot consume a
+   *    `yield`) and the skill / plugin / mention half was module-level but
+   *    written inline in the generator's prologue. The reset here is what makes
+   *    the seam's ordering safe: `producePromptContextRail` ASSIGNS the rail
+   *    from `UserPromptSubmit` first, and that assignment replaces an empty
+   *    array only because of the reset below.
    *  - `_resolveAgentProfile`: OWNED. It is a private method that reads the
    *    profile service and config, needs nothing from the generator's frame, and
    *    its answer is returned as `appliedProfile` so the driver can hand the
@@ -1700,6 +1701,251 @@ export class duyaAgent implements AgentRuntime {
         return assembly;
       },
     };
+  }
+
+  /**
+   * Plan 610 P6: fill this run's prompt-context rail, in the legacy's order.
+   *
+   * ## What this lifts, and why it had to be lifted
+   *
+   * `streamChat`'s prologue ran seven producers into
+   * `promptContexts` / `promptContextBlocks` / `injectedSkillParts`, and every
+   * one of them was unreachable from outside the generator:
+   *
+   *  - the hook half (`UserPromptSubmit`, `SessionStart`) arrived through
+   *    `dispatchHooks`, a closure local holding a `ConfigHooksRunner` built per
+   *    `streamChat` and reached by `yield*`. A composition cannot consume a
+   *    `yield`, so those two were unreachable BY CONSTRUCTION.
+   *  - the other five (connector activation, skill injections, skill
+   *    suggestions, plugin activation, agent @-mentions) are module-level calls
+   *    that needed only `options` / `promptText` / `turnContext`, all of which
+   *    the run handle already carries -- they were unreachable only because they
+   *    were written inline in the prologue.
+   *
+   * The consequence was measured rather than argued: on a real run with a
+   * registry-free producer the legacy path put 1 plugin-activation row on the
+   * provider boundary and the engine path put 0, and the run logs agreed
+   * (`1 agent messages -> 2 model messages` against `1 -> 1`).
+   *
+   * The DRAIN half needed no new seam: `beginTurnAssembly` already projects with
+   * `injectHookContexts: true`, so a driver that calls THIS first and
+   * `beginTurnAssembly` second gets the same delivered blocks the legacy got.
+   * That is why this is a FILL seam and not a fill+drain pair -- the second
+   * half was already public and the first half was the whole gap.
+   *
+   * ## The ORDER is load-bearing, and it is the legacy's
+   *
+   * `UserPromptSubmit` ASSIGNS `this.promptContexts = submitCtx.contexts.slice()`
+   * where the other six PUSH. That asymmetry is safe here and only because of
+   * two facts established by reading the prologue rather than assuming them:
+   *
+   *  1. It runs FIRST, before every other producer.
+   *  2. `beginRun` reset the rail to `[]` immediately before, and it resets
+   *     `promptContextBlocks` alongside it.
+   *
+   * So the assignment replaces an empty rail, and the six pushes accumulate
+   * after it. A driver that produced in a DIFFERENT order -- say skills first,
+   * then `UserPromptSubmit` -- would have the assignment silently discard the
+   * earlier producer, which is precisely the silent class of defect this plan
+   * exists to prevent. The order is therefore fixed INSIDE this method rather
+   * than left to the caller: there is no argument a caller can pass to reorder
+   * it, and `UserPromptSubmit` cannot be invoked standalone.
+   *
+   * ## One implementation, two callers
+   *
+   * `streamChat` calls THIS for its prologue, exactly as it calls `beginRun` and
+   * `beginTurnAssembly`. Nothing is reimplemented at the call site, so there is
+   * no second answer to "what does this run inject".
+   *
+   * ## The hook runner is THIS method's, not the generator's
+   *
+   * The legacy's `configHooks` runner is built with an `onHookInvoked` callback
+   * that pushes SSE `agent_progress` frames into a closure buffer the generator
+   * `yield`s. A caller outside the generator cannot reach that buffer, so this
+   * method builds its own `ConfigHooksRunner` and returns the frames it
+   * produced through `frames` for the caller to route. `HookInvokedEvent.seq`
+   * is minted per runner, so the two runners number independently -- which is
+   * why the frames are RETURNED rather than pushed onto the legacy's buffer:
+   * sharing the generator's buffer would need the generator's closure.
+   *
+   * `pendingHookMessages` is pushed here for the same reason the generator
+   * pushes it: that field is on the agent, so both paths reach the same drain.
+   *
+   * ## What it does NOT do
+   *
+   * It does not drain, project, or build a turn: those are `beginTurnAssembly`'s
+   * and `_projectModelMessages`' jobs and they are already reachable. It does not
+   * dispatch any hook the prologue did not already dispatch, and it does not
+   * resolve a profile, a mode or an abort source -- `RunHandle` carries all
+   * three and this method reads none of them.
+   */
+  async producePromptContextRail(run: RunHandle): Promise<SSEEvent[]> {
+    const { options, prompt } = run.request;
+    const turnContext = run.turnContext;
+    const promptText = typeof prompt === 'string' ? prompt : '';
+    const sessionId = turnContext.sessionId ?? '';
+
+    // Frames the two hook dispatches emit. Returned to the caller rather than
+    // yielded, because a composition cannot consume a `yield`.
+    const frames: SSEEvent[] = [];
+    const runner = new ConfigHooksRunner({
+      cwd: turnContext.workingDirectory ?? process.cwd(),
+      vars: { sessionId, cwd: turnContext.workingDirectory ?? '', prompt: promptText },
+      onHookInvoked: (hookEvent) => {
+        frames.push({
+          type: 'agent_progress',
+          data: { type: 'hook_invoked', hookEvent, sessionId },
+        });
+        // Same durability rule as the generator's own callback: verifier-only
+        // hooks carry no additionalContext and persisting them produced blank
+        // `role:'system'` rows.
+        const hookContext = hookEvent.additionalContext;
+        if (typeof hookContext === 'string' && hookContext.trim().length > 0) {
+          this.pendingHookMessages.push(buildHookMessage(hookEvent, sessionId));
+        }
+      },
+    });
+
+    // Fail-open, matching the legacy's `dispatchHooks`: a hook that throws logs
+    // WARN and yields `null` rather than failing the run.
+    const dispatch = async (
+      event: import('../hooks/types.js').HookEvent,
+      input: EventHookInput,
+      targets?: EventHookMatcherTargets,
+    ): Promise<EventHookRunResult | null> => {
+      try {
+        return await runner.run(event, input, targets);
+      } catch (err) {
+        logger.warn(
+          `[Hooks] ${event} dispatch failed (skipped): ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return null;
+      }
+    };
+
+    // 1. UserPromptSubmit -- the ONLY producer that ASSIGNS. First because
+    //    `beginRun` reset the rail and last would mean discarding the six
+    //    below. See the header's "The ORDER is load-bearing".
+    const submitCtx = await dispatch('UserPromptSubmit', {
+      session_id: sessionId,
+      cwd: turnContext.workingDirectory ?? '',
+      hook_event_name: 'UserPromptSubmit',
+      prompt: promptText,
+    });
+    if (submitCtx && submitCtx.contexts.length > 0) {
+      this.promptContexts = submitCtx.contexts.slice();
+      // Fresh run: previous run's delivered blocks must not leak into this
+      // one's restore set.
+      this.promptContextBlocks = [];
+      logger.info(
+        `[Hooks] UserPromptSubmit produced ${submitCtx.contexts.length} context line(s) - queued for first-turn injection`,
+      );
+    }
+
+    // 2. SessionStart -- routed through the same transient rail, wrapped in a
+    //    provenance envelope so the model can attribute the block.
+    const startCtx = await dispatch('SessionStart', {
+      session_id: sessionId,
+      cwd: turnContext.workingDirectory ?? '',
+      hook_event_name: 'SessionStart',
+      source: 'startup',
+    });
+    if (startCtx && startCtx.contexts.length > 0) {
+      logger.info(`[Hooks] SessionStart produced ${startCtx.contexts.length} context line(s)`);
+      for (let i = 0; i < startCtx.contexts.length; i += 1) {
+        this.promptContexts.push(
+          renderHookContextEnvelope(
+            { event: 'SessionStart', hookName: 'session-start', seq: i },
+            startCtx.contexts[i],
+          ),
+        );
+      }
+    }
+
+    // 3. Connector activation -- the user @-mentioned apps in the composer.
+    if (options?.mentionedProviders?.length) {
+      const descriptors = getCachedAppConnectionDescriptors();
+      const injection = collectConnectorActivationInjection(options.mentionedProviders, descriptors);
+      if (injection) {
+        this.promptContexts.push(`<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`);
+        logger.info(`[Agent] Connector activation: ${options.mentionedProviders.join(', ')}`);
+      }
+    }
+
+    // 4. Skill injections -- `/skill-name` mentions plus handwritten `$name`
+    //    and `skill://name` references in the raw prompt.
+    if (options?.mentionedSkills?.length || promptText) {
+      const explicitSkills = extractExplicitSkillMentions(promptText);
+      const mergedMentionedSkills = mergeSkillMentionSources(
+        options?.mentionedSkills ?? [],
+        explicitSkills,
+      );
+      const skillInjections = await collectSkillInjections(mergedMentionedSkills);
+      // Plan 579: attribute the transient bodies' token cost per skill
+      // (cleared per run, matching promptContextBlocks' lifecycle).
+      this.injectedSkillParts.clear();
+      for (const injection of skillInjections) {
+        const rendered = `<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`;
+        this.promptContexts.push(rendered);
+        if (injection.envelope === 'skill' && injection.skillName) {
+          this.injectedSkillParts.set(
+            `skill:${injection.skillName}`,
+            estimateContextTextTokens(rendered),
+          );
+        }
+      }
+      if (skillInjections.length > 0) {
+        logger.info(`[Agent] Skill injection: ${skillInjections.length} skill fragment(s) queued`);
+      }
+    }
+
+    // 5. Skill suggestion -- per-turn skill-match reminder. Fail-closed:
+    //    hidden / disabled / pending skills are never suggested, and skills
+    //    already injected above are excluded.
+    if (promptText) {
+      const excludeSkills = new Set(options?.mentionedSkills ?? []);
+      const skillHits = matchSkillsForPrompt(promptText, {
+        workingDirectory: turnContext.workingDirectory ?? undefined,
+        exclude: excludeSkills,
+      });
+      const skillSuggestion = buildSkillSuggestionInjection(skillHits);
+      if (skillSuggestion) {
+        this.promptContexts.push(`<${skillSuggestion.envelope}>\n${skillSuggestion.body}\n</${skillSuggestion.envelope}>`);
+        logger.info(
+          `[Agent] Skill suggestion: ${skillHits.length} skill(s) matched (${skillHits.map((h) => h.skill.name).join(', ')})`,
+        );
+      }
+    }
+
+    // 6. Plugin activation -- the `@` popover lists installed plugins.
+    if (options?.mentionedPlugins?.length) {
+      const descriptors = getCachedAppConnectionDescriptors();
+      const injection = collectPluginInjections(options.mentionedPlugins, descriptors);
+      if (injection) {
+        this.promptContexts.push(`<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`);
+        logger.info(`[Agent] Plugin activation: ${options.mentionedPlugins.map((p) => p.pluginId).join(', ')}`);
+      }
+    }
+
+    // 7. Agent @-mentions in the raw text, parsed against the config agent
+    //    roster minus the session's own agent. Fail-open.
+    if (promptText) {
+      try {
+        const agents = await readConfigAgents();
+        const roster = Object.entries(agents)
+          .filter(([id]) => id !== options?.agentProfileId)
+          .map(([id, entry]) => ({ id, name: entry.name || id }));
+        const mentionedContext = buildMentionedAgentsContext(parseAgentMentions(promptText, roster));
+        if (mentionedContext) {
+          this.promptContexts.push(mentionedContext);
+          logger.info('[Agent] Injected mentioned-agents context into first turn');
+        }
+      } catch (err) {
+        logger.warn(`[Agent] Agent mention parse skipped: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    return frames;
   }
 
   // ==========================================================================
@@ -2860,148 +3106,15 @@ export class duyaAgent implements AgentRuntime {
       }
     };
 
-    // UserPromptSubmit 鈥?the user's raw prompt entered the run.
-    // Plan 430: the returned additionalContext lines are stashed on the
-    // agent and pumped into the first `_projectModelMessages` projection as
-    // `<system-reminder>` runtime_context messages (`source: 'custom'`).
-    // Without this, the memory-RAG hook output is logged and discarded 鈥?    // the model never sees the retrieved memories on its first turn.
-    const submitCtx = yield* dispatchHooks(
-      'UserPromptSubmit',
-      { session_id: turnContext.sessionId ?? '', cwd: turnContext.workingDirectory ?? '', hook_event_name: 'UserPromptSubmit', prompt: promptText },
-    );
-    if (submitCtx && submitCtx.contexts.length > 0) {
-      this.promptContexts = submitCtx.contexts.slice();
-      // Fresh run: previous run's delivered blocks must not leak into this
-      // one's restore set.
-      this.promptContextBlocks = [];
-      logger.info(`[Hooks] UserPromptSubmit produced ${submitCtx.contexts.length} context line(s) 鈥?queued for first-turn injection`);
-    }
-
-    // SessionStart 鈥?fired once per run (covers orchestrator modes too,
-    // since this sits ahead of the mode dispatch below).
-    const startCtx = yield* dispatchHooks(
-      'SessionStart',
-      { session_id: turnContext.sessionId ?? '', cwd: turnContext.workingDirectory ?? '', hook_event_name: 'SessionStart', source: 'startup' },
-    );
-    if (startCtx && startCtx.contexts.length > 0) {
-      logger.info(`[Hooks] SessionStart produced ${startCtx.contexts.length} context line(s)`);
-      // Context-injection hardening: SessionStart contexts used to be logged
-      // and discarded 鈥?fatal for memory-RAG hooks that do their retrieval
-      // exactly once per session. Route them through the same transient
-      // `promptContexts` rail as UserPromptSubmit, wrapped in a provenance
-      // envelope so the model can attribute the block.
-      for (let i = 0; i < startCtx.contexts.length; i += 1) {
-        this.promptContexts.push(
-          renderHookContextEnvelope({ event: 'SessionStart', hookName: 'session-start', seq: i }, startCtx.contexts[i]),
-        );
-      }
-    }
-
-    // Plan 450 Phase G: connector-activation reminder 鈥?the user @-mentioned
-    // apps in the composer. Codex parity: a mention changes tool exposure,
-    // not the prompt's capability text; this one-shot reminder only tells the
-    // model the user explicitly named these apps and to prefer their tools.
-    // Rendering lives in the mentions framework (packages/agent/src/mentions).
-    if (options?.mentionedProviders?.length) {
-      const descriptors = getCachedAppConnectionDescriptors();
-      const injection = collectConnectorActivationInjection(options.mentionedProviders, descriptors);
-      if (injection) {
-        this.promptContexts.push(`<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`);
-        logger.info(`[Agent] Connector activation: ${options.mentionedProviders.join(', ')}`);
-      }
-    }
-
-    // Plan 450 Phase H: `/skill-name` mentions 鈥?inject the SKILL.md body as
-    // a `<skill>` fragment this turn (codex UserInput::Skill parity), so the
-    // model executes the skill immediately instead of having to notice the
-    // catalog entry and load it with a read round-trip. Resolution happens
-    // against the agent's own skill registry (see collectSkillInjections).
-    // Plan 535 Phase B: handwritten `$name` and `skill://name` references in
-    // the raw prompt join the popover selection (deduped, popover first);
-    // unresolvable tokens ($20-style prices, unknown names) drop out in the
-    // extractor, and fail-closed rules stay with collectSkillInjections.
-    if (options?.mentionedSkills?.length || promptText) {
-      const explicitSkills = extractExplicitSkillMentions(promptText);
-      const mergedMentionedSkills = mergeSkillMentionSources(
-        options?.mentionedSkills ?? [],
-        explicitSkills,
-      );
-      const skillInjections = await collectSkillInjections(mergedMentionedSkills);
-      // Plan 579: attribute the transient bodies' token cost per skill
-      // (cleared per run, matching promptContextBlocks' lifecycle).
-      this.injectedSkillParts.clear();
-      for (const injection of skillInjections) {
-        const rendered = `<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`;
-        this.promptContexts.push(rendered);
-        if (injection.envelope === 'skill' && injection.skillName) {
-          this.injectedSkillParts.set(
-            `skill:${injection.skillName}`,
-            estimateContextTextTokens(rendered),
-          );
-        }
-      }
-      if (skillInjections.length > 0) {
-        logger.info(`[Agent] Skill injection: ${skillInjections.length} skill fragment(s) queued`);
-      }
-    }
-
-    // Plan 535 Phase A-4: per-turn skill-match reminder (mcode matcher
-    // parity). Scans the prompt for path-like tokens and skill names and
-    // suggests up to five relevant installed skills the user never
-    // explicitly mentioned. Fail-closed: hidden / disabled /
-    // conditional-pending skills are never suggested, and skills already
-    // injected via the popover above are excluded.
-    if (promptText) {
-      const excludeSkills = new Set(options?.mentionedSkills ?? []);
-      const skillHits = matchSkillsForPrompt(promptText, {
-        workingDirectory: turnContext.workingDirectory ?? undefined,
-        exclude: excludeSkills,
-      });
-      const skillSuggestion = buildSkillSuggestionInjection(skillHits);
-      if (skillSuggestion) {
-        this.promptContexts.push(`<${skillSuggestion.envelope}>\n${skillSuggestion.body}\n</${skillSuggestion.envelope}>`);
-        logger.info(`[Agent] Skill suggestion: ${skillHits.length} skill(s) matched (${skillHits.map((h) => h.skill.name).join(', ')})`);
-      }
-    }
-
-    // Plugin @-mentions (the `@` popover lists installed plugins): inject a
-    // one-shot `<plugin-activation>` block listing the plugin's callable
-    // capabilities (connected apps / MCP servers / skills). Connected app
-    // connectors already flowed into `mentionedProviders` renderer-side, so
-    // their tools were exposure-promoted above; this block only adds the
-    // capability map (codex `render_explicit_plugin_instructions` parity).
-    if (options?.mentionedPlugins?.length) {
-      const descriptors = getCachedAppConnectionDescriptors();
-      const injection = collectPluginInjections(options.mentionedPlugins, descriptors);
-      if (injection) {
-        this.promptContexts.push(`<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`);
-        logger.info(`[Agent] Plugin activation: ${options.mentionedPlugins.map((p) => p.pluginId).join(', ')}`);
-      }
-    }
-
-    // Agent @-mentions in the raw text (grok-bot 0.18 port): when the user
-    // writes "@Bot Name", inject the reachability block naming each
-    // mentioned teammate with its SendToAgent id, so "@ that agent" style
-    // references become actionable without guessing ids. Parsed here against
-    // the config agent roster (minus the session's own agent) rather than
-    // renderer-side, mirroring grok's host-side withMentionedAgentsContext.
-    // Fail-open: a config read failure never breaks the turn.
-    if (promptText) {
-      try {
-        const agents = await readConfigAgents();
-        const roster = Object.entries(agents)
-          .filter(([id]) => id !== options?.agentProfileId)
-          .map(([id, entry]) => ({ id, name: entry.name || id }));
-        const mentionedContext = buildMentionedAgentsContext(parseAgentMentions(promptText, roster));
-        if (mentionedContext) {
-          this.promptContexts.push(mentionedContext);
-          logger.info('[Agent] Injected mentioned-agents context into first turn');
-        }
-      } catch (err) {
-        logger.warn(`[Agent] Agent mention parse skipped: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-
+    // Plan 610 P6: the seven prompt-context producers, MOVED to
+    // `producePromptContextRail` and called through it, so there is one
+    // implementation and a driver can reach the same answer. This block used
+    // to inline all seven; the hook half additionally went through the
+    // closure-local `dispatchHooks` below, which is why an engine-driven run
+    // injected nothing at all. The ORDER is unchanged and is load-bearing:
+    // `UserPromptSubmit` assigns the rail and must stay first.
+    const railFrames = await this.producePromptContextRail(run);
+    for (const frame of railFrames) yield frame;
     // === Mode Dispatch ===
     // The agent profile is already resolved -- `beginRun` did it at the top of
     // this generator, ahead of the hook rail exactly as this prologue used to,
