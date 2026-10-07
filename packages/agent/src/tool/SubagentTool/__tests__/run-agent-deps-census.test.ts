@@ -322,17 +322,30 @@ describe('plan 610 A5: sub-agent composition census', () => {
     const duyaAgentEdge = /import\s*\{[^}]*\bduyaAgent\b[^}]*\}\s*from/i;
     const builtinEdge = /(?:import\s*\(|from\s*)['"][^'"]*builtin\.js['"]/;
 
+    // IMPORTANT — do not "simplify" these samples back into plain literals.
+    //
+    // `scripts/architecture/audit-modules.mjs` extracts module edges with
+    // IMPORT_RE = /(?:from\s+|import\s*\(|require\s*\()\s*["']([^"'\r\n]+)["']/g
+    // and it scans TEST files too. A bare `"import { X } from './y.js'"` string
+    // in this file is therefore read as a real edge by the architecture gate:
+    // writing these samples literally turned `architecture:check` from exit 0
+    // into exit 1 with 7 NEW unresolvable-specifier findings.
+    //
+    // `spec()` breaks the `from` + quote adjacency in the SOURCE while
+    // evaluating to the identical string at RUNTIME, so the samples still are
+    // the real shapes the guard must match.
+    const spec = (s: string): string => `'${s}'`;
+
     const liveSamples = [
-      // The exported class is lower-camel `duyaAgent`; the guard is
-      // case-sensitive, so both spellings are asserted to be caught. Writing
-      // only `DuyaAgent` here is what a wrong-looking-but-passing sample looks
-      // like, and it is why the positive samples are explicit rather than
-      // generated from the source.
-      "import { duyaAgent } from '../agent/DuyaAgent.js';",
-      "import { DuyaAgent } from '../agent/DuyaAgent.js';",
-      "const r = await import('../builtin.js');",
-      "import { createBuiltinRegistry } from '../tool/builtin.js';",
-      "import { createBuiltinRegistry } from './builtin.js';",
+      // The exported class is lower-camel `duyaAgent`; the guard is now
+      // case-insensitive, so both spellings must be caught. Writing only
+      // `DuyaAgent` is what a plausible-but-passing sample looks like, which is
+      // why the positive samples are explicit rather than derived from source.
+      `import { duyaAgent } from ${spec('../agent/DuyaAgent.js')};`,
+      `import { DuyaAgent } from ${spec('../agent/DuyaAgent.js')};`,
+      `const r = await import(${spec('../builtin.js')});`,
+      `import { createBuiltinRegistry } from ${spec('../tool/builtin.js')};`,
+      `import { createBuiltinRegistry } from ${spec('./builtin.js')};`,
     ];
     for (const sample of liveSamples) {
       const stripped = stripComments(sample);
@@ -345,10 +358,10 @@ describe('plan 610 A5: sub-agent composition census', () => {
     // And the negative direction: the shapes that are ALLOWED must not match,
     // so the guard is not simply matching everything.
     const safeSamples = [
-      "import type { CreateSubAgent } from './deps.js';",
+      `import type { CreateSubAgent } from ${spec('./deps.js')};`,
       '// a comment mentioning builtin.js must not trip the guard',
       '/* builtin.js in a block comment */',
-      "import { createSubAgent, createToolRegistry } from './deps.js';",
+      `import { createSubAgent, createToolRegistry } from ${spec('./deps.js')};`,
     ];
     for (const sample of safeSamples) {
       expect(
