@@ -57,6 +57,11 @@ async function buildElectron() {
       // covers the bare name and every subpath — see the longest-match note
       // on `@duya/agent-protocol` below.)
       '@duya/plugin-core': path.resolve(scriptDir, '../packages/plugin-core/dist'),
+      // Plan 610 A5: same convention and same worktree-safety reason as the
+      // entry above, for the package the App Connector vocabulary and the
+      // `.app.json` schema moved into. One entry covers the bare name and every
+      // subpath, because esbuild substitutes the matched package-name prefix.
+      '@duya/connectors': path.resolve(scriptDir, '../packages/connectors/dist'),
       // Same reason, same root-pointing convention, for the three packages
       // plan 584/586 added. They are ESM with `exports` maps, so the package
       // root resolves to `dist/index.js` via `main` and the `/testing`

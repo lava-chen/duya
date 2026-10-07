@@ -21,7 +21,7 @@ import path from 'path';
 import { getLogger, LogComponent } from '../../../logging/logger';
 import { getPluginManager } from '../../../plugins/PluginManager.js';
 import { getConnectorService } from '../connector-service.js';
-import { parseAppDeclarationFile } from '@duya/plugin-core/connectors/app-schema';
+import { parseAppDeclarationFile } from '@duya/connectors/app-schema';
 
 const COMPONENT = 'AppConnectionReconcile' as LogComponent;
 

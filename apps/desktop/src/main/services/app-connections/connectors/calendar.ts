@@ -11,7 +11,7 @@ import type {
   ConnectorModule,
   ConnectorToolDescriptor,
 } from '../connector-types.js';
-import { asAppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
+import { asAppConnectorId } from '@duya/connectors/app-connector-id';
 
 const PROVIDER = asAppConnectorId('calendar');
 const CALENDAR_LIST_ACTION = 'calendar.list';

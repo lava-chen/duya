@@ -1,16 +1,16 @@
-// Plan 455 Phase B — `.app.json` declaration schema (packages/plugin-core).
+// Plan 455 Phase B — `.app.json` declaration schema (packages/connectors).
 
 import { describe, expect, it } from 'vitest';
 import {
   AppDeclarationFileSchema,
   parseAppDeclarationFile,
-} from '../src/connectors/app-schema.js';
+} from '../src/app-schema.js';
 import {
   asAppConnectorId,
   isBuiltinConnectorId,
   isWellFormedConnectorId,
   pluginConnectorId,
-} from '../src/connectors/app-connector-id.js';
+} from '../src/app-connector-id.js';
 
 const VALID_FILE = JSON.stringify({
   apps: [

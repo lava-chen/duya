@@ -71,6 +71,12 @@ const BUILD_ORDER = [
   // typechecking against whatever `agent-protocol/dist` happened to contain —
   // or against a stale declaration for a subpath that does not exist yet.
   '@duya/agent-protocol',
+  // Plan 610 A5: the App Connector vocabulary and the `.app.json` declaration
+  // schema. Level 1 because it imports NO `@duya/*` package -- `app-schema.ts`
+  // imports only `zod` and its sibling. It has to build before the host,
+  // because `apps/desktop/tsconfig.main.json` maps `@duya/connectors/*` onto
+  // this package's emitted `dist`.
+  '@duya/connectors',
 
   // Level 2 — depend only on level 1.
   '@duya/ai', //              -> @duya/agent-protocol

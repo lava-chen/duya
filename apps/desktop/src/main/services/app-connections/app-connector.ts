@@ -23,12 +23,12 @@
 import type {
   AppDeclaration,
   AppToolDeclaration,
-} from '@duya/plugin-core/connectors/app-schema';
+} from '@duya/connectors/app-schema';
 import {
   asAppConnectorId,
   isBuiltinConnectorId,
   type AppConnectorId,
-} from '@duya/plugin-core/connectors/app-connector-id';
+} from '@duya/connectors/app-connector-id';
 import type { ConnectorModule, ConnectorToolDescriptor } from './connector-types.js';
 import type { RiskTier } from './types.js';
 import { getProviderConfig } from './providers/registry.js';

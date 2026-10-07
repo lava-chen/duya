@@ -8,6 +8,9 @@ import { fileURLToPath } from 'url'
 // subpaths (`@duya/plugin-core/mcp/core/alias`) instead of reaching into
 // `src/`, so the alias has to map a subpath onto `dist/<subpath>`.
 const PLUGIN_CORE_DIST = fileURLToPath(new URL('./packages/plugin-core/dist', import.meta.url))
+// Plan 610 A5: same worktree-safety reason, for the package that took over the
+// App Connector vocabulary and the `.app.json` declaration schema.
+const CONNECTORS_DIST = fileURLToPath(new URL('./packages/connectors/dist', import.meta.url))
 // Same reason: the protocol package must be tested against THIS worktree's
 // source, never the primary checkout's dist.
 const AGENT_PROTOCOL_SRC = fileURLToPath(new URL('./packages/agent-protocol/src', import.meta.url))
@@ -77,6 +80,11 @@ export default defineConfig({
       // name first, then subpaths — the bare rule must not swallow them.
       { find: /^@duya\/plugin-core$/, replacement: PLUGIN_CORE_DIST + '/index.js' },
       { find: /^@duya\/plugin-core\/(.*)$/, replacement: PLUGIN_CORE_DIST + '/$1' },
+      // Plan 610 A5: the App Connector vocabulary and `.app.json` schema moved
+      // out of plugin-core into their own package. Same reason as above — this
+      // checkout's `dist`, never the primary checkout's node_modules junction.
+      { find: /^@duya\/connectors$/, replacement: CONNECTORS_DIST + '/index.js' },
+      { find: /^@duya\/connectors\/(.*)$/, replacement: CONNECTORS_DIST + '/$1' },
       // Subpaths first: the bare name would otherwise swallow
       // `@duya/agent-protocol/testing` and `/legacy`.
       // `/testing` resolves to the subpath INDEX, matching the package's own
