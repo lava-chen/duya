@@ -516,6 +516,31 @@ export interface RunAssemblyRequest {
   readonly publisher: TurnPipelinePublisher | undefined;
 }
 
+/**
+ * What `commitTurnPromptUserRow` did with a run's opening prompt.
+ *
+ * ## Why `committed` and `messageId` are separate facts
+ *
+ * Because duplicate suppression is the case that matters and it does NOT
+ * produce a row. A caller that needs to name the row the model is answering --
+ * the legacy's `runtimePromptMessageId`, which two later reads consume -- has
+ * to be handed the EXISTING row's id when the prompt was suppressed, and a
+ * caller that only cares about durability needs to be able to tell the two
+ * apart. A bare `string | null` return would make "suppressed" and "committed
+ * with no id" the same value, and those are different states.
+ *
+ * `messageId` is `null` only when the transcript held no comparable row AND
+ * the committed row carried no id, which `commitTurnPromptUserRow` can only
+ * reach through a caller that supplied neither `clientMsgId` nor a mintable
+ * value -- stated so the nullable half is a contract rather than a shrug.
+ */
+export interface PromptUserRowCommit {
+  /** True when a NEW durable row was written and journaled. */
+  readonly committed: boolean;
+  /** The row the run's model context answers: the new one, or the suppressed one. */
+  readonly messageId: string | null;
+}
+
 /** What the host knows about the turn it is asking for. */
 export interface LegacyTurnDelta {
   /** 1-based turn number, as the publisher records it and the catalog is stamped. */
@@ -2196,6 +2221,164 @@ export class duyaAgent implements AgentRuntime {
   }
 
   /**
+   * The turn's OWN prompt user row: built, fork-tagged, committed durably.
+   *
+   * PUBLIC, and it exists because this row was the one durable write with no
+   * reachable producer outside the legacy generator. Measured on plan 610 P7:
+   * `Journal.userMsgAdded` had exactly ONE production caller in the package --
+   * the `role === 'user'` arm of `_commitDurable` -- and `_commitDurable` was
+   * reachable only through `_pushDurable`, whose four call sites are all inside
+   * `streamChat`. The prompt row was the first of them. `TurnOutputPort` has no
+   * user-row arm, so the engine had no way to ask for one, and
+   * `beginTurnAssembly` seeds only `options.messages` on an empty timeline. The
+   * capability was PRESENT and starved, exactly as `forkTurn` was before
+   * `bindRunForkMarker`: this is that lift, for the same class of problem.
+   *
+   * ## Why the transcript is a PARAMETER
+   *
+   * Because the duplicate-suppression refresh MUTATES the row it suppresses
+   * against -- that is what makes a pre-loaded row pick up this run's
+   * `displayContent` and attachments -- and the row it has to mutate is the
+   * caller's, not a projection this method took for itself. `this.messages` is
+   * recomputed by `projectTimelinePersistenceMessages` on every read, so
+   * mutating what IT returns would refresh a copy and leave the caller's
+   * transcript holding the stale row.
+   *
+   * So this is `claimInterTurn`'s exact shape: the legacy owns its array and
+   * hands it over, and a caller that has none hands over a fresh one. The
+   * asymmetry is a consequence of who owns the array, and it is the same one
+   * that method documents.
+   *
+   * ## Why the fork marker is RESOLVED here and not supplied
+   *
+   * Because the marker is a fact about the committed transcript, not an input.
+   * `resolveReplyMeta` validates the target against `collectMessageIds` of the
+   * timeline as committed BEFORE this row lands, and silently strips an unknown
+   * target -- so a caller-supplied marker could tag a run against a row that
+   * does not exist, or one a later commit invalidates. The legacy computed it
+   * here and nowhere else; keeping the computation here is what makes the two
+   * paths one implementation instead of two answers.
+   *
+   * Note the ORDER this implies: `_commitDurable` tags NON-user rows from
+   * `forkTurn`, and this method is what SETS `forkTurn`, from the row it is
+   * about to commit. So a forked run's opening row carries the branch metadata
+   * at construction and every later row of that run inherits it -- and a plain
+   * run leaves it null, exactly as before.
+   *
+   * ## What `committed: false` means
+   *
+   * Duplicate suppression, which is the legacy's own rule: a transcript whose
+   * last row is a user message with the same model-facing content is a
+   * transcript that was pre-loaded from the database before this run started,
+   * and appending again would show the user their message twice. There is no
+   * row to commit, so the existing row is refreshed in place and ITS id is
+   * returned, because the caller's `runtimePromptMessageId` has to name the row
+   * the model is answering either way.
+   */
+  commitTurnPromptUserRow(input: {
+    readonly prompt: string | MessageContent[];
+    /**
+     * The caller's transcript. The committed row is pushed onto it, and the
+     * duplicate rule reads -- and refreshes -- its last entry.
+     */
+    readonly messages: Message[];
+    readonly seqIndex: number;
+    /** Host-minted identity for the row, when the caller has one. */
+    readonly clientMsgId?: string;
+    readonly displayContent?: string;
+    readonly attachments?: ChatOptions['attachments'];
+    /** A wake run's prompt is model context, not user chat (plan 497). */
+    readonly wakeRun?: boolean;
+    readonly replyToId?: string;
+    readonly branched?: boolean;
+  }): PromptUserRowCommit {
+    const { messages } = input;
+    const lastMessage = messages[messages.length - 1];
+    const persistedPromptContent = input.prompt as string | MessageContent[];
+    const displayContent = input.displayContent !== undefined ? input.displayContent : undefined;
+
+    if (!this._isDuplicatePrompt(lastMessage, input.prompt)) {
+      const userMessage = {
+        id: input.clientMsgId ?? crypto.randomUUID(),
+        role: 'user',
+        content: persistedPromptContent,
+        displayContent: displayContent !== undefined ? displayContent : undefined,
+        timestamp: Date.now(),
+        seq_index: input.seqIndex,
+        attachments: input.attachments,
+        ...(input.wakeRun ? { source: 'system' as const } : {}),
+      } as Message;
+      // Plan 486 2.1/2.2: fork/reply creation rule. The target must exist in
+      // this session's timeline, checked against entries ALREADY committed --
+      // this row is not appended yet, which is what makes a self-referential
+      // fork impossible.
+      const replyMeta = resolveReplyMeta(
+        input.replyToId,
+        input.branched,
+        collectMessageIds(this.timeline.snapshot()),
+      );
+      if (replyMeta) {
+        userMessage.metadata = mergeThreadMetadata(userMessage.metadata, replyMeta);
+        // Plan 486 2.3: a branched fork opens an active fork turn -- every row
+        // this turn produces afterwards is tagged branched (see
+        // `_commitDurable`). A quote reply leaves the marker null.
+        if (replyMeta.branched === true && userMessage.id) {
+          this.forkTurn = {
+            replyToId: replyMeta.replyToId ?? userMessage.id,
+            userId: userMessage.id,
+          };
+        }
+      }
+      // `_pushDurable`, not `_commitDurable`: the array push and the durable
+      // write are ONE operation on this path, exactly as they were in the
+      // legacy, so the row the caller reads back is the row that was written.
+      this._pushDurable(messages, userMessage);
+      return { committed: true, messageId: userMessage.id ?? null };
+    }
+
+    if (lastMessage) {
+      lastMessage.seq_index = input.seqIndex;
+      lastMessage.content = persistedPromptContent;
+      lastMessage.displayContent = displayContent;
+      if (input.attachments && input.attachments.length > 0) {
+        lastMessage.attachments = input.attachments;
+      }
+      return { committed: false, messageId: lastMessage.id ?? null };
+    }
+    return { committed: false, messageId: null };
+  }
+
+  /**
+   * True when `candidate` is this run's prompt already on the transcript.
+   *
+   * The legacy's rule, unchanged: only the model-facing `text` blocks are
+   * compared, both sides are stripped of pasted-content markers and trimmed,
+   * and the raw-trim comparison is kept as a second acceptance so a prompt
+   * whose only difference is the marker still suppresses.
+   */
+  private _isDuplicatePrompt(candidate: Message | undefined, prompt: string | MessageContent[]): boolean {
+    if (!candidate || candidate.role !== 'user') return false;
+    const compareContent = typeof prompt === 'string'
+      ? prompt
+      : (Array.isArray(prompt)
+          ? prompt.filter((b: unknown) => (b as Record<string, unknown>).type === 'text')
+              .map((b: unknown) => (b as Record<string, string>).text || '')
+              .join('')
+          : '');
+    const candidateContent = typeof candidate.content === 'string'
+      ? candidate.content
+      : (Array.isArray(candidate.content)
+          ? (candidate.content as Array<{ type: string; text?: string }>)
+              .filter((b) => b.type === 'text')
+              .map((b) => b.text || '')
+              .join('')
+          : '');
+    const normalizedCandidate = stripPastedContentMarkers(candidateContent).trim();
+    const normalizedCompare = stripPastedContentMarkers(compareContent).trim();
+    return normalizedCandidate === normalizedCompare || candidateContent.trim() === compareContent.trim();
+  }
+
+  /**
    * The drain ended. Forwards `TurnOutputSummary` to the bound sink.
    *
    * PUBLIC because `TurnOutputPort.finishTurn` is a port method, and it is a
@@ -3559,87 +3742,29 @@ export class duyaAgent implements AgentRuntime {
       // Only add user message on first turn (original prompt)
       // Subsequent turns are continuations after tool results, not new prompts
       if (turnCount === 1 && !options?.backgroundTaskResume) {
-        // Check if the last message is already a user message with the same content
-        // This prevents duplicates when messages are pre-loaded from DB before streamChat is called
-        const lastMessage = messages[messages.length - 1];
-        // Compare the model-facing prompt. UI marker content is persisted
-        // separately as displayContent and must not replace content.
-        const compareContent = typeof prompt === 'string'
-          ? prompt
-          : (Array.isArray(prompt)
-              ? prompt.filter((b: unknown) => (b as Record<string, unknown>).type === 'text')
-                  .map((b: unknown) => (b as Record<string, string>).text || '')
-                  .join('')
-              : '');
-        // Extract comparable content from lastMessage (handle both string and MessageContent[])
-        const lastMessageContent = typeof lastMessage?.content === 'string'
-          ? lastMessage.content
-          : (Array.isArray(lastMessage?.content)
-              ? (lastMessage.content as Array<{type: string; text?: string}>)
-                  .filter(b => b.type === 'text')
-                  .map(b => b.text || '')
-                  .join('')
-              : '');
-        const normalizedLastMessageContent = stripPastedContentMarkers(lastMessageContent).trim();
-        const normalizedCompareContent = stripPastedContentMarkers(compareContent).trim();
-        const isDuplicate = lastMessage &&
-          lastMessage.role === 'user' &&
-          (normalizedLastMessageContent === normalizedCompareContent ||
-            lastMessageContent.trim() === compareContent.trim());
-
-        const displayContent = options?.displayContent !== undefined
-          ? options.displayContent
-          : undefined;
-        const persistedPromptContent = prompt as string | MessageContent[];
-
-        if (!isDuplicate) {
-          const userMessage = {
-            id: options?.clientMsgId ?? crypto.randomUUID(),
-            role: 'user',
-            content: persistedPromptContent,
-            displayContent: displayContent !== undefined ? displayContent : undefined,
-            timestamp: Date.now(),
-            seq_index: seqIndex,
-            attachments: (options as ChatOptions & { attachments?: Message['attachments'] })?.attachments,
-            // Plan 497: a wake run's prompt is model context, not user chat —
-            // persist it source 'system' (bot-direct hidden) so it does not
-            // duplicate the agent_dm marker card the dispatcher already wrote.
-            ...(options?.wakeRun ? { source: 'system' as const } : {}),
-          } as Message;
-          // Plan 486 搂2.1/搂2.2: fork/reply creation rule. The target must
-          // exist in this session's timeline (checked against entries already
-          // committed 鈥?this message is not yet appended). An unknown target
-          // is silently stripped so a dangling fork is never persisted.
-          const replyMeta = resolveReplyMeta(
-            options?.replyToId,
-            options?.branched,
-            collectMessageIds(this.timeline.snapshot()),
-          );
-          if (replyMeta) {
-            userMessage.metadata = mergeThreadMetadata(userMessage.metadata, replyMeta);
-            // Plan 486 搂2.3: a branched fork opens an active fork turn 鈥?every
-            // message this turn produces is tagged branched (see _pushDurable).
-            // Quote replies (no branched) stay on the main line and leave the
-            // marker null.
-            if (replyMeta.branched === true && userMessage.id) {
-              this.forkTurn = {
-                replyToId: replyMeta.replyToId ?? userMessage.id,
-                userId: userMessage.id,
-              };
-            }
-          }
-          this._pushDurable(messages, userMessage);
-          runtimePromptMessageId = userMessage.id ?? null;
-        } else if (lastMessage) {
-          lastMessage.seq_index = seqIndex;
-          runtimePromptMessageId = lastMessage.id ?? null;
-          const newAttachments = (options as ChatOptions & { attachments?: Message['attachments'] })?.attachments;
-          lastMessage.content = persistedPromptContent;
-          lastMessage.displayContent = displayContent;
-          if (newAttachments && newAttachments.length > 0) {
-            lastMessage.attachments = newAttachments;
-          }
-        }
+        // Plan 610 P7: this block's CONSTRUCTION, duplicate suppression, fork
+        // resolution and durable write are now `commitTurnPromptUserRow`, which
+        // is the same method a driver that does not call this generator uses.
+        // It used to be ~50 inline lines, which is why the row had no reachable
+        // producer outside `streamChat` and why `Journal.userMsgAdded` had
+        // exactly one production caller in the package.
+        //
+        // `messages` is handed over rather than pushed into from here, because
+        // the duplicate refresh MUTATES that array's last entry and
+        // `this.messages` is recomputed by `projectTimelinePersistenceMessages`
+        // on every read -- mutating what the getter returns would refresh a
+        // copy and leave this array stale. Same shape as `claimInterTurn`.
+        runtimePromptMessageId = this.commitTurnPromptUserRow({
+          prompt,
+          messages,
+          seqIndex,
+          ...(options?.clientMsgId !== undefined ? { clientMsgId: options.clientMsgId } : {}),
+          ...(options?.displayContent !== undefined ? { displayContent: options.displayContent } : {}),
+          ...(options?.wakeRun ? { wakeRun: true } : {}),
+          ...(options?.replyToId !== undefined ? { replyToId: options.replyToId } : {}),
+          ...(options?.branched !== undefined ? { branched: options.branched } : {}),
+          attachments: (options as ChatOptions & { attachments?: Message['attachments'] })?.attachments,
+        }).messageId;
       }
 
       // Plan 610 A3-2b8 (S2): ONE call assembles this turn, through the
