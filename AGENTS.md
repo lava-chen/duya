@@ -192,16 +192,39 @@ touched until the merge lands on `origin/master`.
 1. **Isolate**: work in a git worktree under `.claude/worktrees/<name>`
    on its own branch, based on `origin/master`. An isolated session must
    not edit the shared checkout or cd back into it.
-2. **Worktree setup**: before running tsc/vitest, junction `node_modules`
-   from the primary checkout — the repo root plus every workspace package
-   that has its own (`packages/agent`, `conductor`, `gateway`,
-   `plugin-core`, `voice`). Missing junctions produce fake TS2307 errors.
-   A `packages/agent-core` / `agent-runtime` link is needed too, and it must
-   point at the **worktree's** copy: the root `node_modules/@duya/*` symlinks
-   in the primary checkout may already be stale or missing, and a stale one
-   resolves to a package that no longer exists. Then build the dependency
-   (`npm run build:core`) before `typecheck:runtime` — their `types` point at
-   `dist/`, so a missing build is a TS2307 that looks like a wiring fault.
+2. **Worktree setup**: run `node scripts/junction-worktree.mjs <worktree-path>`
+   before any tsc/vitest run. It is idempotent and creates **no** link inside
+   the primary checkout. It does two separate jobs, and the second one is the
+   one that matters:
+
+   a. Third-party deps come from the primary — `<worktree>/node_modules` plus
+      each workspace package's own `node_modules` (`agent`, `conductor`,
+      `gateway`, `plugin-core`, `voice`, `cli`, `computer-use`). Missing
+      junctions produce fake TS2307 errors.
+
+   b. Workspace packages must resolve to the **worktree's own** copies. The
+      primary's `node_modules/@duya/*` are junctions back into the primary's
+      `packages/*`, so a plain `node_modules` link silently makes
+      `@duya/agent-runtime` resolve to the **primary's** `dist/*.d.ts` — build
+      output compiled from whatever branch the primary last had checked out.
+      Every worktree then typechecks against that one shared set of
+      declarations: exactly one branch can be self-consistent, the others fail
+      with errors naming symbols that do not exist in their own source
+      (e.g. `TS2741: Property 'modeExit' is missing … but required in type
+      'RunEnginePorts'`), and the lucky one is only passing by coincidence. The
+      script's fix is a real overlay at `packages/node_modules/@duya/*` and
+      `apps/node_modules/@duya/*` — real directories inside the worktree, which
+      Node and TS check *before* `<worktree>/node_modules`, so `@duya/*` wins
+      while third-party deps still fall through to the shared link. ~14
+      junctions, a few KB.
+
+   Then build the dependency (`npm run build:core`) before `typecheck:runtime` —
+   their `types` point at `dist/`, so a missing build is a TS2307 that looks like
+   a wiring fault.
+
+   Never `npm install` inside a worktree to fix resolution: writing
+   `<worktree>/node_modules/@duya/*` goes *through* the junction and rewrites
+   the **primary's** links, which breaks every other worktree at once.
 2b. **Tearing a worktree down**: those junctions point back INTO the primary
    checkout, so any recursive delete that follows them deletes the primary
    checkout's sources. This has now happened **twice** on this repo:
