@@ -1001,3 +1001,45 @@ worker 枚举了 6 条可能的 prompt 通道(controller 的 input / transport �
   `agent.streamChat(` 而只登记了 2 处,其中 4 处在测试文件里。
   **因此它们不能作为 d2b 的基线门禁** —— 我在 briefing 里没有把这一条说清,是第二个前提错误。
 
+### P10 落地:prompt 已送达执行器
+
+**更正上文一处我写错的事实。** 上文称既有测试的 `scriptedAgent` double「一个参数都不接」,
+**这是错的**。它确实声明 `streamChat(prompt)` 并把 prompt 推进 `prompts` 数组
+(`headless-run-host.test.ts:54-55`)。真实情况是:**`prompts` 每次运行都被填满,
+却从未被断言过。** 所以缺口是**一条缺失的断言**,不是一个测不出来的量。
+缺陷本身不变,变的是「为什么它没被发现」的答案 —— 修复的准确描述是
+「去断言早已在记录的东西」,而不是「让它变得可观测」。
+
+worker 在实现中推翻了我的这条前提,主 agent 复核后确认 worker 是对的,
+并已把新测试文件里同源的错误注释一并改正 —— 错误的前提一旦写进代码注释,
+就会成为下一个实现者的「依据」。
+
+**修复**:`InProcessTransport.start` 增加**可选**第 4 参 `input?: RunStartInput`,
+缺省值就是修复前捏造的那个空对象;`headless-run-host.ts` 的桥接把真实 input 转发下去。
+端口仍是三参形状:subprocess 与 http-sse 把 prompt **过线**发送,所以它们的 `start` 不需要 input;
+本适配器没有线,transport 调用是唯一入口。
+
+**主 agent 独立复核**(不复用 worker 的测试):另写探针,以
+`prompt: 'THE-PROMPT-abc123'` + 一个哨兵 toolRegistry 启动一次 run,执行器实际收到:
+
+```
+PROBE_PROMPTS=["THE-PROMPT-abc123"]      修复前为 [""]
+PROBE_CANARY_ARRIVED=true
+PROBE_OPTION_KEYS=["toolRegistry","maxTurns"]
+PROBE_REGISTRY_IDENTITY=true             按引用相等,不是拷贝
+```
+
+**顺带修好的一件事(此前是第二个静默缺陷)**:修复前 `input.options` 是捏造的 `{}`,
+所以 `toolRegistry` **从未到达执行器** —— CLI 带着工具注册表跑,等于没带。
+现在它按引用原样送达,`maxTurns` 合并仍保留。已在 48 文件 / 459 测试内确认无新增失败。
+
+**回归测试**:`headless-run-host-prompt.test.ts`,7 条。去掉生产改动后为 **4 failed / 3 passed**,
+修复前复现 `['']`;恢复后 7/7。
+
+**门禁**:`packages/agent/src/process` 47/452 → 48/459;`agent-runtime` 59/711 前后不变(单独跑);
+`architecture:check` 1047/1047 tolerated、baseline size 1044 未动;
+G7 仍红且两行逐字不变;`typecheck:all` exit 0。
+那两个已知红的 desktop 测试 **4 failed / 10 passed 未变**(本次没有增删 `agent.streamChat(` 调用点)。
+
+**已知未修**:`run-routing.ts:336-340` 的注释仍写着 `InProcessTransport` "does today"
+转发空 session —— 该注释现已过期,但不属于本切片拥有的文件。
