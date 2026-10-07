@@ -1,0 +1,30 @@
+{
+  "name": "@duya/tooling",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Extension contract and assembly for Duya: 13 narrow contributor interfaces, an ExtensionRegistry with 13 independent slots, and assembly-time validation. No feature implementations, no universal registry.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "node -e \"for(const t of ['dist','tsconfig.tsbuildinfo'])require('fs').rmSync(t,{recursive:true,force:true})\"",
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "vitest": "^3.0.0"
+  }
+}
