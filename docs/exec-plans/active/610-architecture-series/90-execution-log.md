@@ -1043,3 +1043,107 @@ G7 仍红且两行逐字不变;`typecheck:all` exit 0。
 
 **已知未修**:`run-routing.ts:336-340` 的注释仍写着 `InProcessTransport` "does today"
 转发空 session —— 该注释现已过期,但不属于本切片拥有的文件。
+
+---
+
+## 2026-10-07 — P0-3 复核:不是「一个字段读错」,是**两套词表**对不上;且严重性记录有误
+
+原先的记录是:「`legacy-sse-projector.ts` 写 `done.data.reason` 而 `sse-frame-codec.ts`
+读 `event.reason` → `chat:done.reason` 恒 undefined,影响已上线的 worker entry」。
+
+**这条的机制部分为真**(主 agent 逐字复读两侧源码确认),但**范围被严重低估,
+且严重性判断反了**。机械比对(脚本提取两侧词表,非肉眼)的结果:
+
+- projector 产出 **25** 个 type;codec `switch` **48** 个 case。
+- **产出但 codec 不认的 7 个**:`goal_updated` / `permission` / `retry` / `status` /
+  `text_delta` / `thinking_delta` / `token_usage` —— 全部落到 default 臂,记一条 unknown 后**丢弃**。
+- **codec 认但 projector 永不产出的 29 个**:`permission_request` / `system` / 全部 18 个
+  `research_*` / `plan_steps_created` / `activity` / `result` / `run_status` 等。
+
+### 根因是**换了一个生产者**,而这正是翻转做的事
+
+- **master 上** codec 的唯一生产输入是 `DuyaAgent.streamChat` 的旧词汇事件:
+  `agent-process-entry.ts` 的 `convertSSEToAgentMessage(event)` 周围判的正是
+  `event.type === 'result' | 'tool_result' | 'done'`。**所以那 29 条「死臂」今天全是活的。**
+- **翻转后** 两个入口都把 codec 当作 `legacyFrameCodec` 注入 `driveRunWithEngine`
+  (`headless-run-host.ts:503`),其输入变成 `projectToLegacyFrame` 的输出。
+  此时那 29 条才真的死,7 个类型才开始被丢。
+
+**所以我原先写的「影响已上线的 worker entry」是错的** —— 在 master 上它是**潜伏**的,
+是**翻转会把它变成活跃的**。严重性判断方向因此整个反过来,必须更正。
+
+### 波及面比记录的更宽
+
+1. `agent-process-entry.ts:3314` `turnEndReason = (agentMsg as { reason?: string }).reason`
+   —— 与 `chat:done.reason` 是**同一个读取点**,一起失效。
+2. `error` 臂同样错位,且更糟:projector 写 `data: { message, code }`,
+   而 codec 读 `message: event.data as string` —— 交给 `chat:error.message` 的是一个**对象**,
+   `code` 从顶层读,恒 `undefined`。
+3. d2b 已在 `headless-run-host.ts` 的 `finalizedStopReason` 文档里**独立发现了 `done` 这一条**,
+   并明确划为界外、不修。**那个判断是对的**(codec 与 projector 是共享面)。
+   但它只覆盖 7 个丢失类型里最显眼的一个。
+
+### 裁决:修,但**排在 d2c 之后、同 PR 内的独立 commit**
+
+不在 d2c 期间修的理由是**顺序依赖,不是冲突**:在遗留循环删掉之前,
+`agent-process-entry.ts` 仍可能有旧生产者路径,此时量出来的「死臂集合」不完整,
+按不完整的集合去删会漏。现在修等于按一份会变的清单动一个共享面。
+
+d2c 落地后可得三样今天拿不到的东西:① 旧生产者的调用点数(应为 0,可实测);
+② 29 条臂里哪些**真**没有其它生产者;③ 「7 个类型被丢」是否已有守卫测试。
+届时以**变异证明**收口:注入一个 `permission` 帧,确认它到达渲染层,再回退确认变红。
+
+---
+
+## 2026-10-07 — 新 P0-4:**「从 CLI 跑一次对话」今天没有任何可运行入口**
+
+起因是回答「什么时候能接入 desktop 或 cli 跑起来」时,主 agent 亲手去跑了两条路,而不是读文档。
+
+### 路 1:`AGENTS.md` 记录的那条命令 —— 实测不成立
+
+`node packages/agent/dist/cli/index.js --task "say hi"` 直接崩在**加载期**:
+
+```
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module
+  '...\packages\plugin-core\dist\mcp\scope'
+  imported from ...\packages\plugin-core\dist\mcp\provider-tool-name.js
+```
+
+**根因是实测的,不是推断**:所有 `@duya/*` 的 tsconfig 都是
+`"module": "ESNext"` + **`"moduleResolution": "bundler"`**。`bundler` 解析模式允许并**原样发出
+无扩展名的相对 specifier**,而 Node 的 ESM loader 要求完全限定。二者不兼容,
+所以**任何 `packages/*/dist` 树都不能被 `node` 直接加载**。
+
+**一个必须写下的反面结果**:主 agent 一度以为根因是
+`packages/plugin-core/package.json` **缺 `"type": "module"`** —— 它确实是
+`@duya/*` 里**唯一**没有这个字段的包(其余 ai / agent-core / agent-protocol / agent-runtime 全有)。
+于是加上它重跑:**同一个 `ERR_MODULE_NOT_FOUND`,一字不差**。
+**所以缺 `type` 是一个真实的打包不一致,但不是本故障的原因,不要当成修复去合。** 已回退,树干净。
+
+真正的消费者是 esbuild(`build-agent-bundle.mjs` / `build-electron.mjs`),
+`scripts/build-packages.mjs` 的文件头自己写明了这一点 ——
+「The real consumers never run `tsc`」。**`AGENTS.md` 里那条 standalone CLI 命令是过期的。**
+
+### 路 2:真正带 bundle 的 CLI —— 能跑,但**不是聊天入口**
+
+`npm run build:cli-bundle` → `packages/cli/bundle/cli.cjs`(0.41 MB,exit 0),
+`--help` 正常打印。它是 **DUYA desktop control plane**:
+`status / plugin / session / doctor / skill / mcp / provider / channel / cron /
+message / gateway / update / backup / security / voice / agent / hook`。
+**没有 `--task`,没有 `--print`,不跑一轮对话。**
+
+### 结论(这是对「什么时候能跑起来」的直接回答)
+
+今天的状态是**两半都够不着**:
+
+| 想要的 | 现状 |
+| --- | --- |
+| 用 CLI 跑一轮对话 | `packages/agent` 的 `--task` / REPL / `--print` 无可运行形态 |
+| 用 CLI 操桌面 | `packages/cli/bundle/cli.cjs` 可运行,但要求**桌面已在运行** |
+
+**所以 P0-1(`ToolRegistry` 卡住 `--task` 与 REPL)即使修好也不够** ——
+修完仍然没有一条能启动的路径。这是**与翻转正交**的第二个阻塞,排在 P0-1 之后,
+且它的正解不是一行 `package.json`(已实测排除),而是为 agent 聊天 CLI 补一个 bundle 入口
+(形态上就是 `build:cli-bundle` 的同构做法)。
+
+**桌面侧不受这条影响**:`electron:dev` 走 esbuild,今天可跑(见上,`typecheck:all` exit 0)。
