@@ -21,6 +21,19 @@
  * exported and independently callable; the slice that wires it is the driver
  * flip, and it is the slice that must answer for `turnOutput`.
  *
+ * ## The ONE exception to "nothing here decides": `selectRunDriverLeg`
+ *
+ * Plan 610 P5 added it, and it is a decision where everything else in this file
+ * is a derivation, so the exception is named rather than blurred. It decides
+ * WHICH leg drives an established run, and it decides it from
+ * `RunHandle.orchestrator` -- the run's own resolved mode -- rather than from
+ * anything it could re-read. Its reason is asymmetry: `beginRun` could report
+ * that a run's mode was an orchestrator and no caller could ACT on that, so a
+ * driver had only two options, both wrong (assemble a turn and drop the mode,
+ * or fail). It still composes nothing: the engine leg is deliberately bare,
+ * because ports / manifest / input belong to the driver that owns the host
+ * obligations.
+ *
  * ## The rule this file follows: derive what the agent exposes, require the rest
  *
  * Every `LegacyEngineSources` member is either DERIVED here from a public
@@ -187,9 +200,9 @@ import {
 // `pkg:agent` is what keeps this file from moving the
 // `module-dependency-permitted` count. Same reason
 // `turn-loop-product-behavior.test.ts:87-92` gives.
-import type { AssistantMessage, Message, MessageContent } from '../types.js';
+import type { AssistantMessage, Message, MessageContent, SSEEvent } from '../types.js';
 import type { Tool } from '../types.js';
-import type { RunTurnAssembly, TurnOutputSink, duyaAgent } from '../agent/DuyaAgent.js';
+import type { RunHandle, RunTurnAssembly, TurnOutputSink, duyaAgent } from '../agent/DuyaAgent.js';
 import type { TurnPipelinePublisher } from '../tool/turn-pipeline-publisher.js';
 import { createClientModelPort } from './run-engine-model.js';
 import { createLegacyCommandPort } from './command-port.js';
@@ -831,6 +844,69 @@ export function composeLegacyRunPorts(agent: duyaAgent, host: LegacyRunHost): Ru
   agent.bindTurnOutputSink(host.turnOutputSink ?? null);
   agent.bindRunForkMarker(host.runFork ?? null);
   return buildEnginePorts(composeLegacyRunSources(agent, host));
+}
+
+// ============================================================================
+// Which leg drives an already-established run
+// ============================================================================
+
+/**
+ * How one established run must be driven. There are two answers and no third.
+ *
+ * - `orchestrator` carries the frames. The consumer forwards them; no turn is
+ *   assembled and the engine is not offered this run.
+ * - `engine` carries nothing, and its meaning is exactly "assemble and drive
+ *   this run on the engine" -- so a driver cannot read it as permission to skip
+ *   the work.
+ *
+ * The union rather than a boolean, because the failure this exists to prevent
+ * is a boolean plus a branch the driver forgot: `orchestrator !== null` was
+ * reportable and there was no way to ACT on it, so the only correct behaviour
+ * was to refuse the turn and fail. `frames` is the action, in the type.
+ */
+export type RunDriverLeg =
+  | { readonly kind: 'orchestrator'; readonly frames: AsyncIterable<SSEEvent> }
+  | { readonly kind: 'engine' };
+
+/**
+ * Plan 610 P5: route an established run to the leg that can actually drive it.
+ *
+ * ## Why this lives here rather than in the driver
+ *
+ * Because the answer is a property of the RUN (its resolved mode), the run
+ * handle already owns the inputs to it (`RunHandle.orchestrator`), and this
+ * layer already owns "everything `RunEngineImpl.execute` needs". Putting the
+ * decision at each driver instead would make it a convention repeated per
+ * caller, and the one caller that got it wrong would drop an orchestrator mode
+ * silently -- the exact class plan 610 exists to prevent.
+ *
+ * ## Why the orchestrator leg yields the LEGACY vocabulary
+ *
+ * `ModeModifierOrchestrator.execute` yields `@duya/ai`'s `SSEEvent`, an
+ * orchestrator owns the whole stream, and MEASURED on this commit
+ * `agent-runtime`'s `ports.ts` has no orchestrator member while forbidding that
+ * `SSEEvent` import (its renderer half -- `tool_group_progress`,
+ * `agent_progress`, `mode_changed`, `goal_updated` -- is precisely the
+ * vocabulary the engine must not carry). So there is nothing for the engine to
+ * consume, and routing the frames verbatim to the same consumer the legacy
+ * generator fed is the behaviour-preserving answer. The header of
+ * `orchestratorFramesFor` carries the long form.
+ *
+ * ## What this deliberately does NOT do
+ *
+ * It does not build the engine leg: no ports, no manifest, no input. Those
+ * belong to the driver that owns the host obligations (`LegacyRunHost`), and
+ * inventing them here would put a second account of a run's composition next to
+ * the real one.
+ */
+export function selectRunDriverLeg(agent: duyaAgent, run: RunHandle): RunDriverLeg {
+  if (run.orchestrator) {
+    // The CALL, not the iteration: `orchestratorFramesFor` validates the handle
+    // before it returns a stream, so a driver that selected the wrong leg finds
+    // out while it is still on the stack.
+    return { kind: 'orchestrator', frames: agent.orchestratorFramesFor(run) };
+  }
+  return { kind: 'engine' };
 }
 
 // ============================================================================

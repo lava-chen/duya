@@ -432,11 +432,30 @@ export interface RunHandle {
   /** `options.mode ?? 'normal'`, so a driver can report what it actually ran. */
   readonly requestedMode: string;
   /**
+   * The request this run was begun with -- the SAME object `beginRun` was
+   * handed, not a copy or a re-read.
+   *
+   * It is here because `orchestratorFramesFor` needs the prompt and the chat
+   * options and must not be given them as arguments: an argument a driver
+   * re-supplies is a second account of the turn's input, and the whole argument
+   * for handing out a handle rather than a field is that a handle carries the
+   * run's own facts (see `turnContext`, `appliedProfile`). A driver that passed
+   * a different prompt than the one it began the run with would get this run's
+   * orchestrator answering someone else's question.
+   */
+  readonly request: RunStartRequest;
+  /**
    * The orchestrator-paradigm mode this run asked for, or `null`.
    *
-   * REPORTED, NEVER DISPATCHED -- see `beginRun`'s header for the measured
-   * reason. A non-null value means the legacy's stream would have been taken
-   * over by that mode and this run's turn assembly must NOT be used.
+   * THE ROUTING DECISION, and the only answer that permits turn assembly: a
+   * non-null value means this mode owns the whole stream and never reaches
+   * `beginTurnAssembly` (measured -- `streamChat` yields the orchestrator and
+   * RETURNS before the assembly call), so a driver handed one must dispatch it
+   * through `orchestratorFramesFor` rather than assemble a turn. `null` is the
+   * ordinary turn.
+   *
+   * Reported and DISPATCHED from here as of plan 610 P5; before that it was
+   * reported only, and the dispatcher was unreachable from outside this file.
    */
   readonly orchestrator: ModeModifier | null;
   /**
@@ -1366,14 +1385,18 @@ export class duyaAgent implements AgentRuntime {
    *    profile service and config, needs nothing from the generator's frame, and
    *    its answer is returned as `appliedProfile` so the driver can hand the
    *    SAME value to `beginTurnAssembly` rather than resolving a second one.
-   *  - ORCHESTRATOR DISPATCH: NOT owned, and this method says so out loud. It
-   *    REPORTS the orchestrator-paradigm mode on the handle, because resolving
-   *    it is a registry lookup, but it cannot DISPATCH it: the dispatcher
-   *    `_dispatchOrchestratorMode` is an async generator that yields the
-   *    legacy's SSE vocabulary and takes the whole stream over, and MEASURED on
-   *    this commit `agent-runtime`'s `ports.ts` has no orchestrator member at
-   *    all. A driver handed a non-null `orchestrator` must not drive the turn
-   *    assembly -- the legacy would never have reached it either.
+   *  - ORCHESTRATOR DISPATCH: the RESOLUTION is owned (`_readOrchestratorMode`,
+   *    reported as `RunHandle.orchestrator`) and so is the dispatch itself
+   *    (`orchestratorFramesFor`), because the dispatcher was already
+   *    frame-independent -- MEASURED on this commit it reads agent fields, the
+   *    resolved modifier, the prompt and the options, and needs nothing from the
+   *    generator's closure. What is still NOT owned is an ENGINE-SIDE
+   *    orchestrator port: `agent-runtime`'s `ports.ts` has no orchestrator member
+   *    at all, so the frames stay in the legacy's SSE vocabulary and a driver
+   *    ROUTES them instead of assembling a turn. A driver handed a non-null
+   *    `orchestrator` must not drive the turn assembly for that reason, and
+   *    `selectRunDriverLeg` (`process/run-composition.ts`) is where that route
+   *    is named.
    *  - the LEGACY's other prologue work -- the hook bus, the deterministic
    *    control commands, `beginTurnAssembly` itself -- stays in the generator.
    *    Those are the generator's own, and this method does not pretend to reach
@@ -1431,6 +1454,11 @@ export class duyaAgent implements AgentRuntime {
       turnContext,
       appliedProfile,
       requestedMode: options?.mode || 'normal',
+      // The request ITSELF, not a re-read of `options`/`prompt`: the two
+      // locals above are this method's own destructuring of it, and an
+      // orchestrator dispatch that re-derived either would be a second account
+      // of the turn's input. See `RunHandle.request`.
+      request,
       orchestrator: this._readOrchestratorMode(options),
       signal: controller.signal,
       controller,
@@ -2980,17 +3008,23 @@ export class duyaAgent implements AgentRuntime {
     // and recorded it for turn-end consumers (e.g. bot-pipeline title skip).
     //
     // Resolve mode: explicit option > 'normal'. Orchestrator-paradigm
-    // modes (research) take over the entire stream via
-    // `_dispatchOrchestratorMode`. Modifier-paradigm modes (plan-task,
-    // conductor via `conductorMode` flag) fall through to the normal
-    // agent loop where `applyModes` composes them on top of the profile.
+    // modes take over the entire stream via `orchestratorFramesFor` (whose
+    // header says why the frames stay in this vocabulary rather than becoming
+    // an engine port). Modifier-paradigm modes (plan-task, conductor via
+    // `conductorMode` flag) fall through to the normal agent loop where
+    // `applyModes` composes them on top of the profile.
     const requestedMode = options?.mode || 'normal';
     if (requestedMode !== 'normal') {
-      const mod = modeModifierRegistry.get(requestedMode);
-      if (mod?.orchestrator) {
-        yield* this._dispatchOrchestratorMode(mod, prompt, options);
+      // The orchestrator decision is the RUN's -- `beginRun` resolved it into
+      // `run.orchestrator` from this same `options.mode` -- so the branch
+      // dispatches through the same seam a driver uses rather than re-reading
+      // the registry here. Two reads of the registry were two answers for one
+      // run, and the legacy's was the one nothing outside could reach.
+      if (run.orchestrator) {
+        yield* this.orchestratorFramesFor(run);
         return;
       }
+      const mod = modeModifierRegistry.get(requestedMode);
       if (!mod && !options?.conductorMode) {
         // Unknown mode 鈥?no registry entry and no conductor flag.
         yield {
@@ -5996,6 +6030,81 @@ export class duyaAgent implements AgentRuntime {
   }
 
   /**
+   * Plan 610 P5: the orchestrator frames for an ALREADY-ESTABLISHED run,
+   * reachable from outside this file.
+   *
+   * ## Why this is a seam and not the private generator it wraps
+   *
+   * `_dispatchOrchestratorMode` was already frame-independent -- MEASURED: it
+   * reads agent fields (`llmClient`, `activeMCPRegistry`, `sessionId`,
+   * `workingDirectory`, `blockedDomains`, `providerNameToInternalKey`,
+   * `widgetStyleHistory`), the resolved modifier, the prompt and the options,
+   * and NOTHING from `streamChat`'s closure. Private was therefore the only
+   * thing standing between it and a driver, and the cost of that was measured:
+   * `RunHandle.orchestrator` could REPORT that a run's mode was an
+   * orchestrator and the reader had no way to ACT on it, so the only correct
+   * driver behaviour was to refuse the turn and fail.
+   *
+   * ## Why it is NOT an `async *` method
+   *
+   * Because the refusal below has to happen when the driver CALLS it, not when
+   * it first iterates. An `async *` method body does not run until the first
+   * `next()`, so a throw inside one is invisible to a driver that constructs
+   * the stream and forwards it somewhere that never pulls from it -- which is
+   * the mute-stream failure this plan exists to prevent, one layer down. This
+   * method is therefore NOT a generator: it validates, then RETURNS the
+   * private generator, so `orchestratorFramesFor` either hands back a real
+   * stream or throws while the driver is still on the stack.
+   *
+   * ## What the frames are, and why the ENGINE has none of them
+   *
+   * The legacy's SSE vocabulary, unchanged: an orchestrator owns the whole
+   * stream (`ModeModifierOrchestrator.execute` yields `SSEEvent`), so this path
+   * is not a turn and produces nothing the engine's `ModelPort` /
+   * `ToolPort` / `TurnOutputPort` could consume. MEASURED on this commit
+   * `agent-runtime`'s `ports.ts` has no orchestrator member, and `ports.ts`
+   * forbids importing `@duya/ai`'s `SSEEvent` -- the renderer-facing half of
+   * that union (`tool_group_progress`, `agent_progress`, `mode_changed`,
+   * `goal_updated`) is exactly the vocabulary the engine is forbidden to carry.
+   * So the frames are ROUTED to the same consumer the legacy generator fed,
+   * and the engine leg is not offered this run at all. `selectRunDriverLeg`
+   * (`process/run-composition.ts`) is that routing, named once.
+   *
+   * ## One implementation, two callers
+   *
+   * `streamChat` calls THIS for its mode branch, exactly as it calls `beginRun`.
+   * Before this seam the generator resolved the mode from the registry a second
+   * time and called the private dispatcher, which meant the legacy path and any
+   * driver path could hold different answers for "which mode does this run
+   * dispatch" and both would typecheck.
+   *
+   * @throws if the run resolved no orchestrator. That is a caller error -- a
+   * driver that got `null` from `RunHandle.orchestrator` has an ordinary turn
+   * and must assemble it -- so it throws rather than yielding an empty stream,
+   * because an empty stream satisfies every "the mode produced no error" reading
+   * (see `turn-pipeline-producer.test.ts` on why a mute pipeline passes those).
+   */
+  orchestratorFramesFor(run: RunHandle): AsyncGenerator<SSEEvent, void, unknown> {
+    const mod = run.orchestrator;
+    if (!mod) {
+      throw new Error(
+        `orchestratorFramesFor: run requested mode "${run.requestedMode}", which resolved to no orchestrator; ` +
+          'this run is an ordinary turn and must be assembled, not dispatched',
+      );
+    }
+    // `run.controller`, NOT `this.abortController`: the handle's own controller
+    // is the run's cancellation source even after a later `beginRun` has taken
+    // the field, and it is the same object on the legacy path because
+    // `streamChat` dispatches through a handle its own `beginRun` returned.
+    return this._dispatchOrchestratorMode(
+      mod,
+      run.request.prompt,
+      run.request.options,
+      run.controller,
+    );
+  }
+
+  /**
    * Dispatch to an orchestrator-paradigm ModeModifier (plan 224 Phase 1.5+).
    *
    * Orchestrator modes (e.g. research) take over the entire stream with
@@ -6006,11 +6115,17 @@ export class duyaAgent implements AgentRuntime {
    * Tool registry construction is shared with the legacy path so that
    * plugin/MCP tools remain available to orchestrator modes that
    * choose to use them.
+   *
+   * Private because `orchestratorFramesFor` is the seam: it takes the mode from
+   * `RunHandle.orchestrator` and the controller from `RunHandle.controller`, so
+   * a caller cannot pair this dispatch with a different run's mode or abort
+   * source.
    */
   private async *_dispatchOrchestratorMode(
     mod: ModeModifier,
     prompt: string | MessageContent[],
-    options?: ChatOptions,
+    options: ChatOptions | undefined,
+    runController: AbortController,
   ): AsyncGenerator<SSEEvent, void, unknown> {
     const queryText = typeof prompt === 'string'
       ? prompt
@@ -6079,7 +6194,10 @@ export class duyaAgent implements AgentRuntime {
 
     const deps: OrchestratorDeps = {
       llmClient: this.llmClient,
-      abortController: this.abortController!,
+      // The run's OWN controller, handed in by the seam. The `this.abortController!`
+      // this replaces read a field a superseded run could have re-pointed, and
+      // asserted rather than checked that it was there.
+      abortController: runController,
       sessionId: this.sessionId,
       workingDirectory: this.workingDirectory,
       toolRegistry,
