@@ -85,7 +85,9 @@ import { fileURLToPath } from 'node:url';
  *    can be compared against a real `RunEngineImpl` on the same channel;
  *    `engine-control-command-proof` uses the legacy's reply as the EXPECTED
  *    value for the engine's; `engine-fork-metadata-proof` asserts the legacy
- *    resets a marker so a bound marker cannot reach a legacy turn. Migrating
+ *    resets a marker so a bound marker cannot reach a legacy turn;
+ *    `orchestrator-run-leg` drives the legacy so the orchestrator dispatch can
+ *    be compared against the driver route that has to replace it. Migrating
  *    any of them makes a parity test compare the engine with itself, which
  *    keeps the name and drops the claim.
  *
@@ -118,12 +120,21 @@ import { fileURLToPath } from 'node:url';
  *  - `packages/agent/tests/**` (55) and `model-leg.test.ts` (5): MIGRATABLE,
  *    row by row, each keeping its claim by re-pointing the harness at a real
  *    `RunEngineImpl` rather than at the generator.
+ *  - `orchestrator-run-leg` (1): NOT MIGRATABLE, and for a stronger reason than
+ *    the three above. Its legacy call is the EXPECTED side of a claim that the
+ *    orchestrator leg behaves the same through the driver route, and after the
+ *    flip the ONLY driver is the engine path -- so the comparison has to be
+ *    rewritten as "the driver route still dispatches what the legacy
+ *    dispatched", pinned on the orchestrator's OWN frames rather than on the
+ *    generator. Deleting the legacy arm instead would leave the file asserting
+ *    that a routing decision reproduces itself.
  */
 const EXPECTED: readonly (readonly [string, number, number])[] = [
-  // packages/agent/src/process -- 12, all two-sided comparisons.
+  // packages/agent/src/process -- 13, all two-sided comparisons.
   ['packages/agent/src/process/__tests__/engine-session-end-parity.test.ts', 8, 7],
   ['packages/agent/src/process/__tests__/engine-control-command-proof.test.ts', 10, 4],
   ['packages/agent/src/process/__tests__/engine-fork-metadata-proof.test.ts', 12, 1],
+  ['packages/agent/src/process/__tests__/orchestrator-run-leg.test.ts', 5, 1],
   // packages/agent/src/agent -- 5, on the legacy's own harness.
   ['packages/agent/src/agent/__tests__/model-leg.test.ts', 19, 5],
   // packages/agent/tests/unit -- 34.
@@ -142,7 +153,7 @@ const EXPECTED: readonly (readonly [string, number, number])[] = [
 ];
 
 /** Every test in the package, so the census is a proportion and not a total. */
-const PACKAGE_TEST_COUNT = 5067;
+const PACKAGE_TEST_COUNT = 5072;
 
 // ============================================================================
 // The census
@@ -333,15 +344,16 @@ describe('the measured driver surface the flip has to move', () => {
     }
   });
 
-  it('is 72 tests, which is the number the flip is sized against', () => {
+  it('is 73 tests, which is the number the flip is sized against', () => {
     // Stated on its own so a reader does not have to add the table up, and so a
     // silent change to the total is a red row rather than a diff a reviewer has
     // to notice. The sum is computed from the SAME table the row above pins, so
-    // the two cannot disagree.
+    // the two cannot disagree. It moved 72 -> 73 at plan 610 P5, by the one
+    // row above that is a legacy-vs-driver parity comparison.
     const total = EXPECTED.reduce((n, [, , driving]) => n + driving, 0);
-    expect(total).toBe(72);
+    expect(total).toBe(73);
     // And it is a small fraction of the package, which is the finding: the flip
-    // is not "rewrite the agent's tests", it is "move 72 of 5067".
+    // is not "rewrite the agent's tests", it is "move 73 of 5072".
     expect(total).toBeLessThan(PACKAGE_TEST_COUNT / 50);
   });
 

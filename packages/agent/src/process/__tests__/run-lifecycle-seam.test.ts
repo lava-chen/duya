@@ -352,8 +352,11 @@ describe('a run established through the public seam can assemble a turn', () => 
     // what `beginTurnAssembly` is then handed, so there is one resolution.
     expect(run.appliedProfile).toBeUndefined();
     expect(handle.turnContext).toBe(run.turnContext);
-    // Reported, never dispatched: the engine has no orchestrator concept, so a
-    // driver MUST be able to see this without the run having acted on it.
+    // Reported on the handle, and (since plan 610 P5) DISPATCHABLE through
+    // `orchestratorFramesFor`. Still `null` here: an ordinary run resolved no
+    // orchestrator, which is the only value that permits turn assembly. P5's
+    // proof that a non-null one really runs and is really routed is
+    // `orchestrator-run-leg.test.ts`; this row stays the ordinary half.
     expect(run.requestedMode).toBe('normal');
     expect(run.orchestrator).toBeNull();
 
