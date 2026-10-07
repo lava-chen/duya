@@ -36,7 +36,7 @@
 import { canonicalJson, sha256Hex } from './hash.js';
 import type { JsonValue } from './hash.js';
 import type { RunId, SessionId, ToolCallId, RequestId } from './primitives.js';
-import type { RunEpoch } from './replay.js';
+import { FIRST_EPOCH, type RunEpoch } from './replay.js';
 import type { RunBudget } from './primitives.js';
 
 // ── schema version ────────────────────────────────────────────────────────
@@ -457,4 +457,88 @@ export function nextFence(previous: readonly number[]): number {
  */
 export function isFenceCurrent(incoming: RunFence, highest: number): boolean {
   return incoming.token >= highest;
+}
+
+// ── the first attempt ─────────────────────────────────────────────────────
+
+/**
+ * What a run's durable state says about attempts that already exist.
+ *
+ * The shape is a QUESTION, not a value, and that is the whole point: a caller
+ * that cannot answer it has no first attempt to describe. `committed: false` is
+ * the one answer that licenses {@link firstAttemptFence}, and reaching it is a
+ * claim about durable storage that somebody had to go and check -- not a
+ * default.
+ */
+export type FirstAttemptState =
+  /** Nothing has ever been committed for this run. The store answers 0. */
+  | { readonly committed: false }
+  /**
+   * An earlier attempt exists, and this is the state it left behind. Carrying
+   * `committedFence` rather than a bare boolean is what lets the refusal name
+   * the attempt it is refusing to duplicate.
+   */
+  | { readonly committed: true; readonly committedFence: number };
+
+/**
+ * The fence for a run's FIRST attempt, minted from durable state rather than
+ * asserted by a caller.
+ *
+ * ## Why this is not `GROUND_FENCE` with a nicer name
+ *
+ * Every existing supplier of a first-attempt fence builds the value itself --
+ * `{ runId, runEpoch: FIRST_EPOCH, token: GROUND_FENCE.token }` -- from two
+ * exported constants. That is a fabrication in the precise sense the engine
+ * cares about: nothing checked that the run had no earlier attempt, so a
+ * RESUMED run handed to that code would be given epoch 1 at token 0 and its
+ * writes would be indistinguishable from the dead attempt's. A crash would
+ * then read as a duplicate dispatch rather than an unattributable one, which
+ * is the distinction `ToolSideEffectLedger` exists to preserve.
+ *
+ * So the value here is DERIVED from `state`, and the derivation refuses:
+ *
+ *  - `committed: false` -- the store holds no fence for this run, so there is
+ *    no earlier attempt to be stale against. `GROUND_FENCE` is then not a
+ *    guess: it is the floor the store itself reports, which is exactly what
+ *    `isFenceCurrent` compares a first write against, and the value
+ *    `nextFence` exceeds on the first recovery.
+ *  - `committed: true` -- an earlier attempt exists. There is NO honest
+ *    first-attempt fence to hand back, because this run is not on its first
+ *    attempt; the next fence belongs to whoever resumes it, and that is
+ *    `recoverRun`'s job because only it can see the committed checkpoint the
+ *    resume is over. So this REFUSES rather than returning a shape-valid
+ *    value.
+ *
+ * ## Why the Control Plane does not supply this instead
+ *
+ * `AttemptLeasePort` (`packages/agent-runtime/src/engine/ports.ts`) states the
+ * rule this function exists to honour: "Minting the fence anywhere else --
+ * including on the Control Plane and putting it in the manifest -- would be a
+ * second authority, and the one that matters is the one that refuses the
+ * write." A fence carried on `chat:start` would be minted by a party that
+ * cannot see the store, and the store is what refuses. So the minting stays
+ * next to the definition of what a fence is, and the Control Plane's only
+ * obligation is unchanged: it supplies the `runId`.
+ *
+ * ## Why the epoch is `FIRST_EPOCH` and not 0
+ *
+ * `RunEpoch` is a counter that starts at 1 (`FIRST_EPOCH`), and
+ * `encodeReplayCursor` refuses anything below it. A "ground epoch 0" would be
+ * unencodable, so a fence carrying one could never appear in a cursor and its
+ * attempt could never be told apart from another run's.
+ */
+export function firstAttemptFence(input: {
+  readonly runId: RunId;
+  readonly state: FirstAttemptState;
+}): RunFence {
+  if (input.state.committed) {
+    // Loud, and it names the attempt it is refusing to duplicate. Returning
+    // `GROUND_FENCE` here would hand a resumed run a fence indistinguishable
+    // from its dead predecessor's, which is the exact conflation that makes an
+    // unattributable effect look like a duplicate one.
+    throw new Error(
+      `refusing to mint a first-attempt fence for '${input.runId}': an earlier attempt already committed fence ${input.state.committedFence}, so this run is not on its first attempt and the next fence belongs to whoever resumes it`,
+    );
+  }
+  return { runId: input.runId, runEpoch: FIRST_EPOCH, token: GROUND_FENCE.token };
 }
