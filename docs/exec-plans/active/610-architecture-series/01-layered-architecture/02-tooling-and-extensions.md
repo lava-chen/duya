@@ -182,10 +182,16 @@ protocol  ←──── tooling  ←──── runtime
 
 ## 4. 门禁
 
+**编号用 `T` 前缀,不是 `G`。** `G` 前缀已经属于 `scripts/architecture/boundary-gates.mjs`
+的真实门禁(截至 2026-10-07 已实装到 G10),其中 **G7 = 「worker entry 不得到达轮次循环实现」**、
+**G8 = 「轮次循环归运行时执行包所有」**。本文原先把这三条也写成 G7/G8/G9,于是同一个号有两套含义 ——
+本项目已经因此在会话里被引用错过不止一次(「G7 转绿」说的是轮次循环那一条,与这里的 G7 无关)。
+**未实装的门禁不得占用已实装门禁的号。**
+
 | 门禁 | 检查 | 变异证明 |
 | --- | --- | --- |
-| G7 | `tooling` 不 import capabilities/connectors/memory | 在 tooling 加一条 `import from '@duya/capabilities'` |
-| G8 | registry 有装配期 `validate()` 且被真实装配路径调用 | 绕过 validate 直接装配 |
-| G9 | 没有单一 `register(plugin)` 万能方法 | 加一个 `register(any)` 方法 |
+| T1 | `tooling` 不 import capabilities/connectors/memory | 在 tooling 加一条 `import from '@duya/capabilities'` |
+| T2 | registry 有装配期 `validate()` 且被真实装配路径调用 | 绕过 validate 直接装配 |
+| T3 | 没有单一 `register(plugin)` 万能方法 | 加一个 `register(any)` 方法 |
 
-**G9 的检查方式**:统计 `ExtensionRegistry` 的 public 方法,若存在参数类型为 `any`/`unknown` 的注册方法则红。
+**T3 的检查方式**:统计 `ExtensionRegistry` 的 public 方法,若存在参数类型为 `any`/`unknown` 的注册方法则红。
