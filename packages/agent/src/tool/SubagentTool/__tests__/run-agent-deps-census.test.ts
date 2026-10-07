@@ -99,12 +99,77 @@ function callArguments(src: string, openParen: number): string {
 
 /** Strip string literals and comments so a factory name inside prose is not a hit. */
 function codeOnly(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ')
+  return stripComments(src)
     .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
     .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
     .replace(/`(?:[^`\\]|\\.)*`/g, '``');
+}
+
+/**
+ * Strip COMMENTS ONLY, leaving string literals byte-for-byte intact.
+ *
+ * This exists because {@link codeOnly} is unusable for any assertion whose
+ * subject IS a string literal. `codeOnly` rewrites every string to `''`, so a
+ * check for `import('../builtin.js')` is run against `import('')` and can never
+ * match.
+ *
+ * A regex-based comment stripper is NOT a fix. The common one spares `//`
+ * preceded by a colon, which protects `https`, but a RELATIVE specifier's `//`
+ * is preceded by `.`, not `:`, so
+ * `import { DuyaAgent } from '../agent/DuyaAgent.js'` loses everything from the
+ * `//` onward. That silently disarmed the *other* half of the same assertion.
+ * Both regexes below therefore had no teeth at all, on a file whose two import
+ * edges are the ones that closed the cycle.
+ *
+ * Hence the character scanner: it knows whether it is inside a line comment, a
+ * block comment, or a string literal, and only blanks the first two.
+ * `architecture:check` caught both edges regardless — it is slow and whole-repo,
+ * whereas this census is meant to be the fast local signal.
+ */
+function stripComments(src: string): string {
+  let out = '';
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    const ch = src[i]!;
+    const next = src[i + 1];
+    if (ch === '/' && next === '/') {
+      while (i < n && src[i] !== '\n') {
+        out += ' ';
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      while (i < n && !(src[i] === '*' && src[i + 1] === '/')) {
+        out += src[i] === '\n' ? '\n' : ' ';
+        i += 1;
+      }
+      out += '  ';
+      i += 2;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch;
+      out += ch;
+      i += 1;
+      while (i < n) {
+        if (src[i] === '\\') {
+          out += src[i] + (src[i + 1] ?? '');
+          i += 2;
+          continue;
+        }
+        out += src[i];
+        const closing = src[i] === quote;
+        i += 1;
+        if (closing) break;
+      }
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
 }
 
 /**
@@ -230,17 +295,66 @@ describe('plan 610 A5: sub-agent composition census', () => {
   });
 
   it('the cycle edges are absent from runAgent.ts', () => {
-    const src = codeOnly(fs.readFileSync(RUN_AGENT_FILE, 'utf8'));
+    // `stripComments`, NOT `codeOnly`: the specifier below is a string literal,
+    // and `codeOnly` rewrites strings to `''`, which silently disarms this
+    // whole assertion. See the note on `stripComments`.
+    const src = stripComments(fs.readFileSync(RUN_AGENT_FILE, 'utf8'));
     // A VALUE import of DuyaAgent re-closes runAgent -> DuyaAgent -> builtin
     // -> SubagentTool -> runAgent. `import type` is erased and is fine; the
     // inline `import { type X }` spelling is NOT erased, so it is rejected here.
+    // Case-insensitive so a rename to `DuyaAgent` cannot slip past; the `\b`
+    // boundaries keep it from matching an unrelated identifier.
     expect(
-      /import\s*\{[^}]*\bduyaAgent\b[^}]*\}\s*from/.test(src),
+      /import\s*\{[^}]*\bduyaAgent\b[^}]*\}\s*from/i.test(src),
       'runAgent.ts must not value-import DuyaAgent (use a whole-statement `import type`)',
     ).toBe(false);
     expect(
       /(?:import\s*\(|from\s*)['"][^'"]*builtin\.js['"]/.test(src),
       'runAgent.ts must not reference builtin.js; the registry factory is injected',
     ).toBe(false);
+  });
+
+  it('the cycle-edge regexes still match the shapes they claim to forbid', () => {
+    // Self-test for the assertion above. A guard that cannot fire is worse than
+    // no guard, because it reads as coverage. Each sample below is exactly one
+    // of the two cycle-closing edges; if the regexes stop matching them, this
+    // test goes red BEFORE the real code is allowed to drift.
+    const duyaAgentEdge = /import\s*\{[^}]*\bduyaAgent\b[^}]*\}\s*from/i;
+    const builtinEdge = /(?:import\s*\(|from\s*)['"][^'"]*builtin\.js['"]/;
+
+    const liveSamples = [
+      // The exported class is lower-camel `duyaAgent`; the guard is
+      // case-sensitive, so both spellings are asserted to be caught. Writing
+      // only `DuyaAgent` here is what a wrong-looking-but-passing sample looks
+      // like, and it is why the positive samples are explicit rather than
+      // generated from the source.
+      "import { duyaAgent } from '../agent/DuyaAgent.js';",
+      "import { DuyaAgent } from '../agent/DuyaAgent.js';",
+      "const r = await import('../builtin.js');",
+      "import { createBuiltinRegistry } from '../tool/builtin.js';",
+      "import { createBuiltinRegistry } from './builtin.js';",
+    ];
+    for (const sample of liveSamples) {
+      const stripped = stripComments(sample);
+      expect(
+        duyaAgentEdge.test(stripped) || builtinEdge.test(stripped),
+        `stripComments destroyed a live specifier: ${sample}`,
+      ).toBe(true);
+    }
+
+    // And the negative direction: the shapes that are ALLOWED must not match,
+    // so the guard is not simply matching everything.
+    const safeSamples = [
+      "import type { CreateSubAgent } from './deps.js';",
+      '// a comment mentioning builtin.js must not trip the guard',
+      '/* builtin.js in a block comment */',
+      "import { createSubAgent, createToolRegistry } from './deps.js';",
+    ];
+    for (const sample of safeSamples) {
+      expect(
+        duyaAgentEdge.test(stripComments(sample)) || builtinEdge.test(stripComments(sample)),
+        `stripComments left a false positive: ${sample}`,
+      ).toBe(false);
+    }
   });
 });
