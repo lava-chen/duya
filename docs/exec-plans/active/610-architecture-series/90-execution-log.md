@@ -794,3 +794,100 @@ worker 自己的红证据:同一测试在 `HEAD~2` 上 **6/6 全红**(4 × `agen
 必须先问「有没有第二道守卫在补偿它」。** 否则无法区分「被冗余守卫覆盖」与「根本没覆盖」。
 P1 的 fence token、`close()` 的身份检查、这次的 fork 标记,三次都是冗余双守。
 
+---
+
+## 2026-10-07 — P5:orchestrator 派发从生成器里搬出来,作为「走哪条腿」的**路由**落地
+
+先答一个必须先答的问题:**orchestrator 模式是第二个驱动,还是现有驱动里的一个分支?**
+**实测:是第二个驱动。** 一句话证据 —— `streamChat` 的模式分支
+`yield* this.orchestratorFramesFor(run); return;` 在 `beginTurnAssembly` **之前**返回,
+那一轮永远到不了 turn 装配,也就到不了 `while` 循环。
+`ModeModifierOrchestrator.execute` 自己也这么说:它拿 `llmClient` / `toolRegistry` /
+abort controller,「does NOT run through the agent tool loop」。
+**所以它不是「引擎 turn 的一个分支」,它是替换掉那个 turn 的另一个驱动。**
+
+### 阻塞点其实只有「private」
+
+P4 的结论说 orchestrator 派发不可达,理由是词汇问题(遗留 SSE)和
+`agent-runtime` 的 `ports.ts` 零 orchestrator 成员。**前半句量错了**:
+`_dispatchOrchestratorMode` 本来就与生成器帧无关 —— 实测它只读 agent 字段、
+解析出的 modifier、prompt 与 options,一样都不读 `streamChat` 的闭包局部。
+**唯一的障碍是它是 private。** 所以本片做的是搬运,不是翻译。
+
+`duyaAgent.orchestratorFramesFor(run)`:一个**非** `async *` 的方法,先校验再返回
+遗留的 async generator。**刻意不是 generator**:async generator 的函数体要到第一次
+`next()` 才执行,「返回一个空流」的驱动看不出任何异常 —— 正是本系列要防的那类静音。
+`@throws` 于 `run.orchestrator === null`,那属于调用错误(普通轮必须去装配)。
+`RunHandle` 多一个 `request`,派发从**它**读 prompt 与 options:参数由驱动再传一次
+就是第二轮输入的第二份账。
+
+`selectRunDriverLeg(agent, run)`(`process/run-composition.ts`)把这个决定**命名一次**:
+要么 `{kind:'orchestrator', frames}`,要么 `{kind:'engine'}` —— 没有第三个答案。
+是 union 而不是 boolean,因为要防的失败正是「boolean + 驱动忘了的那个分支」。
+
+遗留循环**调用**同一个 `orchestratorFramesFor`,所以模式解析只有一份
+(`beginRun` 的注册表读),编排器和引擎驱动不可能对同一轮给出不同的答案。
+`_dispatchOrchestratorMode` 的 `abortController` 从 `this.abortController!` 改成
+由 handle 传入 —— 那个 `!` 断言的是一个可能被后一轮 `beginRun` 改指的字段。
+
+### 为什么不给引擎一个 orchestrator 端口(方案 A 更差的实测理由)
+
+`ports.ts` 自己写着:它**禁止**引入 `@duya/ai` 的 `SSEEvent`,因为那个 union 的
+渲染器那一半(`tool_group_progress` / `agent_progress` / `mode_changed` /
+`goal_updated`)正是引擎不许携带的词汇。orchestrator 产出的**就是**这个 union,
+而且它按设计取代整个循环。给引擎加一个 orchestrator 端口,要么把渲染器词汇搬进引擎
+(它明文禁止),要么丢掉一部分帧。**两条都是静默失败。** 方案 (B) 把帧原样转给遗留
+生成器喂过的同一个消费者,行为逐帧不变。
+
+### 附带测出的一件事:**目前没有任何生产模式声明 `orchestrator`**
+
+`modes/index.ts` 注册 6 个模式,全部是 modifier 范式;`research-mode.ts` 的文件头
+自己写着「It does NOT take over the stream」。所以 `streamChat` 的 orchestrator 分支
+**在生产里当前不可达**。能力是真的(注册表 API 是 plan 224 的),分支是未执行的 ——
+这恰恰是路由不能交给每个驱动自行决定的理由。
+
+### 与 prompt-context 轨道生产者的关系:**可分离**
+
+orchestrator 派发读的是 agent 字段 + 模式 + prompt + options;它**从不**读
+`promptContexts`(实测)。轨道的生产者是另一类东西 —— hook context 经 `dispatchHooks`
+这个被 `yield*` 到达的闭包局部到达,skill/plugin/mention 是模块级。两者机制不同、
+根因不同(前者是「引擎没有帧汇」,后者是「合成消费不了一个 yield」),**共享的只有
+「都在序言里、都还没抬出生成器」这一层位置**。可以并行推进,不必合并。
+
+### 删掉遗留循环的那一版,现在**允许**假设什么
+
+1. **不能再假设「入口只命名一个驱动」。** orchestrator 轮今天走的就是
+   `agent.streamChat(` —— 方案 (B) 保留它。翻转之后入口仍然要保留这**一次**
+   `agent.streamChat(` 调用(当且仅当 `selectRunDriverLeg` 判为 orchestrator 时),
+   或者把同样的 `yield*` 留在原地。`live-turn-single-driver.test.ts` 里
+   `legacyDrivers + engineDrivers === 1` **必须保留** —— 它防的是「一个驱动都没有」,
+   而不是「遗留字样为零」。诚实表述是:**入口始终有一个驱动;翻转改变的是哪一类轮走哪一条腿。**
+2. **不能再假设删掉 `streamChat` 就等于删掉 orchestrator。** `_dispatchOrchestratorMode`
+   与它的产出词汇必须另有归属(`orchestratorFramesFor` 现在是那个归属),
+   否则被删掉的是一整个产品能力。
+3. **不能再假设 turn 装配对每一轮都可达。** 编排器轮明确不可达,而且这是**设计**,
+   不是缺陷。
+
+### 门禁与变异
+
+架构门禁 `1023/1023 tolerated, 0 new blocking`;G7 状态行 `G7 NEW`、计数行
+`known: 0   new: 1   stale: 0`(与 P4 相同,不是本片动的);
+`orchestrator-run-leg.test.ts` `5/5`;`packages/agent/src/process` 见下。
+
+worker 的红证据:同一测试在**只有测试、没有生产改动**的树上 `5/5 全红`
+(4 × `selectRunDriverLeg is not a function`,1 × `agent.orchestratorFramesFor is not a function`)。
+
+变异方向(**前面几片都没测过的**:路由决策本身):把 `selectRunDriverLeg` 的
+`if (run.orchestrator)` 改成 `if (false && run.orchestrator)` —— 也就是
+「拿到编排器轮却去装配 turn」这个本片要防的静默失败本身 ——
+**3 failed / 5 passed**,红的三个分属三个不同的 block
+(路由腿、abort 腿、遗留对拍腿),不是同一处断言的重复。
+剩下的两个(拒绝、引擎腿)按设计就该绿:它们不碰编排器腿。
+
+### 一个顺手被门禁抓住的账
+
+`legacy-driver-surface.test.ts` 红了 —— 它普查「哪些测试驱动遗留循环」,
+而本片的对拍块**真的**调了一次 `agent.streamChat(`。已按实测更新
+(新增一行 `[5, 1]`,72 → 73)。这不是放宽:普查的职责就是让驱动面不能静默漂移,
+而这一行正是翻转之后不能迁移的那一类。
+
