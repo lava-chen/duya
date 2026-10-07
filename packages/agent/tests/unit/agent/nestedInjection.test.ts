@@ -52,6 +52,14 @@ vi.mock('../../../src/ipc/db-client.js', () => ({
     markObserved: vi.fn(async () => ({})),
   },
   pluginDb: { list: vi.fn(async () => []) },
+  // The run driver settles through the agent's `Journal`, which imports
+  // `messageDb` at module load. `streamChat` never reached one.
+  messageDb: {
+    append: vi.fn(async (_sessionId: string, messages: unknown[]) => ({
+      success: true,
+      count: messages.length,
+    })),
+  },
 }));
 
 // --- Real nested-loader behind the manager mock -----------------------------
@@ -101,6 +109,12 @@ vi.mock('../../../src/agentsmd/index.js', () => ({
 import { duyaAgent } from '../../../src/agent/DuyaAgent.js';
 import { clearCommandQueue } from '../../../src/queue/index.js';
 import { ToolRegistry } from '../../../src/tool/registry.js';
+import {
+  cleanupEngineTurnDirs,
+  driveTurn,
+  installEngineTurnIpc,
+  restoreEngineTurnIpc,
+} from '../../helpers/engineTurnHarness.js';
 
 function makeRepo(): string {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-nested-wire-'));
@@ -111,12 +125,37 @@ function makeRepo(): string {
   return repo;
 }
 
+/**
+ * Drive one real turn through the run driver.
+ *
+ * `DuyaAgent.streamChat` no longer exists (plan 610 A3 / S4c-d3); the turn loop
+ * is `driveRunWithEngine`'s. The claim under test -- a `read` below cwd injects
+ * a one-shot nested-AGENTS.md reminder into the NEXT round, and a repeat read
+ * does not -- lives in the PostToolUse wiring, which the driver reaches through
+ * the same `beginTurnAssembly` the legacy did. `maxTurns` is raised because the
+ * injection only becomes visible on the round after the tool runs.
+ *
+ * The stub tool goes on the agent's own catalog rather than in
+ * `options.toolRegistry`: `_resolveTools` still reads that field to build the
+ * DECLARED surface, but the engine DISPATCHES through
+ * `composeLegacyRunPorts`' `lookup`, which is derived from
+ * `agent.activeMCPRegistry` (`run-composition.ts:716-727`). A tool advertised
+ * from one registry and dispatched out of the other is refused before it can run,
+ * which would leave this file proving nothing about nested memory.
+ */
 async function drainStream(agent: duyaAgent, prompt: string): Promise<void> {
-  for await (const _event of agent.streamChat(prompt, {
-    toolRegistry: registry,
-  } as never)) {
-    void _event;
-  }
+  agent.activeMCPRegistry.register(
+    { name: 'read', description: 'read stub', input_schema: {} },
+    {
+      execute: async (input: Record<string, unknown>) => ({
+        id: `result-${crypto.randomUUID()}`,
+        name: 'read',
+        result: `(stubbed contents of ${String(input.file_path)})`,
+      }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any,
+  );
+  await driveTurn(agent, prompt, { maxTurns: 4 });
 }
 
 const registry = new ToolRegistry();
@@ -133,15 +172,18 @@ registry.register(
 );
 
 describe('Plan 408b — nested AGENTS.md injection wiring', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     streamState.current = { responses: [] };
     streamState.callCount = 0;
     streamState.seenMessages = [];
     clearCommandQueue();
+    await installEngineTurnIpc();
   });
 
   afterEach(() => {
     clearCommandQueue();
+    restoreEngineTurnIpc();
+    cleanupEngineTurnDirs();
     vi.restoreAllMocks();
   });
 
@@ -177,6 +219,10 @@ describe('Plan 408b — nested AGENTS.md injection wiring', () => {
 
       await drainStream(agent, 'read the file');
 
+      // The turn really ran a tool and really took a second round, so the
+      // absence below is the injection and not a turn that stopped early.
+      expect(streamState.callCount).toBe(2);
+
       const round2 = streamState.seenMessages[1] as Array<{
         role: string;
         content: unknown;
@@ -191,7 +237,26 @@ describe('Plan 408b — nested AGENTS.md injection wiring', () => {
           m.content.includes('nested directory') &&
           m.content.includes('Use barrels sparingly.'),
       );
-      expect(injected).toBeDefined();
+      // KNOWN PRODUCTION DEFECT, not a harness artifact. This assertion was
+      // green against `streamChat` and is red against the run driver, and it is
+      // left red here on purpose rather than deleted or weakened.
+      //
+      // The nested-AGENTS.md injection had NO producer on the PostToolUse path
+      // the driver reaches. It lived inside `streamChat`'s tool-result block
+      // (deleted in `539b97f0`) as a `collectNestedMemory(triggerPaths)` call
+      // feeding `renderNestedMemoryBlock` into `applyHookInjection`. The
+      // vocabulary survives -- `agent/reminder-sources.ts:46` still names
+      // `nested_agents_md` and `agentsmd/manager.ts:279` still exposes the
+      // collector -- but `grep -r "collectNestedMemory" packages/agent/src`
+      // now matches only the loader itself and its manager, with no caller in
+      // the turn path. So a feature-flagged capability
+      // (`config/feature-flags.ts:29`, `duya_nested_agents_md`) is live and
+      // unwired.
+      //
+      // The fix is to lift that block onto the driver's tool-result seam the
+      // way plan 610 lifted `claimInterTurn` and `forkTurn`, which is
+      // production source and outside this migration's scope.
+      expect(injected, 'the nested AGENTS.md injection has no engine-path producer').toBeDefined();
       expect(injected?.metadata?.source).toBe('nested-agents-md');
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });

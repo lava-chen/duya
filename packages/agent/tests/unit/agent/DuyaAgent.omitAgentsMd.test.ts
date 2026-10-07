@@ -42,7 +42,11 @@ vi.mock('@duya/ai', async (importOriginal) => {
   };
 });
 
-// --- Mocked mailbox DB so DuyaAgent can be constructed without IPC ---------
+// --- Mocked DB so DuyaAgent can be constructed without IPC --------------------
+// `messageDb` is here because the run driver commits real rows through the
+// agent's `Journal`, which imports it at module load. Pre-flip these suites
+// never reached a Journal, so the stub carried only the two mailbox/plugin
+// tables `streamChat` claimed; the flip made the durable sink a participant.
 
 vi.mock('../../../src/ipc/db-client.js', () => ({
   mailboxDb: {
@@ -52,6 +56,12 @@ vi.mock('../../../src/ipc/db-client.js', () => ({
   },
   pluginDb: {
     list: vi.fn(async () => []),
+  },
+  messageDb: {
+    append: vi.fn(async (_sessionId: string, messages: unknown[]) => ({
+      success: true,
+      count: messages.length,
+    })),
   },
 }));
 
@@ -79,6 +89,12 @@ vi.mock('../../../src/agentsmd/index.js', () => ({
 import { duyaAgent } from '../../../src/agent/DuyaAgent.js';
 import type { MessageContent } from '../../../src/types.js';
 import { clearCommandQueue } from '../../../src/queue/index.js';
+import {
+  cleanupEngineTurnDirs,
+  driveTurn,
+  installEngineTurnIpc,
+  restoreEngineTurnIpc,
+} from '../../helpers/engineTurnHarness.js';
 
 const AGENTS_MD_MARKER = 'AGENTS_MD_MARKER_12345';
 
@@ -92,30 +108,38 @@ function newAgent(options: Record<string, unknown> = {}): duyaAgent {
   });
 }
 
+/**
+ * Drive one real turn through the run driver.
+ *
+ * `DuyaAgent.streamChat` no longer exists (plan 610 A3 / S4c-d3): the turn loop
+ * belongs to `driveRunWithEngine` and the agent is a set of ports beneath it.
+ * The claim under test is unchanged by that move -- it was always "what the
+ * PROVIDER was handed as its system prompt" -- so the assertion still reads the
+ * same capture off the same `@duya/ai` boundary, one layer further out.
+ */
 async function drainStream(
   agent: duyaAgent,
   prompt: string | MessageContent[],
-  options?: Parameters<duyaAgent['streamChat']>[1],
-): Promise<SSEEvent[]> {
-  const events: SSEEvent[] = [];
-  for await (const event of agent.streamChat(prompt, options)) {
-    events.push(event);
-  }
-  return events;
+  options?: Parameters<typeof driveTurn>[2],
+): Promise<void> {
+  await driveTurn(agent, prompt, options ?? {});
 }
 
 describe('Plan 408 Phase 5 — DuyaAgent omitAgentsMd', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     streamState.callCount = 0;
     streamState.seenMessages = [];
     streamState.seenTools = [];
     streamState.seenSystemPrompts = [];
     agentsMdState.currentText = AGENTS_MD_MARKER;
     clearCommandQueue();
+    await installEngineTurnIpc();
   });
 
   afterEach(() => {
     clearCommandQueue();
+    restoreEngineTurnIpc();
+    cleanupEngineTurnDirs();
     vi.restoreAllMocks();
   });
 
@@ -123,6 +147,9 @@ describe('Plan 408 Phase 5 — DuyaAgent omitAgentsMd', () => {
     const agent = newAgent();
     await drainStream(agent, 'hello');
 
+    // The turn really ran: without this a driver that never opened a request
+    // would satisfy the assertion below with an empty capture.
+    expect(streamState.callCount).toBeGreaterThan(0);
     const systemPrompt = streamState.seenSystemPrompts[0] ?? '';
     expect(systemPrompt).toContain(AGENTS_MD_MARKER);
   });
@@ -131,6 +158,9 @@ describe('Plan 408 Phase 5 — DuyaAgent omitAgentsMd', () => {
     const agent = newAgent({ omitAgentsMd: true });
     await drainStream(agent, 'hello');
 
+    // Same guard, for the same reason: a NEGATIVE assertion is satisfied by a
+    // turn that never issued a request, so the run is proved first.
+    expect(streamState.callCount).toBeGreaterThan(0);
     const systemPrompt = streamState.seenSystemPrompts[0] ?? '';
     expect(systemPrompt).not.toContain(AGENTS_MD_MARKER);
   });

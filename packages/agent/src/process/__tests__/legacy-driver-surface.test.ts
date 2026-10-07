@@ -149,12 +149,27 @@ import { fileURLToPath } from 'node:url';
  *    the frozen `DECLARED` literal, which is an absolute claim rather than the
  *    differential one it replaced.
  *
- * So the census is now 60 tests across 11 files, and `packages/agent/src/process`
- * holds ZERO drivers. The remaining surface is entirely
+ * So the census was 60 tests across 11 files, entirely
  * `packages/agent/src/agent/__tests__/model-leg.test.ts` plus
  * `packages/agent/tests/**` -- ordinary legacy-behaviour tests whose subject is
  * the product's behaviour rather than a driver, and which the map above already
  * called MIGRATABLE row by row.
+ *
+ * ## What the unit migration did: 60 -> 21
+ *
+ * Those seven files have now been re-pointed, each driving `driveRunWithEngine`
+ * instead of the generator. Two things are worth separating, because the table
+ * only records the first:
+ *
+ *  - The DRIVERS are gone -- that is what moves the census, and it is the row
+ *    count above. No test was deleted to achieve it.
+ *  - The cases that could NOT be re-pointed were left RED with the cause named
+ *    inline, not dropped. Re-pointing them is what surfaced that seven distinct
+ *    capabilities had no engine-path producer at all (the sent-at reminder, the
+ *    nested-AGENTS.md injection, the `[In reply to ...]` boundary, compaction
+ *    through the agent's own controller, mailbox/attachment projection, the
+ *    deferred follow-up, and the model-leg publisher). Each is a finding about
+ *    the flip, and a census row would have hidden every one of them.
  */
 const EXPECTED: readonly (readonly [string, number, number])[] = [
   // packages/agent/src/process -- 0.
@@ -166,15 +181,19 @@ const EXPECTED: readonly (readonly [string, number, number])[] = [
   // so the census row is gone because the legacy arm is gone, not because the
   // claim was. `git log` on the four files carries the conversions.
   //
-  // `packages/agent/src/agent -- 5, on the legacy's own harness.`
-  ['packages/agent/src/agent/__tests__/model-leg.test.ts', 19, 5],
-  // packages/agent/tests/unit -- 34.
-  ['packages/agent/tests/unit/agent/DuyaAgent.plan315.test.ts', 21, 17],
-  ['packages/agent/tests/unit/agent/turn-loop-product-behavior.test.ts', 8, 6],
-  ['packages/agent/tests/unit/agent/DuyaAgent.plan486.test.ts', 5, 5],
-  ['packages/agent/tests/unit/agent/DuyaAgent.omitAgentsMd.test.ts', 2, 2],
-  ['packages/agent/tests/unit/agent/DuyaAgent.thinking-replay.test.ts', 2, 2],
-  ['packages/agent/tests/unit/agent/nestedInjection.test.ts', 2, 2],
+  // `packages/agent/src/agent` and `packages/agent/tests/unit` -- 0.
+  //
+  // The seven rows the S4c-d3 census left are gone. Every one of them was
+  // marked MIGRATABLE in the map above, and each was migrated by RE-POINTING
+  // its harness at `driveRunWithEngine` -- the real driver -- rather than by
+  // deleting the case. That is why they leave the table: this census counts
+  // tests that DRIVE the legacy loop, and these no longer do. It says nothing
+  // about whether their assertions survived; the files themselves do, and the
+  // cases that could not be re-pointed are left RED with the cause named
+  // inline rather than dropped.
+  //
+  // What is left below is the integration/regression surface, which still
+  // names the driver and is untouched by this slice.
   // packages/agent/tests/integration -- 14.
   ['packages/agent/tests/integration/DuyaAgent.test.ts', 12, 7],
   ['packages/agent/tests/integration/RealTasks.test.ts', 13, 5],
@@ -375,18 +394,19 @@ describe('the measured driver surface the flip has to move', () => {
     }
   });
 
-  it('is 60 tests, which is the number the flip is sized against', () => {
+  it('is 21 tests, which is the number the flip is sized against', () => {
     // Stated on its own so a reader does not have to add the table up, and so a
     // silent change to the total is a red row rather than a diff a reviewer has
     // to notice. The sum is computed from the SAME table the row above pins, so
     // the two cannot disagree. It moved 72 -> 73 at plan 610 P5, by the one
-    // row above that is a legacy-vs-driver parity comparison, and then
-    // 73 -> 60 at plan 610 S4c-d3, which removed the last 13 drivers in
-    // `packages/agent/src/process` without removing a single test.
+    // row above that is a legacy-vs-driver parity comparison; 73 -> 60 at plan
+    // 610 S4c-d3, which removed the last 13 drivers in `packages/agent/src/process`
+    // without removing a single test; and 60 -> 21 when the seven unit files
+    // were re-pointed at the driver, which again removed no test.
     const total = EXPECTED.reduce((n, [, , driving]) => n + driving, 0);
-    expect(total).toBe(60);
+    expect(total).toBe(21);
     // And it is a small fraction of the package, which is the finding: the flip
-    // is not "rewrite the agent's tests", it is "move 60 of 5072".
+    // is not "rewrite the agent's tests", it is "move a few dozen".
     expect(total).toBeLessThan(PACKAGE_TEST_COUNT / 50);
   });
 

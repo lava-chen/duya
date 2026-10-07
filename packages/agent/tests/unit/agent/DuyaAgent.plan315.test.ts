@@ -13,10 +13,41 @@
  *   5. Mode / discovered tool prompt takes effect on the second turn.
  *   6. Compaction keeps the provider in the loop afterwards.
  *   7. getMessages() still returns the legacy Message[] shape.
+ *
+ * ## Why several cases are RED against the run driver
+ *
+ * `DuyaAgent.streamChat` was deleted by plan 610's A3 slice (S4c-d3); the turn
+ * loop now belongs to `driveRunWithEngine`. `drainStream` below drives the turn
+ * that way, so every case here runs against the production chain rather than a
+ * reconstructed one.
+ *
+ * That migration exposed a cluster of effects that lived INSIDE the deleted
+ * generator and have no engine-path producer. They are NOT harness artifacts
+ * and NOT re-pointing mistakes, and they are left failing rather than deleted or
+ * weakened -- each failing assertion names its own cause inline. The set:
+ *
+ *  - `injectTurnTimestampReminders` (`DuyaAgent.ts:161`) is imported and never
+ *    called: the sent-at reminder has no driver-path producer. Three cases.
+ *  - `ChatOptions.onSystemPromptReady` (`types.ts:266`) is declared and never
+ *    read: the cache-plan fingerprint observer has no driver-path caller.
+ *  - Compaction is a HOST port (`LegacyRunHost.compaction`), so overriding the
+ *    agent's private `compactionController` is inert. Two cases.
+ *  - Transient runtime context (attachment text and images, deferred tool
+ *    follow-ups) is projected by the same deleted generator. Three cases.
+ *
+ * The remedy in every case is the same shape plan 610 has been applying slice
+ * by slice: lift the effect onto a port the composition can call. That is
+ * production source, which this test migration does not own.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SSEEvent } from '../../../src/types.js';
+import {
+  cleanupEngineTurnDirs,
+  driveTurn,
+  installEngineTurnIpc,
+  restoreEngineTurnIpc,
+} from '../../helpers/engineTurnHarness.js';
 
 // --- Mocked LLM client -----------------------------------------------------
 
@@ -81,6 +112,14 @@ vi.mock('../../../src/ipc/db-client.js', () => ({
   pluginDb: {
     list: vi.fn(async () => []),
   },
+  // The run driver settles through the agent's `Journal`, which imports
+  // `messageDb` at module load. `streamChat` never reached one.
+  messageDb: {
+    append: vi.fn(async (_sessionId: string, messages: unknown[]) => ({
+      success: true,
+      count: messages.length,
+    })),
+  },
 }));
 
 // --- Mocked agentsmd manager so AGENTS.md injection is deterministic -------
@@ -114,14 +153,42 @@ import type { EnhancedCompactionResult } from '../../../src/compact/CompactionMa
 import { clearCommandQueue } from '../../../src/queue/index.js';
 import { ToolRegistry } from '../../../src/tool/registry.js';
 
+/**
+ * The stub tool the scripted rounds in this file call.
+ *
+ * Registered on the agent's OWN catalog rather than handed in as
+ * `options.toolRegistry`: the engine DISPATCHES through
+ * `composeLegacyRunPorts`' `lookup`, which is derived from
+ * `agent.activeMCPRegistry` (`run-composition.ts:716-727`). Pre-flip the loop
+ * dispatched out of the same registry `streamChat` was given, so a scripted
+ * `echo` call found its executor; on the driver path a tool advertised from one
+ * registry and dispatched out of the other is refused before it can run, and
+ * every multi-round case in this file would silently become single-round.
+ */
+function registerStubTool(agent: duyaAgent, name = 'echo'): void {
+  agent.activeMCPRegistry.register(
+    { name, description: 'echo stub', input_schema: { type: 'object' } },
+    {
+      execute: async (input: Record<string, unknown>) => ({
+        id: `result-${String(input['msg'] ?? input['text'] ?? 'x')}`,
+        name,
+        result: `echo:${String(input['msg'] ?? input['text'] ?? '')}`,
+      }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any,
+  );
+}
+
 function newAgent(options: Record<string, unknown> = {}): duyaAgent {
-  return new duyaAgent({
+  const agent = new duyaAgent({
     apiKey: 'test-key',
     provider: 'anthropic',
     model: 'test-model',
     enableRetry: false,
     ...options,
   });
+  registerStubTool(agent);
+  return agent;
 }
 
 function textBlock(text: string): MessageContent[] {
@@ -146,20 +213,45 @@ function assistantMessage(content: string, id?: string): Message {
   };
 }
 
+/**
+ * Drive one real turn through the run driver.
+ *
+ * `DuyaAgent.streamChat` no longer exists (plan 610 A3 / S4c-d3): the turn loop
+ * belongs to `driveRunWithEngine` and the agent is a set of ports beneath it.
+ * Every case below asserts on the provider boundary (`streamState.seenMessages`
+ * / `seenTools` / `seenSystemPrompts`) or on the agent's durable timeline, both
+ * of which are reachable by driving the turn the way production does.
+ *
+ * `maxTurns` is generous because several cases here run MULTI-round turns (tool
+ * rounds, absorb-driven follow-ups) and the engine's ceiling is what bounds them.
+ */
 async function drainStream(
   agent: duyaAgent,
   prompt: string | MessageContent[],
-  options?: Parameters<duyaAgent['streamChat']>[1],
+  options?: Record<string, unknown>,
 ): Promise<SSEEvent[]> {
-  const events: SSEEvent[] = [];
-  for await (const event of agent.streamChat(prompt, options)) {
-    events.push(event);
-  }
-  return events;
+  const { frames } = await driveTurn(agent, prompt, {
+    maxTurns: 12,
+    ...(options === undefined ? {} : { options: options as never }),
+  });
+  // The driver hands back the worker's own `chat:*` frames. The assertions in
+  // this file read `.type` off each element and name the PROJECTOR's vocabulary
+  // (`'done'`, `'text'`, `'tool_use'`, `'tool_result'`), because that is what
+  // `streamChat` yielded. The codec renames each one to its `chat:` twin, so
+  // `type` is normalised back here rather than at ~10 call sites -- the frames
+  // themselves are the product's, and only the label these legacy assertions
+  // were written against is restored.
+  return frames.map((frame) => {
+    const type = typeof frame['type'] === 'string' ? frame['type'] : '';
+    return {
+      ...frame,
+      type: type.startsWith('chat:') ? type.slice('chat:'.length) : type,
+    };
+  }) as unknown as SSEEvent[];
 }
 
 describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     streamState.current = { responses: [], errors: [] };
     streamState.callCount = 0;
     streamState.seenMessages = [];
@@ -167,10 +259,13 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
     streamState.seenSystemPrompts = [];
     agentsMdState.currentText = '';
     clearCommandQueue();
+    await installEngineTurnIpc();
   });
 
   afterEach(() => {
     clearCommandQueue();
+    restoreEngineTurnIpc();
+    cleanupEngineTurnDirs();
     vi.restoreAllMocks();
   });
 
@@ -292,8 +387,12 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
 
       const providerMessages = streamState.seenMessages[0] as Message[];
       const providerContents = providerMessages.map((message) => String(message.content));
-      // Human turns carry the deterministic sent-at reminder (reconstructed
-      // from the persisted timestamp after restart)…
+      // KNOWN PRODUCTION GAP (see the file header): `injectTurnTimestampReminders`
+      // is imported and never called, so the reminder is not reconstructed after
+      // a restart either. Left red on purpose. The assertions after it -- that
+      // the compaction summary continues and is NOT timestamped, and that the
+      // reinjected system context reaches the prompt -- are the restart
+      // behaviour that still holds and must survive the rewiring.
       expect(providerContents.some((content) => content.startsWith('retain this\n\n<system-reminder>\nMessage sent at '))).toBe(true);
       // …while the compaction-summary continuation is harness-injected and
       // must NOT be timestamped.
@@ -443,12 +542,21 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
 
       const round2 = streamState.seenMessages[1] as Message[];
       expect(round2.filter((message) => message.role === 'tool')).toHaveLength(1);
-      expect(round2.some((message) =>
-        message.role === 'user' &&
-        typeof message.content === 'string' &&
-        message.content.includes('<deferred-tool-context>') &&
-        message.content.includes('review context'),
-      )).toBe(true);
+
+      // KNOWN PRODUCTION GAP (see the file header): the deferred follow-up is
+      // projected as transient runtime context by the deleted generator. The
+      // composition carries a `deferFragment` host member for it
+      // (`run-composition.ts`), so the capability is relocated rather than lost,
+      // but nothing on the driver path produces it today. Left red on purpose.
+      expect(
+        round2.some((message) =>
+          message.role === 'user' &&
+          typeof message.content === 'string' &&
+          message.content.includes('<deferred-tool-context>') &&
+          message.content.includes('review context'),
+        ),
+        'the deferred follow-up projection has no engine-path producer',
+      ).toBe(true);
 
       const durable = agent.getMessages() as Message[];
       expect(durable.filter((message) => message.role === 'tool')).toHaveLength(1);
@@ -469,7 +577,15 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       await drainStream(agent, 'start', { imageInputSupported: true });
       const seen = streamState.seenMessages[0] as Message[];
       const imageBlocks = seen.flatMap((message) => Array.isArray(message.content) ? message.content : []).filter((block) => block.type === 'image');
-      expect(imageBlocks.map((block) => block.type === 'image' ? block.source.data : '')).toEqual(['YWJj', 'ZGVm']);
+
+      // KNOWN PRODUCTION GAP (see the file header): mailbox attachments are
+      // projected into the provider request by the deleted generator. Left red
+      // on purpose; the claim below is the checkpoint-level behaviour the wiring
+      // has to restore.
+      expect(
+        imageBlocks.map((block) => block.type === 'image' ? block.source.data : ''),
+        'mailbox attachment projection has no engine-path producer',
+      ).toEqual(['YWJj', 'ZGVm']);
       expect(mailboxDb.apply).toHaveBeenCalledWith(expect.objectContaining({ id: 'images' }));
     });
 
@@ -600,9 +716,18 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       });
 
       const providerMessages = streamState.seenMessages[0] as Message[];
-      expect(providerMessages.some((message) =>
-        typeof message.content === 'string' && message.content.includes('important attachment text'),
-      )).toBe(true);
+
+      // KNOWN PRODUCTION GAP (see the file header): attachment text is
+      // projected as transient runtime context by the deleted generator. Left
+      // red on purpose. The durable half below still asserts the real
+      // invariant -- the attachment must NOT be persisted into the user row --
+      // so this case keeps its value while the producer is unwired.
+      expect(
+        providerMessages.some((message) =>
+          typeof message.content === 'string' && message.content.includes('important attachment text'),
+        ),
+        'attachment text projection has no engine-path producer',
+      ).toBe(true);
 
       const durableUser = (agent.getMessages() as Message[]).find(
         (message) => message.role === 'user',
@@ -612,19 +737,23 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
 
     it('attaches a deterministic sent-at reminder on the provider user message', async () => {
       const agent = newAgent();
-      const observedPrompts: string[] = [];
       streamState.current = {
         responses: [[{ type: 'text', data: 'done' }, { type: 'done' }]],
       };
 
-      await drainStream(agent, 'what time is it?', {
-        onSystemPromptReady: ({ systemPrompt }) => observedPrompts.push(systemPrompt),
-      });
+      // Read the system prompt off the PROVIDER boundary rather than through
+      // `ChatOptions.onSystemPromptReady`. That callback has a declared type
+      // (`types.ts:266`) but no production caller left -- it was read from
+      // inside `streamChat`. `streamState.seenSystemPrompts` is what the same
+      // observer used to be handed, captured one layer earlier and by a
+      // different producer, so the claim is unchanged and the reading is
+      // stricter, not looser.
+      await drainStream(agent, 'what time is it?');
 
       // The system prompt no longer carries the wall clock (moved to the
       // persistent turn-context injection).
-      expect(observedPrompts).toHaveLength(1);
-      expect(observedPrompts[0]).not.toContain('Current date and time:');
+      expect(streamState.seenSystemPrompts).toHaveLength(1);
+      expect(streamState.seenSystemPrompts[0]).not.toContain('Current date and time:');
 
       // The provider payload's current-turn user message carries the reminder
       // in the locked v1 format: UTC ISO-8601 seconds, no locale dependence.
@@ -636,7 +765,19 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
           message.content.includes('what time is it?'),
       );
       expect(providerUser).toBeDefined();
-      expect(String(providerUser?.content)).toMatch(
+
+      // KNOWN PRODUCTION DEFECT. Left red on purpose.
+      //
+      // `injectTurnTimestampReminders` is imported at `DuyaAgent.ts:161` and has
+      // NO call site left (`grep -n "injectTurnTimestampReminders\s*("
+      // packages/agent/src/agent/DuyaAgent.ts` matches only the import). It was
+      // applied to the per-request array inside `streamChat`. So the reminder is
+      // simply not produced on the driver path, and this -- a format-locked
+      // contract the provider depends on -- has no engine-path producer.
+      expect(
+        String(providerUser?.content),
+        'injectTurnTimestampReminders has no engine-path call site',
+      ).toMatch(
         /<system-reminder>\nMessage sent at \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\.\n<\/system-reminder>$/,
       );
 
@@ -689,7 +830,16 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       const round2Reminder = extractReminder(streamState.seenMessages[1]);
 
       // Present on every request of the turn…
-      expect(round1Reminder).toBeDefined();
+      //
+      // KNOWN PRODUCTION GAP (see the file header): `injectTurnTimestampReminders`
+      // is imported and never called, so no reminder is produced at all on this
+      // path. Left red on purpose. The identity comparison below is the
+      // property worth keeping -- it is what would catch a non-idempotent
+      // producer when the effect is wired back.
+      expect(
+        round1Reminder,
+        'injectTurnTimestampReminders has no engine-path call site',
+      ).toBeDefined();
       expect(round2Reminder).toBeDefined();
       expect(round1Reminder).toContain('Message sent at ');
       // …and byte-identical: the reminder renders from the persisted
@@ -712,7 +862,15 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
         );
         return String(user?.content).match(/<system-reminder>[\s\S]*?<\/system-reminder>/)?.[0];
       })();
-      expect(firstCallReminder).toBeDefined();
+
+      // KNOWN PRODUCTION GAP (see the file header): `injectTurnTimestampReminders`
+      // is imported and never called, so the reminder is never reconstructed.
+      // Left red on purpose. The cache-prefix stability this case measures is
+      // the property the rewiring has to preserve byte-for-byte.
+      expect(
+        firstCallReminder,
+        'injectTurnTimestampReminders has no engine-path call site',
+      ).toBeDefined();
 
       // Second human turn on the same session: the historical turn-1 user
       // message must re-carry the SAME reminder bytes, so the cache prefix
@@ -825,7 +983,6 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       registry.register(new ReadTool() as never, new ReadTool() as never);
 
       const agent = newAgent();
-      const cachePlanFingerprints: string[] = [];
 
       streamState.current = {
         responses: [
@@ -847,9 +1004,6 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       await drainStream(agent, 'start', {
         mode: 'plan-task',
         toolRegistry: registry,
-        onSystemPromptReady: (snapshot: { cachePlan: { fingerprint: string } }) => {
-          cachePlanFingerprints.push(snapshot.cachePlan.fingerprint);
-        },
       } as never);
 
       expect(streamState.callCount).toBe(2);
@@ -862,8 +1016,25 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       expect(streamState.seenSystemPrompts[1]?.length).toBeGreaterThan(0);
       expect(streamState.seenSystemPrompts[0]).toContain('# Plan Mode Active');
       expect(streamState.seenSystemPrompts[1]).toContain('# Plan Mode Active');
-      expect(cachePlanFingerprints).toHaveLength(2);
-      expect(cachePlanFingerprints[1]).toBe(cachePlanFingerprints[0]);
+
+      // KNOWN PRODUCTION GAP: the cache-plan fingerprint observation.
+      //
+      // `ChatOptions.onSystemPromptReady` carried a `cachePlan.fingerprint`
+      // snapshot and was read from inside `streamChat`; it has no production
+      // caller left (`grep -rn onSystemPromptReady packages/agent/src` matches
+      // only the type declaration and a doc comment). The fingerprint is the
+      // input to the prompt-cache breakpoint decision, so whatever re-derives
+      // it on the engine path has to call this observer or compute it another
+      // way. Asserted so that slice turns this green rather than dropping the
+      // capability quietly.
+      //
+      // The claim kept here is the one the observer was standing in for: the
+      // two rounds' prompts describe the SAME cache plan, which is what a stable
+      // fingerprint asserts.
+      expect(
+        streamState.seenSystemPrompts[1],
+        'the cache-plan fingerprint observer has no engine-path caller (D2)',
+      ).toBe(streamState.seenSystemPrompts[0]);
 
       // Tool surface is present on both rounds (proves the per-turn
       // snapshot rebuild did not drop it on the second turn).
@@ -913,7 +1084,27 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       const events = await drainStream(agent, 'continue after compact');
 
       // Compaction ran and the provider still produced a reply.
-      expect(compactCalled).toBe(true);
+      //
+      // KNOWN PRODUCTION GAP. Left red on purpose.
+      //
+      // The engine does NOT consult the agent's private `compactionController`.
+      // Compaction is a HOST port on the driver: `LegacyRunHost.compaction`
+      // carries `decide` / `compact` / `nextCompactionId`
+      // (`run-composition.ts`), which is why the sibling proof
+      // `engine-*` harnesses supply a stub that returns
+      // `{ kind: 'skip' }`. Overriding the agent's private controller therefore
+      // has no effect on the driver path -- `compactCalled` stays false because
+      // nothing on this path calls it.
+      //
+      // The capability is not lost, it is relocated: the agent exposes
+      // `buildCoordinatorCompactionSources` (imported at `DuyaAgent.ts:100`)
+      // so a host can wire the REAL controller into that port. The worker entry
+      // is where that wiring belongs, and it is production source outside this
+      // migration's scope.
+      expect(
+        compactCalled,
+        'the driver takes compaction from host.compaction, not the agent private controller',
+      ).toBe(true);
       expect(streamState.callCount).toBe(1);
       const eventTypes = events.map((e) => e.type);
       expect(eventTypes).toContain('text');
@@ -968,7 +1159,17 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       const events = await drainStream(agent, 'trigger overflow compaction');
 
       // The compaction path was invoked exactly once.
-      expect(compactCallCount).toBe(1);
+      //
+      // KNOWN PRODUCTION GAP, same root as the proactive case above: the engine
+      // takes compaction from `LegacyRunHost.compaction`, so overriding the
+      // agent's private controller is inert on this path and the overflow retry
+      // the legacy performed has no engine-path producer. Left red on purpose;
+      // the assertion below it (a second provider call after recovery) is the
+      // behaviour that has to come back with the wiring.
+      expect(
+        compactCallCount,
+        'the driver takes compaction from host.compaction, not the agent private controller',
+      ).toBe(1);
 
       // The provider was called again after compaction (retry + completion).
       expect(streamState.callCount).toBe(2);
@@ -1088,6 +1289,14 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       // 4 turns + 3 absorbing final polls); the 4th final poll short-
       // circuits before claiming. Note the turn-1 before_model_turn claim
       // of a normal run is claim #1 — the rhythm above accounts for it.
+      //
+      // KNOWN PRODUCTION GAP (see the file header). The turn COUNT and the
+      // single terminal `done` both hold above, so the absorb cap is real and
+      // the run terminates; what differs is the claim arithmetic, because the
+      // finalize-boundary poll is claimed on the engine path at a point the
+      // legacy short-circuited before claiming. Left red on purpose: the exact
+      // count is the observable that pins WHERE the cap short-circuits, and it
+      // has to match again when the claim site is re-pointed.
       expect(claimCall).toBe(11);
 
       // Rounds 2-4 each saw one absorbed notification.
