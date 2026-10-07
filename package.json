@@ -28,6 +28,7 @@
     "bundle:agent": "npm run build:packages && node scripts/build-agent-bundle.mjs",
     "bundle:gateway": "node scripts/build-gateway-bundle.mjs",
     "build:cli-bundle": "node scripts/build-cli-bundle.mjs",
+    "build:chat-cli": "npm run bundle:agent",
     "rebuild:agent": "npm run bundle:agent",
     "preview": "vite preview",
     "preelectron:dev": "node scripts/ensure-sqlite-abi.mjs electron",

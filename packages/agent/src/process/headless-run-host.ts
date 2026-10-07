@@ -167,8 +167,25 @@ export interface HeadlessRunIntent {
   readonly permissionMode?: PermissionPolicyMode;
   /** The run's whole-turn ceiling, forwarded onto the executor's options. */
   readonly maxTurns?: number;
+}
+
+export interface HeadlessRunHostOptions {
+  readonly agent: HeadlessAgent;
   /**
    * The executor's tool registry, forwarded onto `streamChat`'s options.
+   *
+   * A PORT MEMBER, and that placement is load-bearing rather than stylistic.
+   * `RunStartInput.options` is canonical JSON — `runInputRevision` derives the
+   * run's revision digest from it, and `asJson` (`@duya/agent-protocol`) refuses
+   * any value whose prototype is not `Object.prototype`/`null`. A `ToolRegistry`
+   * is a class, so a registry carried there made `RunController.start` throw
+   * `... which has no canonical JSON form` before the run opened at all: `-t`
+   * and the REPL died at start while `--print` (which passes no registry)
+   * survived. This is the same rule plan 610 P9 applied when it moved the
+   * `ApprovalPort` off `RunStartInput.options`: a capability handle is not data.
+   *
+   * Per-HOST rather than per-run because the handle belongs to the executor the
+   * host owns, and a headless host builds one registry for its process.
    *
    * `unknown` rather than a registry type, and deliberately: this module sits in
    * the same package as `duyaAgent` and importing the registry's interface here
@@ -177,10 +194,6 @@ export interface HeadlessRunIntent {
    * executor is the only thing that reads it.
    */
   readonly toolRegistry?: unknown;
-}
-
-export interface HeadlessRunHostOptions {
-  readonly agent: HeadlessAgent;
   /**
    * Mint the run id, injected so a test can pin it and a host can prefix it
    * with its own authority. The default is a random UUID, which is the honest
@@ -255,8 +268,15 @@ export interface HeadlessRun {
  * This is the ONLY place the headless path touches the executor, and it does
  * three things: start the turn, forward each agent event as the frame the
  * worker would have sent, and report a stop as the interrupt it issued.
+ *
+ * `toolRegistry` is injected HERE, on the way to `streamChat`, and never
+ * through `input.options` — see `HeadlessRunHostOptions.toolRegistry` for why
+ * that boundary cannot carry it. `input.options` is still forwarded WHOLE
+ * (spread, not copied field by field), so anything else a caller legitimately
+ * puts there still reaches the executor; the registry is simply added on top,
+ * last, so the host's own handle is the one that arrives.
  */
-export function createAgentExecutionChannel(agent: HeadlessAgent): ExecutionChannel {
+export function createAgentExecutionChannel(agent: HeadlessAgent, toolRegistry?: unknown): ExecutionChannel {
   return {
     async start(
       manifest: RunManifest,
@@ -270,10 +290,11 @@ export function createAgentExecutionChannel(agent: HeadlessAgent): ExecutionChan
       // `isBudgetExhausted`'s own `isPositive` — forwarding `0` would stop a
       // healthy run after one turn.
       const maxTurns = manifest.budget.maxTurns;
-      const options: Readonly<Record<string, unknown>> =
-        typeof maxTurns === 'number' && Number.isFinite(maxTurns) && maxTurns > 0
-          ? { ...input.options, maxTurns }
-          : input.options;
+      const options: Readonly<Record<string, unknown>> = {
+        ...input.options,
+        ...(toolRegistry === undefined ? {} : { toolRegistry }),
+        ...(typeof maxTurns === 'number' && Number.isFinite(maxTurns) && maxTurns > 0 ? { maxTurns } : {}),
+      };
 
       // Pump the generator onto the sink. Deliberately NOT awaited: `start` must
       // return a handle so the caller can cancel, and awaiting the whole turn
@@ -431,7 +452,7 @@ export class HeadlessRunHost {
     this.#now = options.now ?? Date.now;
 
     this.#transport = new InProcessTransport({
-      channel: createAgentExecutionChannel(options.agent),
+      channel: createAgentExecutionChannel(options.agent, options.toolRegistry),
       // The probe is the runtime's OWN, asked of a host that supplies the facts
       // it cannot measure for itself. It reports `NO_RESUME` and
       // `deterministic: false` because that is what the runtime supports today,
@@ -547,7 +568,9 @@ export class HeadlessRunHost {
     const handle: RunHandle = await this.#controller.start(manifest, {
       prompt: intent.prompt,
       sessionId: intent.sessionId,
-      options: intent.toolRegistry === undefined ? {} : { toolRegistry: intent.toolRegistry },
+      // Canonical JSON only. The registry travels on the host, not here — see
+      // `HeadlessRunHostOptions.toolRegistry`.
+      options: {},
     });
     return this.#wrap(handle, manifest);
   }

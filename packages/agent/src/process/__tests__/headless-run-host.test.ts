@@ -26,6 +26,7 @@ import {
   type HeadlessAgent,
 } from '../headless-run-host.js';
 import { convertSSEToAgentMessage } from '../sse-frame-codec.js';
+import { ToolRegistry } from '../../tool/registry.js';
 
 /** One real multi-byte character, spelled as an escape so this file stays ASCII. */
 const CJK = '\u4e2d\u6587';
@@ -109,6 +110,31 @@ const INTENT = {
   providerId: 'test-provider',
   maxTurns: 8,
 } as const;
+
+/**
+ * The same double, but it RECORDS the options object the executor was handed.
+ *
+ * Asserting on `run.manifest` proves what the host said; asserting on this
+ * proves what the executor RECEIVED. Those are different facts, and the budget
+ * test above is the cautionary case — it asserted the manifest while its
+ * comment claimed to cover the executor's options.
+ */
+function capturingAgent(events: readonly { type: string; data?: unknown }[]): HeadlessAgent & {
+  readonly received: (Readonly<Record<string, unknown>> | undefined)[];
+} {
+  const received: (Readonly<Record<string, unknown>> | undefined)[] = [];
+  return {
+    received,
+    async *streamChat(
+      _prompt: string,
+      options?: Readonly<Record<string, unknown>>,
+    ): AsyncGenerator<{ type: string; data?: unknown }, void, unknown> {
+      received.push(options);
+      for (const event of events) yield event;
+    },
+    interrupt(): void {},
+  };
+}
 
 function host(agent: HeadlessAgent, runId: RunId = 'run-headless-1'): HeadlessRunHost {
   return createHeadlessRunHost({ agent, mintRunId: () => runId, now: () => 1_700_000_000_000 });
@@ -390,15 +416,103 @@ describe('H8.1 — cancel is the runtime path, not a second stop', () => {
   });
 
   it('routes the budget onto the executor options, not just the run layer', async () => {
-    const agent = scriptedAgent(TURN);
+    const agent = capturingAgent(TURN);
     const run = await host(agent).start({ ...INTENT, maxTurns: 3 });
     await collect(run);
 
     // A ceiling only the run layer checks is a receipt, not a budget: the run
     // layer learns a turn started when the frame comes BACK, which is after the
-    // model request went out. The options the executor received are the
-    // observable half of that claim.
+    // model request went out. The options the executor RECEIVED are the
+    // observable half of that claim — the manifest alone would pass even if the
+    // channel never forwarded the ceiling, which is exactly what this test
+    // asserted before it observed `capturingAgent`.
     expect(run.manifest.budget.maxTurns).toBe(3);
+    expect(agent.received[0]?.['maxTurns']).toBe(3);
+  });
+});
+
+/**
+ * The tool registry is a capability handle, and a capability handle is not data.
+ *
+ * `RunStartInput.options` is the run layer's canonical-JSON boundary:
+ * `runInputRevision` digests it, and `asJson` rejects any value whose prototype
+ * is not `Object.prototype`/`null`. A `ToolRegistry` is a class, so routing one
+ * through `options` made `RunController.start` THROW before the run opened —
+ * which is why `duya -t` and the REPL failed at start while `--print` (no
+ * registry) survived. These tests pin both halves of the fix: the run starts,
+ * and the registry still arrives AT THE EXECUTOR, by reference.
+ */
+describe('H8.1 — the tool registry reaches the executor without crossing the JSON boundary', () => {
+  it('starts a run at all when the host was given a real ToolRegistry', async () => {
+    // The regression itself. Before the fix `host(...).start(INTENT)` REJECTED
+    // with `options.toolRegistry is a ToolRegistry, which has no canonical JSON
+    // form`, so every other CLI mode died here.
+    const agent = capturingAgent(TURN);
+    const registry = new ToolRegistry();
+
+    const run = await createHeadlessRunHost({ agent, toolRegistry: registry }).start(INTENT);
+    const seen = await collect(run);
+
+    expect(seen.length).toBeGreaterThan(0);
+    expect((await run.terminal).status).toBe('completed');
+  });
+
+  it('delivers the registry to the executor BY REFERENCE, not a copy', async () => {
+    // Identity, not equality: the executor calls methods on this object
+    // (`agent-shell.ts` reads `options.toolRegistry` and uses it live), so a
+    // structural clone would be a different registry that happens to look alike.
+    const agent = capturingAgent(TURN);
+    const registry = new ToolRegistry();
+
+    const run = await createHeadlessRunHost({ agent, toolRegistry: registry }).start(INTENT);
+    await collect(run);
+
+    expect(agent.received[0]?.['toolRegistry']).toBe(registry);
+  });
+
+  it('keeps input.options canonical JSON — nothing non-serialisable crosses the boundary', async () => {
+    // The mechanism, asserted directly rather than only through "it did not
+    // throw": whatever the host passes as `options` must survive
+    // `runInputRevision`, which is what `RunController.start` computes.
+    const agent = capturingAgent(TURN);
+    const registry = new ToolRegistry();
+
+    const run = await createHeadlessRunHost({ agent, toolRegistry: registry }).start(INTENT);
+    const seen = await collect(run);
+
+    // `run.started` is the event the runtime emits only after the revision was
+    // derived successfully, so its presence is the receipt.
+    expect(seen.some((envelope) => envelope.payload.type === 'run.started')).toBe(true);
+  });
+
+  it('forwards the run layer options whole alongside the registry', async () => {
+    // Guards the P10 counter-pressure: moving the registry off `options` must
+    // not become "copy only the fields we know about". `maxTurns` and the
+    // registry both have to arrive, from two different sources.
+    const agent = capturingAgent(TURN);
+    const registry = new ToolRegistry();
+
+    const run = await createHeadlessRunHost({ agent, toolRegistry: registry }).start({
+      ...INTENT,
+      maxTurns: 4,
+    });
+    await collect(run);
+
+    const received = agent.received[0];
+    expect(received?.['maxTurns']).toBe(4);
+    expect(received?.['toolRegistry']).toBe(registry);
+  });
+
+  it('omits the registry entirely when the host has none', async () => {
+    // A host with no registry must not gain a `toolRegistry: undefined` key:
+    // that would be a key the executor's own option narrowing has to tolerate,
+    // bought for nothing.
+    const agent = capturingAgent(TURN);
+
+    const run = await host(agent).start(INTENT);
+    await collect(run);
+
+    expect(agent.received[0]).not.toHaveProperty('toolRegistry');
   });
 });
 
