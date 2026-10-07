@@ -89,6 +89,10 @@ import { convertSSEToAgentMessage } from './sse-frame-codec.js';
 // settled here rather than in this file, because those four cannot be separated
 // -- the drain is parked on a stream only the settle closes.
 import { driveRunWithEngine } from './engine-run-driver.js';
+// The inter-agent call registry is a leaf so `tool/MessageSessionTool` can
+// register a call without importing this entry. See the module for the cycle
+// this avoids.
+import { getPendingInteragentCall } from './pending-interagent-calls.js';
 // Plan 587 R2.1: the run id is the Control Plane's when it sent one, and minted
 // here only for the producers that have not migrated. `streamChat` resolved it
 // for itself; the driver cannot, so the resolution moves to the one caller that
@@ -927,32 +931,9 @@ const pendingIpcRequests = new Map<string, {
   timeoutHandle?: ReturnType<typeof setTimeout>;
 }>();
 
-// Pending inter-agent call registry.
-// Architecture: the caller worker sends `interagent:invoke` via process.send,
-// the server routes it to a target worker, and forwards the target's chat:*
-// events back to the caller as `interagent:event` commands. The caller
-// buffers events here (keyed by invoke id) and resolves the tool promise
-// on `chat:done` / `chat:error`.
-export interface PendingInteragentCall {
-  events: import('./worker-protocol.js').WorkerEvent[];
-  resolveDone: (event: import('./worker-protocol.js').WorkerEvent) => void;
-  resolveError: (event: import('./worker-protocol.js').WorkerEvent) => void;
-  timer: ReturnType<typeof setTimeout>;
-}
-
-const pendingInteragentCalls = new Map<string, PendingInteragentCall>();
-
-export function registerPendingInteragentCall(id: string, call: PendingInteragentCall): void {
-  pendingInteragentCalls.set(id, call);
-}
-
-export function unregisterPendingInteragentCall(id: string): void {
-  pendingInteragentCalls.delete(id);
-}
-
-export function getPendingInteragentCall(id: string): PendingInteragentCall | undefined {
-  return pendingInteragentCalls.get(id);
-}
+// Pending inter-agent call registry lives in its own leaf module
+// (`./pending-interagent-calls.js`), because the tool that registers a call
+// must not have to import this entry to reach it.
 
 // Helper: IPC request for conductor executor.
 //
@@ -4774,7 +4755,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
 
         case 'interagent:event': {
           const eventMsg = msg as unknown as { type: 'interagent:event'; id: string; event: import('./worker-protocol.js').WorkerEvent };
-          const call = pendingInteragentCalls.get(eventMsg.id);
+          const call = getPendingInteragentCall(eventMsg.id);
           if (!call) {
             // Stale event after cleanup — safe to ignore
             break;
