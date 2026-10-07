@@ -476,7 +476,7 @@ async function runInteractive(
   // controller is stateless between runs, so this is a composition rather than
   // a per-turn object, and building it per turn would be a second place for the
   // run wiring to live.
-  const host: HeadlessRunHost = createHeadlessRunHost({ agent });
+  const host: HeadlessRunHost = createHeadlessRunHost({ agent, toolRegistry: registry });
 
   // Track messages for persistence
   let pendingUserMessage: { id: string; content: string } | null = null;
@@ -575,7 +575,6 @@ async function runInteractive(
           cwd: workspace,
           model: model || '',
           providerId: 'cli',
-          toolRegistry: registry,
         });
         await handleStreamEvents(agent, run.frames(), sessionLogger, sessionId, pendingUserMessage.id);
       } catch (error) {
@@ -609,7 +608,7 @@ async function runTask(
   registry: ToolRegistry,
   task: string,
   sessionLogger: SessionLogger,
-  runHost: HeadlessRunHost = createHeadlessRunHost({ agent })
+  runHost: HeadlessRunHost = createHeadlessRunHost({ agent, toolRegistry: registry })
 ): Promise<void> {
   console.log(`${Colors.BRIGHT_CYAN}Executing task...${Colors.RESET}\n`);
 
@@ -623,7 +622,6 @@ async function runTask(
       cwd: process.cwd(),
       model: '',
       providerId: 'cli',
-      toolRegistry: registry,
     });
     await handleStreamEvents(agent, run.frames(), sessionLogger, '', '');
   } catch (error) {

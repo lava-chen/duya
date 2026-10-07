@@ -4,6 +4,27 @@ import path from 'path';
 
 const outdir = path.join('packages', 'agent', 'bundle');
 const outfile = path.join(outdir, 'agent-process-entry.js');
+// The duya CHAT CLI (`duya -t` / `--print` / the REPL), from the same package
+// and against the same runtime, as a second entry in THIS directory.
+//
+// It lives here rather than in a directory of its own for two reasons, both
+// measured. First, `outdir` is wiped on line 13, so a chat CLI bundle in a
+// sibling directory would be deleted by every later `npm run bundle:agent`.
+// Second — and the reason this is a build constraint rather than a style
+// choice — every architecture gate under `scripts/architecture/` skips
+// directories whose NAME is exactly `bundle` (`boundary-gates.mjs:37`,
+// `audit-modules.mjs:27`, `audit-imports.mjs:28-31`). A `bundle-cli/`
+// directory is not skipped, so its ~12 MB of generated JavaScript was scanned
+// as first-party source and reported as a new `module-dependency` violation.
+// `scripts/architecture/**` is not ours to edit, and re-recording the baseline
+// to absorb generated output would be a fake green. Emitting into the
+// existing `bundle/` directory keeps generated output out of the gate's
+// source scan by construction.
+//
+// Why this entry needs bundling at all, and why the same two facts defeat a
+// "make the dist node-loadable" fix, is documented in AGENTS.md under
+// "Agent CLI (standalone)".
+const chatCliOutfile = path.join(outdir, 'cli-entry.js');
 // The BashTool worker is a separate emitted file, not a module of `outfile`.
 // Declared once here so the build step and the log below cannot drift onto
 // different paths — the same reason the gate reads this path from one place.
@@ -38,6 +59,40 @@ await build({
     // workflow scripts. esbuild's JS API resolves its platform binary via a
     // relative path, so bundling it breaks — keep it external (loadEsbuild
     // already degrades gracefully to DwfCompileError when require fails).
+    'esbuild',
+    'chromium-bidi/lib/cjs/bidiMapper/BidiMapper',
+    'chromium-bidi/lib/cjs/cdp/CdpConnection',
+  ],
+  banner: {
+    js: importMetaUrlPolyfill,
+  },
+  define: {
+    'import.meta.url': 'import_meta_url',
+  },
+});
+
+// The duya CHAT CLI — a THIRD esbuild entry, and the reason `bundle:agent` is
+// also how you get a runnable `duya -t` / `--print` / REPL.
+//
+// Same externals and same polyfill as the worker entry above, deliberately:
+// they are the same package and the same runtime, and a chat CLI that resolved
+// `better-sqlite3` differently from the worker would be a second answer to one
+// question. NOT minified, unlike the other two — this artifact is what a human
+// runs and reports a stack trace from, and the agent worker is never read by a
+// person.
+await build({
+  entryPoints: ['packages/agent/src/cli/index.ts'],
+  outfile: chatCliOutfile,
+  bundle: true,
+  platform: 'node',
+  target: 'node18',
+  format: 'cjs',
+  sourcemap: false,
+  minify: false,
+  external: [
+    'better-sqlite3',
+    'fsevents',
+    'playwright',
     'esbuild',
     'chromium-bidi/lib/cjs/bidiMapper/BidiMapper',
     'chromium-bidi/lib/cjs/cdp/CdpConnection',
@@ -125,9 +180,15 @@ console.log(`[build-agent-bundle] Copied prompt assets to ${promptsAssetsOut}`);
 // and the electron-builder extraResources copy both look for
 // `packages/cli/bundle/cli.cjs` (production: `resources/cli-bundle/cli.cjs`).
 // See `scripts/build-cli-bundle.mjs`.
+// That is the DESKTOP CONTROL PLANE. The chat CLI built above
+// (`bundle/cli-entry.js`) is a different program with different commands —
+// `-t`, `--print`, the REPL — and it is not what that path looks for.
 
 const stats = fs.statSync(outfile);
 console.log(`[build-agent-bundle] Built ${outfile} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
 const workerStats = fs.statSync(workerOutfile);
 console.log(`[build-agent-bundle] Built ${workerOutfile} (${(workerStats.size / 1024).toFixed(2)} KB)`);
+const chatCliStats = fs.statSync(chatCliOutfile);
+console.log(`[build-agent-bundle] Built ${chatCliOutfile} (${(chatCliStats.size / 1024 / 1024).toFixed(2)} MB)`);
+console.log(`[build-agent-bundle] Run the chat CLI: node ${chatCliOutfile} --help`);
 console.log(`[build-agent-bundle] Created package.json with type: commonjs`);
