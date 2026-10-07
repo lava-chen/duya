@@ -35,6 +35,7 @@ import {
   type UpdateProjectInput,
 } from '../db/core/projectService';
 import type { ProjectPathEntry, ProjectRow } from '../db/core/project-store';
+import { getDb as getMemoryStateDb } from '../memory-state/db';
 import { getLogger, LogComponent } from '../logging/logger';
 
 /** Row shape sent over the wire: same as DB row but with `paths` already parsed. */
@@ -356,7 +357,12 @@ export function registerProjectEntityHandlers(): void {
       return { success: false, error: 'Invalid projectId: must be a non-empty string' };
     }
     try {
-      const deleted = deleteProject(rawProjectId);
+      // `memoryDb` is passed as a RESOLVER, not a handle: `getDb()` throws
+      // when the memory-state DB was never bootstrapped, and the service must
+      // only reach for it once it knows the project exists. Resolving here
+      // would move that failure ahead of the existence check and turn a
+      // no-op delete into a reported failure.
+      const deleted = deleteProject(rawProjectId, { memoryDb: () => getMemoryStateDb() });
       return { success: true, deleted };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
