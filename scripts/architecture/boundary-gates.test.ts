@@ -22,13 +22,16 @@
  *
  * ## The fixtures are synthetic on purpose
  *
- * The negative cases run against temp files, not the live tree. Two reasons:
- * the live tree is shared and under active modification by other agents, and a
- * test that mutates the real source to prove a gate works would race them. The
- * exception is the one place where the live tree IS the subject — the
- * `reports the real known defects` block below — which asserts the gates are
- * currently RED and says why. That block is the load-bearing one: it is what
- * stops these gates from being quietly satisfied by a tree that drifted.
+ * The negative cases run against planted fixtures, not the live tree. Two
+ * reasons: the live tree is shared and under active modification by other
+ * agents, and a test that mutates the real source to prove a gate works would
+ * race them. A live-tree assertion is therefore only ever paired with a
+ * CONTROL — a planted fixture carrying the violation, or the real file on the
+ * other side of the verdict — so an empty live result can never be confused
+ * with a gate that stopped matching. That is the load-bearing discipline: the
+ * `the gates pin the CURRENT live state` block below measures the repository
+ * as it stands, and every one of its lines proves its detector works before it
+ * asserts what that detector currently says.
  */
 
 import { describe, expect, it, afterAll } from 'vitest';
@@ -132,6 +135,37 @@ function withRepoFixtures(files: Record<string, string>, body: (dir: string) => 
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
+
+/**
+ * A turn cycle in the shape the detector recognises: one loop body carrying two
+ * driven streams, the model leg and the tool leg.
+ *
+ * It is PLANTED, never borrowed from the live tree. `DuyaAgent.ts` used to hold
+ * a real one and several tests below borrowed it, which made every one of them a
+ * statement about the repository's CURRENT state rather than about the
+ * detector. When the legacy loop was deleted — the work the whole series is for
+ * — the detector correctly stopped finding it and those tests went red for
+ * having been right. A self-test must not be a second copy of the gate's
+ * output: the day the gate turns green, the tests that assert it is red are the
+ * ones that break.
+ *
+ * Named `legacyLoop` and living in its own module under its own directory,
+ * which is what the detector has to notice anyway.
+ */
+const PLANTED_LOOP = [
+  'export async function* legacyLoop(tools) {',
+  '  let keepGoing = true;',
+  '  while (keepGoing) {',
+  '    for await (const event of tools.modelStream([])) {',
+  '      yield event;',
+  '    }',
+  '    for await (const outcome of tools.dispatch([])) {',
+  '      keepGoing = outcome;',
+  '    }',
+  '  }',
+  '}',
+  '',
+].join('\n');
 
 // ---------------------------------------------------------------------------
 
@@ -437,13 +471,19 @@ describe('G7 — the worker entry cannot reach the loop through an adapter', () 
   // loop is still the old one in the old package. The first assertion below is
   // the load-bearing one — it proves the name gate really does miss this — and
   // the second proves reachability does not.
+  //
+  // The loop is `PLANTED_LOOP` from the top of this file, not the real
+  // `DuyaAgent` — see its docstring for why. `ADAPTER` is the bypass shape:
+  // entry -> adapter -> a loop in a differently named module under a
+  // differently named directory.
   const ADAPTER = {
     'entry.ts': ["import { legacyLoop } from './adapter.js';", 'export const start = () => legacyLoop;', ''].join('\n'),
     'adapter.ts': [
       '/** Re-exported under a different identifier, which is the whole trick. */',
-      "export { duyaAgent as legacyLoop } from '../../packages/agent/src/agent/DuyaAgent.js';",
+      "export { legacyLoop } from './legacy-pkg/loop-owner.js';",
       '',
     ].join('\n'),
+    'legacy-pkg/loop-owner.ts': PLANTED_LOOP,
   };
 
   it('the name gate misses the adapter — this is why a name gate is not enough', () => {
@@ -458,14 +498,14 @@ describe('G7 — the worker entry cannot reach the loop through an adapter', () 
 
   it('catches the loop behind a ONE-hop adapter', () => {
     withRepoFixtures(ADAPTER, () => {
-      // `ADAPTER` re-exports the real loop from a differently named module, and
-      // that module lives in a different package, so the specifier resolves
-      // through `resolveRepoSpecifier` and the finding is real.
+      // `ADAPTER` re-exports a PLANTED loop from a differently named module,
+      // and that module lives in a different directory, so the specifier
+      // resolves through `resolveRepoSpecifier` and the finding is real.
       const findings = findWorkerLoopReach('fixtures/boundary-gates/entry.ts', undefined, 2);
-      expect(findings.map((f) => f.file)).toContain('packages/agent/src/agent/DuyaAgent.ts');
+      expect(findings.map((f) => f.file)).toContain('fixtures/boundary-gates/legacy-pkg/loop-owner.ts');
       // The finding names the step the bypass arrived through, so the next
       // slice does not have to re-derive which hop to cut.
-      expect(findings.find((f) => f.file.endsWith('DuyaAgent.ts'))?.via).toBe('fixtures/boundary-gates/adapter.ts');
+      expect(findings.find((f) => f.file.endsWith('loop-owner.ts'))?.via).toBe('fixtures/boundary-gates/adapter.ts');
     });
   });
 
@@ -474,12 +514,21 @@ describe('G7 — the worker entry cannot reach the loop through an adapter', () 
     // assertion rather than an emptiness one: the SAME fixture above is
     // reported at depth 2, so a green here means the depth bound did the
     // filtering, not that the scan failed to look.
+    //
+    // The far end of the fixture is the PLANTED loop in `legacy-pkg/`, not
+    // the real `DuyaAgent.ts` — for the same reason `ADAPTER` carries its own
+    // loop. A depth-8 walk over the live entry now finds nothing anywhere, so
+    // pinning `DuyaAgent.ts` here would be pinning the empty set twice and
+    // saying nothing about the bound.
     withRepoFixtures(ADAPTER, () => {
       const entry = 'fixtures/boundary-gates/entry.ts';
       const deep = findWorkerLoopReach(entry, undefined, 8);
       const bounded = findWorkerLoopReach(entry, undefined, 1);
-      expect(deep.map((f) => f.file)).toContain('packages/agent/src/agent/DuyaAgent.ts');
-      expect(bounded.map((f) => f.file)).not.toContain('packages/agent/src/agent/DuyaAgent.ts');
+      expect(deep.map((f) => f.file)).toContain('fixtures/boundary-gates/legacy-pkg/loop-owner.ts');
+      expect(bounded.map((f) => f.file)).not.toContain('fixtures/boundary-gates/legacy-pkg/loop-owner.ts');
+      // Both ends are the fixture, so the only thing that differs between the
+      // two scans is the depth argument.
+      expect(deep.length).toBeGreaterThan(0);
     });
   });
 
@@ -489,11 +538,12 @@ describe('G7 — the worker entry cannot reach the loop through an adapter', () 
     // this fixture is entry -> loop with nothing in between.
     withRepoFixtures(
       {
-        'direct.ts': ["import { driveTurns } from '../../packages/agent/src/agent/DuyaAgent.js';", 'export const go = driveTurns;', ''].join('\n'),
+        'direct.ts': ["import { legacyLoop } from './loop-owner.js';", 'export const go = legacyLoop;', ''].join('\n'),
+        'loop-owner.ts': PLANTED_LOOP,
       },
       () => {
         const findings = findWorkerLoopReach('fixtures/boundary-gates/direct.ts');
-        expect(findings.map((f) => f.file)).toContain('packages/agent/src/agent/DuyaAgent.ts');
+        expect(findings.map((f) => f.file)).toContain('fixtures/boundary-gates/loop-owner.ts');
         expect(findings[0]?.via).toBe('fixtures/boundary-gates/direct.ts');
       },
     );
@@ -546,13 +596,35 @@ describe('G7 — the worker entry cannot reach the loop through an adapter', () 
     expect(findWorkerLoopReach().map((f) => f.file)).not.toContain(entryRel);
   });
 
-  it('reports the live worker as reaching the real loop within one hop', () => {
+  it('reports NO live loop reachable from the worker entry — the legacy cycle is GONE', () => {
+    // INVERTED, deliberately. This used to assert that the live entry reaches
+    // the real loop in `packages/agent/src/agent/DuyaAgent.ts` within one hop,
+    // i.e. it asserted the debt was still outstanding. Plan 610 deleted that
+    // cycle, so the debt is paid and the only true statement left is the empty
+    // one. It is still a real guard and not a deleted test: reintroduce a
+    // loop anywhere in the entry's depth-<=1 closure and this goes red, which
+    // is exactly what a boundary gate is for.
+    //
+    // The control is what keeps it from reading as green for the wrong reason.
+    // `expect(findWorkerLoopReach()).toEqual([])` also passes if the scan
+    // silently stopped working, so the same call is exercised against a planted
+    // loop the planted entry reaches at depth 1 first.
+    withRepoFixtures(
+      {
+        'probe-entry.ts': ["import { legacyLoop } from './probe-loop.js';", 'export const go = legacyLoop;', ''].join('\n'),
+        'probe-loop.ts': PLANTED_LOOP,
+      },
+      () => {
+        expect(
+          findWorkerLoopReach('fixtures/boundary-gates/probe-entry.ts').map((f) => f.file),
+        ).toEqual(['fixtures/boundary-gates/probe-loop.ts']);
+      },
+    );
+
     const findings = findWorkerLoopReach();
-    expect(findings.map((f) => f.file)).toContain('packages/agent/src/agent/DuyaAgent.ts');
-    // The live bypass is the entry's own import, so the named hop is the entry.
-    // Asserting the hop rather than a line number keeps this true when an
-    // unrelated edit shifts the import down a line.
-    expect(findings.find((f) => f.file.endsWith('DuyaAgent.ts'))?.via).toBe('packages/agent/src/process/agent-process-entry.ts');
+    // Named rather than `toEqual([])` so a failure says WHICH module reached
+    // the loop and through which import, instead of printing an empty array.
+    expect(findings.map((f) => `${f.file} via ${f.via}`)).toEqual([]);
   });
 
   it('an entry that reaches no loop reports nothing', () => {
@@ -670,17 +742,39 @@ describe('G7/G8 — the loop is located by SHAPE, and the shape contains no name
   });
 
   it('cannot be silenced by deleting the model-leg markers — the hole this closed', () => {
-    // The exact mutation, measured against the real file, that made G7 go green
-    // with all 1476 lines of the cycle still in place. The model leg at
-    // `DuyaAgent.ts:95` and `:2454` is already dead code — no live caller passes
-    // `modelLegs` — so removing those two identifiers was free, and it used to
-    // be enough to clear the gate.
-    const src = stripComments(
-      fs.readFileSync(path.join(REPO_ROOT, 'packages/agent/src/agent/DuyaAgent.ts'), 'utf8'),
-    ).text;
-    expect(isTurnLoopModule(src)).toBe(true);
+    // The mutation, not the file, is what this is about. Deleting the model-leg
+    // identifiers used to flip `isTurnLoopModule` to false with the cycle still
+    // in place, and it was found against the real 1476-line `DuyaAgent.ts`.
+    //
+    // That file no longer contains a cycle — deleting it is the point of plan
+    // 610 — so the mutation is now reproduced against a FIXTURE that carries
+    // BOTH halves it needs: a full two-leg cycle AND all five markers that were
+    // load-bearing under the old three-clause predicate. That is the same
+    // experiment with a subject that still exists.
+    const MARKER_HOLDER = [
+      "import type { ModelPort } from '../ports.js';",
+      '',
+      'class LegacyRunner {',
+      '  TurnModelLeg = 1;',
+      '  buildTurnModelLeg(port: ModelPort) {',
+      '    return port;',
+      '  }',
+      '  drain() {',
+      '    const pipeline = new ToolExecutionPipeline();',
+      '    return pipeline.getRemainingResults();',
+      '  }',
+      '}',
+      '',
+    ].join('\n');
+    const withMarkers = MARKER_HOLDER + turnLoop;
 
-    const withoutModelLegMarkers = src
+    // Control: the markers really are present, so the redactions below have
+    // something to remove. Asserting only the post-mutation result would also
+    // pass if the markers were never there.
+    expect(withMarkers).toMatch(/buildTurnModelLeg|TurnModelLeg|ModelPort/);
+    expect(isTurnLoopModule(withMarkers)).toBe(true);
+
+    const withoutModelLegMarkers = withMarkers
       .split('buildTurnModelLeg')
       .join('redactedOne')
       .split('TurnModelLeg')
@@ -690,15 +784,26 @@ describe('G7/G8 — the loop is located by SHAPE, and the shape contains no name
     expect(withoutModelLegMarkers).not.toMatch(/buildTurnModelLeg|TurnModelLeg|ModelPort/);
     // The assertion that matters: still red.
     expect(isTurnLoopModule(withoutModelLegMarkers)).toBe(true);
+    expect(turnLoopSites(withoutModelLegMarkers)).toEqual(turnLoopSites(withMarkers));
 
     // And the tool leg is the same story, so both are pinned rather than one.
-    const withoutToolMarkers = src
+    const withoutToolMarkers = withoutModelLegMarkers
       .split('ToolExecutionPipeline')
       .join('redactedFour')
       .split('getRemainingResults')
       .join('redactedFive');
     expect(withoutToolMarkers).not.toMatch(/ToolExecutionPipeline|getRemainingResults/);
     expect(isTurnLoopModule(withoutToolMarkers)).toBe(true);
+
+    // The other half, on the real file. This is the assertion that goes green
+    // the moment a cycle is added back, and it is what makes the fixture above
+    // necessary rather than redundant: `DuyaAgent.ts` is the module that USED
+    // to be the counterexample, and it is now clean for the right reason.
+    const live = stripComments(
+      fs.readFileSync(path.join(REPO_ROOT, 'packages/agent/src/agent/DuyaAgent.ts'), 'utf8'),
+    ).text;
+    expect(isTurnLoopModule(live)).toBe(false);
+    expect(turnLoopSites(live)).toEqual([]);
   });
 
   it('does not recognise a module that iterates but never calls a model', () => {
@@ -715,9 +820,35 @@ describe('G7/G8 — the loop is located by SHAPE, and the shape contains no name
     expect(isTurnLoopModule("export const s = (c) => c.streamChat([]);")).toBe(false);
   });
 
-  it('flags the package that still holds the loop on the live tree', () => {
-    const findings = findLoopMisownership();
-    expect(findings.map((f) => f.table)).toContain('@duya/agent');
+  it('no longer flags @duya/agent — the legacy cycle left that package', () => {
+    // INVERTED. This asserted that `@duya/agent` still held a copy of the turn
+    // loop, which was true only while `DuyaAgent.streamChat` existed. Plan 610
+    // deleted it, so the fact is now the absence, and the absence is the point
+    // of the gate: a loop may live in exactly one package, the execution
+    // owner, and `@duya/agent` is not it.
+    //
+    // Control: the same call with an extra NON-owner package holding a planted
+    // loop still reports that package. Without this the `not.toContain` below
+    // would also pass on a scanner that reports nothing at all, which is the
+    // `vacuous-guard-tells` shape this file exists to prevent. Paired with the
+    // live `run-engine.ts` control on the "G8 reports nothing" line below, the
+    // two halves are: the predicate still sees the real cycle, and no package
+    // other than the owner holds one.
+    const pkgSrc = path.join(REPO_ROOT, 'fixtures', 'boundary-gates', 'g8live', 'src');
+    withRepoFixtures(
+      {
+        'g8live/package.json': JSON.stringify({ name: '@duya/agent-not-owner' }),
+        'g8live/src/cycle.ts': turnLoop,
+      },
+      () => {
+        const roots = new Map([['@duya/agent-not-owner', pkgSrc]]);
+        expect(findLoopMisownership(EXECUTION_OWNER_PACKAGE, roots).map((f) => f.table)).toEqual([
+          '@duya/agent-not-owner',
+        ]);
+      },
+    );
+
+    expect(findLoopMisownership().map((f) => f.table)).not.toContain('@duya/agent');
   });
 
   it('does not flag the package that is supposed to own the loop', () => {
@@ -1146,12 +1277,34 @@ describe('G7 — the sanctioned execution owner is excluded, and only that', () 
     );
   });
 
-  it('still reports the live red — the exclusion is scoped, not a mute', () => {
-    // `packages/agent/src/agent/DuyaAgent.ts` is reached at depth 1 and is NOT
-    // in the owner package, so G7 keeps its live finding. If this ever went
-    // empty, G7 would be reporting green on a tree that still has a cycle.
+  it('reports no live red anymore — the exclusion is scoped, and the tree is clean', () => {
+    // INVERTED. This used to prove the owner exclusion was NOT a blanket mute
+    // by pointing at a live finding outside the owner package. That evidence is
+    // gone, so the scoping has to be argued from the FIXTURE, which is stronger
+    // anyway: the two tests above run the same planted cycle twice, once with a
+    // non-owner package reported and once with the owner package declared, so
+    // what is excluded is a package path and nothing else.
+    //
+    // What is left to pin HERE is the live half: no module in the worker's
+    // depth-<=1 closure carries a cycle any more. Control first, or an empty
+    // live result could just as well mean the scan stopped working.
+    withRepoFixtures(
+      {
+        'owner-entry.ts': ["import { legacyLoop } from './owner-loop.js';", 'export const go = legacyLoop;', ''].join('\n'),
+        'owner-loop.ts': PLANTED_LOOP,
+      },
+      () => {
+        // A planted loop outside `@duya/agent-runtime` is still reported, so
+        // the live emptiness below is the tree and not the exclusion swallowing
+        // everything.
+        expect(
+          findWorkerLoopReach('fixtures/boundary-gates/owner-entry.ts').map((f) => f.file),
+        ).toEqual(['fixtures/boundary-gates/owner-loop.ts']);
+      },
+    );
+
     const findings = findWorkerLoopReach();
-    expect(findings.map((f) => f.file)).toContain('packages/agent/src/agent/DuyaAgent.ts');
+    expect(findings.map((f) => `${f.file} via ${f.via}`)).toEqual([]);
   });
 });
 
@@ -1538,10 +1691,18 @@ describe('reachability — resolving the edges a boundary argument depends on', 
   });
 });
 
-describe('the gates are RED on the live tree, and that is the point', () => {
-  // These are not aspirational assertions. They pin the CURRENT known state so
-  // that a future slice cannot make these gates green by accident, and so that
-  // when S3/S1 do fix them, the change is a deliberate, visible one.
+describe('the gates pin the CURRENT live state — G7 and G8 are green, the rest are red', () => {
+  // These are not aspirational assertions. Each one pins the CURRENT known
+  // state of a gate, in whichever direction that state currently lies, so that
+  // a slice cannot move a gate without a test turning red and the move being
+  // visible.
+  //
+  // The block is deliberately titled after the state rather than asserting that
+  // state. G7 and G8 went GREEN when plan 610 deleted the `DuyaAgent.streamChat`
+  // turn loop; a title saying "the gates are RED" would have become a false
+  // claim about the tree, and a describe whose name is untrue is worse than no
+  // describe at all. Their lines below are real guards in the green direction —
+  // reintroduce a cycle and they report it.
   it('G4 is red: the worker still constructs DuyaAgent', () => {
     expect(findWorkerSeamBypasses().length).toBeGreaterThan(0);
   });
@@ -1554,29 +1715,65 @@ describe('the gates are RED on the live tree, and that is the point', () => {
     expect(findLifecycleCouplings().length).toBeGreaterThan(0);
   });
 
-  it('G7 reports the live bypass, and names the edge that has to be cut', () => {
-    // This used to assert `length > 0`, which pinned G7 red forever: the
-    // moment A3 legitimately removed the entry's direct `DuyaAgent` import, a
-    // correct fix would have failed this test. The gate's value is that it
-    // NAMES the bypass, so that is what is asserted — the count is reported but
-    // not constrained, and an empty result is a legitimate state that A3 is
-    // working toward.
-    const findings = findWorkerLoopReach();
-    for (const finding of findings) {
-      expect(finding.file).toBeTruthy();
-      expect(finding.via).toBeTruthy();
-      expect(finding.why).toContain('turn-loop');
-    }
-    // Whatever the count is, the gate must be looking at the real entry rather
-    // than returning nothing because it could not resolve anything. The
-    // unbounded depth is the check for that: if even depth 8 finds nothing, the
-    // scan is not working and an empty result above would be meaningless.
-    const deep = findWorkerLoopReach('packages/agent/src/process/agent-process-entry.ts', undefined, 8);
-    expect(deep.length).toBeGreaterThan(0);
+  it('G7 reports nothing live, and still names the edge whenever it does', () => {
+    // INVERTED, with the naming half preserved and moved onto a fixture.
+    //
+    // This used to assert `length > 0`, which pinned G7 red forever: the moment
+    // A3 legitimately removed the entry's direct `DuyaAgent` import, a correct
+    // fix would have failed this test. It was then relaxed to assert only that
+    // every finding carries a file, a hop and a `why`, plus that an unbounded
+    // depth-8 walk of the LIVE entry found something.
+    //
+    // Both of those had to move, because the live tree is now clean at every
+    // depth and asserting the depth-8 walk finds something would re-pin G7 red
+    // forever in the exact place the fix landed. So:
+    //
+    //  - "every finding names its edge" is asserted against a PLANTED loop
+    //    three hops down, which is the property that matters — a finding a
+    //    slice cannot act on is not a finding.
+    //  - "the scan is not silently broken" is the same planted loop found at
+    //    depth 8 and NOT found at the default bound of 1. That is the old
+    //    depth-8 check, with a subject that exists.
+    const DEEP_CHAIN = {
+      'chain-entry.ts': ["import { a } from './hop1.js';", 'export const go = a;', ''].join('\n'),
+      'hop1.ts': ["export { a } from './hop2.js';", ''].join('\n'),
+      'hop2.ts': ["export { legacyLoop as a } from './hop3.js';", ''].join('\n'),
+      'hop3.ts': PLANTED_LOOP,
+    };
+    withRepoFixtures(DEEP_CHAIN, () => {
+      const entry = 'fixtures/boundary-gates/chain-entry.ts';
+      const deep = findWorkerLoopReach(entry, undefined, 8);
+      for (const finding of deep) {
+        expect(finding.file).toBeTruthy();
+        expect(finding.via).toBeTruthy();
+        expect(finding.why).toContain('turn-loop');
+      }
+      expect(deep.map((f) => f.file)).toEqual(['fixtures/boundary-gates/hop3.ts']);
+      // The naming half has teeth only if the hop is the one that is actually
+      // reported, so the three re-exports in between are pinned too.
+      expect(deep[0]?.via).toBe('fixtures/boundary-gates/hop2.ts');
+      // And the bounded walk really is what excluded it.
+      expect(findWorkerLoopReach(entry).map((f) => f.file)).toEqual([]);
+    });
+
+    // The live half: nothing reachable from the worker entry at any depth.
+    expect(findWorkerLoopReach('packages/agent/src/process/agent-process-entry.ts', undefined, 8).map((f) => f.file)).toEqual([]);
   });
 
-  it('G8 is red: the loop is not owned by the execution owner package', () => {
-    expect(findLoopMisownership().length).toBeGreaterThan(0);
+  it('G8 reports nothing: the only cycle is the one the execution owner owns', () => {
+    // INVERTED, with the subject proved rather than assumed.
+    //
+    // `findLoopMisownership()` returning `[]` proves nothing on its own — it is
+    // also what a gate that never matches returns. So this asserts both halves:
+    // the predicate still recognises the REAL cycle, which now lives in
+    // `packages/agent-runtime/src/engine/run-engine.ts`, and no package outside
+    // that owner holds one. G8 green here means the cycle was MOVED, not that
+    // the gate went blind.
+    const engine = stripComments(
+      fs.readFileSync(path.join(REPO_ROOT, 'packages/agent-runtime/src/engine/run-engine.ts'), 'utf8'),
+    ).text;
+    expect(isTurnLoopModule(engine)).toBe(true);
+    expect(findLoopMisownership().map((f) => `${f.table} holds ${f.owners.join(',')}`)).toEqual([]);
   });
 
   it('G9 is red: a core-classified package can still reach IO', () => {
