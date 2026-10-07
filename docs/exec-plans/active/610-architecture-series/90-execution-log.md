@@ -890,4 +890,77 @@ worker 的红证据:同一测试在**只有测试、没有生产改动**的树�
 而本片的对拍块**真的**调了一次 `agent.streamChat(`。已按实测更新
 (新增一行 `[5, 1]`,72 → 73)。这不是放宽:普查的职责就是让驱动面不能静默漂移,
 而这一行正是翻转之后不能迁移的那一类。
+---
 
+## 2026-10-07 — A0 结案;§3.2 判定不需要;A5 五项决策书
+
+### A0 已完成并合入 master
+
+`§3.1`(`@duya/ai` 的 WebCrypto,`7f45d418`)、`§3.3`(`conductor` 的 `./renderer` + `./renderer/*`,`456bfffa`)、门禁 **G10**(`scripts/architecture/browser-closure-gate.mjs`,实测 `PASS 0/789`)都已落地。
+**「A0 一片都没开始」是错的** —— 切片表那一行只写定义不写进度,进度在 §5.1。
+
+### §3.2(plugin-core 二分)判定为**不需要**
+
+实测 5 个碰 Node 内建的文件,**零个**是渲染器的消费者(逐个列了消费者)。
+而**不变量已被 G10 强制**:在 barrel 加一行 `export { PathSafetyValidator }` → `G10 FAIL 2/790` exit 1,
+回退 → `PASS 0/789`。**在没有任何拆分存在的情况下,这个不变式已经生效。**
+
+唯一剩余收益是 7.6 KB 死代码(barrel 保留 18 个模块 / 556,092 bytes;直连四个符号只要 4 个 / 548,482),
+而 `"sideEffects": false` 一行即可拿到**逐字节相同**的产物。
+
+**但那一行现在不加**:它是对整个包的声明,而 plugin-core 嵌着 `plugins/builtin/**` 资源树,
+且 **vitest 不做 tree-shaking,测试绿在这里什么都不能证明**。要加必须单独立片,以生产 Rollup 构建为验收。
+
+**两处更正,都记在这里**:① 「plugin-core 只有 2 个文件碰 Node」是**错的**,是 **5 文件 / 8 处 import**;
+2 是只数了 `node:` 前缀,另三个用裸 `fs`/`path`。G10 自己的头注释写过:报较小的数字「比没有门禁更糟,
+因为它会被当作证据引用」——那正是 briefing 里犯的错。② 「计划说三个模块」是**误读**:§3 标题是
+「三处必须先拆的**耦合**」,§3.2 正文点名的正是五个文件。**计划是对的。**
+
+### A5 五项决策书(只读测绘,主 agent 已复核)
+
+| # | 决策 |
+| --- | --- |
+| 1 | **收窄 `data`,保留 G24 但改写它**。原变异证明过不了(`data` 的 migration 和连接建立里合法地有条件分支)。改成:「`data` 内无领域生命周期规则、无策略常量;策略常量归 CP 并注入」,`PENDING_WAKE_STALE_MS` 作为worked negative。接口改造集中在 `session-fork.ts` 一个文件。 |
+| 2 | **`memory` 拆分,顺序加一步**:`memory(agent)` → **切断 data⇄memory-state 的环** → `data` → `memory(desktop)`。测绘**新发现**这个环: `db/core/projectService.ts` → `memory-state/db`,而 `memory-state/index.ts` → `db/core/projectService`。**必须在 `data` 成为包之前切断**,否则 `packages/data` 会 import `apps/desktop/...`,即一个包 import 一个 app。 |
+| 3 | **`tooling` 倒数第二个,且只搬机制**。计划 §0 说它「是其他包的前置」——**实测为假**:`modes/` 反向依赖 6 个 specifier 打进 `OSTool`/`CanvasConductor`/`SubagentTool`,而 `tool/registry` 被 **62 个文件**引用(不是 27)。**`modes/` 不搬进 `tooling`** —— 那会第一天就违反 G7 并孤立 20 个外部导入者。 |
+| 4 | **`capabilities` 最后**。30 个未归属 `tool/` 子目录(110 prod 文件)+ 26 个散落 `tool/*.ts` = 136。判别式:**主体能否纯粹表述为外部之物**(文件、shell、浏览器、技能、设备)→ capabilities;主体是 Goal / Task / Session / Run / 记忆切面 → CP。实测 13 个 import 生命周期、17 个 import 干净。 |
+| 5 | **`connectors` 只搬计划那 7 个文件**,`app-connections/` 31 文件**记为延期**。不记的话 `packages/connectors` 就是个长期空壳,撞 G25。 |
+
+### 主 agent 对决策书里三个「真的开不了」的裁决
+
+测绘说 `UpdateStateTool` / `MemoryWriteTool` / `PlanTool` 需要产品裁决而非测量,并明确拒绝替我拍。
+用上面的判别式,主 agent 裁决如下:
+
+- **`UpdateStateTool` → CP/运行时**。主体是记忆切面 + bot 身份。它只 import `types`,生命周期知识全在**接线**里
+  (`setMemoryTierBridge` / `setBotIdentityBridge`),依赖图永远抓不到它 —— 这正是需要判别式而非 import 计数的原因。
+- **`MemoryWriteTool` → CP/运行时**。它对记忆根目录做裸 `fs`/`path` I/O,**复制了记忆布局知识而没有用 `memory-state`**。
+  归属之外,这是一个真缺陷,应改为走 `memory-state`。
+- **`PlanTool` → CP/运行时**。它的兄弟 `EnterPlanModeTool`/`ExitPlanModeTool` import `modes/plan/plan-tracker`,
+  它自己不 import —— **这个不对称本身就是气味**。
+
+三者都要在能搬之前先被重新插到注入端口后面。
+
+### G10 的真相:门禁不跑,但它的**测试**跑
+
+测绘纠正了「没有任何东西跑它」的说法:`vitest.config.ts` 包含 `scripts/**/*.test.ts`,
+而 `test.yml` 跑 `npm test` —— 所以 G10 **每个 PR 都被单元测试**(含红向变异证明)。
+但**门禁本身从未作用在真实 import 图上**。
+
+**后果:A5 不能引用 G10 作为回归网。** 今天真正的网是 `architecture:check` 的直接边规则。
+G10 的独有价值是**闭包式检测**(抓传递性的 Node 内建牵引),而 `core-io` 在直接边上看不见。
+这恰恰在 `capabilities` 落地时最重要 —— 那正是渲染侧可能出现传递依赖的时刻。
+**要么在迁 `capabilities` 之前把 G10 接进 CI,要么把「G10 保护 Web 故事」这句从 A5 的前提里划掉。**
+
+### 出域依赖计数口径必须写死
+
+两份测绘在 7 行里有 6 行不一致,两者口径都合理。**口径不写进 `00-contracts.md`,
+下一个实现者会量出第三套数字,并把它当成「门禁动了」的论据。**
+先约定「是否计入 npm / workspace specifier」,再谈任何依赖它的设计结论。
+所有 escape 计数都是**下界** —— 动态 `import(变量)` 对它们不可见,包括那个 62 文件的 registry fan-in。
+
+### 新发现的第二个 SQLite
+
+`apps/desktop/src/main/memory-state/` 是**第二个 SQLite 库**(12 个 `.sql.ts` migration、`schema.ts`、
+`db.ts` 单例)。计划 06 §5 没有把它列为 `data` 的来源。决策书把它划进 `data`,并把
+`control-plane/sqlite-repository.ts` 留在 CP —— 后者自己的文档说「不执行 DDL、不跑 migration、不构造 `Database`」,
+它是**端口绑定**不是持久化。
