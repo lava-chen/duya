@@ -49,7 +49,21 @@ import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolUseContext, Message, SSEEvent } from '../../../types.js';
-import type { AgentProgressEvent } from '../runAgent.js';
+import type { AgentProgressEvent, SubagentRunDeps } from '../runAgent.js';
+import { duyaAgent } from '../../../agent/DuyaAgent.js';
+import { createBuiltinRegistry } from '../../builtin.js';
+
+// Plan 610 A5: `runAgent` used to reach these two through module scope; the
+// suite now supplies them explicitly. They are the REAL factories, not stubs:
+// this suite drives a complete sub-agent turn through the mocked `@duya/ai`
+// provider, and the child's tool registry is part of that path (the timing
+// notes above measured `createBuiltinRegistry()` at ~19ms for exactly this
+// reason).
+const subagentDeps: SubagentRunDeps = {
+  createSubAgent: (options) => new duyaAgent(options),
+  // Argument-less, matching what `runAgent` did before the cut.
+  createToolRegistry: () => createBuiltinRegistry(subagentDeps),
+};
 
 // ── the scripted provider ────────────────────────────────────────────────────
 
@@ -226,6 +240,8 @@ async function drive(options: {
     isAsync: false,
     availableTools: [],
     agentId: `agent-${(seq += 1)}`,
+    createSubAgent: subagentDeps.createSubAgent,
+    createToolRegistry: subagentDeps.createToolRegistry,
     ...(options.maxTurns === undefined ? {} : { maxTurns: options.maxTurns }),
     ...(options.ledgerDir === undefined ? {} : { engineLedgerDir: options.ledgerDir }),
     onProgress: (event) => progress.push(event),

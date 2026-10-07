@@ -29,6 +29,7 @@
 
 import type { AgentDefinition } from '../../tool/SubagentTool/loadAgentsDir.js';
 import { runAgentSync } from '../../tool/SubagentTool/runAgent.js';
+import type { SubagentRunDeps } from '../../tool/SubagentTool/runAgent.js';
 import type { Message, ToolUseContext } from '../../types.js';
 import { logger } from '../../utils/logger.js';
 import { goalModeTracker } from './goal-tracker.js';
@@ -75,6 +76,12 @@ export interface GoalVerificationParams {
   maxTurns?: number;
   /** Number of skeptic sub-agents in the panel (default 1, Phase 3: >1). */
   verifierCount?: number;
+  /**
+   * Plan 610 A5: sub-agent composition deps. Required — `runAgent` no longer
+   * resolves `createSubAgent` / `createToolRegistry` from module scope, so a
+   * caller without them cannot run the verification panel honestly.
+   */
+  subagentDeps: SubagentRunDeps;
   /** After this many consecutive not-achieved rounds, fire the strategist (Phase 3). */
   strategistEvery?: number;
   /** Max consecutive not-achieved rounds before auto-pausing (stall guard). */
@@ -155,6 +162,7 @@ export async function verifyGoalCompletion(
     context,
     agentDefinitions,
     maxTurns,
+    subagentDeps,
     // Plan 411 Phase 4: caller-provided values win; otherwise fall back to
     // the `[goal]` config.toml section (env overrides applied in goal-config).
     verifierCount = cfg.verifierCount,
@@ -206,6 +214,7 @@ export async function verifyGoalCompletion(
       context,
       definition,
       maxTurns,
+      subagentDeps,
     }),
   );
   const panelPromise = Promise.all(skepticRuns);
@@ -280,6 +289,7 @@ export async function verifyGoalCompletion(
       context,
       agentDefinitions,
       maxTurns,
+      subagentDeps,
     });
     // Same unhandled-rejection guard as the panel.
     strategistPromise.catch(() => {});
@@ -402,6 +412,8 @@ async function runOneSkeptic(params: {
   context: ToolUseContext;
   definition: AgentDefinition;
   maxTurns?: number;
+  /** Plan 610 A5: sub-agent composition deps. Required, see `SubagentRunDeps`. */
+  subagentDeps: SubagentRunDeps;
 }): Promise<{ skeptic: number; verdict: GoalVerdict; report: string }> {
   const {
     skepticIndex,
@@ -414,6 +426,7 @@ async function runOneSkeptic(params: {
     context,
     definition,
     maxTurns,
+    subagentDeps,
   } = params;
   const stance = SKEPTIC_STANCES[skepticIndex % SKEPTIC_STANCES.length] ?? '';
   const prompt = buildVerifierPrompt({
@@ -443,6 +456,8 @@ async function runOneSkeptic(params: {
       availableTools: context.options.tools,
       description: `Goal verifier ${skepticIndex + 1}/${count}: ${objective.slice(0, 60)}`,
       agentId: crypto.randomUUID(),
+      createSubAgent: subagentDeps.createSubAgent,
+      createToolRegistry: subagentDeps.createToolRegistry,
     });
     report = extractText(result);
   } catch (err) {
@@ -736,8 +751,10 @@ export async function runStrategist(params: {
   context: ToolUseContext;
   agentDefinitions?: AgentDefinition[];
   maxTurns?: number;
+  /** Plan 610 A5: sub-agent composition deps. Required, see `SubagentRunDeps`. */
+  subagentDeps: SubagentRunDeps;
 }): Promise<string | undefined> {
-  const { objective, finalSummary, gapsSummary, context, agentDefinitions, maxTurns } = params;
+  const { objective, finalSummary, gapsSummary, context, agentDefinitions, maxTurns, subagentDeps } = params;
   // Reuse the verification agent for strategy reconstruction — it already
   // has read-only, project-aware tooling. A dedicated strategist profile is
   // Phase 3 polish.
@@ -774,6 +791,8 @@ export async function runStrategist(params: {
       availableTools: context.options.tools,
       description: `Goal strategist: ${objective.slice(0, 60)}`,
       agentId: crypto.randomUUID(),
+      createSubAgent: subagentDeps.createSubAgent,
+      createToolRegistry: subagentDeps.createToolRegistry,
     });
     return extractText(result).slice(0, 4000) || undefined;
   } catch (err) {

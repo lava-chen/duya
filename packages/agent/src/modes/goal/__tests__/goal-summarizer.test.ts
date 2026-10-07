@@ -9,6 +9,18 @@
 
 import { describe, it, expect } from 'vitest';
 import { summarizeGoalCompletion, SUMMARY_MAX_CHARS } from '../goal-summarizer.js';
+import type { SubagentRunDeps } from '../../../tool/SubagentTool/runAgent.js';
+
+// Plan 610 A5: the summarizer receives the sub-agent composition deps. Both
+// cases below return before a sub-agent is built, so these are never called.
+const stubSubagentDeps: SubagentRunDeps = {
+  createSubAgent: () => {
+    throw new Error('not used by the goal-summarizer suite');
+  },
+  createToolRegistry: () => {
+    throw new Error('not used by the goal-summarizer suite');
+  },
+};
 
 /** Minimal but shape-valid AgentDefinition for runAgentSync callers. */
 function verificationDef() {
@@ -27,6 +39,7 @@ describe('summarizeGoalCompletion (fail-open)', () => {
       finalSummary: 'y',
       context: { options: {} } as never,
       agentDefinitions: [],
+      subagentDeps: stubSubagentDeps,
     });
     expect(r).toBeUndefined();
   });
@@ -40,6 +53,7 @@ describe('summarizeGoalCompletion (fail-open)', () => {
       finalSummary: 'y',
       context: { options: {} } as never,
       agentDefinitions: [verificationDef() as never],
+      subagentDeps: stubSubagentDeps,
     }).catch(() => undefined);
     expect(r).toBeUndefined();
   });

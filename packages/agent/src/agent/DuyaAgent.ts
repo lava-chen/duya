@@ -138,6 +138,7 @@ import { getDuyaMemoryRoot } from '@duya/memory/memory_paths';
 // the public re-exports live in src/index.ts).
 import { modeModifierRegistry, modeTrackerEngine } from '../modes/index.js';
 import type { ModeModifier, ModeModifierContext, OrchestratorDeps, ResolvedMode, ToolRegistration } from '../modes/index.js';
+import type { SubagentRunDeps } from '../tool/SubagentTool/runAgent.js';
 import { ModeCoordinator } from '../modes/engine/index.js';
 import { applyModes, collectActiveModes, runExitHooks } from '../modes/apply-modes.js';
 import { planModeTracker } from '../modes/plan/plan-tracker.js';
@@ -1240,6 +1241,7 @@ export class duyaAgent implements AgentRuntime {
     this.modeCtx = {
       sessionId: turnContext.sessionId ?? '',
       workingDirectory: turnContext.workingDirectory ?? '',
+      subagentDeps: this.subagentDeps,
       state: {
         conductorCanvasId: options?.conductorCanvasId,
         widgetStyleHistory: this.widgetStyleHistory,
@@ -2698,6 +2700,16 @@ export class duyaAgent implements AgentRuntime {
    * `state` (read by mode prompt builders and hooks).
    */
   private modeCtx?: ModeModifierContext;
+  /**
+   * Plan 610 A5: composition dependencies handed to every `SubagentTool` this
+   * agent builds and to every `ModeModifierContext` it creates. Assigned by
+   * {@link initToolCatalog}, which is the documented once-at-init gate — an
+   * agent that never called it has no builtin tools at all, so reading this
+   * before then is already a broken configuration rather than a new one. The
+   * definite-assignment assertion is deliberate: a missing pair should fail
+   * loudly at the composition site, never silently skip a verification.
+   */
+  private subagentDeps!: SubagentRunDeps;
   /** Mode state-machine coordinator (plan 413d). Rebuilt per streamChat call. */
   private modeCoordinator?: ModeCoordinator;
   /**
@@ -4472,6 +4484,7 @@ export class duyaAgent implements AgentRuntime {
       const orchestratorCtx: ModeModifierContext = {
         sessionId: this.sessionId ?? '',
         workingDirectory: this.workingDirectory ?? '',
+        subagentDeps: this.subagentDeps,
         state: {
           conductorCanvasId: options?.conductorCanvasId,
           widgetStyleHistory: this.widgetStyleHistory,
@@ -4531,6 +4544,7 @@ export class duyaAgent implements AgentRuntime {
     const ctx: ModeModifierContext = {
       sessionId: this.sessionId ?? '',
       workingDirectory: this.workingDirectory ?? '',
+      subagentDeps: this.subagentDeps,
       state: {},
     };
 
@@ -4865,6 +4879,18 @@ export class duyaAgent implements AgentRuntime {
    */
   async initToolCatalog(): Promise<void> {
     const { createBuiltinRegistry } = await import('../tool/builtin.js');
+    // Plan 610 A5: build the sub-agent composition deps once, here, where both
+    // halves are in scope. `duyaAgent` is this module's own class, so
+    // `createSubAgent` needs no import; `createBuiltinRegistry` was just
+    // dynamically loaded. A child's registry is a plain argument-less
+    // `createBuiltinRegistry` — that is exactly what `runAgent` did before,
+    // so forwarding this agent's domain-blocker / plugin configuration into a
+    // child would be a behaviour change.
+    this.subagentDeps = {
+      createSubAgent: (agentOptions) => new duyaAgent(agentOptions),
+      createToolRegistry: () =>
+        createBuiltinRegistry(this.subagentDeps),
+    };
     // Fetch enabled plugin IDs so plugin-declared tools are filtered
     // correctly (mirrors the per-turn logic previously in _resolveTools).
     let enabledPluginIds: Set<string> | undefined;
@@ -4878,6 +4904,7 @@ export class duyaAgent implements AgentRuntime {
       // Fallback: register all builtin tools without plugin filtering.
     }
     const temp = createBuiltinRegistry(
+      this.subagentDeps,
       this.blockedDomains.length > 0 ? { blockedDomains: this.blockedDomains } : undefined,
       {
         enabledPluginIds,

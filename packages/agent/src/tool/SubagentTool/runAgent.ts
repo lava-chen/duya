@@ -4,6 +4,7 @@
  */
 
 import type {
+  AgentOptions,
   Message,
   MessageContent,
   SSEEvent,
@@ -14,7 +15,12 @@ import type { ChatOptions } from '../../types.js'
 import type { PermissionMode } from '../../permissions/types.js'
 import type { AgentDefinition, BuiltInAgentDefinition, CustomAgentDefinition } from './loadAgentsDir.js'
 import { isBuiltInAgent } from './loadAgentsDir.js'
-import { duyaAgent } from '../../agent/DuyaAgent.js'
+// Plan 610 A5: the sub-agent CLASS is a type-only dependency of this module,
+// so this import must stay a whole-statement `import type` on ONE line. The
+// cycle gate erases that form before building the module graph; the inline
+// `import { type X }` form still emits a load and would keep
+// runAgent -> DuyaAgent -> builtin -> SubagentTool -> runAgent alive.
+import type { duyaAgent } from '../../agent/DuyaAgent.js'
 import { inferProvider } from '@duya/ai'
 import { setMaxListeners } from 'node:events'
 import { resolveAgentTools, SUBAGENT_FORBIDDEN_TOOLS } from './subagentToolUtils.js'
@@ -32,6 +38,32 @@ import { isSubagentSlimAgentsMdEnabled } from '../../config/feature-flags.js'
 // as the producer of the event stream below; the consumption is untouched.
 import { driveSubagentRunWithEngine } from './subagent-engine-run.js'
 
+/**
+ * Plan 610 A5: the two composition dependencies `runAgent` used to reach for
+ * through module imports.
+ *
+ * `runAgent` previously imported `DuyaAgent` directly and dynamically imported
+ * `createBuiltinRegistry`. Both are static module-graph edges, and together
+ * they closed `runAgent -> DuyaAgent -> builtin -> SubagentTool -> runAgent`
+ * and `runAgent -> builtin -> SubagentTool -> runAgent`. They are now handed
+ * in by the composition site that already owns both halves, which makes the
+ * wiring explicit and validatable at assembly instead of implicit at import.
+ */
+export type CreateSubAgent = (options: AgentOptions) => duyaAgent
+
+export type CreateToolRegistry = () => ToolRegistry
+
+/**
+ * The pair every `runAgent` call site must supply. Carried on
+ * {@link RunAgentParams} rather than resolved from module scope, so a call site
+ * cannot silently pick up a different composition root than the one its
+ * caller assembled.
+ */
+export interface SubagentRunDeps {
+  createSubAgent: CreateSubAgent
+  createToolRegistry: CreateToolRegistry
+}
+
 export interface RunAgentParams {
   agentDefinition: AgentDefinition
   promptMessages: Message[]
@@ -41,6 +73,18 @@ export interface RunAgentParams {
   maxTurns?: number
   availableTools: Tool[]
   description?: string
+  /**
+   * Composition dependencies for this run. Required on purpose: an omitted
+   * factory is the "registry without assembly-time validation" defect, so the
+   * compiler rejects the call site instead of the module graph catching it
+   * later. See {@link SubagentRunDeps}.
+   */
+  createSubAgent: CreateSubAgent
+  /**
+   * Builds the child agent's own tool registry. Required for the same reason
+   * as {@link RunAgentParams.createSubAgent}.
+   */
+  createToolRegistry: CreateToolRegistry
   /**
    * Stable identifier the caller (e.g. SubagentTool) hands out for this
    * sub-agent. It is attached to every progress event so the renderer
@@ -239,6 +283,8 @@ export async function* runAgent({
   workingDirectory: workingDirectoryOverride,
   abortController,
   engineLedgerDir,
+  createSubAgent,
+  createToolRegistry,
 }: RunAgentParams): RunAgentResult {
   const startTime = Date.now()
   const parentSessionId = toolUseContext.options.sessionId
@@ -346,9 +392,11 @@ export async function* runAgent({
     return
   }
 
-  // Create real tool registry with actual tool executors
-  const { createBuiltinRegistry } = await import('../builtin.js')
-  const registry = createBuiltinRegistry()
+  // Create real tool registry with actual tool executors. Plan 610 A5: the
+  // factory comes from the caller's composition site; this module no longer
+  // imports `builtin.js`, which was one of the two edges closing the
+  // runAgent <-> SubagentTool cycle.
+  const registry = createToolRegistry()
   const allTools = registry.getAllTools()
   const toolNames = new Set(toolOverlayResult.tools.map(t => t.name))
   let toolsToUse = toolNames.size > 0
@@ -404,7 +452,9 @@ export async function* runAgent({
 
   // The explicit systemPrompt replaces DuyaAgent's normal prompt path, so it
   // must already contain both the agent role and the shared project harness.
-  const subAgent = new duyaAgent({
+  // Plan 610 A5: constructed by the injected factory rather than by importing
+  // `DuyaAgent` here, which was the other edge closing the cycle.
+  const subAgent = createSubAgent({
     apiKey,
     baseURL: toolUseContext.options.baseURL,
     model: agentModel,

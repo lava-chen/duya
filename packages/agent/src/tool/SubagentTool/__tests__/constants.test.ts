@@ -1,7 +1,21 @@
 import { describe, it, expect } from 'vitest';
 import { SUBAGENT_TOOL_NAME, LEGACY_SUBAGENT_TOOL_NAME } from '../constants.js';
-import { subagentTool } from '../SubagentTool.js';
+import { SubagentTool } from '../SubagentTool.js';
+import type { SubagentRunDeps } from '../runAgent.js';
 import { normalizeLegacyToolName } from '../../../permissions/rules.js';
+
+// Plan 610 A5: `SubagentTool` is constructed per registry now, so this suite
+// builds its own instance. Only the declared wire surface is under test, so the
+// composition deps are never invoked.
+const stubSubagentDeps: SubagentRunDeps = {
+  createSubAgent: () => {
+    throw new Error('not used by the wire-surface suite');
+  },
+  createToolRegistry: () => {
+    throw new Error('not used by the wire-surface suite');
+  },
+};
+const subagentTool = new SubagentTool(stubSubagentDeps);
 
 /**
  * Plan 571: `auto_wake`, `resume_from` and `isolation` used to be declared in

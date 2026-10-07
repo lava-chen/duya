@@ -34,6 +34,7 @@ import type { ToolExecutor } from '../../tool/registry.js';
 import { goalModeTracker } from './goal-tracker.js';
 import { verifyGoalCompletion, shouldRunVerificationPanel } from './goal-evaluator.js';
 import { summarizeGoalCompletion } from './goal-summarizer.js';
+import type { SubagentRunDeps } from '../../tool/SubagentTool/runAgent.js';
 import { writeGoalPlan } from './goal-plan.js';
 import { captureBaselineCommit } from './goal-changes.js';
 import { getGoalConfig } from './goal-config.js';
@@ -215,7 +216,15 @@ function applyVerdict(
   }
 }
 
-const updateGoalExecutor: ToolExecutor = {
+/**
+ * Plan 610 A5: `update_goal` needs the sub-agent composition deps to run the
+ * verification panel, so it is built per injection rather than held as a
+ * module-level executor. `deps` arrives from the `ModeModifierContext` that
+ * `goal-mode`'s `inject` received, so the wiring is explicit at the composition
+ * site instead of hidden in a module import.
+ */
+function createUpdateGoalExecutor(deps: SubagentRunDeps): ToolExecutor {
+  return {
   async execute(
     input: Record<string, unknown>,
     _workingDirectory?: string,
@@ -317,6 +326,7 @@ const updateGoalExecutor: ToolExecutor = {
         agentDefinitions: context.options.agentDefinitions?.allAgents,
         verifierCount: (context.options as unknown as { goalVerifierCount?: number })
           .goalVerifierCount,
+        subagentDeps: deps,
       });
       applyVerdict(result.verdict, sessionId, result.gapsSummary, result.pauseReason);
       emitGoalUpdated(sessionId, {
@@ -333,6 +343,7 @@ const updateGoalExecutor: ToolExecutor = {
           gapsSummary: result.gapsSummary,
           context,
           agentDefinitions: context.options.agentDefinitions?.allAgents,
+          subagentDeps: deps,
         });
       }
       const payload: Record<string, unknown> = {
@@ -385,7 +396,8 @@ const updateGoalExecutor: ToolExecutor = {
       message: message ?? undefined,
     });
   },
-};
+  };
+}
 
 const goalStartInputSchema = z.object({
   objective: z.string().min(1).describe('The long-running objective to track across rounds.'),
@@ -514,11 +526,17 @@ const getGoalExecutor: ToolExecutor = {
   },
 };
 
-/** ToolRegistration pairs injected by goal mode (plan 411 §4.3 + plan 553). */
-export function getGoalTools(): Array<{ definition: Tool; executor: ToolExecutor }> {
+/**
+ * ToolRegistration pairs injected by goal mode (plan 411 §4.3 + plan 553).
+ *
+ * Plan 610 A5: `deps` is required. `update_goal`'s verification panel runs
+ * sub-agents, so the composition deps are supplied by the caller that injects
+ * the tools rather than imported here.
+ */
+export function getGoalTools(deps: SubagentRunDeps): Array<{ definition: Tool; executor: ToolExecutor }> {
   return [
     { definition: goalStartDefinition, executor: goalStartExecutor },
-    { definition: updateGoalDefinition, executor: updateGoalExecutor },
+    { definition: updateGoalDefinition, executor: createUpdateGoalExecutor(deps) },
     { definition: getGoalDefinition, executor: getGoalExecutor },
   ];
 }

@@ -15,6 +15,18 @@ import {
   getGoalConfig,
   _resetGoalConfigCache,
 } from '../goal-config.js';
+import type { SubagentRunDeps } from '../../../tool/SubagentTool/runAgent.js';
+
+// Plan 610 A5: the verification panel receives the sub-agent composition deps.
+// `runAgentSync` is mocked in this suite, so neither factory is invoked.
+const stubSubagentDeps: SubagentRunDeps = {
+  createSubAgent: () => {
+    throw new Error('not used by the goal-config suite');
+  },
+  createToolRegistry: () => {
+    throw new Error('not used by the goal-config suite');
+  },
+};
 
 const TEST_NS = 'goal-config-test';
 
@@ -134,6 +146,7 @@ describe('readGoalConfig', () => {
       finalSummary: 'y',
       context: { options: { tools: [] } } as never,
       agentDefinitions: [{ agentType: 'verification', whenToUse: 'v' } as never],
+      subagentDeps: stubSubagentDeps,
       // verifierCount omitted → config (2) is used; runAgent mocked so the
       // panel runs 2 skeptics.
     });

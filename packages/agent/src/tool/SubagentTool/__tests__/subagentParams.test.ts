@@ -80,7 +80,18 @@ vi.mock('../../task-verification.js', () => ({
   buildSubagentParentReport: () => '',
 }));
 
-const { subagentTool } = await import('../SubagentTool.js');
+// Plan 610 A5: no module-level `subagentTool` singleton any more. These cases
+// exercise the tool's input-schema handling, so the composition deps are never
+// invoked; they throw rather than silently building a real child agent.
+const { SubagentTool } = await import('../SubagentTool.js');
+const subagentTool = new SubagentTool({
+  createSubAgent: () => {
+    throw new Error('not used by the input-parameter suite');
+  },
+  createToolRegistry: () => {
+    throw new Error('not used by the input-parameter suite');
+  },
+});
 
 function makeContext(overrides: Record<string, unknown> = {}): ToolUseContext {
   return {

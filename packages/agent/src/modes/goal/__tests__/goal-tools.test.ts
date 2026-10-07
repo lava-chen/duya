@@ -16,14 +16,27 @@ import {
   GET_GOAL_TOOL_NAME,
 } from '../goal-tools.js';
 import { goalModeTracker } from '../goal-tracker.js';
+import type { SubagentRunDeps } from '../../../tool/SubagentTool/runAgent.js';
+
+// Plan 610 A5: goal tools are built per injection from these deps. Only
+// `update_goal`'s completion path consumes them, and the cases here either
+// skip verification or stop before a sub-agent runs.
+const stubSubagentDeps: SubagentRunDeps = {
+  createSubAgent: () => {
+    throw new Error('not used by the goal-tools suite');
+  },
+  createToolRegistry: () => {
+    throw new Error('not used by the goal-tools suite');
+  },
+};
 
 function execute(input: Record<string, unknown>) {
-  const [, tool] = getGoalTools();
+  const [, tool] = getGoalTools(stubSubagentDeps);
   return tool.executor.execute(input);
 }
 
 function executeStart(input: Record<string, unknown>) {
-  const [tool] = getGoalTools();
+  const [tool] = getGoalTools(stubSubagentDeps);
   return tool.executor.execute(input);
 }
 
@@ -39,7 +52,7 @@ describe('update_goal tool', () => {
   });
 
   it('exposes goal_start, update_goal and get_goal tool registrations', () => {
-    const tools = getGoalTools();
+    const tools = getGoalTools(stubSubagentDeps);
     expect(tools.map((t) => t.definition.name)).toEqual([
       GOAL_START_TOOL_NAME,
       UPDATE_GOAL_TOOL_NAME,
@@ -89,9 +102,9 @@ describe('update_goal tool', () => {
     tracker.transition({ type: 'clear' });
     tracker.transition({ type: 'start', objective: 'X' });
 
-    const [goalStart] = getTools();
+    const [goalStart] = getTools(stubSubagentDeps);
     void goalStart;
-    const [, updateTool] = getTools();
+    const [, updateTool] = getTools(stubSubagentDeps);
     const r = await updateTool.executor.execute(
       { completed: true, message: 'done' },
       undefined,
@@ -213,7 +226,7 @@ describe('get_goal tool (plan 553)', () => {
   });
 
   function executeGet() {
-    const [, , getTool] = getGoalTools();
+    const [, , getTool] = getGoalTools(stubSubagentDeps);
     return getTool.executor.execute({});
   }
 
@@ -245,7 +258,7 @@ describe('goal session ownership (plan 553)', () => {
 
   it('update_goal from another session is rejected as no_goal', async () => {
     goalModeTracker.transition({ type: 'start', objective: 'Session A goal' }, 'session-a');
-    const [, updateTool] = getGoalTools();
+    const [, updateTool] = getGoalTools(stubSubagentDeps);
     const r = await updateTool.executor.execute(
       { completed: false, message: 'peeking' },
       undefined,
@@ -259,7 +272,7 @@ describe('goal session ownership (plan 553)', () => {
 
   it('goal_start from another session cannot clobber the owner goal', async () => {
     goalModeTracker.transition({ type: 'start', objective: 'Session A goal' }, 'session-a');
-    const [startTool] = getGoalTools();
+    const [startTool] = getGoalTools(stubSubagentDeps);
     const r = await startTool.executor.execute(
       { objective: 'Session B goal' },
       undefined,

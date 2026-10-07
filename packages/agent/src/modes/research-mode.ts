@@ -18,7 +18,7 @@
  * orchestrator. Clarification uses the standard ask_user_question tool.
  */
 
-import type { ModeModifier } from './types.js';
+import type { ModeModifier, ModeModifierContext } from './types.js';
 import { researchModeTracker } from './research-mode/research-tracker.js';
 import { getResearchTools } from './research-mode/research-tools.js';
 import { getResearchConfig } from './research-mode/research-config.js';
@@ -137,7 +137,8 @@ export const researchMode: ModeModifier = {
     // `research_start` / `research_report` must survive profile filtering so
     // the model can start and finalize a research run under any base profile.
     // Gated by `[research] enabled` — when disabled, inject nothing.
-    inject: () => (getResearchConfig().enabled ? getResearchTools() : []),
+    inject: (ctx: ModeModifierContext) =>
+      getResearchConfig().enabled ? getResearchTools(ctx.subagentDeps) : [],
     overrideFilter: true,
 
     // Block write/execute/side-effect tools (same set as plan-task) plus

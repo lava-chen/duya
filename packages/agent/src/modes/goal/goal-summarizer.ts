@@ -14,6 +14,7 @@
 
 import type { AgentDefinition } from '../../tool/SubagentTool/loadAgentsDir.js';
 import { runAgentSync } from '../../tool/SubagentTool/runAgent.js';
+import type { SubagentRunDeps } from '../../tool/SubagentTool/runAgent.js';
 import type { Message, ToolUseContext } from '../../types.js';
 import { logger } from '../../utils/logger.js';
 import { findVerificationAgent } from './goal-evaluator.js';
@@ -30,6 +31,12 @@ export interface GoalSummaryParams {
   context: ToolUseContext;
   agentDefinitions?: AgentDefinition[];
   maxTurns?: number;
+  /**
+   * Plan 610 A5: sub-agent composition deps. Required — `runAgent` no longer
+   * resolves them from module scope, so a caller that cannot supply them has
+   * no honest way to run the summarizer.
+   */
+  subagentDeps: SubagentRunDeps;
 }
 
 /**
@@ -40,7 +47,7 @@ export interface GoalSummaryParams {
 export async function summarizeGoalCompletion(
   params: GoalSummaryParams,
 ): Promise<string | undefined> {
-  const { objective, finalSummary, gapsSummary, context, agentDefinitions, maxTurns } = params;
+  const { objective, finalSummary, gapsSummary, context, agentDefinitions, maxTurns, subagentDeps } = params;
 
   const definition = findVerificationAgent(agentDefinitions);
   if (!definition) {
@@ -83,6 +90,8 @@ export async function summarizeGoalCompletion(
       availableTools: context.options.tools,
       description: `Goal summarizer: ${objective.slice(0, 60)}`,
       agentId: crypto.randomUUID(),
+      createSubAgent: subagentDeps.createSubAgent,
+      createToolRegistry: subagentDeps.createToolRegistry,
     });
     const text = extractText(result).trim();
     if (!text) {

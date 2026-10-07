@@ -11,6 +11,20 @@ import {
   type GoalSnapshot,
 } from '../goal-tracker.js';
 import { verifyGoalCompletion, shouldRunVerificationPanel } from '../goal-evaluator.js';
+import { duyaAgent } from '../../../agent/DuyaAgent.js';
+import { createBuiltinRegistry } from '../../../tool/builtin.js';
+import type { SubagentRunDeps } from '../../../tool/SubagentTool/runAgent.js';
+
+// Plan 610 A5: the verification panel receives the sub-agent composition deps.
+// These are the REAL factories, not stubs: this suite's whole point is a panel
+// that stalls until `verifyTimeoutMs` fires, so the verifier must actually
+// start. A throwing stub would fail the run instantly and settle the verdict
+// for the wrong reason.
+const subagentDeps: SubagentRunDeps = {
+  createSubAgent: (options) => new duyaAgent(options),
+  // Argument-less, matching what `runAgent` did before the cut.
+  createToolRegistry: () => createBuiltinRegistry(subagentDeps),
+};
 
 function freshGoal(objective = 'Ship the thing', sessionId?: string): void {
   goalModeTracker.transition({ type: 'clear' });
@@ -187,6 +201,7 @@ describe('verification panel timeout (plan 553)', () => {
       finalSummary: 'done',
       context,
       agentDefinitions: agentDefinitions.allAgents,
+      subagentDeps,
       verifyTimeoutMs: 30,
       maxTurns: 2,
     });

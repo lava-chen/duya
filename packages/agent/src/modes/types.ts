@@ -3,6 +3,10 @@ import type { SSEEvent, Tool } from '../types.js';
 import type { ToolExecutor } from '../tool/registry.js';
 import type { ToolRegistry } from '../tool/registry.js';
 import type { ModeTracker } from './engine/tracker.js';
+// Plan 610 A5: must stay a whole-statement single-line `import type` — the
+// cycle gate erases exactly this form, and the inline `import { type X }`
+// spelling would emit a real load back into the SubagentTool module.
+import type { SubagentRunDeps } from '../tool/SubagentTool/runAgent.js'
 
 export type { SSEEvent };
 
@@ -51,6 +55,21 @@ export interface ModeModifierContext {
    * without the LLM having to pass it.
    */
   toolUseContextPatch?: Record<string, unknown>;
+  /**
+   * Plan 610 A5: composition dependencies for spawning a sub-agent.
+   *
+   * `goal` and `research` inject tools whose executors run verification /
+   * fan-out sub-agents, and those runs need the `SubagentTool` composition
+   * dependencies. `runAgent` used to import them from module scope; making them
+   * a required context field puts them on the channel the mode layer already
+   * has, so the wiring is explicit at the site that builds the context rather
+   * than hidden inside a module import.
+   *
+   * Required, not optional: an absent pair here would silently degrade
+   * verification into a skipped verification, which is a behaviour change
+   * dressed as a default.
+   */
+  subagentDeps: SubagentRunDeps;
 }
 
 /**

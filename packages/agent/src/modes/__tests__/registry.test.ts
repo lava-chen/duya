@@ -40,6 +40,16 @@ function makeCtx(): ModeModifierContext {
   return {
     sessionId: 'test-session',
     workingDirectory: '/test',
+    // Plan 610 A5: the context carries the sub-agent composition deps. The
+    // modes under test here never spawn a sub-agent, so inert stubs are fine.
+    subagentDeps: {
+      createSubAgent: () => {
+        throw new Error('not used by the mode-registry suite');
+      },
+      createToolRegistry: () => {
+        throw new Error('not used by the mode-registry suite');
+      },
+    },
     state: {},
   };
 }

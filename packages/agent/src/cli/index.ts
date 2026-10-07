@@ -27,6 +27,7 @@ import { createBuiltinRegistry } from '../tool/builtin.js';
 import { sessionSearchTool, type SummaryLLMConfig } from '../tool/SessionSearchTool/index.js';
 import type { AgentOptions, Message } from '../types.js';
 import type { ToolRegistry } from '../tool/registry.js';
+import type { SubagentRunDeps } from '../tool/SubagentTool/runAgent.js';
 import { loadSkills, getSkillRegistry } from '../skills/index.js';
 import { Colors, color } from './colors.js';
 import { REPL } from './repl.js';
@@ -696,8 +697,16 @@ export async function runCLI(
   // Create agent
   const agent = new duyaAgent(agentOptions);
 
+  // Plan 610 A5: the CLI is a composition site, so it owns the sub-agent
+  // dependencies outright. Both halves are already imported here.
+  const subagentDeps: SubagentRunDeps = {
+    createSubAgent: (subAgentOptions) => new duyaAgent(subAgentOptions),
+    // Argument-less, matching what `runAgent` did before the cut.
+    createToolRegistry: () => createBuiltinRegistry(subagentDeps),
+  };
+
   // Get tool registry
-  const registry = createBuiltinRegistry();
+  const registry = createBuiltinRegistry(subagentDeps);
 
   // Configure session search LLM if options provided
   if (options.summaryLLMProvider && options.summaryLLMApiKey) {

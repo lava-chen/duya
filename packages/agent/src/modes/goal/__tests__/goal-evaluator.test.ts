@@ -18,6 +18,18 @@ import {
   fingerprintOf,
 } from '../goal-evaluator.js';
 import { GoalTracker } from '../goal-tracker.js';
+import type { SubagentRunDeps } from '../../../tool/SubagentTool/runAgent.js';
+
+// Plan 610 A5: the verification panel receives the sub-agent composition deps.
+// The only case that reaches them returns blocked before any sub-agent run.
+const stubSubagentDeps: SubagentRunDeps = {
+  createSubAgent: () => {
+    throw new Error('not used by the goal-evaluator suite');
+  },
+  createToolRegistry: () => {
+    throw new Error('not used by the goal-evaluator suite');
+  },
+};
 
 describe('parseVerifierReport', () => {
   it('maps VERDICT: PASS to achieved', () => {
@@ -228,6 +240,7 @@ describe('verifyGoalCompletion (mocked runAgent)', () => {
       finalSummary: 'y',
       context: { options: {} } as never,
       agentDefinitions: [],
+      subagentDeps: stubSubagentDeps,
     });
     expect(r.verdict).toBe('blocked');
   });

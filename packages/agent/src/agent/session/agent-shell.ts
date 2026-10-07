@@ -39,6 +39,7 @@ import { readToolExposureConfig } from '../../config/tool-exposure.js';
 import { ToolCatalogTool, type ToolCatalogView } from '../../tool/ToolCatalogTool/ToolCatalogTool.js';
 import { ToolInvokeTool } from '../../tool/ToolInvokeTool/ToolInvokeTool.js';
 import type { AgentDefinition } from '../../tool/SubagentTool/index.js';
+import type { SubagentRunDeps } from '../../tool/SubagentTool/runAgent.js';
 import type { ChatOptions, Message, MessageContent, SSEEvent, Tool, WidgetStyleSignature } from '../../types.js';
 import { logger } from '../../utils/logger.js';
 import { buildAgentIdentityBlock, EMPTY_DISCOVERED } from '../utils/agent-helpers.js';
@@ -404,6 +405,27 @@ export async function* streamLoopEvents<T, U>(
 }
 
 /**
+ * Plan 610 A5: assemble the sub-agent composition deps for the shell path.
+ *
+ * Same shape as `DuyaAgent.initToolCatalog` builds, and deliberately not
+ * shared through a module of its own: a shared builder would have to import
+ * both `DuyaAgent` and `builtin`, and `DuyaAgent` imports this helper, so the
+ * builder would close the very cycle this work removes.
+ */
+async function createShellSubagentRunDeps(): Promise<SubagentRunDeps> {
+  const [{ duyaAgent }, { createBuiltinRegistry }] = await Promise.all([
+    import('../DuyaAgent.js'),
+    import('../../tool/builtin.js'),
+  ]);
+  const deps: SubagentRunDeps = {
+    createSubAgent: (agentOptions) => new duyaAgent(agentOptions),
+    // Argument-less, matching what `runAgent` did before the cut.
+    createToolRegistry: () => createBuiltinRegistry(deps),
+  };
+  return deps;
+}
+
+/**
  * Dispatch to an orchestrator-paradigm ModeModifier (plan 224 Phase 1.5+).
  * Yields SSE events directly to the stream.
  */
@@ -449,10 +471,16 @@ export async function* dispatchOrchestratorMode(
   const orchestratorResolved = orchestratorActiveModes.length > 0
     ? modeModifierRegistry.resolve(orchestratorActiveModes)
     : null;
+  // Plan 610 A5: the sub-agent composition deps for this shell. Built from the
+  // same two modules the worker path uses, each loaded lazily so this helper
+  // stays a leaf. `agent-shell -> DuyaAgent` and `agent-shell -> builtin` were
+  // both measured against the module graph and introduce no cycle.
+  const subagentDeps = await createShellSubagentRunDeps();
   if (orchestratorResolved) {
     const ctxForModes: ModeModifierContext = {
       sessionId: ctx.sessionId ?? '',
       workingDirectory: ctx.workingDirectory ?? '',
+      subagentDeps,
       state: {
         conductorCanvasId: options?.conductorCanvasId,
         widgetStyleHistory: ctx.widgetStyleHistory,
@@ -479,6 +507,7 @@ export async function* dispatchOrchestratorMode(
   const modeCtx: ModeModifierContext = {
     sessionId: ctx.sessionId ?? '',
     workingDirectory: ctx.workingDirectory ?? '',
+    subagentDeps,
     state: {},
   };
 

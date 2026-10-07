@@ -24,7 +24,8 @@
 import { z } from 'zod';
 import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor } from '../../tool/registry.js';
-import { subagentTool } from '../../tool/SubagentTool/SubagentTool.js';
+import { SubagentTool } from '../../tool/SubagentTool/SubagentTool.js';
+import type { SubagentRunDeps } from '../../tool/SubagentTool/runAgent.js';
 import { researchModeTracker } from './research-tracker.js';
 import { persistSnapshot } from '../engine/persistence.js';
 import { sendEvent, buildResearchUpdatedEvent } from '../../process/worker-protocol.js';
@@ -91,7 +92,15 @@ interface FanoutResult {
   sessionId?: string;
 }
 
-const researchFanoutExecutor: ToolExecutor = {
+/**
+ * Plan 610 A5: built per injection, carrying the `SubagentTool` instance this
+ * tool fans out with. The module-level `subagentTool` singleton is gone — every
+ * registry now constructs its own — so the fan-out tool takes the instance
+ * from its caller instead of importing one.
+ */
+function createResearchFanoutExecutor(deps: SubagentRunDeps): ToolExecutor {
+  const subagentTool = new SubagentTool(deps);
+  return {
   async execute(
     input: Record<string, unknown>,
     workingDirectory?: string,
@@ -127,7 +136,7 @@ const researchFanoutExecutor: ToolExecutor = {
     }
 
     const results = await Promise.all(
-      toRun.map((q) => runOne(q, workingDirectory, context)),
+      toRun.map((q) => runOne(subagentTool, q, workingDirectory, context)),
     );
 
     const sessionId = context?.options.sessionId;
@@ -148,10 +157,12 @@ const researchFanoutExecutor: ToolExecutor = {
       error: false,
     };
   },
-};
+  };
+}
 
 /** Spawn a single Research sub-agent for one sub-question and collect its text. */
 async function runOne(
+  subagentTool: SubagentTool,
   question: string,
   workingDirectory: string | undefined,
   context: ToolUseContext | undefined,
@@ -266,11 +277,14 @@ function safeParse(text: string): unknown {
 }
 
 /** ToolRegistration pair injected by research mode (plan 423 §4). */
-export function getResearchFanoutTool(): {
+export function getResearchFanoutTool(deps: SubagentRunDeps): {
   definition: Tool;
   executor: ToolExecutor;
 } {
-  return { definition: researchFanoutDefinition, executor: researchFanoutExecutor };
+  return {
+    definition: researchFanoutDefinition,
+    executor: createResearchFanoutExecutor(deps),
+  };
 }
 
 /**

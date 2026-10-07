@@ -1,22 +1,39 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
-  subagentTool,
+  SubagentTool,
   getAgentDefinitions,
   formatAgentLineForPrompt,
   SUBAGENT_TOOL_NAME,
   type SubagentToolInput,
 } from '../../../src/tool/SubagentTool/SubagentTool.js';
-import { runAgentSync, type RunAgentParams } from '../../../src/tool/SubagentTool/runAgent.js';
+import { runAgentSync, type RunAgentParams, type SubagentRunDeps } from '../../../src/tool/SubagentTool/runAgent.js';
+import { duyaAgent } from '../../../src/agent/DuyaAgent.js';
+import { createBuiltinRegistry } from '../../../src/tool/builtin.js';
 import type { ToolUseContext, Tool, Message } from '../../../src/types.js';
 import type { AgentDefinition } from '../../../src/tool/SubagentTool/loadAgentsDir.js';
+
+// Plan 610 A5: `SubagentTool` is no longer a module singleton and `runAgent`
+// no longer resolves its composition deps from module scope, so this suite
+// supplies the same REAL factories the removed imports provided.
+//
+// A first attempt used throwing stubs on the theory that both cases bail out
+// early. Measurement said otherwise: both reach `createToolRegistry`, so stubs
+// turned the cases into "stub called" failures -- and masked the known
+// pre-existing `no API key` failure (this environment has a key in the
+// environment, so that case no longer short-circuits where the test assumes).
+const subagentDeps: SubagentRunDeps = {
+  createSubAgent: (options) => new duyaAgent(options),
+  // Argument-less, matching what `runAgent` did before the cut.
+  createToolRegistry: () => createBuiltinRegistry(subagentDeps),
+};
 
 // 99556ea4 deleted the exported `getSubagentToolDefinition()` helper, which
 // was a one-line `return subagentTool.toTool()` and added nothing. The
 // definition it returned is still the contract this suite pins, so read it
-// off the registered singleton instead — that is the object the tool
-// registry actually advertises, which is a strictly tighter assertion than
-// the deleted wrapper was.
-const getSubagentToolDefinition = () => subagentTool.toTool();
+// off an instance built exactly the way `createBuiltinRegistry` builds one,
+// that is the object the tool registry actually advertises, which is a
+// strictly tighter assertion than the deleted wrapper was.
+const getSubagentToolDefinition = () => new SubagentTool(subagentDeps).toTool();
 
 describe('AgentTool', () => {
   describe('getSubagentToolDefinition', () => {
@@ -225,6 +242,8 @@ describe('runAgent', () => {
         isAsync: false,
         availableTools: [],
         agentId: 'test-agent-id',
+        createSubAgent: subagentDeps.createSubAgent,
+        createToolRegistry: subagentDeps.createToolRegistry,
       };
 
       const result = await runAgentSync(params);
@@ -265,6 +284,8 @@ describe('runAgent', () => {
         isAsync: false,
         availableTools: [],
         agentId: 'test-agent-id',
+        createSubAgent: subagentDeps.createSubAgent,
+        createToolRegistry: subagentDeps.createToolRegistry,
       };
 
       const result = await runAgentSync(params);
