@@ -564,3 +564,70 @@ parity 测试在整个过程中保持双边有效。
 不是此前记录的 `181/190 in 23 files` / 9 failed —— 后者是**子串过滤**跑法,
 会额外扫进 `unit/AgentTool/`。两次跑的 scope 不同,数字不可互换引用。
 
+---
+
+## 2026-10-07 — S4c-d2a 第三次被拒:三条**静默失败**型前置缺口
+
+worker 同样**零提交**,树干净停在 `bbcd9127`。它造了一个四臂探针(真 `duyaAgent`、
+已注册探针工具、脚本化 provider,数**真实工具执行次数**),主 agent 逐条独立复核,
+三条全部成立。
+
+| 臂 | 账本 | declared-tools 刷新 | 历史 | 工具执行 | 终态 | turn-2 角色 |
+| --- | --- | --- | --- | --- | --- | --- |
+| A | 无 | 无 | inline | **0** | **`failed`** | — |
+| B | 有 | 有 | `by_ref` | **1** | completed | `user,assistant,tool,user` |
+| C | 有 | 有 | **inline** | 1 | completed | **`["user"]`** |
+| D | 有 | **无** | `by_ref` | **0** | completed | `user,assistant,tool,user` |
+
+### 缺口一:副作用账本是**强制的**,却无法诚实绑定
+
+`RunEngineImpl.#ticket`:无账本时,**任何非 `read_only` 的调用直接 `throw`**
+——「不是假设没有副作用工具,而是无副作用工具才可派发」。
+
+而 `composeLegacyRunSources` 的 `sideEffectOf: () => null`,经 `resolveSideEffectClass`
+把**每个**工具解析成 `undeclared`(非 `read_only`)。根因是 `ToolMetaInput` 没有
+`sideEffect` 成员,产品里**没有任何工具声明过类别**。
+
+**所以账本绑定不是可选优化,是工具腿能跑的前提。** 而绑定它需要 `runEpoch` 与 `RunFence`:
+`chat:start` 两者都没有,runtime 侧唯一的 fence 生产者 `recoverRun` 要求已有 committed
+checkpoint,首次尝试没有。现有供给者全在伪造 `FIRST_EPOCH` + `GROUND_FENCE`。
+
+**诚实解法只有两条路:** (a) Control Plane 在 `chat:start` 上送来 `runEpoch` 与初始
+`RunFence`(它现在只送 `runId`,且 `runId` 还是可选的);或 (b) 在 `@duya/agent-protocol`
+里加一个**首次尝试 fence 生产者**,由协议自己定义 epoch 1,而不是由调用方断言。
+
+### 缺口二:`buildLegacyRunInput` 发的是 inline 历史,turn 2 会饿死
+
+它发 `history: { kind: 'inline', value: history }`,而**同一函数**的 `catalog` 却是 `by_ref`
+——函数的注释只解释了后者,没解释这个不对称。引擎对 inline 读 `input.history.value`,
+那份值在 run 开始就冻结;只有 `by_ref` 才回落到 `assembled.messages`。
+臂 C 实测:工具跑了、run `completed`、turn-2 的请求里 **tool result 不存在**。
+现有全部证明性 harness 都把它覆盖成 `by_ref`,所以这个缺口此前对测试**不可见**。
+
+### 缺口三:declared-tools 守卫在引擎路径上永远是空的
+
+`declaredToolsForRequest` 初始为 `new Set<string>()`,由 `TurnStreamRunner` 每次尝试调
+`refreshDeclaredTools` 填充。引擎路径的 `createClientModelPort` **从不调它**,
+守卫保持空集 → **每一次工具派发都被拒**(臂 D:工具执行 0 次,而 run 仍报 `completed`)。
+
+`turn-pipeline-producer.test.ts` 的注释早就写明了这个陷阱:「守卫以**空集**开始并拒绝
+它之外的任何工具,所以跳过刷新的测试会看到每次调用都是 `tool_error`,
+并且可能因为**从未派发任何东西**而『通过』一个静音管道的断言」。
+
+### 为什么这三条比红门禁更严重
+
+**它们全是静默失败**:run 正常完成、门禁全绿、但工具一个没执行、tool result 不上线。
+一个「跑完了但什么都没干」的产品,比一条红门禁危险得多 ——
+红门禁会拦住 push,这三条不会。
+
+### 因此 d2a 不能开工,先补三片前置
+
+| 前置 | 内容 | 跨层? |
+| --- | --- | --- |
+| **P1** | 诚实的首次尝试 fence(账本才能绑定) | **是** —— 要动 Control Plane 契约或协议 |
+| **P2** | `buildLegacyRunInput` 的历史改 `by_ref` | 否 |
+| **P3** | 引擎模型腿接上 `refreshDeclaredTools` | 否 |
+
+三片都不大,但都必须先有**证明它们真的修好了上述行为**的测试 ——
+现有 harness 会覆盖掉缺口二,所以必须造一个不覆盖的生产形状探针。
+
