@@ -233,11 +233,12 @@ describe('DuyaAgent thinking replay', () => {
     //
     // The consequence is not cosmetic. `packages/ai/src/api/anthropic-messages.ts:497`
     // keeps a `thinking` block native ONLY when it carries a signature and
-    // downgrades an unsigned one to text, so an Anthropic thinking chain can no
-    // longer be continued across a tool round. The fix is one line in
-    // `packages/agent-runtime` (capture `frame.signature` before the empty-text
-    // early return), which is production source and outside this migration's
-    // scope.
+    // downgrades an unsigned one to text, so an Anthropic thinking chain could
+    // not be continued across a tool round.
+    //
+    // FIXED in `0e4f1c8a`-era `run-engine.ts`: the signature is now read before
+    // the empty-text early return. This assertion is what proves it, so if the
+    // ordering is ever reverted the message names the symptom.
     expect(thinking.thinkingSignature, 'the engine drops the empty-text signature event').toBe(
       'sig-123',
     );

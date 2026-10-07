@@ -3258,9 +3258,18 @@ class TurnMessage {
     if (frame.redacted === true && typeof frame.encrypted === 'string' && frame.encrypted !== '') {
       this.#redactedPayload = frame.encrypted;
     }
+    // The signature is read BEFORE the empty-text guard, and that order is the
+    // whole point. Anthropic delivers the signature as its OWN event:
+    // `parseAnthropicEvent` maps `signature_delta` to a thinking frame whose
+    // `delta` is `''`, so the signature arrives on a frame with no text. Reading
+    // it after the guard discarded it, and a signed thinking block replayed
+    // without its signature is DOWNGRADED TO TEXT by the provider
+    // (`convertContentBlock`), which silently ends thinking-chain continuation
+    // across a tool round. The legacy read `event.signature` independently of
+    // whether `event.data` was empty; that condition is restored here.
+    if (frame.signature !== undefined) this.#thinkingSignature = frame.signature;
     if (frame.text === '') return;
     this.#thinking += frame.text;
-    if (frame.signature !== undefined) this.#thinkingSignature = frame.signature;
   }
 
   /**
