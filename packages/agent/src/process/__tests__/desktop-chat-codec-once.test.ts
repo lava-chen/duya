@@ -371,6 +371,58 @@ describe('a desktop chat turn survives the codec exactly once', () => {
     expect(turn.driverFrames.length - heldDone.length).toBe(turn.delivered.length);
   }, 120_000);
 
+  it('admits the projector arms the scripted turn never produces', () => {
+    // The test below measures the inventory over ONE scripted turn, whose
+    // frames are thinking / text / done. The three projector arms this change
+    // newly converts -- `status`, `retry`, `tool_progress` -- never appear in
+    // a turn scripted that way, so they sit OUTSIDE what that measurement
+    // covers. (`goal_updated` and `token_usage` are deliberately NOT
+    // converted; they reach the renderer from a second, non-codec producer.)
+    // Since the entry's admission comment rests its completeness argument on
+    // this pin, the arms that are now converted have to be in the pin
+    // explicitly, not merely asserted in a different file.
+    //
+    // The claim is the same one the loop above makes, applied to frames the
+    // loop cannot reach: each is emitted by the REAL projector, converted by
+    // the REAL codec, and re-admitted by the REAL gate -- and re-admission
+    // must be a verbatim no-op. A non-`chat:` vocabulary would fail here
+    // instead of passing unnoticed.
+    const projected: readonly RunEvent[] = [
+      { type: 'assistant.status', message: 'inventory-check' },
+      { type: 'turn.retry_scheduled', attempt: 2, maxAttempts: 10, delayMs: 500, reason: 'inventory-check' },
+      { type: 'tool.progress', toolCallId: 'call-inventory', elapsedMs: 1_000 },
+    ];
+
+    for (const payload of projected) {
+      const frame = projectToLegacyFrame(envelope(payload));
+      expect(frame, `projectToLegacyFrame dropped ${payload.type}`).not.toBeNull();
+
+      const chatFrame = convertSSEToAgentMessage(frame as unknown as AgentStreamEvent);
+      expect(chatFrame, `the codec dropped the ${payload.type} frame`).not.toBeNull();
+
+      // The prefix itself: this is the whole admission rule, stated directly.
+      expect(
+        String(chatFrame?.['type']).startsWith('chat:'),
+        `${String(payload.type)} produced the non-chat vocabulary ${String(chatFrame?.['type'])}`,
+      ).toBe(true);
+
+      // And that admitting one is a verbatim no-op rather than a re-encoding.
+      // Compared key-by-key instead of with a whole-object `toEqual`, which
+      // ignores an `undefined` property -- and an `undefined` where a value
+      // belonged is exactly the shape the pre-fix codec produced.
+      const readmitted = admitChatFrame(chatFrame as { type: string });
+      expect(readmitted, `admission dropped the codec's own ${String(payload.type)} frame`).not.toBeNull();
+      const before = chatFrame as Record<string, unknown>;
+      const after = readmitted as Record<string, unknown>;
+      expect(Object.keys(after).sort(), `${String(payload.type)}: admission changed the key set`).toEqual(
+        Object.keys(before).sort(),
+      );
+      for (const key of Object.keys(before)) {
+        expect(after[key], `${String(payload.type)}: admission changed ${key}`).toStrictEqual(before[key]);
+      }
+    }
+  });
+
   it('admits every frame the real pipeline emits, so the gate has no blind spot', async () => {
     const turn = await runTurn();
 
