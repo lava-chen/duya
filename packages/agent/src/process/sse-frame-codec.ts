@@ -42,14 +42,34 @@ export interface AgentStreamEvent {
   readonly type: string;
   readonly data?: unknown;
   /**
-   * Producers attach fields the declared union does not name — `reason` on
-   * `done`, `code` on `error`, `metadata` on `system`. The index signature is
-   * what lets the rest-spread arms below destructure the event, and it is the
-   * same openness the inline parameter type this function was extracted from
-   * had. Narrowing it would have meant either casts at those three arms or
-   * dropping the fields they forward.
+   * Producers attach fields the declared union does not name -- `metadata` on
+   * `system`, for instance. The index signature is what lets the rest-spread
+   * arms below destructure the event, and it is the same openness the inline
+   * parameter type this function was extracted from had. Narrowing it would
+   * have meant either casts at those arms or dropping the fields they forward.
+   *
+   * It is NOT a licence to read a payload off the top level: `done` and
+   * `error` carry theirs inside `data`, and reading `event.reason` /
+   * `event.code` from here returned `undefined` for every frame the real
+   * producer ever minted. See `readPayloadString`.
    */
   readonly [field: string]: unknown;
+}
+
+/**
+ * Read one string field off a legacy frame's `data` payload.
+ *
+ * The legacy wire carries a frame's payload INSIDE `data` -- `{ type, data }`,
+ * which is the shape `LegacySseFrame` declares and the shape every agent-server
+ * client already parses. So `done` and `error` are read here rather than off the
+ * frame's top level, and the value is NARROWED because `data` is `unknown`: a
+ * bare `as string` would turn "the payload is an object" into a lie the type
+ * system could not catch.
+ */
+function readPayloadString(data: unknown, field: string): string | undefined {
+  if (data === null || typeof data !== 'object') return undefined;
+  const value = (data as Record<string, unknown>)[field];
+  return typeof value === 'string' ? value : undefined;
 }
 
 /**
@@ -148,10 +168,28 @@ export function convertSSEToAgentMessage(event: AgentStreamEvent): Record<string
     }
     case 'permission_request':
       return { type: 'chat:permission', request: event.data };
+    // ── The two terminal frames ─────────────────────────────────────────
+    //
+    // Both payloads live INSIDE `data`, which is where the ONE producer of
+    // these frames writes them: `projectToLegacyFrame` (`run.completed` ->
+    // `{ type: 'done', data: { reason } }`, `run.failed` ->
+    // `{ type: 'error', data: { message, code } }`), reached through
+    // `driveRunWithEngine`'s drain. `LegacySseFrame.data` is `unknown`, so the
+    // reads below are NARROWED rather than asserted -- the old
+    // `event.data as string` was a type assertion over a real type error, and
+    // it silently handed the worker frame's `message: string` the payload
+    // OBJECT while `code` (read off the top level) came back `undefined`.
     case 'done':
-      return { type: 'chat:done', reason: (event as { reason?: string }).reason };
+      return { type: 'chat:done', reason: readPayloadString(event.data, 'reason') };
     case 'error':
-      return { type: 'chat:error', message: event.data as string, code: (event as { code?: string }).code };
+      return {
+        type: 'chat:error',
+        // `''`, not the payload: `message` is declared `string` on the worker
+        // frame, and the router's own fallback (`event.message || 'Unknown
+        // error'`) turns an empty string into the message the user sees.
+        message: readPayloadString(event.data, 'message') ?? '',
+        code: readPayloadString(event.data, 'code'),
+      };
     case 'turn_start':
       return { type: 'chat:status', message: `Turn ${(event.data as { turnCount?: number })?.turnCount ?? ''}` };
     case 'mode_changed':
