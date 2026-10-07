@@ -13,7 +13,7 @@ const REPO_ROOT = path.join(__dirname, '../../../../../..');
 
 describe('Phase D retire — no dangling imports', () => {
   it('consolidator.ts is deleted', () => {
-    const p = path.join(REPO_ROOT, 'packages/agent/src/memory-state/consolidator.ts');
+    const p = path.join(REPO_ROOT, 'packages/memory/src/consolidator.ts');
     expect(fs.existsSync(p)).toBe(false);
   });
 
@@ -25,7 +25,7 @@ describe('Phase D retire — no dangling imports', () => {
   });
 
   it('reconcile.ts no longer imports Phase 2 renderers from projectionContent', () => {
-    const p = path.join(REPO_ROOT, 'packages/agent/src/memory-state/reconcile.ts');
+    const p = path.join(REPO_ROOT, 'packages/memory/src/reconcile.ts');
     const content = fs.readFileSync(p, 'utf8');
     // renderRolloutSummaryFile MUST still be imported (Stage 1 keeps it).
     expect(content).toMatch(/renderRolloutSummaryFile/);
@@ -40,7 +40,7 @@ describe('Phase D retire — no dangling imports', () => {
   });
 
   it('projectionContent.ts still exports renderRolloutSummaryFile', () => {
-    const p = path.join(REPO_ROOT, 'packages/agent/src/memory-state/projectionContent.ts');
+    const p = path.join(REPO_ROOT, 'packages/memory/src/projectionContent.ts');
     const content = fs.readFileSync(p, 'utf8');
     expect(content).toMatch(/export function renderRolloutSummaryFile/);
   });

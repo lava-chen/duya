@@ -25,7 +25,7 @@ import {
   type RagRefreshResult,
 } from './rag_index';
 import { createEmbeddingClient } from './rag_embedding_client';
-import { writeSystemLog } from '../../../../../packages/agent/src/memory-state/system_log';
+import { writeSystemLog } from '@duya/memory/system_log';
 import { getLogger, LogComponent } from '../logging/logger';
 
 export type { RagRefreshResult } from './rag_index';

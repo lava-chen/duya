@@ -14,8 +14,6 @@
  * pipeline error.
  */
 
-import { getLogger } from '../utils/logger.js';
-
 export interface MemoryWakeupEvent {
   type: 'memory:wakeup';
   sessionId?: string;
@@ -26,6 +24,14 @@ export type SendWakeupFn = (event: MemoryWakeupEvent) => void;
 export interface SendMemoryWakeupOptions {
   /** Session identifier, if known. */
   sessionId?: string;
+  /**
+   * Called when `send` throws. The caller supplies it because logging is a
+   * host concern: this module used to reach into the agent's logger directly,
+   * which was the only edge from this package into agent infrastructure.
+   * Omitted means the failure is swallowed silently, which is still the
+   * contract -- a throw here must never break the agent's startup path.
+   */
+  onError?: (error: unknown) => void;
   /**
    * Explicit enable override. When omitted, the helper reads
    * `DUYA_MEMORY_ENABLED` from the environment.
@@ -43,8 +49,8 @@ export interface SendMemoryWakeupOptions {
  * Contract:
  *   - When disabled (env unset and `enabled` not `true`): no-op, returns 0.
  *   - When enabled and `send` succeeds: returns 1.
- *   - When enabled and `send` throws: logs a warning and returns 0. The
- *     throw NEVER propagates to the caller (shadow-mode tolerance).
+ *   - When enabled and `send` throws: reports via `opts.onError` and returns 0.
+ *     The throw NEVER propagates to the caller (shadow-mode tolerance).
  */
 export function sendMemoryWakeup(
   send: SendWakeupFn,
@@ -63,13 +69,9 @@ export function sendMemoryWakeup(
   } catch (err) {
     // Shadow mode: best-effort. Never break the agent's startup path.
     try {
-      const logger = getLogger();
-      logger.warn(
-        'memory:wakeup send failed (shadow mode tolerates this)',
-        { error: err instanceof Error ? err.message : String(err) },
-      );
+      opts.onError?.(err);
     } catch {
-      // Logger itself unavailable — swallow entirely.
+      // The error handler itself failed — swallow entirely.
     }
     return 0;
   }

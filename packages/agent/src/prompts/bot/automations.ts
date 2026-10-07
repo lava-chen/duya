@@ -18,7 +18,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { parse } from '@iarna/toml'
-import { getDuyaRoot } from '../../memory-state/memory_paths.js'
+import { getDuyaRoot } from '@duya/memory/memory_paths'
 import { ROUTINE_WAKE_CUE } from '../../wake/cue.js'
 import type { BotPromptContext } from './framework.js'
 import { identityHbsSentinel, makeBotTemplateHbs } from './hbsCompat.js'

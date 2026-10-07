@@ -26,7 +26,7 @@
  * two checks are complementary and the split is intentional.
  */
 
-import { CLAIM_TYPES, type ClaimType } from '../memory-rollout/types.js';
+import { CLAIM_TYPES, type ClaimType } from './types.js';
 
 const RESERVED_PATHS = new Set([
   'rollout_summaries',

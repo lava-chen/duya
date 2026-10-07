@@ -20,7 +20,7 @@ import {
   createMemoryStateFixture,
   insertCatalogRow,
   type MemoryStateFixture,
-} from './fixture';
+} from '../testing/fixture.js';
 
 /**
  * Lease race-condition scenarios (Plan 302 Phase C, design v3 D4).

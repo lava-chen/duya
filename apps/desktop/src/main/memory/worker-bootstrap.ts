@@ -58,7 +58,7 @@ export async function ensureMemoryConfigDir(configRoot: string): Promise<void> {
 
   const layoutPath = path.join(configRoot, 'memory_layout.json');
   if (!fs.existsSync(layoutPath)) {
-    const { DEFAULT_LAYOUT } = await import('../../../../../packages/agent/src/memory-state/memory_layout.js');
+    const { DEFAULT_LAYOUT } = await import('@duya/memory/memory_layout');
     const entities: Record<string, unknown> = {};
     for (const [claimType, cfg] of DEFAULT_LAYOUT.entities) {
       entities[claimType] = cfg;

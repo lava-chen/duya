@@ -51,10 +51,10 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { MIGRATIONS } from '../migrations';
 
-/** Where the agent package states the schema it requires. */
+/** Where the memory package states the schema it requires. */
 const AGENT_DDL_PATH = path.resolve(
   __dirname,
-  '../../../../../../packages/agent/src/memory-state/__tests__/schema-ddl.ts',
+  '../../../../../../packages/memory/src/testing/schema-ddl.ts',
 );
 
 /**

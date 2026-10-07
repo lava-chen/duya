@@ -15,7 +15,7 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { getDuyaMemoryRoot } from '../../memory-state/memory_paths.js'
+import { getDuyaMemoryRoot } from '@duya/memory/memory_paths'
 
 export const MAX_INLINE_SUMMARY_CHARS = 12_000
 

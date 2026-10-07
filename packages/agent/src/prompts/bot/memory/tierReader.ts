@@ -25,7 +25,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { createHash } from 'node:crypto'
-import { parseCanonicalFile } from '../../../memory-state/canonical_file.js'
+import { parseCanonicalFile } from '@duya/memory/canonical_file'
 import { normalizeKey } from './render.js'
 import type { TierMemoryEntry } from './types.js'
 

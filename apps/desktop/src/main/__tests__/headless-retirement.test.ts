@@ -32,16 +32,26 @@ import { LEGACY_RETIREMENT, RUN_ENTRY_DIVERGENCES } from '../agents/server/run-o
 
 const ROOT = resolve(__dirname, '../../../../..');
 const AGENT_SRC = resolve(ROOT, 'packages/agent/src');
+// Plan 610 A5: the memory modules moved out of the agent into their own
+// package. Both roots are scanned, because a scanner that stops at the new
+// package boundary would report the memory `.streamChat(` look-alike as
+// "not measured" rather than "measured and excluded" — the exclusion below
+// would go green by blindness instead of by counting.
+const MEMORY_SRC = resolve(ROOT, 'packages/memory/src');
 
-/** Every `.ts` under `packages/agent/src`, recursively. */
-function sourceFiles(dir: string = AGENT_SRC): string[] {
+/** Every `.ts` under each scanned source root, recursively. */
+function sourceFilesIn(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
-    if (statSync(full).isDirectory()) out.push(...sourceFiles(full));
+    if (statSync(full).isDirectory()) out.push(...sourceFilesIn(full));
     else if (full.endsWith('.ts') && !full.endsWith('.d.ts')) out.push(full);
   }
   return out;
+}
+
+function sourceFiles(): string[] {
+  return [...sourceFilesIn(AGENT_SRC), ...sourceFilesIn(MEMORY_SRC)];
 }
 
 /** One remaining call of the agent facade's `streamChat`. */
@@ -171,7 +181,7 @@ describe('H8.1 — the retirement registry matches the code', () => {
   it('excludes an @duya/ai call that wears the facade name, and shows why', () => {
     // The exclusion above is a claim about a real file, so it is asserted
     // against that file rather than left in a comment where it can rot.
-    const extractor = readFileSync(join(AGENT_SRC, 'memory-rollout', 'extractor.ts'), 'utf8');
+    const extractor = readFileSync(join(MEMORY_SRC, 'extractor.ts'), 'utf8');
     expect(extractor).toContain("AIClient['streamChat']");
     expect(extractor).toMatch(/this\.streamChat\s*=\s*llmClient\.streamChat\.bind\(/);
     expect(extractor).toContain('this.streamChat([userMessage]');
@@ -179,7 +189,7 @@ describe('H8.1 — the retirement registry matches the code', () => {
     // So it is genuinely not in the measured set.
     expect(
       remainingAgentStreamChatCallSites().map((site) => site.path),
-    ).not.toContain('packages/agent/src/memory-rollout/extractor.ts');
+    ).not.toContain('packages/memory/src/extractor.ts');
   });
 
   it('does not claim removability while a removal condition is unmet', () => {

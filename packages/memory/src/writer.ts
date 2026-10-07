@@ -26,14 +26,14 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { Database } from 'better-sqlite3';
-import { computeContentHash, enqueueProjectionOutbox } from '../memory-state/outbox.js';
+import { computeContentHash, enqueueProjectionOutbox } from './outbox.js';
 import {
   deriveRolloutSummaryFilename,
   renderRolloutSummaryFile,
   rolloutShortId,
   sanitizeRolloutSlug,
   type Stage1OutputRow,
-} from '../memory-state/projectionContent.js';
+} from './projectionContent.js';
 
 /** Hard cap on the persisted summary body (32 KiB of UTF-16 code units). */
 export const MAX_SUMMARY_CHARS = 32 * 1024;
