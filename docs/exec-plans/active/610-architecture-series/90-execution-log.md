@@ -1147,3 +1147,70 @@ message / gateway / update / backup / security / voice / agent / hook`。
 (形态上就是 `build:cli-bundle` 的同构做法)。
 
 **桌面侧不受这条影响**:`electron:dev` 走 esbuild,今天可跑(见上,`typecheck:all` exit 0)。
+
+## 2026-10-07 — S4c-d3 落地:子代理宿主走引擎;并切掉那条**早就存在**的环
+
+### 落地内容(分支 `plan/610-final-flip`)
+
+`DuyaAgent.streamChat` 的遗留循环删除后,子代理宿主(`SubagentTool`)是最后一个
+还在驱动那个循环的生产方。本切片把它换成 `driveRunWithEngine`,即 worker 入口
+与 `headless-run-host` 用的**同一个**驱动。`runAgent.ts` 的 400 行事件消费逻辑
+一个字节没动,新的 `subagent-engine-run.ts` 只负责生产那一侧,`__tests__/subagent-engine-run.test.ts`
+因此是有意义的对照。
+
+### 循环不是翻转造出来的,是翻转把一个**已有的环**撑大了
+
+`architecture:check` 报了 1 条 NEW:`[cycle] packages/agent/src/hooks/builtin.ts`,
+`SCC size=21`。实测的 SCC 成员(用 `audit-modules.mjs` 同一套解析规则复算):
+
+```
+command-port -> goal-commands -> goal-tools -> goal-summarizer
+  -> runAgent -> subagent-engine-run -> engine-run-driver
+  -> run-composition -> command-port
+```
+
+**环数一直是 9,没有增加。** 变的是那条**已经存在**的 SCC 从 17 长到 21 —— 翻转把
+`tool/SubagentTool` 的四个文件加了进去。判据把 `SCC size=N` 写进了指纹,所以
+「同一个环,变大了」只可能以 NEW 的形式出现。
+
+**因此正确的目标不是翻转新增的那条边。** 新模块到 `engine-run-driver` 的边
+正是翻转本身,砍掉它等于撤销这次落地(前一位 worker 拒绝了这个处方,拒绝是对的)。
+真正该切的是那条**前置就存在**的 `run-composition -> command-port -> goal-commands`。
+
+### 为什么切在 `duyaAgent` 上,而不是别的注入点
+
+逐个候选注入点都用同一套解析规则实测(每种都先移除端口的 import,再加入该处):
+
+| 注入位置 | 含 `hooks/builtin.ts` 的 SCC 大小 |
+| --- | --- |
+| 什么都不做(现状) | 21 |
+| 从 `command-port` 移除 import,交给 `run-composition` | 20 |
+| 从 `command-port` 移除 import,交给 `subagent-engine-run` | 18 |
+| 从 `command-port` 移除 import,交给 `runAgent` / `agent-process-entry` / `headless-run-host` | 17 |
+| **从 `command-port` 移除 import,交给 `duyaAgent`** | **17** ✅ |
+
+`duyaAgent` 之所以是对的位置,不是因为它排在表里,而是因为**它本来就 import 了
+`goal-commands`**:遗留循环还在时,`streamChat` 在函数体里内联做过 `/goal` 派发。
+循环删除后那两个 import 变成死引用,但边还在。把派发提升为类上的
+`runGoalCommand`、让命令端口把它当注入的协作者接收,是**同一份动词表**换了个位置,
+不是新增第二份实现。
+
+冻结的 baseline 里那条指纹正是 `cycle / packages/agent/src/agent/DuyaAgent.ts /
+SCC size=17`,所以落到 17 就是回到既有债务,**不需要重录 baseline**。
+
+### 变异证明(两个方向都真的变红)
+
+1. **端口不再派发 `/goal`**:把 `goalReply !== null` 改成 `goalReply.length < 0`。
+   红,且失败信息是 `expected 1 to be +0` —— 那是**模型被调用的次数**,说明
+   `/goal` 真的没被认领、直接发给了 provider(不是只改了注释)。
+2. **环重新出现**:把 `import { handleGoalCommand, isGoalControlCommand }` 加回
+   `command-port.ts`。`architecture:check` 回到 `SCC size=21` / exit 1,
+   与修复前的数字逐字一致。
+
+两次都回滚后 `git status` 干净,`architecture:check` exit 0。
+
+### 结论
+
+**`architecture:check` 回到 exit 0**(total 1054 / tolerated 1054),G7 未受影响
+(`known: 0 new: 0 stale: 0`)。`npm run typecheck:all` exit 0。
+`packages/agent/src/process` 49 文件 482 用例全绿,`tool/SubagentTool` 7 文件 62 用例全绿。
