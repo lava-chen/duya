@@ -443,10 +443,22 @@ export class HeadlessRunHost {
     this.#controller = new RunController({
       channel: {
         start: async (manifest, input, sink): Promise<ExecutionHandle> => {
-          const run = await this.#transport.start(manifest, {
-            frame: (raw) => sink.frame(raw),
-            end: () => sink.end(),
-          });
+          // The run layer's REAL input crosses here, whole. This bridge used to
+          // accept `input` and drop it on the floor, forwarding only the sink;
+          // the transport then had nothing to dispatch and fabricated an empty
+          // one, so the executor's `streamChat` was called with `''` no matter
+          // what the caller passed to `HeadlessRunHost.start`. `require` is
+          // position three on the port and this adapter ignores it, so it is
+          // passed through as `undefined` rather than reordered away.
+          const run = await this.#transport.start(
+            manifest,
+            {
+              frame: (raw) => sink.frame(raw),
+              end: () => sink.end(),
+            },
+            undefined,
+            input,
+          );
           return run.handle;
         },
       },
