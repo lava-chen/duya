@@ -197,14 +197,44 @@ modules:
   - id: agent-core
     roots: [packages/agent-core]
     managed: true
-    requires: [agent-protocol, ai]
+    # Plan 610: `ai` REMOVED, and that removal is the point — do not "restore"
+    # it as `legacy-ai`.
+    #
+    # `ai` did not match any declared module id (the id is `legacy-ai`), so it
+    # resolved to `false` and permitted NOTHING. Measured: agent-core has 12
+    # cross-module edges, all to `agent-protocol`, and ZERO to `packages/ai`.
+    # Deleting the entry changes no edge's classification today.
+    #
+    # Renaming it to `legacy-ai` WOULD change enforcement, in the wrong
+    # direction: a resolvable entry puts every future `agent-core -> packages/ai`
+    # edge into `module-dependency-permitted`, and that rule is in
+    # MEASUREMENT_RULES — permitted edges are pushed straight to `tolerated` and
+    # NEVER block, not even inside a `managed: true` module. So the rename would
+    # pre-authorise, forever, exactly the edge the `layers:` block says core must
+    # not be able to take. Leaving it unresolvable is what keeps that edge
+    # blocking if someone ever adds it.
+    #
+    # The layering intent ("`ai` is core") lives in `layers:` above, where it is
+    # argued from measurement. It does not belong in a `requires` entry, because
+    # a `requires` entry that resolves is a standing permission.
+    requires: [agent-protocol]
     publicEntrypoints: [packages/agent-core/src/index.ts]
     owner: agent
 
   - id: agent-runtime
     roots: [packages/agent-runtime]
     managed: true
-    requires: [agent-protocol, agent-core, agent-tools, ai, plugin-core]
+    # Plan 610: `agent-tools`, `ai` and `plugin-core` REMOVED. Same reasoning as
+    # agent-core above, plus `agent-tools` names nothing at all — there is no
+    # `packages/agent-tools` on disk, no module id for it, and no module whose
+    # `roots` covers such a path.
+    #
+    # Measured: agent-runtime has 130 cross-module edges — 126 to
+    # `agent-protocol`, 4 to `agent-core` — and ZERO to `packages/ai`,
+    # `packages/plugin-core`, `packages/computer-use`, or any `UNRESOLVED:`
+    # owner. The `agent-runtime -> plugin-core / computer-use / ai` edges that
+    # `allowedDependencies` below claims are granted do not exist.
+    requires: [agent-protocol, agent-core]
     publicEntrypoints: [packages/agent-runtime/src/index.ts]
     owner: agent
 
