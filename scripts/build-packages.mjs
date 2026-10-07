@@ -93,12 +93,21 @@ const BUILD_ORDER = [
   // Level 4.
   '@duya/agent-runtime', // -> @duya/agent-core, @duya/agent-protocol
 
+  // Level 5.
+  //
+  // `@duya/memory` sits at level 5 because its only `@duya/*` dependency is
+  // `@duya/ai` (level 2) and its only consumers are `@duya/agent` and
+  // `apps/desktop`. Both need its emitted `dist`, so it must be built before
+  // either — and it must not be hoisted earlier, or a package that imports it
+  // could typecheck against a `dist` that does not exist yet.
+  '@duya/memory', //           -> @duya/ai
+
   // Level 5 — last. `@duya/agent` consumes the four level-2/3 packages above,
   // and `apps/desktop/src/main` plus the agent bundle both import it, so
   // nothing that needs it can be built or typechecked earlier. It also
   // resolves `@duya/agent/message` to its OWN emitted `dist/message`, so it
   // must be fully built before any step that leans on its emitted types.
-  '@duya/agent', // -> @duya/ai, @duya/cli, @duya/computer-use, @duya/plugin-core
+  '@duya/agent', // -> @duya/ai, @duya/cli, @duya/computer-use, @duya/plugin-core, @duya/memory
 ];
 
 /**
