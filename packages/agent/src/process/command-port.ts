@@ -13,26 +13,35 @@
  *
  * This is a BINDING and not a second implementation, which is the whole point
  * and the reason it is worth a separate file. The command surface already
- * exists and already has TWO callers -- `DuyaAgent.streamChat` and the CLI
- * registry (`cli/slash-commands.ts`) -- and both of them reach the same two
- * modules:
+ * exists and already has TWO callers -- the CLI registry
+ * (`cli/slash-commands.ts`) and, before the engine cutover,
+ * `DuyaAgent.streamChat` -- and both of them reach the same two modules:
  *
  * - `modes/goal/goal-commands.ts` -- `isGoalControlCommand` / `handleGoalCommand`
  * - `session/transcript-commands.ts` -- `isTranscriptControlCommand` /
  *   `handleTranscriptCommand`
  *
- * So the engine path becomes the THIRD caller of the same functions. The
- * recognition predicate, the verb tables, the `/goal` state machine, the
- * transcript renderer and the reply wording are all still written once, in one
- * place, by the code the other two drivers call. A second `isGoalCommand`
- * here would be a third definition of what `/goal status` means, and the three
- * could disagree without any test failing -- which is exactly the
- * double-execution / double-tagging failure class the previous two slices of
- * this plan existed to avoid.
+ * So the engine path became the THIRD caller of the same functions, and the
+ * `/goal` half is reached through `LegacyCommandContext.runGoalCommand` --
+ * `duyaAgent`'s own method, which dispatches with the same two functions. A
+ * second `isGoalCommand` here would be a third definition of what
+ * `/goal status` means, and the three could disagree without any test failing
+ * -- which is exactly the double-execution / double-tagging failure class the
+ * previous two slices of this plan existed to avoid.
+ *
+ * ## Why `/goal` is INJECTED while the transcript family is imported
+ *
+ * Measured, not preferred: `transcript-commands.ts` is not in a module cycle,
+ * and `goal-commands.ts` is, because `goal-tools -> goal-summarizer ->
+ * runAgent` reaches the driver that composes this very port. Importing it here
+ * grew the SCC containing `hooks/builtin.ts` from 17 to 21 members.
+ * `agent/DuyaAgent.ts`'s `runGoalCommand` is the injection point that keeps it
+ * at 17 -- see that method's own header for the alternatives and their
+ * measurements.
  *
  * ## The order is the legacy's, and it is load-bearing
  *
- * `DuyaAgent.streamChat` tests `/goal` FIRST and the transcript family second
+ * `DuyaAgent.streamChat` tested `/goal` FIRST and the transcript family second
  * (`DuyaAgent.ts:2411` then `:2423`). The two sets do not overlap today, so
  * swapping them would be invisible -- but the order is copied rather than
  * invented so that a future command added to both families resolves the way the
@@ -74,7 +83,6 @@
 import type { RunCommandOutcome, RunCommandPort } from '@duya/agent-runtime';
 import type { ModelMessage } from '@duya/agent-runtime';
 import type { Message } from '../types.js';
-import { handleGoalCommand, isGoalControlCommand } from '../modes/goal/goal-commands.js';
 import {
   handleTranscriptCommand,
   isTranscriptControlCommand,
@@ -89,6 +97,22 @@ export interface LegacyCommandContext {
   readonly workingDirectory?: string;
   /** `agent.getMessages()`. The transcript family reads it; `/goal` does not. */
   readonly messages: readonly Message[];
+  /**
+   * Where `/goal` is answered. Plan 610: INJECTED, not imported.
+   *
+   * Declared structurally so this port names the BEHAVIOUR rather than a mode's
+   * implementation -- the same reason `LegacyRunHost.runFork` is declared
+   * structurally. `duyaAgent.runGoalCommand` satisfies it, and the port can no
+   * longer reach `modes/goal` even by accident, which is what keeps
+   * `command-port -> goal-commands` out of the module cycle.
+   *
+   * `null` means "not a `/goal` control verb", which is the answer an objective
+   * (`/goal ship the release`) gets so it can reach the model.
+   */
+  readonly runGoalCommand: (
+    prompt: string,
+    context: { readonly sessionId?: string; readonly workingDirectory?: string },
+  ) => Promise<string | null>;
 }
 
 /**
@@ -125,18 +149,16 @@ export function createLegacyCommandPort(context: LegacyCommandContext): RunComma
       if (text === null) return null;
 
       // ── `/goal` FIRST, in the legacy's order ──────────────────────────────
-      // `handleGoalCommand` is only reached when `isGoalControlCommand` has
-      // already agreed, and it re-derives the verb itself; the pair is used
-      // exactly as `streamChat` uses it.
-      if (text.startsWith('/goal') && isGoalControlCommand(text)) {
-        const result = await handleGoalCommand(text, {
-          ...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
-          ...(context.workingDirectory === undefined
-            ? {}
-            : { workingDirectory: context.workingDirectory }),
-        });
-        return { reply: result.reply };
-      }
+      // The recogniser AND the handler are the agent's, reached through the
+      // injected collaborator: one definition of the verb table, and no import
+      // from this port into a specific mode's implementation.
+      const goalReply = await context.runGoalCommand(text, {
+        ...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
+        ...(context.workingDirectory === undefined
+          ? {}
+          : { workingDirectory: context.workingDirectory }),
+      });
+      if (goalReply !== null) return { reply: goalReply };
 
       // ── the transcript family, SECOND ─────────────────────────────────────
       if (isTranscriptControlCommand(text)) {

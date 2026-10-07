@@ -4563,6 +4563,56 @@ export class duyaAgent implements AgentRuntime {
   // === end streamChat helpers ===========================================
 
   /**
+   * Answer a `/goal` CONTROL verb, or report that this prompt is not one.
+   *
+   * ## Why this is a method and not something `command-port.ts` imports
+   *
+   * The engine path answers control commands through
+   * `process/command-port.ts`, and that port used to reach straight for
+   * `modes/goal/goal-commands.js`. That made the PORT know a specific mode's
+   * implementation, and it closed a cycle that already existed before plan 610:
+   *
+   *   command-port -> goal-commands -> goal-tools -> goal-summarizer
+   *     -> runAgent -> subagent-engine-run -> engine-run-driver
+   *     -> run-composition -> command-port
+   *
+   * The last edge is this slice's driver flip; the rest is pre-existing. So the
+   * port taking the goal handler as an injected collaborator is what breaks the
+   * loop, and this method is who supplies it: `duyaAgent` already imports
+   * `goal-commands` (it dispatched `/goal` inline in `streamChat` until that
+   * loop was deleted), so moving the dispatch onto the class keeps ONE
+   * implementation of the verb table instead of adding a second one here.
+   *
+   * MEASURED, not assumed: with the port's import removed this way the module
+   * SCC containing `hooks/builtin.ts` falls from 21 members to 17 -- the size
+   * `architecture:check`'s frozen baseline already records. Importing
+   * `goal-commands` from `run-composition.ts` instead measures 20, and from
+   * `subagent-engine-run.ts` measures 18, so the injection has to land HERE.
+   *
+   * `null` means "not a goal control command, run the model", and it is the
+   * same answer the removed `streamChat` block gave by falling through:
+   * `/goal <objective>` starts a goal THROUGH the model, which calls
+   * `goal_start`, so treating it as a command would answer an objective with
+   * usage text and start nothing.
+   */
+  async runGoalCommand(
+    prompt: string,
+    context: { readonly sessionId?: string; readonly workingDirectory?: string },
+  ): Promise<string | null> {
+    // The legacy's own guard, in its order: the prefix test first, then the
+    // recogniser. `isGoalControlCommand` re-derives the verb itself, so the
+    // pair is used exactly as `streamChat` used it.
+    if (!prompt.startsWith('/goal') || !isGoalControlCommand(prompt)) return null;
+    const result = await handleGoalCommand(prompt, {
+      ...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
+      ...(context.workingDirectory === undefined
+        ? {}
+        : { workingDirectory: context.workingDirectory }),
+    });
+    return result.reply;
+  }
+
+  /**
    * 涓柇褰撳墠瀵硅瘽
    */
   interrupt(): void {

@@ -882,6 +882,11 @@ export function composeLegacyRunSources(
         get messages(): readonly Message[] {
           return agent.getMessages();
         },
+        // Plan 610: the `/goal` half is the AGENT's dispatch, handed over rather
+        // than imported here. `run-composition -> goal-commands` was measured
+        // at SCC 20 -- it re-enters the cycle through the very driver that
+        // composes this port. See `duyaAgent.runGoalCommand`.
+        runGoalCommand: (prompt, context) => agent.runGoalCommand(prompt, context),
         ...(host.sessionId === undefined ? {} : { sessionId: host.sessionId }),
         ...(host.workingDirectory === undefined
           ? {}
