@@ -190,6 +190,7 @@ import type {
 import {
   canonicalJson,
   sha256Hex,
+  type PermissionPolicyMode,
   type RunId,
   type RunManifest,
   type TokenUsage as ProtocolTokenUsage,
@@ -1145,7 +1146,16 @@ export interface LegacyRunFacts {
   readonly revision: string;
   /** The catalog revision this run advertises. `ToolRegistry.getCatalogRevision()`. */
   readonly catalogRevision: number;
-  readonly permissionMode: 'default' | 'acceptEdits' | 'plan';
+  /**
+   * The PROTOCOL's mode, not a subset of it.
+   *
+   * Narrowed to `'default' | 'acceptEdits' | 'plan'` alongside the driver's copy,
+   * which is what made a `bypassPermissions` session impossible to record
+   * faithfully. `buildLegacyRunManifest` writes this straight into
+   * `permissionPolicy.mode`, whose type is `PermissionPolicyMode`, so the
+   * narrower union was buying nothing.
+   */
+  readonly permissionMode: PermissionPolicyMode;
   readonly roots?: readonly string[];
   readonly maxTurns?: number;
 }

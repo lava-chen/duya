@@ -6,6 +6,9 @@
  *       因此本桥接必须先于 setPermissionMode 调用.
  */
 
+import { toExternalPermissionMode } from '../permissions/policy.js';
+import type { ExternalPermissionMode } from '../permissions/types.js';
+
 export type AgentPermissionMode = 'default' | 'auto' | 'bypassPermissions';
 
 export function isValidAgentMode(m: unknown): m is AgentPermissionMode {
@@ -56,4 +59,48 @@ export function resolveChatStartAgentMode(input: ChatStartPermissionInput): Chat
   }
 
   return { agentMode, fromRow, override };
+}
+
+/**
+ * Plan 610 P8: the PROTOCOL mode the run manifest records for a resolved agent
+ * mode.
+ *
+ * ## Why this is a function and not an inline ternary at the call site
+ *
+ * Because an inline ternary is untestable. The call site is inside
+ * `handleChatCommand`, a handler that needs a live agent, a database row and a
+ * message bus, so no test can reach the expression -- a mapping written there
+ * is a mapping nothing can pin. That is not hypothetical: the previous inline
+ * ternary mapped `bypassPermissions` to `acceptEdits` and `auto` to `plan`, and
+ * both were wrong, and nothing failed.
+ *
+ * ## Why it is DERIVED, not restated
+ *
+ * `toExternalPermissionMode` reads `PERMISSION_MODE_CONFIG[mode].external`, the
+ * repository's own declaration of what each internal mode is called externally.
+ * Deriving from it means a mode added to that table cannot drift out of sync
+ * with what gets recorded, and it means this file states no opinion the policy
+ * module does not already hold.
+ *
+ * The two mappings it corrects:
+ *
+ *  - `bypassPermissions` recorded as `acceptEdits`. `PermissionPolicyMode`
+ *    carries `bypassPermissions` itself, so the recorded policy was strictly
+ *    weaker than the mode actually in force.
+ *  - `auto` recorded as `plan`. `auto` default-allows workspace-confined
+ *    actions and asks for the rest; `plan` means read-only planning. The
+ *    policy module already declares `auto`'s external name to be `default`.
+ *
+ * ## What this does NOT do
+ *
+ * Enforce anything. The engine asks `ports.approval.authorize` for every call
+ * with no mode shortcut and reads this value only to stamp
+ * `ApprovalRequest.permissionMode`; the decision is the entry's
+ * `askApproval` -> `requestPermission` bridge against the untranslated
+ * `agentMode`. This is the RECORD, not the decision.
+ */
+export function manifestPermissionMode(
+  agentMode: AgentPermissionMode,
+): ExternalPermissionMode {
+  return toExternalPermissionMode(agentMode);
 }

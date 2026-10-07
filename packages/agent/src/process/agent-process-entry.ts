@@ -101,7 +101,7 @@ import { resolveTurnRunId } from '../agent/run-identity.js';
 import { launchSavedWorkflow } from './workflow-runner.js';
 import { runWorkflowRuntimeChild } from './workflow-runtime-child.js';
 import { MemoryArtifactStore } from '../modes/workflow/gui-artifacts.js';
-import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
+import { resolveChatStartAgentMode, manifestPermissionMode } from './permission-profile-bridge.js';
 // Plan 600 S2: the run execution engine and its port contracts. The engine OWNS
 // the turn loop; this file supplies mechanisms and forwards events, which is the
 // whole of the worker's job under `04-runtime-owns-execution.md` section 2 item 3.
@@ -3370,17 +3370,28 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         providerId: currentProviderId,
         workingDirectory,
         // `resolved.agentMode` is the AGENT's vocabulary; the manifest's
-        // permission policy is the PROTOCOL's, and the two overlap only on
-        // `default`. `bypassPermissions` is the auto/full-access profile, which
-        // the manifest names `acceptEdits` for -- the closest honest member, and
-        // `hostSwitch: 'ask'` still gates every individual call through
-        // `askApproval`.
-        permissionMode:
-          resolved.agentMode === 'bypassPermissions'
-            ? 'acceptEdits'
-            : resolved.agentMode === 'auto'
-              ? 'plan'
-              : 'default',
+        // permission policy is the PROTOCOL's. `toExternalPermissionMode` is the
+        // repository's OWN declaration of that correspondence
+        // (`permissions/policy.ts:PERMISSION_MODE_CONFIG[mode].external`), so
+        // this derives the manifest mode instead of restating it, and a mode
+        // added to that table cannot drift out of sync with what is recorded.
+        //
+        // It also fixes what the hand-written ternary got wrong. It read
+        // `bypassPermissions` as having no protocol name and substituted
+        // `acceptEdits` -- but `PermissionPolicyMode` carries `bypassPermissions`
+        // itself, so the recorded policy was weaker than the mode actually in
+        // force. And `auto` is NOT `plan`: `auto` default-allows
+        // workspace-confined actions and asks for the rest, while `plan` means
+        // read-only planning. `PERMISSION_MODE_CONFIG.auto.external` is
+        // `default`, and that is what this now records.
+        //
+        // WHAT THIS DOES NOT DO: enforce anything. `RunEngineImpl.#dispatchCall`
+        // asks `ports.approval.authorize` for EVERY call with no mode shortcut,
+        // and reads this string only to stamp `ApprovalRequest.permissionMode`
+        // as a label. The decision is the entry's `askApproval` ->
+        // `requestPermission` bridge, and the agent's live mode is the
+        // untranslated `agentMode` set by `setPermissionMode` above.
+        permissionMode: manifestPermissionMode(resolved.agentMode),
         ...(msg.options?.maxTurns === undefined ? {} : { maxTurns: msg.options.maxTurns }),
         wakeRun: msg.options?.wakeRun === true,
         imageInputSupported: modelIsMultimodal,

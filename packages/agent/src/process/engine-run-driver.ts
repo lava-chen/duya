@@ -61,6 +61,7 @@ import {
 } from '@duya/agent-runtime';
 import { existsSync, readFileSync } from 'node:fs';
 import { FIRST_EPOCH, firstAttemptFence, manifestFingerprint } from '@duya/agent-protocol';
+import type { PermissionPolicyMode } from '@duya/agent-protocol';
 import type {
   RunEvent,
   RunEventEnvelope,
@@ -134,7 +135,20 @@ export interface EngineRunDriverRequest {
   /** The provider id the client was constructed with. */
   readonly providerId: string;
   readonly workingDirectory: string;
-  readonly permissionMode: 'default' | 'acceptEdits' | 'plan';
+  /**
+   * The PROTOCOL's mode, not a subset of it.
+   *
+   * It was `'default' | 'acceptEdits' | 'plan'`, which is what forced the entry
+   * to downgrade `bypassPermissions` to `acceptEdits` and `auto` to `plan` --
+   * the type was the cause of the lossy mapping, not a description of it.
+   * `PermissionPolicyMode` and the agent's `ExternalPermissionMode` are the
+   * same five names, so this takes the protocol's own union and lets the entry
+   * pass `toExternalPermissionMode`'s result straight through.
+   *
+   * Still not an enforcement input: `RunEngineImpl` stamps it on the approval
+   * request and nothing more.
+   */
+  readonly permissionMode: PermissionPolicyMode;
   readonly maxTurns?: number;
   readonly wakeRun: boolean;
   readonly imageInputSupported: boolean;
