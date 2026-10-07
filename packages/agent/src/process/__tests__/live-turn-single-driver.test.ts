@@ -520,76 +520,71 @@ describe('G7/G8 are measured against the real gate module, not a copy of it', ()
     return { ...gates, stripComments: strip.stripComments };
   }
 
-  it('still reports the turn loop in DuyaAgent.ts, and for the right reason', () => {
-    // The claim this test used to make described a predicate the gate no longer
-    // has. `TURN_LOOP_SHAPE` is `{ legs: 2 }` (asserted in the next test) and
-    // `isTurnLoopModule` is `turnLoopSites(src).length > 0` -- a loop body that
-    // drives two `for await` streams to exhaustion. `TURN_LOOP_SHAPE.modelStream`
-    // is `undefined`, so the old `.modelStream.test(line)` THREW rather than
-    // measuring anything: it was reading a key step A1 had removed, not the loop
-    // it was written to watch.
+  it('reports NO turn loop in DuyaAgent.ts, and would still report one if it came back', () => {
+    // Plan 610 S4c-d3 INVERTED this row, and the inversion is the point rather
+    // than a concession: the legacy turn generator this test used to require is
+    // deleted, and boundary gate G7 is green because of it.
     //
-    // What survives of the original intent is the part that was load-bearing: the
-    // gate must be RED because the loop EXISTS, never because a marker was
-    // deleted. So this measures the real predicate against the real module and
-    // requires exactly one loop body carrying both legs.
+    // The original intent was "the gate must be RED because the loop EXISTS,
+    // never because a marker was deleted". The surviving form of that intent is
+    // the two halves below:
     //
-    // The reported line is MATCHED against the `while` in the same text rather
-    // than hard-coded. Pinning a literal would make this file go red the next
-    // time anything above the loop is edited -- a failure that says nothing about
-    // the property being guarded.
+    //   1. the real predicate reports nothing on the real module, and
+    //   2. the SAME predicate, called in the SAME file, still finds a loop when
+    //      one is planted.
     //
-    // The header is matched by its SHAPE -- a `while` whose condition negates an
-    // aborted-signal read -- rather than by WHICH expression supplies the
-    // controller. That relaxation was forced by plan 610 P4 and is not a
-    // weakening: before it, the regex named `this.abortController` literally, and
-    // P4 binds the loop's controller once from the run handle that owns it
-    // (`beginRun`) instead of re-reading the field, because re-reading would let
-    // a second run re-point this loop's cancellation mid-stream. TypeScript
-    // refuses the field read here outright (the assignment moved out of this
-    // generator, so the narrowing this loop relied on is gone), and the `!`
-    // that would satisfy it does not match the old regex either -- so the text
-    // could not have stayed. What this row still pins is the whole property:
-    // the gate's reported site is the line after a loop gated on an abort signal.
+    // Without (2) this row would pass for the wrong reason -- a predicate that
+    // had simply stopped matching anything would satisfy (1) forever. That is the
+    // "the gate went quiet for the wrong reason" failure this file was written to
+    // catch, and it is why the canary is planted rather than assumed.
     return loadGates().then(({ turnLoopSites, stripComments }) => {
       const duya = stripComments(fs.readFileSync(DUYA, 'utf8')).text;
 
-      const sites = turnLoopSites(duya);
-      expect(sites).toHaveLength(1);
-      expect(sites[0].legs).toBe(2);
+      // (1) The real module, through the real predicate.
+      expect(turnLoopSites(duya)).toEqual([]);
 
-      const loopLine = duya
-        .split(/\r?\n/)
-        .findIndex((line) =>
-          /^\s*while\s*\(![\w.]+\.signal\.aborted\)/.test(line),
-        );
-      expect(loopLine).toBeGreaterThan(-1);
-      expect(sites[0].line).toBe(loopLine + 1);
+      // (2) NON-VACUITY. A two-leg loop body planted in the same text is found,
+      // and the legs are counted. If this ever fails, the gate went quiet for the
+      // wrong reason -- the absence in (1) would then be the predicate's, not the
+      // module's.
+      const canary = [
+        'function canary(a: AsyncIterable<unknown>, b: AsyncIterable<unknown>) {',
+        '  let go = true;',
+        '  while (go) {',
+        '    for await (const x of a) { void x; }',
+        '    for await (const y of b) { void y; }',
+        '  }',
+        '}',
+      ].join('\n');
+      const planted = turnLoopSites(duya + '\n' + canary);
+      expect(planted).toHaveLength(1);
+      expect(planted[0].legs).toBe(2);
 
-      // The loop is still the one calling `runTurnStream` rather than
-      // `.streamChat(`. If this ever fails, the gate went quiet for the wrong
-      // reason.
+      // The class still owns the SEAM the driver reaches through, so "no loop
+      // here" is not "the turn has no owner at all".
       expect(duya).toContain('runTurnStream');
     });
   });
 
-  it('names every source file in @duya/agent that still satisfies the loop predicate', () => {
+  it('names NO source file in @duya/agent that still satisfies the loop predicate', () => {
     // G8 is reported per PACKAGE with a list of owning files, and it is
     // measured here the way the gate measures it: comment-stripped, through the
     // real predicate.
     //
-    // The expected list changed, and BOTH halves of that change are load-bearing:
+    // Plan 610 S4c-d3 changed the expected list from `['agent/DuyaAgent.ts']` to
+    // `[]`, because that module's turn generator is deleted. The two halves of
+    // the ORIGINAL expectation were load-bearing and both still hold:
     //
-    //  - The owner is `agent/DuyaAgent.ts`, NOT `process/agent-process-entry.ts`.
-    //    Under the shipped predicate the entry has ONE `for await` leg (its
-    //    `for await (const event of eventGen)`), one short of
+    //  - the owner was never `process/agent-process-entry.ts`: under the shipped
+    //    predicate the entry has ONE `for await` leg, one short of
     //    `TURN_LOOP_SHAPE.legs`, so it does not satisfy the predicate at all.
-    //  - The owner is visible only AFTER stripping. Read raw, the predicate
-    //    returns `[]` here -- the discrepancy `loadGates` documents.
+    //  - the owner is visible only AFTER stripping; read raw, the predicate
+    //    returns `[]` for the same reason it returns `[]` now.
     //
-    // So this list is a MEASUREMENT of the gate rather than a restatement of what
-    // G7 reported when an older predicate was in force, and it moves the day the
-    // loop is deleted -- which is the point.
+    // So this remains a MEASUREMENT of the gate rather than a restatement of what
+    // G7 reported under an older predicate, and it is now the assertion that the
+    // migration finished: a second turn loop appearing anywhere under
+    // `packages/agent/src` turns this red.
     return loadGates().then(({ isTurnLoopModule, TURN_LOOP_SHAPE, stripComments }) => {
       const isTestPath = (rel: string): boolean =>
         /(?:^|\/)(?:__tests__|tests?|e2e)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/.test(rel);
@@ -619,7 +614,7 @@ describe('G7/G8 are measured against the real gate module, not a copy of it', ()
         .map(({ rel }) => rel)
         .sort();
 
-      expect(owners).toEqual(['agent/DuyaAgent.ts']);
+      expect(owners).toEqual([]);
 
       // Sanity: the predicate really is the two-leg loop body and nothing else, so
       // this test is measuring the gate and not a weaker local approximation. A

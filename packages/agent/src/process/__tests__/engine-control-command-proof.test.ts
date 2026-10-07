@@ -376,54 +376,23 @@ async function runThroughEngine(promptText: string): Promise<Proof> {
   };
 }
 
-/**
- * What the LEGACY path produces for the same prompt.
- *
- * The comparison source for every "the product's own answer" assertion below.
- * It runs `streamChat` -- the generator the engine path replaces -- so the
- * expected value is produced by different code than the actual one. A literal
- * would be an identity: both sides would move together and the assertion would
- * keep passing while the engine sent `/goal` to the model.
- *
- * `/goal <objective>` is deliberately absent here: it is not intercepted by the
- * legacy either, and the test that needs it asserts the fall-through.
- */
-async function legacyReply(promptText: string): Promise<string> {
-  installFakeDbIpc();
-  const seq = (sessionSeq += 1);
-  const agent = new duyaAgent({
-    apiKey: 'test-key',
-    model: 'claude-test',
-    provider: 'anthropic',
-    sessionId: `s-d1-legacy-${seq}`,
-    workingDirectory: process.cwd(),
-    permissionMode: 'bypassPermissions',
-  });
-  agent.setMessages([
-    ...agent.getMessages(),
-    { id: 'p0', role: 'user', content: 'earlier turn', timestamp: Date.now(), seq_index: 0 } as never,
-  ]);
-
-  seenRequests = [];
-  let text = '';
-  const iterator = agent.streamChat(promptText, { sessionId: `s-d1-legacy-${seq}` } as never);
-  for await (const event of iterator as AsyncGenerator<{ type: string; data?: unknown }>) {
-    if (event.type === 'text' && typeof event.data === 'string') text += event.data;
-  }
-  return text;
-}
-
 // ============================================================================
 // D1 -- a recognised command is answered by the product, with no model call
 // ============================================================================
 
 describe('a recognised control command on the engine-driven path', () => {
   it('answers /goal with the product\'s own reply and never calls the model', async () => {
-    const expected = await legacyReply('/goal status');
-    // PRECONDITION, measured on the legacy path itself rather than assumed: if
-    // the legacy also reached a model, "the engine did not" would prove nothing.
-    expect(expected.length).toBeGreaterThan(0);
-
+    // Plan 610 S4c-d3: the legacy oracle is gone. This row used to compute the
+    // answer on the legacy path and require the engine's to MATCH it, which made
+    // it a real two-sided comparison. What replaces it is the property that
+    // survives the legacy's deletion and is the one this file is for: the reply
+    // is produced by the PRODUCT's command implementation, is published as a
+    // finalized message, and no model call happens.
+    //
+    // The oracle is not merely dropped -- it is replaced by a check the engine
+    // could not pass by accident: the reply must come from the command port, so
+    // the mock provider must have been called ZERO times while a real answer
+    // still appeared.
     const proof = await runThroughEngine('/goal status');
 
     // THE CLAIM. Zero, as a positive count of an interception that CAN see a
@@ -431,14 +400,19 @@ describe('a recognised control command on the engine-driven path', () => {
     // would mean the regression this slice fixes is still present.
     expect(proof.calls()).toBe(0);
 
-    // The reply is the PRODUCT'S, compared against the legacy's independently
-    // computed answer for the same prompt.
+    // The reply is the PRODUCT'S, and it is a real one: exactly one text block,
+    // non-empty. An interception that answered with nothing would satisfy a
+    // length check written as "no throw".
     expect(proof.textBlocks).toHaveLength(1);
-    expect(proof.textBlocks[0]).toBe(expected);
+    expect(proof.textBlocks[0].length).toBeGreaterThan(0);
 
     // And it is a finalized message, so a consumer rebuilding the transcript
     // from `assistant.message_finalized` does not lose the command's answer.
-    expect(proof.finalizedText()).toBe(expected);
+    // Before S4c-d3 this compared the finalized text to the legacy's answer;
+    // it now compares it to the run's OWN published block, which is the pairing
+    // that can still disagree -- a finalized row that drifted from the text the
+    // run reported would fail here.
+    expect(proof.finalizedText()).toBe(proof.textBlocks[0]);
 
     // A run that answered still proposes exactly one terminal, and it is
     // `completed` -- the same terminal a model-answered turn reaches.
@@ -446,16 +420,15 @@ describe('a recognised control command on the engine-driven path', () => {
     expect(proof.terminals[0].state.status).toBe('completed');
   });
 
-  it('answers the transcript family too, and /export writes the file the legacy writes', async () => {
-    const expected = await legacyReply('/transcript');
-    expect(expected.length).toBeGreaterThan(0);
-
+  it('answers the transcript family too, and finalizes the answer', async () => {
+    // Plan 610 S4c-d3: the legacy oracle is gone; see the `/goal` row above for
+    // what replaces it and why.
     const proof = await runThroughEngine('/transcript');
 
     expect(proof.calls()).toBe(0);
     expect(proof.textBlocks).toHaveLength(1);
-    expect(proof.textBlocks[0]).toBe(expected);
-    expect(proof.finalizedText()).toBe(expected);
+    expect(proof.textBlocks[0].length).toBeGreaterThan(0);
+    expect(proof.finalizedText()).toBe(proof.textBlocks[0]);
   });
 
   it('runs /export to a real file and reports it, with no model call', async () => {
@@ -463,9 +436,10 @@ describe('a recognised control command on the engine-driven path', () => {
     ledgerDirs.push(dir);
     const target = path.join(dir, 'engine-path.md');
 
-    const expected = await legacyReply(`/export ${path.join(dir, 'legacy-path.md')}`);
-    expect(expected).toContain('Transcript exported:');
-
+    // Plan 610 S4c-d3: this row asked the legacy to export to a sibling path and
+    // compared the two replies. The legacy is gone, so the claim is now the
+    // engine's alone, and it is the STRONGER of the two available: the export
+    // happened, to the requested path, on disk.
     const proof = await runThroughEngine(`/export ${target}`);
 
     expect(proof.calls()).toBe(0);
@@ -483,21 +457,18 @@ describe('a recognised control command on the engine-driven path', () => {
 // ============================================================================
 
 describe('a prompt that is not a registered command', () => {
-  it('reaches the model, exactly as the legacy sends it', async () => {
-    // BOTH SIDES OBSERVED. The legacy first, so the claim "the engine matches
-    // the legacy" rests on two measurements rather than on my reading of which
-    // way `isTranscriptControlCommand` falls through.
-    await legacyReply('/not-a-command');
-    const legacyCalls = seenRequests.length;
-    expect(legacyCalls).toBe(1);
-
+  it('reaches the model, unmodified', async () => {
+    // Plan 610 S4c-d3: this row observed BOTH sides and required the legacy to
+    // reach the model too, so that "the engine reached it" could not be satisfied
+    // by a fall-through that the legacy also had. The legacy is gone, so the
+    // engine's own fall-through is pinned directly: a model call happens, and
+    // the literal text arrives UNMODIFIED.
     const proof = await runThroughEngine('/not-a-command');
 
     // A MODEL CALL, positively counted. The engine did not swallow it.
     expect(proof.calls()).toBe(1);
     // And the literal text reached the provider UNMODIFIED -- not stripped,
-    // not rewritten, not replaced by a "unknown command" reply the legacy
-    // never produces.
+    // not rewritten, not replaced by a "unknown command" reply.
     expect(seenRequests[0].contents).toContain('/not-a-command');
     // No command-shaped answer was published alongside it.
     expect(proof.textBlocks).toContain('the model answered conversationally');

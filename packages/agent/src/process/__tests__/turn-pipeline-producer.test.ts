@@ -368,7 +368,18 @@ describe('the run handle is public, and the loop routes through it', () => {
     expect(occurrences(/new ToolExecutionPipeline\s*\(/)).toBe(1);
     expect(occurrences(/this\.buildTurnPipeline\s*\(/)).toBe(1);
     expect(occurrences(/this\.assembleTurn\s*\(/)).toBe(1);
-    expect(occurrences(/this\.beginTurnAssembly\s*\(/)).toBe(1);
+    // Plan 610 S4c-d3: this was 1, because the legacy turn generator was the
+    // single caller. That generator is deleted, so the count inside
+    // `DuyaAgent.ts` is now 0 -- and 0 is the STRONGER claim, not a weaker one:
+    // the class no longer drives its own turn at all, so it cannot reach the
+    // assembly seam from within itself.
+    //
+    // The single remaining caller is `engine-run-driver.ts`, outside this file,
+    // and it is pinned there by `engine-chat-start-assembly-proof.test.ts` and by
+    // the `driveRunWithEngine` count in `live-turn-single-driver.test.ts`. This
+    // row is deliberately scoped to "not in the class", which is the property
+    // that can still regress without that file being edited.
+    expect(occurrences(/this\.beginTurnAssembly\s*\(/)).toBe(0);
   });
 
   it('builds the run-scoped pieces exactly once each', () => {

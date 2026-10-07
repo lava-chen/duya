@@ -10,10 +10,12 @@ import type {
   Tool,
   ToolUseContext,
 } from '../../types.js'
+import type { ChatOptions } from '../../types.js'
 import type { PermissionMode } from '../../permissions/types.js'
 import type { AgentDefinition, BuiltInAgentDefinition, CustomAgentDefinition } from './loadAgentsDir.js'
 import { isBuiltInAgent } from './loadAgentsDir.js'
 import { duyaAgent } from '../../index.js'
+import { inferProvider } from '@duya/ai'
 import { setMaxListeners } from 'node:events'
 import { resolveAgentTools, SUBAGENT_FORBIDDEN_TOOLS } from './subagentToolUtils.js'
 import type { SubagentToolOverlay } from './subagentResult.js'
@@ -26,6 +28,9 @@ import type { TokenUsage } from '../../types.js'
 import { logger } from '../../utils/logger.js'
 import { composeSubagentSystemPrompt } from './promptComposition.js'
 import { isSubagentSlimAgentsMdEnabled } from '../../config/feature-flags.js'
+// Plan 610 S4c-d3: the ENGINE driver for this path. Replaces `subAgent.streamChat`
+// as the producer of the event stream below; the consumption is untouched.
+import { driveSubagentRunWithEngine } from './subagent-engine-run.js'
 
 export interface RunAgentParams {
   agentDefinition: AgentDefinition
@@ -87,6 +92,16 @@ export interface RunAgentParams {
    * child the parent is no longer waiting on.
    */
   abortController?: AbortController
+  /**
+   * Where the engine's tool-side-effect journals go for this run.
+   *
+   * Plan 610 S4c-d3 consequence, stated rather than left implicit: the engine
+   * REFUSES to dispatch anything it cannot ticket, so a sub-agent turn now
+   * writes a ledger where the legacy wrote none. Undefined uses the driver's own
+   * default; exposed so a test can point it at a disposable directory instead of
+   * the user's data directory.
+   */
+  engineLedgerDir?: string
 }
 
 export interface CacheSafeParams {
@@ -223,6 +238,7 @@ export async function* runAgent({
   toolOverlay,
   workingDirectory: workingDirectoryOverride,
   abortController,
+  engineLedgerDir,
 }: RunAgentParams): RunAgentResult {
   const startTime = Date.now()
   const parentSessionId = toolUseContext.options.sessionId
@@ -409,7 +425,11 @@ export async function* runAgent({
     ...(permissionMode ? { permissionMode } : {}),
   })
 
-  logger.info('[SubAgent] streamChat starting', {
+  // Plan 610 S4c-d3: the message says `run starting`, not `streamChat starting`,
+  // because `streamChat` is no longer what this row describes. The fields are
+  // unchanged — a log line that kept naming a deleted driver would send the next
+  // reader looking for it.
+  logger.info('[SubAgent] run starting', {
     agentId,
     agentType: agentDefinition.agentType,
     toolCount: toolsToUse.length,
@@ -496,13 +516,40 @@ export async function* runAgent({
     }, 5000)
 
     try {
-      const eventIterator = subAgent.streamChat(promptText, {
-        systemPrompt,
-        tools: toolsToUse,
-        maxTurns: agentMaxTurns,
-        toolRegistry: registry,
-        // Per-call thinking budget. Undefined inherits the runtime default.
-        ...(effort ? { effort } : {}),
+      // Plan 610 S4c-d3: the sub-agent's turn is driven by the ENGINE, through
+      // the same `driveRunWithEngine` the worker entry and the headless host
+      // call. This used to be `subAgent.streamChat(promptText, …)`, which ran
+      // `DuyaAgent`'s own turn generator — the third and last production driver
+      // of that loop. Everything below this line (the stall watchdog, the abort
+      // handling, the progress callbacks, the result message) is UNCHANGED: the
+      // flip is in where the event stream comes from, and
+      // `subagent-engine-run.ts` owns that translation alone.
+      const eventIterator = driveSubagentRunWithEngine({
+        agent: subAgent,
+        agentId,
+        prompt: promptText,
+        options: {
+          systemPrompt,
+          tools: toolsToUse,
+          toolRegistry: registry,
+          // Kept in the options bag as well as handed to the driver, because the
+          // worker entry does the same and something downstream of the options
+          // reads it there. The DRIVER's own `maxTurns` is what becomes the
+          // engine's ceiling, so this row alone would have let an uncapped
+          // sub-agent run forever.
+          maxTurns: agentMaxTurns,
+          // Per-call thinking budget. Undefined inherits the runtime default.
+          ...(effort ? { effort } : {}),
+        } as ChatOptions,
+        workingDirectory,
+        // The SAME expression the child instance above was constructed with
+        // (`DuyaAgent.ts:2773`), so the manifest records the provider the child
+        // actually resolved rather than the caller's possibly-absent one.
+        providerId: toolUseContext.options.provider ?? inferProvider(toolUseContext.options.baseURL ?? ''),
+        ...(agentMaxTurns === undefined ? {} : { maxTurns: agentMaxTurns }),
+        ...(sessionId === undefined ? {} : { sessionId }),
+        ...(permissionMode === undefined ? {} : { permissionMode }),
+        ...(engineLedgerDir === undefined ? {} : { ledgerDir: engineLedgerDir }),
       })[Symbol.asyncIterator]()
 
       let sawFirstEvent = false

@@ -444,12 +444,20 @@ describe('the seam is a method, not a widened field', () => {
     expect(occurrences(/this\.abortController = /g)).toBe(2);
   });
 
-  it('exposes the run lifecycle as a public method the legacy also calls', () => {
-    // "One implementation, two callers" is the property that stops the seam and
-    // the legacy from having two answers about what a run is. If a later slice
-    // re-inlines the prologue, this row goes red rather than leaving two
-    // silently-diverging versions of a run's setup in one file.
+  it('exposes the run lifecycle as exactly ONE public method, called from nowhere inside the class', () => {
+    // "One implementation" is the property that stops the run layer from having
+    // two answers about what a run is. If a later slice re-inlines the prologue,
+    // this row goes red rather than leaving two silently-diverging versions of a
+    // run's setup in one file.
     expect(occurrences(/async beginRun\(/)).toBe(1);
-    expect(occurrences(/await this\.beginRun\(\{/)).toBe(1);
+    // Plan 610 S4c-d3: the second half was 1, because the legacy turn generator
+    // was the one caller. That generator is deleted, so the count inside
+    // `DuyaAgent.ts` is now 0 -- which is the stronger claim: the class defines
+    // the lifecycle and no longer drives it, so a re-inlined prologue would show
+    // up here as a caller appearing again.
+    //
+    // The one caller that remains is `engine-run-driver.ts` (outside this file)
+    // and it is pinned there. This row is scoped to "not inside the class".
+    expect(occurrences(/await this\.beginRun\(\{/)).toBe(0);
   });
 });

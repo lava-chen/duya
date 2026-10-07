@@ -63,9 +63,10 @@
  * The orchestrator leg is read from the fixture's own body and the consumer's
  * received frames; the engine leg is read from a probe tool's executor and the
  * provider's request count. Neither leg is compared against itself, and the
- * legacy-parity block compares the driver path against `streamChat` -- two
- * different code paths reaching one orchestrator, which is the behaviour
- * preservation this shape claims.
+ * verbatim-forwarding block compares the frames a consumer RECEIVED against
+ * `DECLARED` -- a frozen literal, not a second execution of the dispatch. Before
+ * Plan 610 S4c-d3 that block compared the driver path against `streamChat`;
+ * the loop is deleted, so the oracle is now the frozen declaration.
  */
 
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
@@ -142,13 +143,12 @@ const tempDirs: string[] = [];
  * Answer every worker DB request with an empty result.
  *
  * Deliberately NOT the allowlist-that-throws shape `engine-mode-exit-port.test.ts`
- * uses: the legacy-parity block below drives the WHOLE `streamChat` prologue, so
- * this harness reaches db actions the other blocks never touch. Nothing in this
- * file reads the db, so the answers are inert -- but they are shaped, because an
- * inert `null` is not the same as an inert empty row: the engine leg reads
- * `mailbox:claimBatch`'s `.rows` during a turn and a `null` there ends the run
- * `failed` with "Cannot read properties of null". The actions seen are recorded
- * so a reader can see which ones happened.
+ * uses: `beginRun`'s prologue runs db actions the other blocks never touch.
+ * Nothing in this file reads the db, so the answers are inert -- but they are
+ * shaped, because an inert `null` is not the same as an inert empty row: the
+ * engine leg reads `mailbox:claimBatch`'s `.rows` during a turn and a `null`
+ * there ends the run `failed` with "Cannot read properties of null". The actions
+ * seen are recorded so a reader can see which ones happened.
  */
 const dbActions: string[] = [];
 
@@ -433,40 +433,41 @@ describe('the seam refuses a run that resolved no orchestrator', () => {
 });
 
 // ============================================================================
-// 3. PARITY: the legacy generator and the driver route to the SAME dispatch
+// 3. VERBATIM FORWARDING: the declared frames reach the consumer unchanged
 // ============================================================================
 
-describe('the legacy generator and the driver dispatch the same orchestrator', () => {
-  it('produces the same frames through streamChat as through the driver route', async () => {
+describe('the driver route forwards the orchestrator\'s frames verbatim', () => {
+  it('hands the consumer exactly the declared frames, in order', async () => {
+    // Plan 610 S4c-d3: this block compared `streamChat` against the driver route
+    // -- two independent executions of one orchestrator -- and the legacy is
+    // deleted, so that comparison has no second side left. The claim is NOT
+    // dropped: it moves from "the two paths agree" to the property that made
+    // the agreement worth having, which is STRICTLY STRONGER because it is
+    // absolute rather than differential.
+    //
+    // Section 1 reads the frames NARROWLY -- the marked `data` strings, the
+    // count, and the last frame's `type`. A forwarder could add, drop, reorder
+    // or rewrite any OTHER field and still pass all of that. `DECLARED` is a
+    // FROZEN literal written before any dispatch ran, so comparing the WHOLE
+    // frame objects to it is a comparison against an oracle, not against
+    // another execution of the same code.
     installFakeDbIpc();
     await registerOrchestratorMode();
+    const agent = makeAgent(nextSessionId('orch-verbatim'));
 
-    // Two SEPARATE agents and two separate runs, so the two sides are two
-    // independent executions of one orchestrator rather than one execution read
-    // twice. The comparison is legacy-generator vs driver-route: two different
-    // code paths, one fixture.
-    const legacyAgent = makeAgent(nextSessionId('orch-legacy'));
-    const legacyFrames: SSEEvent[] = [];
-    for await (const frame of legacyAgent.streamChat('what is the answer', { mode: MODE_ID } as never)) {
-      legacyFrames.push(frame);
-    }
+    const drove = await drive(agent, { mode: MODE_ID }, 'what is the answer');
 
-    const driverAgent = makeAgent(nextSessionId('orch-driver'));
-    const drove = await drive(driverAgent, { mode: MODE_ID }, 'what is the answer');
+    // THE CLAIM. Whole objects, in order: nothing added, nothing dropped,
+    // nothing reordered, nothing rewritten.
+    expect(drove.frames).toEqual(DECLARED as readonly SSEEvent[]);
 
-    // Both sides ran the orchestrator, once each.
-    expect(executeCalls).toBe(2);
+    // And the three properties that make the comparison above non-vacuous:
+    // the orchestrator's OWN body ran (positive count, reset by `beforeEach`),
+    // the run was ROUTED to it rather than assembled, and the provider was
+    // never asked -- an orchestrator owns its stream and drives its own calls.
+    expect(executeCalls).toBe(1);
     expect(drove.leg).toBe('orchestrator');
-
-    // Same frames, same order -- which is the behaviour preservation shape (B)
-    // claims. A pin by MARKER COUNT alone would pass on a reordered stream, so
-    // the whole frame list is compared, in order.
-    expect(legacyFrames).toEqual(drove.frames as SSEEvent[]);
-    expect(
-      legacyFrames
-        .map((frame) => (frame as { data?: unknown }).data)
-        .filter((data): data is string => typeof data === 'string' && data.startsWith(MARK)),
-    ).toEqual([`${MARK}-alpha`, `${MARK}-beta`]);
+    expect(modelCalls).toBe(0);
   });
 });
 

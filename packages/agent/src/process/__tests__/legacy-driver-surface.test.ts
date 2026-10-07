@@ -66,16 +66,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // ============================================================================
-// The measured surface, as of plan 610 D2
+// The measured surface, as of plan 610 D2; the S4c-d3 delta is recorded below
 // ============================================================================
 
 /**
  * `[file, tests in the file, tests that drive the legacy loop]`, repo-root
  * relative.
  *
- * 72 tests across 14 files, out of 5067 tests in the package. The two
- * directories the flip's difficulty is usually attributed to hold very little
- * of it, and the reason matters more than the number:
+ * 73 tests across 14 files, out of 5067 tests in the package, MEASURED at plan
+ * 610 D2. The two directories the flip's difficulty is usually attributed to
+ * hold very little of it, and the reason matters more than the number:
  *
  *  - `packages/agent-runtime`: **ZERO**. Nothing there drives the loop; the
  *    only occurrences of the symbol are in prose explaining why those tests do
@@ -128,14 +128,45 @@ import { fileURLToPath } from 'node:url';
  *    dispatched", pinned on the orchestrator's OWN frames rather than on the
  *    generator. Deleting the legacy arm instead would leave the file asserting
  *    that a routing decision reproduces itself.
+ *
+ * ## What plan 610 S4c-d3 actually did, four predictions later
+ *
+ * The map above was written to be falsifiable, so the outcome is recorded
+ * against it rather than a fresh description being written:
+ *
+ *  - `engine-session-end-parity`: INVERTED, as predicted -- the legacy harness
+ *    was deleted and the rows pinned on the engine path alone.
+ *  - `engine-control-command-proof`: the predicted problem was real. Comparing
+ *    against the legacy reply would have been "the engine compared with
+ *    itself", so the oracle was replaced by self-consistency
+ *    (`finalizedText() === textBlocks[0]`) plus non-vacuity (`calls() === 0`
+ *    while a real answer appeared). 31 tests, none dropped.
+ *  - `engine-fork-metadata-proof`: predicted to become "vacuous rather than
+ *    wrong". It did NOT -- `composeLegacyRunPorts` already nulls the marker at
+ *    run start, so the row was re-pointed at that path and its property is
+ *    asserted for real.
+ *  - `orchestrator-run-leg`: rewritten on the orchestrator's own frames against
+ *    the frozen `DECLARED` literal, which is an absolute claim rather than the
+ *    differential one it replaced.
+ *
+ * So the census is now 60 tests across 11 files, and `packages/agent/src/process`
+ * holds ZERO drivers. The remaining surface is entirely
+ * `packages/agent/src/agent/__tests__/model-leg.test.ts` plus
+ * `packages/agent/tests/**` -- ordinary legacy-behaviour tests whose subject is
+ * the product's behaviour rather than a driver, and which the map above already
+ * called MIGRATABLE row by row.
  */
 const EXPECTED: readonly (readonly [string, number, number])[] = [
-  // packages/agent/src/process -- 13, all two-sided comparisons.
-  ['packages/agent/src/process/__tests__/engine-session-end-parity.test.ts', 8, 7],
-  ['packages/agent/src/process/__tests__/engine-control-command-proof.test.ts', 10, 4],
-  ['packages/agent/src/process/__tests__/engine-fork-metadata-proof.test.ts', 12, 1],
-  ['packages/agent/src/process/__tests__/orchestrator-run-leg.test.ts', 5, 1],
-  // packages/agent/src/agent -- 5, on the legacy's own harness.
+  // packages/agent/src/process -- 0.
+  //
+  // Plan 610 S4c-d3 emptied this directory. All four rows above were the
+  // NOT-MIGRATABLE two-sided comparisons, and the map above predicted the shape
+  // each had to take: inverted, re-pointed at a frozen oracle, or rewritten on
+  // the orchestrator's own frames. Each was done that way rather than deleted,
+  // so the census row is gone because the legacy arm is gone, not because the
+  // claim was. `git log` on the four files carries the conversions.
+  //
+  // `packages/agent/src/agent -- 5, on the legacy's own harness.`
   ['packages/agent/src/agent/__tests__/model-leg.test.ts', 19, 5],
   // packages/agent/tests/unit -- 34.
   ['packages/agent/tests/unit/agent/DuyaAgent.plan315.test.ts', 21, 17],
@@ -344,16 +375,18 @@ describe('the measured driver surface the flip has to move', () => {
     }
   });
 
-  it('is 73 tests, which is the number the flip is sized against', () => {
+  it('is 60 tests, which is the number the flip is sized against', () => {
     // Stated on its own so a reader does not have to add the table up, and so a
     // silent change to the total is a red row rather than a diff a reviewer has
     // to notice. The sum is computed from the SAME table the row above pins, so
     // the two cannot disagree. It moved 72 -> 73 at plan 610 P5, by the one
-    // row above that is a legacy-vs-driver parity comparison.
+    // row above that is a legacy-vs-driver parity comparison, and then
+    // 73 -> 60 at plan 610 S4c-d3, which removed the last 13 drivers in
+    // `packages/agent/src/process` without removing a single test.
     const total = EXPECTED.reduce((n, [, , driving]) => n + driving, 0);
-    expect(total).toBe(73);
+    expect(total).toBe(60);
     // And it is a small fraction of the package, which is the finding: the flip
-    // is not "rewrite the agent's tests", it is "move 73 of 5072".
+    // is not "rewrite the agent's tests", it is "move 60 of 5072".
     expect(total).toBeLessThan(PACKAGE_TEST_COUNT / 50);
   });
 

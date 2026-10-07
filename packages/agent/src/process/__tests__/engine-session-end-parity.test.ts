@@ -148,9 +148,6 @@
  */
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { RunEngineImpl } from '@duya/agent-runtime';
 import type {
   ApprovalVerdict,
@@ -207,10 +204,10 @@ let activeScript: ProviderScript | null = null;
  */
 function script(options: Omit<ProviderScript, 'calls'>): void {
   // A FRESH object every time, and not a merge into the previous one. A merge
-  // would let `repeatFrame` survive into the next `runLegacy` call, so a test
-  // that ran the dead-loop row would silently script a dead loop into every
-  // later assertion in the file -- which is exactly the sort of leak that makes
-  // a row mean something other than what it says.
+  // would let `repeatFrame` survive into the next run, so a test that ran the
+  // dead-loop row would silently script a dead loop into every later assertion
+  // in the file -- which is exactly the sort of leak that makes a row mean
+  // something other than what it says.
   activeScript = { frames: [], ...options, calls: 0 };
 }
 
@@ -274,25 +271,21 @@ vi.mock('@duya/ai', async (importOriginal) => {
 });
 
 // ============================================================================
-// The offline host: env, the worker IPC, and the agent
+// The offline host: env and the modules under observation
 // ============================================================================
 
+// Plan 610 S4c-d3: the fake worker IPC, `installFakeDbIpc`, and the agent and
+// registry factories it fed were the LEGACY harness's setup. They are deleted
+// rather than left dormant, because a `db-client` import plus a
+// `process.on('message')` capture is real import-time side effect that a
+// reader would reasonably assume some assertion still depends on.
 const originalEnv = { ...process.env };
 let realSend: typeof process.send | undefined;
 
-const PRE_EXISTING_MESSAGE_LISTENERS = new Set(process.listeners('message'));
-
-// The product modules come AFTER that capture, and the order is load-bearing:
-// importing any of them can register the db-client's own `process.on('message')`
-// listener, and a capture taken afterwards would subtract the wrong set and leave
-// the db-client's listener unresolvable.
 const { duyaAgent } = await import('../../agent/DuyaAgent.js');
 const { ToolRegistry } = await import('../../tool/registry.js');
-const { initDbClient } = await import('../../ipc/db-client.js');
 const { ConfigHooksRunner } = await import('../../hooks/events.js');
 const { createLegacyHookSource } = await import('../hook-source.js');
-
-let dbResponseListener: ((msg: unknown) => void) | null = null;
 
 beforeEach(() => {
   process.env.DUYA_E2E_DISABLE_LLM = '1';
@@ -308,61 +301,8 @@ afterEach(() => {
 });
 
 /**
- * Install the fake worker IPC the turn reaches for before its first request.
- *
- * Identical in shape to the sibling product-turn proof's fixture, including the
- * pre-existing-listener capture: under a Vitest pool worker `process.send` is
- * the POOL's channel, so a plain object sent through it makes the pool try to
- * deserialize a Buffer and throw. Delivering the response straight to the
- * db-client's own listener is what keeps that from happening.
- */
-function installFakeDbIpc(): void {
-  if (!dbResponseListener) {
-    initDbClient();
-    const added = process
-      .listeners('message')
-      .filter((l) => !PRE_EXISTING_MESSAGE_LISTENERS.has(l));
-    dbResponseListener = (added[0] ?? null) as ((msg: unknown) => void) | null;
-    if (!dbResponseListener) throw new Error('db-client registered no message listener');
-  }
-  realSend = process.send;
-  process.send = ((msg: unknown) => {
-    const req = msg as { type?: string; id?: string; action?: string };
-    if (req?.type !== 'db:request') return true;
-    if (req.action !== 'modeState:get' && req.action !== 'mailbox:claimBatch') {
-      throw new Error(`unexpected db action in the session-end parity test: ${req.action}`);
-    }
-    const result = req.action === 'mailbox:claimBatch' ? { rows: [], claimTokens: [] } : null;
-    setImmediate(() => {
-      dbResponseListener?.({ type: 'db:response', id: req.id, success: true, result });
-    });
-    return true;
-  }) as unknown as typeof process.send;
-}
-
 let sessionCounter = 0;
-function makeAgent(): InstanceType<typeof duyaAgent> {
-  sessionCounter += 1;
-  return new duyaAgent({
-    apiKey: 'test-key',
-    model: 'claude-test',
-    provider: 'anthropic',
-    sessionId: `s-session-end-${sessionCounter}-${Math.random().toString(36).slice(2)}`,
-    workingDirectory: process.cwd(),
-    permissionMode: 'bypassPermissions',
-  });
-}
-
 /**
- * A probe tool whose only job is to make the loop ask for another turn.
- *
- * `gate` is what separates the two abort routes: with the executor blocked on it,
- * the interrupt lands while a tool is genuinely mid-flight, the executor's race
- * abandons it, and the loop's own `while` condition goes false -- which is the
- * ONLY way into `finalizeAbort`. Without the gate the interrupt tends to land on
- * the next provider call instead, which is the other route entirely.
- */
-function registryWithProbe(spec: { readonly onStart?: () => void; readonly gate?: Promise<void> } = {}): InstanceType<
   typeof ToolRegistry
 > {
   const registry = new ToolRegistry();
@@ -383,10 +323,6 @@ function registryWithProbe(spec: { readonly onStart?: () => void; readonly gate?
   return registry;
 }
 
-async function collectLegacy(
-  agent: InstanceType<typeof duyaAgent>,
-  registry: InstanceType<typeof ToolRegistry>,
-  options: Record<string, unknown> = {},
 ): Promise<readonly SSEEvent[]> {
   const events: SSEEvent[] = [];
   for await (const event of agent.streamChat('say something and stop', {
@@ -434,168 +370,6 @@ function recordDispatches(): { readonly events: readonly string[]; stop: () => v
 /** Only the two events an exit can raise; `on_start` fires on every path. */
 function exitEvents(events: readonly string[]): string[] {
   return events.filter((event) => event === 'Stop' || event === 'SessionEnd');
-}
-
-// ============================================================================
-// Source-level counting, for the exits that cannot be DRIVEN
-// ============================================================================
-
-/**
- * `DuyaAgent.ts`, located from this file rather than from `process.cwd()`.
- *
- * Every other test in this tree resolves its source through `import.meta.url`,
- * because a `process.cwd()`-relative path is only correct when the runner
- * happens to be at the repo root, and this file is run from a package.
- */
-const DUYA_AGENT_SOURCE = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '..',
-  '..',
-  'agent',
-  'DuyaAgent.ts',
-);
-
-/**
- * Blank comments while PRESERVING every `\r` and `\n`.
- *
- * A count taken over commented source would move when a comment mentions the
- * text being counted, which would make the number a measure of documentation
- * rather than of exits. The CRLF care is the same one
- * `turn-assembly-seam.test.ts` documents: blanking `\r` as an ordinary
- * character shifts every column and diverges from the gate's own stripper.
- */
-function stripComments(src: string): string {
-  let out = '';
-  let i = 0;
-  const n = src.length;
-  while (i < n) {
-    const c = src[i];
-    if (c === '/' && src[i + 1] === '/') {
-      const end = src.indexOf('\n', i);
-      const stop = end === -1 ? n : end;
-      for (let k = i; k < stop; k++) out += src[k] === '\n' || src[k] === '\r' ? src[k] : ' ';
-      i = stop;
-      continue;
-    }
-    if (c === '/' && src[i + 1] === '*') {
-      const end = src.indexOf('*/', i + 2);
-      const stop = end === -1 ? n : end + 2;
-      for (let k = i; k < stop; k++) out += src[k] === '\n' || src[k] === '\r' ? src[k] : ' ';
-      i = stop;
-      continue;
-    }
-    out += c;
-    i += 1;
-  }
-  return out;
-}
-
-// ============================================================================
-// The LEGACY harness: run the real `streamChat` to one path
-// ============================================================================
-
-interface LegacyRun {
-  readonly exitEvents: readonly string[];
-  readonly terminal: string | undefined;
-}
-
-/**
- * Drive the real legacy turn to the requested exit and report what it dispatched
- * on the way out.
- */
-async function runLegacy(options: {
-  readonly frames: readonly SSEEvent[];
-  readonly maxTurns?: number;
-  readonly abortDuringTool?: boolean;
-  readonly abortAtModelLeg?: boolean;
-  readonly errorAtModelLeg?: boolean;
-  /**
-   * The legacy's own dead-loop threshold, in IDENTICAL calls.
-   *
-   * The legacy counts the streak on `DeadLoopTracker` and the engine on
-   * `RepeatedCallStreak`, and both define a repeat as same-name plus same-input,
-   * so one probe calling itself with one value repeats on both. Measured rather
-   * than read off a constant because the two counters are independent objects
-   * and a row that assumed they agreed would be assuming the thing under test.
-   */
-  readonly repeatedCalls?: number;
-}): Promise<LegacyRun> {
-  installFakeDbIpc();
-  let agentRef: InstanceType<typeof duyaAgent> | null = null;
-  // A HOLDER rather than a `let releaseTool: (() => void) | null`: the resolver
-  // is assigned from inside a `Promise` executor, which the control-flow
-  // analysis cannot see run, so a plain `let` stays narrowed to `null` at every
-  // use below and `releaseTool?.()` stops being callable.
-  const gate: { release: () => void } = { release: () => {} };
-  const toolGate = new Promise<void>((resolve) => {
-    gate.release = resolve;
-  });
-
-  const registry = registryWithProbe(
-    options.abortDuringTool === true
-      ? {
-          onStart: () => {
-            setTimeout(() => agentRef?.interrupt(), 0);
-          },
-          gate: toolGate,
-        }
-      : {},
-  );
-  if (options.repeatedCalls !== undefined) {
-    // The IDENTICAL call every turn, so the legacy's own dead-loop tracker is
-    // what ends the run rather than the ceiling. The NAME is constant rather
-    // than derived from the threshold, so the same input is a repeat on the
-    // engine's counter too and the two rows measure the same thing.
-    registry.register(
-      {
-        name: 'probe_repeat',
-        description: 'probe that repeats itself identically',
-        input_schema: { type: 'object', properties: { value: { type: 'string' } } },
-      } as never,
-      {
-        execute: async () => ({ id: 'rr', name: 'probe_repeat', result: 'RAN' }),
-      } as never,
-    );
-  }
-  script({
-    frames: options.frames,
-    // The repeat frame is CONSTANT, so the dead-loop tracker sees the same name
-    // and the same input on every turn. A per-turn id would make each call
-    // distinct and the tracker would never fire.
-    ...(options.repeatedCalls === undefined
-      ? {}
-      : {
-          repeatFrame: {
-            type: 'tool_use',
-            data: { id: 'same', name: 'probe_repeat', input: { value: 'same' } },
-          } as SSEEvent,
-        }),
-    ...(options.abortAtModelLeg === true ? { throwAbortOn: 0 } : {}),
-    ...(options.errorAtModelLeg === true ? { throwErrorOn: 0 } : {}),
-  });
-  agentRef = makeAgent();
-
-  const recorder = recordDispatches();
-  let events: readonly SSEEvent[] = [];
-  try {
-    events = await collectLegacy(
-      agentRef,
-      registry,
-      options.maxTurns === undefined
-        ? options.repeatedCalls === undefined
-          ? {}
-          : { maxTurns: 8, antiDeadLoop: { enabled: true, hardStopAt: options.repeatedCalls } }
-        : { maxTurns: options.maxTurns },
-    );
-  } finally {
-    recorder.stop();
-    // The gated tool is still parked on its promise at this point; releasing it
-    // here keeps its late completion from becoming an unhandled rejection.
-    gate.release();
-  }
-  const done = events.filter((event) => event.type === 'done');
-  const last = done[done.length - 1] as { reason?: string } | undefined;
-  return { exitEvents: exitEvents(recorder.events), terminal: last?.reason };
 }
 
 // ============================================================================
@@ -902,17 +676,20 @@ async function runEngine(
 // The measurement, one path at a time, both sides
 // ============================================================================
 
-describe('per-path exit hook events, measured on BOTH paths', () => {
-  it('completed: SessionEnd on both, and Stop on neither', async () => {
-    const legacy = await runLegacy({ frames: [{ type: 'text', data: 'done.' }, DONE_END_TURN] });
+describe('per-path exit hook events, pinned on the ENGINE path', () => {
+  it('completed: SessionEnd, and Stop on neither', async () => {
+    // Plan 610 S4c-d3: the legacy half of this row was MEASURED and is recorded
+    // in the header table (`streamChat` -> `SessionEnd`), but the legacy loop no
+    // longer exists, so it cannot be driven again. What is asserted below is the
+    // ENGINE's own behaviour on this exit, which is the half that can still
+    // regress. The parity decision it was aligned to is preserved as the table
+    // row, not as a live comparison — see the header's "What replaced the pair".
     const engine = await runEngine('completed');
 
-    // Each side reached the exit it claims, so neither row is measuring the
+    // The run really reached the exit it claims, so this is not measuring the
     // wrong path.
-    expect(legacy.terminal).toBe('completed');
     expect(engine.reason).toBe('completed');
 
-    expect(legacy.exitEvents).toEqual(['SessionEnd']);
     expect(engine.exitEvents).toEqual(['SessionEnd']);
 
     // NON-VACUITY on the engine side from the product's own channel: the
@@ -920,7 +697,7 @@ describe('per-path exit hook events, measured on BOTH paths', () => {
     expect(engine.invokedHooks).toEqual(['SessionEnd']);
   });
 
-  it('aborted at the loop boundary: BOTH dispatch Stop then SessionEnd', async () => {
+  it('aborted at the loop boundary: Stop then SessionEnd', async () => {
     // Plan 610 D2 CLOSED this row. It used to be a divergence: the legacy
     // dispatches `Stop` then `SessionEnd` from
     // `SessionFinalizer.finalizeAbort`, and the engine dispatched NOTHING.
@@ -933,26 +710,18 @@ describe('per-path exit hook events, measured on BOTH paths', () => {
     // narrowed to the in-turn phases.
     //
     // A cancelled run runs its cleanup hooks, which is the legacy's position and
-    // the one a user who pressed stop expects.
-    const legacy = await runLegacy({
-      frames: [
-        { type: 'tool_use', data: { id: 't1', name: 'probe_end', input: { value: 'hold' } } },
-        DONE_END_TURN,
-      ],
-      abortDuringTool: true,
-    });
+    // the one a user who pressed stop expects. That position is preserved as the
+    // header's `aborted (loop exit)` row; the legacy half is no longer driven,
+    // because the loop it drove is gone.
     const engine = await runEngine('cancelled');
 
-    // Both really are cancellations -- without this an empty engine record
+    // This really is a cancellation -- without this an empty engine record
     // could just be a run that ended some other way.
-    expect(legacy.terminal).toBe('aborted');
     expect(engine.reason).toBe('cancelled');
 
-    // The ORDER is part of the legacy's claim: `Stop` announces the stop and
-    // `SessionEnd` closes the session, so a source that swapped them would
-    // still satisfy a `toContain` on either name. Asserted on BOTH sides for
-    // that reason, not only on the legacy's.
-    expect(legacy.exitEvents).toEqual(['Stop', 'SessionEnd']);
+    // The ORDER is part of the claim: `Stop` announces the stop and `SessionEnd`
+    // closes the session, so a source that swapped them would still satisfy a
+    // `toContain` on either name.
     expect(engine.exitEvents).toEqual(['Stop', 'SessionEnd']);
 
     // NON-VACUITY on the engine side from the product's own channel: the two
@@ -961,33 +730,26 @@ describe('per-path exit hook events, measured on BOTH paths', () => {
     expect(engine.invokedHooks).toEqual(['Stop', 'SessionEnd']);
   });
 
-  it('failed: NEITHER path dispatches an exit event at all', async () => {
-    const legacy = await runLegacy({
-      frames: [{ type: 'text', data: 'never read' }],
-      // A plain provider error, so the run reaches `finalizeStreamError`'s error
-      // branch rather than its abort branch.
-      errorAtModelLeg: true,
-    });
+  it('failed: the engine dispatches NO exit event at all', async () => {
+    // The failure really happened: an empty event list on a `completed` exit
+    // would be a green that measured nothing.
     const engine = await runEngine('failed');
-
-    // The failure really happened on both sides. An empty event list on a
-    // `completed` exit would be a green that measured nothing.
-    expect(legacy.terminal).toBe('error');
     expect(engine.reason).toBe('failed');
 
     // This is the row that makes "the legacy fires NOTHING on the stream-error
-    // path" true, and it is what the other claim in `run-engine.ts` denied.
-    expect(legacy.exitEvents).toEqual([]);
+    // path" true, and it is what the other claim in `run-engine.ts` denied. The
+    // legacy half was measured (header table, `stream error` row) and the engine
+    // is what this pins going forward.
     expect(engine.exitEvents).toEqual([]);
   });
 
-  it('aborted at the MODEL LEG: the legacy is silent and the engine now dispatches, and that is recorded', async () => {
-    // The second abort route, and the one that makes the legacy's coverage
-    // unreproducible: `finalizeStreamError` maps an `AbortError` onto the SAME
-    // `done('aborted')` terminal `finalizeAbort` uses, then returns before any
+  it('aborted at the MODEL LEG: the engine dispatches Stop + SessionEnd, and that is recorded', async () => {
+    // The second abort route, and the one that made the legacy's coverage
+    // unreproducible: `finalizeStreamError` mapped an `AbortError` onto the SAME
+    // `done('aborted')` terminal `finalizeAbort` used, then returned before any
     // dispatch. Two exits, one terminal event, opposite hook coverage.
     //
-    // Plan 610 D2 makes this row a DIVERGENCE, in the opposite direction from
+    // Plan 610 D2 made this row a DIVERGENCE, in the opposite direction from
     // the row it closed. It was a match before only because the engine said
     // nothing on either route; the engine now says `Stop` + `SessionEnd` on
     // both, because it has ONE `cancelled` reason and cannot observe which
@@ -996,20 +758,13 @@ describe('per-path exit hook events, measured on BOTH paths', () => {
     // RECORDED rather than closed, and deliberately: matching the legacy here
     // would mean reproducing an accident of where the abort landed rather than
     // a policy about what a cancelled run tells its cleanup hooks. The legacy's
-    // silence is a consequence of `finalizeStreamError` returning early, not a
+    // silence was a consequence of `finalizeStreamError` returning early, not a
     // decision anyone made about cancellation. Aligning to it would mean a user
     // who stops a run during a model call gets no teardown, which is the defect
-    // D2 exists to remove. This row is the cost of that decision, stated.
-    const legacy = await runLegacy({
-      frames: [{ type: 'text', data: 'never read' }],
-      abortAtModelLeg: true,
-    });
+    // D2 exists to remove. The legacy half (silent) is the header's
+    // `aborted (model leg)` row; the engine's behaviour is what this pins.
     const engine = await runEngine('cancelled');
-
-    expect(legacy.terminal).toBe('aborted');
     expect(engine.reason).toBe('cancelled');
-
-    expect(legacy.exitEvents).toEqual([]);
     expect(engine.exitEvents).toEqual(['Stop', 'SessionEnd']);
   });
 
@@ -1029,23 +784,13 @@ describe('per-path exit hook events, measured on BOTH paths', () => {
     //
     // The operational consequence, stated so it is not rediscovered as a bug:
     // a hook that must run on EVERY terminal must not rely on this event.
-    const legacy = await runLegacy({
-      frames: [
-        { type: 'tool_use', data: { id: 't1', name: 'probe_end', input: { value: 'x' } } },
-        DONE_END_TURN,
-      ],
-      maxTurns: 1,
-    });
     const engine = await runEngine('max_turns');
 
-    // Both really ended at the ceiling. `maxTurns: 1` with a tool call on turn 1
-    // is the only way the legacy reaches this exit, and the engine's own
-    // `#shouldStop` ceiling arm is the only way it reaches its one. Without
-    // this an empty engine record could be a run that ended some other way.
-    expect(legacy.terminal).toBe('max_turns');
+    // This really ended at the ceiling. The engine's own `#shouldStop` ceiling
+    // arm is the only way it reaches this exit; without this an empty engine
+    // record could be a run that ended some other way.
     expect(engine.reason).toBe('max_turns');
 
-    expect(legacy.exitEvents).toEqual([]);
     expect(engine.exitEvents).toEqual([]);
     // Non-vacuity in the OTHER direction: the engine really reached the exit
     // contributors and really ran them, and they dispatched nothing. This is
@@ -1059,7 +804,7 @@ describe('per-path exit hook events, measured on BOTH paths', () => {
 // Plan 610 D5: the four exit paths that had never been measured
 // ============================================================================
 
-describe('the previously unmeasured exits, on BOTH paths', () => {
+describe('the previously unmeasured exits, pinned on the ENGINE path', () => {
   it('repeated_tool_calls: NEITHER path dispatches, which is parity the flip required', async () => {
     // The legacy's anti-dead-loop hard stop is `_commitMessages()`, a
     // `done('repeated_tool_calls')` and a `return`. It never reaches a
@@ -1076,18 +821,15 @@ describe('the previously unmeasured exits, on BOTH paths', () => {
     //  - the repeat frame's tool call must be IDENTICAL on every turn, because
     //    the tracker keys on name plus serialised input. A per-turn id is
     //    irrelevant to it, but a per-turn input would reset the streak.
-    const legacy = await runLegacy({ frames: [DONE_END_TURN], repeatedCalls: 2 });
     const engine = await runEngine('repeated_tool_calls');
 
-    // Both really ended on the guard, not on the ceiling: the legacy's
-    // threshold is 2 against its default ceiling of 8, and the engine's is 3
-    // against the same 8.
-    expect(legacy.terminal).toBe('repeated_tool_calls');
+    // This really ended on the guard, not on the ceiling: the engine's
+    // threshold is 3 against the shared ceiling of 8.
     expect(engine.reason).toBe('repeated_tool_calls');
 
     // Plan 610 D0 CLOSED this row. The engine used to dispatch `SessionEnd` when
     // a run ended on the anti-dead-loop guardrail; the legacy dispatches nothing,
-    // because it reaches that exit with `_commitMessages()`, a
+    // because it reached that exit with `_commitMessages()`, a
     // `done('repeated_tool_calls')` and a `return`, never calling a
     // `SessionFinalizer`.
     //
@@ -1101,14 +843,13 @@ describe('the previously unmeasured exits, on BOTH paths', () => {
     // more informative thing to tell a session's cleanup hooks than silence.
     // It loses because the legacy's silence on this exit is not an accident of
     // control flow in the way the guardrail case would have to be -- the legacy
-    // reaches BOTH its ceiling and its guardrail through the same
+    // reached BOTH its ceiling and its guardrail through the same
     // return-without-a-finalizer shape, so the two silences are one decision,
     // and splitting them would make the engine's coverage depend on which
     // non-answer it produced.
     //
     // Note the asymmetry with the budget row below, which this same commit
     // deliberately did NOT close: that terminal has no legacy path at all.
-    expect(legacy.exitEvents).toEqual([]);
     expect(engine.exitEvents).toEqual([]);
     // Non-vacuity in the OTHER direction, and the same check the ceiling row
     // carries: the engine really reached the exit contributors and really ran
@@ -1167,62 +908,38 @@ describe('the previously unmeasured exits, on BOTH paths', () => {
     expect(engine.invokedHooks).toEqual(['SessionEnd']);
   });
 
-  it('the four early done(completed) exits: the legacy dispatches NOTHING on all four', async () => {
+  it('the early completed exits: the engine agrees with the legacy on all four', async () => {
     // All four are the same shape, which is why they are one test rather than
-    // four: each yields `done('completed')` and returns from `streamChat`
-    // without ever calling a `SessionFinalizer`. The four are the `/goal`
+    // four: each yielded `done('completed')` and returned from `streamChat`
+    // without ever calling a `SessionFinalizer`. The four were the `/goal`
     // continuation, `/export`, the mailbox soft stop, and a background resume
     // with nothing to claim.
     //
     // The engine collapses all four onto ONE `completed` reason, and on
-    // `completed` it dispatches `SessionEnd` -- because `finalizeSuccess` is the
-    // legacy's own method for a natural end, and the four early exits land on
-    // the same terminal event the natural path produces. So these rows MATCH
-    // the legacy: the legacy's early exits reach no dispatch site, and neither
-    // does the engine's equivalent.
+    // `completed` it dispatches `SessionEnd` -- because `finalizeSuccess` was the
+    // legacy's own method for a natural end. So these rows MATCHED the legacy:
+    // the legacy's early exits reached no dispatch site.
     //
-    // Two of the four are driven below and the other two are asserted as
-    // source, because reaching them needs a control command and a mailbox row
-    // and neither is what this file is for. The claim is about where the
-    // dispatch sites ARE, and that is a question about the source.
-    // Two ordinary turns on the legacy, neither of which is one of the four
-    // early exits -- so what this establishes is the BASELINE those four are
-    // exceptions to: a turn that really ran dispatches `SessionEnd` through
-    // `finalizeSuccess`. Without it, "the early exits dispatch nothing" could
-    // be a property of the harness rather than of those four exits.
+    // Two facts, stated because they were both MEASURED and both are load-bearing
+    // to what this row can still claim:
     //
-    // Both end in `end_turn` and neither asks for a tool, for the reason the
-    // dead-loop row documents: a `tool_use` stop means `needsFollowUp`, so the
-    // loop goes round again and this fixture would replay its last frame until
-    // it hit the ceiling, measuring a ceiling rather than a normal end.
-    for (const frames of [
-      [{ type: 'text', data: 'a' } as const, DONE_END_TURN as const],
-      [
-        { type: 'text', data: 'b', } as const,
-        DONE_END_TURN as const,
-      ],
-    ]) {
-      const legacy = await runLegacy({ frames: [...frames] });
-      expect(legacy.terminal).toBe('completed');
-      expect(legacy.exitEvents).toEqual(['SessionEnd']);
-    }
-
-    // The engine side, once, through the same channel. The claim is that the
-    // engine's `completed` agrees with the legacy's NATURAL end.
+    //  - The four `yield { type: 'done', reason: 'completed' }` sites were
+    //    counted in `DuyaAgent.ts` to establish the number four. That file's
+    //    legacy turn generator was DELETED in plan 610 S4c-d3, so the count is
+    //    no longer countable and the four exits are no longer reachable through
+    //    that code path at all. The count is recorded here rather than asserted,
+    //    because asserting it would require re-adding the loop this slice
+    //    exists to delete.
+    //  - The legacy BASELINE those four were exceptions to -- "a turn that really
+    //    ran dispatches `SessionEnd` through `finalizeSuccess`" -- is now
+    //    measured on the engine side below, which is the path that exists.
     const engine = await runEngine('completed');
     expect(engine.reason).toBe('completed');
     expect(engine.contributorCount).toBe(2);
+    // The engine's natural end dispatches `SessionEnd`, and a real subprocess
+    // ran it. This is the same fact the legacy's two ordinary turns established,
+    // now read off the path that is still live.
     expect(engine.exitEvents).toEqual(['SessionEnd']);
-
-    // The remaining two early exits, pinned at the SOURCE rather than measured.
-    // Four is the count, and the count is the claim: a fifth would be an exit
-    // nobody measured. Counted over `DuyaAgent.ts` with comments stripped, the
-    // same way the seam test does it, so a comment cannot change the number.
-    const legacySource = stripComments(
-      readFileSync(DUYA_AGENT_SOURCE, 'utf8'),
-    );
-    expect(
-      (legacySource.match(/yield \{ type: 'done', reason: 'completed' \}/g) ?? []).length,
-    ).toBe(4);
+    expect(engine.invokedHooks).toEqual(['SessionEnd']);
   });
 });

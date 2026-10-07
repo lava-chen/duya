@@ -539,32 +539,58 @@ describe('the marker cannot outlive the run that set it', () => {
     expect(b.markerAfterRun).toBeNull();
   });
 
-  it('the legacy resets the marker too, so a bound marker cannot reach a legacy turn', async () => {
-    // The seam is a HOST-side input, and the legacy still owns the production
-    // turn loop. `streamChat` nulls `forkTurn` at `:2277` on entry, so a marker
-    // bound for an engine run cannot tag a later legacy turn. Asserted through
-    // the public reader rather than by reaching for the private.
+  it('the engine run resets it too, so a marker bound with no run behind it cannot reach a turn', async () => {
+    // Plan 610 S4c-d3: this row used to prove the LEGACY also cleared the
+    // marker -- `streamChat` nulled `forkTurn` at `:2277` on entry, so a marker
+    // bound for an engine run could not tag a later legacy turn. The loop is
+    // deleted, so there is no second turn path left to leak into.
+    //
+    // The claim is NOT dropped, it is re-pointed at the path that now owns it.
+    // The same obligation is met at run start by `composeLegacyRunPorts:935`,
+    // whose own header says so ("Same obligation as the legacy's `:2277`
+    // reset"): every run binds `host.runFork ?? null`, so a run that supplies
+    // no marker CLEARS one by construction.
+    //
+    // The fixture is the harder case the legacy row was reaching for: the
+    // marker is bound directly on a long-lived agent, with no run behind it --
+    // precisely the state `bindRunForkMarker`'s doc says the engine must not
+    // honour, because a marker that outlives its run filters every later
+    // durable row out of the user's history, silently.
     const agent = new duyaAgent({
       apiKey: 'test-key',
       model: 'claude-test',
       provider: 'anthropic',
-      sessionId: 's-legacy-reset',
+      sessionId: 's-bound-marker-reset',
       workingDirectory: process.cwd(),
       permissionMode: 'bypassPermissions',
     });
 
     agent.bindRunForkMarker(FORK_MARKER);
+    // The marker is REALLY in force before the run, so a later "cleared"
+    // reading cannot be explained by the bind having failed.
     expect(agent.readRunForkMarker()).toEqual(FORK_MARKER);
 
-    // Entering the legacy is enough; no turn needs to complete for the reset to
-    // have happened, because `:2277` runs before the generator's first yield.
-    for await (const _event of agent.streamChat('a plain prompt', {
-      turnId: 'legacy-reset-turn',
-    } as never)) {
-      // drain
-    }
+    // `runFork` omitted, exactly as a production host that is not forking
+    // supplies it. The reset happens when the run is established, before the
+    // first turn is assembled.
+    const run = await runThroughEngine(false, false, agent);
 
     expect(agent.readRunForkMarker()).toBeNull();
+
+    // NON-VACUITY: the run really happened, so "cleared" is not "never
+    // engaged", and the rows below are rows this run wrote.
+    expect(run.probeRuns()).toBe(1);
+    expect(run.seen).toHaveLength(2);
+    expect(run.terminals[0].state.status).toBe('completed');
+
+    // The hazard itself: the unbound-but-still-set marker did not tag a single
+    // row of the run that followed it.
+    const { readThreadMeta } = await import('../../message/threads.js');
+    const rows = engineWritten(run);
+    expect(rows.length).toBeGreaterThanOrEqual(3);
+    for (const row of rows) {
+      expect(readThreadMeta(row)).toBeUndefined();
+    }
   });
 });
 

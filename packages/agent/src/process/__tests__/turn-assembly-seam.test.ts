@@ -583,14 +583,21 @@ describe('the seam did not change what the cycle sends the model', () => {
 
     // The owner, pinned at the SOURCE. The claim is that there is exactly ONE
     // append and that it is inside `beginTurnAssembly` -- a second owner is the
-    // thing this file exists to prevent, and an append left in `streamChat`
-    // would put the tool back outside both owners.
+    // thing this file exists to prevent.
     expect(code()).toContain('PROGRESS_UPDATE_TOOL');
     expect(occurrences(/tools: \[\.\.\.moded\.resolved\.tools, \{ \.\.\.PROGRESS_UPDATE_TOOL/)).toBe(1);
     // The consumer reads the name off the handle rather than deciding it again:
     // two `while` loops over the same collision are two answers that can differ.
     expect(occurrences(/PROGRESS_UPDATE_TOOL_NAME/)).toBe(2);
-    expect(occurrences(/const progressToolName = runAssembly\.progressToolName/)).toBe(1);
+    // Plan 610 S4c-d3: the consumer was the legacy cycle. It read the name back
+    // off the handle as `const progressToolName = runAssembly.progressToolName`
+    // and then collided it a SECOND time, so two `while` loops decided the same
+    // name from two lists. That is gone with the loop, and the claim is not
+    // weakened by saying so -- it is stricter. The name is now decided in
+    // exactly one place, published once, and re-decided nowhere:
+    expect(occurrences(/let progressToolName = PROGRESS_UPDATE_TOOL_NAME/)).toBe(1);
+    expect(occurrences(/\r?\n\s*progressToolName,\r?\n/)).toBe(1);
+    expect(occurrences(/runAssembly\.progressToolName/)).toBe(0);
   });
 });
 
@@ -606,10 +613,15 @@ describe('the seam is public, and the loop routes through it rather than beside 
     expect(code()).not.toMatch(/private\s+assembleTurn/);
   });
 
-  it('has exactly ONE call site, and it is the legacy cycle', () => {
+  it('has exactly ONE call site, and it is the seam\'s own port', () => {
     // Counted, not pattern-matched: a second caller is a second owner of "what
     // a turn advertises". `composeLegacyRunPorts` takes the agent and will reach
     // this method -- through this seam, not around it.
+    //
+    // Plan 610 S4c-d3: the single call site used to be the legacy cycle, which
+    // called `this.assembleTurn` directly. The loop is deleted, so the survivor
+    // is the `assemble:` closure `beginTurnAssembly` publishes on the run handle
+    // -- the same one the engine reaches. The COUNT is unchanged; the owner is.
     expect(occurrences(/this\.assembleTurn\s*\(/)).toBe(1);
   });
 
@@ -631,12 +643,23 @@ describe('the catalog protocol has one home', () => {
     expect(occurrences(/currentRound\s*=\s*turnCount/)).toBe(0);
   });
 
-  it('routes the three compaction sites and the drain site through the seam methods', () => {
-    // Three invalidations, one record. Each is a hand-reached piece of one
-    // protocol, which is the shape that lets a seam skip one and still pass
-    // every structural test.
-    expect(occurrences(/this\.invalidateTurnCatalogSchemaReads\s*\(/)).toBe(3);
-    expect(occurrences(/this\.recordTurnCatalogSchemaRead\s*\(/)).toBe(1);
+  it('leaves NO hand-reached call sites for the catalog protocol', () => {
+    // Plan 610 S4c-d3: this used to require three invalidations and one record,
+    // all of them hand-reached from inside the legacy cycle. Each was a hand-
+    // reached piece of one protocol, which is the shape that lets a seam skip
+    // one and still pass every structural test.
+    //
+    // The loop is gone, so the only passing shape is ZERO hand-reached sites --
+    // which is strictly stricter than "three sites that must exist": a second
+    // caller now fails this test rather than being tolerated. The protocol's
+    // single home is asserted separately, both as the bare free functions
+    // (below) and by driving the two seam methods directly (section 4).
+    expect(occurrences(/this\.invalidateTurnCatalogSchemaReads\s*\(/)).toBe(0);
+    expect(occurrences(/this\.recordTurnCatalogSchemaRead\s*\(/)).toBe(0);
+    // Both seam methods still exist, so this is a count of CALL SITES reaching
+    // past them, not a count of a protocol that was deleted outright.
+    expect(occurrences(/invalidateTurnCatalogSchemaReads\s*\(resolved: ResolvedTurnTools\)/)).toBe(1);
+    expect(occurrences(/recordTurnCatalogSchemaRead\s*\(resolved: ResolvedTurnTools/)).toBe(1);
   });
 
   it('keeps the bare free functions reachable ONLY as the seam implementation', () => {
