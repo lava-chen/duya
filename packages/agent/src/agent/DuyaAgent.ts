@@ -383,6 +383,93 @@ export interface TurnAssembly {
 }
 
 /**
+ * Plan 610 P4: what establishing a RUN needs from its driver.
+ *
+ * Only the two facts the driver is the sole authority for -- what the user
+ * asked for, and the options the run was started with. Everything else about a
+ * run is decided by the agent, because a driver that could supply those would
+ * be a second account of one run's setup, and two accounts that can disagree is
+ * the defect class this seam exists to remove (see `beginTurnAssembly` for the
+ * same argument applied to `turnContext`).
+ *
+ * ## Why there is NO abort controller in this request
+ *
+ * Because that is the one thing the run OWNS rather than receives. A caller that
+ * could hand in a controller would be able to install one with no run behind it,
+ * which is precisely the state `buildTurnPipeline` refuses to guess its way
+ * past. So the controller is not a parameter, is not a public field, and has no
+ * setter: `beginRun` creates it and `RunHandle.close` releases it.
+ */
+export interface RunStartRequest {
+  readonly options: ChatOptions | undefined;
+  readonly prompt: string | MessageContent[];
+}
+
+/**
+ * Plan 610 P4: the live run's lifecycle handle.
+ *
+ * ## `close` is the load-bearing member
+ *
+ * The agent outlives the run -- `beginTurnAssembly`'s doc says the same about
+ * the fork marker -- so everything this handle establishes has to be released
+ * or a finished run keeps addressing the next one. `bindRunForkMarker`'s header
+ * is the worked example of that failure: a fork marker that survives its run
+ * filters every later durable row out of the user's history, silently, because
+ * `projectModelMessages` drops branched rows. So `close` is the release, it is
+ * idempotent, and it is IDENTITY-CHECKED: a handle that has been superseded
+ * releases nothing rather than tearing down a newer run's controller.
+ */
+export interface RunHandle {
+  /** `options.turnId ?? null`. The value journal emits carry for this run. */
+  readonly turnId: string | null;
+  /**
+   * Assembled ONCE per run by `beginRun`, so the driver never builds a second
+   * `TurnAssembler.build` for the same run and hands it to `beginTurnAssembly`.
+   */
+  readonly turnContext: TurnContext;
+  /** `_resolveAgentProfile`'s answer, or `undefined` when no profile was named. */
+  readonly appliedProfile: AgentProfile | undefined;
+  /** `options.mode ?? 'normal'`, so a driver can report what it actually ran. */
+  readonly requestedMode: string;
+  /**
+   * The orchestrator-paradigm mode this run asked for, or `null`.
+   *
+   * REPORTED, NEVER DISPATCHED -- see `beginRun`'s header for the measured
+   * reason. A non-null value means the legacy's stream would have been taken
+   * over by that mode and this run's turn assembly must NOT be used.
+   */
+  readonly orchestrator: ModeModifier | null;
+  /**
+   * This run's abort signal, derived from the controller `beginRun` installed.
+   *
+   * Read-only by construction, for the reason `readModelClient` is: the caller
+   * gets the signal to observe, not the controller to replace, so a host cannot
+   * swap the abort source out from under a turn that is already in flight.
+   * `agent.interrupt()` still aborts the same controller, so the legacy's
+   * cancellation route and this one are the same wire.
+   */
+  readonly signal: AbortSignal;
+  /**
+   * This run's controller, for the run's OWN plumbing.
+   *
+   * The controller rather than only the signal because the legacy derives
+   * PER-REQUEST child controllers from it (`createChildAbortController`) and
+   * hands it to `OrchestratorDeps`, and re-deriving one per site would be the
+   * second account of a run's cancellation this seam exists to remove.
+   *
+   * Read-only, and reachable ONLY through a handle -- which is the whole
+   * difference from the field this does not replace. A caller holding a handle
+   * is holding a live run, so aborting here aborts something real; a caller
+   * writing the field could install a controller no run was ever built around.
+   */
+  readonly controller: AbortController;
+  /** Abort this run. Equivalent to `agent.interrupt()`, scoped to this handle. */
+  readonly abort: (reason?: unknown) => void;
+  /** Release the run. See the note above; safe to call more than once. */
+  close(): void;
+}
+
+/**
  * Plan 610 A3-2b8 (S2): what establishing the RUN-scoped half of assembly needs.
  *
  * Deliberately almost nothing. Every value that can be derived from the agent
@@ -687,12 +774,17 @@ export class duyaAgent implements AgentRuntime {
   buildTurnPipeline(request: TurnPipelineRequest): ToolExecutionPipeline {
     const { resolved, turnContext, options } = request;
 
-    // `streamChat` assigns this on entry and clears it on exit, so it is
-    // non-null for every turn of a live run -- and the generator relied on
-    // that narrowing without stating it. A method does not inherit it, so it
-    // is stated here, and stated as a THROW rather than a default: silently
-    // substituting a fresh controller would build a tool-use context wired
-    // to a signal the caller cannot abort.
+    // A run establishes this (`beginRun`) and releases it (`RunHandle.close`),
+    // so it is non-null for every turn of a live run -- and the generator
+    // relied on that narrowing without stating it. A method does not inherit it,
+    // so it is stated here, and stated as a THROW rather than a default:
+    // silently substituting a fresh controller would build a tool-use context
+    // wired to a signal the caller cannot abort.
+    //
+    // Both halves of that are load-bearing. Until `beginRun` landed, the only
+    // way past this throw was to write the private field, and the "already been
+    // cleared" half of the message named a state the tree could not reach --
+    // `streamChat` assigned the controller and never released it.
     const abortController = this.abortController;
     if (!abortController) {
       throw new Error(
@@ -1213,6 +1305,168 @@ export class duyaAgent implements AgentRuntime {
   recordTurnCatalogSchemaRead(resolved: ResolvedTurnTools, message: Message): boolean {
     if (message.role !== 'tool') return false;
     return recordToolCatalogSchemaRead(resolved.catalogView, message.metadata);
+  }
+
+  /**
+   * Plan 610 P4: establish a run, and hand back the handle that owns it.
+   *
+   * ## Why this is PUBLIC, and why it is a METHOD
+   *
+   * The fifth instance of a shape this file already documents: `claimInterTurn`
+   * ("PUBLIC, and it is the whole reason `_sweepInterTurn` exists"),
+   * `readModelClient`, `bindTurnOutputSink` and `beginTurnAssembly` each lift
+   * one thing out of `streamChat` so a run composition can bind the port that
+   * needs it. `abortController` was the last one standing: it is assigned in
+   * the generator's prologue and read by `buildTurnPipeline`, so outside the
+   * generator every turn assembly THREW ("no run in progress"), and the only
+   * way past it was to write the private field. Measured at this commit: 15
+   * cast sites across 12 harness files, one of which calls the cast "the honest
+   * boundary". There was no honest production path.
+   *
+   * A method and not a public field or a setter, because the run must be the
+   * thing that OWNS the controller. A writable field would let a caller install
+   * one with no run behind it -- the exact confusion the `buildTurnPipeline`
+   * throw exists to prevent -- and a setter would be the same hole with a
+   * method's name on it. Establishing the run and releasing it are ONE operation
+   * on ONE code path here, which is the argument `bindRunForkMarker` makes about
+   * why it is not a `setForkTurn` plus a `clearForkTurn`.
+   *
+   * ## One implementation, two callers
+   *
+   * `streamChat` calls THIS for its prologue. That is what keeps a run's setup
+   * from having two answers, and it is also why the abort controller is assigned
+   * in exactly one place in this file. The legacy's own prologue comments (plan
+   * 441 / 486 / 610 A3-2b2 / 498 / 550) moved onto this method with it.
+   *
+   * ## WHAT THIS OWNS, per symbol, and what it does NOT
+   *
+   *  - `abortController`: OWNED. Created here, exposed as `signal`, released by
+   *    `close`. This is the blocker this slice exists to remove.
+   *  - `currentTurnId`: OWNED. `options.turnId ?? null`, the value
+   *    `_pushDurable`'s journal emits read.
+   *  - `forkTurn`, `turnOutputSink`: OWNED as per-run RESETS. They are cleared
+   *    here (the legacy's per-run resets) and released again by `close`, because
+   *    a per-run marker that outlives its run on a long-lived agent is silent
+   *    cross-conversation corruption -- see `bindRunForkMarker`.
+   *  - `_consumeApprovedEffect`, `_turnAlwaysAllowTools`: OWNED. Plan 498's
+   *    per-turn approval ledger, which `buildPermissions` reads through
+   *    `readTurnAlwaysAllowTools`.
+   *  - `promptContexts` / `promptContextBlocks` / `injectedSkillParts`: the rail
+   *    is RESET here and released by `close`, but its PRODUCERS are NOT lifted.
+   *    The hook half is unreachable by construction -- `UserPromptSubmit` and
+   *    `SessionStart` contexts arrive through `dispatchHooks`, a closure local
+   *    of the generator that is itself reached by `yield*`, and a composition
+   *    cannot consume a `yield`. The skill / plugin / mention half is
+   *    module-level and COULD move, but moving it changes where the legacy's
+   *    prologue sits relative to its hook dispatch (the hook half assigns
+   *    `promptContexts` rather than pushing to it), so it is deliberately not
+   *    done here. A driver that needs those blocks supplies them through its own
+   *    projection; the rail this run owns is the reset half.
+   *  - `_resolveAgentProfile`: OWNED. It is a private method that reads the
+   *    profile service and config, needs nothing from the generator's frame, and
+   *    its answer is returned as `appliedProfile` so the driver can hand the
+   *    SAME value to `beginTurnAssembly` rather than resolving a second one.
+   *  - ORCHESTRATOR DISPATCH: NOT owned, and this method says so out loud. It
+   *    REPORTS the orchestrator-paradigm mode on the handle, because resolving
+   *    it is a registry lookup, but it cannot DISPATCH it: the dispatcher
+   *    `_dispatchOrchestratorMode` is an async generator that yields the
+   *    legacy's SSE vocabulary and takes the whole stream over, and MEASURED on
+   *    this commit `agent-runtime`'s `ports.ts` has no orchestrator member at
+   *    all. A driver handed a non-null `orchestrator` must not drive the turn
+   *    assembly -- the legacy would never have reached it either.
+   *  - the LEGACY's other prologue work -- the hook bus, the deterministic
+   *    control commands, `beginTurnAssembly` itself -- stays in the generator.
+   *    Those are the generator's own, and this method does not pretend to reach
+   *    them.
+   *
+   * ## Why `close` releases even though `streamChat` never did
+   *
+   * Correcting the record, because it changes what `close` has to do: at this
+   * commit `streamChat` assigns `abortController` and NEVER clears it (measured
+   * -- the field's only other writes are a read and a local `const` elsewhere in
+   * the file). So the "already been cleared" half of `buildTurnPipeline`'s
+   * message describes a state the tree could not reach, and the run's controller
+   * leaked past the generator on a long-lived agent. `close` clears it, and the
+   * identity check means a handle whose run was superseded by another one
+   * releases nothing rather than detaching a live run's signal.
+   */
+  async beginRun(request: RunStartRequest): Promise<RunHandle> {
+    const { options, prompt } = request;
+
+    // Assigned FIRST and synchronously, before the profile await below: a
+    // caller that awaits `beginRun` and then drives a turn must find the run
+    // already established, and an exception thrown by the await must not leave
+    // a controller behind with no handle to release it.
+    const controller = new AbortController();
+    this.abortController = controller;
+    this.currentTurnId = options?.turnId ?? null;
+    // Plan 486: per-run fork marker. Cleared unconditionally so a plain run
+    // clears a previous run's marker by construction (see `bindRunForkMarker`).
+    this.forkTurn = null;
+    // Plan 610 A3-2b2: whoever starts a run OWNS its frames. A host binds its
+    // sink AFTER this returns, which is the order the legacy's entry uses.
+    this.turnOutputSink = null;
+    // Plan 498: this run's approval ledger and always-allow grants.
+    this._consumeApprovedEffect = options?.consumeApprovedEffect;
+    this._turnAlwaysAllowTools = new Set(options?.approvedAlwaysAllowTools ?? []);
+    // The hook-context rail is per-run. A finished run's delivered blocks would
+    // otherwise be RESTORED into the next run's first turn by the ensure-present
+    // re-projection in `_projectModelMessages`.
+    this.promptContexts = [];
+    this.promptContextBlocks = [];
+    this.injectedSkillParts.clear();
+
+    // Plan 550 step 2a-5: one `TurnAssembler.build` per run, handed to
+    // `beginTurnAssembly` by the driver rather than rebuilt there.
+    const turnContext = this.assembleTurnContext(options, prompt);
+    // Resolve agent profile early so mode dispatch can use promptSystem for
+    // auto-resolution. Remembered for turn-end consumers (e.g. bot-pipeline
+    // title skip), exactly as the legacy's prologue did.
+    const appliedProfile = await this._resolveAgentProfile(options);
+    this.lastAppliedAgentProfile = appliedProfile;
+
+    let closed = false;
+    return {
+      turnId: this.currentTurnId,
+      turnContext,
+      appliedProfile,
+      requestedMode: options?.mode || 'normal',
+      orchestrator: this._readOrchestratorMode(options),
+      signal: controller.signal,
+      controller,
+      abort: (reason?: unknown) => { controller.abort(reason); },
+      close: () => {
+        // Idempotent, and identity-checked: a handle closed twice, or closed
+        // after another run took the field, must not detach a live run.
+        if (closed) return;
+        closed = true;
+        if (this.abortController === controller) this.abortController = null;
+        this.currentTurnId = null;
+        this.forkTurn = null;
+        this.turnOutputSink = null;
+        this._consumeApprovedEffect = undefined;
+        this._turnAlwaysAllowTools = new Set();
+        this.promptContexts = [];
+        this.promptContextBlocks = [];
+        this.injectedSkillParts.clear();
+      },
+    };
+  }
+
+  /**
+   * The orchestrator-paradigm mode this run asked for, or `null`.
+   *
+   * Private because it is a lookup, not a decision any caller should make: the
+   * answer is a property of `options.mode` plus the registry, and a caller that
+   * recomputed it could disagree with the handle it was handed. It is separated
+   * from `beginRun` only so the registry read sits next to the comment that
+   * explains why it is reported but never dispatched.
+   */
+  private _readOrchestratorMode(options?: ChatOptions): ModeModifier | null {
+    const requestedMode = options?.mode || 'normal';
+    if (requestedMode === 'normal') return null;
+    const mod = modeModifierRegistry.get(requestedMode);
+    return mod?.orchestrator ? mod : null;
   }
 
   /**
@@ -2446,38 +2700,28 @@ export class duyaAgent implements AgentRuntime {
     prompt: string | MessageContent[],
     options?: ChatOptions
   ): AsyncGenerator<SSEEvent, void, unknown> {
-    this.abortController = new AbortController();
-    // Plan 441: per-turn journal propagation. _pushDurable reads this so
-    // journal emits carry the turn id without each call site threading it
-    // through. Reset on every streamChat so a follow-up turn gets a fresh
-    // value rather than the previous turn's leftover.
-    this.currentTurnId = options?.turnId ?? null;
-    // Plan 486: reset the fork-turn marker every streamChat call (see the
-    // field doc for semantics).
-    this.forkTurn = null;
-    // Plan 610 A3-2b2: the legacy OWNS this run's frames, so any turn-output
-    // sink a caller bound beforehand is taken away here.
+    // Plan 610 P4: the run's setup is ONE implementation, shared with the
+    // composition a host drives. It owns this run's abort controller (the
+    // signal every tool-use context this generator builds is wired to), its turn
+    // id, its fork / frame / approval / hook-context resets, and the resolved
+    // agent profile that mode dispatch below reads.
     //
-    // Not about duplication -- nothing in this generator publishes to the sink,
-    // so a frame has one writer either way (see the seam block's header). This
-    // is the LIFETIME half: the agent outlives the run, and a sink is a per-run
-    // object, so a binding that survived here would leave a later legacy turn
-    // addressing a finished run's receiver.
-    //
-    // Same placement and same reason as the two resets above: whoever starts the
-    // generator owns the turn.
-    this.turnOutputSink = null;
-    // Plan 498: per-turn approval-ledger consume + always-allow grants.
-    this._consumeApprovedEffect = options?.consumeApprovedEffect;
-    this._turnAlwaysAllowTools = new Set(options?.approvedAlwaysAllowTools ?? []);
-    // Plan 550 step 2a-5: assemble the per-turn TurnContext once at
-    // the top of every streamChat call. The current generator body
-    // still reads from the local fields above; follow-up commits
-    // replace those reads with `turnContext.xxx` one field at a time
-    // so the diff stays reviewable. Until then the local store is
-    // the source of truth.
-    const turnContext = this.assembleTurnContext(options, prompt);
-    logger.info(`[Agent] streamChat started, sessionId=${turnContext.sessionId ?? 'null'}, model=${this._model}, provider=${this.provider}, turnId=${this.currentTurnId ?? 'null'}`);
+    // `close` is deliberately NOT called on the generator's exits: `streamChat`
+    // has no single epilogue, and it never released this state before (measured
+    // -- the abort controller's only write in this file was the assignment it
+    // just replaced). The legacy therefore keeps its historical lifetime here,
+    // and only a driver driving the engine through `beginRun` releases a run.
+    const run = await this.beginRun({ options, prompt });
+    const { turnContext, appliedProfile } = run;
+    // The generator RELIED on the assignment above narrowing `abortController`
+    // to non-null for the rest of its body, without ever stating it -- the same
+    // dependence `buildTurnPipeline` documents, and the reason that method
+    // states it. Bound once here, from the run that owns it, and read
+    // everywhere below: this is also what stops a later `beginRun` (a driver
+    // taking the agent mid-stream) from silently re-pointing this loop's
+    // cancellation at someone else's controller.
+    const abortController = run.controller;
+    logger.info(`[Agent] streamChat started, sessionId=${turnContext.sessionId ?? 'null'}, model=${this._model}, provider=${this.provider}, turnId=${run.turnId ?? 'null'}`);
 
     // Plan 426 follow-up: configured [hooks] events dispatched outside the
     // loop bus (SessionStart / UserPromptSubmit / PreToolUse / Stop / 鈥?.
@@ -2730,12 +2974,11 @@ export class duyaAgent implements AgentRuntime {
       }
     }
 
-    // Resolve agent profile early so mode dispatch can use promptSystem for auto-resolution
-    const appliedProfile = await this._resolveAgentProfile(options);
-    // Remember it for turn-end consumers (e.g. bot-pipeline title skip).
-    this.lastAppliedAgentProfile = appliedProfile;
-
     // === Mode Dispatch ===
+    // The agent profile is already resolved -- `beginRun` did it at the top of
+    // this generator, ahead of the hook rail exactly as this prologue used to,
+    // and recorded it for turn-end consumers (e.g. bot-pipeline title skip).
+    //
     // Resolve mode: explicit option > 'normal'. Orchestrator-paradigm
     // modes (research) take over the entire stream via
     // `_dispatchOrchestratorMode`. Modifier-paradigm modes (plan-task,
@@ -3126,7 +3369,7 @@ export class duyaAgent implements AgentRuntime {
     // Track total elapsed time for the entire stream (including all turns and tool execution)
     const streamStartTime = Date.now();
 
-    while (!this.abortController.signal.aborted) {
+    while (!abortController.signal.aborted) {
       // Remove the prior turn's dynamic guide before rebuilding this turn.
       // This prevents duplicate prompt sections when a discovered tool stays
       // active across multiple tool-use turns.
@@ -3439,9 +3682,9 @@ export class duyaAgent implements AgentRuntime {
       // normal-completion and error paths.
       let requestController: (AbortController & { dispose?: () => void }) | null = null;
       let requestTimer: ReturnType<typeof setTimeout> | undefined;
-      let requestSignal: AbortSignal = this.abortController.signal;
+      let requestSignal: AbortSignal = abortController.signal;
       if (options?.llmRequestTimeoutMs && options.llmRequestTimeoutMs > 0) {
-        requestController = createChildAbortController(this.abortController);
+        requestController = createChildAbortController(abortController);
         requestSignal = requestController.signal;
         requestTimer = setTimeout(() => {
           requestController?.abort(new Error(`LLM request timed out after ${options.llmRequestTimeoutMs}ms`));
@@ -3644,7 +3887,7 @@ export class duyaAgent implements AgentRuntime {
         // because `disposeRequestController()` nulls the child on the way out
         // and a later read would hand the leg a controller that no longer
         // governs anything.
-        const turnAbortController = requestController ?? this.abortController;
+        const turnAbortController = requestController ?? abortController;
         options?.modelLegs?.publish(
           buildTurnModelLeg({
             turn: turnCount,
