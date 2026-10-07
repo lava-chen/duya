@@ -4,8 +4,8 @@ import { MESSAGE_SESSION_TOOL_NAME } from './constants.js';
 import {
   registerPendingInteragentCall,
   unregisterPendingInteragentCall,
-} from '../../process/agent-process-entry.js';
-import type { PendingInteragentCall } from '../../process/agent-process-entry.js';
+} from '../../process/pending-interagent-calls.js';
+import type { PendingInteragentCall } from '../../process/pending-interagent-calls.js';
 import type { WorkerEvent } from '../../process/worker-protocol.js';
 
 export class MessageSessionTool implements Tool {

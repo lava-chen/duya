@@ -184,6 +184,16 @@ export type { RawFrame, TranslateContext, TranslateResult } from './translate/ch
 
 export { projectToLegacyFrame } from './project/legacy-sse-projector.js';
 
+// Plan 610 D2: the ONE implementation of `WorkerAdapterSurface`, the `chat:*`
+// projection the worker adapter owes an engine.
+export { createWorkerAdapterSurface } from './engine/worker-adapter-surface.js';
+export type {
+  LegacyFrameCodec,
+  UsageResultFrame,
+  WorkerAdapter,
+  WorkerAdapterSurfaceOptions,
+} from './engine/worker-adapter-surface.js';
+
 export {
   LEGACY_SSE_TYPES,
   INTERNAL_SSE_TYPES,
@@ -396,6 +406,11 @@ export type {
   ContextPort,
   ExtensionContext,
   ExtensionContribution,
+  // The row a `before_commit` contributor's work is committed as. Exported for
+  // the same reason `AssistantMessageRecord` and `ToolResultRecord` are: the
+  // engine builds it, so a host that binds `TurnOutputPort` has to be able to
+  // name what it is handed.
+  InjectedMessageRecord,
   ExtensionContributor,
   ExtensionPhase,
   ExtensionPort,
@@ -407,6 +422,11 @@ export type {
   InterTurnInputPort,
   InterTurnSweep,
   InterTurnSweepResult,
+  // Plan 610 D1 -- mode exit. The run-boundary half of a mode's lifecycle,
+  // which `after_finalize` does NOT carry despite `DuyaAgent.ts:961` saying it
+  // does: that phase fires CONFIG hooks, and the two registries are disjoint.
+  // See `ModeExitPort` for the full enumeration.
+  ModeExitPort,
   ModelContentBlock,
   ModelFrame,
   ModelMessage,
@@ -424,6 +444,12 @@ export type {
   OneShotTextResult,
   ResolvedPart,
   RunEngine,
+  // Plan 610 D1 -- the control-command gate. A host that owns product commands
+  // (`/goal`, `/export`) binds this so a recognised command is answered by the
+  // product and ends the run before any model call. Type-only, for the same G1
+  // reason as the rest of the family.
+  RunCommandOutcome,
+  RunCommandPort,
   RunEnginePorts,
   RunEventStorePort,
   RunExecutionHandle,

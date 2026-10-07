@@ -323,58 +323,38 @@ interface Construction {
 }
 
 /**
- * ## The turn entries, measured
+ * ## The turn entries, RETIRED at plan 610 S4c-d3
  *
  * `DuyaAgent.streamChat` (the agent facade) is the turn entry. `AIClient
  * .streamChat` is a different method on a different class that happens to
  * share the name, and is excluded — see `NOT_TURN_ENTRIES`.
  *
  * Desktop's own turn is opened by the router, not by a `streamChat` call site,
- * which is why the router has no row here: `router.ts` calls `openRun`, and the
- * execution channel inside it issues `chat:start` to the worker.
+ * which is why the router has never had a row here: `router.ts` calls `openRun`,
+ * and the execution channel inside it issues `chat:start` to the worker.
  *
- * Re-measured after PR #198 (the headless CLI moved onto the shared Run API):
- * the CLI's three direct `streamChat` turn sites are GONE, and the CLI's turn
- * now opens through `HeadlessRunHost`, which is a second producer of
- * `run.start` on the same `RunController` — see the `run.start` row in
- * `CONTROL_PLANE_CENSUS`. So the CLI row moved from `cli/index.ts` to the host,
- * and the non-ControlPlane count fell from 4 to 1.
+ * This table held three rows, one per production consumer of the legacy turn
+ * loop. Measured over `packages/agent/src/process` and
+ * `packages/agent/src/tool/SubagentTool`, there is now **no call site for any
+ * of them**: the facade generator is deleted, and each consumer drives the
+ * engine instead. The three rows and where each consumer's turn went:
+ *
+ *  - `agent-process-entry.ts` → the worker drives the engine (plan 610 hosts 1).
+ *  - `headless-run-host.ts` → the headless host drives the engine (host 2).
+ *  - `SubagentTool/runAgent.ts` → `driveSubagentRunWithEngine` (host 3, this
+ *    slice).
+ *
+ * The first two were already stale before S4c-d3 landed — this table was the
+ * slice that should have been updated with them and was not, which is why the
+ * census had been reporting drift. All three are retired together here, and the
+ * headline number below is what the retirement gate was waiting for: it is now
+ * **zero**, which is the one state H8.3 needed and could not previously assert.
+ *
+ * The rows are kept in git history rather than as a comment block, so a
+ * re-introduced `agent.streamChat(` shows up in the unclassified check below as
+ * a NEW site with no row to explain it.
  */
-const TURN_ENTRIES: readonly TurnEntry[] = Object.freeze([
-  Object.freeze({
-    consumer: 'desktop',
-    path: 'packages/agent/src/process/agent-process-entry.ts',
-    receiver: 'agent',
-    symbol: 'handleChatStart',
-    viaControlPlane: true,
-    note:
-      'The worker `chat:start` command. Reached only through `openRun`, which ' +
-      'awaits `run.started` before dispatching and carries the canonical runId.',
-  }),
-  Object.freeze({
-    consumer: 'cli',
-    path: 'packages/agent/src/process/headless-run-host.ts',
-    receiver: 'agent',
-    symbol: 'createAgentExecutionChannel',
-    viaControlPlane: true,
-    note:
-      'The headless CLI turn, as of PR #198. The host starts a run through the ' +
-      'same `RunController` the Desktop path uses, so this is a second producer ' +
-      'of the single entry rather than a private loop. It is the one caller of ' +
-      'the facade that is SUPPOSED to exist: the composition H8.1 introduced.',
-  }),
-  Object.freeze({
-    consumer: 'subagent',
-    path: 'packages/agent/src/tool/SubagentTool/runAgent.ts',
-    receiver: 'subAgent',
-    symbol: 'runAgent',
-    viaControlPlane: false,
-    note:
-      'The sub-agent turn. Runs INSIDE the parent worker on a `DuyaAgent` ' +
-      'built for the child, so it is a nested loop rather than a child run. ' +
-      'Identity is `taskId` / `subAgentSessionId`, neither of which is a runId.',
-  }),
-]);
+const TURN_ENTRIES: readonly TurnEntry[] = Object.freeze([]);
 
 /**
  * ## The look-alikes
@@ -382,19 +362,38 @@ const TURN_ENTRIES: readonly TurnEntry[] = Object.freeze([
  * Every one of these matches `.streamChat(` in a grep. None of them begins an
  * agent turn, and counting them is the most likely way the retirement gate ends
  * up chasing a number that can never reach zero.
+ *
+ * Plan 610 S4c-d3 removed the first two rows of this table. Both were
+ * `duyaAgent` look-alikes that lived inside the deleted turn loop -- context
+ * compaction's summary call and the side-question helper. With the generator
+ * gone the calls are gone, and a row that classifies a call which no longer
+ * exists is worse than no row: the census would report it as a drift.
  */
 const NOT_TURN_ENTRIES: readonly NotATurnEntry[] = Object.freeze([
   Object.freeze({
-    path: 'packages/agent/src/agent/DuyaAgent.ts',
-    receiver: '(this.compactClient ?? this.llmClient)',
-    symbol: 'duyaAgent',
-    reason: 'Context compaction summary — an `AIClient` call, no turn.',
+    path: 'packages/agent/src/process/run-engine-model.ts',
+    receiver: 'client',
+    symbol: 'createClientModelPort',
+    reason:
+      "The engine's own model port: the `AIClient` call the runtime makes " +
+      "inside one turn. Same class of call as the turn itself, one layer down.",
   }),
   Object.freeze({
-    path: 'packages/agent/src/agent/DuyaAgent.ts',
-    receiver: 'this.llmClient',
-    symbol: 'duyaAgent',
-    reason: 'Side-question helper — no tools, no turn state.',
+    path: 'packages/agent/src/process/run-engine-model.ts',
+    receiver: 'sources.llmClient',
+    symbol: 'createLegacyModelPort',
+    reason:
+      'The model port handed to `composeLegacyRunPorts`, wrapping the ' +
+      "host's `AIClient`. One layer down, and the reason the facade generator " +
+      'could be deleted without changing what the model is asked.',
+  }),
+  Object.freeze({
+    path: 'packages/agent/src/process/run-engine-model.ts',
+    receiver: 'client',
+    symbol: 'createOneShotTextPort',
+    reason:
+      'The single-text port used by one-shot helpers (titles, summaries). ' +
+      "Its own `AIClient`; no turn state.",
   }),
   Object.freeze({
     path: 'packages/agent/src/agent/TurnStreamRunner.ts',
@@ -525,7 +524,19 @@ describe('H8.2 — measured consumer inventory', () => {
     for (const entry of NOT_TURN_ENTRIES) {
       const pool = entry.receiver === null ? mentions : calls.filter((s) => s.kind === 'call');
       const found = pool.filter(
-        (site) => site.path === entry.path && site.receiver === entry.receiver,
+        (site) =>
+          site.path === entry.path &&
+          site.receiver === entry.receiver &&
+          // Plan 610 S4c-d3: the symbol is part of a row's identity, exactly as
+          // `siteKey` already treats it in the unclassified check below. Keying
+          // only on (path, receiver) made two rows unrepresentable as soon as
+          // one file held two look-alikes on the same receiver --
+          // `run-engine-model.ts` calls `client.streamChat(` from both
+          // `createClientModelPort` and `createOneShotTextPort`, which then
+          // collided and each reported "resolved to 2". A mention row
+          // (`receiver: null`) is exempt: its symbol is a label for the row,
+          // not the enclosing declaration.
+          (entry.receiver === null || site.symbol === entry.symbol),
       );
       if (found.length !== 1) {
         problems.push(
@@ -627,10 +638,15 @@ describe('H8.2 — measured consumer inventory', () => {
     // The headline number: turns that do NOT go through the Control Plane.
     // H8.3 can only delete the shim when this reaches zero.
     //
-    // Re-measured after PR #198: the CLI's three direct turn sites are gone and
-    // the CLI's turn now opens through the shared `RunController`, so 4 became
-    // 1. The sub-agent is the whole of what is left, and `runAgent.ts` is a
+    // Re-measured after PR #198: the CLI's three direct turn sites were gone and
+    // the CLI's turn opened through the shared `RunController`, so 4 became 1.
+    // The sub-agent was the whole of what was left, and `runAgent.ts` was a
     // nested loop inside the parent worker with no run row of its own.
+    //
+    // PLAN 610 S4c-d3 REACHED ZERO. The sub-agent was the last consumer still
+    // calling the facade generator, and it now drives the engine. Every consumer
+    // of a `DuyaAgent` turn goes through the Control Plane or the engine, so the
+    // shim H8.3 wants to delete has no remaining caller to break.
     //
     // Unchanged by the H8.2 automation work, and deliberately so. Automation
     // was never counted here: it does not call `.streamChat(` at all, it POSTs
@@ -639,16 +655,18 @@ describe('H8.2 — measured consumer inventory', () => {
     // `done` FRAME instead of reading the `RunResult`. Fixing a read cannot
     // move an entry count, and a number that moved because a read changed
     // would mean the count had been measuring the wrong thing.
-    expect(TURN_ENTRIES.length - cpDriven).toBe(1);
-    expect(TURN_ENTRIES.length).toBe(3);
-    expect(cpDriven).toBe(2);
-    expect(byConsumer('cli')).toBe(1);
-    expect(byConsumer('subagent')).toBe(1);
-    expect(byConsumer('desktop')).toBe(1);
+    expect(TURN_ENTRIES.length - cpDriven).toBe(0);
+    expect(TURN_ENTRIES.length).toBe(0);
+    expect(cpDriven).toBe(0);
+    expect(byConsumer('cli')).toBe(0);
+    expect(byConsumer('subagent')).toBe(0);
+    expect(byConsumer('desktop')).toBe(0);
     // The look-alikes are excluded on purpose — documented so the exclusion is
-    // a number someone can challenge, not a silent filter. Seven `@duya/ai`
-    // calls plus the registry's own prose.
-    expect(NOT_TURN_ENTRIES.length).toBe(8);
+    // a number someone can challenge, not a silent filter. Nine `@duya/ai`
+    // calls plus the registry's own prose. Plan 610 S4c-d3 took this from 8 by
+    // deleting the two `duyaAgent` look-alikes that lived in the removed loop,
+    // and added back three for the engine's own model ports.
+    expect(NOT_TURN_ENTRIES.length).toBe(9);
     expect(NOT_TURN_ENTRIES.filter((e) => e.receiver === null).length).toBe(1);
   });
 });
@@ -674,11 +692,27 @@ describe('H8.2 — per-consumer verdicts', () => {
     expect(workflowRunner).not.toContain('new DuyaAgent');
 
     // The sub-agent entry itself is the single nested turn.
+    //
+    // Plan 610 S4c-d3: this used to assert `runAgent.ts` contains EXACTLY ONE
+    // `.streamChat(` call -- the census shape "one nested turn, no second
+    // loop". The third and last production driver of `DuyaAgent`'s legacy turn
+    // loop was in this file, so the count is now ZERO and the claim is
+    // STRONGER, not gone: the sub-agent no longer contains a turn loop of any
+    // kind, it delegates to the engine driver the worker entry and the headless
+    // host already used. A future second loop fails on the first assertion; a
+    // re-introduced generator fails on the second.
     const runAgent = readRepoFile('packages/agent/src/tool/SubagentTool/runAgent.ts');
     const turnSites = runAgent
       .split('\n')
       .filter((line) => !isCommentLine(line.trim()) && line.includes('.streamChat('));
-    expect(turnSites).toHaveLength(1);
+    expect(turnSites).toHaveLength(0);
+
+    // POSITIVELY, not by absence: exactly one engine-driver call, so "zero turn
+    // sites" cannot be satisfied by this file having stopped driving anything.
+    const engineSites = runAgent
+      .split('\n')
+      .filter((line) => !isCommentLine(line.trim()) && line.includes('driveSubagentRunWithEngine('));
+    expect(engineSites).toHaveLength(1);
   });
 
   it('worktree isolation is plan 496 implementation, consumed not reimplemented', () => {

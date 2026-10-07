@@ -345,6 +345,11 @@ async function driveComposedRun(turns: readonly ('tool' | 'text')[]): Promise<Ob
         revision: input.digest,
       };
     },
+    // No assembly handle in this arm: it builds the COMPOSITION's members, and
+    // the guard belongs to a handle. What it has to be is the surface this arm
+    // advertises -- an empty snapshot denies every dispatch, so the tool leg
+    // would measure a refusal instead of the ports under test.
+    refreshDeclaredTools: () => new Set([TOOL_NAME]),
     async askApproval(): Promise<ApprovalVerdict> {
       return { allowed: true, scope: 'once' };
     },
@@ -452,19 +457,48 @@ async function driveComposedRun(turns: readonly ('tool' | 'text')[]): Promise<Ob
 // ============================================================================
 
 describe('composeLegacyRunPorts supplies every member the engine requires', () => {
-  it('binds all six required ports, and the two that cannot be optional', async () => {
+  it('binds every required port the engine reads, including the three the cutover closed', async () => {
     const o = await driveComposedRun(['tool', 'text']);
 
     // POSITIVE evidence first: the run really executed rather than assembling a
     // bundle and being asserted on structurally.
     expect(o.requests.length).toBeGreaterThan(1);
 
-    for (const port of ['model', 'tools', 'context', 'approval', 'events', 'interTurn', 'compaction'] as const) {
+    // `turnOutput` is in this list now and was NOT in the previous version of
+    // it, which asserted "all six required ports" while naming seven of them
+    // and omitting this one. `composeLegacyRunSources` binds it
+    // unconditionally, so the assertion was free to make and the gap was not
+    // free to leave: plan 610 D4 made this port REQUIRED, and the one test that
+    // claims to cover the composition's required members did not look at it.
+    for (const port of [
+      'model',
+      'tools',
+      'context',
+      'approval',
+      'events',
+      'interTurn',
+      'compaction',
+      'turnOutput',
+      'modeExit',
+    ] as const) {
       expect(o.ports[port], `port ${port} must be supplied`).toBeDefined();
     }
-    // The two the runtime's own type cannot do without.
+    // The SAME NINE are REQUIRED in the type as of D4 and D1, so this list is no
+    // longer "required, plus two the cutover will close" -- it is exactly the
+    // required set. The assertion that used to sit here claimed these two
+    // "cannot be optional"; that was measured and it was false at the time, and
+    // D4 is the change that made it true. `port-guards.ts` now carries the
+    // `@ts-expect-error` triple that keeps it true.
     expect(o.ports.interTurn).toBeDefined();
+    expect(o.ports.turnOutput).toBeDefined();
     expect(o.ports.compaction).toBeDefined();
+    // `modeExit` is the ninth and the last, and it is in the list rather than
+    // merely re-asserted because the composition binds it UNCONDITIONALLY now:
+    // `composeLegacyRunPorts` always supplies the source, so this assertion is
+    // free to make -- and the shape it pins is that the no-op arm exists for the
+    // hosts that do not, which `engine-drain-carryover.test.ts` proves by
+    // building a bundle with no source at all.
+    expect(o.ports.modeExit).toBeDefined();
   });
 
   it('the derived catalog reaches the agent s REAL registry, not a copy', async () => {
@@ -482,6 +516,10 @@ describe('composeLegacyRunPorts supplies every member the engine requires', () =
       // run has no turn yet".
       turnPipelines: new TurnPipelinePublisher(),
       assembleTurn: () => Promise.reject(new Error('unused')),
+      // Never called on this arm -- no model port is opened. Present because the
+      // composition reads it when it binds one, and an absent member would be a
+      // hole the type system cannot see.
+      refreshDeclaredTools: () => new Set<string>(),
       askApproval: () => Promise.reject(new Error('unused')),
       emitter: { emit: () => Promise.resolve() },
       proposeTerminal: () => undefined,

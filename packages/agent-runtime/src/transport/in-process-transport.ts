@@ -42,7 +42,12 @@ import type {
   RuntimeCapabilities,
   TransportKind,
 } from '@duya/agent-protocol';
-import type { ExecutionChannel, ExecutionHandle, StopReceipt } from './execution-channel.js';
+import type {
+  ExecutionChannel,
+  ExecutionHandle,
+  RunStartInput,
+  StopReceipt,
+} from './execution-channel.js';
 import type { StopRequest } from './execution-channel.js';
 import type {
   RawFrameIntake,
@@ -57,6 +62,31 @@ interface DeliveredPrivate {
   readonly payload: unknown;
   readonly seq: number;
 }
+
+/**
+ * What the executor is handed when the caller supplied no input.
+ *
+ * ## Why this default exists rather than being required
+ *
+ * {@link RuntimeTransport.start} carries no prompt, and that is structural
+ * rather than an oversight: the subprocess and http-sse adapters send the
+ * prompt ACROSS THE WIRE as part of dispatching, so their `start` needs no
+ * input parameter. This adapter has no wire, so the transport call is the only
+ * place an in-process prompt can enter — which is why `input` is accepted below
+ * rather than folded into the port.
+ *
+ * Keeping the empty input as the default means an existing caller that passes
+ * none (the equivalence harness scripts its own channel and never reads the
+ * input) keeps working untouched. It is also the honest record of what this
+ * adapter had before it forwarded anything: a host that forgets to pass its
+ * input gets an empty prompt, visibly, rather than a silent substitution.
+ */
+const EMPTY_RUN_START_INPUT: RunStartInput = Object.freeze({
+  sessionId: '',
+  prompt: '',
+  options: Object.freeze({}),
+  revision: '',
+});
 
 export interface InProcessTransportOptions {
   /**
@@ -95,6 +125,7 @@ export class InProcessTransport implements RuntimeTransport {
     manifest: RunManifest,
     intake: RawFrameIntake,
     _require?: readonly CapabilityRequirement[],
+    input?: RunStartInput,
   ): Promise<TransportRun> {
     if (this.#closed) {
       throw new ProtocolError({ code: 'transport_closed', message: 'the transport is closed' });
@@ -109,15 +140,19 @@ export class InProcessTransport implements RuntimeTransport {
     // The ONE line the three adapters share: the runtime's own intake, given to
     // the executor. Not a wrapper, not a tee -- the same object, so the frames
     // arrive by the same path they would over a pipe.
-    const handle: ExecutionHandle = await this.#options.channel.start(manifest, {
-      sessionId: '',
-      prompt: '',
-      options: {},
-      revision: '',
-    }, {
-      frame: (raw) => intake.frame(raw),
-      end: () => intake.end(),
-    });
+    //
+    // The INPUT is the caller's, passed through whole: the prompt, the session,
+    // the options and the revision the run layer already decided. This adapter
+    // used to invent an empty input here, which meant an in-process run's
+    // prompt was discarded between the dispatch and the executor.
+    const handle: ExecutionHandle = await this.#options.channel.start(
+      manifest,
+      input ?? EMPTY_RUN_START_INPUT,
+      {
+        frame: (raw) => intake.frame(raw),
+        end: () => intake.end(),
+      },
+    );
 
     return {
       kind: this.kind,

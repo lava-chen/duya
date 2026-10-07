@@ -71,8 +71,39 @@ export interface LoopHookDispatchContext {
   stopReason?: string;
   /** Present on PostToolUse when an identical-call streak is being tracked. */
   consecutiveIdenticalToolCalls?: ConsecutiveToolCallStats;
-  /** Tool calls the assistant emitted this turn (PostToolUse only). Lets
-   * configured hooks (plan 426 Phase 4) match on tool name via `matcher`. */
+  /**
+   * Tool calls the assistant emitted this turn (PostToolUse only), so a
+   * configured hook can match on tool name via `matcher`
+   * (`config-loop.ts`'s `matcherMatches` reads it).
+   *
+   * ## NO PRODUCTION DISPATCH POPULATES THIS -- read before relying on it
+   *
+   * Measured, not assumed: the only producers of a `LoopHookDispatchContext` in
+   * the product are the four `loopHooks.dispatch` sites -- `DuyaAgent.streamChat`
+   * for `PreTurn` and `PostToolUse`, and `SessionFinalizer.finalize` for
+   * `PreFinalize` and `PostTurn` -- and NONE of them sets this field. To re-derive
+   * that list after any change:
+   *
+   *   grep -rn "loopHooks.dispatch('" packages/agent/src/agent
+   *
+   * The legacy's `PostToolUse` context is therefore six fields, not the seven
+   * this type advertises, and the field's only producers today are the tests in
+   * `hooks/__tests__/executor.test.ts` that exercise `matcherMatches` directly.
+   *
+   * ## What that means for a matcher today
+   *
+   * `matcherMatches` reads `ctx.toolCalls ?? []`, so a bridged `PostToolUse`
+   * hook carrying a `matcher` is tested against an EMPTY list and every such
+   * matcher evaluates false -- the hook does not fire. A bridged hook with no
+   * `matcher` is unaffected. Stated here rather than left to be discovered,
+   * because an earlier version of this comment described the field as the
+   * thing that LETS a hook match on tool name, and a reader would reasonably
+   * have concluded the capability worked in production.
+   *
+   * Populating it is a change to the loop's dispatch context, not to this type,
+   * and it belongs with whoever owns the loop bus. Do not "fix" it by widening
+   * a type: the field is already optional and already read.
+   */
   toolCalls?: ReadonlyArray<{ name: string; input: unknown }>;
 }
 

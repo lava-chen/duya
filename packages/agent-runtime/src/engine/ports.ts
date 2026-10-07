@@ -77,6 +77,7 @@ import type {
   RunBudget,
   RunEpoch,
   RunEvent,
+  RunEventEnvelope,
   RunFence,
   RunId,
   RunManifest,
@@ -785,6 +786,40 @@ export interface TurnOutputPort {
    * (`DuyaAgent.ts:2858`, `:2935`).
    */
   finishTurn(summary: TurnOutputSummary): Promise<void>;
+  /**
+   * A `before_commit` contributor's work reached the transcript, and the run is
+   * about to end. Called once per committed contribution, IN CONTRIBUTOR ORDER,
+   * after the stop decision was `completed` and before the run's terminal is
+   * proposed.
+   *
+   * ## Why this is a FOURTH method here and not a sibling port
+   *
+   * The same argument `recordAssistantMessage` gives above: a sibling port is a
+   * second optional binding a host can forget, and this port's own header names
+   * forgetting as the one way the cutover fails. A host that implements
+   * `TurnOutputPort` and has no way to record an injected row cannot satisfy
+   * this interface, which is the point -- a contributor whose work is silently
+   * dropped at the end of every run is the defect `before_commit` exists to
+   * remove, and it should not be expressible.
+   *
+   * ## Why it is NOT `context.defer`
+   *
+   * Because deferring is the thing this phase must not do. `defer` collects a
+   * fragment for the NEXT model request, and a run that finalizes has no next
+   * request: a deferred fragment is written to the host and to the run's own list
+   * and read by nobody. The legacy's `PostTurn` injections are the opposite --
+   * `applyLoopHookEffect` PUSHES them onto the working `messages` array
+   * (`hooks/loop.ts:252`) so that `_commitMessages`, which runs immediately after
+   * (`SessionFinalizer.ts:245`), persists them. A deferred rail reproduces the
+   * injection and loses the commit.
+   *
+   * ## Awaited, for the reason the other two are
+   *
+   * The host's row has to land before the run's terminal is proposed, or a
+   * consumer that reads the transcript after seeing `run.completed` can read it
+   * before the row is there.
+   */
+  recordInjectedMessage(record: InjectedMessageRecord): Promise<void>;
 }
 
 /**
@@ -873,6 +908,70 @@ export type AssistantContentBlock = Extract<
   TranscriptMessageContent,
   { readonly type: 'text' | 'thinking' | 'tool_use' }
 >;
+
+/**
+ * One `before_commit` contribution, as the host is handed it.
+ *
+ * ## What this row IS, in the legacy's terms
+ *
+ * The legacy's `PostTurn` dispatch runs at
+ * `SessionFinalizer.finalize`'s one point where an effect is applied to the
+ * working `messages` array BEFORE `_commitMessages` persists it
+ * (`SessionFinalizer.ts:226` then `:245`), and the effect it applies is
+ * `applyLoopHookEffect`, which pushes a projected provider `user` turn
+ * (`hooks/loop.ts:252`). So the legacy's `PostTurn` row is: a text contribution,
+ * written into the transcript as a `user`-role row, committed with the rest.
+ * This record carries the facts of that row and nothing else.
+ *
+ * ## Why `text` is resolved by the ENGINE and not left as a fragment
+ *
+ * Because a fragment is a promise (`TransientContextFragment.pending` is how a
+ * tool's follow-up payload arrives), and a port that handed the host an
+ * unresolved promise would make "the row is committed" a claim the host has to
+ * re-establish. The engine already owns the one resolver -- `fragmentText`,
+ * the same function `#modelRequest` uses -- so a committed row and a row the
+ * model would have seen are the same string by construction rather than by
+ * agreement between two implementations. A rejected `pending` is a SKIP, which
+ * is `fragmentMessages`' own `allSettled` policy.
+ *
+ * ## What is NOT here, and why
+ *
+ *  - **`role`** -- it is always the transcript's injected/`user` row. A field
+ *    with one legal value is a field whose only reader is the type, which is
+ *    the defect `InterTurnSweep` is documented against at length.
+ *  - **`id`, `timestamp`, `seq_index`** -- the writer's, for the reason
+ *    `AssistantMessageRecord` gives: they are minted where the row is stored,
+ *    and a second authority for "where does this row sit" is a second authority
+ *    that can disagree with the store.
+ *  - **`source` / `dedupKey`** -- the legacy's `LoopHookInjectEffect` carries
+ *    both because the legacy pushes into an array it owns. The engine's
+ *    contributor already carries a `key` on its contribution, and that is what
+ *    travels here, so a host that wants replace-by-key has one.
+ */
+export interface InjectedMessageRecord {
+  /** The run this row belongs to. Forwarded, never minted. */
+  readonly runId: RunId;
+  /**
+   * The turn the run stopped on, or `0`.
+   *
+   * The same honest value `after_finalize` receives: `RunSpendLedger.beginTurn`
+   * assigns rather than increments, so this is the last turn that BEGAN, and it
+   * is `0` for a run that refused one at the budget check. It is a position in
+   * the transcript, not an ordering key.
+   */
+  readonly turn: number;
+  /**
+   * The contributor's own key, so a host can dedup or replace rather than stack.
+   *
+   * Carried from `ExtensionContribution.key` verbatim. Two contributors that
+   * return the same key are asking for one row, and only the host's store can
+   * honour that -- the engine does not merge them, because merging two
+   * contributors' text is a decision about whose words they are.
+   */
+  readonly key: string;
+  /** The contribution's text, already resolved. Never empty-by-accident: see below. */
+  readonly text: string;
+}
 
 /**
  * One landed tool result, as the host is handed it.
@@ -1019,14 +1118,23 @@ export interface RunEnginePorts {
   /**
    * Where a landed tool result goes. See `TurnOutputPort`.
    *
-   * OPTIONAL, and the absence is the live worker's state today rather than an
-   * oversight: every effect this port names is currently performed by the
-   * legacy drain loop inside `DuyaAgent.streamChat`, and binding them here as
-   * well would perform each of them TWICE. Making it required before the cutover
-   * would break every composition for no gain; making it required AT the cutover
-   * is the obligation `TurnOutputPort` states in its own doc comment.
+   * REQUIRED as of plan 610 D4. It was OPTIONAL only while the legacy loop
+   * still drove: every effect this port names was performed by the legacy drain
+   * inside `DuyaAgent.streamChat`, so binding it here as well would have
+   * performed each of them TWICE. The `?` was the marker for that window.
+   *
+   * What closing it cost is measured, not assumed: making it required breaks
+   * ZERO compositions. `composeLegacyRunSources` already binds a derived
+   * `turnOutput` unconditionally, and `buildEnginePorts` only omits it for a
+   * source that passed none. Three minimal bindings broke, all of them
+   * synthetic: this package's own `port-guards.ts`, and two test harnesses.
+   * Nothing in `packages/agent/src` is affected, tests included.
+   *
+   * A forgotten binding is not a missing feature but a wrong record: without it
+   * the engine runs a whole session with no durable tool rows and no
+   * `PostToolUseFailure`, while every event it publishes still looks correct.
    */
-  readonly turnOutput?: TurnOutputPort;
+  readonly turnOutput: TurnOutputPort;
   /** Present only under budget option (a). See `BudgetPort`. */
   readonly budget?: BudgetPort;
   /** Present only when this run is a recovery. See `AttemptLeasePort`. */
@@ -1042,41 +1150,61 @@ export interface RunEnginePorts {
    */
   readonly sideEffects?: ToolSideEffectLedger;
   /**
+   * Where a control command the PRODUCT answers is recognised. See
+   * `RunCommandPort`.
+   *
+   * OPTIONAL, and the absence is the pre-existing behaviour rather than a
+   * gap: until this member existed the engine sent every prompt to the model
+   * and no channel existed to say otherwise, so "no command port" is exactly
+   * what every host had.
+   *
+   * Optional rather than required because a run with no control commands is a
+   * legitimate run (the CLI's own `--headless` script mode, a sub-agent, a
+   * test driving the engine directly), and forcing every one of them to build a
+   * no-op port to satisfy a type would buy nothing. The composition
+   * (`run-composition.ts`) binds it unconditionally for the same reason it
+   * binds `turnOutput`: the desktop product HAS control commands, and a
+   * forgotten binding there is the regression this member exists to prevent.
+   */
+  readonly command?: RunCommandPort;
+  /**
    * Where a transcript gets REPLACED. See `CompactionPort`.
    *
-   * OPTIONAL, and the absence is still the live worker's state today: the legacy
-   * loop still decides and runs every compaction itself (16 call sites in the
-   * loop body, `DuyaAgent.ts:1825-3404`), so a host that binds this WHILE the
-   * legacy drives still compacts twice.
+   * REQUIRED as of plan 610 D4, for the same reason as `turnOutput` above and
+   * by the same measurement: `LegacyRunHost.compaction` is ALREADY required and
+   * `composeLegacyRunSources` passes it straight through, so the optionality was
+   * the only place the obligation could be forgotten, and closing it breaks
+   * ZERO compositions.
    *
-   * The ENGINE now calls it at all three decision points the legacy owns --
+   * The engine calls this at all three decision points the legacy owns --
    * between assembly and the model request, after the drain, and on a failed
-   * model stream -- but the legacy is still what runs a turn today, which is
-   * why this stays OPTIONAL. `run-engine.ts` and the legacy cycle are both
-   * live: a bound port with the legacy still driving is the double compaction
-   * above, and an unbound one leaves the legacy's own compactions as the only
-   * producer. The cutover is what makes it required.
+   * model stream -- so an unbound port meant no transcript was ever replaced and
+   * the five compaction frames had no producer at all.
    *
-   * A forgotten binding is NOT harmless the way a forgotten guardrail is: it
-   * means no transcript is ever replaced and the five compaction frames have no
-   * producer at all. That cost is stated at length on `CompactionPort`, and it
-   * is the obligation the cutover inherits.
+   * ## The three call sites, and why they differ
+   *
+   * Between assembly and the request (`auto`), after the drain
+   * (`preflight_overflow`), and on a failed model stream (`emergency`). Only the
+   * third differs in consequence, and it is a consequence inherited from the
+   * legacy rather than invented: `run-engine.ts`'s emergency arm decrements the
+   * turn and continues, which re-runs the same turn against the compacted
+   * transcript. That is the entire point of an emergency compaction.
    */
-  readonly compaction?: CompactionPort;
+  readonly compaction: CompactionPort;
   /**
    * Where mid-run input arrives. See `InterTurnInputPort`.
    *
-   * REQUIRED, and the only optional-looking member here that is not optional.
-   * The distinction from `turnOutput` and `compaction` above is that both of
-   * those are optional *while the legacy still drives* -- binding them today
-   * performs their effects twice -- whereas nothing drives the engine in
-   * production, so there is no window in which binding this one double-sweeps
-   * and no composition in which omitting it is correct.
+   * REQUIRED, and one of the seven. Each of those names a capability whose
+   * ABSENCE is a wrong result rather than a missing feature, which is why none
+   * of them is a `?.`. `interTurn` loses the user's mid-run correction;
+   * `turnOutput` loses durable tool rows and `PostToolUseFailure`; `compaction`
+   * lets the transcript grow until the provider rejects it; the other four are
+   * the loop's decisions and its output.
    *
    * ## What a missing member would cost, stated as the engine would experience it
    *
-   * Nothing. That is the problem, and it is why this is a type error rather
-   * than a `?.`. `RunInputSnapshot.steering` is frozen at run start, so a
+   * Nothing visible. That is the problem, and it is why this is a type error
+   * rather than a `?.`. `RunInputSnapshot.steering` is frozen at run start, so a
    * message that arrives mid-run has exactly one route into the transcript,
    * and this is it. An engine that skipped the sweep would still call the
    * model, still dispatch tools, still propose a `completed` terminal, and
@@ -1086,11 +1214,206 @@ export interface RunEnginePorts {
    * file's contracts exist to make unrepresentable.
    */
   readonly interTurn: InterTurnInputPort;
+  /**
+   * Where a mode's run-boundary `onExit` hooks are run. See `ModeExitPort`.
+   *
+   * REQUIRED as of plan 610 D1, and it was the LAST member whose optionality the
+   * legacy-still-drives window explained. The legacy's `SessionFinalizer` still
+   * runs `runExitHooks`, so a composition that bound this port while the legacy
+   * drove would have exited every mode TWICE; the `?` was the marker for that
+   * window, exactly as it was for `turnOutput` and `compaction` in plan 610 D4,
+   * and closing it here is the last half of that work.
+   *
+   * ## Why a missing `modeExit` is a WRONG RESULT and not a missing feature
+   *
+   * The objection that kept this optional -- a run with no active
+   * `kind: 'message'` mode has nothing to lose, since `runExitHooks` iterates
+   * `resolved.modes` and a run that resolved none is a no-op even in the legacy
+   * -- is a statement about ONE host's inputs, not about the contract. The engine
+   * cannot see whether a mode was activated: it has no member that says so, and
+   * adding one would be a second authority for which modes a run activated,
+   * which `ModeExitPort`'s own doc refuses. So an absent port is not "no mode
+   * was active" and not "this host has no modes"; it is "nothing was run", and
+   * the engine cannot distinguish that from the case it matters in.
+   *
+   * The consequence of getting it wrong is a real teardown loss. A mode whose
+   * `onExit` clears a per-session trigger or disables an OS bridge
+   * (`computer-use-mode.ts`) leaves that state behind for the NEXT run, and
+   * nothing reports it -- the run completed, every frame it published was
+   * correct, and the side effect simply did not happen. A host that genuinely
+   * has nothing to run binds a port whose promise resolves and does nothing,
+   * which is legible in the composition; omitting the member is a type error.
+   *
+   * ## The SEVEN members still optional, each by name
+   *
+   * `budget` (present only under budget option (a) -- a run with no ceiling has
+   * nothing to cross), `attempt` (present only when the run is a recovery, and a
+   * run with nothing to recover acquires nothing), `subtasks` (a run that spawns
+   * no subtask), `extensions` (the headless CLI, a sub-agent and a direct test
+   * drive are all legitimate hosts with no hook surface), `checkpoints`
+   * (durability is not a precondition for correctness), `command` (the same three
+   * have no control surface -- "no command port" is exactly what every host had
+   * before the member existed) and `sideEffects` (ABSENT is coherent here and
+   * only here: it means "no tool with a side effect may be dispatched", which
+   * the engine enforces by refusing such a call, where "no transcript is ever
+   * replaced" is not a coherent reading of absence).
+   *
+   * The shared test is not "is this feature used every run" -- `extensions`
+   * fails that and is still right -- but "is absence a DIFFERENT ANSWER or a
+   * MISSING ONE". A missing `interTurn` loses the user's mid-run correction; a
+   * missing `modeExit` loses a teardown side effect; a missing `turnOutput`
+   * drops durable tool rows and `PostToolUseFailure`; a missing `compaction`
+   * lets the transcript grow until the provider rejects it. Each is an absence no
+   * frame reports, which is what makes them compile errors rather than `?.`s.
+   */
+  readonly modeExit: ModeExitPort;
 }
 
 /** What a host needs in order to run one execution to completion. */
 export interface RunEngine {
   execute(request: RunExecutionRequest): RunExecutionHandle;
+}
+
+/**
+ * Contract 1h -- control commands the PRODUCT answers, before any model call.
+ *
+ * ## Why this is a PORT and not an extension phase
+ *
+ * Measured against the two alternatives, because both were plausible and one
+ * of them is actively wrong:
+ *
+ * - **`on_start` cannot do this.** A contributor's contract is to CONTRIBUTE
+ *   (`ports.ts`, "Data or a decision, never a loop"), and the only outcome a
+ *   contribution can express is a binding VETO -- which `#shouldStop` reads as
+ *   "keep the loop open" (`run-engine.ts`, Decision 4). A veto is a decision to
+ *   run AGAIN. There is no contribution shape that says "this run is finished
+ *   and here is its text", so an `on_start` command handler could add context
+ *   and keep going but could never end the run without a model call -- which is
+ *   the entire regression. A veto-based abort would also fire `Stop` /
+ * `SessionEnd` for a prompt the user never sent to a model.
+ * - **The host `assembleTurn` seam cannot say so either.** It is host-owned and
+ *   it does run before the model, which is why it was the first candidate. But
+ *   `AssembledTurn` is a PAYLOAD (`systemPrompt` / `messages` / `tools` /
+ *   revisions) and it is produced per TURN, while this is a once-per-RUN
+ *   decision about whether there is a turn at all. Widening it would mean the
+ *   engine learns "stop" by reading a field off a payload it was about to send
+ *   to a provider -- and it is still evaluated on turn 2, 3 and N for a prompt
+ *   that was consumed on turn 1. A separate pre-loop port is the honest shape:
+ *   consulted ONCE, before turn 1, returning a decision.
+ *
+ * ## What the port returns, and why it is not `void`
+ *
+ * `resolve` returns the product's OWN reply text, and the engine publishes it
+ * as this run's assistant message. That is deliberate: the alternative --
+ * returning a boolean and having the host publish the text by some other route
+ * -- would mean two paths write the run's assistant message depending on
+ * whether a model was called, and a consumer that reconstructs the transcript
+ * from `assistant.message_finalized` would see a gap for exactly the runs a
+ * user typed a command into.
+ *
+ * ## Why the engine does NOT interpret the text
+ *
+ * `resolve` is the whole product-side command surface behind one method. The
+ * engine never inspects the prompt for `/`, never holds a verb table, and never
+ * formats a reply. Whether `/goal` pauses a goal is decided by the code the
+ * CLI and the legacy already call, so there is one implementation of the
+ * command rather than one per driver.
+ */
+export interface RunCommandPort {
+  /**
+   * Answer the run's prompt, or report that it is an ordinary prompt.
+   *
+   * `null` is the ordinary answer and MUST mean "run the model": an
+   * unregistered `/`-prefixed prompt is not a command, and the legacy sends it
+   * to the model verbatim (`DuyaAgent.streamChat` falls through both
+   * `isGoalControlCommand` and `isTranscriptControlCommand` failures). A port
+   * that returned a reply for every prompt beginning with `/` would swallow
+   * every unregistered command, which is a behaviour change users can see.
+   */
+  resolve(input: {
+    readonly runId: RunId;
+    readonly prompt: ModelMessage;
+  }): Promise<RunCommandOutcome | null>;
+}
+
+/**
+ * A recognised command: the product's OWN reply, already formatted.
+ *
+ * One field, and the narrowness is deliberate. `/copy` also produces clipboard
+ * text, but the engine must not act on it: the clipboard is the HOST's
+ * channel (`chat:clipboard_write`, `worker-protocol.ts`) and the runtime knows
+ * nothing about it, so the host performs that write inside its own `resolve`
+ * and reports only the reply here. An outcome field the engine never reads
+ * would be a second description of the channel, which is the "declared type
+ * that does not describe its own channel" defect this file refuses elsewhere.
+ */
+export interface RunCommandOutcome {
+  /** The user-facing text, already formatted by the command implementation. */
+  readonly reply: string;
+}
+
+/**
+ * The host's thresholds for the anti-dead-loop HARD STOP.
+ *
+ * ## What the engine does with it, and what it refuses to do
+ *
+ * The engine counts the streak of consecutive IDENTICAL tool calls it dispatched
+ * (same name, same serialised input) and ends the run with
+ * `reason: 'repeated_tool_calls'` once that count reaches `hardStopAt`. That is
+ * the whole capability, and it is an invariant rather than an extension: it is
+ * enforced by the loop itself, on every run, and no host can veto it.
+ *
+ * It reads the THRESHOLD from here and nowhere else. There is no config file, no
+ * environment variable and no TOML read anywhere on this path, because a run's
+ * ceiling that came from ambient process state is a ceiling the run cannot
+ * replay and cannot report.
+ *
+ * ## ABSENT means the guard is not armed, and that is the honest answer
+ *
+ * There is no default threshold here, and the absence is deliberate. A silent
+ * default like 16 would be a ceiling no host agreed to, enforced against every
+ * run in the product, invisible in every config that omitted it — which is the
+ * objection `RunEngineOptions.defaultMaxTurns` records at length for exactly
+ * this class of value. So a host that wants the guard says so, per run, and a
+ * host that does not is not silently running one.
+ *
+ * **This is the obligation the cutover inherits.** Nothing constructs a
+ * `RunExecutionRequest` in production today (the legacy loop still drives every
+ * run), so an unbound guard costs nothing yet; the moment the legacy's
+ * `DuyaAgent.streamChat` is deleted, the host that assembles the request has to
+ * map its existing `antiDeadLoop` config onto this field or the capability is
+ * gone with no frame reporting the loss. The mapping is
+ * `{ enabled: antiDeadLoop.enabled, hardStopAt: antiDeadLoop.hardStopAt }` off
+ * the host's own resolved config (`packages/agent/src/hooks/config.ts:80`,
+ * which also clamps it).
+ *
+ * ## Why the threshold is NOT clamped here
+ *
+ * Clamping is the host's validation boundary and it already happens
+ * (`hooks/config.ts` clamps `hardStopAt` to 2..100). A second clamp inside the
+ * engine would either silently disagree with the host's own value or duplicate a
+ * rule that lives in one place by design. The engine compares `count >=
+ * hardStopAt` exactly as given.
+ *
+ * ## What is deliberately NOT in this shape
+ *
+ * `nudgeAt` and `hardNudgeAt`. Those drive the soft and hard nudge hooks, which
+ * are a HOST capability — the engine holds no nudge prose and no hook text, and
+ * a field named for them here would invite both. This shape is the hard stop and
+ * nothing else.
+ */
+export interface RepeatedCallStopPolicy {
+  /**
+   * Whether the invariant fires. `false` records the streak and stops nothing.
+   *
+   * Present rather than inferred from `hardStopAt` because "guard off" and
+   * "guard on at a threshold nobody chose" are different host decisions, and
+   * collapsing them would make a disabled guard indistinguishable from a
+   * misconfigured one.
+   */
+  readonly enabled: boolean;
+  /** Consecutive identical dispatched calls at which the run hard-stops. */
+  readonly hardStopAt: number;
 }
 
 /**
@@ -1146,6 +1469,23 @@ export interface RunExecutionRequest {
    * shape cannot return quietly.
    */
   readonly modelRequestTimeoutMs?: number;
+  /**
+   * The anti-dead-loop HARD STOP for this run. See `RepeatedCallStopPolicy`.
+   *
+   * PER RUN and not on `RunEngineOptions`, and that placement is the whole
+   * design. The legacy resolves this config once per `streamChat` call from the
+   * options it was handed (`DuyaAgent.ts:2847-2848`), so the threshold is a
+   * per-run fact like the model and the catalog; a process-lifetime knob would
+   * silently ignore a user who changed the setting between two chats.
+   * `RunEngineOptions` is for what the engine itself owns (`defaultMaxTurns` is
+   * a fallback for a manifest that names none), and a host-supplied limit is
+   * exactly the thing `modelRequestTimeoutMs` above already establishes as
+   * per-run.
+   *
+   * OPTIONAL, and the absence is a real state rather than a default — see
+   * `RepeatedCallStopPolicy` for why an absent guard is not silently armed.
+   */
+  readonly repeatedCallStop?: RepeatedCallStopPolicy;
   /** The ports for this run. Supplied per run, not per process. */
   readonly ports: RunEnginePorts;
 }
@@ -1468,18 +1808,115 @@ export interface SubtaskHandle {
 // ============================================================================
 
 /**
+ * Why the engine stopped.
+ *
+ * Always a CANDIDATE. `RunSession.settle` is the single writer of the terminal
+ * (`run-session.ts:519,527`) and may disagree — a budget ceiling the engine has
+ * not seen, a lost dispatch, a server-side stop.
+ *
+ * ## Why it lives in this file
+ *
+ * Because `ExtensionContext.exit` names it, and a port file that re-declared a
+ * second copy of the union beside the engine's own would be a second answer to
+ * "how can a run end" -- one the compiler could not check against the other.
+ * `run-engine.ts` re-exports both types unchanged, so every existing import
+ * still resolves and nothing outside this package has to care.
+ *
+ * ## Why `repeated_tool_calls` is a reason rather than a `max_turns`
+ *
+ * It is the anti-dead-loop HARD STOP, and it is a different fact from a turn
+ * ceiling. A run that hit `max_turns` did as many turns as it was allowed; a
+ * run that hit this one asked the same question `hardStopAt` times in a row and
+ * is being stopped because the model is not converging, which is the diagnosis
+ * an operator needs and the one a generic ceiling cannot state.
+ *
+ * The legacy already reports this string -- `DuyaAgent.ts:4273` yields
+ * `{ type: 'done', reason: 'repeated_tool_calls' }` -- so keeping it verbatim
+ * means deleting the legacy loop does not change what a consumer reads.
+ * `chat-event-translator.ts` already names it among the runtime loop outcomes
+ * that have no `StopReason` counterpart and must not be coerced into one.
+ */
+export type EngineExitReason =
+  | 'completed'
+  | 'budget_exhausted'
+  | 'max_turns'
+  | 'cancelled'
+  | 'repeated_tool_calls'
+  | 'failed';
+
+export interface EngineExit {
+  readonly reason: EngineExitReason;
+  /** `failed` only. A message, never a stack. */
+  readonly message?: string;
+}
+
+/**
  * The points the engine consults a contributor at.
  *
  * One narrow interface per phase in practice: adding a capability adds a
  * contributor, and does not widen this union. Plan 600 `02` section 1.2 makes
  * this the load-bearing shape (thirteen separate `Vec`s, not one `register`).
+ *
+ * ## The five TURN phases, the two RUN phases, and the one COMMIT phase
+ *
+ * Five of these are per-turn and were there from the start. `on_start` and
+ * `after_finalize` are per-RUN, and they are not decoration: the legacy cycle
+ * dispatches two hook events at each end of a run that no turn phase can reach.
+ * `UserPromptSubmit` and `SessionStart` fire once before the first turn
+ * (`DuyaAgent.ts:2130`, `:2144`), and `Stop` / `SessionEnd` fire once after the
+ * last (`SessionFinalizer.ts:268`, `:248`). A run whose engine dispatches only
+ * the five turn phases therefore runs every per-tool hook and none of the
+ * per-session ones, and nothing about that failure is visible in a frame.
+ *
+ * The two sit OUTSIDE the turn loop for the same reason the legacy's do, and the
+ * placement is the contract: `on_start` after the attempt fence is acquired (so
+ * a contributor's work is already attributable to this attempt) and before turn
+ * 1, `after_finalize` in the run's `finally` and after
+ * `assistant.message_finalized` (so a contributor sees the final message rather
+ * than a run still changing).
+ *
+ * `before_commit` is the eighth member and the only one whose contributions are
+ * COMMITTED rather than deferred. See `TurnOutputPort.recordInjectedMessage`
+ * and the phase's own comment in `run-engine.ts` for why the legacy needed one.
+ *
+ * ## The phases with no config-hook event behind them YET
+ *
+ * `before_turn`, `before_model`, `before_finalize` and `before_commit` are the
+ * engine's OWN phases, and nothing in
+ * `packages/agent/src/process/hook-source.ts` maps them: the legacy's
+ * `PreTurn` / `PreFinalize` / `PostTurn` are `LoopHookEvent`s dispatched on the
+ * loop bus (`hooks/loop.ts`), not config-runner events, and the bus is not
+ * something the extension port can reach. Leaving them unmapped is stated rather
+ * than implied: a contributor registered for them is called and has nothing to
+ * fire from the legacy side yet.
+ *
+ * ## Two of those four events ARE dispatched today
+ *
+ * Worth being precise, because the previous version of this comment implied the
+ * whole trio was unwritten. All four loop-bus events have live dispatch sites
+ * TODAY -- re-derive them with:
+ *
+ *   grep -rn "loopHooks.dispatch('" packages/agent/src/agent
+ *
+ * which yields `PreTurn` and `PostToolUse` in `DuyaAgent.streamChat`, and
+ * `PreFinalize` and `PostTurn` in `SessionFinalizer.finalize`. What is missing is
+ * not the dispatch but a phase to hang it on, and the mapping is not one-to-one:
+ * `before_turn` and `before_finalize` are the natural homes for `PreTurn` and
+ * `PreFinalize`, `before_commit` is the home for `PostTurn` -- whose position is
+ * the one phase position that was otherwise unrepresentable, because the only
+ * run-scoped phase left was `after_finalize`, which fires in the engine's
+ * `finally` and is therefore reached by FAILED and CANCELLED runs too, whereas
+ * `PostTurn` is dispatched only on the success path.
  */
 export type ExtensionPhase =
+  | 'on_start'
   | 'before_turn'
   | 'before_model'
   | 'before_tool'
   | 'after_tool'
-  | 'before_finalize';
+  | 'before_finalize'
+  | 'before_commit'
+  | 'after_finalize';
 
 /** One contribution. Data or a decision, never a loop. */
 export interface ExtensionContribution {
@@ -1527,13 +1964,101 @@ export interface ExtensionContributor {
   contribute(context: ExtensionContext, signal: AbortSignal): Promise<readonly ExtensionContribution[]>;
 }
 
+/**
+ * The consecutive-identical-tool-call streak, as a hook sees it.
+ *
+ * ## Why the engine re-derives the legacy's `ConsecutiveToolCallStats`
+ *
+ * The legacy hands this fact to its `PostToolUse` loop-hook dispatch as
+ * `LoopHookDispatchContext.consecutiveIdenticalToolCalls`, typed
+ * `ConsecutiveToolCallStats` in `packages/agent/src/hooks/loop.ts`. That type
+ * CANNOT be imported here: `@duya/agent` depends on `@duya/agent-runtime`, so an
+ * import would be a cycle. It is re-derived for the same reason
+ * `RepeatedCallStreak` re-derives the legacy's signature -- see that class's doc
+ * comment, which states the cycle and the alternative that would remove the
+ * duplication (lifting the shared shape into `@duya/agent-protocol`).
+ *
+ * ## Why it carries TWO of the legacy's four fields
+ *
+ * `ConsecutiveToolCallStats` is `{ count, toolName, nudgeAt, hardNudgeAt }`, and
+ * the two thresholds are deliberately NOT reproduced. They are the HOST's nudge
+ * thresholds -- the same reasoning `RepeatedCallStopPolicy` gives for keeping
+ * `nudgeAt` and `hardNudgeAt` out of the hard-stop shape: the engine holds no
+ * nudge prose and no hook text, and a field named for them here would invite
+ * both. A host that owns nudge thresholds joins them onto this shape when it
+ * builds the legacy's `ConsecutiveToolCallStats`; the engine contributes only
+ * the two facts it is the authority for.
+ *
+ * ## The numbers are equal because there is one counter
+ *
+ * Both this and the hard stop are read off ONE `RepeatedCallStreak` per run (see
+ * `RunEngineImpl`'s `repeatedCalls` cell). There is deliberately no second
+ * counter: two counters that agree today are two counters that can disagree
+ * tomorrow, and the disagreement would be a run that hard-stopped at a different
+ * call than the hook nudged at.
+ */
+export interface RepeatedToolCallStreak {
+  /** Consecutive identical dispatched calls: same name AND same serialised input. */
+  readonly count: number;
+  /** The tool name of the current streak. */
+  readonly toolName: string;
+}
+
 export interface ExtensionContext {
   readonly runId: RunId;
+  /**
+   * The turn the phase is running inside, and `0` for the two run-scoped
+   * phases.
+   *
+   * `0` rather than an optional `turn`, because a contributor that reads
+   * `ctx.turn` must not be handed `undefined` and have to narrow first: the
+   * engine counts turns from one, so zero is the one value that cannot be a
+   * real turn index. `on_start` is always `0` -- no turn has begun. On
+   * `after_finalize` it is the turn the run stopped on, or `0` if the run
+   * stopped before one began, which is the same honest answer the budget check
+   * gives when it refuses a run at the top of the loop.
+   */
   readonly turn: number;
   /** Present at `before_tool` only. */
   readonly call?: ToolCallRequest;
   /** Present at `after_tool` only. */
   readonly outcome?: ToolOutcome;
+  /**
+   * The consecutive-identical-call streak as of this dispatch. Present from the
+   * FIRST dispatched call onward, at EVERY phase.
+   *
+   * At `before_tool` it counts the calls made BEFORE this one, because
+   * `#dispatchCall` contributes the phase and only then records into the streak.
+   * At `after_tool` it counts every call dispatched so far this run -- and since
+   * the engine dispatches a whole turn before draining it, that is the turn's
+   * FINAL count on each of that turn's results. Absent before the run has
+   * dispatched anything, which is the same honest `undefined` the legacy's
+   * `DeadLoopTracker.stats()` returns (`TurnLoopTracker.ts`).
+   *
+   * ## Why EVERY phase, and not `after_tool` only
+   *
+   * Because the legacy's `PostToolUse` is not the only reader of this fact in a
+   * future engine-driven run -- a `before_finalize` contributor deciding whether
+   * to veto has the same legitimate interest in "the model asked the same thing
+   * nine times running" that the nudge hook has. Narrowing the field to one
+   * phase would make the engine's own stop decision the one place a contributor
+   * cannot see the evidence for it.
+   */
+  readonly repeatedToolCalls?: RepeatedToolCallStreak;
+  /**
+   * Why the run is ending. Present at `after_finalize` ONLY.
+   *
+   * Not a convenience. The legacy's run-scoped hooks are not unconditional:
+   * `SessionFinalizer` dispatches `SessionEnd` on the success and abort paths
+   * (`:248`, `:274`) and dispatches NOTHING on the stream-error path
+   * (`:310-350`), while `Stop` fires on the abort path alone (`:268`). A
+   * contributor that cannot see the exit has to guess between those, and it
+   * guesses wrong on a failed run by firing a "the session ended cleanly" hook
+   * for a run that crashed.
+   *
+   * Always a CANDIDATE, for the reason `EngineExit` says.
+   */
+  readonly exit?: EngineExit;
 }
 
 /** The engine's view of the extension set. */
@@ -1605,8 +2130,18 @@ export interface CheckpointPort {
  * silent about both channels.
  */
 export interface WorkerAdapterSurface {
-  /** Project engine output into the legacy `chat:*` frames `ExecutionSink` takes. */
-  readonly projectToLegacyFrame: (event: RunEvent) => unknown;
+  /**
+   * Project engine output into the legacy `chat:*` frames `ExecutionSink` takes.
+   *
+   * Takes the ENVELOPE, and plan 610 D2 corrected it from the `RunEvent` this
+   * member used to be declared with. The correction is measured, not stylistic:
+   * `projectToLegacyFrame` (`src/project/legacy-sse-projector.ts:47`) has always
+   * taken an envelope, and the envelope is the only carrier of the minted
+   * `seq` -- a projection built from a bare `RunEvent` would have no sequence
+   * number to be ordered by, and a caller satisfying the old signature had to
+   * FABRICATE an envelope to reach the projector at all.
+   */
+  readonly projectToLegacyFrame: (envelope: RunEventEnvelope) => unknown;
   /** Bind the engine's store to the run's emitter. The emitter mints `seq`. */
   readonly bindEmitter: (store: RunEventStorePort) => RunEventStorePort;
   /** The legacy codec, shared with the headless path. Adapter-owned. */
@@ -1920,15 +2455,14 @@ export type CompactionDecision =
  * `replacement` is `readonly ModelMessage[] | null`, and it is null for every
  * arm except `replaced`. That is the whole reason this is a port rather than an
  * extension phase, and the measurement is in this package's own engine:
- * `ExtensionPhase` has five values (`ports.ts:1432-1437`) and the one that runs
- * last, `before_finalize`, can only VETO -- `#shouldStop` reads
+ * `ExtensionPhase` has SEVEN values (see the union in this file), and the only
+ * one that can influence the run's OUTCOME, `before_finalize`, can only VETO --
+ * `RunEngineImpl`'s `#shouldStop` reads
  * `contribution.binding && 'veto' in contribution.content` and returns `null`
- * to keep the loop open (`#shouldStop`, `run-engine.ts:1151-1155`). A veto is a
- * DECISION to run again. Compaction is not a decision to run again; it is a NEW
- * INPUT for
- * the run that continues, and it has to reach the next
- * `ports.context.assemble(...)` (`run-engine.ts:421`) rather than the next
- * loop iteration. No member of `ExtensionContribution` can carry a transcript:
+ * to keep the loop open. A veto is a DECISION to run again. Compaction is not a
+ * decision to run again; it is a NEW INPUT for the run that continues, and it
+ * has to reach the next `ports.context.assemble(...)` rather than the next loop
+ * iteration. No member of `ExtensionContribution` can carry a transcript:
  * its `content` is a transient fragment or a veto (`ports.ts:1443`), and a
  * fragment is a string that gets folded into one message, not a replacement
  * for the history.
@@ -2016,10 +2550,10 @@ export type CompactionProgress =
  *
  * ## Why this is NOT an extension phase
  *
- * Measured, and the reason is the veto. `ports.extensions` has five phases and
+ * Measured, and the reason is the veto. Of `ExtensionPhase`'s SEVEN values,
  * `before_finalize` is the only one that can affect the OUTCOME; it does so by
- * VETO, which `#shouldStop` turns into "do not stop" (`run-engine.ts:1151-1155`).
- * Compaction needs two things a veto cannot express:
+ * VETO, which `RunEngineImpl`'s `#shouldStop` turns into "do not stop" by
+ * returning `null`. Compaction needs two things a veto cannot express:
  *
  *  1. **replace an input, not a decision.** A veto re-runs the same turn with
  *     the same transcript. Compaction changes what the next
@@ -2069,8 +2603,13 @@ export type CompactionProgress =
  * reproduced with no seam, and the run ends in an error a user sees. A
  * forgotten GUARDRAIL would be a port that is bound and ignored -- also wrong,
  * but nothing is lost, because the legacy loop is still driving every turn and
- * still compacting on its own today. That is why the port is OPTIONAL here and
- * why it is the obligation the cutover inherits.
+ * still compacting on its own today.
+ *
+ * The BINDING is required as of plan 610 D4, and this classification is the
+ * reason for it. It is the same reasoning that leaves `sideEffects` merely
+ * optional: a bound-and-ignored ledger does lose data too, but "no tool with a
+ * side effect may be dispatched" is a coherent reading of absence, where "no
+ * transcript is ever replaced" is not.
  */
 export interface CompactionPort {
   /**
@@ -2118,12 +2657,14 @@ export interface CompactionPort {
   /**
    * The provider's real token usage for a request that just completed.
    *
+  /**
    * OPTIONAL, and absent is a DEGRADED but working port rather than a broken
-   * one -- which is why this is the one member here that is not required. A port
-   * without it decides from the transcript it is handed, which is the estimate
-   * path the legacy used before plan 577 §2. Compaction still fires and still
-   * replaces the transcript, so nothing is LOST; what is lost is the anchor, and
-   * an unanchored decision can fire early or late against the trigger line.
+   * one -- which is why this is the one member of `CompactionPort` that is not
+   * required. A port without it decides from the transcript it is handed, which
+   * is the estimate path the legacy used before plan 577 §2. Compaction still
+   * fires and still replaces the transcript, so nothing is LOST; what is lost is
+   * the anchor, and an unanchored decision can fire early or late against the
+   * trigger line.
    *
    * That is the opposite of an absent `compaction` binding itself, and the
    * distinction is why this one is optional and that one is not: skipping
@@ -2315,4 +2856,79 @@ export interface InterTurnInputPort {
    * that proceeded without the correction.
    */
   sweep(input: InterTurnSweep): Promise<InterTurnSweepResult>;
+}
+
+// ============================================================================
+// Contract 1i -- mode exit: the run-boundary half of a mode's lifecycle
+// ============================================================================
+
+/**
+ * The host runs a mode's `onExit` hooks at the end of a successful run.
+ *
+ * ## Why this is a PORT and not an extension phase -- MEASURED, not assumed
+ *
+ * The briefing for this slice asserted that mode `onExit` "has no channel in any
+ * port, in `run-engine-ports.ts`, or in `run-composition.ts`". That half is
+ * CORRECT, and it is worth recording what the enumeration actually found, because
+ * two different subsystems both LOOK like the channel and neither is:
+ *
+ *  1. **`after_finalize` does not reach it.** `DuyaAgent.ts:961-963` says
+ *     `runExitHooks` "rides the engine's `after_finalize` phase instead". That
+ *     comment is FALSE, and reading it is how a false premise survives three
+ *     slices. `after_finalize`'s only producer is `createLegacyHookSource`
+ *     (`hook-source.ts:180-185`), whose `PHASE_EVENTS` maps that phase to the
+ *     CONFIG-hook events `Stop` and `SessionEnd`, dispatched through
+ *     `ConfigHooksRunner`. Mode `onExit` is neither: it is reached only from
+ *     `SessionFinalizer.ts:235`, and the two registries are disjoint --
+ *     `hooks/events.ts` (a `HooksSettings` file) and `modes/registry.ts` (a
+ *     `ModeModifierRegistry`). No contributor in `hook-source.ts` can name a
+ *     mode, and no mode can register a contributor. Re-pointing this at
+ *     `after_finalize` would have produced a green test and a silently dead
+ *     capability -- the same failure `hook-source.ts`'s header already records
+ *     for `PostToolUseFailure`, in the opposite direction.
+ *  2. **`before_commit` is the right POSITION but the wrong vocabulary.** The
+ *     ordering below is exactly the legacy's, and it is why this was considered
+ *     as a phase. But a phase's payload is `ExtensionContribution` -- text to
+ *     commit or a veto to read -- and a mode's `onExit` is neither: it returns
+ *     `void`, and its real work is a side effect on host state
+ *     (`computer-use-mode.ts:199-210` clears a per-session trigger and disables
+ *     the OS bridge). Forcing it through a phase would mean inventing a
+ *     contribution shape whose only correct value is "nothing", which is the
+ *     `ExtensionPort` doc's own "collected during assembly, never read back"
+ *     failure wearing a new name.
+ *
+ * So it is a port: a capability with no contribution, which is the same reason
+ * `InterTurnInputPort` and `RunCommandPort` are ports rather than phases.
+ *
+ * ## Position, and why it is the `before_commit` position
+ *
+ * The legacy's `SessionFinalizer.finalize` runs
+ * `pollFinalMailbox` -> `PreFinalize` -> `PostTurn` -> `runExitHooks` ->
+ * `_commitMessages` -> `SessionEnd`. This port is consulted at the same point
+ * `before_commit` is: INSIDE the run, before the commit, on the success path
+ * only. It is NOT `after_finalize`'s position, and that distinction is the whole
+ * reason this is a separate member rather than a phase on that one:
+ * `after_finalize` fires in the run's `finally`, so a FAILED and a CANCELLED
+ * run reach it too, while `runExitHooks` is reached only from `finalizeSuccess`.
+ * A mode that disables an OS bridge on exit must not do so for a run that failed
+ * before it ever finished a turn.
+ *
+ * ## Fail-open, and that is the legacy's own policy
+ *
+ * `SessionFinalizer.ts:233-241` wraps the call in a `try` and only logs. That is
+ * reproduced here by the engine, not delegated: a mode whose `onExit` throws
+ * must not fail a run that has already produced its answer, and the port has no
+ * way to say "I failed" other than by throwing.
+ */
+export interface ModeExitPort {
+  /**
+   * Run every `kind: 'message'` mode's `onExit`, in registration order.
+   *
+   * Called at most ONCE per run, and only on the success path. MAY throw; the
+   * engine treats a throw as a logged warning and lets the run end normally,
+   * because the run's answer is already produced by this point and replacing a
+   * `completed` terminal with a failure over a mode's teardown would be the
+   * engine inventing an outcome the host never asked it to decide.
+   */
+  onRunExit(): Promise<void>;
 }

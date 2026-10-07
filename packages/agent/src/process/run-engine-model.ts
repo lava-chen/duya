@@ -91,7 +91,7 @@
  * grants a synthetic ticket to exactly that class (`run-engine.ts:1064`).
  */
 
-import type { AIClient, SSEEvent, ToolUse } from '@duya/ai';
+import type { AIClient, SSEEvent, TokenUsage, ToolUse } from '@duya/ai';
 import type {
   ModelFrame,
   ModelMessage,
@@ -439,9 +439,102 @@ export interface LegacyModelSources {
  * replaying it. The legacy loop keeps its own envelope because the legacy loop
  * still drives every turn, so nothing in production is affected today.
  */
-export function createClientModelPort(client: AIClient): ModelPort {
+/**
+ * The host-supplied per-call usage tap (plan 610 D3).
+ *
+ * ## What it carries, and why it is the provider's OWN block
+ *
+ * The argument is `TokenUsage` VERBATIM -- the provider's snake_case block,
+ * un-narrowed and un-summed -- so the host bills from the same numbers the
+ * legacy loop billed from, including `cache_hit_tokens` /
+ * `cache_creation_tokens`. One callback per provider `result`, so a tool-heavy
+ * turn fires it once per LLM API call and the host's per-call ledger
+ * (`UsageCall[]`) stays exactly as granular as it is today.
+ *
+ * ## Why this seam and not the `ModelFrame`
+ *
+ * `ModelFrame.usage` carries three counters and cannot carry the cache buckets
+ * (`ports.ts`): it is a runtime-layer contract, and the runtime has no honest
+ * source for a per-call MODEL to stamp. Widening it would push per-call
+ * attribution into the engine, which is the second usage authority the entry
+ * must stay. The engine's own accounting is turn-level BY CONTRACT --
+ * `AssistantMessage.addUsage` is last-wins-never-summed, and `assistant.usage`
+ * is published once in `#finalizeLastMessage` -- so forwarding each usage frame
+ * as a new `RunEvent` would mean changing that contract and registering an
+ * event type, to carry data the HOST already has. This tap carries it instead:
+ * the host owns the hot-swap surface (`agent.model`), so the host is the only
+ * side that can attribute a call to the model that produced it.
+ *
+ * ## Why it is a tap and not a second ledger
+ *
+ * The callback receives the provider's block and nothing else. It stores no
+ * state, invents no number, and re-derives nothing: the billing authority stays
+ * the entry's existing block, and the per-call ledger it pushes is unchanged.
+ * OMITTING the option is a supported run with no per-call accounting at all --
+ * distinct from binding a tap that fires zero times, because a provider that
+ * reported nothing must not be indistinguishable from a host that never asked.
+ */
+export interface ClientModelPortOptions {
+  /**
+   * Called once per provider `result` frame, pre-narrowing.
+   *
+   * OMITTED means the caller wants no per-call usage. An all-zero provider block
+   * is still delivered, because deciding that a report is meaningless is the
+   * billing authority's call (`parseUsageCall` returns `null` for it) and not
+   * this port's.
+   */
+  readonly onPerCallUsage?: (usage: TokenUsage) => void;
+  /**
+   * Re-take the declared-tools snapshot for the request this call is about to
+   * open. Plan 610 P3.
+   *
+   * ## Why the model leg has to do this, and not the tool leg
+   *
+   * The visibility guard the executor reads (`evaluateVisibilityGuard`) starts
+   * as an EMPTY set and denies any name outside it, and `beginTurnAssembly`
+   * replaces that set only when something calls `refreshDeclaredTools`. On the
+   * legacy path the caller of the provider stream IS the thing that refreshes
+   * it: `TurnStreamRunner.runTurnStream` calls `deps.refreshDeclaredTools()`
+   * inside its attempt loop, immediately before `llmClient.streamChat`. The
+   * engine never enters that runner, so on this path nothing refreshed the
+   * snapshot and every dispatch was denied -- measured: zero tools executed
+   * while the run still reported `completed`.
+   *
+   * So the refresh belongs at the same point in the same sequence here: PER
+   * ATTEMPT, BEFORE the provider request is opened. Before, because the guard
+   * gates what the model is allowed to have asked for, and a snapshot taken
+   * after the request exists is a snapshot of a request already in flight. Per
+   * attempt rather than per turn because the guard's snapshot is REPLACED per
+   * request rather than per turn (`RunTurnAssembly.refreshDeclaredTools`
+   * documents it), so a caller that refreshed once per turn would re-snapshot
+   * one request's surface and open the next on a stale one -- which is the
+   * promotion case, the one where a tool discovered mid-run has to be callable.
+   *
+   * ## It fills the guard; it never widens it
+   *
+   * The hook re-reads the surface the host's own `assemble` was last given, so
+   * the set it produces is the set the turn advertised. Making the guard admit
+   * anything else -- a union with the registry, a constant, an empty-check
+   * bypass -- would be a security regression in the direction that matters:
+   * a name the model was never offered would become callable.
+   *
+   * OMITTED is supported and means "no guard refresh": a caller with no guard to
+   * fill (a bare port test) keeps working, and `composeLegacyRunSources` binds
+   * it unconditionally because a production run always has one.
+   */
+  readonly refreshDeclaredTools?: () => ReadonlySet<string>;
+}
+
+export function createClientModelPort(
+  client: AIClient,
+  options?: ClientModelPortOptions,
+): ModelPort {
   return {
     async *stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelFrame> {
+      // Plan 610 P3: the same position the legacy attempt loop takes it, and for
+      // the same reason -- see `ClientModelPortOptions.refreshDeclaredTools`.
+      options?.refreshDeclaredTools?.();
+
       const stream = client.streamChat(toProviderMessages(request.messages), {
         systemPrompt: request.systemPrompt,
         tools: request.tools.map((tool) => ({
@@ -464,6 +557,14 @@ export function createClientModelPort(client: AIClient): ModelPort {
       });
 
       for await (const event of stream) {
+        // Plan 610 D3. The PER-CALL usage tap, taken BEFORE `toModelFrame`
+        // narrows the event, because this is the last point on the path where
+        // the provider's own numbers are still whole. See
+        // `ClientModelPortOptions` for why the narrowing seam is the wrong
+        // place to recover them.
+        if (options?.onPerCallUsage !== undefined && event.type === 'result') {
+          options.onPerCallUsage(event.data);
+        }
         const frame = toModelFrame(event);
         if (frame !== null) yield frame;
       }
@@ -489,6 +590,16 @@ export function createClientModelPort(client: AIClient): ModelPort {
  * rather than removed because the sources object is how a host hands over its
  * turn state, and a field this port ignores is a smaller problem than a host
  * that has to be told which fields are load-bearing.
+ *
+ * ## No declared-tools refresh here, and why that is not an oversight
+ *
+ * `ClientModelPortOptions` carries one and this port does not take it. A caller
+ * of THIS port brings its own mutable context -- that is what the two `sources`
+ * callbacks are for -- and a context owner is the side that knows when its
+ * surface changed; a caller that wanted the guard filled would refresh it where
+ * it refreshes `declaredTools`, at its own attempt boundary. No composition
+ * builds this port: `composeLegacyRunSources` derives `createClientModelPort`,
+ * which is the model leg the cutover actually runs.
  *
  * ## The `signal` is the ENGINE's, and it is threaded into the client call
  *

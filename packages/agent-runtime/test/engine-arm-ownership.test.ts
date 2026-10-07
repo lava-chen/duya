@@ -165,6 +165,25 @@ function harness(options: Options = {}): Harness {
     // engine would otherwise skip the sweep and drop mid-run steering
     // with nothing reporting the loss.
     interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
+    // The three ports the legacy-still-drives window closed (plan 610 D4 for
+    // the first two, D1 for the third), bound to their smallest honest
+    // answers. This file measures which ARMS the engine declines to publish,
+    // and none of these three produces one -- so each says "records nothing",
+    // "never compacts", "exits no modes" rather than standing in for a leg
+    // under test. A bound no-op cannot make a frame look produced when it was
+    // not, which is the failure mode this file exists to rule out.
+    turnOutput: {
+      recordToolResult: () => Promise.resolve(),
+      recordAssistantMessage: () => Promise.resolve(),
+      finishTurn: () => Promise.resolve(),
+      recordInjectedMessage: () => Promise.resolve(),
+    },
+    compaction: {
+      decide: () => Promise.resolve({ kind: 'skip' as const, reason: 'not under test' }),
+      run: () => Promise.resolve({ kind: 'declined' as const, reason: 'not under test' }),
+      nextCompactionId: () => 'cmp-arm-ownership',
+    },
+    modeExit: { onRunExit: () => Promise.resolve() },
     model: {
       async *stream(_request: ModelRequest): AsyncIterable<ModelFrame> {
         turn += 1;

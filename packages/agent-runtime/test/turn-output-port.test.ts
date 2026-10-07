@@ -126,7 +126,15 @@ interface HarnessOptions {
   readonly batches?: readonly (readonly ToolDrainItem[])[];
   /** The calls the model asks for on turn 1. */
   readonly calls?: readonly ToolCallRequest[];
-  /** Supply no `turnOutput` at all -- the live worker's state today. */
+  /**
+   * Bind a `turnOutput` that RECORDS NOTHING rather than omitting the member.
+   *
+   * The name is historical: it used to omit the port, which is why it reads the
+   * way it does. `RunEnginePorts.turnOutput` has been required since plan 610 D4
+   * and the composition's answer for a host with no durable destination is a
+   * no-op port, so the honest name today would be `recordingNothing` -- kept as
+   * is so the diff against the pre-D4 file stays readable.
+   */
   readonly withoutOutputPort?: boolean;
   /** Gate each `recordToolResult` on this, to test that it is awaited. */
   readonly gateResult?: (record: ToolResultRecord) => Promise<void>;
@@ -200,9 +208,20 @@ function harness(options: HarnessOptions = {}): Harness {
       calls.map((call) => ({ name: call.name, description: 'x', inputSchema: {} })),
   };
 
+  // The no-op arm is a REAL port, not an absent member: `turnOutput` has been
+  // required since plan 610 D4, and the composition's documented answer for a
+  // host with nowhere to record is a port whose promises resolve and perform
+  // nothing. `withoutOutputPort` therefore means "this host records nothing",
+  // which is what the last describe block measures -- an OMITTED member would be
+  // a type error and would no longer describe any host.
   const turnOutput =
     options.withoutOutputPort === true
-      ? undefined
+      ? {
+          async recordToolResult(): Promise<void> {},
+          async recordAssistantMessage(): Promise<void> {},
+          async finishTurn(): Promise<void> {},
+          async recordInjectedMessage(): Promise<void> {},
+        }
       : {
           async recordToolResult(record: ToolResultRecord): Promise<void> {
             order.push('record');
@@ -219,6 +238,18 @@ function harness(options: HarnessOptions = {}): Harness {
             order.push('finish');
             summaries.push(summary);
           },
+          // The fourth member, required since b3a like the two above.
+          //
+          // It deliberately pushes NOTHING onto `order`, and that is a decision
+          // rather than an omission: `order` is what the exact-sequence
+          // assertions below read, so recording here would change the very
+          // surface the file is about. No run in this harness injects a message
+          // -- `interTurn` returns `injected: []` -- so the member is never
+          // called, and a recorder that appeared in `order` only if a future
+          // harness started injecting would be noise rather than evidence. The
+          // file that DOES assert injected messages record is
+          // `assistant-message-emission.test.ts`.
+          async recordInjectedMessage(): Promise<void> {},
         };
 
   const ports: RunEnginePorts = {
@@ -255,6 +286,18 @@ function harness(options: HarnessOptions = {}): Harness {
         terminals.push(candidate.state.status);
       },
     } as RunEventStorePort,
+    // The other two ports the legacy-still-drives window closed (plan 610 D4 for
+    // `compaction`, D1 for `modeExit`). `turnOutput` is this file's subject and
+    // these two are not: a live compaction would replace the transcript these
+    // tests inspect, and a live mode exit would append to the `order` array the
+    // assertions read as the turn-output ORDER. Each is the smallest honest
+    // answer for that reason rather than for brevity.
+    compaction: {
+      decide: () => Promise.resolve({ kind: 'skip' as const, reason: 'not under test' }),
+      run: () => Promise.resolve({ kind: 'declined' as const, reason: 'not under test' }),
+      nextCompactionId: () => 'cmp-turn-output',
+    },
+    modeExit: { onRunExit: () => Promise.resolve() },
     sideEffects: {
       async begin(call): Promise<never> {
         ledger.push(`begin:${call.callId}`);
@@ -274,7 +317,11 @@ function harness(options: HarnessOptions = {}): Harness {
         return [];
       },
     },
-    ...(turnOutput === undefined ? {} : { turnOutput }),
+    // ALWAYS BOUND since plan 610 D4. The conditional spread this replaced was
+  // the last place in this file that could omit the member, and it survived D4
+  // only because the test directory is excluded from every tsconfig -- the same
+  // blind spot the other thirteen fixtures in this directory had.
+  turnOutput,
   };
 
   const engine = new RunEngineImpl({
@@ -572,15 +619,29 @@ describe('the summary is reported even when the drain is abandoned', () => {
 });
 
 // ============================================================================
-// 5. Absence costs exactly the host effects, and is stated rather than assumed
+// 5. What a host with nothing to record says, and is stated rather than assumed
 // ============================================================================
 
-describe('a run with no output port still carries the result to the model', () => {
-  it('completes, shows the model the answer, and calls the host zero times', async () => {
-    // The live worker's state today (`agent-process-entry.ts:3236`), and the
-    // correct one while the legacy loop still performs the six effects itself.
-    // Asserting it is what keeps the port OPTIONAL honest: it is absent because
-    // the effects have not moved yet, not because they have no consumer.
+describe('a run whose output port records nothing still carries the result to the model', () => {
+  it('completes, shows the model the answer, and performs no host effect', async () => {
+    // THE PREMISE OF THIS ROW CHANGED with plan 610 D4, which made `turnOutput`
+    // required, and the row is kept with its CLAIM intact rather than deleted:
+    // it used to omit the member entirely and call that "the live worker's state
+    // today", which was already stale -- nothing drives the engine in production
+    // -- and became unrepresentable once the member closed.
+    //
+    // What it measures now is the same question one level up: a host with NO
+    // DURABLE DESTINATION binds a port that performs nothing (each promise
+    // resolves, no row is written), and the model still receives the tool result.
+    // That is the behaviour `buildEnginePorts` promises its no-op for, so this
+    // row is now the OBSERVABLE END of a contract a caller can rely on rather
+    // than a description of an absence the type forbids.
+    //
+    // `withoutOutputPort` below is a cast, and it stays narrow: it removes
+    // exactly one member so the same bundle shape serves the other rows. The
+    // assertion is deliberately not weakened -- the result still has to reach
+    // the model and the terminal still has to be `completed`, which is what a
+    // recording-but-empty port could get wrong.
     const drained = result('call-1', RESULT_SENTINEL);
     const run = harness({
       calls: [READ_CALL],
@@ -592,5 +653,17 @@ describe('a run with no output port still carries the result to the model', () =
     expect(run.modelSawText()).toContain(RESULT_SENTINEL);
     expect(run.ledger).toEqual(['begin:call-1', 'settle:key:call-1:succeeded']);
     expect(run.terminals).toEqual(['completed']);
+    // Non-vacuity, and scoped to the PORT rather than to `order` as a whole:
+    // `settle` and `defer` come from the side-effect ledger and the context
+    // port, so an empty `order` would be asserting that OTHER ports did nothing,
+    // which is a different claim and a false one. What must be absent is the
+    // output port's own markers -- `record`, `assistant`, `finish` -- plus its
+    // two recorders. Without this the row would also pass against a bundle
+    // where the engine never reached the port at all.
+    expect(run.order).not.toContain('record');
+    expect(run.order).not.toContain('assistant');
+    expect(run.order).not.toContain('finish');
+    expect(run.records).toEqual([]);
+    expect(run.summaries).toEqual([]);
   });
 });

@@ -135,6 +135,22 @@ function harness(options: {
     // engine would otherwise skip the sweep and drop mid-run steering
     // with nothing reporting the loss.
     interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
+    // The three ports the legacy-still-drives window closed (plan 610 D4, then
+    // D1 for `modeExit`). This file measures the LOOP, so each is the smallest
+    // honest answer -- a compaction that ran or a mode that exited mid-loop
+    // would change the turn sequence these tests count.
+    turnOutput: {
+      recordToolResult: () => Promise.resolve(),
+      recordAssistantMessage: () => Promise.resolve(),
+      finishTurn: () => Promise.resolve(),
+      recordInjectedMessage: () => Promise.resolve(),
+    },
+    compaction: {
+      decide: () => Promise.resolve({ kind: 'skip' as const, reason: 'not under test' }),
+      run: () => Promise.resolve({ kind: 'declined' as const, reason: 'not under test' }),
+      nextCompactionId: () => 'cmp-loop',
+    },
+    modeExit: { onRunExit: () => Promise.resolve() },
     model,
     tools: {
       dispatch(call: ToolCallRequest): void {

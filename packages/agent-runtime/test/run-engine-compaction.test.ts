@@ -261,6 +261,18 @@ function harness(options: {
       },
     } as RunEventStorePort,
     compaction,
+    // The two other ports the legacy-still-drives window closed (plan 610 D4 for
+    // `turnOutput`, D1 for `modeExit`). `compaction` is this file's subject and
+    // these two are not, so each is the smallest honest answer: a compaction test
+    // with a live turn-output sink would measure the sink, and one with a mode
+    // exit would measure the exit.
+    turnOutput: {
+      recordToolResult: () => Promise.resolve(),
+      recordAssistantMessage: () => Promise.resolve(),
+      finishTurn: () => Promise.resolve(),
+      recordInjectedMessage: () => Promise.resolve(),
+    },
+    modeExit: { onRunExit: () => Promise.resolve() },
   };
 
   return {
@@ -544,7 +556,29 @@ describe('the engine does not compact when the port declines', () => {
     expect(h.decisions[0]?.turn).toBe(1);
   });
 
-  it('never reaches a port at all when none is bound', async () => {
+  it('never reaches a port at all when none is bound, and the cast is the honest cost', async () => {
+    // THE PREMISE OF THIS ROW CHANGED, and the row is kept rather than deleted
+    // because what it now measures is still true and still worth pinning.
+    //
+    // It used to say "NO `compaction` key. The absent binding is the live
+    // worker's state and must be a no-op rather than a throw." That claim was
+    // true when the member was optional and FALSE about the product: nothing
+    // drives the engine in production, so no live worker had this state. Plan
+    // 610 D4 made `compaction` required, which is the correct fix -- a host with
+    // no compaction source binds a port that decides `skip`, rather than a port
+    // that does not exist.
+    //
+    // What survives is narrower and still load-bearing: `runCompactionPass`
+    // takes `CompactionPort | undefined` and returns `{ kind: 'unbound' }`
+    // before touching anything, so a caller that hands it no port gets a
+    // no-op rather than a throw. That signature is reachable from OUTSIDE this
+    // package (the module doc says it is standalone so a host can drive the port
+    // directly), so the guard is public behaviour and not dead code.
+    //
+    // The cast is therefore the honest way to reach it, and it is asserted as a
+    // cast on purpose: a future widening of the row back into "the product omits
+    // this" would be false, and the comment above is what a reader needs to see
+    // rather than a bare `as`.
     const sent: ModelMessage[][] = [];
     const controller = new AbortController();
     const model: ModelPort = {
@@ -560,8 +594,9 @@ describe('the engine does not compact when the port declines', () => {
         manifest: manifestFor(),
         input: inputFor(),
         signal: controller.signal,
-        // NO `compaction` key. The absent binding is the live worker's state and
-        // must be a no-op rather than a throw.
+        // `compaction` deliberately ABSENT -- see the note above. The other two
+        // closed ports are bound so the cast is narrow: it removes exactly one
+        // member rather than an entire bundle.
         ports: {
           model,
           tools: {
@@ -583,12 +618,15 @@ describe('the engine does not compact when the port declines', () => {
           },
           approval: { authorize: () => Promise.resolve({ allowed: true, scope: 'once' as const }) },
           events: { publish: () => {}, proposeTerminal: () => {} } as RunEventStorePort,
-          // Required, and deliberately NOT the subject of this test: the claim
-          // under test is that an absent `compaction` is a no-op. `interTurn`
-          // is required precisely so it cannot be absent, and a host with
-          // nothing queued says so.
           interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
-        },
+          turnOutput: {
+            recordToolResult: () => Promise.resolve(),
+            recordAssistantMessage: () => Promise.resolve(),
+            finishTurn: () => Promise.resolve(),
+            recordInjectedMessage: () => Promise.resolve(),
+          },
+          modeExit: { onRunExit: () => Promise.resolve() },
+        } as unknown as RunEnginePorts,
       })
       .completed();
 

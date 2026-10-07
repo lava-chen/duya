@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MessageSessionTool } from '../MessageSessionTool.js';
 
-// Mock the agent-process-entry exports used by MessageSessionTool.
-vi.mock('../../../process/agent-process-entry.js', () => ({
+// Mock the pending-interagent-calls exports used by MessageSessionTool.
+vi.mock('../../../process/pending-interagent-calls.js', () => ({
   registerPendingInteragentCall: vi.fn(),
   unregisterPendingInteragentCall: vi.fn(),
 }));

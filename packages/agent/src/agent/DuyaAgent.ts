@@ -383,6 +383,112 @@ export interface TurnAssembly {
 }
 
 /**
+ * Plan 610 P4: what establishing a RUN needs from its driver.
+ *
+ * Only the two facts the driver is the sole authority for -- what the user
+ * asked for, and the options the run was started with. Everything else about a
+ * run is decided by the agent, because a driver that could supply those would
+ * be a second account of one run's setup, and two accounts that can disagree is
+ * the defect class this seam exists to remove (see `beginTurnAssembly` for the
+ * same argument applied to `turnContext`).
+ *
+ * ## Why there is NO abort controller in this request
+ *
+ * Because that is the one thing the run OWNS rather than receives. A caller that
+ * could hand in a controller would be able to install one with no run behind it,
+ * which is precisely the state `buildTurnPipeline` refuses to guess its way
+ * past. So the controller is not a parameter, is not a public field, and has no
+ * setter: `beginRun` creates it and `RunHandle.close` releases it.
+ */
+export interface RunStartRequest {
+  readonly options: ChatOptions | undefined;
+  readonly prompt: string | MessageContent[];
+}
+
+/**
+ * Plan 610 P4: the live run's lifecycle handle.
+ *
+ * ## `close` is the load-bearing member
+ *
+ * The agent outlives the run -- `beginTurnAssembly`'s doc says the same about
+ * the fork marker -- so everything this handle establishes has to be released
+ * or a finished run keeps addressing the next one. `bindRunForkMarker`'s header
+ * is the worked example of that failure: a fork marker that survives its run
+ * filters every later durable row out of the user's history, silently, because
+ * `projectModelMessages` drops branched rows. So `close` is the release, it is
+ * idempotent, and it is IDENTITY-CHECKED: a handle that has been superseded
+ * releases nothing rather than tearing down a newer run's controller.
+ */
+export interface RunHandle {
+  /** `options.turnId ?? null`. The value journal emits carry for this run. */
+  readonly turnId: string | null;
+  /**
+   * Assembled ONCE per run by `beginRun`, so the driver never builds a second
+   * `TurnAssembler.build` for the same run and hands it to `beginTurnAssembly`.
+   */
+  readonly turnContext: TurnContext;
+  /** `_resolveAgentProfile`'s answer, or `undefined` when no profile was named. */
+  readonly appliedProfile: AgentProfile | undefined;
+  /** `options.mode ?? 'normal'`, so a driver can report what it actually ran. */
+  readonly requestedMode: string;
+  /**
+   * The request this run was begun with -- the SAME object `beginRun` was
+   * handed, not a copy or a re-read.
+   *
+   * It is here because `orchestratorFramesFor` needs the prompt and the chat
+   * options and must not be given them as arguments: an argument a driver
+   * re-supplies is a second account of the turn's input, and the whole argument
+   * for handing out a handle rather than a field is that a handle carries the
+   * run's own facts (see `turnContext`, `appliedProfile`). A driver that passed
+   * a different prompt than the one it began the run with would get this run's
+   * orchestrator answering someone else's question.
+   */
+  readonly request: RunStartRequest;
+  /**
+   * The orchestrator-paradigm mode this run asked for, or `null`.
+   *
+   * THE ROUTING DECISION, and the only answer that permits turn assembly: a
+   * non-null value means this mode owns the whole stream and never reaches
+   * `beginTurnAssembly` (measured -- `streamChat` yields the orchestrator and
+   * RETURNS before the assembly call), so a driver handed one must dispatch it
+   * through `orchestratorFramesFor` rather than assemble a turn. `null` is the
+   * ordinary turn.
+   *
+   * Reported and DISPATCHED from here as of plan 610 P5; before that it was
+   * reported only, and the dispatcher was unreachable from outside this file.
+   */
+  readonly orchestrator: ModeModifier | null;
+  /**
+   * This run's abort signal, derived from the controller `beginRun` installed.
+   *
+   * Read-only by construction, for the reason `readModelClient` is: the caller
+   * gets the signal to observe, not the controller to replace, so a host cannot
+   * swap the abort source out from under a turn that is already in flight.
+   * `agent.interrupt()` still aborts the same controller, so the legacy's
+   * cancellation route and this one are the same wire.
+   */
+  readonly signal: AbortSignal;
+  /**
+   * This run's controller, for the run's OWN plumbing.
+   *
+   * The controller rather than only the signal because the legacy derives
+   * PER-REQUEST child controllers from it (`createChildAbortController`) and
+   * hands it to `OrchestratorDeps`, and re-deriving one per site would be the
+   * second account of a run's cancellation this seam exists to remove.
+   *
+   * Read-only, and reachable ONLY through a handle -- which is the whole
+   * difference from the field this does not replace. A caller holding a handle
+   * is holding a live run, so aborting here aborts something real; a caller
+   * writing the field could install a controller no run was ever built around.
+   */
+  readonly controller: AbortController;
+  /** Abort this run. Equivalent to `agent.interrupt()`, scoped to this handle. */
+  readonly abort: (reason?: unknown) => void;
+  /** Release the run. See the note above; safe to call more than once. */
+  close(): void;
+}
+
+/**
  * Plan 610 A3-2b8 (S2): what establishing the RUN-scoped half of assembly needs.
  *
  * Deliberately almost nothing. Every value that can be derived from the agent
@@ -410,8 +516,33 @@ export interface RunAssemblyRequest {
   readonly publisher: TurnPipelinePublisher | undefined;
 }
 
+/**
+ * What `commitTurnPromptUserRow` did with a run's opening prompt.
+ *
+ * ## Why `committed` and `messageId` are separate facts
+ *
+ * Because duplicate suppression is the case that matters and it does NOT
+ * produce a row. A caller that needs to name the row the model is answering --
+ * the legacy's `runtimePromptMessageId`, which two later reads consume -- has
+ * to be handed the EXISTING row's id when the prompt was suppressed, and a
+ * caller that only cares about durability needs to be able to tell the two
+ * apart. A bare `string | null` return would make "suppressed" and "committed
+ * with no id" the same value, and those are different states.
+ *
+ * `messageId` is `null` only when the transcript held no comparable row AND
+ * the committed row carried no id, which `commitTurnPromptUserRow` can only
+ * reach through a caller that supplied neither `clientMsgId` nor a mintable
+ * value -- stated so the nullable half is a contract rather than a shrug.
+ */
+export interface PromptUserRowCommit {
+  /** True when a NEW durable row was written and journaled. */
+  readonly committed: boolean;
+  /** The row the run's model context answers: the new one, or the suppressed one. */
+  readonly messageId: string | null;
+}
+
 /** What the host knows about the turn it is asking for. */
-export interface TurnAssemblyInput {
+export interface LegacyTurnDelta {
   /** 1-based turn number, as the publisher records it and the catalog is stamped. */
   readonly turn: number;
   /** The transcript this turn is built from. Read fresh every turn. */
@@ -426,6 +557,28 @@ export interface TurnAssemblyInput {
   readonly tools: readonly Tool[];
   /** The prompt as the run currently holds it -- compaction may have replaced it. */
   readonly systemPrompt: string;
+}
+
+/**
+ * Plan 610 A3-2b9 (S4b-2): the run's MODEL-BOUNDARY projection.
+ *
+ * Both halves are what `_projectModelMessages` produced, and both are needed:
+ *
+ *  - `systemPrompt` is the run's base prompt with the `## Conversation Context`
+ *    block appended -- the legacy system segments and the compaction-reinjected
+ *    context, lifted OUT of the message array and into the system prompt. It is
+ *    the PRE-mode prompt; `applyTurnModes` layers prefixes on top of it, which is
+ *    the legacy's order and the reason the projection has to run first.
+ *  - `messages` is the provider-facing message list: `legacy_system` roles
+ *    removed, thread metadata stripped, branched-layer messages excluded. The
+ *    agent's RAW `getMessages()` is NOT this, and handing a host the raw array
+ *    is how a system row reaches a provider as a bogus turn.
+ */
+export interface TurnModelProjection {
+  /** Base prompt WITH the projected context block, before any mode prefix. */
+  readonly systemPrompt: string;
+  /** Provider-facing messages. A projection, never the raw timeline. */
+  readonly messages: Message[];
 }
 
 /**
@@ -459,8 +612,77 @@ export interface RunTurnAssembly {
   readonly turnContext: TurnContext;
   /** The tool surface the run started with. Promotion replaces it per turn. */
   readonly tools: readonly Tool[];
-  /** The run's base system prompt, before any per-turn mode prefix. */
+  /**
+   * THIS RUN'S OWN PERMISSION GATE -- the same `guardedCanUseTool` closure every
+   * pipeline this handle assembles dispatches against, not a second build of
+   * `buildPermissions`.
+   *
+   * ## Why the run handle is where it is exposed
+   *
+   * `RunEngineImpl.#dispatchCall` asks `ports.approval.authorize` for every
+   * tool call BEFORE `ports.tools.dispatch`, and the pipeline's own
+   * `canUseTool` runs only during the drain that `dispatch` feeds. So on the
+   * engine path the gate that decides is reached twice per call, and the
+   * composition has to be able to consult it at the EARLIER of the two points
+   * or it cannot answer the engine honestly -- and it must be THIS closure,
+   * because a second `buildPermissions` would be a second gate over the same
+   * session mode, and two gates over one mode can disagree about whether a
+   * call needs the user.
+   *
+   * Read-only for a host: it decides, it does not prompt. The ASK belongs to
+   * the tool's own `checkPermissions` inside the pipeline, which is where the
+   * legacy put it (the `canUseBehavior !== 'allow'` guard in
+   * `StreamingToolExecutor`).
+   */
+  readonly canUseTool: CanUseToolFn;
+  /**
+   * The name the private progress tool was actually advertised under.
+   *
+   * A MEMBER rather than recomputed by each reader, for the reason the tool's
+   * name is a `while` loop: the suffix that avoids a collision with a real tool
+   * is decided ONCE, and a reader that recomputed it could land on a different
+   * name than the surface carries. `streamChat` matches model calls against this
+   * to intercept them before dispatch.
+   */
+  readonly progressToolName: string;
+  /** The run's system prompt, with modes applied. The pre-mode base is `projection.systemPrompt`. */
   readonly systemPrompt: string;
+  /**
+   * The run's model-boundary projection. See `TurnModelProjection`.
+   *
+   * A MEMBER rather than something each caller recomputes, because the two
+   * callers disagree about who owns the transcript: `streamChat` wants the
+   * projected messages for its turn loop, and an engine-driven host wants the
+   * same array for `ContextPort.assemble`. Two recomputations is two accounts
+   * of one projection, and the hook-context rail inside it is stateful.
+   */
+  readonly projection: TurnModelProjection;
+  /**
+   * Re-project the CURRENT timeline into provider messages.
+   *
+   * ## Why the messages half is per-turn and the prompt half is not
+   *
+   * The legacy projects ONCE per run and then PUSHES each turn's tool result
+   * into the resulting working array (`DuyaAgent.ts:2712` onwards), so its
+   * message list grows within the run. The engine has no such array: it
+   * re-assembles every turn and asks for the conversation again, so a run-scoped
+   * snapshot would show turn 2 a transcript that ends at turn 1 -- which is
+   * exactly the failure `engine-real-agent-proof.test.ts` "feeds the tool result
+   * BACK to the model on the second request" was written to catch, and it went
+   * red when this was first written as a single run-scoped pair.
+   *
+   * The PROMPT half must stay run-scoped for the opposite reason: it merges a
+   * `## Conversation Context` block into the base prompt, and re-merging into an
+   * already-merged prompt duplicates the block every turn.
+   *
+   * ## Why the base prompt argument is EMPTY
+   *
+   * Because the prompt half of the result is DISCARDED here, and passing the
+   * live prompt would compute a merged prompt nobody reads while looking like
+   * it meant something. `projectModelMessages` derives messages from the
+   * timeline alone, so the two halves are independent and only one is wanted.
+   */
+  projectTurnMessages(): Message[];
   /**
    * Re-snapshot the tools DECLARED on the provider request about to be opened,
    * and return the new set.
@@ -476,7 +698,7 @@ export interface RunTurnAssembly {
    */
   refreshDeclaredTools(): Set<string>;
   /** Assemble one turn: prompt refresh, catalog round, and a FRESH pipeline. */
-  assemble(input: TurnAssemblyInput): TurnAssembly;
+  assemble(input: LegacyTurnDelta): TurnAssembly;
 }
 
 /**
@@ -619,12 +841,17 @@ export class duyaAgent implements AgentRuntime {
   buildTurnPipeline(request: TurnPipelineRequest): ToolExecutionPipeline {
     const { resolved, turnContext, options } = request;
 
-    // `streamChat` assigns this on entry and clears it on exit, so it is
-    // non-null for every turn of a live run -- and the generator relied on
-    // that narrowing without stating it. A method does not inherit it, so it
-    // is stated here, and stated as a THROW rather than a default: silently
-    // substituting a fresh controller would build a tool-use context wired
-    // to a signal the caller cannot abort.
+    // A run establishes this (`beginRun`) and releases it (`RunHandle.close`),
+    // so it is non-null for every turn of a live run -- and the generator
+    // relied on that narrowing without stating it. A method does not inherit it,
+    // so it is stated here, and stated as a THROW rather than a default:
+    // silently substituting a fresh controller would build a tool-use context
+    // wired to a signal the caller cannot abort.
+    //
+    // Both halves of that are load-bearing. Until `beginRun` landed, the only
+    // way past this throw was to write the private field, and the "already been
+    // cleared" half of the message named a state the tree could not reach --
+    // `streamChat` assigned the controller and never released it.
     const abortController = this.abortController;
     if (!abortController) {
       throw new Error(
@@ -871,6 +1098,243 @@ export class duyaAgent implements AgentRuntime {
   }
 
   /**
+   * Run every `kind: 'message'` mode's `onExit` hook, once, for THIS run.
+   *
+   * Plan 610 D1. ADD-ONLY: this method and its doc are the whole of this file's
+   * change. No existing statement is touched, reordered or removed, because the
+   * capability is a new door into state that already existed.
+   *
+   * ## What it is for, and why the door was missing
+   *
+   * `applyTurnModes` (`:981`) assigns `this.resolvedModes` and `this.modeCtx`,
+   * and both are private. That made the mode lifecycle's run-boundary half
+   * reachable only from `SessionFinalizer.ts:235`, i.e. only from the legacy
+   * `streamChat` path. When the driver flips, `runExitHooks` is deleted with it,
+   * and the ONLY registered `onExit` -- `computer-use-mode.ts:199-210`, which
+   * clears the per-session `computer_use_context` trigger and disables the OS
+   * context bridge -- would silently never run again.
+   *
+   * The engine could not have reached it either, and the reason is worth
+   * recording because a comment in this file claimed otherwise until this slice:
+   * `runExitHooks` does NOT ride the engine's `after_finalize` phase. That
+   * phase's only producer is `createLegacyHookSource` (`hook-source.ts:180`),
+   * whose event map is the CONFIG-hook vocabulary (`Stop`, `SessionEnd` via
+   * `ConfigHooksRunner`), while a mode's `onExit` lives in a disjoint registry
+   * (`modeModifierRegistry`). The old claim at `:961-963` has been corrected at
+   * its own call site by the port that now carries this.
+   *
+   * ## Why a method and not a widened existing one
+   *
+   * `applyTurnModes` is per-run and per-seam; `refreshTurnSystemPrompt` is
+   * per-TURN. Neither is a run-end boundary, and folding a teardown call into
+   * either would fire a mode's `onExit` at a moment the mode lifecycle does not
+   * have. A separate method is also what lets the composition bind it as a port
+   * (`run-composition.ts`) without the engine ever learning what a mode is.
+   *
+   * ## Fail-open, and why that is not this method's choice to make
+   *
+   * `SessionFinalizer.ts:233-241` wraps the call in a `try` and only logs. This
+   * method does NOT swallow: it lets a throwing `onExit` propagate, and the
+   * engine's `ModeExitPort` call site catches it. The layer that owns the run's
+   * outcome owns the policy, and duplicating the `try` here would make two
+   * places responsible for one rule. A no-op when no mode is active is not a
+   * swallow -- it is `runExitHooks` iterating an empty list.
+   */
+  async runModeExitHooks(): Promise<void> {
+    if (!this.resolvedModes || !this.modeCtx) return;
+    await runExitHooks(this.resolvedModes, this.modeCtx);
+  }
+
+  /**
+   * Plan 610 A3-2b9 (S4b-1): apply the run's mode modifiers, ONCE per run.
+   *
+   * ## Why this was a hole in already-merged S1/S2
+   *
+   * The block this replaces lived in `streamChat` at `:2457-2571`, AFTER
+   * `beginTurnAssembly` (`:2312`). So the seam resolved tools and built a prompt
+   * and then never asked a mode anything: `this.resolvedModes`, `this.modeCtx`
+   * and `this.baseSystemPromptWithoutModes` are assigned ONLY here, so on the
+   * engine path all three stayed `undefined`, and `refreshTurnSystemPrompt`'s
+   * four-clause guard short-circuited and returned the prompt unchanged.
+   *
+   * The net effect was silent and total: an engine-driven run advertised **no
+   * mode prompt prefix and no injected mode tool**, and a mode that BLOCKS a
+   * tool did not block it. The S3 proof could not see it, because it registers
+   * no modes -- a green that never turns the knob on.
+   *
+   * ## ONE call site, and the legacy now goes through it
+   *
+   * Not "the seam also does this": `streamChat` calls `beginTurnAssembly` at
+   * `:2312` and reads the mode-applied values off the handle, so the legacy and
+   * an engine-driven run run the SAME code once. A second call site would apply
+   * modes twice on a legacy run -- double prefixes, double injects.
+   *
+   * ## `applyModes` + `runExitHooks`, and what "mode" means here
+   *
+   * `ModeModifier` is the whole of it. The orchestrator *hosts*
+   * (`run-orchestrator.ts:924`, `agent-shell.ts:448`) resolve modes too, but they
+   * apply ONLY tool injection and manage their own prompt and loop, and they do
+   * not go through this cutover -- they are explicitly out of scope for A3, not
+   * a capability this seam is missing. `runExitHooks` (the run-boundary half) is
+   * NOT here: it fires in `SessionFinalizer`, i.e. after the run, and rides the
+   * engine's `after_finalize` phase instead.
+   *
+   * ## The ONE ordering divergence from the legacy, stated
+   *
+   * The legacy applied modes to the prompt AFTER `_projectModelMessages`, which
+   * APPENDS a `## Conversation Context` block (`:6090`), and `_project` is not
+   * reachable from the seam. So the order here is apply-then-project.
+   *
+   * For every prompt PREFIX that is exactly equivalent -- a prefix prepends and
+   * the projection appends, so the two commute, and the final string is
+   * `prefix + base + context` either way. It differs for a mode registering a
+   * prompt SUFFIX when the timeline contributes system content:
+   * legacy `prefix+base+context+suffix`, here `prefix+base+suffix+context`. No
+   * registered mode declares a suffix today (conductor and plan-task both use
+   * prefixes), so the condition is currently unreachable; it is recorded rather
+   * than engineered away because the fix belongs to the projection gap, not
+   * here.
+   */
+  private async applyTurnModes(input: {
+    readonly options: ChatOptions | undefined;
+    readonly turnContext: TurnContext;
+    readonly systemPrompt: string;
+    readonly resolved: ResolvedTurnTools;
+  }): Promise<{ readonly systemPrompt: string; readonly resolved: ResolvedTurnTools }> {
+    const { options, turnContext } = input;
+    const { registry, constraints, catalogView } = input.resolved;
+
+    // === Plan 224 Phase 3+4: apply declarative mode modifiers ===
+    // Modifier-paradigm modes (conductor, plan-task) inject tools,
+    // prepend prompt prefixes, and merge toolUseContextPatch on top
+    // of the profile-resolved base.
+    //
+    // The resolved modes + ctx are stored on `this` so the per-turn
+    // refresh in `refreshTurnSystemPrompt` can re-evaluate function-form
+    // prompt prefixes (e.g. conductor's anti-slop section) against the
+    // latest `widgetStyleHistory` without re-running `onEnter` hooks.
+    const activeModeIds = collectActiveModes(options ?? {});
+    this.resolvedModes = activeModeIds.length > 0
+      ? modeModifierRegistry.resolve(activeModeIds)
+      : undefined;
+    if (!this.resolvedModes || this.resolvedModes.modes.length === 0) {
+      // No active modes -- clear stored state so per-turn refresh is a no-op.
+      // Also the reason this is not an early return of the INPUT values: a run
+      // whose previous run left state behind must not inherit its prefixes.
+      this.resolvedModes = undefined;
+      this.modeCtx = undefined;
+      this.baseSystemPromptWithoutModes = undefined;
+      return { systemPrompt: input.systemPrompt, resolved: input.resolved };
+    }
+
+    // Capture the pre-mode system prompt BEFORE applyModes applies
+    // prefixes. The per-turn refresh re-evaluates function-form
+    // prefixes against this base each turn.
+    this.baseSystemPromptWithoutModes = input.systemPrompt;
+
+    // Build the mode context. `state` is pre-populated with fields
+    // modes need to read in their hooks / prompt builders:
+    //  - conductorCanvasId: passed by the frontend (4-level priority
+    //    resolution in ChatView.handleConductorChange)
+    //  - widgetStyleHistory: the agent's rolling anti-slop history
+    this.modeCtx = {
+      sessionId: turnContext.sessionId ?? '',
+      workingDirectory: turnContext.workingDirectory ?? '',
+      state: {
+        conductorCanvasId: options?.conductorCanvasId,
+        widgetStyleHistory: this.widgetStyleHistory,
+      },
+    };
+
+    // Build base ToolRegistration[] from the profile-filtered tools.
+    // The registry holds the executors; we look them up by name.
+    const baseToolRegistrations: ToolRegistration[] = input.resolved.tools.map((t) => ({
+      definition: t,
+      executor: registry.getExecutor(t.name)!,
+    }));
+
+    const modeResult = await applyModes({
+      basePrompt: input.systemPrompt,
+      baseTools: baseToolRegistrations,
+      baseToolUseContext: undefined,
+      ctx: this.modeCtx,
+      resolved: this.resolvedModes,
+    });
+
+    // Register injected tool executors into the registry so the
+    // streaming executor can dispatch them. Tools that were already
+    // registered (e.g. by an earlier call) are skipped.
+    for (const tr of modeResult.tools) {
+      if (!registry.has(tr.definition.name)) {
+        registry.register(tr.definition, tr.executor);
+      }
+    }
+
+    // Update the LLM-facing tool list and system prompt with the
+    // mode-applied versions.
+    const tools = modeResult.tools.map((t) => t.definition);
+
+    // applyModes filters the direct tool list. Mirror those decisions in
+    // the catalog too, or a deferred target could bypass a mode block via
+    // tool_invoke. Router wrappers are infrastructure, so a mode allowlist
+    // does not need to name them; explicit mode blocks still apply.
+    const modeToolPolicy = this.resolvedModes.tools;
+    const modeAllowsTarget = (name: string): boolean =>
+      modeToolPolicy.overrideFilter || (
+        !modeToolPolicy.blocked.includes(name) &&
+        (modeToolPolicy.allowed === null || modeToolPolicy.allowed.includes(name))
+      );
+    const modeAllowsRouter = (name: string): boolean =>
+      modeToolPolicy.overrideFilter || !modeToolPolicy.blocked.includes(name);
+    const canCatalog =
+      isToolVisible('tool_catalog', 'eager', EMPTY_DISCOVERED, constraints) &&
+      modeAllowsRouter('tool_catalog');
+    const canInvoke =
+      isToolVisible('tool_invoke', 'eager', EMPTY_DISCOVERED, constraints) &&
+      modeAllowsRouter('tool_invoke');
+    const directNames = new Set(tools.map((tool) => tool.name));
+    const eligibleAfterMode = catalogView.snapshot.catalogEntries.filter((entry) => {
+      if (!catalogView.eligibleToolIds.has(entry.toolId) || !modeAllowsTarget(entry.definition.name)) return false;
+      if (entry.exposure !== 'deferred' || directNames.has(entry.definition.name)) return true;
+      return canCatalog && canInvoke;
+    });
+    catalogView.eligibleToolIds = new Set(eligibleAfterMode.map((entry) => entry.toolId));
+    catalogView.directToolIds = new Set(
+      eligibleAfterMode
+        .filter((entry) => directNames.has(entry.definition.name))
+        .map((entry) => entry.toolId),
+    );
+    const withRouters: Tool[] = [...tools];
+    if (canCatalog && !directNames.has('tool_catalog')) {
+      const definition = catalogView.snapshot.tools.find((tool) => tool.name === 'tool_catalog');
+      if (definition) withRouters.push(definition);
+    }
+    const hasRoutableDeferred = eligibleAfterMode.some(
+      (entry) => entry.exposure === 'deferred' && !directNames.has(entry.definition.name),
+    );
+    if (canInvoke && hasRoutableDeferred && !directNames.has('tool_invoke')) {
+      const definition = catalogView.snapshot.tools.find((tool) => tool.name === 'tool_invoke');
+      if (definition) withRouters.push(definition);
+    }
+
+    logger.info(
+      `[Agent] applyTurnModes: Applied ${this.resolvedModes.modes.length} mode modifier(s): ${this.resolvedModes.modes.map((m) => m.id).join(', ')}`,
+    );
+
+    return {
+      systemPrompt: modeResult.systemPrompt,
+      // A NEW object rather than a mutation: `resolved` is the run's
+      // resolved-tools decision and the legacy reads it by destructuring at
+      // `:2328`, so a caller holding the old reference must not see it change
+      // underneath. `catalogView` is deliberately the SAME reference -- the
+      // mirroring above mutates it in place, exactly as the legacy did, and
+      // `assembleTurn` is handed this one view for the whole run.
+      resolved: { ...input.resolved, tools: withRouters },
+    };
+  }
+
+
+  /**
    * Plan 610 A3-2b7 (S1): the catalog half of the schema-read protocol --
    * drop what compaction took out of provider-visible history.
    *
@@ -911,6 +1375,178 @@ export class duyaAgent implements AgentRuntime {
   }
 
   /**
+   * Plan 610 P4: establish a run, and hand back the handle that owns it.
+   *
+   * ## Why this is PUBLIC, and why it is a METHOD
+   *
+   * The fifth instance of a shape this file already documents: `claimInterTurn`
+   * ("PUBLIC, and it is the whole reason `_sweepInterTurn` exists"),
+   * `readModelClient`, `bindTurnOutputSink` and `beginTurnAssembly` each lift
+   * one thing out of `streamChat` so a run composition can bind the port that
+   * needs it. `abortController` was the last one standing: it is assigned in
+   * the generator's prologue and read by `buildTurnPipeline`, so outside the
+   * generator every turn assembly THREW ("no run in progress"), and the only
+   * way past it was to write the private field. Measured at this commit: 15
+   * cast sites across 12 harness files, one of which calls the cast "the honest
+   * boundary". There was no honest production path.
+   *
+   * A method and not a public field or a setter, because the run must be the
+   * thing that OWNS the controller. A writable field would let a caller install
+   * one with no run behind it -- the exact confusion the `buildTurnPipeline`
+   * throw exists to prevent -- and a setter would be the same hole with a
+   * method's name on it. Establishing the run and releasing it are ONE operation
+   * on ONE code path here, which is the argument `bindRunForkMarker` makes about
+   * why it is not a `setForkTurn` plus a `clearForkTurn`.
+   *
+   * ## One implementation, two callers
+   *
+   * `streamChat` calls THIS for its prologue. That is what keeps a run's setup
+   * from having two answers, and it is also why the abort controller is assigned
+   * in exactly one place in this file. The legacy's own prologue comments (plan
+   * 441 / 486 / 610 A3-2b2 / 498 / 550) moved onto this method with it.
+   *
+   * ## WHAT THIS OWNS, per symbol, and what it does NOT
+   *
+   *  - `abortController`: OWNED. Created here, exposed as `signal`, released by
+   *    `close`. This is the blocker this slice exists to remove.
+   *  - `currentTurnId`: OWNED. `options.turnId ?? null`, the value
+   *    `_pushDurable`'s journal emits read.
+   *  - `forkTurn`, `turnOutputSink`: OWNED as per-run RESETS. They are cleared
+   *    here (the legacy's per-run resets) and released again by `close`, because
+   *    a per-run marker that outlives its run on a long-lived agent is silent
+   *    cross-conversation corruption -- see `bindRunForkMarker`.
+   *  - `_consumeApprovedEffect`, `_turnAlwaysAllowTools`: OWNED. Plan 498's
+   *    per-turn approval ledger, which `buildPermissions` reads through
+   *    `readTurnAlwaysAllowTools`.
+   *  - `promptContexts` / `promptContextBlocks` / `injectedSkillParts`: the rail
+   *    is RESET here and released by `close`, and its PRODUCERS are owned by
+   *    `producePromptContextRail`, which this method's own caller invokes
+   *    between this reset and `beginTurnAssembly`'s drain. Plan 610 P6 lifted
+   *    them; before that the hook half was unreachable by construction
+   *    (`UserPromptSubmit` and `SessionStart` arrived through `dispatchHooks`,
+   *    a closure local reached by `yield*`, and a composition cannot consume a
+   *    `yield`) and the skill / plugin / mention half was module-level but
+   *    written inline in the generator's prologue. The reset here is what makes
+   *    the seam's ordering safe: `producePromptContextRail` ASSIGNS the rail
+   *    from `UserPromptSubmit` first, and that assignment replaces an empty
+   *    array only because of the reset below.
+   *  - `_resolveAgentProfile`: OWNED. It is a private method that reads the
+   *    profile service and config, needs nothing from the generator's frame, and
+   *    its answer is returned as `appliedProfile` so the driver can hand the
+   *    SAME value to `beginTurnAssembly` rather than resolving a second one.
+   *  - ORCHESTRATOR DISPATCH: the RESOLUTION is owned (`_readOrchestratorMode`,
+   *    reported as `RunHandle.orchestrator`) and so is the dispatch itself
+   *    (`orchestratorFramesFor`), because the dispatcher was already
+   *    frame-independent -- MEASURED on this commit it reads agent fields, the
+   *    resolved modifier, the prompt and the options, and needs nothing from the
+   *    generator's closure. What is still NOT owned is an ENGINE-SIDE
+   *    orchestrator port: `agent-runtime`'s `ports.ts` has no orchestrator member
+   *    at all, so the frames stay in the legacy's SSE vocabulary and a driver
+   *    ROUTES them instead of assembling a turn. A driver handed a non-null
+   *    `orchestrator` must not drive the turn assembly for that reason, and
+   *    `selectRunDriverLeg` (`process/run-composition.ts`) is where that route
+   *    is named.
+   *  - the LEGACY's other prologue work -- the hook bus, the deterministic
+   *    control commands, `beginTurnAssembly` itself -- stays in the generator.
+   *    Those are the generator's own, and this method does not pretend to reach
+   *    them.
+   *
+   * ## Why `close` releases even though `streamChat` never did
+   *
+   * Correcting the record, because it changes what `close` has to do: at this
+   * commit `streamChat` assigns `abortController` and NEVER clears it (measured
+   * -- the field's only other writes are a read and a local `const` elsewhere in
+   * the file). So the "already been cleared" half of `buildTurnPipeline`'s
+   * message describes a state the tree could not reach, and the run's controller
+   * leaked past the generator on a long-lived agent. `close` clears it, and the
+   * identity check means a handle whose run was superseded by another one
+   * releases nothing rather than detaching a live run's signal.
+   */
+  async beginRun(request: RunStartRequest): Promise<RunHandle> {
+    const { options, prompt } = request;
+
+    // Assigned FIRST and synchronously, before the profile await below: a
+    // caller that awaits `beginRun` and then drives a turn must find the run
+    // already established, and an exception thrown by the await must not leave
+    // a controller behind with no handle to release it.
+    const controller = new AbortController();
+    this.abortController = controller;
+    this.currentTurnId = options?.turnId ?? null;
+    // Plan 486: per-run fork marker. Cleared unconditionally so a plain run
+    // clears a previous run's marker by construction (see `bindRunForkMarker`).
+    this.forkTurn = null;
+    // Plan 610 A3-2b2: whoever starts a run OWNS its frames. A host binds its
+    // sink AFTER this returns, which is the order the legacy's entry uses.
+    this.turnOutputSink = null;
+    // Plan 498: this run's approval ledger and always-allow grants.
+    this._consumeApprovedEffect = options?.consumeApprovedEffect;
+    this._turnAlwaysAllowTools = new Set(options?.approvedAlwaysAllowTools ?? []);
+    // The hook-context rail is per-run. A finished run's delivered blocks would
+    // otherwise be RESTORED into the next run's first turn by the ensure-present
+    // re-projection in `_projectModelMessages`.
+    this.promptContexts = [];
+    this.promptContextBlocks = [];
+    this.injectedSkillParts.clear();
+
+    // Plan 550 step 2a-5: one `TurnAssembler.build` per run, handed to
+    // `beginTurnAssembly` by the driver rather than rebuilt there.
+    const turnContext = this.assembleTurnContext(options, prompt);
+    // Resolve agent profile early so mode dispatch can use promptSystem for
+    // auto-resolution. Remembered for turn-end consumers (e.g. bot-pipeline
+    // title skip), exactly as the legacy's prologue did.
+    const appliedProfile = await this._resolveAgentProfile(options);
+    this.lastAppliedAgentProfile = appliedProfile;
+
+    let closed = false;
+    return {
+      turnId: this.currentTurnId,
+      turnContext,
+      appliedProfile,
+      requestedMode: options?.mode || 'normal',
+      // The request ITSELF, not a re-read of `options`/`prompt`: the two
+      // locals above are this method's own destructuring of it, and an
+      // orchestrator dispatch that re-derived either would be a second account
+      // of the turn's input. See `RunHandle.request`.
+      request,
+      orchestrator: this._readOrchestratorMode(options),
+      signal: controller.signal,
+      controller,
+      abort: (reason?: unknown) => { controller.abort(reason); },
+      close: () => {
+        // Idempotent, and identity-checked: a handle closed twice, or closed
+        // after another run took the field, must not detach a live run.
+        if (closed) return;
+        closed = true;
+        if (this.abortController === controller) this.abortController = null;
+        this.currentTurnId = null;
+        this.forkTurn = null;
+        this.turnOutputSink = null;
+        this._consumeApprovedEffect = undefined;
+        this._turnAlwaysAllowTools = new Set();
+        this.promptContexts = [];
+        this.promptContextBlocks = [];
+        this.injectedSkillParts.clear();
+      },
+    };
+  }
+
+  /**
+   * The orchestrator-paradigm mode this run asked for, or `null`.
+   *
+   * Private because it is a lookup, not a decision any caller should make: the
+   * answer is a property of `options.mode` plus the registry, and a caller that
+   * recomputed it could disagree with the handle it was handed. It is separated
+   * from `beginRun` only so the registry read sits next to the comment that
+   * explains why it is reported but never dispatched.
+   */
+  private _readOrchestratorMode(options?: ChatOptions): ModeModifier | null {
+    const requestedMode = options?.mode || 'normal';
+    if (requestedMode === 'normal') return null;
+    const mod = modeModifierRegistry.get(requestedMode);
+    return mod?.orchestrator ? mod : null;
+  }
+
+  /**
    * Plan 610 A3-2b8 (S2): establish the RUN-scoped half of turn assembly.
    *
    * ## One implementation, two callers
@@ -948,13 +1584,70 @@ export class duyaAgent implements AgentRuntime {
   async beginTurnAssembly(request: RunAssemblyRequest): Promise<RunTurnAssembly> {
     const { options, prompt, appliedProfile, publisher, turnContext } = request;
 
-    const resolved = await this._resolveTools(options, appliedProfile);
-    const { registry, catalogView, tools: resolvedTools } = resolved;
+    const resolvedBase = await this._resolveTools(options, appliedProfile);
+    const { registry, catalogView } = resolvedBase;
 
-    let systemPrompt = await this._buildSystemPrompt(resolvedTools, options, appliedProfile);
+    let systemPrompt = await this._buildSystemPrompt(resolvedBase.tools, options, appliedProfile);
     systemPrompt = systemPrompt
       ? `${systemPrompt}\n\n${TOOL_GROUP_PROGRESS_INSTRUCTIONS}`
       : TOOL_GROUP_PROGRESS_INSTRUCTIONS;
+
+    // Plan 610 A3-2b9 (S4b-2): the `options.messages` fallback, MOVED here.
+    // It used to run at `:2676`, inside `streamChat` and AFTER this seam, and it
+    // seeds the TRANSCRIPT -- so a projection performed in the seam would have
+    // seen an empty timeline and missed every message the CLI / harness path
+    // passes. Run-scoped transcript seeding is this seam's job anyway.
+    if (this.messages.length === 0 && options?.messages?.length) {
+      this.setMessages([...options.messages]);
+    }
+
+    // Plan 610 A3-2b9 (S4b-2): the model-boundary projection, and it runs
+    // BEFORE the modes. That order is the legacy's exactly (`:2684` projected,
+    // then `applyModes` layered prefixes on the projected base), and it is
+    // load-bearing rather than cosmetic: `applyTurnModes` stores the PRE-mode
+    // base that `refreshTurnSystemPrompt` rebuilds from every turn, so
+    // projecting afterwards would store an unprojected base and the per-turn
+    // refresh would drop the `## Conversation Context` block from turn 2 on.
+    const projected = this._projectModelMessages(systemPrompt, { injectHookContexts: true });
+    const projection: TurnModelProjection = {
+      systemPrompt: projected.systemPromptContent,
+      messages: projected.messages,
+    };
+
+    // Plan 610 A3-2b9 (S4b-1): the run's mode modifiers, ON the projected base.
+    // The legacy's inline block at `:2457` was removed and it reads these values
+    // off this handle instead, so there is one implementation and one call site.
+    const moded = await this.applyTurnModes({
+      options,
+      turnContext,
+      systemPrompt: projection.systemPrompt,
+      resolved: resolvedBase,
+    });
+    systemPrompt = moded.systemPrompt;
+    // Plan 610 D1: the private progress tool, MOVED here from `streamChat`.
+    //
+    // It used to be appended to the loop's OWN `tools` local, which is created
+    // AFTER this method has already returned `resolved.tools` on the handle and
+    // seeded `currentTools` from it. So it reached neither the surface the seam
+    // advertises nor the visibility guard that snapshots the same list -- an
+    // engine-driven run could neither offer the tool nor accept its call.
+    //
+    // AFTER `applyTurnModes`, deliberately: that call pairs every tool with
+    // `registry.getExecutor(name)!`, and this tool is deliberately NOT registered
+    // (the loop intercepts its calls with `readProgressUpdateCall` before they
+    // reach a dispatcher). Appending earlier would trip that non-null assertion.
+    let progressToolName = PROGRESS_UPDATE_TOOL_NAME;
+    while (moded.resolved.tools.some((tool) => tool.name === progressToolName)) {
+      progressToolName = `duya_${progressToolName}`;
+    }
+    // A NEW `resolved`, not a mutation of the mode-applied one: the mode block
+    // returns a fresh object precisely so a caller holding the old reference
+    // cannot see it change underneath, and this is the same shape.
+    const resolved: ResolvedTurnTools = {
+      ...moded.resolved,
+      tools: [...moded.resolved.tools, { ...PROGRESS_UPDATE_TOOL, name: progressToolName }],
+    };
+    const resolvedTools: Tool[] = resolved.tools;
 
     const { canUseTool } = buildPermissions(
       {
@@ -1026,7 +1719,16 @@ export class duyaAgent implements AgentRuntime {
       resolved,
       turnContext,
       tools: resolvedTools,
+      // The SAME closure handed to `assembleTurn` below, not a rebuild. A host
+      // that consulted a second gate over the same session mode would be
+      // deciding permissions from a state machine the pipelines never see.
+      canUseTool: guardedCanUseTool,
+      progressToolName,
       systemPrompt,
+      projection,
+      projectTurnMessages: (): Message[] =>
+        // The prompt half is discarded on purpose -- see the interface's doc.
+        this._projectModelMessages('', { injectHookContexts: true }).messages,
       refreshDeclaredTools: () => {
         declaredToolsForRequest = new Set(currentTools.map((t) => t.name));
         return declaredToolsForRequest;
@@ -1051,6 +1753,251 @@ export class duyaAgent implements AgentRuntime {
         return assembly;
       },
     };
+  }
+
+  /**
+   * Plan 610 P6: fill this run's prompt-context rail, in the legacy's order.
+   *
+   * ## What this lifts, and why it had to be lifted
+   *
+   * `streamChat`'s prologue ran seven producers into
+   * `promptContexts` / `promptContextBlocks` / `injectedSkillParts`, and every
+   * one of them was unreachable from outside the generator:
+   *
+   *  - the hook half (`UserPromptSubmit`, `SessionStart`) arrived through
+   *    `dispatchHooks`, a closure local holding a `ConfigHooksRunner` built per
+   *    `streamChat` and reached by `yield*`. A composition cannot consume a
+   *    `yield`, so those two were unreachable BY CONSTRUCTION.
+   *  - the other five (connector activation, skill injections, skill
+   *    suggestions, plugin activation, agent @-mentions) are module-level calls
+   *    that needed only `options` / `promptText` / `turnContext`, all of which
+   *    the run handle already carries -- they were unreachable only because they
+   *    were written inline in the prologue.
+   *
+   * The consequence was measured rather than argued: on a real run with a
+   * registry-free producer the legacy path put 1 plugin-activation row on the
+   * provider boundary and the engine path put 0, and the run logs agreed
+   * (`1 agent messages -> 2 model messages` against `1 -> 1`).
+   *
+   * The DRAIN half needed no new seam: `beginTurnAssembly` already projects with
+   * `injectHookContexts: true`, so a driver that calls THIS first and
+   * `beginTurnAssembly` second gets the same delivered blocks the legacy got.
+   * That is why this is a FILL seam and not a fill+drain pair -- the second
+   * half was already public and the first half was the whole gap.
+   *
+   * ## The ORDER is load-bearing, and it is the legacy's
+   *
+   * `UserPromptSubmit` ASSIGNS `this.promptContexts = submitCtx.contexts.slice()`
+   * where the other six PUSH. That asymmetry is safe here and only because of
+   * two facts established by reading the prologue rather than assuming them:
+   *
+   *  1. It runs FIRST, before every other producer.
+   *  2. `beginRun` reset the rail to `[]` immediately before, and it resets
+   *     `promptContextBlocks` alongside it.
+   *
+   * So the assignment replaces an empty rail, and the six pushes accumulate
+   * after it. A driver that produced in a DIFFERENT order -- say skills first,
+   * then `UserPromptSubmit` -- would have the assignment silently discard the
+   * earlier producer, which is precisely the silent class of defect this plan
+   * exists to prevent. The order is therefore fixed INSIDE this method rather
+   * than left to the caller: there is no argument a caller can pass to reorder
+   * it, and `UserPromptSubmit` cannot be invoked standalone.
+   *
+   * ## One implementation, two callers
+   *
+   * `streamChat` calls THIS for its prologue, exactly as it calls `beginRun` and
+   * `beginTurnAssembly`. Nothing is reimplemented at the call site, so there is
+   * no second answer to "what does this run inject".
+   *
+   * ## The hook runner is THIS method's, not the generator's
+   *
+   * The legacy's `configHooks` runner is built with an `onHookInvoked` callback
+   * that pushes SSE `agent_progress` frames into a closure buffer the generator
+   * `yield`s. A caller outside the generator cannot reach that buffer, so this
+   * method builds its own `ConfigHooksRunner` and returns the frames it
+   * produced through `frames` for the caller to route. `HookInvokedEvent.seq`
+   * is minted per runner, so the two runners number independently -- which is
+   * why the frames are RETURNED rather than pushed onto the legacy's buffer:
+   * sharing the generator's buffer would need the generator's closure.
+   *
+   * `pendingHookMessages` is pushed here for the same reason the generator
+   * pushes it: that field is on the agent, so both paths reach the same drain.
+   *
+   * ## What it does NOT do
+   *
+   * It does not drain, project, or build a turn: those are `beginTurnAssembly`'s
+   * and `_projectModelMessages`' jobs and they are already reachable. It does not
+   * dispatch any hook the prologue did not already dispatch, and it does not
+   * resolve a profile, a mode or an abort source -- `RunHandle` carries all
+   * three and this method reads none of them.
+   */
+  async producePromptContextRail(run: RunHandle): Promise<SSEEvent[]> {
+    const { options, prompt } = run.request;
+    const turnContext = run.turnContext;
+    const promptText = typeof prompt === 'string' ? prompt : '';
+    const sessionId = turnContext.sessionId ?? '';
+
+    // Frames the two hook dispatches emit. Returned to the caller rather than
+    // yielded, because a composition cannot consume a `yield`.
+    const frames: SSEEvent[] = [];
+    const runner = new ConfigHooksRunner({
+      cwd: turnContext.workingDirectory ?? process.cwd(),
+      vars: { sessionId, cwd: turnContext.workingDirectory ?? '', prompt: promptText },
+      onHookInvoked: (hookEvent) => {
+        frames.push({
+          type: 'agent_progress',
+          data: { type: 'hook_invoked', hookEvent, sessionId },
+        });
+        // Same durability rule as the generator's own callback: verifier-only
+        // hooks carry no additionalContext and persisting them produced blank
+        // `role:'system'` rows.
+        const hookContext = hookEvent.additionalContext;
+        if (typeof hookContext === 'string' && hookContext.trim().length > 0) {
+          this.pendingHookMessages.push(buildHookMessage(hookEvent, sessionId));
+        }
+      },
+    });
+
+    // Fail-open, matching the legacy's `dispatchHooks`: a hook that throws logs
+    // WARN and yields `null` rather than failing the run.
+    const dispatch = async (
+      event: import('../hooks/types.js').HookEvent,
+      input: EventHookInput,
+      targets?: EventHookMatcherTargets,
+    ): Promise<EventHookRunResult | null> => {
+      try {
+        return await runner.run(event, input, targets);
+      } catch (err) {
+        logger.warn(
+          `[Hooks] ${event} dispatch failed (skipped): ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return null;
+      }
+    };
+
+    // 1. UserPromptSubmit -- the ONLY producer that ASSIGNS. First because
+    //    `beginRun` reset the rail and last would mean discarding the six
+    //    below. See the header's "The ORDER is load-bearing".
+    const submitCtx = await dispatch('UserPromptSubmit', {
+      session_id: sessionId,
+      cwd: turnContext.workingDirectory ?? '',
+      hook_event_name: 'UserPromptSubmit',
+      prompt: promptText,
+    });
+    if (submitCtx && submitCtx.contexts.length > 0) {
+      this.promptContexts = submitCtx.contexts.slice();
+      // Fresh run: previous run's delivered blocks must not leak into this
+      // one's restore set.
+      this.promptContextBlocks = [];
+      logger.info(
+        `[Hooks] UserPromptSubmit produced ${submitCtx.contexts.length} context line(s) - queued for first-turn injection`,
+      );
+    }
+
+    // 2. SessionStart -- routed through the same transient rail, wrapped in a
+    //    provenance envelope so the model can attribute the block.
+    const startCtx = await dispatch('SessionStart', {
+      session_id: sessionId,
+      cwd: turnContext.workingDirectory ?? '',
+      hook_event_name: 'SessionStart',
+      source: 'startup',
+    });
+    if (startCtx && startCtx.contexts.length > 0) {
+      logger.info(`[Hooks] SessionStart produced ${startCtx.contexts.length} context line(s)`);
+      for (let i = 0; i < startCtx.contexts.length; i += 1) {
+        this.promptContexts.push(
+          renderHookContextEnvelope(
+            { event: 'SessionStart', hookName: 'session-start', seq: i },
+            startCtx.contexts[i],
+          ),
+        );
+      }
+    }
+
+    // 3. Connector activation -- the user @-mentioned apps in the composer.
+    if (options?.mentionedProviders?.length) {
+      const descriptors = getCachedAppConnectionDescriptors();
+      const injection = collectConnectorActivationInjection(options.mentionedProviders, descriptors);
+      if (injection) {
+        this.promptContexts.push(`<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`);
+        logger.info(`[Agent] Connector activation: ${options.mentionedProviders.join(', ')}`);
+      }
+    }
+
+    // 4. Skill injections -- `/skill-name` mentions plus handwritten `$name`
+    //    and `skill://name` references in the raw prompt.
+    if (options?.mentionedSkills?.length || promptText) {
+      const explicitSkills = extractExplicitSkillMentions(promptText);
+      const mergedMentionedSkills = mergeSkillMentionSources(
+        options?.mentionedSkills ?? [],
+        explicitSkills,
+      );
+      const skillInjections = await collectSkillInjections(mergedMentionedSkills);
+      // Plan 579: attribute the transient bodies' token cost per skill
+      // (cleared per run, matching promptContextBlocks' lifecycle).
+      this.injectedSkillParts.clear();
+      for (const injection of skillInjections) {
+        const rendered = `<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`;
+        this.promptContexts.push(rendered);
+        if (injection.envelope === 'skill' && injection.skillName) {
+          this.injectedSkillParts.set(
+            `skill:${injection.skillName}`,
+            estimateContextTextTokens(rendered),
+          );
+        }
+      }
+      if (skillInjections.length > 0) {
+        logger.info(`[Agent] Skill injection: ${skillInjections.length} skill fragment(s) queued`);
+      }
+    }
+
+    // 5. Skill suggestion -- per-turn skill-match reminder. Fail-closed:
+    //    hidden / disabled / pending skills are never suggested, and skills
+    //    already injected above are excluded.
+    if (promptText) {
+      const excludeSkills = new Set(options?.mentionedSkills ?? []);
+      const skillHits = matchSkillsForPrompt(promptText, {
+        workingDirectory: turnContext.workingDirectory ?? undefined,
+        exclude: excludeSkills,
+      });
+      const skillSuggestion = buildSkillSuggestionInjection(skillHits);
+      if (skillSuggestion) {
+        this.promptContexts.push(`<${skillSuggestion.envelope}>\n${skillSuggestion.body}\n</${skillSuggestion.envelope}>`);
+        logger.info(
+          `[Agent] Skill suggestion: ${skillHits.length} skill(s) matched (${skillHits.map((h) => h.skill.name).join(', ')})`,
+        );
+      }
+    }
+
+    // 6. Plugin activation -- the `@` popover lists installed plugins.
+    if (options?.mentionedPlugins?.length) {
+      const descriptors = getCachedAppConnectionDescriptors();
+      const injection = collectPluginInjections(options.mentionedPlugins, descriptors);
+      if (injection) {
+        this.promptContexts.push(`<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`);
+        logger.info(`[Agent] Plugin activation: ${options.mentionedPlugins.map((p) => p.pluginId).join(', ')}`);
+      }
+    }
+
+    // 7. Agent @-mentions in the raw text, parsed against the config agent
+    //    roster minus the session's own agent. Fail-open.
+    if (promptText) {
+      try {
+        const agents = await readConfigAgents();
+        const roster = Object.entries(agents)
+          .filter(([id]) => id !== options?.agentProfileId)
+          .map(([id, entry]) => ({ id, name: entry.name || id }));
+        const mentionedContext = buildMentionedAgentsContext(parseAgentMentions(promptText, roster));
+        if (mentionedContext) {
+          this.promptContexts.push(mentionedContext);
+          logger.info('[Agent] Injected mentioned-agents context into first turn');
+        }
+      } catch (err) {
+        logger.warn(`[Agent] Agent mention parse skipped: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    return frames;
   }
 
   // ==========================================================================
@@ -1111,6 +2058,105 @@ export class duyaAgent implements AgentRuntime {
   /** The bound sink, or `null`. Diagnostics and assertions. */
   readTurnOutputSink(): TurnOutputSink | null {
     return this.turnOutputSink;
+  }
+
+  /**
+   * Set (or CLEAR, with `null`) the fork marker for the run that is starting.
+   *
+   * Plan 610 D1. `_commitDurable` already applies `mergeThreadMetadata` to
+   * every non-user durable row while `forkTurn` is set (`:4706-4711`), and the
+   * engine reaches that same function through `recordTurnAssistantMessage`
+   * (`:1487`) and `recordTurnToolResult` (`:1436`). So the tagging mechanism is
+   * PRESENT on the engine path and only its INPUT was missing: `forkTurn` is
+   * written at `:3055`, inside `streamChat`, which the engine never calls. This
+   * is the same shape as `claimInterTurn` and the A3-2b2 lifted effects: lift
+   * the one assignment a composition needs onto a method it can call. It is NOT
+   * a second tagging mechanism -- duplicating the merge here is exactly the
+   * double-tag the plan has spent slices preventing.
+   *
+   * ## WHY ONE METHOD AND NOT A `setForkTurn` PLUS A `clearForkTurn`
+   *
+   * Because the load-bearing failure is a LEAK, and a leak is what a caller
+   * gets from forgetting a SECOND call rather than from passing the wrong value
+   * to the first. `forkTurn` lives on a long-LIVED agent (the field doc at
+   * `:4539-4547` says the legacy nulls it at the top of every `streamChat`
+   * precisely because the agent outlives the run), so one forked run that fails
+   * to clear would branch EVERY later run on that instance -- silent,
+   * cross-conversation data corruption, because a forked row is filtered out
+   * of the main projection by `projectModelMessages`
+   * (`message-projectors.ts:84`) and simply vanishes from the user's history.
+   *
+   * With ONE method, "set" and "clear" are the same operation on the same code
+   * path: there is no second call to forget, and `null` needs no argument to
+   * express. The composition (`run-composition.ts`) therefore calls this
+   * UNCONDITIONALLY at run start with `host.runFork ?? null`, so every run --
+   * forked or not -- performs the assignment, and a plain run clears by
+   * construction. The residual risk is a caller that drives the engine without
+   * going through the composition; that caller also has no marker to set, so
+   * the field stays null and the run is untagged rather than mis-tagged.
+   *
+   * The argument is COPIED field by field, so a caller mutating its own object
+   * afterwards cannot retarget a run already under way.
+   */
+  bindRunForkMarker(marker: { readonly replyToId: string; readonly userId: string } | null): void {
+    this.forkTurn = marker === null ? null : { replyToId: marker.replyToId, userId: marker.userId };
+  }
+
+  /**
+   * The fork marker currently in force, or `null`. Diagnostics and assertions.
+   *
+   * PUBLIC for the reason `readTurnOutputSink` is: the claim a leak test makes
+   * is about this field's value, so reading it IS the probe rather than a way
+   * around the boundary. It is the only way to assert the per-run reset
+   * directly -- an assertion over durable rows alone would also pass on a run
+   * that simply wrote no rows.
+   */
+  readRunForkMarker(): { readonly replyToId: string; readonly userId: string } | null {
+    return this.forkTurn === null ? null : { replyToId: this.forkTurn.replyToId, userId: this.forkTurn.userId };
+  }
+
+  /**
+   * Plan 610: the model-boundary rows THIS run wrote, and nothing else.
+   *
+   * ## The starvation this answers
+   *
+   * A forked run's rows are tagged `branched` by `_commitDurable`, and
+   * `projectModelMessages` drops every branched row -- which is exactly what
+   * keeps a fork out of the main transcript. The engine re-projects ONCE PER
+   * TURN through `beginTurnAssembly`'s `projectTurnMessages`, so on turn 2 the
+   * projection removed the tool result turn 1 had just produced, and the model
+   * was asked to continue without ever having seen it. The legacy never hit
+   * this because it projects once per `streamChat` and pushes into one working
+   * array, so its forked turn 2 still carried the row (measured:
+   * `["user","user","assistant","tool"]`).
+   *
+   * ## Why a SEPARATE method rather than a change to `projectTurnMessages`
+   *
+   * Because the main projection must keep dropping those rows, and one
+   * projection cannot be two answers at once. The scope belongs to whoever
+   * knows which wire it is building, and the only caller that wants a scoped
+   * one is the engine's per-turn re-projection. The legacy's own projections
+   * -- `beginTurnAssembly`'s run-scoped snapshot, `sideQuestion` -- keep calling
+   * the unscoped private, so their behaviour is unchanged.
+   *
+   * ## What it deliberately does NOT return
+   *
+   * The fork's opening user row, which is tagged against the branch root
+   * rather than against itself. That is the right answer, not a gap: the
+   * engine supplies that row as the run's `input.prompt`, and returning it here
+   * too would send the same user turn twice.
+   *
+   * ## One projector, so there is nothing to drift
+   *
+   * The rows go through `projectModelMessages` itself with the scope option, so
+   * they carry the same role mapping and the same `threadMeta` strip as a row
+   * in the main projection. PUBLIC for the reason `readRunForkMarker` is: the
+   * composition is what knows a run is forked, and reading a run's own rows is
+   * the other half of that claim.
+   */
+  projectRunOwnModelMessages(forkUserId: string): Message[] {
+    const context = buildAgentContext(this.timeline.snapshot());
+    return [...projectModelMessages(context.messages, { runBranch: { forkUserId } }).messages];
   }
 
   /**
@@ -1199,6 +2245,164 @@ export class duyaAgent implements AgentRuntime {
     };
     if (input.usage !== undefined) (row as AssistantMessage).usage = input.usage;
     this._commitDurable(row);
+  }
+
+  /**
+   * The turn's OWN prompt user row: built, fork-tagged, committed durably.
+   *
+   * PUBLIC, and it exists because this row was the one durable write with no
+   * reachable producer outside the legacy generator. Measured on plan 610 P7:
+   * `Journal.userMsgAdded` had exactly ONE production caller in the package --
+   * the `role === 'user'` arm of `_commitDurable` -- and `_commitDurable` was
+   * reachable only through `_pushDurable`, whose four call sites are all inside
+   * `streamChat`. The prompt row was the first of them. `TurnOutputPort` has no
+   * user-row arm, so the engine had no way to ask for one, and
+   * `beginTurnAssembly` seeds only `options.messages` on an empty timeline. The
+   * capability was PRESENT and starved, exactly as `forkTurn` was before
+   * `bindRunForkMarker`: this is that lift, for the same class of problem.
+   *
+   * ## Why the transcript is a PARAMETER
+   *
+   * Because the duplicate-suppression refresh MUTATES the row it suppresses
+   * against -- that is what makes a pre-loaded row pick up this run's
+   * `displayContent` and attachments -- and the row it has to mutate is the
+   * caller's, not a projection this method took for itself. `this.messages` is
+   * recomputed by `projectTimelinePersistenceMessages` on every read, so
+   * mutating what IT returns would refresh a copy and leave the caller's
+   * transcript holding the stale row.
+   *
+   * So this is `claimInterTurn`'s exact shape: the legacy owns its array and
+   * hands it over, and a caller that has none hands over a fresh one. The
+   * asymmetry is a consequence of who owns the array, and it is the same one
+   * that method documents.
+   *
+   * ## Why the fork marker is RESOLVED here and not supplied
+   *
+   * Because the marker is a fact about the committed transcript, not an input.
+   * `resolveReplyMeta` validates the target against `collectMessageIds` of the
+   * timeline as committed BEFORE this row lands, and silently strips an unknown
+   * target -- so a caller-supplied marker could tag a run against a row that
+   * does not exist, or one a later commit invalidates. The legacy computed it
+   * here and nowhere else; keeping the computation here is what makes the two
+   * paths one implementation instead of two answers.
+   *
+   * Note the ORDER this implies: `_commitDurable` tags NON-user rows from
+   * `forkTurn`, and this method is what SETS `forkTurn`, from the row it is
+   * about to commit. So a forked run's opening row carries the branch metadata
+   * at construction and every later row of that run inherits it -- and a plain
+   * run leaves it null, exactly as before.
+   *
+   * ## What `committed: false` means
+   *
+   * Duplicate suppression, which is the legacy's own rule: a transcript whose
+   * last row is a user message with the same model-facing content is a
+   * transcript that was pre-loaded from the database before this run started,
+   * and appending again would show the user their message twice. There is no
+   * row to commit, so the existing row is refreshed in place and ITS id is
+   * returned, because the caller's `runtimePromptMessageId` has to name the row
+   * the model is answering either way.
+   */
+  commitTurnPromptUserRow(input: {
+    readonly prompt: string | MessageContent[];
+    /**
+     * The caller's transcript. The committed row is pushed onto it, and the
+     * duplicate rule reads -- and refreshes -- its last entry.
+     */
+    readonly messages: Message[];
+    readonly seqIndex: number;
+    /** Host-minted identity for the row, when the caller has one. */
+    readonly clientMsgId?: string;
+    readonly displayContent?: string;
+    readonly attachments?: ChatOptions['attachments'];
+    /** A wake run's prompt is model context, not user chat (plan 497). */
+    readonly wakeRun?: boolean;
+    readonly replyToId?: string;
+    readonly branched?: boolean;
+  }): PromptUserRowCommit {
+    const { messages } = input;
+    const lastMessage = messages[messages.length - 1];
+    const persistedPromptContent = input.prompt as string | MessageContent[];
+    const displayContent = input.displayContent !== undefined ? input.displayContent : undefined;
+
+    if (!this._isDuplicatePrompt(lastMessage, input.prompt)) {
+      const userMessage = {
+        id: input.clientMsgId ?? crypto.randomUUID(),
+        role: 'user',
+        content: persistedPromptContent,
+        displayContent: displayContent !== undefined ? displayContent : undefined,
+        timestamp: Date.now(),
+        seq_index: input.seqIndex,
+        attachments: input.attachments,
+        ...(input.wakeRun ? { source: 'system' as const } : {}),
+      } as Message;
+      // Plan 486 2.1/2.2: fork/reply creation rule. The target must exist in
+      // this session's timeline, checked against entries ALREADY committed --
+      // this row is not appended yet, which is what makes a self-referential
+      // fork impossible.
+      const replyMeta = resolveReplyMeta(
+        input.replyToId,
+        input.branched,
+        collectMessageIds(this.timeline.snapshot()),
+      );
+      if (replyMeta) {
+        userMessage.metadata = mergeThreadMetadata(userMessage.metadata, replyMeta);
+        // Plan 486 2.3: a branched fork opens an active fork turn -- every row
+        // this turn produces afterwards is tagged branched (see
+        // `_commitDurable`). A quote reply leaves the marker null.
+        if (replyMeta.branched === true && userMessage.id) {
+          this.forkTurn = {
+            replyToId: replyMeta.replyToId ?? userMessage.id,
+            userId: userMessage.id,
+          };
+        }
+      }
+      // `_pushDurable`, not `_commitDurable`: the array push and the durable
+      // write are ONE operation on this path, exactly as they were in the
+      // legacy, so the row the caller reads back is the row that was written.
+      this._pushDurable(messages, userMessage);
+      return { committed: true, messageId: userMessage.id ?? null };
+    }
+
+    if (lastMessage) {
+      lastMessage.seq_index = input.seqIndex;
+      lastMessage.content = persistedPromptContent;
+      lastMessage.displayContent = displayContent;
+      if (input.attachments && input.attachments.length > 0) {
+        lastMessage.attachments = input.attachments;
+      }
+      return { committed: false, messageId: lastMessage.id ?? null };
+    }
+    return { committed: false, messageId: null };
+  }
+
+  /**
+   * True when `candidate` is this run's prompt already on the transcript.
+   *
+   * The legacy's rule, unchanged: only the model-facing `text` blocks are
+   * compared, both sides are stripped of pasted-content markers and trimmed,
+   * and the raw-trim comparison is kept as a second acceptance so a prompt
+   * whose only difference is the marker still suppresses.
+   */
+  private _isDuplicatePrompt(candidate: Message | undefined, prompt: string | MessageContent[]): boolean {
+    if (!candidate || candidate.role !== 'user') return false;
+    const compareContent = typeof prompt === 'string'
+      ? prompt
+      : (Array.isArray(prompt)
+          ? prompt.filter((b: unknown) => (b as Record<string, unknown>).type === 'text')
+              .map((b: unknown) => (b as Record<string, string>).text || '')
+              .join('')
+          : '');
+    const candidateContent = typeof candidate.content === 'string'
+      ? candidate.content
+      : (Array.isArray(candidate.content)
+          ? (candidate.content as Array<{ type: string; text?: string }>)
+              .filter((b) => b.type === 'text')
+              .map((b) => b.text || '')
+              .join('')
+          : '');
+    const normalizedCandidate = stripPastedContentMarkers(candidateContent).trim();
+    const normalizedCompare = stripPastedContentMarkers(compareContent).trim();
+    return normalizedCandidate === normalizedCompare || candidateContent.trim() === compareContent.trim();
   }
 
   /**
@@ -1968,2242 +3172,6 @@ export class duyaAgent implements AgentRuntime {
    */
   private memoryRootPath(): string | null {
     return getDuyaMemoryRoot()
-  }
-
-  /**
-   * Stream chat with tool execution loop
-   * @param prompt User input
-   * @param options Chat options
-   * @yields SSE events including tool_use, tool_result, text, turn_start, and done
-   */
-  async *streamChat(
-    prompt: string | MessageContent[],
-    options?: ChatOptions
-  ): AsyncGenerator<SSEEvent, void, unknown> {
-    this.abortController = new AbortController();
-    // Plan 441: per-turn journal propagation. _pushDurable reads this so
-    // journal emits carry the turn id without each call site threading it
-    // through. Reset on every streamChat so a follow-up turn gets a fresh
-    // value rather than the previous turn's leftover.
-    this.currentTurnId = options?.turnId ?? null;
-    // Plan 486: reset the fork-turn marker every streamChat call (see the
-    // field doc for semantics).
-    this.forkTurn = null;
-    // Plan 610 A3-2b2: the legacy OWNS this run's frames, so any turn-output
-    // sink a caller bound beforehand is taken away here.
-    //
-    // Not about duplication -- nothing in this generator publishes to the sink,
-    // so a frame has one writer either way (see the seam block's header). This
-    // is the LIFETIME half: the agent outlives the run, and a sink is a per-run
-    // object, so a binding that survived here would leave a later legacy turn
-    // addressing a finished run's receiver.
-    //
-    // Same placement and same reason as the two resets above: whoever starts the
-    // generator owns the turn.
-    this.turnOutputSink = null;
-    // Plan 498: per-turn approval-ledger consume + always-allow grants.
-    this._consumeApprovedEffect = options?.consumeApprovedEffect;
-    this._turnAlwaysAllowTools = new Set(options?.approvedAlwaysAllowTools ?? []);
-    // Plan 550 step 2a-5: assemble the per-turn TurnContext once at
-    // the top of every streamChat call. The current generator body
-    // still reads from the local fields above; follow-up commits
-    // replace those reads with `turnContext.xxx` one field at a time
-    // so the diff stays reviewable. Until then the local store is
-    // the source of truth.
-    const turnContext = this.assembleTurnContext(options, prompt);
-    logger.info(`[Agent] streamChat started, sessionId=${turnContext.sessionId ?? 'null'}, model=${this._model}, provider=${this.provider}, turnId=${this.currentTurnId ?? 'null'}`);
-
-    // Plan 426 follow-up: configured [hooks] events dispatched outside the
-    // loop bus (SessionStart / UserPromptSubmit / PreToolUse / Stop / 鈥?.
-    // One runner per streamChat call; config is read fresh so edits
-    // hot-reload on the next run. Fail-open: a throwing/failing hook never
-    // breaks the run (each dispatch is individually wrapped below).
-    const promptText = typeof prompt === 'string' ? prompt : '';
-    // Plan 552: deterministic /goal control commands (status/pause/resume/
-    // clear) never reach the LLM — the tracker is mutated directly and the
-    // turn is answered synthetically. `/goal <objective>` (start) still
-    // falls through so the model calls goal_start and begins working.
-    if (promptText.startsWith('/goal') && isGoalControlCommand(promptText)) {
-      const goalResult = await handleGoalCommand(promptText, {
-        sessionId: turnContext.sessionId ?? undefined,
-        workingDirectory: turnContext.workingDirectory ?? undefined,
-      });
-      yield { type: 'text', data: goalResult.reply };
-      yield { type: 'done', reason: 'completed' };
-      return;
-    }
-    // Plan 554: deterministic /export /copy /transcript — transcript
-    // plumbing never reaches the LLM. /copy rides the chat:clipboard_write
-    // SSE event so the renderer performs the clipboard write.
-    if (isTranscriptControlCommand(promptText)) {
-      const transcriptResult = handleTranscriptCommand(promptText, {
-        messages: this.getMessages(),
-        sessionId: turnContext.sessionId ?? undefined,
-        workingDirectory: turnContext.workingDirectory ?? undefined,
-      });
-      if (transcriptResult.clipboardText && turnContext.sessionId) {
-        sendEvent(buildClipboardWriteEvent(
-          turnContext.sessionId,
-          transcriptResult.clipboardText,
-        ) as unknown as Record<string, unknown>);
-      }
-      yield { type: 'text', data: transcriptResult.reply };
-      yield { type: 'done', reason: 'completed' };
-      return;
-    }
-    // Plan 437: build a self-referential emitter so the runner can fire
-    // `agent_progress` SSE events with `type: 'hook_invoked'`. The
-    // emitter queues events into a buffer that's flushed alongside the
-    // other yields further down (avoids interleaving issues with the
-    // generator control flow). The closure captures the agent's
-    // streaming surface; nested `yield` would require extracting each
-    // call site into its own helper, which we avoid here for diff size.
-    const pendingHookEvents: SSEEvent[] = [];
-    const configHooks = new ConfigHooksRunner({
-      cwd: turnContext.workingDirectory ?? process.cwd(),
-      vars: {
-        sessionId: turnContext.sessionId ?? '',
-        cwd: turnContext.workingDirectory ?? '',
-        prompt: promptText,
-      },
-      onHookInvoked: (hookEvent) => {
-        // Yield-equivalent: buffer the event so the surrounding code
-        // flushes them through the existing SSE pipeline.
-        pendingHookEvents.push({
-          type: 'agent_progress',
-          data: {
-            type: 'hook_invoked',
-            hookEvent,
-            sessionId: turnContext.sessionId ?? '',
-          },
-        });
-        // Plan 437: also persist a Message row for this hook event so
-        // reload / cross-device sync see hook rows in the message flow.
-        // The renderer reads them back via MessageItem.messageToActionItems
-        // using msgType === 'hook_invocation'.
-        // 2026-09-26: verifier-only hooks carry no additionalContext —
-        // persisting those rows produced blank `role:'system'` entries in
-        // the transcript. Skip them; the live SSE `hook_invoked` progress
-        // event above still surfaces the invocation for the running turn.
-        const hookContext = hookEvent.additionalContext;
-        if (typeof hookContext === 'string' && hookContext.trim().length > 0) {
-          this.pendingHookMessages.push(buildHookMessage(hookEvent, turnContext.sessionId ?? ''));
-        }
-      },
-    });
-    const flushPendingHookEvents = (): SSEEvent[] => {
-      if (pendingHookEvents.length === 0) return [];
-      return pendingHookEvents.splice(0, pendingHookEvents.length);
-    };
-
-    // Plan 437: helper that runs one hook event and yields any
-    // `hook_invoked` agent_progress events the runner emitted during the
-    // dispatch. Async-generator-as-helper 鈥?`yield*` forwards every
-    // inner yield, and the returned value becomes the value of the
-    // `yield*` expression. Replaces the duplicated try/await/catch
-    // blocks at every call site.
-    const dispatchHooks = async function* (
-      event: import('../hooks/types.js').HookEvent,
-      input: import('../hooks/events.js').EventHookInput,
-      targets?: import('../hooks/events.js').EventHookMatcherTargets,
-    ): AsyncGenerator<SSEEvent, import('../hooks/events.js').EventHookRunResult | null, unknown> {
-      try {
-        const result = await configHooks.run(event, input, targets);
-        const pending = flushPendingHookEvents();
-        for (const ev of pending) yield ev;
-        return result;
-      } catch (err) {
-        logger.warn(
-          `[Hooks] ${event} dispatch failed (skipped): ${err instanceof Error ? err.message : String(err)}`,
-        );
-        const pending = flushPendingHookEvents();
-        for (const ev of pending) yield ev;
-        return null;
-      }
-    };
-
-    // UserPromptSubmit 鈥?the user's raw prompt entered the run.
-    // Plan 430: the returned additionalContext lines are stashed on the
-    // agent and pumped into the first `_projectModelMessages` projection as
-    // `<system-reminder>` runtime_context messages (`source: 'custom'`).
-    // Without this, the memory-RAG hook output is logged and discarded 鈥?    // the model never sees the retrieved memories on its first turn.
-    const submitCtx = yield* dispatchHooks(
-      'UserPromptSubmit',
-      { session_id: turnContext.sessionId ?? '', cwd: turnContext.workingDirectory ?? '', hook_event_name: 'UserPromptSubmit', prompt: promptText },
-    );
-    if (submitCtx && submitCtx.contexts.length > 0) {
-      this.promptContexts = submitCtx.contexts.slice();
-      // Fresh run: previous run's delivered blocks must not leak into this
-      // one's restore set.
-      this.promptContextBlocks = [];
-      logger.info(`[Hooks] UserPromptSubmit produced ${submitCtx.contexts.length} context line(s) 鈥?queued for first-turn injection`);
-    }
-
-    // SessionStart 鈥?fired once per run (covers orchestrator modes too,
-    // since this sits ahead of the mode dispatch below).
-    const startCtx = yield* dispatchHooks(
-      'SessionStart',
-      { session_id: turnContext.sessionId ?? '', cwd: turnContext.workingDirectory ?? '', hook_event_name: 'SessionStart', source: 'startup' },
-    );
-    if (startCtx && startCtx.contexts.length > 0) {
-      logger.info(`[Hooks] SessionStart produced ${startCtx.contexts.length} context line(s)`);
-      // Context-injection hardening: SessionStart contexts used to be logged
-      // and discarded 鈥?fatal for memory-RAG hooks that do their retrieval
-      // exactly once per session. Route them through the same transient
-      // `promptContexts` rail as UserPromptSubmit, wrapped in a provenance
-      // envelope so the model can attribute the block.
-      for (let i = 0; i < startCtx.contexts.length; i += 1) {
-        this.promptContexts.push(
-          renderHookContextEnvelope({ event: 'SessionStart', hookName: 'session-start', seq: i }, startCtx.contexts[i]),
-        );
-      }
-    }
-
-    // Plan 450 Phase G: connector-activation reminder 鈥?the user @-mentioned
-    // apps in the composer. Codex parity: a mention changes tool exposure,
-    // not the prompt's capability text; this one-shot reminder only tells the
-    // model the user explicitly named these apps and to prefer their tools.
-    // Rendering lives in the mentions framework (packages/agent/src/mentions).
-    if (options?.mentionedProviders?.length) {
-      const descriptors = getCachedAppConnectionDescriptors();
-      const injection = collectConnectorActivationInjection(options.mentionedProviders, descriptors);
-      if (injection) {
-        this.promptContexts.push(`<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`);
-        logger.info(`[Agent] Connector activation: ${options.mentionedProviders.join(', ')}`);
-      }
-    }
-
-    // Plan 450 Phase H: `/skill-name` mentions 鈥?inject the SKILL.md body as
-    // a `<skill>` fragment this turn (codex UserInput::Skill parity), so the
-    // model executes the skill immediately instead of having to notice the
-    // catalog entry and load it with a read round-trip. Resolution happens
-    // against the agent's own skill registry (see collectSkillInjections).
-    // Plan 535 Phase B: handwritten `$name` and `skill://name` references in
-    // the raw prompt join the popover selection (deduped, popover first);
-    // unresolvable tokens ($20-style prices, unknown names) drop out in the
-    // extractor, and fail-closed rules stay with collectSkillInjections.
-    if (options?.mentionedSkills?.length || promptText) {
-      const explicitSkills = extractExplicitSkillMentions(promptText);
-      const mergedMentionedSkills = mergeSkillMentionSources(
-        options?.mentionedSkills ?? [],
-        explicitSkills,
-      );
-      const skillInjections = await collectSkillInjections(mergedMentionedSkills);
-      // Plan 579: attribute the transient bodies' token cost per skill
-      // (cleared per run, matching promptContextBlocks' lifecycle).
-      this.injectedSkillParts.clear();
-      for (const injection of skillInjections) {
-        const rendered = `<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`;
-        this.promptContexts.push(rendered);
-        if (injection.envelope === 'skill' && injection.skillName) {
-          this.injectedSkillParts.set(
-            `skill:${injection.skillName}`,
-            estimateContextTextTokens(rendered),
-          );
-        }
-      }
-      if (skillInjections.length > 0) {
-        logger.info(`[Agent] Skill injection: ${skillInjections.length} skill fragment(s) queued`);
-      }
-    }
-
-    // Plan 535 Phase A-4: per-turn skill-match reminder (mcode matcher
-    // parity). Scans the prompt for path-like tokens and skill names and
-    // suggests up to five relevant installed skills the user never
-    // explicitly mentioned. Fail-closed: hidden / disabled /
-    // conditional-pending skills are never suggested, and skills already
-    // injected via the popover above are excluded.
-    if (promptText) {
-      const excludeSkills = new Set(options?.mentionedSkills ?? []);
-      const skillHits = matchSkillsForPrompt(promptText, {
-        workingDirectory: turnContext.workingDirectory ?? undefined,
-        exclude: excludeSkills,
-      });
-      const skillSuggestion = buildSkillSuggestionInjection(skillHits);
-      if (skillSuggestion) {
-        this.promptContexts.push(`<${skillSuggestion.envelope}>\n${skillSuggestion.body}\n</${skillSuggestion.envelope}>`);
-        logger.info(`[Agent] Skill suggestion: ${skillHits.length} skill(s) matched (${skillHits.map((h) => h.skill.name).join(', ')})`);
-      }
-    }
-
-    // Plugin @-mentions (the `@` popover lists installed plugins): inject a
-    // one-shot `<plugin-activation>` block listing the plugin's callable
-    // capabilities (connected apps / MCP servers / skills). Connected app
-    // connectors already flowed into `mentionedProviders` renderer-side, so
-    // their tools were exposure-promoted above; this block only adds the
-    // capability map (codex `render_explicit_plugin_instructions` parity).
-    if (options?.mentionedPlugins?.length) {
-      const descriptors = getCachedAppConnectionDescriptors();
-      const injection = collectPluginInjections(options.mentionedPlugins, descriptors);
-      if (injection) {
-        this.promptContexts.push(`<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`);
-        logger.info(`[Agent] Plugin activation: ${options.mentionedPlugins.map((p) => p.pluginId).join(', ')}`);
-      }
-    }
-
-    // Agent @-mentions in the raw text (grok-bot 0.18 port): when the user
-    // writes "@Bot Name", inject the reachability block naming each
-    // mentioned teammate with its SendToAgent id, so "@ that agent" style
-    // references become actionable without guessing ids. Parsed here against
-    // the config agent roster (minus the session's own agent) rather than
-    // renderer-side, mirroring grok's host-side withMentionedAgentsContext.
-    // Fail-open: a config read failure never breaks the turn.
-    if (promptText) {
-      try {
-        const agents = await readConfigAgents();
-        const roster = Object.entries(agents)
-          .filter(([id]) => id !== options?.agentProfileId)
-          .map(([id, entry]) => ({ id, name: entry.name || id }));
-        const mentionedContext = buildMentionedAgentsContext(parseAgentMentions(promptText, roster));
-        if (mentionedContext) {
-          this.promptContexts.push(mentionedContext);
-          logger.info('[Agent] Injected mentioned-agents context into first turn');
-        }
-      } catch (err) {
-        logger.warn(`[Agent] Agent mention parse skipped: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-
-    // Resolve agent profile early so mode dispatch can use promptSystem for auto-resolution
-    const appliedProfile = await this._resolveAgentProfile(options);
-    // Remember it for turn-end consumers (e.g. bot-pipeline title skip).
-    this.lastAppliedAgentProfile = appliedProfile;
-
-    // === Mode Dispatch ===
-    // Resolve mode: explicit option > 'normal'. Orchestrator-paradigm
-    // modes (research) take over the entire stream via
-    // `_dispatchOrchestratorMode`. Modifier-paradigm modes (plan-task,
-    // conductor via `conductorMode` flag) fall through to the normal
-    // agent loop where `applyModes` composes them on top of the profile.
-    const requestedMode = options?.mode || 'normal';
-    if (requestedMode !== 'normal') {
-      const mod = modeModifierRegistry.get(requestedMode);
-      if (mod?.orchestrator) {
-        yield* this._dispatchOrchestratorMode(mod, prompt, options);
-        return;
-      }
-      if (!mod && !options?.conductorMode) {
-        // Unknown mode 鈥?no registry entry and no conductor flag.
-        yield {
-          type: 'error',
-          data: `Unknown mode: ${requestedMode}`,
-        } as unknown as SSEEvent;
-        return;
-      }
-      // Modifier-paradigm mode (plan-task) or conductor-only 鈥?fall
-      // through to the normal agent loop; `applyModes` below composes
-      // the mode overlay onto the profile-resolved base.
-    }
-
-    // === Normal Mode ===
-    // Tool resolution, prompt assembly, permission wiring, and initial
-    // message selection are factored into private helpers (Phase F1 of
-    // Plan 211). The system-message extraction block below remains inline
-    // because it mutates `messages`, `systemPromptContent`, and
-    // `this.messages` together 鈥?a single bridge between helper output
-    // and the main loop.
-
-    // Plan 610 A3-2b8 (S2): ONE call establishes the run-scoped half of
-    // assembly -- the resolved-tools decision, the guarded permission gate and
-    // the meta-tool dispatcher. It used to be ~105 lines of closure-local
-    // construction right here, and all of it was unreachable from outside this
-    // generator, so `assembleTurn` being public was still not enough for
-    // anything but this loop to own a turn.
-    const runAssembly = await this.beginTurnAssembly({
-      options,
-      prompt,
-      appliedProfile,
-      // Handed IN, not rebuilt: `streamChat` assembled this ~36 reads ago, and
-      // a handle that assembled its own would be a second `TurnAssembler.build`
-      // for one run.
-      turnContext,
-      publisher: options?.turnPipelines,
-    });
-    const { resolved: resolvedTools } = runAssembly;
-    // Only what this loop still reads. `registry` and `catalogView` for the
-    // catalog-eligibility block further down, `constraints` for the same
-    // decision, and `baseTools` as the starting value of the LIVE `tools` the
-    // loop promotes through the run. Kept narrow deliberately: a destructuring
-    // that binds names nothing reads is a second, silently-stale account.
-    const {
-      tools: baseTools,
-      registry,
-      constraints,
-      catalogView,
-    } = resolvedTools;
-    let tools = baseTools;
-
-    // The catalog snapshot and per-context dispatchers are prepared by
-    // _resolveTools; each stream keeps its own immutable request view.
-
-    // Diagnostic: worker uses console.error for stderr (stdout is JSON-RPC).
-    // eslint-disable-next-line no-console
-    console.error(`[Agent-Process] streamChat tools (${tools.length}): conductorMode=${options?.conductorMode}, agentProfileId=${options?.agentProfileId}, mode=${options?.mode}, hasCanvasCreate=${tools.some(t => t.name === 'canvas_create_element')}`);
-    // eslint-disable-next-line no-console
-    console.error(`[Agent-Process] canvas tools: ${tools.filter(t => t.name.startsWith('canvas_')).map(t => t.name).join(', ') || '(none)'}`);
-    let systemPromptContent = runAssembly.systemPrompt;
-    // Plan 522: route the model-switch window check through the same
-    // capability → catalog → default resolution as the constructor, so a
-    // switch re-bases the compaction budget on the real window instead of
-    // the 200K default.
-    // Plan 577 Phase 0: the resolution SOURCE is kept alongside the value so
-    // the emergency-compaction evidence log can state where the budget came
-    // from (future ContextLedger verification baselines read these lines).
-    const resolvedCompactionWindow = resolveCompactionContextWindow({
-      capabilityContextWindow:
-        this.runtimeConfig?.modelCapabilities?.contextWindow,
-      modelId: this.runtimeConfig?.model ?? this._model,
-    });
-    const contextWindow = resolvedCompactionWindow.contextWindow;
-    const compactionWindowSource = resolvedCompactionWindow.source;
-    // Plan 577 §3: keep the ledger's window/model lineage in step. A model
-    // or window change is a BUDGET change, NOT a context-lineage rebuild —
-    // noteModelSwitch never rolls the epoch over.
-    this.resolvedWindow = {
-      contextWindow,
-      windowSource: compactionWindowSource,
-    };
-    this.compactionManager
-      .getContextLedger()
-      .noteModelSwitch(
-        { contextWindow, windowSource: compactionWindowSource },
-        this.runtimeConfig?.model ?? this._model,
-      );
-
-    // Grok-aligned model-switch trigger (`maybe_compact_on_model_switch`,
-    // grok `compaction.rs:1984-2016`). When the model or its context window
-    // changes, the prior compaction decision is stale: a larger window
-    // may have over-compressed (now we can keep more), a smaller window
-    // MUST compact to fit. STICKY suppression is also cleared inside
-    // CompactionManager.compact() because a window change is exactly the
-    // budget change it was waiting for.
-    //
-    // First streamChat (`_lastSeenModel` undefined) is treated as the
-    // baseline 鈥?no model-switch compaction, just record what we saw so
-    // the *next* streamChat can detect drift.
-    if (this._lastSeenModel !== undefined) {
-      const previousContextWindow = this.compactionManager.getMaxTokens();
-      const previousModel = this._lastSeenModel;
-      if (
-        previousModel !== this._model ||
-        previousContextWindow !== contextWindow
-      ) {
-        // Plan 577 Phase 0: model switch is a BUDGET INVALIDATION, not a
-        // compaction command. The old order compacted unconditionally (any
-        // context size) and only then raised the window. New order: apply the
-        // new budget first (which also clears 'size' suppression — a window
-        // change is exactly the budget change it waits for), re-probe the
-        // projected context against the NEW trigger line, and compact only
-        // when the next request would not fit. A 200K→1M upgrade with a
-        // 120K context therefore no longer compacts at all.
-        this.compactionManager.updateMaxTokens(contextWindow);
-        let probe: CompactionProbe | null = null;
-        try {
-          probe = this.compactionManager.probeCompaction(
-            this.compactionController.projectInputMessages(),
-          );
-        } catch (probeError) {
-          logger.warn(
-            `[Agent] Model-switch probe failed, skipping threshold check: ${
-              probeError instanceof Error ? probeError.message : String(probeError)
-            }`,
-            undefined,
-            'Agent',
-          );
-        }
-        if (probe && !probe.overTriggerLine) {
-          logger.info(
-            `[Agent] Model/window switched (${previousModel} → ${this._model}, ` +
-              `window ${previousContextWindow} → ${contextWindow}): projected context ` +
-              `${probe.tokens} ≤ trigger line ${contextWindow - 16384}, no compaction needed`,
-            undefined,
-            'Agent',
-          );
-        } else {
-          try {
-            await this.compactionController.compactProactive({
-              trigger: 'model_switch',
-            });
-          } catch (modelSwitchError) {
-            // model_switch is best-effort: a failed model-switch compact does
-            // not block the turn. The error is surfaced via the
-            // `compaction_error` event for telemetry.
-            logger.warn(
-              `[Agent] Model-switch compaction failed: ${
-                modelSwitchError instanceof Error ? modelSwitchError.message : String(modelSwitchError)
-              }`,
-              undefined,
-              'Agent',
-            );
-          }
-        }
-      }
-    }
-    this._lastSeenModel = this._model;
-
-    // Handle options.messages fallback (CLI / harness scenarios)
-    if (this.messages.length === 0 && options?.messages?.length) {
-      this.setMessages([...options.messages]);
-    }
-
-    // Plan 315: project the timeline to the model boundary. System content
-    // from legacy system messages and compaction reinjected context is
-    // extracted into PromptSegments and merged into the system prompt. The
-    // resulting messages array contains only user/assistant/tool roles.
-    const projected = this._projectModelMessages(systemPromptContent, { injectHookContexts: true });
-    systemPromptContent = projected.systemPromptContent;
-    let messages = projected.messages;
-
-    // === Plan 224 Phase 3+4: apply declarative mode modifiers ===
-    // Modifier-paradigm modes (conductor, plan-task) inject tools,
-    // prepend prompt prefixes, and merge toolUseContextPatch on top
-    // of the profile-resolved base. Orchestrator-paradigm modes
-    // (research) are dispatched earlier via `_dispatchOrchestratorMode`
-    // and never reach this path.
-    //
-    // The resolved modes + ctx are stored on `this` so the per-turn
-    // refresh loop below can re-evaluate function-form prompt prefixes
-    // (e.g. conductor's anti-slop section) against the latest
-    // `widgetStyleHistory` without re-running `onEnter` hooks.
-    const activeModeIds = collectActiveModes(options ?? {});
-    this.resolvedModes = activeModeIds.length > 0
-      ? modeModifierRegistry.resolve(activeModeIds)
-      : undefined;
-    if (this.resolvedModes && this.resolvedModes.modes.length > 0) {
-      // Capture the pre-mode system prompt BEFORE applyModes applies
-      // prefixes. The per-turn refresh loop re-evaluates function-form
-      // prefixes against this base each turn.
-      this.baseSystemPromptWithoutModes = systemPromptContent;
-
-      // Build the mode context. `state` is pre-populated with fields
-      // modes need to read in their hooks / prompt builders:
-      //  - conductorCanvasId: passed by the frontend (4-level priority
-      //    resolution in ChatView.handleConductorChange)
-      //  - widgetStyleHistory: the agent's rolling anti-slop history
-      this.modeCtx = {
-        sessionId: turnContext.sessionId ?? '',
-        workingDirectory: turnContext.workingDirectory ?? '',
-        state: {
-          conductorCanvasId: options?.conductorCanvasId,
-          widgetStyleHistory: this.widgetStyleHistory,
-        },
-      };
-
-      // Build base ToolRegistration[] from the profile-filtered tools.
-      // The registry holds the executors; we look them up by name.
-      const baseToolRegistrations: ToolRegistration[] = tools.map((t) => ({
-        definition: t,
-        executor: registry.getExecutor(t.name)!,
-      }));
-
-      const modeResult = await applyModes({
-        basePrompt: systemPromptContent,
-        baseTools: baseToolRegistrations,
-        baseToolUseContext: undefined,
-        ctx: this.modeCtx,
-        resolved: this.resolvedModes,
-      });
-
-      // Register injected tool executors into the registry so the
-      // streaming executor can dispatch them. Tools that were already
-      // registered (e.g. by an earlier call) are skipped.
-      for (const tr of modeResult.tools) {
-        if (!registry.has(tr.definition.name)) {
-          registry.register(tr.definition, tr.executor);
-        }
-      }
-
-      // Update the LLM-facing tool list and system prompt with the
-      // mode-applied versions.
-      tools = modeResult.tools.map((t) => t.definition);
-      systemPromptContent = modeResult.systemPrompt;
-
-      // applyModes filters the direct tool list. Mirror those decisions in
-      // the catalog too, or a deferred target could bypass a mode block via
-      // tool_invoke. Router wrappers are infrastructure, so a mode allowlist
-      // does not need to name them; explicit mode blocks still apply.
-      const modeToolPolicy = this.resolvedModes.tools;
-      const modeAllowsTarget = (name: string): boolean =>
-        modeToolPolicy.overrideFilter || (
-          !modeToolPolicy.blocked.includes(name) &&
-          (modeToolPolicy.allowed === null || modeToolPolicy.allowed.includes(name))
-        );
-      const modeAllowsRouter = (name: string): boolean =>
-        modeToolPolicy.overrideFilter || !modeToolPolicy.blocked.includes(name);
-      const canCatalog =
-        isToolVisible('tool_catalog', 'eager', EMPTY_DISCOVERED, constraints) &&
-        modeAllowsRouter('tool_catalog');
-      const canInvoke =
-        isToolVisible('tool_invoke', 'eager', EMPTY_DISCOVERED, constraints) &&
-        modeAllowsRouter('tool_invoke');
-      const directNames = new Set(tools.map((tool) => tool.name));
-      const eligibleAfterMode = catalogView.snapshot.catalogEntries.filter((entry) => {
-        if (!catalogView.eligibleToolIds.has(entry.toolId) || !modeAllowsTarget(entry.definition.name)) return false;
-        if (entry.exposure !== 'deferred' || directNames.has(entry.definition.name)) return true;
-        return canCatalog && canInvoke;
-      });
-      catalogView.eligibleToolIds = new Set(eligibleAfterMode.map((entry) => entry.toolId));
-      catalogView.directToolIds = new Set(
-        eligibleAfterMode
-          .filter((entry) => directNames.has(entry.definition.name))
-          .map((entry) => entry.toolId),
-      );
-      if (canCatalog && !directNames.has('tool_catalog')) {
-        const definition = catalogView.snapshot.tools.find((tool) => tool.name === 'tool_catalog');
-        if (definition) tools.push(definition);
-      }
-      const hasRoutableDeferred = eligibleAfterMode.some(
-        (entry) => entry.exposure === 'deferred' && !directNames.has(entry.definition.name),
-      );
-      if (canInvoke && hasRoutableDeferred && !directNames.has('tool_invoke')) {
-        const definition = catalogView.snapshot.tools.find((tool) => tool.name === 'tool_invoke');
-        if (definition) tools.push(definition);
-      }
-
-      logger.info(
-        `[Agent] streamChat: Applied ${this.resolvedModes.modes.length} mode modifier(s): ${this.resolvedModes.modes.map((m) => m.id).join(', ')}`,
-      );
-    } else {
-      // No active modes 鈥?clear stored state so per-turn refresh is a no-op.
-      this.resolvedModes = undefined;
-      this.modeCtx = undefined;
-      this.baseSystemPromptWithoutModes = undefined;
-    }
-
-    let progressToolName = PROGRESS_UPDATE_TOOL_NAME;
-    while (tools.some((tool) => tool.name === progressToolName)) {
-      progressToolName = `duya_${progressToolName}`;
-    }
-    tools = [...tools, { ...PROGRESS_UPDATE_TOOL, name: progressToolName }];
-
-    // Plan 413d: build the mode state-machine coordinator only when a
-    // session-level mode with a tracker is active. Rebuilt per streamChat
-    // call (same lifecycle as modeCtx); the trackers themselves are engine
-    // singletons that survive across calls, so state persists between turns.
-    // Scope the coordinator to THIS turn's active tracker ids 鈥?otherwise a
-    // dormant tracker (e.g. planModeTracker while only goal mode is on)
-    // would be auto-activated and injected by the coordinator (plan 411
-    // follow-up: goal mode must not wake plan mode).
-    //
-    // Also include trackers the AGENT activated this session via tool
-    // (EnterPlanModeTool 鈫?`activate_from_tool`), not just the frontend's
-    // `options.mode` 鈥?otherwise a tool-entered plan mode would be invisible
-    // to the coordinator and its write-gate/reminders never fire (grok:
-    // tracker state is authoritative; the prompt mode reconciles to it).
-    const activeTrackerIds = new Set<string>(
-      (this.resolvedModes?.modes ?? [])
-        .filter((m) => m.tracker)
-        .map((m) => m.tracker!.id),
-    );
-    for (const tracker of modeTrackerEngine.list()) {
-      if (tracker.id === 'plan-task' && planModeTracker.state() === 'active') {
-        activeTrackerIds.add(tracker.id);
-      }
-    }
-    // Plan 552: persisted tracker state is authoritative for goal mode —
-    // a goal started in a previous run (or before a restart) re-enters the
-    // active set from its `mode_state_snapshots` row even when the frontend
-    // did not re-select the mode, so continuation reminders, budget
-    // cut-off and the auto-resume path all keep working across sessions.
-    if (!activeTrackerIds.has('goal') && turnContext.sessionId) {
-      try {
-        const goalRow = await modeStateDb.get(turnContext.sessionId, 'goal');
-        if (goalRow?.snapshotJson) {
-          const parsed = JSON.parse(goalRow.snapshotJson) as { status?: string };
-          if (parsed?.status && parsed.status !== 'idle') {
-            activeTrackerIds.add('goal');
-          }
-        }
-      } catch {
-        // DB/IPC hiccup — degrade to mode-selection-only scoping.
-      }
-    }
-    this.modeCoordinator =
-      activeTrackerIds.size > 0
-        ? new ModeCoordinator(modeTrackerEngine, turnContext.sessionId ?? '', activeTrackerIds)
-        : undefined;
-
-    // Plan 413c: restore persisted tracker state for this session before any
-    // per-turn reminder injection (crash/restart recovery). Best-effort 鈥?    // restoreTracker swallows DB/IPC failures and leaves the tracker initial.
-    if (this.modeCoordinator) {
-      await this.modeCoordinator.restore();
-    }
-
-    let turnCount = 0;
-    // Tool-group state belongs to the whole streamChat run, not one provider
-    // request. Private progress calls consume a model turn before real tools
-    // run, and tool batches may continue across multiple model turns.
-    const toolGroupProgress = new ToolGroupProgressTracker();
-    // Per-run agentic-turn cap. Absent 鈫?uncapped (pi-aligned design):
-    // the loop runs until the LLM naturally produces a tool-free turn,
-    // hits a token/context limit (`stopReason: 'length'`), the caller
-    // aborts, or a tool batch returns `terminate: true`. Upper-layer
-    // harnesses (CLI, renderer config) can still set a value here as an
-    // opt-in safety net 鈥?there is no implicit fallback. Plan 426 keeps
-    // engine invariants in the loop (dead-loop guard, mailboxes) but
-    // intentionally does not enforce a default turn limit.
-    const maxTurns = options?.maxTurns;
-    let runtimePromptMessageId: string | null = null;
-
-    // Anti-dead-loop guard (per streamChat call). Tracks consecutive identical
-    // tool calls so the loop can steer or stop instead of spinning forever.
-    // Progression: soft nudge (deadLoopNudgeAt) 鈫?stronger "change approach"
-    // nudge (deadLoopHardNudgeAt) 鈫?hard stop (deadLoopHardStopAt). The
-    // counting and the hard stop are engine invariants (plan 426); the
-    // soft/hard nudge *texts* live in the builtin dead-loop loop hook.
-    // Plan 550 step 2e (TurnPreparer): the streak counter + signature
-    // logic moved behind `DeadLoopTracker` so the per-run allocation
-    // lives in one place and the inline `let` bindings no longer leak
-    // across streamChat's prologue. The four read sites below consult
-    // the tracker instead of touching local variables.
-    const deadLoopTracker = new DeadLoopTracker(
-      resolveDeadLoopConfig(options?.antiDeadLoop),
-    );
-
-    // Loop-hook bus (plan 426): per-run event spine carrying the steering
-    // policies that used to be inline blocks below (todo gate, premature
-    // stop, dead-loop nudges). Engine invariants 鈥?mailbox
-    // checkpoints, max-turns stop, dead-loop hard stop 鈥?stay in this loop
-    // and are never delegated.
-    const loopHooks = new LoopHookBus();
-    for (const registration of createBuiltinLoopHooks({
-      sessionId: turnContext.sessionId ?? undefined,
-      todoGateEnabled: options?.todoGate?.enabled ?? true,
-      antiDeadLoop: {
-        enabled: deadLoopTracker.config.enabled,
-        nudgeAt: deadLoopTracker.config.nudgeAt,
-        hardNudgeAt: deadLoopTracker.config.hardNudgeAt,
-      },
-      // grok SendMessageReminderMiddleware port: only runs whose toolset
-      // actually exposes SendMessage (bot sessions) can go "silently"
-      // invisible, so only those get the silence / early-result nudges.
-      sendMessageReminder: {
-        enabled: tools.some((t) => t.name === 'SendMessage'),
-      },
-      // Plan 496: full delivery enforcement (grok ensureUserReply port) —
-      // reply reminder on turn start + turn-end delivery vetoes. Same bot
-      // gate; silence-allowed runs (wake / cron / effort:'off' /
-      // backgroundTaskResume — the same markers the router treats as
-      // non-user turns) keep grok's isSilenceAllowed exemption.
-      sendMessageDelivery: {
-        enabled: tools.some((t) => t.name === 'SendMessage'),
-        silenceAllowed:
-          options?.effort === 'off' || options?.backgroundTaskResume === true,
-      },
-      disabled: options?.disabledLoopHooks,
-    })) {
-      loopHooks.register(registration);
-    }
-    // Plan 426 Phase 3: the mode coordinator rides the bus 鈥?per-turn
-    // reminders via PreTurn (priority 5), round-end transitions + snapshot
-    // persistence via PreFinalize (priority 5, ahead of builtin vetoes).
-    // Its dedicated call sites below are gone; the WHEN is now owned here.
-    for (const registration of this.modeCoordinator?.createLoopHookRegistrations() ?? []) {
-      loopHooks.register(registration);
-    }
-    // Plan 426 Phase 4: user-configured [hooks] from config.toml (plan 87
-    // command/http executor vocabulary) bridged onto the loop events.
-    // Config is read fresh per streamChat, so edits hot-reload on the next
-    // run. Fail-open: configured hook failures never break the loop.
-    for (const registration of createConfiguredLoopHooks()) {
-      loopHooks.register(registration);
-    }
-    // Shared snapshot builder for loop-hook dispatches.
-    const buildHookCtx = (): Omit<LoopHookDispatchContext, 'event'> => ({
-      sessionId: turnContext.sessionId ?? undefined,
-      turnCount,
-      seqIndex,
-      messages,
-      prompt: typeof prompt === 'string' ? prompt : undefined,
-    });
-
-    // The LLM's native stop reason for the current turn (end_turn / max_tokens
-    // / tool_use / stop_sequence), captured from the stream's done event.
-    let turnStopReason: string | undefined = undefined;
-
-
-    // Generate a unique seq_index for this streamChat call
-    // All messages created in this call (including multi-turn) will share this seq_index
-    // This allows the UI to group all related messages into a single "round"
-    const seqIndex = Date.now();
-    // Plan 587 R2.1: the run id is the Control Plane's, not ours. It arrives on
-    // `chat:start` and, when present, IS this run's identity — the same string,
-    // not an alias. Producers that do not send one (automation, workflow,
-    // sub-agent: all registered for H8) fall back to minting, and
-    // `resolveTurnRunId` reports that it happened so the fallback can be
-    // counted and eventually deleted. See `run-identity.ts`.
-    const { runId } = resolveTurnRunId(options?.runId);
-
-    // Deferred tool contexts collected from tool results during this
-    // streamChat call. They are injected into the provider payload on the
-    // next turn (transient runtime context) but never persisted to the
-    // durable history.
-    const deferredContexts: Array<{
-      toolUseId: string;
-      toolName: string;
-      promise: Promise<unknown>;
-    }> = [];
-
-    // Plan 569: run-level counter for the final mailbox poll inside
-    // finalizeSuccess. Each absorb hands the model a fresh turn, and the
-    // model may finish again immediately — a notification storm could
-    // otherwise extend the run indefinitely. After FINAL_POLL_MAX_ABSORBS
-    // absorbs the final poll passes through (returns false) and leftover
-    // notifications fall to the renderer resume path (which has the
-    // 2026-09-26 no-idle-run guard). 3 is the same conservative magnitude
-    // as claimBatch's DEFAULT_LIMIT=10 / DEFAULT_MAX_CLAIM_ATTEMPTS=5.
-    const FINAL_POLL_MAX_ABSORBS = 3;
-    let finalPollAbsorbs = 0;
-
-    // Track total elapsed time for the entire stream (including all turns and tool execution)
-    const streamStartTime = Date.now();
-
-    while (!this.abortController.signal.aborted) {
-      // Remove the prior turn's dynamic guide before rebuilding this turn.
-      // This prevents duplicate prompt sections when a discovered tool stays
-      // active across multiple tool-use turns.
-
-      turnCount++;
-      // Grok-aligned 5-state suppression: clear SUPPRESS_TURN at the start
-      // of every turn so a transient `other` failure on the previous turn
-      // does not bleed into the next one. STICKY/UNTIL_SUCCESS/AUTH are
-      // preserved 鈥?their clear triggers are event-based, not turn-based.
-      this.compactionManager.onTurnStart();
-      const turnStartTime = Date.now();
-      // Tool calls the assistant emits this turn; handed to the PostToolUse
-      // dispatch so configured hooks can match on tool names (plan 426 Phase 4).
-      const turnToolCalls: Array<{ name: string; input: unknown }> = [];
-      // tool_use id 鈫?tool name, so a failing tool result can be attributed
-      // to its hook matcher (PostToolUseFailure).
-      const turnToolCallIds = new Map<string, string>();
-
-      // Runtime fallback: once a mid-stream compaction promoted the
-      // discovered set, merge those tools into the request's tools array
-      // for the rest of the call, respecting the same deny/allow
-      // constraints. Config-driven 'array' delivery was retired — this
-      // promotion is the only remaining merge path.
-
-      // Plan 610 A3-2b7 (S1): the per-turn system-prompt refresh and this
-      // turn's pipeline now come from ONE call, `assembleTurn`. It used to be
-      // the inline mode-prefix block above plus a `buildTurnPipeline` call
-      // further down, and the catalog round was assigned a third time between
-      // them. Three hand-reached pieces of one turn's assembly is the shape that
-      // lets an engine-driven turn get two of the three; the seam is the answer
-      // to that, so the loop routes through it rather than beside it.
-
-      // Plan 426 Phase 3: the mid-turn buffered-activation flush and the
-      // per-turn mode reminders moved into the mode-coordinator PreTurn hook
-      // (dispatched after the mailbox checkpoint below).
-
-      // Background results that completed after a previous turn end are
-      // picked up at the mailbox checkpoint below, not here.
-
-      // Only add user message on first turn (original prompt)
-      // Subsequent turns are continuations after tool results, not new prompts
-      if (turnCount === 1 && !options?.backgroundTaskResume) {
-        // Check if the last message is already a user message with the same content
-        // This prevents duplicates when messages are pre-loaded from DB before streamChat is called
-        const lastMessage = messages[messages.length - 1];
-        // Compare the model-facing prompt. UI marker content is persisted
-        // separately as displayContent and must not replace content.
-        const compareContent = typeof prompt === 'string'
-          ? prompt
-          : (Array.isArray(prompt)
-              ? prompt.filter((b: unknown) => (b as Record<string, unknown>).type === 'text')
-                  .map((b: unknown) => (b as Record<string, string>).text || '')
-                  .join('')
-              : '');
-        // Extract comparable content from lastMessage (handle both string and MessageContent[])
-        const lastMessageContent = typeof lastMessage?.content === 'string'
-          ? lastMessage.content
-          : (Array.isArray(lastMessage?.content)
-              ? (lastMessage.content as Array<{type: string; text?: string}>)
-                  .filter(b => b.type === 'text')
-                  .map(b => b.text || '')
-                  .join('')
-              : '');
-        const normalizedLastMessageContent = stripPastedContentMarkers(lastMessageContent).trim();
-        const normalizedCompareContent = stripPastedContentMarkers(compareContent).trim();
-        const isDuplicate = lastMessage &&
-          lastMessage.role === 'user' &&
-          (normalizedLastMessageContent === normalizedCompareContent ||
-            lastMessageContent.trim() === compareContent.trim());
-
-        const displayContent = options?.displayContent !== undefined
-          ? options.displayContent
-          : undefined;
-        const persistedPromptContent = prompt as string | MessageContent[];
-
-        if (!isDuplicate) {
-          const userMessage = {
-            id: options?.clientMsgId ?? crypto.randomUUID(),
-            role: 'user',
-            content: persistedPromptContent,
-            displayContent: displayContent !== undefined ? displayContent : undefined,
-            timestamp: Date.now(),
-            seq_index: seqIndex,
-            attachments: (options as ChatOptions & { attachments?: Message['attachments'] })?.attachments,
-            // Plan 497: a wake run's prompt is model context, not user chat —
-            // persist it source 'system' (bot-direct hidden) so it does not
-            // duplicate the agent_dm marker card the dispatcher already wrote.
-            ...(options?.wakeRun ? { source: 'system' as const } : {}),
-          } as Message;
-          // Plan 486 搂2.1/搂2.2: fork/reply creation rule. The target must
-          // exist in this session's timeline (checked against entries already
-          // committed 鈥?this message is not yet appended). An unknown target
-          // is silently stripped so a dangling fork is never persisted.
-          const replyMeta = resolveReplyMeta(
-            options?.replyToId,
-            options?.branched,
-            collectMessageIds(this.timeline.snapshot()),
-          );
-          if (replyMeta) {
-            userMessage.metadata = mergeThreadMetadata(userMessage.metadata, replyMeta);
-            // Plan 486 搂2.3: a branched fork opens an active fork turn 鈥?every
-            // message this turn produces is tagged branched (see _pushDurable).
-            // Quote replies (no branched) stay on the main line and leave the
-            // marker null.
-            if (replyMeta.branched === true && userMessage.id) {
-              this.forkTurn = {
-                replyToId: replyMeta.replyToId ?? userMessage.id,
-                userId: userMessage.id,
-              };
-            }
-          }
-          this._pushDurable(messages, userMessage);
-          runtimePromptMessageId = userMessage.id ?? null;
-        } else if (lastMessage) {
-          lastMessage.seq_index = seqIndex;
-          runtimePromptMessageId = lastMessage.id ?? null;
-          const newAttachments = (options as ChatOptions & { attachments?: Message['attachments'] })?.attachments;
-          lastMessage.content = persistedPromptContent;
-          lastMessage.displayContent = displayContent;
-          if (newAttachments && newAttachments.length > 0) {
-            lastMessage.attachments = newAttachments;
-          }
-        }
-      }
-
-      // Plan 610 A3-2b8 (S2): ONE call assembles this turn, through the
-      // run handle -- the mode-prefix prompt refresh, the catalog round, and a
-      // FRESH pipeline.
-      //
-      // `tools` is passed per turn because promotion moves it during a run, and
-      // `systemPromptContent` because compaction replaces it. Neither belongs on
-      // the handle, which is why this call carries them rather than reading them.
-      const assembly = runAssembly.assemble({
-        turn: turnCount,
-        systemPrompt: systemPromptContent,
-        messages,
-        tools,
-      });
-      // The refreshed prompt REPLACES the run's current one for the rest of the
-      // turn, exactly as the inline block it replaces did. Compaction reassigns
-      // `systemPromptContent` later in the turn and the next assembly reads that
-      // value back in, so a compaction's replacement is not undone.
-      systemPromptContent = assembly.systemPrompt;
-      const executor = assembly.pipeline;
-
-      // Per-turn state
-      const assistantContent: MessageContent[] = [];
-      const privateProgressCalls: Array<{ id: string; title?: string }> = [];
-      const pendingProgressAtRequestStart = toolGroupProgress.pendingSnapshot();
-      let needsFollowUp = false;
-      let thinkingContent = '';  // Accumulate thinking content for this turn
-      let hasThinkingContent = false;  // Track if we have any thinking content
-      let thinkingSignature: string | undefined = undefined;  // Anthropic extended-thinking signature for this turn
-      // Anthropic redacted_thinking: the encrypted payload arrives on a
-      // signature-only SSE thinking event. It must reach the pushed message
-      // verbatim or the next request's assistant turn loses its thinking
-      // prefix and thinking-mode continuations 400.
-      let redactedEncrypted: string | undefined = undefined;
-      // Guard against providers that emit more than one `done` event per
-      // stream (a protocol-layer bug duplicated every assistant message).
-      // One LLM stream produces exactly one assistant message push.
-      let doneEventHandled = false;
-      // Per-call usage from this round's `result` event (always yielded
-      // immediately before `done`). Attached to the pushed assistant message
-      // (pi parity) so context estimation can anchor on real API numbers 鈥?      // see computeContextEstimate in @duya/ai.
-      // NOTE: keep the LARGEST-prompt result of the turn, not the latest.
-      // Some gateways (GLM-style cache reporting) report a near-fresh prefix
-      // (input_tokens=0, tiny cache hit) on individual rounds, which made the
-      // context ring collapse to ~1% for an instant between tool rounds.
-      // Conversation context only grows within a turn, so max is always the
-      // truthful anchor; compaction resets via compactedPending separately.
-      // Plan 577 §2: split the prompt-volume normalizer from the volume that
-      // folds output in. `normalizedPromptVolume` is the Observation-layer
-      // input (the prompt the provider actually saw); `resultPromptVolume`
-      // keeps the historical prompt+output semantics for round-max tracing.
-      const normalizedPromptVolume = (
-        u?: { input_tokens?: number; output_tokens?: number; cache_hit_tokens?: number; cache_creation_tokens?: number },
-      ): number => {
-        if (!u) return 0;
-        const input = u.input_tokens ?? 0;
-        const hit = u.cache_hit_tokens ?? 0;
-        const write = u.cache_creation_tokens ?? 0;
-        return hit > input || write > input ? input + hit + write : input;
-      };
-      const resultPromptVolume = (
-        u?: { input_tokens?: number; output_tokens?: number; cache_hit_tokens?: number; cache_creation_tokens?: number },
-      ): number => normalizedPromptVolume(u) + (u?.output_tokens ?? 0);
-      let roundResultUsage:
-        | { input_tokens?: number; output_tokens?: number; total_tokens?: number; cache_hit_tokens?: number; cache_creation_tokens?: number }
-        | undefined = undefined;
-      // Plan 224 follow-up: track mode-switch tool_use ids so we can emit
-      // a `mode_changed` SSE event right after their tool_result lands.
-      // Keyed by tool_use_id, value is the tool name.
-      const modeSwitchToolIds = new Map<string, string>();
-
-      yield { type: 'turn_start', data: { turnCount } };
-
-      // Lightweight tool result cleanup before each turn
-
-      // Proactive context compaction before each LLM call. Plan 550 step 2c:
-      // delegate to the per-session CompactionCoordinator (it owns the
-      // prefire kick, cooldown gate, event buffer, and post-compact re-projection).
-      //
-      // Real-time pump: `runPreTurn` used to buffer compact:start/steps/done
-      // and return them only AFTER compaction finished, so the renderer saw
-      // nothing during the (~minutes) summarizer call and then every row at
-      // once. An async generator cannot yield while awaiting a sub-promise,
-      // so the coordinator pushes events into a queue via `onEvent` and this
-      // loop drains it on a short tick until the run settles. When no
-      // compaction fires the promise resolves immediately — the loop exits
-      // without waiting a tick.
-      const compactionQueue: SSEEvent[] = [];
-      let compactionRun: CompactionRunResult | null = null;
-      let compactionFailure: unknown = null;
-      const compactionPromise = this.compactionCoordinator
-        .runPreTurn({
-          turnCount,
-          systemPromptContent,
-          messages,
-          onEvent: (event) => compactionQueue.push(event),
-        })
-        .then(
-          (result) => {
-            compactionRun = result;
-          },
-          (err) => {
-            compactionFailure = err;
-          },
-        );
-      while (compactionRun === null && compactionFailure === null) {
-        if (compactionQueue.length > 0) {
-          yield* compactionQueue.splice(0, compactionQueue.length);
-          continue;
-        }
-        await Promise.race([
-          compactionPromise,
-          new Promise<void>((resolve) => setTimeout(resolve, 50)),
-        ]);
-      }
-      yield* compactionQueue.splice(0, compactionQueue.length);
-      if (compactionFailure !== null) throw compactionFailure;
-      // The while loop can only be exited with the run settled, but TS
-      // cannot see through the closure assignment above — re-check via a
-      // widened local so the narrowing below is sound.
-      const settledRun = compactionRun as CompactionRunResult | null;
-      if (!settledRun) {
-        throw compactionFailure ?? new Error('Compaction run did not settle');
-      }
-      if (settledRun.didCompact) this.invalidateTurnCatalogSchemaReads(resolvedTools);
-      for (const ev of settledRun.events) yield ev;
-      systemPromptContent = settledRun.systemPromptContent;
-      messages = settledRun.messages;
-      const mailboxDecision = await this._sweepInterTurn(
-        runId,
-        messages,
-        seqIndex,
-        'before_model_turn',
-        options,
-      );
-      // A `backgroundTaskResume` run has no user prompt (the turn-1 push is
-      // skipped above). If its FIRST checkpoint claim comes back empty, the
-      // notification it was woken for was already absorbed by the run that
-      // was active when it arrived — proceeding would make a bare LLM call
-      // with no new input, wasting a turn and producing a reply with nothing
-      // to reply to (2026-09-26 investigation: empty idle-resume runs).
-      if (
-        options?.backgroundTaskResume === true &&
-        turnCount === 1 &&
-        mailboxDecision.action === 'continue' &&
-        !mailboxDecision.absorbed
-      ) {
-        logger.info('[AgentMailbox] backgroundTaskResume run has no claimable rows — terminating without an LLM call');
-        yield { type: 'done', reason: 'completed' };
-        return;
-      }
-      if (mailboxDecision.action === 'soft_stop') {
-        const stopMessage = mailboxDecision.summary || 'Stopped as requested.';
-        this._pushDurable(messages, {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content: stopMessage,
-          timestamp: Date.now(),
-          duration_ms: Date.now() - streamStartTime,
-          seq_index: seqIndex,
-        });
-        this._commitMessages();
-        yield { type: 'text', data: stopMessage };
-        yield { type: 'done', reason: 'completed' };
-        return;
-      }
-      // hard_replace: the replacement runtime_context was already pushed by
-      // _claimMailboxAtCheckpoint; fall through to the LLM call with it in
-      // the message history.
-
-      // Plan 426 Phase 3: PreTurn dispatch, deliberately located AFTER the
-      // mailbox checkpoint so mode turn reminders (mode-coordinator hook,
-      // priority 5) stay more recent than mailbox guidance 鈥?the same
-      // ordering the pre-bus inline calls produced. The hook flushes
-      // buffered mid-turn activations first, then injects per-turn mode
-      // reminders; other PreTurn consumers see the same position.
-      for (const effect of await loopHooks.dispatch('PreTurn', buildHookCtx())) {
-        applyLoopHookEffect(messages, effect, seqIndex);
-      }
-
-      // Optional per-request wall-clock timeout (curator + callers that opt
-      // in via llmRequestTimeoutMs). Aborts a single LLM call that overruns
-      // even while the stream is still producing data (e.g. a MiniMax
-      // thinking stream that never converges), so a hung turn fails fast
-      // instead of consuming the whole run budget. Cleaned up on both the
-      // normal-completion and error paths.
-      let requestController: (AbortController & { dispose?: () => void }) | null = null;
-      let requestTimer: ReturnType<typeof setTimeout> | undefined;
-      let requestSignal: AbortSignal = this.abortController.signal;
-      if (options?.llmRequestTimeoutMs && options.llmRequestTimeoutMs > 0) {
-        requestController = createChildAbortController(this.abortController);
-        requestSignal = requestController.signal;
-        requestTimer = setTimeout(() => {
-          requestController?.abort(new Error(`LLM request timed out after ${options.llmRequestTimeoutMs}ms`));
-        }, options.llmRequestTimeoutMs);
-      }
-      const disposeRequestController = () => {
-        if (requestTimer !== undefined) clearTimeout(requestTimer);
-        requestController?.dispose?.();
-        requestController = null;
-      };
-
-      try {
-        // Stream from LLM with FULL message history
-        logger.info(`[Agent] Turn ${turnCount}: Starting LLM stream, messages=${messages.length}, provider=${this.provider}`);
-        let llmEventCount = 0;
-        logger.info(`[Agent] Turn ${turnCount}: Calling llmClient.streamChat...`);
-        // Plan 577 §2: prune detection — compressProjectedToolMessages is
-        // pure and returns the SAME reference when no transform changed
-        // anything, so a reference change is the projection-shrink signal.
-        const prePruneMessages = runtimePromptMessageId
-          ? messages.map((msg) => (
-                msg.id === runtimePromptMessageId
-                  ? {
-                      ...msg,
-                      content: prompt as string | MessageContent[],
-                    }
-                  : msg
-              ))
-            : messages;
-        const llmMessages = compressProjectedToolMessages(prePruneMessages);
-        if (llmMessages !== prePruneMessages) {
-          // Projection shrank (tool-result prune / offload / reformat): arm
-          // the next observation to replace the accounting `latest` even
-          // when smaller, and let the ring correct its anchor downward.
-          this.compactionManager.noteProjectionShrink();
-          logger.tokenTrace('projectionShrink', {
-            sessionId: turnContext.sessionId ?? undefined,
-            msgsBefore: prePruneMessages.length,
-            msgsAfter: llmMessages.length,
-          });
-        }
-
-        // Plan 486 搂2.3: render the reply/fork quote context and keep the
-        // provider payload clean. This runs at the per-request boundary where
-        // the current turn's user message is present: historical messages
-        // arrive already stripped by projectModelMessages, so only messages
-        // carrying a live replyToId (this turn's quote reply or fork) get the
-        // `[In reply to <id>: "<quote>"]` prefix. Thread metadata is then
-        // removed from every message so it never leaks into the request body.
-        this._applyProviderThreadBoundary(llmMessages);
-
-        // AGENTS.md is now carried in the system prompt (Plan 408 Phase 5),
-        // not injected as a first-turn user message.
-
-        // Inject transient runtime context (attachment text + deferred tool
-        // contexts) into the provider payload. These are never persisted to
-        // the durable history.
-        await this._injectRuntimeContext(llmMessages, options, deferredContexts);
-
-        // Plan 453 Task C: append OSContext as a contextual user fragment on
-        // every turn. The bridge is the integration seam 鈥?tests can swap
-        // it via __setBridgeForTest. The fragment is ephemeral (lives only
-        // on `llmMessages`; never lands in the durable timeline).
-        injectOSContextFragment(llmMessages, runtimePromptMessageId);
-
-        // Persistent turn-context injection (C′): every human-turn user
-        // message — historical ones included — gets its `Message sent at`
-        // reminder re-rendered deterministically from the persisted
-        // `message.timestamp` on every request. Bytes never change across
-        // replays, so the provider cache prefix stays intact; the durable
-        // timeline keeps the clean canonical content (shallow-copy swap on
-        // `llmMessages` only). Replaces the old `Current date and time:`
-        // line in the environment system-prompt section.
-        injectTurnTimestampReminders(llmMessages);
-
-        // Cache the system-prompt + tool-surface estimate for the live
-        // context ring's no-usage fallback. Only the provider contract is
-        // counted (name/description/input_schema), mirroring what is
-        // serialized into the request body. Plan 577 §4: the two halves
-        // are kept separate for the composition diagnostics.
-        const systemAndTools = this._estimateSystemAndToolsTokens(systemPromptContent, tools);
-        this.lastSystemTokensEstimate = systemAndTools.system;
-        this.lastToolsTokensEstimate = systemAndTools.tools;
-        this.lastSystemContextTokensEstimate = systemAndTools.total;
-        // Plan 577 §2: feed the schema baseline so the compaction manager
-        // can price tool/schema growth BETWEEN provider observations
-        // (schemaDelta) — an MCP/skill load is felt by the next request
-        // without waiting for the provider to report it.
-        this.compactionManager.setSchemaEstimateTokens(this.lastSystemContextTokensEstimate);
-        try {
-          options?.onSystemPromptReady?.({
-            systemPrompt: systemPromptContent,
-            // Copy only the provider contract. Tool executors and internal
-            // registry metadata are deliberately not exposed to observers.
-            tools: tools.map(({ name, description, input_schema }) => ({
-              name,
-              description,
-              input_schema,
-            })),
-            turn: turnCount,
-            // Cache plan fingerprint derived from the stable prefix (system
-            // prompt + tool surface). Stable across turns while the prompt is
-            // unchanged, so observers can detect a reachable provider cache
-            // breakpoint.
-            cachePlan: { fingerprint: computeCachePlanFingerprint(systemPromptContent, tools) },
-          });
-        } catch (error) {
-          logger.warn('[Agent] System prompt observer failed; continuing without observer', { error });
-        }
-
-        // Plan 439: wrap the raw LLM stream with turn-level replay. A
-        // transport death (undici `terminated`, OpenRouter upstream drop,
-        // idle timeout) BEFORE the stream's `done` event leaves no durable
-        // state 鈥?deltas live only in the local accumulators below 鈥?so the
-        // partial attempt is discarded and retried from scratch instead of
-        // failing the whole turn. The retryable-error classification and
-        // attempt budget live in ./stream-retry.ts. Post-`done` failures
-        // propagate unchanged via the turnCommitted guard.
-        // Refresh the declared-tools snapshot before every provider request.
-        // The visibility guard reads it during execution.
-        // Plan 577 §3: capture the epoch for this built prompt. A replay uses
-        // the same prompt bytes, so it must retain this generation and be
-        // dropped if compaction/clear changed the timeline while it was in flight.
-        const requestEpoch = this.compactionManager.getContextEpoch();
-        // Plan 610 A3-2b7 (S1): `catalogView.currentRound` is assigned by
-        // `assembleTurn` at the top of this turn, not here. The value a reader
-        // sees is unchanged -- nothing between the two points dispatches a tool,
-        // and the drain that reads it (:3444) is downstream of both -- but the
-        // round is now something the ENGINE can set rather than something only
-        // this loop can advance.
-        // Plan 600 S2, model-leg slice: named so this turn's deps can be
-        // PUBLISHED rather than buried in the call below. One object, two
-        // readers -- the legacy loop and the engine's model leg -- so the leg
-        // cannot drift from the stream the turn is actually running.
-        const turnStreamDeps: TurnStreamRunnerDeps = {
-          llmClient: this.llmClient,
-          llmMessages,
-          systemPromptContent,
-          tools,
-          maxTokens: options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
-          temperature: options?.temperature ?? 1,
-          effort: options?.effort,
-          maxOutputTokens: this.runtimeConfig?.modelCapabilities?.maxOutputTokens,
-          signal: requestSignal,
-          turnCount,
-          turnCommitted: doneEventHandled,
-          refreshDeclaredTools: () => {
-            // Plan 610 A3-2b8 (S2): the snapshot is re-taken from the handle,
-            // which holds the guard. Reading a local here would mean the loop
-            // and the guard could disagree about which tools are declared.
-            return runAssembly.refreshDeclaredTools();
-          },
-          onRetryReset: () => {
-            // Plan 550 step 2e (TurnLoop first slice): the retry envelope lives in
-            // runTurnStream; the per-attempt state reset (executor discard +
-            // deadLoopTracker reset + accumulator clears) is delegated back to the
-            // caller because it touches closure state in streamChat.
-            executor.discard();
-            assistantContent.length = 0;
-            privateProgressCalls.length = 0;
-            // A retry replays this provider request. Keep prior turn state,
-            // but discard progress announced only by the failed attempt.
-            toolGroupProgress.restorePending(pendingProgressAtRequestStart);
-            thinkingContent = '';
-            hasThinkingContent = false;
-            thinkingSignature = undefined;
-            needsFollowUp = false;
-            turnToolCalls.length = 0;
-            turnToolCallIds.clear();
-            modeSwitchToolIds.clear();
-            deadLoopTracker.reset();
-          },
-        };
-
-        // Plan 600 S2: hand this turn's MODEL leg to the run engine.
-        //
-        // Published HERE, after `llmMessages` is bound, because that is the
-        // only step of the chain above that can REBIND the array:
-        // `compressProjectedToolMessages` returns a fresh array when it changes
-        // anything and the SAME reference when it does not (the reference change
-        // is the projection-shrink signal read a few lines above). The four
-        // transforms after it cannot rebind -- they receive the reference and
-        // mutate entries in place (`injectTurnTimestampReminders` replaces
-        // `messages[i]`, `_injectRuntimeContext` and `injectOSContextFragment`
-        // push or rewrite `content`) -- so publishing the same reference earlier
-        // would still observe their output at request time. Publishing
-        // `prePruneMessages` instead would not.
-        //
-        // `get messages()` is NOT a substitute at any point: it recomputes the
-        // durable projection from the timeline, so it carries none of the four.
-        // `model-leg.test.ts` pins that by reading the same turn three ways.
-        //
-        // Absent publisher means no engine is bound to this run, which is the
-        // pre-plan case (the CLI, the sub-agent tool) and is not an error.
-        //
-        // The abort controller handed over is the one that OWNS
-        // `requestSignal`, which is the signal `runTurnStream` passes to the
-        // client: the per-request child when a request timeout is configured,
-        // otherwise the run's own controller. Captured here, at publish time,
-        // because `disposeRequestController()` nulls the child on the way out
-        // and a later read would hand the leg a controller that no longer
-        // governs anything.
-        const turnAbortController = requestController ?? this.abortController;
-        options?.modelLegs?.publish(
-          buildTurnModelLeg({
-            turn: turnCount,
-            deps: turnStreamDeps,
-            abortController: turnAbortController,
-          }),
-        );
-
-        const streamGenerator = runTurnStream(turnStreamDeps);
-        
-        logger.info(`[Agent] Turn ${turnCount}: Stream generator created, starting iteration...`);
-        for await (const event of streamGenerator) {
-          llmEventCount++;
-          if (event.type === 'text' || event.type === 'thinking') {
-            logger.debug(`[Agent] LLM event ${llmEventCount}: type=${event.type}, data_length=${String(event.data).length}`);
-          } else {
-            logger.debug(`[Agent] LLM event ${llmEventCount}: type=${event.type}`);
-          }
-
-          if (event.type === 'tool_use_started') {
-            if (event.data.name === progressToolName) continue;
-            const group = toolGroupProgress.assign(event.data.id);
-            if (group.progressEvent) {
-              yield { type: 'tool_group_progress', data: group.progressEvent };
-            }
-            yield {
-              ...event,
-              data: {
-                ...event.data,
-                groupId: group.groupId,
-                ...(group.progressTitle ? { progressTitle: group.progressTitle } : {}),
-                progressSource: group.progressSource,
-              },
-            };
-
-          } else if (event.type === 'tool_use_delta') {
-            if (event.data.name === progressToolName) continue;
-            // Plan 461: incremental tool-call argument fragment. Purely
-            // cosmetic on this side (the authoritative input arrives with
-            // `tool_use`), so forward it untouched 鈥?the renderer uses it
-            // to render file edits while the model is still writing them.
-            yield event;
-
-          } else if (event.type === 'tool_group_progress') {
-            toolGroupProgress.queue(event.data.title, event.data.source);
-
-          } else if (event.type === 'tool_use') {
-            const progressUpdate = readProgressUpdateCall(
-              event.data.name,
-              progressToolName,
-              event.data.input,
-            );
-            if (progressUpdate) {
-              const title = progressUpdate.title;
-              privateProgressCalls.push({ id: event.data.id, title });
-              if (title) toolGroupProgress.queue(title, 'model_progress_tool');
-              needsFollowUp = true;
-              continue;
-            }
-
-            const group = toolGroupProgress.assign(event.data.id);
-            const { groupId, progressTitle } = group;
-            if (group.progressEvent) {
-              yield { type: 'tool_group_progress', data: group.progressEvent };
-            }
-
-            // Plan 426 follow-up: PreToolUse 鈥?notification before the tool
-            // is dispatched to its executor. Runs to completion (blocking),
-            // fail-open; matchers filter on the tool name.
-            const preCtx = yield* dispatchHooks(
-              'PreToolUse',
-              {
-                session_id: turnContext.sessionId ?? '',
-                cwd: turnContext.workingDirectory ?? '',
-                hook_event_name: 'PreToolUse',
-                tool_name: event.data.name,
-                tool_input: event.data.input ?? {},
-                tool_use_id: event.data.id,
-              },
-              { toolName: event.data.name },
-            );
-            if (preCtx && preCtx.contexts.length > 0) {
-              logger.debug(
-                `[Hooks] PreToolUse ${event.data.name} produced ${preCtx.contexts.length} context line(s)`,
-              );
-              // Context-injection hardening: PreToolUse is advisory, not a
-              // decision point 鈥?its contexts are injected as an enveloped
-              // reminder keyed per tool so repeated firings replace the
-              // previous block instead of stacking. Fail-open by contract.
-              const advisory = preCtx.contexts
-                .map((c, i) => renderHookContextEnvelope(
-                  { event: 'PreToolUse', hookName: 'pre-tool-use', toolName: event.data.name, toolUseId: event.data.id, seq: i },
-                  c,
-                ))
-                .join('\n\n');
-              applyHookInjection(
-                messages as unknown as InjectableMessage[],
-                `PreToolUse:${event.data.name}`,
-                renderSystemReminder(advisory, 'pre_tool_use_advisory'),
-                'custom',
-                { id: crypto.randomUUID(), now: Date.now() },
-              );
-            }
-
-            // Add tool to executor for background execution
-            const groupedToolUse = {
-              ...event.data,
-              groupId,
-              ...(progressTitle ? { progressTitle } : {}),
-              progressSource: group.progressSource,
-            };
-            executor.addTool(groupedToolUse);
-            needsFollowUp = true;
-
-            // Anti-dead-loop: track consecutive identical tool calls (name +
-            // serialized input). Streak counting is an engine invariant;
-            // nudge decisions consume it via PostToolUse. Plan 550 step 2e
-            // (TurnPreparer): encapsulated in DeadLoopTracker.
-            deadLoopTracker.record(event.data.name, event.data.input ?? {});
-            turnToolCalls.push({ name: event.data.name, input: event.data.input });
-            turnToolCallIds.set(event.data.id, event.data.name);
-
-            // Build assistant content with tool_use block
-            assistantContent.push({
-              type: 'tool_use',
-              id: event.data.id,
-              name: event.data.name,
-              input: event.data.input,
-              groupId,
-              ...(progressTitle ? { progressTitle } : {}),
-              progressSource: group.progressSource,
-              // Gemini thought signatures must be replayed with the
-              // function call they were issued for.
-              ...(event.data.signature ? { thoughtSignature: event.data.signature } : {}),
-            });
-
-            // Plan 224 follow-up: remember mode-switch tool_use ids so we
-            // can emit a `mode_changed` event right after their result lands.
-            if (
-              event.data.name === 'EnterPlanMode' ||
-              event.data.name === 'ExitPlanMode' ||
-              event.data.name === 'SwitchMode'
-            ) {
-              modeSwitchToolIds.set(event.data.id, event.data.name);
-            }
-
-            // Yield the tool_use event to caller with its stable group identity.
-            yield { ...event, data: groupedToolUse };
-
-          } else if (event.type === 'text') {
-            toolGroupProgress.closeActiveGroup();
-            // Accumulate text content - merge consecutive text blocks
-            // to prevent markdown fragmentation when stored in DB
-            const lastBlock = assistantContent[assistantContent.length - 1];
-            if (lastBlock && lastBlock.type === 'text') {
-              lastBlock.text += event.data;
-            } else {
-              // When the previous block was a tool_use / thinking, the new
-              // text block needs a leading newline so block-level markdown
-              // (### heading, - list, 1. numbered, etc.) is not swallowed
-              // into the previous paragraph. Without this, LLM outputs
-              // like `...text\n### heading` that span a tool boundary get
-              // concatenated into a single inline paragraph.
-              const prefix = assistantContent.length > 0 ? '\n' : '';
-              assistantContent.push({
-                type: 'text',
-                text: prefix + event.data,
-              });
-            }
-
-            // Yield text event to caller
-            yield event;
-
-          } else if (event.type === 'done') {
-            // Ignore duplicate `done` events from the same LLM stream.
-            // The first one already pushed the assistant message and
-            // drained tool results; a second would re-push identical
-            // content under a fresh UUID and duplicate the reply in DB/UI.
-            if (doneEventHandled) {
-              logger.warn(`[Agent] Turn ${turnCount}: Ignoring duplicate done event from LLM stream`);
-              continue;
-            }
-            doneEventHandled = true;
-            // Plan 418 L2: capture the model's native stop reason (end_turn /
-            // max_tokens / tool_use / stop_sequence) for turn-termination
-            // decisions below (intent-consistency nudge, length guard).
-            turnStopReason = (event as { reason?: string }).reason;
-            // LLM stream is done for this turn
-            // IMPORTANT: Add assistant message BEFORE tool results for OpenAI API compatibility
-            // OpenAI requires: assistant (tool_calls) -> tool (result) message order
-
-            // Build final assistant content including thinking block if present
-            const finalAssistantContent: MessageContent[] = [];
-
-            // Redacted reasoning goes first: the encrypted payload must lead
-            // the assistant turn for Anthropic thinking-mode validation.
-            if (redactedEncrypted) {
-              finalAssistantContent.push({
-                type: 'thinking',
-                thinking: '',
-                redacted: true,
-                encrypted: redactedEncrypted,
-              });
-            }
-
-            // Add thinking block first if we have thinking content
-            if (hasThinkingContent && thinkingContent) {
-              finalAssistantContent.push({
-                type: 'thinking',
-                thinking: thinkingContent,
-                ...(thinkingSignature ? { thinkingSignature } : {}),
-              });
-            }
-
-            // Add the rest of the content (text and tool_use blocks)
-            finalAssistantContent.push(...assistantContent);
-
-            if (
-              finalAssistantContent.length > 0 ||
-              (needsFollowUp && privateProgressCalls.length === 0)
-            ) {
-              // Per-message model attribution: lets transformMessages
-              // recognize this message as same-model on the next round's
-              // request and replay its thinking block natively (with the
-              // signature captured above) instead of downgrading to text.
-              const pushed: Message = { id: crypto.randomUUID(), role: 'assistant', content: finalAssistantContent.length > 0 ? finalAssistantContent : assistantContent, timestamp: Date.now(), duration_ms: Date.now() - streamStartTime, seq_index: seqIndex, ...this.modelAttribution };
-              // Plan 445: prefer the turn-cumulative tokenUsage (with
-              // `last_call` sub-block) supplied by the caller via
-              // `cumulativeTokenUsageRef`. Falls back to the single-call
-              // `usageBlock` derived from `roundResultUsage` so callers that
-              // never set the ref (CLI / tests / direct streamChat) still
-              // get a working ring — they just lose `last_call` and the
-              // turn sum, matching pre-plan-445 behavior.
-              const cumulative = options?.cumulativeTokenUsageRef?.current ?? null;
-              if (cumulative) {
-                // Plan 546: `pushed.usage` is the in-memory anchor consumed
-                // by computeContextEstimate (pi style). It MUST stay the
-                // single-call snapshot (largest-prompt call of the turn),
-                // not the turn-cumulative block — otherwise every consumer
-                // that reads `usage` (seed loop, anchor scans, anchor
-                // correction) inherits a per-turn sum that overlaps with
-                // the per-call ledger the `result` handler also walks.
-                // `pushed.tokenUsage` remains the turn-cumulative block
-                // (with `last_call` + `calls` ledger) for the DB column;
-                // the renderer's persisted scan prefers `last_call`, so the
-                // anchor still recovers correctly on reload.
-                const singleCall = deriveSingleCallUsage(cumulative);
-                (pushed as AssistantMessage).usage = singleCall as AssistantMessage['usage'];
-                // Persisted shape — turn-cumulative + last_call + calls
-                (pushed as Message & { tokenUsage?: unknown }).tokenUsage = cumulative;
-              } else if (roundResultUsage && ((roundResultUsage.input_tokens ?? 0) + (roundResultUsage.output_tokens ?? 0)) > 0) {
-                // Legacy fallback (CLI / unit tests): single-call block.
-                // Attach BOTH field names: `usage` is the pi-style in-memory
-                // convention read by computeContextEstimate's anchor scan,
-                // `tokenUsage` is the duya projection field listed in
-                // LEGACY_KNOWN_KEYS 鈥?without it ingestMessage strips the
-                // block from the timeline and the context ring shows "?"
-                // forever (plan 443 regression, fixed in plan 444).
-                const usageBlock = {
-                  input_tokens: roundResultUsage.input_tokens ?? 0,
-                  output_tokens: roundResultUsage.output_tokens ?? 0,
-                  ...(roundResultUsage.total_tokens !== undefined ? { total_tokens: roundResultUsage.total_tokens } : {}),
-                  ...(roundResultUsage.cache_hit_tokens !== undefined ? { cache_hit_tokens: roundResultUsage.cache_hit_tokens } : {}),
-                  ...(roundResultUsage.cache_creation_tokens !== undefined ? { cache_creation_tokens: roundResultUsage.cache_creation_tokens } : {}),
-                };
-                (pushed as AssistantMessage).usage = usageBlock;
-                (pushed as Message & { tokenUsage?: unknown }).tokenUsage = usageBlock;
-              }
-              this._pushDurable(messages, pushed);
-            }
-
-            if (!needsFollowUp) {
-              // No subsequent tool call consumed this update. Treat it as an
-              // orphan rather than carrying it into a later agent run.
-              toolGroupProgress.restorePending(undefined);
-              toolGroupProgress.closeActiveGroup();
-            }
-
-            // Plan 418 L2 (pi parity): a max_tokens/length stop means every
-            // tool call in this turn may carry truncated arguments. Fail them
-            // all instead of executing potentially borked calls (pi
-            // `failToolCallsFromTruncatedMessage`). The model retries next
-            // turn with complete arguments.
-            if (
-              turnStopReason === 'max_tokens' &&
-              assistantContent.some((b) => b.type === 'tool_use')
-            ) {
-              const truncatedUses = assistantContent.filter(
-                (b): b is ToolUseContent => b.type === 'tool_use',
-              );
-              logger.warn(
-                `[Agent] Turn ${turnCount}: LLM stopped at max_tokens with ${truncatedUses.length} tool call(s); failing them to avoid truncated arguments`,
-              );
-              executor.discard();
-              for (const use of truncatedUses) {
-                messages.push({
-                  id: crypto.randomUUID(),
-                  role: 'tool',
-                  tool_call_id: use.id,
-                  content:
-                    '<tool_error>output truncated (max_tokens); tool call arguments may be incomplete. Retry the call with complete arguments.</tool_error>',
-                  timestamp: Date.now(),
-                  seq_index: seqIndex,
-                });
-              }
-              needsFollowUp = true;
-            }
-
-            // Now get remaining tool results and add them after assistant message
-            logger.debug(`[Agent] Turn ${turnCount}: entering getRemainingResults, needsFollowUp=${needsFollowUp}`);
-            let toolResultMessageCount = 0;
-            for await (const result of executor.getRemainingResults()) {
-              // Deferred tool context (e.g. a follow-up review payload) is
-              // surfaced here. It is injected into the provider payload on
-              // the next turn and never persisted to the durable history.
-              if (result.deferredContext) {
-                deferredContexts.push(result.deferredContext);
-                continue;
-              }
-              if (result.message) {
-                // Check if this is an agent_progress message
-                const isAgentProgress = result.message.metadata?.type === 'agent_progress';
-                if (isAgentProgress) {
-                  // Yield agent progress event so the UI can show sub-agent activity
-                  const agentEvent = result.message.metadata?.agentEvent as AgentProgressEvent | undefined;
-                  if (agentEvent) {
-                    yield {
-                      type: 'agent_progress',
-                      data: agentEvent,
-                    };
-                  }
-                  continue;
-                }
-
-                // Check if this is a tool_result message (role: 'tool' or content type 'tool_result')
-                const messageContent = result.message.content;
-                const isToolResult = result.message.role === 'tool' ||
-                  (Array.isArray(messageContent) &&
-                    messageContent.length > 0 &&
-                    messageContent[0]?.type === 'tool_result');
-
-                // Only add tool_result messages to history, skip progress messages
-                if (isToolResult) {
-                  toolResultMessageCount++;
-                  result.message.seq_index = seqIndex;
-                  if (!result.message.id) {
-                    result.message.id = crypto.randomUUID();
-                  }
-                  // Plan 610 A3-2b7 (S1): the `role === 'tool'` test moved
-                  // INTO the seam method, because "is this row a tool result"
-                  // is part of the protocol's answer rather than a precondition
-                  // a caller has to remember.
-                  this.recordTurnCatalogSchemaRead(resolvedTools, result.message);
-                  this._pushDurable(messages, result.message);
-
-                  // Yield tool result event. The frame is built by the SAME
-                  // helper `recordTurnToolResult` publishes through, so the
-                  // engine's port and this yield cannot drift into two
-                  // renderings of one event (plan 610 A3-2b2).
-                  const toolResultOutcome = this._readToolResultOutcome(result.message);
-                  const toolResultId = toolResultOutcome.id;
-                  const toolResultContent = toolResultOutcome.content;
-                  const toolResultError = toolResultOutcome.isError;
-
-                  yield this._buildToolResultFrame(result.message, toolResultOutcome);
-
-                  // Plan 426 follow-up: PostToolUseFailure 鈥?fired when a
-                  // tool result is an error (fail-open; matchers filter on
-                  // the failed tool's name).
-                  if (toolResultError) {
-                    const failedToolName = turnToolCallIds.get(toolResultId) ?? '';
-                    yield* dispatchHooks(
-                      'PostToolUseFailure',
-                      {
-                        session_id: turnContext.sessionId ?? '',
-                        cwd: turnContext.workingDirectory ?? '',
-                        hook_event_name: 'PostToolUseFailure',
-                        tool_name: failedToolName,
-                        tool_input: {},
-                        tool_use_id: toolResultId,
-                        error: toolResultContent.slice(0, 2048),
-                      },
-                      { toolName: failedToolName || undefined },
-                    );
-                  }
-
-                  // Plan 224 follow-up: if this tool_result belongs to a
-                  // mode-switch tool (EnterPlanMode / ExitPlanMode /
-                  // SwitchMode), parse the new runtime mode out of the
-                  // JSON result and emit a `mode_changed` SSE event so
-                  // the renderer can sync the input-box chip + glow.
-                  // Skip on error 鈥?failed switches leave the mode unchanged.
-                  //
-                  // The map holds the tool NAME, which is the whole of what the
-                  // mode switch is derived from (`modeSwitchToolIds` is filtered
-                  // on the three mode tools at `:2620-2626`), so
-                  // `_buildModeChangedFrame` takes the name and is callable from
-                  // outside the generator as well.
-                  const modeSwitchToolName = modeSwitchToolIds.get(toolResultId);
-                  if (modeSwitchToolName && !toolResultError) {
-                    const modeChanged = this._buildModeChangedFrame(
-                      modeSwitchToolName,
-                      toolResultOutcome,
-                    );
-                    if (modeChanged !== null) yield modeChanged;
-                    modeSwitchToolIds.delete(toolResultId);
-                  }
-                }
-              }
-            }
-            logger.debug(
-              `[Agent] Turn ${turnCount}: getRemainingResults completed, toolResultMessageCount=${toolResultMessageCount}`
-            );
-
-            // Private progress calls are replayed to the model through the
-            // working message array only. They never enter the durable
-            // timeline, tool executor, permission flow, or renderer rows.
-            for (const call of privateProgressCalls.splice(0)) {
-              messages.push({
-                role: 'assistant',
-                content: [{
-                  type: 'tool_use',
-                  id: call.id,
-                  name: progressToolName,
-                  input: { title: call.title ?? '' },
-                }],
-                timestamp: Date.now(),
-              });
-              messages.push({
-                role: 'tool',
-                tool_call_id: call.id,
-                content: call.title
-                  ? 'Progress title accepted.'
-                  : 'No valid progress title was accepted.',
-                timestamp: Date.now(),
-              });
-            }
-
-            // Post-tool hooks and file-context collection run after results
-            // have been committed to the message history.
-            //
-            if (toolResultMessageCount > 0) {
-              // Plan 426: PostToolUse dispatch, fired now that the turn's
-              // tool results are committed so hook injections read as
-              // feedback on those results (grok "results committed after"
-              // semantics). Carries the identical-call streak for the
-              // dead-loop nudge hook. Plan 550 step 2e (TurnPreparer):
-              // the streak snapshot is now sourced from DeadLoopTracker.
-              const streak = deadLoopTracker.stats();
-              for (const effect of await loopHooks.dispatch('PostToolUse', {
-                ...buildHookCtx(),
-                consecutiveIdenticalToolCalls: streak,
-              })) {
-                applyLoopHookEffect(messages, effect, seqIndex);
-              }
-
-              // Plan 408b: nested AGENTS.md on-demand loading. Tools that
-              // touched files under the project root pull in subtree
-              // AGENTS.md / conditional rules as a one-shot user-role
-              // reminder (cc-haha nested_memory parity). Per-file dedup is
-              // handled by the manager's session-level loaded set.
-              if (
-                this.omitAgentsMd !== true &&
-                isNestedAgentsMdEnabled() &&
-                turnToolCalls.length > 0
-              ) {
-                try {
-                  const triggerPaths = extractTriggerPaths(
-                    turnToolCalls,
-                    turnContext.workingDirectory ?? process.cwd(),
-                  );
-                  if (triggerPaths.length > 0) {
-                    const nestedFiles = await getAgentsMdManager().collectNestedMemory(triggerPaths);
-                    if (nestedFiles.length > 0) {
-                      // Plan 567 §B: renderNestedMemoryBlock returns the inner
-                      // <project_instructions_spec> body only — the outer
-                      // <system-reminder> envelope is applied exactly once here.
-                      const block = getAgentsMdManager().renderNestedMemoryBlock(nestedFiles);
-                      if (block) {
-                        const action = applyHookInjection(
-                          messages as unknown as InjectableMessage[],
-                          undefined,
-                          renderSystemReminder(block, 'nested_agents_md'),
-                          'nested-agents-md',
-                          { id: crypto.randomUUID(), now: Date.now() },
-                        );
-                        logger.info(
-                          `Nested AGENTS.md injected (${action})`,
-                          { count: nestedFiles.length },
-                          'AgentsMd',
-                        );
-                      }
-                    }
-                  }
-                } catch (err) {
-                  // Nested memory is advisory 鈥?never fail the turn on it.
-                  logger.warn(
-                    `Nested AGENTS.md collection failed: ${err instanceof Error ? err.message : String(err)}`,
-                    undefined,
-                    'AgentsMd',
-                  );
-                }
-              }
-            }
-
-            // widgetStyleHistory and canvasFreshness are stable references
-            // injected into toolUseContext; canvas tools mutate them in
-            // place, so nothing to copy back here. The next turn reads the
-            // same references via this.widgetStyleHistory / this.canvasFreshness.
-
-            // Grok-aligned preflight overflow check
-            // (`check_preflight_overflow`, grok `turn.rs:2711`). After tool
-            // results are committed, see whether the projected context has
-            // *exceeded* the window 鈥?a single tool call can blow past the
-            // 78% threshold by itself, and waiting for the next turn's
-            // `shouldCompact()` check risks a `context_length_exceeded`
-            // round-trip. Compacting here is cheaper than retrying the
-            // whole turn.
-            if (toolResultMessageCount > 0) {
-              // Plan 610 A3-2b6: the gate and the compaction moved onto the
-              // coordinator (`CompactionCoordinator.decidePreflightOverflow` /
-              // `.executeRecovery`) so a `CompactionPort` host can reach them.
-              // The probe, the `overHardLimit` comparison, the image arm's
-              // `force` and the re-projection are all still the legacy's
-              // statements -- they are now the coordinator's, and this site
-              // asks the same two methods the port does rather than keeping a
-              // second copy of the decision.
-              const overflowVerdict =
-                this.compactionCoordinator.decidePreflightOverflow({ turnCount });
-              if (overflowVerdict.fire) {
-                try {
-                  const overflowRun = await this.compactionCoordinator.executeRecovery({
-                    turnCount,
-                    systemPromptContent,
-                    messages,
-                    trigger: 'preflight_overflow',
-                    force: overflowVerdict.imageTriggered,
-                  });
-                  const compactEntry = overflowRun.entry;
-                  if (compactEntry) {
-                    this.invalidateTurnCatalogSchemaReads(resolvedTools);
-                    logger.info(
-                      `[Agent] Turn ${turnCount}: Preflight overflow compaction fired, retained=${compactEntry.tokensAfter ?? 0} tokens`,
-                      undefined,
-                      'Agent',
-                    );
-                    // Re-project model messages from the updated timeline
-                    // so the next iteration (if any) and the next turn
-                    // see the compacted projection.
-                    systemPromptContent = overflowRun.systemPromptContent;
-                    messages = overflowRun.messages;
-                  }
-                } catch (overflowError) {
-                  // Best-effort: a failed preflight overflow does not
-                  // block the turn. Fall through to the next iteration.
-                  logger.warn(
-                    `[Agent] Turn ${turnCount}: Preflight overflow compaction failed: ${
-                      overflowError instanceof Error
-                        ? overflowError.message
-                        : String(overflowError)
-                    }`,
-                    undefined,
-                    'Agent',
-                  );
-                }
-              }
-            }
-
-            // Do NOT yield the LLM's 'done' event to the SSE client here.
-            // In multi-turn conversations, the LLM client yields a 'done' event
-            // at the end of each turn. Forwarding it would cause the client to
-            // prematurely think the stream is complete. Only the final 'done'
-            // event (yielded after the while-loop) should reach the client.
-
-          } else if (event.type === 'system') {
-            // Plan 439: forward retry/diagnostic notices. Transport-layer
-            // retries (withRetry) and turn-level stream replays both emit
-            // `{ type:'system', metadata:{ retryAttempt, ... } }`; the worker
-            // boundary converts those into chat:retry chips. Previously this
-            // event type was silently dropped here.
-            yield event;
-
-          } else if (event.type === 'error') {
-            // Propagate error events
-            yield event;
-
-          } else if (event.type === 'thinking') {
-            // Accumulate thinking content and pass through
-            // Ensure event.data is a string to avoid [object Object] issues
-            const thinkingData = typeof event.data === 'string' ? event.data : JSON.stringify(event.data);
-            if (thinkingData) {
-              thinkingContent += thinkingData;
-            }
-            // Capture the signature emitted at content_block_stop (empty data).
-            // This is required by Anthropic to continue the thinking chain
-            // across turns 鈥?without it the next request 400s with
-            // "The content[].thinking in the thinking mode must be passed back to the API."
-            if (event.signature) {
-              thinkingSignature = event.signature;
-            }
-            // Redacted reasoning: no content follows — record the encrypted
-            // payload for the push site below.
-            if (event.redacted && typeof event.encrypted === 'string') {
-              redactedEncrypted = event.encrypted;
-            }
-            hasThinkingContent = true;
-            yield event;
-
-          } else if (event.type === 'tool_progress') {
-            // Pass through tool progress events
-            yield event;
-
-          } else if (event.type === 'tool_timeout') {
-            // Pass through tool timeout events
-            yield event;
-
-          } else if (event.type === 'result') {
-            // Preserve the token-usage event for cost accounting and
-            // context-ring display (persisted to DB by the agent process).
-            // Also feed usage into the goal tracker's token budget so an
-            // over-budget goal transitions to `budget_limited` (plan 411
-            // Phase 2) instead of silently burning tokens.
-            const usage = event.data as
-              | {
-                  input_tokens?: number
-                  output_tokens?: number
-                  total_tokens?: number
-                  cache_hit_tokens?: number
-                  cache_creation_tokens?: number
-                }
-              | undefined;
-            const used = usage?.total_tokens ?? usage?.input_tokens ?? 0;
-            if (used > 0 && this.modeCoordinator) {
-              void this.modeCoordinator.reportGoalTokenUsage(used);
-            }
-            roundResultUsage =
-              resultPromptVolume(usage) >= resultPromptVolume(roundResultUsage) ? usage : roundResultUsage;
-            // Anchor compaction decisions on real provider usage. Keeps the
-            // largest-prompt result of the turn (see resultPromptVolume note
-            // above) so GLM-style per-round cache reporting cannot collapse
-            // the anchor mid-turn.
-            const observedPrompt = resultPromptVolume(roundResultUsage);
-            // Token-trace: log the per-call delta + the chosen round-max so
-            // a dropped/duplicated cache_read or input_tokens is visible in
-            // the log diff (the previous value is reported alongside the new
-            // candidate so an off-by-one is easy to spot).
-            const candidateVolume = resultPromptVolume(usage);
-            const prevVolume = roundResultUsage ? candidateVolume : 0;
-            // Plan 577 §2: Observation-layer feed — input and output travel
-            // separately; the manager owns the round-max defense on the
-            // input slot and output never inflates the anchor.
-            const observedInput = normalizedPromptVolume(usage);
-            const observedOutput = usage?.output_tokens ?? 0;
-            logger.tokenTrace('observedPromptTokens', {
-              sessionId: turnContext.sessionId ?? undefined,
-              turnEvent: 'result',
-              observed: observedPrompt,
-              candidate: candidateVolume,
-              prev: prevVolume,
-              keptNew: resultPromptVolume(usage) >= resultPromptVolume(roundResultUsage),
-              input: observedInput,
-              output: observedOutput,
-              latestInput: this.compactionManager.getLatestInputTokens() ?? null,
-              peakInput: this.compactionManager.getPeakInputTokens() ?? null,
-              usage: usage
-                ? {
-                    input: usage.input_tokens,
-                    output: usage.output_tokens,
-                    cacheRead: usage.cache_hit_tokens,
-                    cacheWrite: usage.cache_creation_tokens,
-                    total: usage.total_tokens,
-                  }
-                : null,
-            });
-            if (observedInput > 0) {
-              this.compactionManager.setObservedUsageForEpoch(
-                observedInput,
-                observedOutput,
-                requestEpoch,
-              );
-            }
-            yield event;
-          }
-        }
-
-        logger.debug(`[Agent] Turn ${turnCount}: LLM stream ended, total events=${llmEventCount}`);
-
-        // Per-run turn cap (only fires when the caller passed an explicit
-        // `maxTurns`). `maxTurns === undefined` means uncapped 鈥?matches
-        // pi's design where `shouldStopAfterTurn` is the only stop hook and
-        // defaults to undefined. We mirror that: no `?? N` fallback here.
-        // A natural completion falls through to the `!needsFollowUp` branch.
-        if (maxTurns !== undefined && turnCount >= maxTurns && needsFollowUp) {
-          // No wrap-up nudge 鈥?the caller opted into a hard ceiling, so we
-          // honour it. Refresh sessionInfo counters BEFORE yielding.
-          this._commitMessages();
-          yield { type: 'done', reason: 'max_turns' };
-          return;
-        }
-
-        // If no tool_use blocks were emitted, we're done
-        // Note: assistant message was already added in 'done' event handler
-        if (!needsFollowUp) {
-          // A message can arrive while the model is producing its final text.
-          // Re-check before finalising so in-run guidance is not limited to
-          // tool-heavy flows that naturally create another model turn.
-          const finalMailboxDecision = await this._sweepInterTurn(
-            runId,
-            messages,
-            seqIndex,
-            'before_final_answer',
-            options,
-          );
-          if (finalMailboxDecision.action === 'hard_replace') {
-            // Replacement runtime_context was already pushed by
-            // _claimMailboxAtCheckpoint; loop to give the model a fresh turn.
-            continue;
-          }
-          if (finalMailboxDecision.action === 'continue' && finalMailboxDecision.absorbed) {
-            continue;
-          }
-
-          // Plan 426 Phase 3: round-end mode transitions + snapshot
-          // persistence (plan deferred exit, goal worker rounds, research
-          // auto-converge) now run inside the mode-coordinator PreFinalize
-          // hook (priority 5) 鈥?dispatched ahead of the builtin vetoes
-          // below, and re-fired on every natural stop exactly like the
-          // pre-bus inline call did.
-
-          // Plan 426: PreFinalize dispatch 鈥?the veto-capable steering point.
-          // The model ended its turn naturally; the bus consults the builtin
-          // policies (goal premature-stop 鈫?todo gate, in that
-          // fixed priority order) before the run is allowed to finalize. A
-          // block_finalize veto injects a transient <system-reminder>
-          // directive and continues the loop. Hook failures already degraded
-          // to "allow" inside the bus (fail-open).
-          // Plan 550 step 2e (StreamFinalizer): the entire success-path
-          // finalization is delegated to SessionFinalizer so the
-          // "PreFinalize veto short-circuits the natural exit and
-          // continues the loop" contract is unit-testable in
-          // isolation rather than embedded in streamChat. The
-          // dispatchHooks / host casts are the contractually-typed
-          // escape hatches for the agent's narrowed `event` type
-          // (HookEvent union) and the private `_commitMessages`
-          // access — see SessionFinalizer doc comments.
-          const finalizer = new SessionFinalizer({
-            messages,
-            turnCount,
-            seqIndex,
-            turnContext,
-            deadLoopTracker,
-            loopHooks,
-            dispatchHooks: dispatchHooks as unknown as import('./SessionFinalizer.js').HookDispatcher,
-            buildHookCtx,
-            resolvedModes: this.resolvedModes,
-            modeCtx: this.modeCtx,
-            host: this as unknown as import('./SessionFinalizer.js').FinalizerHost,
-            stopReason: turnStopReason,
-            // Plan 569: one last mailbox claim at the finalize boundary.
-            // Absorbing here keeps notifications that landed in the
-            // finalize window inside this run (same path as a PreFinalize
-            // veto → continue → next turn's before_model_turn claim is
-            // empty → the LLM sees the notification) instead of leaking
-            // to the renderer's pendingBackgroundResumes resume path.
-            // soft_stop / hard_replace decisions are folded away — a run
-            // about to end neither replays a soft stop nor accepts a
-            // replacement context. `_claimMailboxAtCheckpoint` never
-            // throws (claim failures degrade to continue/absorbed=false).
-            pollFinalMailbox: async () => {
-              if (finalPollAbsorbs >= FINAL_POLL_MAX_ABSORBS) return false;
-              const decision = await this._sweepInterTurn(
-                runId,
-                messages,
-                seqIndex,
-                'before_final_answer',
-                options,
-              );
-              const absorbed = decision.action === 'continue' && decision.absorbed;
-              if (absorbed) {
-                finalPollAbsorbs++;
-                logger.info(
-                  `[AgentMailbox] final poll absorbed #${finalPollAbsorbs}/${FINAL_POLL_MAX_ABSORBS} at finalizeSuccess`,
-                );
-              }
-              return absorbed;
-            },
-          });
-          const finalized = yield* finalizer.finalizeSuccess();
-          if (finalized) return;
-          // PreFinalize vetoed — the effect has been applied to the
-          // messages array, continue the loop.
-          continue;
-
-          // (PostTurn dispatch + mode-exit hooks + SessionEnd +
-          // done event are now driven by SessionFinalizer.finalizeSuccess
-          // above. The block below is unreachable dead code kept out of
-          // the diff to keep this commit reviewable.)
-        }
-
-        // Anti-dead-loop hard stop: only when the model requested more tool
-        // rounds. The assistant message and tool results are already persisted
-        // above, so terminating here is safe. Plan 550 step 2e (TurnPreparer):
-        // threshold check moved into DeadLoopTracker.shouldHardStop().
-        if (deadLoopTracker.shouldHardStop()) {
-          this._commitMessages();
-          yield { type: 'done', reason: 'repeated_tool_calls' };
-          return;
-        }
-
-        // Loop continues - next LLM call will include tool results
-        // Note: assistant message and tool results were already added in 'done' event handler
-
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        logger.error(`[Agent] Turn ${turnCount}: Error in LLM stream`, error instanceof Error ? error : new Error(errorMessage));
-
-        // Check for context length exceeded errors and attempt compaction.
-        // Plan 577 Phase 0: dual-evidence gate. The old raw
-        // `errorMessage.includes('exceeds limit')` match fired a
-        // threshold-free emergency compaction for ANY error carrying that
-        // phrase (output/payload/quota wording included). Now:
-        //   explicit provider claim → compaction on its own (the local budget
-        //     may be misresolved, so a probe is NOT more authoritative here);
-        //   weak wording            → only with local corroboration
-        //     (projected context already over the trigger line); probe
-        //     failure = no evidence = no compaction (fail-closed).
-        //
-        // Plan 610 A3-2b6: the gate moved onto the coordinator
-        // (`decideEmergency`) so a `CompactionPort` host can reach the recovery
-        // path at all, and the compaction itself onto `executeRecovery`. The
-        // structured log below still reads the classification and the measured
-        // context off the SAME verdict that decided -- plan 577 review round 2
-        // made these lines the historical baseline the ContextLedger is
-        // verified against, so they are preserved rather than re-derived by a
-        // second probe next to the gate.
-        const emergencyVerdict = this.compactionCoordinator.decideEmergency({
-          turnCount,
-          providerError: errorMessage,
-        });
-        const evidenceProbe: CompactionProbe | null = emergencyVerdict.probe ?? null;
-
-        if (emergencyVerdict.fire) {
-          const evidence =
-            emergencyVerdict.classification === 'explicit' ? 'explicit' : 'weak+probe';
-          logger.warn(
-            `[Agent] Turn ${turnCount}: Context length exceeded (evidence=${evidence}), attempting compaction`,
-            {
-              classification: emergencyVerdict.classification,
-              estimatedTokens: evidenceProbe?.tokens ?? null,
-              peakInputTokens: evidenceProbe?.peakInputTokens ?? null,
-              triggerLine: this.compactionManager.getTriggerLine(),
-              hardLimit: this.compactionManager.getHardLimit(),
-              contextWindow: this.compactionManager.getMaxTokens(),
-              modelId: this._model,
-              windowSource: compactionWindowSource,
-            },
-          );
-          try {
-            const emergencyRun = await this.compactionCoordinator.executeRecovery({
-              turnCount,
-              systemPromptContent,
-              messages,
-              trigger: 'emergency',
-              force: false,
-            });
-            const compactEntry = emergencyRun.entry;
-            if (compactEntry) {
-              this.invalidateTurnCatalogSchemaReads(resolvedTools);
-              logger.info(`[Agent] Turn ${turnCount}: Compaction succeeded, strategy=${compactEntry.strategy}, retained=${compactEntry.tokensAfter ?? 0} tokens`);
-              systemPromptContent = emergencyRun.systemPromptContent;
-              messages = emergencyRun.messages;
-              // Retry this turn with compacted messages
-              executor.discard();
-              turnCount--; // Decrement so the next iteration uses the same turn number
-              continue;
-            }
-          } catch (compactError) {
-            const compactErrorMsg = compactError instanceof Error ? compactError.message : String(compactError);
-            logger.error(`[Agent] Turn ${turnCount}: Compaction failed: ${compactErrorMsg}`);
-          }
-        }
-
-        // Plan 550 step 2e (StreamFinalizer): the cleanup +
-        // AbortError synthetic tool_result injection + Plan 462
-        // error-code mapping is delegated to the finalizer so the
-        // catch block stays focused on the retry orchestration.
-        const errorFinalizer = new SessionFinalizer({
-          messages,
-          turnCount,
-          seqIndex,
-          turnContext,
-          deadLoopTracker,
-          loopHooks,
-          dispatchHooks: dispatchHooks as unknown as import('./SessionFinalizer.js').HookDispatcher,
-          buildHookCtx,
-          resolvedModes: this.resolvedModes,
-          modeCtx: this.modeCtx,
-          host: this as unknown as import('./SessionFinalizer.js').FinalizerHost,
-          executor,
-        });
-        yield* errorFinalizer.finalizeStreamError(error);
-        return;
-      } finally {
-        // Always release the per-request timeout controller (clear the
-        // timer and drop the parent-signal abort listener) so a long
-        // multi-turn run does not accumulate listeners/timers.
-        disposeRequestController();
-      }
-    }
-
-    // User interrupted - executor already created in current turn.
-    // Plan 550 step 2e (StreamFinalizer): Stop + SessionEnd +
-    // done(aborted) is delegated to SessionFinalizer.finalizeAbort.
-    const finalizer = new SessionFinalizer({
-      messages,
-      turnCount,
-      seqIndex,
-      turnContext,
-      deadLoopTracker,
-      loopHooks,
-      dispatchHooks: dispatchHooks as unknown as import('./SessionFinalizer.js').HookDispatcher,
-      buildHookCtx,
-      resolvedModes: this.resolvedModes,
-      modeCtx: this.modeCtx,
-      host: this as unknown as import('./SessionFinalizer.js').FinalizerHost,
-    });
-    yield* finalizer.finalizeAbort();
   }
 
   /**
@@ -5385,6 +4353,81 @@ export class duyaAgent implements AgentRuntime {
   }
 
   /**
+   * Plan 610 P5: the orchestrator frames for an ALREADY-ESTABLISHED run,
+   * reachable from outside this file.
+   *
+   * ## Why this is a seam and not the private generator it wraps
+   *
+   * `_dispatchOrchestratorMode` was already frame-independent -- MEASURED: it
+   * reads agent fields (`llmClient`, `activeMCPRegistry`, `sessionId`,
+   * `workingDirectory`, `blockedDomains`, `providerNameToInternalKey`,
+   * `widgetStyleHistory`), the resolved modifier, the prompt and the options,
+   * and NOTHING from `streamChat`'s closure. Private was therefore the only
+   * thing standing between it and a driver, and the cost of that was measured:
+   * `RunHandle.orchestrator` could REPORT that a run's mode was an
+   * orchestrator and the reader had no way to ACT on it, so the only correct
+   * driver behaviour was to refuse the turn and fail.
+   *
+   * ## Why it is NOT an `async *` method
+   *
+   * Because the refusal below has to happen when the driver CALLS it, not when
+   * it first iterates. An `async *` method body does not run until the first
+   * `next()`, so a throw inside one is invisible to a driver that constructs
+   * the stream and forwards it somewhere that never pulls from it -- which is
+   * the mute-stream failure this plan exists to prevent, one layer down. This
+   * method is therefore NOT a generator: it validates, then RETURNS the
+   * private generator, so `orchestratorFramesFor` either hands back a real
+   * stream or throws while the driver is still on the stack.
+   *
+   * ## What the frames are, and why the ENGINE has none of them
+   *
+   * The legacy's SSE vocabulary, unchanged: an orchestrator owns the whole
+   * stream (`ModeModifierOrchestrator.execute` yields `SSEEvent`), so this path
+   * is not a turn and produces nothing the engine's `ModelPort` /
+   * `ToolPort` / `TurnOutputPort` could consume. MEASURED on this commit
+   * `agent-runtime`'s `ports.ts` has no orchestrator member, and `ports.ts`
+   * forbids importing `@duya/ai`'s `SSEEvent` -- the renderer-facing half of
+   * that union (`tool_group_progress`, `agent_progress`, `mode_changed`,
+   * `goal_updated`) is exactly the vocabulary the engine is forbidden to carry.
+   * So the frames are ROUTED to the same consumer the legacy generator fed,
+   * and the engine leg is not offered this run at all. `selectRunDriverLeg`
+   * (`process/run-composition.ts`) is that routing, named once.
+   *
+   * ## One implementation, two callers
+   *
+   * `streamChat` calls THIS for its mode branch, exactly as it calls `beginRun`.
+   * Before this seam the generator resolved the mode from the registry a second
+   * time and called the private dispatcher, which meant the legacy path and any
+   * driver path could hold different answers for "which mode does this run
+   * dispatch" and both would typecheck.
+   *
+   * @throws if the run resolved no orchestrator. That is a caller error -- a
+   * driver that got `null` from `RunHandle.orchestrator` has an ordinary turn
+   * and must assemble it -- so it throws rather than yielding an empty stream,
+   * because an empty stream satisfies every "the mode produced no error" reading
+   * (see `turn-pipeline-producer.test.ts` on why a mute pipeline passes those).
+   */
+  orchestratorFramesFor(run: RunHandle): AsyncGenerator<SSEEvent, void, unknown> {
+    const mod = run.orchestrator;
+    if (!mod) {
+      throw new Error(
+        `orchestratorFramesFor: run requested mode "${run.requestedMode}", which resolved to no orchestrator; ` +
+          'this run is an ordinary turn and must be assembled, not dispatched',
+      );
+    }
+    // `run.controller`, NOT `this.abortController`: the handle's own controller
+    // is the run's cancellation source even after a later `beginRun` has taken
+    // the field, and it is the same object on the legacy path because
+    // `streamChat` dispatches through a handle its own `beginRun` returned.
+    return this._dispatchOrchestratorMode(
+      mod,
+      run.request.prompt,
+      run.request.options,
+      run.controller,
+    );
+  }
+
+  /**
    * Dispatch to an orchestrator-paradigm ModeModifier (plan 224 Phase 1.5+).
    *
    * Orchestrator modes (e.g. research) take over the entire stream with
@@ -5395,11 +4438,17 @@ export class duyaAgent implements AgentRuntime {
    * Tool registry construction is shared with the legacy path so that
    * plugin/MCP tools remain available to orchestrator modes that
    * choose to use them.
+   *
+   * Private because `orchestratorFramesFor` is the seam: it takes the mode from
+   * `RunHandle.orchestrator` and the controller from `RunHandle.controller`, so
+   * a caller cannot pair this dispatch with a different run's mode or abort
+   * source.
    */
   private async *_dispatchOrchestratorMode(
     mod: ModeModifier,
     prompt: string | MessageContent[],
-    options?: ChatOptions,
+    options: ChatOptions | undefined,
+    runController: AbortController,
   ): AsyncGenerator<SSEEvent, void, unknown> {
     const queryText = typeof prompt === 'string'
       ? prompt
@@ -5468,7 +4517,10 @@ export class duyaAgent implements AgentRuntime {
 
     const deps: OrchestratorDeps = {
       llmClient: this.llmClient,
-      abortController: this.abortController!,
+      // The run's OWN controller, handed in by the seam. The `this.abortController!`
+      // this replaces read a field a superseded run could have re-pointed, and
+      // asserted rather than checked that it was there.
+      abortController: runController,
       sessionId: this.sessionId,
       workingDirectory: this.workingDirectory,
       toolRegistry,
@@ -5509,6 +4561,56 @@ export class duyaAgent implements AgentRuntime {
   }
 
   // === end streamChat helpers ===========================================
+
+  /**
+   * Answer a `/goal` CONTROL verb, or report that this prompt is not one.
+   *
+   * ## Why this is a method and not something `command-port.ts` imports
+   *
+   * The engine path answers control commands through
+   * `process/command-port.ts`, and that port used to reach straight for
+   * `modes/goal/goal-commands.js`. That made the PORT know a specific mode's
+   * implementation, and it closed a cycle that already existed before plan 610:
+   *
+   *   command-port -> goal-commands -> goal-tools -> goal-summarizer
+   *     -> runAgent -> subagent-engine-run -> engine-run-driver
+   *     -> run-composition -> command-port
+   *
+   * The last edge is this slice's driver flip; the rest is pre-existing. So the
+   * port taking the goal handler as an injected collaborator is what breaks the
+   * loop, and this method is who supplies it: `duyaAgent` already imports
+   * `goal-commands` (it dispatched `/goal` inline in `streamChat` until that
+   * loop was deleted), so moving the dispatch onto the class keeps ONE
+   * implementation of the verb table instead of adding a second one here.
+   *
+   * MEASURED, not assumed: with the port's import removed this way the module
+   * SCC containing `hooks/builtin.ts` falls from 21 members to 17 -- the size
+   * `architecture:check`'s frozen baseline already records. Importing
+   * `goal-commands` from `run-composition.ts` instead measures 20, and from
+   * `subagent-engine-run.ts` measures 18, so the injection has to land HERE.
+   *
+   * `null` means "not a goal control command, run the model", and it is the
+   * same answer the removed `streamChat` block gave by falling through:
+   * `/goal <objective>` starts a goal THROUGH the model, which calls
+   * `goal_start`, so treating it as a command would answer an objective with
+   * usage text and start nothing.
+   */
+  async runGoalCommand(
+    prompt: string,
+    context: { readonly sessionId?: string; readonly workingDirectory?: string },
+  ): Promise<string | null> {
+    // The legacy's own guard, in its order: the prefix test first, then the
+    // recogniser. `isGoalControlCommand` re-derives the verb itself, so the
+    // pair is used exactly as `streamChat` used it.
+    if (!prompt.startsWith('/goal') || !isGoalControlCommand(prompt)) return null;
+    const result = await handleGoalCommand(prompt, {
+      ...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
+      ...(context.workingDirectory === undefined
+        ? {}
+        : { workingDirectory: context.workingDirectory }),
+    });
+    return result.reply;
+  }
 
   /**
    * 涓柇褰撳墠瀵硅瘽

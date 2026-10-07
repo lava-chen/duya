@@ -110,6 +110,22 @@ function harness(turnOneFrames: readonly ModelFrame[]): Harness {
     // engine would otherwise skip the sweep and drop mid-run steering
     // with nothing reporting the loss.
     interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
+    // The three ports the legacy-still-drives window closed (plan 610 D4, then
+    // D1 for `modeExit`), each the smallest honest answer. This file measures the
+    // PREVIEW frame the engine emits for a call the tool port accepts, so a live
+    // turn-output sink would add frames the ordering assertions would trip on.
+    turnOutput: {
+      recordToolResult: () => Promise.resolve(),
+      recordAssistantMessage: () => Promise.resolve(),
+      finishTurn: () => Promise.resolve(),
+      recordInjectedMessage: () => Promise.resolve(),
+    },
+    compaction: {
+      decide: () => Promise.resolve({ kind: 'skip' as const, reason: 'not under test' }),
+      run: () => Promise.resolve({ kind: 'declined' as const, reason: 'not under test' }),
+      nextCompactionId: () => 'cmp-preview',
+    },
+    modeExit: { onRunExit: () => Promise.resolve() },
     model: {
       async *stream(_request: ModelRequest): AsyncIterable<ModelFrame> {
         turn += 1;
