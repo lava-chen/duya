@@ -736,3 +736,61 @@ skill/plugin/mention 注入、agent profile、orchestrator 模式和 turn id —
 先例就在这个仓库里:#236 加的 public 接缝 `claimInterTurn`,它旁边的注释写着
 「PUBLIC, and it is the whole reason `_sweepInterTurn` exists」。
 
+---
+
+## 2026-10-07 — P4 公开运行生命周期接缝落地;并顺带修掉一个真泄漏
+
+`beb6d18f`(先放松一条按文本钉死的测试)+ `287259e3`(接缝本身)。
+
+`duyaAgent.beginRun(request): Promise<RunHandle>`。handle 暴露
+`turnId` / `turnContext` / `appliedProfile` / `requestedMode` / `orchestrator` /
+`signal` / `controller` / `abort()` / `close()`。
+**是一个方法,不是字段也不是 setter** —— run 必须拥有 controller;`abortController`
+保持 `private`,文件里只剩两处写入(安装、释放)。
+
+遗留循环**调用** `beginRun`,所以只有一份实现,不是两个答案。
+
+### worker 又推翻一条我的子前提,而且翻出的是个真缺陷
+
+我说「`abortController` 在 `streamChat` 里被赋值**与清除**」。实测:**只有一处赋值,
+从不清除**(`HEAD~2` 的 `DuyaAgent.ts` 里唯一写入是 `:2449`,另三处命中全是读取或无关局部变量)。
+
+两个后果:
+1. `buildTurnPipeline` 那句「the abort controller has already been cleared」
+   描述的是**当前树到不了的状态** —— 这条 throw 有一半是死代码。
+2. 长生命周期 agent 上,**run 的控制器泄漏过了生成器**。`close` 现在清它,
+   并且带身份检查 —— 一个被取代的 handle 什么也不释放。
+
+### 五项序言职责:三项到达,两项**明确报告为未达**
+
+| 职责 | 到达? |
+| --- | --- |
+| abort controller | 是,完全拥有 |
+| agent profile | 是 —— `appliedProfile` 让驱动把**同一个值**交给 `beginTurnAssembly` |
+| turn id | 是 |
+| prompt-context 轨道 | **部分** —— 重置与释放已拥有,**生产者是 generator 闭包局部**(`dispatchHooks` 经 `yield*` 到达,composition 无法消费一个 `yield`) |
+| orchestrator 派发 | **否** —— 解析可以(注册表查询,`beginRun` 报告),**派发不行**:`_dispatchOrchestratorMode` 是 yield 遗留 SSE 词汇的 async generator,而 `agent-runtime` 的 `ports.ts` 里**零** orchestrator 成员(实测) |
+
+**所以 d2a 仍不能开工**:一个拿到非 null `orchestrator` 的驱动必须拒绝驱动 turn 装配 ——
+否则 orchestrator 模式会被静默丢弃,又是那类静默失败。
+
+### 主 agent 独立复核
+
+架构门禁 `1023/1023 tolerated, 0 new blocking`;`run-lifecycle-seam.test.ts` `6/6`;
+`packages/agent/src/process` `415/415 in 40 files`;G7 仍 `known 0, new 1, stale 0`。
+
+worker 自己的红证据:同一测试在 `HEAD~2` 上 **6/6 全红**(4 × `agent.beginRun is not a function`)。
+
+### 主 agent 自做变异:一个保持绿的变异,以及它真正的含义
+
+拆掉 `close()` 里的 `this.forkTurn = null` → **415/415 仍绿**。
+再加拆掉 `beginRun` 里的那一处 → **1 failed / 414 passed**,红的是
+`the marker cannot outlive the run that set it`。
+
+**结论:fork 标记有两道冗余守卫**(run 开始时重置 + 释放时重置),
+测试钉的是**不变量**而不是某一行。覆盖是真的。
+
+**这条与先前两次「保持绿」是同一个形状:一个保持绿的变异,在宣布「覆盖的是 X」之前,
+必须先问「有没有第二道守卫在补偿它」。** 否则无法区分「被冗余守卫覆盖」与「根本没覆盖」。
+P1 的 fence token、`close()` 的身份检查、这次的 fork 标记,三次都是冗余双守。
+
