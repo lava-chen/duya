@@ -176,6 +176,52 @@ jobs:
         if: steps.resolver.outputs.resolver-changed == 'true'
         run: npm run architecture:self-test
 
+      # ---------------------------------------------------------------------
+      # G10 + A1: gates that existed, had unit tests, and ran in CI's vitest
+      # (vitest.config.ts includes `scripts/**/*.test.ts`) -- but were NEVER
+      # EXECUTED as gates. `browser-closure-gate.mjs` had no package.json
+      # script at all; `headless-load-gate.mjs` had one that nothing called.
+      # A gate whose only CI presence is its own unit test is evidence that
+      # the gate's LOGIC is correct, and no evidence that anyone is watching
+      # the tree it guards. The window was open: plan 610 A0 measured the
+      # browser closure at 0/789 built-ins and that number was produced by a
+      # human running a script by hand.
+      #
+      # They run here, in the existing `architecture` job, on the same
+      # single-OS/no-dist reasoning as `architecture:check` above: both are
+      # static analysis over the source tree.
+      #
+      # `boundary-gates.mjs` (G1-G9) is deliberately NOT added in this commit,
+      # and the reason is the one thing a CI wiring must not do. G7 is red
+      # today -- by design, and by plan: `known: 0 new: 1 stale: 0`, the flag
+      # that A3 exists to clear. Adding the gate now would turn the
+      # `architecture` job red on every PR and block the very work that clears
+      # it. Baselining today's red instead would be the same outcome with the
+      # signal deleted: the job goes green, the finding is recorded as known,
+      # and the plan reads as done while nothing was fixed. G7 joins this file
+      # in the same commit that deletes the legacy turn loop.
+      # ---------------------------------------------------------------------
+      - name: Browser entry closure (G10)
+        run: npm run architecture:browser-closure
+
+      - name: Headless load of the cli handler layer (A1)
+        run: npm run architecture:headless
+
+      # Both gates decide "clean" by a count being zero, and a count is also
+      # zero when the walk followed nothing. These are guards, not second
+      # verdicts: they never re-decide whether the gate passes, only whether it
+      # looked at anything. A red gate with a non-empty scope fails the step
+      # above and passes this one; a green gate over an empty scope fails here.
+      # Same reasoning as the `architecture:check` guard above, applied to the
+      # two gates that were about to be promoted without it.
+      - name: "Guard: G10 must have scanned something"
+        if: always()
+        run: node scripts/architecture/gate-scan-guard.mjs g10
+
+      - name: "Guard: A1 must have scanned something"
+        if: always()
+        run: node scripts/architecture/gate-scan-guard.mjs a1
+
   # ── Typecheck + tests ─────────────────────────────────────────────────────
   test:
     runs-on: ${{ matrix.os }}
