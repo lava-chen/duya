@@ -1214,3 +1214,120 @@ SCC size=17`,所以落到 17 就是回到既有债务,**不需要重录 baseline
 **`architecture:check` 回到 exit 0**(total 1054 / tolerated 1054),G7 未受影响
 (`known: 0 new: 0 stale: 0`)。`npm run typecheck:all` exit 0。
 `packages/agent/src/process` 49 文件 482 用例全绿,`tool/SubagentTool` 7 文件 62 用例全绿。
+---
+
+## A5 收口:环彻底溶解,`architecture:check` 首次带着全部门禁回到 exit 0
+
+实测于 `15deafb9`。这一节记录三件事:环是怎么真正消失的、一条**看似有牙实则全空**的
+守卫,以及我自己制造又修掉的 7 条 NEW。
+
+### 环的最终形态:DI 注入,而不是拆边
+
+上一节把 SCC 从 21 降到 17,冻在 baseline 既有指纹上。剩下的最后两条边要靠依赖注入:
+
+| 边 | 原形态 |
+| --- | --- |
+| `runAgent → DuyaAgent` | `runAgent.ts` 直接值导入 |
+| `runAgent → tool/builtin` | `await import('../builtin.js')` 动态导入 |
+
+**动态导入同样是真实边**,`audit-modules.mjs` 的 `IMPORT_RE` 同时匹配
+`from "..."` / `import("...")` / `require("...")`。所以「默认值惰性 import」这类兜底
+会把环原样造回来。
+
+落地方式:`SubagentTool` 从模块级单例改为**每 registry 一个实例**,两个组合依赖经
+`RunAgentParams` 的**必填**字段传入(`createSubAgent` / `createToolRegistry`)。
+没有用模块级可变 factory 绑定——`packages/tooling` 的设计文档已经把那个形状点名
+警告过(「没有装配期校验的注册表就是下一个 `HostMap`」)。
+
+`ModeModifierContext.subagentDeps` 那个字段**刻意是必填而非可选**:缺一对会让验证
+静默退化成「跳过验证」,那是伪装成默认值的行为变更。
+
+### 实测结果
+
+| 项 | 值 |
+| --- | --- |
+| `architecture:check` | **exit 0**,`cycle 8`(原 9),total **1036** / tolerated **1036** |
+| baseline size | **930**,未动(**没有** `--write`) |
+| `architecture:boundaries` | exit 0,G7 `known: 0 / new: 0 / stale: 0` |
+| `npm run typecheck:all` | exit 0 |
+| SCC | size-15 那个组件**整体消失**,不是变小 |
+
+翻转基线指纹是 `SCC size=17`,所以降到 8 是回到既有债务之下;**108 条基线指纹已不再触发**,
+门禁自己提示可以重录缩小债务——**不重录**,记在这里以免以后有人顺手做掉。
+
+### 一条全空的守卫:census 的两条断言从来没生效过
+
+worker 交了一份 246 行的 `run-agent-deps-census.test.ts` 当门禁,自述已用变异证明有牙。
+主 agent 注入 `await import('../builtin.js')` 复验,**照样绿**。两层独立原因:
+
+1. 守卫跑在 `codeOnly()` 上,而它把**所有字符串字面量重写成 `''`**。被禁的动态
+   `import('../builtin.js')` 本身就是字符串字面量,于是断言实际在检查 `import('')`。
+2. 换成正则剥注释后**更糟**:`//` 前是 `.` 不是 `:`,所以 `'../agent/DuyaAgent.js'`
+   从 `//` 起被整段吃掉,连另一半(DuyaAgent 那条)一起打瞎。
+
+也就是说,**关掉环的那两条边在这份「门禁」里一条都没被守住**。
+`architecture:check` 照样抓得住(全仓、慢),但 census 的定位是快速局部信号,
+恰好对它最该管的 case 完全失明。
+
+修法:换成逐字符扫描器(区分行注释 / 块注释 / 字符串,只清空前两者),
+外加**正反双向自检**——断言这两条正则仍匹配它们声称要禁的形状,且不误伤允许的形状。
+`DuyaAgent` 那条放宽到大小写不敏感(真实类名是小写 `duyaAgent`,改名成 `DuyaAgent`
+就能绕过边界检查)。
+
+**变异证明**:重注入 `await import('../builtin.js')` → RED,消息精确命中;
+完全回退 → 5/5 绿。提交 `4e8aca30`。
+
+### 自检自己踩了门禁:census 样例被当成真实模块边
+
+上面那份自检的样例是**完整的 import 语句字符串**。而 `audit-modules.mjs` **会扫测试文件**,
+样例里的 `from '...'` 被读成真实边,`architecture:check` 从 exit 0 退回 **exit 1 + 7 条 NEW**
+(specifier 如 `../agent/DuyaAgent.js`、`./deps.js`)。
+
+修法:用辅助函数在**源码层面**断开「`from` + 引号」的相邻关系,运行时字符串逐字节不变,
+并在代码里写明原因以防后人「顺手简化」回去。门禁本身不需要改——真去 import 那些模块的
+测试确实是真边,而这个文件什么都没 import。提交 `15deafb9`,门禁重回 exit 0。
+
+### package-lock 的 workspace 债
+
+`@duya/memory` / `@duya/tooling` / `@duya/connectors` 在 `packages/*` 里但不在
+`package-lock.json` 中,新克隆会装不完整。修复 `abb9c5e6`:**78 插入 / 0 删除**,
+只动 `package-lock.json` 一个文件。「0 删除」是关键证据——版本漂移和平台可选条目
+丢失必然表现为修改或删除,这里一个都没有。
+
+顺带发现 `packages/agent` 的条目还缺它声明的 `@duya/memory: "0.1.0"` 依赖,
+同一次重建一并恢复,同根因,未拆分提交。
+
+### P0-3 实测:推翻了四条说法
+
+只读测绘(环已绿之后才量,所以集合是准的):
+
+1. **位置错了。** codec 在 `packages/agent/src/process/sse-frame-codec.ts`,不在
+   `agent-runtime`。`agent-runtime/src/transport/line-codec.ts` 是 NDJSON 字节切分器,
+   **根本没有词表**。
+2. **「29 条死臂」差一。** 真实的「读了没人写」是 **30** 条;29 只在知道 `result` 有一条
+   手工旁路(`agent-process-entry.ts` 手工构造 `{type:'result'}`)时才成立。
+3. **「7 类被丢」确认无误**,但**严重性被高估 4 条**:`permission` / `token_usage` /
+   `status` / `goal_updated` 走独立 `chat:*` 通道仍到达渲染层。真正丢失的是
+   `retry`(**全仓无任何活生产者**,唯一来源就是那条死掉的 `system` 分支)、
+   `text_delta` 与 `thinking_delta`(既无 `chat:` 生产者也无 router 处理)。
+4. **`done`/`error` 是字段位置错配**,不是命名错配也不是真值判断:
+   projector 写 `data: { reason }`,codec 在**顶层**读 `reason` → 恒 `undefined`;
+   `error` 更糟——把 `{ message, code }` **对象**断言进 `string` 类型的 `message`,
+   且 `code` 读顶层恒 `undefined`。
+
+**该改 codec 而不是 projector**,这一条已实测:`convertSSEToAgentMessage` 的 48 个分支里
+**38 个读 `event.data`**,读顶层的**只有 `done` 这一个异类**,`error` 半读半不读。
+
+**注意**:本日志此前那条 P0-3 记录是**翻转前**测的,所以写「29 条今天全是活的」已过期;
+它的 `done`/`error` 机制与「7 类丢失」计数则复现无误。
+
+### 当前状态与待办
+
+`architecture:check` exit 0(1036/1036,baseline 930 未动)、`architecture:boundaries` exit 0、
+`typecheck:all` exit 0、census 5/5。
+
+**master 领先 `origin/master` 92 个提交,按用户决定:剩余切片全部做完后再一次性 push**,
+之后关闭已被 `3c33bc5a` 取代的 PR #259 并留言说明。
+
+剩余切片:P0-3 的 `done`/`error` 修复(已派 worker)、policy 4 条死 `requires`
+(已派只读测绘)、A5 `capabilities` / `data`。
