@@ -194,9 +194,20 @@ const EXPECTED: readonly (readonly [string, number, number])[] = [
   //
   // What is left below is the integration/regression surface, which still
   // names the driver and is untouched by this slice.
-  // packages/agent/tests/integration -- 14.
+  //
+  // `integration/RealTasks.test.ts` left this table by being PORTED, not
+  // deleted: it drives the engine harness now, so it names the legacy driver
+  // nowhere. Its 5 drivers became 0 while its 13 tests stayed — which is the
+  // whole shape of this work, and why the count below moved without a single
+  // test being removed.
+  //
+  // CAVEAT, and it is the reason this table cannot be read as coverage: the
+  // census matches SOURCE SHAPE, not execution. `streaming-lifecycle` below
+  // counts 7 drivers that are all preceded by a credential guard and an early
+  // return, so its 7 tests name the driver and assert nothing. A green row in
+  // this table is a claim about a file, never about a test having run.
+  // packages/agent/tests/integration -- 9.
   ['packages/agent/tests/integration/DuyaAgent.test.ts', 12, 7],
-  ['packages/agent/tests/integration/RealTasks.test.ts', 13, 5],
   ['packages/agent/tests/integration/AgentLoop.test.ts', 2, 2],
   // packages/agent/tests/regression -- 7.
   ['packages/agent/tests/regression/streaming-lifecycle.test.ts', 7, 7],
@@ -394,17 +405,20 @@ describe('the measured driver surface the flip has to move', () => {
     }
   });
 
-  it('is 21 tests, which is the number the flip is sized against', () => {
+  it('is 16 drivers, which is the number the flip is sized against', () => {
     // Stated on its own so a reader does not have to add the table up, and so a
     // silent change to the total is a red row rather than a diff a reviewer has
     // to notice. The sum is computed from the SAME table the row above pins, so
     // the two cannot disagree. It moved 72 -> 73 at plan 610 P5, by the one
     // row above that is a legacy-vs-driver parity comparison; 73 -> 60 at plan
     // 610 S4c-d3, which removed the last 13 drivers in `packages/agent/src/process`
-    // without removing a single test; and 60 -> 21 when the seven unit files
-    // were re-pointed at the driver, which again removed no test.
+    // without removing a single test; 60 -> 21 when the seven unit files
+    // were re-pointed at the driver, which again removed no test; and 21 -> 16
+    // when `RealTasks` was ported onto the engine harness, which is the first
+    // move in this series to retire a driver by rewriting rather than by
+    // deleting a test.
     const total = EXPECTED.reduce((n, [, , driving]) => n + driving, 0);
-    expect(total).toBe(21);
+    expect(total).toBe(16);
     // And it is a small fraction of the package, which is the finding: the flip
     // is not "rewrite the agent's tests", it is "move a few dozen".
     expect(total).toBeLessThan(PACKAGE_TEST_COUNT / 50);
