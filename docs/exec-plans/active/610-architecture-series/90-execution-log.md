@@ -1525,3 +1525,60 @@ junction 也有陷阱：worker 建好的是**指向它自己 worktree** 的链�
 `RULE_TABLE_FINGERPRINT`，而那次重录只覆盖四分之一的漂移，**记录本身就成了误导**。
 门禁自己有一条测试就叫「the rules are ordered and **none of them is dead**」，
 它一直如实报着这件事。记为独立切片。
+### 最危险的东西不是红的，是「绿的，而且从来没在跑」
+
+失败归属那张表里，权重最高的两行是**错的**。worker 逐条复核后发现：
+
+| 文件 | 我以为 | 实测 |
+| --- | --- | --- |
+| `tests/integration/DuyaAgent.test.ts` | 12 条红 | **12/12 绿，但真空** |
+| `tests/regression/streaming-lifecycle.test.ts` | 7 条红 | **7/7 绿，但真空** |
+| `tests/skills/snapshotIntegration.test.ts` | 1 条红 | 5/5 绿 |
+
+形状完全一样：`streaming-lifecycle` 有 **7 个 `if (!API_KEY) return;` 守卫配 7 个 `it()` 块**；
+`DuyaAgent.test.ts` 在 `beforeEach` 和每个测试里提前 return。两处都还留着
+**已经被删除的** `agent.streamChat(...)` 调用 —— 一旦配上凭据，7 个全部 throw。
+
+所以「19 条集中在这两个文件」实际是**19 个什么都不断言的测试**。
+这比红更坏：红的至少会告诉你它坏了。
+
+**How to apply:** 报「某文件红/绿」之前，先问它**在测什么**。计数只说明断言失败了几条，
+不说明断言**执行**了几条。一个用 early-return 自我跳过的套件，在任何失败统计里都是绿的。
+判据是形状（有没有守卫、有没有还指向已删 API 的调用），不是颜色。
+
+worker 同时核对出我给的「36 条」与自己那张逐文件清单**加起来是 41** ——
+两处数字对不上，说明这张表从来没被当成需要自洽的东西用过。
+
+### 计费：一个前提为真、结论为假的判断
+
+我断言「计费完整（`onPerCallUsage` 每次调用都触发、缓存桶保留）」，并让 worker 验证。
+**前提是真的，结论是假的。**
+
+`result` 帧到达**两条通道**：per-call 的 tap，以及轮次级的 `projectUsageResults`
+（后者是 last-wins、且不带缓存桶）。入口把两条都绑到了同一个计费臂上。
+**实测一个两次调用的轮次：tap=2、drain=1，`input_tokens` 被累加成 1000+2000+2000。**
+
+修在入口的 drain 绑定上，不在 driver 里 —— 因为 `projectUsageResults` 归入口这层所有，
+而 `subagent-engine-run.ts` 直接读它，driver 并不拥有这个面。
+
+教训很具体：**「前提成立」不等于「结论成立」。** 我把一个复合判断当成了一个断言去验证，
+worker 照做了，而它验证的是我给的那一半。
+
+### 归属：causation 也要验，不能只验结论
+
+worker 复核后确认那批红「是真缺口」，但**因果关系是错的**：
+census 记录的措辞是这些能力「因为翻转而完全没有 engine-path 生产者」——
+不是「本来就有、只是被旧的测试替身掩盖」。两者结论相同，处置不同：
+前者要**把能力搬过去**，后者只需接线。
+
+它还推翻了第四条：`host.runFork` 字面上确实没被驱动设置，**但那不是缺陷** ——
+该标记现在从 `replyToId` + `branched` 对已提交的时间线推导。字面为真，结论为假。
+
+### 一个让所有新 worktree 的测量都不可信的坑
+
+`packages/plugin-core/dist` 是 gitignored 的构建产物，**新 worktree 里不存在**，
+而它的 `exports` 把子路径指向 `dist/`。结果是 38 个套件在**收集阶段**就失败
+（`Cannot find module '@duya/plugin-core/mcp/core/alias'`），与它们测的东西无关。
+
+两个 worker 各撞了一次。**任何新 worktree 里的失败统计，在跑之前必须先构建该包**，
+否则「红」里混着一批根本没跑起来的文件。
