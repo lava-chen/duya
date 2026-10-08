@@ -77,6 +77,12 @@ const BUILD_ORDER = [
   // because `apps/desktop/tsconfig.main.json` maps `@duya/connectors/*` onto
   // this package's emitted `dist`.
   '@duya/connectors',
+  // Plan 610 A5: the cross-platform sandbox capability, moved out of
+  // `packages/agent/src/sandbox`. Level 1 because it imports NO `@duya/*`
+  // package -- only Node builtins (`child_process`, `fs`, `http`, `os`,
+  // `path`) and its own siblings. It has to build before the host, because
+  // `packages/sandbox`'s emitted `dist` is what its `exports` map points at.
+  '@duya/sandbox',
 
   // Level 2 — depend only on level 1.
   '@duya/ai', //              -> @duya/agent-protocol
