@@ -1474,3 +1474,54 @@ vitest 用回车重绘进度条，只按 `\n` 切会把整行粘在一起，结�
    并抛出 `[vitest-worker]: Timeout calling "onTaskUpdate"`。
    `engine-permission-enforcement` 单独跑最重的用例 1.86s，而 `testTimeout` 是 10s ——
    5 倍减速就正好卡在边缘。任何「超时类」失败都必须在隔离下重跑再相信。
+### `engine-permission-enforcement` 的间歇红：是超时，不是共享状态
+
+此前只知道「文件已定位、测试名从未捕获、机制未明」。现在机制已定，且**测试名不稳定本身
+就是线索**：5 次失败捕获到 5 个不同名字，因为**当时最慢的那个**会挂，而哪个最慢取决于调度噪声。
+这正是它一直没被记录的原因。
+
+`vitest.config.ts` 的 `testTimeout: 10000`；该文件固有成本是 10 个测试合计 5571ms、最重
+1600–1971ms，**最重的那个只用掉预算的 0.19×**。全量并发把它放大 5–7 倍，越过 10 秒。
+
+**决定性对照**：同样的负载下把 `testTimeout` 提到 120000，10 个测试全过、最大 1971ms。
+所以**没有死锁、没有永不 resolve 的 await** —— 工作都会完成，只是完成得太晚。
+所有失败都是 wall-clock 超时，**从来没有一次是断言失败**。
+
+分类判定：共享可变状态**已排除**（单文件独跑即复现；vitest 默认 `isolate: true` /
+`pool: "forks"`）；模块单例**已排除**（318 个模块的传递图里，它 import 的每个 plan-610 模块
+都没有模块级可变状态）；定时器/假时钟**已排除**；文件内测试间顺序**已排除**。
+唯一成立的是 (d) 资源竞争，**且仅限 CPU/时间**。
+
+它同时**推翻了本日志的 briefing 里两条断言**：
+
+1. 「结构上与本轮改动无关」**只对一半**。它确实不 import `sse-frame-codec` 或
+   `agent-process-entry`（318 模块、0 条入边），但它 import 了 `engine-run-driver.js` 的
+   `deriveFirstAttemptFence` —— **正是入口通过 `driveRunWithEngine` 消费的那个模块**。
+   它与 plan 610 相关，只是不 import 那两个文件。
+2. 连带的「与本轮无关」推论不成立。
+
+修复方向（已诊断，未实施）：把 6 模式的 `for` 循环改成 `it.each(MODES)`，
+每次 `armRun` 都新建 agent 和 registry，12 次构造降到 2 次；再按仓库**已有先例**
+（`agent-process-entry-import.test.ts` 的位置参数 `60_000`）加超时覆盖。
+**不要**上调全局 `testTimeout` —— 那会掩盖 1105 个文件里的真实挂起。
+
+### sandbox 抽取的收尾，以及一个会伤人的陷阱
+
+抽取（`8b25f8d3`）停在正确的地方：源文件搬了，唯一活着的消费者还指着旧相对路径。
+补完后 **`typecheck:all` exit 0**，`module-dependency` 回到 349、`permitted` 550→551，
+`baseline size` **930 未动**，自检四条钉值全部吻合。
+
+补这一半时踩到的陷阱，值得单独记：**`npm install --package-lock-only` 在本仓库会触发
+root `postinstall`**，它跑 `electron-builder install-app-deps`，**穿过 junction 打向共享的
+`node_modules`**，去重建 `node-pty`。本系列后续切片一律加 `--ignore-scripts`。
+
+junction 也有陷阱：worker 建好的是**指向它自己 worktree** 的链接，合并后那条路径会随 worktree
+一起消失。重指向时 `unlink` 只删重解析点、不跟随目标（两侧都已实测存活），
+**这与 `git worktree remove` 的破坏性行为不同**。
+
+`slice-classification` 门禁这轮**判定为不动**：95 条规则里 3 条指向已搬走的路径，
+另有 4 个新包根本没有规则，共 72 个文件未分类 —— 其中**只有 9 个属 sandbox**，
+其余 63 个来自更早的 memory/tooling/connectors 抽取。只修 sandbox 一条会逼我重录
+`RULE_TABLE_FINGERPRINT`，而那次重录只覆盖四分之一的漂移，**记录本身就成了误导**。
+门禁自己有一条测试就叫「the rules are ordered and **none of them is dead**」，
+它一直如实报着这件事。记为独立切片。
