@@ -175,12 +175,24 @@ forbiddenDependencies:
     reason: agent must not depend on UI (2 measured violations).
 
 # ── Capability edges that are explicitly permitted ─────────────────────────
-allowedDependencies:
-  - from: packages/agent-runtime/**
-    to:
-      - packages/plugin-core/**
-      - packages/computer-use/**
-      - packages/ai/**
+#
+# REMOVED: an `allowedDependencies` block that granted
+# `packages/agent-runtime/**` -> {plugin-core, computer-use, ai}.
+#
+# Two independent reasons, and the second is why this must not simply be
+# "wired up" later:
+#
+#   1. Nothing ever read it. `scripts/architecture/**` holds no reference to
+#      this key, so it was never a permissive rule — it was a dead block that
+#      merely LOOKED like permission, to anyone reading this file.
+#   2. Wiring it would RELAX a boundary plan 610 deliberately tightened. The
+#      `agent-runtime` module declaration below lists `agent-tools`, `ai` and
+#      `plugin-core` as REMOVED from its `requires`. Granting the same edges
+#      here by a second route would quietly undo that, and no gate would say so.
+#
+# So the correct state is no block at all: the absence IS the boundary. If a
+# real edge ever needs to be permitted, declare it on that module's own
+# `requires` list, which `moduleDependencyPermitted` already reads.
 
 # ── Module declarations ────────────────────────────────────────────────────
 modules:
