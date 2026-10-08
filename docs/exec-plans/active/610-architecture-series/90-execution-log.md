@@ -1331,3 +1331,108 @@ worker 交了一份 246 行的 `run-agent-deps-census.test.ts` 当门禁,自述�
 
 剩余切片:P0-3 的 `done`/`error` 修复(已派 worker)、policy 4 条死 `requires`
 (已派只读测绘)、A5 `capabilities` / `data`。
+---
+
+## 收口批次 B：签名修复、streamChat 迁移、PR #262 合并
+
+### thinking 签名 P0 —— 逐层实测，不是采信 worker
+
+提交 `81c48bd5`。三层机制，每层都亲自核实过：
+
+1. **provider 侧**：Anthropic 的 `signature_delta` 被映射成一个**文本为空**的 thinking 帧
+   （`packages/ai/src/api/anthropic-messages.ts` 的 `signature_delta` 分支）。
+2. **引擎侧**：`TurnMessage.addThinking` 原本是 `if (frame.text === '') return;` 在前，
+   读 `frame.signature` 在后。**带签名但无文本的帧全部被丢弃**。
+3. **回放侧**：`convertContentBlock` 只在**有签名**时才保留原生 thinking 块，
+   无签名就降级成纯文本。
+
+三者叠加的后果是 **Anthropic 的 thinking 链无法跨工具轮延续** —— 每过一次工具调用，
+前一轮的推理痕迹就退化成普通文本。
+
+修法：把签名读取移到空文本守卫**之前**。
+
+验证方式不是「跑一遍看绿」，而是喂一条 `{ type:'thinking', data:'', signature:'sig-123' }`，
+看签名断言**由红转绿**。`packages/agent-runtime` 59 文件 / 711 用例全绿。
+
+### streamChat 迁移
+
+提交 `4444c7cf`。7 个套件接回真 driver，**39 过 / 20 红**（迁移前是 20 过 / 39 红）。
+无断言被删或弱化。`streamChat` 在生产源码中已不存在。
+
+那 20 条红**不是 streamChat 债**，而是旧测试替身掩盖掉的既有产品缺口，被迁移暴露出来。
+worker 已逐条标注成因：死观察者 `onSystemPromptReady`、
+`injectTurnTimestampReminders` 无生产调用点、嵌套 AGENTS.md 的 PostToolUse 注入无引擎路径生产者、
+驱动从不设置 `host.runFork`、D2 引语边界（已登记为推迟项）、
+腿发布者已删但仍被 import、模型归因读 `message.providerId` 得到 `undefined`。已单排一片。
+
+**这条的教训值得单独记**：worker 纠正过我的 briefing —— `AgentLoop` 与 `RealTasks`
+我原先归为「需要真实凭据」，实测两者都 `vi.mock('@duya/ai')` 并传 `apiKey: 'test-key'`，
+**不需要凭据**。同属迁移债。
+
+### 门禁自检重钉：不是把计数改坏，是让它重新开始运行
+
+`0eab2998` 把 `selfTest` 三个钉值 `380/146/9` → `349/115/8`，三条变异逐条证明有牙。
+
+要点：`selfTest` 块（`architecture-policy.yaml`）与 `.architecture-baseline.json`
+（930 条债务账本）是**两套东西**。CI 只在检测到 `scripts/architecture/`、
+`architecture-policy.yaml` 或 `.architecture-baseline.json` 变动时才跑自检 ——
+本轮改了 policy，于是**一个早已过期的自检重新开始运行**。不是我把计数改坏了。
+baseline 全程未动，size 仍是 930。
+
+`package-boundary-escape` 146→115 与 `module-dependency` 380→349 同为 −31，
+但前者**没有独立的 before/after 测量**，只在 policy 注释和提交信息里如实标注「是旁证，不是测量」。
+
+### cut-list 重测
+
+`08e71b55`：`slice-cut-list.ts` 的 `main-to-agent-value` 91 → **60**（value-edge 口径），
+散文里两处「91」一并更正。
+
+### 翻转引入的活跃回归：双重编解码
+
+`c6521e5d`。driver 已经把帧交出来了，`handleStreamEvent` 又调一次 codec，
+而 codec 有 **0 个 `chat:` 分支** → 每帧落 `default` → `sendToMain` 与 `deferredDone` 全被抑制。
+
+选方案 (b)（`handleStreamEvent` 对已是 `chat:*` 的帧放行），理由是它让**驱动契约逐字节不变**；
+方案 (c) 会打断 headless 的 `heldDone`，且三个 `onFrame` 消费者共享该契约。
+
+另三处帧缝修复：
+
+- `396a3b3b` `text`/`thinking` 载荷形状（`chat:text.content` 从对象变字符串；
+  `chat:thinking` 从线上不存在变存在）
+- `a778676b` `tool_progress` 的 `"[object Object]"` + 写死的 `percent: 0`；
+  补 `retry`/`status` 缺失分支。**经实测未加** `token_usage`/`goal_updated`
+  —— 已有更丰富通道，加了是回归
+- `8d00fdd5` `done`/`error` 载荷改从 `data` 读，新增 `readPayloadString` 收窄助手，
+  消灭 `as string` 的真实类型违规
+
+### PR #262 合并：ruleset 实测，不是推测
+
+合并前查了 ruleset，而不是「大概是只有 architecture」：
+
+- ruleset `17257193`（"Protect master branch"，active，条件 `~DEFAULT_BRANCH`）
+- `required_status_checks` = **只有 `architecture`** → `test` 矩阵红**不拦截**
+- `non_fast_forward` 在 → 必须 `--merge`
+- `bypass_actors: []`，`current_user_can_bypass: "never"`
+
+所以 CI `test × 3 平台` 红而 `architecture` 绿，是**合规可合**的状态。
+`gh pr merge 262 --merge` → merge commit `2baa95df`。
+
+（旁证：`mergeStateStatus` 报的是 `UNSTABLE` 而非 `BLOCKED`。）
+
+### PR #259：记录里说「仍 OPEN」，实测是 MERGED
+
+本日志此前写「关闭已被 `3c33bc5a` 取代的 PR #259 并留言」。
+实测 `gh pr view 259` 返回 **MERGED**，其 merge commit `997cc91c`
+经 `git merge-base --is-ancestor` 确认是 `origin/master` 的祖先（exit 0）。
+**无需任何动作**，此前那条待办作废。
+
+教训与门禁数字那条同源：**状态也要实测，摘要不算数**。
+另注：经典 `branches/master/protection` 返回 404「Branch not protected」，
+说明用的是 ruleset 而非经典保护 —— 两者是不同机制，只查前者会得出错误结论。
+
+### 本地状态
+
+`master` 已快进到 `2baa95df`，树干净。
+两个新隔离 worktree（各 10 个 junction：repo root + 9 个 workspace 包）：
+`610-process-fixes` / `plan/610-process-fixes`、
+`610-a5-sandbox` / `plan/610-a5-sandbox`。
