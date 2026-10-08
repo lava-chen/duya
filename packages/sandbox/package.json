@@ -1,0 +1,30 @@
+{
+  "name": "@duya/sandbox",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cross-platform command sandboxing for Duya: provider selection (Docker -> bubblewrap -> none), the sandbox policy vocabulary, host <-> container path translation, and the legacy ISandboxManager surface.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "npm run clean && tsc --incremental",
+    "clean": "node -e \"for (const t of ['dist','tsconfig.tsbuildinfo']) require('fs').rmSync(t,{recursive:true,force:true})\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.3",
+    "vitest": "^3.0.0"
+  }
+}

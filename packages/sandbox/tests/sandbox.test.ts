@@ -13,18 +13,18 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   createSandboxPolicy,
   DEFAULT_SANDBOX_POLICY,
-} from '../src/sandbox/types.js';
+} from '../src/types.js';
 import {
   setSandboxEnabled,
   isSandboxEnabled,
   getSandboxPolicy,
   updateSandboxPolicy,
   resetProviderCache,
-} from '../src/sandbox/sandbox-adapter.js';
+} from '../src/sandbox-adapter.js';
 import {
   wrapWithBubblewrap,
   checkBubblewrapAvailable,
-} from '../src/sandbox/bubblewrap-sandbox.js';
+} from '../src/bubblewrap-sandbox.js';
 
 // ============================================================
 // SandboxPolicy Tests

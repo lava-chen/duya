@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { PathMapper } from '../../src/sandbox/path-mapper.js';
+import { PathMapper } from '../src/path-mapper.js';
 
 describe('PathMapper', () => {
   describe('rewriteCommandToContainer', () => {
