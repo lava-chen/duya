@@ -18,6 +18,12 @@ import type { SSEEvent, ToolUse, ToolUseContext } from '../../src/types.js';
 import { writeFile, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import {
+  cleanupEngineTurnDirs,
+  driveTurn,
+  installEngineTurnIpc,
+  restoreEngineTurnIpc,
+} from '../helpers/engineTurnHarness.js';
 
 // Mock LLM client
 const mockStreamChat = vi.fn();
@@ -41,6 +47,9 @@ describe('Real Tasks Integration', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    // The engine driver reports through `process.send`; the harness installs
+    // that seam for the duration of the turn.
+    await installEngineTurnIpc();
 
     // Create a unique temp directory for each test (cross-platform)
     const testId = `duya-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -68,6 +77,8 @@ describe('Real Tasks Integration', () => {
   });
 
   afterEach(async () => {
+    restoreEngineTurnIpc();
+    cleanupEngineTurnDirs();
     try {
       await rm(tempDir, { recursive: true, force: true });
     } catch {
@@ -105,6 +116,46 @@ describe('Real Tasks Integration', () => {
     });
   };
 
+  /**
+   * Drive one turn through the production engine and hand back the frames.
+   *
+   * `duyaAgent.streamChat` no longer exists -- the turn loop moved to
+   * `driveRunWithEngine` -- so every case here that used to iterate
+   * `agent.streamChat(prompt, { toolRegistry })` now drives the real engine
+   * through the shared harness. The assertions below are left reading `.type`
+   * and `.data.name`, so the `chat:`-prefixed labels the worker's codec emits
+   * are normalised back to the projector vocabulary they were written against.
+   * The frames themselves are the product's.
+   */
+  async function drainStream(
+    agent: duyaAgent,
+    prompt: string,
+    options: Record<string, unknown>,
+  ): Promise<SSEEvent[]> {
+    const { frames } = await driveTurn(agent, prompt, { options: options as never });
+    return frames.map((frame) => {
+      const record = frame as Record<string, unknown>;
+      const type = typeof record['type'] === 'string' ? record['type'] : '';
+      const normalized: Record<string, unknown> = {
+        ...record,
+        type: type.startsWith('chat:') ? type.slice('chat:'.length) : type,
+      };
+      // The codec FLATTENS the projector payload: `chat:tool_use` carries
+      // `id` / `name` / `input` at the top level, where the SSEEvent these
+      // assertions were written against nested them under `data`. That one
+      // triple is re-nested here so the `data.name` reads below keep checking
+      // what they always checked, rather than being restated in a second
+      // vocabulary.
+      if (typeof normalized['name'] === 'string') {
+        return {
+          ...normalized,
+          data: { id: normalized['id'], name: normalized['name'], input: normalized['input'] },
+        };
+      }
+      return normalized;
+    }) as unknown as SSEEvent[];
+  }
+
   describe('File System Operations', () => {
     it('should read a file and return content', async () => {
       // Create a test file
@@ -129,10 +180,7 @@ describe('Real Tasks Integration', () => {
         model: 'test-model',
       });
 
-      const events: SSEEvent[] = [];
-      for await (const event of agent.streamChat('Read the file', { toolRegistry })) {
-        events.push(event);
-      }
+      const events = await drainStream(agent, 'Read the file', { toolRegistry });
 
       // Should have received events
       const toolUseEvents = events.filter((e) => e.type === 'tool_use');
@@ -164,10 +212,7 @@ describe('Real Tasks Integration', () => {
         model: 'test-model',
       });
 
-      const events: SSEEvent[] = [];
-      for await (const event of agent.streamChat('Create a file', { toolRegistry })) {
-        events.push(event);
-      }
+      const events = await drainStream(agent, 'Create a file', { toolRegistry });
 
       const toolUseEvents = events.filter((e) => e.type === 'tool_use');
       expect(toolUseEvents.length).toBeGreaterThan(0);
@@ -196,10 +241,7 @@ describe('Real Tasks Integration', () => {
         model: 'test-model',
       });
 
-      const events: SSEEvent[] = [];
-      for await (const event of agent.streamChat('Find all TypeScript files', { toolRegistry })) {
-        events.push(event);
-      }
+      const events = await drainStream(agent, 'Find all TypeScript files', { toolRegistry });
 
       const toolUseEvents = events.filter((e) => e.type === 'tool_use');
       expect(toolUseEvents.length).toBeGreaterThan(0);
@@ -227,10 +269,7 @@ describe('Real Tasks Integration', () => {
         model: 'test-model',
       });
 
-      const events: SSEEvent[] = [];
-      for await (const event of agent.streamChat('Find files with console.log', { toolRegistry })) {
-        events.push(event);
-      }
+      const events = await drainStream(agent, 'Find files with console.log', { toolRegistry });
 
       const toolUseEvents = events.filter((e) => e.type === 'tool_use');
       expect(toolUseEvents.length).toBeGreaterThan(0);
@@ -262,10 +301,7 @@ describe('Real Tasks Integration', () => {
         model: 'test-model',
       });
 
-      const events: SSEEvent[] = [];
-      for await (const event of agent.streamChat('Read and update the file', { toolRegistry })) {
-        events.push(event);
-      }
+      const events = await drainStream(agent, 'Read and update the file', { toolRegistry });
 
       // Should have multiple tool calls
       const toolUseEvents = events.filter((e) => e.type === 'tool_use');
@@ -312,10 +348,17 @@ describe('Real Tasks Integration', () => {
         }
       }
 
-      // Both reads should complete with content
+      // Both reads should complete, each with its own file's content.
+      // The executor yields results AS THEY COMPLETE
+      // (`StreamingToolExecutor.getRemainingResults`), and these two reads run
+      // concurrently, so completion order is not submission order. Reading
+      // `results[0]` as a.txt asserted an ordering the executor never promised
+      // and failed whenever b.txt's read happened to land first; the claim that
+      // actually matters is that both reads completed and neither lost its
+      // content, so that is what is asserted.
       expect(results.length).toBe(2);
-      expect(results[0]).toContain('Content A');
-      expect(results[1]).toContain('Content B');
+      expect(results.some((result) => result.includes('Content A'))).toBe(true);
+      expect(results.some((result) => result.includes('Content B'))).toBe(true);
     });
 
     it('should handle concurrent-safe tools', async () => {

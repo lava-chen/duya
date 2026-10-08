@@ -155,7 +155,13 @@ describe('buildPermissions — canUseTool precedence', () => {
   });
 
   it('honours plan-mode exact-path deny', async () => {
-    const gateWriteTool = vi.fn(() => 'deny' as const);
+    // The gate result is an OBJECT, not a bare string: `PermissionsGate`
+    // reads `gate.decision` (`PermissionsGate.ts:193`). A bare `'deny'` string
+    // is truthy, so it entered the gate branch and then failed the
+    // `=== 'deny'` comparison, falling through to the rules engine and
+    // returning allow. The mock has to carry the real shape or this case
+    // silently stops testing the deny branch at all.
+    const gateWriteTool = vi.fn(() => ({ decision: 'deny' as const }));
     const getModeCoordinator = vi.fn(() => ({ gateWriteTool }) as never);
     const hasPermissionsToUseTool = vi.fn(async () => {
       throw new Error('rules-engine should not be consulted when gate denies');
@@ -174,7 +180,7 @@ describe('buildPermissions — canUseTool precedence', () => {
   });
 
   it('honours plan-mode exact-path allow and skips the rules engine', async () => {
-    const gateWriteTool = vi.fn(() => 'allow' as const);
+    const gateWriteTool = vi.fn(() => ({ decision: 'allow' as const }));
     const getModeCoordinator = vi.fn(() => ({ gateWriteTool }) as never);
     const hasPermissionsToUseTool = vi.fn(async () => {
       throw new Error('rules-engine should not be consulted when gate allows');
@@ -209,7 +215,15 @@ describe('buildPermissions — canUseTool precedence', () => {
 
     const { canUseTool } = buildPermissions(deps, turn, undefined);
     const decision = await canUseTool('Bash', { command: 'echo' });
-    expect(decision).toEqual({ allowed: false, behavior: 'deny' });
+    // The fail-closed deny also carries the reason (`PermissionsGate.ts:240`),
+    // so `toEqual` on the two-key object was asserting a shape production
+    // deliberately widened. Asserting the whole object keeps the assertion
+    // exact AND checks the reason is propagated.
+    expect(decision).toEqual({
+      allowed: false,
+      behavior: 'deny',
+      message: 'Permission check failed (fail-closed): classifier exploded',
+    });
   });
 });
 
