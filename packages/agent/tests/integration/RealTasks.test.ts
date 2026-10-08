@@ -134,9 +134,10 @@ describe('Real Tasks Integration', () => {
   ): Promise<SSEEvent[]> {
     const { frames } = await driveTurn(agent, prompt, { options: options as never });
     return frames.map((frame) => {
-      const type = typeof frame['type'] === 'string' ? frame['type'] : '';
-      const normalized = {
-        ...frame,
+      const record = frame as Record<string, unknown>;
+      const type = typeof record['type'] === 'string' ? record['type'] : '';
+      const normalized: Record<string, unknown> = {
+        ...record,
         type: type.startsWith('chat:') ? type.slice('chat:'.length) : type,
       };
       // The codec FLATTENS the projector payload: `chat:tool_use` carries
