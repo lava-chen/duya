@@ -559,6 +559,44 @@ export function admitChatFrame(event: {
 }
 
 /**
+ * THE LIVE-RING REFRESH SELECTION.
+ *
+ * The context ring has to be recomputed when a tool round lands and when a turn
+ * ends, because both change the trailing volume the stateless estimator scans
+ * (`computeContextEstimate`), and neither is followed by a provider `result`.
+ *
+ * ## Why it reads the NORMALIZED frame
+ *
+ * These two refreshes used to be selected on the PRE-codec names `tool_result`
+ * and `done`, and both arms were dead on the live path. `driveRunWithEngine`
+ * runs `request.legacyFrameCodec` BEFORE it calls `onFrame`, so the drain
+ * hands this handler `chat:tool_result` and `chat:done` -- never the bare
+ * names. Only the orchestrator leg (which passes pre-codec `SSEEvent`s, and
+ * which no registered production mode declares today) could still produce
+ * them. So the ring froze for the whole of a tool-heavy turn and only moved
+ * again on the next provider `result` or at turn end. The two arms had the
+ * same intent and the same action, so they are ONE predicate here.
+ *
+ * ## Why the payload guard is gone
+ *
+ * The old tool-result arm also required `event.data`, which the codec's
+ * `tool_result` case consumes and does not forward: `chat:tool_result`
+ * carries its payload spread flat (`id`, `result`, `error`), so `data` is
+ * `undefined` on every frame the drain produces and the guard could only ever
+ * be false there. It was not protecting anything either -- that same codec
+ * case dereferences `event.data` unconditionally, so a `tool_result` without
+ * a payload throws before the guard could matter.
+ *
+ * `result` is deliberately NOT here. It is read on the RAW frame by the
+ * billing block above, because `convertSSEToAgentMessage` returns `null` for
+ * it -- the normalized frame can never name it.
+ */
+export function refreshesLiveRing(chatFrame: Record<string, unknown> | null): boolean {
+  const type = chatFrame?.type;
+  return type === 'chat:tool_result' || type === 'chat:done';
+}
+
+/**
  * THE TURN-END HOLD.
  *
  * `chat:done` is withheld rather than forwarded inline: the renderer's
@@ -3229,6 +3267,14 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         debugLog('Sent heartbeat pong during streaming');
       }
 
+      // Normalize ONCE, before anything reads a frame type. The accounting
+      // arms below and the forwarder below are then reading the SAME
+      // vocabulary, which is the only reason the ring selection can be a
+      // single predicate instead of a per-caller list of aliases. The codec
+      // is a pure switch (its only side effect is a WARN in `default:`), and
+      // this is still exactly one call per event, so nothing logs twice.
+      const agentMsg = admitChatFrame(event);
+
       if (event.type === 'result' && event.data) {
         // Parse the single LLM API call's usage. One `result` fires per API
         // call, so a tool-heavy turn emits many — each becomes one UsageCall
@@ -3350,24 +3396,25 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         } else {
           warn('[Agent-Process] Received all-zero usage, ignoring to avoid empty context ring');
         }
-      } else if (event.type === 'tool_result' && event.data) {
-        // Tool results are appended to the in-memory history and will be sent
-        // to the model on the next request. Recompute statelessly from the
-        // full timeline so trailing tool-result volume is included.
-        emitTokenUsage();
-      } else if (event.type === 'done') {
-        // The assistant message carrying this round's usage is pushed BEFORE
-        // `done` yields downstream, so emitting here re-anchors the frame on
-        // the fresh per-call usage immediately. Without this, a thinking /
-        // text-only round emits nothing after its `result` (which fires pre-
-        // push) and the ring freezes until the next tool_result or turn end.
+      } else if (refreshesLiveRing(agentMsg)) {
+        // A tool result is appended to the in-memory history and will be sent
+        // to the model on the next request, and `done` means the assistant
+        // message carrying this round's usage has just been pushed. Both
+        // recompute statelessly from the full timeline so trailing volume is
+        // included and the final round re-anchors immediately -- without the
+        // `done` refresh, a thinking / text-only round emits nothing after its
+        // `result` (which fires pre-push) and the ring freezes until the next
+        // tool result or turn end.
+        //
+        // Keyed on the NORMALIZED type, because on the drain path these frames
+        // arrive already codec'd. See `refreshesLiveRing`.
         emitTokenUsage();
       }
 
       // ONE codec pass, wherever the frame came from. See `admitChatFrame`:
       // calling this unconditionally is what dropped every `chat:*` frame
-      // the driver had already converted.
-      const agentMsg = admitChatFrame(event);
+      // the driver had already converted. Computed above the accounting arms
+      // so both read one vocabulary.
       if (agentMsg) {
         // Plan 441 follow-up: hold `chat:done` instead of forwarding it
         // inline. The renderer's terminal handoff (App.tsx) only swaps the
