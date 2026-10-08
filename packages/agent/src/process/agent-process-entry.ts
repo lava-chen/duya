@@ -2150,7 +2150,7 @@ async function initAgent(
   };
 
   if (sandboxEnabled !== false) {
-    const { buildSandboxImage, setSandboxEnabled } = await import('../sandbox/index.js');
+    const { buildSandboxImage, setSandboxEnabled } = await import('@duya/sandbox');
     if (setSandboxEnabled) setSandboxEnabled(true);
     buildSandboxImage((msg: string) => log(msg)).catch(() => {});
   }
