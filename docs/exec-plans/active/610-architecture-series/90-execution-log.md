@@ -1436,3 +1436,41 @@ baseline 全程未动，size 仍是 930。
 两个新隔离 worktree（各 10 个 junction：repo root + 9 个 workspace 包）：
 `610-process-fixes` / `plan/610-process-fixes`、
 `610-a5-sandbox` / `plan/610-a5-sandbox`。
+### 失败归属：先把「20 条红」这个模糊数字换成可归属的清单
+
+此前一直沿用「streamChat 迁移后剩 20 条红」这个说法。它没有归属，因此无法排片。
+本轮在 `e8192bac`（PR #262 合并前的 master）建 detached worktree，**同一范围、同一命令**
+跑了两遍：`npx vitest run packages/agent/tests packages/agent/src`。
+
+采集脚本是现写的，逐行剥 ANSI 后按 `\r\n | \n | \r` 三种分隔切分。切 `\r` 是必需的 ——
+vitest 用回车重绘进度条，只按 `\n` 切会把整行粘在一起，结果是**一条 FAIL 都抓不到**，
+而这种「采集为空」极容易被误读成「没有失败」。采集自洽性可验：逐文件失败数之和
+23 与该次 `Tests failed` 完全吻合。
+
+**合并前：17 个文件 / 23 条失败 · 合并后：21 个文件 / 65 条失败**
+
+拆开后的形状比总数有用得多：
+
+| 类别 | 内容 |
+| --- | --- |
+| **从绿变红（8 个文件，+33 条）** | `integration/DuyaAgent.test.ts` **12**、`regression/streaming-lifecycle.test.ts` **7**、`src/agent/__tests__/model-leg.test.ts` 5、`src/process/__tests__/engine-real-agent-proof.test.ts` 5、`engine-post-tool-use-failure.test.ts` 1、`thinking-replay` 1、`nestedInjection` 1、`skills/snapshotIntegration` 1 |
+| **同一文件变严重** | `plan315` **2 → 10**、`RealTasks` **2 → 6**、`plan486` 2 → 3 |
+| **红消失（4 个文件）** | `os-context/watcher`、`send-message-reminder`、`agent-process-entry-import`、`bash-task-store` |
+| **失败数完全不变（10 个文件）** | `AgentLoop` 2、`one-shot-calls` 2、`permissions-gate` 2，以及 file-mutation-queue / worktree / ConversationTrace / sync-protection / compaction-coordinator / AgentTool / turn-review 各 1 |
+
+**最要紧的一句**：此前一律把新增的红断言描述成「旧测试替身掩盖掉的既有产品缺口，迁移只是暴露了它」。
+**这个说法没有经过验证。** 一个文件在合并前绿、合并后红，**首要嫌疑是迁移引入的回归**，
+两者的处置方向相反 —— 前者补生产路径，后者是活的用户可见缺陷、优先级更高。
+所以给 worker 的指令是逐条判定，**不许默认按「暴露」处理**。
+19 条集中在 `DuyaAgent.test.ts` 与 `streaming-lifecycle.test.ts` 两个文件，优先。
+
+### 并发下测数：两个把数字整个测坏的坑
+
+1. **`npm test` 不能并发跑。** 它的 `pretest` 会跑 `bundle:agent` → `build:packages`
+   （`tsc -b` 逐个构建 11 个 workspace 包）。多个 worker 同时跑，构建互相踩，
+   `npm` 直接以 **exit 2** 返回 —— 表现为「没跑任何测试」，而不是「测试失败」。
+   需要测试结果时用 `npx vitest run <paths>` 绕过 `pretest`。
+2. **负载会让超时伪装成回归。** 同一次全量跑在三个并发 worker 下，`collect` 涨到 865s
+   并抛出 `[vitest-worker]: Timeout calling "onTaskUpdate"`。
+   `engine-permission-enforcement` 单独跑最重的用例 1.86s，而 `testTimeout` 是 10s ——
+   5 倍减速就正好卡在边缘。任何「超时类」失败都必须在隔离下重跑再相信。
