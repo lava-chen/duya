@@ -31,7 +31,8 @@ import { GrepTool } from './GrepTool/GrepTool.js';
 import { EditTool, editTool, executeEdit } from './EditTool/EditTool.js';
 import { ApplyPatchTool, applyPatchTool } from './ApplyPatchTool/ApplyPatchTool.js';
 import { GlobTool, globTool, executeGlob } from './GlobTool/GlobTool.js';
-import { subagentTool } from './SubagentTool/index.js';
+import { SubagentTool } from './SubagentTool/index.js';
+import type { SubagentRunDeps } from './SubagentTool/index.js';
 
 import { todoTool } from './TodoTool/TodoTool.js';
 import { getTaskOutputTool } from './BackgroundTaskTool/index.js';
@@ -69,7 +70,13 @@ import { planTool } from './PlanTool/index.js';
 // Registry factory
 // ============================================================================
 
+/**
+ * Plan 610 A5: `deps` is required, for the same reason as
+ * `createBuiltinRegistry` — the bot registry constructs its own `SubagentTool`
+ * instance rather than registering the shared module singleton.
+ */
 export function createBotRegistry(
+  deps: SubagentRunDeps,
   domainBlockerConfig?: DomainBlockerConfig,
   options?: {
     enabledPluginIds?: Set<string>;
@@ -89,7 +96,7 @@ export function createBotRegistry(
     });
   }
 
-  registerBotTools(registry);
+  registerBotTools(registry, deps);
 
   return registry;
 }
@@ -98,7 +105,7 @@ export function createBotRegistry(
 // Registration entry point
 // ============================================================================
 
-export function registerBotTools(registry: ToolRegistry): void {
+export function registerBotTools(registry: ToolRegistry, deps: SubagentRunDeps): void {
   // --------------------------------------------------------------------------
   // always — tools with full schema sent every request
   // --------------------------------------------------------------------------
@@ -193,6 +200,7 @@ export function registerBotTools(registry: ToolRegistry): void {
   // --------------------------------------------------------------------------
 
   // SubagentTool — bots should NOT spawn sub-agents (this is the main controller's job)
+  const subagentTool = new SubagentTool(deps);
   registry.register(subagentTool.toTool(), subagentTool, { exposure: 'hidden' });
 
   // AskUserQuestionTool — bots should not directly ask users multi-choice questions

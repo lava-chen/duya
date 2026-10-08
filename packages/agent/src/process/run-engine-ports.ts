@@ -63,11 +63,20 @@ import type {
   CompactionProgress,
   CompactionUsageAnchor,
   ContextPort,
+  // Plan 610 A3-2b10 (S4a) -- the extension surface. OPTIONAL, and the reason
+  // it stays optional is that a run with no hooks is a legitimate run: the
+  // engine reads `?? []` and runs none, which is what happened before S4a.
+  ExtensionPort,
+  // Plan 610 D1 -- the mode lifecycle's run-boundary half. Optional, because a
+  // run that resolved no `kind: 'message'` mode has nothing to exit; see
+  // `ModeExitPort` for why it is a port rather than an `after_finalize` phase.
+  ModeExitPort,
   // Plan 610 A3-1 -- inter-turn input. Required, unlike the two optional
   // sources above, and `LegacyEngineSources.interTurn` says why.
   InterTurnCheckpoint,
   InterTurnDecision,
   InterTurnInputPort,
+  InjectedMessageRecord,
   ModelContentBlock,
   ModelFrame,
   ModelMessage,
@@ -76,6 +85,7 @@ import type {
   RunEnginePorts,
   RunEventEmitter,
   RunEventStorePort,
+  RunCommandPort,
   ToolCallRequest,
   ToolDescriptor,
   ToolDispatchTicket,
@@ -232,6 +242,13 @@ export interface LegacyEngineSources {
    *
    * So the seam exists and is exercised by this package's tests, and the cutover
    * is the slice that fills it in.
+   *
+   * OPTIONAL SOURCE, REQUIRED PORT. Plan 610 D4 made the PORT required, and the
+   * asymmetry is deliberate: a host may genuinely have nothing to record
+   * through, which is a fact about the host, while "the engine has no port to
+   * record through" is a type error. `buildEnginePorts` translates the first
+   * into a port whose promises resolve and perform nothing, so the engine never
+   * has to ask whether a host recorded anything.
    */
   readonly turnOutput?: TurnOutputSources;
   /**
@@ -259,6 +276,21 @@ export interface LegacyEngineSources {
    * assembly; a host that assembles from the engine's own seed needs nothing.
    */
   readonly deferFragment?: (fragment: TransientContextFragment) => void;
+  /**
+   * Runs the run's modes' `onExit` hooks. See `ModeExitPort`.
+   *
+   * OPTIONAL on the SOURCE and REQUIRED on the PORT, and the asymmetry is the
+   * same one `turnOutput` documents: a host genuinely may have no modes to exit,
+   // and the composition binds a port whose promise resolves and runs nothing so
+   * the host does not have to build an inert implementation to satisfy a type.
+   *
+   * The implementation is the legacy's own `runExitHooks`
+   * (`modes/apply-modes.ts:126`) reached through `duyaAgent`, which already
+   * holds the resolved modes and the mode context as private state assigned in
+   * `applyTurnModes`. A second copy of the iteration would be a second
+   * authority for which modes a run activated.
+   */
+  readonly modeExit?: ModeExitSources;
   /**
    * Asks whether anything arrived for this run since the last ask.
    *
@@ -302,6 +334,37 @@ export interface LegacyEngineSources {
    * why this is a type error rather than a `?.`.
    */
   readonly compaction: CompactionSources;
+  /**
+   * The run's hook source, on the engine's extension port.
+   *
+   * Plan 610 A3-2b10 (S4a). OPTIONAL, and deliberately so: a host that configures
+   * no hooks is a host whose runs must still complete, and the engine's
+   * `#contribute` already reads `?? []`. Making it required would have meant
+   * every existing host grew a no-op port to satisfy a type.
+   *
+   * The source is a HOST concern and stays one. `createLegacyHookSource`
+   * (`hook-source.ts`) is the binding that maps the legacy's `ConfigHooksRunner`
+   * events onto the engine's phases; nothing in `packages/agent-runtime` knows
+   * that a `HookEvent` exists.
+   */
+  readonly extensions?: ExtensionPort;
+  /**
+   * Where a control command the product answers is recognised.
+   *
+   * Plan 610 D1. OPTIONAL on the source and on the port, and the two are the
+   * same decision: a host with no command surface must not build a no-op port
+   * to satisfy a type, and the engine's `?.` treats an absent one as "no port,
+   * every prompt goes to the model" -- which was every host's behaviour before
+   * this member existed.
+   *
+   * The source is a HOST concern and stays one. `createLegacyCommandPort`
+   * (`command-port.ts`) is the binding that routes to the product's existing
+   * `isGoalControlCommand` / `handleGoalCommand` /
+   * `isTranscriptControlCommand` / `handleTranscriptCommand`, so the engine
+   * learns nothing about verbs, `/`-prefixes or the goal state machine -- and
+   * cannot grow a second copy of them.
+   */
+  readonly command?: RunCommandPort;
 }
 
 /**
@@ -351,6 +414,23 @@ export interface InterTurnSources {
 
 /** The one thing the adapter needs from the legacy's claim. */
 export type InterTurnClaim = InterTurnSources['claim'];
+
+/**
+ * Runs the run's `kind: 'message'` modes' `onExit` hooks, once, on the success
+ * path. See `ModeExitPort` for why this is a port and not an extension phase.
+ *
+ * One method, and it is the legacy's own `runExitHooks` reached through
+ * `duyaAgent` rather than a reimplementation: the agent already holds the
+ * resolved modes and the mode context, and a second copy of the iteration would
+ * be a second authority for which modes a run activated.
+ */
+export interface ModeExitSources {
+  /**
+   * `runExitHooks(resolvedModes, modeCtx)`. MAY throw; `ModeExitPort` states that
+   * the engine swallows it, reproducing `SessionFinalizer.ts:233-241`.
+   */
+  readonly onRunExit: () => Promise<void>;
+}
 
 /**
  * Build `InterTurnInputPort` over the legacy's claim.
@@ -726,6 +806,25 @@ export interface TurnOutputSources {
   readonly onAssistantMessage?: (record: AssistantMessageRecord) => Promise<void> | void;
   /** The drain ended. Wraps the legacy `toolResultMessageCount` gates. */
   readonly onTurnResults: (summary: TurnOutputSummary) => Promise<void> | void;
+  /**
+   * A `before_commit` contributor's work, to be written into the transcript.
+   *
+   * OPTIONAL, and the reason is the one that governs this whole interface: the
+   * legacy loop still owns the commit (`_commitMessages`,
+   * `SessionFinalizer.ts:245`), so nothing may push a row here while the legacy
+   * drives -- a source that supplied one would put the same row in the durable
+   * transcript twice. The PORT requires the method; a source with nothing to do
+   * hands over a resolved promise, and one that cannot yet commit simply omits
+   * it.
+   *
+   * The record is in the RUNTIME's vocabulary, so the natural implementation is
+   * the legacy's own push: `applyLoopHookEffect` wraps the text in a
+   * `<system-reminder>` and projects a provider `user` turn
+   * (`hooks/loop.ts:229-252`). The engine resolves the text and the HOST decides
+   * the row's shape, because the row's shape is a storage fact the runtime does
+   * not have.
+   */
+  readonly onInjectedMessage?: (record: InjectedMessageRecord) => Promise<void> | void;
 }
 
 /**
@@ -800,8 +899,26 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
   const settleTicket = sources.settleTicket;
   const turnOutput = sources.turnOutput;
   const onAssistantMessage = turnOutput?.onAssistantMessage;
+  const onInjectedMessage = turnOutput?.onInjectedMessage;
   const interTurn: InterTurnInputPort = buildInterTurnPort(sources.interTurn);
   const compaction: CompactionPort = buildCompactionPort(sources.compaction);
+  const extensions = sources.extensions;
+  const command = sources.command;
+  // Plan 610 D1. A pass-through, not a translation, and the reason is that the
+  // only vocabulary involved is the host's: the source is already
+  // `() => Promise<void>` and the port is `() => Promise<void>`. Wrapping it
+  // would add a frame that exists only to look like the other builders.
+  // Plan 610 D1 CLOSED the last optional port, and the composition answers for it
+  // the same way it does for `turnOutput` below: the SOURCE stays optional --
+  // a host genuinely may have no modes to exit -- and the PORT is always bound.
+  // A host with no source gets a port whose promise resolves and runs nothing,
+  // which is legible in the composition ("this host exits no modes"), where an
+  // omitted member is a type error and where a bound-but-half-built port would
+  // be an obligation the engine believed was met.
+  const onRunExit = sources.modeExit?.onRunExit;
+  const modeExit: ModeExitPort = {
+    onRunExit: () => Promise.resolve(onRunExit?.()),
+  };
 
   return {
     model,
@@ -818,23 +935,47 @@ export function buildEnginePorts(sources: LegacyEngineSources): RunEnginePorts {
     // production, so this binding performs no side effect until the cutover --
     // which is exactly why it can land first.
     compaction,
-    // All-or-nothing, for the same reason `sideEffects` is: half a port is a
-    // port whose missing half is indistinguishable from one that was never
-    // asked. `finishTurn` without `recordToolResult` would report counts for
-    // results the host was never handed, and a host that never learned the
-    // model's answer would have no way to notice.
-    ...(turnOutput === undefined
-      ? {}
-      : {
-          turnOutput: {
-            recordToolResult: (record) => Promise.resolve(turnOutput.onToolResult(record)),
-            // Optional at the SOURCE, required by the port: a source that has
-            // nothing to do with the message still gets a resolved promise
-            // rather than a `!` or a silent skip in the engine.
-            recordAssistantMessage: (record) => Promise.resolve(onAssistantMessage?.(record)),
-            finishTurn: (summary) => Promise.resolve(turnOutput.onTurnResults(summary)),
-          },
-        }),
+    // OMITTED rather than bound to an empty port, and the difference is worth
+    // stating: a bound-but-empty port makes "this host configured no hooks" and
+    // "this host never bound one" look the same to anything reading the ports,
+    // and the omission is what `#contribute`'s `?? []` already handles.
+    ...(extensions === undefined ? {} : { extensions }),
+    // Plan 610 D1. Same omitted-not-empty treatment as `extensions` above, and
+    // for the same reason: a bound-but-empty command port would claim a command
+    // surface that answers nothing, which is indistinguishable from "this host
+    // has no commands" -- and the engine's `?.` already handles the absence.
+    ...(command === undefined ? {} : { command }),
+    // ALWAYS BOUND, since plan 610 D1 made `modeExit` required. This is the one
+    // member that moved from the omitted-not-empty treatment of `extensions` and
+    // `command` above to the always-bound treatment of `turnOutput` and
+    // `compaction`, and the move is the point rather than an inconsistency:
+    // absence of `extensions` is a legible answer the engine already reads
+    // (`#contribute`'s `?? []` -- "this host has no hooks"), while absence of
+    // `modeExit` would be indistinguishable from "this run activated no mode",
+    // which the engine cannot see. See `ports.ts` for why that difference is the
+    // test the required members are chosen by.
+    modeExit,
+    // ALWAYS BOUND, since plan 610 D4 made `turnOutput` a required port. The
+    // SOURCE stays optional -- a host genuinely may have nothing to record
+    // through -- and the difference is what the no-op below is for: a host with
+    // no source gets a port whose promises resolve and perform nothing, which
+    // is a legible answer ("this host records nothing"), where omitting the
+    // member is a type error and a bound-but-empty half-built port would be a
+    // host obligation the engine believed was half met.
+    //
+    // The mapping itself is unchanged: a source that has nothing to do with the
+    // message still gets a resolved promise rather than a `!` or a silent skip
+    // in the engine, which is the same rule `recordInjectedMessage` below
+    // follows for the same reason.
+    turnOutput: {
+      recordToolResult: (record) => Promise.resolve(turnOutput?.onToolResult(record)),
+      recordAssistantMessage: (record) => Promise.resolve(onAssistantMessage?.(record)),
+      finishTurn: (summary) => Promise.resolve(turnOutput?.onTurnResults(summary)),
+      // Same optional-at-the-source shape as the two above: the legacy still
+      // owns the commit while it drives, so a source that cannot commit yet
+      // omits this and the engine still gets a resolved promise.
+      recordInjectedMessage: (record) => Promise.resolve(onInjectedMessage?.(record)),
+    },
     ...(beginTicket === undefined || settleTicket === undefined
       ? {}
       : {

@@ -229,6 +229,22 @@ function harness(options: HarnessOptions = {}): Harness {
     // engine would otherwise skip the sweep and drop mid-run steering
     // with nothing reporting the loss.
     interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
+    // The three ports the legacy-still-drives window closed (plan 610 D4, then
+    // D1 for `modeExit`), each the smallest honest answer. This file measures the
+    // model's own timeout, so a bound no-op on these three cannot extend a
+    // deadline or shorten one -- which is the property under test.
+    turnOutput: {
+      recordToolResult: () => Promise.resolve(),
+      recordAssistantMessage: () => Promise.resolve(),
+      finishTurn: () => Promise.resolve(),
+      recordInjectedMessage: () => Promise.resolve(),
+    },
+    compaction: {
+      decide: () => Promise.resolve({ kind: 'skip' as const, reason: 'not under test' }),
+      run: () => Promise.resolve({ kind: 'declined' as const, reason: 'not under test' }),
+      nextCompactionId: () => 'cmp-timeout',
+    },
+    modeExit: { onRunExit: () => Promise.resolve() },
     model,
     tools,
     context: {

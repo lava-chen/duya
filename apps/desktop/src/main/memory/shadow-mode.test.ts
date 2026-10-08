@@ -31,11 +31,12 @@ import {
   _resetMemoryWorkerForTesting,
   type MemoryWorkerDeps,
 } from './memory-worker';
-import { drainOutbox } from '../../../../../packages/agent/src/memory-state/outbox.js';
-import { acquireLease } from '../../../../../packages/agent/src/memory-state/lease.js';
+import { drainOutbox } from '@duya/memory/outbox';
+import { acquireLease } from '@duya/memory/lease';
+import type { MessageRowShape } from '@duya/memory/extractor';
 import {
   deriveRolloutSummaryFilename,
-} from '../../../../../packages/agent/src/memory-state/projectionContent.js';
+} from '@duya/memory/projectionContent';
 import { migration0001 } from '../memory-state/migrations/0001_init.sql';
 import { migration0002 } from '../memory-state/migrations/0002_lease_stage1.sql';
 import { migration0003 } from '../memory-state/migrations/0003_outbox.sql';
@@ -43,33 +44,17 @@ import { migration0005 } from '../memory-state/migrations/0005_phase2.sql';
 import { migration0008 } from '../memory-state/migrations/0008_curation_runs.sql';
 
 // ---------------------------------------------------------------------------
-// Mock agent db-client IPC
+// Message read port
 // ---------------------------------------------------------------------------
-// Plan 328 Phase 6: the Stage1Extractor reads messages via messageDb.getBySession
-// IPC instead of opening the core database. In these Electron tests there is no
-// IPC bridge, so mock the agent db-client to route the read to the fixture's
-// local mainDb (hoisted state shares the reference between the mock factory
-// and the test bodies).
-const dbMockState = vi.hoisted(() => ({
-  mainDb: null as BetterSqlite3Database | null,
-}));
-
-vi.mock('../../../../../packages/agent/src/ipc/db-client.js', () => ({
-  messageDb: {
-    getBySession: vi.fn(async (sessionId: string) => {
-      if (!dbMockState.mainDb) return [];
-      return dbMockState.mainDb
-        .prepare(
-          `SELECT id, role, content, tool_call_id, tool_name, tool_input,
-                  msg_type, seq_index, created_at, status
-           FROM messages
-           WHERE session_id = ?
-           ORDER BY seq_index ASC`,
-        )
-        .all(sessionId);
-    }),
-  },
-}));
+// Plan 328 Phase 6 had the Stage1Extractor read messages through the agent's
+// `messageDb` IPC, which this test had to mock at
+// `packages/agent/src/ipc/db-client.js` because Electron has no IPC bridge.
+//
+// Plan 610 A5 removed that fallback: reading a session's messages is a HOST
+// concern, so `@duya/memory` requires the caller to supply `readMessageRows`.
+// Production already does exactly this
+// (`apps/desktop/src/main/memory/worker-bootstrap.ts`), so this test now wires
+// the same port instead of mocking a module inside another package.
 
 // ---------------------------------------------------------------------------
 // LLM response templates
@@ -149,7 +134,6 @@ function createShadowFixture(
   // Stub main DB with messages table (what the extractor reads) and
   // chat_sessions table (what catalog sync reads).
   const mainDb = new Database(path.join(dbDir, 'main.db'));
-  dbMockState.mainDb = mainDb;
   mainDb.exec(`
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
@@ -238,6 +222,18 @@ function toDeps(f: ShadowFixture): MemoryWorkerDeps {
     mainDb: f.mainDb,
     llmClient: f.llmClient,
     rootDir: f.memoryRoot,
+    // The port `@duya/memory` requires. Reads the same table the mocked agent
+    // db-client read, from the same fixture database.
+    readMessageRows: async (sessionId: string) =>
+      f.mainDb
+        .prepare(
+          `SELECT id, role, content, tool_call_id, tool_name, tool_input,
+                  msg_type, seq_index, created_at, status
+           FROM messages
+           WHERE session_id = ?
+           ORDER BY seq_index ASC`,
+        )
+        .all(sessionId) as MessageRowShape[],
   };
 }
 

@@ -14,6 +14,18 @@ import {
   shouldInjectComputerUseContext,
 } from '../../tool/OSTool/index.js';
 import { COMPUTER_USE_TOOL_NAME } from '../../tool/OSTool/constants.js';
+import type { SubagentRunDeps } from '../../tool/SubagentTool/runAgent.js';
+
+// Plan 610 A5: every ModeModifierContext literal needs the sub-agent
+// composition deps. computer-use never spawns a sub-agent, so inert stubs.
+const stubSubagentDeps: SubagentRunDeps = {
+  createSubAgent: () => {
+    throw new Error('not used by the computer-use mode suite');
+  },
+  createToolRegistry: () => {
+    throw new Error('not used by the computer-use mode suite');
+  },
+};
 
 describe('computerUseMode — registration', () => {
   it('is registered with the canonical id', () => {
@@ -92,6 +104,7 @@ describe('computerUseMode — registration', () => {
     await computerUseMode.hooks!.onExit!({
       sessionId: 'mode-exit-session',
       workingDirectory: '/tmp',
+      subagentDeps: stubSubagentDeps,
       state: {},
     });
     expect(shouldInjectComputerUseContext('mode-exit-session')).toBe(false);
@@ -101,6 +114,7 @@ describe('computerUseMode — registration', () => {
     const serialized = computerUseMode.persist!.serialize({
       sessionId: 's',
       workingDirectory: '/tmp',
+      subagentDeps: stubSubagentDeps,
       state: {},
     });
     expect(serialized).toEqual({});
@@ -137,6 +151,7 @@ describe('applyModes — computer-use-mode integration', () => {
     const ctx = {
       sessionId: 's',
       workingDirectory: '/tmp',
+      subagentDeps: stubSubagentDeps,
       state: {},
     };
     const resolved = modeModifierRegistry.resolve([COMPUTER_USE_MODE_ID]);
@@ -158,6 +173,7 @@ describe('applyModes — computer-use-mode integration', () => {
     const ctx = {
       sessionId: 's',
       workingDirectory: '/tmp',
+      subagentDeps: stubSubagentDeps,
       state: {},
     };
     const resolved = modeModifierRegistry.resolve([COMPUTER_USE_MODE_ID]);

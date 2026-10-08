@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as fsp from 'fs/promises';
 import * as path from 'path';
-import { generateMemoryMd, generateSummaryMd, generateIndexMd } from '../../../../../packages/agent/src/memory-state/curation_projection';
+import { generateMemoryMd, generateSummaryMd, generateIndexMd } from '@duya/memory/curation_projection';
 
 /**
  * Crash-safe publication state machine (design §8.2–§8.5).

@@ -110,8 +110,9 @@ npm run electron:pack:win     # Windows (.exe installer)
 npm run electron:pack:mac     # macOS (.dmg)
 npm run electron:pack:linux   # Linux (AppImage, .deb, .rpm)
 
-# Agent CLI (standalone)
-node packages/agent/dist/cli/index.js [options]
+# Agent CLI (standalone) — the CHAT entry (REPL, -t, --print, --headless)
+npm run build:chat-cli             # = bundle:agent; emits bundle/cli-entry.js
+node packages/agent/bundle/cli-entry.js [options]
 #   -k, --api-key <key>        API key for LLM provider
 #   -m, --model <model>        Model to use
 #   -u, --base-url <url>       Base URL for API
@@ -122,6 +123,40 @@ node packages/agent/dist/cli/index.js [options]
 #   --headless                 Headless mode: read from script file
 #   -f, --format <format>      Output format: text, json, markdown
 ```
+
+### Why the chat CLI is a bundle and not `dist/`
+
+`node packages/agent/dist/cli/index.js` does **not** run, for two independent
+reasons. Each was found by fixing the first and watching the second appear:
+
+1. **Extensionless specifiers.** Node's ESM loader rejects them.
+   `packages/plugin-core` is emitted under `module: ESNext` +
+   `moduleResolution: bundler`, which permits and emits `./scope` rather than
+   `./scope.js`. Measured across all 11 workspace packages, plugin-core is the
+   only one that emits any — 41 specifiers across 44 files; the other ten,
+   `packages/agent` included, are on `NodeNext` and emit 0.
+2. **No assets.** `tsc` emits JavaScript and declarations only. The 20+
+   `.hbs` files under `src/prompts/assets/` are never copied, and
+   `prompts/bot/basicPrompt.ts` throws at module scope when it cannot find them
+   ("fail loud, a missing prompt asset must never degrade into an empty bot
+   persona").
+
+So a thin wrapper over `dist` cannot work, and making `dist` loadable would mean
+changing every asset-dependent package plus teaching `build-packages.mjs` to
+copy assets — its own header calls that array the single source of build order.
+esbuild settles both in one pass, so `bundle:agent` emits `bundle/cli-entry.js`
+alongside the agent worker, and both share the one `bundle/assets` copy.
+
+**Do not give this artifact its own output directory.** Every gate under
+`scripts/architecture/` skips directories named exactly `bundle`; a
+`bundle-cli/` directory is not skipped, and its generated JavaScript was then
+scanned as first-party source and reported as a new `module-dependency`
+violation.
+
+Note the distinct `npm run build:cli-bundle` → `packages/cli/bundle/cli.cjs`.
+That is the **desktop control plane** (`status`, `plugin`, `session`, `mcp`, …)
+and needs a running desktop app. It has no `-t` and no `--print`, and it does not
+run a chat turn. The chat entry is `bundle/cli-entry.js`.
 
 ## Gates
 

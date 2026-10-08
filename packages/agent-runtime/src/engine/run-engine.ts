@@ -143,6 +143,8 @@ import type {
   AssistantMessageRecord,
   AssembledTurn,
   BudgetPort,
+  EngineExit,
+  EngineExitReason,
   ExtensionContext,
   ExtensionContribution,
   ExtensionPhase,
@@ -151,7 +153,10 @@ import type {
   ModelMessage,
   ModelRequest,
   ModelStopReason,
+  RepeatedCallStopPolicy,
+  RepeatedToolCallStreak,
   RunEngine,
+  RunCommandOutcome,
   RunEnginePorts,
   RunExecutionHandle,
   RunExecutionRequest,
@@ -173,24 +178,17 @@ import { runCompactionPass, type CompactionPassResult } from './compaction.js';
 // ============================================================================
 
 /**
- * Why the engine stopped.
+ * Why the engine stopped, and what it reported about that.
  *
- * Always a CANDIDATE. `RunSession.settle` is the single writer of the terminal
- * (`run-session.ts:519,527`) and may disagree — a budget ceiling the engine has
- * not seen, a lost dispatch, a server-side stop.
+ * `EngineExitReason` / `EngineExit` now LIVE in `ports.ts`, because
+ * `ExtensionContext.exit` has to name them for a contributor reading the
+ * `after_finalize` phase -- and a port file that re-declared a second copy of
+ * the exit union would let the two disagree. They are re-exported here, so
+ * every existing import of `./engine/run-engine.js` (and `index.ts`) is
+ * unchanged; the same move the file already makes for `ProtocolErrorInfo` at
+ * the bottom.
  */
-export type EngineExitReason =
-  | 'completed'
-  | 'budget_exhausted'
-  | 'max_turns'
-  | 'cancelled'
-  | 'failed';
-
-export interface EngineExit {
-  readonly reason: EngineExitReason;
-  /** `failed` only. A message, never a stack. */
-  readonly message?: string;
-}
+export type { EngineExit, EngineExitReason } from './ports.js';
 
 /** What the run reported about its own exit. For a log line or a receipt. */
 export interface EngineRunReport {
@@ -325,8 +323,18 @@ export class RunEngineImpl implements RunEngine {
     const runId = manifest.runId;
     const startedAt = this.#options.now();
     const spend = new RunSpendLedger();
-    /** Fragments produced this turn that the NEXT turn's assembly will carry. */
-    const deferred: TransientContextFragment[] = [];
+/**
+     * Fragments produced this turn that the NEXT turn's assembly will carry.
+     *
+     * A CELL rather than a local, for the same reason `injected` and `compacted`
+     * are: S4b-3 adoption has to reach it from `#streamModel`, `#dispatchCall`
+     * and `#shouldStop`, all of which sit one or two call frames below this
+     * loop. A local threaded through five signatures is a second account waiting
+     * to go stale -- the exact defect `RunScoped` exists to prevent, and the
+     * reason this was ever a local is that nothing below the loop consumed it
+     * before now.
+     */
+    const deferred: RunScoped<{ current: TransientContextFragment[] }> = { current: [] };
     /** Dispatch tickets, so a settle names the key its own `begin` minted. */
     const tickets = new Map<string, ToolDispatchTicket>();
     /** Dispatched tool names, so a landing result can name the call behind it. */
@@ -386,6 +394,22 @@ export class RunEngineImpl implements RunEngine {
      * model call.
      */
     const finalPollAbsorbs: RunScoped<{ current: number }> = { current: 0 };
+    /**
+     * The consecutive-identical-tool-call streak, for the whole run.
+     *
+     * A CELL for the same reason `finalPollAbsorbs` above is one: `#dispatchCall`
+     * writes it and `#shouldStop` reads it, neither of which is the method that
+     * would otherwise hold a `let`, and the engine object must stay stateless.
+     *
+     * RUN-scoped and not per-turn, and that is load-bearing rather than tidiness:
+     * the streak is consecutive ACROSS turns -- a model that asks for the same
+     * call every turn never repeats it within one turn -- and `RunContext` is
+     * rebuilt every iteration. A per-turn counter would reset to 1 on each
+     * iteration and the invariant could never fire at any threshold above 1, which
+     * is the legacy behaviour this replaces reading `shouldHardStop()` off one
+     * tracker for the whole `streamChat` (`DuyaAgent.ts:2847`, `:4271`).
+     */
+    const repeatedCalls: RunScoped<RepeatedCallStreak> = new RepeatedCallStreak();
     /**
      * Which turn the run stopped on, for the one `assistant.message_finalized`
      * this run emits.
@@ -480,7 +504,89 @@ export class RunEngineImpl implements RunEngine {
       // outside would be a second authority that cannot be refused.
       fence = ports.attempt === undefined ? null : await ports.attempt.acquire(runId);
 
-      for (let turn = 1; ; turn++) {
+      // ── The control-command gate: once per RUN, before turn 1 ─────────────
+      // BEFORE the `on_start` phase and before the loop, for two reasons that
+      // point the same way. First, an `on_start` contributor cannot express
+      // this: the only outcome a contribution carries is a binding veto, and
+      // `#shouldStop` reads a veto as "keep the loop open" -- the opposite of a
+      // command that has already answered the user. Second, this decides whether
+      // there IS a turn, so it belongs outside the turn loop; a check inside
+      // `before_turn` would be re-evaluated on turn 2 for a prompt consumed on
+      // turn 1.
+      //
+      // A recognised command ends the run HERE, and `command !== null` then
+      // short-circuits the `on_start` phase and the loop below to zero
+      // iterations. That reproduces the legacy's position rather than inventing
+      // a difference: it returns from `streamChat` before its turn loop AND
+      // before the ConfigHooksRunner is built (`DuyaAgent.ts:2411-2438` against
+      // `:2447`), so `UserPromptSubmit` / `SessionStart` never fire for a
+      // control command there either.
+      //
+      // The `?.` is the honest absence -- no port means no command surface,
+      // which is every host's state before this member existed -- and a `null`
+      // from the port means "not a command", so the run reaches the model
+      // exactly as before. That is what keeps an unregistered `/`-prefixed
+      // prompt behaving as the legacy behaves.
+      const command = ports.command === undefined
+        ? null
+        : await ports.command.resolve({ runId, prompt: input.prompt });
+      if (command !== null) {
+        await this.#answerCommand(ports, command, messageId, lastMessage);
+        exit = { reason: 'completed' };
+      }
+
+      // ── The `on_start` phase: once per RUN, before turn 1 ────────────────
+      // AFTER the fence, because a contributor that runs before its attempt is
+      // leased has produced work that no epoch attributes -- the same reason
+      // the fence is acquired at all (`ports.ts` contract 3).
+      //
+      // And BEFORE the loop rather than as a first-iteration `before_turn`,
+      // because these are not the same phase and conflating them would make
+      // "once per run" unrepresentable: a run that exhausts its budget at the
+      // top of turn 1 never reaches a first iteration's body, and the legacy
+      // fires `SessionStart` before it can do that too (`DuyaAgent.ts:2144`).
+      //
+      // `turn: 0` is the "no turn has begun" answer documented on
+      // `ExtensionContext.turn`, not a bug in the call site.
+      // A phase with NO contributors must not add a scheduling point, and that
+      // is not an optimisation -- it is the difference between this change
+      // being observable and not. `#run`'s FIRST `await` is a scheduling
+      // point, and `handle.stop()` aborts synchronously from the caller's next
+      // statement; so moving that first await from `before_turn` (inside the
+      // turn loop, after its abort check) out here ahead of the loop means a
+      // stop that arrives immediately is caught by the loop's `isAborted`
+      // instead of reaching the provider. Measured, not assumed:
+      // `run-engine-model-frames.test.ts` "a stop during the turn aborts the
+      // PROVIDER" fails on exactly that and passes again once the await is
+      // conditional.
+      //
+      // A host that configures no hooks therefore gets byte-for-byte the
+      // scheduling it had before S4a, and a host that DOES configure hooks is
+      // the one that asked for work before its first turn.
+      //
+      // `command === null` is the other half of the gate above: a run already
+      // answered by the product never reaches a model, and the legacy never
+      // dispatched `SessionStart` for one either.
+      if (command === null && (ports.extensions?.list('on_start') ?? []).length > 0) {
+        // Adopted: `deferred` is still empty here, so these ride turn 1's
+        // request, and on turn 1 `#modelRequest` places `carried` before the
+        // history -- a session-start context is context the model must have read
+        // BEFORE the transcript, which is the legacy's position too
+        // (`DuyaAgent.ts:2155` routes it through the first-turn context rail).
+        // `repeatedCalls` is the run-scoped cell, not a fresh value: it is the
+        // same object `#dispatchCall` records into and `#shouldStop` reads, and
+        // `on_start` contributes before this run has dispatched anything, so its
+        // `stats()` is the legacy's `undefined` -- an absent field, not a zero.
+        this.#adopt(ports, await this.#contribute({ runId, turn: 0, signal, ports, repeatedCalls }, 'on_start', {}), deferred.current);
+      }
+
+      // ZERO iterations when the run was answered by a control command, which is
+      // the whole point: `#modelRequest` and `ports.model.stream` live inside
+      // this loop, so a handled command cannot reach a provider. Written as the
+      // loop's CONDITION rather than an early `break` so the "no turn ran" fact
+      // is the same one fact the budget-exhausted arm above already expresses by
+      // `break`ing before `spend.beginTurn`.
+      for (let turn = 1; command === null; turn++) {
         // ── Budget, BEFORE this turn is counted and BEFORE the model request ──
         // Checked here rather than after the turn, because a check after the
         // spend it should have prevented is an accounting report, not a ceiling.
@@ -511,6 +617,9 @@ export class RunEngineImpl implements RunEngine {
           ...(request.modelRequestTimeoutMs === undefined
             ? {}
             : { modelRequestTimeoutMs: request.modelRequestTimeoutMs }),
+          ...(request.repeatedCallStop === undefined
+            ? {}
+            : { repeatedCallStop: request.repeatedCallStop }),
           ports,
           input,
           manifest,
@@ -519,6 +628,7 @@ export class RunEngineImpl implements RunEngine {
           fence,
           tickets,
           toolNames,
+          deferred,
           turnWork: new TurnWork(),
           messageId,
           lastMessage,
@@ -527,6 +637,7 @@ export class RunEngineImpl implements RunEngine {
           contextEpoch,
           injected,
           finalPollAbsorbs,
+          repeatedCalls,
         };
 
         if (isAborted(signal)) {
@@ -535,7 +646,10 @@ export class RunEngineImpl implements RunEngine {
           break;
         }
 
-        await this.#contribute(ctx, 'before_turn', {});
+        // Adopted into THIS turn's request: the phase fires before
+        // `#modelRequest` below, so the fragments it defers are read by the very
+        // call the phase is named for.
+        this.#adopt(ctx.ports, await this.#contribute(ctx, 'before_turn', {}), ctx.deferred.current);
 
         // ── Decision 1: call the model ───────────────────────────────────────
         // Assembled by the host (it owns the catalog, the skills and the
@@ -621,13 +735,20 @@ export class RunEngineImpl implements RunEngine {
         // means at `:2232-2234` ("fall through to the LLM call with it in the
         // message history").
 
-        const modelRequest = await this.#modelRequest(ctx, assembled, deferred);
+        const modelRequest = await this.#modelRequest(ctx, assembled);
         // Consumed: the fragments belong to the request that just carried them
         // and must not ride the next one. Left in place they would accumulate
         // turn after turn, so turn 5 would resend turns 1-4's results and the
         // context would grow with copies of answers the model already has.
-        deferred.length = 0;
-        await this.#contribute(ctx, 'before_model', {});
+        ctx.deferred.current.length = 0;
+        // Adopted, and it lands on the NEXT turn's request -- NOT this one. The
+        // phase fires after `#modelRequest` has already been built and after
+        // `deferred.length = 0` consumed the list, so nothing it defers can reach
+        // the call it is named for. That is the engine's existing ordering
+        // rather than a choice made here, and it is the legacy's behaviour too:
+        // `PreFinalize` injects reach the model on the following turn because
+        // the turn it vetoes is over.
+        this.#adopt(ctx.ports, await this.#contribute(ctx, 'before_model', {}), ctx.deferred.current);
 
         ports.events.publish(this.#turnStartedEvent(ctx, modelRequest));
 
@@ -680,7 +801,7 @@ export class RunEngineImpl implements RunEngine {
             // drained are in `deferred` and are exactly the payload that
             // overflowed, so a probe that could not see them would decline
             // against a transcript the provider had already rejected.
-            transcript: this.#transcriptFor(ctx, assembled, deferred),
+            transcript: this.#transcriptFor(ctx, assembled, ctx.deferred.current),
             // The provider's own words, forwarded verbatim. The engine does not
             // classify them: the dual-evidence gate is a property of how each
             // provider phrases the error and those providers are the host's
@@ -724,7 +845,7 @@ export class RunEngineImpl implements RunEngine {
         // Draining is what makes the NEXT turn's request carry the tool
         // results, so these are two decisions at one point in the spine.
         const turnWork = ctx.turnWork;
-        await this.#drainOutcomes(ctx, deferred);
+        await this.#drainOutcomes(ctx);
 
         // ── Compaction site 2 of 3: the preflight overflow check ────────────
         // After the drain and BEFORE the stop decision, which is the legacy's
@@ -748,7 +869,7 @@ export class RunEngineImpl implements RunEngine {
           // purpose -- that asymmetry is the point of the table in the header.
           await this.#compact(ctx, {
             trigger: 'preflight_overflow',
-            transcript: this.#transcriptFor(ctx, assembled, deferred),
+            transcript: this.#transcriptFor(ctx, assembled, ctx.deferred.current),
           });
         }
 
@@ -788,6 +909,78 @@ export class RunEngineImpl implements RunEngine {
       // stream completed has no message, and `#finalizeLastMessage` returns
       // without publishing -- absence, not an empty finalized message.
       this.#finalizeLastMessage(ports, lastMessage);
+      // ── The `after_finalize` phase: once per RUN, at the end ─────────────
+      // In the `finally`, so a FAILED and a CANCELLED run reach it too. What a
+      // run then DISPATCHES is not this file's decision, and the two paths
+      // differ, so the shape is measured rather than assumed -- by
+      // `engine-session-end-parity.test.ts`, on both paths, through the same
+      // `ConfigHooksRunner` dispatch boundary:
+      //
+      //   path                legacy `streamChat`   this engine
+      //   ------------------- --------------------- --------------------
+      //   completed           SessionEnd            SessionEnd
+      //   aborted (loop exit) Stop, SessionEnd      (nothing)
+      //   aborted (model leg) (nothing)             (nothing)
+      //   stream error        (nothing)             (nothing)
+      //   max_turns           (nothing)             SessionEnd
+      //
+      // An EARLIER version of this comment claimed the legacy fires `SessionEnd`
+      // "on the same three paths". That was FALSE, and forty lines below the same
+      // block said the opposite and correctly. It is removed rather than
+      // reconciled: the legacy's `SessionEnd` comes from exactly two of its
+      // three `SessionFinalizer` methods, and both of its ceiling exits plus its
+      // four early `done('completed')` exits never call a finalizer at all.
+      //
+      // The point of running the phase for failed and cancelled runs survives the
+      // correction: a hook that only sees successful runs never sees the run a
+      // user needs to know about.
+      //
+      // AFTER `#finalizeLastMessage` and not before: the message stops changing
+      // strictly before the run ends, so a contributor that reads the finalized
+      // message here is reading the same bytes every consumer will.
+      //
+      // CANNOT THROW, deliberately. Rule 3's one exception is scoped to
+      // `before_finalize`, so a throwing contributor at this phase is swallowed
+      // by `#contribute` -- which is what makes it safe to await inside a
+      // `finally` without a try, where a throw would replace the real exit with
+      // the exit of a bookkeeping failure.
+      //
+      // `spend.turns` is the last turn that BEGAN (`RunSpendLedger.beginTurn`
+      // assigns rather than increments), and is `0` when the run stopped at the
+      // budget check above turn 1. That is the honest value and the same one
+      // the run's own spend report carries.
+      //
+      // `exit` is handed over, and it is the reason this phase exists: the legacy
+      // fires `SessionEnd` only from `SessionFinalizer.finalizeSuccess` and
+      // `finalizeAbort` and fires NOTHING from `finalizeStreamError`, which no
+      // phase-only signal can reproduce. The one asymmetry that is NOT a
+      // reproduction question is the cancellation row above, which is decided
+      // by the hook source's own `signal.aborted` guard rather than by anything
+      // here -- see `hook-source.ts`'s `contributorsFor`. Same rule as `on_start`
+      // above, for the same measured reason: a run with no hook source must not
+      // gain a scheduling point in its `finally`.
+      if ((ports.extensions?.list('after_finalize') ?? []).length > 0) {
+        // NOT ADOPTED, and this is the one phase of seven whose contributions
+        // cannot reach the model. It runs here -- after the turn loop has broken
+        // and after `assistant.message_finalized` -- so there is no later
+        // `#modelRequest` to carry them. Deferring anyway would write to the
+        // host and to `deferred` for a list nothing will ever read, which is a
+        // side effect claiming delivery that did not happen.
+        //
+        // It is the legacy's position too: `Stop` and `SessionEnd` contexts are
+        // dispatched after the final answer is committed (`SessionFinalizer.ts:226`,
+        // `:248`), so a hook that wanted the model to see them had to say so
+        // through the transcript, not through `additionalContext`.
+        //
+        // The phase is still worth running: a `SessionEnd` hook's real work is
+        // its side effects (cleanup, notifications, the `hook_invoked` event the
+        // runner emits), and those still happen.
+        // `repeatedCalls` again, and this phase is where it is most informative:
+        // a run that ended as `repeated_tool_calls` reached this contributor
+        // having just been stopped by the very count it is being handed, so the
+        // two cannot be different numbers.
+        await this.#contribute({ runId, turn: spend.turns, signal, ports, repeatedCalls }, 'after_finalize', { exit });
+      }
       // The engine PROPOSES and does not publish `run.completed` / `run.failed`.
       //
       // ## The ordering hazard that used to block this is GONE
@@ -1135,33 +1328,61 @@ export class RunEngineImpl implements RunEngine {
    * convention.
    */
   #publishBlocks(ctx: RunContext, message: TurnMessage): void {
-    const { ports } = ctx;
+    this.#publishBlocksFor(ctx.ports, ctx.blockIndex, message);
+  }
+
+  /**
+   * `#publishBlocks`, narrowed to the two things it reads off the context.
+   *
+   * A context-shaped parameter would force the command path to fabricate a
+   * `RunContext` -- a dozen fields it does not have and would have to invent --
+   * which is the "second authority" shape `ports.ts` refuses elsewhere: a
+   * literal that can disagree with the real one. `ports` and the block index
+   * are the whole dependency, so they are the parameters, and the per-turn
+   * caller passes `ctx.ports` / `ctx.blockIndex` unchanged. There is ONE
+   * implementation of this publication; the command path and the model path
+   * differ only in where their block counter starts, which is why a control
+   * command's answer cannot drift from a model's answer on the wire.
+   */
+  #publishBlocksFor(
+    ports: RunEnginePorts,
+    blockIndex: { text: number; thinking: number },
+    message: TurnMessage,
+  ): void {
     message.eachBlock((block) => {
       if (block.kind === 'text') {
         ports.events.publish({
           type: 'assistant.text_block',
           messageId: message.messageId,
-          index: ctx.blockIndex.text,
+          index: blockIndex.text,
           text: block.text,
         });
-        ctx.blockIndex.text += 1;
+        blockIndex.text += 1;
         return;
       }
       ports.events.publish({
         type: 'assistant.thinking_block',
         messageId: message.messageId,
-        index: ctx.blockIndex.thinking,
+        index: blockIndex.thinking,
         thinking: block.thinking,
         ...(block.thinkingSignature === undefined ? {} : { thinkingSignature: block.thinkingSignature }),
         // `encrypted` is a BOOLEAN here: the event vocabulary cannot hold the
-        // payload, only the fact that one exists
-        // (`events/payloads.ts:118`). The payload itself reaches the host
-        // through `recordAssistantMessage`, in the transcript vocabulary where
-        // it is a string.
+        // payload, only the fact that one exists (`events/payloads.ts:118`).
+        // The payload itself reaches the host through `recordAssistantMessage`,
+        // in the transcript vocabulary where it is a string.
         ...(block.encrypted === undefined ? {} : { encrypted: true }),
       });
-      ctx.blockIndex.thinking += 1;
+      blockIndex.thinking += 1;
     });
+  }
+
+  /** `#handOffMessage`, narrowed the same way: no request, no context. */
+  async #handOffMessageFor(ports: RunEnginePorts, message: TurnMessage): Promise<void> {
+    const turnOutput = ports.turnOutput;
+    if (turnOutput === undefined) return;
+    // No `model` / `providerId`: no model ran, and attributing this message to
+    // one would record a resolution the run never performed.
+    await turnOutput.recordAssistantMessage(message.toRecord({}));
   }
 
   /**
@@ -1180,6 +1401,69 @@ export class RunEngineImpl implements RunEngine {
       ...(request.provider === undefined ? {} : { providerId: request.provider }),
     });
     await turnOutput.recordAssistantMessage(record);
+  }
+
+  /**
+   * Publish a control command's reply as this run's assistant message.
+   *
+   * ## Why the command's text goes through the SAME steps a model's does
+   *
+   * Because a consumer cannot tell them apart, and that is the point. The
+   * engine's contract is that a run which answered produces an assistant
+   * message: `assistant.text_block`, then once per run
+   * `assistant.message_finalized`, plus the durable row through
+   * `TurnOutputPort`. A command answer published by some other route -- a
+   * bespoke event, a host-side stream push -- would leave every transcript
+   * rebuilt from `assistant.message_finalized` with a hole exactly where the
+   * user typed a command, which is the silent class of regression this plan
+   * exists to prevent.
+   *
+   * So this REUSES `TurnMessage` and the run's own `messageId` rather than
+   * minting an identity, and reuses `#publishBlocksFor` / `#handOffMessageFor`
+   * -- the same two calls `#streamModel` makes. One publication path, two
+   * producers, and they cannot drift.
+   *
+   * ## Why the stop reason is `end_turn`, and why that is honest
+   *
+   * `TurnMessage.eventStopReason` reads `null` for an unset reason and the
+   * finalize step then publishes a `diagnostic` and NO finalized message. So a
+   * command message needs a reason, and `end_turn` is the truthful one: the
+   * answer is complete and nothing further is coming. It is also what the
+   * legacy's `{ type: 'done', reason: 'completed' }` becomes on this wire --
+   * `completed` is the run's exit, `end_turn` is the message's stop, and the
+   * two are different vocabularies for different facts.
+   *
+   * ## `turn` is 1, not 0
+   *
+   * `TurnMessage.turn` reaches the host through
+   * `TurnOutputPort.recordAssistantMessage`, and 1 is the honest value: this run
+   * DID produce an answer, it simply did not ask a model for one. Zero is
+   * reserved for "no turn began" and is what `spend.turns` reports, which is
+   * the accounting, not the message.
+   */
+  async #answerCommand(
+    ports: RunEnginePorts,
+    outcome: RunCommandOutcome,
+    messageId: string,
+    lastMessage: RunScoped<{ current: TurnMessage | null }>,
+  ): Promise<void> {
+    const message = new TurnMessage(messageId, 1);
+    message.addText(outcome.reply);
+    message.stop('end_turn');
+    // A fresh zero counter rather than the run's own `blockIndex`: a run that
+    // never entered the loop has published nothing, so its counter is already
+    // zero, and `#publishBlocksFor` increments what it is handed.
+    this.#publishBlocksFor(ports, { text: 0, thinking: 0 }, message);
+    await this.#handOffMessageFor(ports, message);
+    // THE run's own `lastMessage` cell, handed in rather than re-minted: the
+    // `finally`'s `#finalizeLastMessage` reads that exact object, so this is
+    // what makes it publish `assistant.message_finalized` for the command's
+    // answer. Without it the run proposes a terminal having published no
+    // finalized message at all, and a consumer rebuilding the transcript
+    // silently loses what the user typed. A cell stored on the ENGINE instead
+    // would be shared state across concurrent runs, which this file's header
+    // forbids outright.
+    lastMessage.current = message;
   }
 
   /**
@@ -1322,7 +1606,11 @@ export class RunEngineImpl implements RunEngine {
       arguments: call.input,
       attempt: 1,
     });
-    await this.#contribute(ctx, 'before_tool', { call });
+    // Adopted onto the run's rail, so it reaches the NEXT model request. The one
+    // in flight was built before this phase, which is the legacy's position:
+    // `PreToolUse` injects go onto the working `messages` array
+    // (`DuyaAgent.ts:3375`) and the next request is built from it.
+    this.#adopt(ctx.ports, await this.#contribute(ctx, 'before_tool', { call }), ctx.deferred.current);
     ports.tools.dispatch(call, ticket);
     ctx.tickets.set(call.callId, ticket);
     // The name only, and only for a call that is actually on its way: the
@@ -1333,6 +1621,11 @@ export class RunEngineImpl implements RunEngine {
     // Recorded only once the call is actually on its way, so a denied or
     // budget-refused call does not count as work the next turn must answer.
     ctx.turnWork.record();
+    // The anti-dead-loop streak, recorded at the SAME point and for the same
+    // reason: a call that was refused never happened, and counting it would let
+    // a model be hard-stopped for calls it never made. `#shouldStop` reads this
+    // at the end of the turn.
+    ctx.repeatedCalls.record(call.name, call.input);
   }
 
   // ── Decision 3 ────────────────────────────────────────────────────────────
@@ -1384,7 +1677,7 @@ export class RunEngineImpl implements RunEngine {
    *    legacy analogue (`PostToolUse`, `:2866`) ran after every result in the
    *    turn was committed, not after the first one.
    */
-  async #drainOutcomes(ctx: RunContext, deferred: TransientContextFragment[]): Promise<void> {
+  async #drainOutcomes(ctx: RunContext): Promise<void> {
     const { ports, signal } = ctx;
     // RESULTS that landed, counted here and NOT read off `TurnWork`.
     //
@@ -1452,7 +1745,7 @@ export class RunEngineImpl implements RunEngine {
             // local list carries it into this run's own message seed. One write,
             // two readers, no second copy of the text.
             ports.context.defer(fragment);
-            deferred.push(fragment);
+            ctx.deferred.current.push(fragment);
             const turnOutput = ports.turnOutput;
             if (turnOutput !== undefined) {
               await turnOutput.recordToolResult({
@@ -1465,7 +1758,16 @@ export class RunEngineImpl implements RunEngine {
                 toolName: ctx.toolNames.get(item.callId) ?? '',
               });
             }
-            await this.#contribute(ctx, 'after_tool', { outcome: item });
+            // Adopted, and it reaches the NEXT model request -- the current one
+            // is already built. Same position as `before_tool` above and the same
+            // reason; the legacy's `PostToolUse` (loop bus) injects land the same
+            // way, after the turn's results are committed and before the next
+            // request is assembled.
+            this.#adopt(
+              ctx.ports,
+              await this.#contribute(ctx, 'after_tool', { outcome: item }),
+              ctx.deferred.current,
+            );
             break;
           }
           case 'deferred_context': {
@@ -1484,7 +1786,7 @@ export class RunEngineImpl implements RunEngine {
               pending: item.pending,
             };
             ports.context.defer(fragment);
-            deferred.push(fragment);
+            ctx.deferred.current.push(fragment);
             break;
           }
           case 'subagent_progress': {
@@ -1558,12 +1860,62 @@ export class RunEngineImpl implements RunEngine {
     // contributor override its own ceiling is not enforcing one.
     if (ctx.spend.turns >= this.#maxTurns(ctx.ports)) return { reason: 'max_turns' };
 
+    // ── The anti-dead-loop HARD STOP, second and also non-negotiable ─────────
+    // A model that asks for the same call over and over is not converging, and
+    // each round costs a full model call plus every side effect the call has.
+    // So the loop ends rather than spending the rest of the run budget proving
+    // it.
+    //
+    // HERE, beside the turn ceiling and BEFORE the `before_finalize` phase,
+    // for two reasons. First, it is a CEILING in the same sense `max_turns` is,
+    // and the comment above says a contributor may not reopen one -- a binding
+    // veto that kept a diverging run alive would be the engine choosing not to
+    // enforce its own invariant. Second, stopping before the phase means a run
+    // that is not converging pays no extension round-trip to learn that.
+    //
+    // ORDER: after `max_turns`, so a run that simply used up its turns keeps
+    // reporting `max_turns` and no existing consumer sees a new reason for a
+    // case that already had one. Only a run that no ceiling would have stopped
+    // reaches this, which is precisely the run it exists for.
+    //
+    // The threshold is the HOST's, read from `RunExecutionRequest` and never
+    // from config, env or TOML. Absent policy = the guard is not armed, and no
+    // default is invented here; see `RepeatedCallStopPolicy` for why a silent
+    // default would be a ceiling nobody agreed to.
+    const stopPolicy = ctx.repeatedCallStop;
+    if (stopPolicy !== undefined && stopPolicy.enabled && ctx.repeatedCalls.repeats(stopPolicy.hardStopAt)) {
+      return { reason: 'repeated_tool_calls' };
+    }
+
     // A binding veto keeps the run open even when the model asked for nothing.
     // This is the one place a contributor influences the OUTCOME, and it does so
     // through a DECLARED veto rather than by deciding the loop — the difference
     // `00-contracts.md` section F rule 2 draws between contributing a decision
     // and taking the loop over.
     const contributions = await this.#contribute(ctx, 'before_finalize', {});
+    // Adopted BEFORE the veto test, and deliberately so: a veto is the run being
+    // told to CONTINUE, so anything the same phase said is for the continuation.
+    // A run that finalizes instead carries the fragments on `deferred` and ends
+    // with them unread.
+    //
+    // PARITY, and it was disputed in this plan, so it is stated with the
+    // mechanism rather than with a resemblance. The legacy's `LoopHookBus`
+    // declares the effect types each event honours, and `PreFinalize` honours
+    // exactly one -- `block_finalize` -- so a handler returning an `inject`
+    // there is discarded BY THE BUS before `SessionFinalizer.finalizeSuccess`
+    // reads the list. `finalizeSuccess` itself then keeps only a veto and drops
+    // the rest. So the legacy cannot deliver a non-vetoing `PreFinalize`
+    // inject to the model on any path, and "unread on a finalizing run" is the
+    // same outcome on both sides rather than a gap in this one.
+    //
+    // The engine is in fact MORE generous: it has no per-event effect filter,
+    // so it accepts an `inject` the legacy's bus would drop. That extra
+    // permissiveness changes no observable outcome, because a non-vetoing
+    // contribution on a finalizing run is read by nobody on either path -- and
+    // widening the legacy's bus to match would be a product behaviour change
+    // nobody asked for. Measured on both paths by
+    // `engine-before-finalize-parity.test.ts`.
+    this.#adopt(ctx.ports, contributions, ctx.deferred.current);
     const vetoed = contributions.some(
       (contribution) => contribution.binding && 'veto' in contribution.content,
     );
@@ -1632,7 +1984,111 @@ export class RunEngineImpl implements RunEngine {
       }
     }
 
-    return { reason: 'completed' };  }
+    // ── The `before_commit` phase: the legacy's `PostTurn` slot ─────────────
+    // Here, and not in the `finally` beside `after_finalize`, because position
+    // is the whole of the legacy's semantics. `SessionFinalizer.finalize` runs
+    // `pollFinalMailbox` -> `PreFinalize` -> `PostTurn` -> `runExitHooks` ->
+    // `_commitMessages` -> `SessionEnd`, and `PostTurn` is the one step that both
+    // (a) sits INSIDE the run, before the commit, and (b) is reached only on the
+    // success path. `after_finalize` satisfies neither: it fires in the
+    // `finally`, so a FAILED and a CANCELLED run reach it too, and by then the
+    // loop has broken and nothing is committed afterwards.
+    //
+    // This is the LAST thing before the run is allowed to end, which is the
+    // faithful position: the model has finished its work, the polls have run, and
+    // the engine is still inside the decision that ends the run.
+    //
+    // GATED, and the gate is the requirement rather than an optimisation: a run
+    // with no contributor registered must gain NO scheduling point here, because
+    // an unconditional `await` at the end of a run is a microtask that every
+    // other run used to skip -- which is exactly the regression that moved a
+    // scheduling point and broke a stop-aborts-the-provider test in this plan.
+    // Same rule and same shape as `on_start` and `after_finalize`.
+    //
+    // Plan 610 D5: a mode's `onExit` runs BETWEEN the `before_commit`
+    // contribution and its commit, so the `else` branch below exists and the
+    // call is NOT after the gate. The gate covers only the two phase awaits,
+    // which is what keeps the no-contributor run free of a scheduling point;
+    // the mode exit was already unconditional before this slice and stays
+    // unconditional. Measured by `engine-mode-exit-order.test.ts`, which is an
+    // ORDERED observation rather than a pair of existence checks -- an
+    // implementation that ran the teardown after `#commitContributions`
+    // satisfied "the contributor ran" and "the mode exited" while doing the
+    // opposite of what this comment claims, which is the defect that shape
+    // cannot see.
+    if ((ctx.ports.extensions?.list('before_commit') ?? []).length > 0) {
+      const committed = await this.#contribute(ctx, 'before_commit', {});
+      await this.#runModeExits(ctx);
+      await this.#commitContributions(ctx, committed);
+    } else {
+      // No contributor, so there is nothing to observe and nothing to commit,
+      // but the teardown still belongs to every successful run. See the block
+      // below for why this is not `after_finalize`.
+      await this.#runModeExits(ctx);
+    }
+
+    return { reason: 'completed' };
+  }
+
+  // ── A mode's run-boundary teardown ────────────────────────────────────────
+
+  /**
+   * Run every `kind: 'message'` mode's `onExit` hook, once, for THIS run.
+   *
+   * ## BETWEEN the `before_commit` contribution and its commit, which is the
+   * legacy's own order and not an arbitrary one
+   *
+   * `SessionFinalizer.finalizeSuccess` runs `PostTurn` -> `runExitHooks` ->
+   * `_commitMessages` -- the loop-bus `PostTurn` dispatch, then `runExitHooks`,
+   * then the `host._commitMessages()` that persists the working array. So a
+   * mode's teardown OBSERVES the `PostTurn` effects and PRECEDES the durable
+   * write of them. Folding it in after the commit would let a mode read a
+   * timeline the run has already persisted; folding it in before the
+   * contribution would invert both.
+   *
+   * Measured rather than restated: `engine-mode-exit-order.test.ts` drives a
+   * real `RunEngineImpl` over real composed ports and asserts the ORDER of the
+   * three finalize-boundary effects. The comment above it once described a
+   * position the code did not have.
+   *
+   * ## NOT a phase, and the reason is measured rather than stylistic
+   *
+   * A mode's `onExit` returns `void` and its real work is a host side effect
+   * (`computer-use-mode.ts` clears a per-session trigger and disables the OS
+   * bridge). There is no `ExtensionContribution` that means "nothing, but I
+   * ran" -- expressing it as one would be a contribution whose value is
+   * discarded, which is the `ExtensionPort` doc's own failure. See
+   * `ModeExitPort` for the full enumeration of why `after_finalize` is not
+   * this channel despite a comment in `DuyaAgent.ts` claiming it is.
+   *
+   * ## SUCCESS PATH ONLY, and that is what makes it not `after_finalize`
+   *
+   * `runExitHooks` is reached from `finalizeSuccess` alone; `finalizeAbort`
+   * and `finalizeStreamError` never call it. A mode that disables an OS bridge
+   * on exit must not do so for a run that failed before finishing a turn. The
+   * engine inherits that by CALLING this only from the success position, so
+   * the property does not depend on a caller remembering.
+   *
+   * ## FAIL-OPEN, reproducing `SessionFinalizer.finalizeSuccess` rather than
+   * delegating the policy
+   *
+   * A mode whose teardown throws must not replace a `completed` terminal the
+   * run has already earned. The engine owns the outcome, so the engine
+   * swallows this -- the same rule 3 applies to every extension phase, and the
+   * same reason `#commitContributions` is the single documented exception
+   * (there the phase's output IS the record).
+   */
+  async #runModeExits(ctx: RunContext): Promise<void> {
+    try {
+      await ctx.ports.modeExit.onRunExit();
+    } catch {
+      // Deliberately silent. The legacy logs this at WARN through
+      // `electron/logging/logger.ts`, which `@duya/agent-runtime` may not
+      // import (G1), and the engine has no logger of its own. The throw is
+      // swallowed rather than surfaced because the run's answer is already
+      // produced: a mode's teardown failing is not the run failing.
+    }
+  }
 
   // ── helpers ───────────────────────────────────────────────────────────────
 
@@ -1840,10 +2296,23 @@ export class RunEngineImpl implements RunEngine {
     return isBudgetExhausted(budget.budget, spend.snapshot, this.#options.now() - startedAt).exhausted;
   }
 
+  /**
+ * The mode the manifest pinned, read off the run INPUT.
+ *
+ * Plan 610 P9. This used to be gated on `ports.extensions !== undefined` and to
+ * fall back to `'default'` otherwise. That gate was not about hooks: the mode
+ * is in `input.options`, and reading it needs no extension port. Measured on
+ * the worker entry's composition, `ports.extensions` is ALWAYS omitted (the
+ * entry binds no hook source, and `buildEnginePorts` omits rather than
+ * binds an empty one), so every `ApprovalRequest` carried `'default'`
+ * whatever the session mode was -- a third account of the mode that
+ * disagreed with both the manifest's record and the gate that enforces it.
+ *
+ * Only the LABEL changes. The decision was never made here.
+ */
   #permissionMode(ctx: RunContext): string {
-    return ctx.ports.extensions === undefined
-      ? 'default'
-      : (ctx.input.options['permissionMode'] as string | undefined) ?? 'default';
+    const declared = ctx.input.options['permissionMode'];
+    return typeof declared === 'string' && declared.length > 0 ? declared : 'default';
   }
 
   /**
@@ -1877,20 +2346,59 @@ export class RunEngineImpl implements RunEngine {
    * Run one extension phase, honouring the five rules in `ports.ts`: fixed
    * order, engine-enforced timeout, fail-open on a throw, the caller's signal,
    * and no unloading mid-run.
+   *
+   * ## Why the scope is `ExtensionScope` and not `RunContext`
+   *
+   * Because the two run-scoped phases run OUTSIDE any turn. `RunContext` is
+   * rebuilt every iteration and carries the turn's assembly, spend and work
+   * counters, none of which exist before turn 1 or after the loop has broken --
+   * so a `RunContext` parameter would force the two run-scoped call sites to
+   * mint a context that is a fiction, and every field a future contributor
+   * reads off it would be a plausible-looking zero.
+   *
+   * `ExtensionScope` is exactly the four things `#contribute` reads, and
+   * `RunContext` satisfies it structurally, so the five per-turn call sites are
+   * unchanged by this narrowing. The type is the whole argument: it is what
+   * makes "this phase has no turn context" a compile-time fact rather than a
+   * comment.
    */
   async #contribute(
-    ctx: RunContext,
+    scope: ExtensionScope,
     phase: ExtensionPhase,
-    extra: { readonly call?: ToolCallRequest; readonly outcome?: ToolOutcome },
+    extra: {
+      readonly call?: ToolCallRequest;
+      readonly outcome?: ToolOutcome;
+      readonly exit?: EngineExit;
+    },
   ): Promise<readonly ExtensionContribution[]> {
-    const contributors = ctx.ports.extensions?.list(phase) ?? [];
-    const context: ExtensionContext = { runId: ctx.runId, turn: ctx.turn, ...extra };
+    const contributors = scope.ports.extensions?.list(phase) ?? [];
+    // The streak, off the SAME object `#shouldStop` reads, so a hook is given the
+    // count the engine's own stop decision would use rather than a second,
+    // independently-maintained number. `ExtensionScope` is what makes it
+    // reachable from the two run-scoped call sites as well as the five per-turn
+    // ones: it carries the run-scoped cell, and `RunContext` satisfies it
+    // structurally.
+    //
+    // The conditional spread rather than an assignment: `ExtensionContext` is
+    // `readonly` per field, and an `undefined`-valued member would also be a
+    // DIFFERENT state from an absent one. `undefined` before the run has
+    // dispatched anything is the legacy's own answer
+    // (`DeadLoopTracker.stats`), and the package compiles with
+    // `exactOptionalPropertyTypes`, so "no streak yet" has to be expressed by
+    // omitting the key.
+    const streak = scope.repeatedCalls.stats();
+    const context: ExtensionContext = {
+      runId: scope.runId,
+      turn: scope.turn,
+      ...(streak === undefined ? {} : { repeatedToolCalls: streak }),
+      ...extra,
+    };
     const adopted: ExtensionContribution[] = [];
 
     for (const contributor of contributors) {
       try {
         for (const contribution of await withDeadline(
-          contributor.contribute(context, ctx.signal),
+          contributor.contribute(context, scope.signal),
           contributor.timeoutMs,
         )) {
           adopted.push(contribution);
@@ -1908,6 +2416,151 @@ export class RunEngineImpl implements RunEngine {
       }
     }
     return adopted;
+  }
+
+  /**
+   * Put a phase's TEXT contributions on the run's deferred-fragment rail.
+   *
+   * ## Why this is a method and not a line at each call site
+   *
+   * Because before this, `#contribute`'s return value was read at exactly ONE of
+   * its seven call sites -- `before_finalize`, and only to ask whether a
+   * contribution was a VETO. Every text contribution at every phase, including
+   * the veto phase's own non-veto siblings, was computed and dropped. A hook
+   * that returned `additionalContext` was executed and its output discarded, and
+   * the run still completed cleanly, so nothing in a frame said so.
+   *
+   * The rail is the one the tool leg already uses (`#drainOutcomes`:
+   * `ports.context.defer(fragment)` plus the same object pushed onto `deferred`),
+   * because there is no second one: `#modelRequest` turns `deferred` into
+   * messages through `#fragmentMessages`, and a fragment that skipped the local
+   * list would reach only the host, never the model.
+   *
+   * ## A veto is NOT text, and is skipped
+   *
+   * `ExtensionContribution.content` is a fragment OR `{ veto: true, reason }`. The
+   * veto is a decision the engine honours by refusing to finalize; there is no
+   * prompt to render it as. Pushing it would hand `#fragmentMessages` an object
+   * with neither `text` nor `pending`, which `fragmentText` resolves to
+   * `undefined` -- a `user` message whose content is the string "undefined".
+   */
+  #adopt(
+    ports: RunEnginePorts,
+    contributions: readonly ExtensionContribution[],
+    deferred: TransientContextFragment[],
+  ): void {
+    for (const contribution of contributions) {
+      // Narrows to `TransientContextFragment`; the `binding` flag is NOT the
+      // discriminator, because a contributor may return advisory text that
+      // happens to be marked binding and a veto that is not.
+      if ('veto' in contribution.content) continue;
+      deferred.push(contribution.content);
+      ports.context.defer(contribution.content);
+    }
+  }
+
+  /**
+   * COMMIT a `before_commit` phase's text contributions to the durable record.
+   *
+   * ## Why this exists at all, and what it is NOT
+   *
+   * The gap it closes is measurable. A contributor had exactly one way to put
+   * work in the transcript, and neither existing path could reach the durable
+   * record at end of turn:
+   *
+   *  - `before_finalize` can only VETO. `#shouldStop` reads a binding veto as
+   *    "run again", and its text contributions go through `#adopt` onto the
+   *    deferred rail, so they reach the model only if ANOTHER turn happens. A
+   *    run that finalizes ends with them unread -- which is the legacy's own
+   *    position too: its `LoopHookBus` honours only `block_finalize` at
+   *    `PreFinalize`, so the legacy cannot carry such an inject to the model
+   *    either. Measured on both paths by
+   *    `engine-before-finalize-parity.test.ts`.
+   *  - `after_finalize` runs in the run's `finally`, after the loop has broken,
+   *    and its contributions are deliberately NOT adopted (see its call site).
+   *    That behaviour is documented and was reviewed; this method does not
+   *    change it and does not adopt anything on its behalf.
+   *
+   * The legacy had a third thing, and this is it: `PostTurn` applies its effects
+   * to the working `messages` array and `_commitMessages` persists the array
+   * immediately afterwards (`SessionFinalizer.ts:226`, then `:245`). So a
+   * `PostTurn` contribution reaches the timeline, the durable record, and a
+   * later turn -- all three -- and that is the capability that had no engine
+   * phase.
+   *
+   * ## Why it does not go through `#adopt`
+   *
+   * Because `#adopt` defers, and a run that finalizes has no next request. A
+   * fragment handed to `ports.context.defer` and pushed onto `ctx.deferred` here
+   * would be written to the host for a list nothing will ever read, which is a
+   * side effect claiming a delivery that did not happen -- the precise
+   * objection `after_finalize`'s call site raises about itself.
+   *
+   * ## A veto here is IGNORED, deliberately
+   *
+   * There is no loop left to keep open: this runs after every veto test and
+   * after the polls, and the run is about to return `completed`. Honouring a
+   * veto would mean this method decides the run's outcome, which is the line
+   * `00-contracts.md` section F rule 2 draws between contributing a decision and
+   * taking the loop over. A contributor that wants to keep the run alive
+   * registers for `before_finalize`, which is the phase whose veto means exactly
+   * that. Said here because a silently-ignored veto is indistinguishable from a
+   * dropped one in a frame.
+   *
+   * ## WHY A THROWING HOST IS FATAL HERE, and it is the one exception to rule 3
+   *
+   * Because this is the commit. Every other extension phase is fail-open by
+   * contract, and a skipped phase loses a hook's SIDE EFFECT -- `after_finalize`
+   * says outright that the phase is still worth running when all it does is
+   * cleanup. Here the phase's entire output IS the record, so swallowing a
+   * rejected `recordInjectedMessage` would end the run having published a
+   * success and lost the row: a claim of durability with nothing behind it. The
+   * run fails loudly instead. The contributor's own throw is still swallowed
+   * upstream by `#contribute`, which is rule 3's own boundary -- this catch is
+   * about the HOST's store, not the contributor.
+   */
+  async #commitContributions(
+    ctx: RunContext,
+    contributions: readonly ExtensionContribution[],
+  ): Promise<void> {
+    if (contributions.length === 0) return;
+    // `undefined` means the host bound no `turnOutput`, which is the live
+    // worker's state today. It is the same absence that loses the run's own
+    // assistant row, so it is NOT reported as a failure here: inventing a
+    // diagnostic would claim the engine is broken when the obligation is the
+    // cutover's, and the obligation is already written down in `TurnOutputPort`.
+    const turnOutput = ctx.ports.turnOutput;
+    if (turnOutput === undefined) return;
+
+    // Text only, and the same discriminator `#adopt` uses: `binding` is not the
+    // discriminator, because a contributor may return advisory text marked
+    // binding and a veto that is not.
+    const text = contributions.filter((contribution) => !('veto' in contribution.content));
+    // A `pending` fragment is a payload still being computed. Resolved with the
+    // engine's own `fragmentText` -- the same function `#modelRequest` uses -- so
+    // a committed row and a row the model would have seen are the same string
+    // rather than two implementations agreeing. A rejection is a SKIP, which is
+    // `#fragmentMessages`' own `allSettled` policy, applied for the same reason:
+    // one contributor's dead payload must not fail the commit of the rest.
+    const resolved = await Promise.allSettled(
+      text.map(async (contribution) => ({
+        key: contribution.key,
+        text: await fragmentText(contribution.content as TransientContextFragment),
+      })),
+    );
+    for (const outcome of resolved) {
+      if (outcome.status === 'rejected') continue;
+      // An empty contribution commits nothing. Recording it would put a row with
+      // no content in the durable transcript, and a transcript rebuilt from rows
+      // would then show a message the user never received.
+      if (outcome.value.text.trim() === '') continue;
+      await turnOutput.recordInjectedMessage({
+        runId: ctx.runId,
+        turn: ctx.turn,
+        key: outcome.value.key,
+        text: outcome.value.text,
+      });
+    }
   }
 
   /**
@@ -1955,7 +2608,6 @@ export class RunEngineImpl implements RunEngine {
   async #modelRequest(
     ctx: RunContext,
     assembled: AssembledTurn,
-    deferred: readonly TransientContextFragment[],
   ): Promise<ModelRequest> {
     const { input, manifest } = ctx;
     // A `by_ref` history is the HOST's to resolve; the engine hands the locator
@@ -1983,7 +2635,7 @@ export class RunEngineImpl implements RunEngine {
         .map((directive) => directive.payload),
     );
 
-    const carried = await this.#fragmentMessages('fragment', deferred);
+    const carried = await this.#fragmentMessages('fragment', ctx.deferred.current);
 
     // Host-injected text rides EVERY request from the sweep onward, not just
     // the one that followed it. Concatenated after the history, which is the
@@ -2126,6 +2778,17 @@ export class RunEngineImpl implements RunEngine {
         };
       case 'cancelled':
         return { state: { status: 'cancelled' }, reason: 'the run was stopped by its caller' };
+      case 'repeated_tool_calls':
+        // `completed`, and NOT `failed`: the run ended the way it was told it
+        // could end, with every call before it dispatched, recorded and settled.
+        // A status of `failed` would put an error object in the durable record
+        // for a guardrail that did its job -- the same distinction
+        // `max_turns` draws a line above, and the reason the legacy's `done`
+        // event carries this reason rather than an error.
+        return {
+          state: { status: 'completed' },
+          reason: 'the run stopped because the model repeated the same tool call',
+        };
       case 'failed':
         return {
           state: {
@@ -2181,6 +2844,98 @@ class TurnWork {
   }
 }
 
+/**
+ * The consecutive-identical-tool-call streak. The anti-dead-loop HARD STOP's
+ * whole input, and run-scoped because a streak that reset every turn could never
+ * reach a threshold.
+ *
+ * ## The signature is the legacy's, deliberately
+ *
+ * `name` + U+0001 + `JSON.stringify(input)` is exactly what
+ * `packages/agent/src/agent/TurnLoopTracker.ts` composes (`toolCallSignature`),
+ * and it is re-derived here rather than imported. It CANNOT be imported: this
+ * package depends only on `@duya/agent-core` and `@duya/agent-protocol`, and
+ * `@duya/agent` depends on THIS package, so an import would be a cycle. Lifting
+ * the helper into `@duya/agent-protocol` -- the one lower package both sides
+ * already depend on -- would make the two implementations provably the same, and
+ * that is a package-boundary decision this change does not make on its own.
+ *
+ * So the duplication is stated here rather than hidden, and the contract is the
+ * part that matters: identical name AND identical serialised input, with the
+ * separator U+0001 because it cannot occur in either part. Two runs that count
+ * the same streak therefore agree on when it fires.
+ *
+ * `JSON.stringify` is the legacy's own serialiser and it THROWS on a circular
+ * structure. That is kept rather than defended against: `ToolCallRequest.input`
+ * is `Readonly<Record<string, unknown>>` decoded from the provider's JSON, and
+ * the legacy has the identical exposure on the identical path
+ * (`DuyaAgent.ts:3586`). A guard here would make this tracker count differently
+ * from the one it replaces.
+ */
+class RepeatedCallStreak {
+  #lastSignature: string | null = null;
+  #count = 0;
+  #currentName: string | null = null;
+
+  /** One dispatched call. A different signature starts a new streak at 1. */
+  record(name: string, input: Readonly<Record<string, unknown>>): void {
+    const signature = `${name}\u0001${JSON.stringify(input)}`;
+    if (signature === this.#lastSignature) this.#count += 1;
+    else {
+      this.#lastSignature = signature;
+      this.#count = 1;
+    }
+    // The streak's NAME, kept separately from the signature so `stats()` can
+    // report it without splitting a string it built for comparison. Recorded on
+    // EVERY call rather than only on a new streak, which is the legacy's own
+    // ordering (`DeadLoopTracker.record` sets `currentName` outside the
+    // branch): within a streak the name cannot change, and across a reset the
+    // branch above has already written the new signature.
+    this.#currentName = name;
+  }
+
+  /**
+   * The streak as a contributor reads it, or `undefined` before the run has
+   * dispatched anything.
+   *
+   * ## Why this is a method and not the two private fields
+   *
+   * Because `#contribute` needs the fact for EVERY phase, and reaching into two
+   * private fields from outside the class would make "was the streak reset or
+   * merely continued" a question each caller has to re-answer. `undefined` is
+   * the legacy's own answer for "nothing recorded yet"
+   * (`DeadLoopTracker.stats`), kept so a hook can short-circuit before any
+   * threshold comparison rather than reading a count of 0.
+   *
+   * ## The same object the hard stop reads
+   *
+   * `repeats` and this method are two views of `#count` on ONE instance, so the
+   * number a nudge hook is given and the number the hard stop fires on cannot
+   * drift. A second counter would be a second authority for "how many identical
+   * calls has this run made", which is exactly the defect that makes a run stop
+   * at a different call than the hook warned about.
+   *
+   * The returned object is a fresh literal per call and typed
+   * `RepeatedToolCallStreak`, which is re-derived rather than imported for the
+   * package-cycle reason its own doc comment states.
+   */
+  stats(): RepeatedToolCallStreak | undefined {
+    if (this.#count === 0 || this.#currentName === null) return undefined;
+    return { count: this.#count, toolName: this.#currentName };
+  }
+
+  /**
+   * Whether the streak has reached the host's threshold.
+   *
+   * `>=`, matching the legacy's own comparison (`shouldHardStop`), so the count
+   * of dispatched calls at which the run ends is `hardStopAt` and not one more
+   * or one fewer.
+   */
+  repeats(threshold: number): boolean {
+    return this.#count >= threshold;
+  }
+}
+
 /** Everything one run needs. Built per `execute`, never shared. */
 interface RunContext {
   readonly runId: RunId;
@@ -2195,6 +2950,21 @@ interface RunContext {
    * and that is every run's state today.
    */
   readonly modelRequestTimeoutMs?: number;
+  /**
+   * The run's anti-dead-loop HARD STOP thresholds, forwarded from
+   * `RunExecutionRequest`. See `RepeatedCallStopPolicy`.
+   *
+   * Copied onto the context rather than re-read from the request for the reason
+   * `modelRequestTimeoutMs` above gives: `#shouldStop` reads the context, and a
+   * fact read from two places is a fact that can disagree with itself.
+   */
+  readonly repeatedCallStop?: RepeatedCallStopPolicy;
+  /**
+   * The consecutive-identical-call streak. A CELL, and run-scoped; see its
+   * declaration in `#run` for why a per-turn value could never reach a
+   * threshold.
+   */
+  readonly repeatedCalls: RunScoped<RepeatedCallStreak>;
   readonly ports: RunEnginePorts;
   readonly input: RunInputSnapshot;
   readonly manifest: RunManifest;
@@ -2224,6 +2994,11 @@ interface RunContext {
    * asked only which tool failed (`:2771`).
    */
   readonly toolNames: Map<string, string>;
+/**
+   * Fragments the NEXT turn's request will carry. A CELL, shared with `#run` by
+   * reference -- see its declaration there.
+   */
+  readonly deferred: RunScoped<{ current: TransientContextFragment[] }>;
   /** Mutable, per turn. Replaced at the top of each iteration. */
   turnWork: TurnWork;
   /**
@@ -2271,6 +3046,39 @@ interface RunContext {
    * see the declaration in `#run` for the bound and why it exists.
    */
   readonly finalPollAbsorbs: RunScoped<{ current: number }>;
+}
+
+/**
+ * The four things an extension phase actually needs, and the reason two phases
+ * can run without a turn.
+ *
+ * `RunContext` satisfies this structurally, so the five per-turn call sites pass
+ * it unchanged; the two run-scoped ones (`on_start`, `after_finalize`) pass a
+ * four-field literal. See `#contribute` for why the distinction is load-bearing
+ * rather than cosmetic.
+ */
+interface ExtensionScope {
+  readonly runId: RunId;
+  /**
+   * The turn, or `0` for a phase outside one -- see `ExtensionContext.turn`,
+   * which is the value a contributor actually reads and carries the same rule.
+   */
+  readonly turn: number;
+  readonly signal: AbortSignal;
+  readonly ports: RunEnginePorts;
+  /**
+   * The run's consecutive-identical-call streak, so `#contribute` can put it on
+   * the context at EVERY phase -- including `on_start` and `after_finalize`,
+   * which have no `RunContext` to read it from.
+   *
+   * Required rather than optional precisely because those two call sites build
+   * their scope as a literal: an optional member would be omitted there, and
+   * `on_start` would silently hand a contributor no streak on a run that had
+   * already dispatched calls, which is a fact a hook cannot recover on its own.
+   * A literal cannot supply a counter it does not own, so both run-scoped sites
+   * pass the same run-scoped cell `#run` allocated.
+   */
+  readonly repeatedCalls: RunScoped<RepeatedCallStreak>;
 }
 
 /**
@@ -2450,9 +3258,18 @@ class TurnMessage {
     if (frame.redacted === true && typeof frame.encrypted === 'string' && frame.encrypted !== '') {
       this.#redactedPayload = frame.encrypted;
     }
+    // The signature is read BEFORE the empty-text guard, and that order is the
+    // whole point. Anthropic delivers the signature as its OWN event:
+    // `parseAnthropicEvent` maps `signature_delta` to a thinking frame whose
+    // `delta` is `''`, so the signature arrives on a frame with no text. Reading
+    // it after the guard discarded it, and a signed thinking block replayed
+    // without its signature is DOWNGRADED TO TEXT by the provider
+    // (`convertContentBlock`), which silently ends thinking-chain continuation
+    // across a tool round. The legacy read `event.signature` independently of
+    // whether `event.data` was empty; that condition is restored here.
+    if (frame.signature !== undefined) this.#thinkingSignature = frame.signature;
     if (frame.text === '') return;
     this.#thinking += frame.text;
-    if (frame.signature !== undefined) this.#thinkingSignature = frame.signature;
   }
 
   /**
@@ -2793,6 +3610,10 @@ const SUBTASK_REASON_FOR_EXIT: Readonly<Record<EngineExitReason, SubtaskTerminat
   Object.freeze({
     completed: 'completed',
     max_turns: 'completed',
+    // A guardrail that fired is not a parent failure: the run ended on the
+    // engine's own terms, exactly as `max_turns` does, and recording it as
+    // `parent_failure` is the misreading this map exists to prevent.
+    repeated_tool_calls: 'completed',
     budget_exhausted: 'budget_exhausted',
     cancelled: 'parent_cancel',
     failed: 'parent_failure',

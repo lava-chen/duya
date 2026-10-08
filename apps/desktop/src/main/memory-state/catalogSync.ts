@@ -8,7 +8,7 @@ import {
 } from './sourceFingerprint';
 import type { AgentType, ScopeKind } from './schema';
 import type { SessionStore, CoreSession } from '../db/core';
-import { writeSystemLog } from '../../../../../packages/agent/src/memory-state/system_log';
+import { writeSystemLog } from '@duya/memory/system_log';
 
 /**
  * Main-DB catalog sync (Plan 301 Phase C, updated for Plan 328 Phase 5).

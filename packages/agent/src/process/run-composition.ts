@@ -21,6 +21,19 @@
  * exported and independently callable; the slice that wires it is the driver
  * flip, and it is the slice that must answer for `turnOutput`.
  *
+ * ## The ONE exception to "nothing here decides": `selectRunDriverLeg`
+ *
+ * Plan 610 P5 added it, and it is a decision where everything else in this file
+ * is a derivation, so the exception is named rather than blurred. It decides
+ * WHICH leg drives an established run, and it decides it from
+ * `RunHandle.orchestrator` -- the run's own resolved mode -- rather than from
+ * anything it could re-read. Its reason is asymmetry: `beginRun` could report
+ * that a run's mode was an orchestrator and no caller could ACT on that, so a
+ * driver had only two options, both wrong (assemble a turn and drop the mode,
+ * or fail). It still composes nothing: the engine leg is deliberately bare,
+ * because ports / manifest / input belong to the driver that owns the host
+ * obligations.
+ *
  * ## The rule this file follows: derive what the agent exposes, require the rest
  *
  * Every `LegacyEngineSources` member is either DERIVED here from a public
@@ -75,6 +88,29 @@
  * `Record<string, unknown>`"). So `assembleTurn` is required from the host, and
  * the reason is written on the member rather than left in a comment here.
  *
+ * ## The run's SCOPE, and why a fork starves on the engine path but not the legacy
+ *
+ * `assembleTurn` re-projects the transcript once per turn (see
+ * `createLegacyAssembleTurn`), and the model projection drops every branched
+ * row (`message-projectors.ts`). That is the right default and it is what keeps
+ * a fork out of the main transcript -- but a forked run's OWN rows are branched
+ * too (`_commitDurable` tags every non-user row of an active fork turn), so the
+ * per-turn re-projection deleted the tool result the previous turn had just
+ * produced, and turn 2 asked the model to continue without it. Measured before
+ * the scope existed: a forked run sent `["user","user"]` on turn 2 where a
+ * non-forked run sends `["user","assistant","tool","user"]`.
+ *
+ * The legacy never showed this because it projects ONCE per `streamChat` and
+ * pushes into one working array, so its forked turn 2 carried the row
+ * (measured on the production path: `["user","user","assistant","tool"]`).
+ *
+ * So the scope is applied HERE, over the host's own assembled turn, for a
+ * forked run only. Two properties make that the narrowest thing that works:
+ * the rows come from the agent's own projector
+ * (`projectRunOwnModelMessages`), and the main rows are the agent's objects
+ * passed through in the agent's order rather than a second projection built
+ * here. A plain run gets the host's function untouched.
+ *
  * ## Compaction: three gates, three decisions
  *
  * `CompactionSources.decide` is a DECISION, and the legacy makes it at three
@@ -125,9 +161,12 @@ import type {
   ApprovalRequest,
   ApprovalVerdict,
   AssembledTurn,
+  ExtensionPort,
   ModelFrame,
+  ModelMessage,
   ModelRequest,
   RunEnginePorts,
+  RunCommandPort,
   RunEventEmitter,
   RunInputSnapshot,
   TerminalCandidate,
@@ -139,18 +178,55 @@ import type {
   TransientContextFragment,
   TurnAssemblyInput,
 } from '@duya/agent-runtime';
-import type { RunId, RunManifest, TokenUsage } from '@duya/agent-protocol';
+// One statement, and it is deliberately a VALUE import rather than the
+// type-only one this file carried before plan 610 P2: `canonicalJson` /
+// `sha256Hex` live in `@duya/agent-protocol` and `architecture-policy.yaml`
+// states why this module reaches for them instead of hashing locally -- "a
+// worker that could not reach them would have to reimplement canonical JSON and
+// sha256, and a second implementation of the digest is a second source of truth
+// for exactly the value whose whole purpose is to be checked". Merging the two
+// into one statement also keeps the module's cross-boundary edge count where it
+// was, which the import audit measures per STATEMENT.
+import {
+  canonicalJson,
+  sha256Hex,
+  type PermissionPolicyMode,
+  type RunId,
+  type RunManifest,
+  type TokenUsage as ProtocolTokenUsage,
+} from '@duya/agent-protocol';
+// The PROVIDER's usage block, which is what the per-call tap carries -- NOT the
+// protocol's `TokenUsage`. They are different types for the same idea: this one
+// is `@duya/ai`'s snake_case, un-narrowed and un-summed, with the cache buckets
+// the billing ledger reads; the protocol's is the engine's camelCase,
+// turn-level projection. Naming the right one for each is what keeps
+// `ClientModelPortOptions.onPerCallUsage` from being satisfied by a function that
+// cannot accept what the port actually hands it.
+//
+// Sourced from `../types.js` -- which re-exports `@duya/ai`'s own `TokenUsage` --
+// rather than from `@duya/ai` directly, for the reason the block above records
+// for every other type in this file: the import audit counts type-only imports
+// as cross-boundary edges, so a direct `@duya/ai` specifier here adds an edge
+// this package does not own. MEASURED, not assumed -- adding it produced a NEW
+// cross-package cycle (`hooks/builtin.ts`, SCC size 25) that `npm run
+// architecture:check` reports as an unbaselined violation.
+import type { TokenUsage } from '../types.js';
 // Types come from the agent's OWN types module, which re-exports them, rather
 // than from `@duya/ai`: the import audit counts every import statement --
 // type-only included -- as a cross-boundary edge, so sourcing them from inside
 // `pkg:agent` is what keeps this file from moving the
 // `module-dependency-permitted` count. Same reason
 // `turn-loop-product-behavior.test.ts:87-92` gives.
-import type { AssistantMessage, Message, MessageContent } from '../types.js';
+import type { AssistantMessage, Message, MessageContent, SSEEvent } from '../types.js';
 import type { Tool } from '../types.js';
-import type { TurnOutputSink, duyaAgent } from '../agent/DuyaAgent.js';
+import type { RunHandle, RunTurnAssembly, TurnOutputSink, duyaAgent } from '../agent/DuyaAgent.js';
 import type { TurnPipelinePublisher } from '../tool/turn-pipeline-publisher.js';
 import { createClientModelPort } from './run-engine-model.js';
+import { createLegacyCommandPort } from './command-port.js';
+import { renderSystemReminder } from '../agent/reminders.js';
+import { normalizeCanUseToolDecision } from '../agent/toolInvokePermission.js';
+import { adaptLoopNudgeContext } from '../message/runtime-context-adapters.js';
+import { projectRuntimeContextToProviderMessage } from '../message/message-projectors.js';
 import { buildEnginePorts, toDrainItem } from './run-engine-ports.js';
 import type { CompactionSources, LegacyEngineSources } from './run-engine-ports.js';
 
@@ -199,12 +275,102 @@ function toToolResultMessage(outcome: ToolOutcome): Message {
  * happened, which is different from not knowing, and `computeContextEstimate`
  * reads these numbers.
  */
-function toRowUsage(usage: TokenUsage): AssistantMessage['usage'] {
+function toRowUsage(usage: ProtocolTokenUsage): AssistantMessage['usage'] {
   return {
     input_tokens: usage.inputTokens,
     output_tokens: usage.outputTokens,
     ...(usage.totalTokens === undefined ? {} : { total_tokens: usage.totalTokens }),
   } as AssistantMessage['usage'];
+}
+
+/**
+ * Plan 610: put a forked run's OWN rows back on its own wire, in durable order.
+ *
+ * ## Why a restore rather than a projection that keeps them
+ *
+ * Because the rows are already projected. `agent.projectRunOwnModelMessages`
+ * runs the agent's own `projectModelMessages` with the run's scope, so each
+ * restored row carries the same role mapping and the same `threadMeta` strip as
+ * a row of the main projection, and this function decides only WHERE they go.
+ * Re-projecting the durable rows here instead would have been a second
+ * rendering of the same rules, and a `tool` row does not survive it unchanged:
+ * the durable projection re-wraps a plain string body into a `tool_result`
+ * block, which is a different wire shape from the one a non-forked run sends.
+ *
+ * ## Why the main projection is not rebuilt
+ *
+ * Because it is the agent's, and it is the only place the system segments, the
+ * compaction checkpoint rows and the hook-context restoration exist. Rebuilding
+ * it here would put a second copy of all three in this file. So the main rows
+ * are used verbatim, in the agent's order, with the run's own rows dropped into
+ * the positions the timeline gives them -- a tool result lands after the
+ * assistant row that asked for it rather than appended to the end of the
+ * request, and the hook-context blocks the agent injected survive untouched
+ * because those rows are the agent's objects, not copies.
+ *
+ * ## Why `id` is the join key
+ *
+ * Both sides are projections of the same timeline, and `toModelBoundary`
+ * preserves `id` on every row it emits, so a projected row and its durable row
+ * agree. A projected row with no durable counterpart would mean one side
+ * invented a row; rather than drop it -- losing history the run already decided
+ * to send -- it is kept, after the ordered rows.
+ *
+ * ## The scope is the fork's USER row id, and why not the root
+ *
+ * `_commitDurable` stamps every non-user row of an active fork turn with
+ * `forkTurn.userId`, so that id -- not the branch root, which every fork off the
+ * same root shares -- is what tells this run's rows from another fork's
+ * (`threads.ts`, `isRunOwnBranchRow`).
+ */
+function restoreRunOwnRows(
+  agent: duyaAgent,
+  marker: { readonly replyToId: string; readonly userId: string },
+  projected: readonly ModelMessage[],
+): readonly ModelMessage[] {
+  // POSITIVE COUNT before the join: a run that has written no branched row yet
+  // (turn 1, or a marker that never reached the writer) returns the projection
+  // untouched and allocates nothing.
+  //
+  // The ONE cast in this file. The agent's `Message` declares a wider `role`
+  // union than the runtime's `ModelMessage` because the transcript also holds
+  // `system` rows, while `projectModelMessages` only ever emits the three model
+  // roles -- so the rows are model messages, and the wider static type is all
+  // that is being narrowed here.
+  const own = agent.projectRunOwnModelMessages(marker.userId) as readonly ModelMessage[];
+  if (own.length === 0) return projected;
+
+  const ownById = new Map<string, ModelMessage>();
+  for (const row of own) {
+    if (row.id !== undefined) ownById.set(row.id, row);
+  }
+  const mainById = new Map<string, ModelMessage>();
+  for (const row of projected) {
+    if (row.id !== undefined) mainById.set(row.id, row);
+  }
+
+  const merged: ModelMessage[] = [];
+  const placed = new Set<string>();
+  for (const row of agent.getMessages()) {
+    const id = row.id;
+    if (id === undefined) continue;
+    const main = mainById.get(id);
+    if (main !== undefined) {
+      merged.push(main);
+      placed.add(id);
+      continue;
+    }
+    const mine = ownById.get(id);
+    if (mine !== undefined) {
+      merged.push(mine);
+      placed.add(id);
+    }
+  }
+  for (const row of projected) {
+    if (row.id !== undefined && placed.has(row.id)) continue;
+    merged.push(row);
+  }
+  return merged;
 }
 
 // ============================================================================
@@ -245,6 +411,71 @@ export interface LegacyRunHost {
    * (`DuyaAgent.ts:3889`) and is not reproducible from the public registry.
    */
   readonly assembleTurn: (input: TurnAssemblyInput) => Promise<AssembledTurn>;
+  /**
+   * Re-take the run's declared-tools guard snapshot. `RunTurnAssembly.refreshDeclaredTools`.
+   *
+   * REQUIRED, and required for the reason `assembleTurn` is: the guard's live set
+   * is a closure local of `beginTurnAssembly`, so nothing outside the handle can
+   * fill it, and a composition that derived a second copy of "which tools are
+   * declared" would be a second authority for exactly the decision the guard
+   * exists to make.
+   *
+   * The legacy has always called it once per ATTEMPT from inside
+   * `TurnStreamRunner`, immediately before the provider request; the model leg
+   * calls it at the same point in the same sequence (plan 610 P3). Omitting it
+   * was not a no-op: the guard starts EMPTY, so a run without this refresh
+   * denied every tool name and completed having done nothing.
+   */
+  readonly refreshDeclaredTools: () => Set<string>;
+  /**
+   * Plan 610 S4c-d2a. Receives the PROVIDER'S OWN usage block, once per
+   * provider `result` frame, before `toModelFrame` narrows it.
+   *
+   * OPTIONAL, and optional is "this host runs no per-call ledger": a bare port
+   * test and the CLI keep working, and the two states stay distinguishable
+   * because a bound tap that never fires is a fact the host can observe.
+   *
+   * It is a tap rather than a second ledger on purpose. The block arrives
+   * verbatim -- snake_case, un-summed, cache buckets included -- so the host
+   * bills from the same numbers the legacy loop billed from, and the host's
+   * `UsageCall[]` per-call ledger stays exactly as granular as it is today. See
+   * `ClientModelPortOptions.onPerCallUsage` for why the narrowing `ModelFrame`
+   * is the wrong place to recover them.
+   */
+  readonly onPerCallUsage?: (usage: TokenUsage) => void;
+  /**
+   * Plan 610 P8: the usage block to PERSIST on this turn's assistant row.
+   *
+   * ## Why the host, and not the engine
+   *
+   * `TurnMessage.addUsage` keeps the LAST usage frame of the turn and never the
+   * sum, on purpose: a provider reports usage more than once per request, and
+   * summing inflates `usage` by the prompt (`run-engine.ts:3253-3261`). That is
+   * right for the frame the engine publishes, and it is WRONG for the durable
+   * row, for two reasons the engine cannot see:
+   *
+   * 1. `addUsage` keeps three counters. The row's block also carries the cache
+   *    buckets, and `normalizePromptTokens` needs them to tell Anthropic's
+   *    `input_tokens`-excludes-cache convention from an OpenAI gateway's
+   *    `prompt_tokens`-includes-it one. Without them the convention guard
+   *    cannot fire and a 24k context with a 500-token non-cached tail reloads
+   *    as 500.
+   * 2. `last_call` is the LARGEST-prompt call of the turn, chosen by anchor
+   *    volume, because some gateways report a near-fresh prefix (input ~0, tiny
+   *    hit) on a later round. "Last frame wins" takes that collapsed reading
+   *    and the ring shrinks permanently after a restart.
+   *
+   * ## Why this is a FUNCTION and not a value
+   *
+   * It is read at the moment the row is written, and the host's per-call ledger
+   * is still being appended to until the final `result` frame. A value captured
+   * when the host was built would be empty for the whole turn.
+   *
+   * OPTIONAL: a host with no ledger (a bare port test, the CLI) returns nothing
+   * and the row gets exactly what it got before this hook existed — the
+   * engine's own block via `toRowUsage`.
+   */
+  readonly turnUsageBlock?: () => AssistantMessage['usage'] | null;
   /** Asks the user. Resolves; never throws for a refusal. `ChatOptions.requestPermission`. */
   readonly askApproval: (request: ApprovalRequest, signal: AbortSignal) => Promise<ApprovalVerdict>;
   /**
@@ -274,6 +505,26 @@ export interface LegacyRunHost {
    * silently mis-orders them against real transcript rows.
    */
   readonly seqIndex: number;
+  /**
+   * Plan 610 D1. This run's `turnContext.sessionId`, for the command port.
+   *
+   * Not optional, and the reason is asymmetry rather than ceremony: the OTHER
+   * command facts are derivable from the agent (`messages` is
+   * `agent.getMessages()`), but the session id and the working directory live
+   * on `turnContext`, a per-run local of `streamChat` this layer cannot see --
+   * the same reason `assembleTurn` is host-supplied rather than derived. A
+   * defaulted `sessionId` would be a command answered against a session nobody
+   * named, and `/goal pause` would then mutate whichever goal that id resolved
+   * to.
+   *
+   * `sessionId` may still be `undefined` at runtime (the legacy passes
+   * `turnContext.sessionId ?? undefined`), and the command port handles that
+   * honestly; what is required is that the host SAYS which it is rather than the
+   * composition inventing one.
+   */
+  readonly sessionId?: string;
+  /** This run's `turnContext.workingDirectory`. `/export` resolves against it. */
+  readonly workingDirectory?: string;
   /** `options.wakeRun === true`: an `agent_dm` row is already in the prompt. */
   readonly wakeRun: boolean;
   /** Whether the model accepts images, for the mailbox guidance attachment path. */
@@ -301,8 +552,58 @@ export interface LegacyRunHost {
    * entry so a finished run's receiver is not left on a long-lived agent.
    */
   readonly turnOutputSink?: TurnOutputSink;
+  /**
+   * This run's fork marker, when the run's opening message is a branched fork.
+   *
+   * Plan 610 D1. OPTIONAL, and optional is the RESET: a run with no fork is the
+   * common case, and `composeLegacyRunPorts` binds `host.runFork ?? null`
+   * unconditionally, so omitting this member CLEARS the marker. That is the
+   * property the leak test pins -- the agent is long-lived, and a marker that
+   * outlived its run would branch every later run on the same instance, because
+   * a branched row is filtered out of the main projection
+   * (`message-projectors.ts:84`) and would simply disappear from the transcript.
+   *
+   * Declared structurally rather than by importing a type from the agent so
+   * that this file keeps depending on the agent only through its public
+   * surface; `bindRunForkMarker` accepts exactly this shape.
+   */
+  readonly runFork?: { readonly replyToId: string; readonly userId: string };
   /** Collects a fragment the engine deferred for the next turn. */
   readonly deferFragment?: (fragment: TransientContextFragment) => void;
+  /**
+   * The run's hook source, for the engine's extension port.
+   *
+   * Plan 610 A3-2b10 (S4a). Host-supplied rather than derived from the agent,
+   * and that placement is the point: which hooks a run raises is a property of
+   * the session's configuration, and `duyaAgent` builds its own
+   * `ConfigHooksRunner` per `streamChat` call (`:2062`) out of `turnContext`
+   * locals this interface cannot see. The engine needs the same runner the
+   * legacy used, and only the host holds those facts.
+   *
+   * Build it with `createLegacyHookSource` (`hook-source.ts`), which is the
+   * only thing that knows how a `HookEvent` maps onto an `ExtensionPhase`.
+   */
+  readonly extensions?: ExtensionPort;
+  /**
+   * Plan 610 D1. Where the run's control commands are answered.
+   *
+   * OPTIONAL, and optional here for the same reason it is optional on
+   * `RunEnginePorts`: a host with no command surface is a legitimate host, and
+   * `composeLegacyRunSources` omits the port entirely rather than binding an
+   * empty one -- "this host has no commands" and "this host never bound one"
+   * must stay distinguishable, exactly as `extensions` argues.
+   *
+   * OMITTING IT IS THE REGRESSION, and that asymmetry is deliberate and worth
+   * stating plainly: unlike `turnOutput` (which nothing can supply yet) or
+   * `compaction` (a capability whose absence loses a transcript), the desktop
+   * product HAS control commands today. They work because `streamChat`
+   * intercepts them; after the cutover nothing does, and `/goal` reaches the
+   * provider as literal text. So the composition DERIVES this rather than
+   * asking the host for it -- the facts it needs (`sessionId`, the working
+   * directory, the transcript) are the same ones the assembly seam already
+   * takes -- and only a host that supplies its own overrides the derivation.
+   */
+  readonly command?: RunCommandPort;
 }
 
 // ============================================================================
@@ -347,13 +648,42 @@ export function composeLegacyRunSources(
   // caller could have replaced mid-run; the publisher's own `#current` is what
   // decides, and this only decides where to ask.
   const pipelines = host.turnPipelines;
+  // Plan 610: read ONCE, with the same reasoning as `pipelines` above. The
+  // restore below closes over it, and a host that replaced the member mid-run
+  // would otherwise change the scope half way through a conversation.
+  const runFork = host.runFork;
   return {
     // DERIVED. `createClientModelPort` opens exactly the request the engine
     // assembled and threads the engine's own scoped signal into the provider
     // call, which is the only model port that does not also consult the legacy
     // turn (`run-engine-model.ts:429-441`).
+    //
+    // Plan 610 P3: `refreshDeclaredTools` is threaded here rather than reached
+    // for inside the port, because the guard's live set belongs to the handle
+    // and this is where the host says which handle. Without it the guard stayed
+    // EMPTY -- it denies anything outside itself -- so every dispatch was refused
+    // and the run still reported `completed` with zero tools executed.
+    //
+    // A port is built PER REQUEST rather than once per run, and that is what
+    // makes the refresh per ATTEMPT observable: `stream()` re-takes the snapshot
+    // however many times it is called, so a host that promoted a tool between
+    // turns gets the next request guarded by the surface that request advertised.
     openModelStream: (request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelFrame> =>
-      createClientModelPort(agent.readModelClient()).stream(request, signal),
+      createClientModelPort(agent.readModelClient(), {
+        refreshDeclaredTools: host.refreshDeclaredTools,
+        // Plan 610 S4c-d2a. The per-call usage tap, threaded HERE rather than
+        // reached for inside the port, because the host owns the billing
+        // authority and the port does not know who it is.
+        //
+        // OMITTED when the host supplies no sink, which is a supported run with
+        // no per-call accounting at all -- distinct from a sink that fires zero
+        // times, because a provider that reported nothing must not be
+        // indistinguishable from a host that never asked. Every existing
+        // hand-built host omits it, so nothing had to change to add it.
+        ...(host.onPerCallUsage === undefined
+          ? {}
+          : { onPerCallUsage: host.onPerCallUsage }),
+      }).stream(request, signal),
     queueTool: (call: ToolCallRequest) =>
       pipelines.queue({ id: call.callId, name: call.name, input: call.input }),
     // The real publisher's real drain, mapped by the real `toDrainItem`. A
@@ -397,7 +727,29 @@ export function composeLegacyRunSources(
       },
     },
 
-    assembleTurn: host.assembleTurn,
+    // Plan 610: `assembleTurn` stays HOST-supplied, and the run's SCOPE is
+    // applied here rather than inside the host's body -- because this is the one
+    // frame where the agent and the run's marker are both in scope
+    // (`createLegacyAssembleTurn` sees only a handle, and the handle's
+    // `projectTurnMessages` re-projects through the MAIN projection, which drops
+    // branched rows). Without this a forked run's turn 2 is sent to the model
+    // without the tool result turn 1 produced: measured `["user","user"]` where
+    // a non-forked run sends `["user","assistant","tool","user"]`.
+    //
+    // The `runFork` check is not an optimisation: an UNSCOPED run must get the
+    // host's own function, both because its own rows are not branched (nothing
+    // to restore) and because a restore that ran anyway would be a second path
+    // through the same binding.
+    assembleTurn:
+      runFork === undefined
+        ? host.assembleTurn
+        : async (input) => {
+            const assembled = await host.assembleTurn(input);
+            return {
+              ...assembled,
+              messages: restoreRunOwnRows(agent, runFork, assembled.messages),
+            };
+          },
     askApproval: host.askApproval,
     emitter: host.emitter,
     proposeTerminal: host.proposeTerminal,
@@ -435,17 +787,111 @@ export function composeLegacyRunSources(
       // the only place that can supply it. The usage block is mapped from the
       // engine's camelCase into the ROW's snake_case here, which is the mapping
       // `AssistantMessageRecord` explicitly leaves to the host (`:822-826`).
-      onAssistantMessage: (record) =>
+      //
+      // `LegacyRunHost.turnUsageBlock` WINS over `toRowUsage` when the host has
+      // one, because the row is the persisted anchor and the engine's block is
+      // built for the published frame. Read at write time, not captured: the
+      // row is committed by `recordTurnAssistantMessage` on its first line, so
+      // anything grafted afterwards would decorate an object the store never
+      // sees.
+      onAssistantMessage: (record) => {
+        const hostUsage = host.turnUsageBlock?.() ?? undefined;
+        const usage =
+          hostUsage ?? (record.usage === undefined ? undefined : toRowUsage(record.usage));
         agent.recordTurnAssistantMessage({
           content: record.content as unknown as MessageContent[],
           seqIndex: host.seqIndex,
-          ...(record.usage === undefined ? {} : { usage: toRowUsage(record.usage) }),
-        }),
+          ...(usage === undefined ? {} : { usage }),
+        });
+      },
       onTurnResults: (summary) => {
         agent.finishTurnOutput(summary);
       },
+      // Plan 610 D1. DERIVED, and it is the leg that makes a `before_commit`
+      // contributor's work durable rather than merely executed.
+      //
+      // The row is built by the LEGACY'S OWN projection chain, not by a row
+      // written here: `renderSystemReminder` wraps the text, `adaptLoopNudgeContext`
+      // gives it source and visibility, and `projectRuntimeContextToProviderMessage`
+      // projects the provider `user` turn. Those are the three calls
+      // `applyLoopHookEffect` makes for a `PostTurn` inject
+      // (`hooks/loop.ts:229-233`), so a contributor's committed row and a legacy
+      // `PostTurn` row are the same row produced by the same code -- which is the
+      // only way "the engine path reaches the product's behaviour" is true for
+      // the COMMIT as well as for the dispatch.
+      //
+      // `'custom'` is the honest `RuntimeContextSource`: the union has no member
+      // meaning "an extension contributor", and inventing one would change what
+      // an existing consumer matches on. It is the member the union already
+      // reserves for a source the framework does not otherwise name.
+      //
+      // `agent.addMessage` is the agent's OWN append onto its own timeline, and
+      // that timeline is what the legacy's `_commitMessages` persists -- the same
+      // seam `recordTurnToolResult` and `recordTurnAssistantMessage` are derived
+      // from, for the same reason: a projection written here instead would be a
+      // second authority for what the transcript contains.
+      onInjectedMessage: (record) => {
+        const projected = projectRuntimeContextToProviderMessage(
+          adaptLoopNudgeContext(
+            renderSystemReminder(record.text, 'loop_nudge'),
+            'custom',
+            { seqIndex: host.seqIndex },
+          ),
+        );
+        agent.addMessage(projected);
+      },
     },
     ...(host.deferFragment === undefined ? {} : { deferFragment: host.deferFragment }),
+    // Plan 610 D1. DERIVED from the agent, and the derivation is the point: the
+    // resolved modes and the mode context are PRIVATE state assigned by
+    // `applyTurnModes` inside `beginTurnAssembly`, so the host cannot read them
+    // and `run-composition` cannot reimplement `runExitHooks` without becoming a
+    // second authority for which modes a run activated.
+    //
+    // `agent.runModeExitHooks()` is that state handed back out. It is the
+    // ADD-ONLY public method on `duyaAgent` this slice is allowed, and it adds a
+    // capability rather than changing a statement.
+    //
+    // OMITTED-when-unavailable is NOT what this does -- it is bound
+    // unconditionally, exactly like `command` below, because a composition that
+    // could silently drop a mode's teardown is the regression the port exists to
+    // prevent. The no-op case is handled INSIDE the agent: a run that resolved no
+    // `kind: 'message'` mode iterates nothing, which is the legacy's own
+    // behaviour (`SessionFinalizer.ts:233` guards, then `runExitHooks` loops).
+    modeExit: { onRunExit: () => agent.runModeExitHooks() },
+    // Plan 610 A3-2b10 (S4a). Optional on the host and optional on the ports,
+    // and the two are the same decision: a host that configures no hooks must
+    // not be forced to build an empty `ExtensionPort` to satisfy a type, and
+    // the engine's `#contribute` already treats an absent one as "no
+    // contributors". Omitted rather than defaulted so that "no hooks" and "no
+    // hook source bound" stay distinguishable.
+    ...(host.extensions === undefined ? {} : { extensions: host.extensions }),
+    // Plan 610 D1. DERIVED unless the host overrode it, and deriving is the
+    // point: the product HAS control commands, so a composition that could
+    // silently drop them is a composition that ships the regression this slice
+    // exists to prevent. `agent.getMessages()` is read AT CALL TIME (it is a
+    // live getter), so a command answered on turn 1 sees the transcript as it
+    // is then -- the same rule the `pipelines` binding above follows.
+    //
+    // `host.command` wins when supplied, so a host with its own command surface
+    // (the CLI's own registry, a test) can replace the product's rather than
+    // fight it.
+    command:
+      host.command ??
+      createLegacyCommandPort({
+        get messages(): readonly Message[] {
+          return agent.getMessages();
+        },
+        // Plan 610: the `/goal` half is the AGENT's dispatch, handed over rather
+        // than imported here. `run-composition -> goal-commands` was measured
+        // at SCC 20 -- it re-enters the cycle through the very driver that
+        // composes this port. See `duyaAgent.runGoalCommand`.
+        runGoalCommand: (prompt, context) => agent.runGoalCommand(prompt, context),
+        ...(host.sessionId === undefined ? {} : { sessionId: host.sessionId }),
+        ...(host.workingDirectory === undefined
+          ? {}
+          : { workingDirectory: host.workingDirectory }),
+      }),
     ...(host.beginTicket === undefined || host.settleTicket === undefined
       ? {}
       : { beginTicket: host.beginTicket, settleTicket: host.settleTicket }),
@@ -470,10 +916,313 @@ export function composeLegacyRunSources(
  *
  * It is still a small, deliberate side effect on a shared object, and it is
  * undone the moment anything drives the legacy: `streamChat` unbinds on entry.
+ *
+ * ## The fork marker is bound HERE for the same reason, and it is UNCONDITIONAL
+ *
+ * Plan 610 D1. Same placement as the sink -- this function is "start this run",
+ * and the run's fork marker is a fact about the run rather than a description
+ * of the agent. It is NOT on `RunExecutionRequest`, because the engine never
+ * touches thread metadata: it hands records to `ports.turnOutput` and the
+ * agent's own `_commitDurable` does the tagging, so putting fork state on the
+ * engine's request type would be the wrong layer -- the engine could only pass
+ * it back out to the host that owns it.
+ *
+ * `?? null` is the load-bearing half, and it is why this is ONE line rather
+ * than a conditional: every run performs the assignment, so a run with no fork
+ * CLEARS the marker. Written as `if (host.runFork) agent.bindRunForkMarker(...)`
+ * a later plain run would leave the previous forked run's marker in force on a
+ * long-lived agent, and every durable row it wrote would be filtered out of the
+ * main projection. Same obligation as the legacy's `:2277` reset, met by the
+ * same mechanism: one unconditional write per run.
  */
 export function composeLegacyRunPorts(agent: duyaAgent, host: LegacyRunHost): RunEnginePorts {
   agent.bindTurnOutputSink(host.turnOutputSink ?? null);
+  agent.bindRunForkMarker(host.runFork ?? null);
   return buildEnginePorts(composeLegacyRunSources(agent, host));
+}
+
+/**
+ * Plan 610 P9: the engine's approval decision, taken from the RUN'S OWN GATE.
+ *
+ * ## The defect this closes, measured
+ *
+ * `RunEngineImpl.#dispatchCall` asked `ports.approval.authorize` for EVERY tool
+ * call and the composition forwarded that to the host's ask bridge with no
+ * per-mode shortcut. Measured on this composition with the real
+ * `RunEngineImpl`, the real `beginTurnAssembly` pipeline and the real
+ * `PermissionsGate`, one `write` call outside the workspace raised:
+ *
+ * | mode              | legacy cards | engine cards (before) |
+ * |-------------------|--------------|-----------------------|
+ * | `default`         | 1            | 2                     |
+ * | `auto`            | 1            | 2                     |
+ * | `acceptEdits`     | 1            | 2                     |
+ * | `bypassPermissions` | 0          | 1                     |
+ * | `plan`            | 0            | 1                     |
+ *
+ * and one card inside the workspace, where the legacy raises none, in every
+ * mode. The mode in force decided nothing on the engine path.
+ *
+ * ## Why the ASK is not taken here
+ *
+ * Because the legacy does not take it here either. Its gate answers
+ * `{ allowed, behavior }` and an `ask` is NOT a block: `PermissionsGate`
+ * returns `allowed: true` with `behavior: 'ask'`, and the card is raised later
+ * by the tool's own `checkPermissions` inside `StreamingToolExecutor` (the
+ * `canUseBehavior !== 'allow'` guard). That arm is the legacy's ask site, it
+ * runs on the engine path too (it is the drain the dispatch feeds), and it
+ * already reproduces the legacy's counts exactly.
+ *
+ * So this returns the gate's verdict and stops: `allowed: false` for a denial,
+ * and `allowed: true` for both an `allow` and an `ask`. Raising the card here
+ * as well is what produced the second card in the table above -- the pipeline's
+ * arm has no memory of a card answered earlier in the run (`_approvedToolUses`
+ * is read only by the tool-thrown retry path, not by the `checkPermissions`
+ * pre-check), so a forwarded ask would be asked twice.
+ *
+ * ## Why it is the gate and not a mode table
+ *
+ * `assembly.canUseTool` IS the closure every pipeline this run assembles
+ * dispatches against, and it reads the session mode through
+ * `agent.getPermissionMode()` -- the value `setPermissionMode(resolved.agentMode)`
+ * installed. `buildLegacyRunManifest` records `toExternalPermissionMode` of the
+ * SAME `resolved.agentMode`. The recorded mode and the enforced decision are
+ * therefore two readings of one fact rather than two sources that can disagree,
+ * and no mode name is restated here: `auto`'s workspace trust, `bypass`'s
+ * catastrophe boundary and `plan`'s write gate all stay in `permissions.ts`,
+ * where the legacy put them.
+ *
+ * ## The residual gap, stated rather than hidden
+ *
+ * The gate now runs TWICE per call on the engine path (here, and in the drain).
+ * `PermissionsGate`'s first arm is a CAS consume -- plan 498's one-shot approval
+ * ledger -- so a CONTINUATION run replaying a granted call has it consumed here,
+ * and the drain's own consult then finds nothing and can reach `ask`. Measured:
+ * a ledger replay outside the workspace raises 0 cards on the legacy and 1 on
+ * the engine path both before and after this change, so this regresses nothing
+ * but does not close it. Closing it needs the dispatch payload to carry the
+ * already-decided verdict so the pipeline skips its own consult; `ApprovalPort`
+ * as it stands has no way to say "ask, but not here".
+ */
+export function gateRunApproval(
+  assembly: RunTurnAssembly,
+  askApproval: LegacyRunHost['askApproval'],
+): LegacyRunHost['askApproval'] {
+  return async (request, signal) => {
+    const { behavior } = normalizeCanUseToolDecision(
+      await assembly.canUseTool(request.toolName, { ...request.input }),
+    );
+    if (behavior === 'deny') {
+      return { allowed: false, reason: 'denied' } as const;
+    }
+    // `'allow'` and `'ask'` are BOTH allowed here: the legacy's own answer to an
+    // `ask` is `allowed: true` (`PermissionsGate` returns it that way, and the
+    // card is raised afterwards by the tool's own `checkPermissions`).
+    // `askApproval` stays the port's required member and stays the run's ONE ask
+    // bridge -- the pipeline reaches it through `ChatOptions.requestPermission`,
+    // the same callback -- but this slot must not raise a card the legacy would
+    // not have raised. `normalizeCanUseToolDecision` is the repository's own
+    // fail-closed reading of the gate's three shapes, so an unrecognised answer
+    // denies rather than widening access.
+    void askApproval;
+    void signal;
+    return { allowed: true, scope: 'once' } as const;
+  };
+}
+
+// ============================================================================
+// Which leg drives an already-established run
+// ============================================================================
+
+/**
+ * How one established run must be driven. There are two answers and no third.
+ *
+ * - `orchestrator` carries the frames. The consumer forwards them; no turn is
+ *   assembled and the engine is not offered this run.
+ * - `engine` carries nothing, and its meaning is exactly "assemble and drive
+ *   this run on the engine" -- so a driver cannot read it as permission to skip
+ *   the work.
+ *
+ * The union rather than a boolean, because the failure this exists to prevent
+ * is a boolean plus a branch the driver forgot: `orchestrator !== null` was
+ * reportable and there was no way to ACT on it, so the only correct behaviour
+ * was to refuse the turn and fail. `frames` is the action, in the type.
+ */
+export type RunDriverLeg =
+  | { readonly kind: 'orchestrator'; readonly frames: AsyncIterable<SSEEvent> }
+  | { readonly kind: 'engine' };
+
+/**
+ * Plan 610 P5: route an established run to the leg that can actually drive it.
+ *
+ * ## Why this lives here rather than in the driver
+ *
+ * Because the answer is a property of the RUN (its resolved mode), the run
+ * handle already owns the inputs to it (`RunHandle.orchestrator`), and this
+ * layer already owns "everything `RunEngineImpl.execute` needs". Putting the
+ * decision at each driver instead would make it a convention repeated per
+ * caller, and the one caller that got it wrong would drop an orchestrator mode
+ * silently -- the exact class plan 610 exists to prevent.
+ *
+ * ## Why the orchestrator leg yields the LEGACY vocabulary
+ *
+ * `ModeModifierOrchestrator.execute` yields `@duya/ai`'s `SSEEvent`, an
+ * orchestrator owns the whole stream, and MEASURED on this commit
+ * `agent-runtime`'s `ports.ts` has no orchestrator member while forbidding that
+ * `SSEEvent` import (its renderer half -- `tool_group_progress`,
+ * `agent_progress`, `mode_changed`, `goal_updated` -- is precisely the
+ * vocabulary the engine must not carry). So there is nothing for the engine to
+ * consume, and routing the frames verbatim to the same consumer the legacy
+ * generator fed is the behaviour-preserving answer. The header of
+ * `orchestratorFramesFor` carries the long form.
+ *
+ * ## What this deliberately does NOT do
+ *
+ * It does not build the engine leg: no ports, no manifest, no input. Those
+ * belong to the driver that owns the host obligations (`LegacyRunHost`), and
+ * inventing them here would put a second account of a run's composition next to
+ * the real one.
+ */
+export function selectRunDriverLeg(agent: duyaAgent, run: RunHandle): RunDriverLeg {
+  if (run.orchestrator) {
+    // The CALL, not the iteration: `orchestratorFramesFor` validates the handle
+    // before it returns a stream, so a driver that selected the wrong leg finds
+    // out while it is still on the stack.
+    return { kind: 'orchestrator', frames: agent.orchestratorFramesFor(run) };
+  }
+  return { kind: 'engine' };
+}
+
+// ============================================================================
+// `ContextPort.assemble`, for a host that drives the engine
+// ============================================================================
+
+/**
+ * Plan 610 A3-2b9 (S3): bind `ContextPort.assemble` to a real run handle.
+ *
+ * ## Why this exists, and why it is a TRANSLATION and not a second assembly
+ *
+ * `LegacyRunHost.assembleTurn` is required and is the engine's one call per
+ * turn, and until plan 610 A3-2b8 it had no possible production body: its
+ * inputs were closure locals of a 2300-line generator. A3-2b7 gave
+ * `assembleTurn` a body and A3-2b8 gave that body a producer
+ * (`beginTurnAssembly`), so a production binding is finally expressible.
+ *
+ * It is a TRANSLATION, and the distinction is the whole safety argument. Every
+ * decision about what a turn advertises -- the filtered catalog, the prompt
+ * refresh, the catalog round, the pipeline -- is made by `handle.assemble`,
+ * which the legacy loop ALSO calls. Nothing is re-derived here. What is
+ * translated is the VOCABULARY: the legacy `Message` / `Tool` shapes into the
+ * runtime's `ModelMessage` / `ToolDescriptor`, which `ports.ts` says is the
+ * host's job because the two are genuinely different types.
+ *
+ * ## The two projections, and what each is faithful to
+ *
+ * - `Tool.input_schema` -> `ToolDescriptor.inputSchema`. A rename, and the
+ *   engine sends it straight back to the provider, so a silent swap here would
+ *   send every model a tool surface whose schema it cannot read. The
+ *   camelCase/snake_case defect class `run-engine-model.ts:73-81` documents is
+ *   exactly this, which is why it is asserted rather than assumed.
+ * - `Message` -> `ModelMessage`. Only `role` and `content` survive, because
+ *   `ModelMessage` carries only those two plus an `id`. Nothing is invented:
+ *   the dropped fields are metadata the model never saw.
+ *
+ * ## `messages` is the PROJECTION, and the agent is no longer a parameter
+ *
+ * Plan 610 A3-2b9 (S4b-2). This function used to take the agent and read
+ * `agent.getMessages()` for both the assembly input and the returned messages,
+ * justified in the comment this replaces with "the agent owns that transcript".
+ *
+ * Owning it is not the same as projecting it. The agent's raw timeline still
+ * carries `legacy_system` rows and thread metadata, and the model's boundary
+ * projection exists to lift system content into the system prompt, strip
+ * `replyToId` / `branched`, and exclude the branched layer. A raw array handed
+ * to a provider smuggles a system row in as a bogus user turn and leaks thread
+ * metadata into the request body.
+ *
+ * So the messages come from `handle.projection` -- the seam's own model-boundary
+ * projection, the same one `streamChat` uses -- and `agent` became an unused
+ * parameter and was removed rather than left binding a name nothing reads. The
+ * engine's `input.history` is still the wrong source for the same reason: it is
+ * what the host pushed in, not what the agent's timeline projected to.
+ *
+ * ## `revision` and `catalogRevision` are reported, not computed here
+ *
+ * `revision` is the digest the ENGINE computed over its own input; the host has
+ * no better claim to it and must not invent one. `catalogRevision` is the
+ * registry's own counter, stringified for the port.
+ */
+export function createLegacyAssembleTurn(
+  handle: RunTurnAssembly,
+): (input: TurnAssemblyInput) => Promise<AssembledTurn> {
+  return async (input: TurnAssemblyInput): Promise<AssembledTurn> => {
+    // The assembly is driven by what the ENGINE asked for (the turn number) and
+    // by the run's own current state (the prompt the run holds, the projected
+    // transcript the handle holds). `input.digest` and `input.turn` come from the
+    // engine; nothing else in the request has a legacy counterpart, and inventing
+    // one would be the host deciding what belongs in the payload -- which is the
+    // engine's job and `ports.ts:482-486` says so.
+    // Re-projected PER TURN, not read off `handle.projection.messages`. The
+    // engine re-assembles every turn, and the tool rows it needs to see were
+    // written to the agent's timeline by the previous turn -- so a run-scoped
+    // snapshot hands turn 2 a transcript that ends at turn 1. The legacy gets
+    // this for free by pushing into one working array; the engine has to ask.
+    const messages = handle.projectTurnMessages();
+    const assembly = handle.assemble({
+      turn: input.turn,
+      systemPrompt: handle.systemPrompt,
+      messages,
+      tools: handle.tools as Tool[],
+    });
+
+    return {
+      systemPrompt: assembly.systemPrompt,
+      // The PROJECTED messages, not `agent.getMessages()`.
+      //
+      // This is the S4b-2 change and it is the whole slice. `getMessages()` is
+      // the agent's RAW timeline: it still carries `legacy_system` rows and
+      // thread metadata, and the model's boundary projection exists precisely to
+      // lift system content into the system prompt, strip thread metadata, and
+      // drop branched-layer messages. Handing a provider the raw array smuggles
+      // a system row in as a bogus turn and reintroduces `replyToId` into the
+      // request body.
+      //
+      // The previous version of this line justified reading the agent directly
+      // with "the agent owns that transcript" -- true, and the point of the fix
+      // is that owning it is not the same as projecting it.
+      messages: toModelMessages(messages),
+      tools: assembly.tools.map(toToolDescriptor),
+      catalogRevision: String(handle.resolved.registry.getCatalogRevision()),
+      revision: input.digest,
+    };
+  };
+}
+
+/**
+ * `Message` -> `ModelMessage`, dropping what the model never sees.
+ *
+ * Exported for the reason `toDrainItem` is: a pure projection is the only shape
+ * in which "did the adapter drop something" is a question a test can answer,
+ * and it is answerable without a registry, a model or a pipeline.
+ */
+export function toModelMessages(messages: readonly Message[]): ModelMessage[] {
+  return messages.map((message, index) => ({
+    role: message.role as ModelMessage['role'],
+    content: message.content as ModelMessage['content'],
+    id: message.id ?? `m${index}`,
+  }));
+}
+
+/**
+ * `Tool` -> `ToolDescriptor`. The `input_schema` -> `inputSchema` rename is the
+ * load-bearing line; see this file's header on the defect class it belongs to.
+ */
+export function toToolDescriptor(tool: Tool): ToolDescriptor {
+  return {
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.input_schema as Record<string, unknown>,
+  };
 }
 
 // ============================================================================
@@ -492,7 +1241,16 @@ export interface LegacyRunFacts {
   readonly revision: string;
   /** The catalog revision this run advertises. `ToolRegistry.getCatalogRevision()`. */
   readonly catalogRevision: number;
-  readonly permissionMode: 'default' | 'acceptEdits' | 'plan';
+  /**
+   * The PROTOCOL's mode, not a subset of it.
+   *
+   * Narrowed to `'default' | 'acceptEdits' | 'plan'` alongside the driver's copy,
+   * which is what made a `bypassPermissions` session impossible to record
+   * faithfully. `buildLegacyRunManifest` writes this straight into
+   * `permissionPolicy.mode`, whose type is `PermissionPolicyMode`, so the
+   * narrower union was buying nothing.
+   */
+  readonly permissionMode: PermissionPolicyMode;
   readonly roots?: readonly string[];
   readonly maxTurns?: number;
 }
@@ -579,11 +1337,45 @@ export function buildLegacyRunManifest(facts: LegacyRunFacts): RunManifest {
  * THIRD path for the same fact, and two of the three would be the ones the
  * design already rejects.
  *
- * ## `catalog` is `by_ref`, with the digest, for the reason the port gives
+ * ## `history` is `by_ref`, and it is the SAME decision as the catalog's
  *
- * A `by_ref` part is verifiable rather than trusted (`ports.ts:1200-1207`), and
- * the locator is the catalog revision the run pinned, so a tool surface that
- * changes mid-run is detectable instead of silent.
+ * `ResolvedPart` is a union with no third member, and `RunInputSnapshot.history`
+ * deliberately leaves the choice open ("give `by_ref` and the engine
+ * re-resolves, or give `inline` and it cannot"). The engine then treats the two
+ * shapes differently: `RunEngineImpl.#modelRequest` takes `input.history.value`
+ * when the part is INLINE and falls back to `assembled.messages` for a
+ * `by_ref`. So `inline` cannot carry a conversation at all -- the snapshot is
+ * frozen at run start, and the tool result turn 1 produced can never reach
+ * turn 2. Measured on this composition with a real agent: the tool ran, the run
+ * proposed `completed`, and turn 2's request was `["user"]` where the `by_ref`
+ * shape sends `["user","assistant","tool","user"]`.
+ *
+ * The catalog beside it was already `by_ref`, and for the reason this now
+ * shares: a `by_ref` part is verifiable rather than trusted, and the locator is
+ * what makes a mid-run change detectable instead of silent. History is the part
+ * `ports.ts` names as ALREADY DURABLE and owned by the transcript store, so it
+ * is the one part where an inline copy is both larger and less honest than a
+ * reference.
+ *
+ * ## The locator NAMES the source; the digest is what it resolved to
+ *
+ * `locator` is the durable transcript the host resolves from, keyed by the run's
+ * own `sessionId` -- the same fact `LegacyRunHost.sessionId` already requires,
+ * and the same session the command port answers `/goal` against. Nothing parses
+ * it: `RunEngineImpl` hands a `by_ref` locator BACK to the host rather than
+ * re-resolving it, which is what keeps exactly one derivation of "the same
+ * input" (`ports.ts`, contract 2).
+ *
+ * `digest` is the sha256 of the rows the host resolved that locator to when the
+ * run started, canonicalised with the protocol's own `canonicalJson`. Two runs
+ * over the same prior transcript pin the same digest; a run that begins from a
+ * different one does not. A constant string would satisfy the type and verify
+ * nothing, which is the whole reason `ResolvedPart` makes `digest` required and
+ * forbidden on `inline`.
+ *
+ * `canonicalJson` THROWS on a value it cannot canonicalise rather than dropping
+ * it, and that is kept rather than softened: `runInputRevision` argues the same
+ * way ("dropping the field would let two different inputs hash the same").
  */
 export function buildLegacyRunInput(
   facts: LegacyRunFacts,
@@ -593,7 +1385,11 @@ export function buildLegacyRunInput(
   return {
     revision: facts.revision,
     prompt: { role: 'user', id: prompt.id, content: prompt.content },
-    history: { kind: 'inline', value: history },
+    history: {
+      kind: 'by_ref',
+      digest: historyDigest(history),
+      locator: `transcript://${facts.sessionId}`,
+    },
     attachments: { kind: 'inline', value: [] },
     catalog: {
       kind: 'by_ref',
@@ -601,6 +1397,42 @@ export function buildLegacyRunInput(
       locator: `catalog://${facts.catalogRevision}`,
     },
     steering: [],
-    options: {},
+    // Plan 610 P9. `RunEngineImpl.#permissionMode` reads the mode the manifest
+    // pinned off `input.options.permissionMode` and stamps it on every
+    // `ApprovalRequest` -- so with an empty `options` every approval request
+    // carried `'default'` regardless of the mode actually in force, which is a
+    // THIRD account of the mode next to the manifest's and the gate's. It is
+    // `facts.permissionMode`, the same value the manifest writes, so the label
+    // at the ask and the record of the run are one reading of one fact.
+    options: { permissionMode: facts.permissionMode },
   } as unknown as RunInputSnapshot;
+}
+
+/**
+ * The digest a `by_ref` history carries: the transcript as it stood when the run
+ * started.
+ *
+ * ## What is hashed, and why only three fields
+ *
+ * `role`, `id` and `content`, which is what `ModelMessage` carries and therefore
+ * everything the model could have been shown. A projected row's other fields
+ * (`timestamp`, `seq_index`, `replyToId`) are metadata the model never sees, and
+ * a digest that moved when a row was re-timestamped would report drift where
+ * there is none.
+ *
+ * `content` is typed `unknown` here because the caller's rows are whatever the
+ * host projected, and `canonicalJson` is the thing that decides whether a value
+ * is canonicalisable. The ONE cast is to the protocol's `JsonValue`, and
+ * `MessageContent` is a string or an array of plain blocks, so this narrows a
+ * wider static type rather than asserting something new.
+ */
+function historyDigest(
+  history: readonly { role: 'user' | 'assistant' | 'tool'; id: string; content: unknown }[],
+): string {
+  const rows = history.map((row) => ({
+    role: row.role,
+    id: row.id,
+    content: row.content as Parameters<typeof canonicalJson>[0],
+  }));
+  return sha256Hex(canonicalJson(rows));
 }

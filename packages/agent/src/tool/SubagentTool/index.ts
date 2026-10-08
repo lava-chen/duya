@@ -9,14 +9,14 @@
  */
 
 export { SUBAGENT_TOOL_NAME, LEGACY_SUBAGENT_TOOL_NAME, VERIFICATION_AGENT_TYPE, ONE_SHOT_BUILTIN_AGENT_TYPES } from './constants.js'
-export { getAgentDefinitions, formatAgentLineForPrompt, getPrompt, formatAgentLine, subagentTool, SubagentTool } from './SubagentTool.js'
+export { getAgentDefinitions, formatAgentLineForPrompt, getPrompt, formatAgentLine, SubagentTool } from './SubagentTool.js'
 export type { SubagentToolInput } from './SubagentTool.js'
 export { getBuiltInAgents } from './builtInAgents.js'
 export type { AgentDefinition, BaseAgentDefinition, BuiltInAgentDefinition, CustomAgentDefinition, AgentDefinitionsResult, AgentMcpServerSpec } from './loadAgentsDir.js'
 export { isBuiltInAgent, isCustomAgent, getActiveAgentsFromList, hasRequiredMcpServers, filterAgentsByMcpRequirements } from './loadAgentsDir.js'
 export { isForkSubagentEnabled, FORK_SUBAGENT_TYPE, FORK_AGENT, buildForkedMessages, buildChildMessage, buildWorktreeNotice, buildWorktreeSpawnNotice } from './forkSubagent.js'
 export { runAgent } from './runAgent.js'
-export type { RunAgentParams, RunAgentResult, CacheSafeParams, AgentProgressEvent } from './runAgent.js'
+export type { RunAgentParams, RunAgentResult, CacheSafeParams, AgentProgressEvent, SubagentRunDeps, CreateSubAgent, CreateToolRegistry } from './runAgent.js'
 export { resolveResumeTarget } from './resumeAgent.js'
 export type { ResumeTarget, ResumeTargetError, ResumeErrorCode } from './resumeAgent.js'
 export { createIsolatedWorktree, slugifyWorktreeName, WorktreeError } from './worktree.js'

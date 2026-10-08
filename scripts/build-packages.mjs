@@ -71,6 +71,12 @@ const BUILD_ORDER = [
   // typechecking against whatever `agent-protocol/dist` happened to contain —
   // or against a stale declaration for a subpath that does not exist yet.
   '@duya/agent-protocol',
+  // Plan 610 A5: the App Connector vocabulary and the `.app.json` declaration
+  // schema. Level 1 because it imports NO `@duya/*` package -- `app-schema.ts`
+  // imports only `zod` and its sibling. It has to build before the host,
+  // because `apps/desktop/tsconfig.main.json` maps `@duya/connectors/*` onto
+  // this package's emitted `dist`.
+  '@duya/connectors',
 
   // Level 2 — depend only on level 1.
   '@duya/ai', //              -> @duya/agent-protocol
@@ -87,12 +93,21 @@ const BUILD_ORDER = [
   // Level 4.
   '@duya/agent-runtime', // -> @duya/agent-core, @duya/agent-protocol
 
+  // Level 5.
+  //
+  // `@duya/memory` sits at level 5 because its only `@duya/*` dependency is
+  // `@duya/ai` (level 2) and its only consumers are `@duya/agent` and
+  // `apps/desktop`. Both need its emitted `dist`, so it must be built before
+  // either — and it must not be hoisted earlier, or a package that imports it
+  // could typecheck against a `dist` that does not exist yet.
+  '@duya/memory', //           -> @duya/ai
+
   // Level 5 — last. `@duya/agent` consumes the four level-2/3 packages above,
   // and `apps/desktop/src/main` plus the agent bundle both import it, so
   // nothing that needs it can be built or typechecked earlier. It also
   // resolves `@duya/agent/message` to its OWN emitted `dist/message`, so it
   // must be fully built before any step that leans on its emitted types.
-  '@duya/agent', // -> @duya/ai, @duya/cli, @duya/computer-use, @duya/plugin-core
+  '@duya/agent', // -> @duya/ai, @duya/cli, @duya/computer-use, @duya/plugin-core, @duya/memory
 ];
 
 /**

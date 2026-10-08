@@ -46,16 +46,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import fs from 'node:fs';
-import path from 'node:path';
 import Database from 'better-sqlite3';
 import { MIGRATIONS } from '../migrations';
-
-/** Where the agent package states the schema it requires. */
-const AGENT_DDL_PATH = path.resolve(
-  __dirname,
-  '../../../../../../packages/agent/src/memory-state/__tests__/schema-ddl.ts',
-);
+import { MEMORY_STATE_FIXTURE_DDL } from '@duya/memory/testing';
 
 /**
  * The migrations the agent fixture mirrors.
@@ -72,29 +65,10 @@ const mirrored = MIGRATIONS.filter((m) => m.version <= MIRRORED_MAX_VERSION);
 /** The DDL statements the agent fixture applies, read from its source. */
 function agentFixtureStatements(): string[] {
   expect(
-    fs.existsSync(AGENT_DDL_PATH),
-    `the agent fixture DDL is gone: ${AGENT_DDL_PATH}. If it moved, the agent's ` +
-      'memory-state tests are building a schema this host no longer has.',
-  ).toBe(true);
-
-  const source = fs.readFileSync(AGENT_DDL_PATH, 'utf8');
-  const start = source.indexOf('MEMORY_STATE_FIXTURE_DDL: readonly string[] = [');
-  expect(start, 'the agent DDL no longer exports MEMORY_STATE_FIXTURE_DDL').toBeGreaterThan(-1);
-  const end = source.indexOf('];', start);
-  expect(end, 'the agent DDL array is unterminated').toBeGreaterThan(start);
-
-  const body = source.slice(start, end);
-  const statements: string[] = [];
-  for (let i = body.indexOf('`'); i !== -1; i = body.indexOf('`', i + 1)) {
-    const close = body.indexOf('`', i + 1);
-    if (close === -1) break;
-    statements.push(body.slice(i + 1, close));
-    i = close;
-  }
-  expect(statements.length, 'no DDL statements found in the agent fixture').toBeGreaterThanOrEqual(
-    mirrored.length,
-  );
-  return statements;
+    MEMORY_STATE_FIXTURE_DDL.length,
+    'no DDL statements found in the agent fixture',
+  ).toBeGreaterThanOrEqual(mirrored.length);
+  return [...MEMORY_STATE_FIXTURE_DDL];
 }
 
 /** Collapse whitespace so the comparison is about schema, not formatting. */

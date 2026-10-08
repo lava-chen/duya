@@ -102,6 +102,32 @@ export function isBranchedEntry(entry: MessageTimelineEntry): boolean {
 }
 
 /**
+ * True when `message` is a row THIS RUN wrote: a branched row whose
+ * `replyToId` is the fork's own user-message id.
+ *
+ * ## Why that id and not the branch root
+ *
+ * `resolveBranchRoot` answers "which main-line message does this branch hang
+ * off", and every fork off the same root shares that one answer, so the root
+ * cannot tell two forks apart -- scoping a projection by root would hand one
+ * fork another fork's rows. `replyToId` separates them: `_commitDurable`
+ * stamps every non-user row of an active fork turn with the fork's user-row id,
+ * and nothing else points there, so a second fork off the same root (a
+ * different `userId`) is excluded rather than merged in.
+ *
+ * ## What it deliberately does NOT match
+ *
+ * The fork's OPENING user row, which points at the branch root rather than at
+ * itself. That is the correct answer rather than a gap: the engine supplies
+ * that row as the run's `input.prompt`, and matching it here as well would put
+ * the same user turn on the wire twice.
+ */
+export function isRunOwnBranchRow(message: unknown, forkUserId: string): boolean {
+  const meta = readThreadMeta(message);
+  return meta !== undefined && meta.branched === true && meta.replyToId === forkUserId;
+}
+
+/**
  * Merges thread metadata onto a fresh metadata record. Never mutates the input
  * message; the caller assigns the result onto a new/owned message object.
  */

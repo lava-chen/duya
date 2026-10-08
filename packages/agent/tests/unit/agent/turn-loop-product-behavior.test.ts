@@ -87,6 +87,11 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 // edge, so sourcing them from inside `pkg:agent` is what keeps this file from
 // moving the `module-dependency-permitted` self-test count.
 import type { Message, SSEEvent } from '../../../src/types.js';
+import {
+  cleanupEngineTurnDirs,
+  driveTurn,
+  restoreEngineTurnIpc,
+} from '../../helpers/engineTurnHarness.js';
 
 interface FakeDbRequest {
   type: string;
@@ -259,6 +264,11 @@ beforeEach(() => {
 afterEach(() => {
   process.env = { ...originalEnv };
   process.send = realSend;
+  // The run driver's turn-end barrier flushes the agent's `Journal`, which the
+  // engine path reaches; `streamChat` never did. The IPC restore is this file's
+  // own `installFakeDbIpc` teardown, so the harness's is a no-op safety net.
+  restoreEngineTurnIpc();
+  cleanupEngineTurnDirs();
   vi.restoreAllMocks();
   activeClient = null;
 });
@@ -399,20 +409,50 @@ function registryWith(
   return registry;
 }
 
+/**
+ * Drive one real product turn and return the frames its consumer would see.
+ *
+ * `DuyaAgent.streamChat` no longer exists (plan 610 A3 / S4c-d3): the turn loop
+ * belongs to `driveRunWithEngine`, and the agent is a set of ports beneath it.
+ * This file's whole subject is that a real product turn -- real agent, real
+ * tool pipeline, real registry -- behaves correctly, so it keeps driving the
+ * real chain and only changes how the turn is STARTED.
+ *
+ * Two consequences worth stating:
+ *
+ *  - The probe tool is registered on the agent's OWN catalog rather than passed
+ *    as `options.toolRegistry`. `_resolveTools` still reads that field to build
+ *    the DECLARED surface, but the engine DISPATCHES through
+ *    `composeLegacyRunPorts`' `lookup`, derived from `agent.activeMCPRegistry`
+ *    (`run-composition.ts:716-727`). A tool advertised from one registry and
+ *    dispatched out of the other is refused before it runs, and every case here
+ *    would then prove nothing about tool results.
+ *  - The frames are the worker's own `chat:*` ones, produced through the real
+ *    `convertSSEToAgentMessage`. `eventsOfType` below normalises the name, so
+ *    each case keeps asserting against the same claim it always did.
+ */
 async function collect(
   agent: InstanceType<typeof duyaAgent>,
   prompt: string,
   registry: InstanceType<typeof ToolRegistry>,
   options: Record<string, unknown> = {},
 ): Promise<SSEEvent[]> {
-  const events: SSEEvent[] = [];
-  for await (const event of agent.streamChat(prompt, {
-    toolRegistry: registry,
-    ...options,
-  })) {
-    events.push(event);
+  for (const tool of registry.getAllTools()) {
+    agent.activeMCPRegistry.register(tool, registry.getExecutor(tool.name) as never);
   }
-  return events;
+
+  const { frames } = await driveTurn(agent, prompt, {
+    maxTurns: 8,
+    options: { ...options } as never,
+  });
+
+  return frames.map((frame) => {
+    const type = typeof frame['type'] === 'string' ? frame['type'] : '';
+    return {
+      ...frame,
+      type: type.startsWith('chat:') ? type.slice('chat:'.length) : type,
+    };
+  }) as unknown as SSEEvent[];
 }
 
 function eventsOfType(events: readonly SSEEvent[], type: SSEEvent['type']): SSEEvent[] {
@@ -798,12 +838,24 @@ describe('product turn: a bound turn-output sink does not change the legacy', ()
     // turns this red too.
     const frame = r.frames[0];
     expect(frame?.type).toBe('tool_result');
-    const data = frame?.data as Record<string, unknown>;
+
+    // The key set, read off the frame the consumer is actually handed.
+    //
+    // `collect` returns the frames AFTER the worker's own
+    // `convertSSEToAgentMessage`, so the payload is the codec's
+    // `chat:tool_result` shape rather than the legacy's nested `data` bag: the
+    // codec lifts `id` / `result` / `error` / `duration_ms` / `metadata` onto
+    // the frame itself (`sse-frame-codec.ts:156-172`) and drops the empty
+    // `name`. Pinning THAT key set is the same claim one layer out -- it is
+    // still "nothing a tidy-up would drop", and `metadata` is still the field
+    // the renderer's previews are built from, so a missing key is a silently
+    // degraded tool result rather than an error. Exact keys, not a subset, so
+    // an ADDED field turns this red too.
+    const data = frame as unknown as Record<string, unknown>;
     expect(Object.keys(data).sort()).toEqual(
-      ['duration_ms', 'error', 'id', 'metadata', 'name', 'result'].sort(),
+      ['duration_ms', 'error', 'id', 'metadata', 'result', 'type'].sort(),
     );
-    expect(data.name).toBe('');
-    // And the values are the legacy's, read from the frame the generator yielded.
+    // And the values, read off the frame the consumer received.
     expect(data.id).toBe('t1');
     expect(data.error).toBe(true);
     expect(typeof data.result).toBe('string');

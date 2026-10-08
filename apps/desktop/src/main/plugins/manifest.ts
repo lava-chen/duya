@@ -25,7 +25,7 @@ import fs from 'fs';
 import path from 'path';
 import type { PluginCapabilityKind, PluginInterface, PluginManifest } from './types';
 import { discoverAllCapabilities } from '@duya/plugin-core/plugins/loader/capability-discovery';
-import { parseAppDeclarationFile } from '@duya/plugin-core/connectors/app-schema';
+import { parseAppDeclarationFile } from '@duya/connectors/app-schema';
 import {
   allPluginManifestPaths,
   isNativeManifestPath,

@@ -3,8 +3,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createBuiltinRegistry } from '../../../src/tool/builtin.js';
+import type { SubagentRunDeps } from '../../../src/tool/SubagentTool/runAgent.js';
 import { StreamingToolExecutor } from '../../../src/tool/StreamingToolExecutor.js';
 import type { Message, ToolUseContext } from '../../../src/types.js';
+
+// Plan 610 A5: the registry factory requires the sub-agent composition deps.
+// This suite drives write/edit only, so they are never invoked.
+const stubSubagentDeps: SubagentRunDeps = {
+  createSubAgent: () => {
+    throw new Error('not used by the write/edit flow suite');
+  },
+  createToolRegistry: () => {
+    throw new Error('not used by the write/edit flow suite');
+  },
+};
 
 describe('write/edit tool flow', () => {
   it('creates a file and then edits it through StreamingToolExecutor', async () => {
@@ -15,7 +27,7 @@ describe('write/edit tool flow', () => {
     const editedContent = 'alpha\nbeta edited\ngamma\n';
 
     try {
-      const registry = createBuiltinRegistry();
+      const registry = createBuiltinRegistry(stubSubagentDeps);
       let appState: Record<string, unknown> = {
         toolPermissionContext: { mode: 'bypassPermissions' },
       };

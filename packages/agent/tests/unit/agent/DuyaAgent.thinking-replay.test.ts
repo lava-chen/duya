@@ -53,7 +53,10 @@ vi.mock('@duya/ai', async (importOriginal) => {
   };
 });
 
-// --- Mocked mailbox DB so DuyaAgent can be constructed without IPC ---------
+// --- Mocked DB --------------------------------------------------------------
+// `messageDb` is present because the run driver's turn-end barrier flushes the
+// agent's `Journal`, which imports it at module load. `streamChat` never
+// reached one; the driver settles through it.
 
 vi.mock('../../../src/ipc/db-client.js', () => ({
   mailboxDb: {
@@ -63,6 +66,12 @@ vi.mock('../../../src/ipc/db-client.js', () => ({
   },
   pluginDb: {
     list: vi.fn(async () => []),
+  },
+  messageDb: {
+    append: vi.fn(async (_sessionId: string, messages: unknown[]) => ({
+      success: true,
+      count: messages.length,
+    })),
   },
 }));
 
@@ -90,26 +99,58 @@ vi.mock('../../../src/agentsmd/index.js', () => ({
 import { duyaAgent } from '../../../src/agent/DuyaAgent.js';
 import type { Message, MessageContent } from '../../../src/types.js';
 import { clearCommandQueue } from '../../../src/queue/index.js';
+import {
+  cleanupEngineTurnDirs,
+  driveTurn,
+  installEngineTurnIpc,
+  restoreEngineTurnIpc,
+} from '../../helpers/engineTurnHarness.js';
 
 function newAgent(options: Record<string, unknown> = {}): duyaAgent {
-  return new duyaAgent({
+  const agent = new duyaAgent({
     apiKey: FAKE_API_KEY,
     provider: 'anthropic',
     model: 'test-model',
     enableRetry: false,
     ...options,
   });
+  // The tool the scripted round 1 calls. Registered on the agent's OWN catalog
+  // rather than handed in as `options.toolRegistry`, because the engine resolves
+  // its dispatch surface from the catalog the assembly publishes. Without a real
+  // executor behind the name, the call is refused before it becomes a tool
+  // result and round 2 never happens -- which is the thing under test here.
+  agent.activeMCPRegistry.register(
+    {
+      name: 'echo',
+      description: 'echo the input back',
+      input_schema: { type: 'object', properties: { msg: { type: 'string' } } },
+    } as never,
+    {
+      execute: async (input: Record<string, unknown>) => ({
+        id: `result-${String(input['msg'])}`,
+        name: 'echo',
+        result: `echo:${String(input['msg'])}`,
+      }),
+    } as never,
+  );
+  return agent;
 }
 
+/**
+ * Drive one real turn through the run driver.
+ *
+ * `DuyaAgent.streamChat` no longer exists (plan 610 A3 / S4c-d3). What this file
+ * asserts never depended on it: both cases read the SECOND provider request's
+ * messages and the agent's durable timeline, and both are reachable by driving
+ * the turn the way production does. `maxTurns` is raised because the second
+ * round only happens once the engine has a tool result to feed back.
+ */
 async function drainStream(
   agent: duyaAgent,
   prompt: string,
-): Promise<SSEEvent[]> {
-  const events: SSEEvent[] = [];
-  for await (const event of agent.streamChat(prompt)) {
-    events.push(event);
-  }
-  return events;
+  maxTurns = 4,
+): Promise<void> {
+  await driveTurn(agent, prompt, { maxTurns });
 }
 
 function findAssistantWithThinking(messages: Message[]): {
@@ -128,16 +169,19 @@ function findAssistantWithThinking(messages: Message[]): {
 }
 
 describe('DuyaAgent thinking replay', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     streamState.current = { responses: [] };
     streamState.callCount = 0;
     streamState.seenMessages = [];
     agentsMdState.currentText = '';
     clearCommandQueue();
+    await installEngineTurnIpc();
   });
 
   afterEach(() => {
     clearCommandQueue();
+    restoreEngineTurnIpc();
+    cleanupEngineTurnDirs();
     vi.restoreAllMocks();
   });
 
@@ -173,7 +217,31 @@ describe('DuyaAgent thinking replay', () => {
     expect(found).toBeDefined();
     const { message, thinking } = found!;
     expect(thinking.thinking).toBe('I need to run the tool');
-    expect(thinking.thinkingSignature).toBe('sig-123');
+
+    // KNOWN PRODUCTION DEFECT, not a harness artifact. This assertion was green
+    // against `streamChat` and is red against the run driver, and it is left red
+    // here on purpose rather than deleted or weakened.
+    //
+    // Anthropic delivers the signature on its OWN empty-text thinking event
+    // (`signature_delta` -> `{ type: 'thinking', data: '', signature }`,
+    // `packages/ai/src/api/anthropic-messages.ts:1207`). The legacy read
+    // `event.signature` independently of `event.data`, so the signature landed
+    // on the block. `TurnMessage.addThinking` (`run-engine.ts:3253`) returns at
+    // line 3261 when `frame.text === ''` and only reads `frame.signature` at
+    // line 3263 -- so the empty-text signature event is dropped before the
+    // signature is recorded.
+    //
+    // The consequence is not cosmetic. `packages/ai/src/api/anthropic-messages.ts:497`
+    // keeps a `thinking` block native ONLY when it carries a signature and
+    // downgrades an unsigned one to text, so an Anthropic thinking chain could
+    // not be continued across a tool round.
+    //
+    // FIXED in `0e4f1c8a`-era `run-engine.ts`: the signature is now read before
+    // the empty-text early return. This assertion is what proves it, so if the
+    // ordering is ever reverted the message names the symptom.
+    expect(thinking.thinkingSignature, 'the engine drops the empty-text signature event').toBe(
+      'sig-123',
+    );
 
     // The signature-only empty-data event must not duplicate content.
     expect(thinking.thinking).not.toContain('sig-123');

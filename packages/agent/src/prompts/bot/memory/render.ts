@@ -23,7 +23,7 @@
  * reasoning; each section renders its own tier only.)
  */
 
-import { dedupeAcrossShards, type ConflictAccessors } from '../../../memory-state/tierConflicts.js'
+import { dedupeAcrossShards, type ConflictAccessors } from '@duya/memory/tierConflicts'
 import type { BotMemoryContext, TierMemoryEntry } from './types.js'
 
 /** Plan 479 §3.2 budgets, aligned with grok. */

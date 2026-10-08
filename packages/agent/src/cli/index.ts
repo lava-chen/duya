@@ -27,6 +27,7 @@ import { createBuiltinRegistry } from '../tool/builtin.js';
 import { sessionSearchTool, type SummaryLLMConfig } from '../tool/SessionSearchTool/index.js';
 import type { AgentOptions, Message } from '../types.js';
 import type { ToolRegistry } from '../tool/registry.js';
+import type { SubagentRunDeps } from '../tool/SubagentTool/runAgent.js';
 import { loadSkills, getSkillRegistry } from '../skills/index.js';
 import { Colors, color } from './colors.js';
 import { REPL } from './repl.js';
@@ -476,7 +477,7 @@ async function runInteractive(
   // controller is stateless between runs, so this is a composition rather than
   // a per-turn object, and building it per turn would be a second place for the
   // run wiring to live.
-  const host: HeadlessRunHost = createHeadlessRunHost({ agent });
+  const host: HeadlessRunHost = createHeadlessRunHost({ agent, toolRegistry: registry });
 
   // Track messages for persistence
   let pendingUserMessage: { id: string; content: string } | null = null;
@@ -575,7 +576,6 @@ async function runInteractive(
           cwd: workspace,
           model: model || '',
           providerId: 'cli',
-          toolRegistry: registry,
         });
         await handleStreamEvents(agent, run.frames(), sessionLogger, sessionId, pendingUserMessage.id);
       } catch (error) {
@@ -609,7 +609,7 @@ async function runTask(
   registry: ToolRegistry,
   task: string,
   sessionLogger: SessionLogger,
-  runHost: HeadlessRunHost = createHeadlessRunHost({ agent })
+  runHost: HeadlessRunHost = createHeadlessRunHost({ agent, toolRegistry: registry })
 ): Promise<void> {
   console.log(`${Colors.BRIGHT_CYAN}Executing task...${Colors.RESET}\n`);
 
@@ -623,7 +623,6 @@ async function runTask(
       cwd: process.cwd(),
       model: '',
       providerId: 'cli',
-      toolRegistry: registry,
     });
     await handleStreamEvents(agent, run.frames(), sessionLogger, '', '');
   } catch (error) {
@@ -698,8 +697,16 @@ export async function runCLI(
   // Create agent
   const agent = new duyaAgent(agentOptions);
 
+  // Plan 610 A5: the CLI is a composition site, so it owns the sub-agent
+  // dependencies outright. Both halves are already imported here.
+  const subagentDeps: SubagentRunDeps = {
+    createSubAgent: (subAgentOptions) => new duyaAgent(subAgentOptions),
+    // Argument-less, matching what `runAgent` did before the cut.
+    createToolRegistry: () => createBuiltinRegistry(subagentDeps),
+  };
+
   // Get tool registry
-  const registry = createBuiltinRegistry();
+  const registry = createBuiltinRegistry(subagentDeps);
 
   // Configure session search LLM if options provided
   if (options.summaryLLMProvider && options.summaryLLMApiKey) {

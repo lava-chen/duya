@@ -138,6 +138,23 @@ async function run(script: Script, maxTurns = 6): Promise<Run> {
     context: { assemble: () => Promise.resolve(ASSEMBLED), defer: () => {} },
     approval: { authorize: () => Promise.resolve({ allowed: true, scope: 'once' } as ApprovalVerdict) },
     events: { publish: (event) => void events.push(event), proposeTerminal: (candidate) => void candidates.push(candidate) },
+    // The three ports the legacy-still-drives window closed (plan 610 D4, then
+    // D1 for `modeExit`), each bound to its smallest honest answer. `interTurn`
+    // is the subject of this file and the other two are not, so they say
+    // "records nothing", "never compacts", "exits no modes" -- a bound no-op
+    // here cannot inject mid-run input, which is what these tests count.
+    turnOutput: {
+      recordToolResult: () => Promise.resolve(),
+      recordAssistantMessage: () => Promise.resolve(),
+      finishTurn: () => Promise.resolve(),
+      recordInjectedMessage: () => Promise.resolve(),
+    },
+    compaction: {
+      decide: () => Promise.resolve({ kind: 'skip' as const, reason: 'not under test' }),
+      run: () => Promise.resolve({ kind: 'declined' as const, reason: 'not under test' }),
+      nextCompactionId: () => 'cmp-inter-turn',
+    },
+    modeExit: { onRunExit: () => Promise.resolve() },
   };
   const candidates: { state: { status: string } }[] = [];
 

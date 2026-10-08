@@ -219,6 +219,23 @@ function startHeldConsumerRun(): SlowRun {
     // every tsconfig, so an omitted required member is invisible to the
     // compiler and only shows up as a runtime `failed` run.
     interTurn: { sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }) },
+    // The three ports the legacy-still-drives window closed (plan 610 D4, then
+    // D1 for `modeExit`), bound to their smallest honest answers. This file
+    // measures backpressure through the emitter, and none of these three
+    // publishes a frame, so each says "records nothing", "never compacts",
+    // "exits no modes" rather than standing in for a leg under test.
+    turnOutput: {
+      recordToolResult: () => Promise.resolve(),
+      recordAssistantMessage: () => Promise.resolve(),
+      finishTurn: () => Promise.resolve(),
+      recordInjectedMessage: () => Promise.resolve(),
+    },
+    compaction: {
+      decide: () => Promise.resolve({ kind: 'skip' as const, reason: 'not under test' }),
+      run: () => Promise.resolve({ kind: 'declined' as const, reason: 'not under test' }),
+      nextCompactionId: () => 'cmp-slow-consumer',
+    },
+    modeExit: { onRunExit: () => Promise.resolve() },
     sideEffects: {
       async begin(call) {
         return {

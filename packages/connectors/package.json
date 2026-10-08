@@ -1,0 +1,39 @@
+{
+  "name": "@duya/connectors",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DUYA App Connectors — the branded connector id vocabulary and the `.app.json` declaration schema. Zero IO: schema and identity only.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./app-connector-id": {
+      "types": "./dist/app-connector-id.d.ts",
+      "default": "./dist/app-connector-id.js"
+    },
+    "./app-schema": {
+      "types": "./dist/app-schema.d.ts",
+      "default": "./dist/app-schema.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.3",
+    "vitest": "^3.0.0"
+  }
+}

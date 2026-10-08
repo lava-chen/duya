@@ -29,11 +29,11 @@ import {
   _resetMemoryWorkerForTesting,
   type MemoryWorkerDeps,
 } from './memory-worker';
-import { drainOutbox } from '../../../../../packages/agent/src/memory-state/outbox.js';
+import { drainOutbox } from '@duya/memory/outbox';
 import {
   deriveRolloutSummaryFilename,
   type Stage1OutputRow,
-} from '../../../../../packages/agent/src/memory-state/projectionContent.js';
+} from '@duya/memory/projectionContent';
 import { migration0001 } from '../memory-state/migrations/0001_init.sql';
 import { migration0002 } from '../memory-state/migrations/0002_lease_stage1.sql';
 import { migration0003 } from '../memory-state/migrations/0003_outbox.sql';

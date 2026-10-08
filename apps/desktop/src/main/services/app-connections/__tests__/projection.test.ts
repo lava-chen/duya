@@ -2,8 +2,8 @@
 
 import { describe, expect, it } from 'vitest';
 import { declarationToProviderConfig } from '../declarative/projection.js';
-import type { AppDeclaration } from '@duya/plugin-core/connectors/app-schema';
-import { asAppConnectorId } from '@duya/plugin-core/connectors/app-connector-id';
+import type { AppDeclaration } from '@duya/connectors/app-schema';
+import { asAppConnectorId } from '@duya/connectors/app-connector-id';
 
 function decl(partial: Partial<AppDeclaration>): AppDeclaration {
   return { id: 'acme-tasks', name: 'Acme', tools: [], ...partial } as AppDeclaration;

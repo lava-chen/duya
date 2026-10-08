@@ -108,6 +108,32 @@ const MINIMAL_PORTS: RunEnginePorts = {
   interTurn: {
     sweep: () => Promise.resolve({ decision: { action: 'continue', absorbed: false }, injected: [] }),
   },
+  // Plan 610 D4: required, and for the same reason `interTurn` above is -- a
+  // missing one loses durable rows and produced frames with nothing reporting
+  // it. The smallest legal port here means "record nothing", which is exactly
+  // what a host that has nowhere to record is saying.
+  turnOutput: {
+    recordToolResult: () => Promise.resolve(),
+    recordAssistantMessage: () => Promise.resolve(),
+    finishTurn: () => Promise.resolve(),
+    recordInjectedMessage: () => Promise.resolve(),
+  },
+  compaction: {
+    decide: () =>
+      Promise.resolve({
+        kind: 'skip' as const,
+        reason: 'nothing under test binds a compaction source',
+      }),
+    run: () => Promise.resolve({ kind: 'declined' as const, reason: 'as above' }),
+    nextCompactionId: () => 'cmp-guards',
+  },
+  // Plan 610 D1: the last one, and the smallest legal port is "exit no modes",
+  // which is what a host with no active `kind: 'message'` mode is saying. The
+  // engine cannot see which modes a run activated, so this port is how it finds
+  // out -- there is no smaller legal binding, which is what makes it required.
+  modeExit: {
+    onRunExit: () => Promise.resolve(),
+  },
 };
 
 /** An engine is one method returning one handle. */
@@ -121,9 +147,13 @@ const MINIMAL_ENGINE: RunEngine = {
 export const PORT_IS_CONSTRUCTIBLE = [MINIMAL_PORTS, MINIMAL_ENGINE] as const;
 
 /**
- * The optional ports are OPTIONAL, and the required five are the only required
- * ones. Positive half of the split, so the negative half below can be read as
- * "and nothing else became mandatory".
+ * The optional ports are OPTIONAL, and the required ones are exactly the ones
+ * named above. Positive half of the split, so the negative half below can be
+ * read as "and nothing else became mandatory".
+ *
+ * `turnOutput`, `compaction` and `modeExit` are NOT here: they were required by
+ * plan 610 D4 and D1 and are built in `MINIMAL_PORTS`, which is what makes them
+ * required -- there is no shorter legal binding.
  */
 const FULL_PORTS: RunEnginePorts = {
   ...MINIMAL_PORTS,
@@ -166,14 +196,89 @@ const FULL_PORTS: RunEnginePorts = {
     reconcile: () => Promise.resolve(),
     read: () => Promise.resolve([]),
   },
-  turnOutput: {
-    recordToolResult: () => Promise.resolve(),
-    recordAssistantMessage: () => Promise.resolve(),
-    finishTurn: () => Promise.resolve(),
-  },
 };
 
 export const OPTIONAL_PORTS_ARE_OPTIONAL = FULL_PORTS;
+
+// ---------------------------------------------------------------------------
+// Plan 610 D4 and D1: the ports the flip had to make REQUIRED, and what
+// replaces their tripwires.
+//
+// ## What the tripwires were
+//
+// `turnOutput`, `compaction` and `modeExit` each carried a `?` because the legacy
+// loop still drove: binding them then would have performed each of their effects
+// TWICE. `turnOutput` and `compaction` were closed in D4; `modeExit` was the last
+// one and D1 closed it, for the same reason -- the legacy's `SessionFinalizer`
+// still calls `runExitHooks`, so a bound port would exit every mode twice the
+// moment the engine drove. The `?` was therefore the marker in all three cases,
+// and this file carried a tripwire per field -- `Pick<RunEnginePorts,
+// 'turnOutput'> = {}` compiles only while the field is optional, so making it
+// required turned the build red at a line naming the field. That was the
+// mechanism, and it worked: it fired here the moment D4 closed the first two and
+// again when D1 closed the third, which is the expected outcome rather than a
+// failure.
+//
+// ## What replaces it
+//
+// A tripwire proves a field is currently OPTIONAL. That is the wrong claim to
+// keep now, so it is replaced by the claim that matters: the field is REQUIRED,
+// and the assertion for that has the same self-policing polarity as the
+// `@ts-expect-error` cases above. Each assigns the EMPTY object to a pick of a
+// port that no longer has an empty legal value -- so if either field is ever
+// widened back to optional, the directive goes UNUSED and the build fails.
+//
+// The difference from a tripwire is the direction of the failure. A tripwire
+// fires when a contract TIGHTENS; these fire when it LOOSENS. Together, over
+// the plan's history, they have covered both ends of the same field.
+// ---------------------------------------------------------------------------
+
+/**
+ * `turnOutput` cannot be omitted.
+ *
+ * A host with nowhere to record a landed tool result must say so with an
+ * implementation that records nothing, not by leaving the field out. The
+ * difference is that the second compiles and produces a run with no durable tool
+ * rows and no `PostToolUseFailure`, while every event it publishes still looks
+ * correct.
+ */
+// @ts-expect-error - `turnOutput` is REQUIRED; assigning `{}` must not compile
+const TURNOUTPUT_IS_REQUIRED: Pick<RunEnginePorts, 'turnOutput'> = {};
+
+/**
+ * `compaction` cannot be omitted.
+ *
+ * Same shape, same reason, larger blast radius: an unbound compaction port means
+ * no transcript is ever replaced and the five compaction frames have no producer
+ * at all, which no event reports.
+ */
+// @ts-expect-error - `compaction` is REQUIRED; assigning `{}` must not compile
+const COMPACTION_IS_REQUIRED: Pick<RunEnginePorts, 'compaction'> = {};
+
+/**
+ * `modeExit` cannot be omitted.
+ *
+ * The LAST of the four, and the one whose objection was strongest: a run with no
+ * active `kind: 'message'` mode has nothing for this port to run, so binding it
+ * looks like forcing every host to build something inert. That is a statement
+ * about inputs the ENGINE cannot see -- it has no member that reports which modes
+ * a run activated, and adding one would be a second authority for that question
+ * -- so an absent port is not "no mode was active", it is "nothing ran".
+ *
+ * The cost of the absence is a real teardown loss, and it is silent: a mode whose
+ * `onExit` clears a per-session trigger or disables an OS bridge leaves that
+ * state for the NEXT run, while this run completes and every frame it published
+ * is correct. A host with genuinely nothing to run binds a promise that resolves
+ * and does nothing, which is legible; omitting the member is a compile error.
+ */
+// @ts-expect-error - `modeExit` is REQUIRED; assigning `{}` must not compile
+const MODEEXIT_IS_REQUIRED: Pick<RunEnginePorts, 'modeExit'> = {};
+
+export const CUTOVER_PORTS_ARE_REQUIRED = [
+  TURNOUTPUT_IS_REQUIRED,
+  COMPACTION_IS_REQUIRED,
+  MODEEXIT_IS_REQUIRED,
+] as const;
 
 // ---------------------------------------------------------------------------
 // Distributive key probes.
@@ -371,6 +476,7 @@ export const TURN_OUTPUT_PORT_IS_CONSTRUCTIBLE: TurnOutputPort = {
   recordToolResult: () => Promise.resolve(),
   recordAssistantMessage: () => Promise.resolve(),
   finishTurn: () => Promise.resolve(),
+  recordInjectedMessage: () => Promise.resolve(),
 };
 
 /**

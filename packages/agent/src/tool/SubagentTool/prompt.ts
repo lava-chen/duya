@@ -4,7 +4,6 @@
 
 import type { AgentDefinition } from './loadAgentsDir.js'
 import { SUBAGENT_TOOL_NAME } from './constants.js'
-import { formatAgentLineForPrompt } from './SubagentTool.js'
 
 // Tool name imports from duya
 const FILE_READ_TOOL_NAME = 'Read'
@@ -113,6 +112,41 @@ Usage notes:
 - Set \`auto_wake: false\` only when you explicitly do not want to be interrupted when a background agent finishes — you then have to fetch the result yourself with get_task_output.${writingThePromptSection}
 
 ${currentExamples}`
+}
+
+/**
+ * Render one `AgentDefinition` as the single agent line used by the prompt
+ * agent list: `- agentType: whenToUse (Tools: ...)`.
+ *
+ * Lives here, not in `SubagentTool.ts`, so the prompt formatter and the tool
+ * that renders it do not import each other. Both used to reach across: this
+ * module pulled `formatAgentLineForPrompt` out of `SubagentTool.ts` while
+ * `SubagentTool.ts` pulled `getPrompt` out of this one — a two-module cycle
+ * with one function in it.
+ */
+export function formatAgentLineForPrompt(agent: AgentDefinition): string {
+  const { tools, disallowedTools } = agent;
+  const hasAllowlist = tools && tools.length > 0;
+  const hasDenylist = disallowedTools && disallowedTools.length > 0;
+
+  let toolsDescription: string;
+  if (hasAllowlist && hasDenylist) {
+    const denySet = new Set(disallowedTools);
+    const effectiveTools = tools.filter(t => !denySet.has(t));
+    if (effectiveTools.length === 0) {
+      toolsDescription = 'None';
+    } else {
+      toolsDescription = effectiveTools.join(', ');
+    }
+  } else if (hasAllowlist) {
+    toolsDescription = tools.join(', ');
+  } else if (hasDenylist) {
+    toolsDescription = `All tools except ${disallowedTools.join(', ')}`;
+  } else {
+    toolsDescription = 'All tools';
+  }
+
+  return `- ${agent.agentType}: ${agent.whenToUse} (Tools: ${toolsDescription})`;
 }
 
 /**

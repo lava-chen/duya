@@ -29,6 +29,7 @@ import {
 import { persistSnapshot } from '../engine/persistence.js';
 import type { ModeTracker } from '../engine/tracker.js';
 import { sendEvent, buildResearchUpdatedEvent } from '../../process/worker-protocol.js';
+import type { SubagentRunDeps } from '../../tool/SubagentTool/runAgent.js';
 
 export const RESEARCH_START_TOOL_NAME = 'research_start';
 export const RESEARCH_REPORT_TOOL_NAME = 'research_report';
@@ -532,13 +533,18 @@ function errorCompleted(name: string): ToolResult {
   };
 }
 
-/** ToolRegistration pairs injected by research mode (plan 423 §4, §Phase 3). */
-export function getResearchTools(): Array<{ definition: Tool; executor: ToolExecutor }> {
+/**
+ * ToolRegistration pairs injected by research mode (plan 423 §4, §Phase 3).
+ *
+ * Plan 610 A5: `deps` is required — the fan-out tool spawns Research
+ * sub-agents, so it takes its `SubagentTool` instance from the injection site.
+ */
+export function getResearchTools(deps: SubagentRunDeps): Array<{ definition: Tool; executor: ToolExecutor }> {
   return [
     { definition: researchStartDefinition, executor: researchStartExecutor },
     { definition: researchReportDefinition, executor: researchReportExecutor },
     { definition: researchContinueDefinition, executor: researchContinueExecutor },
     { definition: researchAdvanceDefinition, executor: researchAdvanceExecutor },
-    getResearchFanoutTool(),
+    getResearchFanoutTool(deps),
   ];
 }

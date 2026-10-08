@@ -13,7 +13,7 @@ import {
   countPriorDeferrals,
   type CurationInput,
   type InputDisposition,
-} from '../../../../../packages/agent/src/memory-state/curation_ledger';
+} from '@duya/memory/curation_ledger';
 import { runSingleShotCuration } from './curation_single_shot';
 import { backupMemoryBeforeRun } from './memory_git_backup';
 import { cleanStagingTmps } from './curation_file_writer';
@@ -23,7 +23,7 @@ import {
   synthesizeSummary,
   SYNTH_HASH_FILENAME,
 } from './summary_synthesizer';
-import { writeSystemLog } from '../../../../../packages/agent/src/memory-state/system_log';
+import { writeSystemLog } from '@duya/memory/system_log';
 import type { RagRefreshResult } from './rag_index';
 import { getLogger, LogComponent } from '../logging/logger';
 

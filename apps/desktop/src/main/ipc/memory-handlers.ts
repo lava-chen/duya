@@ -12,11 +12,11 @@ import { ipcMain } from 'electron';
 import type { MemoryEntry } from '../src/types';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getDb } from '../memory-state/db';
-import { parseCanonicalFile } from '../../../../../packages/agent/src/memory-state/canonical_file';
+import { parseCanonicalFile } from '@duya/memory/canonical_file';
 import {
   listSystemLog,
   type ListSystemLogOpts,
-} from '../../../../../packages/agent/src/memory-state/system_log';
+} from '@duya/memory/system_log';
 import { rebuildRagIndexNow, type RagRebuildResult } from '../memory/rag_refresh';
 
 const logger = getLogger();

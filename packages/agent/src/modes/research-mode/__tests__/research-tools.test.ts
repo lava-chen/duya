@@ -29,6 +29,18 @@ import {
   RESEARCH_FANOUT_TOOL_NAME,
   RESEARCH_ERROR_CODES,
 } from '../research-tools.js';
+import type { SubagentRunDeps } from '../../../tool/SubagentTool/runAgent.js';
+
+// Plan 610 A5: research tools are built per injection from these deps. Only the
+// fan-out tool consumes them, and this suite never executes it.
+const stubSubagentDeps: SubagentRunDeps = {
+  createSubAgent: () => {
+    throw new Error('not used by the research-tools suite');
+  },
+  createToolRegistry: () => {
+    throw new Error('not used by the research-tools suite');
+  },
+};
 
 function resetTracker(): void {
   // The tracker is a module singleton — reset it to idle between tests.
@@ -44,7 +56,7 @@ describe('research tools', () => {
   });
 
   it('injects research_start, research_report, research_continue, research_advance, and research_fanout', () => {
-    const tools = getResearchTools();
+    const tools = getResearchTools(stubSubagentDeps);
     expect(tools.map((t) => t.definition.name)).toEqual([
       RESEARCH_START_TOOL_NAME,
       RESEARCH_REPORT_TOOL_NAME,
@@ -55,7 +67,7 @@ describe('research tools', () => {
   });
 
   it('research_start transitions idle → clarifying and persists', async () => {
-    const [tool] = getResearchTools();
+    const [tool] = getResearchTools(stubSubagentDeps);
     const res = await tool.executor.execute(
       { query: 'State of RAG in 2026' },
       '/wd',
@@ -70,7 +82,7 @@ describe('research tools', () => {
   });
 
   it('research_start rejects an empty query', async () => {
-    const [tool] = getResearchTools();
+    const [tool] = getResearchTools(stubSubagentDeps);
     const res = await tool.executor.execute({ query: '   ' }, '/wd');
     expect(res.error).toBe(true);
     expect(researchModeTracker.state()).toBe('idle');
@@ -78,7 +90,7 @@ describe('research tools', () => {
 
   it('research_start reports already-active instead of restarting', async () => {
     researchModeTracker.transition({ type: 'start', query: 'Existing' });
-    const [tool] = getResearchTools();
+    const [tool] = getResearchTools(stubSubagentDeps);
     const res = await tool.executor.execute({ query: 'New' }, '/wd');
     const parsed = JSON.parse(res.result) as { started: boolean; state: string };
     expect(parsed.started).toBe(false);
@@ -87,7 +99,7 @@ describe('research tools', () => {
   });
 
   it('research_report carries report_markdown through to the result', async () => {
-    const [, report] = getResearchTools();
+    const [, report] = getResearchTools(stubSubagentDeps);
     researchModeTracker.transition({ type: 'start', query: 'X' });
     researchModeTracker.transition({ type: 'search' });
     researchModeTracker.transition({ type: 'synthesize' });
@@ -105,7 +117,7 @@ describe('research tools', () => {
   });
 
   it('research_report reads report content from a local file_path', async () => {
-    const [, report] = getResearchTools();
+    const [, report] = getResearchTools(stubSubagentDeps);
     researchModeTracker.transition({ type: 'start', query: 'X' });
     researchModeTracker.transition({ type: 'search' });
     researchModeTracker.transition({ type: 'synthesize' });
@@ -131,7 +143,7 @@ describe('research tools', () => {
   });
 
   it('research_report rejects a missing report file', async () => {
-    const [, report] = getResearchTools();
+    const [, report] = getResearchTools(stubSubagentDeps);
     researchModeTracker.transition({ type: 'start', query: 'X' });
     researchModeTracker.transition({ type: 'search' });
     researchModeTracker.transition({ type: 'synthesize' });
@@ -147,7 +159,7 @@ describe('research tools', () => {
   });
 
   it('research_report rejects completed=true with no report content', async () => {
-    const [, report] = getResearchTools();
+    const [, report] = getResearchTools(stubSubagentDeps);
     researchModeTracker.transition({ type: 'start', query: 'X' });
     researchModeTracker.transition({ type: 'search' });
     researchModeTracker.transition({ type: 'synthesize' });
@@ -160,7 +172,7 @@ describe('research tools', () => {
   });
 
   it('research_report only finalizes from synthesizing', async () => {
-    const [, report] = getResearchTools();
+    const [, report] = getResearchTools(stubSubagentDeps);
 
     // Not synthesizing → rejected with NOT_SYNTHESIZING.
     researchModeTracker.transition({ type: 'start', query: 'X' });
@@ -186,14 +198,14 @@ describe('research tools', () => {
   });
 
   it('research_report with no active run is rejected', async () => {
-    const [, report] = getResearchTools();
+    const [, report] = getResearchTools(stubSubagentDeps);
     const res = await report.executor.execute({ completed: true }, '/wd');
     expect(res.error).toBe(true);
   });
 
   it('research_report(completed: false) is a status-only no-op', async () => {
     researchModeTracker.transition({ type: 'start', query: 'X' });
-    const [, report] = getResearchTools();
+    const [, report] = getResearchTools(stubSubagentDeps);
     const res = await report.executor.execute({ completed: false, message: 'progress' }, '/wd');
     expect(res.error).toBe(false);
     expect(researchModeTracker.state()).toBe('clarifying');
@@ -201,7 +213,7 @@ describe('research tools', () => {
 
   it('research_continue is a no-op in an active (non-paused) state', async () => {
     researchModeTracker.transition({ type: 'start', query: 'X' });
-    const [, , cont] = getResearchTools();
+    const [, , cont] = getResearchTools(stubSubagentDeps);
     const res = await cont.executor.execute({}, '/wd');
     expect(res.error).toBe(true);
     const parsed = JSON.parse(res.result) as { error_code: string; state: string };
@@ -215,7 +227,7 @@ describe('research tools', () => {
     researchModeTracker.transition({ type: 'ask_user' });
     expect(researchModeTracker.state()).toBe('awaiting_input');
 
-    const [, , cont] = getResearchTools();
+    const [, , cont] = getResearchTools(stubSubagentDeps);
     const res = await cont.executor.execute(
       { instruction: 'focus on the 2026 benchmarks' },
       '/wd',
@@ -235,7 +247,7 @@ describe('research tools', () => {
     researchModeTracker.transition({ type: 'block' });
     expect(researchModeTracker.state()).toBe('blocked');
 
-    const [, , cont] = getResearchTools();
+    const [, , cont] = getResearchTools(stubSubagentDeps);
     const res = await cont.executor.execute({}, '/wd');
     expect(res.error).toBe(false);
     const parsed = JSON.parse(res.result) as { resumed: boolean; state: string };
@@ -244,7 +256,7 @@ describe('research tools', () => {
   });
 
   it('research_continue rejects when no run is active', async () => {
-    const [, , cont] = getResearchTools();
+    const [, , cont] = getResearchTools(stubSubagentDeps);
     const res = await cont.executor.execute({}, '/wd');
     expect(res.error).toBe(true);
   });
@@ -256,7 +268,7 @@ describe('research tools', () => {
     researchModeTracker.transition({ type: 'report_done' });
     expect(researchModeTracker.state()).toBe('complete');
 
-    const [, , cont] = getResearchTools();
+    const [, , cont] = getResearchTools(stubSubagentDeps);
     const res = await cont.executor.execute({}, '/wd');
     expect(res.error).toBe(true);
   });
@@ -271,7 +283,7 @@ describe('research tools', () => {
     researchModeTracker.restore(snap);
     expect(researchModeTracker.state()).toBe('awaiting_input');
 
-    const [, , cont] = getResearchTools();
+    const [, , cont] = getResearchTools(stubSubagentDeps);
     const res = await cont.executor.execute({}, '/wd');
     expect(res.error).toBe(false);
     const parsed = JSON.parse(res.result) as { resumed: boolean; state: string };
@@ -280,7 +292,7 @@ describe('research tools', () => {
   });
 
   it('research_advance walks the full lifecycle clarifying → planning → gathering → evaluating → synthesizing', async () => {
-    const tools = getResearchTools();
+    const tools = getResearchTools(stubSubagentDeps);
     const [, , , advance] = tools;
     const start = tools[0];
     await start.executor.execute({ query: 'X' }, '/wd');
@@ -302,7 +314,7 @@ describe('research tools', () => {
   });
 
   it('research_advance is rejected from synthesizing (use research_report instead)', async () => {
-    const tools = getResearchTools();
+    const tools = getResearchTools(stubSubagentDeps);
     const [, , , advance] = tools;
     const start = tools[0];
     await start.executor.execute({ query: 'X' }, '/wd');
@@ -320,7 +332,7 @@ describe('research tools', () => {
   });
 
   it('research_advance is rejected when no run is active', async () => {
-    const [, , , advance] = getResearchTools();
+    const [, , , advance] = getResearchTools(stubSubagentDeps);
     const res = await advance.executor.execute({}, '/wd');
     expect(res.error).toBe(true);
   });

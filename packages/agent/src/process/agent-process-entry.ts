@@ -27,7 +27,7 @@ import { COMPACTION_CHECKPOINT_ID_SUFFIX } from '../message/index.js';
 
 import type { MessageRow, AttachmentRow, ParsedDocumentAttachment } from '../session/db.js';
 import { getAttachmentsForSession, rehydrateContentWithAttachments } from '../session/db.js';
-import type { Message, MessageContent, MCPServerConfig, Tool, TokenUsage, UsageCall } from '../types.js';
+import type { Message, AssistantMessage, MessageContent, MCPServerConfig, Tool, TokenUsage, UsageCall, ChatOptions } from '../types.js';
 import type { ProviderRuntimeConfig } from '@duya/ai';
 import { logger } from '../utils/logger.js';
 import { parseUsageCall } from './call-usage.js';
@@ -79,16 +79,29 @@ import { loadSkills, getSkillRegistry, getAgentSkillDirectory } from '../skills/
 import { browserTool } from '../tool/builtin.js';
 import { modeModifierRegistry } from '../modes/index.js';
 import { verifyRunManifestBinding, manifestRejectionProtocolCode, type WorkerCapabilitySet } from './run-manifest-verification.js';
-import { type RunManifest } from '@duya/agent-protocol';
+import { type RunManifest, type RunId } from '@duya/agent-protocol';
 import { getBashTaskRegistry } from '../session/bash-task-registry.js';
 import { hookTaskRegistry } from '../hooks/task-registry.js';
 import { backgroundAgentLifecycle } from '../lifecycle/BackgroundAgentLifecycle.js';
 import { sendEvent, parseStdin, type WorkerCommand, buildWorkflowRunEvent, buildMessageFinalizedEvent, type WorkflowRunCommand } from './worker-protocol.js';
 import { convertSSEToAgentMessage } from './sse-frame-codec.js';
+// Plan 610 S4c-d2a: the DRIVER. The turn is assembled, executed, drained and
+// settled here rather than in this file, because those four cannot be separated
+// -- the drain is parked on a stream only the settle closes.
+import { driveRunWithEngine } from './engine-run-driver.js';
+// The inter-agent call registry is a leaf so `tool/MessageSessionTool` can
+// register a call without importing this entry. See the module for the cycle
+// this avoids.
+import { getPendingInteragentCall } from './pending-interagent-calls.js';
+// Plan 587 R2.1: the run id is the Control Plane's when it sent one, and minted
+// here only for the producers that have not migrated. `streamChat` resolved it
+// for itself; the driver cannot, so the resolution moves to the one caller that
+// holds `chat:start`.
+import { resolveTurnRunId } from '../agent/run-identity.js';
 import { launchSavedWorkflow } from './workflow-runner.js';
 import { runWorkflowRuntimeChild } from './workflow-runtime-child.js';
 import { MemoryArtifactStore } from '../modes/workflow/gui-artifacts.js';
-import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
+import { resolveChatStartAgentMode, manifestPermissionMode } from './permission-profile-bridge.js';
 // Plan 600 S2: the run execution engine and its port contracts. The engine OWNS
 // the turn loop; this file supplies mechanisms and forwards events, which is the
 // whole of the worker's job under `04-runtime-owns-execution.md` section 2 item 3.
@@ -455,6 +468,151 @@ interface LastCallUsageBlock {
   cache_creation_tokens?: number;
 }
 
+/**
+ * Plan 610 P8: the turn-cumulative block, with `last_call`, as the assistant row
+ * persists it.
+ *
+ * ## Why this is the entry's and not the engine's
+ *
+ * The engine's `TurnMessage.addUsage` keeps the LAST usage frame of the turn
+ * and never the sum (`agent-runtime/src/engine/run-engine.ts:3253-3261`), which
+ * is right for the published frame and wrong for the durable row on two counts
+ * the engine cannot see:
+ *
+ * 1. It keeps three counters. The cache buckets are what let
+ *    `normalizePromptTokens` tell Anthropic's `input_tokens`-excludes-cache
+ *    convention from an OpenAI gateway's `prompt_tokens`-includes-it one.
+ * 2. It has no `last_call`, and `last_call` is the LARGEST-prompt call chosen by
+ *    anchor volume, not the latest. Some gateways report a near-fresh prefix on
+ *    a later round, and a collapsed anchor shrinks the ring permanently after a
+ *    restart.
+ *
+ * So the row gets the sum plus the anchor, exactly as it did through
+ * `cumulativeTokenUsageRef` before the flip.
+ *
+ * `null` when no provider call reported anything, which leaves the row without
+ * a usage block rather than with a block of zeros: a zero claims no cache read
+ * happened, which is a different statement from not knowing.
+ */
+function persistedUsageBlock(turnUsage: {
+  cumulative: TokenUsage | null;
+  lastCall: (LastCallUsageBlock & { output_tokens: number }) | null;
+}): AssistantMessage['usage'] | null {
+  const cumulative = turnUsage.cumulative;
+  if (cumulative === null) return null;
+  return {
+    input_tokens: cumulative.input_tokens,
+    output_tokens: cumulative.output_tokens,
+    ...(cumulative.total_tokens === undefined ? {} : { total_tokens: cumulative.total_tokens }),
+    ...(cumulative.cache_hit_tokens === undefined
+      ? {}
+      : { cache_hit_tokens: cumulative.cache_hit_tokens }),
+    ...(cumulative.cache_creation_tokens === undefined
+      ? {}
+      : { cache_creation_tokens: cumulative.cache_creation_tokens }),
+    ...(cumulative.calls === undefined ? {} : { calls: cumulative.calls }),
+    ...(turnUsage.lastCall === null ? {} : { last_call: turnUsage.lastCall }),
+  };
+}
+
+/**
+ * THE CODEC ADMISSION GATE.
+ *
+ * `handleStreamEvent` is reached by FOUR callers and they do NOT agree on
+ * the frame's vocabulary:
+ *
+ *  - the driver's `onFrame` binding, whose frames are ALREADY `chat:*` -- the
+ *    drain in `engine-run-driver.ts` runs `request.legacyFrameCodec` itself
+ *    BEFORE it calls `onFrame` (`engine-run-driver.ts:689-691`);
+ *  - `onPerCallUsage` (`result`), the orchestrator leg, and
+ *    `engineRun.railFrames`, which all pass frames in the PRE-codec legacy
+ *    `SSEEvent` vocabulary.
+ *
+ * So the codec cannot be called unconditionally here, and that is the defect
+ * this gate fixes: the S4c-d3 flip put a codec pass IN FRONT of a handler
+ * that already owned one, and `convertSSEToAgentMessage` has no `chat:*` arm
+ * -- every already-converted frame fell through to the `default:` WARN and
+ * returned `null`. That silenced the frame AND the `deferredDone` latch
+ * behind it, so a run streamed nothing and terminated on the renderer's
+ * `db_persisted` fallback alone.
+ *
+ * The rule is the codec's own postcondition made explicit: a frame already
+ * in the worker's `chat:*` vocabulary is ADMITTED as it stands, and only a
+ * pre-codec frame is converted. Admitting verbatim is COMPLETE rather than
+ * partial: every frame the codec can emit is either `chat:*` (admitted here)
+ * or a `compact:*` type, and the `compact:*` arms are idempotent -- re-encoding
+ * one returns it unchanged. `desktop-chat-codec-once.test.ts` pins that
+ * inventory so a future arm emitting some third vocabulary cannot pass
+ * silently.
+ *
+ * This is deliberately a no-op for the other two `onFrame` consumers
+ * (`headless-run-host.ts`, `SubagentTool/subagent-engine-run.ts`): the
+ * driver's shared contract is untouched, so both keep receiving exactly the
+ * frames they received before.
+ */
+export function admitChatFrame(event: {
+  readonly type: string;
+  readonly [field: string]: unknown;
+}): Record<string, unknown> | null {
+  if (event.type.startsWith('chat:')) return { ...event };
+  return convertSSEToAgentMessage(event);
+}
+
+/**
+ * THE TURN-END HOLD.
+ *
+ * `chat:done` is withheld rather than forwarded inline: the renderer's
+ * terminal handoff only swaps the live stream view for durable rows when a
+ * SUCCESSFUL `db_persisted` ack PRECEDES `done`. The held frame is released
+ * after the flush barrier, behind `assistant.message_finalized`.
+ *
+ * One object rather than two closure variables, because the latch and its
+ * release ARE the turn-end contract and a turn whose `chat:done` was dropped
+ * upstream leaves it permanently unlatched -- which is precisely the failure
+ * the double codec caused, and which no assertion on a frame list alone
+ * would catch.
+ */
+export interface TurnDoneLatch {
+  /** Latch a converted frame. True when it was this turn's `chat:done`. */
+  latch(agentMsg: Record<string, unknown> | null): boolean;
+  /** True once a `chat:done` has been latched. */
+  readonly latched: boolean;
+  /** The latched frame's own stop reason, or `undefined` if it stated none. */
+  readonly reason: string | undefined;
+  /**
+   * The frames the post-flush barrier emits, IN ORDER. Empty when nothing
+   * latched: a turn that produced no `chat:done` must not invent one.
+   */
+  release(sessionId: string, finalized: Record<string, unknown> | null): Record<string, unknown>[];
+}
+
+export function createTurnDoneLatch(): TurnDoneLatch {
+  let latched = false;
+  let reason: string | undefined;
+  return {
+    latch(agentMsg) {
+      if (agentMsg === null || agentMsg['type'] !== 'chat:done') return false;
+      latched = true;
+      const stated = agentMsg['reason'];
+      reason = typeof stated === 'string' ? stated : undefined;
+      return true;
+    },
+    get latched() {
+      return latched;
+    },
+    get reason() {
+      return reason;
+    },
+    release(sessionId, finalized) {
+      if (!latched) return [];
+      return [
+        ...(finalized === null ? [] : [finalized]),
+        { type: 'chat:done', sessionId, reason },
+      ];
+    },
+  };
+}
+
 // Ring diagnostic trace — pi-style dedicated debug file written directly
 // with appendFileSync (see tui-main-screen logRedraw). Deliberately bypasses
 // the stderr -> prefix-classification -> level-filter pipeline, which drops
@@ -763,6 +921,19 @@ const HEARTBEAT_INTERVAL = 5000; // Send pong every 5 seconds during streaming
 let chatHeartbeatTimer: NodeJS.Timeout | null = null;
 const CHAT_HEARTBEAT_INTERVAL = 8000; // Send pong every 8 seconds while chat is active
 
+/**
+ * Plan 610 S4c-d2a: how long a permission CARD stays open.
+ *
+ * A display deadline only. It is what the approval card renders as its
+ * remaining time and what the surface handler stamps the card with; it is NOT
+ * an authorization, so the engine's `askApproval` still waits for the user's
+ * answer rather than timing out into a denial. The value matches the one the
+ * legacy's own tool-use context callers passed, because the card is the same
+ * card and a shorter window here would expire a prompt the user could still
+ * answer.
+ */
+const PERMISSION_CARD_EXPIRY_MS = 300_000;
+
 // ----------------------------------------------------------------------------
 // Bash background task list — push snapshot to renderer on any change.
 // Throttled so rapid progress events coalesce into a single update per tick.
@@ -905,32 +1076,9 @@ const pendingIpcRequests = new Map<string, {
   timeoutHandle?: ReturnType<typeof setTimeout>;
 }>();
 
-// Pending inter-agent call registry.
-// Architecture: the caller worker sends `interagent:invoke` via process.send,
-// the server routes it to a target worker, and forwards the target's chat:*
-// events back to the caller as `interagent:event` commands. The caller
-// buffers events here (keyed by invoke id) and resolves the tool promise
-// on `chat:done` / `chat:error`.
-export interface PendingInteragentCall {
-  events: import('./worker-protocol.js').WorkerEvent[];
-  resolveDone: (event: import('./worker-protocol.js').WorkerEvent) => void;
-  resolveError: (event: import('./worker-protocol.js').WorkerEvent) => void;
-  timer: ReturnType<typeof setTimeout>;
-}
-
-const pendingInteragentCalls = new Map<string, PendingInteragentCall>();
-
-export function registerPendingInteragentCall(id: string, call: PendingInteragentCall): void {
-  pendingInteragentCalls.set(id, call);
-}
-
-export function unregisterPendingInteragentCall(id: string): void {
-  pendingInteragentCalls.delete(id);
-}
-
-export function getPendingInteragentCall(id: string): PendingInteragentCall | undefined {
-  return pendingInteragentCalls.get(id);
-}
+// Pending inter-agent call registry lives in its own leaf module
+// (`./pending-interagent-calls.js`), because the tool that registers a call
+// must not have to import this entry to reach it.
 
 // Helper: IPC request for conductor executor.
 //
@@ -2967,154 +3115,65 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       }
     }
 
-    // Plan 445: turn-cumulative tokenUsage lives in agent-process-entry's
-    // scope (this is where every `result` event lands). The agent loop's
-    // done handler READS it through `cumulativeTokenUsageRef` BEFORE
-    // journal.assistantMsgFinalized fires, so the persisted DB row gets
-    // the cumulative sum + `last_call` sub-block instead of the single-
-    // call usageBlock.
-    let tokenUsage: TokenUsage | null = null;
-    let lastCallUsage: LastCallUsageBlock & { output_tokens: number } | null = null;
-    let lastCallModel = '';
-    let lastCallProviderId = '';
-    // Mutable reference passed to streamChat options. Agent loop reads
-    // `.current` synchronously when building the final assistant message;
-    // the result handler below mutates it as each `result` event lands.
-    const cumulativeTokenUsageRef: { current: TokenUsage | null } = {
-      current: null,
+    // Plan 445: turn-cumulative tokenUsage lives in agent-process-entry's scope
+    // (this is where every provider `result` lands).
+    //
+    // A CELL rather than four `let`s, and the reason is the flip rather than
+    // taste: the accumulator is now written from inside `handleStreamEvent`, a
+    // nested function, and TypeScript's control-flow analysis does not account
+    // for a `let` assigned from a closure. It kept the declaration's `null`
+    // narrowing at every later read, so `tokenUsage.total_tokens` below became
+    // `never` and the post-turn budget write silently stopped typechecking. A
+    // property access is re-read after every call, so the cell is the shape
+    // that stays honest.
+    const turnUsage: {
+      /** The turn-cumulative sum every provider call folds into. */
+      cumulative: TokenUsage | null;
+      /** The largest-prompt call of the turn, for the persisted anchor. */
+      lastCall: (LastCallUsageBlock & { output_tokens: number }) | null;
+      /** The model that produced the turn's LAST call. */
+      lastCallModel: string;
+      /** The provider that produced the turn's LAST call. */
+      lastCallProviderId: string;
+    } = {
+      cumulative: null,
+      lastCall: null,
+      lastCallModel: '',
+      lastCallProviderId: '',
     };
 
-    // ── Plan 600 S2: where the turn is driven, and why it is still HERE ─────
+    // ── Plan 610 S4c-d2a: where the turn is driven, and why it is the ENGINE ──
     //
-    // This used to construct and run a `RunEngineImpl` on every `chat:start`,
-    // with `openModelStream: () => emptyModelStream()`. That was a PHANTOM run,
-    // and it is gone as of this commit. It was removed rather than completed,
-    // because a run the engine cannot serve is not a neutral placeholder.
+    // The turn is driven by `driveRunWithEngine`, and by nothing else in this
+    // file. That function assembles the run (`beginRun` ->
+    // `producePromptContextRail` -> `commitTurnPromptUserRow` ->
+    // `beginTurnAssembly` -> `composeLegacyRunPorts` -> `RunEngineImpl`), opens
+    // the event spine, and settles the run through the single writer before it
+    // closes the stream the drain is parked on.
     //
-    // MEASURED consequences of that phantom run, observed rather than reasoned
-    // (see `__tests__/live-turn-single-driver.test.ts`):
+    // What used to be here was `DuyaAgent.streamChat` plus a ~2150-line
+    // `for await` body. The three pieces that had to move together are named in
+    // the flip: the durable transcript write, the tool-result frames and the
+    // `PostToolUseFailure` hook all live in the composition's `turnOutput` port,
+    // and they landed in the same change that stopped this file from driving the
+    // turn.
     //
-    //  - It asked the provider ZERO times and dispatched ZERO tools, then ended
-    //    `failed` on `sawFrame === false` (`run-engine.ts:584`) and proposed that
-    //    failure as the run's terminal. `RunSession.settle` is the single writer
-    //    of a real terminal, so the proposal was logged and discarded: a second
-    //    account of a run that had not happened, minted once per `chat:start`.
-    //  - NONE of the decisions the removed comment claimed for it were reachable.
-    //    `buildEnginePorts` attaches no `budget`, no `attempt` and no `subtasks`
-    //    (`run-engine-ports.ts:280`), so `#budgetExhausted` was constantly false,
-    //    the fence was always null, and `#reclaimSubtasks` always returned 0. The
-    //    old claim that "the stop decision, the turn ceiling, the budget verdict
-    //    and the subtask sweep are therefore the engine's" was false in all four
-    //    parts, and is not restated here as if it were true.
+    // `DuyaAgent.streamChat` is NOT deleted by this. `headless-run-host.ts` and
+    // `SubagentTool/runAgent.ts` still drive it; that is a later slice.
     //
-    // The turn is driven HERE, by `DuyaAgent.streamChat`, and by nothing else.
-    //
-    // Why a PUBLISHED LEG cannot be what the engine's model port reads --
-    // measured before it was made unconstructible, and the reason the port was
-    // deleted rather than kept. The port that pulled one,
-    // `createTurnLegModelPort`, ignored the `ModelRequest` the engine assembles
-    // and streamed the leg instead -- and the leg's `open()` IS
-    // `runTurnStream(params.deps)` (`model-leg.ts:258`), the same call this
-    // generator makes at its own `:2461`. Binding it therefore did not lend the
-    // engine one turn of the running loop; it handed it the WHOLE cycle
-    // (`run-engine.ts:354` is a self-contained `for`: assemble, `#streamModel`
-    // at `:439`, drain at `:449`, decide, repeat) while this generator kept
-    // running that same cycle. Two callers, two provider requests, one set of
-    // per-attempt accumulators -- a transport death under either attempt called
-    // `onRetryReset` -> `executor.discard()` underneath the other. Measured as
-    // `entered === 2`; `__tests__/engine-model-port.test.ts` now measures the
-    // engine's own share as 1 and re-points the two-driver case at the
-    // request-owned port.
-    //
-    // The engine's model port is `createClientModelPort`: it opens the request
-    // the engine assembled and threads the engine's own scoped signal into the
-    // provider call, so cancellation no longer has to be AIMED at a controller
-    // this generator owns. The leg itself is now a publication with no reader --
-    // `DuyaAgent.streamChat` still publishes per turn (`DuyaAgent.ts:2453`) and
-    // nothing consumes it, because no live caller passes `modelLegs`. The
-    // publish site stays only because it sits inside the turn body this comment
-    // says must become port calls; removing it belongs to that rewrite.
-    //
-    // So the model port, the tool drain, `TurnOutputPort` and the `chat:*`
-    // projection all become correct in the SAME change that stops this generator
-    // from driving the turn -- and this generator is what owns the durable
-    // transcript write, the tool-result frames and the `PostToolUseFailure` hook
-    // (the eleven rows `__tests__/engine-drain-carryover.test.ts` enumerates).
-    // They land together or the turn loses them. That change is a REFACTOR of
-    // `DuyaAgent.streamChat` -- its body has to become port calls, because
-    // `packages/agent-runtime` may not import `packages/agent` -- and it is the
-    // whole of the remaining cutover.
-    const eventGen = agent.streamChat(messageContent, {
-      systemPrompt: effectiveSystemPrompt,
-      requestPermission,
-      // Plan 498: one-shot approval ledger + persisted always-allow grants.
-      consumeApprovedEffect,
-      approvedAlwaysAllowTools,
-      agentProfileId: msg.options?.agentProfileId,
-      outputStyleConfig: msg.options?.outputStyleConfig,
-      mode: msg.options?.mode,
-      // Plan 450: @-mentioned providers for this run (exposure promotion +
-      // connector-activation reminder). See mentions/index.ts.
-      mentionedProviders: msg.options?.mentionedProviders,
-      // Plan 450 Phase H: /skill-name mentioned this run (skill fragment
-      // injection). See mentions/index.ts collectSkillInjection.
-      mentionedSkills: msg.options?.mentionedSkills,
-      // Plugins @-mentioned this run (the @ popover lists installed plugins).
-      // Structured capability summaries; agent injects <plugin-activation>.
-      mentionedPlugins: msg.options?.mentionedPlugins,
-      attachments: files,
-      imageInputSupported: modelIsMultimodal,
-      displayContent: msg.options?.displayContent,
-      // Plan 441: thread the chat:start message id through as the turn id
-      // so every journal emit and rebase event for this turn carries the
-      // same id. The renderer uses it for turn-scoped queries via the
-      // `message_index.turn_id` column.
-      turnId: msg.id,
-      // Plan 587 R2.1: the Control Plane's run id, when it sent one. Passed
-      // through UNCHANGED — the point is that the value the mailbox attributes
-      // a claim to is the value the Control Plane recorded a terminal under, not
-      // a second id minted here. See `run-identity.ts` for the fallback used by
-      // producers that have not migrated.
-      runId: msg.runId,
-      effort: msg.options?.effort,
-      maxTurns: msg.options?.maxTurns,
-      allowedTools: msg.options?.allowedTools,
-      conductorMode: msg.options?.conductorMode ? true : undefined,
-      conductorCanvasId: msg.options?.conductorCanvasId,
-      // Plan 312: always inject ipcRequest so App Connection tools work
-      // without conductor mode. The unified dispatcher routes by channel.
-      conductorIpc: { sendToMain, ipcRequest: toolIpcRequest },
-      backgroundTaskResume: msg.options?.backgroundTaskResume,
-      llmRequestTimeoutMs: msg.options?.llmRequestTimeoutMs,
-      // Plan 497: wake runs (cron/background notification/agent DM) persist
-      // their prompt user row source 'system' — model context, not chat.
-      wakeRun: msg.options?.wakeRun === true,
-      clientMsgId: msg.options?.clientMsgId,
-      todoGate: { enabled: steering.todoGateEnabled },
-      antiDeadLoop: { ...steering.antiDeadLoop },
-      disabledLoopHooks: steering.disabledLoopHooks,
-      // Plan 445: agent loop reads this mutable reference at the `done`
-      // boundary to know the turn-cumulative tokenUsage (with `last_call`
-      // sub-block) it should attach to the final assistant message before
-      // journal.assistantMsgFinalized fires. Without this, journal would
-      // persist only the single-call usageBlock (roundResultUsage),
-      // losing the per-turn sum and last_call forever.
-      cumulativeTokenUsageRef,
-      // Plan 600 S2, step 1: each turn publishes its freshly built pipeline here,
-      // which is what gives the engine's `queueTool` above a handle that is
-      // correct for the live turn and correct again on the next one.
-      turnPipelines,
-    });
-
-    log('[Agent-Process] streamChat started, agentProfileId:', msg.options?.agentProfileId || '(none)', 'iterating events...');
-    // Terminal `done` reason from the agent loop (completed / max_turns /
-    // repeated_tool_calls / aborted). Captured from the deferred chat:done
-    // and attached to the final chat:done so the renderer can surface why
-    // the run stopped.
-    let turnEndReason: string | undefined;
-    /** True once the agent loop yielded `done` and we held it back for the
-     *  post-flush persistence barrier below. */
-    let deferredDone = false;
+    // The per-call usage ledger below is UNCHANGED behaviourally, and that is
+    // why the driver takes `onPerCallUsage`: the engine's model port fires it
+    // once per provider `result` frame with the provider's own block, before
+    // `toModelFrame` narrows it, so `parseUsageCall` reads exactly the numbers
+    // the legacy `result` frame carried -- cache buckets included.
+    log('[Agent-Process] engine driver starting, agentProfileId:', msg.options?.agentProfileId || '(none)');
+    // The turn-end `chat:done` HOLD, and the stop reason it carries from the
+    // agent loop (completed / max_turns / repeated_tool_calls / aborted). The
+    // reason is latched off the held frame and re-attached to the final
+    // `chat:done` so the renderer can surface why the run stopped; the frame
+    // itself waits for the persistence barrier below. See
+    // `createTurnDoneLatch`.
+    const turnDone = createTurnDoneLatch();
     let eventCount = 0;
     // Stable-boundary persistence baseline: capture the message count at turn
     // start so the single end-of-turn append can persist exactly the messages
@@ -3131,7 +3190,19 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // Kick off the ring before the first LLM `result` lands.
     emitTokenUsage();
 
-    for await (const event of eventGen) {
+    // The per-frame consumer. UNCHANGED from the legacy drain body, and that is
+    // the point: the frames arriving here are the SAME `{ type, data }` shape the
+    // generator produced, because the surface's projector is what produces them
+    // (`projectToLegacyFrame` -> `convertSSEToAgentMessage`). Only the SOURCE
+    // changed -- the engine's spine rather than the generator's `yield`, and
+    // since S4c-d3 the driver's codec runs BEFORE this function rather than
+    // inside it, so callers now arrive in BOTH vocabularies. `admitChatFrame`
+    // is where that difference is absorbed.
+    const handleStreamEvent = (event: {
+      type: string;
+      data?: unknown;
+      [field: string]: unknown;
+    }): void => {
       eventCount++;
       if (eventCount <= 5) {
         log(`[Agent-Process] Event ${eventCount}:`, event.type, event.data ? String((event as {data?: unknown}).data).substring(0, 100) : '');
@@ -3202,8 +3273,8 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           // summed; per-provider conventions (input includes cache,
           // total_tokens = input + output) survive summation.
           const callTotal = call.total_tokens ?? rawInput + outputTokens;
-          if (!tokenUsage) {
-            tokenUsage = {
+          if (!turnUsage.cumulative) {
+            turnUsage.cumulative = {
               input_tokens: rawInput,
               output_tokens: outputTokens,
               total_tokens: callTotal,
@@ -3212,26 +3283,18 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
               calls: [],
             };
           } else {
-            tokenUsage.input_tokens += rawInput;
-            tokenUsage.output_tokens += outputTokens;
-            tokenUsage.total_tokens = (tokenUsage.total_tokens ?? 0) + callTotal;
-            tokenUsage.cache_hit_tokens = (tokenUsage.cache_hit_tokens ?? 0) + cacheHitTokens;
-            tokenUsage.cache_creation_tokens = (tokenUsage.cache_creation_tokens ?? 0) + cacheCreationTokens;
+            turnUsage.cumulative.input_tokens += rawInput;
+            turnUsage.cumulative.output_tokens += outputTokens;
+            turnUsage.cumulative.total_tokens =
+              (turnUsage.cumulative.total_tokens ?? 0) + callTotal;
+            turnUsage.cumulative.cache_hit_tokens =
+              (turnUsage.cumulative.cache_hit_tokens ?? 0) + cacheHitTokens;
+            turnUsage.cumulative.cache_creation_tokens =
+              (turnUsage.cumulative.cache_creation_tokens ?? 0) + cacheCreationTokens;
           }
           // Push the per-call ledger entry (carries model/provider snapshot).
-          if (!tokenUsage.calls) tokenUsage.calls = [];
-          tokenUsage.calls.push(call);
-          // Plan 445: keep the agent loop's done handler in sync with
-          // the cumulative block we're building here. Include
-          // `last_call` so the persisted anchor (normalizePromptTokens
-          // prefers it on reload) reflects the largest-prompt call of
-          // the turn instead of the cumulative N-call sum. We update
-          // the ref AFTER every result, so by the time the agent loop
-          // yields `done` and reads `.current`, it sees the final turn
-          // state.
-          cumulativeTokenUsageRef.current = lastCallUsage
-            ? { ...tokenUsage, last_call: lastCallUsage }
-            : { ...tokenUsage };
+          if (!turnUsage.cumulative.calls) turnUsage.cumulative.calls = [];
+          turnUsage.cumulative.calls.push(call);
           // last_call feeds the persisted anchor (normalizePromptTokens
           // prefers it on reload) and the footer's per-request line. Keep the
           // LARGEST-prompt call of the turn, not the latest: GLM-style
@@ -3249,10 +3312,10 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           // Recompute last_call from the calls ledger each time, so the
           // anchor block can never diverge from the per-call records.
           let maxCall: UsageCall | null = null;
-          for (const c of tokenUsage.calls) {
+          for (const c of turnUsage.cumulative.calls) {
             if (!maxCall || anchorVolume(c) >= anchorVolume(maxCall)) maxCall = c;
           }
-          lastCallUsage = maxCall
+          turnUsage.lastCall = maxCall
             ? {
                 input_tokens: maxCall.input_tokens,
                 output_tokens: maxCall.output_tokens,
@@ -3263,8 +3326,8 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           // Track the LAST call's model/provider for the assistant-message
           // attribution at stream end (the final answer is produced by the
           // turn's last LLM call).
-          lastCallModel = call.model ?? '';
-          lastCallProviderId = call.provider_id ?? '';
+          turnUsage.lastCallModel = call.model ?? '';
+          turnUsage.lastCallProviderId = call.provider_id ?? '';
           ringTrace(`[${(msg.sessionId ?? sessionId ?? '?').slice(0, 8)}] result call: input=${rawInput}, output=${outputTokens}, cacheHit=${cacheHitTokens}, cacheWrite=${cacheCreationTokens}, normalizedInput=${normalizedInput}, model=${call.model ?? '?'}`);
           // A real request just landed — its usage rides on the assistant
           // message DuyaAgent pushes right after `done` (plan 443), so the
@@ -3301,7 +3364,10 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         emitTokenUsage();
       }
 
-      const agentMsg = convertSSEToAgentMessage(event);
+      // ONE codec pass, wherever the frame came from. See `admitChatFrame`:
+      // calling this unconditionally is what dropped every `chat:*` frame
+      // the driver had already converted.
+      const agentMsg = admitChatFrame(event);
       if (agentMsg) {
         // Plan 441 follow-up: hold `chat:done` instead of forwarding it
         // inline. The renderer's terminal handoff (App.tsx) only swaps the
@@ -3310,10 +3376,8 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         // journal flush, the ack could never precede it, and the message
         // list went blank at turn end. The held event is re-emitted after
         // the flush + bookkeeping block below.
-        if (agentMsg.type === 'chat:done') {
-          turnEndReason = (agentMsg as { reason?: string }).reason;
-          deferredDone = true;
-          continue;
+        if (turnDone.latch(agentMsg)) {
+          return;
         }
         if (DEBUG_IPC && (
           agentMsg.type === 'chat:tool_use'
@@ -3335,7 +3399,187 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           type: event.type,
         });
       }
+    };
+
+    // ── The turn. `driveRunWithEngine` owns the assembly, the engine, the drain
+    // AND the settle, because the last three cannot be separated: the drain is
+    // parked on a stream only the settle closes.
+    const chatOptions: ChatOptions = {
+      systemPrompt: effectiveSystemPrompt,
+      requestPermission,
+      // Plan 498: one-shot approval ledger + persisted always-allow grants.
+      consumeApprovedEffect,
+      approvedAlwaysAllowTools,
+      agentProfileId: msg.options?.agentProfileId,
+      outputStyleConfig: msg.options?.outputStyleConfig,
+      mode: msg.options?.mode,
+      // Plan 450: @-mentioned providers for this run (exposure promotion +
+      // connector-activation reminder). See mentions/index.ts.
+      mentionedProviders: msg.options?.mentionedProviders,
+      // Plan 450 Phase H: /skill-name mentioned this run (skill fragment
+      // injection). See mentions/index.ts collectSkillInjection.
+      mentionedSkills: msg.options?.mentionedSkills,
+      // Plugins @-mentioned this run (the @ popover lists installed plugins).
+      // Structured capability summaries; agent injects <plugin-activation>.
+      mentionedPlugins: msg.options?.mentionedPlugins,
+      attachments: files,
+      imageInputSupported: modelIsMultimodal,
+      displayContent: msg.options?.displayContent,
+      // Plan 441: the chat:start message id IS the turn id, so every journal
+      // emit and rebase event for this turn carries the same id. The renderer
+      // reads it for turn-scoped queries via `message_index.turn_id`.
+      turnId: msg.id,
+      // Plan 587 R2.1: the Control Plane's run id, when it sent one. Passed
+      // through UNCHANGED -- the value the mailbox attributes a claim to is the
+      // value the Control Plane recorded a terminal under, not a second id
+      // minted here. `resolveTurnRunId` supplies the fallback.
+      runId: msg.runId,
+      effort: msg.options?.effort,
+      maxTurns: msg.options?.maxTurns,
+      allowedTools: msg.options?.allowedTools,
+      conductorMode: msg.options?.conductorMode ? true : undefined,
+      conductorCanvasId: msg.options?.conductorCanvasId,
+      // Plan 312: always inject ipcRequest so App Connection tools work
+      // without conductor mode. The unified dispatcher routes by channel.
+      conductorIpc: { sendToMain, ipcRequest: toolIpcRequest },
+      backgroundTaskResume: msg.options?.backgroundTaskResume,
+      llmRequestTimeoutMs: msg.options?.llmRequestTimeoutMs,
+      // Plan 497: wake runs (cron/background notification/agent DM) persist
+      // their prompt user row source 'system' -- model context, not chat.
+      wakeRun: msg.options?.wakeRun === true,
+      clientMsgId: msg.options?.clientMsgId,
+      todoGate: { enabled: steering.todoGateEnabled },
+      antiDeadLoop: { ...steering.antiDeadLoop },
+      disabledLoopHooks: steering.disabledLoopHooks,
+    } as ChatOptions;
+
+    // Plan 445: the per-call usage tap. The provider's own block, pre-narrowing,
+    // so the ledger below sees the same numbers the legacy `result` frame
+    // carried. The BLOCK is unchanged; only its arrival moved.
+    const engineRun = await driveRunWithEngine(
+      {
+        agent,
+        sessionId: msg.sessionId,
+        runId: resolveTurnRunId(msg.runId).runId as RunId,
+        // `Date.now()` taken ONCE per run, as `streamChat` took it once per call
+        // and threaded through every row it wrote.
+        seqIndex: Date.now(),
+        options: chatOptions,
+        prompt: messageContent,
+        ...(msg.inputRevision === undefined ? {} : { inputRevision: msg.inputRevision }),
+        model: agent.model,
+        providerId: currentProviderId,
+        workingDirectory,
+        // `resolved.agentMode` is the AGENT's vocabulary; the manifest's
+        // permission policy is the PROTOCOL's. `toExternalPermissionMode` is the
+        // repository's OWN declaration of that correspondence
+        // (`permissions/policy.ts:PERMISSION_MODE_CONFIG[mode].external`), so
+        // this derives the manifest mode instead of restating it, and a mode
+        // added to that table cannot drift out of sync with what is recorded.
+        //
+        // It also fixes what the hand-written ternary got wrong. It read
+        // `bypassPermissions` as having no protocol name and substituted
+        // `acceptEdits` -- but `PermissionPolicyMode` carries `bypassPermissions`
+        // itself, so the recorded policy was weaker than the mode actually in
+        // force. And `auto` is NOT `plan`: `auto` default-allows
+        // workspace-confined actions and asks for the rest, while `plan` means
+        // read-only planning. `PERMISSION_MODE_CONFIG.auto.external` is
+        // `default`, and that is what this now records.
+        //
+        // WHAT THIS DOES NOT DO: enforce anything. `RunEngineImpl.#dispatchCall`
+        // asks `ports.approval.authorize` for EVERY call with no mode shortcut,
+        // and reads this string only to stamp `ApprovalRequest.permissionMode`
+        // as a label. The decision is the entry's `askApproval` ->
+        // `requestPermission` bridge, and the agent's live mode is the
+        // untranslated `agentMode` set by `setPermissionMode` above.
+        permissionMode: manifestPermissionMode(resolved.agentMode),
+        ...(msg.options?.maxTurns === undefined ? {} : { maxTurns: msg.options.maxTurns }),
+        wakeRun: msg.options?.wakeRun === true,
+        imageInputSupported: modelIsMultimodal,
+        turnPipelines,
+        // `createPermissionHandler` answers `'allow' | 'deny'`; the port's
+        // verdict is the same decision in the runtime's vocabulary. A refusal is
+        // a `denied` verdict, not a throw, and never an `unavailable` -- the
+        // handler resolved.
+        askApproval: async (approval) => {
+          // A run with no approver is `unavailable`, which the port keeps
+          // DISTINCT from a denial on purpose: conflating them makes a missing
+          // bridge look like a user saying no. The entry always installs one,
+          // so this arm is the honest reading rather than a silent allow.
+          if (requestPermission === undefined) {
+            return { allowed: false, reason: 'unavailable' } as const;
+          }
+          const verdict = await requestPermission({
+            id: approval.callId,
+            toolName: approval.toolName,
+            toolInput: approval.input as Record<string, unknown>,
+            // `generic`, and NAMED rather than derived: protocol G-2 forbids
+            // inferring an ask's interaction kind from the tool name, and the
+            // engine's `ApprovalRequest` carries none. `headless-run-host.ts`'s
+            // own `#contextFor` reports `generic` for the same reason.
+            mode: 'generic',
+            // The card's own expiry window. A DISPLAY deadline, not an
+            // authorization: the verdict below is the user's answer.
+            expiresAt: Date.now() + PERMISSION_CARD_EXPIRY_MS,
+          });
+          if (verdict === 'allow') return { allowed: true, scope: 'once' } as const;
+          // `'paused'` is plan 498's persisted-card case: the request is on disk
+          // and the turn ends with a neutral tool result rather than blocking.
+          // `cancelled` is the honest verdict for it -- the call will not run and
+          // nobody refused it -- where `denied` would put a user decision in the
+          // transcript that the user never made.
+          return {
+            allowed: false,
+            reason: verdict === 'paused' ? 'cancelled' : 'denied',
+          } as const;
+        },
+        legacyFrameCodec: convertSSEToAgentMessage,
+        // The billing block, verbatim. Extracted rather than reimplemented so
+        // the ledger has ONE implementation and the `result` arm below and this
+        // tap cannot drift.
+        onPerCallUsage: (usage) =>
+          handleStreamEvent({ type: 'result', data: usage as unknown }),
+        // Plan 610 P8: the block the assistant ROW persists.
+        //
+        // Read at write time, so it carries the whole turn: `onPerCallUsage`
+        // above has already appended every provider `result` by the time the
+        // engine hands the final message over, and `turnUsage.lastCall` is
+        // recomputed from the ledger on each one.
+        //
+        // This is what `cumulativeTokenUsageRef` used to graft on, and what the
+        // flip dropped: without `last_call`, `normalizePromptTokens` falls back
+        // to the engine's own block, which keeps only the LAST usage frame and
+        // no cache buckets -- so the cache-convention guard cannot fire and a
+        // near-cached context reloads as its non-cached tail.
+        turnUsageBlock: () => persistedUsageBlock(turnUsage),
+      },
+      // The drain's frames, in the order the surface projects them. A frame the
+      // codec drops is dropped by the SAME `handleStreamEvent`, so the held
+      // `chat:done` and the post-flush barrier below are unchanged.
+      (frame) => handleStreamEvent(frame as { type: string; data?: unknown }),
+      // The orchestrator leg, routed rather than dropped. No registered
+      // production mode declares an orchestrator today, so this arm is
+      // unexercised; it is here because a driver that omitted it would drop the
+      // mode SILENTLY.
+      async (frames) => {
+        for await (const frame of frames) {
+          handleStreamEvent(frame as unknown as { type: string; data?: unknown });
+        }
+      },
+    );
+
+    // The rail's own frames. `producePromptContextRail` RETURNS them because a
+    // driver cannot consume a `yield`, and they are `agent_progress` /
+    // `hook_invoked` frames the renderer shows as hook cards.
+    for (const frame of engineRun.railFrames) {
+      handleStreamEvent(frame as unknown as { type: string; data?: unknown });
     }
+    log(
+      '[Agent-Process] engine run settled:',
+      engineRun.terminal?.status ?? '(orchestrator)',
+      'proposed:', engineRun.proposed?.state.status ?? '(none)',
+      'announced:', engineRun.announced.length,
+    );
 
     let agentMessages = agent.getMessages();
 
@@ -3363,37 +3607,28 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // list grew between them.
     let lastAssistant: (typeof agentMessages)[number] | undefined;
 
-    log(`[Agent-Process] Stream ended, tokenUsage present=${!!tokenUsage}, agentMessages=${agentMessages.length}, existingMessageCount=${existingMessageCount}`);
+    log(`[Agent-Process] Stream ended, tokenUsage present=${!!turnUsage.cumulative}, agentMessages=${agentMessages.length}, existingMessageCount=${existingMessageCount}`);
     if (agentMessages.length > 0) {
-      if (tokenUsage) {
+      if (turnUsage.cumulative) {
         lastAssistant = [...agentMessages].reverse().find(m => m.role === 'assistant');
         if (lastAssistant) {
-          // Plan 445: the cumulative tokenUsage + last_call are already
-          // attached to `pushed.tokenUsage` BEFORE _pushDurable runs
-          // (see cumulativeTokenUsageRef in streamChat options), so
-          // journal persists the correct shape. The legacy write here
-          // only mutated the in-memory message after journal had
-          // already fired — INSERT OR IGNORE dropped the re-emit on the
-          // next replay. Removing it eliminates the dead assignment.
-          //
-          // Attribute the final assistant message to the model/provider
-          // that produced the turn's last LLM call (per-message model
-          // accounting). The journal already has `pushed.providerId` /
-          // `pushed.model` from when DuyaAgent built it, but the agent
-          // loop's roundResultUsage is updated on EVERY result while
-          // lastCallModel / lastCallProviderId reflect the FINAL call.
-          // Overwrite here so the persisted row carries the final
-          // call's attribution rather than whichever call happened to
-          // produce the largest prompt.
-          if (lastCallModel) {
-            (lastAssistant as Record<string, unknown>).model = lastCallModel;
+          // The assistant row's own usage block is the engine's now: the
+          // composition's `turnOutput.onAssistantMessage` hands the usage it
+          // recorded straight to `agent.recordTurnAssistantMessage`, so the
+          // cumulative block this entry used to graft on through
+          // `cumulativeTokenUsageRef` has no reader left. What stays here is
+          // the ATTRIBUTION the engine cannot decide: it does not know which
+          // model the host's client actually used, and `agent.model` is the
+          // hot-swap surface, so the final call's attribution is the entry's.
+          if (turnUsage.lastCallModel) {
+            (lastAssistant as Record<string, unknown>).model = turnUsage.lastCallModel;
           }
-          if (lastCallProviderId) {
-            (lastAssistant as Record<string, unknown>).providerId = lastCallProviderId;
+          if (turnUsage.lastCallProviderId) {
+            (lastAssistant as Record<string, unknown>).providerId = turnUsage.lastCallProviderId;
           }
-          log(`[Agent-Process] Attached token_usage to last assistant message: id=${lastAssistant.id}, lastCallInput=${lastCallUsage?.input_tokens ?? 'n/a'}, model=${lastCallModel || 'n/a'}`);
+          log(`[Agent-Process] Attributed last assistant message: id=${lastAssistant.id}, lastCallInput=${turnUsage.lastCall?.input_tokens ?? 'n/a'}, model=${turnUsage.lastCallModel || 'n/a'}`);
         } else {
-          warn('[Agent-Process] No assistant message found to attach token_usage');
+          warn('[Agent-Process] No assistant message found to attribute');
         }
       } else {
         warn('[Agent-Process] No tokenUsage received during stream');
@@ -3412,8 +3647,10 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
       // Plan 331 Phase 2.3: persist token-budget delta after each turn.
       try {
-        if (tokenUsage) {
-          const turnTokens = tokenUsage.total_tokens ?? (tokenUsage.input_tokens + tokenUsage.output_tokens);
+        if (turnUsage.cumulative) {
+          const turnTokens =
+            turnUsage.cumulative.total_tokens ??
+            (turnUsage.cumulative.input_tokens + turnUsage.cumulative.output_tokens);
           if (turnTokens > 0) {
             await goalDb.updateBudget(msg.sessionId, { tokensUsedDelta: turnTokens });
             log(`[Agent-Process] Persisted token budget delta: +${turnTokens} for session ${msg.sessionId}`);
@@ -3485,7 +3722,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       success: true,
       messageCount: agentMessages.length,
     });
-    if (deferredDone) {
+    if (turnDone.latched) {
       // AHEAD of `chat:done`, deliberately. `assistant.message_finalized` is the
       // point where the message stopped changing, and the run terminal is a
       // later fact; the ledger has to record them in that order for a consumer
@@ -3493,15 +3730,13 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       // frame is emitted only when there IS an assistant message — a turn that
       // produced none is a real state, and its honest wire is the absence of
       // this frame rather than one with an empty `content`.
-      const finalized = buildMessageFinalizedEvent(msg.sessionId, lastAssistant, turnEndReason);
-      if (finalized !== null) {
-        sendToMain(finalized as unknown as Record<string, unknown>);
+      const finalized = buildMessageFinalizedEvent(msg.sessionId, lastAssistant, turnDone.reason);
+      for (const frame of turnDone.release(
+        msg.sessionId,
+        finalized as unknown as Record<string, unknown> | null,
+      )) {
+        sendToMain(frame);
       }
-      sendToMain({
-        type: 'chat:done',
-        sessionId: msg.sessionId,
-        reason: turnEndReason,
-      });
     }
 
     // Background title generation: only in first 3 rounds, never regenerate after
@@ -4246,11 +4481,20 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             // here (instead of at module top) trims ~1.5 MB off the cold
             // worker parse. The helper itself is gated by DUYA_MEMORY
             // *_ENABLED inside wakeup.ts, so failures are swallowed.
-            void import('../memory-rollout/wakeup.js').then(({ sendMemoryWakeup }) => {
+            void import('@duya/memory/wakeup').then(({ sendMemoryWakeup }) => {
               try {
                 sendMemoryWakeup(
                   (event) => sendToMain(event as unknown as Record<string, unknown>),
-                  { sessionId: sessionId ?? undefined },
+                  {
+                    sessionId: sessionId ?? undefined,
+                    // Plan 610 A5: `wakeup` moved into `@duya/memory` and no
+                    // longer reaches into this package's logger, so the
+                    // warning is reported through a port the caller supplies.
+                    onError: (err) =>
+                      logger.warn('memory:wakeup send failed (shadow mode tolerates this)', {
+                        error: err instanceof Error ? err.message : String(err),
+                      }),
+                  },
                 );
               } catch (wakeupErr) {
                 // Wakeup is best-effort; a failure here must not block
@@ -4690,7 +4934,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
 
         case 'interagent:event': {
           const eventMsg = msg as unknown as { type: 'interagent:event'; id: string; event: import('./worker-protocol.js').WorkerEvent };
-          const call = pendingInteragentCalls.get(eventMsg.id);
+          const call = getPendingInteragentCall(eventMsg.id);
           if (!call) {
             // Stale event after cleanup — safe to ignore
             break;

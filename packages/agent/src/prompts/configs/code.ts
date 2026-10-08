@@ -12,7 +12,7 @@ import type { PromptSystemConfig } from '../PromptSystem.js'
 import { initializeAgentsMd } from '../dynamic/agentsMdSection.js'
 import { createMemoryPreBuildHook } from '../dynamic/memoryPreBuildHook.js'
 import { createEnvironmentPreBuildHook } from '../dynamic/environmentPreBuildHook.js'
-import { isMemoryEnabled } from '../../memory-rollout/wakeup.js'
+import { isMemoryEnabled } from '@duya/memory/wakeup'
 
 
 // Dynamic sections

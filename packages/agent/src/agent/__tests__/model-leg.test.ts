@@ -48,13 +48,36 @@
  * and the retry policy under test are the production ones. Without this the
  * test would issue a real provider request — which it did, once, before the
  * factory was stubbed.
+ *
+ * ## What the A3 flip did to this file
+ *
+ * `DuyaAgent.streamChat` was deleted (plan 610 A3 / S4c-d3), so `runOneTurn`
+ * below drives a real turn through `driveRunWithEngine` instead. Five cases are
+ * now RED, and every one of them is a dead SEAM rather than broken behaviour --
+ * no turn publishes a leg any more, because `buildTurnModelLeg` is imported and
+ * never called. Each failing describe says so inline, and none was deleted or
+ * weakened. The remaining 14 cases, which test `buildTurnModelLeg` and
+ * `ModelLegPublisher` directly, are unaffected and still green.
  */
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import type { Message } from '@duya/ai';
+import type { RunId, PermissionPolicyMode } from '@duya/agent-protocol';
 import type { TurnStreamRunnerDeps } from '../TurnStreamRunner.js';
 import { buildTurnModelLeg, ModelLegPublisher, type TurnModelLeg } from '../model-leg.js';
 import { injectTurnTimestampReminders } from '../turn-time-reminder.js';
+
+// The pool worker's own `'message'` listeners, captured BEFORE this file's first
+// `await import(...)` runs. Static imports are hoisted above this line, so the
+// only thing that can precede it is the pool's own setup -- which is the point:
+// `initDbClient()` registers the db-client's listener from `beforeEach`, and the
+// filter below has to be able to tell the two apart. Capturing it after the
+// top-level `await import('../../ipc/db-client.js')` would be too late in any
+// worker where that import already ran.
+const POOL_LISTENERS = new Set(process.listeners('message'));
 
 interface FakeDbRequest {
   type: string;
@@ -122,24 +145,84 @@ async function runOneTurn(options?: {
   };
 
   const eventTypes: string[] = [];
-  for await (const ev of agent.streamChat(options?.prompt ?? 'hello', { modelLegs: legs })) {
-    eventTypes.push(ev.type);
-  }
+
+  // Drive the turn the way production does.
+  //
+  // `DuyaAgent.streamChat` was deleted by plan 610's A3 slice (S4c-d3); the turn
+  // loop is `driveRunWithEngine`'s. See the section below the helper for what
+  // that means for the leg assertions.
+  const { driveRunWithEngine } = await import('../../process/engine-run-driver.js');
+  const { convertSSEToAgentMessage } = await import('../../process/sse-frame-codec.js');
+  const { TurnPipelinePublisher } = await import('../../tool/turn-pipeline-publisher.js');
+  const { Journal } = await import('../../journal/Journal.js');
+  const { resolveTurnRunId } = await import('../run-identity.js');
+
+  const sessionId = 's-model-leg-' + Math.random().toString(36).slice(2);
+  // `sessionId` / `workingDirectory` are `private` on `duyaAgent`, so they are
+  // read through `assembleTurnContext` -- the same `TurnContext` `beginRun`
+  // builds -- rather than by casting the instance to its own field layout.
+  const context = agent.assembleTurnContext({ sessionId } as never, options?.prompt ?? 'hello');
+  agent.journal = new Journal({ sessionId });
+  const turnPipelines = new TurnPipelinePublisher();
+  await driveRunWithEngine(
+    {
+      agent,
+      sessionId,
+      runId: resolveTurnRunId(undefined).runId as RunId,
+      seqIndex: Date.now(),
+      options: { sessionId } as never,
+      prompt: options?.prompt ?? 'hello',
+      model: 'claude-test',
+      providerId: 'anthropic',
+      workingDirectory: context.workingDirectory ?? process.cwd(),
+      permissionMode: 'bypassPermissions' as PermissionPolicyMode,
+      maxTurns: 2,
+      wakeRun: false,
+      imageInputSupported: false,
+      turnPipelines,
+      askApproval: async () => ({ allowed: true, scope: 'once' }) as const,
+      legacyFrameCodec: convertSSEToAgentMessage,
+      onPerCallUsage: () => {},
+      ledgerDir: mkdtempSync(path.join(os.tmpdir(), 'duya-model-leg-')),
+    },
+    (frame) => {
+      eventTypes.push(String((frame as { type?: unknown }).type));
+    },
+  );
+  turnPipelines.close();
+  await agent.journal.flush();
+
   return { legs, published, durable: agent.messages, eventTypes };
 }
 
 // ─── The IPC the turn reaches for before its first model request ───────────
-// `streamChat` claims mailbox rows and reads mode state through the worker IPC
+// The turn claims mailbox rows and reads mode state through the worker IPC
 // bridge. Without a channel the turn hangs on a 30s timeout, and with a
 // silently-resolving one it throws on `claim.rows`. Answering exactly the two
 // actions this turn issues keeps the fixture small and explicit; anything else
 // arriving is a test-visible failure rather than a hang.
+//
+// The response is handed to the db-client's OWN listener rather than broadcast
+// with `process.emit('message', ...)`. Under a Vitest pool worker that channel
+// is the POOL's, and the pool's handler tries to `Buffer.from` whatever arrives:
+// broadcasting an object there raises an unhandled rejection per request. Both
+// reference harnesses reach the listener directly for the same reason
+// (`desktop-chat-codec-once.test.ts`, `engine-chat-start-assembly-proof.test.ts`).
 
+let dbResponseListener: ((m: unknown) => void) | null = null;
 let realSend: typeof process.send | undefined;
 
 beforeEach(() => {
   providerCalls.length = 0;
   initDbClient();
+  // `initDbClient` registers its `'message'` listener ONCE per module instance.
+  // The FIRST call therefore adds one and every later call adds none, so the
+  // diff alone is not the answer -- on the second `beforeEach` it is empty.
+  // The listeners that are NOT the pool's own are the db-client's, and the pool
+  // snapshot above is taken at collection, before any `beforeEach` ran.
+  const added = process.listeners('message').filter((l) => !POOL_LISTENERS.has(l));
+  dbResponseListener = (added[added.length - 1] ?? null) as ((m: unknown) => void) | null;
+  if (!dbResponseListener) throw new Error('db-client registered no message listener');
   realSend = process.send;
   process.send = ((msg: unknown) => {
     const req = msg as FakeDbRequest;
@@ -147,13 +230,13 @@ beforeEach(() => {
     if (req.action === 'modeState:get') {
       // null = no snapshot, which is the pre-plan state.
     } else if (req.action === 'mailbox:claimBatch') {
-      // An EMPTY claim, not a null: `DuyaAgent.ts:3595` reads `claim.rows`.
+      // An EMPTY claim, not a null: the agent reads `claim.rows`.
     } else {
       throw new Error(`unexpected db action in model-leg test: ${req.action}`);
     }
     const result = req.action === 'mailbox:claimBatch' ? { rows: [], claimTokens: [] } : null;
     setImmediate(() => {
-      process.emit('message', {
+      dbResponseListener?.({
         type: 'db:response',
         id: req.id,
         success: true,
@@ -173,6 +256,38 @@ afterEach(() => {
 // ============================================================================
 
 describe('the published leg carries the transformed per-request messages', () => {
+  // ── KNOWN PRODUCTION GAP ──────────────────────────────────────────────────
+  //
+  // These four cases were green against `streamChat` and cannot be made green
+  // again by re-pointing the harness, because the thing they observe no longer
+  // has a producer.
+  //
+  // `DuyaAgent.ts` still IMPORTS `buildTurnModelLeg` (`:96`) and still accepts
+  // `options.modelLegs` (`types.ts:567`), but nothing calls it:
+  //
+  //   grep -n "buildTurnModelLeg(" packages/agent/src/agent/DuyaAgent.ts
+  //   -> (no matches; the import is the only occurrence)
+  //
+  // The publish site was `options?.modelLegs?.publish(buildTurnModelLeg({...}))`
+  // inside `streamChat`'s turn body, deleted with it in `539b97f0`. So no turn
+  // publishes a leg, ever.
+  //
+  // The engine does not need one -- `createClientModelPort` opens the request the
+  // engine assembled (`run-engine-model.ts:374-386`), and `agent/model-leg.ts:123-133`
+  // says so outright. So this is a dead seam, not a regression: nothing product-
+  // facing is broken by it.
+  //
+  // The four assertions are LEFT FAILING rather than deleted or weakened,
+  // because they are the standing evidence that the seam is unwired. `turn-loop-
+  // product-behavior.test.ts` and the `engine-*-proof` files in `src/process`
+  // already cover what the engine path actually guarantees, so this file's
+  // remaining 14 cases plus these 4 keep the module's contract pinned either way.
+  //
+  // The fix is a decision, not a port lift: either delete `model-leg.ts` and
+  // these cases (its own header calls removal "part of that rewrite"), or
+  // restore a publisher from the driver's turn loop. Both are production changes
+  // outside this migration's scope.
+  // ───────────────────────────────────────────────────────────────────────────
   it('carries the turn-timestamp reminder that only the per-request array has', async () => {
     const { published } = await runOneTurn();
 
@@ -521,6 +636,16 @@ describe('buildTurnModelLeg refuses an abort controller that does not own the si
 // ============================================================================
 
 describe('a real turn\'s leg cancels the real provider request', () => {
+  // KNOWN PRODUCTION GAP -- see the block above section 1. No turn publishes a
+  // leg, because `buildTurnModelLeg` is imported at `DuyaAgent.ts:96` and never
+  // called; the publish site went with `streamChat` in `539b97f0`. Left failing
+  // rather than deleted, because it is the standing evidence that the seam is
+  // unwired.
+  //
+  // Note what this case is NOT evidence of: cancellation on the engine path is
+  // already proven. `__tests__/engine-model-port.test.ts` drives it through the
+  // ENGINE's own port, and `agent.process` feeds the engine its scoped signal
+  // (`engine-run-driver.ts:653-659`), so a stop still reaches the provider.
   it('stops a provider request that is still streaming', async () => {
     // `providerCalls` is the shared fake-client log from the mock at the top of
     // this file. The turn below drives that same mock, so a signal that reaches

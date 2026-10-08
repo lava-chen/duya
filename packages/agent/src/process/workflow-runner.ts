@@ -64,6 +64,8 @@ import { openRunLog, type RunLog } from '../modes/workflow/run-log.js';
 import type { SavedWorkflowArgDeclaration } from '../modes/workflow/dwf/contracts.js';
 import { workflowRunDb } from '../ipc/db-client.js';
 import { createBuiltinRegistry } from '../tool/builtin.js';
+import { duyaAgent } from '../agent/DuyaAgent.js';
+import type { SubagentRunDeps } from '../tool/SubagentTool/runAgent.js';
 import { SUBAGENT_TOOL_NAME } from '../tool/SubagentTool/constants.js';
 import { getAgentDefinitions } from '../tool/SubagentTool/index.js';
 import type { ToolUseContext } from '../types.js';
@@ -462,7 +464,16 @@ function buildHostPorts(
   gui: { journal: Journal; runId: string },
   onArtifact?: (descriptor: WorkflowArtifactDescriptor) => void,
 ): DwfHostPorts {
-  const registry = createBuiltinRegistry();
+  // Plan 610 A5: the workflow runner reaches `task` through this registry, so it
+  // is a composition site for the sub-agent dependencies. The added
+  // `workflow-runner -> DuyaAgent` edge was measured against the module graph
+  // and closes no cycle.
+  const subagentDeps: SubagentRunDeps = {
+    createSubAgent: (subAgentOptions) => new duyaAgent(subAgentOptions),
+    // Argument-less, matching what `runAgent` did before the cut.
+    createToolRegistry: () => createBuiltinRegistry(subagentDeps),
+  };
+  const registry = createBuiltinRegistry(subagentDeps);
   const ctx = buildToolUseContext(deps, registry, cwd);
   // Per-call identity: every wf.tool / wf.agent call is its own tool use, so
   // each call passes a ctx clone carrying a fresh toolUseId. Tools key

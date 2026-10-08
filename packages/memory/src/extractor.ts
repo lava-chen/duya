@@ -1,0 +1,1088 @@
+/**
+ * Stage 1 extractor orchestration (Plan 304 Phase E, design v3 D2/D8/D9).
+ *
+ * Lifecycle: lease → compact → LLM → validate → write projection → complete
+ * → persist Stage 1 output. Heartbeats every TTL/6 for the duration of
+ * the LLM call. Validation enforces the D8 promotion constraints BEFORE
+ * any stage1_outputs row is written.
+ *
+ * The LLM returns a Markdown `rollout_summary` string plus the expanded
+ * memory-item taxonomies (claim-type/scope/scope_id, lifecycle fields,
+ * D8 constraints). The summary is persisted as-is (after credential
+ * redaction) into the rollout_summaries projection file; no structural
+ * validation is performed on the Markdown content itself.
+ *
+ * Shadow mode: no production caller until Plan 305 wires the worker.
+ */
+
+import type { Database } from 'better-sqlite3';
+import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
+import type { AIClient } from '@duya/ai';
+import {
+  acquireLease,
+  heartbeat,
+  complete,
+  fail,
+  HEARTBEAT_DIVISOR,
+  DEFAULT_LEASE_TTL_MS,
+} from './lease.js';
+import { compactMessages, DEFAULT_BUDGET_TOKENS, type MessageEvent } from './compactMessages.js';
+import { STAGE1_USER_PROMPT_TEMPLATE, STAGE1_SYSTEM_PROMPT } from './prompt.js';
+import { loadPolicy, assembleStage1Prompt } from './stage1_prompt_loader.js';
+import { writeRolloutProjection, redactCredentials } from './writer.js';
+import { parseCanonicalFile } from './canonical_file.js';
+import { writeSystemLog } from './system_log.js';
+import {
+  TASK_OUTCOMES,
+  CONFIDENCE_LEVELS,
+  MEMORY_STATUSES,
+  CLAIM_TYPES,
+  SCOPES,
+  SOURCE_TYPES,
+  VERIFICATION_LEVELS,
+  type ClaimType,
+  type Scope,
+  type MemoryItem,
+  type Evidence,
+  type ParsedExtraction as ParsedExtractionV2,
+} from './types.js';
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const LLM_TIMEOUT_MS = 120_000;
+// 16k output budget (raised from 4k): on large rollouts a reasoning model's
+// thinking + full JSON envelope routinely exceeded 4k and the response was
+// truncated mid-JSON (`invalid-json`) or came back empty (`llm-refused`).
+const LLM_MAX_TOKENS = 16_384;
+
+// ---------------------------------------------------------------------------
+// Public types
+// ---------------------------------------------------------------------------
+
+export interface ExtractInput {
+  rolloutId: string;
+  claimedBy: string;
+  leaseTtlMs?: number;
+  /**
+   * Existing canonical_keys from `memory_entries`, injected into the user
+   * prompt so the LLM can reuse semantically equivalent keys instead of
+   * inventing new ones. When undefined, the extractor queries the memory
+   * DB itself; when explicitly null, the keys section is omitted.
+   */
+  existingKeys?: string[] | null;
+}
+
+export interface ExtractResult {
+  status: 'committed' | 'succeeded_no_output' | 'noop_skipped' | 'stale_source' | 'failed';
+  contentOutcome: 'success' | 'partial' | 'fail' | 'uncertain' | null;
+  projectionPath: string | null;
+  stage1RowId: string;
+  durationMs: number;
+  errorMessage?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+const VALID_JOB_STATUS = new Set(['succeeded', 'succeeded_no_output']);
+const VALID_CONTENT_OUTCOME: ReadonlySet<string> = new Set(TASK_OUTCOMES);
+const VALID_CLAIM_TYPE: ReadonlySet<string> = new Set(CLAIM_TYPES);
+const VALID_SOURCE_TYPE: ReadonlySet<string> = new Set(SOURCE_TYPES);
+const VALID_VERIFICATION: ReadonlySet<string> = new Set(VERIFICATION_LEVELS);
+const VALID_SCOPE: ReadonlySet<string> = new Set(SCOPES);
+const VALID_CONFIDENCE: ReadonlySet<string> = new Set(CONFIDENCE_LEVELS);
+const VALID_MEMORY_STATUS: ReadonlySet<string> = new Set(MEMORY_STATUSES);
+const EXTERNAL_SOURCE_TYPES = new Set(['browser_page', 'mcp_response']);
+
+/** Stage 1 LLM output contract, defined in types.ts. */
+export type { ParsedExtraction } from './types.js';
+
+export type ValidationResult = { valid: true; result: ParsedExtractionV2 } | { valid: false; error: string };
+
+/**
+ * Flat message row shape returned by `message:getBySession` (and by the
+ * `readMessageRows` override). The extractor maps these to `MessageEvent`.
+ */
+export interface MessageRowShape {
+  id: string;
+  role: string;
+  content: string;
+  tool_call_id: string | null;
+  tool_name: string | null;
+  tool_input: string | null;
+  msg_type: string | null;
+  seq_index: number | null;
+  created_at: number | null;
+  status: string | null;
+}
+
+/**
+ * Extractor options. `readMessageRows` overrides the IPC-backed message read
+ * for in-process callers (Electron Main process MemoryWorker) where
+ * `process.send` is unavailable. When absent, the extractor falls back to
+ * `messageDb.getBySession` IPC.
+ */
+export interface Stage1ExtractorOpts {
+  rootDir?: string;
+  policyPath?: string;
+  memoryRoot?: string;
+  readMessageRows?: (sessionId: string) => Promise<MessageRowShape[]>;
+}
+
+function validateSlug(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  if (!/^[a-z0-9-]{3,80}$/.test(value)) return null;
+  return value;
+}
+
+/**
+ * Validate a string-array field. Returns the typed array, or null when the
+ * value is not an array of strings.
+ */
+function validateStringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  for (const entry of value) {
+    if (typeof entry !== 'string') return null;
+  }
+  return value as string[];
+}
+
+/**
+ * Validate an evidence array against the provenance contract (source_type +
+ * source_id + optional verification). Empty arrays are accepted here; the
+ * memory-item path additionally requires at least one entry.
+ */
+function validateEvidence(value: unknown): Evidence[] | null {
+  if (!Array.isArray(value)) return null;
+  const validated: Evidence[] = [];
+  for (const ev of value) {
+    if (typeof ev !== 'object' || ev === null) return null;
+    const evObj = ev as Record<string, unknown>;
+    const sourceType = evObj.source_type;
+    if (typeof sourceType !== 'string' || !VALID_SOURCE_TYPE.has(sourceType)) return null;
+    const sourceId = evObj.source_id;
+    if (typeof sourceId !== 'string' || sourceId.length === 0) return null;
+    const verification = evObj.verification;
+    if (
+      verification !== undefined &&
+      (typeof verification !== 'string' || !VALID_VERIFICATION.has(verification))
+    ) {
+      return null;
+    }
+    validated.push({
+      source_type: sourceType as Evidence['source_type'],
+      source_id: sourceId,
+      ...(verification !== undefined
+        ? { verification: verification as NonNullable<Evidence['verification']> }
+        : {}),
+    });
+  }
+  return validated;
+}
+
+/**
+ * Parse and validate the LLM response against the Stage 1 schema (D8).
+ * Rejects:
+ *   - invalid JSON → 'invalid-json'
+ *   - bad job_status → 'bad-job-status'
+ *   - external source item with claim_type preference/procedure → 'invalid-promotion'
+ *   - missing/duplicate required fields → 'schema-violation'
+ *
+ * For job_status='succeeded', the `rollout_summary` must be a non-empty
+ * Markdown string. No structural validation is performed on the Markdown
+ * content itself.
+ */
+export function parseAndValidate(response: string): ValidationResult {
+  // Strip markdown fences if present.
+  let text = response.trim();
+  if (text.startsWith('```')) {
+    text = text.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+  }
+
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return { valid: false, error: 'invalid-json' };
+  }
+
+  if (typeof data !== 'object' || data === null) {
+    return { valid: false, error: 'invalid-json' };
+  }
+
+  const obj = data as Record<string, unknown>;
+  const jobStatus = obj.job_status;
+
+  // Tolerant-envelope fallback: some reasoning-disabled models (e.g. MiniMax
+  // M3 with effort=off) return ONLY the raw_memory object — a top-level
+  // `{"items":[...]}` — dropping the outer envelope (job_status,
+  // content_outcome, rollout_summary, rollout_slug). Promote `items` to
+  // raw_memory and synthesize a degraded 'succeeded' envelope so the durable
+  // memory items are persisted instead of being discarded. The rollout
+  // narrative degrades to a concatenation of the extracted claims.
+  if (typeof jobStatus !== 'string') {
+    const promotedItems = Array.isArray(obj.items) ? obj.items : undefined;
+    if (promotedItems) {
+      const promoted: Record<string, unknown> = {
+        job_status: 'succeeded',
+        content_outcome: 'uncertain',
+        rollout_summary: synthesizeRolloutSummary(promotedItems),
+        rollout_slug: 'memory-items',
+        raw_memory: { items: promotedItems },
+      };
+      return validateSucceededEnvelope(promoted);
+    }
+  }
+
+  if (typeof jobStatus !== 'string' || !VALID_JOB_STATUS.has(jobStatus)) {
+    return { valid: false, error: 'bad-job-status' };
+  }
+
+  // succeeded_no_output: content fields are empty by contract.
+  if (jobStatus === 'succeeded_no_output') {
+    return {
+      valid: true,
+      result: {
+        job_status: 'succeeded_no_output',
+        content_outcome: null,
+        rollout_summary: null,
+        rollout_slug: validateSlug(obj.rollout_slug) ?? 'no-output',
+        raw_memory: { items: [] },
+      },
+    };
+  }
+
+  // succeeded: validate the Markdown rollout_summary + memory items.
+  return validateSucceededEnvelope(obj);
+}
+
+// ---------------------------------------------------------------------------
+// validateSucceededEnvelope / synthesizeRolloutSummary
+// ---------------------------------------------------------------------------
+
+/**
+ * Synthesize a minimal Markdown rollout_summary from a bare items array.
+ * Used by the tolerant-envelope fallback when the model returns only
+ * raw_memory.items (no job_status / rollout_summary envelope). Keeps the
+ * durable memory items persistable while degrading the narrative quality.
+ */
+function synthesizeRolloutSummary(items: unknown[]): string {
+  const claims: string[] = [];
+  for (const item of items) {
+    if (typeof item !== 'object' || item === null) continue;
+    const claim = (item as Record<string, unknown>).claim;
+    if (typeof claim === 'string' && claim.length > 0) {
+      claims.push(`- ${claim}`);
+    }
+  }
+  const body = claims.length > 0 ? claims.join('\n') : '- Memory items extracted.';
+  return `# Memory Items\n\nRollout context: Extracted durable memory; the model did not return a narrative summary.\n\n## Decisions\n${body}`;
+}
+
+/**
+ * Per-item validation outcome. `{ ok: true }` carries the typed item;
+ * `{ ok: false }` carries the reason (a D8 promotion violation vs. a plain
+ * schema violation) so the caller can report the most meaningful error when
+ * nothing survives salvage.
+ */
+type ItemValidation =
+  | { ok: true; item: MemoryItem }
+  | { ok: false; error: string };
+
+/**
+ * Validate a single memory item against the D8 per-item contract. Returns
+ * the typed item, or an error reason when the item is malformed. A failed
+ * item does NOT fail the whole extraction — the caller salvages the
+ * remaining valid items so one bad item cannot discard an entire rollout's
+ * memory.
+ *
+ * The `seenKeys` set is used to reject duplicate canonical_key values.
+ */
+function validateMemoryItem(item: unknown, seenKeys: Set<string>): ItemValidation {
+  const fail = (error: string): ItemValidation => ({ ok: false, error });
+
+  if (typeof item !== 'object' || item === null) {
+    return fail('schema-violation');
+  }
+
+  const itemObj = item as Record<string, unknown>;
+  const claim = itemObj.claim;
+  if (typeof claim !== 'string' || claim.length === 0) {
+    return fail('schema-violation');
+  }
+
+  const claimType = itemObj.claim_type;
+  if (typeof claimType !== 'string' || !VALID_CLAIM_TYPE.has(claimType)) {
+    return fail('schema-violation');
+  }
+
+  const scope = itemObj.scope;
+  if (typeof scope !== 'string' || !VALID_SCOPE.has(scope)) {
+    return fail('schema-violation');
+  }
+
+  // scope_id identifies the scope target. It must be null for personal
+  // and global scopes, and non-null for every other scope.
+  const scopeId = itemObj.scope_id;
+  if (scopeId !== null && typeof scopeId !== 'string') {
+    return fail('schema-violation');
+  }
+  if (scope === 'personal' || scope === 'global') {
+    if (scopeId !== null) {
+      return fail('schema-violation');
+    }
+  } else if (scopeId === null) {
+    return fail('schema-violation');
+  }
+
+  const canonicalKey = itemObj.canonical_key;
+  if (typeof canonicalKey !== 'string' || canonicalKey.length === 0) {
+    return fail('schema-violation');
+  }
+  if (seenKeys.has(canonicalKey)) {
+    return fail('schema-violation');
+  }
+
+  // Enforce canonical_key prefix for person/area claim types.
+  if (claimType === 'person' && !canonicalKey.startsWith('person:')) {
+    return fail('invalid-promotion');
+  }
+  if (claimType === 'area' && !canonicalKey.startsWith('area:')) {
+    return fail('invalid-promotion');
+  }
+  const expectedPrefix = `${claimType}:`;
+  if (!canonicalKey.startsWith(expectedPrefix)) {
+    return fail('invalid-promotion');
+  }
+
+  const evidence = validateEvidence(itemObj.evidence);
+  if (!evidence || evidence.length === 0) {
+    return fail('schema-violation');
+  }
+
+  const externalSourceCount = evidence.filter((ev) => EXTERNAL_SOURCE_TYPES.has(ev.source_type)).length;
+  const unverifiedAssistantCount = evidence.filter(
+    (ev) =>
+      ev.source_type === 'assistant_only' &&
+      (ev.verification === 'none' || ev.verification === undefined),
+  ).length;
+
+  // D8: external-only evidence cannot become preference or procedure.
+  if (
+    externalSourceCount === evidence.length &&
+    (claimType === 'preference' || claimType === 'procedure')
+  ) {
+    return fail('invalid-promotion');
+  }
+
+  // D8: unverified assistant-only claims cannot become preference.
+  if (unverifiedAssistantCount === evidence.length && claimType === 'preference') {
+    return fail('invalid-promotion');
+  }
+
+  const confidence = itemObj.confidence;
+  if (typeof confidence !== 'string' || !VALID_CONFIDENCE.has(confidence)) {
+    return fail('schema-violation');
+  }
+
+  const status = itemObj.status;
+  if (typeof status !== 'string' || !VALID_MEMORY_STATUS.has(status)) {
+    return fail('schema-violation');
+  }
+
+  // Validity window: type-checked only, no date-format enforcement.
+  const validFrom = itemObj.valid_from;
+  if (validFrom !== null && typeof validFrom !== 'string') {
+    return fail('schema-violation');
+  }
+  const validUntil = itemObj.valid_until;
+  if (validUntil !== null && typeof validUntil !== 'string') {
+    return fail('schema-violation');
+  }
+
+  const relationToExisting = itemObj.relation_to_existing;
+  if (relationToExisting !== null && typeof relationToExisting !== 'string') {
+    return fail('schema-violation');
+  }
+
+  const supersedes = validateStringArray(itemObj.supersedes);
+  if (!supersedes) {
+    return fail('schema-violation');
+  }
+
+  const whyFutureAgentNeedsThis = itemObj.why_future_agent_needs_this;
+  if (typeof whyFutureAgentNeedsThis !== 'string') {
+    return fail('schema-violation');
+  }
+
+  const retrievalCues = validateStringArray(itemObj.retrieval_cues);
+  if (!retrievalCues) {
+    return fail('schema-violation');
+  }
+
+  seenKeys.add(canonicalKey);
+
+  return {
+    ok: true,
+    item: {
+      claim,
+      claim_type: claimType as ClaimType,
+      scope: scope as Scope,
+      scope_id: scopeId,
+      evidence,
+      canonical_key: canonicalKey,
+      confidence: confidence as MemoryItem['confidence'],
+      status: status as MemoryItem['status'],
+      valid_from: validFrom,
+      valid_until: validUntil,
+      relation_to_existing: relationToExisting,
+      supersedes,
+      why_future_agent_needs_this: whyFutureAgentNeedsThis,
+      retrieval_cues: retrievalCues,
+    },
+  };
+}
+
+/**
+ * Validate a 'succeeded'-style envelope: content_outcome, rollout_summary,
+ * rollout_slug, and raw_memory.items. Shared by the strict path and the
+ * tolerant-envelope fallback (which promotes a bare items array first).
+ */
+function validateSucceededEnvelope(obj: Record<string, unknown>): ValidationResult {
+  const contentOutcome = obj.content_outcome;
+  if (typeof contentOutcome !== 'string' || !VALID_CONTENT_OUTCOME.has(contentOutcome)) {
+    return { valid: false, error: 'schema-violation' };
+  }
+
+  const rolloutSummary = obj.rollout_summary;
+  if (typeof rolloutSummary !== 'string' || rolloutSummary.trim().length === 0) {
+    return { valid: false, error: 'schema-violation' };
+  }
+
+  const rolloutSlug = validateSlug(obj.rollout_slug);
+  if (!rolloutSlug) {
+    return { valid: false, error: 'schema-violation' };
+  }
+
+  const rawMemory = obj.raw_memory;
+  if (typeof rawMemory !== 'object' || rawMemory === null) {
+    return { valid: false, error: 'schema-violation' };
+  }
+
+  const items = (rawMemory as Record<string, unknown>).items;
+  if (!Array.isArray(items)) {
+    return { valid: false, error: 'schema-violation' };
+  }
+
+  const seenKeys = new Set<string>();
+  const validatedItems: MemoryItem[] = [];
+
+  if (items.length > 5) {
+    return { valid: false, error: 'schema-violation' };
+  }
+
+  // Salvage semantics: a single malformed item (e.g. an out-of-enum
+  // claim_type from a reasoning-disabled model) must not discard the whole
+  // rollout's memory. Drop the invalid items and keep the valid subset.
+  let firstError: string | null = null;
+  for (const item of items) {
+    const result = validateMemoryItem(item, seenKeys);
+    if (result.ok) {
+      validatedItems.push(result.item);
+    } else if (firstError === null) {
+      firstError = result.error;
+    }
+  }
+
+  // If the envelope was intact but every item was malformed, nothing is
+  // salvageable — report the most meaningful reason so no empty 'succeeded'
+  // extraction is persisted.
+  if (items.length > 0 && validatedItems.length === 0) {
+    return { valid: false, error: firstError ?? 'schema-violation' };
+  }
+
+  return {
+    valid: true,
+    result: {
+      job_status: 'succeeded',
+      content_outcome: contentOutcome as ParsedExtractionV2['content_outcome'],
+      rollout_summary: rolloutSummary,
+      rollout_slug: rolloutSlug,
+      raw_memory: { items: validatedItems },
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Lease snapshot row
+// ---------------------------------------------------------------------------
+
+interface LeaseSnapshotRow {
+  source_updated_at: number;
+  source_content_hash: string;
+  attempt_count: number;
+  last_error: string | null;
+}
+
+interface CatalogMappingRow {
+  project_id: string | null;
+  working_directory: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Extractor
+// ---------------------------------------------------------------------------
+
+/**
+ * Stage 1 extractor. Holds injected DB handles + LLM client so the extract
+ * method stays focused on orchestration. Plan 305 wires a concrete
+ * Stage1Extractor instance in the Electron main process worker.
+ *
+ * Uses streamChat() instead of chat() to avoid Anthropic's "Streaming is
+ * required for operations that may take longer than 10 minutes" error on
+ * large payloads (long conversation histories).
+ */
+export class Stage1Extractor {
+  private readonly streamChat: AIClient['streamChat'];
+
+  // Deliberately NOT cached: the policy file is small (<= 8 KiB) and the
+  // curation loop may rewrite it between extractions. Reading it per
+  // extract guarantees the adaptive loop's policy updates take effect
+  // immediately (no mtime-resolution or staleness issues).
+  private policyCache: null = null;
+
+  constructor(
+    private readonly memoryDb: Database,
+    private readonly mainDb: Database,
+    private readonly llmClient: AIClient,
+    private readonly opts?: Stage1ExtractorOpts,
+  ) {
+    if (typeof llmClient.streamChat !== 'function') {
+      throw new Error('AIClient.streamChat is required for Stage1Extractor');
+    }
+    // Bind streamChat to the AIClient instance. LazyLLMClientProxy.streamChat
+    // calls `this.getClient()` internally — without binding, `this` would be
+    // undefined when invoked via `this.streamChat(...)`.
+    this.streamChat = llmClient.streamChat.bind(llmClient);
+  }
+
+  private async resolvePolicy(): Promise<{ content: string; hash: string; version: number }> {
+    const policyPath = this.opts?.policyPath;
+    if (!policyPath) {
+      return {
+        content: '',
+        hash: crypto.createHash('sha256').update('').digest('hex'),
+        version: 0,
+      };
+    }
+    // Always reload (see policyCache note above).
+    return loadPolicy(policyPath);
+  }
+
+  async extract(input: ExtractInput): Promise<ExtractResult> {
+    const result = await this.extractInner(input);
+    this.logExtractResult(input.rolloutId, result);
+    return result;
+  }
+
+  /**
+   * Log a stage-1 extraction outcome to the memory system log. Best-effort
+   * (a logging failure must not affect extraction). The `rollout_slug` is
+   * resolved from the catalog when available so the UI can name the rollout.
+   */
+  private logExtractResult(rolloutId: string, result: ExtractResult): void {
+    // Resolve the slug best-effort and INSIDE its own guard: a lookup
+    // failure (missing table, schema drift) must never suppress the event
+    // itself. `rollout_slug` lives on stage1_outputs, not rollout_catalog
+    // (the catalog never had that column — querying it used to throw on
+    // every outcome and silently drop ALL extract_* events).
+    let slug: string | null = null;
+    try {
+      const slugRow = this.memoryDb
+        .prepare('SELECT rollout_slug FROM stage1_outputs WHERE rollout_id = ?')
+        .get(rolloutId) as { rollout_slug: string | null } | undefined;
+      slug = slugRow?.rollout_slug ?? null;
+    } catch {
+      slug = null;
+    }
+    try {
+      const detail = { rollout_slug: slug, content_outcome: result.contentOutcome, duration_ms: result.durationMs };
+      switch (result.status) {
+        case 'committed':
+          writeSystemLog({
+            phase: 'phase1',
+            eventType: 'extract_committed',
+            message: `Extracted rollout ${rolloutId} (${slug ?? 'no-slug'})`,
+            detail,
+            rolloutId,
+          });
+          break;
+        case 'succeeded_no_output':
+          writeSystemLog({
+            phase: 'phase1',
+            eventType: 'extract_no_output',
+            message: `Rollout ${rolloutId} extracted with no memory output`,
+            detail,
+            rolloutId,
+          });
+          break;
+        case 'noop_skipped':
+        case 'stale_source':
+          writeSystemLog({
+            phase: 'phase1',
+            eventType: 'extract_skipped',
+            level: 'warn',
+            message: `Rollout ${rolloutId} skipped (${result.status})`,
+            detail: { ...detail, error: result.errorMessage ?? null },
+            rolloutId,
+          });
+          break;
+        case 'failed':
+          writeSystemLog({
+            phase: 'phase1',
+            eventType: 'extract_failed',
+            level: 'error',
+            message: `Rollout ${rolloutId} extraction failed (${result.errorMessage ?? 'unknown'})`,
+            detail: { ...detail, error: result.errorMessage ?? null },
+            rolloutId,
+          });
+          break;
+      }
+    } catch {
+      // Best-effort logging.
+    }
+  }
+
+  private async extractInner(input: ExtractInput): Promise<ExtractResult> {
+    const startTime = Date.now();
+    const ttlMs = input.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
+    const { rolloutId, claimedBy } = input;
+
+    const elapsed = (): number => Date.now() - startTime;
+
+    // 1. Catalog lookup.
+    const catalog = this.memoryDb
+      .prepare('SELECT project_id, working_directory FROM rollout_catalog WHERE rollout_id = ?')
+      .get(rolloutId) as CatalogMappingRow | undefined;
+    if (!catalog) {
+      return { status: 'noop_skipped', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed() };
+    }
+
+    // 2. Acquire lease.
+    const acquireResult = acquireLease(this.memoryDb, { rolloutId, claimedBy, ttlMs });
+    if (acquireResult.status === 'busy') {
+      return { status: 'noop_skipped', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed() };
+    }
+    const token = acquireResult.token;
+
+    // Read the lease snapshot for source version + retry context.
+    const leaseRow = this.memoryDb
+      .prepare('SELECT source_updated_at, source_content_hash, attempt_count, last_error FROM rollout_leases WHERE rollout_id = ?')
+      .get(rolloutId) as LeaseSnapshotRow | undefined;
+    if (!leaseRow) {
+      // acquireLease succeeded but the row vanished before we could read
+      // it (e.g. a concurrent retire). Release the lease via fail() so it
+      // doesn't dangle as 'running' until TTL expiry.
+      fail(this.memoryDb, { rolloutId, token, error: 'lease-snapshot-miss-after-acquire' });
+      return { status: 'noop_skipped', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed() };
+    }
+
+    if (leaseRow.attempt_count > 1 && leaseRow.last_error) {
+      console.warn(
+        `[Stage1Extractor] Retry attempt ${leaseRow.attempt_count} for ${rolloutId}, last error: ${leaseRow.last_error}`,
+      );
+    }
+
+    // 3. Heartbeat every TTL/6.
+    const heartbeatMs = Math.max(1, Math.floor(ttlMs / HEARTBEAT_DIVISOR));
+    const heartbeatInterval = setInterval(() => {
+      heartbeat(this.memoryDb, { rolloutId, token, ttlMs });
+    }, heartbeatMs);
+
+    try {
+      return await this.runExtraction(
+        rolloutId,
+        token,
+        leaseRow,
+        catalog,
+        ttlMs,
+        startTime,
+        input.existingKeys,
+      );
+    } finally {
+      clearInterval(heartbeatInterval);
+    }
+  }
+
+  private async runExtraction(
+    rolloutId: string,
+    token: string,
+    leaseRow: LeaseSnapshotRow,
+    catalog: CatalogMappingRow,
+    _ttlMs: number,
+    startTime: number,
+    existingKeysInput?: string[] | null,
+  ): Promise<ExtractResult> {
+    const elapsed = (): number => Date.now() - startTime;
+    const { source_updated_at, source_content_hash } = leaseRow;
+
+    // 4. Read messages once — retries below only re-compact + re-call.
+    let messages: MessageEvent[];
+    try {
+      messages = await this.readMessages(rolloutId);
+    } catch (err) {
+      // A read failure (e.g. missing rollout file, IPC unavailable) must NOT
+      // leave the lease in 'running' state — that would block a concurrency
+      // slot forever. Record the failure so the rollout can be retried or
+      // retired by the lease backoff/retirement machinery.
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      fail(this.memoryDb, { rolloutId, token, error: `read-messages:${errorMsg.slice(0, 200)}` });
+      return { status: 'failed', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: errorMsg.slice(0, 200) };
+    }
+
+    // 4b. Resolve existing canonical_keys for cross-session dedup (once —
+    // identical across attempts). When existingKeysInput is undefined,
+    // query the memory DB; when null, omit the keys section entirely.
+    let existingKeysSection = '';
+    if (existingKeysInput !== null) {
+      const keys = existingKeysInput ?? this.queryExistingKeys();
+      if (keys.length > 0) {
+        existingKeysSection = `Existing canonical keys (reuse if semantically equivalent):\n${keys.map((k) => `- ${k}`).join('\n')}\n\n`;
+      }
+    }
+
+    const policy = await this.resolvePolicy();
+    // The hard contract carries the full envelope + item schema (see
+    // STAGE1_HARD_CONTRACT), so a non-empty policy yields a self-sufficient
+    // prompt. With no policy file at all we still prefer the complete
+    // STAGE1_SYSTEM_PROMPT: it adds long-form guidance (lifecycle fields,
+    // cross-session key reuse, examples) beyond the contract's minimum.
+    const systemPrompt =
+      policy.content.trim().length > 0
+        ? assembleStage1Prompt(policy.content)
+        : STAGE1_SYSTEM_PROMPT;
+
+    // 4c-6. Compact → LLM → parse, with ONE budget-degrading retry.
+    //
+    // On very large rollouts the model can produce output that fails the
+    // envelope contract (truncated JSON, dropped envelope, empty text).
+    // Those are output-shape failures: shrinking the compaction budget
+    // halves the transcript the model must summarize, which shortens the
+    // required output and frequently turns a parse failure into a commit.
+    // Transport-class failures (timeout / provider refusal / raw provider
+    // errors) do NOT benefit from less input and go straight to lease
+    // backoff as before. Only one degraded retry is attempted — persistent
+    // shape failures belong to the backoff/retire machinery, not to
+    // burning extra calls inline.
+    const attemptBudgets = [
+      DEFAULT_BUDGET_TOKENS,
+      Math.floor(DEFAULT_BUDGET_TOKENS / 2),
+    ];
+    let compacted: ReturnType<typeof compactMessages> | null = null;
+    let data: ParsedExtractionV2 | null = null;
+    for (let i = 0; i < attemptBudgets.length && data === null; i++) {
+      const isLastAttempt = i === attemptBudgets.length - 1;
+      compacted = compactMessages(messages, {
+        sourceUpdatedAt: source_updated_at,
+        sourceContentHash: source_content_hash,
+        budgetTokens: attemptBudgets[i],
+      });
+
+      // 5. LLM call (streaming — avoids Anthropic's 10-min non-streaming limit).
+      const userContent = STAGE1_USER_PROMPT_TEMPLATE.replace(
+        '{{existing_keys}}',
+        existingKeysSection,
+      ).replace(
+        '{{compacted}}',
+        compacted.lines.join('\n'),
+      );
+      const userMessage = { role: 'user' as const, content: userContent };
+
+      const abortController = new AbortController();
+      const timeoutId = setTimeout(() => abortController.abort(), LLM_TIMEOUT_MS);
+
+      let llmResponse: string;
+      try {
+        const generator = this.streamChat([userMessage], {
+          systemPrompt: systemPrompt,
+          maxTokens: LLM_MAX_TOKENS,
+          signal: abortController.signal,
+          // No effort override: reasoning-disabled models (e.g. MiniMax M3)
+          // with effort='off' return ONLY the raw_memory object and drop the
+          // outer envelope (job_status/content_outcome/rollout_summary/
+          // rollout_slug), which degrades every extraction to the tolerant
+          // fallback. Let the model use its default effort so the full JSON
+          // envelope is produced.
+        });
+        const chunks: string[] = [];
+        for await (const event of generator) {
+          if (event.type === 'text' || event.type === 'text_delta') {
+            chunks.push(event.data);
+          } else if (event.type === 'error') {
+            throw new Error(event.data);
+          }
+          // 'done' event marks completion; loop exits naturally.
+        }
+        llmResponse = chunks.join('');
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        const failReason = abortController.signal.aborted || /abort|timeout/i.test(errorMsg)
+          ? 'llm-timeout'
+          : /refus|content.?policy|safety/i.test(errorMsg)
+            ? 'llm-refused'
+            : errorMsg.slice(0, 200);
+        fail(this.memoryDb, { rolloutId, token, error: failReason });
+        return { status: 'failed', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: failReason };
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      if (!llmResponse || llmResponse.trim().length === 0) {
+        // Empty text behaves like an output-shape failure — retry once on
+        // the smaller budget before giving up.
+        if (isLastAttempt) {
+          fail(this.memoryDb, { rolloutId, token, error: 'llm-refused' });
+          return { status: 'failed', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: 'llm-refused' };
+        }
+        console.warn(`[Stage1Extractor] ${rolloutId} empty response at full budget; retrying with halved compaction budget`);
+        continue;
+      }
+
+      // 6. Parse + validate.
+      const parsed = parseAndValidate(llmResponse);
+      if (!parsed.valid) {
+        // Keep the error code machine-readable in last_error/errorMessage,
+        // but log a truncated raw-response snippet so the cause stays
+        // diagnosable.
+        console.warn(
+          `[Stage1Extractor] ${rolloutId} validation failed (${parsed.error}): ${llmResponse.slice(0, 500)}`,
+        );
+        if (isLastAttempt) {
+          fail(this.memoryDb, { rolloutId, token, error: parsed.error });
+          return { status: 'failed', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: parsed.error };
+        }
+        continue;
+      }
+
+      data = parsed.result;
+    }
+
+    // The loop only exits with `data === null` via early returns, so this
+    // narrowing guard is unreachable in practice — kept for type safety.
+    if (data === null || compacted === null) {
+      fail(this.memoryDb, { rolloutId, token, error: 'invalid-json' });
+      return { status: 'failed', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: 'invalid-json' };
+    }
+
+    // 7. succeeded_no_output path.
+    if (data.job_status === 'succeeded_no_output') {
+      const status = complete(this.memoryDb, {
+        rolloutId,
+        token,
+        sourceUpdatedAt: source_updated_at,
+        sourceContentHash: source_content_hash,
+        outcome: 'succeeded_no_output',
+        contentOutcome: null,
+        rolloutSummary: null,
+        rawMemoryJson: null,
+        rolloutSlug: data.rollout_slug,
+        extractedThroughSeq: compacted.extractedThroughSeq,
+        stage1PolicyVersion: policy.version,
+        stage1PolicyHash: policy.hash,
+      });
+
+      if (status !== 'committed') {
+        console.warn(`[Stage1Extractor] complete() returned ${status} for ${rolloutId}`);
+        return { status: 'stale_source', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: status };
+      }
+
+      return { status: 'succeeded_no_output', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed() };
+    }
+
+    // 8. succeeded path — the rollout_summary is a Markdown string produced
+    //    directly by the LLM. The DB rollout_summary column receives the
+    //    string as-is; the writer redacts credentials and caps the length
+    //    before persisting the projection file. raw_memory is redacted
+    //    separately before persistence.
+    const rawMemoryJson = redactCredentials(JSON.stringify(data.raw_memory));
+
+    // Write projection (enqueues outbox). The writer receives the summary
+    // Markdown string and renders the projection file from it.
+    const writeResult = writeRolloutProjection(this.memoryDb, {
+      rolloutId,
+      cwd: catalog.working_directory ?? '',
+      threadId: rolloutId,
+      gitBranch: null,
+      outcome: 'succeeded',
+      contentOutcome: data.content_outcome!,
+      summaryMarkdown: data.rollout_summary!,
+      rawMemoryJson,
+      rolloutSlug: data.rollout_slug,
+      generatedAt: Date.now(),
+      sourceUpdatedAt: source_updated_at,
+      sourceContentHash: source_content_hash,
+      rootDir: this.opts?.rootDir,
+    });
+
+    // Complete (CAS).
+    const status = complete(this.memoryDb, {
+      rolloutId,
+      token,
+      sourceUpdatedAt: source_updated_at,
+      sourceContentHash: source_content_hash,
+      outcome: 'succeeded',
+      contentOutcome: data.content_outcome!,
+      rolloutSummary: data.rollout_summary,
+      rawMemoryJson,
+      rolloutSlug: data.rollout_slug,
+      extractedThroughSeq: compacted.extractedThroughSeq,
+      contentHashAtWrite: writeResult.contentHashAtWrite,
+      stage1PolicyVersion: policy.version,
+      stage1PolicyHash: policy.hash,
+    });
+
+    if (status !== 'committed') {
+      console.warn(`[Stage1Extractor] complete() returned ${status} for ${rolloutId}`);
+      return { status: 'stale_source', contentOutcome: data.content_outcome, projectionPath: writeResult.projectionPath, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: status };
+    }
+
+    return { status: 'committed', contentOutcome: data.content_outcome, projectionPath: writeResult.projectionPath, stage1RowId: rolloutId, durationMs: elapsed() };
+  }
+
+  /**
+   * Read session messages from the main DB and map to MessageEvent with
+   * inferred source_type (user→user_message, tool→local_tool_output,
+   * assistant→assistant_only).
+   */
+
+  /**
+   * Query active canonical_keys from `memory_entries` for cross-session
+   * dedup. Returns an empty array when the table does not exist (e.g.
+   * before migration 0005/0006). Guards against table-missing errors so
+   * the extractor degrades gracefully on fresh installs.
+   *
+   * Phase D switch: when the extractor is constructed with a `memoryRoot`
+   * (the canonical memory file root), keys are read from the live file
+   * manifest instead of the DB. Falls back to the DB query during the
+   * Phase C shadow window when `memoryRoot` is unset.
+   */
+  private queryExistingKeys(): string[] {
+    if (this.opts?.memoryRoot) {
+      return collectActiveKeysFromFiles(this.opts.memoryRoot);
+    }
+    try {
+      const rows = this.memoryDb
+        .prepare("SELECT DISTINCT canonical_key FROM memory_entries WHERE status = 'active' ORDER BY canonical_key ASC")
+        .all() as Array<{ canonical_key: string }>;
+      return rows.map((r) => r.canonical_key);
+    } catch {
+      // Table missing (pre-migration) — no existing keys to reuse.
+      return [];
+    }
+  }
+
+  private async readMessages(sessionId: string): Promise<MessageEvent[]> {
+    // Plan 328 Phase 6 read messages through the agent's `messageDb` IPC when
+    // running in a forked agent process, and through a `readMessageRows`
+    // override for in-process callers (Electron Main process MemoryWorker),
+    // which have no `process.send`.
+    //
+    // Plan 610 A5 removed the `messageDb` branch. It was the only edge from
+    // this module out of the memory domain, and it made the memory package
+    // depend on agent IPC infrastructure it has no business knowing about.
+    // Measured before removing it: `readMessageRows` has exactly one
+    // production constructor (`apps/desktop/src/main/memory/worker-bootstrap.ts`),
+    // which always supplies it, and no production file constructs
+    // `Stage1Extractor` inside the agent at all. The branch was unreachable in
+    // production, so removing it changes no live path.
+    const readMessageRows = this.opts?.readMessageRows;
+    if (!readMessageRows) {
+      throw new Error(
+        'Stage1Extractor requires `readMessageRows`: reading a session\'s messages ' +
+          'is a host concern, not a memory one, so the caller supplies the port.',
+      );
+    }
+    const rows = await readMessageRows(sessionId);
+
+    return rows.map((row): MessageEvent => {
+      const role = row.role as MessageEvent['role'];
+      let source_type: string | undefined;
+      if (role === 'user') source_type = 'user_message';
+      else if (role === 'tool') source_type = 'local_tool_output';
+      else if (role === 'assistant') source_type = 'assistant_only';
+
+      return {
+        message_id: row.id,
+        role,
+        content: row.content ?? '',
+        tool_call_id: row.tool_call_id ?? undefined,
+        tool_name: row.tool_name ?? undefined,
+        tool_input: row.tool_input ?? undefined,
+        type: row.msg_type ?? undefined,
+        source_type,
+        seq_index: row.seq_index ?? undefined,
+        created_at: row.created_at ?? undefined,
+        status: row.status ?? undefined,
+      };
+    });
+  }
+}
+
+/**
+ * Read active canonical_keys from live memory files (Phase D switch).
+ *
+ * Walks `<memoryRoot>/items/**\/*.md` and `<memoryRoot>/entities/**\/*.md`,
+ * parses each file's frontmatter, and returns the `canonical_key` of every
+ * file with `status: active`. Returns an empty array when the root or any
+ * subdirectory is missing — Stage 1 dedup degrades gracefully.
+ *
+ * This is the Phase D replacement for the DB-backed `queryExistingKeys`.
+ * The private `queryExistingKeys` delegates here when the extractor is
+ * built with a `memoryRoot`.
+ */
+export async function queryExistingKeysFromFiles(memoryRoot: string): Promise<string[]> {
+  return collectActiveKeysFromFiles(memoryRoot);
+}
+
+function collectActiveKeysFromFiles(memoryRoot: string): string[] {
+  const keys: string[] = [];
+  if (!memoryRoot) return keys;
+  for (const sub of ['items', 'entities']) {
+    const subRoot = path.join(memoryRoot, sub);
+    if (!fs.existsSync(subRoot)) continue;
+    walkMdForKeys(subRoot, keys);
+  }
+  keys.sort();
+  return keys;
+}
+
+function walkMdForKeys(dir: string, out: string[]): void {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(full);
+    } catch {
+      continue;
+    }
+    if (stat.isDirectory()) {
+      walkMdForKeys(full, out);
+    } else if (stat.isFile() && entry.endsWith('.md')) {
+      const parsed = parseCanonicalFile(full);
+      if (parsed && parsed.status === 'active') {
+        out.push(parsed.canonical_key);
+      }
+    }
+  }
+}

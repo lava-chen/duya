@@ -139,6 +139,30 @@ jobs:
           }
           EOF
 
+      # Plan 610 S4c-d3. `architecture:boundaries` (scripts/architecture/
+      # boundary-gates.mjs) is a SEPARATE gate with a SEPARATE baseline
+      # (`boundary-gates-baseline.json`) and it had a `package.json` script that
+      # no CI job ever called — so G7's verdict was computed locally and never
+      # enforced. It is wired here now.
+      #
+      # Placed AFTER the `architecture:check` guard rather than beside it, and
+      # that is not cosmetic: the guard exits 1 when the check scanned nothing,
+      # and a step inserted between the check and its guard would mean the guard
+      # reported on a check that had already been superseded by a different gate.
+      #
+      # Exit contract: 1 when a finding's fingerprint is absent from
+      # `boundary-gates-baseline.json`. No `--write` here, ever — the gate is
+      # only meaningful while the baseline is frozen and reviewed by a human.
+      #
+      # NOT gated on the resolver-change step below, deliberately. That step
+      # exists because `architecture:self-test` compares live counts against a
+      # frozen snapshot, so it may only fire when the resolver or its
+      # expectations move. This gate's baseline is a list of fingerprints, not a
+      # count, so an ordinary source change that adds a violation must fail
+      # immediately rather than wait for a resolver edit to reveal it.
+      - name: Architecture plan-600 boundary gates
+        run: npm run architecture:boundaries
+
       - name: Detect architecture resolver changes
         id: resolver
         run: |

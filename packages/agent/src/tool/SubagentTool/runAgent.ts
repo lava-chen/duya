@@ -4,16 +4,24 @@
  */
 
 import type {
+  AgentOptions,
   Message,
   MessageContent,
   SSEEvent,
   Tool,
   ToolUseContext,
 } from '../../types.js'
+import type { ChatOptions } from '../../types.js'
 import type { PermissionMode } from '../../permissions/types.js'
 import type { AgentDefinition, BuiltInAgentDefinition, CustomAgentDefinition } from './loadAgentsDir.js'
 import { isBuiltInAgent } from './loadAgentsDir.js'
-import { duyaAgent } from '../../index.js'
+// Plan 610 A5: the sub-agent CLASS is a type-only dependency of this module,
+// so this import must stay a whole-statement `import type` on ONE line. The
+// cycle gate erases that form before building the module graph; the inline
+// `import { type X }` form still emits a load and would keep
+// runAgent -> DuyaAgent -> builtin -> SubagentTool -> runAgent alive.
+import type { duyaAgent } from '../../agent/DuyaAgent.js'
+import { inferProvider } from '@duya/ai'
 import { setMaxListeners } from 'node:events'
 import { resolveAgentTools, SUBAGENT_FORBIDDEN_TOOLS } from './subagentToolUtils.js'
 import type { SubagentToolOverlay } from './subagentResult.js'
@@ -26,6 +34,35 @@ import type { TokenUsage } from '../../types.js'
 import { logger } from '../../utils/logger.js'
 import { composeSubagentSystemPrompt } from './promptComposition.js'
 import { isSubagentSlimAgentsMdEnabled } from '../../config/feature-flags.js'
+// Plan 610 S4c-d3: the ENGINE driver for this path. Replaces `subAgent.streamChat`
+// as the producer of the event stream below; the consumption is untouched.
+import { driveSubagentRunWithEngine } from './subagent-engine-run.js'
+
+/**
+ * Plan 610 A5: the two composition dependencies `runAgent` used to reach for
+ * through module imports.
+ *
+ * `runAgent` previously imported `DuyaAgent` directly and dynamically imported
+ * `createBuiltinRegistry`. Both are static module-graph edges, and together
+ * they closed `runAgent -> DuyaAgent -> builtin -> SubagentTool -> runAgent`
+ * and `runAgent -> builtin -> SubagentTool -> runAgent`. They are now handed
+ * in by the composition site that already owns both halves, which makes the
+ * wiring explicit and validatable at assembly instead of implicit at import.
+ */
+export type CreateSubAgent = (options: AgentOptions) => duyaAgent
+
+export type CreateToolRegistry = () => ToolRegistry
+
+/**
+ * The pair every `runAgent` call site must supply. Carried on
+ * {@link RunAgentParams} rather than resolved from module scope, so a call site
+ * cannot silently pick up a different composition root than the one its
+ * caller assembled.
+ */
+export interface SubagentRunDeps {
+  createSubAgent: CreateSubAgent
+  createToolRegistry: CreateToolRegistry
+}
 
 export interface RunAgentParams {
   agentDefinition: AgentDefinition
@@ -36,6 +73,18 @@ export interface RunAgentParams {
   maxTurns?: number
   availableTools: Tool[]
   description?: string
+  /**
+   * Composition dependencies for this run. Required on purpose: an omitted
+   * factory is the "registry without assembly-time validation" defect, so the
+   * compiler rejects the call site instead of the module graph catching it
+   * later. See {@link SubagentRunDeps}.
+   */
+  createSubAgent: CreateSubAgent
+  /**
+   * Builds the child agent's own tool registry. Required for the same reason
+   * as {@link RunAgentParams.createSubAgent}.
+   */
+  createToolRegistry: CreateToolRegistry
   /**
    * Stable identifier the caller (e.g. SubagentTool) hands out for this
    * sub-agent. It is attached to every progress event so the renderer
@@ -87,6 +136,16 @@ export interface RunAgentParams {
    * child the parent is no longer waiting on.
    */
   abortController?: AbortController
+  /**
+   * Where the engine's tool-side-effect journals go for this run.
+   *
+   * Plan 610 S4c-d3 consequence, stated rather than left implicit: the engine
+   * REFUSES to dispatch anything it cannot ticket, so a sub-agent turn now
+   * writes a ledger where the legacy wrote none. Undefined uses the driver's own
+   * default; exposed so a test can point it at a disposable directory instead of
+   * the user's data directory.
+   */
+  engineLedgerDir?: string
 }
 
 export interface CacheSafeParams {
@@ -223,6 +282,9 @@ export async function* runAgent({
   toolOverlay,
   workingDirectory: workingDirectoryOverride,
   abortController,
+  engineLedgerDir,
+  createSubAgent,
+  createToolRegistry,
 }: RunAgentParams): RunAgentResult {
   const startTime = Date.now()
   const parentSessionId = toolUseContext.options.sessionId
@@ -330,9 +392,11 @@ export async function* runAgent({
     return
   }
 
-  // Create real tool registry with actual tool executors
-  const { createBuiltinRegistry } = await import('../builtin.js')
-  const registry = createBuiltinRegistry()
+  // Create real tool registry with actual tool executors. Plan 610 A5: the
+  // factory comes from the caller's composition site; this module no longer
+  // imports `builtin.js`, which was one of the two edges closing the
+  // runAgent <-> SubagentTool cycle.
+  const registry = createToolRegistry()
   const allTools = registry.getAllTools()
   const toolNames = new Set(toolOverlayResult.tools.map(t => t.name))
   let toolsToUse = toolNames.size > 0
@@ -388,7 +452,9 @@ export async function* runAgent({
 
   // The explicit systemPrompt replaces DuyaAgent's normal prompt path, so it
   // must already contain both the agent role and the shared project harness.
-  const subAgent = new duyaAgent({
+  // Plan 610 A5: constructed by the injected factory rather than by importing
+  // `DuyaAgent` here, which was the other edge closing the cycle.
+  const subAgent = createSubAgent({
     apiKey,
     baseURL: toolUseContext.options.baseURL,
     model: agentModel,
@@ -409,7 +475,11 @@ export async function* runAgent({
     ...(permissionMode ? { permissionMode } : {}),
   })
 
-  logger.info('[SubAgent] streamChat starting', {
+  // Plan 610 S4c-d3: the message says `run starting`, not `streamChat starting`,
+  // because `streamChat` is no longer what this row describes. The fields are
+  // unchanged — a log line that kept naming a deleted driver would send the next
+  // reader looking for it.
+  logger.info('[SubAgent] run starting', {
     agentId,
     agentType: agentDefinition.agentType,
     toolCount: toolsToUse.length,
@@ -496,13 +566,40 @@ export async function* runAgent({
     }, 5000)
 
     try {
-      const eventIterator = subAgent.streamChat(promptText, {
-        systemPrompt,
-        tools: toolsToUse,
-        maxTurns: agentMaxTurns,
-        toolRegistry: registry,
-        // Per-call thinking budget. Undefined inherits the runtime default.
-        ...(effort ? { effort } : {}),
+      // Plan 610 S4c-d3: the sub-agent's turn is driven by the ENGINE, through
+      // the same `driveRunWithEngine` the worker entry and the headless host
+      // call. This used to be `subAgent.streamChat(promptText, …)`, which ran
+      // `DuyaAgent`'s own turn generator — the third and last production driver
+      // of that loop. Everything below this line (the stall watchdog, the abort
+      // handling, the progress callbacks, the result message) is UNCHANGED: the
+      // flip is in where the event stream comes from, and
+      // `subagent-engine-run.ts` owns that translation alone.
+      const eventIterator = driveSubagentRunWithEngine({
+        agent: subAgent,
+        agentId,
+        prompt: promptText,
+        options: {
+          systemPrompt,
+          tools: toolsToUse,
+          toolRegistry: registry,
+          // Kept in the options bag as well as handed to the driver, because the
+          // worker entry does the same and something downstream of the options
+          // reads it there. The DRIVER's own `maxTurns` is what becomes the
+          // engine's ceiling, so this row alone would have let an uncapped
+          // sub-agent run forever.
+          maxTurns: agentMaxTurns,
+          // Per-call thinking budget. Undefined inherits the runtime default.
+          ...(effort ? { effort } : {}),
+        } as ChatOptions,
+        workingDirectory,
+        // The SAME expression the child instance above was constructed with
+        // (`DuyaAgent.ts:2773`), so the manifest records the provider the child
+        // actually resolved rather than the caller's possibly-absent one.
+        providerId: toolUseContext.options.provider ?? inferProvider(toolUseContext.options.baseURL ?? ''),
+        ...(agentMaxTurns === undefined ? {} : { maxTurns: agentMaxTurns }),
+        ...(sessionId === undefined ? {} : { sessionId }),
+        ...(permissionMode === undefined ? {} : { permissionMode }),
+        ...(engineLedgerDir === undefined ? {} : { ledgerDir: engineLedgerDir }),
       })[Symbol.asyncIterator]()
 
       let sawFirstEvent = false

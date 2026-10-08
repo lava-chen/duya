@@ -197,14 +197,44 @@ modules:
   - id: agent-core
     roots: [packages/agent-core]
     managed: true
-    requires: [agent-protocol, ai]
+    # Plan 610: `ai` REMOVED, and that removal is the point — do not "restore"
+    # it as `legacy-ai`.
+    #
+    # `ai` did not match any declared module id (the id is `legacy-ai`), so it
+    # resolved to `false` and permitted NOTHING. Measured: agent-core has 12
+    # cross-module edges, all to `agent-protocol`, and ZERO to `packages/ai`.
+    # Deleting the entry changes no edge's classification today.
+    #
+    # Renaming it to `legacy-ai` WOULD change enforcement, in the wrong
+    # direction: a resolvable entry puts every future `agent-core -> packages/ai`
+    # edge into `module-dependency-permitted`, and that rule is in
+    # MEASUREMENT_RULES — permitted edges are pushed straight to `tolerated` and
+    # NEVER block, not even inside a `managed: true` module. So the rename would
+    # pre-authorise, forever, exactly the edge the `layers:` block says core must
+    # not be able to take. Leaving it unresolvable is what keeps that edge
+    # blocking if someone ever adds it.
+    #
+    # The layering intent ("`ai` is core") lives in `layers:` above, where it is
+    # argued from measurement. It does not belong in a `requires` entry, because
+    # a `requires` entry that resolves is a standing permission.
+    requires: [agent-protocol]
     publicEntrypoints: [packages/agent-core/src/index.ts]
     owner: agent
 
   - id: agent-runtime
     roots: [packages/agent-runtime]
     managed: true
-    requires: [agent-protocol, agent-core, agent-tools, ai, plugin-core]
+    # Plan 610: `agent-tools`, `ai` and `plugin-core` REMOVED. Same reasoning as
+    # agent-core above, plus `agent-tools` names nothing at all — there is no
+    # `packages/agent-tools` on disk, no module id for it, and no module whose
+    # `roots` covers such a path.
+    #
+    # Measured: agent-runtime has 130 cross-module edges — 126 to
+    # `agent-protocol`, 4 to `agent-core` — and ZERO to `packages/ai`,
+    # `packages/plugin-core`, `packages/computer-use`, or any `UNRESOLVED:`
+    # owner. The `agent-runtime -> plugin-core / computer-use / ai` edges that
+    # `allowedDependencies` below claims are granted do not exist.
+    requires: [agent-protocol, agent-core]
     publicEntrypoints: [packages/agent-runtime/src/index.ts]
     owner: agent
 
@@ -240,14 +270,14 @@ modules:
     # kill strategy, so this edge buys a lifetime abstraction and not a
     # relocation of `processTreeKill` -- which stays put, with its test and its
     # `evals/agent` matrix row, because moving it would have been churn.
-    requires: [agent-protocol, agent-runtime, legacy-ai, repo-tooling]
+    requires: [agent-protocol, agent-runtime, legacy-ai, repo-tooling, memory]
     owner: agent
     migrateTo: agent-core
 
   - id: legacy-desktop
     roots: [src, electron]
     managed: false
-    requires: []
+    requires: [memory]
     owner: desktop
     migrateTo: apps/desktop
 
@@ -287,7 +317,7 @@ modules:
   - id: desktop-host
     roots: [apps/desktop]
     managed: false
-    requires: [agent-protocol, agent-runtime, legacy-plugin-core, desktop-contracts]
+    requires: [agent-protocol, agent-runtime, legacy-plugin-core, connectors, desktop-contracts, memory]
     owner: desktop
 
   - id: repo-tooling
@@ -332,8 +362,6 @@ modules:
     # from this list, so this block is documentation of the intended surface.
     publicEntrypoints:
       - packages/plugin-core/src/index.ts
-      - packages/plugin-core/src/connectors/app-connector-id.ts
-      - packages/plugin-core/src/connectors/app-schema.ts
       - packages/plugin-core/src/mcp/collect.ts
       - packages/plugin-core/src/mcp/user-config.ts
       - packages/plugin-core/src/mcp/resolve.ts
@@ -347,6 +375,53 @@ modules:
       - packages/plugin-core/src/mcp/core/projection.ts
       - packages/plugin-core/src/security/path-validator.ts
     owner: extensibility
+
+  # Plan 610 A5 — the first of the six new packages.
+  #
+  # `managed: true` from the first commit, on the `agent-protocol` precedent:
+  # a vocabulary leaf with `requires: []` has nothing to baseline, so
+  # baselining it would only buy the appearance of leniency. Measured: zero
+  # `@duya/*` imports — only `zod` and a sibling module.
+  #
+  # Scope note: this declares the App-connector ID and schema ONLY. The
+  # AppConnectionTool / AppConnectorManageTool tools are NOT here — they are
+  # blocked on `Tool` / `ToolUseContext` / `ToolExecutor` / `ToolMetaInput`
+  # living inside `packages/agent`, and on `tooling` and `capabilities`
+  # existing. A name with no matching module silently permits nothing, so
+  # declaring them early would declare a permission nothing can use.
+  - id: connectors
+    roots: [packages/connectors]
+    managed: true
+    requires: []
+    publicEntrypoints:
+      - packages/connectors/src/index.ts
+      - packages/connectors/src/app-connector-id.ts
+      - packages/connectors/src/app-schema.ts
+    owner: extensibility
+
+  # Plan 610 A5. `@duya/memory` is the agent-side memory implementation moved
+  # out of `packages/agent/src/{memory-state,memory-rollout}`.
+  #
+  # `managed: true` — zero tolerance from the first commit, like every other
+  # package this series has created. It has exactly one `@duya/*` dependency,
+  # `@duya/ai`, and nothing about it is baselined, so there is no debt here to
+  # be lenient about. A package that starts tolerant has to be tightened later,
+  # and tightening a baseline is the operation this project has forbidden.
+  - id: memory
+    roots: [packages/memory]
+    managed: true
+    # `legacy-ai`, NOT `ai`. `moduleDependencyPermitted` resolves a `requires`
+    # entry by looking up a module whose `id` matches the string exactly, and
+    # the module owning `packages/ai` is named `legacy-ai`. A `requires: [ai]`
+    # finds nothing, `?? false` makes it permit nothing, and the edge it was
+    # meant to allow is reported as a violation instead — which is exactly the
+    # "a `requires` list nobody can satisfy is not a boundary" failure the
+    # header of `architecture-check.mjs` documents.
+    requires: [legacy-ai]
+    publicEntrypoints:
+      - packages/memory/src/index.ts
+      - packages/memory/src/testing/index.ts
+    owner: agent
 
   - id: legacy-ai
     roots: [packages/ai]
@@ -605,7 +680,30 @@ selfTest:
   # `scripts/` is absent from `audit-imports.mjs:ROOTS`
   # (`["apps","packages","tests","e2e"]`), so it is never a scan SOURCE and
   # cannot host an unchecked edge.
-  module-dependency: 380
+  #
+  # 380 -> 349 (plan 610 A5). ALL THIRTY-ONE REMOVED, none added.
+  #
+  # Attributed by measurement, not inferred: this series recorded the counter at
+  # 380 immediately before `@duya/memory` landed (`ac7a1995`) and 349 immediately
+  # after, so the extraction accounts for the whole delta. The edges that
+  # disappeared were cross-module imports that became INTRA-package once the
+  # agent-side memory implementation moved into a declared workspace package --
+  # they were never legal, merely tolerated debt, and paying them is the point of
+  # the slice.
+  #
+  # WHY LOWERING THE PIN IS NOT A FALSE GREEN. This pin exists so that a resolver
+  # which has gone BLIND and a codebase which has genuinely IMPROVED are not
+  # mistaken for each other; the numbers can only tell them apart if the pin is
+  # re-measured whenever the count legitimately moves. Holding 380 would make
+  # every future migration fail this check, and the only way to satisfy it would
+  # be to stop migrating.
+  #
+  # `.architecture-baseline.json` is deliberately NOT re-recorded by this edit.
+  # It still carries all 930 fingerprints, 108 of which no longer trigger; the
+  # baseline's own note sanctions deleting them "as their migration lands", and
+  # that is a separate, explicitly-forbidden operation. This pin is a test
+  # expectation; the baseline is a debt ledger. They are different instruments.
+  module-dependency: 349
   # 51 -> 61 (plan 587 T3.2): TEN new, all one owner pair, 0 removed.
   #
   # `module-dependency` is UNCHANGED at 559, and that is the load-bearing half:
@@ -1228,7 +1326,19 @@ selfTest:
   # 162 -> 146 by plan 587 M5.2: the 16 host imports that reached into
   # `packages/plugin-core/src` by relative path now use declared subpaths. The
   # 126 agent escapes are untouched — that is the pair the same slice CUT.
-  package-boundary-escape: 146
+  #
+  # 146 -> 115 (plan 610 A5). The delta is THIRTY-ONE, the same number the
+  # `module-dependency` pin lost in the same slice, which is the expected shape:
+  # the same 31 imports stopped crossing a module boundary AND stopped escaping a
+  # package root, because the code moved into a package of its own.
+  #
+  # HONEST ATTRIBUTION: unlike `module-dependency`, this pin does not have its own
+  # recorded before/after pair from the extraction. The shared delta and the
+  # mechanism are consistent with it, but "31 and 31" is corroboration, not a
+  # measurement. What makes this safe to pin is the mutation proof that must be
+  # re-run whenever these numbers move: inject one real escape and this pin must
+  # go red.
+  package-boundary-escape: 115
   # Was 24. The 25 are 2x `@duya/agent/tool/allowedRoots`
   # (`main/core/media-allowlist.ts`, `main/ipc/system-handlers.ts`) and
   # 23 `src-renderer` -> `@duya/conductor/renderer/*`; neither is plugin-core.
@@ -1292,7 +1402,21 @@ selfTest:
   # deliberately -- widening the regex moves every count in this file and is a
   # separate piece of work, not something to smuggle into a change whose whole
   # justification is that it made the gate MORE accurate.
-  cycle: 9
+  #
+  # 9 -> 8 (plan 610). The size-15 SCC anchored on `packages/agent/src/agent/
+  # DuyaAgent.ts` stopped existing; it did not shrink. `SubagentTool` stopped
+  # being a module-level singleton and became one instance per registry, and the
+  # two composition dependencies `runAgent` used to resolve through module
+  # imports (`DuyaAgent` as a value import, and a DYNAMIC `import('../builtin.js')`
+  # -- both are real edges to the resolver) now arrive as required fields on
+  # `RunAgentParams`.
+  #
+  # MUTATION-PROVEN, not asserted: re-introducing either edge turns this count back
+  # into 9 and the gate red. The two edges were re-introduced one at a time and
+  # each was observed to restore a cycle, with different fingerprints (size 15
+  # anchored on DuyaAgent; size 4 anchored on SubagentTool) -- so this is two
+  # genuinely separate edges, not one change reported twice.
+  cycle: 8
   # Was 1: plugin-core was the only package under packages/ with no
   # `exports` map. The rule is declarative — it reads package.json only, so
   # this stays 0 regardless of whether dist/ has been built.

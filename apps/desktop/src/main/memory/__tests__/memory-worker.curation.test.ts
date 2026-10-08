@@ -39,7 +39,7 @@ vi.mock('../curation_publish_orchestrator', () => ({
   runCurationCycle: mocks.runCurationCycle,
 }));
 
-vi.mock('../../../../../../packages/agent/src/memory-state/curation_ledger', () => ({
+vi.mock('@duya/memory/curation_ledger', () => ({
   queryEligibleInputs: mocks.queryEligibleInputs,
 }));
 

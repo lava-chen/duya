@@ -37,12 +37,12 @@ import type { AIClient } from '@duya/ai';
 
 import { parseCurationResponse, CurationParseError } from './curation_response_parser';
 import { applyCurationActions, resolveAreaPath, type ApplyResult } from './curation_file_writer';
-import { listEntityDirs, isValidEntityDirName } from '../../../../../packages/agent/src/memory-state/entity_dirs';
+import { listEntityDirs, isValidEntityDirName } from '@duya/memory/entity_dirs';
 import type { CurationResponse } from './curation_response_parser';
 import {
   applyPolicyEdits,
   readPolicyForPrompt,
-} from '../../../../../packages/agent/src/memory-rollout/stage1_policy_editor';
+} from '@duya/memory/stage1_policy_editor';
 import { getLogger, LogComponent } from '../logging/logger';
 
 const logger = getLogger();

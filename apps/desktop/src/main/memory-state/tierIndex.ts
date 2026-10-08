@@ -25,13 +25,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { Database } from 'better-sqlite3';
 import { getLogger, LogComponent } from '../logging/logger';
-import { parseCanonicalFile } from '../../../../../packages/agent/src/memory-state/canonical_file';
+import { parseCanonicalFile } from '@duya/memory/canonical_file';
 import {
   mergeTierRecall,
   type MemoryTier,
   type TierEntryKind,
   type MergedTierRecall,
-} from '../../../../../packages/agent/src/memory-state/tierConflicts';
+} from '@duya/memory/tierConflicts';
 
 export type { MemoryTier, TierEntryKind, MergedTierRecall };
 

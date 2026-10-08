@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
   backupMemoryBeforeRun: vi.fn(),
 }));
 
-vi.mock('../../../../../../packages/agent/src/memory-state/curation_ledger', () => ({
+vi.mock('@duya/memory/curation_ledger', () => ({
   queryEligibleInputs: mocks.queryEligibleInputs,
   claimRun: mocks.claimRun,
   completeRun: mocks.completeRun,

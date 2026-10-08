@@ -62,6 +62,14 @@ vi.mock('../../../src/ipc/db-client.js', () => ({
   pluginDb: {
     list: vi.fn(async () => []),
   },
+  // The run driver settles through the agent's `Journal`, which imports
+  // `messageDb` at module load. `streamChat` never reached one.
+  messageDb: {
+    append: vi.fn(async (_sessionId: string, messages: unknown[]) => ({
+      success: true,
+      count: messages.length,
+    })),
+  },
 }));
 
 const agentsMdState = vi.hoisted(() => ({ currentText: '' }));
@@ -83,6 +91,12 @@ import { duyaAgent } from '../../../src/agent/DuyaAgent.js';
 import type { Message } from '../../../src/types.js';
 import { THREAD_METADATA_KEY } from '../../../src/message/threads.js';
 import { clearCommandQueue } from '../../../src/queue/index.js';
+import {
+  cleanupEngineTurnDirs,
+  driveTurn,
+  installEngineTurnIpc,
+  restoreEngineTurnIpc,
+} from '../../helpers/engineTurnHarness.js';
 
 function newAgent(options: Record<string, unknown> = {}): duyaAgent {
   return new duyaAgent({
@@ -107,16 +121,22 @@ function assistantMessage(content: string, id?: string): Message {
   };
 }
 
+/**
+ * Drive one real turn through the run driver.
+ *
+ * `DuyaAgent.streamChat` no longer exists (plan 610 A3 / S4c-d3). `replyToId` and
+ * `branched` were `streamChat` OPTIONS and are still `ChatOptions`: the driver
+ * reads them off `request.options` and forwards them to
+ * `commitTurnPromptUserRow` (`engine-run-driver.ts:473-476`), which is the same
+ * `resolveReplyMeta` call the legacy made. So the fork/quote behaviour under
+ * test is reached unchanged, one layer out.
+ */
 async function drainStream(
   agent: duyaAgent,
   prompt: string,
-  options?: Parameters<duyaAgent['streamChat']>[1],
-): Promise<SSEEvent[]> {
-  const events: SSEEvent[] = [];
-  for await (const event of agent.streamChat(prompt, options)) {
-    events.push(event);
-  }
-  return events;
+  options?: { replyToId?: string; branched?: boolean },
+): Promise<void> {
+  await driveTurn(agent, prompt, { options: (options ?? {}) as never });
 }
 
 /** Extracts user-facing model content from the messages a provider call saw. */
@@ -134,16 +154,19 @@ function modelUserTexts(messages: unknown): string[] {
 }
 
 describe('Plan 486 — thread/fork branched layer runtime', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     streamState.current = { responses: [], errors: [] };
     streamState.callCount = 0;
     streamState.seenMessages = [];
     agentsMdState.currentText = '';
     clearCommandQueue();
+    await installEngineTurnIpc();
   });
 
   afterEach(() => {
     clearCommandQueue();
+    restoreEngineTurnIpc();
+    cleanupEngineTurnDirs();
     vi.restoreAllMocks();
   });
 
@@ -158,7 +181,27 @@ describe('Plan 486 — thread/fork branched layer runtime', () => {
 
     // Model projection: main-line messages only — the fork text is absent.
     const texts = modelUserTexts(streamState.seenMessages[0]);
-    expect(texts.some((t) => t.includes('side question in thread'))).toBe(false);
+
+    // KNOWN PRODUCTION DEFECT, not a harness artifact. Green against
+    // `streamChat`, red against the run driver, left red on purpose.
+    //
+    // A forked turn's rows are excluded from the model projection by
+    // `composeLegacyRunSources`' `assembleTurn` wrapper, which is reached ONLY
+    // when `host.runFork` is supplied (`run-composition.ts:743-752`): the
+    // wrapper calls `restoreRunOwnRows` to scope the projection to the fork.
+    // `driveRunWithEngine` builds its `LegacyRunHost` and NEVER sets
+    // `runFork` -- `grep -rn "runFork" packages/agent/src` matches only
+    // `run-composition.ts` and two tests that construct the host by hand. So on
+    // the driver path the fork is persisted and tagged (the durable half below
+    // passes) but nothing scopes it out of the projection.
+    //
+    // `__tests__/engine-fork-metadata-proof.test.ts` binds `runFork` explicitly
+    // and is green, which is why this went unnoticed: the proof exercises
+    // `composeLegacyRunPorts`, not the driver that production calls.
+    expect(
+      texts.some((t) => t.includes('side question in thread')),
+      'driveRunWithEngine supplies no host.runFork, so the fork is not scoped out',
+    ).toBe(false);
 
     // Durable projection keeps the fork with its thread metadata intact.
     const durable = agent.getMessages();
@@ -182,7 +225,24 @@ describe('Plan 486 — thread/fork branched layer runtime', () => {
     const texts = modelUserTexts(streamState.seenMessages[0]);
     const replyText = texts.find((t) => t.includes('Why 42?'));
     expect(replyText).toBeDefined();
-    expect(replyText).toContain('[In reply to asst-1: "The answer is 42."]');
+
+    // KNOWN, ALREADY-ACCOUNTED-FOR PRODUCTION GAP. Left red on purpose.
+    //
+    // The quote is rendered per-request by `_applyProviderThreadBoundary`
+    // (`DuyaAgent.ts:3314`), which is `private` and was reached only from inside
+    // `streamChat`. The engine's model port (`createClientModelPort`) never goes
+    // through it, so the prefix is not rendered on this path.
+    //
+    // This is NOT a surprise: `src/process/__tests__/engine-fork-metadata-proof.test.ts:863`
+    // already pins the same absence and labels it "stays D2" -- D1 tags DURABLE
+    // rows, the quote is a per-request RENDERING of the same metadata. So the
+    // durable half of this case still passes below; only the wire half is
+    // waiting on D2. The assertion is kept rather than deleted so that the slice
+    // which wires the boundary turns it GREEN.
+    expect(
+      replyText,
+      'the [In reply to ...] boundary is private to streamChat and unwired on the engine path',
+    ).toContain('[In reply to asst-1: "The answer is 42."]');
 
     // The durable message itself carries only the metadata marker, not the quote.
     const durable = agent.getMessages();
@@ -199,18 +259,31 @@ describe('Plan 486 — thread/fork branched layer runtime', () => {
     const agent = newAgent();
     agent.setMessages([userMessage('root question', 'root-1')]);
 
-    // First call is the plain user turn. The second call simulates a mid-run
-    // re-projection path (same streamChat continues with the same user row).
+    // First turn, then the same turn again over the same target.
     await drainStream(agent, 'tell me more', { replyToId: 'root-1' });
     const first = modelUserTexts(streamState.seenMessages[0])[0];
-    expect(first).toContain('[In reply to root-1: "root question"]');
 
-    // Re-run the same streamChat with the same target: content must not stack.
+    // Re-run the same turn with the same target: content must not stack.
     agent.setMessages(agent.getMessages());
     await drainStream(agent, 'tell me more', { replyToId: 'root-1' });
     const second = modelUserTexts(streamState.seenMessages[0])[0];
-    expect(second).toContain('[In reply to root-1: "root question"]');
+
+    // The claim under test is IDEMPOTENCE -- the second projection must not
+    // accumulate a second copy of whatever the first one injected. That holds
+    // today, and it is what makes the fix for the D2 gap below safe to land: a
+    // boundary wired into the engine path has to be re-entrant, and this is the
+    // assertion that would catch one that is not.
+    expect(second).toBe(first);
     expect(second.split('[In reply to root-1:').length).toBe(2); // exactly once
+
+    // KNOWN PRODUCTION GAP (the D2 one, as above): the boundary is private to
+    // `streamChat`, so NEITHER projection renders a quote today and the
+    // "exactly once" count above is satisfied by zero. Asserted so the slice
+    // that wires it turns this green rather than leaving it silently passing.
+    expect(
+      second,
+      'the [In reply to ...] boundary is unwired on the engine path (D2)',
+    ).toContain('[In reply to root-1: "root question"]');
   });
 
   it('an unknown replyToId is silently stripped — the turn behaves like a plain send', async () => {

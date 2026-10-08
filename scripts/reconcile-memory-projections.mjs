@@ -1,8 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import Database from 'better-sqlite3';
-import { drainOutbox } from '../packages/agent/dist/memory-state/outbox.js';
-import { reconcileProjections } from '../packages/agent/dist/memory-state/reconcile.js';
+import { drainOutbox } from '@duya/memory/outbox';
+import { reconcileProjections } from '@duya/memory/reconcile';
 
 function requireAbsoluteExistingPath(value, label) {
   if (!value || !path.isAbsolute(value)) {

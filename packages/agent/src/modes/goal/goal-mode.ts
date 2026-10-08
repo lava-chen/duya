@@ -88,7 +88,8 @@ export const goalMode: ModeModifier = {
     // `update_goal` must survive profile filtering so the model can
     // report completion under any base profile. Gated by `[goal] enabled`
     // (plan 411 Phase 4 config) — when disabled, inject nothing.
-    inject: () => (getGoalConfig().enabled ? getGoalTools() : []),
+    inject: (ctx: ModeModifierContext) =>
+      getGoalConfig().enabled ? getGoalTools(ctx.subagentDeps) : [],
     overrideFilter: true,
   },
 

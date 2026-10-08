@@ -19,7 +19,11 @@
         "../../packages/agent-protocol/dist/transcript/index.d.ts"
       ],
       "@duya/plugin-core": ["../../packages/plugin-core/dist/index.d.ts"],
-      "@duya/plugin-core/*": ["../../packages/plugin-core/dist/*"]
+      "@duya/plugin-core/*": ["../../packages/plugin-core/dist/*"],
+      "@duya/connectors": ["../../packages/connectors/dist/index.d.ts"],
+      "@duya/connectors/*": ["../../packages/connectors/dist/*"],
+      "@duya/memory": ["../../packages/memory/dist/index.d.ts"],
+      "@duya/memory/*": ["../../packages/memory/dist/*"]
     }
   },
   "include": ["src/contracts/**/*.ts", "src/main/**/*.ts"],

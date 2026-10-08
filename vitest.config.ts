@@ -8,9 +8,18 @@ import { fileURLToPath } from 'url'
 // subpaths (`@duya/plugin-core/mcp/core/alias`) instead of reaching into
 // `src/`, so the alias has to map a subpath onto `dist/<subpath>`.
 const PLUGIN_CORE_DIST = fileURLToPath(new URL('./packages/plugin-core/dist', import.meta.url))
+// Plan 610 A5: same worktree-safety reason, for the package that took over the
+// App Connector vocabulary and the `.app.json` declaration schema.
+const CONNECTORS_DIST = fileURLToPath(new URL('./packages/connectors/dist', import.meta.url))
 // Same reason: the protocol package must be tested against THIS worktree's
 // source, never the primary checkout's dist.
 const AGENT_PROTOCOL_SRC = fileURLToPath(new URL('./packages/agent-protocol/src', import.meta.url))
+// Plan 610 A5: memory moved out of `packages/agent/src/memory-{state,rollout}`
+// into its own package. Aliased to SOURCE, not dist, so a test that mocks or
+// imports a memory subpath exercises the code being edited without requiring a
+// build first -- and so `vi.mock` on a memory subpath intercepts the same
+// module id the consumer under test imports.
+const MEMORY_SRC = fileURLToPath(new URL('./packages/memory/src', import.meta.url))
 
 export default defineConfig({
   test: {
@@ -33,6 +42,17 @@ export default defineConfig({
       'packages/agent-runtime/test/**/*.test.ts',
       'packages/gateway/src/**/*.test.ts',
       'packages/agent/src/**/*.test.ts',
+      // Plan 610 A5: the memory tests moved with the code into
+      // `packages/memory/src/__tests__`. Without this glob they are tracked
+      // test files that no runner collects, which `check-test-coverage`
+      // correctly treats as a test nobody ever runs.
+      //
+      // No apostrophe characters anywhere in this comment:
+      // `check-test-coverage.mjs` reads the include array with a regex over
+      // quoted strings and does not strip comments, so one apostrophe here
+      // silently swallows the glob below and the gate starts reporting every
+      // test file in the repo as an orphan.
+      'packages/memory/src/**/*.test.ts',
       'packages/cli/src/**/*.test.ts',
       'packages/computer-use/src/**/*.test.ts',
       'scripts/**/*.test.ts',
@@ -77,6 +97,17 @@ export default defineConfig({
       // name first, then subpaths — the bare rule must not swallow them.
       { find: /^@duya\/plugin-core$/, replacement: PLUGIN_CORE_DIST + '/index.js' },
       { find: /^@duya\/plugin-core\/(.*)$/, replacement: PLUGIN_CORE_DIST + '/$1' },
+      // Plan 610 A5: the App Connector vocabulary and `.app.json` schema moved
+      // out of plugin-core into their own package. Same reason as above — this
+      // checkout's `dist`, never the primary checkout's node_modules junction.
+      { find: /^@duya\/connectors$/, replacement: CONNECTORS_DIST + '/index.js' },
+      { find: /^@duya\/connectors\/(.*)$/, replacement: CONNECTORS_DIST + '/$1' },
+      // Plan 610 A5. Subpath rule before the bare name, so a declared subpath is
+      // never swallowed. `/testing` resolves to the subpath INDEX (it holds two
+      // modules, not one).
+      { find: /^@duya\/memory\/testing$/, replacement: MEMORY_SRC + '/testing/index.ts' },
+      { find: /^@duya\/memory\/(.*)$/, replacement: MEMORY_SRC + '/$1' },
+      { find: /^@duya\/memory$/, replacement: MEMORY_SRC + '/index.ts' },
       // Subpaths first: the bare name would otherwise swallow
       // `@duya/agent-protocol/testing` and `/legacy`.
       // `/testing` resolves to the subpath INDEX, matching the package's own

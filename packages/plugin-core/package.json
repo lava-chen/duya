@@ -13,14 +13,6 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./connectors/app-connector-id": {
-      "types": "./dist/connectors/app-connector-id.d.ts",
-      "default": "./dist/connectors/app-connector-id.js"
-    },
-    "./connectors/app-schema": {
-      "types": "./dist/connectors/app-schema.d.ts",
-      "default": "./dist/connectors/app-schema.js"
-    },
     "./mcp/collect": {
       "types": "./dist/mcp/collect.d.ts",
       "default": "./dist/mcp/collect.js"

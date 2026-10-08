@@ -25,11 +25,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import BetterSqlite3 from 'better-sqlite3';
 import { CoreDatabase } from '../database';
 import { ProjectStore, parseProjectPaths, serializeProjectPaths } from '../project-store';
 import {
   createProject,
   CURRENT_PROJECT_AGENTS_MD_VERSION,
+  deleteProject,
   ensurePlansDirs,
   ensureProjectAgentsMd,
   ensureProjectPlansSkeleton,
@@ -573,5 +575,203 @@ user wrote this
     expect(readProjectAgentsMdVersion(readAgentsMd('legacy-update'))).toBe(
       CURRENT_PROJECT_AGENTS_MD_VERSION,
     );
+  });
+});
+
+/**
+ * projectService — `deleteProject` unbind against the memory-state DB.
+ *
+ * Deleting a project is the one place where `db/core` writes to a SECOND
+ * SQLite database: the `rollout_catalog` table in `memory-state.db` carries
+ * a `scope_kind`/`project_id` pair, and the delete unbinds every row bound
+ * to the project (`project_id -> NULL`, `scope_kind -> 'global'`).
+ *
+ * Both columns must move together. migration 0001 declares
+ *
+ *   CHECK ((scope_kind = 'global'  AND project_id IS NULL)
+ *      OR (scope_kind = 'project' AND project_id IS NOT NULL))
+ *
+ * so a half-applied unbind is rejected by SQLite. The FK to `projects` is
+ * `ON DELETE RESTRICT`, which is why the unbind (not a row delete) is the
+ * mechanism at all.
+ *
+ * The second DB here is built from a deliberately MINIMAL mirror of the
+ * 0001 columns and constraints this path depends on, rather than by
+ * importing `memory-state/migrations`: `db/core` must not depend on
+ * memory-state, and its tests must not smuggle that dependency back in.
+ */
+describe('projectService — deleteProject rollout_catalog unbind', () => {
+  let tempDir: string;
+  let core: CoreDatabase;
+  let projectsRoot: string;
+  let memory: BetterSqlite3.Database;
+
+  /** Minimal mirror of memory-state 0001: the FK target + the two columns. */
+  function createMemoryDb(dbPath: string): BetterSqlite3.Database {
+    const db = new BetterSqlite3(dbPath);
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    db.exec(`
+      CREATE TABLE projects (
+        project_id TEXT PRIMARY KEY,
+        canonical_root TEXT NOT NULL,
+        name TEXT,
+        description TEXT,
+        paths TEXT,
+        created_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL
+      );
+      CREATE TABLE rollout_catalog (
+        rollout_id TEXT PRIMARY KEY,
+        scope_kind TEXT NOT NULL CHECK (scope_kind IN ('global','project')),
+        project_id TEXT,
+        agent_type TEXT NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects(project_id)
+          ON UPDATE RESTRICT ON DELETE RESTRICT,
+        CHECK (
+          (scope_kind = 'global' AND project_id IS NULL)
+          OR
+          (scope_kind = 'project' AND project_id IS NOT NULL)
+        )
+      );
+    `);
+    return db;
+  }
+
+  function seedCatalogRow(rolloutId: string, projectId: string): void {
+    memory
+      .prepare(
+        `INSERT INTO rollout_catalog (rollout_id, scope_kind, project_id, agent_type)
+         VALUES (?, 'project', ?, 'main')`,
+      )
+      .run(rolloutId, projectId);
+  }
+
+  function readCatalogRow(rolloutId: string): {
+    scope_kind: string;
+    project_id: string | null;
+  } {
+    return memory
+      .prepare('SELECT scope_kind, project_id FROM rollout_catalog WHERE rollout_id = ?')
+      .get(rolloutId) as { scope_kind: string; project_id: string | null };
+  }
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'projectservice-delete-'));
+    core = new CoreDatabase({
+      filename: path.join(tempDir, 'duya-core.db'),
+      migrations: ProjectStore.migrations,
+    });
+    projectsRoot = path.join(tempDir, 'projects');
+    memory = createMemoryDb(path.join(tempDir, 'memory-state.db'));
+    const now = Date.now();
+    memory
+      .prepare(
+        `INSERT INTO projects (project_id, canonical_root, created_at, last_seen_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run('core-1', 'e:/Projects/one', now, now);
+    memory
+      .prepare(
+        `INSERT INTO projects (project_id, canonical_root, created_at, last_seen_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run('core-2', 'e:/Projects/two', now, now);
+    core.db
+      .prepare(
+        `INSERT INTO projects (
+          project_id, canonical_root, name, description, paths, icon, color,
+          created_at, last_seen_at
+        ) VALUES (?, ?, ?, NULL, '[]', NULL, NULL, ?, ?)`,
+      )
+      .run('core-1', 'e:/Projects/one', 'One', now, now);
+    core.db
+      .prepare(
+        `INSERT INTO projects (
+          project_id, canonical_root, name, description, paths, icon, color,
+          created_at, last_seen_at
+        ) VALUES (?, ?, ?, NULL, '[]', NULL, NULL, ?, ?)`,
+      )
+      .run('core-2', 'e:/Projects/two', 'Two', now, now);
+  });
+
+  afterEach(() => {
+    try { core.close(); } catch { /* best-effort */ }
+    try { memory.close(); } catch { /* best-effort */ }
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+  });
+
+  function serviceOpts() {
+    return {
+      projectsDb: core.db,
+      memoryDb: memory,
+      projectsRoot,
+    };
+  }
+
+  it('unbinds every rollout bound to the project and leaves other projects alone', () => {
+    seedCatalogRow('r-mine-1', 'core-1');
+    seedCatalogRow('r-mine-2', 'core-1');
+    seedCatalogRow('r-theirs', 'core-2');
+    new ProjectStore(core.db).addBot('core-1', 'bot-a');
+    new ProjectStore(core.db).addBot('core-2', 'bot-b');
+
+    const deleted = deleteProject('core-1', serviceOpts());
+    expect(deleted).toBe(true);
+
+    // The unbind moved BOTH columns — required by the 0001 CHECK.
+    expect(readCatalogRow('r-mine-1')).toEqual({ scope_kind: 'global', project_id: null });
+    expect(readCatalogRow('r-mine-2')).toEqual({ scope_kind: 'global', project_id: null });
+
+    // Scoped unbind: another project's rollouts are untouched.
+    expect(readCatalogRow('r-theirs')).toEqual({ scope_kind: 'project', project_id: 'core-2' });
+
+    // Core-side deletes still ran, in both tables.
+    expect(core.db.prepare('SELECT * FROM projects WHERE project_id = ?').get('core-1')).toBeUndefined();
+    expect(core.db.prepare('SELECT * FROM projects WHERE project_id = ?').get('core-2')).toBeDefined();
+    expect(new ProjectStore(core.db).listBotsByProject('core-1')).toEqual([]);
+    expect(new ProjectStore(core.db).listBotsByProject('core-2')).toHaveLength(1);
+
+    // The memory-state FK placeholder row is NOT deleted by the unbind —
+    // it is deliberately left behind so the legacy FK stays satisfiable.
+    expect(
+      memory.prepare('SELECT * FROM projects WHERE project_id = ?').get('core-1'),
+    ).toBeDefined();
+  });
+
+  it('is a no-op (returns false, touches no catalog row) for an unknown project', () => {
+    seedCatalogRow('r-mine-1', 'core-1');
+
+    const deleted = deleteProject('no-such-project', serviceOpts());
+    expect(deleted).toBe(false);
+
+    // The guard runs BEFORE the memory DB is touched, so nothing was unbound.
+    expect(readCatalogRow('r-mine-1')).toEqual({ scope_kind: 'project', project_id: 'core-1' });
+  });
+
+  it('aborts the whole delete when the memory DB write fails — core rows survive', () => {
+    // Pin the ordering contract: the unbind runs BEFORE the core deletes.
+    // When the unbind throws, neither core table is touched.
+    seedCatalogRow('r-mine-1', 'core-1');
+    new ProjectStore(core.db).addBot('core-1', 'bot-a');
+    memory.exec('DROP TABLE rollout_catalog');
+
+    expect(() => deleteProject('core-1', serviceOpts())).toThrow();
+
+    // The project row AND its bot membership both survive the failure.
+    expect(core.db.prepare('SELECT * FROM projects WHERE project_id = ?').get('core-1')).toBeDefined();
+    expect(new ProjectStore(core.db).listBotsByProject('core-1')).toHaveLength(1);
+  });
+
+  it('requires a memory Db handle; the service no longer opens the second database itself', () => {
+    // `db/core` must not import memory-state, so it cannot default the
+    // handle. A caller that forgets to inject one gets a loud failure
+    // instead of a silent skip of the unbind.
+    seedCatalogRow('r-mine-1', 'core-1');
+
+    expect(() =>
+      deleteProject('core-1', { projectsDb: core.db, projectsRoot }),
+    ).toThrow(/memoryDb/);
+    expect(readCatalogRow('r-mine-1')).toEqual({ scope_kind: 'project', project_id: 'core-1' });
   });
 });

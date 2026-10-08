@@ -24,7 +24,15 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../../ipc/db-client.js', () => ({ modeStateDb: mocks.modeStateDb }));
 vi.mock('../../../tool/SubagentTool/SubagentTool.js', () => ({
-  subagentTool: mocks.subagentTool,
+  // Plan 610 A5: research-fanout no longer imports a module-level
+  // `subagentTool` singleton; it constructs its own instance from the injected
+  // deps. The mock provides the CLASS and forwards `execute` to the same spy,
+  // so every existing assertion on call counts still holds.
+  SubagentTool: class {
+    execute(input: unknown, workingDirectory: unknown, context: unknown) {
+      return mocks.subagentTool.execute(input, workingDirectory, context);
+    }
+  },
 }));
 
 import { researchModeTracker } from '../research-tracker.js';
@@ -33,6 +41,18 @@ import {
   RESEARCH_FANOUT_TOOL_NAME,
   RESEARCH_FANOUT_ERROR_CODES,
 } from '../research-fanout.js';
+import type { SubagentRunDeps } from '../../../tool/SubagentTool/runAgent.js';
+
+// Plan 610 A5: the fan-out tool is built per injection from these deps. The
+// SubagentTool class itself is mocked above, so neither factory is called.
+const stubSubagentDeps: SubagentRunDeps = {
+  createSubAgent: () => {
+    throw new Error('not used by the fan-out suite');
+  },
+  createToolRegistry: () => {
+    throw new Error('not used by the fan-out suite');
+  },
+};
 
 function okResult(content: string, sessionId?: string) {
   return {
@@ -63,13 +83,13 @@ describe('research fan-out tool', () => {
   });
 
   it('injects a research_fanout tool', () => {
-    const { definition } = getResearchFanoutTool();
+    const { definition } = getResearchFanoutTool(stubSubagentDeps);
     expect(definition.name).toBe(RESEARCH_FANOUT_TOOL_NAME);
   });
 
   it('rejects when not gathering', async () => {
     researchModeTracker.transition({ type: 'start', query: 'X' }); // clarifying
-    const { executor } = getResearchFanoutTool();
+    const { executor } = getResearchFanoutTool(stubSubagentDeps);
     const res = await executor.execute({ questions: ['q1'] }, '/wd');
     expect(res.error).toBe(true);
     const parsed = JSON.parse(res.result) as { error_code: string };
@@ -80,7 +100,7 @@ describe('research fan-out tool', () => {
   it('rejects invalid input', async () => {
     researchModeTracker.transition({ type: 'start', query: 'X' });
     researchModeTracker.transition({ type: 'search' }); // gathering
-    const { executor } = getResearchFanoutTool();
+    const { executor } = getResearchFanoutTool(stubSubagentDeps);
     const res = await executor.execute({ questions: [] }, '/wd');
     expect(res.error).toBe(true);
     const parsed = JSON.parse(res.result) as { error_code: string };
@@ -95,7 +115,7 @@ describe('research fan-out tool', () => {
     researchModeTracker.transition({ type: 'start', query: 'X' });
     researchModeTracker.transition({ type: 'search' }); // gathering
 
-    const { executor } = getResearchFanoutTool();
+    const { executor } = getResearchFanoutTool(stubSubagentDeps);
     const res = await executor.execute(
       { questions: ['q1', 'q2'] },
       '/wd',
@@ -139,7 +159,7 @@ describe('research fan-out tool', () => {
     researchModeTracker.transition({ type: 'start', query: 'X' });
     researchModeTracker.transition({ type: 'search' }); // gathering
 
-    const { executor } = getResearchFanoutTool();
+    const { executor } = getResearchFanoutTool(stubSubagentDeps);
     const res = await executor.execute(
       { questions: ['good', 'bad'] },
       '/wd',
@@ -163,7 +183,7 @@ describe('research fan-out tool', () => {
     researchModeTracker.transition({ type: 'start', query: 'X' });
     researchModeTracker.transition({ type: 'search' });
 
-    const { executor } = getResearchFanoutTool();
+    const { executor } = getResearchFanoutTool(stubSubagentDeps);
     const res = await executor.execute({ questions }, '/wd');
     expect(res.error).toBe(false);
     expect(mocks.subagentTool.execute).toHaveBeenCalledTimes(5);

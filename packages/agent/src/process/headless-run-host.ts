@@ -23,7 +23,8 @@
  *          -> manifest frozen, run.started durable
  *          -> InProcessTransport.start  (agent-runtime, the real one)
  *               -> agentExecutionChannel.start   <-- THIS module, and only this
- *                    -> duyaAgent.streamChat      (the real executor)
+ *                    -> driveRunWithEngine        (the ENGINE driver)
+ *                         -> RunEngineImpl.execute  (the real executor)
  *                    -> sse-frame-codec            (the WORKER's codec)
  *          -> RunSession.observe -> emitter mints seq -> ledger
  *     -> handle.events() is the run's ONLY event stream
@@ -36,6 +37,32 @@
  * difference. That is the whole claim, and it is checkable: see
  * `headless-run-host.test.ts`, which asserts the host's frames are the frames
  * the worker's own codec produces.
+ *
+ * ## Plan 610 S4c-d2b: the executor is the ENGINE, not the legacy loop
+ *
+ * This channel used to call `agent.streamChat(...)` and therefore drove
+ * `DuyaAgent`'s own turn generator. It now calls `driveRunWithEngine` -- the
+ * same driver `agent-process-entry.ts` calls -- so the headless/CLI path runs
+ * `RunEngineImpl` and reaches no turn loop. Three things about that are worth
+ * stating rather than leaving to be discovered:
+ *
+ *  - **There are now TWO run layers for one run, deliberately.** The
+ *    `RunController` above this channel owns the caller's truth: the frozen
+ *    manifest, the minted `seq`, the ledger and the terminal that
+ *    `HeadlessRun` reports. `driveRunWithEngine` opens its OWN spine for the
+ *    engine's `run.started` and its own settle, and its envelopes are the
+ *    driver's business, not the caller's. The driver's persistence is therefore
+ *    deliberately NOT bound to this host's store: both would write the SAME
+ *    `runId` into one store with two independent `seq` sequences, and a caller
+ *    reading its own transcript would find the two interleaved.
+ *  - **The finalized assistant message moved.** The legacy read it off the
+ *    generator's RETURN value. The engine does not return one; the assistant row
+ *    is written by `recordTurnAssistantMessage` and read back off
+ *    `agent.getMessages()`, which is where `agent-process-entry.ts` reads it
+ *    from too.
+ *  - **A headless run now writes tool-side-effect journals.** The engine
+ *    refuses to dispatch anything it cannot ticket, so the ledger is required
+ *    rather than optional (see `EngineRunDriverRequest.ledgerDir`).
  *
  * ## Why this is a host ADAPTER and not a runner
  *
@@ -92,6 +119,14 @@ import type {
 import { manifestFingerprint } from '@duya/agent-protocol';
 import { convertSSEToAgentMessage } from './sse-frame-codec.js';
 import { buildMessageFinalizedEvent } from './worker-protocol.js';
+// Plan 610 S4c-d2b: the ENGINE driver, the same one `agent-process-entry.ts`
+// calls. This channel used to call `agent.streamChat` itself, which drove the
+// legacy turn loop; the driver is what makes the headless path reach
+// `RunEngineImpl` instead.
+import { driveRunWithEngine } from './engine-run-driver.js';
+import { TurnPipelinePublisher } from '../tool/turn-pipeline-publisher.js';
+import type { duyaAgent } from '../agent/DuyaAgent.js';
+import type { ChatOptions } from '../types.js';
 
 /** The runtime this host reports in `run.started` and in its probe. */
 const RUNTIME_IDENTITY = { name: 'duya-headless-run-host', version: '0.1.0' } as const;
@@ -103,53 +138,75 @@ const PROTOCOL = { major: 1, minor: 0 } as const;
 const SCHEMA_REVISION = 1;
 
 /**
- * The assistant message an agent's `streamChat` RETURNS when the turn ends.
+ * The assistant message a turn's FINALIZED frame reads.
  *
- * Structurally the two fields the finalized frame reads, and nothing more: the
- * agent is reached through the `HeadlessAgent` port, so this host depends on
- * "something that ends by handing back its final message", not on the class
- * that produces it.
+ * Structurally the two fields `buildMessageFinalizedEvent` reads, and nothing
+ * more. Kept as a name because the question it answers did not change with the
+ * flip: the host needs "the row that holds the turn's authoritative message",
+ * whether that row arrived as a generator's return value (the legacy) or as the
+ * agent's own transcript row (the engine).
  */
 export type HeadlessFinalMessage = Readonly<{ id?: string; content?: unknown }>;
-
-/** The generator's return value, when it is an object rather than `undefined`. */
-function isFinalMessage(value: unknown): HeadlessFinalMessage | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as HeadlessFinalMessage)
-    : null;
-}
 
 /**
  * The slice of `duyaAgent` this host drives.
  *
- * Declared as a port rather than importing the class, for two reasons. The
- * first is testability without a model: the test supplies an agent that yields
- * a scripted event list, so the run layer is exercised end to end with no
- * provider and no network. The second is the boundary itself — the host depends
- * on "something that streams agent events and can be interrupted", which is
- * what makes the same adapter reusable by a host that has a real model.
+ * ## Why this is the CLASS and not a port, and what changed in S4c-d2b
+ *
+ * It used to be an interface with two members -- `streamChat` and `interrupt` --
+ * and that was honest FOR THE LEGACY LOOP, which asked nothing else of an
+ * executor. The engine asks for the run LIFECYCLE instead: `beginRun` owns the
+ * abort controller, `producePromptContextRail` builds the prompt-context track,
+ * `commitTurnPromptUserRow` makes the user's own message durable, and
+ * `beginTurnAssembly` builds the turn's tool surface and its declared-tools
+ * guard. Those are public seams on `duyaAgent` precisely so that a driver can
+ * own a run (plan 610 P4/P5).
+ *
+ * So a narrower interface written HERE would be a second account of what
+ * `driveRunWithEngine` already names once, and the cast that got it past the
+ * type checker would be a claim about a host that has no engine seams at all --
+ * a build where every frame came out identically and nothing was executed by the
+ * engine. That is the `headless-run-host` trap this plan documents.
+ *
+ * ## What naming the class costs
+ *
+ * The host can no longer be handed a two-method scripted double, because such a
+ * double cannot drive a run. That is a real loss of a testing convenience and it
+ * is stated here rather than discovered later: the headless proof now builds a
+ * real `duyaAgent` over a scripted PROVIDER, which is what the engine proofs in
+ * this directory already do. Every production consumer already passed a real
+ * `duyaAgent` -- `cli/index.ts`'s three host sites all build one -- so naming the
+ * class costs the adapter nothing and removes the fiction.
  */
-export interface HeadlessAgent {
+export type HeadlessAgent = duyaAgent;
+
+/**
+ * The two facts the engine driver needs that this module owns rather than reads
+ * off the manifest.
+ *
+ * `now` is the host's injected clock rather than a fresh `Date.now()`, because
+ * the host already owns one (`HeadlessRunHostOptions.now`) and a second clock
+ * here would be a second account of when this run happened. `ledgerDir` exists
+ * because the engine REQUIRES a tool-side-effect ledger -- without one it refuses
+ * to dispatch anything that is not `read_only` -- and a test needs to point that
+ * somewhere other than the user's temp directory.
+ */
+export interface HeadlessEngineWiring {
+  readonly now?: () => number;
+  readonly ledgerDir?: string;
   /**
-   * The generator's RETURN value is the authoritative assistant message, and
-   * the host reads it to emit `chat:message_finalized`.
+   * The executor's tool registry, forwarded onto the driver's options.
    *
-   * `| void` is what keeps this an honest port rather than a new requirement:
-   * the real `duyaAgent.streamChat` resolves to the `AssistantMessage` it
-   * built, while a double — or a host whose agent produces none — may
-   * legitimately return nothing, and then the frame is simply absent, which is
-   * the correct wire for "there was no message to finalise".
+   * A WIRING MEMBER rather than something smuggled through
+   * `RunStartInput.options`, and that placement is load-bearing. The run
+   * input's option bag is canonical JSON — `runInputRevision` derives the run's
+   * revision by serialising it, and `asJson` rejects anything whose prototype
+   * is not `Object.prototype`. A `ToolRegistry` is a class instance, so putting
+   * it in that bag makes `RunController.start` throw before the run opens,
+   * which is why `--task` and the REPL could not start at all. The registry is
+   * a capability handle, not data, and data is what that boundary carries.
    */
-  streamChat(
-    prompt: string,
-    options?: Readonly<Record<string, unknown>>,
-  ): AsyncGenerator<
-    { readonly type: string; readonly data?: unknown },
-    HeadlessFinalMessage | void,
-    unknown
-  >;
-  /** Stop the in-flight turn. The host maps this onto the run layer's cancel. */
-  interrupt(): void;
+  readonly toolRegistry?: unknown;
 }
 
 /** What the host needs to build a run's frozen decision. */
@@ -167,8 +224,25 @@ export interface HeadlessRunIntent {
   readonly permissionMode?: PermissionPolicyMode;
   /** The run's whole-turn ceiling, forwarded onto the executor's options. */
   readonly maxTurns?: number;
+}
+
+export interface HeadlessRunHostOptions {
+  readonly agent: HeadlessAgent;
   /**
    * The executor's tool registry, forwarded onto `streamChat`'s options.
+   *
+   * A PORT MEMBER, and that placement is load-bearing rather than stylistic.
+   * `RunStartInput.options` is canonical JSON — `runInputRevision` derives the
+   * run's revision digest from it, and `asJson` (`@duya/agent-protocol`) refuses
+   * any value whose prototype is not `Object.prototype`/`null`. A `ToolRegistry`
+   * is a class, so a registry carried there made `RunController.start` throw
+   * `... which has no canonical JSON form` before the run opened at all: `-t`
+   * and the REPL died at start while `--print` (which passes no registry)
+   * survived. This is the same rule plan 610 P9 applied when it moved the
+   * `ApprovalPort` off `RunStartInput.options`: a capability handle is not data.
+   *
+   * Per-HOST rather than per-run because the handle belongs to the executor the
+   * host owns, and a headless host builds one registry for its process.
    *
    * `unknown` rather than a registry type, and deliberately: this module sits in
    * the same package as `duyaAgent` and importing the registry's interface here
@@ -177,10 +251,6 @@ export interface HeadlessRunIntent {
    * executor is the only thing that reads it.
    */
   readonly toolRegistry?: unknown;
-}
-
-export interface HeadlessRunHostOptions {
-  readonly agent: HeadlessAgent;
   /**
    * Mint the run id, injected so a test can pin it and a host can prefix it
    * with its own authority. The default is a random UUID, which is the honest
@@ -189,6 +259,16 @@ export interface HeadlessRunHostOptions {
   readonly mintRunId?: () => RunId;
   /** Wall clock, injected so a test is not at the mercy of the machine. */
   readonly now?: () => number;
+  /**
+   * Where the engine's tool-side-effect journals go. Defaults to the driver's
+   * own resolution.
+   *
+   * Exposed because the engine REFUSES to dispatch anything it cannot ticket,
+   * so this directory is written on every headless run that calls a tool -- a
+   * real on-disk consequence of driving the engine rather than the legacy loop,
+   * and a test needs to point it somewhere disposable.
+   */
+  readonly ledgerDir?: string;
 }
 
 /**
@@ -250,13 +330,107 @@ export interface HeadlessRun {
 }
 
 /**
- * The `ExecutionChannel` from the run layer to a real `duyaAgent`.
+ * The stop reason a `chat:message_finalized` frame may carry, or `undefined`.
+ *
+ * ## Why this function exists at all
+ *
+ * `chat:message_finalized` REQUIRES a stop reason. `translateMessageFinalized`
+ * calls `mapStopReason`, and a reason the protocol's `StopReason` union cannot
+ * state leaves the frame UNMAPPED -- which means the run layer drops it and the
+ * assistant message never reaches the run's ledger at all. A missing reason is
+ * therefore not a cosmetic gap; it silently deletes the run's final message.
+ *
+ * ## Why the `done` FRAME cannot supply it
+ *
+ * `legacy-sse-projector.ts` writes the terminal's reason as `done.data.reason`,
+ * while `sse-frame-codec.ts` reads `event.reason` -- the two never meet, so a
+ * `chat:done` frame produced from a protocol event carries NO reason at all.
+ * (This is a pre-existing mismatch between those two modules and it also affects
+ * the worker entry, which scrapes the same frame. It is NOT fixed here: the
+ * projector and the codec are shared surfaces and neither is this slice's.)
+ *
+ * ## What is used instead, and what is deliberately absent
+ *
+ * The engine's OWN terminal, which is the runtime's decision rather than a
+ * re-derivation. Measured: for a normal completion the driver settles
+ * `{ status: 'completed' }` with NO `stopReason`, so the terminal's own field is
+ * absent far more often than not and the status is the only fact available.
+ *
+ * `budget_exhausted` has NO honest token in `mapStopReason`'s table, so this
+ * returns `undefined` for it and the frame is omitted rather than invented. The
+ * run layer then refuses the frame, which is the runtime's documented behaviour
+ * for a stop reason it cannot state -- an absent message beats a fabricated one.
+ */
+function finalizedStopReason(
+  terminal: RunTerminalState | null,
+  fromDoneFrame: string | undefined,
+): string | undefined {
+  if (terminal !== null && 'stopReason' in terminal && terminal.stopReason !== undefined) {
+    return terminal.stopReason;
+  }
+  if (terminal === null) return fromDoneFrame;
+  switch (terminal.status) {
+    case 'completed':
+      return 'completed';
+    case 'cancelled':
+      return 'aborted';
+    case 'failed':
+      return 'error';
+    case 'budget_exhausted':
+      return undefined;
+  }
+}
+
+/**
+ * The `ExecutionChannel` from the run layer to a real `duyaAgent`, driven on
+ * the ENGINE.
  *
  * This is the ONLY place the headless path touches the executor, and it does
- * three things: start the turn, forward each agent event as the frame the
- * worker would have sent, and report a stop as the interrupt it issued.
+* three things: drive the turn, forward each frame the driver produces, and
+ * report a stop as the interrupt it issued.
+ *
+ * ## What drives the turn, and why the manifest is the source
+ *
+ * `driveRunWithEngine` is the same driver `agent-process-entry.ts` calls, so the
+ * two production turn entries assemble their runs through one implementation
+ * rather than two. Everything it needs that is already DECIDED is read off the
+ * `manifest` the run layer froze above this channel -- run id, cwd, model,
+ * provider, permission mode, turn budget -- rather than re-derived from the
+ * intent. Two answers to "what was this run given" is the failure class this
+ * module's whole design exists to prevent, and the engine's internal manifest is
+ * built from these same values, so the two manifests cannot disagree about a
+ * field the driver read here.
+ *
+ * ## What this channel adds on top of the driver
+ *
+ * The driver ends at the terminal. Two obligations remain and they belong to the
+ * frame vocabulary rather than to the engine, which is why they live here:
+ *
+ *  - `chat:done` is HELD until the turn has ended. The authoritative assistant
+ *    message is only known then, so forwarding `done` inline would put
+ *    `run.completed` into the ledger ahead of the message it finalises, and the
+ *    run would already have terminated by the time the finalized frame arrived.
+ *    `agent-process-entry.ts` holds it for exactly the same reason.
+ *  - `chat:message_finalized` is BUILT here, from the assistant row the engine
+ *    wrote via `recordTurnAssistantMessage`. The driver does not produce it and
+ *    `projectToLegacyFrame` has no arm for it; on the worker path the entry
+ *    builds it after the drive, and this is that same step for this host.
+ *
+ * ## Where the tool registry goes
+ *
+ * `wiring.toolRegistry` is injected HERE, on the way to the driver's options,
+ * and never through `input.options` — see `HeadlessEngineWiring.toolRegistry`
+ * for why that boundary cannot carry it. `input.options` is still forwarded
+ * WHOLE (spread, not copied field by field), so anything else a caller
+ * legitimately puts there still reaches the executor; the registry is simply
+ * added on top, last, so the host's own handle is the one that arrives.
  */
-export function createAgentExecutionChannel(agent: HeadlessAgent): ExecutionChannel {
+export function createAgentExecutionChannel(
+  agent: HeadlessAgent,
+  wiring: HeadlessEngineWiring = {},
+): ExecutionChannel {
+  const now = wiring.now ?? Date.now;
+  const toolRegistry = wiring.toolRegistry;
   return {
     async start(
       manifest: RunManifest,
@@ -269,71 +443,148 @@ export function createAgentExecutionChannel(agent: HeadlessAgent): ExecutionChan
       // went out. A ceiling of `0` is treated as absent, matching
       // `isBudgetExhausted`'s own `isPositive` — forwarding `0` would stop a
       // healthy run after one turn.
-      const maxTurns = manifest.budget.maxTurns;
-      const options: Readonly<Record<string, unknown>> =
-        typeof maxTurns === 'number' && Number.isFinite(maxTurns) && maxTurns > 0
-          ? { ...input.options, maxTurns }
-          : input.options;
+const manifestMaxTurns = manifest.budget.maxTurns;
+      const maxTurns =
+        typeof manifestMaxTurns === 'number' &&
+        Number.isFinite(manifestMaxTurns) &&
+        manifestMaxTurns > 0
+          ? manifestMaxTurns
+          : undefined;
 
-      // Pump the generator onto the sink. Deliberately NOT awaited: `start` must
+      // `input.options` is the run layer's own bag. It is forwarded whole
+      // rather than re-listed, because a field-by-field copy is where a
+      // registry would be dropped again -- which is exactly what P10 measured
+      // happening before the transport began forwarding the real input. The
+      // host's own registry is layered on LAST so its handle wins over
+      // anything a caller put in the bag; the bag itself cannot carry a class
+      // instance through the canonical-JSON boundary at all, which is why this
+      // arrives via `wiring` instead.
+      const options = {
+        ...input.options,
+        ...(toolRegistry === undefined ? {} : { toolRegistry }),
+        sessionId: input.sessionId,
+      } as unknown as ChatOptions;
+
+      // Pump the run onto the sink. Deliberately NOT awaited: `start` must
       // return a handle so the caller can cancel, and awaiting the whole turn
       // here would make a cancel impossible to issue for the duration of it.
       void (async (): Promise<void> => {
-        try {
-          // Driven with an explicit iterator rather than `for await`, for one
-          // reason: the agent's `streamChat` RETURNS the authoritative assistant
-          // message, and `for await...of` discards a generator's return value.
-          // That value is the only place the finalized message exists on this
-          // path — the in-process host has no `chat:done` producer upstream of
-          // it, and the worker's message log is a different process.
-          const iterator = agent.streamChat(input.prompt, options);
-          let stopReason: string | undefined;
-          // `chat:done` is HELD, not forwarded inline, for the same reason the
-          // worker subprocess holds it: the authoritative assistant message is
-          // only known when the generator finishes, which is AFTER the `done`
-          // event has already been seen. Forwarding `done` first would put
-          // `run.completed` into the ledger ahead of the message it finalises,
-          // and the run would already have terminated by the time the finalized
-          // frame arrived — the run layer would drop it as a late frame and the
-          // message would never reach the ledger at all.
-          let heldDone: Record<string, unknown> | null = null;
-          for (;;) {
-            const next = await iterator.next();
-            if (next.done === true) {
-              // The producer's own stop reason, read off the frame the codec
-              // built rather than off the raw event, so the reason that travels
-              // with the finalized message is the one the terminal frame
-              // carries.
-              const finalMessage = isFinalMessage(next.value);
-              const finalized = buildMessageFinalizedEvent(
-                input.sessionId,
-                finalMessage,
-                stopReason,
-              );
-              if (finalized !== null) {
-                sink.frame(finalized as unknown as Record<string, unknown>);
-              }
-              if (heldDone !== null) sink.frame(heldDone);
-              break;
-            }
-            // The WORKER's codec, not a second one. See `sse-frame-codec.ts`:
-            // two frame producers is the case the transport equivalence test
-            // cannot catch, because it compares transports and not producers.
-            const frame = convertSSEToAgentMessage(next.value);
-            if (frame === null) continue;
-            if (frame['type'] === 'chat:done') {
-              const reason = frame['reason'];
-              if (typeof reason === 'string' && reason !== '') stopReason = reason;
-              heldDone = frame;
-              continue;
-            }
-            sink.frame(frame);
+        let stopReason: string | undefined;
+        // `chat:done` is HELD, not forwarded inline, for the reason this
+        // function's header gives.
+        let heldDone: Record<string, unknown> | null = null;
+
+        /** Every frame except `done`, which waits for the finalized message. */
+        const forward = (frame: Record<string, unknown>): void => {
+          if (frame['type'] === 'chat:done') {
+            // The producer's own stop reason, read off the frame rather than
+            // off a raw event, so the reason that travels with the finalized
+            // message is the one the terminal frame carries.
+            const reason = frame['reason'];
+            if (typeof reason === 'string' && reason !== '') stopReason = reason;
+            heldDone = frame;
+            return;
           }
+          sink.frame(frame);
+        };
+
+        try {
+          // ONE publisher per run, for the reason `agent-process-entry.ts`
+          // creates one per `chat:start`: it is a per-TURN record, and a
+          // publisher reused across runs would refuse the second run's first
+          // turn. Omitting it entirely is not the neutral choice -- the tool leg
+          // would have no producer and a model asking for a tool would get a
+          // thrown refusal instead of a result.
+          const turnPipelines = new TurnPipelinePublisher();
+
+          const outcome = await driveRunWithEngine(
+            {
+              agent,
+              sessionId: input.sessionId,
+              // The run's OWN id, read off the manifest the run layer froze. A
+              // channel that minted a second one beside the dispatch would be
+              // the second run-identity source R2.1 removed.
+              runId: manifest.runId,
+              seqIndex: now(),
+              options,
+              prompt: input.prompt,
+              model: manifest.agent?.model ?? '',
+              providerId: manifest.agent?.providerId ?? '',
+              workingDirectory: manifest.cwd,
+              // The manifest's own recorded mode, which `buildLegacyRunInput`
+              // then carries onto the run INPUT. Measured, not assumed: the
+              // engine reads its approval label from
+              // `input.options.permissionMode` and falls back to `'default'`
+              // when that is absent.
+              permissionMode: manifest.permissionPolicy.mode,
+              ...(maxTurns === undefined ? {} : { maxTurns }),
+              // A headless run has no wake source and its prompt is a plain
+              // string, so no image or document block can reach the turn.
+              wakeRun: false,
+              imageInputSupported: false,
+              turnPipelines,
+              // A headless host has NO approver, and this is reported as
+              // `unavailable` rather than as a denial for the reason
+              // `agent-process-entry.ts` gives: conflating them makes a missing
+              // bridge look like a user saying no.
+              //
+              // What ENFORCES the mode is not this: `gateRunApproval` consults
+              // the run's own `assembly.canUseTool` -- which reads the AGENT's
+              // live session mode -- and does not call this port at all. So the
+              // decision is unchanged by the value bound here, and the port is
+              // present because it is required, not because it decides.
+              askApproval: async () => ({ allowed: false, reason: 'unavailable' }) as const,
+              // The WORKER's codec, not a second one. See `sse-frame-codec.ts`:
+              // two frame producers is the case the transport equivalence test
+              // cannot catch, because it compares transports and not producers.
+              legacyFrameCodec: convertSSEToAgentMessage,
+              // The entry's per-call BILLING tap. A headless run has no Control
+              // Plane and therefore no ledger to feed, so this records nothing
+              // rather than forwarding a second copy: the turn-level usage
+              // already reaches the caller through the surface's `result`
+              // frames, which the translator turns into `assistant.usage`. Wiring
+              // this to emit as well would record every call's usage twice.
+              onPerCallUsage: () => {},
+              ...(wiring.ledgerDir === undefined ? {} : { ledgerDir: wiring.ledgerDir }),
+            },
+            forward,
+            // The orchestrator leg, routed rather than dropped. No registered
+            // production mode declares an orchestrator today, so this arm is
+            // unexercised; it is here because a channel that omitted it would
+            // drop the mode SILENTLY.
+            async (frames) => {
+              for await (const frame of frames) {
+                forward(frame as unknown as Record<string, unknown>);
+              }
+            },
+          );
+
+          // The turn's authoritative assistant message, read at the one point
+          // this function already knows the turn has ended. `null` when the turn
+          // produced none, and `buildMessageFinalizedEvent` then returns `null`
+          // too -- which is the correct wire for "there was no message to
+          // finalise", not a frame carrying an empty content.
+          const lastAssistant = [...agent.getMessages()]
+            .reverse()
+            .find((message) => message.role === 'assistant');
+
+          // The stop reason comes from the ENGINE'S OWN TERMINAL rather than from
+          // the `chat:done` frame. `finalizedStopReason` gives the full
+          // reasoning and the one terminal for which it honestly returns nothing.
+          const finalized = buildMessageFinalizedEvent(
+            input.sessionId,
+            lastAssistant as HeadlessFinalMessage | undefined,
+            finalizedStopReason(outcome.terminal, stopReason),
+          );
+          if (finalized !== null) {
+            sink.frame(finalized as unknown as Record<string, unknown>);
+          }
+          if (heldDone !== null) sink.frame(heldDone);
         } catch (error) {
           // A turn that threw is a FAILED run, not a silent one. The runtime
           // synthesises the terminal from the frames it received, and without
-          // this frame a generator that died mid-turn would leave the run
-          // looking live until something else closed it.
+          // this frame a turn that died mid-flight would leave the run looking
+          // live until something else closed it.
           sink.frame({
             type: 'chat:error',
             message: error instanceof Error ? error.message : String(error),
@@ -348,8 +599,9 @@ export function createAgentExecutionChannel(agent: HeadlessAgent): ExecutionChan
           // The interrupt is the agent's own, so the stop is genuinely
           // cooperative: the executor is asked to leave and reports that it
           // was asked. `waitedMs: 0` because there is no separate process whose
-          // exit could be timed — the agent's generator ends when the abort
-          // lands, and the run layer observes that as `sink.end()`.
+          // exit could be timed — `beginRun` installed the abort controller this
+          // aborts, the engine holds that run's signal, and the run layer
+          // observes the turn ending as `sink.end()`.
           agent.interrupt();
           return { requested: true, disposition: 'cooperative', waitedMs: 0, reason: request.reason };
         },
@@ -431,7 +683,13 @@ export class HeadlessRunHost {
     this.#now = options.now ?? Date.now;
 
     this.#transport = new InProcessTransport({
-      channel: createAgentExecutionChannel(options.agent),
+channel: createAgentExecutionChannel(options.agent, {
+        // The host's OWN clock, so `seqIndex` and the run's timestamps come from
+        // the one injected time source rather than a second `Date.now()` here.
+        now: this.#now,
+        ...(options.ledgerDir === undefined ? {} : { ledgerDir: options.ledgerDir }),
+        ...(options.toolRegistry === undefined ? {} : { toolRegistry: options.toolRegistry }),
+      }),
       // The probe is the runtime's OWN, asked of a host that supplies the facts
       // it cannot measure for itself. It reports `NO_RESUME` and
       // `deterministic: false` because that is what the runtime supports today,
@@ -443,10 +701,22 @@ export class HeadlessRunHost {
     this.#controller = new RunController({
       channel: {
         start: async (manifest, input, sink): Promise<ExecutionHandle> => {
-          const run = await this.#transport.start(manifest, {
-            frame: (raw) => sink.frame(raw),
-            end: () => sink.end(),
-          });
+          // The run layer's REAL input crosses here, whole. This bridge used to
+          // accept `input` and drop it on the floor, forwarding only the sink;
+          // the transport then had nothing to dispatch and fabricated an empty
+          // one, so the executor's `streamChat` was called with `''` no matter
+          // what the caller passed to `HeadlessRunHost.start`. `require` is
+          // position three on the port and this adapter ignores it, so it is
+          // passed through as `undefined` rather than reordered away.
+          const run = await this.#transport.start(
+            manifest,
+            {
+              frame: (raw) => sink.frame(raw),
+              end: () => sink.end(),
+            },
+            undefined,
+            input,
+          );
           return run.handle;
         },
       },
@@ -547,7 +817,9 @@ export class HeadlessRunHost {
     const handle: RunHandle = await this.#controller.start(manifest, {
       prompt: intent.prompt,
       sessionId: intent.sessionId,
-      options: intent.toolRegistry === undefined ? {} : { toolRegistry: intent.toolRegistry },
+      // Canonical JSON only. The registry travels on the host, not here — see
+      // `HeadlessRunHostOptions.toolRegistry`.
+      options: {},
     });
     return this.#wrap(handle, manifest);
   }

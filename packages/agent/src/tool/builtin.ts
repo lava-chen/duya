@@ -19,7 +19,8 @@ import { GlobTool, globTool, executeGlob } from './GlobTool/GlobTool.js';
 import { MemoryWriteTool } from './MemoryWriteTool/MemoryWriteTool.js';
 import { WriteStage1PolicyTool } from './WriteStage1PolicyTool/WriteStage1PolicyTool.js';
 import { SendArtifactTool } from './SendArtifactTool/SendArtifactTool.js';
-import { subagentTool } from './SubagentTool/index.js';
+import { SubagentTool } from './SubagentTool/index.js';
+import type { SubagentRunDeps } from './SubagentTool/index.js';
 
 // Phase 5 tools imports
 import { todoTool } from './TodoTool/TodoTool.js';
@@ -78,8 +79,17 @@ const grepTool = new GrepTool();
 
 /**
  * Create registry with all built-in tools
+ *
+ * Plan 610 A5: `deps` is required. Each registry constructs its OWN
+ * `SubagentTool` instance bound to the factories the caller supplied, so the
+ * tool's child-agent wiring is fixed at assembly and validated by the
+ * compiler. `createToolRegistry` is deliberately NOT specialised here — it is
+ * handed through as given, because a child agent's registry has always been a
+ * plain `createBuiltinRegistry()` with no domain-blocker or plugin filtering.
+ * Forwarding this registry's own arguments into it would be a behaviour change.
  */
 export function createBuiltinRegistry(
+  deps: SubagentRunDeps,
   domainBlockerConfig?: DomainBlockerConfig,
   options?: {
     enabledPluginIds?: Set<string>;
@@ -136,7 +146,9 @@ export function createBuiltinRegistry(
   const globToolInstance = new GlobTool();
   registry.register(globToolInstance.toTool(), globToolInstance, { exposure: 'eager' });
 
-  // SubagentTool - for spawning sub-agents
+  // SubagentTool - for spawning sub-agents.
+  // Plan 610 A5: one instance per registry, not a shared module singleton.
+  const subagentTool = new SubagentTool(deps);
   registry.register(subagentTool.toTool(), subagentTool, { exposure: 'eager' });
 
   // Memory curation tools — validated writes, registered deferred so the

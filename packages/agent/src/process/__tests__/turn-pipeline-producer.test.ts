@@ -368,7 +368,18 @@ describe('the run handle is public, and the loop routes through it', () => {
     expect(occurrences(/new ToolExecutionPipeline\s*\(/)).toBe(1);
     expect(occurrences(/this\.buildTurnPipeline\s*\(/)).toBe(1);
     expect(occurrences(/this\.assembleTurn\s*\(/)).toBe(1);
-    expect(occurrences(/this\.beginTurnAssembly\s*\(/)).toBe(1);
+    // Plan 610 S4c-d3: this was 1, because the legacy turn generator was the
+    // single caller. That generator is deleted, so the count inside
+    // `DuyaAgent.ts` is now 0 -- and 0 is the STRONGER claim, not a weaker one:
+    // the class no longer drives its own turn at all, so it cannot reach the
+    // assembly seam from within itself.
+    //
+    // The single remaining caller is `engine-run-driver.ts`, outside this file,
+    // and it is pinned there by `engine-chat-start-assembly-proof.test.ts` and by
+    // the `driveRunWithEngine` count in `live-turn-single-driver.test.ts`. This
+    // row is deliberately scoped to "not in the class", which is the property
+    // that can still regress without that file being edited.
+    expect(occurrences(/this\.beginTurnAssembly\s*\(/)).toBe(0);
   });
 
   it('builds the run-scoped pieces exactly once each', () => {
@@ -388,14 +399,32 @@ describe('the run handle is public, and the loop routes through it', () => {
     expect(code()).toContain('const turnContext = this.assembleTurnContext(options, prompt);');
   });
 
-  it('leaves the entry driving the legacy loop', () => {
-    // S2 is not a driver change and must not become one. The entry still calls
-    // `streamChat` exactly once and still constructs no engine.
+  it('leaves the entry driving the ENGINE, through the one module that builds it', () => {
+    // S2 was not a driver change; plan 610 S4c-d2a is, and it is the reason this
+    // row reads the other way round. The entry no longer names `streamChat` at
+    // all.
+    //
+    // MEASURED rather than assumed, and this is the whole reason the row spans
+    // two files: the constructor count taken over `agent-process-entry.ts` ALONE
+    // is 0 after the flip, because the engine assembly moved into
+    // `engine-run-driver.ts` to keep a 5000-line entry readable. An entry-only
+    // count would therefore read "no driver here" for a `chat:start` that does
+    // drive one -- the exact vacuous reading this file's counts exist to refuse.
+    //
+    // So the property is asserted as a PATH: the entry calls the driver exactly
+    // once, and the driver constructs exactly one engine. Deleting either half
+    // fails a row; deleting BOTH fails both.
     const entry = stripComments(
       fs.readFileSync(path.join(HERE, '..', 'agent-process-entry.ts'), 'utf8'),
     );
-    expect((entry.match(/agent\.streamChat\s*\(/g) ?? []).length).toBe(1);
-    expect((entry.match(/new RunEngineImpl\s*\(/g) ?? []).length).toBe(0);
+    const driver = stripComments(
+      fs.readFileSync(path.join(HERE, '..', 'engine-run-driver.ts'), 'utf8'),
+    );
+    expect((entry.match(/agent\.streamChat\s*\(/g) ?? []).length).toBe(0);
+    // Call-shaped, so the `import { driveRunWithEngine }` line -- which carries
+    // the name but no `(` -- is not counted as a second call site.
+    expect((entry.match(/driveRunWithEngine\s*\(/g) ?? []).length).toBe(1);
+    expect((driver.match(/new RunEngineImpl\s*\(/g) ?? []).length).toBe(1);
   });
 });
 

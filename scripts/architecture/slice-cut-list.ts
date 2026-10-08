@@ -97,9 +97,21 @@ export const CUT_LIST: readonly CutEdge[] = [
     id: 'main-to-agent-value',
     rank: 2,
     pair: 'electron-main -> pkg:agent',
-    edges: 91,
+    // 91 -> 60 (plan 610 A5). The pair SHRANK by 31 rather than growing: the
+    // `@duya/memory`, `@duya/tooling` and `@duya/connectors` extractions moved
+    // host-facing code out of `packages/agent` into declared packages, so the
+    // main process now reaches them directly instead of through the legacy
+    // agent root. Measured on the same口径 this verifier uses (value edges only,
+    // cross-owner pairs); the broader cross-boundary count including type edges
+    // is 114 and is a different question.
+    //
+    // The remaining 60 are spread across 45 files with a maximum of 3 in any one
+    // of them, six of which are test files. The flatness is the point: there is
+    // no single host seam left to cut, which is what "逐项解除" costs when the
+    // set has already been thinned.
+    edges: 60,
     because: 'c',
-    why: 'The largest host -> workspace value edge set in the tree, and the reason the plan calls the cut "逐项解除" (edge by edge) rather than one move. NOT all 91 are in scope: the rank is a statement that the SET must shrink, not that every edge must go. Several are legitimate composition in the host. The value/type split is what makes the per-edge triage possible, and it is why this is rank 2 rather than rank 1.',
+    why: 'The largest host -> workspace value edge set in the tree, and the reason the plan calls the cut "逐项解除" (edge by edge) rather than one move. NOT all 60 are in scope: the rank is a statement that the SET must shrink, not that every edge must go. Several are legitimate composition in the host. The value/type split is what makes the per-edge triage possible, and it is why this is rank 2 rather than rank 1.',
     cut: 'M5.2, edge by edge, with the measurement above as the checklist. An edge stays when the host genuinely composes the runtime.',
   },
   {

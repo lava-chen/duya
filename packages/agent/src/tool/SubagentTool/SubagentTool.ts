@@ -20,8 +20,12 @@ import type {
 } from '../types.js';
 import type { AgentDefinition } from './loadAgentsDir.js';
 import { getBuiltInAgents } from './builtInAgents.js';
-import { formatAgentLine, getPrompt } from './prompt.js';
-import { runAgent, runAgentSync, type AgentProgressEvent } from './runAgent.js';
+import { formatAgentLine, formatAgentLineForPrompt, getPrompt } from './prompt.js';
+import { runAgent, runAgentSync } from './runAgent.js';
+// Plan 610 A5: the two imports below are whole-statement `import type` on one
+// line each. The inline `import { type AgentProgressEvent }` form this
+// replaces still emits a module load, so the cycle gate counted it.
+import type { AgentProgressEvent, SubagentRunDeps } from './runAgent.js';
 import {
   VERDICT_CONTRACT,
   buildSubagentParentReport,
@@ -256,6 +260,27 @@ function mapTokenUsage(usage: TokenUsage | undefined): SubagentToolResultPayload
 }
 
 export class SubagentTool extends BaseTool {
+  /**
+   * Plan 610 A5: composition dependencies for this instance's child agents.
+   *
+   * This class used to be a module-level `new SubagentTool()` singleton that
+   * `builtin.ts`, `bot-builtin.ts` and `research-fanout.ts` all reached for by
+   * import. That made one instance serve every registry, so a caller's wiring
+   * was invisible and unvalidatable. Each registry now constructs its own
+   * instance and hands it the factories that registry was built with.
+   *
+   * Behaviour note, measured rather than assumed: this class holds NO mutable
+   * instance state. Every `this.` read is the readonly `name`, and the mutable
+   * `recentBackgroundSpawns` map is module-level, so per-registry instances
+   * share exactly the state the singleton did.
+   */
+  private readonly deps: SubagentRunDeps;
+
+  constructor(deps: SubagentRunDeps) {
+    super();
+    this.deps = deps;
+  }
+
   readonly name = SUBAGENT_TOOL_NAME;
   readonly description = 'Launch a new agent to handle complex, multi-step tasks autonomously.';
   readonly input_schema: Record<string, unknown> = {
@@ -796,6 +821,8 @@ export class SubagentTool extends BaseTool {
           agentId: taskId,
           onProgress,
           sessionId: subAgentSessionId,
+          createSubAgent: this.deps.createSubAgent,
+          createToolRegistry: this.deps.createToolRegistry,
           ...(effort ? { effort } : {}),
           ...(permissionMode ? { permissionMode } : {}),
           ...(toolOverlay ? { toolOverlay } : {}),
@@ -862,6 +889,8 @@ export class SubagentTool extends BaseTool {
         agentId: taskId,
         onProgress,
         sessionId: subAgentSessionId,
+        createSubAgent: this.deps.createSubAgent,
+        createToolRegistry: this.deps.createToolRegistry,
         ...(effort ? { effort } : {}),
         ...(permissionMode ? { permissionMode } : {}),
         ...(toolOverlay ? { toolOverlay } : {}),
@@ -1112,35 +1141,16 @@ export class SubagentTool extends BaseTool {
   }
 }
 
-export const subagentTool = new SubagentTool();
-
+/**
+ * Plan 610 A5: the module-level `subagentTool` singleton is gone.
+ *
+ * `createBuiltinRegistry` and `createBotRegistry` each construct their own
+ * instance, and `research-fanout` constructs one per injected tool. A caller
+ * that needs the instance for a specific registry gets it from that registry's
+ * factory rather than from a process-wide export.
+ */
 export function getAgentDefinitions(): AgentDefinition[] {
   return getBuiltInAgents();
 }
 
-export function formatAgentLineForPrompt(agent: AgentDefinition): string {
-  const { tools, disallowedTools } = agent;
-  const hasAllowlist = tools && tools.length > 0;
-  const hasDenylist = disallowedTools && disallowedTools.length > 0;
-
-  let toolsDescription: string;
-  if (hasAllowlist && hasDenylist) {
-    const denySet = new Set(disallowedTools);
-    const effectiveTools = tools.filter(t => !denySet.has(t));
-    if (effectiveTools.length === 0) {
-      toolsDescription = 'None';
-    } else {
-      toolsDescription = effectiveTools.join(', ');
-    }
-  } else if (hasAllowlist) {
-    toolsDescription = tools.join(', ');
-  } else if (hasDenylist) {
-    toolsDescription = `All tools except ${disallowedTools.join(', ')}`;
-  } else {
-    toolsDescription = 'All tools';
-  }
-
-  return `- ${agent.agentType}: ${agent.whenToUse} (Tools: ${toolsDescription})`;
-}
-
-export { getPrompt }
+export { getPrompt, formatAgentLineForPrompt }

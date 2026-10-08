@@ -43,6 +43,7 @@
     "@duya/ai": "0.1.0",
     "@duya/cli": "0.1.0",
     "@duya/computer-use": "0.0.1",
+    "@duya/memory": "0.1.0",
     "@duya/plugin-core": "0.1.0",
     "@duya/agent-runtime": "0.1.0",
     "@inquirer/prompts": "^7.0.0",
