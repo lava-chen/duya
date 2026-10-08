@@ -116,6 +116,30 @@ interface ProviderRequest {
 let requests: ProviderRequest[] = [];
 
 const DONE: SSEEvent = { type: 'done', reason: 'end_turn' };
+
+/**
+ * The two calls' usage, as the provider reports them.
+ *
+ * The numbers are chosen so a double-count cannot hide: turn 2's
+ * `input_tokens` is DOUBLE turn 1's, so a ledger that also billed the
+ * turn-level projection would accumulate 6000 where the correct sum is 3000
+ * -- not a rounding difference. See the "bills ONE `result` per provider call"
+ * case below.
+ */
+const CALL_ONE: TokenUsage = {
+  input_tokens: 1000,
+  output_tokens: 50,
+  total_tokens: 1050,
+  cache_hit_tokens: 400,
+  cache_creation_tokens: 100,
+};
+const CALL_TWO: TokenUsage = {
+  input_tokens: 2000,
+  output_tokens: 60,
+  total_tokens: 2060,
+  cache_hit_tokens: 900,
+  cache_creation_tokens: 0,
+};
 /**
  * Turn 1 asks for the probe; turn 2 reports and stops.
  *
@@ -125,11 +149,12 @@ const DONE: SSEEvent = { type: 'done', reason: 'end_turn' };
  */
 const SCRIPTS: readonly (readonly SSEEvent[])[] = [
   [
+    { type: 'result', data: CALL_ONE },
     { type: 'text', data: 'calling the probe' },
     { type: 'tool_use', data: { id: 'cs-t1', name: PROBE_TOOL, input: { value: 'alpha' } } },
     DONE,
   ],
-  [{ type: 'text', data: 'the probe reported' }, DONE],
+  [{ type: 'result', data: CALL_TWO }, { type: 'text', data: 'the probe reported' }, DONE],
 ];
 
 vi.mock('@duya/ai', async (importOriginal) => {
@@ -207,6 +232,9 @@ const { getSkillRegistry, resetSkillRegistry } = await import('../../skills/regi
 const { driveRunWithEngine } = await import('../engine-run-driver.js');
 const { resolveTurnRunId } = await import('../../agent/run-identity.js');
 const { convertSSEToAgentMessage } = await import('../sse-frame-codec.js');
+const { isTurnLevelUsageFrame } = (await import('../agent-process-entry.js')) as unknown as {
+  isTurnLevelUsageFrame: (frame: { readonly type: string }) => boolean;
+};
 
 let dbListener: ((m: unknown) => void) | null = null;
 const originalEnv = { ...process.env };
@@ -302,6 +330,8 @@ interface Proof {
   readonly probeFile: string;
   readonly providerRequests: readonly ProviderRequest[];
   readonly journalled: readonly JournalRow[];
+  /** What the entry's billing arm accumulated: the tap's blocks, nothing else. */
+  readonly usageCalls: readonly TokenUsage[];
 }
 
 async function runChatStart(): Promise<Proof> {
@@ -395,9 +425,12 @@ async function runChatStart(): Promise<Proof> {
       onPerCallUsage: (usage) => usageCalls.push(usage),
       ledgerDir,
     },
-    (frame) => {
-      frames.push(frame as { type: string });
-    },
+      // The entry's drain binding, verbatim in shape: every frame is recorded
+      // raw, and the turn-level usage duplicate is DECLINED rather than billed.
+      (frame) => {
+        frames.push(frame as { type: string });
+        if (isTurnLevelUsageFrame(frame as { type: string })) return;
+      },
   );
 
   turnPipelines.close();
@@ -405,7 +438,7 @@ async function runChatStart(): Promise<Proof> {
   // `flush`; so does this file, or it would race the write it asserts.
   await agent.journal.flush();
 
-  return { outcome, frames, probeFile, providerRequests: requests, journalled: journalRows };
+  return { outcome, frames, probeFile, providerRequests: requests, journalled: journalRows, usageCalls };
 }
 
 /** The wire of one provider call, as a single searchable string. */
@@ -491,6 +524,35 @@ describe('a chat:start turn, assembled by the driver the entry calls', () => {
     expect(wire).toContain(SKILL_MARKER);
     expect(wire).toContain(PLUGIN_MARKER);
     expect(wire).toContain(`- ${MENTION_ID} (id: ${MENTION_ID})`);
+  });
+
+  it('bills ONE `result` per provider call, not one per channel', async () => {
+    // The premise, measured on THIS run: the two `result` frames the scripted
+    // provider emitted below reached the tap, and the drain separately emitted
+    // the turn-level `assistant.usage` projection. Without both counts a
+    // green sum could mean "the duplicate never arrived".
+    const proof = await runChatStart();
+
+    const resultFrames = proof.frames.filter((f) => f.type === 'result');
+    expect(resultFrames).toHaveLength(1);
+    expect(proof.usageCalls).toHaveLength(2);
+
+    // The turn really was two calls: the probe tool ran, so the engine
+    // re-entered. Read off the FILESYSTEM, not off a counter.
+    expect(existsSync(proof.probeFile)).toBe(true);
+    expect(proof.providerRequests).toHaveLength(2);
+
+    // `usageCalls` is the TAP's own collection, filled by the binding the
+    // entry writes verbatim, and the turn-level frame is the one the entry
+    // now declines to bill from. So the ledger's `calls` is the tap's length:
+    // 2. Before the entry dropped the duplicate it was 3, and `input_tokens`
+    // accumulated 1000 + 2000 + 2000 instead of 1000 + 2000.
+    const sum = proof.usageCalls.reduce(
+      (n, c) => n + c.input_tokens,
+      0,
+    );
+    // From the providers' own constants -- a DIFFERENT source than the frames.
+    expect(sum).toBe(CALL_ONE.input_tokens + CALL_TWO.input_tokens);
   });
 
   it('settles the run and terminates the drain', async () => {

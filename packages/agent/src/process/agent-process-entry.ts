@@ -597,6 +597,43 @@ export function refreshesLiveRing(chatFrame: Record<string, unknown> | null): bo
 }
 
 /**
+ * THE TWO USAGE CHANNELS ARE NOT THE SAME FRAME.
+ *
+ * `result` reaches the worker on TWO independent channels, and the billing
+ * ledger must read exactly one of them.
+ *
+ *  - `onPerCallUsage` (`ClientModelPortOptions`) fires ONCE PER PROVIDER CALL,
+ *    pre-narrowing, so the provider's own numbers survive: `cache_hit_tokens`
+ *    and `cache_creation_tokens` included. That is the channel the ledger's
+ *    cache-convention guard and its per-model attribution are built on.
+ *  - The drain's `result` frames come from
+ *    `WorkerAdapterSurface.projectUsageResults`, which projects the ONE
+ *    turn-level `assistant.usage` event. The engine's `addUsage` is
+ *    last-wins-never-summed, so this frame is the LAST call's usage again,
+ *    and narrowed to three counters with no cache buckets at all.
+ *
+ * Both arrive as `{ type: 'result' }`. Handing both to the same arm sums the
+ * turn's calls and then adds the last call a second time: measured on a
+ * two-call turn, the per-call tap delivered 2 and the drain delivered 1, so
+ * `input_tokens` accumulated 1000 + 2000 + 2000 instead of 1000 + 2000. The
+ * `calls` ledger gained a third entry, `last_call` re-derived its anchor from
+ * the duplicate, and `liveTotalInput` inflated the session ring.
+ *
+ * So the drop is at the DRAIN binding, not at the driver: the surface owns
+ * `projectUsageResults` and other consumers read `result` off `onFrame`
+ * (`subagent-engine-run.ts`), so the driver must keep emitting it. This entry
+ * simply declines to bill from it, because the tap already covers every call
+ * with strictly better data.
+ *
+ * The drop is also free. `convertSSEToAgentMessage` returns `null` for
+ * `result`, so the frame was never forwarded to the renderer either -- its
+ * only effect inside `handleStreamEvent` WAS the billing arm.
+ */
+export function isTurnLevelUsageFrame(frame: { readonly type?: unknown }): boolean {
+  return frame.type === 'result';
+}
+
+/**
  * THE TURN-END HOLD.
  *
  * `chat:done` is withheld rather than forwarded inline: the renderer's
@@ -3603,7 +3640,14 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       // The drain's frames, in the order the surface projects them. A frame the
       // codec drops is dropped by the SAME `handleStreamEvent`, so the held
       // `chat:done` and the post-flush barrier below are unchanged.
-      (frame) => handleStreamEvent(frame as { type: string; data?: unknown }),
+      //
+      // EXCEPT the drain's `result`, which is dropped on purpose. See
+      // `isTurnLevelUsageFrame` -- feeding it to the billing arm alongside the
+      // `onPerCallUsage` tap above double-counts every turn.
+      (frame) => {
+        if (isTurnLevelUsageFrame(frame)) return;
+        handleStreamEvent(frame as { type: string; data?: unknown });
+      },
       // The orchestrator leg, routed rather than dropped. No registered
       // production mode declares an orchestrator today, so this arm is
       // unexercised; it is here because a driver that omitted it would drop the
