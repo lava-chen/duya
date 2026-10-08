@@ -282,7 +282,7 @@ modules:
     # kill strategy, so this edge buys a lifetime abstraction and not a
     # relocation of `processTreeKill` -- which stays put, with its test and its
     # `evals/agent` matrix row, because moving it would have been churn.
-    requires: [agent-protocol, agent-runtime, legacy-ai, repo-tooling, memory]
+    requires: [agent-protocol, agent-runtime, legacy-ai, repo-tooling, memory, sandbox]
     owner: agent
     migrateTo: agent-core
 
@@ -410,6 +410,26 @@ modules:
       - packages/connectors/src/app-connector-id.ts
       - packages/connectors/src/app-schema.ts
     owner: extensibility
+
+  # Plan 610 A5. `@duya/sandbox` is the sandbox enforcement implementation moved
+  # out of `packages/agent/src/sandbox`.
+  #
+  # `managed: true`, on the `agent-protocol` precedent: a leaf whose imports are
+  # Node builtins only has nothing to baseline, so baselining it would buy the
+  # appearance of leniency rather than any.
+  #
+  # `legacy-agent` requires it because the entry still lazily loads the sandbox
+  # when `sandboxEnabled` is not false. That import is DYNAMIC on purpose — it
+  # keeps the sandbox module graph out of every cold-start worker — which means
+  # a grep for static imports will not find it. Declaring the edge is what makes
+  # the load visible to the gate instead of merely absent from the census.
+  - id: sandbox
+    roots: [packages/sandbox]
+    managed: true
+    requires: []
+    publicEntrypoints:
+      - packages/sandbox/src/index.ts
+    owner: agent
 
   # Plan 610 A5. `@duya/memory` is the agent-side memory implementation moved
   # out of `packages/agent/src/{memory-state,memory-rollout}`.
