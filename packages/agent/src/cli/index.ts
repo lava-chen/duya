@@ -31,6 +31,8 @@ import type { SubagentRunDeps } from '../tool/SubagentTool/runAgent.js';
 import { loadSkills, getSkillRegistry } from '../skills/index.js';
 import { Colors, color } from './colors.js';
 import { REPL } from './repl.js';
+import { shouldUseTui } from './ui/tty.js';
+import { runTuiSession } from './tui-session.js';
 import {
   initSessionLogger,
   closeSessionLogger,
@@ -473,6 +475,27 @@ async function runInteractive(
   });
   console.log(`${Colors.DIM}Session created: ${sessionId.slice(0, 8)}...${Colors.RESET}`);
 
+  // Interactive mode has two surfaces, chosen BEFORE anything is constructed.
+  //
+  // `blessed.screen()` claims the terminal when it is created: with stdout
+  // piped it writes cursor and erase-screen sequences into that pipe
+  // (measured on blessed 0.1.81 — `ESC[1;1H ESC[H ESC[J`), which corrupts the
+  // output of anything reading it. So the TUI is only constructed when BOTH
+  // ends are a terminal, and everything else falls through to the REPL below,
+  // which already handles terminal readline, persisted history and
+  // completion.
+  if (shouldUseTui()) {
+    return runTuiSession({
+      agent,
+      registry,
+      sessionLogger,
+      model,
+      workspace,
+      sessionId,
+      toolCount: registry.size,
+    });
+  }
+
   // The run host, built once for the REPL's lifetime (plan 587 H8.1). The
   // controller is stateless between runs, so this is a composition rather than
   // a per-turn object, and building it per turn would be a second place for the
@@ -746,8 +769,13 @@ export async function runCLI(
     workspace,
   });
 
-  // Print banner in interactive mode
-  if (!options.task) {
+  // Print banner in interactive mode.
+  //
+  // Skipped when the TUI will own the terminal: the banner would be painted
+  // to the normal buffer a moment before the alternate screen takes over, so
+  // the user would see it flash and vanish. The TUI reports the same facts as
+  // transcript notices instead.
+  if (!options.task && !shouldUseTui()) {
     printWelcomeBanner({
       model,
       workspace: agentOptions.workingDirectory || process.cwd(),
