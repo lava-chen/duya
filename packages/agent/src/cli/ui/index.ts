@@ -44,6 +44,17 @@ export {
   type RenderOptions,
 } from './transcript-view.js';
 
+// The surface-backed tape. `blocks.ts` above still consumes legacy frames and
+// is not migrated by this commit; these are additive and cover turn lifecycle
+// and tool call phases, the two capabilities the legacy vocabulary cannot carry
+// (`turn.completed` and `tool.timed_out` both reach `null` in the projector).
+export {
+  SurfaceTape,
+  renderToolRow,
+  renderTurnRow,
+  type SurfacePushResult,
+} from './surface-view.js';
+
 export {
   RenderScheduler,
   MIN_RENDER_INTERVAL_MS,
