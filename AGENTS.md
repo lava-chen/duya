@@ -111,17 +111,38 @@ npm run electron:pack:mac     # macOS (.dmg)
 npm run electron:pack:linux   # Linux (AppImage, .deb, .rpm)
 
 # Agent CLI (standalone) — the CHAT entry (REPL, -t, --print, --headless)
-npm run build:chat-cli             # = bundle:agent; emits bundle/cli-entry.js
-node packages/agent/bundle/cli-entry.js [options]
-#   -k, --api-key <key>        API key for LLM provider
-#   -m, --model <model>        Model to use
-#   -u, --base-url <url>       Base URL for API
-#   -p, --provider <provider>  LLM provider protocol: anthropic or openai
-#   -w, --workspace <dir>      Workspace directory
-#   -t, --task <task>          Execute task and exit (non-interactive mode)
-#   --print                    Print mode: single query and exit
-#   --headless                 Headless mode: read from script file
-#   -f, --format <format>      Output format: text, json, markdown
+npm run chat-cli [options]         # run the prebuilt bundle/cli-entry.js
+npm run chat-cli:build [options]   # = build:chat-cli && chat-cli (rebuild first)
+npm run chat-cli -- --print "..."  # extra flags pass through npm's `--`
+# ⚠ `chat-cli` runs a BUILD ARTIFACT. `packages/agent/bundle/` is gitignored
+#   (.gitignore), so a fresh clone or a new worktree has no `cli-entry.js` and
+#   `chat-cli` dies with MODULE_NOT_FOUND. Run `build:chat-cli` (or
+#   `chat-cli:build`) first there.
+#   -V, --version                  Output the version number
+#   -k, --api-key <key>            API key for LLM provider
+#   -m, --model <model>            Model to use
+#   -u, --base-url <url>           Base URL for API
+#   -p, --provider <provider>      LLM provider protocol: anthropic or openai
+#   -w, --workspace <dir>          Workspace directory
+#   -t, --task <task>              Execute task and exit (non-interactive mode)
+#   --print                        Print mode: single query and exit
+#   --headless                     Headless mode: read from script file
+#   --script <path>                Script file path for headless mode
+#   --continue [sessionId]         Continue a previous session (optional ID)
+#   --resume [sessionId]           Resume a session (alias for --continue)
+#   --summary-provider <provider>  Session-search summarizer: anthropic or openai
+#   --summary-api-key <key>        Summarizer API key
+#   --summary-model <model>        Summarizer model
+#   --summary-base-url <url>       Summarizer base URL
+#
+# ⚠ `--print` / `--headless` do NOT go through commander: `cli/index.ts` scans
+# raw `process.argv` first and dispatches through a hand-rolled `parseCLIArgs`
+# that reads only `--model`, `--cwd`/`-c` and `--format`. Consequences:
+#   - `--format <text|json|markdown>` works there but is absent from `--help`.
+#   - `-k`, `-u`, `-p` and `-w` are silently DROPPED in those two modes
+#     (api key / base URL / provider fall back to env and `~/.duya/config.toml`).
+#   - `--cwd` is assigned to BOTH `baseUrl` and `workspace`.
+#   Interactive mode is unaffected — it uses commander.
 ```
 
 ### Why the chat CLI is a bundle and not `dist/`
