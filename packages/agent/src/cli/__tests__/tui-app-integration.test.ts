@@ -1,4 +1,4 @@
-﻿import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { Writable, PassThrough } from 'stream';
 import { readFileSync } from 'fs';
 import { TUIApp } from '../ui/TUIApp.js';
