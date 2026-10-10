@@ -11,7 +11,7 @@ import { Colors, color } from './colors.js';
 import { resolve } from 'path';
 import { existsSync, statSync } from 'fs';
 import type { duyaAgent } from '../agent/DuyaAgent.js';
-import { getActiveCliProvider } from './config/db-config.js';
+import { resolveProvider } from './config/file-config.js';
 import { handleGoalCommand, isGoalControlCommand } from '../modes/goal/goal-commands.js';
 import { handleTranscriptCommand } from '../session/transcript-commands.js';
 
@@ -499,8 +499,10 @@ export function initSlashCommands(): void {
       const toolMsgs = messages.filter(m => m.role === 'tool').length;
 
       // Get provider info
-      const provider = getActiveCliProvider();
-      const model = process.env.ANTHROPIC_MODEL || provider?.notes?.match(/Default model:\s*(.+)/)?.[1]?.trim() || '';
+      const resolution = resolveProvider(process.env.ANTHROPIC_MODEL);
+      const model = resolution.ok
+        ? resolution.provider.model.model
+        : '';
 
       if (platform === 'cli') {
         // CLI formatted output
