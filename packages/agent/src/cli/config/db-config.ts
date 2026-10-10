@@ -1,9 +1,34 @@
 /**
- * Database-based Configuration for CLI
- * 
+ * Database-based Configuration for CLI (LEGACY — provider helpers retired).
+ *
  * Uses the same database as the app (src/lib/db.ts)
  * Providers are stored in api_providers table
  * Settings are stored in settings table
+ *
+ * ## Provider helpers are retired. Do not add new callers.
+ *
+ * The `api_providers` table is gone from the desktop's real database:
+ * migration `drop_api_providers_table` in
+ * `apps/desktop/src/main/db/schema.ts` runs `DROP TABLE IF EXISTS
+ * api_providers`. Providers moved to the unified config store
+ * (`~/.duya/config.toml` + `~/.duya/secrets.json`).
+ *
+ * `getActiveCliProvider()` therefore always returned null for a correctly
+ * configured user, and the CLI reported a generic "API key is required".
+ * Provider resolution now lives in `./file-config.ts` (`resolveProvider`),
+ * which reads the store the desktop actually writes.
+ *
+ * The provider CRUD helpers below remain ONLY for the legacy `duya setup`
+ * wizard (`./setup/index.ts`), which still creates the table on demand via
+ * `initCliDatabase()`. That wizard writes a private store the CLI no longer
+ * reads for runs; `duya setup` is therefore ineffective for configuring the
+ * CLI and the desktop Settings UI is the supported path.
+ *
+ * The SETTINGS helpers (`getCliSetting` / `setCliSetting`) are still live
+ * (`tool_display_mode`, `agent_mode`, `skillAdditionalPaths`), but they read
+ * a store the desktop never wrote, so every lookup misses and falls through
+ * to its default. Settings that have a config.toml home (`agent.max_turns`,
+ * `mcp_servers`) are read from file-config.ts instead.
  */
 
 import Database from 'better-sqlite3';
@@ -147,7 +172,7 @@ export function getAllCliProviders(): CliProvider[] {
   return db.prepare('SELECT * FROM api_providers ORDER BY sort_order ASC').all() as CliProvider[];
 }
 
-// Get active provider
+/** @deprecated Retired — reads a table the desktop dropped. Use `resolveProvider` in ./file-config.ts. */
 export function getActiveCliProvider(): CliProvider | null {
   const db = getCliDatabase();
   return db.prepare('SELECT * FROM api_providers WHERE is_active = 1 ORDER BY sort_order ASC LIMIT 1').get() as CliProvider | null;
