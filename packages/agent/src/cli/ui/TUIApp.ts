@@ -43,6 +43,8 @@ import { OverlayState, type PermissionDecision } from './overlay.js';
 import { renderTranscript, type RenderOptions } from './transcript-view.js';
 import { EscapeSafeWriter } from './bounded-writer.js';
 import { wrapWithCursor, type WrappedText } from './width.js';
+import { CompletionController, type CompletionKey, type CompletionSources } from './completion.js';
+import { defaultCompletionSources } from './candidates.js';
 
 /** DECSET 2026: begin synchronized update. */
 const SYNC_BEGIN = '\x1b[?2026h';
@@ -90,6 +92,16 @@ export interface TUIAppOptions {
   readonly isBusy?: () => boolean;
   /** True when a permission responder is attached to the run. */
   readonly canAnswerPermissions?: () => boolean;
+  /**
+   * Where completion candidates come from.
+   *
+   * Defaults to the real CLI sources. Injectable for the same reason `input` and
+   * `output` are: the popup's painting and key routing are reachable from a test
+   * without a workspace on disk or a command registry loaded.
+   */
+  readonly completionSources?: CompletionSources;
+  /** How many completion rows to show at once. */
+  readonly completionRows?: number;
 }
 
 export class TUIApp {
@@ -104,6 +116,11 @@ export class TUIApp {
   private readonly inputBox: Widgets.BoxElement;
   private readonly statusBar: Widgets.BoxElement;
   private readonly overlayBox: Widgets.BoxElement;
+  /** The `/` and `@` popup, drawn immediately above the input box. */
+  private readonly completionBox: Widgets.BoxElement;
+  private readonly completion: CompletionController;
+  /** Rows the popup shows. */
+  private readonly completionRows: number;
 
   private readonly model = new TranscriptModel();
   private readonly editor = new InputEditor();
@@ -238,6 +255,25 @@ export class TUIApp {
       vi: true,
     }) as Widgets.BoxElement;
 
+    this.completionRows = Math.max(1, options.completionRows ?? 8);
+    this.completion = new CompletionController(
+      options.completionSources ?? defaultCompletionSources(process.cwd()),
+    );
+
+    this.completionBox = blessed.box({
+      // Height is set on every paint from the visible row count; the box starts
+      // hidden so it never reserves space the popup is not using.
+      bottom: 3 + STATUS_ROWS,
+      left: 4,
+      right: 4,
+      height: 3,
+      hidden: true,
+      scrollable: false,
+      tags: true,
+      border: { type: 'line' },
+      style: { border: { fg: 'cyan' } },
+    }) as Widgets.BoxElement;
+
     this.screen.append(this.transcriptBox);
     this.screen.append(this.inputBox);
     this.screen.append(this.statusBar);
@@ -246,6 +282,7 @@ export class TUIApp {
     // options is NOT added to that list — it has to be appended here or it is
     // never drawn at all.
     this.screen.append(this.overlayBox);
+    this.screen.append(this.completionBox);
 
     if (options.history !== undefined && options.history.length > 0) {
       this.editor.loadHistory(options.history);
@@ -299,6 +336,7 @@ export class TUIApp {
       // size its scroll against the PREVIOUS frame's height.
       this.paintInput();
       this.paintTranscript();
+      this.paintCompletion();
       this.paintStatus();
       this.paintOverlay();
       this.screen.render();
@@ -336,9 +374,27 @@ export class TUIApp {
    */
   private visibleTranscriptRows(): number {
     const screenRows = asNumber(this.program.rows, 24);
-    // input box (rows + its two border rows), status bar, the transcript's own
-    // top and bottom border.
-    return Math.max(1, screenRows - this.inputRows - asNumber(this.inputBox.iheight, 2) - STATUS_ROWS - 2);
+    // input box (rows + its two border rows), status bar, the popup while it is
+    // open, and the transcript's own top and bottom border.
+    return Math.max(
+      1,
+      screenRows -
+        this.inputRows -
+        asNumber(this.inputBox.iheight, 2) -
+        STATUS_ROWS -
+        2 -
+        this.popupRows(),
+    );
+  }
+
+  /** Rows the popup occupies right now, borders included. Zero when closed. */
+  private popupRows(): number {
+    if (!this.completion.isOpen) return 0;
+    const total = this.completion.snapshot.items.length;
+    const rows = Math.min(this.completionRows, total);
+    const hasOverflowMarker = total > rows;
+    // One more row when the list is scrollable, for the ellipsis.
+    return rows + (hasOverflowMarker ? 1 : 0) + 2;
   }
 
   private paintInput(): void {
@@ -348,7 +404,12 @@ export class TUIApp {
     const height = rows + asNumber(this.inputBox.iheight, 2);
     this.inputBox.height = height;
     this.inputBox.bottom = STATUS_ROWS;
-    this.transcriptBox.bottom = height + STATUS_ROWS;
+    // The popup lives between the transcript and the input, so the transcript
+    // gives up rows for it. Reading the PREVIOUS frame's popup height is
+    // deliberate: this runs before `paintCompletion`, and a one-frame lag on a
+    // box that opens and closes is invisible, whereas sizing the transcript from
+    // a popup whose row count is not known yet would not be.
+    this.transcriptBox.bottom = height + STATUS_ROWS + this.popupRows();
 
     const visible = wrapped.rows.slice(0, rows);
     this.inputBox.setContent(visible.join('\n'));
@@ -368,6 +429,56 @@ export class TUIApp {
     const y = asNumber(box.top) + asNumber(box.itop, 1) + row;
     this.program.move(Math.max(0, col), Math.max(0, y));
     this.program.showCursor();
+  }
+
+  /**
+ * Draw the popup, or hide it.
+ *
+ * Sits immediately above the input box and steals transcript rows while it is
+ * open, so the transcript is shortened by exactly the popup height rather than
+ * being overlapped — an overlapped popup would hide the very text the user is
+ * completing against.
+ */
+private paintCompletion(): void {
+    const state = this.completion.snapshot;
+    if (!this.completion.isOpen) {
+      if (!this.completionBox.hidden) this.completionBox.hide();
+      return;
+    }
+
+    const total = state.items.length;
+    const visible = Math.min(this.completionRows, total);
+    // Window the selection into view. Without this, accepting row 30 of a
+    // 100-row list would insert something the user never saw.
+    const first = Math.max(
+      0,
+      Math.min(state.selectedIndex - (visible - 1), Math.max(0, total - visible)),
+    );
+
+    const rows: string[] = [];
+    for (let i = first; i < first + visible; i += 1) {
+      const entry = state.items[i];
+      if (entry === undefined) continue;
+      const selected = i === state.selectedIndex;
+      const marker = selected ? '❯' : ' ';
+      const description = entry.description === '' ? '' : `  {gray-fg}${entry.description}{/gray-fg}`;
+      const line = `${marker} ${entry.label}${description}`;
+      rows.push(selected ? `{cyan-fg}${line}{/cyan-fg}` : line);
+    }
+
+    if (first > 0) rows.unshift('{gray-fg}  …{/gray-fg}');
+    if (first + visible < total) rows.push('{gray-fg}  …{/gray-fg}');
+
+    // `+ 2` for the popup own border rows.
+    this.completionBox.height = rows.length + 2;
+    this.completionBox.bottom = this.visibleInputHeight() + STATUS_ROWS;
+    this.completionBox.setContent(rows.join('\n'));
+    if (this.completionBox.hidden) this.completionBox.show();
+  }
+
+  /** Total rows the input box occupies, borders included. */
+  private visibleInputHeight(): number {
+    return this.inputRows + asNumber(this.inputBox.iheight, 2);
   }
 
   private paintStatus(): void {
@@ -556,8 +667,13 @@ export class TUIApp {
   }
 
   /** The persisted input history. */
-  exportHistory(): string[] {
+exportHistory(): string[] {
     return this.editor.exportHistory();
+  }
+
+  /** The current input text. Read-only; the editor owns the buffer. */
+  get inputText(): string {
+    return this.editor.text;
   }
 
   /** Render options, exposed so tests can drive the shell. */
@@ -587,6 +703,34 @@ export class TUIApp {
     'f1',
   ]);
 
+  /**
+   * The blessed key names bound for the completion popup — one per physical key.
+   *
+   * A lookup rather than a `switch` so the routing site cannot drift from the
+   * fallbacks: `routeContended` indexes the same key set.
+   *
+   * `return` is what a terminal actually sends for Enter (`\r`). `enter` is
+   * blessed's own alias for the same byte, re-emitted at `program.js:397-399`;
+   * it is deliberately absent here. See `CONTENDED_ALIASES`.
+   */
+  private static readonly CONTENDED_BINDINGS: Readonly<Record<string, CompletionKey>> = {
+    up: 'up',
+    down: 'down',
+    tab: 'tab',
+    escape: 'escape',
+    return: 'return',
+  };
+
+  /**
+   * Every blessed name the popup owns, which the text handler must not also
+   * read as input. A strict superset of `CONTENDED_BINDINGS` that adds
+   * `enter`, the unbound alias.
+   */
+  private static readonly CONTENDED_ALIASES: ReadonlySet<string> = new Set([
+    ...Object.keys(TUIApp.CONTENDED_BINDINGS),
+    'enter',
+  ]);
+
   private bindKeys(): void {
     const target = this.screen;
 
@@ -604,10 +748,6 @@ export class TUIApp {
     target.key(['C-k'], () => this.editor.killToEnd());
     target.key(['C-w'], () => this.editor.killWordBackward());
     target.key(['C-end'], () => this.followTail());
-    target.key(['escape'], () => this.closeOverlay());
-
-    target.key(['up'], () => this.editor.historyPrevious());
-    target.key(['down'], () => this.editor.historyNext());
     target.key(['left'], () => this.editor.moveLeft());
     target.key(['right'], () => this.editor.moveRight());
     target.key(['C-left'], () => this.editor.moveWordLeft());
@@ -616,7 +756,33 @@ export class TUIApp {
     target.key(['end'], () => this.editor.moveEnd());
     target.key(['backspace'], () => this.editor.backspace());
     target.key(['delete'], () => this.editor.deleteForward());
-    target.key(['tab'], () => this.editor.insert('  '));
+
+    // ── Keys the completion popup and the editor CONTEND for ─────────────
+    //
+    // Exactly ONE blessed name per physical key, and never both names of a
+    // pair.
+    //
+    // `Screen.prototype.key` forwards to `program.key`, which registers on the
+    // PROGRAM emitter (`widgets/screen.js:1726` → `program.js:515-520`).
+    // `Program._listenInput` broadcasts `key <name>` once per `input` keypress
+    // (`program.js:408-412`) — but `\r` produces TWO `input` keypresses, because
+    // lines 397-399 re-emit the key under the alias `enter` and then fall
+    // through for the real `return`. So one physical Enter fires `key enter`
+    // once and `key return` once.
+    //
+    // Binding both names therefore dispatches twice. Measured consequence with
+    // the popup open on `/rev`: the first run accepted `/review `, the second
+    // found the popup already closed and fell through to `onEnter()`, which
+    // appended a newline to the text it had just accepted. The completion
+    // controller's own tests could not have seen it — they dispatch once.
+    //
+    // Binding only the canonical name drops the duplicate by construction: no
+    // dedup state, and no assumption about how fast the two arrivals land.
+    for (const [name, completionKey] of Object.entries(TUIApp.CONTENDED_BINDINGS)) {
+      target.key([name], () => {
+        this.routeContended(completionKey);
+      });
+    }
 
     target.key(['pageup'], () => {
       this.scrollBy(-1);
@@ -625,14 +791,21 @@ export class TUIApp {
       this.scrollBy(1);
     });
 
-    target.key(['return', 'enter'], () => this.onEnter());
-
     // Everything else is text. Notably this is where CJK arrives: measured on
     // blessed's key path a committed ideograph arrives with `key.name`
     // undefined and `ch` holding the character, so the name-keyed bindings
     // above never see it and it lands here instead.
     target.on('keypress', (ch: string, key: blessed.Widgets.Events.IKeyEventArg) => {
       const name = key?.name;
+
+      // The popup's keys are bound on the program channel above, so this path
+      // must not also read them as input. `enter` is in this set without being
+      // bound: it is the duplicate blessed re-emits for every physical Enter.
+      if (typeof name === 'string' && TUIApp.CONTENDED_ALIASES.has(name)) {
+        this.scheduler.requestImmediate();
+        return;
+      }
+
       if (typeof name === 'string' && TUIApp.SPECIAL_KEYS.has(name)) {
         this.scheduler.requestImmediate();
         return;
@@ -650,8 +823,62 @@ export class TUIApp {
       }
       this.editor.insert(ch);
       this.paste.feed(ch, now());
+      this.refreshCompletion();
       this.scheduler.requestImmediate();
     });
+  }
+
+  /**
+   * Give a contended key to the popup, or to its editor meaning.
+   *
+   * `refreshCompletion` after every branch, because the popup is a function of
+   * the text and the caret: accepting, dismissing and navigating all change what
+   * the next keystroke should offer.
+   *
+   * ## Why this takes no key identity
+   *
+   * blessed delivers ONE physical Enter TWICE, under two names. It is not a
+   * timing artefact to be filtered here: `CONTENDED_BINDINGS` binds only the
+   * name a terminal really sends (`return`), so the duplicate alias (`enter`)
+   * never reaches this function at all. Routing one name per physical key
+   * upstream is what makes this dispatch safe — see the note in `bindKeys`.
+   */
+  private routeContended(key: CompletionKey): void {
+    const fallbacks: Record<CompletionKey, () => void> = {
+      up: () => this.editor.historyPrevious(),
+      down: () => this.editor.historyNext(),
+      tab: () => this.editor.insert('  '),
+      escape: () => this.closeOverlay(),
+      return: () => this.onEnter(),
+    };
+
+    const result = this.completion.handleKey(key, this.editor.text);
+    if (result.accepted !== null) {
+      this.editor.setText(result.accepted.text, result.accepted.cursor);
+      this.refreshCompletion();
+      this.scheduler.requestImmediate();
+      return;
+    }
+    if (result.consumed) {
+      this.refreshCompletion();
+      this.scheduler.requestImmediate();
+      return;
+    }
+    fallbacks[key]();
+    this.refreshCompletion();
+    this.scheduler.requestImmediate();
+  }
+
+  /**
+   * Recompute the popup from the current input and caret.
+   *
+   * Called from EVERY place the input text can change — typed characters, an
+   * accept, a backspace, a history recall — because the popup is a function of
+   * both. A trigger that only updated on typing would keep offering rows for
+   * text the user has since deleted.
+   */
+  private refreshCompletion(): void {
+    this.completion.update(this.editor.text, this.editor.cursor);
   }
 
   private handleOverlayKey(ch: string, key: blessed.Widgets.Events.IKeyEventArg): void {

@@ -282,7 +282,14 @@ modules:
     # kill strategy, so this edge buys a lifetime abstraction and not a
     # relocation of `processTreeKill` -- which stays put, with its test and its
     # `evals/agent` matrix row, because moving it would have been churn.
-    requires: [agent-protocol, agent-runtime, legacy-ai, repo-tooling, memory, sandbox]
+    #
+    # Plan 610: `input-completion` is added for the CLI TUI's `/` and `@`
+    # popups. The direction is the point -- the contract has exactly two
+    # consumers, this CLI and the desktop composer, and the failure mode of
+    # "each side implements its own" is a second `detectPopoverTrigger` that
+    # drifts. It is a pure-rules leaf (Node builtins only, `requires: []`), so
+    # the edge adds no cycle and pulls no engine into the terminal entry.
+    requires: [agent-protocol, agent-runtime, legacy-ai, repo-tooling, memory, sandbox, input-completion]
     owner: agent
     migrateTo: agent-core
 
@@ -411,6 +418,27 @@ modules:
       - packages/connectors/src/app-schema.ts
     owner: extensibility
 
+  # Plan 610. The input-completion contract shared by the desktop composer and
+  # the CLI TUI. `managed: true` from the first commit, like every other package
+  # this series has created: it is the only module in the tree whose entire
+  # reason to exist is to be imported from two hosts at once, so the one thing it
+  # must never acquire is a dependency. It has zero, and `requires: []` says so.
+  #
+  # Declared rather than baselined. Without this entry the imports are reported
+  # as blocking `module-dependency` violations, and the only way to silence them
+  # with `--write` would be to record a NEW violation — turning deliberate
+  # dependencies into permanent debt. A `requires` entry on each host is a
+  # standing permission instead, and `architecture-check.mjs` still COUNTS
+  # permitted edges in its own rule, so a future edit to those lists shows up as
+  # a count change rather than as silence.
+  - id: input-completion
+    roots: [packages/input-completion]
+    managed: true
+    requires: []
+    publicEntrypoints:
+      - packages/input-completion/src/index.ts
+    owner: desktop
+
   # Plan 610 A5. `@duya/sandbox` is the sandbox enforcement implementation moved
   # out of `packages/agent/src/sandbox`.
   #
@@ -423,27 +451,6 @@ modules:
   # keeps the sandbox module graph out of every cold-start worker — which means
   # a grep for static imports will not find it. Declaring the edge is what makes
   # the load visible to the gate instead of merely absent from the census.
-  # The input-completion contract shared by the desktop composer and the CLI
-  # TUI. `managed: true` from the first commit, like every other package this
-  # series has created: it is the only module in the tree whose entire reason to
-  # exist is to be imported from two hosts at once, so the one thing it must
-  # never acquire is a dependency. It has zero, and `requires: []` says so.
-  #
-  # Declared rather than baselined. Without this entry the renderer import is
-  # reported as a blocking `module-dependency` violation, and the only way to
-  # silence it with `--write` would be to record a NEW violation — turning a
-  # deliberate dependency into permanent debt. A `requires` entry is a standing
-  # permission instead, and `architecture-check.mjs` still COUNTS permitted edges
-  # in its own rule, so a future edit to this list shows up as a count change
-  # rather than as silence.
-  - id: input-completion
-    roots: [packages/input-completion]
-    managed: true
-    requires: []
-    publicEntrypoints:
-      - packages/input-completion/src/index.ts
-    owner: desktop
-
   - id: sandbox
     roots: [packages/sandbox]
     managed: true

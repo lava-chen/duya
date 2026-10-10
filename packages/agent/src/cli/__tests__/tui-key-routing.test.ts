@@ -39,6 +39,24 @@ async function settle(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/**
+ * Gap between keystrokes that reads as human typing rather than one paste.
+ * Comfortably past `PasteBurstDetector`'s 8 ms burst window.
+ *
+ * Needed here because the tests below submit: a burst arms the detector, and a
+ * pasted Enter is content rather than a submission. Delivering a whole word in
+ * one write would make these tests pass or fail on character COUNT rather than
+ * on key routing.
+ */
+const TYPING_INTERVAL_MS = 20;
+
+async function type(input: PassThrough, text: string): Promise<void> {
+  for (const ch of text) {
+    input.write(ch);
+    await new Promise((resolve) => setTimeout(resolve, TYPING_INTERVAL_MS));
+  }
+}
+
 describe('TUIApp key routing', () => {
   it('submits the typed prompt when Enter arrives', async () => {
     const out = sink();
@@ -54,8 +72,7 @@ describe('TUIApp key routing', () => {
     app.start();
     await settle();
 
-    input.write('hi');
-    await settle();
+    await type(input, 'hi');
     input.write('\r');
     await settle();
 
@@ -77,8 +94,7 @@ describe('TUIApp key routing', () => {
     app.start();
     await settle();
 
-    input.write('/help');
-    await settle();
+    await type(input, '/help');
     input.write('\r');
     await settle();
 

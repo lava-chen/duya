@@ -190,6 +190,25 @@ export class InputEditor {
   }
 
   /**
+   * Replace the whole buffer and place the caret.
+   *
+   * Needed by completion: accepting a row rewrites the text around the trigger,
+   * not just the span the editor happened to be tracking. Rebuilding through
+   * `insert` and `backspace` instead would push every replaced character
+   * through the paste bookkeeping, so a completion would look like a hand-typed
+   * burst to anything watching `hasCollapsedPaste`.
+   *
+   * The history is NOT touched: accepting a completion is not the user having
+   * typed a prompt, and a recalled command should not replace what they just
+   * completed.
+   */
+  setText(text: string, cursor: number): void {
+    this.cells = [...text];
+    this.cursorAt = Math.max(0, Math.min(cursor, this.cells.length));
+    this.paste = null;
+  }
+
+  /**
    * Take the buffer's contents for submission, expanding any collapsed paste.
    *
    * Expansion happens HERE, not at paste time, so a collapsed paste costs one
