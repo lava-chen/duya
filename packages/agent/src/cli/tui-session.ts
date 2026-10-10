@@ -27,10 +27,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { homedir } from 'os';
+import { format } from 'node:util';
 import type { duyaAgent } from '../agent/DuyaAgent.js';
 import type { ToolRegistry } from '../tool/registry.js';
 import type { SessionLogger } from '../utils/sessionLogger.js';
 import { createHeadlessRunHost, type HeadlessRunHost } from '../process/headless-run-host.js';
+import { getLogger } from '../utils/logger.js';
 import { TUIApp } from './ui/TUIApp.js';
 import type { LegacyFrame } from './ui/blocks.js';
 import {
@@ -70,34 +72,67 @@ function saveHistory(entries: readonly string[]): void {
 }
 
 /**
- * Run `fn` with console output routed into the transcript.
+ * Route console output into the transcript for as long as the TUI owns the
+ * screen, and return the undo.
  *
- * A narrow, time-boxed swap rather than a permanent one: the agent itself
- * also logs to console in places, and leaving the redirect installed after the
- * command returns would silently swallow unrelated output.
+ * ## Why this spans the whole session, not just the slash commands
+ *
+ * An alternate-screen app owns the terminal. ANY byte written to stdout while
+ * the screen is up lands on top of the rendered frame and corrupts it. That
+ * includes logging, not just user-facing output: the agent logger defaults to
+ * INFO (`packages/agent/src/utils/logger.ts`), so every turn emits dozens of
+ * `[INFO] [Agent] streamChat: ...` lines, and `packages/ai` has its own
+ * unconditional `console.warn` diagnostic that it cannot route through the
+ * agent logger.
+ *
+ * The previous version wrapped only the two slash-command call sites, which is
+ * why the frame looked fine until a turn started and then fell apart.
+ *
+ * The swap is still undone explicitly rather than left installed: once the
+ * screen is destroyed, later output must reach the real terminal, and a
+ * redirect left behind would silently swallow it.
  */
-async function withConsoleCapture(tui: TUIApp, fn: () => Promise<void> | void): Promise<void> {
-  const originalLog = console.log;
-  const originalError = console.error;
-  const originalWarn = console.warn;
+/**
+ * The slice of `TUIApp` that console capture needs.
+ *
+ * Narrower than the class on purpose: the capture is a pure redirect, and
+ * requiring the whole blessed app to test it would mean standing up a terminal
+ * to assert something that has no terminal in it.
+ */
+export interface ConsoleSink {
+  printNotice(text: string): void;
+  printError(text: string): void;
+}
 
-  console.log = (...args: unknown[]) => {
-    tui.printNotice(args.map(String).join(' '));
-  };
-  console.error = (...args: unknown[]) => {
-    tui.printError(args.map(String).join(' '));
-  };
-  console.warn = (...args: unknown[]) => {
-    tui.printNotice(args.map(String).join(' '));
+export function installConsoleCapture(tui: ConsoleSink): () => void {
+  const original = {
+    log: console.log,
+    error: console.error,
+    warn: console.warn,
+    debug: console.debug,
   };
 
-  try {
-    await fn();
-  } finally {
-    console.log = originalLog;
-    console.error = originalError;
-    console.warn = originalWarn;
-  }
+  // `util.format`, not `args.map(String).join(' ')`: the structured diagnostics
+  // this has to absorb pass an OBJECT as the last argument, and String(obj)
+  // reduces a whole dump to the literal text "[object Object]".
+  const notice = (...args: unknown[]): void => {
+    tui.printNotice(format(...args));
+  };
+  const failure = (...args: unknown[]): void => {
+    tui.printError(format(...args));
+  };
+
+  console.log = notice;
+  console.warn = notice;
+  console.debug = notice;
+  console.error = failure;
+
+  return () => {
+    console.log = original.log;
+    console.error = original.error;
+    console.warn = original.warn;
+    console.debug = original.debug;
+  };
 }
 
 export interface TuiSessionDeps {
@@ -229,13 +264,10 @@ export async function runTuiSession(deps: TuiSessionDeps): Promise<void> {
     }
 
     if (isSlashCommand(trimmed)) {
-      let handled = false;
-      await withConsoleCapture(tui, async () => {
-        handled = await executeSlashCommand(trimmed, {
-          agent,
-          sessionId,
-          platform: 'cli',
-        });
+      const handled = await executeSlashCommand(trimmed, {
+        agent,
+        sessionId,
+        platform: 'cli',
       });
       if (handled && (trimmed === '/exit' || trimmed === '/quit' || trimmed === '/q')) {
         finish();
@@ -247,11 +279,9 @@ export async function runTuiSession(deps: TuiSessionDeps): Promise<void> {
     if (trimmed === '/log' || trimmed.startsWith('/log ')) {
       const filename = trimmed.split(/\s+/)[1];
       const logDir = sessionLogger.getLogDirectory?.() || process.cwd();
-      await withConsoleCapture(tui, async () => {
-        // Reuse the REPL's own reader so both surfaces show the same thing.
-        const reader = new REPL({ onLine: () => {} });
-        reader.showLogs(logDir, filename);
-      });
+      // Reuse the REPL's own reader so both surfaces show the same thing.
+      const reader = new REPL({ onLine: () => {} });
+      reader.showLogs(logDir, filename);
       return;
     }
 
@@ -281,8 +311,26 @@ export async function runTuiSession(deps: TuiSessionDeps): Promise<void> {
     } finally {
       saveHistory(tui.exportHistory());
       tui.stop();
+      // After the screen is gone, later output must reach the real terminal.
+      restoreSideChannels();
       resolveExit();
     }
+  }
+
+  // From here until `finish()`, the alternate screen owns stdout. Logging is
+  // captured, so it lands in the transcript rather than on top of the frame.
+  const restoreConsole = installConsoleCapture(tui);
+
+  // The agent logger defaults to INFO. Captured, that is dozens of transcript
+  // lines per turn, so the session runs at the level AGENTS.md documents as the
+  // default (WARN). Every line still reaches the log file either way.
+  const agentLogger = getLogger();
+  const previousLevel = agentLogger.getConfig().level;
+  agentLogger.updateConfig({ level: 'WARN' });
+
+  function restoreSideChannels(): void {
+    restoreConsole();
+    agentLogger.updateConfig({ level: previousLevel });
   }
 
   tui.start();
