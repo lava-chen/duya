@@ -388,6 +388,33 @@ export function convertSSEToAgentMessage(event: AgentStreamEvent): Record<string
     // LLM usage frame: consumed upstream for token accounting before this
     // codec runs; nothing to forward to the SSE client.
     case 'result':
+    // The streaming trio plus per-turn usage.
+    //
+    // These are NOT unknown event types, and treating them as such was a false
+    // alarm that fired on every single token. `projectToLegacyFrame` projects
+    // them deliberately — they are how the surface model streams an answer
+    // (`assistant.text_delta` -> `text_delta`,
+    // `agent-runtime/src/project/legacy-sse-projector.ts:65`) — and the engine
+    // driver runs every projected frame through this codec
+    // (`engine-run-driver.ts:690`). So each token produced one
+    // "Unknown agent stream event type — dropped" WARN. In the CLI's TUI that
+    // warning is routed into the transcript, where it interleaved with the
+    // answer it was describing: a run of them arrived before the reply and
+    // pushed it off the top.
+    //
+    // Silent drop is the `result` arm's precedent, and for the same reason:
+    // the `chat:*` worker vocabulary has no streaming-delta frame (there is no
+    // `chat:text_delta` anywhere in `worker-protocol.ts`), so there is nothing
+    // to forward to. Inventing one here would put a frame in the protocol that
+    // no consumer reads, which is worse than dropping it — the driver calls
+    // this codec's answer "the product's answer" and papers over nothing.
+    //
+    // Deliberately NOT merged with the `result` arm above, so the two reasons
+    // stay separable: usage is consumed upstream, deltas are carried by the
+    // surface model and re-projected per transport.
+    case 'text_delta':
+    case 'thinking_delta':
+    case 'token_usage':
       return null;
     // Compact events (from DuyaAgent auto-compaction in streamChat).
     // Routed as-is so the renderer can show a compressing indicator.

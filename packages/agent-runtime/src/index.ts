@@ -184,6 +184,45 @@ export type { RawFrame, TranslateContext, TranslateResult } from './translate/ch
 
 export { projectToLegacyFrame } from './project/legacy-sse-projector.js';
 
+// Plan 610 -- the surface layer. A renderer-independent view of a run keyed on
+// `RunEventEnvelope`, NOT on the legacy frame vocabulary the projector above
+// emits. It is what makes turn lifecycle, pause-vs-stall, permission expiry and
+// checkpoints expressible at all: eleven protocol events reach `null` in that
+// projection, so a model keyed on its output cannot represent them. Exported
+// whole rather than named piecemeal because the point is that a second renderer
+// consumes the SAME model rather than a second copy of the logic.
+export { SurfaceModel } from './surface/surface-model.js';
+export type {
+  CheckpointSurface,
+  CompactionPhase,
+  CompactionSurface,
+  DiagnosticSurface,
+  ExtensionSurface,
+  HookSurface,
+  MessageSurface,
+  PermissionPhase,
+  PermissionSurface,
+  RunStatus,
+  RunSurface,
+  SubagentPhase,
+  SubagentSurface,
+  SurfaceEffect,
+  ToolCallSurface,
+  ToolGroupSurface,
+  ToolPhase,
+  ToolProgressSurface,
+  TurnPhase,
+  TurnRetrySurface,
+  TurnSurface,
+} from './surface/surface-model.js';
+export {
+  LEGACY_MAPPED_EVENT_TYPES,
+  LEGACY_UNMAPPED_EVENT_TYPES,
+  isLegacyMapped,
+  replayOntoSurface,
+} from './surface/legacy-projection.js';
+export type { SurfaceReplay } from './surface/legacy-projection.js';
+
 // Plan 610 D2: the ONE implementation of `WorkerAdapterSurface`, the `chat:*`
 // projection the worker adapter owes an engine.
 export { createWorkerAdapterSurface } from './engine/worker-adapter-surface.js';

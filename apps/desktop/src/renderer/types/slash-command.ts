@@ -1,59 +1,40 @@
 // slash-command.ts - Types for slash commands system
 
 import type * as React from 'react';
+import type {
+  PopoverItem as SharedPopoverItem,
+  PopoverItemGroup as SharedPopoverItemGroup,
+  PopoverItemKind as SharedPopoverItemKind,
+  PopoverMode as SharedPopoverMode,
+  SettingsSubmenu as SharedSettingsSubmenu,
+} from '@duya/input-completion';
 
-export type PopoverItemKind =
-  | 'slash_command'
-  | 'agent_command'
-  | 'agent_skill'
-  | 'sdk_command'
-  | 'cli_tool'
-  | 'settings_action'   // execute immediately (add files, /compact, /export, /recap)
-  | 'settings_submenu'  // open a sub-view (thinking, style, mcp)
-  | 'mode'              // toggle a popover mode (plan-task | research | conductor)
-  /**
-   * @deprecated As of plan 224 Phase 5, Conductor is a regular `mode`
-   * item with `modeValue: 'conductor'`. The `conductor_toggle` kind is
-   * retained only for backward compatibility with persisted state or
-   * external callers; new code should use `kind: 'mode'`.
-   */
-  | 'conductor_toggle';
+/**
+ * The shared enums and result shapes, aliased rather than copied.
+ *
+ * `PopoverMode`, `PopoverItemKind`, `PopoverItemGroup`, `SettingsSubmenu`,
+ * `InsertResult` and `TriggerResult` have no host content, so they live in
+ * `@duya/input-completion` and both surfaces take the same declaration. An
+ * alias is the point: a copied union here would be a second definition to keep
+ * in step, which is exactly what this package exists to remove.
+ */
+export type PopoverItemGroup = SharedPopoverItemGroup;
+export type PopoverItemKind = SharedPopoverItemKind;
+export type PopoverMode = SharedPopoverMode;
+export type SettingsSubmenu = SharedSettingsSubmenu;
+export type { InsertResult, TriggerResult };
 
-export type PopoverItemGroup = 'attachments' | 'mode' | 'settings' | 'skills' | 'apps';
-
-export type SettingsSubmenu = 'thinking' | 'style' | 'mcp' | 'recap' | 'btw';
-
-export interface PopoverItem {
-  label: string;
-  value: string;
-  description?: string;
-  /** Optional English counterpart to `description` for bilingual display. */
-  descriptionEn?: string;
+/**
+ * A candidate row, with the icon narrowed to something React can render.
+ *
+ * The shared type declares `icon` as `unknown` because the terminal has no JSX.
+ * Narrowing it HERE rather than there is what lets one contract serve both:
+ * `SlashCommandPopover` can render `item.icon` as a component, and the CLI can
+ * read the same field as a glyph, without either of them widening the other.
+ */
+export interface PopoverItem extends Omit<SharedPopoverItem, 'icon'> {
   icon?: React.ComponentType<{ size?: number; className?: string }>;
-  builtIn?: boolean;
-  immediate?: boolean;
-  kind?: PopoverItemKind;
-  installedSource?: 'agents' | 'claude';
-  source?: 'global' | 'project' | 'plugin' | 'installed' | 'sdk';
-  group?: PopoverItemGroup;
-  /**
-   * Category used by the input plus-menu to group items into the two
-   * second-level lists:
-   *   - 'context' → mode + MCP (triggered by `@` or the `@添加上下文` row)
-   *   - 'command' → settings + skills (triggered by `/` or the `/使用指令和技能` row)
-   * `attachments` (add files) lives outside either category and is exposed as a
-   * top-level row of the plus-menu instead.
-   */
-  category?: 'context' | 'command';
-  /** Absolute path to the skill directory (SKILL.md parent). Only set for agent_skill items. */
-  skillRoot?: string;
-  /** For settings_submenu items: which sub-view to open. */
-  submenu?: SettingsSubmenu;
-  /** For mode items: the ModeModifierId to toggle ('plan-task' | 'research' | 'conductor'). */
-  modeValue?: string;
 }
-
-export type PopoverMode = 'skill' | 'context' | 'cli' | null;
 
 export interface CommandBadge {
   command: string;
@@ -68,14 +49,4 @@ export interface CliBadge {
   summary?: string;
 }
 
-export interface InsertResult {
-  action: 'insert_slash_command' | 'insert_file_mention';
-  commandValue?: string;
-  newInputValue?: string;
-}
-
-export interface TriggerResult {
-  mode: PopoverMode;
-  filter: string;
-  triggerPos: number;
-}
+import type { InsertResult, TriggerResult } from '@duya/input-completion';

@@ -80,6 +80,35 @@ await build({
 // question. NOT minified, unlike the other two — this artifact is what a human
 // runs and reports a stack trace from, and the agent worker is never read by a
 // person.
+//
+// ONE intentional divergence, added when the chat CLI gained a blessed TUI
+// (`cli/tui-session.ts` -> `cli/ui/TUIApp.ts` -> `blessed`).
+//
+// `blessed` cannot be bundled by esbuild at all. `blessed/lib/widget.js` builds
+// its widget registry by reading its OWN `widgets/` directory at runtime and
+// requiring each file it finds:
+//
+//   fs.readdirSync(__dirname + '/widgets').forEach(function (file) {
+//     ... require('./widgets/' + file) ...
+//
+// esbuild cannot see those requires, so it emits a "Module not found in bundle:
+// ./widgets/node" stub for every widget and the CLI dies on first import. The
+// first symptom is misleading and worth naming: the build fails earlier with
+// "Could not resolve 'term.js'" and "Could not resolve 'pty.js'", because
+// blessed@0.1.81 declares NO dependencies at all yet
+// `blessed/lib/widgets/terminal.js` requires two it never declares. Both sit
+// INSIDE that widget's methods, so they never fire at runtime — but esbuild
+// resolves them statically anyway. Marking those two external only moves the
+// failure from build time to run time; marking `blessed` itself external is the
+// fix.
+//
+// Acceptable because the chat CLI is a DEV artifact: it is run from the repo
+// (`node packages/agent/bundle/cli-entry.js`), where Node resolves blessed from
+// the workspace `node_modules` like any other dependency. The artifact that is
+// actually packaged is `agent-process-entry.js`, and the worker entry never
+// imports the cli directory, so it never reaches blessed and needs none of this.
+// If you ever make the chat CLI a shipped artifact, this entry is the thing that
+// has to be revisited.
 await build({
   entryPoints: ['packages/agent/src/cli/index.ts'],
   outfile: chatCliOutfile,
@@ -96,6 +125,7 @@ await build({
     'esbuild',
     'chromium-bidi/lib/cjs/bidiMapper/BidiMapper',
     'chromium-bidi/lib/cjs/cdp/CdpConnection',
+    'blessed',
   ],
   banner: {
     js: importMetaUrlPolyfill,

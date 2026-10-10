@@ -111,17 +111,38 @@ npm run electron:pack:mac     # macOS (.dmg)
 npm run electron:pack:linux   # Linux (AppImage, .deb, .rpm)
 
 # Agent CLI (standalone) — the CHAT entry (REPL, -t, --print, --headless)
-npm run build:chat-cli             # = bundle:agent; emits bundle/cli-entry.js
-node packages/agent/bundle/cli-entry.js [options]
-#   -k, --api-key <key>        API key for LLM provider
-#   -m, --model <model>        Model to use
-#   -u, --base-url <url>       Base URL for API
-#   -p, --provider <provider>  LLM provider protocol: anthropic or openai
-#   -w, --workspace <dir>      Workspace directory
-#   -t, --task <task>          Execute task and exit (non-interactive mode)
-#   --print                    Print mode: single query and exit
-#   --headless                 Headless mode: read from script file
-#   -f, --format <format>      Output format: text, json, markdown
+npm run chat-cli [options]         # run the prebuilt bundle/cli-entry.js
+npm run chat-cli:build [options]   # = build:chat-cli && chat-cli (rebuild first)
+npm run chat-cli -- --print "..."  # extra flags pass through npm's `--`
+# ⚠ `chat-cli` runs a BUILD ARTIFACT. `packages/agent/bundle/` is gitignored
+#   (.gitignore), so a fresh clone or a new worktree has no `cli-entry.js` and
+#   `chat-cli` dies with MODULE_NOT_FOUND. Run `build:chat-cli` (or
+#   `chat-cli:build`) first there.
+#   -V, --version                  Output the version number
+#   -k, --api-key <key>            API key for LLM provider
+#   -m, --model <model>            Model to use
+#   -u, --base-url <url>           Base URL for API
+#   -p, --provider <provider>      LLM provider protocol: anthropic or openai
+#   -w, --workspace <dir>          Workspace directory
+#   -t, --task <task>              Execute task and exit (non-interactive mode)
+#   --print                        Print mode: single query and exit
+#   --headless                     Headless mode: read from script file
+#   --script <path>                Script file path for headless mode
+#   --continue [sessionId]         Continue a previous session (optional ID)
+#   --resume [sessionId]           Resume a session (alias for --continue)
+#   --summary-provider <provider>  Session-search summarizer: anthropic or openai
+#   --summary-api-key <key>        Summarizer API key
+#   --summary-model <model>        Summarizer model
+#   --summary-base-url <url>       Summarizer base URL
+#
+# ⚠ `--print` / `--headless` do NOT go through commander: `cli/index.ts` scans
+# raw `process.argv` first and dispatches through a hand-rolled `parseCLIArgs`
+# that reads only `--model`, `--cwd`/`-c` and `--format`. Consequences:
+#   - `--format <text|json|markdown>` works there but is absent from `--help`.
+#   - `-k`, `-u`, `-p` and `-w` are silently DROPPED in those two modes
+#     (api key / base URL / provider fall back to env and `~/.duya/config.toml`).
+#   - `--cwd` is assigned to BOTH `baseUrl` and `workspace`.
+#   Interactive mode is unaffected — it uses commander.
 ```
 
 ### Why the chat CLI is a bundle and not `dist/`
@@ -614,6 +635,7 @@ question you're asking.
 
 - Format: CommonJS (`format: 'cjs'`). Output: `packages/agent/bundle/agent-process-entry.js`
 - `bundle: true` inlines all runtime dependencies. Only `better-sqlite3` (native) and `BashWorker.js` (worker) remain external.
+- **`blessed` is external in the CHAT CLI entry only.** It cannot be bundled: `blessed/lib/widget.js` enumerates its own `widgets/` directory with `readdirSync` and `require`s each file at runtime, which esbuild cannot see. First symptom is a misleading `Could not resolve 'term.js'` / `'pty.js'` — two packages blessed never declares but requires inside a widget method. Marking those external only moves the failure to runtime. The packaged worker entry never imports `cli/`, so it needs none of this; if that stops being true, fix the chat CLI entry rather than copying its externals up.
 - Production resolves: primary `resources/agent-bundle/agent-process-entry.js`, fallback paths only for debug.
 - Self-contained: no `node_modules` copying in `afterPack`.
 - `better-sqlite3`: packaged to `resources/better-sqlite3/`, shared by main and agent. Agent receives `DUYA_BETTER_SQLITE3_PATH` env var.

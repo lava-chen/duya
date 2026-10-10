@@ -2029,15 +2029,27 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
       // endpoints (MiniMax) may silently drop the `system` field. Also expose
       // the resolved thinking/effort so reasoning leaks can be traced to the
       // request parameters.
-      console.warn('[duya-ai] anthropic request system prompt', {
-        length: systemPromptForRequest.length,
-        hasMemorySection: systemPromptForRequest.includes('Persistent memory'),
-        isMiniMax,
-        model: options.model,
-        effort: effectiveEffort,
-        thinking: thinking ?? null,
-        preview: systemPromptForRequest.slice(0, 200),
-      });
+      //
+      // Gated on DUYA_AI_DEBUG, and that gate is the point rather than a
+      // nicety: this dumps a 200-character preview of the system prompt on
+      // EVERY request. Unconditional, it is indistinguishable from noise — it
+      // arrives once per turn, ahead of the answer, in whatever surface the
+      // caller happens to be using. Inside the CLI's alternate-screen TUI the
+      // console capture routes it into the transcript, where a trace
+      // diagnostic sits above the user's own question and pushes the real
+      // reply off the top. It is still available on demand, which is what a
+      // diagnostic is for.
+      if (process.env.DUYA_AI_DEBUG === '1') {
+        console.warn('[duya-ai] anthropic request system prompt', {
+          length: systemPromptForRequest.length,
+          hasMemorySection: systemPromptForRequest.includes('Persistent memory'),
+          isMiniMax,
+          model: options.model,
+          effort: effectiveEffort,
+          thinking: thinking ?? null,
+          preview: systemPromptForRequest.slice(0, 200),
+        });
+      }
       const params: Anthropic.MessageCreateParams = {
         model: options.model,
         max_tokens: maxTokens,

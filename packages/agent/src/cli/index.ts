@@ -31,6 +31,8 @@ import type { SubagentRunDeps } from '../tool/SubagentTool/runAgent.js';
 import { loadSkills, getSkillRegistry } from '../skills/index.js';
 import { Colors, color } from './colors.js';
 import { REPL } from './repl.js';
+import { shouldUseTui } from './ui/tty.js';
+import { runTuiSession } from './tui-session.js';
 import {
   initSessionLogger,
   closeSessionLogger,
@@ -51,6 +53,8 @@ import { listProviders, addProviderInteractive } from './providerCmds.js';
 import { listMCPServers } from './mcpCmds.js';
 import { printSuccess, printError, printHeader, printInfo } from './interactive.js';
 import { getCliSetting, getCliSettingJson } from './config/db-config.js';
+import { createAgentProgram, parseCliArgs } from './cli-program.js';
+import { resolveProvider, readCliSettings, type ProviderResolution } from './config/file-config.js';
 import {
   initSlashCommands,
   executeSlashCommand,
@@ -103,6 +107,11 @@ export interface CLIOptions {
   apiKey?: string;
   model?: string;
   baseUrl?: string;
+  /**
+   * Wire protocol override (`-p/--provider`). Distinct from the config.toml
+   * `providerType` vocabulary; see `mapProviderType`.
+   */
+  provider?: string;
   workspace?: string;
   task?: string;
   mode?: 'interactive' | 'print' | 'headless';
@@ -473,6 +482,27 @@ async function runInteractive(
   });
   console.log(`${Colors.DIM}Session created: ${sessionId.slice(0, 8)}...${Colors.RESET}`);
 
+  // Interactive mode has two surfaces, chosen BEFORE anything is constructed.
+  //
+  // `blessed.screen()` claims the terminal when it is created: with stdout
+  // piped it writes cursor and erase-screen sequences into that pipe
+  // (measured on blessed 0.1.81 — `ESC[1;1H ESC[H ESC[J`), which corrupts the
+  // output of anything reading it. So the TUI is only constructed when BOTH
+  // ends are a terminal, and everything else falls through to the REPL below,
+  // which already handles terminal readline, persisted history and
+  // completion.
+  if (shouldUseTui()) {
+    return runTuiSession({
+      agent,
+      registry,
+      sessionLogger,
+      model,
+      workspace,
+      sessionId,
+      toolCount: registry.size,
+    });
+  }
+
   // The run host, built once for the REPL's lifetime (plan 587 H8.1). The
   // controller is stateless between runs, so this is a composition rather than
   // a per-turn object, and building it per turn would be a second place for the
@@ -632,6 +662,32 @@ async function runTask(
 }
 
 /**
+ * Report why provider resolution failed.
+ *
+ * Every branch names the ACTUAL problem — the missing file, the malformed
+ * TOML, the provider id that is not defined, the exact secrets key that is
+ * absent. That is the point of routing these through `file-config.ts`: the
+ * old single "API key is required" message was printed for a user whose
+ * provider was configured correctly and whose key was sitting in
+ * secrets.json under a flat key the reader never looked for.
+ *
+ * When resolution succeeded but no key was usable, the user explicitly
+ * passed `--api-key`/env overrides that were empty, so the generic advice
+ * still applies.
+ */
+function reportProviderFailure(resolution: ProviderResolution): void {
+  if (resolution.ok) {
+    console.error(`${Colors.BRIGHT_RED}Error: API key is required${Colors.RESET}`);
+    console.error(`Set it via --api-key option or the ANTHROPIC_API_KEY environment variable.`);
+    return;
+  }
+  console.error(`${Colors.BRIGHT_RED}Error: ${resolution.message}${Colors.RESET}`);
+  if (resolution.reason === 'api-key-missing') {
+    console.error(`Pass --api-key to override the configured provider.`);
+  }
+}
+
+/**
  * Main CLI entry point
  */
 export async function runCLI(
@@ -647,29 +703,29 @@ export async function runCLI(
     summaryLLMBaseUrl?: string;
   }
 ): Promise<void> {
-  // Initialize database to read provider configuration
-  const { getActiveCliProvider } = await import('./config/db-config.js');
-  const activeProvider = getActiveCliProvider();
+  // Resolve provider configuration from ~/.duya/config.toml + secrets.json.
+  // This used to read an `api_providers` row from the CLI's private duya.db,
+  // a table the desktop deliberately dropped (migration
+  // `drop_api_providers_table`), so it always came back empty and the run
+  // died on the generic "API key is required".
+  const resolution = resolveProvider(options.model);
 
-  // Validate API key: CLI option > env var > database provider > error
+  // Validate API key: CLI option > env var > config.toml provider > error
   let apiKey = options.apiKey || process.env.ANTHROPIC_API_KEY || process.env.API_KEY;
-  if (!apiKey && activeProvider?.api_key) {
-    apiKey = activeProvider.api_key;
+  if (!apiKey && resolution.ok) {
+    apiKey = resolution.provider.apiKey;
   }
   if (!apiKey) {
-    console.error(`${Colors.BRIGHT_RED}Error: API key is required${Colors.RESET}`);
-    console.error(`Set it via --api-key option, ANTHROPIC_API_KEY environment variable,`);
-    console.error(`or run 'duya setup' to configure a provider.`);
+    reportProviderFailure(resolution);
     process.exit(1);
   }
 
   // Determine model: CLI option > env var > provider default > fallback
   let model = options.model || process.env.ANTHROPIC_MODEL;
-  if (!model && activeProvider?.notes) {
-    // Extract model from notes (format: "Default model: xxx")
-    const match = activeProvider.notes.match(/Default model:\s*(.+)/);
-    if (match) {
-      model = match[1].trim();
+  if (!model && resolution.ok) {
+    model = resolution.provider.model.model;
+    if (resolution.provider.model.warning) {
+      console.warn(`${Colors.YELLOW}Warning:${Colors.RESET} ${resolution.provider.model.warning}`);
     }
   }
   if (!model) {
@@ -681,8 +737,8 @@ export async function runCLI(
 
   // Determine baseURL: CLI option > env var > provider setting
   let baseURL = options.baseUrl || process.env.ANTHROPIC_BASE_URL;
-  if (!baseURL && activeProvider?.base_url) {
-    baseURL = activeProvider.base_url;
+  if (!baseURL && resolution.ok) {
+    baseURL = resolution.provider.baseUrl;
   }
 
   // Initialize agent options
@@ -746,8 +802,13 @@ export async function runCLI(
     workspace,
   });
 
-  // Print banner in interactive mode
-  if (!options.task) {
+  // Print banner in interactive mode.
+  //
+  // Skipped when the TUI will own the terminal: the banner would be painted
+  // to the normal buffer a moment before the alternate screen takes over, so
+  // the user would see it flash and vanish. The TUI reports the same facts as
+  // transcript notices instead.
+  if (!options.task && !shouldUseTui()) {
     printWelcomeBanner({
       model,
       workspace: agentOptions.workingDirectory || process.cwd(),
@@ -880,32 +941,32 @@ async function runPrintQuery(
  * Run print mode - single query output
  */
 async function runPrintMode(prompt: string, options: CLIOptions): Promise<void> {
-  // Load provider configuration from database
-  const { getActiveCliProvider } = await import('./config/db-config.js');
-  const activeProvider = getActiveCliProvider();
+  // Same resolution as the interactive path (config.toml + secrets.json).
+  // This previously read the retired api_providers table, and additionally
+  // seeded the model from ANTHROPIC_API_KEY -- the API key was being used as
+  // the model name.
+  const resolution = resolveProvider(options.model);
 
-  // Get API key: CLI option > env var > database provider
   let apiKey = options.apiKey || process.env.ANTHROPIC_API_KEY || process.env.API_KEY;
-  if (!apiKey && activeProvider?.api_key) {
-    apiKey = activeProvider.api_key;
+  if (!apiKey && resolution.ok) {
+    apiKey = resolution.provider.apiKey;
   }
   if (!apiKey) {
-    console.error(`${Colors.BRIGHT_RED}Error: API key is required${Colors.RESET}`);
-    console.error(`Set it via --api-key option, ANTHROPIC_API_KEY environment variable,`);
-    console.error(`or run 'duya-agent setup' to configure a provider.`);
+    reportProviderFailure(resolution);
     process.exit(1);
   }
 
-  // Get model and baseURL
-  let model = options.model || process.env.ANTHROPIC_API_KEY;
-  if (!model && activeProvider?.notes) {
-    const match = activeProvider.notes.match(/Default model:\s*(.+)/);
-    if (match) model = match[1].trim();
+  let model = options.model || process.env.ANTHROPIC_MODEL;
+  if (!model && resolution.ok) {
+    model = resolution.provider.model.model;
+    if (resolution.provider.model.warning) {
+      console.warn(`${Colors.YELLOW}Warning:${Colors.RESET} ${resolution.provider.model.warning}`);
+    }
   }
 
   let baseURL = options.baseUrl || process.env.ANTHROPIC_BASE_URL;
-  if (!baseURL && activeProvider?.base_url) {
-    baseURL = activeProvider.base_url;
+  if (!baseURL && resolution.ok) {
+    baseURL = resolution.provider.baseUrl;
   }
 
   const agent = new duyaAgent({
@@ -923,32 +984,29 @@ async function runPrintMode(prompt: string, options: CLIOptions): Promise<void> 
  * Run headless mode - execute from script file
  */
 async function runHeadlessMode(scriptPath: string, options: CLIOptions): Promise<void> {
-  // Load provider configuration from database
-  const { getActiveCliProvider } = await import('./config/db-config.js');
-  const activeProvider = getActiveCliProvider();
+  // Same resolution as interactive and print mode (config.toml + secrets.json).
+  const resolution = resolveProvider(options.model);
 
-  // Get API key: CLI option > env var > database provider
   let apiKey = options.apiKey || process.env.ANTHROPIC_API_KEY || process.env.API_KEY;
-  if (!apiKey && activeProvider?.api_key) {
-    apiKey = activeProvider.api_key;
+  if (!apiKey && resolution.ok) {
+    apiKey = resolution.provider.apiKey;
   }
   if (!apiKey) {
-    console.error(`${Colors.BRIGHT_RED}Error: API key is required${Colors.RESET}`);
-    console.error(`Set it via --api-key option, ANTHROPIC_API_KEY environment variable,`);
-    console.error(`or run 'duya-agent setup' to configure a provider.`);
+    reportProviderFailure(resolution);
     process.exit(1);
   }
 
-  // Get model and baseURL
   let model = options.model || process.env.ANTHROPIC_MODEL;
-  if (!model && activeProvider?.notes) {
-    const match = activeProvider.notes.match(/Default model:\s*(.+)/);
-    if (match) model = match[1].trim();
+  if (!model && resolution.ok) {
+    model = resolution.provider.model.model;
+    if (resolution.provider.model.warning) {
+      console.warn(`${Colors.YELLOW}Warning:${Colors.RESET} ${resolution.provider.model.warning}`);
+    }
   }
 
   let baseURL = options.baseUrl || process.env.ANTHROPIC_BASE_URL;
-  if (!baseURL && activeProvider?.base_url) {
-    baseURL = activeProvider.base_url;
+  if (!baseURL && resolution.ok) {
+    baseURL = resolution.provider.baseUrl;
   }
 
   // Read script file
@@ -984,94 +1042,68 @@ async function runHeadlessMode(scriptPath: string, options: CLIOptions): Promise
 
 /**
  * CLI program setup
+ *
+ * The option table lives in `./cli-program.ts` so the interactive program and
+ * the `--print` / `--headless` interception below are driven by the SAME
+ * declarations (see that module for why this used to be a second parser).
  */
-const program = new Command();
+const program = createAgentProgram();
 
-program
-  .name('duya')
-  .description('DUYA Agent - AI Agent with tools and MCP support')
-  .version('0.2.0')
-  .option('-k, --api-key <key>', 'API key for LLM provider')
-  .option('-m, --model <model>', 'Model to use')
-  .option('-u, --base-url <url>', 'Base URL for API')
-  .option('-p, --provider <provider>', 'LLM provider protocol: anthropic or openai')
-  .option('-w, --workspace <dir>', 'Workspace directory', process.cwd())
-  .option('-t, --task <task>', 'Execute task and exit (non-interactive mode)')
-  .option('--print', 'Print mode: single query and exit')
-  .option('--headless', 'Headless mode: read from script file')
-  .option('--script <path>', 'Script file path for headless mode')
-  .option('--continue [sessionId]', 'Continue a previous session (optional session ID)')
-  .option('--resume [sessionId]', 'Resume a session (alias for --continue)')
-  .option('--summary-provider <provider>', 'Provider for session search summarization: anthropic or openai')
-  .option('--summary-api-key <key>', 'API key for session search summarization LLM')
-  .option('--summary-model <model>', 'Model for session search summarization')
-  .option('--summary-base-url <url>', 'Base URL for session search summarization LLM')
-  .action(runCLI);
+program.action(runCLI as never);
 
-// Handle print and headless modes before normal parsing
+// Handle print and headless modes.
+//
+// `--print` / `--headless` are intercepted here, BEFORE commander reaches its
+// own action handler, because in those modes the trailing positional is a
+// prompt (or a script path) rather than an interactive REPL.
+//
+// The options are nevertheless parsed by COMMANDER, not by a second
+// hand-rolled parser: `program.parseOptions()` runs the same option table
+// that backs `--help` and the interactive path, so `-k`, `-u`, `-p` and `-w`
+// are honoured here exactly as they are interactively. The previous
+// `parseCLIArgs` recognised only `--model`, `--cwd`/`-c` and `--format`,
+// silently dropping the other four, and assigned `--cwd` to BOTH `baseUrl`
+// and `workspace`.
 const args = process.argv.slice(2);
 if (args.includes('--print') || args.includes('--headless') || args.includes('--script')) {
-  const parsed = parseCLIArgs(args);
-  if (parsed.mode === 'print' && parsed.prompt) {
-    runPrintMode(parsed.prompt, {
-      model: parsed.options.model,
-      baseUrl: parsed.options.cwd,
-      workspace: parsed.options.cwd,
-      format: parsed.options.format,
+  const { operands, options: opts } = parseCliArgs(args);
+  const scriptPath: string | undefined = opts.script;
+
+  if (args.includes('--print')) {
+    // The prompt is the first positional operand (`duya --print "hello"`),
+    // not merely "the last token that is not a flag": the old check ran
+    // indexOf() on the value, which misbehaved for a prompt that repeats.
+    const prompt = operands[0];
+    if (prompt === undefined) {
+      console.error(`${Colors.BRIGHT_RED}Error: --print requires a prompt${Colors.RESET}`);
+      process.exit(1);
+    }
+    runPrintMode(prompt, {
+      apiKey: opts.apiKey,
+      model: opts.model,
+      baseUrl: opts.baseUrl,
+      provider: opts.provider,
+      workspace: opts.workspace,
+      format: opts.format,
     }).catch((error) => {
       console.error(`${Colors.BRIGHT_RED}Fatal error:${Colors.RESET}`, error);
       process.exit(1);
     });
     process.exit(0);
-  } else if (parsed.mode === 'headless' && parsed.scriptPath) {
-    runHeadlessMode(parsed.scriptPath, {
-      model: parsed.options.model,
-      baseUrl: parsed.options.cwd,
-      workspace: parsed.options.cwd,
-      format: parsed.options.format,
+  } else if (scriptPath !== undefined) {
+    runHeadlessMode(scriptPath, {
+      apiKey: opts.apiKey,
+      model: opts.model,
+      baseUrl: opts.baseUrl,
+      provider: opts.provider,
+      workspace: opts.workspace,
+      format: opts.format,
     }).catch((error) => {
       console.error(`${Colors.BRIGHT_RED}Fatal error:${Colors.RESET}`, error);
       process.exit(1);
     });
     process.exit(0);
   }
-}
-
-// CLI argument parser for custom modes
-interface CLIParsedArgs {
-  mode: 'interactive' | 'print' | 'headless';
-  prompt?: string;
-  scriptPath?: string;
-  options: {
-    model?: string;
-    cwd?: string;
-    format?: 'text' | 'json' | 'markdown';
-  };
-}
-
-function parseCLIArgs(args: string[]): CLIParsedArgs {
-  const mode: 'interactive' | 'print' | 'headless' = args.includes('--headless') ? 'headless' :
-    args.includes('--print') ? 'print' : 'interactive';
-
-  const scriptPath = args.includes('--script') ? args[args.indexOf('--script') + 1] : undefined;
-  const prompt = args[args.length - 1] && !args[args.indexOf(args[args.length - 1])]?.startsWith('--') ?
-    args[args.length - 1] : undefined;
-
-  const getOption = (flag: string): string | undefined => {
-    const idx = args.indexOf(flag);
-    return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined;
-  };
-
-  return {
-    mode,
-    prompt,
-    scriptPath,
-    options: {
-      model: getOption('--model') || getOption('-m'),
-      cwd: getOption('--cwd') || getOption('-c'),
-      format: getOption('--format') as 'text' | 'json' | 'markdown' | undefined,
-    },
-  };
 }
 
 // ============================================================================
@@ -1088,7 +1120,9 @@ function parseCLIArgs(args: string[]): CLIParsedArgs {
 // `duya config show` (legacy, preserved as-is per roadmap §5.1)
 program
   .command('config')
-  .description('Configuration management (legacy)')
+  .description(
+    'Show current configuration (reads ~/.duya/config.toml + secrets.json, the store the desktop writes)',
+  )
   .addCommand(
     new Command('show')
       .description('Show current configuration')
@@ -1099,11 +1133,32 @@ program
         console.log(color('  Base URL: ', Colors.DIM) + (process.env.ANTHROPIC_BASE_URL || color('not set (using default)', Colors.DIM)))
         console.log(color('  Workspace: ', Colors.DIM) + process.cwd())
 
-        // Load settings from database
+        // Show the provider the CLI will actually use, and WHY it failed if
+        // it cannot. This is the first place a user looks when the CLI
+        // refuses to start, so it reports the same resolution the run path
+        // performs rather than only the env vars.
+        const resolution = resolveProvider(process.env.ANTHROPIC_MODEL);
+        console.log()
+        if (resolution.ok) {
+          const p = resolution.provider;
+          console.log(color('Resolved Provider:', Colors.CYAN))
+          console.log(color('  Provider: ', Colors.DIM) + `${p.name} (${p.id})`)
+          console.log(color('  Type: ', Colors.DIM) + `${p.providerType} -> ${p.protocol}`)
+          console.log(color('  Model: ', Colors.DIM) + `${p.model.model} (from ${p.model.source})`)
+          if (p.model.warning) console.log(color('  Warning: ', Colors.YELLOW) + p.model.warning)
+        } else {
+          console.log(color('Resolved Provider:', Colors.BRIGHT_RED) + ' none')
+          console.log(color('  Reason: ', Colors.DIM) + resolution.reason)
+          console.log(color('  Detail: ', Colors.DIM) + resolution.message)
+        }
+
+        // max_turns comes from config.toml ([agent].max_turns). It used to come
+        // from the CLI's private duya.db, which the desktop never wrote, so
+        // this always printed 'unlimited' regardless of the user's setting.
         const { getCliSetting } = await import('./config/db-config.js');
         const displayMode = getCliSetting('tool_display_mode') || 'verbose';
-        const maxTurnsRaw = getCliSetting('max_turns');
-        const maxTurns = maxTurnsRaw && maxTurnsRaw !== '0' ? maxTurnsRaw : 'unlimited';
+        const settings = readCliSettings();
+        const maxTurns = settings.maxTurns !== undefined ? String(settings.maxTurns) : 'unlimited';
         const agentMode = getCliSetting('agent_mode') || 'code';
 
         console.log()
@@ -1115,9 +1170,16 @@ program
   )
 
 // Setup command (legacy interactive wizard)
+//
+// LEGACY FOR A REASON: this wizard writes providers to its own private
+// duya.db, a store the CLI no longer reads and the desktop dropped
+// (`drop_api_providers_table`). Running it does NOT configure the CLI. Use
+// the desktop Settings UI, or edit ~/.duya/config.toml + secrets.json.
 program
   .command('setup [section]')
-  .description('Interactive setup wizard for configuration (legacy)')
+  .description(
+    'Interactive setup wizard (legacy) — writes its own duya.db, which the CLI does not read. Use the desktop Settings UI instead.',
+  )
   .option('--reset', 'Reset configuration to defaults')
   .action(async (section, options) => {
     const { runSetupWizard } = await import('./setup/index.js');

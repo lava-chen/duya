@@ -1,0 +1,30 @@
+{
+  "name": "@duya/input-completion",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Surface-neutral input-completion contract shared by the duya desktop composer and the CLI TUI: trigger detection, item filtering (substring and fuzzy subsequence), selection insertion, and selection cycling. Pure functions, zero runtime dependencies, no React, no Electron, no terminal.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "node -e \"for(const t of ['dist','tsconfig.tsbuildinfo'])require('fs').rmSync(t,{recursive:true,force:true})\"",
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "vitest": "^3.0.0"
+  }
+}
