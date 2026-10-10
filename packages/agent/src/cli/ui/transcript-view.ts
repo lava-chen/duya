@@ -70,6 +70,25 @@ export function escapeTags(text: string): string {
   return text.replace(/\{/g, '\\{');
 }
 
+/**
+ * Apply ONE style to payload text.
+ *
+ * Exists to make two mistakes impossible rather than merely discouraged:
+ *
+ * 1. **Nesting.** `c.brightGreen(c.bold('›'))` produces
+ *    `{brightGreen-fg}{bold}›{/bold}{/brightGreen-fg}`, and blessed's tag parser
+ *    does not consume a closing tag whose opener it has already left. The
+ *    outer `{/brightGreen-fg}` survived into the output, so every user message
+ *    on a live TUI read `{brightGreen-fg}{/brightGreen-fg} 你是谁`. Measured on a
+ *    real screen. Styles are therefore applied FLAT here: never one inside
+ *    another.
+ * 2. **Forgetting the escape.** Every helper in this file escapes its payload,
+ *    so data can never be read as markup.
+ */
+function tagged(style: (s: string) => string, payload: string): string {
+  return style(escapeTags(payload));
+}
+
 /** One tool call, as its call line plus optional result lines. */
 function renderTool(block: Extract<Block, { kind: 'tool' }>, options: RenderOptions): string {
   const label = block.preview === '' ? block.name : `${block.name}(${block.preview})`;
@@ -93,7 +112,7 @@ function renderTool(block: Extract<Block, { kind: 'tool' }>, options: RenderOpti
 
   const body = capLines(block.result.trimEnd(), options.toolResultLines);
   for (const line of body.split('\n')) {
-    lines.push(`    ${c.gray(escapeTags(line))}`);
+    lines.push(`    ${tagged(c.gray, line)}`);
   }
   return lines.join('\n');
 }
@@ -111,15 +130,18 @@ function renderThinking(
 ): string {
   if (!options.expanded) {
     const suffix = block.finalized ? '' : '…';
-    return c.gray(`${c.magenta('⏳')} thinking${suffix} (${block.text.length} chars)`);
+    // Flat, not gray(`magenta(…)`) — see `tagged`.
+    return tagged(c.magenta, `⏳ thinking${suffix} (${block.text.length} chars)`);
   }
-  return `${c.magenta('💭 thinking')}\n${c.gray(escapeTags(block.text))}`;
+  return `${tagged(c.magenta, '💭 thinking')}\n${tagged(c.gray, block.text)}`;
 }
 
 function renderBlock(block: Block, options: RenderOptions): string {
   switch (block.kind) {
     case 'user':
-      return `${c.brightGreen(c.bold('›'))} ${escapeTags(block.text)}`;
+      // FLAT: one style, no nesting, payload escaped. `›` lost its bold to
+      // achieve that, which is the trade the leak measured out.
+      return tagged(c.brightGreen, `› ${block.text}`);
     case 'assistant':
       return escapeTags(block.text);
     case 'thinking':
@@ -129,9 +151,9 @@ function renderBlock(block: Block, options: RenderOptions): string {
     case 'error':
       // Full width, never collapsed: an error the reader cannot see is an
       // error they will hit again next turn.
-      return c.brightRed(`✗ ${escapeTags(block.message)}`);
+      return tagged(c.brightRed, `✗ ${block.message}`);
     case 'notice':
-      return c.gray(escapeTags(block.text));
+      return tagged(c.gray, block.text);
   }
 }
 
