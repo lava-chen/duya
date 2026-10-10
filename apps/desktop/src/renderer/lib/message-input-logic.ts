@@ -1,14 +1,49 @@
 /**
- * Pure algorithm functions for MessageInput behavior.
+ * Desktop-facing surface for the shared input-completion contract.
  *
- * These functions contain no React dependencies — they are plain TypeScript
- * and can be tested directly without any framework setup.
+ * ## What moved and why
+ *
+ * `detectPopoverTrigger`, `filterItems`, `resolveItemSelection` and
+ * `cycleIndex` were defined here and are now defined once in
+ * `@duya/input-completion`, which the CLI TUI imports too. They were the rules
+ * for WHEN a popup opens, WHAT survives the filter, and WHAT accepting writes
+ * back — and the CLI had none of them, which is why typing `/` there did
+ * nothing while typing here opened a list.
+ *
+ * They are re-exported rather than wrapped so this module's importers need no
+ * change and the desktop's own `message-input-logic.spec.ts` keeps asserting
+ * against the same functions. That spec is what makes this a MOVE rather than a
+ * rewrite: it ran against the definitions that used to sit below, and now runs
+ * against the shared ones. If relocating them had changed behaviour it would be
+ * red, and it is not.
+ *
+ * ## What deliberately stayed
+ *
+ * `BUILT_IN_COMMANDS` is DESKTOP DATA, not logic: it is derived at module load
+ * from the desktop command registry, and its shape does not describe the CLI
+ * command set. So does `resolveDirectSlash`, which answers a question only the
+ * desktop asks — does this submitted line run a command immediately? Neither
+ * can be shared, and moving them would have been sharing a data source by
+ * accident.
+ *
+ * `resolveKeyAction` also stayed, despite looking like shared policy: its
+ * `remove_badge` / `remove_cli_badge` arms are about desktop badges the terminal
+ * has no concept of, and no caller was found for it outside this file.
  */
 
-import type { PopoverItem, PopoverMode, CommandBadge, InsertResult, TriggerResult } from '@/types/slash-command';
+import type { PopoverMode, CommandBadge, InsertResult, TriggerResult } from '@/types/slash-command';
 import { getCommandsForPlatform } from '@/lib/commands';
 
 export { InsertResult, TriggerResult };
+
+// The shared contract, gathered in one place so the desktop composer and the CLI
+// TUI cannot drift apart on the rules that were duplicated.
+export {
+  detectPopoverTrigger,
+  filterItems,
+  resolveItemSelection,
+  cycleIndex,
+} from '@duya/input-completion';
 
 // Built-in commands (derived from registry for UI display)
 export interface BuiltInCommand {
@@ -55,92 +90,6 @@ function pickLabel(cmd: { labelZh?: string; label?: string; name: string }): str
 function pickLabelByName(name: string): string {
   const cmd = getCommandsForPlatform('app').find((c) => c.name === name);
   return cmd ? pickLabel(cmd) : `/${name}`;
-}
-
-/**
- * Detects popover trigger from input text and cursor position.
- */
-export function detectPopoverTrigger(
-  text: string,
-  cursorPos: number,
-): TriggerResult | null {
-  const beforeCursor = text.slice(0, cursorPos);
-
-  // Check for @ trigger (add context: mode + MCP)
-  const atMatch = beforeCursor.match(/@([^\s@]*)$/);
-  if (atMatch) {
-    return {
-      mode: 'context',
-      filter: atMatch[1],
-      triggerPos: cursorPos - atMatch[0].length,
-    };
-  }
-
-  // Check for / trigger (only at start of line or after space)
-  const slashMatch = beforeCursor.match(/(^|\s)\/([^\s]*)$/);
-  if (slashMatch) {
-    return {
-      mode: 'skill',
-      filter: slashMatch[2],
-      triggerPos: cursorPos - slashMatch[2].length - 1,
-    };
-  }
-
-  return null;
-}
-
-/**
- * Filters popover items by substring match on label or description.
- */
-export function filterItems(items: PopoverItem[], filter: string): PopoverItem[] {
-  const q = filter.toLowerCase();
-  return items.filter(
-    (item) =>
-      item.label.toLowerCase().includes(q) ||
-      String(item.description ?? '').toLowerCase().includes(q),
-  );
-}
-
-/**
- * Determines what happens when an item is selected from the popover.
- */
-export function resolveItemSelection(
-  item: PopoverItem,
-  popoverMode: PopoverMode,
-  triggerPos: number,
-  inputValue: string,
-  popoverFilter: string,
-): InsertResult {
-  if (popoverMode === 'skill') {
-    const before = inputValue.slice(0, triggerPos);
-    const cursorEnd = triggerPos + popoverFilter.length + 1;
-    const after = inputValue.slice(cursorEnd);
-    const needsTrailingSpace = after.length === 0 || !/^\s/.test(after);
-    return {
-      action: 'insert_slash_command',
-      commandValue: item.value,
-      newInputValue: `${before}${item.value}${needsTrailingSpace ? ' ' : ''}${after}`,
-    };
-  }
-
-  // File mention: insert into text
-  const before = inputValue.slice(0, triggerPos);
-  const cursorEnd = triggerPos + popoverFilter.length + 1;
-  const after = inputValue.slice(cursorEnd);
-  const insertText = `@${item.value} `;
-  return {
-    action: 'insert_file_mention',
-    newInputValue: before + insertText + after,
-  };
-}
-
-/**
- * ArrowDown/ArrowUp index cycling logic.
- */
-export function cycleIndex(current: number, direction: 'up' | 'down', length: number): number {
-  if (length === 0) return 0;
-  if (direction === 'down') return (current + 1) % length;
-  return (current - 1 + length) % length;
 }
 
 /**

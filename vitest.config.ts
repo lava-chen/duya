@@ -40,6 +40,7 @@ export default defineConfig({
       'packages/agent-protocol/test/**/*.test.ts',
       'packages/agent-core/test/**/*.test.ts',
       'packages/agent-runtime/test/**/*.test.ts',
+      'packages/input-completion/test/**/*.test.ts',
       'packages/gateway/src/**/*.test.ts',
       'packages/agent/src/**/*.test.ts',
       // Plan 610 A5: the memory tests moved with the code into
@@ -122,10 +123,13 @@ export default defineConfig({
       // rule below would otherwise swallow it.
       { find: /^@duya\/agent-protocol\/transcript$/, replacement: AGENT_PROTOCOL_SRC + '/transcript/index.ts' },
       { find: /^@duya\/agent-protocol$/, replacement: AGENT_PROTOCOL_SRC + '/index.ts' },
-      // agent-core / agent-runtime resolve to THIS checkout's source too, for
+      // agent-core / agent-runtime resolve to THIS checkout source too, for
       // the same worktree-safety reason as the protocol package above.
       { find: /^@duya\/agent-core$/, replacement: fileURLToPath(new URL('./packages/agent-core/src', import.meta.url)) + '/index.ts' },
       { find: /^@duya\/agent-runtime$/, replacement: fileURLToPath(new URL('./packages/agent-runtime/src', import.meta.url)) + '/index.ts' },
+      // The input-completion core shared by the desktop composer and the CLI
+      // TUI. Source, not dist, for the same worktree-safety reason.
+      { find: /^@duya\/input-completion$/, replacement: fileURLToPath(new URL('./packages/input-completion/src', import.meta.url)) + '/index.ts' },
       // Plan 583 ISS-02: the duya-file media allowlist reuses the sandboxed
       // file tools' root-boundary primitive from agent source. Point at this
       // checkout (worktree-safe), same as plugin-core above.

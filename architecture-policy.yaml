@@ -329,7 +329,7 @@ modules:
   - id: desktop-host
     roots: [apps/desktop]
     managed: false
-    requires: [agent-protocol, agent-runtime, legacy-plugin-core, connectors, desktop-contracts, memory]
+    requires: [agent-protocol, agent-runtime, legacy-plugin-core, connectors, desktop-contracts, memory, input-completion]
     owner: desktop
 
   - id: repo-tooling
@@ -423,6 +423,27 @@ modules:
   # keeps the sandbox module graph out of every cold-start worker — which means
   # a grep for static imports will not find it. Declaring the edge is what makes
   # the load visible to the gate instead of merely absent from the census.
+  # The input-completion contract shared by the desktop composer and the CLI
+  # TUI. `managed: true` from the first commit, like every other package this
+  # series has created: it is the only module in the tree whose entire reason to
+  # exist is to be imported from two hosts at once, so the one thing it must
+  # never acquire is a dependency. It has zero, and `requires: []` says so.
+  #
+  # Declared rather than baselined. Without this entry the renderer import is
+  # reported as a blocking `module-dependency` violation, and the only way to
+  # silence it with `--write` would be to record a NEW violation — turning a
+  # deliberate dependency into permanent debt. A `requires` entry is a standing
+  # permission instead, and `architecture-check.mjs` still COUNTS permitted edges
+  # in its own rule, so a future edit to this list shows up as a count change
+  # rather than as silence.
+  - id: input-completion
+    roots: [packages/input-completion]
+    managed: true
+    requires: []
+    publicEntrypoints:
+      - packages/input-completion/src/index.ts
+    owner: desktop
+
   - id: sandbox
     roots: [packages/sandbox]
     managed: true
