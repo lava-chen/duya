@@ -235,6 +235,11 @@ const { convertSSEToAgentMessage } = await import('../sse-frame-codec.js');
 const { isTurnLevelUsageFrame } = (await import('../agent-process-entry.js')) as unknown as {
   isTurnLevelUsageFrame: (frame: { readonly type: string }) => boolean;
 };
+// The entry's REAL billing arithmetic, extracted from its `handleStreamEvent`
+// closure. Imported rather than re-implemented so this file's ledger assertions
+// exercise production code -- a local copy would prove only that the copy works,
+// which is exactly the failure mode this case previously had.
+const { createTurnUsageLedger, foldUsageCall, parseUsageCall } = await import('../call-usage.js');
 
 let dbListener: ((m: unknown) => void) | null = null;
 const originalEnv = { ...process.env };
@@ -527,10 +532,10 @@ describe('a chat:start turn, assembled by the driver the entry calls', () => {
   });
 
   it('bills ONE `result` per provider call, not one per channel', async () => {
-    // The premise, measured on THIS run: the two `result` frames the scripted
-    // provider emitted below reached the tap, and the drain separately emitted
-    // the turn-level `assistant.usage` projection. Without both counts a
-    // green sum could mean "the duplicate never arrived".
+    // The PREMISE, measured on THIS run: the two `result` frames the scripted
+    // provider emitted below reached the tap, AND the drain separately emitted
+    // the turn-level `assistant.usage` projection. Without both counts a green
+    // sum could only mean "the duplicate never arrived".
     const proof = await runChatStart();
 
     const resultFrames = proof.frames.filter((f) => f.type === 'result');
@@ -542,17 +547,47 @@ describe('a chat:start turn, assembled by the driver the entry calls', () => {
     expect(existsSync(proof.probeFile)).toBe(true);
     expect(proof.providerRequests).toHaveLength(2);
 
-    // `usageCalls` is the TAP's own collection, filled by the binding the
-    // entry writes verbatim, and the turn-level frame is the one the entry
-    // now declines to bill from. So the ledger's `calls` is the tap's length:
-    // 2. Before the entry dropped the duplicate it was 3, and `input_tokens`
-    // accumulated 1000 + 2000 + 2000 instead of 1000 + 2000.
-    const sum = proof.usageCalls.reduce(
-      (n, c) => n + c.input_tokens,
-      0,
+    // ── The ledger arithmetic itself, driven through the REAL accumulator ──
+    //
+    // `usageCalls` above is this harness's OWN collection: it proves the tap
+    // fired twice, and says nothing about what the entry's ledger then did with
+    // the frames. An earlier version of this case asserted only that, which is
+    // why it stayed green when the drain binding was mutated to bill the
+    // turn-level duplicate again -- the very defect the commit message claims it
+    // catches. It did not, because the accumulator was a private inline block
+    // inside the entry's `handleStreamEvent` closure.
+    //
+    // `foldUsageCall` is that block, extracted. Driving the REAL one here is
+    // what makes the guard load-bearing: if the entry ever bills the duplicate
+    // a second time, `cumulative.calls.length` is 3 and `input_tokens` is
+    // 1000 + 2000 + 2000 = 5000, and both assertions below go red.
+    const ledger = createTurnUsageLedger();
+    for (const usage of proof.usageCalls) {
+      foldUsageCall(ledger, parseUsageCall(usage as unknown as Record<string, unknown>)!, {
+        model: 'claude-test',
+        providerId: 'anthropic',
+      });
+    }
+
+    // ONE entry per provider call. A third is the duplicate.
+    expect(ledger.cumulative?.calls).toHaveLength(2);
+    // Cache buckets survive, which is why the tap is the authority and the
+    // narrowed turn-level projection is not.
+    expect(ledger.cumulative?.cache_hit_tokens).toBe(
+      CALL_ONE.cache_hit_tokens + CALL_TWO.cache_hit_tokens,
     );
-    // From the providers' own constants -- a DIFFERENT source than the frames.
-    expect(sum).toBe(CALL_ONE.input_tokens + CALL_TWO.input_tokens);
+    expect(ledger.cumulative?.cache_creation_tokens).toBe(
+      CALL_ONE.cache_creation_tokens + CALL_TWO.cache_creation_tokens,
+    );
+    // The sum the ledger must NOT exceed: CALL_TWO's input is DOUBLE CALL_ONE's,
+    // so re-billing the duplicate lands on 5000 rather than hiding in a rounding
+    // difference.
+    expect(ledger.cumulative?.input_tokens).toBe(CALL_ONE.input_tokens + CALL_TWO.input_tokens);
+
+    // And the shape the turn-level projection WOULD have contributed, so the
+    // margin is explicit: it is the LAST call's numbers again, with no cache
+    // buckets at all. Billing it a second time is what this file forbids.
+    expect(ledger.cumulative?.input_tokens).not.toBe(CALL_ONE.input_tokens + CALL_TWO.input_tokens + CALL_TWO.input_tokens);
   });
 
   it('settles the run and terminates the drain', async () => {

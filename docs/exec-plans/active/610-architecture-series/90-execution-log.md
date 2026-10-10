@@ -1582,3 +1582,101 @@ census 记录的措辞是这些能力「因为翻转而完全没有 engine-path 
 
 两个 worker 各撞了一次。**任何新 worktree 里的失败统计，在跑之前必须先构建该包**，
 否则「红」里混着一批根本没跑起来的文件。
+## 收口批次 C：计费双计的**回归测试本身是空的**，已修
+
+实测于 `35329df3`（= `origin/master`），工作树 `610-p0-billing-verify`。
+**先复现再判断**：上一条日志记的「21 文件 / 65 红」今天实测是 **10 文件 / 29 红**
+（`packages/agent/tests packages/agent/src`）。那个数字已经过期，**不要引用它**。
+
+### 结论：生产修复是真的，**它的守卫测不出东西**
+
+`015f626a` 把 drain 的 turn-level `result` 从计费臂上摘掉，方向正确。
+但同一条 commit 宣称配套用例「Billing the duplicate in the harness turns it red
+at 3 entries instead of 2」。**实测不成立。** 两个方向的变异都是绿的：
+
+| 变异 | 期望 | 实测 |
+| --- | --- | --- |
+| `isTurnLevelUsageFrame` 恒 false（= 双计重现） | 红 | **绿** |
+| 生产绑定改成 `if (isTurnLevelUsageFrame(frame) && false) return` | 红 | **绿** |
+
+**机制**：用例断言的是 `proof.usageCalls` —— 那是它**自己**的
+`onPerCallUsage: (usage) => usageCalls.push(usage)` 桩。
+而双计的伤害发生在 `handleStreamEvent` 内的 `turnUsage` 累加器上，
+那个累加器是**闭包私有**的，用例够不到。
+
+所以那句注释里的「真实回归测试」断言的是**一个必然为真的事实**（tap 确实触发了两次），
+而不是那个会变错的事实（账本是否被记了三次）。**这条比红更坏：红的会告诉你它坏了。**
+
+### 修法：把计费算术从闭包里搬出来，而不是把断言加厚
+
+`call-usage.ts` 本来就是纯函数模块（无进程状态、可直接单测），
+所以**没有新建文件**：导出 `createTurnUsageLedger` / `foldUsageCall`
+/ `TurnUsageLedger` / `LastCallUsageBlock` / `UsageCallVolumes`，
+`agent-process-entry.ts` 的 `handleStreamEvent` 改为调用它。
+**行为逐字不变**，搬的是可测性。
+
+用例改为**驱动真的 `foldUsageCall`**，并断言三件之前看不见的事：
+`calls.length === 2`、cache 桶**存活**（`400 + 900 = 1300`）、
+`input_tokens === 3000`。
+
+### 变异证明（两个方向都真的变红，且**只有那一条**红）
+
+1. 在累加器里把重复的那次也 push 进 `calls` → 红，
+   消息是 `expected [...] to have a length of 2 but got 3` ——
+   **正是缺陷本身的形状**，不是别的。
+2. 让累加路径丢弃 cache 桶 → 红，`expected 400 to be 1300`。
+
+两次都是 **1 failed / 5 passed**：另外五条保持绿，说明断言之间没有互相污染。
+这正是「守卫失能」该有的反面签名。
+
+> **How to apply:** 「我们加了回归测试」这句话，要用**变异**兑现，不能用「跑一遍是绿的」兑现。
+> 一个只断言自己那根桩的用例，对任何生产改动都免疫 —— 它测的是它自己。
+> 判断标准：**断言的两侧是否来自不同代码**。这里两侧都来自同一个 `push`。
+
+### 顺手更正日志里的一条过期说法
+
+`model-leg.test.ts` 的 5 条红**不是**回归。本轮独立核实了它自述的依据：
+`grep -n "buildTurnModelLeg(" packages/agent/src/agent/DuyaAgent.ts` → 只有 `:96` 的 import，
+全仓库非测试调用点 **0**。它自己文件头就写明是「standing evidence that the seam is unwired」，
+并且刻意留红而非删除。**这是一份诚实的债务登记，不是回归。**
+
+### 失败归属：本轮实测的分类（29 条）
+
+| 类别 | 数量 | 判定 |
+| --- | --- | --- |
+| `plan315` / `plan486` / `nestedInjection` / `model-leg` | 19 | **已登记的历史缺口**，断言自带「no engine-path producer」措辞 |
+| `AgentLoop` / `one-shot-calls` | 4 | 调用**已删除**的 `agent.streamChat`（本轮核实 `DuyaAgent.ts` 里该方法**已无声明**，仅存注释散文） |
+| `thinking-replay` / `sync-protection` / `compaction-coordinator` | 3 | 单点，未在本切片处理 |
+| `bash-task-store` | 3 | **并发污染，不是缺陷** |
+
+最后一条值得单独记：`bash-task-store` **单跑 12/12 全绿**，与 `AgentLoop`
+同批跑就挂 3 条（`rehydrate()` 返回 `[]`）。改动前后各跑一次全量：
+**29 → 26，减少的正好是这 3 条**，其余逐条一致 —— 所以本次改动**没有引入任何回归**。
+
+> 又是同一课：**红的颜色不等于红的性质。** 隔离能绿而合跑能红，
+> 指的是资源/时序，不是逻辑。看到一条红，先问它「单独跑还红吗」。
+
+### 本轮门禁实测
+
+| 项 | 值 |
+| --- | --- |
+| `architecture:check` | exit 0，total **1045** / tolerated **1045**，baseline **930 未动**（未 `--write`） |
+| `architecture:boundaries` | exit 0，结尾 `no new findings`；G7 `known 0 / new 0 / stale 0` |
+| `architecture:self-test` | exit 0 |
+| `check:encoding` | OK |
+| `typecheck:all` / `typecheck:agent` | exit 0 |
+| `packages/agent/src/process` | **53 文件 / 523 用例**全绿 |
+
+### 仍未解决（不属本切片，按优先级排队）
+
+1. **7 + 13 个真空测试**（`streaming-lifecycle` 7 个 `if (!API_KEY) return` +
+   7 处 `streamChat`；`DuyaAgent.test.ts` 13 处守卫 + 7 处 `streamChat`）。
+   配上凭据会全部 throw，**但今天它们显示为绿**。这是当前最危险的一类。
+2. `AgentLoop` / `one-shot-calls` 的 4 条：调用已删除的 API。
+   与 ① 同源，处置方向一致：**要么改接新路径，要么删**，
+   不要留着「一旦有凭据就炸」的文件。
+3. `plan315` / `plan486` 的 19 条：能力在翻转后**没有 engine-path 生产者**。
+   日志此前撤回过「旧替身掩盖的既有缺口」的说法 —— 现在的表述是
+   **因果待定、结论为真**：需要的是**接线**还是**搬运**，尚未逐条判定。
+4. `slice-classification` 门禁：72 个文件未分类（其中只有 9 个属 sandbox），
+   修一条会逼重录 `RULE_TABLE_FINGERPRINT`，而那次重录只覆盖四分之一漂移。独立切片。

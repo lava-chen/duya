@@ -30,7 +30,7 @@ import { getAttachmentsForSession, rehydrateContentWithAttachments } from '../se
 import type { Message, AssistantMessage, MessageContent, MCPServerConfig, Tool, TokenUsage, UsageCall, ChatOptions } from '../types.js';
 import type { ProviderRuntimeConfig } from '@duya/ai';
 import { logger } from '../utils/logger.js';
-import { parseUsageCall } from './call-usage.js';
+import { parseUsageCall, createTurnUsageLedger, foldUsageCall } from './call-usage.js';
 import { seedTokenUsageFromHistory, parsePersistedTokenUsage } from './seed-token-usage.js';
 import {
   messageDb,
@@ -460,13 +460,18 @@ let lastEmittedUsageKey: string | null = null;
 /** Single-request usage sub-block persisted inside the turn-cumulative
  *  `token_usage` JSON. The cumulative block sums EVERY LLM call of the turn,
  *  so restoring a context base from it inflates the ring ~N× on tool-heavy
- *  turns; `last_call` carries the final request's real prompt size. */
-interface LastCallUsageBlock {
+ *  turns; `last_call` carries the final request's real prompt size.
+ *
+ *  Declared here with OPTIONAL fields because it also describes the loose shape
+ *  read back off a persisted row (`persistedUsageBlock`'s input). The shape the
+ *  ledger WRITES is `call-usage.ts`'s `LastCallUsageBlock`, where all four are
+ *  present -- a row read back may genuinely lack them. */
+type LastCallUsageBlock = {
   input_tokens?: number;
   output_tokens?: number;
   cache_hit_tokens?: number;
   cache_creation_tokens?: number;
-}
+};
 
 /**
  * Plan 610 P8: the turn-cumulative block, with `last_call`, as the assistant row
@@ -3201,21 +3206,11 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // `never` and the post-turn budget write silently stopped typechecking. A
     // property access is re-read after every call, so the cell is the shape
     // that stays honest.
-    const turnUsage: {
-      /** The turn-cumulative sum every provider call folds into. */
-      cumulative: TokenUsage | null;
-      /** The largest-prompt call of the turn, for the persisted anchor. */
+    const turnUsage: ReturnType<typeof createTurnUsageLedger> & {
+      // The persisted row's own shape keeps `output_tokens` optional-friendly;
+      // widen so `persistedUsageBlock` can read it without a cast.
       lastCall: (LastCallUsageBlock & { output_tokens: number }) | null;
-      /** The model that produced the turn's LAST call. */
-      lastCallModel: string;
-      /** The provider that produced the turn's LAST call. */
-      lastCallProviderId: string;
-    } = {
-      cumulative: null,
-      lastCall: null,
-      lastCallModel: '',
-      lastCallProviderId: '',
-    };
+    } = createTurnUsageLedger();
 
     // ── Plan 610 S4c-d2a: where the turn is driven, and why it is the ENGINE ──
     //
@@ -3314,121 +3309,39 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
       if (event.type === 'result' && event.data) {
         // Parse the single LLM API call's usage. One `result` fires per API
-        // call, so a tool-heavy turn emits many — each becomes one UsageCall
+        // call, so a tool-heavy turn emits many -- each becomes one UsageCall
         // in the turn ledger (token-accounting), keeping per-model attribution
         // exact when the model hot-swaps mid-turn.
         const call = parseUsageCall(event.data as Record<string, unknown>);
         if (call) {
-          // Snapshot the exact model/provider that produced THIS call.
-          // `agent.model` is the hot-swap surface (ModelRuntime), so reading
-          // it here attributes each call to the model actually in use.
-          call.model = agent?.model ?? mainModelName;
-          call.provider_id = currentProviderId;
-          const rawInput = call.input_tokens;
-          const outputTokens = call.output_tokens;
-          const cacheHitTokens = call.cache_hit_tokens ?? 0;
-          const cacheCreationTokens = call.cache_creation_tokens ?? 0;
-          // Cache-convention guard: Anthropic's input_tokens already includes
-          // cached tokens, but some OpenAI-compatible gateways report
-          // prompt_tokens EXCLUDING cache. When cache hits exceed the reported
-          // input, the input clearly omits cache — add the hits back (pi does
-          // the same: input + cacheRead + cacheWrite). The cacheWrite clause
-          // covers the first request of a session where cacheRead is still 0
-          // but the full prefix (system + tools) is written to cache.
-          const normalizedInput =
-            cacheHitTokens > rawInput || cacheCreationTokens > rawInput
-              ? rawInput + cacheHitTokens + cacheCreationTokens
-              : rawInput;
-          // ONLY-NEW session-total volume: the uncached delta + newly-written
-          // cache. cache_hit is a RE-READ of an already-counted prefix and
-          // must NOT accumulate into the session "t" total (MiniMax re-reports
-          // the whole cached prefix every call → N×/quadratic inflation). The
-          // RESIDENT volume (normalizedInput above) still drives the RING via
-          // liveLatestObserved so the anchor shows real resident context.
-          const onlyNewInput =
-            cacheHitTokens > rawInput || cacheCreationTokens > rawInput
-              ? rawInput + cacheCreationTokens
-              : rawInput;
-          // Accumulate across ALL result events in this turn — one fires per
-          // LLM API call, so a tool-heavy turn emits many. Keeping only the
-          // last event (the old behavior) lost every earlier round's tokens,
-          // and input grows each round, so the loss was large. Raw fields are
-          // summed; per-provider conventions (input includes cache,
-          // total_tokens = input + output) survive summation.
-          const callTotal = call.total_tokens ?? rawInput + outputTokens;
-          if (!turnUsage.cumulative) {
-            turnUsage.cumulative = {
-              input_tokens: rawInput,
-              output_tokens: outputTokens,
-              total_tokens: callTotal,
-              cache_hit_tokens: cacheHitTokens,
-              cache_creation_tokens: cacheCreationTokens,
-              calls: [],
-            };
-          } else {
-            turnUsage.cumulative.input_tokens += rawInput;
-            turnUsage.cumulative.output_tokens += outputTokens;
-            turnUsage.cumulative.total_tokens =
-              (turnUsage.cumulative.total_tokens ?? 0) + callTotal;
-            turnUsage.cumulative.cache_hit_tokens =
-              (turnUsage.cumulative.cache_hit_tokens ?? 0) + cacheHitTokens;
-            turnUsage.cumulative.cache_creation_tokens =
-              (turnUsage.cumulative.cache_creation_tokens ?? 0) + cacheCreationTokens;
-          }
-          // Push the per-call ledger entry (carries model/provider snapshot).
-          if (!turnUsage.cumulative.calls) turnUsage.cumulative.calls = [];
-          turnUsage.cumulative.calls.push(call);
-          // last_call feeds the persisted anchor (normalizePromptTokens
-          // prefers it on reload) and the footer's per-request line. Keep the
-          // LARGEST-prompt call of the turn, not the latest: GLM-style
-          // gateways report a near-fresh prefix (input=0, tiny hit) on some
-          // rounds, and a collapsed last_call would permanently shrink the
-          // ring after an app restart. Context only grows within a turn.
-          const anchorVolume = (
-            u: { input_tokens?: number; output_tokens?: number; cache_hit_tokens?: number; cache_creation_tokens?: number },
-          ): number => {
-            const input = u.input_tokens ?? 0;
-            const hit = u.cache_hit_tokens ?? 0;
-            const write = u.cache_creation_tokens ?? 0;
-            return (hit > input || write > input ? input + hit + write : input) + (u.output_tokens ?? 0);
-          };
-          // Recompute last_call from the calls ledger each time, so the
-          // anchor block can never diverge from the per-call records.
-          let maxCall: UsageCall | null = null;
-          for (const c of turnUsage.cumulative.calls) {
-            if (!maxCall || anchorVolume(c) >= anchorVolume(maxCall)) maxCall = c;
-          }
-          turnUsage.lastCall = maxCall
-            ? {
-                input_tokens: maxCall.input_tokens,
-                output_tokens: maxCall.output_tokens,
-                cache_hit_tokens: maxCall.cache_hit_tokens,
-                cache_creation_tokens: maxCall.cache_creation_tokens,
-              }
-            : null;
-          // Track the LAST call's model/provider for the assistant-message
-          // attribution at stream end (the final answer is produced by the
-          // turn's last LLM call).
-          turnUsage.lastCallModel = call.model ?? '';
-          turnUsage.lastCallProviderId = call.provider_id ?? '';
-          ringTrace(`[${(msg.sessionId ?? sessionId ?? '?').slice(0, 8)}] result call: input=${rawInput}, output=${outputTokens}, cacheHit=${cacheHitTokens}, cacheWrite=${cacheCreationTokens}, normalizedInput=${normalizedInput}, model=${call.model ?? '?'}`);
-          // A real request just landed — its usage rides on the assistant
+          // The accumulation itself lives in `call-usage.ts` as an exported
+          // pure function, NOT inline here. It used to be inline inside this
+          // closure, which made the billing arithmetic unreachable from a test:
+          // a regression suite could only assert against its own stub
+          // collection and stayed green while this ledger double-counted.
+          // Attribution is snapshotted per call here because `agent.model` is
+          // the hot-swap surface and is only readable from this scope.
+          const volumes = foldUsageCall(turnUsage, call, {
+            model: agent?.model ?? mainModelName,
+            providerId: currentProviderId,
+          });
+          // Not a null check: `parseUsageCall` above already rejected the
+          // all-zero block, and `foldUsageCall` always returns its volumes for
+          // a call that survived it. The two guards are the same guard.
+          ringTrace(`[${(msg.sessionId ?? sessionId ?? '?').slice(0, 8)}] result call: input=${call.input_tokens}, output=${call.output_tokens}, cacheHit=${call.cache_hit_tokens ?? 0}, cacheWrite=${call.cache_creation_tokens ?? 0}, normalizedInput=${volumes.normalizedInput}, model=${call.model ?? '?'}`);
+          // A real request just landed -- its usage rides on the assistant
           // message DuyaAgent pushes right after `done` (plan 443), so the
           // pure estimator anchors on it directly. Clear the post-compaction
           // pending flag here too.
           compactedPending = false;
-          // Plan 577 §3: the Observation layer is seeded by DuyaAgent itself
-          // (setObservedUsage on its `result` handler, BEFORE this event is
-          // yielded) into the ContextLedger — the single entry point. The
-          // ledger holds latest input, the output bridge and the peak
-          // high-water mark; emitLiveUsage reads them from the snapshot and
-          // merges into the timeline scan via applyLiveAnchorCorrection.
           // Accumulate session-cumulative totals for the ring's stats line.
-          liveTotalInput += onlyNewInput;
-          liveTotalInputRaw += rawInput;
-          liveTotalOutput += outputTokens;
-          liveTotalCacheHit += cacheHitTokens;
-          liveTotalCacheCreation += cacheCreationTokens;
+          // `onlyNewInput` deliberately excludes cache HITS -- see
+          // `foldUsageCall` for why counting them inflates quadratically.
+          liveTotalInput += volumes.onlyNewInput;
+          liveTotalInputRaw += call.input_tokens;
+          liveTotalOutput += call.output_tokens;
+          liveTotalCacheHit += call.cache_hit_tokens ?? 0;
+          liveTotalCacheCreation += call.cache_creation_tokens ?? 0;
           emitTokenUsage();
         } else {
           warn('[Agent-Process] Received all-zero usage, ignoring to avoid empty context ring');
