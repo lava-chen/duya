@@ -83,6 +83,18 @@ const BUILD_ORDER = [
   // `path`) and its own siblings. It has to build before the host, because
   // `packages/sandbox`'s emitted `dist` is what its `exports` map points at.
   '@duya/sandbox',
+  // Plan 610: the `/` and `@` completion rules shared by the desktop composer
+  // and the CLI TUI prompt. Level 1 because it imports nothing but its own
+  // siblings -- no `@duya/*` package, no React, no blessed. It has to build
+  // before `@duya/agent` (whose `src/cli/ui/*` imports it) and before the
+  // desktop renderer, whose `tsconfig.renderer.json` maps the package onto this
+  // one's emitted `dist`.
+  //
+  // Omitting it here fails in a way that is invisible locally: a workstation
+  // that has run `npm run -w @duya/input-completion build` by hand resolves the
+  // import from an already-present `dist`, so `typecheck:all` is green while a
+  // clean CI checkout reports TS2307 for every file that imports it.
+  '@duya/input-completion',
 
   // Level 2 — depend only on level 1.
   '@duya/ai', //              -> @duya/agent-protocol
