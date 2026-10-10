@@ -635,6 +635,7 @@ question you're asking.
 
 - Format: CommonJS (`format: 'cjs'`). Output: `packages/agent/bundle/agent-process-entry.js`
 - `bundle: true` inlines all runtime dependencies. Only `better-sqlite3` (native) and `BashWorker.js` (worker) remain external.
+- **`blessed` is external in the CHAT CLI entry only.** It cannot be bundled: `blessed/lib/widget.js` enumerates its own `widgets/` directory with `readdirSync` and `require`s each file at runtime, which esbuild cannot see. First symptom is a misleading `Could not resolve 'term.js'` / `'pty.js'` — two packages blessed never declares but requires inside a widget method. Marking those external only moves the failure to runtime. The packaged worker entry never imports `cli/`, so it needs none of this; if that stops being true, fix the chat CLI entry rather than copying its externals up.
 - Production resolves: primary `resources/agent-bundle/agent-process-entry.js`, fallback paths only for debug.
 - Self-contained: no `node_modules` copying in `afterPack`.
 - `better-sqlite3`: packaged to `resources/better-sqlite3/`, shared by main and agent. Agent receives `DUYA_BETTER_SQLITE3_PATH` env var.
