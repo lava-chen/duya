@@ -119,6 +119,14 @@ export class TUIApp {
   private expanded = false;
   /** Tail-following. Disengaged by scrolling up, restored by Ctrl+End. */
   private follow = true;
+  /**
+   * How many lines the view is scrolled back from the tail.
+   *
+   * Zero means "following". This is the whole scroll state: the transcript box
+   * is never handed more content than it has rows, so the offset is the only
+   * thing that decides which slice of the model is on screen.
+   */
+  private scrollLines = 0;
   private lastCtrlCAt = Number.NEGATIVE_INFINITY;
   private running = false;
   /** Lines committed to the model but not yet accounted for by a render. */
@@ -179,10 +187,15 @@ export class TUIApp {
       left: 0,
       right: 0,
       bottom: 3 + STATUS_ROWS,
-      scrollable: true,
-      alwaysScroll: true,
-      keys: true,
-      vi: true,
+      // NOT `scrollable`. The window is owned by `TranscriptModel` and applied
+      // in `paintTranscript`, because blessed's scrollable measures against
+      // `_clines`/`_pcontent`, which are only rebuilt by `parseContent` and
+      // therefore lag the content by one coalesced render batch. Handing the
+      // box a buffer taller than the screen and asking it to scroll is what
+      // made a streaming answer appear frozen at the top with the newest
+      // lines stranded below the fold. See `paintTranscript`.
+      keys: false,
+      vi: false,
       tags: true,
       border: { type: 'line' },
       label: ' transcript ',
@@ -281,8 +294,11 @@ export class TUIApp {
     if (!this.running) return;
     this.output.write(SYNC_BEGIN);
     try {
-      this.paintTranscript();
+      // Input FIRST: it owns the box geometry, and the transcript scroll is
+      // computed against that geometry. Painting the transcript first would
+      // size its scroll against the PREVIOUS frame's height.
       this.paintInput();
+      this.paintTranscript();
       this.paintStatus();
       this.paintOverlay();
       this.screen.render();
@@ -300,12 +316,29 @@ export class TUIApp {
   }
 
   private paintTranscript(): void {
-    this.transcriptBox.setContent(renderTranscript(this.model, this.renderOptions()));
-    // Only pin to the tail when following. `setScrollPerc(100)` is an
-    // unconditional jump to the bottom (terminal.js:375 ->
-    // scrollablebox.js:378), so calling it while the user has scrolled up
-    // yanks them back mid-sentence — which is what the previous TUI did.
-    if (this.follow) this.transcriptBox.setScrollPerc(100);
+    const lines = renderTranscript(this.model, this.renderOptions()).split('\n');
+    const rows = this.visibleTranscriptRows();
+    // The window ends at the last line and only drops lines from the top, so
+    // "following" is the state where `scrollLines` is 0 rather than a special
+    // case. That is what stops a streaming answer from ending up with its
+    // newest lines stranded below the fold.
+    const maxStart = Math.max(0, lines.length - rows);
+    const start = Math.max(0, Math.min(maxStart, maxStart - this.scrollLines));
+    this.transcriptBox.setContent(lines.slice(start).join('\n'));
+  }
+
+  /**
+   * Rows the transcript can actually paint.
+   *
+   * Derived from the terminal rather than from the box's last measured height,
+   * so the first frame — before blessed has laid anything out — still gets a
+   * real window instead of a one-line one.
+   */
+  private visibleTranscriptRows(): number {
+    const screenRows = asNumber(this.program.rows, 24);
+    // input box (rows + its two border rows), status bar, the transcript's own
+    // top and bottom border.
+    return Math.max(1, screenRows - this.inputRows - asNumber(this.inputBox.iheight, 2) - STATUS_ROWS - 2);
   }
 
   private paintInput(): void {
@@ -499,6 +532,7 @@ export class TUIApp {
     this.thinkingBuffer.reset();
     this.editor.clear();
     this.follow = true;
+    this.scrollLines = 0;
     this.scheduler.requestImmediate();
   }
 
@@ -585,7 +619,6 @@ export class TUIApp {
     target.key(['tab'], () => this.editor.insert('  '));
 
     target.key(['pageup'], () => {
-      this.follow = false;
       this.scrollBy(-1);
     });
     target.key(['pagedown'], () => {
@@ -680,13 +713,23 @@ export class TUIApp {
 
   private followTail(): void {
     this.follow = true;
-    this.transcriptBox.setScrollPerc(100);
+    this.scrollLines = 0;
     this.scheduler.requestImmediate();
   }
 
   private scrollBy(pages: number): void {
-    const height = Math.max(1, asNumber(this.transcriptBox.height, 1));
-    this.transcriptBox.scroll(-pages * height);
+    const rows = this.visibleTranscriptRows();
+    const total = renderTranscript(this.model, this.renderOptions()).split('\n').length;
+    const maxBack = Math.max(0, total - rows);
+    const next = pages < 0
+      ? Math.min(maxBack, this.scrollLines - pages * rows)
+      : Math.max(0, this.scrollLines - pages * rows);
+    this.scrollLines = next;
+    // Scrolling back to the newest line IS following again; scrolling away
+    // from it is not. Deriving this from the offset rather than setting it
+    // separately is what stops "I scrolled to the bottom but it still says
+    // paused" from being reachable.
+    this.follow = this.scrollLines === 0;
     this.scheduler.requestImmediate();
   }
 
