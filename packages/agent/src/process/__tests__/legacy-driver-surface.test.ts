@@ -201,16 +201,30 @@ const EXPECTED: readonly (readonly [string, number, number])[] = [
   // whole shape of this work, and why the count below moved without a single
   // test being removed.
   //
-  // CAVEAT, and it is the reason this table cannot be read as coverage: the
-  // census matches SOURCE SHAPE, not execution. `streaming-lifecycle` below
-  // counts 7 drivers that are all preceded by a credential guard and an early
-  // return, so its 7 tests name the driver and assert nothing. A green row in
-  // this table is a claim about a file, never about a test having run.
-  // packages/agent/tests/integration -- 9.
-  ['packages/agent/tests/integration/DuyaAgent.test.ts', 12, 7],
+  // `DuyaAgent.test.ts` and `streaming-lifecycle.test.ts` left this table on
+  // 2026-10-10, and they left it for OPPOSITE reasons, which is why the two
+  // removals are described separately rather than as one cleanup:
+  //
+  //  - `streaming-lifecycle.test.ts` was DELETED. All 7 cases called
+  //    `agent.streamChat(...)`, which no longer exists since the turn loop
+  //    moved to `RunEngineImpl` (plan 610 A3), so none could be re-pointed.
+  //  - `DuyaAgent.test.ts` was REWRITTEN, and its row is gone because its 7
+  //    legacy drivers went with the rewrite -- 5 of its cases never needed a
+  //    credential at all and now run, and the 7 that did are `describe.skip`.
+  //
+  // The caveat that used to sit here is now RESOLVED rather than merely noted.
+  // It read: "`streaming-lifecycle` below counts 7 drivers that are all
+  // preceded by a credential guard and an early return, so its 7 tests name the
+  // driver and assert nothing." The census was right and the table was wrong:
+  // it counted source shape and reported a file as covered while every one of
+  // those tests returned early. That row is why the file is gone rather than
+  // migrated.
+  //
+  // What still holds is the caveat itself, for every remaining row: the census
+  // matches SOURCE SHAPE, not execution. A green row is a claim about a file,
+  // never about a test having run.
+  // packages/agent/tests/integration -- 1.
   ['packages/agent/tests/integration/AgentLoop.test.ts', 2, 2],
-  // packages/agent/tests/regression -- 7.
-  ['packages/agent/tests/regression/streaming-lifecycle.test.ts', 7, 7],
 ];
 
 /** Every test in the package, so the census is a proportion and not a total. */
@@ -405,7 +419,7 @@ describe('the measured driver surface the flip has to move', () => {
     }
   });
 
-  it('is 16 drivers, which is the number the flip is sized against', () => {
+  it('is 2 drivers, which is the number the flip is sized against', () => {
     // Stated on its own so a reader does not have to add the table up, and so a
     // silent change to the total is a red row rather than a diff a reviewer has
     // to notice. The sum is computed from the SAME table the row above pins, so
@@ -417,8 +431,22 @@ describe('the measured driver surface the flip has to move', () => {
     // when `RealTasks` was ported onto the engine harness, which is the first
     // move in this series to retire a driver by rewriting rather than by
     // deleting a test.
+    //
+    // 16 -> 2 on 2026-10-10, and this one IS a deletion of drivers that took
+    // tests with them -- the first move in the series that breaks the pattern
+    // every earlier entry describes. Both rows that left the table named
+    // `agent.streamChat`, which the A3 flip deleted, so they could not be
+    // re-pointed the way `RealTasks` was:
+    //
+    //  - `streaming-lifecycle.test.ts` (7 drivers) was deleted outright.
+    //  - `DuyaAgent.test.ts` (7 drivers) was rewritten; its 5 cases that need
+    //    no credential now run, and the other 7 are `describe.skip`.
+    //
+    // So the total is now "what is left that still drives the legacy loop",
+    // not "how much surface the flip has left to move". The next row below --
+    // the proportion check -- is what keeps that distinction honest.
     const total = EXPECTED.reduce((n, [, , driving]) => n + driving, 0);
-    expect(total).toBe(16);
+    expect(total).toBe(2);
     // And it is a small fraction of the package, which is the finding: the flip
     // is not "rewrite the agent's tests", it is "move a few dozen".
     expect(total).toBeLessThan(PACKAGE_TEST_COUNT / 50);

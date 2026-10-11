@@ -1680,3 +1680,109 @@ at 3 entries instead of 2」。**实测不成立。** 两个方向的变异都�
    **因果待定、结论为真**：需要的是**接线**还是**搬运**，尚未逐条判定。
 4. `slice-classification` 门禁：72 个文件未分类（其中只有 9 个属 sandbox），
    修一条会逼重录 `RULE_TABLE_FINGERPRINT`，而那次重录只覆盖四分之一漂移。独立切片。
+## 收口批次 D：CI 红的归属，以及两套真空测试的处置
+
+实测于 `8dd142a1`（PR #264 已合），工作树 `610-p0-billing-verify`，
+分支 `plan/610-ci-diagnosis`。
+
+### 先撤回一条本会话的错误结论
+
+上一条汇报里我写过：「vitest 全程没有打印过任何一条 summary，CI 是超时不是断言失败」。
+**这句话是错的，而且错在方法上。** 我用 `replace(/\x1b\[[0-9;]*[A-Za-z]/g,'')` 剥 ANSI，
+但日志落盘时 ESC 字节**已经被剥掉了**，剩下的是字面量 `^[[`。于是我的正则去匹配
+不存在的 ESC，summary 行永远匹配不上 —— **「采集为空」被我读成了「没有 summary」**。
+这与本日志反复记的那条「采集为空极容易被误读成没有失败」是同一个坑，我又踩了一次。
+
+改正后的实测（`gh run view --job ... --log`，按 `\t` 切掉
+`<job>\t<STEP>\t<ISO>Z ` 前缀）：
+
+```
+Test Files  35 failed | 1149 passed | 9 skipped (1193)
+Tests       75 failed | 13841 passed | 112 skipped (14028)
+Duration    389.83s
+```
+
+**CI 是跑完的，有完整 summary。** 台阶是「有 75 条断言失败」，
+不是「没跑完」。
+
+### CI 的红不是本轮引入的：与 master 逐字相同
+
+同一 base commit `35329df3` 在 master 上自己的 run（`37947682808`）：
+
+| | master `35329df3` | 本分支 `2cdeda1d` |
+| --- | --- | --- |
+| `Test Files` | 35 failed / 1149 passed / 9 skipped | **完全相同** |
+| `architecture` | success | success |
+| `build` × 3 | success | success |
+| `test` × 3 | failure | failure |
+
+**本 PR 贡献的失败数 = 0。** 与我本地 `packages/agent` 子集跑出的 29 条是同一批。
+
+### 75 条失败的实测归属（不是同一个东西）
+
+| 文件 | 条数 | 形态 |
+| --- | --- | --- |
+| `WorkflowPanel.test.tsx` | 12 | `TestingLibraryElementError: Unable to find [data-testid=...]`，UI 组件测试找不到元素 |
+| `plan315` / `plan486` / `nestedInjection` / `model-leg` | 19 | 已登记的 engine-path 缺口 |
+| `slice-classification.test.ts` | 4 | 门禁自身的 72 个未分类文件（独立切片） |
+| `tool-side-effect-ledger` | 2 | `ENOTDIR: ... /tmp/duya-ledger-XXX/not-a-dir/` —— **Linux/macOS 路径假设** |
+| `worker-protocol-write-queue` | 2 | `expected '"n":2500'` 但收到 `n:2092` —— **背压时序** |
+| `engine-permission-enforcement` | 1 | 载荷下的 wall-clock（已知） |
+| 其余 32 个文件 | 33 | 各自单点 |
+
+注意 `tool-side-effect-ledger` 那条：**本地 Windows 全绿，CI Linux 报
+`ENOTDIR`**，因为测试造了一个「文件」再往里当目录用。这是**平台假设**，
+不是产品缺陷 —— 本地跑永远看不到它。
+
+### 本轮处置：两套真空测试
+
+实测数字（不是引用的）：
+
+| 文件 | `if (!API_KEY)` | 调 `streamChat` | `it()` 总数 |
+| --- | --- | --- | --- |
+| `tests/regression/streaming-lifecycle.test.ts` | **7** | **7** | 7 |
+| `tests/integration/DuyaAgent.test.ts` | 13 | 7 | 12 |
+
+并核实 `DuyaAgent.ts` 里 **`streamChat` 已无声明**（声明位搜索，不是读注释散文）。
+
+处置按「这条用例到底需要什么」拆，而不是按文件一刀切：
+
+- **删掉 `streaming-lifecycle.test.ts`（7 条全部无解）**：7 条都要真 provider 流，
+  而入口已随 A3 迁移。
+  这里**没有**留 `describe.skip` 占位 —— 我先写了一版带
+  `expect(true).toBe(true)` 的「退役声明测试」，**自己否决了**：
+  那正是本轮要消灭的东西，写进仓库只是换个地方再放一颗装饰品。
+  记录归执行日志，不归一个假装有断言的测试文件。
+- **重写 `DuyaAgent.test.ts`：12 → 7 条真测试 + 7 条 `describe.skip`**：
+  其中 **5 条根本不调用 provider**（`clearMessages` / `addMessage` /
+  `getMessages` / `getSessionInfo` / `getContextStats` / `shouldCompact` /
+  `interrupt`），它们的 `if (!API_KEY) return` 从一开始就是错的守卫 ——
+  **这些测试从不需要凭据**。删掉守卫后它们**真的跑了**。
+  剩下 7 条要真流的，用 `describe.skip` 并写明原因：`skip` 会被 vitest
+  **报告为跳过**，而 early-return 会被**报告为通过** —— 这正是原来的病。
+
+**变异复验**（`clearMessages` 不再替换 timeline）→ 红，
+`expected 2 to be +0`，且**只有那一条**红（1 failed / 6 passed / 7 skipped）。
+
+### 门禁实测
+
+| 项 | 值 |
+| --- | --- |
+| `check:test-coverage` | exit 0 —— 删掉一个文件**不产生** orphan |
+| `typecheck:agent` | exit 0 |
+| `architecture:check` | exit 0，1045/1045，baseline **930 未动** |
+| `check:encoding` | OK |
+| `packages/agent/tests` + `src` | 29 失败 / 4950 通过 —— **与本轮改动前逐条一致**，无新增 |
+
+**测试总数从 5065 变为 5065，但其中「真空通过」的 19 条被替换成了
+7 条真跑 + 7 条显式跳过 + 5 条复活。** 绿色的含义第一次变了。
+
+### 仍未解决
+
+1. **19 条 engine-path 缺口**（`plan315` / `plan486`）：结论为真、**因果未定**
+   （接线 vs 搬运），需逐条判定。
+2. **`slice-classification`** 72 个未分类文件。
+3. **`WorkflowPanel.test.tsx` 12 条**：UI 测试找不到 `data-testid`，
+   看起来是**组件与测试不同步**，与 610 无关但它是最大的单点。
+4. **`tool-side-effect-ledger` 的 Linux `ENOTDIR`**：平台假设问题，
+   本地永远看不到，只能在 CI 或容器里复现。
