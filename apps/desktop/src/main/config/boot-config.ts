@@ -15,11 +15,10 @@
 import { app } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import { parse, stringify } from '@iarna/toml';
 import writeFileAtomic from 'write-file-atomic';
 import { getLogger, LogComponent } from '../logging/logger';
-import { resolveConfigTomlPath, resolveDatabasePathFromConfigToml } from './compass';
+import { resolveConfigRoot, resolveConfigTomlPath, resolveDatabasePathFromConfigToml } from './compass';
 
 const logger = getLogger();
 
@@ -354,33 +353,10 @@ function readStorageRoot(key: 'rollout_root' | 'attachments_root'): string {
  * logger/bootstrap init chain.
  */
 export function resolveRolloutRoot(): string {
-  const base = path.join(os.homedir(), '.duya');
-  if (process.env.DUYA_TEST === '1') {
-    const ns = readTestNamespace();
-    if (ns) return path.join(base, 'test-namespaces', ns);
-  }
+  const base = resolveConfigRoot();
+  if (isNamespacedTestRun()) return base;
   const configured = readStorageRoot('rollout_root');
   return configured && configured.trim() ? configured : base;
-}
-
-/**
- * Parse `--duya-namespace=<name>` from argv (mirrors `getTestNamespace` in
- * `../core/bootstrap`, kept here to avoid a module dependency). Returns null
- * when absent or invalid.
- */
-function readTestNamespace(): string | null {
-  for (const arg of process.argv) {
-    if (arg.startsWith('--duya-namespace=')) {
-      const ns = arg.slice('--duya-namespace='.length);
-      return ns && /^[a-zA-Z0-9_-]+$/.test(ns) ? ns : null;
-    }
-  }
-  const idx = process.argv.indexOf('--duya-namespace');
-  if (idx >= 0 && idx + 1 < process.argv.length) {
-    const ns = process.argv[idx + 1];
-    return ns && /^[a-zA-Z0-9_-]+$/.test(ns) ? ns : null;
-  }
-  return null;
 }
 
 /**
@@ -393,11 +369,8 @@ function readTestNamespace(): string | null {
  * the same policy as `resolveRolloutRoot`.
  */
 export function resolveAttachmentsRoot(): string {
-  const base = path.join(os.homedir(), '.duya');
-  if (process.env.DUYA_TEST === '1') {
-    const ns = readTestNamespace();
-    if (ns) return path.join(base, 'test-namespaces', ns, 'attachments');
-  }
+  const base = resolveConfigRoot();
+  if (isNamespacedTestRun()) return path.join(base, 'attachments');
   const configured = readStorageRoot('attachments_root');
   return configured && configured.trim() ? configured : path.join(base, 'attachments');
 }

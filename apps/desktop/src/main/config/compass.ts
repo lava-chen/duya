@@ -11,33 +11,13 @@
  */
 
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { parse } from '@iarna/toml';
-
-function readTestNamespace(): string | null {
-  for (const arg of process.argv) {
-    if (arg.startsWith('--duya-namespace=')) {
-      const ns = arg.slice('--duya-namespace='.length);
-      return ns && /^[a-zA-Z0-9_-]+$/.test(ns) ? ns : null;
-    }
-  }
-  const idx = process.argv.indexOf('--duya-namespace');
-  if (idx >= 0 && idx + 1 < process.argv.length) {
-    const ns = process.argv[idx + 1];
-    return ns && /^[a-zA-Z0-9_-]+$/.test(ns) ? ns : null;
-  }
-  return null;
-}
+import { resolveDataRoot } from '@duya/data/data-paths';
 
 /** Config root: `~/.duya` (or `~/.duya/test-namespaces/<ns>` in test mode). */
 export function resolveConfigRoot(): string {
-  const base = path.join(os.homedir(), '.duya');
-  if (process.env.DUYA_TEST === '1') {
-    const ns = readTestNamespace();
-    if (ns) return path.join(base, 'test-namespaces', ns);
-  }
-  return base;
+  return resolveDataRoot();
 }
 
 export function resolveConfigTomlPath(): string {

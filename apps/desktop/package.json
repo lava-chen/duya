@@ -3,6 +3,9 @@
   "version": "0.8.1",
   "private": true,
   "description": "DUYA desktop shell — Electron main process, preload bridge, and renderer",
+  "dependencies": {
+    "@duya/data": "0.1.0"
+  },
   "main": "src/main/index.ts",
   "scripts": {
     "typecheck:main": "tsc -p tsconfig.main.json --noEmit",

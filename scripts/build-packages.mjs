@@ -99,6 +99,7 @@ const BUILD_ORDER = [
   // Level 2 — depend only on level 1.
   '@duya/ai', //              -> @duya/agent-protocol
   '@duya/plugin-core',
+  '@duya/data', // Electron-independent shared data root
   '@duya/conductor',
   '@duya/gateway',
   '@duya/voice',
