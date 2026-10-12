@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Transport-neutral wire contract for Duya agent runs: a closed event registry, envelopes, manifests, permissions, and an error taxonomy. Types only — zero runtime dependencies.",
+  "description": "Transport-neutral wire contract for Duya Host and agent runs: session APIs, event envelopes, manifests, permissions, and an error taxonomy. Zero runtime dependencies.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -22,6 +22,126 @@
     "./transcript": {
       "types": "./dist/transcript/index.d.ts",
       "import": "./dist/transcript/index.js"
+    },
+    "./message-timeline": {
+      "types": "./dist/message-timeline.d.ts",
+      "import": "./dist/message-timeline.js"
+    },
+    "./message-ingest": {
+      "types": "./dist/message-ingest.d.ts",
+      "import": "./dist/message-ingest.js"
+    },
+    "./session-api": {
+      "types": "./dist/session-api.d.ts",
+      "import": "./dist/session-api.js"
+    },
+    "./session-fork": {
+      "types": "./dist/session-fork.d.ts",
+      "import": "./dist/session-fork.js"
+    },
+    "./rollout-events": {
+      "types": "./dist/rollout-events.d.ts",
+      "import": "./dist/rollout-events.js"
+    },
+    "./workflow-journal": {
+      "types": "./dist/workflow-journal.d.ts",
+      "import": "./dist/workflow-journal.js"
+    },
+    "./goals": {
+      "types": "./dist/goals.d.ts",
+      "import": "./dist/goals.js"
+    },
+    "./mode-state": {
+      "types": "./dist/mode-state.d.ts",
+      "import": "./dist/mode-state.js"
+    },
+    "./workflow-runs": {
+      "types": "./dist/workflow-runs.d.ts",
+      "import": "./dist/workflow-runs.js"
+    },
+    "./projects": {
+      "types": "./dist/projects.d.ts",
+      "import": "./dist/projects.js"
+    },
+    "./locks": {
+      "types": "./dist/locks.d.ts",
+      "import": "./dist/locks.js"
+    },
+    "./mailbox": {
+      "types": "./dist/mailbox.d.ts",
+      "import": "./dist/mailbox.js"
+    },
+    "./research-api": {
+      "types": "./dist/research-api.d.ts",
+      "import": "./dist/research-api.js"
+    },
+    "./terminal-history": {
+      "types": "./dist/terminal-history.d.ts",
+      "import": "./dist/terminal-history.js"
+    },
+    "./gateway-user-map": {
+      "types": "./dist/gateway-user-map.d.ts",
+      "import": "./dist/gateway-user-map.js"
+    },
+    "./channel-persistence": {
+      "types": "./dist/channel-persistence.d.ts",
+      "import": "./dist/channel-persistence.js"
+    },
+    "./channels": {
+      "types": "./dist/channels.d.ts",
+      "import": "./dist/channels.js"
+    },
+    "./agent-profiles": {
+      "types": "./dist/agent-profiles.d.ts",
+      "import": "./dist/agent-profiles.js"
+    },
+    "./gateway-directory": {
+      "types": "./dist/gateway-directory.d.ts",
+      "import": "./dist/gateway-directory.js"
+    },
+    "./gateway-allowlist": {
+      "types": "./dist/gateway-allowlist.d.ts",
+      "import": "./dist/gateway-allowlist.js"
+    },
+    "./gateway-message-mirror": {
+      "types": "./dist/gateway-message-mirror.d.ts",
+      "import": "./dist/gateway-message-mirror.js"
+    },
+    "./gateway-threads": {
+      "types": "./dist/gateway-threads.d.ts",
+      "import": "./dist/gateway-threads.js"
+    },
+    "./send-message-state": {
+      "types": "./dist/send-message-state.d.ts",
+      "import": "./dist/send-message-state.js"
+    },
+    "./model-capabilities": {
+      "types": "./dist/model-capabilities.d.ts",
+      "import": "./dist/model-capabilities.js"
+    },
+    "./app-connections": {
+      "types": "./dist/app-connections.d.ts",
+      "import": "./dist/app-connections.js"
+    },
+    "./plugin-setup": {
+      "types": "./dist/plugin-setup.d.ts",
+      "import": "./dist/plugin-setup.js"
+    },
+    "./import-batches": {
+      "types": "./dist/import-batches.d.ts",
+      "import": "./dist/import-batches.js"
+    },
+    "./turn-review": {
+      "types": "./dist/turn-review.d.ts",
+      "import": "./dist/turn-review.js"
+    },
+    "./sidebar-sections": {
+      "types": "./dist/sidebar-sections.d.ts",
+      "import": "./dist/sidebar-sections.js"
+    },
+    "./usage-api": {
+      "types": "./dist/usage-api.d.ts",
+      "import": "./dist/usage-api.js"
     }
   },
   "files": [
