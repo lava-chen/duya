@@ -2318,3 +2318,58 @@ Deliberately NOT done yet, in order:
 4. Desktop still supervises the Agent Server rather than an independent Host
    (gate 2), and its Desktop Host API adapter does not yet compose the
    execution controller.
+
+## CLI chat over the Host — the vertical chain is live end to end (2026-10-12)
+
+Gate 4 is landed: `duya chat` (packages/cli) is a pure Host HTTP client —
+`startAgentRun` → `watchAgentRunEvents` (replay + follow) → `cancelAgentRun`.
+It contains NO agent runtime: no `DuyaAgent`, no `@duya/agent` dependency edge
+(verified: packages/cli has neither `@duya/agent` nor `@duya/agent-runtime` in
+dependencies; apps/desktop has neither either). Session creation, resume
+(`--session`), per-run provider/model/apiFormat overrides (`--provider`,
+`--model`, `--api-format`), and SIGINT→cancel are all served through the Host.
+
+Supporting changes:
+- The worker now SELF-INITIALIZES when no `init` arrived: `buildSelfInitMessage`
+  resolves the provider from local config.toml + secrets.json only, honouring
+  the run manifest's frozen agent selection (`manifest.agent.providerId/model`)
+  over `[model].provider`. The Host never sees a credential.
+- `resolveProvider` gained an explicit-provider-id parameter for the manifest
+  override.
+- Standalone Host now serves `localSessionApi` (the local session projection),
+  which `duya chat --session` reads to resume.
+- Host WorkerManager no longer swallows `db:request` (the Desktop router's
+  per-request handler was copied into the Host composition long ago; the Host
+  controller serves it through the worker db bridge).
+
+RUNTIME EVIDENCE (real processes, real model):
+- `duya serve` (standalone process, `DUYA_DATA_ROOT=.e2e-host`) + `duya chat
+  --print "只回复四个字：链路通了" --provider deepseek --model deepseek-v4-pro
+  --api-format openai` → run `daafedf0` **completed**; the model answered
+  「链路通了」; durable events: run.started, assistant.thinking_block,
+  assistant.text_block, assistant.usage (input 25,893 / output 18),
+  run.completed. Replay over `GET /v1/agent-runs/:id/events?afterSeq=0`
+  returns the same durable sequence.
+- Second turn in the same session (`--session sess-968f5b1f…`) asked the model
+  to quote its previous answer — it replied 「链路通了」, proving the session
+  transcript round-trips through Host persistence to the worker's context.
+- Cancel: a long generation was cancelled via `POST /v1/agent-runs/:id/cancel`
+  → `requested: true`, the model stream was actually aborted, and the run
+  settled durably. KNOWN GAP: the terminal was `failed("stream ended without
+  finish_reason")` rather than `cancelled` — the worker's interrupt path
+  reports `chat:error`, whose `run.failed` envelope wins the one-shot CAS
+  before the cancel arbiter settles. This is the shared
+  orchestrator/controller semantics (not Host-specific), recorded as a
+  follow-up: the worker must report a cooperative stop frame on interrupt.
+- Provider override proven by error provenance: minimax-cn quota 429 (2056)
+  before the manifest-override fix, glm-cn balance 429 (1113) after switching
+  `--provider glm-cn` — each request hit the provider it named.
+
+Remaining, in order:
+1. Worker entry is still the legacy `@duya/agent` bundle (gate 3 port
+   extraction A5–A7) — the CLI/Desktop production dependency graphs no longer
+   contain `@duya/agent`, but the spawned worker process is still its bundle.
+2. Worker interrupt should report a cooperative stop so cancel lands
+   `cancelled` instead of racing `run.failed`.
+3. Desktop still supervises its in-process Agent Server (gate 2); its Host
+   adapter does not yet compose the execution controller.

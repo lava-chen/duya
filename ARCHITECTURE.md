@@ -29,8 +29,13 @@ DUYA is a Windows desktop AI agent client with a modular architecture:
   execute in-process over the same `RunStore` the ledger API serves, worker
   frames are normalized and observed into durable `run_events`, and worker
   `db:request` frames are served by the Host worker bridge (unmigrated domains
-  fail fast with a typed error). Standalone
-  `duya serve` owns its database handles; Desktop still composes the Host
+  fail fast with a typed error). The worker self-initializes from local
+  config when no `init` arrived, honouring the run manifest's frozen provider
+  selection. Standalone
+  `duya serve` owns its database handles; `duya chat` is a pure Host HTTP
+  client (start/replay/cancel, session resume, provider overrides) with no
+  `@duya/agent` dependency edge — verified live end to end against a real
+  model through the standalone Host. Desktop still composes the Host
   listener over Main-owned handles, and its Agent Server still supplies the
   worker command channel and launches the legacy Agent worker entry.
 - **AI Layer**: `@duya/ai` multi-protocol adapter
