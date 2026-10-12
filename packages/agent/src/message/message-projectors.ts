@@ -10,15 +10,26 @@ import {
   type RuntimeContextMessage,
   type CompactionEntry,
   type MessageTimelineEntry,
-  buildAgentContext,
   cloneValue,
 } from './message-framework.js';
 import {
+  COMPACTION_CHECKPOINT_ID_SUFFIX,
+  COMPACTION_CHECKPOINT_MESSAGE_TYPE,
+  projectPersistenceMessages as projectProtocolPersistenceMessages,
+  projectTimelinePersistenceMessages as projectProtocolTimelinePersistenceMessages,
+} from '@duya/agent-protocol/transcript';
+import type { LegacyCompactionCheckpoint } from '@duya/agent-protocol/transcript';
+import {
   THREAD_METADATA_KEY,
-  isBranchedEntry,
   isBranchedMessage,
   isRunOwnBranchRow,
 } from './threads.js';
+
+export {
+  COMPACTION_CHECKPOINT_ID_SUFFIX,
+  COMPACTION_CHECKPOINT_MESSAGE_TYPE,
+} from '@duya/agent-protocol/transcript';
+export type { LegacyCompactionCheckpoint } from '@duya/agent-protocol/transcript';
 
 /**
  * Three explicit output boundaries for {@link AgentMessage}.
@@ -515,14 +526,7 @@ function toBoundaryMessage(
 export function projectPersistenceMessages(
   messages: readonly AgentMessage[],
 ): Message[] {
-  const result: Message[] = [];
-  for (const message of messages) {
-    const legacy = toBoundaryMessage(message);
-    if (legacy) {
-      result.push(legacy);
-    }
-  }
-  return result;
+  return projectProtocolPersistenceMessages(messages);
 }
 
 /**
@@ -530,21 +534,7 @@ export function projectPersistenceMessages(
  * This deliberately avoids a schema migration: a compacted history is stored
  * as one durable marker followed by its retained suffix.
  */
-export interface LegacyCompactionCheckpoint {
-  readonly version: 1;
-  readonly id: string;
-  readonly createdAt: number;
-  readonly firstKeptMessageId: string;
-  readonly compactedMessageIds: readonly string[];
-  readonly tokensBefore: number;
-  readonly tokensAfter?: number;
-  readonly strategy: string;
-  readonly previousCompactionId?: string;
-  readonly reinjectedSystemMessages?: readonly (string | readonly MessageContent[])[];
-}
-
 const COMPACTION_CHECKPOINT_METADATA_KEY = 'duyaCompactionCheckpoint';
-export const COMPACTION_CHECKPOINT_MESSAGE_TYPE = 'compact_checkpoint';
 /**
  * Id suffix shared by every projection-synthesized compaction checkpoint row
  * (`${checkpoint.id}:checkpoint`, see projectTimelinePersistenceMessages).
@@ -553,25 +543,6 @@ export const COMPACTION_CHECKPOINT_MESSAGE_TYPE = 'compact_checkpoint';
  * a new un-indexed row that collides with the rebase-emitted copy on the next
  * load (duplicate message id breaks agent hydration).
  */
-export const COMPACTION_CHECKPOINT_ID_SUFFIX = ':checkpoint';
-
-function checkpointForEntry(entry: CompactionEntry): LegacyCompactionCheckpoint {
-  return {
-    version: 1,
-    id: entry.id,
-    createdAt: entry.createdAt,
-    firstKeptMessageId: entry.firstKeptMessageId,
-    compactedMessageIds: [...entry.compactedMessageIds],
-    tokensBefore: entry.tokensBefore,
-    tokensAfter: entry.tokensAfter,
-    strategy: entry.strategy,
-    previousCompactionId: entry.previousCompactionId,
-    reinjectedSystemMessages: entry.reinjectedSystemMessages
-      ? cloneValue(entry.reinjectedSystemMessages)
-      : undefined,
-  };
-}
-
 function isCheckpoint(value: unknown): value is LegacyCompactionCheckpoint {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const checkpoint = value as Record<string, unknown>;
@@ -620,45 +591,7 @@ export function getLegacyCompactionCheckpoint(
 export function projectTimelinePersistenceMessages(
   entries: readonly MessageTimelineEntry[],
 ): Message[] {
-  const projection = buildAgentContext(entries);
-  if (!projection.compaction) {
-    return projectPersistenceMessages(projection.messages);
-  }
-  const checkpoint = checkpointForEntry(projection.compaction);
-  const marker: Message = {
-    id: `${checkpoint.id}:checkpoint`,
-    role: 'system',
-    content: projection.compaction.summary,
-    isCompactSummary: true,
-    compactBoundaryId: checkpoint.id,
-    compactedMessageCount: checkpoint.compactedMessageIds.length,
-    timestamp: checkpoint.createdAt,
-    msg_type: COMPACTION_CHECKPOINT_MESSAGE_TYPE,
-    tool_input: JSON.stringify(checkpoint),
-  };
-
-  // Branched messages located strictly before the retained suffix (inside the
-  // folded prefix). The prefix is what the main window compressed; its branched
-  // entries survive for the thread layer.
-  const firstKeptIndex = entries.findIndex(
-    (entry) => entry.type === 'message' && entry.message.id === checkpoint.firstKeptMessageId,
-  );
-  const foldedBranched: AgentMessage[] = [];
-  if (firstKeptIndex > 0) {
-    for (const entry of entries.slice(0, firstKeptIndex)) {
-      if (entry.type === 'message' && isBranchedEntry(entry)) {
-        foldedBranched.push(entry.message);
-      }
-    }
-  }
-
-  return [
-    marker,
-    ...projectPersistenceMessages(foldedBranched),
-    ...projectPersistenceMessages(
-      projection.messages.filter((message) => message.role !== 'compaction_summary'),
-    ),
-  ];
+  return projectProtocolTimelinePersistenceMessages(entries);
 }
 
 // ─── Transcript boundary ─────────────────────────────────────────────────

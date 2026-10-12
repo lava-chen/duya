@@ -80,6 +80,18 @@ export type {
 
 export { AGENT_PROGRESS_TYPES, PERMISSION_REQUEST_MODES } from './permission-progress.js';
 
+export {
+  COMPACTION_CHECKPOINT_ID_SUFFIX,
+  COMPACTION_CHECKPOINT_MESSAGE_TYPE,
+  projectPersistenceMessages,
+  projectTimelinePersistenceMessages,
+  projectTranscriptMessages,
+} from './projector.js';
+export type {
+  LegacyCompactionCheckpoint,
+  ProjectTranscriptOptions,
+} from './projector.js';
+
 export type { FieldClass, Classified } from './classification.js';
 
 export {
