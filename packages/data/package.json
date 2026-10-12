@@ -13,6 +13,10 @@
     "./data-paths": {
       "types": "./dist/data-paths.d.ts",
       "import": "./dist/data-paths.js"
+    },
+    "./database-migration": {
+      "types": "./dist/database-migration.d.ts",
+      "import": "./dist/database-migration.js"
     }
   },
   "files": ["dist"],
