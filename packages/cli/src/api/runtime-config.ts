@@ -1,14 +1,13 @@
 /**
- * packages/agent/src/cli/api/runtime-config.ts
+ * packages/cli/src/api/runtime-config.ts
  *
- * Read userData/runtime/cli-api.json produced by the Electron main process.
+ * Read runtime/cli-api.json produced by Desktop Main or a local Host process.
  * The CLI client uses this to discover the loopback port + bearer token.
  *
- * Path resolution rules (per Phase 0 decision):
- *   1. If DUYA_CLI_USER_DATA_DIR is set, use it verbatim. This is the only
- *      escape hatch for dev / test environments; we never guess -dev
- *      suffixes, never read NODE_ENV, and never infer the dev userData.
- *   2. Otherwise resolve by platform, matching Electron's app.getPath('userData'):
+ * Path resolution rules:
+ *   1. If DUYA_CLI_USER_DATA_DIR is set, use it verbatim.
+ *   2. Otherwise read the shared Data root (`~/.duya` by default).
+ *   3. Outside tests, fall back to legacy Electron userData directories:
  *      - Windows: %APPDATA%/DUYA
  *      - macOS:   ~/Library/Application Support/DUYA
  *      - Linux:   $XDG_DATA_HOME/DUYA  ||  ~/.local/share/DUYA
@@ -22,6 +21,7 @@ import { promises as fs } from 'fs';
 import { existsSync } from 'fs';
 import { join, isAbsolute } from 'path';
 import { homedir, platform } from 'os';
+import { resolveDataRoot } from '@duya/data/data-paths';
 
 export interface CliApiRuntime {
   port: number;
@@ -36,10 +36,10 @@ export type RuntimeLookupResult =
   | { kind: 'malformed'; reason: string; runtimePath: string };
 
 /**
- * Resolve the userData directory the CLI should use.
+ * Resolve the canonical data directory the CLI should use.
  *
  *   1. DUYA_CLI_USER_DATA_DIR (explicit override; for dev / test only)
- *   2. Platform default
+ *   2. DUYA_DATA_ROOT or `~/.duya`
  *
  * Returns an absolute path. Throws if the resolved directory does not
  * exist (e.g. the desktop app has never been launched on this machine).
@@ -54,21 +54,7 @@ export function resolveUserDataDir(): string {
     return abs;
   }
 
-  const plat = platform();
-  let userData: string;
-  if (plat === 'win32') {
-    const appData = process.env.APPDATA;
-    if (!appData) {
-      throw new CliUserDataMissingError('%APPDATA% is not set');
-    }
-    userData = join(appData, 'DUYA');
-  } else if (plat === 'darwin') {
-    userData = join(homedir(), 'Library', 'Application Support', 'DUYA');
-  } else {
-    const xdg = process.env.XDG_DATA_HOME;
-    userData = xdg ? join(xdg, 'DUYA') : join(homedir(), '.local', 'share', 'DUYA');
-  }
-
+  const userData = resolveDataRoot();
   if (!existsSync(userData)) {
     throw new CliUserDataMissingError(userData);
   }
@@ -96,11 +82,9 @@ export function getRuntimeFilePath(userDataDir: string): string {
  *   1. If DUYA_CLI_USER_DATA_DIR is set, return only that single path
  *      (no dev fallback — the user explicitly chose a directory).
  *      The path is returned only if it exists on disk.
- *   2. Otherwise return [platform default, platform default + '/duya-dev'],
- *      filtered by existsSync. The dev subdirectory is the userData
- *      used by `setupDevMode()` in electron/core/bootstrap.ts during
- *      development, so probing it lets the CLI talk to a dev instance
- *      without any environment variable configuration.
+ *   2. Otherwise return the canonical Data root first, followed by the old
+ *      platform userData and its `duya-dev` subdirectory. Test runs only probe
+ *      the canonical root so they cannot attach to a production Desktop process.
  *
  * Never throws. Returns an empty array if neither directory exists
  * (the caller decides how to report that).
@@ -112,23 +96,13 @@ function collectCandidateUserDataDirs(): string[] {
     return existsSync(abs) ? [abs] : [];
   }
 
-  const plat = platform();
-  let prod: string;
-  if (plat === 'win32') {
-    const appData = process.env.APPDATA;
-    if (!appData) return [];
-    prod = join(appData, 'DUYA');
-  } else if (plat === 'darwin') {
-    prod = join(homedir(), 'Library', 'Application Support', 'DUYA');
-  } else {
-    const xdg = process.env.XDG_DATA_HOME;
-    prod = xdg ? join(xdg, 'DUYA') : join(homedir(), '.local', 'share', 'DUYA');
+  const candidates = [resolveDataRoot()];
+  if (process.env.DUYA_TEST !== '1') {
+    const legacyUserData = resolveLegacyUserDataDir();
+    if (legacyUserData) candidates.push(legacyUserData, join(legacyUserData, 'duya-dev'));
   }
 
-  const candidates = [prod, join(prod, 'duya-dev')];
-  // Deduplicate (dev dir is a subdir, so no real dupes, but be safe) and
-  // filter by existence. Order matters: prod is tried first so a running
-  // packaged build always wins over a stale dev runtime.
+  // Preserve candidate order: the shared Data root wins over a legacy runtime.
   const seen = new Set<string>();
   const result: string[] = [];
   for (const dir of candidates) {
@@ -138,6 +112,17 @@ function collectCandidateUserDataDirs(): string[] {
     if (existsSync(dir)) result.push(dir);
   }
   return result;
+}
+
+function resolveLegacyUserDataDir(): string | null {
+  const plat = platform();
+  if (plat === 'win32') {
+    const appData = process.env.APPDATA;
+    return appData ? join(appData, 'DUYA') : null;
+  }
+  if (plat === 'darwin') return join(homedir(), 'Library', 'Application Support', 'DUYA');
+  const xdg = process.env.XDG_DATA_HOME;
+  return xdg ? join(xdg, 'DUYA') : join(homedir(), '.local', 'share', 'DUYA');
 }
 
 /**
@@ -164,12 +149,10 @@ export function isPidAlive(pid: number | undefined): boolean {
 export async function readCliApiRuntime(): Promise<RuntimeLookupResult> {
   const candidates = collectCandidateUserDataDirs();
 
-  // Preserve the original "userData missing" contract: if neither the prod
-  // directory nor the dev subdirectory exists, the desktop app has never
-  // been launched on this machine. status/session/plugin commands catch
-  // this to print a friendly "launch the app first" hint.
+  // If neither the shared data root nor a legacy directory exists, surface a
+  // friendly message pointing at the canonical root.
   if (candidates.length === 0) {
-    // Reuse resolveUserDataDir() to throw with the canonical prod path in
+    // Reuse resolveUserDataDir() to throw with the canonical data path in
     // the error message (it throws CliUserDataMissingError when the dir
     // does not exist).
     resolveUserDataDir();
@@ -179,10 +162,8 @@ export async function readCliApiRuntime(): Promise<RuntimeLookupResult> {
     candidates.push(resolveUserDataDir());
   }
 
-  // Probe each candidate in order (prod first, then dev fallback).
-  // Track the first "not_running" result from prod so we can return it
-  // (with the prod path) if the dev fallback also fails — this keeps the
-  // error message pointing at the canonical path rather than a subdir.
+  // Probe each candidate in order, preferring the shared root over legacy
+  // Desktop paths. Keep the first failure for a useful canonical-path error.
   let staleResult: RuntimeLookupResult | null = null;
 
   for (const userDataDir of candidates) {

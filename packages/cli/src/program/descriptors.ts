@@ -276,6 +276,13 @@ const subSessionList: CliSubcommand = {
   run: adaptPaginated(runSessionCommand.list as LegacyFn),
 };
 
+const subSessionCreate: CliSubcommand = {
+  description: 'Create a durable session through the running local Duya Host',
+  args: [{ name: 'title', required: true, description: 'Session title' }],
+  write: true,
+  run: async (ctx) => ok(await runSessionCommand.create(ctx)),
+};
+
 const subSessionShow: CliSubcommand = {
   description: 'Show details for one top-level session (adds createdAt + model)',
   args: [{ name: 'id', required: true, description: 'Session id' }],
@@ -1114,8 +1121,9 @@ export const CLI_DESCRIPTORS = defineDescriptors([
   },
   {
     name: 'session',
-    description: 'Session management (list / show / search / export / import)',
+    description: 'Session management (create / list / show / search / export / import)',
     subcommands: {
+      create: subSessionCreate,
       list: subSessionList,
       show: subSessionShow,
       search: subSessionSearch,

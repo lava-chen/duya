@@ -1,0 +1,263 @@
+{
+  "name": "@duya/host",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Electron-independent Duya Host services and composition ports.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./session-api": {
+      "types": "./dist/session-api.d.ts",
+      "import": "./dist/session-api.js"
+    },
+    "./local-session-api": {
+      "types": "./dist/local-session-api.d.ts",
+      "import": "./dist/local-session-api.js"
+    },
+    "./local-project-api": {
+      "types": "./dist/local-project-api.d.ts",
+      "import": "./dist/local-project-api.js"
+    },
+    "./local-rollout-api": {
+      "types": "./dist/local-rollout-api.d.ts",
+      "import": "./dist/local-rollout-api.js"
+    },
+    "./local-attachment-api": {
+      "types": "./dist/local-attachment-api.d.ts",
+      "import": "./dist/local-attachment-api.js"
+    },
+    "./local-settings-api": {
+      "types": "./dist/local-settings-api.d.ts",
+      "import": "./dist/local-settings-api.js"
+    },
+    "./local-terminal-history-api": {
+      "types": "./dist/local-terminal-history-api.d.ts",
+      "import": "./dist/local-terminal-history-api.js"
+    },
+    "./local-gateway-user-map-api": {
+      "types": "./dist/local-gateway-user-map-api.d.ts",
+      "import": "./dist/local-gateway-user-map-api.js"
+    },
+    "./local-channel-persistence-api": {
+      "types": "./dist/local-channel-persistence-api.d.ts",
+      "import": "./dist/local-channel-persistence-api.js"
+    },
+    "./local-agent-profile-api": {
+      "types": "./dist/local-agent-profile-api.d.ts",
+      "import": "./dist/local-agent-profile-api.js"
+    },
+    "./local-gateway-directory-api": {
+      "types": "./dist/local-gateway-directory-api.d.ts",
+      "import": "./dist/local-gateway-directory-api.js"
+    },
+    "./local-gateway-allowlist-api": {
+      "types": "./dist/local-gateway-allowlist-api.d.ts",
+      "import": "./dist/local-gateway-allowlist-api.js"
+    },
+    "./local-gateway-message-mirror-api": {
+      "types": "./dist/local-gateway-message-mirror-api.d.ts",
+      "import": "./dist/local-gateway-message-mirror-api.js"
+    },
+    "./local-gateway-thread-api": {
+      "types": "./dist/local-gateway-thread-api.d.ts",
+      "import": "./dist/local-gateway-thread-api.js"
+    },
+    "./local-send-message-state-api": {
+      "types": "./dist/local-send-message-state-api.d.ts",
+      "import": "./dist/local-send-message-state-api.js"
+    },
+    "./local-model-capability-api": {
+      "types": "./dist/local-model-capability-api.d.ts",
+      "import": "./dist/local-model-capability-api.js"
+    },
+    "./local-provider-model-capability-api": {
+      "types": "./dist/local-provider-model-capability-api.d.ts",
+      "import": "./dist/local-provider-model-capability-api.js"
+    },
+    "./local-app-connection-api": {
+      "types": "./dist/local-app-connection-api.d.ts",
+      "import": "./dist/local-app-connection-api.js"
+    },
+    "./local-plugin-setup-api": {
+      "types": "./dist/local-plugin-setup-api.d.ts",
+      "import": "./dist/local-plugin-setup-api.js"
+    },
+    "./local-workbench-api": {
+      "types": "./dist/local-workbench-api.d.ts",
+      "import": "./dist/local-workbench-api.js"
+    },
+    "./local-import-batch-api": {
+      "types": "./dist/local-import-batch-api.d.ts",
+      "import": "./dist/local-import-batch-api.js"
+    },
+    "./local-turn-review-api": {
+      "types": "./dist/local-turn-review-api.d.ts",
+      "import": "./dist/local-turn-review-api.js"
+    },
+    "./local-mailbox-api": {
+      "types": "./dist/local-mailbox-api.d.ts",
+      "import": "./dist/local-mailbox-api.js"
+    },
+    "./workflow-run-api": {
+      "types": "./dist/workflow-run-api.d.ts",
+      "import": "./dist/workflow-run-api.js"
+    },
+    "./run-api": {
+      "types": "./dist/run-api.d.ts",
+      "import": "./dist/run-api.js"
+    },
+    "./workspace-access": {
+      "types": "./dist/workspace-access.d.ts",
+      "import": "./dist/workspace-access.js"
+    },
+    "./task-api": {
+      "types": "./dist/task-api.d.ts",
+      "import": "./dist/task-api.js"
+    },
+    "./project-api": {
+      "types": "./dist/project-api.d.ts",
+      "import": "./dist/project-api.js"
+    },
+    "./research-api": {
+      "types": "./dist/research-api.d.ts",
+      "import": "./dist/research-api.js"
+    },
+    "./permission-request-api": {
+      "types": "./dist/permission-request-api.d.ts",
+      "import": "./dist/permission-request-api.js"
+    },
+    "./tool-approval-api": {
+      "types": "./dist/tool-approval-api.d.ts",
+      "import": "./dist/tool-approval-api.js"
+    },
+    "./lock-api": {
+      "types": "./dist/lock-api.d.ts",
+      "import": "./dist/lock-api.js"
+    },
+    "./goal-api": {
+      "types": "./dist/goal-api.d.ts",
+      "import": "./dist/goal-api.js"
+    },
+    "./mode-state-api": {
+      "types": "./dist/mode-state-api.d.ts",
+      "import": "./dist/mode-state-api.js"
+    },
+    "./http-server": {
+      "types": "./dist/http-server.d.ts",
+      "import": "./dist/http-server.js"
+    },
+    "./http-client": {
+      "types": "./dist/http-client.d.ts",
+      "import": "./dist/http-client.js"
+    },
+    "./local-host": {
+      "types": "./dist/local-host.d.ts",
+      "import": "./dist/local-host.js"
+    },
+    "./manifest-factory": {
+      "types": "./dist/manifest-factory.d.ts",
+      "import": "./dist/manifest-factory.js"
+    },
+    "./run-engine-model": {
+      "types": "./dist/run-engine-model.d.ts",
+      "import": "./dist/run-engine-model.js"
+    },
+    "./run-event-spine": {
+      "types": "./dist/run-event-spine.d.ts",
+      "import": "./dist/run-event-spine.js"
+    },
+    "./run-engine-execution": {
+      "types": "./dist/run-engine-execution.d.ts",
+      "import": "./dist/run-engine-execution.js"
+    },
+    "./worker-limits": {
+      "types": "./dist/worker-limits.d.ts",
+      "import": "./dist/worker-limits.js"
+    },
+    "./worker-manager": {
+      "types": "./dist/worker-manager.d.ts",
+      "import": "./dist/worker-manager.js"
+    },
+    "./worker-session-registry": {
+      "types": "./dist/worker-session-registry.d.ts",
+      "import": "./dist/worker-session-registry.js"
+    },
+    "./run-orchestrator": {
+      "types": "./dist/run-orchestrator.d.ts",
+      "import": "./dist/run-orchestrator.js"
+    },
+    "./control-plane-service": {
+      "types": "./dist/control-plane-service.d.ts",
+      "import": "./dist/control-plane-service.js"
+    },
+    "./command-receipt": {
+      "types": "./dist/command-receipt.d.ts",
+      "import": "./dist/command-receipt.js"
+    },
+    "./run-receipt": {
+      "types": "./dist/run-receipt.d.ts",
+      "import": "./dist/run-receipt.js"
+    },
+    "./repository-port": {
+      "types": "./dist/repository-port.d.ts",
+      "import": "./dist/repository-port.js"
+    },
+    "./trusted-sender-core": {
+      "types": "./dist/trusted-sender-core.d.ts",
+      "import": "./dist/trusted-sender-core.js"
+    },
+    "./run-control-plane": {
+      "types": "./dist/run-control-plane.d.ts",
+      "import": "./dist/run-control-plane.js"
+    },
+    "./ipc-message-adapters": {
+      "types": "./dist/ipc-message-adapters.d.ts",
+      "import": "./dist/ipc-message-adapters.js"
+    },
+    "./ipc-row-adapters": {
+      "types": "./dist/ipc-row-adapters.d.ts",
+      "import": "./dist/ipc-row-adapters.js"
+    },
+    "./channel-prompts": {
+      "types": "./dist/channel-prompts.d.ts",
+      "import": "./dist/channel-prompts.js"
+    },
+    "./group-turn": {
+      "types": "./dist/group-turn.d.ts",
+      "import": "./dist/group-turn.js"
+    },
+    "./local-sidebar-sections-api": {
+      "types": "./dist/local-sidebar-sections-api.d.ts",
+      "import": "./dist/local-sidebar-sections-api.js"
+    },
+    "./local-usage-api": {
+      "types": "./dist/local-usage-api.d.ts",
+      "import": "./dist/local-usage-api.js"
+    },
+    "./agent-profile-config": {
+      "types": "./dist/agent-profile-config.d.ts",
+      "import": "./dist/agent-profile-config.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "clean": "node -e \"for(const t of ['dist','tsconfig.tsbuildinfo'])require('fs').rmSync(t,{recursive:true,force:true})\"",
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@duya/agent-runtime": "0.1.0",
+    "@duya/agent-protocol": "0.1.0",
+    "@duya/ai": "0.1.0",
+    "@duya/data": "0.1.0",
+    "@iarna/toml": "^2.2.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  }
+}

@@ -70,6 +70,8 @@ export interface ResolvedProvider {
   apiKey: string;
   /** Deterministic model pick; `model` is always set when this resolves. */
   model: ResolvedModel;
+  /** Models declared by this provider, with its resolved model included. */
+  models: string[];
 }
 
 export interface CliSettings {
@@ -254,6 +256,7 @@ export function resolveModel(
 export function resolveProvider(
   explicitModel?: string,
   configRootOverride?: string,
+  explicitProviderId?: string,
 ): ProviderResolution {
   const root = configRootOverride ?? resolveConfigRoot();
   const configPath = path.join(root, 'config.toml');
@@ -296,7 +299,11 @@ export function resolveProvider(
     };
   }
 
-  const providerId = typeof doc.model?.provider === 'string' ? doc.model.provider.trim() : '';
+  // An explicit provider id (e.g. the run manifest's frozen agent selection)
+  // wins over `[model].provider` in config.toml.
+  const providerId =
+    explicitProviderId?.trim() ||
+    (typeof doc.model?.provider === 'string' ? doc.model.provider.trim() : '');
   if (!providerId) {
     return {
       ok: false,
@@ -368,6 +375,9 @@ export function resolveProvider(
   }
 
   const options = isPlainObject(entry.options) ? entry.options : undefined;
+  const enabledModels = Array.isArray(options?.enabled_models)
+    ? options.enabled_models.filter((value): value is string => typeof value === 'string' && value.trim() !== '')
+    : [];
   const configDefault = typeof doc.model?.default === 'string' ? doc.model.default : undefined;
   const model = resolveModel(explicitModel, options, configDefault);
   if (!model.model) {
@@ -396,6 +406,13 @@ export function resolveProvider(
       baseUrl: providerBaseUrl || configBaseUrl,
       apiKey,
       model,
+      models: [...new Set([
+        ...enabledModels,
+        ...(typeof options?.defaultModel === 'string' && options.defaultModel.trim() !== ''
+          ? [options.defaultModel]
+          : []),
+        model.model,
+      ])],
     },
   };
 }

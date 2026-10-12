@@ -102,22 +102,16 @@ import { launchSavedWorkflow } from './workflow-runner.js';
 import { runWorkflowRuntimeChild } from './workflow-runtime-child.js';
 import { MemoryArtifactStore } from '../modes/workflow/gui-artifacts.js';
 import { resolveChatStartAgentMode, manifestPermissionMode } from './permission-profile-bridge.js';
-// Plan 600 S2: the run execution engine and its port contracts. The engine OWNS
-// the turn loop; this file supplies mechanisms and forwards events, which is the
-// whole of the worker's job under `04-runtime-owns-execution.md` section 2 item 3.
-//
-// It NO LONGER RUNS ONE. The `RunEngineImpl` construction and the
-// `buildEnginePorts` bundle that went with it were removed with the phantom run
-// (see the `chat:start` handler), because a run whose model port yields nothing
-// cannot be completed by wiring it better -- and leaving it live meant every
-// `chat:start` also minted a failed terminal for a run that never spoke.
-// `ModelContentBlock` is still needed for `toEngineContent`; the rest of the
-// engine's types moved out with their last use.
+// Plan 600 S2: the run execution engine and its port contracts. The live
+// `chat:start` handler calls `driveRunWithEngine`; that driver constructs
+// `RunEngineImpl` and owns the turn loop. This entry still supplies the legacy
+// agent mechanisms used to assemble the run, then forwards the driver's events.
+// The loop moved; the production worker's dependency on `DuyaAgent` did not.
+// `ModelContentBlock` remains needed by `toEngineContent`.
 import type { ModelContentBlock } from '@duya/agent-runtime';
-// Plan 600 S2: the per-run publisher each turn's pipeline is published into, so
-// a `ToolPort` can reach the live turn once the cutover binds one. Nothing
-// publishes into it today -- `DuyaAgent.streamChat` still builds and drains the
-// pipeline itself -- so it is retained as the seam, not as a live mechanism.
+// Plan 610 S4c-d2a: the per-run publisher passed to `driveRunWithEngine`, so the
+// engine's `ToolPort` reaches the same live pipeline the legacy agent assembles.
+// The agent still owns pipeline creation; the engine owns dispatch and draining.
 import { TurnPipelinePublisher } from '../tool/turn-pipeline-publisher.js';
 import { applyMCPConfiguration, type MCPApplyResult } from '../mcp/apply.js';
 import { storePendingAnswer, takePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
@@ -130,6 +124,7 @@ import type { ProbeConfig } from '../utils/model-capability-cache.js';
 import type { ToolExecutor } from '../tool/registry.js';
 import { estimateMessagesTokens } from '../compact/tokenBudget.js';
 import type { ApiFormat, ModelCompat } from '@duya/ai';
+import { resolveProvider } from '../cli/config/file-config.js';
 
 // Polyfill globalThis.crypto for Node.js
 if (typeof globalThis.crypto === 'undefined' || !globalThis.crypto.randomUUID) {
@@ -4217,10 +4212,83 @@ async function reloadMCP(): Promise<void> {
 // Main Message Loop (stdin/stdout JSON-RPC)
 // ============================================================================
 
+/**
+ * Plan 587/12 gate 4: build the init command a Host-spawned worker needs when
+ * no Desktop main sent one. Provider/model resolution is the SAME file-based
+ * resolution the CLI chat uses (config.toml `[providers]` + secrets.json flat
+ * keys) — the Host never sees a credential. Returns null (after reporting a
+ * chat:error) when the local configuration cannot produce a runnable provider.
+ */
+function buildSelfInitMessage(msg: ChatStartMessage): InitMessage | null {
+  // The manifest's cwd is the Control-Plane-validated workspace for this run;
+  // a worker without a manifest falls back to its own cwd.
+  const workingDirectory = msg.manifest?.cwd || process.cwd();
+  // The manifest's frozen agent selection (model + providerId) is the
+  // Control-Plane-validated configuration decision for this run; it wins over
+  // config.toml's `[model]` defaults. resolveProvider only reads local config
+  // files (config.toml + secrets.json) for the matching credential.
+  const selection = msg.manifest?.agent;
+  const resolution = resolveProvider(
+    selection?.model,
+    undefined,
+    selection?.providerId ?? undefined,
+  );
+  if (!resolution.ok) {
+    sendToMain({
+      type: 'chat:error',
+      message: `worker self-init could not resolve a provider: ${resolution.message}`,
+      sessionId: msg.sessionId,
+    });
+    return null;
+  }
+  const provider = resolution.provider;
+  return {
+    type: 'init',
+    sessionId: msg.sessionId,
+    providerConfig: {
+      apiKey: provider.apiKey,
+      ...(provider.baseUrl ? { baseURL: provider.baseUrl } : {}),
+      model: provider.model.model,
+      // `protocol` is exactly the three-value discriminator InitMessage wants
+      // ('anthropic' | 'openai' | 'ollama'); openai-compatible and openrouter
+      // both map to 'openai'.
+      provider: provider.protocol,
+      authStyle: 'api_key',
+    },
+    workingDirectory,
+    language: 'zh',
+  };
+}
+
 async function handleCommand(msg: WorkerCommand): Promise<void> {
   const msgType = msg.type as string;
   if (msgType !== 'db:response') {
     log('[Agent-Process] Received command:', msgType, 'sessionId:', (msg as Record<string, unknown>).sessionId);
+  }
+
+  // Plan 587/12 gate 4: a HOST-spawned worker (duya serve / duya chat) receives
+  // `chat:start` with no Desktop-style `init` first — the Host owns execution
+  // supervision and deliberately never touches provider credentials, so there
+  // is nobody to send init. Self-initialize from config.toml + secrets.json
+  // (the same files the CLI resolves), then run the queued turn. The Desktop
+  // path is unchanged: it always sends an explicit init whose renderer-chosen
+  // providerConfig wins, so this branch never fires there.
+  if (msgType === 'chat:start' && !agent && !chatInProgress) {
+    const selfInit = buildSelfInitMessage(msg as ChatStartMessage);
+    if (selfInit !== null) {
+      log('[Agent-Process] No init received; self-initializing from config.toml');
+      await handleCommand(selfInit);
+      if (agent !== null) {
+        await handleChatStart(msg as ChatStartMessage);
+      } else {
+        sendToMain({
+          type: 'chat:error',
+          message: 'worker self-initialization from config.toml failed; see worker logs',
+          sessionId: (msg as ChatStartMessage).sessionId,
+        });
+      }
+      return;
+    }
   }
 
   switch (msgType) {

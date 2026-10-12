@@ -13,6 +13,15 @@ import { CliApiClient } from '../api/client.js';
 import { CliApiError } from '../api/errors.js';
 import { renderJson, type OutputFormat } from '../api/format.js';
 import { CliUserDataMissingError } from '../api/runtime-config.js';
+import { HostSessionHttpClient } from '@duya/host/http-client';
+import { readLocalHostRuntime } from '@duya/host/local-host';
+
+async function connectLocalHost(): Promise<HostSessionHttpClient | null> {
+  const runtime = await readLocalHostRuntime();
+  return runtime
+    ? new HostSessionHttpClient(`http://${runtime.host}:${runtime.port}`, runtime.token)
+    : null;
+}
 
 interface ListSessionItem {
   id: string;
@@ -103,6 +112,24 @@ async function listSessions(
   const query = params.toString();
   const path = '/v1/sessions' + (query ? '?' + query : '');
   try {
+    const host = await connectLocalHost();
+    if (host) {
+      const page = await host.list({
+        includeArchived: true,
+        ...(pagination?.limit === undefined ? {} : { limit: Number(pagination.limit) }),
+        ...(pagination?.offset === undefined ? {} : { offset: Number(pagination.offset) }),
+      });
+      const sessions = page.sessions.map(({ session, timelineCount }) => ({
+        id: session.id,
+        title: session.title,
+        updatedAt: session.updatedAt,
+        messageCount: timelineCount,
+      }));
+      process.stdout.write(
+        format === 'json' ? renderJson({ sessions }) + '\n' : renderListText(sessions) + '\n',
+      );
+      return 0;
+    }
     const client = await CliApiClient.connect();
     const body = await client.get<{ sessions: ListSessionItem[] }>(path);
     process.stdout.write(
@@ -120,6 +147,24 @@ async function showSession(id: string, format: OutputFormat): Promise<number> {
     return 1;
   }
   try {
+    const host = await connectLocalHost();
+    if (host) {
+      const session = await host.get(id);
+      if (!session) {
+        process.stderr.write(`Session not found: ${id}\n`);
+        return 1;
+      }
+      const item = {
+        id: session.id,
+        title: session.title,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        model: session.model,
+        messageCount: await host.countTimeline(id),
+      };
+      process.stdout.write(format === 'json' ? renderJson(item) + '\n' : renderShowText(item) + '\n');
+      return 0;
+    }
     const client = await CliApiClient.connect();
     const body = await client.get<ShowSessionItem>(
       '/v1/sessions/' + encodeURIComponent(id),
@@ -256,5 +301,26 @@ export const runSessionCommand = {
   },
   import: (ctx: { args: string[] }): Promise<number> => {
     return importSession(ctx.args[0]);
+  },
+  create: async (ctx: { args: string[] }): Promise<number> => {
+    const title = ctx.args[0]?.trim();
+    if (!title) {
+      process.stderr.write('usage: duya session create <title>\n');
+      return 64;
+    }
+    try {
+      const host = await connectLocalHost();
+      const session = host
+        ? await host.create({ title })
+        : await (await CliApiClient.connect()).post<{ session: { id: string; title: string } }>(
+            '/v1/sessions',
+            { title },
+          ).then((result) => result.session);
+      process.stdout.write(`Created session ${session.id} (${session.title})\n`);
+      return 0;
+    } catch (error) {
+      process.stderr.write(`Could not create session: ${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
   },
 };

@@ -26,6 +26,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { startLocalHost } from '@duya/host/local-host';
 import { buildControlPlane } from './program/build-control-plane.js';
+import { runChatCommand, type ChatCommandOptions } from './chat.js';
 
 export { CLI_DESCRIPTORS } from './program/descriptors.js';
 export type { CliCommandPath, ExitCode } from './program/registry.js';
@@ -79,9 +80,15 @@ export function buildProgram(): Command {
     }
 
     try {
-      const host = await startLocalHost({ port });
+      const workerPath = resolveServeWorkerPath();
+      const host = await startLocalHost({ port, ...(workerPath === undefined ? {} : { workerPath }) });
       process.stdout.write(`Duya Host listening at ${host.origin}\n`);
       process.stdout.write(`Runtime descriptor: ${host.runtimeFilePath}\n`);
+      process.stdout.write(
+        workerPath === undefined
+          ? 'Execution: LEDGER-ONLY (no worker entry found; set DUYA_HOST_WORKER_PATH)\n'
+          : `Execution: enabled (worker: ${workerPath})\n`,
+      );
       let stopping = false;
       const stop = (): void => {
         if (stopping) return;
@@ -99,6 +106,34 @@ export function buildProgram(): Command {
       process.stderr.write(`Could not start Duya Host: ${error instanceof Error ? error.message : String(error)}\n`);
       process.exitCode = 1;
     }
+  });
+
+  // `duya chat` — the Host-backed chat client (plan 587/12 gate 4). It holds
+  // no agent runtime: every turn is a Host run (start → durable events →
+  // terminal), the same path the Desktop uses.
+  const chat = program.command('chat').description('Chat through a running Duya Host (start one with `duya serve`)');
+  chat.option('--origin <origin>', 'Host origin, e.g. http://127.0.0.1:43110 (else DUYA_HOST_ORIGIN or the runtime descriptor)');
+  chat.option('--token <token>', 'Host auth token (else DUYA_HOST_TOKEN or the runtime descriptor)');
+  chat.option('--runtime-file <file>', 'Runtime descriptor path (default <dataRoot>/runtime/host-api.json)');
+  chat.option('--session <id>', 'Continue an existing session instead of creating one');
+  chat.option('--model <model>', 'Model override for the runs started by this chat');
+  chat.option('--provider <id>', 'Provider override for the runs started by this chat (e.g. deepseek, glm-cn)');
+  chat.option('--api-format <format>', 'API format override: anthropic | openai');
+  chat.option('-p, --print <prompt>', 'Run a single prompt and exit (non-interactive)');
+  chat.action(async () => {
+    const asString = (value: unknown): string | undefined =>
+      typeof value === 'string' && value.length > 0 ? value : undefined;
+    const options: ChatCommandOptions = {
+      origin: asString(chat.getOptionValue('origin')),
+      token: asString(chat.getOptionValue('token')),
+      runtimeFile: asString(chat.getOptionValue('runtime-file')),
+      session: asString(chat.getOptionValue('session')),
+      model: asString(chat.getOptionValue('model')),
+      providerId: asString(chat.getOptionValue('provider')),
+      apiFormat: asString(chat.getOptionValue('api-format')) as 'anthropic' | 'openai' | undefined,
+      print: asString(chat.getOptionValue('print')),
+    };
+    process.exitCode = await runChatCommand(options);
   });
   return program;
 }

@@ -40,6 +40,7 @@ import type { HostWorkspaceAccess } from './session-api.js';
 import { createHostSessionApi, createHostWorkspaceRegistrationApi } from './session-api.js';
 import { HostSessionHttpServer } from './http-server.js';
 import { createHostLocalRolloutApi } from './local-rollout-api.js';
+import { createHostLocalSessionApi } from './local-session-api.js';
 import { createHostLocalAttachmentApi } from './local-attachment-api.js';
 import { createHostLocalSettingsApi } from './local-settings-api.js';
 import { createHostLocalTerminalHistoryApi } from './local-terminal-history-api.js';
@@ -363,6 +364,10 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     // compose the run execution controller over the SAME stores the ledger
     // APIs serve, and hand it to the HTTP server. Without it the Host stays a
     // ledger-only composition.
+    const goalApi = createHostGoalApi(core.stores);
+    const modeStateApi = createHostModeStateApi(core.stores);
+    const taskApi = createHostTaskApi(core.stores);
+    const lockApi = createHostLockApi(core.stores);
     let runExecution: HostRunExecutionController | null = null;
     if (options.workerPath !== undefined) {
       const executionLogger: HostRunExecutionLogger = {
@@ -376,16 +381,12 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
         sessionDefaults: async (sessionId) => {
           const row = core.stores.sessions.get(sessionId);
           if (row === null) return null;
-          const fields = row as unknown as Record<string, unknown>;
-          const workingDirectory = typeof fields.working_directory === 'string' && fields.working_directory !== ''
-            ? fields.working_directory
-            : dataRoot;
+          const workingDirectory =
+            row.workingDirectory !== '' ? row.workingDirectory : dataRoot;
           return {
             workingDirectory,
-            ...(typeof fields.model === 'string' && fields.model !== '' ? { model: fields.model } : {}),
-            ...(typeof fields.provider_id === 'string' && fields.provider_id !== ''
-              ? { providerId: fields.provider_id }
-              : {}),
+            ...(row.model !== '' ? { model: row.model } : {}),
+            ...(row.providerId !== '' ? { providerId: row.providerId } : {}),
           };
         },
         bridge: createHostWorkerDbBridge({
@@ -393,6 +394,15 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           sessions: core.stores.sessions,
           settings,
           mainDatabase,
+          timeline: api,
+          localSessions: {
+            readLocalSession: (sessionId) =>
+              Promise.resolve(core.stores.sessions.get(sessionId)),
+          },
+          goalApi,
+          lockApi,
+          modeStateApi,
+          taskApi,
           logger: executionLogger,
         }),
         logger: executionLogger,
@@ -406,6 +416,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
 
     server = new HostSessionHttpServer({
       api,
+      localSessionApi: createHostLocalSessionApi({ stores: core.stores, sessions: api }),
       localRolloutApi: createHostLocalRolloutApi({ stores: core.stores, sessions: api, rolloutRoot }),
       localAttachmentApi: createHostLocalAttachmentApi({
         stores: core.stores,
@@ -442,14 +453,14 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       workflowRunApi: createHostWorkflowRunApi(core.stores),
       runApi: createHostRunApi(core.stores),
       ...(runExecution === undefined || runExecution === null ? {} : { runExecutionApi: runExecution }),
-      goalApi: createHostGoalApi(core.stores),
-      modeStateApi: createHostModeStateApi(core.stores),
-      taskApi: createHostTaskApi(core.stores),
+      goalApi,
+      modeStateApi,
+      taskApi,
       projectApi: createHostProjectApi(core.stores.projects),
       researchApi: createHostResearchApi(core.stores),
       permissionRequestApi: createHostPermissionRequestApi(core.stores),
       toolApprovalApi: createHostToolApprovalApi(mainDatabase.db),
-      lockApi: createHostLockApi(core.stores),
+      lockApi,
       workspaceApi,
       host: HOST,
       port: options.port ?? DEFAULT_PORT,

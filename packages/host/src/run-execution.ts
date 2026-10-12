@@ -280,7 +280,10 @@ export class HostRunExecutionController {
 
   async #onWorkerMessage(sessionId: string, msg: Record<string, unknown>): Promise<void> {
     const type = msg.type;
-    if (type === 'db:request') return; // served by #serveDbRequest on the child listener
+    if (type === 'db:request') {
+      await this.#serveDbRequest(sessionId, msg);
+      return;
+    }
 
     if (typeof type === 'string' && (type.startsWith('chat:') || type.startsWith('compact:'))) {
       const normalized = normalizeWorkerEvent(msg);
