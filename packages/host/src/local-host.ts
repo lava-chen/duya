@@ -139,11 +139,26 @@ export interface StartLocalHostOptions {
   readonly workerPath?: string;
   /** better-sqlite3 directory for the worker environment; defaults to ./node_modules. */
   readonly betterSqlite3Path?: string;
+  /**
+   * Logger for Host-owned run execution. Defaults to a `console.*`-backed
+   * implementation that tags every line with `[host-run]`. Embedders whose
+   * stdout is occupied (e.g. the full-screen TUI) should pass a logger that
+   * drops info/debug or writes to a file.
+   */
+  readonly executionLogger?: HostRunExecutionLogger;
+  /**
+   * When true, the Host does not write a runtime descriptor file and does not
+   * acquire a process lock. Suitable for short-lived embedded use (e.g. `duya tui`).
+   * The caller owns the Host lifecycle; process exit is the only clean shutdown.
+   */
+  readonly ephemeral?: boolean;
 }
 
 export interface LocalHostHandle {
   readonly origin: string;
   readonly port: number;
+  /** Defined when the Host was started with a stable token; undefined in ephemeral mode. */
+  readonly token?: string;
   readonly runtimeFilePath: string;
   close(): Promise<void>;
 }
@@ -312,7 +327,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
   const rolloutRoot = path.resolve(options.rolloutRoot ?? settings.rolloutRoot ?? dataRoot);
   const attachmentsRoot = path.resolve(options.attachmentsRoot ?? settings.attachmentsRoot ?? path.join(dataRoot, 'attachments'));
   const runtimeFilePath = path.resolve(options.runtimeFilePath ?? path.join(dataRoot, 'runtime', 'host-api.json'));
-  const lockPath = acquireHostLock(path.dirname(runtimeFilePath));
+  const lockPath = options.ephemeral ? '' : acquireHostLock(path.dirname(runtimeFilePath));
   const databaseHost = new DatabaseHost();
   let server: HostSessionHttpServer | null = null;
   let runtime: LocalHostRuntime | null = null;
@@ -370,7 +385,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     const lockApi = createHostLockApi(core.stores);
     let runExecution: HostRunExecutionController | null = null;
     if (options.workerPath !== undefined) {
-      const executionLogger: HostRunExecutionLogger = {
+      const executionLogger: HostRunExecutionLogger = options.executionLogger ?? {
         info: (message, context) => console.info(`[host-run] ${message}`, context ?? ''),
         warn: (message, context) => console.warn(`[host-run] ${message}`, context ?? ''),
         error: (message, error, context) => console.error(`[host-run] ${message}`, error?.message ?? '', context ?? ''),
@@ -475,12 +490,13 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       pid: process.pid,
       startedAt: Date.now(),
     };
-    writeRuntimeFile(runtimeFilePath, runtime);
+    if (!options.ephemeral) writeRuntimeFile(runtimeFilePath, runtime);
 
     let closed = false;
     return {
       origin: `http://${HOST}:${server.port}`,
       port: server.port,
+      token: runtime?.token,
       runtimeFilePath,
       close: async () => {
         if (closed) return;
@@ -496,16 +512,18 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           } catch {
             // A worker that already exited is not a shutdown failure.
           }
-          removeOwnedFile(runtimeFilePath, (value) => value.pid === process.pid && value.token === runtime?.token);
+          if (!options.ephemeral) {
+            removeOwnedFile(runtimeFilePath, (value) => value.pid === process.pid && value.token === runtime?.token);
+            removeOwnedFile(lockPath, (value) => value.pid === process.pid);
+          }
           databaseHost.close();
-          removeOwnedFile(lockPath, (value) => value.pid === process.pid);
         }
       },
     };
   } catch (error) {
     try { await server?.close(); } finally {
       databaseHost.close();
-      removeOwnedFile(lockPath, (value) => value.pid === process.pid);
+      if (!options.ephemeral) removeOwnedFile(lockPath, (value) => value.pid === process.pid);
     }
     throw error;
   }

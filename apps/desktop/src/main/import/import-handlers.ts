@@ -2,19 +2,19 @@ import { ipcMain } from 'electron';
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
-import { getLogger, LogComponent } from '../logging/logger';
+import { getLogger } from '../logging/logger';
 import { scanClaudeCode } from './scanner/claude-code-scanner';
 import { scanCodexSessions } from './scanner/codex-session-scanner';
 import { scanClaudeSessions } from './scanner/claude-session-scanner';
-import { createBatch, addItem, updateBatchStatus, rollbackBatchItems, getBatchItems, listBatches } from './batch-store';
+import { getDesktopHostLocalImportBatchApi } from '../cli/desktop-host-api';
 import { writeInstructions, rollbackInstructions } from './writer/instruction-writer';
 import { writeMemories, rollbackMemories } from './writer/memory-writer';
 import { writeSessions, rollbackSessions } from './writer/session-writer';
-import type { ImportSource, ScanResult, ApplyImportParams, ImportManifest, ImportBatch, ImportItem } from '../types';
+import type { ImportSource, ScanResult, ApplyImportParams, ImportManifest, ImportBatch, ImportItem } from '../../contracts/import';
 import type { IpcRegistrar } from '../ipc/lazy-ipc-registry';
 
 const logger = getLogger();
-const COMPONENT = 'ImportHandlers' as LogComponent;
+const COMPONENT = 'ImportHandlers';
 
 function isClaudeCodeInstalled(): boolean {
   const userDir = path.join(os.homedir(), '.claude');
@@ -35,7 +35,10 @@ function isCodexInstalled(): boolean {
 }
 
 export function registerImportHandlers(
-  register: IpcRegistrar = (channel, handler) => ipcMain.handle(channel, handler),
+  register: IpcRegistrar = (channel, handler) => ipcMain.handle(
+    channel,
+    handler as unknown as Parameters<typeof ipcMain.handle>[1],
+  ),
 ): void {
   register('import:detect', async (): Promise<{ claude: boolean; codex: boolean }> => {
     return {
@@ -81,7 +84,7 @@ export function registerImportHandlers(
 
       throw new Error(`Unsupported source: ${params.source}`);
     } catch (error) {
-      logger.error('Import scan failed', error instanceof Error ? error : new Error(String(error)), COMPONENT);
+      logger.error('Import scan failed', error instanceof Error ? error : new Error(String(error)), undefined, COMPONENT);
       throw error;
     }
   });
@@ -94,7 +97,8 @@ export function registerImportHandlers(
       const totalItems = params.items.length + (params.sessions?.length ?? 0);
       logger.info('Applying import', { itemCount: totalItems }, COMPONENT);
 
-      const batch = createBatch({
+      const importBatches = getDesktopHostLocalImportBatchApi();
+      const batch = await importBatches.createBatch({
         source: params.items[0]?.source ?? params.sessions?.[0]?.source ?? 'unknown',
         sourceProjectPath: params.targetProjectPath,
         targetProjectPath: params.targetProjectPath,
@@ -131,9 +135,16 @@ export function registerImportHandlers(
 
       const instructionResult = await writeInstructions(instructionItems, batch.id, params.targetProjectPath);
       for (let i = 0; i < instructionItems.length; i++) {
-        addItem({
+        await importBatches.addItem({
           batchId: batch.id,
-          item: instructionItems[i],
+          sourceType: instructionItems[i].type,
+          sourcePath: instructionItems[i].sourcePath,
+          sourceHash: instructionItems[i].sourceHash ?? null,
+          title: instructionItems[i].title,
+          summary: instructionItems[i].summary,
+          riskLevel: instructionItems[i].riskLevel,
+          requiresAuth: instructionItems[i].requiresAuthorization ? 1 : 0,
+          isEnabled: instructionItems[i].defaultSelected ? 1 : 0,
           targetType: instructionItems[i].type,
           targetPath: instructionResult.paths[i] ?? '',
         });
@@ -141,9 +152,16 @@ export function registerImportHandlers(
 
       const memoryResult = await writeMemories(memoryItems, batch.id, params.targetProjectPath);
       for (let i = 0; i < memoryItems.length; i++) {
-        addItem({
+        await importBatches.addItem({
           batchId: batch.id,
-          item: memoryItems[i],
+          sourceType: memoryItems[i].type,
+          sourcePath: memoryItems[i].sourcePath,
+          sourceHash: memoryItems[i].sourceHash ?? null,
+          title: memoryItems[i].title,
+          summary: memoryItems[i].summary,
+          riskLevel: memoryItems[i].riskLevel,
+          requiresAuth: memoryItems[i].requiresAuthorization ? 1 : 0,
+          isEnabled: memoryItems[i].defaultSelected ? 1 : 0,
           targetType: memoryItems[i].type,
           targetPath: memoryResult.paths[i] ?? '',
         });
@@ -157,23 +175,16 @@ export function registerImportHandlers(
         for (const result of sessionResults) {
           const sessionItem = params.sessions.find((s) => s.sessionId === result.sessionId);
           if (sessionItem) {
-            addItem({
+            await importBatches.addItem({
               batchId: batch.id,
-              item: {
-                id: sessionItem.id,
-                source: sessionItem.source,
-                sourcePath: sessionItem.sourcePath,
-                sourceHash: undefined,
-                type: 'session',
-                title: sessionItem.title,
-                summary: `${sessionItem.messageCount} messages`,
-                contentPreview: '',
-                scope: 'project',
-                riskLevel: 'safe',
-                requiresAuthorization: false,
-                conflictKeys: [],
-                defaultSelected: true,
-              },
+              sourceType: 'session',
+              sourcePath: sessionItem.sourcePath,
+              sourceHash: null,
+              title: sessionItem.title,
+              summary: `${sessionItem.messageCount} messages`,
+              riskLevel: 'safe',
+              requiresAuth: 0,
+              isEnabled: 1,
               targetType: 'session',
               targetPath: `chat_sessions:${result.sessionId}`,
             });
@@ -182,7 +193,7 @@ export function registerImportHandlers(
       }
 
       const appliedCount = instructionResult.written + memoryResult.written;
-      updateBatchStatus(batch.id, 'applied', appliedCount + sessionCount);
+      await importBatches.updateBatchStatus(batch.id, 'applied', appliedCount + sessionCount);
 
       const manifest: ImportManifest = {
         batchId: batch.id,
@@ -195,10 +206,16 @@ export function registerImportHandlers(
         createdAt: batch.createdAt,
       };
 
-      logger.info('Import applied', manifest, COMPONENT);
+      logger.info('Import applied', {
+        batchId: manifest.batchId,
+        source: manifest.source,
+        appliedCount: manifest.appliedCount,
+        skippedCount: manifest.skippedCount,
+        sessionCount: manifest.sessionCount,
+      }, COMPONENT);
       return manifest;
     } catch (error) {
-      logger.error('Import apply failed', error instanceof Error ? error : new Error(String(error)), COMPONENT);
+      logger.error('Import apply failed', error instanceof Error ? error : new Error(String(error)), undefined, COMPONENT);
       throw error;
     }
   });
@@ -210,7 +227,8 @@ export function registerImportHandlers(
     try {
       logger.info('Rolling back import', { batchId: params.batchId }, COMPONENT);
 
-      const items = getBatchItems(params.batchId);
+      const importBatches = getDesktopHostLocalImportBatchApi();
+      const items = await importBatches.getBatchItems(params.batchId);
       const instructionRollbacks: Array<{ targetPath: string; batchId: string; itemId: string }> = [];
       const memoryRollbacks: Array<{ targetPath: string; batchId: string; itemId: string }> = [];
       const sessionRollbackIds: string[] = [];
@@ -248,21 +266,21 @@ export function registerImportHandlers(
         await rollbackSessions(sessionRollbackIds);
       }
 
-      rollbackBatchItems(params.batchId);
-      updateBatchStatus(params.batchId, 'rolled_back', 0);
+      await importBatches.rollbackBatchItems(params.batchId);
+      await importBatches.updateBatchStatus(params.batchId, 'rolled_back', 0);
 
       logger.info('Import rolled back', { batchId: params.batchId }, COMPONENT);
     } catch (error) {
-      logger.error('Import rollback failed', error instanceof Error ? error : new Error(String(error)), COMPONENT);
+      logger.error('Import rollback failed', error instanceof Error ? error : new Error(String(error)), undefined, COMPONENT);
       throw error;
     }
   });
 
   register('import:history', async (): Promise<ImportBatch[]> => {
     try {
-      return listBatches();
+      return await getDesktopHostLocalImportBatchApi().listBatches();
     } catch (error) {
-      logger.error('Import history failed', error instanceof Error ? error : new Error(String(error)), COMPONENT);
+      logger.error('Import history failed', error instanceof Error ? error : new Error(String(error)), undefined, COMPONENT);
       throw error;
     }
   });

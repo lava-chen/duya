@@ -12,7 +12,7 @@ import { getPluginManager } from '../../plugins/PluginManager';
 import { getConfigStore } from '../../config/store-instance';
 import { getBundledSkillsDir } from '../../plugins/catalog';
 import { ensureSystemSkillsSynced } from '../../skills/system-skills-gui';
-import { getJsonSetting } from '../../db/index';
+import { getDesktopHostLocalSettingsApi } from '../desktop-host-api';
 import {
   listSkillDTOs,
   getSkillInfoDTO,
@@ -25,9 +25,15 @@ import {
 const SKILL_ENABLED_OVERRIDES_KEY = 'skillEnabledOverrides';
 type SkillEnabledOverrides = Record<string, boolean>;
 
-function getOverrides(): SkillEnabledOverrides {
+async function getOverrides(): Promise<SkillEnabledOverrides> {
   try {
-    return getJsonSetting<SkillEnabledOverrides>(SKILL_ENABLED_OVERRIDES_KEY, {});
+    const raw = await getDesktopHostLocalSettingsApi().getSetting(SKILL_ENABLED_OVERRIDES_KEY);
+    if (raw === null) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'),
+    );
   } catch {
     return {};
   }
@@ -95,9 +101,9 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
   res.end(text);
 }
 
-export function handleListSkills(req: http.IncomingMessage, res: http.ServerResponse): void {
+export async function handleListSkills(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   try {
-    const skills: SkillListItem[] = listSkillDTOs(buildArgs(getOverrides()));
+    const skills: SkillListItem[] = listSkillDTOs(buildArgs(await getOverrides()));
     sendJson(res, 200, { skills });
   } catch (err) {
     sendJson(res, 500, {
@@ -109,10 +115,10 @@ export function handleListSkills(req: http.IncomingMessage, res: http.ServerResp
   }
 }
 
-export function handleGetSkill(req: http.IncomingMessage, res: http.ServerResponse, id: string): void {
+export async function handleGetSkill(req: http.IncomingMessage, res: http.ServerResponse, id: string): Promise<void> {
   try {
     const info: SkillInfoItem | null = getSkillInfoDTO({
-      ...buildArgs(getOverrides()),
+      ...buildArgs(await getOverrides()),
       id,
     });
     if (!info) {

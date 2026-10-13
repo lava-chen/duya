@@ -20,7 +20,7 @@ import * as path from 'node:path';
 import type {
   ChannelInboundAttachment,
   ChannelInboundEnvelope,
-} from '../../../../../packages/agent/src/channels/types';
+} from '@duya/agent-protocol/channels';
 import { getLogger, LogComponent } from '../logging/logger';
 import {
   WeixinAdapter,

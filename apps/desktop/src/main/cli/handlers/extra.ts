@@ -22,8 +22,8 @@ import { promises as fs } from 'node:fs';
 import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { getCoreStores } from '../../db/core-connection';
 import { ipcMessageToNewEvent } from '../../ipc/core-db-adapters';
+import { getDesktopHostSessionApi } from '../desktop-host-api';
 import { syncBundledSkills } from '../../../../../../packages/agent/src/skills/skillsSync';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
 import { requestChannelSend } from '../../gateway/message-bus';
@@ -187,9 +187,8 @@ export async function handleSendMessage(
   try {
     const { randomUUID } = await import('node:crypto');
     const id = randomUUID();
-    getCoreStores().messageLog.appendBatch([
-      ipcMessageToNewEvent(sessionId, { id, session_id: sessionId, role: 'user', content }),
-    ]);
+    const event = ipcMessageToNewEvent(sessionId, { id, session_id: sessionId, role: 'user', content });
+    await getDesktopHostSessionApi().appendTimeline(sessionId, { entries: [event.payload] });
     sendJson(res, 200, { ok: true, id, sessionId });
   } catch (err) {
     sendJson(res, 500, { error: { code: 'insert_failed', message: err instanceof Error ? err.message : String(err) } });
@@ -359,9 +358,9 @@ export async function handleChannelSendTest(
  * before the first `:` is treated as the platform and the remainder
  * as the chat id.
  */
-function resolveChannelTarget(
+async function resolveChannelTarget(
   body: Record<string, unknown>,
-): { platform: string; platformChatId: string } | { error: { code: string; message: string } } {
+): Promise<{ platform: string; platformChatId: string } | { error: { code: string; message: string } }> {
   const platform = asString(body.platform);
   const chatId = asString(body.chatId) ?? asString(body.platformChatId);
   if (platform && chatId) {
@@ -371,7 +370,7 @@ function resolveChannelTarget(
   if (!channelId) {
     return { error: { code: 'missing_arg', message: 'channelId (or platform + chatId) and text required' } };
   }
-  const entries = listChannelDirectoryWithBindings();
+  const entries = await listChannelDirectoryWithBindings();
   const match = entries.find(
     (c) => c.id === channelId || `${c.platform}:${c.id}` === channelId,
   );
@@ -423,7 +422,7 @@ export async function handleChannelSend(
     sendJson(res, 404, { error: { code: 'path_not_found', message: filePath } });
     return;
   }
-  const target = resolveChannelTarget(body);
+  const target = await resolveChannelTarget(body);
   if ('error' in target) {
     sendJson(res, 400, { error: target.error });
     return;
@@ -480,10 +479,23 @@ export async function handleChannelDisconnect(
   let agentId = asString(body.agentId) ?? null;
   if (!agentId) {
     try {
-      const { sessions } = getCoreStores();
-      const allSessions = sessions.list();
-      const primarySession = allSessions.find(s => s.status !== 'deleted' && s.agentProfileId);
-      agentId = primarySession?.agentProfileId ?? null;
+      const api = getDesktopHostSessionApi();
+      let cursor: string | undefined;
+      do {
+        const page = await api.list({
+          includeAllSessions: true,
+          limit: 100,
+          ...(cursor === undefined ? {} : { cursor }),
+        });
+        const primarySession = page.sessions
+          .map(({ session }) => session)
+          .find((session) => session.agentProfileId !== null && session.agentProfileId !== '');
+        if (primarySession) {
+          agentId = primarySession.agentProfileId;
+          break;
+        }
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor !== undefined);
     } catch {
       // ignore lookup errors — fall through to null
     }

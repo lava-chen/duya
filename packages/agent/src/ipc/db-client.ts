@@ -6,6 +6,8 @@
  */
 
 import { ChildProcess } from 'child_process';
+import type { ModeStateRow } from '@duya/agent-protocol/mode-state';
+export type { ModeStateRow };
 
 // IPC message types
 interface DbRequest {
@@ -411,16 +413,6 @@ export const goalDb = {
 // snapshot after a tracker state transition and restores it on session resume
 // (see modes/engine/persistence.ts). `snapshotJson` carries the full
 // `ModeStateSnapshot` payload; `status`/`reminderCount` mirror query columns.
-
-/** Row shape of the core-db `mode_state_snapshots` table (IPC view). */
-export interface ModeStateRow {
-  sessionId: string;
-  mode: string;
-  status: string;
-  reminderCount: number;
-  snapshotJson: string;
-  updatedAt: number;
-}
 
 export const modeStateDb = {
   get: (sessionId: string, mode: string): Promise<ModeStateRow | null> =>

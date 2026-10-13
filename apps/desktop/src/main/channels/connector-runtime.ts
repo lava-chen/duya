@@ -24,11 +24,11 @@ import * as path from 'node:path';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getConnectorSecretStore } from './connector-secret-store';
 import { getConnectorCredential } from './agent-session-channels';
-import { isKnownPlatform } from '../../../../../packages/agent/src/channels/types';
+import { isKnownPlatform } from '@duya/agent-protocol/channels';
 import type {
   ChannelInboundEnvelope,
   ChannelOutboundMessage,
-} from '../../../../../packages/agent/src/channels/types';
+} from '@duya/agent-protocol/channels';
 import type { NormalizedReply } from '../../../../../packages/gateway/src/types';
 import { isFileUrl, fileUrlToPath, mediaTypeForPath } from './file-url';
 import { TelegramChannelConnector, createChannelOffsetStore } from './telegram-connector';
@@ -39,7 +39,7 @@ import { defaultBotSessionCreator } from '../wake/agent-dm-dispatcher';
 import { getBotSessionId } from '../wake/bot-session-id';
 import { readChannelInboundFilter } from './channel-store';
 import { getSharedAgentsRoot } from '../config/agent-paths';
-import { getDb } from '../db/connection';
+import { getDesktopHostLocalChannelPersistenceApi } from '../cli/desktop-host-api';
 
 const logger = getLogger();
 
@@ -219,10 +219,10 @@ function fileExistsNonEmpty(filePath: string): boolean {
  * Route an inbound envelope into the owning bot's persistent session:
  * ensure `bot:<agentId>` exists, then enqueue the hidden wake turn.
  */
-function routeInboundToBot(agentId: string, envelope: ChannelInboundEnvelope): void {
+async function routeInboundToBot(agentId: string, envelope: ChannelInboundEnvelope): Promise<void> {
   const sessionId = getBotSessionId(agentId);
   try {
-    defaultBotSessionCreator.createIfMissing(sessionId, agentId);
+    await defaultBotSessionCreator.createIfMissing(sessionId, agentId);
   } catch (err) {
     logger.warn(
       `connector-runtime: could not ensure bot session, waking anyway: ${err instanceof Error ? err.message : String(err)}`,
@@ -302,7 +302,7 @@ class BotConnectorManager {
           // every restart replayed whatever Telegram still had queued.
           // Keyed by agentId because update_id is per bot.
           offsetStore: createChannelOffsetStore(
-            () => getDb(),
+            () => getDesktopHostLocalChannelPersistenceApi(),
             'telegram',
             agentId,
             (reason) =>

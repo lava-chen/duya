@@ -14,7 +14,6 @@ import { getProviderStore } from '../../services/providers/provider-store-electr
 import { getConfigStore } from '../../config/store-instance.js';
 import { toLegacyApiProvider } from '../../../renderer/lib/providers/legacy.js';
 import { toLLMProvider } from '../../config/provider-types.js';
-import { getDatabase } from '../../ipc/db-handlers.js';
 import { killProcessTree } from '../../lib/process-cleanup.js';
 import { getPerformanceMonitor } from '../../services/performance-monitor.js';
 import { registerSpawnedWorker, unregisterSpawnedWorker } from '../../control-plane/spawned-workers.js';
@@ -110,6 +109,7 @@ export class AgentProcessPool {
   private debugIpc = process.env.DUYA_DEBUG_IPC === 'true';
   private logger = getLogger();
   private providerReinitLock = new Map<string, boolean>();
+  private pendingProviderInit = new Set<string>();
   private unsubConfigChange: (() => void) | null = null;
   // L1: Cached provider config snapshot to detect provider-only changes
   private lastProviderSnapshot = '';
@@ -727,17 +727,52 @@ export class AgentProcessPool {
   }
 
   private sendProviderInit(sessionId: string): void {
-    const db = getDatabase();
+    if (this.pendingProviderInit.has(sessionId)) return;
+    const proc = this.running.get(sessionId);
+    if (!proc || proc.child.exitCode !== null) return;
 
-    let browserBackendMode: 'auto' | 'extension' | 'built-in' | 'human-like' = 'auto';
+    this.pendingProviderInit.add(sessionId);
+    void this.readBrowserBackendMode().then((browserBackendMode) => {
+      if (this.running.get(sessionId) !== proc || proc.child.exitCode !== null) return;
+      this.sendProviderInitWithMode(sessionId, browserBackendMode);
+    }).catch((error: unknown) => {
+      this.logger.error(
+        'Failed to send provider initialization to agent process',
+        error instanceof Error ? error : new Error(String(error)),
+        { sessionId },
+        LogComponent.AgentProcessPool,
+      );
+    }).finally(() => {
+      this.pendingProviderInit.delete(sessionId);
+    });
+  }
+
+  private async readBrowserBackendMode(): Promise<'auto' | 'extension' | 'built-in' | 'human-like'> {
+    // Keep the process-pool module usable in standalone/headless composition.
+    // Desktop's authenticated Host API is only available when Electron is the
+    // supervisor; headless composition falls back to the previous default.
+    if (!electronApp()) return 'auto';
     try {
-      const row = db?.prepare("SELECT value FROM settings WHERE key = 'browserBackendMode'").get() as { value: string } | undefined;
-      if (row?.value === 'extension' || row?.value === 'built-in' || row?.value === 'human-like') {
-        browserBackendMode = row.value;
-      }
-    } catch {}
+      const { getDesktopHostLocalSettingsApi } = await import('../../cli/desktop-host-api.js');
+      const mode = await getDesktopHostLocalSettingsApi().getSetting('browserBackendMode');
+      if (mode === 'extension' || mode === 'built-in' || mode === 'human-like') return mode;
+    } catch (error) {
+      this.logger.debug(
+        'Could not read browser backend mode through Host; using default',
+        { error: String(error) },
+        LogComponent.AgentProcessPool,
+      );
+    }
+    return 'auto';
+  }
+
+  private sendProviderInitWithMode(
+    sessionId: string,
+    browserBackendMode: 'auto' | 'extension' | 'built-in' | 'human-like',
+  ): void {
 
     const proc = this.running.get(sessionId);
+    if (!proc || proc.child.exitCode !== null) return;
     const pinnedId = proc?.providerId ?? null;
     const pinned = pinnedId ? getProviderStore().getLlmProvider(pinnedId) : undefined;
     const targetLlm = pinned ?? getProviderStore().getDefaultLlmProvider();

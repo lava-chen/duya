@@ -25,7 +25,7 @@ import { getBotConnectorManager } from '../channels/connector-runtime';
 import {
   CONNECTOR_MANIFESTS,
   manifestCredentialFields,
-} from '../../../../../packages/agent/src/channels/types';
+} from '@duya/agent-protocol/channels';
 import {
   qrRegisterBegin,
   qrRegisterPoll,

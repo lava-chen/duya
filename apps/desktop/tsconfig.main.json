@@ -14,9 +14,70 @@
     "paths": {
       "@/*": ["./src/main/*"],
       "@duya/agent/message": ["../../packages/agent/dist/message/index"],
-      "@duya/agent/tool/allowedRoots": ["../../packages/agent/src/tool/allowedRoots.ts"],
+      "@duya/data": ["../../packages/data/dist/index.d.ts"],
+      "@duya/data/*": ["../../packages/data/dist/*"],
+      "@duya/host": ["../../packages/host/dist/index.d.ts"],
+      "@duya/host/control-plane-service": [
+        "../../packages/host/dist/control-plane-service.d.ts"
+      ],
+      "@duya/host/command-receipt": [
+        "../../packages/host/dist/command-receipt.d.ts"
+      ],
+      "@duya/host/run-receipt": [
+        "../../packages/host/dist/run-receipt.d.ts"
+      ],
+      "@duya/host/repository-port": [
+        "../../packages/host/dist/repository-port.d.ts"
+      ],
+      "@duya/host/trusted-sender-core": [
+        "../../packages/host/dist/trusted-sender-core.d.ts"
+      ],
+      "@duya/host/run-control-plane": [
+        "../../packages/host/dist/run-control-plane.d.ts"
+      ],
+      "@duya/host/channel-prompts": [
+        "../../packages/host/dist/channel-prompts.d.ts"
+      ],
+      "@duya/host/local-sidebar-sections-api": [
+        "../../packages/host/dist/local-sidebar-sections-api.d.ts"
+      ],
+      "@duya/host/*": ["../../packages/host/dist/*"],
+      "@duya/sandbox": ["../../packages/sandbox/dist/index.d.ts"],
       "@duya/agent-protocol/transcript": [
         "../../packages/agent-protocol/dist/transcript/index.d.ts"
+      ],
+      "@duya/agent-protocol/message-timeline": [
+        "../../packages/agent-protocol/dist/message-timeline.d.ts"
+      ],
+      "@duya/agent-protocol/channels": [
+        "../../packages/agent-protocol/dist/channels.d.ts"
+      ],
+      "@duya/agent-protocol/sidebar-sections": [
+        "../../packages/agent-protocol/dist/sidebar-sections.d.ts"
+      ],
+      "@duya/agent-protocol/session-fork": [
+        "../../packages/agent-protocol/dist/session-fork.d.ts"
+      ],
+      "@duya/agent-protocol/session-api": [
+        "../../packages/agent-protocol/dist/session-api.d.ts"
+      ],
+      "@duya/agent-protocol/gateway-user-map": [
+        "../../packages/agent-protocol/dist/gateway-user-map.d.ts"
+      ],
+      "@duya/agent-protocol/workflow-runs": [
+        "../../packages/agent-protocol/dist/workflow-runs.d.ts"
+      ],
+      "@duya/agent-protocol/goals": [
+        "../../packages/agent-protocol/dist/goals.d.ts"
+      ],
+      "@duya/agent-protocol/mode-state": [
+        "../../packages/agent-protocol/dist/mode-state.d.ts"
+      ],
+      "@duya/agent-protocol/research-api": [
+        "../../packages/agent-protocol/dist/research-api.d.ts"
+      ],
+      "@duya/agent-protocol/workbench": [
+        "../../packages/agent-protocol/dist/workbench.d.ts"
       ],
       "@duya/plugin-core": ["../../packages/plugin-core/dist/index.d.ts"],
       "@duya/plugin-core/*": ["../../packages/plugin-core/dist/*"],

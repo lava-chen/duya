@@ -279,9 +279,11 @@ describe('MessageLog', () => {
       makeEvent(sessionId, makeAssistantMessage('m-2', 'b', t + 1)),
     ]);
     expect(log.getCount(sessionId)).toBe(2);
+    expect(log.getLastSequence(sessionId)).toBe(2);
 
     log.deleteBySession(sessionId);
     expect(log.getCount(sessionId)).toBe(0);
+    expect(log.getLastSequence(sessionId)).toBeNull();
 
     // File is preserved
     const row = db.prepare('SELECT rollout_path FROM sessions WHERE id = ?').get(sessionId) as { rollout_path: string };

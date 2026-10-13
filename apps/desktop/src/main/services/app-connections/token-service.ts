@@ -20,7 +20,7 @@
 
 import { getLogger, LogComponent } from '../../logging/logger';
 import { getProviderConfig, getClientSecret } from './providers/registry.js';
-import type { ConnectionStore } from './connection-store.js';
+import type { ConnectionStorePort } from './connection-store-port.js';
 import type { TokenVault } from './token-vault.js';
 import type {
   AppConnection,
@@ -35,7 +35,7 @@ const COMPONENT = 'AppConnectionTokenService' as LogComponent;
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 
 export interface TokenServiceDeps {
-  store: ConnectionStore;
+  store: ConnectionStorePort;
   vault: TokenVault;
   /** Override fetch in tests. */
   fetchImpl?: typeof fetch;
@@ -55,7 +55,7 @@ const inflightRefresh = new Map<string, Promise<ValidToken>>();
 
 export class TokenService {
   private readonly logger = getLogger();
-  private readonly store: ConnectionStore;
+  private readonly store: ConnectionStorePort;
   private readonly vault: TokenVault;
   private readonly fetchImpl: typeof fetch;
 
@@ -73,7 +73,7 @@ export class TokenService {
    * translate errors uniformly without try/catch parsing.
    */
   async getValidToken(connectionId: string): Promise<AppConnectionResult<ValidToken>> {
-    const conn = this.store.get(connectionId);
+    const conn = await this.store.get(connectionId);
     if (!conn) {
       return failure('connection_not_found', `connection ${connectionId} not found`, false);
     }
@@ -102,7 +102,7 @@ export class TokenService {
     if (!tokens) {
       // State drift: metadata says connected but vault is empty. Treat
       // as revoked — needs re-authorization.
-      this.store.updateStatus(connectionId, 'revoked', {
+      await this.store.updateStatus(connectionId, 'revoked', {
         lastError: 'vault entry missing',
       });
       return failure('connection_revoked', 'vault entry missing; re-authorization required', false);
@@ -133,7 +133,7 @@ export class TokenService {
     // Expiring soon — refresh.
     if (!tokens.refreshToken) {
       // No refresh token; surface as expired so caller can prompt re-auth.
-      this.store.updateStatus(connectionId, 'expired', {
+      await this.store.updateStatus(connectionId, 'expired', {
         lastError: 'access token expired and no refresh_token available',
       });
       return failure('connection_not_available', 'access token expired without a refresh_token', false);
@@ -215,7 +215,7 @@ export class TokenService {
     };
 
     this.vault.set(conn.id, newTokens);
-    this.store.updateStatus(conn.id, 'connected', {
+    await this.store.updateStatus(conn.id, 'connected', {
       expiresAt: expiresInMs,
       lastError: null,
     });
@@ -235,12 +235,12 @@ export class TokenService {
   }
 
   /** Convert a refresh error to a structured {@link AppConnectionResult}. */
-  private translateRefreshError(err: unknown, conn: AppConnection): AppConnectionResult<ValidToken> {
+  private async translateRefreshError(err: unknown, conn: AppConnection): Promise<AppConnectionResult<ValidToken>> {
     if (err instanceof RefreshError) {
       if (err.code === 'invalid_grant') {
         // Refresh permanently failed — user must re-authorize.
         this.vault.remove(conn.id);
-        this.store.updateStatus(conn.id, 'revoked', { lastError: 'invalid_grant' });
+        await this.store.updateStatus(conn.id, 'revoked', { lastError: 'invalid_grant' });
         this.logger.warn(
           'App Connection: refresh failed (invalid_grant); connection revoked',
           { connectionId: conn.id, provider: conn.provider },

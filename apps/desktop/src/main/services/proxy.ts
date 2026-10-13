@@ -1,6 +1,7 @@
 import https from 'https';
-import { HttpsProxyAgent } from 'https-proxy-agent';
-import { getDatabase } from '../ipc/db-handlers';
+import HttpsProxyAgent from 'https-proxy-agent';
+import { getConfigStore } from '../config/store-instance';
+import { readGatewaySettingFromStore } from '../config/gateway-setting-adapter';
 
 export function detectWindowsSystemProxy(): string | undefined {
   if (process.platform !== 'win32') {
@@ -86,13 +87,10 @@ export function detectProxy(): string | undefined {
   if (envProxy) return envProxy;
 
   try {
-    const db = getDatabase();
-    if (db) {
-      const row = db.prepare("SELECT value FROM settings WHERE key = 'bridge_proxy_url'").get() as { value: string } | undefined;
-      if (row?.value) return row.value;
-    }
+    const configuredProxy = readGatewaySettingFromStore(getConfigStore(), 'bridge_proxy_url');
+    if (configuredProxy) return configuredProxy;
   } catch {
-    // Database not available, ignore
+    // ConfigStore not available, fall back to the operating-system proxy.
   }
 
   return detectWindowsSystemProxy() || detectMacOSSystemProxy();

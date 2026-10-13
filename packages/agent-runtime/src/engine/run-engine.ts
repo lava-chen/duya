@@ -124,7 +124,7 @@
  */
 
 import type {
-  MessageContent as EventContent,
+  EventMessageContent as EventContent,
   ProtocolErrorInfo,
   RunEvent,
   RunFence,

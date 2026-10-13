@@ -247,8 +247,8 @@ export function initRoutineListenerHub(store: CronFileStore): RoutineListenerHub
     resolveAccessToken: async (provider) => {
       const { getAppConnectionService } = await import('../services/app-connections/app-connection-service.js');
       const service = getAppConnectionService();
-      const connected = service
-        .list()
+      const connected = (await service
+        .list())
         .filter((c) => c.provider === provider && c.status === 'connected');
       for (const connection of connected) {
         const token = await service.getValidToken(connection.id);

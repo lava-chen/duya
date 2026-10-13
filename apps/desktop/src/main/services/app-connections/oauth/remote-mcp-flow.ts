@@ -24,7 +24,7 @@ import type {
 } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { getLogger, LogComponent } from '../../../logging/logger';
 import { startLoopbackServer } from './loopback-server.js';
-import type { ConnectionStore } from '../connection-store.js';
+import type { ConnectionStorePort } from '../connection-store-port.js';
 import type { TokenVault } from '../token-vault.js';
 import { VaultUnavailableError } from '../token-vault.js';
 import type { AppConnection, AppConnectionStatusDTO, ProviderId, TokenSet } from '../types.js';
@@ -35,7 +35,7 @@ import { FlowError } from './flow.js';
 const COMPONENT = 'RemoteMcpOAuth' as LogComponent;
 
 export interface RemoteMcpAuthorizationDeps {
-  store: ConnectionStore;
+  store: ConnectionStorePort;
   vault: TokenVault;
   openExternal?: (url: string) => Promise<void>;
   timeoutMs?: number;
@@ -274,7 +274,7 @@ export async function startRemoteMcpAuthorization(
       createdAt: now,
       updatedAt: now,
     };
-    const persisted = deps.store.upsert(connection);
+    const persisted = await deps.store.upsert(connection);
     logger.info('Remote MCP OAuth: connection established', { provider, connectionId }, COMPONENT);
     return toStatusDTO(persisted);
   } catch (error) {

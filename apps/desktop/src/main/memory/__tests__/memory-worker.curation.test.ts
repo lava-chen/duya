@@ -105,7 +105,6 @@ function createCurationFixture(): CurationFixture {
 function toDeps(f: CurationFixture): MemoryWorkerDeps {
   return {
     memoryDb: f.memoryDb,
-    mainDb: f.mainDb,
     llmClient: f.llmClient,
     rootDir: f.memoryRoot,
     curation: {

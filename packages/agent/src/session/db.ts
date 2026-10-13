@@ -10,13 +10,13 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import fs from 'node:fs';
-import os from 'node:os';
 import type { Message, MessageContent, SessionInfo, FileAttachment, TokenUsage } from '../types.js';
 import { getConfigDatabasePath } from '../config/index.js';
 import * as ipcDbClient from '../ipc/db-client.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import { logger } from '../utils/logger.js';
 import { isCDNImageUrl } from '../utils/urlSafety.js';
+import { getDuyaRoot } from '../utils/duyaRoot.js';
 
 // =============================================================================
 // IPC Mode Detection
@@ -459,43 +459,21 @@ export function getDb(): BetterSqlite3.Database {
 }
 
 /**
- * Get the user data directory for the current platform.
- */
-function getUserDataPath(): string {
-  if (process.platform === 'win32') {
-    return process.env.APPDATA || path.join(process.env.USERPROFILE || os.homedir(), 'AppData', 'Roaming');
-  } else if (process.platform === 'darwin') {
-    return path.join(process.env.HOME || os.homedir(), 'Library', 'Application Support');
-  } else {
-    return process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
-  }
-}
-
-/**
  * Get the default database file path.
- * Both dev and production use APPDATA/DUYA/duya-main.db for consistency
- * with the main process (electron/db/connection.ts).
+ * Use the canonical per-user root. A packaged legacy worker may still provide
+ * DUYA_DB_DIR; the Desktop Agent Server otherwise gives workers the fully
+ * resolved DUYA_CUSTOM_DB_PATH.
  */
 function getDefaultDbPath(): string {
-  // Check if running as packaged Electron app
   const isPackaged = typeof process !== 'undefined' && (process as NodeJS.Process & { pkg?: unknown }).pkg !== undefined
     ? true
     : process.env.NODE_ENV === 'production';
-
-  // Check if running in CLI mode (CLI always uses production database)
-  const isCLI = process.env.DUYA_CLI === 'true' || 
-    process.argv[0]?.includes('duya') || 
-    process.argv[1]?.includes('duya');
-
-  // If electron passed the database directory via env, use it
-  if (isPackaged && process.env.DUYA_DB_DIR) {
-    return path.join(process.env.DUYA_DB_DIR, 'duya-main.db');
-  }
-
-  // Use APPDATA/DUYA (or equivalent on other platforms) for both dev and prod
-  // This ensures frontend and agent use the same database
-  const userDataPath = getUserDataPath();
-  return path.join(userDataPath, 'DUYA', 'duya-main.db');
+  const dataRoot = process.env.DUYA_DATA_ROOT?.trim()
+    ? getDuyaRoot()
+    : (isPackaged ? process.env.DUYA_DB_DIR?.trim() : undefined) ??
+      process.env.DUYA_APP_DATA_PATH?.trim() ??
+      getDuyaRoot();
+  return path.join(dataRoot, 'duya-main.db');
 }
 
 /**

@@ -85,6 +85,7 @@ describe('resolveProvider (the reported bug)', () => {
     expect(p.apiKey).toBe('sk-real-key');
     expect(p.protocol).toBe('anthropic');
     expect(p.baseUrl).toBe('https://api.minimaxi.com/anthropic');
+    expect(p.models).toEqual(['MiniMax-M3', 'MiniMax-M2.7', 'MiniMax-M2.1']);
   });
 
   it('falls back to [model].base_url when the provider omits baseUrl', () => {

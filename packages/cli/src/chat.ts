@@ -14,13 +14,23 @@
  *      written by `duya serve` (or any standalone Host process)
  */
 
-import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import readline from 'node:readline';
-import type { RunEvent, RunEventEnvelope, RunId, SessionId } from '@duya/agent-protocol';
+import type {
+  DurableTimelineEntry,
+  HostSessionListItem,
+  HostSessionRecord,
+  RunEvent,
+  RunEventEnvelope,
+  RunId,
+  SessionId,
+} from '@duya/agent-protocol';
+import { projectTimelinePersistenceMessages } from '@duya/agent-protocol/transcript';
 import { HostSessionHttpClient } from '@duya/host/http-client';
+import { startLocalHost } from '@duya/host/local-host';
 import { resolveDataRoot } from '@duya/data';
+import { TUIApp, shouldUseTui, type CompletionSources, type LegacyFrame, type TuiChoice } from './tui/index.js';
 
 interface RuntimeDescriptor {
   readonly apiVersion: number;
@@ -220,6 +230,8 @@ async function chatInteractive(
   sessionId: SessionId,
   options: ChatCommandOptions,
 ): Promise<number> {
+  if (shouldUseTui()) return chatTui(client, sessionId, options);
+
   write(`${DIM}session ${sessionId} — type a message, /exit to quit${RESET}`);
   const rl = readline.createInterface({
     input: process.stdin,
@@ -283,6 +295,447 @@ async function chatInteractive(
   return 0;
 }
 
+async function createChatSession(
+  client: HostSessionHttpClient,
+  options: ChatCommandOptions,
+): Promise<HostSessionRecord> {
+  const workingDirectory = path.resolve(process.cwd());
+  const workspace = await client.registerLocalDirectory(workingDirectory);
+  return client.create({
+    title: 'duya chat',
+    projectName: path.basename(workingDirectory),
+    workspaceId: workspace.workspaceId,
+    workspaceRootId: workspace.rootId,
+    workspaceRelativePath: workspace.relativePath,
+    ...(options.model === undefined ? {} : { model: options.model }),
+    ...(options.providerId === undefined ? {} : { providerId: options.providerId }),
+    mode: 'code',
+  });
+}
+
+async function listWorkspaceSessions(
+  client: HostSessionHttpClient,
+  current: HostSessionRecord,
+): Promise<HostSessionListItem[]> {
+  const sessions: HostSessionListItem[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await client.list({
+      ...(current.workspace.state === 'bound' ? { workspaceId: current.workspace.workspaceId } : {}),
+      limit: 100,
+      includeArchived: false,
+      includeAllSessions: current.workspace.state !== 'bound',
+      includeDeleted: false,
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    sessions.push(...page.sessions);
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor !== undefined);
+  return sessions;
+}
+
+async function loadSessionMessages(
+  client: HostSessionHttpClient,
+  sessionId: string,
+) {
+  const entries: Extract<DurableTimelineEntry, { type: 'message' | 'compaction' }>[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await client.readMessages(sessionId, {
+      limit: 200,
+      includeSuperseded: false,
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    for (const item of page.messages) {
+      if (item.entry.type === 'message' || item.entry.type === 'compaction') entries.push(item.entry);
+    }
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor !== undefined);
+  return projectTimelinePersistenceMessages(entries);
+}
+
+function sessionLabel(item: HostSessionListItem): string {
+  const { session, timelineCount } = item;
+  return [
+    session.title || 'Untitled session',
+    `${session.providerId}/${session.model || 'default'}`,
+    `${timelineCount} messages`,
+    new Date(session.updatedAt).toLocaleString(),
+    session.id.slice(0, 8),
+  ].join('  ·  ');
+}
+
+function sessionCompletionItem(item: HostSessionListItem) {
+  return {
+    label: sessionLabel(item),
+    value: item.session.id,
+    description: item.session.id,
+    kind: 'slash_command' as const,
+    category: 'command' as const,
+    group: 'settings' as const,
+  };
+}
+
+/** Translate the Host event contract into the renderer's narrow frame vocabulary. */
+function tuiFrame(event: RunEventEnvelope<RunEvent>): LegacyFrame | null {
+  const payload = event.payload;
+  switch (payload.type) {
+    case 'assistant.text_delta':
+      return { type: 'text_delta', data: { content: payload.delta } };
+    case 'assistant.text_block':
+      return { type: 'text', data: { content: payload.text } };
+    case 'assistant.thinking_delta':
+      return { type: 'thinking_delta', data: { content: payload.delta } };
+    case 'assistant.thinking_block':
+      return { type: 'thinking', data: { content: payload.thinking } };
+    case 'assistant.status':
+      return { type: 'status', data: { message: payload.message } };
+    case 'assistant.usage':
+      return {
+        type: 'token_usage',
+        data: {
+          input_tokens: payload.usage.inputTokens,
+          output_tokens: payload.usage.outputTokens,
+          total_tokens: payload.usage.totalTokens,
+        },
+      };
+    case 'tool.call_preview':
+      return {
+        type: 'tool_use_started',
+        data: { id: payload.toolCallId, name: payload.toolName, input: payload.arguments },
+      };
+    case 'tool.call_started':
+      return {
+        type: 'tool_use',
+        data: { id: payload.toolCallId, name: payload.toolName, input: payload.arguments },
+      };
+    case 'tool.call_completed':
+      return {
+        type: 'tool_result',
+        data: {
+          id: payload.toolCallId,
+          result: payload.content,
+          error: payload.outcome.outcome !== 'success',
+        },
+      };
+    case 'run.failed':
+      return { type: 'error', data: { message: payload.error.message } };
+    case 'run.completed':
+      return { type: 'done' };
+    default:
+      return null;
+  }
+}
+
+async function chatTui(
+  client: HostSessionHttpClient,
+  sessionId: SessionId,
+  options: ChatCommandOptions,
+): Promise<number> {
+  const initialSession = await client.get(sessionId, { includeAllSessions: true });
+  if (initialSession === null) throw new Error(`session ${sessionId} does not exist on this Host`);
+
+  let activeSession = initialSession;
+  let activeRunId: RunId | null = null;
+  let busy = false;
+  let finished = false;
+  let finish: () => void = () => {};
+  const finishedPromise = new Promise<void>((resolve) => { finish = resolve; });
+
+  // TUI-level model override. Mirrors mcode's `/model` slash command:
+  // `/model <provider>` mutates this state, and the next turn threads it
+  // through `startAgentRun` so the override actually reaches the worker.
+  // `null` means "no override — use the session / global default".
+  let activeModelOverride: { providerId: string; model?: string } | null = null;
+
+  let sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
+  const slashRows = [
+    ['/resume', 'Resume a previous session'],
+    ['/sessions', 'Browse previous sessions'],
+    ['/new', 'Start a new session'],
+    ['/model', 'Show or switch the active model (mirrors mcode /model)'],
+    ['/clear', 'Clear the visible transcript'],
+    ['/help', 'Show chat commands'],
+    ['/exit', 'End this chat'],
+  ].map(([label, description]) => ({
+    label: label ?? '',
+    value: label ?? '',
+    description: description ?? '',
+    kind: 'slash_command' as const,
+    category: 'command' as const,
+    group: 'settings' as const,
+  }));
+  const completionSources: CompletionSources = {
+    slash: () => slashRows,
+    slashOptions: (command) => command === '/resume' || command === '/sessions' ? sessionRows : [],
+    slashOptionsOnBare: (command) => command === '/resume' || command === '/sessions',
+    context: () => [],
+    files: () => [],
+  };
+
+  const tui = new TUIApp({
+    title: 'duya chat',
+    completionSources,
+    statusText: () => {
+      const provider = activeModelOverride?.providerId ?? activeSession.providerId;
+      const model = activeModelOverride?.model ?? (activeSession.model || options.model || 'default');
+      return `${provider} · ${model} · ${activeSession.id.slice(0, 8)}`;
+    },
+    isBusy: () => busy,
+    onSubmit: (text) => { void handleLine(text); },
+    onInterrupt: () => {
+      if (activeRunId !== null) {
+        void client.cancelAgentRun(activeRunId, 'chat interrupt (Ctrl+C)').catch(() => undefined);
+      }
+    },
+    onExit: () => close(),
+  });
+
+  function close(): void {
+    if (finished) return;
+    finished = true;
+    if (activeRunId !== null) {
+      void client.cancelAgentRun(activeRunId, 'chat exit').catch(() => undefined);
+    }
+    tui.stop();
+    finish();
+  }
+
+  async function resumeSession(query: string): Promise<void> {
+    if (busy) {
+      tui.printError('Wait for the current turn to finish before switching sessions.');
+      return;
+    }
+    const sessions = await listWorkspaceSessions(client, activeSession);
+    sessionRows = sessions.map(sessionCompletionItem);
+    const normalized = query.trim().toLowerCase();
+    const idMatches = normalized === ''
+      ? []
+      : sessions.filter(({ session }) => session.id.toLowerCase().startsWith(normalized));
+    const choices: TuiChoice[] = sessions.map((item) => ({
+      label: sessionLabel(item),
+      value: item.session.id,
+    }));
+    if (choices.length === 0) {
+      tui.printNotice('No sessions are available in this workspace.');
+      return;
+    }
+    const selectedId = idMatches.length === 1
+      ? idMatches[0]?.session.id ?? null
+      : await tui.chooseFiltered('Resume session', choices, { initialFilter: query });
+    if (selectedId === null) return;
+    const selected = await client.get(selectedId, { includeAllSessions: true });
+    if (selected === null) {
+      tui.printError(`Session not found: ${selectedId}`);
+      return;
+    }
+    activeSession = selected;
+    tui.replaceTranscript(await loadSessionMessages(client, selectedId));
+    tui.printNotice(`Resumed "${selected.title || 'Untitled session'}".`);
+  }
+
+  /**
+   * `/model` slash command — mirrors mcode's `/model`.
+   *
+   * `/model` (no args) prints the current model: the session default plus any
+   * `/model <provider>` override the user has set in this TUI.
+   *
+   * `/model <provider>` records a per-TUI override that the next
+   * `startAgentRun` forwards to the worker. The override stays in memory
+   * only; closing the TUI clears it. To change the global default across
+   * sessions, run `duya config provider set-default <id>` outside the TUI.
+   *
+   * `<provider>/<model>` syntax is accepted and stored verbatim, so the
+   * picker can later fan out to per-model variants when the Host exposes
+   * the full provider list.
+   */
+  async function showOrSwitchModel(arg: string): Promise<void> {
+    const trimmed = arg.trim();
+    if (trimmed === '') {
+      const provider = activeModelOverride?.providerId ?? (activeSession.providerId ?? '(unset)');
+      const model =
+        activeModelOverride?.model ?? (activeSession.model || options.model || '(session default)');
+      tui.printNotice(
+        `current model: ${provider} / ${model}\n` +
+          'use `/model <provider>` to override for the next turn, ' +
+          'or `duya config provider set-default <id>` to change globally.',
+      );
+      return;
+    }
+    // Accept `<provider>` or `<provider>/<model>`.
+    const slash = trimmed.indexOf('/');
+    const providerId = slash === -1 ? trimmed : trimmed.slice(0, slash);
+    const model = slash === -1 ? undefined : trimmed.slice(slash + 1) || undefined;
+    activeModelOverride = { providerId, ...(model !== undefined ? { model } : {}) };
+    tui.printNotice(
+      `next turn will use ${activeModelOverride.providerId}${activeModelOverride.model ? ` / ${activeModelOverride.model}` : ''}. ` +
+        'Override is per-TUI; clears on /exit.',
+    );
+  }
+
+  async function startNewSession(): Promise<void> {
+    if (busy) {
+      tui.printError('Wait for the current turn to finish before starting a new session.');
+      return;
+    }
+    activeSession = await createChatSession(client, options);
+    sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
+    tui.clearTranscript();
+    tui.printNotice(`Started a new session (${activeSession.id.slice(0, 8)}).`);
+  }
+
+  async function runTurn(prompt: string): Promise<void> {
+    tui.printUser(prompt);
+    busy = true;
+    tui.setBusy(true);
+    // Resolve per-turn provider/model in this order:
+    //   1. `/model <provider>` override set in the TUI (clears on /exit)
+    //   2. CLI `--model` / `--provider` flags (process-wide default)
+    //   3. whatever the session was created with
+    const effectiveProviderId = activeModelOverride?.providerId ?? options.providerId;
+    const effectiveModel = activeModelOverride?.model ?? options.model;
+    try {
+      const start = await client.startAgentRun({
+        sessionId: activeSession.id,
+        prompt,
+        ...(effectiveModel !== undefined ? { model: effectiveModel } : {}),
+        ...(effectiveProviderId !== undefined ? { providerId: effectiveProviderId } : {}),
+        ...(options.apiFormat !== undefined ? { apiFormat: options.apiFormat } : {}),
+        workingDirectory: process.cwd(),
+      });
+      if (!start.accepted) {
+        tui.printError(`run refused: ${start.stage} — ${start.reason ?? ''}`);
+        return;
+      }
+      activeRunId = start.runId;
+      for await (const event of client.watchAgentRunEvents(start.runId)) {
+        const frame = tuiFrame(event as RunEventEnvelope<RunEvent>);
+        if (frame !== null) tui.push(frame);
+      }
+      const record = await client.getAgentRun(start.runId).catch(() => null);
+      if (record?.status === 'failed') tui.printError(`Run ${start.runId} failed.`);
+    } catch (error) {
+      tui.printError(error instanceof Error ? error.message : String(error));
+    } finally {
+      activeRunId = null;
+      busy = false;
+      tui.setBusy(false);
+      try {
+        sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
+      } catch {
+        // Resume can retry the list when the user opens its submenu.
+      }
+    }
+  }
+
+  async function handleLine(line: string): Promise<void> {
+    const text = line.trim();
+    if (text === '') return;
+    const command = /^\/([^\s]+)(?:\s+(.*))?$/u.exec(text);
+    if (command !== null) {
+      const name = command[1]?.toLowerCase() ?? '';
+      const args = command[2]?.trim() ?? '';
+      try {
+        if (name === 'exit' || name === 'quit' || name === 'q') close();
+        else if (name === 'resume' || name === 'sessions') await resumeSession(args);
+        else if (name === 'new') await startNewSession();
+        else if (name === 'model') await showOrSwitchModel(args);
+        else if (name === 'clear') tui.clearTranscript();
+        else if (name === 'help') tui.printNotice('/resume · /sessions · /new · /model · /clear · /exit');
+        else tui.printError(`Unknown command: /${name}`);
+      } catch (error) {
+        tui.printError(error instanceof Error ? error.message : String(error));
+      }
+      return;
+    }
+    if (busy) {
+      tui.printNotice('Wait for the current turn to finish before sending another message.');
+      return;
+    }
+    await runTurn(text);
+  }
+
+  tui.replaceTranscript(await loadSessionMessages(client, sessionId));
+  tui.printNotice(`session ${sessionId} · type a message, /resume to switch sessions`);
+  tui.start();
+  await finishedPromise;
+  return 0;
+}
+
+export interface TuiCommandOptions {
+  readonly port?: number;
+  readonly session?: string;
+  readonly model?: string;
+  readonly providerId?: string;
+  readonly apiFormat?: 'anthropic' | 'openai';
+}
+
+/**
+ * Resolve the worker entry the Host-owned execution controller spawns.
+ * Mirrors the logic in `packages/cli/src/index.ts` so this file stays
+ * self-contained (it cannot import from `./index.js`).
+ */
+function resolveServeWorkerPath(): string | undefined {
+  const explicit = process.env.DUYA_HOST_WORKER_PATH;
+  if (explicit !== undefined && explicit.trim().length > 0) return path.resolve(explicit.trim());
+  const devBundle = path.join(process.cwd(), 'packages', 'agent', 'bundle', 'agent-process-entry.js');
+  if (fs.existsSync(devBundle)) return devBundle;
+  const devDist = path.join(process.cwd(), 'packages', 'agent', 'dist', 'process', 'agent-process-entry.js');
+  if (fs.existsSync(devDist)) return devDist;
+  return undefined;
+}
+
+/**
+ * Entry for the `duya tui` command. Starts an ephemeral Host and opens the
+ * full-screen TUI in the same process. The Host is shut down when the TUI exits.
+ * Returns the process exit code.
+ */
+export async function runTuiCommand(options: TuiCommandOptions): Promise<number> {
+  const host = await startLocalHost({
+    port: options.port,
+    ephemeral: true,
+    workerPath: resolveServeWorkerPath(),
+    // The full-screen TUI owns stdout/stderr; silence the Host's run-execution
+    // logger (worker stderr passthrough etc.) so it does not corrupt blessed's
+    // frame buffer. Real run failures still surface via `run.failed` events.
+    executionLogger: {
+      debug: () => undefined,
+      info: () => undefined,
+      warn: () => undefined,
+      error: () => undefined,
+    },
+  });
+  const client = new HostSessionHttpClient(host.origin, host.token ?? '');
+  try {
+    const health = await client.getHealth();
+    write(`${DIM}duya tui · Host ${host.origin} (api v${health.apiVersion})${RESET}`);
+  } catch (error) {
+    write(`${RED}Host failed to start: ${error instanceof Error ? error.message : String(error)}${RESET}`);
+    return 1;
+  }
+
+  let sessionId: SessionId;
+  if (options.session !== undefined && options.session.trim().length > 0) {
+    sessionId = options.session.trim() as SessionId;
+    const existing = await client.readLocalSession(sessionId, { includeAllSessions: true });
+    if (existing === null) {
+      write(`${RED}session ${sessionId} does not exist on this Host${RESET}`);
+      return 1;
+    }
+  } else {
+    const created = await createChatSession(client, { ...options, origin: host.origin, token: host.token });
+    sessionId = created.id;
+  }
+
+  let exitCode = 0;
+  try {
+    exitCode = await chatInteractive(client, sessionId, { ...options, origin: host.origin, token: host.token });
+  } finally {
+    await host.close();
+  }
+  return exitCode;
+}
+
 /** Entry for the `duya chat` command. Returns the process exit code. */
 export async function runChatCommand(options: ChatCommandOptions): Promise<number> {
   const connection = resolveConnection(options);
@@ -304,13 +757,8 @@ export async function runChatCommand(options: ChatCommandOptions): Promise<numbe
       return 1;
     }
   } else {
-    const created = await client.createImportedSession({
-      sessionId: `sess-${randomUUID()}` as SessionId,
-      title: 'duya chat',
-      workingDirectory: process.cwd(),
-      projectName: path.basename(process.cwd()),
-    });
-    sessionId = created.sessionId;
+    const created = await createChatSession(client, options);
+    sessionId = created.id;
   }
 
   if (options.print !== undefined) {

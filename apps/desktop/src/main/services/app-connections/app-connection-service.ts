@@ -1,7 +1,7 @@
 /**
  * AppConnectionService — main-process singleton facade. Plan 312 Phase 1.
  *
- * Composes {@link ConnectionStore}, {@link TokenVault},
+ * Composes a Host-backed connection store, {@link TokenVault},
  * {@link TokenService}, and the OAuth flow orchestrator into a single
  * surface used by the IPC layer and the connector service.
  *
@@ -19,11 +19,12 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { getDatabase } from '../../db/connection.js';
 import { getLogger, LogComponent } from '../../logging/logger';
-import { ConnectionStore } from './connection-store.js';
+import { HostConnectionStore } from './host-connection-store.js';
+import type { ConnectionStorePort } from './connection-store-port.js';
 import { TokenVault } from './token-vault.js';
 import { TokenService } from './token-service.js';
+import { getDesktopHostLocalAppConnectionApi } from '../../cli/desktop-host-api.js';
 import { startAuthorization, FlowError } from './oauth/flow.js';
 import { startRemoteMcpAuthorization } from './oauth/remote-mcp-flow.js';
 import type { RemoteMcpConnector } from './connectors/remote-mcp.js';
@@ -70,7 +71,7 @@ export type ProviderBlockCheck = (
 ) => { allowed: boolean; reason?: string };
 
 export interface AppConnectionServiceDeps {
-  store?: ConnectionStore;
+  store?: ConnectionStorePort;
   vault?: TokenVault;
   tokenService?: TokenService;
   fetchImpl?: typeof fetch;
@@ -85,7 +86,8 @@ export interface AppConnectionServiceDeps {
 export class AppConnectionService {
   private readonly logger = getLogger();
   readonly vault: TokenVault;
-  private readonly _store: ConnectionStore | undefined;
+  private readonly _store: ConnectionStorePort | undefined;
+  private hostStore: ConnectionStorePort | undefined;
   private readonly _tokenService: TokenService | undefined;
   private readonly fetchImpl: typeof fetch;
   private reloadHook: ReloadBroadcastHook | null = null;
@@ -102,22 +104,19 @@ export class AppConnectionService {
   constructor(deps: AppConnectionServiceDeps = {}) {
     this.vault = deps.vault ?? new TokenVault();
     this.fetchImpl = deps.fetchImpl ?? fetch;
-    // Store / tokenService are lazily resolved at call time (not at module-
-    // import time) so that `getDatabase()` is guaranteed to be non-null by
-    // the time any method body runs.  This mirrors the defensive pattern in
-    // `getReadyAppConnectionService()` in the IPC layer.
+    // Resolve Host access lazily so the singleton can be constructed while
+    // Electron is booting, before the Desktop Host API has started.
     this._store = deps.store;
     this._tokenService = deps.tokenService;
     this.providerBlockCheck = deps.isProviderBlocked;
     this.hydrateProviderClients();
   }
 
-  /** Lazy store — resolves the DB connection at first use, not at construction. */
-  private get _connectionStore(): ConnectionStore {
+  /** Lazy store — production persistence crosses the authenticated Host API. */
+  private get _connectionStore(): ConnectionStorePort {
     if (this._store) return this._store;
-    const db = getDatabase();
-    if (!db) throw new Error('App connection database is not ready');
-    return new ConnectionStore(db);
+    this.hostStore ??= new HostConnectionStore(getDesktopHostLocalAppConnectionApi());
+    return this.hostStore;
   }
 
   /** Lazy tokenService — depends on the store, so also resolved lazily. */
@@ -146,13 +145,13 @@ export class AppConnectionService {
   }
 
   /** List all connections as renderer-safe DTOs. */
-  list(): AppConnectionStatusDTO[] {
-    return this._connectionStore.list().map(toStatusDTO);
+  async list(): Promise<AppConnectionStatusDTO[]> {
+    return (await this._connectionStore.list()).map(toStatusDTO);
   }
 
   /** List connections for a single provider (renderer-safe DTOs). */
-  listByProvider(provider: ProviderId): AppConnectionStatusDTO[] {
-    return this._connectionStore.listByProvider(provider).map(toStatusDTO);
+  async listByProvider(provider: ProviderId): Promise<AppConnectionStatusDTO[]> {
+    return (await this._connectionStore.listByProvider(provider)).map(toStatusDTO);
   }
 
   /** List built-in providers without exposing OAuth client secrets. */
@@ -227,8 +226,8 @@ export class AppConnectionService {
   }
 
   /** Get a single connection's status DTO. */
-  getStatus(connectionId: string): AppConnectionStatusDTO | null {
-    const conn = this._connectionStore.get(connectionId);
+  async getStatus(connectionId: string): Promise<AppConnectionStatusDTO | null> {
+    const conn = await this._connectionStore.get(connectionId);
     return conn ? toStatusDTO(conn) : null;
   }
 
@@ -271,7 +270,7 @@ export class AppConnectionService {
 
     // Upsert a connected connection for provider wecom so the connector's
     // descriptors surface after reload. Reuse any existing wecom connection id.
-    const existing = this._connectionStore.listByProvider(WECOM_PROVIDER)[0];
+    const existing = (await this._connectionStore.listByProvider(WECOM_PROVIDER))[0];
     const conn: AppConnection = {
       id: existing?.id ?? `wecom-${randomUUID().slice(0, 8)}`,
       provider: WECOM_PROVIDER,
@@ -284,7 +283,7 @@ export class AppConnectionService {
       createdAt: existing?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
     };
-    this._connectionStore.upsert(conn);
+    const persisted = await this._connectionStore.upsert(conn);
 
     this.logger.info(
       'App Connection: connected wecom (manual credentials)',
@@ -293,7 +292,7 @@ export class AppConnectionService {
     );
 
     await this.fireReload();
-    return toStatusDTO(this._connectionStore.get(conn.id)!);
+    return toStatusDTO(persisted);
   }
 
   /**
@@ -324,7 +323,7 @@ export class AppConnectionService {
 
     this.vault.setOAuthClient(QQ_MAIL_PROVIDER, { clientId: email, clientSecret: authCode });
 
-    const existing = this._connectionStore.listByProvider(QQ_MAIL_PROVIDER)[0];
+    const existing = (await this._connectionStore.listByProvider(QQ_MAIL_PROVIDER))[0];
     const conn: AppConnection = {
       id: existing?.id ?? `qq-mail-${randomUUID().slice(0, 8)}`,
       provider: QQ_MAIL_PROVIDER,
@@ -337,7 +336,7 @@ export class AppConnectionService {
       createdAt: existing?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
     };
-    this._connectionStore.upsert(conn);
+    const persisted = await this._connectionStore.upsert(conn);
 
     this.logger.info(
       'App Connection: connected qq-mail (manual credentials)',
@@ -346,7 +345,7 @@ export class AppConnectionService {
     );
 
     await this.fireReload();
-    return toStatusDTO(this._connectionStore.get(conn.id)!);
+    return toStatusDTO(persisted);
   }
 
   /**
@@ -412,7 +411,7 @@ export class AppConnectionService {
       // prior transport deaths. Without this, every restart+reconnect cycle
       // would accumulate one stale DB row plus an orphaned vault token pair.
       if (config.remoteMcpUrl) {
-        this.cleanupStaleRemoteMcpConnections(provider, dto.id);
+        await this.cleanupStaleRemoteMcpConnections(provider, dto.id);
       }
 
       await this.fireReload();
@@ -464,7 +463,7 @@ export class AppConnectionService {
     // that is the exact recovery scenario this helper targets. Fall back to
     // any row with stored tokens so a `disconnected` row also gets a chance.
     // Note: TokenSet uses camelCase (`refreshToken`), not snake_case.
-    const candidates = this._connectionStore.listByProvider(provider);
+    const candidates = await this._connectionStore.listByProvider(provider);
     const target =
       candidates.find(
         (c) => c.status === 'error' && this.vault.get(c.id)?.refreshToken,
@@ -474,10 +473,10 @@ export class AppConnectionService {
 
     try {
       await this.remoteMcp.ensureSession(target.id, config, scopes);
-      this._connectionStore.updateStatus(target.id, 'connected', {
+      await this._connectionStore.updateStatus(target.id, 'connected', {
         lastError: null,
       });
-      const refreshed = this._connectionStore.get(target.id);
+      const refreshed = await this._connectionStore.get(target.id);
       if (!refreshed) return null;
       this.logger.info(
         'App Connection: silent reconnect succeeded',
@@ -507,16 +506,15 @@ export class AppConnectionService {
    * dance in {@link startRemoteMcpAuthorization}); drop those too so they
    * don't accumulate forever.
    */
-  private cleanupStaleRemoteMcpConnections(
+  private async cleanupStaleRemoteMcpConnections(
     provider: ProviderId,
     keepConnectionId: string,
-  ): void {
-    const stale = this._connectionStore
-      .listByProvider(provider)
+  ): Promise<void> {
+    const stale = (await this._connectionStore.listByProvider(provider))
       .filter((c) => c.id !== keepConnectionId && c.status === 'error');
     if (stale.length === 0) return;
     for (const row of stale) {
-      this._connectionStore.remove(row.id);
+      await this._connectionStore.remove(row.id);
       this.vault.remove(row.id);
       this.vault.removeMcpOAuth(row.id);
     }
@@ -553,13 +551,13 @@ export class AppConnectionService {
     if (!this.remoteMcp) return;
     for (const provider of listProviders()) {
       if (!provider.remoteMcpUrl) continue;
-      const candidates = this._connectionStore.listByProvider(provider.id);
+      const candidates = await this._connectionStore.listByProvider(provider.id);
       for (const conn of candidates) {
         const stored = this.vault.get(conn.id);
         if (!stored?.refreshToken) continue;
         try {
           await this.remoteMcp.ensureSession(conn.id, provider, conn.scopes);
-          this._connectionStore.updateStatus(conn.id, 'connected', {
+          await this._connectionStore.updateStatus(conn.id, 'connected', {
             lastError: null,
           });
           this.logger.info(
@@ -596,7 +594,7 @@ export class AppConnectionService {
    * Returns true if a connection existed (regardless of revoke success).
    */
   async disconnect(connectionId: string): Promise<boolean> {
-    const conn = this._connectionStore.get(connectionId);
+    const conn = await this._connectionStore.get(connectionId);
     if (!conn) {
       return false;
     }
@@ -609,7 +607,7 @@ export class AppConnectionService {
     this.vault.removeMcpOAuth(connectionId);
 
     // 3) Mark disconnected in DB.
-    this._connectionStore.updateStatus(connectionId, 'disconnected', {
+    await this._connectionStore.updateStatus(connectionId, 'disconnected', {
       expiresAt: null,
       lastError: null,
     });
@@ -630,7 +628,7 @@ export class AppConnectionService {
    * Provider token revocation is best-effort and does not block cleanup.
    */
   async remove(connectionId: string): Promise<boolean> {
-    const conn = this._connectionStore.get(connectionId);
+    const conn = await this._connectionStore.get(connectionId);
     if (!conn) {
       return false;
     }
@@ -655,7 +653,7 @@ export class AppConnectionService {
     if (conn.provider === WECOM_PROVIDER || conn.provider === QQ_MAIL_PROVIDER) {
       this.vault.removeOAuthClient(conn.provider);
     }
-    const removed = this._connectionStore.remove(connectionId);
+    const removed = await this._connectionStore.remove(connectionId);
     if (!removed) {
       return false;
     }
@@ -679,9 +677,9 @@ export class AppConnectionService {
    * the next invoke re-connects (see RemoteMcpConnector.ensureSession).
    */
   async markTransportDead(connectionId: string, reason: string): Promise<void> {
-    const conn = this._connectionStore.get(connectionId);
+    const conn = await this._connectionStore.get(connectionId);
     if (!conn || conn.status !== 'connected') return;
-    this._connectionStore.updateStatus(connectionId, 'error', {
+    await this._connectionStore.updateStatus(connectionId, 'error', {
       lastError: `Remote MCP stream died: ${reason}`,
     });
     this.logger.warn(

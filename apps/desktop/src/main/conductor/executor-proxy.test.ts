@@ -13,12 +13,26 @@ const mocks = vi.hoisted(() => ({
   getCanvasSnapshot: vi.fn(),
 }));
 
-vi.mock('../db/core-connection', () => ({
-  getCoreStores: () => ({
-    sessions: {
-      get: mocks.getSession,
-      getExtension: mocks.getExtension,
-      setExtension: mocks.setExtension,
+vi.mock('../cli/desktop-host-api', () => ({
+  getDesktopHostLocalSessionApi: () => ({
+    readLocalSession: async (id: string) => {
+      const session = mocks.getSession(id) as Record<string, unknown> | null | undefined;
+      if (!session) return null;
+      return {
+        ...session,
+        workingDirectory: session.workingDirectory ?? session.working_directory ?? null,
+        extensions: { conductor_canvas_id: mocks.getExtension() },
+      };
+    },
+  }),
+  getDesktopHostSessionApi: () => ({
+    update: async (sessionId: string, _expectedUpdatedAt: number | undefined, patch: {
+      extensions?: Record<string, unknown>;
+    }) => {
+      for (const [key, value] of Object.entries(patch.extensions ?? {})) {
+        mocks.setExtension(sessionId, key, value);
+      }
+      return { updated: true, session: {} };
     },
   }),
 }));

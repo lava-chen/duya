@@ -1,19 +1,18 @@
-import { BashTool } from '../BashTool/BashTool.js';
 import {
-  checkPowerShellSecurity,
-  isReadOnlyPowerShellCommand,
-} from './security.js';
+  PowerShellTool as CapabilityPowerShellTool,
+  type ShellCommandRuntimePorts,
+} from '@duya/capabilities';
+import { getBashOutputDir } from '../../utils/duyaRoot.js';
 
-export class PowerShellTool extends BashTool {
+const agentPowerShellRuntimePorts: ShellCommandRuntimePorts = {
+  start: async (params) => (await import('../BashTool/managed-bash.js')).startManagedBash(params),
+  outputDirectory: getBashOutputDir,
+  gitReminder: async (command) => (await import('../BashTool/git-reminder.js')).buildGitReminder(command),
+};
+
+/** Temporary compatibility adapter for the existing Agent registry. */
+export class PowerShellTool extends CapabilityPowerShellTool {
   constructor() {
-    super({
-      name: 'powershell',
-      description: 'Execute a PowerShell command. Returns the stdout and stderr output.',
-      providerKind: 'powershell',
-      commandLabel: 'PowerShell command',
-      securityCheck: checkPowerShellSecurity,
-      readOnlyCheck: isReadOnlyPowerShellCommand,
-      normalizeCommandForExecution: (command) => command,
-    });
+    super(agentPowerShellRuntimePorts);
   }
 }

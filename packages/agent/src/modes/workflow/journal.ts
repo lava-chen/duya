@@ -17,6 +17,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import type { JournalRecord as ProtocolJournalRecord } from '@duya/agent-protocol';
 
 export type JournalKind = 'node_result' | 'decision' | 'approval' | 'artifact' | 'phase';
 
@@ -25,59 +26,7 @@ export type JournalStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'sk
 /** Node kind annotation — drives console stats (agent count) and icons. */
 export type JournalNodeKind = 'tool' | 'agent' | 'decision' | 'human' | 'gui' | 'browser' | 'ask' | 'noop';
 
-export interface JournalRecord {
-  seq: number;
-  kind: JournalKind;
-  nodeId: string;
-  /** Skyvern block-level attempt semantics. */
-  attempt: number;
-  /** sha256(kind + canonical payload), first 16 bytes hex (415 §5.3). */
-  reqHash?: string;
-  /** Replay cache value. */
-  result?: unknown;
-  status: JournalStatus;
-  /** fresh-eyes annotation (plan 552 §2 principle 4) — verify-stage output. */
-  verification?: 'verified' | 'unconfirmed';
-  /** Failure taxonomy (Skyvern-style classes; regex first). */
-  errorClass?: string;
-  atMs: number;
-  /**
-   * Step-evidence metadata (plan 552 Phase 7 console, ZCode replay-view
-   * analogue). Display/audit only — NEVER part of the reqHash payload,
-   * so populating these can never invalidate the replay cache.
-   */
-  nodeKind?: JournalNodeKind;
-  /** What ran: tool name, agent type, gui action (`click`/`capture`), `decide`. */
-  action?: string;
-  /** Process exit code when the host surfaces one (bash-family tools). */
-  exitCode?: number | null;
-  /** Wall time of the host call (cache hits carry no duration). */
-  durationMs?: number;
-  /** Serialized size of `result` in bytes (output evidence weight). */
-  outputSize?: number;
-  /** Sub-agent DB session (plan 504 lineage) — console links to the transcript. */
-  childSessionId?: string;
-  /** Token usage when the host reports it (summed into run stats). */
-  usage?: { inputTokens: number; outputTokens: number };
-  /**
-   * Display-only one-line input digest (plan 560 §6.1), e.g.
-   * `git tag --list v*`. The record otherwise carries only `reqHash`, so the
-   * run card has nothing readable to print for a step. Truncated by the
-   * producer (~200 chars).
-   *
-   * Display/audit only — NEVER part of the reqHash payload, so populating it
-   * can never invalidate the replay cache.
-   */
-  inputSummary?: string;
-  /**
-   * This call was served from the replay cache — the host was never invoked
-   * (plan 560 §6.1). The run card renders it as the `重放` badge; it is NOT a
-   * re-run control.
-   *
-   * Display/audit only — NEVER part of the reqHash payload.
-   */
-  replayed?: boolean;
-}
+export type JournalRecord = ProtocolJournalRecord;
 
 /** Canonical JSON: sorted keys, stable float formatting. */
 export function canonicalJson(value: unknown): string {

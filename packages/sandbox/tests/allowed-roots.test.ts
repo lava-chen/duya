@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { isPathWithinRoots } from '../allowedRoots.js';
+import { isPathWithinRoots } from '../src/allowed-roots.js';
 
 let root: string;
 let outside: string;

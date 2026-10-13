@@ -1,6 +1,5 @@
 import * as http from 'http';
 import { getLogger, LogComponent } from '../logging/logger';
-import { getDatabase } from '../ipc/db-handlers';
 import { GatewayInitConfig, GatewayProxyConfig } from './types';
 import { startGatewayProcess, stopGatewayProcess, waitForGatewayReady, isGatewayRunning, getGatewayProcess, reloadGatewayProcess } from './lifecycle';
 import { GatewaySessionState } from './types';
@@ -27,46 +26,46 @@ import type { ChannelAdapterEntry } from '../config/schema';
 import { wakeForInbound } from '../wake/channels';
 import { botAgentIdFromSession } from '../automation/provider';
 import { persistInboundAttachment } from '../channels/attachment-store';
-import type { ChannelAddress, ChannelInboundAttachment, ChannelInboundEnvelope } from '../../../../../packages/agent/src/channels/types';
+import type { ChannelAddress, ChannelInboundAttachment, ChannelInboundEnvelope } from '@duya/agent-protocol/channels';
 import { isUserAllowed, getChannelAllowlist, addChannelAllowlistEntry, removeChannelAllowlistEntry } from './channel-directory';
 import { generateHelpText } from '../../../../../packages/gateway/src/commands/help';
 import { interruptCronSession } from '../automation/agent-run';
+import {
+  getDesktopHostLocalGatewayThreadApi,
+  getDesktopHostLocalGatewayUserMapApi,
+  getDesktopHostLocalSettingsApi,
+} from '../cli/desktop-host-api';
 
 const logger = getLogger();
 
 const GATEWAY_SESSION_KEY = '__gateway_session_states__';
 
-// Cached provider config to avoid DB reads on every gateway:inbound
+// Cache provider config so inbound messages do not repeat Host settings reads.
 let _cachedProviderConfig: Record<string, unknown> | null = null;
 let _cachedProviderConfigAt = 0;
 const PROVIDER_CONFIG_TTL_MS = 30_000;
 
-function getCachedProviderConfig(): Record<string, unknown> | undefined {
+function parseStoredSetting(raw: string | undefined): unknown {
+  if (raw === undefined) return undefined;
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return raw;
+  }
+}
+
+async function getCachedProviderConfig(): Promise<Record<string, unknown> | undefined> {
   const now = Date.now();
   if (_cachedProviderConfig && (now - _cachedProviderConfigAt) < PROVIDER_CONFIG_TTL_MS) {
     return _cachedProviderConfig;
   }
 
-  const db = getDatabase();
-  if (!db) {
-    _cachedProviderConfig = null;
-    _cachedProviderConfigAt = now;
-    return undefined;
-  }
-
-  const providerStore = getProviderStore();
-
-  // Fallback to the legacy ConfigManager read when ConfigStore has no
-  // active provider (Phase 3 pre-migration transition period).
-  const fallbackGetSetting = (key: string): string | undefined => {
-    const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
-    if (row) {
-      try { return JSON.parse(row.value); } catch { return row.value; }
-    }
-    return undefined;
-  };
-
   try {
+    const settings = await getDesktopHostLocalSettingsApi().getSettings();
+    const providerStore = getProviderStore();
+
+    // Fallback to legacy settings when ConfigStore has no active provider.
+    const fallbackGetSetting = (key: string): unknown => parseStoredSetting(settings[key]);
     const configStore = getConfigStore();
 
     // Resolve the gateway model setting. It may live in several places and
@@ -74,12 +73,20 @@ function getCachedProviderConfig(): Record<string, unknown> | undefined {
     // one ("minimax-cn:MiniMax-M3"). Collect every source and prefer the
     // first non-empty value.
     let gatewayModelSetting = configStore.getByPath('channels.gateway_model') as string | undefined;
-    if (!gatewayModelSetting) gatewayModelSetting = fallbackGetSetting('gatewayModel');
+    if (!gatewayModelSetting) {
+      const legacyGatewayModel = fallbackGetSetting('gatewayModel');
+      if (typeof legacyGatewayModel === 'string') gatewayModelSetting = legacyGatewayModel;
+    }
     if (!gatewayModelSetting) {
       // ModelSelectionSection persists the qualified form under the
       // `modelSelection` JSON key.
       const modelSelection = fallbackGetSetting('modelSelection');
-      if (modelSelection) {
+      if (modelSelection && typeof modelSelection === 'object') {
+        const legacyGatewayModel = (modelSelection as Record<string, unknown>).gatewayModel;
+        if (typeof legacyGatewayModel === 'string' && legacyGatewayModel) {
+          gatewayModelSetting = legacyGatewayModel;
+        }
+      } else if (typeof modelSelection === 'string') {
         try {
           const parsed = JSON.parse(modelSelection) as { gatewayModel?: unknown };
           if (typeof parsed.gatewayModel === 'string' && parsed.gatewayModel) {
@@ -261,13 +268,11 @@ function isFallbackGatewayTitle(title: string, platform: string): boolean {
  * messages keep arriving. We derive the platform from the inbound message and
  * regenerate the title whenever the stored title is still a fallback.
  */
-function maybeUpdateGatewaySessionTitle(sessionId: string, prompt: string, platform: string): void {
-  const db = getDatabase();
-  if (!db) return;
-
+async function maybeUpdateGatewaySessionTitle(sessionId: string, prompt: string, platform: string): Promise<void> {
   try {
-    const row = db.prepare('SELECT title FROM threads WHERE id = ?').get(sessionId) as { title: string } | undefined;
-    if (row && !isFallbackGatewayTitle(row.title, platform)) {
+    const api = getDesktopHostLocalGatewayThreadApi();
+    const currentTitle = await api.getGatewayThreadTitle(sessionId);
+    if (currentTitle !== null && !isFallbackGatewayTitle(currentTitle, platform)) {
       const state = getSessionState(sessionId);
       if (state) state.titleGenerated = true;
       return;
@@ -275,19 +280,18 @@ function maybeUpdateGatewaySessionTitle(sessionId: string, prompt: string, platf
 
     const title = generateGatewaySessionTitle(prompt, platform);
     const now = Date.now();
-    // Upsert so the title is persisted even if the threads row is missing.
-    db.prepare(`
-      INSERT INTO threads (id, title, provider_type, model, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at
-    `).run(sessionId, title, 'gateway', '', now, now);
-    updateGatewaySessionMeta(sessionId, { title });
+    await api.setGatewayThreadTitle({ sessionId, title, now });
+    await updateGatewaySessionMeta(sessionId, { title });
 
     const state = getSessionState(sessionId);
     if (state) state.titleGenerated = true;
     getLogger().debug('Gateway session title generated', { sessionId, title }, LogComponent.Gateway);
   } catch (err) {
-    getLogger().warn('Failed to update gateway session title', err instanceof Error ? err.message : String(err), LogComponent.Gateway);
+    getLogger().warn(
+      'Failed to update gateway session title',
+      { error: err instanceof Error ? err.message : String(err) },
+      LogComponent.Gateway,
+    );
   }
 }
 
@@ -332,17 +336,14 @@ export function resetGatewaySession(sessionId: string): void {
   states.delete(sessionId);
 
   try {
-    const db = getDatabase();
-    if (db) {
-      const now = Date.now();
-      db.prepare(`UPDATE threads SET updated_at = ? WHERE id = ?`).run(now, sessionId);
-      // Intentionally do NOT delete messages. The messages table is
-      // append-only; resetting a gateway session creates a fresh session
-      // via the mapping update, but the previous session history must
-      // remain visible when the user opens the old session in the UI.
-    }
+    void getDesktopHostLocalGatewayThreadApi()
+      .touchGatewayThread(sessionId, Date.now())
+      .catch((error: unknown) => getLogger().debug('Gateway thread timestamp update failed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      }, LogComponent.Gateway));
   } catch {
-    // best effort
+    // The in-memory reset still succeeds if the Host has already stopped.
   }
 
   getLogger().info('Gateway session reset', { sessionId }, LogComponent.Gateway);
@@ -354,18 +355,13 @@ export function resetGatewaySession(sessionId: string): void {
  * (the old gateway:create_session path, now Main-side only — the gateway's
  * user-mapper is gone).
  */
-export function resolveOrCreateGatewaySession(
+export async function resolveOrCreateGatewaySession(
   platform: string,
   platformChatId: string,
   platformUserId: string,
-): string {
-  const db = getDatabase();
-  if (db) {
-    const row = db.prepare(
-      'SELECT session_id FROM gateway_user_map WHERE platform = ? AND platform_chat_id = ?'
-    ).get(platform, platformChatId) as { session_id?: string } | undefined;
-    if (row?.session_id) return row.session_id;
-  }
+): Promise<string> {
+  const existing = await getDesktopHostLocalGatewayUserMapApi().findGatewayUserMapping(platform, platformChatId);
+  if (existing?.sessionId) return existing.sessionId;
 
   const sessionId = `gw-${platform}-${platformChatId}`;
   createOrResetGatewaySession(sessionId, platform);
@@ -374,25 +370,20 @@ export function resolveOrCreateGatewaySession(
   // falls back to ~/.duya/workspace).
   const workingDirectory = prepareGatewayWorkspace(getOrBuildInitConfig());
 
-  if (db) {
-    try {
-      const now = Date.now();
-      const title = `${platform} ${new Date().toLocaleString()}`;
-      db.prepare(`
-        INSERT INTO threads (id, title, provider_type, model, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
-      `).run(sessionId, title, 'gateway', '', now, now);
-      createGatewaySessionRecord(sessionId, title, workingDirectory, platform);
+  try {
+    const now = Date.now();
+    const title = `${platform} ${new Date().toLocaleString()}`;
+    await getDesktopHostLocalGatewayThreadApi().ensureGatewayThread({ sessionId, title, now });
+    await createGatewaySessionRecord(sessionId, title, workingDirectory, platform);
 
-      db.prepare(`
-        INSERT INTO gateway_user_map (id, platform, platform_user_id, platform_chat_id, session_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(platform, platform_chat_id) DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at
-      `).run(`${platform}:${platformChatId}`, platform, platformUserId, platformChatId, sessionId, now, now);
-    } catch (err) {
-      getLogger().error('Failed to save gateway session', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
-    }
+    await getDesktopHostLocalGatewayUserMapApi().upsertGatewayUserMapping({
+      platform,
+      platformUserId,
+      platformChatId,
+      sessionId,
+    });
+  } catch (err) {
+    getLogger().error('Failed to save gateway session', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
   }
 
   return sessionId;
@@ -428,17 +419,14 @@ async function handleGatewayCommand(
       case 'new':
       case 'reset':
       case 'clear': {
-        const newSessionId = resetGatewaySessionForChat(platform, platformChatId);
+        const newSessionId = await resetGatewaySessionForChat(platform, platformChatId);
         reply(`✨ Session reset! Starting fresh.\n\nSession: \`${newSessionId}\``);
         return;
       }
 
       case 'stop': {
-        const db = getDatabase();
-        const row = db?.prepare(
-          'SELECT session_id FROM gateway_user_map WHERE platform = ? AND platform_chat_id = ?'
-        ).get(platform, platformChatId) as { session_id?: string } | undefined;
-        const sessionId = row?.session_id;
+        const mapping = await getDesktopHostLocalGatewayUserMapApi().findGatewayUserMapping(platform, platformChatId);
+        const sessionId = mapping?.sessionId;
         if (sessionId) {
           try {
             interruptCronSession(sessionId);
@@ -453,16 +441,13 @@ async function handleGatewayCommand(
       }
 
       case 'status': {
-        const db = getDatabase();
-        const row = db?.prepare(
-          'SELECT session_id FROM gateway_user_map WHERE platform = ? AND platform_chat_id = ?'
-        ).get(platform, platformChatId) as { session_id?: string } | undefined;
+        const mapping = await getDesktopHostLocalGatewayUserMapApi().findGatewayUserMapping(platform, platformChatId);
         const lines = [
           '*Session Status*',
           '',
           `Platform: ${platform}`,
           `Chat ID: \`${platformChatId}\``,
-          `Session: \`${row?.session_id ?? '(no active session)'}\``,
+          `Session: \`${mapping?.sessionId ?? '(no active session)'}\``,
           `Running: ${isGatewayRunning() ? 'Yes' : 'No'}`,
         ];
         reply(lines.join('\n'));
@@ -482,17 +467,10 @@ async function handleGatewayCommand(
  * repointing the (platform, chatId) mapping (the old gateway:reset_session
  * handler, now Main-side only).
  */
-function resetGatewaySessionForChat(platform: string, platformChatId: string): string {
-  const db = getDatabase();
-
+async function resetGatewaySessionForChat(platform: string, platformChatId: string): Promise<string> {
   // 1. Find the old session id from the mapping table (source of truth).
-  let oldSessionId: string | undefined;
-  if (db) {
-    const row = db.prepare(
-      'SELECT session_id FROM gateway_user_map WHERE platform = ? AND platform_chat_id = ?'
-    ).get(platform, platformChatId) as { session_id?: string } | undefined;
-    oldSessionId = row?.session_id;
-  }
+  const previousMapping = await getDesktopHostLocalGatewayUserMapApi().findGatewayUserMapping(platform, platformChatId);
+  const oldSessionId = previousMapping?.sessionId;
 
   // 2. Reset the old session's in-memory state. Messages are intentionally
   //    preserved so the old session remains viewable in the UI.
@@ -507,24 +485,19 @@ function resetGatewaySessionForChat(platform: string, platformChatId: string): s
 
   const workingDirectory = prepareGatewayWorkspace(getOrBuildInitConfig());
 
-  if (db) {
-    try {
-      const now = Date.now();
-      const title = `${platform} Reset ${new Date().toLocaleString()}`;
-      db.prepare(`
-        INSERT INTO threads (id, title, provider_type, model, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at
-      `).run(sessionId, title, 'gateway', '', now, now);
-      createGatewaySessionRecord(sessionId, title, workingDirectory, platform);
-      db.prepare(`
-        INSERT INTO gateway_user_map (id, platform, platform_user_id, platform_chat_id, session_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(platform, platform_chat_id) DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at
-      `).run(`${platform}:${platformChatId}`, platform, '', platformChatId, sessionId, now, now);
-    } catch (err) {
-      getLogger().error('Failed to save gateway reset session', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
-    }
+  try {
+    const now = Date.now();
+    const title = `${platform} Reset ${new Date().toLocaleString()}`;
+    await getDesktopHostLocalGatewayThreadApi().resetGatewayThread({ sessionId, title, now });
+    await createGatewaySessionRecord(sessionId, title, workingDirectory, platform);
+    await getDesktopHostLocalGatewayUserMapApi().upsertGatewayUserMapping({
+      platform,
+      platformUserId: previousMapping?.platformUserId ?? '',
+      platformChatId,
+      sessionId,
+    });
+  } catch (err) {
+    getLogger().error('Failed to save gateway reset session', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
   }
 
   return sessionId;
@@ -586,10 +559,10 @@ async function persistInboundAttachmentRefs(
   return { attachments, skippedLines };
 }
 
-export function handleGatewayMessage(
+export async function handleGatewayMessage(
   msg: Record<string, unknown>,
   onAuthFailure: () => void,
-): void {
+): Promise<void> {
   const type = msg.type as string | undefined;
   const sessionId = msg.sessionId as string | undefined;
 
@@ -670,7 +643,7 @@ export function handleGatewayMessage(
         payloadStr: JSON.stringify(payload).slice(0, 200)
       }, LogComponent.Main);
 
-      const result = dispatchGatewayDbAction(actionObj);
+      const result = await dispatchGatewayDbAction(actionObj);
 
       logger.info('db:request result', { result: result ? 'ok' : 'null' }, LogComponent.Main);
 
@@ -751,7 +724,7 @@ export function handleGatewayMessage(
 
       // Channel allow-list (channel-directory, plan 520): an empty list for
       // the platform means open — the legacy adapters did their own gating.
-      if (!isUserAllowed(platform, inboundMsg.platformUserId ?? '')) {
+      if (!await isUserAllowed(platform, inboundMsg.platformUserId ?? '')) {
         getLogger().info('gateway:inbound rejected by allow-list', {
           platform,
           platformChatId,
@@ -770,7 +743,7 @@ export function handleGatewayMessage(
 
       let sessionId: string;
       try {
-        sessionId = resolveOrCreateGatewaySession(platform, platformChatId, inboundMsg.platformUserId ?? '');
+        sessionId = await resolveOrCreateGatewaySession(platform, platformChatId, inboundMsg.platformUserId ?? '');
       } catch (err) {
         getLogger().error(
           'Failed to resolve gateway session for inbound message',
@@ -790,9 +763,9 @@ export function handleGatewayMessage(
       }
 
       // Generate a meaningful title from the first inbound message (fire-and-forget).
-      maybeUpdateGatewaySessionTitle(sessionId, inboundMsg.prompt, platform);
+      void maybeUpdateGatewaySessionTitle(sessionId, inboundMsg.prompt, platform);
 
-      const providerConfig = getCachedProviderConfig();
+      const providerConfig = await getCachedProviderConfig();
       if (providerConfig) {
         logger.info('gateway:inbound enqueuing', { provider: providerConfig.provider, model: providerConfig.model || '(empty)' }, LogComponent.Main);
       } else {
@@ -802,7 +775,7 @@ export function handleGatewayMessage(
       // Update gateway session metadata (workspace + permission profile).
       const workingDirectory = prepareGatewayWorkspace(getOrBuildInitConfig());
       try {
-        updateGatewaySessionMeta(sessionId, {
+        await updateGatewaySessionMeta(sessionId, {
           working_directory: workingDirectory,
           permission_profile: GATEWAY_PERMISSION_PROFILE,
         });
@@ -1053,7 +1026,7 @@ export function sendToGatewayProcess(data: Record<string, unknown>): void {
   }
 }
 
-export function forwardToGateway(sessionId: string, event: Record<string, unknown>): void {
+export async function forwardToGateway(sessionId: string, event: Record<string, unknown>): Promise<void> {
   const proc = getGatewayProcess();
   if (!proc || proc.killed) {
     getLogger().warn('Cannot forward: gateway not running', { sessionId }, LogComponent.Gateway);
@@ -1067,16 +1040,11 @@ export function forwardToGateway(sessionId: string, event: Record<string, unknow
   // from the DB mapping (in-memory bridgeChannel stays the platform hint).
   let platform = sessionInfo?.bridgeChannel;
   let platformChatId: string | undefined;
-  const db = getDatabase();
-  if (db) {
-    try {
-      const row = db.prepare(
-        'SELECT platform, platform_chat_id FROM gateway_user_map WHERE session_id = ? LIMIT 1'
-      ).get(sessionId) as { platform?: string; platform_chat_id?: string } | undefined;
-      platform = platform ?? row?.platform;
-      platformChatId = row?.platform_chat_id;
-    } catch { /* best effort */ }
-  }
+  try {
+    const mapping = await getDesktopHostLocalGatewayUserMapApi().findGatewayUserMappingBySession(sessionId);
+    platform = platform ?? mapping?.platform;
+    platformChatId = mapping?.platformChatId;
+  } catch { /* best effort */ }
 
   proc.send({
     type: 'gateway:outbound',
@@ -1108,8 +1076,8 @@ const _gatewayStatusRequests = new Map<string, { resolve: (value: any) => void; 
 const _channelSendRequests = new Map<string, { resolve: (value: { ok: boolean; error?: string; platformMsgId?: string }) => void; reject: (err: Error) => void; timeout: ReturnType<typeof setTimeout> }>();
 
 export function getOrBuildInitConfig(): GatewayInitConfig {
-  // 注意：不再缓存。每次调用都从 DB 重读，确保 UI 保存新凭据后下一次 start 拿到最新值。
-  // 缓存导致过 "配置完 channel 后必须重启 dev 才能生效" 的 bug。
+  // Rebuild on every call so the next start sees credentials just saved to
+  // ConfigStore and its secrets file.
 
   const platforms: Array<{ platform: string; enabled: boolean; credentials: Record<string, string>; options?: Record<string, unknown> }> = [];
 
@@ -1322,10 +1290,12 @@ export function registerGatewayIpcHandlers(): void {
       const child = startGatewayProcess(config);
 
       child.on('message', (msg: Record<string, unknown>) => {
-        handleGatewayMessage(msg, () => {
+        void handleGatewayMessage(msg, () => {
           // auth-failure 回调：热重启时用最新 config
           const fresh = getOrBuildInitConfig();
           reloadGatewayProcess(fresh, 'auth-failure').catch(() => { /* error already logged */ });
+        }).catch((err: unknown) => {
+          getLogger().error('Gateway message handler failed', err instanceof Error ? err : new Error(String(err)), { type: msg.type }, LogComponent.Gateway);
         });
       });
 
@@ -1398,28 +1368,24 @@ export function registerGatewayIpcHandlers(): void {
 
   // Plan 520: allow-list replaces the pairing system. Managed by Main via
   // channel-directory; the gateway only transparently forwards sender ids.
-  ipcMain.handle('gateway:allowlist:list', () => {
-    return getChannelAllowlist();
+  ipcMain.handle('gateway:allowlist:list', async () => {
+    return await getChannelAllowlist();
   });
 
-  ipcMain.handle('gateway:allowlist:add', (_event, platform: string, platformUserId: string) => {
-    addChannelAllowlistEntry(platform, platformUserId);
+  ipcMain.handle('gateway:allowlist:add', async (_event, platform: string, platformUserId: string) => {
+    await addChannelAllowlistEntry(platform, platformUserId);
     return { success: true };
   });
 
-  ipcMain.handle('gateway:allowlist:remove', (_event, platform: string, platformUserId: string) => {
-    removeChannelAllowlistEntry(platform, platformUserId);
+  ipcMain.handle('gateway:allowlist:remove', async (_event, platform: string, platformUserId: string) => {
+    await removeChannelAllowlistEntry(platform, platformUserId);
     return { success: true };
   });
 
   ipcMain.handle('gateway:getStatus', async () => {
     let autoStart = false;
     try {
-      const db = getDatabase();
-      if (db) {
-        const row = db.prepare("SELECT value FROM settings WHERE key = 'bridge_auto_start'").get() as { value: string } | undefined;
-        autoStart = row?.value === 'true';
-      }
+      autoStart = await getDesktopHostLocalSettingsApi().getSetting('bridge_auto_start') === 'true';
     } catch { /* best effort */ }
 
     const running = isGatewayRunning();
@@ -1569,28 +1535,26 @@ export function registerGatewayIpcHandlers(): void {
     };
   });
 
-  ipcMain.handle('gateway:get_config', () => {
-    const db = getDatabase();
-    if (!db) return {};
-
-    const getSetting = (key: string): string | undefined => {
-      const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
-      if (row) {
-        try { return JSON.parse(row.value); } catch { return row.value; }
-      }
-      return undefined;
-    };
-
-    return {
-      telegramToken: getSetting('telegram_bot_token'),
-      qqAppId: getSetting('bridge_qq_app_id'),
-      qqAppSecret: getSetting('bridge_qq_app_secret'),
-      feishuAppId: getSetting('bridge_feishu_app_id'),
-      feishuAppSecret: getSetting('bridge_feishu_app_secret'),
-      weixinToken: getSetting('weixin_bot_token'),
-      weixinAccountId: getSetting('weixin_account_id'),
-      weixinBaseUrl: getSetting('weixin_base_url'),
-    };
+  ipcMain.handle('gateway:get_config', async () => {
+    try {
+      const settings = await getDesktopHostLocalSettingsApi().getSettings();
+      const getSetting = (key: string): unknown => parseStoredSetting(settings[key]);
+      return {
+        telegramToken: getSetting('telegram_bot_token'),
+        qqAppId: getSetting('bridge_qq_app_id'),
+        qqAppSecret: getSetting('bridge_qq_app_secret'),
+        feishuAppId: getSetting('bridge_feishu_app_id'),
+        feishuAppSecret: getSetting('bridge_feishu_app_secret'),
+        weixinToken: getSetting('weixin_bot_token'),
+        weixinAccountId: getSetting('weixin_account_id'),
+        weixinBaseUrl: getSetting('weixin_base_url'),
+      };
+    } catch (err) {
+      logger.warn('Failed to read gateway config through Host', {
+        error: err instanceof Error ? err.message : String(err),
+      }, LogComponent.Gateway);
+      return {};
+    }
   });
 
   getLogger().info('Registered gateway IPC handlers', undefined, LogComponent.Gateway);
@@ -1602,10 +1566,12 @@ export async function startGateway(): Promise<void> {
   const child = startGatewayProcess(config);
 
   child.on('message', (msg: Record<string, unknown>) => {
-    handleGatewayMessage(msg, () => {
+    void handleGatewayMessage(msg, () => {
       // auth-failure 回调：热重启时用最新 config
       const fresh = getOrBuildInitConfig();
       reloadGatewayProcess(fresh, 'auth-failure:auto-start').catch(() => { /* error already logged */ });
+    }).catch((err: unknown) => {
+      getLogger().error('Gateway message handler failed', err instanceof Error ? err : new Error(String(err)), { type: msg.type }, LogComponent.Gateway);
     });
   });
 

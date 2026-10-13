@@ -7,7 +7,7 @@ import { workerLogger } from './logger';
 import type { WorkerEvent } from '../../../../../../packages/agent/src/process/worker-protocol';
 import type { ApiProvider } from '../../config/provider-types';
 import { buildInitProviderConfig, detectReferencesEnabled, resolveRuntimeConfigViaDbRequest } from './router';
-import { calculateMaxConcurrentWorkers } from './worker-limits';
+import { calculateMaxConcurrentWorkers } from '@duya/host/worker-limits';
 
 /**
  * Shared map of pending DB requests, keyed by request id. The agent server

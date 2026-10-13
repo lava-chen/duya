@@ -4,27 +4,6 @@ import path from 'path';
 
 const outdir = path.join('packages', 'agent', 'bundle');
 const outfile = path.join(outdir, 'agent-process-entry.js');
-// The duya CHAT CLI (`duya -t` / `--print` / the REPL), from the same package
-// and against the same runtime, as a second entry in THIS directory.
-//
-// It lives here rather than in a directory of its own for two reasons, both
-// measured. First, `outdir` is wiped on line 13, so a chat CLI bundle in a
-// sibling directory would be deleted by every later `npm run bundle:agent`.
-// Second — and the reason this is a build constraint rather than a style
-// choice — every architecture gate under `scripts/architecture/` skips
-// directories whose NAME is exactly `bundle` (`boundary-gates.mjs:37`,
-// `audit-modules.mjs:27`, `audit-imports.mjs:28-31`). A `bundle-cli/`
-// directory is not skipped, so its ~12 MB of generated JavaScript was scanned
-// as first-party source and reported as a new `module-dependency` violation.
-// `scripts/architecture/**` is not ours to edit, and re-recording the baseline
-// to absorb generated output would be a fake green. Emitting into the
-// existing `bundle/` directory keeps generated output out of the gate's
-// source scan by construction.
-//
-// Why this entry needs bundling at all, and why the same two facts defeat a
-// "make the dist node-loadable" fix, is documented in AGENTS.md under
-// "Agent CLI (standalone)".
-const chatCliOutfile = path.join(outdir, 'cli-entry.js');
 // The BashTool worker is a separate emitted file, not a module of `outfile`.
 // Declared once here so the build step and the log below cannot drift onto
 // different paths — the same reason the gate reads this path from one place.
@@ -45,6 +24,13 @@ var import_meta = { url: import_meta_url };
 await build({
   entryPoints: ['packages/agent/src/process/agent-process-entry.ts'],
   outfile,
+  alias: {
+    // The legacy agent's CLI tool now reaches the Host-backed control CLI.
+    // Resolve these workspace edges to the ordered package build outputs,
+    // matching build-cli-bundle.mjs rather than relying on npm junctions.
+    '@duya/host/http-client': path.resolve('packages/host/dist/http-client.js'),
+    '@duya/host/local-host': path.resolve('packages/host/dist/local-host.js'),
+  },
   bundle: true,
   platform: 'node',
   target: 'node18',
@@ -62,70 +48,6 @@ await build({
     'esbuild',
     'chromium-bidi/lib/cjs/bidiMapper/BidiMapper',
     'chromium-bidi/lib/cjs/cdp/CdpConnection',
-  ],
-  banner: {
-    js: importMetaUrlPolyfill,
-  },
-  define: {
-    'import.meta.url': 'import_meta_url',
-  },
-});
-
-// The duya CHAT CLI — a THIRD esbuild entry, and the reason `bundle:agent` is
-// also how you get a runnable `duya -t` / `--print` / REPL.
-//
-// Same externals and same polyfill as the worker entry above, deliberately:
-// they are the same package and the same runtime, and a chat CLI that resolved
-// `better-sqlite3` differently from the worker would be a second answer to one
-// question. NOT minified, unlike the other two — this artifact is what a human
-// runs and reports a stack trace from, and the agent worker is never read by a
-// person.
-//
-// ONE intentional divergence, added when the chat CLI gained a blessed TUI
-// (`cli/tui-session.ts` -> `cli/ui/TUIApp.ts` -> `blessed`).
-//
-// `blessed` cannot be bundled by esbuild at all. `blessed/lib/widget.js` builds
-// its widget registry by reading its OWN `widgets/` directory at runtime and
-// requiring each file it finds:
-//
-//   fs.readdirSync(__dirname + '/widgets').forEach(function (file) {
-//     ... require('./widgets/' + file) ...
-//
-// esbuild cannot see those requires, so it emits a "Module not found in bundle:
-// ./widgets/node" stub for every widget and the CLI dies on first import. The
-// first symptom is misleading and worth naming: the build fails earlier with
-// "Could not resolve 'term.js'" and "Could not resolve 'pty.js'", because
-// blessed@0.1.81 declares NO dependencies at all yet
-// `blessed/lib/widgets/terminal.js` requires two it never declares. Both sit
-// INSIDE that widget's methods, so they never fire at runtime — but esbuild
-// resolves them statically anyway. Marking those two external only moves the
-// failure from build time to run time; marking `blessed` itself external is the
-// fix.
-//
-// Acceptable because the chat CLI is a DEV artifact: it is run from the repo
-// (`node packages/agent/bundle/cli-entry.js`), where Node resolves blessed from
-// the workspace `node_modules` like any other dependency. The artifact that is
-// actually packaged is `agent-process-entry.js`, and the worker entry never
-// imports the cli directory, so it never reaches blessed and needs none of this.
-// If you ever make the chat CLI a shipped artifact, this entry is the thing that
-// has to be revisited.
-await build({
-  entryPoints: ['packages/agent/src/cli/index.ts'],
-  outfile: chatCliOutfile,
-  bundle: true,
-  platform: 'node',
-  target: 'node18',
-  format: 'cjs',
-  sourcemap: false,
-  minify: false,
-  external: [
-    'better-sqlite3',
-    'fsevents',
-    'playwright',
-    'esbuild',
-    'chromium-bidi/lib/cjs/bidiMapper/BidiMapper',
-    'chromium-bidi/lib/cjs/cdp/CdpConnection',
-    'blessed',
   ],
   banner: {
     js: importMetaUrlPolyfill,
@@ -203,22 +125,8 @@ const promptsAssetsOut = path.join(outdir, 'assets');
 fs.cpSync(promptsAssetsSrc, promptsAssetsOut, { recursive: true });
 console.log(`[build-agent-bundle] Copied prompt assets to ${promptsAssetsOut}`);
 
-// Build standalone CLI bundle (duya shell wrapper target).
-// Plan 99: the CLI bundle is now built separately by
-// `scripts/build-cli-bundle.mjs` into `packages/cli/bundle/cli.cjs`.
-// The dev fallback path (`electron/services/cliInstallAuto.ts:98`)
-// and the electron-builder extraResources copy both look for
-// `packages/cli/bundle/cli.cjs` (production: `resources/cli-bundle/cli.cjs`).
-// See `scripts/build-cli-bundle.mjs`.
-// That is the DESKTOP CONTROL PLANE. The chat CLI built above
-// (`bundle/cli-entry.js`) is a different program with different commands —
-// `-t`, `--print`, the REPL — and it is not what that path looks for.
-
 const stats = fs.statSync(outfile);
 console.log(`[build-agent-bundle] Built ${outfile} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
 const workerStats = fs.statSync(workerOutfile);
 console.log(`[build-agent-bundle] Built ${workerOutfile} (${(workerStats.size / 1024).toFixed(2)} KB)`);
-const chatCliStats = fs.statSync(chatCliOutfile);
-console.log(`[build-agent-bundle] Built ${chatCliOutfile} (${(chatCliStats.size / 1024 / 1024).toFixed(2)} MB)`);
-console.log(`[build-agent-bundle] Run the chat CLI: node ${chatCliOutfile} --help`);
 console.log(`[build-agent-bundle] Created package.json with type: commonjs`);

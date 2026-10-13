@@ -13,42 +13,19 @@
  * table for server-side handler execution; it is intentionally unused in v1.
  */
 
-export type WorkbenchSourceType = 'http' | 'project_db';
+import type { DataSourceRow, WorkbenchSourceType } from '@duya/agent-protocol/workbench';
+
+export type {
+  CreateDataSourceInput,
+  DataSourceRow,
+  HttpSourceConfig,
+  ProjectDbSourceConfig,
+  WorkbenchSourceConfig,
+  WorkbenchSourceType,
+  UpdateDataSourceInput,
+} from '@duya/agent-protocol/workbench';
 
 export const WORKBENCH_SOURCE_TYPES: readonly WorkbenchSourceType[] = ['http', 'project_db'];
-
-/** `headers` values may reference environment variables via "$env:NAME". */
-export interface HttpSourceConfig {
-  url: string;
-  method?: 'GET' | 'POST';
-  headers?: Record<string, string>;
-  body?: string;
-  /** Dot path into the JSON response (e.g. "data.ticker.price"); omitted = whole payload. */
-  path?: string;
-}
-
-export interface ProjectDbSourceConfig {
-  /** Passthrough command object for ProjectDatabaseService.invoke (parameterized). */
-  command: Record<string, unknown>;
-}
-
-export type WorkbenchSourceConfig = HttpSourceConfig | ProjectDbSourceConfig;
-
-export interface DataSourceRow {
-  id: string;
-  canvasId: string;
-  name: string;
-  type: WorkbenchSourceType;
-  config: WorkbenchSourceConfig;
-  /** 0 = manual only; scheduler refreshes at >= WORKBENCH_MIN_INTERVAL_SEC otherwise. */
-  refreshIntervalSec: number;
-  lastSnapshot: unknown | null;
-  lastRefreshedAt: number | null;
-  lastError: string | null;
-  enabled: boolean;
-  createdAt: number;
-  updatedAt: number;
-}
 
 /** Widget action dispatched from a widget iframe via the host renderer. */
 export interface WorkbenchWidgetAction {

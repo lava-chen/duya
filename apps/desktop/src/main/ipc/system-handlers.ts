@@ -24,7 +24,7 @@ import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import { getConfigStore } from '../config/store-instance';
 import { isHttpUrl } from './url-safety';
-import { isPathWithinRoots } from '@duya/agent/tool/allowedRoots';
+import { isPathWithinRoots } from '@duya/sandbox';
 export { isHttpUrl } from './url-safety';
 import { getNoProjectWorkspace } from '../automation/workspace';
 

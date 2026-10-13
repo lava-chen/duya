@@ -79,6 +79,8 @@ export * from './send-message-state.js';
 export * from './model-capabilities.js';
 export * from './app-connections.js';
 export * from './plugin-setup.js';
+export * from './workbench.js';
+export * from './computer-use.js';
 export * from './import-batches.js';
 export * from './turn-review.js';
 export * from './sidebar-sections.js';

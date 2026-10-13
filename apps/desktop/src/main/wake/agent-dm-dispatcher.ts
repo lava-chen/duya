@@ -22,15 +22,19 @@
  * Mirrors `idle-dispatcher.ts`'s dependency style so it stays unit-testable.
  */
 
-import { getCoreStores } from '../db/core-connection'
-import type { WakeItem } from '../../../../../packages/agent/src/wake/types'
+import type { WakeItem } from '@duya/agent-protocol'
 import { enqueueWakeItemForSession } from './wake-dispatcher'
-import { decodeEnvelope } from '../../../../../packages/agent/src/agent/dm/index.js'
+import { decodeEnvelope } from '@duya/agent-protocol'
 import { parseAgentIdFromBotSession } from './bot-session-id'
 import { getLogger, LogComponent } from '../logging/logger'
 import type { NewEvent } from '../db/core'
 import { ipcMessageToNewEvent, newEventToIpcMessage } from '../ipc/core-db-adapters'
 import { getSessionManager } from '../agents/session-manager'
+import {
+  getDesktopHostLocalMailboxApi,
+  getDesktopHostLocalSessionApi,
+  getDesktopHostSessionApi,
+} from '../cli/desktop-host-api'
 
 export interface AgentDmRowLike {
   id: string
@@ -44,7 +48,7 @@ export interface AgentDmRowLike {
 
 export interface BotSessionSpec {
   /** Idempotently ensure the target bot's persistent session row exists. */
-  createIfMissing(sessionId: string, agentId: string): void
+  createIfMissing(sessionId: string, agentId: string): void | Promise<void>
 }
 
 /**
@@ -53,7 +57,7 @@ export interface BotSessionSpec {
  */
 export const defaultBotSessionCreator: BotSessionSpec = {
   createIfMissing(sessionId, agentId) {
-    createBotSessionIfMissing(sessionId, agentId)
+    return createBotSessionIfMissing(sessionId, agentId)
   },
 }
 
@@ -63,10 +67,10 @@ export const defaultBotSessionCreator: BotSessionSpec = {
  * automation Scheduler's routine fires (both POST hidden turns to that
  * session via the wake bus).
  */
-export function createBotSessionIfMissing(sessionId: string, agentId: string): void {
-  const { sessions } = getCoreStores()
-  if (sessions.get(sessionId)) return
-  sessions.create({
+export async function createBotSessionIfMissing(sessionId: string, agentId: string): Promise<void> {
+  const api = getDesktopHostSessionApi()
+  if (await api.get(sessionId, { includeAllSessions: true })) return
+  await api.create({
     id: sessionId,
     // The LLM provider/model for a wake run is resolved at request time by
     // wake-run.ts (same as cron); the row only needs the bot identity.
@@ -93,11 +97,11 @@ export function _setBotSessionCreatorForTest(spec: BotSessionSpec): void {
  * prompt's visibility claim is true. Mirrors the sender-side marker in
  * SendToAgentTool. Best-effort: marker failures never block the wake.
  */
-function appendReceiverMarker(
+async function appendReceiverMarker(
   sessionId: string,
   envelope: ReturnType<typeof decodeEnvelope> & { clientMsgId: string },
   hops: number,
-): void {
+): Promise<void> {
   if (!envelope) return
   try {
     // Plan 497 fix: the envelope's from.id is the SENDER'S PERSISTENT SESSION
@@ -110,7 +114,10 @@ function appendReceiverMarker(
       parseAgentIdFromBotSession(envelope.from.id) ?? envelope.from.id
     let fromName = envelope.from.name || fromAgentId
     try {
-      const senderSession = getCoreStores().sessions.get(envelope.from.id)
+      const senderSession = await getDesktopHostLocalSessionApi().readLocalSession(
+        envelope.from.id,
+        { includeAllSessions: true },
+      )
       if (senderSession?.agentName) fromName = senderSession.agentName
     } catch {
       // Core stores unavailable (tests) — the envelope name is fine.
@@ -138,13 +145,15 @@ function appendReceiverMarker(
       },
       created_at: Date.now(),
     }
-    const { messageLog } = getCoreStores()
     const event: NewEvent = ipcMessageToNewEvent(
       sessionId,
       message as unknown as Parameters<typeof ipcMessageToNewEvent>[1],
       null,
     )
-    messageLog.appendBatch([event])
+    const receipt = await getDesktopHostSessionApi().appendTimeline(sessionId, {
+      entries: [event.payload],
+    })
+    if (receipt.writtenCount === 0) return
     const broadcast = newEventToIpcMessage(event)
     if (broadcast) {
       getSessionManager().broadcastSessionEvent('message:new', {
@@ -165,7 +174,7 @@ function appendReceiverMarker(
  * enqueued (or suppressed by dedupe), false when it is not an agent_dm row or
  * the target session could not be resolved.
  */
-export function maybeDispatchAgentDm(row: AgentDmRowLike): boolean {
+export async function maybeDispatchAgentDm(row: AgentDmRowLike): Promise<boolean> {
   if (row.kind !== 'agent_dm') return false
   if (!row.sessionId) return false
 
@@ -174,7 +183,10 @@ export function maybeDispatchAgentDm(row: AgentDmRowLike): boolean {
 
   // Try to keep the session alive so a later wake has a target (best-effort).
   try {
-    botSessionCreator.createIfMissing(sessionId, parseAgentIdFromBotSession(sessionId) ?? sessionId)
+    await botSessionCreator.createIfMissing(
+      sessionId,
+      parseAgentIdFromBotSession(sessionId) ?? sessionId,
+    )
   } catch (err) {
     getLogger().warn('AgentDm: failed to ensure bot session', {
       sessionId,
@@ -203,7 +215,7 @@ export function maybeDispatchAgentDm(row: AgentDmRowLike): boolean {
   let hops = 0
   if (envelope.replyTo?.messageId) {
     try {
-      const inbound = getCoreStores().mailbox.getByClientMsgId(
+      const inbound = await getDesktopHostLocalMailboxApi().getByClientMsgId(
         row.source || envelope.from.id,
         envelope.replyTo.messageId,
       )
@@ -222,7 +234,7 @@ export function maybeDispatchAgentDm(row: AgentDmRowLike): boolean {
 
   // Plan 477 P4.4 — receiver-side marker row (before the wake so the card is
   // already in the transcript when the hidden run starts).
-  appendReceiverMarker(sessionId, envelope, hops)
+  await appendReceiverMarker(sessionId, envelope, hops)
 
   const item: WakeItem = {
     id: `dm:${clientMsgId}`,

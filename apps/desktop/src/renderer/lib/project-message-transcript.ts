@@ -1,28 +1,26 @@
 /**
  * project-message-transcript.ts
  *
- * Thin renderer shim over the agent-side structural projector
- * (`@duya/agent/message`). The renderer still loads legacy `Message[]` DTOs
+ * Thin renderer shim over the Protocol structural projector
+ * (`@duya/agent-protocol/transcript`). The renderer still loads legacy `Message[]` DTOs
  * from the DB/IPC, so this module bridges the two shapes and delegates ALL
  * visibility filtering to `projectTranscriptMessages`, which is driven by the
- * structural `visibility` field the agent sets at AgentMessage construction
+ * structural `visibility` field set during AgentMessage ingestion
  * time (mailbox, background notifications, and non-compaction system rows are
  * hidden; the rest are visible).
  *
- * The agent projector is the single source of truth for what is visible. Local
+ * The Protocol projector is the single source of truth for what is visible. Local
  * concerns that remain here (the agent projector does not own them):
  *  - tool-result grouping (collected into a map, removed from the stream)
  *  - displayContent normalisation for user messages
- *  - field mapping between the renderer's hybrid Message shape and the agent
- *    snake_case Message shape
+ *  - field mapping between the renderer's hybrid Message shape and the legacy
+ *    Agent-compatible Message shape
  */
 
 import type { FileAttachment, Message, MsgType, ToolResultInfo } from '@/types';
-import {
-  ingestMessages,
-  projectTranscriptMessages,
-  type Message as AgentMessage,
-} from '@duya/agent/message';
+import { ingestMessages } from '@duya/agent-protocol';
+import type { Message as AgentMessage } from '@duya/agent-protocol/transcript';
+import { projectTranscriptMessages } from '@duya/agent-protocol/transcript';
 
 /** Output of the transcript projection. */
 export interface ProjectedTranscript {
@@ -121,7 +119,7 @@ function resolveDisplayContent(msg: Message): Message {
  * `MessageList` grouping logic continues to work unchanged.
  *
  * PURE function: it does not mutate the input array or any message object.
- * Visibility filtering is delegated to the agent-side `projectTranscriptMessages`
+ * Visibility filtering is delegated to Protocol's `projectTranscriptMessages`
  * (structural `visibility` field); displayContent normalisation is resolved here.
  */
 export function projectMessageTranscript(messages: Message[]): ProjectedTranscript {

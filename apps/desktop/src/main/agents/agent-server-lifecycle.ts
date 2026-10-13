@@ -5,7 +5,7 @@ import { app, BrowserWindow } from 'electron';
 import { getLogger, LogComponent, safeUserDataPath } from '../logging/logger';
 import { getConfigStore } from '../config/store-instance';
 import type { PerformanceConfig } from '../config/schema';
-import { workerLimitEnvFromConfig } from './server/worker-limits';
+import { workerLimitEnvFromConfig } from '@duya/host/worker-limits';
 import { handleDbRequest } from './db-bridge';
 import { registerSpawnedWorker, unregisterSpawnedWorker } from '../control-plane/spawned-workers';
 import { killProcessTree } from '../lib/process-cleanup';
@@ -304,9 +304,9 @@ export function spawnAgentServer(): Promise<number> {
       // secrets cross this boundary.
       if (msg.type === 'appConnection:catalog' && typeof msg.requestId === 'string') {
         import('../services/app-connections/app-connection-service')
-          .then(({ getAppConnectionService }) => {
+          .then(async ({ getAppConnectionService }) => {
             const svc = getAppConnectionService();
-            const data = { providers: svc.listProviders(), connections: svc.list() };
+            const data = { providers: svc.listProviders(), connections: await svc.list() };
             if (!child.killed) {
               child.send({
                 type: 'appConnection:catalog:response',

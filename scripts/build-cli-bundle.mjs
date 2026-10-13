@@ -38,6 +38,10 @@ var import_meta = { url: import_meta_url };
 await build({
   entryPoints: ['packages/cli/src/index.ts'],
   outfile,
+  alias: {
+    '@duya/host/local-host': path.resolve('packages/host/dist/local-host.js'),
+    '@duya/host/http-client': path.resolve('packages/host/dist/http-client.js'),
+  },
   bundle: true,
   platform: 'node',
   target: 'node18',
@@ -51,6 +55,12 @@ await build({
     'fsevents',
     'playwright',
     'esbuild',
+    'blessed',
+    // Blessed loads these only for its optional terminal-emulator widget.
+    // They are not installed by blessed and the chat TUI does not use that
+    // widget; leaving them external keeps the control-plane bundle portable.
+    'term.js',
+    'pty.js',
   ],
   banner: {
     js: importMetaUrlPolyfill,

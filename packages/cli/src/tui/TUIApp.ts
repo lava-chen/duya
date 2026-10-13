@@ -1272,6 +1272,13 @@ private paintCompletion(): void {
     this.scheduleRender();
   }
 
+  /** Append a submitted user message to the visible transcript. */
+  printUser(text: string): void {
+    if (text.trim() === '') return;
+    this.model.addUser(text);
+    this.scheduleRender();
+  }
+
   /** Append an error and render it. Never collapsed, never truncated. */
   printError(message: string): void {
     if (message.trim() === '') return;

@@ -1,3 +1,13 @@
+export {
+  BOT_DIRECT_VISIBLE_SOURCES,
+  BOT_INTERNAL_SOURCES,
+  DEFAULT_MESSAGE_SOURCE,
+  ROOM_HISTORY_SOURCES,
+  ROOM_VISIBLE_SOURCES,
+  isBotDirectVisible,
+} from '@duya/agent-protocol/message-timeline';
+export type { MessageSource } from '@duya/agent-protocol/message-timeline';
+
 /**
  * MessageSource — origin classifier for persisted MessageEntry rows.
  *
@@ -39,85 +49,3 @@
  * the caller does not supply one explicitly. The inference rules live in
  * `electron/ipc/core-db-adapters.ts::inferMessageSource`.
  */
-export type MessageSource =
-  | 'user'
-  | 'send_message'
-  | 'tool_use'
-  | 'thinking'
-  | 'scratchpad'
-  | 'system'
-  | 'channel_mirror'
-  | 'reaction'
-  | 'agent_dm'
-  | 'group'
-  | 'group_system'
-  // Channel send/receive marker rows (bot-direct chat chips). One row per
-  // channel message in/out of the bot; payload rides metadata.channelMsg.
-  | 'channel_activity'
-  // Routine lifecycle marker rows (bot-direct chat chips): one row per
-  // routine create/update/pause/resume/delete affecting this bot; payload
-  // rides metadata.routine.
-  | 'routine_activity';
-
-/**
- * Sources that are visible to the end user in a 1:1 bot chat view.
- * Any other source is bot workspace only.
- */
-export const BOT_DIRECT_VISIBLE_SOURCES: readonly MessageSource[] = [
-  'send_message',
-  'user',
-  // Plan 490 P1: reaction tapbacks render as pills on target bubbles in the
-  // bot-direct view (UI pending). The rows must survive the projection so
-  // the future renderer can group them; they are never standalone bubbles.
-  'reaction',
-  // Plan 477 P4.4: bot→bot DM marker cards (sent + received directions).
-  'agent_dm',
-  // Channel send/receive marker cards — collapsed into "与 XX 收发消息"
-  // chips by the bot-direct view, never rendered as standalone bubbles.
-  'channel_activity',
-  // Routine lifecycle marker cards ("已创建 routine X" chips) — one row per
-  // routine mutation affecting this bot, never rendered as bubbles.
-  'routine_activity',
-] as const;
-
-/**
- * Sources that belong to bot internal execution and must NEVER be shown
- * in the bot-direct chat view. (They live in the bot's own workspace
- * transcript and are surfaced through the bot's profile "Activity" tab.)
- */
-export const BOT_INTERNAL_SOURCES: readonly MessageSource[] = [
-  'tool_use',
-  'thinking',
-  'scratchpad',
-  'system',
-] as const;
-
-/**
- * Plan 478: sources visible in a group room transcript (`room:<roomId>`
- * session). User posts, bot PostToRoom messages, and room lifecycle notices;
- * everything else is hidden from the room view.
- */
-export const ROOM_VISIBLE_SOURCES: readonly MessageSource[] = [
-  'user',
-  'group',
-  'group_system',
-] as const;
-
-/** Sources the group orchestrator projects into GroupMessage history. */
-export const ROOM_HISTORY_SOURCES: readonly MessageSource[] = ['user', 'group'] as const;
-
-/**
- * Default source used when no other inference rule matches. Existing
- * pre-P0.1 data is backfilled with this value, which keeps it bot-direct
- * hidden (matches old "scratchpad" behaviour for bot-side text).
- */
-export const DEFAULT_MESSAGE_SOURCE: MessageSource = 'scratchpad';
-
-/**
- * Filter helper for the bot-direct projection. Equivalent to
- * `BOT_DIRECT_VISIBLE_SOURCES.includes(source)` but future-proof.
- */
-export function isBotDirectVisible(source: MessageSource | undefined): boolean {
-  if (!source) return false;
-  return BOT_DIRECT_VISIBLE_SOURCES.includes(source);
-}

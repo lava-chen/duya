@@ -36,14 +36,14 @@
 
 ## M5.3 提取 core 纯岛
 
-> #173 交付了本阶段所依赖的**门禁**，四项迁移本身**一项未做**。本节保持全开。
+> #173 交付了本阶段所依赖的**门禁**。迁移仍未验收；本节保持全开。
 
 - [ ] 纯message转换、compacttransforms、budget/outcome/permissionreducers、contextselection依次迁入core；真实模型compaction调用留runtime。
   未完成：无切片迁移过这些 reducer。`#175` 抽出的是 `agent/turnShape.ts` 的纯形状推导（留在 `packages/agent` 内），不是迁入 core。
 - [ ] prompt渲染/排序/截断归core；Hbsassetloader、目录扫描/watch和现有缓存IO归runtimeadapter。模板bundle/loader路径验证。
   未完成。550 1a–1d 的 Hbs render/assets 仍按 [接管表](10-legacy-crosswalk.md) 归 M5.3，未开始。
 - [ ] mode声明/状态reducer归core；mode tools/hooks归runtime，Goal/Researchdurableowner归CP。profile、mode、permission三层正交保持。
-  未完成。plan 224 的 `ModeModifier` 注册表与 `applyModes` 仍在原位；`AgentProfile`/`PermissionMode` 的三层正交未被动过（这不算缺陷，只算未迁）。
+  部分（2026-10-11，当前工作树未提交）：`AgentProfileKind`、`PromptProfileOverride`、`AgentProfile` 的类型 owner 已迁至 `@duya/agent-core`；Agent 的 profile service、config resolver、shell 与 prompt consumers 改为直接导入，旧路径保留 type re-export。`AgentProfileDbRow` 仍属 agent persistence。该切片通过 `build:protocol`、`build:core` 和 `@duya/agent` typecheck；未运行测试。`ModeModifier`/`applyModes` 与 `PermissionMode` 仍未迁，profile/mode/permission 的整体三层边界未验收。
 - [ ] 纯算法复用现有夹具；prompt比较语义及约定newline策略，cache稳定段不漂移，不把CRLF差异当普遍业务变化。
   未完成：没有 core 纯岛可复用夹具。**方法论已在别处确立并可直接复用**——#184 改 20 个文件夹具时"Windows 用 Windows 形式（这样盘符小写化仍被断言）、其它平台用真正的绝对路径并同时作用到种下的值与期望值，使比较保持有意义而非仅仅通过"，以及本计划 `check:encoding` 强制绝对路径测编码，都是同一条纪律。
 

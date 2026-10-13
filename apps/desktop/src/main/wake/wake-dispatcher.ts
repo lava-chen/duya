@@ -42,11 +42,11 @@ import {
   removeWakeWhere,
   type WakeQueue,
 } from '../../../../../packages/agent/src/wake/queue'
-import type { WakeItem } from '../../../../../packages/agent/src/wake/types'
+import type { HostPendingWakeInput, WakeItem, WakePayload } from '@duya/agent-protocol'
 import { createTurnEpochState } from '../../../../../packages/agent/src/wake/epoch'
 import { decidePreemption, asRedriven, type RunOrigin } from '../../../../../packages/agent/src/wake/preemption'
 import { buildAgentInboundWakePrompt } from '../../../../../packages/agent/src/agent/dm/index.js'
-import { getCoreStores } from '../db/core-connection'
+import { getDesktopHostLocalPendingWakeApi, getDesktopHostLockApi } from '../cli/desktop-host-api'
 import { runWakePromptInExistingSession, runUserTurnInSession, type WakeRunOptions, type WakeRunOutcome } from './wake-run'
 import { maybeAutoReturnDmResult, runUsedSendToAgent } from './agent-dm-return'
 import { reviveForInbound } from './channels'
@@ -85,12 +85,12 @@ function allBrowserWindows(): BrowserWindow[] {
 
 export interface WakeDispatcherDeps {
   /** Busy/idle truth for a session (session_runtime_locks mirror). */
-  isLocked(sessionId: string): boolean
+  isLocked(sessionId: string): boolean | Promise<boolean>
   /**
    * Origin of the run currently holding the lock (Plan 500 P1). Null when
    * idle or unattributed. Lets preemption classify renderer-driven runs.
    */
-  lockOrigin?(sessionId: string): 'user' | 'agent' | 'background' | null
+  lockOrigin?(sessionId: string): 'user' | 'agent' | 'background' | null | Promise<'user' | 'agent' | 'background' | null>
   /** Launch one hidden wake run and resolve when it fully finishes. */
   runWake(sessionId: string, prompt: string, opts?: WakeRunOptions): Promise<WakeRunOutcome>
   /**
@@ -105,7 +105,7 @@ export interface WakeDispatcherDeps {
    * disabled while queued wakes with its current definition. Return null
    * (or omit the dep) to skip the fire silently.
    */
-  resolveRoutinePrompt?(payload: Extract<import('../../../../../packages/agent/src/wake/types').WakePayload, { kind: 'automation' }>): string | null
+  resolveRoutinePrompt?(payload: Extract<WakePayload, { kind: 'automation' }>): string | null
   /**
    * Plan 500 P2.2 — run a queued USER turn when no renderer view claims it.
    * Must preserve user-turn semantics (userTurn lock, session's own model).
@@ -183,6 +183,7 @@ const DEDUPE_MAX_ENTRIES = 500
  * member, not just the representative. Cleared when the batch settles.
  */
 const redriveBatches = new Map<string, WakeItem[]>()
+const pendingWakeWrites = new Map<string, Promise<void>>()
 
 // ─── User-lane dispatch (Plan 500 P2.2) ───
 
@@ -306,7 +307,7 @@ async function dispatchUserLaneTurn(sessionId: string, item: WakeItem): Promise<
     // drain does not race the next item against the not-yet-started turn.
     const deadline = Date.now() + USER_TURN_LOCK_WAIT_MS
     while (Date.now() < deadline) {
-      if (currentDeps().isLocked(sessionId)) return
+      if (await currentDeps().isLocked(sessionId)) return
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
     getLogger().warn('Scheduled user turn claimed but lock never acquired; falling back', {
@@ -350,16 +351,16 @@ export function _setWakeDispatcherDeps(impl: WakeDispatcherDeps): void {
 function currentDeps(): WakeDispatcherDeps {
   if (!activeDeps) {
     activeDeps = {
-      isLocked(sessionId) {
+      async isLocked(sessionId) {
         try {
-          return getCoreStores().locks.isLocked(sessionId)
+          return await getDesktopHostLockApi().isSessionLocked(sessionId)
         } catch {
           return false
         }
       },
-      lockOrigin(sessionId) {
+      async lockOrigin(sessionId) {
         try {
-          return getCoreStores().locks.lockOrigin(sessionId)
+          return await getDesktopHostLockApi().getSessionLockOrigin(sessionId)
         } catch {
           return null
         }
@@ -467,12 +468,12 @@ export function enqueueWakeItemForSession(
   // watchdog, not only user turns — a wedged run must be detected no matter
   // which lane is waiting behind it.
   armQueueWatchdog(sessionId)
-  kick(sessionId)
+  void kick(sessionId)
   // Plan 495 G3 / 476 §2.2: preemption is decided at enqueue time — the
   // drain loop is blocked awaiting the in-flight runWake, so a preempting
   // wake that arrives mid-run must interrupt from here, not wait for the
   // next drain pass.
-  if (outcome === 'added') tryPreemptRunning(sessionId, stamped)
+  if (outcome === 'added') void tryPreemptRunning(sessionId, stamped)
   return outcome
 }
 
@@ -482,81 +483,123 @@ export function enqueueWakeItemForSession(
  * queue remains the primary carrier.
  */
 function persistQueuedItem(sessionId: string, item: WakeItem): void {
-  try {
-    const { wakes } = getCoreStores()
-    if (item.source === 'user.message' && item.payload.kind === 'user') {
-      wakes.persist({
-        kind: 'user.message',
-        workId: item.payload.messageId ?? item.id,
-        agentId: item.agentId,
-        lane: 'user',
-        title: item.payload.text,
-      })
-    } else if (item.source === 'agent.dm' && item.payload.kind === 'dm') {
-      wakes.persist({
-        kind: 'agent.dm',
-        workId: item.payload.clientMsgId,
-        agentId: item.agentId,
-        lane: 'agent',
-        title: item.payload.text,
-        quietOriginJson: JSON.stringify({
-          dm: {
-            fromAgentId: item.payload.fromAgentId,
-            ...(item.payload.fromAgentName ? { fromAgentName: item.payload.fromAgentName } : {}),
-            ...(item.payload.intent ? { intent: item.payload.intent } : {}),
-            ...(item.payload.priority ? { priority: true } : {}),
-            ...(item.payload.hops != null ? { hops: item.payload.hops } : {}),
-          },
-        }),
-      })
-    } else if (item.source === 'automation.fire' && item.payload.kind === 'automation') {
-      // One row per fire: workId is `<jobKey>:<fireKey>` so distinct queued
-      // fires never collide (upsert would otherwise keep only the newest),
-      // and the rearm can restore the real fireKey instead of collapsing to
-      // 'rearm'. fireKey is a UUID (Scheduler), so the ':' separator is safe.
-      wakes.persist({
-        kind: 'automation.fire',
-        workId: `${item.payload.jobKey}:${item.payload.fireKey}`,
-        agentId: item.agentId,
-        lane: 'background',
-        title: item.payload.name ?? null,
-        quietOriginJson: JSON.stringify({
-          fire: {
-            trigger: item.payload.trigger ?? 'schedule',
-            ...(item.payload.quiet ? { quiet: true } : {}),
-            ...(item.payload.eventSummary ? { eventSummary: item.payload.eventSummary } : {}),
-            ...(item.payload.eventContext ? { eventContext: item.payload.eventContext } : {}),
-          },
-        }),
-      })
+  let input: HostPendingWakeInput | null = null
+  if (item.source === 'user.message' && item.payload.kind === 'user') {
+    input = {
+      kind: 'user.message',
+      workId: item.payload.messageId ?? item.id,
+      agentId: item.agentId,
+      lane: 'user',
+      title: item.payload.text,
     }
-  } catch (err) {
-    getLogger().debug('Pending-wake persist skipped', {
-      sessionId,
-      itemId: item.id,
-      error: err instanceof Error ? err.message : String(err),
-    }, LogComponent.Automation)
+  } else if (item.source === 'agent.dm' && item.payload.kind === 'dm') {
+    input = {
+      kind: 'agent.dm',
+      workId: item.payload.clientMsgId,
+      agentId: item.agentId,
+      lane: 'agent',
+      title: item.payload.text,
+      quietOriginJson: JSON.stringify({
+        dm: {
+          fromAgentId: item.payload.fromAgentId,
+          ...(item.payload.fromAgentName ? { fromAgentName: item.payload.fromAgentName } : {}),
+          ...(item.payload.intent ? { intent: item.payload.intent } : {}),
+          ...(item.payload.priority ? { priority: true } : {}),
+          ...(item.payload.hops != null ? { hops: item.payload.hops } : {}),
+        },
+      }),
+    }
+  } else if (item.source === 'automation.fire' && item.payload.kind === 'automation') {
+    // One row per fire: workId is `<jobKey>:<fireKey>` so distinct queued
+    // fires never collide (upsert would otherwise keep only the newest),
+    // and the rearm can restore the real fireKey instead of collapsing to
+    // 'rearm'. fireKey is a UUID (Scheduler), so the ':' separator is safe.
+    input = {
+      kind: 'automation.fire',
+      workId: `${item.payload.jobKey}:${item.payload.fireKey}`,
+      agentId: item.agentId,
+      lane: 'background',
+      title: item.payload.name ?? null,
+      quietOriginJson: JSON.stringify({
+        fire: {
+          trigger: item.payload.trigger ?? 'schedule',
+          ...(item.payload.quiet ? { quiet: true } : {}),
+          ...(item.payload.eventSummary ? { eventSummary: item.payload.eventSummary } : {}),
+          ...(item.payload.eventContext ? { eventContext: item.payload.eventContext } : {}),
+        },
+      }),
+    }
   }
+  if (!input) return
+  const pending = input
+  queuePendingWakeMutation(
+    sessionId,
+    () => getDesktopHostLocalPendingWakeApi().persistPendingWake(pending),
+    (err) => {
+      getLogger().debug('Pending-wake persist skipped', {
+        sessionId,
+        itemId: item.id,
+        error: err instanceof Error ? err.message : String(err),
+      }, LogComponent.Automation)
+    },
+  )
 }
 
 /** Plan 500 P5.2 — the queued item left the queue (dispatched or dropped). */
-function clearPersistedItem(item: WakeItem): void {
-  try {
-    const { wakes } = getCoreStores()
-    if (item.source === 'user.message' && item.payload.kind === 'user') {
-      wakes.clear('user.message', item.payload.messageId ?? item.id)
-    } else if (item.source === 'agent.dm' && item.payload.kind === 'dm') {
-      wakes.clear('agent.dm', item.payload.clientMsgId)
-    } else if (item.source === 'connector.inbound') {
-      // The session's durable envelope row (workId = sessionId) rides the
-      // wake item — the revive consumes ALL stored envelopes, so the row is
-      // cleared at dequeue like every other self-contained payload.
-      wakes.clear('connector.inbound', item.agentId)
-    } else if (item.source === 'automation.fire' && item.payload.kind === 'automation') {
-      wakes.clear('automation.fire', `${item.payload.jobKey}:${item.payload.fireKey}`)
-    }
-  } catch {
-    // Best-effort; the stale horizon prunes orphans.
+function clearPersistedItem(sessionId: string, item: WakeItem): void {
+  let kind: HostPendingWakeInput['kind'] | null = null
+  let workId: string | null = null
+  if (item.source === 'user.message' && item.payload.kind === 'user') {
+    kind = 'user.message'
+    workId = item.payload.messageId ?? item.id
+  } else if (item.source === 'agent.dm' && item.payload.kind === 'dm') {
+    kind = 'agent.dm'
+    workId = item.payload.clientMsgId
+  } else if (item.source === 'connector.inbound') {
+    // The session's durable envelope row (workId = sessionId) rides the
+    // wake item — the revive consumes ALL stored envelopes, so the row is
+    // cleared at dequeue like every other self-contained payload.
+    kind = 'connector.inbound'
+    workId = item.agentId
+  } else if (item.source === 'automation.fire' && item.payload.kind === 'automation') {
+    kind = 'automation.fire'
+    workId = `${item.payload.jobKey}:${item.payload.fireKey}`
+  }
+  if (!kind || !workId) return
+  const pendingKind = kind
+  const pendingWorkId = workId
+  queuePendingWakeMutation(sessionId, () =>
+    getDesktopHostLocalPendingWakeApi().clearPendingWake(pendingKind, pendingWorkId), () => {
+      // Best-effort; the stale horizon prunes orphans.
+    })
+}
+
+/** Serialize durable pending-wake operations for one session. */
+export function queuePendingWakeMutation(
+  sessionId: string,
+  operation: () => Promise<unknown>,
+  onFailure: (error: unknown) => void,
+): void {
+  const previous = pendingWakeWrites.get(sessionId) ?? Promise.resolve()
+  let current: Promise<void>
+  current = previous
+    .catch(() => undefined)
+    .then(operation)
+    .then(() => undefined)
+    .catch(onFailure)
+    .finally(() => {
+      if (pendingWakeWrites.get(sessionId) === current) pendingWakeWrites.delete(sessionId)
+    })
+  pendingWakeWrites.set(sessionId, current)
+}
+
+async function waitForPendingWakeWrites(sessionId: string): Promise<void> {
+  let pending = pendingWakeWrites.get(sessionId)
+  while (pending) {
+    await pending
+    const latest = pendingWakeWrites.get(sessionId)
+    if (latest === pending) return
+    pending = latest
   }
 }
 
@@ -579,9 +622,9 @@ function clearPersistedItem(item: WakeItem): void {
  * redriven — their partial transcript is persisted and the preempting
  * turn takes over.
  */
-function tryPreemptRunning(sessionId: string, incoming: WakeItem): void {
+async function tryPreemptRunning(sessionId: string, incoming: WakeItem): Promise<void> {
   const state = getState(sessionId)
-  if (!currentDeps().isLocked(sessionId)) return
+  if (!await currentDeps().isLocked(sessionId)) return
   if (state.redrivePending) return
 
   const running = state.runningItem
@@ -607,7 +650,7 @@ function tryPreemptRunning(sessionId: string, incoming: WakeItem): void {
   // Plan 500 P3: the lock is held by a run this dispatcher did not start
   // (renderer chat, cron, group member turn). Classify it via the lock
   // origin and apply the same preemption rules.
-  const lockOrigin = currentDeps().lockOrigin?.(sessionId) ?? null
+  const lockOrigin = await currentDeps().lockOrigin?.(sessionId) ?? null
   if (!lockOrigin) return
   const decision = decidePreemption(incoming, lockOriginOf(lockOrigin))
   if (decision.action !== 'preempt') return
@@ -712,7 +755,7 @@ export function enqueueInboundWake(
  * continue after a user turn that pre-empted them.
  */
 export function notifySessionIdle(sessionId: string): void {
-  kick(sessionId)
+  void kick(sessionId)
 }
 
 /**
@@ -856,7 +899,7 @@ function requeueRedriven(sessionId: string, item: WakeItem): void {
  * just `[first]`. Otherwise drains following consecutive dm items off the
  * queue and returns them as one batch. Cleared each member's durable marker.
  */
-function collectDmBatch(state: SessionWakeState, first: WakeItem): WakeItem[] {
+function collectDmBatch(sessionId: string, state: SessionWakeState, first: WakeItem): WakeItem[] {
   if (first.payload.kind !== 'dm') return [first]
   const batch: WakeItem[] = [first]
   for (;;) {
@@ -865,7 +908,7 @@ function collectDmBatch(state: SessionWakeState, first: WakeItem): WakeItem[] {
     const next = dequeueNextWake(state.queue)
     if (!next) break
     state.queue = next.queue
-    clearPersistedItem(next.item)
+    clearPersistedItem(sessionId, next.item)
     batch.push(next.item)
   }
   return batch
@@ -926,7 +969,7 @@ function armQueueWatchdog(sessionId: string, delayMs: number = userTurnWatchdogM
   if (state.watchdogTimer) return
   state.watchdogTimer = setTimeout(() => {
     state.watchdogTimer = undefined
-    runQueueWatchdogCheck(sessionId)
+    void runQueueWatchdogCheck(sessionId)
   }, Math.max(delayMs, 1))
 }
 
@@ -940,11 +983,11 @@ function armQueueWatchdog(sessionId: string, delayMs: number = userTurnWatchdogM
  *    running item is wedged. The wedged run's work is re-queued
  *    (redrivePending) so parked work is never silently lost.
  */
-function runQueueWatchdogCheck(sessionId: string): void {
+async function runQueueWatchdogCheck(sessionId: string): Promise<void> {
   const state = getState(sessionId)
   const head = peekNextWake(state.queue)
   if (!head) return
-  if (!currentDeps().isLocked(sessionId)) return
+  if (!await currentDeps().isLocked(sessionId)) return
   const running = state.runningItem
   const decision = running
     ? decidePreemption(head, runOriginOf(running))
@@ -995,23 +1038,25 @@ function armWatchdogEscape(sessionId: string, item: WakeItem): void {
   if (state.escapeTimer) clearTimeout(state.escapeTimer)
   state.escapeTimer = setTimeout(() => {
     state.escapeTimer = undefined
-    if (state.runningItem?.id !== item.id) return // run already returned
-    if (!currentDeps().isLocked(sessionId)) return
-    getLogger().warn('Bot run watchdog escape: interrupted run still wedged; escaping it', {
-      sessionId,
-      itemId: item.id,
-      source: item.source,
-      graceMs: watchdogEscapeMs,
-    }, LogComponent.Automation)
-    state.drainGeneration += 1
-    state.runningItem = undefined
-    resolveTurnWaiters(sessionId, item.id, { output: '', events: [] })
-    if (state.redrivePending?.id === item.id) {
-      state.redrivePending = undefined
-      requeueRedriven(sessionId, item)
-    }
-    state.draining = false
-    void drain(sessionId)
+    void (async () => {
+      if (state.runningItem?.id !== item.id) return // run already returned
+      if (!await currentDeps().isLocked(sessionId)) return
+      getLogger().warn('Bot run watchdog escape: interrupted run still wedged; escaping it', {
+        sessionId,
+        itemId: item.id,
+        source: item.source,
+        graceMs: watchdogEscapeMs,
+      }, LogComponent.Automation)
+      state.drainGeneration += 1
+      state.runningItem = undefined
+      resolveTurnWaiters(sessionId, item.id, { output: '', events: [] })
+      if (state.redrivePending?.id === item.id) {
+        state.redrivePending = undefined
+        requeueRedriven(sessionId, item)
+      }
+      state.draining = false
+      void drain(sessionId)
+    })()
   }, watchdogEscapeMs)
 }
 
@@ -1033,11 +1078,12 @@ function hasQueuedItem(queue: WakeQueue, id: string): boolean {
 }
 
 /** Start a drain pass when possible. */
-function kick(sessionId: string): void {
+async function kick(sessionId: string): Promise<void> {
   const state = sessions.get(sessionId)
   if (!state) return
   if (state.draining) return
-  if (currentDeps().isLocked(sessionId)) return // busy — release will re-kick
+  if (await currentDeps().isLocked(sessionId)) return // busy — release will re-kick
+  if (sessions.get(sessionId) !== state) return
   void drain(sessionId)
 }
 
@@ -1052,16 +1098,22 @@ async function drain(sessionId: string): Promise<void> {
     for (;;) {
       const head = peekNextWake(state.queue)
       if (!head) break
-      if (currentDeps().isLocked(sessionId)) {
+      if (await currentDeps().isLocked(sessionId)) {
         // Plan 495 G3 / 476 §2.2 + §6.4: preempt a dispatcher-owned run
         // when the queued head is a preempting wake (user message /
         // priority DM); the displaced run redrives after the preempting
         // turn finishes. The enqueue path covers the mid-run case (the
         // drain is blocked awaiting runWake); this covers items already
         // parked when a user turn took the lock.
-        tryPreemptRunning(sessionId, head)
+        void tryPreemptRunning(sessionId, head)
         break
       }
+
+      // The Host API is asynchronous. Do not dispatch a newly accepted wake
+      // until its durable marker write has completed.
+      await waitForPendingWakeWrites(sessionId)
+      if (await currentDeps().isLocked(sessionId)) break
+      await waitForPendingWakeWrites(sessionId)
 
       const dequeued = dequeueNextWake(state.queue)
       if (!dequeued) break
@@ -1069,7 +1121,8 @@ async function drain(sessionId: string): Promise<void> {
       // Plan 500: the item left the queue — clear its durable marker. The
       // watchdog re-arms for the next waiting head (any lane) or disarms
       // when the queue is empty.
-      clearPersistedItem(dequeued.item)
+      clearPersistedItem(sessionId, dequeued.item)
+      await waitForPendingWakeWrites(sessionId)
       if (peekNextWake(state.queue)) armQueueWatchdog(sessionId)
       else disarmQueueWatchdog(sessionId)
 
@@ -1157,7 +1210,8 @@ async function drain(sessionId: string): Promise<void> {
       // resolve for every member; a preemption/redrive re-queues the whole
       // batch. A non-dm head (or a higher-lane item that arrives mid-collect)
       // passes through unchanged.
-      const batchRunItems = collectDmBatch(state, dequeued.item)
+      const batchRunItems = collectDmBatch(sessionId, state, dequeued.item)
+      await waitForPendingWakeWrites(sessionId)
       const representative = batchRunItems[0]
       const prompts = batchRunItems.map(promptForItem)
       const prompt = prompts.filter(Boolean).join('\n\n')
@@ -1248,7 +1302,7 @@ async function drain(sessionId: string): Promise<void> {
           // void (legacy fakes).
           const tailDm = batchRunItems[batchRunItems.length - 1].payload as Extract<WakeItem['payload'], { kind: 'dm' }>
           if (!runUsedSendToAgent(outcome.events ?? [])) {
-            maybeAutoReturnDmResult(
+            await maybeAutoReturnDmResult(
               {
                 sessionId,
                 clientMsgId: tailDm.clientMsgId,

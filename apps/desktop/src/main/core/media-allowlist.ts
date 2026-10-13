@@ -22,16 +22,15 @@
  *     file tools use, so the realpath/symlink/prefix-sibling/cross-drive
  *     handling is identical rather than a third hand-rolled variant.
  *
- * Note for ISS-35: `isPathWithinRoots` currently has two other homes
- * (`packages/agent/src/tool/policy.ts` and `packages/agent/src/tool/
- * allowedRoots.ts`). This module deliberately reuses the latter via a
- * source alias rather than adding a third implementation, but the
- * consolidation into one shared helper is still open work.
+ * Note for ISS-35: `isPathWithinRoots` now has exactly one home —
+ * `@duya/sandbox` (`allowed-roots.ts`, moved out of
+ * `packages/agent/src/tool/allowedRoots.ts` on 2026-10-10). This module
+ * imports it from the package instead of keeping a second implementation.
  */
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { app } from 'electron';
-import { isPathWithinRoots } from '@duya/agent/tool/allowedRoots';
+import { isPathWithinRoots } from '@duya/sandbox';
 import { resolveAttachmentsRoot, resolveRolloutRoot } from '../config/boot-config';
 
 /**

@@ -1,5 +1,10 @@
-import { getDatabase } from '../ipc/db-handlers';
 import { getLogger, LogComponent } from '../logging/logger';
+import {
+  getDesktopHostLocalGatewayAllowlistApi,
+  getDesktopHostLocalGatewayDirectoryApi,
+  getDesktopHostLocalGatewayUserMapApi,
+} from '../cli/desktop-host-api';
+import type { GatewayUserMapping } from '@duya/agent-protocol/gateway-user-map';
 
 export interface ChannelEntry {
   id: string;
@@ -30,60 +35,30 @@ export interface ChannelStatus {
 
 const _channelStatuses = new Map<string, ChannelStatus>();
 
-export function updateChannelDirectory(
+export async function updateChannelDirectory(
   platform: string,
   channels: ChannelEntry[]
-): void {
-  const db = getDatabase();
-  if (!db) {
-    getLogger().error('Cannot update channel directory: DB not available', undefined, undefined, LogComponent.Gateway);
-    return;
-  }
-
-  const now = Date.now();
+): Promise<void> {
   try {
-    const txn = db.transaction(() => {
-      db.prepare('DELETE FROM channel_directory WHERE platform = ?').run(platform);
-
-      const stmt = db.prepare(`
-        INSERT OR REPLACE INTO channel_directory
-        (id, platform, name, guild, type, extra, discovered_at)
-        VALUES (?, ?, ?, ?, ?, '{}', ?)
-      `);
-      for (const ch of channels) {
-        stmt.run(ch.id, platform, ch.name, ch.guild || null, ch.type, now);
-      }
-    });
-    txn();
+    await getDesktopHostLocalGatewayDirectoryApi().replaceGatewayChannels(
+      platform,
+      channels.map(({ id, name, guild, type }) => ({ id, name, ...(guild ? { guild } : {}), type })),
+    );
     getLogger().info('Channel directory updated', { platform, count: channels.length }, LogComponent.Gateway);
   } catch (err) {
     getLogger().error('Failed to update channel directory', err instanceof Error ? err : new Error(String(err)), { platform }, LogComponent.Gateway);
   }
 }
 
-export function getChannelDirectory(platform?: string): ChannelEntry[] {
-  const db = getDatabase();
-  if (!db) return [];
-
-  if (platform) {
-    return db.prepare(
-      'SELECT id, platform, name, guild, type FROM channel_directory WHERE platform = ? ORDER BY guild, name'
-    ).all(platform) as ChannelEntry[];
-  }
-
-  return db.prepare(
-    'SELECT id, platform, name, guild, type FROM channel_directory ORDER BY platform, guild, name'
-  ).all() as ChannelEntry[];
-}
-
-interface GatewayUserMapRow {
-  id: string;
-  platform: string;
-  platform_user_id: string;
-  platform_chat_id: string;
-  session_id: string;
-  created_at: number;
-  updated_at: number;
+export async function getChannelDirectory(platform?: string): Promise<ChannelEntry[]> {
+  const channels = await getDesktopHostLocalGatewayDirectoryApi().listGatewayChannels(platform);
+  return channels.map(({ id, platform: channelPlatform, name, guild, type }) => ({
+    id,
+    platform: channelPlatform,
+    name,
+    ...(guild === undefined ? {} : { guild }),
+    type,
+  }));
 }
 
 /**
@@ -97,25 +72,15 @@ interface GatewayUserMapRow {
  * rows for chats the user has talked to without adapter discovery
  * (weixin, gateway-created DM sessions, etc.).
  */
-export function listChannelDirectoryWithBindings(
+export async function listChannelDirectoryWithBindings(
   platform?: string,
-): ChannelEntryWithBinding[] {
-  const db = getDatabase();
-  if (!db) return [];
+): Promise<ChannelEntryWithBinding[]> {
+  const directoryRows = await getChannelDirectory(platform);
+  const bindingRows = await getDesktopHostLocalGatewayUserMapApi().listGatewayUserMappings(platform);
 
-  const directoryRows = getChannelDirectory(platform);
-  const bindingQuery = platform
-    ? db.prepare(
-        'SELECT id, platform, platform_user_id, platform_chat_id, session_id, created_at, updated_at FROM gateway_user_map WHERE platform = ?',
-      ).all(platform)
-    : db.prepare(
-        'SELECT id, platform, platform_user_id, platform_chat_id, session_id, created_at, updated_at FROM gateway_user_map',
-      ).all();
-  const bindingRows = bindingQuery as GatewayUserMapRow[];
-
-  const bindingsByKey = new Map<string, GatewayUserMapRow>();
+  const bindingsByKey = new Map<string, GatewayUserMapping>();
   for (const row of bindingRows) {
-    bindingsByKey.set(`${row.platform}:${row.platform_chat_id}`, row);
+    bindingsByKey.set(`${row.platform}:${row.platformChatId}`, row);
   }
 
   const out: ChannelEntryWithBinding[] = [];
@@ -127,22 +92,22 @@ export function listChannelDirectoryWithBindings(
     out.push({
       ...entry,
       source: 'directory',
-      ...(binding ? { boundSessionId: binding.session_id, lastActivityAt: binding.updated_at } : {}),
+      ...(binding ? { boundSessionId: binding.sessionId, lastActivityAt: binding.updatedAt } : {}),
     });
     seenIds.add(key);
   }
 
   for (const binding of bindingRows) {
-    const key = `${binding.platform}:${binding.platform_chat_id}`;
+    const key = `${binding.platform}:${binding.platformChatId}`;
     if (seenIds.has(key)) continue;
     out.push({
-      id: binding.platform_chat_id,
+      id: binding.platformChatId,
       platform: binding.platform,
-      name: binding.platform_chat_id,
+      name: binding.platformChatId,
       type: 'dm',
       source: 'binding',
-      boundSessionId: binding.session_id,
-      lastActivityAt: binding.updated_at,
+      boundSessionId: binding.sessionId,
+      lastActivityAt: binding.updatedAt,
     });
   }
 
@@ -155,14 +120,14 @@ export function listChannelDirectoryWithBindings(
   return out;
 }
 
-export function resolveChannelName(platform: string, name: string): string | null {
+export async function resolveChannelName(platform: string, name: string): Promise<string | null> {
   const normalized = name.replace(/^#/, '').toLowerCase();
   if (!normalized) {
     getLogger().warn('Empty channel name in resolveChannelName', { platform }, LogComponent.Gateway);
     return null;
   }
 
-  const channels = getChannelDirectory(platform);
+  const channels = await getChannelDirectory(platform);
 
   const exact = channels.find(c => c.name.toLowerCase() === normalized);
   if (exact) return exact.id;
@@ -209,70 +174,38 @@ export function getAllChannelStatuses(): ChannelStatus[] {
  * gated via their own dm_policy/allow_from options, so an empty Main-side
  * list preserves that behavior until the admin curates entries.
  */
-const ALLOWLIST_SETTING_KEY = 'gateway_allowlist';
-
-export function getChannelAllowlist(): Record<string, string[]> {
-  const db = getDatabase();
-  if (!db) return {};
-
+export async function getChannelAllowlist(): Promise<Record<string, string[]>> {
   try {
-    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(ALLOWLIST_SETTING_KEY) as { value: string } | undefined;
-    if (!row?.value) return {};
-    const parsed = JSON.parse(row.value) as Record<string, unknown>;
-    const out: Record<string, string[]> = {};
-    for (const [platform, entries] of Object.entries(parsed)) {
-      if (Array.isArray(entries)) {
-        out[platform] = entries.filter((e): e is string => typeof e === 'string');
-      }
-    }
-    return out;
+    const allowlist = await getDesktopHostLocalGatewayAllowlistApi().getGatewayAllowlist();
+    return Object.fromEntries(Object.entries(allowlist).map(([platform, users]) => [platform, [...users]]));
   } catch (err) {
     getLogger().error('Failed to read channel allow-list', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Gateway);
     return {};
   }
 }
 
-function saveChannelAllowlist(list: Record<string, string[]>): void {
-  const db = getDatabase();
-  if (!db) return;
-  const now = Date.now();
-  db.prepare(`
-    INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-  `).run(ALLOWLIST_SETTING_KEY, JSON.stringify(list), now);
-}
-
 /**
  * Whether a sender may use the gateway. Unknown sender ids (adapters that
  * don't expose user identity) and platforms without a curated list fail open.
  */
-export function isUserAllowed(platform: string, platformUserId: string): boolean {
-  if (!platformUserId) return true;
-  const entries = getChannelAllowlist()[platform];
-  if (!entries || entries.length === 0) return true;
-  return entries.includes(platformUserId);
-}
-
-export function addChannelAllowlistEntry(platform: string, platformUserId: string): void {
-  if (!platform || !platformUserId) return;
-  const list = getChannelAllowlist();
-  const entries = list[platform] ?? [];
-  if (!entries.includes(platformUserId)) {
-    entries.push(platformUserId);
-    list[platform] = entries;
-    saveChannelAllowlist(list);
+export async function isUserAllowed(platform: string, platformUserId: string): Promise<boolean> {
+  try {
+    return await getDesktopHostLocalGatewayAllowlistApi().isGatewayUserAllowed(platform, platformUserId);
+  } catch (err) {
+    getLogger().error(
+      'Failed to check channel allow-list; preserving the existing fail-open behavior',
+      err instanceof Error ? err : new Error(String(err)),
+      { platform },
+      LogComponent.Gateway,
+    );
+    return true;
   }
 }
 
-export function removeChannelAllowlistEntry(platform: string, platformUserId: string): void {
-  const list = getChannelAllowlist();
-  const entries = list[platform];
-  if (!entries) return;
-  const next = entries.filter((e) => e !== platformUserId);
-  if (next.length > 0) {
-    list[platform] = next;
-  } else {
-    delete list[platform];
-  }
-  saveChannelAllowlist(list);
+export async function addChannelAllowlistEntry(platform: string, platformUserId: string): Promise<void> {
+  await getDesktopHostLocalGatewayAllowlistApi().addGatewayAllowlistEntry(platform, platformUserId);
+}
+
+export async function removeChannelAllowlistEntry(platform: string, platformUserId: string): Promise<void> {
+  await getDesktopHostLocalGatewayAllowlistApi().removeGatewayAllowlistEntry(platform, platformUserId);
 }

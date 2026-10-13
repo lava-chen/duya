@@ -16,7 +16,7 @@ import {
   listAgentChannels as _listAgentChannels,
 } from './channel-store';
 import { getConnectorSecretStore } from './connector-secret-store';
-import type { ChannelAddress, ChannelConnectionConfig } from '../../../../../packages/agent/src/channels/types';
+import type { ChannelAddress, ChannelConnectionConfig } from '@duya/agent-protocol/channels';
 
 /**
  * Open a channel store for a specific agent.

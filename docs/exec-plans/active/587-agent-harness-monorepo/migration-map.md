@@ -73,6 +73,55 @@ apps/agent-server/               # only when a real second host warrants composi
 
 上述“区域”包括顶层types/constants文件及目录，口径不用于重复统计LOC。
 
+## 2.1 运行能力闭环：资源、入口与生产验收
+
+本节把“目标归属”与“生产路径已迁移”分开。包边界参考
+`E:\cloned-projects\minimax-code\packages` 的实际组织：`agent-core`、
+`agent-runtime`、`agent-extension`、`agent-tools`、`local-runtime` 与
+`tui` 分别承担核心契约/组装、扩展 SPI、内置适配器、平台工具、本地 Host
+和产品 CLI/TUI。该仓库的价值是 owner 分离；目录名或 manifest 存在本身
+不证明某项行为在生产入口运行。Duya 继续复用现有 `agent-protocol`、
+`agent-core`、`agent-runtime`、`capabilities`、`tooling`、`host`，不为对称
+而新建空包，也不把 Minimax 的实现或其包名直接搬入。
+
+| 能力/旧入口 | 新 owner 与切片 | 资源和构建约束 | 必须通过的生产验收 |
+| --- | --- | --- | --- |
+| 工具定义、校验、授权、调度、执行、progress/result（`packages/agent/src/tool/**`，当前 `StreamingToolExecutor`） | 工具契约在 Protocol；纯策略在 Core；工具 adapter/registry 在 Capabilities/Tooling；取消、审批编排和执行生命周期由 Runtime/Host Run API 持有。2026-10-13 shell 切片：BashTool schema、校验、权限决策、命令规范化、输出裁剪与结果投影已移到 `@duya/capabilities/ShellCommandTool`；Agent 旧路径仅剩组合适配器。shell detector/provider、intelligence、safe-rm、soft-yield、常量也由 capabilities 实现并经兼容 re-export 使用。 | 已检查的底层合同：Protocol 有通用 `ToolUse`/结果事件；Runtime 有 `ToolPort.dispatch/drain/discard/describe` 和 `ProcessScope`，但没有 Host 可实现的 shell managed-task/审批/副作用回执接口。新加的 `ShellCommandRuntimePorts` 是 capability 包本地的临时注入缝，当前只有 Agent `startManagedBash` adapter；它尚未接入 Runtime `ToolPort` 或 Protocol，也不是 Host API。Agent adapter/shims 只是过渡层；最终切换由 Host/Runtime 直接装配 capability，Desktop、CLI、automation 等消费者归零旧 Agent 调用后删除 shim 与 `packages/agent` 旧执行入口。 | 下一片先明确 Runtime `ToolPort` 到 shell lifecycle 的 adapter 合同，再经 Desktop、Host CLI、独立 CLI 验收：未授权时执行次数为 0；执行中取消能终止对应任务/进程树并落 terminal；进度可按 run/tool id 观察与重连；成功/失败结果写入 durable run transcript；失败注入后 receipt 能区分“未派发、已执行但未记账、已记账”，重试不伪称 exactly-once。当前 bundle 构建成功，capability 可通过注入端口真实启动 PowerShell；这不是 Agent managed-process adapter 或 Host Run API 的真实工具轮次证据。断言必须走生产 Run API/worker bridge，而非直接调用 dispatcher fixture。 |
+| Prompt、Context、历史压缩与指令组合（`prompts/`、`context/`、`compact/`、`agentsmd/`、`skills/`） | 模板渲染、优先级与选择算法归 Core；文件/模板/缓存/skill loader 归 Runtime adapter；Profile/Mode 等冻结决策进入 RunManifest；Host 组装一份带来源和 revision 的输入快照。 | `.hbs`、skill 文件/脚本和动态模板必须有唯一 AssetResolver；路径来自运行包而非 `packages/agent` 的相对路径。技能与模板版本/缺失状态写入诊断信息；所有入口用同一解析规则。 | 建立 golden parity 用例，锁定组合顺序：基础 system → 用户/项目指令 → profile/mode/channel/wake → skills 与动态 context → 历史/压缩 → tool schema；明确冲突时的优先级。对 Desktop、Host CLI、独立 CLI 逐一验证快照等价（仅声明的平台差异可不同），并验证缺模板/skill 时明确失败或显式降级，不能静默变空 prompt。 |
+| 包资源（`packages/agent/skills/.system`、`prompts/assets/**`、脚本、可能的 `modules/**`） | 资源跟随其运行 owner 的发行物；优先由 Host 统一解析和版本化。只有确有独立发布/复用边界时才提取资源包。`modules/` 下 README 先逐份确认是用户加载内容、示例还是历史文档，再决定保留路径和 loader。 | build、CLI bundle、Electron `extraResources/asar`、BashWorker 子入口都纳入资源清单；在打包后检查路径、文件数/摘要和可读权限。开发目录可用不能替代安装包验证。 | 对每种受支持产物执行资源清点与真实加载：Host 源码运行、干净 CLI bundle、真实 Electron packaged app；抽测内置 skill 的入口脚本和 prompt 模板。缺资源要在启动/能力探测阶段给出可诊断错误，不能等到模型轮次才报找不到文件。 |
+| Cron、wake、durable intent、重试与恢复（Desktop `AutomationScheduler`、wake dispatch） | Control Plane/Host 是唯一 scheduler 与 intent owner；Desktop 仅作为受管 Host 的 supervisor/UI。intent 持久化、lease/fence、单实例、触发幂等和结果回执都在 Host 边界。 | Host 独立于 Electron 常驻；启动/关闭恢复扫描在 DB ready 后、接受新触发前完成。定时配置、时区/下次触发、retry/backoff 与 outbox 语义要持久化。 | 用真实 Host 进程和数据库覆盖：到期触发、重复触发去重、失败重试、进程崩溃后恢复、两个 Host 争同一 data root 只有一个 owner、取消/关闭竞态、terminal/outbox 对账。Desktop 与 CLI 创建的同一 intent 由同一个 Host 执行；只测 `RunResult` 读取不足以验收 scheduler。 |
+| Worker、BashWorker、Browser/Computer 进程及打包 | Host 管 Worker Manager/dispatch/stop；Runtime 管通用轮次、工具与取消合同；平台工具包只提供 capability adapter。每个子进程入口有唯一 owner 和受版本化的 wire protocol。2026-10-13 `bundle:agent` 重建成功，包含 `agent-process-entry.js`、独立 `BashTool/BashWorker.js` 和 prompt assets；这仍是旧 Agent worker bundle，不是 Host worker 退役证据。 | 列出入口、构建命令、产物路径、assets/native dependencies、父子退出码、IPC/SSE handshake；electron-builder 与 CLI bundle 均要检查实际产物。不能用主包 typecheck 代替子入口验证。 | 从真实入口启动各 Worker，执行一个最小真实任务；验证 ready、请求/响应、progress、cancel、异常退出、父进程关闭和重启后清理。packaged Electron 至少完成首次 Host/worker ready 与一轮任务；支持范围要按 OS/capability 明确。 |
+| 旧 CLI 和旧包引用（根 `chat-cli`、`packages/agent/bin/duya`、旧 `dist/cli`/`bundle/cli-entry.js`） | 暂设单向兼容转发到 `packages/cli` 的 Host-backed command；不能保留第二套 turn loop。明确废弃版本/消费者扫描、build 脚本和删除条件，入口去留由实际包消费者决定。 | `npm run chat-cli`、bin shim、`duya chat`、`duya serve`、control-plane CLI 各自列明目标；build artifact 和 help/exit code 要与发布包一致。 | 在干净安装/打包环境逐入口执行 help、一次文本任务、一次带工具任务、取消及 session/run 恢复；检查进程树及 DB/run/event 归属。消费者 inventory 归零后才移除旧 bundle 与 `packages/agent` CLI 源码。 |
+| Worker DB action 面（旧 `db-client`、Desktop IPC、automation/CLI consumers） | 按领域迁到 Protocol typed command/query → Data store → Host API；Desktop、CLI、automation、worker 都列为真实消费者。拒绝任意 SQL tunnel 和伪同步代理。 | Host 是应用 DB 唯一 owner；跨进程写操作有 command receipt/幂等键，读取有明确 cursor/分页和权限上下文。迁移前后不能双写。 | 对每个领域记录旧 action 数、调用者、Host API、删除的旧边和重启/失败行为。使用真实 bridge+SQLite 验证授权拒绝不落行、成功可读回、重试不重复副作用；全量 consumer inventory 归零后才能删兼容实现。 |
+
+| PowerShell tool specialization and security (`packages/agent/src/tool/PowerShellTool/**`) | `@duya/capabilities` owns the PowerShell specialization and its safety/read-only policy. The zero-argument Agent adapter still injects `startManagedBash`, output directory, and Git reminder; `builtin.ts` remains its production registration. Host/Runtime must later provide the process lifecycle and register the capability directly before deleting the adapter. | Build order is Protocol/AI dependencies → Capabilities → Agent; Desktop and CLI artifacts must resolve the public capability export. Windows shell discovery and PowerShell availability are explicit platform dependencies. | A real `pwsh` command returned version `7.6.5` both through an injected capability port and the built Agent adapter. Still required: Host Run API execution on Windows with safe output, approval/rejection before start, process-tree cancellation, progress/output delivery, and durable result. These smokes do not prove Host ownership. |
+| Computer Use tool contract and execution (`packages/agent/src/tool/OSTool/**`, Desktop `computer-use` IPC) | `@duya/agent-protocol` now owns the shared action names, wire channel constants, error codes, and request/result envelopes; Agent and Desktop Main consume that contract. The executor, exposure policy, approval lifecycle, and OS bridge remain in Agent/Desktop. Runtime/Host must own registration, invocation, cancellation, and durable results before the Agent executor can be retired. | Build Protocol before Agent and Desktop. Keep platform executor/native resources in the supported OS package; Electron packaging must preserve the OS bridge and approval transport. | From Desktop and Host-connected CLI, invoke through the real catalog and run transport: verify exposure/filtering, user approval and rejection, a real OS action/readback, cancellation, progress, result persistence, and packaged resource resolution. Protocol type sharing alone is not production execution migration. |
+
+### 2.1.1 工具实现迁出与授权边界（2026-10-13）
+
+本轮把 18 个具体工具实现单元迁到 @duya/capabilities：Files、Bash、
+PowerShell、Todo、MemoryWrite、WriteStage1Policy、AskUserQuestion、Brief、
+Module、ImageGenerate、Vision、ReactToMessage、SendArtifact。旧 Agent 路径
+保留 adapter/re-export。Capabilities 是当前实现的暂存边界，不是最终工具
+架构边界；其通用 ToolContext、权限策略以及交互状态仍待按职责拆分。
+
+| 切片 | 当前生产路径与限制 | 下一步验收 |
+| --- | --- | --- |
+| 18 个工具实现 | Desktop worker 仍通过 Agent builtin registry 注册；Agent registry、tool exposure、profile/mode filter、permission pipeline 均未切换。CLI 的 Host-backed 与 legacy 入口需逐一核实。Module 的 README 与生成器已随 capabilities build。 | Desktop worker、Host CLI、legacy CLI 分别从真实入口跑工具调用；校验 schema/name/exposure、授权、取消、progress、结果持久化与打包资源。当前没有 Host Run API 的真实模型工具轮次。SendArtifact 仍只返回 MEDIA: 文本，未找到生产 media-result consumer，不能算附件实际投递。 |
+| 授权与提问状态 | Host/Core 持有授权规则和决定权；Runtime 对最终参数与调用身份授权一次，并把绑定本次调用的结果交给 ToolPort/executor。AskUserQuestion 通过独立 InteractionPort 管理等待/回答，不能把回答映射成 permission grant。 | 首先修复 ApprovalPort 与旧 executor 重复检查导致的一次性批准重复消费；验证参数或执行环境变化后重新授权、ask/deny/cancel/timeout，以及只执行一次和审计/结果落盘。此跨层切片尚未实施。 |
+
+### 2.1.2 跨入口验收门
+
+一个切片只有同时满足以下条件才可标记为“生产迁移完成”：
+
+1. 迁移前后入口与依赖边可重算；旧生产调用已删除或被登记为明确的单向兼容 shim。
+2. 测试经过 Host 公共 API 和真实 transport/worker/存储接缝；直接调用内部 executor 的测试只算单元证据。
+3. Desktop、Host-connected CLI、standalone CLI 各自有可重复 smoke 记录，说明其执行器、runId、事件/结果和持久层 owner；未支持的 provider/OS/capability 明确标记 unsupported。
+4. 资源/构建类切片增加干净 bundle 与 packaged artifact 检查；Electron renderer/IPC 行为在真实 Electron 中验证。
+5. 记录命令、OS、HEAD/工作树状态、退出码、日志/产物位置和限制。取消、跳过、fixture-only、typecheck 通过均不算运行验收。
+
+Canvas/Conductor 不在本节迁移范围；它们只在其他模块引用时作为消费者，不因此改变 owner 或验收范围。
+
 ## 3. Desktop main / preload / renderer
 
 | 当前区域 | 保留的 host 职责 | 应提取 / 阶段 |

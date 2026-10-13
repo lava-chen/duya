@@ -62,6 +62,13 @@ async function buildElectron() {
       // `.app.json` schema moved into. One entry covers the bare name and every
       // subpath, because esbuild substitutes the matched package-name prefix.
       '@duya/connectors': path.resolve(scriptDir, '../packages/connectors/dist'),
+      // Plan 587 Host extraction: resolve the Electron-independent service
+      // package from this checkout's build output, not a node_modules link.
+      '@duya/host': path.resolve(scriptDir, '../packages/host/dist'),
+      // Desktop's persistence services use the same workspace-resolved Data
+      // package. Keep this edge local as well so a missing npm junction cannot
+      // silently select another checkout or fail resolution during bundling.
+      '@duya/data': path.resolve(scriptDir, '../packages/data/dist'),
       // Same reason, same root-pointing convention, for the three packages
       // plan 584/586 added. They are ESM with `exports` maps, so the package
       // root resolves to `dist/index.js` via `main` and the `/testing`
@@ -73,21 +80,21 @@ async function buildElectron() {
       // `@duya/agent-protocol` entry also swallows
       // `@duya/agent-protocol/testing` and rewrites it to
       // `<root>/testing` — which resolves to nothing, because the built subpath
-      // lives at `dist/testing`. Longest match wins, so naming both is what
-      // makes the pair work.
+      // lives at `dist/testing`. Point the package root at `dist`, then list
+      // subpaths whose exports do not resolve through a directory index (and
+      // keep the explicit testing entry for its index module).
+      '@duya/agent-protocol/message-timeline': path.resolve(scriptDir, '../packages/agent-protocol/dist/message-timeline.js'),
+      '@duya/agent-protocol/workflow-journal': path.resolve(scriptDir, '../packages/agent-protocol/dist/workflow-journal.js'),
+      '@duya/agent-protocol/legacy': path.resolve(scriptDir, '../packages/agent-protocol/dist/legacy/sse-event.js'),
       '@duya/agent-protocol/testing': path.resolve(scriptDir, '../packages/agent-protocol/dist/testing/index.js'),
-      '@duya/agent-protocol': path.resolve(scriptDir, '../packages/agent-protocol'),
+      '@duya/agent-protocol': path.resolve(scriptDir, '../packages/agent-protocol/dist'),
       '@duya/agent-core': path.resolve(scriptDir, '../packages/agent-core'),
       '@duya/agent-runtime': path.resolve(scriptDir, '../packages/agent-runtime'),
-      // The `duya-file://` media allowlist
-      // (apps/desktop/src/main/core/media-allowlist.ts, plan 583 ISS-02)
-      // reuses the sandboxed file tools' root-boundary primitive instead of a
-      // third hand-rolled variant. Point at the source file: it only imports
-      // node:fs/node:path, so it inlines cleanly into the main-process bundle.
-      '@duya/agent/tool/allowedRoots': path.resolve(
-        scriptDir,
-        '../packages/agent/src/tool/allowedRoots.ts',
-      ),
+      // Plan 610 A5 continuation (2026-10-10): the `duya-file://` media
+      // allowlist primitive moved to `@duya/sandbox` (allowed-roots.ts), so
+      // the former `@duya/agent/tool/allowedRoots` alias is gone. The main
+      // bundle resolves `@duya/sandbox` through the workspace exports map;
+      // build-packages.mjs builds the sandbox dist before this runs.
     },
     // The agent bundle (and WorkerPool.ts in packages/agent) reads
     // `import.meta.url` and falls back to `__dirname` when bundled as CJS

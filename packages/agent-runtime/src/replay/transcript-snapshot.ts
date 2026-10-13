@@ -48,7 +48,7 @@
 
 import type { RunEventEnvelope, SnapshotSource, StopReason } from '@duya/agent-protocol';
 import type { RunId } from '@duya/agent-protocol';
-import type { MessageContent as FinalizedContent } from '@duya/agent-protocol';
+import type { EventMessageContent as FinalizedContent } from '@duya/agent-protocol';
 import type { Message, MessageContent, TextContent, ThinkingContent } from '@duya/agent-protocol/transcript';
 
 /** One block of recovered assistant output, and whether it is still open. */

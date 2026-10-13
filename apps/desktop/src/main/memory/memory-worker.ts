@@ -41,17 +41,16 @@ import {
   DEFAULT_WINDOW_MS,
 } from '@duya/memory/eligibility';
 import { drainOutbox } from '@duya/memory/outbox';
-import { readConfigAgents } from '../../../../../packages/agent/src/agent-profile/config-agents.js';
+import { readConfigAgents } from '@duya/host/agent-profile-config';
 import {
   reconcileProjections,
   purgeDegradedOutputs,
 } from '@duya/memory/reconcile';
 import { queryEligibleInputs } from '@duya/memory/curation_ledger';
 import { writeSystemLog } from '@duya/memory/system_log';
-import { syncAllFromMainDb } from '../memory-state/catalogSync';
+import { syncAllFromHost, type MemoryCatalogSource } from '../memory-state/catalogSync';
 import { runCurationCycle } from './curation_publish_orchestrator';
 import type { ProviderConfig } from './curation_publish_orchestrator';
-import type { CoreDatabase, SessionStore } from '../db/core';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -60,24 +59,8 @@ import type { CoreDatabase, SessionStore } from '../db/core';
 export interface MemoryWorkerDeps {
   /** Memory-state DB (must be bootstrapped + migrated before start). */
   memoryDb: Database;
-  /**
-   * Main DUYA DB (read-only — used for message reads by the Stage 1
-   * extractor, which still imports `readMessages` from the legacy
-   * `messages` table until plan 328 Phase 6 migrates it).
-   */
-  mainDb: Database;
-  /**
-   * Core database (`duya-core.db`) handle — passed to `catalogSync`
-   * for `message_index` reads (plan 328 decision 10). Optional for
-   * backwards compat with tests that have not been migrated yet.
-   */
-  coreDb?: CoreDatabase;
-  /**
-   * Core `SessionStore` — `catalogSync` reads session rows (including
-   * deleted tombstones) via `SessionStore.list({ includeDeleted: true })`.
-   * Optional for backwards compat with tests that have not been migrated.
-   */
-  sessions?: SessionStore;
+  /** Host-owned source for session catalog snapshots and project resolution. */
+  catalogSource?: MemoryCatalogSource;
   /**
    * Override the Stage 1 extractor's message source. The Main-process
    * MemoryWorker has no `process.send` IPC, so it supplies a reader that
@@ -418,7 +401,7 @@ function createWorker(
 ): MemoryWorkerHandle {
   const logger = getLogger();
   const workerId = `memory-worker-${crypto.randomUUID()}`;
-  const extractor = new Stage1Extractor(deps.memoryDb, deps.mainDb, deps.llmClient, {
+  const extractor = new Stage1Extractor(deps.memoryDb, deps.llmClient, {
     rootDir: deps.rootDir,
     // Live policy file managed by the curation loop (missing file = default
     // empty policy, so unwired deployments behave exactly as before).
@@ -585,28 +568,22 @@ function createWorker(
       }
     }
 
-    // Catalog sync: materialize sessions from the core DB into
+    // Catalog sync: materialize Host-owned session snapshots into
     // rollout_catalog. Throttled to catalogSyncIntervalMs on regular
     // ticks; always runs on forceSweep. Without this step, the catalog
     // stays empty and selectEligible returns nothing forever.
     //
-    // Plan 328 Phase 5: the source switched from the legacy
-    // `chat_sessions`/`messages` tables to the core `sessions` store +
-    // `message_index` rows. The coreDb handle is required for the
-    // `message_index` fingerprint reads (decision 10).
+    // Session, index, and project reads cross the Host catalog port; this
+    // worker only owns the memory-state database it writes.
     let catalogSynced: ForceSweepResult['catalogSynced'] = null;
     const syncStale = now - state.lastCatalogSyncAt >= cfg.catalogSyncIntervalMs;
     if (options.force || syncStale) {
       try {
-        if (!deps.coreDb || !deps.sessions) {
-          throw new Error(
-            'catalogSync requires coreDb + sessions store (plan 328 Phase 5); ' +
-              'pass them via MemoryWorkerDeps',
-          );
+        if (!deps.catalogSource) {
+          throw new Error('catalogSync requires the Host memory catalog API');
         }
-        const syncResult = syncAllFromMainDb({
-          coreDb: deps.coreDb.db,
-          sessions: deps.sessions,
+        const syncResult = await syncAllFromHost({
+          source: deps.catalogSource,
           memoryDb,
         });
         state.lastCatalogSyncAt = now;

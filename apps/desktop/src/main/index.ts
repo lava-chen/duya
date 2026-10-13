@@ -42,11 +42,9 @@ import { RecapService } from './services/recap/recap-service';
 import { registerRecapHandlers } from './ipc/recap-handlers';
 import { registerNextStepHandlers } from './ipc/next-step-handlers';
 import { initAgentProcessPool, getAgentProcessPool, AgentProcessPool } from './agents/process-pool/agent-process-pool';
-// Plan 587 C6.1. Statically imported (not dynamically) because this module
-// pulls in nothing Electron-specific — it reaches the logger only — so
-// `collectSpawnedWorkerPids` can read the registry at module scope. The
-// Control Plane service itself IS created via a dynamic import below, because
-// its sibling `run-control-plane` reaches the core-stores singleton.
+// Plan 587 C6.1. This process registry is Electron-independent and can be
+// imported before database composition. Host Control Plane services are loaded
+// below after the Desktop repository and worker registry are ready.
 import { liveSpawnedWorkerPids } from './control-plane/spawned-workers';
 import { startBrowserDaemon, stopBrowserDaemon, getBrowserExtensionStatus, setAllowedExtensionIds, setBrowserMaxTabs, DEFAULT_MAX_WEBVIEW_SESSIONS } from './services/browser/daemon';
 import { attachBrowserDownloadHandler } from './services/browser/cookie-writer';
@@ -91,7 +89,6 @@ import { registerMcpReloadIpcHandler } from './ipc/mcp-handlers';
 import { registerLazyIpcHandlers } from './ipc/lazy-ipc-registry';
 import { ConductorExecutorProxy } from './conductor/executor-proxy';
 import { workbenchService } from './conductor/workbench-service';
-import { getJsonSetting } from './db/queries/settings';
 
 // =============================================================================
 // Core modules (refactored from inline code)
@@ -322,24 +319,34 @@ if (gotTheLock) {
       logger.warn('Skipping core database init — better-sqlite3 not loaded', undefined, 'Main');
     }
 
-    // Plan 587 C6.1: create the Control Plane here, once, now that both
-    // connections it decides over are open. It used to be free functions
-    // reaching for the core-stores singleton on every call, so there was no
-    // moment at which the durable decision owner became initialised and
-    // therefore nothing to assert. `db:request` handlers reach THIS instance
-    // through `getControlPlane()`.
+    // Start Host APIs before composing the Control Plane. Its repository gets
+    // approval capabilities through the authenticated client, never through
+    // direct permission-table handles.
+    const { startDesktopHostApi } = await import('./cli/desktop-host-api');
+    await startDesktopHostApi();
+
+    // Plan 587 C6.1: create the Control Plane after CoreStores and the Host API
+    // client are ready. `db:request` handlers reach THIS instance through
+    // `getControlPlane()`.
     try {
       const { getCoreStoresOrNull } = await import('./db/core-connection');
       const { createControlPlaneRepository } = await import('./control-plane/sqlite-repository');
-      const { createControlPlane } = await import('./control-plane/control-plane-service');
-      const { dispatchControlPlaneAction } = await import('./control-plane/run-control-plane');
-      const { roleOrigin } = await import('./control-plane/command-receipt');
+      const {
+        getDesktopHostPermissionRequestApi,
+        getDesktopHostToolApprovalApi,
+        getDesktopHostRunApi,
+      } = await import('./cli/desktop-host-api');
+      const { createDesktopHostRunApiAdapter } = await import('./control-plane/host-run-api-adapter');
+      const { createControlPlane } = await import('@duya/host/control-plane-service');
+      const { roleOrigin } = await import('@duya/host/command-receipt');
       const core = getCoreStoresOrNull();
       if (core) {
         const repository = createControlPlaneRepository({
           stores: core,
-          legacyDatabase: getDatabase,
+          permissionRequests: getDesktopHostPermissionRequestApi(),
+          toolApprovals: getDesktopHostToolApprovalApi(),
         });
+        const hostRunApiRequest = createDesktopHostRunApiAdapter(getDesktopHostRunApi());
         createControlPlane({
           repository,
           // Every role the host actually spawns. A `db:request` from a pid this
@@ -357,7 +364,14 @@ if (gotTheLock) {
             // after this point is still a worker this host spawned.
             trustedPids: collectSpawnedWorkerPids,
           },
-          request: (action, payload) => dispatchControlPlaneAction(action, payload) as Promise<unknown>,
+          // Every durable run action uses the same typed Host Run API as CLI.
+          // ControlPlaneService still authenticates the worker sender first.
+          request: hostRunApiRequest,
+          onUntrustedCommand: (details) => logger.warn(
+            'Control Plane refused a command from an untrusted sender',
+            { ...details },
+            'Main',
+          ),
         });
         logger.info('Control Plane created', { tables: repository.ownership.tables.length }, 'Main');
       } else {
@@ -376,24 +390,26 @@ if (gotTheLock) {
       );
     }
 
+    registerDbHandlers();
+    registerConductorHandlers();
+    registerSidebarSectionsHandlers();
+
     // Plan 560 §6.2 — crash reconciliation. This process has just booted, so no
     // workflow engine is running anything yet (neither the session-anchored
     // workers nor the run-anchored runtime). Any row still sitting in a
     // RUNNING-class status is therefore stale and was left behind by a crash or
     // a hard quit. Mark them `interrupted` — never auto-resume; replaying a
-    // journal is the user's explicit decision.
+    // journal is the user's explicit decision. Use the same typed Host API as
+    // every other workflow-run caller.
     try {
-      const { getCoreStoresOrNull } = await import('./db/core-connection');
-      const coreForReconcile = getCoreStoresOrNull();
-      if (coreForReconcile) {
-        const stale = coreForReconcile.workflowRuns.reconcileStaleRuns(new Set());
-        if (stale.length > 0) {
-          logger.info(
-            `Workflow crash reconciliation: ${stale.length} stale run(s) marked interrupted`,
-            undefined,
-            'Main',
-          );
-        }
+      const { getDesktopHostWorkflowRunApi } = await import('./cli/desktop-host-api');
+      const stale = await getDesktopHostWorkflowRunApi().reconcileStaleRuns([]);
+      if (stale.length > 0) {
+        logger.info(
+          `Workflow crash reconciliation: ${stale.length} stale run(s) marked interrupted`,
+          undefined,
+          'Main',
+        );
       }
     } catch (err) {
       logger.warn(
@@ -401,34 +417,6 @@ if (gotTheLock) {
         { error: err instanceof Error ? err.message : String(err) },
         'Main',
       );
-    }
-
-    registerDbHandlers();
-    registerConductorHandlers();
-    registerSidebarSectionsHandlers();
-
-    // Plan 534 — one-time copy of `memory-state.db.projects`/`project_bots`
-    // into `duya-core.db` (the `projects` table was misplaced in memory-state,
-    // plan 525). Runs unconditionally (independent of the memory worker) so
-    // users with the worker disabled still keep their historical project rows.
-    // Idempotent + marker-guarded; a no-op once core `meta` records it.
-    try {
-      const { getCoreStoresOrNull } = await import('./db/core-connection');
-      const { runProjectsImport, needsProjectsImport } = await import('./db/core/projects-import');
-      const { resolveMemoryDbPath } = await import('./memory-state/path');
-      const coreStoresForImport = getCoreStoresOrNull();
-      if (coreStoresForImport) {
-        const coreDb = coreStoresForImport.coreDb.db;
-        if (needsProjectsImport(coreDb)) {
-          runProjectsImport({
-            memoryDbPath: resolveMemoryDbPath({ bootJsonDatabaseDir: path.dirname(dbPath) }),
-            coreDb,
-            sqlite: sqliteCtor,
-          });
-        }
-      }
-    } catch (err) {
-      logger.warn('Projects one-time import skipped', { error: err instanceof Error ? err.message : String(err) }, LogComponent.Main);
     }
 
     // Plan 526 — merge legacy <userData>/agents channel data into the shared
@@ -549,7 +537,7 @@ if (gotTheLock) {
     initSessionManager();
 
     // Recap service for session context recovery
-    const recapService = new RecapService(getDatabase, getSessionManager);
+    const recapService = new RecapService(getSessionManager);
     registerRecapHandlers(recapService);
 
     // Next-step suggestions (end-of-turn follow-up option cards)
@@ -804,6 +792,8 @@ if (gotTheLock) {
     // Memory worker: reads from config.toml via ConfigStore first (user setting),
     // with env var override for development/testing.
     // DUYA_MEMORY_ENABLED env var takes precedence over config.toml for explicit opt-in/opt-out.
+    const { syncMemoryToggleFromHostSettings, startMemoryWorkerFromConfig } = await import('./memory/worker-bootstrap');
+    await syncMemoryToggleFromHostSettings();
     const memoryExplicitOff = process.env.DUYA_MEMORY_ENABLED === '0' || process.env.DUYA_MEMORY_ENABLED === 'false'
       || process.env.DUYA_MEMORY_V2_ENABLED === '0' || process.env.DUYA_MEMORY_V2_ENABLED === 'false';
     const memoryExplicitOn = process.env.DUYA_MEMORY_ENABLED === '1' || process.env.DUYA_MEMORY_ENABLED === 'true'
@@ -818,12 +808,6 @@ if (gotTheLock) {
       const configStore = getConfigStore();
       memoryEnabled = configStore.getByPath('memory.memory_enabled') === true;
     }
-    // Memory toggle boot alignment: legacy builds wrote the toggle only to
-    // the SQLite settings table while every consumer reads config.toml —
-    // align the two (SQLite wins as the user's latest intent) before the
-    // gate reads it. No-op when they already agree. (worker-bootstrap.ts)
-    const { syncMemoryToggleFromSettingsDb, startMemoryWorkerFromConfig } = await import('./memory/worker-bootstrap');
-    syncMemoryToggleFromSettingsDb();
     if (memoryEnabled) {
       const outcome = await startMemoryWorkerFromConfig();
       if (outcome === 'started') {
@@ -837,20 +821,6 @@ if (gotTheLock) {
     const autoStartValue = getAutoStartFromSettings();
     if (autoStartValue) {
       setAutoStart(true);
-    }
-
-    // Auto-start Gateway if bridge_auto_start is enabled
-    try {
-      const db = getDatabase();
-      if (db) {
-        const row = db.prepare("SELECT value FROM settings WHERE key = 'bridge_auto_start'").get() as { value: string } | undefined;
-        if (row?.value === 'true') {
-          const { startGateway } = await import('./gateway/message-bus');
-          await startGateway();
-        }
-      }
-    } catch (error) {
-      logger.error('Failed to auto-start Gateway', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
     }
 
     // ============================================================
@@ -1101,7 +1071,20 @@ if (gotTheLock) {
         }
 
         try {
-          const allowedExtensionIds = getJsonSetting<string[]>('browserExtensionAllowedIds', []);
+          const { getDesktopHostLocalSettingsApi } = await import('./cli/desktop-host-api');
+          const settings = getDesktopHostLocalSettingsApi();
+          const readJsonSetting = <T>(raw: string | null, fallback: T): T => {
+            if (raw === null) return fallback;
+            try {
+              return JSON.parse(raw) as T;
+            } catch {
+              return fallback;
+            }
+          };
+          const allowedExtensionIds = readJsonSetting<unknown>(
+            await settings.getSetting('browserExtensionAllowedIds'),
+            [],
+          );
           const normalizedExtensionIds = Array.from(new Set(
             (Array.isArray(allowedExtensionIds) ? allowedExtensionIds : [])
               .filter((id) => typeof id === 'string')
@@ -1112,10 +1095,13 @@ if (gotTheLock) {
           // Seed the daemon with the user-configured max agent browser pages so
           // both the built-in webview backend and the extension cap applies from
           // the first command. Falls back to the default when unset.
-          const storedMaxTabs = getJsonSetting<unknown>('browserMaxTabs', DEFAULT_MAX_WEBVIEW_SESSIONS);
+          const storedMaxTabs = readJsonSetting<unknown>(
+            await settings.getSetting('browserMaxTabs'),
+            DEFAULT_MAX_WEBVIEW_SESSIONS,
+          );
           setBrowserMaxTabs(typeof storedMaxTabs === 'number' ? storedMaxTabs : DEFAULT_MAX_WEBVIEW_SESSIONS);
           await startBrowserDaemon();
-          attachBrowserDownloadHandler();
+          attachBrowserDownloadHandler(await settings.getSetting('browserDownloadPath'));
         } catch (error) {
           logger.error('Failed to start Browser Daemon', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
         }

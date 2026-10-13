@@ -107,12 +107,17 @@ vi.mock('../ipc/db-handlers', () => ({ getDatabase: () => hoisted.stores }));
 
 import { handleDbRequest } from '../agents/db-bridge';
 import { readRunReceipt } from '../control-plane/run-receipt';
-import { dispatchControlPlaneAction } from '../control-plane/run-control-plane';
+import {
+  dispatchControlPlaneAction,
+  __setDesktopHostRunApiForTesting,
+} from '../control-plane/run-control-plane';
+import { createHostRunApi } from '@duya/host/run-api';
 import {
   createControlPlaneRepository,
   _resetControlPlaneRepositoryForTesting,
   type CoreStoreAggregates,
 } from '../control-plane/sqlite-repository';
+import { HOST_APPROVAL_API_STUBS } from '../control-plane/__tests__/host-approval-api-stubs';
 import { createControlPlane, _resetControlPlaneForTesting } from '../control-plane/control-plane-service';
 import { roleOrigin, type CommandSenderConfig } from '../control-plane/command-receipt';
 import { RUN_STORE_MIGRATIONS, RunStore } from '../db/core/run-store';
@@ -253,16 +258,21 @@ beforeEach(() => {
   };
   hoisted.stores = { runs: aggregates.runs, research: null };
   // The real composition: one repository, one Control Plane, and the real
-  // dispatcher as its route to the run write path.
-  createControlPlaneRepository({ stores: aggregates, legacyDatabase: () => null });
+  // dispatcher as its route to the run write path. The dispatcher now speaks
+  // the typed Host Run API; the seam points it at the SAME real RunStore this
+  // file asserts against, so the measurement keeps a real durable store
+  // without standing up a Host HTTP process.
+  __setDesktopHostRunApiForTesting(createHostRunApi({ runs: aggregates.runs }));
+  createControlPlaneRepository({ stores: aggregates, ...HOST_APPROVAL_API_STUBS });
   createControlPlane({
-    repository: createControlPlaneRepository({ stores: aggregates, legacyDatabase: () => null }),
+    repository: createControlPlaneRepository({ stores: aggregates, ...HOST_APPROVAL_API_STUBS }),
     senderConfig: SENDER,
     request: dispatchControlPlaneAction,
   });
 });
 
 afterEach(() => {
+  __setDesktopHostRunApiForTesting(null);
   _resetControlPlaneForTesting();
   _resetControlPlaneRepositoryForTesting();
   hoisted.stores = null;
@@ -410,16 +420,17 @@ describe('the channel is still CLOSED from the sub-agent, and this file knows it
   });
 
   it('the sub-agent turn is still the one non-ControlPlane turn entry', () => {
-    // The census itself is the authority and is unchanged; what is asserted
-    // here is only that this slice did not move the sub-agent's turn. The
-    // nested loop is still a nested loop, and the count is still 1.
+    // The census itself is the authority. The nested loop's turn call moved
+    // off `subAgent.streamChat` onto the engine driver (plan 610 S4c-d3);
+    // what is asserted is the same property under the new name — the
+    // sub-agent's turn is still ONE site, still a nested loop, not fanned out.
     const runAgent = readFileSync(
       resolve(ROOT, 'packages/agent/src/tool/SubagentTool/runAgent.ts'),
       'utf8',
     );
     const turnSites = runAgent
       .split('\n')
-      .filter((line) => !line.trim().startsWith('//') && line.includes('.streamChat('));
+      .filter((line) => !line.trim().startsWith('//') && line.includes('driveSubagentRunWithEngine('));
     expect(turnSites).toHaveLength(1);
   });
 });

@@ -19,14 +19,14 @@
  */
 
 import type { MessageContent } from '../types.js';
+import { THREAD_METADATA_KEY } from '@duya/agent-protocol/message-timeline';
 import type {
   AgentMessage,
   MessageEntry,
   MessageTimelineEntry,
 } from './message-framework.js';
 
-/** Namespace key for thread/fork metadata on an AgentMessage. */
-export const THREAD_METADATA_KEY = 'threadMeta';
+export { THREAD_METADATA_KEY };
 
 /**
  * Optional thread metadata carried on a message (plan 486 §2.1):

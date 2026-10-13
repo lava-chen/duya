@@ -10,9 +10,13 @@
 | core | reducer、权限/预算求值、上下文选择、prompt渲染/压缩转换 | protocol、无外部执行能力的纯库 | 自行FS/NET/PROC/数据库/clock；通过AI client间接IO |
 | runtime | async run loop、模型与工具调用、hook执行、取消、事件/背压、端口协调 | core/protocol、ai与能力adapter | Electron、renderer、Desktop logger/schema/migration |
 | CP services | Run/Task/Goal持久化决策、审批、调度、Workspace解析、lease/checkpoint | runtime/protocol及repository port | UI、worker句柄、另造模型循环 |
+| Host service | CP、Worker Manager、scheduler、permission与`@duya/data`组合；每个数据根只有一个活动Host owner | protocol/API及runtime | Electron依赖、客户端直连数据库、第二套run loop |
+| clients | CLI/TUI、Desktop renderer/Main adapter、以后Web | Host API | 打开应用数据库、管理worker进程 |
 | host adapters | IPC/HTTP/进程、secret/vault、SQLite、文件/平台 | 上述公开入口 | 让下层回import host实现 |
 
-ControlPlane先留 `apps/desktop/src/main/control-plane`；纯service不importElectron，SQLite和transportadapter显式注入。第二种真实host需要相同服务时才提取独立包。runtime包可在worker执行，server负责管理；模块边界不等于进程边界。
+Control Plane 与 Host composition 从 `apps/desktop/src/main` 迁入 Electron-independent Host package；纯service不importElectron，SQLite和transport adapter显式注入。Host 是唯一数据库/Worker生命周期 owner。Desktop 负责启动、监督本机 Host 并把 renderer 操作适配到 Host API；CLI 默认连接同一 Host，`duya serve` 管理其生命周期，独立执行时复用同一 Host composition。runtime可在Host管理的worker中执行；模块边界不等于进程边界。Web以后只经认证代理连接远端Host，不直接访问SQLite，也不暴露现有loopback token。
+
+本地每个 `dataRoot` 同时只允许一个活动Host owner。Host discovery、启动锁、鉴权轮换和关闭恢复属于Host生命周期，不由CLI或Desktop各自维护第二份。API schema进入protocol；HTTP/SSE、WebSocket、IPC只做transport binding，不复制业务状态机。旧 `@duya/agent` 的实现可作为迁移期 adapter，但最终CLI、Desktop生产运行链都必须从其依赖图移除。
 
 Browser-safe、仅Desktop消费的DTO首选 `apps/desktop/src/contracts`；多个独立包的稳定公共DTO才提shared。不要把service或全部`types.ts`搬进共享包。现有ai/plugin-core/computer等继续复用。
 

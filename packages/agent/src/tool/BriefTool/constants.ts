@@ -1,1 +1,2 @@
-export const BRIEF_TOOL_NAME = 'Brief';
+/** Compatibility adapter for BriefTool constants. */
+export { BRIEF_TOOL_NAME } from '@duya/capabilities/BriefTool/constants';

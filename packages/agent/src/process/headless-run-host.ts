@@ -73,7 +73,8 @@
  *  - an `ExecutionChannel` that starts the real executor and forwards frames;
  *  - a `TranslateContext` per run, because the runtime is the component that
  *    owns permission classification and the turn counter;
- *  - a `RunPersistence`, which a headless host has no Control Plane to ask.
+ *  - a `RunPersistence`, backed by the Host API when one is configured and by
+ *    the local in-memory store for reference use.
  *
  * The terminal decision, the `seq` sequence, the budget verdict and the cancel
  * escalation all come out of `RunController`. If a future change made this
@@ -115,8 +116,9 @@ import type {
   RunResult,
   RunTerminalState,
   RuntimeCapabilities,
+  HostRunApiV1,
 } from '@duya/agent-protocol';
-import { manifestFingerprint } from '@duya/agent-protocol';
+import { manifestFingerprint, runInputRevision } from '@duya/agent-protocol';
 import { convertSSEToAgentMessage } from './sse-frame-codec.js';
 import { buildMessageFinalizedEvent } from './worker-protocol.js';
 // Plan 610 S4c-d2b: the ENGINE driver, the same one `agent-process-entry.ts`
@@ -207,6 +209,21 @@ export interface HeadlessEngineWiring {
    * a capability handle, not data, and data is what that boundary carries.
    */
   readonly toolRegistry?: unknown;
+  /**
+   * The run's permission ask callback, wired through to
+   * `ChatOptions.requestPermission` (plan 611 P0-2).
+   *
+   * A WIRING MEMBER for the same reason `toolRegistry` is: the callback is a
+   * function, and `RunStartInput.options` is canonical JSON that cannot carry
+   * one. Injected into the executor's options bag in
+   * `createAgentExecutionChannel`, AFTER the spread of `input.options` so the
+   * host's handle wins — the same layering `toolRegistry` uses.
+   *
+   * Absent (the default) is the honest headless shape: a tool ask then
+   * resolves through `resolveAskWithoutUser`, and the run reports no
+   * permission coordinator.
+   */
+  readonly requestPermission?: ChatOptions['requestPermission'];
 }
 
 /** What the host needs to build a run's frozen decision. */
@@ -251,6 +268,8 @@ export interface HeadlessRunHostOptions {
    * executor is the only thing that reads it.
    */
   readonly toolRegistry?: unknown;
+  /** Host-owned durable run records; absent for in-memory reference use. */
+  readonly runApi?: HostRunApiV1;
   /**
    * Mint the run id, injected so a test can pin it and a host can prefix it
    * with its own authority. The default is a random UUID, which is the honest
@@ -269,6 +288,13 @@ export interface HeadlessRunHostOptions {
    * and a test needs to point it somewhere disposable.
    */
   readonly ledgerDir?: string;
+  /**
+   * The permission ask callback, forwarded onto the engine wiring (plan 611
+   * P0-2). See `HeadlessEngineWiring.requestPermission` for the placement
+   * rules. Absent keeps the documented headless behaviour: tool asks are not
+   * answerable, and the session surfaces that rather than pretending.
+   */
+  readonly requestPermission?: ChatOptions['requestPermission'];
 }
 
 /**
@@ -462,6 +488,12 @@ const manifestMaxTurns = manifest.budget.maxTurns;
       const options = {
         ...input.options,
         ...(toolRegistry === undefined ? {} : { toolRegistry }),
+        // The ask callback rides the wiring, not the run input — see
+        // `HeadlessEngineWiring.requestPermission` for why the canonical-JSON
+        // boundary cannot carry it.
+        ...(wiring.requestPermission === undefined
+          ? {}
+          : { requestPermission: wiring.requestPermission }),
         sessionId: input.sessionId,
       } as unknown as ChatOptions;
 
@@ -673,11 +705,13 @@ export class HeadlessRunHost {
   readonly #store: InMemoryRunEventStore;
   readonly #transport: InProcessTransport;
   readonly #agent: HeadlessAgent;
+  readonly #runApi: HostRunApiV1 | undefined;
   readonly #mintRunId: () => RunId;
   readonly #now: () => number;
 
   constructor(options: HeadlessRunHostOptions) {
     this.#agent = options.agent;
+    this.#runApi = options.runApi;
     this.#store = new InMemoryRunEventStore();
     this.#mintRunId = options.mintRunId ?? (() => crypto.randomUUID());
     this.#now = options.now ?? Date.now;
@@ -689,6 +723,9 @@ channel: createAgentExecutionChannel(options.agent, {
         now: this.#now,
         ...(options.ledgerDir === undefined ? {} : { ledgerDir: options.ledgerDir }),
         ...(options.toolRegistry === undefined ? {} : { toolRegistry: options.toolRegistry }),
+        ...(options.requestPermission === undefined
+          ? {}
+          : { requestPermission: options.requestPermission }),
       }),
       // The probe is the runtime's OWN, asked of a host that supplies the facts
       // it cannot measure for itself. It reports `NO_RESUME` and
@@ -723,7 +760,7 @@ channel: createAgentExecutionChannel(options.agent, {
       identity: RUNTIME_IDENTITY,
       protocol: PROTOCOL,
       contextFor: (manifest) => this.#contextFor(manifest),
-      persistenceFor: () => this.#persistence(),
+      persistenceFor: (manifest) => this.#persistence(manifest.runId),
       now: this.#now,
       clock: this.#now,
     });
@@ -763,12 +800,22 @@ channel: createAgentExecutionChannel(options.agent, {
     };
   }
 
-  #persistence(): RunPersistence {
+  #persistence(runId: RunId): RunPersistence {
+    const runApi = this.#runApi;
     return {
       append: async (envelopes) => {
+        if (runApi && envelopes.length > 0) {
+          await runApi.appendAgentRunEvents(envelopes[0]!.runId, envelopes);
+        }
         await this.#store.append(envelopes);
       },
-      complete: async () => undefined,
+      complete: async (terminal, metrics) => {
+        if (!runApi) return;
+        const outcome = await runApi.settleAgentRun(runId, terminal, metrics);
+        if (outcome.state === 'conflict' || outcome.state === 'absent') {
+          throw new Error(`Host refused to settle run ${runId}: ${outcome.state}`);
+        }
+      },
     };
   }
 
@@ -794,9 +841,9 @@ channel: createAgentExecutionChannel(options.agent, {
       permissionActions: [],
       permissionDefaultTimeoutMs: 300_000,
       permissionMaxTimeoutMs: 300_000,
-      // A headless host holds no replay window: the in-memory store is what it
-      // has, and it is the same store the run just wrote. `0` is the honest
-      // answer rather than a bound this host does not enforce.
+      // The in-memory replay window remains the live host's bounded view. The
+      // optional Host Run API is the durable transcript store; this capability
+      // probe does not claim that persisted runs can be resumed.
       oldestAvailableSeq: 0,
       latestSeq: 0,
       catalog: { profiles: [], modes: [], tools: [], connectorProviders: [] },
@@ -814,12 +861,29 @@ channel: createAgentExecutionChannel(options.agent, {
   async start(intent: HeadlessRunIntent): Promise<HeadlessRun> {
     const runId = this.#mintRunId();
     const manifest = buildHeadlessManifest(intent, runId);
+    const options = {};
+    const revision = runInputRevision({ sessionId: intent.sessionId, prompt: intent.prompt, options });
+    if (this.#runApi) {
+      const created = await this.#runApi.createAgentRun({
+        runId,
+        sessionId: intent.sessionId,
+        manifest,
+        manifestHash: manifestFingerprint(manifest),
+        inputHash: revision,
+        origin: 'user',
+        ...(manifest.parentRunId === undefined ? {} : { parentRunId: manifest.parentRunId }),
+      });
+      if (created.runId !== runId || created.state !== 'created') {
+        throw new Error(`Host did not create a fresh Agent Run record (${created.state})`);
+      }
+    }
     const handle: RunHandle = await this.#controller.start(manifest, {
       prompt: intent.prompt,
       sessionId: intent.sessionId,
       // Canonical JSON only. The registry travels on the host, not here — see
       // `HeadlessRunHostOptions.toolRegistry`.
-      options: {},
+      options,
+      revision,
     });
     return this.#wrap(handle, manifest);
   }

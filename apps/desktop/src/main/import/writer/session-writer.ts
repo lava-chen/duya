@@ -1,11 +1,8 @@
 import * as fs from 'fs';
-import * as path from 'path';
 import { createInterface } from 'readline';
 import { randomUUID } from 'crypto';
-import { getCoreStores } from '../../db/core-connection';
 import { ipcMessageToNewEvent } from '../../ipc/core-db-adapters';
-import type { NewEvent } from '../../db/core';
-import { resolveRolloutRoot } from '../../config/boot-config';
+import { getDesktopHostLocalRolloutApi, getDesktopHostSessionApi } from '../../cli/desktop-host-api';
 import { getLogger, LogComponent } from '../../logging/logger';
 import type { SessionImportItem } from '../types';
 
@@ -278,6 +275,7 @@ export async function writeSessions(
   const results: SessionWriteResult[] = [];
 
   for (const item of items) {
+    let createdByImport = false;
     try {
       const isCodex = isCodexSource(item);
       const messages = await parseMessages(item.sourcePath, isCodex);
@@ -287,25 +285,21 @@ export async function writeSessions(
         continue;
       }
 
-      const { sessions, messageLog } = getCoreStores();
-
-      sessions.create({
-        id: item.sessionId,
+      await getDesktopHostLocalRolloutApi().createImportedSession({
+        sessionId: item.sessionId,
         title: item.title,
         workingDirectory: item.workingDirectory,
         projectName: item.projectName,
-        status: 'active',
-        mode: 'code',
-        providerId: 'env',
-        agentType: 'main',
       });
+      createdByImport = true;
 
-      // Batch-append all messages via the core message log. Seq is auto-assigned
-      // by appendBatch (COALESCE(MAX(seq),0)+1) — no manual seqIndex counting.
-      const events: NewEvent[] = messages.map((msg) =>
-        ipcMessageToNewEvent(item.sessionId, { ...msg, session_id: item.sessionId }),
+      const entries = messages.map((msg) =>
+        ipcMessageToNewEvent(item.sessionId, { ...msg, session_id: item.sessionId }).payload,
       );
-      messageLog.appendBatch(events);
+      const sessionApi = getDesktopHostSessionApi();
+      for (let offset = 0; offset < entries.length; offset += 50) {
+        await sessionApi.appendTimeline(item.sessionId, { entries: entries.slice(offset, offset + 50) });
+      }
 
       results.push({
         sessionId: item.sessionId,
@@ -314,6 +308,16 @@ export async function writeSessions(
 
       logger.info('Session imported', { sessionId: item.sessionId, messageCount: messages.length }, COMPONENT);
     } catch (err) {
+      if (createdByImport) {
+        try {
+          const rollback = await getDesktopHostLocalRolloutApi().rollbackImportedSessions([item.sessionId]);
+          if (rollback.failedSessionIds.includes(item.sessionId)) {
+            logger.warn('Failed to clean up a partially imported session', { sessionId: item.sessionId }, COMPONENT);
+          }
+        } catch {
+          // Preserve the original import error; batch rollback can retry cleanup.
+        }
+      }
       logger.warn('Failed to import session', { sessionId: item.sessionId, error: String(err) }, COMPONENT);
     }
   }
@@ -322,28 +326,11 @@ export async function writeSessions(
 }
 
 export async function rollbackSessions(sessionIds: string[]): Promise<void> {
-  const { sessions, messageLog } = getCoreStores();
-  const rolloutRoot = resolveRolloutRoot();
-  for (const sessionId of sessionIds) {
-    try {
-      // Capture the rollout path before deleting the session row (after delete
-      // the path can no longer be resolved from the sessions table).
-      const relativePath = sessions.getRolloutPath(sessionId);
-      messageLog.deleteBySession(sessionId);
-      sessions.delete(sessionId);
-      // Best-effort rollout file cleanup — orphaned JSONL files are harmless
-      // but accumulate disk space across repeated import/rollback cycles.
-      if (relativePath) {
-        const absolutePath = path.join(rolloutRoot, relativePath);
-        try {
-          if (fs.existsSync(absolutePath)) fs.unlinkSync(absolutePath);
-        } catch {
-          // File cleanup is best-effort — index + session row are already gone.
-        }
-      }
-      logger.info('Session rolled back', { sessionId }, COMPONENT);
-    } catch (err) {
-      logger.warn('Failed to rollback session', { sessionId, error: String(err) }, COMPONENT);
-    }
+  const result = await getDesktopHostLocalRolloutApi().rollbackImportedSessions(sessionIds);
+  for (const sessionId of result.deletedSessionIds) {
+    logger.info('Session rolled back', { sessionId }, COMPONENT);
+  }
+  for (const sessionId of result.failedSessionIds) {
+    logger.warn('Failed to rollback session', { sessionId }, COMPONENT);
   }
 }

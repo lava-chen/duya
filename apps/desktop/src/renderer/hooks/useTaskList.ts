@@ -7,7 +7,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import type { Task } from '@duya/agent';
+import type { Task } from '@duya/agent-protocol';
 
 export interface UseTaskListResult {
   tasks: Task[];

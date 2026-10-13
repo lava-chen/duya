@@ -1,4 +1,16 @@
 import * as ipcDbClient from '../ipc/db-client.js';
+import type {
+  AgentTaskStatus,
+  Task,
+  TaskClaimResult,
+  TaskCreateInput,
+  TaskStatus,
+  TaskStore,
+  TaskUpdateInput,
+  UnassignTeammateTasksResult,
+} from '@duya/agent-protocol';
+
+export type { Task, TaskStatus, TaskStore } from '@duya/agent-protocol';
 
 // =============================================================================
 // IPC Mode Detection
@@ -19,48 +31,28 @@ function getIpcClient(): typeof ipcClient {
 // Task Types
 // =============================================================================
 
-export type TaskStatus = 'pending' | 'in_progress' | 'completed';
+export type ClaimTaskResult = TaskClaimResult;
+export type UnassignTasksResult = UnassignTeammateTasksResult;
+export type AgentStatus = AgentTaskStatus;
 
-export interface Task {
-  id: string;
-  subject: string;
-  description: string;
-  status: TaskStatus;
-  activeForm?: string;
-  owner?: string;
-  blocks: string[];
-  blockedBy: string[];
-  metadata?: Record<string, unknown>;
-}
+export type TaskStoreFactory = (sessionId: string) => TaskStore;
 
-export type ClaimTaskResult = {
-  success: boolean;
-  reason?: 'task_not_found' | 'already_claimed' | 'already_resolved' | 'blocked';
-  task?: Task;
-  blockedByTasks?: string[];
-};
+let hostTaskStoreFactory: TaskStoreFactory | null = null;
 
-export type UnassignTasksResult = {
-  unassignedTasks: Array<{ id: string; subject: string }>;
-  notificationMessage: string;
-};
-
-export type AgentStatus = {
-  agentId: string;
-  status: 'idle' | 'busy';
-  currentTasks: string[];
-};
-
-export interface TaskStore {
-  getTask(taskId: string): Promise<Task | null>;
-  listTasks(): Promise<Task[]>;
-  createTask(task: Omit<Task, 'id'> & { id?: string }): Promise<Task>;
-  updateTask(taskId: string, updates: Partial<Task>): Promise<Task | null>;
-  deleteTask(taskId: string): Promise<boolean>;
-  claimTask(taskId: string, owner: string): Promise<ClaimTaskResult>;
-  blockTask(fromTaskId: string, toTaskId: string): Promise<boolean>;
-  getAgentStatuses(): Promise<AgentStatus[]>;
-  unassignTeammateTasks(owner: string): Promise<UnassignTasksResult>;
+/** Install a Host-backed store for standalone CLI runs and return its disposer. */
+export function installHostTaskStoreFactory(factory: TaskStoreFactory): () => void {
+  const previous = hostTaskStoreFactory;
+  hostTaskStoreFactory = factory;
+  storeCache.clear();
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    if (hostTaskStoreFactory === factory) {
+      hostTaskStoreFactory = previous;
+      storeCache.clear();
+    }
+  };
 }
 
 // =============================================================================
@@ -114,7 +106,7 @@ class IPCTaskStore implements TaskStore {
     return results.map(rowToTask);
   }
 
-  async createTask(task: Omit<Task, 'id'> & { id?: string }): Promise<Task> {
+  async createTask(task: TaskCreateInput): Promise<Task> {
     const ipc = getIpcClient()!;
     // Caller-supplied id is honored so tools (e.g. todo) can preserve
     // their own identity across re-issue. If the row already exists in
@@ -141,7 +133,7 @@ class IPCTaskStore implements TaskStore {
     return result;
   }
 
-  async updateTask(taskId: string, updates: Partial<Task>): Promise<Task | null> {
+  async updateTask(taskId: string, updates: TaskUpdateInput): Promise<Task | null> {
     const ipc = getIpcClient()!;
     await ipc.taskDb.update(taskId, { ...updates, session_id: this.sessionId });
     return this.getTask(taskId);
@@ -266,7 +258,7 @@ export function getDatabaseTaskStore(sessionId: string): TaskStore {
     return new IPCTaskStore(sessionId);
   }
   if (!storeCache.has(sessionId)) {
-    storeCache.set(sessionId, new NoopTaskStore(sessionId));
+    storeCache.set(sessionId, hostTaskStoreFactory?.(sessionId) ?? new NoopTaskStore(sessionId));
   }
   return storeCache.get(sessionId)!;
 }

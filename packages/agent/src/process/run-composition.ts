@@ -221,7 +221,7 @@ import type { AssistantMessage, Message, MessageContent, SSEEvent } from '../typ
 import type { Tool } from '../types.js';
 import type { RunHandle, RunTurnAssembly, TurnOutputSink, duyaAgent } from '../agent/DuyaAgent.js';
 import type { TurnPipelinePublisher } from '../tool/turn-pipeline-publisher.js';
-import { createClientModelPort } from './run-engine-model.js';
+import { createClientModelPort } from '@duya/host/run-engine-model';
 import { createLegacyCommandPort } from './command-port.js';
 import { renderSystemReminder } from '../agent/reminders.js';
 import { normalizeCanUseToolDecision } from '../agent/toolInvokePermission.js';

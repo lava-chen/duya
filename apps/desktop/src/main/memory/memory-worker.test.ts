@@ -179,7 +179,6 @@ function createWorkerFixture(): WorkerFixture {
 function toDeps(f: WorkerFixture): MemoryWorkerDeps {
   return {
     memoryDb: f.memoryDb,
-    mainDb: f.mainDb,
     llmClient: f.llmClient,
     rootDir: f.memoryRoot,
   };

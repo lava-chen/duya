@@ -2,9 +2,7 @@
  * Pure helpers extracted from DuyaAgent.ts. Each function is self-contained
  * (no `this` dependency) and may be reused by other modules.
  */
-import type {
-  AgentProfile,
-} from '../../agent-profile/types.js';
+import type { AgentProfile } from '@duya/agent-core';
 import type { MailboxApplyMode, MailboxRow } from '../../session/db.js';
 import type {
   FileAttachment,

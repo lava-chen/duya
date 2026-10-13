@@ -17,7 +17,8 @@
  *
  * Reuses:
  *   - `mcpService.computeMCPId` (= `idFor` re-export) for canonical MCP ids.
- *   - `getJsonSetting` for `skillEnabledOverrides`. We never mutate.
+ *   - the authenticated Host settings API to read `skillEnabledOverrides`.
+ *     This snapshot never mutates the override.
  *   - `scanSkillFile` from `packages/agent/src/security/skillScanner.ts`
  *     for `skill.securityVerdict` (read-only).
  *
@@ -32,7 +33,7 @@
 import { readdirSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
-import { getJsonSetting } from '../../db/queries/settings';
+import { getDesktopHostLocalSettingsApi } from '../../cli/desktop-host-api';
 import { collectMainMCPCandidates } from '../../agents/mcp/collect-main';
 import { readPluginManifest } from '../../plugins/manifest';
 import { getPluginManager } from '../../plugins/PluginManager';
@@ -70,9 +71,15 @@ type SkillEnabledOverrides = Record<string, boolean>;
  * Read skill enabled overrides from settingsKv. Pure read; does not
  * trigger any sync side effects.
  */
-function readSkillEnabledOverrides(): SkillEnabledOverrides {
+async function readSkillEnabledOverrides(): Promise<SkillEnabledOverrides> {
   try {
-    return getJsonSetting<SkillEnabledOverrides>(SKILL_ENABLED_OVERRIDES_KEY, {});
+    const raw = await getDesktopHostLocalSettingsApi().getSetting(SKILL_ENABLED_OVERRIDES_KEY);
+    if (raw === null) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'),
+    );
   } catch {
     return {};
   }
@@ -171,10 +178,10 @@ export interface CrossSourceSkillResult {
   settingsOverrideApplied: boolean;
 }
 
-export function buildCrossSourceSkillCapabilities(
+export async function buildCrossSourceSkillCapabilities(
   options: CrossSourceSkillOptions,
-): CrossSourceSkillResult {
-  const overrides = readSkillEnabledOverrides();
+): Promise<CrossSourceSkillResult> {
+  const overrides = await readSkillEnabledOverrides();
   const { candidates, descriptions } = buildCrossSourceSkillCandidates(options);
   const available = resolveAvailable(candidates);
   const out: CapabilityDTO[] = [];

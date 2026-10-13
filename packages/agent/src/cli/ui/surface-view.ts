@@ -38,7 +38,7 @@ import type {
   TurnSurface,
 } from '@duya/agent-runtime';
 import { SurfaceModel } from '@duya/agent-runtime';
-import { escapeTags } from './transcript-view.js';
+import { escapeTags } from '@duya/cli/tui';
 
 /** Blessed tag for a colour, matching `transcript-view.ts` so one screen reads as one screen. */
 const c = {

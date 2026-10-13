@@ -8,7 +8,7 @@ import { getSessionManager } from '../agents/session-manager';
 import { stopBrowserDaemon } from '../services/browser/daemon';
 import { getAutomationScheduler } from '../automation/Scheduler';
 import { getDatabase } from '../ipc/db-handlers';
-import { stopWalCheckpoint } from '../db/connection';
+import { closeDatabase, stopWalCheckpoint } from '../db/connection';
 import { closeCoreDatabase } from '../db/core-connection';
 import { cleanupUpdater } from '../services/updater';
 import { shutdownProjectDatabaseService } from '../project-database/service';
@@ -182,7 +182,7 @@ export async function performGracefulShutdown(): Promise<void> {
   try {
     const database = getDatabase();
     if (database) {
-      database.close();
+      closeDatabase();
       logger.info('Database connection closed', undefined, 'Main');
     }
   } catch (error) {

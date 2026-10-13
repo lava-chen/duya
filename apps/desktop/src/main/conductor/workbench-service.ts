@@ -2,7 +2,7 @@
  * workbench-service.ts — Canvas Workbench Runtime service (plan 570).
  *
  * Owns the lifecycle of canvas data sources:
- *   - CRUD over `conductor_data_sources` (main DB), broadcasting a
+ *   - Host API CRUD over `conductor_data_sources`, broadcasting a
  *     `conductor:data:sources` registry sync after each change;
  *   - `refreshSource` — fetch (http) or project-database query snapshot
  *     production, persisted and broadcast as `conductor:data:update` over
@@ -11,29 +11,22 @@
  *     element→canvas ownership validation;
  *   - the refresh scheduler tick (interval-sourced, in-flight dedupe).
  *
- * Everything runs in the Electron main process: widget iframes keep
+ * Fetching and scheduling run in Electron Main; the Host owns persistence.
+ * Widget iframes keep
  * `connect-src 'none'` and never touch the network directly. Derived/strategy
  * logic deliberately lives inside the widget iframe (agent-authored scripts) —
  * the main process only fetches data, it never executes widget code.
  */
 
-import { getDatabase } from '../db/connection';
 import { getLogger, LogComponent } from '../logging/logger';
-import {
-  createDataSource,
-  deleteDataSource,
-  ensureWorkbenchTables,
-  getDataSource,
-  listDataSourcesByCanvas,
-  saveDataSourceRefresh,
-  updateDataSource,
-  type CreateDataSourceInput,
-  type UpdateDataSourceInput,
-} from './workbench-store';
+import { getDesktopHostLocalWorkbenchApi } from '../cli/desktop-host-api';
+import type { HostLocalWorkbenchApiV1 } from '@duya/agent-protocol/workbench';
 import type {
+  CreateDataSourceInput,
   DataSourceRow,
   HttpSourceConfig,
   ProjectDbSourceConfig,
+  UpdateDataSourceInput,
   WorkbenchBroadcastMessage,
   WorkbenchSourceType,
   WorkbenchWidgetAction,
@@ -53,6 +46,7 @@ const MAX_CONCURRENT_REFRESHES = 6;
 export interface FetchDeps {
   fetch?: typeof fetch;
   invokeProjectDb?: (projectPath: string, command: Record<string, unknown>) => Promise<unknown>;
+  workbenchApi?: HostLocalWorkbenchApiV1;
   now?: () => number;
 }
 
@@ -111,11 +105,8 @@ export class WorkbenchService {
     this.deps = { ...this.deps, ...deps };
   }
 
-  private getDb(): import('better-sqlite3').Database {
-    const db = getDatabase();
-    if (!db) throw new Error('Database not initialized');
-    ensureWorkbenchTables(db);
-    return db;
+  private getWorkbenchApi(): HostLocalWorkbenchApiV1 {
+    return this.deps.workbenchApi ?? getDesktopHostLocalWorkbenchApi();
   }
 
   private broadcast(message: WorkbenchBroadcastMessage): void {
@@ -126,11 +117,11 @@ export class WorkbenchService {
     }
   }
 
-  private syncCanvas(canvasId: string, db: import('better-sqlite3').Database): void {
+  private async syncCanvas(canvasId: string): Promise<void> {
     this.broadcast({
       type: 'conductor:data:sources',
       canvasId,
-      sources: listDataSourcesByCanvas(db, canvasId),
+      sources: await this.getWorkbenchApi().listDataSourcesByCanvas(canvasId),
     });
   }
 
@@ -177,48 +168,48 @@ export class WorkbenchService {
     return null;
   }
 
-  createSource(input: Partial<CreateDataSourceInput>): WorkbenchResult<DataSourceRow> {
+  async createSource(input: Partial<CreateDataSourceInput>): Promise<WorkbenchResult<DataSourceRow>> {
     const validation = this.validateSourceInput(input);
     if (validation) return validation;
     try {
-      const db = this.getDb();
-      const row = createDataSource(db, input as CreateDataSourceInput);
-      this.syncCanvas(row.canvasId, db);
+      const row = await this.getWorkbenchApi().createDataSource(input as CreateDataSourceInput);
+      await this.syncCanvas(row.canvasId);
       return { success: true, data: row };
     } catch (err) {
       return { success: false, error: { code: 'INVALID_INPUT', message: errorMessage(err) } };
     }
   }
 
-  updateSource(id: string, patch: UpdateDataSourceInput): WorkbenchResult<DataSourceRow> {
+  async updateSource(id: string, patch: UpdateDataSourceInput): Promise<WorkbenchResult<DataSourceRow>> {
     try {
-      const db = this.getDb();
-      const row = updateDataSource(db, id, patch);
+      const api = this.getWorkbenchApi();
+      const row = await api.updateDataSource(id, patch);
       if (!row) return { success: false, error: { code: 'NOT_FOUND', message: `Data source ${id} not found` } };
-      this.syncCanvas(row.canvasId, db);
+      await this.syncCanvas(row.canvasId);
       return { success: true, data: row };
     } catch (err) {
       return { success: false, error: { code: 'INVALID_INPUT', message: errorMessage(err) } };
     }
   }
 
-  deleteSource(id: string): WorkbenchResult<{ deleted: boolean; canvasId?: string }> {
+  async deleteSource(id: string): Promise<WorkbenchResult<{ deleted: boolean; canvasId?: string }>> {
     try {
-      const db = this.getDb();
-      const existing = getDataSource(db, id);
+      const api = this.getWorkbenchApi();
+      const existing = await api.getDataSource(id);
       if (!existing) return { success: false, error: { code: 'NOT_FOUND', message: `Data source ${id} not found` } };
-      deleteDataSource(db, id);
-      this.syncCanvas(existing.canvasId, db);
+      if (!(await api.deleteDataSource(id))) {
+        return { success: false, error: { code: 'NOT_FOUND', message: `Data source ${id} not found` } };
+      }
+      await this.syncCanvas(existing.canvasId);
       return { success: true, data: { deleted: true, canvasId: existing.canvasId } };
     } catch (err) {
       return { success: false, error: { code: 'DB_UNAVAILABLE', message: errorMessage(err) } };
     }
   }
 
-  listSources(canvasId: string): WorkbenchResult<{ sources: DataSourceRow[] }> {
+  async listSources(canvasId: string): Promise<WorkbenchResult<{ sources: DataSourceRow[] }>> {
     try {
-      const db = this.getDb();
-      return { success: true, data: { sources: listDataSourcesByCanvas(db, canvasId) } };
+      return { success: true, data: { sources: await this.getWorkbenchApi().listDataSourcesByCanvas(canvasId) } };
     } catch (err) {
       return { success: false, error: { code: 'DB_UNAVAILABLE', message: errorMessage(err) } };
     }
@@ -231,8 +222,7 @@ export class WorkbenchService {
   async refreshSource(sourceId: string, opts?: { actor?: string }): Promise<WorkbenchResult<{ snapshot: unknown | null; error: string | null }>> {
     let row: DataSourceRow;
     try {
-      const db = this.getDb();
-      const found = getDataSource(db, sourceId);
+      const found = await this.getWorkbenchApi().getDataSource(sourceId);
       if (!found) return { success: false, error: { code: 'NOT_FOUND', message: `Data source ${sourceId} not found` } };
       row = found;
     } catch (err) {
@@ -245,8 +235,7 @@ export class WorkbenchService {
     try {
       const outcome = await this.produceSnapshot(row);
       try {
-        const db = this.getDb();
-        saveDataSourceRefresh(db, sourceId, {
+        await this.getWorkbenchApi().saveDataSourceRefresh(sourceId, {
           snapshot: outcome.snapshot ?? null,
           error: outcome.error ?? null,
         });
@@ -329,11 +318,7 @@ export class WorkbenchService {
     config: ProjectDbSourceConfig,
   ): Promise<{ snapshot?: unknown; error?: string }> {
     try {
-      const db = this.getDb();
-      const canvas = db
-        .prepare('SELECT project_path FROM conductor_canvases WHERE id = ?')
-        .get(row.canvasId) as { project_path: string | null } | undefined;
-      const projectPath = canvas?.project_path ?? null;
+      const projectPath = await this.getWorkbenchApi().getCanvasProjectPath(row.canvasId);
       if (!projectPath) {
         return { error: 'Canvas is not bound to a project folder (NO_PROJECT_PATH)' };
       }
@@ -371,11 +356,8 @@ export class WorkbenchService {
     // inside the tool-permission boundary and address sources directly.
     if (via === 'widget') {
       try {
-        const db = this.getDb();
-        const element = db
-          .prepare('SELECT canvas_id FROM conductor_elements WHERE id = ?')
-          .get(elementId) as { canvas_id: string } | undefined;
-        if (!element || element.canvas_id !== canvasId) {
+        const belongs = await this.getWorkbenchApi().elementBelongsToCanvas(elementId, canvasId);
+        if (!belongs) {
           return { success: false, error: { code: 'NOT_FOUND', message: 'Element does not belong to this canvas' } };
         }
       } catch (err) {
@@ -392,7 +374,7 @@ export class WorkbenchService {
       return { success: false, error: { code: 'INVALID_INPUT', message: 'refresh requires sourceId' } };
     }
     if (via === 'widget') {
-      const source = getDataSource(this.getDb(), sourceId);
+      const source = await this.getWorkbenchApi().getDataSource(sourceId);
       if (!source || source.canvasId !== canvasId) {
         return { success: false, error: { code: 'NOT_FOUND', message: 'Source does not belong to this canvas' } };
       }
@@ -435,33 +417,12 @@ export class WorkbenchService {
   }
 
   async tick(): Promise<void> {
-    let db: import('better-sqlite3').Database;
-    try {
-      db = this.getDb();
-    } catch {
-      return;
-    }
-    let due: Array<{ id: string; name: string; interval: number }>;
+    let due: DataSourceRow[];
     try {
       const now = (this.deps.now ?? Date.now)();
-      due = (
-        db.prepare(
-          "SELECT id, name, refresh_interval_sec, last_refreshed_at FROM conductor_data_sources " +
-            'WHERE enabled = 1 AND refresh_interval_sec >= ?',
-        ).all(WORKBENCH_MIN_INTERVAL_SEC) as Array<{
-          id: string;
-          name: string;
-          refresh_interval_sec: number;
-          last_refreshed_at: number | null;
-        }>
-      )
-        .filter((row) => {
-          if (this.inflight.has(row.id)) return false;
-          const dueAt = (row.last_refreshed_at ?? 0) + row.refresh_interval_sec * 1000;
-          return dueAt <= now;
-        })
-        .slice(0, MAX_CONCURRENT_REFRESHES)
-        .map((row) => ({ id: row.id, name: row.name, interval: row.refresh_interval_sec }));
+      due = (await this.getWorkbenchApi().listDueDataSources(now, WORKBENCH_MIN_INTERVAL_SEC))
+        .filter((row) => !this.inflight.has(row.id))
+        .slice(0, MAX_CONCURRENT_REFRESHES);
     } catch {
       return;
     }

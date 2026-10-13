@@ -16,7 +16,7 @@
  *    binding keeps working; the connectors log a one-time setup warning.
  */
 
-import type { ChannelConnectionConfig } from '../../../../../packages/agent/src/channels/types';
+import type { ChannelConnectionConfig } from '@duya/agent-protocol/channels';
 
 export type GroupPolicy = 'mention' | 'all' | 'off';
 

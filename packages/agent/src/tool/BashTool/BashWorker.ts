@@ -19,7 +19,7 @@ import { join } from 'path';
 import { getBashOutputDir } from '../../utils/duyaRoot.js';
 import type { FileHandle } from 'fs/promises';
 import { BASH_DEFAULT_TIMEOUT_MS, BASH_MAX_TIMEOUT_MS } from './constants.js';
-import { resolveShellProvider, type ShellProviderKind } from '../../utils/shell/providers.js';
+import { resolveShellProvider, type ShellProviderKind } from '@duya/capabilities/utils/shell/providers';
 
 const execAsync = promisify(exec);
 

@@ -26,7 +26,7 @@ import {
   WORKTREE_TAG,
   type TaskNotificationStatus,
 } from '../constants/taskNotificationXml.js'
-import { GET_TASK_OUTPUT_TOOL_NAME } from '../tool/BackgroundTaskTool/GetTaskOutputTool.js'
+import { GET_TASK_OUTPUT_TOOL_NAME } from '../tool/BackgroundTaskTool/constants.js'
 
 /** Default inlined budget for <result>. ~4 KB keeps a 200K-context
  * conversation safe even with a dozen concurrent subagent completions. */

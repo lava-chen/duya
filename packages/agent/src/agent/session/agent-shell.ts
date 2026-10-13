@@ -13,7 +13,7 @@ import { renderSystemReminder } from '../reminders.js';
 import { getAgentsMdManager } from '../../agentsmd/index.js';
 import { getAgentProfileService } from '../../agent-profile/AgentProfileService.js';
 import { isToolVisible, type ToolVisibilityConstraints } from '../../agent-profile/ToolFilter.js';
-import type { AgentProfile } from '../../agent-profile/types.js';
+import type { AgentProfile } from '@duya/agent-core';
 import { buildAgentContext, extractLegacySystemSegments, projectModelMessages as projectModelMessagesCore } from '../../message/index.js';
 import type { MessageTimelineEntry } from '../../message/index.js';
 import { buildMCPCapabilityCatalog } from '../../mcp/capability-catalog.js';

@@ -1,93 +1,17 @@
 /**
- * Agent Profile System - Core Types
+ * Agent profile persistence types and preset declarations.
  *
- * Agent profiles control both tool scope and prompt sections.
+ * The cross-layer profile contract is owned by @duya/agent-core and re-exported
+ * here for existing package consumers.
  */
 
-// ============================================================
-// Prompt Profile Override
-// ============================================================
+import type { AgentProfile } from '@duya/agent-core';
 
-export interface PromptProfileOverride {
-  /** Disable specific prompt sections */
-  disableSections?: string[];
-  /**
-   * @deprecated Plan 557 phase 2: a non-empty list acts as a strict
-   * whitelist that silently hides sections added to the config later.
-   * Prefer `disableSections`. Still honored for DB-persisted custom
-   * profiles; presets must not use it.
-   */
-  enableSections?: string[];
-}
-
-// ============================================================
-// Agent Profile
-// ============================================================
-
-export interface AgentProfile {
-  /** Unique identifier */
-  id: string;
-  /** Display name */
-  name: string;
-  /** Description of the agent's purpose */
-  description?: string;
-
-  /** Allowed tool group patterns (supports wildcards like 'file:*', 'search:*') */
-  allowedTools?: string[];
-  /** Denied tool group patterns */
-  disallowedTools?: string[];
-
-  /** Default model ID override */
-  defaultModel?: string;
-
-  /** Prompt sections control */
-  promptProfile?: PromptProfileOverride;
-
-  /**
-   * Which prompt system to use. Built-in values: 'general', 'code',
-   * 'research', 'gateway'. Subsystem values (e.g. 'conductor' from
-   * `@duya/conductor`) are registered at runtime via
-   * `PromptsRegistry.register()`; the type is open (string) so the
-   * agent typecheck does not need to be updated when a new system
-   * lands. Defaults to 'general' if not specified.
-   */
-  promptSystem?: 'general' | 'code' | 'research' | 'gateway' | (string & {});
-
-  /**
-   * Optional one-line identity prompt prepended to the system prompt
-   * by `buildAgentIdentityBlock`. When provided, it replaces the
-   * generic "You are a \"<name>\" agent." block so a profile can
-   * express its role in a single concise sentence. Preset-only field
-   * (not persisted to the DB); user-created profiles fall back to the
-   * generic block.
-   */
-  identityPrompt?: string;
-
-  /** Optional full agent global instructions (loaded from config `agents_md`),
-   *  injected as an extra <system-reminder> block. Config-driven custom
-   *  agents only; not persisted to the DB. */
-  globalInstructions?: string;
-
-  /** Whether this profile is selectable by users in the UI */
-  userVisible: boolean;
-  /** Whether this is a preset profile */
-  isPreset: boolean;
-  /** Whether this profile is enabled */
-  isEnabled: boolean;
-  /**
-   * Structural grouping of the profile. 'main' are the user-facing main
-   * agents (general-purpose / code-expert / research); 'subagent' are the
-   * read-only sub-agent profiles; 'special' are infrastructure agents
-   * (gateway / cron / conductor-refine / memory-curator) that never appear
-   * in user-facing pickers. This is the canonical grouping — `userVisible`
-   * is a legacy boolean kept for compatibility.
-   */
-  kind?: 'main' | 'subagent' | 'special';
-  /** Creation timestamp */
-  createdAt: number;
-  /** Last update timestamp */
-  updatedAt: number;
-}
+export type {
+  AgentProfile,
+  AgentProfileKind,
+  PromptProfileOverride,
+} from '@duya/agent-core';
 
 // ============================================================
 // Database Row Type (for serialization)

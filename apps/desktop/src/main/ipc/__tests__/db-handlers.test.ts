@@ -19,6 +19,7 @@
  * hoisted) and test bodies share one singleton.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CoreSession } from '@duya/data/session-store';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -49,28 +50,38 @@ const mocks = vi.hoisted(() => {
   // Each store method is a vi.fn with a default implementation so tests
   // can override return values per-call via mockReturnValueOnce without
   // losing the defaults for un-overridden calls.
+  const sessionRows = new Map<string, CoreSession>();
+  const makeSession = (input: Record<string, unknown>): CoreSession => ({
+    id: String(input.id),
+    title: 'Mock',
+    workingDirectory: '',
+    projectName: '',
+    status: 'active',
+    model: '',
+    providerId: '',
+    mode: 'code',
+    permissionMode: (input.permissionMode as string) ?? 'default',
+    agentProfileId: null,
+    parentSessionId: null,
+    agentType: '',
+    agentName: '',
+    draft: null,
+    extensions: {},
+    rolloutPath: null,
+    archivedAt: null,
+    archivedPath: null,
+    recencyAt: 1000,
+    lastTurnStartedAt: null,
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
   const sessions = {
-    create: vi.fn((input: Record<string, unknown>) => ({
-      id: input.id,
-      title: 'Mock',
-      workingDirectory: '',
-      projectName: '',
-      status: 'active',
-      model: '',
-      providerId: '',
-      mode: 'code',
-      permissionMode: (input.permissionMode as string) ?? 'default',
-      agentProfileId: null,
-      parentSessionId: null,
-      agentType: '',
-      agentName: '',
-      draft: null,
-      extensions: {},
-      rolloutPath: null,
-      createdAt: 1000,
-      updatedAt: 1000,
-    })),
-    get: vi.fn(() => undefined),
+    create: vi.fn((input: Record<string, unknown>) => {
+      const session = makeSession(input);
+      sessionRows.set(session.id, session);
+      return session;
+    }),
+    get: vi.fn((sessionId: string) => sessionRows.get(sessionId)),
     update: vi.fn(),
     delete: vi.fn(),
     list: vi.fn(() => []),
@@ -87,6 +98,8 @@ const mocks = vi.hoisted(() => {
 
   const messageLog = {
     appendBatch: vi.fn(),
+    timeline: vi.fn(() => []),
+    getLastSequence: vi.fn(() => null),
     listBySession: vi.fn(() => []),
     getCount: vi.fn(() => 0),
     getCountByKind: vi.fn(() => 0),
@@ -161,6 +174,55 @@ const mocks = vi.hoisted(() => {
 
   const coreDb = { db: {} };
   const resolveRolloutRoot = vi.fn(() => '/tmp/rollout-root');
+  const agentProfileRows = new Map<string, Record<string, unknown>>();
+  const agentProfileApi = {
+    listAgentProfiles: vi.fn(async () => [...agentProfileRows.values()]),
+    getAgentProfile: vi.fn(async (id: string) => agentProfileRows.get(id) ?? null),
+    createAgentProfile: vi.fn(async (input: Record<string, unknown>) => {
+      const id = (input.id as string | undefined) || 'generated-profile';
+      const now = Date.now();
+      const row: Record<string, unknown> = {
+        id,
+        name: input.name || 'New Agent',
+        description: input.description ?? null,
+        allowed_tools: input.allowed_tools ? JSON.stringify(input.allowed_tools) : null,
+        disallowed_tools: input.disallowed_tools ? JSON.stringify(input.disallowed_tools) : null,
+        prompt_system: input.prompt_system ?? null,
+        prompt_profile: input.prompt_profile ? JSON.stringify(input.prompt_profile) : null,
+        default_model: input.default_model ?? null,
+        profile_kind: input.profile_kind ?? 'main',
+        user_visible: input.user_visible !== undefined ? (input.user_visible ? 1 : 0) : 1,
+        is_preset: input.is_preset !== undefined ? (input.is_preset ? 1 : 0) : 0,
+        is_enabled: input.is_enabled !== undefined ? (input.is_enabled ? 1 : 0) : 1,
+        created_at: now,
+        updated_at: now,
+      };
+      agentProfileRows.set(id, row);
+      return row;
+    }),
+    updateAgentProfile: vi.fn(async (id: string, input: Record<string, unknown>) => {
+      const row = { ...(agentProfileRows.get(id) ?? {}), updated_at: Date.now() };
+      for (const key of [
+        'name', 'description', 'allowed_tools', 'disallowed_tools', 'prompt_system',
+        'prompt_profile', 'default_model', 'profile_kind', 'is_enabled',
+      ]) {
+        if (input[key] === undefined) continue;
+        const value = input[key];
+        row[key] = ['allowed_tools', 'disallowed_tools', 'prompt_profile'].includes(key)
+          ? (value ? JSON.stringify(value) : null)
+          : key === 'is_enabled'
+            ? (value ? 1 : 0)
+            : key === 'profile_kind'
+              ? (value ?? 'main')
+              : key === 'description' || key === 'prompt_system' || key === 'default_model'
+                ? (value ?? null)
+                : value;
+      }
+      agentProfileRows.set(id, row);
+      return row;
+    }),
+    deleteAgentProfile: vi.fn(async (id: string) => agentProfileRows.delete(id)),
+  };
 
   const mailbox = {
     enqueue: vi.fn(),
@@ -280,7 +342,17 @@ const mocks = vi.hoisted(() => {
     })),
   };
 
-  return { captured, logger, resolvePermissionProfile, stores, adapters, resolveRolloutRoot };
+  return {
+    captured,
+    logger,
+    resolvePermissionProfile,
+    stores,
+    sessionRows,
+    adapters,
+    resolveRolloutRoot,
+    agentProfileRows,
+    agentProfileApi,
+  };
 });
 
 // ─── Module mocks (paths relative to this test file) ───
@@ -324,6 +396,16 @@ vi.mock('../../db/index', () => ({
   getDatabaseStats: vi.fn(() => null),
   checkDatabaseSizeWarning: vi.fn(() => null),
 }));
+
+vi.mock('../../cli/desktop-host-api', async () => {
+  const actual = await vi.importActual<typeof import('../../cli/desktop-host-api')>(
+    '../../cli/desktop-host-api',
+  );
+  return {
+    ...actual,
+    getDesktopHostLocalAgentProfileApi: () => mocks.agentProfileApi,
+  };
+});
 
 vi.mock('../../logging/logger', () => ({
   initLogger: vi.fn(),
@@ -453,6 +535,8 @@ describe('db-handlers (core store thin forward)', () => {
     // preserving their default implementations (set in vi.hoisted).
     vi.clearAllMocks();
     mocks.captured.handle.clear();
+    mocks.sessionRows.clear();
+    mocks.agentProfileRows.clear();
     registerDbHandlers();
   });
 
@@ -591,6 +675,7 @@ describe('db-handlers (core store thin forward)', () => {
         role: 'user',
         content: 'hi',
       };
+      mocks.stores.sessions.create({ id: 's1' });
       // appendBatch writes; listBySession reads back the stored event so
       // the handler can return the canonical row shape.
       mocks.stores.messageLog.listBySession.mockReturnValueOnce([
@@ -604,19 +689,22 @@ describe('db-handlers (core store thin forward)', () => {
       );
       // Decision 5: appendBatch (INSERT OR IGNORE), not a replace path.
       expect(mocks.stores.messageLog.appendBatch).toHaveBeenCalledTimes(1);
+      expect(mocks.stores.messageLog.timeline).not.toHaveBeenCalled();
       const batchArg = mocks.stores.messageLog.appendBatch.mock
         .calls[0][0] as unknown[];
       expect(batchArg).toHaveLength(1);
       expect(batchArg[0]).toMatchObject({
-        __tag: 'newEvent',
         id: 'm1',
         sessionId: 's1',
+        payload: data,
+        createdAt: 0,
       });
       expect(mocks.adapters.storedEventToIpcMessage).toHaveBeenCalledTimes(1);
       expect(result).toMatchObject({ __tag: 'ipcMsg', id: 'm1' });
     });
 
     it('returns null when the stored event cannot be found after append', async () => {
+      mocks.stores.sessions.create({ id: 's1' });
       const result = await invokeHandler('db:message:add', {}, {
         id: 'm1',
         session_id: 's1',
@@ -693,10 +781,8 @@ describe('db-handlers (core store thin forward)', () => {
     });
 
     it('skips session auto-create when the session already exists', async () => {
-      mocks.stores.sessions.get.mockReturnValueOnce({
-        id: 's1',
-        status: 'active',
-      });
+      mocks.stores.sessions.create({ id: 's1' });
+      mocks.stores.sessions.create.mockClear();
       await invokeHandler('db:message:replace', {}, 's1', [], 0);
       expect(mocks.stores.sessions.create).not.toHaveBeenCalled();
     });
@@ -898,33 +984,7 @@ describe('db-handlers (core store thin forward)', () => {
   // ==================== Agent Profile Handlers ====================
 
   describe('db:agentProfile (prompt_profile persistence, Plan 420)', () => {
-    // Fake in-memory SQLite surface covering the agent_profiles
-    // INSERT/UPDATE/SELECT statements used by the handlers.
-    function makeFakeDb() {
-      const rows = new Map<string, Record<string, unknown>>();
-      return {
-        prepare: (sql: string) => ({
-          run: (params: unknown) => {
-            const p = params as Record<string, unknown>;
-            if (sql.includes('INSERT INTO agent_profiles')) {
-              rows.set(p.id as string, { ...p });
-            } else if (sql.includes('UPDATE agent_profiles')) {
-              rows.set(p.id as string, { ...(rows.get(p.id as string) ?? {}), ...p });
-            }
-            return { changes: 1, lastInsertRowid: 1 };
-          },
-          get: (arg: unknown) => {
-            const id = typeof arg === 'string' ? arg : (arg as Record<string, unknown>).id;
-            return rows.get(id as string);
-          },
-          all: () => Array.from(rows.values()),
-        }),
-      };
-    }
-
     it('persists prompt_profile through create and round-trips it on get', async () => {
-      vi.mocked(getDatabase).mockReturnValue(makeFakeDb() as never);
-
       const created = (await invokeHandler('db:agentProfile:create', {}, {
         id: 'my-agent',
         name: 'My Agent',
@@ -941,7 +1001,6 @@ describe('db-handlers (core store thin forward)', () => {
     });
 
     it('updates prompt_profile via fieldMap and persists the new value', async () => {
-      vi.mocked(getDatabase).mockReturnValue(makeFakeDb() as never);
       await invokeHandler('db:agentProfile:create', {}, {
         id: 'my-agent',
         name: 'My Agent',
@@ -957,7 +1016,6 @@ describe('db-handlers (core store thin forward)', () => {
     });
 
     it('stores null prompt_profile when absent (backward compatible)', async () => {
-      vi.mocked(getDatabase).mockReturnValue(makeFakeDb() as never);
       const created = (await invokeHandler('db:agentProfile:create', {}, {
         id: 'plain-agent',
         name: 'Plain',
@@ -970,67 +1028,37 @@ describe('db-handlers (core store thin forward)', () => {
   // The handlers used to take `Record<string, unknown>` and coerce each value
   // with a bare `as` cast, so a type-confused payload reached the row verbatim.
   describe('db:agentProfile payload contract (ISS-31)', () => {
-    function makeFakeDb() {
-      const rows = new Map<string, Record<string, unknown>>();
-      return {
-        rows,
-        prepare: (sql: string) => ({
-          run: (params: unknown) => {
-            const p = params as Record<string, unknown>;
-            if (sql.includes('INSERT INTO agent_profiles')) {
-              rows.set(p.id as string, { ...p });
-            } else if (sql.includes('UPDATE agent_profiles')) {
-              rows.set(p.id as string, { ...(rows.get(p.id as string) ?? {}), ...p });
-            }
-            return { changes: 1, lastInsertRowid: 1 };
-          },
-          get: (arg: unknown) => {
-            const id = typeof arg === 'string' ? arg : (arg as Record<string, unknown>).id;
-            return rows.get(id as string);
-          },
-          all: () => Array.from(rows.values()),
-        }),
-      };
-    }
-
     it('refuses an object where a string column belongs', async () => {
-      vi.mocked(getDatabase).mockReturnValue(makeFakeDb() as never);
       await expect(
         invokeHandler('db:agentProfile:update', {}, 'my-agent', { name: { evil: true } }),
       ).rejects.toThrow(/Invalid payload for db:agentProfile:update/);
     });
 
     it('refuses a scalar where a tool-pattern array belongs', async () => {
-      vi.mocked(getDatabase).mockReturnValue(makeFakeDb() as never);
       await expect(
         invokeHandler('db:agentProfile:update', {}, 'my-agent', { allowed_tools: 'file:*' }),
       ).rejects.toThrow(/Invalid payload/);
     });
 
     it('refuses an oversized free-text column', async () => {
-      vi.mocked(getDatabase).mockReturnValue(makeFakeDb() as never);
       await expect(
         invokeHandler('db:agentProfile:update', {}, 'my-agent', { description: 'a'.repeat(5001) }),
       ).rejects.toThrow(/Invalid payload/);
     });
 
     it('refuses a non-string profile id', async () => {
-      vi.mocked(getDatabase).mockReturnValue(makeFakeDb() as never);
       await expect(
         invokeHandler('db:agentProfile:update', {}, 42, { name: 'ok' }),
       ).rejects.toThrow(/Invalid payload/);
     });
 
     it('refuses a type-confused payload on create', async () => {
-      vi.mocked(getDatabase).mockReturnValue(makeFakeDb() as never);
       await expect(
         invokeHandler('db:agentProfile:create', {}, { id: 'a', name: 'A', profile_kind: 7 }),
       ).rejects.toThrow(/Invalid payload for db:agentProfile:create/);
     });
 
     it('still accepts a well-formed patch and strips unknown keys', async () => {
-      const db = makeFakeDb();
-      vi.mocked(getDatabase).mockReturnValue(db as never);
       await invokeHandler('db:agentProfile:create', {}, { id: 'my-agent', name: 'My Agent' });
       const updated = (await invokeHandler('db:agentProfile:update', {}, 'my-agent', {
         description: 'hello',

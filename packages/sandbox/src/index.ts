@@ -47,6 +47,8 @@ export type {
 export { PathMapper } from './path-mapper.js';
 export type { PathMapperOptions } from './path-mapper.js';
 
+export { isPathWithinRoots } from './allowed-roots.js';
+
 export type {
   SandboxExecuteResult,
   ISandboxManager,

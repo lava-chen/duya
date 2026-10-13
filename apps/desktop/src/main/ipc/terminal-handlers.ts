@@ -156,12 +156,12 @@ export function registerTerminalHandlers(): void {
 
   ipcMain.handle(
     'terminal:write',
-    (_event: IpcMainInvokeEvent, payload: WritePayload | undefined) => {
+    async (_event: IpcMainInvokeEvent, payload: WritePayload | undefined) => {
       if (!payload || typeof payload.id !== 'string' || typeof payload.data !== 'string') {
         return { ok: false, error: 'invalid payload' };
       }
       try {
-        const ok = manager.write(payload.id, payload.data);
+        const ok = await manager.write(payload.id, payload.data);
         return { ok };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -201,20 +201,20 @@ export function registerTerminalHandlers(): void {
 
   ipcMain.handle(
     'terminal:suggest',
-    (_event: IpcMainInvokeEvent, payload: SuggestPayload | undefined) => {
+    async (_event: IpcMainInvokeEvent, payload: SuggestPayload | undefined) => {
       if (!payload || typeof payload.prefix !== 'string') {
         return { ok: false, error: 'invalid payload', suggestions: [] };
       }
       const shell = isShell(payload.shell) ? payload.shell : undefined;
       const cwd = typeof payload.cwd === 'string' && payload.cwd.length > 0 ? payload.cwd : undefined;
       const limit = typeof payload.limit === 'number' ? payload.limit : undefined;
-      return { ok: true, suggestions: manager.suggest(payload.prefix, shell, cwd, limit) };
+      return { ok: true, suggestions: await manager.suggest(payload.prefix, shell, cwd, limit) };
     }
   );
 
   ipcMain.handle(
     'terminal:record',
-    (_event: IpcMainInvokeEvent, payload: RecordPayload | undefined) => {
+    async (_event: IpcMainInvokeEvent, payload: RecordPayload | undefined) => {
       if (
         !payload ||
         typeof payload.command !== 'string' ||
@@ -224,7 +224,7 @@ export function registerTerminalHandlers(): void {
         return { ok: false, error: 'invalid payload' };
       }
       const source = typeof payload.source === 'string' ? payload.source : 'user';
-      manager.recordCommand(payload.command, payload.shell, payload.cwd, source);
+      await manager.recordCommand(payload.command, payload.shell, payload.cwd, source);
       return { ok: true };
     }
   );

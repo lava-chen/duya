@@ -1,0 +1,243 @@
+{
+  "name": "@duya/capabilities",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Capability implementations for Duya, starting with the filesystem capability: the FS tool stack (Read/Write/Edit/Glob/Grep/ApplyPatch), the tool contract types, BaseTool, the file read-state / mutation-queue / snapshot stores, and the path-permission policy. Capabilities do not know who calls them.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./contracts": {
+      "types": "./dist/contracts/index.d.ts",
+      "default": "./dist/contracts/index.js"
+    },
+    "./BaseTool": {
+      "types": "./dist/BaseTool.d.ts",
+      "default": "./dist/BaseTool.js"
+    },
+    "./ReadTool/ReadTool": {
+      "types": "./dist/ReadTool/ReadTool.d.ts",
+      "default": "./dist/ReadTool/ReadTool.js"
+    },
+    "./ReadTool/schema": {
+      "types": "./dist/ReadTool/schema.d.ts",
+      "default": "./dist/ReadTool/schema.js"
+    },
+    "./ReadTool/security": {
+      "types": "./dist/ReadTool/security.d.ts",
+      "default": "./dist/ReadTool/security.js"
+    },
+    "./ReadTool/path-suggest": {
+      "types": "./dist/ReadTool/path-suggest.d.ts",
+      "default": "./dist/ReadTool/path-suggest.js"
+    },
+    "./WriteTool/WriteTool": {
+      "types": "./dist/WriteTool/WriteTool.d.ts",
+      "default": "./dist/WriteTool/WriteTool.js"
+    },
+    "./EditTool/EditTool": {
+      "types": "./dist/EditTool/EditTool.d.ts",
+      "default": "./dist/EditTool/EditTool.js"
+    },
+    "./GlobTool/GlobTool": {
+      "types": "./dist/GlobTool/GlobTool.d.ts",
+      "default": "./dist/GlobTool/GlobTool.js"
+    },
+    "./GrepTool/GrepTool": {
+      "types": "./dist/GrepTool/GrepTool.d.ts",
+      "default": "./dist/GrepTool/GrepTool.js"
+    },
+    "./GrepTool/sanitize": {
+      "types": "./dist/GrepTool/sanitize.d.ts",
+      "default": "./dist/GrepTool/sanitize.js"
+    },
+    "./ApplyPatchTool/ApplyPatchTool": {
+      "types": "./dist/ApplyPatchTool/ApplyPatchTool.d.ts",
+      "default": "./dist/ApplyPatchTool/ApplyPatchTool.js"
+    },
+    "./file-read-state": {
+      "types": "./dist/file-read-state.d.ts",
+      "default": "./dist/file-read-state.js"
+    },
+    "./file-mutation-queue": {
+      "types": "./dist/file-mutation-queue.d.ts",
+      "default": "./dist/file-mutation-queue.js"
+    },
+    "./file-snapshot": {
+      "types": "./dist/file-snapshot.d.ts",
+      "default": "./dist/file-snapshot.js"
+    },
+    "./file-snapshot-store": {
+      "types": "./dist/file-snapshot-store.d.ts",
+      "default": "./dist/file-snapshot-store.js"
+    },
+    "./permissions": {
+      "types": "./dist/permissions/index.d.ts",
+      "default": "./dist/permissions/index.js"
+    },
+    "./utils/path": {
+      "types": "./dist/utils/path.d.ts",
+      "default": "./dist/utils/path.js"
+    },
+    "./utils/notebook": {
+      "types": "./dist/utils/notebook.d.ts",
+      "default": "./dist/utils/notebook.js"
+    },
+    "./utils/multimodal-detection": {
+      "types": "./dist/utils/multimodal-detection.d.ts",
+      "default": "./dist/utils/multimodal-detection.js"
+    },
+    "./utils/bash/shellQuote": {
+      "types": "./dist/utils/bash/shellQuote.d.ts",
+      "default": "./dist/utils/bash/shellQuote.js"
+    },
+    "./utils/bash/commands": {
+      "types": "./dist/utils/bash/commands.d.ts",
+      "default": "./dist/utils/bash/commands.js"
+    },
+    "./utils/shellDetector": {
+      "types": "./dist/utils/shellDetector.d.ts",
+      "default": "./dist/utils/shellDetector.js"
+    },
+    "./utils/shell/providers": {
+      "types": "./dist/utils/shell/providers.d.ts",
+      "default": "./dist/utils/shell/providers.js"
+    },
+    "./ShellCommandTool/BashTool": {
+      "types": "./dist/ShellCommandTool/BashTool.d.ts",
+      "default": "./dist/ShellCommandTool/BashTool.js"
+    },
+    "./ShellCommandTool/PowerShellTool": {
+      "types": "./dist/ShellCommandTool/PowerShellTool.d.ts",
+      "default": "./dist/ShellCommandTool/PowerShellTool.js"
+    },
+    "./ShellCommandTool/ports": {
+      "types": "./dist/ShellCommandTool/ports.d.ts",
+      "default": "./dist/ShellCommandTool/ports.js"
+    },
+    "./ShellCommandTool/constants": {
+      "types": "./dist/ShellCommandTool/constants.d.ts",
+      "default": "./dist/ShellCommandTool/constants.js"
+    },
+    "./ShellCommandTool/safe-rm": {
+      "types": "./dist/ShellCommandTool/safe-rm.d.ts",
+      "default": "./dist/ShellCommandTool/safe-rm.js"
+    },
+    "./ShellCommandTool/soft-yield": {
+      "types": "./dist/ShellCommandTool/soft-yield.d.ts",
+      "default": "./dist/ShellCommandTool/soft-yield.js"
+    },
+    "./AskUserQuestionTool/AskUserQuestionTool": {
+      "types": "./dist/AskUserQuestionTool/AskUserQuestionTool.d.ts",
+      "default": "./dist/AskUserQuestionTool/AskUserQuestionTool.js"
+    },
+    "./AskUserQuestionTool/constants": {
+      "types": "./dist/AskUserQuestionTool/constants.d.ts",
+      "default": "./dist/AskUserQuestionTool/constants.js"
+    },
+    "./AskUserQuestionTool/prompt": {
+      "types": "./dist/AskUserQuestionTool/prompt.d.ts",
+      "default": "./dist/AskUserQuestionTool/prompt.js"
+    },
+    "./BriefTool/BriefTool": {
+      "types": "./dist/BriefTool/BriefTool.d.ts",
+      "default": "./dist/BriefTool/BriefTool.js"
+    },
+    "./BriefTool/constants": {
+      "types": "./dist/BriefTool/constants.d.ts",
+      "default": "./dist/BriefTool/constants.js"
+    },
+    "./BriefTool/prompt": {
+      "types": "./dist/BriefTool/prompt.d.ts",
+      "default": "./dist/BriefTool/prompt.js"
+    },
+    "./BriefTool/ports": {
+      "types": "./dist/BriefTool/ports.d.ts",
+      "default": "./dist/BriefTool/ports.js"
+    },
+    "./ImageGenerateTool/ImageGenerateTool": {
+      "types": "./dist/ImageGenerateTool/ImageGenerateTool.d.ts",
+      "default": "./dist/ImageGenerateTool/ImageGenerateTool.js"
+    },
+    "./ImageGenerateTool/ports": {
+      "types": "./dist/ImageGenerateTool/ports.d.ts",
+      "default": "./dist/ImageGenerateTool/ports.js"
+    },
+    "./MemoryTools/MemoryWriteTool": {
+      "types": "./dist/MemoryTools/MemoryWriteTool.d.ts",
+      "default": "./dist/MemoryTools/MemoryWriteTool.js"
+    },
+    "./MemoryTools/WriteStage1PolicyTool": {
+      "types": "./dist/MemoryTools/WriteStage1PolicyTool.d.ts",
+      "default": "./dist/MemoryTools/WriteStage1PolicyTool.js"
+    },
+    "./MemoryTools/ports": {
+      "types": "./dist/MemoryTools/ports.d.ts",
+      "default": "./dist/MemoryTools/ports.js"
+    },
+    "./ModuleTool/ModuleTool": {
+      "types": "./dist/ModuleTool/ModuleTool.d.ts",
+      "default": "./dist/ModuleTool/ModuleTool.js"
+    },
+    "./SendArtifactTool/SendArtifactTool": {
+      "types": "./dist/SendArtifactTool/SendArtifactTool.d.ts",
+      "default": "./dist/SendArtifactTool/SendArtifactTool.js"
+    },
+    "./TodoTool/TodoTool": {
+      "types": "./dist/TodoTool/TodoTool.d.ts",
+      "default": "./dist/TodoTool/TodoTool.js"
+    },
+    "./VisionTool/VisionTool": {
+      "types": "./dist/VisionTool/VisionTool.d.ts",
+      "default": "./dist/VisionTool/VisionTool.js"
+    },
+    "./VisionTool/ports": {
+      "types": "./dist/VisionTool/ports.d.ts",
+      "default": "./dist/VisionTool/ports.js"
+    },
+    "./ReactToMessageTool/ReactToMessageTool": {
+      "types": "./dist/ReactToMessageTool/ReactToMessageTool.d.ts",
+      "default": "./dist/ReactToMessageTool/ReactToMessageTool.js"
+    },
+    "./ReactToMessageTool/ports": {
+      "types": "./dist/ReactToMessageTool/ports.d.ts",
+      "default": "./dist/ReactToMessageTool/ports.js"
+    },
+    "./ReactToMessageTool/constants": {
+      "types": "./dist/ReactToMessageTool/constants.d.ts",
+      "default": "./dist/ReactToMessageTool/constants.js"
+    },
+    "./utils/shell/intelligence": {
+      "types": "./dist/utils/shell/intelligence.d.ts",
+      "default": "./dist/utils/shell/intelligence.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "npm run clean && tsc --incremental",
+    "clean": "node -e \"for (const t of ['dist','tsconfig.tsbuildinfo']) require('fs').rmSync(t,{recursive:true,force:true})\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@duya/ai": "0.1.0",
+    "@duya/agent-protocol": "0.1.0",
+    "@duya/sandbox": "0.1.0",
+    "@duya/tooling": "0.1.0",
+    "diff": "^8.0.4",
+    "picomatch": "^4.0.4",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/diff": "^7.0.2",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.3",
+    "vitest": "^3.0.0"
+  }
+}

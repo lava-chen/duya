@@ -65,6 +65,8 @@ export {
 export {
   BOT_DIRECT_VISIBLE_SOURCES,
   BOT_INTERNAL_SOURCES,
+  ROOM_VISIBLE_SOURCES,
+  ROOM_HISTORY_SOURCES,
   DEFAULT_MESSAGE_SOURCE,
   isBotDirectVisible,
 } from './message-source.js';

@@ -29,6 +29,11 @@ await build({
   external: [
     '@aws-sdk/client-s3',
     '@aws-sdk/s3-request-presigner',
+    // Optional acceleration/charset modules used by ws and node-fetch. Their
+    // callers catch MODULE_NOT_FOUND and use the built-in fallback instead.
+    'utf-8-validate',
+    'bufferutil',
+    'encoding',
   ],
   banner: {
     js: importMetaUrlPolyfill,

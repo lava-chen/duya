@@ -18,12 +18,12 @@ import type {
   ChannelAddress,
   ChannelConnectionConfig,
   ConnectorManifest,
-} from '../../../../../packages/agent/src/channels/types';
+} from '@duya/agent-protocol/channels';
 import {
   formatChannelAddress,
   isKnownPlatform,
   KNOWN_PLATFORMS,
-} from '../../../../../packages/agent/src/channels/types';
+} from '@duya/agent-protocol/channels';
 import { getSharedAgentsRoot } from '../config/agent-paths';
 import { getLogger, LogComponent } from '../logging/logger';
 import { isFilterUnconfigured, type InboundFilterConfig } from './inbound-filter';

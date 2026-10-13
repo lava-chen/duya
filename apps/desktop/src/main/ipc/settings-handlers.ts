@@ -20,19 +20,18 @@ import {
   denyPendingExtensionApproval,
   setOnAutoApprovedExtensionId,
 } from '../services/browser/daemon';
-import { getDatabase } from './db-handlers';
-import { getCoreStoresOrNull } from '../db/core-connection';
 import { setAutoStart, getAutoStartFromSettings, setAutoStartToSettings } from '../services/auto-start';
 import {
-  getJsonSetting,
-  setJsonSetting,
-} from '../db/queries/settings';
+  getDesktopHostLocalSessionApi,
+  getDesktopHostLocalSettingsApi,
+} from '../cli/desktop-host-api';
 import { getConfigStore } from '../config/store-instance';
 import { GatewayProxyConfig } from '../gateway/types';
 import { emitGatewayConfigChanged } from '../gateway/config-events';
 
 const BROWSER_EXTENSION_ALLOWED_IDS_KEY = 'browserExtensionAllowedIds';
 let allowedExtensionIdsLoaded = false;
+let allowedExtensionIdsLoad: Promise<void> | null = null;
 
 function normalizeExtensionIds(ids: string[]): string[] {
   return Array.from(new Set(
@@ -43,39 +42,91 @@ function normalizeExtensionIds(ids: string[]): string[] {
   ));
 }
 
-function ensureAllowedExtensionIdsLoaded(): void {
-  if (allowedExtensionIdsLoaded) return;
-  const persisted = getJsonSetting<string[]>(BROWSER_EXTENSION_ALLOWED_IDS_KEY, []);
-  const normalized = normalizeExtensionIds(Array.isArray(persisted) ? persisted : []);
-  setAllowedExtensionIds(normalized);
-  allowedExtensionIdsLoaded = true;
+function parseJsonSetting<T>(value: string | null, defaultValue: T): T {
+  if (value === null) return defaultValue;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return defaultValue;
+  }
 }
 
-function persistAllowedExtensionIds(ids: string[]): void {
+async function ensureAllowedExtensionIdsLoaded(): Promise<void> {
+  if (allowedExtensionIdsLoaded) return;
+  if (allowedExtensionIdsLoad) return allowedExtensionIdsLoad;
+  allowedExtensionIdsLoad = (async () => {
+    const persisted = parseJsonSetting<unknown>(
+      await getDesktopHostLocalSettingsApi().getSetting(BROWSER_EXTENSION_ALLOWED_IDS_KEY),
+      [],
+    );
+    setAllowedExtensionIds(normalizeExtensionIds(Array.isArray(persisted) ? persisted : []));
+    allowedExtensionIdsLoaded = true;
+  })().finally(() => {
+    allowedExtensionIdsLoad = null;
+  });
+  return allowedExtensionIdsLoad;
+}
+
+async function persistAllowedExtensionIds(ids: string[]): Promise<void> {
   const normalized = normalizeExtensionIds(ids);
   setAllowedExtensionIds(normalized);
-  setJsonSetting(BROWSER_EXTENSION_ALLOWED_IDS_KEY, normalized);
+  await getDesktopHostLocalSettingsApi().setSetting(
+    BROWSER_EXTENSION_ALLOWED_IDS_KEY,
+    JSON.stringify(normalized),
+  );
 }
 
-function syncAllowedExtensionIdsToSettings(): void {
+async function syncAllowedExtensionIdsToSettings(): Promise<void> {
+  await ensureAllowedExtensionIdsLoaded();
   const runtimeIds = normalizeExtensionIds(getAllowedExtensionIds());
-  const persistedIds = normalizeExtensionIds(
-    getJsonSetting<string[]>(BROWSER_EXTENSION_ALLOWED_IDS_KEY, []),
+  const persisted = parseJsonSetting<unknown>(
+    await getDesktopHostLocalSettingsApi().getSetting(BROWSER_EXTENSION_ALLOWED_IDS_KEY),
+    [],
   );
+  const persistedIds = normalizeExtensionIds(Array.isArray(persisted) ? persisted : []);
   if (runtimeIds.length !== persistedIds.length || runtimeIds.some((id, index) => id !== persistedIds[index])) {
-    persistAllowedExtensionIds(runtimeIds);
+    await persistAllowedExtensionIds(runtimeIds);
   }
+}
+
+const HOST_LOCAL_TOOL_PERMISSION_KEY = 'host.localToolPermission';
+const HOST_LOCAL_TOOL_PERMISSIONS = new Set(['ask', 'always', 'never']);
+
+function isHostLocalToolPermission(value: unknown): value is 'ask' | 'always' | 'never' {
+  return typeof value === 'string' && HOST_LOCAL_TOOL_PERMISSIONS.has(value);
+}
+
+async function getHostLocalToolPermission(): Promise<'ask' | 'always' | 'never'> {
+  const raw = await getDesktopHostLocalSettingsApi().getSetting(HOST_LOCAL_TOOL_PERMISSION_KEY);
+  const value = parseJsonSetting<unknown>(raw, 'ask');
+  return isHostLocalToolPermission(value) ? value : 'ask';
+}
+
+async function setHostLocalToolPermission(value: 'ask' | 'always' | 'never'): Promise<void> {
+  if (!isHostLocalToolPermission(value)) {
+    throw new Error(`Invalid host tool permission: ${String(value)}`);
+  }
+  await getDesktopHostLocalSettingsApi().setSetting(
+    HOST_LOCAL_TOOL_PERMISSION_KEY,
+    JSON.stringify(value),
+  );
 }
 
 export function registerSettingsHandlers(): void {
   // Persist auto-approved extension IDs immediately
   setOnAutoApprovedExtensionId((extensionId: string) => {
-    ensureAllowedExtensionIdsLoaded();
-    const current = getAllowedExtensionIds();
-    if (!current.includes(extensionId)) {
-      current.push(extensionId);
-    }
-    persistAllowedExtensionIds(current);
+    void (async () => {
+      await ensureAllowedExtensionIdsLoaded();
+      const current = getAllowedExtensionIds();
+      if (!current.includes(extensionId)) current.push(extensionId);
+      await persistAllowedExtensionIds(current);
+    })().catch((error: unknown) => {
+      getLogger().warn(
+        'Failed to persist auto-approved browser extension ID',
+        { error: String(error) },
+        LogComponent.Settings,
+      );
+    });
   });
 
   // Plan 453 Task H: Wake Agent settings (config.toml [wake] section).
@@ -183,8 +234,8 @@ export function registerSettingsHandlers(): void {
   // Browser extension status
   ipcMain.handle('browser-extension:get-status', async () => {
     try {
-      ensureAllowedExtensionIdsLoaded();
-      syncAllowedExtensionIdsToSettings();
+      await ensureAllowedExtensionIdsLoaded();
+      await syncAllowedExtensionIdsToSettings();
       const status = getBrowserExtensionStatus();
       return { success: true, status };
     } catch (error) {
@@ -196,13 +247,13 @@ export function registerSettingsHandlers(): void {
 
   ipcMain.handle('browser-extension:approve-pending', async () => {
     try {
-      ensureAllowedExtensionIdsLoaded();
+      await ensureAllowedExtensionIdsLoaded();
       const approvalResult = approvePendingExtensionApproval();
       if (!approvalResult.success) {
         return { success: false, error: approvalResult.error, status: getBrowserExtensionStatus() };
       }
 
-      persistAllowedExtensionIds(getAllowedExtensionIds());
+      await persistAllowedExtensionIds(getAllowedExtensionIds());
       return { success: true, status: getBrowserExtensionStatus() };
     } catch (error) {
       const logger = getLogger();
@@ -213,7 +264,7 @@ export function registerSettingsHandlers(): void {
 
   ipcMain.handle('browser-extension:deny-pending', async () => {
     try {
-      ensureAllowedExtensionIdsLoaded();
+      await ensureAllowedExtensionIdsLoaded();
       denyPendingExtensionApproval();
       return { success: true, status: getBrowserExtensionStatus() };
     } catch (error) {
@@ -286,7 +337,7 @@ export function registerSettingsHandlers(): void {
         (activeLlm.options?.defaultModel as string) ||
         (activeLlm.options?.model as string) ||
         '';
-      const cfg = store.getActiveProviderRuntimeConfig(modelId);
+      const cfg = await store.getActiveProviderRuntimeConfig(modelId);
       if ('error' in cfg) {
         const logger = getLogger();
         logger.info('agent:reinit-provider: active provider runtime config unavailable', { code: cfg.code }, LogComponent.Main);
@@ -298,48 +349,50 @@ export function registerSettingsHandlers(): void {
 
       const agentPool = getAgentProcessPool();
       const status = agentPool.getStatus();
-      const db = getDatabase();
+      const settings = getDesktopHostLocalSettingsApi();
 
       // Get blocked domains from settings
       let blockedDomains: string[] = [];
       try {
-        const blockedRow = db?.prepare("SELECT value FROM settings WHERE key = 'blockedDomains'").get() as { value: string } | undefined;
-        if (blockedRow?.value) {
-          blockedDomains = JSON.parse(blockedRow.value);
+        const raw = await settings.getSetting('blockedDomains');
+        if (raw) {
+          const parsed: unknown = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.every((domain) => typeof domain === 'string')) {
+            blockedDomains = parsed;
+          }
         }
       } catch {}
 
       // Get sandbox enabled setting
       let sandboxEnabled = true;
       try {
-        const sandboxRow = db?.prepare("SELECT value FROM settings WHERE key = 'sandboxEnabled'").get() as { value: string } | undefined;
-        if (sandboxRow?.value !== undefined) {
-          sandboxEnabled = sandboxRow.value === 'true';
+        const value = await settings.getSetting('sandboxEnabled');
+        if (value !== null) {
+          sandboxEnabled = value === 'true';
         }
       } catch {}
 
       // Get browser backend mode
       let browserBackendMode: 'auto' | 'extension' | 'built-in' | 'human-like' = 'auto';
       try {
-        const backendRow = db?.prepare("SELECT value FROM settings WHERE key = 'browserBackendMode'").get() as { value: string } | undefined;
-        if (backendRow?.value) {
-          const parsed = backendRow.value;
+        const parsed = await settings.getSetting('browserBackendMode');
+        if (parsed) {
           if (parsed === 'extension' || parsed === 'built-in' || parsed === 'human-like') {
             browserBackendMode = parsed;
           }
         }
       } catch {}
 
-      const stores = getCoreStoresOrNull();
+      const localSessions = getDesktopHostLocalSessionApi();
       for (const proc of status.processes) {
         // Plan 328 Phase 5: replaced the legacy
         // `SELECT working_directory, system_prompt FROM chat_sessions`
-        // with SessionStore reads. `system_prompt` lives in the
-        // `extensions` JSON column (see core-db-adapters.ts).
-        const session = stores?.sessions.get(proc.sessionId);
+        // with the Host's authenticated local session projection.
+        // `system_prompt` lives in the `extensions` JSON column.
+        const session = await localSessions.readLocalSession(proc.sessionId);
         const workingDirectory = session?.workingDirectory ?? '';
-        const systemPrompt =
-          (stores?.sessions.getExtension(proc.sessionId, 'system_prompt') as string) || '';
+        const systemPromptValue = session?.extensions.system_prompt;
+        const systemPrompt = typeof systemPromptValue === 'string' ? systemPromptValue : '';
 
         agentPool.send(proc.sessionId, {
           type: 'init',
@@ -371,7 +424,7 @@ export function registerSettingsHandlers(): void {
   // Plan 487: host-level standing permission switch (3-state: ask/always/never).
   ipcMain.handle('settings:get-host-tool-permission', async () => {
     try {
-      return { success: true, value: getHostToolPermission() };
+      return { success: true, value: await getHostLocalToolPermission() };
     } catch (error) {
       const logger = getLogger();
       logger.error('Failed to read host tool permission', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Settings);
@@ -383,7 +436,7 @@ export function registerSettingsHandlers(): void {
   // change applies to running sessions without an app restart.
   ipcMain.handle('settings:set-host-tool-permission', async (_event, value: 'ask' | 'always' | 'never') => {
     try {
-      setHostToolPermission(value);
+      await setHostLocalToolPermission(value);
       const logger = getLogger();
       logger.info(`Host tool permission set to: ${value}`, undefined, LogComponent.Settings);
 

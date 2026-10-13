@@ -26,7 +26,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { startLocalHost } from '@duya/host/local-host';
 import { buildControlPlane } from './program/build-control-plane.js';
-import { runChatCommand, type ChatCommandOptions } from './chat.js';
+import { runChatCommand, runTuiCommand, type ChatCommandOptions, type TuiCommandOptions } from './chat.js';
 
 export { CLI_DESCRIPTORS } from './program/descriptors.js';
 export type { CliCommandPath, ExitCode } from './program/registry.js';
@@ -135,6 +135,34 @@ export function buildProgram(): Command {
     };
     process.exitCode = await runChatCommand(options);
   });
+
+  // `duya tui` — ephemeral Host + TUI in one process.
+  const tui = program.command('tui').description('Start an ephemeral Duya Host and open the full-screen TUI');
+  tui.option('--port <port>', 'HTTP port for the embedded Host (0 = auto)', '0');
+  tui.option('--session <id>', 'Continue an existing session instead of creating one');
+  tui.option('--model <model>', 'Default model override');
+  tui.option('--provider <id>', 'Default provider override (e.g. deepseek, glm-cn)');
+  tui.option('--api-format <format>', 'API format override: anthropic | openai');
+  tui.action(async () => {
+    const asString = (value: unknown): string | undefined =>
+      typeof value === 'string' && value.length > 0 ? value : undefined;
+    const asInt = (value: unknown): number | undefined => {
+      if (typeof value === 'string') {
+        const n = Number(value);
+        return Number.isInteger(n) && n >= 0 && n <= 65535 ? n : undefined;
+      }
+      return undefined;
+    };
+    const options: TuiCommandOptions = {
+      port: asInt(tui.getOptionValue('port')),
+      session: asString(tui.getOptionValue('session')),
+      model: asString(tui.getOptionValue('model')),
+      providerId: asString(tui.getOptionValue('provider')),
+      apiFormat: asString(tui.getOptionValue('api-format')) as 'anthropic' | 'openai' | undefined,
+    };
+    process.exitCode = await runTuiCommand(options);
+  });
+
   return program;
 }
 

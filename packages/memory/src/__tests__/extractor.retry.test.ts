@@ -102,7 +102,7 @@ function scriptedLlm(script: Array<Array<string | { error: string }>>): Scripted
 }
 
 function makeExtractor(f: Fixture, client: AIClient): Stage1Extractor {
-  return new Stage1Extractor(f.db, {} as BetterSqlite3Database, client, {
+  return new Stage1Extractor(f.db, client, {
     rootDir: f.rootDir,
     readMessageRows: async () => FAKE_ROWS,
   });

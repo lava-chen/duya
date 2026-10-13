@@ -1,302 +1,82 @@
 /**
- * duyaAgent Integration Tests
+ * duyaAgent agent-state tests — plan 610 A4 pre-clean residue.
  *
- * Tests the complete agent workflow using real API.
- * Requires ANTHROPIC_API_KEY environment variable.
+ * The old file drove `agent.streamChat(...)`, an entry point plan 610 A3
+ * (S4c-d3, commit `4444c7cf`) deleted from `duyaAgent`. Every stream case was
+ * silently vacuous without ANTHROPIC_API_KEY (an early `return` inside `it`
+ * counts as a pass) and threw `TypeError` with one — 7 dead calls behind
+ * 13 vacuous guards, 0 executing assertions.
+ *
+ * Disposition of the old cases (2026-10-10, A4 pre-clean):
+ *
+ *  - stream basic flow / tool_use / interrupt / error events → DELETED, not
+ *    migrated. The product-turn behaviours they probed are already pinned
+ *    offline by `tests/unit/agent/turn-loop-product-behavior.test.ts`
+ *    (multi-turn feedback, tool error, stop decision, abort mid-turn) and at
+ *    engine level by
+ *    `packages/agent-runtime/test/engine-scenario-turn-behaviour.test.ts`.
+ *    `packages/agent` is a facade scheduled for retirement (A7), so no new
+ *    coverage is invested here; a real-provider smoke entry belongs to the
+ *    A4 CLI/eval wiring slice, not to a skip badge on a dead API.
+ *  - message / session / context state assertions → KEPT below. They never
+ *    needed a provider; the API-key guard was pure noise and is gone.
+ *
+ * `streaming-lifecycle.test.ts` (7 dead calls, all duplicates or vacuous) and
+ * `AgentLoop.test.ts` (2 dead calls) were deleted outright.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { ToolRegistry } from '../../src/tool/registry.js';
-import type { SSEEvent } from '../../src/types.js';
+import { describe, it, expect } from 'vitest';
+import { duyaAgent } from '../../src/agent/DuyaAgent.js';
 
-const API_KEY = process.env.ANTHROPIC_API_KEY;
-const MODEL = process.env.ANTHROPIC_MODEL || 'MiniMax-M2.7';
-const BASE_URL = process.env.ANTHROPIC_BASE_URL;
+let sessionCounter = 0;
+function makeAgent(): duyaAgent {
+  sessionCounter += 1;
+  return new duyaAgent({
+    apiKey: 'test-key',
+    model: 'claude-test',
+    provider: 'anthropic',
+    sessionId: `s-duya-agent-it-${sessionCounter}-${Math.random().toString(36).slice(2)}`,
+    workingDirectory: process.cwd(),
+    permissionMode: 'bypassPermissions',
+  });
+}
 
-describe('duyaAgent Integration', () => {
-  let agent: duyaAgent;
-  let toolRegistry: ToolRegistry;
-
-  beforeEach(() => {
-    if (!API_KEY) {
-      console.warn('⏭️  Skipping: ANTHROPIC_API_KEY not set');
-      return;
-    }
-
-    toolRegistry = new ToolRegistry();
-
-    toolRegistry.register(
-      {
-        name: 'echo',
-        description: 'Echo input back',
-        input_schema: { type: 'object', properties: { msg: { type: 'string' } } },
-      },
-      {
-        execute: async (input) => ({
-          id: crypto.randomUUID(),
-          name: 'echo',
-          result: `Echo: ${JSON.stringify(input)}`,
-        }),
-      }
-    );
-
-    toolRegistry.register(
-      {
-        name: 'add',
-        description: 'Add two numbers',
-        input_schema: { type: 'object', properties: { a: { type: 'number' }, b: { type: 'number' } } },
-      },
-      {
-        execute: async (input: Record<string, unknown>) => ({
-          id: crypto.randomUUID(),
-          name: 'add',
-          result: String((input.a as number) + (input.b as number)),
-        }),
-      }
-    );
+describe('duyaAgent state surface (no provider involved)', () => {
+  it('clears messages', () => {
+    const agent = makeAgent();
+    agent.clearMessages();
+    expect(agent.getMessages().length).toBe(0);
   });
 
-  afterEach(() => {
-    agent?.interrupt();
-  });
-
-  // ───────────────────────────────────────────────────────────────────
-  // NOTE: These tests require ANTHROPIC_API_KEY to be set.
-  // Tests will skip if the key is not available.
-  // ───────────────────────────────────────────────────────────────────
-
-  describe('streamChat basic flow', () => {
-    it('should yield events from LLM response', async () => {
-      if (!API_KEY) return;
-
-      agent = new duyaAgent({
-        apiKey: API_KEY,
-        provider: 'anthropic',
-        model: MODEL,
-        baseURL: BASE_URL,
-      });
-
-      const events: SSEEvent[] = [];
-      for await (const event of agent.streamChat('Say hello', { toolRegistry })) {
-        events.push(event);
-      }
-
-      expect(events.length).toBeGreaterThan(0);
-      const textEvents = events.filter((e) => e.type === 'text');
-      expect(textEvents.length).toBeGreaterThan(0);
-    }, 60000);
-
-    it('should yield tool_use events when LLM requests tool', async () => {
-      if (!API_KEY) return;
-
-      agent = new duyaAgent({
-        apiKey: API_KEY,
-        provider: 'anthropic',
-        model: MODEL,
-        baseURL: BASE_URL,
-      });
-
-      const events: SSEEvent[] = [];
-      for await (const event of agent.streamChat('Use the add tool with a=1 and b=2', { toolRegistry })) {
-        events.push(event);
-      }
-
-      const toolUseEvents = events.filter((e) => e.type === 'tool_use');
-      expect(toolUseEvents.length).toBeGreaterThan(0);
-    }, 60000);
-
-    it('should handle multiple tool calls', async () => {
-      if (!API_KEY) return;
-
-      agent = new duyaAgent({
-        apiKey: API_KEY,
-        provider: 'anthropic',
-        model: MODEL,
-        baseURL: BASE_URL,
-      });
-
-      const events: SSEEvent[] = [];
-      for await (const event of agent.streamChat('Use add tool with a=5 b=3 then echo "done"', { toolRegistry })) {
-        events.push(event);
-      }
-
-      const toolUseEvents = events.filter((e) => e.type === 'tool_use');
-      expect(toolUseEvents.length).toBeGreaterThanOrEqual(1);
-    }, 60000);
-
-    it('should handle text before tool_use', async () => {
-      if (!API_KEY) return;
-
-      agent = new duyaAgent({
-        apiKey: API_KEY,
-        provider: 'anthropic',
-        model: MODEL,
-        baseURL: BASE_URL,
-      });
-
-      const events: SSEEvent[] = [];
-      for await (const event of agent.streamChat('Calculate 10+20', { toolRegistry })) {
-        events.push(event);
-      }
-
-      const textEvents = events.filter((e) => e.type === 'text');
-      const toolUseEvents = events.filter((e) => e.type === 'tool_use');
-
-      expect(textEvents.length).toBeGreaterThan(0);
-      // Tool use may or may not happen depending on model behavior
-    }, 60000);
-  });
-
-  describe('interrupt handling', () => {
-    it('should support interrupt via abort controller', async () => {
-      if (!API_KEY) return;
-
-      agent = new duyaAgent({
-        apiKey: API_KEY,
-        provider: 'anthropic',
-        model: MODEL,
-        baseURL: BASE_URL,
-      });
-
-      const events: SSEEvent[] = [];
-      for await (const event of agent.streamChat('Count to 100', { toolRegistry })) {
-        events.push(event);
-        if (events.length >= 5) {
-          agent.interrupt();
-          break;
-        }
-      }
-
-      expect(() => agent.interrupt()).not.toThrow();
-    }, 30000);
-  });
-
-  describe('message management', () => {
-    it('should clear messages', async () => {
-      if (!API_KEY) return;
-
-      agent = new duyaAgent({
-        apiKey: API_KEY,
-        provider: 'anthropic',
-        model: MODEL,
-        baseURL: BASE_URL,
-      });
-
-      agent.clearMessages();
-      expect(agent.getMessages().length).toBe(0);
+  it('adds single messages', () => {
+    const agent = makeAgent();
+    agent.addMessage({
+      role: 'user',
+      content: 'Test message',
+      timestamp: Date.now(),
     });
-
-    it('should add single messages', async () => {
-      if (!API_KEY) return;
-
-      agent = new duyaAgent({
-        apiKey: API_KEY,
-        provider: 'anthropic',
-        model: MODEL,
-        baseURL: BASE_URL,
-      });
-
-      agent.addMessage({
-        role: 'user',
-        content: 'Test message',
-        timestamp: Date.now(),
-      });
-
-      expect(agent.getMessages().length).toBe(1);
-      expect(agent.getMessages()[0].content).toBe('Test message');
-    });
-
-    it('should report session info', async () => {
-      if (!API_KEY) return;
-
-      agent = new duyaAgent({
-        apiKey: API_KEY,
-        provider: 'anthropic',
-        model: MODEL,
-        baseURL: BASE_URL,
-      });
-
-      const info = agent.getSessionInfo();
-      expect(info).toHaveProperty('id');
-      expect(info).toHaveProperty('createdAt');
-      expect(info).toHaveProperty('updatedAt');
-      expect(typeof info.messageCount).toBe('number');
-    });
+    expect(agent.getMessages().length).toBe(1);
+    expect(agent.getMessages()[0].content).toBe('Test message');
   });
 
-  describe('context management', () => {
-    it('should report context stats', async () => {
-      if (!API_KEY) return;
-
-      agent = new duyaAgent({
-        apiKey: API_KEY,
-        provider: 'anthropic',
-        model: MODEL,
-        baseURL: BASE_URL,
-      });
-
-      const stats = agent.getContextStats();
-      expect(stats).toBeDefined();
-      expect(typeof stats.totalTokens).toBe('number');
-    });
-
-    it('should check compaction need', async () => {
-      if (!API_KEY) return;
-
-      agent = new duyaAgent({
-        apiKey: API_KEY,
-        provider: 'anthropic',
-        model: MODEL,
-        baseURL: BASE_URL,
-      });
-
-      const needsCompaction = agent.shouldCompact();
-      expect(typeof needsCompaction).toBe('boolean');
-    });
+  it('reports session info', () => {
+    const agent = makeAgent();
+    const info = agent.getSessionInfo();
+    expect(info).toHaveProperty('id');
+    expect(info).toHaveProperty('createdAt');
+    expect(info).toHaveProperty('updatedAt');
+    expect(typeof info.messageCount).toBe('number');
   });
 
-  describe('error handling', () => {
-    it('should handle error events from LLM', async () => {
-      if (!API_KEY) return;
+  it('reports context stats', () => {
+    const agent = makeAgent();
+    const stats = agent.getContextStats();
+    expect(stats).toBeDefined();
+    expect(typeof stats.totalTokens).toBe('number');
+  });
 
-      // Use invalid model to trigger error
-      agent = new duyaAgent({
-        apiKey: API_KEY,
-        provider: 'anthropic',
-        model: 'invalid-model-xyz',
-        baseURL: BASE_URL,
-      });
-
-      const events: SSEEvent[] = [];
-      try {
-        for await (const event of agent.streamChat('Hello', { toolRegistry })) {
-          events.push(event);
-        }
-      } catch {
-        // Expected: API error
-      }
-
-      const errorEvents = events.filter((e) => e.type === 'error');
-      expect(errorEvents.length).toBeGreaterThan(0);
-    }, 30000);
-
-    it('should yield turn_start events', async () => {
-      if (!API_KEY) return;
-
-      agent = new duyaAgent({
-        apiKey: API_KEY,
-        provider: 'anthropic',
-        model: MODEL,
-        baseURL: BASE_URL,
-      });
-
-      const events: SSEEvent[] = [];
-      for await (const event of agent.streamChat('Hi', { toolRegistry })) {
-        events.push(event);
-      }
-
-      const turnStartEvents = events.filter((e) => e.type === 'turn_start');
-      expect(turnStartEvents.length).toBeGreaterThan(0);
-    }, 60000);
+  it('checks compaction need', () => {
+    const agent = makeAgent();
+    expect(typeof agent.shouldCompact()).toBe('boolean');
   });
 });

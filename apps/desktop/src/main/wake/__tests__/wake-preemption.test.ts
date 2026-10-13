@@ -26,7 +26,7 @@ import {
   type WakeDispatcherDeps,
 } from '../wake-dispatcher'
 import { maybeAutoReturnDmResult } from '../agent-dm-return'
-import type { WakeItem } from '../../../../../../packages/agent/src/wake/types'
+import type { WakeItem } from '@duya/agent-protocol'
 
 vi.mock('../agent-dm-return', () => ({
   maybeAutoReturnDmResult: vi.fn(() => true),

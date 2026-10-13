@@ -136,12 +136,12 @@ interface GatewayStatusResponse {
   channels: GatewayChannelSummary[];
 }
 
-export function handleGetGateway(_req: IncomingMessage, res: ServerResponse, startedAt: number): void {
+export async function handleGetGateway(_req: IncomingMessage, res: ServerResponse, startedAt: number): Promise<void> {
   void _req;
   try {
     const running = isGatewayRunning();
     const proc = getGatewayProcess();
-    const channelEntries = getChannelDirectory();
+    const channelEntries = await getChannelDirectory();
     const statuses = getAllChannelStatuses();
     const statusByPlatform = new Map(statuses.map((s) => [s.platform, s]));
 

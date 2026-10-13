@@ -94,6 +94,14 @@ vi.mock('./PluginRegistryStore', () => ({
   },
 }));
 
+vi.mock('../cli/desktop-host-api', () => ({
+  getDesktopHostLocalPluginSetupApi: () => ({
+    listPluginSetupValues: async () => ({}),
+    mergePluginSetupValues: async () => undefined,
+    clearPluginSetupValues: async () => undefined,
+  }),
+}));
+
 vi.mock('./cache/layout', () => ({
   ensurePluginCacheDir: vi.fn((_marketplace: string, _pluginId: string, _version: string) => {
     fs.mkdirSync(state.cacheDir, { recursive: true });

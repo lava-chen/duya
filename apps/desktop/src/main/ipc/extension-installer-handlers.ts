@@ -28,14 +28,17 @@ import {
   getAllowedExtensionIds,
   setAllowedExtensionIds,
 } from '../services/browser/daemon';
-import { getJsonSetting, setJsonSetting } from '../db/queries/settings';
+import { getDesktopHostLocalSettingsApi } from '../cli/desktop-host-api';
 
 const logger = getLogger();
 
 const BROWSER_EXTENSION_ALLOWED_IDS_KEY = 'browserExtensionAllowedIds';
 
-function persistAllowedExtensionIds(ids: string[]): void {
-  setJsonSetting(BROWSER_EXTENSION_ALLOWED_IDS_KEY, ids);
+async function persistAllowedExtensionIds(ids: string[]): Promise<void> {
+  await getDesktopHostLocalSettingsApi().setSetting(
+    BROWSER_EXTENSION_ALLOWED_IDS_KEY,
+    JSON.stringify(ids),
+  );
 }
 
 /**
@@ -44,12 +47,12 @@ function persistAllowedExtensionIds(ids: string[]): void {
  * user re-approval. Called right after a successful install so the
  * bridge hello protocol lands in `verified`, not `pendingApproval`.
  */
-function autoApproveInstalledExtensionId(): void {
+async function autoApproveInstalledExtensionId(): Promise<void> {
   const current = getAllowedExtensionIds();
   if (current.includes(DUYA_BRIDGE_EXTENSION_ID)) return;
   const next = [...current, DUYA_BRIDGE_EXTENSION_ID];
   setAllowedExtensionIds(next);
-  persistAllowedExtensionIds(next);
+  await persistAllowedExtensionIds(next);
   logger.info(
     `[extensionInstaller] Whitelisted ${DUYA_BRIDGE_EXTENSION_ID} after local install`,
     undefined,
@@ -81,7 +84,7 @@ export function registerExtensionInstallerHandlers(): void {
   ipcMain.handle('extensionInstaller:install', async () => {
     const result = await installLocalExtension();
     if (result.ok) {
-      autoApproveInstalledExtensionId();
+      await autoApproveInstalledExtensionId();
     }
     return result;
   });

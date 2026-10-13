@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "description": "Electron-independent data paths, SQLite ownership, migrations, and durable stores.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -17,11 +18,222 @@
     "./database-migration": {
       "types": "./dist/database-migration.d.ts",
       "import": "./dist/database-migration.js"
+    },
+    "./core-database": {
+      "types": "./dist/core-database.d.ts",
+      "import": "./dist/core-database.js"
+    },
+    "./core-data-host": {
+      "types": "./dist/core-data-host.d.ts",
+      "import": "./dist/core-data-host.js"
+    },
+    "./database-host": {
+      "types": "./dist/database-host.d.ts",
+      "import": "./dist/database-host.js"
+    },
+    "./sqlite-connection": {
+      "types": "./dist/sqlite-connection.d.ts",
+      "import": "./dist/sqlite-connection.js"
+    },
+    "./run-store": {
+      "types": "./dist/run-store.d.ts",
+      "import": "./dist/run-store.js"
+    },
+    "./core-stores": {
+      "types": "./dist/core-stores.d.ts",
+      "import": "./dist/core-stores.js"
+    },
+    "./workflow-run-store": {
+      "types": "./dist/workflow-run-store.d.ts",
+      "import": "./dist/workflow-run-store.js"
+    },
+    "./archive-paths": {
+      "types": "./dist/archive-paths.d.ts",
+      "import": "./dist/archive-paths.js"
+    },
+    "./legacy-archive-migration": {
+      "types": "./dist/legacy-archive-migration.d.ts",
+      "import": "./dist/legacy-archive-migration.js"
+    },
+    "./session-store": {
+      "types": "./dist/session-store.d.ts",
+      "import": "./dist/session-store.js"
+    },
+    "./mailbox": {
+      "types": "./dist/mailbox.d.ts",
+      "import": "./dist/mailbox.js"
+    },
+    "./project-store": {
+      "types": "./dist/project-store.d.ts",
+      "import": "./dist/project-store.js"
+    },
+    "./projects-import": {
+      "types": "./dist/projects-import.d.ts",
+      "import": "./dist/projects-import.js"
+    },
+    "./research-store": {
+      "types": "./dist/research-store.d.ts",
+      "import": "./dist/research-store.js"
+    },
+    "./conductor-store": {
+      "types": "./dist/conductor-store.d.ts",
+      "import": "./dist/conductor-store.js"
+    },
+    "./pending-wakes": {
+      "types": "./dist/pending-wakes.d.ts",
+      "import": "./dist/pending-wakes.js"
+    },
+    "./tool-approval-state": {
+      "types": "./dist/tool-approval-state.d.ts",
+      "import": "./dist/tool-approval-state.js"
+    },
+    "./send-message-state": {
+      "types": "./dist/send-message-state.d.ts",
+      "import": "./dist/send-message-state.js"
+    },
+    "./workbench-store": {
+      "types": "./dist/workbench-store.d.ts",
+      "import": "./dist/workbench-store.js"
+    },
+    "./workbench-types": {
+      "types": "./dist/workbench-types.d.ts",
+      "import": "./dist/workbench-types.js"
+    },
+    "./main-schema": {
+      "types": "./dist/main-schema.d.ts",
+      "import": "./dist/main-schema.js"
+    },
+    "./main-database": {
+      "types": "./dist/main-database.d.ts",
+      "import": "./dist/main-database.js"
+    },
+    "./main-settings-store": {
+      "types": "./dist/main-settings-store.d.ts",
+      "import": "./dist/main-settings-store.js"
+    },
+    "./main-attachment-store": {
+      "types": "./dist/main-attachment-store.d.ts",
+      "import": "./dist/main-attachment-store.js"
+    },
+    "./chat-turn-review-store": {
+      "types": "./dist/chat-turn-review-store.d.ts",
+      "import": "./dist/chat-turn-review-store.js"
+    },
+    "./message-log": {
+      "types": "./dist/message-log.d.ts",
+      "import": "./dist/message-log.js"
+    },
+    "./rollout-events": {
+      "types": "./dist/rollout-events.d.ts",
+      "import": "./dist/rollout-events.js"
+    },
+    "./message-repair": {
+      "types": "./dist/message-repair.d.ts",
+      "import": "./dist/message-repair.js"
+    },
+    "./legacy-import": {
+      "types": "./dist/legacy-import.d.ts",
+      "import": "./dist/legacy-import.js"
+    },
+    "./bot-session-paths": {
+      "types": "./dist/bot-session-paths.d.ts",
+      "import": "./dist/bot-session-paths.js"
+    },
+    "./path-utils": {
+      "types": "./dist/path-utils.d.ts",
+      "import": "./dist/path-utils.js"
+    },
+    "./workspace-store": {
+      "types": "./dist/workspace-store.d.ts",
+      "import": "./dist/workspace-store.js"
+    },
+    "./workspace-identity": {
+      "types": "./dist/workspace-identity.d.ts",
+      "import": "./dist/workspace-identity.js"
+    },
+    "./workspace-resolver": {
+      "types": "./dist/workspace-resolver.d.ts",
+      "import": "./dist/workspace-resolver.js"
+    },
+    "./terminal-history-store": {
+      "types": "./dist/terminal-history-store.d.ts",
+      "import": "./dist/terminal-history-store.js"
+    },
+    "./gateway-user-map-store": {
+      "types": "./dist/gateway-user-map-store.d.ts",
+      "import": "./dist/gateway-user-map-store.js"
+    },
+    "./channel-persistence-store": {
+      "types": "./dist/channel-persistence-store.d.ts",
+      "import": "./dist/channel-persistence-store.js"
+    },
+    "./agent-profile-store": {
+      "types": "./dist/agent-profile-store.d.ts",
+      "import": "./dist/agent-profile-store.js"
+    },
+    "./gateway-channel-directory-store": {
+      "types": "./dist/gateway-channel-directory-store.d.ts",
+      "import": "./dist/gateway-channel-directory-store.js"
+    },
+    "./gateway-allowlist-store": {
+      "types": "./dist/gateway-allowlist-store.d.ts",
+      "import": "./dist/gateway-allowlist-store.js"
+    },
+    "./gateway-message-mirror-store": {
+      "types": "./dist/gateway-message-mirror-store.d.ts",
+      "import": "./dist/gateway-message-mirror-store.js"
+    },
+    "./gateway-thread-store": {
+      "types": "./dist/gateway-thread-store.d.ts",
+      "import": "./dist/gateway-thread-store.js"
+    },
+    "./send-message-state-store": {
+      "types": "./dist/send-message-state-store.d.ts",
+      "import": "./dist/send-message-state-store.js"
+    },
+    "./model-capability-store": {
+      "types": "./dist/model-capability-store.d.ts",
+      "import": "./dist/model-capability-store.js"
+    },
+    "./app-connection-store": {
+      "types": "./dist/app-connection-store.d.ts",
+      "import": "./dist/app-connection-store.js"
+    },
+    "./plugin-setup-store": {
+      "types": "./dist/plugin-setup-store.d.ts",
+      "import": "./dist/plugin-setup-store.js"
+    },
+    "./import-batch-store": {
+      "types": "./dist/import-batch-store.d.ts",
+      "import": "./dist/import-batch-store.js"
+    },
+    "./sidebar-sections-store": {
+      "types": "./dist/sidebar-sections-store.d.ts",
+      "import": "./dist/sidebar-sections-store.js"
+    },
+    "./provider-model-pricing-store": {
+      "types": "./dist/provider-model-pricing-store.d.ts",
+      "import": "./dist/provider-model-pricing-store.js"
+    },
+    "./provider-model-capability-store": {
+      "types": "./dist/provider-model-capability-store.d.ts",
+      "import": "./dist/provider-model-capability-store.js"
     }
   },
-  "files": ["dist"],
+  "files": ["dist", "README.md"],
   "scripts": {
+    "clean": "node -e \"for(const t of ['dist','tsconfig.tsbuildinfo'])require('fs').rmSync(t,{recursive:true,force:true})\"",
     "build": "tsc -b",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --root ../.. packages/data/tests"
+  },
+  "dependencies": {
+    "@duya/agent-protocol": "0.1.0",
+    "better-sqlite3": "^13.0.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "typescript": "^5.3.3",
+    "vitest": "^3.0.0"
   }
 }

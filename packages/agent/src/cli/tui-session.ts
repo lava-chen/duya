@@ -29,21 +29,26 @@ import * as path from 'path';
 import { homedir } from 'os';
 import { format } from 'node:util';
 import type { duyaAgent } from '../agent/DuyaAgent.js';
+import type { Message, ChatOptions } from '../types.js';
 import type { ToolRegistry } from '../tool/registry.js';
+import type { HostRunApiV1 } from '@duya/agent-protocol';
+import type { CliHostSession } from '@duya/cli/host-session';
+import type { CliTranscriptPersistence } from '@duya/cli/transcript-persistence';
 import type { SessionLogger } from '../utils/sessionLogger.js';
 import { createHeadlessRunHost, type HeadlessRunHost } from '../process/headless-run-host.js';
 import { getLogger } from '../utils/logger.js';
-import { TUIApp } from './ui/TUIApp.js';
-import type { LegacyFrame } from './ui/blocks.js';
+import { TUIApp, isDestructiveRequest, runProviderLogin, type LegacyFrame } from '@duya/cli/tui';
+import type { PopoverItem } from '@duya/input-completion';
+import { defaultCompletionSources } from './ui/candidates.js';
 import {
   executeSlashCommand,
   getSlashCommands,
   initSlashCommands,
   isSlashCommand,
 } from './slash-commands.js';
-import { COMPACTION_CHECKPOINT_ID_SUFFIX } from '../message/index.js';
-import { addMessage, replaceMessages, updateSession } from '../session/db.js';
 import { REPL } from './repl.js';
+import { resolveProvider } from './config/file-config.js';
+import { BUILTIN_CATALOG, findModelById } from '@duya/ai';
 
 /** Where the input history lives, matching the REPL's own path. */
 function historyFilePath(): string {
@@ -141,16 +146,75 @@ export interface TuiSessionDeps {
   readonly sessionLogger: SessionLogger;
   readonly model: string;
   readonly workspace: string;
-  readonly sessionId: string;
+  readonly session: CliHostSession;
+  readonly runApi: HostRunApiV1;
+  readonly persistMessages: CliTranscriptPersistence;
   /** Tool count for the start-up line, matching the REPL banner. */
   readonly toolCount?: number;
 }
 
+/**
+ * The TUI's picker decision → the executor's verdict.
+ *
+ * Exported because the mapping IS the contract of the ask chain: an allow is
+ * an allow, and EVERYTHING else — deny, Esc, a deadline — is a refusal.
+ * `'paused'` is deliberately not produced: that verdict exists for the bot
+ * surface, where the turn ends and a later card answers; the CLI user is
+ * present, so their "no" (or their silence) is answered now.
+ */
+export function mapPermissionDecision(decision: 'once' | 'always' | 'deny' | null): 'allow' | 'deny' {
+  return decision === 'once' || decision === 'always' ? 'allow' : 'deny';
+}
+
 export async function runTuiSession(deps: TuiSessionDeps): Promise<void> {
-  const { agent, registry, sessionLogger, model, workspace, sessionId } = deps;
+  const { agent, registry, sessionLogger, model, workspace } = deps;
 
   initSlashCommands();
-  const host: HeadlessRunHost = createHeadlessRunHost({ agent, toolRegistry: registry });
+  // The ask chain (plan 611 P0-2): the executor raises a tool ask through
+  // `ChatOptions.requestPermission`, this handler routes it to the TUI's
+  // permission queue (codex-style list picker), and the user's answer rides
+  // back as the verdict. `null` — Esc, or the request's own deadline — maps
+  // to a refusal, NEVER to an allow: an unanswered prompt must not approve a
+  // tool call by accident.
+  const requestPermission: ChatOptions['requestPermission'] = async (request) => {
+    const decision = await tui.requestPermissionApproval({
+      requestId: request.id,
+      toolName: request.toolName,
+      toolInput: request.toolInput,
+      reason: request.decisionReason ?? '',
+      mode: request.mode,
+      expiresAt: request.expiresAt,
+      destructive: isDestructiveRequest(request.toolName, request.toolInput),
+    });
+    return mapPermissionDecision(decision);
+  };
+  const host: HeadlessRunHost = createHeadlessRunHost({
+    agent,
+    toolRegistry: registry,
+    runApi: deps.runApi,
+    requestPermission,
+  });
+  const configuredModels = (() => {
+    const resolution = resolveProvider();
+    return resolution.ok ? resolution.provider.models : [];
+  })();
+  const slashOptions = new Map<string, PopoverItem[]>(
+    getSlashCommands().map((command): [string, PopoverItem[]] => [
+      `/${command.name}`,
+      (command.subcommands ?? []).map((value) => ({
+        label: command.name === 'login'
+          ? value === 'add' ? '添加服务商' : '管理已配置服务商'
+          : value,
+        value,
+        description: command.name === 'login'
+          ? value === 'add' ? '从 Duya 服务商目录注册并录入密钥' : '设为默认或移除 Desktop 服务商'
+          : '',
+        kind: 'slash_command' as const,
+        category: 'command' as const,
+        group: 'settings' as const,
+      })),
+    ] as const),
+  );
 
   let exiting = false;
   let resolveExit: () => void = () => {};
@@ -161,18 +225,55 @@ export async function runTuiSession(deps: TuiSessionDeps): Promise<void> {
   const tui = new TUIApp({
     title: 'duya',
     history: loadHistory(),
-    statusText: () => `${model || 'default'}  ·  ${workspace}`,
+    completionSources: {
+      ...defaultCompletionSources(workspace),
+      slashOptions: (command) => {
+        if (command === '/model') {
+          const current = agent.model || model;
+          const choices = [...new Set([current, ...configuredModels].filter(Boolean))];
+          return choices.map((value) => ({
+            label: value,
+            value,
+            description: value === current ? 'current' : '',
+            kind: 'slash_command' as const,
+            category: 'command' as const,
+            group: 'settings' as const,
+          }));
+        }
+        return slashOptions.get(command.toLowerCase()) ?? [];
+      },
+      slashOptionsOnBare: (command) => command === '/model' || command === '/login',
+    },
+    statusText: () => [agent.model || model || 'default', workspace].join('  ·  '),
     isBusy: () => busy,
-    // See `headless-run-host.ts`: a headless run has no permission responder,
-    // so the overlay reports that rather than offering choices that all end
-    // the same way.
-    canAnswerPermissions: () => false,
+    // The context-window budget for the active model, when the catalog knows
+    // it; unknown ids (custom providers) fall back to the bare session total.
+    contextBudgetTokens: () => {
+      const id = agent.model || model || '';
+      if (id === '') return null;
+      return findModelById(id)?.contextWindow ?? null;
+    },
+    // The ask chain is wired above: the host carries a `requestPermission`
+    // callback, so the overlay offers real choices and every answer reaches
+    // the executor's pending tool promise.
+    canAnswerPermissions: () => true,
+    // The busy-time queue's visible half: the status bar's `⧗ N` segment.
+    queuedCount: () => queuedPrompts.length,
     onSubmit: (line) => {
       void handleLine(line);
     },
     onInterrupt: () => {
+      // Steering semantics (plan 611 P1-a, codex model): the queued prompts
+      // SURVIVE an interrupt. The head queued prompt is exactly what the user
+      // wants the NEXT turn to do — killing the run does not kill the
+      // instruction — so `runTurn`'s finally drains it into a fresh turn
+      // right after the abort settles. `/exit` still ends everything, and a
+      // user who wants a truly empty queue can clear it by exiting.
       agent.interrupt();
-      tui.printNotice('Interrupted.');
+      const pending = queuedPrompts.length;
+      tui.printNotice(pending > 0
+        ? `Interrupted. ${pending} queued prompt${pending === 1 ? '' : 's'} will steer the next turn.`
+        : 'Interrupted.');
     },
     onExit: () => {
       finish();
@@ -180,72 +281,61 @@ export async function runTuiSession(deps: TuiSessionDeps): Promise<void> {
   });
 
   let busy = false;
+  /**
+   * Prompts submitted while a turn is running.
+   *
+   * Without this, a second submit while the agent works would start a SECOND
+   * concurrent run against the same session — two turns interleaving their
+   * frames into one transcript. Queued prompts drain in order from
+   * `runTurn`'s `finally`.
+   */
+  const queuedPrompts: string[] = [];
 
   tui.printNotice(`duya agent · model ${model || 'default'}`);
   tui.printNotice(`workspace ${workspace}`);
   if (deps.toolCount !== undefined) tui.printNotice(`${deps.toolCount} tools available`);
 
-  /**
-   * One turn. Streams frames into the TUI and mirrors the REPL path's
-   * persistence so both surfaces leave the same rows in the database.
-   */
+  /** One turn. The Host persistence callback records the completed transcript. */
   async function runTurn(prompt: string): Promise<void> {
     busy = true;
     tui.setBusy(true);
 
-    const userMessageId = crypto.randomUUID();
-    let assistantText = '';
-    // Authoritative-on-block, exactly as the block model does it: deltas
-    // accumulate, and the whole-block frame REPLACES rather than appends.
-    // Concatenating both prints every answer twice.
-    let deltaBuffer = '';
-
     try {
       const run = await host.start({
         prompt,
-        sessionId,
+        sessionId: deps.session.id,
         cwd: workspace,
-        model: model || '',
-        providerId: 'cli',
+        model: agent.model || deps.session.model || model || '',
+        providerId: deps.session.providerId,
       });
 
       for await (const frame of run.frames()) {
         tui.push(frame as LegacyFrame);
-        if (frame.type === 'text_delta') {
-          deltaBuffer += readContent(frame);
-        } else if (frame.type === 'text') {
-          assistantText = readContent(frame);
-        }
       }
 
-      if (assistantText === '') assistantText = deltaBuffer;
-
-      // The REPL path persists on the same boundary.
-      const allMessages = agent.getMessages();
-      const userMessage = allMessages.find((m) => m.role === 'user');
-      if (userMessage !== undefined && !allMessages.some((m) => m.id === userMessageId)) {
-        addMessage({
-          id: userMessageId,
-          session_id: sessionId,
-          role: 'user',
-          content: prompt,
-        });
-      }
-      if (assistantText !== '') {
-        addMessage({
-          id: crypto.randomUUID(),
-          session_id: sessionId,
-          role: 'assistant',
-          content: assistantText,
-        });
-      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       tui.printError(message);
       sessionLogger.logError(error instanceof Error ? error : String(error));
     } finally {
+      try {
+        await deps.persistMessages(agent.getMessages());
+      } catch (error) {
+        tui.printError(`Could not save the session: ${error instanceof Error ? error.message : String(error)}`);
+        sessionLogger.logError(error instanceof Error ? error : String(error));
+        process.exitCode = 1;
+      }
       busy = false;
       tui.setBusy(false);
+      // Drain the queue AFTER the state flips: a `queueMicrotask` re-entry
+      // sees `busy === false` and starts the next turn instead of re-queuing.
+      const next = queuedPrompts.shift();
+      if (next !== undefined) {
+        tui.printNotice('running queued prompt');
+        queueMicrotask(() => {
+          void handleLine(next);
+        });
+      }
     }
   }
 
@@ -258,7 +348,8 @@ export async function runTuiSession(deps: TuiSessionDeps): Promise<void> {
     // and fights the TUI for it. List the commands instead.
     if (trimmed === '/') {
       for (const cmd of getSlashCommands()) {
-        tui.printNotice(`/${cmd.name}  ${cmd.description ?? ''}`);
+        const aliases = cmd.aliases?.length ? ` (alias: ${cmd.aliases.map((alias) => `/${alias}`).join(', ')})` : '';
+        tui.printNotice(`/${cmd.name}${aliases}  ${cmd.description ?? ''}`);
       }
       return;
     }
@@ -266,8 +357,73 @@ export async function runTuiSession(deps: TuiSessionDeps): Promise<void> {
     if (isSlashCommand(trimmed)) {
       const handled = await executeSlashCommand(trimmed, {
         agent,
-        sessionId,
+        sessionId: deps.session.id,
         platform: 'cli',
+        updateSessionModel: (nextModel) => deps.session.updateModel(nextModel),
+        resumeSession: async (query) => {
+          if (busy) {
+            tui.printError('Wait for the current task to finish before switching sessions.');
+            return;
+          }
+          try {
+            const sessions = await deps.session.listSessions();
+            const choices = sessions.map(({ session, timelineCount }) => ({
+              label: [
+                session.title || 'Untitled session',
+                `${session.providerId}/${session.model || 'default'}`,
+                `${timelineCount} messages`,
+                new Date(session.updatedAt).toLocaleString(),
+                session.id.slice(0, 8),
+              ].join('  ·  '),
+              value: session.id,
+            }));
+            if (choices.length === 0) {
+              tui.printNotice('No previous sessions in this workspace.');
+              return;
+            }
+            const selectedId = await tui.chooseFiltered('Resume session', choices, {
+              initialFilter: query,
+            });
+            if (selectedId === null) return;
+            if (busy) {
+              tui.printError('The active task started before the session could be switched.');
+              return;
+            }
+
+            const loaded = await deps.session.loadSession(selectedId);
+            const activeProviderId = deps.session.providerId;
+            if (
+              loaded.session.providerId !== activeProviderId
+              && loaded.session.providerId !== 'cli'
+              && activeProviderId !== 'cli'
+            ) {
+              tui.printError(
+                `This session uses provider "${loaded.session.providerId}"; `
+                + `the active CLI agent uses "${activeProviderId}". Switch providers before resuming it.`,
+              );
+              return;
+            }
+
+            agent.setMessages(loaded.messages as unknown as Message[]);
+            agent.model = loaded.session.model || model;
+            deps.session.activateSession(loaded.session);
+            deps.persistMessages.setBaseline(loaded.messages);
+            tui.replaceTranscript(loaded.messages);
+            tui.printNotice(
+              `Resumed "${loaded.session.title || 'Untitled session'}" `
+              + `(${loaded.session.providerId}/${loaded.session.model || 'default'}).`,
+            );
+          } catch (error) {
+            tui.printError(`Could not resume session: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        },
+        providerLogin: async (action) => {
+          if (busy) {
+            tui.printError('Wait for the current task to finish before managing providers.');
+            return;
+          }
+          await runProviderLogin(tui, action, BUILTIN_CATALOG.list());
+        },
       });
       if (handled && (trimmed === '/exit' || trimmed === '/quit' || trimmed === '/q')) {
         finish();
@@ -285,36 +441,40 @@ export async function runTuiSession(deps: TuiSessionDeps): Promise<void> {
       return;
     }
 
+    // A turn is running and this is not a slash command: queue it rather than
+    // starting a second concurrent run against the same session. Slash
+    // commands stay immediate — `/status`, `/effort` and friends are useful
+    // mid-run, which is exactly when people reach for them.
+    if (busy) {
+      queuedPrompts.push(trimmed);
+      tui.printNotice(`queued (${queuedPrompts.length}) — it will run when the current turn finishes`);
+      return;
+    }
+
     sessionLogger.logUser(trimmed);
     await runTurn(trimmed);
   }
 
+  let finishPromise: Promise<void> | null = null;
+
   function finish(): void {
-    if (exiting) return;
+    if (finishPromise) return;
     exiting = true;
-    try {
-      // Same projection filter the REPL applies: a standalone copy of a
-      // compaction checkpoint marker collides with the rebase-emitted id.
-      const allMessages = agent.getMessages();
-      const persistable = allMessages.filter(
-        (m) => !(m.id ?? '').endsWith(COMPACTION_CHECKPOINT_ID_SUFFIX),
-      );
-      if (persistable.length > 0) {
-        void replaceMessages(sessionId, persistable, 0);
+    finishPromise = (async () => {
+      try {
+        await deps.persistMessages(agent.getMessages());
+      } catch (error) {
+        tui.printError(`Could not save the session: ${error instanceof Error ? error.message : String(error)}`);
+        sessionLogger.logError(error instanceof Error ? error : String(error));
+        process.exitCode = 1;
+      } finally {
+        saveHistory(tui.exportHistory());
+        tui.stop();
+        // After the screen is gone, later output must reach the real terminal.
+        restoreSideChannels();
+        resolveExit();
       }
-      const firstUser = allMessages.find((m) => m.role === 'user');
-      if (firstUser !== undefined) {
-        updateSession(sessionId, {
-          title: typeof firstUser.content === 'string' ? firstUser.content.slice(0, 50) : 'Chat',
-        });
-      }
-    } finally {
-      saveHistory(tui.exportHistory());
-      tui.stop();
-      // After the screen is gone, later output must reach the real terminal.
-      restoreSideChannels();
-      resolveExit();
-    }
+    })();
   }
 
   // From here until `finish()`, the alternate screen owns stdout. Logging is
@@ -348,15 +508,4 @@ function interruptSignal(agent: duyaAgent): Promise<void> {
     if (typeof anyAgent.once !== 'function') return;
     anyAgent.once('interrupt', () => resolve());
   });
-}
-
-/** Read `data.content` from a frame, tolerating both wire shapes. */
-function readContent(frame: LegacyFrame): string {
-  const { data } = frame;
-  if (typeof data === 'string') return data;
-  if (typeof data === 'object' && data !== null) {
-    const content = (data as { content?: unknown }).content;
-    if (typeof content === 'string') return content;
-  }
-  return '';
 }

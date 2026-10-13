@@ -24,17 +24,17 @@ import {
   GroupValidationError,
 } from '../config/groups';
 import { listConfigAgents } from '../config/agents';
-import { getCoreStores } from '../db/core-connection';
-import { storedEventToIpcMessage } from './core-db-adapters';
-import { ROOM_VISIBLE_SOURCES } from '../../../../../packages/agent/src/message/message-source';
+import { getDesktopHostSessionApi } from '../cli/desktop-host-api';
+import { hostMessageItemsToIpcMessages } from './core-db-adapters';
+import type { HostMessageItem } from '@duya/agent-protocol';
+import { ROOM_VISIBLE_SOURCES } from '@duya/agent-protocol/message-timeline';
 import {
   appendRoomEntry,
   ensureRoomSession,
   scheduleGroupTurn,
 } from '../wake/group-turn-dispatcher';
-import { getRoomSessionId } from '../../../../../packages/agent/src/agent/dm/bot-session-id';
+import { getRoomSessionId, parseRoomIdFromSession } from '@duya/agent-protocol';
 import { getLogger, LogComponent } from '../logging/logger';
-import { parseRoomIdFromSession } from '../../../../../packages/agent/src/agent/dm/bot-session-id';
 
 /** Accept both a bare room id and the full `room:<roomId>` session id. */
 function normalizeRoomId(raw: unknown): string {
@@ -86,19 +86,19 @@ export function registerGroupHandlers(): void {
   ipcMain.handle('room:ensure', async (_event, roomId: unknown) => {
     const id = normalizeRoomId(roomId);
     const group = await getGroup(id);
-    const sessionId = ensureRoomSession(id, group?.name ?? id);
+    const sessionId = await ensureRoomSession(id, group?.name ?? id);
     getLogger().debug('Room ensured', { roomId: id, sessionId }, LogComponent.AgentProcess);
     return sessionId;
   });
 
-  ipcMain.handle('room:post', (_event, data: { roomId: string; text: string }) => {
+  ipcMain.handle('room:post', async (_event, data: { roomId: string; text: string }) => {
     const roomId = normalizeRoomId(data?.roomId);
     const text = typeof data?.text === 'string' ? data.text.trim() : '';
     if (!roomId) throw new Error('roomId is required');
     if (!text) throw new Error('text is required');
 
-    const sessionId = ensureRoomSession(roomId, roomId);
-    appendRoomEntry(sessionId, {
+    const sessionId = await ensureRoomSession(roomId, roomId);
+    await appendRoomEntry(sessionId, {
       id: randomUUID(),
       role: 'user',
       content: text,
@@ -111,13 +111,25 @@ export function registerGroupHandlers(): void {
     return { ok: true };
   });
 
-  ipcMain.handle('room:getTranscript', (_event, roomId: unknown) => {
-    const { messageLog } = getCoreStores();
+  ipcMain.handle('room:getTranscript', async (_event, roomId: unknown) => {
+    const api = getDesktopHostSessionApi();
     const sessionId = getRoomSessionId(normalizeRoomId(roomId));
-    const events = messageLog.listBySession(sessionId, { source: ROOM_VISIBLE_SOURCES });
-    return events
-      .map((event) => storedEventToIpcMessage(event))
-      .filter((row) => row !== null);
+    const session = await api.get(sessionId, { includeAllSessions: true });
+    if (!session) return [];
+
+    const items: HostMessageItem[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await api.readMessages(sessionId, {
+        limit: 200,
+        sources: ROOM_VISIBLE_SOURCES,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      items.push(...page.messages);
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor !== undefined);
+
+    return hostMessageItemsToIpcMessages(sessionId, items);
   });
 
   ipcMain.handle('room:members', async (_event, roomId: unknown) => {

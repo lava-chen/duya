@@ -20,6 +20,13 @@ const AGENT_PROTOCOL_SRC = fileURLToPath(new URL('./packages/agent-protocol/src'
 // build first -- and so `vi.mock` on a memory subpath intercepts the same
 // module id the consumer under test imports.
 const MEMORY_SRC = fileURLToPath(new URL('./packages/memory/src', import.meta.url))
+// Plan 610 A8: the extension contract package. Source alias, same
+// worktree-safety reason as memory above.
+const TOOLING_SRC = fileURLToPath(new URL('./packages/tooling/src', import.meta.url))
+// Plan 610 A8: the FS capability moved out of packages/agent. Aliased to
+// SOURCE so the agent shims and capability tests exercise the edited code
+// without a build first, and so module identity is shared across shims.
+const CAPABILITIES_SRC = fileURLToPath(new URL('./packages/capabilities/src', import.meta.url))
 
 export default defineConfig({
   test: {
@@ -130,15 +137,30 @@ export default defineConfig({
       // The input-completion core shared by the desktop composer and the CLI
       // TUI. Source, not dist, for the same worktree-safety reason.
       { find: /^@duya\/input-completion$/, replacement: fileURLToPath(new URL('./packages/input-completion/src', import.meta.url)) + '/index.ts' },
-      // Plan 583 ISS-02: the duya-file media allowlist reuses the sandboxed
-      // file tools' root-boundary primitive from agent source. Point at this
-      // checkout (worktree-safe), same as plugin-core above.
+      // Plan 583 ISS-02 + 610 A5 continuation (2026-10-10): the duya-file
+      // media allowlist consumes the root-boundary primitive from
+      // `@duya/sandbox` (moved out of packages/agent/src/tool/allowedRoots.ts).
+      // Point at this checkout's source (worktree-safe), same as plugin-core
+      // and the protocol packages above.
       {
-        find: /^@duya\/agent\/tool\/allowedRoots$/,
+        find: /^@duya\/sandbox$/,
         replacement: fileURLToPath(
-          new URL('./packages/agent/src/tool/allowedRoots.ts', import.meta.url),
+          new URL('./packages/sandbox/src/index.ts', import.meta.url),
         ),
       },
+      // Plan 610 A8: the extension contract package (source, worktree-safe).
+      { find: /^@duya\/tooling$/, replacement: TOOLING_SRC + '/index.ts' },
+      // Plan 610 A8: the FS capability package (source, worktree-safe).
+      // Every declared subpath of the package `exports` map mirrors the src
+      // directory layout, so one pair of rules covers them all. The two
+      // directory barrels (contracts, permissions) are listed explicitly
+      // because directory-index resolution is not reliable in vite-node.
+      // No apostrophes in this comment block: check-test-coverage.mjs scans
+      // quoted strings in this file verbatim.
+      { find: /^@duya\/capabilities\/contracts$/, replacement: CAPABILITIES_SRC + '/contracts/index.ts' },
+      { find: /^@duya\/capabilities\/permissions$/, replacement: CAPABILITIES_SRC + '/permissions/index.ts' },
+      { find: /^@duya\/capabilities\/(.*)$/, replacement: CAPABILITIES_SRC + '/$1' },
+      { find: /^@duya\/capabilities$/, replacement: CAPABILITIES_SRC + '/index.ts' },
       // Mirror vite.config.ts aliases so vitest can resolve
       // `@duya/conductor/renderer/*` to the package's source tree. Without
       // these the test environment errors out when any imported file

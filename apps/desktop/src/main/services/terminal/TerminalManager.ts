@@ -13,7 +13,7 @@ import { randomUUID } from 'crypto';
 import { app } from 'electron';
 import { createRequire } from 'module';
 import type * as NodePty from 'node-pty';
-import { getDatabase } from '../../db/connection';
+import { getDesktopHostLocalTerminalHistoryApi } from '../../cli/desktop-host-api';
 import { getLogger, LogComponent } from '../../logging/logger';
 
 const logger = getLogger();
@@ -303,19 +303,14 @@ export class TerminalManager {
     return { handle: { ...handle }, scrollback: '' };
   }
 
-  write(id: string, data: string): boolean {
+  async write(id: string, data: string): Promise<boolean> {
     const entry = this.terminals.get(id);
     if (!entry || entry.handle.status !== 'running') return false;
 
     const next = applyInputToLine(entry.inputLine, data);
     entry.inputLine = next.line;
-    if (next.submitted !== undefined) {
-      this.recordCommand(next.submitted, entry.handle.shell, entry.handle.cwd, 'user');
-    }
-
     try {
       entry.proc.write(data);
-      return true;
     } catch (err) {
       this.log.warn('Terminal write failed', {
         id,
@@ -323,6 +318,10 @@ export class TerminalManager {
       }, LogComponent.Main);
       return false;
     }
+    if (next.submitted !== undefined) {
+      await this.recordCommand(next.submitted, entry.handle.shell, entry.handle.cwd, 'user');
+    }
+    return true;
   }
 
   resize(id: string, cols: number, rows: number): boolean {
@@ -362,39 +361,16 @@ export class TerminalManager {
     }
   }
 
-  suggest(prefix: string, shell?: TerminalShell, cwd?: string, limit = 8): TerminalSuggestion[] {
-    const db = getDatabase();
+  async suggest(prefix: string, shell?: TerminalShell, cwd?: string, limit = 8): Promise<TerminalSuggestion[]> {
     const trimmed = prefix.trimStart();
-    if (!db || trimmed.length === 0) return [];
-
-    const params: unknown[] = [`${trimmed}%`];
-    const where: string[] = ['command LIKE ?'];
-    if (shell) {
-      where.push('shell = ?');
-      params.push(shell);
-    }
-    if (cwd) {
-      where.push('cwd = ?');
-      params.push(cwd);
-    }
-    params.push(Math.max(1, Math.min(20, limit)));
-
+    if (trimmed.length === 0) return [];
     try {
-      const rows = db.prepare(`
-        SELECT command, use_count AS useCount, last_used_at AS lastUsedAt
-        FROM terminal_command_history
-        WHERE ${where.join(' AND ')}
-        ORDER BY use_count DESC, last_used_at DESC
-        LIMIT ?
-      `).all(...params) as Array<{ command: string; useCount: number; lastUsedAt: number }>;
-      return rows
-        .filter((row) => row.command !== trimmed && row.command.startsWith(trimmed))
-        .map((row) => ({
-          command: row.command,
-          suffix: row.command.slice(trimmed.length),
-          useCount: row.useCount,
-          lastUsedAt: row.lastUsedAt,
-        }));
+      return [...await getDesktopHostLocalTerminalHistoryApi().suggestTerminalHistory({
+        prefix: trimmed,
+        ...(shell === undefined ? {} : { shell }),
+        ...(cwd === undefined ? {} : { cwd }),
+        limit: Math.max(1, Math.min(20, limit)),
+      })];
     } catch (err) {
       this.log.warn('Terminal suggestion query failed', {
         error: err instanceof Error ? err.message : String(err),
@@ -403,22 +379,11 @@ export class TerminalManager {
     }
   }
 
-  recordCommand(commandInput: string, shell: TerminalShell, cwd: string, source = 'user'): void {
+  async recordCommand(commandInput: string, shell: TerminalShell, cwd: string, source = 'user'): Promise<void> {
     const command = normalizeCommand(commandInput);
     if (!command) return;
-    const db = getDatabase();
-    if (!db) return;
-    const now = Date.now();
     try {
-      db.prepare(`
-        INSERT INTO terminal_command_history
-          (id, command, shell, cwd, source, use_count, created_at, last_used_at)
-        VALUES (?, ?, ?, ?, ?, 1, ?, ?)
-        ON CONFLICT(command, shell, cwd, source)
-        DO UPDATE SET
-          use_count = use_count + 1,
-          last_used_at = excluded.last_used_at
-      `).run(randomUUID(), command, shell, cwd, source, now, now);
+      await getDesktopHostLocalTerminalHistoryApi().recordTerminalCommand({ command, shell, cwd, source });
     } catch (err) {
       this.log.warn('Terminal command history write failed', {
         error: err instanceof Error ? err.message : String(err),

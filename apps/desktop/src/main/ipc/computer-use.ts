@@ -24,13 +24,11 @@ import { randomUUID } from 'node:crypto';
 
 import {
   COMPUTER_USE_IPC_CHANNEL,
+  ComputerUseErrorCode,
   type ComputerUseAction,
   type ComputerUseExecuteAction,
-} from '../../../../../packages/agent/dist/tool/OSTool/constants.js';
-import {
-  ComputerUseErrorCode,
   type ComputerUseToolEnvelope,
-} from '../../../../../packages/agent/dist/tool/OSTool/ComputerUseTool.js';
+} from '@duya/agent-protocol';
 import {
   buildArgsPreview,
   formatTreeForLlm,

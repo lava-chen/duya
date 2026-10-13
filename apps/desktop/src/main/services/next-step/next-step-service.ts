@@ -3,27 +3,20 @@
  *
  * Next-step suggestions: after an agent turn finishes, predict 3 short
  * follow-up prompts the user would plausibly send. Modeled on the recap
- * service — reads durable messages from the core store, picks the default
+ * service — reads durable messages through Host, picks the default
  * LLM provider, makes one non-streaming call, parses strict JSON.
  *
  * Stateless by design: the renderer drives when to ask (streaming
  * true → false transition), this module only answers.
  */
 
-import { getCoreStoresOrNull } from '../../db/core-connection';
-import { storedEventsToIpcMessages } from '../../ipc/core-db-adapters';
+import { readHostMessageRows } from '../host-message-reader';
 import { getProviderStore } from '../providers/provider-store-electron';
 import { buildNextStepPrompt, parseNextStepSuggestions } from './next-step-prompt';
 import { callLLMForNextSteps } from './next-step-llm';
 
 export async function requestNextSteps(sessionId: string): Promise<string[]> {
-  const stores = getCoreStoresOrNull();
-  if (!stores) {
-    return [];
-  }
-
-  const events = stores.messageLog.listBySession(sessionId);
-  const messages = storedEventsToIpcMessages(events);
+  const messages = await readHostMessageRows(sessionId);
   if (messages.length === 0) {
     return [];
   }
@@ -47,7 +40,7 @@ export async function requestNextSteps(sessionId: string): Promise<string[]> {
     (Array.isArray(provider.options?.enabled_models) &&
       (provider.options?.enabled_models as string[])[0]) ||
     '';
-  const runtime = store.getProviderRuntimeConfig(provider.id, model);
+  const runtime = await store.getProviderRuntimeConfig(provider.id, model);
   if ('error' in runtime) {
     return [];
   }

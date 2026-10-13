@@ -72,7 +72,7 @@ import { applyDictation } from '@/lib/voice/dictation';
 import { InlineTaskRow } from './InlineTaskRow';
 import type { UseGitStatusResult } from '@/hooks/useGitStatus';
 import type { GitTurnReview } from '@/lib/git-ipc';
-import type { Task } from '@duya/agent';
+import type { Task } from '@duya/agent-protocol';
 import type { Message } from '@/types/message';
 import { IconButton } from '@/components/ui/IconButton';
 import { getPluginAPI } from '@/lib/plugin-ipc';

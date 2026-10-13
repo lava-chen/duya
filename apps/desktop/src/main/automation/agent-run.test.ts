@@ -2,10 +2,8 @@
  * agent-run.test.ts — Cron session creation for immediate/scheduled runs.
  *
  * Coverage:
- *   - createCronSessionRow creates the session row AND pre-inserts the cron
- *     prompt as a durable user message (the run view shows the task
- *     immediately; the worker reuses the row via its same-content duplicate
- *     check instead of writing a second copy at turn end).
+ *   - createCronSessionRow persists a cron session through the Host API without
+ *     eagerly writing a prompt that the Agent Server will append at dispatch.
  *   - Idempotency: runCronNow creates the row eagerly and runCronInSession
  *     reuses it — a second call must not duplicate the prompt message.
  *   - Empty prompts are skipped (no empty bubble in the run view).
@@ -26,6 +24,7 @@ const mocks = vi.hoisted(() => ({
     sessions: { get: (id: string) => unknown; create: (input: unknown) => unknown };
     messageLog: { appendBatch: (events: unknown[]) => void; listBySession: (id: string) => unknown[] };
   } | null,
+  workspaceDirectory: null as string | null,
   windows: [] as unknown[],
 }));
 
@@ -33,10 +32,20 @@ vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => mocks.windows },
 }));
 
-vi.mock('../db/core-connection', () => ({
-  getCoreStores: () => {
+vi.mock('../cli/desktop-host-api', () => ({
+  getDesktopHostSessionApi: () => {
     if (!mocks.stores) throw new Error('stores not initialized in test');
-    return mocks.stores;
+    return {
+      get: async (id: string) => mocks.stores?.sessions.get(id) ?? null,
+      registerLocalDirectory: async (directory: string) => {
+        mocks.workspaceDirectory = directory;
+        return { state: 'bound', workspaceId: 'workspace-test', rootId: null, relativePath: '' };
+      },
+      create: async (input: Record<string, unknown>) => mocks.stores?.sessions.create({
+        ...input,
+        workingDirectory: mocks.workspaceDirectory ?? '',
+      }),
+    };
   },
 }));
 
@@ -65,10 +74,12 @@ describe('createCronSessionRow', () => {
         listBySession: (id) => messageLog.listBySession(id),
       },
     };
+    mocks.workspaceDirectory = null;
   });
 
   afterEach(() => {
     mocks.stores = null;
+    mocks.workspaceDirectory = null;
     try {
       db.close();
     } catch {
@@ -88,11 +99,10 @@ describe('createCronSessionRow', () => {
     providerId: 'openai',
     workingDirectory: tempDir,
     cronId: 'job-1',
-    prompt: 'Summarize yesterday\'s commits',
   };
 
-  it('creates the session row without an eager prompt write (plan 441)', () => {
-    createCronSessionRow(params);
+  it('creates the session row without an eager prompt write (plan 441)', async () => {
+    await createCronSessionRow(params);
 
     expect(sessions.get(params.sessionId)).not.toBeNull();
     // Plan 441 removed the eager `messageLog.appendBatch` of the cron
@@ -102,9 +112,9 @@ describe('createCronSessionRow', () => {
     expect(messageLog.listBySession(params.sessionId)).toHaveLength(0);
   });
 
-  it('is idempotent across the runCronNow create and runCronInSession reuse', () => {
-    createCronSessionRow(params);
-    createCronSessionRow(params);
+  it('is idempotent across the runCronNow create and runCronInSession reuse', async () => {
+    await createCronSessionRow(params);
+    await createCronSessionRow(params);
 
     expect(sessions.get(params.sessionId)).not.toBeNull();
     // No eager writes here means no duplicate prompt messages can pile up
@@ -112,8 +122,8 @@ describe('createCronSessionRow', () => {
     expect(messageLog.listBySession(params.sessionId)).toHaveLength(0);
   });
 
-  it('writes nothing to the message log regardless of prompt content', () => {
-    createCronSessionRow({ ...params, prompt: '   ' });
+  it('does not append a prompt while creating the Host session', async () => {
+    await createCronSessionRow(params);
 
     expect(sessions.get(params.sessionId)).not.toBeNull();
     expect(messageLog.listBySession(params.sessionId)).toHaveLength(0);

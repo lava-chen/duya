@@ -6,18 +6,16 @@
  */
 
 import { getDatabase } from '../connection';
+import { MainSettingsStore } from '@duya/data/main-settings-store';
 
-type BetterSqlite3 = InstanceType<typeof import('better-sqlite3')>;
-
-function db(): BetterSqlite3 {
+function store(): MainSettingsStore {
   const d = getDatabase();
   if (!d) throw new Error('Database not initialized');
-  return d;
+  return new MainSettingsStore(d);
 }
 
 export function getSetting(key: string): string | null {
-  const row = db().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
-  return row?.value ?? null;
+  return store().getString(key);
 }
 
 // ============================================================================
@@ -58,19 +56,17 @@ export function setHostToolPermission(
 }
 
 export function getJsonSetting<T = unknown>(key: string, defaultValue: T): T {
-  const value = db().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
-  if (!value) return defaultValue;
+  const value = store().getString(key);
+  if (value === null) return defaultValue;
   try {
-    return JSON.parse(value.value) as T;
+    return JSON.parse(value) as T;
   } catch {
     return defaultValue;
   }
 }
 
 export function setJsonSetting(key: string, value: unknown): void {
-  const now = Date.now();
-  db().prepare(`
-    INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-  `).run(key, JSON.stringify(value), now);
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) throw new TypeError('Setting value is not JSON serializable');
+  store().setString(key, serialized);
 }

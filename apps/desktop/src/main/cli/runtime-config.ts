@@ -1,9 +1,9 @@
 /**
  * apps/desktop/src/main/cli/runtime-config.ts
  *
- * Atomic write of userData/runtime/cli-api.json containing the ephemeral
- * CLI API server connection info. Written only after the HTTP server
- * successfully listens; removed on graceful shutdown.
+ * Atomic write of <dataRoot>/runtime/cli-api.json containing the ephemeral
+ * CLI API server connection info. Written after the HTTP server listens and
+ * removed on graceful shutdown. DUYA_TEST runs retain checkout-scoped userData.
  *
  * Security policy:
  * - Atomic write via temp file + rename
@@ -13,9 +13,9 @@
  *   in future phases, but the Phase 0 CLI client ignores it
  */
 
-import { homedir } from 'os';
 import { promises as fs, readdirSync } from 'fs';
 import { join } from 'path';
+import { resolveDataRoot } from '@duya/data/data-paths';
 import { getLogger } from '../logging/logger';
 
 export interface CliApiRuntime {
@@ -51,20 +51,19 @@ function electronApp(): ElectronApp | undefined {
 }
 
 /**
- * Electron wins whenever it is present: this is the app's own directory and
- * must not move because the variable below happens to be exported in a dev
- * shell. `DUYA_CLI_USER_DATA_DIR` (`cli/handlers/plugins.ts`) is the existing
- * headless entry point and applies only when there is no desktop, where
- * `~/.duya` is the same root the rollout / attachment paths already use
- * (`config/boot-config.ts`). Returning `''` instead would resolve this runtime
- * file against the process cwd, which is not a directory anyone chose.
+ * Keep discovery metadata beside the shared Duya data root so standalone CLI
+ * clients can find the same local service as Desktop. Tests retain Electron's
+ * checkout-scoped userData directory; a headless host may use the explicit
+ * override before falling back to the shared root.
  */
 function userDataDir(): string {
   const app = electronApp();
-  if (app && typeof app.getPath === 'function') return app.getPath('userData');
+  if (process.env.DUYA_TEST === '1' && app && typeof app.getPath === 'function') {
+    return app.getPath('userData');
+  }
   const envOverride = process.env.DUYA_CLI_USER_DATA_DIR;
-  if (envOverride && envOverride.trim().length > 0) return envOverride;
-  return join(homedir(), '.duya');
+  if (!app && envOverride && envOverride.trim().length > 0) return envOverride;
+  return resolveDataRoot();
 }
 
 function runtimeDir(): string {

@@ -10,12 +10,20 @@ import type { ToolUseContext } from '../types.js';
 // Import all tools
 import { BashTool } from './BashTool/BashTool.js';
 import { PowerShellTool } from './PowerShellTool/PowerShellTool.js';
-import { ReadTool, readFileContent } from './ReadTool/ReadTool.js';
-import { WriteTool } from './WriteTool/WriteTool.js';
-import { GrepTool } from './GrepTool/GrepTool.js';
-import { EditTool, editTool, executeEdit } from './EditTool/EditTool.js';
-import { ApplyPatchTool, applyPatchTool } from './ApplyPatchTool/ApplyPatchTool.js';
-import { GlobTool, globTool, executeGlob } from './GlobTool/GlobTool.js';
+import {
+  ApplyPatchTool,
+  applyPatchTool,
+  EditTool,
+  editTool,
+  executeEdit,
+  executeGlob,
+  GlobTool,
+  globTool,
+  GrepTool,
+  ReadTool,
+  readFileContent,
+  WriteTool,
+} from '@duya/capabilities';
 import { MemoryWriteTool } from './MemoryWriteTool/MemoryWriteTool.js';
 import { WriteStage1PolicyTool } from './WriteStage1PolicyTool/WriteStage1PolicyTool.js';
 import { SendArtifactTool } from './SendArtifactTool/SendArtifactTool.js';
@@ -43,7 +51,7 @@ import { duyaCliTool } from './DuyaCliTool/index.js';
 import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.js';
 import { moduleTool } from './ModuleTool/ModuleTool.js';
 import { widgetTool } from './WidgetTool/index.js';
-import { hasShellFamily } from '../utils/shellDetector.js';
+import { hasShellFamily } from '@duya/capabilities/utils/shellDetector';
 import { ToolCatalogTool } from './ToolCatalogTool/ToolCatalogTool.js';
 import { ToolInvokeTool } from './ToolInvokeTool/ToolInvokeTool.js';
 import { updateStateTool } from './UpdateStateTool/UpdateStateTool.js';
@@ -345,11 +353,20 @@ export function createBuiltinRegistry(
 export { ToolRegistry } from './registry.js';
 export { BashTool } from './BashTool/BashTool.js';
 export { PowerShellTool } from './PowerShellTool/PowerShellTool.js';
-export { ReadTool, readFileContent } from './ReadTool/ReadTool.js';
-export { WriteTool } from './WriteTool/WriteTool.js';
-export { GrepTool } from './GrepTool/GrepTool.js';
-export { EditTool, editTool, executeEdit } from './EditTool/EditTool.js';
-export { GlobTool, globTool, executeGlob } from './GlobTool/GlobTool.js';
+export {
+  ApplyPatchTool,
+  applyPatchTool,
+  EditTool,
+  editTool,
+  executeEdit,
+  executeGlob,
+  GlobTool,
+  globTool,
+  GrepTool,
+  ReadTool,
+  readFileContent,
+  WriteTool,
+} from '@duya/capabilities';
 export { MemoryWriteTool } from './MemoryWriteTool/MemoryWriteTool.js';
 export { WriteStage1PolicyTool } from './WriteStage1PolicyTool/WriteStage1PolicyTool.js';
 export { SendArtifactTool } from './SendArtifactTool/SendArtifactTool.js';

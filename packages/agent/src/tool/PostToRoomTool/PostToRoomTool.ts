@@ -26,7 +26,7 @@
 import { randomUUID } from "node:crypto";
 import type { Tool, ToolResult, ToolUseContext } from "../../types.js";
 import { POST_TO_ROOM_TOOL_NAME } from "./constants.js";
-import { isPassContent } from "../../wake/groupTurn.js";
+import { isPassContent } from '@duya/host/group-turn';
 import { listResolvedGroups } from "../../agent-profile/config-groups.js";
 import { validateRoomTarget } from "../../session/room-db.js";
 import { appendMessages } from "../../session/db.js";

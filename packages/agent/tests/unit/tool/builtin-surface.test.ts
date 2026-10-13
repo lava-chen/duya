@@ -24,4 +24,23 @@ describe('builtin tool source boundary', () => {
       expect(source).not.toContain(retiredPath);
     }
   });
+
+  it('registers filesystem tools from the capabilities package', () => {
+    const source = readFileSync(
+      new URL('../../../src/tool/builtin.ts', import.meta.url),
+      'utf8',
+    );
+
+    expect(source).toContain("} from '@duya/capabilities';");
+    for (const compatibilityPath of [
+      './ReadTool/',
+      './WriteTool/',
+      './GrepTool/',
+      './EditTool/',
+      './ApplyPatchTool/',
+      './GlobTool/',
+    ]) {
+      expect(source).not.toContain(compatibilityPath);
+    }
+  });
 });

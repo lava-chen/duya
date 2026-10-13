@@ -15,6 +15,10 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SpawnSyncReturns } from 'node:child_process';
+import type {
+  HostLocalTurnReviewRecord,
+  HostLocalTurnReviewSummary,
+} from '@duya/agent-protocol';
 
 const mocks = vi.hoisted(() => {
   const fsState = {
@@ -28,8 +32,12 @@ const mocks = vi.hoisted(() => {
   return {
     fs: fsState,
     spawn: spawnState,
-    db: {
-      getDatabase: vi.fn(() => null),
+    turnReviewAvailable: true,
+    turnReviews: {
+      getLatestTurnReview: vi.fn(async (_sessionId: string): Promise<HostLocalTurnReviewRecord | null> => null),
+      listTurnReviewHistory: vi.fn(async (_sessionId: string, _limit: number): Promise<readonly HostLocalTurnReviewSummary[]> => []),
+      getTurnReviewById: vi.fn(async (_reviewId: string): Promise<HostLocalTurnReviewRecord | null> => null),
+      getTurnReviewByTurnId: vi.fn(async (_sessionId: string, _turnId: string): Promise<HostLocalTurnReviewRecord | null> => null),
     },
     captured: {
       handle: new Map<
@@ -62,7 +70,12 @@ vi.mock('electron', () => ({
 
 vi.mock('fs', () => mocks.fs);
 vi.mock('child_process', () => mocks.spawn);
-vi.mock('../db-handlers', () => mocks.db);
+vi.mock('../../cli/desktop-host-api', () => ({
+  getDesktopHostLocalTurnReviewApi: () => {
+    if (!mocks.turnReviewAvailable) throw new Error('Host is not running');
+    return mocks.turnReviews;
+  },
+}));
 
 import {
   parseCommitLogOutput,
@@ -346,8 +359,11 @@ describe('git:review-latest-turn', () => {
     mocks.fs.existsSync.mockReturnValue(true);
     mocks.fs.readFileSync.mockReset();
     mocks.fs.readFileSync.mockReturnValue('');
-    mocks.db.getDatabase.mockReset();
-    mocks.db.getDatabase.mockReturnValue(null);
+    mocks.turnReviewAvailable = true;
+    mocks.turnReviews.getLatestTurnReview.mockReset().mockResolvedValue(null);
+    mocks.turnReviews.listTurnReviewHistory.mockReset().mockResolvedValue([]);
+    mocks.turnReviews.getTurnReviewById.mockReset().mockResolvedValue(null);
+    mocks.turnReviews.getTurnReviewByTurnId.mockReset().mockResolvedValue(null);
     mocks.captured.handle.clear();
     registerGitHandlers();
   });
@@ -358,6 +374,7 @@ describe('git:review-latest-turn', () => {
   });
 
   it('keeps review history unavailable when the main database is not ready', async () => {
+    mocks.turnReviewAvailable = false;
     await expect(invokeHandler('git:review-latest-turn', {}, 'session-1', '/tmp/repo')).resolves.toEqual({
       isGitRepo: true,
       error: 'Review history is unavailable.',
@@ -367,22 +384,18 @@ describe('git:review-latest-turn', () => {
   it('matches the latest turn by session id only, tolerating cwd drift', async () => {
     // Plan 308 Phase 2: the stored working_directory no longer needs to
     // equal the caller's cwd string (Windows separator / case drift).
-    mocks.db.getDatabase.mockReturnValue({
-      prepare: vi.fn(() => ({
-        get: vi.fn(() => ({
-          id: 'row-1',
-          session_id: 'session-1',
-          turn_id: 'turn-1',
-          working_directory: 'E:\\repo',
-          files_json: JSON.stringify([{ path: 'a.ts', status: 'modified', additions: 1, removals: 0 }]),
-          patch: 'diff',
-          additions: 1,
-          removals: 0,
-          truncated: 0,
-          binary: 0,
-          captured_at: 100,
-        })),
-      })),
+    mocks.turnReviews.getLatestTurnReview.mockResolvedValue({
+      id: 'row-1',
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      workingDirectory: 'E:\\repo',
+      filesJson: JSON.stringify([{ path: 'a.ts', status: 'modified', additions: 1, removals: 0 }]),
+      patch: 'diff',
+      additions: 1,
+      removals: 0,
+      truncated: 0,
+      binary: 0,
+      capturedAt: 100,
     });
     await expect(invokeHandler('git:review-latest-turn', {}, 'session-1', '/tmp/repo')).resolves.toEqual({
       isGitRepo: true,
@@ -408,8 +421,11 @@ describe('git:review-turn-history', () => {
     mocks.fs.existsSync.mockReturnValue(true);
     mocks.fs.readFileSync.mockReset();
     mocks.fs.readFileSync.mockReturnValue('');
-    mocks.db.getDatabase.mockReset();
-    mocks.db.getDatabase.mockReturnValue(null);
+    mocks.turnReviewAvailable = true;
+    mocks.turnReviews.getLatestTurnReview.mockReset().mockResolvedValue(null);
+    mocks.turnReviews.listTurnReviewHistory.mockReset().mockResolvedValue([]);
+    mocks.turnReviews.getTurnReviewById.mockReset().mockResolvedValue(null);
+    mocks.turnReviews.getTurnReviewByTurnId.mockReset().mockResolvedValue(null);
     mocks.captured.handle.clear();
     registerGitHandlers();
   });
@@ -420,6 +436,7 @@ describe('git:review-turn-history', () => {
   });
 
   it('reports history unavailable when the main database is not ready', async () => {
+    mocks.turnReviewAvailable = false;
     await expect(invokeHandler('git:review-turn-history', {}, 'session-1', '/tmp/repo')).resolves.toEqual({
       isGitRepo: true,
       error: 'Review history is unavailable.',
@@ -427,31 +444,27 @@ describe('git:review-turn-history', () => {
   });
 
   it('summarizes persisted turns with a file count per entry', async () => {
-    mocks.db.getDatabase.mockReturnValue({
-      prepare: vi.fn(() => ({
-        all: vi.fn(() => [
-          {
-            id: 'row-2',
-            turn_id: 'turn-2',
-            files_json: JSON.stringify([
-              { path: 'a.ts', status: 'modified', additions: 2, removals: 1 },
-              { path: 'b.ts', status: 'added', additions: 5, removals: 0 },
-            ]),
-            additions: 7,
-            removals: 1,
-            captured_at: 200,
-          },
-          {
-            id: 'row-1',
-            turn_id: 'turn-1',
-            files_json: 'not-json',
-            additions: 1,
-            removals: 0,
-            captured_at: 100,
-          },
+    mocks.turnReviews.listTurnReviewHistory.mockResolvedValue([
+      {
+        id: 'row-2',
+        turnId: 'turn-2',
+        filesJson: JSON.stringify([
+          { path: 'a.ts', status: 'modified', additions: 2, removals: 1 },
+          { path: 'b.ts', status: 'added', additions: 5, removals: 0 },
         ]),
-      })),
-    });
+        additions: 7,
+        removals: 1,
+        capturedAt: 200,
+      },
+      {
+        id: 'row-1',
+        turnId: 'turn-1',
+        filesJson: 'not-json',
+        additions: 1,
+        removals: 0,
+        capturedAt: 100,
+      },
+    ]);
     await expect(invokeHandler('git:review-turn-history', {}, 'session-1', '/tmp/repo')).resolves.toEqual({
       isGitRepo: true,
       turns: [
@@ -468,8 +481,11 @@ describe('git:review-turn-detail', () => {
     mocks.fs.existsSync.mockReturnValue(true);
     mocks.fs.readFileSync.mockReset();
     mocks.fs.readFileSync.mockReturnValue('');
-    mocks.db.getDatabase.mockReset();
-    mocks.db.getDatabase.mockReturnValue(null);
+    mocks.turnReviewAvailable = true;
+    mocks.turnReviews.getLatestTurnReview.mockReset().mockResolvedValue(null);
+    mocks.turnReviews.listTurnReviewHistory.mockReset().mockResolvedValue([]);
+    mocks.turnReviews.getTurnReviewById.mockReset().mockResolvedValue(null);
+    mocks.turnReviews.getTurnReviewByTurnId.mockReset().mockResolvedValue(null);
     mocks.captured.handle.clear();
     registerGitHandlers();
   });
@@ -480,22 +496,18 @@ describe('git:review-turn-detail', () => {
   });
 
   it('returns one stored turn review by row id', async () => {
-    mocks.db.getDatabase.mockReturnValue({
-      prepare: vi.fn(() => ({
-        get: vi.fn(() => ({
-          id: 'row-9',
-          session_id: 'session-1',
-          turn_id: 'turn-9',
-          working_directory: '/tmp/repo',
-          files_json: JSON.stringify([{ path: 'b.ts', status: 'added', additions: 5, removals: 0 }]),
-          patch: 'diff --git',
-          additions: 5,
-          removals: 0,
-          truncated: 0,
-          binary: 0,
-          captured_at: 300,
-        })),
-      })),
+    mocks.turnReviews.getTurnReviewById.mockResolvedValue({
+      id: 'row-9',
+      sessionId: 'session-1',
+      turnId: 'turn-9',
+      workingDirectory: '/tmp/repo',
+      filesJson: JSON.stringify([{ path: 'b.ts', status: 'added', additions: 5, removals: 0 }]),
+      patch: 'diff --git',
+      additions: 5,
+      removals: 0,
+      truncated: 0,
+      binary: 0,
+      capturedAt: 300,
     });
     await expect(invokeHandler('git:review-turn-detail', {}, '/tmp/repo', 'row-9')).resolves.toEqual({
       isGitRepo: true,
@@ -510,6 +522,34 @@ describe('git:review-turn-detail', () => {
         truncated: false,
         binary: false,
         capturedAt: 300,
+      },
+    });
+  });
+
+  it('loads the newest stored review for a session turn id', async () => {
+    mocks.turnReviews.getTurnReviewByTurnId.mockResolvedValue({
+      id: 'row-10',
+      sessionId: 'session-1',
+      turnId: 'turn-10',
+      workingDirectory: '/tmp/repo',
+      filesJson: JSON.stringify([{ path: 'c.ts', status: 'modified', additions: 3, removals: 2 }]),
+      patch: 'turn patch',
+      additions: 3,
+      removals: 2,
+      truncated: 0,
+      binary: 0,
+      capturedAt: 400,
+    });
+
+    await expect(
+      invokeHandler('git:review-turn-by-turn-id', {}, 'session-1', '/tmp/repo', 'turn-10'),
+    ).resolves.toMatchObject({
+      isGitRepo: true,
+      review: {
+        id: 'row-10',
+        sessionId: 'session-1',
+        turnId: 'turn-10',
+        totals: { additions: 3, removals: 2, fileCount: 1 },
       },
     });
   });

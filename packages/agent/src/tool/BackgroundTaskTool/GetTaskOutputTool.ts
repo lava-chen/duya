@@ -21,13 +21,14 @@ import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
 import type { TaskRecord, TaskStatus } from '../../lifecycle/TaskState.js';
 import { getBackgroundAgentLifecycle } from '../../lifecycle/BackgroundAgentLifecycle.js';
+import { GET_TASK_OUTPUT_TOOL_NAME } from './constants.js';
+export { GET_TASK_OUTPUT_TOOL_NAME } from './constants.js';
 import {
   getBashTaskRegistry,
   type BashBackgroundTask,
   type BashTaskStatus,
 } from '../../session/bash-task-registry.js';
 
-export const GET_TASK_OUTPUT_TOOL_NAME = 'get_task_output';
 /** Max task ids accepted in a single snapshot call. */
 export const MAX_MULTI_TASK_IDS = 10;
 /** Inline budget for a completed task's output (keeps context bounded). */

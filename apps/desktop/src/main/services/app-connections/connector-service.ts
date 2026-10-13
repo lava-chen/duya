@@ -225,7 +225,8 @@ export class ConnectorService {
     // treating the missing descriptors as an authoritative empty set.
     const discoveryFailedConnectionIds: string[] = [];
     const policy = readAppPolicy();
-    for (const dto of this.service.list()) {
+    const connections = await this.service.list();
+    for (const dto of connections) {
       if (dto.status !== 'connected') continue;
       // Plan 450 (Phase C): exposure-layer policy gate. Disabled
       // providers are filtered BEFORE tools/list / descriptor emission
@@ -301,7 +302,6 @@ export class ConnectorService {
     // with the per-connection `account_label` (`Notion · rain@example.com`)
     // so the model can tell the accounts apart; single-connection providers
     // keep the bare label (byte-stable section).
-    const connections = this.service.list();
     const slugByConnection = new Map(
       connections.map((c) => [c.id, c.connectionSlug ?? ''] as const),
     );
@@ -336,9 +336,9 @@ export class ConnectorService {
    * Plan 580 Phase 5: per-connection inventory ledger snapshots from the
    * remote-MCP connector. Connections without a live session are absent.
    */
-  listLedgerSnapshots(): Record<string, ReturnType<RemoteMcpConnector['getLedgerSnapshot']>> {
+  async listLedgerSnapshots(): Promise<Record<string, ReturnType<RemoteMcpConnector['getLedgerSnapshot']>>> {
     const out: Record<string, NonNullable<ReturnType<RemoteMcpConnector['getLedgerSnapshot']>>> = {};
-    for (const conn of this.service.list()) {
+    for (const conn of await this.service.list()) {
       const snapshot = this.remoteMcp.getLedgerSnapshot(conn.id);
       if (snapshot) out[conn.id] = snapshot;
     }
@@ -356,7 +356,7 @@ export class ConnectorService {
       return failure('connection_not_found', 'connectionId is required', false);
     }
 
-    const conn = this.service.getStatus(connectionId);
+    const conn = await this.service.getStatus(connectionId);
     if (!conn) {
       return failure('connection_not_found', `connection ${connectionId} not found`, false);
     }

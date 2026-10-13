@@ -15,7 +15,7 @@ import { readConfigAgents } from '../../agent-profile/config-agents.js'
 import { listResolvedGroups } from '../../agent-profile/config-groups.js'
 import { readBotProfileIdentity } from '../../agent-profile/bot-profile-reader.js'
 import type { CustomAgentPromptConfig } from '../../agent-profile/config-agents.js'
-import type { AgentProfile } from '../../agent-profile/types.js'
+import type { AgentProfile } from '@duya/agent-core'
 import { getDuyaRoot } from '@duya/memory/memory_paths'
 import type { BotPromptConfig, BotPromptContext, BotRosterEntry } from './framework.js'
 import {

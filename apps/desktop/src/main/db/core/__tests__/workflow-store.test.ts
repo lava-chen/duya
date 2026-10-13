@@ -343,6 +343,11 @@ describe.skipIf(!nativeSqliteAvailable)('WorkflowRunStore', () => {
       finishedAt: null,
     });
 
+    // Newer migrations add columns used by the current createRun path.
+    for (const migration of WorkflowRunStore.migrations) {
+      if (migration.id > migration30.id) migration.up(legacyDb);
+    }
+
     // A row created after the migration defaults to the run-anchored path.
     expect(legacyStore.createRun({ workflowName: 'new' }).origin).toBe('library');
     legacyDb.close();

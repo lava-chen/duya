@@ -15,14 +15,14 @@ import {
 import { CheckpointBatcher } from './checkpoint-batcher';
 import { Logger } from './logger';
 import { toLLMProvider, type ApiProvider } from '../../config/provider-types';
-import { calculateMaxConcurrentWorkers, getWorkerMemoryThreshold } from './worker-limits';
+import { calculateMaxConcurrentWorkers, getWorkerMemoryThreshold } from '@duya/host/worker-limits';
 import { acquireChatLock, releaseChatLock, type ChatLockOrigin } from './chat-runtime-lock';
 import { acceptedVerbs } from '../../control-plane/permission-vocabulary';
 import { recordPermissionDecision } from '../../control-plane/permission-decision-record';
-import type { RunOrchestrator } from './run-orchestrator';
+import type { RunOrchestrator } from '@duya/host/run-orchestrator';
 import { parseAgentIdFromBotSession } from '../../wake/bot-session-id';
 import { buildCronProviderConfig, resolveCronModel } from '../../automation/provider-config';
-import { readConfigAgents } from '../../../../../../packages/agent/src/agent-profile/config-agents.js';
+import { readConfigAgents } from '@duya/host/agent-profile-config';
 import { normalizePath } from '../../memory-state/pathUtils';
 import type { JournalRecord } from '../../../../../../packages/agent/src/modes/workflow/journal';
 import { getLogger, LogComponent } from '../../logging/logger';

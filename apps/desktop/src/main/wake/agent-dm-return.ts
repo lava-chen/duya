@@ -18,12 +18,15 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { getCoreStores } from '../db/core-connection';
 import { maybeDispatchAgentDm } from './agent-dm-dispatcher';
-import { clampAgentMessage, encodeEnvelope, prepareEnvelopeForSend } from '../../../../../packages/agent/src/agent/dm/index.js';
-import type { AgentDmEnvelope, AgentDmIntent } from '../../../../../packages/agent/src/agent/dm/index.js';
+import { clampAgentMessage, encodeEnvelope, prepareEnvelopeForSend } from '@duya/agent-protocol';
+import type { AgentDmEnvelope, AgentDmIntent } from '@duya/agent-protocol';
 import { parseAgentIdFromBotSession } from './bot-session-id';
 import { getLogger, LogComponent } from '../logging/logger';
+import {
+  getDesktopHostLocalMailboxApi,
+  getDesktopHostLocalSessionApi,
+} from '../cli/desktop-host-api';
 
 /** DM wake payload fields the auto-return needs (subset of WakeItem). */
 export interface DmAutoReturnContext {
@@ -55,10 +58,10 @@ function isRealOutput(output: string): boolean {
  * Maybe send the run's final response back to the delegating bot.
  * Returns true when an auto-return DM was written and dispatched.
  */
-export function maybeAutoReturnDmResult(
+export async function maybeAutoReturnDmResult(
   ctx: DmAutoReturnContext,
   runOutput: string,
-): boolean {
+): Promise<boolean> {
   const intent: AgentDmIntent | undefined = (
     ctx.intent as AgentDmIntent | undefined
   );
@@ -73,7 +76,10 @@ export function maybeAutoReturnDmResult(
   // Resolve the replying bot's display name from its session row (best-effort).
   let replierName = replierAgentId;
   try {
-    replierName = getCoreStores().sessions.get(replierSessionId)?.agentName ?? replierAgentId;
+    replierName = (await getDesktopHostLocalSessionApi().readLocalSession(
+      replierSessionId,
+      { includeAllSessions: true },
+    ))?.agentName ?? replierAgentId;
   } catch {
     // Core stores unavailable (test env) — the id is an acceptable fallback.
   }
@@ -92,7 +98,7 @@ export function maybeAutoReturnDmResult(
 
   try {
     const prepared = prepareEnvelopeForSend(envelope);
-    const row = getCoreStores().mailbox.enqueue({
+    const row = await getDesktopHostLocalMailboxApi().enqueue({
       id: randomUUID(),
       sessionId: targetSessionId,
       kind: 'agent_dm',
@@ -101,7 +107,7 @@ export function maybeAutoReturnDmResult(
       clientMsgId,
       submittedRunId: '',
     });
-    const dispatched = maybeDispatchAgentDm({
+    const dispatched = await maybeDispatchAgentDm({
       id: row.id,
       sessionId: row.sessionId,
       kind: row.kind,

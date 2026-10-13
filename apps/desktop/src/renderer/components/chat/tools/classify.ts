@@ -37,7 +37,7 @@ export const ASK_USER_QUESTION_TOOLS = new Set(['askuserquestion']);
 /**
  * Module tool — loads design specification READMEs as markdown.
  * Single canonical name (`read_module`) registered on the agent side
- * (see MODULE_TOOL_NAME in packages/agent/src/tool/ModuleTool).
+ * (see MODULE_TOOL_NAME in packages/capabilities/src/ModuleTool/ModuleTool).
  */
 export const MODULE_TOOLS = new Set(['read_module']);
 

@@ -5,32 +5,35 @@
  * dm-prompt rendering against the injected wake dispatcher deps.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import Database from 'better-sqlite3'
-import * as fs from 'node:fs'
-import * as os from 'node:os'
-import * as path from 'node:path'
 import {
   maybeDispatchAgentDm,
   defaultBotSessionCreator,
   _setBotSessionCreatorForTest,
 } from '../agent-dm-dispatcher'
-import { _setCoreStoresForTesting, type CoreStores } from '../../db/core-connection'
-import { SessionStore } from '../../db/core/session-store'
-import { encodeEnvelope } from '../../../../../../packages/agent/src/agent/dm/index.js'
+import { encodeEnvelope } from '@duya/agent-protocol'
 import {
   _resetWakeDispatcherForTest,
   _setWakeDispatcherDeps,
   _queuedWakeCount,
 } from '../wake-dispatcher'
-import type { SqliteDatabase } from '../../db/core/database'
 
-let nativeSqliteAvailable = true
-try {
-  const probe = new Database(':memory:')
-  probe.close()
-} catch {
-  nativeSqliteAvailable = false
-}
+const mailboxApi = vi.hoisted(() => ({
+  getByClientMsgId: vi.fn(async () => null as { content: string } | null),
+}))
+const hostSessionApi = vi.hoisted(() => ({
+  get: vi.fn(async () => null as { id: string } | null),
+  create: vi.fn(async (input: Record<string, unknown>) => input),
+  appendTimeline: vi.fn(async () => ({ writtenCount: 1 })),
+}))
+const localSessionApi = vi.hoisted(() => ({
+  readLocalSession: vi.fn(async () => null as { agentName?: string } | null),
+}))
+
+vi.mock('../../cli/desktop-host-api', () => ({
+  getDesktopHostLocalMailboxApi: () => mailboxApi,
+  getDesktopHostSessionApi: () => hostSessionApi,
+  getDesktopHostLocalSessionApi: () => localSessionApi,
+}))
 
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
@@ -44,41 +47,33 @@ function envelope(from = { id: 'bot-a', name: 'Alpha' }, text = 'Hello peer', cl
   })
 }
 
-describe.skipIf(!nativeSqliteAvailable)('defaultBotSessionCreator (core store)', () => {
-  let tempDir: string
-  let db: SqliteDatabase
-  let sessionStore: SessionStore
-
+describe('defaultBotSessionCreator (Host session API)', () => {
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-dm-test-'))
-    db = new Database(path.join(tempDir, 'core.db')) as unknown as SqliteDatabase
-    for (const m of SessionStore.migrations) m.up(db)
-    sessionStore = new SessionStore(db)
-    // Only `sessions` is consumed by the default creator; stub the rest.
-    _setCoreStoresForTesting({ sessions: sessionStore } as unknown as CoreStores)
+    hostSessionApi.get.mockReset()
+    hostSessionApi.get.mockResolvedValue(null)
+    hostSessionApi.create.mockReset()
   })
 
-  afterEach(() => {
-    _setCoreStoresForTesting(null)
-    try { db.close() } catch { /* already closed */ }
-    try { fs.rmSync(tempDir, { recursive: true, force: true }) } catch { /* best-effort */ }
+  it('creates a bot session carrying its profile and source metadata', async () => {
+    await defaultBotSessionCreator.createIfMissing('bot:target', 'target')
+    expect(hostSessionApi.get).toHaveBeenCalledWith('bot:target', { includeAllSessions: true })
+    expect(hostSessionApi.create).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'bot:target',
+      title: 'target',
+      status: 'active',
+      mode: 'chat',
+      permissionMode: 'auto',
+      agentType: 'bot',
+      agentName: 'target',
+      agentProfileId: 'target',
+      extensions: { source: 'bot' },
+    }))
   })
 
-  it('creates a bot session carrying agent_profile_id + extensions.source=bot', () => {
-    defaultBotSessionCreator.createIfMissing('bot:target', 'target')
-    const s = sessionStore.get('bot:target')
-    expect(s).not.toBeNull()
-    expect(s!.agentProfileId).toBe('target')
-    expect(s!.extensions.source).toBe('bot')
-    expect(s!.agentType).toBe('bot')
-  })
-
-  it('is idempotent on an existing session', () => {
-    defaultBotSessionCreator.createIfMissing('bot:target', 'target')
-    // The second call must short-circuit on the get() guard — a real
-    // duplicate INSERT would throw on the PRIMARY KEY.
-    defaultBotSessionCreator.createIfMissing('bot:target', 'target')
-    expect(sessionStore.get('bot:target')!.agentProfileId).toBe('target')
+  it('does not update an existing bot session', async () => {
+    hostSessionApi.get.mockResolvedValue({ id: 'bot:target' })
+    await defaultBotSessionCreator.createIfMissing('bot:target', 'target')
+    expect(hostSessionApi.create).not.toHaveBeenCalled()
   })
 })
 
@@ -104,28 +99,29 @@ describe('maybeDispatchAgentDm (orchestration)', () => {
     calls.length = 0
     _setBotSessionCreatorForTest(fakeCreator)
     _setWakeDispatcherDeps({ isLocked: () => true, runWake: async () => {} })
+    mailboxApi.getByClientMsgId.mockResolvedValue(null)
   })
 
   afterEach(() => {
     _resetWakeDispatcherForTest()
   })
 
-  it('ignores non-agent_dm kinds', () => {
-    const result = maybeDispatchAgentDm(dmRow({ kind: 'queued' }))
+  it('ignores non-agent_dm kinds', async () => {
+    const result = await maybeDispatchAgentDm(dmRow({ kind: 'queued' }))
     expect(result).toBe(false)
     expect(calls.length).toBe(0)
     expect(_queuedWakeCount('bot:bot-b')).toBe(0)
   })
 
-  it('ignores rows without a sessionId', () => {
-    const result = maybeDispatchAgentDm(dmRow({ sessionId: '' }))
+  it('ignores rows without a sessionId', async () => {
+    const result = await maybeDispatchAgentDm(dmRow({ sessionId: '' }))
     expect(result).toBe(false)
     expect(calls.length).toBe(0)
     expect(_queuedWakeCount('bot:bot-b')).toBe(0)
   })
 
-  it('ensures the target bot session and enqueues one agent.dm wake', () => {
-    const result = maybeDispatchAgentDm(dmRow())
+  it('ensures the target bot session and enqueues one agent.dm wake', async () => {
+    const result = await maybeDispatchAgentDm(dmRow())
     expect(result).toBe(true)
     // createIfMissing receives the fixed `bot:<agentId>` session id and the
     // parsed agent id (the `bot:` prefix stripped).
@@ -133,16 +129,16 @@ describe('maybeDispatchAgentDm (orchestration)', () => {
     expect(_queuedWakeCount('bot:bot-b')).toBe(1)
   })
 
-  it('falls back to row.id as the clientMsgId when missing', () => {
-    const result = maybeDispatchAgentDm(
+  it('falls back to row.id as the clientMsgId when missing', async () => {
+    const result = await maybeDispatchAgentDm(
       dmRow({ content: envelope({ id: 'bot-a', name: 'Alpha' }, 'hi', 'dm-1'), clientMsgId: null }),
     )
     expect(result).toBe(true)
     expect(_queuedWakeCount('bot:bot-b')).toBe(1)
   })
 
-  it('returns false for unparseable content but still ensures the session', () => {
-    const result = maybeDispatchAgentDm(dmRow({ content: 'not-json' }))
+  it('returns false for unparseable content but still ensures the session', async () => {
+    const result = await maybeDispatchAgentDm(dmRow({ content: 'not-json' }))
     expect(result).toBe(false)
     expect(calls.length).toBe(1) // session is still ensured best-effort
     expect(_queuedWakeCount('bot:bot-b')).toBe(0)
@@ -151,7 +147,7 @@ describe('maybeDispatchAgentDm (orchestration)', () => {
   it('drains and renders the dm prompt with the sender identity', async () => {
     const runWake = vi.fn(async () => {})
     _setWakeDispatcherDeps({ isLocked: () => false, runWake })
-    const result = maybeDispatchAgentDm(dmRow())
+    const result = await maybeDispatchAgentDm(dmRow())
     expect(result).toBe(true)
     await flush()
     expect(runWake).toHaveBeenCalledTimes(1)
@@ -176,7 +172,7 @@ describe('maybeDispatchAgentDm (orchestration)', () => {
     })
     const runWake = vi.fn(async () => {})
     _setWakeDispatcherDeps({ isLocked: () => false, runWake })
-    expect(maybeDispatchAgentDm(dmRow({ content, clientMsgId: 'dm-intent' }))).toBe(true)
+    expect(await maybeDispatchAgentDm(dmRow({ content, clientMsgId: 'dm-intent' }))).toBe(true)
     await flush()
     const prompt = runWake.mock.calls[0][1] as string
     expect(prompt).toContain('AUTOMATICALLY returned to Alpha')
@@ -195,7 +191,7 @@ describe('maybeDispatchAgentDm (orchestration)', () => {
     })
     const runWake = vi.fn(async () => {})
     _setWakeDispatcherDeps({ isLocked: () => false, runWake })
-    expect(maybeDispatchAgentDm(dmRow({ content, clientMsgId: 'dm-fyi' }))).toBe(true)
+    expect(await maybeDispatchAgentDm(dmRow({ content, clientMsgId: 'dm-fyi' }))).toBe(true)
     await flush()
     const prompt = runWake.mock.calls[0][1] as string
     expect(prompt).toContain('This is an FYI')
@@ -215,9 +211,7 @@ describe('maybeDispatchAgentDm (orchestration)', () => {
       timestampMs: Date.now(),
       clientMsgId: 'dm-deep',
     })
-    _setCoreStoresForTesting({
-      mailbox: { getByClientMsgId: () => ({ content: inboundContent }) },
-    } as unknown as CoreStores)
+    mailboxApi.getByClientMsgId.mockResolvedValue({ content: inboundContent })
     try {
       const replyContent = encodeEnvelope({
         from: { id: 'bot-a', name: 'Alpha' },
@@ -229,7 +223,7 @@ describe('maybeDispatchAgentDm (orchestration)', () => {
       })
       const runWake = vi.fn(async () => {})
       _setWakeDispatcherDeps({ isLocked: () => false, runWake })
-      const result = maybeDispatchAgentDm(
+      const result = await maybeDispatchAgentDm(
         dmRow({ content: replyContent, clientMsgId: 'dm-reply', source: 'bot:bot-a' }),
       )
       expect(result).not.toBe(false)
@@ -237,7 +231,7 @@ describe('maybeDispatchAgentDm (orchestration)', () => {
       expect(runWake).toHaveBeenCalledTimes(1)
       expect(runWake.mock.calls[0][1] as string).toContain('deep reply stays delivered')
     } finally {
-      _setCoreStoresForTesting(null)
+      mailboxApi.getByClientMsgId.mockResolvedValue(null)
     }
   })
 
@@ -250,9 +244,7 @@ describe('maybeDispatchAgentDm (orchestration)', () => {
       timestampMs: Date.now(),
       clientMsgId: 'dm-shallow',
     })
-    _setCoreStoresForTesting({
-      mailbox: { getByClientMsgId: () => ({ content: inboundContent }) },
-    } as unknown as CoreStores)
+    mailboxApi.getByClientMsgId.mockResolvedValue({ content: inboundContent })
     try {
       const replyContent = encodeEnvelope({
         from: { id: 'bot-a', name: 'Alpha' },
@@ -266,14 +258,14 @@ describe('maybeDispatchAgentDm (orchestration)', () => {
       const runWake = vi.fn(async () => {})
       _setWakeDispatcherDeps({ isLocked: () => false, runWake })
       expect(
-        maybeDispatchAgentDm(dmRow({ content: replyContent, clientMsgId: 'dm-reply-2', source: 'bot:bot-a' })),
+        await maybeDispatchAgentDm(dmRow({ content: replyContent, clientMsgId: 'dm-reply-2', source: 'bot:bot-a' })),
       ).toBe(true)
       await flush()
       expect(runWake).toHaveBeenCalledTimes(1)
       const prompt = runWake.mock.calls[0][1] as string
       expect(prompt).toContain('within limit')
     } finally {
-      _setCoreStoresForTesting(null)
+      mailboxApi.getByClientMsgId.mockResolvedValue(null)
     }
   })
 })

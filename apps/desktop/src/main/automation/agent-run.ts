@@ -17,12 +17,7 @@
 import * as http from 'node:http';
 import { BrowserWindow } from 'electron';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
-import { getCoreStores } from '../db/core-connection';
-// ipcMessageToNewEvent was used by the eager cron-prompt write that plan
-// 441 deleted. The import is no longer needed at runtime; kept commented
-// here so the historical reference survives in case future plan work
-// reintroduces an eager-write path.
-// import { ipcMessageToNewEvent } from '../ipc/core-db-adapters';
+import { getDesktopHostSessionApi } from '../cli/desktop-host-api';
 import { getLogger, LogComponent } from '../logging/logger';
 import { resolveCronProvider } from './provider';
 import { buildCronProviderConfig } from './provider-config';
@@ -57,7 +52,9 @@ export interface ChatRunOptions {
  * session-profile vocabulary falls back to 'auto' — the hard-coded default
  * cron sessions used before per-cron profiles existed.
  */
-function normalizeSessionPermissionMode(value: string | null | undefined): string {
+function normalizeSessionPermissionMode(
+  value: string | null | undefined,
+): 'default' | 'auto' | 'full_access' {
   return value === 'default' || value === 'auto' || value === 'full_access' ? value : 'auto';
 }
 
@@ -298,37 +295,34 @@ function runResultFailure(run: AutomationRunResult): Error | null {
 }
 
 /**
- * Create the core session row for a cron run. The Agent Server rejects a chat
- * POST when the session row is missing (router 404), so this MUST run first.
- * Idempotent: reuses an existing row for the same session id (runCronNow may
- * create it eagerly so the UI can open the run view immediately).
- *
- * Also pre-inserts the cron prompt as a durable user message (deterministic
- * id → idempotent across the eager runCronNow create + runCronInSession
- * reuse). The worker's same-content duplicate check at turn start reuses this
- * row instead of inserting a second copy at turn end, so opening the run view
- * shows the task immediately and the transcript stays clean.
+ * Create the Host session record for a cron run. The Agent Server rejects a
+ * chat POST when the session record is missing (router 404), so this MUST run
+ * first. Idempotent: reuses an existing record for the same session id
+ * (runCronNow creates it eagerly so the UI can open the run view immediately).
  */
-export function createCronSessionRow(params: {
+export async function createCronSessionRow(params: {
   sessionId: string;
   title: string;
   model: string;
   providerId: string;
   workingDirectory: string;
   cronId: string;
-  prompt: string;
   /** Per-cron permission profile (plan 574); invalid/absent values keep the legacy 'auto'. */
   permissionMode?: string | null;
-}): void {
-  const { sessions, messageLog } = getCoreStores();
-  const created = !sessions.get(params.sessionId);
+}): Promise<void> {
+  const api = getDesktopHostSessionApi();
+  const existing = await api.get(params.sessionId, { includeAllSessions: true });
+  const created = existing === null;
   if (created) {
-    sessions.create({
+    const workspace = await api.registerLocalDirectory(params.workingDirectory);
+    await api.create({
       id: params.sessionId,
       title: params.title,
       model: params.model,
       providerId: params.providerId,
-      workingDirectory: params.workingDirectory,
+      workspaceId: workspace.workspaceId,
+      workspaceRootId: workspace.rootId,
+      workspaceRelativePath: workspace.relativePath,
       status: 'active',
       mode: 'chat',
       // Cron runs are headless: there is no user watching the session in
@@ -588,14 +582,13 @@ export async function runCronInSession(job: AutomationCron, sessionId: string): 
     job.effort === 'low' || job.effort === 'medium' || job.effort === 'high' || job.effort === 'max'
       ? job.effort
       : 'off';
-  createCronSessionRow({
+  await createCronSessionRow({
     sessionId,
     title: `[Cron] ${job.name}`,
     model,
     providerId: provider.id,
     workingDirectory,
     cronId: job.id,
-    prompt: job.prompt,
     permissionMode,
   });
 

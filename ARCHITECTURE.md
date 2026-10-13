@@ -947,9 +947,16 @@ domain or database-owner cutover to Host.
   focus, key routing, and scroll window. `transcript-view.ts` is a pure
   block-to-markup renderer in the same package; the `@duya/cli/tui` entrypoint
   exposes these UI primitives without importing the Agent runtime.
+- `packages/cli/src/chat.ts` is the Host HTTP `duya chat` entry. On interactive
+  terminals it renders Host run events through `TUIApp`; `/resume` and
+  `/sessions` offer workspace session candidates in the slash-completion menu
+  and restore the selected session's persisted transcript. `/new`, `/clear`,
+  and `/exit` are handled in the same entry. Non-interactive terminals retain
+  the readline fallback.
 - `packages/agent/src/cli/tui-session.ts` is the temporary host adapter: it
-  connects run events, persistence, and Agent-specific completion candidates
-  to the TUI. The planned CLI/Run API migration will replace this adapter.
+  connects the legacy chat CLI's run events, persistence, and Agent-specific
+  completion candidates to the TUI. The planned CLI/Run API migration will
+  replace this adapter; it is separate from the Host HTTP `duya chat` entry.
 - Focus starts in the input. Tab switches to history when the input is empty
   (and inserts indentation when it has text); F6 switches focus at any time.
   Up/Down recalls prompt history in the input and selects transcript blocks in
@@ -1006,6 +1013,45 @@ Key wiring:
   catalog + invoke fallback until capability checks and request contracts are
   implemented. Existing deferred-schema utilities alone do not establish native
   search support.
+
+#### Tool Migration Status (2026-10-13)
+
+`@duya/capabilities` now owns the PowerShell specialization and its
+PowerShell-specific security/read-only policy. The old Agent `PowerShellTool`
+is a compatibility adapter that supplies the Agent-managed process starter,
+output directory, and Git reminder; `builtin.ts` still registers that adapter.
+`ToolRegistry`, `ToolSnapshot`, eager/deferred/hidden exposure, profile/mode
+filtering, and the permission/approval chain therefore remain Agent-owned.
+Moving a tool implementation into Capabilities does not move its production
+registration or execution owner.
+
+The 2026-10-13 extraction batch now places the filesystem tools, Bash and
+PowerShell, Todo, MemoryWrite, WriteStage1Policy, AskUserQuestion, Brief,
+Module, ImageGenerate, Vision, ReactToMessage, and SendArtifact implementations
+under `@duya/capabilities`. This is a source extraction seam, not the final
+architecture boundary: the package still contains a broad application-shaped
+tool contract and permission policy, while several tools still carry domain or
+interaction state. The old Agent paths are compatibility adapters/re-exports;
+Desktop's worker still reaches them through the Agent registry. CLI has
+separate Host-backed and legacy entry paths, so each consumer must be traced
+before claiming cutover. Exposure, approval ownership, cancellation, and
+durable result recording have not moved with these implementation files.
+
+The next cross-layer slice is the single authorization result between
+`ApprovalPort` and `ToolPort`: Runtime must authorize the resolved tool and
+final arguments once, bind that decision to the invocation/resource scope, and
+pass it to execution so the legacy executor cannot consume an approval a
+second time. Argument or environment changes must request authorization again.
+AskUserQuestion needs a separate interaction port for prompt, wait, answer,
+timeout, and cancellation; an answer must not be represented as permission.
+Move product permission rules to Host/Core and leave capability-local input,
+path, and patch safety invariants in place.
+
+Computer Use action names, error codes, and request/result envelopes now live
+in `@duya/agent-protocol`, shared by the Agent tool and Desktop Main IPC. The
+executor, tool exposure, approval flow, and OS-context bridge still use their
+existing Agent/Desktop production paths. Runtime/Host registration and actual
+tool execution have not moved in either slice.
 
 #### MCP Capability Core (plan 580)
 
@@ -1350,6 +1396,7 @@ packages/
 ├── agent-protocol/       @duya/agent-protocol - Transport-neutral wire contract
 ├── agent-runtime/        @duya/agent-runtime - Run execution engine
 ├── ai/                   @duya/ai - Multi-protocol LLM adapter
+├── capabilities/         @duya/capabilities - Filesystem and shell tool implementations
 ├── cli/                  @duya/cli - CLI tools
 ├── computer-use/         @duya/computer-use - Computer use capability
 ├── conductor/            @duya/conductor - Conductor component

@@ -102,9 +102,10 @@ export class WindowManager {
   /**
    * Feed a terminal key name. Returns true when the window consumed it.
    *
-   * An Enter on an empty filtered list closes nothing — there is nothing to
-   * submit — but still reports consumed, so the key cannot fall through into
-   * the editor underneath the modal.
+   * An Enter on an empty filtered list closes the window — there is nothing
+   * to submit, and acknowledging with Enter reads as "done here" — but
+   * submits nothing and still reports consumed, so the key cannot fall
+   * through into the editor underneath the modal.
    */
   handleKey(name: string): boolean {
     const spec = this.spec;
@@ -119,7 +120,10 @@ export class WindowManager {
       case 'enter': {
         const rows = this.visibleItems();
         const item = rows[this.selected];
-        if (item === undefined) return true;
+        if (item === undefined) {
+          this.close();
+          return true;
+        }
         this.spec = null;
         if (spec.onSubmit !== undefined) spec.onSubmit(item.value);
         return true;

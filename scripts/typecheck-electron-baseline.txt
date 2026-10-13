@@ -11,14 +11,14 @@
 # Each fix should let you delete or lower its line here via `--write`;
 # never hand-add a line to silence a new error.
 #
-# 303 known error(s) across 148 (file, code) key(s).
+# 299 known error(s) across 146 (file, code) key(s).
 apps/desktop/src/main/agents/db-bridge.ts TS2339 10
 apps/desktop/src/main/agents/db-bridge.ts TS2531 1
 apps/desktop/src/main/agents/db-bridge.ts TS2551 2
 apps/desktop/src/main/agents/db-bridge.ts TS7053 2
 apps/desktop/src/main/agents/server/index.ts TS2345 1
 apps/desktop/src/main/agents/server/router.ts TS2345 1
-apps/desktop/src/main/agents/server/router.ts TS2353 2
+apps/desktop/src/main/agents/server/router.ts TS2353 1
 apps/desktop/src/main/channels/connector-runtime.ts TS2341 1
 apps/desktop/src/main/channels/connector-runtime.ts TS2741 1
 apps/desktop/src/main/channels/feishu-connector.ts TS7006 28
@@ -127,8 +127,6 @@ apps/desktop/src/main/services/app-connections/token-service.ts TS2749 1
 apps/desktop/src/main/services/app-connections/token-vault.ts TS2345 1
 apps/desktop/src/main/services/app-connections/token-vault.ts TS2749 1
 apps/desktop/src/main/services/app-connections/tool-approvals.ts TS2749 1
-apps/desktop/src/main/services/auto-start.ts TS2339 1
-apps/desktop/src/main/services/auto-start.ts TS2353 2
 apps/desktop/src/main/services/browser/cookie-importer.ts TS2694 1
 apps/desktop/src/main/services/browser/daemon.ts TS18047 2
 apps/desktop/src/main/services/browser/webview-bridge.ts TS2554 4
@@ -150,7 +148,6 @@ apps/desktop/src/main/services/voice/index.ts TS2783 1
 apps/desktop/src/main/wake/wake-rearm.ts TS2537 2
 apps/desktop/src/main/wake/wake-rearm.ts TS2551 3
 packages/agent/src/agentsmd/nested-loader.ts TS7016 1
-packages/agent/src/process/agent-process-entry.ts TS1343 1
 packages/agent/src/prompts/bot/basicPrompt.ts TS1343 1
 packages/agent/src/prompts/hbs/HbsPromptSystem.ts TS1343 1
 packages/agent/src/session/db.ts TS1343 1

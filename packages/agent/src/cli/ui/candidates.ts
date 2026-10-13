@@ -69,14 +69,14 @@ const MAX_FILE_CANDIDATES = 800;
 export function slashCommandItems(): PopoverItem[] {
   return getSlashCommands()
     .filter((cmd) => isCommandAvailable(cmd, 'cli'))
-    .map((cmd) => ({
-      label: `/${cmd.name}`,
-      value: `/${cmd.name}`,
+    .flatMap((cmd) => [cmd.name, ...(cmd.aliases ?? [])].map((name) => ({
+      label: `/${name}`,
+      value: `/${name}`,
       description: cmd.description,
       kind: 'slash_command' as const,
       category: 'command' as const,
       group: 'settings' as const,
-    }));
+    })));
 }
 
 /**

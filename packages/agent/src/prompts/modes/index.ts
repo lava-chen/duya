@@ -8,6 +8,7 @@
  */
 
 import type { PromptProfile } from './types.js'
+import type { AgentProfile, PromptProfileOverride } from '@duya/agent-core'
 import { DEFAULT_PROMPT_PROFILE, SUBAGENT_TYPE_PROFILE_MAP, DEFAULT_SUBAGENT_PROFILE } from './types.js'
 
 // Re-export types and constants for callers that import from here.
@@ -56,7 +57,7 @@ export function resolveEnabledSections(profile: PromptProfile): Set<string> {
  * just pass it through (or default to empty).
  */
 export function getPromptProfileForAgentProfile(
-  agentProfile: import('../../agent-profile/types.js').AgentProfile
+  agentProfile: AgentProfile
 ): PromptProfile {
   return agentProfile.promptProfile ?? DEFAULT_PROMPT_PROFILE
 }
@@ -75,7 +76,7 @@ export function getPromptProfileForSubagentType(subagentType?: string): PromptPr
  * Now the override IS the profile — just return it (or default).
  */
 export function applyProfileOverrides(
-  override: import('../../agent-profile/types.js').PromptProfileOverride | undefined,
+  override: PromptProfileOverride | undefined,
   _base: PromptProfile = DEFAULT_PROMPT_PROFILE,
 ): PromptProfile {
   if (!override) return DEFAULT_PROMPT_PROFILE
@@ -89,7 +90,7 @@ export function applyProfileOverrides(
  * Backward-compat: previously resolved sections for an AgentProfile.
  */
 export function resolveEnabledSectionsForAgentProfile(
-  agentProfile: import('../../agent-profile/types.js').AgentProfile
+  agentProfile: AgentProfile
 ): Set<string> {
   return resolveEnabledSections(getPromptProfileForAgentProfile(agentProfile))
 }

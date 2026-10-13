@@ -1,220 +1,37 @@
-import type { Message, MessageContent, TokenUsage } from '../types.js';
-import type { MessageSource } from './message-source.js';
+import type { MessageContent } from '../types.js';
+import type {
+  AgentMessage,
+  MessageEntry,
+  CompactionEntry,
+  MessageTimelineEntry,
+  RuntimeContextSource,
+} from '@duya/agent-protocol/message-timeline';
 
-export type AgentMessageContent = string | MessageContent[];
-
-export type AgentMessageVisibility = 'visible' | 'hidden';
-
-export type RuntimeContextSource =
-  | 'agents_md'
-  | 'attachment'
-  | 'background_notification'
-  | 'mailbox'
-  | 'memory'
-  | 'mode'
-  | 'system'
-  | 'todo_gate'
-  | 'working_directory_switch'
-  | 'auto_continue'
-  | 'goal_summary'
-  | 'research_continuation'
-  | 'dead_loop_nudge'
-  | 'premature_stop'
-  | 'send_message_reminder'
-  | 'goal_reply_fingerprint'
-  | 'goal_continuation'
-  | 'custom';
-
-/**
- * Runtime context (AGENTS.md, mailbox, background notification, mode, memory,
- * attachment, system). Modeled as a user-role provider turn when projected.
- */
-export interface RuntimeContextMessage {
-  role: 'runtime_context';
-  id: string;
-  timestamp: number;
-  visibility: AgentMessageVisibility;
-  source: RuntimeContextSource;
-  content: AgentMessageContent;
-  metadata?: Readonly<Record<string, unknown>>;
-}
-
-/**
- * Compaction summary that stands in for compacted history. Derived from a
- * durable CompactionEntry rather than an independent historical record.
- */
-export interface CompactionSummaryMessage {
-  role: 'compaction_summary';
-  id: string;
-  timestamp: number;
-  visibility: AgentMessageVisibility;
-  summary: string;
-  compactionEntryId: string;
-  tokensBefore: number;
-  tokensAfter?: number;
-  metadata?: Readonly<Record<string, unknown>>;
-}
-
-/** Legacy `role: 'system'` message adapted from an old provider row. */
-export interface LegacySystemMessage {
-  role: 'legacy_system';
-  id: string;
-  timestamp: number;
-  visibility: AgentMessageVisibility;
-  payload: { content: AgentMessageContent; name?: string };
-}
-
-/** Legacy compact-boundary marker adapted from an old provider row. */
-export interface LegacyCompactionBoundaryMessage {
-  role: 'legacy_compaction_boundary';
-  id: string;
-  timestamp: number;
-  visibility: AgentMessageVisibility;
-  payload: {
-    compactBoundaryId?: string;
-    /** Original marker content, kept so persistence can rebuild the row. */
-    content: AgentMessageContent;
-    compactedMessageCount?: number;
-    compactedMessageIds?: readonly string[];
-  };
-}
-
-/** Legacy message with a role the new domain does not model. */
-export interface LegacyUnknownRoleMessage {
-  role: 'legacy_unknown_role';
-  id: string;
-  timestamp: number;
-  visibility: AgentMessageVisibility;
-  payload: { role: string; content: AgentMessageContent };
-}
-
-/**
- * Fixed registry of the framework's custom (non-provider) message roles.
- * The composite `AgentMessage` is the provider `Message` OR one of these.
- */
-export interface CustomAgentMessages {
-  runtimeContext: RuntimeContextMessage;
-  compactionSummary: CompactionSummaryMessage;
-  legacySystem: LegacySystemMessage;
-  legacyCompactionBoundary: LegacyCompactionBoundaryMessage;
-  legacyUnknownRole: LegacyUnknownRoleMessage;
-}
-
-/**
- * Unified agent message: the flat provider `Message` for user/assistant/tool
- * turns, unioned with the framework's custom message roles.
- */
-export type AgentMessage = Message | CustomAgentMessages[keyof CustomAgentMessages];
-
-// ─── Backward-compatible aliases ────────────────────────────────────────
-
-export type RuntimeContextAgentMessage = RuntimeContextMessage;
-export type CompactionSummaryAgentMessage = CompactionSummaryMessage;
-
-export type UserAgentMessage = Message & { role: 'user' };
-export type AssistantAgentMessage = Message;
-export type ToolResultAgentMessage = Message & { role: 'tool' };
-
-export type CoreAgentMessage =
-  | Message
-  | RuntimeContextMessage
-  | CompactionSummaryMessage;
-
-export interface MessageEntry {
-  type: 'message';
-  id: string;
-  parentId: string | null;
-  createdAt: number;
-  message: AgentMessage;
-  /**
-   * Message origin classifier (plan 489 P0.1). Written by the IPC adapter
-   * (`inferMessageSource`) or supplied explicitly by the producer
-   * (SendMessageTool → 'send_message'). Persisted in the rollout payload so
-   * projection queries can filter bot-direct visible rows at the data layer.
-   */
-  source?: MessageSource;
-}
-
-export interface CompactionEntry {
-  type: 'compaction';
-  id: string;
-  parentId: string | null;
-  createdAt: number;
-  summary: string;
-  firstKeptMessageId: string;
-  compactedMessageIds: readonly string[];
-  tokensBefore: number;
-  tokensAfter?: number;
-  strategy: string;
-  previousCompactionId?: string;
-  /**
-   * System-role context the legacy CompactionManager reinjected immediately
-   * after its summary marker (file/skill/tool/working-directory context).
-   * Kept on the checkpoint so it survives both the current projection and a
-   * restart, without being appended as a user history turn.
-   */
-  reinjectedSystemMessages?: readonly (string | readonly MessageContent[])[];
-}
-
-interface TimelineControlEntryBase {
-  id: string;
-  parentId: string | null;
-  createdAt: number;
-}
-
-/**
- * Records a model switch (e.g. user changed the active model/provider).
- * Non-message: it never contributes to the provider projection.
- */
-export interface ModelChangeEntry extends TimelineControlEntryBase {
-  type: 'model_change';
-  fromModel: string;
-  toModel: string;
-  fromProvider?: string;
-  toProvider?: string;
-  reason?: string;
-}
-
-/**
- * Records a mode switch (e.g. entering plan/research mode).
- * Non-message: it never contributes to the provider projection.
- */
-export interface ModeChangeEntry extends TimelineControlEntryBase {
-  type: 'mode_change';
-  fromMode: string;
-  toMode: string;
-  reason?: string;
-  source?: 'user' | 'agent' | 'system';
-}
-
-/**
- * Records a branch fork in the timeline (e.g. a sub-conversation detached from
- * a parent entry). Non-message: it never contributes to the provider projection.
- */
-export interface BranchEntry extends TimelineControlEntryBase {
-  type: 'branch';
-  branchId: string;
-  fromEntryId: string;
-  label?: string;
-}
-
-/**
- * Records an application-specific state marker (e.g. a checkpoint).
- * Non-message: it never contributes to the provider projection.
- */
-export interface CustomStateEntry extends TimelineControlEntryBase {
-  type: 'custom_state';
-  stateKind: string;
-  payload: unknown;
-}
-
-export type MessageTimelineEntry =
-  | MessageEntry
-  | CompactionEntry
-  | ModelChangeEntry
-  | ModeChangeEntry
-  | BranchEntry
-  | CustomStateEntry;
+export type {
+  AgentMessageContent,
+  AgentMessageVisibility,
+  RuntimeContextSource,
+  RuntimeContextMessage,
+  CompactionSummaryMessage,
+  LegacySystemMessage,
+  LegacyCompactionBoundaryMessage,
+  LegacyUnknownRoleMessage,
+  CustomAgentMessages,
+  AgentMessage,
+  RuntimeContextAgentMessage,
+  CompactionSummaryAgentMessage,
+  UserAgentMessage,
+  AssistantAgentMessage,
+  ToolResultAgentMessage,
+  CoreAgentMessage,
+  MessageEntry,
+  CompactionEntry,
+  ModelChangeEntry,
+  ModeChangeEntry,
+  BranchEntry,
+  CustomStateEntry,
+  MessageTimelineEntry,
+} from '@duya/agent-protocol/message-timeline';
 
 export interface AgentContextProjection {
   messages: AgentMessage[];

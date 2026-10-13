@@ -1,6 +1,6 @@
 /**
- * core-connection.ts — CoreDatabase singleton lifecycle for the Electron
- * main process. Initialized right after `initDatabaseFromBoot()` in main.ts.
+ * core-connection.ts — Desktop adapter for the core stores. The shared
+ * DatabaseHost in @duya/data owns the database handle and lifecycle.
  *
  * The core store (`duya-core.db` + rollout files) holds the six core
  * aggregates (messages, sessions, mailbox, tasks, permissions, locks).
@@ -18,60 +18,22 @@ import * as path from 'node:path';
 import {
   CoreDatabase,
   MessageLog,
-  SessionStore,
-  Mailbox,
-  TaskStore,
-  PermissionLedger,
-  LockStore,
-  GoalStore,
-  SpawnEdgeStore,
-  AttachmentStore,
-  ModeStateStore,
-  PendingWakeStore,
-  ProjectStore,
-  ResearchStore,
-  ConductorStore,
-  WorkflowRunStore,
-  RunStore,
+  createDesktopMessageLogPorts,
   LegacyImport,
-  migrateLegacyArchivedRows,
   type SqliteCtor,
   type Migration,
 } from './core';
+import { collectCoreDatabaseMigrations } from '@duya/data/core-data-host';
+import {
+  type CoreDataStores,
+} from '@duya/data/core-stores';
+import type { DataLogger } from '@duya/data/core-database';
 import { isSafeMode } from './connection';
+import { databaseHost } from './database-host';
 
-export interface CoreStores {
+export interface CoreStores extends CoreDataStores {
   coreDb: CoreDatabase;
   messageLog: MessageLog;
-  sessions: SessionStore;
-  mailbox: Mailbox;
-  tasks: TaskStore;
-  permissions: PermissionLedger;
-  locks: LockStore;
-  goals: GoalStore;
-  spawnEdges: SpawnEdgeStore;
-  attachments: AttachmentStore;
-  modeState: ModeStateStore;
-  /** Durable pending-wake markers (Plan 476 Phase 3 / Plan 500 P5.2). */
-  wakes: PendingWakeStore;
-  /** Project entity registry (plan 534 — migrated from memory-state). */
-  projects: ProjectStore;
-  /** Research subsystem store (Plan 423 — deep research). */
-  research: ResearchStore;
-  /** Conductor subsystem store (canvas/groups/widgets/elements/actions). */
-  conductor: ConductorStore;
-  /** Workflow run store (plan 552 Phase 4 — run metadata + snapshot blobs). */
-  workflowRuns: WorkflowRunStore;
-  /**
-   * Reference Run store (plan 586 — `runs` + `run_events`).
-   *
-   * Distinct from `workflowRuns` on purpose: a workflow run is a library
-   * feature, while a run here is the durable record of one agent turn. They
-   * will eventually share a lineage (`parentRunId` already exists on the
-   * manifest); until then two stores keep two different lifecycles from
-   * sharing one table.
-   */
-  runs: RunStore;
 }
 
 let stores: CoreStores | null = null;
@@ -84,8 +46,8 @@ let stores: CoreStores | null = null;
  * and new roots coincide (e.g. a fresh install or already-migrated data).
  */
 function migrateRolloutRoots(): void {
-  const { dbPath } = resolveDatabasePath();
-  const oldRoot = path.dirname(dbPath);
+  const { dbPath, legacyDbPath } = resolveDatabasePath();
+  const oldRoot = path.dirname(legacyDbPath ?? dbPath);
   const newRoot = resolveRolloutRoot();
   if (oldRoot === newRoot) return;
 
@@ -133,24 +95,7 @@ function migrateRolloutRoots(): void {
  * skipped (`stores.ts`, "Duplicate core migration id 26").
  */
 export function collectMigrations(): Migration[] {
-  return [
-    ...MessageLog.migrations,
-    ...SessionStore.migrations,
-    ...Mailbox.migrations,
-    ...TaskStore.migrations,
-    ...PermissionLedger.migrations,
-    ...LockStore.migrations,
-    ...GoalStore.migrations,
-    ...SpawnEdgeStore.migrations,
-    ...AttachmentStore.migrations,
-    ...ModeStateStore.migrations,
-    ...PendingWakeStore.migrations,
-    ...ProjectStore.migrations,
-    ...ResearchStore.migrations,
-    ...ConductorStore.migrations,
-    ...WorkflowRunStore.migrations,
-    ...RunStore.migrations,
-  ].sort((a, b) => a.id - b.id);
+  return collectCoreDatabaseMigrations();
 }
 
 /**
@@ -170,6 +115,18 @@ export function initCoreDatabase(sqlite: SqliteCtor): CoreStores | null {
   }
 
   const logger = getLogger();
+  const dataLogger: DataLogger = (event) => {
+    const component = event.category === 'database-migration'
+      ? LogComponent.DBMigration
+      : LogComponent.DB;
+    if (event.level === 'error') {
+      logger.error(event.message, event.error, event.data, component);
+    } else if (event.level === 'warn') {
+      logger.warn(event.message, event.data, component);
+    } else {
+      logger.info(event.message, event.data, component);
+    }
+  };
   const filename = resolveCoreDatabasePath();
   const rolloutRoot = resolveRolloutRoot();
   const attachmentsRoot = resolveAttachmentsRoot();
@@ -177,31 +134,20 @@ export function initCoreDatabase(sqlite: SqliteCtor): CoreStores | null {
   logger.info('Initializing core database', { filename, rolloutRoot, attachmentsRoot }, LogComponent.DB);
 
   try {
-    const coreDb = new CoreDatabase({
+    // Relocate legacy rollout files before the Data owner begins serving stores.
+    migrateRolloutRoots();
+
+    const coreDataHost = databaseHost.openCoreDatabase({
       filename,
       sqlite,
-      migrations: collectMigrations(),
+      rolloutRoot,
+      attachmentsRoot,
+      messageLogPorts: createDesktopMessageLogPorts(),
+      logger: dataLogger,
     });
-    const db = coreDb.db;
-
     stores = {
-      coreDb,
-      messageLog: new MessageLog(db, rolloutRoot),
-      sessions: new SessionStore(db),
-      mailbox: new Mailbox(db),
-      tasks: new TaskStore(db),
-      permissions: new PermissionLedger(db),
-      locks: new LockStore(db),
-      goals: new GoalStore(db),
-      spawnEdges: new SpawnEdgeStore(db),
-      attachments: new AttachmentStore(db, attachmentsRoot),
-      modeState: new ModeStateStore(db),
-      wakes: new PendingWakeStore(db),
-      projects: new ProjectStore(db),
-      research: new ResearchStore(db),
-      conductor: new ConductorStore(db),
-      workflowRuns: new WorkflowRunStore(db),
-      runs: new RunStore(db),
+      coreDb: coreDataHost.database,
+      ...coreDataHost.stores,
     };
 
     // Plan 329: auto-run the legacy import on first boot. Runs before any
@@ -211,21 +157,7 @@ export function initCoreDatabase(sqlite: SqliteCtor): CoreStores | null {
     // naturally retried on the next startup. A fresh user (no legacy file)
     // writes a `none@<ts>` marker so startup stops probing.
     try {
-      // First relocate any rollout files written under the old
-      // `<databases>/sessions/` layout to `~/.duya/sessions/` (Codex-style).
-      migrateRolloutRoots();
-
-      // Plan 582 (G1 follow-up, §8.1): re-file archive rows that Plan 549
-      // wrote on the old single-file convention. Runs before any session
-      // service accepts requests, so no archived session can be read in its
-      // broken (empty-history) state. Idempotent, and a no-op for users with
-      // nothing archived under 549.
-      const archiveReport = migrateLegacyArchivedRows(db, rolloutRoot);
-      for (const sessionId of archiveReport.migrated) {
-        stores.messageLog.invalidateRolloutPathCache(sessionId);
-      }
-
-      const impl = new LegacyImport(stores, resolveDatabasePath().dbPath, sqlite);
+      const impl = new LegacyImport(stores, resolveDatabasePath().dbPath, sqlite, dataLogger);
       if (impl.needsImport()) {
         const report = impl.run();
         logger.info(
@@ -254,6 +186,8 @@ export function initCoreDatabase(sqlite: SqliteCtor): CoreStores | null {
     logger.info('Core database initialized', undefined, LogComponent.DB);
     return stores;
   } catch (error) {
+    databaseHost.closeCoreDatabase();
+    stores = null;
     logger.error(
       'Core database initialization failed',
       error instanceof Error ? error : new Error(String(error)),
@@ -285,8 +219,7 @@ export function getCoreStoresOrNull(): CoreStores | null {
  * Close the core database (graceful shutdown). Idempotent.
  */
 export function closeCoreDatabase(): void {
-  if (!stores) return;
-  stores.coreDb.close();
+  databaseHost.closeCoreDatabase();
   stores = null;
 }
 
@@ -297,5 +230,6 @@ export function closeCoreDatabase(): void {
  * (mirrors the `setDb(null)` pattern in `connection.ts`).
  */
 export function _setCoreStoresForTesting(s: CoreStores | null): void {
+  databaseHost.closeCoreDatabase();
   stores = s;
 }

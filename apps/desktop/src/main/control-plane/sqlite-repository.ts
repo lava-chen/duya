@@ -4,46 +4,25 @@
  *
  * ## It is a binding, not a second database
  *
- * Every method below is a delegation to a store the host ALREADY opened:
- * `getCoreStores()` for `duya-core.db` and `getDatabase()` for the legacy
- * `duya-main.db`. This file executes no DDL, runs no migration, and constructs
- * no `Database`. If it had, the port would have created a second owner for a
- * fact the host already owns — which is the defect the port exists to prevent,
- * not a design choice available to it.
+ * Synchronous repository methods delegate only to the CoreStores the host
+ * already opened for `duya-core.db`. Approval capabilities are async Host API
+ * clients. This file executes no DDL, runs no migration, and constructs no
+ * `Database`.
  *
  * `ownership` is the assertion a reader can make instead of taking that on
  * trust, and {@link bindCoreStores} takes the stores as a PARAMETER so a test
  * can bind a fixture and prove the adapter adds no connection of its own.
  *
- * ## Why the approval surface spans two connections (the finding)
+ * ## Approval storage is a Host API dependency
  *
- * The plan's condition is one implementation reusing THE existing connection and
- * migration owner. Measured, the approval half does not fit that sentence:
- *
- *  - the request LEDGER (`permission_requests`) is a core-DB aggregate, owned
- *    by `PermissionLedger`'s migration id=6;
- *  - the decision that actually AUTHORISES is `tool_approval_state`, whose
- *    first-wins CAS (`resolveToolApproval`) is the function both the bot card and
- *    R2.4's `recordPermissionDecision` go through — and that table is created by
- *    `ensureToolApprovalTables()` on the LEGACY connection.
- *
- * So one authorisation fact is durably owned by two different files with two
- * different migration owners, reachable through one bridge action each
- * (`permission:resolve` and `toolApproval:resolve`, `agents/db-bridge.ts:1357`
- * and `:917`). That is reported as the finding it is. It is NOT papered over by
- * opening a third connection or by pretending the ledger is the authority, and
- * it is not "fixed" here because moving `tool_approval_state` onto the core DB
- * is a schema migration of a live table — a different slice with its own
- * acceptance, and the one place where doing it quietly would be worst.
+ * Permission request rows and approval-card rows have separate schemas, but
+ * this repository no longer opens or reaches either storage surface. It is
+ * given the asynchronous Host APIs at composition time, so the repository
+ * cannot accidentally fall back to a Main-process SQLite handle when the
+ * Host transport becomes process-remote.
  */
 
-import {
-  listToolApprovalRules,
-  resolveToolApproval,
-  upsertToolApprovalRule,
-} from '../db/toolApprovalState';
 import type { CoreStores } from '../db/core-connection';
-import { getLogger, LogComponent } from '../logging/logger';
 import type {
   ApprovalRepository,
   ArtefactRepository,
@@ -53,21 +32,8 @@ import type {
   GoalTaskRepository,
   RepositoryOwnership,
   RunRepository,
-} from './repository-port';
-
-/**
- * The legacy connection's type, without importing `db/connection`.
- *
- * `db/connection.ts` imports `electron` (for `app.getPath`), so importing it
- * here would make the Control Plane repository unloadable without an Electron
- * runtime — and therefore untestable. The ACCESSOR is injected by composition
- * instead, which is where that import already lives. The port gains a
- * dependency-injection seam; it does not gain a dependency.
- */
-export type LegacyDatabaseHandle = Parameters<typeof resolveToolApproval>[0];
-
-/** Reads the legacy connection, or `null` when it is not open. */
-export type LegacyDatabaseAccessor = () => LegacyDatabaseHandle | null;
+} from '@duya/host/repository-port';
+import type { HostPermissionRequestApiV1, HostToolApprovalApiV1 } from '@duya/agent-protocol';
 
 // ── ownership ─────────────────────────────────────────────────────────────
 
@@ -76,14 +42,7 @@ export const CORE_OWNERSHIP: RepositoryOwnership = {
     {
       owner: 'initCoreDatabase',
       file: 'duya-core.db',
-      aggregates: ['RunStore', 'AttachmentStore', 'PermissionLedger', 'GoalStore', 'TaskStore', 'Mailbox'],
-    },
-    {
-      // The finding, not a preference: the first-wins authorisation CAS lives
-      // here while its request ledger lives on the connection above.
-      owner: 'initDatabaseFromBoot',
-      file: 'duya-main.db',
-      aggregates: ['tool_approval_state', 'tool_approval_rules'],
+      aggregates: ['RunStore', 'AttachmentStore', 'GoalStore', 'TaskStore', 'Mailbox'],
     },
   ],
   migrationOwner: 'collectMigrations',
@@ -92,12 +51,9 @@ export const CORE_OWNERSHIP: RepositoryOwnership = {
     'runs',
     'run_events',
     'attachments',
-    'permission_requests',
     'session_goals',
     'tasks',
     'mailbox',
-    'tool_approval_state',
-    'tool_approval_rules',
   ],
 };
 
@@ -118,7 +74,7 @@ export function connectionOwners(ownership: RepositoryOwnership): readonly Conne
  */
 export type CoreStoreAggregates = Pick<
   CoreStores,
-  'runs' | 'attachments' | 'permissions' | 'goals' | 'tasks' | 'mailbox'
+  'runs' | 'attachments' | 'goals' | 'tasks' | 'mailbox'
 >;
 
 /**
@@ -128,7 +84,11 @@ export type CoreStoreAggregates = Pick<
  * is what lets {@link createControlPlaneRepository} be exercised against a
  * fixture without opening a database.
  */
-function bindCoreStores(stores: CoreStoreAggregates, legacyDatabase: LegacyDatabaseAccessor): ControlPlaneRepository {
+function bindCoreStores(
+  stores: CoreStoreAggregates,
+  permissionRequests: HostPermissionRequestApiV1,
+  toolApprovals: HostToolApprovalApiV1,
+): ControlPlaneRepository {
   const runs: RunRepository = {
     createRun: (input) => stores.runs.createRun(input),
     appendEvents: (envelopes) => stores.runs.appendEvents(envelopes),
@@ -146,42 +106,20 @@ function bindCoreStores(stores: CoreStoreAggregates, legacyDatabase: LegacyDatab
   };
 
   const approvals: ApprovalRepository = {
-    createRequest: (input) => stores.permissions.create(input),
-    getRequest: (id) => stores.permissions.get(id),
-    resolveRequest: (id, input) => stores.permissions.resolve(id, input),
-    listPendingRequests: (sessionId) =>
-      sessionId === undefined ? stores.permissions.listPending() : stores.permissions.listPending(sessionId),
-
-    // The legacy half. Resolved per call because the legacy connection is
-    // opened by a different boot step than the core one, so binding it once at
-    // composition time would capture "not open yet" for the life of the process.
-    resolveDecision: (id, decision) => {
-      const db = legacyDatabase();
-      if (!db) {
-        getLogger().warn('Approval decision refused: the legacy database is not open', {}, LogComponent.DB);
-        return { claimed: false, row: null };
-      }
-      const outcome = resolveToolApproval(db, id, decision);
-      // `undefined` is "no such request", which is NOT the same as "already
-      // decided". Both refuse to execute, and the caller must be able to tell
-      // them apart: the first is a stale id, the second is a duplicate answer
-      // to a question that was already answered.
-      if (outcome === undefined) return { claimed: false, row: null };
-      return { claimed: outcome.claimed, row: { decision: outcome.row.decision ?? null } };
+    createRequest: (input) => permissionRequests.createPermissionRequest(input),
+    getRequest: (id) => permissionRequests.getPermissionRequest(id),
+    resolveRequest: (id, input) => permissionRequests.resolvePermissionRequest(id, input),
+    listPendingRequests: (sessionId) => permissionRequests.listPendingPermissionRequests(sessionId),
+    resolveDecision: async (id, decision) => {
+      const result = await toolApprovals.resolveToolApproval(id, decision);
+      return {
+        claimed: result?.claimed ?? false,
+        row: result ? { decision: result.row.decision } : null,
+      };
     },
-    upsertGrantRule: (scopeType, scopeId, toolName) => {
-      const db = legacyDatabase();
-      if (!db) {
-        getLogger().warn('Approval grant refused: the legacy database is not open', { scopeType }, LogComponent.DB);
-        return;
-      }
-      upsertToolApprovalRule(db, scopeType, scopeId, toolName);
-    },
-    listGrantRules: (scopeType, scopeId) => {
-      const db = legacyDatabase();
-      if (!db) return [];
-      return listToolApprovalRules(db, scopeType, scopeId);
-    },
+    upsertGrantRule: (scopeType, scopeId, toolName) =>
+      toolApprovals.upsertToolApprovalRule({ scopeType, scopeId, toolName }),
+    listGrantRules: (scopeType, scopeId) => toolApprovals.listToolApprovalRules({ scopeType, scopeId }),
   };
 
   const goalsAndTasks: GoalTaskRepository = {
@@ -243,14 +181,9 @@ export interface CreateRepositoryOptions {
    * nothing) and costs one argument at one call site.
    */
   readonly stores: CoreStoreAggregates;
-  /**
-   * Reads the legacy `duya-main.db` handle, or `null` when it is not open.
-   *
-   * Injected for the same reason: `db/connection` imports `electron`.
-   * Composition passes `getDatabase` — the same handle every other legacy
-   * caller uses, so no second connection is created.
-   */
-  readonly legacyDatabase: LegacyDatabaseAccessor;
+  /** Host-owned approval APIs. Storage remains behind the async boundary. */
+  readonly permissionRequests: HostPermissionRequestApiV1;
+  readonly toolApprovals: HostToolApprovalApiV1;
 }
 
 export function createControlPlaneRepository(options: CreateRepositoryOptions): ControlPlaneRepository {
@@ -260,7 +193,7 @@ export function createControlPlaneRepository(options: CreateRepositoryOptions): 
       'Control Plane repository needs the core aggregates: createControlPlaneRepository() must be called after initCoreDatabase()',
     );
   }
-  bound = bindCoreStores(options.stores, options.legacyDatabase);
+  bound = bindCoreStores(options.stores, options.permissionRequests, options.toolApprovals);
   return bound;
 }
 

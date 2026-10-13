@@ -31,6 +31,7 @@ import type {
   ProviderId,
   TokenSet,
 } from '../types.js';
+import type { MaybePromise } from '../connection-store-port.js';
 import { toStatusDTO } from '../types.js';
 
 const COMPONENT = 'AppConnectionFlow' as LogComponent;
@@ -62,7 +63,7 @@ export interface AuthorizationCallbacks {
    * Persist a connection record. The orchestrator fills in
    * `status='connected'`, account identity, scopes, and expiry.
    */
-  upsertConnection: (conn: AppConnection) => AppConnection;
+  upsertConnection: (conn: AppConnection) => MaybePromise<AppConnection>;
   /** Store the token set in the encrypted vault. */
   storeTokens: (connectionId: string, tokens: TokenSet) => void;
 }
@@ -241,7 +242,7 @@ export async function startAuthorization(
     }
     throw err;
   }
-  const persisted = callbacks.upsertConnection(conn);
+  const persisted = await callbacks.upsertConnection(conn);
 
   logger.info(
     'App Connection: authorization complete',

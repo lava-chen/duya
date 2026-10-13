@@ -4,6 +4,15 @@
 > 本文件是这三者的**唯一状态源**。600/601/602 各自的 README 保留为契约与推导过程,
 > 但"现在做到哪、下一步做什么"只在这里回答,且只回答一次。
 
+## 当前状态（2026-10-10，`master@95e1fc7c`）
+
+**610 仍为 Active，尚未完成。** A3 的生产轮次循环迁移已由 `4444c7cf` 落地并随 PR #262 合并；当前 `DuyaAgent.ts` 已没有 `streamChat` 方法。索引里“A3 是当前 next action”的说法过时。
+
+**A4 前置清理已完成（2026-10-10）：3 个测试文件里 16 处旧 `duyaAgent.streamChat` 调用归零**（处置：`streaming-lifecycle.test.ts` 与 `AgentLoop.test.ts` 整文件删除，`DuyaAgent.test.ts` 剥离为纯状态用例；逐文件依据见 [90 执行日志](90-execution-log.md)）。六场景 runtime 层验收 **17/17** 同 HEAD 实测记录在同一日志。
+
+**当前第一步归 A4 主体：同引擎接 CLI / eval**（600 §Step 4 的原始交付），以及存储拒绝 / worker 退出两场景的**产品级**变体（真实持久层、真实 worker 进程）——runtime 层与产品轮次层现有覆盖不替代这一步。A5–A7 与 B2–B3 仍是后续切片。
+
+---
 ## 0. 为什么需要这一份
 
 三份计划各自声明了**一个**"唯一 next action",而它们之间没有共同的编号空间:
@@ -268,103 +277,8 @@ B 线在 B1 之后才与 A5 交汇;C 线全程可并行且不阻塞任何人。
 | **A1** | ✅ **已合并**(PR #219 / `908b5baf`)。原 open 项已答:新增 finding 是**真违规**,不是 `ports.ts` 过读(实测该文件只满足 1/3 子句,两处正则命中都在注释里) | `mutation-proof-a1.mjs` **5/5**;`architecture:check` 无新增 |
 | **A0** | ✅ §3.1 + §3.3 + 门禁 **G10** 已落。§3.2 plugin-core 二分**未做**:实测它对 renderer 闭包贡献 21 文件、**0** Node 内建,barrel 已排除真正碰 Node 的三个模块 —— 是独立切片不是本片尾巴 | 浏览器入口闭包 **0/789** Node 内建;G10 变异证明 `FAIL 2/790` → 回退 `PASS 0/789` |
 | **A2** | ✅ **已合并**(PR #222 / `a046cdf6`)。顺带修掉 #214 的 `TS2393` 重复 `publish` | `935/935 tolerated`(baseline 930 未动);`644/652 in packages/agent-runtime` 与 master 同一失败集;`typecheck:all` exit 0 |
-| **A3** | **判据已重定义并合入**(PR #223 / `3f53bcf0`)。原描述"把 `ToolExecutionPipeline` 移出闭包"**已证明做不成**:三个探针显示搬去 `packages/agent` 或 `agent-runtime` 都让 G7 从 1 变 2,因为 worker 入口是进程根、循环必须被静态加载。G7 现按**深度 0/1** 判定,且已解开测试里"把 G7 钉死为红"的断言,使正确的修复不会反而失败。**下一步:先建「运行组装层」,再谈切换 —— 切换本身不是换驱动。** ⚠️ **2026-10-06 实测更正**:此前这里写的是「执行原子切换,运行体已存在,这不是实现问题」,**该判断被推翻**。引擎侧确实齐了(`RunEngineImpl` 是真实循环拥有者,`run-engine.ts:355`;`buildEnginePorts` 九个成员全绑,含 #236 的 `interTurn` 与 #242 的 `compaction`;两个 blocker 均已消解),**但宿主侧一行都不存在**:
-- `buildEnginePorts` 的**生产调用方为零** —— 非测试命中只有 `agent-process-entry.ts:97` 与 `:3003` **两处注释**;
-- 入口里**没有构造** `RunController` / `RunSession` / `RunEventEmitter` —— 唯一出现是 `:2999` 的注释;
-- **没有** live 路径的 `LegacyEngineSources` 工厂,也没有 `RunManifest` + `RunInputSnapshot` 的生产装配点(`RunExecutionRequest` 两者皆需,`ports.ts:1104-1107`);
-- `turnOutput` **无人供给**(`run-engine-ports.ts:220` 可选,`:205-219` 明写「在切换把它们抬出来之前没有什么可绑的」)。
-
-仓库自己已经这么写着:`engine-drain-carryover.test.ts:78-89` ——「**NO host supplies one** … 供给一个真 emitter 本身就是切换的一部分」;计划日志说了三次:「**切换不是换驱动,是要在 5291 行入口里建一整层**」。
-
-**尚未做的五件事(顺序有依赖):** ① 建运行组装层:emitter/session、`LegacyEngineSources` 工厂、manifest/input 装配、`turnOutput` 供给(`turnOutput` 的效果读 `DuyaAgent` 上 `_pushDurable` 等 private 方法,**先例是 #236 加的 public 接缝 `claimInterTurn`**,它旁边的注释写着「PUBLIC, and it is the whole reason `_sweepInterTurn` exists」);② 入口驱动引擎;③ 删掉遗留循环;④ ~~去掉 `agent-process-entry.ts` 的 `duyaAgent` 值 import~~ ⚠️ **2026-10-06 再更正:这一步不成立。** 实测入口**自己构造 agent**(`agent = new duyaAgent({...})`),用了 **35 个不同的 `agent.*` 成员共 73 处**(42 处在 `handleChatStart` 之外),而 `composeLegacyRunPorts(agent: duyaAgent, ...)` **把 agent 当第一个参数**。**切换只会让入口更依赖 `duyaAgent`,不是更少。** G7 转绿的原因是 `DuyaAgent.ts` **不再满足循环判据**,不是 import 没了。
-
-**循环删除范围(⚠️ 2026-10-06 第四次更正,前三次都错):全仓只有**一个**轮次循环。** 判据形状:`while (!this.abortController.signal.aborted)` 打开的那个循环体,内有**恰好两条** `for await` 腿 —— 一条遍历 `streamGenerator`(model 腿),一条遍历 `executor.getRemainingResults()`(tool 腿)。此前所有「N 行、行号在 M」的记载一律作废,包括本文件上一版本自己写的。
-
-**为什么连着错三次:根因是 `turnLoopSites()` 返回的行号不能当文件行号用。** 它被传入的是**去注释**源码(`code(abs)`),内部 `lineAt()` 数的是**去注释后**的行,所以它的输出是**去注释坐标系**的偏移,不是文件里的行号。实测:`turnLoopSites(DuyaAgent 去注释源码)` 报 `line: 1982`,而同一个循环在**真实文件**里不是 1982。**把门禁的输出抄成行号,等于换一种方式重新引入同一个错误。**
-
-**唯一权威与复现方式** —— 不要引用行号,引用形状。要拿当前位置就跑:
-
-```bash
-node -e "import('./scripts/architecture/boundary-gates.mjs').then(m=>console.log(m.isTurnLoopModule(require('fs').readFileSync('packages/agent/src/agent/DuyaAgent.ts','utf8').replace(/\/\*[\s\S]*?\*\//g,'').replace(/^[ \t]*\/\/.*$/gm,''))))"
-```
-
-实测 `isTurnLoopModule(DuyaAgent 去注释源码) === true`,`agent-process-entry.ts` 同样入参下为 `false` —— 这正是 G7 报 depth-1 的原因(入口一跳到达一个仍然满足循环判据的模块)。**G7 转绿的判据是 `DuyaAgent.ts` 不再满足 `turnLoopSites`,与 import 无关。**
-
-**⚠️ 2026-10-06 实测,这条判据对「引擎的写法」永远不成立,A3-2b6 的验收必须知道:** `TURN_LOOP_SHAPE = { legs: 2 }` 要求**两条 `for await` 出现在循环体内**。实测两侧的写法根本不同:
-
-| | 循环 | 两条 `for await` 在哪 |
-| --- | --- | --- |
-| 遗留 `DuyaAgent` | `for`/`while` 头打开的循环体 | **内联在循环体内** |
-| 引擎 `RunEngineImpl` | `for (let turn = 1; ; turn++) {` | **在 `#streamModel` / `#drainOutcomes` 两个私有方法里,比循环体深一帧** |
-
-实测证据:引擎那个循环体的花括号配平后是 **286 行**,内含 `for await` **0 条**;两条腿分别在 `#streamModel` 与 `#drainOutcomes` 里,被循环体**调用**(调用点在循环体内部)。所以 `turnLoopSites(run-engine.ts 去注释源码) === []` **不是缺陷,是架构的必然结果**:引擎把两条腿**抽成了方法**,门禁的 `legs` 判据只看循环体,于是永远看不见它。
-
-**因此 A3-2b6 之后 G7 会转绿,但那个绿与「循环被删干净了」在结构上无法区分。** 判据对**分解方式**敏感,不对**职责**敏感 —— 一个把轮次循环整个委托出去的模块会被判为「不是轮次循环」。
-
-**A3-2b6 的验收因此必须包含一条正向证明,不能只看门禁变绿:** 引擎在切换后**确实**驱动 ≥2 轮(模型腿 + 工具腿各被调用 ≥1 次),并且有一个**非恒等**的测试证明「循环存在时判据仍能报出」。只有「门禁红→绿」这一条,就是把 `legs: 2` 这个代理指标当成职责本身。
-
-**⚠️ 第四点「去掉 `agent-process-entry.ts:76` 的值 import」同样不成立。** 入口**自己构造 agent**(`new duyaAgent({...})`,`:1929`),用了 **35 个 `agent.*` 成员共 73 处**(42 处在 `handleChatStart` 之外),而 `composeLegacyRunPorts(agent: duyaAgent, ...)` **把 agent 当第一个参数**。**切换让入口更依赖 `duyaAgent`。** G7 转绿的原因是 `DuyaAgent.ts` 不再满足循环判据 —— 判据读**去注释**源码(`code(abs)`),而 `tokenize` 跳过字符串但**不跳注释**,5000 行散文里的花括号会截断块扫描。
-
-**剩余顺序(2026-10-06 第七次更正;①② 已落,此前列的三条依据有两条被实测推翻):**
-
-**① 压缩缝 —— ✅ 已落(#251 + #253)。** 原判「包装不是抽取」成立:`compactionManager.compact(` **零生产调用点**,遗留实际走 `compactionCoordinator.runPreTurn`,它**已经返回** `{systemPromptContent, messages}` 且 `onEvent` 就是 reporter。#251 把 `decide`/`run` 的切分**做在 coordinator 上**(`decidePreTurn` + `executePreTurn`),因为整个 `runPreTurn` 包成 `run` 会让 `decide` 无条件返回 `compact`,而 `runCompactionPass` 在两者之间发 `compaction.started` —— **每一轮都会发一个没有终态的 started**。
-
-**#253 补齐了另外两条路径。** 原判它们「被按名字 decline」,实测**更糟:它们根本不是任何 port 能够到的东西** —— 两段各约 55 行**内联**在 `streamChat` 循环体里,唯一出路是把它们抬到 coordinator 上。现在是三道闸,因为是三个不同的问题:`decidePreTurn`(触发线 + 冷却)、`decidePreflightOverflow`(**硬**上限 + 无冷却)、`decideEmergency`(provider 错误文本 + 探针,不重置冷却)。`DuyaAgent` 的两个内联点现在调**同一批** coordinator 方法,一份权威而不是两份。
-**保留而非「顺手整理」的三处决定(各自都有变异证明):** ① preflight 用**硬**上限而不是触发线 —— 那正是这条路径存在的意义;② image 分支保留 `force: true` + `trigger: 'auto'`,因为抑制环只对 `auto` 折叠失败;③ emergency 在探针抛异常时**fail closed**。
-
-**② 组装缝 —— 原判三条依据有两条被推翻,剩下的一条才是真的。**
-- ~~「`injectTurnTimestampReminders` 在 sweep 之前跑,会漏掉 mailbox 注入的消息」~~ **不成立。** `isHumanTurnUserMessage` 在 `metadata.runtimeContext === true` 时返回 false,而遗留在投影之后追加的每一条消息都带这个标记 —— **它们在遗留里本来就没有 reminder**。实测四个后续变换全部产出该标记。
-- ~~「引擎在重试路径上不重新 assemble」~~ **不成立。** 引擎走 `turn -= 1; continue` 回到 `assemble`,遗留同样对称。#254 已加测试钉住。
-- ~~「加一个 `ContextPort.finalize` 钩子」~~ **建不出来。** 那条规则读**七个**字段,而 `ModelMessage` 只带**两个**(`role`、`content`),其余在边界上已经没了。#254 用一条**反向的 `@ts-expect-error` 类型守卫**把这个事实钉住(字段一变 `typecheck` 就红)。
-- **真的那条:`assemble` 的产物在压缩替换 transcript 时被丢弃。** 这是宿主侧的工作,在 `run-engine-ports.ts` 与 `run-engine-compaction.ts`。
-
-**③ 翻转驱动 + 删掉那个唯一的轮次循环(判据形状见上,不引用行号)。** | G7 depth-1 finding 转绿;`mutation-proof-a1.mjs` 仍 **7/7**;`live-turn-single-driver.test.ts` 仍断言 driver 总数 === 1;**外加上面那条正向证明,否则这个绿是空的**。**#252 已先把这个绿变成「挣来的」而不是「看不见」**: 判据现在能看穿「两条腿被抽成方法」的分解形状,`isTurnLoopModule(run-engine.ts)` 已从 `false` 变 `true`,所以删掉遗留循环后的绿是「循环确实搬到了 runtime 包」而不是「没人看得见任何循环」 |
-> **§4 那个未决问题的答案:真违规,不是 `ports.ts` 已知过读。** 它就是真正的轮次循环,
-> **归属 A3,不归属 A1** —— A1 的活已经干完,红的是 A3 的待办,门禁把它如实报出来,
-> 正是「门禁是事实报告,不是待办清单」的预期行为。
-
-> ⚠️ **A2 的完成标志此前自相矛盾(2026-10-06 实测)。** 原文写「`module-dependency-permitted`
-> **375 条无新增**」——「375」与「无新增」不可能同时是判据:375 这个数本身就是新增的 5 条。
-> 怎么测的:`architecture-policy.yaml` 的 `selfTest` 块里存的就是这个期望值。
-> - `205a4cd4`:`module-dependency-permitted: 370`(`architecture-policy.yaml:1182`)
-> - `origin/master`(`a046cdf6`,PR #222 之后):`module-dependency-permitted: 375`
-> - 在 `205a4cd4` 上跑 `node scripts/architecture/architecture-check.mjs --self-test` → OK,exit 0,报 370。
->
-> **可判读的写法:计数 370 → 375,且这 5 条全部是 declared(在 `agent-runtime` 的 `requires` 里),
-> 没有一条未基线化。** 归因要写清:这 5 条来自 **plan 600 S1a 的 `run-routing.ts`**
-> (`@duya/agent-protocol` ×2 + `./execution-channel.js` ×1),由 A2 的分支带入,
-> 不是 A2 新造的边(见 commit `9710107d` 的说明)。
-
-> ⚠️ **A3 的边界此前写错了(2026-10-06 实测)。** 原文是「把 `ToolExecutionPipeline` 移出
-> `DuyaAgent.ts:2036` 闭包」。两处错:
->
-> ⚠️ **以下 1./2. 是 A1 当时的调查记录,原文保留以便追溯,但其中描述的判据
-> (`repetition` / `modelStream` / `toolExecution` 三子句)**已被 PR #232 换成
-> `TURN_LOOP_SHAPE = { legs: 2 }`,**不再存在**。因此本块里所有行号都是**对已删除判据的
-> 历史命中位置**,对今天的门禁**没有任何指导意义** —— 不要把它们当实测结果读,也不要"更正"它们:
-> 更正一个已不存在的东西,只会再造一批新的过期数字。当前判据见上方「循环删除范围」小节。**
-
-> 1. **行号**:`:2036` 无此构造。唯一的构造在 **`:2067`**(`:76` 是它的值 import)。
->    怎么测的:`Select-String -Pattern 'ToolExecutionPipeline' packages/agent/src/agent/DuyaAgent.ts`
->    → 仅 `:76` 与 `:2067` 两行命中。
-> 2. **搬走它不会让 G7 转绿 —— 照原文做会白做一整片。** G7 是**按模块的三子句合取**
->    (`isTurnLoopModule`,`boundary-gates.mjs:306`),不是按符号。删掉 `ToolExecutionPipeline`
->    只清掉 `:76`/`:2067`,`modelStream` 与 `toolExecution` 仍然为真,G7 **照样报**。
->    怎么测的:对 `DuyaAgent.ts` 去注释后逐子句求值 → `repetition`✓ / `modelStream`✓ /
->    `toolExecution`✓ = **3/3**;其中 `modelStream` 命中在 `:95`(import `buildTurnModelLeg`)
->    与 `:2454`,`toolExecution` 命中在 `:76`/`:2067`/`:2762`/`:2764`/`:2902`/`:4427`。
->
-> **要转绿,`isTurnLoopModule(DuyaAgent.ts)` 必须变 false**,即迁走 `streamChat` 生成器
-> (`:990` 起,约到 `:3400`),或让 `DuyaAgent.ts` 离开入口的值 import 闭包。
->
-> ⚠️ **迁出时的两个陷阱(实测自 `boundary-gates.mjs` 源码):**
->
-> - **新模块若仍被 `DuyaAgent.ts` 值 import,就仍在闭包里,会变成新的 finding。**
->   落点必须在 `agent-runtime`(G8 指定的归属包,`EXECUTION_OWNER_PACKAGE`,
->   `boundary-gates.mjs:414`),经 `import type` + 注册实现接入。
-> - `importsOf` **只读静态 specifier**(`boundary-gates.mjs:277`),所以改成动态
->   `import(变量)` 也能让门禁闭嘴。**那是钻门禁的空子,不是修好任何东西**,本系列 §4 第 5 条禁止。
-| **A4** | 按 `04-runtime-owns-execution.md` §Step 4 逐场景做,**从"工具报错"起**(最易复现) | 6 场景逐个可复跑;每场景一条测试 |
+| **A3** | ✅ **已完成**：S4c-d3 删除 `DuyaAgent.streamChat` 生产轮次循环并接入 RunEngine（commit `4444c7cf`，PR #262 / merge `2baa95df`）。2026-10-10 静态核对确认生产类已无该方法；迁移后遗留测试另列为 A4 前置清理 | 生产 `DuyaAgent.ts` 无 `streamChat` 声明/调用；此前门禁与迁移证据见 [90 执行日志](./90-execution-log.md)
+| **A4** | ✅ **前置清理已完成**（2026-10-10）：16 处旧 `duyaAgent.streamChat` 调用归零，处置以删除为主（`packages/agent` 是 A7 待退役 facade，不做迁移式投资）；六场景 runtime 层验收 17/17 同 HEAD 实测。**下一步：A4 主体**——同引擎接 CLI / eval + 存储拒绝/worker 退出的产品级变体 | 旧调用归零 ✅；多轮、工具报错、取消、存储拒绝、worker 退出、慢消费者各有可复跑测试 ✅（runtime + 产品轮次层；CLI/eval 与产品级存储/worker 变体待 A4 主体） |
 | **A5** | 先迁 `data`(纯 I/O、无业务决策),再 `capabilities`,最后 `memory` | 每迁一块:旧依赖归零 + 真实消费者仍绿 |
 | **A6** | 先产出回填/恢复脚本,再改 schema | 三份证据齐备才删旧关系 |
 | **A7** | `packages/agent` 消费者归零检查 | `architecture:check` 的 module-dependency 降到预期值 |
@@ -373,8 +287,7 @@ node -e "import('./scripts/architecture/boundary-gates.mjs').then(m=>console.log
 | **B3** | 远端注册表 + 认证 | — |
 | **C1** | 写探针,两个 runtime 各跑一次 | 9 项能力边界;`close()` 与回滚路径任一不过就停 |
 
-**A0 与 A1 都会改 `scripts/architecture/`** —— 两者并行会冲突。
-**约定:先合 A1,再动 A0 的 G10。** A0 的 `conductor` 子路径部分不碰门禁,可先行。
+**A0 与 A1 已完成；原并行约束是历史记录，不再是当前排期条件。**
 
 > ⚠️ **A3 最高风险项,此前没写下来(2026-10-06 补记):`discarded` 是一次性闩。**
 >

@@ -8,21 +8,23 @@
 import { randomUUID } from 'crypto';
 import * as path from 'path';
 import type { BrowserWindow } from 'electron';
-import { getDatabase } from '../ipc/db-handlers';
-import {
-  consumeApprovedToolApproval,
-  createToolApproval,
-  listToolApprovalRules,
-  resolveToolApproval,
-  toolApprovalInputHash,
-  upsertToolApprovalRule,
-} from '../db/toolApprovalState';
+import { toolApprovalInputHash } from '@duya/data/tool-approval-state';
+import type { CoreSession } from '@duya/data/session-store';
 import { getProviderStore } from '../services/providers/provider-store-electron';
 import { getConfigStore } from '../config/store-instance';
 import { createConfigAgentFromName, patchConfigAgentIdentity } from '../config/agents';
-import { readConfigAgents } from '../../../../../packages/agent/src/agent-profile/config-agents.js';
+import { readConfigAgents } from '@duya/host/agent-profile-config';
 import { toLegacyApiProvider, migrateLegacyApiProvider } from '../../renderer/lib/providers/legacy';
 import { toRuntimeConfig } from '@duya/ai';
+import type {
+  CreateSecretPendingInput,
+  CreateWidgetPendingInput,
+  CursorAgentRunInput,
+  HostMessageItem,
+  TurnReviewFile,
+  TurnReviewWriteInput,
+} from '@duya/agent-protocol';
+import { isHostResearchAction } from '@duya/agent-protocol/research-api';
 import type { ApiProvider } from '../config/provider-types';
 import { getAutomationScheduler } from '../automation/Scheduler.js';
 import { runPromptInSession, interruptCronSession } from '../automation/agent-run';
@@ -31,14 +33,33 @@ import { getLogger, LogComponent } from '../logging/logger';
 import { testProviderConnection } from '../ipc/net-handlers';
 import { getPluginManager } from '../plugins/PluginManager';
 import { readPluginManifest } from '../plugins/manifest';
-import { resolvePermissionProfile } from '../db/permission-resolver';
-import type { PermissionProfile } from '../lib/permission-profile';
-import { getCoreStores } from '../db/core-connection';
-import { dispatchControlPlaneAction } from '../control-plane/run-control-plane';
-import { getControlPlane } from '../control-plane/control-plane-service';
-import { COMMAND_SCHEMA_VERSION, type CommandSenderFacts } from '../control-plane/command-receipt';
-import { writeRunReceiptOnWire } from '../control-plane/run-receipt';
-import type { WorkflowRunSnapshot, WorkflowRunStatus, WorkflowTriggerKind } from '../db/core/workflow-store';
+import {
+  getDesktopHostLocalAttachmentApi,
+  getDesktopHostLocalSettingsApi,
+  getDesktopHostLocalMailboxApi,
+  getDesktopHostLocalSessionApi,
+  getDesktopHostSessionApi,
+  getDesktopHostTaskApi,
+  getDesktopHostGoalApi,
+  getDesktopHostModeStateApi,
+  getDesktopHostWorkflowRunApi,
+  getDesktopHostPermissionRequestApi,
+  getDesktopHostToolApprovalApi,
+  getDesktopHostLockApi,
+  getDesktopHostResearchApi,
+  getDesktopHostLocalSendMessageStateApi,
+  getDesktopHostLocalModelCapabilityApi,
+  getDesktopHostLocalPluginSetupApi,
+  getDesktopHostLocalTurnReviewApi,
+  getDesktopHostLocalChannelPersistenceApi,
+  getDesktopHostProjectApi,
+} from '../cli/desktop-host-api';
+import { resolveDataRoot } from '@duya/data/data-paths';
+import { normalizePath } from '@duya/data/path-utils';
+import { getControlPlane } from '@duya/host/control-plane-service';
+import { COMMAND_SCHEMA_VERSION, type CommandSenderFacts } from '@duya/host/command-receipt';
+import { writeRunReceiptOnWire } from '@duya/host/run-receipt';
+import type { WorkflowRunSnapshot, WorkflowRunStatus, WorkflowTriggerKind } from '@duya/agent-protocol/workflow-runs';
 
 /**
  * Electron is OPTIONAL here: this module is inside the value-import closure of
@@ -65,15 +86,81 @@ function allBrowserWindows(): BrowserWindow[] {
     return [];
   }
 }
-import {
-  createWidgetPending,
-  updateWidgetResponse,
-  upsertCursorAgentRun,
-  updateCursorAgentRun,
-  createSecretPending,
-  markSecretProvided,
-} from '../db/sendMessageState';
 import { notifySessionIdle, advanceUserTurn } from '../wake/wake-dispatcher';
+
+async function readHostMessageItems(sessionId: string): Promise<HostMessageItem[]> {
+  const api = getDesktopHostSessionApi();
+  const items: HostMessageItem[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await api.readMessages(sessionId, {
+      limit: 200,
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    items.push(...page.messages);
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor !== undefined);
+  return items;
+}
+
+type HostSessionListQuery = NonNullable<Parameters<ReturnType<typeof getDesktopHostSessionApi>['list']>[0]>;
+
+async function readHostSessionRows(
+  query: HostSessionListQuery = {},
+): Promise<Array<Record<string, unknown>>> {
+  const api = getDesktopHostLocalSessionApi();
+  const rows: Array<Record<string, unknown>> = [];
+  let cursor: string | undefined;
+  do {
+    const page = await api.listLocalSessions({
+      ...query,
+      includeAllSessions: true,
+      limit: 200,
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    for (const session of page.sessions) rows.push(coreSessionToIpcRow(session));
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor !== undefined);
+  return rows;
+}
+
+async function readAllHostLocalSessions(): Promise<CoreSession[]> {
+  const api = getDesktopHostLocalSessionApi();
+  const sessions: CoreSession[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await api.listLocalSessions({
+      includeAllSessions: true,
+      limit: 200,
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    sessions.push(...page.sessions);
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor !== undefined);
+  return sessions;
+}
+
+async function readHostSessionRow(sessionId: string): Promise<Record<string, unknown> | undefined> {
+  const session = await getDesktopHostLocalSessionApi().readLocalSession(sessionId, {
+    includeAllSessions: true,
+  });
+  return session ? coreSessionToIpcRow(session) : undefined;
+}
+
+async function searchHostSessionRows(
+  query: string,
+  limit: number,
+  includeContent = true,
+): Promise<Array<Record<string, unknown>>> {
+  const results = await getDesktopHostSessionApi().searchSessions(query, { limit, includeContent });
+  const rows: Array<Record<string, unknown> | null> = await Promise.all(results.map(async (result) => {
+    const session = await getDesktopHostLocalSessionApi().readLocalSession(result.session.id, {
+      includeAllSessions: true,
+    });
+    return session ? { ...coreSessionToIpcRow(session), snippet: result.snippet } : null;
+  }));
+  return rows.filter((row): row is Record<string, unknown> => row !== null);
+}
 
 /**
  * Resolve a bot's configured provider (store id) + model from its
@@ -98,25 +185,25 @@ import { getSessionManager } from './session-manager.js';
 import { getChannelBackgroundWakes } from '../wake/channels';
 import { parseAgentIdFromBotSession } from '../wake/bot-session-id';
 import { type MailboxKind, type MailboxApplyMode, type MailboxStatus, type CheckpointType } from '../db/core';
-import type { NewEvent, AttachmentWithData } from '../db/core';
+import type { NewEvent } from '../db/core';
 import {
   ipcSessionToCoreCreate,
   ipcSessionToUpdate,
   coreSessionToIpcRow,
   ipcMessageToNewEvent,
   newEventToIpcMessage,
-  storedEventToIpcMessage,
   storedEventsToIpcMessages,
   serializeMessageContent,
   serializeDisplayContent,
-  ipcTaskToCoreCreate,
-  ipcTaskToUpdate,
-  coreTaskToIpcRow,
+  ipcTaskToHostCreate,
+  ipcTaskToHostUpdate,
+  hostTaskToIpcRow,
   ipcPermissionToCoreCreate,
   ipcPermissionToResolve,
   corePermissionToIpcRow,
   coreMailboxToIpcRow,
   coreGoalToIpcRow,
+  hostMessageItemsToIpcMessages,
 } from '../ipc/core-db-adapters';
 
 const DEBUG_IPC = process.env.DUYA_DEBUG_IPC === 'true';
@@ -132,7 +219,7 @@ function debugLog(...args: unknown[]): void {
  * Plan 536 L4: resolve a session's working directory to the project that
  * owns it, plus the canonical list of paths registered against that
  * project. Returns `null` when no project matches (cwd outside any
- * registered project, memory-state DB unavailable, or cwd unparseable).
+ * registered project, Host API unavailable, or cwd unparseable).
  *
  * Used by both `projects:resolveAdditionalRoots` (writable-roots fan-out
  * for session cwd) and `projects:resolveProject` (lightweight
@@ -141,56 +228,19 @@ function debugLog(...args: unknown[]): void {
 async function resolveProjectByCwd(
   cwd: string
 ): Promise<{ projectId: string; paths: string[]; cwdNormalized: string } | null> {
-  let memoryState: typeof import('../memory-state');
   try {
-    memoryState = await import('../memory-state');
+    const rows = await getDesktopHostProjectApi().listProjects();
+    const cwdNorm = normalizePath(cwd).absolute_normalized_path;
+    const hit = rows.find((row) => row.paths.some((entry) => entry.path === cwdNorm));
+    if (!hit) return null;
+    return {
+      projectId: hit.project_id,
+      paths: hit.paths.map((entry) => entry.path),
+      cwdNormalized: cwdNorm,
+    };
   } catch {
     return null;
   }
-  let rows = memoryState.listProjects();
-  if (rows.length === 0) {
-    try {
-      const { getDatabasePath } = await import('../config/boot-config');
-      memoryState.bootstrap({ bootJsonDatabaseDir: path.dirname(getDatabasePath()) });
-      rows = memoryState.listProjects();
-    } catch {
-      // no database dir available — treat as no project
-      return null;
-    }
-  }
-  const cwdNorm = memoryState.normalizePath(cwd).absolute_normalized_path;
-  const hit = rows.find((row) =>
-    memoryState.projectPaths(row).some((entry) => entry.path === cwdNorm)
-  );
-  if (!hit) return null;
-  const paths = memoryState.projectPaths(hit).map((entry) => entry.path);
-  return { projectId: hit.project_id, paths, cwdNormalized: cwdNorm };
-}
-
-/**
- * Map a file-backed parsed_document attachment to the legacy `message_attachments`
- * row shape so the Agent / renderer contract stays unchanged. The payload `data`
- * string is the JSON body written by `attachment:store` (plan 332 Phase 2).
- */
-function parsedDocToRow(att: AttachmentWithData): Record<string, unknown> {
-  let parsed: { filename?: string; filePath?: string; charCount?: number; extractMethod?: string | null; text?: string; imageChunks?: unknown[] } = {};
-  try {
-    parsed = JSON.parse(att.data) as typeof parsed;
-  } catch {
-    // unparseable payload — return empty fields
-  }
-  return {
-    id: att.id,
-    message_id: att.messageId,
-    session_id: att.sessionId,
-    filename: parsed.filename || '',
-    filePath: parsed.filePath || att.originalUrl || '',
-    charCount: parsed.charCount || 0,
-    extractMethod: parsed.extractMethod || null,
-    text: parsed.text || '',
-    imageChunks: parsed.imageChunks ? JSON.stringify(parsed.imageChunks) : null,
-    created_at: att.createdAt,
-  };
 }
 
 function emitMailboxEvent(
@@ -216,15 +266,14 @@ function emitMailboxEvent(
  * re-kick and slot-checkpoint mailbox claim deliver it on the next available
  * turn. Best-effort: a wake failure must not surface to the spawn path.
  */
-function notifySpawnCompletion(
+async function notifySpawnCompletion(
   parentSessionId: string,
   childSessionId: string,
   status: 'completed' | 'failed',
   summary: string,
-): void {
+): Promise<void> {
   try {
-    const { mailbox } = getCoreStores();
-    const item = mailbox.enqueue({
+    const item = await getDesktopHostLocalMailboxApi().enqueue({
       id: randomUUID(),
       sessionId: parentSessionId,
       submittedRunId: '',
@@ -320,31 +369,29 @@ export async function dispatchDbAction(
   payload: unknown,
   sender?: CommandSenderFacts,
 ): Promise<unknown> {
-  const db = getDatabase();
-  if (!db) {
-    throw new Error('Database not initialized');
+  if (isHostResearchAction(action)) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new Error(`Invalid payload for Host Research action: ${action}`);
+    }
+    return getDesktopHostResearchApi().dispatch(action, payload as Record<string, unknown>);
   }
-  const { research } = getCoreStores();
 
   const p = payload as Record<string, unknown>;
   const now = Date.now();
 
   switch (action) {
     // ==================== Control Plane / run actions (plan 586) ====================
-    // Handled by the Control Plane dispatcher rather than inline, because these
-    // actions are the run layer's entire view of storage and inlining them
-    // here would scatter the schema knowledge back across the bridge. The
-    // dispatcher returns `undefined` for an action it does not own, so the
-    // fallthrough below still runs for everything else.
+    // Handled by the Control Plane rather than inline. It authenticates this
+    // child-process sender before its injected request adapts the command to
+    // HostRunApiV1. The dispatcher returns `undefined` for an action it does
+    // not own, so the fallthrough below still runs for everything else.
     //
-    // The agent-server is a FORK, so this is the only route from a run to
-    // `duya-core.db`. It is the same channel `lock:acquire` already uses.
+    // The agent-server is a FORK, so this is the authenticated Control Plane
+    // route for durable run operations. Runtime locks use the Host lock API.
     //
     // Plan 587 C6.1: the dispatcher is the one composition created, reached
-    // through `getControlPlane()` — falling back to the free function only when
-    // the Control Plane was never created (a headless or test host), and saying
-    // so on the wire rather than dispatching through an owner that does not
-    // exist. `run:unavailable` is a refusal, not a silent success.
+    // through `getControlPlane()`. `run:unavailable` is a refusal, not a silent
+    // success, when composition did not create the sender-authorising service.
     case 'run:create':
     case 'run:append':
     case 'run:complete':
@@ -408,9 +455,8 @@ export async function dispatchDbAction(
       return receipt.result;
     }
 
-    // ==================== Session actions (core store thin forward) ====================
+    // ==================== Session actions (Host API compatibility adapter) ====================
     case 'session:create': {
-      const { sessions } = getCoreStores();
       // Resolve model from provider config if not explicitly specified.
       let providerType: ApiProvider['providerType'] = 'anthropic';
       let defaultModel: string | undefined;
@@ -432,35 +478,67 @@ export async function dispatchDbAction(
       }
 
       const model = (p.model as string) || defaultModel || getDefaultModelForProvider(providerType);
-      const data = { ...p, model };
+      const data: Record<string, unknown> = { ...p, model };
       const parentSessionId =
         (data.parent_session_id as string | undefined) ?? (data.parent_id as string | undefined) ?? null;
       const isTrusted = data.is_trusted_permission_override === true;
       const explicitProfile = typeof data.permission_profile === 'string' ? data.permission_profile : undefined;
-      const permissionProfile: PermissionProfile = resolvePermissionProfile(explicitProfile, parentSessionId, { isTrustedOverride: isTrusted });
-
-      // Upsert semantics: if the session already exists, update it (matches
-      // the old ON CONFLICT(id) DO NOTHING + SELECT-back behavior).
-      const existing = sessions.get(data.id as string);
-      if (existing) {
-        sessions.update(data.id as string, ipcSessionToUpdate(data));
-        const extKeys = ['system_prompt', 'conductor_mode_enabled', 'conductor_canvas_id', 'context_summary', 'context_summary_updated_at', 'source'] as const;
-        for (const key of extKeys) {
-          if (data[key] !== undefined) {
-            sessions.setExtension(data.id as string, key, data[key]);
-          }
-        }
-        return coreSessionToIpcRow(sessions.get(data.id as string)!);
-      }
-      const session = sessions.create(ipcSessionToCoreCreate(data, permissionProfile));
-      return coreSessionToIpcRow(session);
+      const permissionProfile = await getDesktopHostSessionApi().resolveSessionPermissionProfile({
+        explicit: explicitProfile,
+        parentSessionId,
+        trustedOverride: isTrusted,
+      });
+      const input = ipcSessionToCoreCreate(data, permissionProfile);
+      const hostApi = getDesktopHostSessionApi();
+      const requestedCwd = typeof data.working_directory === 'string' ? data.working_directory.trim() : '';
+      const workspace = requestedCwd
+        ? await hostApi.registerLocalDirectory(requestedCwd)
+        : undefined;
+      const hostCreate: Parameters<typeof hostApi.create>[0] = {
+        id: input.id,
+        ...(workspace ? {
+          workspaceId: workspace.workspaceId,
+          workspaceRootId: workspace.rootId,
+          workspaceRelativePath: workspace.relativePath,
+        } : {}),
+        ...(input.title !== undefined ? { title: input.title } : {}),
+        ...(input.projectName !== undefined ? { projectName: input.projectName } : {}),
+        ...(input.status !== undefined ? { status: input.status } : {}),
+        ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(input.providerId !== undefined ? { providerId: input.providerId } : {}),
+        ...(input.mode !== undefined ? { mode: input.mode } : {}),
+        ...(input.permissionMode !== undefined
+          ? { permissionMode: input.permissionMode as NonNullable<Parameters<typeof hostApi.create>[0]['permissionMode']> }
+          : {}),
+        ...(input.agentProfileId !== undefined ? { agentProfileId: input.agentProfileId } : {}),
+        ...(input.parentSessionId !== undefined ? { parentSessionId: input.parentSessionId } : {}),
+        ...(input.parentSessionId
+          ? {
+              spawn: {
+                type: (data.spawn_type as string | undefined) ?? 'subagent',
+                ...(typeof data.spawn_reason === 'string' ? { reason: data.spawn_reason } : {}),
+                ...(typeof data.spawn_turn_id === 'string' ? { turnId: data.spawn_turn_id } : {}),
+              },
+            }
+          : {}),
+        ...(input.agentType !== undefined ? { agentType: input.agentType } : {}),
+        ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+        ...(input.draft !== undefined ? { draft: input.draft } : {}),
+        ...(input.extensions !== undefined
+          ? { extensions: input.extensions as NonNullable<Parameters<typeof hostApi.create>[0]['extensions']> }
+          : {}),
+        ...(input.createdAt !== undefined ? { createdAt: input.createdAt } : {}),
+      };
+      const created = await hostApi.create(hostCreate);
+      const persisted = await getDesktopHostLocalSessionApi().readLocalSession(created.id, {
+        includeAllSessions: true,
+      });
+      if (!persisted) throw new Error(`Host created session but it could not be read back: ${created.id}`);
+      return coreSessionToIpcRow(persisted);
     }
 
-    case 'session:get': {
-      const { sessions } = getCoreStores();
-      const session = sessions.get(p.id as string);
-      return session ? coreSessionToIpcRow(session) : undefined;
-    }
+    case 'session:get':
+      return readHostSessionRow(p.id as string);
 
     case 'session:ensureBot': {
       // Plan 477 P3.1 / 491 P1.2 — lazily materialize a bot's persistent
@@ -469,26 +547,29 @@ export async function dispatchDbAction(
       // so wake-created and chat-created rows converge on the same canonical
       // row (idempotent, no config validation — a misconfigured bot surfaces
       // as a profile-resolution error in the worker, same as wake runs).
-      const { sessions } = getCoreStores();
+      const hostApi = getDesktopHostSessionApi();
       const sessionId = p.sessionId as string;
       const agentId = parseAgentIdFromBotSession(sessionId);
       if (!agentId) {
         return { ok: false, reason: 'not-a-bot-session' };
       }
-      const existing = sessions.get(sessionId);
+      const existing = await hostApi.get(sessionId, { includeAllSessions: true });
       if (existing) {
         // Backfill the agent's configured provider/model when an older row was
         // created before per-agent config landed (it stored the defaults).
         const cfg = await botAgentConfigFor(agentId);
         if (cfg.model && !existing.model) {
-          sessions.update(sessionId, { model: cfg.model, providerId: cfg.providerId ?? existing.providerId });
-          const backfilled = sessions.get(sessionId);
-          return { ok: true, created: false, session: coreSessionToIpcRow(backfilled ?? existing) };
+          await hostApi.update(sessionId, undefined, {
+            model: cfg.model,
+            providerId: cfg.providerId ?? existing.providerId,
+          });
         }
-        return { ok: true, created: false, session: coreSessionToIpcRow(existing) };
+        const compatible = await readHostSessionRow(sessionId);
+        if (!compatible) throw new Error(`Host session could not be read back: ${sessionId}`);
+        return { ok: true, created: false, session: compatible };
       }
       const cfg = await botAgentConfigFor(agentId);
-      const created = sessions.create({
+      const created = await hostApi.create({
         id: sessionId,
         title: agentId,
         status: 'active',
@@ -501,6 +582,10 @@ export async function dispatchDbAction(
         providerId: cfg.providerId,
         extensions: { source: 'bot' },
       });
+      const compatible = await getDesktopHostLocalSessionApi().readLocalSession(created.id, {
+        includeAllSessions: true,
+      });
+      if (!compatible) throw new Error(`Host created session but it could not be read back: ${created.id}`);
       // The row was created outside any renderer action (the agent-server
       // fork asked for it), so the normal renderer→main sync path never
       // fires. Broadcast so the session list picks the thread up without a
@@ -512,45 +597,62 @@ export async function dispatchDbAction(
           window.webContents.send('sync:threads-changed');
         }
       }
-      return { ok: true, created: true, session: coreSessionToIpcRow(created) };
+      return { ok: true, created: true, session: coreSessionToIpcRow(compatible) };
     }
 
     case 'session:update': {
-      const { sessions } = getCoreStores();
       const id = p.id as string;
-      sessions.update(id, ipcSessionToUpdate(p));
       const extKeys = ['system_prompt', 'conductor_mode_enabled', 'conductor_canvas_id', 'context_summary', 'context_summary_updated_at', 'source'] as const;
-      for (const key of extKeys) {
-        if (p[key] !== undefined) {
-          sessions.setExtension(id, key, p[key]);
-        }
+      const patch = ipcSessionToUpdate(p);
+      const changesWorkingDirectory = patch.workingDirectory !== undefined;
+      const requestedWorkingDirectory = typeof patch.workingDirectory === 'string'
+        ? patch.workingDirectory.trim()
+        : '';
+      let workspacePatch: Parameters<ReturnType<typeof getDesktopHostSessionApi>['update']>[2]['workspace'];
+      if (changesWorkingDirectory && requestedWorkingDirectory.length === 0) {
+        workspacePatch = { state: 'legacy_unbound' };
+      } else if (changesWorkingDirectory) {
+        workspacePatch = await getDesktopHostSessionApi().registerLocalDirectory(requestedWorkingDirectory);
       }
-      const updated = sessions.get(id);
-      return updated ? coreSessionToIpcRow(updated) : undefined;
+      const hostApi = getDesktopHostSessionApi();
+      const extensions = Object.fromEntries(extKeys.filter((key) => p[key] !== undefined).map((key) => [key, p[key]]));
+      type HostPatch = Parameters<typeof hostApi.update>[2];
+      const hostPatch: HostPatch = {
+        ...(workspacePatch !== undefined ? { workspace: workspacePatch } : {}),
+        ...(patch.title !== undefined ? { title: patch.title } : {}),
+        ...(patch.projectName !== undefined ? { projectName: patch.projectName } : {}),
+        ...(patch.status !== undefined ? { status: patch.status } : {}),
+        ...(patch.model !== undefined ? { model: patch.model } : {}),
+        ...(patch.providerId !== undefined ? { providerId: patch.providerId } : {}),
+        ...(patch.mode !== undefined ? { mode: patch.mode } : {}),
+        ...(patch.permissionMode !== undefined ? { permissionMode: patch.permissionMode as HostPatch['permissionMode'] } : {}),
+        ...(patch.parentSessionId !== undefined ? { parentSessionId: patch.parentSessionId } : {}),
+        ...(patch.agentProfileId !== undefined ? { agentProfileId: patch.agentProfileId } : {}),
+        ...(patch.agentType !== undefined ? { agentType: patch.agentType } : {}),
+        ...(patch.agentName !== undefined ? { agentName: patch.agentName } : {}),
+        ...(p.draft_message !== undefined ? { draft: p.draft_message as string | null } : {}),
+        ...(Object.keys(extensions).length > 0
+          ? { extensions: extensions as NonNullable<HostPatch['extensions']> }
+          : {}),
+      };
+      await hostApi.update(id, undefined, hostPatch);
+      return readHostSessionRow(id);
     }
 
     // Decision 5: session:delete is now soft delete (status='deleted'), no cascade.
-    case 'session:delete': {
-      const { sessions } = getCoreStores();
-      const existing = sessions.get(p.id as string);
-      if (!existing) return false;
-      sessions.update(p.id as string, { status: 'deleted' });
-      return true;
-    }
+    case 'session:delete':
+      return (await getDesktopHostSessionApi().delete(p.id as string)).deleted;
 
-    case 'session:list': {
-      const { sessions } = getCoreStores();
-      return sessions.list().map(coreSessionToIpcRow);
-    }
+    case 'session:list':
+      return readHostSessionRows();
 
     case 'session:listByWorkingDirectory': {
-      const { sessions } = getCoreStores();
-      return sessions.list({ workingDirectory: (p.workingDirectory as string) || '' }).map(coreSessionToIpcRow);
+      const workingDirectory = (p.workingDirectory as string) || '';
+      return (await readHostSessionRows()).filter((row) => row.working_directory === workingDirectory);
     }
 
     case 'session:listByParentId': {
-      const { sessions } = getCoreStores();
-      return sessions.list({ parentSessionId: p.parentId as string }).map(coreSessionToIpcRow);
+      return readHostSessionRows({ parentSessionId: p.parentId as string });
     }
 
     // Plan 504 — session tool minimal loop. The worker calls
@@ -582,32 +684,44 @@ export async function dispatchDbAction(
       const providerConfig = buildCronProviderConfig({ provider: activeProvider, model });
 
       const childId = `spawn:${Date.now()}:${randomUUID().slice(0, 8)}`;
-      const { sessions, spawnEdges } = getCoreStores();
-      const permissionMode = resolvePermissionProfile(undefined, parentSessionId, {
-        isTrustedOverride: false,
-      });
-      sessions.create(
-        ipcSessionToCoreCreate(
-          {
-            id: childId,
-            title: `[Spawn] ${prompt.split('\n')[0]?.slice(0, 60) || 'task'}`,
-            working_directory: workingDirectory,
-            status: 'active',
-            mode: 'chat',
-            model,
-            provider_id: activeLlm.id,
-            parent_session_id: parentSessionId,
-            agent_type: 'spawn',
-          },
-          permissionMode,
-        ),
-      );
-      spawnEdges.record({
+      const permissionMode = await getDesktopHostSessionApi().resolveSessionPermissionProfile({
         parentSessionId,
-        childSessionId: childId,
-        spawnReason: 'session-tool',
-        spawnType: 'session',
       });
+      const childInput = ipcSessionToCoreCreate(
+        {
+          id: childId,
+          title: `[Spawn] ${prompt.split('\n')[0]?.slice(0, 60) || 'task'}`,
+          working_directory: workingDirectory,
+          status: 'active',
+          mode: 'chat',
+          model,
+          provider_id: activeLlm.id,
+          parent_session_id: parentSessionId,
+          agent_type: 'spawn',
+        },
+        permissionMode,
+      );
+      const hostApi = getDesktopHostSessionApi();
+      const workspace = await hostApi.registerLocalDirectory(workingDirectory);
+      const hostCreate: Parameters<typeof hostApi.create>[0] = {
+        id: childInput.id,
+        workspaceId: workspace.workspaceId,
+        workspaceRootId: workspace.rootId,
+        workspaceRelativePath: workspace.relativePath,
+        ...(childInput.title !== undefined ? { title: childInput.title } : {}),
+        ...(childInput.status !== undefined ? { status: childInput.status } : {}),
+        ...(childInput.model !== undefined ? { model: childInput.model } : {}),
+        ...(childInput.providerId !== undefined ? { providerId: childInput.providerId } : {}),
+        ...(childInput.mode !== undefined ? { mode: childInput.mode } : {}),
+        ...(childInput.permissionMode !== undefined
+          ? { permissionMode: childInput.permissionMode as NonNullable<Parameters<typeof hostApi.create>[0]['permissionMode']> }
+          : {}),
+        ...(childInput.parentSessionId !== undefined ? { parentSessionId: childInput.parentSessionId } : {}),
+        spawn: { type: 'session', reason: 'session-tool' },
+        ...(childInput.agentType !== undefined ? { agentType: childInput.agentType } : {}),
+        ...(childInput.createdAt !== undefined ? { createdAt: childInput.createdAt } : {}),
+      };
+      await hostApi.create(hostCreate);
 
       // Surface in the sidebar without a manual refresh (same as session:ensureBot).
       // `allBrowserWindows` yields none on a headless host (no renderer to
@@ -649,8 +763,7 @@ export async function dispatchDbAction(
     case 'session:spawnList': {
       const parentSessionId = p.parentSessionId as string | undefined;
       if (!parentSessionId) return { ok: false, reason: 'missing_parentSessionId' };
-      const { sessions } = getCoreStores();
-      const children = sessions.list({ parentSessionId }).map(coreSessionToIpcRow);
+      const children = await readHostSessionRows({ parentSessionId });
       return { ok: true, sessions: children };
     }
 
@@ -658,10 +771,9 @@ export async function dispatchDbAction(
       const sessionId = p.sessionId as string | undefined;
       const callerSessionId = p.callerSessionId as string | undefined;
       if (!sessionId || !callerSessionId) return { ok: false, reason: 'missing_ids' };
-      const { sessions } = getCoreStores();
-      const session = sessions.get(sessionId);
+      const session = await readHostSessionRow(sessionId);
       if (!session) return { ok: false, reason: 'not_found' };
-      if (session.parentSessionId !== callerSessionId) {
+      if (session.parent_session_id !== callerSessionId) {
         return { ok: false, reason: 'not_owned' };
       }
       // Diff statistics come from the latest turn review (duya's own +N/-M
@@ -670,22 +782,10 @@ export async function dispatchDbAction(
       let linesRemoved = 0;
       let filesChanged = 0;
       try {
-        const reviews = getDatabase().prepare(
-          'SELECT additions, removals, files_json FROM chat_turn_reviews WHERE session_id = ?',
-        ).all(sessionId) as Array<{ additions: number; removals: number; files_json: string }>;
-        const fileSet = new Set<string>();
-        for (const r of reviews) {
-          linesAdded += Number(r.additions) || 0;
-          linesRemoved += Number(r.removals) || 0;
-          try {
-            for (const f of JSON.parse(r.files_json) as { path?: string }[]) {
-              if (f?.path) fileSet.add(f.path);
-            }
-          } catch {
-            // files_json unparseable — ignore for stats
-          }
-        }
-        filesChanged = fileSet.size;
+        const stats = await getDesktopHostSessionApi().getSessionChangeStats(sessionId);
+        linesAdded = stats.linesAdded;
+        linesRemoved = stats.linesRemoved;
+        filesChanged = stats.filesChanged;
       } catch {
         // chat_turn_reviews absent / unreadable — stats default to zero.
       }
@@ -693,15 +793,15 @@ export async function dispatchDbAction(
         ok: true,
         session: {
           id: sessionId,
-          title: session.title ?? '',
-          status: session.status ?? '',
-          workingDirectory: session.workingDirectory ?? '',
-          parentId: session.parentSessionId,
+          title: (session.title as string | null | undefined) ?? '',
+          status: (session.status as string | null | undefined) ?? '',
+          workingDirectory: (session.working_directory as string | null | undefined) ?? '',
+          parentId: session.parent_session_id,
           filesChanged,
           linesAdded,
           linesRemoved,
-          updatedAt: session.updatedAt,
-          createdAt: session.createdAt,
+          updatedAt: session.updated_at,
+          createdAt: session.created_at,
         },
       };
     }
@@ -713,14 +813,13 @@ export async function dispatchDbAction(
       if (!sessionId || !callerSessionId || !prompt) {
         return { ok: false, reason: 'missing_required_fields' };
       }
-      const { sessions } = getCoreStores();
-      const session = sessions.get(sessionId);
+      const session = await readHostSessionRow(sessionId);
       if (!session) return { ok: false, reason: 'not_found' };
-      if (session.parentSessionId !== callerSessionId) {
+      if (session.parent_session_id !== callerSessionId) {
         return { ok: false, reason: 'not_owned' };
       }
-      const parentSessionId = session.parentSessionId;
-      const workingDirectory = session.workingDirectory;
+      const parentSessionId = callerSessionId;
+      const workingDirectory = session.working_directory as string | null;
       if (!workingDirectory) return { ok: false, reason: 'no_working_directory' };
 
       // Reuse the same provider/model the child was created with.
@@ -729,7 +828,7 @@ export async function dispatchDbAction(
       if (!activeLlm || !activeProvider) return { ok: false, reason: 'no_active_provider' };
       const options = (activeProvider.options ?? {}) as Record<string, unknown>;
       const model =
-        session.model ??
+        (session.model as string | null | undefined) ??
         (options.defaultModel as string) ??
         (options.model as string) ??
         getDefaultModelForProvider(activeProvider.providerType, options);
@@ -756,10 +855,9 @@ export async function dispatchDbAction(
       const sessionId = p.sessionId as string | undefined;
       const callerSessionId = p.callerSessionId as string | undefined;
       if (!sessionId || !callerSessionId) return { ok: false, reason: 'missing_ids' };
-      const { sessions } = getCoreStores();
-      const session = sessions.get(sessionId);
+      const session = await readHostSessionRow(sessionId);
       if (!session) return { ok: false, reason: 'not_found' };
-      if (session.parentSessionId !== callerSessionId) return { ok: false, reason: 'not_owned' };
+      if (session.parent_session_id !== callerSessionId) return { ok: false, reason: 'not_owned' };
       interruptCronSession(sessionId);
       return { ok: true, sessionId };
     }
@@ -771,33 +869,23 @@ export async function dispatchDbAction(
       if (!sessionId || !callerSessionId || !title?.trim()) {
         return { ok: false, reason: 'missing_required_fields' };
       }
-      const { sessions } = getCoreStores();
-      const session = sessions.get(sessionId);
+      const session = await readHostSessionRow(sessionId);
       if (!session) return { ok: false, reason: 'not_found' };
-      if (session.parentSessionId !== callerSessionId) return { ok: false, reason: 'not_owned' };
-      sessions.update(sessionId, { title: title.trim() });
+      if (session.parent_session_id !== callerSessionId) return { ok: false, reason: 'not_owned' };
+      await getDesktopHostSessionApi().update(sessionId, undefined, { title: title.trim() });
       return { ok: true, sessionId };
     }
 
-    // ==================== Goal actions (core store thin forward) ====================
+    // ==================== Goal actions (Host API adapter) ====================
     // Plan 331: session_goals — per-session goal + token budget mirror. The
-    // Agent persists token/time deltas after each turn via these actions.
+    // Agent persists token/time deltas after each turn through the Host API.
     case 'goal:get': {
-      const { goals } = getCoreStores();
-      const goal = goals.get(p.sessionId as string);
+      const goal = await getDesktopHostGoalApi().getGoal(p.sessionId as string);
       return goal ? coreGoalToIpcRow(goal) : undefined;
     }
 
     case 'goal:create': {
-      const { goals } = getCoreStores();
-      // Idempotent upsert: each session may have at most one goal row
-      // (UNIQUE(session_id)), and workers re-initialize a session after a
-      // restart with no message history but a persisted goal row. Return
-      // the existing row instead of letting the INSERT violate the
-      // constraint (which surfaced as noisy ERROR spam in the worker).
-      const existing = goals.get(p.sessionId as string);
-      if (existing) return coreGoalToIpcRow(existing);
-      const goal = goals.create({
+      const goal = await getDesktopHostGoalApi().getOrCreateGoal({
         id: p.id as string,
         sessionId: p.session_id as string,
         goalText: (p.goal_text as string | null | undefined) ?? null,
@@ -807,8 +895,7 @@ export async function dispatchDbAction(
     }
 
     case 'goal:updateBudget': {
-      const { goals } = getCoreStores();
-      const goal = goals.updateBudget(p.sessionId as string, {
+      const goal = await getDesktopHostGoalApi().updateBudget(p.sessionId as string, {
         tokensUsedDelta: p.tokensUsedDelta as number | undefined,
         timeUsedDelta: p.timeUsedDelta as number | undefined,
       });
@@ -816,124 +903,64 @@ export async function dispatchDbAction(
     }
 
     case 'goal:setStatus': {
-      const { goals } = getCoreStores();
-      const goal = goals.setStatus(p.sessionId as string, p.status as 'active' | 'paused' | 'usage_limited' | 'complete');
+      const goal = await getDesktopHostGoalApi().setStatus(
+        p.sessionId as string,
+        p.status as 'active' | 'paused' | 'usage_limited' | 'complete',
+      );
       return goal ? coreGoalToIpcRow(goal) : undefined;
     }
 
     case 'goal:listByStatus': {
-      const { goals } = getCoreStores();
-      return goals.listByStatus(p.status as 'active' | 'paused' | 'usage_limited' | 'complete').map(coreGoalToIpcRow);
+      const goals = await getDesktopHostGoalApi().listByStatus(
+        p.status as 'active' | 'paused' | 'usage_limited' | 'complete',
+      );
+      return goals.map(coreGoalToIpcRow);
     }
 
-    // ==================== Mode state actions (core store thin forward) ====================
+    // ==================== Mode state actions (Host API adapter) ====================
     // Plan 413c: mode_state_snapshots — per (session, mode) ModeTracker snapshot.
     // The Agent persists tracker snapshots after state transitions and restores
     // them on session resume via these actions.
     case 'modeState:get': {
-      const { modeState } = getCoreStores();
-      return modeState.get(p.sessionId as string, p.mode as string);
+      return getDesktopHostModeStateApi().getModeState(p.sessionId as string, p.mode as string);
     }
 
     case 'modeState:upsert': {
-      const { modeState } = getCoreStores();
-      modeState.upsert(
-        p.sessionId as string,
-        p.mode as string,
-        p.status as string,
-        p.snapshotJson as string,
-        (p.reminderCount as number | undefined) ?? 0,
-      );
-      return undefined;
+      return getDesktopHostModeStateApi().upsertModeState({
+        sessionId: p.sessionId as string,
+        mode: p.mode as string,
+        status: p.status as string,
+        snapshotJson: p.snapshotJson as string,
+        reminderCount: (p.reminderCount as number | undefined) ?? 0,
+      });
     }
 
     case 'modeState:setStatus': {
-      const { modeState } = getCoreStores();
-      modeState.setStatus(p.sessionId as string, p.mode as string, p.status as string);
-      return undefined;
+      return getDesktopHostModeStateApi().setModeStateStatus(
+        p.sessionId as string,
+        p.mode as string,
+        p.status as string,
+      );
     }
 
     case 'modeState:listBySession': {
-      const { modeState } = getCoreStores();
-      return modeState.listBySession(p.sessionId as string);
+      return getDesktopHostModeStateApi().listModeStateBySession(p.sessionId as string);
     }
 
-    // Plan 328 Phase 6: session:search combines SessionStore.search (metadata
-    // LIKE) with MessageLog.searchText (rollout content scan). Returns the old
-    // `s.* + snippet` shape — same implementation as the `db:search:sessions`
-    // IPC handler in apps/desktop/src/main/ipc/db-handlers.ts.
+    // Session search runs through Host so Desktop and CLI use the same data owner.
     case 'session:search': {
-      const { sessions, messageLog } = getCoreStores();
       const opts = p.opts as { limit?: number } | undefined;
       const limit = opts?.limit ?? 10;
-      // 1. Metadata matches (title / project_name / agent_name) — snippet empty.
-      const metaHits = sessions.search(p.query as string, limit);
-      const seenIds = new Set(metaHits.map((s) => s.id));
-      const rows: Record<string, unknown>[] = metaHits.map((s) => ({
-        ...coreSessionToIpcRow(s),
-        snippet: '',
-      }));
-
-      // 2. Content matches (rollout scan) — fill in snippet for sessions not
-      //    already in the metadata set, up to `limit` total.
-      if (rows.length < limit) {
-        const remaining = limit - rows.length;
-        const contentHits = messageLog.searchText(p.query as string, { limit: remaining + 5 });
-        for (const hit of contentHits) {
-          if (rows.length >= limit) break;
-          if (seenIds.has(hit.sessionId)) {
-            // Attach snippet to existing metadata hit if not already set.
-            const row = rows.find((r) => r.id === hit.sessionId);
-            if (row && !row.snippet) row.snippet = hit.snippet;
-            continue;
-          }
-          const session = sessions.get(hit.sessionId);
-          if (!session || session.status === 'deleted') continue;
-          seenIds.add(hit.sessionId);
-          rows.push({
-            ...coreSessionToIpcRow(session),
-            snippet: hit.snippet,
-          });
-        }
-      }
-
-      // Sort by updated_at DESC (matches old ORDER BY).
-      rows.sort((a, b) => ((b.updated_at as number) ?? 0) - ((a.updated_at as number) ?? 0));
-      return rows.slice(0, limit);
+      return searchHostSessionRows(p.query as string, limit);
     }
 
     case 'session:loadMessages': {
-      const { messageLog } = getCoreStores();
       const sessionId = p.sessionId as string;
-      const messages = storedEventsToIpcMessages(messageLog.listBySession(sessionId));
-      // parsed_document attachments still live in the legacy DB (message_attachments
-      // table) until a follow-up plan migrates them. Read from the legacy DB.
-      const attachmentRows = db.prepare(
-        "SELECT * FROM message_attachments WHERE session_id = ? AND attachment_type = 'parsed_document' ORDER BY created_at ASC"
-      ).all(sessionId) as Array<{
-        id: string;
-        message_id: string;
-        session_id: string;
-        data: string;
-        original_url: string | null;
-        created_at: number;
-      }>;
-
-      const parsedDocuments = attachmentRows.map((row) => {
-        const parsed = JSON.parse(row.data);
-        return {
-          id: row.id,
-          message_id: row.message_id,
-          session_id: row.session_id,
-          filename: parsed.filename || '',
-          filePath: parsed.filePath || row.original_url || '',
-          charCount: parsed.charCount || 0,
-          extractMethod: parsed.extractMethod || null,
-          text: parsed.text || '',
-          imageChunks: parsed.imageChunks ? JSON.stringify(parsed.imageChunks) : null,
-          created_at: row.created_at,
-        };
-      });
+      const messages = hostMessageItemsToIpcMessages(
+        sessionId,
+        await readHostMessageItems(sessionId),
+      );
+      const parsedDocuments = await getDesktopHostLocalAttachmentApi().getParsedDocumentsForSession(sessionId);
 
       return { messages, parsedDocuments };
     }
@@ -942,55 +969,45 @@ export async function dispatchDbAction(
     // Decision 5: message:add uses INSERT OR IGNORE semantics via appendBatch
     // (same-id re-send is a no-op instead of overwriting).
     case 'message:add': {
-      const { messageLog } = getCoreStores();
       const event = ipcMessageToNewEvent(p.session_id as string, p as unknown as Parameters<typeof ipcMessageToNewEvent>[1]);
-      messageLog.appendBatch([event]);
-      const events = messageLog.listBySession(p.session_id as string);
-      const stored = events.find((e) => e.id === p.id);
-      return stored ? storedEventToIpcMessage(stored) : null;
+      await getDesktopHostSessionApi().appendTimeline(event.sessionId, { entries: [event.payload] });
+      const items = await readHostMessageItems(event.sessionId);
+      return hostMessageItemsToIpcMessages(event.sessionId, items).find((row) => row.id === event.id) ?? null;
     }
 
     case 'message:getBySession': {
-      const { messageLog } = getCoreStores();
-      return storedEventsToIpcMessages(messageLog.listBySession(p.sessionId as string));
+      const sessionId = p.sessionId as string;
+      return hostMessageItemsToIpcMessages(sessionId, await readHostMessageItems(sessionId));
     }
 
     // ==================== Tool approval side state (plan 498) ====================
     // Worker-side writes for durable approval cards: row creation, one-shot
     // ledger consume (from canUseTool), and always-allow rule reads.
     case 'toolApproval:create': {
-      const db = getDatabase();
-      if (!db) return null;
-      return createToolApproval(db, {
+      return getDesktopHostToolApprovalApi().createToolApproval({
         id: p.id as string,
         messageId: p.messageId as string,
         sessionId: p.sessionId as string,
         scopeType: (p.scopeType as 'bot' | 'session') ?? 'session',
         scopeId: p.scopeId as string,
         toolName: p.toolName as string,
-        toolInput: p.toolInput as Record<string, unknown> | undefined,
+        ...(p.toolInput === undefined ? {} : { toolInput: p.toolInput as Record<string, unknown> }),
       });
     }
 
     case 'toolApproval:consumeApproved': {
-      const db = getDatabase();
-      if (!db) return false;
-      return consumeApprovedToolApproval(
-        db,
-        p.sessionId as string,
-        p.toolName as string,
-        toolApprovalInputHash(p.toolInput as Record<string, unknown> | undefined),
-      );
+      return getDesktopHostToolApprovalApi().consumeApprovedToolApproval({
+        sessionId: p.sessionId as string,
+        toolName: p.toolName as string,
+        inputHash: toolApprovalInputHash(p.toolInput as Record<string, unknown> | undefined),
+      });
     }
 
     case 'toolApproval:listRules': {
-      const db = getDatabase();
-      if (!db) return [];
-      return listToolApprovalRules(
-        db,
-        (p.scopeType as 'bot' | 'session') ?? 'session',
-        p.scopeId as string,
-      );
+      return getDesktopHostToolApprovalApi().listToolApprovalRules({
+        scopeType: (p.scopeType as 'bot' | 'session') ?? 'session',
+        scopeId: p.scopeId as string,
+      });
     }
 
     // Plan 587 R2.4: the worker path's "always allow" now writes the SAME
@@ -998,15 +1015,13 @@ export async function dispatchDbAction(
     // one scope key -- so a grant made in the UI and a grant made by a click on
     // a permission prompt are the same kind of fact and cannot disagree.
     case 'toolApproval:upsertRule': {
-      const db = getDatabase();
-      if (!db) return { ok: false, error: 'db_unavailable' };
       const scopeType = (p.scopeType as 'bot' | 'session') ?? 'session';
       const scopeId = p.scopeId as string;
       const toolName = p.toolName as string;
       if (scopeId === '' || toolName === '') {
         return { ok: false, error: 'toolApproval:upsertRule requires scopeId and toolName' };
       }
-      upsertToolApprovalRule(db, scopeType, scopeId, toolName);
+      await getDesktopHostToolApprovalApi().upsertToolApprovalRule({ scopeType, scopeId, toolName });
       return { ok: true };
     }
 
@@ -1021,33 +1036,26 @@ export async function dispatchDbAction(
     // `{ ok: false, error: 'not_found' }` rather than `undefined` so the caller
     // can tell "no such request" from "the bridge does not know this action".
     case 'toolApproval:resolve': {
-      const db = getDatabase();
-      if (!db) return { ok: false, error: 'db_unavailable' };
       const decision = p.decision as 'allow' | 'always' | 'deny';
       if (decision !== 'allow' && decision !== 'always' && decision !== 'deny') {
         return { ok: false, error: 'invalid_decision' };
       }
-      const claimed = resolveToolApproval(db, p.id as string, decision);
+      const claimed = await getDesktopHostToolApprovalApi().resolveToolApproval(p.id as string, decision);
       if (!claimed) return { ok: false, error: 'not_found' };
       return { ok: true, claimed: claimed.claimed, row: claimed.row };
     }
 
     case 'message:getCount': {
-      const { messageLog } = getCoreStores();
-      return messageLog.getCount(p.sessionId as string);
+      return getDesktopHostSessionApi().countTimeline(p.sessionId as string);
     }
 
     case 'message:deleteBySession': {
-      const { messageLog } = getCoreStores();
-      const before = messageLog.getCount(p.sessionId as string);
-      messageLog.deleteBySession(p.sessionId as string);
-      return before;
+      return getDesktopHostSessionApi().deleteTimeline(p.sessionId as string);
     }
 
     // Decision 3: message:append maps to MessageLog.appendBatch (INSERT OR IGNORE
     // idempotency). turnId is forwarded to NewEvent.turnId for turn-scoped queries.
     case 'message:append': {
-      const { messageLog } = getCoreStores();
       const sessionId = p.sessionId as string;
       const messages = p.messages as Array<Record<string, unknown>>;
       const turnId = p.turnId as string | null | undefined;
@@ -1060,11 +1068,10 @@ export async function dispatchDbAction(
         const events: NewEvent[] = messages.map((msg) =>
           ipcMessageToNewEvent(sessionId, msg as unknown as Parameters<typeof ipcMessageToNewEvent>[1], turnId ?? null),
         );
-        // Count actually-appended rows via getCount diff (INSERT OR IGNORE makes
-        // duplicate IDs no-ops). Single-writer model ensures no concurrent inserts.
-        const before = messageLog.getCount(sessionId);
-        messageLog.appendBatch(events);
-        const after = messageLog.getCount(sessionId);
+        const receipt = await getDesktopHostSessionApi().appendTimeline(sessionId, {
+          entries: events.map((event) => event.payload),
+          ...(turnId !== undefined ? { turnId } : {}),
+        });
 
         // Broadcast to all renderer windows (Plan 483 P2)
         // Each renderer checks if the sessionId matches its active session and refreshes
@@ -1085,7 +1092,7 @@ export async function dispatchDbAction(
         // room turn runs from the chained queue (stale epochs no-op).
         maybeScheduleGroupTurnFromAppend(sessionId, messages);
 
-        return { success: true, count: after - before };
+        return { success: true, count: receipt.writtenCount };
       } catch (err) {
         getLogger().error('message:append failed', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.AgentCommunicator);
         return { success: false, count: 0, reason: 'transaction_failed' };
@@ -1164,7 +1171,6 @@ export async function dispatchDbAction(
     // path widens NewEvent.payload to include RolloutEvent — see
     // apps/desktop/src/main/db/core/rollout-events.ts.
     case 'journal:emit': {
-      const { messageLog } = getCoreStores();
       const sessionId = p.sessionId as string;
       const event = p.event as Record<string, unknown>;
       const turnId = p.turnId as string | null | undefined;
@@ -1184,10 +1190,11 @@ export async function dispatchDbAction(
           payload: event as unknown as NewEvent['payload'],
           createdAt: typeof event.createdAt === 'number' ? (event.createdAt as number) : Date.now(),
         };
-        const before = messageLog.getCount(sessionId);
-        messageLog.appendBatch([newEvent]);
-        const after = messageLog.getCount(sessionId);
-        return { success: true, count: after - before };
+        const receipt = await getDesktopHostSessionApi().appendTimeline(sessionId, {
+          entries: [newEvent.payload],
+          turnId: newEvent.turnId ?? null,
+        });
+        return { success: true, count: receipt.writtenCount };
       } catch (err) {
         getLogger().error('journal:emit failed', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.AgentCommunicator);
         return { success: false, count: 0, reason: 'transaction_failed' };
@@ -1203,7 +1210,9 @@ export async function dispatchDbAction(
     case 'sendMessageState:createWidgetPending': {
       const msgId = p.messageId as string;
       try {
-        createWidgetPending(db, p as never);
+        await getDesktopHostLocalSendMessageStateApi().createWidgetPending(
+          p as unknown as CreateWidgetPendingInput,
+        );
         return { success: true, messageId: msgId };
       } catch (err) {
         getLogger().error('sendMessageState:createWidgetPending failed', err instanceof Error ? err : new Error(String(err)), { messageId: msgId }, LogComponent.AgentCommunicator);
@@ -1214,7 +1223,12 @@ export async function dispatchDbAction(
     case 'sendMessageState:updateWidgetResponse': {
       const msgId = p.messageId as string;
       try {
-        updateWidgetResponse(db, { messageId: msgId, status: p.status as never, customAnswer: p.customAnswer as string | null | undefined, answeredAt: p.answeredAt as number | null | undefined });
+        await getDesktopHostLocalSendMessageStateApi().updateWidgetResponse({
+          messageId: msgId,
+          status: p.status as 'pending' | 'answered' | 'dismissed',
+          customAnswer: p.customAnswer as string | null | undefined,
+          answeredAt: p.answeredAt as number | null | undefined,
+        });
         return { success: true, messageId: msgId };
       } catch (err) {
         getLogger().error('sendMessageState:updateWidgetResponse failed', err instanceof Error ? err : new Error(String(err)), { messageId: msgId }, LogComponent.AgentCommunicator);
@@ -1225,7 +1239,9 @@ export async function dispatchDbAction(
     case 'sendMessageState:upsertCursorAgentRun': {
       const msgId = p.messageId as string;
       try {
-        upsertCursorAgentRun(db, p as never);
+        await getDesktopHostLocalSendMessageStateApi().upsertCursorAgentRun(
+          p as unknown as CursorAgentRunInput,
+        );
         return { success: true, messageId: msgId };
       } catch (err) {
         getLogger().error('sendMessageState:upsertCursorAgentRun failed', err instanceof Error ? err : new Error(String(err)), { messageId: msgId }, LogComponent.AgentCommunicator);
@@ -1236,7 +1252,11 @@ export async function dispatchDbAction(
     case 'sendMessageState:updateCursorAgentRun': {
       const msgId = p.messageId as string;
       try {
-        updateCursorAgentRun(db, { messageId: msgId, status: p.status as never, updatedAt: p.updatedAt as number });
+        await getDesktopHostLocalSendMessageStateApi().updateCursorAgentRun({
+          messageId: msgId,
+          status: p.status as 'pending' | 'running' | 'completed' | 'failed' | 'aborted',
+          updatedAt: p.updatedAt as number,
+        });
         return { success: true, messageId: msgId };
       } catch (err) {
         getLogger().error('sendMessageState:updateCursorAgentRun failed', err instanceof Error ? err : new Error(String(err)), { messageId: msgId }, LogComponent.AgentCommunicator);
@@ -1247,7 +1267,9 @@ export async function dispatchDbAction(
     case 'sendMessageState:createSecretPending': {
       const msgId = p.messageId as string;
       try {
-        createSecretPending(db, p as never);
+        await getDesktopHostLocalSendMessageStateApi().createSecretPending(
+          p as unknown as CreateSecretPendingInput,
+        );
         return { success: true, messageId: msgId };
       } catch (err) {
         getLogger().error('sendMessageState:createSecretPending failed', err instanceof Error ? err : new Error(String(err)), { messageId: msgId }, LogComponent.AgentCommunicator);
@@ -1258,7 +1280,11 @@ export async function dispatchDbAction(
     case 'sendMessageState:markSecretProvided': {
       const msgId = p.messageId as string;
       try {
-        markSecretProvided(db, { messageId: msgId, status: p.status as 'provided' | 'dismissed', providedAt: p.providedAt as number | null | undefined });
+        await getDesktopHostLocalSendMessageStateApi().markSecretProvided({
+          messageId: msgId,
+          status: p.status as 'provided' | 'dismissed',
+          providedAt: p.providedAt as number | null | undefined,
+        });
         return { success: true, messageId: msgId };
       } catch (err) {
         getLogger().error('sendMessageState:markSecretProvided failed', err instanceof Error ? err : new Error(String(err)), { messageId: msgId }, LogComponent.AgentCommunicator);
@@ -1269,7 +1295,6 @@ export async function dispatchDbAction(
     // Decision 3: message:replace maps to MessageLog.appendBatch (INSERT OR IGNORE
     // idempotency). Generation optimistic lock is deprecated (append-only store).
     case 'message:replace': {
-      const { sessions, messageLog } = getCoreStores();
       const sessionId = p.sessionId as string;
       const messages = p.messages as Array<Record<string, unknown>>;
 
@@ -1286,8 +1311,9 @@ export async function dispatchDbAction(
 
       // Auto-create session if missing (old behavior: happens when the Worker
       // creates a session without a DB entry first).
-      if (!sessions.get(sessionId)) {
-        sessions.create({ id: sessionId, createdAt: Date.now(), updatedAt: Date.now() });
+      const hostApi = getDesktopHostSessionApi();
+      if (!(await hostApi.get(sessionId, { includeAllSessions: true }))) {
+        await hostApi.create({ id: sessionId, createdAt: Date.now() });
       }
 
       try {
@@ -1296,7 +1322,9 @@ export async function dispatchDbAction(
           msg.id = id;
           return ipcMessageToNewEvent(sessionId, msg as unknown as Parameters<typeof ipcMessageToNewEvent>[1]);
         });
-        messageLog.appendBatch(events);
+        await getDesktopHostSessionApi().appendTimeline(sessionId, {
+          entries: events.map((event) => event.payload),
+        });
         const result = { success: true, newGeneration: 0, messageCount: events.length };
         debugLog('message:replace success', { sessionId, ...result });
         return result;
@@ -1308,7 +1336,6 @@ export async function dispatchDbAction(
 
     // ==================== Lock actions (core store thin forward) ====================
     case 'lock:acquire': {
-      const { locks } = getCoreStores();
       // Plan 500 P1: origin attributes the run (user chat / agent wake /
       // background automation) so the bot run scheduler can classify any
       // in-flight run before deciding to preempt it.
@@ -1316,13 +1343,13 @@ export async function dispatchDbAction(
         p.origin === 'user' || p.origin === 'agent' || p.origin === 'background'
           ? p.origin
           : undefined;
-      const result = locks.acquire(
-        p.sessionId as string,
-        p.lockId as string,
-        p.owner as string,
-        (p.ttlSec as number) || 300,
-        origin,
-      );
+      const result = await getDesktopHostLockApi().acquireLock({
+        sessionId: p.sessionId as string,
+        lockId: p.lockId as string,
+        owner: p.owner as string,
+        ttlSec: (p.ttlSec as number) || 300,
+        ...(origin === undefined ? {} : { origin }),
+      });
       // Plan 476 P2.5: a user-initiated turn starts here (router marks
       // wake/automation runs with wakeRun/effort:off and omits userTurn).
       // Advance the turn epoch so older parked background wakes are
@@ -1334,13 +1361,18 @@ export async function dispatchDbAction(
     }
 
     case 'lock:renew': {
-      const { locks } = getCoreStores();
-      return locks.renew(p.sessionId as string, p.lockId as string, (p.ttlSec as number) || 300);
+      return getDesktopHostLockApi().renewLock({
+        sessionId: p.sessionId as string,
+        lockId: p.lockId as string,
+        ttlSec: (p.ttlSec as number) || 300,
+      });
     }
 
     case 'lock:release': {
-      const { locks } = getCoreStores();
-      const result = locks.release(p.sessionId as string, p.lockId as string);
+      const result = await getDesktopHostLockApi().releaseLock({
+        sessionId: p.sessionId as string,
+        lockId: p.lockId as string,
+      });
       // Plan 476 P2.1: a released runtime lock means "this session's run
       // ended" — re-kick the wake dispatcher so background wakes that were
       // parked behind a user turn can drain now. Harmless when the session
@@ -1350,137 +1382,118 @@ export async function dispatchDbAction(
     }
 
     case 'lock:isLocked': {
-      const { locks } = getCoreStores();
-      return locks.isLocked(p.sessionId as string);
+      return getDesktopHostLockApi().isSessionLocked(p.sessionId as string);
     }
 
     // Plan 500 P1: run attribution of the current lock holder (null = idle
     // or unattributed legacy row).
     case 'lock:origin': {
-      const { locks } = getCoreStores();
-      return locks.lockOrigin(p.sessionId as string);
+      return getDesktopHostLockApi().getSessionLockOrigin(p.sessionId as string);
     }
 
-    // ==================== Task actions (core store thin forward) ====================
+    // ==================== Task actions (Host API compatibility adapter) ====================
     case 'task:create': {
-      const { tasks } = getCoreStores();
-      const task = tasks.create(ipcTaskToCoreCreate(p as Parameters<typeof ipcTaskToCoreCreate>[0]));
-      return coreTaskToIpcRow(task);
+      const data = p as Parameters<typeof ipcTaskToHostCreate>[0];
+      const task = await getDesktopHostTaskApi().createTask(data.session_id, ipcTaskToHostCreate(data));
+      return hostTaskToIpcRow(task);
     }
 
     case 'task:get': {
-      const { tasks } = getCoreStores();
-      const task = tasks.get(p.id as string);
-      return task ? coreTaskToIpcRow(task) : undefined;
+      const task = await getDesktopHostTaskApi().getTask(p.id as string);
+      return task ? hostTaskToIpcRow(task) : undefined;
     }
 
     case 'task:getBySession': {
-      const { tasks } = getCoreStores();
-      return tasks.getBySession(p.sessionId as string).map(coreTaskToIpcRow);
+      const tasks = await getDesktopHostTaskApi().listTasks(p.sessionId as string);
+      return tasks.map(hostTaskToIpcRow);
     }
 
     case 'task:update': {
-      const { tasks } = getCoreStores();
-      const task = tasks.update(p.id as string, ipcTaskToUpdate(p));
-      return task ? coreTaskToIpcRow(task) : undefined;
+      const task = await getDesktopHostTaskApi().updateTask(p.id as string, ipcTaskToHostUpdate(p));
+      return task ? hostTaskToIpcRow(task) : undefined;
     }
 
     case 'task:delete': {
-      const { tasks } = getCoreStores();
-      return tasks.delete(p.id as string);
+      return getDesktopHostTaskApi().deleteTask(p.id as string);
     }
 
     case 'task:deleteBySession': {
-      const { tasks } = getCoreStores();
-      tasks.deleteBySession(p.sessionId as string);
+      await getDesktopHostTaskApi().deleteTasksBySession(p.sessionId as string);
       return { success: true };
     }
 
     case 'task:claim': {
-      const { tasks } = getCoreStores();
-      const result = tasks.claim(p.id as string, p.owner as string);
+      const result = await getDesktopHostTaskApi().claimTask(p.id as string, p.owner as string);
       if (result.success && result.task) {
-        return { success: true, task: coreTaskToIpcRow(result.task) };
+        return { success: true, task: hostTaskToIpcRow(result.task) };
       }
       return result;
     }
 
     case 'task:block': {
-      const { tasks } = getCoreStores();
-      return tasks.block(p.fromId as string, p.toId as string);
+      return getDesktopHostTaskApi().blockTasks(p.fromId as string, p.toId as string);
     }
 
     case 'task:unassignTeammate': {
-      const { tasks } = getCoreStores();
-      return tasks.unassignTeammate(p.sessionId as string, p.owner as string);
+      return getDesktopHostTaskApi().unassignTeammateTasks(p.sessionId as string, p.owner as string);
     }
 
     case 'task:getByOwner': {
-      const { tasks } = getCoreStores();
-      return tasks.getByOwner(p.sessionId as string, p.owner as string).map(coreTaskToIpcRow);
+      const tasks = await getDesktopHostTaskApi().listTasksByOwner(p.sessionId as string, p.owner as string);
+      return tasks.map(hostTaskToIpcRow);
     }
 
     // ==================== Settings actions ====================
     case 'setting:get': {
-      const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(p.key) as { value: string } | undefined;
-      return row?.value ?? null;
+      return getDesktopHostLocalSettingsApi().getSetting(p.key as string);
     }
 
     case 'setting:set': {
-      db.prepare(`
-        INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-      `).run(p.key, p.value, now);
+      await getDesktopHostLocalSettingsApi().setSetting(p.key as string, p.value as string);
       return { success: true };
     }
 
     case 'setting:getAll': {
-      const rows = db.prepare('SELECT key, value FROM settings').all() as Array<{ key: string; value: string }>;
-      const settings: Record<string, string> = {};
-      for (const row of rows) settings[row.key] = row.value;
-      return settings;
+      return getDesktopHostLocalSettingsApi().getSettings();
     }
 
     case 'setting:getJson': {
-      const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(p.key) as { value: string } | undefined;
-      if (!row) return p.defaultValue;
+      const value = await getDesktopHostLocalSettingsApi().getSetting(p.key as string);
+      if (value === null) return p.defaultValue;
       try {
-        return JSON.parse(row.value);
+        return JSON.parse(value);
       } catch {
         return p.defaultValue;
       }
     }
 
     case 'setting:setJson': {
-      db.prepare(`
-        INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-      `).run(p.key, JSON.stringify(p.value), now);
+      const serialized = JSON.stringify(p.value);
+      if (serialized === undefined) throw new Error('Setting value is not JSON serializable');
+      await getDesktopHostLocalSettingsApi().setSetting(p.key as string, serialized);
       return { success: true };
     }
 
-    // ==================== Permission actions (core store thin forward) ====================
+    // ==================== Permission actions (Host API) ====================
     case 'permission:create': {
-      const { permissions } = getCoreStores();
-      const perm = permissions.create(ipcPermissionToCoreCreate(p as Parameters<typeof ipcPermissionToCoreCreate>[0]));
+      const perm = await getDesktopHostPermissionRequestApi().createPermissionRequest(
+        ipcPermissionToCoreCreate(p as Parameters<typeof ipcPermissionToCoreCreate>[0]),
+      );
       return corePermissionToIpcRow(perm);
     }
 
     case 'permission:get': {
-      const { permissions } = getCoreStores();
-      const perm = permissions.get(p.id as string);
+      const perm = await getDesktopHostPermissionRequestApi().getPermissionRequest(p.id as string);
       return perm ? corePermissionToIpcRow(perm) : undefined;
     }
 
     case 'permission:resolve': {
-      const { permissions } = getCoreStores();
       const extra = p.extra as { message?: string; updatedPermissions?: unknown[]; updatedInput?: Record<string, unknown> } | undefined;
-      permissions.resolve(p.id as string, {
+      const resolved = await getDesktopHostPermissionRequestApi().resolvePermissionRequest(p.id as string, {
         status: p.status as 'pending' | 'allow' | 'deny' | 'timeout' | 'aborted',
         decision: p.status as string,
         ...ipcPermissionToResolve(extra),
       });
-      const resolved = permissions.get(p.id as string);
       return resolved ? corePermissionToIpcRow(resolved) : undefined;
     }
 
@@ -1489,94 +1502,48 @@ export async function dispatchDbAction(
     // MessageLog.searchText (rollout content scan). Returns the old
     // `s.* + snippet` shape so consumers have zero changes.
     case 'search:sessions': {
-      const { sessions, messageLog } = getCoreStores();
       const limit = (p.limit as number) || 10;
-      // 1. Metadata matches (title / project_name / agent_name) — snippet empty.
-      const metaHits = sessions.search(p.query as string, limit);
-      const seenIds = new Set(metaHits.map((s) => s.id));
-      const rows: Record<string, unknown>[] = metaHits.map((s) => ({
-        ...coreSessionToIpcRow(s),
-        snippet: '',
-      }));
-
-      // 2. Content matches (rollout scan) — fill in snippet for sessions not
-      //    already in the metadata set, up to `limit` total.
-      if (rows.length < limit) {
-        const remaining = limit - rows.length;
-        const contentHits = messageLog.searchText(p.query as string, { limit: remaining + 5 });
-        for (const hit of contentHits) {
-          if (rows.length >= limit) break;
-          if (seenIds.has(hit.sessionId)) {
-            // Attach snippet to existing metadata hit if not already set.
-            const row = rows.find((r) => r.id === hit.sessionId);
-            if (row && !row.snippet) row.snippet = hit.snippet;
-            continue;
-          }
-          const session = sessions.get(hit.sessionId);
-          if (!session || session.status === 'deleted') continue;
-          seenIds.add(hit.sessionId);
-          rows.push({
-            ...coreSessionToIpcRow(session),
-            snippet: hit.snippet,
-          });
-        }
-      }
-
-      // Sort by updated_at DESC (matches old ORDER BY).
-      rows.sort((a, b) => ((b.updated_at as number) ?? 0) - ((a.updated_at as number) ?? 0));
-      return rows.slice(0, limit);
+      return searchHostSessionRows(p.query as string, limit);
     }
 
     // ==================== Channel actions ====================
     case 'channel:getBindings': {
       const channelType = p.channelType as string | undefined;
-      if (channelType) {
-        return db.prepare('SELECT * FROM channel_bindings WHERE channel_type = ? ORDER BY updated_at DESC').all(channelType);
-      }
-      return db.prepare('SELECT * FROM channel_bindings ORDER BY updated_at DESC').all();
+      return getDesktopHostLocalChannelPersistenceApi().listChannelBindings(channelType);
     }
 
     case 'channel:getBinding':
-      return db.prepare('SELECT * FROM channel_bindings WHERE channel_type = ? AND chat_id = ?').get(p.channelType, p.chatId);
+      return getDesktopHostLocalChannelPersistenceApi().getChannelBinding(
+        p.channelType as string,
+        p.chatId as string,
+      );
 
     case 'channel:upsertBinding': {
-      db.prepare(`
-        INSERT INTO channel_bindings (id, channel_type, chat_id, duya_session_id, sdk_session_id, working_directory, model, mode, active, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          duya_session_id = excluded.duya_session_id,
-          sdk_session_id = COALESCE(excluded.sdk_session_id, sdk_session_id),
-          working_directory = COALESCE(excluded.working_directory, working_directory),
-          model = COALESCE(excluded.model, model),
-          mode = COALESCE(excluded.mode, mode),
-          updated_at = excluded.updated_at
-      `).run(
-        p.id,
-        p.channel_type,
-        p.chat_id,
-        p.duya_session_id,
-        p.sdk_session_id || '',
-        p.working_directory || '',
-        p.model || '',
-        p.mode || 'code',
-        now,
-        now
-      );
-      return db.prepare('SELECT * FROM channel_bindings WHERE id = ?').get(p.id);
+      return getDesktopHostLocalChannelPersistenceApi().upsertChannelBinding({
+        id: p.id as string,
+        channel_type: p.channel_type as string,
+        chat_id: p.chat_id as string,
+        duya_session_id: p.duya_session_id as string,
+        ...(typeof p.sdk_session_id === 'string' ? { sdk_session_id: p.sdk_session_id } : {}),
+        ...(typeof p.working_directory === 'string' ? { working_directory: p.working_directory } : {}),
+        ...(typeof p.model === 'string' ? { model: p.model } : {}),
+        ...(typeof p.mode === 'string' ? { mode: p.mode } : {}),
+      });
     }
 
     case 'channel:getOffset':
-      return db.prepare('SELECT * FROM channel_offsets WHERE channel_type = ? AND offset_key = ?').get(p.channelType, p.offsetKey);
+      return getDesktopHostLocalChannelPersistenceApi().getChannelOffset(
+        p.channelType as string,
+        p.offsetKey as string,
+      );
 
     case 'channel:setOffset': {
-      db.prepare(`
-        INSERT INTO channel_offsets (channel_type, offset_key, offset_value, offset_type, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(channel_type, offset_key) DO UPDATE SET
-          offset_value = excluded.offset_value,
-          offset_type = COALESCE(excluded.offset_type, offset_type),
-          updated_at = excluded.updated_at
-      `).run(p.channelType, p.offsetKey, p.offsetValue, p.offsetType || 'long_polling', now);
+      await getDesktopHostLocalChannelPersistenceApi().setChannelOffset({
+        channelType: p.channelType as string,
+        offsetKey: p.offsetKey as string,
+        offsetValue: p.offsetValue as string,
+        offsetType: (p.offsetType as string | undefined) || 'long_polling',
+      });
     }
 
     // ==================== Project actions ====================
@@ -1586,22 +1553,20 @@ export async function dispatchDbAction(
       // single group whose working_directory is the entity's canonical
       // root (paths[0]); sessions in projects without an entity keep the
       // per-path grouping.
-      const { sessions } = getCoreStores();
-      const all = sessions.list();
+      const all = await readAllHostLocalSessions();
       const normalizeForMatch = (value: string): string =>
         value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 
-      // Best-effort entity lookup: memory DB may be unbootstrapped.
+      // Best-effort entity lookup through the Host-owned project API.
       let entityByPath: Map<string, { projectId: string; canonicalRoot: string; name: string }>;
       try {
-        const memoryState = await import('../memory-state');
+        const projects = await getDesktopHostProjectApi().listProjects();
         entityByPath = new Map();
-        for (const row of memoryState.listProjects()) {
-          const entries = memoryState.projectPaths(row);
-          for (const entry of entries) {
+        for (const row of projects) {
+          for (const entry of row.paths) {
             entityByPath.set(normalizeForMatch(entry.path), {
               projectId: row.project_id,
-              canonicalRoot: entries[0]?.path ?? entry.path,
+              canonicalRoot: row.paths[0]?.path ?? entry.path,
               name: row.name,
             });
           }
@@ -1678,16 +1643,11 @@ export async function dispatchDbAction(
 
     case 'automation:cron:runs': {
       const input = p as { cronId: string; limit?: number; offset?: number };
-      const { sessions } = getCoreStores();
-      const rows = sessions.listByPrefix(`cron:${input.cronId}:`, { limit: input.limit, offset: input.offset });
-      return rows.map((r) => ({
-        id: r.id,
-        title: r.title,
-        createdAt: r.created_at,
-        updatedAt: r.updated_at,
-        model: r.model,
-        messageCount: r.message_count,
-      }));
+      return getDesktopHostLocalSessionApi().listLocalSessionSummariesByPrefix({
+        idPrefix: `cron:${input.cronId}:`,
+        ...(input.limit === undefined ? {} : { limit: input.limit }),
+        ...(input.offset === undefined ? {} : { offset: input.offset }),
+      });
     }
 
     // ==================== Config Manager actions ====================
@@ -1747,7 +1707,7 @@ export async function dispatchDbAction(
       const resolvedModelId =
         runtimeModel || runtimeExplicit || getDefaultModelForProvider(runtimeLegacy.providerType, runtimeLegacy.options);
       if (!resolvedModelId) return null;
-      const capability = store.resolveRuntimeCapability(runtimeLlm.id, resolvedModelId);
+      const capability = await store.resolveRuntimeCapability(runtimeLlm.id, resolvedModelId);
       const cfg = toRuntimeConfig(runtimeLlm, {
         modelId: resolvedModelId,
         capabilities: capability,
@@ -1785,37 +1745,17 @@ export async function dispatchDbAction(
       const sessionCwd = typeof p.workingDirectory === 'string' ? p.workingDirectory.trim() : '';
       if (!sessionCwd) return { projectId: null, additionalRoots: [] };
       try {
-        // listProjects throws when the memory-state DB is not bootstrapped
-        // (memory worker disabled) — bootstrap lazily once and retry, so
-        // project root injection works regardless of the memory toggle.
-        let memoryState: typeof import('../memory-state');
-        try {
-          memoryState = await import('../memory-state');
-        } catch {
-          return { projectId: null, additionalRoots: [] };
-        }
-        let rows = memoryState.listProjects();
-        if (rows.length === 0) {
-          try {
-            const { getDatabasePath } = await import('../config/boot-config');
-            memoryState.bootstrap({ bootJsonDatabaseDir: path.dirname(getDatabasePath()) });
-            rows = memoryState.listProjects();
-          } catch {
-            // no database dir available — treat as no project
-          }
-        }
+        const rows = await getDesktopHostProjectApi().listProjects();
         // Normalize the cwd through the same algorithm as the stored
         // path entries. `normalizePath` swallows realpath failures
         // (ELOOP / ENOENT / EACCES) and falls back to lexical resolve,
         // so cwd for a fresh chat on a not-yet-created directory still
         // matches a stored entry created from the same lexical form.
-        const cwdNorm = memoryState.normalizePath(sessionCwd).absolute_normalized_path;
-        const hit = rows.find((row) =>
-          memoryState.projectPaths(row).some((entry) => entry.path === cwdNorm)
-        );
+        const cwdNorm = normalizePath(sessionCwd).absolute_normalized_path;
+        const hit = rows.find((row) => row.paths.some((entry) => entry.path === cwdNorm));
         if (!hit) return { projectId: null, additionalRoots: [] };
         // L2 hardening: only inject roots that the project actually
-        // owns. `projectPaths(row)` is the canonical list stored in
+        // owns. `row.paths` is the canonical list stored in
         // `projects.paths` (already normalized by `createProject` /
         // `updateProject` since the L1 fix). Filter against the cwd
         // (already excluded) and dedupe — we never trust any extra
@@ -1824,7 +1764,7 @@ export async function dispatchDbAction(
         const cwdNormLower = cwdNorm.toLowerCase();
         const seen = new Set<string>([cwdNormLower]);
         const additionalRoots: string[] = [];
-        for (const entry of memoryState.projectPaths(hit)) {
+        for (const entry of hit.paths) {
           const lower = entry.path.toLowerCase();
           if (seen.has(lower)) continue;
           seen.add(lower);
@@ -1849,9 +1789,9 @@ export async function dispatchDbAction(
         const hit = await resolveProjectByCwd(sessionCwd);
         if (!hit) return { projectId: null, paths: null };
         // paths is the canonical list of registered working paths; the agent server derives the writable-roots fan-out from it. projectHome is the per-project duya-internal storage root that owns the project's AGENTS.md and plans/. The agent subprocess uses projectHome independently of paths because the entity home lives outside any user code subtree.
-        // Resolve the duya projects base via the same path the storage side uses (Plan 536 L3); the per-project entity home lives at `<base>/<projectId>/` and is the directory the agentsmd loader reads `<home>/AGENTS.md` from. The base honors DUYA_TEST and DUYA_TEST_NAMESPACE so unit tests get isolated roots.
-        const memoryStateMod = await import('../memory-state');
-        const projectHome = path.join(memoryStateMod.resolveProjectsRoot(), hit.projectId);
+        // Resolve the project entity home from the shared data root. The root
+        // honors DUYA_TEST and DUYA_TEST_NAMESPACE so tests stay isolated.
+        const projectHome = path.join(resolveDataRoot(), 'projects', hit.projectId);
         return {
           projectId: hit.projectId,
           paths: hit.paths,
@@ -2051,15 +1991,7 @@ export async function dispatchDbAction(
     }
 
     case 'health:gatewayStatus': {
-      const dbHealth = getDatabase();
-      if (!dbHealth) throw new Error('Database not available');
-
-      const bindings = dbHealth.prepare('SELECT channel_type, chat_id, active, updated_at FROM channel_bindings ORDER BY updated_at DESC').all() as Array<{
-        channel_type: string;
-        chat_id: string;
-        active: number;
-        updated_at: number;
-      }>;
+      const bindings = await getDesktopHostLocalChannelPersistenceApi().listChannelBindings();
 
       const gateways: Record<string, { chatCount: number; active: boolean; lastActivity: string }> = {};
       for (const b of bindings) {
@@ -2085,8 +2017,8 @@ export async function dispatchDbAction(
     }
 
     // ==================== Attachment actions (parsed_document) ====================
-    // Plan 332 Phase 2: payloads moved from the legacy `message_attachments.data`
-    // TEXT column to file-backed `AttachmentStore` (core DB index + ~/.duya/attachments).
+    // Plan 332 Phase 2: new payloads use the file-backed AttachmentStore;
+    // Host also projects older parsed-document rows from `message_attachments`.
     case 'attachment:store': {
       const messageId = p.messageId as string;
       const sessionId = p.sessionId as string;
@@ -2104,450 +2036,26 @@ export async function dispatchDbAction(
       const extractMethod = p.extractMethod as string | undefined;
       const imageChunks = p.imageChunks as Array<{ base64: string; mediaType: string }> | undefined;
 
-      const id = `${messageId}-parsed-doc`;
-      getCoreStores().attachments.save({
-        id,
+      return getDesktopHostLocalAttachmentApi().storeParsedDocument({
         messageId,
         sessionId,
-        type: 'parsed_document',
-        mimeType: 'application/pdf',
         filename,
-        originalUrl: filePath,
-        data: JSON.stringify({
-          filename,
-          filePath,
-          charCount,
-          text,
-          extractMethod: extractMethod || null,
-          imageChunks: imageChunks || [],
-        }),
+        filePath,
+        charCount,
+        text,
+        ...(extractMethod === undefined ? {} : { extractMethod }),
+        ...(imageChunks === undefined ? {} : { imageChunks }),
       });
-      return { success: true };
     }
 
     case 'attachment:getForSession': {
       const sessionId = p.sessionId as string;
-      return getCoreStores()
-        .attachments.getForSession(sessionId)
-        .filter((a) => a.attachmentType === 'parsed_document')
-        .map(parsedDocToRow);
+      return getDesktopHostLocalAttachmentApi().getParsedDocumentsForSession(sessionId);
     }
 
     case 'attachment:getForMessage': {
       const messageId = p.messageId as string;
-      return getCoreStores()
-        .attachments.getForMessage(messageId)
-        .filter((a) => a.attachmentType === 'parsed_document')
-        .map(parsedDocToRow);
-    }
-
-    // ==================== Research Session actions (Plan 60 - Research Mode) ====================
-    case 'researchSession:create': {
-      return research.createSession({
-        id: p.id as string,
-        sessionId: p.session_id as string,
-        originalQuery: p.original_query as string,
-        clarification: p.clarification as string | null,
-        contextJson: p.context_json as string,
-        status: p.status as string,
-        title: p.title as string | null,
-        runStatus: p.run_status as string | null,
-      });
-    }
-
-    case 'researchSession:get': {
-      return research.getSession(p.id as string);
-    }
-
-    case 'researchSession:getBySessionId': {
-      return research.getSessionBySessionId(p.sessionId as string);
-    }
-
-    case 'researchSession:update': {
-      const id = p.id as string;
-      const patch: Parameters<typeof research.updateSession>[1] = {};
-      if (p.clarification !== undefined) patch.clarification = p.clarification as string | null;
-      if (p.context_json !== undefined) patch.contextJson = p.context_json as string;
-      if (p.status !== undefined) patch.status = p.status as string;
-      if (p.current_phase !== undefined) patch.currentPhase = p.current_phase as string;
-      if (p.iterations !== undefined) patch.iterations = p.iterations as number;
-      if (p.coverage !== undefined) patch.coverage = p.coverage as number;
-      if (p.title !== undefined) patch.title = p.title as string | null;
-      if (p.run_status !== undefined) patch.runStatus = p.run_status as string | null;
-      if (p.plan_version !== undefined) patch.planVersion = p.plan_version as number;
-      if (p.active_step_id !== undefined) patch.activeStepId = p.active_step_id as string | null;
-      if (p.progress_summary !== undefined) patch.progressSummary = p.progress_summary as string | null;
-      if (p.completed_at !== undefined) patch.completedAt = p.completed_at as number | null;
-      if (p.error_json !== undefined) patch.errorJson = p.error_json as string | null;
-      return research.updateSession(id, patch);
-    }
-
-    case 'researchSession:delete': {
-      return { success: research.deleteSession(p.id as string) };
-    }
-
-    case 'researchSession:list': {
-      return research.listSessions(p.limit as number);
-    }
-
-    case 'researchSession:listByStatus': {
-      return research.listSessionsByStatus(p.status as string);
-    }
-
-    case 'researchSession:getActiveRun': {
-      return research.getActiveRun(p.sessionId as string);
-    }
-
-    case 'researchSession:listActiveRuns': {
-      return research.listActiveRuns();
-    }
-
-    // ==================== Research Plan Steps ====================
-
-    case 'researchPlanStep:createSteps': {
-      const runId = p.runId as string;
-      const steps = p.steps as Array<{
-        id: string;
-        order_num: number;
-        user_facing_label: string;
-        internal_question_ids: string[];
-      }>;
-      return research.createSteps(runId, steps.map(s => ({
-        id: s.id,
-        orderNum: s.order_num,
-        userFacingLabel: s.user_facing_label,
-        internalQuestionIds: s.internal_question_ids,
-      })));
-    }
-
-    case 'researchPlanStep:getByRunId': {
-      return research.getPlanStepsByRunId(p.runId as string);
-    }
-
-    case 'researchPlanStep:update': {
-      const stepId = p.stepId as string;
-      const patch: Parameters<typeof research.updatePlanStep>[1] = {};
-      if (p.status !== undefined) patch.status = p.status as string;
-      if (p.started_at !== undefined) patch.startedAt = p.started_at as number | null;
-      if (p.completed_at !== undefined) patch.completedAt = p.completed_at as number | null;
-      return research.updatePlanStep(stepId, patch);
-    }
-
-    case 'researchPlanStep:deleteByRunId': {
-      research.deletePlanStepsByRunId(p.runId as string);
-      return undefined;
-    }
-
-    // ==================== Research Activities ====================
-
-    case 'researchActivity:create': {
-      return research.createActivity({
-        id: p.id as string,
-        runId: p.run_id as string,
-        sequence: p.sequence as number,
-        kind: p.kind as string,
-        title: p.title as string,
-        detail: p.detail as string | null,
-        visibility: p.visibility as string,
-      });
-    }
-
-    case 'researchActivity:getByRunId': {
-      return research.getActivitiesByRunId(p.runId as string, {
-        visibility: p.visibility as string | undefined,
-        limit: p.limit as number | undefined,
-        afterSequence: p.afterSequence as number | undefined,
-      });
-    }
-
-    case 'researchActivity:getMaxSequence': {
-      return { max_seq: research.getMaxActivitySequence(p.runId as string) };
-    }
-
-    case 'researchActivity:deleteByRunId': {
-      research.deleteActivitiesByRunId(p.runId as string);
-      return undefined;
-    }
-
-    // ==================== Research Events / Sources / Citations / Reports ====================
-
-    case 'researchEvent:create': {
-      return research.createEvent({
-        id: p.id as string,
-        runId: p.run_id as string,
-        sequence: p.sequence as number,
-        eventType: p.event_type as string,
-        payloadJson: p.payload_json as string,
-        visibility: p.visibility as string,
-      });
-    }
-
-    case 'researchEvent:getByRunId': {
-      return research.getEventsByRunId(p.runId as string, {
-        limit: p.limit as number | undefined,
-        afterSequence: p.afterSequence as number | undefined,
-        visibility: p.visibility as string | undefined,
-      });
-    }
-
-    case 'researchEvent:getMaxSequence': {
-      return { max_seq: research.getMaxEventSequence(p.runId as string) };
-    }
-
-    case 'researchSource:upsert': {
-      return research.upsertSource({
-        id: p.id as string,
-        runId: p.run_id as string,
-        title: p.title as string,
-        url: p.url as string | null,
-        canonicalUrl: (p.canonical_url ?? p.url) as string | null,
-        sourceType: p.source_type as string,
-        allowedByPolicy: p.allowed_by_policy !== false,
-        reliabilityJson: p.reliability_json as string | null,
-        dedupeKey: p.dedupe_key as string | null,
-        rejectedReason: p.rejected_reason as string | null,
-        metadataJson: p.metadata_json as string | null,
-      });
-    }
-
-    case 'researchSource:getByRunId': {
-      return research.getSourcesByRunId(p.runId as string);
-    }
-
-    case 'researchCitation:create': {
-      return research.createCitation({
-        id: p.id as string,
-        runId: p.run_id as string,
-        reportId: p.report_id as string | null,
-        sourceId: p.source_id as string,
-        findingId: p.finding_id as string | null,
-        claim: p.claim as string,
-        locatorJson: p.locator_json as string | null,
-        quotedEvidence: p.quoted_evidence as string | null,
-      });
-    }
-
-    case 'researchCitation:getByRunId': {
-      return research.getCitationsByRunId(p.runId as string, p.reportId as string | undefined);
-    }
-
-    case 'researchReport:upsert': {
-      return research.upsertReport({
-        id: p.id as string,
-        runId: p.run_id as string,
-        title: p.title as string | null,
-        markdown: p.markdown as string,
-        outlineJson: p.outline_json as string | null,
-        sourceIdsJson: p.source_ids_json as string,
-        citationIdsJson: p.citation_ids_json as string,
-        activitySummaryJson: p.activity_summary_json as string | null,
-        exportMetadataJson: p.export_metadata_json as string | null,
-      });
-    }
-
-    case 'researchReport:getLatest': {
-      return research.getLatestReport(p.runId as string);
-    }
-
-    // ==================== Research Memory actions ====================
-
-    case 'researchMemory:project:create': {
-      return research.createProject({
-        id: p.id as string,
-        name: p.name as string,
-        description: p.description as string | null,
-      });
-    }
-
-    case 'researchMemory:project:get': {
-      return research.getProject(p.id as string);
-    }
-
-    case 'researchMemory:project:list': {
-      return research.listProjects();
-    }
-
-    case 'researchMemory:project:update': {
-      const id = p.id as string;
-      const patch: Parameters<typeof research.updateProject>[1] = {};
-      if (p.name !== undefined) patch.name = p.name as string;
-      if (p.description !== undefined) patch.description = p.description as string | null;
-      if (p.status !== undefined) patch.status = p.status as string;
-      return research.updateProject(id, patch);
-    }
-
-    case 'researchMemory:project:delete': {
-      return { success: research.deleteProject(p.id as string) };
-    }
-
-    case 'researchMemory:projectState:get': {
-      return research.getProjectState(p.projectId as string);
-    }
-
-    case 'researchMemory:projectState:upsert': {
-      const stateJson = typeof p.state === 'string' ? p.state : JSON.stringify(p.state);
-      return research.upsertProjectState(p.projectId as string, stateJson);
-    }
-
-    case 'researchMemory:object:create': {
-      return research.createMemoryObject({
-        id: p.id as string,
-        projectId: p.projectId as string,
-        type: p.type as string,
-        content: p.content as string,
-        summary: p.summary as string | null,
-        sourceRefs: p.sourceRefs as string[] | undefined,
-        relationRefs: p.relationRefs as string[] | undefined,
-        validFrom: p.validFrom as number | null,
-        validTo: p.validTo as number | null,
-        status: p.status as string,
-        confidence: p.confidence as number,
-        importance: p.importance as number,
-        tags: p.tags as string[] | undefined,
-        embeddingJson: (p as Record<string, unknown>).embedding_json as string | null,
-      });
-    }
-
-    case 'researchMemory:object:get': {
-      return research.getMemoryObject(p.id as string);
-    }
-
-    case 'researchMemory:object:listByProject': {
-      return research.listMemoryObjectsByProject(p.projectId as string, {
-        type: p.type as string | undefined,
-        status: p.status as string | undefined,
-        limit: p.limit as number | undefined,
-      });
-    }
-
-    case 'researchMemory:object:search': {
-      return research.searchMemoryObjects(p.query as string, {
-        projectId: p.projectId as string | undefined,
-        type: p.type as string | undefined,
-        status: p.status as string | undefined,
-        limit: p.limit as number | undefined,
-      });
-    }
-
-    case 'researchMemory:object:update': {
-      const id = p.id as string;
-      const patch: Parameters<typeof research.updateMemoryObject>[1] = {};
-      if (p.content !== undefined) patch.content = p.content as string;
-      if (p.summary !== undefined) patch.summary = p.summary as string | null;
-      if (p.status !== undefined) patch.status = p.status as string;
-      if (p.type !== undefined) patch.type = p.type as string;
-      if (p.sourceRefs !== undefined) patch.sourceRefs = p.sourceRefs as string[];
-      if (p.relationRefs !== undefined) patch.relationRefs = p.relationRefs as string[];
-      if (p.validFrom !== undefined) patch.validFrom = p.validFrom as number | null;
-      if (p.validTo !== undefined) patch.validTo = p.validTo as number | null;
-      if (p.confidence !== undefined) patch.confidence = p.confidence as number;
-      if (p.importance !== undefined) patch.importance = p.importance as number;
-      if (p.tags !== undefined) patch.tags = p.tags as string[];
-      return research.updateMemoryObject(id, patch);
-    }
-
-    case 'researchMemory:object:delete': {
-      return { success: research.deleteMemoryObject(p.id as string) };
-    }
-
-    case 'researchMemory:hypothesis:create': {
-      return research.createHypothesis({
-        id: p.id as string,
-        projectId: p.projectId as string,
-        statement: p.statement as string,
-        status: p.status as string,
-        supportingEvidenceIds: p.supportingEvidenceIds as string[] | undefined,
-        contradictingEvidenceIds: p.contradictingEvidenceIds as string[] | undefined,
-        relatedSourceIds: p.relatedSourceIds as string[] | undefined,
-      });
-    }
-
-    case 'researchMemory:hypothesis:get': {
-      return research.getHypothesis(p.id as string);
-    }
-
-    case 'researchMemory:hypothesis:listByProject': {
-      return research.listHypothesesByProject(p.projectId as string);
-    }
-
-    case 'researchMemory:hypothesis:update': {
-      const id = p.id as string;
-      const patch: Parameters<typeof research.updateHypothesis>[1] = {};
-      if (p.status !== undefined) patch.status = p.status as string;
-      if (p.supersededBy !== undefined) patch.supersededBy = p.supersededBy as string | null;
-      if (p.supportingEvidenceIds !== undefined) patch.supportingEvidenceIds = p.supportingEvidenceIds as string[];
-      if (p.contradictingEvidenceIds !== undefined) patch.contradictingEvidenceIds = p.contradictingEvidenceIds as string[];
-      if (p.relatedSourceIds !== undefined) patch.relatedSourceIds = p.relatedSourceIds as string[];
-      return research.updateHypothesis(id, patch);
-    }
-
-    case 'researchMemory:hypothesis:delete': {
-      return { success: research.deleteHypothesis(p.id as string) };
-    }
-
-    case 'researchMemory:candidate:create': {
-      return research.createCandidate({
-        id: p.id as string,
-        projectId: p.projectId as string,
-        proposedType: p.proposedType as string,
-        content: p.content as string,
-        rationale: p.rationale as string,
-        sourceRefs: p.sourceRefs as string[] | undefined,
-        confidence: p.confidence as number,
-        createdBySessionId: p.createdBySessionId as string | null,
-      });
-    }
-
-    case 'researchMemory:candidate:get': {
-      return research.getCandidate(p.id as string);
-    }
-
-    case 'researchMemory:candidate:listByProject': {
-      return research.listCandidatesByProject(p.projectId as string, p.status as string | undefined);
-    }
-
-    case 'researchMemory:candidate:accept': {
-      return research.acceptCandidate(p.id as string, (p as Record<string, unknown>).embedding_json as string | null);
-    }
-
-    case 'researchMemory:candidate:reject': {
-      return research.rejectCandidate(p.id as string);
-    }
-
-    case 'researchMemory:candidate:delete': {
-      return { success: research.deleteCandidate(p.id as string) };
-    }
-
-    case 'researchMemory:object:updateEmbedding': {
-      return research.updateEmbedding(p.id as string, (p as Record<string, unknown>).embedding_json as string | null);
-    }
-
-    case 'researchMemory:object:listWithEmbeddings': {
-      return research.listWithEmbeddings({
-        projectId: p.projectId as string | undefined,
-        limit: p.limit as number | undefined,
-      });
-    }
-
-    case 'researchMemory:relation:create': {
-      return research.createRelation({
-        projectId: p.projectId as string,
-        fromMemoryId: p.fromMemoryId as string,
-        toMemoryId: p.toMemoryId as string,
-        relationType: p.relationType as string,
-      });
-    }
-
-    case 'researchMemory:relation:listByMemory': {
-      return research.listRelationsByMemory(p.memoryId as string);
-    }
-
-    case 'researchMemory:relation:listByProject': {
-      return research.listRelationsByProject(p.projectId as string);
-    }
-
-    case 'researchMemory:relation:delete': {
-      return { success: research.deleteRelation(p.id as string) };
+      return getDesktopHostLocalAttachmentApi().getParsedDocumentsForMessage(messageId);
     }
 
     case 'plugin:registry:list': {
@@ -2568,50 +2076,27 @@ export async function dispatchDbAction(
     }
 
     case 'plugin:setup:list-all': {
-      // Return all plugin setup values as `{ [pluginId]: { [key]: value } }`.
-      // The MCP loader uses this map to expand `${setup.X}` references in
-      // plugin manifests. Defensive: if the `plugin_setup_values` table does not
-      // exist yet (setup-storage migration not applied), return an empty
-      // object so `${setup.X}` references degrade to `missingKeys` issues
-      // instead of crashing the MCP load.
-      try {
-        const tableExists = db.prepare(
-          "SELECT 1 FROM sqlite_master WHERE type='table' AND name='plugin_setup_values'",
-        ).get() as { '1': number } | undefined;
-        if (!tableExists) return {};
-        const rows = db.prepare(
-          'SELECT plugin_id, key, value FROM plugin_setup_values',
-        ).all() as Array<{ plugin_id: string; key: string; value: string }>;
-        const out: Record<string, Record<string, string>> = {};
-        for (const row of rows) {
-          if (!out[row.plugin_id]) out[row.plugin_id] = {};
-          out[row.plugin_id][row.key] = row.value;
-        }
-        return out;
-      } catch {
-        return {};
-      }
+      return getDesktopHostLocalPluginSetupApi().listPluginSetupValues();
     }
 
     case 'modelCapability:get': {
       const modelName = (p.modelName as string).trim().toLowerCase();
-      return db.prepare('SELECT * FROM model_capabilities WHERE id = ?').get(modelName);
+      return getDesktopHostLocalModelCapabilityApi().getModelCapability(modelName);
     }
 
     case 'modelCapability:set': {
       const modelName = (p.modelName as string).trim().toLowerCase();
-      const isMultimodal = p.isMultimodal ? 1 : 0;
       const method = (p.method as string) || 'unknown';
-      db.prepare(
-        'INSERT OR REPLACE INTO model_capabilities (id, is_multimodal, detected_at, detection_method) VALUES (?, ?, ?, ?)'
-      ).run(modelName, isMultimodal, Date.now(), method);
-      return { success: true };
+      return getDesktopHostLocalModelCapabilityApi().setModelCapability({
+        modelName,
+        isMultimodal: Boolean(p.isMultimodal),
+        method,
+      });
     }
 
     case 'modelCapability:delete': {
       const modelName = (p.modelName as string).trim().toLowerCase();
-      const result = db.prepare('DELETE FROM model_capabilities WHERE id = ?').run(modelName);
-      return { success: result.changes > 0 };
+      return getDesktopHostLocalModelCapabilityApi().deleteModelCapability(modelName);
     }
 
     // ==================== Mailbox actions (core store thin forward) ====================
@@ -2620,8 +2105,7 @@ export async function dispatchDbAction(
     // Worker code has zero changes. The apply matrix is enforced by
     // Mailbox.assertApplyAllowed (single source of truth, Plan 202 §5.2).
     case 'mailbox:send': {
-      const { mailbox } = getCoreStores();
-      const item = mailbox.enqueue({
+      const item = await getDesktopHostLocalMailboxApi().enqueue({
         id: p.id as string,
         sessionId: p.sessionId as string,
         submittedRunId: (p.submittedDuringRunId as string) || '',
@@ -2669,8 +2153,8 @@ export async function dispatchDbAction(
     }
 
     case 'mailbox:edit': {
-      const { mailbox } = getCoreStores();
-      const existing = mailbox.get(p.id as string);
+      const mailbox = getDesktopHostLocalMailboxApi();
+      const existing = await mailbox.getItem(p.id as string);
       if (!existing) return null;
       // Retry-safe: if the row was already promoted as queued_for_next_agent_turn,
       // return it unchanged so the renderer's retry is idempotent.
@@ -2678,7 +2162,7 @@ export async function dispatchDbAction(
         return coreMailboxToIpcRow(existing);
       }
       const previousContent = existing.content;
-      const edited = mailbox.edit(p.id as string, {
+      const edited = await mailbox.edit(p.id as string, {
         content: p.content as string | undefined,
         kind: p.kind as MailboxKind | undefined,
       });
@@ -2689,11 +2173,11 @@ export async function dispatchDbAction(
     }
 
     case 'mailbox:guide': {
-      const { mailbox } = getCoreStores();
-      const existing = mailbox.get(p.id as string);
+      const mailbox = getDesktopHostLocalMailboxApi();
+      const existing = await mailbox.getItem(p.id as string);
       if (!existing) return null;
       const previousContent = existing.content;
-      const guided = mailbox.guide(p.id as string);
+      const guided = await mailbox.guide(p.id as string);
       if (!guided) return null;
       const row = coreMailboxToIpcRow(guided);
       emitMailboxEvent('emitMailEdited', row, previousContent);
@@ -2701,20 +2185,16 @@ export async function dispatchDbAction(
     }
 
     case 'mailbox:promoteQueued': {
-      const { mailbox } = getCoreStores();
-      // promoteQueued requires sessionId — fetch the item first to get it.
-      const existing = mailbox.get(p.id as string);
-      if (!existing) return null;
-      const row = mailbox.promoteQueued(existing.sessionId, p.id as string);
+      const row = await getDesktopHostLocalMailboxApi().promoteQueued(p.id as string);
       if (!row) return null;
       emitMailboxEvent('emitMailApplied', coreMailboxToIpcRow(row));
       return coreMailboxToIpcRow(row);
     }
 
     case 'mailbox:cancel': {
-      const { mailbox } = getCoreStores();
+      const mailbox = getDesktopHostLocalMailboxApi();
       const reason = p.reason as string | undefined;
-      const cancelled = mailbox.cancel(p.id as string, reason, 'user');
+      const cancelled = await mailbox.cancel(p.id as string, reason);
       if (!cancelled) return null;
       const row = coreMailboxToIpcRow(cancelled);
       emitMailboxEvent('emitMailCancelled', row, reason);
@@ -2722,22 +2202,20 @@ export async function dispatchDbAction(
     }
 
     case 'mailbox:list': {
-      const { mailbox } = getCoreStores();
+      const mailbox = getDesktopHostLocalMailboxApi();
       const limit = (p.limit as number) ?? 50;
       const statuses = p.status as MailboxStatus[] | undefined;
-      return mailbox
-        .list(p.sessionId as string, { status: statuses, limit })
-        .map(coreMailboxToIpcRow);
+      const items = await mailbox.listMailboxItems(p.sessionId as string, { status: statuses, limit });
+      return items.map(coreMailboxToIpcRow);
     }
 
     case 'mailbox:listForSession': {
-      const { mailbox } = getCoreStores();
-      return mailbox.listForSession(p.sessionId as string).map(coreMailboxToIpcRow);
+      const items = await getDesktopHostLocalMailboxApi().listMailboxItemsForSession(p.sessionId as string);
+      return items.map(coreMailboxToIpcRow);
     }
 
     case 'mailbox:claimBatch': {
-      const { mailbox } = getCoreStores();
-      const result = mailbox.claimBatch({
+      const result = await getDesktopHostLocalMailboxApi().claimBatch({
         sessionId: p.sessionId as string,
         runId: p.runId as string,
         checkpoint: p.checkpoint as CheckpointType,
@@ -2755,8 +2233,7 @@ export async function dispatchDbAction(
     }
 
     case 'mailbox:apply': {
-      const { mailbox } = getCoreStores();
-      const item = mailbox.apply({
+      const item = await getDesktopHostLocalMailboxApi().apply({
         id: p.id as string,
         claimToken: p.claimToken as string,
         mode: p.mode as MailboxApplyMode,
@@ -2770,9 +2247,9 @@ export async function dispatchDbAction(
     }
 
     case 'mailbox:cancelByAgent': {
-      const { mailbox } = getCoreStores();
+      const mailbox = getDesktopHostLocalMailboxApi();
       const reason = (p.reason as string | undefined) ?? 'cancelled_by_agent';
-      const cancelled = mailbox.cancelByAgent({
+      const cancelled = await mailbox.cancelByAgent({
         id: p.id as string,
         claimToken: p.claimToken as string,
         reason,
@@ -2793,44 +2270,26 @@ export async function dispatchDbAction(
         throw new Error('Invalid turn review payload');
       }
 
-      // Plan 328: chat_turn_reviews no longer has a FK to chat_sessions (migration 47
-      // dropped it). working_directory is stored on chat_turn_reviews itself, so no
-      // parent-row check or placeholder INSERT is needed — string association only.
-      db.prepare(`
-        INSERT INTO chat_turn_reviews (
-          id, session_id, turn_id, working_directory, files_json, patch,
-          additions, removals, truncated, binary, captured_at
-        ) VALUES (
-          @id, @session_id, @turn_id, @working_directory, @files_json, @patch,
-          @additions, @removals, @truncated, @binary, @captured_at
-        )
-        ON CONFLICT(session_id, turn_id) DO UPDATE SET
-          files_json = excluded.files_json,
-          patch = excluded.patch,
-          additions = excluded.additions,
-          removals = excluded.removals,
-          truncated = excluded.truncated,
-          binary = excluded.binary,
-          captured_at = excluded.captured_at
-      `).run({
+      const input: TurnReviewWriteInput = {
         id: typeof p.id === 'string' ? p.id : randomUUID(),
-        session_id: sessionId,
-        turn_id: turnId,
-        working_directory: workingDirectory,
-        files_json: JSON.stringify(files),
+        sessionId,
+        turnId,
+        workingDirectory,
+        files: files as TurnReviewFile[],
         patch,
         additions: typeof p.additions === 'number' ? p.additions : 0,
         removals: typeof p.removals === 'number' ? p.removals : 0,
-        truncated: p.truncated === true ? 1 : 0,
-        binary: p.binary === true ? 1 : 0,
-        captured_at: typeof p.capturedAt === 'number' ? p.capturedAt : now,
-      });
+        truncated: p.truncated === true,
+        binary: p.binary === true,
+        capturedAt: typeof p.capturedAt === 'number' ? p.capturedAt : now,
+      };
+      await getDesktopHostLocalTurnReviewApi().saveTurnReview(input);
       return true;
     }
 
     // ─── Workflow runs (plan 552 Phase 4) ───
     case 'workflowRun:create': {
-      const { workflowRuns } = getCoreStores();
+      const workflowRuns = getDesktopHostWorkflowRunApi();
       return workflowRuns.createRun({
         id: p.id as string | undefined,
         workflowName: p.workflowName as string,
@@ -2853,15 +2312,15 @@ export async function dispatchDbAction(
       });
     }
     case 'workflowRun:get': {
-      const { workflowRuns } = getCoreStores();
+      const workflowRuns = getDesktopHostWorkflowRunApi();
       return workflowRuns.getRun(p.id as string);
     }
     case 'workflowRun:getByDedupKey': {
-      const { workflowRuns } = getCoreStores();
+      const workflowRuns = getDesktopHostWorkflowRunApi();
       return workflowRuns.getRunByDedupKey(p.dedupKey as string);
     }
     case 'workflowRun:list': {
-      const { workflowRuns } = getCoreStores();
+      const workflowRuns = getDesktopHostWorkflowRunApi();
       return workflowRuns.listRuns({
         status: p.status as WorkflowRunStatus | undefined,
         workflowName: p.workflowName as string | undefined,
@@ -2872,7 +2331,7 @@ export async function dispatchDbAction(
       });
     }
     case 'workflowRun:updateStatus': {
-      const { workflowRuns } = getCoreStores();
+      const workflowRuns = getDesktopHostWorkflowRunApi();
       return workflowRuns.updateStatus(
         p.id as string,
         p.status as WorkflowRunStatus,
@@ -2883,7 +2342,7 @@ export async function dispatchDbAction(
       // Plan 560 terminal write. Optional keys are only forwarded when the
       // caller actually sent them, so a partial outcome never clobbers an
       // earlier summary / artifact list.
-      const { workflowRuns } = getCoreStores();
+      const workflowRuns = getDesktopHostWorkflowRunApi();
       return workflowRuns.finishRun(p.id as string, {
         status: p.status as WorkflowRunStatus,
         ...(p.summary !== undefined ? { summary: p.summary as string | null } : {}),
@@ -2902,54 +2361,52 @@ export async function dispatchDbAction(
       });
     }
     case 'workflowRun:latestEventSeq': {
-      const { workflowRuns } = getCoreStores();
+      const workflowRuns = getDesktopHostWorkflowRunApi();
       return workflowRuns.latestEventSeq(p.runId as string);
     }
     case 'workflowRun:listEvents': {
-      const { workflowRuns } = getCoreStores();
+      const workflowRuns = getDesktopHostWorkflowRunApi();
       return workflowRuns.listEvents(p.runId as string, (p.afterSeq as number | undefined) ?? -1);
     }
     case 'workflowRun:setWaitTill': {
-      const { workflowRuns } = getCoreStores();
+      const workflowRuns = getDesktopHostWorkflowRunApi();
       return workflowRuns.setWaitTill(p.id as string, (p.waitTill as number | null | undefined) ?? null);
     }
     case 'workflowRun:setVersionId': {
-      const { workflowRuns } = getCoreStores();
+      const workflowRuns = getDesktopHostWorkflowRunApi();
       return workflowRuns.setVersionId(p.id as string, p.versionId as string);
     }
     case 'workflowRun:listWaitingPast': {
-      const { workflowRuns } = getCoreStores();
+      const workflowRuns = getDesktopHostWorkflowRunApi();
       return workflowRuns.listWaitingPast(p.now as number);
     }
     case 'workflowRun:reconcileStale': {
-      const { workflowRuns } = getCoreStores();
-      return workflowRuns.reconcileStaleRuns(new Set((p.activeRunIds as string[]) ?? []));
+      const workflowRuns = getDesktopHostWorkflowRunApi();
+      return workflowRuns.reconcileStaleRuns((p.activeRunIds as string[]) ?? []);
     }
     case 'workflowRun:saveSnapshot': {
-      const { workflowRuns } = getCoreStores();
-      workflowRuns.saveSnapshot({
+      const workflowRuns = getDesktopHostWorkflowRunApi();
+      return workflowRuns.saveSnapshot({
         runId: p.runId as string,
         definition: p.definition,
         nodeStack: (p.nodeStack as WorkflowRunSnapshot['nodeStack']) ?? [],
         journal: (p.journal as WorkflowRunSnapshot['journal']) ?? [],
       });
-      return true;
     }
     case 'workflowRun:loadSnapshot': {
-      const { workflowRuns } = getCoreStores();
+      const workflowRuns = getDesktopHostWorkflowRunApi();
       return workflowRuns.loadSnapshot(p.runId as string);
     }
     case 'workflowRun:appendJournal': {
-      const { workflowRuns } = getCoreStores();
-      workflowRuns.appendJournalRecord(p.runId as string, p.record as WorkflowRunSnapshot['journal'][number]);
-      return true;
+      const workflowRuns = getDesktopHostWorkflowRunApi();
+      return workflowRuns.appendJournalRecord(p.runId as string, p.record as WorkflowRunSnapshot['journal'][number]);
     }
     case 'workflowRun:loadJournal': {
-      const { workflowRuns } = getCoreStores();
+      const workflowRuns = getDesktopHostWorkflowRunApi();
       return workflowRuns.loadJournal(p.runId as string);
     }
     case 'workflowRun:delete': {
-      const { workflowRuns } = getCoreStores();
+      const workflowRuns = getDesktopHostWorkflowRunApi();
       return workflowRuns.deleteRun(p.id as string);
     }
 

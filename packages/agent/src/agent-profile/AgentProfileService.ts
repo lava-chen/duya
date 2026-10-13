@@ -3,11 +3,8 @@
  * Manages agent profile persistence and tool resolution
  */
 
-import type {
-  AgentProfile,
-  AgentProfileDbRow,
-  PromptProfileOverride,
-} from './types.js';
+import type { AgentProfile, PromptProfileOverride } from '@duya/agent-core';
+import type { AgentProfileDbRow } from './types.js';
 import {
   PRESET_AGENT_PROFILES,
 } from './types.js';

@@ -310,8 +310,8 @@ describe('ProviderStore — runtime config', () => {
     store.migrateAllLegacyProviders();
   });
 
-  it('builds an Anthropic runtime config from the active provider', () => {
-    const r = store.getActiveProviderRuntimeConfig('claude-sonnet-4-5');
+  it('builds an Anthropic runtime config from the active provider', async () => {
+    const r = await store.getActiveProviderRuntimeConfig('claude-sonnet-4-5');
     expect('error' in r).toBe(false);
     if (!('error' in r)) {
       expect(r.providerId).toBe('a');
@@ -331,10 +331,10 @@ describe('ProviderStore — runtime config', () => {
     }
   });
 
-  it('returns a sanitized error when there is no active provider', () => {
+  it('returns a sanitized error when there is no active provider', async () => {
     reader.data = {};
     store.migrateAllLegacyProviders();
-    const r = store.getActiveProviderRuntimeConfig('m');
+    const r = await store.getActiveProviderRuntimeConfig('m');
     expect('error' in r).toBe(true);
     if ('error' in r) {
       expect(r.code).toBe('runtime.noActiveProvider');
@@ -342,15 +342,15 @@ describe('ProviderStore — runtime config', () => {
     }
   });
 
-  it('returns a sanitized error when modelId is empty', () => {
-    const r = store.getActiveProviderRuntimeConfig('');
+  it('returns a sanitized error when modelId is empty', async () => {
+    const r = await store.getActiveProviderRuntimeConfig('');
     expect('error' in r).toBe(true);
     if ('error' in r) {
       expect(r.code).toBe('runtime.missingModel');
     }
   });
 
-  it('builds an OpenAI-compatible runtime config', () => {
+  it('builds an OpenAI-compatible runtime config', async () => {
     reader.data = {
       o: {
         id: 'o',
@@ -362,7 +362,7 @@ describe('ProviderStore — runtime config', () => {
       },
     };
     store.migrateAllLegacyProviders();
-    const r = store.getActiveProviderRuntimeConfig('gpt-4o');
+    const r = await store.getActiveProviderRuntimeConfig('gpt-4o');
     if (!('error' in r)) {
       expect(r.apiFormat).toBe('openai-chat');
       expect(r.headers['Authorization']).toBe('Bearer sk-oai-1234567890');
@@ -371,7 +371,7 @@ describe('ProviderStore — runtime config', () => {
     }
   });
 
-  it('builds an Ollama runtime config with no auth', () => {
+  it('builds an Ollama runtime config with no auth', async () => {
     reader.data = {
       o: {
         id: 'o',
@@ -383,7 +383,7 @@ describe('ProviderStore — runtime config', () => {
       },
     };
     store.migrateAllLegacyProviders();
-    const r = store.getActiveProviderRuntimeConfig('llama3.2');
+    const r = await store.getActiveProviderRuntimeConfig('llama3.2');
     if (!('error' in r)) {
       expect(r.apiFormat).toBe('ollama');
       expect(r.headers['Authorization']).toBeUndefined();
@@ -395,8 +395,8 @@ describe('ProviderStore — runtime config', () => {
     }
   });
 
-  it('getProviderRuntimeConfig returns by id', () => {
-    const r = store.getProviderRuntimeConfig('a', 'm');
+  it('getProviderRuntimeConfig returns by id', async () => {
+    const r = await store.getProviderRuntimeConfig('a', 'm');
     if (!('error' in r)) {
       expect(r.providerId).toBe('a');
     } else {
@@ -404,8 +404,8 @@ describe('ProviderStore — runtime config', () => {
     }
   });
 
-  it('getProviderRuntimeConfig returns error for missing provider', () => {
-    const r = store.getProviderRuntimeConfig('nope', 'm');
+  it('getProviderRuntimeConfig returns error for missing provider', async () => {
+    const r = await store.getProviderRuntimeConfig('nope', 'm');
     expect('error' in r).toBe(true);
     if ('error' in r) {
       expect(r.code).toBe('provider.notFound');
@@ -414,7 +414,7 @@ describe('ProviderStore — runtime config', () => {
 });
 
 describe('ProviderStore — secret redaction', () => {
-  it('the active apiKey is never written to logger.info / error', () => {
+  it('the active apiKey is never written to logger.info / error', async () => {
     // The store only logs the count and active id; the apiKey is
     // never included. The invariant we check here is that the
     // validation error path is sanitized.
@@ -427,7 +427,7 @@ describe('ProviderStore — secret redaction', () => {
     };
     const store = new ProviderStore(reader);
     store.migrateAllLegacyProviders();
-    const r = store.getActiveProviderRuntimeConfig('m');
+    const r = await store.getActiveProviderRuntimeConfig('m');
     if ('error' in r) {
       expect(r.error.includes('sk-should-NOT-appear')).toBe(false);
     }
@@ -464,14 +464,14 @@ describe('ProviderStore — capability surface (Phase 3)', () => {
     }
   }
 
-  it('upsertModelCapability round-trips through the capability store', () => {
+  it('upsertModelCapability round-trips through the capability store', async () => {
     const reader = new FakeReader();
     reader.data = { a: makeLegacyAnthropic('a', true) };
     const dao = new InMemoryCapabilityStore();
     const store = new ProviderStore(reader, dao);
     store.migrateAllLegacyProviders();
 
-    const r = store.upsertModelCapability({
+    const r = await store.upsertModelCapability({
       providerId: 'a',
       modelId: 'claude-sonnet-4-6',
       contextWindow: 1_000_000,
@@ -483,38 +483,38 @@ describe('ProviderStore — capability surface (Phase 3)', () => {
     expect(dao.getOne('a', 'claude-sonnet-4-6')?.contextWindow).toBe(1_000_000);
   });
 
-  it('listModelCapabilities returns only the requested provider', () => {
+  it('listModelCapabilities returns only the requested provider', async () => {
     const reader = new FakeReader();
     reader.data = { a: makeLegacyAnthropic('a', true) };
     const dao = new InMemoryCapabilityStore();
     const store = new ProviderStore(reader, dao);
     store.migrateAllLegacyProviders();
-    store.upsertModelCapability({ providerId: 'a', modelId: 'm-1', source: 'user', updatedAt: 0 });
-    store.upsertModelCapability({ providerId: 'b', modelId: 'm-2', source: 'user', updatedAt: 0 });
-    expect(store.listModelCapabilities('a')).toHaveLength(1);
-    expect(store.listModelCapabilities('b')).toHaveLength(1);
-    expect(store.listModelCapabilities('a')[0].modelId).toBe('m-1');
+    await store.upsertModelCapability({ providerId: 'a', modelId: 'm-1', source: 'user', updatedAt: 0 });
+    await store.upsertModelCapability({ providerId: 'b', modelId: 'm-2', source: 'user', updatedAt: 0 });
+    expect(await store.listModelCapabilities('a')).toHaveLength(1);
+    expect(await store.listModelCapabilities('b')).toHaveLength(1);
+    expect((await store.listModelCapabilities('a'))[0].modelId).toBe('m-1');
   });
 
-  it('deleteModelCapability removes a single record', () => {
+  it('deleteModelCapability removes a single record', async () => {
     const reader = new FakeReader();
     reader.data = { a: makeLegacyAnthropic('a', true) };
     const dao = new InMemoryCapabilityStore();
     const store = new ProviderStore(reader, dao);
     store.migrateAllLegacyProviders();
-    store.upsertModelCapability({ providerId: 'a', modelId: 'm', source: 'user', updatedAt: 0 });
-    expect(store.deleteModelCapability('a', 'm')).toBe(true);
-    expect(store.getModelCapability('a', 'm')).toBeUndefined();
+    await store.upsertModelCapability({ providerId: 'a', modelId: 'm', source: 'user', updatedAt: 0 });
+    expect(await store.deleteModelCapability('a', 'm')).toBe(true);
+    expect(await store.getModelCapability('a', 'm')).toBeUndefined();
   });
 
-  it('NoopCapabilityStore upsert returns the input unchanged with a fresh timestamp', () => {
+  it('NoopCapabilityStore upsert returns the input unchanged with a fresh timestamp', async () => {
     // No fake reader / dao passed: store should not crash.
     const reader = new FakeReader();
     reader.data = { a: makeLegacyAnthropic('a', true) };
     const store = new ProviderStore(reader);
     store.migrateAllLegacyProviders();
     const before = Date.now();
-    const r = store.upsertModelCapability({
+    const r = await store.upsertModelCapability({
       providerId: 'a',
       modelId: 'm',
       source: 'user',
@@ -523,7 +523,7 @@ describe('ProviderStore — capability surface (Phase 3)', () => {
     expect(r.ok).toBe(true);
     expect(r.capability.updatedAt).toBeGreaterThanOrEqual(before);
     // Noop store is read-empty.
-    expect(store.listModelCapabilities('a')).toEqual([]);
+    expect(await store.listModelCapabilities('a')).toEqual([]);
   });
 });
 
@@ -551,19 +551,19 @@ describe('ProviderStore — resolveRuntimeCapability (Plan 517 R1)', () => {
     }
   }
 
-  it('returns the built-in baseline contextWindow for a 1M preset model', () => {
+  it('returns the built-in baseline contextWindow for a 1M preset model', async () => {
     const reader = new FakeReader();
     reader.data = { anthropic: makeLegacyAnthropic('anthropic', true) };
     const store = new ProviderStore(reader, new InMemoryCapabilityStore());
     store.migrateAllLegacyProviders();
 
     // `claude-sonnet-5` is a built-in 1M preset (anthropic.models.ts).
-    const cap = store.resolveRuntimeCapability('anthropic', 'claude-sonnet-5');
+    const cap = await store.resolveRuntimeCapability('anthropic', 'claude-sonnet-5');
     expect(cap).toBeDefined();
     expect(cap!.contextWindow).toBe(1_000_000);
   });
 
-  it('returns the config-marker contextWindow even when DB override exists', () => {
+  it('returns the config-marker contextWindow even when DB override exists', async () => {
     // Plan 517 R1: `[options].model_context[modelId]` is the highest-priority
     // marker. It must win over DB overrides and built-in baselines.
     const reader = new FakeReader();
@@ -574,7 +574,7 @@ describe('ProviderStore — resolveRuntimeCapability (Plan 517 R1)', () => {
     const llm = store.getLlmProvider('openrouter')!;
     store.upsertLlmProvider({ ...llm, options: { model_context: { 'anthropic/claude-sonnet-4.5': 1_000_000 } } });
 
-    const cap = store.resolveRuntimeCapability(
+    const cap = await store.resolveRuntimeCapability(
       'openrouter',
       'anthropic/claude-sonnet-4.5',
     );
@@ -583,7 +583,7 @@ describe('ProviderStore — resolveRuntimeCapability (Plan 517 R1)', () => {
     expect(cap!.source).toBe('user');
   });
 
-  it('returns the DB-override contextWindow when no config marker is set', () => {
+  it('returns the DB-override contextWindow when no config marker is set', async () => {
     const reader = new FakeReader();
     reader.data = { custom: makeLegacyAnthropic('custom', true) };
     const store = new ProviderStore(reader, new InMemoryCapabilityStore());
@@ -593,7 +593,7 @@ describe('ProviderStore — resolveRuntimeCapability (Plan 517 R1)', () => {
       ...store.getLlmProvider('custom')!,
       apiFormat: 'openai',
     });
-    store.upsertModelCapability({
+    await store.upsertModelCapability({
       providerId: 'custom',
       modelId: 'gpt-4o-custom',
       contextWindow: 500_000,
@@ -601,12 +601,12 @@ describe('ProviderStore — resolveRuntimeCapability (Plan 517 R1)', () => {
       updatedAt: 0,
     });
 
-    const cap = store.resolveRuntimeCapability('custom', 'gpt-4o-custom');
+    const cap = await store.resolveRuntimeCapability('custom', 'gpt-4o-custom');
     expect(cap).toBeDefined();
     expect(cap!.contextWindow).toBe(500_000);
   });
 
-  it('returns undefined when no layer matches — DuyaAgent falls back to 200K', () => {
+  it('returns undefined when no layer matches — DuyaAgent falls back to 200K', async () => {
     // Plan 517 R1 regression test: a custom modelId on a custom provider
     // with no DB row and no config marker must return undefined so the
     // DuyaAgent constructor can log a WARN. (Plan 522: the agent now tries
@@ -623,7 +623,7 @@ describe('ProviderStore — resolveRuntimeCapability (Plan 517 R1)', () => {
       apiFormat: 'openai',
     });
 
-    const cap = store.resolveRuntimeCapability(
+    const cap = await store.resolveRuntimeCapability(
       'custom',
       'totally-unknown-model-id',
     );
@@ -653,7 +653,7 @@ describe('ProviderStore — runtime config carries the merged capability (Plan 5
     }
   }
 
-  it('falls back to the built-in baseline window when there is no DB row', () => {
+  it('falls back to the built-in baseline window when there is no DB row', async () => {
     // Regression (plan 522): the reported bug was a 1M model whose chat
     // session carried NO capability row, so the agent's compaction budget
     // collapsed to the 200K default while the context ring showed 1M. The
@@ -663,18 +663,18 @@ describe('ProviderStore — runtime config carries the merged capability (Plan 5
     const store = new ProviderStore(reader, new InMemoryCapabilityStore());
     store.migrateAllLegacyProviders();
 
-    const r = store.getActiveProviderRuntimeConfig('claude-sonnet-5');
+    const r = await store.getActiveProviderRuntimeConfig('claude-sonnet-5');
     if ('error' in r) throw new Error('expected runtime config');
     expect(r.modelCapabilities?.contextWindow).toBe(1_000_000);
   });
 
-  it('still prefers an explicit caller capability over the baseline', () => {
+  it('still prefers an explicit caller capability over the baseline', async () => {
     const reader = new FakeReader();
     reader.data = { a: makeLegacyAnthropic('a', true) };
     const store = new ProviderStore(reader, new InMemoryCapabilityStore());
     store.migrateAllLegacyProviders();
 
-    const r = store.getActiveProviderRuntimeConfig('claude-sonnet-5', {
+    const r = await store.getActiveProviderRuntimeConfig('claude-sonnet-5', {
       providerId: 'a',
       modelId: 'claude-sonnet-5',
       contextWindow: 64_000,

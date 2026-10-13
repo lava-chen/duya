@@ -106,7 +106,7 @@ import { createChildAbortController } from '../abort/index.js';
 import { getAgentProfileService } from '../agent-profile/AgentProfileService.js';
 import { readConfigAgents, toAgentProfile } from '../agent-profile/config-agents.js';
 import { parseAgentMentions, buildMentionedAgentsContext } from './dm/index.js';
-import type { AgentProfile } from '../agent-profile/types.js';
+import type { AgentProfile } from '@duya/agent-core';
 import { isToolVisible, type ToolVisibilityConstraints } from '../agent-profile/ToolFilter.js';
 import { mailboxDb, modeStateDb, pluginDb } from '../ipc/db-client.js';
 import { MCPManager } from '../mcp/index.js';

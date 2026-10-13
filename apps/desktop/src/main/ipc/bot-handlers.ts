@@ -14,7 +14,7 @@
 
 import { ipcMain } from 'electron';
 import { randomUUID } from 'crypto';
-import { getBotSessionId } from '../../../../../packages/agent/src/agent/dm/bot-session-id';
+import { getBotSessionId } from '@duya/agent-protocol';
 import { defaultBotSessionCreator } from '../wake/agent-dm-dispatcher';
 import {
   claimScheduledUserTurn,
@@ -22,7 +22,7 @@ import {
   enqueueWakeItemForSession,
 } from '../wake/wake-dispatcher';
 import { runWakePromptInExistingSession } from '../wake/wake-run';
-import { getCoreStores } from '../db/core-connection';
+import { getDesktopHostLockApi } from '../cli/desktop-host-api';
 import { getLogger, LogComponent } from '../logging/logger';
 
 export interface BotSendTurnResult {
@@ -50,7 +50,7 @@ const BOT_KICKSTART_PROMPT = [
 export function registerBotHandlers(): void {
   ipcMain.handle(
     'bot:sendTurn',
-    (_event, data: { agentId?: string; text?: string; clientMsgId?: string }): BotSendTurnResult => {
+    async (_event, data: { agentId?: string; text?: string; clientMsgId?: string }): Promise<BotSendTurnResult> => {
       const agentId = typeof data?.agentId === 'string' ? data.agentId.trim() : '';
       const text = typeof data?.text === 'string' ? data.text.trim() : '';
       if (!agentId) throw new Error('agentId is required');
@@ -64,7 +64,7 @@ export function registerBotHandlers(): void {
       try {
         // Same get-or-create contract as the DM dispatcher: the bot's
         // persistent session must exist before any run targets it.
-        defaultBotSessionCreator.createIfMissing(sessionId, agentId);
+        await defaultBotSessionCreator.createIfMissing(sessionId, agentId);
       } catch (err) {
         getLogger().warn('bot:sendTurn session ensure failed', {
           sessionId,
@@ -72,7 +72,7 @@ export function registerBotHandlers(): void {
         }, LogComponent.AgentProcess);
       }
 
-      const busy = getCoreStores().locks.isLocked(sessionId);
+      const busy = await getDesktopHostLockApi().isSessionLocked(sessionId);
       if (!busy) {
         // Idle → the renderer runs the turn directly through its streaming
         // path. A 409 race (something took the lock in between) surfaces as
@@ -111,7 +111,7 @@ export function registerBotHandlers(): void {
       try {
         // Same get-or-create contract as `bot:sendTurn`: the bot's
         // persistent session must exist before the hidden run targets it.
-        defaultBotSessionCreator.createIfMissing(sessionId, agentId);
+        await defaultBotSessionCreator.createIfMissing(sessionId, agentId);
       } catch (err) {
         getLogger().warn('bot:kickstart session ensure failed', {
           sessionId,

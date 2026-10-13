@@ -20,6 +20,9 @@ import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { Command } from '@commander-js/extra-typings';
 import { readTextContent, type LegacySseFrame } from '@duya/agent-runtime';
+import { createCliHostSession, type CliHostSession } from '@duya/cli/host-session';
+import { createHostTaskStore } from '@duya/cli/host-task-store';
+import { createCliTranscriptPersistence, updateCliSessionTitle } from '@duya/cli/transcript-persistence';
 import { duyaAgent } from '../agent/DuyaAgent.js';
 import { createHeadlessRunHost, type HeadlessRunHost } from '../process/headless-run-host.js';
 import { COMPACTION_CHECKPOINT_ID_SUFFIX } from '../message/index.js';
@@ -31,7 +34,7 @@ import type { SubagentRunDeps } from '../tool/SubagentTool/runAgent.js';
 import { loadSkills, getSkillRegistry } from '../skills/index.js';
 import { Colors, color } from './colors.js';
 import { REPL } from './repl.js';
-import { shouldUseTui } from './ui/tty.js';
+import { shouldUseTui } from '@duya/cli/tui';
 import { runTuiSession } from './tui-session.js';
 import {
   initSessionLogger,
@@ -42,19 +45,13 @@ import {
 import { printWelcomeBanner } from './banner.js';
 import { listSessions, selectSession } from './sessionCmds.js';
 import type { SessionInfo } from './sessionCmds.js';
-import {
-  createSession,
-  addMessage,
-  replaceMessages,
-  updateSession,
-  type ChatSession,
-} from '../session/db.js';
 import { listProviders, addProviderInteractive } from './providerCmds.js';
 import { listMCPServers } from './mcpCmds.js';
 import { printSuccess, printError, printHeader, printInfo } from './interactive.js';
 import { getCliSetting, getCliSettingJson } from './config/db-config.js';
 import { createAgentProgram, parseCliArgs } from './cli-program.js';
 import { resolveProvider, readCliSettings, type ProviderResolution } from './config/file-config.js';
+import { installHostTaskStoreFactory } from '../session/task-store.js';
 import {
   initSlashCommands,
   executeSlashCommand,
@@ -62,6 +59,10 @@ import {
   isSlashCommand,
   getSlashCommands,
 } from './slash-commands.js';
+
+function installCliTaskStore(session: CliHostSession): () => void {
+  return installHostTaskStoreFactory((sessionId) => createHostTaskStore(session.taskApi, sessionId));
+}
 // (Plan 99: the desktop control plane — status / plugin / session /
 // skill / mcp / provider / channel / cron / message / install-cli —
 // now lives in @duya/cli. See packages/cli/src/. The agent runtime
@@ -251,17 +252,12 @@ function getToolDisplayMode(): 'verbose' | 'compact' {
  * The runtime ships that reader for exactly this two-shape situation.
  */
 async function handleStreamEvents(
-  agent: duyaAgent,
   frames: AsyncGenerator<LegacySseFrame, void, unknown>,
-  sessionLogger: SessionLogger,
-  sessionId?: string,
-  userMessageId?: string
+  sessionLogger: SessionLogger
 ): Promise<void> {
   let currentText = '';
   let thinkingBuffer = '';
   let stepToolCount = 0;
-  let userMessageIdSent = false;
-  let assistantMessageId = crypto.randomUUID();
   const displayMode = getToolDisplayMode();
   const isCompact = displayMode === 'compact';
 
@@ -401,32 +397,6 @@ async function handleStreamEvents(
           sessionLogger.logAssistant(currentText);
           console.log(currentText);
 
-          // Persist messages if sessionId is provided (interactive mode)
-          if (sessionId && userMessageId) {
-            // Persist user message if not already done
-            if (!userMessageIdSent) {
-              const userMsg = agent.getMessages().find((m) => m.id === userMessageId);
-              if (!userMsg) {
-                // User message wasn't persisted yet, do it now
-                addMessage({
-                  id: userMessageId,
-                  session_id: sessionId,
-                  role: 'user',
-                  content: agent.getMessages().find((m) => m.role === 'user')?.content?.toString() || '',
-                });
-              }
-              userMessageIdSent = true;
-            }
-
-            // Persist assistant message
-            addMessage({
-              id: assistantMessageId,
-              session_id: sessionId,
-              role: 'assistant',
-              content: currentText,
-            });
-          }
-
           currentText = '';
         }
         if (thinkingBuffer) {
@@ -470,17 +440,18 @@ async function runInteractive(
   model: string,
   workspace: string
 ): Promise<void> {
-  // Create a new session in the database
-  const sessionId = crypto.randomUUID();
-  const session = createSession({
-    id: sessionId,
+  const providerResolution = resolveProvider(model);
+  const session = await createCliHostSession({
     title: 'New Chat',
     model,
-    working_directory: workspace,
-    mode: 'code',
-    status: 'active',
+    workingDirectory: workspace,
+    ...(providerResolution.ok ? { providerId: providerResolution.provider.id } : {}),
   });
+  const restoreTaskStore = installCliTaskStore(session);
+  const sessionId = session.id;
   console.log(`${Colors.DIM}Session created: ${sessionId.slice(0, 8)}...${Colors.RESET}`);
+  const persistMessages = createCliTranscriptPersistence(session, { excludeIdSuffix: COMPACTION_CHECKPOINT_ID_SUFFIX });
+  const updateSessionTitle = (): Promise<void> => updateCliSessionTitle(session, agent.getMessages());
 
   // Interactive mode has two surfaces, chosen BEFORE anything is constructed.
   //
@@ -492,26 +463,33 @@ async function runInteractive(
   // which already handles terminal readline, persisted history and
   // completion.
   if (shouldUseTui()) {
-    return runTuiSession({
-      agent,
-      registry,
-      sessionLogger,
-      model,
-      workspace,
-      sessionId,
-      toolCount: registry.size,
-    });
+    try {
+      await runTuiSession({
+        agent,
+        registry,
+        sessionLogger,
+        model,
+        workspace,
+        session,
+        runApi: session.runApi,
+        toolCount: registry.size,
+        persistMessages,
+      });
+      await persistMessages(agent.getMessages());
+      await updateSessionTitle();
+    } finally {
+      restoreTaskStore();
+      await session.close();
+    }
+    return;
   }
 
+  try {
   // The run host, built once for the REPL's lifetime (plan 587 H8.1). The
   // controller is stateless between runs, so this is a composition rather than
   // a per-turn object, and building it per turn would be a second place for the
   // run wiring to live.
-  const host: HeadlessRunHost = createHeadlessRunHost({ agent, toolRegistry: registry });
-
-  // Track messages for persistence
-  let pendingUserMessage: { id: string; content: string } | null = null;
-  let pendingAssistantMessage: { id: string; content: string } | null = null;
+  const host: HeadlessRunHost = createHeadlessRunHost({ agent, toolRegistry: registry, runApi: session.runApi });
 
   // Initialize slash commands
   initSlashCommands();
@@ -543,26 +521,14 @@ async function runInteractive(
       if (isSlashCommand(trimmed)) {
         const handled = await executeSlashCommand(trimmed, slashCommandContext);
         if (handled) {
-          // Handle special exit case - persist messages and stop REPL
+          // Handle special exit case - flush the Host timeline before stopping.
           if (trimmed === '/exit' || trimmed === '/quit' || trimmed === '/q') {
-            // Persist all messages before exit. Drop projection-synthesized
-            // compaction checkpoint markers: the rebase event already carries
-            // them inline, and a standalone copy collides with the
-            // rebase-emitted id on the next load (duplicate message id).
-            const allMessages = agent.getMessages();
-            const persistableMessages = allMessages.filter(
-              (m) => !(m.id ?? '').endsWith(COMPACTION_CHECKPOINT_ID_SUFFIX),
-            );
-            if (persistableMessages.length > 0) {
-              await replaceMessages(sessionId, persistableMessages, 0);
-            }
-            // Update session title from first user message
-            const firstUserMsg = allMessages.find((m) => m.role === 'user');
-            if (firstUserMsg) {
-              const title = typeof firstUserMsg.content === 'string'
-                ? firstUserMsg.content.slice(0, 50)
-                : 'Chat';
-              updateSession(sessionId, { title });
+            try {
+              await persistMessages(agent.getMessages());
+              await updateSessionTitle();
+            } catch (error) {
+              repl.printColored(`Could not save the session: ${error instanceof Error ? error.message : String(error)}`, 'RED');
+              return;
             }
             repl.println(`${Colors.BRIGHT_YELLOW}Goodbye!${Colors.RESET}`);
             repl.println(`${Colors.DIM}Session saved: ${sessionId.slice(0, 8)}...${Colors.RESET}`);
@@ -584,12 +550,6 @@ async function runInteractive(
       // Log user input
       sessionLogger.logUser(trimmed);
 
-      // Prepare user message for persistence
-      pendingUserMessage = {
-        id: crypto.randomUUID(),
-        content: trimmed,
-      };
-
       // Send to agent
       repl.printBlank();
       repl.printColored('Thinking... (Ctrl+C to cancel)', 'DIM');
@@ -607,9 +567,16 @@ async function runInteractive(
           model: model || '',
           providerId: 'cli',
         });
-        await handleStreamEvents(agent, run.frames(), sessionLogger, sessionId, pendingUserMessage.id);
+        await handleStreamEvents(run.frames(), sessionLogger);
       } catch (error) {
         repl.printColored(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`, 'RED');
+        sessionLogger.logError(error instanceof Error ? error : String(error));
+      }
+
+      try {
+        await persistMessages(agent.getMessages());
+      } catch (error) {
+        repl.printColored(`Could not save the session: ${error instanceof Error ? error.message : String(error)}`, 'RED');
         sessionLogger.logError(error instanceof Error ? error : String(error));
       }
 
@@ -623,12 +590,15 @@ async function runInteractive(
     },
   });
 
-  // Keep the process alive
-  return new Promise((resolve) => {
-    repl.rl.on('close', () => {
-      resolve();
-    });
+  await new Promise<void>((resolve) => {
+    repl.rl.on('close', resolve);
   });
+  await persistMessages(agent.getMessages());
+  await updateSessionTitle();
+  } finally {
+    restoreTaskStore();
+    await session.close();
+  }
 }
 
 /**
@@ -639,25 +609,46 @@ async function runTask(
   registry: ToolRegistry,
   task: string,
   sessionLogger: SessionLogger,
-  runHost: HeadlessRunHost = createHeadlessRunHost({ agent, toolRegistry: registry })
+  runHost?: HeadlessRunHost,
 ): Promise<void> {
   console.log(`${Colors.BRIGHT_CYAN}Executing task...${Colors.RESET}\n`);
+
+  const session = await createCliHostSession({
+    title: task.slice(0, 50) || 'New Chat',
+    model: agent.model || '',
+    workingDirectory: process.cwd(),
+  });
+  const restoreTaskStore = installCliTaskStore(session);
+  const persistMessages = createCliTranscriptPersistence(session, { excludeIdSuffix: COMPACTION_CHECKPOINT_ID_SUFFIX });
+  const host = runHost ?? createHeadlessRunHost({ agent, toolRegistry: registry, runApi: session.runApi });
 
   // Log task
   sessionLogger.logUser(task);
 
   try {
-    const run = await runHost.start({
+    const run = await host.start({
       prompt: task,
-      sessionId: 'cli-task',
+      sessionId: session.id,
       cwd: process.cwd(),
-      model: '',
+      model: agent.model || '',
       providerId: 'cli',
     });
-    await handleStreamEvents(agent, run.frames(), sessionLogger, '', '');
+    await handleStreamEvents(run.frames(), sessionLogger);
   } catch (error) {
     console.error(`${Colors.BRIGHT_RED}Error: ${error instanceof Error ? error.message : 'Unknown error'}${Colors.RESET}`);
     sessionLogger.logError(error instanceof Error ? error : String(error));
+  } finally {
+    try {
+      await persistMessages(agent.getMessages());
+      await updateCliSessionTitle(session, agent.getMessages());
+    } catch (error) {
+      console.error(`${Colors.BRIGHT_RED}Could not save the session: ${error instanceof Error ? error.message : String(error)}${Colors.RESET}`);
+      sessionLogger.logError(error instanceof Error ? error : String(error));
+      process.exitCode = 1;
+    } finally {
+      restoreTaskStore();
+      await session.close();
+    }
   }
 }
 
@@ -889,18 +880,22 @@ async function runPrintQuery(
   agent: duyaAgent,
   prompt: string,
   format: string | undefined,
-  runHost: HeadlessRunHost = createHeadlessRunHost({ agent })
+  session: CliHostSession,
+  persistMessages: (messages: readonly Message[]) => Promise<void>,
+  runHost?: HeadlessRunHost,
 ): Promise<void> {
   let tokenUsage: { total_tokens?: number } = {};
+  let runFailed = false;
+  const host = runHost ?? createHeadlessRunHost({ agent, runApi: session.runApi });
   try {
     // Through the run layer (plan 587 H8.1). The usage number is now read off
     // the run's own `token_usage` frame rather than off the executor's private
     // `result` event, so `--format json` reports what the run recorded.
-    const run = await runHost.start({
+    const run = await host.start({
       prompt,
-      sessionId: 'cli-print',
+      sessionId: session.id,
       cwd: process.cwd(),
-      model: '',
+      model: agent.model || '',
       providerId: 'cli',
     });
     for await (const frame of run.frames()) {
@@ -911,9 +906,18 @@ async function runPrintQuery(
     }
   } catch (error) {
     console.error(`${Colors.BRIGHT_RED}Error:${Colors.RESET} ${error instanceof Error ? error.message : String(error)}`);
-    return;
+    runFailed = true;
   }
 
+  try {
+    await persistMessages(agent.getMessages());
+  } catch (error) {
+    console.error(`${Colors.BRIGHT_RED}Could not save the session:${Colors.RESET} ${error instanceof Error ? error.message : String(error)}`);
+    runFailed = true;
+    process.exitCode = 1;
+  }
+
+  if (runFailed) return;
   const messages = agent.getMessages();
   const outputFormat = format || 'text';
   switch (outputFormat) {
@@ -977,7 +981,20 @@ async function runPrintMode(prompt: string, options: CLIOptions): Promise<void> 
     communicationPlatform: 'cli',
   });
 
-  await runPrintQuery(agent, prompt, options.format);
+  const session = await createCliHostSession({
+    title: prompt.slice(0, 50) || 'New Chat',
+    model: model || '',
+    workingDirectory: options.workspace || process.cwd(),
+  });
+  const restoreTaskStore = installCliTaskStore(session);
+  const persistMessages = createCliTranscriptPersistence(session, { excludeIdSuffix: COMPACTION_CHECKPOINT_ID_SUFFIX });
+  try {
+    await runPrintQuery(agent, prompt, options.format, session, persistMessages);
+    await updateCliSessionTitle(session, agent.getMessages());
+  } finally {
+    restoreTaskStore();
+    await session.close();
+  }
 }
 
 /**
@@ -1027,16 +1044,30 @@ async function runHeadlessMode(scriptPath: string, options: CLIOptions): Promise
     communicationPlatform: 'cli',
   });
 
+  const session = await createCliHostSession({
+    title: 'New Chat',
+    model: model || '',
+    workingDirectory: options.workspace || process.cwd(),
+  });
+  const restoreTaskStore = installCliTaskStore(session);
+  const persistMessages = createCliTranscriptPersistence(session, { excludeIdSuffix: COMPACTION_CHECKPOINT_ID_SUFFIX });
+
   // Execute each line as a separate prompt
   const lines = scriptContent.split('\n');
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) {
-      continue; // Skip empty lines and comments
-    }
+  try {
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) {
+        continue; // Skip empty lines and comments
+      }
 
-    console.log(`\n--- Executing: ${trimmed.slice(0, 50)}... ---\n`);
-    await runPrintQuery(agent, trimmed, options.format);
+      console.log(`\n--- Executing: ${trimmed.slice(0, 50)}... ---\n`);
+      await runPrintQuery(agent, trimmed, options.format, session, persistMessages);
+    }
+    await updateCliSessionTitle(session, agent.getMessages());
+  } finally {
+    restoreTaskStore();
+    await session.close();
   }
 }
 
@@ -1065,6 +1096,7 @@ program.action(runCLI as never);
 // silently dropping the other four, and assigned `--cwd` to BOTH `baseUrl`
 // and `workspace`.
 const args = process.argv.slice(2);
+let dispatchedHeadlessMode = false;
 if (args.includes('--print') || args.includes('--headless') || args.includes('--script')) {
   const { operands, options: opts } = parseCliArgs(args);
   const scriptPath: string | undefined = opts.script;
@@ -1078,6 +1110,7 @@ if (args.includes('--print') || args.includes('--headless') || args.includes('--
       console.error(`${Colors.BRIGHT_RED}Error: --print requires a prompt${Colors.RESET}`);
       process.exit(1);
     }
+    dispatchedHeadlessMode = true;
     runPrintMode(prompt, {
       apiKey: opts.apiKey,
       model: opts.model,
@@ -1087,10 +1120,10 @@ if (args.includes('--print') || args.includes('--headless') || args.includes('--
       format: opts.format,
     }).catch((error) => {
       console.error(`${Colors.BRIGHT_RED}Fatal error:${Colors.RESET}`, error);
-      process.exit(1);
+      process.exitCode = 1;
     });
-    process.exit(0);
   } else if (scriptPath !== undefined) {
+    dispatchedHeadlessMode = true;
     runHeadlessMode(scriptPath, {
       apiKey: opts.apiKey,
       model: opts.model,
@@ -1100,9 +1133,8 @@ if (args.includes('--print') || args.includes('--headless') || args.includes('--
       format: opts.format,
     }).catch((error) => {
       console.error(`${Colors.BRIGHT_RED}Fatal error:${Colors.RESET}`, error);
-      process.exit(1);
+      process.exitCode = 1;
     });
-    process.exit(0);
   }
 }
 
@@ -1221,4 +1253,4 @@ program
     printImageConfigSummary();
   })
 
-program.parse();
+if (!dispatchedHeadlessMode) program.parse();

@@ -32,15 +32,13 @@
  *                               owns the whole stream and is routed to its own
  *                               frames; everything else is assembled on the
  *                               engine.
- *   6. `composeLegacyRunPorts` + `RunEngineImpl.execute` -- the turn.
+ *   6. `composeLegacyRunPorts` + Host's `executeRunEngine` -- the turn.
  *
  * ## The obligation this file exists partly to discharge
  *
  * `RunEventStream` is a push queue with no self-termination, and the engine
- * PROPOSES its terminal (`ports.ts`: `RunSession.settle` is the single writer and
- * no host calls it). So a host that drains the spine's stream MUST both settle
- * the run and close the stream itself, or the `for await` never returns. See
- * {@link settleAndCloseSpine} for the ordering and why each part is where it is.
+ * proposes its terminal. Host's `executeRunEngine` owns the drain, durable
+ * settlement, terminal publication, and stream close.
  *
  * ## What this file does NOT do
  *
@@ -51,7 +49,6 @@
  */
 
 import {
-  RunEngineImpl,
   createWorkerAdapterSurface,
   type RunEnginePorts,
   type RunInputSnapshot,
@@ -63,7 +60,6 @@ import { existsSync, readFileSync } from 'node:fs';
 import { FIRST_EPOCH, firstAttemptFence, manifestFingerprint } from '@duya/agent-protocol';
 import type { PermissionPolicyMode } from '@duya/agent-protocol';
 import type {
-  RunEvent,
   RunEventEnvelope,
   RunFence,
   RunId,
@@ -84,7 +80,8 @@ import {
   type LegacyRunFacts,
   type LegacyRunHost,
 } from './run-composition.js';
-import { createRunEventSpine, type RunEventSpine } from './run-event-spine.js';
+import { createRunEventSpine } from '@duya/host/run-event-spine';
+import { executeRunEngine } from '@duya/host/run-engine-execution';
 import { createToolSideEffectLedger, defaultLedgerDir, ledgerFile } from './tool-side-effect-ledger.js';
 
 /** The runtime this worker reports in `run.started`. */
@@ -203,117 +200,6 @@ export interface EngineRunOutcome {
   readonly promptRowId: string | null;
   /** The frames `producePromptContextRail` returned, for the caller to route. */
   readonly railFrames: readonly SSEEvent[];
-}
-
-/**
- * Drain the spine's stream, projecting each envelope to the renderer's frame.
- *
- * ## Why the drain is SEPARATE from the execution
- *
- * Because the two must overlap. The engine publishes synchronously through the
- * emitter, and `RunEventStream` is BOUNDED (1024 envelopes, oldest dropped), so
- * a host that awaited the execution before reading would lose the run's first
- * frames to the queue's own overflow. The execution is started first and the
- * drain runs beside it, exactly as `RunController` does.
- *
- * `onEnvelope` receives the ENVELOPE, not a projected frame: projection is the
- * surface's job and a second projector here would be a second mapping table that
- * could disagree with the first.
- */
-async function drainSpine(
-  spine: RunEventSpine,
-  onEnvelope: (envelope: RunEventEnvelope) => void | Promise<void>,
-): Promise<void> {
-  for await (const envelope of spine.stream) {
-    await onEnvelope(envelope as unknown as RunEventEnvelope);
-  }
-}
-
-/**
- * Settle the run, release its held terminal, and CLOSE the stream.
- *
- * ## The obligation
- *
- * Nothing in the tree closes a `RunEventStream`, and the engine only PROPOSES
- * its terminal. A drain therefore never terminates on its own: the `for await`
- * parks on a waiter that only `close()` resolves. This is the close, and it is
- * the reason the flip is executable at all rather than merely correct.
- *
- * ## Step 0 exists because `settle` DECIDES from observed events
- *
- * `RunSession.settle` is the single writer, and it resolves the terminal with
- * `resolveRunOutcome(this.#terminalEvents, ...)` -- the events the run OBSERVED.
- * The engine publishes `run.completed` / `run.failed` nowhere (it states so at
- * `run-engine.ts:984` and only calls `proposeTerminal`), so a host that settled
- * straight from the candidate would hand the session an EMPTY terminal-event set
- * and every run would end `failed` with `runtime_crash: the run stream ended with
- * no terminal event`.
- *
- * So the candidate is published as a terminal EVENT through the emitter first.
- * That is not the driver deciding: the emitter HOLDS the terminal
- * (`event-emitter.ts:300-308`) instead of announcing it, and
- * `publishCommittedTerminal` below discards the held frame whenever the session's
- * committed terminal contradicts it. The session therefore still decides, and a
- * disagreement is still reported rather than papered over -- which is exactly the
- * `run.completed` that became `failed` downgrade the emitter documents.
- *
- * Publishing it HERE also keeps the "announced before durable" hole shut: the
- * event is held, so a consumer sees the run's ending only after the settle
- * barrier answered.
- *
- * ## The ORDER, and why each step is where it is
- *
- * 0. `emitter.emit(terminalEvent)` FIRST, and only when the engine proposed
- *    something. A run that proposed nothing has no ending to record, and
- *    `settle(undefined)` is then the honest input -- the session synthesises from
- *    its own observations.
- * 1. `session.settle(candidate)` next. It is the single writer of the terminal
- *    (`ports.ts:1028-1035`), and it flushes the transcript and writes the
- *    terminal row. Nothing may be announced before that barrier answered.
- * 2. `emitter.publishCommittedTerminal(terminal)` THIRD. It releases the frame the
- *    emitter HELD, and `RunEventStream.push` is a no-op once closed -- so closing
- *    first would drop the run's own ending, which is the exact hole the hold
- *    exists to close (`controller.ts:912-927`).
- * 3. `stream.close()` LAST, and unconditionally. Even a settle that threw must
- *    not leave a drain parked forever, so the close is in a `finally`.
- */
-async function settleAndCloseSpine(
-  spine: RunEventSpine,
-  candidate: TerminalCandidate | null,
-): Promise<RunTerminalState> {
-  try {
-    if (candidate !== null) {
-      const state = candidate.state;
-      // The event the CANDIDATE names, in the union's own vocabulary. Projected
-      // rather than asserted: the candidate carries a `RunTerminalState`, and
-      // `run.failed` is the one arm whose required `error` has no counterpart on
-      // the completed arms.
-      const event: RunEvent =
-        state.status === 'failed'
-          ? { type: 'run.failed', error: state.error }
-          : {
-              type: 'run.completed',
-              status: state.status,
-              ...(state.stopReason === undefined ? {} : { stopReason: state.stopReason }),
-            };
-      // Through the EMITTER, never a direct `session.observe`: the emitter is
-      // what holds the terminal, and a bypass would announce the run's ending
-      // before its durable barrier answered.
-      spine.emitter.emit(event);
-    }
-    const terminal = await spine.session.settle(
-      candidate === null
-        ? undefined
-        : candidate.state.status === 'cancelled'
-          ? { cancelRequested: true, requestedReason: candidate.reason }
-          : {},
-    );
-    await spine.emitter.publishCommittedTerminal(terminal);
-    return terminal;
-  } finally {
-    // Unconditional, and LAST. See the ordering note above.
-    spine.stream.close();
-  }
 }
 
 /**
@@ -603,7 +489,7 @@ export async function driveRunWithEngine(
       emitter: spine.emitter,
       // ADVISORY. `createRunEventSpine`'s own recorder, so the run's last
       // candidate is read back off the spine rather than re-derived here; the
-      // DECISION is `settleAndCloseSpine`'s.
+      // DECISION is Host's settlement path.
       proposeTerminal: spine.proposeTerminal,
       // REQUIRED: an unbound compaction port means no transcript is ever
       // replaced. `engineCompactionSources` is the member that supplies it, and
@@ -642,74 +528,48 @@ export async function driveRunWithEngine(
       legacyFrameCodec: request.legacyFrameCodec,
     });
 
-    const engine = new RunEngineImpl({
-      now: () => Date.now(),
-      // `undefined` means UNCAPPED, which is the legacy's own reading
-      // (`DuyaAgent.ts:4851-4854`): a silent default would truncate a long run
-      // without anything recording why.
-      ...(request.maxTurns === undefined ? {} : { defaultMaxTurns: request.maxTurns }),
-    });
-
-    const execution = engine.execute({
+    const execution = await executeRunEngine({
+      spine,
       manifest,
       input,
-      // The run's OWN signal, so a stop reaches the controller the engine
-      // actually hands to its ports rather than a controller this file owns.
       signal: run.signal,
       ports,
+      ...(request.maxTurns === undefined ? {} : { maxTurns: request.maxTurns }),
+      onEnvelope: (typed) => {
+        // The `result` frame the entry's billing ledger reads. `result` is NOT a
+        // legacy SSE type -- the legacy consumed it upstream of the codec -- so
+        // the projector has no arm for it and the surface owns it.
+        for (const result of surface.projectUsageResults(typed.payload)) {
+          onFrame(result as unknown as Record<string, unknown>);
+        }
+        const frame = surface.surface.projectToLegacyFrame(typed);
+        // THEN the worker's own codec. The surface projects a protocol event into
+        // the LEGACY `SSEEvent` vocabulary (`text_delta`, `turn_start`, `done`),
+        // and the caller's handler is written against the `chat:*` frames
+        // `convertSSEToAgentMessage` produces. Handing over the projection
+        // un-codec'd would silently miss every `chat:*` arm.
+        //
+        // A frame the codec returns `null` for is DROPPED here rather than passed
+        // on, so a caller that kept a legacy arm open would see it -- the codec's
+        // own drop is the product's answer, not a gap this driver should paper
+        // over by inventing a frame.
+        // The surface's DECLARED return is `unknown` (`ports.ts:2144`), deliberately --
+        // the interface documents the projection's envelope argument rather than
+        // its shape. So the one thing the codec needs is checked here at run time
+        // rather than asserted: a projection that is not an object carrying a
+        // string `type` is not something `convertSSEToAgentMessage` can read, and
+        // handing it over would throw inside the drain.
+        if (frame != null && typeof frame === 'object' && typeof (frame as { type?: unknown }).type === 'string') {
+          const chatFrame = request.legacyFrameCodec(frame as { readonly type: string });
+          if (chatFrame !== null) onFrame(chatFrame as unknown as Record<string, unknown>);
+        }
+      },
     });
-
-    // The drain runs BESIDE the execution, for the bounded-queue reason
-    // `drainSpine` gives. Started, not awaited.
-    const drained = drainSpine(spine, (envelope) => {
-      const typed = envelope as RunEventEnvelope;
-      // The `result` frame the entry's billing ledger reads. `result` is NOT a
-      // legacy SSE type -- the legacy consumed it upstream of the codec -- so
-      // the projector has no arm for it and the surface owns it.
-      for (const result of surface.projectUsageResults(typed.payload)) {
-        onFrame(result as unknown as Record<string, unknown>);
-      }
-      const frame = surface.surface.projectToLegacyFrame(typed);
-      // THEN the worker's own codec. The surface projects a protocol event into
-      // the LEGACY `SSEEvent` vocabulary (`text_delta`, `turn_start`, `done`),
-      // and the caller's handler is written against the `chat:*` frames
-      // `convertSSEToAgentMessage` produces. Handing over the projection
-      // un-codec'd would silently miss every `chat:*` arm.
-      //
-      // A frame the codec returns `null` for is DROPPED here rather than passed
-      // on, so a caller that kept a legacy arm open would see it -- the codec's
-      // own drop is the product's answer, not a gap this driver should paper
-      // over by inventing a frame.
-      // The surface's DECLARED return is `unknown` (`ports.ts:2144`), deliberately --
-      // the interface documents the projection's envelope argument rather than
-      // its shape. So the one thing the codec needs is checked here at run time
-      // rather than asserted: a projection that is not an object carrying a
-      // string `type` is not something `convertSSEToAgentMessage` can read, and
-      // handing it over would throw inside the drain.
-      if (frame != null && typeof frame === 'object' && typeof (frame as { type?: unknown }).type === 'string') {
-        const chatFrame = request.legacyFrameCodec(frame as { readonly type: string });
-        if (chatFrame !== null) onFrame(chatFrame as unknown as Record<string, unknown>);
-      }
-    });
-
-    // Whatever the execution does, the drain MUST terminate. `settleAndCloseSpine`
-    // closes the stream in a `finally`, so an execution that threw still releases
-    // the waiter this drain is parked on.
-    try {
-      await execution.completed();
-    } finally {
-      // THE obligation. The engine PROPOSED its terminal; this settles the run
-      // through the single writer, releases the held frame, and closes the
-      // stream. See `settleAndCloseSpine` for why that order is the only one
-      // that neither drops the run's ending nor parks the drain forever.
-      await settleAndCloseSpine(spine, spine.proposedTerminal());
-    }
-    await drained;
 
     return {
       announced,
-      proposed: spine.proposedTerminal(),
-      terminal: spine.session.terminal,
+      proposed: execution.proposed,
+      terminal: execution.terminal,
       ports,
       promptRowId,
       railFrames,

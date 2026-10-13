@@ -363,7 +363,7 @@ Four were wrong and are corrected below; these five were checked and are
 
 | Plan | Priority | Next action |
 | --- | --- | --- |
-| **[610-architecture-series](./active/610-architecture-series/README.md)** | **P0** | **唯一的架构计划。** 600 / 601 / 602 已收为它的三章,不再各自独立。**A1 已合并**(PR #219 / `205a4cd4`)、**A2 已落地**(PR #222 / `a046cdf6`)。**当前 next action 是 A3**:迁走 `DuyaAgent.ts` 的 `streamChat` 轮次循环,使 `isTurnLoopModule` 变 false(门禁已如实报出这条真违规,归 A3);A0 可并行 |
+| **[610-architecture-series](./active/610-architecture-series/README.md)** | **P0** | **唯一的架构计划，仍 Active。** A3 已随 PR #262 完成；旧索引中的“A3 是下一步”已过时。**当前 next action 是 A4 前置清理**：把 `DuyaAgent.test.ts`、`streaming-lifecycle.test.ts`、`AgentLoop.test.ts` 的 16 处旧 `duyaAgent.streamChat` 调用迁到 engine harness，或明确删除/skip；随后完成 A4 六场景运行时验收。当前证据与计数限制见 [610 执行日志](./active/610-architecture-series/90-execution-log.md)。 |
 | [587-agent-harness-monorepo](./active/587-agent-harness-monorepo/README.md) | P1 | 合同与历史推导已被 610 第 01 章接管(`01-layered-architecture/10-takeover-from-587.md`)。**不再单独排期**,只作为查证来源 |
 
 > **只有一个架构计划。** 610 的切片表 A0–A7 / B1–B3 / C1 是全部的架构工作,
@@ -405,6 +405,7 @@ Four were wrong and are corrected below; these five were checked and are
 | [cua-tree-richness](./active/576-cua-tree-richness.md) | P1 | Phase 3 in the ps1 C# probe walk: emit `children_total/shown/offset` for container nodes, plus `surface_kind` and the new-window settle poll _(Phases 1-2 landed)_ |
 | [mcp-capability-core-convergence](./active/580-mcp-capability-core-convergence.md) | P0 | Run Phase 0's real-machine Notion baseline (instrumented around `RemoteMcpConnector`/`MCPClient` discovery) to record `pages=N, total=M` _(Phases 0/3/4/5 open)_ |
 | [session-archive-hardening](./active/582-session-archive-hardening.md) | P0 | Storage 与生命周期补强（G1–G4 / UI 轨 G5–G9）—— **此前未列入本索引，2026-10-03 补上**；前置 plan 549 已于 PR #56 落地 |
+| [tui-ux-overhaul](./active/611-tui-ux-overhaul.md) | P1 | CLI TUI Wave 1：主题 token 化 + 自动明暗、F1/Ctrl+R/Ctrl+P 窗口、busy 排队、粘贴 Map 修复、状态栏 token 条、工具组渲染 |
 
 ***
 

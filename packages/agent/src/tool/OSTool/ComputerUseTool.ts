@@ -29,6 +29,11 @@
 import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
 import { randomUUID } from 'node:crypto';
+import { ComputerUseErrorCode as ProtocolComputerUseErrorCode } from '@duya/agent-protocol';
+import type {
+  ComputerUseErrorCode as ProtocolComputerUseErrorCodeType,
+  ComputerUseToolEnvelope,
+} from '@duya/agent-protocol';
 import {
   COMPUTER_USE_TOOL_NAME,
   COMPUTER_USE_ACTIONS,
@@ -42,6 +47,13 @@ import { computerUseInputSchema } from './schema.js';
 // only calls the trigger recorder inside execute() — safe under ESM
 // and the esbuild CJS bundle (plan 519 §3.2 / D2).
 import { recordComputerUseContextTrigger } from './context-tool.js';
+
+export const ComputerUseErrorCode = ProtocolComputerUseErrorCode;
+export type ComputerUseErrorCode = ProtocolComputerUseErrorCodeType;
+export type {
+  ComputerUseActionResult,
+  ComputerUseToolEnvelope,
+} from '@duya/agent-protocol';
 
 /**
  * Tool definition. Codex-skill style description: short imperative
@@ -147,73 +159,6 @@ export const definition: Tool = {
 };
 
 /**
- * Error codes returned by the tool. Kept as a frozen enum so callers
- * (main process + renderer) can match on them.
- */
-export const ComputerUseErrorCode = {
-  SCHEMA_INVALID: 'SCHEMA_INVALID',
-  NO_IPC: 'NO_IPC',
-  IPC_EXCEPTION: 'IPC_EXCEPTION',
-  BACKEND_UNAVAILABLE: 'BACKEND_UNAVAILABLE',
-  TIMEOUT: 'TIMEOUT',
-  USER_REJECTED: 'USER_REJECTED',
-  APPROVAL_TIMEOUT: 'APPROVAL_TIMEOUT',
-  REDACTED_FIELD: 'REDACTED_FIELD',
-  BLOCKED: 'BLOCKED',
-  APP_BLOCKED: 'APP_BLOCKED',
-  /**
-   * plan 564: the structural channel (tree/invoke) has no bridge on
-   * this platform or the probe is down — the model should stay on the
-   * vision loop instead of retrying structural actions.
-   */
-  STRUCTURAL_UNAVAILABLE: 'STRUCTURAL_UNAVAILABLE',
-  UNKNOWN: 'UNKNOWN',
-} as const;
-
-export type ComputerUseErrorCode =
-  (typeof ComputerUseErrorCode)[keyof typeof ComputerUseErrorCode];
-
-/**
- * Structured read-back for state-changing actions (click / type / key /
- * scroll / drag / set_value). plan 519 §3.5: the main process returns a
- * `verdict` alongside a successful action so the agent can tell whether
- * the action actually landed before retrying. Kept as a local structural
- * type on purpose — do NOT import `@duya/computer-use`'s Verdict type,
- * to avoid pulling a runtime dependency on the computer-use package into
- * the agent bundle.
- */
-export interface ComputerUseActionResult {
-  ok: boolean;
-  reason?: string;
-  durationMs?: number;
-  /** plan 519 §3.5: structured read-back verdict */
-  verdict?: {
-    effect: 'confirmed' | 'unverifiable' | 'suspected_noop';
-    verified: { elementChanged: boolean; newFocusedEntity: unknown | null };
-    escalation?: { recommended: 're-capture' | 'raise' | 'foreground'; reason: string };
-    readbackMs?: number;
-    fallbackUsed?: boolean;
-  };
-}
-
-/**
- * Result envelope returned by the executor. Tools callers see a
- * ToolResult whose `result` field is the JSON-serialized envelope.
- *
- * plan 519 (D2): `action` widened to include the conditional
- * `computer_use_context` actions — the main-process dispatcher
- * (`computer-use:execute`) returns the same envelope shape for
- * `list_apps` / `focus_app`, and the main side imports THIS type.
- * Tool-level schemas stay separate; only the envelope sees the union.
- */
-export interface ComputerUseToolEnvelope<T = unknown> {
-  success: boolean;
-  action: ComputerUseExecuteAction;
-  data?: T;
-  error?: { code: ComputerUseErrorCode; message: string };
-}
-
-/**
  * Tool executor. Handles:
  *   1. zod validation (returns SCHEMA_INVALID on failure).
  *   2. IPC dispatch via `computer-use:execute`.
@@ -240,7 +185,7 @@ export const executor: ToolExecutor = {
           success: false,
           action: typeof input.action === 'string' ? input.action : 'unknown',
           error: {
-            code: ComputerUseErrorCode.SCHEMA_INVALID,
+            code: ProtocolComputerUseErrorCode.SCHEMA_INVALID,
             message: parsed.error.issues
               .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
               .join('; '),
@@ -261,7 +206,7 @@ export const executor: ToolExecutor = {
           success: false,
           action,
           error: {
-            code: ComputerUseErrorCode.NO_IPC,
+            code: ProtocolComputerUseErrorCode.NO_IPC,
             message:
               'IPC not available — computer_use tool requires the Electron main process bridge.',
           },
@@ -284,8 +229,8 @@ export const executor: ToolExecutor = {
 
       if (!response.success) {
         const code =
-          (response.error?.code as ComputerUseErrorCode | undefined) ??
-          ComputerUseErrorCode.UNKNOWN;
+          (response.error?.code as ProtocolComputerUseErrorCodeType | undefined) ??
+          ProtocolComputerUseErrorCode.UNKNOWN;
         return {
           id: randomUUID(),
           name: toolName,
@@ -388,7 +333,7 @@ export const executor: ToolExecutor = {
           success: false,
           action,
           error: {
-            code: ComputerUseErrorCode.IPC_EXCEPTION,
+            code: ProtocolComputerUseErrorCode.IPC_EXCEPTION,
             message: err instanceof Error ? err.message : String(err),
           },
         } satisfies ComputerUseToolEnvelope),
