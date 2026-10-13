@@ -890,7 +890,23 @@ export class RunEngineImpl implements RunEngine {
     } catch (error) {
       // A thrown turn is a FAILED run, not a silent one. Left uncaught it would
       // leave a run that looks live to every consumer of the event stream.
-      exit = { reason: 'failed', message: error instanceof Error ? error.message : String(error) };
+      //
+      // UNLESS the caller's signal is aborted. A stop that lands mid-stream
+      // kills the provider request before any frame boundary is reached, so the
+      // abort surfaces as a transport-shaped THROW from the stream iterator —
+      // "stream ended without finish_reason" and its siblings — and the
+      // `isAborted` checks at the loop's clean boundaries (:643, :877, :1116,
+      // :1692) never run. The caller asked for this stop; recording it as a
+      // failure is the exact lie `resolveRunOutcome` forbids ("cancellation is
+      // completed, never failed"), and it is the race that let a worker's
+      // interrupt land as `run.failed` ahead of the cancel arbiter's
+      // `cancelled` — the durable terminal then said failed for a stop the
+      // user requested. The four clean boundaries already exit `cancelled`
+      // here; a throw under an aborted signal is the fifth boundary arriving
+      // as an exception instead of a return, and it gets the same verdict.
+      exit = isAborted(signal)
+        ? { reason: 'cancelled' }
+        : { reason: 'failed', message: error instanceof Error ? error.message : String(error) };
     } finally {
       const reclaimed = await this.#reclaimSubtasks(ports, exit);
       // The lease is released on every exit, including a throw. `ports.ts`

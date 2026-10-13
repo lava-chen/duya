@@ -826,6 +826,73 @@ describe('cancellation: an in-flight tool result is abandoned, not delivered', (
 });
 
 // ============================================================================
+// 3b. 取消 -- a mid-stream model THROW under an aborted signal
+//
+// A stop that lands mid-stream kills the provider request before any frame
+// boundary is reached, so the abort surfaces as a transport-shaped throw from
+// the stream iterator ("stream ended without finish_reason") and the
+// `isAborted` checks at the loop's clean boundaries never run. MIS-
+// IMPLEMENTATION PROVEN AGAINST: the turn-loop `catch` classifying every throw
+// as `failed`. That is the race that let a worker's interrupt land as
+// `run.failed` ahead of the cancel arbiter's `cancelled`, so the durable
+// terminal recorded a user stop as an error.
+// ============================================================================
+
+describe('cancellation: a mid-stream model throw under an aborted signal is cancelled, not failed', () => {
+  it('settles the run as cancelled when the transport dies BECAUSE the caller aborted', async () => {
+    const controller = new AbortController();
+    let openGate = (): void => {};
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+
+    const h = harness({
+      // No tools: a pure model-stream death, the shape a real abort produces.
+      // The message is the real premature-end guard's text — the exact error a
+      // provider stream killed mid-SSE throws before any boundary can observe
+      // the signal.
+      turns: [
+        {
+          frames: [{ type: 'text', text: 'partial answer' }],
+          diesWith: new Error('OpenAI-compatible stream ended without finish_reason'),
+        },
+      ],
+    });
+
+    // Park the stream after its first frame, so the abort lands while the
+    // iterator is open and the throw arrives AFTER the signal is aborted.
+    // Without the park the throw would race the abort and the test could pass
+    // by ordering luck.
+    let streamWasOpen = false;
+    const originalStream = h.ports.model.stream;
+    h.ports.model.stream = ((request: ModelRequest) => {
+      const iterable = originalStream.call(h.ports.model, request);
+      return (async function* () {
+        for await (const frame of iterable) {
+          yield frame;
+          streamWasOpen = true;
+          await gate;
+        }
+      })();
+    }) as typeof h.ports.model.stream;
+
+    const running = run(new RunEngineImpl({ now: fakeClock() }), h, { signal: controller.signal });
+    for (let tick = 0; tick < 20 && !streamWasOpen; tick += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(streamWasOpen, 'the stream should be open before the abort').toBe(true);
+    controller.abort(new Error('the user pressed stop'));
+    openGate();
+    await running;
+
+    // The run reports a cancellation, from two independent sources: the
+    // candidate the engine proposed, and the terminal events it offered.
+    expect(h.terminals[0]?.state).toEqual({ status: 'cancelled' });
+    expect(h.events.filter((event) => event.type === 'run.failed')).toEqual([]);
+  });
+});
+
+// ============================================================================
 // 4. 瀛樺偍鎷掔粷 -- storage rejection
 //
 // MIS-IMPLEMENTATION PROVEN AGAINST: the `catch` in `#run` (`run-engine.ts:684`)

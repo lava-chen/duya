@@ -2369,7 +2369,44 @@ Remaining, in order:
 1. Worker entry is still the legacy `@duya/agent` bundle (gate 3 port
    extraction A5–A7) — the CLI/Desktop production dependency graphs no longer
    contain `@duya/agent`, but the spawned worker process is still its bundle.
-2. Worker interrupt should report a cooperative stop so cancel lands
-   `cancelled` instead of racing `run.failed`.
-3. Desktop still supervises its in-process Agent Server (gate 2); its Host
+2. Desktop still supervises its in-process Agent Server (gate 2); its Host
+   adapter does not yet compose the execution controller.
+
+## Cooperative cancel lands `cancelled`, not `failed` (2026-10-13)
+
+The gate-4 KNOWN GAP above is closed at the engine, which is where the
+misclassification lived. A stop that lands mid-stream kills the provider
+request before any frame boundary is reached, so the abort surfaced as a
+transport-shaped THROW from the stream iterator ("OpenAI-compatible stream
+ended without finish_reason") — the `isAborted(signal)` checks at the turn
+loop's four clean boundaries (`run-engine.ts:643/877/1116/1692`) never ran,
+and the turn-loop `catch` (`run-engine.ts:890`) classified every throw as
+`failed`. The worker then emitted `chat:error`, whose translated
+`run.failed` envelope won the one-shot CAS ahead of the cancel arbiter.
+
+Fix: the catch now reads the caller's signal first — `isAborted(signal)` →
+`exit: { reason: 'cancelled' }`. Downstream, everything already agreed: the
+worker spine settles `run.completed{status:'cancelled'}`, the legacy
+projector emits a clean `chat:done` (no error frame), the Host translator
+maps it to `run.completed`, and `controller.settle` merges
+`active.cancelRequested` so `resolveRunOutcome` records `cancelled`.
+
+- `packages/agent-runtime/src/engine/run-engine.ts` — the one production
+  change (turn-loop catch).
+- `packages/agent-runtime/test/engine-scenario-turn-behaviour.test.ts` — new
+  scenario: a model stream that throws BECAUSE the caller aborted settles
+  `cancelled`. Mutation-verified: reverting the catch turns exactly this test
+  red.
+- `packages/agent-runtime/test/request-timeout-cap.test.ts` — the pinned
+  expectation "a rethrowing port records `failed` under a run-level stop" is
+  the old semantics; updated to `cancelled` with the reasoning in place.
+- Known pre-existing red (not this slice): `coalescing-throughput.test.ts`
+  "survives a ten-minute slow consumer" fails identically with and without
+  this change.
+
+Remaining, in order:
+1. Worker entry is still the legacy `@duya/agent` bundle (gate 3 port
+   extraction A5–A7) — the CLI/Desktop production dependency graphs no longer
+   contain `@duya/agent`, but the spawned worker process is still its bundle.
+2. Desktop still supervises its in-process Agent Server (gate 2); its Host
    adapter does not yet compose the execution controller.
