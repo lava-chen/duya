@@ -11,7 +11,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { validateWorkflow } from '../../../../../../packages/agent/src/modes/workflow/validate';
+import { validateWorkflow } from '@duya/host/worker-workflows/validate';
 
 // ─── harness (vi.hoisted: mock factories are hoisted above the consts) ───
 

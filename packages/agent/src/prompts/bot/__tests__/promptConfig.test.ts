@@ -16,11 +16,11 @@ const mocks = vi.hoisted(() => ({
   profiles: {} as Record<string, { name?: string; description?: string } | undefined>,
 }))
 
-vi.mock('../../../agent-profile/config-agents.js', () => ({
+vi.mock('@duya/host/agent-profile-config', () => ({
   readConfigAgents: async () => mocks.agents,
 }))
 
-vi.mock('../../../agent-profile/bot-profile-reader.js', () => ({
+vi.mock('@duya/host/worker-prompts/bot/bot-profile-reader', () => ({
   readBotProfileIdentity: async (id: string) => mocks.profiles[id],
 }))
 

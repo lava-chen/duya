@@ -1,5 +1,5 @@
 /**
- * Plan 610 A8 shim â€?ApplyPatchTool moved to `@duya/capabilities`
+ * Plan 610 A8 shim   ?ApplyPatchTool moved to `@duya/capabilities`
  * (`fs/apply-patch`). Pass-through (`ApplyPatchTool`, `applyPatchTool`
  * singleton, `parseCodexPatch`, `applyHunkToLines`, patch types).
  */

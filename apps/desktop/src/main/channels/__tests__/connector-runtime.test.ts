@@ -26,7 +26,7 @@ import {
   getLiveOutbound,
   channelOutboundToNormalizedReply,
 } from '../connector-runtime';
-import type { ChannelOutboundMessage } from '../../../../../../packages/agent/src/channels/types';
+import type { ChannelOutboundMessage } from '@duya/agent-protocol/channels';
 
 _setConfigStoreForTest(
   new ConfigStore({

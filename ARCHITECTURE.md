@@ -16,8 +16,12 @@ DUYA is a Windows desktop AI agent client with a modular architecture:
 - **Desktop Shell**: Electron 44 (Main Process)
 - **Agent runtime**: `@duya/agent-runtime` owns run identity, event ordering,
   and the model/tool/context port contracts.
-- **Legacy Agent assembly**: `@duya/agent` still constructs production
-  workers, CLI runs, tools, and turn context.
+- **Worker assembly**: `@duya/host` owns the product session, concrete tool
+  registry composition, worker command loop and run-context bindings.
+  `@duya/cli` supplies the command runner at the worker bootstrap; Host does
+  not import CLI. `packages/host/bundle/worker-entry.js` is the new executable,
+  with packaged location `resources/harness-bundle/worker-entry.js`.
+  Legacy Agent import adapters remain pending final retirement verification.
 - **Duya Host**: `@duya/host` is Electron-independent and owns the local
   session/timeline/archive, project metadata, parsed-document attachment,
   settings APIs, config-driven Agent profile reads, session permission-profile
@@ -37,7 +41,10 @@ DUYA is a Windows desktop AI agent client with a modular architecture:
   `@duya/agent` dependency edge — verified live end to end against a real
   model through the standalone Host. Desktop still composes the Host
   listener over Main-owned handles, and its Agent Server still supplies the
-  worker command channel and launches the legacy Agent worker entry.
+  worker command channel. Desktop and standalone launch selectors now target
+  the Host worker bundle. The new child startup/command channel has been
+  verified; complete CLI/Desktop execution with the old package absent remains
+  pending.
 - **AI Layer**: `@duya/ai` multi-protocol adapter
 - **Database**: SQLite via better-sqlite3; default data root is `~/.duya`,
   with `DUYA_DATA_ROOT` overriding the shared root for databases, rollouts, and

@@ -22,11 +22,10 @@
  */
 
 import { Command } from '@commander-js/extra-typings';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { startLocalHost } from '@duya/host/local-host';
 import { buildControlPlane } from './program/build-control-plane.js';
 import { runChatCommand, runTuiCommand, type ChatCommandOptions, type TuiCommandOptions } from './chat.js';
+import { resolveHostWorkerPath } from './worker-path.js';
 
 export { CLI_DESCRIPTORS } from './program/descriptors.js';
 export type { CliCommandPath, ExitCode } from './program/registry.js';
@@ -40,24 +39,6 @@ export * from './contract/index.js';
  * no argv mutation. The caller (`bin/duya`) wires argv to
  * `program.parse(argv)`.
  */
-/**
- * Resolve the worker entry the Host-owned execution controller spawns.
- *
- * `DUYA_HOST_WORKER_PATH` wins; otherwise the repository layout is probed the
- * same way the Desktop Agent Server resolves its dev bundle. Absent, `duya
- * serve` stays a ledger-only Host — execution ownership requires a worker
- * entry, and inventing one would be worse than not offering execution.
- */
-function resolveServeWorkerPath(): string | undefined {
-  const explicit = process.env.DUYA_HOST_WORKER_PATH;
-  if (explicit !== undefined && explicit.trim().length > 0) return path.resolve(explicit.trim());
-  const devBundle = path.join(process.cwd(), 'packages', 'agent', 'bundle', 'agent-process-entry.js');
-  if (fs.existsSync(devBundle)) return devBundle;
-  const devDist = path.join(process.cwd(), 'packages', 'agent', 'dist', 'process', 'agent-process-entry.js');
-  if (fs.existsSync(devDist)) return devDist;
-  return undefined;
-}
-
 export function buildProgram(): Command {
   const program = new Command();
   program
@@ -80,7 +61,7 @@ export function buildProgram(): Command {
     }
 
     try {
-      const workerPath = resolveServeWorkerPath();
+      const workerPath = resolveHostWorkerPath();
       const host = await startLocalHost({ port, ...(workerPath === undefined ? {} : { workerPath }) });
       process.stdout.write(`Duya Host listening at ${host.origin}\n`);
       process.stdout.write(`Runtime descriptor: ${host.runtimeFilePath}\n`);

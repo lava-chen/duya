@@ -29,7 +29,7 @@ import type {
   MCPServerInventoryEntry,
 } from '@duya/plugin-core';
 
-vi.mock('../../src/mcp/collect-worker.js', async () => {
+vi.mock('../../../host/src/connector-services/collector.js', async () => {
   return {
     collectWorkerMCPCandidates: vi.fn(),
     fetchPluginSetupValuesForMcp: vi.fn(async () => ({})),
@@ -278,7 +278,7 @@ vi.mock('@duya/plugin-core/mcp/resolve', () => ({
   resolveMCPDiscovery: vi.fn(),
 }));
 
-import { collectWorkerMCPCandidates } from '../../src/mcp/collect-worker.js';
+import { collectWorkerMCPCandidates } from '../../../host/src/connector-services/collector.js';
 import * as mcpModule from '../../src/mcp/index.js';
 import { resolveMCPDiscovery } from '@duya/plugin-core/mcp/resolve';
 

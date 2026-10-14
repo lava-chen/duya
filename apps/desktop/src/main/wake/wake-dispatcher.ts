@@ -41,11 +41,11 @@ import {
   dequeueNextWake,
   removeWakeWhere,
   type WakeQueue,
-} from '../../../../../packages/agent/src/wake/queue'
+} from '@duya/agent-core/wake/queue'
 import type { HostPendingWakeInput, WakeItem, WakePayload } from '@duya/agent-protocol'
-import { createTurnEpochState } from '../../../../../packages/agent/src/wake/epoch'
-import { decidePreemption, asRedriven, type RunOrigin } from '../../../../../packages/agent/src/wake/preemption'
-import { buildAgentInboundWakePrompt } from '../../../../../packages/agent/src/agent/dm/index.js'
+import { createTurnEpochState } from '@duya/agent-core/wake/epoch'
+import { decidePreemption, asRedriven, type RunOrigin } from '@duya/agent-core/wake/preemption'
+import { buildAgentInboundWakePrompt } from '@duya/host/worker-prompts/bot/agent-dm-wake-prompt'
 import { getDesktopHostLocalPendingWakeApi, getDesktopHostLockApi } from '../cli/desktop-host-api'
 import { runWakePromptInExistingSession, runUserTurnInSession, type WakeRunOptions, type WakeRunOutcome } from './wake-run'
 import { maybeAutoReturnDmResult, runUsedSendToAgent } from './agent-dm-return'

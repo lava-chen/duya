@@ -9,12 +9,12 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { parseHooksJsonContent } from '../../packages/agent/src/hooks/hooks-json';
+import { parseHooksJsonContent } from '@duya/host/worker-hooks/hooks-json';
 
 const TEMPLATE = path.resolve(
   process.cwd(),
   'packages',
-  'agent',
+  'host',
   'skills',
   '.system',
   'memory-search',

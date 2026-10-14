@@ -95,7 +95,7 @@ export class CapabilityManagementService {
       generatedAt: Date.now(),
       sources: {
         plugins: 'apps/desktop/src/main/plugins/PluginManager',
-        skills: 'packages/agent/src/skills',
+        skills: 'packages/host/src/skills',
         mcp: 'apps/desktop/src/main/agents/mcp/collect-main',
         ui: 'plugin-manifest',
         hooks: 'plugin-manifest',

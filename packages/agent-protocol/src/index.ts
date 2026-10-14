@@ -94,3 +94,6 @@ export * from './events/criticality.js';
 
 export { RunLedger, LifecycleViolation } from './run-ledger.js';
 export type { LifecycleViolationCode } from './run-ledger.js';
+
+export type { FileAttachment } from './file-attachment.js';
+export type { CommunicationPlatform } from './communication-platform.js';

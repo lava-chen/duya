@@ -1,4 +1,4 @@
-import type { HostLocalParsedDocument } from '@duya/agent-protocol/session-api';
+import type { HostLocalImageAttachment, HostLocalParsedDocument } from '@duya/agent-protocol/session-api';
 import type { SqliteDatabase } from './core-database.js';
 
 interface LegacyAttachmentRow {
@@ -42,6 +42,17 @@ function parsedDocument(row: LegacyAttachmentRow): HostLocalParsedDocument {
 /** Read-only compatibility projection for parsed documents in the legacy main DB. */
 export class MainAttachmentStore {
   constructor(private readonly db: SqliteDatabase) {}
+
+  /** Read-only compatibility projection for image payloads in the legacy main DB. */
+  getImageAttachmentsForSession(sessionId: string): HostLocalImageAttachment[] {
+    const rows = this.db.prepare(`
+      SELECT id, message_id, session_id, attachment_type, mime_type, data, original_url, created_at
+      FROM message_attachments
+      WHERE session_id = ? AND attachment_type = 'image'
+      ORDER BY created_at ASC
+    `).all(sessionId) as HostLocalImageAttachment[];
+    return rows;
+  }
 
   getParsedDocumentsForSession(sessionId: string): HostLocalParsedDocument[] {
     const rows = this.db.prepare(`

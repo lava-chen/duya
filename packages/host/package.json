@@ -7,6 +7,30 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./skills": {
+      "types": "./dist/skills/index.d.ts",
+      "import": "./dist/skills/index.js"
+    },
+    "./skills/*": {
+      "types": "./dist/skills/*.d.ts",
+      "import": "./dist/skills/*.js"
+    },
+    "./worker-config": {
+      "types": "./dist/worker-config/index.d.ts",
+      "import": "./dist/worker-config/index.js"
+    },
+    "./worker-config/*": {
+      "types": "./dist/worker-config/*.d.ts",
+      "import": "./dist/worker-config/*.js"
+    },
+    "./worker-db-client": {
+      "types": "./dist/worker-db-client.d.ts",
+      "import": "./dist/worker-db-client.js"
+    },
+    "./worker-os-context": {
+      "types": "./dist/worker-os-context/index.d.ts",
+      "import": "./dist/worker-os-context/index.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
@@ -242,20 +266,333 @@
     "./agent-profile-config": {
       "types": "./dist/agent-profile-config.d.ts",
       "import": "./dist/agent-profile-config.js"
+    },
+    "./authorization/connector-approval-cache": {
+      "types": "./dist/authorization/connector-approval-cache.d.ts",
+      "import": "./dist/authorization/connector-approval-cache.js"
+    },
+    "./worker-session-history": {
+      "types": "./dist/worker-session-history.d.ts",
+      "import": "./dist/worker-session-history.js"
+    },
+    "./managed-shell": {
+      "types": "./dist/managed-shell/index.d.ts",
+      "import": "./dist/managed-shell/index.js"
+    },
+    "./worker-logger": {
+      "types": "./dist/worker-logger.d.ts",
+      "import": "./dist/worker-logger.js"
+    },
+    "./decisions": {
+      "types": "./dist/decisions/index.d.ts",
+      "import": "./dist/decisions/index.js"
+    },
+    "./decisions/*": {
+      "types": "./dist/decisions/*.d.ts",
+      "import": "./dist/decisions/*.js"
+    },
+    "./worker-prompts": {
+      "types": "./dist/worker-prompts/index.d.ts",
+      "import": "./dist/worker-prompts/index.js"
+    },
+    "./worker-prompts/*": {
+      "types": "./dist/worker-prompts/*.d.ts",
+      "import": "./dist/worker-prompts/*.js"
+    },
+    "./worker-agents-md": {
+      "types": "./dist/worker-agents-md/index.d.ts",
+      "import": "./dist/worker-agents-md/index.js"
+    },
+    "./worker-agents-md/*": {
+      "types": "./dist/worker-agents-md/*.d.ts",
+      "import": "./dist/worker-agents-md/*.js"
+    },
+    "./worker-context/*": {
+      "types": "./dist/worker-context/*.d.ts",
+      "import": "./dist/worker-context/*.js"
+    },
+    "./worker-hooks/*": {
+      "types": "./dist/worker-hooks/*.d.ts",
+      "import": "./dist/worker-hooks/*.js"
+    },
+    "./worker-modes/*": {
+      "types": "./dist/worker-modes/*.d.ts",
+      "import": "./dist/worker-modes/*.js"
+    },
+    "./worker-modes": {
+      "types": "./dist/worker-modes/index.d.ts",
+      "import": "./dist/worker-modes/index.js"
+    },
+    "./connector-services": {
+      "types": "./dist/connector-services/index.d.ts",
+      "import": "./dist/connector-services/index.js"
+    },
+    "./connector-services/*": {
+      "types": "./dist/connector-services/*.d.ts",
+      "import": "./dist/connector-services/*.js"
+    },
+    "./worker-transport": {
+      "types": "./dist/worker-transport.d.ts",
+      "import": "./dist/worker-transport.js"
+    },
+    "./worker-interagent-calls": {
+      "types": "./dist/worker-interagent-calls.d.ts",
+      "import": "./dist/worker-interagent-calls.js"
+    },
+    "./worker-journal/*": {
+      "types": "./dist/worker-journal/*.d.ts",
+      "import": "./dist/worker-journal/*.js"
+    },
+    "./worker-compaction": {
+      "types": "./dist/worker-compaction/index.d.ts",
+      "import": "./dist/worker-compaction/index.js"
+    },
+    "./worker-compaction/*": {
+      "types": "./dist/worker-compaction/*.d.ts",
+      "import": "./dist/worker-compaction/*.js"
+    },
+    "./worker-subagents/*": {
+      "types": "./dist/worker-subagents/*.d.ts",
+      "import": "./dist/worker-subagents/*.js"
+    },
+    "./worker-task-store": {
+      "types": "./dist/worker-task-store.d.ts",
+      "import": "./dist/worker-task-store.js"
+    },
+    "./worker-frame-codec": {
+      "types": "./dist/worker-frame-codec.d.ts",
+      "import": "./dist/worker-frame-codec.js"
+    },
+    "./worker-subagents": {
+      "types": "./dist/worker-subagents/index.d.ts",
+      "import": "./dist/worker-subagents/index.js"
+    },
+    "./worker-journal": {
+      "types": "./dist/worker-journal/index.d.ts",
+      "import": "./dist/worker-journal/index.js"
+    },
+    "./worker-workflows": {
+      "types": "./dist/worker-workflows/index.d.ts",
+      "import": "./dist/worker-workflows/index.js"
+    },
+    "./worker-workflows/*": {
+      "types": "./dist/worker-workflows/*.d.ts",
+      "import": "./dist/worker-workflows/*.js"
+    },
+    "./worker-session": {
+      "types": "./dist/worker-session/index.d.ts",
+      "import": "./dist/worker-session/index.js"
+    },
+    "./worker-session/*": {
+      "types": "./dist/worker-session/*.d.ts",
+      "import": "./dist/worker-session/*.js"
+    },
+    "./worker-profiles": {
+      "types": "./dist/worker-profiles/index.d.ts",
+      "import": "./dist/worker-profiles/index.js"
+    },
+    "./worker-profiles/*": {
+      "types": "./dist/worker-profiles/*.d.ts",
+      "import": "./dist/worker-profiles/*.js"
+    },
+    "./worker-mentions": {
+      "types": "./dist/worker-mentions.d.ts",
+      "import": "./dist/worker-mentions.js"
+    },
+    "./worker-tool-ledger": {
+      "types": "./dist/worker-tool-ledger.d.ts",
+      "import": "./dist/worker-tool-ledger.js"
+    },
+    "./worker-visual-analysis": {
+      "types": "./dist/worker-visual-analysis.d.ts",
+      "import": "./dist/worker-visual-analysis.js"
+    },
+    "./worker-command-queue": {
+      "types": "./dist/worker-command-queue.d.ts",
+      "import": "./dist/worker-command-queue.js"
+    },
+    "./worker-tool-pool": {
+      "types": "./dist/worker-tool-pool.d.ts",
+      "import": "./dist/worker-tool-pool.js"
+    },
+    "./managed-shell/*": {
+      "types": "./dist/managed-shell/*.d.ts",
+      "import": "./dist/managed-shell/*.js"
+    },
+    "./authorization/worker-approval-card": {
+      "types": "./dist/authorization/worker-approval-card.d.ts",
+      "import": "./dist/authorization/worker-approval-card.js"
+    },
+    "./worker-tool-services/*": {
+      "types": "./dist/worker-tool-services/*.d.ts",
+      "import": "./dist/worker-tool-services/*.js"
+    },
+    "./worker-image-generation": {
+      "types": "./dist/worker-image-generation/index.d.ts",
+      "import": "./dist/worker-image-generation/index.js"
+    },
+    "./worker-image-generation/*": {
+      "types": "./dist/worker-image-generation/*.d.ts",
+      "import": "./dist/worker-image-generation/*.js"
+    },
+    "./worker-widget": {
+      "types": "./dist/worker-widget/index.d.ts",
+      "import": "./dist/worker-widget/index.js"
+    },
+    "./worker-widget/*": {
+      "types": "./dist/worker-widget/*.d.ts",
+      "import": "./dist/worker-widget/*.js"
+    },
+    "./worker-run-contracts": {
+      "types": "./dist/worker-run-contracts.d.ts",
+      "import": "./dist/worker-run-contracts.js"
+    },
+    "./worker-tool-registry": {
+      "types": "./dist/worker-tool-registry.d.ts",
+      "import": "./dist/worker-tool-registry.js"
+    },
+    "./worker-modes/modifiers": {
+      "types": "./dist/worker-modes/modifiers/index.d.ts",
+      "import": "./dist/worker-modes/modifiers/index.js"
+    },
+    "./authorization/worker-permission-evaluator": {
+      "types": "./dist/authorization/worker-permission-evaluator.d.ts",
+      "import": "./dist/authorization/worker-permission-evaluator.js"
+    },
+    "./authorization/worker-permission-gate": {
+      "types": "./dist/authorization/worker-permission-gate.d.ts",
+      "import": "./dist/authorization/worker-permission-gate.js"
+    },
+    "./worker-execution/streaming-tool-executor": {
+      "types": "./dist/worker-execution/streaming-tool-executor.d.ts",
+      "import": "./dist/worker-execution/streaming-tool-executor.js"
+    },
+    "./worker-execution/tool-execution-pipeline": {
+      "types": "./dist/worker-execution/tool-execution-pipeline.d.ts",
+      "import": "./dist/worker-execution/tool-execution-pipeline.js"
+    },
+    "./worker-compaction/bound-ports": {
+      "types": "./dist/worker-compaction/bound-ports.d.ts",
+      "import": "./dist/worker-compaction/bound-ports.js"
+    },
+    "./worker-compaction/bound-manager": {
+      "types": "./dist/worker-compaction/bound-manager.d.ts",
+      "import": "./dist/worker-compaction/bound-manager.js"
+    },
+    "./worker-compaction/bound-controller": {
+      "types": "./dist/worker-compaction/bound-controller.d.ts",
+      "import": "./dist/worker-compaction/bound-controller.js"
+    },
+    "./worker-compaction/context-window": {
+      "types": "./dist/worker-compaction/context-window.d.ts",
+      "import": "./dist/worker-compaction/context-window.js"
+    },
+    "./connector-services/worker-mcp": {
+      "types": "./dist/connector-services/worker-mcp.d.ts",
+      "import": "./dist/connector-services/worker-mcp.js"
+    },
+    "./worker-context/os-context-binding": {
+      "types": "./dist/worker-context/os-context-binding.d.ts",
+      "import": "./dist/worker-context/os-context-binding.js"
+    },
+    "./worker-execution/deferred-dispatcher": {
+      "types": "./dist/worker-execution/deferred-dispatcher.d.ts",
+      "import": "./dist/worker-execution/deferred-dispatcher.js"
+    },
+    "./worker-execution/visibility-guard": {
+      "types": "./dist/worker-execution/visibility-guard.d.ts",
+      "import": "./dist/worker-execution/visibility-guard.js"
+    },
+    "./worker-config/cache-config": {
+      "types": "./dist/worker-config/cache-config.d.ts",
+      "import": "./dist/worker-config/cache-config.js"
+    },
+    "./worker-cache-monitor": {
+      "types": "./dist/worker-cache-monitor.d.ts",
+      "import": "./dist/worker-cache-monitor.js"
+    },
+    "./worker-execution/stream-retry": {
+      "types": "./dist/worker-execution/stream-retry.d.ts",
+      "import": "./dist/worker-execution/stream-retry.js"
+    },
+    "./worker-command-port": {
+      "types": "./dist/worker-command-port.d.ts",
+      "import": "./dist/worker-command-port.js"
+    },
+    "./worker-mailbox-row": {
+      "types": "./dist/worker-mailbox-row.d.ts",
+      "import": "./dist/worker-mailbox-row.js"
+    },
+    "./worker-run-session-port": {
+      "types": "./dist/worker-run-session-port.d.ts",
+      "import": "./dist/worker-run-session-port.js"
+    },
+    "./worker-run-composition": {
+      "types": "./dist/worker-run-composition.d.ts",
+      "import": "./dist/worker-run-composition.js"
+    },
+    "./worker-engine-driver": {
+      "types": "./dist/worker-engine-driver.d.ts",
+      "import": "./dist/worker-engine-driver.js"
+    },
+    "./worker-tool-bindings/*": {
+      "types": "./dist/worker-tool-bindings/*.d.ts",
+      "import": "./dist/worker-tool-bindings/*.js"
+    },
+    "./worker-session-runtime": {
+      "types": "./dist/worker-session-runtime.d.ts",
+      "import": "./dist/worker-session-runtime.js"
+    },
+    "./worker-session-assembly-ports": {
+      "types": "./dist/worker-session-assembly-ports.d.ts",
+      "import": "./dist/worker-session-assembly-ports.js"
+    },
+    "./worker-headless-run-host": {
+      "types": "./dist/worker-headless-run-host.d.ts",
+      "import": "./dist/worker-headless-run-host.js"
+    },
+    "./worker-tools/*": {
+      "types": "./dist/worker-tools/*.d.ts",
+      "import": "./dist/worker-tools/*.js"
+    },
+    "./worker-process-assembly": {
+      "types": "./dist/worker-process-assembly.d.ts",
+      "import": "./dist/worker-process-assembly.js"
+    },
+    "./worker-process-entry": {
+      "types": "./dist/worker-process-entry.d.ts",
+      "import": "./dist/worker-process-entry.js"
     }
   },
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md",
+    "skills"
+  ],
   "scripts": {
     "clean": "node -e \"for(const t of ['dist','tsconfig.tsbuildinfo'])require('fs').rmSync(t,{recursive:true,force:true})\"",
     "build": "tsc -b",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@duya/agent-core": "0.1.0",
     "@duya/agent-runtime": "0.1.0",
     "@duya/agent-protocol": "0.1.0",
     "@duya/ai": "0.1.0",
     "@duya/data": "0.1.0",
-    "@iarna/toml": "^2.2.5"
+    "@iarna/toml": "^2.2.5",
+    "chokidar": "^3.6.0",
+    "@duya/capabilities": "0.1.0",
+    "@duya/memory": "0.1.0",
+    "handlebars": "^4.7.9",
+    "marked": "^17.0.6",
+    "zod": "^4.3.6",
+    "@duya/plugin-core": "0.1.0",
+    "jimp": "^1.6.0",
+    "@duya/computer-use": "0.1.0",
+    "yaml": "^2.9.0",
+    "esbuild": "^0.27.7",
+    "playwright": "^1.59.1"
   },
   "devDependencies": {
     "typescript": "^5.3.3"

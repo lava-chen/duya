@@ -52,7 +52,7 @@ import { getAutomationScheduler, initAutomationScheduler } from './automation/Sc
 import { initRoutineListenerHub } from './automation/listener-hub';
 import { initLogger, getLogger, LogComponent } from './logging/index';
 import { initUpdater, checkForUpdates, downloadUpdate, installUpdate, getUpdaterState, cleanupUpdater } from './services/updater';
-import { scanSkillFile, type SkillFinding, type SkillScanResult } from '../../../../packages/agent/src/security/skillScanner.js';
+import { scanSkillFile, type SkillFinding, type SkillScanResult } from '@duya/agent-core/skills/skill-scanner';
 
 // IPC handlers (extracted from main.ts)
 import { registerSystemHandlers } from './ipc/system-handlers';

@@ -21,12 +21,12 @@ import {
   DwfCompileError,
   type SavedWorkflowScope,
   type SavedWorkflowMeta,
-} from '../../../../../packages/agent/src/modes/workflow/dwf';
+} from '@duya/host/worker-workflows/dwf/index';
 import {
   WorkflowFileRegistry,
   parseWorkflowDef,
   type WorkflowScope,
-} from '../../../../../packages/agent/src/modes/workflow/workflow-files';
+} from '@duya/host/worker-workflows/workflow-files';
 import type {
   WorkflowRunApiV1,
   WorkflowRunOrigin,

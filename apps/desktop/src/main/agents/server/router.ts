@@ -24,7 +24,7 @@ import { parseAgentIdFromBotSession } from '../../wake/bot-session-id';
 import { buildCronProviderConfig, resolveCronModel } from '../../automation/provider-config';
 import { readConfigAgents } from '@duya/host/agent-profile-config';
 import { normalizePath } from '../../memory-state/pathUtils';
-import type { JournalRecord } from '../../../../../../packages/agent/src/modes/workflow/journal';
+import type { JournalRecord } from '@duya/host/worker-workflows/journal';
 import { getLogger, LogComponent } from '../../logging/logger';
 
 const logger = getLogger();

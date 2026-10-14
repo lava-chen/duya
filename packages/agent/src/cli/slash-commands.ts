@@ -13,7 +13,7 @@ import { existsSync, statSync } from 'fs';
 import type { duyaAgent } from '../agent/DuyaAgent.js';
 import { resolveProvider } from './config/file-config.js';
 import { handleGoalCommand, isGoalControlCommand } from '../modes/goal/goal-commands.js';
-import { handleTranscriptCommand } from '../session/transcript-commands.js';
+import { handleTranscriptCommand } from '@duya/host/worker-session/transcript-commands';
 
 export interface SlashCommandContext {
   agent?: duyaAgent;
@@ -359,7 +359,7 @@ export function initSlashCommands(): void {
         console.log(color('[ERR] No agent context available', Colors.RED));
         return true;
       }
-      const { getLastReplyText } = await import('../session/transcript-md.js');
+      const { getLastReplyText } = await import('@duya/agent-core/message');
       const text = getLastReplyText(context.agent.getMessages());
       if (!text) {
         console.log(color('[INFO] No assistant reply to copy yet', Colors.YELLOW));

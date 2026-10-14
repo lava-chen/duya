@@ -470,5 +470,5 @@ jobs:
           path: |
             dist/
             dist-electron/
-            packages/agent/bundle/
+            packages/host/bundle/
           retention-days: 7

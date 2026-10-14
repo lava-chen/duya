@@ -1,15 +1,20 @@
 import { build } from 'esbuild';
 import fs from 'fs';
 import path from 'path';
+import { workspacePublicSources } from './workspace-public-sources.mjs';
 
-const outdir = path.join('packages', 'agent', 'bundle');
-const outfile = path.join(outdir, 'agent-process-entry.js');
+const outdir = path.join('packages', 'host', 'bundle');
+const outfile = path.join(outdir, 'worker-entry.js');
 // The BashTool worker is a separate emitted file, not a module of `outfile`.
 // Declared once here so the build step and the log below cannot drift onto
 // different paths — the same reason the gate reads this path from one place.
 const workerOutfile = path.join(outdir, 'BashTool', 'BashWorker.js');
 
 if (fs.existsSync(outdir)) {
+  const expected = path.resolve('packages', 'host', 'bundle');
+  if (fs.realpathSync(outdir) !== expected || fs.lstatSync(outdir).isSymbolicLink()) {
+    throw new Error('Refusing to clean a redirected worker bundle directory');
+  }
   fs.rmSync(outdir, { recursive: true, force: true });
 }
 fs.mkdirSync(outdir, { recursive: true });
@@ -21,17 +26,12 @@ var import_meta_url = typeof document === 'undefined' ? require('url').pathToFil
 var import_meta = { url: import_meta_url };
 `;
 
-await build({
-  entryPoints: ['packages/agent/src/process/agent-process-entry.ts'],
+const mainBundle = await build({
+  entryPoints: ['packages/cli/src/agent-worker-entry.ts'],
   outfile,
-  alias: {
-    // The legacy agent's CLI tool now reaches the Host-backed control CLI.
-    // Resolve these workspace edges to the ordered package build outputs,
-    // matching build-cli-bundle.mjs rather than relying on npm junctions.
-    '@duya/host/http-client': path.resolve('packages/host/dist/http-client.js'),
-    '@duya/host/local-host': path.resolve('packages/host/dist/local-host.js'),
-  },
   bundle: true,
+  plugins: [workspacePublicSources()],
+  metafile: true,
   platform: 'node',
   target: 'node18',
   format: 'cjs',
@@ -57,6 +57,14 @@ await build({
   },
 });
 
+const legacyInputs = Object.keys(mainBundle.metafile.inputs).filter((input) =>
+  /(?:^|\/)packages\/agent\/(?:src|dist)\//.test(input.replaceAll('\\', '/')),
+);
+if (legacyInputs.length > 0) {
+  throw new Error(`Worker bundle still includes retired Agent source: ${legacyInputs.join(', ')}`);
+}
+fs.writeFileSync(path.join(outdir, 'worker-metafile.json'), JSON.stringify(mainBundle.metafile, null, 2));
+
 // ---------------------------------------------------------------------------
 // BashTool worker — a SECOND esbuild entry, not a second ordering mechanism.
 //
@@ -64,13 +72,12 @@ await build({
 // (`spawn(runtime, [workerScriptPath], { stdio: [..., 'ipc'] })`), so it cannot
 // be inlined into the entry and has to exist as a real file on disk. It is built
 // here because this script is the one owner of everything emitted into
-// packages/agent/bundle/. The build ORDER stays in scripts/build-packages.mjs:
-// the worker is an entry point of @duya/agent, not a workspace package, so adding
-// it to that array would mean inventing a package that does not exist.
+// packages/host/bundle/. The build ORDER stays in scripts/build-packages.mjs:
+// the shell child is a Host executable artifact, not a separate workspace package.
 //
 // FORMAT: CJS, matching the entry. WorkerPool spawns this file by path with no
 // extension change, so the format is decided by the nearest package.json `type`
-// walking up from the file — packages/agent/bundle/package.json, which the
+// walking up from the file — packages/host/bundle/package.json, which the
 // entry's build writes as `commonjs` above. No second marker is needed in
 // BashTool/; adding one would be redundant.
 //
@@ -79,7 +86,7 @@ await build({
 // A spawned worker is a separate program, not a module inside the bundle.
 // Nothing hands it the entry's resolution environment: it is loaded by path,
 // with no NODE_PATH, no execArgv, and no node_modules of its own. In a packaged
-// app it lives at resources/agent-bundle/BashTool/BashWorker.js, where the only
+// app it lives at resources/harness-bundle/BashTool/BashWorker.js, where the only
 // node_modules is the one after-pack.js copies to satisfy the ENTRY's
 // externals — reusing that allowlist here would let esbuild emit a
 // `require(...)` that nothing resolves at runtime, which is exactly the failure
@@ -91,7 +98,7 @@ await build({
 // everything and produces a genuinely self-contained file. Keep it empty;
 // check-packaged-artifacts.mjs fails the build if that ever stops being true.
 await build({
-  entryPoints: ['packages/agent/src/tool/BashTool/BashWorker.ts'],
+  entryPoints: ['packages/host/src/managed-shell/BashWorker.ts'],
   outfile: workerOutfile,
   bundle: true,
   platform: 'node',
@@ -104,7 +111,7 @@ await build({
 
 // Create a package.json to force CommonJS mode for the bundle
 const packageJson = {
-  name: '@duya/agent-bundle',
+  name: '@duya/host-worker-bundle',
   version: '0.1.0',
   private: true,
   type: 'commonjs',
@@ -118,12 +125,16 @@ fs.writeFileSync(
 
 // Copy the prompt .hbs asset tree next to the bundle. HbsPromptSystem
 // resolves `./assets` relative to the bundle file, and electron-builder
-// ships the whole `packages/agent/bundle/` directory as
-// `resources/agent-bundle/`, so this copy serves both dev and packaged runs.
-const promptsAssetsSrc = path.join('packages', 'agent', 'src', 'prompts', 'assets');
+// ships the whole `packages/host/bundle/` directory as
+// `resources/harness-bundle/`, so this copy serves both dev and packaged runs.
+const promptsAssetsSrc = path.join('packages', 'host', 'src', 'worker-prompts', 'assets');
 const promptsAssetsOut = path.join(outdir, 'assets');
 fs.cpSync(promptsAssetsSrc, promptsAssetsOut, { recursive: true });
 console.log(`[build-agent-bundle] Copied prompt assets to ${promptsAssetsOut}`);
+
+// Host owns bundled skills; the worker carries them beside its executable.
+const skillsAssetsSrc = path.join('packages', 'host', 'skills');
+fs.cpSync(skillsAssetsSrc, path.join(outdir, 'skills'), { recursive: true });
 
 const stats = fs.statSync(outfile);
 console.log(`[build-agent-bundle] Built ${outfile} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);

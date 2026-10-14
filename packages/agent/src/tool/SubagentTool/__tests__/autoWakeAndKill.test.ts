@@ -14,19 +14,18 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { BackgroundAgentLifecycle } from '../../../lifecycle/BackgroundAgentLifecycle.js';
+import { BackgroundAgentLifecycle } from '@duya/host/worker-subagents';
 import type { AgentProgressEvent } from '../runAgent.js';
 
-// The lifecycle delivers terminal envelopes through the mailbox IPC. Under
-// vitest's fork pool `process.send` exists, so an unmocked mailboxDb.send
-// would push a real db:request frame into the pool's IPC channel and crash
-// the runner.
+// The Host lifecycle delivers terminal envelopes through the notification
+// port. Under vitest's fork pool `process.send` exists, so this must stay
+// mocked to keep the test hermetic.
 const mocks = vi.hoisted(() => ({
-  mailboxSend: vi.fn(async () => ({})),
+  notificationSend: vi.fn(async () => ({})),
 }));
 
-vi.mock('../../../ipc/db-client.js', () => ({
-  mailboxDb: { send: mocks.mailboxSend },
+vi.mock('@duya/host/worker-context/background-notification', () => ({
+  sendBackgroundNotification: mocks.notificationSend,
 }));
 
 function makeInput(overrides: Record<string, unknown> = {}) {
@@ -51,7 +50,7 @@ describe('auto_wake', () => {
   let lc: BackgroundAgentLifecycle;
   beforeEach(() => {
     lc = new BackgroundAgentLifecycle();
-    mocks.mailboxSend.mockClear();
+    mocks.notificationSend.mockClear();
   });
 
   it('defaults to true, preserving pre-571 behavior', () => {
@@ -68,13 +67,13 @@ describe('auto_wake', () => {
     expect(lc.getSnapshot('t-1')?.status).toBe('completed');
     // The model was already handed outputFilePath in the spawn receipt, so
     // it can fetch the result with get_task_output on its own schedule.
-    expect(mocks.mailboxSend).not.toHaveBeenCalled();
+    expect(mocks.notificationSend).not.toHaveBeenCalled();
   });
 
   it('auto_wake: true (the default) still writes the mailbox notification', async () => {
     lc.register(makeInput());
     await lc.run('t-1', completingSource());
-    expect(mocks.mailboxSend).toHaveBeenCalledTimes(1);
+    expect(mocks.notificationSend).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -82,7 +81,7 @@ describe('BackgroundAgentLifecycle.tryKill', () => {
   let lc: BackgroundAgentLifecycle;
   beforeEach(() => {
     lc = new BackgroundAgentLifecycle();
-    mocks.mailboxSend.mockClear();
+    mocks.notificationSend.mockClear();
   });
 
   it('is a silent no-op for an unknown taskId — never throws', () => {

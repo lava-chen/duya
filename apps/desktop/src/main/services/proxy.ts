@@ -1,7 +1,11 @@
 import https from 'https';
-import HttpsProxyAgent from 'https-proxy-agent';
+import httpsProxyAgentModule = require('https-proxy-agent');
 import { getConfigStore } from '../config/store-instance';
 import { readGatewaySettingFromStore } from '../config/gateway-setting-adapter';
+
+const HttpsProxyAgent = (httpsProxyAgentModule as unknown as {
+  HttpsProxyAgent: typeof httpsProxyAgentModule;
+}).HttpsProxyAgent;
 
 export function detectWindowsSystemProxy(): string | undefined {
   if (process.platform !== 'win32') {

@@ -146,6 +146,30 @@
     "./usage-api": {
       "types": "./dist/usage-api.d.ts",
       "import": "./dist/usage-api.js"
+    },
+    "./worker-protocol": {
+      "types": "./dist/worker-protocol.d.ts",
+      "import": "./dist/worker-protocol.js"
+    },
+    "./worker-event-completeness": {
+      "types": "./dist/worker-event-completeness.d.ts",
+      "import": "./dist/worker-event-completeness.js"
+    },
+    "./session-ids": {
+      "types": "./dist/session-ids.d.ts",
+      "import": "./dist/session-ids.js"
+    },
+    "./agent-dm": {
+      "types": "./dist/agent-dm.d.ts",
+      "import": "./dist/agent-dm.js"
+    },
+    "./communication-platform": {
+      "types": "./dist/communication-platform.d.ts",
+      "import": "./dist/communication-platform.js"
+    },
+    "./task-tool-names": {
+      "types": "./dist/task-tool-names.d.ts",
+      "import": "./dist/task-tool-names.js"
     }
   },
   "files": [

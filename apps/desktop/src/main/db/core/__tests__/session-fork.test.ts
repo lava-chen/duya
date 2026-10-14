@@ -46,7 +46,7 @@ import {
 } from '../session-fork';
 import { MessageLog, type NewEvent, type TimelineEntryRow } from '../message-log';
 import type { TurnStartedEvent } from '../rollout-events';
-import { THREAD_METADATA_KEY, type MessageEntry } from '@duya/agent/message';
+import { THREAD_METADATA_KEY, type MessageEntry } from '@duya/agent-core/message';
 import type { SqliteDatabase } from '../database';
 import { SessionStore } from '../session-store';
 import { SpawnEdgeStore } from '../stores';

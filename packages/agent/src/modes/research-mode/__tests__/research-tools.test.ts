@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('../../../ipc/db-client.js', () => ({ modeStateDb: mocks.modeStateDb }));
+vi.mock('@duya/host/worker-db-client', () => ({ modeStateDb: mocks.modeStateDb }));
 
 import { researchModeTracker } from '../research-tracker.js';
 import {

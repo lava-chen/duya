@@ -95,11 +95,24 @@ export interface HostLocalParsedDocumentInput {
   readonly imageChunks?: readonly { readonly base64: string; readonly mediaType: string }[];
 }
 
+/** Read-only image payload needed to restore provider CDN images in worker history. */
+export interface HostLocalImageAttachment {
+  readonly id: string;
+  readonly message_id: string;
+  readonly session_id: SessionId;
+  readonly attachment_type: 'image';
+  readonly mime_type: string | null;
+  readonly data: string;
+  readonly original_url: string | null;
+  readonly created_at: Millis;
+}
+
 /** Local-only compatibility surface for parsed documents and local file paths. */
 export interface HostLocalAttachmentApiV1 {
   storeParsedDocument(input: HostLocalParsedDocumentInput): Promise<{ readonly success: boolean }>;
   getParsedDocumentsForSession(sessionId: SessionId): Promise<readonly HostLocalParsedDocument[]>;
   getParsedDocumentsForMessage(messageId: string): Promise<readonly HostLocalParsedDocument[]>;
+  getImageAttachmentsForSession(sessionId: SessionId): Promise<readonly HostLocalImageAttachment[]>;
 }
 
 /** Local-only access to settings; values may contain credentials. */

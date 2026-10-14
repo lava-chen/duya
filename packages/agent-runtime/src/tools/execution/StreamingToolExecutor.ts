@@ -1,0 +1,2337 @@
+/**
+ * StreamingToolExecutor (Enhanced) - Tool execution with concurrency control and progress feedback
+ *
+ * Enhanced features from claude-code-haha:
+ * 1. Detailed progress tracking with stages (starting, running, completing)
+ * 2. Tool execution statistics (duration, tokens, etc.)
+ * 3. Progress callbacks for real-time UI updates
+ * 4. Error categorization and recovery suggestions
+ * 5. Tool grouping for related operations
+ */
+
+import { PermissionRequiredError } from '@duya/capabilities/BaseTool'
+import {
+  analyzeShellFailure,
+  resolveShellExecutionPlan,
+  type ShellExecutionPlan,
+} from '@duya/capabilities/utils/shell/intelligence'
+import { readPermissionMode, resolveAskWithoutUser } from '../../authorization/permissions/askWithoutUser.js'
+import {
+  type CanUseToolFn,
+  type MessageUpdate,
+  type SubagentProgressEvent,
+  type ToolCall,
+  type ToolExecutionMessage,
+  type ToolExecutionResult,
+  type ToolExecutionRegistry,
+  type ToolPermissionRequest,
+} from './contracts.js'
+import type { ToolExecutionLogger, ToolExecutionPorts, WorkerTaskRequest } from './ports.js'
+import { ToolRetryExecutor } from './retry/ToolRetryExecutor.js'
+import { DEFAULT_RETRY_STRATEGIES } from './retry/BuiltInStrategies.js'
+import type { RetryStrategy } from './retry/types.js'
+import { ToolStreamBuffer } from './ToolStreamBuffer.js'
+import { TransferableBuffer } from './TransferableBuffer.js'
+import type { StreamChunk, BufferConfig } from './stream-types.js'
+import { classifyTool } from './orchestration/classify.js'
+import { ToolBatch, BATCH_STRATEGY } from './orchestration/types.js'
+import { createChildAbortController } from '../../abort/index.js'
+
+export type { CanUseToolFn, MessageUpdate } from './contracts.js';
+
+interface RenderedToolMessage {
+  content: unknown;
+  [key: string]: unknown;
+}
+
+interface ToolPermissionCheckResult {
+  allowed: boolean;
+  requiresUserConfirmation?: boolean;
+  reason?: string;
+  mode?: 'generic' | 'ask_user_question' | 'exit_plan_mode';
+}
+
+interface PermissionCheckingExecutor {
+  checkPermissions(input: unknown, context: unknown): ToolPermissionCheckResult;
+}
+
+// ============================================================================
+// TYPES & INTERFACES
+// ============================================================================
+
+/**
+ * Tool execution status - enhanced with more states
+ */
+export type ToolStatus =
+  | 'queued'
+  | 'starting'
+  | 'executing'
+  | 'streaming'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'yielded'
+
+/**
+ * Progress stage for detailed status reporting
+ */
+export type ProgressStage =
+  | 'initializing'
+  | 'validating_input'
+  | 'checking_permissions'
+  | 'executing_command'
+  | 'processing_results'
+  | 'backgrounded'
+  | 'finalizing'
+  | 'completed'
+  | 'error'
+
+/**
+ * Enhanced progress message structure
+ */
+export interface ToolProgress {
+  toolUseId: string
+  toolName: string
+  status: ToolStatus
+  stage: ProgressStage
+  elapsedSeconds: number
+  /** Estimated remaining time in seconds (if available) */
+  estimatedRemaining?: number | undefined
+  /** Percentage complete (0-100) */
+  percentComplete?: number | undefined
+  /** Current operation description */
+  currentOperation?: string | undefined
+  /** Additional data */
+  data?: Record<string, unknown> | undefined
+}
+
+/**
+ * Tool execution statistics
+ */
+export interface ToolExecutionStats {
+  toolName: string
+  toolUseId: string
+  startTime: number
+  endTime?: number | undefined
+  duration?: number | undefined
+  inputSize?: number | undefined
+  outputSize?: number | undefined
+  error?: string | undefined
+  cancelledBy?: string | undefined
+}
+
+/**
+ * Callback types for progress updates
+ */
+export type ProgressCallback = (progress: ToolProgress) => void
+export type ToolStartCallback = (toolName: string, input: Record<string, unknown>) => void
+export type ToolCompleteCallback = (stats: ToolExecutionStats) => void
+export type ToolErrorCallback = (stats: ToolExecutionStats, error: Error) => void
+
+/**
+ * Tracked tool entry for monitoring execution state
+ */
+export interface TrackedTool {
+  id: string
+  block: ToolCall
+  status: ToolStatus
+  batch: ToolBatch
+  promise?: Promise<void> | undefined
+  results?: ToolExecutionMessage[] | undefined
+  pendingProgress: ToolExecutionMessage[]
+  elapsedSeconds: number
+  error?: Error | undefined
+
+  // Enhanced fields
+  stage: ProgressStage
+  startTime: number
+  endTime?: number | undefined
+  percentComplete?: number | undefined
+  currentOperation?: string | undefined
+  stats: ToolExecutionStats
+}
+
+/**
+ * Executor configuration options
+ */
+export interface ExecutorConfig {
+  /** Interval between progress updates (ms) */
+  progressIntervalMs?: number
+  /** Maximum execution time per tool (ms) */
+  maxExecutionTimeMs?: number
+  /** Enable detailed progress tracking */
+  enableDetailedProgress?: boolean
+  /** Enable concurrent execution for safe tools */
+  enableConcurrentExecution?: boolean
+  /** Retry strategies for tool failures */
+  retryStrategies?: RetryStrategy[]
+  /** Enable automatic retry on tool failure */
+  enableRetry?: boolean
+  /** Maximum output size per tool (bytes). 0 = no limit. Default: 5MB */
+  maxOutputSizeBytes?: number
+  /** Memory warning threshold (MB). Default: 500 */
+  memoryWarningThresholdMB?: number
+  /** Tools that should run in worker processes (for streaming) */
+  workerTools?: string[]
+  /** Minimum execution time (ms) before delegating to worker */
+  workerThresholdMs?: number
+}
+
+
+
+// ============================================================================
+// MESSAGE CREATORS
+// ============================================================================
+
+/**
+ * Creates an error tool message for tool execution errors
+ */
+function createErrorMessage(
+  toolUseId: string,
+  content: string,
+  isError: boolean = true,
+): ToolExecutionMessage {
+  return {
+    role: 'tool',
+    content: `<tool_error>${content}</tool_error>`,
+    tool_call_id: toolUseId,
+    status: 'error',
+  }
+}
+
+/**
+ * Creates a permission required message (does not wrap in tool_error)
+ */
+function createPermissionRequiredMessage(
+  toolUseId: string,
+  content: string,
+): ToolExecutionMessage {
+  return {
+    role: 'tool',
+    content,
+    tool_call_id: toolUseId,
+  }
+}
+
+/**
+ * Wrap a successful tool result in a model-visible envelope (borrowed from
+ * Codex): a deterministic status header at the START (cache-friendly, since it
+ * only depends on the tool name, not on timing) and a duration footer at the
+ * END (so the variable wall-time token sits at the very tail of the block and
+ * invalidates only the trailing cache, not the bulk of the result content).
+ */
+function buildToolResultEnvelope(toolName: string, durationMs: number, content: string): string {
+  return `[completed] ${toolName}\n${content}\n[Duration: ${durationMs}ms]`
+}
+
+/**
+ * Creates a detailed progress message for tool execution
+ */
+function createDetailedProgressMessage(
+  tool: TrackedTool,
+): ToolExecutionMessage {
+  const progressData: Record<string, unknown> = {
+    toolUseId: tool.id,
+    toolName: tool.block.name,
+    status: tool.status,
+    stage: tool.stage,
+    elapsedSeconds: Math.round(tool.elapsedSeconds * 10) / 10,
+    percentComplete: tool.percentComplete ?? 0,
+    currentOperation: tool.currentOperation,
+  }
+
+  return {
+    role: 'user',
+    content: [
+      {
+        type: 'text' as const,
+        text: JSON.stringify(progressData),
+        },
+    ],
+    metadata: {
+      type: 'tool_progress',
+      toolId: tool.id,
+      toolName: tool.block.name,
+    },
+  } as ToolExecutionMessage
+}
+
+/**
+ * Creates a simple progress message (backward compatible)
+ */
+function createSimpleProgressMessage(
+  toolUseId: string,
+  toolName: string,
+  elapsedSeconds: number,
+): ToolExecutionMessage {
+  return {
+    role: 'user',
+    content: [
+      {
+        type: 'text' as const,
+        text: `[Progress] ${toolName} (${toolUseId}): ${elapsedSeconds.toFixed(1)}s`,
+      },
+    ],
+  }
+}
+
+function summarizeInputForLog(input: unknown): string {
+  try {
+    const raw = JSON.stringify(input)
+    if (!raw) return '(empty)'
+    return raw.length > 500 ? `${raw.slice(0, 500)}...` : raw
+  } catch {
+    return String(input)
+  }
+}
+
+function isShellCommandToolName(toolName: string): boolean {
+  const normalized = toolName.toLowerCase()
+  return normalized === 'bash' || normalized === 'powershell'
+}
+
+function isSubagentToolCall(toolName: string, input: Record<string, unknown> | undefined): boolean {
+  const normalized = toolName.toLowerCase()
+  // Canonical subagent wire name is `task`; keep legacy `Agent` / `Task`
+  // / `subagent` accepted for historical sessions.
+  if (normalized === 'task' || normalized === 'agent' || normalized === 'subagent' || normalized === 'sub_agent') {
+    // A `task` call is a subagent only when it carries scheduling inputs
+    // (prompt / subagent_type / run_in_background); a todo-list update
+    // shaped like `{todos: [...]}` is not a subagent call.
+    if (normalized === 'task') {
+      return (
+        typeof input?.prompt === 'string' ||
+        typeof input?.subagent_type === 'string' ||
+        input?.run_in_background === true
+      )
+    }
+    return true
+  }
+  return false
+}
+
+export function normalizeWorkerInput(
+  toolName: string,
+  input: Record<string, unknown>,
+): {
+  input: Record<string, unknown>
+  normalizationNote?: string | undefined
+} {
+  if (!isShellCommandToolName(toolName)) {
+    return { input }
+  }
+
+  const normalizeBackgroundAlias = (nextInput: Record<string, unknown>) => {
+    if (
+      nextInput.run_in_background === true &&
+      nextInput.background === undefined
+    ) {
+      return {
+        input: { ...nextInput, background: true },
+        note: 'normalized run_in_background -> background',
+      }
+    }
+    return { input: nextInput }
+  }
+
+  if (typeof input.command === 'string' && input.command.trim().length > 0) {
+    const normalized = normalizeBackgroundAlias(input)
+    return {
+      input: normalized.input,
+      normalizationNote: normalized.note,
+    }
+  }
+
+  if (typeof input.cmd === 'string' && input.cmd.trim().length > 0) {
+    const normalized = normalizeBackgroundAlias({ ...input, command: input.cmd })
+    return {
+      input: normalized.input,
+      normalizationNote: [
+        'normalized cmd -> command',
+        normalized.note,
+      ].filter(Boolean).join('; '),
+    }
+  }
+
+  if (typeof input.script === 'string' && input.script.trim().length > 0) {
+    const normalized = normalizeBackgroundAlias({ ...input, command: input.script })
+    return {
+      input: normalized.input,
+      normalizationNote: [
+        'normalized script -> command',
+        normalized.note,
+      ].filter(Boolean).join('; '),
+    }
+  }
+
+  return { input }
+}
+
+function stringifyWorkerOutput(result: unknown): string {
+  if (typeof result === 'string') return result.trim()
+  if (result === undefined || result === null) return ''
+  try {
+    return JSON.stringify(result, null, 2)
+  } catch {
+    return String(result)
+  }
+}
+
+function escapeToolUseErrorText(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+export function formatWorkerFailureContent(result: {
+  error?: string | undefined
+  result?: unknown
+  exitCode?: number | undefined
+  hints?: string[] | undefined
+}): string {
+  const summaryParts = [
+    result.error || 'Worker execution failed',
+    typeof result.exitCode === 'number' ? `exitCode=${result.exitCode}` : undefined,
+  ].filter(Boolean)
+
+  const summary = summaryParts.join(' ')
+  const output = stringifyWorkerOutput(result.result)
+
+  if (!output) {
+    return [
+      `<tool_use_error>${escapeToolUseErrorText(summary)}</tool_use_error>`,
+      result.hints && result.hints.length > 0
+        ? `Hints:\n- ${result.hints.join('\n- ')}`
+        : undefined,
+    ].filter(Boolean).join('\n\n')
+  }
+
+  return [
+    `<tool_use_error>${escapeToolUseErrorText(summary)}</tool_use_error>`,
+    '',
+    'Command output:',
+    output,
+    result.hints && result.hints.length > 0
+      ? `Hints:\n- ${result.hints.join('\n- ')}`
+      : undefined,
+  ].join('\n')
+}
+
+// ============================================================================
+// MAIN EXECUTOR CLASS
+// ============================================================================
+
+/**
+ * StreamingToolExecutor manages concurrent tool execution with queue management
+ * and detailed progress feedback.
+ *
+ * Features:
+ * - Queue-based execution with concurrency control
+ * - Detailed progress tracking with stages
+ * - Real-time progress callbacks for UI updates
+ * - Execution statistics collection
+ * - Abort signal handling for cancellation
+ * - Error handling with categorization
+ */
+export class StreamingToolExecutor<TContext extends object = object> {
+  private tools: TrackedTool[] = []
+  private toolUseContext: TContext
+  private readonly ports: ToolExecutionPorts<TContext>
+  private readonly session: ReturnType<ToolExecutionPorts<TContext>['readSession']>
+  private toolRegistry: ToolExecutionRegistry
+  private hasErrored = false
+  private erroredToolDescription = ''
+  private discarded = false
+
+  private siblingAbortController: AbortController
+  private progressAvailableResolve: (() => void) | undefined
+
+  // Configuration
+  private config: Required<ExecutorConfig>
+
+  // Callbacks
+  private onProgress: ProgressCallback | undefined
+  private onToolStart: ToolStartCallback | undefined
+  private onToolComplete: ToolCompleteCallback | undefined
+  private onToolError: ToolErrorCallback | undefined
+
+  // Statistics collector
+  private allStats: ToolExecutionStats[] = []
+
+  // Retry support
+  private retryExecutor: ToolRetryExecutor
+  private retryStrategies: RetryStrategy[]
+
+  // Memory protection
+  private totalOutputBytes = 0
+  private memoryWarningCallback?: (currentMB: number, thresholdMB: number) => void
+
+  // Deferred second results. Populated by `executeTool` when a ToolResult
+  // carries a `pendingExtraResult`; drained by `getRemainingResults` after
+  // the main results have been yielded. Map keyed by tool_use_id.
+  private readonly pendingExtraResults = new Map<
+    string,
+    { toolName: string; promise: Promise<{ result: string; is_error?: boolean }> }
+  >()
+
+  // Deferred context. Populated by `executeTool` when a ToolResult carries a
+  // `pendingContext`; drained by `getRemainingResults` and surfaced as a
+  // `deferredContext` update so the agent can inject it as transient runtime
+  // context on the next provider turn. Map keyed by tool_use_id.
+  private readonly pendingDeferredContextList = new Map<
+    string,
+    { toolName: string; promise: Promise<unknown> }
+  >()
+
+  // WeakRef cleanup support
+  private readonly toolWeakRefs = new Set<WeakRef<TrackedTool>>()
+
+  // Worker pool for long-running tools
+  private workerPort?: ToolExecutionPorts<TContext>['worker']
+  private workerTools: Set<string>
+  private workerThresholdMs: number
+
+  // Tool stream buffer for high-frequency output
+  private streamBuffer: ToolStreamBuffer
+  private transferableBuffer: TransferableBuffer
+  private resolveToolKey: (name: string) => string;
+
+  constructor(
+    toolRegistry: ToolExecutionRegistry,
+    private readonly canUseTool: CanUseToolFn,
+    toolUseContext: TContext,
+    config: ExecutorConfig | undefined,
+    ports: ToolExecutionPorts<TContext>,
+  ) {
+    this.toolRegistry = toolRegistry
+    this.toolUseContext = toolUseContext
+    this.ports = ports
+    this.session = ports.readSession(toolUseContext)
+    this.siblingAbortController = createChildAbortController(
+      this.session.abortController,
+    )
+
+    this.config = {
+      progressIntervalMs: config?.progressIntervalMs ?? 1000,
+      maxExecutionTimeMs: config?.maxExecutionTimeMs ?? 300000,
+      enableDetailedProgress: config?.enableDetailedProgress ?? true,
+      enableConcurrentExecution: config?.enableConcurrentExecution ?? true,
+      retryStrategies: config?.retryStrategies ?? DEFAULT_RETRY_STRATEGIES,
+      enableRetry: config?.enableRetry ?? true,
+      maxOutputSizeBytes: config?.maxOutputSizeBytes ?? 5 * 1024 * 1024, // 5MB default
+      memoryWarningThresholdMB: config?.memoryWarningThresholdMB ?? 500,
+      // WorkerPool delegation disabled: bash/powershell now run via
+      // BashTool.execute() directly (managed spawn per command — see
+      // BashTool/managed-bash.ts). Background commands, including foreground
+      // calls yielded at the soft-yield window, live in BashTaskRegistry.
+      // Pass workerTools explicitly to opt back into the worker pool.
+      workerTools: config?.workerTools ?? [],
+      workerThresholdMs: config?.workerThresholdMs ?? 5000,
+    }
+
+    this.retryExecutor = new ToolRetryExecutor()
+    this.retryStrategies = this.config.retryStrategies
+    this.workerTools = new Set(this.config.workerTools)
+    this.workerThresholdMs = this.config.workerThresholdMs
+    this.workerPort = ports.worker
+
+    // Phase 2A worker closure: resolve a model-returned tool name
+    // (which is a providerName for MCP tools, or a builtin tool
+    // name) into the ToolRegistry's internalKey via the alias map
+    // installed by `applyMCPConfiguration`. Falls back to the
+    // identity function when no resolver is set (legacy / test
+    // mode where MCP tools register under their own names).
+    this.resolveToolKey = (name: string): string =>
+      this.ports.resolveToolKey?.(this.toolUseContext, name) ?? name;
+
+    // Initialize stream buffer for high-frequency output buffering
+    this.streamBuffer = new ToolStreamBuffer({
+      maxLines: 1000,
+      maxBytes: 1024 * 1024,  // 1MB
+      flushInterval: 50,         // 50ms
+      maxChunkSize: 64 * 1024,  // 64KB
+    }, (message) => this.log('warn', message))
+
+    // Initialize transferable buffer for zero-copy transfer
+    this.transferableBuffer = new TransferableBuffer()
+
+    // Set up stream buffer flush handler
+    this.streamBuffer.on('flush', (result: { toolUseId: string; items: StreamChunk[] }) => {
+      this.handleBufferFlush(result.toolUseId, result.items)
+    })
+  }
+
+  private log(
+    level: 'debug' | 'info' | 'warn' | 'error',
+    message: string,
+    context?: Record<string, unknown>,
+    component?: string,
+  ): void {
+    const logger = this.ports.logger;
+    if (!logger) return;
+    if (level === 'error') {
+      logger.error?.(message, undefined, context, component);
+      return;
+    }
+    logger[level]?.(message, context, component);
+  }
+
+  private getAppState(): Record<string, unknown> {
+    return this.ports.getAppState(this.toolUseContext) ?? {};
+  }
+
+  private createPermissionContext(toolUseId: string, abortController: AbortController): object {
+    const input = {
+      toolUseId,
+      abortController,
+      workingDirectory: this.session.workingDirectory ?? process.cwd(),
+      sessionId: this.session.sessionId ?? 'default',
+    };
+    return this.ports.createPermissionContext?.(this.toolUseContext, input) ?? {
+      ...input,
+      getAppState: () => this.getAppState(),
+    };
+  }
+
+  /**
+   * Set callback handlers for progress events
+   */
+  setCallbacks(callbacks: {
+    onProgress?: ProgressCallback
+    onToolStart?: ToolStartCallback
+    onToolComplete?: ToolCompleteCallback
+    onToolError?: ToolErrorCallback
+  }): void {
+    this.onProgress = callbacks.onProgress
+    this.onToolStart = callbacks.onToolStart
+    this.onToolComplete = callbacks.onToolComplete
+    this.onToolError = callbacks.onToolError
+  }
+
+  /**
+   * Set memory warning callback
+   */
+  setMemoryWarningCallback(callback: (currentMB: number, thresholdMB: number) => void): void {
+    this.memoryWarningCallback = callback
+  }
+
+  /**
+   * Get current memory usage in MB (approximate)
+   */
+  getMemoryUsageMB(): number {
+    if (typeof process !== 'undefined' && process.memoryUsage) {
+      const usage = process.memoryUsage()
+      return usage.heapUsed / 1024 / 1024
+    }
+    return 0
+  }
+
+  /**
+   * Check memory and emit warning if threshold exceeded
+   */
+  private checkMemoryWarning(): void {
+    const currentMB = this.getMemoryUsageMB()
+    if (currentMB > this.config.memoryWarningThresholdMB && this.memoryWarningCallback) {
+      this.memoryWarningCallback(currentMB, this.config.memoryWarningThresholdMB)
+    }
+  }
+
+  /**
+   * Calculate output size in bytes
+   */
+  private calculateOutputSize(messages: ToolExecutionMessage[]): number {
+    let size = 0
+    for (const msg of messages) {
+      if (typeof msg.content === 'string') {
+        size += msg.content.length
+      } else if (Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (typeof block === 'object' && block !== null && 'type' in block
+              && block.type === 'text' && 'text' in block && typeof block.text === 'string') {
+            size += block.text.length
+          }
+        }
+      }
+    }
+    return size
+  }
+
+  /**
+   * Truncate messages if they exceed max output size
+   */
+  private truncateOutput(messages: ToolExecutionMessage[], maxBytes: number): ToolExecutionMessage[] {
+    const size = this.calculateOutputSize(messages)
+    if (size <= maxBytes) return messages
+
+    let currentSize = 0
+    const truncated: ToolExecutionMessage[] = []
+
+    for (const msg of messages) {
+      const msgSize = this.calculateOutputSize([msg])
+      if (currentSize + msgSize > maxBytes) {
+        // Add truncation message
+        truncated.push({
+          role: 'tool',
+          content: `... [Output truncated. Original size: ${size} bytes, limit: ${maxBytes} bytes]`,
+          ...(msg.tool_call_id ? { tool_call_id: msg.tool_call_id } : {}),
+        })
+        break
+      }
+      truncated.push(msg)
+      currentSize += msgSize
+    }
+
+    return truncated
+  }
+
+  /**
+   * Clean up WeakRefs to allow garbage collection
+   */
+  private cleanupWeakRefs(): void {
+    for (const ref of this.toolWeakRefs) {
+      const tool = ref.deref()
+      if (tool === undefined) {
+        this.toolWeakRefs.delete(ref)
+      }
+    }
+  }
+
+  /**
+   * Release the listener that `siblingAbortController` registered on the
+   * run-level abort signal. Called when the executor's turn completes
+   * (normally or via `discard`) so the per-turn listener does not accumulate
+   * on the run-level controller across turns. Idempotent and safe to call
+   * after `discard()`.
+   */
+  dispose(): void {
+    const ctrl = this.siblingAbortController as AbortController & {
+      dispose?: () => void
+    }
+    ctrl.dispose?.()
+  }
+
+  /**
+   * Has `discard()` already run on this instance?
+   *
+   * ## Why this is a read and not a reset
+   *
+   * `discarded` is a ONE-WAY latch: nothing in the class clears it, and the
+   * ABORTED `siblingAbortController` it aborts (`:733`) breaks the drain loop
+   * on its own. So an executor that answers `true` here can never run another
+   * tool, no matter what a caller does afterwards. A `resetDiscarded()` beside
+   * this would be a trap that reads as a fix -- it would revive a pipeline whose
+   * abort controller is already aborted, which is the exact "tidying" change
+   * `tool-pipeline-turn-lifetime.test.ts` exists to catch.
+   *
+   * ## Why anything needs to ask
+   *
+   * A discarded executor fails SILENTLY: `addTool` still buffers, and the drain
+   * still iterates -- it simply yields nothing (`StreamingToolExecutor.ts:2004`,
+   * `:2052` short-circuit on this flag). So a caller about to hand it a tool
+   * cannot learn the tool was dropped by looking at the result. This read is how
+   * a caller turns that silence into a refusal it can report.
+   */
+  isDiscarded(): boolean {
+    return this.discarded
+  }
+
+  /**
+   * Discards all pending and in-progress tools
+   */
+  discard(): void {
+    this.discarded = true
+    // Abort any in-flight tools via the shared child abort controller. This
+    // cancels worker tools (bash) through the WorkerPool abort path and
+    // non-worker tools through the per-tool abortPromise created in
+    // executeTool.
+    this.siblingAbortController.abort('discard')
+    // Mark every unfinished tool as cancelled so its tracked state settles
+    // and no further work is scheduled for it.
+    for (const tool of this.tools) {
+      if (
+        tool.status === 'queued' ||
+        tool.status === 'starting' ||
+        tool.status === 'executing' ||
+        tool.status === 'streaming'
+      ) {
+        tool.status = 'cancelled'
+      }
+    }
+  }
+
+  /**
+   * Add a tool to the execution queue
+   */
+  addTool(block: ToolCall): void {
+    const toolDefinition = this.toolRegistry.getTool(block.name)
+
+    if (!toolDefinition) {
+      this.tools.push({
+        id: block.id,
+        block,
+        status: 'completed',
+        batch: ToolBatch.SYSTEM,
+        pendingProgress: [],
+        elapsedSeconds: 0,
+        stage: 'error',
+        startTime: Date.now(),
+        stats: {
+          toolName: block.name,
+          toolUseId: block.id,
+          startTime: Date.now(),
+          error: `No such tool available: ${block.name}`,
+        },
+        results: [
+          createErrorMessage(
+            block.id,
+            `<tool_use_error>Error: No such tool available: ${block.name}</tool_use_error>`,
+          ),
+        ],
+      })
+      return
+    }
+
+    const batch = classifyTool(block.name, (message) => this.log('warn', message))
+
+    const trackedTool: TrackedTool = {
+      id: block.id,
+      block,
+      status: 'queued',
+      batch,
+      pendingProgress: [],
+      elapsedSeconds: 0,
+      stage: 'initializing',
+      startTime: Date.now(),
+      stats: {
+        toolName: block.name,
+        toolUseId: block.id,
+        startTime: Date.now(),
+        inputSize: JSON.stringify(block.input).length,
+      },
+    }
+
+    this.tools.push(trackedTool)
+
+    void this.processQueue()
+  }
+
+  /**
+   * Check if a tool can execute based on current concurrency state
+   */
+  private canExecuteTool(toolName: string, batch: ToolBatch): boolean {
+    if (!this.config.enableConcurrentExecution) {
+      const executingTools = this.tools.filter(t => t.status === 'executing')
+      return executingTools.length === 0
+    }
+
+    const executingTools = this.tools.filter(t =>
+      t.status === 'executing' || t.status === 'starting' || t.status === 'streaming'
+    )
+
+    if (executingTools.length === 0) return true
+
+    const executingBatch = executingTools[0]!.batch
+    const allSameBatch = executingTools.every(t => t.batch === executingBatch)
+
+    if (!allSameBatch) return false
+
+    if (batch !== executingBatch) return false
+
+    if (batch === ToolBatch.READ) {
+      return executingTools.length < BATCH_STRATEGY[ToolBatch.READ].maxConcurrency
+    }
+
+    if (batch === ToolBatch.SYSTEM) {
+      const isNewSafe = this.toolRegistry.isToolConcurrencySafe(toolName)
+      const allExistingSafe = executingTools.every(t =>
+        this.toolRegistry.isToolConcurrencySafe(t.block.name)
+      )
+      if (isNewSafe && allExistingSafe) {
+        return executingTools.length < BATCH_STRATEGY[ToolBatch.SYSTEM].maxConcurrency
+      }
+      return false
+    }
+
+    return false
+  }
+
+  /**
+   * Check if a tool should be delegated to a worker process
+   */
+  private shouldDelegateToWorker(toolName: string): boolean {
+    return (
+      this.workerPort !== undefined &&
+      this.workerTools.has(toolName) &&
+      this.workerTools.size > 0
+    )
+  }
+
+  /**
+   * Execute tool in worker process (for streaming output)
+   */
+  private async executeInWorker(
+    tool: TrackedTool,
+    toolAbortController: AbortController,
+  ): Promise<ToolExecutionMessage[]> {
+    const messages: ToolExecutionMessage[] = []
+    const startTime = Date.now()
+    const input = (tool.block.input ?? {}) as Record<string, unknown>
+    const { input: normalizedInput, normalizationNote } = normalizeWorkerInput(
+      tool.block.name,
+      input,
+    )
+    const commandPreview = (() => {
+      const raw = normalizedInput?.command
+      if (typeof raw !== 'string') return ''
+      return raw.length > 200 ? `${raw.slice(0, 200)}...` : raw
+    })()
+
+    if (normalizationNote) {
+      this.log('warn', '[StreamingToolExecutor] executeInWorker:normalized-input', {
+        toolId: tool.id,
+        toolName: tool.block.name,
+        note: normalizationNote,
+      })
+    }
+
+    if (isShellCommandToolName(tool.block.name) && !commandPreview) {
+      const inputKeys = Object.keys(normalizedInput)
+      this.log('error', '[StreamingToolExecutor] executeInWorker:missing-command', {
+        toolId: tool.id,
+        toolName: tool.block.name,
+        inputKeys,
+        inputSummary: summarizeInputForLog(normalizedInput),
+      })
+      messages.push(
+        createErrorMessage(
+          tool.id,
+          `<tool_use_error>Invalid ${tool.block.name} input: missing required field "command". input keys: ${inputKeys.join(', ') || '(none)'}</tool_use_error>`,
+        ),
+      )
+      return messages
+    }
+
+    const executionPlan = isShellCommandToolName(tool.block.name)
+      ? resolveShellExecutionPlan(
+          tool.block.name.toLowerCase() === 'powershell' ? 'powershell' : 'bash',
+          String(normalizedInput.command ?? ''),
+        )
+      : null
+
+    if (isShellCommandToolName(tool.block.name) && (!executionPlan || !executionPlan.providerKind)) {
+      messages.push(
+        createErrorMessage(
+          tool.id,
+          `<tool_use_error>No compatible shell is available for ${tool.block.name}</tool_use_error>`,
+        ),
+      )
+      return messages
+    }
+
+    const effectiveToolName = executionPlan?.providerKind ?? tool.block.name
+    const effectiveInput = executionPlan
+      ? {
+          ...normalizedInput,
+          command: executionPlan.preparedCommand,
+        }
+      : normalizedInput
+
+    if (executionPlan?.reason) {
+      this.log('warn', '[StreamingToolExecutor] executeInWorker:shell-reroute', {
+        toolId: tool.id,
+        requestedTool: tool.block.name,
+        effectiveTool: effectiveToolName,
+        reason: executionPlan.reason,
+      })
+    }
+
+    // Use extended task with onOutput callback for stream buffering
+    const task: WorkerTaskRequest = {
+      id: tool.id,
+      toolName: effectiveToolName,
+      input: effectiveInput,
+      workingDirectory: this.session.workingDirectory,
+      abortController: toolAbortController,
+      sessionId: this.session.sessionId,
+      onOutput: (stream, data) => {
+        // Only buffer actual output streams; progress is metadata only
+        if (stream === 'stdout' || stream === 'stderr') {
+          this.streamBuffer.addOutput(tool.id, stream, data)
+        }
+      },
+      timeoutMs: typeof effectiveInput.timeout === 'number' ? effectiveInput.timeout : undefined,
+    }
+
+    tool.status = 'streaming'
+    this.updateProgress(tool, {
+      status: 'streaming',
+      stage: 'executing_command',
+      currentOperation: `Executing ${tool.block.name} in worker...`,
+      percentComplete: 20,
+    })
+
+    try {
+      this.log('debug', '[StreamingToolExecutor] executeInWorker:start', {
+        toolId: tool.id,
+        toolName: effectiveToolName,
+        hasCommand: !!commandPreview,
+        commandPreview: String(effectiveInput.command ?? commandPreview),
+        inputKeys: Object.keys(effectiveInput),
+      })
+      let result = await this.workerPort!.executeTask(task)
+
+      if (!result.success && executionPlan?.providerKind) {
+        const failureAnalysis = analyzeShellFailure({
+          providerKind: executionPlan.providerKind,
+          command: String(effectiveInput.command ?? ''),
+          ...(result.error !== undefined ? { error: result.error } : {}),
+          output: stringifyWorkerOutput(result.result),
+          ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
+        })
+
+        if (failureAnalysis.retry) {
+          this.log('warn', '[StreamingToolExecutor] executeInWorker:shell-retry', {
+            toolId: tool.id,
+            fromTool: effectiveToolName,
+            toTool: failureAnalysis.retry.providerKind,
+            reason: failureAnalysis.retry.reason,
+          })
+
+          this.updateProgress(tool, {
+            status: 'streaming',
+            stage: 'executing_command',
+            currentOperation: failureAnalysis.retry.reason,
+            percentComplete: 35,
+          })
+
+          const retryTask: WorkerTaskRequest = {
+            ...task,
+            toolName: failureAnalysis.retry.providerKind,
+            input: {
+              ...effectiveInput,
+              command: failureAnalysis.retry.command,
+            },
+          }
+
+          result = await this.workerPort!.executeTask(retryTask)
+
+          if (!result.success) {
+            messages.push(
+              createErrorMessage(
+                tool.id,
+                formatWorkerFailureContent({
+                  ...(result.error !== undefined ? { error: result.error } : {}),
+                  result: result.result,
+                  ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
+                  hints: failureAnalysis.hints,
+                }),
+              ),
+            )
+            tool.stats.duration = Date.now() - startTime
+            return messages
+          }
+        } else if (failureAnalysis.hints.length > 0) {
+          messages.push(
+            createErrorMessage(
+              tool.id,
+              formatWorkerFailureContent({
+                ...(result.error !== undefined ? { error: result.error } : {}),
+                result: result.result,
+                ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
+                hints: failureAnalysis.hints,
+              }),
+            ),
+          )
+          tool.stats.duration = Date.now() - startTime
+          return messages
+        }
+      }
+
+      // Flush remaining buffered output
+      this.streamBuffer.flush(tool.id)
+
+      const duration = Date.now() - startTime
+      this.log('debug', '[StreamingToolExecutor] executeInWorker:result', {
+        toolId: tool.id,
+        toolName: tool.block.name,
+        success: result.success,
+        durationMs: duration,
+        error: result.error,
+      })
+
+      if (result.success) {
+        const content = result.backgrounded
+          ? `${result.result}\n\nBackground task info:\n- Task ID: ${tool.id}\n- PID: ${result.pid}\n- Output file: ${result.outputFile || 'N/A'}\n- You will be notified automatically when it completes — do not wait or poll for it. Use get_task_output only for a quick status/output snapshot; it never blocks.`
+          : [
+              executionPlan?.reason ? `[Shell] ${executionPlan.reason}` : undefined,
+              typeof result.result === 'string'
+                ? result.result
+                : JSON.stringify(result.result),
+            ].filter(Boolean).join('\n\n');
+
+        messages.push({
+          role: 'tool' as const,
+          content,
+          tool_call_id: tool.id,
+          duration_ms: duration,
+        })
+
+        if (result.backgrounded) {
+          tool.status = 'streaming'
+          this.updateProgress(tool, {
+            status: 'streaming',
+            stage: 'backgrounded',
+            currentOperation: `Background process (PID: ${result.pid})`,
+            percentComplete: 50,
+          })
+        }
+      } else {
+        messages.push(
+          createErrorMessage(
+            tool.id,
+            formatWorkerFailureContent({
+              ...(result.error !== undefined ? { error: result.error } : {}),
+              result: result.result,
+              ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
+            }),
+          ),
+        )
+      }
+
+      tool.stats.duration = duration
+    } catch (error) {
+      // Flush buffer on error too
+      this.streamBuffer.flush(tool.id)
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+      this.log('error', '[StreamingToolExecutor] executeInWorker:exception', {
+        toolId: tool.id,
+        toolName: tool.block.name,
+        error: errorMsg,
+      })
+      messages.push(
+        createErrorMessage(
+          tool.id,
+          `<tool_use_error>Worker error: ${errorMsg}</tool_use_error>`,
+        ),
+      )
+    }
+
+    return messages
+  }
+
+  /**
+   * Update tool progress and emit callback
+   */
+  private updateProgress(tool: TrackedTool, update: Partial<ToolProgress>): void {
+    if ('status' in update) tool.status = update.status!
+    if ('stage' in update && update.stage) tool.stage = update.stage
+    if ('percentComplete' in update) tool.percentComplete = update.percentComplete
+    if ('currentOperation' in update) tool.currentOperation = update.currentOperation
+
+    tool.elapsedSeconds = (Date.now() - tool.startTime) / 1000
+
+    if (this.onProgress && this.config.enableDetailedProgress) {
+      this.onProgress({
+        toolUseId: tool.id,
+        toolName: tool.block.name,
+        status: tool.status,
+        stage: tool.stage,
+        elapsedSeconds: tool.elapsedSeconds,
+        percentComplete: tool.percentComplete,
+        currentOperation: tool.currentOperation,
+        data: update.data,
+      })
+    }
+
+    // Create progress message for streaming
+    const progressMsg = this.config.enableDetailedProgress
+      ? createDetailedProgressMessage(tool)
+      : createSimpleProgressMessage(tool.id, tool.block.name, tool.elapsedSeconds)
+
+    tool.pendingProgress.push(progressMsg)
+
+    if (this.progressAvailableResolve) {
+      this.progressAvailableResolve()
+      this.progressAvailableResolve = undefined
+    }
+  }
+
+  /**
+   * Handle buffer flush - process batched stream output
+   */
+  private handleBufferFlush(toolUseId: string, chunks: StreamChunk[]): void {
+    // Group chunks by stream type
+    const stdoutChunks = chunks.filter(c => c.stream === 'stdout')
+    const stderrChunks = chunks.filter(c => c.stream === 'stderr')
+
+    const stdout = stdoutChunks.map(c => c.data).join('')
+    const stderr = stderrChunks.map(c => c.data).join('')
+
+    // Update tool output if we have a tracked tool
+    const tool = this.tools.find(t => t.id === toolUseId)
+    if (tool) {
+      this.updateProgress(tool, {
+        status: 'streaming',
+        stage: 'executing_command',
+        currentOperation: `Streaming ${tool.block.name}: ${stdout.slice(0, 50)}${stdout.length > 50 ? '...' : ''}`,
+        percentComplete: 30,
+        data: { stdout, stderr },
+      })
+    }
+
+    // Emit output via onProgress callback if available
+    if (this.onProgress && (stdout || stderr)) {
+      this.onProgress({
+        toolUseId,
+        toolName: tool?.block.name ?? 'unknown',
+        status: 'streaming',
+        stage: 'executing_command',
+        elapsedSeconds: tool ? (Date.now() - tool.startTime) / 1000 : 0,
+        currentOperation: stdout || stderr,
+        data: { stdout, stderr },
+      })
+    }
+  }
+
+  /**
+   * Process the queue, starting tools when conditions allow
+   */
+  private async processQueue(): Promise<void> {
+    for (const tool of this.tools) {
+      if (tool.status !== 'queued') continue
+
+      if (this.canExecuteTool(tool.block.name, tool.batch)) {
+        tool.promise = this.executeTool(tool)
+      } else {
+        if (tool.batch !== ToolBatch.READ) break
+      }
+    }
+  }
+
+  /**
+   * Execute a single tool with full progress tracking
+   */
+  private async executeTool(tool: TrackedTool): Promise<void> {
+    // Starting phase
+    tool.status = 'starting'
+    tool.stage = 'initializing'
+    this.updateProgress(tool, { status: 'starting', stage: 'initializing', currentOperation: 'Initializing...' })
+
+    if (this.onToolStart) {
+      this.onToolStart(tool.block.name, tool.block.input as Record<string, unknown>)
+    }
+
+    const startTime = Date.now()
+    const messages: ToolExecutionMessage[] = []
+
+    // Check abort conditions
+    const initialAbortReason = this.getAbortReason(tool)
+    if (initialAbortReason) {
+      messages.push(this.createSyntheticErrorMessage(tool.id, initialAbortReason))
+      this.finalizeTool(tool, messages, initialAbortReason)
+      return
+    }
+
+    // Create per-tool abort controller
+    const toolAbortController = createChildAbortController(this.siblingAbortController)
+
+    // Validate input
+    tool.stage = 'validating_input'
+    this.updateProgress(tool, { stage: 'validating_input', currentOperation: 'Validating input...', percentComplete: 5 })
+
+    // Check permissions
+    tool.stage = 'checking_permissions'
+    this.updateProgress(tool, { stage: 'checking_permissions', currentOperation: 'Checking permissions...', percentComplete: 10 })
+
+    try {
+      const canUseResult = await this.canUseTool(tool.block.name, tool.block.input as Record<string, unknown>, tool.id)
+      const canUse = typeof canUseResult === 'boolean' ? canUseResult : canUseResult.allowed
+      const canUseBehavior = typeof canUseResult === 'boolean' ? undefined : canUseResult.behavior
+      if (canUse && canUseBehavior === 'allow' && typeof canUseResult !== 'boolean' && canUseResult.userApproved === true) {
+        this.ports.markInvocationApproved(this.toolUseContext, tool.id);
+      }
+
+      if (!canUse) {
+        const denyReason =
+          typeof canUseResult !== 'boolean' && canUseResult?.message
+            ? canUseResult.message
+            : `Permission denied: tool ${tool.block.name} cannot be used`;
+        messages.push(
+          createErrorMessage(
+            tool.id,
+            `<tool_use_error>${denyReason.replace(/[<\n]/g, ' ')}</tool_use_error>`,
+          ),
+        )
+        this.finalizeTool(tool, messages, undefined, 'Permission denied')
+        return
+      }
+
+      // Check if tool requires user confirmation via checkPermissions
+      // Skip confirmation if canUseTool already granted permission (behavior === 'allow')
+      const resolvedKey = this.resolveToolKey(tool.block.name);
+      const executor = this.toolRegistry.getExecutor(resolvedKey);
+      if (executor && 'checkPermissions' in executor && canUseBehavior !== 'allow') {
+        // Build proper ToolContext for permission check
+        const toolContext = this.createPermissionContext(tool.id, toolAbortController);
+        const permResult = (executor as { checkPermissions: (input: unknown, context: unknown) => { allowed: boolean; requiresUserConfirmation?: boolean; reason?: string; mode?: 'generic' | 'ask_user_question' | 'exit_plan_mode' } }).checkPermissions(tool.block.input, toolContext);
+        // Plan 583 / ISS-11: the `&& this.toolUseContext.requestPermission` that
+        // used to sit on the branch below made an unwired hook silently skip
+        // the prompt and run the tool. Resolve the no-user case explicitly
+        // instead, and refuse unless the session mode says nobody is asked.
+        if (permResult.requiresUserConfirmation && !this.ports.requestPermission) {
+          const mode = readPermissionMode(this.getAppState());
+          const fallback = resolveAskWithoutUser(mode, tool.block.name);
+          if (fallback.behavior === 'deny') {
+            messages.push(
+              createErrorMessage(tool.id, `<tool_error>${fallback.message}</tool_error>`)
+            );
+            this.finalizeTool(tool, messages, 'Approval required');
+            return;
+          }
+          // Allowed by session mode: fall through to the normal execution path.
+        }
+        if (permResult.requiresUserConfirmation && this.ports.requestPermission) {
+          // Use the tool's stable `tool.id` (= toolUseId) as the permission
+          // request id so that any answers the user submits can be looked up
+          // by the tool's two-phase retry logic. The pre-check id MUST match
+          // the throw-path id for `storePendingAnswer` (keyed by id) to
+          // resolve the same entry the second-phase `execute()` reads from.
+          // Plan 450 Phase D: attach structured tool-params display for
+          // connector tools so the approval card can render a tidy
+          // label:value summary above the raw input JSON. Only emitted
+          // when the descriptor is known and the renderer would benefit
+          // (i.e. at least one scalar argument exists).
+          const approvalMetadata = this.ports.getApprovalMetadata?.(
+            tool.block.name,
+            tool.block.input as Record<string, unknown>,
+          );
+          const hasToolParamsDisplay = Array.isArray(approvalMetadata?.toolParamsDisplay)
+            && approvalMetadata.toolParamsDisplay.length > 0;
+          const permissionRequest = {
+            id: tool.id,
+            toolName: tool.block.name,
+            toolInput: tool.block.input as Record<string, unknown>,
+            mode: permResult.mode || 'generic',
+            expiresAt: Date.now() + 5 * 60 * 1000,
+            decisionReason: permResult.reason,
+            ...(hasToolParamsDisplay ? { metadata: approvalMetadata } : {}),
+          };
+
+          try {
+            const decision = await this.ports.requestPermission(this.toolUseContext, permissionRequest);
+
+            if (decision === 'deny') {
+              messages.push(
+                createErrorMessage(tool.id, `<tool_error>Permission denied by user</tool_error>`)
+              );
+              this.finalizeTool(tool, messages, 'Permission denied');
+              return;
+            }
+
+            if (decision === 'paused') {
+              messages.push({
+                role: 'tool',
+                content:
+                  'Waiting for user approval. The request has been sent as an approval card; ' +
+                  'the tool call will run automatically once the user decides. Summarize the ' +
+                  'pending action briefly and end your turn without further tool calls.',
+                tool_call_id: tool.id,
+              });
+              this.finalizeTool(tool, messages, 'Waiting for user approval');
+              return;
+            }
+
+            // Permission granted - mark this tool use as approved in appState
+            // so that tools can skip their internal permission checks
+            if (decision === 'allow') {
+              this.ports.markInvocationApproved(this.toolUseContext, tool.id);
+            }
+          } catch (permError) {
+            messages.push(
+              createErrorMessage(tool.id, `<tool_error>Permission request failed: ${permError instanceof Error ? permError.message : 'Unknown error'}</tool_error>`)
+            );
+            this.finalizeTool(tool, messages, 'Permission request failed');
+            return;
+          }
+        }
+      }
+
+      // Start actual execution
+      tool.status = 'executing'
+      tool.stage = 'executing_command'
+
+      // Check if this tool should run in a worker
+      if (this.shouldDelegateToWorker(tool.block.name)) {
+        const workerMessages = await this.executeInWorker(tool, toolAbortController)
+        this.finalizeTool(tool, workerMessages)
+        return
+      }
+
+      this.updateProgress(tool, {
+        status: 'executing',
+        stage: 'executing_command',
+        currentOperation: `Executing ${tool.block.name}...`,
+        percentComplete: 20,
+      })
+
+      // Set up timeout
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(`Tool execution timed out after ${this.config.maxExecutionTimeMs}ms`))
+        }, this.config.maxExecutionTimeMs)
+      })
+
+      // Set up abort promise - reject when the per-tool abort controller fires.
+      // This lets user interrupts cancel non-worker tools (Read, Write, Edit, etc.)
+      // in addition to worker tools (bash) which are handled by WorkerPool.
+      let abortHandler: (() => void) | undefined
+      const abortPromise = new Promise<never>((_, reject) => {
+        abortHandler = () => {
+          const err = new Error('AbortError')
+          err.name = 'AbortError'
+          reject(err)
+        }
+        if (toolAbortController.signal.aborted) {
+          abortHandler()
+        } else {
+          toolAbortController.signal.addEventListener('abort', abortHandler, { once: true })
+        }
+      })
+
+      const executionContext = this.ports.createToolContext(this.toolUseContext, {
+        toolUseId: tool.id,
+        abortController: toolAbortController,
+        workingDirectory: this.session.workingDirectory,
+        sessionId: this.session.sessionId,
+      })
+
+      // For SubagentTool, create a context with progress callback to stream sub-agent events
+      const toolInput = (tool.block.input ?? {}) as Record<string, unknown>
+      const isSubagentTool = isSubagentToolCall(tool.block.name, toolInput)
+      const reportAgentProgress = (event: SubagentProgressEvent) => {
+        const progressMsg = this.createAgentProgressMessage(tool, event)
+        tool.pendingProgress.push(progressMsg)
+        if (this.progressAvailableResolve) this.progressAvailableResolve()
+      }
+      const toolContext = isSubagentTool
+        ? this.ports.createToolContext(this.toolUseContext, {
+            toolUseId: tool.id,
+            abortController: toolAbortController,
+            workingDirectory: this.session.workingDirectory,
+            sessionId: this.session.sessionId,
+            reportAgentProgress,
+          })
+        : executionContext
+
+      if (isSubagentTool) {
+        this.log('info', '[SubAgent] executor invoking agent tool', {
+          toolUseId: tool.id,
+          toolName: tool.block.name,
+          subagentType: toolInput.subagent_type,
+          runInBackground: toolInput.run_in_background !== false,
+          parentSessionId: this.session.sessionId,
+          promptLength: typeof toolInput.prompt === 'string' ? toolInput.prompt.length : 0,
+        }, 'SubAgent')
+      }
+
+      // Execute with timeout AND abort support
+      let result: ToolExecutionResult | null
+      try {
+        result = await Promise.race([
+          this.toolRegistry.execute(
+            this.resolveToolKey(tool.block.name),
+            tool.block.input as Record<string, unknown>,
+            this.session.workingDirectory,
+            toolContext
+          ),
+          timeoutPromise,
+          abortPromise,
+        ])
+      } catch (err) {
+        // New typed-error path: tool threw PermissionRequiredError instead of
+        // returning a string sentinel.
+        if (err instanceof PermissionRequiredError) {
+          // If the pre-check (line 1145) already ran `checkPermissions` and
+          // got an `allow` from the user for this exact tool id, the user's
+          // answer has already been stored in `AskUserQuestionTool`'s
+          // `pendingAnswers` map. Skip the second permission request and
+          // go straight to Phase 2 retry, which will read the stored
+          // answer and return the formatted string to the LLM.
+          if (this.ports.isInvocationApproved(this.toolUseContext, tool.id)) {
+            const retryResult = await this.toolRegistry.execute(
+              this.resolveToolKey(tool.block.name),
+              tool.block.input as Record<string, unknown>,
+              this.session.workingDirectory,
+              executionContext
+            );
+            if (retryResult && !retryResult.error) {
+              messages.push({
+                role: 'tool' as const,
+                content: typeof retryResult.result === 'string'
+                  ? retryResult.result
+                  : JSON.stringify(retryResult.result),
+                tool_call_id: tool.id,
+                duration_ms: Date.now() - startTime,
+              });
+              this.finalizeTool(tool, messages);
+              return;
+            }
+            // Retry failed (e.g. user dismissed with no answer) 鈥?fall
+            // through to the standard deny path below.
+            messages.push(
+              createErrorMessage(tool.id, `<tool_error>User did not provide an answer</tool_error>`)
+            );
+            this.finalizeTool(tool, messages, 'No answer provided');
+            return;
+          }
+          // Pre-check did not run (sub-agent path, or `checkPermissions`
+          // returned `requiresUserConfirmation: false`). Go through the
+          // normal permission-request flow.
+          await this.handlePermissionRequest(err.permissionInfo, tool, messages, startTime)
+          return
+        }
+        // AbortError / timeout / any other unexpected throw falls through
+        // to the outer catch at line ~1429 which handles AbortError and
+        // retry-with-fallback for everything else.
+        throw err
+      } finally {
+        // Always release the per-tool timeout timer and abort listener once
+        // the race is over. Without this the timer keeps ticking after a
+        // normal completion (kept alive by the unresolved timeoutPromise)
+        // and the abort listener accumulates one entry per tool execution.
+        if (timeoutHandle) clearTimeout(timeoutHandle)
+        if (abortHandler) toolAbortController.signal.removeEventListener('abort', abortHandler)
+      }
+
+      // Process results
+      tool.stage = 'processing_results'
+      this.updateProgress(tool, { stage: 'processing_results', currentOperation: 'Processing results...', percentComplete: 80 })
+
+      if (!result) {
+        messages.push(
+          createErrorMessage(
+            tool.id,
+            `<tool_use_error>Error: No such tool available: ${tool.block.name}</tool_use_error>`,
+          ),
+        )
+        this.finalizeTool(tool, messages, undefined, 'Tool not found')
+        return
+      }
+
+      if (result.error) {
+        if (isSubagentTool) {
+        this.log('warn', '[SubAgent] executor agent tool returned error', {
+            toolUseId: tool.id,
+            toolName: tool.block.name,
+            result: typeof result.result === 'string' ? result.result.slice(0, 500) : result.result,
+          }, 'SubAgent')
+        }
+        messages.push(
+          createErrorMessage(
+            tool.id,
+            `[failed] ${tool.block.name}\n${result.result}`,
+            true,
+          ),
+        )
+
+        this.finalizeTool(tool, messages, undefined, result.error ? String(result.result) : undefined)
+        return
+      }
+
+      // Success
+      tool.stage = 'finalizing'
+      this.updateProgress(tool, { stage: 'finalizing', currentOperation: 'Finalizing...', percentComplete: 95 })
+
+      let rawContent = typeof result.result === 'string'
+        ? result.result
+        : JSON.stringify(result.result) ?? String(result.result)
+
+      if (isSubagentTool) {
+        let parsedResult: Record<string, unknown> | null = null
+        try {
+          parsedResult = JSON.parse(rawContent) as Record<string, unknown>
+        } catch {
+          parsedResult = null
+        }
+        this.log('info', '[SubAgent] executor agent tool result', {
+          toolUseId: tool.id,
+          toolName: tool.block.name,
+          error: false,
+          background: parsedResult?.background === true,
+          taskId: parsedResult?.taskId,
+          subAgentSessionId: parsedResult?.sessionId,
+          resultLength: rawContent.length,
+        }, 'SubAgent')
+
+        // Render the subagent tool result through renderToolResultMessage so
+        // the model sees a human-readable markdown block (with <subagent_meta>
+        // + resume footer) instead of the raw JSON string that execute()
+        // returns. This is the Grok-aligned path; without it the model must
+        // parse a JSON blob out of every serial subagent result.
+        const subagentExecutor = this.toolRegistry.getExecutor(
+          this.resolveToolKey(tool.block.name),
+        ) as { renderToolResultMessage?(r: ToolExecutionResult): RenderedToolMessage } | undefined
+        const rendered = subagentExecutor?.renderToolResultMessage?.(result)
+        if (rendered && typeof rendered.content === 'string') {
+          rawContent = rendered.content
+        }
+      }
+
+      // Check if result indicates a permission is required
+      // (legacy string-sentinel path, kept as a fallback for tools that have
+      // not been migrated to throw PermissionRequiredError).
+      if (rawContent.includes('<tool_use_permission_required>')) {
+        const match = rawContent.match(/<tool_use_permission_required>(.*?)<\/tool_use_permission_required>/);
+        if (match) {
+          try {
+            const permissionInfo = JSON.parse(match[1] ?? '');
+            await this.handlePermissionRequest(permissionInfo, tool, messages, startTime);
+            return;
+          } catch {
+            // Failed to parse - fall through and treat as plain result.
+          }
+        }
+      }
+
+      // Wrap the result in a status/duration envelope so the model can tell
+      // whether the step succeeded and how expensive it was (Codex-style).
+      const durationMs = Date.now() - startTime;
+      const resultContent = buildToolResultEnvelope(tool.block.name, durationMs, rawContent);
+
+      // Build the tool_result message. When the tool returned inline images
+      // (e.g. ReadTool on a pure image file), attach them as ImageContent
+      // blocks so vision-capable main models see the image directly in the
+      // tool_result. Non-vision models get the image downgraded to placeholder
+      // text by transformMessages; OpenAI tool messages cannot carry images
+      // and strip them with a fallback hint in the OpenAI adapter.
+      const toolMessage: ToolExecutionMessage = {
+        role: 'tool',
+        content: resultContent,
+        tool_call_id: tool.id,
+        duration_ms: durationMs,
+        // Forward structured tool-result metadata (e.g. browserResults for
+        // browser tool search/parallel_fetch) so the renderer can build
+        // rich tool rows without parsing the markdown result. Provider
+        // adapters only serialize role/content/tool_call_id, so this never
+        // leaks into the LLM payload.
+        ...(result.metadata ? { metadata: result.metadata } : {}),
+      };
+      // Plan 580 D8 (persistence): canonical MCP content blocks and
+      // `structuredContent` ride message.metadata so they survive session
+      // reload with the existing message JSON persistence (metadata is
+      // persisted verbatim and never serialized into the LLM payload).
+      if (result.blocks || result.structured !== undefined) {
+        toolMessage.metadata = {
+          ...(toolMessage.metadata ?? {}),
+          ...(result.blocks ? { mcpBlocks: result.blocks } : {}),
+          ...(result.structured !== undefined ? { mcpStructured: result.structured } : {}),
+        };
+      }
+      if (result.images && result.images.length > 0) {
+        toolMessage.content = [
+          { type: 'text', text: resultContent },
+          ...result.images.map((img) => ({
+            type: 'image' as const,
+            source: {
+              type: 'base64' as const,
+              media_type: img.mediaType,
+              data: img.data,
+            },
+          })),
+        ];
+      }
+      messages.push(toolMessage);
+
+      // Capture deferred extra result (e.g. visual self-review from
+      // show_widget). The executor will await and yield this as a second
+      // tool_result so the LLM gets both messages with the same tool_use_id.
+      if (result.pendingExtraResult) {
+        this.pendingExtraResults.set(tool.id, {
+          toolName: tool.block.name,
+          promise: result.pendingExtraResult,
+        })
+      }
+
+      // Capture deferred context (e.g. a follow-up review payload). Surfaces
+      // as a `deferredContext` update so the agent can inject it as transient
+      // runtime context on the next provider turn without persisting it.
+      if (result.pendingContext) {
+        this.pendingDeferredContextList.set(tool.id, {
+          toolName: tool.block.name,
+          promise: result.pendingContext,
+        })
+      }
+
+      this.finalizeTool(tool, messages)
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+
+      // Aborted tools should not retry - immediately finalize as cancelled
+      if (error instanceof Error && error.name === 'AbortError') {
+        tool.status = 'cancelled'
+        messages.push(
+          createErrorMessage(tool.id, '<tool_error>Tool execution was interrupted by user</tool_error>')
+        )
+        this.finalizeTool(tool, messages, 'user_interrupted')
+        return
+      }
+
+      // Check if we should retry with fallback strategies
+      if (this.config.enableRetry && this.retryStrategies.length > 0) {
+        const retryResult = await this.retryExecutor.executeWithRetry(
+          {
+            toolUseId: tool.id,
+            toolName: tool.block.name,
+            toolInput: tool.block.input as Record<string, unknown>,
+          },
+          this.retryStrategies,
+          async (toolName, toolInput) => {
+            try {
+              const execResult = await this.toolRegistry.execute(
+                this.resolveToolKey(toolName),
+                toolInput,
+                this.session.workingDirectory,
+                this.ports.createToolContext(this.toolUseContext, {
+                  toolUseId: tool.id,
+                  abortController: toolAbortController,
+                  workingDirectory: this.session.workingDirectory,
+                  sessionId: this.session.sessionId,
+                })
+              )
+              // Handle null case (tool not found)
+              if (execResult === null) {
+                return { error: `Tool not found: ${toolName}` }
+              }
+              // Convert ToolResult error format to what ToolRetryExecutor expects
+              // error?: boolean 鈫?error?: string
+              const errorStr = execResult.error ? String(execResult.result) : undefined
+              return {
+                result: execResult.result ?? undefined,
+                ...(errorStr !== undefined ? { error: errorStr } : {}),
+              }
+            } catch (e) {
+              return { error: e instanceof Error ? e.message : String(e) }
+            }
+          }
+        )
+
+        // If retry succeeded, update messages and continue
+        if (retryResult.success && retryResult.result !== undefined) {
+          const resultContent = typeof retryResult.result === 'string'
+            ? retryResult.result
+            : JSON.stringify(retryResult.result) ?? String(retryResult.result)
+
+          messages.push({
+            role: 'tool' as const,
+            content: resultContent,
+            tool_call_id: tool.id,
+            duration_ms: Date.now() - startTime,
+          })
+
+          this.finalizeTool(tool, messages)
+          return
+        }
+
+        // If fallback was used, log it
+        if (retryResult.finalAction === 'fallback') {
+          const fallbackNote = `Fallback executed after ${retryResult.attempts} attempt(s)`
+          this.log('debug', `[ToolRetry] ${tool.block.name}: ${fallbackNote}`)
+        }
+      }
+
+      // Retry failed or disabled - emit error
+      messages.push(
+        createErrorMessage(
+          tool.id,
+          `<tool_use_error>Error executing ${tool.block.name}: ${errorMessage}</tool_use_error>`,
+        ),
+      )
+
+      this.finalizeTool(tool, messages, errorMessage)
+    }
+  }
+
+  /**
+   * Handle a permission request from a tool.
+   *
+   * Called from two paths:
+   *  1. The new typed-error path: tool threw `PermissionRequiredError` (caught
+   *     in executeTool around the `toolRegistry.execute()` Promise.race).
+   *  2. The legacy string-sentinel path: tool returned a result whose content
+   *     contained `<tool_use_permission_required>...</tool_use_permission_required>`.
+   *
+   * Both paths converge here so there is exactly one place that talks to
+   * `ToolUseContext.requestPermission` and one retry logic.
+   *
+   * On `allow`: marks the tool as approved in appState and retries execution
+   *   with the original `toolUseContext` (preserving `toolUseId` so two-phase
+   *   tools like `AskUserQuestionTool` can read stored answers by id).
+   * On `deny`: pushes a `Permission denied` tool error and finalizes.
+   * On no `requestPermission` callback (e.g. sub-agents): pushes a
+   *   `Permission system not configured` tool error and finalizes.
+   */
+  private async handlePermissionRequest(
+    permissionInfo: {
+      id: string;
+      toolName: string;
+      toolInput: Record<string, unknown>;
+      mode: 'generic' | 'ask_user_question' | 'exit_plan_mode';
+      expiresAt: number;
+      decisionReason?: string;
+    },
+    tool: TrackedTool,
+    messages: ToolExecutionMessage[],
+    startTime: number
+  ): Promise<void> {
+    if (!this.ports.requestPermission) {
+      // Plan 583 / ISS-11: this is the reference fail-closed behaviour that
+      // the pre-check, `mcp/apply.ts` and `dispatcherFromRegistry.ts` were
+      // diverging from. It stays unconditional even in `dontAsk`, because
+      // reaching here means a tool itself threw `PermissionRequiredError` —
+      // a tool-level escalation that a session mode should not self-grant.
+      messages.push({
+        role: 'tool' as const,
+        content: `<tool_error>Permission system not configured</tool_error>`,
+        tool_call_id: tool.id,
+      });
+      this.finalizeTool(tool, messages, 'Permission system not configured');
+      return;
+    }
+
+    try {
+      const decision = await this.ports.requestPermission(this.toolUseContext, permissionInfo);
+
+      if (decision === 'deny') {
+        messages.push(
+          createErrorMessage(tool.id, `<tool_error>Permission denied by user</tool_error>`)
+        );
+        this.finalizeTool(tool, messages, 'Permission denied');
+        return;
+      }
+
+      // Plan 498: the request was persisted as a durable approval card and
+      // nobody is answering it in-process (bot/wake runs, crashed renderer).
+      // Push a neutral tool result — NOT an error — so the model wraps the
+      // turn up; a later continuation run replays the approved call via the
+      // one-shot approval ledger.
+      if (decision === 'paused') {
+        messages.push({
+          role: 'tool' as const,
+          content:
+            'Waiting for user approval. The request has been sent as an approval card; ' +
+            'the tool call will run automatically once the user decides. Summarize the ' +
+            'pending action briefly and end your turn without further tool calls.',
+          tool_call_id: tool.id,
+        });
+        this.finalizeTool(tool, messages, 'Waiting for user approval');
+        return;
+      }
+
+      // Permission granted - mark this tool use as approved and actually retry execution.
+      // Previously we only emitted a "granted" message and returned, which caused
+      // empty/no-op tool results after user approval.
+      this.ports.markInvocationApproved(this.toolUseContext, tool.id);
+
+      // Retry with `this.toolUseContext` (NOT `toolContext`) so the tool sees
+      // the same `toolUseId` as Phase 1 - this is what makes two-phase tools
+      // like AskUserQuestionTool work (Phase 2 looks up `pendingAnswers` by id).
+      const retryResult = await this.toolRegistry.execute(
+        this.resolveToolKey(tool.block.name),
+        tool.block.input as Record<string, unknown>,
+        this.session.workingDirectory,
+        this.ports.createToolContext(this.toolUseContext, {
+          toolUseId: tool.id,
+          abortController: this.session.abortController,
+          workingDirectory: this.session.workingDirectory,
+          sessionId: this.session.sessionId,
+        })
+      );
+
+      if (!retryResult) {
+        messages.push(
+          createErrorMessage(
+            tool.id,
+            `<tool_use_error>Error: No such tool available: ${tool.block.name}</tool_use_error>`,
+          ),
+        );
+        this.finalizeTool(tool, messages, undefined, 'Tool not found');
+        return;
+      }
+
+      if (retryResult.error) {
+        messages.push(
+          createErrorMessage(tool.id, String(retryResult.result), true),
+        );
+        this.finalizeTool(tool, messages, undefined, String(retryResult.result));
+        return;
+      }
+
+      messages.push({
+        role: 'tool' as const,
+        content: typeof retryResult.result === 'string'
+          ? retryResult.result
+          : JSON.stringify(retryResult.result),
+        tool_call_id: tool.id,
+        duration_ms: Date.now() - startTime,
+      });
+      this.finalizeTool(tool, messages);
+      return;
+
+    } catch (permError) {
+      messages.push(
+        createErrorMessage(tool.id, `<tool_error>Permission request failed: ${permError instanceof Error ? permError.message : 'Unknown error'}</tool_error>`)
+      );
+      this.finalizeTool(tool, messages, 'Permission request failed');
+      return;
+    }
+  }
+
+  /**
+   * Finalize tool execution and record statistics
+   */
+  private finalizeTool(
+    tool: TrackedTool,
+    messages: ToolExecutionMessage[],
+    errorReason?: string,
+    errorDetail?: string,
+  ): void {
+    tool.endTime = Date.now()
+
+    // Apply output size limit if configured
+    if (this.config.maxOutputSizeBytes > 0) {
+      const outputSize = this.calculateOutputSize(messages)
+      if (outputSize > this.config.maxOutputSizeBytes) {
+        messages = this.truncateOutput(messages, this.config.maxOutputSizeBytes)
+        this.log('warn', `[StreamingToolExecutor] Output truncated for ${tool.block.name}: ${outputSize} -> ${this.config.maxOutputSizeBytes} bytes`)
+      }
+    }
+
+    tool.results = messages
+    tool.status = errorReason ? 'failed' : 'completed'
+    tool.stage = errorReason ? 'error' : 'completed'
+    tool.elapsedSeconds = (tool.endTime - tool.startTime) / 1000
+    tool.percentComplete = 100
+
+    // Track output size
+    const outputSize = this.calculateOutputSize(messages)
+    this.totalOutputBytes += outputSize
+
+    // Check memory warning
+    this.checkMemoryWarning()
+
+    // Update stats
+    tool.stats = {
+      ...tool.stats,
+      endTime: tool.endTime,
+      duration: tool.elapsedSeconds,
+      outputSize,
+      error: errorDetail || errorReason,
+    }
+
+    this.allStats.push(tool.stats)
+
+    // Add WeakRef for cleanup tracking
+    this.toolWeakRefs.add(new WeakRef(tool))
+
+    // Periodic WeakRef cleanup (every 10 tools)
+    if (this.tools.length % 10 === 0) {
+      this.cleanupWeakRefs()
+    }
+
+    // Emit final progress
+    this.updateProgress(tool, {
+      status: tool.status,
+      stage: tool.stage,
+      percentComplete: 100,
+      currentOperation: errorReason ? `Failed: ${errorReason}` : 'Completed',
+    })
+
+    // Call completion/error callbacks
+    if (errorReason) {
+      if (this.onToolError) {
+        this.onToolError(tool.stats, tool.error || new Error(errorDetail || errorReason))
+      }
+    } else {
+      if (this.onToolComplete) {
+        this.onToolComplete(tool.stats)
+      }
+    }
+  }
+
+  /**
+   * Get abort reason for a tool
+   */
+  private getAbortReason(
+    tool: TrackedTool,
+  ): 'sibling_error' | 'user_interrupted' | 'streaming_fallback' | null {
+    if (this.discarded) return 'streaming_fallback'
+    if (this.hasErrored) return 'sibling_error'
+    if (this.session.abortController.signal.aborted) return 'user_interrupted'
+    return null
+  }
+
+  /**
+   * Create synthetic error message for cancelled tools
+   */
+  private createSyntheticErrorMessage(
+    toolUseId: string,
+    reason: 'sibling_error' | 'user_interrupted' | 'streaming_fallback',
+  ): ToolExecutionMessage {
+    if (reason === 'user_interrupted') {
+      return createErrorMessage(toolUseId, '<tool_use_error>Tool use was interrupted by user</tool_use_error>')
+    }
+    if (reason === 'streaming_fallback') {
+      return createErrorMessage(toolUseId, '<tool_use_error>Error: Streaming fallback - tool execution discarded</tool_use_error>')
+    }
+
+    const desc = this.erroredToolDescription
+    const msg = desc
+      ? `Cancelled: parallel tool call ${desc} errored`
+      : 'Cancelled: parallel tool call errored'
+
+    return createErrorMessage(toolUseId, `<tool_use_error>${msg}</tool_use_error>`)
+  }
+
+  /**
+   * Get human-readable tool description
+   */
+  private getToolDescription(tool: TrackedTool): string {
+    const input = tool.block.input as Record<string, unknown> | undefined
+    const summary =
+      input?.command ?? input?.file_path ?? input?.pattern ?? input?.prompt ?? ''
+
+    if (typeof summary === 'string' && summary.length > 0) {
+      const truncated = summary.length > 40 ? summary.slice(0, 40) + '\u2026' : summary
+      return `${tool.block.name}(${truncated})`
+    }
+    return tool.block.name
+  }
+
+  // ==========================================================================
+  // RESULT GENERATORS
+  // ==========================================================================
+
+  /**
+   * Get any completed results that haven't been yielded yet (non-blocking)
+   */
+  *getCompletedResults(): Generator<MessageUpdate<TContext>, void> {
+    if (this.discarded) return
+
+    for (const tool of this.tools) {
+      while (tool.pendingProgress.length > 0) {
+        const progressMessage = tool.pendingProgress.shift()!
+        yield { message: progressMessage, newContext: this.toolUseContext }
+      }
+
+      if (tool.status === 'yielded') continue
+
+      if (tool.status === 'completed' || tool.status === 'failed' || tool.status === 'cancelled') {
+        // Capture the terminal status before flipping to 'yielded' so the
+        // cancellation branch below can still inspect the original state.
+        const wasCancelled = tool.status === 'cancelled'
+        tool.status = 'yielded'
+
+        const results = tool.results
+        if (results && results.length > 0) {
+          for (const message of results) {
+            yield { message, newContext: this.toolUseContext }
+          }
+        } else if (wasCancelled) {
+          // A sibling_error abort cancels queued/not-yet-started tools with
+          // no results. Unlike discard or user interruption (both of which
+          // have upstream cleanup in the agent loop), this path continues the
+          // turn, so we must synthesise a result here to keep every tool_use
+          // paired — otherwise the next provider request carries an orphan
+          // tool_use and is rejected with 400. Other cancellation reasons are
+          // left to their existing upstream handling to avoid duplicate or
+          // orphan results.
+          const reason = this.getAbortReason(tool)
+          if (reason === 'sibling_error') {
+            yield {
+              message: this.createSyntheticErrorMessage(tool.id, reason),
+              newContext: this.toolUseContext,
+            }
+          }
+        }
+      } else if (tool.status === 'executing' && tool.batch !== ToolBatch.READ) {
+        break
+      }
+    }
+  }
+
+  /**
+   * Wait for remaining tools and yield their results as they complete
+   */
+  async *getRemainingResults(): AsyncGenerator<MessageUpdate<TContext>, void> {
+    if (this.discarded) return
+
+    while (this.hasUnfinishedTools()) {
+      // Stop waiting if abort was requested (e.g. user interrupted).
+      // The individual tool abort promises in executeTool will finalize any
+      // still-executing tools as 'cancelled' so getCompletedResults below
+      // picks them up before the loop exits.
+      if (this.siblingAbortController.signal.aborted) {
+        break
+      }
+
+      await this.processQueue()
+
+      for (const result of this.getCompletedResults()) {
+        yield result
+      }
+
+      if (
+        this.hasExecutingTools() &&
+        !this.hasCompletedResults() &&
+        !this.hasPendingProgress()
+      ) {
+        const executingPromises = this.tools
+          .filter(
+            t =>
+              (t.status === 'executing' ||
+                t.status === 'starting' ||
+                t.status === 'streaming') &&
+              t.promise
+          )
+          .map(t => t.promise!)
+
+        const progressPromise = new Promise<void>(resolve => {
+          this.progressAvailableResolve = resolve
+        })
+
+        if (executingPromises.length > 0) {
+          await Promise.race([...executingPromises, progressPromise])
+        } else {
+          // Fallback to avoid a tight loop when states are temporarily out of sync.
+          await new Promise(resolve => setTimeout(resolve, 10))
+        }
+      } else if (
+        !this.hasExecutingTools() &&
+        !this.hasCompletedResults() &&
+        !this.hasPendingProgress() &&
+        this.hasUnfinishedTools()
+      ) {
+        // Tools still queued (blocked on a concurrency slot) never emit
+        // progress events — poll briefly so they start as soon as the slot
+        // frees instead of sleeping a fixed 5s per tool (a burst of N
+        // non-concurrency-safe tools took N*5s). Backgrounded workers keep
+        // waiting on progress events, with the 5s race as a safety net.
+        if (this.tools.some(t => t.status === 'queued')) {
+          await new Promise(resolve => setTimeout(resolve, 10))
+        } else {
+          // Background tools are waiting for completion; wait for progress events
+          const progressPromise = new Promise<void>(resolve => {
+            this.progressAvailableResolve = resolve
+          })
+          await Promise.race([
+            progressPromise,
+            new Promise(resolve => setTimeout(resolve, 5000)),
+          ])
+        }
+      }
+    }
+
+    for (const result of this.getCompletedResults()) {
+      yield result
+    }
+
+    // Drain pending extra results (e.g. show_widget's visual self-review).
+    // Each one becomes a synthetic tool_result message + executor yield,
+    // keeping the existing SSE tool_result pipeline intact.
+    if (this.pendingExtraResults.size > 0) {
+      yield* this.drainPendingExtraResults()
+    }
+
+    // Drain deferred contexts (e.g. a follow-up review payload). Each one is
+    // surfaced as a `deferredContext` update (not a tool_result) so the agent
+    // can inject it as transient runtime context on the next provider turn.
+    if (this.pendingDeferredContextList.size > 0) {
+      yield* this.drainPendingDeferredContexts()
+    }
+  }
+
+  // ==========================================================================
+  // STATUS HELPERS
+  // ==========================================================================
+
+  /**
+   * Drain the pendingExtraResults map. Each entry's promise is awaited
+   * (race against a 30s safety cap to prevent an indefinitely hung vision
+   * call from pinning the turn). The resolved payload is wrapped as a
+   * `Message` with role='tool' and re-uses the original tool_use_id, so
+   * the LLM history correctly sees it as a second tool_result for the
+   * same tool_use block.
+   */
+  private async *drainPendingExtraResults(): AsyncGenerator<MessageUpdate<TContext>, void> {
+    const SAFETY_CAP_MS = 30_000;
+
+    // Take a snapshot — pop entries as we go to avoid mutation during yield.
+    const entries = Array.from(this.pendingExtraResults.entries());
+    this.pendingExtraResults.clear();
+
+    for (const [toolUseId, { toolName, promise }] of entries) {
+      const result = await Promise.race([
+        promise,
+        new Promise<{ result: string; is_error?: boolean }>((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                result: `[${toolName}] deferred result timed out after ${SAFETY_CAP_MS}ms`,
+                is_error: true,
+              }),
+            SAFETY_CAP_MS,
+          ),
+        ),
+      ]);
+
+      yield {
+        message: {
+          role: 'tool' as const,
+          content: result.result,
+          tool_call_id: toolUseId,
+          status: result.is_error ? 'error' : 'done',
+        },
+      };
+    }
+  }
+
+  /**
+   * Drain the pendingDeferredContextList map. Each entry's promise is surfaced
+   * as a `deferredContext` update (not a tool_result) so the agent can inject
+   * it as transient runtime context on the next provider turn without
+   * persisting it to the durable history.
+   */
+  private async *drainPendingDeferredContexts(): AsyncGenerator<MessageUpdate<TContext>, void> {
+    const entries = Array.from(this.pendingDeferredContextList.entries());
+    this.pendingDeferredContextList.clear();
+    for (const [toolUseId, { toolName, promise }] of entries) {
+      yield { deferredContext: { toolUseId, toolName, promise } };
+    }
+  }
+
+  private hasPendingProgress(): boolean {
+    return this.tools.some(t => t.pendingProgress.length > 0)
+  }
+
+  private hasCompletedResults(): boolean {
+    return this.tools.some(t => t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled')
+  }
+
+  private hasExecutingTools(): boolean {
+    return this.tools.some(
+      t =>
+        t.status === 'executing' ||
+        t.status === 'starting' ||
+        t.status === 'streaming'
+    )
+  }
+
+  private hasUnfinishedTools(): boolean {
+    return this.tools.some(t => t.status !== 'yielded')
+  }
+
+  // ==========================================================================
+  // PUBLIC API
+  // ==========================================================================
+
+  /**
+   * Get all tracked tools with their current status
+   */
+  getTools(): TrackedTool[] {
+    return this.tools
+  }
+
+  /**
+   * Get current progress for all tools
+   */
+  getProgress(): ToolProgress[] {
+    return this.tools.map(tool => ({
+      toolUseId: tool.id,
+      toolName: tool.block.name,
+      status: tool.status,
+      stage: tool.stage,
+      elapsedSeconds: tool.elapsedSeconds,
+      percentComplete: tool.percentComplete,
+      currentOperation: tool.currentOperation,
+    }))
+  }
+
+  /**
+   * Get execution statistics for all completed tools
+   */
+  getStatistics(): ToolExecutionStats[] {
+    return [...this.allStats]
+  }
+
+  /**
+   * Get total execution time across all tools
+   */
+  getTotalExecutionTime(): number {
+    if (this.allStats.length === 0) return 0
+
+    const start = Math.min(...this.allStats.map(s => s.startTime))
+    const end = Math.max(...this.allStats.map(s => s.endTime ?? Date.now()))
+    return (end - start) / 1000
+  }
+
+  /**
+   * Get the updated context
+   */
+  getUpdatedContext(): TContext {
+    return this.toolUseContext
+  }
+
+  /**
+   * Check if there are any active/queued tools
+   */
+  isActive(): boolean {
+    return this.tools.some(t =>
+      t.status === 'queued' ||
+      t.status === 'starting' ||
+      t.status === 'executing' ||
+      t.status === 'streaming'
+    )
+  }
+
+  /**
+   * Create a progress message from a sub-agent progress event.
+   * This allows the UI to see what the sub-agent is doing in real-time.
+   */
+  private createAgentProgressMessage(
+    tool: TrackedTool,
+    event: SubagentProgressEvent
+  ): ToolExecutionMessage {
+    const progressData: Record<string, unknown> = {
+      toolUseId: tool.id,
+      toolName: tool.block.name,
+      agentEventType: event.type,
+      agentData: event.data,
+      agentToolName: event.toolName,
+      agentToolInput: event.toolInput,
+      agentToolResult: event.toolResult,
+      agentDuration: event.duration,
+      elapsedSeconds: Math.round(tool.elapsedSeconds * 10) / 10,
+    }
+
+    return {
+      role: 'user',
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify(progressData),
+        },
+      ],
+      metadata: {
+        type: 'agent_progress',
+        toolId: tool.id,
+        toolName: tool.block.name,
+        agentEvent: event,
+      },
+    } as ToolExecutionMessage
+  }
+}
+
+export default StreamingToolExecutor

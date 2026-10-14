@@ -1,0 +1,16 @@
+{{!--
+  Platform-specific guidance — Plan 550 1c.
+
+  Renders only when the user is communicating through a recognised
+  platform (e.g. IM, CLI). Otherwise empty.
+
+  Mirrors the previous `getPlatformSection` (sections/dynamic/platform.ts)
+  verbatim. The hint string is computed by `getPlatformHint` upstream
+  and passed as `platform_hint`. When empty, the renderer treats this
+  section as omitted.
+--}}
+{{#if platform_hint}}
+# Platform
+
+{{{platform_hint}}}
+{{/if}}

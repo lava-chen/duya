@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { applyRebases, effectiveMessageTimeline, type TimelineEntryRow } from '../message-log';
-import type { MessageEntry, CompactionEntry } from '@duya/agent/message';
+import type { MessageEntry, CompactionEntry } from '@duya/agent-core/message';
 import type { RebaseEvent, ReasoningEvent, ToolCallEvent } from '../rollout-events';
 
 // ─── Builders ───

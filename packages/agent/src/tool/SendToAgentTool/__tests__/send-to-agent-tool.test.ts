@@ -16,17 +16,17 @@ const mocks = vi.hoisted(() => ({
   readConfigAgents: vi.fn(async () => ({})),
 }));
 
-vi.mock('../../../session/db.js', () => ({
-  mailboxSend: mocks.mailboxSend,
-  appendMessages: mocks.appendMessages,
-}));
-
-vi.mock('../../../agent-profile/config-agents.js', () => ({
-  readConfigAgents: mocks.readConfigAgents,
+vi.mock('@duya/host/worker-tool-services/agent-messaging', () => ({
+  createWorkerAgentMessagingPort: () => ({
+    getSenderSessionId: (sessionId?: string) => sessionId || 'bot:bot-sender',
+    sendMailbox: mocks.mailboxSend,
+    appendMessages: mocks.appendMessages,
+    readConfigAgents: mocks.readConfigAgents,
+  }),
 }));
 
 import { sendToAgentTool } from '../SendToAgentTool.js';
-import { decodeEnvelope } from '../../../agent/dm/index.js';
+import { decodeEnvelope } from '@duya/agent-protocol/agent-dm';
 
 type ExecResult = { id: string; name: string; result: string; error?: boolean };
 

@@ -1,0 +1,82 @@
+/**
+ * Context Compaction System Types
+ */
+
+import type { Message, ToolUse } from '@duya/agent-protocol/transcript'
+
+// Re-export for convenience
+export type { Message, ToolUse }
+
+// ============================================================
+// Core Types
+// ============================================================
+
+/**
+ * Compaction statistics. totalTokens is computed live via computeContextEstimate
+ * so it always matches the renderer ring.
+ */
+export interface CompactionStats {
+  totalTokens: number
+  maxTokens: number
+  sessionAge: number
+  lastCompactionAt?: number
+}
+
+/**
+ * Result of a compaction operation.
+ */
+export interface CompactionResult {
+  messages: Message[]
+  tokensRemoved: number
+  tokensRetained: number
+  strategy: string
+  /** Raw summary text (session_memory only). Used for memory flush. */
+  summaryText?: string
+}
+
+/**
+ * Compaction strategy. The threshold check (totalTokens > maxTokens - reserveTokens)
+ * is handled by CompactionManager — strategies only implement compact().
+ */
+export interface CompactionStrategy {
+  name: string
+  compact(messages: Message[], stats: CompactionStats, options?: CompactOptions): Promise<CompactionResult>
+}
+
+// ============================================================
+// Defaults
+// ============================================================
+
+/** Default context window used when the Host has no model-specific value. */
+export const DEFAULT_CONTEXT_WINDOW = 200_000
+
+// ============================================================
+// Options
+// ============================================================
+
+export interface CompactOptions {
+  strategy?: string
+  maxMessagesToKeep?: number
+  customInstructions?: string
+  /** 'auto' = gated by suppression; 'manual'/'emergency' = always run. */
+  trigger?: 'auto' | 'manual' | 'emergency' | 'preflight_overflow' | 'model_switch'
+  /** Transient seed from prefire (not used without prefire, kept for compat). */
+  previousSummary?: string
+  /**
+   * Bypass strategy-level guards that would return the input unchanged
+   * (Plan 495 G2 image-threshold trigger). The nothing-to-summarize
+   * early return still applies.
+   */
+  force?: boolean
+  /**
+   * Plan 523 P6: per-attempt summary outcome hook (success/degenerate/empty/
+   * error). Injected by CompactionManager so the renderer sees *why* a retry
+   * or failure happened, not just the coarse 'summarizing' step.
+   */
+  onSummaryAttempt?: (report: {
+    attempt: number
+    outcome: 'success' | 'degenerate' | 'empty' | 'error'
+    errorKind?: string
+    chars: number
+  }) => void
+}

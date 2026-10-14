@@ -85,12 +85,19 @@ describe('createIsolatedWorktree', () => {
 
   it('refuses a directory that is not inside a git repository', async () => {
     const plain = mkdtempSync(path.join(os.tmpdir(), 'duya-plain-'));
+    const previousGitCeiling = process.env.GIT_CEILING_DIRECTORIES;
+    // The configured temp root can itself live inside the checkout. Keep Git's
+    // upward repository discovery from escaping this fixture so the test still
+    // exercises a genuinely non-repository directory under that temp root.
+    process.env.GIT_CEILING_DIRECTORIES = path.dirname(plain);
     try {
       await expect(createIsolatedWorktree(plain, 'x')).rejects.toThrow(WorktreeError);
       await expect(createIsolatedWorktree(plain, 'x')).rejects.toMatchObject({
         code: 'not_a_git_repo',
       });
     } finally {
+      if (previousGitCeiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+      else process.env.GIT_CEILING_DIRECTORIES = previousGitCeiling;
       rmSync(plain, { recursive: true, force: true });
     }
   });

@@ -29,6 +29,7 @@ import type {
 import { projectTimelinePersistenceMessages } from '@duya/agent-protocol/transcript';
 import { HostSessionHttpClient } from '@duya/host/http-client';
 import { startLocalHost } from '@duya/host/local-host';
+import { resolveHostWorkerPath } from './worker-path.js';
 import { resolveDataRoot } from '@duya/data';
 import { TUIApp, shouldUseTui, type CompletionSources, type LegacyFrame, type TuiChoice } from './tui/index.js';
 
@@ -442,18 +443,11 @@ async function chatTui(
   let finish: () => void = () => {};
   const finishedPromise = new Promise<void>((resolve) => { finish = resolve; });
 
-  // TUI-level model override. Mirrors mcode's `/model` slash command:
-  // `/model <provider>` mutates this state, and the next turn threads it
-  // through `startAgentRun` so the override actually reaches the worker.
-  // `null` means "no override — use the session / global default".
-  let activeModelOverride: { providerId: string; model?: string } | null = null;
-
   let sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
   const slashRows = [
     ['/resume', 'Resume a previous session'],
     ['/sessions', 'Browse previous sessions'],
     ['/new', 'Start a new session'],
-    ['/model', 'Show or switch the active model (mirrors mcode /model)'],
     ['/clear', 'Clear the visible transcript'],
     ['/help', 'Show chat commands'],
     ['/exit', 'End this chat'],
@@ -476,11 +470,7 @@ async function chatTui(
   const tui = new TUIApp({
     title: 'duya chat',
     completionSources,
-    statusText: () => {
-      const provider = activeModelOverride?.providerId ?? activeSession.providerId;
-      const model = activeModelOverride?.model ?? (activeSession.model || options.model || 'default');
-      return `${provider} · ${model} · ${activeSession.id.slice(0, 8)}`;
-    },
+    statusText: () => `${activeSession.providerId} · ${activeSession.model || options.model || 'default'} · ${activeSession.id.slice(0, 8)}`,
     isBusy: () => busy,
     onSubmit: (text) => { void handleLine(text); },
     onInterrupt: () => {
@@ -534,45 +524,6 @@ async function chatTui(
     tui.printNotice(`Resumed "${selected.title || 'Untitled session'}".`);
   }
 
-  /**
-   * `/model` slash command — mirrors mcode's `/model`.
-   *
-   * `/model` (no args) prints the current model: the session default plus any
-   * `/model <provider>` override the user has set in this TUI.
-   *
-   * `/model <provider>` records a per-TUI override that the next
-   * `startAgentRun` forwards to the worker. The override stays in memory
-   * only; closing the TUI clears it. To change the global default across
-   * sessions, run `duya config provider set-default <id>` outside the TUI.
-   *
-   * `<provider>/<model>` syntax is accepted and stored verbatim, so the
-   * picker can later fan out to per-model variants when the Host exposes
-   * the full provider list.
-   */
-  async function showOrSwitchModel(arg: string): Promise<void> {
-    const trimmed = arg.trim();
-    if (trimmed === '') {
-      const provider = activeModelOverride?.providerId ?? (activeSession.providerId ?? '(unset)');
-      const model =
-        activeModelOverride?.model ?? (activeSession.model || options.model || '(session default)');
-      tui.printNotice(
-        `current model: ${provider} / ${model}\n` +
-          'use `/model <provider>` to override for the next turn, ' +
-          'or `duya config provider set-default <id>` to change globally.',
-      );
-      return;
-    }
-    // Accept `<provider>` or `<provider>/<model>`.
-    const slash = trimmed.indexOf('/');
-    const providerId = slash === -1 ? trimmed : trimmed.slice(0, slash);
-    const model = slash === -1 ? undefined : trimmed.slice(slash + 1) || undefined;
-    activeModelOverride = { providerId, ...(model !== undefined ? { model } : {}) };
-    tui.printNotice(
-      `next turn will use ${activeModelOverride.providerId}${activeModelOverride.model ? ` / ${activeModelOverride.model}` : ''}. ` +
-        'Override is per-TUI; clears on /exit.',
-    );
-  }
-
   async function startNewSession(): Promise<void> {
     if (busy) {
       tui.printError('Wait for the current turn to finish before starting a new session.');
@@ -588,18 +539,12 @@ async function chatTui(
     tui.printUser(prompt);
     busy = true;
     tui.setBusy(true);
-    // Resolve per-turn provider/model in this order:
-    //   1. `/model <provider>` override set in the TUI (clears on /exit)
-    //   2. CLI `--model` / `--provider` flags (process-wide default)
-    //   3. whatever the session was created with
-    const effectiveProviderId = activeModelOverride?.providerId ?? options.providerId;
-    const effectiveModel = activeModelOverride?.model ?? options.model;
     try {
       const start = await client.startAgentRun({
         sessionId: activeSession.id,
         prompt,
-        ...(effectiveModel !== undefined ? { model: effectiveModel } : {}),
-        ...(effectiveProviderId !== undefined ? { providerId: effectiveProviderId } : {}),
+        ...(options.model !== undefined ? { model: options.model } : {}),
+        ...(options.providerId !== undefined ? { providerId: options.providerId } : {}),
         ...(options.apiFormat !== undefined ? { apiFormat: options.apiFormat } : {}),
         workingDirectory: process.cwd(),
       });
@@ -639,9 +584,8 @@ async function chatTui(
         if (name === 'exit' || name === 'quit' || name === 'q') close();
         else if (name === 'resume' || name === 'sessions') await resumeSession(args);
         else if (name === 'new') await startNewSession();
-        else if (name === 'model') await showOrSwitchModel(args);
         else if (name === 'clear') tui.clearTranscript();
-        else if (name === 'help') tui.printNotice('/resume · /sessions · /new · /model · /clear · /exit');
+        else if (name === 'help') tui.printNotice('/resume · /sessions · /new · /clear · /exit');
         else tui.printError(`Unknown command: /${name}`);
       } catch (error) {
         tui.printError(error instanceof Error ? error.message : String(error));
@@ -671,21 +615,6 @@ export interface TuiCommandOptions {
 }
 
 /**
- * Resolve the worker entry the Host-owned execution controller spawns.
- * Mirrors the logic in `packages/cli/src/index.ts` so this file stays
- * self-contained (it cannot import from `./index.js`).
- */
-function resolveServeWorkerPath(): string | undefined {
-  const explicit = process.env.DUYA_HOST_WORKER_PATH;
-  if (explicit !== undefined && explicit.trim().length > 0) return path.resolve(explicit.trim());
-  const devBundle = path.join(process.cwd(), 'packages', 'agent', 'bundle', 'agent-process-entry.js');
-  if (fs.existsSync(devBundle)) return devBundle;
-  const devDist = path.join(process.cwd(), 'packages', 'agent', 'dist', 'process', 'agent-process-entry.js');
-  if (fs.existsSync(devDist)) return devDist;
-  return undefined;
-}
-
-/**
  * Entry for the `duya tui` command. Starts an ephemeral Host and opens the
  * full-screen TUI in the same process. The Host is shut down when the TUI exits.
  * Returns the process exit code.
@@ -694,16 +623,7 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
   const host = await startLocalHost({
     port: options.port,
     ephemeral: true,
-    workerPath: resolveServeWorkerPath(),
-    // The full-screen TUI owns stdout/stderr; silence the Host's run-execution
-    // logger (worker stderr passthrough etc.) so it does not corrupt blessed's
-    // frame buffer. Real run failures still surface via `run.failed` events.
-    executionLogger: {
-      debug: () => undefined,
-      info: () => undefined,
-      warn: () => undefined,
-      error: () => undefined,
-    },
+    workerPath: resolveHostWorkerPath(),
   });
   const client = new HostSessionHttpClient(host.origin, host.token ?? '');
   try {

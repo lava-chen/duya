@@ -1183,7 +1183,6 @@ export class RunEngineImpl implements RunEngine {
               arguments: frame.call.input,
               provisional: true,
             });
-            await this.#dispatchCall(ctx, frame.call);
             break;
           case 'text':
             // BEFORE `addText`, and inside the loop: a frame that arrives at t is

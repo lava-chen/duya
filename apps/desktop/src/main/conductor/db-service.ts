@@ -35,7 +35,7 @@ import {
   formatValidationErrors,
   validateElementInput,
   validateConnectorShape,
-} from '../../../../../packages/agent/src/tool/CanvasConductor/validate.js';
+} from '@duya/capabilities/canvas/validate';
 import type {
   ExecutorRpcResponse,
   ElementActionResult,

@@ -13,27 +13,17 @@ export type { WorkerInterrupt } from '@duya/host/worker-manager';
 
 const hostLogger: WorkerManagerLogger = workerLogger;
 
-function resolveDesktopWorkerPath(): string {
+export function resolveDesktopWorkerPath(): string {
   const isPackaged = !!process.resourcesPath && !process.defaultApp;
 
   if (isPackaged) {
-    const bundled = path.join(process.resourcesPath, 'agent-bundle', 'agent-process-entry.js');
+    const bundled = path.join(process.resourcesPath, 'harness-bundle', 'worker-entry.js');
     if (fs.existsSync(bundled)) return bundled;
-
-    const primary = path.join(process.resourcesPath, 'agent', 'process', 'agent-process-entry.js');
-    if (fs.existsSync(primary)) return primary;
-
-    const fallback = path.join(process.resourcesPath, 'agent', 'dist', 'process', 'agent-process-entry.js');
-    if (fs.existsSync(fallback)) return fallback;
   }
 
   // Prefer the esbuild bundle over tsc-compiled dist.
-  // The dist output imports plugin-core source files that Node cannot load natively.
-  const devBundle = path.join(process.cwd(), 'packages', 'agent', 'bundle', 'agent-process-entry.js');
+  const devBundle = path.join(process.cwd(), 'packages', 'host', 'bundle', 'worker-entry.js');
   if (fs.existsSync(devBundle)) return devBundle;
-
-  const devDist = path.join(process.cwd(), 'packages', 'agent', 'dist', 'process', 'agent-process-entry.js');
-  if (fs.existsSync(devDist)) return devDist;
 
   return devBundle;
 }

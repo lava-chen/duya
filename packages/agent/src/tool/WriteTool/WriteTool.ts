@@ -1,5 +1,5 @@
 /**
- * Plan 610 A8 shim â€?WriteTool moved to `@duya/capabilities` (`fs/write`).
+ * Plan 610 A8 shim   ?WriteTool moved to `@duya/capabilities` (`fs/write`).
  * Pass-through.
  */
 

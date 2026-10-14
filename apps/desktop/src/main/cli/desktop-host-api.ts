@@ -31,7 +31,6 @@ import type {
   HostProjectApiV1,
   HostRunApiV1,
   HostWorkspaceRegistrationApiV1,
-  HostLocalAttachmentApiV1,
   HostLocalSettingsApiV1,
   HostLocalTerminalHistoryApiV1,
   HostLocalGatewayUserMapApiV1,
@@ -56,6 +55,7 @@ import type {
   HostHealthApiV1,
   HostLocalProviderModelCapabilityApiV1,
 } from '@duya/agent-protocol';
+import type { HostLocalAttachmentApiV1 } from '@duya/agent-protocol/session-api';
 import { HostSessionHttpClient } from '@duya/host/http-client';
 import { HostSessionHttpServer } from '@duya/host/http-server';
 import { createHostLocalSessionApi } from '@duya/host/local-session-api';
@@ -197,6 +197,10 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     workspaceDatabase: stores.coreDb.db,
     workspaces: workspaceAccess,
   });
+  const localAttachmentApi = createHostLocalAttachmentApi({
+    stores,
+    legacyAttachments: new MainAttachmentStore(mainDatabase),
+  });
   const server = new HostSessionHttpServer({
     api,
     localSessionApi: createHostLocalSessionApi({
@@ -222,10 +226,7 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
       },
     }),
     localRolloutApi: createHostLocalRolloutApi({ stores, sessions: api, rolloutRoot: resolveRolloutRoot() }),
-    localAttachmentApi: createHostLocalAttachmentApi({
-      stores,
-      legacyAttachments: new MainAttachmentStore(mainDatabase),
-    }),
+    localAttachmentApi,
     localSettingsApi: createHostLocalSettingsApi(settings),
     localTerminalHistoryApi: createHostLocalTerminalHistoryApi(new TerminalHistoryStore(mainDatabase)),
     localGatewayUserMapApi: createHostLocalGatewayUserMapApi(new GatewayUserMapStore(mainDatabase)),

@@ -1,0 +1,356 @@
+/**
+ * HbsPromptSystem — Plan 550 / 551.
+ *
+ * Owns the Handlebars renderer (and its compile cache) for the prompt
+ * asset tree plus the standard context mapper. Plan 551: `renderModule`
+ * is the single correct entry for authored content modules — it resolves
+ * the asset path through the module registry and applies the module's
+ * `slots` mapper and the caller's `params`.
+ *
+ * Behaviour contract:
+ *
+ *   - The renderer is bound to `<packages/agent/src/prompts/assets>` so
+ *     templates can be referenced by short relative paths (e.g.
+ *     `modules/identity.hbs`).
+ *   - Assembly of the static half (profile gating, prompt-cache keying,
+ *     empty-collapse) lives in `PromptSystem.getAllSections`.
+ *
+ * @see docs/exec-plans/active/551-prompt-module-flatten.md
+ */
+
+import { existsSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import type { PromptContext } from '../types.js';
+import { CYBER_RISK_INSTRUCTION, TOOL_NAMES } from '../types.js';
+import { getPlatformHint } from '../platformHints.js';
+import { buildEnvironmentItems } from '../dynamic/environment.js';
+
+import { getSkillRegistry } from '../../skills/registry.js';
+import {
+  buildCatalogSkillEntry,
+  buildLoadDiagnosticsLine,
+  DEFAULT_BUDGET,
+  pickCatalogTier,
+  SKILLS_CATALOG_FIXED_OVERHEAD_CHARS,
+  type CatalogSkillEntry,
+} from '../dynamic/skillsMetadata.js';
+import { MODULES } from '../modules/registry.js';
+import type { ModuleName, PromptModuleDef } from '../modules/registry.js';
+import { HbsPromptRenderer } from './HandlebarsRenderer.js';
+
+/**
+ * Locate the prompt asset tree at runtime. Which candidate wins depends on
+ * how this module was loaded:
+ *   - `../assets` — tsc output (`dist/prompts/hbs/`) and src (vitest).
+ *   - `./assets` — the esbuild CJS bundle (`bundle/agent-process-entry.js`,
+ *     which is also what the packaged app ships as
+ *     `resources/agent-bundle/`); `scripts/build-agent-bundle.mjs` copies
+ *     the tree there.
+ */
+function resolveAssetsRoot(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates: [string, string] = [resolve(here, '../assets'), resolve(here, 'assets')];
+  for (const candidate of candidates) {
+    if (existsSync(join(candidate, 'dynamic', 'platform.hbs'))) return candidate;
+  }
+  // Keep the historical default when nothing matches; the renderer fails
+  // with the raw ENOENT on first render, which is easier to trace than a
+  // wrong-but-existing directory.
+  return candidates[0];
+}
+
+const ASSETS_ROOT = resolveAssetsRoot();
+
+/**
+ * Build the structured vars the `dynamic/skills-metadata.hbs` template
+ * iterates over. Plan 560: every prompt-text literal lives in the
+ * template; this helper is the data side of that contract.
+ *
+ * Returns an empty `skill_catalog_enabled` when the registry is empty
+ * (the .hbs `{{#if}}` collapses the body so the section is omitted,
+ * matching `renderSectionCompute`'s `out === '' ? null : out`).
+ */
+function buildSkillsCatalogContext(ctx: PromptContext): Record<string, unknown> {
+  // `ctx` reserved for future per-call overrides (parity with the previous
+  // `getSkillsMetadataSection(ctx, { skills: options.skills })` signature);
+  // currently the registry is global and `ctx` carries no extra signal.
+  void ctx
+  const skills = getSkillRegistry().listModelInvocable()
+  if (skills.length === 0) {
+    return { skill_catalog_enabled: false }
+  }
+  const sorted = [...skills].sort((left, right) => {
+    if (left.source === 'system' && right.source !== 'system') return -1
+    if (left.source !== 'system' && right.source === 'system') return 1
+    return left.name.localeCompare(right.name)
+  })
+  const tier = pickCatalogTier(sorted, DEFAULT_BUDGET, SKILLS_CATALOG_FIXED_OVERHEAD_CHARS)
+  const showDescription = tier === 'full' || tier === 'compact'
+  const showLocation = tier === 'full'
+  const systemSkills = sorted.filter(skill => skill.source === 'system')
+  const otherSkills = sorted.filter(skill => skill.source !== 'system')
+  const decorate = (skill: typeof sorted[number]): CatalogSkillEntry => ({
+    ...buildCatalogSkillEntry(skill),
+    show_description: showDescription,
+    show_location: showLocation,
+  })
+  const allEntries: CatalogSkillEntry[] = sorted.map(decorate)
+  return {
+    skill_catalog_enabled: true,
+    system_skills: systemSkills.map(decorate),
+    other_skills: otherSkills.map(decorate),
+    has_system_skills: systemSkills.length > 0,
+    has_other_skills: otherSkills.length > 0,
+    show_skill_roots: tier !== 'full',
+    skill_roots: allEntries.filter(entry => entry.location !== undefined),
+    load_diagnostics_line: buildLoadDiagnosticsLine(
+      getSkillRegistry().getLastLoadDiagnostics(),
+    ),
+  }
+}
+
+/**
+ * Map a `PromptContext` to the variables a `.hbs` template expects.
+ *
+ * The mapping is intentionally explicit (one entry per template variable)
+ * to make it easy to grep the contract between the TS world and the
+ * template world. Tests under `tests/unit/prompts/hbs/` pin the names.
+ */
+export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknown> {
+  const isWindows = ctx.platform === 'win32';
+  const hasTodoTool =
+    ctx.enabledTools.has(TOOL_NAMES.TODO) ||
+    ctx.enabledTools.has(TOOL_NAMES.TASK) ||
+    ctx.enabledTools.has(TOOL_NAMES.TODO_WRITE);
+  const hasEmbeddedSearchTools = ctx.hasEmbeddedSearchTools ?? false;
+  const isReplModeEnabled = ctx.isReplModeEnabled ?? false;
+  const hasPowerShellTool = ctx.enabledTools.has('powershell');
+  const hasDuyaCli = ctx.enabledTools.has('duya_cli');
+  // The desktop section is gated on `duya_cli` (the legacy duyaDesktopContext
+  // section uses the same heuristic — `duya_cli` is the proxy for
+  // "running inside the Duya desktop app" because the CLI control plane
+  // is desktop-only).
+  const isDesktopSurface = hasDuyaCli;
+  const shellToolsLabel = hasPowerShellTool
+    ? `${TOOL_NAMES.BASH} or ${TOOL_NAMES.POWERSHELL}`
+    : TOOL_NAMES.BASH;
+
+  const fileLinkExample = isWindows
+    ? '[app.py](C:/project/src/app.py:12). Write drive paths directly, exactly as they exist on disk — NEVER add an `/abs/` or `/abs/path` prefix to a Windows path'
+    : '[app.py](/abs/path/app.py:12)';
+  const spacedExample = isWindows
+    ? '[My Report.md](<C:/Users/me/My Project/My Report.md:3>)'
+    : '[My Report.md](</abs/path/My Project/My Report.md:3>)';
+  const imageRule = isWindows
+    ? '* **To embed a local image, use a markdown image with an absolute Windows drive path and forward slashes**: `![alt](C:/path/to/image.png)` (e.g. `![chart](C:/Users/me/plot.png)`). Use forward slashes, never backslashes — `E:\\4.png` is not rendered correctly. Never write an `/abs/` or `/abs/path` prefix in front of the drive letter.'
+    : '* **To embed a local image, use a markdown image with an absolute path and forward slashes**: `![alt](/abs/path/image.png)`. Verify the file exists at the path you cite.';
+
+  const providedToolSubitems = [
+    `To read files use ${TOOL_NAMES.READ}`,
+    `To edit files use ${TOOL_NAMES.EDIT}. Prefer ${TOOL_NAMES.EDIT} when you have a single file and an exact, unique old_string to replace. Use apply_patch for multi-file changes or when matching must tolerate context drift (the current file may differ from what you read earlier). Do not default to one over the other — pick the tool that fits the change.`,
+    `To create files use ${TOOL_NAMES.WRITE}`,
+    ...(hasEmbeddedSearchTools
+      ? []
+      : [
+          `To search for files use ${TOOL_NAMES.GLOB}`,
+          `To search content use ${TOOL_NAMES.GREP}`,
+        ]),
+    `Reserve using ${shellToolsLabel} for system commands that require shell execution. Use ${TOOL_NAMES.BASH} for Unix-style shell commands and ${TOOL_NAMES.POWERSHELL} for Windows-native PowerShell commands when available.`,
+  ];
+
+  // Dynamic-section inputs (Plan 550 1c). Each is the precomputed string
+  // the .hbs templates need; empty strings cause the `{{#if}}` blocks to
+  // skip their body, matching the legacy `return null` short-circuits.
+  const platformHint = getPlatformHint(ctx.communicationPlatform) ?? '';
+  const mcpInstructionBlocks =
+    ctx.mcpServers && ctx.mcpServers.length > 0
+      ? ctx.mcpServers
+          .filter(
+            (server): server is { name: string; instructions?: string } =>
+              'instructions' in server && server.instructions !== undefined,
+          )
+          .map(server => `## ${server.name}\n${server.instructions}`)
+          .join('\n\n')
+      : '';
+  const hasVisionTool = ctx.enabledTools.has(TOOL_NAMES.VISION);
+  // Plan 550 1d-rest — scratchpad_dir is the precomputed string the
+  // dynamic/scratchpad.hbs template needs; empty string causes the
+  // `{{#if}}` block to skip its body, matching the legacy
+  // `return null` short-circuit in getScratchpadSection.
+  const scratchpadDir = ctx.scratchpadDir ?? '';
+  // Plan 550 1d-rest — memory section fields are precomputed by
+  // createMemoryPreBuildHook (sections/dynamic/memoryPreBuildHook.ts)
+  // and surfaced here as the seven `memory_*` slots. The hook reads
+  // summary.md synchronously once per buildSystemPrompt call so the
+  // .hbs template can render the layout paths + inline summary body
+  // without touching fs.
+  const memorySummaryBody = ctx.memorySummaryBody ?? '';
+  // Plan 550 1d-rest — session-guidance precomputed booleans / strings.
+  // Each conditional paragraph in getSessionGuidanceSection becomes a
+  // `{{#if}}` block in the .hbs; the boolean fields gate visibility and
+  // the string fields carry the tool-name / search-tools label so a tool
+  // rename propagates via TOOL_NAMES.
+  const hasAskUserQuestion = ctx.enabledTools.has(TOOL_NAMES.ASK_USER_QUESTION);
+  const hasAgentTool = ctx.enabledTools.has(TOOL_NAMES.SUBAGENT);
+  const hasSkills = ctx.enabledTools.has(TOOL_NAMES.SKILL);
+  const isNonInteractiveSession = ctx.isNonInteractiveSession ?? false;
+  const isForkSubagentEnabled = ctx.isForkSubagentEnabled ?? false;
+  const searchTools = hasEmbeddedSearchTools
+    ? `\`find\` or \`grep\` via the ${TOOL_NAMES.BASH} tool`
+    : `the ${TOOL_NAMES.GLOB} or ${TOOL_NAMES.GREP}`;
+  const isSkillSearchEnabled = ctx.isSkillSearchEnabled ?? false;
+  const hasDiscoverSkillsTool = ctx.enabledTools.has(TOOL_NAMES.DISCOVER_SKILLS);
+  const showDiscoverSkillsGuidance = isSkillSearchEnabled && hasDiscoverSkillsTool;
+  const isVerificationAgentEnabled = ctx.isVerificationAgentEnabled ?? false;
+  const showVerificationAgentSection = isVerificationAgentEnabled && hasAgentTool;
+
+  return {
+    ctx,
+    cyber_risk_instruction: CYBER_RISK_INSTRUCTION,
+    isWindows,
+    platform: ctx.platform,
+    shell: ctx.shell,
+    hasTodoTool,
+    todo_tool_name: TOOL_NAMES.TODO,
+    hasEmbeddedSearchTools,
+    isReplModeEnabled,
+    hasPowerShellTool,
+    hasDuyaCli,
+    isDesktopSurface,
+    shellToolsLabel,
+    providedToolSubitems,
+    ask_user_question_tool: TOOL_NAMES.ASK_USER_QUESTION,
+    fileLinkExample,
+    spacedExample,
+    imageRule,
+    platform_hint: platformHint,
+    mcp_instruction_blocks: mcpInstructionBlocks,
+    has_vision_tool: hasVisionTool,
+    vision_tool_name: TOOL_NAMES.VISION,
+    scratchpad_dir: scratchpadDir,
+    // environment section (Plan 550 1d-rest) — mapper builds the
+    // `env_items` string[] via the same helper the legacy TS path uses,
+    // so the .hbs body's `{{#each env_items}}` produces a byte-identical
+    // render to `getEnvironmentSection`. The preBuildHook populates
+    // ctx.isGitRepo / ctx.unameSr / ctx.marketingName /
+    // ctx.knowledgeCutoff; mapper always runs after preBuildHook so
+    // those overrides are present in production. Tests inject them
+    // directly when calling `renderStaticTemplate` for parity checks.
+    env_items: buildEnvironmentItems(ctx),
+    // skills-metadata section (Plan 550 1d-rest → Plan 560 native .hbs).
+    // The mapper precomputes the per-skill `CatalogSkillEntry` records
+    // (clamped description, absolute SKILL.md path, XML-safe escapes),
+    // the tier chosen by `pickCatalogTier` against the budget, and the
+    // diagnostic + skill-roots sidebar that survive the catalog body. The
+    // .hbs is plain markup — it iterates `system_skills` / `other_skills`
+    // and gates each field on the mapper-computed `show_description` /
+    // `show_location` booleans (decorated onto every entry because
+    // `{{#each}}` creates a new context that can't see the outer var).
+    // `skill_catalog_enabled` collapses to `''` when the registry is empty
+    // so `renderSectionCompute` returns `null`.
+    ...buildSkillsCatalogContext(ctx),
+    // session-guidance
+    has_ask_user_question: hasAskUserQuestion,
+    has_agent_tool: hasAgentTool,
+    has_skills: hasSkills,
+    is_non_interactive_session: isNonInteractiveSession,
+    has_embedded_search_tools: hasEmbeddedSearchTools,
+    is_fork_subagent_enabled: isForkSubagentEnabled,
+    search_tools: searchTools,
+    show_discover_skills_guidance: showDiscoverSkillsGuidance,
+    show_verification_agent_section: showVerificationAgentSection,
+    // memory section (preBuildHook populates these)
+    memory_root_path: ctx.memoryRootPath ?? '',
+    memory_summary_path: ctx.memorySummaryPath ?? '',
+    memory_path: ctx.memoryPath ?? '',
+    memory_rollout_summaries_dir: ctx.memoryRolloutSummariesDir ?? '',
+    memory_ad_hoc_dir: ctx.memoryAdHocDir ?? '',
+    memory_summary_body: memorySummaryBody,
+    TOOL_NAMES,
+  };
+}
+
+export interface HbsPromptSystemOptions {
+  /** Override the assets root. Default: `<packages/agent/src/prompts/assets>`. */
+  assetsRoot?: string;
+}
+
+/**
+ * Render a `.hbs` template using the standard section context mapper.
+ *
+ * The class is intentionally small: it owns the renderer (and therefore
+ * its compile cache), and exposes `renderStaticTemplate` so a `PromptSystem`
+ * can hand it one of the existing static-section names. The caller is
+ * still responsible for assembling dynamic sections.
+ */
+export class HbsPromptSystem {
+  private readonly renderer: HbsPromptRenderer;
+  private readonly assetsRoot: string;
+
+  constructor(options: HbsPromptSystemOptions = {}) {
+    this.assetsRoot = options.assetsRoot ?? ASSETS_ROOT;
+    this.renderer = new HbsPromptRenderer({ assetsRoot: this.assetsRoot });
+  }
+
+  /**
+   * Render a static template by relative path (e.g. `general/system-prompt.md.hbs`).
+   *
+   * `params` are extra template variables merged over the base mapper
+   * output (Plan 551): assembly-time variant flags a config passes per
+   * module reference, e.g. `{ variant: 'compact' }`.
+   */
+  renderStaticTemplate(
+    relativePath: string,
+    context: PromptContext,
+    params?: Record<string, unknown>,
+  ): string {
+    const vars = params
+      ? { ...mapPromptContextToHbs(context), ...params }
+      : mapPromptContextToHbs(context);
+    return this.renderer.render(relativePath, vars);
+  }
+
+  /**
+   * Render an authored content module by registry key (Plan 551).
+   *
+   * This is the single correct render entry for a module: it resolves the
+   * asset path through the registry (so a rename is a compile error) and
+   * applies the module's own `slots` mapper before the caller-supplied
+   * `params`, which win on collision.
+   */
+  renderModule(
+    module: ModuleName,
+    context: PromptContext,
+    params?: Record<string, unknown>,
+  ): string {
+    const def: PromptModuleDef = MODULES[module];
+    const slots = def.slots?.(context);
+    const extra = { ...slots, ...params };
+    return this.renderStaticTemplate(
+      def.path,
+      context,
+      Object.keys(extra).length > 0 ? extra : undefined,
+    );
+  }
+
+  /** Invalidate the renderer's compile cache (e.g. after a template hot-reload). */
+  invalidate(): void {
+    this.renderer.invalidate();
+  }
+
+  /** Diagnostics. */
+  cacheHits(): number {
+    return this.renderer.cacheHits();
+  }
+
+  cacheMisses(): number {
+    return this.renderer.cacheMisses();
+  }
+
+  /** Resolve the bound assets root. */
+  getAssetsRoot(): string {
+    return this.assetsRoot;
+  }
+}

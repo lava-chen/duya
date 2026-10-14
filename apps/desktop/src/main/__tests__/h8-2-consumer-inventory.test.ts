@@ -687,8 +687,10 @@ describe('H8.2 — per-consumer verdicts', () => {
     // Plan 560's Go/No-Go went Go (option A): `wf.agent` is bound to the
     // SubagentTool executor. One path, not two — which is the outcome H8.2
     // wants, and is asserted so a future second loop fails here.
-    const workflowRunner = readRepoFile('packages/agent/src/process/workflow-runner.ts');
-    expect(workflowRunner).toContain('SUBAGENT_TOOL_NAME');
+    const workflowRunner = readRepoFile('packages/host/src/worker-workflows/runner.ts');
+    expect(workflowRunner).toContain('execution.createPorts');
+    expect(workflowRunner).toContain('runAgent');
+    expect(workflowRunner).not.toContain('@duya/agent');
     expect(workflowRunner).not.toContain('new DuyaAgent');
 
     // The sub-agent entry itself is the single nested turn.

@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { AgentMessage } from '@duya/agent/message';
+import type { AgentMessage } from '@duya/agent-core/message';
 import { CoreDatabase, type SqliteDatabase, type SqliteCtor } from '../database';
 import { MessageLog } from '../message-log';
 import { SessionStore } from '../session-store';

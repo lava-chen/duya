@@ -662,9 +662,9 @@ class WakeServiceImpl implements WakeService {
  */
 export function armOSContextBridge(): void {
   try {
-    void import('../../../../../packages/agent/dist/context/os-context/index.js')
+    void import('@duya/host/worker-os-context')
       .then(({ getOSContextBridge }) => {
-        const bridge = getOSContextBridge();
+        const bridge = getOSContextBridge(logger);
         void bridge.start().catch(() => {});
         bridge.enable();
       })

@@ -19,7 +19,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { emitRebaseNewMessages, type TimelineEntryRow } from '../message-log';
-import type { MessageEntry, CompactionEntry } from '@duya/agent/message';
+import type { MessageEntry, CompactionEntry } from '@duya/agent-core/message';
 import type { RebaseEvent, ReasoningEvent } from '../rollout-events';
 
 // ─── Builders (mirrored from apply-rebases.test.ts) ─────────────────────

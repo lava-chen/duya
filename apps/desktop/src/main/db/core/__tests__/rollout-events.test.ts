@@ -22,7 +22,7 @@ import {
   type ToolCallEvent,
   type TurnStartedEvent,
 } from '../rollout-events';
-import type { MessageEntry } from '@duya/agent/message';
+import type { MessageEntry } from '@duya/agent-core/message';
 
 describe('rollout events', () => {
   it('exports every event type from plan 333 + rebase from plan 441', () => {

@@ -56,9 +56,9 @@ extraResources:
       - "!test/**"
       - "!benchmark/**"
       - "!docs/**"
-  - from: packages/agent/bundle/
-    to: agent-bundle/
-    filter: ["**/*"]
+  - from: packages/host/bundle/
+    to: harness-bundle/
+    filter: ["**/*", "!worker-metafile.json"]
   # Plan 453 Task F: Wake Agent orb renderer. Vite emits at
   # `dist/apps/desktop/src/renderer/orb/index.html` (the source path is
   # preserved verbatim under dist/).
@@ -102,7 +102,7 @@ extraResources:
   - from: resources/recorder/
     to: recorder/
     filter: ["**/*"]
-  - from: packages/agent/skills/
+  - from: packages/host/skills/
     to: agent/skills/
     filter: ["**/*"]
   # Plan 455 follow-up: builtin plugins (github / notion / zotero / ...)

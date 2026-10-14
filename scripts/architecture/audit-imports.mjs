@@ -21,6 +21,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripComments } from "./strip-comments.mjs";
+import { workspaceExportTargets } from "./workspace-exports.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const ROOTS = ["apps", "packages", "tests", "e2e"];
@@ -164,6 +165,14 @@ function resolveFile(base) {
 /** Resolve a workspace package specifier, honouring the `exports` map. */
 function resolveWorkspace(spec, pkgInfo) {
   const sub = spec.slice(pkgInfo.manifest.name.length); // "" or "/message"
+  const exportKey = sub === "" || sub === "/" ? "." : `.${sub}`;
+  const targets = workspaceExportTargets(pkgInfo.manifest, exportKey);
+  for (const target of targets) {
+    if (!target.startsWith("./")) continue;
+    const sourceTarget = target.replace(/^\.\/dist\//, "./src/").replace(/\.d\.ts$/, ".ts");
+    const file = resolveFile(path.resolve(ROOT, pkgInfo.dir, sourceTarget));
+    if (file) return { file, sub, isPublic: true };
+  }
   // Try the package root and its src/ dir: the repo consumes both forms
   // (bare `@duya/x` resolves to packages/x/src/index.ts at build time, while
   // `@duya/x/message` maps through `exports` to the built output).
@@ -224,18 +233,7 @@ for (const file of files) {
       const r = resolveWorkspace(spec, workspacePkgs.get(pkgName));
       toFile = r.file;
       sub = r.sub;
-      const exportsMap = workspacePkgs.get(pkgName).exports;
-      // `resolveWorkspace` returns `sub` as the raw remainder of the specifier
-      // — "" or "/testing" — but an `exports` map keys subpaths as "./testing".
-      // Comparing the two without the dot marked every subpath export in the
-      // repo as a deep import: `@duya/agent/message` and
-      // `@duya/agent-protocol/testing` are both declared in their package's
-      // `exports`, and both were being reported as reaching past the public
-      // entrypoints. Only the bare root was ever checked correctly, because
-      // that is the one case where the literal "." happens to line up.
-      const isPublic = exportsMap
-        ? exportsMap.has(sub === "" || sub === "/" ? "." : `.${sub}`)
-        : false;
+      const isPublic = r.isPublic;
       kind = toFile ? (isPublic ? "public" : "deep") : "unresolved";
       toOwner = toFile ? ownerOf(rel(toFile)) : `UNRESOLVED:${spec}`;
     } else if (spec.startsWith(".")) {

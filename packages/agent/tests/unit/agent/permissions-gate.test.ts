@@ -136,7 +136,7 @@ describe('buildPermissions — canUseTool precedence', () => {
 
     const { canUseTool } = buildPermissions(deps, turn, undefined);
     const decision = await canUseTool('Write', { path: 'foo.txt' });
-    expect(decision).toEqual({ allowed: true, behavior: 'allow' });
+    expect(decision).toEqual({ allowed: true, behavior: 'allow', userApproved: true });
     expect(consumeApprovedEffect).toHaveBeenCalledWith('Write', { path: 'foo.txt' });
   });
 
@@ -151,7 +151,7 @@ describe('buildPermissions — canUseTool precedence', () => {
 
     const { canUseTool } = buildPermissions(deps, turn, undefined);
     const decision = await canUseTool('Bash', { command: 'ls' });
-    expect(decision).toEqual({ allowed: true, behavior: 'allow' });
+    expect(decision).toEqual({ allowed: true, behavior: 'allow', userApproved: true });
   });
 
   it('honours plan-mode exact-path deny', async () => {

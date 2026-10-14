@@ -1,1 +1,1 @@
-export const SESSION_SEARCH_TOOL_NAME = 'SessionSearch';
+export { SESSION_SEARCH_TOOL_NAME } from '@duya/capabilities/session-search-tool';

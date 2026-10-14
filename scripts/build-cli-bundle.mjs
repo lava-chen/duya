@@ -17,6 +17,7 @@
 import { build } from 'esbuild';
 import fs from 'node:fs';
 import path from 'node:path';
+import { workspacePublicSources } from './workspace-public-sources.mjs';
 
 const outdir = path.join('packages', 'cli', 'bundle');
 const outfile = path.join(outdir, 'cli.cjs');
@@ -38,10 +39,7 @@ var import_meta = { url: import_meta_url };
 await build({
   entryPoints: ['packages/cli/src/index.ts'],
   outfile,
-  alias: {
-    '@duya/host/local-host': path.resolve('packages/host/dist/local-host.js'),
-    '@duya/host/http-client': path.resolve('packages/host/dist/http-client.js'),
-  },
+  plugins: [workspacePublicSources()],
   bundle: true,
   platform: 'node',
   target: 'node18',

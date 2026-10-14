@@ -1,5 +1,5 @@
 /**
- * Plan 610 A8 shim â€?BaseTool moved to `@duya/capabilities/BaseTool`. Re-export
+ * Plan 610 A8 shim   ?BaseTool moved to `@duya/capabilities/BaseTool`. Re-export
  * pass-through so every existing `../BaseTool.js` import inside the agent
  * keeps resolving to the same classes.
  */

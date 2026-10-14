@@ -1,1 +1,1 @@
-export const SKILL_TOOL_NAME = 'Skill';
+export { SKILL_TOOL_NAME } from '@duya/capabilities/skill-tool';

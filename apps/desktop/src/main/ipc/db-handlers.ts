@@ -136,7 +136,7 @@ import {
   type ToolApprovalDecisionInput,
 } from '../db/tool-approval-resolver';
 import { enqueueWakeItemForSession } from '../wake/wake-dispatcher';
-import type { WakeItem } from '../../../../../packages/agent/src/wake/types';
+import type { WakeItem } from '@duya/agent-protocol';
 import {
   aggregateUsageFromFacts,
   extractSessionFacts,

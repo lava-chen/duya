@@ -42,7 +42,7 @@ vi.mock('../connector-service', () => ({
   disconnectMcpSession: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { riskTierToBehavior, normalizeRiskTier, DEFAULT_MISSING_TIER } from '../../../../../../../packages/agent/src/permissions/policy.js';
+import { riskTierToBehavior, normalizeRiskTier, DEFAULT_MISSING_TIER } from '@duya/capabilities/permissions';
 import { redactSecrets } from '../../../../renderer/lib/errors/extractErrorMessage.js';
 import { PolicyEngine, DEFAULT_POLICY } from '@duya/plugin-core/security/policy-engine';
 import { toStatusDTO } from '../types';

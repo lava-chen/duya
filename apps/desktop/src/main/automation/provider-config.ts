@@ -11,7 +11,7 @@
 
 import { toLLMProvider } from '../config/provider-types';
 import type { ApiProvider } from '../../renderer/lib/providers/types';
-import type { CompactModelConfig } from '../../../../../packages/agent/src/types';
+import type { CompactModelConfig } from '@duya/host/worker-config/model-config';
 import type { ResolvedCronProvider } from './provider';
 
 export interface CronProviderConfig {

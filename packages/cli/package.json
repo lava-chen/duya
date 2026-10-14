@@ -38,6 +38,10 @@
     "./transcript-persistence": {
       "types": "./dist/transcript-persistence.d.ts",
       "default": "./dist/transcript-persistence.js"
+    },
+    "./worker-services": {
+      "types": "./dist/worker-services.d.ts",
+      "import": "./dist/worker-services.js"
     }
   },
   "scripts": {

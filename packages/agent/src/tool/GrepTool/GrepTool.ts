@@ -1,5 +1,5 @@
 /**
- * Plan 610 A8 shim â€?GrepTool moved to `@duya/capabilities` (`fs/grep`).
+ * Plan 610 A8 shim   ?GrepTool moved to `@duya/capabilities` (`fs/grep`).
  * Pass-through (`GrepTool`, `parseRipgrepLine`, `isSensitiveFilename`, ...).
  */
 

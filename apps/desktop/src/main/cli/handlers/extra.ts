@@ -24,7 +24,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { ipcMessageToNewEvent } from '../../ipc/core-db-adapters';
 import { getDesktopHostSessionApi } from '../desktop-host-api';
-import { syncBundledSkills } from '../../../../../../packages/agent/src/skills/skillsSync';
+import { syncBundledSkills } from '@duya/host/skills/skillsSync';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
 import { requestChannelSend } from '../../gateway/message-bus';
 import { disconnectChannel } from '../../channels/agent-session-channels';

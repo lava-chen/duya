@@ -17,6 +17,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   loadSystemSkills,
   getSystemSkillsDir,
@@ -28,6 +29,7 @@ import {
 import { scanSkillFile } from '../../src/security/skillScanner.js';
 
 const SYSTEM_SKILL_NAMES = ['self-config', 'self-knowledge', 'plugin-mcp-builder'];
+const BUNDLED_SKILLS_ROOT = fileURLToPath(new URL('../../skills', import.meta.url));
 
 describe('System-level skills (.system)', () => {
   beforeEach(() => {
@@ -35,12 +37,12 @@ describe('System-level skills (.system)', () => {
   });
 
   it('getSystemSkillsDir points at <bundledSkillsDir>/.system', () => {
-    const dir = getSystemSkillsDir();
+    const dir = getSystemSkillsDir(BUNDLED_SKILLS_ROOT);
     expect(dir.endsWith(join('skills', '.system'))).toBe(true);
   });
 
   it('loadSystemSkills loads every system skill with source=system and registers them', async () => {
-    const skills = await loadSystemSkills();
+    const skills = await loadSystemSkills(undefined, undefined, BUNDLED_SKILLS_ROOT);
     expect(skills.length).toBeGreaterThanOrEqual(SYSTEM_SKILL_NAMES.length);
 
     const names = skills.map((s) => s.name);
@@ -59,18 +61,18 @@ describe('System-level skills (.system)', () => {
     // critical `agent_config_mod` scanner pattern. Because system skills
     // are trusted and skip scanning, the skill must still load.
     const md = await readFile(
-      join(getSystemSkillsDir(), 'self-knowledge', 'SKILL.md'),
+      join(getSystemSkillsDir(BUNDLED_SKILLS_ROOT), 'self-knowledge', 'SKILL.md'),
       'utf-8',
     );
     const findings = scanSkillFile(md, 'SKILL.md');
     expect(findings.some((f) => f.severity === 'critical' && f.patternId === 'agent_config_mod')).toBe(true);
 
-    const skills = await loadSystemSkills();
+    const skills = await loadSystemSkills(undefined, undefined, BUNDLED_SKILLS_ROOT);
     expect(skills.some((s) => s.name === 'self-knowledge')).toBe(true);
   });
 
   it('system skills are model-invocable (visible in the agent skill catalog)', async () => {
-    await loadSystemSkills();
+    await loadSystemSkills(undefined, undefined, BUNDLED_SKILLS_ROOT);
     const names = getSkillRegistry().listModelInvocable().map((s) => s.name);
     for (const expected of SYSTEM_SKILL_NAMES) {
       expect(names).toContain(expected);

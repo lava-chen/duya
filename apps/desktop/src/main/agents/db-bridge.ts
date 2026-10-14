@@ -2053,6 +2053,11 @@ export async function dispatchDbAction(
       return getDesktopHostLocalAttachmentApi().getParsedDocumentsForSession(sessionId);
     }
 
+    case 'attachment:getImagesForSession': {
+      const sessionId = p.sessionId as string;
+      return getDesktopHostLocalAttachmentApi().getImageAttachmentsForSession(sessionId);
+    }
+
     case 'attachment:getForMessage': {
       const messageId = p.messageId as string;
       return getDesktopHostLocalAttachmentApi().getParsedDocumentsForMessage(messageId);
