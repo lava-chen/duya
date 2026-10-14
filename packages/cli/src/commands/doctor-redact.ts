@@ -34,17 +34,22 @@
  * corrupt them; the rules above are anchored on a user-home prefix precisely so
  * that only the part that identifies a person is removed.
  *
- * ## Why it recurses into `details`
+ * ## Why it recurses into `details` and `issues`
  *
- * `details` is a caller-supplied `Record<string, unknown>`. If redaction only
- * walked `message` and `hint`, the module header's promise that the report
- * carries no absolute paths would hold only until the first check author put a
- * path in a detail. Recursing makes the invariant enforced by the type of the
- * field rather than by the discipline of whoever fills it.
+ * `details` is a caller-supplied `Record<string, unknown>`, and every string in
+ * `issues` is caller-authored free text. If redaction only walked `message` and
+ * `hint`, the module header's promise that the report carries no absolute paths
+ * would hold only until the first check author put a path in a detail or an
+ * issue. Recursing makes the invariant enforced by the type of the field rather
+ * than by the discipline of whoever fills it.
+ *
+ * `durationMs` is a number and is passed through as-is: running a measurement
+ * through string redaction would be meaningless, and `redactValue` leaves
+ * non-strings alone.
  */
 
 import * as os from 'node:os';
-import type { DoctorResult } from './doctor.js';
+import type { DoctorIssue, DoctorResult } from './doctor.js';
 
 export interface RedactionOptions {
   /**
@@ -113,6 +118,23 @@ function redactValue(value: unknown, home: string): unknown {
 }
 
 /**
+ * Redact one issue.
+ *
+ * `cause`, `measured`, `expected` and `remedy` are all caller-authored free
+ * text, and they are the likeliest place for a path to reappear: the permission
+ * check phrases its remedy as `Run: chmod 600 "<path>"` and an issue's
+ * `measured` routinely quotes the file it stat'ed. Walking the array generically
+ * rather than naming each field means the next field someone adds to
+ * `DoctorIssue` is covered by the type, not by remembering this list.
+ *
+ * `redactValue` returns non-strings untouched, so a number that ever appears in
+ * an issue would survive as a number rather than becoming a mangled string.
+ */
+function redactIssue(issue: DoctorIssue, home: string): unknown {
+  return redactValue(issue, home);
+}
+
+/**
  * The JSON view of a doctor report, with home directories collapsed.
  *
  * The shape mirrors `DoctorResult` field for field. It is NOT indexed by check
@@ -138,6 +160,10 @@ export function redactDoctorJson(result: DoctorResult, options: RedactionOptions
       ...(check.details === undefined
         ? {}
         : { details: redactValue(check.details, home) }),
+      ...(check.issues === undefined
+        ? {}
+        : { issues: check.issues.map((issue) => redactIssue(issue, home)) }),
+      ...(check.durationMs === undefined ? {} : { durationMs: check.durationMs }),
     })),
   };
 }

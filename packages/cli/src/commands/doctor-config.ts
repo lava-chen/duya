@@ -19,6 +19,7 @@ import os from 'os';
 import path from 'path';
 import { parse as parseToml } from '@iarna/toml';
 import type { CheckResult } from './doctor.js';
+import { pushCheck } from './doctor-timing.js';
 
 /** Config root: `~/.duya` (mirrors electron/config/compass.ts). */
 function resolveConfigRoot(): string {
@@ -96,7 +97,7 @@ function checkPermission(
   label: string,
 ): void {
   if (os.platform() === 'win32') {
-    checks.push({
+    pushCheck(checks, {
       id: `config_${idSuffix}_permissions`,
       category: 'config',
       status: 'skipped',
@@ -108,7 +109,7 @@ function checkPermission(
   try {
     mode = fs.statSync(filePath).mode & 0o777;
   } catch {
-    checks.push({
+    pushCheck(checks, {
       id: `config_${idSuffix}_permissions`,
       category: 'config',
       status: 'skipped',
@@ -117,15 +118,25 @@ function checkPermission(
     return;
   }
   if ((mode & 0o077) !== 0) {
-    checks.push({
+    const chmod = `Run: chmod 600 "${filePath}"`;
+    pushCheck(checks, {
       id: `config_${idSuffix}_permissions`,
       category: 'config',
       status: 'warning',
       message: `${label} permissions are ${mode.toString(8)} (expected 600)`,
-      hint: `Run: chmod 600 "${filePath}"`,
+      hint: chmod,
+      // The mode is the one place a doctor check has a genuinely measurable
+      // value, so it is worth stating as measured/expected rather than only in
+      // prose. The path lives in the remedy, which redaction collapses.
+      issues: [{
+        cause: `${label} is readable or writable by group/other`,
+        measured: `mode ${mode.toString(8).padStart(4, '0')} at ${filePath}`,
+        expected: 'mode 0600',
+        remedy: chmod,
+      }],
     });
   } else {
-    checks.push({
+    pushCheck(checks, {
       id: `config_${idSuffix}_permissions`,
       category: 'config',
       status: 'ok',
@@ -154,7 +165,7 @@ function checkSchema(checks: CheckResult[], ctx: LoadedConfig): void {
   for (const [key, kind] of REQUIRED_TOP) {
     const v = doc[key];
     if (v === undefined) {
-      checks.push({
+      pushCheck(checks, {
         id: 'config_schema_missing',
         category: 'config',
         status: 'warning',
@@ -164,7 +175,7 @@ function checkSchema(checks: CheckResult[], ctx: LoadedConfig): void {
     }
     const typeOk = kind === 'object' ? isPlainObject(v) : typeof v === kind;
     if (!typeOk) {
-      checks.push({
+      pushCheck(checks, {
         id: 'config_schema_type',
         category: 'config',
         status: 'error',
@@ -187,7 +198,7 @@ function checkModelProviderConsistency(checks: CheckResult[], ctx: LoadedConfig)
     const providerId = model.provider;
     if (typeof providerId === 'string' && providerId !== '') {
       if (!providerNames.has(providerId)) {
-        checks.push({
+        pushCheck(checks, {
           id: 'config_default_provider_defined',
           category: 'config',
           status: 'warning',
@@ -196,7 +207,7 @@ function checkModelProviderConsistency(checks: CheckResult[], ctx: LoadedConfig)
       }
       const def = model.default;
       if (typeof def !== 'string' || def === '') {
-        checks.push({
+        pushCheck(checks, {
           id: 'config_default_model_set',
           category: 'config',
           status: 'warning',
@@ -204,7 +215,7 @@ function checkModelProviderConsistency(checks: CheckResult[], ctx: LoadedConfig)
         });
       }
     } else {
-      checks.push({
+      pushCheck(checks, {
         id: 'config_default_provider_set',
         category: 'config',
         status: 'warning',
@@ -216,7 +227,7 @@ function checkModelProviderConsistency(checks: CheckResult[], ctx: LoadedConfig)
   for (const id of providerNames) {
     const entry = providerMap[id];
     if (!isPlainObject(entry)) {
-      checks.push({
+      pushCheck(checks, {
         id: 'config_provider_entry_shape',
         category: 'config',
         status: 'error',
@@ -226,7 +237,7 @@ function checkModelProviderConsistency(checks: CheckResult[], ctx: LoadedConfig)
     }
     const baseUrl = entry.baseUrl;
     if (typeof baseUrl !== 'string' || baseUrl === '') {
-      checks.push({
+      pushCheck(checks, {
         id: 'config_provider_base_url',
         category: 'config',
         status: 'warning',
@@ -235,11 +246,22 @@ function checkModelProviderConsistency(checks: CheckResult[], ctx: LoadedConfig)
     }
     const apiKey = getSecret(ctx.secretsDoc, `providers.${id}.apiKey`);
     if (typeof apiKey !== 'string' || apiKey === '') {
-      checks.push({
+      pushCheck(checks, {
         id: 'config_provider_api_key',
         category: 'config',
         status: 'warning',
         message: `Provider "${id}" has no apiKey in secrets.json`,
+        hint: `Set providers.${id}.apiKey in secrets.json, or run: duya provider set-key ${id}`,
+        // State whether the key is absent or present-but-empty: they look
+        // identical in `message` and have different fixes.
+        issues: [{
+          cause: `Provider "${id}" cannot authenticate without an API key`,
+          measured: ctx.secretsExists
+            ? `providers.${id}.apiKey is ${apiKey === '' ? 'present but empty' : 'missing'}`
+            : 'secrets.json is missing',
+          expected: `a non-empty providers.${id}.apiKey`,
+          remedy: `Save the key with: duya provider set-key ${id}`,
+        }],
       });
     }
   }
@@ -247,7 +269,7 @@ function checkModelProviderConsistency(checks: CheckResult[], ctx: LoadedConfig)
   if (isPlainObject(memory)) {
     const memProvider = memory.provider;
     if (typeof memProvider === 'string' && memProvider !== '' && !providerNames.has(memProvider)) {
-      checks.push({
+      pushCheck(checks, {
         id: 'config_memory_provider_defined',
         category: 'config',
         status: 'warning',
@@ -264,7 +286,7 @@ function checkMcpServers(checks: CheckResult[], ctx: LoadedConfig): void {
   if (!isPlainObject(servers)) return;
   for (const [id, entry] of Object.entries(servers)) {
     if (!isPlainObject(entry)) {
-      checks.push({
+      pushCheck(checks, {
         id: 'config_mcp_server_shape',
         category: 'config',
         status: 'error',
@@ -276,7 +298,7 @@ function checkMcpServers(checks: CheckResult[], ctx: LoadedConfig): void {
     const transport = entry.transport === 'streamable-http' ? 'streamable-http' : 'stdio';
     if (transport === 'stdio') {
       if (typeof entry.command !== 'string' || entry.command === '') {
-        checks.push({
+        pushCheck(checks, {
           id: 'config_mcp_command',
           category: 'config',
           status: 'warning',
@@ -285,7 +307,7 @@ function checkMcpServers(checks: CheckResult[], ctx: LoadedConfig): void {
       }
     } else {
       if (typeof entry.url !== 'string' || entry.url === '') {
-        checks.push({
+        pushCheck(checks, {
           id: 'config_mcp_url',
           category: 'config',
           status: 'warning',
@@ -305,7 +327,7 @@ function checkChannels(checks: CheckResult[], ctx: LoadedConfig): void {
   if (!isPlainObject(adapters)) return;
   for (const [id, entry] of Object.entries(adapters)) {
     if (!isPlainObject(entry)) {
-      checks.push({
+      pushCheck(checks, {
         id: 'config_channel_shape',
         category: 'config',
         status: 'error',
@@ -316,11 +338,18 @@ function checkChannels(checks: CheckResult[], ctx: LoadedConfig): void {
     if (entry.enabled !== true) continue;
     const token = getSecret(ctx.secretsDoc, `channels.adapters.${id}.credentials.token`);
     if (typeof token !== 'string' || token === '') {
-      checks.push({
+      pushCheck(checks, {
         id: 'config_channel_credential',
         category: 'config',
         status: 'warning',
         message: `Channel adapter "${id}" is enabled but has no token in secrets.json`,
+        hint: `Set channels.adapters.${id}.credentials.token in secrets.json, or disable the adapter.`,
+        issues: [{
+          cause: `Channel adapter "${id}" is enabled but unauthenticated, so messages to it will fail`,
+          measured: `channels.adapters.${id}.credentials.token is ${token === '' ? 'present but empty' : 'missing'}`,
+          expected: `a non-empty token for the enabled "${id}" adapter`,
+          remedy: `Save the token in secrets.json, or set enabled = false for "${id}"`,
+        }],
       });
     }
   }
@@ -335,7 +364,7 @@ export function runConfigChecks(checks: CheckResult[]): void {
 
   // config.toml presence + parse
   if (!ctx.configExists) {
-    checks.push({
+    pushCheck(checks, {
       id: 'config_file_exists',
       category: 'config',
       status: 'warning',
@@ -344,7 +373,7 @@ export function runConfigChecks(checks: CheckResult[]): void {
     });
     return;
   }
-  checks.push({
+  pushCheck(checks, {
     id: 'config_file_exists',
     category: 'config',
     status: 'ok',
@@ -352,7 +381,7 @@ export function runConfigChecks(checks: CheckResult[]): void {
   });
 
   if (ctx.configParseError) {
-    checks.push({
+    pushCheck(checks, {
       id: 'config_file_parses',
       category: 'config',
       status: 'error',
@@ -361,7 +390,7 @@ export function runConfigChecks(checks: CheckResult[]): void {
     });
     return;
   }
-  checks.push({
+  pushCheck(checks, {
     id: 'config_file_parses',
     category: 'config',
     status: 'ok',
@@ -372,7 +401,7 @@ export function runConfigChecks(checks: CheckResult[]): void {
 
   // secrets.json presence + parse
   if (!ctx.secretsExists) {
-    checks.push({
+    pushCheck(checks, {
       id: 'config_secrets_parses',
       category: 'config',
       status: 'warning',
@@ -380,7 +409,7 @@ export function runConfigChecks(checks: CheckResult[]): void {
       hint: 'Secrets are split from config.toml; create it by saving a provider API key.',
     });
   } else if (ctx.secretsParseError) {
-    checks.push({
+    pushCheck(checks, {
       id: 'config_secrets_parses',
       category: 'config',
       status: 'error',
@@ -388,7 +417,7 @@ export function runConfigChecks(checks: CheckResult[]): void {
       hint: ctx.secretsParseError,
     });
   } else {
-    checks.push({
+    pushCheck(checks, {
       id: 'config_secrets_parses',
       category: 'config',
       status: 'ok',
