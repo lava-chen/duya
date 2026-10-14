@@ -35,7 +35,7 @@ import type { HostRunApiV1 } from '@duya/agent-protocol';
 import type { CliHostSession } from '@duya/cli/host-session';
 import type { CliTranscriptPersistence } from '@duya/cli/transcript-persistence';
 import type { SessionLogger } from '../utils/sessionLogger.js';
-import { createHeadlessRunHost, type HeadlessRunHost } from '../process/headless-run-host.js';
+import type { HeadlessRunHost } from '../process/headless-run-host.js';
 import { getLogger } from '../utils/logger.js';
 import { TUIApp, isDestructiveRequest, runProviderLogin, type LegacyFrame } from '@duya/cli/tui';
 import type { PopoverItem } from '@duya/input-completion';
@@ -151,6 +151,30 @@ export interface TuiSessionDeps {
   readonly persistMessages: CliTranscriptPersistence;
   /** Tool count for the start-up line, matching the REPL banner. */
   readonly toolCount?: number;
+  /**
+   * Build the run host, closing over whatever the caller owns.
+   *
+   * ## Why this is injected rather than imported
+   *
+   * `createHeadlessRunHost` is 913 lines of agent run layer — `RunController`,
+   * `InProcessTransport`, the event store, the executor. The TUI needs exactly
+   * one method of it (`start`), so importing the factory made this file's
+   * runtime dependency set include the whole run layer.
+   *
+   * That blocks moving the TUI session into `@duya/cli`: the package would have
+   * to depend on `@duya/agent`, which is scheduled for deletion — a package
+   * that cannot be deleted because something else depends on it. Injecting the
+   * factory keeps the composition in `cli/index.ts`, where the other wiring
+   * already lives, and leaves the remaining dependency on the run layer as a
+   * type-only import.
+   *
+   * It is also the seam the steer queues have to sit on: a submission that must
+   * join a running turn has to be able to reach the host without this module
+   * owning it.
+   */
+  readonly createRunHost: (options: {
+    readonly requestPermission: ChatOptions['requestPermission'];
+  }) => HeadlessRunHost;
 }
 
 /**
@@ -188,12 +212,7 @@ export async function runTuiSession(deps: TuiSessionDeps): Promise<void> {
     });
     return mapPermissionDecision(decision);
   };
-  const host: HeadlessRunHost = createHeadlessRunHost({
-    agent,
-    toolRegistry: registry,
-    runApi: deps.runApi,
-    requestPermission,
-  });
+  const host: HeadlessRunHost = deps.createRunHost({ requestPermission });
   const configuredModels = (() => {
     const resolution = resolveProvider();
     return resolution.ok ? resolution.provider.models : [];

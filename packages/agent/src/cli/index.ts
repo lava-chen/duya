@@ -474,6 +474,15 @@ async function runInteractive(
         runApi: session.runApi,
         toolCount: registry.size,
         persistMessages,
+        // The run host is composed here rather than inside the TUI session: it
+        // is the agent's run layer, and the TUI is not allowed to reach it.
+        createRunHost: ({ requestPermission }) =>
+          createHeadlessRunHost({
+            agent,
+            toolRegistry: registry,
+            runApi: session.runApi,
+            requestPermission,
+          }),
       });
       await persistMessages(agent.getMessages());
       await updateSessionTitle();
