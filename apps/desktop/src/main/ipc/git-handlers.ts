@@ -52,12 +52,98 @@ function isGitRepoDir(cwd: string): boolean {
 }
 
 function runGit(cwd: string, args: string[], maxBuffer = MAX_DIFF_BYTES): SpawnSyncReturns<string> {
-  return spawnSync('git', args, {
+  return spawnSync('git', [...gitSafetyArgs(), ...args], {
     cwd,
     encoding: 'utf-8',
     timeout: GIT_TIMEOUT_MS,
     maxBuffer,
   });
+}
+
+// ── Executable-config hardening ──────────────────────────────────
+//
+// Everything below renders diffs of repositories the user may not control, so
+// the Git configuration that Git reads is itself untrusted input: a repo can
+// ship a `.gitattributes` naming a filter driver, and if that driver is defined
+// anywhere in the config chain, `git diff` runs it as a shell command. The same
+// is true of hooks. A read-only review panel has no reason to execute either.
+//
+// Three layers, matching what the reference implementation does:
+//
+//   1. `core.hooksPath` → the null device, so no hook is found to run. Applied
+//      on EVERY call, because there is no reason to scope it to diffs.
+//   2. Filter drivers are enumerated and neutralized per call (below).
+//   3. `--no-ext-diff --no-textconv`, injected centrally by `runGitDiff`
+//      rather than repeated in each argument list. Both disable a config-driven
+//      executable path; neither is valid on `git status`/`git log`, which is
+//      why they cannot simply live on `runGit`.
+
+/** The platform's null device, used to point hooks and diffs at "nothing". */
+const NULL_DEVICE = process.platform === 'win32' ? 'NUL' : '/dev/null';
+
+/** `-c` overrides applied to every Git invocation. */
+function gitSafetyArgs(): string[] {
+  return ['-c', `core.hooksPath=${NULL_DEVICE}`];
+}
+
+/** Keys that make a configured filter driver executable. */
+const EXECUTABLE_FILTER_PATTERN = '^filter\\..*\\.(clean|process)$';
+
+/**
+ * `-c` overrides that neutralize every configured filter driver.
+ *
+ * Git has no "disable all filters" switch, so the drivers are enumerated
+ * first and each one is then overridden. Empty `clean`/`process` means "no
+ * filter"; `required=false` keeps Git from failing when the (now absent)
+ * command is looked up. Enumerating rather than guessing names is what makes
+ * this complete — an attacker picks the driver name.
+ *
+ * Not cached: the enumeration is one extra short-lived process per diff call,
+ * and diffs are user-initiated rather than per-frame. A cache would make a
+ * newly added filter survive for the rest of the session, which is the one
+ * direction of staleness that matters.
+ */
+function filterNeutralizerArgs(cwd: string): string[] {
+  const result = spawnSync('git', [...gitSafetyArgs(), 'config', '--null', '--name-only', '--get-regexp', EXECUTABLE_FILTER_PATTERN], {
+    cwd,
+    encoding: 'utf-8',
+    timeout: GIT_TIMEOUT_MS,
+  });
+  // Exit 1 means "no matches", which is the common case — not a failure.
+  if (result.error || (result.status !== 0 && result.status !== 1) || typeof result.stdout !== 'string') {
+    return [];
+  }
+
+  const drivers = new Set<string>();
+  for (const key of result.stdout.split('\0')) {
+    const driver = key.endsWith('.clean')
+      ? key.slice(0, -'.clean'.length)
+      : key.endsWith('.process')
+        ? key.slice(0, -'.process'.length)
+        : null;
+    if (driver !== null && driver !== '') drivers.add(driver);
+  }
+
+  const args: string[] = [];
+  for (const driver of drivers) {
+    args.push('-c', `${driver}.clean=`, '-c', `${driver}.process=`, '-c', `${driver}.required=false`);
+  }
+  return args;
+}
+
+/**
+ * Run a Git command that produces a diff.
+ *
+ * The diff-suppressing flags are inserted immediately after the subcommand so
+ * a caller cannot forget them; every argument list in this file routes through
+ * here instead of repeating `--no-ext-diff` by hand, which is how the previous
+ * state of this file ended up with it on some paths and not others.
+ */
+function runGitDiff(cwd: string, args: string[], maxBuffer = MAX_DIFF_BYTES): SpawnSyncReturns<string> {
+  const [subcommand, ...rest] = args;
+  if (subcommand === undefined) return runGit(cwd, args, maxBuffer);
+  const hardened = [subcommand, '--no-ext-diff', '--no-textconv', ...rest];
+  return runGit(cwd, [...filterNeutralizerArgs(cwd), ...hardened], maxBuffer);
 }
 
 function stdoutOf(result: SpawnSyncReturns<string>): string | null {
@@ -181,7 +267,7 @@ function readReviewFiles(cwd: string): GitReviewFile[] | null {
   const statsByPath = new Map<string, GitStatusFileChange>();
 
   if (trackedPaths.length > 0) {
-    const numstat = stdoutOf(runGit(cwd, ['diff', '--numstat', '-M', '-C', 'HEAD', '--', ...trackedPaths]));
+    const numstat = stdoutOf(runGitDiff(cwd, ['diff', '--numstat', '-M', '-C', 'HEAD', '--', ...trackedPaths]));
     if (numstat !== null) {
       for (const change of parseNumstat(numstat)) {
         const renameMatch = change.path.match(/^(.+?)\s+->\s+(.+)$/);
@@ -266,7 +352,7 @@ function buildFullPatch(cwd: string, files: GitReviewFile[]): { patch: string; t
   let usedBytes = 0;
 
   if (tracked.length > 0) {
-    const result = runGit(cwd, ['diff', '--no-ext-diff', '--no-color', '--unified=20', 'HEAD', '--', ...tracked.map((file) => file.path)]);
+    const result = runGitDiff(cwd, ['diff', '--no-ext-diff', '--no-color', '--unified=20', 'HEAD', '--', ...tracked.map((file) => file.path)]);
     const patch = patchStdoutOf(result);
     if (patch !== null) {
       parts.push(patch);
@@ -279,7 +365,7 @@ function buildFullPatch(cwd: string, files: GitReviewFile[]): { patch: string; t
   for (const file of untracked) {
     const absolutePath = path.resolve(cwd, file.path);
     if (!resolvesInsideWorkspace(cwd, absolutePath)) continue;
-    const result = runGit(cwd, ['diff', '--no-index', '--no-color', '--unified=20', emptyFile, file.path]);
+    const result = runGitDiff(cwd, ['diff', '--no-index', '--no-color', '--unified=20', emptyFile, file.path]);
     const patch = patchStdoutOf(result);
     if (patch === null || patch === '') continue;
     const bounded = boundedPatchPart(patch, MAX_DIFF_BYTES - usedBytes);
@@ -454,7 +540,7 @@ function buildScopeNumstatArgs(scope: ReviewScopeParams): string[] {
 function readScopedReviewFiles(cwd: string, scope: ReviewScopeParams): GitReviewFile[] | null {
   const numstatArgs = buildScopeNumstatArgs(scope);
   if (numstatArgs.length === 0) return null;
-  const numstat = stdoutOf(runGit(cwd, numstatArgs));
+  const numstat = stdoutOf(runGitDiff(cwd, numstatArgs));
   if (numstat === null) return null;
   const changes = parseNumstat(numstat);
   if (changes.length === 0) return [];
@@ -467,7 +553,7 @@ function readScopedReviewFiles(cwd: string, scope: ReviewScopeParams): GitReview
 function buildScopedFullPatch(cwd: string, scope: ReviewScopeParams): { patch: string; truncated: boolean } | null {
   const diffArgs = buildScopeDiffArgs(scope);
   if (diffArgs.length === 0) return null;
-  const result = runGit(cwd, diffArgs);
+  const result = runGitDiff(cwd, diffArgs);
   const patch = patchStdoutOf(result);
   if (patch === null) return null;
   return {
@@ -483,7 +569,7 @@ function buildScopedSinglePatch(
 ): { patch: string; truncated: boolean } | null {
   const baseArgs = buildScopeDiffArgs(scope);
   if (baseArgs.length === 0) return null;
-  const result = runGit(cwd, [...baseArgs, '--', relativePath]);
+  const result = runGitDiff(cwd, [...baseArgs, '--', relativePath]);
   const patch = patchStdoutOf(result);
   if (patch === null) return null;
   return {
@@ -501,7 +587,7 @@ export function registerGitHandlers(): void {
     }
 
     try {
-      const stdout = stdoutOf(runGit(cwd, GIT_DIFF_ARGS));
+      const stdout = stdoutOf(runGitDiff(cwd, GIT_DIFF_ARGS));
       if (stdout === null) return { isGitRepo: false };
       const fileChanges = parseNumstat(stdout);
       // `git diff` misses untracked files; merge them in from porcelain so
@@ -652,7 +738,7 @@ export function registerGitHandlers(): void {
         return { isGitRepo: true, path: target.relativePath, error: 'File has no uncommitted changes.' };
       }
 
-      let result = runGit(cwd, [...GIT_PATCH_ARGS, target.relativePath]);
+      let result = runGitDiff(cwd, [...GIT_PATCH_ARGS, target.relativePath]);
       let patch = patchStdoutOf(result);
 
       if (patch === '' && file.status === 'untracked') {
@@ -664,7 +750,7 @@ export function registerGitHandlers(): void {
           };
         }
         const emptyFile = process.platform === 'win32' ? 'NUL' : '/dev/null';
-        result = runGit(cwd, [...GIT_UNTRACKED_PATCH_ARGS, emptyFile, target.absolutePath]);
+        result = runGitDiff(cwd, [...GIT_UNTRACKED_PATCH_ARGS, emptyFile, target.absolutePath]);
         patch = patchStdoutOf(result);
       }
 
@@ -851,7 +937,7 @@ export function registerGitHandlers(): void {
       const commit = commits[0];
 
       const numstat = stdoutOf(
-        runGit(cwd, ['show', '--numstat', '--format=', sha as string], MAX_DIFF_BYTES),
+        runGitDiff(cwd, ['show', '--numstat', '--format=', sha as string], MAX_DIFF_BYTES),
       );
       const files: GitReviewFile[] = [];
       if (numstat) {
@@ -860,7 +946,7 @@ export function registerGitHandlers(): void {
         }
       }
 
-      const patchResult = runGit(cwd, ['show', '--no-ext-diff', '--no-color', '--unified=20', sha as string], MAX_DIFF_BYTES);
+      const patchResult = runGitDiff(cwd, ['show', '--no-ext-diff', '--no-color', '--unified=20', sha as string], MAX_DIFF_BYTES);
       const patch = patchStdoutOf(patchResult) ?? '';
       const binary = patch.length > 0 ? isBinaryPatch(patch) : files.length === 0;
       const bounded = boundedPatchPart(patch, MAX_DIFF_BYTES);

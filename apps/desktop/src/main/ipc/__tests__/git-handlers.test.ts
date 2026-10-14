@@ -119,6 +119,36 @@ function spawnResult(stdout: string, status: number | null = 0): SpawnSyncReturn
   } as SpawnSyncReturns<string>;
 }
 
+/** Whether every token of `wanted` appears in `args`, in order. */
+function containsSequence(args: readonly string[], wanted: readonly string[]): boolean {
+  let index = 0;
+  for (const token of args) {
+    if (index < wanted.length && token === wanted[index]) index += 1;
+  }
+  return index === wanted.length;
+}
+
+/**
+ * Argument-aware git mock.
+ *
+ * The handlers enumerate configured filter drivers before every diff, so a
+ * blind `mockReturnValueOnce` sequence shifts by one call and the fixture meant
+ * for the diff lands on the enumeration. Routing by argv makes each fixture
+ * describe the command it answers, and an unmatched call — the enumeration, or
+ * anything a test did not anticipate — defaults to empty stdout instead of
+ * silently stealing a neighbouring fixture.
+ */
+function mockGit(
+  routes: ReadonlyArray<{ readonly args: readonly string[]; readonly result: SpawnSyncReturns<string> }>,
+): void {
+  mocks.spawn.spawnSync.mockImplementation(((command: string, args: readonly string[]) => {
+    for (const route of routes) {
+      if (containsSequence(args, route.args)) return route.result;
+    }
+    return spawnResult('');
+  }) as never);
+}
+
 describe('git:status', () => {
   beforeEach(() => {
     mocks.fs.existsSync.mockReset();
@@ -149,9 +179,10 @@ describe('git:status', () => {
   });
 
   it('returns parsed fileChanges + totals on happy path', async () => {
-    mocks.spawn.spawnSync
-      .mockReturnValueOnce(spawnResult(NUMSTAT_FIXTURE))
-      .mockReturnValueOnce(spawnResult(''));
+    mockGit([
+      { args: ['diff', '--numstat'], result: spawnResult(NUMSTAT_FIXTURE) },
+      { args: ['status'], result: spawnResult('') },
+    ]);
     const result = await invokeHandler('git:status', {}, '/tmp/repo') as {
       isGitRepo: boolean;
       fileChanges?: Array<{ path: string; additions: number; removals: number }>;
@@ -175,24 +206,25 @@ describe('git:status', () => {
   it('returns isGitRepo: false when git binary is missing (ENOENT)', async () => {
     const err = new Error('spawnSync ENOENT') as Error & { code: string };
     err.code = 'ENOENT';
-    mocks.spawn.spawnSync.mockReturnValueOnce({
-      pid: 0,
-      output: [],
-      stdout: '',
-      stderr: '',
-      status: null,
-      signal: null,
-      error: err,
-    } as unknown as SpawnSyncReturns<string>);
+    // Routed to the diff itself. With a blind sequence this fixture used to be
+    // consumed by the filter enumeration, and the test then passed for the
+    // wrong reason — the diff call fell through to an undefined mock result.
+    mockGit([
+      {
+        args: ['diff', '--numstat'],
+        result: { ...spawnResult(''), status: null, error: err } as unknown as SpawnSyncReturns<string>,
+      },
+    ]);
     const result = await invokeHandler('git:status', {}, '/tmp/repo');
     expect(result).toEqual({ isGitRepo: false });
   });
 
   it('merges untracked files from porcelain into the status result', async () => {
     mocks.fs.readFileSync.mockReturnValue('a\nb\nc');
-    mocks.spawn.spawnSync
-      .mockReturnValueOnce(spawnResult(NUMSTAT_FIXTURE))
-      .mockReturnValueOnce(spawnResult(STATUS_UNTRACKED_FIXTURE));
+    mockGit([
+      { args: ['diff', '--numstat'], result: spawnResult(NUMSTAT_FIXTURE) },
+      { args: ['status'], result: spawnResult(STATUS_UNTRACKED_FIXTURE) },
+    ]);
     const result = await invokeHandler('git:status', {}, '/tmp/repo') as {
       isGitRepo: boolean;
       fileChanges?: Array<{ path: string; additions: number; removals: number }>;
@@ -212,9 +244,7 @@ describe('git:status', () => {
   });
 
   it('returns empty changes when stdout is empty', async () => {
-    mocks.spawn.spawnSync
-      .mockReturnValueOnce(spawnResult(''))
-      .mockReturnValueOnce(spawnResult(''));
+    mockGit([{ args: ['diff', '--numstat'], result: spawnResult('') }]);
     const result = await invokeHandler('git:status', {}, '/tmp/repo') as {
       isGitRepo: boolean;
       fileChanges?: unknown[];
@@ -252,10 +282,11 @@ describe('git:review', () => {
   });
 
   it('returns working-tree file statuses, stats, and branch information', async () => {
-    mocks.spawn.spawnSync
-      .mockReturnValueOnce(spawnResult(REVIEW_STATUS_FIXTURE))
-      .mockReturnValueOnce(spawnResult(REVIEW_NUMSTAT_FIXTURE))
-      .mockReturnValueOnce(spawnResult('feature/review\n'));
+    mockGit([
+      { args: ['status'], result: spawnResult(REVIEW_STATUS_FIXTURE) },
+      { args: ['diff', '--numstat'], result: spawnResult(REVIEW_NUMSTAT_FIXTURE) },
+      { args: ['branch'], result: spawnResult('feature/review\n') },
+    ]);
 
     await expect(invokeHandler('git:review', {}, '/tmp/repo')).resolves.toEqual({
       isGitRepo: true,
@@ -298,10 +329,11 @@ describe('git:review', () => {
       '+new',
       '',
     ].join('\n');
-    mocks.spawn.spawnSync
-      .mockReturnValueOnce(spawnResult(REVIEW_STATUS_FIXTURE))
-      .mockReturnValueOnce(spawnResult(REVIEW_NUMSTAT_FIXTURE))
-      .mockReturnValueOnce(spawnResult(patch));
+    mockGit([
+      { args: ['status'], result: spawnResult(REVIEW_STATUS_FIXTURE) },
+      { args: ['diff', '--numstat'], result: spawnResult(REVIEW_NUMSTAT_FIXTURE) },
+      { args: ['diff', '--unified=20'], result: spawnResult(patch) },
+    ]);
 
     await expect(invokeHandler('git:review-diff', {}, '/tmp/repo', 'src/changed.ts')).resolves.toEqual({
       isGitRepo: true,
@@ -322,10 +354,14 @@ describe('git:review', () => {
       '',
     ].join('\n');
     const overflow = Object.assign(new Error('maxBuffer length exceeded'), { code: 'ENOBUFS' });
-    mocks.spawn.spawnSync
-      .mockReturnValueOnce(spawnResult(REVIEW_STATUS_FIXTURE))
-      .mockReturnValueOnce(spawnResult(REVIEW_NUMSTAT_FIXTURE))
-      .mockReturnValueOnce({ ...spawnResult(patch), error: overflow });
+    mockGit([
+      { args: ['status'], result: spawnResult(REVIEW_STATUS_FIXTURE) },
+      { args: ['diff', '--numstat'], result: spawnResult(REVIEW_NUMSTAT_FIXTURE) },
+      {
+        args: ['diff', '--unified=20'],
+        result: { ...spawnResult(patch), error: overflow } as unknown as SpawnSyncReturns<string>,
+      },
+    ]);
 
     await expect(invokeHandler('git:review-diff', {}, '/tmp/repo', 'src/changed.ts')).resolves.toEqual({
       isGitRepo: true,
@@ -340,10 +376,11 @@ describe('git:review', () => {
     mocks.fs.realpathSync.mockImplementation((value: string) =>
       value.endsWith('src\\new-file.ts') ? '/tmp/outside.ts' : value,
     );
-    mocks.spawn.spawnSync
-      .mockReturnValueOnce(spawnResult(REVIEW_STATUS_FIXTURE))
-      .mockReturnValueOnce(spawnResult(REVIEW_NUMSTAT_FIXTURE))
-      .mockReturnValueOnce(spawnResult(''));
+    mockGit([
+      { args: ['status'], result: spawnResult(REVIEW_STATUS_FIXTURE) },
+      { args: ['diff', '--numstat'], result: spawnResult(REVIEW_NUMSTAT_FIXTURE) },
+      { args: ['diff', '--unified=20'], result: spawnResult('') },
+    ]);
 
     await expect(invokeHandler('git:review-diff', {}, '/tmp/repo', 'src/new-file.ts')).resolves.toEqual({
       isGitRepo: true,
@@ -412,6 +449,108 @@ describe('git:review-latest-turn', () => {
         capturedAt: 100,
       },
     });
+  });
+});
+
+describe('executable-config hardening', () => {
+  beforeEach(() => {
+    mocks.fs.existsSync.mockReset();
+    mocks.fs.existsSync.mockReturnValue(true);
+    mocks.fs.readFileSync.mockReset();
+    mocks.fs.readFileSync.mockReturnValue('');
+    mocks.spawn.spawnSync.mockReset();
+    mocks.captured.handle.clear();
+    registerGitHandlers();
+  });
+
+  /** The argv of the first call whose subcommand is `wanted`. */
+  function argvFor(wanted: string): string[] {
+    for (const call of mocks.spawn.spawnSync.mock.calls) {
+      const args = (call[1] ?? []) as string[];
+      if (containsSequence(args, [wanted])) return args;
+    }
+    throw new Error(`no git ${wanted} call was made`);
+  }
+
+  const NULL_DEVICE = process.platform === 'win32' ? 'NUL' : '/dev/null';
+
+  it('points core.hooksPath at the null device on every git call', async () => {
+    mockGit([{ args: ['branch'], result: spawnResult('') }]);
+    await invokeHandler('git:repo-state', {}, '/tmp/repo');
+    expect(mocks.spawn.spawnSync).toHaveBeenCalled();
+    for (const call of mocks.spawn.spawnSync.mock.calls) {
+      const args = (call[1] ?? []) as string[];
+      expect(args).toContain(`core.hooksPath=${NULL_DEVICE}`);
+    }
+  });
+
+  it('adds --no-ext-diff and --no-textconv to diff calls', async () => {
+    mockGit([{ args: ['diff', '--numstat'], result: spawnResult(NUMSTAT_FIXTURE) }]);
+    await invokeHandler('git:status', {}, '/tmp/repo');
+    const argv = argvFor('diff');
+    expect(argv).toContain('--no-ext-diff');
+    expect(argv).toContain('--no-textconv');
+  });
+
+  it('omits the diff-only flags from commands that would reject them', async () => {
+    mockGit([{ args: ['branch'], result: spawnResult('') }]);
+    await invokeHandler('git:repo-state', {}, '/tmp/repo');
+    // `git status` / `git branch` / `git rev-parse` have no --no-textconv, so
+    // adding it there would turn every one of these into a hard error.
+    expect(argvFor('status')).not.toContain('--no-textconv');
+    expect(argvFor('branch')).not.toContain('--no-textconv');
+    expect(argvFor('rev-parse')).not.toContain('--no-textconv');
+  });
+
+  it('neutralizes every configured filter driver it discovers', async () => {
+    mockGit([
+      {
+        args: ['config', '--null'],
+        result: spawnResult('filter.lfs.clean\0filter.lfs.process\0filter.custom.process\0'),
+      },
+      { args: ['diff', '--numstat'], result: spawnResult(NUMSTAT_FIXTURE) },
+    ]);
+
+    await invokeHandler('git:status', {}, '/tmp/repo');
+
+    const argv = argvFor('diff');
+    for (const driver of ['filter.lfs', 'filter.custom']) {
+      expect(argv).toContain(`${driver}.clean=`);
+      expect(argv).toContain(`${driver}.process=`);
+      expect(argv).toContain(`${driver}.required=false`);
+    }
+  });
+
+  it('still produces the diff when the filter enumeration fails', async () => {
+    // `git config --get-regexp` exits 1 when nothing matches, which is the
+    // common case. A hard error there would make every diff unreadable.
+    mockGit([
+      { args: ['config', '--null'], result: spawnResult('', 1) },
+      { args: ['diff', '--numstat'], result: spawnResult(NUMSTAT_FIXTURE) },
+    ]);
+
+    const result = await invokeHandler('git:status', {}, '/tmp/repo') as {
+      isGitRepo: boolean;
+      fileChanges?: Array<{ path: string }>;
+    };
+    expect(result.isGitRepo).toBe(true);
+    expect(result.fileChanges?.[0]?.path).toBe('README.md');
+  });
+
+  it('does not let enumeration output be mistaken for a filter driver', async () => {
+    // Anything that is not `*.clean` / `*.process` must be ignored, or a
+    // malformed line could become a `-c` override naming an arbitrary key.
+    mockGit([
+      { args: ['config', '--null'], result: spawnResult('core.autocrlf\0filter.lfs.clean\0user.name\0') },
+      { args: ['diff', '--numstat'], result: spawnResult(NUMSTAT_FIXTURE) },
+    ]);
+
+    await invokeHandler('git:status', {}, '/tmp/repo');
+
+    const argv = argvFor('diff');
+    expect(argv).toContain('filter.lfs.clean=');
+    expect(argv.join(' ')).not.toContain('core.autocrlf=');
+    expect(argv.join(' ')).not.toContain('user.name=');
   });
 });
 
