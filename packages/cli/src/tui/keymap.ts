@@ -203,7 +203,15 @@ export function applyKeyOverrides(
  * prevent.
  */
 export interface KeymapIssue {
-  readonly severity: 'error' | 'warning';
+  /**
+   * Every issue is an error, and the field exists only so a consumer can route
+   * on it. It was briefly `'error' | 'warning'`, but nothing produced a
+   * warning: all five detections mean the user asked for a key and did not get
+   * it, which is the same failure. Widening the union without a producer would
+   * have invited handling logic for a branch that can never run, so this
+   * narrows to the single level that exists until a real warning arrives.
+   */
+  readonly severity: 'error';
   /** `reserved` | `duplicate` | `not-rebindable` | `unexpressible` | `unknown-action` */
   readonly code: string;
   /** The actions involved; a whole-table clash names both. */
