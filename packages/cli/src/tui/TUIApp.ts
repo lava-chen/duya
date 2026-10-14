@@ -47,7 +47,7 @@ import { wrapWithCursor, type WrappedText } from './width.js';
 import { CompletionController, type CompletionKey, type CompletionSources } from './completion.js';
 import { WindowManager } from './window.js';
 import { ACTION_DEFS, helpGroups, keysColumn, type ActionDef } from './actions.js';
-import { applyKeyOverrides, loadKeyOverrides, toBlessedKeys, REBINDABLE_ACTIONS } from './keymap.js';
+import { applyKeyOverrides, loadKeyOverrides, toBlessedKeys, REBINDABLE_ACTIONS, validateKeyOverrides, type KeymapIssue } from './keymap.js';
 import { resolveThemeName, themeFor, type ThemeName } from './theme.js';
 import type { Message as TranscriptMessage, MessageContent } from '@duya/agent-protocol/transcript';
 
@@ -258,6 +258,13 @@ export class TUIApp {
    * overrides come from config + env.
    */
   private readonly actionDefs: readonly ActionDef[];
+  /**
+   * Problems with this session's key overrides, resolved once with
+   * `actionDefs`. Reported as transcript notices in `start()`: an override
+   * that silently does not bind is worse than one that is refused loudly,
+   * because the help window still renders the requested key.
+   */
+  private readonly keymapIssues: readonly KeymapIssue[];
   /** Usage of the most recent billed call, from `token_usage` frames. */
   private lastUsage: { input: number; output: number; total: number } | null = null;
   /** Sum of every `token_usage` total seen this session. */
@@ -273,10 +280,11 @@ export class TUIApp {
     this.theme = themeFor(options.theme ?? resolveThemeName());
     // Overrides resolved ONCE, here: config + env, with the injected map (a
     // test seam) winning outright when present.
-    this.actionDefs = applyKeyOverrides(
-      ACTION_DEFS,
-      options.keyOverrides ?? loadKeyOverrides(),
-    );
+    const keyOverrides = options.keyOverrides ?? loadKeyOverrides();
+    this.actionDefs = applyKeyOverrides(ACTION_DEFS, keyOverrides);
+    // Validated against the SAME map that produced `actionDefs`, so the help
+    // window and the reported problems cannot describe different sessions.
+    this.keymapIssues = validateKeyOverrides(ACTION_DEFS, keyOverrides);
 
     this.output = options.output ?? process.stdout;
 
@@ -423,6 +431,12 @@ export class TUIApp {
   start(): void {
     this.running = true;
     this.model.addNotice('F1 help · Ctrl+R history · Ctrl+P usage · Ctrl+C interrupt · Ctrl+T expand · wheel / PgUp-PgDn scroll');
+    // Every issue is shown, not just the errors: a keymap warning is a
+    // binding the user believes in and the terminal does not deliver, and the
+    // only moment the user is guaranteed to read the transcript is the start.
+    for (const issue of this.keymapIssues) {
+      this.model.addNotice(`keymap: ${issue.message} ${issue.remedy}`);
+    }
     this.scheduler.requestImmediate();
   }
 

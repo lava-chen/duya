@@ -47,6 +47,21 @@ export const REBINDABLE_ACTIONS: ReadonlySet<string> = new Set([
   'follow-tail',
 ]);
 
+/**
+ * Chords an override may never claim, with the reason each one is fixed.
+ *
+ * Deliberately short: a key earns a place here only when losing it would cost
+ * the user a path they cannot get back — not merely because it "feels
+ * important". Anything that merely collides with another action is caught by
+ * the duplicate check instead, which reads the effective table.
+ */
+export const RESERVED_KEYS: Readonly<Record<string, string>> = {
+  'Ctrl+C': 'the interrupt channel, and the double-press exit out of the TUI',
+  'Enter': 'the only way to submit a prompt or confirm a window selection',
+  'Esc': 'the universal dismissal for windows, overlays and the completion popup',
+  'Tab': 'indent in the editor and accept in the completion popup, both at once',
+};
+
 /** The config file consulted for `[tui.keys]`. */
 function keyConfigPath(home: string = homedir()): string {
   return path.join(home, '.duya', 'config.toml');
@@ -177,6 +192,139 @@ export function applyKeyOverrides(
     if (chord === undefined) return def;
     return { ...def, keys: [chord] };
   });
+}
+
+/**
+ * One problem with the requested keybinding overrides.
+ *
+ * `code` is the machine-readable class; `message` is what a user reads and
+ * always names the config file they have to edit, because "your key does not
+ * work" without a file to open is the failure this whole module exists to
+ * prevent.
+ */
+export interface KeymapIssue {
+  readonly severity: 'error' | 'warning';
+  /** `reserved` | `duplicate` | `not-rebindable` | `unexpressible` | `unknown-action` */
+  readonly code: string;
+  /** The actions involved; a whole-table clash names both. */
+  readonly actionIds: readonly string[];
+  /** The chord at fault, or `null` when the problem is the id, not the key. */
+  readonly chord: string | null;
+  /** One sentence for the user, naming `~/.duya/config.toml`. */
+  readonly message: string;
+  /** What to do about it. */
+  readonly remedy: string;
+}
+
+/**
+ * Report everything wrong with `overrides` against `defs`.
+ *
+ * ## Why only the overrides
+ *
+ * The shipped table is not audited: it legitimately binds `↑`/`↓` in two
+ * contexts at once, and a validator that reported that would cry wolf on every
+ * start. Every issue below is traceable to one key the user typed, so a run
+ * with no overrides returns an empty list by construction.
+ *
+ * ## Why duplicates read the effective table
+ *
+ * The clash that matters is the one the user *produced*, so the comparison is
+ * made on `applyKeyOverrides(defs, overrides)` — the keys the session actually
+ * dispatches — not on the shipped defaults. Context is deliberately ignored
+ * here, unlike the reference implementation: duya binds its global toggles on
+ * the screen, so a rebound `↑` genuinely fires next to the editor's history
+ * recall rather than in a disjoint context.
+ *
+ * Pure: neither argument is mutated, and the caller may still apply the
+ * overrides or discard them.
+ */
+export function validateKeyOverrides(
+  defs: readonly ActionDef[],
+  overrides: Readonly<Record<string, string>>,
+): readonly KeymapIssue[] {
+  const issues: KeymapIssue[] = [];
+  const ids = new Set(defs.map((def) => def.id));
+  /** Overrides that name a real action with a chord the TUI can bind. */
+  const usable: Record<string, string> = {};
+
+  for (const [id, raw] of Object.entries(overrides)) {
+    if (!ids.has(id)) {
+      issues.push({
+        severity: 'error',
+        code: 'unknown-action',
+        actionIds: [id],
+        chord: null,
+        message: `No action named "${id}" exists, so the "${id}" entry in ~/.duya/config.toml is ignored.`,
+        remedy: `Rename it to one of: ${[...ids].sort().join(', ')}.`,
+      });
+      continue;
+    }
+    const chord = normalizeChord(raw);
+    if (chord === null || toBlessedKeys([chord]).length === 0) {
+      issues.push({
+        severity: 'error',
+        code: 'unexpressible',
+        actionIds: [id],
+        chord: raw,
+        message: `"${raw}" is not a key this TUI can bind, so the "${id}" entry in ~/.duya/config.toml is ignored and the default key still fires.`,
+        remedy: `Use a chord like Ctrl+J, Alt+H, F2 or Ctrl+End.`,
+      });
+      continue;
+    }
+    if (!REBINDABLE_ACTIONS.has(id)) {
+      issues.push({
+        severity: 'error',
+        code: 'not-rebindable',
+        actionIds: [id],
+        chord,
+        message: `"${id}" is dispatched by priority-ordered routing and cannot be rebound: ~/.duya/config.toml sets it to ${chord}, the help window will show ${chord}, but pressing it will not run "${id}".`,
+        remedy: `Drop that entry — the default key for "${id}" is unchanged — or pick a different action.`,
+      });
+    }
+    const reservedReason = RESERVED_KEYS[chord];
+    if (reservedReason !== undefined) {
+      issues.push({
+        severity: 'error',
+        code: 'reserved',
+        actionIds: [id],
+        chord,
+        message: `${chord} is reserved and cannot be taken by "${id}": it is ${reservedReason}. "~/.duya/config.toml" cannot reassign it.`,
+        remedy: `Give "${id}" a different key.`,
+      });
+    }
+    usable[id] = chord;
+  }
+
+  // Clashes are computed over the keys this session will actually dispatch.
+  // Chords that already failed above are excluded: a chord nothing can bind
+  // cannot clash with anything, and reporting it twice only adds noise.
+  const overridden = new Set(Object.keys(usable));
+  const effective = applyKeyOverrides(defs, usable);
+  const byChord = new Map<string, string[]>();
+  for (const def of effective) {
+    for (const chord of def.keys) {
+      const owners = byChord.get(chord);
+      if (owners === undefined) byChord.set(chord, [def.id]);
+      else if (!owners.includes(def.id)) owners.push(def.id);
+    }
+  }
+  for (const [chord, owners] of byChord) {
+    // Only report clashes the user introduced; the shipped table may share a
+    // chord across contexts by design.
+    if (owners.length < 2) continue;
+    const blamed = owners.filter((id) => overridden.has(id));
+    if (blamed.length === 0) continue;
+    issues.push({
+      severity: 'error',
+      code: 'duplicate',
+      actionIds: owners,
+      chord,
+      message: `${chord} is bound to ${owners.join(' and ')} at once, so only one of them will respond; ~/.duya/config.toml cannot disambiguate it.`,
+      remedy: `Give "${blamed[0]}" a key nothing else uses.`,
+    });
+  }
+
+  return issues;
 }
 
 /** Display form → blessed key names. Unknown display forms bind nothing. */
