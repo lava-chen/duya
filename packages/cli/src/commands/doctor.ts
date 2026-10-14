@@ -16,6 +16,7 @@ import { readCliApiRuntime } from '../api/runtime-config.js';
 import { isPidAlive } from '../api/runtime-config.js';
 import { renderJson, type OutputFormat } from '../api/format.js';
 import { runConfigChecks } from './doctor-config.js';
+import { redactDoctorJson } from './doctor-redact.js';
 
 export interface CheckResult {
   id: string;
@@ -370,7 +371,11 @@ export async function runDoctorCommand(format: OutputFormat): Promise<number> {
   const result = await runDiagnostics();
 
   if (format === 'json') {
-    process.stdout.write(renderJson(result) + '\n');
+    // The JSON view is the artifact people paste into a bug report, so it goes
+    // through its own redaction pass rather than serializing the internal
+    // result. The text view keeps absolute paths on purpose: a `chmod 600
+    // "<path>"` hint is only actionable if the path is there.
+    process.stdout.write(renderJson(redactDoctorJson(result)) + '\n');
   } else {
     process.stdout.write(renderText(result) + '\n');
   }
