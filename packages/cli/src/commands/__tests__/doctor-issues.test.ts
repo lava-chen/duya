@@ -223,4 +223,24 @@ describe('check duration', () => {
     expect(second[0]!.durationMs).toBeGreaterThanOrEqual(1);
     expect(second).toHaveLength(1);
   });
+
+  it('falls back to the floor instead of throwing when resetTiming was skipped', () => {
+    // Forgetting `resetTiming` is a mistake, but it is a silent one: the first
+    // push has no baseline, so the elapsed time is 0 and the floor turns it into
+    // 1ms. Pinning that behaviour here means a future refactor cannot quietly
+    // turn "reports 1ms" into "throws", which would take down every caller that
+    // happens to build a report without the reset.
+    const checks: CheckResult[] = [];
+    pushCheck(checks, { id: 'no-baseline', category: 'config', status: 'ok', message: 'no baseline' });
+
+    expect(checks[0]!.durationMs).toBe(1);
+
+    // A later push on the same array still measures normally, because the first
+    // push installed a baseline.
+    const until = Date.now() + 25;
+    while (Date.now() < until) { /* occupy the clock */ }
+    pushCheck(checks, { id: 'after', category: 'config', status: 'ok', message: 'after' });
+
+    expect(checks[1]!.durationMs!).toBeGreaterThanOrEqual(20);
+  });
 });

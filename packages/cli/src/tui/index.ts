@@ -96,11 +96,14 @@ export {
 
 export {
   REBINDABLE_ACTIONS,
+  RESERVED_KEYS,
   applyKeyOverrides,
   loadKeyOverrides,
   normalizeChord,
   parseKeyConfigToml,
   toBlessedKeys,
+  validateKeyOverrides,
+  type KeymapIssue,
 } from './keymap.js';
 
 export {

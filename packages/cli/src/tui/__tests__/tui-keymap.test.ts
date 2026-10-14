@@ -184,6 +184,32 @@ describe('validateKeyOverrides', () => {
     expect(issuesOfCode(issues, 'unexpressible')[0].chord).toBe('Wheel');
   });
 
+  it('still reports an unexpressible chord that survives loading from config', () => {
+    // `Wheel` above proves the validator rejects it, but it is unreachable in
+    // production: `normalizeChord` rejects `Wheel` too, so `loadKeyOverrides`
+    // drops it before validation ever runs. That makes the case above a test of
+    // the injection seam only.
+    //
+    // `Alt+End` is the shape that is genuinely reachable — `normalizeChord`
+    // accepts it (it parses as a plausible Alt chord) while `toBlessedKeys`
+    // cannot name it, so it survives loading and then binds nothing. Without
+    // this case the `unexpressible` code could be deleted and the suite would
+    // stay green.
+    const loaded = loadKeyOverrides(
+      { DUYA_TUI_KEY_HISTORY: 'Alt+End' },
+      () => {
+        throw new Error('no config file');
+      },
+    );
+    // Loading stores the normalised chord, so the stored form is `Alt+END`.
+    expect(loaded.history).toBe('Alt+END');
+
+    const issues = validateKeyOverrides(ACTION_DEFS, loaded);
+    const unexpressible = issuesOfCode(issues, 'unexpressible');
+    expect(unexpressible).toHaveLength(1);
+    expect(unexpressible[0].chord).toBe('Alt+END');
+  });
+
   it('rejects an id that names no action', () => {
     const issues = validateKeyOverrides(ACTION_DEFS, { histroy: 'F2' });
     const unknown = issuesOfCode(issues, 'unknown-action');
