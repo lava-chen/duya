@@ -35,6 +35,7 @@
  */
 
 import type { Block, TranscriptModel } from './blocks.js';
+import { splitStreamCommit } from './stream-commit.js';
 import { capLines, truncateToWidth, visibleWidth } from './width.js';
 import { DARK_THEME_TAGS, type ThemeTags } from './theme.js';
 
@@ -281,6 +282,20 @@ function renderTable(
   return lines.join('\n');
 }
 
+/**
+ * Render one assistant block, honouring whether it is still arriving.
+ *
+ * A finalized block is complete and renders in full. A streaming one withholds
+ * a still-growing pipe table, whose column widths would otherwise be recomputed
+ * — and every border moved — on each arriving row. Nothing else is held back;
+ * see `stream-commit.ts` for why an unfinished code fence is deliberately shown.
+ */
+function renderAssistant(text: string, finalized: boolean, styles: Styles): string {
+  if (finalized) return renderAssistantMarkdown(text, styles);
+  const commit = splitStreamCommit(text);
+  return renderAssistantMarkdown(commit.safe, styles);
+}
+
 /** Render Markdown structure while keeping code and plain text safe for Blessed. */
 function renderAssistantMarkdown(text: string, styles: Styles): string {
   const lines = text.replace(/\r\n?/gu, '\n').split('\n');
@@ -504,7 +519,7 @@ export function renderBlock(block: Block, options: RenderOptions, styles: Styles
       // achieve that, which is the trade the leak measured out.
       return styles.user(`› ${block.text}`);
     case 'assistant':
-      return renderAssistantMarkdown(block.text, styles);
+      return renderAssistant(block.text, block.finalized, styles);
     case 'thinking':
       return renderThinking(block, options, styles);
     case 'tool':
