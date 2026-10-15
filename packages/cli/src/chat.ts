@@ -1,11 +1,11 @@
 /**
- * packages/cli/src/chat.ts — `duya chat`: the Host-backed chat client.
+ * packages/cli/src/chat.ts 鈥?`duya chat`: the Host-backed chat client.
  *
  * This is the production chat entry for the Host architecture (plan 587/12).
  * It contains NO agent runtime: no `DuyaAgent`, no REPL over `streamChat`, no
  * `@duya/agent` import. Everything it does goes through the Host's versioned
- * HTTP API — start a run, follow its durable event stream, cancel on
- * Ctrl+C — exactly the same path the Desktop uses.
+ * HTTP API 鈥?start a run, follow its durable event stream, cancel on
+ * Ctrl+C 鈥?exactly the same path the Desktop uses.
  *
  * Connection discovery order:
  *   1. `--origin` / `DUYA_HOST_ORIGIN` (with `--token` / `DUYA_HOST_TOKEN`
@@ -118,7 +118,7 @@ function renderEvent(event: RunEventEnvelope<RunEvent>): void {
       write(payload.text);
       return;
     case 'tool.call_started':
-      write(`${DIM}⚙ ${payload.toolName}(${summarizeArguments(payload.arguments)})${RESET}`);
+      write(`${DIM}鈿?${payload.toolName}(${summarizeArguments(payload.arguments)})${RESET}`);
       return;
     case 'tool.call_completed': {
       const verdict = payload.outcome.outcome;
@@ -133,11 +133,11 @@ function renderEvent(event: RunEventEnvelope<RunEvent>): void {
                 ? `${YELLOW}cancelled${RESET}`
                 : `${YELLOW}?${RESET}`;
       const firstLine = payload.content.split('\n', 1)[0] ?? '';
-      write(`${DIM}↳ ${outcome} ${firstLine.slice(0, 120)}${RESET}`);
+      write(`${DIM}鈫?${outcome} ${firstLine.slice(0, 120)}${RESET}`);
       return;
     }
     case 'assistant.status':
-      write(`${DIM}… ${payload.message}${RESET}`);
+      write(`${DIM}鈥?${payload.message}${RESET}`);
       return;
     default:
       // Every other event type is diagnostic for a chat terminal; the durable
@@ -218,7 +218,7 @@ async function chatOnce(
     workingDirectory: process.cwd(),
   });
   if (!start.accepted) {
-    write(`${RED}run refused: ${start.stage} — ${start.reason ?? ''}${RESET}`);
+    write(`${RED}run refused: ${start.stage} 鈥?${start.reason ?? ''}${RESET}`);
     return 1;
   }
   write(`${DIM}run ${start.runId}${RESET}`);
@@ -234,11 +234,11 @@ async function chatInteractive(
 ): Promise<number> {
   if (shouldUseTui()) return chatTui(client, sessionId, options);
 
-  write(`${DIM}session ${sessionId} — type a message, /exit to quit${RESET}`);
+  write(`${DIM}session ${sessionId} 鈥?type a message, /exit to quit${RESET}`);
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: `${BRIGHT_CYAN}you${RESET} ${DIM}›${RESET} `,
+    prompt: `${BRIGHT_CYAN}you${RESET} ${DIM}鈥?{RESET} `,
   });
   let interrupt: (() => void) | null = null;
   let stopping = false;
@@ -276,7 +276,7 @@ async function chatInteractive(
             workingDirectory: process.cwd(),
           });
           if (!start.accepted) {
-            write(`${RED}run refused: ${start.stage} — ${start.reason ?? ''}${RESET}`);
+            write(`${RED}run refused: ${start.stage} 鈥?${start.reason ?? ''}${RESET}`);
           } else {
             const terminal = await driveRun(client, start.runId, (cancel) => {
               interrupt = cancel;
@@ -293,7 +293,7 @@ async function chatInteractive(
     });
     rl.on('close', resolve);
   });
-  write(`${DIM}goodbye — session ${sessionId}${RESET}`);
+  write(`${DIM}goodbye 鈥?session ${sessionId}${RESET}`);
   return 0;
 }
 
@@ -356,6 +356,24 @@ async function loadSessionMessages(
   return projectTimelinePersistenceMessages(entries);
 }
 
+/**
+ * Whether to run the inline TUI.
+ *
+ * `DUYA_TUI_INLINE=1` opts in. The default is still the full-screen window
+ * because the inline model is new here and its scrollback geometry has not been
+ * exercised against a range of real terminals yet; codex, claude and minimax all
+ * default to inline, and this is the switch that makes that reachable without a
+ * rebuild.
+ *
+ * `DUYA_TUI_INLINE=0` is honoured as an explicit off, so a shell that exports
+ * `DUYA_TUI_INLINE=1` globally can still turn it off for one run.
+ */
+export function inlineTuiRequested(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env['DUYA_TUI_INLINE'];
+  if (value === undefined || value === '') return false;
+  return value !== '0' && value.toLowerCase() !== 'false';
+}
+
 function sessionLabel(item: HostSessionListItem): string {
   const { session, timelineCount } = item;
   return [
@@ -364,7 +382,7 @@ function sessionLabel(item: HostSessionListItem): string {
     `${timelineCount} messages`,
     new Date(session.updatedAt).toLocaleString(),
     session.id.slice(0, 8),
-  ].join('  ·  ');
+  ].join('  路  ');
 }
 
 function sessionCompletionItem(item: HostSessionListItem) {
@@ -470,8 +488,9 @@ async function chatTui(
 
   const tui = new TUIApp({
     title: 'duya chat',
+    inline: inlineTuiRequested(),
     completionSources,
-    statusText: () => `${activeSession.providerId} · ${activeSession.model || options.model || 'default'} · ${activeSession.id.slice(0, 8)}`,
+    statusText: () => `${activeSession.providerId} 路 ${activeSession.model || options.model || 'default'} 路 ${activeSession.id.slice(0, 8)}`,
     isBusy: () => busy,
     onSubmit: (text) => { void handleLine(text); },
     onInterrupt: () => {
@@ -550,7 +569,7 @@ async function chatTui(
         workingDirectory: process.cwd(),
       });
       if (!start.accepted) {
-        tui.printError(`run refused: ${start.stage} — ${start.reason ?? ''}`);
+        tui.printError(`run refused: ${start.stage} 鈥?${start.reason ?? ''}`);
         return;
       }
       activeRunId = start.runId;
@@ -586,7 +605,7 @@ async function chatTui(
         else if (name === 'resume' || name === 'sessions') await resumeSession(args);
         else if (name === 'new') await startNewSession();
         else if (name === 'clear') tui.clearTranscript();
-        else if (name === 'help') tui.printNotice('/resume · /sessions · /new · /clear · /exit');
+        else if (name === 'help') tui.printNotice('/resume 路 /sessions 路 /new 路 /clear 路 /exit');
         else tui.printError(`Unknown command: /${name}`);
       } catch (error) {
         tui.printError(error instanceof Error ? error.message : String(error));
@@ -601,7 +620,7 @@ async function chatTui(
   }
 
   tui.replaceTranscript(await loadSessionMessages(client, sessionId));
-  tui.printNotice(`session ${sessionId} · type a message, /resume to switch sessions`);
+  tui.printNotice(`session ${sessionId} 路 type a message, /resume to switch sessions`);
   tui.start();
   await finishedPromise;
   return 0;
@@ -629,7 +648,7 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
   const client = new HostSessionHttpClient(host.origin, host.token ?? '');
   try {
     const health = await client.getHealth();
-    write(`${DIM}duya tui · Host ${host.origin} (api v${health.apiVersion})${RESET}`);
+    write(`${DIM}duya tui 路 Host ${host.origin} (api v${health.apiVersion})${RESET}`);
   } catch (error) {
     write(`${RED}Host failed to start: ${error instanceof Error ? error.message : String(error)}${RESET}`);
     return 1;
@@ -653,7 +672,7 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
   // writer, so any `console.*` call from this process lands inline in the
   // transcript and buries the turn the user asked for. Route it to the Host's
   // diagnostics log for the rest of the TUI's life. `process.stdout` and
-  // `process.stderr` are deliberately NOT patched — that is what blessed draws.
+  // `process.stderr` are deliberately NOT patched 鈥?that is what blessed draws.
   const consoleCapture =
     host.diagnosticsLogPath === undefined
       ? undefined

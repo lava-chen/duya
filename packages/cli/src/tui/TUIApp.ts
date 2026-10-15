@@ -50,6 +50,8 @@ import { ACTION_DEFS, helpGroups, keysColumn, type ActionDef } from './actions.j
 import { applyKeyOverrides, loadKeyOverrides, toBlessedKeys, REBINDABLE_ACTIONS, validateKeyOverrides, type KeymapIssue } from './keymap.js';
 import { resolveThemeName, themeFor, type ThemeName } from './theme.js';
 import { detectTerminalEnvironment, type TerminalEnvironment } from './terminal-env.js';
+import { InlineSurface } from './terminal/surface.js';
+import { conversationRegionBottom, type TerminalSize } from './terminal/viewport.js';
 import type { Message as TranscriptMessage, MessageContent } from '@duya/agent-protocol/transcript';
 
 /** DECSET 2026: begin synchronized update. */
@@ -62,6 +64,17 @@ const MAX_INPUT_ROWS = 8;
 
 /** Height of the status bar, in rows. */
 const STATUS_ROWS = 1;
+
+/**
+ * Columns the inline composer holds back from the right edge.
+ *
+ * Two, matching the border the full-screen composer has, so a line that fits
+ * inline fits in the old layout too.
+ */
+const COMPOSER_INSET = 2;
+
+/** Prompt marker on the first composer row, inline mode only. */
+const COMPOSER_PREFIX = '❯ ';
 
 /** Transcript lines moved per wheel tick. Three is the conventional step. */
 const WHEEL_STEP_LINES = 3;
@@ -202,24 +215,71 @@ export interface TUIAppOptions {  /** Window title. */
    * constant (colour count, box characters) comes from here instead.
    */
   readonly terminalEnv?: TerminalEnvironment;
+  /**
+   * Render into the terminal's own scrollback instead of a full-screen window.
+   *
+   * The conversation is printed as it finishes and stays readable after the TUI
+   * exits, which a fixed window cannot offer. Off by default while this is
+   * proven against real terminals; `DUYA_TUI_INLINE=1` turns it on.
+   *
+   * In this mode blessed's `Screen` is never constructed — it switches to the
+   * alternate buffer in its constructor, and an alternate buffer has no
+   * scrollback to commit into. Its `Program` is still used, for input only.
+   */
+  readonly inline?: boolean;
 }
 
 export class TUIApp {
   private readonly options: TUIAppOptions;
-  private readonly screen: Widgets.Screen;
+  /**
+   * Null in inline mode until an overlay needs it.
+   *
+   * Blessed switches to the alternate buffer in the Screen CONSTRUCTOR, and an
+   * alternate buffer has no scrollback — committing the conversation into it
+   * would put the history somewhere the user cannot scroll back to. So inline
+   * mode builds no Screen at all and renders its own frames.
+   *
+   * It builds one LAZILY, for the overlay only, the way codex does: an overlay
+   * is a modal takeover, and the one thing a full-screen buffer is good at.
+   */
+  private screen: Widgets.Screen | null;
+  /** Kept so the lazily built overlay screen is constructed the same way. */
+  private readonly screenOptions: Record<string, unknown>;
   private readonly program: BlessedProgram;
   private readonly writer: EscapeSafeWriter;
   /** What the terminal can render, measured rather than assumed. */
   private readonly terminalEnv: TerminalEnvironment;
+  /** Inline write path; null in full-screen mode. */
+  private readonly inlineSurface: InlineSurface | null;
+  /**
+   * The frame under construction, in visual order, captured by the paint
+   * methods as they fill their blessed boxes. In full-screen mode blessed
+   * reads those boxes; in inline mode this is what gets written instead.
+   */
+  private inlineTranscriptLines: string[] = [];
+  private inlinePopupLines: string[] = [];
+  private inlineInputLines: string[] = [];
+  private inlineStatusLines: string[] = [];
   /** Where the synchronized-output markers go, alongside the frames. */
   private readonly output: NodeJS.WritableStream;
 
-  private readonly transcriptBox: Widgets.BoxElement;
-  private readonly inputBox: Widgets.BoxElement;
-  private readonly statusBar: Widgets.BoxElement;
-  private readonly overlayBox: Widgets.BoxElement;
+  /**
+   * Null in inline mode, and not lazily — these cannot be built at all.
+   *
+   * `blessed.box()` resolves its `program` from blessed's module-global
+   * "active screen" and throws `No active screen` when there is none
+   * (`node_modules/blessed/lib/widgets/node.js:57`). So in inline mode the boxes
+   * simply do not exist, and every path that would touch one is guarded by the
+   * screen being present. Building them lazily instead would mean a widget tree
+   * that only half exists, and a null check on each of the five either way.
+   */
+  private transcriptBox: Widgets.BoxElement | null = null;
+  private inputBox: Widgets.BoxElement | null = null;
+  private statusBar: Widgets.BoxElement | null = null;
   /** The `/` and `@` popup, drawn immediately above the input box. */
-  private readonly completionBox: Widgets.BoxElement;
+  private completionBox: Widgets.BoxElement | null = null;
+  /** Built with the overlay's screen, since it is the only thing that uses it. */
+  private overlayBox: Widgets.BoxElement | null = null;
   private readonly completion: CompletionController;
   /** Rows the popup shows. */
   private readonly completionRows: number;
@@ -369,6 +429,7 @@ export class TUIApp {
       fullUnicode: this.terminalEnv.unicodeBox,
       title: options.title ?? 'duya',
     };
+    this.screenOptions = screenOptions;
     // Both option objects are published AND passed by reference, so what a test
     // reads is what blessed was constructed from. Publishing a copy instead
     // would leave this seam able to describe a renderer that was never built —
@@ -377,7 +438,37 @@ export class TUIApp {
     const renderConfig: RenderConfig = { program: programOptions, screen: screenOptions };
     proxy.renderConfig = renderConfig;
 
-    this.screen = blessed.screen(screenOptions) as Widgets.Screen;
+    const inline = options.inline === true;
+    this.inlineSurface = inline
+      ? new InlineSurface({
+          output: this.output,
+          size: () => this.terminalSize(),
+        })
+      : null;
+    // Not built eagerly in inline mode: `blessed.screen` enters the alternate
+    // buffer in its constructor, and there is no exit from that in a frame.
+    this.screen = inline ? null : (blessed.screen(screenOptions) as Widgets.Screen);
+
+    this.completionRows = Math.max(1, options.completionRows ?? 8);
+    this.completion = new CompletionController(
+      options.completionSources ?? EMPTY_COMPLETION_SOURCES,
+    );
+
+    // Every widget below needs an active screen to exist at all, so inline mode
+    // builds none of them. The layout constants above are still declared, and
+    // the guards in the paint methods are what make the two modes differ.
+    if (this.screen === null) {
+      if (options.history !== undefined && options.history.length > 0) {
+        this.editor.loadHistory(options.history);
+      }
+      this.scheduler = new RenderScheduler({ onRender: () => this.paint() });
+      this.bindKeys();
+      this.bindPaste();
+      this.bindResize();
+      this.program.setMode('?2004');
+      return;
+    }
+    const screen = this.screen;
 
     this.transcriptBox = blessed.box({
       top: 0,
@@ -435,11 +526,6 @@ export class TUIApp {
       vi: true,
     }) as Widgets.BoxElement;
 
-    this.completionRows = Math.max(1, options.completionRows ?? 8);
-    this.completion = new CompletionController(
-      options.completionSources ?? EMPTY_COMPLETION_SOURCES,
-    );
-
     this.completionBox = blessed.box({
       // Height is set on every paint from the visible row count; the box starts
       // hidden so it never reserves space the popup is not using.
@@ -454,15 +540,7 @@ export class TUIApp {
       style: { border: { fg: 'cyan' } },
     }) as Widgets.BoxElement;
 
-    this.screen.append(this.transcriptBox);
-    this.screen.append(this.inputBox);
-    this.screen.append(this.statusBar);
-    // Appended LAST so it paints over the transcript. Blessed renders
-    // `screen.children` in order, and an element passed `parent:` in its
-    // options is NOT added to that list — it has to be appended here or it is
-    // never drawn at all.
-    this.screen.append(this.overlayBox);
-    this.screen.append(this.completionBox);
+    this.attachBoxesTo(screen);
 
     if (options.history !== undefined && options.history.length > 0) {
       this.editor.loadHistory(options.history);
@@ -478,6 +556,67 @@ export class TUIApp {
     // arrives as a key storm. See the module comment for why the markers
     // this causes are harmless.
     this.program.setMode('?2004');
+  }
+
+  /**
+   * Rows and columns, read live rather than cached.
+   *
+   * `process.stdout` first: it is the tty itself and it is what the `resize`
+   * listener updates, so it is correct on the very first frame and on every
+   * frame after a resize. `program` is the fallback for a test that drives the
+   * app with a fake output stream.
+   */
+  private terminalSize(): TerminalSize {
+    return {
+      rows: asNumber(process.stdout.rows, asNumber(this.program.rows, 24)),
+      columns: asNumber(process.stdout.columns, 80),
+    };
+  }
+
+  private attachBoxesTo(screen: Widgets.Screen): void {
+    for (const box of [this.transcriptBox, this.inputBox, this.statusBar, this.overlayBox, this.completionBox]) {
+      if (box === null) continue;
+      screen.append(box);
+    }
+  }
+
+  /**
+   * A full-screen buffer, built on demand, for the overlay only.
+   *
+   * This is codex's split: the conversation lives in the normal screen's
+   * scrollback, and an overlay is the one thing that takes the screen over. So
+   * inline mode keeps no Screen between overlays and pays for the alternate
+   * buffer only while a prompt, a permission request, or a modal window is up.
+   */
+  private ensureAltScreen(): Widgets.Screen {
+    if (this.screen !== null && this.overlayBox !== null) return this.screen;
+    const screen = blessed.screen(this.screenOptions) as Widgets.Screen;
+    this.screen = screen;
+    // Built here rather than in the constructor: `blessed.box()` needs an active
+    // screen, and in inline mode there is none until this moment.
+    this.overlayBox = blessed.box({
+      top: 'center',
+      left: 'center',
+      width: '70%',
+      // Sized from the body on every paint; see `paintOverlay`.
+      height: 7,
+      hidden: true,
+      tags: true,
+      border: { type: 'line' },
+      style: { border: { fg: 'yellow' } },
+      keys: true,
+      vi: true,
+    }) as Widgets.BoxElement;
+    screen.append(this.overlayBox);
+    return screen;
+  }
+
+  /** Drop the overlay buffer and let the normal screen show through again. */
+  private releaseAltScreen(): void {
+    if (this.screen === null) return;
+    this.screen.destroy();
+    this.screen = null;
+    this.overlayBox = null;
   }
 
   /** Begin the session. */
@@ -503,7 +642,10 @@ export class TUIApp {
     // shell the user returns to swallows clicks and wheel events.
     this.program.disableMouse();
     this.program.resetMode('?2004');
-    this.screen.destroy();
+    // Exactly one of these exists. Destroying a Screen leaves the alternate
+    // buffer; `InlineSurface.stop` leaves the conversation on the normal one.
+    this.releaseAltScreen();
+    this.inlineSurface?.stop();
     this.writer.flush();
   }
 
@@ -587,15 +729,25 @@ export class TUIApp {
   // ---------------------------------------------------------------- rendering
 
   /**
-   * The one place `screen.render()` is called.
+   * The one place a frame reaches the terminal.
    *
-   * Wrapped in synchronized output so the frame is presented at once, and so
-   * that the sequence is emitted even when the render throws — otherwise a
-   * failed render leaves the terminal in synchronized mode, where it swallows
+   * Two paths, chosen by what exists: a Screen means blessed owns the drawing,
+   * and the frame is wrapped in synchronized output so it is presented at once
+   * and so the sequence is emitted even when the render throws — a failed render
+   * would otherwise leave the terminal in synchronized mode, where it swallows
    * output until the mode is reset.
+   *
+   * No Screen means inline mode, and there `InlineSurface` does its own
+   * synchronized-output framing per frame. Wrapping it again here would be
+   * closed early by the inner frame's terminator, which turns the outer one into
+   * no effect at all.
    */
   private paint(): void {
     if (!this.running) return;
+    if (this.inlineSurface !== null) {
+      this.paintInline();
+      return;
+    }
     this.output.write(SYNC_BEGIN);
     try {
       // Input FIRST: it owns the box geometry, and the transcript scroll is
@@ -606,14 +758,71 @@ export class TUIApp {
       this.paintCompletion();
       this.paintStatus();
       this.paintOverlay();
-      this.screen.render();
+      this.screen?.render();
       this.placeCursor();
     } finally {
-      // In the `finally`, not the happy path: a render that throws would
-      // otherwise leave the terminal in synchronized mode, where it stops
-      // displaying output until the mode is reset.
       this.output.write(SYNC_END);
     }
+  }
+
+  /**
+   * Compose the frame inline and hand it to the surface.
+   *
+   * The paint methods are shared; only the destination differs. Each one writes
+   * its rows into a blessed box in full-screen mode and into a capture array
+   * here, so the two paths cannot disagree about what the frame contains.
+   */
+  private paintInline(): void {
+    this.inlineTranscriptLines = [];
+    this.inlinePopupLines = [];
+    this.inlineInputLines = [];
+    this.inlineStatusLines = [];
+
+    this.paintInput();
+    this.paintTranscript();
+    this.paintCompletion();
+    this.paintStatus();
+    // The overlay is a full-screen takeover, so inline mode needs a Screen for
+    // it. Building one here — rather than at construction — is what keeps the
+    // alternate buffer out of the way while the conversation is on screen.
+    if (this.overlayActive()) this.ensureAltScreen();
+    else this.releaseAltScreen();
+
+    if (this.screen !== null) {
+      this.paintOverlay();
+      this.screen.render();
+      this.placeCursor();
+      return;
+    }
+
+    const chrome = [...this.inlinePopupLines, ...this.inlineInputLines, ...this.inlineStatusLines];
+    // The caret's row is an index into `scroll`, so it is offset by everything
+    // that sits above the composer. Its column is the editor's own column plus
+    // the prompt marker's width, because that is what is actually printed.
+    const caret =
+      this.focus === 'input' && this.interactivePrompt === null
+        ? {
+            row: this.inlineTranscriptLines.length + this.inlinePopupLines.length + this.inputCursor.cursorRow,
+            column: this.inputCursor.cursorCol + COMPOSER_PREFIX.length + 1,
+          }
+        : null;
+    this.inlineSurface?.render({
+      scroll: this.inlineTranscriptLines,
+      chrome,
+      caret,
+      // Scrolling back must not commit: those rows may be wanted again, and the
+      // terminal cannot be told to take a committed row back.
+      ...(this.scrollLines > 0
+        ? { viewEnd: Math.max(0, this.inlineTranscriptLines.length - this.scrollLines) }
+        : {}),
+    });
+  }
+
+  /** True when something needs the full-screen takeover. */
+  private overlayActive(): boolean {
+    if (this.interactivePrompt !== null) return true;
+    if (this.overlay.body(this.options.canAnswerPermissions?.() ?? false) !== null) return true;
+    return this.windowMgr.isActive;
   }
 
   private renderOptions(): RenderOptions {
@@ -632,8 +841,18 @@ export class TUIApp {
   }
 
   private paintTranscript(): void {
-    this.transcriptBox.style.border.fg = this.focus === 'transcript' ? 'cyan' : 'gray';
     const lines = this.transcript.lines(this.model, this.renderOptions());
+    if (this.inlineSurface !== null) {
+      // The WHOLE transcript, unwindowed. Deciding what the live area shows and
+      // committing the rest to scrollback is the surface's job, and it cannot do
+      // either if the transcript arrives pre-sliced: "which rows scrolled off" is
+      // exactly the information that slicing destroys.
+      this.inlineTranscriptLines = lines;
+      return;
+    }
+    const box = this.transcriptBox;
+    if (box === null) return;
+    box.style.border.fg = this.focus === 'transcript' ? 'cyan' : 'gray';
     const rows = this.visibleTranscriptRows();
     // The window ends at the last line and only drops lines from the top, so
     // "following" is the state where `scrollLines` is 0 rather than a special
@@ -641,7 +860,7 @@ export class TUIApp {
     // newest lines stranded below the fold.
     const maxStart = Math.max(0, lines.length - rows);
     const start = Math.max(0, Math.min(maxStart, maxStart - this.scrollLines));
-    this.transcriptBox.setContent(lines.slice(start).join('\n'));
+    box.setContent(lines.slice(start).join('\n'));
   }
 
   /**
@@ -659,11 +878,16 @@ export class TUIApp {
       1,
       screenRows -
         this.inputRows -
-        asNumber(this.inputBox.iheight, 2) -
+        this.inputChromeRows() -
         STATUS_ROWS -
         2 -
         this.popupRows(),
     );
+  }
+
+  /** The composer's own border rows. Two, whether or not a box exists. */
+  private inputChromeRows(): number {
+    return asNumber(this.inputBox?.iheight, 2);
   }
 
   /** Rows the popup occupies right now, borders included. Zero when closed. */
@@ -676,23 +900,47 @@ export class TUIApp {
     return rows + (hasOverflowMarker ? 1 : 0) + 2;
   }
 
+  /**
+   * Columns the composer can wrap at.
+   *
+   * Full-screen mode reads the box blessed actually laid out. Inline mode has no
+   * layout pass, so it reads the terminal — otherwise the composer would wrap at
+   * blessed's 20-column default and every answer would look mangled.
+   */
+  private composerWidth(): number {
+    const measured = asNumber(this.inputBox?.width, 0);
+    if (this.inlineSurface === null && measured > 0) {
+      return Math.max(1, measured - asNumber(this.inputBox?.iwidth, 2));
+    }
+    return Math.max(1, this.terminalSize().columns - COMPOSER_INSET);
+  }
+
   private paintInput(): void {
-    this.inputBox.style.border.fg = this.focus === 'input' ? 'green' : 'gray';
-    const width = Math.max(1, asNumber(this.inputBox.width, 20) - asNumber(this.inputBox.iwidth, 2));
+    const width = this.composerWidth();
     const wrapped = wrapWithCursor(this.editor.text, width, this.editor.cursor);
     const rows = Math.min(MAX_INPUT_ROWS, Math.max(1, wrapped.rows.length));
-    const height = rows + asNumber(this.inputBox.iheight, 2);
-    this.inputBox.height = height;
-    this.inputBox.bottom = STATUS_ROWS;
-    // The popup lives between the transcript and the input, so the transcript
-    // gives up rows for it. Reading the PREVIOUS frame's popup height is
-    // deliberate: this runs before `paintCompletion`, and a one-frame lag on a
-    // box that opens and closes is invisible, whereas sizing the transcript from
-    // a popup whose row count is not known yet would not be.
-    this.transcriptBox.bottom = height + STATUS_ROWS + this.popupRows();
-
     const visible = wrapped.rows.slice(0, rows);
-    this.inputBox.setContent(visible.join('\n'));
+
+    const inputBox = this.inputBox;
+    if (inputBox !== null) {
+      inputBox.style.border.fg = this.focus === 'input' ? 'green' : 'gray';
+      const height = rows + this.inputChromeRows();
+      inputBox.height = height;
+      inputBox.bottom = STATUS_ROWS;
+      // The popup lives between the transcript and the input, so the transcript
+      // gives up rows for it. Reading the PREVIOUS frame's popup height is
+      // deliberate: this runs before `paintCompletion`, and a one-frame lag on a
+      // box that opens and closes is invisible, whereas sizing the transcript from
+      // a popup whose row count is not known yet would not be.
+      if (this.transcriptBox !== null) this.transcriptBox.bottom = height + STATUS_ROWS + this.popupRows();
+      inputBox.setContent(visible.join('\n'));
+    } else {
+      // No borders inline: the composer is the last line of the conversation, not
+      // a panel that sits below it. That is the structure claude and codex both
+      // ship, and it is what makes the committed history read as one continuous
+      // document instead of two stacked widgets.
+      this.inlineInputLines = visible.map((row, index) => (index === 0 ? `${COMPOSER_PREFIX}${row}` : ` ${row}`));
+    }
     // Recorded so `placeCursor` can put the real cursor where the editor
     // thinks it is, without re-wrapping.
     this.inputRows = rows;
@@ -704,8 +952,10 @@ export class TUIApp {
       this.program.hideCursor();
       return;
     }
+    // Inline mode places its own caret, in absolute rows and columns, as part of
+    // the frame. Blessed's cursor addressing assumes a widget tree.
     const box = this.inputBox;
-    if (box.lpos === undefined) return;
+    if (box === null || box.lpos === undefined) return;
     // Clamp into the visible window: the editor's logical row may be below
     // the fold once the box has hit MAX_INPUT_ROWS.
     const row = Math.min(this.inputCursor.cursorRow, this.inputRows) - 1;
@@ -726,7 +976,8 @@ export class TUIApp {
 private paintCompletion(): void {
     const state = this.completion.snapshot;
     if (!this.completion.isOpen) {
-      if (!this.completionBox.hidden) this.completionBox.hide();
+      if (this.inlineSurface !== null) this.inlinePopupLines = [];
+      else if (this.completionBox !== null && !this.completionBox.hidden) this.completionBox.hide();
       return;
     }
 
@@ -753,16 +1004,22 @@ private paintCompletion(): void {
     if (first > 0) rows.unshift('{gray-fg}  …{/gray-fg}');
     if (first + visible < total) rows.push('{gray-fg}  …{/gray-fg}');
 
+    const box = this.completionBox;
+    if (box === null) {
+      this.inlinePopupLines = rows;
+      return;
+    }
+
     // `+ 2` for the popup own border rows.
-    this.completionBox.height = rows.length + 2;
-    this.completionBox.bottom = this.visibleInputHeight() + STATUS_ROWS;
-    this.completionBox.setContent(rows.join('\n'));
-    if (this.completionBox.hidden) this.completionBox.show();
+    box.height = rows.length + 2;
+    box.bottom = this.visibleInputHeight() + STATUS_ROWS;
+    box.setContent(rows.join('\n'));
+    if (box.hidden) box.show();
   }
 
   /** Total rows the input box occupies, borders included. */
   private visibleInputHeight(): number {
-    return this.inputRows + asNumber(this.inputBox.iheight, 2);
+    return this.inputRows + this.inputChromeRows();
   }
 
   private paintStatus(): void {
@@ -784,16 +1041,37 @@ private paintCompletion(): void {
       : this.focus === 'transcript'
         ? `history ${selection}/${blockCount} / arrows select / left-right fold`
         : `${this.editor.isEmpty ? 'Tab history' : 'Tab indent'} / F6 focus / arrows prompts`;
-    const width = asNumber(process.stdout.columns, 80);
+    // The status line is chrome, so in inline mode it is a row inside the live
+    // area — and a row that wraps moves every row below it, which is how an
+    // inline TUI's geometry goes wrong on a narrow terminal. `?7l` is disabled
+    // around every frame for exactly this, but it is a request, not a
+    // guarantee: measured on Windows ConPTY, a line that reaches the last column
+    // wraps anyway and the frame lands one row lower than intended.
+    //
+    // So the line is fitted to the terminal instead of trusted to wrap. One
+    // column is left spare because a line that exactly fills the width is the
+    // case that wraps.
+    const width = Math.max(8, this.terminalSize().columns - 1);
     const usage = this.usageSegment();
     // Queued-prompt count: the visible half of the busy-time queue, so a
     // user can see their follow-up prompts exist without digging for the
     // "queued (N)" transcript line that acknowledged each one.
     const queued = this.options.queuedCount?.() ?? 0;
     const queueSegment = queued > 0 ? ` · ⧗ ${queued}` : '';
-    const maxActivityLength = Math.max(8, width - text.length - context.length - tail.length - usage.length - queueSegment.length - 6);
+    const fixed = `${text} | ${tail}${usage}${queueSegment} | ${context}`;
+    // No floor under the activity budget: when the fixed parts alone exceed the
+    // width, the only honest answer is a truncated activity rather than a status
+    // line that wraps and takes the frame with it.
+    const maxActivityLength = Math.max(0, width - fixed.length);
     const activity = escapeTags(compactActivity(this.activityLabel(busy), maxActivityLength));
-    this.statusBar.setContent(`{gray-fg}${text} | ${activity}${tail}${usage}${queueSegment} | ${context}{/gray-fg}`);
+    // Clamped as PLAIN TEXT, before the colour tag goes on: fitting a line that
+    // already carries markup counts the tag as characters and can cut one in
+    // half, which leaves the terminal in the previous colour for the rest of the
+    // row.
+    const visible = compactActivity(`${text} | ${activity}${tail}${usage}${queueSegment} | ${context}`, width);
+    const line = `{gray-fg}${visible}{/gray-fg}`;
+    if (this.statusBar !== null) this.statusBar.setContent(line);
+    else this.inlineStatusLines = [visible];
   }
 
   /**
@@ -953,13 +1231,15 @@ private paintCompletion(): void {
   }
 
   private paintOverlay(): void {
+    const box = this.overlayBox;
+    if (box === null) return;
     if (this.interactivePrompt !== null) {
       const prompt = this.interactivePrompt;
       const body = this.renderInteractivePrompt(prompt);
-      this.overlayBox.height = Math.min(body.split('\n').length + 2, Math.max(5, asNumber(this.program.rows, 24) - 2));
-      this.overlayBox.style.border.fg = prompt.kind === 'text' && prompt.secret ? 'yellow' : 'cyan';
-      this.overlayBox.setContent(body);
-      if (this.overlayBox.hidden) this.overlayBox.show();
+      box.height = Math.min(body.split('\n').length + 2, Math.max(5, asNumber(this.program.rows, 24) - 2));
+      box.style.border.fg = prompt.kind === 'text' && prompt.secret ? 'yellow' : 'cyan';
+      box.setContent(body);
+      if (box.hidden) box.show();
       return;
     }
 
@@ -969,22 +1249,22 @@ private paintCompletion(): void {
       // then nothing. Only one of the three can be on screen.
       const windowBody = this.windowMgr.render(Math.max(5, asNumber(this.program.rows, 24) - 4));
       if (windowBody === null) {
-        if (!this.overlayBox.hidden) this.overlayBox.hide();
+        if (!box.hidden) box.hide();
         return;
       }
-      this.overlayBox.height = windowBody.split('\n').length + 2;
-      this.overlayBox.style.border.fg = 'cyan';
-      this.overlayBox.setContent(windowBody);
-      if (this.overlayBox.hidden) this.overlayBox.show();
+      box.height = windowBody.split('\n').length + 2;
+      box.style.border.fg = 'cyan';
+      box.setContent(windowBody);
+      if (box.hidden) box.show();
       return;
     }
     // Height is set explicitly rather than left to blessed's `'auto'`: a box
     // that starts hidden has no measured height to auto-size from, and an
     // overlay that renders at zero height is an overlay that never appears.
-    this.overlayBox.height = body.split('\n').length + 2;
-    this.overlayBox.style.border.fg = 'yellow';
-    this.overlayBox.setContent(body);
-    if (this.overlayBox.hidden) this.overlayBox.show();
+    box.height = body.split('\n').length + 2;
+    box.style.border.fg = 'yellow';
+    box.setContent(body);
+    if (box.hidden) box.show();
   }
 
   private renderInteractivePrompt(prompt: InteractivePrompt): string {
@@ -1392,7 +1672,11 @@ private paintCompletion(): void {
     if (def === undefined) return;
     const keys = toBlessedKeys(def.keys);
     if (keys.length === 0) return;
-    this.screen.key(keys, handler);
+    // On the program, not the screen: `Screen.prototype.key` is a one-line
+    // delegation to `Program.prototype.key` (blessed screen.js:1726), so this is
+    // the same binding in full-screen mode — and it is the only one available
+    // in inline mode, which deliberately has no Screen.
+    this.program.key(keys, handler);
   }
 
   /** F1: the keymap, rendered from the same table `bindKeys` documents. */
@@ -1562,7 +1846,9 @@ exportHistory(): string[] {
   ]);
 
   private bindKeys(): void {
-    const target = this.screen;
+    // Bound to the program, never to a Screen: see `bindAction`. Inline mode
+    // has no Screen, and a Screen's own key table is this program's table.
+    const target = this.program;
 
     target.key(['C-c'], () => {
       if (this.interactivePrompt !== null) this.settleInteractivePrompt(null);
