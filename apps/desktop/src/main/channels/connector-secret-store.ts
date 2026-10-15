@@ -14,8 +14,11 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import type { ConnectorSecretRecord } from '../../../../../packages/agent/src/channels/types';
 import { getSharedAgentsRoot } from '../config/agent-paths';
+
+interface ConnectorSecretRecord {
+  [field: string]: string;
+}
 
 // =============================================================================
 // Path resolution

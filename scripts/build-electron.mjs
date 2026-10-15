@@ -2,6 +2,7 @@ import { build } from 'esbuild';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { workspacePublicSources } from './workspace-public-sources.mjs';
 
 // ESM has no __dirname — derive the script directory from import.meta.url.
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -9,6 +10,9 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 async function buildElectron() {
   // Clean dist-electron/ before every build to prevent stale artifacts
   if (fs.existsSync('dist-electron')) {
+    if (fs.realpathSync('dist-electron') !== path.resolve('dist-electron') || fs.lstatSync('dist-electron').isSymbolicLink()) {
+      throw new Error('Refusing to clean redirected Electron output');
+    }
     fs.rmSync('dist-electron', { recursive: true });
     console.log('Cleaned dist-electron/');
   }
@@ -46,49 +50,9 @@ async function buildElectron() {
     // debug sessions still see unminified stack traces via the .map files.
     minify: true,
     treeShaking: true,
-    alias: {
-      // Resolve workspace plugin-core from THIS checkout (worktree-safe);
-      // node_modules junctions would otherwise pin the primary checkout.
-      // Points at `dist`, mirroring the package's own `exports` map: the bare
-      // name lands on `dist/index.js` and a declared subpath on
-      // `dist/<subpath>`, so `@duya/plugin-core/mcp/core/alias` rewrites to
-      // `dist/mcp/core/alias` instead of the old `src/`-shaped specifiers.
-      // (esbuild substitutes the matched package-name prefix, so one entry
-      // covers the bare name and every subpath — see the longest-match note
-      // on `@duya/agent-protocol` below.)
-      '@duya/plugin-core': path.resolve(scriptDir, '../packages/plugin-core/dist'),
-      // Plan 610 A5: same convention and same worktree-safety reason as the
-      // entry above, for the package the App Connector vocabulary and the
-      // `.app.json` schema moved into. One entry covers the bare name and every
-      // subpath, because esbuild substitutes the matched package-name prefix.
-      '@duya/connectors': path.resolve(scriptDir, '../packages/connectors/dist'),
-      // Same reason, same root-pointing convention, for the three packages
-      // plan 584/586 added. They are ESM with `exports` maps, so the package
-      // root resolves to `dist/index.js` via `main` and the `/testing`
-      // subpath to `dist/testing/index.js` — which is what
-      // `apps/desktop/src/main/agents/server/run-orchestrator.ts` imports.
-      //
-      // The SUBPATH must be listed first and explicitly. esbuild treats an
-      // alias as matching the exact path or a `/`-delimited prefix, so a bare
-      // `@duya/agent-protocol` entry also swallows
-      // `@duya/agent-protocol/testing` and rewrites it to
-      // `<root>/testing` — which resolves to nothing, because the built subpath
-      // lives at `dist/testing`. Longest match wins, so naming both is what
-      // makes the pair work.
-      '@duya/agent-protocol/testing': path.resolve(scriptDir, '../packages/agent-protocol/dist/testing/index.js'),
-      '@duya/agent-protocol': path.resolve(scriptDir, '../packages/agent-protocol'),
-      '@duya/agent-core': path.resolve(scriptDir, '../packages/agent-core'),
-      '@duya/agent-runtime': path.resolve(scriptDir, '../packages/agent-runtime'),
-      // The `duya-file://` media allowlist
-      // (apps/desktop/src/main/core/media-allowlist.ts, plan 583 ISS-02)
-      // reuses the sandboxed file tools' root-boundary primitive instead of a
-      // third hand-rolled variant. Point at the source file: it only imports
-      // node:fs/node:path, so it inlines cleanly into the main-process bundle.
-      '@duya/agent/tool/allowedRoots': path.resolve(
-        scriptDir,
-        '../packages/agent/src/tool/allowedRoots.ts',
-      ),
-    },
+    plugins: [workspacePublicSources(path.resolve(scriptDir, '..'))],
+    banner: { js: "var import_meta_url = typeof __filename === 'string' ? require('url').pathToFileURL(__filename).href : undefined;" },
+    define: { 'import.meta.url': 'import_meta_url' },
     // The agent bundle (and WorkerPool.ts in packages/agent) reads
     // `import.meta.url` and falls back to `__dirname` when bundled as CJS
     // without the `import_meta_url` polyfill (this Electron bundle does
@@ -121,10 +85,7 @@ async function buildElectron() {
     outfile: 'dist-electron/project-database-worker.js',
   });
 
-  // Agent runs as ChildProcess via agent-process-entry.ts
-  // which is built separately by the agent package's own TypeScript build (npm run build:agent)
-  // and is NOT part of the electron bundle.
-  // AgentProcessPool spawns this process using its own dist/ path at runtime.
+  // Host worker and shell-child executables are emitted by build-agent-bundle.mjs.
 
   console.log('Electron build complete');
 
@@ -148,13 +109,7 @@ function copyNativeModules() {
     }
   }
 
-  // Also check in packages/agent/node_modules for better-sqlite3
-  const agentBetterSqlite3 = 'packages/agent/node_modules/better-sqlite3';
-  const targetBetterSqlite3 = path.join(distNodeModules, 'better-sqlite3');
-  if (fs.existsSync(agentBetterSqlite3) && !fs.existsSync(targetBetterSqlite3)) {
-    fs.cpSync(agentBetterSqlite3, targetBetterSqlite3, { recursive: true });
-    console.log(`Copied better-sqlite3 from packages/agent/node_modules/`);
-  }
+
 }
 
 buildElectron().catch((err) => {

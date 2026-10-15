@@ -173,6 +173,7 @@ interface ProviderListItem {
   name: string;
   providerType: string;
   isActive: boolean;
+  isDefault?: boolean;
   hasKey: boolean;
   baseUrl?: string;
   model?: string;
@@ -186,9 +187,11 @@ interface ApiProvider {
   apiKey?: string;
   isActive?: boolean;
   model?: string;
+  options?: Record<string, unknown>;
 }
 
 function toProviderListItem(p: ApiProvider): ProviderListItem {
+  const model = p.model ?? (typeof p.options?.defaultModel === 'string' ? p.options.defaultModel : undefined);
   return {
     id: p.id,
     name: p.name,
@@ -196,7 +199,7 @@ function toProviderListItem(p: ApiProvider): ProviderListItem {
     isActive: p.isActive === true,
     hasKey: typeof p.apiKey === 'string' && p.apiKey.length > 0,
     ...(p.baseUrl ? { baseUrl: p.baseUrl } : {}),
-    ...(p.model ? { model: p.model } : {}),
+    ...(model ? { model } : {}),
   };
 }
 
@@ -215,7 +218,11 @@ function toProviderInfoItem(p: ApiProvider): ProviderListItem & { headers: Recor
 export function handleListConfigProviders(_req: IncomingMessage, res: ServerResponse): void {
   try {
     const all = Object.fromEntries(getProviderStore().listLlmProviders().map((p) => [p.id, toLegacyApiProvider(p)]));
-    const providers: ProviderListItem[] = Object.values(all).map(toProviderListItem);
+    const defaultId = getProviderStore().getDefaultLlmProvider()?.id;
+    const providers: ProviderListItem[] = Object.values(all).map((provider) => ({
+      ...toProviderListItem(provider),
+      isDefault: provider.id === defaultId,
+    }));
     sendJson(res, 200, { providers });
   } catch (err) {
     const c = classify(err);
@@ -235,7 +242,9 @@ export function handleGetConfigProvider(_req: IncomingMessage, res: ServerRespon
       sendError(res, 404, 'provider_not_found', `Provider '${id}' not found`);
       return;
     }
-    sendJson(res, 200, { provider: toProviderInfoItem(found) });
+    sendJson(res, 200, {
+      provider: { ...toProviderInfoItem(found), isDefault: found.id === getProviderStore().getDefaultLlmProvider()?.id },
+    });
   } catch (err) {
     const c = classify(err);
     sendError(res, c.status, c.code, c.message);
@@ -263,13 +272,31 @@ export async function handleAddConfigProvider(req: IncomingMessage, res: ServerR
   }
   const baseUrl = typeof body.baseUrl === 'string' ? body.baseUrl : '';
   const apiKey = typeof body.apiKey === 'string' ? body.apiKey : '';
+  const model = typeof body.model === 'string' ? body.model.trim() : '';
+  const models = Array.isArray(body.models)
+    ? body.models.filter((item): item is string => typeof item === 'string' && item.trim() !== '').map((item) => item.trim())
+    : [];
+  const extraEnv = typeof body.extraEnv === 'object' && body.extraEnv !== null && !Array.isArray(body.extraEnv)
+    ? Object.fromEntries(Object.entries(body.extraEnv).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+    : undefined;
   const isActive = body.isActive === true;
   try {
     // Cast to the ApiProvider union — the wire body uses the same
     // enum but the TS type for `providerType` is a strict literal
     // union. Validate at the wire boundary; the manager rejects
     // unknown types.
-    const up = getProviderStore().upsertLlmProvider(migrateLegacyApiProvider({ id, name, providerType, baseUrl, apiKey, isActive } as unknown as Parameters<typeof migrateLegacyApiProvider>[0]));
+    const up = getProviderStore().upsertLlmProvider(migrateLegacyApiProvider({
+      id,
+      name,
+      providerType,
+      baseUrl,
+      apiKey,
+      isActive,
+      ...(extraEnv && Object.keys(extraEnv).length > 0 ? { extraEnv } : {}),
+      ...(model || models.length > 0
+        ? { model, options: { ...(model ? { defaultModel: model } : {}), enabled_models: models.length > 0 ? models : [model] } }
+        : {}),
+    } as unknown as Parameters<typeof migrateLegacyApiProvider>[0]));
     if (!up.ok) {
       sendError(res, 400, 'invalid_request', up.message);
       return;
@@ -277,6 +304,10 @@ export async function handleAddConfigProvider(req: IncomingMessage, res: ServerR
     const ctx = readAuditContext(req);
     await audit(ctx, 'config.provider.add', id, `providerType=${providerType}`);
     const stored = (() => { const pr = getProviderStore().getLlmProvider(id); return pr ? toLegacyApiProvider(pr) : undefined; })();
+    if (stored === undefined) {
+      sendError(res, 500, 'provider_save_failed', `Provider '${id}' was saved but could not be read back`);
+      return;
+    }
     sendJson(res, 200, { ok: true, provider: toProviderListItem(stored) });
   } catch (err) {
     const c = classify(err);

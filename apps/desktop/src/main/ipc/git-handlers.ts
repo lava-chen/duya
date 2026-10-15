@@ -8,7 +8,7 @@ import { spawnSync, type SpawnSyncReturns } from 'child_process';
 import { ipcMain } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
-import { getDatabase } from './db-handlers';
+import { getDesktopHostLocalTurnReviewApi } from '../cli/desktop-host-api';
 
 const GIT_TIMEOUT_MS = 5_000;
 const MAX_DIFF_BYTES = 1_000_000;
@@ -40,6 +40,7 @@ import type {
   GitRepositoryState,
   GitCommitDetailResult,
 } from '../../contracts/git';
+import type { HostLocalTurnReviewRecord } from '@duya/agent-protocol';
 
 function isGitRepoDir(cwd: string): boolean {
   try {
@@ -313,126 +314,89 @@ function parseStoredTurnFiles(value: unknown): GitReviewFile[] | null {
   return files;
 }
 
-interface TurnReviewRow {
-  id: string;
-  session_id: string;
-  turn_id: string;
-  working_directory: string;
-  files_json: string;
-  patch: string;
-  additions: number;
-  removals: number;
-  truncated: number;
-  binary: number;
-  captured_at: number;
-}
-
-const TURN_REVIEW_COLUMNS = 'id, session_id, turn_id, working_directory, files_json, patch, additions, removals, truncated, binary, captured_at';
-
-function rowToTurnReview(row: TurnReviewRow): GitTurnReview | null {
+function rowToTurnReview(row: HostLocalTurnReviewRecord): GitTurnReview | null {
   try {
-    const files = parseStoredTurnFiles(JSON.parse(row.files_json));
+    const files = parseStoredTurnFiles(JSON.parse(row.filesJson));
     if (!files) return null;
     return {
       id: row.id,
-      sessionId: row.session_id,
-      turnId: row.turn_id,
-      workingDirectory: row.working_directory,
+      sessionId: row.sessionId,
+      turnId: row.turnId,
+      workingDirectory: row.workingDirectory,
       files,
       totals: { additions: row.additions, removals: row.removals, fileCount: files.length },
       patch: row.patch,
       truncated: row.truncated === 1,
       binary: row.binary === 1,
-      capturedAt: row.captured_at,
+      capturedAt: row.capturedAt,
     };
   } catch {
     return null;
   }
 }
 
-function readLatestTurnReview(sessionId: string): GitLatestTurnReviewResult {
-  const db = getDatabase();
-  if (!db) return { isGitRepo: true, error: 'Review history is unavailable.' };
+function getTurnReviewApiOrNull() {
+  try {
+    return getDesktopHostLocalTurnReviewApi();
+  } catch {
+    return null;
+  }
+}
+
+async function readLatestTurnReview(sessionId: string): Promise<GitLatestTurnReviewResult> {
+  const api = getTurnReviewApiOrNull();
+  if (!api) return { isGitRepo: true, error: 'Review history is unavailable.' };
   // Plan 308 Phase 2: match by session_id only. Filtering on the stored
   // working_directory with exact string equality silently returned no rows
   // whenever the agent cwd and the renderer cwd drifted in separators or
   // case on Windows. session_id is unique per session and indexed for this
   // lookup (idx_chat_turn_reviews_latest).
-  const row = db.prepare(`
-    SELECT ${TURN_REVIEW_COLUMNS}
-    FROM chat_turn_reviews
-    WHERE session_id = ?
-    ORDER BY captured_at DESC
-    LIMIT 1
-  `).get(sessionId) as TurnReviewRow | undefined;
+  const row = await api.getLatestTurnReview(sessionId);
   if (!row) return { isGitRepo: true };
   const review = rowToTurnReview(row);
   if (!review) return { isGitRepo: true, error: 'Stored review history is invalid.' };
   return { isGitRepo: true, review };
 }
 
-function readTurnHistory(sessionId: string, limit: number): GitTurnHistoryResult {
-  const db = getDatabase();
-  if (!db) return { isGitRepo: true, error: 'Review history is unavailable.' };
-  const rows = db.prepare(`
-    SELECT id, turn_id, files_json, additions, removals, captured_at
-    FROM chat_turn_reviews
-    WHERE session_id = ?
-    ORDER BY captured_at DESC
-    LIMIT ?
-  `).all(sessionId, limit) as Array<{
-    id: string;
-    turn_id: string;
-    files_json: string;
-    additions: number;
-    removals: number;
-    captured_at: number;
-  }>;
+async function readTurnHistory(sessionId: string, limit: number): Promise<GitTurnHistoryResult> {
+  const api = getTurnReviewApiOrNull();
+  if (!api) return { isGitRepo: true, error: 'Review history is unavailable.' };
+  const rows = await api.listTurnReviewHistory(sessionId, limit);
   const turns: GitTurnHistoryEntry[] = [];
   for (const row of rows) {
     let fileCount = 0;
     try {
-      const parsed: unknown = JSON.parse(row.files_json);
+      const parsed: unknown = JSON.parse(row.filesJson);
       if (Array.isArray(parsed)) fileCount = parsed.length;
     } catch {
       // Unreadable payload — still list the turn with a zero count.
     }
     turns.push({
       id: row.id,
-      turnId: row.turn_id,
+      turnId: row.turnId,
       additions: row.additions,
       removals: row.removals,
       fileCount,
-      capturedAt: row.captured_at,
+      capturedAt: row.capturedAt,
     });
   }
   return { isGitRepo: true, turns };
 }
 
-function readTurnDetail(reviewId: string): GitLatestTurnReviewResult {
-  const db = getDatabase();
-  if (!db) return { isGitRepo: true, error: 'Review history is unavailable.' };
-  const row = db.prepare(`
-    SELECT ${TURN_REVIEW_COLUMNS}
-    FROM chat_turn_reviews
-    WHERE id = ?
-  `).get(reviewId) as TurnReviewRow | undefined;
+async function readTurnDetail(reviewId: string): Promise<GitLatestTurnReviewResult> {
+  const api = getTurnReviewApiOrNull();
+  if (!api) return { isGitRepo: true, error: 'Review history is unavailable.' };
+  const row = await api.getTurnReviewById(reviewId);
   if (!row) return { isGitRepo: true };
   const review = rowToTurnReview(row);
   if (!review) return { isGitRepo: true, error: 'Stored review history is invalid.' };
   return { isGitRepo: true, review };
 }
 
-function readTurnReviewByTurnId(sessionId: string, turnId: string): GitLatestTurnReviewResult {
-  const db = getDatabase();
-  if (!db) return { isGitRepo: true, error: 'Review history is unavailable.' };
-  const row = db.prepare(`
-    SELECT ${TURN_REVIEW_COLUMNS}
-    FROM chat_turn_reviews
-    WHERE session_id = ? AND turn_id = ?
-    ORDER BY captured_at DESC
-    LIMIT 1
-  `).get(sessionId, turnId) as TurnReviewRow | undefined;
+async function readTurnReviewByTurnId(sessionId: string, turnId: string): Promise<GitLatestTurnReviewResult> {
+  const api = getTurnReviewApiOrNull();
+  if (!api) return { isGitRepo: true, error: 'Review history is unavailable.' };
+  const row = await api.getTurnReviewByTurnId(sessionId, turnId);
   if (!row) return { isGitRepo: true };
   const review = rowToTurnReview(row);
   if (!review) return { isGitRepo: true, error: 'Stored review history is invalid.' };
@@ -613,7 +577,7 @@ export function registerGitHandlers(): void {
       return { isGitRepo: false };
     }
     try {
-      return readLatestTurnReview(sessionId);
+      return await readLatestTurnReview(sessionId);
     } catch {
       return { isGitRepo: true, error: 'Unable to load review history.' };
     }
@@ -631,7 +595,7 @@ export function registerGitHandlers(): void {
     }
     const capped = typeof limit === 'number' && limit > 0 && limit <= 200 ? Math.floor(limit) : 50;
     try {
-      return readTurnHistory(sessionId, capped);
+      return await readTurnHistory(sessionId, capped);
     } catch {
       return { isGitRepo: true, error: 'Unable to load review history.' };
     }
@@ -649,7 +613,7 @@ export function registerGitHandlers(): void {
       return { isGitRepo: false };
     }
     try {
-      return readTurnDetail(reviewId);
+      return await readTurnDetail(reviewId);
     } catch {
       return { isGitRepo: true, error: 'Unable to load review history.' };
     }
@@ -668,7 +632,7 @@ export function registerGitHandlers(): void {
       return { isGitRepo: false };
     }
     try {
-      return readTurnReviewByTurnId(sessionId, turnId);
+      return await readTurnReviewByTurnId(sessionId, turnId);
     } catch {
       return { isGitRepo: true, error: 'Unable to load review history.' };
     }

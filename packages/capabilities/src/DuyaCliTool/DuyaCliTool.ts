@@ -1,0 +1,469 @@
+/**
+ * Capability implementation for the DUYA CLI control-plane tool.
+ *
+ * The single agent-side entry point to the DUYA CLI control plane.
+ *
+ * The agent must use this tool — NOT bespoke tool implementations —
+ * for everything the CLI control plane covers.
+ *
+ * ## Two invocation styles
+ *
+ * 1. **Structured** (legacy Phase 8, frozen):
+ *    ```
+ *    { command, subcommand?, id?, format?, yes? }
+ *    ```
+ *    Preserved for backward compatibility with the original Phase 8
+ *    frozen contract (see `docs/design-docs/cli-control-plane/roadmap.md`
+ *    §6 Phase 8). New code should prefer argv.
+ *
+ * 2. **argv** (Plan 99):
+ *    ```
+ *    { argv: ['cron', 'list', '--format', 'json'] }
+ *    ```
+ *    Mirrors the external `duya` CLI bundle 1:1. No translation layer,
+ *    no schema drift — what the agent sends is what the user would
+ *    type at the terminal. This unlocks the full CLI surface
+ *    (including channel/cron/message added in plan 98) without
+ *    touching the agent's Zod schema.
+ *
+ * ## Schema
+ *
+ * The Zod `inputSchema` is **derived from `descriptors.ts`** (Plan 99)
+ * so the enum of valid `command` values is auto-generated and stays
+ * in sync with the descriptor registry. argv-style bypasses the
+ * structured enum entirely and goes through the same `buildAgentRunner`
+ * dispatcher.
+ */
+
+import { z } from 'zod/v4';
+import { DUYA_CLI_TOOL_NAME } from './constants.js';
+import { DESCRIPTION } from './prompt.js';
+import { BaseTool } from '../BaseTool.js';
+import type { ToolResult } from '../contracts/tool.js';
+import type {
+  DuyaCliCommandDescriptor,
+  DuyaCliInvocation,
+  DuyaCliToolPort,
+} from './ports.js';
+
+// ---------------------------------------------------------------------------
+// Schema (Plan 99 — auto-generated enum from descriptors)
+// ---------------------------------------------------------------------------
+
+function toCommandTuple(commands: readonly string[]): [string, ...string[]] {
+  const [first, ...rest] = commands;
+  if (first === undefined) throw new Error('DuyaCliTool requires at least one CLI command');
+  return [first, ...rest];
+}
+
+function createInputSchema(commands: readonly string[]) {
+  return z
+    .object({
+    // argv-style (Plan 99 — preferred for new code)
+    argv: z
+      .array(z.string())
+      .optional()
+      .describe(
+        'Positional CLI argv, mirrors the external `duya` CLI 1:1. Example: ["cron", "list", "--format", "json"]. Mutually exclusive with command/subcommand fields.',
+      ),
+    format: z
+      .enum(['json', 'text'])
+      .optional()
+      .describe(
+        'Output format. Applies to structured command/subcommand style and as the default for argv style. Default: json. Always prefer json in agent context.',
+      ),
+    yes: z
+      .boolean()
+      .optional()
+      .describe(
+        'Skip confirmation prompt. Required for write operations in non-interactive mode.',
+      ),
+
+    // Structured (Phase 8, frozen — preserved for backward compat)
+    command: z
+      .enum(toCommandTuple(commands))
+      .optional()
+      .describe(
+        'Top-level CLI command (Phase 8 frozen enum). Prefer `argv` for new code.',
+      ),
+    subcommand: z
+      .string()
+      .optional()
+      .describe(
+        'Subcommand for the top-level command (Phase 8 style). Use `argv` for new code.',
+      ),
+    id: z
+      .string()
+      .optional()
+      .describe('Skill/Plugin/Session/MCP/Provider id (Phase 8 style).'),
+    })
+    .refine((data) => data.argv !== undefined || data.command !== undefined, {
+      message: 'either argv or command must be provided',
+    });
+}
+
+export type DuyaCliInput = z.infer<ReturnType<typeof createInputSchema>>;
+
+function commandMap(commands: readonly DuyaCliCommandDescriptor[]): Partial<Record<string, readonly string[]>> {
+  return Object.fromEntries(
+    commands
+      .filter((command) => command.subcommands)
+      .map((command) => [command.name, [...command.subcommands!, 'help']]),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Envelope helpers
+// ---------------------------------------------------------------------------
+
+function toolSuccess(payload: unknown): ToolResult {
+  return {
+    id: crypto.randomUUID(),
+    name: DUYA_CLI_TOOL_NAME,
+    result: JSON.stringify(payload, null, 2),
+  };
+}
+
+function toolError(message: string, extra?: Record<string, unknown>): ToolResult {
+  return {
+    id: crypto.randomUUID(),
+    name: DUYA_CLI_TOOL_NAME,
+    result: JSON.stringify({ error: message, ...(extra ?? {}) }),
+    error: true,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// argv-style parser
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse `argv` into a `CliInvocation` understood by `runCliCommand`.
+ * Supports `--key value` and `--key=value` forms. Unknown flags are
+ * passed through as strings under `extraArgs` (or ignored if the
+ * descriptor has a `pagination` / `write` flag, etc.).
+ */
+function parseArgv(argv: string[]): DuyaCliInvocation {
+  const out: DuyaCliInvocation = { command: '', extraArgs: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const tok = argv[i];
+    // Plan 108 — `--help` / `-h` is the standard "show help" flag.
+    // Surface it to the runner as `subcommand: 'help'` so the
+    // runner's help branch (which prints the subcommand table)
+    // handles it uniformly with the structured path. Without this,
+    // the unknown-flag branch below would silently swallow `--help`.
+    if (tok === '--help' || tok === '-h') {
+      out.subcommand = 'help';
+      continue;
+    }
+    if (tok === '--format' && i + 1 < argv.length) {
+      out.format = argv[++i];
+      continue;
+    }
+    if (tok.startsWith('--format=')) {
+      out.format = tok.slice('--format='.length);
+      continue;
+    }
+    if (tok === '--yes') {
+      out.yes = true;
+      continue;
+    }
+    if (tok === '--limit' && i + 1 < argv.length) {
+      out.limit = argv[++i];
+      continue;
+    }
+    if (tok.startsWith('--limit=')) {
+      out.limit = tok.slice('--limit='.length);
+      continue;
+    }
+    if (tok === '--offset' && i + 1 < argv.length) {
+      out.offset = argv[++i];
+      continue;
+    }
+    if (tok.startsWith('--offset=')) {
+      out.offset = tok.slice('--offset='.length);
+      continue;
+    }
+    if (tok === '--platform' && i + 1 < argv.length) {
+      out.platform = argv[++i];
+      continue;
+    }
+    if (tok.startsWith('--platform=')) {
+      out.platform = tok.slice('--platform='.length);
+      continue;
+    }
+    if (tok === '--from-file' && i + 1 < argv.length) {
+      out.fromFile = argv[++i];
+      continue;
+    }
+    if (tok.startsWith('--from-file=')) {
+      out.fromFile = tok.slice('--from-file='.length);
+      continue;
+    }
+    if (tok === '--cron' && i + 1 < argv.length) {
+      // Plan 99 P3: inline JSON body for cron create
+      out.cronBodyJson = argv[++i];
+      continue;
+    }
+    if (tok.startsWith('--cron=')) {
+      out.cronBodyJson = tok.slice('--cron='.length);
+      continue;
+    }
+    if (tok === '--prompt' && i + 1 < argv.length) {
+      out.prompt = argv[++i];
+      continue;
+    }
+    if (tok.startsWith('--prompt=')) {
+      out.prompt = tok.slice('--prompt='.length);
+      continue;
+    }
+    // Plan 102 (config command) — provider / settings / vision / style / pairing flags
+    if (tok === '--id' && i + 1 < argv.length) { out.configId = argv[++i]; out.agentId = argv[i]; continue; }
+    if (tok.startsWith('--id=')) { out.configId = tok.slice('--id='.length); out.agentId = out.configId; continue; }
+    if (tok === '--name' && i + 1 < argv.length) { out.configName = argv[++i]; out.agentName = argv[i]; continue; }
+    if (tok.startsWith('--name=')) { out.configName = tok.slice('--name='.length); out.agentName = out.configName; continue; }
+    if (tok === '--type' && i + 1 < argv.length) { out.configType = argv[++i]; continue; }
+    if (tok.startsWith('--type=')) { out.configType = tok.slice('--type='.length); continue; }
+    // Plan 102 — `mcp add` exposes `--server` / `--command` to the user
+    // via the descriptor. Map them to the same configId / configType the
+    // structured contract carries so the external CLI and the agent tool
+    // agree on the flag names (the descriptor help is authoritative).
+    if (tok === '--server' && i + 1 < argv.length) { out.configId = argv[++i]; continue; }
+    if (tok.startsWith('--server=')) { out.configId = tok.slice('--server='.length); continue; }
+    if (tok === '--command' && i + 1 < argv.length) { out.configType = argv[++i]; continue; }
+    if (tok.startsWith('--command=')) { out.configType = tok.slice('--command='.length); continue; }
+    if (tok === '--base-url' && i + 1 < argv.length) { out.configBaseUrl = argv[++i]; continue; }
+    if (tok.startsWith('--base-url=')) { out.configBaseUrl = tok.slice('--base-url='.length); continue; }
+    if (tok === '--api-key' && i + 1 < argv.length) { out.configApiKey = argv[++i]; continue; }
+    if (tok.startsWith('--api-key=')) { out.configApiKey = tok.slice('--api-key='.length); continue; }
+    if (tok === '--active') { out.configActive = true; continue; }
+    if (tok === '--enabled') { out.configEnabled = true; out.enabled = true; continue; }
+    if (tok === '--verbose') { out.verbose = true; continue; }
+    if (tok === '--delete-data') { out.deleteData = true; continue; }
+    if (tok === '--from-path' && i + 1 < argv.length) { out.fromPath = argv[++i]; continue; }
+    if (tok.startsWith('--from-path=')) { out.fromPath = tok.slice('--from-path='.length); continue; }
+    if (tok === '--scope' && i + 1 < argv.length) { out.scope = argv[++i]; continue; }
+    if (tok.startsWith('--scope=')) { out.scope = tok.slice('--scope='.length); continue; }
+    if (tok === '--model' && i + 1 < argv.length) { out.configModel = argv[++i]; out.agentModel = argv[i]; continue; }
+    if (tok.startsWith('--model=')) { out.configModel = tok.slice('--model='.length); out.agentModel = out.configModel; continue; }
+    if (tok === '--provider' && i + 1 < argv.length) { out.configProvider = argv[++i]; continue; }
+    if (tok.startsWith('--provider=')) { out.configProvider = tok.slice('--provider='.length); continue; }
+    if (tok === '--max-tokens' && i + 1 < argv.length) { out.configMaxTokens = argv[++i]; continue; }
+    if (tok.startsWith('--max-tokens=')) { out.configMaxTokens = tok.slice('--max-tokens='.length); continue; }
+    if (tok === '--temperature' && i + 1 < argv.length) { out.configTemperature = argv[++i]; continue; }
+    if (tok.startsWith('--temperature=')) { out.configTemperature = tok.slice('--temperature='.length); continue; }
+    if (tok === '--top-p' && i + 1 < argv.length) { out.configTopP = argv[++i]; continue; }
+    if (tok.startsWith('--top-p=')) { out.configTopP = tok.slice('--top-p='.length); continue; }
+    if (tok === '--top-k' && i + 1 < argv.length) { out.configTopK = argv[++i]; continue; }
+    if (tok.startsWith('--top-k=')) { out.configTopK = tok.slice('--top-k='.length); continue; }
+    if (tok === '--enable-thinking') { out.configEnableThinking = true; continue; }
+    if (tok === '--thinking-budget' && i + 1 < argv.length) { out.configThinkingBudget = argv[++i]; continue; }
+    if (tok.startsWith('--thinking-budget=')) { out.configThinkingBudget = tok.slice('--thinking-budget='.length); continue; }
+    if (tok === '--code' && i + 1 < argv.length) { out.configCode = argv[++i]; continue; }
+    if (tok.startsWith('--code=')) { out.configCode = tok.slice('--code='.length); continue; }
+    if (tok === '--user' && i + 1 < argv.length) { out.configUser = argv[++i]; continue; }
+    if (tok.startsWith('--user=')) { out.configUser = tok.slice('--user='.length); continue; }
+    if (tok === '--style-id' && i + 1 < argv.length) { out.configStyleId = argv[++i]; continue; }
+    if (tok.startsWith('--style-id=')) { out.configStyleId = tok.slice('--style-id='.length); continue; }
+    if (tok === '--include' && i + 1 < argv.length) { out.configInclude = argv[++i]; continue; }
+    if (tok.startsWith('--include=')) { out.configInclude = tok.slice('--include='.length); continue; }
+    if (tok === '--clear') { out.configClear = true; continue; }
+    // Plan 102 (agent create) — single-value flags
+    if (tok === '--workspace' && i + 1 < argv.length) { out.agentWorkspace = argv[++i]; continue; }
+    if (tok.startsWith('--workspace=')) { out.agentWorkspace = tok.slice('--workspace='.length); continue; }
+    if (tok === '--description' && i + 1 < argv.length) { out.agentDescription = argv[++i]; continue; }
+    if (tok.startsWith('--description=')) { out.agentDescription = tok.slice('--description='.length); continue; }
+    if (tok === '--tools-profile' && i + 1 < argv.length) { out.agentToolsProfile = argv[++i]; continue; }
+    if (tok.startsWith('--tools-profile=')) { out.agentToolsProfile = tok.slice('--tools-profile='.length); continue; }
+    if (tok === '--instructions-file' && i + 1 < argv.length) { out.agentInstructionsFile = argv[++i]; continue; }
+    if (tok.startsWith('--instructions-file=')) { out.agentInstructionsFile = tok.slice('--instructions-file='.length); continue; }
+    // Plan 102 (agent create) — repeatable allow/deny/plugins lists
+    if (tok === '--allow' && i + 1 < argv.length) { (out.agentAllow = out.agentAllow ?? []), (out.agentAllow as string[]).push(argv[++i]); continue; }
+    if (tok.startsWith('--allow=')) { (out.agentAllow = out.agentAllow ?? []), (out.agentAllow as string[]).push(tok.slice('--allow='.length)); continue; }
+    if (tok === '--deny' && i + 1 < argv.length) { (out.agentDeny = out.agentDeny ?? []), (out.agentDeny as string[]).push(argv[++i]); continue; }
+    if (tok.startsWith('--deny=')) { (out.agentDeny = out.agentDeny ?? []), (out.agentDeny as string[]).push(tok.slice('--deny='.length)); continue; }
+    if (tok === '--plugins' && i + 1 < argv.length) { (out.agentPlugins = out.agentPlugins ?? []), (out.agentPlugins as string[]).push(argv[++i]); continue; }
+    if (tok.startsWith('--plugins=')) { (out.agentPlugins = out.agentPlugins ?? []), (out.agentPlugins as string[]).push(tok.slice('--plugins='.length)); continue; }
+    // Plan 102 (mcp add) — repeatable flags
+    if (tok === '--arg' && i + 1 < argv.length) { (out.configArgs ??= []).push(argv[++i]); continue; }
+    if (tok.startsWith('--arg=')) { (out.configArgs ??= []).push(tok.slice('--arg='.length)); continue; }
+    if (tok === '--env' && i + 1 < argv.length) { (out.configEnv ??= []).push(argv[++i]); continue; }
+    if (tok.startsWith('--env=')) { (out.configEnv ??= []).push(tok.slice('--env='.length)); continue; }
+    if (tok === '--agent' && i + 1 < argv.length) { (out.configAgents ??= []).push(argv[++i]); continue; }
+    if (tok.startsWith('--agent=')) { (out.configAgents ??= []).push(tok.slice('--agent='.length)); continue; }
+    if (tok.startsWith('--')) {
+      // Unknown long flag — skip value if next token is not a flag
+      if (i + 1 < argv.length && !argv[i + 1].startsWith('--')) i++;
+      continue;
+    }
+    // Positional arg
+    if (out.command === '') {
+      out.command = tok;
+    } else if (out.subcommand === undefined) {
+      out.subcommand = tok;
+    } else if (out.id === undefined) {
+      out.id = tok;
+    } else {
+      out.extraArgs!.push(tok);
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Tool class
+// ---------------------------------------------------------------------------
+
+export class DuyaCliTool extends BaseTool {
+  private readonly commandNames: readonly string[];
+  private readonly subcommands: Partial<Record<string, readonly string[]>>;
+  private readonly validationSchema: ReturnType<typeof createInputSchema>;
+
+  constructor(private readonly port: DuyaCliToolPort) {
+    super();
+    this.commandNames = port.commands.map((command) => command.name);
+    this.subcommands = commandMap(port.commands);
+    this.validationSchema = createInputSchema(this.commandNames);
+  }
+
+  readonly name = DUYA_CLI_TOOL_NAME;
+  readonly description = DESCRIPTION;
+  get input_schema(): Record<string, unknown> {
+    return {
+    type: 'object',
+    description:
+      'Single agent-side entry point to the DUYA CLI control plane. Two styles supported: structured (command/subcommand/id) or argv (preferred for new code).',
+    properties: {
+      argv: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'Positional CLI argv, 1:1 with the external `duya` CLI. Example: ["cron", "list", "--format", "json"]. Preferred for new code.',
+      },
+      command: {
+        type: 'string',
+        enum: [...this.commandNames],
+        description:
+          'Top-level CLI command (Phase 8 frozen enum). Auto-derived from the descriptor registry. Prefer `argv` for new code.',
+      },
+      subcommand: {
+        type: 'string',
+        description:
+          'Subcommand for the top-level command. Required for plugin/session/skill/mcp/provider/channel/cron/message.',
+      },
+      id: {
+        type: 'string',
+        description: 'Resource id (plugin/skill/session/mcp/provider/channel/cron).',
+      },
+      format: {
+        type: 'string',
+        enum: ['json', 'text'],
+        description: 'Output format. Default: json. Always prefer json in agent context.',
+      },
+      yes: {
+        type: 'boolean',
+        description: 'Skip confirmation prompt for write operations.',
+      },
+    },
+    required: [],
+    };
+  }
+
+  async execute(
+    input: Record<string, unknown>,
+    workingDirectory?: string,
+  ): Promise<ToolResult> {
+    const parsed = this.validationSchema.safeParse(input);
+    if (!parsed.success) {
+      return toolError(`Invalid input: ${parsed.error.message}`);
+    }
+    const data = parsed.data;
+
+    // ---------------------------------------------------------------
+    // Resolve invocation: argv OR structured
+    // ---------------------------------------------------------------
+    let invocation: DuyaCliInvocation;
+
+    if (data.argv !== undefined) {
+      if (data.argv.length === 0) {
+        return toolError('argv must be a non-empty array');
+      }
+      if (data.command !== undefined || data.subcommand !== undefined || data.id !== undefined) {
+        return toolError(
+          'argv is mutually exclusive with command/subcommand/id (use one style only)',
+        );
+      }
+      invocation = parseArgv(data.argv);
+      if (data.format !== undefined) invocation.format = data.format;
+      if (data.yes !== undefined) invocation.yes = data.yes;
+    } else {
+      // Structured (Phase 8) — preserved for backward compat
+      const command = data.command!;
+      const subs = this.subcommands[command];
+      if (subs && subs.length > 0 && !subs.includes('default')) {
+        // Multi-subcommand surface: require + validate subcommand
+        if (!data.subcommand) {
+          return toolError(`command '${command}' requires a subcommand`, {
+            allowedSubcommands: [...subs],
+          });
+        }
+        if (!subs.includes(data.subcommand)) {
+          return toolError(`unknown subcommand '${data.subcommand}' for '${command}'`, {
+            allowedSubcommands: [...subs],
+          });
+        }
+      } else if (data.subcommand) {
+        // Single-subcommand surface (status / doctor / install-cli etc.):
+        // any subcommand is rejected with the legacy "does not accept" hint.
+        return toolError(`command '${command}' does not accept a subcommand`, {
+          subcommand: data.subcommand,
+        });
+      }
+      invocation = {
+        command,
+        subcommand: data.subcommand,
+        id: data.id,
+        format: data.format ?? 'json',
+        yes: data.yes,
+      };
+    }
+
+    // Thread the session working directory into the invocation so
+    // relative paths (e.g. cron's `--from-file`) resolve against the
+    // session workspace, not the worker process cwd.
+    if (workingDirectory) {
+      invocation.cwd = workingDirectory;
+    }
+
+    // ---------------------------------------------------------------
+    // Dispatch
+    // ---------------------------------------------------------------
+    const result = await this.port.run(invocation);
+
+    // For json format, attempt to parse stdout so the agent can
+    // consume it as a structured object instead of a string blob.
+    let parsedStdout: unknown = result.stdout;
+    const fmt = invocation.format ?? 'json';
+    if (fmt !== 'text') {
+      const trimmed = result.stdout.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          parsedStdout = JSON.parse(trimmed);
+        } catch {
+          // keep as string
+        }
+      }
+    }
+
+    return toolSuccess({
+      command: invocation.command,
+      subcommand: invocation.subcommand ?? null,
+      argv: invocation.extraArgs,
+      exitCode: result.exitCode,
+      ok: result.exitCode === 0,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      data: parsedStdout,
+    });
+  }
+}

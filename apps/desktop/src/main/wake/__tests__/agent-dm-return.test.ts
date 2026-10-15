@@ -21,7 +21,22 @@ import {
 import {
   _setBotSessionCreatorForTest,
 } from '../agent-dm-dispatcher'
-import { decodeEnvelope } from '../../../../../../packages/agent/src/agent/dm/index.js'
+import { decodeEnvelope } from '@duya/agent-protocol'
+
+const mailboxApi = vi.hoisted(() => ({
+  enqueue: vi.fn(async (_input: unknown) => ({
+    id: 'row-1',
+    sessionId: '',
+    kind: 'agent_dm',
+    content: '',
+    clientMsgId: 'auto-1',
+  })),
+  getByClientMsgId: vi.fn(async () => null),
+}))
+
+vi.mock('../../cli/desktop-host-api', () => ({
+  getDesktopHostLocalMailboxApi: () => mailboxApi,
+}))
 
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
@@ -36,16 +51,22 @@ describe('maybeAutoReturnDmResult (P4.3)', () => {
   beforeEach(() => {
     _resetWakeDispatcherForTest()
     enqueuedRows.length = 0
+    mailboxApi.enqueue.mockImplementation(async (value: unknown) => {
+      const input = value as { sessionId: string; content: string }
+      enqueuedRows.push({ sessionId: input.sessionId, content: input.content })
+      return {
+        id: 'row-1',
+        sessionId: input.sessionId,
+        kind: 'agent_dm',
+        content: input.content,
+        clientMsgId: 'auto-1',
+      }
+    })
+    mailboxApi.getByClientMsgId.mockResolvedValue(null)
     _setWakeDispatcherDeps({ isLocked: () => true, runWake: async () => ({ output: '', events: [] }) })
     _setBotSessionCreatorForTest({ createIfMissing: () => {} })
     _setCoreStoresForTesting({
       sessions: { get: () => ({ agentName: 'Receiver' }) },
-      mailbox: {
-        enqueue: (input: { sessionId: string; content: string }) => {
-          enqueuedRows.push({ sessionId: input.sessionId, content: input.content })
-          return { id: 'row-1', sessionId: input.sessionId, kind: 'agent_dm', content: input.content, clientMsgId: 'auto-1' }
-        },
-      },
     } as unknown as CoreStores)
   })
 
@@ -63,8 +84,8 @@ describe('maybeAutoReturnDmResult (P4.3)', () => {
     hops: 1,
   }
 
-  it('auto-returns a request outcome as intent=result threaded via replyTo', () => {
-    const ok = maybeAutoReturnDmResult(ctx, 'Here is the summary you asked for.')
+  it('auto-returns a request outcome as intent=result threaded via replyTo', async () => {
+    const ok = await maybeAutoReturnDmResult(ctx, 'Here is the summary you asked for.')
     expect(ok).toBe(true)
     expect(enqueuedRows).toHaveLength(1)
     expect(enqueuedRows[0].sessionId).toBe('bot:sender')
@@ -76,21 +97,21 @@ describe('maybeAutoReturnDmResult (P4.3)', () => {
     expect(envelope.text).toContain('summary')
   })
 
-  it('does not auto-return for result/status/fyi intents', () => {
+  it('does not auto-return for result/status/fyi intents', async () => {
     for (const intent of ['result', 'status', 'fyi']) {
-      expect(maybeAutoReturnDmResult({ ...ctx, intent }, 'done')).toBe(false)
+      expect(await maybeAutoReturnDmResult({ ...ctx, intent }, 'done')).toBe(false)
     }
     expect(enqueuedRows).toHaveLength(0)
   })
 
-  it('does not auto-return placeholder or empty output', () => {
-    expect(maybeAutoReturnDmResult(ctx, 'completed in 123ms')).toBe(false)
-    expect(maybeAutoReturnDmResult(ctx, '   ')).toBe(false)
+  it('does not auto-return placeholder or empty output', async () => {
+    expect(await maybeAutoReturnDmResult(ctx, 'completed in 123ms')).toBe(false)
+    expect(await maybeAutoReturnDmResult(ctx, '   ')).toBe(false)
     expect(enqueuedRows).toHaveLength(0)
   })
 
-  it('rejects a self-addressed return', () => {
-    expect(maybeAutoReturnDmResult({ ...ctx, fromAgentId: 'bot:receiver' }, 'done')).toBe(false)
+  it('rejects a self-addressed return', async () => {
+    expect(await maybeAutoReturnDmResult({ ...ctx, fromAgentId: 'bot:receiver' }, 'done')).toBe(false)
     expect(enqueuedRows).toHaveLength(0)
   })
 })

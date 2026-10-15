@@ -137,6 +137,8 @@ export interface ModelMessage {
   readonly content: string | readonly ModelContentBlock[];
   /** Stable identity for replay and for thread quoting. Never a `seq`. */
   readonly id: string;
+  /** Correlates a tool-role result with the assistant's originating call. */
+  readonly toolCallId?: string;
 }
 
 /** Why the provider stopped producing. Drives the engine's stop decision. */

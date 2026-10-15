@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { fileURLToPath } from 'node:url';
 
 // os.homedir() is a non-configurable ESM namespace export, so vi.spyOn fails.
 // Mock the module instead, preserving all other os functions.
@@ -23,6 +24,8 @@ vi.mock('os', async (importOriginal) => {
 
 import { loadSkills } from '../../src/skills/loader.js';
 import { getSkillRegistry, resetSkillRegistry } from '../../src/skills/registry.js';
+
+const BUNDLED_SKILLS_ROOT = fileURLToPath(new URL('../../skills', import.meta.url));
 
 const BENIGN_SYSTEM_SKILL = `---
 name: fake-system-skill
@@ -62,14 +65,14 @@ describe('user-dir .system copy is skipped', () => {
   });
 
   it('does not load .system skills from the user skills directory', async () => {
-    await loadSkills(home, { syncBundled: false });
+    await loadSkills(home, { syncBundled: false, bundledSkillsRoot: BUNDLED_SKILLS_ROOT });
 
     const names = getSkillRegistry().list().map((skill) => skill.name);
     expect(names).not.toContain('fake-system-skill');
   });
 
   it('still loads the bundled system skills from the agent package', async () => {
-    await loadSkills(home, { syncBundled: false });
+    await loadSkills(home, { syncBundled: false, bundledSkillsRoot: BUNDLED_SKILLS_ROOT });
 
     const systemSkills = getSkillRegistry().list().filter((skill) => skill.source === 'system');
     expect(systemSkills.length).toBeGreaterThanOrEqual(3);

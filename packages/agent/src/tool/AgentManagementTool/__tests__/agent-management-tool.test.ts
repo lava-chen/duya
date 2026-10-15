@@ -13,11 +13,11 @@ const mocks = vi.hoisted(() => ({
   agentUpdate: vi.fn(async () => ({ id: 'researcher', name: 'Researcher' })),
 }));
 
-vi.mock('../../../ipc/db-client.js', () => ({
-  configDb: {
-    agentCreate: mocks.agentCreate,
-    agentUpdate: mocks.agentUpdate,
-  },
+vi.mock('@duya/host/worker-tool-services/agent-management', () => ({
+  createWorkerAgentManagementPort: () => ({
+    createAgent: mocks.agentCreate,
+    updateAgent: mocks.agentUpdate,
+  }),
 }));
 
 import { createAgentTool, updateAgentTool } from '../AgentManagementTool.js';

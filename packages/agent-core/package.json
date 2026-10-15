@@ -7,9 +7,57 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./skills/*": {
+      "types": "./dist/skills/*.d.ts",
+      "import": "./dist/skills/*.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./message": {
+      "types": "./dist/message/index.d.ts",
+      "import": "./dist/message/index.js"
+    },
+    "./message/*": {
+      "types": "./dist/message/*.d.ts",
+      "import": "./dist/message/*.js"
+    },
+    "./context/*": {
+      "types": "./dist/context/*.d.ts",
+      "import": "./dist/context/*.js"
+    },
+    "./task-notifications/*": {
+      "types": "./dist/task-notifications/*.d.ts",
+      "import": "./dist/task-notifications/*.js"
+    },
+    "./modes/*": {
+      "types": "./dist/modes/*.d.ts",
+      "import": "./dist/modes/*.js"
+    },
+    "./wake": {
+      "types": "./dist/wake/index.d.ts",
+      "import": "./dist/wake/index.js"
+    },
+    "./wake/*": {
+      "types": "./dist/wake/*.d.ts",
+      "import": "./dist/wake/*.js"
+    },
+    "./usage/*": {
+      "types": "./dist/usage/*.d.ts",
+      "import": "./dist/usage/*.js"
+    },
+    "./run-manifest-verification": {
+      "types": "./dist/run-manifest-verification.d.ts",
+      "import": "./dist/run-manifest-verification.js"
+    },
+    "./profiles/*": {
+      "types": "./dist/profiles/*.d.ts",
+      "import": "./dist/profiles/*.js"
+    },
+    "./subagents/*": {
+      "types": "./dist/subagents/*.d.ts",
+      "import": "./dist/subagents/*.js"
     }
   },
   "files": [
@@ -23,7 +71,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@duya/agent-protocol": "0.1.0"
+    "@duya/agent-protocol": "0.1.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "typescript": "^5.3.3",

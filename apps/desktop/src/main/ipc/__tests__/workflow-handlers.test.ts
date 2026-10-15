@@ -1,7 +1,6 @@
 /**
- * workflow-handlers.test.ts — plan 552 Phase 7: the console IPC reads
- * (list / get / journal / snapshot / delete) against an in-memory core
- * database with the store injected via _setCoreStoresForTesting.
+ * workflow-handlers.test.ts — console IPC run-store calls use the typed Host
+ * API, backed here by an in-memory core database.
  *
  * Note: the native better-sqlite3 test follows the same skip guard as
  * the other core-db suites — where the ABI is unavailable the suite is
@@ -14,9 +13,14 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type BetterSqlite3 from 'better-sqlite3';
 import * as osMod from 'node:os';
+import { createHostWorkflowRunApi } from '@duya/host/workflow-run-api';
 import { CoreDatabase, WorkflowRunStore } from '../../db/core';
 import { _setCoreStoresForTesting, getCoreStores } from '../../db/core-connection';
-import { registerWorkflowHandlers, _setWorkflowRuntimeHttpForTesting } from '../workflow-handlers';
+import {
+  registerWorkflowHandlers,
+  _setWorkflowRunApiForTesting,
+  _setWorkflowRuntimeHttpForTesting,
+} from '../workflow-handlers';
 
 let nativeSqliteAvailable = true;
 try {
@@ -72,10 +76,12 @@ describe.skipIf(!nativeSqliteAvailable)('workflow console handlers', () => {
       coreDb,
       workflowRuns: new WorkflowRunStore(coreDb.db),
     } as Parameters<typeof _setCoreStoresForTesting>[0]);
+    _setWorkflowRunApiForTesting(createHostWorkflowRunApi(getCoreStores()));
     registerWorkflowHandlers();
   });
 
   afterEach(() => {
+    _setWorkflowRunApiForTesting(null);
     _setCoreStoresForTesting(null);
     // `_setCoreStoresForTesting(null)` only drops the reference — the SQLite
     // handle stays open and Windows refuses to unlink a locked file
@@ -162,7 +168,7 @@ describe.skipIf(!nativeSqliteAvailable)('workflow console handlers', () => {
   });
 
 
-  it('list → get → journal → delete round-trip', () => {
+  it('list → get → journal → delete round-trip', async () => {
     const store = getCoreStores().workflowRuns;
     const run = store.createRun({
       workflowName: 'invoice-sync',
@@ -175,22 +181,22 @@ describe.skipIf(!nativeSqliteAvailable)('workflow console handlers', () => {
       seq: 0, kind: 'node_result', nodeId: 'a', attempt: 1, status: 'succeeded', result: null, atMs: 1,
     });
 
-    const listed = handlers.get('workflow:list')!(undefined, { limit: 10 }) as Array<{ id: string; status: string }>;
+    const listed = (await handlers.get('workflow:list')!(undefined, { limit: 10 })) as Array<{ id: string; status: string }>;
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({ id: run.id, status: 'complete' });
 
-    const got = handlers.get('workflow:get')!(undefined, run.id) as { workflowName: string };
+    const got = (await handlers.get('workflow:get')!(undefined, run.id)) as { workflowName: string };
     expect(got.workflowName).toBe('invoice-sync');
 
-    const journal = handlers.get('workflow:journal')!(undefined, run.id) as Array<{ nodeId: string }>;
+    const journal = (await handlers.get('workflow:journal')!(undefined, run.id)) as Array<{ nodeId: string }>;
     expect(journal).toHaveLength(1);
     expect(journal[0].nodeId).toBe('a');
 
-    const snapshot = handlers.get('workflow:snapshot')!(undefined, run.id) as { definition: unknown };
+    const snapshot = (await handlers.get('workflow:snapshot')!(undefined, run.id)) as { definition: unknown };
     expect(snapshot.definition).toEqual({ name: 'invoice-sync' });
 
-    expect(handlers.get('workflow:delete')!(undefined, run.id)).toBe(true);
-    expect(handlers.get('workflow:get')!(undefined, run.id)).toBeNull();
+    await expect(handlers.get('workflow:delete')!(undefined, run.id)).resolves.toBe(true);
+    await expect(handlers.get('workflow:get')!(undefined, run.id)).resolves.toBeNull();
   });
 
   // ─── plan 560: run-anchored surface ────────────────────────────────────────
@@ -239,7 +245,7 @@ describe.skipIf(!nativeSqliteAvailable)('workflow console handlers', () => {
     }
   });
 
-  it('reads the run record, history and journal backfill from the core store', () => {
+  it('reads the run record, history and journal backfill through the Host API', async () => {
     const store = getCoreStores().workflowRuns;
     const run = store.createRun({ workflowName: 'digest', status: 'active' });
     store.appendJournalRecord(run.id, {
@@ -250,28 +256,28 @@ describe.skipIf(!nativeSqliteAvailable)('workflow console handlers', () => {
     });
     const other = store.createRun({ workflowName: 'other', status: 'complete' });
 
-    const record = handlers.get('workflow:status')!(undefined, run.id) as {
+    const record = (await handlers.get('workflow:status')!(undefined, run.id)) as {
       workflowName: string;
       origin: string;
     };
     expect(record).toMatchObject({ workflowName: 'digest', origin: 'library' });
 
-    const library = handlers.get('workflow:list-runs')!(undefined, { origin: 'library' }) as Array<{
+    const library = (await handlers.get('workflow:list-runs')!(undefined, { origin: 'library' })) as Array<{
       id: string;
     }>;
     expect(library.map((r) => r.id).sort()).toEqual([run.id, other.id].sort());
 
-    const scoped = handlers.get('workflow:list-runs')!(undefined, { workflowName: 'digest' }) as Array<{
+    const scoped = (await handlers.get('workflow:list-runs')!(undefined, { workflowName: 'digest' })) as Array<{
       id: string;
     }>;
     expect(scoped.map((r) => r.id)).toEqual([run.id]);
 
     // `afterSeq` is the backfill cursor: replay only what the client missed.
-    const tail = handlers.get('workflow:get-events')!(undefined, { runId: run.id, afterSeq: 0 }) as Array<{
+    const tail = (await handlers.get('workflow:get-events')!(undefined, { runId: run.id, afterSeq: 0 })) as Array<{
       seq: number;
     }>;
     expect(tail.map((e) => e.seq)).toEqual([1]);
-    const all = handlers.get('workflow:get-events')!(undefined, { runId: run.id }) as Array<{
+    const all = (await handlers.get('workflow:get-events')!(undefined, { runId: run.id })) as Array<{
       seq: number;
     }>;
     expect(all.map((e) => e.seq)).toEqual([0, 1]);

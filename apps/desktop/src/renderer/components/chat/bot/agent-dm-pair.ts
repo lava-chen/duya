@@ -12,25 +12,17 @@
  *    each message exactly once, no cross-session dedupe needed. The dedupe
  *    below is defense-in-depth for duplicate persisted rows.
  *
- * Session-id scheme mirrors packages/agent bot-session-id.ts (a bot's
- * persistent session is `bot:<agentId>`); duplicated here so the renderer
- * does not pull the agent bundle into this code path.
+ * Persisted bot session IDs are defined by the shared agent-protocol contract
+ * so the renderer, Host, and worker address the same `bot:<agentId>` session.
  */
 
 import type { AgentDmCardMeta, Message } from "@/types/message";
-
-export const BOT_SESSION_ID_PREFIX = "bot:";
-
-/** Derive a bot's persistent session id from its agent id. */
-export function getBotSessionId(agentId: string): string {
-  return `${BOT_SESSION_ID_PREFIX}${agentId}`;
-}
+import { parseAgentIdFromBotSession } from '@duya/agent-protocol';
+export { BOT_SESSION_ID_PREFIX, getBotSessionId } from '@duya/agent-protocol';
 
 /** Strip the `bot:` prefix; returns the agent id, or null for non-bot sessions. */
 export function parseBotSessionAgentId(sessionId: string): string | null {
-  return sessionId.startsWith(BOT_SESSION_ID_PREFIX)
-    ? sessionId.slice(BOT_SESSION_ID_PREFIX.length)
-    : null;
+  return parseAgentIdFromBotSession(sessionId);
 }
 
 /** Plan 477 P4.4: bot→bot DM marker row (source agent_dm + card payload). */

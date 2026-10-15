@@ -1,4 +1,4 @@
-import * as path from 'path';
+import { resolveDatabasePaths } from '@duya/data/data-paths';
 
 /**
  * Resolve the memory-state.db path from the boot.json database directory.
@@ -20,5 +20,5 @@ export function resolveMemoryDbPath(opts?: {
       'memory-state: boot.json database directory is required — refusing to fall back to a default path'
     );
   }
-  return path.join(opts.bootJsonDatabaseDir, 'memory-state.db');
+  return resolveDatabasePaths({ dataRoot: opts.bootJsonDatabaseDir }).memoryStateDatabasePath;
 }

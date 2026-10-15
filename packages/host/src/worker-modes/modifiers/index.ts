@@ -1,0 +1,52 @@
+import { modeModifierRegistry } from './registry.js';
+import { researchMode } from './research-mode.js';
+import { conductorMode } from './conductor-mode.js';
+import { planTaskMode } from './plan/plan-task-mode.js';
+import { automationMode } from './automation-mode.js';
+import { goalMode } from './goal/goal-mode.js';
+import { computerUseMode } from './computer-use-mode.js';
+import { ModeTrackerEngine } from '../engine/engine.js';
+import { planModeTracker } from '../plan/plan-tracker.js';
+import { goalModeTracker } from '../goal/goal-tracker.js';
+import { researchModeTracker } from '../research-mode/research-tracker.js';
+import type { ModeTracker } from '@duya/agent-core/modes/tracker';
+
+// Register declarative ModeModifiers (plan 224).
+modeModifierRegistry.register(researchMode);
+modeModifierRegistry.register(conductorMode);
+modeModifierRegistry.register(planTaskMode);
+modeModifierRegistry.register(automationMode);
+modeModifierRegistry.register(goalMode);
+modeModifierRegistry.register(computerUseMode);
+
+// Mode state-machine engine (plan 413a/413b). Trackers registered here
+// are alive for the whole process and keep their state across streamChat
+// calls. Plan 413d reads them via `modeTrackerEngine` to drive reminders,
+// gating, and persistence.
+export const modeTrackerEngine = new ModeTrackerEngine();
+modeTrackerEngine.register(planModeTracker);
+// Goal events carry payloads (objects), unlike plan's string events, so
+// the narrowed tracker needs an explicit upcast to the engine's
+// `ModeTracker<string, string, unknown>` existential. The engine only
+// calls state()/snapshot()/restore() — never transition() — so the cast
+// is safe (same contract the 413a engine doc allows for upcasting).
+modeTrackerEngine.register(goalModeTracker as unknown as ModeTracker<string, string, unknown>);
+// Research events carry payloads (objects) too — same upcast rationale as goal.
+modeTrackerEngine.register(researchModeTracker as unknown as ModeTracker<string, string, unknown>);
+
+export { modeModifierRegistry } from './registry.js';
+export type {
+  ModeModifier,
+  ModeModifierContext,
+  ModeModifierDisplay,
+  ModeModifierHooks,
+  ModeModifierPersist,
+  ModeModifierPrompt,
+  ModeModifierTools,
+  ModeModifierOrchestrator,
+  OrchestratorDeps,
+  ResolvedMode,
+  StreamOptionsPatch,
+  ToolRegistration,
+  PromptBuilder,
+} from './types.js';

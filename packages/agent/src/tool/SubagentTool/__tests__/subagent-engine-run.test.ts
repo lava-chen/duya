@@ -275,7 +275,10 @@ const TOOL_CALL: SSEEvent = {
 describe('plan 610 S4c-d3 — the sub-agent path drives the engine', () => {
   it('names no legacy turn-loop call, and drives the engine driver exactly once', async () => {
     const { readFileSync } = await import('node:fs');
-    const src = readFileSync(new URL('../runAgent.ts', import.meta.url), 'utf8');
+    const src = readFileSync(
+      new URL('../../../../../host/src/worker-subagents/run-agent.ts', import.meta.url),
+      'utf8',
+    );
 
     // The NEEDLE is assembled rather than written out. Two censuses scan this
     // tree for that call and one of them — `legacy-driver-surface.test.ts` —

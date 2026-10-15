@@ -2,17 +2,15 @@
  * session-helpers.ts — Gateway session write adapters for the core store.
  *
  * Gateway message-bus handlers previously wrote `chat_sessions` rows via raw
- * SQL `INSERT ... ON CONFLICT DO UPDATE`. These helpers route those writes
- * through `getCoreStores().sessions` (SessionStore), preserving the legacy
- * upsert semantics (insert if missing, sync workspace + permission profile
- * if present) and the legacy row shape returned to callers.
+ * SQL `INSERT ... ON CONFLICT DO UPDATE`. These helpers route session writes
+ * through the authenticated Host Session API, preserving the upsert semantics
+ * (insert if missing, sync workspace + permission profile if present).
  *
  * See plan 328 Phase 4 Task 1.
  */
 
-import { getCoreStores } from '../db/core-connection';
-import { coreSessionToIpcRow } from '../ipc/core-db-adapters';
-import type { SessionPatch } from '../db/core';
+import type { HostSessionPatch, HostSessionRecord } from '@duya/agent-protocol';
+import { getDesktopHostSessionApi } from '../cli/desktop-host-api';
 
 /**
  * Gateway (IM channels: Feishu/WeChat/Telegram/etc.) sessions use
@@ -39,6 +37,10 @@ const SESSION_EXTENSION_KEYS = new Set([
   'source',
 ]);
 
+type MutableHostSessionPatch = {
+  -readonly [Key in keyof HostSessionPatch]?: HostSessionPatch[Key];
+};
+
 /**
  * Create or sync a gateway session record in the core store.
  *
@@ -51,28 +53,36 @@ const SESSION_EXTENSION_KEYS = new Set([
  *    (preserving the existing title and metadata).
  *
  * `system_prompt` (empty string for gateway sessions) is routed to
- * `extensions.system_prompt`. Returns the persisted row in the legacy
- * `chat_sessions` shape, or null if the session could not be read back.
+ * `extensions.system_prompt`. Workspace paths are registered with Host and
+ * persisted as opaque workspace references.
  */
-export function createGatewaySessionRecord(
+export async function createGatewaySessionRecord(
   sessionId: string,
   title: string,
   workingDirectory: string,
   platform: string,
-): Record<string, unknown> | null {
-  const { sessions } = getCoreStores();
-  const existing = sessions.get(sessionId);
+): Promise<HostSessionRecord> {
+  const api = getDesktopHostSessionApi();
+  const workspace = workingDirectory.trim()
+    ? await api.registerLocalDirectory(workingDirectory)
+    : undefined;
+  const existing = await api.get(sessionId, { includeAllSessions: true });
   if (existing) {
     // Upsert conflict path: sync workspace + permission profile only.
-    sessions.update(sessionId, {
-      workingDirectory,
+    const result = await api.update(sessionId, undefined, {
+      ...(workspace ? { workspace } : { workspace: { state: 'legacy_unbound' } }),
       permissionMode: GATEWAY_PERMISSION_PROFILE,
     });
+    if (result.updated) return result.session;
   } else {
-    sessions.create({
+    return api.create({
       id: sessionId,
+      ...(workspace ? {
+        workspaceId: workspace.workspaceId,
+        workspaceRootId: workspace.rootId,
+        workspaceRelativePath: workspace.relativePath,
+      } : {}),
       title,
-      workingDirectory,
       projectName: '',
       status: 'active',
       mode: 'chat',
@@ -85,8 +95,27 @@ export function createGatewaySessionRecord(
       },
     });
   }
-  const row = sessions.get(sessionId);
-  return row ? coreSessionToIpcRow(row) : null;
+
+  // The row may have been deleted between the initial read and update.
+  return api.create({
+    id: sessionId,
+    ...(workspace ? {
+      workspaceId: workspace.workspaceId,
+      workspaceRootId: workspace.rootId,
+      workspaceRelativePath: workspace.relativePath,
+    } : {}),
+    title,
+    projectName: '',
+    status: 'active',
+    mode: 'chat',
+    permissionMode: GATEWAY_PERMISSION_PROFILE,
+    providerId: 'env',
+    extensions: {
+      system_prompt: '',
+      source: 'gateway',
+      gateway_platform: platform,
+    },
+  });
 }
 
 /**
@@ -97,36 +126,63 @@ export function createGatewaySessionRecord(
  * Extension-bound fields (system_prompt, conductor_*, context_summary,
  * source) are routed to `sessions.setExtension` one key at a time.
  */
-export function updateGatewaySessionMeta(
+export async function updateGatewaySessionMeta(
   sessionId: string,
   fields: Record<string, unknown>,
-): void {
-  const { sessions } = getCoreStores();
-  const patch: SessionPatch = {};
+): Promise<void> {
+  const api = getDesktopHostSessionApi();
+  const patch: MutableHostSessionPatch = {};
+  const extensions: Record<string, string | number | boolean | null> = {};
 
   for (const [key, value] of Object.entries(fields)) {
     if (SESSION_EXTENSION_KEYS.has(key)) {
-      sessions.setExtension(sessionId, key, value);
+      if (
+        value === null || typeof value === 'string' || typeof value === 'boolean' ||
+        (typeof value === 'number' && Number.isFinite(value))
+      ) {
+        extensions[key] = value;
+      } else {
+        throw new TypeError(`Unsupported gateway session extension value: ${key}`);
+      }
     } else if (key === 'working_directory') {
-      patch.workingDirectory = value as string;
+      if (typeof value !== 'string') throw new TypeError('working_directory must be a string');
+      patch.workspace = value.trim()
+        ? await api.registerLocalDirectory(value)
+        : { state: 'legacy_unbound' };
     } else if (key === 'permission_profile') {
-      patch.permissionMode = value as string;
+      if (value !== 'default' && value !== 'auto' && value !== 'full_access') {
+        throw new TypeError('permission_profile is not a supported session permission mode');
+      }
+      patch.permissionMode = value;
     } else if (key === 'project_name') {
-      patch.projectName = value as string;
+      if (typeof value !== 'string') throw new TypeError('project_name must be a string');
+      patch.projectName = value;
     } else if (key === 'status') {
-      patch.status = value as string;
+      if (typeof value !== 'string') throw new TypeError('status must be a string');
+      patch.status = value;
     } else if (key === 'model') {
-      patch.model = value as string;
+      if (typeof value !== 'string') throw new TypeError('model must be a string');
+      patch.model = value;
     } else if (key === 'title') {
-      patch.title = value as string;
+      if (typeof value !== 'string') throw new TypeError('title must be a string');
+      patch.title = value;
     } else if (key === 'mode') {
-      patch.mode = value as string;
+      if (typeof value !== 'string') throw new TypeError('mode must be a string');
+      patch.mode = value;
     } else if (key === 'provider_id') {
-      patch.providerId = value as string;
+      if (typeof value !== 'string') throw new TypeError('provider_id must be a string');
+      patch.providerId = value;
     }
   }
 
-  if (Object.keys(patch).length > 0) {
-    sessions.update(sessionId, patch);
+  const update = {
+    ...patch,
+    ...(Object.keys(extensions).length > 0 ? { extensions } : {}),
+  };
+  if (Object.keys(update).length > 0) {
+    const result = await api.update(sessionId, undefined, update);
+    if (!result.updated && result.reason === 'not_found') {
+      throw new Error(`Gateway session not found: ${sessionId}`);
+    }
   }
 }

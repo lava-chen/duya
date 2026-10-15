@@ -1,6 +1,6 @@
 import type { Database } from 'better-sqlite3';
 import { getLogger, LogComponent } from '../logging/logger';
-import { resolveProject } from './projectResolver';
+import { resolveProject, type ResolveProjectInput, type ResolveProjectResult } from './projectResolver';
 import {
   computeSourceFingerprint,
   readMessagesForFingerprint,
@@ -41,6 +41,15 @@ export interface SyncResult {
 
 export interface SyncSessionResult {
   status: 'inserted' | 'updated' | 'tombstoned' | 'unchanged';
+}
+
+/** Async Host-facing source used by the Memory worker for catalog inputs. */
+export interface MemoryCatalogSource {
+  listSessions(): Promise<readonly CoreSession[]>;
+  readMessageIndex(sessionId: string): Promise<readonly MessageForHash[]>;
+  resolveProject(
+    input: Omit<ResolveProjectInput, 'memoryDb' | 'gitProbe'>,
+  ): Promise<ResolveProjectResult>;
 }
 
 /**
@@ -458,6 +467,186 @@ export function syncAllFromMainDb(opts: {
   return { inserted, updated, tombstoned, errors, durationMs };
 }
 
+/** Full catalog sync through typed Host data operations. */
+export async function syncAllFromHost(opts: {
+  source: MemoryCatalogSource;
+  memoryDb: Database;
+  cwd?: string;
+  workspaceOverridesPath?: string;
+}): Promise<SyncResult> {
+  const logger = getLogger();
+  const start = Date.now();
+  let inserted = 0;
+  let updated = 0;
+  let tombstoned = 0;
+  let errors = 0;
+
+  let sessions: readonly CoreSession[];
+  try {
+    sessions = await opts.source.listSessions();
+  } catch (err) {
+    logger.error(
+      'memory-state: Host session listing failed during catalog sync',
+      err instanceof Error ? err : new Error(String(err)),
+      {},
+      LogComponent.DB,
+    );
+    return { inserted, updated, tombstoned, errors: 1, durationMs: Date.now() - start };
+  }
+
+  for (const coreSession of sessions) {
+    try {
+      const session = coreSessionToChatRow(coreSession);
+      const result = await syncOneSessionFromHost({
+        source: opts.source,
+        memoryDb: opts.memoryDb,
+        session,
+        cwd: opts.cwd,
+        workspaceOverridesPath: opts.workspaceOverridesPath,
+      });
+      switch (result.status) {
+        case 'inserted':
+          inserted++;
+          break;
+        case 'updated':
+          updated++;
+          break;
+        case 'tombstoned':
+          tombstoned++;
+          break;
+        case 'unchanged':
+          break;
+      }
+    } catch (err) {
+      errors++;
+      logger.error(
+        'memory-state: session sync failed during Host catalog sync',
+        err instanceof Error ? err : new Error(String(err)),
+        { sessionId: coreSession.id },
+        LogComponent.DB,
+      );
+    }
+  }
+
+  const durationMs = Date.now() - start;
+  logger.debug(
+    'memory-state: Host catalog sync complete',
+    { inserted, updated, tombstoned, errors, durationMs, totalSessions: sessions.length },
+    LogComponent.DB,
+  );
+
+  if (inserted > 0 || updated > 0 || tombstoned > 0) {
+    writeSystemLog({
+      phase: 'phase1',
+      eventType: 'catalog_sync',
+      message: `Catalog sync: ${inserted} new, ${updated} updated, ${tombstoned} tombstoned rollout(s)`,
+      detail: { inserted, updated, tombstoned, errors, durationMs },
+      level: errors > 0 ? 'warn' : 'info',
+    });
+  }
+
+  return { inserted, updated, tombstoned, errors, durationMs };
+}
+
+async function syncOneSessionFromHost(opts: {
+  source: MemoryCatalogSource;
+  memoryDb: Database;
+  session: ChatSessionRow;
+  cwd?: string;
+  workspaceOverridesPath?: string;
+}): Promise<SyncSessionResult> {
+  const { source, memoryDb, session } = opts;
+  const now = Date.now();
+
+  if (session.is_deleted === 1 || session.status === 'archived' || session.status === 'purged') {
+    return memoryDb.transaction(() => tombstoneRollout(memoryDb, session, now))();
+  }
+
+  const messages = [...await source.readMessageIndex(session.id)];
+  const fingerprint = computeSourceFingerprint(messages);
+  const meta = computeMessageMetadata(messages);
+  const existing = memoryDb.prepare(SELECT_EXISTING_ROLLOUT_SQL).get(session.id) as
+    | ExistingRolloutRow
+    | undefined;
+
+  if (
+    existing &&
+    existing.source_fingerprint === fingerprint &&
+    existing.message_count === meta.message_count &&
+    existing.last_message_id === meta.last_message_id &&
+    existing.last_message_at === meta.last_message_at
+  ) {
+    return memoryDb.transaction(() => {
+      memoryDb.prepare(UPDATE_HEARTBEAT_SQL).run({
+        rollout_id: session.id,
+        last_seen_at: now,
+        message_count: meta.message_count,
+        last_message_id: meta.last_message_id,
+        last_message_at: meta.last_message_at,
+      });
+      return { status: 'unchanged' as const };
+    })();
+  }
+
+  const scope = await resolveScopeFromHost({
+    source,
+    workingDirectory: session.working_directory,
+    agentProfileId: session.agent_profile_id,
+    cwd: opts.cwd,
+    workspaceOverridesPath: opts.workspaceOverridesPath,
+  });
+  return memoryDb.transaction(() =>
+    activeSyncWithScope(memoryDb, session, messages, scope, now),
+  )();
+}
+
+async function resolveScopeFromHost(opts: {
+  source: MemoryCatalogSource;
+  workingDirectory: string;
+  agentProfileId: string | null;
+  cwd?: string;
+  workspaceOverridesPath?: string;
+}): Promise<ReturnType<typeof resolveScope>> {
+  const workingDirectory = opts.workingDirectory?.trim() ?? '';
+  if (!workingDirectory) {
+    return {
+      scope_kind: 'global',
+      project_id: null,
+      working_directory: null,
+      working_directory_normalized: null,
+    };
+  }
+  try {
+    const resolved = await opts.source.resolveProject({
+      workingDirectory,
+      agent_profile_id: opts.agentProfileId ?? undefined,
+      cwd: opts.cwd,
+      workspaceOverridesPath: opts.workspaceOverridesPath,
+    });
+    return {
+      scope_kind: 'project',
+      project_id: resolved.project_id,
+      working_directory: workingDirectory,
+      working_directory_normalized: resolved.absolute_normalized_path,
+    };
+  } catch (err) {
+    getLogger().warn(
+      'memory-state: Host project resolution failed; falling back to global scope',
+      {
+        workingDirectory,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      LogComponent.DB,
+    );
+    return {
+      scope_kind: 'global',
+      project_id: null,
+      working_directory: workingDirectory,
+      working_directory_normalized: null,
+    };
+  }
+}
+
 /**
  * Mark a rollout's source as missing. Called by the reaper (Plan 305)
  * when `last_seen_at` is older than 30 days AND the core DB still has
@@ -552,6 +741,39 @@ function activeSync(
     workspaceOverridesPath: opts.workspaceOverridesPath,
     coreDb,
   });
+
+  return activeSyncWithScope(memoryDb, session, messages, scope, now);
+}
+
+function activeSyncWithScope(
+  memoryDb: Database,
+  session: ChatSessionRow,
+  messages: MessageForHash[],
+  scope: ReturnType<typeof resolveScope>,
+  now: number,
+): SyncSessionResult {
+  const fingerprint = computeSourceFingerprint(messages);
+  const meta = computeMessageMetadata(messages);
+  const existing = memoryDb.prepare(SELECT_EXISTING_ROLLOUT_SQL).get(session.id) as
+    | ExistingRolloutRow
+    | undefined;
+
+  if (
+    existing &&
+    existing.source_fingerprint === fingerprint &&
+    existing.message_count === meta.message_count &&
+    existing.last_message_id === meta.last_message_id &&
+    existing.last_message_at === meta.last_message_at
+  ) {
+    memoryDb.prepare(UPDATE_HEARTBEAT_SQL).run({
+      rollout_id: session.id,
+      last_seen_at: now,
+      message_count: meta.message_count,
+      last_message_id: meta.last_message_id,
+      last_message_at: meta.last_message_at,
+    });
+    return { status: 'unchanged' };
+  }
 
   // Plan 534: keep the legacy memory-state `projects` FK target in sync with
   // the resolved project so the roll insert below never trips the constraint,

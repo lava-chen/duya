@@ -40,6 +40,7 @@ export type CliCommandPath =
   | 'skill'
   | 'mcp'
   | 'provider'
+  | 'model'
   | 'channel'
   | 'cron'
   | 'message'

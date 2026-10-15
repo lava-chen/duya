@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { fileURLToPath } from 'node:url';
 
 // os.homedir() is a non-configurable ESM namespace export, so vi.spyOn fails.
 // Mock the module instead, preserving all other os functions.
@@ -24,6 +25,8 @@ import {
   getAgentSkillDirectory,
 } from '../../src/skills/loader.js';
 import { getSkillRegistry, resetSkillRegistry } from '../../src/skills/registry.js';
+
+const BUNDLED_SKILLS_ROOT = fileURLToPath(new URL('../../skills', import.meta.url));
 
 function writeSkill(dir: string, name: string, body: string): void {
   fs.mkdirSync(path.join(dir, name), { recursive: true });
@@ -73,6 +76,7 @@ describe('bot-scoped (agent) skills', () => {
     await loadSkills(home, {
       syncBundled: false,
       agentSkillsDir: botSkillsDir,
+      bundledSkillsRoot: BUNDLED_SKILLS_ROOT,
     });
 
     const registry = getSkillRegistry();
@@ -90,6 +94,7 @@ describe('bot-scoped (agent) skills', () => {
     await loadSkills(home, {
       syncBundled: false,
       agentSkillsDir: botSkillsDir,
+      bundledSkillsRoot: BUNDLED_SKILLS_ROOT,
     });
 
     const registry = getSkillRegistry();

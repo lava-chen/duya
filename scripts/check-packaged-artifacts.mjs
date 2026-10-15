@@ -17,7 +17,7 @@
  * The failure this catches is specific and expensive to find late. The agent
  * bundle is a single esbuild CJS file with `bundle: true`; anything esbuild
  * inlines needs no packaging step, and anything marked `external` needs a
- * matching copy under `resources/agent-bundle/` or the first tool call dies
+ * matching copy under `resources/harness-bundle/` or the first tool call dies
  * with MODULE_NOT_FOUND / ERR_MODULE_NOT_FOUND. Nothing in the test suite
  * exercises the packaged tree, so only a check against real packaging output
  * can see it.
@@ -29,11 +29,11 @@
  *                     boundary change and in CI. It gates the *contract*:
  *                     which externals are allowed, that the bundle stays
  *                     CommonJS, that the production resolver still prefers
- *                     `resources/agent-bundle/agent-process-entry.js`, and
+ *                     `resources/harness-bundle/worker-entry.js`, and
  *                     that every file the runtime resolves inside the bundle
  *                     directory has a build step that actually emits it.
  *
- *   --bundle          Inspects the STAGED `packages/agent/bundle/` tree that
+ *   --bundle          Inspects the STAGED `packages/host/bundle/` tree that
  *                     electron-builder copies into resources/. Needs
  *                     `npm run bundle:agent` first, but not a package. This
  *                     is the only mode that sees esbuild's real output, so it
@@ -94,7 +94,7 @@ const PROCESS_MANAGER = path.join(
   'apps/desktop/src/main/agents/process-pool/process-manager.ts',
 );
 /** Runtime resolver for the bash worker child process (inside the bundle). */
-const WORKER_POOL = path.join(REPO_ROOT, 'packages/agent/src/tool/WorkerPool.ts');
+const WORKER_POOL = path.join(REPO_ROOT, 'packages/host/src/worker-tool-pool.ts');
 
 /**
  * The externals the current build is allowed to leave unbundled.
@@ -103,7 +103,7 @@ const WORKER_POOL = path.join(REPO_ROOT, 'packages/agent/src/tool/WorkerPool.ts'
  * and the BashWorker worker stay external; the build actually marks six
  * packages external, and four of them are load-bearing for packaged runtime:
  * `better-sqlite3` (native), `playwright` (after-pack.js copies it into
- * `agent-bundle/node_modules/` and FATALs if it is missing), `esbuild`
+ * `harness-bundle/node_modules/` and FATALs if it is missing), `esbuild`
  * (dwf transpiles workflow scripts at runtime and degrades to a typed error
  * when the require fails), `fsevents` (macOS-only, never installed on
  * Windows), and the two `chromium-bidi` deep paths the browser daemon
@@ -126,7 +126,7 @@ export const REQUIRED_BUNDLE_FORMAT = 'cjs';
  * The primary packaged location of the agent entry, relative to
  * `process.resourcesPath`. Probed first by `getAgentProcessPath()`.
  */
-export const PRIMARY_AGENT_ENTRY = 'agent-bundle/agent-process-entry.js';
+export const PRIMARY_AGENT_ENTRY = 'harness-bundle/worker-entry.js';
 
 /**
  * Files the agent resolves *inside the bundle directory* at runtime.
@@ -143,14 +143,14 @@ export const BUNDLE_FILE_CONTRACTS = [
     id: 'prompt-assets',
     relativePath: 'assets',
     kind: 'directory',
-    resolvedBy: 'packages/agent/src/prompts/hbs/HbsPromptSystem.ts',
+    resolvedBy: 'packages/host/src/worker-prompts/hbs/HbsPromptSystem.ts',
     producer: 'scripts/build-agent-bundle.mjs',
   },
   {
     id: 'bash-worker',
     relativePath: 'BashTool/BashWorker.js',
     kind: 'file',
-    resolvedBy: 'packages/agent/src/tool/WorkerPool.ts',
+    resolvedBy: 'packages/host/src/worker-tool-pool.ts',
     producer: 'scripts/build-agent-bundle.mjs',
   },
 ];
@@ -240,8 +240,8 @@ export function extractFormat(source) {
  * trailing string-literal segments of each.
  *
  * This is how a resolver's candidate paths are recovered from source without
- * evaluating it. `path.join(process.resourcesPath, 'agent-bundle', 'entry.js')`
- * yields `agent-bundle/entry.js`; a call that starts with a variable yields
+ * evaluating it. `path.join(process.resourcesPath, 'harness-bundle', 'entry.js')`
+ * yields `harness-bundle/entry.js`; a call that starts with a variable yields
  * the literals after it, which is what makes the ordering check meaningful.
  *
  * @param {string} source
@@ -343,7 +343,7 @@ export function classifyRequires(bundleText, externals) {
  * the bundle, it is a separate program WorkerPool spawns with
  * `spawn(process.execPath, [workerPath])` — no NODE_PATH, no execArgv, no
  * node_modules of its own. In a packaged app it sits at
- * `resources/agent-bundle/BashTool/BashWorker.js`, where the only node_modules
+ * `resources/harness-bundle/BashTool/BashWorker.js`, where the only node_modules
  * is the one after-pack.js copies for the ENTRY's externals. So a require the
  * entry may legitimately keep is a require the worker cannot resolve.
  *
@@ -596,7 +596,7 @@ export function runStaticChecks() {
   const bundleSource = readFileSync(BUNDLE_SCRIPT, 'utf8');
 
   // 1. Externals are exactly the allowlist. A new external is only safe if a
-  //    matching copy lands under resources/agent-bundle/; a removed one means
+  //    matching copy lands under resources/harness-bundle/; a removed one means
   //    the producer that copied it is now dead weight at best.
   const externals = extractExternals(bundleSource);
   const missing = ALLOWED_EXTERNALS.filter((e) => !externals.includes(e));
@@ -653,7 +653,7 @@ export function runStaticChecks() {
 
   for (const contract of BUNDLE_FILE_CONTRACTS) {
     const resolverSource =
-      contract.resolvedBy === 'packages/agent/src/tool/WorkerPool.ts'
+      contract.resolvedBy === 'packages/host/src/worker-tool-pool.ts'
         ? workerPoolSource
         : readFileSync(path.join(REPO_ROOT, contract.resolvedBy), 'utf8');
 
@@ -677,7 +677,7 @@ export function runStaticChecks() {
         check: `bundle-file-contract:${contract.id}`,
         kind: 'missing',
         message: `the agent resolves ${contract.relativePath} inside the bundle directory, `
-          + `but no build step emits it into packages/agent/bundle/`,
+          + `but no build step emits it into packages/host/bundle/`,
         evidence: `resolver: ${contract.resolvedBy}; producers scanned: ${PRODUCER_SOURCES.join(', ')}`,
       });
     }
@@ -692,14 +692,14 @@ export function runStaticChecks() {
 
 /** The three paths AGENTS.md's pre-release checklist names. */
 export const CHECKLIST_ARTIFACTS = [
-  { id: 'agent-entry', rel: 'agent-bundle/agent-process-entry.js' },
-  { id: 'bash-worker', rel: 'agent-bundle/BashTool/BashWorker.js' },
+  { id: 'agent-entry', rel: 'harness-bundle/worker-entry.js' },
+  { id: 'bash-worker', rel: 'harness-bundle/BashTool/BashWorker.js' },
   { id: 'native-sqlite', rel: 'better-sqlite3/build/Release/better_sqlite3.node' },
 ];
 
 /**
- * Check the STAGED bundle directory (`packages/agent/bundle/`), i.e. the tree
- * `electron-builder.yml` copies verbatim into `resources/agent-bundle/`.
+ * Check the STAGED bundle directory (`packages/host/bundle/`), i.e. the tree
+ * `electron-builder.yml` copies verbatim into `resources/harness-bundle/`.
  *
  * This sits between the two other modes. Static mode reads source, so it
  * proves the build contract but never sees esbuild's actual output;
@@ -716,10 +716,10 @@ export const CHECKLIST_ARTIFACTS = [
  * @returns {{findings: Finding[], bundleDir: string}}
  */
 export function runBundleChecks(options = {}) {
-  const bundleDir = options.bundleDir ?? path.join(REPO_ROOT, 'packages', 'agent', 'bundle');
+  const bundleDir = options.bundleDir ?? path.join(REPO_ROOT, 'packages', 'host', 'bundle');
   /** @type {Finding[]} */
   const findings = [];
-  const entry = path.join(bundleDir, 'agent-process-entry.js');
+  const entry = path.join(bundleDir, 'worker-entry.js');
 
   if (!existsSync(entry)) {
     findings.push({
@@ -930,7 +930,7 @@ export function runPackagedChecks(options = {}) {
 
   // Self-containment: scan the real bundle for bare requires that could only
   // resolve through a node_modules the packaged app does not have.
-  const entryAbs = path.join(resourcesDir, 'agent-bundle', 'agent-process-entry.js');
+  const entryAbs = path.join(resourcesDir, 'harness-bundle', 'worker-entry.js');
   if (existsSync(entryAbs) && statSync(entryAbs).size > 0) {
     const externals = extractExternals(readFileSync(BUNDLE_SCRIPT, 'utf8'));
     const classified = classifyRequires(readFileSync(entryAbs, 'utf8'), externals);
@@ -955,7 +955,7 @@ export function runPackagedChecks(options = {}) {
 
   // The worker gets the stricter treatment: it is spawned as its own process,
   // so the entry's externals allowlist cannot help it resolve anything.
-  const packagedWorker = path.join(resourcesDir, 'agent-bundle', ...BASH_WORKER_CONTRACT_PATH);
+  const packagedWorker = path.join(resourcesDir, 'harness-bundle', ...BASH_WORKER_CONTRACT_PATH);
   if (existsSync(packagedWorker) && statSync(packagedWorker).size > 0) {
     findings.push(...checkBashWorkerSelfContained(readFileSync(packagedWorker, 'utf8'), packagedWorker));
   }
@@ -1042,7 +1042,7 @@ function main() {
       // every run, so a green --bundle can never be quoted as a packaging pass.
       unverified.push({
         id: 'packaging-output',
-        detail: 'packages/agent/bundle/ is what electron-builder COPIES; what the installed '
+        detail: 'packages/host/bundle/ is what electron-builder COPIES; what the installed '
           + 'resources/ tree actually contains is only proven by --packaged',
       });
     } else {

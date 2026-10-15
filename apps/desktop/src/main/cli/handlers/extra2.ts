@@ -18,9 +18,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { getDatabase } from '../../db/connection';
-import { getCoreStores } from '../../db/core-connection';
 import { getAutomationScheduler } from '../../automation/Scheduler.js';
+import { getDesktopHostLocalSessionApi } from '../desktop-host-api';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
 
 interface ElectronApp {
@@ -177,18 +176,13 @@ interface CronRunRow {
   logs: string | null;
 }
 
-export function handleCronLogs(
+export async function handleCronLogs(
   _req: IncomingMessage,
   res: ServerResponse,
   id: string,
-): void {
+): Promise<void> {
   void _req;
   try {
-    const db = getDatabase();
-    if (!db) {
-      sendJson(res, 503, { error: { code: 'db_unavailable', message: 'database is not ready' } });
-      return;
-    }
     const scheduler = getAutomationScheduler();
     const job = scheduler?.listCrons().find((c) => c.id === id);
     if (!scheduler || !job) {
@@ -208,12 +202,21 @@ export function handleCronLogs(
       }
     }
     // A cron's run history is its ordinary sessions (id prefix `cron:<jobId>:`).
-    const { sessions } = getCoreStores();
-    const rows = sessions.listByPrefix(`cron:${id}:`, { limit });
+    let localSessions: ReturnType<typeof getDesktopHostLocalSessionApi>;
+    try {
+      localSessions = getDesktopHostLocalSessionApi();
+    } catch {
+      sendJson(res, 503, { error: { code: 'db_unavailable', message: 'database is not ready' } });
+      return;
+    }
+    const rows = await localSessions.listLocalSessionSummariesByPrefix({
+      idPrefix: `cron:${id}:`,
+      limit,
+    });
     const runs: CronRunRow[] = rows.map((r, i) => ({
       id: r.id,
-      started_at: r.created_at,
-      ended_at: r.updated_at,
+      started_at: r.createdAt,
+      ended_at: r.updatedAt,
       run_status: i === 0 && job.lastError ? 'failed' : 'success',
       error_message: i === 0 ? (job.lastError ?? null) : null,
       output: null,

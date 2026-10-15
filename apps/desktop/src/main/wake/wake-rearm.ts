@@ -15,10 +15,10 @@
  *     startup logic; pending_wakes rearm only covers the wake bus.)
  */
 
-import { getCoreStores } from '../db/core-connection'
 import { enqueueInboundWake, enqueueWakeItemForSession, notifySessionIdle } from './wake-dispatcher'
 import { loadPersistedInboundEnvelopes, restoreInboundEnvelopes } from './channels'
-import type { WakeItem } from '../../../../../packages/agent/src/wake/types'
+import { getDesktopHostLocalPendingWakeApi } from '../cli/desktop-host-api'
+import type { HostPendingWakeRow, WakeItem } from '@duya/agent-protocol'
 import { getLogger, LogComponent } from '../logging/logger'
 
 const logger = getLogger()
@@ -28,16 +28,16 @@ const logger = getLogger()
  * Idempotent — safe to call more than once.
  */
 export async function rearmPendingWakes(): Promise<void> {
-  const { wakes } = getCoreStores()
+  const wakes = getDesktopHostLocalPendingWakeApi()
 
   // Step 1: prune stale entries (48 h horizon).
-  const pruned = wakes.pruneStale()
+  const pruned = await wakes.pruneStalePendingWakes()
   if (pruned > 0) {
     logger.info(`Pending wakes rearm: pruned ${pruned} stale rows`, undefined, LogComponent.Automation)
   }
 
   // Step 2: re-enqueue surviving rows.
-  const rows = wakes.listAll()
+  const rows = await wakes.listPendingWakes()
   if (rows.length === 0) {
     logger.debug('Pending wakes rearm: no surviving rows', undefined, LogComponent.Automation)
     return
@@ -65,18 +65,18 @@ export async function rearmPendingWakes(): Promise<void> {
         continue
       }
 
-      const outcome = enqueueWakeItemForSession(row.agent_id, item)
+      const outcome = enqueueWakeItemForSession(row.agentId, item)
       logger.debug('Pending wakes rearm: re-enqueued', {
         kind: row.kind,
         workId: row.workId,
-        agentId: row.agent_id,
+        agentId: row.agentId,
         outcome,
       }, LogComponent.Automation)
     } catch (err) {
       logger.warn('Pending wakes rearm: failed to re-enqueue row', {
         kind: row.kind,
         workId: row.workId,
-        agentId: row.agent_id,
+        agentId: row.agentId,
         error: err instanceof Error ? err.message : String(err),
       }, LogComponent.Automation)
     }
@@ -90,8 +90,8 @@ export async function rearmPendingWakes(): Promise<void> {
  * dispatcher's dedupe collapses repeats, and the drain's revive replays the
  * full `[inbound]` prompt (grok `wakeForInbound` restart parity).
  */
-function rearmConnectorInboundRow(row: ReturnType<typeof getCoreStores>['wakes']['listAll'][number]): void {
-  const sessionId = row.work_id
+function rearmConnectorInboundRow(row: HostPendingWakeRow): void {
+  const sessionId = row.workId
   const envelopes = loadPersistedInboundEnvelopes(row)
   if (envelopes.length === 0) {
     logger.debug('Pending wakes rearm: connector.inbound row has no envelopes; skipping', {
@@ -125,20 +125,20 @@ function rearmConnectorInboundRow(row: ReturnType<typeof getCoreStores>['wakes']
  * Convert a pending_wakes DB row back to a WakeItem so it can be re-queued.
  * Returns null for kinds not yet wired (agent.dm etc.).
  */
-function pendingWakeRowToWakeItem(row: ReturnType<typeof getCoreStores>['wakes']['listAll'][number]): WakeItem | null {
+function pendingWakeRowToWakeItem(row: HostPendingWakeRow): WakeItem | null {
   const now = Date.now()
 
   switch (row.kind) {
     case 'task.completion':
       return {
-        id: `task:${row.work_id}`,
+        id: `task:${row.workId}`,
         source: 'task.completion',
-        lane: row.lane as WakeItem['lane'],
-        agentId: row.agent_id,
+        lane: row.lane,
+        agentId: row.agentId,
         enqueuedAtMs: now,
         turnEpoch: undefined,
-        quietOrigin: row.quiet_origin_json ? JSON.parse(row.quiet_origin_json) : undefined,
-        payload: { kind: 'completion', taskId: row.work_id, title: row.title ?? undefined },
+        quietOrigin: row.quietOriginJson ? JSON.parse(row.quietOriginJson) : undefined,
+        payload: { kind: 'completion', taskId: row.workId, title: row.title ?? undefined },
       }
 
     case 'automation.fire': {
@@ -147,12 +147,12 @@ function pendingWakeRowToWakeItem(row: ReturnType<typeof getCoreStores>['wakes']
       // fire payload (trigger / event context / quiet) rides
       // quiet_origin_json. Legacy rows without the separator fall back to
       // the old collapse-to-'rearm' behaviour.
-      const sep = row.work_id.lastIndexOf(':')
-      const jobKey = sep > 0 ? row.work_id.slice(0, sep) : row.work_id
-      const fireKey = sep > 0 ? row.work_id.slice(sep + 1) : 'rearm'
+      const sep = row.workId.lastIndexOf(':')
+      const jobKey = sep > 0 ? row.workId.slice(0, sep) : row.workId
+      const fireKey = sep > 0 ? row.workId.slice(sep + 1) : 'rearm'
       let fire: { trigger?: string; eventSummary?: string; eventContext?: string; quiet?: boolean } = {}
       try {
-        const parsed = row.quiet_origin_json ? (JSON.parse(row.quiet_origin_json) as { fire?: typeof fire }) : null
+        const parsed = row.quietOriginJson ? (JSON.parse(row.quietOriginJson) as { fire?: typeof fire }) : null
         if (parsed && typeof parsed === 'object' && parsed.fire) fire = parsed.fire
       } catch {
         // Malformed JSON → defaults below.
@@ -160,8 +160,8 @@ function pendingWakeRowToWakeItem(row: ReturnType<typeof getCoreStores>['wakes']
       return {
         id: `auto:${jobKey}:${fireKey}`,
         source: 'automation.fire',
-        lane: row.lane as WakeItem['lane'],
-        agentId: row.agent_id,
+        lane: row.lane,
+        agentId: row.agentId,
         enqueuedAtMs: now,
         ...(fire.quiet ? { quietOrigin: { automation: { id: jobKey, name: row.title ?? '' } } } : {}),
         payload: {
@@ -183,12 +183,12 @@ function pendingWakeRowToWakeItem(row: ReturnType<typeof getCoreStores>['wakes']
     case 'broadcast':
       // title stores the broadcast text for re-arm purposes
       return {
-        id: `broadcast:${row.work_id}`,
+        id: `broadcast:${row.workId}`,
         source: 'broadcast',
-        lane: row.lane as WakeItem['lane'],
-        agentId: row.agent_id,
+        lane: row.lane,
+        agentId: row.agentId,
         enqueuedAtMs: now,
-        payload: { kind: 'broadcast', broadcastId: row.work_id, text: row.title ?? '' },
+        payload: { kind: 'broadcast', broadcastId: row.workId, text: row.title ?? '' },
       }
 
     case 'user.message':
@@ -196,12 +196,12 @@ function pendingWakeRowToWakeItem(row: ReturnType<typeof getCoreStores>['wakes']
       // the restart. Re-enters the user lane; the drain offers it to the
       // renderer (claim) or runs the hidden fallback.
       return {
-        id: `user:${row.work_id}`,
+        id: `user:${row.workId}`,
         source: 'user.message',
         lane: 'user',
-        agentId: row.agent_id,
+        agentId: row.agentId,
         enqueuedAtMs: now,
-        payload: { kind: 'user', text: row.title ?? '', messageId: row.work_id },
+        payload: { kind: 'user', text: row.title ?? '', messageId: row.workId },
       }
 
     case 'agent.dm': {
@@ -215,27 +215,27 @@ function pendingWakeRowToWakeItem(row: ReturnType<typeof getCoreStores>['wakes']
         hops?: number
       } = {}
       try {
-        const parsed = row.quiet_origin_json ? JSON.parse(row.quiet_origin_json) : {}
+        const parsed = row.quietOriginJson ? JSON.parse(row.quietOriginJson) : {}
         if (parsed && typeof parsed === 'object' && parsed.dm) envelope = parsed.dm
       } catch {
         // Malformed JSON → empty envelope; fromAgentId empty → prompt skipped.
       }
       if (!envelope.fromAgentId) {
         getLogger().debug('Pending wakes rearm: agent.dm row missing sender; skipping', {
-          workId: row.work_id,
-          agentId: row.agent_id,
+          workId: row.workId,
+          agentId: row.agentId,
         }, LogComponent.Automation)
         return null
       }
       return {
-        id: `dm:${row.work_id}`,
+        id: `dm:${row.workId}`,
         source: 'agent.dm',
         lane: 'agent',
-        agentId: row.agent_id,
+        agentId: row.agentId,
         enqueuedAtMs: now,
         payload: {
           kind: 'dm',
-          clientMsgId: row.work_id,
+          clientMsgId: row.workId,
           fromAgentId: envelope.fromAgentId,
           ...(envelope.fromAgentName ? { fromAgentName: envelope.fromAgentName } : {}),
           text: row.title ?? '',

@@ -18,11 +18,12 @@
  */
 
 import * as path from 'node:path';
+import type { HostLocalChannelPersistenceApiV1 } from '@duya/agent-protocol';
 
 import type {
   ChannelInboundAttachment,
   ChannelInboundEnvelope,
-} from '../../../../../packages/agent/src/channels/types';
+} from '@duya/agent-protocol/channels';
 import {
   filterInboundMessage,
   isGroupChatType,
@@ -99,9 +100,9 @@ interface MediaOutcome {
  */
 export interface TelegramOffsetStore {
   /** Last acknowledged offset, or null when nothing has been stored yet. */
-  load(): number | null;
+  load(): number | null | Promise<number | null>;
   /** Persist the offset after a batch has been handled. */
-  save(offset: number): void;
+  save(offset: number): void | Promise<void>;
 }
 
 export interface TelegramConnectorOptions {
@@ -135,71 +136,58 @@ export interface TelegramConnectorOptions {
 }
 
 /**
- * The slice of better-sqlite3 this store needs. `prepare` is typed as
- * returning `unknown` on purpose: the driver's Statement generics are
- * parameterised per call, which no structural signature here will satisfy.
- * The two methods actually used are cast at the call sites instead.
- */
-interface OffsetDb {
-  prepare: (sql: string) => unknown;
-}
-
-/** The two Statement methods this store calls. */
-interface OffsetStatement {
-  get: (...args: unknown[]) => unknown;
-  run: (...args: unknown[]) => unknown;
-}
-
-/**
- * Offset persistence bound to the existing channel_offsets table.
- *
- * `getDbFn` is called on every access rather than captured once: the
- * connector runtime can build a connector before the database finishes
- * booting, and the table is also absent in safe mode. Both cases
- * degrade to "no persistence" instead of throwing into the poll loop.
+ * Offset persistence through the authenticated local Host API. The connector
+ * does not own or open the database and degrades to in-memory polling when
+ * Host persistence is temporarily unavailable.
  */
 export function createChannelOffsetStore(
-  getDbFn: () => OffsetDb | null,
+  getApiFn: () => Pick<HostLocalChannelPersistenceApiV1, 'getChannelOffset' | 'setChannelOffset'> | null,
   channelType: string,
   offsetKey: string,
   onUnavailable?: (reason: string) => void,
 ): TelegramOffsetStore {
   let warned = false;
-  const requireDb = (): OffsetDb | null => {
-    const handle = getDbFn();
-    if (!handle) {
-      if (!warned) {
-        warned = true;
-        onUnavailable?.('database not available; offset will not persist across restarts');
-      }
-      return null;
+  const warnUnavailable = (error?: unknown): void => {
+    if (!warned) {
+      warned = true;
+      const reason = error instanceof Error ? error.message : 'Host persistence API is not available';
+      onUnavailable?.(reason);
     }
-    return handle;
   };
 
   return {
-    load(): number | null {
-      const handle = requireDb();
-      if (!handle) return null;
-      const stmt = handle.prepare(
-        'SELECT offset_value FROM channel_offsets WHERE channel_type = ? AND offset_key = ?',
-      ) as OffsetStatement;
-      const row = stmt.get(channelType, offsetKey) as { offset_value?: string } | undefined;
-      if (!row || typeof row.offset_value !== 'string') return null;
-      const parsed = Number(row.offset_value);
-      return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+    async load(): Promise<number | null> {
+      try {
+        const api = getApiFn();
+        if (!api) {
+          warnUnavailable();
+          return null;
+        }
+        const row = await api.getChannelOffset(channelType, offsetKey);
+        if (!row || typeof row.offset_value !== 'string') return null;
+        const parsed = Number(row.offset_value);
+        return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+      } catch (error) {
+        warnUnavailable(error);
+        return null;
+      }
     },
-    save(offset: number): void {
-      const handle = requireDb();
-      if (!handle) return;
-      const stmt = handle.prepare(`
-          INSERT INTO channel_offsets (channel_type, offset_key, offset_value, offset_type, updated_at)
-          VALUES (?, ?, ?, 'long_polling', ?)
-          ON CONFLICT(channel_type, offset_key) DO UPDATE SET
-            offset_value = excluded.offset_value,
-            updated_at = excluded.updated_at
-        `) as OffsetStatement;
-      stmt.run(channelType, offsetKey, String(offset), Date.now());
+    async save(offset: number): Promise<void> {
+      try {
+        const api = getApiFn();
+        if (!api) {
+          warnUnavailable();
+          return;
+        }
+        await api.setChannelOffset({
+          channelType,
+          offsetKey,
+          offsetValue: String(offset),
+          offsetType: 'long_polling',
+        });
+      } catch (error) {
+        warnUnavailable(error);
+      }
     },
   };
 }
@@ -237,7 +225,6 @@ export class TelegramChannelConnector {
   start(): void {
     if (this.running) return;
     this.running = true;
-    this.restoreOffset();
     this.loopPromise = this.runLoop();
   }
 
@@ -249,12 +236,12 @@ export class TelegramChannelConnector {
    * queue). Failure to read storage must not stop the connector, so this
    * only logs.
    */
-  private restoreOffset(): void {
+  private async restoreOffset(): Promise<void> {
     this.firstBatchDone = false;
     const store = this.opts.offsetStore;
     if (!store) return;
     try {
-      const stored = store.load();
+      const stored = await store.load();
       if (stored !== null && Number.isSafeInteger(stored) && stored >= 0) {
         this.offset = stored;
         logger.info(
@@ -275,11 +262,11 @@ export class TelegramChannelConnector {
   }
 
   /** Persist the offset after a batch was handled. Never throws into the loop. */
-  private persistOffset(): void {
+  private async persistOffset(): Promise<void> {
     const store = this.opts.offsetStore;
     if (!store) return;
     try {
-      store.save(this.offset);
+      await store.save(this.offset);
     } catch (err) {
       logger.warn(
         `Telegram connector: could not persist offset: ${
@@ -305,6 +292,7 @@ export class TelegramChannelConnector {
   }
 
   private async runLoop(): Promise<void> {
+    await this.restoreOffset();
     const backoffMs = this.opts.errorBackoffMs ?? 5_000;
     while (this.running) {
       this.abortController = new AbortController();
@@ -329,7 +317,7 @@ export class TelegramChannelConnector {
         }
         // Written only after the batch was handled, so a crash mid-batch
         // replays the batch rather than silently dropping it.
-        this.persistOffset();
+        await this.persistOffset();
         if (batch.length > 0) this.firstBatchDone = true;
         if (this.consecutiveFailures > 0) {
           logger.info(

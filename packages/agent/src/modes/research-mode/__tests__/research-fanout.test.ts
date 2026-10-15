@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('../../../ipc/db-client.js', () => ({ modeStateDb: mocks.modeStateDb }));
+vi.mock('@duya/host/worker-db-client', () => ({ modeStateDb: mocks.modeStateDb }));
 vi.mock('../../../tool/SubagentTool/SubagentTool.js', () => ({
   // Plan 610 A5: research-fanout no longer imports a module-level
   // `subagentTool` singleton; it constructs its own instance from the injected

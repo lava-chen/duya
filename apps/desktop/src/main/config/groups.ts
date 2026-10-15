@@ -20,11 +20,11 @@ import {
   resolveGroupConfig,
   type GroupEntryConfig,
   type ResolvedGroupConfig,
-} from '../../../../../packages/agent/src/agent-profile/config-groups';
+} from '@duya/host/worker-prompts/bot/config-groups';
 // Same root resolver the worker reader uses — main and worker MUST agree on
 // the groups.toml path even under DUYA_TEST namespaces (compass' resolver
 // keys off a different namespace mechanism and would split the paths).
-import { resolveConfigRoot } from '../../../../../packages/agent/src/agent-profile/config-agents';
+import { resolveConfigRoot } from '@duya/host/agent-profile-config';
 import { listConfigAgents } from './agents';
 import { getLogger, LogComponent } from '../logging/logger';
 

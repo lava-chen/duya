@@ -15,11 +15,11 @@
 import { app } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import { parse, stringify } from '@iarna/toml';
 import writeFileAtomic from 'write-file-atomic';
+import { resolveDatabasePaths } from '@duya/data/data-paths';
 import { getLogger, LogComponent } from '../logging/logger';
-import { resolveConfigTomlPath, resolveDatabasePathFromConfigToml } from './compass';
+import { resolveConfigRoot, resolveConfigTomlPath, resolveDatabasePathFromConfigToml } from './compass';
 
 const logger = getLogger();
 
@@ -27,12 +27,46 @@ export interface BootConfig {
   databasePath: string;
 }
 
+export interface ResolvedDatabasePath {
+  dbPath: string;
+  needsBootWrite: boolean;
+  needsDbRename: boolean;
+  /** Previous Electron default, copied before the new database is opened. */
+  legacyDbPath?: string;
+}
+
 function getDefaultDatabaseDir(): string {
-  return path.join(app.getPath('userData'), 'databases');
+  // E2E namespaces remain checkout-scoped. Production data follows the
+  // Codex-style per-user root so Desktop and standalone Host resolve the same
+  // database without depending on Electron's userData path.
+  if (isNamespacedTestRun()) {
+    return path.join(app.getPath('userData'), 'databases');
+  }
+  return resolveConfigRoot();
 }
 
 function getDefaultDatabasePath(): string {
-  return path.join(getDefaultDatabaseDir(), 'duya-main.db');
+  return resolveDatabasePaths({ dataRoot: getDefaultDatabaseDir() }).mainDatabasePath;
+}
+
+function getPreviousDefaultDatabasePath(): string {
+  return path.join(app.getPath('userData'), 'databases', 'duya-main.db');
+}
+
+function samePath(left: string, right: string): boolean {
+  const resolvedLeft = path.resolve(left);
+  const resolvedRight = path.resolve(right);
+  return process.platform === 'win32'
+    ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase()
+    : resolvedLeft === resolvedRight;
+}
+
+function resolvePreviousDefaultPath(candidate: string, testScopedRun: boolean): string | undefined {
+  if (testScopedRun) return undefined;
+  const previousDefault = getPreviousDefaultDatabasePath();
+  return samePath(candidate, previousDefault) && !samePath(candidate, getDefaultDatabasePath())
+    ? previousDefault
+    : undefined;
 }
 
 function ensureDatabaseDir(dbPath: string): void {
@@ -150,7 +184,7 @@ function isNamespacedTestRun(): boolean {
  * Resolve the database path with full fallback chain:
  * 1. config.toml `storage.database_path` (if set and valid)
  * 2. Legacy duya-config.json (migration)
- * 3. Default path (userData/databases/duya-main.db)
+ * 3. Default path (~/.duya/duya-main.db; tests use their namespaced userData)
  *
  * Also handles backward compatibility for old duya.db filename.
  *
@@ -159,19 +193,33 @@ function isNamespacedTestRun(): boolean {
  * caller (getDatabasePath, resolveCoreDatabasePath) inherits that, which keeps
  * the whole test database set on one run's root.
  */
-export function resolveDatabasePath(): { dbPath: string; needsBootWrite: boolean; needsDbRename: boolean } {
+export function resolveDatabasePath(): ResolvedDatabasePath {
   const testScopedRun = isNamespacedTestRun();
+  const defaultPath = getDefaultDatabasePath();
+
+  const resolveCandidate = (candidate: string, needsBootWrite: boolean): ResolvedDatabasePath => {
+    const previousDefault = resolvePreviousDefaultPath(candidate, testScopedRun);
+    const isDefault = previousDefault !== undefined || samePath(candidate, defaultPath);
+    const dbPath = isDefault ? defaultPath : candidate;
+    const legacyDbPath = previousDefault ?? (
+      isDefault && !testScopedRun && !samePath(defaultPath, getPreviousDefaultDatabasePath())
+        ? getPreviousDefaultDatabasePath()
+        : undefined
+    );
+    const oldDbPath = dbPath.replace('duya-main.db', 'duya.db');
+
+    return {
+      dbPath,
+      needsBootWrite: needsBootWrite || !samePath(candidate, dbPath),
+      needsDbRename: !fs.existsSync(dbPath) && fs.existsSync(oldDbPath),
+      ...(legacyDbPath === undefined || samePath(legacyDbPath, dbPath) ? {} : { legacyDbPath }),
+    };
+  };
 
   // Step 1: Check config.toml storage.database_path
   const configured = testScopedRun ? '' : resolveDatabasePathFromConfigToml();
   if (configured && configured.trim()) {
-    const dbPath = configured;
-
-    // Handle backward compatibility: if path ends with old filename, check for rename
-    const oldDbPath = dbPath.replace('duya-main.db', 'duya.db');
-    const needsDbRename = !fs.existsSync(dbPath) && fs.existsSync(oldDbPath);
-
-    return { dbPath, needsBootWrite: false, needsDbRename };
+    return resolveCandidate(configured, false);
   }
 
   // Step 2: Check legacy config. This reads under the run's own userData, so it
@@ -179,19 +227,12 @@ export function resolveDatabasePath(): { dbPath: string; needsBootWrite: boolean
   // has to be suppressed so the test namespace does not grow a stale pin.
   const legacyPath = migrateFromLegacyConfig();
   if (legacyPath) {
-    const oldDbPath = legacyPath.replace('duya-main.db', 'duya.db');
-    const needsDbRename = !fs.existsSync(legacyPath) && fs.existsSync(oldDbPath);
-    return { dbPath: legacyPath, needsBootWrite: !testScopedRun, needsDbRename };
+    return resolveCandidate(legacyPath, !testScopedRun);
   }
 
-  // Step 3: Default path
-  const defaultPath = getDefaultDatabasePath();
-
-  // Check if old duya.db exists at default location
-  const oldDefaultPath = path.join(getDefaultDatabaseDir(), 'duya.db');
-  const needsDbRename = !fs.existsSync(defaultPath) && fs.existsSync(oldDefaultPath);
-
-  return { dbPath: defaultPath, needsBootWrite: !testScopedRun, needsDbRename };
+  // Step 3: Default path. If a prior default database exists, migrate it
+  // before opening the new path; custom configured paths remain untouched.
+  return resolveCandidate(defaultPath, !testScopedRun);
 }
 
 /**
@@ -318,7 +359,7 @@ export function updateDatabasePath(newDbPath: string): boolean {
  */
 export function resolveCoreDatabasePath(): string {
   const { dbPath } = resolveDatabasePath();
-  return path.join(path.dirname(dbPath), 'duya-core.db');
+  return resolveDatabasePaths({ databasePath: dbPath }).coreDatabasePath;
 }
 
 /**
@@ -342,7 +383,7 @@ function readStorageRoot(key: 'rollout_root' | 'attachments_root'): string {
  * Resolve the rollout root directory for MessageLog JSONL files.
  *
  * Mirrors Codex's `~/.codex/sessions/` layout: rollout files live under
- * `~/.duya/sessions/<YYYY>/<MM>/<DD>/...` (MessageLog.resolvePath appends the
+ * `<dataRoot>/sessions/<YYYY>/<MM>/<DD>/...` (default: `~/.duya`; MessageLog.resolvePath appends the
  * `sessions/<YYYY>/<MM>/<DD>/...` subpath on top of this root, so this root
  * must NOT include `sessions` itself, or the rollout path would duplicate the
  * folder). The `[storage] rollout_root` config overrides the default. In test
@@ -354,11 +395,8 @@ function readStorageRoot(key: 'rollout_root' | 'attachments_root'): string {
  * logger/bootstrap init chain.
  */
 export function resolveRolloutRoot(): string {
-  const base = path.join(os.homedir(), '.duya');
-  if (process.env.DUYA_TEST === '1') {
-    const ns = readTestNamespace();
-    if (ns) return path.join(base, 'test-namespaces', ns);
-  }
+  const base = resolveConfigRoot();
+  if (isNamespacedTestRun()) return base;
   const configured = readStorageRoot('rollout_root');
   return configured && configured.trim() ? configured : base;
 }
@@ -387,17 +425,15 @@ function readTestNamespace(): string | null {
  * Resolve the root directory for file-backed attachments (plan 332 Phase 2).
  *
  * Mirrors Codex's `~/.codex/attachments/<uuid>/` layout: payload files live
- * under `~/.duya/attachments/<id>/<filename>`. The `[storage] attachments_root`
+ * under `<dataRoot>/attachments/<id>/<filename>` (default: `~/.duya`). The
+ * `[storage] attachments_root`
  * config overrides the default root. In test mode a `test-namespaces/<ns>`
  * suffix keeps each Playwright namespace isolated from the real user data —
  * the same policy as `resolveRolloutRoot`.
  */
 export function resolveAttachmentsRoot(): string {
-  const base = path.join(os.homedir(), '.duya');
-  if (process.env.DUYA_TEST === '1') {
-    const ns = readTestNamespace();
-    if (ns) return path.join(base, 'test-namespaces', ns, 'attachments');
-  }
+  const base = resolveConfigRoot();
+  if (isNamespacedTestRun()) return path.join(base, 'attachments');
   const configured = readStorageRoot('attachments_root');
   return configured && configured.trim() ? configured : path.join(base, 'attachments');
 }

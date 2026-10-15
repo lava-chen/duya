@@ -1,1 +1,1 @@
-export const EXIT_PLAN_MODE_TOOL_NAME = 'ExitPlanMode';
+export { EXIT_PLAN_MODE_TOOL_NAME } from '@duya/capabilities/mode-tools';

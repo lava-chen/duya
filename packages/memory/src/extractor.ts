@@ -539,9 +539,9 @@ interface CatalogMappingRow {
 // ---------------------------------------------------------------------------
 
 /**
- * Stage 1 extractor. Holds injected DB handles + LLM client so the extract
- * method stays focused on orchestration. Plan 305 wires a concrete
- * Stage1Extractor instance in the Electron main process worker.
+ * Stage 1 extractor. Holds the memory-state DB + LLM client so the extract
+ * method stays focused on orchestration. Session message reads are supplied
+ * through the host-owned `readMessageRows` port.
  *
  * Uses streamChat() instead of chat() to avoid Anthropic's "Streaming is
  * required for operations that may take longer than 10 minutes" error on
@@ -558,7 +558,6 @@ export class Stage1Extractor {
 
   constructor(
     private readonly memoryDb: Database,
-    private readonly mainDb: Database,
     private readonly llmClient: AIClient,
     private readonly opts?: Stage1ExtractorOpts,
   ) {

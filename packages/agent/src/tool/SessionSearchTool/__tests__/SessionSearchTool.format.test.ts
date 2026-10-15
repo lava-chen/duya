@@ -39,7 +39,12 @@ type RecentSessionSqlRow = {
   snippet: string | null;
 };
 
-const tool = new SessionSearchTool();
+const tool = new SessionSearchTool({
+  searchSessions: async () => [],
+  loadRecentSessionDirectory: async () => ({ sameProject: [], otherProjects: [] }),
+  getMessages: async () => [],
+  async *streamSummary() {},
+});
 
 function callFormatSummaries(summaries: SessionSummaryWithSummary[], query: string): string {
   return (tool as unknown as {

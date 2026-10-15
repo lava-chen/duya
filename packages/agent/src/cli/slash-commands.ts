@@ -13,12 +13,18 @@ import { existsSync, statSync } from 'fs';
 import type { duyaAgent } from '../agent/DuyaAgent.js';
 import { resolveProvider } from './config/file-config.js';
 import { handleGoalCommand, isGoalControlCommand } from '../modes/goal/goal-commands.js';
-import { handleTranscriptCommand } from '../session/transcript-commands.js';
+import { handleTranscriptCommand } from '@duya/host/worker-session/transcript-commands';
 
 export interface SlashCommandContext {
   agent?: duyaAgent;
   sessionId?: string;
   platform?: 'cli' | 'telegram' | 'duya-app' | 'web' | 'api';
+  /** TUI-only bridge for provider registration and Desktop provider management. */
+  providerLogin?: (action: 'add' | 'manage') => Promise<void>;
+  /** TUI-only session switcher; the CLI owns Host session orchestration. */
+  resumeSession?: (query: string) => Promise<void>;
+  /** Persist a model change into the active Host session. */
+  updateSessionModel?: (model: string) => Promise<void>;
 }
 
 export interface SlashCommand {
@@ -192,6 +198,7 @@ export function isSlashCommand(input: string): boolean {
 export const COMMAND_REGISTRY: CommandDef[] = [
   // Session commands
   { name: 'new', description: 'Start a new session (fresh session ID + history)', category: 'Session' },
+  { name: 'resume', aliases: ['sessions'], description: 'Search and resume a previous session', category: 'Session', argsHint: '[query]', cliOnly: true },
   { name: 'clear', description: 'Clear screen and start a new session', category: 'Session', cliOnly: true },
   { name: 'history', description: 'Show conversation history', category: 'Session', cliOnly: true },
   { name: 'save', description: 'Save the current conversation', category: 'Session', cliOnly: true },
@@ -203,11 +210,12 @@ export const COMMAND_REGISTRY: CommandDef[] = [
   { name: 'compress', description: 'Manually compress conversation context', category: 'Session', argsHint: '[focus topic]' },
   { name: 'agents', description: 'Show active agents and running tasks', category: 'Session', aliases: ['tasks'] },
   { name: 'plan', description: 'Create or view an execution plan', category: 'Session', argsHint: '[description|open]' },
-  { name: 'goal', description: 'Goal mode: start an objective / status / pause / resume / clear', category: 'Session', argsHint: '[<objective>|status|pause|resume|clear]' },
+  { name: 'goal', description: 'Goal mode: start an objective / status / pause / resume / clear / help', category: 'Session', argsHint: '[<objective>|status|pause|resume|clear|help]', subcommands: ['status', 'pause', 'resume', 'clear', 'help'] },
 
   // Configuration commands
   { name: 'config', description: 'Show current configuration', category: 'Configuration', cliOnly: true },
   { name: 'model', description: 'Switch model for this session', category: 'Configuration', argsHint: '[model-name]' },
+  { name: 'login', description: 'Connect or manage a provider', category: 'Configuration', argsHint: '[add|manage]', subcommands: ['add', 'manage'] },
   { name: 'cd', description: 'Change working directory', category: 'Configuration', argsHint: '[path]', cliOnly: true },
   { name: 'setup', description: 'Run setup wizard', category: 'Configuration', cliOnly: true },
   { name: 'effort', description: 'Manage reasoning effort and display', category: 'Configuration', argsHint: '[level|show|hide]', subcommands: ['none', 'minimal', 'low', 'medium', 'high', 'show', 'hide'] },
@@ -298,9 +306,10 @@ export function initSlashCommands(): void {
   // and begins working in the same turn).
   registerSlashCommand({
     name: 'goal',
-    description: 'Goal mode: start an objective / status / pause / resume / clear',
+    description: 'Goal mode: start an objective / status / pause / resume / clear / help',
     category: 'Session',
-    argsHint: '[<objective>|status|pause|resume|clear]',
+    argsHint: '[<objective>|status|pause|resume|clear|help]',
+    subcommands: ['status', 'pause', 'resume', 'clear', 'help'],
     handler: async (args, context) => {
       const input = args.trim() ? `/goal ${args.trim()}` : '/goal';
       if (!isGoalControlCommand(input)) {
@@ -350,7 +359,7 @@ export function initSlashCommands(): void {
         console.log(color('[ERR] No agent context available', Colors.RED));
         return true;
       }
-      const { getLastReplyText } = await import('../session/transcript-md.js');
+      const { getLastReplyText } = await import('@duya/agent-core/message');
       const text = getLastReplyText(context.agent.getMessages());
       if (!text) {
         console.log(color('[INFO] No assistant reply to copy yet', Colors.YELLOW));
@@ -400,6 +409,23 @@ export function initSlashCommands(): void {
   });
 
   // Session commands
+  registerSlashCommand({
+    name: 'resume',
+    aliases: ['sessions'],
+    description: 'Search and resume a previous session',
+    category: 'Session',
+    argsHint: '[query]',
+    cliOnly: true,
+    handler: async (args, context) => {
+      if (context?.resumeSession === undefined) {
+        console.log(color('Session resume is available in the interactive chat TUI.', Colors.YELLOW));
+        return true;
+      }
+      await context.resumeSession(args.trim());
+      return true;
+    },
+  });
+
   registerSlashCommand({
     name: 'new',
     description: 'Start a new session (fresh session ID + history)',
@@ -759,12 +785,35 @@ export function initSlashCommands(): void {
         }
         return true;
       }
+      if (context?.agent) context.agent.model = args;
+      await context?.updateSessionModel?.(args);
       process.env.ANTHROPIC_MODEL = args;
       if (context?.platform === 'cli') {
         console.log(color(`[OK] Model set to: ${args}`, Colors.GREEN));
       } else {
         console.log(`Model set to: ${args}`);
       }
+      return true;
+    },
+  });
+
+  registerSlashCommand({
+    name: 'login',
+    description: 'Connect or manage a provider in Desktop settings',
+    category: 'Configuration',
+    argsHint: '[add|manage]',
+    subcommands: ['add', 'manage'],
+    handler: async (args, context) => {
+      const action = args.trim().toLowerCase();
+      if (action !== 'add' && action !== 'manage') {
+        console.log(color('Choose /login add or /login manage.', Colors.CYAN));
+        return true;
+      }
+      if (context?.providerLogin === undefined) {
+        console.log(color('Provider setup is available in the interactive chat TUI.', Colors.YELLOW));
+        return true;
+      }
+      await context.providerLogin(action);
       return true;
     },
   });

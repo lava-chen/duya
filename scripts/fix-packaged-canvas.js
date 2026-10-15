@@ -26,16 +26,10 @@
 
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
+const { resolveDataRoot } = require('./duya-data-root.cjs');
 
 function getDefaultDbPath() {
-  if (process.platform === 'win32') {
-    return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'DUYA', 'databases', 'duya-main.db');
-  }
-  if (process.platform === 'darwin') {
-    return path.join(os.homedir(), 'Library', 'Application Support', 'DUYA', 'databases', 'duya-main.db');
-  }
-  return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), 'DUYA', 'databases', 'duya-main.db');
+  return path.join(resolveDataRoot(), 'duya-main.db');
 }
 
 function parseArgs() {

@@ -203,8 +203,45 @@ modules:
     roots: [packages/agent-protocol]
     managed: true # zero tolerance from the first commit
     requires: []
-    publicEntrypoints: [packages/agent-protocol/src/index.ts]
+    publicEntrypoints:
+      - packages/agent-protocol/src/index.ts
+      - packages/agent-protocol/src/message-timeline.ts
+      - packages/agent-protocol/src/session-api.ts
+      - packages/agent-protocol/src/rollout-events.ts
     owner: agent-harness
+
+  - id: data
+    roots: [packages/data]
+    managed: true
+    requires: [agent-protocol]
+    publicEntrypoints:
+      - packages/data/src/index.ts
+      - packages/data/src/data-paths.ts
+      - packages/data/src/database-migration.ts
+      - packages/data/src/core-database.ts
+      - packages/data/src/run-store.ts
+    owner: host
+
+  - id: duya-host
+    roots: [packages/host]
+    managed: true
+    requires: [agent-protocol, agent-runtime, agent-core, legacy-ai, data, capabilities, memory, legacy-plugin-core, legacy-computer-use]
+    publicEntrypoints:
+      - packages/host/src/index.ts
+      - packages/host/src/session-api.ts
+      - packages/host/src/http-client.ts
+      - packages/host/src/local-host.ts
+      - packages/host/src/run-engine-model.ts
+      - packages/host/src/group-turn.ts
+      - packages/host/src/control-plane-service.ts
+      - packages/host/src/command-receipt.ts
+      - packages/host/src/run-receipt.ts
+      - packages/host/src/repository-port.ts
+      - packages/host/src/trusted-sender-core.ts
+      - packages/host/src/run-control-plane.ts
+      - packages/host/src/worker-db-client.ts
+      - packages/host/src/worker-os-context/index.ts
+    owner: host
 
   - id: agent-core
     roots: [packages/agent-core]
@@ -230,7 +267,10 @@ modules:
     # argued from measurement. It does not belong in a `requires` entry, because
     # a `requires` entry that resolves is a standing permission.
     requires: [agent-protocol]
-    publicEntrypoints: [packages/agent-core/src/index.ts]
+    publicEntrypoints:
+      - packages/agent-core/src/index.ts
+      - packages/agent-core/src/skills/skill-scanner.ts
+      - packages/agent-core/src/skills/resolver.ts
     owner: agent
 
   - id: agent-runtime
@@ -246,16 +286,18 @@ modules:
     # `packages/plugin-core`, `packages/computer-use`, or any `UNRESOLVED:`
     # owner. The `agent-runtime -> plugin-core / computer-use / ai` edges that
     # `allowedDependencies` below claims are granted do not exist.
-    requires: [agent-protocol, agent-core]
-    publicEntrypoints: [packages/agent-runtime/src/index.ts]
+    requires: [agent-protocol, agent-core, capabilities, legacy-plugin-core]
+    publicEntrypoints:
+      - packages/agent-runtime/src/index.ts
+      - packages/agent-runtime/src/context/contextual-user-fragment.ts
     owner: agent
 
   # ── Legacy: managed: false, each flipped as its migration lands ─────────
   - id: legacy-agent
     roots: [packages/agent]
     managed: false
-    # Plan 587 R2.2: `agent-protocol` is added, and it is the FIRST declared
-    # dependency this module has. The worker now VERIFIES the manifest binding
+    # Plan 587 R2.2: `agent-protocol` is added for manifest verification. The
+    # worker now VERIFIES the manifest binding
     # it is handed — `verifyRunManifestBinding` recomputes the manifest
     # fingerprint and the input digest over what actually arrived — and those
     # two hashes live in the protocol package. A worker that could not reach
@@ -263,6 +305,11 @@ modules:
     # implementation of the digest is a second source of truth for exactly the
     # value whose whole purpose is to be checked. So the edge is declared
     # rather than avoided.
+    #
+    # Plan 587 profile contract extraction: `agent-core` owns AgentProfile and
+    # PromptProfileOverride, so the legacy Agent imports those types from the
+    # lower-level package while its callers migrate. The package dependency is
+    # explicit and the edge is acyclic.
     #
     # Plan 587 M5.5: `agent-runtime` is added, for `ProcessScope` ONLY
     # (`agent-runtime/src/process/process-scope.ts`). The three sites that owned
@@ -289,7 +336,16 @@ modules:
     # "each side implements its own" is a second `detectPopoverTrigger` that
     # drifts. It is a pure-rules leaf (Node builtins only, `requires: []`), so
     # the edge adds no cycle and pulls no engine into the terminal entry.
-    requires: [agent-protocol, agent-runtime, legacy-ai, repo-tooling, memory, sandbox, input-completion]
+    # The temporary CLI session adapter consumes the terminal-only TUI package;
+    # the CLI package itself has no Agent runtime dependency.
+    #
+    # Plan 610 A8: `capabilities` is added because the filesystem tool stack
+    # (Read/Write/Edit/Glob/Grep/ApplyPatch), BaseTool, the tool contracts, the
+    # session-level file state modules, and the path-permission policy moved
+    # into that package; the agent consumes them through byte-compatible shims
+    # at the old import paths. The edge points the direction the retirement
+    # (A7) wants: legacy executor TOWARDS the capability package.
+    requires: [agent-protocol, agent-core, agent-runtime, legacy-ai, repo-tooling, memory, sandbox, input-completion, legacy-cli, duya-host, capabilities]
     owner: agent
     migrateTo: agent-core
 
@@ -336,7 +392,13 @@ modules:
   - id: desktop-host
     roots: [apps/desktop]
     managed: false
-    requires: [agent-protocol, agent-runtime, legacy-plugin-core, connectors, desktop-contracts, memory, input-completion]
+    # `sandbox` (2026-10-10): plan 610 A5 continuation — the `duya-file://`
+    # media allowlist (plan 583 ISS-02) and the IPC path checks consume
+    # `isPathWithinRoots` from `@duya/sandbox` after it moved out of
+    # `packages/agent/src/tool/allowedRoots.ts`. Declared here rather than
+    # baselined: the App depending on the sandbox primitives package is the
+    # intended shape of the A5 split, not legacy debt.
+    requires: [agent-protocol, agent-core, agent-runtime, capabilities, legacy-plugin-core, connectors, desktop-contracts, memory, input-completion, sandbox, data, duya-host]
     owner: desktop
 
   - id: repo-tooling
@@ -483,6 +545,155 @@ modules:
       - packages/memory/src/testing/index.ts
     owner: agent
 
+  # Plan 610 A8. `@duya/tooling` is the extension contract plus assembly:
+  # 13 narrow contributor interfaces, an ExtensionRegistry with 13
+  # independent slots, and assembly-time validation. It existed before this
+  # entry (its gate tests are T1-T3); the entry makes the census see it.
+  #
+  # `managed: true` from the first commit, like every package this series
+  # created: it imports no `@duya/*` package at all, so there is nothing to
+  # baseline and nothing to be lenient about. G7 forbids it from ever
+  # importing capabilities / connectors / memory.
+  - id: tooling
+    roots: [packages/tooling]
+    managed: true
+    requires: []
+    publicEntrypoints:
+      - packages/tooling/src/index.ts
+    owner: agent
+
+  # Plan 610 A8. `@duya/capabilities` is the capability implementations, slice
+  # 1 = filesystem: Read/Write/Edit/Glob/Grep/ApplyPatch, BaseTool, the pure
+  # tool contracts (with ToolUseContext narrowed to the structural field set
+  # the tools read), the session-level file state modules
+  # (read-state / mutation-queue / snapshot), the path-permission policy, and
+  # the small utils those files need. The agent consumes all of it through
+  # byte-compatible shims at the old import paths.
+  #
+  # `managed: true` from the first commit, on the sandbox/memory precedent.
+  # requires declares the four real edges: the `ToolResult` runtime type
+  # (`legacy-ai`, the same edge `memory` declares), transcript types
+  # (`agent-protocol`), path containment (`sandbox`), and the
+  # `ToolContributor` declaration (`tooling`). G23 forbids lifecycle types
+  # here -- the caller context is deliberately a narrow structural type.
+  - id: capabilities
+    roots: [packages/capabilities]
+    managed: true
+    requires: [legacy-ai, agent-protocol, sandbox, tooling, legacy-computer-use, legacy-plugin-core]
+    publicEntrypoints:
+      # Barrel + the two curated subpath barrels.
+      - packages/capabilities/src/index.ts
+      - packages/capabilities/src/contracts/index.ts
+      - packages/capabilities/src/permissions/index.ts
+      # BaseTool (agent shim `tool/BaseTool.ts` re-exports from here).
+      - packages/capabilities/src/BaseTool.ts
+      # FS tools (agent shims re-export each file).
+      - packages/capabilities/src/ReadTool/ReadTool.ts
+      - packages/capabilities/src/ReadTool/schema.ts
+      - packages/capabilities/src/ReadTool/security.ts
+      - packages/capabilities/src/ReadTool/path-suggest.ts
+      - packages/capabilities/src/WriteTool/WriteTool.ts
+      - packages/capabilities/src/EditTool/EditTool.ts
+      - packages/capabilities/src/GlobTool/GlobTool.ts
+      - packages/capabilities/src/GrepTool/GrepTool.ts
+      - packages/capabilities/src/GrepTool/sanitize.ts
+      - packages/capabilities/src/ApplyPatchTool/ApplyPatchTool.ts
+      # Session-level filesystem state.
+      - packages/capabilities/src/file-read-state.ts
+      - packages/capabilities/src/file-mutation-queue.ts
+      - packages/capabilities/src/file-snapshot.ts
+      - packages/capabilities/src/file-snapshot-store.ts
+      # Shared utils the moved code needs (agent shims re-export each).
+      - packages/capabilities/src/utils/path.ts
+      - packages/capabilities/src/utils/notebook.ts
+      - packages/capabilities/src/utils/multimodal-detection.ts
+      - packages/capabilities/src/utils/bash/shellQuote.ts
+      - packages/capabilities/src/utils/bash/commands.ts
+      - packages/capabilities/src/BrowserTool/BrowserPool.ts
+      - packages/capabilities/src/BrowserTool/BrowserTool.ts
+      - packages/capabilities/src/BrowserTool/CDPClient.ts
+      - packages/capabilities/src/BrowserTool/DomainBlocker.ts
+      - packages/capabilities/src/BrowserTool/FallbackBrowser.ts
+      - packages/capabilities/src/BrowserTool/HumanLikeCDPClient.ts
+      - packages/capabilities/src/BrowserTool/ParallelFetcher.ts
+      - packages/capabilities/src/BrowserTool/ResultFormatter.ts
+      - packages/capabilities/src/BrowserTool/SchemaGenerator.ts
+      - packages/capabilities/src/BrowserTool/SnapshotEngine.ts
+      - packages/capabilities/src/BrowserTool/WebviewCDPClient.ts
+      - packages/capabilities/src/BrowserTool/actions/ActionRegistry.ts
+      - packages/capabilities/src/BrowserTool/actions/close.ts
+      - packages/capabilities/src/BrowserTool/actions/computer.ts
+      - packages/capabilities/src/BrowserTool/actions/cookies.ts
+      - packages/capabilities/src/BrowserTool/actions/evaluate.ts
+      - packages/capabilities/src/BrowserTool/actions/forms.ts
+      - packages/capabilities/src/BrowserTool/actions/index.ts
+      - packages/capabilities/src/BrowserTool/actions/interaction.ts
+      - packages/capabilities/src/BrowserTool/actions/navigation.ts
+      - packages/capabilities/src/BrowserTool/actions/network.ts
+      - packages/capabilities/src/BrowserTool/actions/parallel.ts
+      - packages/capabilities/src/BrowserTool/actions/post.ts
+      - packages/capabilities/src/BrowserTool/actions/screenshot.ts
+      - packages/capabilities/src/BrowserTool/actions/search.ts
+      - packages/capabilities/src/BrowserTool/actions/snapshot.ts
+      - packages/capabilities/src/BrowserTool/actions/tabs.ts
+      - packages/capabilities/src/BrowserTool/actions/twitterPost.ts
+      - packages/capabilities/src/BrowserTool/actions/types.ts
+      - packages/capabilities/src/BrowserTool/backend-resolver.ts
+      - packages/capabilities/src/BrowserTool/constants.ts
+      - packages/capabilities/src/BrowserTool/imageUtils.ts
+      - packages/capabilities/src/BrowserTool/index.ts
+      - packages/capabilities/src/BrowserTool/input-dispatch.ts
+      - packages/capabilities/src/BrowserTool/networkEnv.ts
+      - packages/capabilities/src/BrowserTool/platform-adapters/types.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/BaseExtractor.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/_shared/public-api.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/ali1688/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/article/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/arxiv/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/bilibili/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/capability-guides.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/github/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/google-search/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/hacker-news/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/instagram/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/jd/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/pubmed/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/reddit/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/rednote/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/taobao/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/tiktok/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/twitter/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/types.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/wechat-article/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/weibo/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/wikipedia/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/xianyu/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/youtube/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/zhihu/index.ts
+      - packages/capabilities/src/BrowserTool/platform-hooks/PlatformHookManager.ts
+      - packages/capabilities/src/BrowserTool/platform-hooks/platforms/bilibili.ts
+      - packages/capabilities/src/BrowserTool/platform-hooks/platforms/twitter.ts
+      - packages/capabilities/src/BrowserTool/platform-hooks/platforms/weixin-mp.ts
+      - packages/capabilities/src/BrowserTool/platform-hooks/platforms/youtube.ts
+      - packages/capabilities/src/BrowserTool/platform-hooks/types.ts
+      - packages/capabilities/src/BrowserTool/ports.ts
+      - packages/capabilities/src/BrowserTool/prompt.ts
+      - packages/capabilities/src/BrowserTool/safety.ts
+      - packages/capabilities/src/BrowserTool/selfHealing.ts
+      - packages/capabilities/src/BrowserTool/stealth.ts
+      - packages/capabilities/src/BrowserTool/types.ts
+      - packages/capabilities/src/OSTool/ComputerCuaTool.ts
+      - packages/capabilities/src/OSTool/ComputerUseDecideTool.ts
+      - packages/capabilities/src/OSTool/ComputerUseTool.ts
+      - packages/capabilities/src/OSTool/constants.ts
+      - packages/capabilities/src/OSTool/context-tool.ts
+      - packages/capabilities/src/OSTool/index.ts
+      - packages/capabilities/src/OSTool/ports.ts
+      - packages/capabilities/src/OSTool/schema.ts
+      - packages/capabilities/src/utils/urlSafety.ts
+    owner: agent
+
   - id: legacy-ai
     roots: [packages/ai]
     managed: false
@@ -492,7 +703,9 @@ modules:
   - id: legacy-cli
     roots: [packages/cli]
     managed: false
-    requires: []
+    # CLI serves the local Host and uses its authenticated session API. Data
+    # ownership and database handles stay in the Host package.
+    requires: [input-completion, data, duya-host, agent-protocol]
     owner: agent
 
   - id: legacy-gateway
@@ -763,7 +976,20 @@ selfTest:
   # baseline's own note sanctions deleting them "as their migration lands", and
   # that is a separate, explicitly-forbidden operation. This pin is a test
   # expectation; the baseline is a debt ledger. They are different instruments.
-  module-dependency: 349
+  module-dependency: 198
+  # 349 -> 343 (2026-10-10, plan 610 A5 continuation). Ledger, not vibes:
+  #   +2  group-handlers.ts / group-turn-dispatcher.ts — their cross-package
+  #       RELATIVE imports (`../../../../../packages/agent/src/message/
+  #       message-source`) became declared-subpath `@duya/agent/message`
+  #       imports. Escapes invisible to this gate became visible (and
+  #       baselined) module edges: fingerprints b7118efb6afbe6c4 /
+  #       908c21f0f70be587 in `.architecture-baseline.json`.
+  #   -8  pre-existing drift from merges that landed after the 2026-10-06
+  #       re-measurement (A3 / PR #262 among them). This slice's own edges
+  #       net to +2 on this pin, so the deficit was already present at HEAD
+  #       before the slice (349 expected vs 341 counted) and is recorded as
+  #       measured here. Not attributable within this slice — flagged for
+  #       the next re-measurement owner.
   # 51 -> 61 (plan 587 T3.2): TEN new, all one owner pair, 0 removed.
   #
   # `module-dependency` is UNCHANGED at 559, and that is the load-bearing half:
@@ -1398,7 +1624,14 @@ selfTest:
   # measurement. What makes this safe to pin is the mutation proof that must be
   # re-run whenever these numbers move: inject one real escape and this pin must
   # go red.
-  package-boundary-escape: 115
+  package-boundary-escape: 21
+  # 115 -> 113 (2026-10-10, plan 610 A5 continuation): the two cross-package
+  # relative imports in group-handlers.ts / group-turn-dispatcher.ts
+  # (`../../../../../packages/agent/src/message/message-source`) became
+  # declared-subpath `@duya/agent/message` imports. Measured, not inferred:
+  # after the conversion those two files appeared in architecture:check's
+  # "not in baseline" set only as module-dependency; no escape edge remains
+  # for either file.
   # Was 24. The 25 are 2x `@duya/agent/tool/allowedRoots`
   # (`main/core/media-allowlist.ts`, `main/ipc/system-handlers.ts`) and
   # 23 `src-renderer` -> `@duya/conductor/renderer/*`; neither is plugin-core.
@@ -1417,7 +1650,14 @@ selfTest:
   # inspection. This is a MEASUREMENT moving because the coupling is genuinely
   # gone, not a gate relaxing: the resolver still sees every remaining edge, and
   # `npm run architecture:baseline` was NOT re-recorded.
-  deep-import: 22
+  deep-import: 0
+  # 22 -> 20 (2026-10-10, plan 610 A5 continuation): the 2x
+  # `@duya/agent/tool/allowedRoots` deep imports named above
+  # (`main/core/media-allowlist.ts`, `main/ipc/system-handlers.ts`) are gone —
+  # the primitive moved to `@duya/sandbox` (`allowed-roots.ts`) and both
+  # files now import the package's declared public entry, permitted by the
+  # `desktop-host.requires` sandbox entry. The remaining 20
+  # `src-renderer` -> `@duya/conductor/renderer/*` edges are untouched.
   # Was 17. The 42-file SCC remains; the count fell because
   # `fix/conductor-copy-and-dead-code` (PR #130) removed an edge.
   #
@@ -1476,7 +1716,7 @@ selfTest:
   # each was observed to restore a cycle, with different fingerprints (size 15
   # anchored on DuyaAgent; size 4 anchored on SubagentTool) -- so this is two
   # genuinely separate edges, not one change reported twice.
-  cycle: 8
+  cycle: 2
   # Was 1: plugin-core was the only package under packages/ with no
   # `exports` map. The rule is declarative — it reads package.json only, so
   # this stays 0 regardless of whether dist/ has been built.

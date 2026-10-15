@@ -203,10 +203,10 @@ function toPlatformStatusItem(platform: string, status: ChannelStatus | undefine
 // Handlers
 // ---------------------------------------------------------------------------
 
-function handleListChannels(_req: IncomingMessage, res: ServerResponse, platform: string | undefined): void {
+async function handleListChannels(_req: IncomingMessage, res: ServerResponse, platform: string | undefined): Promise<void> {
   void _req;
   try {
-    const entries = listChannelDirectoryWithBindings(platform);
+    const entries = await listChannelDirectoryWithBindings(platform);
     const channels: ChannelListItem[] = entries.map(toListItem);
     sendJson(res, 200, { channels });
   } catch (err) {
@@ -215,7 +215,7 @@ function handleListChannels(_req: IncomingMessage, res: ServerResponse, platform
   }
 }
 
-function handleGetChannel(_req: IncomingMessage, res: ServerResponse, id: string): void {
+async function handleGetChannel(_req: IncomingMessage, res: ServerResponse, id: string): Promise<void> {
   void _req;
   if (!id || id.trim().length === 0) {
     sendError(res, 400, 'invalid_id', 'Channel id must be a non-empty string');
@@ -225,7 +225,7 @@ function handleGetChannel(_req: IncomingMessage, res: ServerResponse, id: string
     // Plan 108: the merged directory+bindings list covers every chat
     // the user has ever talked to, so the id can match either a
     // directory row id or a binding chat_id.
-    const entries = listChannelDirectoryWithBindings();
+    const entries = await listChannelDirectoryWithBindings();
     const match = entries.find(
       (c) => c.id === id || `${c.platform}:${c.id}` === id,
     );
@@ -240,7 +240,7 @@ function handleGetChannel(_req: IncomingMessage, res: ServerResponse, id: string
   }
 }
 
-function handleListPlatforms(_req: IncomingMessage, res: ServerResponse): void {
+async function handleListPlatforms(_req: IncomingMessage, res: ServerResponse): Promise<void> {
   void _req;
   try {
     const statuses = getAllChannelStatuses();
@@ -251,7 +251,7 @@ function handleListPlatforms(_req: IncomingMessage, res: ServerResponse): void {
     });
     // Ensure every discovered channel's platform appears, even if the
     // status snapshot is empty (cold start).
-    for (const entry of getChannelDirectory()) {
+    for (const entry of await getChannelDirectory()) {
       if (!seen.has(entry.platform)) {
         platforms.push(toPlatformItem(entry.platform, undefined));
       }
@@ -264,11 +264,11 @@ function handleListPlatforms(_req: IncomingMessage, res: ServerResponse): void {
   }
 }
 
-function handlePlatformStatus(
+async function handlePlatformStatus(
   _req: IncomingMessage,
   res: ServerResponse,
   platform: string | undefined,
-): void {
+): Promise<void> {
   void _req;
   try {
     if (platform) {
@@ -283,7 +283,7 @@ function handlePlatformStatus(
       seen.add(s.platform);
       return toPlatformStatusItem(s.platform, s);
     });
-    for (const entry of getChannelDirectory()) {
+    for (const entry of await getChannelDirectory()) {
       if (!seen.has(entry.platform)) {
         out.push(toPlatformStatusItem(entry.platform, undefined));
       }

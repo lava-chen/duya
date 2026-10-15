@@ -19,7 +19,7 @@ import {
   _queuedWakeCount,
   type WakeDispatcherDeps,
 } from '../wake-dispatcher'
-import type { WakeItem } from '../../../../../../packages/agent/src/wake/types'
+import type { WakeItem } from '@duya/agent-protocol'
 
 /** Microtask flush — drain() is kicked as a fire-and-forget promise. */
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))

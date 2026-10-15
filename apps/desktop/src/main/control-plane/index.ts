@@ -12,8 +12,8 @@
  * (`run-store` in the core DB, reached through the dispatcher below).
  */
 
-export { buildRunManifest } from './manifest-factory';
-export type { BuiltRun, RunIntent } from './manifest-factory';
+export { buildRunManifest } from '@duya/host/manifest-factory';
+export type { BuiltRun, RunIntent, RunOrigin } from '@duya/host/manifest-factory';
 
 export {
   dispatchControlPlaneAction,
@@ -68,7 +68,7 @@ export type {
   GoalTaskRepository,
   RepositoryOwnership,
   RunRepository,
-} from './repository-port';
+} from '@duya/host/repository-port';
 
 export {
   createControlPlaneRepository,
@@ -77,7 +77,6 @@ export {
   _resetControlPlaneRepositoryForTesting,
   type CoreStoreAggregates,
   type CreateRepositoryOptions,
-  type LegacyDatabaseAccessor,
 } from './sqlite-repository';
 
 export {
@@ -88,7 +87,7 @@ export {
   _resetControlPlaneForTesting,
   type ControlPlaneServiceOptions,
   type WorkerBinding,
-} from './control-plane-service';
+} from '@duya/host/control-plane-service';
 
 export {
   assertCommandAccepted,
@@ -105,7 +104,7 @@ export {
   type CommandSchemaVersion,
   type CommandSenderConfig,
   type CommandSenderFacts,
-} from './command-receipt';
+} from '@duya/host/command-receipt';
 
 export {
   liveSpawnedWorkerPids,

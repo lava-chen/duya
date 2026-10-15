@@ -3,7 +3,7 @@
  */
 
 import { handleDbRequest } from '../db-bridge.js';
-import { getCoreStores } from '../../db/core-connection.js';
+import { getDesktopHostSessionApi } from '../../cli/desktop-host-api.js';
 import { getPerformanceMonitor } from '../../services/performance-monitor.js';
 import { getLogger, LogComponent } from '../../logging/logger.js';
 import type { RunningProcess } from './process-manager.js';
@@ -73,7 +73,7 @@ export class MessageRouter {
     if (msg.type === 'chat:title_generated') {
       const titleMsg = msg as unknown as { sessionId: string; title: string };
       try {
-        getCoreStores().sessions.update(titleMsg.sessionId, { title: titleMsg.title });
+        await getDesktopHostSessionApi().update(titleMsg.sessionId, undefined, { title: titleMsg.title });
       } catch {
         // Best-effort; logger not available in this module
       }

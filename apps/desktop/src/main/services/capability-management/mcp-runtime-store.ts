@@ -27,7 +27,7 @@
  *     returns a defensive copy so callers cannot mutate the cache.
  */
 
-import type { MCPConnectionStatus } from '../../../../../../packages/agent/src/types.js';
+import type { MCPConnectionStatus } from '@duya/host/worker-run-contracts';
 
 export interface McpServerStatusEntry {
   /** Live status reported by the worker MCPClient. */

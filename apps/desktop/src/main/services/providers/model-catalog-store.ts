@@ -7,8 +7,8 @@
  * the SQLite `provider_model_capabilities` table only ever holds
  * user / runtime override rows.
  *
- * This class wraps a `CapabilityStore` (the row-level `CapabilityDao`) and
- * enforces the one domain rule `CapabilityDao` does not: **never write a
+ * This class wraps a Host-backed `CapabilityStore` and enforces the one
+ * domain rule the Data store does not: **never write a
  * `preset` row**. A `preset` row would duplicate the built-in baseline that
  * already lives in `@duya/ai`, so it is coerced to `user` on write. The
  * resolution priority is DB(user override) > built-in(format seed).
@@ -30,7 +30,7 @@ export function normalizeOverrideSource(
 }
 
 /**
- * DB-backed override layer over a `provider_model_capabilities` store.
+ * Override layer over a Host-backed `provider_model_capabilities` store.
  * Implements `CapabilityStore` so it can be wired anywhere a capability
  * store is expected, and adds override-semantic helpers whose writes
  * never persist a `preset` row.
@@ -43,39 +43,39 @@ export class ModelCatalogStore implements CapabilityStore {
   }
 
   // ── CapabilityStore passthrough ──
-  listByProvider(providerId: string): ModelCapability[] {
-    return this.inner.listByProvider(providerId);
+  async listByProvider(providerId: string): Promise<ModelCapability[]> {
+    return await this.inner.listByProvider(providerId);
   }
 
-  getOne(providerId: string, modelId: string): ModelCapability | undefined {
-    return this.inner.getOne(providerId, modelId);
+  async getOne(providerId: string, modelId: string): Promise<ModelCapability | undefined> {
+    return await this.inner.getOne(providerId, modelId);
   }
 
-  upsert(capability: ModelCapability): ModelCapability {
-    return this.upsertOverride(capability);
+  async upsert(capability: ModelCapability): Promise<ModelCapability> {
+    return await this.upsertOverride(capability);
   }
 
-  delete(providerId: string, modelId: string): boolean {
-    return this.inner.delete(providerId, modelId);
+  async delete(providerId: string, modelId: string): Promise<boolean> {
+    return await this.inner.delete(providerId, modelId);
   }
 
   // ── Override semantics (never persist a preset row) ──
-  getOverrides(providerId: string, modelId: string): ModelCapability | undefined {
+  getOverrides(providerId: string, modelId: string): Promise<ModelCapability | undefined> {
     return this.getOne(providerId, modelId);
   }
 
-  listOverrides(providerId: string): ModelCapability[] {
+  listOverrides(providerId: string): Promise<ModelCapability[]> {
     return this.listByProvider(providerId);
   }
 
-  upsertOverride(capability: ModelCapability): ModelCapability {
-    return this.inner.upsert({
+  upsertOverride(capability: ModelCapability): Promise<ModelCapability> {
+    return Promise.resolve(this.inner.upsert({
       ...capability,
       source: normalizeOverrideSource(capability.source),
-    });
+    }));
   }
 
-  deleteOverride(providerId: string, modelId: string): boolean {
+  deleteOverride(providerId: string, modelId: string): Promise<boolean> {
     return this.delete(providerId, modelId);
   }
 }

@@ -13,13 +13,13 @@
  *
  * Example:
  *   node scripts/check-db-health.js
- *   node scripts/check-db-health.js --db "C:/Users/xxx/AppData/Roaming/DUYA/databases/duya-main.db"
+ *   node scripts/check-db-health.js --db "C:/Users/xxx/.duya/duya-main.db"
  *   node scripts/check-db-health.js --json
  */
 
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
+const { resolveDataRoot } = require('./duya-data-root.cjs');
 
 // ============================================================
 // Configuration
@@ -128,18 +128,8 @@ function formatSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-function getUserDataPath() {
-  if (process.platform === 'win32') {
-    return process.env.APPDATA || path.join(process.env.USERPROFILE || os.homedir(), 'AppData', 'Roaming');
-  } else if (process.platform === 'darwin') {
-    return path.join(process.env.HOME || os.homedir(), 'Library', 'Application Support');
-  } else {
-    return process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
-  }
-}
-
 function getDefaultDbPath() {
-  return path.join(getUserDataPath(), 'DUYA', 'databases', 'duya-main.db');
+  return path.join(resolveDataRoot(), 'duya-main.db');
 }
 
 // ============================================================

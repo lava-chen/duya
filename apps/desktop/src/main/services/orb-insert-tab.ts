@@ -24,7 +24,7 @@
  */
 
 import { getLogger, LogComponent } from '../logging/logger.js';
-import { getOSContextBridge } from '../../../../../packages/agent/dist/context/os-context/index.js';
+import { getOSContextBridge } from '@duya/host/worker-os-context';
 
 const logger = getLogger();
 
@@ -64,7 +64,7 @@ export async function insertTabToFocusedField(
     return { ok: true, method: 'nut.type', length: 0 };
   }
 
-  const bridge = getOSContextBridge();
+  const bridge = getOSContextBridge(logger);
   if (!bridge.isEnabled()) {
     return { ok: false, reason: 'os-context-bridge-disabled' };
   }

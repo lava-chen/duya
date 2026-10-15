@@ -9,17 +9,18 @@
  */
 
 import * as http from 'http';
-import { getJsonSetting, setJsonSetting } from '../../db/index';
+import { getDesktopHostLocalSettingsApi } from '../desktop-host-api';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import {
   type SkillListItem,
   type SkillInfoItem,
-} from '../../../../../../packages/agent/src/skills/skillService.js';
+} from '@duya/host/skills/skillService';
 
 const SKILL_ENABLED_OVERRIDES_KEY = 'skillEnabledOverrides';
 type SkillEnabledOverrides = Record<string, boolean>;
+let overrideWriteQueue: Promise<void> = Promise.resolve();
 
 function getUserDataDir(): string {
   // Match the convention used by skills-handlers.ts. Dev override
@@ -41,16 +42,37 @@ function getUserDataDir(): string {
   return join(homedir(), '.duya');
 }
 
-function getOverrides(): SkillEnabledOverrides {
+async function getOverrides(): Promise<SkillEnabledOverrides> {
   try {
-    return getJsonSetting<SkillEnabledOverrides>(SKILL_ENABLED_OVERRIDES_KEY, {});
+    const raw = await getDesktopHostLocalSettingsApi().getSetting(SKILL_ENABLED_OVERRIDES_KEY);
+    if (raw === null) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'),
+    );
   } catch {
     return {};
   }
 }
 
-function writeOverrides(next: SkillEnabledOverrides): void {
-  setJsonSetting(SKILL_ENABLED_OVERRIDES_KEY, next);
+async function writeOverrides(next: SkillEnabledOverrides): Promise<void> {
+  await getDesktopHostLocalSettingsApi().setSetting(
+    SKILL_ENABLED_OVERRIDES_KEY,
+    JSON.stringify(next),
+  );
+}
+
+function updateOverrides(
+  update: (current: SkillEnabledOverrides) => SkillEnabledOverrides,
+): Promise<SkillEnabledOverrides> {
+  const operation = overrideWriteQueue.then(async () => {
+    const next = update(await getOverrides());
+    await writeOverrides(next);
+    return next;
+  });
+  overrideWriteQueue = operation.then(() => undefined, () => undefined);
+  return operation;
 }
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
@@ -73,7 +95,7 @@ function buildEnabledDTO(
   sourceId: string | undefined,
   enabled: boolean,
 ): SkillListItem {
-  return { id, name, source, ...(sourceId ? { sourceId } : {}), enabled };
+  return { id, name, description: '', source, ...(sourceId ? { sourceId } : {}), enabled };
 }
 
 /**
@@ -96,16 +118,17 @@ async function applyOverride(
     return { ok: false, reason: 'system skills cannot be toggled' };
   }
 
-  const current = getOverrides();
-  const next: SkillEnabledOverrides = { ...current };
-  if (enabled) {
-    // enable = remove the override (default is enabled)
-    delete next[id];
-  } else {
-    // disable = set to false
-    next[id] = false;
-  }
-  writeOverrides(next);
+  await updateOverrides((current) => {
+    const next: SkillEnabledOverrides = { ...current };
+    if (enabled) {
+      // enable = remove the override (default is enabled)
+      delete next[id];
+    } else {
+      // disable = set to false
+      next[id] = false;
+    }
+    return next;
+  });
 
   // Derive the canonical name (last component after `:`)
   const name = id.split(':').pop() ?? id;
@@ -134,12 +157,18 @@ export async function handleEnableSkill(
   id: string,
   correlationId: string | undefined,
 ): Promise<void> {
-  const r = await applyOverride(id, true, correlationId);
-  if (!r.ok) {
-    sendJson(res, 400, { error: { code: 'invalid_id', message: r.reason } });
-    return;
+  try {
+    const r = await applyOverride(id, true, correlationId);
+    if (!r.ok) {
+      sendJson(res, 400, { error: { code: 'invalid_id', message: r.reason } });
+      return;
+    }
+    sendJson(res, 200, { skill: r.item });
+  } catch (error) {
+    sendJson(res, 500, {
+      error: { code: 'internal_error', message: error instanceof Error ? error.message : String(error) },
+    });
   }
-  sendJson(res, 200, { skill: r.item });
 }
 
 export async function handleDisableSkill(
@@ -148,10 +177,16 @@ export async function handleDisableSkill(
   id: string,
   correlationId: string | undefined,
 ): Promise<void> {
-  const r = await applyOverride(id, false, correlationId);
-  if (!r.ok) {
-    sendJson(res, 400, { error: { code: 'invalid_id', message: r.reason } });
-    return;
+  try {
+    const r = await applyOverride(id, false, correlationId);
+    if (!r.ok) {
+      sendJson(res, 400, { error: { code: 'invalid_id', message: r.reason } });
+      return;
+    }
+    sendJson(res, 200, { skill: r.item });
+  } catch (error) {
+    sendJson(res, 500, {
+      error: { code: 'internal_error', message: error instanceof Error ? error.message : String(error) },
+    });
   }
-  sendJson(res, 200, { skill: r.item });
 }

@@ -60,3 +60,9 @@ export {
   type RequiredCapability,
   type UnmetRequirement,
 } from './capability-negotiation.js';
+
+export type {
+  AgentProfile,
+  AgentProfileKind,
+  PromptProfileOverride,
+} from './agent-profile.js';

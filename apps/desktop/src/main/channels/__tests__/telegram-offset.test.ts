@@ -4,11 +4,13 @@
  *
  * The offset used to be a plain field, so a restart replayed whatever
  * Telegram still had queued. fetch is injected, so no network is used; the
- * store is injected too, and the DB-backed factory is exercised against a
- * real in-memory SQLite table with the real channel_offsets schema.
+ * store is injected too, and the Host API adapter is exercised against a
+ * Data-owned store backed by a real in-memory SQLite table.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
+import { ChannelPersistenceStore } from '@duya/data/channel-persistence-store';
+import type { HostLocalChannelPersistenceApiV1 } from '@duya/agent-protocol';
 
 import {
   TelegramChannelConnector,
@@ -28,6 +30,19 @@ import { _setConfigStoreForTest } from '../../config/store-instance';
 
 const TOKEN = 'bot-token';
 let tmpRoot: string;
+
+function createOffsetApi(
+  store: ChannelPersistenceStore,
+): Pick<HostLocalChannelPersistenceApiV1, 'getChannelOffset' | 'setChannelOffset'> {
+  return {
+    async getChannelOffset(channelType, offsetKey) {
+      return store.getOffset(channelType, offsetKey);
+    },
+    async setChannelOffset(input) {
+      store.setOffset(input);
+    },
+  };
+}
 
 /**
  * A faithful stand-in for the Telegram getUpdates queue: it serves only
@@ -275,6 +290,7 @@ describe('startup backlog cap', () => {
 
 describe('createChannelOffsetStore against a real table', () => {
   let db: Database.Database;
+  let persistence: ChannelPersistenceStore;
 
   beforeEach(() => {
     db = new Database(':memory:');
@@ -288,48 +304,49 @@ describe('createChannelOffsetStore against a real table', () => {
         PRIMARY KEY (channel_type, offset_key)
       )
     `);
+    persistence = new ChannelPersistenceStore(db);
   });
 
   afterEach(() => {
     db.close();
   });
 
-  it('round-trips an offset', () => {
-    const store = createChannelOffsetStore(() => db, 'telegram', 'bot-a');
-    expect(store.load()).toBeNull();
-    store.save(4242);
-    expect(store.load()).toBe(4242);
+  it('round-trips an offset', async () => {
+    const store = createChannelOffsetStore(() => createOffsetApi(persistence), 'telegram', 'bot-a');
+    expect(await store.load()).toBeNull();
+    await store.save(4242);
+    expect(await store.load()).toBe(4242);
   });
 
-  it('overwrites rather than duplicating on a second save', () => {
-    const store = createChannelOffsetStore(() => db, 'telegram', 'bot-a');
-    store.save(1);
-    store.save(9);
+  it('overwrites rather than duplicating on a second save', async () => {
+    const store = createChannelOffsetStore(() => createOffsetApi(persistence), 'telegram', 'bot-a');
+    await store.save(1);
+    await store.save(9);
     const rows = db
       .prepare('SELECT offset_value FROM channel_offsets WHERE channel_type = ? AND offset_key = ?')
       .all('telegram', 'bot-a');
     expect(rows).toHaveLength(1);
-    expect(store.load()).toBe(9);
+    expect(await store.load()).toBe(9);
   });
 
-  it('keeps agents isolated from each other', () => {
-    const a = createChannelOffsetStore(() => db, 'telegram', 'bot-a');
-    const b = createChannelOffsetStore(() => db, 'telegram', 'bot-b');
-    a.save(100);
-    b.save(200);
-    expect(a.load()).toBe(100);
-    expect(b.load()).toBe(200);
+  it('keeps agents isolated from each other', async () => {
+    const a = createChannelOffsetStore(() => createOffsetApi(persistence), 'telegram', 'bot-a');
+    const b = createChannelOffsetStore(() => createOffsetApi(persistence), 'telegram', 'bot-b');
+    await a.save(100);
+    await b.save(200);
+    expect(await a.load()).toBe(100);
+    expect(await b.load()).toBe(200);
   });
 
-  it('treats a corrupt stored value as absent', () => {
+  it('treats a corrupt stored value as absent', async () => {
     db.prepare(
       'INSERT INTO channel_offsets (channel_type, offset_key, offset_value, offset_type, updated_at) VALUES (?, ?, ?, ?, ?)',
     ).run('telegram', 'bot-a', 'not-a-number', 'long_polling', 1);
-    const store = createChannelOffsetStore(() => db, 'telegram', 'bot-a');
-    expect(store.load()).toBeNull();
+    const store = createChannelOffsetStore(() => createOffsetApi(persistence), 'telegram', 'bot-a');
+    expect(await store.load()).toBeNull();
   });
 
-  it('degrades to no persistence when the database is unavailable', () => {
+  it('degrades to no persistence when the Host API is unavailable', async () => {
     const notes: string[] = [];
     const store = createChannelOffsetStore(
       () => null,
@@ -337,15 +354,15 @@ describe('createChannelOffsetStore against a real table', () => {
       'bot-a',
       (reason) => notes.push(reason),
     );
-    expect(() => store.save(1)).not.toThrow();
-    expect(store.load()).toBeNull();
-    expect(notes.join(' ')).toMatch(/database not available/);
+    await store.save(1);
+    expect(await store.load()).toBeNull();
+    expect(notes.join(' ')).toMatch(/Host persistence API is not available/);
   });
 
   it('survives a connector restart without replaying the batch', async () => {
     const onInbound = vi.fn();
     const first = telegramStub([50]);
-    const store = createChannelOffsetStore(() => db, 'telegram', 'bot-a');
+    const store = createChannelOffsetStore(() => createOffsetApi(persistence), 'telegram', 'bot-a');
 
     const c1 = new TelegramChannelConnector({
       agentId: 'bot-a', token: TOKEN, onInbound, fetchFn: first.fn, offsetStore: store,
@@ -353,7 +370,7 @@ describe('createChannelOffsetStore against a real table', () => {
     c1.start();
     await waitFor(() => onInbound.mock.calls.length > 0);
     await c1.stop();
-    expect(store.load()).toBe(51);
+    expect(await store.load()).toBe(51);
 
     // Restart: the next poll must ask from 51, not 0.
     const onInbound2 = vi.fn();

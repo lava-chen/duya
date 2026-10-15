@@ -56,6 +56,7 @@ import {
   toLegacyApiProvider,
 } from '../../../renderer/lib/providers/legacy';
 import type { ApiProvider, LlmProvider, ModelCapability, ProviderRuntimeConfig, ProviderHealthStatus } from '../../../renderer/lib/providers/types';
+export type { ModelCapability };
 import {
   toRuntimeConfig,
   validateRuntimeConfig,
@@ -100,15 +101,15 @@ export interface ProviderStoreReader {
 }
 
 /**
- * Minimal capability-store interface. The Electron bridge supplies
- * a SQLite-backed implementation (`CapabilityDao`); tests can
- * substitute a no-op fake.
+ * Minimal capability-store interface. The Electron bridge supplies an
+ * asynchronous adapter over the authenticated Host API; tests can use a
+ * synchronous in-memory fake.
  */
 export interface CapabilityStore {
-  listByProvider(providerId: string): ModelCapability[];
-  getOne(providerId: string, modelId: string): ModelCapability | undefined;
-  upsert(capability: ModelCapability): ModelCapability;
-  delete(providerId: string, modelId: string): boolean;
+  listByProvider(providerId: string): ModelCapability[] | Promise<ModelCapability[]>;
+  getOne(providerId: string, modelId: string): ModelCapability | undefined | Promise<ModelCapability | undefined>;
+  upsert(capability: ModelCapability): ModelCapability | Promise<ModelCapability>;
+  delete(providerId: string, modelId: string): boolean | Promise<boolean>;
 }
 
 /** A `CapabilityStore` that does nothing. Useful as the test default
@@ -452,10 +453,10 @@ export class ProviderStore {
    * Secret redaction: secrets are NEVER written to logs. Validation
    * errors are run through `redactSecrets()` before being returned.
    */
-  getActiveProviderRuntimeConfig(
+  async getActiveProviderRuntimeConfig(
     modelId: string,
     capabilities?: ModelCapability,
-  ): ProviderRuntimeConfig | { error: string; code: string } {
+  ): Promise<ProviderRuntimeConfig | { error: string; code: string }> {
     this.ensureInitialized();
     const active = this.getActiveLlmProvider();
     if (!active) {
@@ -471,7 +472,7 @@ export class ProviderStore {
     // for providers without an override row (e.g. deepseek) and forced
     // the agent's 200K compaction fallback.
     const resolved =
-      capabilities ?? this.resolveRuntimeCapability(active.id, modelId);
+      capabilities ?? await this.resolveRuntimeCapability(active.id, modelId);
     const cfg = toRuntimeConfig(active, { modelId, capabilities: resolved });
     const v = validateRuntimeConfig(cfg);
     if (!v.ok) {
@@ -487,11 +488,11 @@ export class ProviderStore {
    * Get a runtime config for a specific (providerId, modelId) pair.
    * Used for title-generation / gateway sub-models.
    */
-  getProviderRuntimeConfig(
+  async getProviderRuntimeConfig(
     providerId: string,
     modelId: string,
     capabilities?: ModelCapability,
-  ): ProviderRuntimeConfig | { error: string; code: string } {
+  ): Promise<ProviderRuntimeConfig | { error: string; code: string }> {
     this.ensureInitialized();
     const p = this.getLlmProvider(providerId);
     if (!p) return { error: `provider ${providerId} not found`, code: 'provider.notFound' };
@@ -500,7 +501,7 @@ export class ProviderStore {
     // resolver (config marker > DB override > catalog baseline) when the
     // caller did not pass capabilities explicitly.
     const resolved =
-      capabilities ?? this.resolveRuntimeCapability(providerId, modelId);
+      capabilities ?? await this.resolveRuntimeCapability(providerId, modelId);
     const cfg = toRuntimeConfig(p, { modelId, capabilities: resolved });
     const v = validateRuntimeConfig(cfg);
     if (!v.ok) {
@@ -584,7 +585,7 @@ export class ProviderStore {
     // (never the built-in preset baseline). Skip when empty or no DB.
     if (result.ok && result.models.length > 0) {
       for (const m of result.models) {
-        this.catalogStore.upsertOverride({
+        await this.catalogStore.upsertOverride({
           ...m,
           providerId,
           source: 'models-api',
@@ -606,23 +607,23 @@ export class ProviderStore {
 
   /**
    * Phase 3: persist a `ModelCapability` record. The capability is
-   * stored in the SQLite `provider_model_capabilities` table
-   * (Phase 3 schema migration in `apps/desktop/src/main/db/schema.ts`).
+   * stored in the Host-owned SQLite `provider_model_capabilities` table
+   * (schema migration in `packages/data/src/main-schema.ts`).
    *
    * The record is keyed on `(provider_id, model_id)`. The user's
    * `source = 'user'` always wins over `preset` / `models-api`.
    */
-  upsertModelCapability(
+  async upsertModelCapability(
     capability: ModelCapability,
-  ): { ok: true; capability: ModelCapability } {
+  ): Promise<{ ok: true; capability: ModelCapability }> {
     // Route through the override layer so a `preset` source is coerced to
     // `user` (the built-in baseline lives in @duya/ai, never in the DB).
-    const stored = this.catalogStore.upsertOverride(capability);
+    const stored = await this.catalogStore.upsertOverride(capability);
     return { ok: true, capability: stored };
   }
 
-  listModelCapabilities(providerId: string): ModelCapability[] {
-    return this.capabilityStore.listByProvider(providerId);
+  async listModelCapabilities(providerId: string): Promise<ModelCapability[]> {
+    return await this.capabilityStore.listByProvider(providerId);
   }
 
   /**
@@ -635,10 +636,10 @@ export class ProviderStore {
    * (built-in providers), falling back to a `apiFormat` match for custom
    * providers that share a protocol with a built-in family.
    */
-  listModelCapabilitiesMerged(providerId: string): ModelCapability[] {
+  async listModelCapabilitiesMerged(providerId: string): Promise<ModelCapability[]> {
     this.ensureInitialized();
     const provider = this.getLlmProvider(providerId);
-    const overrides = this.capabilityStore.listByProvider(providerId);
+    const overrides = await this.capabilityStore.listByProvider(providerId);
     if (!provider) return overrides;
 
     const apiFormat = provider.apiFormat;
@@ -662,11 +663,11 @@ export class ProviderStore {
     );
   }
 
-  getModelCapability(
+  async getModelCapability(
     providerId: string,
     modelId: string,
-  ): ModelCapability | undefined {
-    return this.capabilityStore.getOne(providerId, modelId);
+  ): Promise<ModelCapability | undefined> {
+    return await this.capabilityStore.getOne(providerId, modelId);
   }
 
   /**
@@ -685,14 +686,14 @@ export class ProviderStore {
    * `provider:getModelCapability`) should use to attach
    * `modelCapabilities` to the runtime config.
    */
-  resolveRuntimeCapability(
+  async resolveRuntimeCapability(
     providerId: string,
     modelId: string,
-  ): ModelCapability | undefined {
+  ): Promise<ModelCapability | undefined> {
     this.ensureInitialized();
     const provider = this.getLlmProvider(providerId);
     const apiFormat = provider?.apiFormat;
-    const dbCap = this.capabilityStore.getOne(providerId, modelId);
+    const dbCap = await this.capabilityStore.getOne(providerId, modelId);
 
     // Built-in baseline (matched by providerId first, then apiFormat
     // for custom providers that share a protocol with a built-in family).
@@ -771,8 +772,8 @@ export class ProviderStore {
     return undefined;
   }
 
-  deleteModelCapability(providerId: string, modelId: string): boolean {
-    return this.capabilityStore.delete(providerId, modelId);
+  async deleteModelCapability(providerId: string, modelId: string): Promise<boolean> {
+    return await this.capabilityStore.delete(providerId, modelId);
   }
 
   // ===========================================================================

@@ -1,8 +1,8 @@
 /**
  * usage-aggregator.ts — pure aggregation for the usage dashboard.
  *
- * Turns per-session message rows (projected from core-db rollout files via
- * `storedEventsToIpcMessages`) plus a per-model pricing lookup into the
+ * Turns per-session message rows (projected from Host Session API items via
+ * `hostMessageItemsToIpcMessages`) plus a per-model pricing lookup into the
  * `UsageSummary` DTO served by the `db:usage:summary` IPC handler.
  *
  * Token conventions (mirrors agent-process-entry live-usage handling):
@@ -23,8 +23,8 @@
  * Structure: `extractSessionFacts` reduces a session's rows into a
  * cost-independent `SessionUsageFacts` snapshot; `aggregateUsageFromFacts`
  * combines facts + live pricing into the summary. The IPC handler caches
- * facts per session keyed by the rollout file's mtime/size stamp
- * (`UsageFactsCache`), so unchanged sessions skip the rollout read entirely.
+ * facts per session keyed by the append-only Host timeline count
+ * (`UsageFactsCache`), so unchanged sessions skip message paging entirely.
  */
 
 import type { MessageRow } from './core-db-adapters';
@@ -639,11 +639,11 @@ export function aggregateUsage(
 }
 
 // ============================================================================
-// Facts cache (mtime/size-gated, used by the db:usage:summary handler)
+// Facts cache (Host timeline-version-gated, used by db:usage:summary)
 // ============================================================================
 
-/** Caches per-session facts keyed by a rollout-file stamp so unchanged
- *  sessions skip the rollout read on every dashboard refresh. */
+/** Caches per-session facts by append-only timeline version so unchanged
+ *  sessions skip Host message reads on every dashboard refresh. */
 export class UsageFactsCache {
   private entries = new Map<string, { stamp: string; facts: SessionUsageFacts }>();
 

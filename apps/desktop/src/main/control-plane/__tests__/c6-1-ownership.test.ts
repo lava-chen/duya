@@ -9,10 +9,8 @@
  *    owner the slice forbids. So the binding is asserted against REAL
  *    `better-sqlite3` stores: if the adapter issued DDL or constructed a
  *    connection, the fixture's tables would not be the ones it wrote.
- *  - **Ownership is data, and it is plural.** The approval surface's decision
- *    genuinely lives on a second connection. A test that asserted a single
- *    owner would be asserting something false, so the test pins the real two
- *    and names which is the finding.
+ *  - **Ownership is data.** This binding reaches one Core DB connection;
+ *    approval records and decisions are supplied by Host API clients.
  *  - **The host map refuses an unrecorded run.** A worker handle for a run with
  *    no row is process memory pretending to be a fact.
  *  - **The command receipt refuses before it dispatches.** The sender check has
@@ -35,6 +33,7 @@ import {
   _resetControlPlaneRepositoryForTesting,
   type CoreStoreAggregates,
 } from '../sqlite-repository';
+import { HOST_APPROVAL_API_STUBS } from './host-approval-api-stubs';
 import {
   ControlPlaneService,
   HostMap,
@@ -95,7 +94,7 @@ beforeEach(() => {
     tasks: new TaskStore(db),
     mailbox: new Mailbox(db),
   };
-  repository = createControlPlaneRepository({ stores: aggregates, legacyDatabase: () => null });
+  repository = createControlPlaneRepository({ stores: aggregates, ...HOST_APPROVAL_API_STUBS });
 });
 
 afterEach(() => {
@@ -140,21 +139,16 @@ describe('the repository port reuses the existing connection and migration owner
     expect(tableExists('control_plane_runs')).toBe(false);
   });
 
-  it('names the connection owners it actually reaches, and the approval split is visible', () => {
+  it('names the one SQLite connection it reaches; approvals stay behind Host APIs', () => {
     const owners = repository.ownership.connections.map((c) => c.owner);
-    // Two, not one. The legacy connection is where the first-wins
-    // authorisation CAS lives; collapsing this to a single owner would hide the
-    // finding C6.1 exists to produce.
-    expect(new Set(owners)).toEqual(new Set(['initCoreDatabase', 'initDatabaseFromBoot']));
+    expect(new Set(owners)).toEqual(new Set(['initCoreDatabase']));
     const core = repository.ownership.connections.find((c) => c.owner === 'initCoreDatabase');
     expect(core?.aggregates).toContain('RunStore');
-    const legacy = repository.ownership.connections.find((c) => c.owner === 'initDatabaseFromBoot');
-    expect(legacy?.aggregates).toContain('tool_approval_state');
     expect(repository.ownership.executingProcess).toBe('electron-main');
   });
 
   it('reports the same repository on a second create, so there is one owner', () => {
-    const again = createControlPlaneRepository({ stores: aggregates, legacyDatabase: () => null });
+    const again = createControlPlaneRepository({ stores: aggregates, ...HOST_APPROVAL_API_STUBS });
     expect(again).toBe(repository);
   });
 });

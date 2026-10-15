@@ -25,20 +25,20 @@
  * chained queue.
  */
 
-import { getCoreStores } from '../db/core-connection';
 import { randomUUID } from 'crypto';
-import type { NewEvent } from '../db/core';
+import type { HostMessageItem } from '@duya/agent-protocol';
+import { getDesktopHostSessionApi } from '../cli/desktop-host-api';
 import { ipcMessageToNewEvent, newEventToIpcMessage } from '../ipc/core-db-adapters';
 import { getSessionManager } from '../agents/session-manager';
 import { listConfigAgents } from '../config/agents';
 import { listGroups } from '../config/groups';
-import { ROOM_HISTORY_SOURCES } from '../../../../../packages/agent/src/message/message-source';
+import { ROOM_HISTORY_SOURCES } from '@duya/agent-protocol/message-timeline';
 import {
   GroupChatOrchestrator,
   type GroupMember,
   type GroupMessage,
-} from '../../../../../packages/agent/src/wake/groupTurn';
-import { getRoomSessionId, parseRoomIdFromSession } from '../../../../../packages/agent/src/agent/dm/bot-session-id';
+} from '@duya/host/group-turn';
+import { getRoomSessionId, parseRoomIdFromSession } from '@duya/agent-protocol';
 import { defaultBotSessionCreator } from './agent-dm-dispatcher';
 import { dispatchBotTurn } from './wake-dispatcher';
 import { interruptCronSession } from '../automation/agent-run';
@@ -94,9 +94,9 @@ function resolveMemberName(memberId: string): string {
  * wake dispatcher; post the room narrative the cap requires (grok posts a
  * redelivery note rather than letting the member vanish silently).
  */
-export function appendGroupTurnDroppedNotice(roomId: string, memberId: string): void {
+export async function appendGroupTurnDroppedNotice(roomId: string, memberId: string): Promise<void> {
   try {
-    appendRoomEntry(getRoomSessionId(roomId), {
+    await appendRoomEntry(getRoomSessionId(roomId), {
       id: `room-redrive-drop-${roomId}-${memberId}-${Date.now()}`,
       role: 'system',
       content: `${resolveMemberName(memberId)}'s turn was interrupted repeatedly and gave up (redrive limit). Mention them again to retry.`,
@@ -119,11 +119,11 @@ export function appendGroupTurnDroppedNotice(roomId: string, memberId: string): 
  * MessageLog rollout file, the renderer thread list and the source-filtered
  * transcript reads.
  */
-export function ensureRoomSession(roomId: string, title: string): string {
+export async function ensureRoomSession(roomId: string, title: string): Promise<string> {
   const sessionId = getRoomSessionId(roomId);
-  const { sessions } = getCoreStores();
-  if (sessions.get(sessionId)) return sessionId;
-  sessions.create({
+  const api = getDesktopHostSessionApi();
+  if (await api.get(sessionId, { includeAllSessions: true })) return sessionId;
+  await api.create({
     id: sessionId,
     title,
     status: 'active',
@@ -141,7 +141,7 @@ export function ensureRoomSession(roomId: string, title: string): string {
  * renderer (`message:new`). Used for user posts and room lifecycle notices;
  * bot posts arrive through the `message:append` bridge instead.
  */
-export function appendRoomEntry(
+export async function appendRoomEntry(
   sessionId: string,
   message: {
     id: string;
@@ -150,15 +150,14 @@ export function appendRoomEntry(
     source: 'user' | 'group_system';
     metadata?: Record<string, unknown>;
   },
-): void {
+): Promise<void> {
   try {
-    const { messageLog } = getCoreStores();
-    const event: NewEvent = ipcMessageToNewEvent(
+    const event = ipcMessageToNewEvent(
       sessionId,
       { ...message, created_at: Date.now() } as unknown as Parameters<typeof ipcMessageToNewEvent>[1],
       null,
     );
-    messageLog.appendBatch([event]);
+    await getDesktopHostSessionApi().appendTimeline(sessionId, { entries: [event.payload] });
     const broadcast = newEventToIpcMessage(event);
     if (broadcast) {
       getSessionManager().broadcastSessionEvent('message:new', {
@@ -181,12 +180,21 @@ export function appendRoomEntry(
  * `ROOM_HISTORY_SOURCES` rows participate; streaming previews don't exist
  * here because room posts are written complete.
  */
-export function readGroupHistory(sessionId: string): GroupMessage[] {
-  let rows: Array<{ payload: string }> = [];
+export async function readGroupHistory(sessionId: string): Promise<GroupMessage[]> {
+  const api = getDesktopHostSessionApi();
+  const items: HostMessageItem[] = [];
   try {
-    rows = getCoreStores().messageLog.listBySession(sessionId, {
-      source: ROOM_HISTORY_SOURCES,
-    }) as unknown as Array<{ payload: string }>;
+    if (!(await api.get(sessionId, { includeAllSessions: true }))) return [];
+    let cursor: string | undefined;
+    do {
+      const page = await api.readMessages(sessionId, {
+        limit: 200,
+        sources: ROOM_HISTORY_SOURCES,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      items.push(...page.messages);
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor !== undefined);
   } catch (err) {
     getLogger().warn('GroupTurn: history read failed', {
       sessionId,
@@ -195,27 +203,23 @@ export function readGroupHistory(sessionId: string): GroupMessage[] {
     return [];
   }
   const history: GroupMessage[] = [];
-  for (const row of rows) {
-    let entry: {
-      type?: string;
-      message?: { role?: string; content?: unknown; metadata?: { groupPost?: GroupPostMeta } };
-    };
-    try {
-      entry = JSON.parse(row.payload);
-    } catch {
-      continue;
-    }
-    if (entry?.type !== 'message' || !entry.message) continue;
-    const role = entry.message.role;
-    const content = typeof entry.message.content === 'string' ? entry.message.content : '';
-    if (!content.trim()) continue;
-    if (role === 'user') {
+  for (const item of items) {
+    if (item.entry.type !== 'message') continue;
+    const message = item.entry.message;
+    if (message.role === 'user') {
+      const content = typeof message.content === 'string' ? message.content : '';
+      if (!content.trim()) continue;
       history.push({ speaker: { kind: 'user' }, content });
       continue;
     }
-    if (role === 'assistant') {
-      const post = entry.message.metadata?.groupPost;
-      if (!post?.memberId) continue;
+    if (message.role === 'assistant') {
+      const content = typeof message.content === 'string' ? message.content : '';
+      if (!content.trim()) continue;
+      const metadata = message.metadata;
+      const post = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+        ? (metadata as Record<string, unknown>).groupPost as GroupPostMeta | undefined
+        : undefined;
+      if (typeof post?.memberId !== 'string' || post.memberId.length === 0) continue;
       history.push({
         speaker: { kind: 'member', id: post.memberId, name: post.memberName || post.memberId },
         content,
@@ -256,6 +260,7 @@ export function scheduleGroupTurn(
   const state = getRoomState(sessionId);
   const epoch = state.epoch + 1;
   state.epoch = epoch;
+  let preTurnNotice = Promise.resolve();
 
   // Plan 478 §2.4: a user message interrupts the in-flight member run and
   // voids the remaining plan; bot/automation posts wait for the chained turn.
@@ -276,7 +281,7 @@ export function scheduleGroupTurn(
     }
     // Plan 501 L3 (grok redelivery note parity): the room sees why the
     // member's stream went silent instead of a silent disappearance.
-    appendRoomEntry(sessionId, {
+    preTurnNotice = appendRoomEntry(sessionId, {
       id: `room-interrupt-${roomId}-${epoch}`,
       role: 'system',
       content: `User message interrupted ${resolveMemberName(memberId)}'s turn; the room picks up after the user is served.`,
@@ -285,7 +290,10 @@ export function scheduleGroupTurn(
   }
 
   state.queue = state.queue
-    .then(() => runRoomTurn(roomId, sessionId, epoch))
+    .then(async () => {
+      await preTurnNotice;
+      await runRoomTurn(roomId, sessionId, epoch);
+    })
     .catch((err) => {
       getLogger().warn('GroupTurn: room turn crashed', {
         roomId,
@@ -323,7 +331,7 @@ async function runRoomTurn(roomId: string, sessionId: string, epoch: number): Pr
           description: agents[id].description || '',
         }));
     },
-    readHistory: (): GroupMessage[] => readGroupHistory(sessionId),
+    readHistory: async (): Promise<GroupMessage[]> => readGroupHistory(sessionId),
     isCurrent: (): boolean => getRoomState(sessionId).epoch === epoch,
     runMemberTurn: async ({ member, systemPrompt, prompt }: {
       member: GroupMember;
@@ -334,7 +342,7 @@ async function runRoomTurn(roomId: string, sessionId: string, epoch: number): Pr
       // Ensure the member's persistent bot session exists (same get-or-create
       // as the DM dispatcher) — the group turn runs on the member's session.
       try {
-        defaultBotSessionCreator.createIfMissing(`bot:${member.id}`, member.id);
+        await defaultBotSessionCreator.createIfMissing(`bot:${member.id}`, member.id);
       } catch (err) {
         getLogger().warn('GroupTurn: member session ensure failed', {
           roomId,
@@ -386,7 +394,7 @@ async function runRoomTurn(roomId: string, sessionId: string, epoch: number): Pr
   });
 
   if (getRoomState(sessionId).epoch === epoch) {
-    appendRoomEntry(sessionId, {
+    await appendRoomEntry(sessionId, {
       id: `room-turn-${roomId}-${epoch}`,
       role: 'system',
       content: `Group turn concluded (round limit ${group.maxRounds}, turn limit ${group.maxMemberTurns}).`,

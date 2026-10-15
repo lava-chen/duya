@@ -12,7 +12,7 @@
 
 import { ipcMain, BrowserWindow } from 'electron';
 import * as http from 'http';
-import { getDatabase } from '../db/connection';
+import { getDesktopHostLocalAppConnectionApi } from '../cli/desktop-host-api.js';
 import { getLogger, LogComponent } from '../logging/logger';
 import {
   getAppConnectionService,
@@ -91,9 +91,7 @@ export interface AppConnectionSingleResponse {
  * `appConnection:list` request failed even though boot had completed.
  */
 function getReadyAppConnectionService() {
-  if (!getDatabase()) {
-    throw new Error('App connection database is not ready');
-  }
+  getDesktopHostLocalAppConnectionApi();
   const service = getAppConnectionService();
   service.setReloadHook(notifyAgentServerAppConnectionReload);
   return service;
@@ -135,7 +133,7 @@ export function registerAppConnectionHandlers(): void {
     'appConnection:list',
     async (): Promise<AppConnectionListResponse> => {
       try {
-        const list = getReadyAppConnectionService().list();
+        const list = await getReadyAppConnectionService().list();
         return { success: true, data: list };
       } catch (err) {
         logger.error(
@@ -175,7 +173,7 @@ export function registerAppConnectionHandlers(): void {
         return { success: false, error: 'connectionId is required' };
       }
       try {
-        const dto = getReadyAppConnectionService().getStatus(connectionId);
+        const dto = await getReadyAppConnectionService().getStatus(connectionId);
         return dto ? { success: true, data: dto } : { success: false, error: 'Connection not found', errorCode: 'connection_not_found' };
       } catch (err) {
         logger.error(

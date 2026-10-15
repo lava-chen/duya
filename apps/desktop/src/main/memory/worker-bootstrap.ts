@@ -11,9 +11,9 @@
  * `memory.memory_enabled` from config.toml — the toggle never reached the
  * worker. Two fixes landed together:
  *
- *   1. `syncMemoryToggleFromSettingsDb()` — one-time boot alignment that
- *      treats the SQLite UI value as the user's intent when the two
- *      stores disagree (legacy builds only wrote SQLite).
+ *   1. `syncMemoryToggleFromHostSettings()` — one-time boot alignment that
+ *      reads the legacy SQLite UI value through the Host Settings API and
+ *      treats it as the user's intent when config.toml disagrees.
  *   2. `startMemoryWorkerFromConfig()` — reusable hot-start used by boot
  *      and the toggle IPC (the toggle pauses/resumes the running handle
  *      without tearing it down; hot-start only fills the "booted while
@@ -23,16 +23,21 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { getLogger, LogComponent } from '../logging/logger';
-import { getDatabase } from '../db/connection';
 import { getDatabasePath } from '../config/boot-config';
-import { getCoreStoresOrNull } from '../db/core-connection';
+import {
+  getDesktopHostLocalSessionApi,
+  getDesktopHostLocalProjectApi,
+  getDesktopHostLocalSettingsApi,
+  getDesktopHostSessionApi,
+} from '../cli/desktop-host-api';
 import { getProviderStore } from '../services/providers/provider-store-electron';
+import { readHostMessageRows } from '../services/host-message-reader';
+import type { MemoryCatalogSource } from '../memory-state/catalogSync';
 import { isLowPowerEnabled } from '../services/low-power';
 import { resolveMemoryModel } from '../services/providers/memory-model-resolution';
 import { toLegacyApiProvider } from '../../renderer/lib/providers/legacy';
 import { createRagIndexExecutor } from './rag_refresh';
 import { getConfigStore } from '../config/store-instance';
-import { getJsonSetting } from '../db/queries/settings';
 
 const logger = getLogger();
 
@@ -93,22 +98,62 @@ export async function startMemoryWorkerFromConfig(): Promise<MemoryWorkerStartOu
     const { toLLMProvider } = await import('../config/provider-types');
     const { toRuntimeConfigFromLegacy } = await import('@duya/ai');
 
-    const mainDb = getDatabase();
-    if (!mainDb) {
-      throw new Error('Main DB not available for memory worker');
-    }
     const memoryDb = bootstrap({ bootJsonDatabaseDir: path.dirname(getDatabasePath()) });
 
-    // Plan 328 Phase 5: catalogSync now reads from the core DB
-    // (`duya-core.db` sessions + message_index tables). Pull the
-    // singleton CoreStores so the worker's catalogSync uses the
-    // same handle the rest of the main process uses.
-    const coreStores = getCoreStoresOrNull();
-    if (!coreStores) {
-      throw new Error(
-        'Core stores not initialized — memory worker requires core DB (plan 328)',
-      );
-    }
+    // The authenticated Host local API supplies complete session snapshots,
+    // timeline index metadata, and project path resolution.
+    const catalogSource: MemoryCatalogSource = {
+      async listSessions() {
+        const api = getDesktopHostLocalSessionApi();
+        const sessions = [];
+        let cursor: string | undefined;
+        do {
+          const page = await api.listLocalSessions({
+            includeAllSessions: true,
+            includeArchived: true,
+            includeDeleted: true,
+            limit: 200,
+            ...(cursor === undefined ? {} : { cursor }),
+          });
+          sessions.push(...page.sessions);
+          cursor = page.nextCursor ?? undefined;
+        } while (cursor !== undefined);
+        return sessions;
+      },
+      async readMessageIndex(sessionId) {
+        const api = getDesktopHostSessionApi();
+        const rows = [];
+        let cursor: string | undefined;
+        do {
+          const page = await api.readProjectedTimeline(sessionId, {
+            limit: 200,
+            ...(cursor === undefined ? {} : { cursor }),
+          });
+          rows.push(...page.entries.map((entry) => ({
+            id: entry.id,
+            seq: entry.sequence,
+            created_at: entry.createdAt,
+          })));
+          cursor = page.nextCursor ?? undefined;
+        } while (cursor !== undefined);
+        return rows;
+      },
+      async resolveProject(input) {
+        const resolved = await getDesktopHostLocalProjectApi().resolveProjectPath({
+          workingDirectory: input.workingDirectory,
+          agentProfileId: input.agent_profile_id ?? null,
+          cwd: input.cwd,
+          workspaceOverridesPath: input.workspaceOverridesPath,
+        });
+        return {
+          project_id: resolved.projectId,
+          canonical_root: resolved.canonicalRoot,
+          resolution_source: resolved.resolutionSource,
+          alias_kind: resolved.aliasKind,
+          absolute_normalized_path: resolved.absoluteNormalizedPath,
+        };
+      },
+    };
 
     // Construct LLM client from the memory worker provider. When
     // memoryProviderId is unset, getMemoryProvider() falls back to
@@ -219,16 +264,10 @@ export async function startMemoryWorkerFromConfig(): Promise<MemoryWorkerStartOu
     startMemoryWorker(
       {
         memoryDb,
-        mainDb,
-        coreDb: coreStores.coreDb,
-        sessions: coreStores.sessions,
-        // Main process has no `process.send` — read messages from the
-        // core store MessageLog directly (mirror of the db-bridge
-        // `message:getBySession` case).
-        readMessageRows: async (sessionId: string) => {
-          const { storedEventsToIpcMessages } = await import('../ipc/core-db-adapters');
-          return storedEventsToIpcMessages(coreStores.messageLog.listBySession(sessionId));
-        },
+        catalogSource,
+        // The Memory extractor consumes the same paginated Host projection
+        // as the Desktop session APIs; it does not reach into CoreStores.
+        readMessageRows: readHostMessageRows,
         llmClient,
         curation,
       },
@@ -252,16 +291,25 @@ export async function startMemoryWorkerFromConfig(): Promise<MemoryWorkerStartOu
  *
  * The renderer-facing toggle historically wrote ONLY the SQLite settings
  * table (`memoryEnabled` via db:setting:setJson), while every consumer
- * reads `memory.memory_enabled` from config.toml. When the two stores
- * disagree, the SQLite value is the user's most recent intent — copy it
- * into config.toml before the worker gate / agent env bridges read it.
+ * reads `memory.memory_enabled` from config.toml. Read the legacy value
+ * through the authenticated Host Settings API. When the two stores disagree,
+ * the UI value is the user's most recent intent — copy it into config.toml
+ * before the worker gate / agent env bridges read it.
  *
- * Runs before the boot worker gate in main.ts. No-op when the SQLite key
+ * Runs before the boot worker gate in main.ts. No-op when the legacy key
  * is absent (fresh installs) or both stores already agree.
  */
-export function syncMemoryToggleFromSettingsDb(): void {
+export async function syncMemoryToggleFromHostSettings(): Promise<void> {
   try {
-    const uiValue = getJsonSetting<boolean | null>('memoryEnabled', null);
+    const storedValue = await getDesktopHostLocalSettingsApi().getSetting('memoryEnabled');
+    let uiValue: unknown = null;
+    if (storedValue !== null) {
+      try {
+        uiValue = JSON.parse(storedValue) as unknown;
+      } catch {
+        return;
+      }
+    }
     if (typeof uiValue !== 'boolean') return;
     const configStore = getConfigStore();
     const configValue = configStore.getByPath('memory.memory_enabled');

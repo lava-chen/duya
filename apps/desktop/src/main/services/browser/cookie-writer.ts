@@ -4,23 +4,22 @@
 
 import { session, type DownloadItem, type Event } from 'electron';
 import * as path from 'path';
-import { getSetting } from '../../db/queries/settings';
 import type { ElectronCookie } from './cookie-importer';
 
 const PARTITION = 'persist:duya-local-browser';
+let configuredDownloadPath: string | undefined;
 
-function getConfiguredDownloadPath(): string | undefined {
-  const raw = getSetting('browserDownloadPath');
-  return raw?.trim() || undefined;
+export function setBrowserDownloadPathSetting(raw: string | null | undefined): void {
+  configuredDownloadPath = raw?.trim() || undefined;
 }
 
-export function attachBrowserDownloadHandler(): void {
+export function attachBrowserDownloadHandler(initialSetting?: string | null): void {
+  if (initialSetting !== undefined) setBrowserDownloadPathSetting(initialSetting);
   const ses = session.fromPartition(PARTITION);
   ses.on('will-download', (event: Event, item: DownloadItem) => {
-    const configuredPath = getConfiguredDownloadPath();
-    if (configuredPath) {
+    if (configuredDownloadPath) {
       const fileName = item.getFilename();
-      item.setSavePath(path.join(configuredPath, fileName));
+      item.setSavePath(path.join(configuredDownloadPath, fileName));
     }
   });
 }

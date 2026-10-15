@@ -10,12 +10,12 @@
  * coexisting with different orders. This repo uses the explicit-scripts option,
  * and THIS ARRAY IS THE SINGLE SOURCE OF TRUTH for that order.
  *
- * Every entry point (`typecheck:web`, `typecheck:electron`, `bundle:agent`,
- * `electron:build`, `electron:dev`, `pretest`, …) obtains its prerequisites by
- * calling `npm run build:packages`, which runs this file. No entry point may
- * hand-order a subset of these packages, and no entry point may add a package
- * to its own chain — that is precisely how `voice` and `gateway` came to be
- * built ad hoc by the electron scripts and omitted from the package chain.
+ * Every entry point obtains package prerequisites from this file. The default
+ * invocation builds the full monorepo order; `--target <workspace>` builds the
+ * target's transitive workspace dependency closure using this same order. No
+ * entry point may hand-order a subset or add a package to its own chain — that
+ * is precisely how `voice` and `gateway` came to be built ad hoc by the
+ * electron scripts and omitted from the package chain.
  *
  * Project references were rejected on evidence, not taste:
  *
@@ -44,12 +44,14 @@
  *
  * Usage:
  *   node scripts/build-packages.mjs
+ *   node scripts/build-packages.mjs --target @duya/cli
  *
  * Exit codes: 0 = every package built; non-zero = the first failing package's
  * exit code is propagated. Failures are NOT swallowed.
  */
 
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
@@ -95,10 +97,26 @@ const BUILD_ORDER = [
   // import from an already-present `dist`, so `typecheck:all` is green while a
   // clean CI checkout reports TS2307 for every file that imports it.
   '@duya/input-completion',
+  // Plan 610 A8: the extension contract package. Level 1 because it imports
+  // no `@duya/*` package at all -- 13 contributor interfaces, the registry,
+  // and assembly-time validation, nothing else. It must build before
+  // `@duya/capabilities`, whose `fs-contributors.ts` consumes the
+  // `ToolContributor` type. (The package existed before this entry; without
+  // it, `@duya/capabilities` built against whatever `dist` happened to sit
+  // there -- or none.)
+  '@duya/tooling',
 
   // Level 2 — depend only on level 1.
   '@duya/ai', //              -> @duya/agent-protocol
   '@duya/plugin-core',
+  // Plan 610 A8: the capability implementations, slice 1 = filesystem
+  // (Read/Write/Edit/Glob/Grep/ApplyPatch + BaseTool + contracts + the
+  // path-permission policy). Depends on level-1 `@duya/agent-protocol`
+  // (transcript types), `@duya/sandbox` (path containment), `@duya/tooling`
+  // (contributor declaration), level-2 `@duya/ai` (the `ToolResult` runtime
+  // type, same edge `@duya/memory` declares) plus npm `diff`/`picomatch`/
+  // `zod`. It must build before `@duya/agent`, whose shims re-export it.
+  '@duya/data', //             -> @duya/agent-protocol
   '@duya/conductor',
   '@duya/gateway',
   '@duya/voice',
@@ -106,27 +124,107 @@ const BUILD_ORDER = [
   // Level 3 — depend only on level 2.
   '@duya/agent-core', //   -> @duya/agent-protocol
   '@duya/computer-use', // -> @duya/ai
-  '@duya/cli', //          -> @duya/plugin-core
 
-  // Level 4.
+  // Concrete browser/CUA and connector adapters consume the platform and
+  // plugin contracts, while Runtime consumes their public tool contracts.
+  '@duya/capabilities',
+
+  // Level 4 — depend on agent-core and agent-protocol.
   '@duya/agent-runtime', // -> @duya/agent-core, @duya/agent-protocol
 
-  // Level 5.
-  //
-  // `@duya/memory` sits at level 5 because its only `@duya/*` dependency is
-  // `@duya/ai` (level 2) and its only consumers are `@duya/agent` and
-  // `apps/desktop`. Both need its emitted `dist`, so it must be built before
-  // either — and it must not be hoisted earlier, or a package that imports it
-  // could typecheck against a `dist` that does not exist yet.
-  '@duya/memory', //           -> @duya/ai
+  // Memory is a Host prompt/context prerequisite.
+  '@duya/memory', // -> @duya/ai
 
-  // Level 5 — last. `@duya/agent` consumes the four level-2/3 packages above,
+  // Level 5 — the Host composes the runtime and data packages; CLI connects to it.
+  '@duya/host', //         -> @duya/agent-runtime, @duya/data, @duya/agent-protocol
+  '@duya/cli', //          -> @duya/host, @duya/plugin-core, @duya/input-completion
+
+
+  // Level 6 — last. `@duya/agent` consumes the level-2 through level-5 packages,
   // and `apps/desktop/src/main` plus the agent bundle both import it, so
   // nothing that needs it can be built or typechecked earlier. It also
   // resolves `@duya/agent/message` to its OWN emitted `dist/message`, so it
   // must be fully built before any step that leans on its emitted types.
   '@duya/agent', // -> @duya/ai, @duya/cli, @duya/computer-use, @duya/plugin-core, @duya/memory
 ];
+
+const BUILD_ORDER_SET = new Set(BUILD_ORDER);
+
+function parseTarget(args) {
+  let target;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--target') {
+      if (target !== undefined || !args[index + 1]) {
+        throw new Error('Usage: node scripts/build-packages.mjs [--target <workspace>]');
+      }
+      target = args[index + 1];
+      index += 1;
+    } else if (arg.startsWith('--target=')) {
+      if (target !== undefined || arg.length === '--target='.length) {
+        throw new Error('Usage: node scripts/build-packages.mjs [--target <workspace>]');
+      }
+      target = arg.slice('--target='.length);
+    } else {
+      throw new Error(`Unknown build-packages argument: ${arg}`);
+    }
+  }
+  return target;
+}
+
+function packageDirectory(name) {
+  if (!name.startsWith('@duya/')) {
+    throw new Error(`Expected a @duya workspace package, got: ${name}`);
+  }
+  return resolve(repoRoot, 'packages', name.slice('@duya/'.length));
+}
+
+function workspaceDependencies(name) {
+  const manifestPath = resolve(packageDirectory(name), 'package.json');
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  } catch (error) {
+    throw new Error(`Could not read workspace manifest for ${name}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (manifest.name !== name) {
+    throw new Error(`Workspace manifest mismatch at ${manifestPath}: expected ${name}, got ${String(manifest.name)}`);
+  }
+
+  return new Set([
+    ...Object.keys(manifest.dependencies ?? {}),
+    ...Object.keys(manifest.devDependencies ?? {}),
+    ...Object.keys(manifest.optionalDependencies ?? {}),
+    ...Object.keys(manifest.peerDependencies ?? {}),
+  ].filter((dependency) => dependency.startsWith('@duya/')));
+}
+
+function selectBuildOrder(target) {
+  if (target === undefined) return BUILD_ORDER;
+  if (!BUILD_ORDER_SET.has(target)) {
+    throw new Error(`Unknown build target ${target}; expected one of: ${BUILD_ORDER.join(', ')}`);
+  }
+
+  const required = new Set();
+  const visit = (name) => {
+    if (required.has(name)) return;
+    required.add(name);
+    for (const dependency of workspaceDependencies(name)) {
+      if (!BUILD_ORDER_SET.has(dependency)) {
+        const dependencyManifest = resolve(packageDirectory(dependency), 'package.json');
+        try {
+          readFileSync(dependencyManifest, 'utf8');
+        } catch {
+          continue; // External @duya-scoped dependency, not a workspace package.
+        }
+        throw new Error(`Workspace dependency ${dependency} of ${name} is missing from BUILD_ORDER`);
+      }
+      visit(dependency);
+    }
+  };
+  visit(target);
+  return BUILD_ORDER.filter((name) => required.has(name));
+}
 
 /**
  * Spawn `npm run -w <name> build` for one workspace package.
@@ -149,9 +247,34 @@ function runPackageBuild(name) {
     : spawnSync('npm', args, { cwd: repoRoot, stdio: 'inherit' });
 }
 
-for (const [index, name] of BUILD_ORDER.entries()) {
-  const label = `build-packages ${index + 1}/${BUILD_ORDER.length}`;
+let target;
+let selectedOrder;
+try {
+  target = parseTarget(process.argv.slice(2));
+  selectedOrder = selectBuildOrder(target);
+} catch (error) {
+  process.stderr.write(`[build-packages] ${error instanceof Error ? error.message : String(error)}\n`);
+  process.exit(64);
+}
+
+for (const [index, name] of selectedOrder.entries()) {
+  const label = `build-packages ${index + 1}/${selectedOrder.length}`;
   process.stdout.write(`[${label}] ${name}\n`);
+
+  if (name === '@duya/capabilities') {
+    const generated = spawnSync(process.execPath, [resolve(repoRoot, 'scripts/inline-modules.mjs')], {
+      cwd: repoRoot,
+      stdio: 'inherit',
+    });
+    if (generated.error) {
+      process.stderr.write(`[build-packages] could not generate capability module content: ${generated.error.message}\n`);
+      process.exit(1);
+    }
+    if (generated.status !== 0) {
+      process.stderr.write(`[build-packages] capability module content generation failed with exit ${generated.status}\n`);
+      process.exit(generated.status ?? 1);
+    }
+  }
 
   const proc = runPackageBuild(name);
 
@@ -165,4 +288,4 @@ for (const [index, name] of BUILD_ORDER.entries()) {
   }
 }
 
-process.stdout.write(`[build-packages] all ${BUILD_ORDER.length} packages built.\n`);
+process.stdout.write(`[build-packages] built ${selectedOrder.length} package(s)${target ? ` for ${target}` : ''}.\n`);

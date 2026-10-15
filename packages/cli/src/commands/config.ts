@@ -30,6 +30,7 @@ export interface ProviderDTO {
   providerType: string;
   baseUrl?: string;
   isActive: boolean;
+  isDefault?: boolean;
   hasKey: boolean;
   model?: string;
 }

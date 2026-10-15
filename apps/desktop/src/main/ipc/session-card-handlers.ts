@@ -9,40 +9,21 @@
  */
 import { ipcMain } from 'electron';
 import { interruptCronSession } from '../automation/agent-run';
-import { getCoreStores } from '../db/core-connection';
-import { getDatabase } from './db-handlers';
+import { getDesktopHostLocalSessionApi, getDesktopHostSessionApi } from '../cli/desktop-host-api';
 import { getLogger, LogComponent } from '../logging/logger';
 
 export function registerSessionCardHandlers(): void {
   // Status + diff stats (+N/-M from chat_turn_reviews) for a child session.
   ipcMain.handle('duya:session:card', async (_event, sessionId: unknown) => {
     if (typeof sessionId !== 'string') return { ok: false, reason: 'missing_sessionId' };
-    const { sessions } = getCoreStores();
-    const session = sessions.get(sessionId);
+    const session = await getDesktopHostLocalSessionApi().readLocalSession(sessionId, {
+      includeAllSessions: true,
+    });
     if (!session) return { ok: false, reason: 'not_found' };
 
-    let linesAdded = 0;
-    let linesRemoved = 0;
-    let filesChanged = 0;
+    let stats = { filesChanged: 0, linesAdded: 0, linesRemoved: 0 };
     try {
-      const db = getDatabase();
-      if (!db) throw new Error('legacy db unavailable');
-      const reviews = db
-        .prepare('SELECT additions, removals, files_json FROM chat_turn_reviews WHERE session_id = ?')
-        .all(sessionId) as Array<{ additions: number | null; removals: number | null; files_json: string | null }>;
-      const fileSet = new Set<string>();
-      for (const r of reviews) {
-        linesAdded += Number(r.additions) || 0;
-        linesRemoved += Number(r.removals) || 0;
-        try {
-          for (const f of JSON.parse(r.files_json ?? '[]') as Array<{ path?: string }>) {
-            if (f?.path) fileSet.add(f.path);
-          }
-        } catch {
-          // files_json unparseable — ignore for stats
-        }
-      }
-      filesChanged = fileSet.size;
+      stats = await getDesktopHostSessionApi().getSessionChangeStats(sessionId);
     } catch (err) {
       getLogger().warn('session-card stats read failed', {
         sessionId,
@@ -58,9 +39,7 @@ export function registerSessionCardHandlers(): void {
         status: session.status ?? '',
         workingDirectory: session.workingDirectory ?? '',
         parentId: session.parentSessionId ?? null,
-        filesChanged,
-        linesAdded,
-        linesRemoved,
+        ...stats,
         updatedAt: session.updatedAt,
         createdAt: session.createdAt,
       },
@@ -70,8 +49,10 @@ export function registerSessionCardHandlers(): void {
   // Interrupt a child session's active run (DELETE /chat).
   ipcMain.handle('duya:session:cancel', async (_event, sessionId: unknown) => {
     if (typeof sessionId !== 'string') return { ok: false, reason: 'missing_sessionId' };
-    const { sessions } = getCoreStores();
-    if (!sessions.get(sessionId)) return { ok: false, reason: 'not_found' };
+    const session = await getDesktopHostLocalSessionApi().readLocalSession(sessionId, {
+      includeAllSessions: true,
+    });
+    if (!session) return { ok: false, reason: 'not_found' };
     interruptCronSession(sessionId);
     return { ok: true, sessionId };
   });

@@ -6,7 +6,7 @@ import { CheckpointBatcher } from './checkpoint-batcher';
 import { logger, httpLogger, sessionLogger, workerLogger } from './logger';
 import { createHandleRequest, RouterDeps } from './router';
 import { InteragentRouter } from './interagent-router';
-import { RunOrchestrator, createWorkerExecutionChannel } from './run-orchestrator';
+import { RunOrchestrator, createWorkerExecutionChannel } from '@duya/host/run-orchestrator';
 
 const PORT = 0;
 const HOST = '127.0.0.1';
@@ -327,6 +327,7 @@ const deps: RouterDeps = {
   // executor carrying an id no run row knew about.
   runOrchestrator: new RunOrchestrator({
     dbRequest,
+    logger,
     channel: createWorkerExecutionChannel({
       // The command is delivered by the host because the host owns
       // `WorkerManager`; the fields on it come from the run, so the run layer

@@ -356,15 +356,15 @@ module.exports = async function afterPack(context) {
 
   // Step 3: Verify agent-bundle exists (esbuild should have inlined all dependencies)
   console.log('[afterPack] Step 3: Verifying agent-bundle...');
-  const agentBundlePath = path.join(RESOURCES_DIR, 'agent-bundle', 'agent-process-entry.js');
+  const agentBundlePath = path.join(RESOURCES_DIR, 'harness-bundle', 'worker-entry.js');
   if (!fs.existsSync(agentBundlePath)) {
     // Diagnose: was the source bundle present in the workspace at all?
-    // extraResources copies from packages/agent/bundle/ → release/<platform>/resources/agent-bundle/.
+    // extraResources copies from packages/host/bundle/ → release/<platform>/resources/harness-bundle/.
     // If the source is missing, electron-builder silently skips the copy and
     // emits a 'file source doesn't exist' warning — that is the most common
     // reason this FATAL fires after a successful-looking `npm run electron:build`.
-    const sourceBundleDir = path.join(projectDir, 'packages', 'agent', 'bundle');
-    const sourceBundleEntry = path.join(sourceBundleDir, 'agent-process-entry.js');
+    const sourceBundleDir = path.join(projectDir, 'packages', 'host', 'bundle');
+    const sourceBundleEntry = path.join(sourceBundleDir, 'worker-entry.js');
     let sourceDiagnostic = 'not present';
     if (fs.existsSync(sourceBundleEntry)) {
       const stats = fs.statSync(sourceBundleEntry);
@@ -378,8 +378,8 @@ module.exports = async function afterPack(context) {
       packagedResourcesDiagnostic = `present — subdirs: ${fs.readdirSync(packagedResourcesDir).join(', ')}`;
     }
     throw new Error(
-      `[afterPack] FATAL: agent-process-entry.js not found at ${agentBundlePath}.\n` +
-      `  Source packages/agent/bundle/agent-process-entry.js: ${sourceDiagnostic}\n` +
+      `[afterPack] FATAL: worker-entry.js not found at ${agentBundlePath}.\n` +
+      `  Source packages/host/bundle/worker-entry.js: ${sourceDiagnostic}\n` +
       `  ${packagedResourcesDir}: ${packagedResourcesDiagnostic}\n` +
       'Run `npm run bundle:agent` before packaging. The agent core cannot start without this entry file.'
     );
@@ -392,15 +392,15 @@ module.exports = async function afterPack(context) {
   // process.execPath, resolving it relative to the bundle directory. esbuild
   // cannot inline a spawned process, so scripts/build-agent-bundle.mjs emits it
   // as a second entry. If that step is ever skipped or its output is not
-  // copied by the `packages/agent/bundle/ -> agent-bundle/` extraResources
+  // copied by the `packages/host/bundle/ -> harness-bundle/` extraResources
   // rule, the installed app still starts and still reaches agent ready — the
   // Bash tool is simply dead, because resolveBashWorkerPath() falls back to a
   // path that does not exist. A warning at spawn time is not an acceptable
   // signal for a broken release, so this is FATAL like the other two.
   console.log('[afterPack] Step 3.5: Verifying BashTool worker...');
-  const bashWorkerPath = path.join(RESOURCES_DIR, 'agent-bundle', 'BashTool', 'BashWorker.js');
+  const bashWorkerPath = path.join(RESOURCES_DIR, 'harness-bundle', 'BashTool', 'BashWorker.js');
   if (!fs.existsSync(bashWorkerPath)) {
-    const sourceWorker = path.join(projectDir, 'packages', 'agent', 'bundle', 'BashTool', 'BashWorker.js');
+    const sourceWorker = path.join(projectDir, 'packages', 'host', 'bundle', 'BashTool', 'BashWorker.js');
     let workerDiagnostic = 'not present';
     if (fs.existsSync(sourceWorker)) {
       workerDiagnostic = 'present in the workspace but NOT copied into resources';
@@ -409,7 +409,7 @@ module.exports = async function afterPack(context) {
     }
     throw new Error(
       `[afterPack] FATAL: BashWorker.js not found at ${bashWorkerPath}.\n` +
-      `  Source packages/agent/bundle/BashTool/BashWorker.js: ${workerDiagnostic}\n` +
+      `  Source packages/host/bundle/BashTool/BashWorker.js: ${workerDiagnostic}\n` +
       'The Bash tool spawns this file as a separate process; without it every ' +
       'Bash call fails at runtime even though the app starts normally.'
     );
@@ -420,7 +420,7 @@ module.exports = async function afterPack(context) {
   // Step 4: Copy playwright package to agent-bundle node_modules
   // Playwright is marked as external in esbuild config, so it needs to be available at runtime
   console.log('[afterPack] Step 4: Copying playwright to agent-bundle...');
-  const agentBundleNodeModules = path.join(RESOURCES_DIR, 'agent-bundle', 'node_modules');
+  const agentBundleNodeModules = path.join(RESOURCES_DIR, 'harness-bundle', 'node_modules');
   const playwrightSource = path.join(projectDir, 'node_modules', 'playwright');
   const playwrightCoreSource = path.join(projectDir, 'node_modules', 'playwright-core');
 
@@ -430,14 +430,14 @@ module.exports = async function afterPack(context) {
 
   if (fs.existsSync(playwrightSource)) {
     copyDirRecursive(playwrightSource, path.join(agentBundleNodeModules, 'playwright'));
-    console.log('[afterPack] Copied playwright to agent-bundle/node_modules/');
+    console.log('[afterPack] Copied playwright to harness-bundle/node_modules/');
   } else {
     console.warn('[afterPack] playwright not found in project node_modules, skipping...');
   }
 
   if (fs.existsSync(playwrightCoreSource)) {
     copyDirRecursive(playwrightCoreSource, path.join(agentBundleNodeModules, 'playwright-core'));
-    console.log('[afterPack] Copied playwright-core to agent-bundle/node_modules/');
+    console.log('[afterPack] Copied playwright-core to harness-bundle/node_modules/');
   } else {
     console.warn('[afterPack] playwright-core not found in project node_modules, skipping...');
   }

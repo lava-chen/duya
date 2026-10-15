@@ -22,6 +22,7 @@ import { runInstallCliCommand, runUninstallCliCommand } from '../commands/instal
 import { runMCPAddCommand, runMCPAssignCommand, runMCPListCommand, runMCPRemoveCommand } from '../commands/mcp.js';
 import { runPluginCommand } from '../commands/plugin.js';
 import { runProviderInfoCommand, runProviderListCommand } from '../commands/provider.js';
+import { runModelCurrentCommand, runModelInfoCommand, runModelListCommand } from '../commands/model.js';
 import { runSessionCommand } from '../commands/session.js';
 import {
   runSkillDisableCommand,
@@ -276,6 +277,13 @@ const subSessionList: CliSubcommand = {
   run: adaptPaginated(runSessionCommand.list as LegacyFn),
 };
 
+const subSessionCreate: CliSubcommand = {
+  description: 'Create a durable session through the running local Duya Host',
+  args: [{ name: 'title', required: true, description: 'Session title' }],
+  write: true,
+  run: async (ctx) => ok(await runSessionCommand.create(ctx)),
+};
+
 const subSessionShow: CliSubcommand = {
   description: 'Show details for one top-level session (adds createdAt + model)',
   args: [{ name: 'id', required: true, description: 'Session id' }],
@@ -394,6 +402,24 @@ const subProviderInfo: CliSubcommand = {
   description: 'Show details for one provider (adds headers / extraEnv keys)',
   args: [{ name: 'id', required: true, description: 'Provider id (e.g. anthropic, openai, ollama)' }],
   run: (ctx) => adaptIdFirst(runProviderInfoCommand as LegacyFn, [0])(ctx),
+};
+
+// `duya model` — model view, mirrors mcode's unified provider+model command.
+// Read-only; write operations live in `duya config provider set-default`.
+const subModelList: CliSubcommand = {
+  description: 'List configured models (one default model per provider; * marks the active one)',
+  run: (ctx) => adaptLegacy(runModelListCommand as LegacyFn, [])(ctx),
+};
+
+const subModelCurrent: CliSubcommand = {
+  description: 'Show the active provider and its default model',
+  run: (ctx) => adaptLegacy(runModelCurrentCommand as LegacyFn, [])(ctx),
+};
+
+const subModelInfo: CliSubcommand = {
+  description: 'Show details for one provider (model + type + baseUrl + hasKey + headers)',
+  args: [{ name: 'id', required: true, description: 'Provider id (e.g. anthropic, openai, ollama)' }],
+  run: (ctx) => adaptIdFirst(runModelInfoCommand as LegacyFn, [0])(ctx),
 };
 
 const subChannelList: CliSubcommand = {
@@ -1114,8 +1140,9 @@ export const CLI_DESCRIPTORS = defineDescriptors([
   },
   {
     name: 'session',
-    description: 'Session management (list / show / search / export / import)',
+    description: 'Session management (create / list / show / search / export / import)',
     subcommands: {
+      create: subSessionCreate,
       list: subSessionList,
       show: subSessionShow,
       search: subSessionSearch,
@@ -1155,6 +1182,11 @@ export const CLI_DESCRIPTORS = defineDescriptors([
     name: 'provider',
     description: 'Provider configuration',
     subcommands: { list: subProviderList, info: subProviderInfo },
+  },
+  {
+    name: 'model',
+    description: 'Model view across configured providers (mirrors mcode; read-only — use `duya config provider set-default` to change)',
+    subcommands: { list: subModelList, current: subModelCurrent, info: subModelInfo },
   },
   {
     name: 'channel',

@@ -12,7 +12,7 @@ import { ipcMain } from 'electron';
 import * as http from 'node:http';
 import { existsSync } from 'node:fs';
 import { resolve as resolvePath, sep } from 'node:path';
-import { getCoreStoresOrNull } from '../db/core-connection';
+import { getDesktopHostWorkflowRunApi } from '../cli/desktop-host-api';
 import {
   SavedWorkflowStore,
   SavedWorkflowMetaSchema,
@@ -21,13 +21,17 @@ import {
   DwfCompileError,
   type SavedWorkflowScope,
   type SavedWorkflowMeta,
-} from '../../../../../packages/agent/src/modes/workflow/dwf';
+} from '@duya/host/worker-workflows/dwf/index';
 import {
   WorkflowFileRegistry,
   parseWorkflowDef,
   type WorkflowScope,
-} from '../../../../../packages/agent/src/modes/workflow/workflow-files';
-import type { WorkflowRunOrigin, WorkflowRunStatus } from '../db/core/workflow-store';
+} from '@duya/host/worker-workflows/workflow-files';
+import type {
+  WorkflowRunApiV1,
+  WorkflowRunOrigin,
+  WorkflowRunStatus,
+} from '@duya/agent-protocol/workflow-runs';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { defaultArtifactsRoot } from '../agents/server/workflow-runtime-manager';
 import { getLogger, LogComponent } from '../logging/logger';
@@ -36,10 +40,9 @@ import { createDefWatcherManager, defaultWatchDir } from './workflow-def-watcher
 // ─── agent server HTTP bridge (plan 560) ─────────────────────────────────────
 //
 // Run-anchored runs are executed by the AGENT SERVER, not by main: the runtime
-// manager and its child processes live in that process. So trigger / cancel /
-// permission-resolve are HTTP calls to it — the same shape `workflow:run`
-// already uses for the session anchor. Reads (status / list-runs / get-events)
-// stay local: the row and the events table are main's own database.
+// manager and its child processes live in that process. Trigger / cancel /
+// permission-resolve are HTTP calls to it. Durable run reads and writes go
+// through the authenticated Host API so this IPC layer does not own the store.
 
 export interface WorkflowRuntimeHttpResult {
   status: number;
@@ -92,6 +95,7 @@ function defaultRuntimeHttpClient(): WorkflowRuntimeHttpClient {
 }
 
 let runtimeHttp: WorkflowRuntimeHttpClient = defaultRuntimeHttpClient();
+let workflowRunApiOverride: WorkflowRunApiV1 | null = null;
 
 /**
  * Injection seam for tests. A unit test cannot bind the agent server socket, so
@@ -102,46 +106,56 @@ export function _setWorkflowRuntimeHttpForTesting(client: WorkflowRuntimeHttpCli
   runtimeHttp = client ?? defaultRuntimeHttpClient();
 }
 
+/** Injection seam for handler tests; production resolves the live Host client. */
+export function _setWorkflowRunApiForTesting(api: WorkflowRunApiV1 | null): void {
+  workflowRunApiOverride = api;
+}
+
 // Library auto-refresh: watch the dirs `workflow:dwf:list` returns and push
 // `workflow:dwf:changed` to renderers so the library view reloads without a
 // manual refresh (external file creation, agent-authored workflows, …).
 const defWatcher = createDefWatcherManager({ watchDir: defaultWatchDir });
 
 export function registerWorkflowHandlers(): void {
-  // Read handlers must tolerate "core not yet ready" — the renderer may
-  // call them during the boot window between when IPC handlers are
-  // registered (module load) and when initCoreDatabase() finishes inside
-  // app.whenReady(). Returning null/empty is friendlier than throwing.
-  const safeStores = () => getCoreStoresOrNull();
+  // IPC handlers are registered before the Host listener starts. Keep the
+  // existing boot-window behavior while resolving the typed Host API lazily.
+  const safeWorkflowRuns = () => {
+    if (workflowRunApiOverride) return workflowRunApiOverride;
+    try {
+      return getDesktopHostWorkflowRunApi();
+    } catch {
+      return null;
+    }
+  };
 
   ipcMain.handle('workflow:list', (_e, filter?: { status?: WorkflowRunStatus; workflowName?: string; limit?: number; offset?: number }) => {
-    const core = safeStores();
-    if (!core) return [];
-    return core.workflowRuns.listRuns(filter);
+    const workflowRuns = safeWorkflowRuns();
+    if (!workflowRuns) return [];
+    return workflowRuns.listRuns(filter);
   });
 
   ipcMain.handle('workflow:get', (_e, id: string) => {
-    const core = safeStores();
-    if (!core) return null;
-    return core.workflowRuns.getRun(id);
+    const workflowRuns = safeWorkflowRuns();
+    if (!workflowRuns) return null;
+    return workflowRuns.getRun(id);
   });
 
   ipcMain.handle('workflow:journal', (_e, runId: string) => {
-    const core = safeStores();
-    if (!core) return [];
-    return core.workflowRuns.loadJournal(runId);
+    const workflowRuns = safeWorkflowRuns();
+    if (!workflowRuns) return [];
+    return workflowRuns.loadJournal(runId);
   });
 
   ipcMain.handle('workflow:snapshot', (_e, runId: string) => {
-    const core = safeStores();
-    if (!core) return null;
-    return core.workflowRuns.loadSnapshot(runId);
+    const workflowRuns = safeWorkflowRuns();
+    if (!workflowRuns) return null;
+    return workflowRuns.loadSnapshot(runId);
   });
 
   ipcMain.handle('workflow:delete', (_e, id: string) => {
-    const core = safeStores();
-    if (!core) return false;
-    return core.workflowRuns.deleteRun(id);
+    const workflowRuns = safeWorkflowRuns();
+    if (!workflowRuns) return false;
+    return workflowRuns.deleteRun(id);
   });
 
   /**
@@ -155,9 +169,9 @@ export function registerWorkflowHandlers(): void {
    * lands with the production host-binding pass — see plan 552 §13.)
    */
   ipcMain.handle('workflow:cancel', async (_e, id: string) => {
-    const core = safeStores();
-    if (!core) return { ok: false, reason: 'not_ready' as const };
-    const run = core.workflowRuns.getRun(id);
+    const workflowRuns = safeWorkflowRuns();
+    if (!workflowRuns) return { ok: false, reason: 'not_ready' as const };
+    const run = await workflowRuns.getRun(id);
     if (!run) return { ok: false, reason: 'not_found' as const };
 
     if (run.origin === 'library') {
@@ -174,8 +188,8 @@ export function registerWorkflowHandlers(): void {
         // Reconcile store-side instead, with the same semantics as
         // `reconcileStaleRuns` (mark cancelled, never auto-rerun).
         if (status === 404) {
-          core.workflowRuns.updateStatus(id, 'cancelled', 'runtime not active — reconciled on cancel');
-          core.workflowRuns.setWaitTill(id, null);
+          await workflowRuns.updateStatus(id, 'cancelled', 'runtime not active — reconciled on cancel');
+          await workflowRuns.setWaitTill(id, null);
           return { ok: true };
         }
         return {
@@ -189,8 +203,8 @@ export function registerWorkflowHandlers(): void {
 
     const terminal = ['complete', 'failed', 'cancelled', 'interrupted'];
     if (terminal.includes(run.status)) return { ok: false, reason: 'terminal' as const };
-    core.workflowRuns.updateStatus(id, 'cancelled', 'cancelled from console');
-    core.workflowRuns.setWaitTill(id, null);
+    await workflowRuns.updateStatus(id, 'cancelled', 'cancelled from console');
+    await workflowRuns.setWaitTill(id, null);
     return { ok: true };
   });
 
@@ -501,11 +515,11 @@ export function registerWorkflowHandlers(): void {
     },
   );
 
-  /** One run's row. Null while the core stores are still booting. */
+  /** One run's row. Null while the Host API is still booting. */
   ipcMain.handle('workflow:status', (_e, runId: string) => {
-    const core = safeStores();
-    if (!core) return null;
-    return core.workflowRuns.getRun(runId);
+    const workflowRuns = safeWorkflowRuns();
+    if (!workflowRuns) return null;
+    return workflowRuns.getRun(runId);
   });
 
   /**
@@ -526,9 +540,9 @@ export function registerWorkflowHandlers(): void {
         offset?: number;
       },
     ) => {
-      const core = safeStores();
-      if (!core) return [];
-      return core.workflowRuns.listRuns(filter);
+      const workflowRuns = safeWorkflowRuns();
+      if (!workflowRuns) return [];
+      return workflowRuns.listRuns(filter);
     },
   );
 
@@ -538,9 +552,9 @@ export function registerWorkflowHandlers(): void {
    * recoverable instead of permanently lost.
    */
   ipcMain.handle('workflow:get-events', (_e, payload: { runId: string; afterSeq?: number }) => {
-    const core = safeStores();
-    if (!core) return [];
-    return core.workflowRuns.listEvents(payload.runId, payload.afterSeq ?? -1);
+    const workflowRuns = safeWorkflowRuns();
+    if (!workflowRuns) return [];
+    return workflowRuns.listEvents(payload.runId, payload.afterSeq ?? -1);
   });
 
   /**

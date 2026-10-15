@@ -4,14 +4,6 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-const mocks = vi.hoisted(() => ({
-  getDatabase: vi.fn<() => unknown>(),
-}));
-
-vi.mock('../../db/connection', () => ({
-  getDatabase: mocks.getDatabase,
-}));
-
 vi.mock('../../logging/logger', () => ({
   getLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
   LogComponent: { Conductor: 'Conductor', DB: 'DB' },
@@ -19,6 +11,8 @@ vi.mock('../../logging/logger', () => ({
 
 import { WorkbenchService } from '../workbench-service';
 import { ensureWorkbenchTables } from '../workbench-store';
+import { WorkbenchDataStore } from '@duya/data/workbench-store';
+import { createHostLocalWorkbenchApi } from '@duya/host/local-workbench-api';
 import type { WorkbenchBroadcastMessage } from '../workbench-types';
 
 const CANVAS_DDL =
@@ -55,7 +49,6 @@ describe.skipIf(!nativeSqliteAvailable)('WorkbenchService', () => {
     db.exec(CANVAS_DDL);
     db.exec(ELEMENT_DDL);
     ensureWorkbenchTables(db);
-    mocks.getDatabase.mockReturnValue(db);
 
     const now = Date.now();
     db.prepare(
@@ -72,7 +65,9 @@ describe.skipIf(!nativeSqliteAvailable)('WorkbenchService', () => {
     ).run(now, now);
 
     broadcasted = [];
-    service = new WorkbenchService();
+    service = new WorkbenchService({
+      workbenchApi: createHostLocalWorkbenchApi(new WorkbenchDataStore(db)),
+    });
     service.setBroadcastFn((msg) => broadcasted.push(msg));
   });
 
@@ -96,8 +91,8 @@ describe.skipIf(!nativeSqliteAvailable)('WorkbenchService', () => {
   // CRUD + validation
   // ============================================================
 
-  it('creates a source and broadcasts a registry sync', () => {
-    const result = service.createSource({
+  it('creates a source and broadcasts a registry sync', async () => {
+    const result = await service.createSource({
       canvasId: 'canvas-1',
       name: 'stock-quote',
       type: 'http',
@@ -113,22 +108,22 @@ describe.skipIf(!nativeSqliteAvailable)('WorkbenchService', () => {
     }
   });
 
-  it('rejects invalid source input', () => {
-    expect(service.createSource({ canvasId: 'canvas-1', name: '', type: 'http', config: {} }).success).toBe(false);
+  it('rejects invalid source input', async () => {
+    expect((await service.createSource({ canvasId: 'canvas-1', name: '', type: 'http', config: {} })).success).toBe(false);
     expect(
-      service.createSource({ canvasId: 'canvas-1', name: 'x', type: 'ftp' as never, config: {} }).success,
+      (await service.createSource({ canvasId: 'canvas-1', name: 'x', type: 'ftp' as never, config: {} })).success,
     ).toBe(false);
     expect(
-      service.createSource({ canvasId: 'canvas-1', name: 'x', type: 'http', config: { url: 'not a url' } }).success,
+      (await service.createSource({ canvasId: 'canvas-1', name: 'x', type: 'http', config: { url: 'not a url' } })).success,
     ).toBe(false);
     expect(
-      service.createSource({ canvasId: 'canvas-1', name: 'x', type: 'http', config: { url: 'ftp://x' } }).success,
+      (await service.createSource({ canvasId: 'canvas-1', name: 'x', type: 'http', config: { url: 'ftp://x' } })).success,
     ).toBe(false);
-    expect(service.createSource({ canvasId: 'canvas-1', name: 'x', type: 'project_db', config: {} }).success).toBe(false);
+    expect((await service.createSource({ canvasId: 'canvas-1', name: 'x', type: 'project_db', config: {} })).success).toBe(false);
   });
 
-  it('updates and deletes sources with registry sync', () => {
-    const created = service.createSource({
+  it('updates and deletes sources with registry sync', async () => {
+    const created = await service.createSource({
       canvasId: 'canvas-1',
       name: 'quote',
       type: 'http',
@@ -136,16 +131,16 @@ describe.skipIf(!nativeSqliteAvailable)('WorkbenchService', () => {
     });
     const sourceId = (created as { success: true; data: { id: string } }).data.id;
 
-    const updated = service.updateSource(sourceId, { refreshIntervalSec: 60, enabled: false });
+    const updated = await service.updateSource(sourceId, { refreshIntervalSec: 60, enabled: false });
     expect(updated.success).toBe(true);
     if (updated.success) {
       expect(updated.data.refreshIntervalSec).toBe(60);
       expect(updated.data.enabled).toBe(false);
     }
 
-    const deleted = service.deleteSource(sourceId);
+    const deleted = await service.deleteSource(sourceId);
     expect(deleted.success).toBe(true);
-    expect(service.deleteSource(sourceId).success).toBe(false);
+    expect((await service.deleteSource(sourceId)).success).toBe(false);
   });
 
   // ============================================================
@@ -162,7 +157,7 @@ describe.skipIf(!nativeSqliteAvailable)('WorkbenchService', () => {
     }));
     service.setDeps({ fetch: fetchMock as unknown as typeof fetch });
 
-    const created = service.createSource({
+    const created = await service.createSource({
       canvasId: 'canvas-1',
       name: 'quote',
       type: 'http',
@@ -194,7 +189,7 @@ describe.skipIf(!nativeSqliteAvailable)('WorkbenchService', () => {
   it('persists and broadcasts http refresh failures', async () => {
     const fetchMock = vi.fn(async () => ({ ok: false, status: 503, statusText: 'Service Unavailable', text: async () => '' }));
     service.setDeps({ fetch: fetchMock as unknown as typeof fetch });
-    const created = service.createSource({
+    const created = await service.createSource({
       canvasId: 'canvas-1',
       name: 'down',
       type: 'http',
@@ -220,7 +215,7 @@ describe.skipIf(!nativeSqliteAvailable)('WorkbenchService', () => {
   it('queries the project database via the injected invoker', async () => {
     const invoke = vi.fn(async () => ({ rows: [{ ticker: 'AAPL' }] }));
     service.setDeps({ invokeProjectDb: invoke });
-    const created = service.createSource({
+    const created = await service.createSource({
       canvasId: 'canvas-1',
       name: 'positions',
       type: 'project_db',
@@ -235,7 +230,7 @@ describe.skipIf(!nativeSqliteAvailable)('WorkbenchService', () => {
   it('fails a project_db source when the canvas has no project path', async () => {
     const invoke = vi.fn();
     service.setDeps({ invokeProjectDb: invoke });
-    const created = service.createSource({
+    const created = await service.createSource({
       canvasId: 'canvas-2',
       name: 'orphan',
       type: 'project_db',
@@ -262,7 +257,7 @@ describe.skipIf(!nativeSqliteAvailable)('WorkbenchService', () => {
   });
 
   it('rate limits widget actions per element', async () => {
-    const created = service.createSource({
+    const created = await service.createSource({
       canvasId: 'canvas-1',
       name: 'rl',
       type: 'http',
@@ -291,7 +286,7 @@ describe.skipIf(!nativeSqliteAvailable)('WorkbenchService', () => {
   });
 
   it('rejects refresh actions for sources on another canvas', async () => {
-    const created = service.createSource({
+    const created = await service.createSource({
       canvasId: 'canvas-2',
       name: 'other-canvas-source',
       type: 'http',
@@ -315,21 +310,21 @@ describe.skipIf(!nativeSqliteAvailable)('WorkbenchService', () => {
     const fetchMock = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK', text: async () => '{}' }));
     service.setDeps({ fetch: fetchMock as unknown as typeof fetch });
 
-    service.createSource({
+    await service.createSource({
       canvasId: 'canvas-1',
       name: 'due-now',
       type: 'http',
       config: { url: 'https://example.com/a' },
       refreshIntervalSec: 15,
     });
-    service.createSource({
+    await service.createSource({
       canvasId: 'canvas-1',
       name: 'manual-only',
       type: 'http',
       config: { url: 'https://example.com/b' },
       refreshIntervalSec: 0,
     });
-    service.createSource({
+    await service.createSource({
       canvasId: 'canvas-1',
       name: 'not-due',
       type: 'http',

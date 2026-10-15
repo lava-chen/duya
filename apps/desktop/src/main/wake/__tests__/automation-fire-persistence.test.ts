@@ -51,8 +51,7 @@ import {
   type WakeDispatcherDeps,
 } from '../wake-dispatcher';
 import { rearmPendingWakes } from '../wake-rearm';
-import type { WakeItem } from '../../../../../../packages/agent/src/wake/types';
-import type { WakePayload } from '../../../../../../packages/agent/src/wake/types';
+import type { WakeItem, WakePayload } from '@duya/agent-protocol';
 
 const BOT_SESSION = 'bot:news-bot';
 

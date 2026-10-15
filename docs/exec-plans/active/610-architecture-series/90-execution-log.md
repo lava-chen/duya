@@ -1680,3 +1680,179 @@ at 3 entries instead of 2」。**实测不成立。** 两个方向的变异都�
    **因果待定、结论为真**：需要的是**接线**还是**搬运**，尚未逐条判定。
 4. `slice-classification` 门禁：72 个文件未分类（其中只有 9 个属 sandbox），
    修一条会逼重录 `RULE_TABLE_FINGERPRINT`，而那次重录只覆盖四分之一漂移。独立切片。
+
+## 2026-10-10 — HEAD 状态复核：A3 已落，A4 先清理旧测试调用
+
+复核基准：干净的 `master@95e1fc7c`，与 `origin/master` 一致。此处为静态源码与 Git 祖先关系检查；**本轮未运行 Vitest 或架构门禁**。
+
+### 已确认
+
+- A3 的 `streamChat` 生产循环迁移已随 PR #262 合并（代码提交 `4444c7cf`，merge `2baa95df`）。当前 `packages/agent/src/agent/DuyaAgent.ts` 中无 `streamChat` 方法。故 `docs/exec-plans/README.md` 所称“A3 是当前 next action”已过时。
+- 仍有 16 处旧 `duyaAgent.streamChat` 测试调用：`DuyaAgent.test.ts` 7 处、`streaming-lifecycle.test.ts` 7 处、`AgentLoop.test.ts` 2 处。前两文件分别有 13 与 7 个 API-key 早退守卫；回调内直接 `return` 会被测试框架记为通过，不会显示为 skip。应逐项决定迁到 engine harness、删除，或将确需真实 provider 的用例显式 skip。
+- 旧归因“`AgentLoop` / `one-shot-calls` 共 4 处调用已删除的 agent API”不成立：`AgentLoop.test.ts` 有 2 处旧调用；`one-shot-calls.test.ts` 没有 `agent.streamChat` 调用，它模拟的是底层 AI client 的 `streamChat`。历史失败数 2+2 不能等同于旧 API 调用数。
+- 引擎路径确有未闭合行为：`buildTurnModelLeg` 目前仅有定义和 `DuyaAgent.ts` 导入，无生产调用点；`plan315`、`plan486`、`nestedInjection` 等当前测试仍保留“无 engine-path producer”的断言/说明。日志中的聚合数 **19 未在此 HEAD 重跑**，不作为当前精确计数。
+- 计费双计守卫已由 `2cdeda1` 修复，且该提交是当前 HEAD 的祖先；不再列为开放问题。
+- “72 个未分类文件”是旧测量，本次未重算。分类测试把有说明理由的 `unclassified` 前缀作为显式桶，因此数量本身不代表门禁失败；只有未解释文件或门禁失败才是阻塞。
+
+### A4 当前 next action
+
+先逐项处理上述 16 处旧调用：有效的 engine 行为测试改用 `packages/agent/tests/helpers/engineTurnHarness.ts`；真实 provider 用例用显式 skip 表示依赖条件；不要把底层 AI client 的 mock `streamChat` 误删。完成后从“工具报错”场景继续 A4 六场景矩阵：多轮、工具报错、取消、存储拒绝、worker 退出、慢消费者。每项记录当前 HEAD 上的测试结果，再决定 A5 的下一片。
+
+## 2026-10-10 — A4 前置清理完成：16 处旧调用归零（处置：删除为主，不投迁移）
+
+复核基准：`master@95e1fc7c` 工作树。裁决变更：上一条日志写的是“有效行为改用 engine harness”，本轮按**最小清理**执行 ——
+`packages/agent` 是 A7 待退役 facade，对一个注定删除的包不应做迁移式投资；16 处调用的覆盖几乎全部已由现存套件承载。
+上一条日志“改用 engine harness”的建议被本轮裁决覆盖，理由如下。
+
+### 处置逐文件
+
+| 文件 | 旧调用 | 处置 | 依据 |
+| --- | --- | --- | --- |
+| `packages/agent/tests/integration/DuyaAgent.test.ts` | 7 | **保留 5 条纯状态用例**（message/session/context，本就不需要 provider），**删除全部 stream 用例与 13 个 API-key 早退守卫** | stream 用例与 `turn-loop-product-behavior` 场景 1–4 重复；状态用例照常有效到 A7 |
+| `packages/agent/tests/regression/streaming-lifecycle.test.ts` | 7 | **整文件删除** | chat flow / interrupt 与 turn-loop 重复；permission flow 断言 `toolUseEvents.length >= 0` 恒真；crash recovery 断言 `hasError \|\| events.length > 0` 近似恒真；4 并发会话由 runtime 层并行套件覆盖 |
+| `packages/agent/tests/integration/AgentLoop.test.ts` | 2 | **整文件删除** | write→done / write→read→done 的循环语义已由 `turn-loop-product-behavior`（真实 pipeline + 真实 registry + 工具结果回喂）承载；executor 的具体副作用（WriteTool/ReadTool 写真文件）不是循环语义的一部分。真实工具落盘的产品级变体留给 A4 CLI/eval 接线自带的测试 |
+
+`grep -rn "\.streamChat(" packages/agent/tests --include="*.test.ts"` 残留 4 处，**全部是注释散文或 scripted client 自身的方法**（`turn-loop-product-behavior.test.ts:180` 的 `activeClient.streamChat` 是替身客户端，不是已删 API）。真实调用 **0**。
+`one-shot-calls.test.ts` 未动（它 mock 的是底层 AI client，上一条日志已排除）。
+
+**改动净量：3 文件 −798 行 / +75 行，0 生产代码改动。**
+
+### 处置前基线（同 HEAD 实测）
+
+3 个待清理文件 + turn-loop 合跑：**21 failed / 8 passed**，21 条红全是 `TypeError: agent.streamChat(...) is not a function`。
+处置后同组合跑（DuyaAgent 状态用例 + turn-loop + one-shot-calls + RealTasks）：**42 passed / 2 failed**，
+2 条红见下节“发现的存量问题”。
+
+### 六场景运行时验收（同 HEAD 实测，2026-10-10）
+
+| 场景 | 可复跑测试 | 结果 |
+| --- | --- | --- |
+| 多轮 | `packages/agent-runtime/test/engine-scenario-turn-behaviour.test.ts`（three turns, three answers）+ 产品级 `turn-loop-product-behavior`（SECOND turn receives the result） | 绿 |
+| 工具报错 | 同上文件（surfaces the failure text / keeps going）+ 产品级（error marker reaches turn-2 request） | 绿 |
+| 取消 | 同上文件（in-flight tool result abandoned / never opens a second turn）+ 产品级场景 4（abort mid-turn，迟到的工具惰性） | 绿 |
+| 存储拒绝 | 同上文件（transcript store refuses → failed run；side-effect ledger refuses；assembly refuses） | 绿 |
+| worker 退出 | 同上文件（mid-turn transport death releases the lease, new epoch follows；clean exit too） | 绿 |
+| 慢消费者 | `packages/agent-runtime/test/engine-scenario-slow-consumer.test.ts` + `engine-scenario-slow-consumer-delta.test.ts` | 绿 |
+
+runtime 层合计 **17/17**（turn-behaviour 11 + slow-consumer 2 + delta 4）。存储拒绝与 worker 退出的**产品级**（`agent-process-entry` 真实持久层/真实 worker 进程）变体仍属 A4 主体（CLI/eval 同引擎接线），本表是 runtime + 产品轮次层的验收记录。
+
+### 本轮实测的门禁与套件
+
+| 项 | 值 |
+| --- | --- |
+| 六场景 runtime 套件 | **17/17**（上表） |
+| `turn-loop-product-behavior` | **8/8** |
+| 受影响组合跑 | 42 passed / 2 failed（2 条为存量，见下） |
+| `packages/agent/tests/unit/agent` 全目录 | 349 passed / 19 failed，**失败文件集（`plan315`/`plan486`/`nestedInjection`/`compaction-coordinator`/`one-shot-calls`）全部不在本次 diff 内**，即日志登记的“无 engine-path producer”历史缺口 + A1 尾巴 |
+| `check:test-coverage` | OK（删除的测试文件不触发孤儿基线） |
+| `check:encoding` / `check:manifest-keys` / `check:no-ts-suppress` | 全 OK |
+| `typecheck:agent` / `typecheck:runtime` / `typecheck:cli` | 全 exit 0 |
+| `typecheck:all` 整链 | **HEAD 存量红，非本切片**：electron ratchet 报 21 条 NEW，全部落在 `computer-use`/`cua`/`recorder` 文件（`cua-service.ts` 15、`ax-helper.ts` 12 等），该批文件本次 diff 未触碰（git status 可证），与既有登记的 computer-use 存量债同源。本切片 diff 只含 `packages/agent/tests/**` 与两份计划文档，上述与 diff 相关的子门禁已逐条跑绿 |
+
+### 发现的存量问题（不属本切片，未修）
+
+`one-shot-calls.test.ts:192` 与 `:202` 引用 `TURN_LOOP_SHAPE.modelStream` / `.repetition` / `.toolExecution` ——
+这些标识符正则是 A1 抗改名重做（2026-10-06，`7a11ae38`/`273b8601` 一线）**故意删除**的，现 `TURN_LOOP_SHAPE` 只剩 `legs`。
+两个用例 `TypeError: Cannot read properties of undefined (reading 'test')`。该文件的
+`isTurnLoopModule(source) === false` 断言（`:204`）仍有效。修复方向：删掉两条过期正则断言，保留 `isTurnLoopModule` 与形状断言。
+属 A1 的尾巴，不是本次清理改坏的（本次 diff 未触碰这两个文件）。
+
+### harness 的一个坑（本轮实测发现，留给后续使用者）
+
+`engineTurnHarness.ts` 的 `installEngineTurnIpc()` **不能在同一测试文件内调用第二次**：
+第二次安装时第一次注册的 db-client `'message'` listener 已落入 `preexisting` 集合，`dbListener` 解析为 null，
+响应落入 fallback 循环又被 `preexisting` 跳过 —— `modeState:get` 的响应从此无人接收，turn 永不返回（10s 超时）。
+`turn-loop-product-behavior.test.ts` 不踩坑是因为它的本地 fake 只捕获一次、跨测试复用。
+修法（未做）：harness 改为模块级单次安装，或按 turn-loop 的方式缓存 listener。本轮清理最终未新增 harness 使用者，故未修。
+
+## 2026-10-13 — 在途批次复核：两条真实破损修复（Windows 窗口关闭语义 + Host Run API 指纹翻译）
+
+复核基准：工作树（A4 清理 + A5 data 抽取 + Desktop→Host 适配 + 611 TUI Wave 1–4 全部未提交，373 files）。上批工作最后触碰 2026-10-12 17:11，无活跃会话。本轮为**复核 + 修复**，未新增架构面。
+
+### 门禁与套件实测
+
+| 项 | 值 |
+| --- | --- |
+| `typecheck:all` 整链 | exit 0；electron ratchet **OK，无新增**（245 known / 121 keys；另报 28 个 baseline key 缩水，可 `--write` 收紧，未动） |
+| `packages/data/tests` | **16/16** |
+| `packages/cli`（含 611 TUI） | **307/307**（修复前 306/307，见下） |
+| `packages/agent/src/cli`（611 另一半） | **102/102** |
+| `packages/agent/tests/unit` | 19 failed / 1148 passed —— 失败文件集与 10-10 登记的存量红**逐一吻合**（`plan315`/`plan486`/`nestedInjection`/`compaction-coordinator`/`one-shot-calls`），非本批造成 |
+| desktop run 通道测量文件（`h8-2` + `run-create-ack`） | **17/17**（修复前 7/17，见下） |
+
+### 修复 1：`WindowManager` 空列表 Enter 不关闭（611 遗留）
+
+`tui-window.test.ts:103` pin 死的规格（「closes on Enter even with an empty filtered list」）与 `window.ts:105` 的 doc comment（「closes nothing」）相互矛盾——实现停在旧设计，测试是意图。以测试为准：空过滤列表上 Enter 关闭窗口、不提交、仍吞键。doc comment 同步改写。
+
+### 修复 2：Desktop→Host run 通道的测试装配 + 指纹翻译（gate 2 地形的真实缺口）
+
+`db-bridge` 的 `run:*` 改道 `getDesktopHostRunApi()` 后，两个测量文件红 10 条，根因两层：
+
+1. **装配缺失**：测量文件要测「真实 dispatch 链 + 真实 SQLite RunStore」，但新链要求运行中的 Host HTTP 进程。解法 = `run-control-plane.ts` 增设 `__setDesktopHostRunApiForTesting`（先例：`_resetControlPlaneForTesting`），测试注入 `createHostRunApi({ runs: <真实 RunStore> })`——dispatch 链、鉴权、持久层全部真实，只省掉 Host 进程。
+2. **指纹翻译缺失**：legacy `db:request` 契约的 `manifestHash` 是**不透明值**（旧 facade 原样入库，测试用 `hash-${runId}` 也绿）；Host Run API 则强制 `manifestFingerprint(manifest) === manifestHash`。适配器原样透传 → 全部 run:create 被 Host 拒绝（后续 parent/settle 断言级联红）。修复 = 适配器在边界**重算指纹**：legacy hash 保留必填（`run-create-ack` 的拒绝路径测试 pin 了缺失即拒），值忽略；Host 的防篡改校验语义不变，只是校验的 hops 变为 main→Host。另更新 h8-2 的 sub-agent tripwire：turn 调用已随 610 S4c-d3 迁至 `driveSubagentRunWithEngine`（恰 1 个调用点，断言属性不变）。
+
+### desktop main 全量套件实测（补录，同轮）
+
+**85 failed / 3353 passed（14 文件）**，归因完成：**全部为在途批次的未完成测试适配，非环境存量红**。失败簇：`db-handlers` 38、`app-connection-handlers` 9、`project-entity-handlers` 7、`run-orchestrator` 5、`reference-run-closed-loop` 5、wake 持久化 8、eval/legacy 8、其余 5。根因与上文 run 通道同族——handlers/bridge 已改道 `getDesktopHostXxxApi()`，但测试的 mock 层仍 stub 旧 `getCoreStores` 路径（报「Desktop Host … API is not running」）。修复模式机械：把各文件的 mock 层从 core stores 换到对应 Host API 模块。**这是本批落地前的唯一实质欠账**（renderer / e2e 仍未验证）。
+
+### 待办（本批落地前仍欠）
+
+1. 14 文件 / 85 条的 Host API mock 层适配（机械，模式已由 run 通道两文件验证）。
+2. desktop renderer / e2e 未验证。
+3. `packages/agent` 的 19 条存量红依旧开放（接线 vs 搬运，10-10 日志第 3 条的判定未做）。
+4. 373 文件在途批次的**分片提交**待裁决：A5 data / Desktop 适配 / 611 TUI 三线叠在同一工作树，无法单文件拆净。
+
+## 2026-10-13 — A8 文件系统工具生产注册入口切换
+
+`packages/capabilities` 已有 Read/Write/Edit/Glob/Grep/ApplyPatch 实现和
+旧路径兼容 facade，但 `packages/agent/src/tool/builtin.ts` 仍从旧工具目录
+导入这些实现。该注册表被 Agent worker 使用，因此这条 import 边让 Host
+启动的 worker bundle 经由旧 owner 进入 FS 工具。
+
+- 将 builtin registry 的六类 FS 工具 import 与兼容 re-export 改为
+  `@duya/capabilities`；旧 `packages/agent/src/tool/**` facade 保留给尚未
+  迁移的消费者。注册顺序、schema 和 tool instance 创建方式未变。
+- `packages/agent/tests/unit/tool/builtin-surface.test.ts` 增加防回退断言，
+  要求注册入口从 capabilities 导入且不再 import 六个旧实现目录。
+- `npm run build:packages -- --target @duya/agent`：15/15 依赖包构建通过。
+- `npm run bundle:agent`：19/19 包构建通过；生成 worker bundle 5.14 MB、
+  BashWorker 11.63 KB、CLI bundle 12.37 MB，并复制 prompt assets。该证据
+  证明生产 bundle 能解析新包，不证明 worker 已完全脱离 `@duya/agent`。
+- `npm run -w @duya/agent test:run -- tests/unit/tool/builtin-surface.test.ts`
+  在 Vitest 收集前因 `EPERM realpath node_modules/vitest/dist/spy.js` 退出，
+  本次用例未执行。`npm run -w @duya/agent typecheck` 失败于既有/并行工作树的
+  `@duya/memory/{wakeup,memory_paths,tierConflicts}` 子路径缺失及其隐式 any；
+  本次修改文件无对应诊断。
+- Desktop/CLI/Host 的带工具真实 run 尚未由本切片验证；worker 主入口仍是
+  旧 Agent bundle。此项是实现边界第一步，不标记为 A8 或 Host 迁移完成。
+
+## 2026-10-13 — A8 Bash shell resolver 归属 capabilities
+
+将旧 `packages/agent/src/utils/shellDetector.ts` 与
+`utils/shell/providers.ts` 的实现移至 `@duya/capabilities`，原路径保留为
+单向 re-export。BashTool、工具 catalog 的 shell-family gating、shell command
+planner 与独立 BashWorker 改为直接从 capabilities 导入；shell 工具实际执行、
+授权和后台任务生命周期仍由旧 Agent 编排。
+
+- `npm run -w @duya/capabilities build`：通过。
+- `npm run build:packages -- --target @duya/agent`：15 个依赖包通过。
+- `npm run bundle:agent`：19 个包通过；Agent worker 5.14 MB、BashWorker
+  11.63 KB、CLI 12.37 MB，prompt assets 成功复制。
+- 构建后 Node 导入 `@duya/capabilities` 并通过新 resolver 执行 PowerShell
+  `Write-Output capabilities-runtime-ok`：成功，输出匹配。Git Bash 在当前
+  Windows 沙箱执行时报 MSYS `NtCreateDirectoryObject ... 0xC0000022`，因此本机
+  Bash provider 进程启动未验收；这是环境限制，provider 构造与 bundle 解析正常。
+- 新增 `packages/capabilities/tests/unit/shell-providers.test.ts`，包含当前
+  shell 探测、PowerShell 编码与非交互参数，以及可用 Unix provider 的真实执行。
+  Vitest 收集前被 `EPERM realpath node_modules/vitest/dist/spy.js` 阻断，测试未执行。
+- `npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext
+  --strict --skipLibCheck --types node packages/capabilities/tests/unit/shell-providers.test.ts`：通过。
+- `npm run electron:build` 已完成 Agent/Worker bundle 和 prompt assets，但在后续
+  `build:cli-bundle` 阶段失败：esbuild 读 `../../node_modules` 报 Access denied，且
+  `blessed` 的 `term.js` / `pty.js` 解析失败；尚未到 Vite/Electron build 阶段。
+- 已尝试 `duya serve` + Host-backed `duya chat --print` 真实模型触发 PowerShell
+  工具。Host 启动并找到新 worker bundle，但当前受限 Windows 沙箱拒绝 loopback
+  socket connect（`127.0.0.1:<port>`：访问套接字权限不允许），CLI 未能连到 Host，故
+  没有模型调用或工具执行；专用工作区临时数据目录已安全清理。Desktop smoke 和
+  packaged Electron 未运行。该切片迁移的是 shell resolver/provider，不宣称 Bash
+  工具执行链迁完。

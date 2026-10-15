@@ -74,12 +74,17 @@ import { handleDbRequest } from '../agents/db-bridge';
 import { normalizeAndObserve, type RouterDeps } from '../agents/server/router';
 import { RunOrchestrator, createWorkerExecutionChannel } from '../agents/server/run-orchestrator';
 import { readRunReceipt } from '../control-plane/run-receipt';
-import { dispatchControlPlaneAction } from '../control-plane/run-control-plane';
+import {
+  dispatchControlPlaneAction,
+  __setDesktopHostRunApiForTesting,
+} from '../control-plane/run-control-plane';
+import { createHostRunApi } from '@duya/host/run-api';
 import {
   createControlPlaneRepository,
   _resetControlPlaneRepositoryForTesting,
   type CoreStoreAggregates,
 } from '../control-plane/sqlite-repository';
+import { HOST_APPROVAL_API_STUBS } from '../control-plane/__tests__/host-approval-api-stubs';
 import {
   createControlPlane,
   _resetControlPlaneForTesting,
@@ -214,16 +219,21 @@ beforeEach(() => {
   };
   hoisted.stores = { runs: aggregates.runs, research: null };
   // The real composition: one repository, one Control Plane, and the real
-  // dispatcher as its route to the run write path.
-  createControlPlaneRepository({ stores: aggregates, legacyDatabase: () => null });
+  // dispatcher as its route to the run write path. The dispatcher now speaks
+  // the typed Host Run API; the seam points it at the SAME real RunStore this
+  // file asserts against, so the bridge measurement keeps a real durable
+  // store without standing up a Host HTTP process.
+  __setDesktopHostRunApiForTesting(createHostRunApi({ runs: aggregates.runs }));
+  createControlPlaneRepository({ stores: aggregates, ...HOST_APPROVAL_API_STUBS });
   createControlPlane({
-    repository: createControlPlaneRepository({ stores: aggregates, legacyDatabase: () => null }),
+    repository: createControlPlaneRepository({ stores: aggregates, ...HOST_APPROVAL_API_STUBS }),
     senderConfig: SENDER,
     request: dispatchControlPlaneAction,
   });
 });
 
 afterEach(() => {
+  __setDesktopHostRunApiForTesting(null);
   _resetControlPlaneForTesting();
   _resetControlPlaneRepositoryForTesting();
   hoisted.stores = null;

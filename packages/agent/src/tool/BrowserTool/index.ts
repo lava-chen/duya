@@ -1,6 +1,4 @@
-/**
- * BrowserTool exports
- */
+/** Agent compatibility barrel for the capability-owned browser tool. */
 
 export { BrowserTool, browserTool } from './BrowserTool.js';
 export { ExtensionCDPClient, PlaywrightCDPClient, fetchBlockedDomains } from './CDPClient.js';

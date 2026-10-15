@@ -141,7 +141,7 @@ export class AutomationScheduler {
     ]);
     const agentId = job.agent as string;
     const sessionId = getBotSessionId(agentId);
-    createBotSessionIfMissing(sessionId, agentId);
+    await createBotSessionIfMissing(sessionId, agentId);
     return enqueueAutomationWake({
       jobKey: job.id,
       fireKey: randomUUID(),
@@ -172,18 +172,17 @@ export class AutomationScheduler {
     const runId = randomUUID();
     const sessionId = `cron:${job.id}:${Date.now()}:${runId}`;
 
-    // Resolve provider + create the session row synchronously so provider
-    // errors surface immediately to the caller instead of vanishing into a
-    // background failure. runCronInSession reuses the row (idempotent create).
+    // Resolve provider + persist the session through Host before dispatch so
+    // provider or Host errors surface to the caller instead of disappearing in
+    // the background task. runCronInSession reuses the row idempotently.
     const { provider, model } = resolveCronProvider(job.model);
-    createCronSessionRow({
+    await createCronSessionRow({
       sessionId,
       title: `[Cron] ${job.name}`,
       model,
       providerId: provider.id,
       workingDirectory: prepareAutomationWorkspace(job.workingDirectory),
       cronId: job.id,
-      prompt: job.prompt,
       permissionMode: job.permissionMode,
     });
 

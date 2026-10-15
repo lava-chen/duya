@@ -9,7 +9,7 @@ import {
   buildRoutineWakePrompt,
   describeRoutineTrigger,
 } from '../routine-wake.js';
-import { ROUTINE_WAKE_CUE as SHARED_CUE } from '../../../../../../packages/agent/src/wake/cue.js';
+import { ROUTINE_WAKE_CUE as SHARED_CUE } from '@duya/host/worker-prompts/bot/wake-cue';
 
 const JOB = {
   id: 'morning-digest',

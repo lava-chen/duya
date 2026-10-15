@@ -13,19 +13,41 @@ const fakeState = vi.hoisted(() => ({
   appended: [] as Array<{ sessionId: string; messages: unknown[] }>,
 }));
 
-vi.mock('../../../ipc/db-client.js', () => ({
-  messageDb: {
-    getBySession: (sessionId: string) => {
-      if (sessionId === '__bridge_error__') {
-        return Promise.reject(new Error('bridge down'));
-      }
+vi.mock('@duya/host/worker-tool-services/react-to-message', () => ({
+  createWorkerReactToMessagePort: () => ({
+    resolveInvocationContext(context: unknown) {
+      const options = (context as { options?: Record<string, unknown> } | undefined)?.options;
+      return {
+        sessionId: typeof options?.sessionId === 'string' ? options.sessionId : undefined,
+        actorId: typeof options?.agentProfileId === 'string' ? options.agentProfileId : undefined,
+      };
+    },
+    getTranscript(sessionId: string) {
+      if (sessionId === '__bridge_error__') return Promise.reject(new Error('bridge down'));
       return Promise.resolve(fakeState.rows);
     },
-    append: (sessionId: string, messages: unknown[]) => {
-      fakeState.appended.push({ sessionId, messages });
-      return Promise.resolve({ success: true, count: 1 });
+    appendReaction(input: { sessionId: string; targetId: string; emoji: string; by: string; set: string[] }) {
+      fakeState.appended.push({
+        sessionId: input.sessionId,
+        messages: [{
+          id: 'reaction-1',
+          role: 'assistant',
+          msg_type: 'reaction',
+          source: 'reaction',
+          metadata: {
+            source: 'reaction',
+            reaction: {
+              targetId: input.targetId,
+              emoji: input.emoji,
+              by: input.by,
+              set: input.set,
+            },
+          },
+        }],
+      });
+      return Promise.resolve();
     },
-  },
+  }),
 }));
 
 import { reactToMessageTool, resolveReactToMessage } from '../ReactToMessageTool.js';

@@ -928,5 +928,408 @@ Shim consumers + removal criterion: 无shim。`OPTIONAL_CHECKS`机制连同其�
 Rollback/data compatibility: 无schema变更、无数据迁移。回退即恢复这4个文件
 Remaining blocker: 无技术阻塞。**待用户决定**：(1) 是否接受"PDF/Office抽取在打包构建不可用"作为已记录的产品事实；(2) `ReadTool` description里"use the matching skill instead"在默认包里指向不存在的skill，是否改文案或把plugin builtin随包发布；(3) `pdf-parse`/`jszip`未用依赖是否另起一切片清理
 Next task: 上述(2)(3)需产品决定，不属本切片
+
+## Host extraction — shared SQLite connection opener (2026-10-11)
+
+Task: move the low-level SQLite open contract for `duya-main.db` out of the
+Electron-only connection module so a future Host can use the same settings.
+Changed files: `packages/data/src/sqlite-connection.ts`, `core-database.ts`,
+`tool-approval-state.ts`, `send-message-state.ts`, `workbench-store.ts`,
+`workbench-types.ts`, `index.ts`, `package.json`, Desktop's DB connection and
+compatibility shims, and the Data/architecture/Host-plan docs.
+Old owner → new owner: Desktop `connection.ts` directly created both main DB
+handles and applied WAL / timeout / foreign-key pragmas; `@duya/data` now owns
+`openSqliteDatabase()`, and Desktop injects its packaged native constructor.
+`CoreDatabase` uses that same opener. ToolApproval and SendMessage side-state
+stores also moved behind Data, with the old Desktop module paths retained as
+compatibility exports. Workbench persistence moved too; Desktop retains the
+conductor service and renderer broadcast contract. The Desktop main DB
+singleton, schema, migrations, and shutdown lifecycle remain in Main.
+Verification: `npm run -w @duya/data build` passed after all three store moves. Desktop
+Main typecheck exits 1 on the current broad error set; filtered output showed
+no diagnostics in the changed DB connection/store files. `architecture:check`
+still reports the same 9 dirty `@duya/agent -> @duya/agent-core` edges and no
+new Data boundary violation; no baseline was written. No tests were run.
+`git diff --check` found no whitespace errors (only CRLF conversion notices
+for existing changed files).
+Compatibility / rollback: no schema or file-layout change; the old Electron
+native binding is still injected and all existing DB consumers keep the same
+singleton handle. Revert the Data opener call sites and package export to roll
+back this slice.
+Remaining work: Host still does not own the `duya-main.db` schema, migration
+set, message log, or singleton lifecycle; standalone CLI session persistence is
+still disabled, and Desktop/CLI still execute the legacy agent runtime.
+Next task: move the main DB schema/migrations behind `@duya/data` without
+bringing Electron logger or renderer services into the data package, then
+introduce Host-owned Session/Message APIs before switching CLI and Desktop.
 ```
+
+## Host extraction — main database schema and migrations (2026-10-11)
+
+Task: move `duya-main.db` table definitions and numbered migrations into the
+Electron-free Data package while preserving Desktop's current import contract.
+Changed files: `packages/data/src/main-schema.ts`, the Data package exports and
+manifest/lockfile, `scripts/build-packages.mjs`, and Desktop's
+`src/main/db/schema.ts` compatibility adapter; updated `ARCHITECTURE.md` and
+Plan 12.
+Old owner → new owner: Desktop Main owned schema construction and migrations;
+`@duya/data` now owns them. Migration 58 receives the connection-slug
+derivation function as a host port, so Data does not depend on plugin-core.
+Desktop continues to inject that function and its structured logger. The
+Desktop DB singleton, path selection, shutdown, MessageLog, and
+WorkflowRunStore remain in Main.
+Verification: `npm run -w @duya/data build` passed. `npm run
+architecture:check` reports no Data-package violations and remains red on the
+same 9 dirty `@duya/agent -> @duya/agent-core` edges; no baseline was written.
+Filtered Desktop Main typecheck exits 2 on the existing unrelated
+`src/main/config/schema.ts` errors at lines 637 and 647. No tests were run.
+Compatibility / rollback: Desktop keeps the `../schema` entrypoint and its
+`migrations` export. Revert the Data schema export and adapter wiring to return
+schema ownership to Desktop; no database format or file path changed.
+Remaining work: move the active DB singleton, MessageLog/WorkflowRunStore,
+legacy import, memory-state DB lifecycle, and CoreStores composition behind a
+standalone Host; make CLI session/message writes use those Host services; then
+cut Desktop and CLI over from the legacy agent runtime.
+Next task: extract Host-owned Session and Message APIs together with the main
+DB singleton lifecycle, keeping Desktop as an adapter until the CLI consumer
+is connected to the same persistence contracts.
+```
+
+## Host extraction — main database connection owner (2026-10-11)
+
+Task: make the Electron-free Data package own the `duya-main.db` open/schema/
+checkpoint lifecycle that Desktop previously assembled directly.
+Changed files: added `packages/data/src/main-database.ts` and its package export;
+updated Desktop's `db/connection.ts` to delegate construction and checkpoint
+ownership to `MainDatabase`; the schema adapter now exports the logger and
+domain port used at composition time. Updated `ARCHITECTURE.md`, Data README,
+and Plan 12.
+Old owner → new owner: Desktop opened the SQLite handle, initialized schema and
+self-check, and registered the periodic/final WAL checkpoint separately. Data's
+`MainDatabase` now performs those steps and provides idempotent checkpoint-stop
+and close operations. Desktop retains the app-wide accessor, path migration and
+validation, safe-mode policy, and graceful-shutdown coordination.
+Verification: `npm run -w @duya/data build` passed. Filtered Desktop Main
+typecheck has no diagnostics in `db/connection.ts`, `db/schema.ts`, or the new
+Data owner; it exits 2 only on the existing unrelated errors in
+`src/main/config/schema.ts` (lines 637 and 647). `MainDatabase` passed an
+in-memory open/schema/checkpoint/close smoke. The Data path tests plus Desktop
+database-path and connection-slug migration suites passed (19 tests). The full
+architecture scan found no Data boundary violation and still reports 9
+undeclared `@duya/agent -> @duya/agent-core` edges from the dirty profile
+migration; no baseline was written. No end-to-end CLI/Desktop Host run has been
+verified yet.
+Compatibility / rollback: `initDatabaseFromBoot()` and `getDatabase()` keep
+their existing signatures; callers still receive the same better-sqlite3
+handle. Revert the `MainDatabase` delegation to restore the previous connection
+construction.
+Remaining work: compose a non-Electron Host around Data, MessageLog and
+WorkflowRunStore; make CLI session/message operations use that Host contract;
+then move worker lifecycle and Desktop/CLI run entrypoints off the legacy
+`@duya/agent` package.
+Next task: move the remaining durable message/session API behind the Data/Host
+boundary, preserving rollout JSONL replay and making the same repository
+callable from standalone CLI and Desktop Host.
+
+## Host extraction — session timeline write adapters (2026-10-11)
+
+Task: route selected production session/timeline writes through the new
+transport-neutral Host Session API without moving SQLite ownership yet.
+Changed paths: `apps/desktop/src/main/agents/db-bridge.ts` now uses
+`HostSessionApiV1.appendTimeline` for `message:add`, `message:append`, and
+`message:replace`; `apps/desktop/src/main/ipc/db-handlers.ts` uses it for
+renderer `db:message:add` and `db:message:replace`. The protocol accepts a
+batch `turnId`, and Host forwards it to `MessageLog`'s turn index. The write
+receipt reads total count and maximum sequence from the index instead of
+rescanning the entire JSONL timeline. Both Agent Server and renderer count
+queries now call `HostSessionApiV1.countTimeline`.
+Old owner → new owner: those call sites no longer invoke `appendBatch`
+directly; Host service validates session existence and maps the timeline to
+the Data store. Main still composes Host from `getCoreStores()`, and other
+database writes remain in existing owners. This does not yet establish Host as
+the sole writer or create a standalone Host process.
+Verification: `npm run build:packages` passed (all 17 packages). Desktop Main
+typecheck exits 2 on the existing backlog; no diagnostics point to the changed
+message bridge or IPC handler locations. The targeted `db-handlers.test.ts`
+and `message-log.test.ts` suites could not collect tests because Vitest failed
+`realpath` on `node_modules/vitest/dist/spy.js` with `EPERM`. `architecture:check` reports
+the nine dirty Agent-to-Core edges plus the core-io scanner's temporary-file
+`realpath` `EPERM`, with no Host/Protocol/Data boundary finding. No baseline
+was written. The protocol and Host builds passed again after adding the count
+query; Desktop Main typecheck still exits 2 on unrelated existing diagnostics,
+with none at the changed message/count handlers.
+Remaining work: move session CRUD and timeline replay consumers behind the
+same API, compose a standalone Host around Data and the Worker Manager, then
+make Desktop and CLI use the shared Run API and remove their production
+dependency on `@duya/agent`.
+```
+
+## Host extraction — CLI session read adapters (2026-10-11)
+
+Task: move the Desktop-hosted CLI session list and show reads onto the Host
+Session API. `GET /v1/sessions` and `GET /v1/sessions/:id` now use the same
+service as session import and timeline writes. The Host list contract carries
+indexed timeline counts and supports the existing offset-based CLI route,
+including archived sessions; the HTTP response DTO and pagination validation
+remain compatible. The Host service only resolves metadata for the requested
+page rather than building DTOs for every visible session.
+Verification: the `@duya/agent-protocol` and `@duya/host` builds pass. Desktop
+Main typecheck exits 2 on the existing repository backlog; filtered output has
+no diagnostics in the changed CLI handler, Host, or Protocol files. Targeted
+tests were not run in this slice.
+Scope limit: CLI session search and export still use their existing Main/Data
+paths; they need search-hit and portable-export DTOs before moving to this
+contract.
+Remaining work: start an Electron-independent Host process and listener, move
+Worker Manager and Control Plane composition there, then migrate run start,
+cancellation, event streaming, and standalone CLI persistence onto the shared
+Run API.
+
+## Host extraction — authenticated HTTP session transport (2026-10-11)
+
+Added `HostSessionHttpServer` in `@duya/host/http-server`, an Electron-free
+Node HTTP adapter over the existing `HostSessionApiV1` port. It exposes health,
+session list/create/get/update/soft-delete, and timeline read/append routes;
+requires a Bearer token, binds only to loopback addresses, rejects browser
+Origin requests, and bounds JSON request bodies. This is a transport adapter,
+not a Host process or database composition: the API and stores are still
+constructed by Desktop Main, and the adapter has no Run API or SSE execution
+endpoint yet.
+
+Verification: `npm run -w @duya/host build` and
+`npm run -w @duya/host typecheck` pass. No tests were added or run in this
+slice. The next safe step is extracting the boot migration/import path into
+Electron-independent ownership; at this point the current Desktop `LegacyImport`
+still depends on `@duya/agent/message` and Main logging, so a standalone Host
+must not skip it and silently start with missing historical sessions.
+
+## Host extraction — legacy import boundary (2026-10-11)
+
+Moved the pure persistence-message ingest codec into `@duya/agent-protocol`;
+`@duya/agent/message` retains a compatibility re-export. Moved the read-only,
+resumable legacy core importer into `@duya/data`, with its logger supplied via
+the existing Data logger port. Desktop retains a compatibility export and
+still chooses the legacy database path and invokes the importer during startup.
+
+Verification: `npm run -w @duya/agent-protocol build`,
+`npm run -w @duya/agent build`, and `npm run -w @duya/data build` pass. A direct
+Node smoke check covers assistant, hidden runtime-context, unknown-role, and
+input-immutability behavior. Targeted Vitest fails before collection because
+Windows cannot `realpath` `node_modules/vitest/dist/spy.js` (`EPERM`); no tests
+ran. Desktop Main typecheck remains red on its broad existing backlog; filtered
+diagnostics do not mention the migrated importer or codec. Host and CLI package
+builds pass. `electron:build` built all 17 packages, the Agent worker/chat CLI
+bundles, and the control CLI bundle, then stopped in `bundle:gateway`: esbuild
+was denied access to `../../node_modules`. Vite and the Electron bundle were not
+reached. `architecture:check` remains red: the core-I/O scanner hit the same
+Windows `realpath` `EPERM`, and it reports the nine already-dirty Agent-to-Core
+profile edges; it reports no new Data/Protocol/Host boundary finding.
+
+Remaining work: move path/bootstrap migration and invocation into an independent
+Host process, then route CLI and Desktop through its shared Run API.
+
+## Host extraction — message source contract (2026-10-11)
+
+Moved the durable message-origin taxonomy and direct/group visibility source
+filters into `@duya/agent-protocol/message-timeline`. Desktop IPC adapters,
+session-fork, group-room handlers, and group-turn history now import the
+Protocol contract directly. `@duya/agent/message` remains a compatibility
+re-export; the renderer transcript projector and Agent-specific projection
+still use that surface.
+
+Verification: `npm run -w @duya/agent-protocol build` and
+`npm run -w @duya/agent build` pass. Desktop Main typecheck still exits 2 on the
+existing broad backlog; filtering found no errors for the Protocol imports and
+still reports the unrelated `session-fork.ts` `rolloutLineTimestamp` error. No
+tests were run.
+
+## Host extraction — CLI task persistence (2026-10-11)
+
+Moved the persisted Todo `Task` contract and `TaskStore` port into
+`@duya/agent-protocol`. The authenticated Host task API is backed by Data's
+durable task store; standalone CLI installs a Host-backed adapter for chat task
+operations. Desktop exposes the same API from Main over its existing CoreStores,
+while Agent Server Todo calls retain the IPC adapter. Both currently reach the
+same Desktop-owned database when Desktop is running; this does not move database
+ownership out of Electron. CLI chat and Desktop Worker execution still use the
+legacy `@duya/agent` runtime.
+
+Verification: Protocol, Data, Host, and CLI package builds pass, and Agent
+typecheck passes. Desktop Main typecheck still exits 2 on the broad existing
+backlog; filtered diagnostics contain no errors in the changed Host task API,
+Desktop adapter, CLI adapter, or Agent task-store files. `git diff --check`
+passes with existing CRLF normalization warnings. No tests or runtime smoke
+were run.
+
+## Host extraction — Desktop Worker task routing (2026-10-12)
+
+Routed Desktop Worker task bridge actions and Renderer `db:task:*` handlers
+through the authenticated `HostTaskApiV1` HTTP client from Main: create, get,
+list, update, delete, claim, block, owner lookup, and teammate unassignment. The IPC
+wire format stays compatible through a Host-task-to-row adapter. The Protocol
+task projection now includes optional persistence metadata, and Host accepts
+`null` for clearing the nullable owner and active-form fields.
+
+Verification: `@duya/agent-protocol` and `@duya/host` builds, plus Agent and CLI
+typechecks, pass. Desktop Main typecheck still exits 2 on the existing broad
+backlog; no diagnostics point to the new task cases or Host-task adapter, while
+unrelated existing `db-bridge.ts` errors remain. No tests or Electron runtime
+smoke were run. The SQLite handles and Host listener are still owned by
+Electron Main.
+
+## Host extraction — runtime lock routing (2026-10-12)
+
+Added `HostLockApiV1` and moved the `LockOrigin` contract into Agent Protocol;
+Data re-exports the type for compatibility and Host implements the async API
+over `LockStore`. Standalone and Desktop Host compositions expose the same
+authenticated HTTP routes/client. Agent DB bridge lock actions, renderer
+`db:lock:*` handlers, bot-send busy checks, and wake-dispatcher lock status and
+origin checks now use the Host client. `advanceUserTurn` remains a Desktop
+scheduler action; the pending-wake queue/store and scheduler lifecycle are not
+extracted in this slice.
+
+Verification: Agent Protocol, Data, and Host builds pass. Desktop Main
+typecheck still exits 2 on the existing broad backlog; filtered diagnostics
+contain no errors in the lock API, Host transport/composition, bridge lock
+actions, IPC handlers, bot handler, or wake dispatcher. A source scan finds no
+remaining direct `LockStore` calls in Desktop Main. Tests and runtime HTTP or
+Electron smoke were not run. The listener and SQLite handles still belong to
+Electron Main, so this migrates the lock access boundary without completing
+Host process/database ownership.
+
+## Host extraction — CLI session data routing (2026-10-12)
+
+Routed the Desktop CLI control-plane session create/list/show/import handlers
+through the authenticated Host session API. Search now sends its visible
+session scope to Host, then reads matching message projections through the
+same API to retain the legacy `role`, `msgType`, and preview response. Export
+uses the Host session and timeline APIs plus the authenticated local session
+projection for the legacy JSON/Markdown output. The CLI session handler no
+longer opens `CoreStores` directly.
+
+Verification: Agent Protocol and Host builds, plus `@duya/cli` typecheck, pass.
+Desktop Main typecheck still exits 2 on the existing broad error backlog;
+filtered diagnostics contain no errors in the changed session handlers, CLI
+router, Host client, or IPC DTO adapter. Scoped `git diff --check` passes. The
+architecture gate remains red because its temporary core-I/O entry cannot be
+realpathed (`EPERM`) and it reports the existing dirty Agent-to-Agent-Core
+edges; no new Host/Protocol edge was reported. No tests or HTTP/Electron
+runtime smoke were run. Electron Main still owns the listener and SQLite
+handles; this is an API-boundary migration only.
+
+## Host extraction — durable Agent Run ledger API for CLI (2026-10-12)
+
+Added `HostRunApiV1` for Agent Run creation, durable event append, terminal
+settlement, and paginated event reads. The Host adapter uses Data's existing
+`RunStore` idempotency, `(runId, seq)` conflict detection, and terminal CAS. The
+authenticated loopback transport is exposed by both standalone Local Host and
+Desktop's current Main-owned listener. CLI interactive REPL, TUI, task, print,
+and headless script paths now create the run row before `RunController`
+dispatches, then persist events and terminal state through that Host API.
+
+This does not move execution into Host: CLI still runs the legacy `duyaAgent`
+executor in its own process, Desktop's Agent Server still uses its existing
+run persistence path, and Desktop Main still owns its database handles and
+listener. The API does not yet own worker start/cancel, live event streaming,
+reattachment, or run resume.
+
+Verification: `npm run build:agent` passes all 17 workspace package builds,
+including Protocol, Host, Agent Runtime, CLI, and Agent. Desktop Main typecheck
+still exits 2 on the existing broad backlog; filtered output has no diagnostics
+in the changed Host adapter, transport, Desktop Host composition, or Agent/CLI
+run paths. `architecture:check` exits 1 because Windows Vite `realpath` fails
+with `EPERM` in the temporary core-I/O entry and the dirty worktree contains
+nine Agent-to-Agent-Core edges absent from the baseline; it reports no new
+Host/Protocol edge. No tests or HTTP/Electron runtime smoke were run.
+
+## Project metadata — route Desktop CRUD through Host (2026-10-12)
+
+Added a Protocol `HostProjectApiV1`, authenticated HTTP routes/client, and the
+same Data-backed implementation to standalone `duya serve` and Desktop's
+current Main-composed Host. Desktop `projects:list/get/register/update/delete`
+IPC now uses that client for the `duya-core.db` project rows. Local project
+directory seeding/reconciliation remains a Desktop filesystem adapter; the
+memory-state `rollout_catalog` unbind still runs in Desktop before Host deletes
+the project row. Other memory-state project-resolution callers still use the
+legacy service, so this cuts over the renderer-facing CRUD path, not every
+project database caller or database ownership.
+
+Verification: all 17 workspace packages build; Data and Host builds pass; the
+authenticated standalone Host HTTP smoke passes list/get/create/update/delete.
+Desktop Main typecheck remains blocked by the existing repository-wide error
+backlog; filtering its output finds no diagnostics in the changed project
+handler, Protocol, Host API, HTTP transport, or project service files. The
+workspace-wide `git diff --check` reports pre-existing dirty-tree whitespace
+findings in `AGENTS.md` and `room-session.ts`; no finding points to this slice.
+
+## BashTool capability extraction and runtime-contract review (2026-10-13)
+
+Moved BashTool's schema, input validation, permission decision, shell selection,
+command normalization, foreground/background result shaping, safe-rm, soft-yield,
+and output truncation into `@duya/capabilities`. The old Agent module now only
+composes `startManagedBash`, the Agent output directory, and the Git reminder
+through injected ports; PowerShellTool and existing registry callers remain
+source-compatible. Agent utility paths are compatibility re-exports. This is a
+temporary bridge only: `@duya/agent` is slated for retirement. The target is
+Host/Runtime composition of the capability, followed by consumer inventory
+reaching zero and deletion of the Agent adapter, shims, and legacy entrypoints.
+
+The new `ShellCommandRuntimePorts` is currently a package-local transition
+contract. Reviewing the existing boundaries confirmed Protocol has generic
+`ToolUse`/result events, Runtime has `ToolPort` (`dispatch/drain/discard/describe`)
+and `ProcessScope`, but neither defines the Host-owned managed shell task,
+approval, progress, cancellation, or side-effect receipt contract. Therefore
+this slice has not connected shell execution to the Host Run API or routed it
+through the new Runtime `ToolPort`; Desktop and legacy CLI still instantiate
+the Agent adapter. Follow-up acceptance must cover that production bridge and
+durable tool effects before calling the shell migration complete.
+
+Verification: Capabilities and Agent TypeScript builds pass; `bundle:agent`
+builds all 19 workspace packages and emits the Agent process, CLI, and
+BashWorker bundles. A direct `@duya/capabilities` runtime smoke launched the
+system PowerShell provider through an injected process port and returned
+`migrated-capability-runtime-ok`. The same direct smoke through the Agent
+managed-process adapter is blocked by an ESM initialization cycle
+(`DEFAULT_MAX_RESULT_CHARS` accessed before initialization in
+`BackgroundAgentLifecycle`); the packaged Agent bundle build itself succeeds.
+The focused Vitest file cannot collect because Vite gets `EPERM` realpath on
+`node_modules/vitest/dist/spy.js`. No Host Run API model turn or packaged
+Electron smoke was completed.
+
+## Tool capability and protocol slices (2026-10-13)
+
+PowerShell's tool specialization and PowerShell-specific security/read-only
+policy now live in `@duya/capabilities`. The old Agent class is a compatibility
+adapter that injects `startManagedBash`, output storage, and the Git reminder;
+the Agent builtin registry still instantiates it. Computer Use action names,
+wire constants, error codes, and request/result envelopes now live in
+`@duya/agent-protocol`; Desktop Main IPC and the Agent executor share those
+definitions. The Computer Use executor, exposure, approval flow, and OS context
+bridge remain in their current Agent/Desktop production owners.
+
+The tool audit confirmed that Runtime owns the production run loop but its
+`ToolPort` still adapts to Agent's `ToolExecutionPipeline`. Agent still owns the
+tool registry, exposure snapshot, permissions gate, and executor selection.
+These slices therefore move implementation/contracts only; they do not retire
+`@duya/agent` or switch Desktop/CLI/Host tool execution ownership.
+
+The first real Agent-adapter smoke exposed an existing ESM initialization
+cycle: `BackgroundAgentLifecycle → buildTaskNotification → GetTaskOutputTool →
+BackgroundAgentLifecycle`. Moved the stable `get_task_output` name into a
+small constants module shared by the task tool and notification builder. This
+breaks the runtime cycle without changing the public Agent import path.
+
+Verification: `@duya/agent-protocol`, `@duya/capabilities`, `@duya/agent`, and
+`bundle:agent` pass; the latter builds all 19 workspaces and emits Agent,
+BashWorker, and legacy chat CLI bundles. Direct PowerShell capability execution
+and the built Agent compatibility adapter each launched the installed `pwsh`
+and returned version `7.6.5`. The one-off adapter smoke printed the result but
+did not exit naturally; its remaining open handle was not isolated and the
+temporary process was interrupted after the result. The focused Vitest runs
+still fail before collection with `EPERM` resolving
+`node_modules/vitest/dist/spy.js`. Full `electron:build` reached the separate
+`@duya/cli` bundle and stopped because esbuild could not read
+`../../node_modules` and could not resolve Blessed's optional `term.js`/`pty.js`
+imports. No end-to-end Host Run API, Host-connected CLI, or packaged Desktop
+tool turn was verified in this slice.
 

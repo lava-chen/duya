@@ -25,10 +25,10 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { getCoreStores } from '../../db/core-connection';
+import type { HostMessageItem } from '@duya/agent-protocol';
+import { getDesktopHostSessionApi } from '../desktop-host-api';
 import {
-  storedEventsToIpcMessages,
-  storedEventToIpcMessage,
+  hostMessageItemsToIpcMessages,
   type MessageRow,
 } from '../../ipc/core-db-adapters';
 
@@ -143,6 +143,34 @@ function parseIntParam(raw: string | undefined): number | undefined {
   return Math.floor(n);
 }
 
+async function readAllMessageItems(
+  sessionId: string,
+): Promise<HostMessageItem[]> {
+  const api = getDesktopHostSessionApi();
+  const session = await api.get(sessionId, { includeAllSessions: true });
+  if (!session) return [];
+
+  const items: HostMessageItem[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await api.readMessages(sessionId, {
+      limit: 200,
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    items.push(...page.messages);
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor !== undefined);
+
+  return items;
+}
+
+async function readAllMessages(sessionId: string): Promise<MessageRow[]> {
+  const items = await readAllMessageItems(sessionId);
+  // Keep the old full-session projection semantics: compaction entries can
+  // affect which legacy message rows are visible, so project after paging.
+  return hostMessageItemsToIpcMessages(sessionId, items);
+}
+
 /**
  * Parse a `GET` URL's query string into `{ limit, offset }`. Returns
  * `undefined` for missing / empty values.
@@ -177,25 +205,19 @@ export function parseListMessagesQuery(url: string | undefined): ListMessagesQue
 // Handlers
 // ---------------------------------------------------------------------------
 
-export function handleListMessages(
+export async function handleListMessages(
   _req: IncomingMessage,
   res: ServerResponse,
   sessionId: string,
   query: ListMessagesQuery = {},
-): void {
+): Promise<void> {
   void _req;
   if (!sessionId || sessionId.trim().length === 0) {
     sendError(res, 400, 'invalid_id', 'Session id must be a non-empty string');
     return;
   }
   try {
-    // Plan 328 Phase 5: reads from MessageLog (core `message_index` +
-    // rollout files) via the DTO adapter. The legacy `messages` table
-    // path is retired. Pagination is applied in JS since `listBySession`
-    // returns the full session timeline (bounded by rollout size).
-    const { messageLog } = getCoreStores();
-    const events = messageLog.listBySession(sessionId);
-    const allRows = storedEventsToIpcMessages(events);
+    const allRows = await readAllMessages(sessionId);
     const limit = Math.min(Math.max(query.limit ?? 50, 1), 200);
     const offset = Math.max(query.offset ?? 0, 0);
     const messages = allRows.slice(offset, offset + limit);
@@ -206,12 +228,12 @@ export function handleListMessages(
   }
 }
 
-export function handleGetMessage(
+export async function handleGetMessage(
   req: IncomingMessage,
   res: ServerResponse,
   sessionId: string,
   messageId: string,
-): void {
+): Promise<void> {
   void req;
   if (!sessionId || sessionId.trim().length === 0) {
     sendError(res, 400, 'invalid_id', 'Session id must be a non-empty string');
@@ -222,19 +244,11 @@ export function handleGetMessage(
     return;
   }
   try {
-    // Plan 328 Phase 5: MessageLog has no getById helper; scan the
-    // session's events for the matching id. Session timelines are
-    // bounded, so this is acceptable for the CLI control plane.
-    const { messageLog } = getCoreStores();
-    const events = messageLog.listBySession(sessionId);
-    const row: MessageRow | null = (() => {
-      for (const ev of events) {
-        if (ev.id === messageId) {
-          return storedEventToIpcMessage(ev);
-        }
-      }
-      return null;
-    })();
+    const items = await readAllMessageItems(sessionId);
+    const item = items.find((candidate) => candidate.id === messageId);
+    const row = item
+      ? hostMessageItemsToIpcMessages(sessionId, [item])[0] ?? null
+      : null;
     if (!row) {
       sendError(res, 404, 'message_not_found', `Message not found: ${messageId}`);
       return;
@@ -250,23 +264,18 @@ export function handleGetMessage(
   }
 }
 
-export function handleMessageCount(
+export async function handleMessageCount(
   _req: IncomingMessage,
   res: ServerResponse,
   sessionId: string,
-): void {
+): Promise<void> {
   void _req;
   if (!sessionId || sessionId.trim().length === 0) {
     sendError(res, 400, 'invalid_id', 'Session id must be a non-empty string');
     return;
   }
   try {
-    // Plan 328 Phase 5: `message_index` contains only live rows
-    // (superseded/purged entries are physically removed by
-    // `rewriteSession`), so `getCount` is equivalent to the legacy
-    // `WHERE status NOT IN ('superseded','purged')` filter.
-    const { messageLog } = getCoreStores();
-    const count = messageLog.getCount(sessionId);
+    const count = await getDesktopHostSessionApi().countTimeline(sessionId);
     sendJson(res, 200, { count });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

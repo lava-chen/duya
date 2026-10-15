@@ -15,7 +15,7 @@
  * require a real filesystem path, not `:memory:`).
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -30,8 +30,19 @@ import {
 import { _setCoreStoresForTesting } from '../../db/core-connection';
 import { ipcMessageToNewEvent } from '../../ipc/core-db-adapters';
 
+const mocks = vi.hoisted(() => ({
+  get: vi.fn(),
+  readMessages: vi.fn(),
+  countTimeline: vi.fn(),
+}));
+
+vi.mock('../desktop-host-api', () => ({
+  getDesktopHostSessionApi: () => mocks,
+}));
+
 let tmpDir: string;
 let coreDb: CoreDatabase;
+let messageLog: MessageLog;
 let handleGetMessage: typeof import('./messages.js').handleGetMessage;
 
 // Core store migrations: only MessageLog (id=1) + SessionStore (id=2)
@@ -73,6 +84,7 @@ function makeReq(headers: Record<string, string> = {}): IncomingMessage {
 }
 
 beforeEach(async () => {
+  vi.clearAllMocks();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-messages-test-'));
   const dbPath = path.join(tmpDir, 'core.db');
   const rolloutRoot = path.join(tmpDir, 'sessions');
@@ -88,7 +100,7 @@ beforeEach(async () => {
   });
 
   const db = coreDb.db;
-  const messageLog = new MessageLog(db, rolloutRoot);
+  messageLog = new MessageLog(db, rolloutRoot);
   const sessions = new SessionStore(db);
   _setCoreStoresForTesting({ coreDb, messageLog, sessions } as Parameters<typeof _setCoreStoresForTesting>[0]);
 
@@ -111,6 +123,27 @@ beforeEach(async () => {
     }),
   ]);
 
+  mocks.get.mockResolvedValue({ id: SESSION_ID });
+  mocks.readMessages.mockImplementation(async (sessionId: string, query?: { cursor?: string }) => {
+    const events = messageLog.listBySession(sessionId);
+    const items = events.map((event) => ({
+      id: event.id,
+      sequence: event.seq,
+      createdAt: event.createdAt,
+      turnId: event.turnId,
+      entry: JSON.parse(event.payload),
+    }));
+    const offset = query?.cursor ? Number(query.cursor) : 0;
+    const page = items.slice(offset, offset + 200);
+    const nextOffset = offset + page.length;
+    return {
+      sessionId,
+      messages: page,
+      nextCursor: nextOffset < items.length ? String(nextOffset) : null,
+    };
+  });
+  mocks.countTimeline.mockImplementation(async (sessionId: string) => messageLog.getCount(sessionId));
+
   const handlers = await import('./messages.js');
   handleGetMessage = handlers.handleGetMessage;
 });
@@ -124,9 +157,9 @@ afterEach(() => {
 });
 
 describe('handleGetMessage', () => {
-  it('returns the row wrapped in `{ message }` (client reads `body.message`)', () => {
+  it('returns the row wrapped in `{ message }` (client reads `body.message`)', async () => {
     const { res, capture } = makeRes();
-    handleGetMessage(makeReq(), res, SESSION_ID, MSG_ID);
+    await handleGetMessage(makeReq(), res, SESSION_ID, MSG_ID);
 
     expect(capture.status).toBe(200);
     const body = capture.body as { message: { id: string; sessionId?: string; content: string } };
@@ -135,22 +168,22 @@ describe('handleGetMessage', () => {
     expect(body.message.content).toBe('hello world');
   });
 
-  it('returns 404 with message_not_found for missing message id', () => {
+  it('returns 404 with message_not_found for missing message id', async () => {
     const { res, capture } = makeRes();
-    handleGetMessage(makeReq(), res, SESSION_ID, 'does-not-exist');
+    await handleGetMessage(makeReq(), res, SESSION_ID, 'does-not-exist');
     expect(capture.status).toBe(404);
     expect((capture.body as { error: { code: string } }).error.code).toBe('message_not_found');
   });
 
-  it('rejects empty sessionId with 400', () => {
+  it('rejects empty sessionId with 400', async () => {
     const { res, capture } = makeRes();
-    handleGetMessage(makeReq(), res, '   ', MSG_ID);
+    await handleGetMessage(makeReq(), res, '   ', MSG_ID);
     expect(capture.status).toBe(400);
   });
 
-  it('rejects empty messageId with 400', () => {
+  it('rejects empty messageId with 400', async () => {
     const { res, capture } = makeRes();
-    handleGetMessage(makeReq(), res, SESSION_ID, '   ');
+    await handleGetMessage(makeReq(), res, SESSION_ID, '   ');
     expect(capture.status).toBe(400);
   });
 });

@@ -6,7 +6,7 @@
  * exposed by this module's callers — it never imports these files directly.
  */
 
-// Types (from agent package — safe to re-export for documentation and IPC typing)
+// Shared channel contracts come from Agent Protocol; credential records stay local.
 export type {
   ChannelAddress,
   ChannelInboundEnvelope,
@@ -14,10 +14,9 @@ export type {
   ChannelReaction,
   ChannelConnectionConfig,
   ConnectorManifest,
-  ConnectorSecretRecord,
   DeliveryFailure,
   KnownPlatform,
-} from '../../../../../packages/agent/src/channels/types';
+} from '@duya/agent-protocol/channels';
 
 export {
   CONNECTOR_MANIFESTS,
@@ -25,7 +24,7 @@ export {
   isKnownPlatform,
   KNOWN_PLATFORMS,
   parseChannelAddress,
-} from '../../../../../packages/agent/src/channels/types';
+} from '@duya/agent-protocol/channels';
 
 // Stores
 export { FileChannelStore, openChannelStore, listAgentChannels, listAgentChannelAddresses } from './channel-store';

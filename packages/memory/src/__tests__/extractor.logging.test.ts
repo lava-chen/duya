@@ -41,7 +41,7 @@ function makeExtractor(memoryDb: Database): Stage1Extractor {
     streamChat: vi.fn(),
     chat: vi.fn(),
   } as unknown as AIClient;
-  return new Stage1Extractor(memoryDb, {} as Database, llmClient);
+  return new Stage1Extractor(memoryDb, llmClient);
 }
 
 describe('Stage1Extractor.logExtractResult', () => {

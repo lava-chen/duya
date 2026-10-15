@@ -16,6 +16,7 @@
 export type {
   AppConnectorId,
 } from '@duya/connectors/app-connector-id';
+import type { HostAppConnectionStatus } from '@duya/agent-protocol';
 export {
   asAppConnectorId,
   BUILTIN_CONNECTOR_IDS,
@@ -37,13 +38,7 @@ export type ProviderId = import('@duya/connectors/app-connector-id').AppConnecto
  * - `revoked`      — refresh failed (invalid_grant), needs re-authorization
  * - `error`        — transient failure (network, provider 5xx, etc.)
  */
-export type AppConnectionStatus =
-  | 'disconnected'
-  | 'pending'
-  | 'connected'
-  | 'expired'
-  | 'revoked'
-  | 'error';
+export type AppConnectionStatus = HostAppConnectionStatus;
 
 /** Persisted connection record (metadata only; tokens live in the vault). */
 export interface AppConnection {

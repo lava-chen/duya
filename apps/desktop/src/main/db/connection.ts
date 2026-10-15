@@ -13,6 +13,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import { createRequire } from 'module';
+import { migratePreviousDefaultDatabases } from '@duya/data/database-migration';
 import {
   resolveDatabasePath,
   validateDatabasePath,
@@ -20,19 +21,15 @@ import {
   renameLegacyDatabase,
 } from '../config/boot-config';
 import { getLogger, LogComponent } from '../logging/logger';
-import { initializeSchema, selfCheckAndRepairSchema } from './schema';
-import { startWalCheckpoint as startSharedWalCheckpoint } from './core/database';
+import { dataLogger, mainSchemaPorts } from './schema';
 import { getCoreStoresOrNull } from './core-connection';
+import { databaseHost } from './database-host';
 
 type BetterSqlite3 = InstanceType<typeof import('better-sqlite3')>;
 
 let BetterSqlite3Ctor: typeof import('better-sqlite3');
 let db: BetterSqlite3 | null = null;
 let safeModeReason: string | null = null;
-// Stop function returned by the shared `startWalCheckpoint` helper. Null when
-// no scheduler is currently active. Kept as module state so the public
-// `stopWalCheckpoint()` export retains its no-arg signature.
-let stopWalCheckpointFn: (() => void) | null = null;
 
 // Module-level logger instance for database operations
 const dbLogger = getLogger();
@@ -43,10 +40,13 @@ const dbLogger = getLogger();
  * kept stable for `apps/desktop/src/main/core/graceful-shutdown.ts`.
  */
 export function stopWalCheckpoint(): void {
-  if (stopWalCheckpointFn) {
-    stopWalCheckpointFn();
-    stopWalCheckpointFn = null;
-  }
+  databaseHost.stopMainWalCheckpoint();
+}
+
+/** Close the main database through its Data package owner. */
+export function closeDatabase(): void {
+  databaseHost.closeMainDatabase();
+  db = null;
 }
 
 interface ElectronApp {
@@ -139,7 +139,7 @@ export function initDatabaseFromBoot(): DbInitResult {
   }
 
   // Step 1: Resolve database path from boot.json
-  const { dbPath, needsBootWrite, needsDbRename } = resolveDatabasePath();
+  const { dbPath, needsBootWrite, needsDbRename, legacyDbPath } = resolveDatabasePath();
   logger.info('Resolved database path', { dbPath }, LogComponent.DB);
 
   // Step 2: Handle legacy duya.db -> duya-main.db rename
@@ -163,6 +163,32 @@ export function initDatabaseFromBoot(): DbInitResult {
     };
   }
 
+  // Copy the old Electron-default database set before writing the new path or
+  // opening SQLite. Keep the source files as recoverable backups. A failed
+  // migration must not fall through and create a fresh, empty database.
+  if (legacyDbPath) {
+    try {
+      const { copied } = migratePreviousDefaultDatabases(legacyDbPath, dbPath);
+      if (copied.length > 0) {
+        logger.info(
+          'Copied the previous default database set into ~/.duya; source files were retained',
+          { legacyDbPath, dbPath, copied },
+          LogComponent.DB,
+        );
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      logger.error(
+        'Failed to migrate the previous default database set',
+        error instanceof Error ? error : new Error(errorMsg),
+        { legacyDbPath, dbPath },
+        LogComponent.DB,
+      );
+      safeModeReason = errorMsg;
+      return { success: false, dbPath, error: errorMsg, safeMode: true };
+    }
+  }
+
   // Step 4: Write boot.json if needed (first run or migration)
   if (needsBootWrite) {
     initBootConfig(dbPath);
@@ -174,23 +200,14 @@ export function initDatabaseFromBoot(): DbInitResult {
       BetterSqlite3Ctor = loadBetterSqlite3();
     }
 
-    const dbDir = path.dirname(dbPath);
-    if (!fs.existsSync(dbDir)) {
-      logger.info('Creating directory', { dbDir }, LogComponent.DB);
-      fs.mkdirSync(dbDir, { recursive: true });
-    }
-
-    db = new BetterSqlite3Ctor(dbPath);
+    const mainDatabase = databaseHost.openMainDatabase({
+      filename: dbPath,
+      sqlite: BetterSqlite3Ctor,
+      ports: mainSchemaPorts,
+      logger: dataLogger,
+    });
+    db = mainDatabase.db;
     logger.info('Database opened successfully', { dbPath }, LogComponent.DB);
-
-    db.pragma('journal_mode = WAL');
-    db.pragma('busy_timeout = 5000');
-    db.pragma('foreign_keys = ON');
-
-    initializeSchema(db);
-    selfCheckAndRepairSchema(db);
-
-    stopWalCheckpointFn = startSharedWalCheckpoint(db);
 
     safeModeReason = null;
     return { success: true, dbPath };
@@ -236,22 +253,14 @@ export function initDatabase(dbDir: string): BetterSqlite3 {
 
   logger.info('Initializing database', { dbPath }, LogComponent.DB);
 
-  if (!fs.existsSync(dbDir)) {
-    logger.info('Creating directory', { dbDir }, LogComponent.DB);
-    fs.mkdirSync(dbDir, { recursive: true });
-  }
-
-  db = new BetterSqlite3Ctor(dbPath);
+  const mainDatabase = databaseHost.openMainDatabase({
+    filename: dbPath,
+    sqlite: BetterSqlite3Ctor,
+    ports: mainSchemaPorts,
+    logger: dataLogger,
+  });
+  db = mainDatabase.db;
   logger.info('Database opened successfully', { dbPath }, LogComponent.DB);
-
-  db.pragma('journal_mode = WAL');
-  db.pragma('busy_timeout = 5000');
-  db.pragma('foreign_keys = ON');
-
-  initializeSchema(db);
-  selfCheckAndRepairSchema(db);
-
-  stopWalCheckpointFn = startSharedWalCheckpoint(db);
 
   return db;
 }

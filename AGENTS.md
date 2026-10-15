@@ -36,7 +36,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
     separate spawned child process, not in-process.
   - `src/preload/` — context bridge
   - `src/renderer/` — Vite + React 19 + Zero Router frontend
-- Other workspaces: `packages/{ai,cli,computer-use,conductor,gateway,plugin-core,voice}/` (12 total)
+- Other workspaces: `packages/{ai,cli,computer-use,conductor,connectors,data,gateway,host,input-completion,memory,plugin-core,sandbox,tooling,voice}/`
 - Build scripts: `scripts/` (esbuild configs)
 - Docs: `docs/{design-docs,exec-plans,generated,product-specs,references}/`
 - Scoped guides: `docs/exec-plans/README.md`, `docs/design-docs/core-beliefs.md`
@@ -75,7 +75,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - **HTTP+SSE 三层分离**：Main Process ↔ Agent Server (HTTP+SSE) ↔ Worker Processes
 - **IPC**: IPC invoke/handle (`db:*`, `gateway:*`, `automation:*`, `logger:*`, etc.) + Agent Server HTTP endpoints
 - **MessagePort**: 仅用于 config/toolExec/toolStream 三通道，不含 agentControl
-- **Database**: SQLite via better-sqlite3. Path: `%APPDATA%/DUYA/databases/duya-main.db` (Windows), `~/Library/Application Support/DUYA/...` (macOS), `~/.local/share/DUYA/...` (Linux). Managed by `boot.json`.
+- **Database**: SQLite via better-sqlite3. Default path: `~/.duya/duya-main.db` on all platforms; `DUYA_DATA_ROOT` overrides the default root; `duya-core.db` and `memory-state.db` are siblings. `storage.database_path` in `~/.duya/config.toml` remains an explicit override. `@duya/data` owns Electron-independent paths, safe legacy DB copying, the main database connection/schema lifecycle, `CoreDatabase`, `RunStore`, CoreDataStores, and the append-only MessageLog implementation. Desktop Main still owns the app-wide accessor, path validation, safe-mode policy, shutdown coordination, memory-state connection/schema, WorkflowRunStore, legacy import, and CoreStores composition pending Host extraction. The standalone chat CLI persists sessions and transcripts through Host APIs under the same root, but its run executor still comes from the legacy `@duya/agent` package. Desktop also still starts the legacy Agent worker; process ownership and execution have not converged on Host yet.
 - **Agent core** runs in isolated child_process. Built separately as workspace package.
 - **Logging**: Structured logger (`apps/desktop/src/main/logging/logger.ts`), level `WARN` by default, console output only for WARN+. See [Logging](#logging).
 - esbuild does NOT type check. Always run `npm run typecheck:all` before committing.

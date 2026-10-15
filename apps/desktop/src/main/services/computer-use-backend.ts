@@ -44,7 +44,7 @@ import {
 import { detectSomElements, drawSomOverlay } from '@duya/computer-use';
 
 import { getLogger, LogComponent } from '../logging/logger.js';
-import { getOSContextBridge } from '../../../../../packages/agent/dist/context/os-context/index.js';
+import { getOSContextBridge } from '@duya/host/worker-os-context';
 import {
   axEnumeratedToDescriptor,
   isChromiumProcess,
@@ -481,7 +481,7 @@ async function listAppsFromContext(): Promise<AppInfo[]> {
   if (native.length > 0) return native;
 
   try {
-    const ctx = getOSContextBridge().getCurrent();
+    const ctx = getOSContextBridge(logger).getCurrent();
     if (!ctx) return [];
     const foreground = ctx.foreground as
       | { pid: number; exeName: string; title: string }
@@ -881,7 +881,7 @@ export function initializeComputerUseBackend(): boolean {
       nut: nutAdapter,
       detectElements: async ({ width, height }) => {
         try {
-          const ctx = getOSContextBridge().getCurrent();
+          const ctx = getOSContextBridge(logger).getCurrent();
           // plan 572 Phase 2 (macOS): real-coordinate AX-tree elements
           // take priority over the coordinate-less daemon inputs; the
           // detector tags them `axSource:'ax-tree'`. Windows keeps the
@@ -979,7 +979,7 @@ export function initializeComputerUseBackend(): boolean {
       // Uses the bridge's latest focused entity; resolves to null when the
       // snapshot is unavailable so the verdict ladder always has a signal.
       readFocusedEntity: () => {
-        const ctx = getOSContextBridge().getCurrent();
+        const ctx = getOSContextBridge(logger).getCurrent();
         return ctx?.focusedEntity ?? null;
       },
       // Use the primary display's actual pixel size as the capture

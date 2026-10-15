@@ -1,8 +1,7 @@
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import type { Database } from 'better-sqlite3';
-import { getCoreStores } from '../core-connection';
+import { resolveDataRoot } from '@duya/data/data-paths';
 import {
   ProjectStore,
   serializeProjectPaths,
@@ -28,7 +27,7 @@ import { normalizeProjectPathEntries, MAX_PROJECT_PATH_LENGTH } from './project-
  * `~/.duya/projects` (DUYA_TEST-namespace aware).
  *
  * DB routing:
- *   - `projects.*` / `project_bots`  → core ProjectStore (default `getCoreStores()`).
+ *   - `projects.*` / `project_bots`  → injected core ProjectStore handle.
  *   - `rollout_catalog` unbind on delete → memory DB (memory-state catalog).
  *     That table lives in a SECOND SQLite database, which `db/core` must not
  *     open: the composition root injects the handle through
@@ -89,7 +88,7 @@ export interface UpdateProjectInput {
 }
 
 export interface ProjectServiceOptions {
-  /** Core projects DB handle. Defaults to `getCoreStores().coreDb.db`. */
+  /** Core projects DB handle supplied by the composition root. */
   projectsDb?: Database;
   /**
    * Handle on the memory-state DB, whose `rollout_catalog` table `deleteProject`
@@ -103,12 +102,10 @@ export interface ProjectServiceOptions {
    * delete for an unknown id never touches memory-state.
    */
   memoryDb?: Database | (() => Database);
-  /** Test injection: overrides `~/.duya/projects` (or its test-namespace root). */
+  /** Test injection: overrides the resolved data root's projects directory. */
   projectsRoot?: string;
-}
-
-function defaultProjectsDb(): Database {
-  return getCoreStores().coreDb.db;
+  /** Host-projected rows let file reconciliation run without opening CoreStores. */
+  projectRows?: readonly Pick<ProjectRow, 'project_id' | 'name' | 'canonical_root'>[];
 }
 
 /**
@@ -130,7 +127,10 @@ function resolveMemoryDb(opts?: ProjectServiceOptions): Database {
 }
 
 function store(opts?: ProjectServiceOptions): ProjectStore {
-  return new ProjectStore(opts?.projectsDb ?? defaultProjectsDb());
+  if (!opts?.projectsDb) {
+    throw new Error('projectService: database-backed operations require an injected `projectsDb` handle');
+  }
+  return new ProjectStore(opts.projectsDb);
 }
 
 /**
@@ -259,14 +259,9 @@ locates your plans on disk. Use it for three things:
   then decide: extend an existing plan, or open a new one.
 `;
 
-/** Resolve `~/.duya/projects` (test-namespace aware). */
+/** Resolve the shared data root's projects directory. */
 export function resolveProjectsRoot(): string {
-  const base = path.join(os.homedir(), '.duya');
-  if (process.env.DUYA_TEST === '1') {
-    const ns = process.env.DUYA_TEST_NAMESPACE;
-    if (ns && /^[a-zA-Z0-9_-]+$/.test(ns)) return path.join(base, 'test-namespaces', ns, 'projects');
-  }
-  return path.join(base, 'projects');
+  return path.join(resolveDataRoot(), 'projects');
 }
 
 function projectsBase(opts?: ProjectServiceOptions): string {
@@ -368,7 +363,7 @@ export function reconcileProjectPlansDirs(opts?: ProjectServiceOptions): {
   indexSeeded: number;
   errors: string[];
 } {
-  const rows = store(opts).list();
+  const rows = opts?.projectRows ? [...opts.projectRows] : store(opts).list();
   let repaired = 0;
   let indexSeeded = 0;
   const errors: string[] = [];
@@ -532,7 +527,7 @@ export function reconcileProjectAgentsMd(opts?: ProjectServiceOptions): {
   skipped: number;
   errors: string[];
 } {
-  const rows = store(opts).list();
+  const rows = opts?.projectRows ? [...opts.projectRows] : store(opts).list();
   let upgraded = 0;
   let skipped = 0;
   const errors: string[] = [];

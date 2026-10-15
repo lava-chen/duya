@@ -170,18 +170,19 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ENTRY = path.join(HERE, '..', 'agent-process-entry.ts');
 /**
- * The module the entry delegates its turn to. Plan 610 S4c-d2a moved the
- * assembly here; the header's "THE ONE PLACE THE PRESCRIPTION WAS WRONG" says
- * why the driver count is measured across both files.
+ * The Host-owned module the worker entry delegates its turn to. It assembles
+ * the run and hands execution to the shared engine execution service below.
  */
-const DRIVER = path.join(HERE, '..', 'engine-run-driver.ts');
+const DRIVER = path.join(HERE, '..', '..', '..', '..', 'host', 'src', 'worker-engine-driver.ts');
+const ENGINE_EXECUTION = path.join(HERE, '..', '..', '..', '..', 'host', 'src', 'run-engine-execution.ts');
 /**
- * The headless/CLI entry. Plan 610 S4c-d2b flipped it onto the same driver, so
- * it is measured here for the same reason the entry is: a caller that reached
- * the driver twice would assemble two turns for one run.
+ * The headless/CLI adapter. It uses the same Host engine driver as the worker
+ * and subagent adapters, so it is measured here for the same reason as the
+ * worker entry: a caller that reaches the driver twice would assemble two turns
+ * for one run.
  */
-const HEADLESS = path.join(HERE, '..', 'headless-run-host.ts');
-const DUYA = path.join(HERE, '..', '..', 'agent', 'DuyaAgent.ts');
+const HEADLESS = path.join(HERE, '..', '..', '..', '..', 'host', 'src', 'worker-headless-run-host.ts');
+const DUYA = path.join(HERE, '..', '..', '..', '..', 'host', 'src', 'worker-session-runtime.ts');
 
 /**
  * Comment-strip. Comments are stripped FIRST because several of the symbols
@@ -201,6 +202,7 @@ function strip(src: string): string {
 
 const ENTRY_CODE = strip(fs.readFileSync(ENTRY, 'utf8'));
 const DRIVER_CODE = strip(fs.readFileSync(DRIVER, 'utf8'));
+const ENGINE_EXECUTION_CODE = strip(fs.readFileSync(ENGINE_EXECUTION, 'utf8'));
 const HEADLESS_CODE = strip(fs.readFileSync(HEADLESS, 'utf8'));
 /**
  * THE LIVE `chat:start` PATH, as one body of text.
@@ -211,41 +213,51 @@ const HEADLESS_CODE = strip(fs.readFileSync(HEADLESS, 'utf8'));
  * driver's mentions of those names instead would make the row a claim about
  * code the entry does not own.
  *
- * `CODE` is the text both halves of the driver pair are measured over, so
- * `legacyDrivers + engineDrivers` is a sum over ONE body and not a subtraction
- * across two scopes.
+ * `CODE` includes the worker entry, shared driver, and the one Host executor
+ * that constructs `RunEngineImpl`, so the model-loop count measures the actual
+ * execution path after ownership moved to Host.
  */
-const CODE = `${ENTRY_CODE}\n${DRIVER_CODE}`;
+const CODE = `${ENTRY_CODE}\n${DRIVER_CODE}\n${ENGINE_EXECUTION_CODE}`;
 
 /**
- * The driver is reached from the two PRODUCTION turn entries, and nowhere else.
+ * The driver is reached from the three PRODUCTION execution adapters, and
+ * nowhere else: the worker entry, headless host, and subagent engine adapter.
  *
  * ## Plan 610 S4c-d2b: this count moved from 1 to 2, and the invariant moved too
  *
- * It was 1 because the worker entry was the only production caller. S4c-d2b
- * flipped the SECOND of the plan's three turn call sites -- the headless/CLI
- * path -- onto the same driver, so `headless-run-host.ts` is now the second
- * importer. That is the change this row exists to detect, and it is a change in
- * the tree, not a defect: two ENTRIES driving one driver is the plan's shape,
- * while two DRIVERS of one turn is what this file rules out.
+ * The worker entry and headless adapter were the first two production callers.
+ * The Host subagent adapter now reaches the same driver for child runs. That is
+ * a third caller, not a third driver: the list below pins every adapter to the
+ * shared engine path and catches an accidental fourth owner.
  *
- * So the row was not weakened from `1` to `toBeGreaterThan(0)`. It is now
- * asserted as the exact SET of importers, so a THIRD caller -- a second driver
- * of a third turn, or a helper reaching for the driver from somewhere it has no
- * business owning a turn -- still fails. The single-driver pair in the next
- * describe is untouched and still measures `new RunEngineImpl(` at 1 over the
- * entry plus the driver, which is the property that actually rules out two
- * drivers: two callers of ONE constructor is not two drivers.
+ * The exact set is asserted so another caller fails. The single-driver pair in
+ * the next describe measures `new RunEngineImpl(` at one over the whole path,
+ * which is the property that rules out a second engine owner.
  */
 const DRIVER_IMPORTERS = ((): readonly string[] => {
-  const dir = path.join(HERE, '..');
+  const repoRoot = path.resolve(HERE, '..', '..', '..', '..', '..');
+  const roots = [
+    path.join(repoRoot, 'packages', 'agent', 'src', 'process'),
+    path.join(repoRoot, 'packages', 'host', 'src'),
+  ];
   const found: string[] = [];
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (!e.isFile() || !/\.(ts|tsx)$/.test(e.name)) continue;
-    if (e.name === 'engine-run-driver.ts') continue;
-    if (strip(fs.readFileSync(path.join(dir, e.name), 'utf8')).includes("'./engine-run-driver.js'"))
-      found.push(e.name);
-  }
+  const visit = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== '__tests__' && entry.name !== 'node_modules' && entry.name !== 'dist') visit(file);
+        continue;
+      }
+      if (!entry.isFile() || !/\.(ts|tsx)$/.test(entry.name) || /\.test\.(ts|tsx)$/.test(entry.name)) continue;
+      if (path.resolve(file) === path.resolve(DRIVER)) continue;
+      const source = strip(fs.readFileSync(file, 'utf8'));
+      const importsDriver = /from\s+['"][^'"]*(?:worker-engine-driver|engine-run-driver)(?:\.js)?['"]/.test(source);
+      if (importsDriver && /\bdriveRunWithEngine\s*\(/.test(source)) {
+        found.push(path.relative(repoRoot, file).replace(/\\/g, '/'));
+      }
+    }
+  };
+  for (const root of roots) visit(root);
   return found.sort();
 })();
 
@@ -321,7 +333,11 @@ describe('the live chat:start path no longer runs a phantom engine run', () => {
     expect(occurrences(/driveRunWithEngine\s*\(/, HEADLESS_CODE)).toBe(1);
     // The exact set, so a THIRD importer fails. See `DRIVER_IMPORTERS` for why
     // the count is a set rather than a number.
-    expect(DRIVER_IMPORTERS).toEqual(['agent-process-entry.ts', 'headless-run-host.ts']);
+    expect(DRIVER_IMPORTERS).toEqual([
+      'packages/agent/src/process/agent-process-entry.ts',
+      'packages/host/src/worker-headless-run-host.ts',
+      'packages/host/src/worker-subagents/engine-run.ts',
+    ]);
   });
 });
 
@@ -520,7 +536,7 @@ describe('G7/G8 are measured against the real gate module, not a copy of it', ()
     return { ...gates, stripComments: strip.stripComments };
   }
 
-  it('reports NO turn loop in DuyaAgent.ts, and would still report one if it came back', () => {
+  it('reports NO turn loop in the Host session, and would still report one if it came back', () => {
     // Plan 610 S4c-d3 INVERTED this row, and the inversion is the point rather
     // than a concession: the legacy turn generator this test used to require is
     // deleted, and boundary gate G7 is green because of it.
@@ -560,9 +576,10 @@ describe('G7/G8 are measured against the real gate module, not a copy of it', ()
       expect(planted).toHaveLength(1);
       expect(planted[0].legs).toBe(2);
 
-      // The class still owns the SEAM the driver reaches through, so "no loop
-      // here" is not "the turn has no owner at all".
-      expect(duya).toContain('runTurnStream');
+      // The Host session still owns the seam the driver reaches through, so
+      // "no loop here" is not "the turn has no owner at all". The shared driver
+      // starts it through `beginRun`.
+      expect(duya).toContain('beginRun');
     });
   });
 

@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { MessageEntry, CompactionEntry, AgentMessage } from '@duya/agent/message';
+import type { MessageEntry, CompactionEntry, AgentMessage } from '@duya/agent-core/message';
 import { MessageLog, type NewEvent } from '../message-log';
 import { SessionStore } from '../session-store';
 import type { SqliteDatabase } from '../database';
@@ -279,9 +279,11 @@ describe('MessageLog', () => {
       makeEvent(sessionId, makeAssistantMessage('m-2', 'b', t + 1)),
     ]);
     expect(log.getCount(sessionId)).toBe(2);
+    expect(log.getLastSequence(sessionId)).toBe(2);
 
     log.deleteBySession(sessionId);
     expect(log.getCount(sessionId)).toBe(0);
+    expect(log.getLastSequence(sessionId)).toBeNull();
 
     // File is preserved
     const row = db.prepare('SELECT rollout_path FROM sessions WHERE id = ?').get(sessionId) as { rollout_path: string };

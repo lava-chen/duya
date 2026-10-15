@@ -10,13 +10,13 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import fs from 'node:fs';
-import os from 'node:os';
 import type { Message, MessageContent, SessionInfo, FileAttachment, TokenUsage } from '../types.js';
 import { getConfigDatabasePath } from '../config/index.js';
 import * as ipcDbClient from '../ipc/db-client.js';
 import type BetterSqlite3 from 'better-sqlite3';
 import { logger } from '../utils/logger.js';
-import { isCDNImageUrl } from '../utils/urlSafety.js';
+import { rehydrateContentWithAttachments as rehydrateHostContentWithAttachments } from '@duya/host/worker-session/image-attachments';
+import { getDuyaRoot } from '../utils/duyaRoot.js';
 
 // =============================================================================
 // IPC Mode Detection
@@ -248,7 +248,7 @@ export interface AttachmentRow {
   message_id: string;
   session_id: string;
   attachment_type: string;
-  mime_type: string;
+  mime_type: string | null;
   data: string;
   original_url: string | null;
   created_at: number;
@@ -459,43 +459,21 @@ export function getDb(): BetterSqlite3.Database {
 }
 
 /**
- * Get the user data directory for the current platform.
- */
-function getUserDataPath(): string {
-  if (process.platform === 'win32') {
-    return process.env.APPDATA || path.join(process.env.USERPROFILE || os.homedir(), 'AppData', 'Roaming');
-  } else if (process.platform === 'darwin') {
-    return path.join(process.env.HOME || os.homedir(), 'Library', 'Application Support');
-  } else {
-    return process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
-  }
-}
-
-/**
  * Get the default database file path.
- * Both dev and production use APPDATA/DUYA/duya-main.db for consistency
- * with the main process (electron/db/connection.ts).
+ * Use the canonical per-user root. A packaged legacy worker may still provide
+ * DUYA_DB_DIR; the Desktop Agent Server otherwise gives workers the fully
+ * resolved DUYA_CUSTOM_DB_PATH.
  */
 function getDefaultDbPath(): string {
-  // Check if running as packaged Electron app
   const isPackaged = typeof process !== 'undefined' && (process as NodeJS.Process & { pkg?: unknown }).pkg !== undefined
     ? true
     : process.env.NODE_ENV === 'production';
-
-  // Check if running in CLI mode (CLI always uses production database)
-  const isCLI = process.env.DUYA_CLI === 'true' || 
-    process.argv[0]?.includes('duya') || 
-    process.argv[1]?.includes('duya');
-
-  // If electron passed the database directory via env, use it
-  if (isPackaged && process.env.DUYA_DB_DIR) {
-    return path.join(process.env.DUYA_DB_DIR, 'duya-main.db');
-  }
-
-  // Use APPDATA/DUYA (or equivalent on other platforms) for both dev and prod
-  // This ensures frontend and agent use the same database
-  const userDataPath = getUserDataPath();
-  return path.join(userDataPath, 'DUYA', 'duya-main.db');
+  const dataRoot = process.env.DUYA_DATA_ROOT?.trim()
+    ? getDuyaRoot()
+    : (isPackaged ? process.env.DUYA_DB_DIR?.trim() : undefined) ??
+      process.env.DUYA_APP_DATA_PATH?.trim() ??
+      getDuyaRoot();
+  return path.join(dataRoot, 'duya-main.db');
 }
 
 /**
@@ -1235,16 +1213,17 @@ export function storeParsedDocumentAttachment(
     extractMethod?: string;
     imageChunks?: Array<{ base64: string; mediaType: string }>;
   }
-): void {
+): Promise<{ success: boolean }> {
+  if (USE_IPC_MODE && getIpcClient()) {
+    return import('@duya/host/worker-session/persistence').then(({ storeParsedDocumentAttachment: storeOnHost }) =>
+      storeOnHost(messageId, sessionId, data),
+    );
+  }
+
   // Guard against null/undefined messageId
   if (!messageId) {
     logger.warn('storeParsedDocumentAttachment: messageId is empty, skipping', { data: data.filename }, 'DB');
-    return;
-  }
-
-  if (USE_IPC_MODE && getIpcClient()) {
-    getIpcClient()!.attachmentDb.storeParsedDocument(messageId, sessionId, data);
-    return;
+    return Promise.resolve({ success: false });
   }
 
   const db = getDb();
@@ -1271,6 +1250,7 @@ export function storeParsedDocumentAttachment(
     original_url: data.filePath,
     created_at: Date.now(),
   });
+  return Promise.resolve({ success: true });
 }
 
 /**
@@ -1363,55 +1343,7 @@ export function rehydrateContentWithAttachments(
   content: string | MessageContent[],
   attachmentMap: Map<string, AttachmentRow[]>,
 ): string | MessageContent[] {
-  if (typeof content === 'string' || !Array.isArray(content)) {
-    return content;
-  }
-
-  const results: MessageContent[] = [];
-  let needsRehydration = false;
-
-  for (const block of content) {
-    if (block.type === 'image') {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const imgBlock = block as any;
-      let url = imgBlock.source?.url || imgBlock.source?.data;
-
-      // Check if this is a CDN URL that needs rehydration
-      if (imgBlock.source?.type === 'url' && url && isCDNImageUrl(url)) {
-        needsRehydration = true;
-        // Try to find matching attachment by original_url
-        let rehydrated = false;
-        for (const attachments of attachmentMap.values()) {
-          for (const att of attachments) {
-            if (att.original_url && (att.original_url === url || url.includes(att.original_url))) {
-              results.push({
-                type: 'image',
-                source: {
-                  type: 'base64',
-                  media_type: att.mime_type,
-                  data: att.data,
-                },
-              });
-              rehydrated = true;
-              break;
-            }
-          }
-          if (rehydrated) break;
-        }
-        // If no attachment found for CDN URL, skip this image block to prevent browser access
-        if (!rehydrated) {
-          logger.warn(`No attachment found for CDN URL, skipping image block`, { url }, 'DB');
-          continue;
-        }
-      } else {
-        results.push(block);
-      }
-    } else {
-      results.push(block);
-    }
-  }
-
-  return needsRehydration ? results : content;
+  return rehydrateHostContentWithAttachments(content, attachmentMap, logger);
 }
 
 // ============================================================
@@ -1714,8 +1646,8 @@ export async function appendMessages(
 ): Promise<{ success: boolean; count: number }> {
   if (USE_IPC_MODE && getIpcClient()) {
     try {
-      const result = await getIpcClient()!.messageDb.append(sessionId, messages as unknown[]);
-      return result as { success: boolean; count: number };
+      const { appendMessages: appendOnHost } = await import('@duya/host/worker-session/persistence');
+      return await appendOnHost(sessionId, messages);
     } catch (error) {
       logger.error(
         'appendMessages failed (IPC)',

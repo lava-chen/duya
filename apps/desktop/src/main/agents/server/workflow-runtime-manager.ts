@@ -24,12 +24,11 @@ import { fork, type ChildProcess } from 'child_process';
 import { homedir } from 'os';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { createWorkerEnvironment } from './worker-manager';
+import { createWorkerEnvironment, getWorkerMaxMemoryMB } from '@duya/host/worker-limits';
 import { registerSpawnedWorker, unregisterSpawnedWorker } from '../../control-plane/spawned-workers';
-import { getWorkerMaxMemoryMB } from './worker-limits';
 import type { Logger } from './logger';
-import type { JournalRecord } from '../../../../../../packages/agent/src/modes/workflow/journal';
-import type { WorkflowArtifactDescriptor } from '../../../../../../packages/agent/src/process/workflow-runner';
+import type { JournalRecord } from '@duya/host/worker-workflows/journal';
+import type { WorkflowArtifactRef } from '@duya/agent-protocol/workflow-runs';
 
 /** Live approval request, relayed to the run panel (plan 560 D6). */
 export interface WorkflowRuntimePermissionRequest {
@@ -48,7 +47,7 @@ export interface WorkflowRunSummary {
   finishedAt: number;
   tokens?: number;
   subagents?: number;
-  artifacts: WorkflowArtifactDescriptor[];
+  artifacts: WorkflowArtifactRef[];
   error?: string;
 }
 
@@ -62,7 +61,7 @@ export interface WorkflowRuntimeSseFrame {
   runId: string;
   seq?: number;
   record?: JournalRecord;
-  artifact?: WorkflowArtifactDescriptor;
+  artifact?: WorkflowArtifactRef;
   request?: WorkflowRuntimePermissionRequest;
   summary?: WorkflowRunSummary;
 }
@@ -163,7 +162,7 @@ interface RunEntry {
   frames: WorkflowRuntimeSseFrame[];
   subscribers: Set<(frame: WorkflowRuntimeSseFrame) => void>;
   lastSeq: number;
-  artifacts: WorkflowArtifactDescriptor[];
+  artifacts: WorkflowArtifactRef[];
   tokens?: number;
   subagents?: number;
   /** Serializes writes so events land in the table in production order. */
@@ -632,7 +631,7 @@ export class WorkflowRuntimeManager {
       }
 
       case 'workflow:publish-artifact': {
-        const artifact: WorkflowArtifactDescriptor = {
+        const artifact: WorkflowArtifactRef = {
           id: frame.id as string,
           name: frame.name as string,
           contentType: frame.contentType as string,
@@ -648,7 +647,7 @@ export class WorkflowRuntimeManager {
         const status = (frame.status as string) ?? 'complete';
         const error = typeof frame.error === 'string' ? frame.error : undefined;
         const artifacts = Array.isArray(frame.artifacts)
-          ? (frame.artifacts as WorkflowArtifactDescriptor[])
+          ? (frame.artifacts as WorkflowArtifactRef[])
           : entry.artifacts;
         // The launch can fail before `ready` (not-found / bad args); the row
         // already exists, so it still needs a terminal write.
@@ -731,7 +730,7 @@ export class WorkflowRuntimeManager {
    */
   private async finishEntry(
     entry: RunEntry,
-    outcome: { status: string; artifacts: WorkflowArtifactDescriptor[]; error?: string },
+    outcome: { status: string; artifacts: WorkflowArtifactRef[]; error?: string },
   ): Promise<void> {
     if (entry.status === 'finished') return;
     entry.status = 'finished';
@@ -784,7 +783,7 @@ export class WorkflowRuntimeManager {
     outcome: {
       status: string;
       error?: string;
-      artifacts?: WorkflowArtifactDescriptor[];
+      artifacts?: WorkflowArtifactRef[];
       spentTokens?: number;
     },
   ): Promise<void> {

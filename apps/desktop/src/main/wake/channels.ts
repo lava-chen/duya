@@ -34,12 +34,12 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { enqueueInboundWake, notifySessionIdle } from './wake-dispatcher';
+import { enqueueInboundWake, notifySessionIdle, queuePendingWakeMutation } from './wake-dispatcher';
 import { runWakePromptInExistingSession, type WakeRunOutcome } from './wake-run';
-import { normalizeChannelAddress, parseChannelAddress } from '../../../../../packages/agent/src/channels/types';
-import type { ChannelAddress, ChannelInboundEnvelope, ChannelOutboundMessage, DeliveryFailure } from '../../../../../packages/agent/src/channels/types';
-import { buildChannelInboundWakePrompt, buildChannelDeliveryFailureWakePrompt, buildChannelAckRedrivePrompt, CHANNEL_INBOUND_WAKE_CUE, CHANNEL_DELIVERY_FAILED_WAKE_CUE } from '../../../../../packages/agent/src/channels/prompts';
-import { getCoreStores } from '../db/core-connection';
+import { normalizeChannelAddress, parseChannelAddress } from '@duya/agent-protocol/channels';
+import type { ChannelAddress, ChannelInboundEnvelope, ChannelOutboundMessage, DeliveryFailure } from '@duya/agent-protocol/channels';
+import { buildChannelInboundWakePrompt, buildChannelDeliveryFailureWakePrompt, buildChannelAckRedrivePrompt, CHANNEL_INBOUND_WAKE_CUE, CHANNEL_DELIVERY_FAILED_WAKE_CUE } from '@duya/host/channel-prompts';
+import { getDesktopHostLocalPendingWakeApi, getDesktopHostSessionApi } from '../cli/desktop-host-api';
 import { ipcMessageToNewEvent, newEventToIpcMessage } from '../ipc/core-db-adapters';
 import { getSessionManager } from '../agents/session-manager';
 import { parseAgentIdFromBotSession } from './bot-session-id';
@@ -78,11 +78,12 @@ const INBOUND_WAKE_KIND = 'connector.inbound' as const;
  * Best-effort: failures log and keep the in-memory path authoritative.
  */
 function persistInboundEnvelope(sessionId: string, envelope: ChannelInboundEnvelope): void {
-  try {
-    const { wakes } = getCoreStores();
-    const envelopes = loadPersistedInboundEnvelopes(wakes.get(INBOUND_WAKE_KIND, sessionId));
+  queuePendingWakeMutation(sessionId, async () => {
+    const api = getDesktopHostLocalPendingWakeApi();
+    const row = await api.getPendingWake(INBOUND_WAKE_KIND, sessionId);
+    const envelopes = loadPersistedInboundEnvelopes(row);
     envelopes.push(envelope);
-    wakes.persist({
+    await api.persistPendingWake({
       kind: INBOUND_WAKE_KIND,
       workId: sessionId,
       agentId: sessionId,
@@ -90,12 +91,12 @@ function persistInboundEnvelope(sessionId: string, envelope: ChannelInboundEnvel
       title: envelope.text.slice(0, 200),
       quietOriginJson: JSON.stringify({ envelopes }),
     });
-  } catch (err) {
+  }, (err) => {
     logger.warn('wakeForInbound: durable envelope persist failed', {
       sessionId,
       error: err instanceof Error ? err.message : String(err),
     }, LogComponent.Automation);
-  }
+  });
 }
 
 /** Parse the envelope list out of a connector.inbound row (defensively). */
@@ -286,7 +287,7 @@ export function wakeForInbound(
   // itself is persisted as a hidden `system` row, so without this marker the
   // channel message is invisible in the bot's chat. Best-effort — a marker
   // failure must never block the wake.
-  appendInboundChannelMarker(sessionId, envelope);
+  void appendInboundChannelMarker(sessionId, envelope);
 
   // Enqueue the connector.inbound wake
   const envelopeId = `${agentId}:${envelope.address.platform}:${envelope.address.chat}`;
@@ -312,10 +313,10 @@ export function wakeForInbound(
  * rides metadata.channelMsg (PERSISTED_METADATA_KEYS whitelist) so the
  * renderer's chip grouping + detail view survive reload.
  */
-function appendInboundChannelMarker(
+async function appendInboundChannelMarker(
   sessionId: string,
   envelope: ChannelInboundEnvelope,
-): void {
+): Promise<void> {
   try {
     const text = envelope.text.trim();
     if (!text) return; // reaction-only envelopes have no chat body to show
@@ -343,13 +344,16 @@ function appendInboundChannelMarker(
       },
       created_at: Date.now(),
     };
-    const { messageLog } = getCoreStores();
     const event = ipcMessageToNewEvent(
       sessionId,
       message as unknown as Parameters<typeof ipcMessageToNewEvent>[1],
       null,
     );
-    messageLog.appendBatch([event]);
+    const receipt = await getDesktopHostSessionApi().appendTimeline(sessionId, {
+      entries: [event.payload],
+      turnId: event.turnId,
+    });
+    if (receipt.writtenCount === 0) return;
     const broadcast = newEventToIpcMessage(event);
     if (broadcast) {
       getSessionManager().broadcastSessionEvent('message:new', {
@@ -456,7 +460,7 @@ export class DefaultChannelBackgroundWakes implements ChannelBackgroundWakes {
     // Channel send/receive marker row (bot-direct chat chips) — the live
     // connector-runtime path wakes through THIS method, so the marker must
     // be written here too, not only in the module-level wakeForInbound.
-    appendInboundChannelMarker(sessionId, envelope);
+    void appendInboundChannelMarker(sessionId, envelope);
 
     // Enqueue the inbound wake with the dispatcher
     const result = enqueueInboundWake(sessionId, {

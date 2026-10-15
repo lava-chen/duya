@@ -25,7 +25,7 @@ import {
   updateCanvas,
   type ConductorCanvas,
 } from '../db/queries/conductors';
-import { getCoreStores } from '../db/core-connection';
+import { getDesktopHostLocalSessionApi, getDesktopHostSessionApi } from '../cli/desktop-host-api';
 import { getProjectDatabaseService, ProjectDatabaseServiceError } from '../project-database/service';
 
 export type { ExecutorRpcRequest, ExecutorRpcResponse } from './executor-types';
@@ -91,34 +91,44 @@ export class ConductorExecutorProxy {
     this.canvasManagementChangedFn = fn;
   }
 
-  private resolveCurrentCanvas(sessionId: string | undefined, fallbackCanvasId?: string): ConductorCanvas | null {
+  private resolveCurrentCanvasById(
+    persistedCanvasId: unknown,
+    fallbackCanvasId?: string,
+  ): ConductorCanvas | null {
     const canvases = listCanvases();
-    // conductor_canvas_id lives in the session's extensions JSON (plan 328).
-    const persistedCanvasId = sessionId
-      ? (getCoreStores().sessions.getExtension(sessionId, 'conductor_canvas_id') as string | null | undefined) ?? null
-      : null;
-    const currentCanvasId = persistedCanvasId ?? fallbackCanvasId;
+    const currentCanvasId =
+      (typeof persistedCanvasId === 'string' ? persistedCanvasId : null) ?? fallbackCanvasId;
     return currentCanvasId ? canvases.find((canvas) => canvas.id === currentCanvasId) ?? null : null;
   }
 
-  private bindSessionToCanvas(sessionId: string | undefined, canvas: ConductorCanvas): ExecutorRpcResponse | null {
+  private async bindSessionToCanvas(
+    sessionId: string | undefined,
+    canvas: ConductorCanvas,
+  ): Promise<ExecutorRpcResponse | null> {
     if (!sessionId) {
       return {
         success: false,
         error: { code: 'NO_SESSION', message: 'A chat session is required to switch canvases' },
       };
     }
-    const { sessions } = getCoreStores();
-    // Existence check via sessions.get — null means the session row is gone.
-    if (!sessions.get(sessionId)) {
+    const session = await getDesktopHostLocalSessionApi().readLocalSession(sessionId, {
+      includeAllSessions: true,
+    });
+    if (!session) {
       return {
         success: false,
         error: { code: 'SESSION_NOT_FOUND', message: `Session ${sessionId} not found` },
       };
     }
-    // conductor_mode_enabled + conductor_canvas_id are extension keys.
-    sessions.setExtension(sessionId, 'conductor_mode_enabled', 1);
-    sessions.setExtension(sessionId, 'conductor_canvas_id', canvas.id);
+    const result = await getDesktopHostSessionApi().update(sessionId, undefined, {
+      extensions: { conductor_mode_enabled: 1, conductor_canvas_id: canvas.id },
+    });
+    if (!result.updated) {
+      return {
+        success: false,
+        error: { code: 'SESSION_NOT_FOUND', message: `Session ${sessionId} not found` },
+      };
+    }
     return null;
   }
 
@@ -203,14 +213,19 @@ export class ConductorExecutorProxy {
     return { ok: true, canvas: matches[0] };
   }
 
-  private manageCanvas(request: ExecutorRpcRequest): ExecutorRpcResponse {
+  private async manageCanvas(request: ExecutorRpcRequest): Promise<ExecutorRpcResponse> {
     const payload = request.payload;
     const action = payload.action as 'get_current' | 'list' | 'create' | 'switch' | 'rename' | 'delete';
     const fallbackCanvasId = payload.currentCanvasId as string | undefined;
-    const currentCanvas = this.resolveCurrentCanvas(request.sessionId, fallbackCanvasId);
+    const session = request.sessionId
+      ? await getDesktopHostLocalSessionApi().readLocalSession(request.sessionId, { includeAllSessions: true })
+      : null;
+    const currentCanvas = this.resolveCurrentCanvasById(
+      session?.extensions.conductor_canvas_id,
+      fallbackCanvasId,
+    );
     // Resolve the session's working directory once so every branch below
     // (list / create / switch / rename) agrees on the project scope.
-    const session = request.sessionId ? getCoreStores().sessions.get(request.sessionId) : null;
     const sessionProjectPath = session?.workingDirectory ?? null;
 
     if (action === 'get_current') {
@@ -236,7 +251,7 @@ export class ConductorExecutorProxy {
         return { success: false, error: { code: 'INVALID_INPUT', message: 'Canvas name is required' } };
       }
       const shouldSwitch = payload.switchTo !== false;
-      if (shouldSwitch && (!request.sessionId || !getCoreStores().sessions.get(request.sessionId))) {
+      if (shouldSwitch && (!request.sessionId || !session)) {
         return {
           success: false,
           error: { code: 'SESSION_NOT_FOUND', message: 'A valid chat session is required to create and switch canvases' },
@@ -265,7 +280,7 @@ export class ConductorExecutorProxy {
         projectPath: sessionProjectPath,
       });
       if (shouldSwitch) {
-        const bindError = this.bindSessionToCanvas(request.sessionId, canvas);
+        const bindError = await this.bindSessionToCanvas(request.sessionId, canvas);
         if (bindError) return bindError;
       }
       this.canvasManagementChangedFn?.({
@@ -303,7 +318,7 @@ export class ConductorExecutorProxy {
           },
         };
       }
-      const bindError = this.bindSessionToCanvas(request.sessionId, target);
+      const bindError = await this.bindSessionToCanvas(request.sessionId, target);
       if (bindError) return bindError;
       this.canvasManagementChangedFn?.({
         operation: 'switch',
@@ -364,7 +379,9 @@ export class ConductorExecutorProxy {
       // If the deleted canvas was the current canvas, unbind the session.
       const wasCurrent = currentCanvas?.id === target.id;
       if (wasCurrent && request.sessionId) {
-        getCoreStores().sessions.setExtension(request.sessionId, 'conductor_canvas_id', null);
+        await getDesktopHostSessionApi().update(request.sessionId, undefined, {
+          extensions: { conductor_canvas_id: null },
+        });
       }
       this.canvasManagementChangedFn?.({
         operation: 'delete',
@@ -410,11 +427,11 @@ export class ConductorExecutorProxy {
    * (`data_source.manage` executor action). Operations:
    * register / list / update / delete.
    */
-  private manageWorkbenchDataSources(payload: Record<string, unknown>): ExecutorRpcResponse {
+  private async manageWorkbenchDataSources(payload: Record<string, unknown>): Promise<ExecutorRpcResponse> {
     const operation = payload.operation as string;
     switch (operation) {
       case 'register': {
-        const result = workbenchService.createSource({
+        const result = await workbenchService.createSource({
           canvasId: payload.canvasId as string,
           name: payload.name as string,
           type: payload.type as never,
@@ -426,13 +443,13 @@ export class ConductorExecutorProxy {
           : { success: false, error: { code: result.error.code, message: result.error.message } };
       }
       case 'list': {
-        const result = workbenchService.listSources(payload.canvasId as string);
+        const result = await workbenchService.listSources(payload.canvasId as string);
         return result.success
           ? { success: true, result: result.data }
           : { success: false, error: { code: result.error.code, message: result.error.message } };
       }
       case 'update': {
-        const result = workbenchService.updateSource(payload.sourceId as string, {
+        const result = await workbenchService.updateSource(payload.sourceId as string, {
           name: payload.name as string | undefined,
           config: payload.config as never,
           refreshIntervalSec: payload.refreshIntervalSec as number | undefined,
@@ -443,7 +460,7 @@ export class ConductorExecutorProxy {
           : { success: false, error: { code: result.error.code, message: result.error.message } };
       }
       case 'delete': {
-        const result = workbenchService.deleteSource(payload.sourceId as string);
+        const result = await workbenchService.deleteSource(payload.sourceId as string);
         return result.success
           ? { success: true, result: result.data }
           : { success: false, error: { code: result.error.code, message: result.error.message } };
@@ -462,12 +479,17 @@ export class ConductorExecutorProxy {
     try {
       switch (action) {
         case 'canvas.manage':
-          return this.manageCanvas(request);
+          return await this.manageCanvas(request);
 
         case 'database.execute': {
           const fallbackCanvasId = payload.canvasId as string | undefined;
-          const canvas = this.resolveCurrentCanvas(request.sessionId, fallbackCanvasId);
-          const session = request.sessionId ? getCoreStores().sessions.get(request.sessionId) : null;
+          const session = request.sessionId
+            ? await getDesktopHostLocalSessionApi().readLocalSession(request.sessionId, { includeAllSessions: true })
+            : null;
+          const canvas = this.resolveCurrentCanvasById(
+            session?.extensions.conductor_canvas_id,
+            fallbackCanvasId,
+          );
           const projectPath = canvas?.projectPath ?? session?.workingDirectory ?? null;
           if (!projectPath) {
             return {

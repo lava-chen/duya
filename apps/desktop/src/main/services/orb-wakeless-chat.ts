@@ -38,11 +38,11 @@ import {
   sendOrbResult,
 } from '../ipc/orb';
 import { getProviderStore } from './providers/provider-store-electron';
+import { getDesktopHostLocalSettingsApi } from '../cli/desktop-host-api';
 import { toLLMProvider, type ApiProvider } from '../config/provider-types';
 import { toLegacyApiProvider } from '../../renderer/lib/providers/legacy';
 import { toRuntimeConfig as buildRuntimeConfig } from '../../renderer/lib/providers';
-import { getOSContextBridge } from '../../../../../packages/agent/dist/context/os-context/index.js';
-import { getSetting } from '../db/queries/settings';
+import { getOSContextBridge } from '@duya/host/worker-os-context';
 
 const logger = getLogger();
 
@@ -117,8 +117,8 @@ function getDefaultModelForProvider(
 }
 
 /** Exposed for the orb's model badge (automation:orb:chat-config). */
-export function getActiveModelName(): string | null {
-  return (getActiveProviderConfig()?.model as string) ?? null;
+export async function getActiveModelName(): Promise<string | null> {
+  return ((await getActiveProviderConfig())?.model as string) ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -169,7 +169,7 @@ export function listModelOptions(): WakeModelOption[] {
       }
     }
     if (models.size === 0) {
-      const fallback = getDefaultModelForProvider(llm.providerType, opts);
+      const fallback = getDefaultModelForProvider(toLegacyApiProvider(llm).providerType, opts);
       if (fallback) models.add(fallback);
     }
     const label = String((llm as { name?: string }).name ?? llm.id);
@@ -180,7 +180,7 @@ export function listModelOptions(): WakeModelOption[] {
   return out.slice(0, 30);
 }
 
-function getActiveProviderConfig(): Record<string, unknown> | null {
+async function getActiveProviderConfig(): Promise<Record<string, unknown> | null> {
   const store = getProviderStore();
   store.migrateAllLegacyProviders();
 
@@ -203,7 +203,7 @@ function getActiveProviderConfig(): Record<string, unknown> | null {
 
   let runtimeConfig: Record<string, unknown> | null = null;
   try {
-    const capability = store.resolveRuntimeCapability(llm!.id, model);
+    const capability = await store.resolveRuntimeCapability(llm!.id, model);
     const cfg = buildRuntimeConfig(llm!, {
       modelId: model,
       capabilities: capability,
@@ -247,7 +247,7 @@ function getActiveProviderConfig(): Record<string, unknown> | null {
 /** Focused-window summary for the prompt preamble; '' when unavailable. */
 function buildContextPreamble(): string {
   try {
-    const bridge = getOSContextBridge();
+    const bridge = getOSContextBridge(logger);
     if (!bridge.isEnabled()) return '';
     const ctx = bridge.getCurrent();
     const focused = ctx?.focusedEntity as
@@ -363,7 +363,7 @@ export interface WakeAutoContext {
  */
 export async function buildWakeAutoContext(): Promise<WakeAutoContext | null> {
   try {
-    const bridge = getOSContextBridge();
+    const bridge = getOSContextBridge(logger);
     if (!bridge.isEnabled()) return null;
     const ctx = bridge.getCurrent();
     if (ctx?.redacted === true) {
@@ -467,7 +467,7 @@ export async function startWakelessChat(
     };
   }
 
-  const providerConfig = getActiveProviderConfig();
+  const providerConfig = await getActiveProviderConfig();
   if (!providerConfig) {
     logger.warn(
       'wakeless: no provider configured, rejecting orb submit',
@@ -510,6 +510,18 @@ export async function startWakelessChat(
     LogComponent.Orb,
   );
 
+  let workingDirectory: string | undefined;
+  try {
+    workingDirectory = (await getDesktopHostLocalSettingsApi().getSetting('workspaceDir')) || undefined;
+  } catch (err) {
+    logger.warn(
+      'wakeless: Host settings lookup failed',
+      { sessionId, error: err instanceof Error ? err.message : String(err) },
+      LogComponent.Orb,
+    );
+    return { accepted: false, note: 'Duya Host is unavailable. Try again after it reconnects.' };
+  }
+
   let res: Response;
   try {
     res = await fetch(`http://127.0.0.1:${port}/sessions/${sessionId}/chat`, {
@@ -526,7 +538,7 @@ export async function startWakelessChat(
           // Audit bug ③: run the wakeless agent in the user's configured
           // workspace instead of the worker's default cwd. Empty/unset →
           // undefined → keys dropped → worker default (unchanged behaviour).
-          workingDirectory: getSetting('workspaceDir') || undefined,
+          workingDirectory,
         }),
       ),
     });

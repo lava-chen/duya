@@ -1,155 +1,134 @@
-import { getDatabase } from '../ipc/db-handlers';
 import { getLogger, LogComponent } from '../logging/logger';
+import {
+  getDesktopHostLocalGatewayMessageMirrorApi,
+  getDesktopHostLocalGatewayUserMapApi,
+  getDesktopHostLocalSettingsApi,
+} from '../cli/desktop-host-api';
 
-export function dispatchGatewayDbAction(
-  action: { type?: string; action?: string; payload?: Record<string, unknown> },
-): { result?: string; error?: string } | undefined {
-  const db = getDatabase();
-  if (!db) {
-    getLogger().error('dispatchGatewayDbAction: DB not available', undefined, undefined, LogComponent.Gateway);
-    return { error: 'DB not available' };
+function parseSettingValue(raw: string | undefined): unknown {
+  if (raw === undefined) return undefined;
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return raw;
   }
+}
 
+export async function dispatchGatewayDbAction(
+  action: { type?: string; action?: string; payload?: Record<string, unknown> },
+): Promise<{ result?: unknown; error?: string } | undefined> {
   const a = action.action || action.type || '';
 
-  try {
-    switch (a) {
-      case 'platform:save_config': {
-        const p = action.payload as Record<string, unknown> | undefined;
-        if (!p) return { error: 'No payload' };
-        const now = Date.now();
-        const sql = `
-          INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-        `;
-        const stmt = db.prepare(sql);
-        if (p.token !== undefined) stmt.run('bridge_token', JSON.stringify(p.token), now);
-        if (p.appId !== undefined) stmt.run('bridge_app_id', JSON.stringify(p.appId), now);
-        if (p.appSecret !== undefined) stmt.run('bridge_app_secret', JSON.stringify(p.appSecret), now);
-        return { result: 'ok' };
+  if (a === 'gateway_user:getMapping' || a === 'gateway_user:createMapping' || a === 'gateway_user:getChatForSession') {
+    try {
+      const api = getDesktopHostLocalGatewayUserMapApi();
+      const p = action.payload;
+      if (!p) return { error: 'No payload' };
+      if (a === 'gateway_user:getMapping') {
+        const platform = p.platform;
+        const platformChatId = p.platformChatId;
+        if (typeof platform !== 'string' || typeof platformChatId !== 'string') return { error: 'Missing required fields' };
+        const mapping = await api.findGatewayUserMapping(platform, platformChatId);
+        return { result: mapping?.sessionId };
       }
-
-      case 'platform:get_config': {
-        const getVal = (key: string) => {
-          const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
-          if (row) {
-            try { return JSON.parse(row.value); } catch { return row.value; }
-          }
-          return undefined;
-        };
-        return {
-          result: JSON.stringify({
-            token: getVal('bridge_token'),
-            appId: getVal('bridge_app_id'),
-            appSecret: getVal('bridge_app_secret'),
-          }),
-        };
-      }
-
-      case 'gateway_user:getMapping': {
-        const p = action.payload as Record<string, unknown> | undefined;
-        if (!p) return { error: 'No payload' };
-        const platform = p.platform as string;
-        const platformChatId = p.platformChatId as string;
-        const row = db.prepare(
-          'SELECT session_id FROM gateway_user_map WHERE platform = ? AND platform_chat_id = ?'
-        ).get(platform, platformChatId) as { session_id?: string } | undefined;
-        return { result: row?.session_id ?? undefined };
-      }
-
-      case 'gateway_user:createMapping': {
-        const p = action.payload as Record<string, unknown> | undefined;
-        if (!p) return { error: 'No payload' };
-        const now = Date.now();
-        // Support both naming conventions from Gateway
-        const sessionId = (p.session_id ?? p.sessionId) as string;
-        const platform = p.platform as string;
-        const platformUserId = (p.platform_user_id ?? p.platformUserId) as string;
-        const platformChatId = (p.platform_chat_id ?? p.platformChatId) as string;
-        if (!sessionId || !platform || !platformChatId) {
+      if (a === 'gateway_user:createMapping') {
+        const sessionId = p.session_id ?? p.sessionId;
+        const platform = p.platform;
+        const platformUserId = p.platform_user_id ?? p.platformUserId;
+        const platformChatId = p.platform_chat_id ?? p.platformChatId;
+        if (
+          typeof sessionId !== 'string' || !sessionId ||
+          typeof platform !== 'string' || !platform ||
+          typeof platformChatId !== 'string' || !platformChatId ||
+          (platformUserId !== undefined && typeof platformUserId !== 'string')
+        ) {
           getLogger().warn('gateway_user:createMapping: missing fields', {
-            sessionId, platform, platformUserId, platformChatId, payloadKeys: Object.keys(p)
+            sessionId, platform, platformUserId, platformChatId, payloadKeys: Object.keys(p),
           }, LogComponent.Gateway);
           return { error: 'Missing required fields' };
         }
-        db.prepare(`
-          INSERT INTO gateway_user_map (id, platform, platform_user_id, platform_chat_id, session_id, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(platform, platform_chat_id) DO UPDATE SET session_id = excluded.session_id, updated_at = excluded.updated_at
-        `).run(`${platform}:${platformChatId}`, platform, platformUserId, platformChatId, sessionId, now, now);
+        await api.upsertGatewayUserMapping({
+          sessionId,
+          platform,
+          platformChatId,
+          platformUserId: platformUserId ?? '',
+        });
         return { result: 'ok' };
       }
-
-      case 'gateway_user:appendMirror': {
-        // Mirror write-back: append a delivery-mirror record to the session
-        // transcript so the agent has context about what the gateway actually
-        // sent (e.g. recovered ledger redeliveries that the worker never
-        // persisted because it crashed mid-turn).
-        const p = action.payload as Record<string, unknown> | undefined;
-        if (!p) return { error: 'No payload' };
-        const sessionId = p.session_id as string;
-        const role = (p.role as string) || 'assistant';
-        const content = p.content as string;
-        if (!sessionId || typeof content !== 'string' || !content) {
-          return { error: 'Missing session_id or content' };
-        }
-        const stmt = db.prepare(`
-          INSERT INTO messages (id, session_id, role, content, msg_type, status, created_at)
-          VALUES (?, ?, ?, ?, 'text', 'done', ?)
-        `);
-        // Deterministic, unique id: mirror + timestamp + monotonic counter.
-        const now = Date.now();
-        const id = `mirror-${now}-${Math.random().toString(36).slice(2, 10)}`;
-        stmt.run(id, sessionId, role, content, now);
-        return { result: JSON.stringify({ id }) };
-      }
-
-      case 'gateway_user:getChatForSession': {
-        const p = action.payload as Record<string, unknown> | undefined;
-        if (!p) return { error: 'No payload' };
-        const sessionId = p.session_id as string;
-        const row = db.prepare(
-          'SELECT platform, platform_chat_id FROM gateway_user_map WHERE session_id = ? LIMIT 1'
-        ).get(sessionId) as { platform?: string; platform_chat_id?: string } | undefined;
-        return { result: row ? JSON.stringify({ platform: row.platform, platform_chat_id: row.platform_chat_id }) : undefined };
-      }
-
-      case 'settings:get': {
-        const p = action.payload as Record<string, unknown> | undefined;
-        const key = p?.key as string;
-        if (!key) return { error: 'Missing key' };
-        const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
-        if (row) {
-          try {
-            return { result: JSON.parse(row.value) };
-          } catch {
-            return { result: row.value };
-          }
-        }
-        return { result: undefined };
-      }
-
-      case 'settings:getJson': {
-        const p = action.payload as Record<string, unknown> | undefined;
-        const key = p?.key as string;
-        if (!key) return { error: 'Missing key' };
-        const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
-        if (row) {
-          try {
-            return { result: JSON.parse(row.value) };
-          } catch {
-            return { result: row.value };
-          }
-        }
-        return { result: undefined };
-      }
-
-      default:
-        getLogger().debug('Unknown gateway db action', { action: a }, LogComponent.Gateway);
-        return { error: `Unknown action: ${a}` };
+      const sessionId = p.session_id;
+      if (typeof sessionId !== 'string' || !sessionId) return { error: 'Missing session_id' };
+      const mapping = await api.findGatewayUserMappingBySession(sessionId);
+      return {
+        result: mapping ? JSON.stringify({ platform: mapping.platform, platform_chat_id: mapping.platformChatId }) : undefined,
+      };
+    } catch (err) {
+      getLogger().error('dispatchGatewayDbAction failed', err instanceof Error ? err : new Error(String(err)), { action: a }, LogComponent.Gateway);
+      return { error: err instanceof Error ? err.message : String(err) };
     }
-  } catch (err) {
-    getLogger().error('dispatchGatewayDbAction failed', err instanceof Error ? err : new Error(String(err)), { action: a }, LogComponent.Gateway);
-    return { error: err instanceof Error ? err.message : String(err) };
   }
+
+  if (a === 'platform:save_config' || a === 'platform:get_config' || a === 'settings:get' || a === 'settings:getJson') {
+    try {
+      const api = getDesktopHostLocalSettingsApi();
+      const payload = action.payload;
+      if (a === 'platform:save_config') {
+        if (!payload) return { error: 'No payload' };
+        const settingKeys = [
+          ['token', 'bridge_token'],
+          ['appId', 'bridge_app_id'],
+          ['appSecret', 'bridge_app_secret'],
+        ] as const;
+        for (const [field, key] of settingKeys) {
+          if (payload[field] !== undefined) {
+            await api.setSetting(key, JSON.stringify(payload[field]));
+          }
+        }
+        return { result: 'ok' };
+      }
+      if (a === 'platform:get_config') {
+        const values = await api.getSettings();
+        return {
+          result: JSON.stringify({
+            token: parseSettingValue(values.bridge_token),
+            appId: parseSettingValue(values.bridge_app_id),
+            appSecret: parseSettingValue(values.bridge_app_secret),
+          }),
+        };
+      }
+      const key = payload?.key;
+      if (typeof key !== 'string' || !key) return { error: 'Missing key' };
+      return { result: parseSettingValue((await api.getSetting(key)) ?? undefined) };
+    } catch (err) {
+      getLogger().error('dispatchGatewayDbAction failed', err instanceof Error ? err : new Error(String(err)), { action: a }, LogComponent.Gateway);
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  if (a === 'gateway_user:appendMirror') {
+    try {
+      const payload = action.payload;
+      const sessionId = payload?.session_id;
+      const content = payload?.content;
+      const role = payload?.role;
+      if (
+        typeof sessionId !== 'string' || !sessionId ||
+        typeof content !== 'string' || !content ||
+        (role !== undefined && typeof role !== 'string')
+      ) {
+        return { error: 'Missing session_id or content' };
+      }
+      const result = await getDesktopHostLocalGatewayMessageMirrorApi().appendGatewayMessageMirror({
+        sessionId,
+        content,
+        role: typeof role === 'string' && role ? role : 'assistant',
+      });
+      return { result: JSON.stringify(result) };
+    } catch (err) {
+      getLogger().error('dispatchGatewayDbAction failed', err instanceof Error ? err : new Error(String(err)), { action: a }, LogComponent.Gateway);
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  getLogger().debug('Unknown gateway db action', { action: a }, LogComponent.Gateway);
+  return { error: `Unknown action: ${a}` };
 }

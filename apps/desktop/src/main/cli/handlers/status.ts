@@ -18,7 +18,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { probePluginRegistry } from './plugins.js';
-import { getDatabase } from '../../db/connection';
+import { getDesktopHostHealthApi } from '../desktop-host-api.js';
 
 interface StatusResponse {
   version: string;
@@ -91,10 +91,10 @@ function appVersion(): string {
   return cachedVersion;
 }
 
-export function handleStatus(_req: IncomingMessage, res: ServerResponse, startedAt: number): void {
+export async function handleStatus(_req: IncomingMessage, res: ServerResponse, startedAt: number): Promise<void> {
   let dbReady = false;
   try {
-    dbReady = getDatabase() !== null;
+    dbReady = (await getDesktopHostHealthApi().getHealth()).databaseReady === true;
   } catch {
     dbReady = false;
   }

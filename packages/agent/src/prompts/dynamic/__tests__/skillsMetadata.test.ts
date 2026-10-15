@@ -34,7 +34,9 @@ import {
   SKILLS_CATALOG_FIXED_OVERHEAD_CHARS,
 } from '../skillsMetadata.js';
 
-const ASSETS_ROOT = resolve(__dirname, '../../assets');
+// The templates are owned and packaged by Host now; keep this compatibility
+// suite pointed at the production assets instead of a second Agent copy.
+const ASSETS_ROOT = resolve(__dirname, '../../../../../host/src/worker-prompts/assets');
 const sep = process.platform === 'win32' ? '\\' : '/';
 
 function makeSkill(overrides: Partial<PromptSkill> = {}): PromptSkill {

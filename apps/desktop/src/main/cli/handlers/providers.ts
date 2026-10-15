@@ -13,7 +13,7 @@ import {
   toProviderInfoDTO,
   type ProviderListItem,
   type ProviderInfoItem,
-} from '../../../../../../packages/agent/src/providers/providerService.js';
+} from '@duya/host/worker-config/provider-service';
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
   const text = JSON.stringify(body);

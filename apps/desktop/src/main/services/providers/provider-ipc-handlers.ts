@@ -132,7 +132,7 @@ export function registerProviderIpcHandlers(opts?: {
   // --- get active runtime config (privileged) ---
   ipcMain.handle(
     'provider:getActiveRuntimeConfig',
-    (event, payload: { modelId: string; capabilities?: ModelCapability }) => {
+    async (event, payload: { modelId: string; capabilities?: ModelCapability }) => {
       if (!isPrivilegedCaller(event)) {
         // Renderer should not receive secrets. We fail closed.
         return {
@@ -141,7 +141,7 @@ export function registerProviderIpcHandlers(opts?: {
           message: 'getActiveRuntimeConfig is privileged',
         };
       }
-      const r = store.getActiveProviderRuntimeConfig(
+      const r = await store.getActiveProviderRuntimeConfig(
         payload?.modelId ?? '',
         payload?.capabilities,
       );
@@ -155,7 +155,7 @@ export function registerProviderIpcHandlers(opts?: {
   // --- get runtime config by id (privileged) ---
   ipcMain.handle(
     'provider:getRuntimeConfig',
-    (
+    async (
       event,
       payload: { providerId: string; modelId: string; capabilities?: ModelCapability },
     ) => {
@@ -166,7 +166,7 @@ export function registerProviderIpcHandlers(opts?: {
           message: 'getRuntimeConfig is privileged',
         };
       }
-      const r = store.getProviderRuntimeConfig(
+      const r = await store.getProviderRuntimeConfig(
         payload?.providerId,
         payload?.modelId,
         payload?.capabilities,
@@ -197,26 +197,26 @@ export function registerProviderIpcHandlers(opts?: {
   });
 
   // --- upsert model capability (no secrets) ---
-  ipcMain.handle('provider:upsertModelCapability', (_event, capability: ModelCapability) => {
-    return store.upsertModelCapability(capability);
+  ipcMain.handle('provider:upsertModelCapability', async (_event, capability: ModelCapability) => {
+    return await store.upsertModelCapability(capability);
   });
 
   // --- list model capabilities by provider (Phase 3; merged baseline + DB overrides) ---
-  ipcMain.handle('provider:listModelCapabilities', (_event, payload: { providerId: string }) => {
-    return store.listModelCapabilitiesMerged(payload?.providerId);
+  ipcMain.handle('provider:listModelCapabilities', async (_event, payload: { providerId: string }) => {
+    return await store.listModelCapabilitiesMerged(payload?.providerId);
   });
 
   // --- get a single capability record (Phase 3) ---
-  ipcMain.handle('provider:getModelCapability', (_event, payload: { providerId: string; modelId: string }) => {
+  ipcMain.handle('provider:getModelCapability', async (_event, payload: { providerId: string; modelId: string }) => {
     // Return the merged runtime capability (config marker > DB override >
     // built-in baseline) so the chat context ring and the edit page
     // agree with what the session agent actually uses.
-    return store.resolveRuntimeCapability(payload?.providerId, payload?.modelId);
+    return await store.resolveRuntimeCapability(payload?.providerId, payload?.modelId);
   });
 
   // --- delete a capability record (Phase 3) ---
-  ipcMain.handle('provider:deleteModelCapability', (_event, payload: { providerId: string; modelId: string }) => {
-    return store.deleteModelCapability(payload?.providerId, payload?.modelId);
+  ipcMain.handle('provider:deleteModelCapability', async (_event, payload: { providerId: string; modelId: string }) => {
+    return await store.deleteModelCapability(payload?.providerId, payload?.modelId);
   });
 
   logger.info('Provider IPC handlers registered', undefined, LogComponent.AgentCommunicator);

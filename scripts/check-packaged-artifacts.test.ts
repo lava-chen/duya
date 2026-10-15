@@ -107,20 +107,24 @@ describe('extractJoinedPathLiterals', () => {
     expect(candidates[0]).toBe(PRIMARY_AGENT_ENTRY);
   });
 
-  it('keeps the debug fallbacks after the production path', () => {
+  it('keeps the development fallback after the packaged path', () => {
     // If a fallback were promoted above the bundle, the release would stop
     // exercising the artifact it ships. The first candidate is the contract.
     const source = readRepoFile(
       'apps/desktop/src/main/agents/process-pool/process-manager.ts',
     );
-    const candidates = extractJoinedPathLiterals(source, 'getAgentProcessPath');
-    expect(candidates.indexOf(PRIMARY_AGENT_ENTRY)).toBeLessThan(
-      candidates.indexOf('agent/process/agent-process-entry.js'),
+    const packagedPath = source.indexOf(
+      "path.join(process.resourcesPath, 'harness-bundle', 'worker-entry.js')",
     );
+    const developmentPath = source.indexOf(
+      "path.join(process.cwd(), 'packages', 'host', 'bundle', 'worker-entry.js')",
+    );
+    expect(packagedPath).toBeGreaterThanOrEqual(0);
+    expect(developmentPath).toBeGreaterThan(packagedPath);
   });
 
   it('recovers the bash worker path as a single relative path', () => {
-    const source = readRepoFile('packages/agent/src/tool/WorkerPool.ts');
+    const source = readRepoFile('packages/host/src/worker-tool-pool.ts');
     const candidates = extractJoinedPathLiterals(source, 'resolveBashWorkerPath');
     expect(candidates).toContain('BashTool/BashWorker.js');
   });
@@ -258,8 +262,8 @@ describe('resolveReleaseResourcesDir', () => {
 describe('checklist artifacts', () => {
   it('covers exactly the three paths AGENTS.md names', () => {
     expect(CHECKLIST_ARTIFACTS.map((a) => a.rel)).toEqual([
-      'agent-bundle/agent-process-entry.js',
-      'agent-bundle/BashTool/BashWorker.js',
+      'harness-bundle/worker-entry.js',
+      'harness-bundle/BashTool/BashWorker.js',
       'better-sqlite3/build/Release/better_sqlite3.node',
     ]);
   });
@@ -272,7 +276,7 @@ describe('checklist artifacts', () => {
     const managerSource = readRepoFile(
       'apps/desktop/src/main/agents/process-pool/process-manager.ts',
     );
-    expect(managerSource).toContain("'agent-bundle', 'agent-process-entry.js'");
+    expect(managerSource).toContain("'harness-bundle', 'worker-entry.js'");
   });
 });
 
@@ -322,10 +326,10 @@ describe('bash worker build contract', () => {
     // Static mode proves a producer NAMES the path. This proves the script
     // really builds it, so a commented-out reference cannot pass as a fix.
     const source = readRepoFile('scripts/build-agent-bundle.mjs');
-    const entryPoint = 'packages/agent/src/tool/BashTool/BashWorker.ts';
+    const entryPoint = 'packages/host/src/managed-shell/BashWorker.ts';
     expect(source).toContain(entryPoint);
     // ...and esbuild is given the real source path, not a literal file copy.
-    expect(source).toMatch(/entryPoints:\s*\[\s*'packages\/agent\/src\/tool\/BashTool\/BashWorker\.ts'\s*\]/);
+    expect(source).toMatch(/entryPoints:\s*\[\s*'packages\/host\/src\/managed-shell\/BashWorker\.ts'\s*\]/);
   });
 
   it('is verified by after-pack.js so a missing copy fails the release', () => {
@@ -338,10 +342,10 @@ describe('bash worker build contract', () => {
 
   it('is covered by the extraResources rule that ships the bundle directory', () => {
     // Structural, not a real package: the recursive filter means a new
-    // subdirectory of packages/agent/bundle/ is copied with no yml change.
+    // subdirectory of packages/host/bundle/ is copied with no yml change.
     const builderConfig = readRepoFile('electron-builder.yml');
-    expect(builderConfig).toMatch(/from:\s*packages\/agent\/bundle\//);
-    expect(builderConfig).toMatch(/to:\s*agent-bundle\//);
+    expect(builderConfig).toMatch(/from:\s*packages\/host\/bundle\//);
+    expect(builderConfig).toMatch(/to:\s*harness-bundle\//);
   });
 
   it('allows the worker NO externals, unlike the entry it sits beside', () => {

@@ -101,6 +101,26 @@ export const SUBPATH_LAYERS = new Map([
 
 const layerOf = (pkg) => LAYERS.find((l) => l.packages.includes(pkg))?.name;
 
+/**
+ * `@duya/agent` is the legacy monolith, so package ownership alone does not
+ * describe every source file's role. Its CLI and worker entrypoints are
+ * application composition code that is being retired from this package; they
+ * may wire the Host-facing CLI adapters while still consuming the lower-level
+ * runtime. Keep this path scope narrow so ordinary legacy Agent runtime files
+ * remain subject to the runtime -> host boundary.
+ */
+export function sourceLayerOf(pkg, file) {
+  const source = file.replaceAll('\\', '/');
+  if (
+    pkg === '@duya/agent' &&
+    (source.startsWith('packages/agent/src/cli/') ||
+      source === 'packages/agent/src/process/agent-process-entry.ts')
+  ) {
+    return 'host';
+  }
+  return layerOf(pkg);
+}
+
 export function layerOfSpecifier(spec) {
   let best;
   for (const [prefix, layer] of SUBPATH_LAYERS) {
@@ -136,10 +156,10 @@ function packageRoots() {
 export function findReverseEdges(roots = packageRoots()) {
   const findings = [];
   for (const [pkg, srcDir] of roots) {
-    const fromLayer = layerOf(pkg);
-    if (!fromLayer) continue;
-    const fromIndex = LAYERS.findIndex((l) => l.name === fromLayer);
     for (const file of walk(srcDir)) {
+      const fromLayer = sourceLayerOf(pkg, rel(file));
+      if (!fromLayer) continue;
+      const fromIndex = LAYERS.findIndex((l) => l.name === fromLayer);
       for (const spec of importSpecifiers(file)) {
         if (!spec.startsWith('@duya/')) continue;
         const toLayer = layerOfSpecifier(spec);
@@ -190,11 +210,11 @@ export function findRuntimeHostLeaks(pkg = '@duya/agent-runtime') {
 
 // ── G4 ──────────────────────────────────────────────────────────────────────
 
-export const WORKER_ENTRY = 'packages/agent/src/process/agent-process-entry.ts';
+export const WORKER_ENTRY = 'packages/cli/src/agent-worker-entry.ts';
 
 const BYPASS_SYMBOLS = [
-  { symbol: 'DuyaAgent', why: 'worker constructs the legacy agent directly instead of through ExecutionChannel' },
-  { symbol: 'duyaAgent', why: 'worker constructs the legacy agent directly instead of through ExecutionChannel' },
+  { symbol: 'DuyaAgent', why: 'worker constructs the legacy agent instead of entering through Host' },
+  { symbol: 'duyaAgent', why: 'worker constructs the legacy agent instead of entering through Host' },
 ];
 
 export function findWorkerSeamBypasses(entryRel = WORKER_ENTRY) {
@@ -213,11 +233,9 @@ export function findWorkerSeamBypasses(entryRel = WORKER_ENTRY) {
   return findings;
 }
 
-export function workerImplementsExecutionChannel(entryRel = WORKER_ENTRY) {
-  const abs = path.join(REPO_ROOT, entryRel);
-  if (!fs.existsSync(abs)) return false;
-  const src = code(abs);
-  return /implements\s+ExecutionChannel|:?\s*ExecutionChannel\s*=/.test(src);
+/** The production worker closure must reach the shared RunEngine owner. */
+export function workerReachesRunEngine(entryRel = WORKER_ENTRY, roots = packageRoots()) {
+  return reachabilityFrom(entryRel, roots).has('packages/agent-runtime/src/engine/run-engine.ts');
 }
 
 // ── the turn loop, located by SHAPE rather than by name ─────────────────────
@@ -1201,7 +1219,7 @@ export function findLoopMisownership(ownerPkg = EXECUTION_OWNER_PACKAGE, roots =
 // ── G6, continued: lifecycle coupling the DDL does not prove ───────────────
 
 /** Where the host keeps its durable stores; also the default G6 scan root. */
-export const HOST_DB_DIR = path.join(REPO_ROOT, 'apps', 'desktop', 'src', 'main');
+export const HOST_DB_DIR = path.join(REPO_ROOT, 'packages', 'data', 'src');
 
 /**
  * ## Why the DDL column test is not the question
@@ -1320,7 +1338,7 @@ function tableOfStatement(statement, owned) {
 /**
  * G6 — lifecycle coupling, measured over the modules that own durable tables.
  *
- * Walks the same `apps/desktop/src/main` tree as the DDL rule and keeps only
+ * Walks the `packages/data/src` tree as the DDL rule and keeps only
  * files that actually declare one of `DURABLE_IDENTITY_TABLES`, so a coupling
  * found in an unrelated store is not reported against this gate.
  *
@@ -1476,14 +1494,18 @@ export function findCoreIoReach(layer = 'core', roots = packageRoots()) {
 
 export const DURABLE_IDENTITY_TABLES = ['runs', 'tasks', 'session_goals'];
 
-/** `db/core/**` is duya-core.db; the rest of db/ is duya-main.db. */
+/** CoreStores and RunStore use duya-core.db; main-schema uses duya-main.db. */
 export function databaseOfFile(relFile) {
-  return relFile.includes('/db/core/') ? 'core.db' : 'main.db';
+  return relFile.includes('/db/core/') ||
+    relFile === 'packages/data/src/core-stores.ts' ||
+    relFile === 'packages/data/src/run-store.ts'
+    ? 'core.db'
+    : 'main.db';
 }
 
 /** DDL that exists but has no reader or writer. */
 export const DEAD_TABLE_DEFINITIONS = [
-  { file: 'apps/desktop/src/main/db/schema.ts', table: 'tasks', database: 'main.db' },
+  { file: 'packages/data/src/main-schema.ts', table: 'tasks', database: 'main.db' },
 ];
 
 export function findSessionRootedTables(tables = DURABLE_IDENTITY_TABLES, dir = HOST_DB_DIR) {
@@ -1526,7 +1548,7 @@ export function collectBoundaryReport() {
     { gate: 'G3', title: 'runtime does not reach into host internals', findings: findRuntimeHostLeaks() },
     {
       gate: 'G4',
-      title: 'worker implements ExecutionChannel, not DuyaAgent',
+      title: 'Host worker uses the RunEngine, not legacy DuyaAgent',
       findings: findWorkerSeamBypasses(),
     },
     {
@@ -1635,7 +1657,7 @@ export function writeBaseline(reports = collectBoundaryReport()) {
     `${JSON.stringify(
       {
         $comment:
-          'Plan 600 boundary-gate baseline. Entries are KNOWN findings, recorded so the gate fails only on NEW ones while G4/G6 stay open. Regenerate with `npm run architecture:boundaries -- --write` after a fix and review the diff: a shrinking set is a real fix, an unchanged one means nothing moved.',
+          'Plan 600 boundary-gate baseline. Entries are KNOWN findings, recorded so the gate fails only on NEW ones while unresolved G6 debt stays visible. Regenerate with `npm run architecture:boundaries -- --write` after a fix and review the diff: a shrinking set is a real fix, an unchanged one means nothing moved.',
         gate: 'plan-600-boundaries',
         entries,
       },

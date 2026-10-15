@@ -395,7 +395,7 @@ export function registerPluginHandlers(): void {
       const secretIds = new Set(
         manifestSetup.filter((f) => f.type === 'secret').map((f) => f.id),
       );
-      const stored = manager.getSetupValues(pluginId);
+      const stored = await manager.getSetupValues(pluginId);
       const values: Record<string, string> = {};
       for (const [key, value] of Object.entries(stored)) {
         // Never echo secrets back to the renderer.
@@ -428,8 +428,8 @@ export function registerPluginHandlers(): void {
         return { success: false, data: null, error: 'pluginId is required' };
       }
       const values = payload.values && typeof payload.values === 'object' ? payload.values : {};
-      manager.saveSetupValues(payload.pluginId, values);
-      logger.debug('plugin:setup:save', { pluginId, fieldCount: Object.keys(values).length }, COMPONENT);
+      await manager.saveSetupValues(payload.pluginId, values);
+      logger.debug('plugin:setup:save', { pluginId: payload.pluginId, fieldCount: Object.keys(values).length }, COMPONENT);
       return { success: true, data: { ok: true } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

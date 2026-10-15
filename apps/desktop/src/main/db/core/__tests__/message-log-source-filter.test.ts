@@ -20,7 +20,7 @@ import Database from 'better-sqlite3';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { AgentMessage, MessageEntry } from '@duya/agent/message';
+import type { AgentMessage, MessageEntry } from '@duya/agent-core/message';
 import { MessageLog, type NewEvent, type SqliteDatabase } from '../message-log';
 
 let nativeSqliteAvailable = true;

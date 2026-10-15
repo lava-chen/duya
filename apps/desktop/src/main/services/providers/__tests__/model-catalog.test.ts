@@ -75,52 +75,52 @@ function makeAnthropicProvider(id: string, isActive = false): ApiProvider {
 }
 
 describe('ModelCatalogStore — override layer', () => {
-  it('getOverrides / upsertOverride round-trip through the inner store', () => {
+  it('getOverrides / upsertOverride round-trip through the inner store', async () => {
     const inner = new InMemoryCapabilityStore();
     const catalog = new ModelCatalogStore(inner);
-    catalog.upsertOverride({
+    await catalog.upsertOverride({
       providerId: 'a',
       modelId: 'm',
       contextWindow: 1000,
       source: 'user',
       updatedAt: 0,
     });
-    expect(catalog.getOverrides('a', 'm')?.contextWindow).toBe(1000);
+    expect((await catalog.getOverrides('a', 'm'))?.contextWindow).toBe(1000);
     expect(inner.getOne('a', 'm')?.contextWindow).toBe(1000);
   });
 
-  it('never persists a preset row — coerced to user', () => {
+  it('never persists a preset row — coerced to user', async () => {
     const inner = new InMemoryCapabilityStore();
     const catalog = new ModelCatalogStore(inner);
-    catalog.upsertOverride({
+    await catalog.upsertOverride({
       providerId: 'a',
       modelId: 'm',
       source: 'preset',
       updatedAt: 0,
     });
-    const stored = catalog.getOverrides('a', 'm');
+    const stored = await catalog.getOverrides('a', 'm');
     expect(stored?.source).toBe('user');
     expect(inner.getOne('a', 'm')?.source).toBe('user');
   });
 
-  it('keeps models-api as a legitimate runtime override source', () => {
+  it('keeps models-api as a legitimate runtime override source', async () => {
     const inner = new InMemoryCapabilityStore();
     const catalog = new ModelCatalogStore(inner);
-    catalog.upsertOverride({
+    await catalog.upsertOverride({
       providerId: 'a',
       modelId: 'm',
       source: 'models-api',
       updatedAt: 0,
     });
-    expect(catalog.getOverrides('a', 'm')?.source).toBe('models-api');
+    expect((await catalog.getOverrides('a', 'm'))?.source).toBe('models-api');
   });
 
-  it('deleteOverride removes a single override row', () => {
+  it('deleteOverride removes a single override row', async () => {
     const inner = new InMemoryCapabilityStore();
     const catalog = new ModelCatalogStore(inner);
-    catalog.upsertOverride({ providerId: 'a', modelId: 'm', source: 'user', updatedAt: 0 });
-    expect(catalog.deleteOverride('a', 'm')).toBe(true);
-    expect(catalog.getOverrides('a', 'm')).toBeUndefined();
+    await catalog.upsertOverride({ providerId: 'a', modelId: 'm', source: 'user', updatedAt: 0 });
+    expect(await catalog.deleteOverride('a', 'm')).toBe(true);
+    expect(await catalog.getOverrides('a', 'm')).toBeUndefined();
   });
 });
 
@@ -137,7 +137,7 @@ describe('ProviderStore — DB override feeds runtime config', () => {
     store.migrateAllLegacyProviders();
   });
 
-  it('getActiveProviderRuntimeConfig auto-loads the DB override as capabilities', () => {
+  it('getActiveProviderRuntimeConfig auto-loads the DB override as capabilities', async () => {
     dao.upsert({
       providerId: 'anthropic',
       modelId: 'claude-sonnet-4-20250514',
@@ -146,14 +146,14 @@ describe('ProviderStore — DB override feeds runtime config', () => {
       updatedAt: 0,
     });
     // No capabilities passed — the store must pull the DB row itself.
-    const r = store.getActiveProviderRuntimeConfig('claude-sonnet-4-20250514');
+    const r = await store.getActiveProviderRuntimeConfig('claude-sonnet-4-20250514');
     expect('error' in r).toBe(false);
     if (!('error' in r)) {
       expect(r.modelCapabilities?.contextWindow).toBe(300_000);
     }
   });
 
-  it('getProviderRuntimeConfig auto-loads the DB override as capabilities', () => {
+  it('getProviderRuntimeConfig auto-loads the DB override as capabilities', async () => {
     dao.upsert({
       providerId: 'anthropic',
       modelId: 'claude-sonnet-4-20250514',
@@ -161,14 +161,14 @@ describe('ProviderStore — DB override feeds runtime config', () => {
       source: 'user',
       updatedAt: 0,
     });
-    const r = store.getProviderRuntimeConfig('anthropic', 'claude-sonnet-4-20250514');
+    const r = await store.getProviderRuntimeConfig('anthropic', 'claude-sonnet-4-20250514');
     expect('error' in r).toBe(false);
     if (!('error' in r)) {
       expect(r.modelCapabilities?.contextWindow).toBe(400_000);
     }
   });
 
-  it('explicitly-passed capabilities still win over the DB row', () => {
+  it('explicitly-passed capabilities still win over the DB row', async () => {
     dao.upsert({
       providerId: 'anthropic',
       modelId: 'claude-sonnet-4-20250514',
@@ -176,7 +176,7 @@ describe('ProviderStore — DB override feeds runtime config', () => {
       source: 'user',
       updatedAt: 0,
     });
-    const r = store.getProviderRuntimeConfig(
+    const r = await store.getProviderRuntimeConfig(
       'anthropic',
       'claude-sonnet-4-20250514',
       {
@@ -230,7 +230,7 @@ describe('ProviderStore — listModelCapabilitiesMerged baseline + override', ()
       source: 'user',
       updatedAt: 0,
     });
-    const merged = store.listModelCapabilitiesMerged('anthropic');
+    const merged = await store.listModelCapabilitiesMerged('anthropic');
 
     const overridden = merged.find((m) => m.modelId === baseline.id);
     expect(overridden).toBeTruthy();
@@ -246,16 +246,16 @@ describe('ProviderStore — listModelCapabilitiesMerged baseline + override', ()
     expect(baselineContext).toBeGreaterThan(0);
   });
 
-  it('returns DB rows only when the provider is unknown (no baseline)', () => {
+  it('returns DB rows only when the provider is unknown (no baseline)', async () => {
     dao.upsert({ providerId: 'custom', modelId: 'm-x', source: 'user', updatedAt: 0 });
-    const merged = store.listModelCapabilitiesMerged('custom');
+    const merged = await store.listModelCapabilitiesMerged('custom');
     expect(merged).toHaveLength(1);
     expect(merged[0].modelId).toBe('m-x');
   });
 
-  it('listModelCapabilities still returns DB rows (unmerged, legacy behavior)', () => {
+  it('listModelCapabilities still returns DB rows (unmerged, legacy behavior)', async () => {
     dao.upsert({ providerId: 'anthropic', modelId: 'm-x', source: 'user', updatedAt: 0 });
-    const rows = store.listModelCapabilities('anthropic');
+    const rows = await store.listModelCapabilities('anthropic');
     expect(rows).toHaveLength(1);
     expect(rows[0].modelId).toBe('m-x');
   });

@@ -6,12 +6,14 @@
     "counts": {
       "cycle": 9,
       "deep-import": 25,
-      "module-dependency": 380,
+      "module-dependency": 382,
       "module-dependency-permitted": 370,
       "package-boundary-escape": 146
     }
   },
   "violations": [
+    "b7118efb6afbe6c4",
+    "908c21f0f70be587",
     "059f2a67496fb1c0",
     "271a422e8508d5ba",
     "33b38b25ab12ab30",

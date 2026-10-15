@@ -1,5 +1,1 @@
-/**
- * Session Tool Constants (Plan 504 — grok CloudAgent parity, minimal loop).
- */
-
-export const SESSION_TOOL_NAME = 'session';
+export { SESSION_TOOL_NAME } from '@duya/capabilities/session-tool';

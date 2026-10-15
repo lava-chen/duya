@@ -15,9 +15,9 @@ import {
   parseIpcPayload,
   RecordIdSchema,
 } from '../ipc/contracts';
-import { getCoreStores } from '../db/core-connection';
 import { getLogger, LogComponent } from '../logging/logger';
 import { dispatchDbAction, handleDbRequest as processDbRequest, type DbRequest, type DbResponse } from './db-bridge';
+import { getDesktopHostSessionApi } from '../cli/desktop-host-api';
 import { getProviderStore } from '../services/providers/provider-store-electron';
 import { getConfigStore } from '../config/store-instance';
 import { toLegacyApiProvider, migrateLegacyApiProvider } from '../../renderer/lib/providers/legacy';
@@ -158,12 +158,12 @@ export function registerAgentHandlers(): void {
   // the agent server's IPC round-trip.
 
   // Handler to get masked provider config for renderer (no API key exposure)
-  ipcMain.handle('agent:getMaskedProviderConfig', (_event, sessionId: string) => {
+  ipcMain.handle('agent:getMaskedProviderConfig', async (_event, sessionId: string) => {
     const store = getProviderStore();
     store.migrateAllLegacyProviders();
 
-    // Read provider_id / model from the core sessions store (plan 328).
-    const session = getCoreStores().sessions.get(sessionId);
+    // Session identity and provider selection are read through the Host API.
+    const session = await getDesktopHostSessionApi().get(sessionId);
 
     let provider: ApiProvider | null = null;
     if (session?.providerId) {
@@ -308,7 +308,7 @@ export function registerAgentHandlers(): void {
   // (`provider` / `providerType` / `authStyle`) are still populated so
   // the existing agent runtime keeps working. New agent code should
   // prefer the `runtimeConfig` field.
-  ipcMain.handle('config:provider:getActiveProviderConfig', () => {
+  ipcMain.handle('config:provider:getActiveProviderConfig', async () => {
     const store = getProviderStore();
     store.migrateAllLegacyProviders();
 
@@ -338,7 +338,7 @@ export function registerAgentHandlers(): void {
     const llm = getDefaultOrFirstLlmProvider(store);
     let runtimeConfig: Record<string, unknown> | null = null;
     if (llm) {
-      const capability = store.resolveRuntimeCapability(llm.id, model);
+      const capability = await store.resolveRuntimeCapability(llm.id, model);
       const cfg = buildRuntimeConfig(llm, {
         modelId: model,
         capabilities: capability,
@@ -374,7 +374,7 @@ export function registerAgentHandlers(): void {
   });
 
   // Get provider config by ID with unmasked API key (for title generation model resolution)
-  ipcMain.handle('config:provider:getConfig', (_event, providerId: string, model: string) => {
+  ipcMain.handle('config:provider:getConfig', async (_event, providerId: string, model: string) => {
     const store = getProviderStore();
     store.migrateAllLegacyProviders();
     const providerLlm = store.getLlmProvider(providerId);
@@ -398,7 +398,7 @@ export function registerAgentHandlers(): void {
     const llm = store.getLlmProvider(providerId);
     let runtimeConfig: Record<string, unknown> | null = null;
     if (llm) {
-      const capability = store.resolveRuntimeCapability(providerId, resolvedModel);
+      const capability = await store.resolveRuntimeCapability(providerId, resolvedModel);
       const cfg = buildRuntimeConfig(llm, {
         modelId: resolvedModel,
         capabilities: capability,

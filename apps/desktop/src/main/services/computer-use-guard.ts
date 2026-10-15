@@ -168,16 +168,9 @@ export async function assertAppAllowed(
   } else {
     // Foreground semantics (vision path parity): read the OS context.
     try {
-      // Lazy import mirrors ipc/computer-use.ts (no hard agent dep).
-      const { getOSContextBridge } = (require('../../../../../packages/agent/dist/context/os-context/index.js') as {
-        getOSContextBridge: () => {
-          getCurrent: () => {
-            foreground?: { exeName?: string; title?: string } | null;
-            focusedEntity?: unknown;
-          } | null;
-        };
-      });
-      const ctx = getOSContextBridge().getCurrent();
+      // Keep the Host context service lazy until foreground data is needed.
+      const { getOSContextBridge } = await import('@duya/host/worker-os-context');
+      const ctx = getOSContextBridge(logger).getCurrent();
       processName = ctx?.foreground?.exeName ?? null;
       title = ctx?.foreground?.title ?? null;
       focusedEntity = ctx?.focusedEntity ?? null;

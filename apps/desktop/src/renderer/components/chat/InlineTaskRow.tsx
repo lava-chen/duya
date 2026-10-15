@@ -13,7 +13,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { Task, TaskStatus } from '@duya/agent';
+import type { Task, TaskStatus } from '@duya/agent-protocol';
 import {
   CheckIcon,
   CircleIcon,

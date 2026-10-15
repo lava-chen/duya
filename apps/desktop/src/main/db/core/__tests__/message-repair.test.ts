@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { repairInterruptedToolCalls } from '../message-repair';
 import type { TimelineEntryRow } from '../message-log';
-import type { MessageEntry } from '@duya/agent/message';
+import type { MessageEntry } from '@duya/agent-core/message';
 
 // ─── Builders ───
 

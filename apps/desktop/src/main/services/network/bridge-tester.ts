@@ -1,15 +1,10 @@
-import { getDatabase } from '../../ipc/db-handlers';
 import { proxyRequest } from '../proxy';
 import { getLogger, LogComponent } from '../../logging/logger';
 import { getConfigStore } from '../../config/store-instance';
 import { readGatewaySettingFromStore } from '../../config/gateway-setting-adapter';
+import { getWeixinAccounts } from '../weixin-account-store';
 
 export async function testBridgeChannel(channel: string): Promise<{ success: boolean; message: string; details?: string }> {
-  const db = getDatabase();
-  if (!db) {
-    return { success: false, message: 'Database not available', details: 'Cannot connect to database' };
-  }
-
   switch (channel) {
     case 'telegram': {
       // Read from ConfigStore (single source of truth since plan 334/335);
@@ -94,119 +89,118 @@ export async function testBridgeChannel(channel: string): Promise<{ success: boo
     }
 
     case 'weixin': {
-      const db2 = getDatabase();
-      if (db2) {
-        const accountRow = db2.prepare(
-          'SELECT account_id, user_id, token, base_url FROM weixin_accounts WHERE enabled = 1 ORDER BY last_login_at DESC LIMIT 1'
-        ).get() as { account_id: string; user_id: string; token: string; base_url: string } | undefined;
+      const configStore = getConfigStore();
+      const enabledAccounts = getWeixinAccounts().filter((account) => account.enabled);
+      const selectedAccountId = readGatewaySettingFromStore(configStore, 'weixin_account_id');
+      const accountRow = enabledAccounts.find((account) => account.account_id === selectedAccountId)
+        ?? enabledAccounts[enabledAccounts.length - 1];
 
-        if (accountRow?.token) {
-          getLogger().info(
-            '[WeixinTest] Testing account from weixin_accounts',
-            { accountId: accountRow.account_id, userId: accountRow.user_id },
-            LogComponent.NetHandlers
-          );
+      if (accountRow?.token) {
+        getLogger().info(
+          '[WeixinTest] Testing account from ConfigStore',
+          { accountId: accountRow.account_id, userId: accountRow.user_id },
+          LogComponent.NetHandlers
+        );
 
-          try {
-            const baseUrl = accountRow.base_url || 'https://ilinkai.weixin.qq.com';
-            const randomUin = Buffer.from(String(Math.floor(Math.random() * 4294967295)), 'utf-8').toString('base64');
+        try {
+          const baseUrl = accountRow.base_url || 'https://ilinkai.weixin.qq.com';
+          const randomUin = Buffer.from(String(Math.floor(Math.random() * 4294967295)), 'utf-8').toString('base64');
 
-            const response = await fetch(`${baseUrl}/ilink/bot/getupdates`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'AuthorizationType': 'ilink_bot_token',
-                'Authorization': `Bearer ${accountRow.token}`,
-                'X-WECHAT-UIN': randomUin,
-              },
-              body: JSON.stringify({
-                get_updates_buf: '',
-                base_info: { channel_version: '1.0.2' }
-              }),
-              signal: AbortSignal.timeout(5_000),
-            });
+          const response = await fetch(`${baseUrl}/ilink/bot/getupdates`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'AuthorizationType': 'ilink_bot_token',
+              'Authorization': `Bearer ${accountRow.token}`,
+              'X-WECHAT-UIN': randomUin,
+            },
+            body: JSON.stringify({
+              get_updates_buf: '',
+              base_info: { channel_version: '1.0.2' }
+            }),
+            signal: AbortSignal.timeout(5_000),
+          });
 
-            if (response.ok) {
-              const data = await response.json() as { ret?: number; errcode?: number; errmsg?: string };
-              const apiErrcode = data.errcode ?? data.ret ?? 0;
-              getLogger().info(
-                '[WeixinTest] getupdates response',
-                { errcode: data.errcode, ret: data.ret, apiErrcode, errmsg: data.errmsg },
-                LogComponent.NetHandlers
-              );
-              if (apiErrcode === 0) {
-                return {
-                  success: true,
-                  message: 'WeChat connection successful',
-                  details: `Connected as ${accountRow.account_id}`
-                };
-              } else if (apiErrcode === -14) {
-                return {
-                  success: false,
-                  message: 'Session paused',
-                  details: 'WeChat session is temporarily paused (will auto-retry in 60 minutes). If this persists, please scan QR code again.'
-                };
-              } else {
-                return {
-                  success: false,
-                  message: 'WeChat API error',
-                  details: data.errmsg || `Error code: ${apiErrcode}`
-                };
-              }
-            } else {
-              return {
-                success: false,
-                message: 'Connection failed',
-                details: `HTTP ${response.status}`
-              };
-            }
-          } catch (err) {
-            if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
-              getLogger().info(
-                '[WeixinTest] getupdates timeout - token is valid (no new messages)',
-                { accountId: accountRow.account_id },
-                LogComponent.NetHandlers
-              );
+          if (response.ok) {
+            const data = await response.json() as { ret?: number; errcode?: number; errmsg?: string };
+            const apiErrcode = data.errcode ?? data.ret ?? 0;
+            getLogger().info(
+              '[WeixinTest] getupdates response',
+              { errcode: data.errcode, ret: data.ret, apiErrcode, errmsg: data.errmsg },
+              LogComponent.NetHandlers
+            );
+            if (apiErrcode === 0) {
               return {
                 success: true,
                 message: 'WeChat connection successful',
                 details: `Connected as ${accountRow.account_id}`
               };
+            } else if (apiErrcode === -14) {
+              return {
+                success: false,
+                message: 'Session paused',
+                details: 'WeChat session is temporarily paused (will auto-retry in 60 minutes). If this persists, please scan QR code again.'
+              };
+            } else {
+              return {
+                success: false,
+                message: 'WeChat API error',
+                details: data.errmsg || `Error code: ${apiErrcode}`
+              };
             }
+          } else {
             return {
               success: false,
               message: 'Connection failed',
-              details: err instanceof Error ? err.message : 'Network error'
+              details: `HTTP ${response.status}`
             };
           }
-        } else {
-          const tokenRow = db2.prepare("SELECT value FROM settings WHERE key = 'weixin_bot_token'").get() as { value: string } | undefined;
-          if (tokenRow?.value) {
-            getLogger().warn(
-              '[WeixinTest] No enabled account in weixin_accounts, falling back to settings',
-              undefined,
+        } catch (err) {
+          if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+            getLogger().info(
+              '[WeixinTest] getupdates timeout - token is valid (no new messages)',
+              { accountId: accountRow.account_id },
               LogComponent.NetHandlers
             );
-            try {
-              const baseUrl = 'https://ilinkai.weixin.qq.com';
-              const response = await fetch(`${baseUrl}/ilink/bot/getupdates?bot_token=${encodeURIComponent(tokenRow.value)}&cursor=`, {
-                method: 'GET',
-                signal: AbortSignal.timeout(10_000),
-              });
-
-              if (response.ok) {
-                const data = await response.json() as { ret?: number; errcode?: number; errmsg?: string };
-                const apiErrcode = data.errcode ?? data.ret ?? 0;
-                if (apiErrcode === 0) {
-                  return { success: true, message: 'WeChat connection successful', details: 'Connected (legacy mode)' };
-                } else if (apiErrcode === -14) {
-                  return { success: false, message: 'Session expired', details: 'Please scan QR code again to re-authenticate' };
-                } else {
-                  return { success: false, message: 'WeChat API error', details: data.errmsg || `Error code: ${apiErrcode}` };
-                }
-              }
-            } catch { /* ignore */ }
+            return {
+              success: true,
+              message: 'WeChat connection successful',
+              details: `Connected as ${accountRow.account_id}`
+            };
           }
+          return {
+            success: false,
+            message: 'Connection failed',
+            details: err instanceof Error ? err.message : 'Network error'
+          };
+        }
+      } else {
+        const token = readGatewaySettingFromStore(configStore, 'weixin_bot_token');
+        if (token) {
+          getLogger().warn(
+            '[WeixinTest] No enabled account in ConfigStore, falling back to legacy token',
+            undefined,
+            LogComponent.NetHandlers
+          );
+          try {
+            const baseUrl = 'https://ilinkai.weixin.qq.com';
+            const response = await fetch(`${baseUrl}/ilink/bot/getupdates?bot_token=${encodeURIComponent(token)}&cursor=`, {
+              method: 'GET',
+              signal: AbortSignal.timeout(10_000),
+            });
+
+            if (response.ok) {
+              const data = await response.json() as { ret?: number; errcode?: number; errmsg?: string };
+              const apiErrcode = data.errcode ?? data.ret ?? 0;
+              if (apiErrcode === 0) {
+                return { success: true, message: 'WeChat connection successful', details: 'Connected (legacy mode)' };
+              } else if (apiErrcode === -14) {
+                return { success: false, message: 'Session expired', details: 'Please scan QR code again to re-authenticate' };
+              } else {
+                return { success: false, message: 'WeChat API error', details: data.errmsg || `Error code: ${apiErrcode}` };
+              }
+            }
+          } catch { /* ignore */ }
         }
       }
       return { success: false, message: 'WeChat requires QR code login', details: 'No WeChat token found. Please scan QR code to authenticate.' };

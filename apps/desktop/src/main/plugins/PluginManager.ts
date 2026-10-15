@@ -6,7 +6,7 @@ import { getPluginCatalog, getPluginCatalogEntry, getLocalPluginPaths, getBuilti
 import { listCapabilityKinds, readPluginManifest } from './manifest';
 import { clonePluginFromGit } from './marketplace/git-source';
 import { PluginRegistryStore } from './PluginRegistryStore';
-import { PluginSetupStore } from './PluginSetupStore';
+import { getDesktopHostLocalPluginSetupApi } from '../cli/desktop-host-api';
 import { notifyMcpConfigChanged } from '../services/mcp-write-reload';
 import {
   ensurePluginCacheDir,
@@ -89,7 +89,8 @@ function hasPluginManifest(pluginDir: string): boolean {
 export class PluginManager {
   private readonly logger = getLogger();
   private readonly store = new PluginRegistryStore();
-  private readonly setupStore = new PluginSetupStore();
+  private readonly setupValuesCache = new Map<string, Record<string, string>>();
+  private setupValuesCacheReady = false;
   private readonly pathValidator = new PathSafetyValidator();
   private readonly trustEngine = new TrustEngine();
   private readonly permissionService = new PermissionService();
@@ -137,6 +138,28 @@ export class PluginManager {
     return registry.map((entry) => this.hydrateViewItem(entry));
   }
 
+  /** Prime the synchronous plugin view from the Host-owned setup-value API. */
+  async refreshSetupValuesCache(): Promise<boolean> {
+    try {
+      const values = await getDesktopHostLocalPluginSetupApi().listPluginSetupValues();
+      this.setupValuesCache.clear();
+      for (const [pluginId, pluginValues] of Object.entries(values)) {
+        this.setupValuesCache.set(pluginId, pluginValues);
+      }
+      this.setupValuesCacheReady = true;
+      return true;
+    } catch (error) {
+      this.setupValuesCache.clear();
+      this.setupValuesCacheReady = false;
+      this.logger.warn(
+        'Failed to refresh plugin setup state from Host (non-fatal)',
+        { error: String(error) },
+        LogComponent.Main,
+      );
+      return false;
+    }
+  }
+
   /**
    * Merge a minimal registry entry into a full `PluginViewItem`.
    *
@@ -149,7 +172,7 @@ export class PluginManager {
    *  - `installPath`                           -> entry, else resolved installed symlink
    *  - `dataPath`                              -> `plugins-data/<id>` (derived from store layout)
    *  - `grantedPermissions`                    -> catalog manifest permissions
-   *  - `setupState`                            -> recomputed from manifest + setup store (SQLite `plugin_setup_values`)
+   *  - `setupState`                            -> recomputed from manifest + Host-owned setup values
    *  - `health`                                -> derived from `enabled`/`setupState`
    *  - `capabilityKinds`                       -> catalog manifest
    *
@@ -230,14 +253,18 @@ export class PluginManager {
   /**
    * Compute the dynamic setup state for a plugin by checking the manifest's
    * required setup fields against the values actually stored in
-   * `PluginSetupStore`. `app-connection` fields are skipped — their
+   * Host's Data-backed plugin setup store. `app-connection` fields are skipped — their
    * satisfaction comes from the OAuth connection status, not this store.
    *
    * Returns `'complete'` when the plugin has no required setup fields, or
    * when every required text/secret/path/url field has a non-empty stored
    * value. Otherwise returns `'needs_setup'`.
    */
-  private computeSetupState(pluginId: string, manifest: PluginManifest): PluginSetupState {
+  private computeSetupState(
+    pluginId: string,
+    manifest: PluginManifest,
+    storedValues?: Record<string, string>,
+  ): PluginSetupState {
     const setupFields = manifest.setup ?? [];
     if (setupFields.length === 0) return 'complete';
     const requiredFields = setupFields.filter(
@@ -245,14 +272,12 @@ export class PluginManager {
     );
     if (requiredFields.length === 0) return 'complete';
 
-    let stored: Record<string, string>;
-    try {
-      stored = this.setupStore.getAll(pluginId);
-    } catch {
-      // DB unavailable (safe mode) — fall back to needs_setup so the user
-      // is prompted to fill values once the DB comes back online.
+    if (!this.setupValuesCacheReady && storedValues === undefined) {
+      // Until the Host cache has been populated, fail closed and ask the user
+      // to review setup rather than implying required values are present.
       return 'needs_setup';
     }
+    const stored = storedValues ?? this.setupValuesCache.get(pluginId) ?? {};
     const allSatisfied = requiredFields.every((f) => {
       const v = stored[f.id];
       return v !== undefined && v !== '';
@@ -265,12 +290,9 @@ export class PluginManager {
    * callers can mutate freely. Secrets are returned as-is here; masking
    * for IPC transport is the responsibility of the handler layer.
    */
-  getSetupValues(pluginId: string): Record<string, string> {
-    try {
-      return this.setupStore.getAll(pluginId);
-    } catch {
-      return {};
-    }
+  async getSetupValues(pluginId: string): Promise<Record<string, string>> {
+    if (!(await this.refreshSetupValuesCache())) return {};
+    return { ...(this.setupValuesCache.get(pluginId) ?? {}) };
   }
 
   /**
@@ -284,10 +306,9 @@ export class PluginManager {
    * is updated, and the agent server is notified so workers reload MCP
    * with the new `${setup.X}` substitutions.
    */
-  saveSetupValues(pluginId: string, values: Record<string, string>): void {
-    const existing = this.getSetupValues(pluginId);
-    const merged: Record<string, string> = { ...existing, ...values };
-    this.setupStore.setAll(pluginId, merged);
+  async saveSetupValues(pluginId: string, values: Record<string, string>): Promise<void> {
+    await getDesktopHostLocalPluginSetupApi().mergePluginSetupValues(pluginId, values);
+    await this.refreshSetupValuesCache();
 
     const catalog = getPluginCatalogEntry(pluginId);
     const manifest = catalog?.manifest;
@@ -483,7 +504,7 @@ export class PluginManager {
       }
 
       const now = new Date().toISOString();
-      const setupState = this.computeSetupState(catalogEntry.id, catalogEntry.manifest);
+      const setupState = await this.computeSetupStateFromHost(catalogEntry.id, catalogEntry.manifest);
       const entry: PluginRegistryEntry = {
         id: catalogEntry.id,
         name: catalogEntry.name,
@@ -564,7 +585,7 @@ export class PluginManager {
       }
 
       const now = new Date().toISOString();
-      const setupState = this.computeSetupState(pluginId, manifest);
+      const setupState = await this.computeSetupStateFromHost(pluginId, manifest);
       const entry: PluginRegistryEntry = {
         id: pluginId,
         name: pluginName,
@@ -633,7 +654,7 @@ export class PluginManager {
   }
 
   async remove(pluginId: string, deleteData: boolean): Promise<PluginResult<{ removed: boolean }>> {
-    return withPluginErrorSync(pluginId, 'remove', () => {
+    return withPluginError(pluginId, 'remove', async () => {
       if (this.policyEngine.isManagedPluginLocked(pluginId)) {
         const err: PluginError = {
           type: 'generic-error',
@@ -664,7 +685,8 @@ export class PluginManager {
         // Also purge stored setup values so a reinstall does not resurrect
         // stale secrets from a previous install of the same plugin id.
         try {
-          this.setupStore.clear(pluginId);
+          await getDesktopHostLocalPluginSetupApi().clearPluginSetupValues(pluginId);
+          this.setupValuesCache.delete(pluginId);
         } catch (err) {
           this.logger.warn(
             'Failed to clear plugin setup values on remove (non-fatal)',
@@ -679,6 +701,18 @@ export class PluginManager {
       this.logger.info('Plugin removed', { pluginId, deleteData }, LogComponent.Main);
       return { removed: true };
     });
+  }
+
+  private async computeSetupStateFromHost(
+    pluginId: string,
+    manifest: PluginManifest,
+  ): Promise<PluginSetupState> {
+    const requiredFields = (manifest.setup ?? []).filter(
+      (field) => field.required && field.type !== 'app-connection',
+    );
+    if (requiredFields.length === 0) return 'complete';
+    const stored = await this.getSetupValues(pluginId);
+    return this.computeSetupState(pluginId, manifest, stored);
   }
 
   buildHealthIssue(err: PluginError) {

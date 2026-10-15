@@ -58,12 +58,12 @@ vi.mock('../logging/logger', () => ({
   LogComponent: { Main: 'Main' },
 }));
 
-vi.mock('./PluginSetupStore', () => ({
-  PluginSetupStore: class {
-    getAll() {
-      return {};
-    }
-  },
+vi.mock('../cli/desktop-host-api', () => ({
+  getDesktopHostLocalPluginSetupApi: () => ({
+    listPluginSetupValues: async () => ({}),
+    mergePluginSetupValues: async () => undefined,
+    clearPluginSetupValues: async () => undefined,
+  }),
 }));
 
 vi.mock('./catalog', () => ({

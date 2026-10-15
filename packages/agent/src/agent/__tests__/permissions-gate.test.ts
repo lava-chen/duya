@@ -49,6 +49,23 @@ function makeDeps(
 }
 
 describe('buildPermissions deny-reason propagation', () => {
+  it('binds prototype session methods and keeps mode reads live', async () => {
+    class Session {
+      mode: PermissionsGateDeps['getPermissionMode'] extends () => infer Mode ? Mode : never = 'default';
+      getPermissionMode() { return this.mode; }
+    }
+    const { getPermissionMode: _method, ...fields } = makeDeps({
+      hasPermissionsToUseTool: async (_name, _input, context) => ({
+        behavior: context.getAppState().toolPermissionContext.mode === 'dontAsk' ? 'allow' : 'ask',
+      }),
+    });
+    const session = Object.assign(new Session(), fields);
+    const { canUseTool } = buildPermissions(session, makeTurn());
+    expect((await canUseTool('Bash', {})).behavior).toBe('ask');
+    session.mode = 'dontAsk';
+    expect((await canUseTool('Bash', {})).behavior).toBe('allow');
+  });
+
   it('passes the engine deny message through to the executor', async () => {
     const { canUseTool } = buildPermissions(
       makeDeps({

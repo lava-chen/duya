@@ -22,8 +22,8 @@ import Database from 'better-sqlite3';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { MessageEntry, CompactionEntry, AgentMessage } from '@duya/agent/message';
-import { THREAD_METADATA_KEY } from '@duya/agent/message';
+import type { MessageEntry, CompactionEntry, AgentMessage } from '@duya/agent-core/message';
+import { THREAD_METADATA_KEY } from '@duya/agent-core/message';
 import {
   MessageLog,
   ImportValidationError,

@@ -219,7 +219,6 @@ function createShadowFixture(
 function toDeps(f: ShadowFixture): MemoryWorkerDeps {
   return {
     memoryDb: f.memoryDb,
-    mainDb: f.mainDb,
     llmClient: f.llmClient,
     rootDir: f.memoryRoot,
     // The port `@duya/memory` requires. Reads the same table the mocked agent

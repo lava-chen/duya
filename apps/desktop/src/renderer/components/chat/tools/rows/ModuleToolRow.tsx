@@ -1,5 +1,5 @@
 // ModuleToolRow — handles the `read_module` tool (see
-// packages/agent/src/tool/ModuleTool/ModuleTool.ts). The tool returns
+// packages/capabilities/src/ModuleTool/ModuleTool.ts). The tool returns
 // the inlined design specification README for one or more modules
 // joined with `\n\n---\n\n`. The body is markdown (headings, tables,
 // code blocks), so we render it with MarkdownRenderer — same pattern

@@ -17,6 +17,7 @@
 import { build } from 'esbuild';
 import fs from 'node:fs';
 import path from 'node:path';
+import { workspacePublicSources } from './workspace-public-sources.mjs';
 
 const outdir = path.join('packages', 'cli', 'bundle');
 const outfile = path.join(outdir, 'cli.cjs');
@@ -38,6 +39,7 @@ var import_meta = { url: import_meta_url };
 await build({
   entryPoints: ['packages/cli/src/index.ts'],
   outfile,
+  plugins: [workspacePublicSources()],
   bundle: true,
   platform: 'node',
   target: 'node18',
@@ -51,6 +53,12 @@ await build({
     'fsevents',
     'playwright',
     'esbuild',
+    'blessed',
+    // Blessed loads these only for its optional terminal-emulator widget.
+    // They are not installed by blessed and the chat TUI does not use that
+    // widget; leaving them external keeps the control-plane bundle portable.
+    'term.js',
+    'pty.js',
   ],
   banner: {
     js: importMetaUrlPolyfill,

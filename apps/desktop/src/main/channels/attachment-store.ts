@@ -18,7 +18,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { EXT_MIME_MAP } from '../../../../../packages/gateway/src/utils/mime';
-import type { ChannelInboundAttachment } from '../../../../../packages/agent/src/channels/types';
+import type { ChannelInboundAttachment } from '@duya/agent-protocol/channels';
 import { getSharedAgentsRoot } from '../config/agent-paths';
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;

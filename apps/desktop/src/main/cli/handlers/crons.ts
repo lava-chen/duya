@@ -29,7 +29,7 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { getAutomationScheduler } from '../../automation/Scheduler';
 import { formatEveryDuration, parseEveryDuration } from '../../automation/schedule.js';
-import { getCoreStores } from '../../db/core-connection';
+import { getDesktopHostLocalSessionApi } from '../desktop-host-api';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
 import type {
   AutomationCron,
@@ -245,7 +245,7 @@ function toInfoItem(row: AutomationCron): CronInfoItemDTO {
 
 /** A cron run is an ordinary session; map it to the frozen run DTO. */
 function toRunItem(
-  session: { id: string; created_at: number; updated_at: number; model: string },
+  session: { id: string; createdAt: number; updatedAt: number },
   job: AutomationCron,
   isLatest: boolean,
 ): CronRunItemDTO {
@@ -253,12 +253,12 @@ function toRunItem(
     id: session.id,
     cronId: job.id,
     runStatus: isLatest && job.lastError ? 'failed' : 'success',
-    startedAt: session.created_at,
-    endedAt: session.updated_at,
+    startedAt: session.createdAt,
+    endedAt: session.updatedAt,
     output: undefined,
     errorMessage: isLatest ? (job.lastError ?? undefined) : undefined,
     sessionId: session.id,
-    createdAt: session.created_at,
+    createdAt: session.createdAt,
   };
 }
 
@@ -399,12 +399,12 @@ export function handleGetCron(req: IncomingMessage, res: ServerResponse, id: str
   }
 }
 
-export function handleListCronRuns(
+export async function handleListCronRuns(
   _req: IncomingMessage,
   res: ServerResponse,
   id: string,
   query: { limit?: number; offset?: number } = {},
-): void {
+): Promise<void> {
   void _req;
   if (!id || id.trim().length === 0) {
     sendError(res, 400, 'invalid_id', 'Cron id must be a non-empty string');
@@ -418,8 +418,11 @@ export function handleListCronRuns(
       return;
     }
     // A cron's run history is its ordinary sessions (id prefix `cron:<jobId>:`).
-    const { sessions } = getCoreStores();
-    const rows = sessions.listByPrefix(`cron:${id}:`, { limit: query.limit, offset: query.offset });
+    const rows = await getDesktopHostLocalSessionApi().listLocalSessionSummariesByPrefix({
+      idPrefix: `cron:${id}:`,
+      limit: query.limit,
+      offset: query.offset,
+    });
     sendJson(res, 200, { runs: rows.map((r, i) => toRunItem(r, job, i === 0)) });
   } catch (err) {
     sendError(res, 500, 'internal_error', err instanceof Error ? err.message : String(err));

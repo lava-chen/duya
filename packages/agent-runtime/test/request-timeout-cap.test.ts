@@ -416,16 +416,19 @@ describe('the per-request cap aborts the request, not the run', () => {
     expect((h.observations[0]?.signal.reason as Error).message).toBe('the user pressed stop');
     expect(receipt.requested).toBe(true);
 
-    // The terminal is `failed`, NOT `cancelled`, and that is this port's doing
-    // rather than the cap's: a port that RETHROWS the abort reason turns a
-    // cooperative stop into a thrown turn, and `#run`'s catch records a throw as
-    // `failed` (`run-engine.ts:465-468`). The case above proves the other
-    // shape -- a port that ends its stream on abort yields
-    // `turn_stopped: cancelled` and the run proposes `cancelled`. Which of the
-    // two a real port produces is the port's business, and the terminal status
-    // follows it; what the runtime owns, and what this file pins, is that the
-    // signal reaching the port is the composed one in both cases.
-    expect(h.terminals).toEqual(['failed']);
+    // The terminal is `cancelled`, and the stop is the CALLER's, not the cap's:
+    // a port that RETHROWS the abort reason used to turn a cooperative stop
+    // into a thrown turn that `#run`'s catch recorded as `failed` — the same
+    // race that recorded a user interrupt as an error. The catch now reads the
+    // caller's signal before the port's failure shape: a throw under an
+    // aborted signal is the stop's downstream symptom, so the terminal follows
+    // the signal (`cancelled`) rather than the throw. The case above proves
+    // the other shape — a port that ends its stream on abort yields
+    // `turn_stopped: cancelled` and proposes `cancelled` too. What this file
+    // still pins is that the signal reaching the port is the composed one in
+    // both cases; the status now agrees across them instead of diverging on
+    // how the port happened to die.
+    expect(h.terminals).toEqual(['cancelled']);
   });
 });
 

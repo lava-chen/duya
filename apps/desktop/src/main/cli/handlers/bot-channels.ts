@@ -30,7 +30,7 @@ import {
 } from '../../channels/agent-session-channels';
 import { openChannelStore } from '../../channels/channel-store';
 import { getBotConnectorManager } from '../../channels/connector-runtime';
-import { CONNECTOR_MANIFESTS } from '../../../../../../packages/agent/src/channels/types';
+import { CONNECTOR_MANIFESTS } from '@duya/agent-protocol/channels';
 import { getLogger, LogComponent } from '../../logging/logger';
 
 const CHANNEL_CREDENTIAL_FIELD = 'token';

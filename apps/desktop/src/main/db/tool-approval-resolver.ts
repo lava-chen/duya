@@ -76,6 +76,24 @@ export function resolveApprovalCard(
   return { ok: true, row: result.row, firstDecision: result.claimed };
 }
 
+/** Async Host API equivalent for callers that cross the HTTP boundary. */
+export async function resolveApprovalCardAsync(
+  deps: Omit<ToolApprovalResolverDeps, 'resolve'> & {
+    resolve: (id: string, decision: ToolApprovalDecisionInput) =>
+      Promise<{ row: ToolApprovalRowLike; claimed: boolean } | undefined>;
+  },
+  id: string,
+  decision: ToolApprovalDecisionInput,
+): Promise<ResolveApprovalOutcome> {
+  const result = await deps.resolve(id, decision);
+  if (!result) return { ok: false, reason: 'not_found' };
+  if (result.claimed) {
+    deps.enqueueContinuation(result.row, decision);
+    deps.broadcast(result.row);
+  }
+  return { ok: true, row: result.row, firstDecision: result.claimed };
+}
+
 /**
  * Sync hook for the interactive fast path (`db:permission:resolve`): the
  * worker executes immediately via its in-memory pending promise, so the
@@ -105,8 +123,37 @@ export function syncApprovalCard(
   } catch (err) {
     getLogger().warn(
       'tool approval card sync failed',
-      err instanceof Error ? err : new Error(String(err)),
-      { id },
+      { id, error: err instanceof Error ? err.message : String(err) },
+      LogComponent.DB,
+    );
+  }
+}
+
+/** Async Host API equivalent for synchronising the live-worker fast path. */
+export async function syncApprovalCardAsync(
+  deps: Omit<ToolApprovalResolverDeps, 'resolve'> & {
+    resolve: (id: string, decision: ToolApprovalDecisionInput) =>
+      Promise<{ row: ToolApprovalRowLike; claimed: boolean } | undefined>;
+    markConsumed: (id: string) => Promise<ToolApprovalRowLike | undefined>;
+  },
+  id: string,
+  decision: ToolApprovalDecisionInput,
+): Promise<void> {
+  try {
+    const result = await deps.resolve(id, decision);
+    if (!result) return;
+    if (result.row.status === 'approved') {
+      const consumed = await deps.markConsumed(result.row.id);
+      if (consumed) {
+        deps.broadcast(consumed);
+        return;
+      }
+    }
+    deps.broadcast(result.row);
+  } catch (err) {
+    getLogger().warn(
+      'tool approval card sync failed',
+      { id, error: err instanceof Error ? err.message : String(err) },
       LogComponent.DB,
     );
   }

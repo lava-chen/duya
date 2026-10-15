@@ -318,7 +318,6 @@ describe('Stage1Extractor with policyPath', () => {
     // version, and the extractor must pick it up on the next extract.
     const extractor = new Stage1Extractor(
       env.db as unknown as BetterSqlite3Database,
-      env.mainDb as unknown as BetterSqlite3Database,
       llmClient,
       { policyPath },
     );

@@ -1,8 +1,6 @@
 import { BrowserWindow } from 'electron';
-import type BetterSqlite3 from 'better-sqlite3';
-import type { SessionManager } from '../../agents/session-manager';
-import { getCoreStoresOrNull } from '../../db/core-connection';
-import { storedEventsToIpcMessages, type MessageRow } from '../../ipc/core-db-adapters';
+import { readHostMessageRows } from '../host-message-reader';
+import type { MessageRow } from '../../ipc/core-db-adapters';
 import { buildRecapPrompt } from './recap-prompt';
 import { callLLMForRecap } from './recap-llm';
 import { getProviderStore } from '../providers/provider-store-electron';
@@ -17,6 +15,11 @@ interface CachedRecap {
   timestamp: number;
 }
 
+interface RecapSessionManager {
+  registerSession(sessionId: string): unknown;
+  getSession(sessionId: string): unknown;
+}
+
 export class RecapService {
   private enabled = true;
   private inactivityThreshold = DEFAULT_INACTIVITY_THRESHOLD_MS;
@@ -28,8 +31,7 @@ export class RecapService {
   private activeSessionId: string | null = null;
 
   constructor(
-    private getDb: () => BetterSqlite3 | null,
-    private getSessionManager: () => SessionManager,
+    private getSessionManager: () => RecapSessionManager,
   ) {}
 
   init(mainWindow: BrowserWindow): void {
@@ -96,7 +98,7 @@ export class RecapService {
     }
 
     this.inactivityTimer = setTimeout(() => {
-      this.onInactivityTimeout();
+      void this.onInactivityTimeout().catch(() => undefined);
     }, this.inactivityThreshold);
   }
 
@@ -131,7 +133,7 @@ export class RecapService {
     });
   }
 
-  private onInactivityTimeout(): void {
+  private async onInactivityTimeout(): Promise<void> {
     if (!this.enabled) {
       return;
     }
@@ -147,7 +149,11 @@ export class RecapService {
       return;
     }
 
-    const turnCount = this.getTurnCount(sessionId);
+    const messages = await readHostMessageRows(sessionId);
+    if (this.activeSessionId !== sessionId) {
+      return;
+    }
+    const turnCount = messages.filter((message) => message.role === 'user').length;
     if (turnCount < MIN_TURN_COUNT) {
       return;
     }
@@ -156,7 +162,7 @@ export class RecapService {
       return;
     }
 
-    this.generateRecap(sessionId)
+    this.generateRecap(sessionId, messages)
       .then((recap) => {
         if (recap) {
           this.cachedRecap = { sessionId, recap, timestamp: Date.now() };
@@ -168,17 +174,10 @@ export class RecapService {
       });
   }
 
-  private async generateRecap(sessionId: string): Promise<string | null> {
-    // Plan 328 Phase 5: messages now live in the core store (rollout
-    // files + message_index). Read via MessageLog.listBySession and
-    // project back to the flat MessageRow shape the recap prompt expects.
-    const stores = getCoreStoresOrNull();
-    if (!stores) {
-      return null;
-    }
-
-    const events = stores.messageLog.listBySession(sessionId);
-    const messages: MessageRow[] = storedEventsToIpcMessages(events);
+  private async generateRecap(sessionId: string, knownMessages?: MessageRow[]): Promise<string | null> {
+    // Read the complete Host projection and adapt it to the existing recap
+    // prompt DTO. Inactivity checks pass their already-loaded rows here.
+    const messages = knownMessages ?? await readHostMessageRows(sessionId);
     if (messages.length === 0) {
       return null;
     }
@@ -202,23 +201,10 @@ export class RecapService {
       (Array.isArray(provider.options?.enabled_models) &&
         (provider.options?.enabled_models as string[])[0]) ||
       '';
-    const runtime = store.getProviderRuntimeConfig(provider.id, model);
+    const runtime = await store.getProviderRuntimeConfig(provider.id, model);
     if ('error' in runtime) {
       return null;
     }
     return callLLMForRecap(runtime, systemPrompt, userContent);
-  }
-
-  private getTurnCount(sessionId: string): number {
-    // Plan 328 Phase 5: replaced the legacy
-    // `SELECT COUNT(*) FROM messages WHERE session_id=? AND role='user'`
-    // with `MessageLog.getCountByKind`. The `kind` column is derived
-    // from the payload's `message.role`, so 'user' matches user
-    // messages without reading payload bytes.
-    const stores = getCoreStoresOrNull();
-    if (!stores) {
-      return 0;
-    }
-    return stores.messageLog.getCountByKind(sessionId, 'user');
   }
 }

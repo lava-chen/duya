@@ -25,8 +25,8 @@ import * as https from 'node:https';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
 
-import type { ChannelAddress, ChannelOutboundMessage } from '../../../../../packages/agent/src/channels/types';
-import { normalizeChannelAddress, parseChannelAddress } from '../../../../../packages/agent/src/channels/types';
+import type { ChannelAddress, ChannelOutboundMessage } from '@duya/agent-protocol/channels';
+import { normalizeChannelAddress, parseChannelAddress } from '@duya/agent-protocol/channels';
 import { getConnectorCredential } from './agent-session-channels';
 import { isFileUrl, fileUrlToPath, mediaTypeForPath, mimeTypeForPath } from './file-url';
 import { getLogger, LogComponent } from '../logging/logger';

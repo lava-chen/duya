@@ -22,19 +22,18 @@
 import { ipcMain } from 'electron';
 
 import {
-  createProject,
-  deleteProject,
-  getProject,
-  listProjects,
-  projectPaths,
+  ensureProjectAgentsMd,
+  ensureProjectPlansSkeleton,
+  normalizeProjectPathEntries,
   reconcileProjectAgentsMd,
   reconcileProjectPlansDirs,
-  updateProject,
   MAX_PROJECT_PATH_LENGTH,
   type CreateProjectInput,
   type UpdateProjectInput,
 } from '../db/core/projectService';
 import type { ProjectPathEntry, ProjectRow } from '../db/core/project-store';
+import type { HostProjectRecord } from '@duya/agent-protocol';
+import { getDesktopHostProjectApi } from '../cli/desktop-host-api';
 import { getDb as getMemoryStateDb } from '../memory-state/db';
 import { getLogger, LogComponent } from '../logging/logger';
 
@@ -54,13 +53,13 @@ const logger = getLogger();
  * reconciliation failure is never fatal — the next call retries it.
  */
 let _reconcileInFlight = false;
-function reconcileProjectPlansDirsBestEffort(): void {
+function reconcileProjectPlansDirsBestEffort(projects: readonly HostProjectRecord[]): void {
   if (_reconcileInFlight) return;
   _reconcileInFlight = true;
   setImmediate(() => {
     _reconcileInFlight = false;
     try {
-      const result = reconcileProjectPlansDirs();
+      const result = reconcileProjectPlansDirs({ projectRows: projects });
       if (result.repaired > 0 || result.errors.length > 0) {
         logger.warn(
           `projects:list reconciliation scanned=${result.scanned} repaired=${result.repaired} indexSeeded=${result.indexSeeded} errors=${result.errors.length}`,
@@ -88,13 +87,13 @@ function reconcileProjectPlansDirsBestEffort(): void {
  * already serializes them on the same tick, but a second `projects:list`
  * while one is still walking the disk must not start a second pass.
  */
-function reconcileProjectAgentsMdBestEffort(): void {
+function reconcileProjectAgentsMdBestEffort(projects: readonly HostProjectRecord[]): void {
   if (_reconcileInFlight) return;
   _reconcileInFlight = true;
   setImmediate(() => {
     _reconcileInFlight = false;
     try {
-      const result = reconcileProjectAgentsMd();
+      const result = reconcileProjectAgentsMd({ projectRows: projects });
       if (result.upgraded > 0 || result.errors.length > 0) {
         logger.info(
           `projects:list agents-md reconciliation scanned=${result.scanned} upgraded=${result.upgraded} skipped=${result.skipped} errors=${result.errors.length}`,
@@ -113,10 +112,10 @@ function reconcileProjectAgentsMdBestEffort(): void {
   });
 }
 
-function toDTO(row: ProjectRow): ProjectRowDTO {
+function toDTO(row: HostProjectRecord): ProjectRowDTO {
   return {
     ...row,
-    paths: projectPaths(row),
+    paths: row.paths.map((entry) => ({ ...entry })),
   };
 }
 
@@ -201,7 +200,7 @@ export function registerProjectEntityHandlers(): void {
     { success: true; projects: ProjectRowDTO[] } | { success: false; error: string }
   > => {
     try {
-      const rows = listProjects();
+      const rows = await getDesktopHostProjectApi().listProjects();
       // Fire-and-forget reconciliation — projects migrated from the
       // legacy `project_path_aliases` era (Plan 525 Phase 2.4) have
       // rows but no `~/.duya/projects/<id>/plans/` directory on disk.
@@ -209,13 +208,13 @@ export function registerProjectEntityHandlers(): void {
       // not blocked on a disk walk over every project. Subsequent
       // `projects:list` calls after reconciliation finishes become
       // no-ops (idempotent existsSync check).
-      void reconcileProjectPlansDirsBestEffort();
+      void reconcileProjectPlansDirsBestEffort(rows);
       // Same shape for AGENTS.md: walk every project and upgrade any
       // seeded file whose version is below the current one. Runs in
       // the background so the renderer gets the (old) row set without
       // waiting on disk I/O. Shares the in-flight guard with the
       // plans-dir reconcile so the two never overlap.
-      void reconcileProjectAgentsMdBestEffort();
+      void reconcileProjectAgentsMdBestEffort(rows);
       return { success: true, projects: rows.map(toDTO) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -231,7 +230,7 @@ export function registerProjectEntityHandlers(): void {
       return { success: false, error: 'Invalid projectId: must be a non-empty string' };
     }
     try {
-      const row = getProject(rawProjectId);
+      const row = await getDesktopHostProjectApi().getProject(rawProjectId);
       return { success: true, project: row ? toDTO(row) : null };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -270,15 +269,21 @@ export function registerProjectEntityHandlers(): void {
     const icon = input.icon == null ? null : String(input.icon).slice(0, 64);
     const color = input.color == null ? null : String(input.color).slice(0, 32);
     try {
-      const row = createProject({
+      const paths = normalizeProjectPathEntries(input.paths.map((p) => ({
+        path: p.path,
+        description: p.description ?? null,
+      })));
+      const row = await getDesktopHostProjectApi().createProject({
         name: input.name,
         description: input.description ?? null,
-        paths: input.paths.map((p) => ({
-          path: p.path,
-          description: p.description ?? null,
-        })),
+        paths,
         icon,
         color,
+      });
+      ensureProjectPlansSkeleton(row.project_id);
+      ensureProjectAgentsMd(row.project_id, {
+        projectName: input.name,
+        canonicalRoot: row.canonical_root,
       });
       return { success: true, projectId: row.project_id, project: toDTO(row) };
     } catch (error) {
@@ -334,10 +339,23 @@ export function registerProjectEntityHandlers(): void {
         ...(patch.icon !== undefined ? { icon: patch.icon == null ? null : String(patch.icon).slice(0, 64) } : {}),
         ...(patch.color !== undefined ? { color: patch.color == null ? null : String(patch.color).slice(0, 32) } : {}),
       };
-      const row = updateProject(rawProjectId, normalized);
+      const row = await getDesktopHostProjectApi().updateProject(rawProjectId, {
+        ...(normalized.name === undefined ? {} : { name: normalized.name }),
+        ...(normalized.description === undefined ? {} : { description: normalized.description }),
+        ...(normalized.paths === undefined ? {} : {
+          paths: normalizeProjectPathEntries(normalized.paths),
+        }),
+        ...(normalized.icon === undefined ? {} : { icon: normalized.icon }),
+        ...(normalized.color === undefined ? {} : { color: normalized.color }),
+      });
       if (!row) {
         return { success: false, error: `project ${rawProjectId} not found`, code: 'NOT_FOUND' };
       }
+      ensureProjectPlansSkeleton(row.project_id);
+      ensureProjectAgentsMd(row.project_id, {
+        projectName: normalized.name ?? row.name,
+        canonicalRoot: row.canonical_root,
+      });
       return { success: true, project: toDTO(row) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -362,7 +380,21 @@ export function registerProjectEntityHandlers(): void {
       // only reach for it once it knows the project exists. Resolving here
       // would move that failure ahead of the existence check and turn a
       // no-op delete into a reported failure.
-      const deleted = deleteProject(rawProjectId, { memoryDb: () => getMemoryStateDb() });
+      const api = getDesktopHostProjectApi();
+      if (!await api.getProject(rawProjectId)) {
+        return { success: true, deleted: false };
+      }
+      const memoryDb = getMemoryStateDb();
+      memoryDb.transaction(() => {
+        memoryDb
+          .prepare(
+            `UPDATE rollout_catalog
+             SET project_id = NULL, scope_kind = 'global'
+             WHERE project_id = ?`,
+          )
+          .run(rawProjectId);
+      }).immediate();
+      const deleted = await api.deleteProject(rawProjectId);
       return { success: true, deleted };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

@@ -34,10 +34,10 @@
  * Busy/dedupe/serialisation live in wake-dispatcher, not here.
  */
 
-import type { WakeItem } from '../../../../../packages/agent/src/wake/types'
+import type { WakeItem } from '@duya/agent-protocol'
 import { enqueueWakeItemForSession } from './wake-dispatcher'
 import { getConfigStore } from '../config/store-instance'
-import { getCoreStoresOrNull } from '../db/core-connection'
+import { getDesktopHostLocalMailboxApi } from '../cli/desktop-host-api'
 
 export const IDLE_DISPATCH_PATH = 'wake.idleDispatch'
 export type IdleDispatchMode = 'renderer' | 'main'
@@ -58,8 +58,8 @@ export interface MailboxRowStatusInfo {
 }
 
 interface IdleDispatcherDeps {
-  /** Read the live status of a mailbox row. Defaults to the core store. */
-  getRowStatus?: (rowId: string) => MailboxRowStatusInfo | null
+  /** Read the live status of a mailbox row through the Host. */
+  getRowStatus?: (rowId: string) => MailboxRowStatusInfo | null | Promise<MailboxRowStatusInfo | null>
   /** Delay before the orphan recheck fires. Defaults to 10s. */
   orphanRecheckDelayMs?: number
   /** Test seam: control the recheck timer (defaults to setTimeout). */
@@ -70,7 +70,7 @@ let activeDeps: IdleDispatcherDeps | null = null
 
 /**
  * Plan 571 test/edge seam. Passing `null` resets to the default deps
- * (core-store-backed row reads + 10s one-shot recheck timer).
+ * (Host-backed row reads + 10s one-shot recheck timer).
  */
 export function _setIdleDispatcherDeps(deps: IdleDispatcherDeps | null): void {
   activeDeps = deps
@@ -79,16 +79,13 @@ export function _setIdleDispatcherDeps(deps: IdleDispatcherDeps | null): void {
 function currentDeps(): IdleDispatcherDeps {
   if (!activeDeps) {
     activeDeps = {
-      getRowStatus(rowId) {
+      async getRowStatus(rowId) {
         try {
-          const mailbox = getCoreStoresOrNull()?.mailbox
-          if (!mailbox) return null
-          const row = mailbox.get(rowId)
+          const row = await getDesktopHostLocalMailboxApi().getItem(rowId)
           if (!row) return null
           return {
             status: row.status,
-            leaseExpired:
-              row.claimExpiresAt != null && row.claimExpiresAt < Date.now(),
+            leaseExpired: row.claimExpiresAt != null && row.claimExpiresAt < Date.now(),
           }
         } catch {
           return null
@@ -127,15 +124,18 @@ function scheduleOrphanRecheck(row: MailboxCreatedRow): void {
   const delay = deps.orphanRecheckDelayMs ?? 10_000
   deps.scheduleTimer?.(() => {
     try {
-      const info = currentDeps().getRowStatus?.(row.id) ?? null
-      if (!info) return
-      // Applied/cancelled → the claiming run (or the user) finalised the
-      // row: nothing to do. Still observed WITH a live lease → a run is
-      // actively holding it, the next checkpoint will finish it. Only an
-      // expired-lease orphan (claiming run crashed) falls back to a wake.
-      if (info.status === 'observed' && info.leaseExpired) {
-        enqueueCompletionWake(row)
-      }
+      void Promise.resolve(currentDeps().getRowStatus?.(row.id) ?? null).then((info) => {
+        if (!info) return
+        // Applied/cancelled → the claiming run (or the user) finalised the
+        // row: nothing to do. Still observed WITH a live lease → a run is
+        // actively holding it, the next checkpoint will finish it. Only an
+        // expired-lease orphan (claiming run crashed) falls back to a wake.
+        if (info.status === 'observed' && info.leaseExpired) {
+          enqueueCompletionWake(row)
+        }
+      }).catch(() => {
+        // Best-effort convergence; a later notification can retry delivery.
+      })
     } catch {
       // Best-effort convergence: the next notification or user input will
       // retrigger delivery anyway. Never loop retries here.
@@ -182,7 +182,7 @@ export async function maybeDispatchIdleWake(
   // Plan 571 dual-channel guard: check the live row status before
   // enqueueing. A row the in-run claimer already holds (observed) or has
   // finalised (applied/cancelled) must not produce a second, lossy wake run.
-  const info = currentDeps().getRowStatus?.(row.id) ?? null
+  const info = await currentDeps().getRowStatus?.(row.id) ?? null
   if (info) {
     if (info.status === 'applied' || info.status === 'cancelled') return false
     if (info.status === 'observed') {

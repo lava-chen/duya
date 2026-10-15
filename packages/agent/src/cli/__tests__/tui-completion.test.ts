@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PopoverItem } from '@duya/input-completion';
-import { CompletionController } from '../ui/completion.js';
+import { CompletionController } from '@duya/cli/tui';
 import { fileItems, relativePath } from '../ui/candidates.js';
 
 /**

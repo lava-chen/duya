@@ -178,7 +178,7 @@ export function registerOrbHandlers(): void {
       const { getActiveModelName, listModelOptions } = await import(
         '../services/orb-wakeless-chat'
       );
-      return { model: getActiveModelName(), options: listModelOptions() };
+      return { model: await getActiveModelName(), options: listModelOptions() };
     } catch {
       return { model: null, options: [] };
     }

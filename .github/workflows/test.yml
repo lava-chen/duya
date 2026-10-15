@@ -211,22 +211,18 @@ jobs:
       # browser closure at 0/789 built-ins and that number was produced by a
       # human running a script by hand.
       #
-      # They run here, in the existing `architecture` job, on the same
-      # single-OS/no-dist reasoning as `architecture:check` above: both are
-      # static analysis over the source tree.
+      # They run here, in the existing `architecture` job. G10 reads the source
+      # graph; A1 also bundles and loads the Desktop CLI handler closure, so its
+      # Host dependency artifacts must be built in this clean checkout.
       #
-      # `boundary-gates.mjs` (G1-G9) is deliberately NOT added in this commit,
-      # and the reason is the one thing a CI wiring must not do. G7 is red
-      # today -- by design, and by plan: `known: 0 new: 1 stale: 0`, the flag
-      # that A3 exists to clear. Adding the gate now would turn the
-      # `architecture` job red on every PR and block the very work that clears
-      # it. Baselining today's red instead would be the same outcome with the
-      # signal deleted: the job goes green, the finding is recorded as known,
-      # and the plan reads as done while nothing was fixed. G7 joins this file
-      # in the same commit that deletes the legacy turn loop.
+      # Plan-600 gates G1-G9 run separately above with their own fingerprint
+      # baseline. This block runs the source-closure checks G10 and A1.
       # ---------------------------------------------------------------------
       - name: Browser entry closure (G10)
         run: npm run architecture:browser-closure
+
+      - name: Build Host dependency closure for A1
+        run: node scripts/build-packages.mjs --target @duya/host
 
       - name: Headless load of the cli handler layer (A1)
         run: npm run architecture:headless
@@ -470,5 +466,5 @@ jobs:
           path: |
             dist/
             dist-electron/
-            packages/agent/bundle/
+            packages/host/bundle/
           retention-days: 7

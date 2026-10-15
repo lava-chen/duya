@@ -11,18 +11,38 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { randomUUID } from 'crypto';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
+import type {
+  HostMessageItem,
+  HostSessionArchiveResult,
+  HostTimelineItem,
+  RebaseEvent,
+} from '@duya/agent-protocol';
+import type { CoreSession } from '@duya/data/session-store';
 import { getAutomationScheduler } from '../automation/Scheduler';
 import type { CreateAutomationCronInput, UpdateAutomationCronInput } from '../automation/types';
 import { getLogger, LogComponent } from '../logging/logger';
 import { AgentProfileCreateSchema, AgentProfileUpdateSchema, parseIpcPayload, RecordIdSchema } from './contracts';
 import { setBrowserMaxTabs } from '../services/browser/daemon';
-import { getCoreStores } from '../db/core-connection';
+import { setBrowserDownloadPathSetting } from '../services/browser/cookie-writer';
+import type { HostLocalRolloutImportInput } from '@duya/agent-protocol/session-api';
+import type { SidebarSectionCreateInput, SidebarSectionPatch } from '@duya/agent-protocol/sidebar-sections';
 import {
-  archivedDirFor,
-  resolveArchivedPath,
-  resolveUnarchivedPath,
-} from '../db/core/archive-paths';
-import { recoverOriginalRel } from '../db/core/legacy-archive-migration';
+  getDesktopHostLocalSessionApi,
+  getDesktopHostLocalRolloutApi,
+  getDesktopHostLocalSettingsApi,
+  getDesktopHostLocalMailboxApi,
+  getDesktopHostLocalChannelPersistenceApi,
+  getDesktopHostLocalAgentProfileApi,
+  getDesktopHostSessionApi,
+  getDesktopHostTaskApi,
+  getDesktopHostGoalApi,
+  getDesktopHostModeStateApi,
+  getDesktopHostPermissionRequestApi,
+  getDesktopHostToolApprovalApi,
+  getDesktopHostLockApi,
+  getDesktopHostLocalSidebarSectionsApi,
+  getDesktopHostLocalUsageApi,
+} from '../cli/desktop-host-api';
 import { getChannelManager } from '../messaging/port-manager';
 import { invertPatch } from '../db/core/conductors/invert-patch';
 import { createConductorUndoRedoHandlers } from './conductor-handlers/conductor-undo-redo-handlers';
@@ -46,7 +66,6 @@ import {
   getMaxZIndex,
 } from '../db/queries/conductors';
 import { updateDatabasePath, readBootConfig } from '../config/boot-config';
-import { resolveRolloutRoot } from '../config/boot-config';
 import { emitGatewayConfigChanged, isGatewayConfigKey } from '../gateway/config-events';
 import { notifyMcpConfigChanged } from '../services/mcp-write-reload';
 import { readUserMcpToml, writeUserMcpToml } from '../services/mcp-config';
@@ -110,28 +129,14 @@ async function maybeConnectQqMail(agentId: string): Promise<void> {
   }
 }
 import { restoreFilesForEvents } from '../services/file-snapshot-restore';
-import { resolvePermissionProfile } from '../db/permission-resolver';
-import {
-  consumeToolApprovalById,
-  getToolApproval,
-  listToolApprovalsBySession,
-  resolveToolApproval,
-} from '../db/toolApprovalState';
 import {
   broadcastToolApprovalUpdate,
-  resolveApprovalCard,
-  syncApprovalCard,
+  resolveApprovalCardAsync,
+  syncApprovalCardAsync,
   type ToolApprovalDecisionInput,
 } from '../db/tool-approval-resolver';
 import { enqueueWakeItemForSession } from '../wake/wake-dispatcher';
-import type { WakeItem } from '../../../../../packages/agent/src/wake/types';
-import { forkSession } from '../db/core/session-fork';
-import { CapabilityDao } from '../services/providers/capability-dao';
-import {
-  SidebarSectionsStore,
-  type SidebarSectionCreateInput,
-  type SidebarSectionPatch,
-} from '../db/core/sidebar-sections-store';
+import type { WakeItem } from '@duya/agent-protocol';
 import {
   aggregateUsageFromFacts,
   extractSessionFacts,
@@ -147,20 +152,20 @@ import {
   storedEventsToIpcMessages,
   serializeMessageContent,
   serializeDisplayContent,
-  ipcTaskToCoreCreate,
-  ipcTaskToUpdate,
-  coreTaskToIpcRow,
+  ipcTaskToHostCreate,
+  ipcTaskToHostUpdate,
+  hostTaskToIpcRow,
   coreGoalToIpcRow,
   ipcPermissionToCoreCreate,
   ipcPermissionToResolve,
   corePermissionToIpcRow,
   coreMailboxToIpcRow,
+  hostMessageItemsToIpcMessages,
 } from './core-db-adapters';
-import { BOT_DIRECT_VISIBLE_SOURCES } from '@duya/agent/message';
+import { BOT_DIRECT_VISIBLE_SOURCES } from '@duya/agent-protocol/message-timeline';
 import type { NewEvent, MailboxKind, MailboxStatus } from '../db/core';
 
-/** Per-session usage facts cache behind rollout-file mtime/size stamps —
- *  module scope so it survives across db:usage:summary invocations. */
+/** Per-session usage facts cache behind append-only Host timeline versions. */
 const usageFactsCache = new UsageFactsCache();
 
 // Re-export lifecycle functions for backward compatibility
@@ -235,277 +240,98 @@ function getNextZIndex(canvasId: string, minZ = 1): number {
   return Math.max(getMaxZIndex(canvasId) + 1, minZ);
 }
 
-/**
- * Plan 582 (G1): undo a partially-completed rollout file move.
- *
- * Archive/unarchive move a *batch* of files, and a later failure would
- * otherwise strand the earlier ones. This mirrors codex's
- * `restore_rollout_moves` (`thread-store/src/local/archive_thread.rs`): a
- * hand-rolled compensating transaction with no dependency on a real one.
- *
- * Entries are undone newest-first, mirroring the order they were applied.
- * Best-effort per entry: a file that cannot be moved back is logged and the
- * rollback continues, because abandoning the rest would strand more data
- * than it saved.
- */
-function restoreArchivedMoves(
-  moved: ReadonlyArray<{ srcAbs: string; archivedAbs?: string; restoredAbs?: string }>,
-  rolloutRoot: string,
-): void {
-  for (let i = moved.length - 1; i >= 0; i -= 1) {
-    const entry = moved[i];
-    // The two directions journal different pairs. Archiving records where
-    // the file WENT (`archivedAbs`); unarchiving records where it must go
-    // BACK (`restoredAbs`). Reading `srcAbs` as the fallback for `to` — as an
-    // earlier version of this helper did — made the unarchive rollback a
-    // rename-to-itself no-op, so a failed row update left the files moved
-    // while the row still said "archived".
-    const from = entry.archivedAbs ?? entry.srcAbs;
-    const to = entry.restoredAbs ?? entry.srcAbs;
-    if (!from || !to || from === to) continue;
-    try {
-      fs.mkdirSync(path.dirname(to), { recursive: true });
-      fs.renameSync(from, to);
-    } catch (err) {
-      getLogger().warn(
-        'archive: failed to roll back a moved rollout file',
-        { from, to, rolloutRoot, err: String(err) },
-        LogComponent.DB,
-      );
-    }
-  }
-}
+export type ArchiveFailureReason = Extract<HostSessionArchiveResult, { readonly ok: false }>['reason'];
+export type ArchiveResult = HostSessionArchiveResult;
 
-/**
- * Plan 582 (G1): every `.jsonl` directly inside `dir`, in the order a session
- * consumes them — `archive-0.jsonl` … `archive-N.jsonl`, then `active.jsonl`,
- * then anything else, with `rollout-<stamp>-<id>.jsonl` last.
- *
- * Order matters: the caller uses the LAST entry as the session's live
- * `rollout_path`. The tail bucket is what makes this work for a
- * single-file (never-rotated) session, whose archived file keeps its
- * original `rollout-*` name — restricting the scan to `archive-<g>` /
- * `active` names would silently skip exactly those.
- */
-function collectJsonlFiles(dir: string): string[] {
-  let entries: string[];
-  try {
-    entries = fs.readdirSync(dir);
-  } catch {
-    return [];
-  }
-  const rank = (name: string): number => {
-    if (/^archive-\d+\.jsonl$/.test(name)) return 0;
-    if (name === 'active.jsonl') return 1;
-    return 2;
-  };
-  return entries
-    .filter((name) => name.endsWith('.jsonl'))
-    .sort((a, b) => {
-      const ra = rank(a);
-      const rb = rank(b);
-      if (ra !== rb) return ra - rb;
-      if (ra === 0) {
-        const ga = Number(a.match(/^archive-(\d+)\.jsonl$/)![1]);
-        const gb = Number(b.match(/^archive-(\d+)\.jsonl$/)![1]);
-        if (ga !== gb) return ga - gb;
-      }
-      return a.localeCompare(b);
-    })
-    .map((name) => path.join(dir, name));
-}
+type HostSessionListQuery = NonNullable<Parameters<ReturnType<typeof getDesktopHostSessionApi>['list']>[0]>;
 
-// ─── Plan 582 (G2): whole-subtree archive as a two-phase commit ─────────
-
-/**
- * The four row fields a batch archive has to put back if a LATER unit in the
- * same batch fails. `rollout_path` is in the set because archiving repoints it
- * at the moved file, so restoring only the status columns would leave the row
- * pointing at a path that no longer exists.
- */
-interface ArchiveRowSnapshot {
-  status: string;
-  archivedAt: number | null;
-  archivedPath: string | null;
-  rolloutPath: string | null;
-}
-
-/** One session's contribution to a batch archive, computed before any I/O. */
-interface ArchiveUnit {
-  sessionId: string;
-  /** File renames to perform, in the order `collectSessionRolloutFiles` gave. */
-  moves: Array<{ srcAbs: string; archivedAbs: string; archivedRel: string }>;
-  /** Row state before the batch; replayed verbatim if the batch aborts. */
-  snapshot: ArchiveRowSnapshot;
-  /** Row state the batch writes on success. */
-  target: ArchiveRowSnapshot;
-}
-
-/** Why a batch archive refused or failed. Surfaced verbatim to the renderer. */
-export type ArchiveFailureReason = 'not_found' | 'session_busy' | 'io';
-
-export type ArchiveResult =
-  | { ok: true; archivedSessionIds: string[] }
-  | {
-      ok: false;
-      reason: ArchiveFailureReason;
-      /** Root of the requested archive, for logging. */
-      sessionId: string;
-      /** Subtree member that tripped a `session_busy` refusal, when known. */
-      blockedId?: string;
-      /** Who holds the lock on `blockedId`: user | agent | background. */
-      origin?: string | null;
-      /** Subtree member whose move or row update failed, when known. */
-      failedId?: string;
-    };
-
-/**
- * Decide what archiving `sessionId` alone would do, without touching disk.
- *
- * Splitting planning from execution is what makes the batch two-phase: the
- * caller can hold every unit's plan in memory, reject the whole call on a
- * preflight failure, and only then start renaming.
- */
-function planSessionArchive(
-  sessionId: string,
-  row: {
-    status: string;
-    archivedAt: number | null;
-    archivedPath: string | null;
-    rolloutPath: string | null;
-  },
-  now: number,
-  rolloutRoot: string,
-  collectFiles: (id: string) => string[],
-  resolveRowPath: (id: string) => string | null,
-): ArchiveUnit {
-  const snapshot: ArchiveRowSnapshot = {
-    status: row.status,
-    archivedAt: row.archivedAt,
-    archivedPath: row.archivedPath,
-    rolloutPath: row.rolloutPath,
-  };
-  const currentRel = row.rolloutPath ?? resolveRowPath(sessionId);
-
-  // Move EVERY file the session owns, not just the one named by
-  // `rollout_path`. A session in the generation layout (every bot, plus any
-  // human/cron session past NON_BOT_ROTATION_THRESHOLD_BYTES) keeps its
-  // history in sibling `archive-<g>.jsonl` files next to `active.jsonl`.
-  // Moving only `rollout_path` stranded those siblings, and since the row's
-  // new path pointed at a directory with no segments, `listBySession`
-  // resolved zero history rows — the archived session silently lost
-  // everything written before the last rotation.
-  const enumerated = collectFiles(sessionId);
-  const candidates =
-    enumerated.length > 0
-      ? enumerated
-      : currentRel
-        ? [path.join(rolloutRoot, currentRel)].filter((abs) => fs.existsSync(abs))
-        : [];
-
-  // No rollout file at all — a session created without a chat history, or one
-  // whose files were removed out from under us. The row still survives, so
-  // archive the metadata alone.
-  if (candidates.length === 0) {
-    return {
-      sessionId,
-      moves: [],
-      snapshot,
-      target: { status: 'archived', archivedAt: now, archivedPath: null, rolloutPath: row.rolloutPath },
-    };
-  }
-
-  const moves = candidates.map((srcAbs) => {
-    const rel = path.relative(rolloutRoot, srcAbs).split(path.sep).join('/');
-    const archivedRel = resolveArchivedPath(rel, now);
-    return { srcAbs, archivedRel, archivedAbs: path.join(rolloutRoot, archivedRel) };
+async function readHostSessionRow(sessionId: string): Promise<Record<string, unknown> | undefined> {
+  const session = await getDesktopHostLocalSessionApi().readLocalSession(sessionId, {
+    includeAllSessions: true,
   });
-
-  return {
-    sessionId,
-    moves,
-    snapshot,
-    target: {
-      status: 'archived',
-      archivedAt: now,
-      // The generation layout spans sibling files that move together, so the
-      // row records the shared destination DIRECTORY, not a single file.
-      archivedPath: archivedDirFor(moves[moves.length - 1].archivedRel),
-      // `collectSessionRolloutFiles` returns generation order, so the LAST
-      // entry is the live `active.jsonl`. Repointing at it is what keeps an
-      // archived session readable.
-      rolloutPath: moves[moves.length - 1].archivedRel,
-    },
-  };
+  return session ? coreSessionToIpcRow(session) : undefined;
 }
 
-/**
- * PHASE 2 + PHASE 3 of the batch: move every file, then update every row.
- * Returns the first failure after restoring everything already applied, so a
- * caller that gets `ok: false` knows the database and the filesystem are both
- * exactly as they were.
- */
-function commitArchiveBatch(
-  units: ReadonlyArray<ArchiveUnit>,
-  rolloutRoot: string,
-  applyRow: (sessionId: string, state: ArchiveRowSnapshot) => void,
-): { ok: true } | { ok: false; failedId: string; phase: 'move' | 'row' } {
-  // ── PHASE 2: file moves, journalled so any failure can be undone ─────
-  const journal: Array<{ srcAbs: string; archivedAbs: string }> = [];
-  for (const unit of units) {
-    for (const move of unit.moves) {
-      try {
-        fs.mkdirSync(path.dirname(move.archivedAbs), { recursive: true });
-        fs.renameSync(move.srcAbs, move.archivedAbs);
-        journal.push({ srcAbs: move.srcAbs, archivedAbs: move.archivedAbs });
-      } catch (err) {
-        restoreArchivedMoves(journal, rolloutRoot);
-        getLogger().warn(
-          'archive: rename failed, rolled back, SQL state unchanged',
-          {
-            sessionId: unit.sessionId,
-            src: move.srcAbs,
-            dst: move.archivedAbs,
-            rolledBack: journal.length,
-            err: String(err),
-          },
-          LogComponent.DB,
-        );
-        return { ok: false, failedId: unit.sessionId, phase: 'move' };
-      }
-    }
-  }
+async function updateHostSessionRow(
+  sessionId: string,
+  patch: Parameters<ReturnType<typeof getDesktopHostSessionApi>['update']>[2],
+): Promise<Record<string, unknown> | undefined> {
+  const result = await getDesktopHostSessionApi().update(sessionId, undefined, patch);
+  return result.updated ? readHostSessionRow(sessionId) : undefined;
+}
 
-  // ── PHASE 3: row updates, likewise reversed on failure ───────────────
-  const written: ArchiveUnit[] = [];
-  for (const unit of units) {
-    try {
-      applyRow(unit.sessionId, unit.target);
-      written.push(unit);
-    } catch (err) {
-      for (let i = written.length - 1; i >= 0; i -= 1) {
-        const done = written[i];
-        try {
-          applyRow(done.sessionId, done.snapshot);
-        } catch (restoreErr) {
-          getLogger().warn(
-            'archive: failed to restore a row after an aborted batch',
-            { sessionId: done.sessionId, err: String(restoreErr) },
-            LogComponent.DB,
-          );
-        }
-      }
-      restoreArchivedMoves(journal, rolloutRoot);
-      getLogger().warn(
-        'archive: metadata update failed, rolled back rows and moved files',
-        { sessionId: unit.sessionId, restoredRows: written.length, err: String(err) },
-        LogComponent.DB,
-      );
-      return { ok: false, failedId: unit.sessionId, phase: 'row' };
-    }
-  }
+async function listHostSessionRows(
+  query: HostSessionListQuery = {},
+): Promise<Array<Record<string, unknown>>> {
+  const hostApi = getDesktopHostLocalSessionApi();
+  const rows: Array<Record<string, unknown>> = [];
+  let cursor: string | undefined;
+  do {
+    const page = await hostApi.listLocalSessions({
+      ...query,
+      includeAllSessions: true,
+      limit: 200,
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    // This local-only projection rehydrates legacy fields inside Host; the
+    // public session API remains path-free for remote clients.
+    for (const session of page.sessions) rows.push(coreSessionToIpcRow(session));
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor !== undefined);
+  return rows;
+}
 
-  return { ok: true };
+async function listHostMessageItems(
+  sessionId: string,
+  includeSuperseded: boolean,
+  sources?: readonly string[],
+): Promise<HostMessageItem[]> {
+  const api = getDesktopHostSessionApi();
+  const items: HostMessageItem[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await api.readMessages(sessionId, {
+      includeSuperseded,
+      limit: 200,
+      ...(cursor === undefined ? {} : { cursor }),
+      ...(sources === undefined ? {} : { sources }),
+    });
+    items.push(...page.messages);
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor !== undefined);
+  return items;
+}
+
+async function listHostProjectedTimelineItems(sessionId: string): Promise<HostTimelineItem[]> {
+  const api = getDesktopHostSessionApi();
+  const items: HostTimelineItem[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await api.readProjectedTimeline(sessionId, {
+      limit: 200,
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    items.push(...page.entries);
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor !== undefined);
+  return items;
+}
+
+function editResendRebase(sessionId: string, keptItems: readonly HostTimelineItem[]): RebaseEvent {
+  const createdAt = Date.now();
+  const newMessages = keptItems
+    .map(({ entry }) => entry)
+    .filter((entry) => entry.type === 'message' || entry.type === 'compaction');
+  return {
+    type: 'rebase',
+    id: `rebase:${sessionId}:all:${createdAt}`,
+    turnId: null,
+    supersededUpToSeq: null,
+    reason: 'edit_resend',
+    // Rebase payloads historically carry compaction entries as well as messages.
+    newMessages: newMessages as unknown as RebaseEvent['newMessages'],
+    createdAt,
+  };
 }
 
 export function registerDbHandlers(): void {
@@ -583,114 +409,155 @@ export function registerDbHandlers(): void {
     return { success: updated, newPath: defaultPath };
   });
 
-  // ==================== Session Handlers (core store thin forward) ====================
-  // Plan 328 Phase 2: all session IPC handlers forward to SessionStore via
-  // core-db-adapters. DTO shape (snake_case flat row) is preserved so the
-  // renderer and Worker code have zero changes.
+  // ==================== Session handlers / Host compatibility adapter ====================
+  // Keep the legacy snake_case IPC row for renderer and Worker callers. CRUD
+  // mutations use HostSessionApiV1. Desktop registers local directories through
+  // Host before sending their opaque Workspace references; legacy projections
+  // are produced by the local-only Host adapter.
 
-  ipcMain.handle('db:session:create', (_event, data: Record<string, unknown>) => {
-    const { sessions } = getCoreStores();
-    // Resolve permission profile BEFORE insert (single-phase write, see
-    // permission-resolver.ts). Trusted override only for internal callers.
+  ipcMain.handle('db:session:create', async (_event, data: Record<string, unknown>) => {
+    // Host resolves permission inheritance and the user default before the
+    // single session write. Trusted override is reserved for internal callers.
     const parentSessionId =
       (data.parent_session_id as string | undefined) ?? (data.parent_id as string | undefined) ?? null;
-    const permissionMode = resolvePermissionProfile(
-      data.permission_profile as string | null | undefined,
+    const hostApi = getDesktopHostSessionApi();
+    const permissionMode = await hostApi.resolveSessionPermissionProfile({
+      explicit: data.permission_profile as string | null | undefined,
       parentSessionId,
-      { isTrustedOverride: data.is_trusted_permission_override === true },
-    );
-    // Upsert semantics: if the session already exists, update it.
-    const existing = sessions.get(data.id as string);
-    if (existing) {
-      const patch = ipcSessionToUpdate(data);
-      sessions.update(data.id as string, patch);
-      const extKeys = ['system_prompt', 'conductor_mode_enabled', 'conductor_canvas_id', 'context_summary', 'plan_mode_enabled', 'goal_mode_enabled', 'source'] as const;
-      for (const key of extKeys) {
-        if (data[key] !== undefined) {
-          sessions.setExtension(data.id as string, key, data[key]);
-        }
-      }
-      return coreSessionToIpcRow(sessions.get(data.id as string)!);
-    }
+      trustedOverride: data.is_trusted_permission_override === true,
+    });
     const input = ipcSessionToCoreCreate(data, permissionMode);
-    const session = sessions.create(input);
-    // Plan 332 Phase 1: record the sub-agent lineage edge. Only fires when a
-    // NEW session is created with a parent (a spawn). `sessions.parent_session_id`
-    // is the fast direct-parent shortcut; the spawn edge is the full lineage truth
-    // source (turn / reason / type). Idempotent — re-create is a no-op.
-    if (input.parentSessionId) {
-      try {
-        getCoreStores().spawnEdges.record({
-          parentSessionId: input.parentSessionId,
-          childSessionId: input.id,
-          spawnType: (data.spawn_type as string | undefined) ?? 'subagent',
-          spawnReason: data.spawn_reason as string | undefined,
-          spawnTurnId: data.spawn_turn_id as string | undefined,
-        });
-      } catch (error) {
-        // Spawn edge is best-effort — parent_session_id still preserves lineage.
-        getLogger().warn(
-          'Failed to record spawn edge',
-          {
-            error: error instanceof Error ? error.message : String(error),
-            parent: input.parentSessionId,
-            child: input.id,
-          },
-          LogComponent.DB,
-        );
-      }
+    const requestedCwd = typeof data.working_directory === 'string' ? data.working_directory.trim() : '';
+    const existing = await hostApi.get(input.id, { includeAllSessions: true });
+    // Desktop is the local user-facing boundary: register the selected folder
+    // through Host, then persist only its opaque Workspace reference.
+    const workspace = requestedCwd
+      ? await hostApi.registerLocalDirectory(requestedCwd)
+      : null;
+    // Preserve the legacy explicit-empty-path upsert by clearing the workspace
+    // through Host before the create-as-upsert writes the remaining metadata.
+    if (existing && data.working_directory !== undefined && requestedCwd.length === 0) {
+      await hostApi.update(input.id, undefined, { workspace: { state: 'legacy_unbound' } });
     }
-    return coreSessionToIpcRow(session);
+    const hostCreate: Parameters<typeof hostApi.create>[0] = {
+        id: input.id,
+        ...(workspace?.state === 'bound'
+          ? {
+              workspaceId: workspace.workspaceId,
+              workspaceRootId: workspace.rootId,
+              workspaceRelativePath: workspace.relativePath,
+            }
+          : {}),
+        ...(input.title !== undefined ? { title: input.title } : {}),
+        ...(input.projectName !== undefined ? { projectName: input.projectName } : {}),
+        ...(input.status !== undefined ? { status: input.status } : {}),
+        ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(input.providerId !== undefined ? { providerId: input.providerId } : {}),
+        ...(input.mode !== undefined ? { mode: input.mode } : {}),
+        ...(input.permissionMode !== undefined
+          ? { permissionMode: input.permissionMode as NonNullable<Parameters<typeof hostApi.create>[0]['permissionMode']> }
+          : {}),
+        ...(input.agentProfileId !== undefined ? { agentProfileId: input.agentProfileId } : {}),
+        ...(input.parentSessionId !== undefined ? { parentSessionId: input.parentSessionId } : {}),
+        ...(input.parentSessionId
+          ? {
+              spawn: {
+                type: (data.spawn_type as string | undefined) ?? 'subagent',
+                ...(typeof data.spawn_reason === 'string' ? { reason: data.spawn_reason } : {}),
+                ...(typeof data.spawn_turn_id === 'string' ? { turnId: data.spawn_turn_id } : {}),
+              },
+            }
+          : {}),
+        ...(input.agentType !== undefined ? { agentType: input.agentType } : {}),
+        ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+        ...(input.draft !== undefined ? { draft: input.draft } : {}),
+        ...(input.extensions !== undefined
+          ? { extensions: input.extensions as NonNullable<Parameters<typeof hostApi.create>[0]['extensions']> }
+          : {}),
+        ...(input.createdAt !== undefined ? { createdAt: input.createdAt } : {}),
+    };
+    const created = await hostApi.create(hostCreate);
+    const persisted = await readHostSessionRow(created.id);
+    if (!persisted) throw new Error(`Host created session but it could not be read back: ${created.id}`);
+    return persisted;
   });
 
-  ipcMain.handle('db:session:get', (_event, sessionId: string) => {
-    const { sessions } = getCoreStores();
-    const session = sessions.get(sessionId);
-    return session ? coreSessionToIpcRow(session) : undefined;
+  ipcMain.handle('db:session:get', async (_event, sessionId: string) => {
+    return readHostSessionRow(sessionId);
   });
 
-  ipcMain.handle('db:session:update', (_event, sessionId: string, data: Record<string, unknown>) => {
-    const { sessions } = getCoreStores();
+  ipcMain.handle('db:session:update', async (_event, sessionId: string, data: Record<string, unknown>) => {
     const patch = ipcSessionToUpdate(data);
-    sessions.update(sessionId, patch);
-    // Extension-bound fields — write via setExtension.
-    const extKeys = ['system_prompt', 'conductor_mode_enabled', 'conductor_canvas_id', 'context_summary', 'context_summary_updated_at', 'plan_mode_enabled', 'goal_mode_enabled', 'source'] as const;
-    for (const key of extKeys) {
-      if (data[key] !== undefined) {
-        sessions.setExtension(sessionId, key, data[key]);
-      }
-    }
-    const updated = sessions.get(sessionId);
-    return updated ? coreSessionToIpcRow(updated) : undefined;
+    const extKeys = [
+      'system_prompt',
+      'conductor_mode_enabled',
+      'conductor_canvas_id',
+      'context_summary',
+      'context_summary_updated_at',
+      'plan_mode_enabled',
+      'goal_mode_enabled',
+      'source',
+    ] as const;
+
+    // Host resolves local paths into granted Workspace references. Raw paths
+    // never become part of the session API write contract.
+    const hostApi = getDesktopHostSessionApi();
+    const workspace = patch.workingDirectory === undefined
+      ? undefined
+      : patch.workingDirectory.trim()
+        ? await hostApi.registerLocalDirectory(patch.workingDirectory)
+        : { state: 'legacy_unbound' as const };
+    const extensions = Object.fromEntries(
+      extKeys.filter((key) => data[key] !== undefined).map((key) => [key, data[key]]),
+    );
+    type HostPatch = Parameters<typeof hostApi.update>[2];
+    const hostPatch: HostPatch = {
+      ...(workspace === undefined ? {} : { workspace }),
+      ...(patch.title !== undefined ? { title: patch.title } : {}),
+      ...(patch.projectName !== undefined ? { projectName: patch.projectName } : {}),
+      ...(patch.status !== undefined ? { status: patch.status } : {}),
+      ...(patch.model !== undefined ? { model: patch.model } : {}),
+      ...(patch.providerId !== undefined ? { providerId: patch.providerId } : {}),
+      ...(patch.mode !== undefined ? { mode: patch.mode } : {}),
+      ...(patch.permissionMode !== undefined
+        ? { permissionMode: patch.permissionMode as HostPatch['permissionMode'] }
+        : {}),
+      ...(patch.parentSessionId !== undefined ? { parentSessionId: patch.parentSessionId } : {}),
+      ...(patch.agentProfileId !== undefined ? { agentProfileId: patch.agentProfileId } : {}),
+      ...(patch.agentType !== undefined ? { agentType: patch.agentType } : {}),
+      ...(patch.agentName !== undefined ? { agentName: patch.agentName } : {}),
+      ...(data.draft_message !== undefined ? { draft: data.draft_message as string | null } : {}),
+      ...(Object.keys(extensions).length > 0
+        ? { extensions: extensions as NonNullable<HostPatch['extensions']> }
+        : {}),
+    };
+    const result = await hostApi.update(sessionId, undefined, hostPatch);
+    if (!result.updated) return undefined;
+
+    return readHostSessionRow(sessionId);
   });
 
   // Decision 5: session:delete is now soft delete (status='deleted'), no cascade.
   // Old behavior was hard DELETE with cascade to messages/tasks/etc.
-  ipcMain.handle('db:session:delete', (_event, sessionId: string) => {
-    const { sessions } = getCoreStores();
-    const existing = sessions.get(sessionId);
-    if (!existing) return false;
-    sessions.update(sessionId, { status: 'deleted' });
-    return true;
+  ipcMain.handle('db:session:delete', async (_event, sessionId: string) => {
+    const hostApi = getDesktopHostSessionApi();
+    const result = await hostApi.delete(sessionId);
+    return result.deleted;
   });
 
-  ipcMain.handle('db:session:list', () => {
-    const { sessions } = getCoreStores();
+  ipcMain.handle('db:session:list', async () => {
     // Cron sessions are fully ordinary (mode='chat'); no exclusion here.
-    const list = sessions.list({});
-    return list.map(coreSessionToIpcRow);
+    return listHostSessionRows();
   });
 
-  ipcMain.handle('db:session:listByWorkingDirectory', (_event, workingDirectory: string) => {
-    const { sessions } = getCoreStores();
-    const list = sessions.list({ workingDirectory: workingDirectory || '' });
-    return list.map(coreSessionToIpcRow);
+  ipcMain.handle('db:session:listByWorkingDirectory', async (_event, workingDirectory: string) => {
+    const path = workingDirectory || '';
+    const rows = await listHostSessionRows();
+    return rows.filter((row) => row.working_directory === path);
   });
 
-  ipcMain.handle('db:session:listByParentId', (_event, parentId: string) => {
-    const { sessions } = getCoreStores();
-    const list = sessions.list({ parentSessionId: parentId });
-    return list.map(coreSessionToIpcRow);
+  ipcMain.handle('db:session:listByParentId', async (_event, parentId: string) => {
+    return listHostSessionRows({ parentSessionId: parentId });
   });
 
   // ─── Plan 506: rollout portability + session fork + session archive ───
@@ -702,8 +569,7 @@ export function registerDbHandlers(): void {
    * `{ absolutePath, lines, bytes }`.
    */
   ipcMain.handle('db:rollout:export', (_event, sessionId: string, destDir?: string) => {
-    const { messageLog } = getCoreStores();
-    return messageLog.exportRollout(sessionId, destDir);
+    return getDesktopHostLocalRolloutApi().exportRollout(sessionId, destDir);
   });
 
   /**
@@ -711,13 +577,11 @@ export function registerDbHandlers(): void {
    * from the rollout files (the source of truth), reporting missing and
    * orphan files. Returns `ReconcileStats`.
    *
-   * Channel name: `preload.ts` invokes `db:rollout:reconcile`. This handler
-   * was registered as `rollout:reconcile`, so nothing could ever reach it —
-   * see `apps/desktop/src/main/ipc/__tests__/ipc-channel-contract.test.ts`.
+   * Keep the IPC name aligned with preload. The Host performs the rebuild from
+   * its own rollout root; this IPC handler no longer calls MessageLog directly.
    */
   ipcMain.handle('db:rollout:reconcile', () => {
-    const { messageLog } = getCoreStores();
-    return messageLog.reconcileAll();
+    return getDesktopHostSessionApi().reconcileRollouts();
   });
 
   /**
@@ -728,8 +592,8 @@ export function registerDbHandlers(): void {
    * Throws `ImportValidationError` (message carries the 1-based line
    * number) on invalid input — all-or-nothing, no partial import.
    *
-   * Channel name: `preload.ts` invokes `db:rollout:import`. This handler was
-   * registered as `rollout:import`, so nothing could ever reach it.
+   * Keep the IPC name aligned with preload; the local Host resolves the path
+   * and performs the import. Remote APIs accept uploaded data instead.
    */
   ipcMain.handle('db:rollout:import', (_event, input: {
     sourcePath: string;
@@ -737,23 +601,29 @@ export function registerDbHandlers(): void {
     targetSessionId?: string;
     title?: string;
   }) => {
-    const stores = getCoreStores();
     if (!input || typeof input.sourcePath !== 'string' || input.sourcePath.length === 0) {
       throw new Error('rollout:import: sourcePath is required');
     }
+    let hostInput: HostLocalRolloutImportInput;
     if (input.mode === 'continue') {
       if (!input.targetSessionId) {
         throw new Error('rollout:import: targetSessionId is required for continue mode');
       }
-      return stores.messageLog.importContinueFromFile(input.targetSessionId, input.sourcePath);
+      hostInput = {
+        mode: 'continue',
+        targetSessionId: input.targetSessionId,
+        sourcePath: input.sourcePath,
+      };
+    } else if (input.mode === 'restore') {
+      hostInput = {
+        mode: 'restore',
+        sourcePath: input.sourcePath,
+        ...(typeof input.title === 'string' ? { title: input.title } : {}),
+      };
+    } else {
+      throw new Error('rollout:import: mode must be restore or continue');
     }
-    const sessionId = `import-${randomUUID()}`;
-    const title =
-      typeof input.title === 'string' && input.title.length > 0
-        ? input.title
-        : `Imported session (${path.basename(input.sourcePath)})`;
-    stores.sessions.create({ id: sessionId, title, agentType: 'main', status: 'active' });
-    return stores.messageLog.importRestoreFromFile(sessionId, input.sourcePath);
+    return getDesktopHostLocalRolloutApi().importRollout(hostInput);
   });
 
   /**
@@ -762,30 +632,22 @@ export function registerDbHandlers(): void {
    * message timeline up to and including `throughMessageId`; the new
    * session records `parent_session_id` + a `fork` spawn edge.
    *
-   * Channel name: `preload.ts` invokes `db:session:forkAt`. This handler was
-   * registered as `session:forkAt`, so nothing could ever reach it.
+   * Keep the IPC name aligned with preload; the Host owns the fork write.
    */
-  ipcMain.handle('db:session:forkAt', (_event, input: {
+  ipcMain.handle('db:session:forkAt', async (_event, input: {
     sourceSessionId: string;
     throughMessageId: string;
     title?: string;
   }) => {
-    const stores = getCoreStores();
-    const result = forkSession(
-      {
-        messageLog: stores.messageLog,
-        sessions: stores.sessions,
-        spawnEdges: stores.spawnEdges,
-      },
-      {
-        sourceSessionId: input.sourceSessionId,
-        throughMessageId: input.throughMessageId,
-        newSessionId: `fork-${randomUUID()}`,
-        title: input.title,
-      },
-    );
+    const result = await getDesktopHostSessionApi().forkAt(input.sourceSessionId, {
+      newSessionId: `fork-${randomUUID()}`,
+      throughMessageId: input.throughMessageId,
+      ...(input.title === undefined ? {} : { title: input.title }),
+    });
     if (!result.ok) return result;
-    const created = stores.sessions.get(result.sessionId);
+    const created = await getDesktopHostLocalSessionApi().readLocalSession(result.sessionId, {
+      includeAllSessions: true,
+    });
     return {
       ok: true as const,
       sessionId: result.sessionId,
@@ -824,236 +686,33 @@ export function registerDbHandlers(): void {
    * Unarchive deliberately does NOT recurse: restoring a parent while its
    * children stay archived is the reversible half of this, and codex agrees.
    */
-  ipcMain.handle('db:session:archive', (_event, sessionId: string): ArchiveResult => {
-    const { sessions, messageLog, locks, spawnEdges } = getCoreStores();
-    const root = sessions.get(sessionId);
-    if (!root) return { ok: false, reason: 'not_found', sessionId };
-    if (root.status === 'archived') return { ok: true, archivedSessionIds: [] };
-
-    // ── PHASE 1: runtime-lock preflight across the whole subtree ────────
-    // Deduped because `getTree` is edge-shaped: a child reachable by two
-    // parents appears twice, and re-checking a lock is only wasted work.
-    const subtree = new Set<string>([sessionId]);
-    for (const edge of spawnEdges.getTree(sessionId)) subtree.add(edge.childSessionId);
-
-    for (const id of subtree) {
-      if (!locks.isLocked(id)) continue;
-      const origin = locks.lockOrigin(id);
-      getLogger().info(
-        'archive: refusing, a session in the subtree is still running',
-        { sessionId, blockedId: id, origin },
-        LogComponent.DB,
-      );
-      return { ok: false, reason: 'session_busy', sessionId, blockedId: id, origin };
-    }
-
-    // ── Plan every unit up front, still without touching disk ──────────
-    const now = Date.now();
-    const rolloutRoot = resolveRolloutRoot();
-    const units: ArchiveUnit[] = [];
-    for (const id of subtree) {
-      const row = sessions.get(id);
-      // Already archived is a no-op we must not re-report; a soft-deleted
-      // descendant is not ours to resurrect metadata for.
-      if (!row || row.status === 'archived' || row.status === 'deleted') continue;
-      units.push(
-        planSessionArchive(
-          id,
-          {
-            status: row.status,
-            archivedAt: row.archivedAt,
-            archivedPath: row.archivedPath,
-            rolloutPath: row.rolloutPath,
-          },
-          now,
-          rolloutRoot,
-          (sid) => messageLog.collectSessionRolloutFiles(sid),
-          (sid) => sessions.getRolloutPath(sid),
-        ),
-      );
-    }
-
-    // ── PHASE 2 + 3: move, then commit rows ────────────────────────────
-    const outcome = commitArchiveBatch(units, rolloutRoot, (id, state) => {
-      sessions.update(id, {
-        status: state.status,
-        archivedAt: state.archivedAt,
-        archivedPath: state.archivedPath,
-        rolloutPath: state.rolloutPath,
-      });
-    });
-    if (!outcome.ok) {
-      return { ok: false, reason: 'io', sessionId, failedId: outcome.failedId };
-    }
-
-    // Every row's rollout_path just changed; drop the cached resolution so
-    // the next read or append re-reads the DB instead of the pre-archive path.
-    for (const unit of units) messageLog.invalidateRolloutPathCache(unit.sessionId);
-    return { ok: true, archivedSessionIds: units.map((u) => u.sessionId) };
-  });
-  /**
-   * Plan 549 (Track A): unarchive — reverse the rename and reset the
-   * archive metadata. Mirrors codex's `unarchive_thread.rs` semantics.
-   *
-   * Plan 582: the channel is `db:session:unarchive`, matching what
-   * `preload.ts` invokes. It was registered as bare `session:unarchive`,
-   * which nothing ever called — the renderer's unarchive had been rejecting
-   * with "No handler registered" since Plan 549 shipped, and the unit tests
-   * could not see it because they invoke handlers by their registered name
-   * rather than through the preload bridge. `e2e/ipc/session-archive.spec.ts`
-   * is what caught it.
-   *
-   * Plan 582 (G1): `archived_path` is the destination DIRECTORY, and the
-   * restore walks the whole directory so a rotated session gets its
-   * `archive-<g>.jsonl` siblings back too. Destination paths are the exact
-   * inverses of the archive mapping (a pure `archived/<date>/` prefix
-   * strip), so nothing is reconstructed by guesswork.
-   *
-   * Plan 582 (G1 follow-up, §8.1): a Plan 549 row records a single FILE and
-   * has no mirrored path to invert, so the prefix strip would only recover a
-   * basename. Those rows are normalized at boot by
-   * `migrateLegacyArchivedRows`; the `stat`-based branch below is the safety
-   * net for any that arrive later, and restores to the recorded
-   * `rollout_path` instead.
-   */
-  ipcMain.handle('db:session:unarchive', (_event, sessionId: string) => {
-    const { sessions, messageLog } = getCoreStores();
-    const session = sessions.get(sessionId);
-    if (!session) return false;
-    if (session.status !== 'archived') return true; // idempotent
-    const archivedDirRel = session.archivedPath;
-    if (!archivedDirRel) {
-      // Archived metadata-only — just flip the status.
-      sessions.update(sessionId, {
-        status: 'active',
-        archivedAt: null,
-        archivedPath: null,
-      });
-      return true;
-    }
-    const rolloutRoot = resolveRolloutRoot();
-    const archivedDirAbs = path.join(rolloutRoot, archivedDirRel);
-    // One stat answers both questions this handler needs: is the archive still
-    // on disk at all, and is it the Plan 549 single-FILE shape or the G1
-    // directory?
-    let archivedStat: fs.Stats | null = null;
-    try {
-      archivedStat = fs.statSync(archivedDirAbs);
-    } catch {
-      archivedStat = null;
-    }
-    if (!archivedStat) {
-      // Archive files already gone — drop the metadata, leave status flipped.
-      sessions.update(sessionId, {
-        status: 'active',
-        archivedAt: null,
-        archivedPath: null,
-      });
-      return true;
-    }
-
-    // Plan 582 (G1 follow-up, §8.1): a row written by Plan 549 records one
-    // FILE, and the mirrored source path is gone with it — stripping
-    // `archived/<date>/` yields a bare basename, which would drop the file at
-    // `<rolloutRoot>/<basename>` instead of the date tree it came from.
-    // `migrateLegacyArchivedRows` rewrites these rows at boot; when one still
-    // slips through (an older build archived after that migration ran),
-    // restore to the session's own recorded `rollout_path` instead.
-    const legacyRestoreRel = archivedStat.isFile()
-      ? recoverOriginalRel(session.rolloutPath, rolloutRoot)
-      : null;
-
-    // Every `.jsonl` in the archived directory belongs to this session, so
-    // restore them together. A legacy file row contributes exactly one entry.
-    const archivedFiles = archivedStat.isDirectory() ? collectJsonlFiles(archivedDirAbs) : [];
-    const plan = (archivedFiles.length > 0 ? archivedFiles : [archivedDirAbs])
-      .filter((srcAbs) => fs.existsSync(srcAbs))
-      .map((srcAbs) => {
-        const rel = path.relative(rolloutRoot, srcAbs).split(path.sep).join('/');
-        const restoredRel = legacyRestoreRel ?? resolveUnarchivedPath(rel);
-        return { srcAbs, restoredRel, restoredAbs: path.join(rolloutRoot, restoredRel) };
-      });
-
-    if (plan.length === 0) {
-      sessions.update(sessionId, {
-        status: 'active',
-        archivedAt: null,
-        archivedPath: null,
-      });
-      return true;
-    }
-
-    const moved: typeof plan = [];
-    for (const entry of plan) {
-      try {
-        fs.mkdirSync(path.dirname(entry.restoredAbs), { recursive: true });
-        fs.renameSync(entry.srcAbs, entry.restoredAbs);
-        moved.push(entry);
-      } catch (err) {
-        restoreArchivedMoves(moved, rolloutRoot);
-        getLogger().warn(
-          'unarchive: rename failed, rolled back, SQL state unchanged',
-          {
-            sessionId,
-            src: entry.srcAbs,
-            dst: entry.restoredAbs,
-            rolledBack: moved.length,
-            err: String(err),
-          },
-          LogComponent.DB,
-        );
-        return false;
-      }
-    }
-
-    // Generation order is preserved by the directory scan below, so the last
-    // restored entry is the live `active.jsonl` for a rotated session.
-    const liveRestoredRel = plan[plan.length - 1].restoredRel;
-    try {
-      sessions.update(sessionId, {
-        status: 'active',
-        archivedAt: null,
-        archivedPath: null,
-        rolloutPath: liveRestoredRel,
-      });
-    } catch (err) {
-      restoreArchivedMoves(moved, rolloutRoot);
-      getLogger().warn(
-        'unarchive: metadata update failed, rolled back moved files',
-        { sessionId, rolledBack: moved.length, err: String(err) },
-        LogComponent.DB,
-      );
-      return false;
-    }
-
-    // The row's rollout_path changed under us; drop the cached resolution so
-    // the next append/read re-reads the DB instead of a stale path.
-    messageLog.invalidateRolloutPathCache(sessionId);
-    return true;
+  ipcMain.handle('db:session:archive', async (_event, sessionId: string): Promise<ArchiveResult> => {
+    return getDesktopHostSessionApi().archive(sessionId);
   });
 
-  /** Plan 506 (C2): list archived sessions (rollout files remain on disk). */
-  ipcMain.handle('db:session:listArchived', () => {
-    const { sessions } = getCoreStores();
-    return sessions.list({ status: 'archived' }).map(coreSessionToIpcRow);
+  ipcMain.handle('db:session:unarchive', async (_event, sessionId: string): Promise<boolean> => {
+    return getDesktopHostSessionApi().unarchive(sessionId);
+  });
+  /** Keep the legacy IPC row shape while Host selects the archived sessions. */
+  ipcMain.handle('db:session:listArchived', async () => {
+    const rows = await listHostSessionRows({ includeArchived: true });
+    return rows.filter((row) => row.status === 'archived');
   });
 
-  ipcMain.handle('db:session:saveDraft', (_event, sessionId: string, draft: string) => {
-    const { sessions } = getCoreStores();
-    sessions.saveDraft(sessionId, draft);
+  ipcMain.handle('db:session:saveDraft', async (_event, sessionId: string, draft: string) => {
+    await getDesktopHostSessionApi().update(sessionId, undefined, { draft });
   });
 
-  ipcMain.handle('db:session:getDraft', (_event, sessionId: string) => {
-    const { sessions } = getCoreStores();
-    return sessions.getDraft(sessionId);
+  ipcMain.handle('db:session:getDraft', async (_event, sessionId: string) => {
+    const session = await getDesktopHostSessionApi().get(sessionId, { includeAllSessions: true });
+    return session?.draft ?? '';
   });
 
   // Read a mode tracker snapshot (mode_state_snapshots) back for a session so
   // the renderer can restore goal/plan state on cold load via the same core
   // store the agent persistence layer writes to.
-  ipcMain.handle('db:session:get_mode_state', (_event, sessionId: string, mode: string) => {
-    const { modeState } = getCoreStores();
-    return modeState.get(sessionId, mode);
+  ipcMain.handle('db:session:get_mode_state', async (_event, sessionId: string, mode: string) => {
+    return getDesktopHostModeStateApi().getModeState(sessionId, mode);
   });
 
   // ==================== Message Handlers (core store thin forward) ====================
@@ -1063,7 +722,7 @@ export function registerDbHandlers(): void {
   // exception). Decision 5: message:add changed from INSERT OR REPLACE to
   // INSERT OR IGNORE (same-id re-send no longer overwrites).
 
-  ipcMain.handle('db:message:add', (_event, data: {
+  ipcMain.handle('db:message:add', async (_event, data: {
     id: string;
     session_id: string;
     role: string;
@@ -1085,15 +744,14 @@ export function registerDbHandlers(): void {
     sub_agent_id?: string;
     attachments?: unknown[];
   }) => {
-    const { messageLog } = getCoreStores();
     // Decision 5: INSERT OR IGNORE semantics via appendBatch — same-id re-send
     // is a no-op instead of overwriting (append-only discipline).
     const event = ipcMessageToNewEvent(data.session_id, data);
-    messageLog.appendBatch([event]);
-    // Read back through the adapter to return the canonical row shape.
-    const events = messageLog.listBySession(data.session_id);
-    const stored = events.find((e) => e.id === data.id);
-    return stored ? storedEventToIpcMessage(stored) : null;
+    await getDesktopHostSessionApi().appendTimeline(data.session_id, { entries: [event.payload] });
+    // Read back through Host too so this IPC stays inside the Host contract
+    // after the append has completed.
+    const items = await listHostMessageItems(data.session_id, true);
+    return hostMessageItemsToIpcMessages(data.session_id, items).find((row) => row.id === data.id) ?? null;
   });
 
   // Plan 548: `includeSuperseded` (default `true`) plumbs the chat-UI history
@@ -1106,54 +764,47 @@ export function registerDbHandlers(): void {
   // is no caller today that wants the folded view from this endpoint.
   ipcMain.handle(
     'db:message:getBySession',
-    (
+    async (
       _event,
       sessionId: string,
       options?: { includeSuperseded?: boolean },
     ) => {
-      const { messageLog } = getCoreStores();
-      const events = messageLog.listBySession(sessionId, {
-        includeSuperseded: options?.includeSuperseded ?? true,
-      });
-      return storedEventsToIpcMessages(events);
+      const items = await listHostMessageItems(sessionId, options?.includeSuperseded ?? true);
+      return hostMessageItemsToIpcMessages(sessionId, items);
     },
   );
 
-  // Plan 489 P0.3: bot-direct transcript — the DATA-LAYER projection the
-  // BotDirectChatView requires. The source allowlist is applied inside
-  // MessageLog.listBySession so only user-typed and SendMessage rows ever
-  // leave the main process; tool/thinking/scratchpad/system stay bot-private.
-  ipcMain.handle('db:message:botDirectGetTranscript', (_event, sessionId: string) => {
-    const { messageLog } = getCoreStores();
-    const events = messageLog.listBySession(sessionId, {
-      source: [...BOT_DIRECT_VISIBLE_SOURCES],
-    });
-    return storedEventsToIpcMessages(events);
+  // Plan 489 P0.3: bot-direct transcript — the Host applies the source
+  // allowlist inside MessageLog before rows leave Main; private tool,
+  // thinking, scratchpad, and system messages stay bot-private.
+  ipcMain.handle('db:message:botDirectGetTranscript', async (_event, sessionId: string) => {
+    const items = await listHostMessageItems(
+      sessionId,
+      true,
+      [...BOT_DIRECT_VISIBLE_SOURCES],
+    );
+    return hostMessageItemsToIpcMessages(sessionId, items);
   });
 
-  ipcMain.handle('db:message:getCount', (_event, sessionId: string) => {
-    const { messageLog } = getCoreStores();
-    return messageLog.getCount(sessionId);
+  ipcMain.handle('db:message:getCount', async (_event, sessionId: string) => {
+    return getDesktopHostSessionApi().countTimeline(sessionId);
   });
 
-  ipcMain.handle('db:message:deleteBySession', (_event, sessionId: string) => {
-    const { messageLog } = getCoreStores();
-    const before = messageLog.getCount(sessionId);
-    messageLog.deleteBySession(sessionId);
-    return before;
+  ipcMain.handle('db:message:deleteBySession', async (_event, sessionId: string) => {
+    return getDesktopHostSessionApi().deleteTimeline(sessionId);
   });
 
   // Decision 3: message:replace maps to MessageLog.appendBatch (INSERT OR IGNORE
   // idempotency). Generation optimistic lock is deprecated (append-only store).
   // If the session does not exist, auto-create it (matches old behavior).
-  ipcMain.handle('db:message:replace', (_event, sessionId: string, messages: unknown[], _generation: number) => {
-    const { sessions, messageLog } = getCoreStores();
+  ipcMain.handle('db:message:replace', async (_event, sessionId: string, messages: unknown[], _generation: number) => {
+    const hostApi = getDesktopHostSessionApi();
 
     // Auto-create session if missing (old behavior: happens when frontend
     // creates a session without a DB entry first).
-    if (!sessions.get(sessionId)) {
+    if (!await hostApi.get(sessionId, { includeAllSessions: true })) {
       dbLogger.info('Session not found, auto-creating', { sessionId }, LogComponent.DB);
-      sessions.create({ id: sessionId, createdAt: Date.now(), updatedAt: Date.now() });
+      await hostApi.create({ id: sessionId, createdAt: Date.now() });
     }
 
     try {
@@ -1164,7 +815,9 @@ export function registerDbHandlers(): void {
         msg.id = id;
         return ipcMessageToNewEvent(sessionId, msg as unknown as Parameters<typeof ipcMessageToNewEvent>[1]);
       });
-      messageLog.appendBatch(events);
+      await getDesktopHostSessionApi().appendTimeline(sessionId, {
+        entries: events.map((event) => event.payload),
+      });
       return { success: true, newGeneration: 0, messageCount: events.length };
     } catch (error) {
       dbLogger.error('replaceMessages failed', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.DB);
@@ -1179,69 +832,41 @@ export function registerDbHandlers(): void {
   // Plan 429 #3 rewind linkage: before the timeline shrinks, pre-image
   // snapshots referenced by the removed tool calls are written back to disk
   // so files roll back with the conversation. Best-effort — a failed restore
-  // never blocks the rewind itself.
+  // never blocks the rewind itself. The timeline projection and rebase write
+  // both go through Host; Main retains only the local file restore side effect.
   ipcMain.handle('db:message:truncateAfter', async (_event, sessionId: string, messageId: string) => {
-    const { messageLog } = getCoreStores();
-    const events = messageLog.listBySession(sessionId);
+    const events = await listHostProjectedTimelineItems(sessionId);
     const cutIdx = events.findIndex((e) => e.id === messageId);
     if (cutIdx < 0) return { deletedCount: 0, restoredFiles: [] as string[] };
     // Keep [0, cutIdx] (inclusive of the target — truncateAfter keeps target).
-    const removedEvents = events.slice(cutIdx + 1);
+    const removedEvents = events.slice(cutIdx + 1).map(({ entry }) => ({ payload: JSON.stringify(entry) }));
     const restored = await restoreFilesForEvents(removedEvents);
-    // Only message/compaction entries may be carried inside a rebase's
-    // newMessages. Embedding rollout event rows (e.g. an older rebase) would
-    // nest non-message payloads into the projection and grow unboundedly
-    // across repeated rewinds.
-    const keptEvents: NewEvent[] = events.slice(0, cutIdx + 1)
-      .filter((e) => {
-        try {
-          const t = (JSON.parse(e.payload) as { type?: string }).type;
-          return t === 'message' || t === 'compaction';
-        } catch {
-          return false;
-        }
-      })
-      .map((e) => ({
-        id: e.id,
-        sessionId: e.sessionId,
-        turnId: e.turnId,
-        payload: JSON.parse(e.payload),
-        createdAt: e.createdAt,
-      }));
+    const keptEvents = events
+      .slice(0, cutIdx + 1)
+      .filter(({ entry }) => entry.type === 'message' || entry.type === 'compaction');
     const deletedCount = events.length - keptEvents.length;
-    messageLog.appendRebase(sessionId, null, null, keptEvents, Date.now(), 'edit_resend'); // edit-resend form: inline mutation, must NOT rotate
+    await getDesktopHostSessionApi().appendTimeline(sessionId, {
+      entries: [editResendRebase(sessionId, keptEvents)],
+    });
     return { deletedCount, restoredFiles: restored.restoredFiles };
   });
 
   // Edit-and-resend: supersede the target message and everything after it
   // (inclusive), so the edited version can be appended as a fresh message.
   ipcMain.handle('db:message:truncateFromInclusive', async (_event, sessionId: string, messageId: string) => {
-    const { messageLog } = getCoreStores();
-    const events = messageLog.listBySession(sessionId);
+    const events = await listHostProjectedTimelineItems(sessionId);
     const cutIdx = events.findIndex((e) => e.id === messageId);
     if (cutIdx < 0) return { deletedCount: 0, restoredFiles: [] as string[] };
     // Keep [0, cutIdx) (exclusive of the target — truncateFromInclusive removes target).
-    const removedEvents = events.slice(cutIdx);
+    const removedEvents = events.slice(cutIdx).map(({ entry }) => ({ payload: JSON.stringify(entry) }));
     const restored = await restoreFilesForEvents(removedEvents);
-    // Same filter as truncateAfter: carry only message/compaction entries.
-    const keptEvents: NewEvent[] = events.slice(0, cutIdx)
-      .filter((e) => {
-        try {
-          const t = (JSON.parse(e.payload) as { type?: string }).type;
-          return t === 'message' || t === 'compaction';
-        } catch {
-          return false;
-        }
-      })
-      .map((e) => ({
-        id: e.id,
-        sessionId: e.sessionId,
-        turnId: e.turnId,
-        payload: JSON.parse(e.payload),
-        createdAt: e.createdAt,
-      }));
+    const keptEvents = events
+      .slice(0, cutIdx)
+      .filter(({ entry }) => entry.type === 'message' || entry.type === 'compaction');
     const deletedCount = events.length - keptEvents.length;
-    messageLog.appendRebase(sessionId, null, null, keptEvents, Date.now(), 'edit_resend'); // edit-resend form: inline mutation, must NOT rotate
+    await getDesktopHostSessionApi().appendTimeline(sessionId, {
+      entries: [editResendRebase(sessionId, keptEvents)],
+    });
     return { deletedCount, restoredFiles: restored.restoredFiles };
   });
 
@@ -1250,107 +875,90 @@ export function registerDbHandlers(): void {
   // truncating the timeline — usable for manual recovery when the renderer
   // wants to roll files back independently of message deletion.
   ipcMain.handle('db:files:restore', async (_event, sessionId: string, cutMessageId: string) => {
-    const { messageLog } = getCoreStores();
-    const events = messageLog.listBySession(sessionId);
+    const events = await listHostProjectedTimelineItems(sessionId);
     const cutIdx = events.findIndex((e) => e.id === cutMessageId);
     if (cutIdx < 0) return { restoredFiles: [] as string[], failedCount: 0 };
-    return restoreFilesForEvents(events.slice(cutIdx + 1));
+    return restoreFilesForEvents(
+      events.slice(cutIdx + 1).map(({ entry }) => ({ payload: JSON.stringify(entry) })),
+    );
   });
 
   // ==================== Usage Summary (settings dashboard) ====================
-  // Aggregates token usage / cost / activity across ALL sessions by scanning
-  // core-db rollout files — the renderer's in-memory conversation store only
+  // Aggregates token usage / cost / activity across ALL sessions through the
+  // Host Session API — the renderer's in-memory conversation store only
   // holds transcripts of sessions opened during the current app run, so
   // renderer-side aggregation was wildly incomplete (plan: usage-stats fix).
   //
-  // Per-session facts are cached behind a rollout-file mtime/size stamp:
-  // unchanged sessions skip the file read + row conversion entirely, which
-  // is what dominates this handler once histories grow.
-  ipcMain.handle('db:usage:summary', () => {
-    const { sessions: sessionStore, messageLog } = getCoreStores();
-    const capabilityDao = new CapabilityDao(getDb());
+  // Per-session facts are cached by append-only timeline version: unchanged
+  // sessions skip Host message paging + row conversion entirely.
+  ipcMain.handle('db:usage:summary', async () => {
+    const hostSessionApi = getDesktopHostSessionApi();
+    const index = await getDesktopHostLocalUsageApi().getUsageIndex();
+    const inputs: SessionFactsInput[] = [];
+    const sessionIds = new Set(index.sessions.map((session) => session.id));
 
-    const listed = sessionStore.list({});
-    const inputs: SessionFactsInput[] = listed.map((session) => {
-      // 'none' = no rollout path; 'missing' = stat failed (listBySession's
-      // self-heal still gets a chance to rescan on the read path below).
-      let stamp = 'none';
-      if (session.rolloutPath) {
-        try {
-          const st = fs.statSync(session.rolloutPath);
-          stamp = `${st.mtimeMs}:${st.size}`;
-        } catch {
-          stamp = 'missing';
+    // Keep HTTP history reads bounded so a large session list does not create
+    // unbounded Main-process memory or request concurrency.
+    for (let offset = 0; offset < index.sessions.length; offset += 4) {
+      const batch = await Promise.all(index.sessions.slice(offset, offset + 4).map(async (session) => {
+        const stamp = String(session.timelineVersion);
+        let facts = usageFactsCache.get(session.id, stamp);
+        if (!facts) {
+          const items: HostMessageItem[] = [];
+          let cursor: string | undefined;
+          for (;;) {
+            const page = await hostSessionApi.readMessages(session.id, {
+              ...(cursor === undefined ? {} : { cursor }),
+              limit: 200,
+              includeSuperseded: true,
+            });
+            items.push(...page.messages);
+            if (page.nextCursor === null) break;
+            cursor = page.nextCursor;
+          }
+          facts = extractSessionFacts(hostMessageItemsToIpcMessages(session.id, items));
+          usageFactsCache.set(session.id, stamp, facts);
         }
-      }
-      let facts = usageFactsCache.get(session.id, stamp);
-      if (!facts) {
-        const rows =
-          stamp === 'none'
-            ? []
-            : storedEventsToIpcMessages(messageLog.listBySession(session.id));
-        facts = extractSessionFacts(rows);
-        usageFactsCache.set(session.id, stamp, facts);
-      }
-      return {
-        id: session.id,
-        title: session.title,
-        model: session.model,
-        providerId: session.providerId,
-        createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
-        facts,
-      };
-    });
-    usageFactsCache.prune(new Set(listed.map((s) => s.id)));
-
-    // Pricing audit stamp (token-accounting): max capability updated_at —
-    // cost figures are only reproducible against the pricing table version
-    // that produced them.
-    let pricingVersion: string | undefined;
-    try {
-      const stampRow = getDb().prepare(
-        'SELECT MAX(updated_at) AS v FROM provider_model_capabilities'
-      ).get() as { v: number | null } | undefined;
-      pricingVersion = stampRow?.v != null ? `pricing@${stampRow.v}` : undefined;
-    } catch {
-      pricingVersion = undefined;
+        return {
+          id: session.id,
+          title: session.title,
+          model: session.model,
+          providerId: session.providerId,
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+          facts,
+        };
+      }));
+      inputs.push(...batch);
     }
+    usageFactsCache.prune(sessionIds);
 
+    const pricingByProviderModel = new Map(
+      index.pricing.map((pricing) => [JSON.stringify([pricing.providerId, pricing.modelId]), pricing]),
+    );
     return aggregateUsageFromFacts(inputs, (providerId, model) => {
       if (!model) return undefined;
-      const pricing = capabilityDao.getOne(providerId, model)?.pricing;
-      if (!pricing) return undefined;
-      return {
-        inputPerMillion: pricing.inputPerMillion,
-        outputPerMillion: pricing.outputPerMillion,
-        cacheReadPerMillion: pricing.cacheReadPerMillion,
-        cacheWritePerMillion: pricing.cacheWritePerMillion,
-      };
-    }, Date.now(), pricingVersion);
+      return pricingByProviderModel.get(JSON.stringify([providerId, model]));
+    }, Date.now(), index.pricingVersion);
   });
 
-  // ==================== Lock Handlers (core store thin forward) ====================
-  // Plan 328 Phase 2: all lock IPC handlers forward to LockStore.
+  // ==================== Lock Handlers (Host API adapter) ====================
+  // The renderer-facing IPC contract stays stable while storage calls cross the Host boundary.
 
   ipcMain.handle('db:lock:acquire', (_event, sessionId: string, lockId: string, owner: string, ttlSec = 300) => {
-    const { locks } = getCoreStores();
-    return locks.acquire(sessionId, lockId, owner, ttlSec);
+    return getDesktopHostLockApi().acquireLock({ sessionId, lockId, owner, ttlSec });
   });
 
   ipcMain.handle('db:lock:renew', (_event, sessionId: string, lockId: string, ttlSec = 300) => {
-    const { locks } = getCoreStores();
-    return locks.renew(sessionId, lockId, ttlSec);
+    return getDesktopHostLockApi().renewLock({ sessionId, lockId, ttlSec });
   });
 
   ipcMain.handle('db:lock:release', (_event, sessionId: string, lockId: string) => {
-    const { locks } = getCoreStores();
-    return locks.release(sessionId, lockId);
+    return getDesktopHostLockApi().releaseLock({ sessionId, lockId });
   });
 
   ipcMain.handle('db:lock:isLocked', (_event, sessionId: string) => {
-    const { locks } = getCoreStores();
-    return locks.isLocked(sessionId);
+    return getDesktopHostLockApi().isSessionLocked(sessionId);
   });
 
   // ==================== Goal Handlers (core store thin forward) ====================
@@ -1359,20 +967,18 @@ export function registerDbHandlers(): void {
   // turn and to transition the goal status. On session resume the persisted
   // counters are read back into the in-memory TokenBudgetManager.
 
-  ipcMain.handle('db:goal:get', (_event, payload: { sessionId: string }) => {
-    const { goals } = getCoreStores();
-    const goal = goals.get(payload.sessionId);
+  ipcMain.handle('db:goal:get', async (_event, payload: { sessionId: string }) => {
+    const goal = await getDesktopHostGoalApi().getGoal(payload.sessionId);
     return goal ? coreGoalToIpcRow(goal) : undefined;
   });
 
-  ipcMain.handle('db:goal:create', (_event, data: {
+  ipcMain.handle('db:goal:create', async (_event, data: {
     id: string;
     session_id: string;
     goal_text?: string | null;
     token_budget?: number | null;
   }) => {
-    const { goals } = getCoreStores();
-    const goal = goals.create({
+    const goal = await getDesktopHostGoalApi().getOrCreateGoal({
       id: data.id,
       sessionId: data.session_id,
       goalText: data.goal_text ?? null,
@@ -1381,38 +987,35 @@ export function registerDbHandlers(): void {
     return coreGoalToIpcRow(goal);
   });
 
-  ipcMain.handle('db:goal:updateBudget', (_event, payload: {
+  ipcMain.handle('db:goal:updateBudget', async (_event, payload: {
     sessionId: string;
     tokensUsedDelta?: number;
     timeUsedDelta?: number;
   }) => {
-    const { goals } = getCoreStores();
-    const goal = goals.updateBudget(payload.sessionId, {
+    const goal = await getDesktopHostGoalApi().updateBudget(payload.sessionId, {
       tokensUsedDelta: payload.tokensUsedDelta,
       timeUsedDelta: payload.timeUsedDelta,
     });
     return goal ? coreGoalToIpcRow(goal) : undefined;
   });
 
-  ipcMain.handle('db:goal:setStatus', (_event, payload: {
+  ipcMain.handle('db:goal:setStatus', async (_event, payload: {
     sessionId: string;
     status: 'active' | 'paused' | 'usage_limited' | 'complete';
   }) => {
-    const { goals } = getCoreStores();
-    const goal = goals.setStatus(payload.sessionId, payload.status);
+    const goal = await getDesktopHostGoalApi().setStatus(payload.sessionId, payload.status);
     return goal ? coreGoalToIpcRow(goal) : undefined;
   });
 
-  ipcMain.handle('db:goal:listByStatus', (_event, status: 'active' | 'paused' | 'usage_limited' | 'complete') => {
-    const { goals } = getCoreStores();
-    return goals.listByStatus(status).map(coreGoalToIpcRow);
+  ipcMain.handle('db:goal:listByStatus', async (_event, status: 'active' | 'paused' | 'usage_limited' | 'complete') => {
+    return (await getDesktopHostGoalApi().listByStatus(status)).map(coreGoalToIpcRow);
   });
 
-  // ==================== Task Handlers (core store thin forward) ====================
-  // Plan 328 Phase 2: all task IPC handlers forward to TaskStore via
-  // core-db-adapters. DTO shape (snake_case flat row) is preserved.
+  // ==================== Task Handlers (Host API adapter) ====================
+  // Keep the renderer's flat row contract at this boundary; persistence goes
+  // through the same Host task service used by CLI and Agent Server.
 
-  ipcMain.handle('db:task:create', (_event, data: {
+  ipcMain.handle('db:task:create', async (_event, data: {
     id: string;
     session_id: string;
     subject: string;
@@ -1421,60 +1024,52 @@ export function registerDbHandlers(): void {
     active_form?: string;
     owner?: string;
   }) => {
-    const { tasks } = getCoreStores();
-    const task = tasks.create(ipcTaskToCoreCreate(data));
-    return coreTaskToIpcRow(task);
+    const task = await getDesktopHostTaskApi().createTask(data.session_id, ipcTaskToHostCreate(data));
+    return hostTaskToIpcRow(task);
   });
 
-  ipcMain.handle('db:task:get', (_event, id: string) => {
-    const { tasks } = getCoreStores();
-    const task = tasks.get(id);
-    return task ? coreTaskToIpcRow(task) : undefined;
+  ipcMain.handle('db:task:get', async (_event, id: string) => {
+    const task = await getDesktopHostTaskApi().getTask(id);
+    return task ? hostTaskToIpcRow(task) : undefined;
   });
 
-  ipcMain.handle('db:task:getBySession', (_event, sessionId: string) => {
-    const { tasks } = getCoreStores();
-    return tasks.getBySession(sessionId).map(coreTaskToIpcRow);
+  ipcMain.handle('db:task:getBySession', async (_event, sessionId: string) => {
+    const tasks = await getDesktopHostTaskApi().listTasks(sessionId);
+    return tasks.map(hostTaskToIpcRow);
   });
 
-  ipcMain.handle('db:task:update', (_event, id: string, data: Record<string, unknown>) => {
-    const { tasks } = getCoreStores();
-    const task = tasks.update(id, ipcTaskToUpdate(data));
-    return task ? coreTaskToIpcRow(task) : undefined;
+  ipcMain.handle('db:task:update', async (_event, id: string, data: Record<string, unknown>) => {
+    const task = await getDesktopHostTaskApi().updateTask(id, ipcTaskToHostUpdate(data));
+    return task ? hostTaskToIpcRow(task) : undefined;
   });
 
-  ipcMain.handle('db:task:delete', (_event, id: string) => {
-    const { tasks } = getCoreStores();
-    return tasks.delete(id);
+  ipcMain.handle('db:task:delete', async (_event, id: string) => {
+    return getDesktopHostTaskApi().deleteTask(id);
   });
 
-  ipcMain.handle('db:task:deleteBySession', (_event, sessionId: string) => {
-    const { tasks } = getCoreStores();
-    tasks.deleteBySession(sessionId);
+  ipcMain.handle('db:task:deleteBySession', async (_event, sessionId: string) => {
+    await getDesktopHostTaskApi().deleteTasksBySession(sessionId);
   });
 
-  ipcMain.handle('db:task:claim', (_event, id: string, owner: string) => {
-    const { tasks } = getCoreStores();
-    const result = tasks.claim(id, owner);
+  ipcMain.handle('db:task:claim', async (_event, id: string, owner: string) => {
+    const result = await getDesktopHostTaskApi().claimTask(id, owner);
     if (result.success && result.task) {
-      return { success: true, task: coreTaskToIpcRow(result.task) };
+      return { success: true, task: hostTaskToIpcRow(result.task) };
     }
     return result;
   });
 
-  ipcMain.handle('db:task:block', (_event, fromId: string, toId: string) => {
-    const { tasks } = getCoreStores();
-    return tasks.block(fromId, toId);
+  ipcMain.handle('db:task:block', async (_event, fromId: string, toId: string) => {
+    return getDesktopHostTaskApi().blockTasks(fromId, toId);
   });
 
-  ipcMain.handle('db:task:unassignTeammate', (_event, sessionId: string, owner: string) => {
-    const { tasks } = getCoreStores();
-    return tasks.unassignTeammate(sessionId, owner);
+  ipcMain.handle('db:task:unassignTeammate', async (_event, sessionId: string, owner: string) => {
+    return getDesktopHostTaskApi().unassignTeammateTasks(sessionId, owner);
   });
 
-  ipcMain.handle('db:task:getByOwner', (_event, sessionId: string, owner: string) => {
-    const { tasks } = getCoreStores();
-    return tasks.getByOwner(sessionId, owner).map(coreTaskToIpcRow);
+  ipcMain.handle('db:task:getByOwner', async (_event, sessionId: string, owner: string) => {
+    const tasks = await getDesktopHostTaskApi().listTasksByOwner(sessionId, owner);
+    return tasks.map(hostTaskToIpcRow);
   });
 
   // ==================== Automation Handlers ====================
@@ -1491,12 +1086,12 @@ export function registerDbHandlers(): void {
   // mutations (automation page) land the same chip in the bot's chat that
   // ManageRoutineTool persists for agent-side mutations. agent=null (a
   // project cron, not bot-bound) writes nothing. Best-effort.
-  const appendRoutineMarker = (
+  const appendRoutineMarker = async (
     agent: string | null | undefined,
     action: 'created' | 'updated' | 'deleted' | 'paused' | 'resumed',
     routineId: string,
     name: string,
-  ): void => {
+  ): Promise<void> => {
     if (!agent) return;
     try {
       const sessionId = `bot:${agent}`;
@@ -1518,13 +1113,15 @@ export function registerDbHandlers(): void {
         },
         created_at: Date.now(),
       };
-      const { messageLog } = getCoreStores();
       const event = ipcMessageToNewEvent(
         sessionId,
         message as unknown as Parameters<typeof ipcMessageToNewEvent>[1],
         null,
       );
-      messageLog.appendBatch([event]);
+      const receipt = await getDesktopHostSessionApi().appendTimeline(sessionId, {
+        entries: [event.payload],
+      });
+      if (receipt.writtenCount === 0) return;
       const broadcast = newEventToIpcMessage(event);
       if (broadcast) {
         getSessionManager().broadcastSessionEvent('message:new', {
@@ -1537,17 +1134,17 @@ export function registerDbHandlers(): void {
     }
   };
 
-  ipcMain.handle('automation:cron:create', (_event, data: CreateAutomationCronInput) => {
+  ipcMain.handle('automation:cron:create', async (_event, data: CreateAutomationCronInput) => {
     const scheduler = getAutomationScheduler();
     if (!scheduler) {
       throw new Error('Automation scheduler is not initialized');
     }
     const created = scheduler.createCron(data);
-    appendRoutineMarker(created.agent, 'created', created.id, created.name);
+    await appendRoutineMarker(created.agent, 'created', created.id, created.name);
     return created;
   });
 
-  ipcMain.handle('automation:cron:update', (_event, id: string, patch: UpdateAutomationCronInput) => {
+  ipcMain.handle('automation:cron:update', async (_event, id: string, patch: UpdateAutomationCronInput) => {
     const scheduler = getAutomationScheduler();
     if (!scheduler) {
       throw new Error('Automation scheduler is not initialized');
@@ -1557,14 +1154,14 @@ export function registerDbHandlers(): void {
     // A user-side enable flip surfaces as pause/resume, every other patch as
     // a plain update (mirrors ManageRoutineTool's action set).
     if (before && typeof patch.enabled === 'boolean' && before.enabled !== patch.enabled) {
-      appendRoutineMarker(updated.agent, patch.enabled ? 'resumed' : 'paused', updated.id, updated.name);
+      await appendRoutineMarker(updated.agent, patch.enabled ? 'resumed' : 'paused', updated.id, updated.name);
     } else {
-      appendRoutineMarker(updated.agent, 'updated', updated.id, updated.name);
+      await appendRoutineMarker(updated.agent, 'updated', updated.id, updated.name);
     }
     return updated;
   });
 
-  ipcMain.handle('automation:cron:delete', (_event, id: string) => {
+  ipcMain.handle('automation:cron:delete', async (_event, id: string) => {
     const scheduler = getAutomationScheduler();
     if (!scheduler) {
       throw new Error('Automation scheduler is not initialized');
@@ -1573,7 +1170,7 @@ export function registerDbHandlers(): void {
     const existing = scheduler.getCron(id);
     const result = scheduler.deleteCron(id);
     if (existing) {
-      appendRoutineMarker(existing.agent, 'deleted', id, existing.name);
+      await appendRoutineMarker(existing.agent, 'deleted', id, existing.name);
     }
     return result;
   });
@@ -1587,7 +1184,7 @@ export function registerDbHandlers(): void {
   });
 
   // Cron run history = the job's ordinary sessions (id prefix `cron:<jobId>:`).
-  ipcMain.handle('automation:cron:sessions', (_event, input: {
+  ipcMain.handle('automation:cron:sessions', async (_event, input: {
     cronId: string;
     limit?: number;
     offset?: number;
@@ -1596,16 +1193,11 @@ export function registerDbHandlers(): void {
     if (!scheduler) {
       throw new Error('Automation scheduler is not initialized');
     }
-    const { sessions } = getCoreStores();
-    const rows = sessions.listByPrefix(`cron:${input.cronId}:`, { limit: input.limit, offset: input.offset });
-    return rows.map((r) => ({
-      id: r.id,
-      title: r.title,
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
-      model: r.model,
-      messageCount: r.message_count,
-    }));
+    return getDesktopHostLocalSessionApi().listLocalSessionSummariesByPrefix({
+      idPrefix: `cron:${input.cronId}:`,
+      ...(input.limit === undefined ? {} : { limit: input.limit }),
+      ...(input.offset === undefined ? {} : { offset: input.offset }),
+    });
   });
 
   ipcMain.handle('automation:template:list', () => {
@@ -1615,29 +1207,25 @@ export function registerDbHandlers(): void {
 
   // ==================== Settings Handlers ====================
 
-  ipcMain.handle('db:setting:get', (_event, key: string) => {
+  ipcMain.handle('db:setting:get', async (_event, key: string) => {
     if (isGatewayConfigKey(key)) {
       const v = readGatewaySettingFromStore(getConfigStore(), key);
       return v;
     }
-    const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
-    return row?.value ?? null;
+    return getDesktopHostLocalSettingsApi().getSetting(key);
   });
 
-  ipcMain.handle('db:setting:set', (_event, key: string, value: string) => {
+  ipcMain.handle('db:setting:set', async (_event, key: string, value: string) => {
     if (isGatewayConfigKey(key)) {
       const store = getConfigStore();
       if (applyGatewaySettingToStore(store, key, value)) {
         emitGatewayConfigChanged(`db:setting:set:${key}`);
         return;
       }
-      // not a channel-scoped key after all: fall through to SQLite
+      // not a channel-scoped key after all: fall through to Host settings
     }
-    const now = Date.now();
-    getDb().prepare(`
-      INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-    `).run(key, value, now);
+    await getDesktopHostLocalSettingsApi().setSetting(key, value);
+    if (key === 'browserDownloadPath') setBrowserDownloadPathSetting(value);
     if (isGatewayConfigKey(key)) {
       emitGatewayConfigChanged(`db:setting:set:${key}`);
     }
@@ -1646,10 +1234,8 @@ export function registerDbHandlers(): void {
     }
   });
 
-  ipcMain.handle('db:setting:getAll', () => {
-    const rows = getDb().prepare('SELECT key, value FROM settings').all() as Array<{ key: string; value: string }>;
-    const settings: Record<string, string> = {};
-    for (const row of rows) settings[row.key] = row.value;
+  ipcMain.handle('db:setting:getAll', async () => {
+    const settings = { ...await getDesktopHostLocalSettingsApi().getSettings() };
     // Channel/gateway config now lives in ConfigStore (plan 335). Overlay the
     // legacy keys the renderer still reads so the SQLite settings table is not a
     // second source of truth for channels.
@@ -1657,7 +1243,7 @@ export function registerDbHandlers(): void {
     return settings;
   });
 
-  ipcMain.handle('db:setting:getJson', (_event, key: string, defaultValue: unknown) => {
+  ipcMain.handle('db:setting:getJson', async (_event, key: string, defaultValue: unknown) => {
     if (isGatewayConfigKey(key)) {
       const v = readGatewaySettingFromStore(getConfigStore(), key);
       if (v === null) return defaultValue;
@@ -1667,10 +1253,10 @@ export function registerDbHandlers(): void {
         return v;
       }
     }
-    const value = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
-    if (!value) return defaultValue;
+    const value = await getDesktopHostLocalSettingsApi().getSetting(key);
+    if (value === null) return defaultValue;
     try {
-      return JSON.parse(value.value);
+      return JSON.parse(value);
     } catch {
       return defaultValue;
     }
@@ -1684,20 +1270,19 @@ export function registerDbHandlers(): void {
     await writeUserMcpToml(servers as Awaited<ReturnType<typeof readUserMcpToml>>);
   });
 
-  ipcMain.handle('db:setting:setJson', (_event, key: string, value: unknown) => {
+  ipcMain.handle('db:setting:setJson', async (_event, key: string, value: unknown) => {
     if (isGatewayConfigKey(key)) {
       const store = getConfigStore();
       if (applyGatewaySettingToStore(store, key, value)) {
         emitGatewayConfigChanged(`db:setting:setJson:${key}`);
         return;
       }
-      // not a channel-scoped key after all: fall through to SQLite
+      // not a channel-scoped key after all: fall through to Host settings
     }
-    const now = Date.now();
-    getDb().prepare(`
-      INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-    `).run(key, JSON.stringify(value), now);
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) throw new Error('Setting value is not JSON serializable');
+    await getDesktopHostLocalSettingsApi().setSetting(key, serialized);
+    if (key === 'browserDownloadPath') setBrowserDownloadPathSetting(serialized);
     if (isGatewayConfigKey(key)) {
       emitGatewayConfigChanged(`db:setting:setJson:${key}`);
     }
@@ -1717,35 +1302,33 @@ export function registerDbHandlers(): void {
     }
   });
 
-  // ==================== Permission Handlers (core store thin forward) ====================
-  // Plan 328 Phase 2: all permission IPC handlers forward to PermissionLedger
-  // via core-db-adapters. DTO shape (snake_case flat row) is preserved.
+  // ==================== Permission Handlers (Host API adapter) ====================
+  // The permission request DTO stays in its legacy snake_case IPC shape.
 
-  ipcMain.handle('db:permission:create', (_event, data: {
+  ipcMain.handle('db:permission:create', async (_event, data: {
     id: string;
     sessionId?: string;
     toolName: string;
     toolInput?: Record<string, unknown>;
   }) => {
-    const { permissions } = getCoreStores();
-    const perm = permissions.create(ipcPermissionToCoreCreate(data));
+    const perm = await getDesktopHostPermissionRequestApi().createPermissionRequest(
+      ipcPermissionToCoreCreate(data),
+    );
     return corePermissionToIpcRow(perm);
   });
 
-  ipcMain.handle('db:permission:get', (_event, id: string) => {
-    const { permissions } = getCoreStores();
-    const perm = permissions.get(id);
+  ipcMain.handle('db:permission:get', async (_event, id: string) => {
+    const perm = await getDesktopHostPermissionRequestApi().getPermissionRequest(id);
     return perm ? corePermissionToIpcRow(perm) : undefined;
   });
 
-  ipcMain.handle('db:permission:resolve', (_event, id: string, status: string, extra?: {
+  ipcMain.handle('db:permission:resolve', async (_event, id: string, status: string, extra?: {
     message?: string;
     updatedPermissions?: unknown[];
     updatedInput?: Record<string, unknown>;
     sessionId?: string;
   }) => {
-    const { permissions } = getCoreStores();
-    permissions.resolve(id, {
+    const resolved = await getDesktopHostPermissionRequestApi().resolvePermissionRequest(id, {
       status: status as 'pending' | 'allow' | 'deny' | 'timeout' | 'aborted',
       decision: status,
       ...ipcPermissionToResolve(extra),
@@ -1769,22 +1352,19 @@ export function registerDbHandlers(): void {
       dbLogger.warn('Agent process not available for permission:resolve forwarding', { sessionId, isRunning: sessionId ? agentPool.isRunning(sessionId) : false }, LogComponent.DB);
     }
 
-    const resolved = permissions.get(id);
     // Plan 498: keep any durable approval card in sync with the interactive
     // fast path — the worker executes right away via its in-memory promise,
     // so the card must transition and its one-shot ledger entry must burn.
     if (status === 'allow' || status === 'deny') {
-      syncApprovalCard(
+      await syncApprovalCardAsync(
         {
-          resolve: (approvalId, decision) => {
-            const db = getDatabase();
-            if (!db) return undefined;
-            return resolveToolApproval(db, approvalId, decision);
+          resolve: async (approvalId, decision) => {
+            const result = await getDesktopHostToolApprovalApi().resolveToolApproval(approvalId, decision);
+            return result ?? undefined;
           },
-          markConsumed: (approvalId) => {
-            const db = getDatabase();
-            if (!db) return undefined;
-            return consumeToolApprovalById(db, approvalId);
+          markConsumed: async (approvalId) => {
+            const row = await getDesktopHostToolApprovalApi().consumeToolApprovalById(approvalId);
+            return row ?? undefined;
           },
           enqueueContinuation: () => {
             // Fast path: the worker is executing now — never queue a replay.
@@ -1800,27 +1380,24 @@ export function registerDbHandlers(): void {
 
   // ==================== Tool approval cards (plan 498) ====================
 
-  ipcMain.handle('db:toolApproval:listBySession', (_event, sessionId: string) => {
-    const db = getDatabase();
-    if (!db) return [];
-    return listToolApprovalsBySession(db, sessionId);
+  ipcMain.handle('db:toolApproval:listBySession', async (_event, sessionId: string) => {
+    return getDesktopHostToolApprovalApi().listToolApprovalsBySession(sessionId);
   });
 
-  ipcMain.handle('db:toolApproval:get', (_event, id: string) => {
-    const db = getDatabase();
-    if (!db) return undefined;
-    return getToolApproval(db, id);
+  ipcMain.handle('db:toolApproval:get', async (_event, id: string) => {
+    return (await getDesktopHostToolApprovalApi().getToolApproval(id)) ?? undefined;
   });
 
-  ipcMain.handle('db:toolApproval:resolve', (_event, id: string, decision: string) => {
-    const db = getDatabase();
-    if (!db) return { ok: false, reason: 'db_unavailable' };
+  ipcMain.handle('db:toolApproval:resolve', async (_event, id: string, decision: string) => {
     if (decision !== 'allow' && decision !== 'always' && decision !== 'deny') {
       return { ok: false, reason: 'invalid_decision' };
     }
-    return resolveApprovalCard(
+    return resolveApprovalCardAsync(
       {
-        resolve: (approvalId, d) => resolveToolApproval(db, approvalId, d),
+        resolve: async (approvalId, d) => {
+          const result = await getDesktopHostToolApprovalApi().resolveToolApproval(approvalId, d);
+          return result ?? undefined;
+        },
         enqueueContinuation: (row, d) => {
           const item: WakeItem = {
             id: `approval:${row.id}`,
@@ -1853,42 +1430,15 @@ export function registerDbHandlers(): void {
   // titles beats unicode61 FTS (326 decision 3); messages_fts/sessions_fts
   // virtual tables are no longer referenced.
 
-  ipcMain.handle('db:search:sessions', (_event, query: string, limit = 10) => {
-    const { sessions, messageLog } = getCoreStores();
-    // 1. Metadata matches (title / project_name / agent_name) — snippet empty.
-    const metaHits = sessions.search(query, limit);
-    const seenIds = new Set(metaHits.map((s) => s.id));
-    const rows: Record<string, unknown>[] = metaHits.map((s) => ({
-      ...coreSessionToIpcRow(s),
-      snippet: '',
+  ipcMain.handle('db:search:sessions', async (_event, query: string, limit = 10) => {
+    const results = await getDesktopHostSessionApi().searchSessions(query, { limit });
+    const rows: Array<Record<string, unknown> | null> = await Promise.all(results.map(async (result) => {
+      const session = await getDesktopHostLocalSessionApi().readLocalSession(result.session.id, {
+        includeAllSessions: true,
+      });
+      return session ? { ...coreSessionToIpcRow(session), snippet: result.snippet } : null;
     }));
-
-    // 2. Content matches (rollout scan) — fill in snippet for sessions not
-    //    already in the metadata set, up to `limit` total.
-    if (rows.length < limit) {
-      const remaining = limit - rows.length;
-      const contentHits = messageLog.searchText(query, { limit: remaining + 5 });
-      for (const hit of contentHits) {
-        if (rows.length >= limit) break;
-        if (seenIds.has(hit.sessionId)) {
-          // Attach snippet to existing metadata hit if not already set.
-          const row = rows.find((r) => r.id === hit.sessionId);
-          if (row && !row.snippet) row.snippet = hit.snippet;
-          continue;
-        }
-        const session = sessions.get(hit.sessionId);
-        if (!session || session.status === 'deleted') continue;
-        seenIds.add(hit.sessionId);
-        rows.push({
-          ...coreSessionToIpcRow(session),
-          snippet: hit.snippet,
-        });
-      }
-    }
-
-    // Sort by updated_at DESC (matches old ORDER BY).
-    rows.sort((a, b) => ((b.updated_at as number) ?? 0) - ((a.updated_at as number) ?? 0));
-    return rows.slice(0, limit);
+    return rows.filter((row): row is Record<string, unknown> => row !== null);
   });
 
   // ==================== Unified Search (rakazo-inspired space search) ====================
@@ -1916,7 +1466,7 @@ export function registerDbHandlers(): void {
     return [...new Set(matches.map((u) => u.replace(/[.,;:!?)]+$/, '')))];
   };
 
-  ipcMain.handle('db:search:query', (_event, rawQuery: string, limit = 25) => {
+  ipcMain.handle('db:search:query', async (_event, rawQuery: string, limit = 25) => {
     const TOTAL = Math.max(limit, 1);
     const query = String(rawQuery ?? '').trim();
     if (!query) return [] as unknown[];
@@ -1927,7 +1477,11 @@ export function registerDbHandlers(): void {
       hits.some((h) => h.kind === kind && h.key === key);
 
     // 1. Navigation: sessions (metadata LIKE).
-    for (const s of getCoreStores().sessions.search(query, SEARCH_NAV_CAP)) {
+    const sessionResults = await getDesktopHostSessionApi().searchSessions(query, {
+      limit: SEARCH_NAV_CAP,
+      includeContent: false,
+    });
+    for (const { session: s } of sessionResults) {
       if (navCount() >= SEARCH_NAV_CAP) break;
       if (seenKey('session', s.id)) continue;
       hits.push({
@@ -1958,25 +1512,19 @@ export function registerDbHandlers(): void {
     // 3. Content: messages + links (rollout content scan).
     const contentBudget = Math.max(0, TOTAL - navCount());
     if (contentBudget > 0) {
-      const msgHits = getCoreStores().messageLog.searchText(query, { limit: contentBudget + 5 });
-      const { sessions } = getCoreStores();
-      const titleBySession = new Map<string, string>();
+      const msgHits = await getDesktopHostSessionApi().searchMessages(query, contentBudget + 5);
       for (const m of msgHits) {
         if (hits.length >= TOTAL) break;
         if (seenKey('message', m.messageId)) continue;
-        let title = titleBySession.get(m.sessionId);
-        if (title === undefined) {
-          title = sessions.get(m.sessionId)?.title ?? m.sessionId;
-          titleBySession.set(m.sessionId, title);
-        }
+        const title = m.session.title || m.session.id;
         hits.push({
           key: m.messageId,
           kind: 'message',
-          sessionId: m.sessionId,
+          sessionId: m.session.id,
           title,
           snippet: m.snippet,
           messageId: m.messageId,
-          seq: m.seq,
+          seq: m.sequence,
         });
         // Link hits ride the same matched message text (best-effort: the snippet
         // window, not the full message — fine for v1 navigation).
@@ -1985,11 +1533,11 @@ export function registerDbHandlers(): void {
           hits.push({
             key: url,
             kind: 'link',
-            sessionId: m.sessionId,
+            sessionId: m.session.id,
             title: url,
             snippet: m.snippet,
             messageId: m.messageId,
-            seq: m.seq,
+            seq: m.sequence,
           });
         }
       }
@@ -2026,23 +1574,15 @@ export function registerDbHandlers(): void {
 
   // ==================== Channel Binding Handlers ====================
 
-  ipcMain.handle('db:channel:getBindings', (_event, channelType?: string) => {
-    const database = getDb();
-    if (channelType) {
-      return database.prepare(
-        'SELECT * FROM channel_bindings WHERE channel_type = ? ORDER BY updated_at DESC'
-      ).all(channelType);
-    }
-    return database.prepare('SELECT * FROM channel_bindings ORDER BY updated_at DESC').all();
+  ipcMain.handle('db:channel:getBindings', async (_event, channelType?: string) => {
+    return getDesktopHostLocalChannelPersistenceApi().listChannelBindings(channelType);
   });
 
-  ipcMain.handle('db:channel:getBinding', (_event, channelType: string, chatId: string) => {
-    return getDb().prepare(
-      'SELECT * FROM channel_bindings WHERE channel_type = ? AND chat_id = ?'
-    ).get(channelType, chatId);
+  ipcMain.handle('db:channel:getBinding', async (_event, channelType: string, chatId: string) => {
+    return getDesktopHostLocalChannelPersistenceApi().getChannelBinding(channelType, chatId);
   });
 
-  ipcMain.handle('db:channel:upsertBinding', (_event, data: {
+  ipcMain.handle('db:channel:upsertBinding', async (_event, data: {
     id: string;
     channel_type: string;
     chat_id: string;
@@ -2052,49 +1592,20 @@ export function registerDbHandlers(): void {
     model?: string;
     mode?: string;
   }) => {
-    const now = Date.now();
-    const database = getDb();
-    database.prepare(`
-      INSERT INTO channel_bindings (id, channel_type, chat_id, duya_session_id, sdk_session_id, working_directory, model, mode, active, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        duya_session_id = excluded.duya_session_id,
-        sdk_session_id = COALESCE(excluded.sdk_session_id, sdk_session_id),
-        working_directory = COALESCE(excluded.working_directory, working_directory),
-        model = COALESCE(excluded.model, model),
-        mode = COALESCE(excluded.mode, mode),
-        updated_at = excluded.updated_at
-    `).run(
-      data.id,
-      data.channel_type,
-      data.chat_id,
-      data.duya_session_id,
-      data.sdk_session_id || '',
-      data.working_directory || '',
-      data.model || '',
-      data.mode || 'code',
-      now,
-      now
-    );
-    return database.prepare('SELECT * FROM channel_bindings WHERE id = ?').get(data.id);
+    return getDesktopHostLocalChannelPersistenceApi().upsertChannelBinding(data);
   });
 
-  ipcMain.handle('db:channel:getOffset', (_event, channelType: string, offsetKey: string) => {
-    return getDb().prepare(
-      'SELECT * FROM channel_offsets WHERE channel_type = ? AND offset_key = ?'
-    ).get(channelType, offsetKey);
+  ipcMain.handle('db:channel:getOffset', async (_event, channelType: string, offsetKey: string) => {
+    return getDesktopHostLocalChannelPersistenceApi().getChannelOffset(channelType, offsetKey);
   });
 
-  ipcMain.handle('db:channel:setOffset', (_event, channelType: string, offsetKey: string, offsetValue: string, offsetType = 'long_polling') => {
-    const now = Date.now();
-    getDb().prepare(`
-      INSERT INTO channel_offsets (channel_type, offset_key, offset_value, offset_type, updated_at)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(channel_type, offset_key) DO UPDATE SET
-        offset_value = excluded.offset_value,
-        offset_type = COALESCE(excluded.offset_type, offset_type),
-        updated_at = excluded.updated_at
-    `).run(channelType, offsetKey, offsetValue, offsetType, now);
+  ipcMain.handle('db:channel:setOffset', async (_event, channelType: string, offsetKey: string, offsetValue: string, offsetType = 'long_polling') => {
+    await getDesktopHostLocalChannelPersistenceApi().setChannelOffset({
+      channelType,
+      offsetKey,
+      offsetValue,
+      offsetType,
+    });
   });
 
   // ==================== Secret Store Handlers (Plan 488 P3.1) ====================
@@ -2119,11 +1630,22 @@ export function registerDbHandlers(): void {
 
   // ==================== Project Group Handlers ====================
 
-  ipcMain.handle('db:project:getGroups', () => {
+  ipcMain.handle('db:project:getGroups', async () => {
     // Plan 328 Phase 5: aggregate from core SessionStore instead of legacy
-    // chat_sessions table. Group by working_directory in JS (small N).
-    const { sessions } = getCoreStores();
-    const all = sessions.list(); // excludes status='deleted' by default
+    // chat_sessions table. Read through Host and group by working_directory.
+    const host = getDesktopHostLocalSessionApi();
+    const all: CoreSession[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await host.listLocalSessions({
+        includeAllSessions: true,
+        limit: 200,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      all.push(...page.sessions);
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor !== undefined);
+
     const groups = new Map<string, { working_directory: string; project_name: string; thread_count: number; last_activity: number }>();
     for (const s of all) {
       if (!s.workingDirectory) continue;
@@ -2266,9 +1788,8 @@ export function registerDbHandlers(): void {
     return row;
   });
 
-  ipcMain.handle('db:weixin:deleteAccount', (_event, accountId: string) => {
-    const database = getDb();
-    database.prepare('DELETE FROM weixin_context_tokens WHERE account_id = ?').run(accountId);
+  ipcMain.handle('db:weixin:deleteAccount', async (_event, accountId: string) => {
+    await getDesktopHostLocalChannelPersistenceApi().deleteWeixinContextTokens(accountId);
     const deleted = deleteWeixinAccount(accountId);
     if (deleted) {
       emitGatewayConfigChanged(`db:weixin:deleteAccount:${accountId}`);
@@ -2276,64 +1797,31 @@ export function registerDbHandlers(): void {
     return deleted;
   });
 
-  ipcMain.handle('db:weixin:getContextToken', (_event, accountId: string, peerUserId: string) => {
-    const row = getDb().prepare(
-      'SELECT context_token FROM weixin_context_tokens WHERE account_id = ? AND peer_user_id = ?'
-    ).get(accountId, peerUserId) as { context_token: string } | undefined;
-    return row?.context_token || null;
+  ipcMain.handle('db:weixin:getContextToken', async (_event, accountId: string, peerUserId: string) => {
+    return getDesktopHostLocalChannelPersistenceApi().getWeixinContextToken(accountId, peerUserId);
   });
 
-  ipcMain.handle('db:weixin:setContextToken', (_event, accountId: string, peerUserId: string, contextToken: string) => {
-    const now = Date.now();
-    getDb().prepare(`
-      INSERT INTO weixin_context_tokens (account_id, peer_user_id, context_token, updated_at)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(account_id, peer_user_id) DO UPDATE SET
-        context_token = excluded.context_token,
-        updated_at = excluded.updated_at
-    `).run(accountId, peerUserId, contextToken, now);
+  ipcMain.handle('db:weixin:setContextToken', async (_event, accountId: string, peerUserId: string, contextToken: string) => {
+    await getDesktopHostLocalChannelPersistenceApi().setWeixinContextToken({
+      accountId,
+      peerUserId,
+      contextToken,
+    });
   });
 
   // ==================== Agent Profile Handlers ====================
 
-  ipcMain.handle('db:agentProfile:list', () => {
-    return getDb().prepare('SELECT * FROM agent_profiles ORDER BY is_preset DESC, name ASC').all();
+  ipcMain.handle('db:agentProfile:list', async () => {
+    return getDesktopHostLocalAgentProfileApi().listAgentProfiles();
   });
 
-  ipcMain.handle('db:agentProfile:get', (_event, id: string) => {
-    return getDb().prepare('SELECT * FROM agent_profiles WHERE id = ?').get(id);
+  ipcMain.handle('db:agentProfile:get', async (_event, id: string) => {
+    return getDesktopHostLocalAgentProfileApi().getAgentProfile(id);
   });
 
-  ipcMain.handle('db:agentProfile:create', (_event, payload: unknown) => {
+  ipcMain.handle('db:agentProfile:create', async (_event, payload: unknown) => {
     const data = parseIpcPayload(AgentProfileCreateSchema, payload, 'db:agentProfile:create');
-    const now = Date.now();
-    const id = data.id || randomUUID();
-    const database = getDb();
-    database.prepare(`
-      INSERT INTO agent_profiles (
-        id, name, description, allowed_tools, disallowed_tools, prompt_system, prompt_profile, default_model,
-        profile_kind, user_visible, is_preset, is_enabled, created_at, updated_at
-      ) VALUES (
-        @id, @name, @description, @allowed_tools, @disallowed_tools, @prompt_system, @prompt_profile, @default_model,
-        @profile_kind, @user_visible, @is_preset, @is_enabled, @created_at, @updated_at
-      )
-    `).run({
-      id,
-      name: data.name || 'New Agent',
-      description: data.description ?? null,
-      allowed_tools: data.allowed_tools ? JSON.stringify(data.allowed_tools) : null,
-      disallowed_tools: data.disallowed_tools ? JSON.stringify(data.disallowed_tools) : null,
-      prompt_system: data.prompt_system ?? null,
-      prompt_profile: data.prompt_profile ? JSON.stringify(data.prompt_profile) : null,
-      default_model: data.default_model ?? null,
-      profile_kind: data.profile_kind ?? 'main',
-      user_visible: data.user_visible !== undefined ? (data.user_visible ? 1 : 0) : 1,
-      is_preset: data.is_preset !== undefined ? (data.is_preset ? 1 : 0) : 0,
-      is_enabled: data.is_enabled !== undefined ? (data.is_enabled ? 1 : 0) : 1,
-      created_at: now,
-      updated_at: now,
-    });
-    return database.prepare('SELECT * FROM agent_profiles WHERE id = ?').get(id);
+    return getDesktopHostLocalAgentProfileApi().createAgentProfile(data);
   });
 
   // Plan 424: expose config-driven custom agent profiles to the renderer.
@@ -2378,68 +1866,42 @@ export function registerDbHandlers(): void {
     return updated;
   });
 
-  ipcMain.handle('db:agentProfile:update', (_event, id: string, payload: unknown) => {
+  ipcMain.handle('db:agentProfile:update', async (_event, id: string, payload: unknown) => {
     const data = parseIpcPayload(AgentProfileUpdateSchema, payload, 'db:agentProfile:update');
     const profileId = parseIpcPayload(RecordIdSchema, id, 'db:agentProfile:update');
-    const now = Date.now();
-    const fields: string[] = ['updated_at = @updated_at'];
-    const params: Record<string, unknown> = { id: profileId, updated_at: now };
-
-    const fieldMap: Record<string, [string, (v: unknown) => unknown]> = {
-      name: ['name', v => v],
-      description: ['description', v => v ?? null],
-      allowed_tools: ['allowed_tools', v => v ? JSON.stringify(v) : null],
-      disallowed_tools: ['disallowed_tools', v => v ? JSON.stringify(v) : null],
-      prompt_system: ['prompt_system', v => v ?? null],
-      prompt_profile: ['prompt_profile', v => v ? JSON.stringify(v) : null],
-      default_model: ['default_model', v => v ?? null],
-      profile_kind: ['profile_kind', v => v ?? 'main'],
-      is_enabled: ['is_enabled', v => v !== undefined ? (v ? 1 : 0) : 1],
-    };
-
-    for (const [key, [dbField, transform]] of Object.entries(fieldMap)) {
-      const value = (data as Record<string, unknown>)[key];
-      if (value !== undefined) {
-        fields.push(`${dbField} = @${dbField}`);
-        params[dbField] = transform(value);
-      }
-    }
-
-    const database = getDb();
-    database.prepare(`UPDATE agent_profiles SET ${fields.join(', ')} WHERE id = @id`).run(params);
-    return database.prepare('SELECT * FROM agent_profiles WHERE id = ?').get(profileId);
+    return getDesktopHostLocalAgentProfileApi().updateAgentProfile(profileId, {
+      name: data.name,
+      description: data.description,
+      allowed_tools: data.allowed_tools,
+      disallowed_tools: data.disallowed_tools,
+      prompt_system: data.prompt_system,
+      prompt_profile: data.prompt_profile,
+      default_model: data.default_model,
+      profile_kind: data.profile_kind,
+      is_enabled: data.is_enabled,
+    });
   });
 
-  ipcMain.handle('db:agentProfile:delete', (_event, id: string) => {
-    const database = getDb();
-    // Prevent deleting preset profiles
-    const profile = database.prepare('SELECT is_preset FROM agent_profiles WHERE id = ?').get(id) as { is_preset: number } | undefined;
-    if (!profile) return false;
-    if (profile.is_preset === 1) {
-      throw new Error('Cannot delete preset agent profiles');
-    }
-    const result = database.prepare('DELETE FROM agent_profiles WHERE id = ?').run(id);
-    return result.changes > 0;
+  ipcMain.handle('db:agentProfile:delete', async (_event, id: string) => {
+    return getDesktopHostLocalAgentProfileApi().deleteAgentProfile(id);
   });
 
   // ==================== Session Agent Profile Binding (core store thin forward) ====================
 
-  ipcMain.handle('db:session:setAgentProfile', (_event, sessionId: string, agentProfileId: string | null) => {
-    const { sessions } = getCoreStores();
-    sessions.update(sessionId, { agentProfileId });
-    const updated = sessions.get(sessionId);
-    return updated ? coreSessionToIpcRow(updated) : undefined;
+  ipcMain.handle('db:session:setAgentProfile', async (_event, sessionId: string, agentProfileId: string | null) => {
+    return updateHostSessionRow(sessionId, { agentProfileId });
   });
 
   ipcMain.handle(
     'db:session:set_conductor_mode',
-    (_event, payload: { sessionId: string; enabled: boolean; canvasId?: string | null }) => {
-      const { sessions } = getCoreStores();
+    async (_event, payload: { sessionId: string; enabled: boolean; canvasId?: string | null }) => {
       // conductor_mode_enabled / conductor_canvas_id live in extensions.
-      sessions.setExtension(payload.sessionId, 'conductor_mode_enabled', payload.enabled ? 1 : 0);
-      sessions.setExtension(payload.sessionId, 'conductor_canvas_id', payload.canvasId ?? null);
-      const updated = sessions.get(payload.sessionId);
-      return updated ? coreSessionToIpcRow(updated) : undefined;
+      return updateHostSessionRow(payload.sessionId, {
+        extensions: {
+          conductor_mode_enabled: payload.enabled ? 1 : 0,
+          conductor_canvas_id: payload.canvasId ?? null,
+        },
+      });
     },
   );
 
@@ -2448,11 +1910,10 @@ export function registerDbHandlers(): void {
   // key-level write. Pinned sessions surface to the top of the sidebar.
   ipcMain.handle(
     'db:session:set_pinned',
-    (_event, payload: { sessionId: string; pinned: boolean }) => {
-      const { sessions } = getCoreStores();
-      sessions.setExtension(payload.sessionId, 'pinned', payload.pinned ? 1 : 0);
-      const updated = sessions.get(payload.sessionId);
-      return updated ? coreSessionToIpcRow(updated) : undefined;
+    async (_event, payload: { sessionId: string; pinned: boolean }) => {
+      return updateHostSessionRow(payload.sessionId, {
+        extensions: { pinned: payload.pinned ? 1 : 0 },
+      });
     },
   );
 
@@ -2460,11 +1921,10 @@ export function registerDbHandlers(): void {
   // set_conductor_mode pattern — plan_mode_enabled lives in extensions.
   ipcMain.handle(
     'db:session:set_plan_mode',
-    (_event, payload: { sessionId: string; enabled: boolean }) => {
-      const { sessions } = getCoreStores();
-      sessions.setExtension(payload.sessionId, 'plan_mode_enabled', payload.enabled ? 1 : 0);
-      const updated = sessions.get(payload.sessionId);
-      return updated ? coreSessionToIpcRow(updated) : undefined;
+    async (_event, payload: { sessionId: string; enabled: boolean }) => {
+      return updateHostSessionRow(payload.sessionId, {
+        extensions: { plan_mode_enabled: payload.enabled ? 1 : 0 },
+      });
     },
   );
 
@@ -2472,11 +1932,10 @@ export function registerDbHandlers(): void {
   // set_conductor_mode pattern — goal_mode_enabled lives in extensions.
   ipcMain.handle(
     'db:session:set_goal_mode',
-    (_event, payload: { sessionId: string; enabled: boolean }) => {
-      const { sessions } = getCoreStores();
-      sessions.setExtension(payload.sessionId, 'goal_mode_enabled', payload.enabled ? 1 : 0);
-      const updated = sessions.get(payload.sessionId);
-      return updated ? coreSessionToIpcRow(updated) : undefined;
+    async (_event, payload: { sessionId: string; enabled: boolean }) => {
+      return updateHostSessionRow(payload.sessionId, {
+        extensions: { goal_mode_enabled: payload.enabled ? 1 : 0 },
+      });
     },
   );
 
@@ -3167,70 +2626,49 @@ export function registerConductorHandlers(): void {
 // sidebar render group.
 
 export function registerSidebarSectionsHandlers(): void {
-  if (!getDatabase()) return;
-
-  let store: SidebarSectionsStore | null = null;
-  try {
-    const db = getDb();
-    store = new SidebarSectionsStore(db);
-  } catch (error) {
-    dbLogger.warn(
-      'SidebarSectionsStore unavailable — section IPC will no-op',
-      { error: error instanceof Error ? error.message : String(error) },
-      LogComponent.DB,
-    );
-    return;
-  }
-
-  const sectionsStore: SidebarSectionsStore = store;
-
-  ipcMain.handle('sidebar-sections:list', () => {
-    const sections = sectionsStore.listSections();
-    const projects = sectionsStore.listSectionProjects();
-    return { sections, projects };
-  });
+  ipcMain.handle('sidebar-sections:list', () => getDesktopHostLocalSidebarSectionsApi().listSidebarSections());
 
   ipcMain.handle('sidebar-sections:create', (_event, input: SidebarSectionCreateInput) => {
-    return sectionsStore.createSection(input);
+    return getDesktopHostLocalSidebarSectionsApi().createSidebarSection(input);
   });
 
   ipcMain.handle(
     'sidebar-sections:update',
     (_event, id: string, patch: SidebarSectionPatch) => {
-      return sectionsStore.updateSection(id, patch);
+      return getDesktopHostLocalSidebarSectionsApi().updateSidebarSection(id, patch);
     },
   );
 
   ipcMain.handle('sidebar-sections:remove', (_event, id: string) => {
-    return sectionsStore.deleteSection(id);
+    return getDesktopHostLocalSidebarSectionsApi().deleteSidebarSection(id);
   });
 
   ipcMain.handle(
     'sidebar-sections:assignProject',
     (_event, sectionId: string, workingDirectory: string) => {
-      return sectionsStore.assignProject(sectionId, workingDirectory);
+      return getDesktopHostLocalSidebarSectionsApi().assignSidebarProject(sectionId, workingDirectory);
     },
   );
 
   ipcMain.handle('sidebar-sections:unassignProject', (_event, workingDirectory: string) => {
-    return sectionsStore.unassignProject(workingDirectory);
+    return getDesktopHostLocalSidebarSectionsApi().unassignSidebarProject(workingDirectory);
   });
 
   ipcMain.handle('sidebar-sections:reorder', (_event, orderedIds: string[]) => {
-    return sectionsStore.reorderSections(orderedIds);
+    return getDesktopHostLocalSidebarSectionsApi().reorderSidebarSections(orderedIds);
   });
 
   ipcMain.handle(
     'sidebar-sections:reorderProjects',
     (_event, sectionId: string, orderedDirs: string[]) => {
-      return sectionsStore.reorderProjectsInSection(sectionId, orderedDirs);
+      return getDesktopHostLocalSidebarSectionsApi().reorderSidebarProjects(sectionId, orderedDirs);
     },
   );
 
   ipcMain.handle(
     'sidebar-sections:findSectionForProject',
     (_event, workingDirectory: string) => {
-      return sectionsStore.findSectionForProject(workingDirectory);
+      return getDesktopHostLocalSidebarSectionsApi().findSidebarSectionForProject(workingDirectory);
     },
   );
 
@@ -3332,7 +2770,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 // (single source of truth, Plan 202 §5.2).
 
 export function registerMailboxHandlers(): void {
-  ipcMain.handle('mailbox:send', (_event, data: {
+  ipcMain.handle('mailbox:send', async (_event, data: {
     id: string;
     sessionId: string;
     content: string;
@@ -3343,8 +2781,7 @@ export function registerMailboxHandlers(): void {
     source?: string;
     constraintsJson?: string;
   }) => {
-    const { mailbox } = getCoreStores();
-    const item = mailbox.enqueue({
+    const item = await getDesktopHostLocalMailboxApi().enqueue({
       id: data.id,
       sessionId: data.sessionId,
       submittedRunId: data.submittedDuringRunId || '',
@@ -3395,9 +2832,9 @@ export function registerMailboxHandlers(): void {
     return row;
   });
 
-  ipcMain.handle('mailbox:edit', (_event, data: { id: string; content?: string; kind?: string }) => {
-    const { mailbox } = getCoreStores();
-    const existing = mailbox.get(data.id);
+  ipcMain.handle('mailbox:edit', async (_event, data: { id: string; content?: string; kind?: string }) => {
+    const mailbox = getDesktopHostLocalMailboxApi();
+    const existing = await mailbox.getItem(data.id);
     if (!existing) return null;
     // A previous renderer may have committed the row before its IPC response
     // failed. Returning the same row makes a retry enqueue it exactly once.
@@ -3405,7 +2842,7 @@ export function registerMailboxHandlers(): void {
       return coreMailboxToIpcRow(existing);
     }
     const previousContent = existing.content;
-    const edited = mailbox.edit(data.id, {
+    const edited = await mailbox.edit(data.id, {
       content: data.content,
       kind: data.kind as MailboxKind | undefined,
     });
@@ -3415,50 +2852,43 @@ export function registerMailboxHandlers(): void {
     return row;
   });
 
-  ipcMain.handle('mailbox:guide', (_event, data: { id: string }) => {
-    const { mailbox } = getCoreStores();
-    const existing = mailbox.get(data.id);
+  ipcMain.handle('mailbox:guide', async (_event, data: { id: string }) => {
+    const mailbox = getDesktopHostLocalMailboxApi();
+    const existing = await mailbox.getItem(data.id);
     if (!existing) return null;
     const previousContent = existing.content;
-    const guided = mailbox.guide(data.id);
+    const guided = await mailbox.guide(data.id);
     if (!guided) return null;
     const row = coreMailboxToIpcRow(guided);
     emitMailEdited(row, previousContent);
     return row;
   });
 
-  ipcMain.handle('mailbox:promoteQueued', (_event, data: { id: string }) => {
-    const { mailbox } = getCoreStores();
-    // promoteQueued requires sessionId — fetch the item first to get it.
-    const existing = mailbox.get(data.id);
-    if (!existing) return null;
-    const item = mailbox.promoteQueued(existing.sessionId, data.id);
+  ipcMain.handle('mailbox:promoteQueued', async (_event, data: { id: string }) => {
+    const item = await getDesktopHostLocalMailboxApi().promoteQueued(data.id);
     if (!item) return null;
     const row = coreMailboxToIpcRow(item);
     emitMailApplied(row);
     return row;
   });
 
-  ipcMain.handle('mailbox:cancel', (_event, data: { id: string; reason?: string }) => {
-    const { mailbox } = getCoreStores();
-    const cancelled = mailbox.cancel(data.id, data.reason, 'user');
+  ipcMain.handle('mailbox:cancel', async (_event, data: { id: string; reason?: string }) => {
+    const cancelled = await getDesktopHostLocalMailboxApi().cancel(data.id, data.reason);
     if (!cancelled) return null;
     const row = coreMailboxToIpcRow(cancelled);
     emitMailCancelled(row, data.reason);
     return row;
   });
 
-  ipcMain.handle('mailbox:list', (_event, data: { sessionId: string; status?: string[]; limit?: number }) => {
-    const { mailbox } = getCoreStores();
+  ipcMain.handle('mailbox:list', async (_event, data: { sessionId: string; status?: string[]; limit?: number }) => {
     const limit = data.limit ?? 50;
     const statuses = data.status as MailboxStatus[] | undefined;
-    return mailbox
-      .list(data.sessionId, { status: statuses, limit })
-      .map(coreMailboxToIpcRow);
+    const items = await getDesktopHostLocalMailboxApi().listMailboxItems(data.sessionId, { status: statuses, limit });
+    return items.map(coreMailboxToIpcRow);
   });
 
-  ipcMain.handle('mailbox:listForSession', (_event, data: { sessionId: string }) => {
-    const { mailbox } = getCoreStores();
-    return mailbox.listForSession(data.sessionId).map(coreMailboxToIpcRow);
+  ipcMain.handle('mailbox:listForSession', async (_event, data: { sessionId: string }) => {
+    const items = await getDesktopHostLocalMailboxApi().listMailboxItemsForSession(data.sessionId);
+    return items.map(coreMailboxToIpcRow);
   });
 }

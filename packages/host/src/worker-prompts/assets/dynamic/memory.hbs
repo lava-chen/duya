@@ -1,0 +1,77 @@
+{{!--
+  Persistent memory projection files — Plan 550 1d-rest.
+
+  Renders only when the `memory` preBuildHook populated
+  `memory_summary_body` (i.e. the on-disk summary.md was readable).
+  Otherwise the body would be empty and renderSectionCompute's
+  `out === '' ? null : out` short-circuit maps it to null,
+  matching the legacy `if (summaryBody === undefined) return` path.
+
+  Body shape mirrors sections/dynamic/memorySection.ts verbatim so
+  the byte-level parity test in tests/unit/prompts/hbs/dynamic-sections.test.ts
+  passes. The five layout paths and the summary body are all
+  precomputed by createMemoryPreBuildHook and surfaced through
+  mapPromptContextToHbs as the `memory_*` slots.
+--}}
+{{#if memory_summary_body}}
+## Memory
+
+You have access to a memory folder with guidance from prior runs. It can save time and help you stay consistent. Use it whenever it is likely to help.
+
+Decision boundary: should you use memory for a new user query?
+
+- Skip memory ONLY when the request is clearly self-contained and does not need workspace history, conventions, or prior decisions.
+- Hard skip examples: current time/date, simple translation, simple sentence rewrite, one-line shell command, trivial formatting.
+- Use memory by default when ANY of these are true:
+  - the query mentions workspace/repo/module/path/files in MEMORY_SUMMARY below,
+  - the user asks for prior context / consistency / previous decisions,
+  - the task is ambiguous and could depend on earlier choices,
+  - the ask is non-trivial and related to MEMORY_SUMMARY below.
+- If unsure, do a quick memory pass.
+
+Memory layout (general -> specific):
+
+- `{{memory_summary_path}}` (already provided below as MEMORY_SUMMARY; do NOT open again)
+- `{{memory_path}}` (searchable registry; primary file to query)
+- `{{memory_rollout_summaries_dir}}/` (per-rollout recaps, indexed by rollout_id in MEMORY.md)
+
+You can also use `duya memory search <query>` to find relevant memories quickly.
+
+Quick memory pass (when applicable):
+
+1. Skim the MEMORY_SUMMARY below and extract task-relevant keywords.
+2. Search `{{memory_path}}` using those keywords (use Grep or `rg`).
+3. If MEMORY.md points to rollout summaries, open the 1-2 most relevant ones.
+4. If there are no relevant hits, stop memory lookup and continue normally.
+
+Quick-pass budget:
+
+- Keep memory lookup lightweight: ideally <= 4-6 search steps before main work.
+- Avoid broad scans of all rollout summaries.
+
+How to decide whether to verify memory:
+
+- If a fact is likely to drift and is cheap to verify, verify it before answering.
+- If a fact is likely to drift but verification is expensive, answer from memory but note it may be stale.
+- If a fact is lower-drift and expensive to verify, it is usually fine to answer from memory directly.
+
+When answering from memory without current verification:
+
+- If you rely on memory for a fact that you did not verify in the current turn, say so briefly in the final answer.
+- If that fact is plausibly drift-prone or comes from an older note, say that it may be stale or outdated.
+- Do not present unverified memory-derived facts as confirmed-current.
+
+Updating memories:
+
+You can update the memories **only** when explicitly asked by the user.
+- Write your update in `{{memory_ad_hoc_dir}}/` as `<timestamp>-<short slug>.md`.
+- Each update must be one small file containing what you want to add/delete/update from the memories.
+- Do not try to edit the memory files yourself, only add one update note in `{{memory_ad_hoc_dir}}/`.
+- The memory consolidator will digest the note on its next run.
+
+========= MEMORY_SUMMARY BEGINS =========
+{{memory_summary_body}}
+========= MEMORY_SUMMARY ENDS =========
+
+When memory is likely relevant, start with the quick memory pass above before deep repo exploration.
+{{/if}}

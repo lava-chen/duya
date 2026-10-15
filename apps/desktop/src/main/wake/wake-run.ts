@@ -12,11 +12,11 @@
  * and this file can grow provider/workspace resolution without churn.
  */
 
-import { getCoreStores } from '../db/core-connection';
+import { getDesktopHostLocalSessionApi } from '../cli/desktop-host-api';
 import { resolveCronProvider, resolveBotOrDefaultProvider, botAgentIdFromSession } from '../automation/provider';
 import type { ResolvedCronProvider } from '../automation/provider';
 import { buildCronProviderConfig } from '../automation/provider-config';
-import { readConfigAgents } from '../../../../../packages/agent/src/agent-profile/config-agents.js';
+import { readConfigAgents } from '@duya/host/agent-profile-config';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { runPromptInSession } from '../automation/agent-run';
 import { getLogger, LogComponent } from '../logging/logger';
@@ -58,9 +58,11 @@ export { botAgentIdFromSession };
 
 /** Extract a session's own working directory, defaulting to '' when the row
  *  is missing. Shared by the wake-run and user-turn run paths (plan 505). */
-function resolveSessionWorkingDirectory(sessionId: string): string {
+async function resolveSessionWorkingDirectory(sessionId: string): Promise<string> {
   try {
-    return getCoreStores().sessions.get(sessionId)?.workingDirectory ?? '';
+    return (await getDesktopHostLocalSessionApi().readLocalSession(sessionId, {
+      includeAllSessions: true,
+    }))?.workingDirectory ?? '';
   } catch {
     return '';
   }
@@ -91,7 +93,7 @@ export async function runWakePromptInExistingSession(
   }
 
   // Prefer the session's own working directory when it exists.
-  const workingDirectory = resolveSessionWorkingDirectory(sessionId)
+  const workingDirectory = await resolveSessionWorkingDirectory(sessionId)
 
   getLogger().info('Idle wake run starting', {
     sessionId,
@@ -153,7 +155,9 @@ export async function runUserTurnInSession(
   // bot session that means its own config.toml provider/model.
   let sessionModel: string | undefined
   try {
-    sessionModel = getCoreStores().sessions.get(sessionId)?.model ?? undefined
+    sessionModel = (await getDesktopHostLocalSessionApi().readLocalSession(sessionId, {
+      includeAllSessions: true,
+    }))?.model ?? undefined
   } catch {
     // Session row may not exist yet — empty workspace falls back to default.
   }
@@ -168,7 +172,7 @@ export async function runUserTurnInSession(
     return { output: '', events: [] }
   }
 
-  const workingDirectory = resolveSessionWorkingDirectory(sessionId)
+  const workingDirectory = await resolveSessionWorkingDirectory(sessionId)
 
   getLogger().info('Queued user-turn fallback run starting', {
     sessionId,

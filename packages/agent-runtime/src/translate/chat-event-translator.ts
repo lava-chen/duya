@@ -48,7 +48,7 @@ import type {
   ErrorCode,
   ErrorCauseSystem,
   GoalState,
-  MessageContent as FinalizedBlock,
+  EventMessageContent as FinalizedBlock,
   RunEvent,
   StopReason,
   ToolCallOutcome,
@@ -408,10 +408,12 @@ export function translateFrame(
 
     case 'done':
     case 'chat:done':
-      // `stopReason` is DELIBERATELY ABSENT. The worker sends no fields on
-      // this event; filling in a plausible stop reason is fabrication. The
-      // absence is the observation: the run finished and the producer said
-      // nothing about why.
+      // `stopReason` is DELIBERATELY ABSENT from the EVENT. The worker's frame
+      // MAY carry a `reason` (the turn-done latch re-attaches the agent loop's
+      // stop reason for the renderer), but filling in a plausible stop reason
+      // from it would be fabrication: the reason is a display fact, and the
+      // absence here is the observation — the run finished and the producer's
+      // stop semantics live in the engine's terminal, not in this frame.
       return ok({ type: 'run.completed', status: 'completed' });
 
     case 'error':

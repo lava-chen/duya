@@ -1,0 +1,217 @@
+/**
+ * ipc-row-adapters.ts — legacy row-shape adapters for the session / goal /
+ * task domains, shared by the Host worker db bridge and the Desktop bridge.
+ *
+ * Moved out of Desktop's `core-db-adapters.ts` (plan 12 gate 1) so the Host
+ * worker db bridge and the Desktop bridge emit byte-identical legacy row
+ * shapes at the worker `db:request` boundary.
+ */
+
+import type {
+  Task as HostTask,
+  TaskCreateInput as HostTaskCreateInput,
+  TaskStatus,
+  TaskUpdateInput as HostTaskUpdateInput,
+} from '@duya/agent-protocol';
+import type { SessionGoal } from '@duya/agent-protocol/goals';
+import type { CoreSession } from '@duya/data/session-store';
+
+/**
+ * Extension keys stored in `sessions.extensions` that map to top-level
+ * columns in the old `chat_sessions` table.
+ */
+const SESSION_EXTENSION_KEYS = [
+  'system_prompt',
+  'conductor_mode_enabled',
+  'conductor_canvas_id',
+  'context_summary',
+  'context_summary_updated_at',
+  'plan_mode_enabled',
+  'goal_mode_enabled',
+  'source',
+] as const;
+
+/**
+ * Map a CoreSession back to the old `chat_sessions` row shape (snake_case).
+ * Extension-bound fields are extracted to top-level columns to match the
+ * old `SELECT * FROM chat_sessions` shape.
+ *
+ * `is_deleted` is derived from `status === 'deleted'` (0 or 1).
+ * `generation` is always 0 (append-only store — generation乐观锁废弃).
+ * `draft_message` is mapped from `draft`.
+ * `permission_profile` is mapped from `permissionMode`.
+ * `parent_id` is mapped from `parentSessionId`.
+ */
+export function coreSessionToIpcRow(session: CoreSession): Record<string, unknown> {
+  const ext = session.extensions ?? {};
+  return {
+    id: session.id,
+    title: session.title,
+    model: session.model,
+    system_prompt: ext.system_prompt ?? '',
+    working_directory: session.workingDirectory,
+    project_name: session.projectName,
+    status: session.status,
+    mode: session.mode,
+    permission_profile: session.permissionMode,
+    provider_id: session.providerId,
+    generation: 0,
+    context_summary: ext.context_summary ?? '',
+    context_summary_updated_at: ext.context_summary_updated_at ?? 0,
+    is_deleted: session.status === 'deleted' ? 1 : 0,
+    parent_id: session.parentSessionId,
+    agent_profile_id: session.agentProfileId,
+    agent_type: session.agentType,
+    agent_name: session.agentName,
+    conductor_mode_enabled: ext.conductor_mode_enabled ?? 0,
+    conductor_canvas_id: ext.conductor_canvas_id ?? null,
+    plan_mode_enabled: ext.plan_mode_enabled ?? 0,
+    goal_mode_enabled: ext.goal_mode_enabled ?? 0,
+    draft_message: session.draft ?? '',
+    source: ext.source ?? 'local',
+    pinned: ext.pinned ? 1 : 0,
+    created_at: session.createdAt,
+    updated_at: session.updatedAt,
+    // Plan 549 (Track A): surface archive metadata so the renderer can
+    // render the archived section without an extra IPC round-trip per row.
+    rollout_path: session.rolloutPath,
+    archived_at: session.archivedAt,
+    archived_path: session.archivedPath,
+    // Plan 582 (G4): the sidebar's real sort key travels with the row so the
+    // renderer can order by it directly instead of guessing from
+    // `updated_at` — which archiving, pinning and renaming all bump.
+    recency_at: session.recencyAt ?? session.updatedAt,
+    last_turn_started_at: session.lastTurnStartedAt,
+  };
+}
+
+function requireHostTaskStatus(status: string): TaskStatus {
+  if (status === 'pending' || status === 'in_progress' || status === 'completed') return status;
+  throw new Error(`Unsupported task status: ${status}`);
+}
+
+interface IpcTaskCoreCreate {
+  id: string;
+  sessionId: string;
+  subject: string;
+  description: string;
+  status?: string;
+  activeForm: string | null;
+  owner: string | null;
+}
+
+function ipcTaskToCoreCreate(data: {
+  id: string;
+  session_id: string;
+  subject: string;
+  description: string;
+  status?: string;
+  active_form?: string | null;
+  owner?: string | null;
+}): IpcTaskCoreCreate {
+  return {
+    id: data.id,
+    sessionId: data.session_id,
+    subject: data.subject,
+    description: data.description,
+    status: data.status ?? 'pending',
+    activeForm: data.active_form ?? null,
+    owner: data.owner ?? null,
+  };
+}
+
+/** Map a legacy IPC task create payload to the Host task contract. */
+export function ipcTaskToHostCreate(
+  data: Parameters<typeof ipcTaskToCoreCreate>[0],
+): HostTaskCreateInput {
+  const task = ipcTaskToCoreCreate(data);
+  return {
+    id: task.id,
+    subject: task.subject,
+    description: task.description,
+    status: requireHostTaskStatus(task.status ?? 'pending'),
+    ...(task.activeForm === null ? {} : { activeForm: task.activeForm }),
+    ...(task.owner === null ? {} : { owner: task.owner }),
+    blocks: [],
+    blockedBy: [],
+    metadata: {},
+  };
+}
+
+function ipcTaskToUpdate(data: Record<string, unknown>) {
+  const patch: {
+    subject?: string;
+    description?: string;
+    status?: string;
+    activeForm?: string | null;
+    owner?: string | null;
+    blocks?: string[];
+    blockedBy?: string[];
+    metadata?: Record<string, unknown>;
+  } = {};
+  if (data.subject !== undefined) patch.subject = data.subject as string;
+  if (data.description !== undefined) patch.description = data.description as string;
+  if (data.status !== undefined) patch.status = data.status as string;
+  if (data.active_form !== undefined) patch.activeForm = data.active_form as string | null;
+  if (data.owner !== undefined) patch.owner = data.owner as string | null;
+  if (data.blocks !== undefined) patch.blocks = data.blocks as string[];
+  if (data.blocked_by !== undefined) patch.blockedBy = data.blocked_by as string[];
+  if (data.metadata !== undefined) patch.metadata = data.metadata as Record<string, unknown>;
+  return patch;
+}
+
+/** Map a legacy IPC task patch to the Host task contract. */
+export function ipcTaskToHostUpdate(data: Record<string, unknown>): HostTaskUpdateInput {
+  const task = ipcTaskToUpdate(data);
+  return {
+    ...(task.subject === undefined ? {} : { subject: task.subject }),
+    ...(task.description === undefined ? {} : { description: task.description }),
+    ...(task.status === undefined ? {} : { status: requireHostTaskStatus(task.status) }),
+    ...(task.activeForm === undefined ? {} : { activeForm: task.activeForm }),
+    ...(task.owner === undefined ? {} : { owner: task.owner }),
+    ...(task.blocks === undefined ? {} : { blocks: task.blocks }),
+    ...(task.blockedBy === undefined ? {} : { blockedBy: task.blockedBy }),
+    ...(task.metadata === undefined ? {} : { metadata: task.metadata }),
+  };
+}
+
+/** Map a Host task back to the legacy task row shape at the IPC boundary. */
+export function hostTaskToIpcRow(task: HostTask): Record<string, unknown> {
+  if (task.sessionId === undefined || task.createdAt === undefined || task.updatedAt === undefined) {
+    throw new Error(`Host task ${task.id} is missing persistence metadata`);
+  }
+  return {
+    id: task.id,
+    session_id: task.sessionId,
+    subject: task.subject,
+    description: task.description,
+    status: task.status,
+    active_form: task.activeForm ?? null,
+    owner: task.owner ?? null,
+    blocks: JSON.stringify(task.blocks),
+    blocked_by: JSON.stringify(task.blockedBy),
+    metadata: JSON.stringify(task.metadata ?? {}),
+    created_at: task.createdAt,
+    updated_at: task.updatedAt,
+  };
+}
+
+/**
+ * Map a SessionGoal back to the `session_goals` row shape (snake_case).
+ * The agent reads this on session resume to restore the in-memory
+ * TokenBudgetManager's accumulated counters.
+ */
+export function coreGoalToIpcRow(goal: SessionGoal): Record<string, unknown> {
+  return {
+    id: goal.id,
+    session_id: goal.sessionId,
+    goal_text: goal.goalText,
+    status: goal.status,
+    token_budget: goal.tokenBudget,
+    tokens_used: goal.tokensUsed,
+    time_used_seconds: goal.timeUsedSeconds,
+    created_at: goal.createdAt,
+    updated_at: goal.updatedAt,
+    completed_at: goal.completedAt,
+  };
+}
