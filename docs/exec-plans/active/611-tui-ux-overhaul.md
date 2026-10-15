@@ -1,5 +1,9 @@
 # 611 — CLI TUI 体验改造（主题 token 化 / 动作注册表与多窗口 / busy 排队 / 粘贴修复 / token 展示 / 工具组渲染 / undo+kill ring）
 
+> 2026-10-15 foundation slice: see [Host-backed TUI foundation](611-tui-foundation-slice.md).
+> This slice targets the actual `@duya/cli` Host entry; earlier legacy-adapter
+> queue and approval evidence below does not establish behavior in that path.
+
 > **Status**: Wave 1–4 landed（2026-10-11/12）· **Priority**: P1 · **Owner**: agent
 > **立项**: 2026-10-11（对标 `E:\cloned-projects\grok-build` 的 `xai-grok-pager` TUI，调研见
 > `docs-local/research/grok-build-tui-comparison.md`）

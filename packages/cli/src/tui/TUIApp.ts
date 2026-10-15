@@ -42,7 +42,9 @@ import { InputEditor } from './editor.js';
 import { OverlayState, isDestructiveRequest, type PermissionDecision } from './overlay.js';
 import { escapeTags, stylesOf, type RenderOptions } from './transcript-view.js';
 import { TranscriptRenderer } from './transcript-cache.js';
-import { EscapeSafeWriter } from './bounded-writer.js';
+import type { EscapeSafeWriter } from './bounded-writer.js';
+import { TerminalSession } from './terminal/session.js';
+import { buildComposerLayout } from './composer-layout.js';
 import { wrapWithCursor, type WrappedText } from './width.js';
 import { CompletionController, type CompletionKey, type CompletionSources } from './completion.js';
 import { WindowManager } from './window.js';
@@ -79,8 +81,8 @@ const STATUS_ROWS = 1;
  */
 const COMPOSER_INSET = 2;
 
-/** Prompt marker on the first composer row, inline mode only. */
-const COMPOSER_PREFIX = '❯ ';
+/** Blessed exposes these lifecycle methods at runtime but omits their types. */
+type ManagedScreen = Widgets.Screen & { enter(): void; leave(): void };
 
 /** Transcript lines moved per wheel tick. Three is the conventional step. */
 const WHEEL_STEP_LINES = 3;
@@ -130,6 +132,21 @@ function frameString(record: Record<string, unknown>, key: string): string {
   return typeof record[key] === 'string' ? record[key] as string : '';
 }
 
+function renderOptionsKey(options: RenderOptions, width: number): string {
+  const ids = (values: ReadonlySet<string> | undefined): string[] =>
+    [...(values ?? [])].sort();
+  return JSON.stringify({
+    width,
+    expanded: options.expanded,
+    showToolResults: options.showToolResults,
+    toolResultLines: options.toolResultLines,
+    expandedBlockIds: ids(options.expandedBlockIds),
+    collapsedBlockIds: ids(options.collapsedBlockIds),
+    selectedBlockId: options.selectedBlockId ?? null,
+    theme: options.theme ?? null,
+  });
+}
+
 /** Where the synchronized-output markers are written. */
 /**
  * What the TUI asked blessed to render with.
@@ -170,6 +187,12 @@ export interface TUIAppOptions {  /** Window title. */
   readonly history?: readonly string[];
   /** Called with each submitted prompt. */
   readonly onSubmit: (text: string) => void | Promise<void>;
+  /** Let the controller own accepted-message echo and pending drafts. */
+  readonly echoSubmitted?: boolean;
+  readonly canSubmit?: () => boolean;
+  readonly queuedPrompts?: () => readonly string[];
+  readonly queuePaused?: () => boolean;
+  readonly onRecallQueued?: () => string | null;
   /** Called on the first Ctrl+C while a turn is running. */
   readonly onInterrupt?: () => void;
   /** Called on the second Ctrl+C inside `DOUBLE_CTRL_C_MS`, or `/exit`. */
@@ -242,7 +265,10 @@ export class TUIApp {
    * It builds one LAZILY, for the overlay only, the way codex does: an overlay
    * is a modal takeover, and the one thing a full-screen buffer is good at.
    */
-  private screen: Widgets.Screen | null;
+  private screen: ManagedScreen | null;
+  private screenSuspended = false;
+  private disposed = false;
+  private readonly terminal: TerminalSession;
   /** Kept so the lazily built overlay screen is constructed the same way. */
   private readonly screenOptions: Record<string, unknown>;
   private readonly program: BlessedProgram;
@@ -319,6 +345,13 @@ export class TUIApp {
    * re-renders only the block that actually changed.
    */
   private readonly transcript = new TranscriptRenderer();
+  /** Lines assembled for the last private model revision and render options. */
+  private transcriptRevision = 0;
+  private cachedTranscriptLines: {
+    readonly revision: number;
+    readonly optionsKey: string;
+    readonly lines: string[];
+  } | null = null;
   private lastCtrlCAt = Number.NEGATIVE_INFINITY;
   private running = false;
   /** Lines committed to the model but not yet accounted for by a render. */
@@ -365,6 +398,7 @@ export class TUIApp {
 
   /** Rows currently visible in the input box, for cursor clamping. */
   private inputRows = 1;
+  private readonly composerBorder = { type: 'line' as const, left: false, right: false };
   /** Last wrap result, so `placeCursor` need not re-wrap. */
   private inputCursor: WrappedText = { rows: [''], cursorRow: 1, cursorCol: 0 };
 
@@ -389,26 +423,10 @@ export class TUIApp {
     // window and the reported problems cannot describe different sessions.
     this.keymapIssues = validateKeyOverrides(ACTION_DEFS, keyOverrides);
 
-    this.output = options.output ?? process.stdout;
-
-    // The writer is built before the screen because the program is constructed
-    // from it, and a program cannot be swapped afterwards.
-    this.writer = new EscapeSafeWriter({ sink: this.output });
-
-    // Geometry is published on the writer BEFORE the program is constructed.
-    // `Program`'s constructor reads `output.columns` / `output.rows` / `isTTY`
-    // once, to size the screen — a plain sink has none of them, so publishing
-    // afterwards leaves the screen sized from `undefined` and every box empty.
+    this.terminal = new TerminalSession({ input: options.input, output: options.output });
+    this.writer = this.terminal.writer;
+    this.output = this.writer;
     const proxy = this.writer as unknown as Record<string, unknown>;
-    proxy.columns = process.stdout.columns ?? 80;
-    proxy.rows = process.stdout.rows ?? 24;
-    proxy.isTTY = true;
-    proxy.on = (event: string, listener: () => void): unknown => {
-      // Geometry changes come from the real terminal, whichever stream the
-      // frames are going to.
-      if (event === 'resize') process.stdout.on('resize', listener);
-      return proxy;
-    };
 
     // The blessed options are built ONCE, published for tests, and then handed
     // to blessed by reference — not rebuilt inside the call. That is what makes
@@ -417,7 +435,7 @@ export class TUIApp {
     // constant back inside `blessed.program({...})` cannot leave the published
     // copy still agreeing with reality.
     const programOptions = {
-      input: (options.input ?? process.stdin) as unknown as NodeJS.ReadStream,
+      input: this.terminal.input as unknown as NodeJS.ReadStream,
       output: this.writer as unknown as NodeJS.WriteStream,
       terminal: this.terminalEnv.term,
       // The cursor is positioned explicitly after each render; letting
@@ -455,7 +473,7 @@ export class TUIApp {
       : null;
     // Not built eagerly in inline mode: `blessed.screen` enters the alternate
     // buffer in its constructor, and there is no exit from that in a frame.
-    this.screen = inline ? null : (blessed.screen(screenOptions) as Widgets.Screen);
+    this.screen = inline ? null : (blessed.screen(screenOptions) as ManagedScreen);
 
     this.completionRows = Math.max(1, options.completionRows ?? 8);
     this.completion = new CompletionController(
@@ -493,8 +511,7 @@ export class TUIApp {
       keys: false,
       vi: false,
       tags: true,
-      border: { type: 'line' },
-      label: ' transcript ',
+
       style: { border: { fg: 'gray' } },
     }) as Widgets.BoxElement;
 
@@ -506,8 +523,7 @@ export class TUIApp {
       keys: true,
       vi: true,
       tags: true,
-      border: { type: 'line' },
-      label: ' input ',
+      border: this.composerBorder,
       style: { border: { fg: 'green' } },
     }) as Widgets.BoxElement;
 
@@ -575,10 +591,7 @@ export class TUIApp {
    * app with a fake output stream.
    */
   private terminalSize(): TerminalSize {
-    return {
-      rows: asNumber(process.stdout.rows, asNumber(this.program.rows, 24)),
-      columns: asNumber(process.stdout.columns, 80),
-    };
+    return this.terminal.size();
   }
 
   private attachBoxesTo(screen: Widgets.Screen): void {
@@ -597,8 +610,21 @@ export class TUIApp {
    * buffer only while a prompt, a permission request, or a modal window is up.
    */
   private ensureAltScreen(): Widgets.Screen {
-    if (this.screen !== null && this.overlayBox !== null) return this.screen;
-    const screen = blessed.screen(this.screenOptions) as Widgets.Screen;
+    if (this.screen !== null && this.overlayBox !== null) {
+      if (this.screenSuspended) {
+        this.screen.enter();
+        this.screenSuspended = false;
+        this.program.enableMouse();
+      }
+      return this.screen;
+    }
+    const screen = blessed.screen(this.screenOptions) as ManagedScreen;
+    const render = screen.render.bind(screen);
+    screen.render = () => {
+      // Blessed repaints on resize even after leave(). A suspended modal must
+      // never paint its cached widgets over the normal conversation buffer.
+      if (!this.screenSuspended) render();
+    };
     this.screen = screen;
     // Built here rather than in the constructor: `blessed.box()` needs an active
     // screen, and in inline mode there is none until this moment.
@@ -619,31 +645,44 @@ export class TUIApp {
     return screen;
   }
 
-  /** Drop the overlay buffer and let the normal screen show through again. */
+  /** Leave the modal buffer without destroying the shared input Program. */
+  private suspendAltScreen(): void {
+    if (this.screen === null || this.screenSuspended) return;
+    this.screenSuspended = true;
+    this.screen.leave();
+    this.inlineSurface?.invalidate();
+    this.program.enableMouse();
+  }
+
   private releaseAltScreen(): void {
-    if (this.screen === null) return;
-    this.screen.destroy();
+    this.screen?.destroy();
     this.screen = null;
     this.overlayBox = null;
+    this.screenSuspended = false;
   }
 
   /** Begin the session. */
   start(): void {
+    if (this.running || this.disposed) return;
     this.running = true;
-    this.model.addNotice('F1 help · Ctrl+R history · Ctrl+P usage · Ctrl+C interrupt · Ctrl+T expand · wheel / PgUp-PgDn scroll');
+    this.model.addNotice('duya · / commands · F1 help');
     // Every issue is shown, not just the errors: a keymap warning is a
     // binding the user believes in and the terminal does not deliver, and the
     // only moment the user is guaranteed to read the transcript is the start.
     for (const issue of this.keymapIssues) {
       this.model.addNotice(`keymap: ${issue.message} ${issue.remedy}`);
     }
+    this.noteTranscriptMutation();
     this.scheduler.requestImmediate();
   }
 
   /** Tear down, restoring the terminal. */
   stop(): void {
-    if (!this.running) return;
+    if (this.disposed) return;
+    this.disposed = true;
     this.running = false;
+    this.settleInteractivePrompt(null);
+    this.overlay.abortAll();
     this.windowMgr.close();
     this.scheduler.stop();
     // Without this the terminal stays in mouse reporting after exit, and the
@@ -655,7 +694,13 @@ export class TUIApp {
     this.releaseAltScreen();
     this.inlineSurface?.stop();
     this.stopSpinner();
-    this.writer.flush();
+    this.program.destroy();
+    this.terminal.dispose();
+  }
+
+  /** Repaint external controller state, such as pending follow-ups. */
+  refresh(): void {
+    this.scheduler.requestImmediate();
   }
 
   /** Open a keyboard-navigable modal and resolve with the selected value. */
@@ -796,9 +841,9 @@ export class TUIApp {
     // it. Building one here — rather than at construction — is what keeps the
     // alternate buffer out of the way while the conversation is on screen.
     if (this.overlayActive()) this.ensureAltScreen();
-    else this.releaseAltScreen();
+    else this.suspendAltScreen();
 
-    if (this.screen !== null) {
+    if (this.screen !== null && !this.screenSuspended) {
       this.paintOverlay();
       this.screen.render();
       this.placeCursor();
@@ -806,7 +851,8 @@ export class TUIApp {
     }
 
     const tail = this.workingTailLines();
-    const chrome = [...tail, ...this.inlinePopupLines, ...this.inlineInputLines, ...this.inlineStatusLines];
+    const queued = this.queuePreviewLines();
+    const chrome = [...tail, ...queued, ...this.inlinePopupLines, ...this.inlineInputLines, ...this.inlineStatusLines];
     // The caret's row is an index into `scroll`, so it is offset by everything
     // that sits above the composer. Its column is the editor's own column plus
     // the prompt marker's width, because that is what is actually printed.
@@ -814,11 +860,12 @@ export class TUIApp {
       this.focus === 'input' && this.interactivePrompt === null
         ? {
             row:
-              this.inlineTranscriptLines.length +
               tail.length +
+              queued.length +
               this.inlinePopupLines.length +
-              this.inputCursor.cursorRow,
-            column: this.inputCursor.cursorCol + COMPOSER_PREFIX.length + 1,
+              this.inputCursor.cursorRow - 1,
+            column: this.inputCursor.cursorCol + 1,
+            region: 'chrome' as const,
           }
         : null;
     this.inlineSurface?.render({
@@ -913,8 +960,29 @@ export class TUIApp {
     };
   }
 
+  /** Invalidate the assembled lines after a private transcript-model change. */
+  private noteTranscriptMutation(): void {
+    this.transcriptRevision += 1;
+    this.cachedTranscriptLines = null;
+  }
+
   private paintTranscript(): void {
-    const lines = this.transcript.lines(this.model, this.renderOptions());
+    const options = this.renderOptions();
+    const optionsKey = renderOptionsKey(options, this.terminalSize().columns);
+    let lines: string[];
+    if (
+      this.cachedTranscriptLines?.revision === this.transcriptRevision &&
+      this.cachedTranscriptLines.optionsKey === optionsKey
+    ) {
+      lines = this.cachedTranscriptLines.lines;
+    } else {
+      lines = this.transcript.lines(this.model, options);
+      this.cachedTranscriptLines = {
+        revision: this.transcriptRevision,
+        optionsKey,
+        lines,
+      };
+    }
     if (this.inlineSurface !== null) {
       // The WHOLE transcript, unwindowed. Deciding what the live area shows and
       // committing the rest to scrollback is the surface's job, and it cannot do
@@ -958,7 +1026,7 @@ export class TUIApp {
     );
   }
 
-  /** The composer's own border rows. Two, whether or not a box exists. */
+  /** Widget border rows; tiny fullscreen composers temporarily omit borders. */
   private inputChromeRows(): number {
     return asNumber(this.inputBox?.iheight, 2);
   }
@@ -989,35 +1057,50 @@ export class TUIApp {
   }
 
   private paintInput(): void {
-    const width = this.composerWidth();
-    const wrapped = wrapWithCursor(this.editor.text, width, this.editor.cursor);
-    const rows = Math.min(MAX_INPUT_ROWS, Math.max(1, wrapped.rows.length));
-    const visible = wrapped.rows.slice(0, rows);
-
-    const inputBox = this.inputBox;
-    if (inputBox !== null) {
-      inputBox.style.border.fg = this.focus === 'input' ? 'green' : 'gray';
-      const height = rows + this.inputChromeRows();
-      inputBox.height = height;
-      inputBox.bottom = STATUS_ROWS;
-      // The popup lives between the transcript and the input, so the transcript
-      // gives up rows for it. Reading the PREVIOUS frame's popup height is
-      // deliberate: this runs before `paintCompletion`, and a one-frame lag on a
-      // box that opens and closes is invisible, whereas sizing the transcript from
-      // a popup whose row count is not known yet would not be.
-      if (this.transcriptBox !== null) this.transcriptBox.bottom = height + STATUS_ROWS + this.popupRows();
-      inputBox.setContent(visible.join('\n'));
-    } else {
-      // No borders inline: the composer is the last line of the conversation, not
-      // a panel that sits below it. That is the structure claude and codex both
-      // ship, and it is what makes the committed history read as one continuous
-      // document instead of two stacked widgets.
-      this.inlineInputLines = visible.map((row, index) => (index === 0 ? `${COMPOSER_PREFIX}${row}` : ` ${row}`));
+    const size = this.terminalSize();
+    const inline = this.inlineSurface !== null;
+    const availableRows = Math.max(1, size.rows - STATUS_ROWS -
+      (inline ? this.workingTailLines().length + this.queuePreviewLines().length : 0) - this.popupRows());
+    if (this.inputBox !== null) {
+      // Blessed computes padding from the presence of a border object, even
+      // when individual edges are false. Remove the object on tiny screens.
+      Reflect.set(this.inputBox, 'border', availableRows >= 3 ? this.composerBorder : undefined);
     }
-    // Recorded so `placeCursor` can put the real cursor where the editor
-    // thinks it is, without re-wrapping.
-    this.inputRows = rows;
-    this.inputCursor = wrapped;
+    const layout = buildComposerLayout(this.editor.text, this.editor.cursor, {
+      columns: inline ? Math.max(1, size.columns - 1) : this.composerWidth(),
+      terminalRows: availableRows,
+      maxRows: MAX_INPUT_ROWS,
+      unicode: this.terminalEnv.unicodeBox,
+    });
+    const borderRows = layout.lines.length - layout.bodyRows;
+    if (this.inputBox !== null) {
+      this.inputBox.style.border.fg = this.focus === 'input' ? 'gray' : 'black';
+      const height = layout.bodyRows + this.inputChromeRows();
+      this.inputBox.height = height;
+      this.inputBox.bottom = Math.min(STATUS_ROWS, Math.max(0, size.rows - 1));
+      if (this.transcriptBox !== null) this.transcriptBox.bottom = height + STATUS_ROWS + this.popupRows();
+      const body = borderRows > 0 ? layout.lines.slice(1, -1) : layout.lines;
+      this.inputBox.setContent(body.map(escapeTags).join('\n'));
+    } else {
+      this.inlineInputLines = layout.lines.map(escapeTags);
+    }
+    this.inputRows = layout.bodyRows;
+    this.inputCursor = {
+      rows: layout.lines,
+      cursorRow: layout.cursorRow - (inline ? 0 : borderRows / 2),
+      cursorCol: layout.cursorColumn - 1,
+    };
+  }
+
+  private queuePreviewLines(): string[] {
+    const pending = this.options.queuedPrompts?.() ?? [];
+    if (pending.length === 0 || this.terminalSize().rows < 7) return [];
+    const label = this.options.queuePaused?.() ? 'paused' : 'queued';
+    const latest = pending[pending.length - 1] ?? '';
+    return [escapeTags(compactActivity(
+      label + ' (' + pending.length + ') · ' + latest.replace(/\s+/gu, ' '),
+      Math.max(1, this.terminalSize().columns - 1),
+    ))];
   }
 
   private placeCursor(): void {
@@ -1124,27 +1207,23 @@ private paintCompletion(): void {
     // So the line is fitted to the terminal instead of trusted to wrap. One
     // column is left spare because a line that exactly fills the width is the
     // case that wraps.
-    const width = Math.max(8, this.terminalSize().columns - 1);
+    const width = Math.max(1, this.terminalSize().columns - 1);
     const usage = this.usageSegment();
     // Queued-prompt count: the visible half of the busy-time queue, so a
     // user can see their follow-up prompts exist without digging for the
     // "queued (N)" transcript line that acknowledged each one.
     const queued = this.options.queuedCount?.() ?? 0;
     const queueSegment = queued > 0 ? ` · ⧗ ${queued}` : '';
-    const fixed = `${text} | ${tail}${usage}${queueSegment} | ${context}`;
-    // No floor under the activity budget: when the fixed parts alone exceed the
-    // width, the only honest answer is a truncated activity rather than a status
-    // line that wraps and takes the frame with it.
-    const maxActivityLength = Math.max(0, width - fixed.length);
-    const activity = escapeTags(compactActivity(this.activityLabel(busy), maxActivityLength));
-    // Clamped as PLAIN TEXT, before the colour tag goes on: fitting a line that
-    // already carries markup counts the tag as characters and can cut one in
-    // half, which leaves the terminal in the previous colour for the rest of the
-    // row.
-    const visible = compactActivity(`${text} | ${activity}${tail}${usage}${queueSegment} | ${context}`, width);
-    const line = `{gray-fg}${visible}{/gray-fg}`;
-    if (this.statusBar !== null) this.statusBar.setContent(line);
-    else this.inlineStatusLines = [visible];
+    if (this.inlineSurface !== null) {
+      const hint = this.options.queuePaused?.() && queued > 0
+        ? '/queue resume · Esc edit queued'
+        : this.completion.isOpen ? context
+        : busy ? 'Enter queue · Esc interrupt' : '/ commands · F1 help';
+      this.inlineStatusLines = [escapeTags(compactActivity(text + usage + ' · ' + hint, width))];
+      return;
+    }
+    const fixed = text + ' · ' + this.activityLabel(busy) + tail + usage + queueSegment + ' · ' + context;
+    this.statusBar?.setContent('{gray-fg}' + escapeTags(compactActivity(fixed, width)) + '{/gray-fg}');
   }
 
   /**
@@ -1426,7 +1505,24 @@ private paintCompletion(): void {
         break;
     }
 
+    if (frame.type === 'text') this.textBuffer.reset();
+    if (frame.type === 'thinking') this.thinkingBuffer.reset();
+    let transcriptChanged = false;
+    if (frame.type === 'done' || frame.type === 'error') {
+      const text = this.textBuffer.flush();
+      if (text !== '') {
+        this.model.appendTextDelta(text);
+        transcriptChanged = true;
+      }
+      const thinking = this.thinkingBuffer.flush();
+      if (thinking !== '') {
+        this.model.appendThinkingDelta(thinking);
+        transcriptChanged = true;
+      }
+    }
     const result = this.model.apply(frame);
+    if (result.kind === 'append' || result.kind === 'mutate') transcriptChanged = true;
+    if (transcriptChanged) this.noteTranscriptMutation();
     if (result.kind === 'permission') {
       this.showPermission(frame);
       return;
@@ -1504,16 +1600,20 @@ private paintCompletion(): void {
    */
   private drainBuffers(): void {
     const at = now();
+    let transcriptChanged = false;
     const text = this.textBuffer.take(at);
     if (text !== '') {
       this.model.appendTextDelta(text);
+      transcriptChanged = true;
       this.noteQueued(text);
     }
     const thinking = this.thinkingBuffer.take(at);
     if (thinking !== '') {
       this.model.appendThinkingDelta(thinking);
+      transcriptChanged = true;
       this.noteQueued(thinking);
     }
+    if (transcriptChanged) this.noteTranscriptMutation();
     this.scheduleRender();
   }
 
@@ -1570,16 +1670,26 @@ private paintCompletion(): void {
       // A turn boundary commits whatever is left, so the transcript cannot
       // disagree with what actually happened.
       const tail = this.textBuffer.flush();
-      if (tail !== '') this.model.appendTextDelta(tail);
+      let transcriptChanged = false;
+      if (tail !== '') {
+        this.model.appendTextDelta(tail);
+        transcriptChanged = true;
+      }
       const thought = this.thinkingBuffer.flush();
-      if (thought !== '') this.model.appendThinkingDelta(thought);
+      if (thought !== '') {
+        this.model.appendThinkingDelta(thought);
+        transcriptChanged = true;
+      }
+      if (transcriptChanged) this.noteTranscriptMutation();
     }
     this.scheduleRender();
   }
 
   /** Clear the transcript and the input. */
   clearTranscript(): void {
+    const hadTranscript = this.model.blocks.length > 0;
     this.model.clear();
+    if (hadTranscript) this.noteTranscriptMutation();
     this.textBuffer.reset();
     this.thinkingBuffer.reset();
     this.editor.clear();
@@ -1677,6 +1787,7 @@ private paintCompletion(): void {
     this.collapsedBlockIds.clear();
     this.activityPhase = 'ready';
     this.clearActiveActivity();
+    this.noteTranscriptMutation();
     this.scheduler.requestImmediate();
   }
 
@@ -1689,6 +1800,7 @@ private paintCompletion(): void {
   printNotice(text: string): void {
     if (text.trim() === '') return;
     this.model.addNotice(text);
+    this.noteTranscriptMutation();
     this.scheduleRender();
   }
 
@@ -1696,6 +1808,7 @@ private paintCompletion(): void {
   printUser(text: string): void {
     if (text.trim() === '') return;
     this.model.addUser(text);
+    this.noteTranscriptMutation();
     this.scheduleRender();
   }
 
@@ -1711,7 +1824,8 @@ private paintCompletion(): void {
    * The count is exposed rather than asserted inside this class because the
    * duplicate was caused by TWO owners of the same fact, and a test that could
    * only be written from one of them would pass again the moment the other was
-   * reintroduced.
+   * reintroduced. Host-backed callers disable automatic echo and append only
+   * when their submission controller admits a draft to a turn.
    */
   userEchoCount(text: string): number {
     return this.model.blocks.filter((block) => block.kind === 'user' && block.text === text).length;
@@ -1721,6 +1835,7 @@ private paintCompletion(): void {
   printError(message: string): void {
     if (message.trim() === '') return;
     this.model.addError(message);
+    this.noteTranscriptMutation();
     this.scheduleRender();
   }
 
@@ -1796,6 +1911,7 @@ private paintCompletion(): void {
       .map((value) => ({ label: compactActivity(value, 76), value }));
     if (items.length === 0) {
       this.model.addNotice('no input history yet');
+      this.noteTranscriptMutation();
       this.scheduleRender();
       return;
     }
@@ -2270,6 +2386,12 @@ exportHistory(): string[] {
       },
       escape: () => {
         if (this.focus === 'transcript') this.focus = 'input';
+        else if (this.completion.isOpen) this.completion.close();
+        else if (this.options.isBusy?.() ?? this.busy) this.options.onInterrupt?.();
+        else if (this.editor.isEmpty) {
+          const queued = this.options.onRecallQueued?.();
+          if (queued != null) this.editor.setText(queued, Array.from(queued).length);
+        }
         else this.closeOverlay();
       },
       return: () => {
@@ -2400,6 +2522,7 @@ exportHistory(): string[] {
       this.scheduler.requestImmediate();
       return;
     }
+    if (this.options.canSubmit?.() === false) return;
     const at = now();
     if (!fromSlashOption && this.paste.isPastedEnter(at)) {
       // A pasted newline is CONTENT, not a submission. Treating it as a
@@ -2416,7 +2539,10 @@ exportHistory(): string[] {
       return;
     }
     this.refreshCompletion();
-    this.model.addUser(text);
+    if (this.options.echoSubmitted !== false) {
+      this.model.addUser(text);
+      this.noteTranscriptMutation();
+    }
     this.follow = true;
     // Render the user's own line before the turn starts, so the transcript
     // shows what was asked rather than jumping straight to the answer.
@@ -2556,7 +2682,7 @@ exportHistory(): string[] {
   }
 
   private bindResize(): void {
-    process.stdout.on('resize', () => {
+    this.writer.on('resize', () => {
       this.scheduler.requestImmediate();
     });
   }

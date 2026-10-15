@@ -108,14 +108,14 @@ describe('inline mode', () => {
     expect(missing).toEqual([]);
   });
 
-  it('draws the composer with a prompt marker and no panel border', async () => {
+  it('draws a composer prompt between horizontal rules without panel corners', async () => {
     const { app, out } = makeApp({ inline: true });
     app.start();
     await settleRendered();
     app.stop();
-    // Inline chrome is the last line of the conversation, not a box below it —
-    // which is the structural change from the two-panel window.
-    expect(out.text()).toContain('❯');
+    // Low-capability environments use the ASCII prompt and separators.
+    expect(out.text()).toMatch(/❯|> /u);
+    expect(out.text()).toMatch(/─{3}|-{3}/u);
     expect(out.text()).not.toContain('┌');
   });
 

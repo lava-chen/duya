@@ -112,8 +112,13 @@ export interface InlineFrame {
    * rows ABOVE it, not below.
    */
   readonly chrome: readonly string[];
-  /** Caret position: an index into `scroll` plus a 1-based column, or null. */
-  readonly caret: { readonly row: number; readonly column: number } | null;
+  /** Caret: a row index in scroll or chrome and a 1-based column, or null. */
+  readonly caret: {
+    readonly row: number;
+    readonly column: number;
+    /** Chrome coordinates include padding above the bottom-anchored composer. */
+    readonly region?: 'chrome';
+  } | null;
   /**
    * One past the last `scroll` row the user wants visible. Omit to follow the
    * tail, which is the only mode that commits.
@@ -143,6 +148,12 @@ export class InlineSurface {
   /** Document rows already printed into the terminal's scrollback. */
   get committedRows(): number {
     return this.#liveStart;
+  }
+
+  /** Repaint the live viewport after another surface borrowed the terminal. */
+  invalidate(): void {
+    this.#previousLive = [];
+    this.#started = false;
   }
 
   /**
@@ -251,7 +262,9 @@ export class InlineSurface {
       // The caret row is an index into `scroll`, so the row it lands on is that
       // offset inside the composed document. The column is the editor's own,
       // not a recomputed one: the caret sits inside the text the user typed.
-      const row = geometry.topRow + (frame.caret.row - start);
+      const row = geometry.topRow + (frame.caret.region === 'chrome'
+        ? liveRows + frame.caret.row
+        : frame.caret.row - start);
       if (row >= geometry.topRow && row < geometry.topRow + capacity) {
         this.#output.write(cursorToSequence(row, frame.caret.column));
         this.#output.write(showCursor());

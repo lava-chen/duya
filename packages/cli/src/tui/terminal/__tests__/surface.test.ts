@@ -70,6 +70,15 @@ function rowAt(out: string, row: number): string {
 }
 
 describe('InlineSurface', () => {
+  it('places a chrome caret after the blank slack of a short conversation', () => {
+    const h = harness(10);
+    h.surface.render({
+      scroll: ['short conversation'],
+      chrome: ['rule', 'prompt', 'rule', 'status'],
+      caret: { region: 'chrome', row: 1, column: 3 },
+    });
+    expect(h.written()).toContain('\x1b[8;3H');
+  });
   it('shows a short document without committing anything', () => {
     const h = harness(10);
     const result = h.surface.render({ scroll: ['a', 'b'], chrome: ['S'], caret: null });
