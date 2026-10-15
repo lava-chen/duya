@@ -635,9 +635,10 @@ export interface TuiCommandOptions {
 }
 
 /**
- * Entry for the `duya tui` command. Starts an ephemeral Host and opens the
- * full-screen TUI in the same process. The Host is shut down when the TUI exits.
- * Returns the process exit code.
+ * Entry for the `duya tui` command. Starts an ephemeral Host and opens the TUI
+ * in the same process. The Host is shut down when the TUI exits. Which screen
+ * model that TUI uses is `inlineTuiRequested`; this entry point is the same
+ * either way. Returns the process exit code.
  */
 export async function runTuiCommand(options: TuiCommandOptions): Promise<number> {
   const host = await startLocalHost({
