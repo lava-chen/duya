@@ -575,17 +575,39 @@ export class MessageLog {
         for (let i = 0; i < freshEvents.length; i++) {
           const ev = freshEvents[i]!;
           const meta = lineMeta[i]!;
-          insert.run(
+          // `created_at` is NOT NULL and every payload that carries a timestamp
+          // uses one of two field names (`createdAt`, or `startedAt` for the
+          // turn envelope). Binding a raw `ev.createdAt` therefore silently
+          // drops the index row for any event whose timestamp lives under the
+          // other name — `INSERT OR IGNORE` swallows NOT NULL violations
+          // without raising, so the line lands in the rollout file but never
+          // becomes addressable through the index. scan() has always used the
+          // tolerant helper here; keep both paths on the same rule.
+          const createdAt = Number.isFinite(ev.createdAt)
+            ? ev.createdAt
+            : rolloutLineTimestamp(ev.payload);
+          const result = insert.run(
             ev.id,
             ev.sessionId,
             ev.sessionId,
             ev.turnId ?? null,
             deriveKind(ev.payload),
-            ev.createdAt,
+            createdAt,
             meta.fileOffset,
             meta.byteLen,
             generation,
           );
+          // freshEvents already excludes known ids, so 0 changes here means a
+          // constraint rejected the row. Surface it instead of letting the
+          // event vanish between the file and the index.
+          if (result.changes === 0) {
+            this.logger.warn('appendBatch: index row rejected by constraint', {
+              sessionId,
+              eventId: ev.id,
+              kind: deriveKind(ev.payload),
+              createdAt,
+            });
+          }
         }
         // Plan 582 (G4): advance recency inside the same transaction as the
         // index rows, and only on a turn boundary. A turn start is the one
@@ -1304,18 +1326,31 @@ export class MessageLog {
 
     // Track offset as we iterate lines to backfill file_offset/byte_len.
     let offset = 0;
+    // Turn boundaries are self-describing in the rollout file: every
+    // `turn_started` event carries the turnId it opens. The normal append path
+    // stamps `message_index.turn_id` straight from the in-memory event, but a
+    // recovery scan only sees the file, so without this it would null out the
+    // turn of every recovered row and silently degrade turn-scoped queries for
+    // that session. Entries preceding the first `turn_started` have no
+    // recoverable turn and stay null — we never guess one.
+    let currentTurnId: string | null = null;
     const txn = this.db.transaction(() => {
       for (const line of lines) {
         const lineBytes = Buffer.byteLength(line + '\n', 'utf8');
         const contentLen = Buffer.byteLength(line, 'utf8');
         try {
           const entry = JSON.parse(line) as RolloutLine;
+          // Set before the insert so the `turn_started` row itself carries its
+          // own turn, matching what appendBatch would have written.
+          if (entry.type === 'turn_started') {
+            currentTurnId = entry.turnId;
+          }
           if (!indexedIds.has(entry.id)) {
             insert.run(
               entry.id,
               sessionId,
               sessionId,
-              null,
+              currentTurnId,
               deriveKind(entry),
               rolloutLineTimestamp(entry),
               offset,
