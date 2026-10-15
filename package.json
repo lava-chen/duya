@@ -103,7 +103,7 @@
     "rebuild": "electron-rebuild",
     "rebuild:node": "node scripts/ensure-sqlite-abi.mjs node",
     "build:cli-dev": "npm run build:packages -- --target @duya/cli && npm run build:cli-bundle",
-    "dev:tui": "cross-env DUYA_DATA_ROOT=./.duya-cli-tui node packages/cli/bundle/cli.cjs tui"
+    "dev:tui": "node packages/cli/bundle/cli.cjs tui"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",
