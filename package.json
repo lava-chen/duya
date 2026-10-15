@@ -56,7 +56,7 @@
     "typecheck:electron:baseline": "node scripts/typecheck-electron-gate.mjs --write",
     "typecheck:protocol": "npm run -w @duya/agent-protocol typecheck",
     "typecheck:core": "npm run -w @duya/agent-core typecheck",
-    "typecheck:runtime": "npm run -w @duya/agent-runtime typecheck",
+    "typecheck:runtime": "npm run build:packages -- --target @duya/agent-runtime && npm run -w @duya/agent-runtime typecheck",
     "typecheck:agent": "npm run build:packages && npm run -w @duya/agent typecheck",
     "typecheck:cli": "node scripts/build-packages.mjs --target @duya/cli && npm run -w @duya/cli typecheck",
     "typecheck:plugin-core": "npm run -w @duya/plugin-core typecheck",
