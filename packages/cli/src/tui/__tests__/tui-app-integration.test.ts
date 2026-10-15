@@ -5,6 +5,7 @@ import { TUIApp } from '../TUIApp.js';
 import { MIN_RENDER_INTERVAL_MS } from '../render-scheduler.js';
 import { renderTranscript, escapeTags } from '../transcript-view.js';
 import { TranscriptModel } from '../blocks.js';
+import { detectTerminalEnvironment } from '../terminal-env.js';
 
 /**
  * The blessed integration, exercised for real.
@@ -75,6 +76,8 @@ function makeApp(submitted: string[] = []) {
     // developer's own `~/.duya/config.toml`, and a personal override would
     // break tests that assert on default bindings.
     keyOverrides: {},
+    // Pin the capability whose escape sequence these integration tests assert.
+    terminalEnv: detectTerminalEnvironment({ TERM: 'xterm-256color', TERM_PROGRAM: 'WezTerm' }),
   });
   return { app, out };
 }
@@ -206,6 +209,50 @@ describe('TUIApp integration', () => {
     await settleRendered();
     expect(out.text()).toContain('Key bindings');
     expect(out.text()).toContain('Ctrl+R');
+    app.stop();
+  });
+
+  // The user-visible half of the keymap validator. `interrupt` is dispatched
+  // by fixed routing, so this override reaches the help window and nowhere
+  // else: the panel would claim Ctrl+X while Ctrl+C still interrupts. The
+  // startup notice is what makes that legible.
+  it('reports a key override that cannot bind, and the help panel shows it anyway', async () => {
+    const out = sink();
+    const stdin = input();
+    const app = new TUIApp({
+      output: out.stream,
+      input: stdin,
+      onSubmit: () => {},
+      keyOverrides: { interrupt: 'Ctrl+X' },
+    });
+    app.start();
+    await settleRendered();
+    // The transcript wraps at the terminal width, so the notice is asserted
+    // on a token that survives wrapping rather than on a whole sentence.
+    const started = out.text();
+    expect(started).toContain('keymap:');
+    expect(started).toContain('interrupt');
+    expect(started).toContain('~/.duya/config.toml');
+
+    stdin.write('\x1bOP'); // F1
+    await settleRendered();
+    const help = out.text();
+    expect(help).toContain('Ctrl+X');
+    expect(help).toContain('Key bindings');
+    app.stop();
+  });
+
+  it('stays silent when the keymap needs no repair', async () => {
+    const out = sink();
+    const app = new TUIApp({
+      output: out.stream,
+      input: input(),
+      onSubmit: () => {},
+      keyOverrides: { history: 'F2' },
+    });
+    app.start();
+    await settleRendered();
+    expect(out.text()).not.toContain('keymap:');
     app.stop();
   });
 

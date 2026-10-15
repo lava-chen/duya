@@ -34,6 +34,19 @@ export interface WorkerManagerOptions {
   lowPower?: boolean;
 }
 
+/** How much of one worker's stderr has already been accounted for. */
+interface WorkerStderrState {
+  /** Occurrences seen per distinct line. */
+  readonly seen: Map<string, number>;
+  /** Lines actually handed to the logger, repeats included. */
+  emitted: number;
+  /** Lines dropped past the ceiling. */
+  dropped: number;
+  ceilingReported: boolean;
+  /** Trailing text after the last newline; an incomplete line. */
+  pending: string;
+}
+
 /**
  * An interrupt that was put to a live worker, and when it took effect.
  *
@@ -78,6 +91,14 @@ export class WorkerManager {
   private drainingWorkers = new Map<string, { child: ChildProcess; deadline: number }>();
   /** Hard cap for a draining worker that never settles (60 min). */
   private static readonly DRAIN_MAX_MS = 60 * 60 * 1000;
+  /**
+   * Repeats of one stderr line that survive before the rest collapse into a
+   * single summary, and the ceiling on lines emitted per worker.
+   */
+  private static readonly STDERR_REPEAT_SUMMARY_AT = 5;
+  private static readonly STDERR_LINE_CEILING = 200;
+  /** Per-worker stderr accounting. Weak so a dead worker frees its map. */
+  private stderrStateByWorker = new WeakMap<ChildProcess, WorkerStderrState>();
 
   constructor(sessionLifecycle: WorkerSessionLifecycle, options: WorkerManagerOptions) {
     this.sessionLifecycle = sessionLifecycle;
@@ -92,6 +113,118 @@ export class WorkerManager {
 
   setMessageHandler(handler: (sessionId: string, msg: Record<string, unknown>) => void): void {
     this.onWorkerMessage = handler;
+  }
+
+  /**
+   * Account for one chunk of a worker's stderr.
+   *
+   * A worker's stderr is not only the worker's own logging: every child it
+   * spawns (npm, MCP servers) inherits the pipe. One `npm install` against a
+   * registry that 404s emits a wall of near-identical lines, and the previous
+   * handler wrote each chunk TWICE — once as an ERROR "raw passthrough", once
+   * classified — so every bit of child-process noise was both duplicated and
+   * promoted to ERROR before it ever reached the log.
+   *
+   * Chunks do NOT align to lines: a pipe read can end mid-line, and one chunk
+   * can carry many. So the text is buffered across chunks and only complete
+   * lines are recorded — otherwise the repeat counter compares fragments that
+   * differ only in where the kernel happened to split the write, and fifty
+   * identical lines all count as distinct.
+   */
+  private recordWorkerStderr(
+    sessionId: string,
+    workerPid: number | undefined,
+    child: ChildProcess,
+    raw: string,
+  ): void {
+    const state = this.stderrStateFor(child);
+    const parts = (state.pending + raw).split(/\r?\n/u);
+    // The last element has no terminator yet — it is the start of the next line.
+    state.pending = parts.pop() ?? '';
+    for (const line of parts) {
+      this.recordWorkerStderrLine(sessionId, workerPid, child, state, line.trim());
+    }
+  }
+
+  /**
+   * Flush the last line of a worker whose stderr ended without a newline.
+   *
+   * `close` (not `exit`) is the correct signal: Node fires it once the stdio
+   * streams have closed, so nothing is still in flight when this runs.
+   */
+  private flushWorkerStderr(
+    sessionId: string,
+    workerPid: number | undefined,
+    child: ChildProcess,
+  ): void {
+    const state = this.stderrStateByWorker.get(child);
+    if (state === undefined) return;
+    const tail = state.pending.trim();
+    state.pending = '';
+    if (tail !== '') this.recordWorkerStderrLine(sessionId, workerPid, child, state, tail);
+  }
+
+  private stderrStateFor(child: ChildProcess): WorkerStderrState {
+    const existing = this.stderrStateByWorker.get(child);
+    if (existing !== undefined) return existing;
+    const created: WorkerStderrState = {
+      seen: new Map(),
+      emitted: 0,
+      dropped: 0,
+      ceilingReported: false,
+      pending: '',
+    };
+    this.stderrStateByWorker.set(child, created);
+    return created;
+  }
+
+  private recordWorkerStderrLine(
+    sessionId: string,
+    workerPid: number | undefined,
+    child: ChildProcess,
+    state: WorkerStderrState,
+    line: string,
+  ): void {
+    if (line === '') return;
+
+    if (state.emitted >= WorkerManager.STDERR_LINE_CEILING) {
+      state.dropped += 1;
+      if (state.ceilingReported) return;
+      state.ceilingReported = true;
+      this.logger.warn('Worker stderr line ceiling reached; further lines dropped', {
+        sessionId,
+        pid: workerPid,
+        ceiling: WorkerManager.STDERR_LINE_CEILING,
+      });
+      return;
+    }
+
+    const occurrences = (state.seen.get(line) ?? 0) + 1;
+    state.seen.set(line, occurrences);
+
+    if (occurrences === WorkerManager.STDERR_REPEAT_SUMMARY_AT) {
+      this.logger.warn('Worker stderr line repeating; further copies dropped', {
+        sessionId,
+        pid: workerPid,
+        line,
+        occurrences,
+      });
+    }
+    if (occurrences > WorkerManager.STDERR_REPEAT_SUMMARY_AT) return;
+
+    state.emitted += 1;
+    const fields = { sessionId, pid: workerPid, line };
+
+    if (line.startsWith('[ERROR]') || line.includes('Error:')) {
+      this.logger.error('Worker stderr', new Error(line), fields);
+    } else if (line.startsWith('[WARN]') || line.startsWith('[WARNING]')) {
+      this.logger.warn('Worker stderr', fields);
+    } else {
+      // Covers [INFO], [DEBUG], and anything unrecognised. Unrecognised lines
+      // stay INFO on purpose: a child process must not be able to manufacture
+      // ERROR alerts that an operator then has to triage.
+      this.logger.info('Worker stderr', fields);
+    }
   }
 
   spawnWorker(sessionId: string): ChildProcess {
@@ -203,23 +336,11 @@ export class WorkerManager {
     });
 
     child.stderr!.on('data', (data: Buffer) => {
-      const line = data.toString().trim();
-      if (!line) return;
+      this.recordWorkerStderr(sessionId, workerPid, child, data.toString());
+    });
 
-      // Raw passthrough for debugging - this is from agent process
-      this.logger.error('Worker stderr passthrough', undefined, { sessionId, line });
-
-      // Parse log level from message - worker uses [LEVEL] prefix
-      if (line.startsWith('[ERROR]') || line.includes('Error:')) {
-        this.logger.error('Worker stderr', new Error(line), { sessionId, pid: workerPid });
-      } else if (line.startsWith('[WARN]') || line.startsWith('[WARNING]')) {
-        this.logger.warn('Worker stderr', { sessionId, pid: workerPid, message: line });
-      } else if (line.startsWith('[INFO]') || line.startsWith('[DEBUG]')) {
-        this.logger.info('Worker stderr', { sessionId, pid: workerPid, message: line });
-      } else {
-        // Unknown format - log as info to avoid false ERROR alerts
-        this.logger.info('Worker stderr', { sessionId, pid: workerPid, message: line });
-      }
+    child.on('close', () => {
+      this.flushWorkerStderr(sessionId, workerPid, child);
     });
 
     child.on('message', (msg: Record<string, unknown>) => {

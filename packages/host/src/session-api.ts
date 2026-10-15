@@ -102,6 +102,22 @@ export function createHostWorkspaceRegistrationApi(
   };
 }
 
+/**
+ * The provider and model a newly created session should start on, for callers
+ * that do not pin one.
+ */
+export interface DefaultSessionModelProvider {
+  readonly model: string;
+  readonly providerId: string;
+  /**
+   * Set when the resolved model is not among the provider's served models. The
+   * session is still created — a warning is strictly better than refusing, and
+   * the turn may well succeed against a provider that serves more than it
+   * declares.
+   */
+  readonly warning?: string;
+}
+
 export interface HostSessionApiOptions {
   readonly stores: Pick<CoreDataHostStores, 'sessions' | 'messageLog' | 'workspaces' | 'spawnEdges' | 'locks'>;
   readonly rolloutRoot: string;
@@ -111,6 +127,25 @@ export interface HostSessionApiOptions {
   readonly workspaces?: HostWorkspaceAccess;
   readonly chatTurnReviews?: Pick<ChatTurnReviewStore, 'getSessionStats'>;
   readonly permissionSettings?: Pick<MainSettingsStore, 'getString'>;
+  /**
+   * Resolved when a create call omits `model` or `providerId`.
+   *
+   * ## Why the Host fills this rather than each client
+   *
+   * The session row's own defaults are placeholders: `model` is `''` and
+   * `provider_id` is the literal `'env'` (`@duya/data/session-store`). That is
+   * fine for storage, but it is exactly what a client renders — so a client
+   * that creates a session without naming a provider shows the user
+   * `env · default` while config.toml selects a real provider and model.
+   *
+   * Filling it here means Desktop and the CLI record the same thing. Resolving
+   * it in one client would leave the other rendering placeholders, which is
+   * the fork the single-client contract exists to prevent.
+   *
+   * Returning `null` (no config, no secrets) leaves the row on its schema
+   * defaults rather than inventing a provider.
+   */
+  readonly defaultModelProvider?: () => DefaultSessionModelProvider | null;
 }
 
 interface PageCursor {
@@ -404,6 +439,24 @@ export function createHostSessionApi(options: HostSessionApiOptions): HostSessio
       }
     }
     const id = input.id ?? randomUUID();
+
+    // Fill whichever of model/providerId the caller left unset from the host's
+    // own config resolution. Resolved per field rather than as a pair, so
+    // `--model` alone still gets the configured provider and vice versa. Only
+    // consulted when something is actually missing, so a fully-specified create
+    // never touches config.toml.
+    const needsFallback = input.model === undefined || input.providerId === undefined;
+    const fallback = needsFallback ? options.defaultModelProvider?.() ?? null : null;
+    if (fallback?.warning !== undefined) {
+      options.warn?.('session created with a model the provider may not serve', {
+        model: fallback.model,
+        providerId: fallback.providerId,
+        warning: fallback.warning,
+      });
+    }
+    const model = input.model ?? fallback?.model;
+    const providerId = input.providerId ?? fallback?.providerId;
+
     const existing = sessions.get(id);
     if (existing) {
       const patch: SessionPatch = {
@@ -442,8 +495,8 @@ export function createHostSessionApi(options: HostSessionApiOptions): HostSessio
       },
       ...(input.title !== undefined ? { title: input.title } : {}),
       ...(input.projectName !== undefined ? { projectName: input.projectName } : {}),
-      ...(input.model !== undefined ? { model: input.model } : {}),
-      ...(input.providerId !== undefined ? { providerId: input.providerId } : {}),
+      ...(model !== undefined ? { model } : {}),
+      ...(providerId !== undefined ? { providerId } : {}),
       ...(input.mode !== undefined ? { mode: input.mode } : {}),
       ...(input.permissionMode !== undefined ? { permissionMode: input.permissionMode } : {}),
       ...(input.agentProfileId !== undefined ? { agentProfileId: input.agentProfileId } : {}),

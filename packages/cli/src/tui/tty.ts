@@ -41,11 +41,12 @@ export function isInteractiveTty(streams: TtyStreams = processStreams()): boolea
 }
 
 /**
- * True when a full-screen TUI should be built.
+ * True when a TUI should be built at all.
  *
- * `DUYA_CLI_TUI=0` forces the plain REPL, which is the escape hatch for
- * anyone whose terminal misbehaves under the alternate screen — and the only
- * way to compare the two surfaces without changing code.
+ * This is the gate on WHETHER, not on which screen model — `DUYA_CLI_TUI=0`
+ * forces the plain REPL, which is the escape hatch for anyone whose terminal
+ * misbehaves under the alternate screen, and the only way to compare the two
+ * surfaces without changing code. Which model is `DUYA_TUI_INLINE`.
  */
 export function shouldUseTui(
   streams: TtyStreams = processStreams(),

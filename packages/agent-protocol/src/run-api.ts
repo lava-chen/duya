@@ -110,8 +110,65 @@ export type CancelAgentRunResult =
   | { readonly requested: true; readonly runId: RunId }
   | { readonly requested: false; readonly runId: RunId; readonly reason: string };
 
+/** One message the caller wants injected into a run that is already executing. */
+export interface SteerAgentRunInput {
+  readonly runId: RunId;
+  /** The message text. Deliberately a string, not an items array: steering is a
+   * user speaking into a running turn, not a batch of tool results. */
+  readonly prompt: string;
+  /**
+   * The turn the caller believes is active.
+   *
+   * The Host REJECTS on mismatch rather than guessing which turn was meant.
+   * Silently steering the wrong turn is worse than a refusal the caller can
+   * retry: a refusal costs one round trip, a wrong-turn steer corrupts a
+   * conversation the user can see.
+   */
+  readonly expectedTurnId?: string;
+}
+
+export type SteerAgentRunStage =
+  | 'steered'
+  | 'refused_run_not_found'
+  | 'refused_run_settled'
+  | 'refused_not_steerable'
+  | 'refused_turn_mismatch'
+  | 'refused_dispatch_failed';
+
 /**
- * Authenticated Host boundary for STARTING and CANCELLING real runs.
+ * How a caller should treat a refusal.
+ *
+ * ## Why this is in the contract and not in each client
+ *
+ * Steer refusal is where the two clients used to diverge. A client that queued
+ * refused steers BEHIND ordinary follow-ups would let a refused steer starve
+ * and never be retried; one that retried everything would replay a steer the
+ * run can no longer accept. Both are silent — the user's message just never
+ * arrives, with no error anywhere.
+ *
+ * Putting the policy here means Electron and the CLI read the same field
+ * instead of each re-deriving it from a stage string.
+ */
+export type SteerAgentRunRetry =
+  /** The run is busy or not yet steerable; keep the steer and retry after it settles. */
+  | 'after_settle'
+  /** The caller named the wrong turn; re-read the active turn and retry once. */
+  | 'with_current_turn'
+  /** Never retry: the run is gone or the steer can never apply. */
+  | 'never';
+
+export type SteerAgentRunResult =
+  | { readonly accepted: true; readonly runId: RunId; readonly stage: 'steered'; readonly turnId?: string }
+  | {
+      readonly accepted: false;
+      readonly runId: RunId;
+      readonly stage: Exclude<SteerAgentRunStage, 'steered'>;
+      readonly reason: string;
+      readonly retry: SteerAgentRunRetry;
+    };
+
+/**
+ * Authenticated Host boundary for STARTING, STEERING and CANCELLING real runs.
  *
  * The ledger API above records what happened; this API makes the Host the
  * execution owner: a caller that can reach it can start a run the Host
@@ -121,4 +178,23 @@ export type CancelAgentRunResult =
 export interface HostRunExecutionApiV1 {
   startAgentRun(input: StartAgentRunInput): Promise<StartAgentRunResult>;
   cancelAgentRun(runId: RunId, reason?: string): Promise<CancelAgentRunResult>;
+  /**
+   * Inject a message into a run that is already executing.
+   *
+   * ## Why this is optional
+   *
+   * Every client already has a correct answer when steering is unavailable:
+   * queue the message as the next turn. Steering is an enhancement, not a
+   * capability the run lifecycle depends on, so requiring it here would force
+   * every Host implementation to write a method most of them cannot honour.
+   *
+   * ## What a caller MUST do when it is absent
+   *
+   * Treat absence the way `after_settle` behaves — keep the message and retry
+   * once the run settles. **Do not drop it, and do not report success.** A
+   * message the user typed that silently disappears is the one failure mode
+   * worse than an error, because the transcript looks identical to a delivered
+   * one.
+   */
+  steerAgentRun?(input: SteerAgentRunInput): Promise<SteerAgentRunResult>;
 }

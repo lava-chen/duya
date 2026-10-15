@@ -950,6 +950,23 @@ domain or database-owner cutover to Host.
 
 ### Chat CLI TUI
 
+- The Host-backed entry uses `tui/host-event-stream.ts` to scope envelopes by
+  session/run identity and sequence before projecting them into UI frames.
+  `tui/turn-queue.ts` serializes locally pending follow-ups; cancellation and
+  failure pause older drafts until an explicit resume. Pending drafts stay in
+  chrome until admitted, and shutdown waits for startup/cancellation before the
+  caller closes its Host. The CLI does not become a second run executor.
+- `tui/terminal/session.ts` owns injected geometry, the output writer and resize
+  forwarding/cleanup. Inline modal views borrow the alternate screen without
+  destroying the shared keyboard Program, then invalidate the live viewport on
+  return. `composer-layout.ts` supplies a cursor-following multiline window and
+  bounded horizontal-rule layout. Fullscreen remains the default; inline is
+  available through `DUYA_TUI_INLINE=1`.
+- TUIApp memoizes assembled transcript lines across input-only and animation
+  frames using its private document revision and presentation options. Public
+  `TranscriptRenderer` content-hash semantics remain unchanged. Stable-prefix
+  native scrollback, a general layout index and a possible pi backend remain
+  separate follow-ups; this slice does not establish them.
 - `packages/cli/src/tui/TUIApp.ts` owns the terminal screen, input/transcript
   focus, key routing, and scroll window. `transcript-view.ts` is a pure
   block-to-markup renderer in the same package; the `@duya/cli/tui` entrypoint

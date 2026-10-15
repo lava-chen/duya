@@ -42,13 +42,24 @@ import { InputEditor } from './editor.js';
 import { OverlayState, isDestructiveRequest, type PermissionDecision } from './overlay.js';
 import { escapeTags, stylesOf, type RenderOptions } from './transcript-view.js';
 import { TranscriptRenderer } from './transcript-cache.js';
-import { EscapeSafeWriter } from './bounded-writer.js';
+import type { EscapeSafeWriter } from './bounded-writer.js';
+import { TerminalSession } from './terminal/session.js';
+import { buildComposerLayout } from './composer-layout.js';
 import { wrapWithCursor, type WrappedText } from './width.js';
 import { CompletionController, type CompletionKey, type CompletionSources } from './completion.js';
 import { WindowManager } from './window.js';
 import { ACTION_DEFS, helpGroups, keysColumn, type ActionDef } from './actions.js';
-import { applyKeyOverrides, loadKeyOverrides, toBlessedKeys, REBINDABLE_ACTIONS } from './keymap.js';
+import { applyKeyOverrides, loadKeyOverrides, toBlessedKeys, REBINDABLE_ACTIONS, validateKeyOverrides, type KeymapIssue } from './keymap.js';
 import { resolveThemeName, themeFor, type ThemeName } from './theme.js';
+import { compactActivity } from './text.js';
+import { detectTerminalEnvironment, type TerminalEnvironment } from './terminal-env.js';
+import {
+  nextSpinnerFrame,
+  workingTailLine,
+  WORKING_TAIL_INTERVAL_MS,
+} from './working-tail.js';
+import { InlineSurface } from './terminal/surface.js';
+import { conversationRegionBottom, type TerminalSize } from './terminal/viewport.js';
 import type { Message as TranscriptMessage, MessageContent } from '@duya/agent-protocol/transcript';
 
 /** DECSET 2026: begin synchronized update. */
@@ -61,6 +72,17 @@ const MAX_INPUT_ROWS = 8;
 
 /** Height of the status bar, in rows. */
 const STATUS_ROWS = 1;
+
+/**
+ * Columns the inline composer holds back from the right edge.
+ *
+ * Two, matching the border the full-screen composer has, so a line that fits
+ * inline fits in the old layout too.
+ */
+const COMPOSER_INSET = 2;
+
+/** Blessed exposes these lifecycle methods at runtime but omits their types. */
+type ManagedScreen = Widgets.Screen & { enter(): void; leave(): void };
 
 /** Transcript lines moved per wheel tick. Three is the conventional step. */
 const WHEEL_STEP_LINES = 3;
@@ -110,15 +132,41 @@ function frameString(record: Record<string, unknown>, key: string): string {
   return typeof record[key] === 'string' ? record[key] as string : '';
 }
 
-function compactActivity(value: string, maxLength = 52): string {
-  const text = value.replace(/\s+/gu, ' ').trim();
-  const chars = Array.from(text);
-  return chars.length > maxLength ? `${chars.slice(0, Math.max(1, maxLength - 3)).join('')}...` : text;
+function renderOptionsKey(options: RenderOptions, width: number): string {
+  const ids = (values: ReadonlySet<string> | undefined): string[] =>
+    [...(values ?? [])].sort();
+  return JSON.stringify({
+    width,
+    expanded: options.expanded,
+    showToolResults: options.showToolResults,
+    toolResultLines: options.toolResultLines,
+    expandedBlockIds: ids(options.expandedBlockIds),
+    collapsedBlockIds: ids(options.collapsedBlockIds),
+    selectedBlockId: options.selectedBlockId ?? null,
+    theme: options.theme ?? null,
+  });
 }
 
 /** Where the synchronized-output markers are written. */
-export interface TUIAppOptions {
-  /** Window title. */
+/**
+ * What the TUI asked blessed to render with.
+ *
+ * Published on the writer before `blessed.program`/`blessed.screen` are called,
+ * and the same object is passed to them, so a test can assert the terminal's
+ * capabilities actually reached the renderer rather than trusting that a
+ * constant stayed correct.
+ */
+export interface RenderConfig {
+  readonly program: {
+    readonly terminal: string;
+    readonly colors: number;
+  };
+  readonly screen: {
+    readonly fullUnicode: boolean;
+  };
+}
+
+export interface TUIAppOptions {  /** Window title. */
   readonly title?: string;
   /**
    * Sink for the rendered frames.
@@ -135,11 +183,16 @@ export interface TUIAppOptions {
    */
   readonly input?: NodeJS.ReadableStream;
   /** Status bar text, recomputed on every render. */
-  readonly statusText?: () => string;
-  /** Seed history, e.g. from `~/.duya/.cli_history`. */
+  readonly statusText?: () => string;  /** Seed history, e.g. from `~/.duya/.cli_history`. */
   readonly history?: readonly string[];
   /** Called with each submitted prompt. */
   readonly onSubmit: (text: string) => void | Promise<void>;
+  /** Let the controller own accepted-message echo and pending drafts. */
+  readonly echoSubmitted?: boolean;
+  readonly canSubmit?: () => boolean;
+  readonly queuedPrompts?: () => readonly string[];
+  readonly queuePaused?: () => boolean;
+  readonly onRecallQueued?: () => string | null;
   /** Called on the first Ctrl+C while a turn is running. */
   readonly onInterrupt?: () => void;
   /** Called on the second Ctrl+C inside `DOUBLE_CTRL_C_MS`, or `/exit`. */
@@ -179,22 +232,80 @@ export interface TUIAppOptions {
   readonly completionSources?: CompletionSources;
   /** How many completion rows to show at once. */
   readonly completionRows?: number;
+  /**
+   * Terminal capabilities. Injected by tests; defaults to detection from
+   * `process.env`. Every rendering choice that used to be a hard-coded
+   * constant (colour count, box characters) comes from here instead.
+   */
+  readonly terminalEnv?: TerminalEnvironment;
+  /**
+   * Render into the terminal's own scrollback instead of a full-screen window.
+   *
+   * The conversation is printed as it finishes and stays readable after the TUI
+   * exits, which a fixed window cannot offer. Off by default while this is
+   * proven against real terminals; `DUYA_TUI_INLINE=1` turns it on.
+   *
+   * In this mode blessed's `Screen` is never constructed — it switches to the
+   * alternate buffer in its constructor, and an alternate buffer has no
+   * scrollback to commit into. Its `Program` is still used, for input only.
+   */
+  readonly inline?: boolean;
 }
 
 export class TUIApp {
   private readonly options: TUIAppOptions;
-  private readonly screen: Widgets.Screen;
+  /**
+   * Null in inline mode until an overlay needs it.
+   *
+   * Blessed switches to the alternate buffer in the Screen CONSTRUCTOR, and an
+   * alternate buffer has no scrollback — committing the conversation into it
+   * would put the history somewhere the user cannot scroll back to. So inline
+   * mode builds no Screen at all and renders its own frames.
+   *
+   * It builds one LAZILY, for the overlay only, the way codex does: an overlay
+   * is a modal takeover, and the one thing a full-screen buffer is good at.
+   */
+  private screen: ManagedScreen | null;
+  private screenSuspended = false;
+  private disposed = false;
+  private readonly terminal: TerminalSession;
+  /** Kept so the lazily built overlay screen is constructed the same way. */
+  private readonly screenOptions: Record<string, unknown>;
   private readonly program: BlessedProgram;
   private readonly writer: EscapeSafeWriter;
+  /** What the terminal can render, measured rather than assumed. */
+  private readonly terminalEnv: TerminalEnvironment;
+  /** Inline write path; null in full-screen mode. */
+  private readonly inlineSurface: InlineSurface | null;
+  /**
+   * The frame under construction, in visual order, captured by the paint
+   * methods as they fill their blessed boxes. In full-screen mode blessed
+   * reads those boxes; in inline mode this is what gets written instead.
+   */
+  private inlineTranscriptLines: string[] = [];
+  private inlinePopupLines: string[] = [];
+  private inlineInputLines: string[] = [];
+  private inlineStatusLines: string[] = [];
   /** Where the synchronized-output markers go, alongside the frames. */
   private readonly output: NodeJS.WritableStream;
 
-  private readonly transcriptBox: Widgets.BoxElement;
-  private readonly inputBox: Widgets.BoxElement;
-  private readonly statusBar: Widgets.BoxElement;
-  private readonly overlayBox: Widgets.BoxElement;
+  /**
+   * Null in inline mode, and not lazily — these cannot be built at all.
+   *
+   * `blessed.box()` resolves its `program` from blessed's module-global
+   * "active screen" and throws `No active screen` when there is none
+   * (`node_modules/blessed/lib/widgets/node.js:57`). So in inline mode the boxes
+   * simply do not exist, and every path that would touch one is guarded by the
+   * screen being present. Building them lazily instead would mean a widget tree
+   * that only half exists, and a null check on each of the five either way.
+   */
+  private transcriptBox: Widgets.BoxElement | null = null;
+  private inputBox: Widgets.BoxElement | null = null;
+  private statusBar: Widgets.BoxElement | null = null;
   /** The `/` and `@` popup, drawn immediately above the input box. */
-  private readonly completionBox: Widgets.BoxElement;
+  private completionBox: Widgets.BoxElement | null = null;
+  /** Built with the overlay's screen, since it is the only thing that uses it. */
+  private overlayBox: Widgets.BoxElement | null = null;
   private readonly completion: CompletionController;
   /** Rows the popup shows. */
   private readonly completionRows: number;
@@ -234,6 +345,13 @@ export class TUIApp {
    * re-renders only the block that actually changed.
    */
   private readonly transcript = new TranscriptRenderer();
+  /** Lines assembled for the last private model revision and render options. */
+  private transcriptRevision = 0;
+  private cachedTranscriptLines: {
+    readonly revision: number;
+    readonly optionsKey: string;
+    readonly lines: string[];
+  } | null = null;
   private lastCtrlCAt = Number.NEGATIVE_INFINITY;
   private running = false;
   /** Lines committed to the model but not yet accounted for by a render. */
@@ -246,6 +364,14 @@ export class TUIApp {
   private waitingForPermission = false;
   private readonly activeTools = new Map<string, { name: string; elapsedSeconds: number | null }>();
   private readonly activeAgents = new Map<string, string>();
+  /**
+   * The working tail's spinner.
+   *
+   * Chrome, never transcript — see `working-tail.ts` for why a row the surface
+   * rewrites is the only kind of row that can hold a spinner.
+   */
+  private spinnerFrame = 0;
+  private spinnerTimer: ReturnType<typeof setInterval> | null = null;
 
   /** Modal windows (F1 help, Ctrl+R history, Ctrl+P usage). */
   private readonly windowMgr = new WindowManager();
@@ -258,6 +384,13 @@ export class TUIApp {
    * overrides come from config + env.
    */
   private readonly actionDefs: readonly ActionDef[];
+  /**
+   * Problems with this session's key overrides, resolved once with
+   * `actionDefs`. Reported as transcript notices in `start()`: an override
+   * that silently does not bind is worse than one that is refused loudly,
+   * because the help window still renders the requested key.
+   */
+  private readonly keymapIssues: readonly KeymapIssue[];
   /** Usage of the most recent billed call, from `token_usage` frames. */
   private lastUsage: { input: number; output: number; total: number } | null = null;
   /** Sum of every `token_usage` total seen this session. */
@@ -265,58 +398,103 @@ export class TUIApp {
 
   /** Rows currently visible in the input box, for cursor clamping. */
   private inputRows = 1;
+  private readonly composerBorder = { type: 'line' as const, left: false, right: false };
   /** Last wrap result, so `placeCursor` need not re-wrap. */
   private inputCursor: WrappedText = { rows: [''], cursorRow: 1, cursorCol: 0 };
 
   constructor(options: TUIAppOptions) {
     this.options = options;
-    this.theme = themeFor(options.theme ?? resolveThemeName());
+    // Capabilities first: the theme fallback below is a rendering decision, so
+    // it must not be made before we know what the terminal can render.
+    this.terminalEnv = options.terminalEnv ?? detectTerminalEnvironment();
+    const requestedTheme = options.theme ?? resolveThemeName();
+    // A light theme on a 16-colour terminal does not degrade, it disintegrates:
+    // the palette is 256-colour numbers, so every tag quantises to something
+    // arbitrary. Falling back keeps the reading experience; the user can still
+    // force `light` on a 256-colour terminal where it works.
+    this.theme = themeFor(
+      requestedTheme === 'light' && !this.terminalEnv.supportsLightPalette ? 'dark' : requestedTheme,
+    );
     // Overrides resolved ONCE, here: config + env, with the injected map (a
     // test seam) winning outright when present.
-    this.actionDefs = applyKeyOverrides(
-      ACTION_DEFS,
-      options.keyOverrides ?? loadKeyOverrides(),
-    );
+    const keyOverrides = options.keyOverrides ?? loadKeyOverrides();
+    this.actionDefs = applyKeyOverrides(ACTION_DEFS, keyOverrides);
+    // Validated against the SAME map that produced `actionDefs`, so the help
+    // window and the reported problems cannot describe different sessions.
+    this.keymapIssues = validateKeyOverrides(ACTION_DEFS, keyOverrides);
 
-    this.output = options.output ?? process.stdout;
-
-    // The writer is built before the screen because the program is constructed
-    // from it, and a program cannot be swapped afterwards.
-    this.writer = new EscapeSafeWriter({ sink: this.output });
-
-    // Geometry is published on the writer BEFORE the program is constructed.
-    // `Program`'s constructor reads `output.columns` / `output.rows` / `isTTY`
-    // once, to size the screen — a plain sink has none of them, so publishing
-    // afterwards leaves the screen sized from `undefined` and every box empty.
+    this.terminal = new TerminalSession({ input: options.input, output: options.output });
+    this.writer = this.terminal.writer;
+    this.output = this.writer;
     const proxy = this.writer as unknown as Record<string, unknown>;
-    proxy.columns = process.stdout.columns ?? 80;
-    proxy.rows = process.stdout.rows ?? 24;
-    proxy.isTTY = true;
-    proxy.on = (event: string, listener: () => void): unknown => {
-      // Geometry changes come from the real terminal, whichever stream the
-      // frames are going to.
-      if (event === 'resize') process.stdout.on('resize', listener);
-      return proxy;
-    };
 
-    this.program = blessed.program({
-      input: (options.input ?? process.stdin) as unknown as NodeJS.ReadStream,
+    // The blessed options are built ONCE, published for tests, and then handed
+    // to blessed by reference — not rebuilt inside the call. That is what makes
+    // the wiring assertable: a test reading `renderConfig.program.colors` is
+    // reading the very object `Program` was constructed from, so putting a
+    // constant back inside `blessed.program({...})` cannot leave the published
+    // copy still agreeing with reality.
+    const programOptions = {
+      input: this.terminal.input as unknown as NodeJS.ReadStream,
       output: this.writer as unknown as NodeJS.WriteStream,
-      terminal: process.env.TERM ?? 'xterm-256color',
+      terminal: this.terminalEnv.term,
       // The cursor is positioned explicitly after each render; letting
       // blessed draw its own would fight the editor's cursor placement.
       // `artificial: false` means blessed leaves the real terminal cursor
       // alone rather than drawing a block over the cell.
-      cursor: { artificial: false, shape: 'line', blink: false, color: '' },
-      colors: 256,
-    });
+      cursor: { artificial: false, shape: 'line', blink: false, color: '' } as const,
+      // 16 covers truecolor too: blessed's `colors: 16` is the 24-bit path,
+      // while anything higher is the 256-colour palette.
+      colors: this.terminalEnv.colorDepth === 'truecolor' ? 16 : this.terminalEnv.colorDepth,
+    };
+    this.program = blessed.program(programOptions);
 
-    this.screen = blessed.screen({
+    const screenOptions = {
       program: this.program,
       smartCSR: true,
-      fullUnicode: true,
+      fullUnicode: this.terminalEnv.unicodeBox,
       title: options.title ?? 'duya',
-    }) as Widgets.Screen;
+    };
+    this.screenOptions = screenOptions;
+    // Both option objects are published AND passed by reference, so what a test
+    // reads is what blessed was constructed from. Publishing a copy instead
+    // would leave this seam able to describe a renderer that was never built —
+    // which is exactly what a `fullUnicode: true` left in the screen call did
+    // while every colour test stayed green.
+    const renderConfig: RenderConfig = { program: programOptions, screen: screenOptions };
+    proxy.renderConfig = renderConfig;
+
+    const inline = options.inline === true;
+    this.inlineSurface = inline
+      ? new InlineSurface({
+          output: this.output,
+          size: () => this.terminalSize(),
+        })
+      : null;
+    // Not built eagerly in inline mode: `blessed.screen` enters the alternate
+    // buffer in its constructor, and there is no exit from that in a frame.
+    this.screen = inline ? null : (blessed.screen(screenOptions) as ManagedScreen);
+
+    this.completionRows = Math.max(1, options.completionRows ?? 8);
+    this.completion = new CompletionController(
+      options.completionSources ?? EMPTY_COMPLETION_SOURCES,
+    );
+
+    // Every widget below needs an active screen to exist at all, so inline mode
+    // builds none of them. The layout constants above are still declared, and
+    // the guards in the paint methods are what make the two modes differ.
+    if (this.screen === null) {
+      if (options.history !== undefined && options.history.length > 0) {
+        this.editor.loadHistory(options.history);
+      }
+      this.scheduler = new RenderScheduler({ onRender: () => this.paint() });
+      this.bindKeys();
+      this.bindPaste();
+      this.bindResize();
+      this.program.setMode('?2004');
+      return;
+    }
+    const screen = this.screen;
 
     this.transcriptBox = blessed.box({
       top: 0,
@@ -333,8 +511,7 @@ export class TUIApp {
       keys: false,
       vi: false,
       tags: true,
-      border: { type: 'line' },
-      label: ' transcript ',
+
       style: { border: { fg: 'gray' } },
     }) as Widgets.BoxElement;
 
@@ -346,8 +523,7 @@ export class TUIApp {
       keys: true,
       vi: true,
       tags: true,
-      border: { type: 'line' },
-      label: ' input ',
+      border: this.composerBorder,
       style: { border: { fg: 'green' } },
     }) as Widgets.BoxElement;
 
@@ -374,11 +550,6 @@ export class TUIApp {
       vi: true,
     }) as Widgets.BoxElement;
 
-    this.completionRows = Math.max(1, options.completionRows ?? 8);
-    this.completion = new CompletionController(
-      options.completionSources ?? EMPTY_COMPLETION_SOURCES,
-    );
-
     this.completionBox = blessed.box({
       // Height is set on every paint from the visible row count; the box starts
       // hidden so it never reserves space the popup is not using.
@@ -393,15 +564,7 @@ export class TUIApp {
       style: { border: { fg: 'cyan' } },
     }) as Widgets.BoxElement;
 
-    this.screen.append(this.transcriptBox);
-    this.screen.append(this.inputBox);
-    this.screen.append(this.statusBar);
-    // Appended LAST so it paints over the transcript. Blessed renders
-    // `screen.children` in order, and an element passed `parent:` in its
-    // options is NOT added to that list — it has to be appended here or it is
-    // never drawn at all.
-    this.screen.append(this.overlayBox);
-    this.screen.append(this.completionBox);
+    this.attachBoxesTo(screen);
 
     if (options.history !== undefined && options.history.length > 0) {
       this.editor.loadHistory(options.history);
@@ -419,25 +582,125 @@ export class TUIApp {
     this.program.setMode('?2004');
   }
 
+  /**
+   * Rows and columns, read live rather than cached.
+   *
+   * `process.stdout` first: it is the tty itself and it is what the `resize`
+   * listener updates, so it is correct on the very first frame and on every
+   * frame after a resize. `program` is the fallback for a test that drives the
+   * app with a fake output stream.
+   */
+  private terminalSize(): TerminalSize {
+    return this.terminal.size();
+  }
+
+  private attachBoxesTo(screen: Widgets.Screen): void {
+    for (const box of [this.transcriptBox, this.inputBox, this.statusBar, this.overlayBox, this.completionBox]) {
+      if (box === null) continue;
+      screen.append(box);
+    }
+  }
+
+  /**
+   * A full-screen buffer, built on demand, for the overlay only.
+   *
+   * This is codex's split: the conversation lives in the normal screen's
+   * scrollback, and an overlay is the one thing that takes the screen over. So
+   * inline mode keeps no Screen between overlays and pays for the alternate
+   * buffer only while a prompt, a permission request, or a modal window is up.
+   */
+  private ensureAltScreen(): Widgets.Screen {
+    if (this.screen !== null && this.overlayBox !== null) {
+      if (this.screenSuspended) {
+        this.screen.enter();
+        this.screenSuspended = false;
+        this.program.enableMouse();
+      }
+      return this.screen;
+    }
+    const screen = blessed.screen(this.screenOptions) as ManagedScreen;
+    const render = screen.render.bind(screen);
+    screen.render = () => {
+      // Blessed repaints on resize even after leave(). A suspended modal must
+      // never paint its cached widgets over the normal conversation buffer.
+      if (!this.screenSuspended) render();
+    };
+    this.screen = screen;
+    // Built here rather than in the constructor: `blessed.box()` needs an active
+    // screen, and in inline mode there is none until this moment.
+    this.overlayBox = blessed.box({
+      top: 'center',
+      left: 'center',
+      width: '70%',
+      // Sized from the body on every paint; see `paintOverlay`.
+      height: 7,
+      hidden: true,
+      tags: true,
+      border: { type: 'line' },
+      style: { border: { fg: 'yellow' } },
+      keys: true,
+      vi: true,
+    }) as Widgets.BoxElement;
+    screen.append(this.overlayBox);
+    return screen;
+  }
+
+  /** Leave the modal buffer without destroying the shared input Program. */
+  private suspendAltScreen(): void {
+    if (this.screen === null || this.screenSuspended) return;
+    this.screenSuspended = true;
+    this.screen.leave();
+    this.inlineSurface?.invalidate();
+    this.program.enableMouse();
+  }
+
+  private releaseAltScreen(): void {
+    this.screen?.destroy();
+    this.screen = null;
+    this.overlayBox = null;
+    this.screenSuspended = false;
+  }
+
   /** Begin the session. */
   start(): void {
+    if (this.running || this.disposed) return;
     this.running = true;
-    this.model.addNotice('F1 help · Ctrl+R history · Ctrl+P usage · Ctrl+C interrupt · Ctrl+T expand · wheel / PgUp-PgDn scroll');
+    this.model.addNotice('duya · / commands · F1 help');
+    // Every issue is shown, not just the errors: a keymap warning is a
+    // binding the user believes in and the terminal does not deliver, and the
+    // only moment the user is guaranteed to read the transcript is the start.
+    for (const issue of this.keymapIssues) {
+      this.model.addNotice(`keymap: ${issue.message} ${issue.remedy}`);
+    }
+    this.noteTranscriptMutation();
     this.scheduler.requestImmediate();
   }
 
   /** Tear down, restoring the terminal. */
   stop(): void {
-    if (!this.running) return;
+    if (this.disposed) return;
+    this.disposed = true;
     this.running = false;
+    this.settleInteractivePrompt(null);
+    this.overlay.abortAll();
     this.windowMgr.close();
     this.scheduler.stop();
     // Without this the terminal stays in mouse reporting after exit, and the
     // shell the user returns to swallows clicks and wheel events.
     this.program.disableMouse();
     this.program.resetMode('?2004');
-    this.screen.destroy();
-    this.writer.flush();
+    // Exactly one of these exists. Destroying a Screen leaves the alternate
+    // buffer; `InlineSurface.stop` leaves the conversation on the normal one.
+    this.releaseAltScreen();
+    this.inlineSurface?.stop();
+    this.stopSpinner();
+    this.program.destroy();
+    this.terminal.dispose();
+  }
+
+  /** Repaint external controller state, such as pending follow-ups. */
+  refresh(): void {
+    this.scheduler.requestImmediate();
   }
 
   /** Open a keyboard-navigable modal and resolve with the selected value. */
@@ -520,15 +783,25 @@ export class TUIApp {
   // ---------------------------------------------------------------- rendering
 
   /**
-   * The one place `screen.render()` is called.
+   * The one place a frame reaches the terminal.
    *
-   * Wrapped in synchronized output so the frame is presented at once, and so
-   * that the sequence is emitted even when the render throws — otherwise a
-   * failed render leaves the terminal in synchronized mode, where it swallows
+   * Two paths, chosen by what exists: a Screen means blessed owns the drawing,
+   * and the frame is wrapped in synchronized output so it is presented at once
+   * and so the sequence is emitted even when the render throws — a failed render
+   * would otherwise leave the terminal in synchronized mode, where it swallows
    * output until the mode is reset.
+   *
+   * No Screen means inline mode, and there `InlineSurface` does its own
+   * synchronized-output framing per frame. Wrapping it again here would be
+   * closed early by the inner frame's terminator, which turns the outer one into
+   * no effect at all.
    */
   private paint(): void {
     if (!this.running) return;
+    if (this.inlineSurface !== null) {
+      this.paintInline();
+      return;
+    }
     this.output.write(SYNC_BEGIN);
     try {
       // Input FIRST: it owns the box geometry, and the transcript scroll is
@@ -539,13 +812,136 @@ export class TUIApp {
       this.paintCompletion();
       this.paintStatus();
       this.paintOverlay();
-      this.screen.render();
+      this.screen?.render();
       this.placeCursor();
     } finally {
-      // In the `finally`, not the happy path: a render that throws would
-      // otherwise leave the terminal in synchronized mode, where it stops
-      // displaying output until the mode is reset.
       this.output.write(SYNC_END);
+    }
+  }
+
+  /**
+   * Compose the frame inline and hand it to the surface.
+   *
+   * The paint methods are shared; only the destination differs. Each one writes
+   * its rows into a blessed box in full-screen mode and into a capture array
+   * here, so the two paths cannot disagree about what the frame contains.
+   */
+  private paintInline(): void {
+    this.inlineTranscriptLines = [];
+    this.inlinePopupLines = [];
+    this.inlineInputLines = [];
+    this.inlineStatusLines = [];
+
+    this.paintInput();
+    this.paintTranscript();
+    this.paintCompletion();
+    this.paintStatus();
+    this.syncSpinner();
+    // The overlay is a full-screen takeover, so inline mode needs a Screen for
+    // it. Building one here — rather than at construction — is what keeps the
+    // alternate buffer out of the way while the conversation is on screen.
+    if (this.overlayActive()) this.ensureAltScreen();
+    else this.suspendAltScreen();
+
+    if (this.screen !== null && !this.screenSuspended) {
+      this.paintOverlay();
+      this.screen.render();
+      this.placeCursor();
+      return;
+    }
+
+    const tail = this.workingTailLines();
+    const queued = this.queuePreviewLines();
+    const chrome = [...tail, ...queued, ...this.inlinePopupLines, ...this.inlineInputLines, ...this.inlineStatusLines];
+    // The caret's row is an index into `scroll`, so it is offset by everything
+    // that sits above the composer. Its column is the editor's own column plus
+    // the prompt marker's width, because that is what is actually printed.
+    const caret =
+      this.focus === 'input' && this.interactivePrompt === null
+        ? {
+            row:
+              tail.length +
+              queued.length +
+              this.inlinePopupLines.length +
+              this.inputCursor.cursorRow - 1,
+            column: this.inputCursor.cursorCol + 1,
+            region: 'chrome' as const,
+          }
+        : null;
+    this.inlineSurface?.render({
+      scroll: this.inlineTranscriptLines,
+      chrome,
+      caret,
+      // Scrolling back must not commit: those rows may be wanted again, and the
+      // terminal cannot be told to take a committed row back.
+      ...(this.scrollLines > 0
+        ? { viewEnd: Math.max(0, this.inlineTranscriptLines.length - this.scrollLines) }
+        : {}),
+    });
+  }
+
+  /** True when something needs the full-screen takeover. */
+  private overlayActive(): boolean {
+    if (this.interactivePrompt !== null) return true;
+    if (this.overlay.body(this.options.canAnswerPermissions?.() ?? false) !== null) return true;
+    return this.windowMgr.isActive;
+  }
+
+  /**
+   * The working tail: one row, empty when nothing is running.
+   *
+   * Shown only in inline mode. Full-screen mode has a fixed four-row layout and
+   * the status line is where its activity has always lived; giving it a tail too
+   * is a separate change to that layout, not something to smuggle in here.
+   */
+  private workingTailLines(): string[] {
+    // Keyed on the inline surface, not on the absence of the status bar: the
+    // status bar being null IS inline mode today, but a full-screen mode that
+    // grows its own tail later must not be switched off by this line.
+    if (this.inlineSurface === null) return [];
+    const busy = this.options.isBusy?.() ?? this.busy;
+    if (!busy && !this.waitingForPermission) return [];
+    return [
+      workingTailLine({
+        frame: this.spinnerFrame,
+        label: this.activityLabel(busy),
+        unicode: this.terminalEnv.unicodeBox,
+        columns: this.terminalSize().columns,
+      }),
+    ];
+  }
+
+  /**
+   * Run the spinner clock while there is a turn in flight.
+   *
+   * It advances an index and asks for a THROTTLED render — it never paints, and
+   * it never touches the transcript. `unref`d, because a timer that outlives
+   * the TUI would keep the process alive after `/exit`.
+   */
+  private syncSpinner(): void {
+    const busy = this.options.isBusy?.() ?? this.busy;
+    const wanted = busy || this.waitingForPermission;
+    if (!wanted) {
+      this.spinnerFrame = 0;
+      if (this.spinnerTimer !== null) {
+        clearInterval(this.spinnerTimer);
+        this.spinnerTimer = null;
+      }
+      return;
+    }
+    if (this.spinnerTimer !== null) return;
+    this.spinnerTimer = setInterval(() => {
+      this.spinnerFrame = nextSpinnerFrame(this.spinnerFrame, this.terminalEnv.unicodeBox);
+      this.scheduleRender();
+    }, WORKING_TAIL_INTERVAL_MS);
+    this.spinnerTimer.unref?.();
+  }
+
+  /** Stop the spinner clock. Called from teardown. */
+  private stopSpinner(): void {
+    if (this.spinnerTimer !== null) {
+      clearInterval(this.spinnerTimer);
+      this.spinnerTimer = null;
     }
   }
 
@@ -564,9 +960,40 @@ export class TUIApp {
     };
   }
 
+  /** Invalidate the assembled lines after a private transcript-model change. */
+  private noteTranscriptMutation(): void {
+    this.transcriptRevision += 1;
+    this.cachedTranscriptLines = null;
+  }
+
   private paintTranscript(): void {
-    this.transcriptBox.style.border.fg = this.focus === 'transcript' ? 'cyan' : 'gray';
-    const lines = this.transcript.lines(this.model, this.renderOptions());
+    const options = this.renderOptions();
+    const optionsKey = renderOptionsKey(options, this.terminalSize().columns);
+    let lines: string[];
+    if (
+      this.cachedTranscriptLines?.revision === this.transcriptRevision &&
+      this.cachedTranscriptLines.optionsKey === optionsKey
+    ) {
+      lines = this.cachedTranscriptLines.lines;
+    } else {
+      lines = this.transcript.lines(this.model, options);
+      this.cachedTranscriptLines = {
+        revision: this.transcriptRevision,
+        optionsKey,
+        lines,
+      };
+    }
+    if (this.inlineSurface !== null) {
+      // The WHOLE transcript, unwindowed. Deciding what the live area shows and
+      // committing the rest to scrollback is the surface's job, and it cannot do
+      // either if the transcript arrives pre-sliced: "which rows scrolled off" is
+      // exactly the information that slicing destroys.
+      this.inlineTranscriptLines = lines;
+      return;
+    }
+    const box = this.transcriptBox;
+    if (box === null) return;
+    box.style.border.fg = this.focus === 'transcript' ? 'cyan' : 'gray';
     const rows = this.visibleTranscriptRows();
     // The window ends at the last line and only drops lines from the top, so
     // "following" is the state where `scrollLines` is 0 rather than a special
@@ -574,7 +1001,7 @@ export class TUIApp {
     // newest lines stranded below the fold.
     const maxStart = Math.max(0, lines.length - rows);
     const start = Math.max(0, Math.min(maxStart, maxStart - this.scrollLines));
-    this.transcriptBox.setContent(lines.slice(start).join('\n'));
+    box.setContent(lines.slice(start).join('\n'));
   }
 
   /**
@@ -592,11 +1019,16 @@ export class TUIApp {
       1,
       screenRows -
         this.inputRows -
-        asNumber(this.inputBox.iheight, 2) -
+        this.inputChromeRows() -
         STATUS_ROWS -
         2 -
         this.popupRows(),
     );
+  }
+
+  /** Widget border rows; tiny fullscreen composers temporarily omit borders. */
+  private inputChromeRows(): number {
+    return asNumber(this.inputBox?.iheight, 2);
   }
 
   /** Rows the popup occupies right now, borders included. Zero when closed. */
@@ -609,27 +1041,66 @@ export class TUIApp {
     return rows + (hasOverflowMarker ? 1 : 0) + 2;
   }
 
-  private paintInput(): void {
-    this.inputBox.style.border.fg = this.focus === 'input' ? 'green' : 'gray';
-    const width = Math.max(1, asNumber(this.inputBox.width, 20) - asNumber(this.inputBox.iwidth, 2));
-    const wrapped = wrapWithCursor(this.editor.text, width, this.editor.cursor);
-    const rows = Math.min(MAX_INPUT_ROWS, Math.max(1, wrapped.rows.length));
-    const height = rows + asNumber(this.inputBox.iheight, 2);
-    this.inputBox.height = height;
-    this.inputBox.bottom = STATUS_ROWS;
-    // The popup lives between the transcript and the input, so the transcript
-    // gives up rows for it. Reading the PREVIOUS frame's popup height is
-    // deliberate: this runs before `paintCompletion`, and a one-frame lag on a
-    // box that opens and closes is invisible, whereas sizing the transcript from
-    // a popup whose row count is not known yet would not be.
-    this.transcriptBox.bottom = height + STATUS_ROWS + this.popupRows();
+  /**
+   * Columns the composer can wrap at.
+   *
+   * Full-screen mode reads the box blessed actually laid out. Inline mode has no
+   * layout pass, so it reads the terminal — otherwise the composer would wrap at
+   * blessed's 20-column default and every answer would look mangled.
+   */
+  private composerWidth(): number {
+    const measured = asNumber(this.inputBox?.width, 0);
+    if (this.inlineSurface === null && measured > 0) {
+      return Math.max(1, measured - asNumber(this.inputBox?.iwidth, 2));
+    }
+    return Math.max(1, this.terminalSize().columns - COMPOSER_INSET);
+  }
 
-    const visible = wrapped.rows.slice(0, rows);
-    this.inputBox.setContent(visible.join('\n'));
-    // Recorded so `placeCursor` can put the real cursor where the editor
-    // thinks it is, without re-wrapping.
-    this.inputRows = rows;
-    this.inputCursor = wrapped;
+  private paintInput(): void {
+    const size = this.terminalSize();
+    const inline = this.inlineSurface !== null;
+    const availableRows = Math.max(1, size.rows - STATUS_ROWS -
+      (inline ? this.workingTailLines().length + this.queuePreviewLines().length : 0) - this.popupRows());
+    if (this.inputBox !== null) {
+      // Blessed computes padding from the presence of a border object, even
+      // when individual edges are false. Remove the object on tiny screens.
+      Reflect.set(this.inputBox, 'border', availableRows >= 3 ? this.composerBorder : undefined);
+    }
+    const layout = buildComposerLayout(this.editor.text, this.editor.cursor, {
+      columns: inline ? Math.max(1, size.columns - 1) : this.composerWidth(),
+      terminalRows: availableRows,
+      maxRows: MAX_INPUT_ROWS,
+      unicode: this.terminalEnv.unicodeBox,
+    });
+    const borderRows = layout.lines.length - layout.bodyRows;
+    if (this.inputBox !== null) {
+      this.inputBox.style.border.fg = this.focus === 'input' ? 'gray' : 'black';
+      const height = layout.bodyRows + this.inputChromeRows();
+      this.inputBox.height = height;
+      this.inputBox.bottom = Math.min(STATUS_ROWS, Math.max(0, size.rows - 1));
+      if (this.transcriptBox !== null) this.transcriptBox.bottom = height + STATUS_ROWS + this.popupRows();
+      const body = borderRows > 0 ? layout.lines.slice(1, -1) : layout.lines;
+      this.inputBox.setContent(body.map(escapeTags).join('\n'));
+    } else {
+      this.inlineInputLines = layout.lines.map(escapeTags);
+    }
+    this.inputRows = layout.bodyRows;
+    this.inputCursor = {
+      rows: layout.lines,
+      cursorRow: layout.cursorRow - (inline ? 0 : borderRows / 2),
+      cursorCol: layout.cursorColumn - 1,
+    };
+  }
+
+  private queuePreviewLines(): string[] {
+    const pending = this.options.queuedPrompts?.() ?? [];
+    if (pending.length === 0 || this.terminalSize().rows < 7) return [];
+    const label = this.options.queuePaused?.() ? 'paused' : 'queued';
+    const latest = pending[pending.length - 1] ?? '';
+    return [escapeTags(compactActivity(
+      label + ' (' + pending.length + ') · ' + latest.replace(/\s+/gu, ' '),
+      Math.max(1, this.terminalSize().columns - 1),
+    ))];
   }
 
   private placeCursor(): void {
@@ -637,8 +1108,10 @@ export class TUIApp {
       this.program.hideCursor();
       return;
     }
+    // Inline mode places its own caret, in absolute rows and columns, as part of
+    // the frame. Blessed's cursor addressing assumes a widget tree.
     const box = this.inputBox;
-    if (box.lpos === undefined) return;
+    if (box === null || box.lpos === undefined) return;
     // Clamp into the visible window: the editor's logical row may be below
     // the fold once the box has hit MAX_INPUT_ROWS.
     const row = Math.min(this.inputCursor.cursorRow, this.inputRows) - 1;
@@ -659,7 +1132,8 @@ export class TUIApp {
 private paintCompletion(): void {
     const state = this.completion.snapshot;
     if (!this.completion.isOpen) {
-      if (!this.completionBox.hidden) this.completionBox.hide();
+      if (this.inlineSurface !== null) this.inlinePopupLines = [];
+      else if (this.completionBox !== null && !this.completionBox.hidden) this.completionBox.hide();
       return;
     }
 
@@ -686,16 +1160,22 @@ private paintCompletion(): void {
     if (first > 0) rows.unshift('{gray-fg}  …{/gray-fg}');
     if (first + visible < total) rows.push('{gray-fg}  …{/gray-fg}');
 
+    const box = this.completionBox;
+    if (box === null) {
+      this.inlinePopupLines = rows;
+      return;
+    }
+
     // `+ 2` for the popup own border rows.
-    this.completionBox.height = rows.length + 2;
-    this.completionBox.bottom = this.visibleInputHeight() + STATUS_ROWS;
-    this.completionBox.setContent(rows.join('\n'));
-    if (this.completionBox.hidden) this.completionBox.show();
+    box.height = rows.length + 2;
+    box.bottom = this.visibleInputHeight() + STATUS_ROWS;
+    box.setContent(rows.join('\n'));
+    if (box.hidden) box.show();
   }
 
   /** Total rows the input box occupies, borders included. */
   private visibleInputHeight(): number {
-    return this.inputRows + asNumber(this.inputBox.iheight, 2);
+    return this.inputRows + this.inputChromeRows();
   }
 
   private paintStatus(): void {
@@ -717,16 +1197,33 @@ private paintCompletion(): void {
       : this.focus === 'transcript'
         ? `history ${selection}/${blockCount} / arrows select / left-right fold`
         : `${this.editor.isEmpty ? 'Tab history' : 'Tab indent'} / F6 focus / arrows prompts`;
-    const width = asNumber(process.stdout.columns, 80);
+    // The status line is chrome, so in inline mode it is a row inside the live
+    // area — and a row that wraps moves every row below it, which is how an
+    // inline TUI's geometry goes wrong on a narrow terminal. `?7l` is disabled
+    // around every frame for exactly this, but it is a request, not a
+    // guarantee: measured on Windows ConPTY, a line that reaches the last column
+    // wraps anyway and the frame lands one row lower than intended.
+    //
+    // So the line is fitted to the terminal instead of trusted to wrap. One
+    // column is left spare because a line that exactly fills the width is the
+    // case that wraps.
+    const width = Math.max(1, this.terminalSize().columns - 1);
     const usage = this.usageSegment();
     // Queued-prompt count: the visible half of the busy-time queue, so a
     // user can see their follow-up prompts exist without digging for the
     // "queued (N)" transcript line that acknowledged each one.
     const queued = this.options.queuedCount?.() ?? 0;
     const queueSegment = queued > 0 ? ` · ⧗ ${queued}` : '';
-    const maxActivityLength = Math.max(8, width - text.length - context.length - tail.length - usage.length - queueSegment.length - 6);
-    const activity = escapeTags(compactActivity(this.activityLabel(busy), maxActivityLength));
-    this.statusBar.setContent(`{gray-fg}${text} | ${activity}${tail}${usage}${queueSegment} | ${context}{/gray-fg}`);
+    if (this.inlineSurface !== null) {
+      const hint = this.options.queuePaused?.() && queued > 0
+        ? '/queue resume · Esc edit queued'
+        : this.completion.isOpen ? context
+        : busy ? 'Enter queue · Esc interrupt' : '/ commands · F1 help';
+      this.inlineStatusLines = [escapeTags(compactActivity(text + usage + ' · ' + hint, width))];
+      return;
+    }
+    const fixed = text + ' · ' + this.activityLabel(busy) + tail + usage + queueSegment + ' · ' + context;
+    this.statusBar?.setContent('{gray-fg}' + escapeTags(compactActivity(fixed, width)) + '{/gray-fg}');
   }
 
   /**
@@ -886,13 +1383,15 @@ private paintCompletion(): void {
   }
 
   private paintOverlay(): void {
+    const box = this.overlayBox;
+    if (box === null) return;
     if (this.interactivePrompt !== null) {
       const prompt = this.interactivePrompt;
       const body = this.renderInteractivePrompt(prompt);
-      this.overlayBox.height = Math.min(body.split('\n').length + 2, Math.max(5, asNumber(this.program.rows, 24) - 2));
-      this.overlayBox.style.border.fg = prompt.kind === 'text' && prompt.secret ? 'yellow' : 'cyan';
-      this.overlayBox.setContent(body);
-      if (this.overlayBox.hidden) this.overlayBox.show();
+      box.height = Math.min(body.split('\n').length + 2, Math.max(5, asNumber(this.program.rows, 24) - 2));
+      box.style.border.fg = prompt.kind === 'text' && prompt.secret ? 'yellow' : 'cyan';
+      box.setContent(body);
+      if (box.hidden) box.show();
       return;
     }
 
@@ -902,22 +1401,22 @@ private paintCompletion(): void {
       // then nothing. Only one of the three can be on screen.
       const windowBody = this.windowMgr.render(Math.max(5, asNumber(this.program.rows, 24) - 4));
       if (windowBody === null) {
-        if (!this.overlayBox.hidden) this.overlayBox.hide();
+        if (!box.hidden) box.hide();
         return;
       }
-      this.overlayBox.height = windowBody.split('\n').length + 2;
-      this.overlayBox.style.border.fg = 'cyan';
-      this.overlayBox.setContent(windowBody);
-      if (this.overlayBox.hidden) this.overlayBox.show();
+      box.height = windowBody.split('\n').length + 2;
+      box.style.border.fg = 'cyan';
+      box.setContent(windowBody);
+      if (box.hidden) box.show();
       return;
     }
     // Height is set explicitly rather than left to blessed's `'auto'`: a box
     // that starts hidden has no measured height to auto-size from, and an
     // overlay that renders at zero height is an overlay that never appears.
-    this.overlayBox.height = body.split('\n').length + 2;
-    this.overlayBox.style.border.fg = 'yellow';
-    this.overlayBox.setContent(body);
-    if (this.overlayBox.hidden) this.overlayBox.show();
+    box.height = body.split('\n').length + 2;
+    box.style.border.fg = 'yellow';
+    box.setContent(body);
+    if (box.hidden) box.show();
   }
 
   private renderInteractivePrompt(prompt: InteractivePrompt): string {
@@ -1006,7 +1505,24 @@ private paintCompletion(): void {
         break;
     }
 
+    if (frame.type === 'text') this.textBuffer.reset();
+    if (frame.type === 'thinking') this.thinkingBuffer.reset();
+    let transcriptChanged = false;
+    if (frame.type === 'done' || frame.type === 'error') {
+      const text = this.textBuffer.flush();
+      if (text !== '') {
+        this.model.appendTextDelta(text);
+        transcriptChanged = true;
+      }
+      const thinking = this.thinkingBuffer.flush();
+      if (thinking !== '') {
+        this.model.appendThinkingDelta(thinking);
+        transcriptChanged = true;
+      }
+    }
     const result = this.model.apply(frame);
+    if (result.kind === 'append' || result.kind === 'mutate') transcriptChanged = true;
+    if (transcriptChanged) this.noteTranscriptMutation();
     if (result.kind === 'permission') {
       this.showPermission(frame);
       return;
@@ -1084,16 +1600,20 @@ private paintCompletion(): void {
    */
   private drainBuffers(): void {
     const at = now();
+    let transcriptChanged = false;
     const text = this.textBuffer.take(at);
     if (text !== '') {
       this.model.appendTextDelta(text);
+      transcriptChanged = true;
       this.noteQueued(text);
     }
     const thinking = this.thinkingBuffer.take(at);
     if (thinking !== '') {
       this.model.appendThinkingDelta(thinking);
+      transcriptChanged = true;
       this.noteQueued(thinking);
     }
+    if (transcriptChanged) this.noteTranscriptMutation();
     this.scheduleRender();
   }
 
@@ -1150,16 +1670,26 @@ private paintCompletion(): void {
       // A turn boundary commits whatever is left, so the transcript cannot
       // disagree with what actually happened.
       const tail = this.textBuffer.flush();
-      if (tail !== '') this.model.appendTextDelta(tail);
+      let transcriptChanged = false;
+      if (tail !== '') {
+        this.model.appendTextDelta(tail);
+        transcriptChanged = true;
+      }
       const thought = this.thinkingBuffer.flush();
-      if (thought !== '') this.model.appendThinkingDelta(thought);
+      if (thought !== '') {
+        this.model.appendThinkingDelta(thought);
+        transcriptChanged = true;
+      }
+      if (transcriptChanged) this.noteTranscriptMutation();
     }
     this.scheduleRender();
   }
 
   /** Clear the transcript and the input. */
   clearTranscript(): void {
+    const hadTranscript = this.model.blocks.length > 0;
     this.model.clear();
+    if (hadTranscript) this.noteTranscriptMutation();
     this.textBuffer.reset();
     this.thinkingBuffer.reset();
     this.editor.clear();
@@ -1257,6 +1787,7 @@ private paintCompletion(): void {
     this.collapsedBlockIds.clear();
     this.activityPhase = 'ready';
     this.clearActiveActivity();
+    this.noteTranscriptMutation();
     this.scheduler.requestImmediate();
   }
 
@@ -1269,6 +1800,7 @@ private paintCompletion(): void {
   printNotice(text: string): void {
     if (text.trim() === '') return;
     this.model.addNotice(text);
+    this.noteTranscriptMutation();
     this.scheduleRender();
   }
 
@@ -1276,13 +1808,34 @@ private paintCompletion(): void {
   printUser(text: string): void {
     if (text.trim() === '') return;
     this.model.addUser(text);
+    this.noteTranscriptMutation();
     this.scheduleRender();
+  }
+
+  /**
+   * How many times this exact text is in the transcript as its own user line.
+   *
+   * Exists for one regression: every prompt used to be appended twice — once
+   * optimistically when Enter was pressed, once again when the turn started.
+   * A full-screen window scrolled past the second copy long before a reader
+   * looked, and the inline model puts the two copies side by side where the
+   * duplication is the first thing on screen. `runTurn` no longer echoes.
+   *
+   * The count is exposed rather than asserted inside this class because the
+   * duplicate was caused by TWO owners of the same fact, and a test that could
+   * only be written from one of them would pass again the moment the other was
+   * reintroduced. Host-backed callers disable automatic echo and append only
+   * when their submission controller admits a draft to a turn.
+   */
+  userEchoCount(text: string): number {
+    return this.model.blocks.filter((block) => block.kind === 'user' && block.text === text).length;
   }
 
   /** Append an error and render it. Never collapsed, never truncated. */
   printError(message: string): void {
     if (message.trim() === '') return;
     this.model.addError(message);
+    this.noteTranscriptMutation();
     this.scheduleRender();
   }
 
@@ -1325,7 +1878,11 @@ private paintCompletion(): void {
     if (def === undefined) return;
     const keys = toBlessedKeys(def.keys);
     if (keys.length === 0) return;
-    this.screen.key(keys, handler);
+    // On the program, not the screen: `Screen.prototype.key` is a one-line
+    // delegation to `Program.prototype.key` (blessed screen.js:1726), so this is
+    // the same binding in full-screen mode — and it is the only one available
+    // in inline mode, which deliberately has no Screen.
+    this.program.key(keys, handler);
   }
 
   /** F1: the keymap, rendered from the same table `bindKeys` documents. */
@@ -1354,6 +1911,7 @@ private paintCompletion(): void {
       .map((value) => ({ label: compactActivity(value, 76), value }));
     if (items.length === 0) {
       this.model.addNotice('no input history yet');
+      this.noteTranscriptMutation();
       this.scheduleRender();
       return;
     }
@@ -1495,7 +2053,9 @@ exportHistory(): string[] {
   ]);
 
   private bindKeys(): void {
-    const target = this.screen;
+    // Bound to the program, never to a Screen: see `bindAction`. Inline mode
+    // has no Screen, and a Screen's own key table is this program's table.
+    const target = this.program;
 
     target.key(['C-c'], () => {
       if (this.interactivePrompt !== null) this.settleInteractivePrompt(null);
@@ -1826,6 +2386,12 @@ exportHistory(): string[] {
       },
       escape: () => {
         if (this.focus === 'transcript') this.focus = 'input';
+        else if (this.completion.isOpen) this.completion.close();
+        else if (this.options.isBusy?.() ?? this.busy) this.options.onInterrupt?.();
+        else if (this.editor.isEmpty) {
+          const queued = this.options.onRecallQueued?.();
+          if (queued != null) this.editor.setText(queued, Array.from(queued).length);
+        }
         else this.closeOverlay();
       },
       return: () => {
@@ -1956,6 +2522,7 @@ exportHistory(): string[] {
       this.scheduler.requestImmediate();
       return;
     }
+    if (this.options.canSubmit?.() === false) return;
     const at = now();
     if (!fromSlashOption && this.paste.isPastedEnter(at)) {
       // A pasted newline is CONTENT, not a submission. Treating it as a
@@ -1972,7 +2539,10 @@ exportHistory(): string[] {
       return;
     }
     this.refreshCompletion();
-    this.model.addUser(text);
+    if (this.options.echoSubmitted !== false) {
+      this.model.addUser(text);
+      this.noteTranscriptMutation();
+    }
     this.follow = true;
     // Render the user's own line before the turn starts, so the transcript
     // shows what was asked rather than jumping straight to the answer.
@@ -2112,7 +2682,7 @@ exportHistory(): string[] {
   }
 
   private bindResize(): void {
-    process.stdout.on('resize', () => {
+    this.writer.on('resize', () => {
       this.scheduler.requestImmediate();
     });
   }

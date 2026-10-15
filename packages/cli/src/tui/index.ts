@@ -96,11 +96,14 @@ export {
 
 export {
   REBINDABLE_ACTIONS,
+  RESERVED_KEYS,
   applyKeyOverrides,
   loadKeyOverrides,
   normalizeChord,
   parseKeyConfigToml,
   toBlessedKeys,
+  validateKeyOverrides,
+  type KeymapIssue,
 } from './keymap.js';
 
 export {
@@ -124,5 +127,10 @@ export {
 } from './theme.js';
 
 export { WindowManager, type WindowSpec, type WindowItem } from './window.js';
+
+export {
+  splitStreamCommit,
+  type StreamCommit,
+} from './stream-commit.js';
 
 export { ACTION_DEFS, helpGroups, keysColumn, type ActionDef } from './actions.js';

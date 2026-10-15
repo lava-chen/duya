@@ -1,11 +1,11 @@
 /**
- * packages/cli/src/chat.ts — `duya chat`: the Host-backed chat client.
+ * packages/cli/src/chat.ts 鈥?`duya chat`: the Host-backed chat client.
  *
  * This is the production chat entry for the Host architecture (plan 587/12).
  * It contains NO agent runtime: no `DuyaAgent`, no REPL over `streamChat`, no
  * `@duya/agent` import. Everything it does goes through the Host's versioned
- * HTTP API — start a run, follow its durable event stream, cancel on
- * Ctrl+C — exactly the same path the Desktop uses.
+ * HTTP API 鈥?start a run, follow its durable event stream, cancel on
+ * Ctrl+C 鈥?exactly the same path the Desktop uses.
  *
  * Connection discovery order:
  *   1. `--origin` / `DUYA_HOST_ORIGIN` (with `--token` / `DUYA_HOST_TOKEN`
@@ -31,7 +31,10 @@ import { HostSessionHttpClient } from '@duya/host/http-client';
 import { startLocalHost } from '@duya/host/local-host';
 import { resolveHostWorkerPath } from './worker-path.js';
 import { resolveDataRoot } from '@duya/data';
-import { TUIApp, shouldUseTui, type CompletionSources, type LegacyFrame, type TuiChoice } from './tui/index.js';
+import { TUIApp, shouldUseTui, type CompletionSources, type TuiChoice } from './tui/index.js';
+import { HostEventStream } from './tui/host-event-stream.js';
+import { TurnQueue, type TurnOutcome } from './tui/turn-queue.js';
+import { captureConsoleToFile } from './tui/console-capture.js';
 
 interface RuntimeDescriptor {
   readonly apiVersion: number;
@@ -117,7 +120,7 @@ function renderEvent(event: RunEventEnvelope<RunEvent>): void {
       write(payload.text);
       return;
     case 'tool.call_started':
-      write(`${DIM}⚙ ${payload.toolName}(${summarizeArguments(payload.arguments)})${RESET}`);
+      write(`${DIM}鈿?${payload.toolName}(${summarizeArguments(payload.arguments)})${RESET}`);
       return;
     case 'tool.call_completed': {
       const verdict = payload.outcome.outcome;
@@ -132,11 +135,11 @@ function renderEvent(event: RunEventEnvelope<RunEvent>): void {
                 ? `${YELLOW}cancelled${RESET}`
                 : `${YELLOW}?${RESET}`;
       const firstLine = payload.content.split('\n', 1)[0] ?? '';
-      write(`${DIM}↳ ${outcome} ${firstLine.slice(0, 120)}${RESET}`);
+      write(`${DIM}鈫?${outcome} ${firstLine.slice(0, 120)}${RESET}`);
       return;
     }
     case 'assistant.status':
-      write(`${DIM}… ${payload.message}${RESET}`);
+      write(`${DIM}鈥?${payload.message}${RESET}`);
       return;
     default:
       // Every other event type is diagnostic for a chat terminal; the durable
@@ -217,7 +220,7 @@ async function chatOnce(
     workingDirectory: process.cwd(),
   });
   if (!start.accepted) {
-    write(`${RED}run refused: ${start.stage} — ${start.reason ?? ''}${RESET}`);
+    write(`${RED}run refused: ${start.stage} 鈥?${start.reason ?? ''}${RESET}`);
     return 1;
   }
   write(`${DIM}run ${start.runId}${RESET}`);
@@ -233,11 +236,11 @@ async function chatInteractive(
 ): Promise<number> {
   if (shouldUseTui()) return chatTui(client, sessionId, options);
 
-  write(`${DIM}session ${sessionId} — type a message, /exit to quit${RESET}`);
+  write(`${DIM}session ${sessionId} 鈥?type a message, /exit to quit${RESET}`);
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: `${BRIGHT_CYAN}you${RESET} ${DIM}›${RESET} `,
+    prompt: `${BRIGHT_CYAN}you${RESET} ${DIM}鈥?{RESET} `,
   });
   let interrupt: (() => void) | null = null;
   let stopping = false;
@@ -275,7 +278,7 @@ async function chatInteractive(
             workingDirectory: process.cwd(),
           });
           if (!start.accepted) {
-            write(`${RED}run refused: ${start.stage} — ${start.reason ?? ''}${RESET}`);
+            write(`${RED}run refused: ${start.stage} 鈥?${start.reason ?? ''}${RESET}`);
           } else {
             const terminal = await driveRun(client, start.runId, (cancel) => {
               interrupt = cancel;
@@ -292,7 +295,7 @@ async function chatInteractive(
     });
     rl.on('close', resolve);
   });
-  write(`${DIM}goodbye — session ${sessionId}${RESET}`);
+  write(`${DIM}goodbye 鈥?session ${sessionId}${RESET}`);
   return 0;
 }
 
@@ -355,6 +358,24 @@ async function loadSessionMessages(
   return projectTimelinePersistenceMessages(entries);
 }
 
+/**
+ * Whether to run the inline TUI.
+ *
+ * `DUYA_TUI_INLINE=1` opts in. The default is still the full-screen window
+ * because the inline model is new here and its scrollback geometry has not been
+ * exercised against a range of real terminals yet; codex, claude and minimax all
+ * default to inline, and this is the switch that makes that reachable without a
+ * rebuild.
+ *
+ * `DUYA_TUI_INLINE=0` is honoured as an explicit off, so a shell that exports
+ * `DUYA_TUI_INLINE=1` globally can still turn it off for one run.
+ */
+export function inlineTuiRequested(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env['DUYA_TUI_INLINE'];
+  if (value === undefined || value === '') return false;
+  return value !== '0' && value.toLowerCase() !== 'false';
+}
+
 function sessionLabel(item: HostSessionListItem): string {
   const { session, timelineCount } = item;
   return [
@@ -363,7 +384,7 @@ function sessionLabel(item: HostSessionListItem): string {
     `${timelineCount} messages`,
     new Date(session.updatedAt).toLocaleString(),
     session.id.slice(0, 8),
-  ].join('  ·  ');
+  ].join('  路  ');
 }
 
 function sessionCompletionItem(item: HostSessionListItem) {
@@ -377,58 +398,7 @@ function sessionCompletionItem(item: HostSessionListItem) {
   };
 }
 
-/** Translate the Host event contract into the renderer's narrow frame vocabulary. */
-function tuiFrame(event: RunEventEnvelope<RunEvent>): LegacyFrame | null {
-  const payload = event.payload;
-  switch (payload.type) {
-    case 'assistant.text_delta':
-      return { type: 'text_delta', data: { content: payload.delta } };
-    case 'assistant.text_block':
-      return { type: 'text', data: { content: payload.text } };
-    case 'assistant.thinking_delta':
-      return { type: 'thinking_delta', data: { content: payload.delta } };
-    case 'assistant.thinking_block':
-      return { type: 'thinking', data: { content: payload.thinking } };
-    case 'assistant.status':
-      return { type: 'status', data: { message: payload.message } };
-    case 'assistant.usage':
-      return {
-        type: 'token_usage',
-        data: {
-          input_tokens: payload.usage.inputTokens,
-          output_tokens: payload.usage.outputTokens,
-          total_tokens: payload.usage.totalTokens,
-        },
-      };
-    case 'tool.call_preview':
-      return {
-        type: 'tool_use_started',
-        data: { id: payload.toolCallId, name: payload.toolName, input: payload.arguments },
-      };
-    case 'tool.call_started':
-      return {
-        type: 'tool_use',
-        data: { id: payload.toolCallId, name: payload.toolName, input: payload.arguments },
-      };
-    case 'tool.call_completed':
-      return {
-        type: 'tool_result',
-        data: {
-          id: payload.toolCallId,
-          result: payload.content,
-          error: payload.outcome.outcome !== 'success',
-        },
-      };
-    case 'run.failed':
-      return { type: 'error', data: { message: payload.error.message } };
-    case 'run.completed':
-      return { type: 'done' };
-    default:
-      return null;
-  }
-}
-
-async function chatTui(
+export async function chatTui(
   client: HostSessionHttpClient,
   sessionId: SessionId,
   options: ChatCommandOptions,
@@ -438,7 +408,10 @@ async function chatTui(
 
   let activeSession = initialSession;
   let activeRunId: RunId | null = null;
+  let activeStream: AbortController | null = null;
   let busy = false;
+  let cancellationRequested = false;
+  let sessionTransition = false;
   let finished = false;
   let finish: () => void = () => {};
   const finishedPromise = new Promise<void>((resolve) => { finish = resolve; });
@@ -449,6 +422,7 @@ async function chatTui(
     ['/sessions', 'Browse previous sessions'],
     ['/new', 'Start a new session'],
     ['/clear', 'Clear the visible transcript'],
+    ['/queue', 'Resume or clear pending follow-ups'],
     ['/help', 'Show chat commands'],
     ['/exit', 'End this chat'],
   ].map(([label, description]) => ({
@@ -467,32 +441,69 @@ async function chatTui(
     files: () => [],
   };
 
-  const tui = new TUIApp({
-    title: 'duya chat',
-    completionSources,
-    statusText: () => `${activeSession.providerId} · ${activeSession.model || options.model || 'default'} · ${activeSession.id.slice(0, 8)}`,
-    isBusy: () => busy,
-    onSubmit: (text) => { void handleLine(text); },
-    onInterrupt: () => {
-      if (activeRunId !== null) {
-        void client.cancelAgentRun(activeRunId, 'chat interrupt (Ctrl+C)').catch(() => undefined);
+  const queue = new TurnQueue({
+    execute: runTurn,
+    onChange: (snapshot) => {
+      busy = snapshot.busy;
+      if (!finished) {
+        tui.setBusy(busy);
+        tui.refresh();
       }
     },
+    onError: (error) => {
+      if (!finished) tui.printError(error instanceof Error ? error.message : String(error));
+    },
+  });
+
+  function interrupt(): void {
+    cancellationRequested = true;
+    queue.pause();
+    if (activeRunId !== null) {
+      void client.cancelAgentRun(activeRunId, 'chat interrupt').catch((error: unknown) => {
+        if (!finished) tui.printError(error instanceof Error ? error.message : String(error));
+      });
+    }
+  }
+
+  const tui = new TUIApp({
+    title: 'duya chat',
+    inline: inlineTuiRequested(),
+    completionSources,
+    echoSubmitted: false,
+    canSubmit: () => !sessionTransition,
+    queuedPrompts: () => queue.snapshot.pending,
+    queuedCount: () => queue.snapshot.pending.length,
+    queuePaused: () => queue.snapshot.paused,
+    onRecallQueued: () => queue.takeLast(),
+    statusText: () => `${activeSession.providerId} 路 ${activeSession.model || options.model || 'default'} 路 ${activeSession.id.slice(0, 8)}`,
+    isBusy: () => busy,
+    onSubmit: (text) => { void handleLine(text); },
+    onInterrupt: interrupt,
     onExit: () => close(),
   });
 
   function close(): void {
     if (finished) return;
     finished = true;
-    if (activeRunId !== null) {
-      void client.cancelAgentRun(activeRunId, 'chat exit').catch(() => undefined);
-    }
+    queue.close();
+    cancellationRequested = true;
     tui.stop();
-    finish();
+    // Keep the Host alive until even an in-flight startup has been cancelled.
+    void (async () => {
+      try {
+        if (activeRunId !== null) await client.cancelAgentRun(activeRunId, 'chat exit');
+      } catch {
+        // The owned Host is closed by the caller after this barrier settles.
+      } finally {
+        activeStream?.abort();
+        await queue.whenIdle();
+        finish();
+      }
+    })();
   }
 
   async function resumeSession(query: string): Promise<void> {
-    if (busy) {
+    if (busy || queue.snapshot.pending.length > 0) {
       tui.printError('Wait for the current turn to finish before switching sessions.');
       return;
     }
@@ -525,7 +536,7 @@ async function chatTui(
   }
 
   async function startNewSession(): Promise<void> {
-    if (busy) {
+    if (busy || queue.snapshot.pending.length > 0) {
       tui.printError('Wait for the current turn to finish before starting a new session.');
       return;
     }
@@ -535,13 +546,14 @@ async function chatTui(
     tui.printNotice(`Started a new session (${activeSession.id.slice(0, 8)}).`);
   }
 
-  async function runTurn(prompt: string): Promise<void> {
+  async function runTurn(prompt: string): Promise<TurnOutcome> {
+    cancellationRequested = false;
+    const runSessionId = activeSession.id;
+    // Pending drafts enter the transcript only when admitted to a Host turn.
     tui.printUser(prompt);
-    busy = true;
-    tui.setBusy(true);
     try {
       const start = await client.startAgentRun({
-        sessionId: activeSession.id,
+        sessionId: runSessionId,
         prompt,
         ...(options.model !== undefined ? { model: options.model } : {}),
         ...(options.providerId !== undefined ? { providerId: options.providerId } : {}),
@@ -549,26 +561,49 @@ async function chatTui(
         workingDirectory: process.cwd(),
       });
       if (!start.accepted) {
-        tui.printError(`run refused: ${start.stage} — ${start.reason ?? ''}`);
-        return;
+        if (!finished) tui.printError('Run refused: ' + start.stage + ' - ' + (start.reason ?? ''));
+        return 'failed';
       }
       activeRunId = start.runId;
-      for await (const event of client.watchAgentRunEvents(start.runId)) {
-        const frame = tuiFrame(event as RunEventEnvelope<RunEvent>);
+      // Interrupt/exit may arrive while the start request is still in flight.
+      if (cancellationRequested || finished) {
+        await client.cancelAgentRun(start.runId, 'chat interrupted during startup');
+      }
+      if (finished) return 'cancelled';
+      const stream = new HostEventStream(runSessionId, start.runId);
+      activeStream = new AbortController();
+      for await (const event of client.watchAgentRunEvents(start.runId, { signal: activeStream.signal })) {
+        if (finished) return 'cancelled';
+        const frame = stream.push(event);
         if (frame !== null) tui.push(frame);
       }
-      const record = await client.getAgentRun(start.runId).catch(() => null);
-      if (record?.status === 'failed') tui.printError(`Run ${start.runId} failed.`);
+      const record = await client.getAgentRun(start.runId);
+      if (record === null) {
+        tui.printError('Run stream closed without a settled record. Pending drafts are paused.');
+        return 'failed';
+      }
+      if (record.status === 'failed') {
+        tui.printError('Run ' + start.runId + ' failed.');
+        return 'failed';
+      }
+      if (cancellationRequested || record.status === 'cancelled') return 'cancelled';
+      if (record.status !== 'completed') {
+        tui.printError('Run stopped with status ' + record.status + '. Pending drafts are paused.');
+        return 'failed';
+      }
+      return 'completed';
     } catch (error) {
-      tui.printError(error instanceof Error ? error.message : String(error));
+      if (!finished) tui.printError(error instanceof Error ? error.message : String(error));
+      return cancellationRequested ? 'cancelled' : 'failed';
     } finally {
+      activeStream = null;
       activeRunId = null;
-      busy = false;
-      tui.setBusy(false);
-      try {
-        sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
-      } catch {
-        // Resume can retry the list when the user opens its submenu.
+      if (!finished) {
+        try {
+          sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
+        } catch {
+          // Resume can retry the list when the user opens its submenu.
+        }
       }
     }
   }
@@ -582,25 +617,42 @@ async function chatTui(
       const args = command[2]?.trim() ?? '';
       try {
         if (name === 'exit' || name === 'quit' || name === 'q') close();
-        else if (name === 'resume' || name === 'sessions') await resumeSession(args);
-        else if (name === 'new') await startNewSession();
+        else if (name === 'resume' || name === 'sessions' || name === 'new') {
+          if (sessionTransition) return;
+          sessionTransition = true;
+          try {
+            if (name === 'new') await startNewSession();
+            else await resumeSession(args);
+          } finally {
+            sessionTransition = false;
+          }
+        }
+        else if (name === 'queue') {
+          if (args === 'clear') queue.clear();
+          else if (args === 'resume') queue.resume();
+          else {
+            const choice = await tui.choose('Pending follow-ups', [
+              { label: 'Resume queued follow-ups', value: 'resume' },
+              { label: 'Discard queued follow-ups', value: 'clear' },
+            ]);
+            if (choice === 'resume') queue.resume();
+            else if (choice === 'clear') queue.clear();
+          }
+        }
         else if (name === 'clear') tui.clearTranscript();
-        else if (name === 'help') tui.printNotice('/resume · /sessions · /new · /clear · /exit');
+        else if (name === 'help') tui.printNotice('/resume 路 /sessions 路 /new 路 /clear 路 /exit');
         else tui.printError(`Unknown command: /${name}`);
       } catch (error) {
         tui.printError(error instanceof Error ? error.message : String(error));
       }
       return;
     }
-    if (busy) {
-      tui.printNotice('Wait for the current turn to finish before sending another message.');
-      return;
-    }
-    await runTurn(text);
+    queue.submit(line);
+
   }
 
   tui.replaceTranscript(await loadSessionMessages(client, sessionId));
-  tui.printNotice(`session ${sessionId} · type a message, /resume to switch sessions`);
+  tui.printNotice(`session ${sessionId} 路 type a message, /resume to switch sessions`);
   tui.start();
   await finishedPromise;
   return 0;
@@ -615,9 +667,10 @@ export interface TuiCommandOptions {
 }
 
 /**
- * Entry for the `duya tui` command. Starts an ephemeral Host and opens the
- * full-screen TUI in the same process. The Host is shut down when the TUI exits.
- * Returns the process exit code.
+ * Entry for the `duya tui` command. Starts an ephemeral Host and opens the TUI
+ * in the same process. The Host is shut down when the TUI exits. Which screen
+ * model that TUI uses is `inlineTuiRequested`; this entry point is the same
+ * either way. Returns the process exit code.
  */
 export async function runTuiCommand(options: TuiCommandOptions): Promise<number> {
   const host = await startLocalHost({
@@ -628,7 +681,7 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
   const client = new HostSessionHttpClient(host.origin, host.token ?? '');
   try {
     const health = await client.getHealth();
-    write(`${DIM}duya tui · Host ${host.origin} (api v${health.apiVersion})${RESET}`);
+    write(`${DIM}duya tui 路 Host ${host.origin} (api v${health.apiVersion})${RESET}`);
   } catch (error) {
     write(`${RED}Host failed to start: ${error instanceof Error ? error.message : String(error)}${RESET}`);
     return 1;
@@ -648,10 +701,23 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
   }
 
   let exitCode = 0;
+  // From here the TUI owns this terminal. `blessed` renders through its own
+  // writer, so any `console.*` call from this process lands inline in the
+  // transcript and buries the turn the user asked for. Route it to the Host's
+  // diagnostics log for the rest of the TUI's life. `process.stdout` and
+  // `process.stderr` are deliberately NOT patched 鈥?that is what blessed draws.
+  const consoleCapture =
+    host.diagnosticsLogPath === undefined
+      ? undefined
+      : captureConsoleToFile(host.diagnosticsLogPath);
   try {
     exitCode = await chatInteractive(client, sessionId, { ...options, origin: host.origin, token: host.token });
   } finally {
-    await host.close();
+    try {
+      await host.close();
+    } finally {
+      consoleCapture?.restore();
+    }
   }
   return exitCode;
 }

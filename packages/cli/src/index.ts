@@ -118,7 +118,9 @@ export function buildProgram(): Command {
   });
 
   // `duya tui` — ephemeral Host + TUI in one process.
-  const tui = program.command('tui').description('Start an ephemeral Duya Host and open the full-screen TUI');
+  const tui = program
+    .command('tui')
+    .description('Start an ephemeral Duya Host and open the TUI (DUYA_TUI_INLINE=1 for the inline screen model)');
   tui.option('--port <port>', 'HTTP port for the embedded Host (0 = auto)', '0');
   tui.option('--session <id>', 'Continue an existing session instead of creating one');
   tui.option('--model <model>', 'Default model override');

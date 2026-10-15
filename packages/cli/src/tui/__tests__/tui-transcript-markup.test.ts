@@ -150,6 +150,30 @@ describe('transcript-view markup', () => {
     expect(rendered).toContain('\\{"ready": false}');
     expect(rendered.endsWith('{gray-fg}  └─{/gray-fg}')).toBe(true);
   });
+
+  it('withholds a still-growing streaming table so its borders stop moving', () => {
+    const table = 'intro\n\n| name | value |\n|------|-------|\n| a | 1 |';
+
+    const streaming = renderOneBlock({ kind: 'assistant', id: 's', finalized: false, text: table });
+    // The prose above the table is committed; the table itself is withheld.
+    expect(streaming).toContain('intro');
+    expect(streaming).not.toContain('value');
+
+    const finished = renderOneBlock({ kind: 'assistant', id: 'f', finalized: true, text: `${table}\n\ndone` });
+    expect(finished).toContain('value');
+    expect(finished).toContain('done');
+  });
+
+  it('releases a streaming table once a following line proves it finished', () => {
+    const rendered = renderOneBlock({
+      kind: 'assistant',
+      id: 'released',
+      finalized: false,
+      text: '| name | value |\n|------|-------|\n| a | 1 |\n\nafter the table',
+    });
+    expect(rendered).toContain('value');
+    expect(rendered).toContain('after the table');
+  });
 });
 
 describe('tool groups', () => {

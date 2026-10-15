@@ -54,6 +54,9 @@ src/stories/
 
 # Runtime data
 .duya/
+# CLI/TUI runtime when DUYA_CLI_USER_DATA_DIR points inside the checkout:
+# two live SQLite databases, the context-ring log and session rollouts.
+.duya-cli-tui/
 
 # Logs
 *.log
