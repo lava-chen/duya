@@ -76,6 +76,7 @@ import { createHostResearchApi } from './research-api.js';
 import { createDatabaseWorkspaceAccess } from './workspace-access.js';
 import { HostRunExecutionController } from './run-execution.js';
 import { createHostWorkerDbBridge } from './worker-db-bridge.js';
+import { resolveProvider } from './worker-config/file-config.js';
 import type { HostRunExecutionLogger } from './run-execution.js';
 
 const HOST = '127.0.0.1';
@@ -364,6 +365,24 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       permissionSettings: settings,
       workspaceDatabase: core.database.db,
       workspaces: workspaceAccess,
+      // A session created without a provider/model records the ones
+      // config.toml actually selects, instead of the schema placeholders
+      // (`''` and `'env'`) that a client would then render as "env · default".
+      // The data root is passed explicitly rather than letting resolveProvider
+      // re-derive it, so an injected `dataRoot` (tests, embedding) governs the
+      // config location too instead of silently reading the real ~/.duya.
+      defaultModelProvider: () => {
+        const resolution = resolveProvider(undefined, dataRoot);
+        return resolution.ok
+          ? {
+              model: resolution.provider.model.model,
+              providerId: resolution.provider.id,
+              ...(resolution.provider.model.warning === undefined
+                ? {}
+                : { warning: resolution.provider.model.warning }),
+            }
+          : null;
+      },
     });
     const localAttachmentApi = createHostLocalAttachmentApi({
       stores: core.stores,
