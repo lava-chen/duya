@@ -5,6 +5,7 @@ import { TUIApp } from '../TUIApp.js';
 import { MIN_RENDER_INTERVAL_MS } from '../render-scheduler.js';
 import { renderTranscript, escapeTags } from '../transcript-view.js';
 import { TranscriptModel } from '../blocks.js';
+import { detectTerminalEnvironment } from '../terminal-env.js';
 
 /**
  * The blessed integration, exercised for real.
@@ -75,6 +76,8 @@ function makeApp(submitted: string[] = []) {
     // developer's own `~/.duya/config.toml`, and a personal override would
     // break tests that assert on default bindings.
     keyOverrides: {},
+    // Pin the capability whose escape sequence these integration tests assert.
+    terminalEnv: detectTerminalEnvironment({ TERM: 'xterm-256color', TERM_PROGRAM: 'WezTerm' }),
   });
   return { app, out };
 }
