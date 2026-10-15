@@ -172,7 +172,15 @@ export function createToolSideEffectLedger(options: LedgerOptions): ToolSideEffe
    * process that wrote the record dying.
    */
   const begun = new Set<string>();
-  for (const entry of readJournal(file)) begun.add(entry.attemptKey);
+  try {
+    for (const entry of readJournal(file)) begun.add(entry.attemptKey);
+  } catch (error) {
+    // A file occupying a parent directory makes mkdirSync fail and readFileSync
+    // report ENOTDIR on Linux. Defer that unavailable-path failure to begin(),
+    // where the durable-write refusal prevents dispatch. Other read failures,
+    // including malformed journals, remain fatal during construction.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOTDIR') throw error;
+  }
 
   /**
    * Append one line and make it durable.

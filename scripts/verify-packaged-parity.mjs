@@ -86,8 +86,8 @@ const CHECKS = {
   'Release directory': [getReleaseDir(), true],
   'Resources directory': [RESOURCES, true],
 
-  // Agent bundle (extraResources)
-  'agent-bundle/agent-process-entry.js': [path.join(RESOURCES, 'agent-bundle', 'agent-process-entry.js'), false],
+  // Host worker bundle (extraResources)
+  'harness-bundle/worker-entry.js': [path.join(RESOURCES, 'harness-bundle', 'worker-entry.js'), false],
 
   // Agent skills (extraResources)
   'agent/skills/ directory': [path.join(RESOURCES, 'agent', 'skills'), true],
