@@ -38,6 +38,13 @@ import {
 } from '@duya/data/bot-session-paths';
 import type { HostWorkspaceAccess } from './session-api.js';
 import { createHostSessionApi, createHostWorkspaceRegistrationApi } from './session-api.js';
+import {
+  createFileDiagnosticsLogger,
+  createStdioDiagnosticsLogger,
+  resolveDiagnosticsSink,
+  resolveHostDiagnosticsLogPath,
+  type HostDiagnosticsSink,
+} from './host-diagnostics-log.js';
 import { HostSessionHttpServer } from './http-server.js';
 import { createHostLocalRolloutApi } from './local-rollout-api.js';
 import { createHostLocalSessionApi } from './local-session-api.js';
@@ -146,6 +153,12 @@ export interface StartLocalHostOptions {
    * The caller owns the Host lifecycle; process exit is the only clean shutdown.
    */
   readonly ephemeral?: boolean;
+  /**
+   * Where run diagnostics go. Defaults to `file` when `ephemeral` is set and
+   * `stdio` otherwise — an embedded Host shares a terminal with someone else's
+   * UI and must not write to it. See `host-diagnostics-log.ts`.
+   */
+  readonly diagnostics?: HostDiagnosticsSink;
 }
 
 export interface LocalHostHandle {
@@ -154,6 +167,12 @@ export interface LocalHostHandle {
   /** Defined when the Host was started with a stable token; undefined in ephemeral mode. */
   readonly token?: string;
   readonly runtimeFilePath: string;
+  /**
+   * Where run diagnostics are being written, when they go to a file. An
+   * embedded caller (the TUI) reads this so anything else that logs to the
+   * console can be diverted to the same place instead of onto the screen.
+   */
+  readonly diagnosticsLogPath?: string;
   close(): Promise<void>;
 }
 
@@ -400,13 +419,15 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     const taskApi = createHostTaskApi(core.stores);
     const lockApi = createHostLockApi(core.stores);
     let runExecution: HostRunExecutionController | null = null;
+    const diagnosticsSink = resolveDiagnosticsSink({
+      ...(options.ephemeral === undefined ? {} : { ephemeral: options.ephemeral }),
+      ...(options.diagnostics === undefined ? {} : { diagnostics: options.diagnostics }),
+    });
     if (options.workerPath !== undefined) {
-      const executionLogger: HostRunExecutionLogger = {
-        info: (message, context) => console.info(`[host-run] ${message}`, context ?? ''),
-        warn: (message, context) => console.warn(`[host-run] ${message}`, context ?? ''),
-        error: (message, error, context) => console.error(`[host-run] ${message}`, error?.message ?? '', context ?? ''),
-        debug: () => undefined,
-      };
+      const executionLogger: HostRunExecutionLogger =
+        diagnosticsSink === 'file'
+          ? createFileDiagnosticsLogger(resolveHostDiagnosticsLogPath(dataRoot))
+          : createStdioDiagnosticsLogger();
       runExecution = new HostRunExecutionController({
         runs: core.stores.runs,
         sessionDefaults: async (sessionId) => {
@@ -513,6 +534,9 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       port: server.port,
       token: runtime?.token,
       runtimeFilePath,
+      ...(diagnosticsSink === 'file'
+        ? { diagnosticsLogPath: resolveHostDiagnosticsLogPath(dataRoot) }
+        : {}),
       close: async () => {
         if (closed) return;
         closed = true;

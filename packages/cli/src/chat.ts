@@ -32,6 +32,7 @@ import { startLocalHost } from '@duya/host/local-host';
 import { resolveHostWorkerPath } from './worker-path.js';
 import { resolveDataRoot } from '@duya/data';
 import { TUIApp, shouldUseTui, type CompletionSources, type LegacyFrame, type TuiChoice } from './tui/index.js';
+import { captureConsoleToFile } from './tui/console-capture.js';
 
 interface RuntimeDescriptor {
   readonly apiVersion: number;
@@ -648,10 +649,23 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
   }
 
   let exitCode = 0;
+  // From here the TUI owns this terminal. `blessed` renders through its own
+  // writer, so any `console.*` call from this process lands inline in the
+  // transcript and buries the turn the user asked for. Route it to the Host's
+  // diagnostics log for the rest of the TUI's life. `process.stdout` and
+  // `process.stderr` are deliberately NOT patched — that is what blessed draws.
+  const consoleCapture =
+    host.diagnosticsLogPath === undefined
+      ? undefined
+      : captureConsoleToFile(host.diagnosticsLogPath);
   try {
     exitCode = await chatInteractive(client, sessionId, { ...options, origin: host.origin, token: host.token });
   } finally {
-    await host.close();
+    try {
+      await host.close();
+    } finally {
+      consoleCapture?.restore();
+    }
   }
   return exitCode;
 }
