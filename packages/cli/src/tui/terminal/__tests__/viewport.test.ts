@@ -55,9 +55,10 @@ describe('liveWindow', () => {
   });
 
   it('never lets the live area start above what is already committed', () => {
-    // A shrinking document (a cleared transcript) must not produce a negative
-    // overflow and try to un-commit history.
-    expect(liveWindow(3, 10, 20)).toEqual({ liveStart: 0, overflow: 10 });
+    // A shrinking document — the user scrolled back — must commit nothing. The
+    // rows at its head have already been printed, and a committed row can
+    // never be un-committed, so re-committing them would duplicate history.
+    expect(liveWindow(3, 10, 20)).toEqual({ liveStart: 0, overflow: 0 });
   });
 
   it('treats a zero-row region as one row rather than dividing by zero', () => {

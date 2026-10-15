@@ -80,7 +80,12 @@ export function liveWindow(
 ): { readonly liveStart: number; readonly overflow: number } {
   const capacity = Math.max(1, regionBottom);
   if (documentRows <= capacity) {
-    return { liveStart: 0, overflow: Math.max(0, committedRows) };
+    // The document fits, so the live area shows all of it from row 0. Nothing
+    // is committed — and that `0` is load-bearing. The user scrolling back
+    // makes the document shorter, and reporting the already-committed count
+    // here would print those rows a SECOND time: a committed row can never be
+    // un-committed, so re-committing is how a TUI duplicates history.
+    return { liveStart: 0, overflow: 0 };
   }
   const liveStart = Math.max(committedRows, documentRows - capacity);
   return { liveStart, overflow: Math.max(0, liveStart - committedRows) };
