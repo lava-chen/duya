@@ -4,7 +4,7 @@ import type { WorkerManager } from './worker-manager';
 import type { SessionManager } from './session-store';
 import { SessionState } from './types';
 import { workerLogger } from './logger';
-import type { WorkerEvent } from '../../../../../../packages/agent/src/process/worker-protocol';
+import type { WorkerEvent } from '@duya/agent-protocol/worker-protocol';
 import type { ApiProvider } from '../../config/provider-types';
 import { buildInitProviderConfig, detectReferencesEnabled, resolveRuntimeConfigViaDbRequest } from './router';
 import { calculateMaxConcurrentWorkers } from '@duya/host/worker-limits';

@@ -773,7 +773,7 @@ export async function getMessagesBySessionIPC(sessionId: string): Promise<Messag
 
 /**
  * Plan 489 P0.1 / 497 — bot-direct visible sources, renderer mirror of
- * `@duya/agent/message` `BOT_DIRECT_VISIBLE_SOURCES`. The canonical filter
+ * `@duya/agent-core/message` `BOT_DIRECT_VISIBLE_SOURCES`. The canonical filter
  * lives in the main-process projection; this copy guards INGESTION points
  * that receive raw broadcast rows (App's `message:new` handler) so hidden
  * sources (tool_use / thinking / system / scratchpad / wake prompts) never

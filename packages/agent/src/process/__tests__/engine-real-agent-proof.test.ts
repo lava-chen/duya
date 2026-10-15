@@ -1042,7 +1042,8 @@ describe('the proof is wired to the real seams, not to a double', () => {
         .replace(/\/\*[\s\S]*?\*\//g, '')
         .replace(/^[ \t]*\/\/.*$/gm, '');
     const entry = code('agent-process-entry.ts');
-    const driver = code('engine-run-driver.ts');
+    expect(code('engine-run-driver.ts')).toContain('@duya/host/worker-engine-driver');
+    const driver = readFileSync(path.join(here, '../../../../host/src/worker-engine-driver.ts'), 'utf8');
     expect((entry.match(/agent\.streamChat\s*\(/g) ?? []).length).toBe(0);
     expect((entry.match(/driveRunWithEngine\s*\(/g) ?? []).length).toBe(1);
     // THE composition under proof, counted call-shaped: the import line carries

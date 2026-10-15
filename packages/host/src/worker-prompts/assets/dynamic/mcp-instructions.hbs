@@ -1,0 +1,18 @@
+{{!--
+  MCP Server Instructions section — Plan 550 1c.
+
+  Renders only when at least one connected MCP server has non-empty
+  `instructions`. Otherwise empty. Mirrors the filter logic of the
+  legacy `getMcpInstructionsSection`.
+
+  The server list is pre-filtered and serialised by
+  `mapPromptContextToHbs` into the `mcp_instruction_blocks` string
+  (each block formatted as `## <name>\n<body>`, joined by `\n\n`).
+--}}
+{{#if mcp_instruction_blocks}}
+# MCP Server Instructions
+
+The following MCP servers have provided instructions for how to use their tools and resources:
+
+{{{mcp_instruction_blocks}}}
+{{/if}}

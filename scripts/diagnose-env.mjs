@@ -184,7 +184,7 @@ function diagnoseExtraResources() {
   const extensionDir = path.join(resDir, 'extension');
   const assetsDir = path.join(resDir, 'assets');
 
-  addResult('Extra Resources', 'agent/skills/', 'packages/agent/skills/', 'packages/agent/skills/', `resources/agent/skills/`, checkFile(skillsDir, 'skills').status);
+  addResult('Extra Resources', 'agent/skills/', 'packages/host/skills/', 'packages/host/skills/', `resources/agent/skills/`, checkFile(skillsDir, 'skills').status);
   addResult('Extra Resources', 'public/', 'public/', 'public/', `resources/public/`, checkFile(publicDir, 'public').status);
   addResult('Extra Resources', 'assets/', 'assets/', 'assets/', `resources/assets/`, checkFile(assetsDir, 'assets').status);
 
@@ -198,7 +198,7 @@ function diagnoseExtraResources() {
 // =============================================================================
 
 function diagnoseSkills() {
-  const bundledSkills = path.join(PROJECT_ROOT, 'packages', 'agent', 'skills');
+  const bundledSkills = path.join(PROJECT_ROOT, 'packages', 'host', 'skills');
   const userSkills = path.join(os.homedir(), '.duya', 'skills');
 
   let bundledCount = 0;
@@ -220,7 +220,7 @@ function diagnoseSkills() {
     }).length;
   }
 
-  addResult('Skills', 'Bundled (packages/agent/skills/)', `${bundledCount} categories`, `${bundledCount} categories`, `resources/agent/skills/ (${bundledCount} cats)`, bundledCount > 0 ? 'ok' : 'warning');
+  addResult('Skills', 'Bundled (packages/host/skills/)', `${bundledCount} categories`, `${bundledCount} categories`, `resources/agent/skills/ (${bundledCount} cats)`, bundledCount > 0 ? 'ok' : 'warning');
   addResult('Skills', 'User (~/.duya/skills/)', `${userSkillDirs} skills`, `${userSkillDirs} skills`, `${userSkillDirs} skills`, userSkillDirs >= 0 ? 'ok' : 'info');
 }
 

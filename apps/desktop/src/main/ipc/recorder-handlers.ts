@@ -47,8 +47,8 @@ import {
   showRecorderBadge,
   updateRecorderBadge,
 } from '../services/recorder/badge.js';
-import { convertEventsToWorkflow } from '../../../../../packages/agent/src/modes/workflow/converter';
-import { defToDwfSource } from '../../../../../packages/agent/src/modes/workflow/dwf/def-to-dwf';
+import { convertEventsToWorkflow } from '@duya/host/worker-workflows/converter';
+import { defToDwfSource } from '@duya/host/worker-workflows/dwf/def-to-dwf';
 import { getLogger, LogComponent } from '../logging/logger';
 
 const logger = getLogger();

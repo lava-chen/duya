@@ -525,7 +525,7 @@ function declaredControlVerbs(modulePath: string): readonly string[] {
 }
 
 const GOAL_MODULE = fileURLToPath(new URL('../../modes/goal/goal-commands.ts', import.meta.url));
-const TRANSCRIPT_MODULE = fileURLToPath(new URL('../../session/transcript-commands.ts', import.meta.url));
+const TRANSCRIPT_MODULE = fileURLToPath(new URL('../../../../../packages/host/src/worker-session/transcript-commands.ts', import.meta.url));
 
 const GOAL_VERBS = declaredControlVerbs(GOAL_MODULE);
 const TRANSCRIPT_VERBS = declaredControlVerbs(TRANSCRIPT_MODULE);

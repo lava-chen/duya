@@ -569,7 +569,7 @@ export function getLocalPluginPaths(): Map<string, string> {
 // ----------------------------------------------------------------------------
 // Bundled Skills Catalog
 // ----------------------------------------------------------------------------
-// Skills under `packages/agent/skills/` are exposed as standalone marketplace
+// Skills under `packages/host/skills/` are exposed as standalone marketplace
 // entries (`kind: 'skill'`) so users can selectively install them instead of
 // having all skills auto-synced at runtime. Each skill becomes one catalog
 // entry; installing copies the skill directory into the plugin's `skills/`
@@ -577,20 +577,20 @@ export function getLocalPluginPaths(): Map<string, string> {
 
 /**
  * Resolve the bundled skills directory in the main process.
- * - Dev: `<repo>/packages/agent/skills`
+ * - Dev: `<repo>/packages/host/skills`
  * - Prod: `<resourcesPath>/agent/skills` (electron-builder extraResources)
  */
 export function getBundledSkillsDir(): string {
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'agent', 'skills');
   }
-  return path.join(app.getAppPath(), 'packages', 'agent', 'skills');
+  return path.join(app.getAppPath(), 'packages', 'host', 'skills');
 }
 
 /**
  * Map a skill category directory name to a `PluginCategory` for marketplace
  * grouping. Skill categories follow the directory layout under
- * `packages/agent/skills/` (agentic, apple, cognition, communication,
+ * `packages/host/skills/` (agentic, apple, cognition, communication,
  * development, media, office, research, websearch, visualize).
  */
 const SKILL_CATEGORY_TO_PLUGIN_CATEGORY: Record<string, PluginCategory> = {

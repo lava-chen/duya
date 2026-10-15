@@ -1,5 +1,5 @@
 /**
- * Plan 610 A8 shim â€?ENOENT path suggestions moved to
+ * Plan 610 A8 shim   ?ENOENT path suggestions moved to
  * `@duya/capabilities` (`fs/read-path-suggest`). Pass-through.
  */
 

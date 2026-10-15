@@ -148,7 +148,7 @@ vi.mock('../../ipc/db-client.js', async (importOriginal) => {
 // ============================================================================
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const HOST_SOURCE = path.join(HERE, '..', 'headless-run-host.ts');
+const HOST_SOURCE = path.resolve(HERE, '../../../../host/src/worker-headless-run-host.ts');
 
 function code(file: string): string {
   return stripComments(readFileSync(file, 'utf8')).text;
@@ -390,13 +390,13 @@ describe('S4c-d2b — the headless channel drives the engine, not the legacy loo
     expect(occurrences(/\bdriveRunWithEngine\s*\(/g, src)).toBe(1);
   });
 
-  it('keeps the legacy loop reachable from the host module for no other reason', () => {
+  it('keeps the injected engine session reachable through cooperative cancel', () => {
     // A guard against the failure mode where the flip "passes" because the
-    // executor vanished: the module still names the real agent and still drives
-    // it, just through the engine.
+    // executor vanished: the host still drives its required session port and
+    // interrupts that same session when the caller cancels.
     const src = code(HOST_SOURCE);
     expect(occurrences(/\bdriveRunWithEngine\b/g, src)).toBeGreaterThan(0);
-    expect(occurrences(/\bagent\.interrupt\s*\(/g, src)).toBe(1);
+    expect(occurrences(/\bsession\.interrupt\s*\(/g, src)).toBe(1);
   });
 });
 

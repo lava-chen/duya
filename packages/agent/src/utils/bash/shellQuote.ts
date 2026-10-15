@@ -1,5 +1,5 @@
 /**
- * Plan 610 A8 shim â€?shell command parsing moved to
+ * Plan 610 A8 shim   ?shell command parsing moved to
  * `@duya/capabilities` (`utils/bash/shellQuote`). Pass-through.
  */
 

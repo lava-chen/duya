@@ -76,22 +76,16 @@ function isPackagedHost(): boolean {
 
 export function getAgentProcessPath(): string {
   if (isPackagedHost()) {
-    const bundled = path.join(process.resourcesPath, 'agent-bundle', 'agent-process-entry.js');
+    const bundled = path.join(process.resourcesPath, 'harness-bundle', 'worker-entry.js');
     if (fs.existsSync(bundled)) return bundled;
-
-    const primary = path.join(process.resourcesPath, 'agent', 'process', 'agent-process-entry.js');
-    if (fs.existsSync(primary)) return primary;
-
-    const fallback = path.join(process.resourcesPath, 'agent', 'dist', 'process', 'agent-process-entry.js');
-    if (fs.existsSync(fallback)) return fallback;
 
     // Fall through to dev path if no packaged path exists (e.g., Playwright e2e)
   }
 
-  const devBundle = path.join(process.cwd(), 'packages', 'agent', 'bundle', 'agent-process-entry.js');
+  const devBundle = path.join(process.cwd(), 'packages', 'host', 'bundle', 'worker-entry.js');
   if (fs.existsSync(devBundle)) return devBundle;
 
-  return path.join(process.cwd(), 'packages', 'agent', 'dist', 'process', 'agent-process-entry.js');
+  return devBundle;
 }
 
 export function getAgentRuntimeCommand(

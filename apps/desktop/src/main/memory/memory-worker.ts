@@ -62,11 +62,9 @@ export interface MemoryWorkerDeps {
   /** Host-owned source for session catalog snapshots and project resolution. */
   catalogSource?: MemoryCatalogSource;
   /**
-   * Override the Stage 1 extractor's message source. The Main-process
-   * MemoryWorker has no `process.send` IPC, so it supplies a reader that
-   * pulls flat rows from the core store MessageLog via
-   * `storedEventsToIpcMessages`. When absent, the extractor falls back to
-   * the agent `messageDb.getBySession` IPC path (tests mock this).
+   * Read session messages through the Host-owned store. The extractor has no
+   * implicit IPC or database fallback; the production worker supplies this
+   * reader from the core store MessageLog via `storedEventsToIpcMessages`.
    */
   readMessageRows?: (sessionId: string) => Promise<MessageRowShape[]>;
   /** LLM client for Stage 1 extraction. */

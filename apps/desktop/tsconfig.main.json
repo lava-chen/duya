@@ -13,7 +13,6 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/main/*"],
-      "@duya/agent/message": ["../../packages/agent/dist/message/index"],
       "@duya/data": ["../../packages/data/dist/index.d.ts"],
       "@duya/data/*": ["../../packages/data/dist/*"],
       "@duya/host": ["../../packages/host/dist/index.d.ts"],
@@ -79,6 +78,11 @@
       "@duya/agent-protocol/workbench": [
         "../../packages/agent-protocol/dist/workbench.d.ts"
       ],
+      "@duya/agent-protocol/worker-protocol": [
+        "../../packages/agent-protocol/dist/worker-protocol.d.ts"
+      ],
+      "@duya/agent-core/*": ["../../packages/agent-core/dist/*"],
+      "@duya/capabilities/*": ["../../packages/capabilities/dist/*"],
       "@duya/plugin-core": ["../../packages/plugin-core/dist/index.d.ts"],
       "@duya/plugin-core/*": ["../../packages/plugin-core/dist/*"],
       "@duya/connectors": ["../../packages/connectors/dist/index.d.ts"],

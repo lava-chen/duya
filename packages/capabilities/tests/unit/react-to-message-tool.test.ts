@@ -8,7 +8,7 @@ import type {
   ReactToMessagePort,
   ReactToMessageTranscriptRow,
 } from '../../src/ReactToMessageTool/ports.js';
-import type { ToolContext, ToolUseContext } from '../../src/contracts/tool.js';
+import type { ToolUseContext } from '../../src/contracts/tool.js';
 
 function createPort(initialRows: ReactToMessageTranscriptRow[] = []) {
   const rows = [...initialRows];
@@ -63,7 +63,7 @@ function failureCode(result: { result: string }): string | undefined {
 }
 
 describe('ReactToMessageTool capability', () => {
-  it('keeps the public input, schema, tool name, and pre-approved permission contract', () => {
+  it('keeps the public input schema and tool name', () => {
     const { port } = createPort();
     const tool = new ReactToMessageTool(port);
 
@@ -71,10 +71,6 @@ describe('ReactToMessageTool capability', () => {
     expect(tool.input_schema).toMatchObject({
       type: 'object',
       required: ['messageId', 'emoji'],
-    });
-    expect(tool.checkPermissions({}, undefined as unknown as ToolContext)).toEqual({
-      allowed: true,
-      reason: 'Emoji tapback (self-scoped, pre-approved).',
     });
     expect(resolveReactToMessage({ messageId: ' m1 ', emoji: ' 👍 ' })).toEqual({
       ok: true,

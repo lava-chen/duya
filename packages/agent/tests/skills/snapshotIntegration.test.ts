@@ -17,7 +17,7 @@ import { join } from 'node:path';
 
 // loadSkills reads disabled-skill overrides via the DB bridge, which has no
 // channel under the vitest process pool. Return "no overrides".
-vi.mock('../../src/ipc/db-client.js', () => ({
+vi.mock('@duya/host/worker-db-client', () => ({
   settingDb: {
     getJson: vi.fn().mockResolvedValue({}),
   },

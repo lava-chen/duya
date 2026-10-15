@@ -666,6 +666,7 @@ export function toProviderMessages(
     role: message.role,
     content: message.content as Message['content'],
     id: message.id,
+    ...(message.toolCallId === undefined ? {} : { tool_call_id: message.toolCallId }),
   }));
 }
 
@@ -716,6 +717,7 @@ export function fromProviderMessages(messages: readonly Message[]): ModelMessage
     role: message.role as ModelMessage['role'],
     content: message.content as ModelMessage['content'],
     id: message.id as string,
+    ...(message.tool_call_id === undefined ? {} : { toolCallId: message.tool_call_id }),
   }));
 }
 

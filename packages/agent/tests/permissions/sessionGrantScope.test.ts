@@ -31,7 +31,7 @@ import { dirname, join } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const WORKER_ENTRY = join(HERE, '..', '..', 'src', 'process', 'agent-process-entry.ts');
-const DB_CLIENT = join(HERE, '..', '..', 'src', 'ipc', 'db-client.ts');
+const DB_CLIENT = join(HERE, '..', '..', '..', 'host', 'src', 'worker-db-client.ts');
 
 /** The `allow_for_session` branch, so an assertion cannot match unrelated text. */
 function allowForSessionBranch(entry: string): string {
@@ -119,7 +119,7 @@ describe('the worker can write the rules table it already read', () => {
     // right only by accident. The claim now has to be the weaker, true one,
     // and it has to name the store that actually backs the grant.
     const approvals = readFileSync(
-      join(HERE, '..', '..', 'src', 'tool', 'AppConnectionTool', 'approvals.ts'),
+      join(HERE, '..', '..', '..', 'host', 'src', 'authorization', 'connector-approval-cache.ts'),
       'utf8',
     );
     expect(approvals).toContain('NOT the session grant');

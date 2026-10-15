@@ -1,5 +1,5 @@
 /**
- * Plan 610 A8 shim â€?asar-safe working-directory sanitization moved to
+ * Plan 610 A8 shim   ?asar-safe working-directory sanitization moved to
  * `@duya/capabilities` (`fs/grep-sanitize`). Pass-through.
  */
 

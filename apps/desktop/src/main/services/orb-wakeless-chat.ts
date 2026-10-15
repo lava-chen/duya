@@ -42,7 +42,7 @@ import { getDesktopHostLocalSettingsApi } from '../cli/desktop-host-api';
 import { toLLMProvider, type ApiProvider } from '../config/provider-types';
 import { toLegacyApiProvider } from '../../renderer/lib/providers/legacy';
 import { toRuntimeConfig as buildRuntimeConfig } from '../../renderer/lib/providers';
-import { getOSContextBridge } from '../../../../../packages/agent/dist/context/os-context/index.js';
+import { getOSContextBridge } from '@duya/host/worker-os-context';
 
 const logger = getLogger();
 
@@ -247,7 +247,7 @@ async function getActiveProviderConfig(): Promise<Record<string, unknown> | null
 /** Focused-window summary for the prompt preamble; '' when unavailable. */
 function buildContextPreamble(): string {
   try {
-    const bridge = getOSContextBridge();
+    const bridge = getOSContextBridge(logger);
     if (!bridge.isEnabled()) return '';
     const ctx = bridge.getCurrent();
     const focused = ctx?.focusedEntity as
@@ -363,7 +363,7 @@ export interface WakeAutoContext {
  */
 export async function buildWakeAutoContext(): Promise<WakeAutoContext | null> {
   try {
-    const bridge = getOSContextBridge();
+    const bridge = getOSContextBridge(logger);
     if (!bridge.isEnabled()) return null;
     const ctx = bridge.getCurrent();
     if (ctx?.redacted === true) {

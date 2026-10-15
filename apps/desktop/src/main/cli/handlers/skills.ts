@@ -20,7 +20,7 @@ import {
   effectivePrecedenceOf,
   type SkillListItem,
   type SkillInfoItem,
-} from '../../../../../../packages/agent/src/skills/skillService.js';
+} from '@duya/host/skills/skillService';
 
 const SKILL_ENABLED_OVERRIDES_KEY = 'skillEnabledOverrides';
 type SkillEnabledOverrides = Record<string, boolean>;

@@ -141,7 +141,7 @@ export interface CapabilityUnsupportedEntry {
 
 export interface CapabilityManagementSources {
   plugins: 'apps/desktop/src/main/plugins/PluginManager' | 'none';
-  skills: 'packages/agent/src/skills' | 'none';
+  skills: 'packages/host/src/skills' | 'none';
   mcp: 'apps/desktop/src/main/agents/mcp/collect-main' | 'none';
   ui: 'plugin-manifest' | 'none';
   hooks: 'plugin-manifest' | 'none';

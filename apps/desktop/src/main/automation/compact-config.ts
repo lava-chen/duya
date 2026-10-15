@@ -12,7 +12,7 @@
  */
 
 import { getConfigStore } from '../config/store-instance';
-import type { CompactModelConfig } from '../../../../../packages/agent/src/types';
+import type { CompactModelConfig } from '@duya/host/worker-config/model-config';
 
 export function resolveCompactModelConfig(): CompactModelConfig | undefined {
   try {

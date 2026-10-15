@@ -37,8 +37,8 @@
  * positive per-mode count, and the counts come from the legacy measurement.
  */
 
-import { describe, expect, it, afterAll } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { describe, expect, it, afterAll, vi } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { duyaAgent, type RunAssemblyRequest } from '../../agent/DuyaAgent.js';
@@ -156,6 +156,7 @@ function registryWithWrite(): ToolRegistry {
 async function armRun(
   mode: PermissionMode,
   requestPermission: () => Promise<'allow'>,
+  consumeApprovedEffect?: (toolName: string, toolInput?: Record<string, unknown>) => Promise<boolean>,
 ) {
   const sessionId = nextSeq();
   const agent = new duyaAgent({
@@ -171,6 +172,7 @@ async function armRun(
     sessionId,
     workingDirectory: WORKSPACE,
     requestPermission,
+    ...(consumeApprovedEffect === undefined ? {} : { consumeApprovedEffect }),
   };
   const run = await agent.beginRun({ options: options as never, prompt: 'write one file' });
   const assembly = await agent.beginTurnAssembly({
@@ -237,6 +239,7 @@ function ledgerFor(runId: string) {
 async function engineCards(
   mode: PermissionMode,
   filePath: string,
+  consumeApprovedEffect?: (toolName: string, toolInput?: Record<string, unknown>) => Promise<boolean>,
 ): Promise<{
   readonly cards: number;
   readonly dispatches: number;
@@ -248,7 +251,7 @@ async function engineCards(
   const { run, assembly, pipeline, options } = await armRun(mode, async () => {
     cards += 1;
     return 'allow' as const;
-  });
+  }, consumeApprovedEffect);
   const publisher = new TurnPipelinePublisher();
   publisher.publish(1, pipeline);
   const runId = nextSeq();
@@ -517,6 +520,21 @@ describe('the approval request carries the mode the manifest recorded', () => {
 // ============================================================================
 
 describe('the engine approval slot decides and does not raise a second card', () => {
+  it('executes a once-approved persisted call without consuming its grant again in the drain', async () => {
+    writeFileSync(OUTSIDE, 'before grant');
+    let grantAvailable = true;
+    const consumeApprovedEffect = vi.fn(async () => {
+      const approved = grantAvailable;
+      grantAvailable = false;
+      return approved;
+    });
+    const result = await engineCards('default', OUTSIDE, consumeApprovedEffect);
+    expect(result.cards).toBe(0);
+    expect(result.dispatches).toBe(1);
+    expect(consumeApprovedEffect).toHaveBeenCalledTimes(1);
+    expect(readFileSync(OUTSIDE, 'utf8')).toBe('probe');
+  });
+
   it('raises exactly one card where the legacy raises exactly one', async () => {
     const legacy = await legacyCards('default', OUTSIDE);
     const engine = (await engineCards('default', OUTSIDE)).cards;

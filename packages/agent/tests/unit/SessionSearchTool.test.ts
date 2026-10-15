@@ -4,15 +4,15 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-// Plan 328 Phase 6: SessionSearchTool now resolves sessions via IPC
-// (sessionDb.search / sessionDb.list) instead of opening the core database.
-// Mock the db-client so the agent worker tests never touch the real IPC
-// channel (process.send is unavailable / must not be used in vitest).
-vi.mock('../../src/ipc/db-client.js', () => ({
-  sessionDb: {
-    search: vi.fn().mockResolvedValue([]),
-    list: vi.fn().mockResolvedValue([]),
-  },
+// The legacy import path binds the tool to Host. Keep this adapter suite
+// deterministic by replacing the Host effects with an in-memory port.
+vi.mock('@duya/host/worker-tool-services/session-search', () => ({
+  createWorkerSessionSearchPort: () => ({
+    searchSessions: vi.fn().mockResolvedValue([]),
+    loadRecentSessionDirectory: vi.fn().mockResolvedValue({ sameProject: [], otherProjects: [] }),
+    getMessages: vi.fn().mockResolvedValue([]),
+    streamSummary: async function* () {},
+  }),
 }));
 
 import { SessionSearchTool, sessionSearchTool, type SummaryLLMConfig } from '../../src/tool/SessionSearchTool/SessionSearchTool.js';

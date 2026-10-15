@@ -82,6 +82,7 @@ interface Harness {
   /** Interleaving markers, to assert a publication's position. */
   readonly order: string[];
   readonly completed: Promise<void>;
+  readonly dispatched: ToolCallRequest[];
 }
 
 /**
@@ -92,6 +93,7 @@ interface Harness {
 function harness(turnOneFrames: readonly ModelFrame[]): Harness {
   const offered: RunEvent[] = [];
   const order: string[] = [];
+  const dispatched: ToolCallRequest[] = [];
 
   const events: RunEventStorePort = {
     publish(event: RunEvent): void {
@@ -138,7 +140,7 @@ function harness(turnOneFrames: readonly ModelFrame[]): Harness {
       },
     },
     tools: {
-      dispatch(): void {},
+      dispatch(call): void { dispatched.push(call); },
       async *drain(): AsyncIterable<ToolDrainItem> {
         // Nothing ever comes back: this suite is about the announcement, not
         // about a result.
@@ -173,7 +175,7 @@ function harness(turnOneFrames: readonly ModelFrame[]): Harness {
     signal: new AbortController().signal,
     ports,
   });
-  return { offered, order, completed: handle.completed() };
+  return { offered, order, completed: handle.completed(), dispatched };
 }
 
 function previews(offered: readonly RunEvent[]) {
@@ -202,6 +204,8 @@ describe('the engine publishes tool.call_preview for an announced call', () => {
     expect(preview.toolName).toBe('Bash');
     expect(preview.arguments).toEqual({ command: 'ls' });
     expect(preview.provisional).toBe(true);
+    expect(h.dispatched).toEqual([]);
+    expect(h.offered.filter(event => event.type === 'tool.call_started')).toEqual([]);
   });
 
   it('lands BEFORE the authoritative tool.call_started, so "coming" precedes "this will run"', async () => {
@@ -211,6 +215,7 @@ describe('the engine publishes tool.call_preview for an announced call', () => {
     const h = harness([
       { type: 'tool_use_started', call: ANNOUNCED_CALL },
       { type: 'tool_use_delta', callId: ANNOUNCED_CALL.callId, delta: '{"command"' },
+      { type: 'tool_use', call: { ...ANNOUNCED_CALL, input: { command: 'ls -a' } } },
     ]);
     await h.completed;
 
@@ -219,6 +224,9 @@ describe('the engine publishes tool.call_preview for an announced call', () => {
     expect(previewAt).toBeGreaterThanOrEqual(0);
     expect(startedAt).toBeGreaterThanOrEqual(0);
     expect(previewAt).toBeLessThan(startedAt);
+    expect(h.dispatched).toHaveLength(1);
+    expect(h.dispatched[0]?.input).toEqual({ command: 'ls -a' });
+    expect(h.offered.filter(event => event.type === 'tool.call_started')).toHaveLength(1);
   });
 });
 

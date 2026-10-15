@@ -32,6 +32,7 @@ import type {
   HostWorkspaceBinding,
   HostWorkspaceRegistrationApiV1,
   HostLocalAttachmentApiV1,
+  HostLocalImageAttachment,
   HostLocalParsedDocument,
   HostLocalParsedDocumentInput,
   HostLocalSettingsApiV1,
@@ -935,6 +936,13 @@ export class HostSessionHttpClient implements
     return this.request(
       'GET',
       `/v1/local/sessions/${encodeURIComponent(sessionId)}/parsed-documents`,
+    );
+  }
+
+  async getImageAttachmentsForSession(sessionId: SessionId): Promise<readonly HostLocalImageAttachment[]> {
+    return this.request(
+      'GET',
+      `/v1/local/sessions/${encodeURIComponent(sessionId)}/image-attachments`,
     );
   }
 

@@ -18,12 +18,15 @@
 
 import { randomUUID } from 'node:crypto';
 import { toolApprovalInputHash } from '@duya/data/tool-approval-state';
+import { ModelCapabilityStore } from '@duya/data/model-capability-store';
+import { createHostLocalModelCapabilityApi } from './local-model-capability-api.js';
 import type { MainDatabase } from '@duya/data/main-database';
 import type { MainSettingsStore } from '@duya/data/main-settings-store';
 import type { SessionStore } from '@duya/data/session-store';
 import type { CoreSession } from '@duya/data/session-store';
 import type {
   HostGoalApiV1,
+  HostLocalImageAttachment,
   HostMessageItem,
   HostLockApiV1,
   HostModeStateApiV1,
@@ -97,6 +100,8 @@ export interface HostWorkerDbBridgeOptions {
    * unless it composes the attachment API.
    */
   readonly parsedDocumentsForSession?: (sessionId: string) => Promise<unknown[]>;
+  /** Image payload rows for provider CDN rehydration in worker message history. */
+  readonly imageAttachmentsForSession?: (sessionId: string) => Promise<readonly HostLocalImageAttachment[]>;
   readonly logger?: RunControlPlaneLogger;
 }
 
@@ -139,6 +144,7 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
   const toolApprovals = (): HostToolApprovalApiV1 => createHostToolApprovalApi(options.mainDatabase.db);
+  const modelCapabilities = createHostLocalModelCapabilityApi(new ModelCapabilityStore(options.mainDatabase.db));
   const timeline = options.timeline;
   const requireTimeline = (): NonNullable<HostWorkerDbBridgeOptions['timeline']> => {
     if (timeline === undefined) {
@@ -187,6 +193,16 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
       if (handled !== undefined) return handled;
 
       switch (action) {
+        case 'modelCapability:get':
+          return modelCapabilities.getModelCapability(requireString(payload, 'modelName', action));
+        case 'modelCapability:set':
+          return modelCapabilities.setModelCapability({
+            modelName: requireString(payload, 'modelName', action),
+            isMultimodal: Boolean(payload.isMultimodal),
+            method: typeof payload.method === 'string' ? payload.method : 'unknown',
+          });
+        case 'modelCapability:delete':
+          return modelCapabilities.deleteModelCapability(requireString(payload, 'modelName', action));
         // ==================== Sessions ====================
         case 'session:get': {
           const id = requireString(payload, 'id', 'session:get');
@@ -227,6 +243,16 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
             ? await options.parsedDocumentsForSession(sessionId)
             : [];
           return { messages, parsedDocuments };
+        }
+        case 'attachment:getImagesForSession': {
+          const sessionId = requireString(payload, 'sessionId', 'attachment:getImagesForSession');
+          if (options.imageAttachmentsForSession === undefined) {
+            throw new WorkerDbBridgeError(
+              'unimplemented_domain',
+              'image attachment history requires options.imageAttachmentsForSession',
+            );
+          }
+          return options.imageAttachmentsForSession(sessionId);
         }
 
         // ==================== Messages (Host timeline; same converters as Desktop) ===

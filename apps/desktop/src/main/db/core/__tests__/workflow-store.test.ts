@@ -16,7 +16,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { WorkflowRunStore } from '../workflow-store';
 import type { SqliteDatabase } from '../database';
-import type { JournalRecord } from '../../../../../../../packages/agent/src/modes/workflow/journal';
+import type { JournalRecord } from '@duya/host/worker-workflows/journal';
 
 let nativeSqliteAvailable = true;
 try {

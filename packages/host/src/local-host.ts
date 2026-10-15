@@ -140,13 +140,6 @@ export interface StartLocalHostOptions {
   /** better-sqlite3 directory for the worker environment; defaults to ./node_modules. */
   readonly betterSqlite3Path?: string;
   /**
-   * Logger for Host-owned run execution. Defaults to a `console.*`-backed
-   * implementation that tags every line with `[host-run]`. Embedders whose
-   * stdout is occupied (e.g. the full-screen TUI) should pass a logger that
-   * drops info/debug or writes to a file.
-   */
-  readonly executionLogger?: HostRunExecutionLogger;
-  /**
    * When true, the Host does not write a runtime descriptor file and does not
    * acquire a process lock. Suitable for short-lived embedded use (e.g. `duya tui`).
    * The caller owns the Host lifecycle; process exit is the only clean shutdown.
@@ -372,6 +365,10 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       workspaceDatabase: core.database.db,
       workspaces: workspaceAccess,
     });
+    const localAttachmentApi = createHostLocalAttachmentApi({
+      stores: core.stores,
+      legacyAttachments: new MainAttachmentStore(mainDatabase.db),
+    });
     const workspaceApi = createHostWorkspaceRegistrationApi(workspaceAccess);
     const token = options.token ?? randomBytes(32).toString('base64url');
 
@@ -385,7 +382,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     const lockApi = createHostLockApi(core.stores);
     let runExecution: HostRunExecutionController | null = null;
     if (options.workerPath !== undefined) {
-      const executionLogger: HostRunExecutionLogger = options.executionLogger ?? {
+      const executionLogger: HostRunExecutionLogger = {
         info: (message, context) => console.info(`[host-run] ${message}`, context ?? ''),
         warn: (message, context) => console.warn(`[host-run] ${message}`, context ?? ''),
         error: (message, error, context) => console.error(`[host-run] ${message}`, error?.message ?? '', context ?? ''),
@@ -414,6 +411,8 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
             readLocalSession: (sessionId) =>
               Promise.resolve(core.stores.sessions.get(sessionId)),
           },
+          imageAttachmentsForSession: (sessionId) =>
+            localAttachmentApi.getImageAttachmentsForSession(sessionId),
           goalApi,
           lockApi,
           modeStateApi,
@@ -433,10 +432,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       api,
       localSessionApi: createHostLocalSessionApi({ stores: core.stores, sessions: api }),
       localRolloutApi: createHostLocalRolloutApi({ stores: core.stores, sessions: api, rolloutRoot }),
-      localAttachmentApi: createHostLocalAttachmentApi({
-        stores: core.stores,
-        legacyAttachments: new MainAttachmentStore(mainDatabase.db),
-      }),
+      localAttachmentApi,
       localSettingsApi: createHostLocalSettingsApi(settings),
       localTerminalHistoryApi: createHostLocalTerminalHistoryApi(new TerminalHistoryStore(mainDatabase.db)),
       localGatewayUserMapApi: createHostLocalGatewayUserMapApi(new GatewayUserMapStore(mainDatabase.db)),

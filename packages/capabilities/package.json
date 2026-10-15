@@ -7,6 +7,30 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./shell/prepare-sandbox": {
+      "types": "./dist/shell/prepare-sandbox.d.ts",
+      "import": "./dist/shell/prepare-sandbox.js"
+    },
+    "./BrowserTool": {
+      "types": "./dist/BrowserTool/index.d.ts",
+      "default": "./dist/BrowserTool/index.js"
+    },
+    "./BrowserTool/*": {
+      "types": "./dist/BrowserTool/*.d.ts",
+      "default": "./dist/BrowserTool/*.js"
+    },
+    "./OSTool": {
+      "types": "./dist/OSTool/index.d.ts",
+      "default": "./dist/OSTool/index.js"
+    },
+    "./OSTool/*": {
+      "types": "./dist/OSTool/*.d.ts",
+      "default": "./dist/OSTool/*.js"
+    },
+    "./utils/urlSafety": {
+      "types": "./dist/utils/urlSafety.d.ts",
+      "default": "./dist/utils/urlSafety.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
@@ -214,13 +238,157 @@
     "./utils/shell/intelligence": {
       "types": "./dist/utils/shell/intelligence.d.ts",
       "default": "./dist/utils/shell/intelligence.js"
+    },
+    "./AppConnectionTool/index": {
+      "types": "./dist/AppConnectionTool/index.d.ts",
+      "default": "./dist/AppConnectionTool/index.js"
+    },
+    "./AppConnectionTool/ports": {
+      "types": "./dist/AppConnectionTool/ports.d.ts",
+      "default": "./dist/AppConnectionTool/ports.js"
+    },
+    "./AppConnectionTool/approval-message": {
+      "types": "./dist/AppConnectionTool/approval-message.d.ts",
+      "default": "./dist/AppConnectionTool/approval-message.js"
+    },
+    "./AppConnectorManageTool/AppConnectorManageTool": {
+      "types": "./dist/AppConnectorManageTool/AppConnectorManageTool.d.ts",
+      "default": "./dist/AppConnectorManageTool/AppConnectorManageTool.js"
+    },
+    "./AppConnectorManageTool/ports": {
+      "types": "./dist/AppConnectorManageTool/ports.d.ts",
+      "default": "./dist/AppConnectorManageTool/ports.js"
+    },
+    "./AppConnectionTool": {
+      "types": "./dist/AppConnectionTool/index.d.ts",
+      "default": "./dist/AppConnectionTool/index.js"
+    },
+    "./AppConnectionTool/*": {
+      "types": "./dist/AppConnectionTool/*.d.ts",
+      "default": "./dist/AppConnectionTool/*.js"
+    },
+    "./AppConnectorManageTool": {
+      "types": "./dist/AppConnectorManageTool/index.d.ts",
+      "default": "./dist/AppConnectorManageTool/index.js"
+    },
+    "./AppConnectorManageTool/*": {
+      "types": "./dist/AppConnectorManageTool/*.d.ts",
+      "default": "./dist/AppConnectorManageTool/*.js"
+    },
+    "./MCP/*": {
+      "types": "./dist/MCP/*.d.ts",
+      "default": "./dist/MCP/*.js"
+    },
+    "./SubagentTool": {
+      "types": "./dist/SubagentTool/index.d.ts",
+      "import": "./dist/SubagentTool/index.js"
+    },
+    "./SubagentTool/*": {
+      "types": "./dist/SubagentTool/*.d.ts",
+      "import": "./dist/SubagentTool/*.js"
+    },
+    "./session-search-tool": {
+      "types": "./dist/session-search-tool.d.ts",
+      "import": "./dist/session-search-tool.js"
+    },
+    "./session-tool": {
+      "types": "./dist/session-tool.d.ts",
+      "import": "./dist/session-tool.js"
+    },
+    "./message-session-tool": {
+      "types": "./dist/message-session-tool.d.ts",
+      "import": "./dist/message-session-tool.js"
+    },
+    "./agent-management-tool": {
+      "types": "./dist/agent-management-tool.d.ts",
+      "import": "./dist/agent-management-tool.js"
+    },
+    "./post-to-room-tool": {
+      "types": "./dist/post-to-room-tool.d.ts",
+      "import": "./dist/post-to-room-tool.js"
+    },
+    "./react-to-message-tool": {
+      "types": "./dist/react-to-message-tool.d.ts",
+      "import": "./dist/react-to-message-tool.js"
+    },
+    "./send-to-agent-tool": {
+      "types": "./dist/send-to-agent-tool.d.ts",
+      "import": "./dist/send-to-agent-tool.js"
+    },
+    "./canvas": {
+      "types": "./dist/canvas/index.d.ts",
+      "import": "./dist/canvas/index.js"
+    },
+    "./canvas/*": {
+      "types": "./dist/canvas/*.d.ts",
+      "import": "./dist/canvas/*.js"
+    },
+    "./widget-tool": {
+      "types": "./dist/widget-tool.d.ts",
+      "import": "./dist/widget-tool.js"
+    },
+    "./widget-renderer/*": {
+      "types": "./dist/widget-renderer/*.d.ts",
+      "import": "./dist/widget-renderer/*.js"
+    },
+    "./SendMessageTool": {
+      "types": "./dist/SendMessageTool/index.d.ts",
+      "import": "./dist/SendMessageTool/index.js"
+    },
+    "./SendMessageTool/*": {
+      "types": "./dist/SendMessageTool/*.d.ts",
+      "import": "./dist/SendMessageTool/*.js"
+    },
+    "./UpdateStateTool": {
+      "types": "./dist/UpdateStateTool/index.d.ts",
+      "import": "./dist/UpdateStateTool/index.js"
+    },
+    "./UpdateStateTool/*": {
+      "types": "./dist/UpdateStateTool/*.d.ts",
+      "import": "./dist/UpdateStateTool/*.js"
+    },
+    "./PlanTool": {
+      "types": "./dist/PlanTool/index.d.ts",
+      "import": "./dist/PlanTool/index.js"
+    },
+    "./PlanTool/*": {
+      "types": "./dist/PlanTool/*.d.ts",
+      "import": "./dist/PlanTool/*.js"
+    },
+    "./ManageRoutineTool": {
+      "types": "./dist/ManageRoutineTool/index.d.ts",
+      "import": "./dist/ManageRoutineTool/index.js"
+    },
+    "./ManageRoutineTool/*": {
+      "types": "./dist/ManageRoutineTool/*.d.ts",
+      "import": "./dist/ManageRoutineTool/*.js"
+    },
+    "./DuyaCliTool": {
+      "types": "./dist/DuyaCliTool/index.d.ts",
+      "import": "./dist/DuyaCliTool/index.js"
+    },
+    "./DuyaCliTool/*": {
+      "types": "./dist/DuyaCliTool/*.d.ts",
+      "import": "./dist/DuyaCliTool/*.js"
+    },
+    "./background-task-tool": {
+      "types": "./dist/background-task-tool.d.ts",
+      "import": "./dist/background-task-tool.js"
+    },
+    "./skill-tool": {
+      "types": "./dist/skill-tool.d.ts",
+      "import": "./dist/skill-tool.js"
+    },
+    "./mode-tools": {
+      "types": "./dist/mode-tools.d.ts",
+      "import": "./dist/mode-tools.js"
     }
   },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "npm run clean && tsc --incremental",
+    "build": "npm run clean && tsc --incremental && node scripts/copy-assets.mjs",
     "clean": "node -e \"for (const t of ['dist','tsconfig.tsbuildinfo']) require('fs').rmSync(t,{recursive:true,force:true})\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
@@ -230,13 +398,19 @@
     "@duya/agent-protocol": "0.1.0",
     "@duya/sandbox": "0.1.0",
     "@duya/tooling": "0.1.0",
+    "@duya/computer-use": "0.0.1",
+    "axios": "^1.14.0",
     "diff": "^8.0.4",
     "picomatch": "^4.0.4",
-    "zod": "^4.3.6"
+    "playwright": "^1.59.1",
+    "zod": "^4.3.6",
+    "@duya/plugin-core": "0.1.0",
+    "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "devDependencies": {
     "@types/diff": "^7.0.2",
     "@types/node": "^20.0.0",
+    "@types/picomatch": "^4.0.3",
     "typescript": "^5.3.3",
     "vitest": "^3.0.0"
   }

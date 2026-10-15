@@ -25,7 +25,7 @@ vi.mock('../../db/core-connection', () => ({
 }));
 
 import { reviveForInbound, inboundEnvelopeStore, runUsedChannelDelivery, _resetChannelAckRedriveForTest } from '../channels';
-import type { ChannelInboundEnvelope } from '../../../../../../packages/agent/src/channels/types';
+import type { ChannelInboundEnvelope } from '@duya/agent-protocol/channels';
 
 function envelope(text: string): ChannelInboundEnvelope {
   return { address: { platform: 'telegram', chat: '100' }, sender: 'alice', text, reaction: null };

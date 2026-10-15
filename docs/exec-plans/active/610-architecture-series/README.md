@@ -4,13 +4,13 @@
 > 本文件是这三者的**唯一状态源**。600/601/602 各自的 README 保留为契约与推导过程,
 > 但"现在做到哪、下一步做什么"只在这里回答,且只回答一次。
 
-## 当前状态（2026-10-10，`master@95e1fc7c`）
+## 当前状态（2026-10-13，退役协同工作树）
 
 **610 仍为 Active，尚未完成。** A3 的生产轮次循环迁移已由 `4444c7cf` 落地并随 PR #262 合并；当前 `DuyaAgent.ts` 已没有 `streamChat` 方法。索引里“A3 是当前 next action”的说法过时。
 
 **A4 前置清理已完成（2026-10-10）：3 个测试文件里 16 处旧 `duyaAgent.streamChat` 调用归零**（处置：`streaming-lifecycle.test.ts` 与 `AgentLoop.test.ts` 整文件删除，`DuyaAgent.test.ts` 剥离为纯状态用例；逐文件依据见 [90 执行日志](90-execution-log.md)）。六场景 runtime 层验收 **17/17** 同 HEAD 实测记录在同一日志。
 
-**当前第一步归 A4 主体：同引擎接 CLI / eval**（600 §Step 4 的原始交付），以及存储拒绝 / worker 退出两场景的**产品级**变体（真实持久层、真实 worker 进程）——runtime 层与产品轮次层现有覆盖不替代这一步。A5–A7 与 B2–B3 仍是后续切片。
+**当前执行目标是用户明确要求的旧 Agent 全面退役**，由 [12 协同切片](12-agent-retirement-coordination.md) 记录有限迁移清单、文件所有权和验收证据。Host 已接管 worker 入口与产品装配，CLI 提供命令工具服务；新产物位于 `packages/host/bundle/worker-entry.js`。在旧目录临时移走的条件下，已重新构建 CLI/worker，并通过本机 OpenAI 协议夹具完成真实 CLI→Host→worker 的工具发现、文件读取和结果回传。Desktop 实际执行、完整门禁/回归、剩余旧测试及构建引用清理、最终删除仍未完成。A4 的 eval 及产品级失败变体仍需验收，不能因拆包或 stub worker 通过而勾选。新客户端、远端注册和非必要 schema 改造不进入本轮。
 
 ---
 ## 0. 为什么需要这一份

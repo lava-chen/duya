@@ -8,7 +8,7 @@ import { getLogger, LogComponent } from '../logging/logger'
 async function syncSkillsOnUpdate(): Promise<void> {
   try {
     // Import dynamically to avoid circular deps and only load when needed
-    const { syncBundledSkills } = await import('../../../../../packages/agent/src/skills/skillsSync.js')
+    const { syncBundledSkills } = await import('@duya/host/skills/skillsSync')
     const result = await syncBundledSkills()
     if (result.added.length > 0 || result.updated.length > 0) {
       logger.info('[Updater] Bundled skills synced after update', {

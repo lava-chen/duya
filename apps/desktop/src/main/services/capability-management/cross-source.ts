@@ -45,9 +45,9 @@ import {
   resolveAvailable,
   type AvailableSkill,
   type SkillCandidate,
-} from '../../../../../../packages/agent/src/skills/resolver.js';
-import { scanSkillFile } from '../../../../../../packages/agent/src/security/skillScanner.js';
-import { computeMCPId } from '../../../../../../packages/agent/src/mcp/mcpService.js';
+} from '@duya/agent-core/skills/resolver';
+import { scanSkillFile } from '@duya/agent-core/skills/skill-scanner';
+import { computeMCPId } from '@duya/capabilities/MCP/mcpService';
 import type { MCPCandidate } from '@duya/plugin-core';
 
 import type {

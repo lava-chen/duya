@@ -24,10 +24,15 @@ import { describe, it, expect } from 'vitest';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_PKG = path.resolve(HERE, '../../../..');
+const PACKAGES_DIR = path.dirname(AGENT_PKG);
+const REPO_ROOT = path.dirname(PACKAGES_DIR);
+const HOST_PKG = path.join(PACKAGES_DIR, 'host');
 const AGENT_SRC = path.join(AGENT_PKG, 'src');
 const AGENT_TESTS = path.join(AGENT_PKG, 'tests');
-const RUN_AGENT_FILE = path.join(AGENT_SRC, 'tool/SubagentTool/runAgent.ts');
-const SUBAGENT_TOOL_FILE = path.join(AGENT_SRC, 'tool/SubagentTool/SubagentTool.ts');
+const HOST_SRC = path.join(HOST_PKG, 'src');
+const HOST_TESTS = path.join(HOST_PKG, 'tests');
+const RUN_AGENT_FILE = path.join(HOST_SRC, 'worker-subagents/run-agent.ts');
+const SUBAGENT_TOOL_FILE = path.join(HOST_SRC, 'worker-subagents/bound-tool.ts');
 
 const SRC_EXTS = new Set(['.ts', '.tsx']);
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'bundle', 'build', 'release', '.git', 'coverage']);
@@ -43,12 +48,12 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** Every `.ts` file under `src/` and `tests/` — the two roots typecheck skips. */
-function allAgentSources(): string[] {
-  return [...walk(AGENT_SRC), ...walk(AGENT_TESTS)];
+/** Every `.ts` file under the Agent and Host source/test roots. */
+function allSubagentSources(): string[] {
+  return [...walk(AGENT_SRC), ...walk(AGENT_TESTS), ...walk(HOST_SRC), ...walk(HOST_TESTS)];
 }
 
-const rel = (p: string): string => path.relative(AGENT_PKG, p).split(path.sep).join('/');
+const rel = (p: string): string => path.relative(REPO_ROOT, p).split(path.sep).join('/');
 
 /**
  * Does this file import `runAgent` or `runAgentSync` from the SubagentTool
@@ -71,7 +76,7 @@ const rel = (p: string): string => path.relative(AGENT_PKG, p).split(path.sep).j
  * keeps the `HostAgent` ports out.
  */
 function importsSubagentRunner(src: string): boolean {
-  const re = /import\s*(?:type\s*)?\{([\s\S]*?)\}\s*from\s*['"][^'"]*\/runAgent\.js['"]/g;
+  const re = /import\s*(?:type\s*)?\{([\s\S]*?)\}\s*from\s*['"][^'"]*\/(?:runAgent|run-agent)\.js['"]/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(src)) !== null) {
     const clause = m[1];
@@ -221,12 +226,27 @@ describe('plan 610 A5: sub-agent composition census', () => {
     const scanned: string[] = [];
     let callSites = 0;
 
-    for (const file of allAgentSources()) {
+    for (const file of allSubagentSources()) {
       if (path.resolve(file) === path.resolve(RUN_AGENT_FILE)) continue;
       const raw = fs.readFileSync(file, 'utf8');
       if (!importsSubagentRunner(raw)) continue;
       scanned.push(rel(file));
       const src = codeOnly(raw);
+
+      // The public Agent adapter now binds the required factories at the
+      // Host service-port boundary. Its `deps` value is typed as
+      // `SubagentRunDeps`, so the wrapper deliberately spreads that object
+      // into each runner call instead of spelling the two fields at the call
+      // site. Keep that changed contract explicit in the census.
+      if (path.resolve(file) === path.resolve(SUBAGENT_TOOL_FILE)) {
+        const wiresAsync = /runAgent:\s*\(request\)\s*=>\s*runAgent\(\{\s*\.\.\.request,\s*\.\.\.deps\s*\}\)/.test(src);
+        const wiresSync = /runAgentSync:\s*\(request\)\s*=>\s*runAgentSync\(\{\s*\.\.\.request,\s*\.\.\.deps\s*\}\)/.test(src);
+        if (!wiresAsync || !wiresSync) {
+          offenders.push(`${rel(file)}: Host service adapter must pass its typed deps to both child runners`);
+        }
+        callSites += 2;
+        continue;
+      }
 
       const callRe = /\brunAgent(?:Sync)?\s*\(/g;
       let m: RegExpExecArray | null;
@@ -283,7 +303,7 @@ describe('plan 610 A5: sub-agent composition census', () => {
     // `const subagentTool = new SubagentTool(deps)` inside a registry factory
     // is fine and is not matched here.
     const importers: string[] = [];
-    for (const file of allAgentSources()) {
+    for (const file of allSubagentSources()) {
       const src = fs.readFileSync(file, 'utf8');
       const re = /import\s*\{[^}]*\bsubagentTool\b[^}]*\}\s*from\s*['"][^'"]*['"]/g;
       if (re.test(src)) importers.push(rel(file));

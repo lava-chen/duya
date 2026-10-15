@@ -10,43 +10,55 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
-  const rows = new Map<string, { kind: string; work_id: string; quiet_origin_json: string | null }>();
+  const rows = new Map<string, {
+    kind: string;
+    workId: string;
+    agentId: string;
+    lane: string;
+    markedAtMs: number;
+    title: string | null;
+    quietOriginJson: string | null;
+  }>();
+  const persisted: Array<{ kind: string; workId: string; quietOriginJson: string | null }> = [];
+  const cleared: Array<{ kind: string; workId: string }> = [];
+  const pendingWakeApi = {
+    getPendingWake: async (_kind: string, workId: string) => rows.get(workId) ?? null,
+    persistPendingWake: async (input: { kind: string; workId: string; agentId: string; lane?: string; title?: string | null; quietOriginJson?: string | null }) => {
+      persisted.push({
+        kind: input.kind,
+        workId: input.workId,
+        quietOriginJson: input.quietOriginJson ?? null,
+      });
+      rows.set(input.workId, {
+        kind: input.kind,
+        workId: input.workId,
+        agentId: input.agentId,
+        lane: input.lane ?? 'background',
+        markedAtMs: Date.now(),
+        title: input.title ?? null,
+        quietOriginJson: input.quietOriginJson ?? null,
+      });
+    },
+    clearPendingWake: async (kind: string, workId: string) => {
+      cleared.push({ kind, workId });
+      return rows.delete(workId);
+    },
+    listPendingWakes: async () => Array.from(rows.values()),
+    pruneStalePendingWakes: async () => 0,
+  };
   return {
     rows,
-    persisted: [] as Array<{ kind: string; workId: string; quietOriginJson: string | null }>,
-    cleared: [] as Array<{ kind: string; workId: string }>,
+    persisted,
+    cleared,
+    pendingWakeApi,
     enqueuedInbound: [] as Array<{ sessionId: string; envelopeId: string; text: string }>,
     notified: [] as string[],
   };
 });
 
-vi.mock('../../db/core-connection', () => ({
-  getCoreStores: () => ({
-    wakes: {
-      get: (_kind: string, workId: string) => mocks.rows.get(workId) ?? null,
-      persist: (input: { kind: string; workId: string; quietOriginJson?: string | null }) => {
-        mocks.persisted.push(input);
-        mocks.rows.set(input.workId, {
-          kind: input.kind,
-          work_id: input.workId,
-          quiet_origin_json: input.quietOriginJson ?? null,
-        });
-      },
-      clear: (kind: string, workId: string) => {
-        mocks.cleared.push({ kind, workId });
-        return mocks.rows.delete(workId);
-      },
-      listAll: () =>
-        Array.from(mocks.rows.values()).map((r) => ({
-          ...r,
-          agent_id: r.work_id,
-          lane: 'background',
-          title: null,
-          marked_at_ms: Date.now(),
-        })),
-      pruneStale: () => 0,
-    },
-  }),
+vi.mock('../../cli/desktop-host-api', () => ({
+  getDesktopHostLocalPendingWakeApi: () => mocks.pendingWakeApi,
+  getDesktopHostSessionApi: () => ({ appendTimeline: async () => ({ writtenCount: 0 }) }),
 }));
 
 // Partial mock: real dispatcher functions stay available (the clear-on-
@@ -72,7 +84,7 @@ vi.mock('../wake-run', () => ({
 
 import { wakeForInbound, inboundEnvelopeStore, restoreInboundEnvelopes, loadPersistedInboundEnvelopes } from '../channels';
 import { rearmPendingWakes } from '../wake-rearm';
-import type { ChannelInboundEnvelope } from '../../../../../../packages/agent/src/channels/types';
+import type { ChannelInboundEnvelope } from '@duya/agent-protocol/channels';
 
 function envelope(platform: string, chat: string, text: string): ChannelInboundEnvelope {
   return { address: { platform, chat }, sender: 'alice', text, reaction: null };
@@ -88,15 +100,16 @@ beforeEach(() => {
 });
 
 describe('durable inbound envelope persistence', () => {
-  it('appends each envelope to the session row and seeds the in-memory store', () => {
+  it('appends each envelope to the Host pending-wake row and seeds the in-memory store', async () => {
     wakeForInbound('bot:qa', envelope('telegram', '100', 'hello'));
     wakeForInbound('bot:qa', envelope('telegram', '100', 'again'));
     wakeForInbound('bot:qa', envelope('feishu', 'oc_1', 'different chat'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(mocks.persisted).toHaveLength(3);
     expect(mocks.persisted.every((p) => p.kind === 'connector.inbound' && p.workId === 'bot:qa')).toBe(true);
 
-    const stored = loadPersistedInboundEnvelopes({ quiet_origin_json: mocks.rows.get('bot:qa')!.quiet_origin_json });
+    const stored = loadPersistedInboundEnvelopes({ quietOriginJson: mocks.rows.get('bot:qa')!.quietOriginJson });
     expect(stored).toHaveLength(3);
     expect(stored.map((e) => e.text)).toEqual(['hello', 'again', 'different chat']);
     expect(inboundEnvelopeStore.get('bot:qa')!.map((e) => e.text)).toEqual(['hello', 'again', 'different chat']);
@@ -113,8 +126,12 @@ describe('durable inbound envelope persistence', () => {
       // keyed by (kind, agentId).
       mocks.rows.set('bot:qa', {
         kind: 'connector.inbound',
-        work_id: 'bot:qa',
-        quiet_origin_json: JSON.stringify({ envelopes: [envelope('telegram', '100', 'hello')] }),
+        workId: 'bot:qa',
+        agentId: 'bot:qa',
+        lane: 'background',
+        markedAtMs: Date.now(),
+        title: null,
+        quietOriginJson: JSON.stringify({ envelopes: [envelope('telegram', '100', 'hello')] }),
       });
       inboundEnvelopeStore.set('bot:qa', [envelope('telegram', '100', 'hello')]);
 
@@ -138,8 +155,12 @@ describe('durable inbound envelope persistence', () => {
   it('rearm restores envelopes and re-enqueues one wake per platform:chat', async () => {
     mocks.rows.set('bot:qa', {
       kind: 'connector.inbound',
-      work_id: 'bot:qa',
-      quiet_origin_json: JSON.stringify({
+      workId: 'bot:qa',
+      agentId: 'bot:qa',
+      lane: 'background',
+      markedAtMs: Date.now(),
+      title: null,
+      quietOriginJson: JSON.stringify({
         envelopes: [envelope('telegram', '100', 'hello'), envelope('telegram', '100', 'again'), envelope('feishu', 'oc_1', 'ping')],
       }),
     });
@@ -158,8 +179,12 @@ describe('durable inbound envelope persistence', () => {
   it('rearm skips connector.inbound rows with no envelopes', async () => {
     mocks.rows.set('bot:qa', {
       kind: 'connector.inbound',
-      work_id: 'bot:qa',
-      quiet_origin_json: JSON.stringify({ envelopes: [] }),
+      workId: 'bot:qa',
+      agentId: 'bot:qa',
+      lane: 'background',
+      markedAtMs: Date.now(),
+      title: null,
+      quietOriginJson: JSON.stringify({ envelopes: [] }),
     });
     await rearmPendingWakes();
     expect(mocks.enqueuedInbound).toHaveLength(0);

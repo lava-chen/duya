@@ -1,5 +1,5 @@
 /**
- * Plan 610 A8 shim â€?ReadTool input schema moved to
+ * Plan 610 A8 shim   ?ReadTool input schema moved to
  * `@duya/capabilities` (`fs/read-schema`). Pass-through.
  */
 

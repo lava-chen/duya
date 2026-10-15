@@ -18,22 +18,19 @@
  * **the declared seam between runtime and its executor does not exist in
  * production.**
  *
- * `agent-runtime` owns `ExecutionChannel` as a port and the Desktop host
- * implements it, but the worker process that actually runs the model loop has no
- * implementation at all — `agent-process-entry.ts:75` imports `DuyaAgent` and
- * `:1923` constructs it, and the file contains zero references to
- * `ExecutionChannel`, `ExecutionSink` or `RunController`. The boundary is
- * declared in three packages and implemented in none on the execution path.
+ * The production worker now enters through `@duya/cli` → `@duya/host` and
+ * reaches the shared RunEngine; G4 guards that production closure. G6 tracks
+ * durable tables whose identity still depends on `session_id`.
  *
- * G4 reports that. It is RED on the current tree, which is correct: it reports a
- * real defect rather than a misconfiguration. G6 reports the same for
- * `session_id NOT NULL` on the durable tables.
+ * G4 and G7 are clean on the current worker path. G6 still reports known
+ * session-rooted table and lifecycle debt; the baseline prevents it from
+ * blocking unrelated changes while keeping new findings visible.
  *
  * ## The discipline
  *
- * G1/G3/G4/G6 fail on NEW findings only; known ones live in a baseline file, so
- * a real defect does not block unrelated work but a regression still does. Every
- * rule was proven red by deliberately breaking its detector — see
+ * G1/G3/G4/G6 fail on NEW findings only; known G6 findings live in a baseline
+ * file, so existing debt does not block unrelated work but regressions do.
+ * Every rule was proven red by deliberately breaking its detector — see
  * `boundary-gates.test.ts`, whose negative cases assert on fixtures rather than
  * on the live tree.
  */
@@ -70,8 +67,9 @@ export {
   reachabilityFrom,
   rel,
   resolveRepoSpecifier,
+  sourceLayerOf,
   turnLoopSites,
-  workerImplementsExecutionChannel,
+  workerReachesRunEngine,
   writeBaseline,
 } from './boundary-gates.mjs';
 

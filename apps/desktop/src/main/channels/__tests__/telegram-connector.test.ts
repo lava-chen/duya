@@ -15,7 +15,7 @@ import * as path from 'node:path';
 import { TelegramChannelConnector } from '../telegram-connector';
 import { ConfigStore } from '../../config/store';
 import { _setConfigStoreForTest } from '../../config/store-instance';
-import type { ChannelInboundEnvelope } from '../../../../../../packages/agent/src/channels/types';
+import type { ChannelInboundEnvelope } from '@duya/agent-protocol/channels';
 
 const mocks = vi.hoisted(() => ({
   userDataDir: '',

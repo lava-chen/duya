@@ -1,5 +1,5 @@
 /**
- * Plan 610 A8 shim â€?ReadTool path safety checks moved to
+ * Plan 610 A8 shim   ?ReadTool path safety checks moved to
  * `@duya/capabilities` (`fs/read-security`). Pass-through.
  */
 

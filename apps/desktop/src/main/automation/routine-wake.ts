@@ -14,7 +14,7 @@
  */
 
 import type { AutomationCron } from './types.js';
-import { ROUTINE_WAKE_CUE } from '../../../../../packages/agent/src/wake/cue.js';
+import { ROUTINE_WAKE_CUE } from '@duya/host/worker-prompts/bot/wake-cue';
 
 export { ROUTINE_WAKE_CUE };
 

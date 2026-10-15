@@ -17,6 +17,7 @@ import type {
   HostMessageReadQuery,
   HostSessionPermissionProfileInput,
   HostLocalParsedDocumentInput,
+  HostLocalImageAttachment,
   HostLocalSessionSummaryQuery,
   HostTimelineAppendInput,
   HostWorkspaceRegistrationApiV1,
@@ -710,6 +711,23 @@ export class HostSessionHttpServer {
       }
       try {
         this.#sendJson(res, 200, await api.getParsedDocumentsForSession(sessionId as SessionId));
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    const localSessionImagesMatch = /^\/v1\/local\/sessions\/([^/]+)\/image-attachments$/.exec(url.pathname);
+    if (req.method === 'GET' && localSessionImagesMatch) {
+      const sessionId = this.#decodePathPart(localSessionImagesMatch[1]!, res);
+      if (sessionId === null) return;
+      const api = this.#options.localAttachmentApi;
+      if (!api) {
+        this.#sendJson(res, 404, { error: { code: 'local_attachment_api_unavailable' } });
+        return;
+      }
+      try {
+        const rows: readonly HostLocalImageAttachment[] = await api.getImageAttachmentsForSession(sessionId as SessionId);
+        this.#sendJson(res, 200, rows);
       } catch (error) {
         this.#sendApiError(res, error);
       }

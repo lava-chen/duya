@@ -62,11 +62,13 @@ import {
   isTestPath,
   isTurnLoopModule,
   layerOfSpecifier,
+  sourceLayerOf,
   reachabilityFrom,
   resolveRepoSpecifier,
   turnLoopSites,
   WORKER_LOOP_MAX_DEPTH,
-  workerImplementsExecutionChannel,
+  WORKER_ENTRY,
+  workerReachesRunEngine,
   type BoundaryReport,
 } from './boundary-gates.js';
 import { stripComments } from './strip-comments.mjs';
@@ -268,6 +270,12 @@ describe('G1 — a sub-path can have a different layer from its package', () => 
     expect(layerOfSpecifier('@duya/cli/contract')).not.toBe(layerOfSpecifier('@duya/cli'));
   });
 
+  it('classifies only legacy Agent CLI and worker entrypoints as host composition code', () => {
+    expect(sourceLayerOf('@duya/agent', 'packages/agent/src/cli/index.ts')).toBe('host');
+    expect(sourceLayerOf('@duya/agent', 'packages/agent/src/process/agent-process-entry.ts')).toBe('host');
+    expect(sourceLayerOf('@duya/agent', 'packages/agent/src/agent/DuyaAgent.ts')).toBe('runtime');
+  });
+
   it('allows a runtime module to import the contract sub-path', () => {
     const roots = fixtureWorkspace({
       '@duya/agent': { 'tool.ts': "import { CLI_DESCRIPTORS } from '@duya/cli/contract';\n" },
@@ -291,10 +299,14 @@ describe('G1 — a sub-path can have a different layer from its package', () => 
     expect(findings[0]).toMatchObject({ to: '@duya/cli', toLayer: 'host' });
   });
 
-  it('the live DuyaCliTool contract imports are not reported', () => {
-    // Measured on the real tree: all four `@duya/cli` references in
-    // packages/agent go through `/contract`, so G1 must be clean.
-    const offenders = findReverseEdges().filter((f) => f.from === '@duya/agent');
+  it('legacy entrypoints can compose Host adapters without exempting Agent runtime files', () => {
+    // The old CLI and process entrypoints still live under packages/agent while
+    // their production replacements are owned by @duya/cli and @duya/host.
+    // Only those application roots get host classification; ordinary Agent
+    // runtime modules remain subject to the runtime -> host boundary.
+    const offenders = findReverseEdges().filter(
+      (f) => f.from === '@duya/agent' && f.fromLayer === 'runtime',
+    );
     expect(offenders).toEqual([]);
   });
 });
@@ -324,30 +336,10 @@ describe('G3 — runtime does not reach into host internals', () => {
   });
 });
 
-describe('G4 — worker implements ExecutionChannel rather than DuyaAgent', () => {
-  it('finds the real DuyaAgent import in the live worker entry', () => {
-    const findings = findWorkerSeamBypasses();
-    expect(findings.length).toBeGreaterThan(0);
-    // The bypass is a real import in a real file, not a line number. Pinning
-    // `f.line === 75` made this test a tripwire for unrelated edits above the
-    // import: any added line moved the import and failed a gate assertion
-    // while the gate itself was still correct. The import's own text is the
-    // fact worth guarding, and it is what the finding actually carries.
-    const bypass = findings.find((f) => f.file.includes('agent-process-entry'));
-    expect(bypass).toBeDefined();
-    expect(bypass!.line).toBeGreaterThan(0);
-  });
-
-  it('the finding names the import it is reporting, not just a file', () => {
-    // Without this the previous test would pass on any bypass the gate ever
-    // emits, including one that stopped being the DuyaAgent import. Read the
-    // live entry and assert the reported line really is the import line.
-    const entryPath = path.join(REPO_ROOT, 'packages/agent/src/process/agent-process-entry.ts');
-    const lines = fs.readFileSync(entryPath, 'utf8').split(/\r?\n/);
-    const findings = findWorkerSeamBypasses();
-    const bypass = findings.find((f) => f.file.includes('agent-process-entry'));
-    expect(bypass).toBeDefined();
-    expect(lines[bypass!.line - 1] ?? '').toMatch(/DuyaAgent/);
+describe('G4 — the production worker enters through Host and reaches RunEngine', () => {
+  it('uses the current CLI worker bootstrap without directly constructing DuyaAgent', () => {
+    expect(WORKER_ENTRY).toBe('packages/cli/src/agent-worker-entry.ts');
+    expect(findWorkerSeamBypasses()).toEqual([]);
   });
 
   it('does not report a DuyaAgent mention in a comment', () => {
@@ -391,10 +383,10 @@ describe('G4 — worker implements ExecutionChannel rather than DuyaAgent', () =
     }
   });
 
-  it('does not claim the live worker implements the port', () => {
-    // This is the assertion that matters: the seam is declared in three
-    // packages and implemented nowhere on the execution path.
-    expect(workerImplementsExecutionChannel()).toBe(false);
+  it('reaches the Host worker and shared RunEngine in its production closure', () => {
+    const reachable = reachabilityFrom(WORKER_ENTRY);
+    expect(reachable.has('packages/host/src/worker-process-entry.ts')).toBe(true);
+    expect(workerReachesRunEngine()).toBe(true);
   });
 });
 
@@ -416,28 +408,27 @@ describe('G6 — durable identity is not rooted at session_id', () => {
 
   it('distinguishes the live core.db tasks table from the dead main.db one', () => {
     // Measured, not assumed: every prepared statement against `tasks` lives in
-    // db/core/stores.ts and db/core/legacy-import.ts, and db-bridge.ts:1432
-    // dispatches task:create through getCoreStores(). The main.db definition in
-    // db/schema.ts is created on every boot and never read — 587 §08 calls it
+    // packages/data/src/core-stores.ts, and the main.db definition in
+    // packages/data/src/main-schema.ts is created on every boot and never read — 587 §08 calls it
     // DEAD. A gate that merged the two would point S1 at a table nobody uses.
     const findings = findSessionRootedTables(['tasks']);
     const live = findings.filter((f) => f.live);
     const dead = findings.filter((f) => !f.live);
 
     expect(live).toHaveLength(1);
-    expect(live[0]).toMatchObject({ file: expect.stringContaining('core/stores.ts'), database: 'core.db' });
+    expect(live[0]).toMatchObject({ file: 'packages/data/src/core-stores.ts', database: 'core.db' });
 
-    // The dead one is defined more than once in schema.ts; all of them must be
+    // The dead one is defined more than once in main-schema.ts; all of them must be
     // marked dead so the migration does not treat them as the target.
     expect(dead.length).toBeGreaterThan(0);
     for (const d of dead) {
-      expect(d.file).toContain('db/schema.ts');
+      expect(d.file).toBe('packages/data/src/main-schema.ts');
       expect(d.database).toBe('main.db');
     }
   });
 
   it('does not flag a table that is already migrated off session_id', () => {
-    const target = path.join(REPO_ROOT, 'apps/desktop/src/main/db/core');
+    const target = path.join(REPO_ROOT, 'packages/data/src');
     const probe = path.join(target, '__boundary-gate-probe.ts');
     fs.writeFileSync(
       probe,
@@ -583,13 +574,11 @@ describe('G7 — the worker entry cannot reach the loop through an adapter', () 
     );
   });
 
-  it('the live entry CALLS the loop without being one, so depth 0 reports nothing today', () => {
-    // The measurement behind including depth 0. The entry's 33 loops contain no
-    // driven streams, so adding the entry to the subject set changed no verdict
-    // on this tree: it CALLS the loop at `agent-process-entry.ts:3047`, and
-    // calling a loop is not owning one. If this ever goes red, the entry grew a
-    // turn cycle of its own — that is a finding to report, not a test to relax.
-    const entryRel = 'packages/agent/src/process/agent-process-entry.ts';
+  it('the active CLI worker bootstrap is not itself a turn loop', () => {
+    // The CLI bootstrap composes the Host worker; the shared RunEngine owns the
+    // loop deeper in the production closure. If this entry grows a turn cycle,
+    // that is a finding to report, not a test to relax.
+    const entryRel = WORKER_ENTRY;
     const src = stripComments(fs.readFileSync(path.join(REPO_ROOT, entryRel), 'utf8')).text;
     expect(turnLoopSites(src)).toEqual([]);
     expect(isTurnLoopModule(src)).toBe(false);
@@ -1671,10 +1660,11 @@ describe('reachability — resolving the edges a boundary argument depends on', 
   });
 
   it('walks the real closure from the worker entry', () => {
-    const reachable = reachabilityFrom('packages/agent/src/process/agent-process-entry.ts');
+    const reachable = reachabilityFrom(WORKER_ENTRY);
     expect(reachable.size).toBeGreaterThan(100);
-    expect(reachable.has('packages/agent/src/agent/DuyaAgent.ts')).toBe(true);
-    expect(reachable.get('packages/agent/src/agent/DuyaAgent.ts')).toBe('packages/agent/src/process/agent-process-entry.ts');
+    expect(reachable.has('packages/host/src/worker-process-entry.ts')).toBe(true);
+    expect(reachable.has('packages/agent-runtime/src/engine/run-engine.ts')).toBe(true);
+    expect(reachable.has('packages/agent/src/agent/DuyaAgent.ts')).toBe(false);
   });
 
   it('terminates on a cycle instead of recursing forever', () => {
@@ -1691,7 +1681,7 @@ describe('reachability — resolving the edges a boundary argument depends on', 
   });
 });
 
-describe('the gates pin the CURRENT live state — G7 and G8 are green, the rest are red', () => {
+describe('the gates pin the current live state', () => {
   // These are not aspirational assertions. Each one pins the CURRENT known
   // state of a gate, in whichever direction that state currently lies, so that
   // a slice cannot move a gate without a test turning red and the move being
@@ -1703,15 +1693,16 @@ describe('the gates pin the CURRENT live state — G7 and G8 are green, the rest
   // claim about the tree, and a describe whose name is untrue is worse than no
   // describe at all. Their lines below are real guards in the green direction —
   // reintroduce a cycle and they report it.
-  it('G4 is red: the worker still constructs DuyaAgent', () => {
-    expect(findWorkerSeamBypasses().length).toBeGreaterThan(0);
+  it('G4 is green: the production worker reaches RunEngine through Host', () => {
+    expect(findWorkerSeamBypasses()).toEqual([]);
+    expect(workerReachesRunEngine()).toBe(true);
   });
 
-  it('G6 is red: durable tables are still rooted at session_id', () => {
+  it('G6 still reports the known session-rooted durable tables', () => {
     expect(findSessionRootedTables().length).toBeGreaterThan(0);
   });
 
-  it('G6 is red on the LIFECYCLE too, which is the half the DDL cannot see', () => {
+  it('G6 still reports known lifecycle coupling that the DDL cannot see', () => {
     expect(findLifecycleCouplings().length).toBeGreaterThan(0);
   });
 
@@ -1756,8 +1747,8 @@ describe('the gates pin the CURRENT live state — G7 and G8 are green, the rest
       expect(findWorkerLoopReach(entry).map((f) => f.file)).toEqual([]);
     });
 
-    // The live half: nothing reachable from the worker entry at any depth.
-    expect(findWorkerLoopReach('packages/agent/src/process/agent-process-entry.ts', undefined, 8).map((f) => f.file)).toEqual([]);
+    // The live half: nothing reachable from the active CLI worker entry at any depth.
+    expect(findWorkerLoopReach(WORKER_ENTRY, undefined, 8).map((f) => f.file)).toEqual([]);
   });
 
   it('G8 reports nothing: the only cycle is the one the execution owner owns', () => {
@@ -1790,7 +1781,7 @@ describe('the gates pin the CURRENT live state — G7 and G8 are green, the rest
     // A reachability gate over a resolver that silently resolves nothing would
     // report zero findings and read as clean. `dbDir` is asserted for the same
     // reason on G6: prove the scan has a subject.
-    expect(HOST_DB_DIR.endsWith(path.join('desktop', 'src', 'main'))).toBe(true);
+    expect(HOST_DB_DIR.endsWith(path.join('packages', 'data', 'src'))).toBe(true);
   });
 
   it('the layer table declares the direction 600 requires', () => {
@@ -1859,8 +1850,8 @@ describe('baseline — a known defect must not block, a new one must fail', () =
   });
 
   it('separates the same table reported from two different databases', () => {
-    const live = { file: 'db/core/stores.ts', table: 'tasks', column: 'session_id NOT NULL', database: 'core.db' };
-    const dead = { file: 'db/schema.ts', table: 'tasks', column: 'session_id NOT NULL', database: 'main.db' };
+    const live = { file: 'packages/data/src/core-stores.ts', table: 'tasks', column: 'session_id NOT NULL', database: 'core.db' };
+    const dead = { file: 'packages/data/src/main-schema.ts', table: 'tasks', column: 'session_id NOT NULL', database: 'main.db' };
     expect(fingerprint(report([live]), live)).not.toBe(fingerprint(report([dead]), dead));
   });
 

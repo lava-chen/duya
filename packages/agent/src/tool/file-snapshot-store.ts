@@ -1,5 +1,5 @@
 /**
- * Plan 610 A8 shim â€?content-addressed snapshot store moved to
+ * Plan 610 A8 shim   ?content-addressed snapshot store moved to
  * `@duya/capabilities` (`fs/snapshot-store`). Pass-through.
  */
 

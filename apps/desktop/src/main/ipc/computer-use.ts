@@ -40,7 +40,7 @@ import {
 } from '@duya/computer-use';
 
 import { getLogger, LogComponent } from '../logging/logger.js';
-import { getOSContextBridge } from '../../../../../packages/agent/dist/context/os-context/index.js';
+import { getOSContextBridge } from '@duya/host/worker-os-context';
 import { logComputerUseAction } from '../services/computer-use-audit.js';
 import { saveComputerUseCapture } from '../services/computer-use-capture-store.js';
 import {
@@ -95,7 +95,7 @@ function envelopeError(
  */
 function getRedactedReason(): string | null {
   try {
-    const ctx = getOSContextBridge().getCurrent();
+    const ctx = getOSContextBridge(logger).getCurrent();
     const focused = ctx?.focusedEntity as unknown as
       | { redaction?: { redacted?: boolean; reasons?: string[] } }
       | null;

@@ -7,12 +7,9 @@
  * `RunEvent` stream, the terminal decision, and the projection back onto the
  * legacy SSE contract the product UI already speaks.
  *
- * It does not own the model loop. `@duya/agent` is the executor today, behind
- * the `ExecutionChannel` seam, and replacing it — a rewritten harness, a
- * sandbox, a different provider stack — must not require touching run identity
- * or persistence. That is the entire reason this layer exists, and it is why
- * `docs/architecture/06-migration-plan.md` M5 is better taken as a vertical
- * slice than as four file-moving PRs.
+ * RunEngine owns the model/tool/result/next-turn loop through injected ports.
+ * Host and domain adapters provide providers, tools, context and persistence;
+ * replacing an adapter does not replace run identity or execution ownership.
  *
  * It does not own storage. `RunPersistence` is supplied by the Control Plane.
  *
@@ -26,6 +23,8 @@
  */
 
 export { RunController, RunStartError, runtimeEventTypes } from './controller.js';
+export { memoizeInvocationDecision } from './authorization/invocation-decision.js';
+export type { InvocationDecisionEvaluator, InvocationDecisionReader } from './authorization/invocation-decision.js';
 export type {
   FrameOutcome,
   RunControllerOptions,

@@ -14,7 +14,7 @@ import { homedir, platform as getPlatform, tmpdir } from 'os';
 import extractZip from 'extract-zip';
 import { getLogger, LogComponent } from '../logging/logger';
 import { parseSkillFrontmatter, parseAllowedTools } from '../utils/skill-parser';
-import { scanSkillFile, type SkillFinding } from '../../../../../packages/agent/src/security/skillScanner.js';
+import { scanSkillFile, type SkillFinding } from '@duya/agent-core/skills/skill-scanner';
 import { getConfigStore } from '../config/store-instance';
 import type { SkillConfigEntry } from '../config/schema';
 import { getPluginManager } from '../plugins/PluginManager';

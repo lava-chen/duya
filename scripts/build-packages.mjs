@@ -108,6 +108,7 @@ const BUILD_ORDER = [
 
   // Level 2 — depend only on level 1.
   '@duya/ai', //              -> @duya/agent-protocol
+  '@duya/plugin-core',
   // Plan 610 A8: the capability implementations, slice 1 = filesystem
   // (Read/Write/Edit/Glob/Grep/ApplyPatch + BaseTool + contracts + the
   // path-permission policy). Depends on level-1 `@duya/agent-protocol`
@@ -115,8 +116,6 @@ const BUILD_ORDER = [
   // (contributor declaration), level-2 `@duya/ai` (the `ToolResult` runtime
   // type, same edge `@duya/memory` declares) plus npm `diff`/`picomatch`/
   // `zod`. It must build before `@duya/agent`, whose shims re-export it.
-  '@duya/capabilities', //    -> @duya/ai, @duya/agent-protocol, @duya/sandbox, @duya/tooling
-  '@duya/plugin-core',
   '@duya/data', //             -> @duya/agent-protocol
   '@duya/conductor',
   '@duya/gateway',
@@ -126,19 +125,20 @@ const BUILD_ORDER = [
   '@duya/agent-core', //   -> @duya/agent-protocol
   '@duya/computer-use', // -> @duya/ai
 
+  // Concrete browser/CUA and connector adapters consume the platform and
+  // plugin contracts, while Runtime consumes their public tool contracts.
+  '@duya/capabilities',
+
   // Level 4 — depend on agent-core and agent-protocol.
   '@duya/agent-runtime', // -> @duya/agent-core, @duya/agent-protocol
+
+  // Memory is a Host prompt/context prerequisite.
+  '@duya/memory', // -> @duya/ai
 
   // Level 5 — the Host composes the runtime and data packages; CLI connects to it.
   '@duya/host', //         -> @duya/agent-runtime, @duya/data, @duya/agent-protocol
   '@duya/cli', //          -> @duya/host, @duya/plugin-core, @duya/input-completion
-  //
-  // `@duya/memory` sits at level 5 because its only `@duya/*` dependency is
-  // `@duya/ai` (level 2) and its only consumers are `@duya/agent` and
-  // `apps/desktop`. Both need its emitted `dist`, so it must be built before
-  // either — and it must not be hoisted earlier, or a package that imports it
-  // could typecheck against a `dist` that does not exist yet.
-  '@duya/memory', //           -> @duya/ai
+
 
   // Level 6 — last. `@duya/agent` consumes the level-2 through level-5 packages,
   // and `apps/desktop/src/main` plus the agent bundle both import it, so
