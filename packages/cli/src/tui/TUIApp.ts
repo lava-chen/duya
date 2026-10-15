@@ -49,6 +49,7 @@ import { WindowManager } from './window.js';
 import { ACTION_DEFS, helpGroups, keysColumn, type ActionDef } from './actions.js';
 import { applyKeyOverrides, loadKeyOverrides, toBlessedKeys, REBINDABLE_ACTIONS, validateKeyOverrides, type KeymapIssue } from './keymap.js';
 import { resolveThemeName, themeFor, type ThemeName } from './theme.js';
+import { detectTerminalEnvironment, type TerminalEnvironment } from './terminal-env.js';
 import type { Message as TranscriptMessage, MessageContent } from '@duya/agent-protocol/transcript';
 
 /** DECSET 2026: begin synchronized update. */
@@ -117,8 +118,25 @@ function compactActivity(value: string, maxLength = 52): string {
 }
 
 /** Where the synchronized-output markers are written. */
-export interface TUIAppOptions {
-  /** Window title. */
+/**
+ * What the TUI asked blessed to render with.
+ *
+ * Published on the writer before `blessed.program`/`blessed.screen` are called,
+ * and the same object is passed to them, so a test can assert the terminal's
+ * capabilities actually reached the renderer rather than trusting that a
+ * constant stayed correct.
+ */
+export interface RenderConfig {
+  readonly program: {
+    readonly terminal: string;
+    readonly colors: number;
+  };
+  readonly screen: {
+    readonly fullUnicode: boolean;
+  };
+}
+
+export interface TUIAppOptions {  /** Window title. */
   readonly title?: string;
   /**
    * Sink for the rendered frames.
@@ -135,8 +153,7 @@ export interface TUIAppOptions {
    */
   readonly input?: NodeJS.ReadableStream;
   /** Status bar text, recomputed on every render. */
-  readonly statusText?: () => string;
-  /** Seed history, e.g. from `~/.duya/.cli_history`. */
+  readonly statusText?: () => string;  /** Seed history, e.g. from `~/.duya/.cli_history`. */
   readonly history?: readonly string[];
   /** Called with each submitted prompt. */
   readonly onSubmit: (text: string) => void | Promise<void>;
@@ -179,6 +196,12 @@ export interface TUIAppOptions {
   readonly completionSources?: CompletionSources;
   /** How many completion rows to show at once. */
   readonly completionRows?: number;
+  /**
+   * Terminal capabilities. Injected by tests; defaults to detection from
+   * `process.env`. Every rendering choice that used to be a hard-coded
+   * constant (colour count, box characters) comes from here instead.
+   */
+  readonly terminalEnv?: TerminalEnvironment;
 }
 
 export class TUIApp {
@@ -186,6 +209,8 @@ export class TUIApp {
   private readonly screen: Widgets.Screen;
   private readonly program: BlessedProgram;
   private readonly writer: EscapeSafeWriter;
+  /** What the terminal can render, measured rather than assumed. */
+  private readonly terminalEnv: TerminalEnvironment;
   /** Where the synchronized-output markers go, alongside the frames. */
   private readonly output: NodeJS.WritableStream;
 
@@ -277,7 +302,17 @@ export class TUIApp {
 
   constructor(options: TUIAppOptions) {
     this.options = options;
-    this.theme = themeFor(options.theme ?? resolveThemeName());
+    // Capabilities first: the theme fallback below is a rendering decision, so
+    // it must not be made before we know what the terminal can render.
+    this.terminalEnv = options.terminalEnv ?? detectTerminalEnvironment();
+    const requestedTheme = options.theme ?? resolveThemeName();
+    // A light theme on a 16-colour terminal does not degrade, it disintegrates:
+    // the palette is 256-colour numbers, so every tag quantises to something
+    // arbitrary. Falling back keeps the reading experience; the user can still
+    // force `light` on a 256-colour terminal where it works.
+    this.theme = themeFor(
+      requestedTheme === 'light' && !this.terminalEnv.supportsLightPalette ? 'dark' : requestedTheme,
+    );
     // Overrides resolved ONCE, here: config + env, with the injected map (a
     // test seam) winning outright when present.
     const keyOverrides = options.keyOverrides ?? loadKeyOverrides();
@@ -307,24 +342,42 @@ export class TUIApp {
       return proxy;
     };
 
-    this.program = blessed.program({
+    // The blessed options are built ONCE, published for tests, and then handed
+    // to blessed by reference — not rebuilt inside the call. That is what makes
+    // the wiring assertable: a test reading `renderConfig.program.colors` is
+    // reading the very object `Program` was constructed from, so putting a
+    // constant back inside `blessed.program({...})` cannot leave the published
+    // copy still agreeing with reality.
+    const programOptions = {
       input: (options.input ?? process.stdin) as unknown as NodeJS.ReadStream,
       output: this.writer as unknown as NodeJS.WriteStream,
-      terminal: process.env.TERM ?? 'xterm-256color',
+      terminal: this.terminalEnv.term,
       // The cursor is positioned explicitly after each render; letting
       // blessed draw its own would fight the editor's cursor placement.
       // `artificial: false` means blessed leaves the real terminal cursor
       // alone rather than drawing a block over the cell.
-      cursor: { artificial: false, shape: 'line', blink: false, color: '' },
-      colors: 256,
-    });
+      cursor: { artificial: false, shape: 'line', blink: false, color: '' } as const,
+      // 16 covers truecolor too: blessed's `colors: 16` is the 24-bit path,
+      // while anything higher is the 256-colour palette.
+      colors: this.terminalEnv.colorDepth === 'truecolor' ? 16 : this.terminalEnv.colorDepth,
+    };
+    this.program = blessed.program(programOptions);
 
-    this.screen = blessed.screen({
+    const screenOptions = {
       program: this.program,
       smartCSR: true,
-      fullUnicode: true,
+      fullUnicode: this.terminalEnv.unicodeBox,
       title: options.title ?? 'duya',
-    }) as Widgets.Screen;
+    };
+    // Both option objects are published AND passed by reference, so what a test
+    // reads is what blessed was constructed from. Publishing a copy instead
+    // would leave this seam able to describe a renderer that was never built —
+    // which is exactly what a `fullUnicode: true` left in the screen call did
+    // while every colour test stayed green.
+    const renderConfig: RenderConfig = { program: programOptions, screen: screenOptions };
+    proxy.renderConfig = renderConfig;
+
+    this.screen = blessed.screen(screenOptions) as Widgets.Screen;
 
     this.transcriptBox = blessed.box({
       top: 0,
