@@ -556,7 +556,11 @@ async function chatTui(
   }
 
   async function runTurn(prompt: string): Promise<void> {
-    tui.printUser(prompt);
+    // NO user echo here. `TUIApp.submit` already appended the line the instant
+    // Enter was pressed, and echoing it again is what printed every prompt
+    // twice: the composer is the only thing that knows what the user sent, and
+    // it has already said so on screen. Anything that starts a turn without
+    // going through the composer has to add the line itself.
     busy = true;
     tui.setBusy(true);
     try {

@@ -49,7 +49,13 @@ import { WindowManager } from './window.js';
 import { ACTION_DEFS, helpGroups, keysColumn, type ActionDef } from './actions.js';
 import { applyKeyOverrides, loadKeyOverrides, toBlessedKeys, REBINDABLE_ACTIONS, validateKeyOverrides, type KeymapIssue } from './keymap.js';
 import { resolveThemeName, themeFor, type ThemeName } from './theme.js';
+import { compactActivity } from './text.js';
 import { detectTerminalEnvironment, type TerminalEnvironment } from './terminal-env.js';
+import {
+  nextSpinnerFrame,
+  workingTailLine,
+  WORKING_TAIL_INTERVAL_MS,
+} from './working-tail.js';
 import { InlineSurface } from './terminal/surface.js';
 import { conversationRegionBottom, type TerminalSize } from './terminal/viewport.js';
 import type { Message as TranscriptMessage, MessageContent } from '@duya/agent-protocol/transcript';
@@ -122,12 +128,6 @@ function frameRecord(value: unknown): Record<string, unknown> {
 
 function frameString(record: Record<string, unknown>, key: string): string {
   return typeof record[key] === 'string' ? record[key] as string : '';
-}
-
-function compactActivity(value: string, maxLength = 52): string {
-  const text = value.replace(/\s+/gu, ' ').trim();
-  const chars = Array.from(text);
-  return chars.length > maxLength ? `${chars.slice(0, Math.max(1, maxLength - 3)).join('')}...` : text;
 }
 
 /** Where the synchronized-output markers are written. */
@@ -331,6 +331,14 @@ export class TUIApp {
   private waitingForPermission = false;
   private readonly activeTools = new Map<string, { name: string; elapsedSeconds: number | null }>();
   private readonly activeAgents = new Map<string, string>();
+  /**
+   * The working tail's spinner.
+   *
+   * Chrome, never transcript — see `working-tail.ts` for why a row the surface
+   * rewrites is the only kind of row that can hold a spinner.
+   */
+  private spinnerFrame = 0;
+  private spinnerTimer: ReturnType<typeof setInterval> | null = null;
 
   /** Modal windows (F1 help, Ctrl+R history, Ctrl+P usage). */
   private readonly windowMgr = new WindowManager();
@@ -646,6 +654,7 @@ export class TUIApp {
     // buffer; `InlineSurface.stop` leaves the conversation on the normal one.
     this.releaseAltScreen();
     this.inlineSurface?.stop();
+    this.stopSpinner();
     this.writer.flush();
   }
 
@@ -782,6 +791,7 @@ export class TUIApp {
     this.paintTranscript();
     this.paintCompletion();
     this.paintStatus();
+    this.syncSpinner();
     // The overlay is a full-screen takeover, so inline mode needs a Screen for
     // it. Building one here — rather than at construction — is what keeps the
     // alternate buffer out of the way while the conversation is on screen.
@@ -795,14 +805,19 @@ export class TUIApp {
       return;
     }
 
-    const chrome = [...this.inlinePopupLines, ...this.inlineInputLines, ...this.inlineStatusLines];
+    const tail = this.workingTailLines();
+    const chrome = [...tail, ...this.inlinePopupLines, ...this.inlineInputLines, ...this.inlineStatusLines];
     // The caret's row is an index into `scroll`, so it is offset by everything
     // that sits above the composer. Its column is the editor's own column plus
     // the prompt marker's width, because that is what is actually printed.
     const caret =
       this.focus === 'input' && this.interactivePrompt === null
         ? {
-            row: this.inlineTranscriptLines.length + this.inlinePopupLines.length + this.inputCursor.cursorRow,
+            row:
+              this.inlineTranscriptLines.length +
+              tail.length +
+              this.inlinePopupLines.length +
+              this.inputCursor.cursorRow,
             column: this.inputCursor.cursorCol + COMPOSER_PREFIX.length + 1,
           }
         : null;
@@ -823,6 +838,64 @@ export class TUIApp {
     if (this.interactivePrompt !== null) return true;
     if (this.overlay.body(this.options.canAnswerPermissions?.() ?? false) !== null) return true;
     return this.windowMgr.isActive;
+  }
+
+  /**
+   * The working tail: one row, empty when nothing is running.
+   *
+   * Shown only in inline mode. Full-screen mode has a fixed four-row layout and
+   * the status line is where its activity has always lived; giving it a tail too
+   * is a separate change to that layout, not something to smuggle in here.
+   */
+  private workingTailLines(): string[] {
+    // Keyed on the inline surface, not on the absence of the status bar: the
+    // status bar being null IS inline mode today, but a full-screen mode that
+    // grows its own tail later must not be switched off by this line.
+    if (this.inlineSurface === null) return [];
+    const busy = this.options.isBusy?.() ?? this.busy;
+    if (!busy && !this.waitingForPermission) return [];
+    return [
+      workingTailLine({
+        frame: this.spinnerFrame,
+        label: this.activityLabel(busy),
+        unicode: this.terminalEnv.unicodeBox,
+        columns: this.terminalSize().columns,
+      }),
+    ];
+  }
+
+  /**
+   * Run the spinner clock while there is a turn in flight.
+   *
+   * It advances an index and asks for a THROTTLED render — it never paints, and
+   * it never touches the transcript. `unref`d, because a timer that outlives
+   * the TUI would keep the process alive after `/exit`.
+   */
+  private syncSpinner(): void {
+    const busy = this.options.isBusy?.() ?? this.busy;
+    const wanted = busy || this.waitingForPermission;
+    if (!wanted) {
+      this.spinnerFrame = 0;
+      if (this.spinnerTimer !== null) {
+        clearInterval(this.spinnerTimer);
+        this.spinnerTimer = null;
+      }
+      return;
+    }
+    if (this.spinnerTimer !== null) return;
+    this.spinnerTimer = setInterval(() => {
+      this.spinnerFrame = nextSpinnerFrame(this.spinnerFrame, this.terminalEnv.unicodeBox);
+      this.scheduleRender();
+    }, WORKING_TAIL_INTERVAL_MS);
+    this.spinnerTimer.unref?.();
+  }
+
+  /** Stop the spinner clock. Called from teardown. */
+  private stopSpinner(): void {
+    if (this.spinnerTimer !== null) {
+      clearInterval(this.spinnerTimer);
+      this.spinnerTimer = null;
+    }
   }
 
   private renderOptions(): RenderOptions {
@@ -1624,6 +1697,24 @@ private paintCompletion(): void {
     if (text.trim() === '') return;
     this.model.addUser(text);
     this.scheduleRender();
+  }
+
+  /**
+   * How many times this exact text is in the transcript as its own user line.
+   *
+   * Exists for one regression: every prompt used to be appended twice — once
+   * optimistically when Enter was pressed, once again when the turn started.
+   * A full-screen window scrolled past the second copy long before a reader
+   * looked, and the inline model puts the two copies side by side where the
+   * duplication is the first thing on screen. `runTurn` no longer echoes.
+   *
+   * The count is exposed rather than asserted inside this class because the
+   * duplicate was caused by TWO owners of the same fact, and a test that could
+   * only be written from one of them would pass again the moment the other was
+   * reintroduced.
+   */
+  userEchoCount(text: string): number {
+    return this.model.blocks.filter((block) => block.kind === 'user' && block.text === text).length;
   }
 
   /** Append an error and render it. Never collapsed, never truncated. */
