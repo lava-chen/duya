@@ -37,6 +37,11 @@ export function normalizeWorkerEvent(event: Record<string, unknown>): Record<str
       type: msgType.replace('chat:', ''),
       data: { content: event.data || event.content },
     };
+  } else if (msgType === 'chat:text_delta' || msgType === 'chat:thinking_delta') {
+    sseEvent = {
+      type: msgType.replace('chat:', ''),
+      data: { content: event.delta },
+    };
   } else if (msgType === 'chat:tool_use_started') {
     sseEvent = {
       type: 'tool_use_started',

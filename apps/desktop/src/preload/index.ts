@@ -1131,6 +1131,26 @@ export interface BashTaskAPI {
   ) => Promise<{ ok: boolean; output?: string; size?: number; truncated?: boolean; error?: string }>
 }
 
+/**
+ * Composer `!cmd` bash-prefix mode: run a shell command in the main process
+ * (same trust model as the agent's BashTool — explicit user intent) and get
+ * back the captured output. `cwd` defaults to the main process cwd, and the
+ * timeout is clamped to [1s, 120s] main-side (default 30s).
+ */
+export interface BangAPI {
+  run: (
+    command: string,
+    cwd?: string,
+    timeoutMs?: number
+  ) => Promise<{
+    ok: boolean
+    output?: string
+    error?: string
+    durationMs?: number
+    exitCode?: number
+  }>
+}
+
 export interface ElectronAPI {
   versions: {
     electron: string
@@ -1483,6 +1503,7 @@ export interface ElectronAPI {
   appConnection: AppConnectionAPI
   terminal: TerminalAPI
   bashTasks: BashTaskAPI
+  bang: BangAPI
   onTerminalOutput: (callback: (event: { id: string; data: string }) => void) => () => void
   onTerminalExit: (callback: (event: { id: string; code: number | null }) => void) => () => void
   recap: RecapAPI
@@ -2944,6 +2965,10 @@ const electronAPI: ElectronAPI = {
   bashTasks: {
     readOutput: (outputFile: string, maxBytes?: number) =>
       ipcRenderer.invoke('bash-task:read-output', { outputFile, maxBytes }),
+  },
+  bang: {
+    run: (command: string, cwd?: string, timeoutMs?: number) =>
+      ipcRenderer.invoke('bang:run', { command, cwd, timeoutMs }),
   },
   onTerminalOutput: (callback) => {
     const handler = (_event: Electron.IpcRendererEvent, data: { id: string; data: string }) => {

@@ -22,12 +22,16 @@
  *
  * ## Why it takes env as an argument
  *
- * Detection must be a pure function of an environment bag. A probe that reads
+ * Detection must be a pure function of its inputs. A probe that reads
  * `process.env` directly can only be tested by mutating global state, which is
  * how "works on my machine" detection bugs get in. Passing the bag in also
  * makes the awkward cases — `TERM=dumb`, Windows without `WT_SESSION`, a
  * UTF-8 locale under a terminal that still cannot draw boxes — expressible as
  * ordinary table-driven tests instead of as a real terminal.
+ *
+ * `platform` is a second input for the same reason: the Windows row of
+ * `detectUnicodeBox` is not reachable from an environment bag alone, because
+ * what identifies it is an ABSENCE of variables. See that function.
  */
 
 /** How much colour the terminal can address. */
@@ -126,12 +130,38 @@ function detectColorDepth(env: NodeJS.ProcessEnv, program: TerminalProgram): Col
  * The Linux virtual console is the case that bites: it advertises a normal
  * `xterm` TERM but mangles box characters depending on the console font, so a
  * UTF-8 locale is not enough to say yes.
+ *
+ * ## The Windows row, and why it needs `platform`
+ *
+ * This check used to end at `isUtf8Locale`, which reads `LC_ALL` / `LC_CTYPE` /
+ * `LANG`. Those are POSIX variables: a stock Windows PowerShell or cmd window
+ * sets none of them, not even to a non-UTF-8 value. So the probe read "no
+ * variable" as "this console cannot do UTF-8" and returned `unicodeBox: false`
+ * for every Windows user outside Windows Terminal -- which blessed then honours
+ * by replacing every non-ASCII cell with `?`. Measured, not inferred: a blessed
+ * box whose content is `你好` writes `<ESC>[1;1H?` with `fullUnicode: false`,
+ * while `box.content` still reads `"你好"`. Every CJK character in the
+ * transcript AND in the composer was lost, while the input side still received
+ * the characters correctly -- which is what made it look like a terminal
+ * encoding problem rather than a render-mode one.
+ *
+ * Node writes UTF-8 to stdout on Windows regardless of the console's OEM code
+ * page, and the Windows-side consoles in use (Windows Terminal, conhost since
+ * 1903, VS Code, mintty) all render it. So on win32 the answer is yes unless
+ * something says otherwise explicitly, which is what `DUYA_TUI_ASCII` is for.
  */
-function detectUnicodeBox(env: NodeJS.ProcessEnv, program: TerminalProgram): boolean {
+function detectUnicodeBox(
+  env: NodeJS.ProcessEnv,
+  program: TerminalProgram,
+  platform: NodeJS.Platform,
+): boolean {
+  // The escape hatch, checked first so it overrides even a capable terminal.
+  if (env['DUYA_TUI_ASCII'] === '1') return false;
   const term = (env['TERM'] ?? '').toLowerCase();
   if (term === 'dumb') return false;
   if (term === 'linux') return false;
   if (UNICODE_CAPABLE.has(program)) return true;
+  if (platform === 'win32') return true;
   // tmux inherits the outer terminal's abilities; if we got here the outer one
   // was not a name we recognise, so require an explicit UTF-8 locale.
   return isUtf8Locale(env);
@@ -145,13 +175,20 @@ function isUtf8Locale(env: NodeJS.ProcessEnv): boolean {
   return false;
 }
 
-/** Read the terminal's self-description out of an environment bag. */
+/**
+ * Read the terminal's self-description out of an environment bag.
+ *
+ * `platform` is an explicit input rather than a `process.platform` read so the
+ * Windows row of `detectUnicodeBox` is reachable from a test instead of only on
+ * the one machine it was found on.
+ */
 export function detectTerminalEnvironment(
   env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
 ): TerminalEnvironment {
   const program = detectProgram(env);
   const colorDepth = detectColorDepth(env, program);
-  const unicodeBox = detectUnicodeBox(env, program);
+  const unicodeBox = detectUnicodeBox(env, program, platform);
   const term = env['TERM'] ?? '';
   const dumb = term === 'dumb';
 

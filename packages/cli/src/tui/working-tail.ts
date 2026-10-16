@@ -66,6 +66,12 @@ export function nextSpinnerFrame(current: number, unicode: boolean): number {
   return ((((index + 1) % frames.length) + frames.length) % frames.length);
 }
 
+/** Glyph currently shown for a frame index, keeping every surface in sync. */
+export function spinnerGlyph(frame: number, unicode: boolean): string {
+  const frames = unicode ? SPINNER_UNICODE : SPINNER_ASCII;
+  return frames[nextSpinnerFrame(frame, unicode)] ?? frames[0] ?? '';
+}
+
 export interface WorkingTailOptions {
   /** Current frame index. */
   readonly frame: number;
@@ -89,8 +95,7 @@ export interface WorkingTailOptions {
  * `?7l` that is supposed to prevent exactly that is ignored.
  */
 export function workingTailLine(options: WorkingTailOptions): string {
-  const frames = options.unicode ? SPINNER_UNICODE : SPINNER_ASCII;
-  const glyph = frames[nextSpinnerFrame(options.frame, options.unicode)] ?? frames[0] ?? '';
+  const glyph = spinnerGlyph(options.frame, options.unicode);
   const width = Math.max(8, options.columns - 1);
   const label = compactActivity(options.label, Math.max(1, width - glyph.length - 1));
   return `{cyan-fg}${glyph}{/cyan-fg} ${label}`;

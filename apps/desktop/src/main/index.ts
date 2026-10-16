@@ -78,6 +78,7 @@ import { registerProjectDatabaseHandlers } from './ipc/project-database-handlers
 import { registerProjectEntityHandlers } from './ipc/project-entity-handlers';
 import { registerGitHandlers } from './ipc/git-handlers';
 import { registerBashTaskHandlers } from './ipc/bash-task-handlers';
+import { registerBangHandlers } from './ipc/bang-handlers';
 import { registerWorkflowHandlers } from './ipc/workflow-handlers';
 import { registerComputerUsePermissionsHandlers } from './ipc/computer-use-permissions';
 import { registerCuaHandlers } from './ipc/cua-handlers';
@@ -1260,6 +1261,10 @@ registerHooksHandlers();
 registerMcpReloadIpcHandler();
 // Plan 566: background bash task output reads for the side panel viewer.
 registerBashTaskHandlers();
+// Composer `!cmd` bash-prefix mode (minimax/codex parity): the renderer sends
+// the raw command line, the main process runs it in a shell with a bounded
+// timeout and returns the captured output.
+registerBangHandlers();
 
 // =============================================================================
 // Graceful Shutdown

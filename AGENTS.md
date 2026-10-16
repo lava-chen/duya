@@ -36,7 +36,14 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
     separate spawned child process, not in-process.
   - `src/preload/` — context bridge
   - `src/renderer/` — Vite + React 19 + Zero Router frontend
-- Other workspaces: `packages/{ai,cli,computer-use,conductor,connectors,data,gateway,host,input-completion,memory,plugin-core,sandbox,tooling,voice}/`
+- Other workspaces: `packages/{ai,cli,command-catalog,computer-use,conductor,connectors,data,gateway,host,input-completion,memory,plugin-core,sandbox,tooling,voice}/`
+- Slash command definitions live in `packages/command-catalog/` only — the Desktop
+  composer (`apps/desktop/src/renderer/lib/commands/registry.ts`) and the CLI TUI
+  (`packages/cli/src/tui/slash/registry.ts`) both project it. Add a command there
+  plus a handler on the owning surface; never hand-copy a definition. Lookup is
+  unfiltered by `surfaces` (only popups filter), array order is presentation
+  order, and the package must stay in level 1 of `scripts/build-packages.mjs`.
+  See [ARCHITECTURE.md § Slash Command Catalog](./ARCHITECTURE.md).
 - Build scripts: `scripts/` (esbuild configs)
 - Docs: `docs/{design-docs,exec-plans,generated,product-specs,references}/`
 - Scoped guides: `docs/exec-plans/README.md`, `docs/design-docs/core-beliefs.md`

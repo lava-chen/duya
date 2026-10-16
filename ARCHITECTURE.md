@@ -384,8 +384,11 @@ Run ledger path, not Host-owned execution. CLI still assembles the executor
 through `@duya/agent`; Desktop Agent Server now routes every `run:*` command
 through the same API after Main's Control Plane authenticates its child-process
 sender. The Desktop API adapter still reaches Main-owned SQLite handles.
-Event reads provide a durable-history substrate, but the API does not yet
-stream, attach, cancel, or resume a live Host run.
+The active Host execution API also streams canonical events from a bounded,
+process-local channel. Ephemeral assistant text and thinking deltas travel only
+on that live channel; after it closes, the SSE endpoint resumes from the durable
+ledger for the committed terminal and later replay. This does not provide
+attach or resume for a live run.
 The production worker's RunDriver now imports the Runtime-only event-spine
 factory from `@duya/host/run-event-spine`; the old Agent path is a compatibility
 re-export. Host owns the run session, event stream, emitter, and terminal
@@ -989,6 +992,104 @@ domain or database-owner cutover to Host.
   results remain capped at five rendered lines. Completion owns Tab/Up/Down
   first while its popup is open. Assistant output renders headings, lists,
   quotes, inline emphasis, links, and fenced code as safe Blessed markup.
+
+#### Drawing Seam (`packages/cli/src/tui/screen/`)
+
+`ScreenSurface` is the interface between the TUI and whatever paints it.
+`TUIApp` used to build a blessed `program`, a `screen` and five boxes itself,
+which made blessed's widget API part of the application's shape; the seam
+reduces every drawing operation to a patch on one of five fixed regions —
+`transcript`, `input`, `status`, `overlay`, `completion` — carrying content,
+height, distance from the bottom edge, border colour, border style and
+visibility.
+
+Three things the seam had to take ownership of rather than let the caller
+compute, because only the renderer placed them:
+
+- `measure(region)` reports laid-out geometry (`innerWidth`/`innerHeight`
+  already account for whether a border exists, and the input box drops its
+  border on short terminals).
+- `measure(region).laidOut` distinguishes "created" from "placed", which the
+  cursor routine needs and cannot infer.
+- `content(region)` returns the lines the caller last handed over. The rendered
+  bytes cannot answer this: a diff-based renderer rewrites one cell per
+  keystroke, so text typed character by character never appears contiguously in
+  the terminal output.
+
+`BlessedScreenSurface` remains the default implementation.
+`OwnScreenSurface` is the second implementation, selected with
+`DUYA_TUI_RENDERER=own`. It uses the same five-region geometry and append order
+to compose a cell grid, then writes only the rows whose cells changed. The
+alternate-buffer lifecycle is owned by either surface; `update()` creates a
+missing surface but never re-enters a suspended one, while `ensure()` and
+`enter()` are the explicit re-entry paths.
+
+**Input migration status:** Blessed remains the default. With
+`DUYA_TUI_RENDERER=own`, `OwnKeyInput` puts the real input stream in raw mode and
+`OwnKeyParser` decodes UTF-8 across chunks, CSI/SS3 navigation, Ctrl/Alt
+modifiers, bracketed paste, and SGR wheel events. Parsed keys are adapted into
+the existing `program` event channel so `TUIApp` keeps one key-routing path;
+bracketed paste is delivered as one literal edit, preserving embedded newlines.
+The own path still uses Blessed `Program` for event dispatch, mouse-mode output,
+and cursor commands, so Phase 4 remains responsible for removing that runtime
+dependency.
+
+**Not yet unified:** the inline path. `InlineSurface` writes whole frames
+straight to the stream and owns no regions, so it is not a `ScreenSurface`. The
+`inline === null` branch still exists in the paint methods; folding it away is a
+rewrite of those methods, not of the seam.
+
+#### Terminal capability detection
+
+`detectTerminalEnvironment(env, platform)` takes the platform as an explicit
+input because one rule cannot be reached from an environment bag: `unicodeBox`
+used to end at a `LC_ALL`/`LC_CTYPE`/`LANG` check, and those are POSIX
+variables that a stock Windows PowerShell sets none of. Absence was read as
+"cannot do UTF-8", and blessed honours `fullUnicode: false` by replacing every
+non-ASCII cell with `?` — so on Windows every CJK character in the transcript
+and the composer was lost while input still arrived correctly. `win32` now
+defaults to UTF-8 capable, `TERM=dumb`/`TERM=linux` still override it, and
+`DUYA_TUI_ASCII=1` is the explicit way back.
+
+Every test row names a platform, because a detection test whose expected value
+depends on the host is this bug waiting for a different CI image.
+
+### Slash Command Catalog (`packages/command-catalog/`)
+
+`@duya/command-catalog` is the single definition of every slash command: name,
+aliases, short titles in both locales, descriptions, argument shape
+(`argsHint`/`subcommands`), category, which surfaces advertise it (`surfaces`),
+and whether the Desktop's gateway adapters serve it (`gateway`). Both front ends
+project it:
+
+- `apps/desktop/src/renderer/lib/commands/registry.ts` maps each spec onto the
+  renderer's `CommandDef` and answers `resolveCommand` /
+  `getCommandsForPlatform` / `getCommandsByCategory`.
+- `packages/cli/src/tui/slash/registry.ts` intersects the catalog's CLI view with
+  the handlers the TUI can actually run, and feeds both the `/` popup and
+  `/help`.
+
+Behaviour is deliberately NOT shared: the Desktop's executors act on a
+renderer-side `CommandAppBridge`, the CLI's act over the Host HTTP API. That
+split matches codex, where `slash_command.rs` holds the definition and
+`slash_dispatch.rs` the behaviour.
+
+Three rules the package enforces (see `packages/command-catalog/src/index.ts`
+and its tests):
+
+1. **Lookup is exact and unfiltered; only the popup filters.** `findSpec()`
+   ignores `surfaces`, so a command a surface does not advertise still resolves
+   when typed. "Not advertised" must never degrade into "unknown command".
+2. **Availability is data.** `surfaces`, `availableWhileBusy` and
+   `requiresSession` live on the definition; a popup asks the catalog instead of
+   carrying its own list.
+3. **Order is presentation order.** The array order in `COMMAND_SPECS` is the
+   popup order. Do not alphabetize it.
+
+`@duya/command-catalog` imports no other `@duya/*` package, so it sits in
+level 1 of `scripts/build-packages.mjs`. Omitting it there fails the way the
+`@duya/input-completion` note in that file describes — green locally, TS2307 on
+a clean checkout.
 
 ### Tool System
 

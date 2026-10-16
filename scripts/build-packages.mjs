@@ -97,6 +97,19 @@ const BUILD_ORDER = [
   // import from an already-present `dist`, so `typecheck:all` is green while a
   // clean CI checkout reports TS2307 for every file that imports it.
   '@duya/input-completion',
+  // The one place a slash command is defined: name, aliases, descriptions,
+  // argument shape and which surfaces advertise it, shared by the desktop
+  // composer and the CLI TUI. Level 1 because it imports nothing but its own
+  // siblings -- no `@duya/*` package, no React, no blessed, no SDK.
+  //
+  // It must build before `@duya/cli` and before the desktop renderer, both of
+  // which resolve it through `node_modules` into this package's emitted `dist`.
+  // Omitting it fails exactly the way the `@duya/input-completion` note above
+  // describes: a workstation that has built this package by hand is green while
+  // a clean checkout typechecks against a missing `dist`. `selectBuildOrder`
+  // would also reject `--target @duya/cli` outright, since that target now has
+  // a workspace dependency missing from this array.
+  '@duya/command-catalog',
   // Plan 610 A8: the extension contract package. Level 1 because it imports
   // no `@duya/*` package at all -- 13 contributor interfaces, the registry,
   // and assembly-time validation, nothing else. It must build before

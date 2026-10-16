@@ -49,6 +49,17 @@ export interface DeltaBufferOptions {
 export class DeltaBuffer {
   private pending = '';
   /**
+   * The content block the buffered text belongs to, or `null` for the
+   * keyless/plain-REPL case.
+   *
+   * This is an ORDERING fact, not bookkeeping. One turn contains several
+   * content blocks, and a fragment for a later one may arrive while an earlier
+   * one's text is still buffered. Merging them would render the earlier text
+   * below the later block, so `append` refuses to cross a key boundary and the
+   * caller commits the old segment first.
+   */
+  private pendingKey: string | null = null;
+  /**
    * When the currently-buffered text's FIRST fragment arrived, or -1 when
    * nothing is buffered. This is the age the staleness rule measures: a
    * fragment that has been sitting for `staleMs` has been sitting since it
@@ -68,6 +79,11 @@ export class DeltaBuffer {
   /** Characters currently buffered and not yet committed. */
   get pendingLength(): number {
     return this.pending.length;
+  }
+
+  /** The content block the buffered text belongs to, or `null` when keyless. */
+  get key(): string | null {
+    return this.pendingKey;
   }
 
   /** True when nothing is buffered. */
@@ -92,11 +108,23 @@ export class DeltaBuffer {
    * that emits empty delta frames (the engine does skip empty text, but the
    * frame type still reaches the CLI) cannot reset the staleness clock and
    * starve the staleness clause.
+   *
+   * A `key` that differs from the buffered one is REJECTED. Silently merging
+   * across content blocks is precisely the ordering defect this guards, so the
+   * caller has to say what to do with the older text — commit it, which
+   * `push()` does before appending.
    */
-  append(text: string, now: number): void {
+  append(text: string, now: number, key: string | null = null): void {
     if (text.length === 0) return;
+    if (this.pending.length > 0 && key !== this.pendingKey) {
+      throw new Error(
+        `refusing to append a fragment for content block ${key ?? '(none)'} onto buffered ` +
+          `text for ${this.pendingKey ?? '(none)'}: commit the buffer before switching blocks`,
+      );
+    }
     if (this.pending.length === 0) {
       this.pendingSince = now;
+      this.pendingKey = key;
     }
     this.pending += text;
   }
@@ -121,6 +149,7 @@ export class DeltaBuffer {
       const ready = this.pending.slice(0, lastNewline + 1);
       this.pending = this.pending.slice(lastNewline + 1);
       this.pendingSince = this.pending.length === 0 ? -1 : now;
+      if (this.pending.length === 0) this.pendingKey = null;
       return ready;
     }
 
@@ -128,6 +157,7 @@ export class DeltaBuffer {
       const ready = this.pending;
       this.pending = '';
       this.pendingSince = -1;
+      this.pendingKey = null;
       return ready;
     }
 
@@ -143,6 +173,7 @@ export class DeltaBuffer {
     const ready = this.pending;
     this.pending = '';
     this.pendingSince = -1;
+    this.pendingKey = null;
     return ready;
   }
 
@@ -150,5 +181,6 @@ export class DeltaBuffer {
   reset(): void {
     this.pending = '';
     this.pendingSince = -1;
+    this.pendingKey = null;
   }
 }

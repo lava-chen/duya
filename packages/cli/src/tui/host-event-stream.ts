@@ -6,17 +6,43 @@ import type {
 } from '@duya/agent-protocol';
 import type { LegacyFrame } from './blocks.js';
 
-/** Project one Host event into the frame vocabulary consumed by the CLI TUI. */
+/**
+ * Project one Host event into the frame vocabulary consumed by the CLI TUI.
+ *
+ * ## Why `messageId` and `index` are carried through
+ *
+ * A text or thinking BLOCK is not the same thing as the turn it arrives in.
+ * One assistant message contains several content blocks — text, a tool call,
+ * more text — and the Host already stamps each one with `messageId` + `index`.
+ * Projecting that away left the view with nothing to tell blocks apart except
+ * arrival order, which is why the TUI used to merge every sentence of a turn
+ * into one block and let tool lines land above text written after them.
+ *
+ * So the identity is carried into `frame.data`, and `TranscriptModel` keys its
+ * blocks on it. `blocks.ts` owns the fallback for frames that carry no key.
+ */
 export function projectHostEvent(event: RunEvent): LegacyFrame | null {
   switch (event.type) {
     case 'assistant.text_delta':
-      return { type: 'text_delta', data: { content: event.delta } };
+      return {
+        type: 'text_delta',
+        data: { content: event.delta, messageId: event.messageId, index: event.index },
+      };
     case 'assistant.text_block':
-      return { type: 'text', data: { content: event.text } };
+      return {
+        type: 'text',
+        data: { content: event.text, messageId: event.messageId, index: event.index },
+      };
     case 'assistant.thinking_delta':
-      return { type: 'thinking_delta', data: { content: event.delta } };
+      return {
+        type: 'thinking_delta',
+        data: { content: event.delta, messageId: event.messageId, index: event.index },
+      };
     case 'assistant.thinking_block':
-      return { type: 'thinking', data: { content: event.thinking } };
+      return {
+        type: 'thinking',
+        data: { content: event.thinking, messageId: event.messageId, index: event.index },
+      };
     case 'assistant.status':
       return { type: 'status', data: { message: event.message } };
     case 'assistant.usage':
@@ -38,15 +64,18 @@ export function projectHostEvent(event: RunEvent): LegacyFrame | null {
         type: 'tool_use',
         data: { id: event.toolCallId, name: event.toolName, input: event.arguments },
       };
-    case 'tool.call_completed':
+    case 'tool.call_completed': {
+      const outcome = event.outcome.outcome;
       return {
         type: 'tool_result',
         data: {
           id: event.toolCallId,
           result: event.content,
-          error: event.outcome.outcome !== 'success',
+          error: outcome !== 'success' && outcome !== 'indeterminate',
+          indeterminate: outcome === 'indeterminate',
         },
       };
+    }
     case 'run.failed':
       return {
         type: 'error',

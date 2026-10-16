@@ -6,7 +6,8 @@
   "main": "src/main/index.ts",
   "dependencies": {
     "@duya/host": "0.1.0",
-    "@duya/data": "0.1.0"
+    "@duya/data": "0.1.0",
+    "@duya/command-catalog": "0.1.0"
   },
   "scripts": {
     "typecheck:main": "tsc -p tsconfig.main.json --noEmit",

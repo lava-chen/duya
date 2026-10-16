@@ -26,10 +26,7 @@ import {
 } from '@/components/icons';
 import { useFocusModeStore, selectFocusEnabled } from '@/stores/focus-mode-store';
 
-// Commands removed from the popover (handled elsewhere or deleted).
-const HIDDEN_COMMANDS = new Set(['/help', '/status', '/cost', '/new', '/clear', '/model']);
-
-// Per-command icons for built-in slash commands that remain in the popover.
+// Per-command icons for built-in slash commands that need a specific glyph.
 const COMMAND_ICONS: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
   '/recap': ClockCounterClockwiseIcon,
 };
@@ -41,6 +38,81 @@ const CATEGORY_ICONS: Record<string, React.ComponentType<{ size?: number; classN
   tools: BrainIcon,
   config: GlobeSimpleIcon,
 };
+
+// Section order and headings, matching /help's category layout so the popover
+// and the help text describe the same command set in the same order.
+const CATEGORY_ORDER = ['session', 'config', 'info', 'tools', 'exit'] as const;
+const CATEGORY_LABELS: Record<string, string> = {
+  session: 'Session',
+  config: 'Configuration',
+  info: 'Info',
+  tools: 'Tools & Skills',
+  exit: 'Exit',
+};
+const CATEGORY_LABELS_ZH: Record<string, string> = {
+  session: '会话',
+  config: '配置',
+  info: '信息',
+  tools: '工具与技能',
+  exit: '退出',
+};
+
+/** Where a skill was loaded from, for the popover's source annotation. */
+type SkillSource = 'user' | 'project' | 'custom' | 'plugin' | 'system' | 'unknown';
+
+const SKILL_SOURCE_LABELS: Record<SkillSource, { en: string; zh: string }> = {
+  user: { en: 'user', zh: '用户' },
+  project: { en: 'project', zh: '项目' },
+  custom: { en: 'custom', zh: '自定义' },
+  plugin: { en: 'plugin', zh: '插件' },
+  system: { en: 'system', zh: '系统' },
+  unknown: { en: 'unknown', zh: '未知' },
+};
+
+/**
+ * Map the loader's source vocabulary onto the narrower `PopoverItem.source`
+ * union. `user`/`custom`/`system` have no counterpart there, so they collapse
+ * to `global` rather than being force-cast into a value the type does not
+ * declare (the old cast wrote `'user'` into a field typed `'global' | ...`).
+ */
+const SKILL_POPOVER_SOURCE: Record<SkillSource, 'global' | 'project' | 'plugin' | 'installed'> = {
+  user: 'global',
+  custom: 'global',
+  system: 'global',
+  project: 'project',
+  plugin: 'plugin',
+  unknown: 'installed',
+};
+
+/**
+ * Resolve a skill's origin. `skills.list()` reports `source` directly
+ * (user | project | custom | plugin | system); when it is missing, fall back
+ * to the skill directory, which encodes the same four loading roots
+ * (see apps/desktop/src/main/ipc/skills-handlers.ts).
+ */
+function resolveSkillSource(skill: {
+  source?: unknown;
+  skillRoot?: unknown;
+}): SkillSource {
+  const reported = typeof skill.source === 'string' ? skill.source.toLowerCase() : '';
+  if (
+    reported === 'user'
+    || reported === 'project'
+    || reported === 'custom'
+    || reported === 'plugin'
+    || reported === 'system'
+  ) {
+    return reported;
+  }
+  if (reported === 'installed') return 'plugin';
+
+  const root = typeof skill.skillRoot === 'string' ? skill.skillRoot.replace(/\\/g, '/') : '';
+  if (root === '') return 'unknown';
+  if (/\/\.agent\/skills\/?$|\/\.duya\/skills\/?$/.test(root)) return 'project';
+  if (/\/skills\/?$/.test(root) && /\/plugins?\//.test(root)) return 'plugin';
+  if (/[\\/]\.system[\\/]/.test(root)) return 'system';
+  return 'user';
+}
 
 export interface UseSlashCommandsReturn {
   insertItem: (item: PopoverItem) => void;
@@ -253,40 +325,63 @@ export function useSlashCommands(opts: {
     ];
   }, [locale]);
 
-  // Built-in slash commands from registry (filtered).
-  // Only /recap is kept in the popover; other built-ins are hidden until
-  // their execution logic is wired up.
+  // Every command in the app registry is listed, ordered and described the
+  // same way `/help` prints them (lib/commands/help.ts and
+  // executors/info.ts both read this same registry).
+  //
+  // Rows are inserted into the composer rather than executed on click
+  // (`kind: 'slash_command'`): SlashCommandPopover's click handler only
+  // dispatches `/recap`, the compact row and the focus toggle, so any other
+  // `settings_action` would close the menu without running anything. Inserting
+  // routes both the mouse and the keyboard path through submit, where
+  // `resolveDirectSlash` -> `runSlashCommand` picks the executor up, and it
+  // also lets the user type arguments (`/model gpt-4`, `/goal status`).
+  // `/recap` keeps its dedicated popover sub-view.
   const registryCommands = useMemo(() => {
-    const cmds = getCommandsForPlatform('app');
     const isZh = locale === 'zh';
-    return cmds
-      .filter((cmd) => cmd.name === 'recap')
-      .map((cmd) => {
-        const slashName = `/${cmd.name}`;
-        const title = isZh
-          ? (cmd.labelZh ?? cmd.label ?? slashName)
-          : (cmd.label ?? cmd.labelZh ?? slashName);
-        const desc = isZh
-          ? (cmd.descriptionZh ?? cmd.description)
-          : cmd.description;
-        const icon = COMMAND_ICONS[slashName]
-          ?? CATEGORY_ICONS[cmd.category]
-          ?? TerminalIcon;
+    const labels = isZh ? CATEGORY_LABELS_ZH : CATEGORY_LABELS;
+    const cmds = getCommandsForPlatform('app');
+    const rank = (category: string) => {
+      const idx = CATEGORY_ORDER.indexOf(category as (typeof CATEGORY_ORDER)[number]);
+      return idx === -1 ? CATEGORY_ORDER.length : idx;
+    };
+    const sorted = [...cmds].sort((a, b) => rank(a.category) - rank(b.category));
 
-        return {
-          label: title,
-          value: slashName,
-          description: desc,
-          icon,
-          builtIn: true,
-          kind: 'settings_action' as const,
-          group: 'settings' as const,
-          category: 'command' as const,
-        };
-      });
+    return sorted.map((cmd) => {
+      const slashName = `/${cmd.name}`;
+      const title = isZh
+        ? (cmd.labelZh ?? cmd.label ?? slashName)
+        : (cmd.label ?? cmd.labelZh ?? slashName);
+      const desc = isZh
+        ? (cmd.descriptionZh ?? cmd.description)
+        : cmd.description;
+
+      // The popover renders one flat section per `group`, so the category is
+      // carried in the description line instead of a section header.
+      let description = `${labels[cmd.category] ?? cmd.category} · ${desc}`;
+      if (cmd.argsHint) description += ` ${cmd.argsHint}`;
+      if (cmd.aliases?.length) description += ` (/${cmd.aliases.join(', /')})`;
+
+      const icon = COMMAND_ICONS[slashName]
+        ?? CATEGORY_ICONS[cmd.category]
+        ?? TerminalIcon;
+
+      return {
+        label: title,
+        value: slashName,
+        description,
+        icon,
+        builtIn: true,
+        kind: (slashName === '/recap' ? 'settings_action' : 'slash_command') as
+          | 'settings_action'
+          | 'slash_command',
+        group: 'settings' as const,
+        category: 'command' as const,
+      };
+    });
   }, [locale]);
 
-  // Insert selected item (skill commands only).
+  // Insert selected item (registry commands and skills both land here).
   const insertItem = useCallback(
     (item: PopoverItem) => {
       // If triggerPos is null (opened via plus button), append at cursor or end.
@@ -372,6 +467,7 @@ export function useSlashCommands(opts: {
   // loaded skills) for typing `/`. Skills are loaded asynchronously.
   const fetchCommandItems = useCallback(async () => {
     const commandBuiltIns = [...settingsItems, ...registryCommands];
+    const isSkillSourceZh = locale === 'zh';
 
     if (!sessionId) {
       return commandBuiltIns;
@@ -396,15 +492,24 @@ export function useSlashCommands(opts: {
             .map((skill) => {
               const rawDesc = typeof skill.description === 'string' ? skill.description : '';
               const fallbackDesc = typeof skill.whenToUse === 'string' ? skill.whenToUse : (skill.category ?? '');
+              const origin = resolveSkillSource(skill);
+              const sourceLabel = isSkillSourceZh ? SKILL_SOURCE_LABELS[origin].zh : SKILL_SOURCE_LABELS[origin].en;
+              // Same shape as claude's formatDescriptionWithSource: the origin
+              // is appended so two skills with the same description are still
+              // tellable apart. `source`/`installedSource` on the row are kept
+              // for callers that render them separately.
+              const description = [rawDesc || fallbackDesc, `(${sourceLabel})`]
+                .filter((part) => part.length > 0)
+                .join(' ');
               return {
                 label: skill.name,
                 value: `/${skill.name}`,
-                description: rawDesc || fallbackDesc,
+                description,
                 kind: 'agent_skill' as const,
                 group: 'skills' as const,
                 category: 'command' as const,
-                installedSource: skill.source === 'project' ? 'agents' : 'claude',
-                source: (skill.source as 'global' | 'project' | 'plugin' | 'installed' | 'sdk') || undefined,
+                installedSource: origin === 'project' ? 'agents' : 'claude',
+                source: SKILL_POPOVER_SOURCE[origin],
                 skillRoot: typeof skill.skillRoot === 'string' ? skill.skillRoot : undefined,
               };
             });
@@ -416,7 +521,7 @@ export function useSlashCommands(opts: {
       console.error('[useSlashCommands] Error fetching skills:', error);
       return commandBuiltIns;
     }
-  }, [settingsItems, registryCommands, sessionId]);
+  }, [settingsItems, registryCommands, sessionId, locale]);
 
   // Handle input changes to detect @ and /
   const handleInputChange = useCallback(

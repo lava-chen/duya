@@ -2624,9 +2624,10 @@ export class HostSessionHttpServer {
         const decodedRunId = this.#decodePathPart(parts[0]!, res);
         if (decodedRunId === null) return;
         const body = await this.#readJson(req, res);
+        if (body === null) return;
         const reason =
-          body !== null && typeof (body as Record<string, unknown>).reason === 'string'
-            ? ((body as Record<string, unknown>).reason as string)
+          typeof body.reason === 'string'
+            ? body.reason
             : 'host_run_cancel';
         this.#sendJson(res, 200, await executionApi.cancelAgentRun(decodedRunId as RunId, reason));
         return;
@@ -2700,12 +2701,16 @@ export class HostSessionHttpServer {
           }, 15_000);
           heartbeat.unref?.();
 
-          for await (const envelope of api.watchAgentRunEvents(runId, {
+          let cursor = afterSeq ?? 0;
+          const streamQuery = {
             ...(afterSeq === undefined ? {} : { afterSeq }),
             ...(limit === undefined ? {} : { limit }),
             signal: abortController.signal,
-          })) {
-            if (abortController.signal.aborted || res.destroyed) break;
+          };
+          const writeEnvelope = async (envelope: RunEventEnvelope): Promise<boolean> => {
+            if (abortController.signal.aborted || res.destroyed) return false;
+            if (envelope.seq <= cursor) return true;
+            cursor = envelope.seq;
             const frame = `id: ${envelope.seq}\nevent: run\ndata: ${JSON.stringify(envelope)}\n\n`;
             if (!res.write(frame)) {
               await new Promise<void>((resolve) => {
@@ -2717,6 +2722,34 @@ export class HostSessionHttpServer {
                 res.once('drain', resume);
                 res.once('close', resume);
               });
+            }
+            return !abortController.signal.aborted && !res.destroyed;
+          };
+          const liveStream = this.#options.runExecutionApi?.watchLiveAgentRunEvents?.(runId, streamQuery) ?? null;
+          if (liveStream !== null && cursor === 0) {
+            // `run.started` is committed before dispatch, before the live tee
+            // begins. Seed it once so live subscribers still see the complete
+            // lifecycle from its first durable event.
+            const firstEvents = await api.readAgentRunEvents(runId, { afterSeq: 0, limit: 1 });
+            for (const envelope of firstEvents) {
+              if (!(await writeEnvelope(envelope))) break;
+            }
+          }
+          const primaryStream = liveStream ?? api.watchAgentRunEvents(runId, streamQuery);
+          for await (const envelope of primaryStream) {
+            if (!(await writeEnvelope(envelope))) break;
+          }
+          // Ephemeral events only exist in the live channel. Once it closes,
+          // continue from the last delivered sequence in the durable ledger so
+          // the committed terminal (including synthesized cancellations) is
+          // still delivered under the original persistence contract.
+          if (liveStream !== null && !abortController.signal.aborted && !res.destroyed) {
+            for await (const envelope of api.watchAgentRunEvents(runId, {
+              afterSeq: cursor,
+              ...(limit === undefined ? {} : { limit }),
+              signal: abortController.signal,
+            })) {
+              if (!(await writeEnvelope(envelope))) break;
             }
           }
         } catch (error) {

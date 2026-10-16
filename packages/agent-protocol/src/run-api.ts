@@ -179,6 +179,15 @@ export interface HostRunExecutionApiV1 {
   startAgentRun(input: StartAgentRunInput): Promise<StartAgentRunResult>;
   cancelAgentRun(runId: RunId, reason?: string): Promise<CancelAgentRunResult>;
   /**
+   * Follow in-memory events from an active Host-owned run. Ephemeral deltas
+   * are intentionally excluded from the durable event ledger and are exposed
+   * only through this optional live stream.
+   */
+  watchLiveAgentRunEvents?(
+    runId: RunId,
+    query?: AgentRunEventStreamQuery,
+  ): AsyncIterable<RunEventEnvelope> | null;
+  /**
    * Inject a message into a run that is already executing.
    *
    * ## Why this is optional

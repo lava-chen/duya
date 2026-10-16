@@ -32,7 +32,7 @@
  */
 
 import type { PopoverMode, CommandBadge, InsertResult, TriggerResult } from '@/types/slash-command';
-import { getCommandsForPlatform } from '@/lib/commands';
+import { getCommandsForPlatform, resolveCommand } from '@/lib/commands';
 
 export { InsertResult, TriggerResult };
 
@@ -138,16 +138,24 @@ export function resolveKeyAction(
 
 /**
  * Direct slash command detection — when user types "/command" in input and submits.
+ *
+ * A token is an immediate command when its name (or an alias) is in the app
+ * command registry — with or without arguments (`/model gpt-4`,
+ * `/goal status`). The dispatcher (`runSlashCommand`) re-parses the full input
+ * for args. Unknown `/tokens` stay `not_slash` so skills and free-form
+ * `/mentions` still reach the agent as plain text.
  */
 export function resolveDirectSlash(content: string): { action: 'immediate_command'; commandValue: string } | { action: 'not_slash' } {
   if (!content.startsWith('/')) return { action: 'not_slash' };
 
-  const cmd = BUILT_IN_COMMANDS.find((c) => c.value === content);
-  if (cmd) {
-    if (cmd.immediate) {
-      return { action: 'immediate_command', commandValue: content };
-    }
-    return { action: 'not_slash' };
+  const spaceIndex = content.indexOf(' ');
+  const token = spaceIndex === -1 ? content : content.slice(0, spaceIndex);
+  const name = token.slice(1).toLowerCase();
+  if (!name) return { action: 'not_slash' };
+
+  const def = resolveCommand(name);
+  if (def) {
+    return { action: 'immediate_command', commandValue: `/${def.name}` };
   }
 
   return { action: 'not_slash' };

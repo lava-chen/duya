@@ -1,10 +1,13 @@
 /**
  * Command Parser
  *
- * Parses command input and resolves to execution.
+ * Parses command input into a resolved command definition.
+ *
+ * Execution lives elsewhere: `lib/commands/executors/registry.ts` owns the
+ * runtime dispatch table (`runSlashCommand`). This file is parse-only.
  */
 
-import type { CommandContext, CommandResult, CommandDef } from './types';
+import type { CommandDef } from './types';
 import { resolveCommand } from './registry';
 
 // ============================================================================
@@ -56,76 +59,4 @@ export function extractCommandName(input: string): string | null {
   return spaceIndex === -1
     ? input.slice(1).toLowerCase()
     : input.slice(1, spaceIndex).toLowerCase();
-}
-
-// ============================================================================
-// Execute
-// ============================================================================
-
-/**
- * Default execute implementations for built-in commands.
- * These are the App-side handlers.
- */
-export const DEFAULT_EXECUTORS: Record<string, (ctx: CommandContext) => CommandResult | Promise<CommandResult>> = {
-  help: () => ({ type: 'dismiss' }),  // Handled by UI
-  status: () => ({ type: 'dismiss' }),  // Handled by UI
-  cost: () => ({ type: 'dismiss' }),  // Handled by UI
-  clear: (ctx) => {
-    ctx.clearMessages?.();
-    return { type: 'dismiss' };
-  },
-  new: async (ctx) => {
-    if (ctx.resetSession) {
-      const result = await ctx.resetSession();
-      return { type: 'session_reset', newSessionId: result.newSessionId };
-    }
-    return { type: 'dismiss' };
-  },
-  compact: (ctx) => ({ type: 'forward', prompt: '/compact' }),
-  export: (ctx) => ({ type: 'forward', prompt: '/export' }),
-  model: (ctx) => ({ type: 'forward', prompt: ctx.args.length ? `/model ${ctx.args.join(' ')}` : '/model' }),
-  review: (ctx) => ({ type: 'forward', prompt: 'Use the /review skill.' }),
-  simplify: (ctx) => ({ type: 'forward', prompt: 'Use the /simplify skill.' }),
-  doctor: (ctx) => ({ type: 'forward', prompt: 'Use the /doctor skill.' }),
-  commit: (ctx) => ({ type: 'forward', prompt: 'Use the /commit skill.' }),
-  plan: (ctx) => ({ type: 'forward', prompt: 'Use the /plan skill.' }),
-  goal: (ctx) => {
-    // /goal <objective> → hand the objective to the agent in goal mode.
-    // /goal status|pause|resume|clear → the agent resolves these against
-    // the goal tracker via goal_start/update_goal tools.
-    const sub = (ctx.args[0] ?? '').toLowerCase();
-    if (['status', 'pause', 'resume', 'clear'].includes(sub)) {
-      return { type: 'forward', prompt: `/goal ${sub}` };
-    }
-    const objective = ctx.args.join(' ');
-    if (!objective) return { type: 'forward', prompt: '/goal status' };
-    return { type: 'forward', prompt: `/goal ${objective}` };
-  },
-};
-
-/**
- * Execute a parsed command.
- */
-export async function executeCommand(
-  parsed: ParsedCommand,
-  ctx: CommandContext
-): Promise<CommandResult> {
-  const executor = parsed.command.execute ?? DEFAULT_EXECUTORS[parsed.command.name];
-  if (!executor) {
-    // Fallback: forward to agent
-    return { type: 'forward', prompt: parsed.raw };
-  }
-  return executor(ctx);
-}
-
-/**
- * Execute a command by name (looks up and executes).
- */
-export async function executeByName(
-  input: string,
-  ctx: CommandContext
-): Promise<CommandResult | null> {
-  const parsed = parseCommand(input);
-  if (!parsed) return null;
-  return executeCommand(parsed, ctx);
 }

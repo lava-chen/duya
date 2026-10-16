@@ -16,6 +16,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { spawn } from 'node:child_process';
 import readline from 'node:readline';
 import type {
   DurableTimelineEntry,
@@ -27,6 +28,7 @@ import type {
   SessionId,
 } from '@duya/agent-protocol';
 import { projectTimelinePersistenceMessages } from '@duya/agent-protocol/transcript';
+import type { PopoverItem } from '@duya/input-completion';
 import { HostSessionHttpClient } from '@duya/host/http-client';
 import { startLocalHost } from '@duya/host/local-host';
 import { resolveHostWorkerPath } from './worker-path.js';
@@ -35,6 +37,17 @@ import { TUIApp, shouldUseTui, type CompletionSources, type TuiChoice } from './
 import { HostEventStream } from './tui/host-event-stream.js';
 import { TurnQueue, type TurnOutcome } from './tui/turn-queue.js';
 import { captureConsoleToFile } from './tui/console-capture.js';
+import {
+  DEFAULT_TUI_PREFERENCES,
+  readTuiPreferences,
+  resolveEffectiveTuiPreferences,
+} from './tui/preferences.js';
+import {
+  buildSlashCompletionRows,
+  buildSlashHelpSections,
+  hasTuiSlashCommand,
+  resolveTuiSlashCommand,
+} from './tui/slash/index.js';
 
 interface RuntimeDescriptor {
   readonly apiVersion: number;
@@ -229,6 +242,116 @@ async function chatOnce(
   return terminal === 'completed' ? 0 : 1;
 }
 
+/**
+ * Commands this TUI dispatches itself, grouped with the same category names
+ * the Desktop app registry uses (apps/desktop/src/renderer/lib/commands/registry.ts),
+ * so one mental model covers both surfaces.
+ *
+ * Only commands this loop actually dispatches are listed. The registry-backed
+ * commands (`/model`, `/status`, `/usage`, `/context`, `/transcript`,
+ * `/export`) live in `./tui/slash/` and append their own groups at render
+ * time — see `buildSlashHelpSections`.
+ */
+const HELP_SECTIONS: ReadonlyArray<{ readonly title: string; readonly lines: readonly string[] }> = [
+  {
+    title: 'Session',
+    lines: [
+      '/new                    Start a new session (fresh id, empty history)',
+      '/resume [query]         Search and resume a previous session',
+      '/sessions               Alias for /resume',
+      '/clear                  Clear the transcript view',
+      '/exit, /quit, /q        Leave the chat',
+    ],
+  },
+  {
+    title: 'Queue',
+    lines: [
+      '/queue                  Show queued follow-ups (resume or clear)',
+      '/queue clear            Discard queued follow-ups',
+      '/queue resume           Resume queued follow-ups',
+    ],
+  },
+  {
+    title: 'Info',
+    lines: [
+      '/help                   Show this list',
+      '!cmd                    Run a shell command here (e.g. !git status)',
+    ],
+  },
+  {
+    title: 'Elsewhere',
+    lines: [
+      'The Desktop composer exposes more: permission modes, panel commands',
+      '(/diff /memory /mcp), user skills as slash commands, and mode toggles.',
+      'Type /help in the Desktop composer for that set.',
+    ],
+  },
+];
+
+/** Hard cap on combined stdout+stderr for a `!cmd` line, in characters. */
+const BANG_OUTPUT_LIMIT = 8000;
+/** Wall-clock cap for a `!cmd` line, in milliseconds. */
+const BANG_TIMEOUT_MS = 30_000;
+
+interface ShellResult {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly output: string;
+  readonly timedOut: boolean;
+}
+
+/**
+ * Run one shell line locally and collect its combined output.
+ *
+ * Runs against `process.cwd()`: the TUI is the user's own terminal, so `!pwd`
+ * should report the directory they launched the chat from, and a `!cd`
+ * should not silently drift away from it.
+ */
+function runShellLine(command: string): Promise<ShellResult> {
+  return new Promise((resolve) => {
+    const child = spawn(command, {
+      cwd: process.cwd(),
+      shell: true,
+      windowsHide: true,
+      env: process.env,
+    });
+
+    let output = '';
+    let truncated = false;
+    let timedOut = false;
+
+    const append = (chunk: Buffer | string): void => {
+      if (truncated) return;
+      const text = chunk.toString();
+      const room = BANG_OUTPUT_LIMIT - output.length;
+      if (text.length <= room) {
+        output += text;
+        return;
+      }
+      output += text.slice(0, Math.max(0, room)) + '\n[output truncated]';
+      truncated = true;
+      child.kill();
+    };
+
+    child.stdout?.on('data', append);
+    child.stderr?.on('data', append);
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, BANG_TIMEOUT_MS);
+
+    child.on('error', (error: Error) => {
+      clearTimeout(timer);
+      resolve({ code: null, signal: null, output: error.message, timedOut });
+    });
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal, output, timedOut });
+    });
+  });
+}
+
 async function chatInteractive(
   client: HostSessionHttpClient,
   sessionId: SessionId,
@@ -384,7 +507,7 @@ function sessionLabel(item: HostSessionListItem): string {
     `${timelineCount} messages`,
     new Date(session.updatedAt).toLocaleString(),
     session.id.slice(0, 8),
-  ].join('  路  ');
+  ].join('  ·  ');
 }
 
 function sessionCompletionItem(item: HostSessionListItem) {
@@ -403,12 +526,22 @@ export async function chatTui(
   sessionId: SessionId,
   options: ChatCommandOptions,
 ): Promise<number> {
+  let savedPreferences = DEFAULT_TUI_PREFERENCES;
+  try {
+    savedPreferences = await readTuiPreferences(client);
+  } catch {
+    // Keep environment/default behavior if the Host's local settings endpoint
+    // is unavailable, so an optional preference never prevents starting chat.
+  }
+  const effectivePreferences = resolveEffectiveTuiPreferences(savedPreferences);
+
   const initialSession = await client.get(sessionId, { includeAllSessions: true });
   if (initialSession === null) throw new Error(`session ${sessionId} does not exist on this Host`);
 
   let activeSession = initialSession;
   let activeRunId: RunId | null = null;
   let activeStream: AbortController | null = null;
+  const pendingCancellations = new Map<RunId, Promise<void>>();
   let busy = false;
   let cancellationRequested = false;
   let sessionTransition = false;
@@ -417,7 +550,7 @@ export async function chatTui(
   const finishedPromise = new Promise<void>((resolve) => { finish = resolve; });
 
   let sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
-  const slashRows = [
+  const sessionSlashRows: PopoverItem[] = [
     ['/resume', 'Resume a previous session'],
     ['/sessions', 'Browse previous sessions'],
     ['/new', 'Start a new session'],
@@ -433,6 +566,7 @@ export async function chatTui(
     category: 'command' as const,
     group: 'settings' as const,
   }));
+  const slashRows: PopoverItem[] = [...sessionSlashRows, ...buildSlashCompletionRows()];
   const completionSources: CompletionSources = {
     slash: () => slashRows,
     slashOptions: (command) => command === '/resume' || command === '/sessions' ? sessionRows : [],
@@ -455,19 +589,36 @@ export async function chatTui(
     },
   });
 
+  function requestRemoteCancellation(runId: RunId, reason: string): Promise<void> {
+    const existing = pendingCancellations.get(runId);
+    if (existing !== undefined) return existing;
+    const pending = client.cancelAgentRun(runId, reason)
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        if (!finished) tui.printError(error instanceof Error ? error.message : String(error));
+      });
+    pendingCancellations.set(runId, pending);
+    void pending.finally(() => {
+      if (pendingCancellations.get(runId) === pending) pendingCancellations.delete(runId);
+    });
+    return pending;
+  }
+
   function interrupt(): void {
     cancellationRequested = true;
     queue.pause();
+    // Stop waiting for the live SSE body immediately. Host cancellation is a
+    // separate request and can be slow when the worker/tool is wedged.
+    activeStream?.abort();
     if (activeRunId !== null) {
-      void client.cancelAgentRun(activeRunId, 'chat interrupt').catch((error: unknown) => {
-        if (!finished) tui.printError(error instanceof Error ? error.message : String(error));
-      });
+      void requestRemoteCancellation(activeRunId, 'chat interrupt');
     }
   }
 
   const tui = new TUIApp({
     title: 'duya chat',
-    inline: inlineTuiRequested(),
+    theme: effectivePreferences.theme,
+    inline: effectivePreferences.displayMode === 'inline',
     completionSources,
     echoSubmitted: false,
     canSubmit: () => !sessionTransition,
@@ -475,7 +626,7 @@ export async function chatTui(
     queuedCount: () => queue.snapshot.pending.length,
     queuePaused: () => queue.snapshot.paused,
     onRecallQueued: () => queue.takeLast(),
-    statusText: () => `${activeSession.providerId} 路 ${activeSession.model || options.model || 'default'} 路 ${activeSession.id.slice(0, 8)}`,
+    statusText: () => `${activeSession.providerId} · ${activeSession.model || options.model || 'default'} · ${activeSession.id.slice(0, 8)}`,
     isBusy: () => busy,
     onSubmit: (text) => { void handleLine(text); },
     onInterrupt: interrupt,
@@ -487,16 +638,17 @@ export async function chatTui(
     finished = true;
     queue.close();
     cancellationRequested = true;
+    activeStream?.abort();
     tui.stop();
     // Keep the Host alive until even an in-flight startup has been cancelled.
     void (async () => {
       try {
-        if (activeRunId !== null) await client.cancelAgentRun(activeRunId, 'chat exit');
+        if (activeRunId !== null) await requestRemoteCancellation(activeRunId, 'chat exit');
       } catch {
         // The owned Host is closed by the caller after this barrier settles.
       } finally {
-        activeStream?.abort();
         await queue.whenIdle();
+        await Promise.all([...pendingCancellations.values()]);
         finish();
       }
     })();
@@ -546,8 +698,27 @@ export async function chatTui(
     tui.printNotice(`Started a new session (${activeSession.id.slice(0, 8)}).`);
   }
 
+  /**
+   * Switch to another session and repaint: used by `/resume` and by `/fork`,
+   * which lands in a session this loop never saw. Extracted so both paths
+   * reload the transcript and refresh the session list the same way.
+   */
+  async function adoptSession(sessionId: string): Promise<void> {
+    const adopted = await client.get(sessionId, { includeAllSessions: true });
+    if (adopted === null) {
+      tui.printError(`Session not found: ${sessionId}`);
+      return;
+    }
+    activeSession = adopted;
+    sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
+    tui.replaceTranscript(await loadSessionMessages(client, adopted.id));
+    tui.printNotice(`Switched to "${adopted.title || 'Untitled session'}" (${adopted.id.slice(0, 8)}).`);
+  }
+
   async function runTurn(prompt: string): Promise<TurnOutcome> {
     cancellationRequested = false;
+    const streamAbort = new AbortController();
+    activeStream = streamAbort;
     const runSessionId = activeSession.id;
     // Pending drafts enter the transcript only when admitted to a Host turn.
     tui.printUser(prompt);
@@ -561,22 +732,23 @@ export async function chatTui(
         workingDirectory: process.cwd(),
       });
       if (!start.accepted) {
+        if (cancellationRequested || finished) return 'cancelled';
         if (!finished) tui.printError('Run refused: ' + start.stage + ' - ' + (start.reason ?? ''));
         return 'failed';
       }
       activeRunId = start.runId;
       // Interrupt/exit may arrive while the start request is still in flight.
       if (cancellationRequested || finished) {
-        await client.cancelAgentRun(start.runId, 'chat interrupted during startup');
+        void requestRemoteCancellation(start.runId, 'chat interrupted during startup');
+        return 'cancelled';
       }
-      if (finished) return 'cancelled';
       const stream = new HostEventStream(runSessionId, start.runId);
-      activeStream = new AbortController();
-      for await (const event of client.watchAgentRunEvents(start.runId, { signal: activeStream.signal })) {
+      for await (const event of client.watchAgentRunEvents(start.runId, { signal: streamAbort.signal })) {
         if (finished) return 'cancelled';
         const frame = stream.push(event);
         if (frame !== null) tui.push(frame);
       }
+      if (cancellationRequested || finished) return 'cancelled';
       const record = await client.getAgentRun(start.runId);
       if (record === null) {
         tui.printError('Run stream closed without a settled record. Pending drafts are paused.');
@@ -593,12 +765,14 @@ export async function chatTui(
       }
       return 'completed';
     } catch (error) {
-      if (!finished) tui.printError(error instanceof Error ? error.message : String(error));
+      if (!finished && !cancellationRequested) {
+        tui.printError(error instanceof Error ? error.message : String(error));
+      }
       return cancellationRequested ? 'cancelled' : 'failed';
     } finally {
       activeStream = null;
       activeRunId = null;
-      if (!finished) {
+      if (!finished && !cancellationRequested) {
         try {
           sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
         } catch {
@@ -640,19 +814,83 @@ export async function chatTui(
           }
         }
         else if (name === 'clear') tui.clearTranscript();
-        else if (name === 'help') tui.printNotice('/resume 路 /sessions 路 /new 路 /clear 路 /exit');
+        else if (hasTuiSlashCommand(name)) {
+          // Registry-backed commands (model/status/usage/context/transcript/
+          // export). They own their own I/O and return a structured outcome;
+          // the only thing this loop has to apply is a replaced session
+          // record so the status line and the next run use the new model.
+          const slash = resolveTuiSlashCommand(name);
+          if (slash === undefined) throw new Error(`unreachable: /${name} passed hasTuiSlashCommand`);
+          const outcome = await slash.run(
+            {
+              client,
+              session: activeSession,
+              tui,
+              busy,
+              // Actions only this loop can perform: they touch the queue, the
+              // transcript and the status line. `/fork`, `/archive`,
+              // `/delete` and `/stop` are wired here rather than inside the
+              // command module.
+              actions: {
+                interrupt,
+                adoptSession: adoptSession,
+                startFreshSession: startNewSession,
+              },
+            },
+            args,
+          );
+          if (outcome.kind === 'session_updated') {
+            activeSession = outcome.session;
+            if (!finished) tui.refresh();
+          }
+        }
+        else if (name === 'help') {
+          tui.printNotice('Available commands:');
+          for (const section of [...HELP_SECTIONS, ...buildSlashHelpSections()]) {
+            tui.printNotice(`[${section.title}]`);
+            for (const line of section.lines) tui.printNotice(`  ${line}`);
+          }
+        }
         else tui.printError(`Unknown command: /${name}`);
       } catch (error) {
         tui.printError(error instanceof Error ? error.message : String(error));
       }
       return;
     }
+    // Bang prefix: `!cmd` runs a shell command in this terminal and prints
+    // the result instead of sending it to the agent (minimax/codex parity,
+    // and the same contract the Desktop composer implements). Checked after
+    // the slash branch because `!/usr/bin/...` is a path, not a command.
+    if (text.startsWith('!')) {
+      const shellLine = text.slice(1).trim();
+      if (shellLine === '') {
+        tui.printError('Usage: !<shell command>');
+        return;
+      }
+      tui.printNotice(`$ ${shellLine}`);
+      try {
+        const result = await runShellLine(shellLine);
+        for (const line of result.output.split('\n')) tui.printNotice(line);
+        if (result.timedOut) {
+          tui.printError(`Command timed out after ${BANG_TIMEOUT_MS / 1000}s`);
+        } else if (result.code !== null && result.code !== 0) {
+          tui.printError(
+            `Exited with code ${result.code}`
+            + (result.signal === null ? '' : ` (signal ${result.signal})`),
+          );
+        }
+      } catch (error) {
+        tui.printError(error instanceof Error ? error.message : String(error));
+      }
+      return;
+    }
+
     queue.submit(line);
 
   }
 
   tui.replaceTranscript(await loadSessionMessages(client, sessionId));
-  tui.printNotice(`session ${sessionId} 路 type a message, /resume to switch sessions`);
+  tui.printNotice(`session ${sessionId} · type a message, /resume to switch sessions`);
   tui.start();
   await finishedPromise;
   return 0;
@@ -681,7 +919,7 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
   const client = new HostSessionHttpClient(host.origin, host.token ?? '');
   try {
     const health = await client.getHealth();
-    write(`${DIM}duya tui 路 Host ${host.origin} (api v${health.apiVersion})${RESET}`);
+    write(`${DIM}duya tui · Host ${host.origin} (api v${health.apiVersion})${RESET}`);
   } catch (error) {
     write(`${RED}Host failed to start: ${error instanceof Error ? error.message : String(error)}${RESET}`);
     return 1;

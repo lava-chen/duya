@@ -32,6 +32,20 @@ import {
   htmlToPlainText,
   type PluginMentionTarget,
 } from '@/lib/message-input-logic';
+import {
+  runSlashCommand,
+  setCommandAppBridge,
+  type CommandAppBridge,
+  type SlashCommandPanel,
+} from '@/lib/commands/executors';
+import { CommandResultDialog } from './CommandResultDialog';
+import { useBangMode } from '@/hooks/useBangMode';
+import { useConversationStore } from '@/stores/conversation-store';
+import { toast as showToast } from '@/components/ui/toast';
+import { openTurnReviewInSidePanel } from '@/lib/review-panel';
+import { dispatchOpenSessionPanel } from '@/lib/open-session-panel-event';
+import { InputDialog } from '@/components/ui/InputDialog';
+import type { ModelProviderSelectorHandle } from './ModelProviderSelector';
 import { ModelProviderSelector, type ModelOption, type ProviderModelGroup } from './ModelProviderSelector';
 import { BackgroundTasksIndicator } from './BackgroundTasksIndicator';
 import { ContextUsageRing, ContextUsagePanel } from './ContextUsageRing';
@@ -474,6 +488,24 @@ export function MessageInput({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const disabled = disabledProp || isSubmitting;
   const [inputValue, setInputValue] = useState('');
+  // Slash-command / bang output surface (shared CommandResultDialog).
+  const [commandResult, setCommandResult] = useState<{
+    title: string;
+    content: string;
+    mono?: boolean;
+    isError?: boolean;
+  } | null>(null);
+  // Single-line prompt bridge for executors (e.g. /rename).
+  const [promptRequest, setPromptRequest] = useState<{
+    title: string;
+    placeholder?: string;
+    initialValue?: string;
+    resolve: (value: string | null) => void;
+  } | null>(null);
+  // `!cmd` bash-prefix runner (hooks/useBangMode — desktop shell execution).
+  const { run: bangRun } = useBangMode();
+  // Imperative handle so `/model` (no args) can open the picker.
+  const modelSelectorRef = useRef<ModelProviderSelectorHandle>(null);
   // Plan 220: hidden prompt prefix that panels inject via
   // `duya:set-hidden-prompt`. Sent to the LLM ahead of `inputValue`
   // but invisible to the user — keeps the input box showing only what
@@ -1645,6 +1677,94 @@ export function MessageInput({
     return result ?? { success: false, recap: null, error: '对话回顾不可用。' };
   }, [onRecapRequest, sessionId]);
 
+  // Slash-command app bridge — executors in lib/commands/executors act on the
+  // live app through this singleton. Registered from the composer because it
+  // owns the props that back most actions; store-backed actions (new session,
+  // panels) are wired directly here. Cleared on unmount so a stale composer
+  // can't serve commands.
+  useEffect(() => {
+    const bridge: CommandAppBridge = {
+      sendPrompt: (prompt) =>
+        onSend(
+          prompt,
+          undefined,
+          null,
+          pickMessageMode(activeModesRef.current),
+          prompt,
+          activeModesRef.current.has('conductor') || undefined,
+        ),
+      getSessionSnapshot: () => ({
+        sessionId,
+        model: (modelName || '').replace(/^"|"$/g, '') || undefined,
+        effort: selectedEffort,
+        permissionMode,
+        workingDirectory,
+        messageCount: messages?.length,
+      }),
+      clearMessages: () => {
+        onClearMessages?.();
+      },
+      resetSession: async () => {
+        const oldSessionId = sessionId ?? '';
+        useConversationStore.getState().startNewChat();
+        return { oldSessionId, newSessionId: '' };
+      },
+      stopTurn: () => {
+        onStop?.();
+      },
+      compactContext: () => {
+        onCompact?.();
+      },
+      requestRecap: () => requestRecap(),
+      setSessionModel: (model, providerId) => {
+        onModelChange?.(model, providerId);
+      },
+      setEffort: (next) => {
+        setSelectedEffort(next);
+        onEffortChange?.(next);
+      },
+      setPermissionMode: (mode) => {
+        onPermissionModeChange?.(mode);
+      },
+      toggleMode: (mode) => {
+        handleToggleMode(mode);
+      },
+      openModelPicker: () => {
+        modelSelectorRef.current?.open();
+      },
+      openPanel: (panel: SlashCommandPanel) => {
+        if (panel === 'code-review') {
+          openTurnReviewInSidePanel({
+            workingDirectory: workingDirectory ?? null,
+            sessionId: sessionId ?? null,
+          });
+          return;
+        }
+        if (panel === 'sessions') {
+          if (sessionId) dispatchOpenSessionPanel(sessionId);
+          return;
+        }
+        // settings / mcp / memory / automation / skills surfaces are opened by
+        // their own pages — dispatch a best-effort intent event.
+        window.dispatchEvent(new CustomEvent(`duya:open-${panel}-panel`));
+      },
+      promptInput: ({ title, placeholder, initialValue }) =>
+        new Promise<string | null>((resolve) => {
+          setPromptRequest({ title, placeholder, initialValue, resolve });
+        }),
+      toast: (message, kind) => {
+        showToast({
+          title: message,
+          variant: kind === 'error' ? 'error' : kind === 'success' ? 'success' : 'default',
+        });
+      },
+    };
+    setCommandAppBridge(bridge);
+    return () => {
+      setCommandAppBridge(null);
+    };
+  }, [onSend, onClearMessages, sessionId, onStop, onCompact, onModelChange, onEffortChange, onPermissionModeChange, handleToggleMode, requestRecap, workingDirectory, modelName, selectedEffort, permissionMode, messages]);
+
   const handlePasteEvent = useCallback(
     async (e: React.ClipboardEvent<HTMLDivElement>) => {
       // First check for image files in clipboard
@@ -1814,33 +1934,60 @@ export function MessageInput({
       // already baked into `modelContent` via `buildContentWithChips`.
       const allAttachments = attachments.length > 0 ? attachments : undefined;
 
-      // Check for direct slash commands
+      // Bang prefix: `!cmd` runs a shell command directly (minimax/codex
+      // parity). Output renders in the shared CommandResultDialog.
+      if (trimmedValue.startsWith('!')) {
+        const bangCommand = trimmedValue.slice(1).trim();
+        if (bangCommand) {
+          setCommandResult({ title: `$ ${bangCommand}`, content: '运行中…', mono: true });
+          const bangResult = await bangRun(bangCommand, workingDirectory ?? undefined);
+          setCommandResult({
+            title: `$ ${bangCommand}`,
+            content: bangResult.ok
+              ? (bangResult.output.trim() || '(无输出)')
+              : `命令失败${bangResult.error ? `：${bangResult.error}` : ''}`,
+            mono: true,
+            isError: !bangResult.ok,
+          });
+          clearDraft();
+          setInputValue('');
+          clearAttachments();
+          return;
+        }
+      }
+
+      // Check for direct slash commands — every command in the app registry
+      // dispatches through the executor table (lib/commands/executors).
+      // Unknown /tokens fall through to the agent as plain text.
       const slashResult = resolveDirectSlash(trimmedValue);
       if (slashResult.action === 'immediate_command') {
         const cmd = slashResult.commandValue;
-        if (cmd === '/clear') {
-          onClearMessages?.();
-          clearDraft();
-          setInputValue('');
-          clearAttachments();
-          return;
-        }
-        if (cmd === '/recap') {
-          void requestRecap();
-          clearDraft();
-          setInputValue('');
-          clearAttachments();
-          return;
-        }
-        const result = onExecuteCommand?.(cmd);
-        if (result) {
-          // Show command result as a message
+        const result = await runSlashCommand(trimmedValue);
+        if (result.type === 'forward') {
+          // The executor decided the agent should handle it — send as a
+          // normal message; the composer shows the raw command text.
           const sendMode = pickMessageMode(activeModes);
           const conductorMode = activeModes.has('conductor') || undefined;
-          onSend(result.content, allAttachments, styleOpts, sendMode, undefined, conductorMode);
+          sendingRef.current = true;
+          setIsSubmitting(true);
+          setSendError(null);
+          try {
+            await onSend(result.prompt, allAttachments, styleOpts, sendMode, trimmedValue, conductorMode);
+          } catch (error) {
+            setSendError(error instanceof Error ? error.message : t('chat.pendingSaveFailed'));
+            return;
+          } finally {
+            sendingRef.current = false;
+            setIsSubmitting(false);
+          }
           // Clear message-level modes (plan-task/research) after send; keep conductor (session-level).
           setActiveModes(clearMessageModes);
+        } else if (result.type === 'text') {
+          setCommandResult({ title: cmd, content: result.content });
+        } else if (result.type === 'error') {
+          setCommandResult({ title: cmd, content: result.message, isError: true });
         }
+        // 'dismiss' / 'session_reset': the executor already did its work.
         clearDraft();
         setInputValue('');
         setHiddenPrompt('');
@@ -1878,7 +2025,7 @@ export function MessageInput({
         textareaRef.current.style.height = 'auto';
       }
     },
-    [inputValue, hiddenPrompt, disabled, isStreaming, isParsing, cliBadge, attachments, hasUnparsedDocs, buildContentWithChips, clearAttachments, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, activeModes, requestRecap, workingDirectory, t],
+    [inputValue, hiddenPrompt, disabled, isStreaming, isParsing, cliBadge, attachments, hasUnparsedDocs, buildContentWithChips, clearAttachments, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, activeModes, requestRecap, workingDirectory, t, bangRun],
   );
 
   const handleKeyDown = useCallback(
@@ -1904,6 +2051,17 @@ export function MessageInput({
             case 'settings_action':
               if (item.value === '__add_files') {
                 fileInputRef.current?.click();
+              } else if (item.value.startsWith('/')) {
+                // Registry command (e.g. /recap) — dispatch through the
+                // executor table; the result surfaces in the shared dialog.
+                void (async () => {
+                  const result = await runSlashCommand(item.value);
+                  if (result.type === 'text') {
+                    setCommandResult({ title: item.value, content: result.content });
+                  } else if (result.type === 'error') {
+                    setCommandResult({ title: item.value, content: result.message, isError: true });
+                  }
+                })();
               } else {
                 onExecuteCommand?.(item.value);
               }
@@ -2339,6 +2497,7 @@ export function MessageInput({
               {/* Model / Provider / Effort selector — next to the send button */}
               {hasProvider && providerGroups.length > 0 && (
                 <ModelProviderSelector
+                  ref={modelSelectorRef}
                   providerGroups={providerGroups}
                   selectedModelId={selectedModel}
                   onSelectModel={handleModelChange}
@@ -2408,6 +2567,33 @@ export function MessageInput({
           isCompacting={isCompacting}
         />
       )}
+
+      {/* Slash-command / `!cmd` output surface — shared dialog so info-style
+          commands don't each need their own UI. */}
+      <CommandResultDialog
+        open={commandResult !== null}
+        title={commandResult?.title ?? ''}
+        content={commandResult?.content ?? ''}
+        mono={commandResult?.mono}
+        isError={commandResult?.isError}
+        onClose={() => setCommandResult(null)}
+      />
+
+      {/* Single-line prompt bridge for executors (e.g. /rename). */}
+      <InputDialog
+        isOpen={promptRequest !== null}
+        title={promptRequest?.title ?? ''}
+        placeholder={promptRequest?.placeholder}
+        defaultValue={promptRequest?.initialValue}
+        onConfirm={(value) => {
+          promptRequest?.resolve(value);
+          setPromptRequest(null);
+        }}
+        onCancel={() => {
+          promptRequest?.resolve(null);
+          setPromptRequest(null);
+        }}
+      />
 
     </div>
   );

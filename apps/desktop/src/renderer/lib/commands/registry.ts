@@ -1,195 +1,61 @@
 /**
  * Command Registry
  *
- * Central registry for all slash commands. Single source of truth for:
- * - CLI (processed in App)
- * - Gateway (processed in platform adapters)
+ * The Desktop's view of `@duya/command-catalog`. Definitions live in that
+ * package so the CLI TUI and this composer cannot drift apart; this file maps
+ * a catalog spec onto the renderer's `CommandDef` and answers lookups.
+ *
+ * Behaviour is NOT shared, and deliberately so: the Desktop's executors act on
+ * a renderer-side `CommandAppBridge` (`executors/`), while the CLI's act over
+ * the Host HTTP API. codex splits the same way — `slash_command.rs` holds the
+ * definition and its `description()`, `slash_dispatch.rs` holds the behavior.
  *
  * Usage:
  *   import { resolveCommand, getCommandsForPlatform, COMMAND_REGISTRY } from '@/lib/commands/registry';
  */
 
-import type { CommandDef, CommandPlatform, CommandContext, CommandResult } from './types';
+import { COMMAND_SPECS, findSpec, type CommandSpec } from '@duya/command-catalog';
+
+import type { CommandDef, CommandPlatform } from './types';
 
 // ============================================================================
-// Built-in Commands
+// Catalog -> CommandDef
 // ============================================================================
 
-const BUILT_IN_COMMANDS: CommandDef[] = [
-  // ========================================================================
-  // Session
-  // ========================================================================
-  {
-    name: 'new',
-    aliases: ['reset'],
-    label: 'New session',
-    labelZh: '新建会话',
-    description: 'Start a new session',
-    descriptionZh: '开始一个新会话',
-    category: 'session',
-    argsHint: '',
-    platforms: ['app', 'gateway'],
-    requiresSession: false,
-  },
-  {
-    name: 'clear',
-    label: 'Clear conversation',
-    labelZh: '清空对话',
-    description: 'Clear conversation history',
-    descriptionZh: '清空当前会话的所有消息',
-    category: 'session',
-    platforms: ['app'],
-    requiresSession: false,
-  },
-  {
-    name: 'compact',
-    label: 'Compact context',
-    labelZh: '压缩上下文',
-    description: 'Compress conversation context to save tokens',
-    descriptionZh: '压缩对话上下文以节省 token',
-    category: 'session',
-    platforms: ['app'],
-    requiresSession: true,
-  },
-  {
-    name: 'export',
-    label: 'Export conversation',
-    labelZh: '导出对话',
-    description: 'Export conversation to markdown/json/html',
-    descriptionZh: '将会话导出为 markdown/json/html',
-    category: 'session',
-    argsHint: '[format]',
-    platforms: ['app'],
-    requiresSession: true,
-  },
+/**
+ * Project a catalog spec onto the renderer's definition.
+ *
+ * Deliberately NOT filtered by session or busy state: this list feeds the
+ * popup, `/help` and lookup, and hiding a command here would turn "not
+ * advertised" into "unknown command" for anyone who types it. The catalog's
+ * `specsForSurface` exists for surfaces that genuinely want a filtered menu;
+ * this one does not, because the Desktop already decided what to show.
+ */
+function toCommandDef(spec: CommandSpec): CommandDef {
+  return {
+    name: spec.name,
+    aliases: spec.aliases === undefined ? undefined : [...spec.aliases],
+    label: spec.label,
+    labelZh: spec.labelZh,
+    description: spec.description,
+    descriptionZh: spec.descriptionZh,
+    category: spec.category,
+    argsHint: spec.argsHint,
+    subcommands: spec.subcommands === undefined ? undefined : [...spec.subcommands],
+    // Gateway is a Desktop-side transport rather than a front end, so the
+    // catalog carries it as a flag on the command instead of a surface.
+    platforms: spec.gateway === true ? ['app', 'gateway'] : ['app'],
+    requiresSession: spec.requiresSession === true,
+  };
+}
 
-  // ========================================================================
-  // Info
-  // ========================================================================
-  {
-    name: 'help',
-    aliases: ['?'],
-    label: 'Help',
-    labelZh: '查看帮助',
-    description: 'Show available commands',
-    descriptionZh: '显示可用的命令列表',
-    category: 'info',
-    platforms: ['app', 'gateway'],
-    requiresSession: false,
-  },
-  {
-    name: 'status',
-    label: 'Session status',
-    labelZh: '会话状态',
-    description: 'Show session info',
-    descriptionZh: '查看当前会话信息',
-    category: 'info',
-    platforms: ['app', 'gateway'],
-    requiresSession: false,
-  },
-  {
-    name: 'cost',
-    label: 'Token usage',
-    labelZh: '用量统计',
-    description: 'Show token usage statistics and estimated costs',
-    descriptionZh: '查看 token 用量与费用估算',
-    category: 'info',
-    platforms: ['app'],
-    requiresSession: true,
-  },
-  {
-    name: 'recap',
-    aliases: ['summary', 'catchup'],
-    label: 'Recap conversation',
-    labelZh: '回顾对话',
-    description: 'Show a recap of the current conversation',
-    descriptionZh: '生成当前对话的回顾摘要',
-    category: 'info',
-    platforms: ['app'],
-    requiresSession: true,
-  },
-
-  // ========================================================================
-  // Config
-  // ========================================================================
-  {
-    name: 'model',
-    label: 'Switch model',
-    labelZh: '切换模型',
-    description: 'Switch model for this session',
-    descriptionZh: '为当前会话切换模型',
-    category: 'config',
-    argsHint: '[model]',
-    platforms: ['app'],
-    requiresSession: false,
-  },
-
-  // ========================================================================
-  // Tools & Skills
-  // ========================================================================
-  {
-    name: 'review',
-    label: 'Review code',
-    labelZh: '代码审查',
-    description: 'Review code changes with detailed feedback',
-    descriptionZh: '审查代码变更并给出详细反馈',
-    category: 'tools',
-    platforms: ['app'],
-    requiresSession: true,
-  },
-  {
-    name: 'simplify',
-    label: 'Simplify code',
-    labelZh: '简化代码',
-    description: 'Simplify and refactor complex code',
-    descriptionZh: '简化并重构复杂的代码',
-    category: 'tools',
-    platforms: ['app'],
-    requiresSession: true,
-  },
-  {
-    name: 'doctor',
-    label: 'Diagnose project',
-    labelZh: '项目诊断',
-    description: 'Diagnose project issues and suggest fixes',
-    descriptionZh: '诊断项目问题并给出修复建议',
-    category: 'tools',
-    platforms: ['app'],
-    requiresSession: true,
-  },
-  {
-    name: 'commit',
-    label: 'Generate commit',
-    labelZh: '生成提交',
-    description: 'Generate smart Git commit messages',
-    descriptionZh: '智能生成 Git 提交信息',
-    category: 'tools',
-    platforms: ['app'],
-    requiresSession: true,
-  },
-  {
-    name: 'plan',
-    label: 'Enter plan mode',
-    labelZh: '进入规划模式',
-    description: 'Enter planning mode for complex tasks',
-    descriptionZh: '为复杂任务进入规划模式',
-    category: 'tools',
-    platforms: ['app'],
-    requiresSession: true,
-  },
-  {
-    name: 'goal',
-    label: 'Goal mode',
-    labelZh: '目标模式',
-    description: 'Track a long-running goal across multiple rounds: /goal <objective> | status | pause | resume | clear',
-    descriptionZh: '多轮自主目标追踪：/goal <目标> | status | pause | resume | clear',
-    category: 'tools',
-    argsHint: '<objective|status|pause|resume|clear>',
-    subcommands: ['status', 'pause', 'resume', 'clear'],
-    platforms: ['app'],
-    requiresSession: true,
-  },
-];
+/**
+ * Desktop-advertised commands, in the catalog's declared order — which is the
+ * popup's presentation order.
+ */
+const BUILT_IN_COMMANDS: CommandDef[] = COMMAND_SPECS.filter((spec) =>
+  spec.surfaces.includes('desktop'),
+).map(toCommandDef);
 
 // ============================================================================
 // Export
@@ -204,12 +70,19 @@ export const COMMAND_REGISTRY: readonly CommandDef[] = BUILT_IN_COMMANDS;
 /**
  * Resolve a command name or alias to its CommandDef.
  * Accepts names with or without leading slash.
+ *
+ * Falls back to the catalog so a command the popup does not list still resolves
+ * and runs its executor, instead of being forwarded to the model as prose.
  */
 export function resolveCommand(input: string): CommandDef | null {
-  const name = input.toLowerCase().replace(/^\//, '');
-  return COMMAND_REGISTRY.find(
+  const name = input.toLowerCase().replace(/^\//, '').trim();
+  const local = COMMAND_REGISTRY.find(
     (cmd) => cmd.name === name || cmd.aliases?.includes(name)
-  ) ?? null;
+  );
+  if (local) return local;
+  const spec = findSpec(name);
+  if (spec === undefined) return null;
+  return toCommandDef(spec);
 }
 
 /**
@@ -237,7 +110,7 @@ export function getCommandNamesForPlatform(platform: CommandPlatform): ReadonlyS
  * Check if a command is known for a platform.
  */
 export function isKnownCommand(input: string, platform: CommandPlatform): boolean {
-  const name = input.toLowerCase().replace(/^\//, '');
+  const name = input.toLowerCase().replace(/^\//, '').trim();
   return getCommandNamesForPlatform(platform).has(name);
 }
 

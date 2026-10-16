@@ -5,6 +5,7 @@
  */
 
 import type { Message } from '@/types';
+import type { CommandAppBridge } from './executors/bridge';
 
 // ============================================================================
 // Platform
@@ -66,6 +67,8 @@ export interface CommandContext {
   sessionId?: string;
   messages?: Message[];
   args: string[];
+  /** The raw command token as typed, e.g. "/deep-research" (alias-resolved name is on `args`). */
+  raw: string;
   platform?: string;
   platformChatId?: string;
   /** Clear all messages in the session */
@@ -74,6 +77,12 @@ export interface CommandContext {
   resetSession?: () => Promise<{ oldSessionId: string; newSessionId: string }>;
   /** Send reply via adapter */
   sendReply?: (text: string) => Promise<void>;
+  /**
+   * Live app bridge, injected by `runSlashCommand`. Executors act on the
+   * desktop app exclusively through this (never import components/stores
+   * that need React context). Absent in gateway/non-desktop contexts.
+   */
+  app?: CommandAppBridge;
 }
 
 export type CommandResult =

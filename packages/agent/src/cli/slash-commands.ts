@@ -299,6 +299,34 @@ export function getGatewayHelpLines(platform: SlashCommandContext['platform'] = 
   return lines;
 }
 
+/** Index of the newest user message, or -1 when the session has none. */
+function lastUserMessageIndex(messages: readonly { role: string }[]): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role === 'user') return i;
+  }
+  return -1;
+}
+
+/** One-line preview of a message body, for transcript echo. */
+function messagePreview(message: { content: unknown }, limit = 160): string {
+  const raw = typeof message.content === 'string'
+    ? message.content
+    : JSON.stringify(message.content);
+  const flat = (raw ?? '').replace(/\s+/g, ' ').trim();
+  return flat.length > limit ? `${flat.slice(0, limit)}...` : flat;
+}
+
+/** Print one CLI-formatted line. */
+function say(text: string, tone: 'info' | 'ok' | 'warn' | 'error' = 'info'): void {
+  const tint = {
+    info: Colors.CYAN,
+    ok: Colors.GREEN,
+    warn: Colors.YELLOW,
+    error: Colors.RED,
+  }[tone];
+  console.log(color(text, tint));
+}
+
 // Initialize default slash commands
 export function initSlashCommands(): void {
   // Goal mode (plan 552): deterministic control verbs; `/goal <objective>`
@@ -558,13 +586,33 @@ export function initSlashCommands(): void {
     description: 'Retry the last message (resend to agent)',
     category: 'Session',
     handler: async (_args, context) => {
-      if (!context?.agent) {
-        console.log(color('[ERR] No agent context available', Colors.RED));
+      const agent = context?.agent;
+      if (!agent) {
+        say('[ERR] No agent context available', 'error');
         return true;
       }
-      // Note: retry logic would need to be implemented by the caller
-      // This command just signals the intent
-      console.log(color('[INFO] Retry requested - implement retry logic in caller', Colors.YELLOW));
+      const messages = agent.getMessages();
+      const userIndex = lastUserMessageIndex(messages);
+      if (userIndex < 0) {
+        say('[INFO] Nothing to retry - this session has no user message yet', 'warn');
+        return true;
+      }
+      const prompt = messages[userIndex];
+      const dropped = messages.length - 1 - userIndex;
+      if (dropped > 0) {
+        // Real state change: the assistant/tool tail of that turn is gone,
+        // so the model re-answers the prompt instead of building on it.
+        agent.setMessages(messages.slice(0, userIndex + 1));
+      }
+      say(`[OK] Dropped ${dropped} message(s) after the last prompt`, 'ok');
+      say(`  Prompt: ${messagePreview(prompt)}`, 'info');
+      say('  Send it again to re-run the turn.', 'info');
+      // TODO: SlashCommandContext has no send primitive - the run is owned by
+      // the caller (packages/agent/src/cli/index.ts uses the HeadlessRunHost,
+      // packages/agent/src/cli/tui-session.ts uses runTurn). Adding
+      // `sendPrompt?(prompt: string): Promise<void>` to SlashCommandContext and
+      // wiring both callers would let /retry dispatch the turn itself instead
+      // of only re-arming the prompt.
       return true;
     },
   });
@@ -574,12 +622,21 @@ export function initSlashCommands(): void {
     description: 'Remove the last user/assistant exchange',
     category: 'Session',
     handler: async (_args, context) => {
-      if (!context?.agent) {
-        console.log(color('[ERR] No agent context available', Colors.RED));
+      const agent = context?.agent;
+      if (!agent) {
+        say('[ERR] No agent context available', 'error');
         return true;
       }
-      // Note: undo logic would need to be implemented by the caller
-      console.log(color('[INFO] Undo requested - implement undo logic in caller', Colors.YELLOW));
+      const messages = agent.getMessages();
+      const userIndex = lastUserMessageIndex(messages);
+      if (userIndex < 0) {
+        say('[INFO] Nothing to undo - this session has no user message yet', 'warn');
+        return true;
+      }
+      const removed = messages.length - userIndex;
+      agent.setMessages(messages.slice(0, userIndex));
+      say(`[OK] Undid the last exchange (${removed} message(s) removed)`, 'ok');
+      say(`  ${userIndex} message(s) remain`, 'info');
       return true;
     },
   });
@@ -590,12 +647,26 @@ export function initSlashCommands(): void {
     category: 'Session',
     argsHint: '[name]',
     handler: async (args, context) => {
-      if (!args) {
-        console.log(color('[INFO] Usage: /title <session name>', Colors.CYAN));
+      const sessionId = context?.sessionId;
+      if (!sessionId) {
+        say('[ERR] No session id in the command context', 'error');
         return true;
       }
-      // Note: title setting would need to be implemented by the caller
-      console.log(color(`[OK] Session title set to: ${args}`, Colors.GREEN));
+      const { getSession, updateSession } = await import('../session/db.js');
+      const title = args.trim();
+      if (!title) {
+        const current = getSession(sessionId);
+        say(`[INFO] Current title: ${current?.title || '(untitled)'}`, 'info');
+        say('  Usage: /title <name>', 'info');
+        return true;
+      }
+      const updated = updateSession(sessionId, { title });
+      if (updated === null) {
+        say('[WARN] Standalone CLI mode does not persist session metadata.', 'warn');
+        say('  Run duya through a Host (duya tui / duya serve) to persist it.', 'warn');
+        return true;
+      }
+      say(`[OK] Session title set to: ${updated.title ?? title}`, 'ok');
       return true;
     },
   });
@@ -605,11 +676,27 @@ export function initSlashCommands(): void {
     description: 'Kill all running background processes',
     category: 'Session',
     handler: async (_args, context) => {
-      if (context?.platform === 'cli') {
-        console.log(color('[OK] All background processes stopped', Colors.GREEN));
-      } else {
-        console.log('All background processes stopped');
+      const agent = context?.agent;
+      if (!agent) {
+        say('[ERR] No agent context available', 'error');
+        return true;
       }
+      const { backgroundAgentLifecycle } = await import(
+        '@duya/host/worker-subagents/background-lifecycle',
+      );
+      const live = backgroundAgentLifecycle
+        .getAll()
+        .filter((task) => task.status === 'pending' || task.status === 'running');
+      let killed = 0;
+      for (const task of live) {
+        if (backgroundAgentLifecycle.tryKill(task.taskId, 'user_kill') !== 'not_found') {
+          killed += 1;
+        }
+      }
+      // Abort the live turn last: a tool batch may be mid-flight, and killing
+      // its sub-agents first is what makes the abort unwind cleanly.
+      agent.interrupt();
+      say(`[OK] Stopped the live turn and ${killed} background task(s)`, 'ok');
       return true;
     },
   });
@@ -620,40 +707,33 @@ export function initSlashCommands(): void {
     category: 'Session',
     argsHint: '[focus topic]',
     handler: async (args, context) => {
-      const platform = context?.platform || 'cli';
-      const focus = args || 'general';
-
-      if (!context?.agent) {
-        const msg = '[ERR] No agent context available';
-        if (platform === 'cli') {
-          console.log(color(msg, Colors.RED));
-        } else {
-          console.log(msg);
-        }
+      const agent = context?.agent;
+      if (!agent) {
+        say('[ERR] No agent context available', 'error');
         return true;
       }
-
+      const before = agent.getMessages().length;
+      if (before === 0) {
+        say('[INFO] Nothing to compress - the conversation is empty', 'warn');
+        return true;
+      }
+      const focus = args.trim();
       try {
-        const messages = context.agent.getMessages();
-        const beforeCount = messages.length;
-
-        // TODO: Implement actual context compression logic
-        // For now, show a placeholder message
-        if (platform === 'cli') {
-          console.log(color(`[OK] Context compression requested (focus: ${focus})`, Colors.GREEN));
-          console.log(color(`  Messages before: ${beforeCount}`, Colors.DIM));
-          console.log(color('  Note: Full compression logic to be implemented', Colors.YELLOW));
-        } else {
-          console.log(`Context compression requested (focus: ${focus})`);
-          console.log(`Messages before: ${beforeCount}`);
+        const result = await agent.compact(
+          focus === ''
+            ? { trigger: 'manual' }
+            : { trigger: 'manual', customInstructions: focus },
+        );
+        if (result.strategy === 'none') {
+          say('[INFO] Nothing was compacted - the transcript is already short', 'warn');
+          return true;
         }
-      } catch (err) {
-        const errorMsg = `Failed to compress context: ${err instanceof Error ? err.message : String(err)}`;
-        if (platform === 'cli') {
-          console.error(color(`[ERR] ${errorMsg}`, Colors.RED));
-        } else {
-          console.log(`Error: ${errorMsg}`);
-        }
+        say(`[OK] Compacted with strategy '${result.strategy}'`, 'ok');
+        if (focus !== '') say(`  Focus: ${focus}`, 'info');
+        say(`  Messages: ${before} -> ${agent.getMessages().length} (${result.removedCount} summarised)`, 'info');
+        say(`  Tokens removed: ${result.tokensRemoved} (${result.tokensRetained} retained)`, 'info');
+      } catch (error) {
+        say(`[ERR] Compaction failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
       }
       return true;
     },
@@ -665,17 +745,28 @@ export function initSlashCommands(): void {
     category: 'Session',
     aliases: ['tasks'],
     handler: async (_args, context) => {
-      const platform = context?.platform || 'cli';
+      const { getAgentDefinitions } = await import(
+        '@duya/host/worker-subagents/built-in-agents',
+      );
+      const { backgroundAgentLifecycle } = await import(
+        '@duya/host/worker-subagents/background-lifecycle',
+      );
 
-      if (platform === 'cli') {
-        console.log(color('\n[Active Agents & Tasks]', Colors.CYAN));
-        console.log(color('  No active background agents', Colors.DIM));
-        console.log(color('  No running tasks', Colors.DIM));
-        console.log();
-      } else {
-        console.log('Active Agents & Tasks:');
-        console.log('  No active background agents');
-        console.log('  No running tasks');
+      const definitions = getAgentDefinitions();
+      say(`\n[Sub-Agents] (${definitions.length} available)`, 'info');
+      for (const definition of definitions) {
+        say(`  ${definition.agentType.padEnd(16)} ${messagePreview({ content: definition.whenToUse }, 88)}`, 'info');
+      }
+
+      const tasks = backgroundAgentLifecycle.getAll();
+      if (tasks.length === 0) {
+        say('\n[Running Tasks] none', 'info');
+        return true;
+      }
+      say(`\n[Running Tasks] (${tasks.length})`, 'info');
+      for (const task of tasks) {
+        const age = Math.max(0, Math.round((Date.now() - task.startedAt) / 1000));
+        say(`  ${task.status.padEnd(9)} ${task.agentType} #${task.taskId.slice(0, 8)} (${age}s) ${task.description}`, 'info');
       }
       return true;
     },
@@ -687,32 +778,36 @@ export function initSlashCommands(): void {
     category: 'Session',
     argsHint: '[description|open]',
     handler: async (args, context) => {
-      const platform = context?.platform || 'cli';
-      const arg = args.trim().toLowerCase();
+      const { modeModifierRegistry } = await import(
+        '@duya/host/worker-modes/modifiers/registry',
+      );
+      const planning = modeModifierRegistry
+        .list()
+        .filter((mode) => mode.id.includes('plan'))
+        .map((mode) => `${mode.id} (${mode.kind}-scoped)`);
 
-      if (!arg || arg === 'open') {
-        // View current plan or show usage
-        if (platform === 'cli') {
-          console.log(color('\n[Plan]', Colors.CYAN));
-          console.log(color('  No active plan', Colors.DIM));
-          console.log(color('  Usage: /plan <description> - Create a new plan', Colors.DIM));
-          console.log(color('         /plan open - Open plan in editor (future)', Colors.DIM));
-          console.log();
-        } else {
-          console.log('Plan:');
-          console.log('  No active plan');
-          console.log('  Usage: /plan <description>');
-        }
+      if (planning.length === 0) {
+        say('[WARN] No planning mode is registered in this build.', 'warn');
         return true;
       }
+      say('\n[Plan]', 'info');
+      for (const mode of planning) say(`  Mode: ${mode}`, 'info');
 
-      // Create a new plan
-      if (platform === 'cli') {
-        console.log(color(`[OK] Plan created: ${args}`, Colors.GREEN));
-        console.log(color('  Note: Plan execution to be implemented', Colors.YELLOW));
+      // duya has no stored plan artefact to read back: planning is a mode
+      // overlay plus a plan the agent writes into the transcript, so /plan
+      // reports the modes it can reach and hands the request to the agent
+      // rather than pretending to persist a document.
+      const description = args.trim();
+      if (description !== '' && description !== 'open') {
+        say(`\n  Send this to the agent: Plan ${description}`, 'info');
       } else {
-        console.log(`Plan created: ${args}`);
+        say('  Usage: /plan <description> - the agent drafts the plan in the transcript', 'info');
+        say('  Enable the plan mode from the Desktop composer (@ > Plan Mode) to gate edits.', 'info');
       }
+      // TODO: SlashCommandContext cannot switch a session mode - WorkerSession
+      // exposes the mode registry but no setter, and the TUI/REPL own mode
+      // state. A `setMode?(id: string)` bridge on SlashCommandContext would let
+      // /plan activate `plan-task` and forward the description in one step.
       return true;
     },
   });
@@ -970,11 +1065,31 @@ export function initSlashCommands(): void {
     description: 'Show token usage and rate limits',
     category: 'Info',
     handler: async (_args, context) => {
-      if (context?.platform === 'cli') {
-        console.log(color('[INFO] Token usage tracking coming soon', Colors.YELLOW));
-      } else {
-        console.log('Token usage tracking coming soon');
+      const agent = context?.agent;
+      if (!agent) {
+        say('[ERR] No agent context available', 'error');
+        return true;
       }
+      const { seedTokenUsageFromHistory } = await import(
+        '@duya/agent-core/usage/seed-token-usage',
+      );
+      const messages = agent.getMessages();
+      const totals = seedTokenUsageFromHistory(messages);
+      const grand = totals.totalInput + totals.totalOutput;
+      say('\n[Token Usage]', 'info');
+      if (grand === 0) {
+        say('  No usage recorded yet - run a turn first.', 'warn');
+        return true;
+      }
+      say(`  Input:       ${totals.totalInput}`, 'info');
+      say(`  Output:      ${totals.totalOutput}`, 'info');
+      say(`  Cache hit:   ${totals.totalCacheHit}`, 'info');
+      say(`  Cache write: ${totals.totalCacheCreation}`, 'info');
+      say(`  Total:       ${grand}`, 'info');
+      say(`  Messages:    ${messages.length}`, 'info');
+      say(`  Model:       ${agent.model || process.env.ANTHROPIC_MODEL || 'default'}`, 'info');
+      // TODO: rate limits (per-provider quota headers) are not exposed to the
+      // session runtime, so this reports consumption only.
       return true;
     },
   });

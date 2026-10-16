@@ -12,7 +12,7 @@
 
 'use client';
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useImperativeHandle } from 'react';
 import { createPortal } from 'react-dom';
 import {
   CaretDownIcon,
@@ -87,6 +87,11 @@ interface ModelProviderSelectorProps {
 
 type FlyoutView = 'models' | 'effort';
 
+/** Imperative handle so `/model` (no args) can open the picker programmatically. */
+export interface ModelProviderSelectorHandle {
+  open: () => void;
+}
+
 interface FlyoutState {
   view: FlyoutView;
   providerId?: string;
@@ -107,7 +112,7 @@ function parsePrefixed(id: string): { providerName: string | null; modelId: stri
 
 const FLYOUT_WIDTH = 216;
 
-export function ModelProviderSelector({
+export const ModelProviderSelector = React.forwardRef<ModelProviderSelectorHandle, ModelProviderSelectorProps>(function ModelProviderSelector({
   providerGroups,
   selectedModelId,
   onSelectModel,
@@ -120,10 +125,11 @@ export function ModelProviderSelector({
   clearOption,
   showManageProviders = true,
   placement = 'top',
-}: ModelProviderSelectorProps) {
+}, ref) {
   const { t } = useTranslation();
   const { setCurrentView, setSettingsTab } = useConversationStore();
   const [open, setOpen] = useState(false);
+  useImperativeHandle(ref, () => ({ open: () => setOpen(true) }), []);
   const [flyout, setFlyout] = useState<FlyoutState | null>(null);
   // Portal placement (fixed coords of the root panel), computed at open time.
   const [portalCoords, setPortalCoords] = useState<
@@ -588,4 +594,4 @@ export function ModelProviderSelector({
         )}
     </div>
   );
-}
+});

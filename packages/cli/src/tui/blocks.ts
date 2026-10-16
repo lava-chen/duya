@@ -118,7 +118,7 @@ export interface ToolBlock {
   name: string;
   preview: string;
   result?: string;
-  status: 'running' | 'ok' | 'error';
+  status: 'running' | 'ok' | 'error' | 'unknown';
 }
 
 export interface ErrorBlock {
@@ -244,9 +244,32 @@ export function resetBlockIds(): void {
   sequence = 0;
 }
 
+/**
+ * The identity of one content block within an assistant message.
+ *
+ * `assistant.text_block` / `thinking_block` and their delta siblings carry
+ * `messageId` + `index`, so two blocks of the same turn never collide and the
+ * same block never splits. Keying on this — rather than on arrival order — is
+ * what lets the transcript hold `text / tool / text` as THREE blocks in the
+ * order they arrived.
+ */
+export function blockKey(messageId: string, index: number): string {
+  return `${messageId}#${index}`;
+}
+
+/** Read the block key off a frame payload, or `null` when it carries none. */
+export function readBlockKey(payload: Record<string, unknown>): string | null {
+  const messageId = asString(payload['messageId']);
+  if (messageId === '') return null;
+  const index = payload['index'];
+  return blockKey(messageId, typeof index === 'number' && Number.isFinite(index) ? index : 0);
+}
+
 export class TranscriptModel {
   private readonly items: Block[] = [];
   private readonly toolsByCallId = new Map<string, ToolBlock>();
+  private readonly assistantsByKey = new Map<string, AssistantBlock>();
+  private readonly thinkingByKey = new Map<string, ThinkingBlock>();
   private assistant: AssistantBlock | null = null;
   private thinking: ThinkingBlock | null = null;
 
@@ -275,16 +298,26 @@ export class TranscriptModel {
   }
 
   /**
-   * Append a streamed text fragment to the live assistant block.
+   * Append a streamed text fragment to its block.
    *
-   * Creates the block on first use. The SAME object is returned every time so
-   * the caller can address one line rather than rebuilding it.
+   * With a `key`, the fragment lands on the block that key already owns, so
+   * deltas belonging to different content blocks cannot merge. Without one
+   * (the plain REPL, older fixtures) it lands on the live block, which is the
+   * pre-identity behaviour and stays correct for a single-block message.
    */
-  appendTextDelta(text: string): AssistantBlock | null {
+  appendTextDelta(text: string, key: string | null = null): AssistantBlock | null {
     if (text.length === 0) return this.assistant;
+    if (key !== null) {
+      const existing = this.assistantsByKey.get(key);
+      if (existing !== undefined) {
+        existing.text += text;
+        return existing;
+      }
+    }
     if (this.assistant === null) {
       this.assistant = { kind: 'assistant', id: nextId('assistant'), text: '', finalized: false };
       this.items.push(this.assistant);
+      if (key !== null) this.assistantsByKey.set(key, this.assistant);
     }
     this.assistant.text += text;
     return this.assistant;
@@ -296,38 +329,70 @@ export class TranscriptModel {
    * REPLACES rather than appends: the block frame repeats content already
    * delivered as deltas. See the module comment.
    */
-  finalizeText(content: string): AssistantBlock | null {
-    if (this.assistant === null) {
+  finalizeText(content: string, key: string | null = null): AssistantBlock | null {
+    const block = key === null ? this.assistant : this.assistantsByKey.get(key) ?? null;
+    if (block === null) {
       if (content.length === 0) return null;
       this.assistant = { kind: 'assistant', id: nextId('assistant'), text: '', finalized: false };
       this.items.push(this.assistant);
+      if (key !== null) this.assistantsByKey.set(key, this.assistant);
     }
-    this.assistant.text = content;
-    this.assistant.finalized = true;
-    return this.assistant;
+    const target = block ?? this.assistant;
+    if (target === null) return null;
+    target.text = content;
+    target.finalized = true;
+    return target;
   }
 
-  /** Append a streamed thinking fragment to the live thinking block. */
-  appendThinkingDelta(text: string): ThinkingBlock | null {
+  /** Append a streamed thinking fragment to its block. Keyed as above. */
+  appendThinkingDelta(text: string, key: string | null = null): ThinkingBlock | null {
     if (text.length === 0) return this.thinking;
+    if (key !== null) {
+      const existing = this.thinkingByKey.get(key);
+      if (existing !== undefined) {
+        existing.text += text;
+        return existing;
+      }
+    }
     if (this.thinking === null) {
       this.thinking = { kind: 'thinking', id: nextId('thinking'), text: '', finalized: false };
       this.items.push(this.thinking);
+      if (key !== null) this.thinkingByKey.set(key, this.thinking);
     }
     this.thinking.text += text;
     return this.thinking;
   }
 
-  /** Apply authoritative thinking content and mark the block final. */
-  finalizeThinking(content: string): ThinkingBlock | null {
-    if (this.thinking === null) {
+  /** Apply authoritative thinking content and mark the block final. Keyed as above. */
+  finalizeThinking(content: string, key: string | null = null): ThinkingBlock | null {
+    const block = key === null ? this.thinking : this.thinkingByKey.get(key) ?? null;
+    if (block === null) {
       if (content.length === 0) return null;
       this.thinking = { kind: 'thinking', id: nextId('thinking'), text: '', finalized: false };
       this.items.push(this.thinking);
+      if (key !== null) this.thinkingByKey.set(key, this.thinking);
     }
-    this.thinking.text = content;
-    this.thinking.finalized = true;
-    return this.thinking;
+    const target = block ?? this.thinking;
+    if (target === null) return null;
+    target.text = content;
+    target.finalized = true;
+    return target;
+  }
+
+  /**
+   * Seal whatever is still open because a tool call started.
+   *
+   * A tool call ENDS the content block that preceded it: no more deltas will
+   * ever arrive for that text. Leaving the pointer live is what made every
+   * later sentence of the turn append into a block sitting ABOVE the tool
+   * line. Marking it final is also what tells the renderer the block will stop
+   * growing, so it may be laid out in full.
+   */
+  closeOpenContent(): void {
+    if (this.assistant !== null) this.assistant.finalized = true;
+    if (this.thinking !== null) this.thinking.finalized = true;
+    this.assistant = null;
+    this.thinking = null;
   }
 
   /**
@@ -344,6 +409,11 @@ export class TranscriptModel {
       if (preview !== '') existing.preview = preview;
       return existing;
     }
+    // Announcing a tool is what ENDS the content block before it. Only a NEW
+    // call closes anything: `tool_use` landing on an already-open block is the
+    // authoritative restatement of the same call, and closing there would split
+    // one piece of text in two.
+    this.closeOpenContent();
     const block: ToolBlock = {
       kind: 'tool',
       id: nextId('tool'),
@@ -358,11 +428,16 @@ export class TranscriptModel {
   }
 
   /** Finish a tool block in place, with its result. */
-  completeTool(callId: string, result: string, failed: boolean): ToolBlock | null {
+  completeTool(
+    callId: string,
+    result: string,
+    failed: boolean,
+    indeterminate = false,
+  ): ToolBlock | null {
     const block = this.toolsByCallId.get(callId);
     if (block === undefined) return null;
     block.result = result;
-    block.status = failed ? 'error' : 'ok';
+    block.status = failed ? 'error' : indeterminate ? 'unknown' : 'ok';
     return block;
   }
 
@@ -398,19 +473,19 @@ export class TranscriptModel {
 
     switch (frame.type) {
       case 'text_delta': {
-        const block = this.appendTextDelta(readFrameContent(frame));
+        const block = this.appendTextDelta(readFrameContent(frame), readBlockKey(payload));
         return block === null ? { kind: 'none' } : { kind: 'mutate', block };
       }
       case 'text': {
-        const block = this.finalizeText(readFrameContent(frame));
+        const block = this.finalizeText(readFrameContent(frame), readBlockKey(payload));
         return block === null ? { kind: 'none' } : { kind: 'mutate', block };
       }
       case 'thinking_delta': {
-        const block = this.appendThinkingDelta(readFrameContent(frame));
+        const block = this.appendThinkingDelta(readFrameContent(frame), readBlockKey(payload));
         return block === null ? { kind: 'none' } : { kind: 'mutate', block };
       }
       case 'thinking': {
-        const block = this.finalizeThinking(readFrameContent(frame));
+        const block = this.finalizeThinking(readFrameContent(frame), readBlockKey(payload));
         return block === null ? { kind: 'none' } : { kind: 'mutate', block };
       }
 
@@ -437,7 +512,12 @@ export class TranscriptModel {
         if (!this.toolsByCallId.has(callId)) {
           this.upsertTool(callId, asString(payload['name']), undefined);
         }
-        const block = this.completeTool(callId, asString(payload['result']), payload['error'] === true);
+        const block = this.completeTool(
+          callId,
+          asString(payload['result']),
+          payload['error'] === true,
+          payload['indeterminate'] === true,
+        );
         return block === null ? { kind: 'none' } : { kind: 'mutate', block };
       }
 
@@ -465,9 +545,13 @@ export class TranscriptModel {
       }
 
       case 'status': {
-        const message = asString(payload['message']);
-        if (message === '') return { kind: 'none' };
-        return { kind: 'append', block: this.addNotice(message) };
+        // CHROME, never content. A turn counter and a "preparing" placeholder
+        // say what the agent is doing RIGHT NOW; appended as a notice they
+        // become permanent transcript rows the reader scrolls past forever, and
+        // `@i18n:` keys that only the desktop renderer knows how to resolve
+        // reach the screen as their own raw names. `TUIApp.updateActivity`
+        // consumes this frame for the activity row, which is where it belongs.
+        return { kind: 'none' };
       }
 
       case 'token_usage': {
@@ -513,6 +597,8 @@ export class TranscriptModel {
   clear(): void {
     this.items.length = 0;
     this.toolsByCallId.clear();
+    this.assistantsByKey.clear();
+    this.thinkingByKey.clear();
     this.assistant = null;
     this.thinking = null;
   }

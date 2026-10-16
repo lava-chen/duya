@@ -91,6 +91,30 @@ describe('TUIApp key routing', () => {
     app.stop();
   });
 
+  it('inserts own-renderer bracketed paste literally and submits it only on a later Enter', async () => {
+    const out = sink();
+    const input = new PassThrough();
+    const submitted: string[] = [];
+    const app = new TUIApp({
+      renderer: 'own',
+      output: out.stream,
+      input,
+      onSubmit: (text) => { submitted.push(text); },
+    });
+    app.start();
+    await settle();
+
+    input.write(Buffer.from('\x1b[200~first line\r\n第二行\x1b[201~', 'utf8'));
+    await settle();
+
+    expect(app.inputText).toBe('first line\r\n第二行');
+    expect(submitted).toEqual([]);
+    input.write('\r');
+    await settle();
+    expect(submitted).toEqual(['first line\r\n第二行']);
+    app.stop();
+  });
+
   it('submits a slash command typed as a whole word', async () => {
     const out = sink();
     const input = new PassThrough();

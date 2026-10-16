@@ -121,6 +121,14 @@ export function convertSSEToAgentMessage(event: AgentStreamEvent): Record<string
       if (!content) return null;
       return { type: 'chat:thinking', content };
     }
+    case 'text_delta': {
+      const delta = readPayloadString(event.data, 'content') ?? '';
+      return delta === '' ? null : { type: 'chat:text_delta', delta };
+    }
+    case 'thinking_delta': {
+      const delta = readPayloadString(event.data, 'content') ?? '';
+      return delta === '' ? null : { type: 'chat:thinking_delta', delta };
+    }
     case 'tool_use_started':
       return {
         type: 'chat:tool_use_started',
@@ -388,32 +396,8 @@ export function convertSSEToAgentMessage(event: AgentStreamEvent): Record<string
     // LLM usage frame: consumed upstream for token accounting before this
     // codec runs; nothing to forward to the SSE client.
     case 'result':
-    // The streaming trio plus per-turn usage.
-    //
-    // These are NOT unknown event types, and treating them as such was a false
-    // alarm that fired on every single token. `projectToLegacyFrame` projects
-    // them deliberately — they are how the surface model streams an answer
-    // (`assistant.text_delta` -> `text_delta`,
-    // `agent-runtime/src/project/legacy-sse-projector.ts:65`) — and the engine
-    // driver runs every projected frame through this codec
-    // (`engine-run-driver.ts:690`). So each token produced one
-    // "Unknown agent stream event type — dropped" WARN. In the CLI's TUI that
-    // warning is routed into the transcript, where it interleaved with the
-    // answer it was describing: a run of them arrived before the reply and
-    // pushed it off the top.
-    //
-    // Silent drop is the `result` arm's precedent, and for the same reason:
-    // the `chat:*` worker vocabulary has no streaming-delta frame (there is no
-    // `chat:text_delta` anywhere in `worker-protocol.ts`), so there is nothing
-    // to forward to. Inventing one here would put a frame in the protocol that
-    // no consumer reads, which is worse than dropping it — the driver calls
-    // this codec's answer "the product's answer" and papers over nothing.
-    //
-    // Deliberately NOT merged with the `result` arm above, so the two reasons
-    // stay separable: usage is consumed upstream, deltas are carried by the
-    // surface model and re-projected per transport.
-    case 'text_delta':
-    case 'thinking_delta':
+    // Per-call usage is consumed upstream for token accounting before this
+    // codec runs; no client frame is needed.
     case 'token_usage':
       return null;
     // Compact events (from DuyaAgent auto-compaction in streamChat).

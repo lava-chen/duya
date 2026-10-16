@@ -40,6 +40,8 @@ export interface WindowSpec {
   readonly title: string;
   /** Static body lines (tagged), used alone when `items` is absent. */
   readonly lines?: readonly string[];
+  /** Allow a static body to scroll when it is taller than the window. */
+  readonly scrollable?: boolean;
   /** Selectable rows; enables selection + Enter semantics. */
   readonly items?: readonly WindowItem[];
   /** Type-to-filter over `items`. */
@@ -61,6 +63,7 @@ export class WindowManager {
   private spec: WindowSpec | null = null;
   private selected = 0;
   private scrollTop = 0;
+  private scrollViewportRows = 1;
   private filter = '';
 
   /** Open (or replace) the window. Navigation state resets. */
@@ -131,6 +134,12 @@ export class WindowManager {
 
       case 'up':
       case 'down': {
+        if (spec.items === undefined && spec.scrollable === true) {
+          const maxScroll = Math.max(0, (spec.lines?.length ?? 0) - this.scrollViewportRows);
+          const delta = name === 'up' ? -1 : 1;
+          this.scrollTop = Math.max(0, Math.min(maxScroll, this.scrollTop + delta));
+          return true;
+        }
         const rows = this.visibleItems();
         if (rows.length === 0) return true;
         const delta = name === 'up' ? -1 : 1;
@@ -140,6 +149,13 @@ export class WindowManager {
 
       case 'pageup':
       case 'pagedown': {
+        if (spec.items === undefined && spec.scrollable === true) {
+          const maxScroll = Math.max(0, (spec.lines?.length ?? 0) - this.scrollViewportRows);
+          const delta = Math.max(1, this.scrollViewportRows - 1)
+            * (name === 'pageup' ? -1 : 1);
+          this.scrollTop = Math.max(0, Math.min(maxScroll, this.scrollTop + delta));
+          return true;
+        }
         const rows = this.visibleItems();
         if (rows.length === 0) return true;
         const delta = name === 'pageup' ? -VIEWPORT_ROWS : VIEWPORT_ROWS;
@@ -212,6 +228,22 @@ export class WindowManager {
         if (last < rows.length) lines.push('{gray-fg}  …{/gray-fg}');
       }
     } else if (spec.lines !== undefined) {
+      if (spec.scrollable === true) {
+        const footerRows = spec.footer === undefined || spec.footer === '' ? 0 : 2;
+        this.scrollViewportRows = maxRows > 0
+          ? Math.max(1, maxRows - lines.length - footerRows)
+          : Math.max(1, spec.lines.length);
+        const maxScroll = Math.max(0, spec.lines.length - this.scrollViewportRows);
+        this.scrollTop = Math.max(0, Math.min(maxScroll, this.scrollTop));
+        lines.push(...spec.lines.slice(this.scrollTop, this.scrollTop + this.scrollViewportRows));
+        if (spec.footer !== undefined && spec.footer !== '') {
+          const first = spec.lines.length === 0 ? 0 : this.scrollTop + 1;
+          const last = Math.min(spec.lines.length, this.scrollTop + this.scrollViewportRows);
+          const position = maxScroll > 0 ? ` · ${first}-${last}/${spec.lines.length}` : '';
+          lines.push('', `{gray-fg}${escapeTags(spec.footer + position)}{/gray-fg}`);
+        }
+        return lines.join('\n');
+      }
       lines.push(...spec.lines);
     }
 

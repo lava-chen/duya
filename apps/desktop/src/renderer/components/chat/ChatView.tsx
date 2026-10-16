@@ -1341,6 +1341,13 @@ export function ChatView({
     setEditDraft({ key: crypto.randomUUID(), text: row.content, attachments: mailboxAttachments(row.attachmentsJson) });
   }, []);
 
+  // /clear — clear the visible transcript (CLI parity: tui.clearTranscript()).
+  // DB history is intentionally preserved; the worker keeps its own copy.
+  const handleClearMessages = useCallback(() => {
+    if (!sessionId) return;
+    useConversationStore.getState().clearMessages(sessionId);
+  }, [sessionId]);
+
   const handleCompact = useCallback(() => {
     if (!sessionId) return;
     const compactStartedAt = Date.now();
@@ -1521,6 +1528,7 @@ export function ChatView({
                     onCancelEdit={cancelComposerEdit}
                     onRecapRequest={requestRecap}
                     onStop={handleStop}
+                    onClearMessages={handleClearMessages}
                     disabled={false}
                     isStreaming={isStreaming}
                     hasQueuedMessages={hasQueuedMessages}
@@ -1666,6 +1674,7 @@ export function ChatView({
                 onCancelEdit={cancelComposerEdit}
                 onRecapRequest={requestRecap}
                 onStop={handleStop}
+                onClearMessages={handleClearMessages}
                 disabled={isArchivedSession}
                 placeholder={
                   isArchivedSession ? t('chat.archivedReadonlyPlaceholder') : t('chat.typeMessage')

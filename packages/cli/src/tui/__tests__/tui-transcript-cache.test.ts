@@ -23,6 +23,11 @@ function seedModel(): TranscriptModel {
   model.upsertTool('c2', 'read_file', { path: 'b.ts' });
   model.completeTool('c1', 'contents of a', false);
   model.completeTool('c2', 'contents of b\nmore lines', false);
+  // A real turn continues after its tools, so the fixture ends on a LIVE
+  // assistant block. Since announcing a tool now closes the block before it,
+  // the text has to reopen one — the cache test below mutates whichever block
+  // is live, and an all-settled transcript has none.
+  model.appendTextDelta('Anything else to check?');
   model.addError('boom');
   model.addNotice('all settled');
   return model;

@@ -22,6 +22,7 @@
       "@duya/connectors/*": ["../../packages/connectors/dist/*"],
       "@duya/input-completion": ["../../packages/input-completion/dist/index.d.ts"],
       "@duya/input-completion/*": ["../../packages/input-completion/dist/*"],
+      "@duya/command-catalog": ["../../packages/command-catalog/dist/index.d.ts"],
       "@duya/conductor/renderer": ["../../packages/conductor/src/renderer/index"],
       "@duya/conductor/renderer/*": ["../../packages/conductor/src/renderer/*"]
     }

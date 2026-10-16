@@ -260,6 +260,18 @@ export interface AgentThinkingEvent {
   content: string;
 }
 
+export interface AgentTextDeltaEvent {
+  type: 'chat:text_delta';
+  sessionId: string;
+  delta: string;
+}
+
+export interface AgentThinkingDeltaEvent {
+  type: 'chat:thinking_delta';
+  sessionId: string;
+  delta: string;
+}
+
 export interface SubagentToolUseEvent {
   type: 'chat:tool_use';
   sessionId: string;
@@ -892,6 +904,8 @@ export type WorkerEvent =
   | CheckpointEvent
   | AgentTextEvent
   | AgentThinkingEvent
+  | AgentTextDeltaEvent
+  | AgentThinkingDeltaEvent
   | SubagentToolUseStartedEvent
   | SubagentToolUseDeltaEvent
   | SubagentToolUseEvent

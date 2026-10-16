@@ -108,7 +108,13 @@ export interface CancelOutcome {
    * durable record for a kill that never happened.
    */
   readonly disposition?: StopDisposition;
-  readonly terminal: RunTerminalState;
+  /**
+   * The run's terminal state, if one was captured.
+   *
+   * Null when neither `cancel` nor `settle` could produce a terminal — the host
+   * has no information to give and must not fabricate one.
+   */
+  readonly terminal: RunTerminalState | null;
 }
 
 export interface RunMetrics {

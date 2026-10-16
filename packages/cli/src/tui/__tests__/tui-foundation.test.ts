@@ -76,11 +76,22 @@ describe('TUI foundation integration', () => {
     try {
       app.start();
       await type(input, 'ok');
-      const composer = (app as unknown as {
-        inputBox: { height: number; getContent(): string };
-      }).inputBox;
-      expect(composer.height).toBeLessThanOrEqual(rows - 1);
-      expect(composer.getContent()).toContain('ok');
+      // Asked of the SURFACE rather than of the widget tree behind it: on a
+      // 2-row terminal the composer drops its border, so what matters is that
+      // the region it was given still fits, and that the text reached the
+      // region rather than only the stream — a diff-based renderer rewrites one
+      // cell per keystroke, so the two characters never appear contiguously in
+      // the terminal output.
+      const surface = (app as unknown as {
+        fullScreen: {
+          measure(region: string): { height: number } | null;
+          content(region: string): readonly string[];
+        };
+      }).fullScreen;
+      const composer = surface.measure('input');
+      expect(composer).not.toBeNull();
+      expect((composer as { height: number }).height).toBeLessThanOrEqual(rows - 1);
+      expect(surface.content('input').join('\n')).toContain('ok');
       await pressEnter(input);
       expect(submitted).toEqual(['ok']);
     } finally {

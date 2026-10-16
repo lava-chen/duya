@@ -158,8 +158,8 @@ describe('inline mode', () => {
     // Closed again, or the conversation would stay hidden behind a buffer the
     // user can no longer get out of.
     expect(out.text().split(ALT_BUFFER_ON).length - 1).toBeGreaterThanOrEqual(1);
-    const reopened = (app as unknown as { screen: unknown }).screen;
-    expect(reopened).toBeNull();
+    const surface = (app as unknown as { fullScreen: { ready: boolean } }).fullScreen;
+    expect(surface.ready).toBe(false);
   });
 
   it('leaves the conversation on screen when it stops', async () => {

@@ -119,13 +119,11 @@ describe('the working tail', () => {
     expect([...out.text()].some((ch) => SPINNER_UNICODE.includes(ch))).toBe(true);
   });
 
-  it('is not shown in full-screen mode, whose layout has no row for it', async () => {
+  it('appears in the full-screen status line while a turn runs', async () => {
     const { app, out } = makeApp({ busy: true });
     app.start();
     await settleRendered();
     app.stop();
-    // Full-screen mode keeps its activity in the status bar, where it has always
-    // been. Adding a row there is a change to that layout, not to this tail.
-    expect([...out.text()].some((ch) => SPINNER_UNICODE.includes(ch))).toBe(false);
+    expect([...out.text()].some((ch) => SPINNER_UNICODE.includes(ch))).toBe(true);
   });
 });

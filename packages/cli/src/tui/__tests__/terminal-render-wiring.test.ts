@@ -105,12 +105,31 @@ describe('detection is total', () => {
   it('returns a complete environment for an empty bag', () => {
     // No optional field may be undefined: TUIApp reads these during
     // construction, so a hole here is a crash at startup, not a degraded UI.
-    const env: TerminalEnvironment = detectTerminalEnvironment({});
-    expect(env).toEqual({
+    //
+    // The platform is named rather than inherited: `unicodeBox` deliberately
+    // disagrees between the two, so a row that did not say which one it meant
+    // would assert the wrong thing on half the machines that run it.
+    const posix = detectTerminalEnvironment({}, 'linux');
+    expect(posix).toEqual({
       term: 'dumb',
       program: 'unknown',
       colorDepth: 16,
       unicodeBox: false,
+      hyperlinks: false,
+      kittyGraphics: false,
+      supportsLightPalette: false,
+    });
+
+    // Same empty bag, Windows. Every field is still present — detection is
+    // still total — but `unicodeBox` is true, because blessed replaces every
+    // non-ASCII cell with `?` when it is false and a stock Windows PowerShell
+    // sets none of the POSIX locale variables the old check looked for.
+    const windows = detectTerminalEnvironment({}, 'win32');
+    expect(windows).toEqual({
+      term: 'dumb',
+      program: 'unknown',
+      colorDepth: 16,
+      unicodeBox: true,
       hyperlinks: false,
       kittyGraphics: false,
       supportsLightPalette: false,
