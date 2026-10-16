@@ -903,18 +903,41 @@ export class RunOrchestrator {
   /** Cancel one specific run, even if a newer run now belongs to its session. */
   async cancelRun(sessionId: string, runId: string, reason: string): Promise<CancelOutcome | null> {
     try {
-      return await this.#controller.cancel(runId, { reason: `delete:${reason}` });
+      const outcome = await this.#controller.cancel(runId, { reason: `delete:${reason}` });
+      // A SUCCESSFUL cancel still has to RELEASE the session binding, and it is
+      // the only producer that can: `controller.cancel` settles the run's ledger
+      // row and closes its emitter, but `#bySession` is bookkeeping this
+      // orchestrator owns and the controller has no reference to.
+      //
+      // Before this, release happened only where a TERMINAL FRAME could drive
+      // it: `observe`, `settleSession`, and this method's catch arm. A cancel
+      // that succeeded while the worker was wedged reached none of them and
+      // waited for a frame that a stopped worker never sends. The Desktop path
+      // has a fourth door — the router's `res.on('close')` calls
+      // `settleSession` — so it never showed. The CLI/TUI path has none: the
+      // SSE handler's `finally` only clears its heartbeat and ends the
+      // response. That left `#bySession` pointing at a dead run, and every
+      // later turn for that session refused with `already has live run`.
+      //
+      // Idempotent: `#release` is guarded on the binding still naming THIS run,
+      // `controller.settle` short-circuits on an in-flight or remembered
+      // settlement, and `onRunSettled` closes an already-closed hub channel.
+      // Calling this on a run `observe` already finished is therefore a no-op.
+      await this.#finish(sessionId, runId, { cancelRequested: true });
+      return outcome;
     } catch (error) {
       this.#logger.error(
         'Run cancel failed',
         error instanceof Error ? error : new Error(String(error)),
         { sessionId, runId },
       );
-      // A cancel that could not complete still has to CLOSE the run: the worker
-      // is being stopped either way, and leaving the row `running` is the one
-      // outcome nobody can reconcile later. The fallback terminal is read once,
-      // after the settle, because a receipt that does not exist yet is not a
-      // terminal to report.
+      // A cancel that could not complete still has to CLOSE the run, for the
+      // same reason the success path does: leaving the row `running` is the one
+      // outcome nobody can reconcile later. This branch exists because a THROWN
+      // cancel may have released nothing at all, so it cannot report the
+      // controller's own outcome and has to synthesise one from the receipt.
+      // The fallback terminal is read once, after the settle, because a receipt
+      // that does not exist yet is not a terminal to report.
       await this.#finish(sessionId, runId, { cancelRequested: true });
       const terminal = this.#controller.receiptFor(runId);
       // `null` rather than a fabricated `completed`: if the settle also failed,
