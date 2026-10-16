@@ -308,32 +308,37 @@ G11 挂在 `boundary-gates.ts` / `browser-closure-gate.ts` 已有的 import 解�
 
 > 本系列纪律:一片一个入口动作,做完才有下一句。写成清单会让人同时开工四片,四片都半途。
 
-**唯一 next action:定义 `HostCapabilities` 契约——与 `agent-protocol/src/capabilities.ts`
-里的 `RuntimeCapabilities` 平级,覆盖盘点列出的 12 类宿主能力。**
+**唯一 next action:让 G11-0 变成**预算门禁**,并用它驱动 A 类抽取的第一批。**
 
-**为什么是它而不是 UI 包:** `RuntimeCapabilities` 描述的是「runtime 在一次 run 里能做什么」,
-**不是 UI 宿主能力表**。B 类那 100 个文件需要的、会话持久化(~150 refs)、设置 KV(~48)、
-fs(~24)、语音(~20)、项目注册表(~20)、目录对话框(~16)、provider CRUD(~14)、
-OS shell(~13)、日志导出(13)、git(10)、端口发现(8)、视觉开关(6),
-**在协议层零表述**。没有它,「这个组件能不能进 Web」就只能逐点 feature detection,
-永远补不完,`@duya/ui` 的抽取缝也定不下来。
+**前置已完成(2026-10-17):`HostCapabilities` 契约已落地**
+`packages/agent-protocol/src/host-capabilities.ts`,22 条能力全部带**归属轴**。
+
+**为什么归属轴是必须的,不是设计洁癖:** 协议层原有的两个声明都是**消费侧**的——
+`RuntimeCapabilities` 是「runtime 在一次 run 里能做什么」,`HostDeclaration` 是「本宿主能消费什么」。
+**都不是「宿主能给客户端什么」**,而这正是 UI 真正问的问题(组件拿着一句「选择目录」,
+问的是对面能不能产出目录列表)。
+
+平铺的能力名还会在生产里出事:`00-contracts` §1.2 把工作区文件系统和 shell 划给 **Runtime**,
+而桌面实现两者都经 Electron main 暴露。所以 `filesystem` 在不同部署下指**不同的盘**——
+一个跑在云端的 Web 客户端若按「宿主本机」理解,会给用户一个只能打开服务器磁盘的文件选择器。
+于是每条能力必须标明 `host-local` / `runtime` / `both`:
+`workspace_filesystem` 与 `workspace_git` 是 `runtime`(跟工作区走,不是跟用户走),
+`native_dialog` / `os_shell` / `port_discovery` 是 `host-local`(浏览器没有,且**这个「没有」是正确的,不是要绕过的 bug**)。
+
+14 条用例 + **四向变异证明 4/4 全杀**(owner 翻转、`both` 降级、一致性检查只看单侧、
+删掉 owner 判定),还原后逐字节相同。**不是「跑绿了」就算数。**
 
 做完才有下一句:
 
-1. **`HostCapabilities` 契约**(见上)+ 客户端侧自述(§3.2 的待查项)
-2. **G11-0 改成预算门禁**。当前形态下它**永远转不绿**:`BROWSER_ENTRIES` 里
-   `apps/desktop/src/renderer` 自己就是入口,而桌面 renderer 必须调 preload 全局。
-   实测推论:搬完 A 类分子 **115 一个不变**(只有分母降)→ **A 类搬运对门禁零进展**;
-   B 类全转 port → 下界 **15**;那 15 个永不归零。
-   **真会下降的指标是 `preloadFiles <= 115`(下界 15)**,不是 `PASS`。
-   详见 [16 UI 盘点](./16-a8-ui-census.md) §「真验收标准」。
-3. **TUI 经 611 的投影边界接 `SurfaceModel`**;`blocks.ts` 的 `TranscriptModel`
+1. **G11-0 改预算门禁**,指标 `preloadFiles <= 115`,下界 15(见 §1.5 与盘点 §8)
+2. **TUI 经 611 的投影边界接 `SurfaceModel`**;`blocks.ts` 的 `TranscriptModel`
    降级为它的一个 view。接线验收里必须含「TUI 闭包不含 `@duya/agent-runtime`」。
-4. **`@duya/ui` 第一批 = A 类**。盘点实测 A 类 658 个文件自身零引用,
+3. **`@duya/ui` 第一批 = A 类**。盘点实测 A 类 658 个文件自身零引用,
    其中 90 个传递闭包被污染。**只搬传递闭包也干净的那批**,第一批给出具体文件名清单。
-5. **B 类逐块转 client port**,每转一块预算数字降一档。
-6. Desktop 切换 `stream-session-manager.ts`——**此时它才是第二个消费者,拆分才有依据**。
-7. `apps/web` 上线。
+4. **B 类逐块转 client port**,每转一块预算数字降一档。转 port 前先用
+   `assertHostSatisfies` 声明该组件需要哪几条能力、归属要哪一侧。
+5. **Desktop 切换 `stream-session-manager.ts`**——此时它才是第二个消费者,拆分才有依据。
+6. `apps/web` 上线。
 
 > **A 类搬完 G11-0 不会变绿,这不是失败。** 变绿在这个门禁的设计下不存在。
 > 拿它当 promise 会得到两个坏结果:要么有人去改门禁让它绿,要么搬完无法验收。
