@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 
 // Follow this checkout's declared exports, including relocated source subpaths.
 // Shared dependency junctions otherwise let Vite read the primary manifest.
-const WORKSPACE_SOURCE_ALIASES = ['host', 'data', 'capabilities', 'agent-runtime', 'agent-core', 'agent-protocol'].flatMap((name) => {
+const WORKSPACE_SOURCE_ALIASES = ['host', 'data', 'capabilities', 'agent-runtime', 'agent-core', 'agent-protocol', 'client-core'].flatMap((name) => {
   const directory = new URL(`./packages/${name}/`, import.meta.url)
   const manifest = JSON.parse(readFileSync(new URL('package.json', directory), 'utf8')) as {
     name: string;
@@ -66,6 +66,11 @@ export default defineConfig({
       'packages/agent-protocol/test/**/*.test.ts',
       'packages/agent-core/test/**/*.test.ts',
       'packages/agent-runtime/test/**/*.test.ts',
+      // Plan 610 A8: the conformance suite moved with SurfaceModel into
+      // packages/client-core. A tracked test file left outside this array is
+      // one no runner collects, which check-test-coverage reports as an
+      // orphan. Same no-apostrophe rule as the memory glob below.
+      'packages/client-core/test/**/*.test.ts',
       'packages/input-completion/test/**/*.test.ts',
       'packages/gateway/src/**/*.test.ts',
       'packages/agent/src/**/*.test.ts',
