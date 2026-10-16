@@ -25,7 +25,7 @@
 
 import type { EventType, RunEventEnvelope } from '@duya/agent-protocol';
 import { EVENT_TYPES } from '@duya/agent-protocol';
-import { SurfaceModel, type SurfaceEffect } from './surface-model.js';
+import { SurfaceModel, type SurfaceEffect } from '@duya/client-core';
 import { projectToLegacyFrame } from '../project/legacy-sse-projector.js';
 import type { LegacySseFrame } from '../legacy-sse-contract.js';
 

@@ -136,14 +136,15 @@ const BUILD_ORDER = [
 
   // Level 3 — depend only on level 2.
   '@duya/agent-core', //   -> @duya/agent-protocol
+  '@duya/client-core', // -> @duya/agent-protocol
   '@duya/computer-use', // -> @duya/ai
 
   // Concrete browser/CUA and connector adapters consume the platform and
   // plugin contracts, while Runtime consumes their public tool contracts.
   '@duya/capabilities',
 
-  // Level 4 — depend on agent-core and agent-protocol.
-  '@duya/agent-runtime', // -> @duya/agent-core, @duya/agent-protocol
+  // Level 4 — depend on agent-core, agent-protocol, and client-core.
+  '@duya/agent-runtime', // -> @duya/agent-core, @duya/agent-protocol, @duya/client-core
 
   // Memory is a Host prompt/context prerequisite.
   '@duya/memory', // -> @duya/ai

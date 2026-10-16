@@ -286,11 +286,20 @@ modules:
     # `packages/plugin-core`, `packages/computer-use`, or any `UNRESOLVED:`
     # owner. The `agent-runtime -> plugin-core / computer-use / ai` edges that
     # `allowedDependencies` below claims are granted do not exist.
-    requires: [agent-protocol, agent-core, capabilities, legacy-plugin-core]
+    requires: [agent-protocol, client-core, agent-core, capabilities, legacy-plugin-core]
     publicEntrypoints:
       - packages/agent-runtime/src/index.ts
       - packages/agent-runtime/src/context/contextual-user-fragment.ts
     owner: agent
+
+  # Client-side state projection from the Host's protocol events.
+  - id: client-core
+    roots: [packages/client-core]
+    managed: true
+    requires: [agent-protocol]
+    publicEntrypoints:
+      - packages/client-core/src/index.ts
+    owner: client
 
   # ── Legacy: managed: false, each flipped as its migration lands ─────────
   - id: legacy-agent
