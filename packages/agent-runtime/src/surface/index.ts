@@ -17,7 +17,7 @@
  * the two drifting.
  */
 
-export { SurfaceModel } from './surface-model.js';
+export { SurfaceModel } from '@duya/client-core';
 export type {
   CheckpointSurface,
   CompactionPhase,
@@ -40,7 +40,7 @@ export type {
   TurnPhase,
   TurnRetrySurface,
   TurnSurface,
-} from './surface-model.js';
+} from '@duya/client-core';
 
 export {
   LEGACY_MAPPED_EVENT_TYPES,
