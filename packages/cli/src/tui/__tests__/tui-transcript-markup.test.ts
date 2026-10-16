@@ -209,18 +209,34 @@ describe('tool groups', () => {
     expect(grouped).toBe(ungrouped);
   });
 
-  it('breaks the group when a different tool intervenes', () => {
+  it('breaks the group when a different family intervenes', () => {
     const model = new TranscriptModel();
     model.apply({ type: 'tool_use', data: { id: 'c1', name: 'read_file', input: { path: 'a.ts' } } });
     model.apply({ type: 'tool_result', data: { id: 'c1', result: 'ok' } });
-    model.apply({ type: 'tool_use', data: { id: 'c2', name: 'search_files', input: { pattern: '*.ts' } } });
+    // `terminal` is its own family (shell), so it breaks the exploration group
+    // the two reads would otherwise share.
+    model.apply({ type: 'tool_use', data: { id: 'c2', name: 'terminal', input: { command: 'ls' } } });
     model.apply({ type: 'tool_result', data: { id: 'c2', result: 'ok' } });
     model.apply({ type: 'tool_use', data: { id: 'c3', name: 'read_file', input: { path: 'c.ts' } } });
     model.apply({ type: 'tool_result', data: { id: 'c3', result: 'ok' } });
 
     const rendered = renderTranscript(model, OPTIONS);
     expect(rendered.match(/read_file\(/gu)).toHaveLength(2);
-    expect(rendered).toContain('search_files');
+    expect(rendered).toContain('terminal(');
+  });
+
+  it('groups the exploration family across different tool names', () => {
+    const model = new TranscriptModel();
+    model.apply({ type: 'tool_use', data: { id: 'e1', name: 'glob', input: { pattern: '**/*.ts' } } });
+    model.apply({ type: 'tool_result', data: { id: 'e1', result: 'ok' } });
+    model.apply({ type: 'tool_use', data: { id: 'e2', name: 'search_files', input: { pattern: 'x' } } });
+    model.apply({ type: 'tool_result', data: { id: 'e2', result: 'ok' } });
+
+    const rendered = renderTranscript(model, OPTIONS);
+    // One head for the family, and the continuation names its own tool because
+    // the head's name no longer describes it.
+    expect(rendered.match(/glob\(/gu)).toHaveLength(1);
+    expect(rendered).toContain('└ search_files x');
   });
 });
 

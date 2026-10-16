@@ -41,6 +41,8 @@
  * block it needs, and the tests can assert identity rather than equality.
  */
 
+import { shellCommandOf } from './tool-render.js';
+
 /** A frame as the CLI receives it. Structurally `LegacySseFrame`. */
 export interface LegacyFrame {
   readonly type: string;
@@ -119,6 +121,15 @@ export interface ToolBlock {
   preview: string;
   result?: string;
   status: 'running' | 'ok' | 'error' | 'unknown';
+  /**
+   * The UNCLIPPED command of a shell tool.
+   *
+   * Kept beside `preview` because `preview` is clipped to one line and the
+   * body's evidence line must show what actually ran. Full JSON payloads are
+   * deliberately not retained: one string is what the body needs, and caching
+   * every tool input would grow the model for no reader-visible gain.
+   */
+  command?: string;
 }
 
 export interface ErrorBlock {
@@ -142,6 +153,12 @@ export interface PermissionRequest {
   readonly toolInput: unknown;
   readonly reason: string;
   readonly blockedPath?: string;
+  /**
+   * The interactive situation, as classified by the runtime (never inferred
+   * here — protocol G-2). `ask_user_question` picks the questionnaire overlay
+   * instead of the allow/deny picker.
+   */
+  readonly mode?: 'generic' | 'ask_user_question' | 'exit_plan_mode';
 }
 
 /** What applying a frame did, so the caller knows whether to schedule a render. */
@@ -177,58 +194,100 @@ function asString(value: unknown): string {
 }
 
 /**
- * Arguments worth previewing, per tool.
+ * Arguments worth previewing, per tool, in presentation order.
  *
- * The SAME table the plain REPL uses (`buildToolPreview` in `cli/index.ts`).
- * Duplicated rather than imported because that one is module-private to a
- * 1000-line entry point, and a second account of "which argument summarises
- * this tool" is exactly the kind of drift this file is trying to avoid. If it
- * changes there, it changes here — they are meant to read as one fact.
+ * REAL tool names. The previous table listed the pre-capabilities vocabulary
+ * (`read_file`, `search_files`, `terminal`) and every entry was dead: `glob`
+ * and `grep` fell through to the generic "first string value" branch, which
+ * summarised a grep call by its pattern only by accident and a glob call by
+ * nothing useful at all. Legacy names are kept alongside the real ones so an
+ * older transcript still reads correctly.
  */
-const PRIMARY_ARGUMENT_KEYS: Readonly<Record<string, string>> = {
-  terminal: 'command',
-  web_search: 'query',
-  web_extract: 'urls',
-  read_file: 'path',
-  write_file: 'path',
-  patch: 'path',
-  search_files: 'pattern',
-  browser_navigate: 'url',
-  browser_click: 'ref',
-  browser_type: 'text',
-  image_generate: 'prompt',
-  text_to_speech: 'text',
-  vision_analyze: 'question',
-  skill_view: 'name',
-  skills_list: 'category',
-  execute_code: 'code',
-  delegate_task: 'goal',
-  clarify: 'question',
-  todo: 'todos',
-  memory: 'action',
-  session_search: 'query',
+const TOOL_PREVIEW_KEYS: Readonly<Record<string, readonly string[]>> = {
+  grep: ['pattern', 'path'],
+  glob: ['pattern', 'path'],
+  read: ['path'],
+  edit: ['path'],
+  write: ['path'],
+  apply_patch: ['path'],
+  bash: ['command'],
+  powershell: ['command'],
+  // Legacy aliases, same shapes.
+  read_file: ['path'],
+  write_file: ['path'],
+  patch: ['path'],
+  search_files: ['pattern', 'path'],
+  terminal: ['command'],
+  // Other families where a named argument still beats a bare value.
+  web_search: ['query'],
+  web_fetch: ['url'],
+  web_extract: ['urls'],
+  task: ['description'],
+  todo: ['todos'],
+  memory: ['action'],
+  session_search: ['query'],
+  image_generate: ['prompt'],
+  image_edit: ['prompt'],
+  vision: ['question'],
+  skill_view: ['name'],
 };
 
 /** Longest preview before it is elided. */
-const PREVIEW_MAX = 40;
+const PREVIEW_MAX = 56;
 
-/** Clip a preview to one line's worth of a tool call. */
+/** Longest a single argument value may be before it is elided. */
+const PREVIEW_VALUE_MAX = 32;
+
+/** Clip one argument's value inside an argument list. */
+function clipValue(value: string): string {
+  return value.length > PREVIEW_VALUE_MAX ? `${value.slice(0, PREVIEW_VALUE_MAX - 3)}...` : value;
+}
+
+/** Clip a whole preview to one line's worth of a tool call. */
 function clip(value: string): string {
   return value.length > PREVIEW_MAX ? `${value.slice(0, PREVIEW_MAX - 3)}...` : value;
 }
 
-/** A one-line summary of a tool call's most telling argument. */
+/** Read one argument as displayable text, or `null` when it is not. */
+function readArgument(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim() !== '') return value;
+  if (Array.isArray(value) && value.length > 0) return value.map((entry) => String(entry)).join(', ');
+  return null;
+}
+
+/**
+ * A one-line summary of a tool call.
+ *
+ * A named tool with MORE than one telling argument renders as an argument list
+ * — `grep(pattern: useStreaming, path: src/)` — because on a desktop terminal
+ * in a monospace font that reads better than a bare value: the reader learns
+ * WHICH argument they are looking at without opening the call. A single
+ * argument stays bare (`read(src/main.ts)`), since `path:` would spend five
+ * columns saying nothing.
+ */
 export function buildToolPreview(name: string, input: unknown): string {
   if (typeof input !== 'object' || input === null) return '';
   const record = input as Record<string, unknown>;
-  const key = PRIMARY_ARGUMENT_KEYS[name];
-  if (key !== undefined) {
-    const value = record[key];
-    if (typeof value === 'string' && value.length > 0) return clip(value);
-    if (Array.isArray(value)) return clip(value.map((v) => String(v)).join(', '));
+  const keys = TOOL_PREVIEW_KEYS[name];
+  if (keys !== undefined) {
+    // The decision is the number of arguments actually PRESENT, not the width
+    // of the table: a glob call that only passed a pattern is a single
+    // argument and reads better bare, even though a path could have joined it.
+    const present: Array<{ key: string; value: string }> = [];
+    for (const key of keys) {
+      const value = readArgument(record[key]);
+      if (value !== null) present.push({ key, value });
+    }
+    if (present.length === 1) return clip(present[0]?.value ?? '');
+    if (present.length > 1) {
+      return clip(present.map(({ key, value }) => `${key}: ${clipValue(value)}`).join(', '));
+    }
+    // A named tool whose expected arguments are absent falls through to the
+    // generic first-string fallback rather than rendering an empty head.
   }
   for (const value of Object.values(record)) {
-    if (typeof value === 'string' && value.length > 0) return clip(value);
+    const text = readArgument(value);
+    if (text !== null) return clip(text);
   }
   return '';
 }
@@ -407,6 +466,8 @@ export class TranscriptModel {
       if (name !== '') existing.name = name;
       const preview = buildToolPreview(existing.name, input);
       if (preview !== '') existing.preview = preview;
+      const command = shellCommandOf(input);
+      if (command !== undefined) existing.command = command;
       return existing;
     }
     // Announcing a tool is what ENDS the content block before it. Only a NEW
@@ -414,6 +475,7 @@ export class TranscriptModel {
     // authoritative restatement of the same call, and closing there would split
     // one piece of text in two.
     this.closeOpenContent();
+    const command = shellCommandOf(input);
     const block: ToolBlock = {
       kind: 'tool',
       id: nextId('tool'),
@@ -421,6 +483,7 @@ export class TranscriptModel {
       name: name === '' ? 'tool' : name,
       preview: buildToolPreview(name, input),
       status: 'running',
+      ...(command === undefined ? {} : { command }),
     };
     this.toolsByCallId.set(callId, block);
     this.items.push(block);
@@ -524,6 +587,10 @@ export class TranscriptModel {
       case 'permission': {
         const requestId = asString(payload['requestId']);
         if (requestId === '') return { kind: 'none' };
+        const rawMode = asString(payload['mode']);
+        const mode = rawMode === 'ask_user_question' || rawMode === 'exit_plan_mode'
+          ? rawMode
+          : 'generic';
         return {
           kind: 'permission',
           request: {
@@ -532,6 +599,7 @@ export class TranscriptModel {
             toolInput: payload['toolInput'],
             reason: asString(payload['reason']),
             blockedPath: asString(payload['blockedPath']) || undefined,
+            mode,
           },
         };
       }

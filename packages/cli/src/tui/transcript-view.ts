@@ -26,16 +26,29 @@
  *
  * ## Tool groups
  *
- * Consecutive tool calls with the same name render as a GROUP: the first call
- * carries the name, the rest become `└ <preview>` continuations. Only the
- * head marker changes — never the line count — because `TUIApp.revealSelectedBlock`
- * locates the selection by summing `renderOneBlock` heights, and a group that
- * renders one line shorter than the sum would scroll the selection off by that
- * many lines.
+ * Consecutive tool calls in the same FAMILY render as a GROUP: the first call
+ * carries the name, the rest become `└ <preview>` continuations. The family is
+ * `toolGroupKey(name)` — read/glob/grep share one exploration family, bash and
+ * powershell one shell family, everything else is its own family — so a glob
+ * followed by a read is one search pass rather than two heads.
+ *
+ * A continuation that is a DIFFERENT tool from its head carries the name
+ * (`└ grep pattern: x`) because the head's name no longer describes it.
+ *
+ * Only the head marker changes — never the line count — because
+ * `TUIApp.revealSelectedBlock` locates the selection by summing
+ * `renderOneBlock` heights, and a group that renders one line shorter than the
+ * sum would scroll the selection off by that many lines.
  */
 
 import type { Block, TranscriptModel } from './blocks.js';
 import { splitStreamCommit } from './stream-commit.js';
+import {
+  formatToolResult,
+  isShellTool,
+  selectShellOutput,
+  toolGroupKey,
+} from './tool-render.js';
 import { capLines, truncateToWidth, visibleWidth } from './width.js';
 import { DARK_THEME_TAGS, type ThemeTags } from './theme.js';
 
@@ -414,32 +427,90 @@ function toolStatusMark(
   }
 }
 
-/** Shared disclosure suffix: `[-]` when shown, `[+ N lines]` when not. */
+/** Shared disclosure suffix: `[-]` when shown, `[+ N <unit>]` when not. */
 function toolDisclosure(
   hasResult: boolean,
   resultLineCount: number,
   showDetails: boolean,
   styles: Styles,
+  unit = 'lines',
 ): string {
   if (!hasResult) return '';
   return showDetails
     ? styles.muted(' [-]')
-    : styles.muted(` [+ ${resultLineCount} lines]`);
+    : styles.muted(` [+ ${resultLineCount} ${unit}]`);
 }
 
-/** Shared result body: a diff block keeps its colours, everything else is muted. */
-function toolBody(
+/**
+ * The body of a shell tool: the command on an evidence line, then its output.
+ *
+ * The command is repeated here rather than left to the head because the head's
+ * preview is clipped to one line — `$ ` plus the WHOLE command is the reader's
+ * only chance to see what actually ran. The output goes through
+ * `selectShellOutput`, whose choice of head/tail depends on the status.
+ */
+function shellBody(
+  block: Extract<Block, { kind: 'tool' }>,
   result: string,
   options: RenderOptions,
   styles: Styles,
   indent: string,
 ): string[] {
-  const body = capLines(result, options.toolResultLines);
+  // A failure gets double the budget: the message the reader needs is usually
+  // at the end, and minimax-code's preview budget does the same.
+  const budget = block.status === 'error'
+    ? options.toolResultLines * 2
+    : options.toolResultLines;
+  const selected = selectShellOutput(result, block.status, Math.max(1, budget));
+  const lines: string[] = [];
+  const command = block.command;
+  if (command !== undefined) {
+    lines.push(`${indent}${styles.accent('$')} ${escapeTags(command)}`);
+  }
+  // A shell command that PRINTS a diff (`git diff`, patch output) keeps its
+  // colours — the selection is the same text the generic path would have seen,
+  // and muting it would lose the one thing that output is for.
+  if (isDiffBlock('text', selected)) {
+    lines.push(...renderCodeBlock('diff', selected, styles).split('\n').map((line) => `${indent}${line}`));
+    return lines;
+  }
+  for (const line of selected) lines.push(`${indent}${styles.muted(line)}`);
+  return lines;
+}
+
+/** The body of any other tool: a known report formatted, or muted raw text. */
+function plainBody(
+  block: Extract<Block, { kind: 'tool' }>,
+  result: string,
+  options: RenderOptions,
+  styles: Styles,
+  indent: string,
+): string[] {
+  // An error gets double the budget: the message the reader needs is usually
+  // at the end of the report (minimax-code's preview budget does the same).
+  const budget = block.status === 'error' ? options.toolResultLines * 2 : options.toolResultLines;
+  const formatted = formatToolResult(block.name, result);
+  const body = capLines(formatted, budget);
   const bodyLines = body.split('\n');
-  if (isDiffBlock('text', bodyLines)) {
+  // Diff detection only applies to pass-through results — the formatters never
+  // emit diffs, and re-colouring grep rows as one would be wrong.
+  if (formatted === result && isDiffBlock('text', bodyLines)) {
     return renderCodeBlock('diff', bodyLines, styles).split('\n').map((line) => `${indent}${line}`);
   }
   return bodyLines.map((line) => `${indent}${styles.muted(line)}`);
+}
+
+/** Shared result body: shell tools get an evidence line, everything else raw. */
+function toolBody(
+  block: Extract<Block, { kind: 'tool' }>,
+  result: string,
+  options: RenderOptions,
+  styles: Styles,
+  indent: string,
+): string[] {
+  return isShellTool(block.name)
+    ? shellBody(block, result, options, styles, indent)
+    : plainBody(block, result, options, styles, indent);
 }
 
 /** One tool call, as its call line plus optional result lines. */
@@ -453,23 +524,30 @@ function renderTool(block: Extract<Block, { kind: 'tool' }>, options: RenderOpti
 
   const head = `${toolStatusMark(block.status, styles)} ${escapeTags(label)}`;
   const resultLines = hasResult ? result.trim().split(/\r?\n/u).length : 0;
-  const lines = [`${head}${toolDisclosure(hasResult, resultLines, showDetails, styles)}`];
+  const unit = isShellTool(block.name) ? 'output lines' : 'lines';
+  const lines = [`${head}${toolDisclosure(hasResult, resultLines, showDetails, styles, unit)}`];
   if (block.status === 'running' || !showDetails) return lines.join('\n');
   if (!hasResult) return lines.join('\n');
 
-  lines.push(...toolBody(result, options, styles, '    '));
+  lines.push(...toolBody(block, result, options, styles, '    '));
   return lines.join('\n');
 }
 
 /**
- * A tool call that continues a same-name group started by the block above it.
+ * A tool call that continues a group started by the block above it.
  *
- * The name is already on screen one line up, so the head shows only the
- * preview. Line count matches `renderTool` exactly — see the module comment.
- * Exported for the per-block cache, which must reproduce the group decision
- * itself (the `continuation` flag is part of its cache key).
+ * The group's head name is `headName`; when it differs from this block's name
+ * the head shows the name too, because a `└ read src/a.ts` under a `grep` head
+ * would claim the wrong tool. Line count matches `renderTool` exactly — see the
+ * module comment. Exported for the per-block cache, which must reproduce the
+ * group decision itself (the `continuation` flag is part of its cache key).
  */
-export function renderToolContinuation(block: Extract<Block, { kind: 'tool' }>, options: RenderOptions, styles: Styles): string {
+export function renderToolContinuation(
+  block: Extract<Block, { kind: 'tool' }>,
+  options: RenderOptions,
+  styles: Styles,
+  headName?: string,
+): string {
   const isExpanded = blockExpanded(block.id, options);
   const result = block.result?.trimEnd() ?? '';
   const hasResult = result.trim() !== '';
@@ -477,13 +555,16 @@ export function renderToolContinuation(block: Extract<Block, { kind: 'tool' }>, 
     (options.showToolResults || isExpanded);
 
   const preview = block.preview === '' ? '…' : block.preview;
-  const head = `${toolStatusMark(block.status, styles)} ${styles.muted(`└ ${preview}`)}`;
+  const sameName = headName === undefined || headName === block.name;
+  const body = sameName ? `└ ${preview}` : `└ ${block.name} ${preview}`;
+  const head = `${toolStatusMark(block.status, styles)} ${styles.muted(escapeTags(body))}`;
   const resultLines = hasResult ? result.trim().split(/\r?\n/u).length : 0;
-  const lines = [`${head}${toolDisclosure(hasResult, resultLines, showDetails, styles)}`];
+  const unit = isShellTool(block.name) ? 'output lines' : 'lines';
+  const lines = [`${head}${toolDisclosure(hasResult, resultLines, showDetails, styles, unit)}`];
   if (block.status === 'running' || !showDetails) return lines.join('\n');
   if (!hasResult) return lines.join('\n');
 
-  lines.push(...toolBody(result, options, styles, '    '));
+  lines.push(...toolBody(block, result, options, styles, '    '));
   return lines.join('\n');
 }
 
@@ -546,18 +627,22 @@ export function renderTranscript(
 ): string {
   const styles = stylesOf(options);
   const lines: string[] = [];
-  // Only a tool block directly after a tool block with the SAME name joins a
-  // group; any other block resets it.
+  // Only a tool block directly after a tool block of the SAME FAMILY joins a
+  // group; any other block resets it. The head's NAME is remembered too, so a
+  // cross-family-name continuation (a `read` under a `grep`) can carry it.
+  let pendingGroupKey: string | null = null;
   let pendingGroupName: string | null = null;
 
   for (const block of model.blocks) {
-    const continuation = block.kind === 'tool' && pendingGroupName === block.name;
+    const key = block.kind === 'tool' ? toolGroupKey(block.name) : null;
+    const continuation = block.kind === 'tool' && key !== null && pendingGroupKey === key;
     const rendered = continuation
-      ? renderToolContinuation(block, options, styles)
+      ? renderToolContinuation(block, options, styles, pendingGroupName ?? undefined)
       : renderBlock(block, options, styles);
     lines.push(block.id === options.selectedBlockId
       ? `${styles.accent('❯')} ${rendered}`
       : rendered);
+    pendingGroupKey = key;
     pendingGroupName = block.kind === 'tool' ? block.name : null;
   }
 

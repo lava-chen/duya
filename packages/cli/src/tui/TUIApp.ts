@@ -45,7 +45,7 @@ import { RenderScheduler } from './render-scheduler.js';
 import { Pacer } from './pacer.js';
 import { PasteBurstDetector } from './paste-burst.js';
 import { InputEditor } from './editor.js';
-import { OverlayState, isDestructiveRequest, type PermissionDecision } from './overlay.js';
+import { OverlayState, isDestructiveRequest, type PermissionDecision, type QuestionAnswers } from './overlay.js';
 import { escapeTags, stylesOf, type RenderOptions } from './transcript-view.js';
 import { TranscriptRenderer } from './transcript-cache.js';
 import type { EscapeSafeWriter } from './bounded-writer.js';
@@ -1469,12 +1469,17 @@ private paintCompletion(): void {
     if (requestId === '') return;
     const toolName = typeof data['toolName'] === 'string' ? data['toolName'] : '';
     const toolInput = data['toolInput'];
+    const rawMode = data['mode'];
+    const mode = rawMode === 'ask_user_question' || rawMode === 'exit_plan_mode'
+      ? rawMode
+      : 'generic';
     void this.requestPermissionApproval({
       requestId,
       toolName,
       toolInput,
       reason: typeof data['reason'] === 'string' ? data['reason'] : '',
       blockedPath: typeof data['blockedPath'] === 'string' ? data['blockedPath'] : undefined,
+      mode,
       destructive: isDestructiveRequest(toolName, toolInput),
     });
   }
@@ -1508,8 +1513,8 @@ private paintCompletion(): void {
     this.windowMgr.close();
     this.waitingForPermission = true;
     return new Promise<PermissionDecision | null>((resolve) => {
-      this.overlay.show(request, (decision: PermissionDecision | null) => {
-        this.onPermissionDecision?.(request.requestId, decision);
+      this.overlay.show(request, (decision: PermissionDecision | null, answers?: QuestionAnswers) => {
+        this.onPermissionDecision?.(request.requestId, decision, answers);
         this.waitingForPermission = this.overlay.isActive;
         this.activityPhase = this.busy ? 'working' : 'ready';
         resolve(decision);
@@ -1519,8 +1524,19 @@ private paintCompletion(): void {
     });
   }
 
-  /** Set by the wiring so a decision has somewhere to go. */
-  onPermissionDecision?: (requestId: string, decision: PermissionDecision | null) => void;
+  /**
+   * Set by the wiring so a decision has somewhere to go.
+   *
+   * `answers` is present only for an `ask_user_question` submit — the wiring
+   * hands it to `storePendingAnswer`, keyed by the same request id the tool's
+   * Phase-2 retry reads. The decision channel cannot carry it: `requestPermission`
+   * returns a verdict (`allow`/`deny`), not a payload.
+   */
+  onPermissionDecision?: (
+    requestId: string,
+    decision: PermissionDecision | null,
+    answers?: QuestionAnswers,
+  ) => void;
 
   /**
    * Commit every buffered delta into the block model, ignoring the pacing
@@ -2201,7 +2217,13 @@ exportHistory(): string[] {
       }
     });
     target.key(['backspace'], () => {
-      if (this.interactivePrompt?.kind === 'text') this.backspacePrompt();
+      // The overlay outranks the editor: the questionnaire's notes buffer is a
+      // real text field, so a backspace under the modal must edit notes and
+      // never the prompt underneath (the same rule the keypress path applies).
+      if (this.overlay.isActive) {
+        this.overlay.handleKey({ name: 'backspace' });
+        this.scheduler.requestImmediate();
+      } else if (this.interactivePrompt?.kind === 'text') this.backspacePrompt();
       else if (this.windowMgr.isActive) {
         this.windowMgr.handleKey('backspace');
         this.scheduler.requestImmediate();
@@ -2522,8 +2544,10 @@ exportHistory(): string[] {
 
   private onEnter(fromSlashOption = false): void {
     if (this.overlay.isActive) {
-      // Enter has no meaning against a permission prompt; ignoring it is
-      // safer than silently defaulting to "deny".
+      // Enter belongs to the overlay — it arrives through the contended-key
+      // route, where the picker confirms and the questionnaire commits. It
+      // must NOT fall through to the prompt: submitting under a modal would
+      // start a run the user cannot see.
       this.scheduler.requestImmediate();
       return;
     }
