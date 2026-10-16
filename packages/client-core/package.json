@@ -1,0 +1,29 @@
+{
+  "name": "@duya/client-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Client-side run surface state derived from protocol events.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "clean": "node -e \"for(const t of ['dist','tsconfig.tsbuildinfo'])require('fs').rmSync(t,{recursive:true,force:true})\"",
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@duya/agent-protocol": "0.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  }
+}

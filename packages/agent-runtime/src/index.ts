@@ -190,7 +190,8 @@ export { projectToLegacyFrame } from './project/legacy-sse-projector.js';
 // projection, so a model keyed on its output cannot represent them. Exported
 // whole rather than named piecemeal because the point is that a second renderer
 // consumes the SAME model rather than a second copy of the logic.
-export { SurfaceModel } from './surface/surface-model.js';
+/** Transitional re-export for packages/agent; remove when plan 610 A7 retires it. */
+export { SurfaceModel } from '@duya/client-core';
 export type {
   CheckpointSurface,
   CompactionPhase,
@@ -213,7 +214,7 @@ export type {
   TurnPhase,
   TurnRetrySurface,
   TurnSurface,
-} from './surface/surface-model.js';
+} from '@duya/client-core';
 export {
   LEGACY_MAPPED_EVENT_TYPES,
   LEGACY_UNMAPPED_EVENT_TYPES,
