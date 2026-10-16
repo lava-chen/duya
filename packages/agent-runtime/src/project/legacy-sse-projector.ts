@@ -138,6 +138,10 @@ export function projectToLegacyFrame(
           toolInput: event.toolInput,
           reason: event.reason,
           blockedPath: event.blockedPath,
+          // PRODUCER FACT, carried through (protocol G-2): the renderer picks
+          // the questionnaire overlay over the allow/deny picker off this, and
+          // it must not be re-derived from the tool name.
+          mode: event.mode,
         },
       };
 

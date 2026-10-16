@@ -34,10 +34,39 @@
  * twice on an allow choice: the first press STAGES it and the body says so,
  * the second confirms. Any navigation un-stages. Deny and cancel never
  * stage — the guard exists to slow down approval, not refusal.
+ *
+ * ## Questionnaire mode (codex `request_user_input`, adapted)
+ *
+ * A request whose `mode` is `ask_user_question` is not an approval at all, and
+ * the Allow/Deny picker would be nonsense against "which auth approach?". When
+ * that mode's tool input parses into questions, the head is handed to
+ * `QuestionAskState` instead: the questionnaire owns the keys, the picker's
+ * state is idle, and the answers ride the settle callback's second argument.
+ * A question request whose input does NOT parse keeps the generic picker —
+ * degraded, but answerable, which beats a broken questionnaire.
  */
+
+import { parseQuestionInput, QuestionAskState } from './question-overlay.js';
 
 /** A permission decision the user can make. */
 export type PermissionDecision = 'once' | 'always' | 'deny';
+
+/** The payload an ask-user-question submit adds to an approval. */
+export type QuestionAnswers = Record<string, string>;
+
+/**
+ * Settles one ask: an approval decision, plus the questionnaire's answers.
+ *
+ * The answers are a SECOND argument rather than part of the decision because
+ * the two channels are different things: the decision is the verdict the
+ * executor acts on (`allow`/`deny`), and the answers are the payload the
+ * tool's Phase-2 retry reads out of `pendingAnswers`. Folding them together
+ * would mean a decision value that only one tool understands.
+ */
+export type AskResolver = (
+  decision: PermissionDecision | null,
+  answers?: QuestionAnswers,
+) => void;
 
 export interface OverlayRequest {
   readonly requestId: string;
@@ -177,7 +206,7 @@ export function renderOverlay(
 
 interface QueuedAsk {
   readonly request: OverlayRequest;
-  readonly resolve: (decision: PermissionDecision | null) => void;
+  readonly resolve: AskResolver;
 }
 
 /**
@@ -189,7 +218,7 @@ interface QueuedAsk {
  */
 export class OverlayState {
   private current: OverlayRequest | null = null;
-  private resolver: ((decision: PermissionDecision | null) => void) | null = null;
+  private resolver: AskResolver | null = null;
   /** Asks waiting behind the head. Only the head is interactive. */
   private readonly queue: QueuedAsk[] = [];
   /** Picker state for the head request. */
@@ -197,6 +226,13 @@ export class OverlayState {
   private staged = false;
   /** The head's expiry timer, cleared on every settle. */
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * The question loop for an `ask_user_question` head.
+   *
+   * Built when the head advances; `null` for a generic permission (or for a
+   * question whose input failed to parse, which falls back to the picker).
+   */
+  private questionAsk: QuestionAskState | null = null;
 
   /** True while the overlay is on screen. */
   get isActive(): boolean {
@@ -226,6 +262,14 @@ export class OverlayState {
   /** Body to render, or `null` when the overlay is closed. */
   body(answerable: boolean): string | null {
     if (this.current === null) return null;
+    if (this.questionAsk !== null) {
+      // A questionnaire cannot be answered without a responder wired, and
+      // every key would do nothing — say so instead of drawing a dead form.
+      if (!answerable) {
+        return '{red-fg}no permission responder is attached to this run; this question cannot be answered here{/red-fg}';
+      }
+      return this.questionAsk.render({ queueDepth: this.queue.length });
+    }
     return renderOverlay(this.current, answerable, {
       selectedIndex: this.selectedIndex,
       staged: this.staged,
@@ -235,9 +279,10 @@ export class OverlayState {
 
   /**
    * Queue a request; `onDecision` settles when the user answers it, it times
-   * out, or it is cancelled.
+   * out, or it is cancelled — with the questionnaire's answers, when there
+   * are any.
    */
-  show(request: OverlayRequest, onDecision: (decision: PermissionDecision | null) => void): void {
+  show(request: OverlayRequest, onDecision: AskResolver): void {
     this.queue.push({ request, resolve: onDecision });
     if (this.current === null) this.advance();
   }
@@ -245,19 +290,21 @@ export class OverlayState {
   /**
    * Answer the head request.
    *
-   * A decision made with no request open is ignored rather than thrown: the
-   * key handler is bound to the screen, so a stray keypress after close would
-   * otherwise take down the turn.
+   * `answers` is present only for a questionnaire submit. A decision made with
+   * no request open is ignored rather than thrown: the key handler is bound to
+   * the screen, so a stray keypress after close would otherwise take down the
+   * turn.
    */
-  decide(decision: PermissionDecision | null): void {
+  decide(decision: PermissionDecision | null, answers?: QuestionAnswers): void {
     if (this.current === null) return;
     this.clearTimer();
     const settle = this.resolver;
     this.current = null;
     this.resolver = null;
+    this.questionAsk = null;
     this.selectedIndex = 0;
     this.staged = false;
-    settle?.(decision);
+    settle?.(decision, answers);
     this.advance();
   }
 
@@ -278,6 +325,7 @@ export class OverlayState {
     this.clearTimer();
     this.current = null;
     this.resolver = null;
+    this.questionAsk = null;
     this.selectedIndex = 0;
     this.staged = false;
     const pending = [...head, ...this.queue.splice(0, this.queue.length)];
@@ -293,6 +341,26 @@ export class OverlayState {
    */
   handleKey(input: { readonly name?: string; readonly ch?: string }): boolean {
     if (this.current === null) return false;
+
+    // An ask-user-question head owns its own loop. Esc means "cancel the ask"
+    // — EXCEPT while the unanswered-confirmation panel is up, where it means
+    // "go back to the question" (the panel's own escape). So Esc is only
+    // intercepted here when the questionnaire is not confirming.
+    if (this.questionAsk !== null) {
+      const questionName = input.name ?? '';
+      if (questionName === 'escape' && !this.questionAsk.isConfirming) {
+        this.decide(null);
+        return true;
+      }
+      const handled = this.questionAsk.handleKey(input);
+      if (this.questionAsk.readyToSubmit) {
+        const outcome = this.questionAsk.finish();
+        this.decide('once', outcome.action === 'submit' ? outcome.answers : undefined);
+        return true;
+      }
+      return handled;
+    }
+
     const name = input.name ?? input.ch ?? '';
 
     // Direct decision keys: quick-pick selects the row, then honours staging.
@@ -350,6 +418,14 @@ export class OverlayState {
     this.resolver = next.resolve;
     this.selectedIndex = 0;
     this.staged = false;
+    // An ask_user_question head gets the question loop; a request whose input
+    // fails to parse falls back to the generic picker rather than showing a
+    // broken questionnaire.
+    this.questionAsk = null;
+    if (next.request.mode === 'ask_user_question') {
+      const questions = parseQuestionInput(next.request.toolInput);
+      if (questions !== null) this.questionAsk = new QuestionAskState(questions);
+    }
     this.armTimer(next.request);
   }
 

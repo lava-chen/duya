@@ -31,6 +31,7 @@ import { format } from 'node:util';
 import type { duyaAgent } from '../agent/DuyaAgent.js';
 import type { Message, ChatOptions } from '../types.js';
 import type { ToolRegistry } from '../tool/registry.js';
+import { storePendingAnswer } from '../tool/index.js';
 import type { HostRunApiV1 } from '@duya/agent-protocol';
 import type { CliHostSession } from '@duya/cli/host-session';
 import type { CliTranscriptPersistence } from '@duya/cli/transcript-persistence';
@@ -298,6 +299,16 @@ export async function runTuiSession(deps: TuiSessionDeps): Promise<void> {
       finish();
     },
   });
+
+  // The answer payload channel (plan 611 P0-2, AskUserQuestion): a
+  // questionnaire submit arrives on this hook, NOT as the promise's decision.
+  // `requestPermission` returns a verdict (`allow`/`deny`), while the tool's
+  // Phase-2 retry reads answers from the `pendingAnswers` map — so the answers
+  // must be stored under the SAME id the retry looks up, which is the request
+  // id the overlay was shown with (= the tool use id).
+  tui.onPermissionDecision = (requestId, _decision, answers) => {
+    if (answers !== undefined) storePendingAnswer(requestId, answers);
+  };
 
   let busy = false;
   /**

@@ -41,6 +41,7 @@ import {
   stylesOf,
   type RenderOptions,
 } from './transcript-view.js';
+import { toolGroupKey } from './tool-render.js';
 
 /** FNV-1a, 32-bit. Not cryptographic — it guards against accidental drift, not adversaries. */
 function fnv1a(text: string): string {
@@ -58,7 +59,7 @@ function blockContent(block: Block): string {
     case 'user': return `u:${block.text}`;
     case 'assistant': return `a:${block.finalized ? 1 : 0}:${block.text}`;
     case 'thinking': return `t:${block.finalized ? 1 : 0}:${block.text}`;
-    case 'tool': return `k:${block.status}:${block.name}:${block.preview}:${block.result ?? ''}`;
+    case 'tool': return `k:${block.status}:${block.name}:${block.preview}:${block.command ?? ''}:${block.result ?? ''}`;
     case 'error': return `e:${block.message}`;
     case 'notice': return `n:${block.text}`;
   }
@@ -91,15 +92,21 @@ export class TranscriptRenderer {
     const themeKey = options.theme === undefined ? 'dark' : fnv1a(JSON.stringify(options.theme));
     const result: string[][] = [];
     const seen = new Set<string>();
-    // Only a tool block directly after a tool block with the SAME name joins
-    // a group; any other block resets it. Mirrors `renderTranscript` exactly.
+    // Only a tool block directly after a tool block of the SAME FAMILY joins a
+    // group; any other block resets it. Mirrors `renderTranscript` exactly.
+    let pendingGroupKey: string | null = null;
     let pendingGroupName: string | null = null;
 
     for (const block of model.blocks) {
-      const continuation = block.kind === 'tool' && pendingGroupName === block.name;
+      const groupKey = block.kind === 'tool' ? toolGroupKey(block.name) : null;
+      const continuation = block.kind === 'tool' && groupKey !== null && pendingGroupKey === groupKey;
+      // The continuation flag distinguishes the SAME-name ('c') and
+      // CROSS-name ('f') heads: they render different text from identical
+      // block content, so they cannot share a cache entry.
+      const sameName = continuation && pendingGroupName === block.name;
       const key = [
         block.kind,
-        continuation ? 'c' : '-',
+        continuation ? (sameName ? 'c' : 'f') : '-',
         blockExpanded(block.id, options) ? 'e' : '-',
         options.showToolResults ? 'r' : '-',
         String(options.toolResultLines),
@@ -115,13 +122,14 @@ export class TranscriptRenderer {
         this.stats.hits += 1;
       } else {
         const rendered = continuation
-          ? renderToolContinuation(block, options, styles)
+          ? renderToolContinuation(block, options, styles, pendingGroupName ?? undefined)
           : renderBlock(block, options, styles);
         lines = rendered.split('\n');
         this.cache.set(block.id, { key, lines });
         this.stats.misses += 1;
       }
       result.push(lines);
+      pendingGroupKey = groupKey;
       pendingGroupName = block.kind === 'tool' ? block.name : null;
     }
 
