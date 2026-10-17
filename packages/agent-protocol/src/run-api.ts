@@ -178,6 +178,11 @@ export type SteerAgentRunResult =
 export interface HostRunExecutionApiV1 {
   startAgentRun(input: StartAgentRunInput): Promise<StartAgentRunResult>;
   cancelAgentRun(runId: RunId, reason?: string): Promise<CancelAgentRunResult>;
+  /** Optional process-local stream for protocol events not written to the ledger. */
+  watchLiveAgentRunEvents?(
+    runId: RunId,
+    query?: AgentRunEventStreamQuery,
+  ): AsyncIterable<RunEventEnvelope> | null;
   /**
    * Inject a message into a run that is already executing.
    *

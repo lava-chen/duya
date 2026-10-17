@@ -2681,6 +2681,12 @@ export class HostSessionHttpServer {
         }
 
         const abortController = new AbortController();
+        let cursor = afterSeq ?? 0;
+        const streamQuery = {
+          afterSeq: cursor,
+          ...(limit === undefined ? {} : { limit }),
+          signal: abortController.signal,
+        };
         const onClose = (): void => {
           abortController.abort();
           this.#activeRunEventStreams.delete(res);
@@ -2700,13 +2706,10 @@ export class HostSessionHttpServer {
           }, 15_000);
           heartbeat.unref?.();
 
-          for await (const envelope of api.watchAgentRunEvents(runId, {
-            ...(afterSeq === undefined ? {} : { afterSeq }),
-            ...(limit === undefined ? {} : { limit }),
-            signal: abortController.signal,
-          })) {
-            if (abortController.signal.aborted || res.destroyed) break;
+          const writeEnvelope = async (envelope: RunEventEnvelope): Promise<boolean> => {
+            if (abortController.signal.aborted || res.destroyed) return false;
             const frame = `id: ${envelope.seq}\nevent: run\ndata: ${JSON.stringify(envelope)}\n\n`;
+            cursor = Math.max(cursor, envelope.seq);
             if (!res.write(frame)) {
               await new Promise<void>((resolve) => {
                 const resume = (): void => {
@@ -2717,6 +2720,27 @@ export class HostSessionHttpServer {
                 res.once('drain', resume);
                 res.once('close', resume);
               });
+            }
+            return !abortController.signal.aborted && !res.destroyed;
+          };
+          const liveStream = executionApi?.watchLiveAgentRunEvents?.(runId, streamQuery) ?? null;
+          if (liveStream !== null && cursor === 0) {
+            const firstEvents = await api.readAgentRunEvents(runId, { afterSeq: 0, limit: 1 });
+            for (const envelope of firstEvents) {
+              if (!(await writeEnvelope(envelope))) break;
+            }
+          }
+          const primaryStream = liveStream ?? api.watchAgentRunEvents(runId, streamQuery);
+          for await (const envelope of primaryStream) {
+            if (!(await writeEnvelope(envelope))) break;
+          }
+          if (liveStream !== null && !abortController.signal.aborted && !res.destroyed) {
+            for await (const envelope of api.watchAgentRunEvents(runId, {
+              afterSeq: cursor,
+              ...(limit === undefined ? {} : { limit }),
+              signal: abortController.signal,
+            })) {
+              if (!(await writeEnvelope(envelope))) break;
             }
           }
         } catch (error) {

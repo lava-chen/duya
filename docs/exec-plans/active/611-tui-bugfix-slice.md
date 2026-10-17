@@ -1,6 +1,6 @@
 # CLI TUI ordering and cancellation repair
 
-Status: implemented and locally verified; not merged. Scope: Host-backed `@duya/cli`.
+Status: implemented and verified on the current remote base. Scope: Host-backed `@duya/cli`.
 
 ## Follow-up: stop and continue (2026-10-17)
 
@@ -52,6 +52,13 @@ Follow-up result:
   interrupts an unresolved permission preflight. This narrows future reports
   without assuming the current screenshot's file I/O is the cause.
 
+## Remote-base PR verification (2026-10-17)
+
+- Replayed the three TUI fixes onto current `origin/master` so unrelated local-only history is not part of the PR. Adapted the run-event stream to the current Host API and restored live status delivery before durable replay.
+- Final targeted verification: 110 tests passed across 11 TUI, Host and runtime test files; `typecheck:all`, `architecture:check`, and `build:cli-dev` passed.
+- The CLI bundle build reports three existing `import.meta` warnings in CommonJS output. No live-provider tool smoke test is claimed.
+- The primary checkout was left untouched, including its unrelated working-tree edits.
+
 ## Evidence and baseline
 
 - Existing unrelated edits in the primary checkout are preserved.
@@ -92,8 +99,9 @@ Follow-up result:
 - `electron:build`: blocked in the unrelated gateway bundle by a damaged shared
   `proxy-agent@6.5.0` install (missing `dist/index.js`). Temporary dependency
   installation and one retry did not resolve esbuild's selected broken package.
-- No live-provider tool smoke test claimed. Primary checkout remains unchanged;
-  it contains unrelated dirty files and six local commits ahead of origin/master.
+- No live-provider tool smoke test is claimed. The original feature checkout had
+  unrelated local-only history; this PR branch is based on `origin/master` and
+  contains only the TUI fix series and current-Host compatibility changes.
 - Separate remaining UI defect observed: long transcript rows can still clip
   at the inline terminal width (48-column preview). This slice verifies ordering
   and approval/input lifecycles, not general transcript wrapping.

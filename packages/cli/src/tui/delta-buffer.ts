@@ -102,7 +102,10 @@ export class DeltaBuffer {
   append(text: string, now: number, key: string | null = null): void {
     if (text.length === 0) return;
     if (this.pending.length > 0 && key !== this.pendingKey) {
-      throw new Error('Cannot mix deltas from different content blocks in one buffer.');
+      throw new Error(
+        `refusing to append a fragment for content block ${key ?? '(none)'} onto buffered ` +
+          `text for ${this.pendingKey ?? '(none)'}: commit the buffer before switching blocks`,
+      );
     }
     if (this.pending.length === 0) {
       this.pendingSince = now;

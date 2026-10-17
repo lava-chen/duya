@@ -1530,6 +1530,10 @@ private paintCompletion(): void {
     if (requestId === '') return;
     const toolName = typeof data['toolName'] === 'string' ? data['toolName'] : '';
     const toolInput = data['toolInput'];
+    const rawMode = data['mode'];
+    const mode = rawMode === 'ask_user_question' || rawMode === 'exit_plan_mode'
+      ? rawMode
+      : 'generic';
     void this.requestPermissionApproval({
       requestId,
       toolName,

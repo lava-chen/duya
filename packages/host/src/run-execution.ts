@@ -31,7 +31,9 @@
 import type {
   CancelAgentRunResult,
   HostPermissionRequestApiV1,
+  AgentRunEventStreamQuery,
   RunId,
+  RunEventEnvelope,
   StartAgentRunInput,
   StartAgentRunResult,
 } from '@duya/agent-protocol';
@@ -47,6 +49,7 @@ import { WorkerManager } from './worker-manager.js';
 import { SessionState, WorkerSessionRegistry } from './worker-session-registry.js';
 import { normalizeWorkerEvent } from './worker-frames.js';
 import { WorkerPermissionRequests } from './worker-permission-requests.js';
+import { LiveRunEventHub } from './live-run-event-hub.js';
 
 /** Serves the worker's `db:request` frames from Host-owned stores. */
 export interface WorkerDbBridge {
@@ -107,6 +110,7 @@ export class HostRunExecutionController {
   readonly #registry: WorkerSessionRegistry;
   readonly #workerManager: WorkerManager;
   readonly #orchestrator: RunOrchestrator;
+  readonly #liveRunEvents = new LiveRunEventHub();
   /** runId -> sessionId for cancellation lookups. */
   readonly #sessionByRun = new Map<string, string>();
   readonly #cancellingRuns = new Set<string>();
@@ -156,6 +160,8 @@ export class HostRunExecutionController {
     this.#orchestrator = new RunOrchestrator({
       dbRequest: localDbRequest,
       logger: adaptOrchestratorLogger(options.logger),
+      onEvent: (event) => this.#liveRunEvents.publish(event),
+      onRunSettled: (runId) => this.#liveRunEvents.close(runId as RunId),
       channel: createWorkerExecutionChannel({
         dispatch: (command) => this.#workerManager.sendCommand(command.sessionId, { ...command }),
         interrupt: (sessionId, graceMs, reason) =>
@@ -241,6 +247,7 @@ export class HostRunExecutionController {
     const acceptance = await this.#orchestrator.openRun(sessionId, intent);
     if (acceptance.accepted) {
       this.#sessionByRun.set(acceptance.runId, sessionId);
+      this.#liveRunEvents.open(acceptance.runId as RunId);
       return { accepted: true, stage: 'dispatched', runId: acceptance.runId as RunId };
     }
     const stage = acceptance.stage;
@@ -277,6 +284,13 @@ export class HostRunExecutionController {
       return { requested: false, runId, reason: `run ${runId} is not live or retained by this Host` };
     }
     return { requested: true, runId };
+  }
+
+  watchLiveAgentRunEvents(
+    runId: RunId,
+    query: AgentRunEventStreamQuery = {},
+  ): AsyncIterable<RunEventEnvelope> | null {
+    return this.#liveRunEvents.watch(runId, query);
   }
 
   /** The supervision pieces, exposed so the owning process can shut them down. */

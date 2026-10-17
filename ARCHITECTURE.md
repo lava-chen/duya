@@ -973,6 +973,9 @@ domain or database-owner cutover to Host.
 
 - The Host-backed entry uses `tui/host-event-stream.ts` to scope envelopes by
   session/run identity and sequence before projecting them into UI frames.
+  The active Host run also publishes canonical events through a bounded
+  `LiveRunEventHub`, including transient status events absent from the durable
+  ledger; its HTTP SSE route resumes from the ledger after terminal settlement.
   `tui/turn-queue.ts` serializes locally pending follow-ups; cancellation and
   failure pause older drafts until an explicit resume. Pending drafts stay in
   chrome until admitted, and shutdown waits for startup/cancellation before the

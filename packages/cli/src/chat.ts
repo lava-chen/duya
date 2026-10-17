@@ -410,6 +410,7 @@ export async function chatTui(
   let activeSession = initialSession;
   let activeRunId: RunId | null = null;
   let activeStream: AbortController | null = null;
+  const pendingCancellations = new Map<RunId, Promise<void>>();
   let busy = false;
   let cancellationRequested = false;
   let unsettledRunId: RunId | null = null;
@@ -507,12 +508,11 @@ export async function chatTui(
     onExit: () => close(),
   });
 
-  tui.onPermissionDecision = (requestId, decision, answers) => {
+  tui.onPermissionDecision = (requestId, decision) => {
     if (activeRunId === null || cancellationRequested) return;
     void client.resolvePermissionRequest(requestId, {
       status: decision === 'once' || decision === 'always' ? 'allow' : 'deny',
       decision: decision === 'always' ? 'allow_for_session' : decision === 'once' ? 'allow_once' : 'deny',
-      ...(answers === undefined ? {} : { updatedInput: { answers } }),
     }).then((request) => {
       if (request === null && !finished) tui.printError('Permission request is no longer pending.');
     }).catch((error: unknown) => {
@@ -641,7 +641,9 @@ export async function chatTui(
       }
       return 'completed';
     } catch (error) {
-      if (!finished) tui.printError(error instanceof Error ? error.message : String(error));
+      if (!finished && !cancellationRequested) {
+        tui.printError(error instanceof Error ? error.message : String(error));
+      }
       return cancellationRequested ? 'cancelled' : 'failed';
     } finally {
       // An aborted SSE read is not a stopped worker. Retain queue admission
