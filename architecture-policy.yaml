@@ -398,6 +398,29 @@ modules:
   # The id is `legacy-plugin-core`, not `plugin-core`: `requires` names a
   # MODULE, and the rule resolves a name to that module's `roots` before
   # comparing. A name with no matching module silently permits nothing.
+  # `@duya/command-catalog` (2026-10-17, landed with the bang-command stack
+  # `c3a1ed41`): the ONE place a slash command is defined — name, aliases,
+  # descriptions, argument shape, and which surfaces advertise it. Measured:
+  # 579 lines in `packages/command-catalog/src/index.ts`, `private: true`, and
+  # **zero dependencies**.
+  #
+  # It was undeclared until now, and per the rule above a name with no matching
+  # module silently permits nothing — so all four edges into it were reported as
+  # blocking `module-dependency` violations, including two from the CLI. Declared
+  # rather than baselined: a zero-dependency, metadata-only package that both
+  # clients import on purpose is the intended shape, not legacy debt, and the
+  # alternative would be four permanent fingerprints for a contract that is
+  # supposed to be shared.
+  #
+  # Behaviour deliberately does NOT live here — the Desktop acts on a renderer
+  # bridge, the CLI acts over Host HTTP. That split is why the package can be
+  # shared without dragging either transport into the other.
+  - id: command-catalog
+    roots: [packages/command-catalog]
+    managed: true
+    requires: []
+    owner: agent
+
   - id: desktop-host
     roots: [apps/desktop]
     managed: false
@@ -407,7 +430,24 @@ modules:
     # `packages/agent/src/tool/allowedRoots.ts`. Declared here rather than
     # baselined: the App depending on the sandbox primitives package is the
     # intended shape of the A5 split, not legacy debt.
-    requires: [agent-protocol, agent-core, agent-runtime, capabilities, legacy-plugin-core, connectors, desktop-contracts, memory, input-completion, sandbox, data, duya-host]
+    # `legacy-ai` (2026-10-17): two edges, from the slash-command executors that
+    # landed with `c3a1ed41` — `lib/commands/executors/info.ts` imports
+    # `computeContextEstimate`, `findModelById`, `resolveContextWindow` from
+    # `@duya/ai`, and `lib/commands/registry.test.ts` does not reach `ai` at all
+    # (that one is `command-catalog`). These are the exact functions plan 610 A0
+    # §3.1 named as the ones the renderer wanted from `ai`.
+    #
+    # Declared, not baselined, because they are pure model-metadata maths with no
+    # IO, and `ai` carries exactly one Node-touching file
+    # (`api/bedrock-converse.ts`, already excluded from every isomorphic claim).
+    # This does widen the permission for the whole `apps/desktop` tree, which is
+    # the standing-permission hazard the `agent-core` note below describes; the
+    # mitigation is that `legacy-ai` stays `managed: false`, so the edge is
+    # visible in every audit rather than tolerated silently.
+    #
+    # `command-catalog`: see its module declaration above. Two edges —
+    # `lib/commands/registry.ts` and its test — both intentional.
+    requires: [agent-protocol, agent-core, agent-runtime, capabilities, legacy-plugin-core, connectors, desktop-contracts, memory, input-completion, sandbox, data, duya-host, legacy-ai, command-catalog]
     owner: desktop
 
   - id: repo-tooling
@@ -714,7 +754,18 @@ modules:
     managed: false
     # CLI serves the local Host and uses its authenticated session API. Data
     # ownership and database handles stay in the Host package.
-    requires: [input-completion, data, duya-host, agent-protocol]
+    # `legacy-ai` and `command-catalog` (2026-10-17): two edges each, from the
+    # TUI slash registry that landed with `c3a1ed41`.
+    # `slash/session-info.ts` imports `computeContextEstimate` and
+    # `resolveContextWindow` from the `@duya/ai/context` subpath — pure metadata,
+    # no IO. `slash/registry.ts` and `slash/__tests__/slash-commands.test.ts`
+    # import the shared command vocabulary, which is metadata by construction
+    # (that package has zero dependencies).
+    #
+    # Both declared rather than baselined: the CLI importing the same slash
+    # vocabulary the Desktop imports is the entire point of the package, and the
+    # `ai` functions are the ones plan 610 A0 §3.1 identified as IO-free.
+    requires: [input-completion, data, duya-host, agent-protocol, legacy-ai, command-catalog]
     owner: agent
 
   - id: legacy-gateway
