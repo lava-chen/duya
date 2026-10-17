@@ -1,14 +1,28 @@
 /**
  * Plan 610 plan-17 S0: the production-chain loss of native Runtime events.
  *
- * ## The claim under test
+ * ## Scope: the driver, NOT the ledger
  *
- * The shared `RunEngine` DOES mint durable lifecycle events — `run.started` and
- * `assistant.message_finalized` both are `durability: 'durable'` in
- * `events/registry.ts` — and the Host spine DOES have a durable sink shape for
- * them (`RunPersistence`, `run-session.ts:56-61`). Neither is reachable from the
- * production worker turn. Two INDEPENDENT seams drop the events, and this file
- * separates them because S1 has to fix them differently:
+ * This file records what the ENGINE mints and what leaves the WORKER. It says
+ * nothing about what the Host stores, and an earlier version of this header
+ * implied otherwise — which was wrong twice over:
+ *
+ *  - `run.started` is not lost. The Host mints and persists its own before
+ *    dispatch (`controller.ts:526-543`), so the worker's dropped copy is a
+ *    harmless duplicate.
+ *  - `assistant.message_finalized` is rebuilt by the worker after journal flush
+ *    (`worker-process-entry.ts:2433-2438`), so the outer layer compensates.
+ *
+ * Reading "the engine dropped it" as "the Host does not have it" was an
+ * overreach. The authoritative measurement — real driver, real Host, real
+ * `run_events` table — lives in `native-event-ledger-roundtrip.test.ts`, and it
+ * shows something different again: the rows are there, but the HOST re-mints
+ * their `seq`, so the Runtime's event identity never reaches the ledger.
+ *
+ * ## What this file DOES establish
+ *
+ * The two INDEPENDENT seams below are real and are what S1 has to fix. They are
+ * about the BINDING and the CHANNEL, not about a missing table.
  *
  *   1. **No durable binding on the worker's spine.** `worker-process-entry.ts:2279`
  *      calls `driveRunWithEngine` without `persistence`; the driver forwards it
@@ -21,10 +35,11 @@
  *   2. **The worker→Host channel is the lossy legacy vocabulary.**
  *      `worker-engine-driver.ts:235` projects each native envelope through
  *      `projectToLegacyFrame`, which returns `null` for eleven event types
- *      (`legacy-sse-projector.ts:299-310`), and `RunOrchestrator.observe` rebuilds
- *      the Host ledger from those frames via `controller.observeFrame` →
- *      `chat-event-translator.ts:222-426`. An event the projection drops cannot be
- *      reconstructed from what remains.
+ *      (`legacy-sse-projector.ts:299-310`), and `RunOrchestrator.observe`
+ *      rebuilds ledger rows from those frames via `controller.observeFrame` →
+ *      `chat-event-translator.ts:222-426`, minting a FRESH `seq` on the way in.
+ *      An event the projection drops cannot be reconstructed from what remains,
+ *      and one that survives arrives with someone else's sequence number.
  *
  * ## The plan's headline example does not reproduce
  *
@@ -58,16 +73,14 @@
  *
  * ## Reading the result
  *
- * Layers A–C are green and are the standing record: they pin the numbers so a
- * later change to either side is visible as a diff.
- *
- * Layer D is the CONTRACT, written with `it.fails`. It is expected to FAIL on the
- * current path. That is deliberate and it is the only red-by-design pattern in
- * this tree: `it.fails` passes when the inner assertion throws, so the suite stays
- * green while the defect is on record — and the moment S1 closes the seam, the
- * inner assertion STOPS throwing, `it.fails` turns the suite RED, and the fix is to
- * delete the `it.fails` wrapper and restate it as a plain assertion. A silent green
- * here would be indistinguishable from the defect being gone.
+ * Layers A–C are green and are the standing record of the driver-level facts:
+ * what the engine mints, what leaves the worker, and what a bound sink would
+ * receive. They are NOT the S1 acceptance gate — that lives in
+ * `native-event-ledger-roundtrip.test.ts`, which measures the real `run_events`
+ * table. An earlier version of this file carried two `it.fails` contracts that
+ * asserted things about the PROJECTOR and about a recorder that was never
+ * handed to the subject under test; neither could distinguish "fixed" from
+ * "still broken", and both were removed. See the contract doc §5.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -466,24 +479,20 @@ describe('plan-610 S0 — native Runtime events on the production worker path', 
   // See the file header: delete `it.fails` when S1 lands.
   // ==========================================================================
 
-  it.fails('CONTRACT (S1): every durable event the engine mints reaches the Host ledger', async () => {
-    const run = await runOnce(false);
-
-    // The Host's authoritative record for a run is derived from what the worker
-    // sent it. Today that is the drained frame set, so a durable event with no
-    // legacy frame is durable only inside a process that is about to exit.
-    const durableNoFrame = NO_LEGACY_FRAME.filter((type) => nativeCount(run.native, type) > 0);
-    expect(durableNoFrame).toEqual([]);
-  });
-
-  it.fails('CONTRACT (S1): a production-shaped run commits its terminal exactly once', async () => {
-    const run = await runOnce(false);
-
-    // Today the run reaches a terminal in the worker (the spine settled it) AND
-    // the Host independently settles from the drained `done` frame, with the
-    // store's CAS picking the durable winner. `run:complete` reaches the Host's
-    // ledger only when the Host settles it; the worker's own settle never does.
-    expect(run.terminal).not.toBeNull();
-    expect(run.durableCompletes).toHaveLength(1);
-  });
+  // ==========================================================================
+  // Layer D — MOVED. The two contract cases that used to live here were removed
+  // after review, and the reason is worth keeping.
+  //
+  // The first one asserted that the engine's native events are members of the
+  // no-legacy-frame list. That is a statement about the PROJECTOR, and it stayed
+  // false even after a correct native channel saved every event in the Host's
+  // ledger — so as an S1 acceptance gate it could never go green for the right
+  // reason. The second one counted calls on a recorder that was never handed to
+  // the subject under test, so its zero said nothing about the production
+  // terminal at all.
+  //
+  // Both now live in `native-event-ledger-roundtrip.test.ts`, which measures the
+  // real `run_events` table. This file remains the driver-level record: what the
+  // engine mints, and what leaves the worker over the legacy channel.
+  // ==========================================================================
 });

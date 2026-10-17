@@ -1,263 +1,269 @@
-# 17-S0 — 生产事件权威接缝合同
+# 17-S0 — 生产事件权威接缝合同（第二版）
 
-Date: 2026-10-17. Parent: [17 共享 Agent 平台执行计划](./17-shared-agent-platform-execution.md) §5 S0.
-Slice: S0（复现 + 冻结权威）. Status: 实施完成，S1 可据此动工。
+Date: 2026-10-17（修订同日）. Parent: [17 共享 Agent 平台执行计划](./17-shared-agent-platform-execution.md) §5 S0.
+Slice: S0（复现 + 冻结权威）. Status: **partial — 见 §7 未闭合项**.
 
-基线：master `d9561936`，工作树在开工时 CLEAN，Windows 11 / Node v24.16.0 / npm 11.13.0。
-本切片唯一改动的源码是测试：`packages/host/tests/worker-product-runtime/engine-turn-harness.ts`
-（+12 行，纯 additive）与新增
-`packages/host/tests/worker-product-runtime/native-event-authority-loss.test.ts`。
-**没有改任何生产代码。**
+基线：master `9c8d589a`（第一版 S0 提交），Windows 11 / Node v24.16.0。
+本切片仍然**零生产代码改动**。
 
 复现命令：
 
 ```bash
-npx vitest run packages/host/tests/worker-product-runtime/native-event-authority-loss.test.ts
+npx vitest run packages/host/tests/worker-product-runtime/native-event-ledger-roundtrip.test.ts \
+                packages/host/tests/worker-product-runtime/native-event-authority-loss.test.ts
 ```
 
-实测结果：8 passed（其中 2 条是 `it.fails` 契约，见 §6）。
+实测结果：12 passed（其中 2 条是 `it.fails` 的 S1 门禁，见 §5）。
 
 ---
 
-## 1. 对计划前提的两处更正
+## 1. 三处更正：第一版有三处结论是错的
 
-S0 的第一项产出是更正，不是确认。计划 §2 有两处与生产实测不符，接手 S1 前必须知道。
+第一版的复现停在 driver 局部输出上就下了全链路结论。审查指出后重做，实测推翻了其中三条。
+**写下来是为了让 S1 不再从这三条出发。**
 
-### 1.1 `turn.completed` 在生产路径上根本不会被引擎发出
+### 1.1 `turn.completed` 没有生产者（第一版已记，仍然成立）
 
-计划 §2 把 `turn.completed` 举为「引擎出现、Host 台账缺失」的样板事件。实测不成立：
+`run-engine.ts` 没有任何 `turn.completed` 发射点；全仓命中只有投影器 null 分支、
+surface 映射表、测试合成 envelope。真实运行实测该事件计数为 0。
 
-```
-native: run.started, turn.started, assistant.text_delta, tool.call_started,
-        assistant.text_block, tool.call_completed, turn.started,
-        assistant.text_delta, assistant.text_block,
-        assistant.message_finalized, run.completed
-```
+### 1.2 台账不是「事件缺失」，而是「身份被重建」（推翻第一版的核心结论）
 
-全仓 `turn.completed` 的命中只有三类：`legacy-sse-projector.ts:301` 的 `return null`
-分支、`surface/legacy-projection.ts:52` 的映射表、以及测试里的合成 envelope。
-`packages/agent-runtime/src/engine/run-engine.ts` **没有任何 `turn.completed` 发射点**。
+第一版称 `run.started` / `assistant.message_finalized` 从未进入 Host 台账。**不成立。**
+真实 `run_events` 实测（`native-event-ledger-roundtrip.test.ts`）：
 
-**Why 这条必须在 S0 就钉死：** 计划 §5 S1 的第一条是「新通道传原生 envelope」。如果照
-「投影丢了就补齐」去实现，会为一个**没有生产者的事件**建通道，而且验收会写
-「`turn.completed` 已贯通」——这条永远通不了。更危险的方向是：拿投影器的 null 列表当
-「缺陷清单」，把 11 个事件全部当作「应该有但丢了」，而其中多数同样没有生产者。
-
-复现层 A2 把它钉成可执行事实（`nativeCount(run.native, 'turn.completed') === 0`，
-同时断言 `turn.started === 2`，排除「整轮没跑」的平凡解释）。
-
-### 1.2 丢失发生在两个互相独立的接缝，不是一个
-
-计划 §2 分别列了「worker 输出有损」和「spine 未绑定持久化」，但没有说清它们是两个
-独立故障、必须分别修。实测：
-
-| 接缝 | 事实 | 后果 |
+| Runtime 铸造（worker） | Host 台账实际存储 | 判定 |
 | --- | --- | --- |
-| A. 绑定 | `worker-process-entry.ts:2279` 调 `driveRunWithEngine` **不传 `persistence`**；driver 只在传入时转发（`worker-engine-driver.ts:169`）；spine 退回 no-op sink（`run-event-spine.ts:100-103`） | worker 侧的原生 envelope 只进 `EngineRunOutcome.announced`，而它唯一的用途是 `worker-process-entry.ts:2337` 打一个计数。**worker 路径上不存在任何 `RunPersistence` 实现** |
-| B. 通道 | `worker-engine-driver.ts:235` 把原生 envelope 过 `projectToLegacyFrame`；Host 侧 `run-orchestrator.ts:728 observe` → `controller.observeFrame` → `chat-event-translator.ts:222-426` 从**旧帧词汇**反推 envelope | 11 个无旧帧的事件无法从残帧中重建 |
+| `run.started#1` | `run.started#1` | 存在，但是 **Host 自己铸的**（`controller.ts:526-543`，派发前发射并落库） |
+| `turn.started#2` | `turn.started#2` | 存在，seq 恰好相同 |
+| `assistant.text_delta#3` | — | 未持久化（ephemeral，按设计） |
+| `tool.call_started#4` | `tool.call_started#**5**` | **seq 不同 → 重建** |
+| `assistant.text_block#5` | `assistant.text_block#**6**` | seq 不同 → 重建 |
+| `tool.call_completed#6` | `tool.call_completed#**7**` | seq 不同 → 重建 |
+| `turn.started#7` | `turn.started#8` | seq 不同 → 重建 |
+| `assistant.text_delta#8` | — | 未持久化（ephemeral） |
+| `assistant.text_block#9` | `assistant.text_block#**11**` | seq 不同 → 重建 |
+| `assistant.message_finalized#10` | — | **完全没有对应行** |
+| `run.completed#11` | `run.completed#**12**` | seq 不同 → 重建 |
 
-**Why 必须分开：** 只补 A，B 仍然丢弃；只补 B，A 仍然没有落库。复现的控制组（Layer C）
-证明了引擎与 spine 都不是瓶颈——绑一个 recording `RunPersistence` 后，同一个真实
-driver 立刻交出 `run.started` / `assistant.message_finalized` / `run.completed`，
-且身份完好（`runId` / `seq` 均在）。所以 S1 **不许**改引擎或 spine。
+台账里共 8 行，`run_metrics` 记 `eventsTotal:12 / eventsDurable:8`。
 
-实测丢失清单（本次真实两轮 + 一次工具调用）：
+**Why 这比「缺失」更准确：** 台账里绝大部分事实都在，缺的是 **Runtime 的身份**。
+Host 在翻译旧帧时重新铸 `seq`，所以任何一行都无法对回引擎真正发出的那个 envelope。
+两个序列的偏移量恰好等于被跳过的 ephemeral 事件数——这是「重建」的直接指纹。
+S1 若按第一版去「补齐缺失事件」，会做很多工作却碰不到真正的问题。
 
-- 引擎铸造、无旧帧、Host 收不到：`run.started`（manifest hash + runtime identity）、
-  `assistant.message_finalized`（权威 assistant 消息）。二者 `durability: 'durable'`。
-- drain 正常收到的：`turn_start` ×2、`status`、`text_delta` ×2、`text` ×2、
-  `tool_use`、`tool_result`、`done`。
+### 1.3 没有两个持久化 writer，也不存在 CAS 竞争（推翻第一版的终态叙述）
+
+第一版写「worker 的 spine 与 Host 各提交一次终态，由 `RunStore.settleRun` 的 CAS 决胜」。
+**这是把一个不存在的竞争当成了架构事实。**
+
+- 生产里直接调 `appendEvents` / `settleRun` 的调用点**全部在测试里**；
+  生产写入一律走 `run:append` / `run:complete` → 控制平面 → `RunStore`。
+- worker 侧 spine 的 persistence 是 no-op（`run-event-spine.ts:100-103`），
+  所以 worker 的终态**从不进入** `run_events`，两个 writer 从未在同一个 CAS 上相遇。
+
+实测：`settleStates = ['applied']`，`runs.status = 'completed'`，`terminal = 'completed'`，
+`finished_at` 已写。**Host 已经是唯一的持久化终态提交者。**
+
+这条把 §4 的决定从「待选」变成了「已被证据锁定」。
+
+### 1.4 外层补偿存在，且第一版没看见
+
+- `worker-process-entry.ts:2433-2438`：worker 在 journal flush 后**自己构造**
+  `chat:message_finalized` 帧。完整生产链路里这条补偿存在。
+- `controller.ts:526-543`：Host 在派发前铸造并落库自己的 `run.started`。
+
+所以必须按三类分别记录，合并成「丢失」一个数字会让 S1 修错东西：
+
+| 类别 | 含义 | 修法 |
+| --- | --- | --- |
+| **absent** | 台账里没有任何对应行 | 原生通道 |
+| **rebuilt** | 事实存在，但身份由 Host 铸造 | 原生通道（让 Runtime 的 seq 直接落库） |
+| **compensated** | 外层重建成功，业务事实没丢 | **不是缺陷**；是今天唯一让输出正确的原因 |
+
+实测归属：`assistant.message_finalized` 在 **driver+Host** 这一对里是 absent；
+完整生产链路里 worker 补偿会把它变成 compensated。`turn.started` 及其余执行事件是 rebuilt。
+`text_delta` 是 ephemeral，不属于任何一类。
 
 ---
 
 ## 2. 完整路径与每一跳的责任人
 
-这是 S0 要求「点名每处 runId/seq/epoch、manifest、terminal 的创建与提交者」的答案。
-`→` 表示数据流向，`[R]` 表示执行事实的产生者，`[C]` 表示控制平面记录的写入者。
+`[R]` 执行事实的产生者，`[C]` 控制平面记录的写入者。
 
 ```mermaid
 flowchart TB
-  ENG[RunEngineImpl 发射 envelope] --> SP[worker 内 spine: RunSession + RunEventEmitter]
-  SP -->|spine.emitter.emit| ANN[announced 数组 / RunEventStream]
+  ENG[RunEngineImpl 发射 envelope] --> SP[worker spine: RunSession + Emitter]
   SP -->|persistence.append| NOP["no-op sink（生产未绑定）"]
-  ANN --> PRJ[projectToLegacyFrame 有损投影]
+  SP --> PRJ[projectToLegacyFrame 有损投影]
   PRJ -->|chat:* 帧| DR[onFrame drain → sendEvent]
-  NOP -.->|缺失| CP
-  DR --> OBS[RunOrchestrator.observe]
+  DR --> NRM[normalizeWorkerEvent]
+  NRM --> OBS[RunOrchestrator.observe]
   OBS --> CF[controller.observeFrame → chat-event-translator]
-  CF -->|RunEventEnvelope| PA[persistenceFor.append → run:append]
+  CF -->|Host 重新铸 seq| PA[run:append]
   PA --> STORE[(RunStore.run_events)]
-  OBS -->|onEvent 实时臂| SSE[GET /v1/agent-runs/:runId/events/stream]
-  STORE --> RP[readAgentRunEvents → listEvents 重放]
-  ENG -->|spine.session.settle| WT[worker 内终态]
-  OBS -->|chat:done / chat:error| HS[RunOrchestrator.settleSession → RunController.settle]
-  HS --> PC[persistenceFor.complete → run:complete → settleRun CAS]
+  OBS -->|chat:done| HS[settleSession → RunController.settle]
+  HS --> PC[run:complete → settleRun]
+  CTRL[controller.start 铸自己的 run.started] --> PA
 ```
 
-| 跳 | 组件 | runId / seq / epoch 谁创建 | terminal 谁提交 |
-| --- | --- | --- | --- |
-| 引擎 → spine | `run-engine.ts` → `RunEventEmitter` | 引擎铸 `seq`；spine 的 `RunSession` 铸 `runId` 归属 | 引擎只 `proposeTerminal`（记录，不结算） |
-| spine → 落库 | `run-event-spine.ts:94-104` | — | **今天无人**（no-op persistence） |
-| spine → 旧帧 | `legacy-sse-projector.ts` | seq / runId 在此**被丢弃** | — |
-| 旧帧 → Host | `run-orchestrator.ts:728` → `chat-event-translator.ts:222` | Host **重新铸** seq（第二次身份） | — |
-| Host → 落库 | `run-orchestrator.ts:290-337` → `run:append` | — | — |
-| Host → 终态 | `run-orchestrator.ts:786` → `controller.ts:884` | — | Host 提交 `run:complete` → `RunStore.settleRun` CAS |
-| 落库 → 重放 | `run-api.ts:135` → `run-store.ts:495` | 读同一张 `run_events` | — |
+| 跳 | runId / seq 谁铸 | terminal 谁提交 |
+| --- | --- | --- |
+| 引擎 → worker spine | **Runtime 铸 seq**（每 run 从 1 起） | 引擎只 `proposeTerminal`，不结算 |
+| worker spine → 落库 | — | **无**（no-op sink，worker 的终态不可见） |
+| spine → 旧帧 | seq / runId 在投影中丢弃 | — |
+| 旧帧 → Host | **Host 重新铸 seq**（第二次身份） | — |
+| Host `controller.start` | Host 铸 `run.started#1` | — |
+| Host → 落库 | — | **Host，恰好一次** |
 
-生产消费者：Agent Server（`packages/host/src/http-server.ts`）经
-`run-execution.ts:147-150` 直连 `RunStore`，SSE 出口 `http-server.ts:2660`，
-重放 `http-server.ts:2733`。
-
-**今天的结构性缺陷用一句话说：** 一个 run 的事件身份被铸造了两次（引擎一次，
-Host 翻译时一次），权威记录只来自第二次，而第二次的输入是一次有损投影。
+生产消费者：Agent Server `http-server.ts:2660`（SSE）、`run-api.ts:135` → `listEvents`（重放）。
 
 ---
 
-## 3. 冻结的权威接缝（S1 的施工依据）
+## 3. 复现方法的自我修正（留给下一位 agent）
 
-以下是 S0 的**唯一权威决定**。S1 照此实现；与之冲突的实现视为违约。
+第一版的复现有三个方法缺陷，都会让结论不可靠，逐条记录：
 
-### 3.1 唯一执行事件序列
+1. **从局部输出推断全链路。** 只看 driver 的 `announced` 和 `frames` 就断言 Host 台账状态。
+   必须真的把帧喂进 Host 并**读回 `run_events` 表**。
+2. **跳过 router 的规范化。** 生产链路是 `normalizeWorkerEvent(frame)` → `observe(...)`。
+   直接把原始帧喂 `observe` 测的是测试的捷径。
+3. **写完立刻读。** `observe` 触发的 append 是异步 flush；不 `await settleSession` 就读表，
+   得到的「什么都没落库」是**没刷完**，不是没写。同理，**过早 `db.close()` 会让 flush 报
+   "The database connection is not open"，读回来是一条事件都没有** —— 这个假象一度让我
+   以为整条链路全丢。
 
-**一个 run 的执行事件只有一条序列，且只有 Runtime 能铸造它。**
+另外两个真实 API 形状陷阱（都会静默失败）：
 
-1. `seq` 由 Runtime 侧的 `RunSession` 铸造，per-run 从 1 起严格 +1。
-   Host **不得**为执行事件再铸一次 seq；Host 收到的 envelope 必须原样使用其 `seq`。
-2. 事件身份 = `(runId, seq)`。**不得**用 `(sessionId, seq)`——session 跨 run，
-   两个 run 的 `seq` 会合法重复（`agent-protocol/src/envelope.ts:58-65` 已写明）。
-3. session 级游标（客户端重连位置）与 per-run `seq` 是两个标度，**不得**复用同一字段。
-4. 缺席即合法：非 durable 事件可以不在 `run_events` 里，于是 `seq` 可以跳号。
-   **不得**把「`seq + 1` 连续」当作 durable 完整性的证明；完整性由 receipt + 终态对账保证。
-5. `runId` 归属必须校验：Host 收到不属于本 worker / 本 run 的 envelope 时拒绝并记录，
-   不接受 payload 自报的身份。
-
-### 3.2 durable 写入与 receipt
-
-1. Runtime 产生的事件**保留其身份**（`runId` / `seq` / `epoch` / 完整 payload）交给 Host。
-   **禁止**先投影成旧帧再反推新事件——那是当前实现，也是本切片要消除的东西。
-2. Host 校验归属后写入 `run_events`，并返回 **receipt**（`run-receipt.ts`：
-   `RunWriteState` / `isDurableWrite`）。`applied` / `reconciled` 算 durable；
-   `conflict` / `absent` 不算。
-3. 生产启动**必须**有真实 persistence 绑定。空 persistence 只允许显式的测试 /
-   无持久化场景；**不得**让权威执行静默使用 no-op sink
-   （`run-event-spine.ts:100` 的默认值今天正是这种情况）。
-4. 同一事件重复到达不得二次生效：以 `(runId, seq)` 幂等。
-
-### 3.3 终态裁决（今天有两个 writer，这是必须先解开的死结）
-
-实测：**worker 与 Host 都在提交终态。**
-
-- worker 侧：spine 的 `RunSession.settle`（`run-session.ts:558`，落库调用 `:614`）
-- Host 侧：`RunOrchestrator.settleSession`（`run-orchestrator.ts:786`）→
-  `RunController.settle` → `persistenceFor.complete` → `RunStore.settleRun` 的 CAS
-
-今天由 CAS 决定谁赢，所以结果是**正确但无归属**的：两个 writer 都「宣布」过终态，
-`run_events` 里只有一条，且来源不可判定。S1 的裁决规则：
-
-1. **一个 run 只有一个终态 owner。** 选定后写进本文件并作为 S1 的验收项。
-2. Host 合成的事实（run 开始、取消升级、worker 崩溃）必须有**明确且无冲突**的
-   seq 与终态：它们由 **Host** 铸造，走 §3.1 同一条序列（不是第二条序列），
-   并且必须是**最后一个**该 run 的事件。
-3. Host 收到「执行已结束」但**尚未落库确认**时，**不得**向客户端发布成功。
-   发布成功 = receipt 确认，不是 worker 说了 `done`。
-4. 存储拒绝、worker 退出、cancel 与 completion 竞态，都要产生**可对账**的结果，
-   不允许出现「一条 `running` 行 + 零线索」（`run-orchestrator.ts:579-585` 已把这条
-   列为最坏结局）。
-5. `runtime_crash` 只在 Host 未主动请求停止时使用。客户端断连导致的 worker 停止
-   是 Host 自己要求的，记 `cancelled`（`run-orchestrator.ts:45-51` 已有此约定，保留）。
-
-### 3.4 旧通道的去向
-
-`chat:*` 帧**只服务旧消费者**（TUI / Desktop 现状）。新通道与旧通道**不得**让同一个
-事件被两条路径各自重新 emit 或入账。S1 的 producer / consumer 必须作为一套兼容发布，
-不允许只切一半造成半条事件链。
+- `run:append` 的回执**必须带写入条数**：`readRunReceipt` 对缺 `written` 的 `applied`
+  判定为 `unreadable`，reason 是 `run:append claimed applied without a written count`。
+  报的是「没有落库」，不是「落库失败」——方向相反，极易误导。
+- `RunOpenOutcome` 用 `state`（`created` / `reused` / `conflict`），没有 `created` 布尔字段；
+  `RunEventRow` 用 `event_type` / `run_id` / `envelope_json`，不是 `payload` / `runId`。
 
 ---
 
-## 4. 明确不做的事
+## 4. 冻结的权威接缝（S1 的施工依据）
 
-- **不改引擎、不改 spine、不改 projector。** 控制组已证明它们不是瓶颈。
-- **不新建 `turn.completed` 的生产路径**（§1.1）。若产品确实需要「轮次结束」这个事实，
-  那是一次**协议决定**（要么让引擎真的发，要么从协议里退役它），不属于 S1 的接线修复，
-  必须单开切片并单独评审。
-- 不在本切片做 TUI / Desktop 接线（S2、S6），不建 Web / Bot / Plugin App。
-- 不把 legacy 投影重新灌回原生台账（那会让台账的上限变成「UI 恰好显示了什么」）。
+### 4.1 权威划分（已由证据锁定，不是待选）
+
+1. **Runtime 产生执行事实**：模型/工具/轮次的事实由 Runtime 铸造，并携带自己的
+   `runId` / `seq` / `epoch` / 完整 payload。
+2. **Host 是唯一的持久化终态提交者**。证据：worker 的 persistence 是 no-op，
+   全部生产写入经 `run:append` / `run:complete`，实测恰好一次 `applied`。
+   S1 **不得**引入第二个持久化终态 writer。
+3. **Host 合成事实的规则**：Host 合成的事件（run 开启、取消升级、worker 崩溃）走
+   §4.2 同一条序列，由 Host 铸 seq，且必须是该 run 的**最后一个**事件。
+   **取消升级不是新事件序列**：它是同一序列上、终态之前的最后一个事件；
+   「必须是最后一个」指的是**终态事件**，不是所有 Host 合成事件。
+
+### 4.2 唯一执行事件序列
+
+1. 一个 run 只有一条执行事件序列。`seq` 由 Runtime 铸，per-run 从 1 起严格 +1。
+2. Host **不得**为转发来的执行事件重铸 `seq`，也不得在翻译阶段分配新身份。
+3. 身份 = `(runId, seq)`。**不得**用 `(sessionId, seq)`——session 跨 run，
+   两个 run 的 `seq` 会合法重复（`envelope.ts:58-65` 已写明）。
+4. session 级游标与 per-run `seq` 是两个标度，**不得**复用同一字段。
+5. 缺席即合法：非 durable 事件可以不在台账里，`seq` 因此可以跳号。
+   **不得**把「`seq + 1` 连续」当作 durable 完整性的证明。
+6. Host 收到不属于本 worker / 本 run 的 envelope 时拒绝并记录，不接受 payload 自报身份。
+
+### 4.3 worker 崩溃 / attempt 失效（第一版缺失，S0 在此定案）
+
+worker 崩溃时 Host 必须能收敛出唯一可对账结果，规则如下：
+
+1. **撤销旧 attempt 的写权限。** 每个 run 的 attempt 带 `epoch`。新 attempt 开启前，
+   Host 先把旧 `epoch` 标记为失效；此后携带旧 `epoch` 的迟到 envelope 一律拒绝，
+   不得写入、不得改变已提交终态。
+2. **确认序列边界。** 崩溃后 Host 读回台账中该 run 已提交的最大 `seq`，作为新 attempt 的
+   起点；**不得**假设连续，也不得从 1 重来。
+3. **合成终态。** Host 在确认边界后合成该 run 的终态事件（`runtime_crash`），
+   并按 §4.2 铸为序列最后一个事件，随后按 §4.1 提交。
+   **前置条件**：新 attempt 的权限已在 (1) 中撤销，否则会出现两个 writer 竞争同一 CAS ——
+   这正是第一版误以为存在、而生产中实际不存在的那种竞争，不得把它引入进来。
+4. **对账而非重做。** 重启先对账已提交结果，不盲目重做外部副作用；
+   execution resume 未支持时继续明确拒绝。
+5. `runtime_crash` 只在 Host **未**主动请求停止时使用。客户端断连导致的 worker 停止
+   记 `cancelled`（`run-orchestrator.ts:45-51` 已有此约定，保留）。
+
+### 4.4 durable 写入与 receipt
+
+1. 原生事件**保留其身份**交给 Host。**禁止**先投影成旧帧再反推新事件。
+2. Host 校验归属后写入 `run_events` 并返回 receipt；`applied` / `reconciled` 算 durable。
+3. 生产启动**必须**有真实 persistence 绑定；空 sink 只允许显式的测试 / 无持久化场景。
+4. 同一 `(runId, seq)` 重复到达不得二次生效；以 `(runId, seq)` 幂等。
+
+### 4.5 旧通道的去向
+
+`chat:*` 帧只服务旧消费者。新旧通道**不得**让同一事件被两条路径各自 emit 或入账。
+S1 的 producer / consumer 必须作为一套兼容发布，不允许只切一半。
 
 ---
 
-## 5. 未验证与不支持
+## 5. S1 门禁（打在真实台账上）
 
-诚实标注，避免被当成已验收：
+`native-event-ledger-roundtrip.test.ts` 末尾两条 `it.fails` 是 S1 的验收门禁。
+它们读的是**真实 `run_events` 表**，不是投影函数、也不是一个没被传给被测对象的 recorder：
 
-- 复现覆盖的是 **worker 进程内的生产 driver 路径**（`driveRunWithEngine` +
-  真实 spine + 真实 `RunEngineImpl` + 真实 worker codec）。它**没有**拉起
-  `worker-process-entry.ts` 作为独立进程——该模块 import 时即调用 `main()`，无法被
-  测试 import，所以这一层是「用生产同形参数驱动生产 driver」而非进程级 e2e。
-- **没有** live provider、**没有**真实 Desktop / Electron、**没有** packaged smoke。
-  provider 是脚本化的（只替掉模型远端，不替掉任何被测腿）。
-- **没有**验证 `RunStore` 的真实落库：控制组用的是 recording `RunPersistence`，
-  它证明「spine 会把这些事件交给一个 sink」，不证明 `run_events` 表能承受它们。
-  S1 接线后必须补这一层。
-- 崩溃 / 取消 / 存储拒绝路径**未**复现。§3.3 的裁决规则来自源码与既有注释，
-  不是本切片的实测结果。
-- 并行 session 提示：本文件写作期间共享检出出现了其他 session 的未提交改动
-  （`AGENTS.md`、`ARCHITECTURE.md`、`package.json`、series README，以及若干新增
-  未跟踪文件）。它们不属于本切片，本切片未触碰。
+- `CONTRACT (S1): the ledger preserves the event identity the Runtime minted`
+  —— 每条 durable 原生事件都能以 Runtime 自己的身份在台账里找到。
+  今天失败（Host 重铸 seq），S1 修好后自然转绿。
+- `CONTRACT (S1): no durable Runtime event is missing from the ledger`
+  —— `assistant.message_finalized` 今天在 driver+Host 这一对里没有任何行。
+
+非空洞性已验证：移除任一断言体后 `it.fails` 转红（`1 failed`），证明是真断言。
+
+`it.fails` 的语义在这里是**缺陷登记**，不是「合同已成立」：内层断言今天必须失败，
+S1 修好后不再抛，`it.fails` 转红，提示删掉 wrapper。删除 wrapper 本身就是 S1 的收尾动作。
 
 ---
 
-## 6. 交接模板（按 17 §6 填写）
+## 6. 明确不做的事（已放宽第一版）
 
-```text
-Slice / owner / commit / OS / worktree state:
-  S0 / mavis / master d9561936 (未提交) / Windows 11 · Node v24.16.0 ·
-  开工时 CLEAN，写作期间出现他方未提交改动
+第一版写「不改引擎、不改 spine」。**该限制过度，收回。** recording sink 能收到事件，
+只证明正常绑定路径可工作，并不证明生产启动校验、提交确认和故障处理都无需改动 ——
+尤其要禁止静默 no-op persistence，这几乎必然要动 spine 的构造边界。
 
-Production caller before -> after:
-  before: driveRunWithEngine 被 worker-process-entry.ts:2279 调用，不传 persistence；
-          原生 envelope 经 projectToLegacyFrame 降为 chat:* 帧出进程
-  after:  未改生产代码（S0 只交付复现 + 合同；§3 是 S1 的施工依据）
+改为：**保持执行语义，允许为权威绑定、receipt 与终态交接修改必要接缝。**
+即：不得改变模型→工具→结果的执行语义；但 `RunSession` / `RunEventEmitter` /
+`driveRunWithEngine` / `run-event-spine` 的**构造与绑定边界**可以改。
+真正禁止的是 §4.2 的身份规则和「一个终态 owner」。
 
-Authority and compatibility decisions:
-  §1.1 更正：turn.completed 无生产者，不得作为 S1 验收样板
-  §3.1 唯一执行事件序列由 Runtime 铸造，Host 不得二次铸 seq
-  §3.2 生产必须绑定真实 persistence，空 sink 只允许显式测试场景
-  §3.3 终态当前有两个 writer（worker spine + Host settleSession），CAS 决定赢家 →
-        S1 必须指定唯一 owner；本切片不替 S1 做这个选择
+其余仍然不做：
 
-Changed paths / remaining consumers:
-  M packages/host/tests/worker-product-runtime/engine-turn-harness.ts (+12, additive)
-  A packages/host/tests/worker-product-runtime/native-event-authority-loss.test.ts
-  生产代码零改动；harness 的其余 8 个使用方不受影响（新增可选字段，未传即保持原行为）
+- 不新建 `turn.completed` 的生产路径（§1.1）。它应登记为**另一项生命周期缺口**，
+  而不是用「必须为零」的测试把它固化成正确。
+- 不在本切片做 TUI / Desktop / Web / Bot / Plugin App 接线。
+- 不把 legacy 投影重新灌回原生台账。
 
-Failing reproduction -> passing evidence:
-  复现 8 passed。2 条 it.fails 契约是**故意红**的合同：
-    - 「引擎铸造的每条 durable 事件都到达 Host 台账」今天失败
-    - 「生产形状的 run 恰好提交一次终态」今天失败
-  非空洞性已验证：移除契约断言体后 `it.fails` 转红（1 failed / 7 passed），
-  证明它是真断言而非恒过的壳；恢复后 8/8 绿。
+---
 
-Targeted tests / typecheck / gates / real UI or terminal:
-  npx vitest run <the file>  → 8 passed
-  npm run typecheck:all      → exit 0
-  npm run architecture:check → exit 0，2686/2686 tolerated，baseline 932 未动
-  无真实 UI / PTY 验证（本切片不涉及 UI）
+## 7. 未验证与未闭合（partial 的原因）
 
-  同目录 11 个套件一起跑：8 passed / 3 failed（7 条）。**已按 (file, test, signature)
-  归属为既有失败，非本切片引入**，两轮独立证据：
-   1) 只跑那 3 个套件（不含本切片新文件）→ 同样 7 条红；
-   2) `git stash push` 仅撤掉 harness 的 12 行 → 仍然同样 7 条红，签名逐字相同。
-  涉及 live-ring-refresh-frame ×1、run-lifecycle-seam ×4、turn-assembly-seam ×2。
-  处置留给它们的 owner，本切片未触碰其断言。
+| 项 | 状态 |
+| --- | --- |
+| `worker-process-entry.ts` 作为**独立进程**的边界 | **未覆盖**。该模块 import 时调用 `main()`，无法被测试 import。本切片覆盖到 driver + Host + 真实台账，**worker 进程边界仍未验证** |
+| worker 的 `chat:message_finalized` 补偿在真实链路中的效果 | **未验证**。§1.4 的结论来自读源码，不是实测。`absent` 与 `compensated` 的分界因此只有 driver+Host 一侧的证据 |
+| 崩溃 / attempt 撤销 / 存储拒绝 / 取消竞态 | **未复现**。§4.3 的规则来自源码与既有注释，**不是实测结果** |
+| live provider、真实 Electron、打包 smoke | 未做（本切片不涉及 UI） |
+| 完整 610 验收 | 未做 |
 
-Persistence and rollback limits:
-  仅测试文件；回滚 = 删新文件 + 还原 harness 的 12 行。
-  未触碰 run_events schema，未产生任何数据或外部副作用。
+并行的 heisenbug：`worker-product-runtime` 同目录另有 **7 条既有红**
+（live-ring-refresh-frame ×1、run-lifecycle-seam ×4、turn-assembly-seam ×2）。
+已按 `(file, test, signature)` 两轮证伪为既有失败（单独跑同样红；撤掉本切片改动后同样红、
+签名逐字相同），非本切片引入，处置留给它们的 owner。
 
-Unverified or unsupported:
-  见 §5（进程级 worker e2e、真实 RunStore 落库、崩溃/取消/存储拒绝路径均未验证）
+共享检出提示：写作期间有其他 session 的未提交改动，本切片全程只动自己那两个测试文件。
 
-Next executable task:
-  S1 —— 按 §3 实现原生事件到 Host 的权威链路；先补「真实 RunStore 落库」这一层
-  （§5 缺口），再动通道；producer/consumer 兼容发布。
-```
+---
+
+## 8. 下一步（很窄）
+
+1. **先定 attempt/epoch 的持久化形状**：§4.3(1) 需要一个能被 Host 拒绝的 attempt 身份，
+   `RunStore` 目前只有 `(run_id, seq)`，没有 epoch 列。这是 additive 迁移 + 旧 reader 兼容。
+2. **再补 §7 表格第一行的缺口**：worker 进程边界要么用真实 e2e 覆盖，要么在计划里
+   明确记为永久不可测，不能默认略过。
+3. **然后才动通道**：按 §4.2 让 Runtime 的 envelope 原样进台账，
+   producer/consumer 兼容发布，并删掉两条 `it.fails` wrapper。
+4. **不要**在上述之前改 UI / 建新包 / 重写 Rust。
