@@ -257,6 +257,7 @@ docs/exec-plans/active/610-architecture-series/
 | **A5** | S5 六包逐切片迁移(L3 宿主) | A4, **A0** | 每迁一块切断旧依赖并验证真实消费者 |
 | **A6** | S6 Session data contract | A5(**不再等 602**) | 回填 / 恢复 / 兼容证据齐备后才删旧关系 |
 | **A7** | S7 facade 退役 | A6 | `packages/agent` 消费者归零后删除 |
+| **A8** | **客户端轴**(2026-10-16 新增):新建 `packages/client-core`,把 `SurfaceModel` 从 `agent-runtime` 移进去 + 定义 **L1.5 客户端状态层** + 门禁 **G11** 客户端反向依赖 | A0;**A7 落地前必须先合 A8.1** | G11-1 闭包不含 `@duya/agent-runtime`(三向变异);G11-2 事件词汇数 == 1 —— 见 [15 切片 A8](./15-slice-a8-client-core.md) |
 | **B1** | 601-A 门禁:6 个 handler 的模块加载期 Electron 依赖 | 无(可与 A 线并行) | 门禁 A1 先证明现在是红的 |
 | **B2** | 601-B 控制平面倒置成纯 Node 进程 | A5, B1, **A0** | Electron / CLI / Web / 小程序全部降级为它的客户端;CLI 与 main 进程内加载 L3,Web 走 HTTP |
 | **B3** | 601-C agent runtime 注册到远端 | B2 | — |
@@ -266,6 +267,7 @@ docs/exec-plans/active/610-architecture-series/
 **A0 是唯一不做架构改造也能做的一片**,产出是让 Web 从"被耦合卡住"变成"差一个 `apps/web` 骨架",
 建议与 A1 并行启动 —— 见 [02 客户端与运行时轴](11-slice-a0-client-runtime-axis.md)。
 B 线在 B1 之后才与 A5 交汇;C 线全程可并行且不阻塞任何人。
+**A8 不在关键路径上**,可与 A5 并行;但它与 **A7 有硬耦合**(见 §5.1 A8 行)。
 
 ### 5.1 每片的唯一 next action
 
@@ -282,12 +284,20 @@ B 线在 B1 之后才与 A5 交汇;C 线全程可并行且不阻塞任何人。
 | **A5** | 先迁 `data`(纯 I/O、无业务决策),再 `capabilities`,最后 `memory` | 每迁一块:旧依赖归零 + 真实消费者仍绿 |
 | **A6** | 先产出回填/恢复脚本,再改 schema | 三份证据齐备才删旧关系 |
 | **A7** | `packages/agent` 消费者归零检查 | `architecture:check` 的 module-dependency 降到预期值 |
+| **A8** | **新建 `packages/client-core`,把 `surface-model.ts` + `legacy-projection.ts` 移进去**,加过渡 re-export,并在 `architecture-policy.yaml` 加 `managed: true` 模块声明 | 实测该文件 `import` 命中 1 且为 `import type`,运行时依赖 0;`typecheck:all` exit 0;`architecture:check` 无新增 —— **门禁 G11 在第 2 步才上线,见下行** |
 | **B1** | ✅ 门禁(静态 A1a + 行为 A1b)已红→绿,6 个 handler 已改软 require。**A1b-full 仍红且故意保留**:45 个层外模块仍硬 import electron(`window-manager` / `ipc/*` / `boot-config` / `db/connection` 等),已逐次打印在门禁输出里 | 图层内 `GREEN`;变异证明双向;层外清单是**下一步的输入**,不是已完成 |
 | **B2** | 先把控制平面搬成独立进程,**不改客户端** | Electron main 不再拥有控制平面;CLI 与 main 进程内加载 L3 |
 | **B3** | 远端注册表 + 认证 | — |
 | **C1** | 写探针,两个 runtime 各跑一次 | 9 项能力边界;`close()` 与回滚路径任一不过就停 |
 
 **A0 与 A1 已完成；原并行约束是历史记录，不再是当前排期条件。**
+
+> ⚠️ **A8 与 A7 的顺序是硬耦合,不是排期偏好(2026-10-16)。**
+> `SurfaceModel` 唯一的生产消费者在 `packages/agent/src/cli/ui/index.ts`,
+> 而 `packages/agent` 由 A7 退役(`agent-retirement-gate.mjs` 至今仍有 `blocking`)。
+> **若 A7 先合,唯一消费者消失,`SurfaceModel` 会变成「有测试、零生产消费者」。**
+> 反向若 A8.1 先合,今天平移是纯移动(实测零运行时依赖);等 TUI 接上之后再搬,
+> 成本会从「移动文件」变成「先拆依赖、再移动、再修 bundle」。**两片必须同分支可见。**
 
 > ⚠️ **A3 最高风险项,此前没写下来(2026-10-06 补记):`discarded` 是一次性闩。**
 >
