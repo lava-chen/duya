@@ -60,7 +60,7 @@ npx vitest run packages/host/tests/worker-product-runtime/native-event-ledger-ro
 
 | # | 缺口 | 入口 | 影响的卡 |
 | --- | --- | --- | --- |
-| G1 | `turn.completed` **零生产发射点**（引擎从不发射，仅协议注册表/投影器/测试合成存在） | `packages/agent-runtime/src/engine/run-engine.ts` | T01 |
+| G1 | `turn.completed` 曾经**零生产发射点**（引擎从不发射，仅协议注册表/投影器/测试合成存在）→ **T01 已部分关闭**：`end_turn` 且 provider 报了 usage 的轮次现在有终态；`tool_use` 继续轮与无 usage 轮仍无（T01b） | `packages/agent-runtime/src/engine/run-engine.ts` `#publishTurnCompleted` | T01b |
 | G2 | 正式 TUI 消费原生事件后**再投影成 LegacyFrame**，`TranscriptModel` 另有 reducer | `packages/cli/src/tui/host-event-stream.ts:24`、`packages/cli/src/chat.ts:37` | T10–T12 |
 | G3 | `client-core` **零生产消费者**；唯一 `SurfaceModel` 使用点在退役包内 | `packages/agent/src/cli/ui/surface-view.ts:206` | T10–T12 |
 | G4 | 能力三向（执行/消费/提供）未绑定，无客户端反向门禁 G11 | `packages/agent-protocol/src/{capabilities,host-capabilities}.ts`、`packages/agent-core/src/capability-negotiation.ts`；`scripts/architecture/` 无对应 gate | T13–T15 |
@@ -69,6 +69,7 @@ npx vitest run packages/host/tests/worker-product-runtime/native-event-ledger-ro
 | G7 | `apps/web` 不存在 | — | Wave 3 |
 | G8 | `packages/host/bundle/*` **tracked 但比源码旧**（在途未提交重建） | `packages/host/bundle/` | T03 |
 | G9 | 旧 Agent 退役 gate 仍 OPEN | `scripts/architecture/agent-retirement-gate.mjs` | Wave 3 |
+| G10 | **CI `test` job 恒红且不携带任何信息**：守卫读不到 vitest 汇总行（`collected: UNKNOWN`），master 每个 commit 都一样 | `.github/workflows/*` 内嵌守卫；run `39040547246` / `39044714745` | T04 |
 
 ---
 
@@ -181,6 +182,56 @@ T## 标题
 - 独占路径：`scripts/architecture/bundle-verify.mjs`、`package.json`（script 一行）、`ARCHITECTURE.md`（一节）。
 - 验收命令：`npm run bundle:verify`（当前故意红）→ 重建 bundle 后转绿。
 - 回退：删脚本 / 恢复 `package.json`。
+
+### T04 修 CI `test` 门禁的 summary 解析（P0）
+
+- 车道 L-GATE ／ 前置 无 ／ 规模 ~30 行 + workflow
+- 目标：让 `test` job 的结论重新具有信息量。**今天它红得毫无意义**：
+  `gh run view 39040547246 --log-failed` 显示 master 每个 commit 都是
+  `guard FAILED: could not read the vitest summary line. - test files collected: **UNKNOWN**`
+  —— 失败原因是守卫读不到汇总行（vitest 输出里的 `^[[` 是**字面文本**，ESC 字节
+  已被写入方剥掉，所以正则匹配不到），不是任何测试失败。
+- 后果：`test` 在 master 与每个 PR 上**恒红**，因此它区分不了
+  “11 条已知红” 与 “新增了一条真回归”。#275 的测试结果完全不可用。
+- 首个失败证据：master `a24b14eb` 的 run `39040547246` job 日志本身
+  （`test (ubuntu-latest, 22.x)` → `##[error]Process completed with exit code 1`，
+  `collected: UNKNOWN`），与 #275 run `39044714745` 同一行——一模一样。
+- 步骤：
+  1. 在守卫里同时接受 `^[[` 字面量与真 ESC 两种形态（或先不带 `--color` 重定向）。
+  2. 加一条：解析不到汇总行时必须报 `UNKNOWN` 并**以中性退出**（不吞红，但也不把
+     “没采到” 报成 “测试失败”）；真正的测试失败由 vitest 退出码决定。
+  3. 变异：把一个必然失败的测试注入 → job 必须因**测试**红；撤掉 → 因守卫解析而红不了。
+- 回退：单文件 revert（workflow 内嵌脚本或 `scripts/ci/test-summary-guard.mjs`）。
+
+### T01b 拓宽 `turn.completed` 的 `StopReason`（T01 的两个 refusal）
+
+- 车道 L-HOST ／ 前置 T01 ／ 规模 ~120 行 + 协议
+- 目标：让**工具轮**也有轮次终态。T01 落地的发射点对两种观测选择不发事件：
+  - `ModelStopReason = 'tool_use'` 在事件 `StopReason` 里没有成员；
+  - provider 未报 `usage`。
+  而 `tool_use` 是**普通继续轮**——一次多轮工具执行只有最后一轮带终态，正是 17 §5 S2
+  要求“turn 终态不得再被窄投影丢掉”的那个洞。
+- 首个失败证据：`packages/agent-runtime/test/turn-terminal-event.test.ts` 新增
+  “a tool-continuation turn also reports its ending” —— 今天计数为 0（T01 的 refusal 表已写明）。
+- 步骤：`packages/agent-protocol/src/events/payloads.ts` 的 `StopReason` 加 `tool_use`；
+  决定 `usage` 是否 optional（若 optional，消费端 `SurfaceModel` 合计逻辑必须区分
+  “没报”和“为 0”）；同步 `required.ts` / registry 的描述。
+- 回退：协议成员删除；不可与已落库的历史事件冲突（additive）。
+
+### T05 修掉已失效的“引擎不发射 `turn.completed`”断言
+
+- 车道 L-HOST ／ 前置 T01 ／ 规模 ~20 行
+- 目标：把 `packages/host/tests/worker-product-runtime/native-event-authority-loss.test.ts`
+  里的 `it('never mints turn.completed: the engine has no emit site for it')` 改成
+  当前事实。它**今天仍然绿**，但只因 fixture 不发 `usage` 帧 → T01 的 refusal 生效 →
+  计数确实为 0。断言与它叙述的理由已经分叉，属于 Plan 593/#265 一直在清的
+  “绿着但什么也没证明”。
+- 首个失败证据：不需要新红；证据是阅读：`lastMessage.current.usage === undefined`
+  （`run-engine.ts:3239`）时 `#publishTurnCompleted` 提前返回。
+- 步骤：把该用例改名为“a turn with no reported usage emits no terminal, and says why”，
+  并把 T01 之前的“no emit site”叙述删除；若 T01b 落地使此路径也不再成立，
+  直接改成断言 `turn.completed` 存在。
+- 回退：纯测试文本，无生产影响。
 
 ---
 
@@ -378,9 +429,12 @@ npm run electron:build
 | 卡 | 车道 | 前置 | 状态 | 证据（测试文件:用例 / commit） |
 | --- | --- | --- | --- | --- |
 | T00 落盘 S1 fence | L-HOST | — | **done** | `44123662` · 8 文件 / 55 测试全绿；`typecheck:all` exit 0（231 known / 0 new） |
-| T01 `turn.completed` 生产者 | L-HOST | T00 | **next** | — |
+| T01 `turn.completed` 生产者 | L-HOST | T00 | **done** | [#275](https://github.com/lava-chen/duya/pull/275) · merge `00ac7149` · `packages/agent-runtime/test/turn-terminal-event.test.ts:5/5`（变更前 0/5）· roundtrip 7/7 · `architecture` check 绿 |
+| T01b 拓宽 `turn.completed` 的 `StopReason` | L-HOST | T01 | **next** | 见 §5 的 T01b 卡 |
 | T02 计划↔代码同步 | L-GATE | — | todo | — |
 | T03 bundle 策略 | L-GATE | — | todo | — |
+| T04 修 CI test 门禁的 summary 解析 | L-GATE | — | **P0（比任何架构卡都优先）** | 见 §5 的 T04 卡 |
+| T05 修掉 `native-event-authority-loss` 里已失效的断言 | L-HOST | T01 | todo | 见 §5 的 T05 卡 |
 | T10 `RunSession` | L-CLIENT | — | todo | — |
 | T11 TUI 接共享状态 | L-CLIENT | T10、T13 | todo | — |
 | T12 PTY 验收 + 删 reducer | L-CLIENT | T11 | todo | — |
