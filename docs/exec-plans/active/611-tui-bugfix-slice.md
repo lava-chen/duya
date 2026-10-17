@@ -38,6 +38,20 @@ Follow-up result:
 - The original concurrent grep stall remains unlocated; recorded events show
   no pending permission request. Direct searches do not reproduce the stall.
 
+## Follow-up: read stall diagnostics (2026-10-17)
+
+- The latest Host log has the run start and worker stderr, but no per-tool
+  stage entries, so it cannot tell whether `read` was in permission evaluation
+  or inside the filesystem tool.
+- `ReadTool` performs local `stat`, a 16-byte format sniff, and a bounded text
+  read (2000 lines / 50 KB). A read in the repository should not wait for a
+  user permission prompt. The executor's 5-minute race begins only after its
+  async `canUseTool` permission check, leaving that preflight unbounded.
+- Added a warning to the existing Host log if either permission evaluation or
+  the actual tool execution remains pending for 15 seconds. Esc now also
+  interrupts an unresolved permission preflight. This narrows future reports
+  without assuming the current screenshot's file I/O is the cause.
+
 ## Evidence and baseline
 
 - Existing unrelated edits in the primary checkout are preserved.
