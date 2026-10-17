@@ -29,6 +29,18 @@ function shape(model: TranscriptModel): string[] {
 }
 
 describe('content blocks keep arrival order across a tool call', () => {
+  it('creates new keyed blocks without needing a tool boundary', () => {
+    const model = new TranscriptModel();
+    for (const kind of ['text', 'thinking']) {
+      model.apply({ type: kind + '_delta', data: { content: 'first', messageId: 'm', index: 0 } });
+      model.apply({ type: kind + '_delta', data: { content: 'second', messageId: 'm', index: 1 } });
+      expect(model.blocks.filter((b) => b.kind === (kind === 'text' ? 'assistant' : 'thinking'))
+        .map((b) => 'text' in b ? b.text : '')).toEqual(['first', 'second']);
+      model.apply({ type: kind, data: { content: 'first final', messageId: 'm', index: 0 } });
+      model.apply({ type: kind, data: { content: 'second final', messageId: 'm', index: 1 } });
+    }
+    expect(shape(model)).toEqual(['text:"first final"', 'text:"second final"', 'thinking:"first final"', 'thinking:"second final"']);
+  });
   it('puts text written after a tool call BELOW that tool line', () => {
     resetBlockIds();
     const model = new TranscriptModel();
@@ -97,6 +109,14 @@ describe('content blocks keep arrival order across a tool call', () => {
  * then landed below it. `push` must commit before it appends anything.
  */
 describe('buffered deltas are committed before any other frame is applied', () => {
+  it('commits thinking before text even when neither buffer contains a newline', () => {
+    const app = new TUIApp({ output: new Writable({ write: (_c, _e, cb) => cb() }), input: new PassThrough(), inline: false, onSubmit: () => {} });
+    app.push({ type: 'thinking_delta', data: { content: 'first', messageId: 'm', index: 0 } });
+    app.push({ type: 'text_delta', data: { content: 'second', messageId: 'm', index: 1 } });
+    app.setBusy(false);
+    expect(shape((app as unknown as { model: TranscriptModel }).model)).toEqual(['thinking:"first"', 'text:"second"']);
+    app.stop();
+  });
   it('never lets a tool line overtake text already written for the previous block', () => {
     resetBlockIds();
     const app = new TUIApp({

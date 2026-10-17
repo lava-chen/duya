@@ -2682,6 +2682,12 @@ export class HostSessionHttpServer {
         }
 
         const abortController = new AbortController();
+        let cursor = afterSeq ?? 0;
+        const streamQuery = {
+          afterSeq: cursor,
+          ...(limit === undefined ? {} : { limit }),
+          signal: abortController.signal,
+        };
         const onClose = (): void => {
           abortController.abort();
           this.#activeRunEventStreams.delete(res);
@@ -2701,12 +2707,6 @@ export class HostSessionHttpServer {
           }, 15_000);
           heartbeat.unref?.();
 
-          let cursor = afterSeq ?? 0;
-          const streamQuery = {
-            ...(afterSeq === undefined ? {} : { afterSeq }),
-            ...(limit === undefined ? {} : { limit }),
-            signal: abortController.signal,
-          };
           const writeEnvelope = async (envelope: RunEventEnvelope): Promise<boolean> => {
             if (abortController.signal.aborted || res.destroyed) return false;
             if (envelope.seq <= cursor) return true;
@@ -2725,7 +2725,7 @@ export class HostSessionHttpServer {
             }
             return !abortController.signal.aborted && !res.destroyed;
           };
-          const liveStream = this.#options.runExecutionApi?.watchLiveAgentRunEvents?.(runId, streamQuery) ?? null;
+          const liveStream = executionApi?.watchLiveAgentRunEvents?.(runId, streamQuery) ?? null;
           if (liveStream !== null && cursor === 0) {
             // `run.started` is committed before dispatch, before the live tee
             // begins. Seed it once so live subscribers still see the complete

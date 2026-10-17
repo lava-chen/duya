@@ -68,6 +68,7 @@ sockets.on('connection', (socket, request) => {
     name: 'xterm-256color', cwd: root,
     cols: Number(args.get('cols') || 100), rows: Number(args.get('rows') || 28),
     env: { ...previewEnv, TERM: 'xterm-256color', COLORTERM: 'truecolor',
+      DUYA_TUI_SCENARIO: args.get('scenario') ?? '',
       DUYA_TUI_INLINE: args.get('mode') === 'fullscreen' ? '0' : '1', FORCE_COLOR: '1' },
   });
   terminals.add(terminal);

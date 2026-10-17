@@ -118,6 +118,57 @@ async function startChat(client: HostSessionHttpClient): Promise<{
 }
 
 describe('chatTui production callback wiring', () => {
+  it('refuses admission when a failed cancellation leaves the old run live', async () => {
+    const client = makeClient({
+      watchAgentRunEvents: vi.fn(async function* (_id: RunId, { signal }: { signal: AbortSignal }) {
+        await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+      }),
+      cancelAgentRun: vi.fn(async () => { throw new Error('Host cancel unavailable'); }),
+      getAgentRun: vi.fn(async () => ({ status: 'running' })),
+    });
+    const { running, app } = await startChat(client);
+    app.options.onSubmit('first');
+    await waitUntil(() => vi.mocked(client.watchAgentRunEvents).mock.calls.length === 1);
+    app.options.onInterrupt();
+    await waitUntil(() => !app.options.isBusy());
+    app.options.onSubmit('second');
+    await waitUntil(() => app.errors.some((message) => message.includes('no new run was started')));
+    expect(client.startAgentRun).toHaveBeenCalledTimes(1);
+    app.options.onExit();
+    await expect(running).resolves.toBe(0);
+  });
+
+  it('holds admission until an interrupted live run has finished cancelling', async () => {
+    const cancellation = deferred<void>();
+    const starts: string[] = [];
+    const client = makeClient({
+      startAgentRun: vi.fn(async ({ prompt }: { prompt: string }) => {
+        starts.push(prompt);
+        return { accepted: true, runId: ('run-' + prompt) as RunId };
+      }),
+      watchAgentRunEvents: vi.fn(async function* (_runId: RunId, { signal }: { signal: AbortSignal }) {
+        await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+      }),
+      cancelAgentRun: vi.fn(() => cancellation.promise),
+    });
+    const { running, app } = await startChat(client);
+    app.options.onSubmit('first');
+    await waitUntil(() => vi.mocked(client.watchAgentRunEvents).mock.calls.length === 1);
+    app.options.onInterrupt();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(app.options.isBusy()).toBe(true);
+    app.options.onSubmit('second');
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(starts).toEqual(['first']);
+    cancellation.resolve();
+    await waitUntil(() => starts.length === 2);
+    await waitUntil(() => vi.mocked(client.watchAgentRunEvents).mock.calls.length === 2);
+    app.options.onInterrupt();
+    await waitUntil(() => !app.options.isBusy());
+    app.options.onExit();
+    await expect(running).resolves.toBe(0);
+  });
+
   beforeEach(() => { harness.app = null; });
   afterEach(() => { harness.app?.options.onExit(); });
 

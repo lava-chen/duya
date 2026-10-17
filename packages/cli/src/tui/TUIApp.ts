@@ -1399,24 +1399,24 @@ private paintCompletion(): void {
   push(frame: LegacyFrame): void {
     const activityChanged = this.updateActivity(frame);
     const key = readBlockKey(frameRecord(frame.data));
-
     switch (frame.type) {
       case 'text_delta': {
+        if (!this.thinkingBuffer.isEmpty && this.commitBuffers()) this.noteTranscriptMutation();
         this.commitIfBlockChanged(this.textBuffer, key);
         this.textBuffer.append(readContent(frame), now(), key);
         this.drainBuffers();
         return;
       }
       case 'thinking_delta': {
+        if (!this.textBuffer.isEmpty && this.commitBuffers()) this.noteTranscriptMutation();
         this.commitIfBlockChanged(this.thinkingBuffer, key);
         this.thinkingBuffer.append(readContent(frame), now(), key);
         this.drainBuffers();
         return;
       }
       case 'permission': {
-        // A fresh frame supersedes every ask still open — answering a stale
-        // one would deliver a decision to a request the run has moved past.
-        this.overlay.abortAll();
+        // Parallel tools can await independent approvals in the same run.
+        // The queue keeps them ordered; deadlines and run end close stale asks.
         this.showPermission(frame);
         return;
       }
@@ -1479,6 +1479,7 @@ private paintCompletion(): void {
       toolInput,
       reason: typeof data['reason'] === 'string' ? data['reason'] : '',
       blockedPath: typeof data['blockedPath'] === 'string' ? data['blockedPath'] : undefined,
+      expiresAt: typeof data['expiresAt'] === 'number' ? data['expiresAt'] : undefined,
       mode,
       destructive: isDestructiveRequest(toolName, toolInput),
     });
@@ -1676,9 +1677,12 @@ private paintCompletion(): void {
       this.clearActiveActivity();
     }
     if (!busy) {
+      this.overlay.abortAll();
+      this.waitingForPermission = false;
       // A turn boundary commits whatever is left, so the transcript cannot
       // disagree with what actually happened.
       if (this.commitBuffers()) this.noteTranscriptMutation();
+      if (this.model.finishRun()) this.noteTranscriptMutation();
     }
     this.scheduleRender();
   }

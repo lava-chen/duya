@@ -364,11 +364,9 @@ export class TranscriptModel {
 
   /** Add a block the user typed. */
   addUser(text: string): UserBlock {
+    this.closeOpenContent();
     const block: UserBlock = { kind: 'user', id: nextId('user'), text };
     this.items.push(block);
-    // A new prompt starts a new answer; the previous one is closed.
-    this.assistant = null;
-    this.thinking = null;
     return block;
   }
 
@@ -398,7 +396,8 @@ export class TranscriptModel {
         return existing;
       }
     }
-    if (this.assistant === null) {
+    if (this.assistant === null || key !== null) {
+      if (this.assistant !== null) this.assistant.finalized = true;
       this.assistant = { kind: 'assistant', id: nextId('assistant'), text: '', finalized: false };
       this.items.push(this.assistant);
       if (key !== null) this.assistantsByKey.set(key, this.assistant);
@@ -417,6 +416,7 @@ export class TranscriptModel {
     const block = key === null ? this.assistant : this.assistantsByKey.get(key) ?? null;
     if (block === null) {
       if (content.length === 0) return null;
+      if (this.assistant !== null) this.assistant.finalized = true;
       this.assistant = { kind: 'assistant', id: nextId('assistant'), text: '', finalized: false };
       this.items.push(this.assistant);
       if (key !== null) this.assistantsByKey.set(key, this.assistant);
@@ -438,7 +438,11 @@ export class TranscriptModel {
         return existing;
       }
     }
-    if (this.thinking === null) {
+    if (this.thinking === null || key !== null) {
+      if (this.thinking !== null) {
+        this.thinking.finalized = true;
+        sealThinkingDuration(this.thinking, at);
+      }
       this.thinking = {
         kind: 'thinking',
         id: nextId('thinking'),
@@ -458,6 +462,10 @@ export class TranscriptModel {
     const block = key === null ? this.thinking : this.thinkingByKey.get(key) ?? null;
     if (block === null) {
       if (content.length === 0) return null;
+      if (this.thinking !== null) {
+        this.thinking.finalized = true;
+        sealThinkingDuration(this.thinking, at);
+      }
       this.thinking = {
         kind: 'thinking',
         id: nextId('thinking'),
@@ -493,6 +501,19 @@ export class TranscriptModel {
     }
     this.assistant = null;
     this.thinking = null;
+  }
+
+  /** A stopped stream cannot prove the outcome of an unfinished tool. */
+  finishRun(): boolean {
+    this.closeOpenContent();
+    let changed = false;
+    for (const block of this.toolsByCallId.values()) {
+      if (block.status !== 'running') continue;
+      block.status = 'unknown';
+      block.result ??= 'Run ended before a tool result was received.';
+      changed = true;
+    }
+    return changed;
   }
 
   /**

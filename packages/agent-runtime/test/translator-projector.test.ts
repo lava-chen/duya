@@ -53,6 +53,11 @@ function roundTrip(raw: Record<string, unknown>): { event: RunEvent; frame: Retu
 }
 
 describe('translateFrame — the producer vocabulary', () => {
+  it.each(['text_delta', 'text', 'thinking_delta', 'thinking'])('retains explicit %s block identity across the Host bridge', (type) => {
+    const { event } = roundTrip({ type, data: { content: 'body', messageId: 'worker-message', index: 3 } });
+    expect(event).toMatchObject({ messageId: 'worker-message', index: 3 });
+  });
+
   it('maps a normalised text frame to a durable text block', () => {
     const { event } = roundTrip({ type: 'text', data: { content: 'hello' } });
     expect(event).toMatchObject({ type: 'assistant.text_block', text: 'hello' });

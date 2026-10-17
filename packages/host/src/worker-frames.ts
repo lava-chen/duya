@@ -12,7 +12,7 @@
  * reaching any client stream.
  */
 
-const RUN_LAYER_ONLY_FRAMES: ReadonlySet<string> = new Set(['chat:message_finalized']);
+const RUN_LAYER_ONLY_FRAMES: ReadonlySet<string> = new Set(['chat:message_finalized', 'chat:turn_start']);
 
 /** True when the frame is normalised but must not reach an SSE client. */
 export function isRunLayerOnlyFrame(normalized: Record<string, unknown> | null): boolean {
@@ -31,11 +31,20 @@ export function normalizeWorkerEvent(event: Record<string, unknown>): Record<str
   if (msgType === 'memory:wakeup') return null;
 
   let sseEvent: Record<string, unknown> = event;
+  const contentIdentity = {
+    ...(typeof event.messageId === 'string' ? { messageId: event.messageId } : {}),
+    ...(typeof event.index === 'number' ? { index: event.index } : {}),
+  };
 
   if (msgType === 'chat:text' || msgType === 'chat:thinking') {
     sseEvent = {
       type: msgType.replace('chat:', ''),
-      data: { content: event.data || event.content },
+      data: { content: event.data || event.content, ...contentIdentity },
+    };
+  } else if (msgType === 'chat:text_delta' || msgType === 'chat:thinking_delta') {
+    sseEvent = {
+      type: msgType.replace('chat:', ''),
+      data: { content: event.delta, ...contentIdentity },
     };
   } else if (msgType === 'chat:text_delta' || msgType === 'chat:thinking_delta') {
     sseEvent = {

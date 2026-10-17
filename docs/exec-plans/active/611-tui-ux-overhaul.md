@@ -1,6 +1,7 @@
 # 611 — CLI TUI 体验改造（主题 token 化 / 动作注册表与多窗口 / busy 排队 / 粘贴修复 / token 展示 / 工具组渲染 / undo+kill ring）
 
 > 2026-10-15 foundation slice: see [Host-backed TUI foundation](611-tui-foundation-slice.md).
+> 2026-10-17 bugfix verification: see [ordering, approvals and cancellation](611-tui-bugfix-slice.md).
 > This slice targets the actual `@duya/cli` Host entry; earlier legacy-adapter
 > queue and approval evidence below does not establish behavior in that path.
 
