@@ -23,6 +23,15 @@ export type SettleAgentRunResult =
   | { readonly state: 'applied' }
   | { readonly state: 'reconciled'; readonly committed: RunTerminalState }
   | { readonly state: 'conflict'; readonly committed: RunTerminalState }
+  /**
+   * The attempt that asked for this terminal has been superseded.
+   *
+   * Not a `conflict`: no other writer decided this run's ending — this attempt
+   * simply lost the right to decide it, so there is no `committed` terminal to
+   * inspect and nothing to reconcile. A caller that reports it as a conflict
+   * blames a rival writer for a decision it was never allowed to make.
+   */
+  | { readonly state: 'fenced'; readonly presented: number; readonly current: number | null }
   | { readonly state: 'absent' };
 
 export interface AgentRunRecord {
@@ -59,11 +68,21 @@ export interface HostRunApiV1 {
   createAgentRun(input: CreateAgentRunInput): Promise<CreateAgentRunResult>;
   getAgentRun(runId: RunId): Promise<AgentRunRecord | null>;
   listAgentRunsBySession(sessionId: SessionId, limit?: number): Promise<readonly AgentRunRecord[]>;
-  appendAgentRunEvents(runId: RunId, events: readonly RunEventEnvelope[]): Promise<number>;
+  /**
+   * Append the Runtime-minted envelopes of one attempt, verbatim.
+   *
+   * `epoch` is the attempt presenting the write. It is optional because a
+   * caller with no fence to present (a bulk backfill, an administrative repair)
+   * still has a legitimate append to make; when it IS presented, storage must
+   * refuse a write from an attempt that has been superseded.
+   */
+  appendAgentRunEvents(runId: RunId, events: readonly RunEventEnvelope[], epoch?: number): Promise<number>;
   settleAgentRun(
     runId: RunId,
     terminal: RunTerminalState,
     metrics?: RunMetrics,
+    /** The attempt landing this terminal; see {@link HostRunApiV1.appendAgentRunEvents}. */
+    epoch?: number,
   ): Promise<SettleAgentRunResult>;
   readAgentRunEvents(
     runId: RunId,
