@@ -1036,7 +1036,24 @@ selfTest:
   # baseline's own note sanctions deleting them "as their migration lands", and
   # that is a separate, explicitly-forbidden operation. This pin is a test
   # expectation; the baseline is a debt ledger. They are different instruments.
-  module-dependency: 198
+  # 198 -> 160 (2026-10-17): THIRTY-EIGHT fewer NOT-PERMITTED edges, caused by
+  # declaration rather than by any code change. `command-catalog` had no module
+  # declaration at all, and the rule above is that a name with no matching module
+  # silently permits nothing -- so all four edges into it counted as blocking.
+  # Declaring it (`roots: [packages/command-catalog]`, `requires: []`) reclassified
+  # those four, and naming `legacy-ai` + `command-catalog` in `desktop-host.requires`
+  # and `legacy-cli.requires` reclassified the CLI and host edges to the same two
+  # packages that were already being imported on purpose.
+  #
+  # This is a RECLASSIFICATION, not a disappearance, and the relation below is what
+  # proves it: `module-dependency 160` + `module-dependency-permitted 2467` = 2627 =
+  # `crossBoundaryEdges`, exactly the same edge total as before the change. Nothing
+  # stopped being counted; edges moved from the blocking side to the permitted side,
+  # which is the intended outcome of declaring rather than baselining. Verified on a
+  # CLEAN tree (origin/master plus this commit, no unrelated working-tree files):
+  # counting 160. The `.architecture-baseline.json` was NOT re-recorded and remains
+  # 932 fingerprints.
+  module-dependency: 160
   # 349 -> 343 (2026-10-10, plan 610 A5 continuation). Ledger, not vibes:
   #   +2  group-handlers.ts / group-turn-dispatcher.ts — their cross-package
   #       RELATIVE imports (`../../../../../packages/agent/src/message/
