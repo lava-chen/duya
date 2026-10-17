@@ -1,0 +1,57 @@
+[
+  {
+    "file": "apps/desktop/src/contracts/git.ts",
+    "reason": "mojibake",
+    "detail": "gbk-em-dash on line(s) 10, 125"
+  },
+  {
+    "file": "apps/desktop/src/main/db/core/__tests__/session-archive-whole-session.test.ts",
+    "reason": "mojibake",
+    "detail": "gbk-em-dash on line(s) 2, 98, 201"
+  },
+  {
+    "file": "apps/desktop/src/main/services/app-connections/connectors/remote-mcp.ts",
+    "reason": "mojibake",
+    "detail": "gbk-em-dash on line(s) 85, 103, 138, 262, 300, 314, 355, 404"
+  },
+  {
+    "file": "packages/agent-protocol/src/events/registry.ts",
+    "reason": "mojibake",
+    "detail": "gbk-em-dash on line(s) 13, 14, 56, 60, 78, 79, 88"
+  },
+  {
+    "file": "packages/agent-protocol/test/worker-adapter-conformance.test.ts",
+    "reason": "mojibake",
+    "detail": "gbk-em-dash on line(s) 2, 14, 23, 53, 287"
+  },
+  {
+    "file": "packages/agent-runtime/src/tools/execution/StreamingToolExecutor.ts",
+    "reason": "mojibake",
+    "detail": "gbk-em-dash on line(s) 1481"
+  },
+  {
+    "file": "packages/agent-runtime/src/transport/execution-channel.ts",
+    "reason": "mojibake",
+    "detail": "gbk-em-dash on line(s) 17, 38, 49, 223, 224"
+  },
+  {
+    "file": "packages/agent-runtime/test/event-sink-ledger.test.ts",
+    "reason": "mojibake",
+    "detail": "gbk-em-dash on line(s) 2, 8, 109, 110"
+  },
+  {
+    "file": "packages/agent-runtime/test/run-engine-loop.test.ts",
+    "reason": "mojibake",
+    "detail": "gbk-em-dash on line(s) 21, 375, 379, 408, 533, 538, 618, 666, 689, 697, 758, 955"
+  },
+  {
+    "file": "packages/ai/src/utils/context-estimate.ts",
+    "reason": "mojibake",
+    "detail": "replacement-char on line(s) 20"
+  },
+  {
+    "file": "packages/cli/src/tui/slash/__tests__/slash-commands.test.ts",
+    "reason": "mojibake",
+    "detail": "replacement-char on line(s) 549"
+  }
+]
