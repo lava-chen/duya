@@ -79,7 +79,9 @@ function createSessionsFixture(db: SqliteDatabase): void {
       extensions        TEXT NOT NULL DEFAULT '{}',
       rollout_path      TEXT,
       created_at        INTEGER NOT NULL,
-      updated_at        INTEGER NOT NULL
+      updated_at        INTEGER NOT NULL,
+      recency_at            INTEGER,
+      last_turn_started_at  INTEGER
     );
   `);
 }
@@ -313,6 +315,110 @@ describe('MessageLog', () => {
     const rows = db.prepare('SELECT id, seq FROM message_index WHERE session_id = ? ORDER BY seq').all(sessionId) as Array<{ id: string; seq: number }>;
     expect(rows.map((r) => r.id)).toEqual(['m-1', 'm-2', 'm-3']);
     expect(rows.map((r) => r.seq)).toEqual([1, 2, 3]);
+  });
+
+  // ─── index rows for events timestamped with `startedAt`, not `createdAt` ───
+
+  it('indexes turn_started events whose timestamp lives in `startedAt`', () => {
+    const sessionId = 'sess-1';
+    const t = Date.now();
+    insertSessionFixture(db, sessionId, t);
+
+    const turnStarted = (id: string, turnId: string, startedAt: number) => ({
+      type: 'turn_started' as const,
+      id,
+      turnId,
+      startedAt,
+      cwd: 'C:/work',
+      approvalPolicy: 'on-request',
+    });
+
+    // TurnStartedEvent has no `createdAt` — its timestamp is `startedAt`.
+    // Binding that event with a missing created_at hits the NOT NULL
+    // constraint, and INSERT OR IGNORE drops the row without raising: the line
+    // lands in the rollout file but is never addressable through the index.
+    log.appendBatch([
+      {
+        id: 'e-1',
+        sessionId,
+        turnId: 'turn-a',
+        payload: turnStarted('e-1', 'turn-a', t),
+        createdAt: undefined as unknown as number,
+      },
+      makeEvent(sessionId, makeUserMessage('m-1', 'q1', t), 'turn-a'),
+    ]);
+
+    const rows = db
+      .prepare('SELECT id, seq, turn_id, kind, created_at FROM message_index WHERE session_id = ? ORDER BY seq')
+      .all(sessionId) as Array<{ id: string; seq: number; kind: string; created_at: number }>;
+    expect(rows.map((r) => r.id)).toEqual(['e-1', 'm-1']);
+    expect(rows.map((r) => r.kind)).toEqual(['turn_started', 'user']);
+    // The stored timestamp is the event's own `startedAt` — not 0, not dropped.
+    expect(rows[0]!.created_at).toBe(t);
+  });
+
+  // ─── scan restores turn_id from the file's turn boundaries ───
+
+  it('scan rebuilds turn_id from turn_started events instead of nulling it', () => {
+    const sessionId = 'sess-1';
+    const t = Date.now();
+    insertSessionFixture(db, sessionId, t);
+
+    const turnStarted = (id: string, turnId: string, startedAt: number) => ({
+      type: 'turn_started' as const,
+      id,
+      turnId,
+      startedAt,
+      cwd: 'C:/work',
+      approvalPolicy: 'on-request',
+    });
+
+    log.appendBatch([
+      makeEvent(sessionId, turnStarted('e-1', 'turn-a', t), 'turn-a'),
+      makeEvent(sessionId, makeUserMessage('m-1', 'q1', t + 1), 'turn-a'),
+      makeEvent(sessionId, turnStarted('e-2', 'turn-b', t + 2), 'turn-b'),
+      makeEvent(sessionId, makeAssistantMessage('m-2', 'a1', t + 3), 'turn-b'),
+      makeEvent(sessionId, makeAssistantMessage('m-3', 'a2', t + 4), 'turn-b'),
+    ]);
+
+    const before = db
+      .prepare('SELECT id, turn_id FROM message_index WHERE session_id = ? ORDER BY seq')
+      .all(sessionId) as Array<{ id: string; turn_id: string | null }>;
+    expect(before.map((r) => r.turn_id)).toEqual(['turn-a', 'turn-a', 'turn-b', 'turn-b', 'turn-b']);
+
+    // Simulate a crash that lost the whole index for this session while the
+    // rollout file survived. This is where a naive scan() nulls every turn.
+    db.prepare('DELETE FROM message_index WHERE session_id = ?').run(sessionId);
+    expect(log.getCount(sessionId)).toBe(0);
+
+    log.scan(sessionId);
+
+    const after = db
+      .prepare('SELECT id, turn_id FROM message_index WHERE session_id = ? ORDER BY seq')
+      .all(sessionId) as Array<{ id: string; turn_id: string | null }>;
+    expect(after.map((r) => r.id)).toEqual(['e-1', 'm-1', 'e-2', 'm-2', 'm-3']);
+    // Reconstructed from the turn boundaries in the file, not invented.
+    expect(after.map((r) => r.turn_id)).toEqual(['turn-a', 'turn-a', 'turn-b', 'turn-b', 'turn-b']);
+  });
+
+  it('scan leaves turn_id null when the rollout has no turn_started event', () => {
+    const sessionId = 'sess-2';
+    const t = Date.now();
+    insertSessionFixture(db, sessionId, t);
+    log.appendBatch([
+      makeEvent(sessionId, makeUserMessage('m-1', 'first', t), 'turn-a'),
+      makeEvent(sessionId, makeAssistantMessage('m-2', 'second', t + 1), 'turn-a'),
+    ]);
+
+    db.prepare('DELETE FROM message_index WHERE session_id = ?').run(sessionId);
+    log.scan(sessionId);
+
+    const rows = db
+      .prepare('SELECT turn_id FROM message_index WHERE session_id = ? ORDER BY seq')
+      .all(sessionId) as Array<{ turn_id: string | null }>;
+    // No turn boundary in the file means no recoverable turn — scan must not
+    // guess one, otherwise it invents a value appendBatch never wrote.
+    expect(rows.map((r) => r.turn_id)).toEqual([null, null]);
   });
 
   // ─── readRange exact line retrieval ───
