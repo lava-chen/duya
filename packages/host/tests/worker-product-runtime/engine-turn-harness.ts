@@ -58,6 +58,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { RunId, PermissionPolicyMode } from '@duya/agent-protocol';
+import type { RunPersistence } from '@duya/agent-runtime';
 import type { EngineRunOutcome } from '@duya/host/worker-engine-driver';
 import type { AgentOptions, ChatOptions, MessageContent, Tool } from '@duya/host/worker-run-contracts';
 import type { WorkerSession } from '@duya/host/worker-session-runtime';
@@ -97,6 +98,16 @@ export interface DriveTurnOptions {
   readonly model?: string;
   /** The provider the run's manifest names. Defaults to `'anthropic'`. */
   readonly providerId?: string;
+  /**
+   * The durable sink the run's spine writes through.
+   *
+   * NOT forwarded by any production caller today — `worker-process-entry.ts`
+   * and the headless host differ here, and both are covered by the plan-610 S0
+   * reproduction. It exists on the harness so a test can measure what the
+   * spine WOULD hand a Control Plane without reassembling the driver, which
+   * would make the two measurements incomparable.
+   */
+  readonly persistence?: RunPersistence;
 }
 
 export interface DriveTurnResult {
@@ -303,6 +314,7 @@ export async function driveTurn(
       legacyFrameCodec: convertSSEToAgentMessage,
       onPerCallUsage: () => {},
       ledgerDir,
+      ...(config.persistence === undefined ? {} : { persistence: config.persistence }),
     },
     (frame) => {
       frames.push(frame as Record<string, unknown>);
