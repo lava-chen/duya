@@ -69,6 +69,19 @@ export interface RunRow {
    * stored, because a reused `runId` is only the same run if both agree.
    */
   input_hash: string | null;
+  /**
+   * The attempt that currently holds WRITE AUTHORITY over this run.
+   *
+   * Not part of the event identity: `(run_id, seq)` stays the primary key, and a
+   * new attempt CONTINUES the sequence from the highest committed `seq` rather
+   * than restarting at 1. `epoch` is a fencing token, not a second sequence —
+   * its whole job is to let the store refuse a late writer from a superseded
+   * attempt without rebuilding anything that already exists.
+   *
+   * `0` on every row written before this column existed, which is correct rather
+   * than merely tolerated: those events belong to the run's initial attempt.
+   */
+  epoch: number;
   status: RunStatus;
   terminal: string | null;
   error_json: string | null;
@@ -85,6 +98,8 @@ export interface RunEventRow {
   seq: number;
   event_type: string;
   envelope_json: string;
+  /** The attempt that wrote this row. `0` for rows from the initial attempt. */
+  epoch: number;
   created_at: number;
 }
 
@@ -138,7 +153,58 @@ export type RunSettleOutcome =
   | { readonly state: 'applied' }
   | { readonly state: 'reconciled'; readonly committed: RunTerminalState }
   | { readonly state: 'conflict'; readonly committed: RunTerminalState }
-  | { readonly state: 'absent' };
+  | { readonly state: 'absent' }
+  /**
+   * The writer presented an attempt that has been superseded.
+   *
+   * Kept separate from `conflict` because they mean opposite things: `conflict`
+   * is "somebody else owns this terminal, decide whether you agree", while
+   * `fenced` is "you are no longer allowed to write at all". A caller that
+   * treats the second as the first will either retry forever or, worse, report a
+   * superseded attempt as a lost race against a live writer.
+   */
+  | { readonly state: 'fenced'; readonly presented: number; readonly current: number };
+
+/**
+ * Refuse a write from an attempt that has been superseded.
+ *
+ * Read INSIDE the caller's transaction so the epoch it compares against is the
+ * same snapshot that will perform the writes.
+ */
+function assertAttemptCurrent(
+  readEpoch: { get: (runId: string) => unknown },
+  envelope: RunEventEnvelope,
+  presented: number,
+): void {
+  const row = readEpoch.get(envelope.runId) as { epoch: number } | undefined;
+  const current = row?.epoch ?? 0;
+  if (current !== presented) throw new RunEpochFencedError(envelope.runId, presented, current);
+}
+
+/**
+ * A writer presented an attempt that no longer holds write authority.
+ *
+ * Its own class, and never a retryable error, for the same reason
+ * {@link RunEventConflictError} is its own: the writer is from a superseded
+ * attempt, and re-offering the same batch fails identically every time. What it
+ * names — run, presented epoch, current epoch — is exactly what the caller needs
+ * to tell "this run was superseded" apart from "the database was busy", which
+ * share a symptom and have opposite remedies.
+ */
+export class RunEpochFencedError extends Error {
+  readonly code = 'attempt_fenced' as const;
+
+  constructor(
+    readonly runId: string,
+    readonly presented: number,
+    readonly current: number,
+  ) {
+    super(
+      `run ${runId} is on attempt ${current}, so attempt ${presented} may no longer write`,
+    );
+    this.name = 'RunEpochFencedError';
+  }
+}
 
 /**
  * A `(run_id, seq)` row already held a DIFFERENT envelope.
@@ -237,6 +303,47 @@ export const RUN_STORE_MIGRATIONS: readonly Migration[] = [
       const cols = db.prepare('PRAGMA table_info(runs)').all() as Array<{ name: string }>;
       if (cols.some((c) => c.name === 'input_hash')) return;
       db.exec('ALTER TABLE runs ADD COLUMN input_hash TEXT');
+    },
+  },
+  {
+    id: 39,
+    name: 'run_attempt_epoch',
+    up: (db) => {
+      // ## What this is for
+      //
+      // A run can be re-attempted after a crash. When a NEW attempt starts, the
+      // OLD one is not merely slow — it is no longer allowed to write, and a
+      // late envelope from it must not be able to append events or land a
+      // terminal. Without a persisted fence there is nothing to check against,
+      // which is the difference between a column that documents an intent and a
+      // column that ENFORCES one.
+      //
+      // ## Why it is not part of the primary key
+      //
+      // `(run_id, seq)` is the identity and stays the identity. A new attempt
+      // CONTINUES the sequence from the highest committed `seq` instead of
+      // restarting at 1, so `epoch` never has to disambiguate two rows that share
+      // a `seq`. Rebuilding the primary key would invalidate every existing
+      // replay cursor to fix a problem the fencing check already solves.
+      //
+      // ## Historical data
+      //
+      // `NOT NULL DEFAULT 0` is a claim, not a placeholder: every row written
+      // before this migration belongs to the run's INITIAL attempt, so `0` is
+      // the truth for them and a pre-migration replay compares equal rather than
+      // failing on a column it never had.
+      //
+      // Both ADDs are guarded by `PRAGMA table_info` for the same reason
+      // migration 37 is: SQLite cannot ADD a column twice, and a retried boot
+      // re-runs the whole migration list.
+      const runCols = db.prepare('PRAGMA table_info(runs)').all() as Array<{ name: string }>;
+      if (!runCols.some((c) => c.name === 'epoch')) {
+        db.exec('ALTER TABLE runs ADD COLUMN epoch INTEGER NOT NULL DEFAULT 0');
+      }
+      const eventCols = db.prepare('PRAGMA table_info(run_events)').all() as Array<{ name: string }>;
+      if (!eventCols.some((c) => c.name === 'epoch')) {
+        db.exec('ALTER TABLE run_events ADD COLUMN epoch INTEGER NOT NULL DEFAULT 0');
+      }
     },
   },
 ];
@@ -348,18 +455,25 @@ export class RunStore {
    *   already-stored batch is `0` and is not an error, which is the property
    *   the Control Plane's bounded retry depends on.
    */
-  appendEvents(envelopes: readonly RunEventEnvelope[]): number {
+  appendEvents(envelopes: readonly RunEventEnvelope[], epoch?: number): number {
     if (envelopes.length === 0) return 0;
     const insert = this.db.prepare(
-      `INSERT INTO run_events (run_id, seq, event_type, envelope_json, created_at)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO run_events (run_id, seq, event_type, envelope_json, epoch, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT (run_id, seq) DO NOTHING`,
     );
     const readBack = this.db.prepare(
       'SELECT envelope_json FROM run_events WHERE run_id = ? AND seq = ?',
     );
+    const readEpoch = this.db.prepare('SELECT epoch FROM runs WHERE id = ?');
     const now = Date.now();
     const tx = this.db.transaction((batch: readonly RunEventEnvelope[]) => {
+      // The fence is checked INSIDE the transaction and therefore against the
+      // same snapshot that performs the writes. Checking it before would leave a
+      // window in which a new attempt starts between the check and the insert,
+      // and a superseded attempt's event would land — which is the exact
+      // outcome the fence exists to prevent.
+      if (epoch !== undefined) assertAttemptCurrent(readEpoch, batch[0] as RunEventEnvelope, epoch);
       let written = 0;
       for (const envelope of batch) {
         const json = JSON.stringify(envelope);
@@ -369,6 +483,7 @@ export class RunStore {
             envelope.seq,
             envelope.payload.type,
             json,
+            epoch ?? 0,
             now,
           ).changes > 0
         ) {
@@ -410,8 +525,20 @@ export class RunStore {
    * statements, and a caller that only saw `false` would have to open a second
    * connection to find out which of the three it is in.
    */
-  settleRun(runId: string, terminal: RunTerminalState, metrics?: unknown): RunSettleOutcome {
-    if (this.completeRun(runId, terminal, metrics)) return { state: 'applied' };
+  settleRun(runId: string, terminal: RunTerminalState, metrics?: unknown, epoch?: number): RunSettleOutcome {
+    if (this.completeRun(runId, terminal, metrics, epoch)) return { state: 'applied' };
+    if (epoch !== undefined) {
+      // The CAS missed. BEFORE concluding anything about the terminal, ask
+      // whether this attempt is still the one holding write authority: a
+      // superseded attempt loses this CAS too, and reporting `conflict` there
+      // would blame another writer for a decision this attempt was never
+      // allowed to make.
+      const attempt = this.db.prepare('SELECT epoch FROM runs WHERE id = ?').get(runId) as
+        | { epoch: number }
+        | undefined;
+      const current = attempt?.epoch ?? 0;
+      if (current !== epoch) return { state: 'fenced', presented: epoch, current };
+    }
     const row = this.getRun(runId);
     if (row === null) return { state: 'absent' };
     const committed = readCommittedTerminal(row);
@@ -445,7 +572,13 @@ export class RunStore {
     runId: string,
     terminal: RunTerminalState,
     metrics?: unknown,
+    epoch?: number,
   ): boolean {
+    // The attempt fence rides in the SAME `WHERE` clause as the terminal CAS,
+    // not as a read before it. A pre-read leaves a window in which a new attempt
+    // starts between the check and the `UPDATE`, and the superseded attempt then
+    // wins the CAS perfectly legally — the one outcome fencing exists to make
+    // impossible. Two predicates, one statement, one decision.
     const result = this.db
       .prepare(
         `UPDATE runs
@@ -454,7 +587,7 @@ export class RunStore {
                 error_json = ?,
                 metrics_json = ?,
                 finished_at = ?
-          WHERE id = ? AND status = 'running'`,
+          WHERE id = ? AND status = 'running'${epoch === undefined ? '' : ' AND epoch = ?'}`,
       )
       .run(
         terminal.status,
@@ -463,8 +596,53 @@ export class RunStore {
         metrics === undefined ? null : JSON.stringify(metrics),
         Date.now(),
         runId,
+        ...(epoch === undefined ? [] : [epoch]),
       );
     return result.changes > 0;
+  }
+
+  /**
+   * Move this run onto a NEW attempt, revoking the previous one's write
+   * authority.
+   *
+   * Bumping `epoch` is the whole revocation: every later `appendEvents` /
+   * `settleRun` that presents the old value is refused by the fences above, so a
+   * worker that is merely slow cannot append an event or land a terminal for an
+   * attempt the Host has already given up on.
+   *
+   * The new attempt CONTINUES the sequence from the highest committed `seq`. It
+   * does not restart at 1, because `(run_id, seq)` is the identity and a restart
+   * would collide with the previous attempt's rows.
+   *
+   * @returns the new epoch, or `null` when there is no such run to re-attempt.
+   */
+  beginAttempt(runId: string): number | null {
+    const tx = this.db.transaction((id: string): number | null => {
+      const row = this.db.prepare('SELECT epoch FROM runs WHERE id = ?').get(id) as
+        | { epoch: number }
+        | undefined;
+      if (row === undefined) return null;
+      const next = (row.epoch ?? 0) + 1;
+      this.db.prepare('UPDATE runs SET epoch = ? WHERE id = ?').run(next, id);
+      return next;
+    });
+    return tx(runId);
+  }
+
+  /** The attempt that currently holds write authority, or `null` for no run. */
+  currentEpoch(runId: string): number | null {
+    const row = this.db.prepare('SELECT epoch FROM runs WHERE id = ?').get(runId) as
+      | { epoch: number }
+      | undefined;
+    return row === undefined ? null : (row.epoch ?? 0);
+  }
+
+  /** The highest `seq` already committed for this run, or `0` when empty. */
+  maxSeq(runId: string): number {
+    const row = this.db.prepare('SELECT MAX(seq) AS max FROM run_events WHERE run_id = ?').get(runId) as
+      | { max: number | null }
+      | undefined;
+    return row?.max ?? 0;
   }
 
   getRun(id: string): RunRow | null {

@@ -244,8 +244,10 @@ describe('RunStore', () => {
     //
     // This is an exact list on purpose, not a range: it is the assertion that a
     // future migration landing on an id already in use FAILS HERE rather than
-    // colliding at boot. R1.3 added 37 for `runs.input_hash`; the next one has
-    // to be measured again, not assumed to be 38.
-    expect(RUN_STORE_MIGRATIONS.map((m) => m.id)).toEqual([35, 36, 37]);
+    // colliding at boot. R1.3 added 37 for `runs.input_hash`; plan 610 S1 added
+    // 39 for the attempt `epoch` fence — 38 is taken by another store in the
+    // composed core migration list, which `run-store-migration.test.ts` checks
+    // for exactly this reason.
+    expect(RUN_STORE_MIGRATIONS.map((m) => m.id)).toEqual([35, 36, 37, 39]);
   });
 });
