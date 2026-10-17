@@ -363,7 +363,7 @@ Four were wrong and are corrected below; these five were checked and are
 
 | Plan | Priority | Next action |
 | --- | --- | --- |
-| **[610-architecture-series](./active/610-architecture-series/README.md)** | **P0** | **唯一的架构计划，仍 Active。** A3 已随 PR #262 完成；旧索引中的“A3 是下一步”已过时。**当前 next action 是 A4 前置清理**：把 `DuyaAgent.test.ts`、`streaming-lifecycle.test.ts`、`AgentLoop.test.ts` 的 16 处旧 `duyaAgent.streamChat` 调用迁到 engine harness，或明确删除/skip；随后完成 A4 六场景运行时验收。当前证据与计数限制见 [610 执行日志](./active/610-architecture-series/90-execution-log.md)。 |
+| **[610-architecture-series](./active/610-architecture-series/README.md)** | **P0** | **唯一的架构计划，仍 Active。** 执行队列唯一入口是 [19 — 快速执行队列](./active/610-architecture-series/19-fast-track-queue.md)：PR 级 T 卡、独占路径、首个失败证据、验收命令。**当前 next action = T01（`turn.completed` 生产者）**；T00（落盘 S1 fence）在共享检出静止后立即提交。S0/S1 已基本落地（`15fa4850` / `cdee21d5` / `a935741f` / `ac1f5183`）——[17](./active/610-architecture-series/17-shared-agent-platform-execution.md) §5 的切片状态已过期，架构裁决仍以 17 为准。 |
 | [587-agent-harness-monorepo](./active/587-agent-harness-monorepo/README.md) | P1 | 合同与历史推导已被 610 第 01 章接管(`01-layered-architecture/10-takeover-from-587.md`)。**不再单独排期**,只作为查证来源 |
 
 > **只有一个架构计划。** 610 的切片表 A0–A7 / B1–B3 / C1 是全部的架构工作,
