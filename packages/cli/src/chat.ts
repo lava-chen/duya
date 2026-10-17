@@ -1,11 +1,11 @@
 /**
- * packages/cli/src/chat.ts 鈥?`duya chat`: the Host-backed chat client.
+ * packages/cli/src/chat.ts —`duya chat`: the Host-backed chat client.
  *
  * This is the production chat entry for the Host architecture (plan 587/12).
  * It contains NO agent runtime: no `DuyaAgent`, no REPL over `streamChat`, no
  * `@duya/agent` import. Everything it does goes through the Host's versioned
- * HTTP API 鈥?start a run, follow its durable event stream, cancel on
- * Ctrl+C 鈥?exactly the same path the Desktop uses.
+ * HTTP API —start a run, follow its durable event stream, cancel on
+ * Ctrl+C —exactly the same path the Desktop uses.
  *
  * Connection discovery order:
  *   1. `--origin` / `DUYA_HOST_ORIGIN` (with `--token` / `DUYA_HOST_TOKEN`
@@ -152,7 +152,7 @@ function renderEvent(event: RunEventEnvelope<RunEvent>): void {
       return;
     }
     case 'assistant.status':
-      write(`${DIM}鈥?${payload.message}${RESET}`);
+      write(`${DIM}—${payload.message}${RESET}`);
       return;
     default:
       // Every other event type is diagnostic for a chat terminal; the durable
@@ -233,7 +233,7 @@ async function chatOnce(
     workingDirectory: process.cwd(),
   });
   if (!start.accepted) {
-    write(`${RED}run refused: ${start.stage} 鈥?${start.reason ?? ''}${RESET}`);
+    write(`${RED}run refused: ${start.stage} —${start.reason ?? ''}${RESET}`);
     return 1;
   }
   write(`${DIM}run ${start.runId}${RESET}`);
@@ -359,11 +359,11 @@ async function chatInteractive(
 ): Promise<number> {
   if (shouldUseTui()) return chatTui(client, sessionId, options);
 
-  write(`${DIM}session ${sessionId} 鈥?type a message, /exit to quit${RESET}`);
+  write(`${DIM}session ${sessionId} —type a message, /exit to quit${RESET}`);
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: `${BRIGHT_CYAN}you${RESET} ${DIM}鈥?{RESET} `,
+    prompt: `${BRIGHT_CYAN}you${RESET} ${DIM}—{RESET} `,
   });
   let interrupt: (() => void) | null = null;
   let stopping = false;
@@ -401,7 +401,7 @@ async function chatInteractive(
             workingDirectory: process.cwd(),
           });
           if (!start.accepted) {
-            write(`${RED}run refused: ${start.stage} 鈥?${start.reason ?? ''}${RESET}`);
+            write(`${RED}run refused: ${start.stage} —${start.reason ?? ''}${RESET}`);
           } else {
             const terminal = await driveRun(client, start.runId, (cancel) => {
               interrupt = cancel;
@@ -418,7 +418,7 @@ async function chatInteractive(
     });
     rl.on('close', resolve);
   });
-  write(`${DIM}goodbye 鈥?session ${sessionId}${RESET}`);
+  write(`${DIM}goodbye —session ${sessionId}${RESET}`);
   return 0;
 }
 
@@ -943,7 +943,7 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
   // writer, so any `console.*` call from this process lands inline in the
   // transcript and buries the turn the user asked for. Route it to the Host's
   // diagnostics log for the rest of the TUI's life. `process.stdout` and
-  // `process.stderr` are deliberately NOT patched 鈥?that is what blessed draws.
+  // `process.stderr` are deliberately NOT patched —that is what blessed draws.
   const consoleCapture =
     host.diagnosticsLogPath === undefined
       ? undefined
