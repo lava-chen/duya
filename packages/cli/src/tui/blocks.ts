@@ -106,6 +106,18 @@ export interface ThinkingBlock {
   readonly id: string;
   text: string;
   finalized: boolean;
+  /**
+   * Clock reading taken when the block was created.
+   *
+   * Only used to derive `durationMs` at seal time, and only for blocks this
+   * process watched stream. A thinking block reconstructed from a reloaded
+   * message arrives already complete and carries neither field, which is why
+   * the header still says `Thought` rather than claiming a duration it never
+   * measured.
+   */
+  startedAt?: number;
+  /** How long the block streamed, frozen the first time it was sealed. */
+  durationMs?: number;
 }
 
 /**
@@ -324,6 +336,19 @@ export function readBlockKey(payload: Record<string, unknown>): string | null {
   return blockKey(messageId, typeof index === 'number' && Number.isFinite(index) ? index : 0);
 }
 
+/**
+ * Freeze a thinking block's measured duration the first time it is sealed.
+ *
+ * First seal wins. A tool call seals the block, and the whole-block frame that
+ * arrives after it must not restart the clock from that later timestamp —
+ * otherwise the header would report the gap between the two frames instead of
+ * the time the model actually spent thinking.
+ */
+function sealThinkingDuration(block: ThinkingBlock, at: number): void {
+  if (block.durationMs !== undefined || block.startedAt === undefined) return;
+  block.durationMs = Math.max(0, at - block.startedAt);
+}
+
 export class TranscriptModel {
   private readonly items: Block[] = [];
   private readonly toolsByCallId = new Map<string, ToolBlock>();
@@ -404,7 +429,7 @@ export class TranscriptModel {
   }
 
   /** Append a streamed thinking fragment to its block. Keyed as above. */
-  appendThinkingDelta(text: string, key: string | null = null): ThinkingBlock | null {
+  appendThinkingDelta(text: string, key: string | null = null, at = Date.now()): ThinkingBlock | null {
     if (text.length === 0) return this.thinking;
     if (key !== null) {
       const existing = this.thinkingByKey.get(key);
@@ -414,7 +439,13 @@ export class TranscriptModel {
       }
     }
     if (this.thinking === null) {
-      this.thinking = { kind: 'thinking', id: nextId('thinking'), text: '', finalized: false };
+      this.thinking = {
+        kind: 'thinking',
+        id: nextId('thinking'),
+        text: '',
+        finalized: false,
+        startedAt: at,
+      };
       this.items.push(this.thinking);
       if (key !== null) this.thinkingByKey.set(key, this.thinking);
     }
@@ -423,11 +454,17 @@ export class TranscriptModel {
   }
 
   /** Apply authoritative thinking content and mark the block final. Keyed as above. */
-  finalizeThinking(content: string, key: string | null = null): ThinkingBlock | null {
+  finalizeThinking(content: string, key: string | null = null, at = Date.now()): ThinkingBlock | null {
     const block = key === null ? this.thinking : this.thinkingByKey.get(key) ?? null;
     if (block === null) {
       if (content.length === 0) return null;
-      this.thinking = { kind: 'thinking', id: nextId('thinking'), text: '', finalized: false };
+      this.thinking = {
+        kind: 'thinking',
+        id: nextId('thinking'),
+        text: '',
+        finalized: false,
+        startedAt: at,
+      };
       this.items.push(this.thinking);
       if (key !== null) this.thinkingByKey.set(key, this.thinking);
     }
@@ -435,6 +472,7 @@ export class TranscriptModel {
     if (target === null) return null;
     target.text = content;
     target.finalized = true;
+    sealThinkingDuration(target, at);
     return target;
   }
 
@@ -447,9 +485,12 @@ export class TranscriptModel {
    * line. Marking it final is also what tells the renderer the block will stop
    * growing, so it may be laid out in full.
    */
-  closeOpenContent(): void {
+  closeOpenContent(at = Date.now()): void {
     if (this.assistant !== null) this.assistant.finalized = true;
-    if (this.thinking !== null) this.thinking.finalized = true;
+    if (this.thinking !== null) {
+      this.thinking.finalized = true;
+      sealThinkingDuration(this.thinking, at);
+    }
     this.assistant = null;
     this.thinking = null;
   }

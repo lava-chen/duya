@@ -447,24 +447,28 @@ describe('renderTranscript', () => {
     expect(globallyExpanded).toContain('second-result');
   });
 
-  it('collapses thinking until expanded', () => {
+  it('previews thinking until expanded', () => {
     const model = new TranscriptModel();
-    model.appendThinkingDelta('reasoning about the answer');
+    model.appendThinkingDelta('line one\nline two\nline three\nline four\nline five');
     const collapsed = renderTranscript(model, {
       expanded: false,
       showToolResults: false,
       toolResultLines: 5,
     });
-    expect(collapsed).toContain('thinking');
-    expect(collapsed).toContain('chars');
-    expect(collapsed).not.toContain('reasoning about the answer');
+    // Collapsed is a three-line PREVIEW, not an absence: the head names the
+    // phase and the clipped tail is disclosed rather than dropped silently.
+    expect(collapsed).toContain('Thinking…');
+    expect(collapsed).toContain('line five');
+    expect(collapsed).not.toContain('line one');
+    expect(collapsed).toContain('earlier lines');
 
     const expanded = renderTranscript(model, {
       expanded: true,
       showToolResults: false,
       toolResultLines: 5,
     });
-    expect(expanded).toContain('reasoning about the answer');
+    expect(expanded).toContain('line one');
+    expect(expanded).toContain('line five');
   });
 
   it('shows a running tool differently from a finished one', () => {

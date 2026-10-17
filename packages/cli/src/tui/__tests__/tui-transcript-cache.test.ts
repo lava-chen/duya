@@ -116,7 +116,7 @@ describe('TranscriptRenderer', () => {
     model.appendThinkingDelta('deep thought');
     const renderer = new TranscriptRenderer();
     const collapsed = renderer.lines(model, OPTIONS).join('\n');
-    expect(collapsed).toContain('thinking… (12 chars)');
+    expect(collapsed).toContain('Thinking…');
 
     const expanded = renderer.lines(model, { ...OPTIONS, expandedBlockIds: new Set([model.activeThinking?.id]) });
     expect(expanded.join('\n')).toContain('deep thought');
