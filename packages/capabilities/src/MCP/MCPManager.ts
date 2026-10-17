@@ -57,11 +57,31 @@ function timeoutMs(seconds: number | undefined, fallback: number): number {
   return Math.max(1, Math.round(seconds * 1000));
 }
 
-/** Race `promise` against a timer; rejects with a descriptive error on expiry. */
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+/**
+ * Race `promise` against a timer; rejects with a descriptive error on expiry.
+ *
+ * `onTimeout` runs at the instant the deadline passes, BEFORE the rejection is
+ * delivered. That ordering is the point: it is the only place a caller can
+ * reach the operation that is being abandoned, since the promise handed in
+ * here is already in flight and this function cannot cancel it. Callers that
+ * have an `AbortSignal` (see `deadline.ts`) pass it so the expiry cancels the
+ * underlying request instead of merely refusing to wait for it.
+ */
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+  onTimeout?: () => void,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     timer = setTimeout(() => {
+      try {
+        onTimeout?.();
+      } catch {
+        // An abort that throws must not replace the timeout error, which is
+        // the one that names the operation that ran out of time.
+      }
       reject(new Error(`MCP ${label} timed out after ${ms}ms`));
     }, ms);
     promise.then(
@@ -372,11 +392,31 @@ class MCPClient {
       this.transport.onclose = () => this.markTransportDead('transport closed');
       this.transport.onerror = (err) => this.markTransportDead(`transport error: ${err}`);
 
-      const startupMs = this.getStartupTimeoutMs();
+      // ONE deadline for the whole startup, which the module doc defines as
+      // "spawn + handshake + listTools" (`DEFAULT_STARTUP_TIMEOUT_MS`). It used
+      // to be built twice — once for the connect race and again, in full, for
+      // the discovery pass — so a server could spend twice its documented
+      // startup budget before it was declared unreachable. That also violated
+      // plan 580 §D5, whose contract is that a discovery pass produces ONE
+      // deadline. `deadline.ts` already models that; this is the call site
+      // finally honouring it.
+      //
+      // The clock is also what makes the connect abortable. `withTimeout` only
+      // rejects the wrapper it returns — the pending `client.connect` and the
+      // child process behind it keep running, which is how a server that never
+      // answers `initialize` used to outlive its own timeout. Passing the
+      // clock's signal into the SDK and firing `abort()` on expiry makes the
+      // timeout real, rather than a rejection the transport never sees.
+      const startupDeadline = createDeadlineClock(this.getStartupTimeoutMs());
       await withTimeout(
-        this.client.connect(this.transport),
-        startupMs,
+        this.client.connect(this.transport, {
+          signal: startupDeadline.signal,
+          timeout: startupDeadline.remainingMs(),
+          maxTotalTimeout: startupDeadline.remainingMs(),
+        }),
+        startupDeadline.remainingMs(),
         `connect to "${this.config.name}"`,
+        () => startupDeadline.abort(new Error('MCP startup deadline exceeded')),
       );
 
       // Plan 580 D2: save server capabilities from the initialize result.
@@ -398,7 +438,9 @@ class MCPClient {
       // Plan 580 D3: transactional paginated discovery (Phase 0
       // instrumentation: DUYA_MCP_DISCOVERY_DEBUG=1 logs every page with
       // cursor/pages/total under the SAME connection / OAuth grant).
-      const startupDeadline = createDeadlineClock(startupMs);
+      // The SAME clock as the connect above: whatever the handshake spent is
+      // subtracted from what discovery gets, which is what "one startup budget"
+      // means and what `listAllTools` already accepts.
       const debug = discoveryDebugEnabled();
       const discovery = await listAllTools(this.client, {
         deadline: startupDeadline,
