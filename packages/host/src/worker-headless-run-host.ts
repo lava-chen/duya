@@ -794,6 +794,12 @@ export class HeadlessRunHost {
       complete: async (terminal, metrics) => {
         if (!runApi) return;
         const outcome = await runApi.settleAgentRun(runId, terminal, metrics);
+        // No `fenced` case here, and that is the type system being right rather
+        // than the check being forgotten: this path calls `settleAgentRun`
+        // without an epoch, so the store cannot return one. The moment an epoch
+        // IS threaded through, this branch has to grow a case in the same commit
+        // that makes it reachable — a superseded attempt must never be reported
+        // as a settled run, and nothing downstream would correct that.
         if (outcome.state === 'conflict' || outcome.state === 'absent') {
           throw new Error(`Host refused to settle run ${runId}: ${outcome.state}`);
         }

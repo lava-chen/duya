@@ -18,9 +18,16 @@
  *             (createRunControlPlaneActions over the same RunStore the ledger
  *             API serves) — no second writer, no second seq space
  *     -> worker frames come back through WorkerManager.setMessageHandler
- *          -> normalizeWorkerEvent (the SAME normalizer the Desktop router
- *             uses, moved into Host)
- *          -> RunOrchestrator.observe -> durable run_events
+ *          -> `run:event` lines: validated, attempt-fenced, and written to the
+ *             durable ledger VERBATIM, under the seq the Runtime minted
+ *          -> chat: / compact: frames
+ *             -> normalizeWorkerEvent (the SAME normalizer the Desktop router
+ *                uses, moved into Host)
+ *             -> RunOrchestrator.observe -> live run-event tee ONLY. The
+ *                reverse translation no longer persists: one `(run_id, seq)`
+ *                identity must have exactly one writer.
+ *
+ * The Host is the ONLY durable writer, and the worker never opens a database.
  *
  * Worker `db:request` messages are served by the injected `WorkerDbBridge`.
  * The bridge is a REQUIRED member on purpose: a silently missing bridge turns
@@ -38,10 +45,13 @@ import type {
   StartAgentRunResult,
 } from '@duya/agent-protocol';
 import type { RunRepository } from './repository-port.js';
+import { RunEventConflictError, RunEpochFencedError } from '@duya/data/run-store';
 import { createRunControlPlaneActions, type RunControlPlaneLogger } from './run-control-plane.js';
 import {
   RunOrchestrator,
   createWorkerExecutionChannel,
+  type NativeAppendOutcome,
+  type NativeRunEventWriter,
   type RunOrchestratorLogger,
   type RunTurnIntent,
 } from './run-orchestrator.js';
@@ -77,9 +87,26 @@ export interface HostRunExecutionLogger {
   error(message: string, error?: Error, fields?: Record<string, unknown>): void;
 }
 
+/**
+ * The ledger surface this controller needs ON TOP of {@link RunRepository}: the
+ * attempt fence.
+ *
+ * A port that only names `appendEvents(events)` cannot fence anything, because
+ * a fence is a second argument. `RunStore` has always accepted it, so this
+ * narrows the port rather than widening the store — and the write authority is
+ * what makes "the Host is the only durable writer" enforceable instead of
+ * merely stated.
+ */
+export interface AttemptFencedRunStore extends RunRepository {
+  /** The attempt that currently holds write authority, or `null` for no run. */
+  currentEpoch(runId: string): number | null;
+  /** Appends under `epoch`, throwing `RunEpochFencedError` when superseded. */
+  appendEvents(envelopes: readonly RunEventEnvelope[], epoch?: number): number;
+}
+
 export interface HostRunExecutionControllerOptions {
   /** The ONE durable run ledger; shared with the Host Run API (no second store). */
-  readonly runs: RunRepository;
+  readonly runs: AttemptFencedRunStore;
   /** Resolves a session's turn defaults; `null` means the session does not exist. */
   readonly sessionDefaults: (sessionId: string) => Promise<HostTurnDefaults | null>;
   /** Serves the worker's `db:request` frames. Required — see module doc. */
@@ -117,6 +144,38 @@ export class HostRunExecutionController {
 
   constructor(options: HostRunExecutionControllerOptions) {
     this.#options = options;
+
+    /**
+     * The Host's ONE durable writer for Runtime-minted envelopes.
+     *
+     * Every refusal the store raises is translated into its own outcome here
+     * rather than thrown at the orchestrator, because the four mean different
+     * things to a caller on a stdout path: `fenced` is a superseded attempt that
+     * must be DROPPED, `conflict` is two envelopes claiming one identity and
+     * must be refused LOUDLY, `duplicate` is a retry that is already durable,
+     * and only the last is a problem at all. `written` counts rows rather than
+     * events, because the whole point is the count the store actually committed.
+     */
+    const nativeWriter: NativeRunEventWriter = {
+      currentEpoch: (runId) => options.runs.currentEpoch(runId),
+      append: (runId, envelopes, epoch): NativeAppendOutcome => {
+        try {
+          const written = options.runs.appendEvents(envelopes, epoch);
+          return written > 0 ? { state: 'written', written } : { state: 'duplicate' };
+        } catch (error) {
+          if (error instanceof RunEpochFencedError) {
+            return { state: 'fenced', presented: error.presented, current: error.current };
+          }
+          if (error instanceof RunEventConflictError) {
+            return { state: 'conflict', seq: error.seq };
+          }
+          return {
+            state: 'failed',
+            reason: error instanceof Error ? error.message : String(error),
+          };
+        }
+      },
+    };
 
     this.#registry = new WorkerSessionRegistry(adaptRegistryLogger(options.logger));
     this.#workerManager = new WorkerManager(
@@ -159,6 +218,7 @@ export class HostRunExecutionController {
 
     this.#orchestrator = new RunOrchestrator({
       dbRequest: localDbRequest,
+      nativeWriter,
       logger: adaptOrchestratorLogger(options.logger),
       onEvent: (event) => this.#liveRunEvents.publish(event),
       onRunSettled: (runId) => this.#liveRunEvents.close(runId as RunId),
@@ -323,6 +383,11 @@ export class HostRunExecutionController {
       return;
     }
 
+    if (type === 'run:event') {
+      await this.#acceptNativeRunEvent(sessionId, msg);
+      return;
+    }
+
     if (typeof type === 'string' && (type.startsWith('chat:') || type.startsWith('compact:'))) {
       if (type === 'chat:permission') {
         const request = msg.request;
@@ -350,6 +415,84 @@ export class HostRunExecutionController {
       }
     }
   }
+
+  /**
+   * Validate and persist ONE native `run:event` line.
+   *
+   * ## What is checked here, and what is checked one layer down
+   *
+   * Everything on this method is a WIRE-boundary check: this is untrusted
+   * process output, and the ledger is append-only, so a malformed line must not
+   * reach storage at all. The run-identity check lives in the orchestrator,
+   * because the orchestrator owns the session→run binding and is the only place
+   * that can answer "which run is this session executing".
+   *
+   * Dropped, with a line in the log, on:
+   *
+   *  - an `epoch` that is not a finite integer. There is no attempt to fence
+   *    against, and a default would be a guess with write authority.
+   *  - an `envelope` that is not an object, or whose `runId` is not a non-empty
+   *    string. There is no identity to write under.
+   *  - a `seq` that is not a safe integer ≥ 1. `(run_id, seq)` IS the event
+   *    identity, so a fractional or negative sequence is not a retry, it is a
+   *    row nobody can order.
+   *  - a `payload` that is not an object with a string `type`. The store reads
+   *    `payload.type` as the event type, and letting that throw inside the
+   *    transaction would report a malformed message as a storage failure.
+   *
+   * And, one layer down, on an envelope naming a run this session is not
+   * executing, on an absent writer, and on a superseded attempt.
+   */
+  async #acceptNativeRunEvent(sessionId: string, msg: Record<string, unknown>): Promise<void> {
+    const epoch = msg.epoch;
+    if (typeof epoch !== 'number' || !Number.isFinite(epoch) || !Number.isInteger(epoch)) {
+      this.#options.logger.warn('dropped a native run:event with no finite integer attempt', { sessionId, epoch });
+      return;
+    }
+    const envelope = msg.envelope;
+    if (!isRecord(envelope)) {
+      this.#options.logger.warn('dropped a native run:event with no envelope object', { sessionId, epoch });
+      return;
+    }
+    const runId = envelope.runId;
+    if (typeof runId !== 'string' || runId === '') {
+      this.#options.logger.warn('dropped a native run:event with no runId', { sessionId, epoch });
+      return;
+    }
+    const seq = envelope.seq;
+    if (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 1) {
+      this.#options.logger.warn('dropped a native run:event whose seq is not a safe integer >= 1', {
+        sessionId,
+        runId,
+        seq,
+        epoch,
+      });
+      return;
+    }
+    const payload = envelope.payload;
+    if (!isRecord(payload) || typeof payload.type !== 'string') {
+      this.#options.logger.warn('dropped a native run:event with no typed payload', { sessionId, runId, seq, epoch });
+      return;
+    }
+
+    const verdict = await this.#orchestrator.persistNativeRunEvent(
+      sessionId,
+      envelope as unknown as RunEventEnvelope,
+      epoch,
+    );
+    if (!verdict.accepted) {
+      this.#options.logger.warn(`dropped a native run:event — ${verdict.reason}`, {
+        sessionId,
+        runId,
+        seq,
+        epoch,
+      });
+    }
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 // ─── Logger adapters ─────────────────────────────────────────────────────────

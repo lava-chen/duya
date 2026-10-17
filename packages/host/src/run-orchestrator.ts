@@ -32,9 +32,12 @@
  * was not accepted has NO executor behind it, because the dispatch never
  * happened.
  *
- * `observe` is a tee: it returns the legacy frame for the router to write and
- * keeps the protocol envelope for `run_events`. The router never learns the
- * protocol, and the run layer never learns about `http.ServerResponse`.
+ * `observe` is a tee, and it no longer PERSISTS. It returns the legacy frame
+ * for the router to write and keeps the protocol envelope for the live run-event
+ * arm; the durable `run_events` ledger is written by the native `run:event`
+ * channel instead, under the identity the Runtime minted. The router never
+ * learns the protocol, and the run layer never learns about
+ * `http.ServerResponse`.
  *
  * ## Settling
  *
@@ -89,7 +92,7 @@ import {
   reasonOf,
   type RunWriteReceipt,
 } from './run-receipt.js';
-import { runInputRevision } from '@duya/agent-protocol';
+import { eventSpecOf, runInputRevision } from '@duya/agent-protocol';
 import type { ControlPlaneRequest } from './control-plane-service.js';
 
 export interface RunOrchestratorLogger {
@@ -122,6 +125,48 @@ type DbRequest = ControlPlaneRequest;
  */
 const RETAINED_HANDLES = 64;
 
+/**
+ * What the durable store said about one native append.
+ *
+ * Receipt-shaped rather than a bare count, because the three ways an append can
+ * fail mean opposite things and the caller must not collapse them: `fenced`
+ * means "this attempt may no longer write" and the batch must be DROPPED, while
+ * `conflict` means two different envelopes are claiming one `(run, seq)` and
+ * must be refused LOUDLY. A single `written: 0` cannot say which.
+ */
+export type NativeAppendOutcome =
+  | { readonly state: 'written'; readonly written: number }
+  /** A duplicate delivery of an envelope already stored — a retry, not an error. */
+  | { readonly state: 'duplicate' }
+  | { readonly state: 'fenced'; readonly presented: number; readonly current: number }
+  | { readonly state: 'conflict'; readonly seq: number }
+  | { readonly state: 'failed'; readonly reason: string };
+
+/**
+ * The ONE durable writer for envelopes the Runtime minted itself.
+ *
+ * Injected rather than reached for, so this module keeps its promise of holding
+ * no store handle: the composing process owns the connection, and the
+ * orchestrator only routes. It is also the seam that carries the ATTEMPT FENCE —
+ * the store refuses a write from a superseded attempt, and only a seam that can
+ * present an epoch can be fenced.
+ */
+export interface NativeRunEventWriter {
+  /** The run's current attempt, or `null` when there is no run row yet. */
+  currentEpoch(runId: string): number | null;
+  /** Appends the envelopes VERBATIM, under the presented attempt. */
+  append(
+    runId: string,
+    envelopes: readonly RunEventEnvelope[],
+    epoch: number,
+  ): NativeAppendOutcome | Promise<NativeAppendOutcome>;
+}
+
+/** What {@link RunOrchestrator.persistNativeRunEvent} decided about one message. */
+export type NativeEventAcceptance =
+  | { readonly accepted: true; readonly runId: string; readonly seq: number }
+  | { readonly accepted: false; readonly runId: string | null; readonly reason: string };
+
 export interface RunOrchestratorOptions {
   readonly dbRequest: DbRequest;
   readonly logger?: RunOrchestratorLogger;
@@ -129,6 +174,14 @@ export interface RunOrchestratorOptions {
   readonly onEvent?: (event: RunEventEnvelope) => void;
   /** Called after the terminal has crossed the durable settlement boundary. */
   readonly onRunSettled?: (runId: string) => void;
+  /**
+   * The durable writer for Runtime-minted envelopes.
+   *
+   * Optional because a host with no native channel still runs legacy frames,
+   * and one absent seam must degrade rather than throw. Absent, a native event
+   * is refused with a reason rather than silently discarded.
+   */
+  readonly nativeWriter?: NativeRunEventWriter;
   /**
    * The worker's command channel. Supplied by the router, which owns
    * `WorkerManager`; the runtime reaches the worker only through this seam, so
@@ -240,6 +293,31 @@ export class RunOrchestrator {
    * run that ended.
    */
   readonly #pendingSessionByRun = new Map<string, string>();
+  /**
+   * runId -> native `run:event` envelopes this Host actually put in the ledger.
+   *
+   * Counted rather than kept, because the count's only job is the comparison in
+   * {@link #reportNativeChannel}: "this run produced legacy frames and nothing
+   * on the native channel" is a degradation nobody can see from either counter
+   * alone.
+   */
+  readonly #nativeEventsByRun = new Map<string, number>();
+  /**
+   * runId -> envelopes REVERSE-TRANSLATED from legacy worker frames.
+   *
+   * These are the ones `persistenceFor.append` refused to persist, so a run with
+   * a non-zero count and a zero native count is a run whose ledger has no
+   * Runtime identity in it at all.
+   */
+  readonly #translatedEventsByRun = new Map<string, number>();
+  /**
+   * runId -> the terminal envelope held back until `run:complete` is durable.
+   *
+   * A terminal is the one event a client may read as "this succeeded", so it is
+   * the one event that must not reach a consumer before the commit that records
+   * it. Cleared in {@link #finish} on both the committed and the failed path.
+   */
+  readonly #terminalAwaitingCommit = new Map<string, RunEventEnvelope>();
 
   constructor(options: RunOrchestratorOptions) {
     this.#options = options;
@@ -290,22 +368,35 @@ export class RunOrchestrator {
       persistenceFor: (manifest) => {
         const runId = manifest.runId;
         return {
+          /**
+           * ## This no longer writes anything, and that is the point
+           *
+           * Every envelope that reaches here was REVERSE-TRANSLATED from a
+           * legacy worker frame, and a reverse translation has to re-`seq` it:
+           * the Host's emitter numbers from its own ledger, not from the
+           * Runtime's, so the row it would write carries the Host's identity
+           * and can never be matched back to the envelope the engine emitted.
+           *
+           * The native channel (`run:event`) is the ledger writer now, and it
+           * writes the envelope verbatim. Leaving this arm writing rows would
+           * put two writers with two different `seq` spaces into one
+           * `(run_id, seq)` identity — which the store can only answer with a
+           * `RunEventConflictError` for whichever envelope lost, or with a
+           * silently dropped batch.
+           *
+           * What is KEPT here is the SSE tee, and it is kept by NOT writing:
+           * `observe` still forwards each translated envelope to `onEvent`, and
+           * the router still writes the frame it was handed. This arm only
+           * counts what it refused to persist, so a run that produced legacy
+           * frames but no native events is visible at settle time instead of
+           * reading as a quiet run.
+           */
           append: async (envelopes) => {
-            // Both Control Plane failure shapes are reported HERE rather than
-            // left to the settle path, because a run that loses a batch
-            // mid-stream and is then hard-killed never reaches a settle that
-            // could report it. A thrown channel is re-thrown so the caller still
-            // learns the batch is gone.
-            const reply = await request('run:append', runId, { runId, events: envelopes });
-            // The Control Plane never throws for a failed write — it answers a
-            // receipt and moves on, because losing one batch of a user's
-            // transcript is a degradation. That answer is only useful if
-            // somebody reads it, and discarding it is what turned a refused
-            // write into a silent one.
-            const receipt = readRunReceipt(reply, 'run:append', runId);
-            if (!isDurableWrite(receipt)) {
-              reportAckLoss(receipt, this.#logger);
-              throw new Error(`run:append was not acknowledged: ${describeReceipt(receipt)}`);
+            for (const envelope of envelopes) {
+              this.#translatedEventsByRun.set(
+                runId,
+                (this.#translatedEventsByRun.get(runId) ?? 0) + 1,
+              );
             }
           },
           complete: async (terminal, metrics) => {
@@ -466,6 +557,12 @@ export class RunOrchestrator {
       // BEFORE the worker produces anything. This is what makes a run that
       // crashes on its first frame still answerable.
       //
+      // The ledger copy of that fact now comes from the RUNTIME, not from here:
+      // the controller's emitter still mints a `run.started` (and still publishes
+      // it to the live arm), but `persistenceFor.append` no longer writes it, so
+      // the row carries the engine's own `seq` and the Runtime's envelope
+      // verbatim. See `persistenceFor` for why one `run.started` has to win.
+      //
       // The session is bound by `onDispatchReady`, after `run.started` is
       // durable and before the executor is told to begin. It used to be bound
       // FIRST, which meant a start that failed left the session pointing at a
@@ -476,7 +573,13 @@ export class RunOrchestrator {
       const handle = await this.#controller.start(built.manifest, {
         prompt: turnPrompt,
         sessionId,
-        options: turnOptions,
+        // `attemptEpoch` is read HERE, at open time, and injected AFTER
+        // `inputHash` was computed above — exactly like `maxTurns`, which the
+        // channel adds later. It is a Host→worker directive about WHICH attempt
+        // may write, not part of the user's turn input, so folding it into the
+        // input revision would make the digest describe something the user never
+        // said and would break the worker's own recomputation of it.
+        options: { ...turnOptions, attemptEpoch: this.#attemptEpochFor(runId) },
         // The revision computed above, verbatim. Passing it is what keeps the
         // digest on the executor's command identical to the one now in the run
         // row; letting the controller recompute it would be a second
@@ -745,20 +848,17 @@ export class RunOrchestrator {
 
     const outcome = this.#controller.observeFrame(runId, frame);
     if (outcome.envelope !== null) {
-      try {
-        this.#options.onEvent?.(outcome.envelope);
-      } catch (error) {
-        this.#logger.warn('live run event publication failed', {
-          runId,
-          error: error instanceof Error ? error.message : String(error),
-        });
+      const envelope = outcome.envelope;
+      if (envelope.payload.type === 'run.completed' || envelope.payload.type === 'run.failed') {
+        // HELD, not published. A terminal is the event a client reads as "this
+        // succeeded", and the settle below has not yet reached the durable
+        // `run:complete`. Publishing it here is exactly the publish-before-
+        // commit this run layer must not do, so it waits for `#finish`.
+        this.#terminalAwaitingCommit.set(runId, envelope);
+        void this.#finish(sessionId, runId);
+      } else {
+        this.#publish(runId, envelope);
       }
-    }
-    if (outcome.envelope !== null && (outcome.envelope.payload.type === 'run.completed' || outcome.envelope.payload.type === 'run.failed')) {
-      // The run has decided. Settle asynchronously: the terminal write is a
-      // round trip to the main process and the router's caller is still inside
-      // a synchronous frame handler.
-      void this.#finish(sessionId, runId);
     }
     return { legacy: outcome.legacy, forwardOnly: outcome.forwardOnly, late: outcome.late ?? false };
   }
@@ -836,8 +936,31 @@ export class RunOrchestrator {
       // The terminal this produces is the CONTROLLER's to publish; this path
       // only has to be certain the write was attempted, so the value is dropped
       // explicitly rather than leaking into the promise's type.
-      .then(() => undefined)
+      //
+      // `settle` resolving is the COMMIT CONFIRMATION: `persistenceFor.complete`
+      // has already read the `run:complete` receipt back and thrown if it was
+      // not a durable write. Publishing the held terminal here rather than in
+      // `observe` is the whole of "no success before commit confirmation" — a
+      // client cannot observe a completed run whose terminal never landed.
+      .then(() => {
+        this.#reportNativeChannel(runId);
+        this.#releaseTerminalToConsumers(runId);
+      })
       .catch((error: unknown) => {
+        // The terminal is DROPPED, not downgraded and not published. The run
+        // did not commit its terminal, so any client told otherwise has been
+        // told a success that is not durable; the ERROR line is the only honest
+        // report this path can make.
+        this.#reportNativeChannel(runId);
+        const held = this.#terminalAwaitingCommit.get(runId);
+        this.#terminalAwaitingCommit.delete(runId);
+        if (held !== undefined) {
+          this.#logger.error('the run terminal was not published because its durable commit did not land', new Error(held.payload.type), {
+            sessionId,
+            runId,
+            eventType: held.payload.type,
+          });
+        }
         this.#logger.error('Run settle failed', error instanceof Error ? error : new Error(String(error)), {
           sessionId,
           runId,
@@ -856,6 +979,14 @@ export class RunOrchestrator {
       });
     this.#finishing.set(sessionId, settling);
     return settling;
+  }
+
+  /** Publish the terminal held since `observe`, now that the commit landed. */
+  #releaseTerminalToConsumers(runId: string): void {
+    const held = this.#terminalAwaitingCommit.get(runId);
+    this.#terminalAwaitingCommit.delete(runId);
+    if (held === undefined) return;
+    this.#publish(runId, held);
   }
 
   #release(sessionId: string, runId: string): void {
@@ -932,6 +1063,171 @@ export class RunOrchestrator {
   /** The live run for a session, for the cancel path. */
   runForSession(sessionId: string): string | null {
     return this.#bySession.get(sessionId) ?? null;
+  }
+
+  /**
+   * Put ONE Runtime-minted envelope into the durable ledger, verbatim.
+   *
+   * ## Why this is not `observe`
+   *
+   * `observe` reverse-translates a legacy frame and therefore cannot preserve
+   * the identity the Runtime gave an event. This arm takes the envelope as it
+   * arrived: the `seq` written is the `seq` the engine minted, so a ledger row
+   * can be matched back to the envelope that produced it.
+   *
+   * ## What is refused, and why each refusal is different
+   *
+   *  - **A run id that is not this session's live run.** Refused before any
+   *    write. A worker holding a stale or foreign run id must never be able to
+   *    land rows under a run its session did not open.
+   *  - **No live run for the session.** The run either never opened or already
+   *    settled; either way appending would create rows on a decided run.
+   *  - **A superseded attempt (`fenced`).** Dropped, loudly. The attempt fence
+   *    exists precisely so a slow worker cannot mutate a run the Host has moved
+   *    on from, and retrying is not an option: the same batch fails identically
+   *    every time.
+   *  - **A contradicted `(runId, seq)` (`conflict`).** Refused loudly rather
+   *    than dropped, because two different envelopes claiming one identity is a
+   *    broken transcript, not a retry.
+   *
+   * Never throws: this runs on the worker's stdout path, and an exception here
+   * would be attributed to the run rather than to the message that caused it.
+   */
+  async persistNativeRunEvent(
+    sessionId: string,
+    envelope: RunEventEnvelope,
+    epoch: number,
+  ): Promise<NativeEventAcceptance> {
+    const liveRunId = this.#bySession.get(sessionId);
+    if (liveRunId === undefined) {
+      return {
+        accepted: false,
+        runId: null,
+        reason: `session ${sessionId} has no live run; the envelope is dropped rather than appended to an ended or unopened run`,
+      };
+    }
+    if (envelope.runId !== liveRunId) {
+      return {
+        accepted: false,
+        runId: liveRunId,
+        reason: `envelope names run ${envelope.runId} but session ${sessionId} is executing run ${liveRunId}`,
+      };
+    }
+    const writer = this.#options.nativeWriter;
+    if (writer === undefined) {
+      return {
+        accepted: false,
+        runId: liveRunId,
+        reason: 'this Host has no native run event writer configured',
+      };
+    }
+    // Durability is the protocol's, not the transport's. `assistant.text_delta`
+    // is `ephemeral` and its own registry entry says "counted in metrics, never
+    // retained" — so a native channel that persisted everything would turn every
+    // streamed token into a permanent ledger row. The worker forwards all of them
+    // deliberately, because live consumers want them; deciding what survives a
+    // crash is this layer's job, and putting the rule HERE means there is one
+    // place it can be applied.
+    const durability = eventSpecOf(envelope.payload.type)?.durability;
+    if (durability === 'ephemeral') {
+      return { accepted: true, runId: liveRunId, seq: envelope.seq };
+    }
+    let outcome: NativeAppendOutcome;
+    try {
+      outcome = await writer.append(liveRunId, [envelope], epoch);
+    } catch (error) {
+      this.#logger.error('the native run:event append threw', error instanceof Error ? error : new Error(String(error)), {
+        runId: liveRunId,
+        seq: envelope.seq,
+        epoch,
+      });
+      return { accepted: false, runId: liveRunId, reason: 'the durable append threw' };
+    }
+    switch (outcome.state) {
+      case 'written':
+      case 'duplicate':
+        // A duplicate delivery is a no-op at the store and is counted the same
+        // way here: the ledger already holds this envelope's identity, which is
+        // all the counter is for.
+        this.#nativeEventsByRun.set(liveRunId, (this.#nativeEventsByRun.get(liveRunId) ?? 0) + 1);
+        return { accepted: true, runId: liveRunId, seq: envelope.seq };
+      case 'fenced':
+        this.#logger.warn('dropped a native run event from a superseded attempt', {
+          runId: liveRunId,
+          seq: envelope.seq,
+          presented: outcome.presented,
+          current: outcome.current,
+        });
+        return {
+          accepted: false,
+          runId: liveRunId,
+          reason: `attempt ${outcome.presented} is superseded by ${outcome.current}`,
+        };
+      case 'conflict':
+        this.#logger.error('refused a native run event whose (run, seq) already holds different content', new Error(`run ${liveRunId} already records a different event at seq ${outcome.seq}`), {
+          runId: liveRunId,
+          seq: outcome.seq,
+          epoch,
+        });
+        return {
+          accepted: false,
+          runId: liveRunId,
+          reason: `(run ${liveRunId}, seq ${outcome.seq}) already holds different content`,
+        };
+      case 'failed':
+        this.#logger.error('the native run event was not persisted', new Error(outcome.reason), {
+          runId: liveRunId,
+          seq: envelope.seq,
+          epoch,
+        });
+        return { accepted: false, runId: liveRunId, reason: outcome.reason };
+    }
+  }
+
+  /**
+   * The attempt this Host is opening the run under, read at open time.
+   *
+   * `0` is a real answer, not a placeholder: a run row is created at epoch 0
+   * and every pre-fence row reads back as 0. A missing seam also yields 0,
+   * which is the same write authority the initial attempt holds.
+   */
+  #attemptEpochFor(runId: string): number {
+    const current = this.#options.nativeWriter?.currentEpoch(runId);
+    return typeof current === 'number' && Number.isFinite(current) ? current : 0;
+  }
+
+  /**
+   * Say out loud that a run's ledger has no Runtime identity in it.
+   *
+   * Without this, a worker that never emits `run:event` produces a run that
+   * looks identical to a healthy one from the outside: a `run` row, a terminal,
+   * and no explanation for why the transcript is empty. That is a silent
+   * degradation, which is the one failure mode this channel was added to remove.
+   */
+  #reportNativeChannel(runId: string): void {
+    const translated = this.#translatedEventsByRun.get(runId) ?? 0;
+    const native = this.#nativeEventsByRun.get(runId) ?? 0;
+    this.#translatedEventsByRun.delete(runId);
+    this.#nativeEventsByRun.delete(runId);
+    if (translated > 0 && native === 0) {
+      this.#logger.warn('this run produced legacy frames but no native run events — its durable transcript has no Runtime identity', {
+        runId,
+        translatedEvents: translated,
+        nativeEvents: 0,
+      });
+    }
+  }
+
+  /** Forward one envelope to the live consumers, reporting a failed tee. */
+  #publish(runId: string, envelope: RunEventEnvelope): void {
+    try {
+      this.#options.onEvent?.(envelope);
+    } catch (error) {
+      this.#logger.warn('live run event publication failed', {
+        runId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**

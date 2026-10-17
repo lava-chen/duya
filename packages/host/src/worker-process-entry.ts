@@ -1556,6 +1556,22 @@ async function loadAgentSkills(workDir?: string, skillPaths?: string[], security
         });
     }
 }
+/**
+ * Read the attempt epoch the run's start command carries.
+ *
+ * The field is supplied by the Host on `input.options.attemptEpoch`. It is read
+ * by narrowing rather than by declaring it on `ChatStartMessage['options']` so
+ * that an older Host that omits it still works, and so an absent epoch is never
+ * replaced by a default: the Host rejects a mismatched epoch, and it must
+ * reject a missing one just as firmly.
+ */
+function readAttemptEpoch(options: ChatStartMessage['options']): number | undefined {
+    if (options === undefined || !('attemptEpoch' in options)) {
+        return undefined;
+    }
+    const raw = options.attemptEpoch;
+    return typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined;
+}
 function sendToMain(msg: Record<string, unknown>): void {
     process.send?.(msg);
     sendEvent(msg);
@@ -2276,6 +2292,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             antiDeadLoop: { ...steering.antiDeadLoop },
             disabledLoopHooks: steering.disabledLoopHooks,
         } as ChatOptions;
+        const attemptEpoch = readAttemptEpoch(msg.options);
         const engineRun = await driveRunWithEngine({
             agent,
             sessionId: msg.sessionId,
@@ -2313,6 +2330,16 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             legacyFrameCodec: convertSSEToAgentMessage,
             onPerCallUsage: (usage) => handleStreamEvent({ type: 'result', data: usage as unknown }),
             turnUsageBlock: () => persistedUsageBlock(turnUsage),
+            // Native channel (plan 610 S1). The envelope travels VERBATIM on
+            // its own message type -- same object the emitter minted, not a
+            // re-sequenced or re-projected copy -- so the Host can stop
+            // re-deriving runs from the lossy `chat:*` frames the drain below
+            // still emits for the TUI and Desktop. `epoch` is passed through
+            // as given; `undefined` serializes to an absent key, which the
+            // Host rejects, exactly as it rejects a wrong number.
+            onNativeEnvelope: (envelope) => {
+                sendEvent({ type: 'run:event', epoch: attemptEpoch, envelope });
+            },
         }, (frame) => {
             if (isTurnLevelUsageFrame(frame))
                 return;

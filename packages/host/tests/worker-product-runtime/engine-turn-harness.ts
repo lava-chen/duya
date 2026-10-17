@@ -57,7 +57,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { RunId, PermissionPolicyMode } from '@duya/agent-protocol';
+import type { RunId, RunEventEnvelope, PermissionPolicyMode } from '@duya/agent-protocol';
 import type { RunPersistence } from '@duya/agent-runtime';
 import type { EngineRunOutcome } from '@duya/host/worker-engine-driver';
 import type { AgentOptions, ChatOptions, MessageContent, Tool } from '@duya/host/worker-run-contracts';
@@ -108,6 +108,28 @@ export interface DriveTurnOptions {
    * would make the two measurements incomparable.
    */
   readonly persistence?: RunPersistence;
+  /**
+   * Receives every native envelope the engine announces, in order and
+   * unmodified — the same hook `worker-process-entry.ts` uses to publish the
+   * `run:event` channel.
+   *
+   * Exposed here so a test can drive the NATIVE half of the seam. A test that
+   * only collects `frames` exercises the lossy legacy projection and says
+   * nothing about what the Host can persist.
+   */
+  readonly onNativeEnvelope?: (envelope: RunEventEnvelope) => void;
+  /**
+   * The run this turn belongs to.
+   *
+   * Production gets it from the Host: `openRun` mints the canonical runId and
+   * puts it on the `chat:start` command, and the worker uses THAT
+   * (`worker-process-entry.ts` resolves `msg.runId`). Omitting this mints a
+   * fresh one, which is right for a standalone turn and wrong for anything
+   * that has to agree with a Host about which run an event belongs to — the
+   * native channel refuses those envelopes by design, and the refusal names the
+   * mismatch.
+   */
+  readonly runId?: RunId;
 }
 
 export interface DriveTurnResult {
@@ -297,7 +319,7 @@ export async function driveTurn(
     {
       agent,
       sessionId,
-      runId: resolveTurnRunId(undefined).runId as RunId,
+      runId: config.runId ?? (resolveTurnRunId(undefined).runId as RunId),
       seqIndex: Date.now(),
       options,
       prompt,
@@ -315,6 +337,7 @@ export async function driveTurn(
       onPerCallUsage: () => {},
       ledgerDir,
       ...(config.persistence === undefined ? {} : { persistence: config.persistence }),
+      ...(config.onNativeEnvelope === undefined ? {} : { onNativeEnvelope: config.onNativeEnvelope }),
     },
     (frame) => {
       frames.push(frame as Record<string, unknown>);

@@ -45,6 +45,13 @@ export interface EngineRunDriverRequest {
     readonly turnUsageBlock?: () => AssistantMessage['usage'] | null;
     readonly ledgerDir?: string;
     readonly persistence?: RunPersistence;
+    /**
+     * Receives every native `RunEventEnvelope` the engine announces, in
+     * order and unmodified, before any legacy projection runs. Optional: a
+     * caller that omits it keeps the previous behaviour exactly, because the
+     * callback is the only thing that adds a publication.
+     */
+    readonly onNativeEnvelope?: (envelope: RunEventEnvelope) => void;
 }
 export interface EngineRunOutcome {
     readonly announced: readonly RunEventEnvelope[];
@@ -224,6 +231,15 @@ export async function driveRunWithEngine(request: EngineRunDriverRequest, onFram
             ports,
             ...(request.maxTurns === undefined ? {} : { maxTurns: request.maxTurns }),
             onEnvelope: (typed) => {
+                // Hand the envelope to the native channel FIRST, while it is
+                // still the identity the emitter minted (runId / sessionId /
+                // seq / traceId / timestamp). The projection below is lossy
+                // and additive; it cannot reconstruct any of this. Exactly one
+                // publication per envelope -- the drain below is the only
+                // other consumer and it keeps serving the legacy frames.
+                if (request.onNativeEnvelope !== undefined) {
+                    request.onNativeEnvelope(typed);
+                }
                 // Keep a machine-readable model-turn boundary alongside the
                 // legacy "Turn N" status line, which has no content identity.
                 if (typed.payload.type === 'turn.started') {

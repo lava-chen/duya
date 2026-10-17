@@ -108,7 +108,9 @@ const { Journal } = await import('@duya/host/worker-journal/Journal');
 const { initDbClient } = await import('@duya/host/worker-db-client');
 const { RunOrchestrator, createWorkerExecutionChannel } = await import('@duya/host/run-orchestrator');
 const { writeRunReceiptOnWire, readRunReceipt, isDurableWrite } = await import('@duya/host/run-receipt');
-const { RunStore, RUN_STORE_MIGRATIONS } = await import('@duya/data/run-store');
+const { RunStore, RUN_STORE_MIGRATIONS, RunEpochFencedError, RunEventConflictError } = await import(
+  '@duya/data/run-store'
+);
 // `worker-frames` has no package export entry, so it is reached the way the
 // sibling host suites reach unexported modules (e.g. `tests/managed-shell/*.test.ts`).
 const { normalizeWorkerEvent } = await import('../../src/worker-frames.js');
@@ -184,6 +186,10 @@ interface Ledger {
   readonly settleStates: readonly string[];
   /** Envelopes the Host published on its live arm — the ones it also persists. */
   readonly live: readonly RunEventEnvelope[];
+  /** What the Host decided when the SAME envelope was offered a second time. */
+  readonly redelivery?: { readonly accepted: boolean; readonly reason: string };
+  /** The ledger's identities after that re-offer. */
+  readonly storedAfterRedelivery: readonly string[];
 }
 
 async function measure(): Promise<Ledger> {
@@ -238,6 +244,27 @@ async function measure(): Promise<Ledger> {
 
   const liveEnvelopes: RunEventEnvelope[] = [];
   const orchestrator = new RunOrchestrator({
+    // The production durable writer, over the REAL store. Same mapping the
+    // router builds in `run-execution.ts`: a refusal is named, never flattened
+    // into a false success, because "written" and "the envelope was a retry"
+    // are different facts the caller has to be able to see.
+    nativeWriter: {
+      currentEpoch: (id: string) => store.currentEpoch(id),
+      append: (id: string, envelopes: readonly RunEventEnvelope[], presented: number) => {
+        try {
+          const written = store.appendEvents(envelopes, presented);
+          return written === 0 ? { state: 'duplicate' } : { state: 'written', written };
+        } catch (error) {
+          if (error instanceof RunEpochFencedError) {
+            return { state: 'fenced', presented, current: store.currentEpoch(id) ?? 0 };
+          }
+          if (error instanceof RunEventConflictError) {
+            return { state: 'conflict', seq: envelopes[0]?.seq ?? 0 };
+          }
+          return { state: 'failed', reason: error instanceof Error ? error.message : String(error) };
+        }
+      },
+    },
     onEvent: (envelope: RunEventEnvelope) => {
       liveEnvelopes.push(envelope);
     },
@@ -289,16 +316,51 @@ async function measure(): Promise<Ledger> {
     workingDirectory: workspaceDir,
   } as never);
   const runId = opened.accepted ? opened.runId : null;
-  console.log('S0_LEDGER opened=', JSON.stringify(opened));
 
-  // The PRODUCTION engine turn. No `persistence` — exactly the argument shape
-  // `worker-process-entry.ts:2279` uses.
-  const result = await driveTurn(agent as never, PROMPT, {});
+  // The NATIVE half, collected off the driver exactly where
+  // `worker-process-entry.ts` collects it — same hook, same order.
+  const nativeOutbound: RunEventEnvelope[] = [];
+  const result = await driveTurn(agent as never, PROMPT, {
+    // The Host's canonical runId, exactly as production gets it from the
+    // `chat:start` command. Without this the engine mints its own and every
+    // envelope is refused as belonging to a different run — which is the
+    // native channel working, not a harness bug.
+    ...(runId === null ? {} : { runId: runId as never }),
+    onNativeEnvelope: (envelope) => {
+      nativeOutbound.push(envelope);
+    },
+  });
 
-  // The REAL Host receive path, per frame — INCLUDING the router's own
-  // normalisation step, which is what production does between a worker frame and
-  // `observe`. Skipping it would measure this test's shortcut instead of the
-  // chain, and "nothing reached the ledger" would be an artefact of the harness.
+  // The Host receive path for a native message, as `run-execution.ts` performs
+  // it: validate, then hand the envelope to the orchestrator under the attempt
+  // the run is on. This is the ONLY writer of `run_events` now — the legacy
+  // frames below go to the SSE tee and must not be persisted twice.
+  const epoch = runId === null ? 0 : (store.currentEpoch(runId) ?? 0);
+  const acceptances: Array<{ seq: number; accepted: boolean; reason: string }> = [];
+  for (const envelope of nativeOutbound) {
+    const verdict = await orchestrator.persistNativeRunEvent(SESSION_ID, envelope, epoch);
+    acceptances.push({
+      seq: envelope.seq,
+      accepted: verdict.accepted,
+      reason: verdict.accepted ? '' : verdict.reason,
+    });
+  }
+
+  // Re-offer the FIRST envelope verbatim. An at-least-once wire does this
+  // routinely, and the ledger must be identical afterwards.
+  const redeliveryTarget = nativeOutbound.find((envelope) => isDurableType(envelope.payload.type));
+  const redelivery =
+    redeliveryTarget === undefined
+      ? undefined
+      : await orchestrator.persistNativeRunEvent(SESSION_ID, redeliveryTarget, epoch);
+  const storedAfterRedelivery =
+    runId === null
+      ? []
+      : store.listEvents(runId, 0).map((row) => `${row.event_type}#${row.seq}`);
+
+  // The legacy channel still runs, and still feeds the SSE tee — but NOT the
+  // ledger. Keeping the loop is the point: dropping it would make this test
+  // pass by removing the old consumer instead of by separating the two paths.
   for (const frame of result.frames) {
     const normalized = normalizeWorkerEvent(frame);
     if (normalized === null) continue;
@@ -332,6 +394,10 @@ async function measure(): Promise<Ledger> {
     runId,
     settleStates,
     live: liveEnvelopes,
+    ...(redelivery === undefined
+      ? {}
+      : { redelivery: { accepted: redelivery.accepted, reason: redelivery.accepted ? '' : redelivery.reason } }),
+    storedAfterRedelivery,
   };
 }
 
@@ -353,63 +419,55 @@ describe('plan-610 S0 — what the Host ledger actually holds after a real turn'
     expect(ledger.runRow?.terminal).toBe('completed');
   });
 
-  it('CATEGORY absent: assistant.message_finalized reaches no row at all', async () => {
+  it('every durable Runtime event lands under the Runtime s OWN sequence', async () => {
     const ledger = await measure();
 
-    // The Runtime minted it and it is `durability: 'durable'`. Nothing in the
-    // ledger carries it. In THIS harness the worker's compensating
-    // `chat:message_finalized` frame is not in play — that lives in
-    // `worker-process-entry.ts`'s post-flush block, which drives neither the
-    // driver nor this test — so what is measured here is the driver/Host pair
-    // alone. Production adds a third layer on top; that is recorded in the
-    // contract doc rather than asserted here.
-    expect(ledger.native.filter((e) => e.payload.type === 'assistant.message_finalized')).toHaveLength(1);
-    expect(ledger.stored.filter((e) => e.type === 'assistant.message_finalized')).toHaveLength(0);
+    // This case used to assert the OPPOSITE — that rows carried Host-minted
+    // sequence numbers. That defect is what plan 610 S1 removed, so the case was
+    // rewritten rather than deleted: it is the same measurement, pointed the
+    // other way, and it is the one place the numbers are pinned.
+    const storedIdentity = new Set(ledger.stored.map((row) => `${row.type}#${row.seq}`));
+    const misnumbered = ledger.native
+      .filter((envelope) => isDurableType(envelope.payload.type))
+      .filter((envelope) => !storedIdentity.has(`${envelope.payload.type}#${envelope.seq}`))
+      .map((envelope) => `${envelope.payload.type}#${envelope.seq}`);
+    expect(misnumbered).toEqual([]);
   });
 
-  it('CATEGORY rebuilt: every execution row carries a Host-minted sequence, not the Runtime s', async () => {
+  it('assistant.message_finalized reaches the ledger on its own identity', async () => {
     const ledger = await measure();
 
-    // The durable execution events ARE in the ledger — which is why "the ledger
-    // is missing events" was the wrong summary. What is missing is the
-    // Runtime's IDENTITY: the Host re-mints `seq` while translating, so a row's
-    // sequence number is the Host's, and no row can be matched back to the
-    // envelope the engine actually emitted.
-    expect(ledger.stored.map((e) => e.type)).toEqual([
-      'run.started',
-      'turn.started',
-      'tool.call_started',
-      'assistant.text_block',
-      'tool.call_completed',
-      'turn.started',
-      'assistant.text_block',
-      'run.completed',
-    ]);
+    // Previously measured as CATEGORY `absent`: durable, minted by the Runtime,
+    // and carried by no row at all. It now arrives because the native channel
+    // forwards the envelope instead of relying on the worker reconstructing a
+    // `chat:message_finalized` frame from its own journal state afterwards.
+    const minted = ledger.native.filter((e) => e.payload.type === 'assistant.message_finalized');
+    expect(minted).toHaveLength(1);
+    const row = ledger.stored.filter((e) => e.type === 'assistant.message_finalized');
+    expect(row).toHaveLength(1);
+    expect(row[0]?.seq).toBe(minted[0]?.seq);
+  });
 
-    // Positive proof of REBUILD rather than forwarding: for every execution
-    // event present in BOTH sets, the two sequence numbers differ. Compared as
-    // a map so the assertion is about correspondence, not about a total count.
-    const nativeSeqByType = new Map<string, number[]>();
-    for (const envelope of ledger.native) {
-      const list = nativeSeqByType.get(envelope.payload.type) ?? [];
-      list.push(envelope.seq);
-      nativeSeqByType.set(envelope.payload.type, list);
-    }
-    const storedSeqByType = new Map<string, number[]>();
-    for (const row of ledger.stored) {
-      const list = storedSeqByType.get(row.type) ?? [];
-      list.push(row.seq);
-      storedSeqByType.set(row.type, list);
-    }
+  it('ephemeral deltas are absent by design, and their absence is not a gap', async () => {
+    const ledger = await measure();
 
-    const executionTypes = [...storedSeqByType.keys()].filter((t) => t !== 'run.started');
-    expect(executionTypes.length).toBeGreaterThan(0);
-    for (const type of executionTypes) {
-      const stored = storedSeqByType.get(type) as number[];
-      const native = nativeSeqByType.get(type) ?? [];
-      // Same facts, different sequence: the Host numbered them itself.
-      expect(native.slice(0, stored.length)).not.toEqual(stored);
-    }
+    // `assistant.text_delta` is `durability: 'ephemeral'`, so it is NOT in the
+    // ledger — which is why the stored sequence has holes. Asserting this
+    // explicitly is what keeps "a missing seq" from reading as data loss: the
+    // authority contract says gaps are legal and completeness comes from the
+    // receipt, not from `seq + 1` being continuous.
+    const deltas = ledger.native.filter((e) => e.payload.type === 'assistant.text_delta');
+    expect(deltas.length).toBeGreaterThan(0);
+    expect(ledger.stored.filter((e) => e.type === 'assistant.text_delta')).toHaveLength(0);
+    // The stored sequence is the RUNTIME's, holes and all. That is the strongest
+    // form of the identity claim: a Host that renumbered would have to compress
+    // these gaps away, and the fact that they survive is what distinguishes
+    // "forwarded" from "rebuilt". It is also why the authority contract says
+    // `seq + 1` continuity proves nothing — the ledger is legitimately sparse.
+    const runtimeSeqs = ledger.native
+      .filter((e) => isDurableType(e.payload.type))
+      .map((e) => e.seq);
+    expect(ledger.stored.map((e) => e.seq)).toEqual(runtimeSeqs);
   });
 
   it('the Host ledger carries the run it opened, and no foreign run', async () => {
@@ -419,43 +477,30 @@ describe('plan-610 S0 — what the Host ledger actually holds after a real turn'
     for (const row of ledger.stored) {
       expect(row.runId).toBe(ledger.runId);
     }
-    // `run.started` really is the Host's own first row, which is what makes a
-    // crash one millisecond after dispatch answerable.
+    // `run.started` really is the first row, which is what makes a crash one
+    // millisecond after dispatch answerable. It is the RUNTIME's now: the Host
+    // stopped minting its own, because two events claiming seq 1 would have made
+    // the authoritative one permanently unwritable.
     expect(ledger.stored[0]?.type).toBe('run.started');
   });
 
   // ==========================================================================
-  // The S1 acceptance gate. Measured on the REAL ledger, so each case goes green
-  // for the right reason when S1 lands — and `it.fails` is what makes that
-  // observable while the defect is still open.
+  // The S1 acceptance gate.
   //
-  // These replaced two contract cases in `native-event-authority-loss.test.ts`
+  // These two ran under `it.fails` while the defect was open, and went RED the
+  // moment the native channel landed — which is the wrapper doing its job: it
+  // made "fixed" a visible event instead of a silent green. The wrappers are
+  // now gone and the cases are ordinary assertions.
+  //
+  // They replaced two contract cases in `native-event-authority-loss.test.ts`
   // that asserted things about the PROJECTOR and about a recorder never handed
   // to the subject under test. Neither could tell "fixed" from "still broken",
   // which is the only property an acceptance gate has to have.
   // ==========================================================================
 
-  it.fails('CONTRACT (S1): the ledger preserves the event identity the Runtime minted', async () => {
+  it('CONTRACT (S1): every durable Runtime event is findable in the ledger', async () => {
     const ledger = await measure();
 
-    // Every durable event the Runtime minted must be findable in the ledger
-    // under the identity the Runtime gave it. Today the Host re-mints `seq`
-    // while translating, so nothing matches. That IS the defect, and this is the
-    // gate that measures it.
-    const storedIdentity = new Set(ledger.stored.map((row) => `${row.type}#${row.seq}`));
-    const lost = ledger.native
-      .filter((envelope) => isDurableType(envelope.payload.type))
-      .filter((envelope) => !storedIdentity.has(`${envelope.payload.type}#${envelope.seq}`))
-      .map((envelope) => `${envelope.payload.type}#${envelope.seq}`);
-    expect(lost).toEqual([]);
-  });
-
-  it.fails('CONTRACT (S1): no durable Runtime event is missing from the ledger', async () => {
-    const ledger = await measure();
-
-    // `assistant.message_finalized` is durable and minted by the Runtime, and no
-    // row carries it. A correct native channel closes this without leaning on any
-    // of the outer compensation paths.
     const storedTypes = new Set(ledger.stored.map((row) => row.type));
     const missing = [
       ...new Set(
@@ -465,6 +510,18 @@ describe('plan-610 S0 — what the Host ledger actually holds after a real turn'
       ),
     ].filter((type) => !storedTypes.has(type));
     expect(missing).toEqual([]);
+  });
+
+  it('CONTRACT (S1): a redelivered envelope is a no-op, not a second row', async () => {
+    const ledger = await measure();
+
+    // The native channel is an at-least-once wire, so duplicate delivery is the
+    // normal case rather than an edge case. `appendEvents` answers 0 for a
+    // re-offer of an identical envelope and the writer maps that to `duplicate`
+    // — never a second row, and never an error a caller would retry forever.
+    expect(ledger.redelivery).toBeDefined();
+    expect(ledger.redelivery?.accepted).toBe(true);
+    expect(ledger.storedAfterRedelivery).toEqual(ledger.stored.map((e) => `${e.type}#${e.seq}`));
   });
 });
 
