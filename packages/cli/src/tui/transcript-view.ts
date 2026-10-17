@@ -569,23 +569,128 @@ export function renderToolContinuation(
 }
 
 /**
- * Thinking, collapsed or expanded.
+ * Thinking, as a preview or in full.
  *
- * Collapsed, it still reports the character count: a thinking block that is
- * silently absent is indistinguishable from a run that did nothing, and the
- * count is the only evidence the work happened.
+ * Ported from minimax-code (`mcode`)'s thinking cell, which is the reference
+ * for this shape:
+ *
+ * - the head says what the block DID, not how much text it holds — `Thinking…`
+ *   while it streams, `Thought for 1.2s` once it closes. A character count was
+ *   the old evidence line; elapsed time is the same evidence with a number a
+ *   reader can compare across turns.
+ * - a collapsed block is a three-line PREVIEW, not an absence. Reasoning that
+ *   is visible while it runs (tail-following, so the newest thought is the one
+ *   on screen) and folded to its first three lines once done is what makes the
+ *   transcript readable without a toggle. The `… N more lines` row is the
+ *   disclosure, and `[+]`/`[-]` marks the toggle.
+ * - long blocks are bounded in CHARACTERS before any line work, because
+ *   splitting and tagging tens of kilobytes to keep three lines is work no
+ *   reader ever sees. The bound follows the same edge as the preview so the
+ *   visible window never jumps when the cut lands mid-block.
  */
 function renderThinking(
   block: Extract<Block, { kind: 'thinking' }>,
   options: RenderOptions,
   styles: Styles,
 ): string {
-  if (!blockExpanded(block.id, options)) {
-    const suffix = block.finalized ? '' : '…';
-    // Flat, not muted(styles(…)) — see `tagged`.
-    return styles.thinking(`⏳ thinking${suffix} (${block.text.length} chars) [+]`);
-  }
-  return `${styles.thinking('💭 thinking [−]')}\n${styles.muted(block.text)}`;
+  const expanded = blockExpanded(block.id, options);
+  const head = `${styles.thinking(`• ${thinkingSummary(block)}`)}${styles.muted(expanded ? ' [−]' : ' [+]')}`;
+  const body = thinkingBody(block, expanded, styles);
+  return body.length === 0 ? head : `${head}\n${body.join('\n')}`;
+}
+
+/** Preview budget in whole lines, matching minimax-code's collapsed cell. */
+const THINKING_PREVIEW_LINES = 3;
+
+/** Characters kept from a preview before line selection. See `renderThinking`. */
+const THINKING_PREVIEW_MAX_CHARS = 2_000;
+
+/** Head text: what the block did, and for how long it was doing it. */
+function thinkingSummary(block: Extract<Block, { kind: 'thinking' }>): string {
+  if (!block.finalized) return 'Thinking…';
+  const durationMs = block.durationMs;
+  if (durationMs === undefined || durationMs <= 0) return 'Thought';
+  return `Thought for ${formatThinkingDuration(durationMs)}`;
+}
+
+/** `1.2s` under a minute, `2m05s` above it — same split minimax-code uses. */
+function formatThinkingDuration(durationMs: number): string {
+  const seconds = durationMs / 1_000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds - minutes * 60);
+  return `${minutes}m${String(rest).padStart(2, '0')}s`;
+}
+
+/**
+ * The body rows of a thinking block.
+ *
+ * While the block streams the window follows the TAIL, so the row that just
+ * arrived is the row on screen; once it closes the window snaps to the HEAD,
+ * which is where a reasoning block states its premise. This is minimax-code's
+ * choice and it is the right one: a reader watching a run wants the newest
+ * thought, a reader reviewing one wants the beginning.
+ */
+function thinkingBody(
+  block: Extract<Block, { kind: 'thinking' }>,
+  expanded: boolean,
+  styles: Styles,
+): string[] {
+  const source = block.text.replace(/\r\n?/gu, '\n').trimEnd();
+  if (source === '') return [];
+
+  if (expanded) return thinkingRows(source.split('\n'), styles);
+
+  const edge = block.finalized ? 'head' : 'tail';
+  const { text, truncated } = boundThinkingText(source, edge);
+  const lines = text.split('\n');
+  if (lines.length <= THINKING_PREVIEW_LINES && !truncated) return thinkingRows(lines, styles);
+
+  const slice = edge === 'head'
+    ? lines.slice(0, THINKING_PREVIEW_LINES)
+    : lines.slice(-THINKING_PREVIEW_LINES);
+  // Blank rows are what separates paragraphs in reasoning, so a slice can end
+  // on one and waste a third of the budget on an empty line. Trim them from
+  // the edges only — an inner blank still separates the two thoughts it sits
+  // between. The omitted count is recomputed from what is actually shown.
+  const kept = trimBlankEdges(slice);
+  const omitted = lines.length - kept.length;
+  // A character bound can hide more than `omitted` lines, so it reports the
+  // kind of overflow rather than a count that would be a lie.
+  const overflow = truncated
+    ? `${edge === 'head' ? 'more' : 'earlier'} content`
+    : `${omitted} ${edge === 'head' ? 'more' : 'earlier'} ${omitted === 1 ? 'line' : 'lines'}`;
+  const hint = styles.muted(`    … ${overflow}`);
+  const rows = thinkingRows(kept, styles);
+  return edge === 'head' ? [...rows, hint] : [hint, ...rows];
+}
+
+/** Drop blank rows from both ends, keeping the blanks in between. */
+function trimBlankEdges(lines: readonly string[]): string[] {
+  let start = 0;
+  let end = lines.length;
+  while (start < end && (lines[start] ?? '').trim() === '') start += 1;
+  while (end > start && (lines[end - 1] ?? '').trim() === '') end -= 1;
+  return lines.slice(start, end);
+}
+
+/** One muted row per source line, indented to the same column as tool results. */
+function thinkingRows(lines: readonly string[], styles: Styles): string[] {
+  return lines.map((line) => `    ${styles.muted(line)}`);
+}
+
+/** Cut a preview to the character bound along the edge the preview reads from. */
+function boundThinkingText(text: string, edge: 'head' | 'tail'): { text: string; truncated: boolean } {
+  if (text.length <= THINKING_PREVIEW_MAX_CHARS) return { text, truncated: false };
+  const cut = edge === 'head'
+    ? text.slice(0, THINKING_PREVIEW_MAX_CHARS)
+    : text.slice(-THINKING_PREVIEW_MAX_CHARS);
+  // Never leave half of a surrogate pair at the cut boundary: blessed would
+  // lay out a lone surrogate as a replacement cell.
+  const safe = edge === 'head'
+    ? cut.replace(/[\uD800-\uDBFF]$/u, '')
+    : cut.replace(/^[\uDC00-\uDFFF]/u, '');
+  return { text: safe, truncated: true };
 }
 
 /** Whether per-block expansion applies to this block id. Exported for the cache. */

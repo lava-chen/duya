@@ -58,7 +58,10 @@ function blockContent(block: Block): string {
   switch (block.kind) {
     case 'user': return `u:${block.text}`;
     case 'assistant': return `a:${block.finalized ? 1 : 0}:${block.text}`;
-    case 'thinking': return `t:${block.finalized ? 1 : 0}:${block.text}`;
+    // The duration is part of the key: the head text changes from `Thinking…`
+    // to `Thought for 1.2s` the moment the block seals, and the seal mutates
+    // the duration without touching the text.
+    case 'thinking': return `t:${block.finalized ? 1 : 0}:${block.durationMs ?? ''}:${block.text}`;
     case 'tool': return `k:${block.status}:${block.name}:${block.preview}:${block.command ?? ''}:${block.result ?? ''}`;
     case 'error': return `e:${block.message}`;
     case 'notice': return `n:${block.text}`;
