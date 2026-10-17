@@ -13,7 +13,7 @@ import {
   type SettleAgentRunResult,
 } from '@duya/agent-protocol';
 import type { CoreDataHostStores } from '@duya/data/core-data-host';
-import { RunEventConflictError, type RunRow } from '@duya/data/run-store';
+import { RunEpochFencedError, RunEventConflictError, type RunRow } from '@duya/data/run-store';
 
 const DEFAULT_EVENT_PAGE_SIZE = 500;
 const MAX_EVENT_PAGE_SIZE = 1000;
@@ -25,6 +25,12 @@ export class HostRunApiError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /**
+     * The attempt numbers behind a `409 attempt_fenced`, when the refusing hop
+     * can report them. A remote HTTP boundary cannot — it forwards a status and
+     * a message — so `undefined` here means "not reported", not "no fence".
+     */
+    readonly fenced?: { readonly presented: number; readonly current: number | null },
   ) {
     super(message);
     this.name = 'HostRunApiError';
@@ -67,7 +73,7 @@ export function createHostRunApi(stores: Pick<CoreDataHostStores, 'runs'>): Host
       return runs.listRunsBySession(sessionId, limit).map((row) => toAgentRunRecord(row));
     },
 
-    async appendAgentRunEvents(runId: RunId, events: readonly RunEventEnvelope[]) {
+    async appendAgentRunEvents(runId: RunId, events: readonly RunEventEnvelope[], epoch?: number) {
       if (events.some((event) => event.runId !== runId)) {
         throw new HostRunApiError(400, 'run_event_id_mismatch', 'Every event must belong to the requested run');
       }
@@ -79,17 +85,27 @@ export function createHostRunApi(stores: Pick<CoreDataHostStores, 'runs'>): Host
         throw new HostRunApiError(400, 'run_event_session_mismatch', 'Events must belong to the run session');
       }
       try {
-        return runs.appendEvents(events);
+        return runs.appendEvents(events, epoch);
       } catch (error) {
         if (error instanceof RunEventConflictError) {
           throw new HostRunApiError(409, error.code, error.message);
+        }
+        // A superseded attempt is a 409 with its OWN code, because the caller
+        // has to be able to tell "another writer disagrees" from "you are no
+        // longer the writer": the remedies are opposite, and the second one
+        // means the caller drops the batch instead of reporting a conflict.
+        if (error instanceof RunEpochFencedError) {
+          throw new HostRunApiError(409, error.code, error.message, {
+            presented: error.presented,
+            current: error.current,
+          });
         }
         throw error;
       }
     },
 
-    async settleAgentRun(runId: RunId, terminal: RunTerminalState, metrics: RunMetrics) {
-      return runs.settleRun(runId, terminal, metrics) as SettleAgentRunResult;
+    async settleAgentRun(runId: RunId, terminal: RunTerminalState, metrics: RunMetrics, epoch?: number) {
+      return runs.settleRun(runId, terminal, metrics, epoch) as SettleAgentRunResult;
     },
 
     async readAgentRunEvents(runId: RunId, query = {}) {

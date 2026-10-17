@@ -472,8 +472,17 @@ export function parsePath(url: string): { pathname: string; parts: string[] } {
  * capture. That would have made "the UI does not change" true only in the sense
  * that the renderer happens to ignore an event type it has never heard of, and
  * it would have paid for the duplicate text on every turn.
+ *
+ * `run:event` is here for the same reason, one level up: it is the Runtime's own
+ * durable envelope, and a projection of a run has no use for the ledger's raw
+ * rows. It is listed rather than only handled inline because `handleGetChat`
+ * attaches its OWN listener to the same stdout and reaches the same decision
+ * through `normalizeWorkerEvent` + `isRunLayerOnlyFrame` — the inline branch in
+ * `normalizeAndObserve` returns before normalisation, so without this entry the
+ * reconnect path would forward envelopes the POST path drops, and a renderer
+ * holding both would see the same event twice in two different forms.
  */
-const RUN_LAYER_ONLY_FRAMES: ReadonlySet<string> = new Set(['chat:message_finalized']);
+const RUN_LAYER_ONLY_FRAMES: ReadonlySet<string> = new Set(['chat:message_finalized', 'run:event']);
 
 /** True when the frame is normalised but must not reach an SSE client. */
 export function isRunLayerOnlyFrame(normalized: Record<string, unknown> | null): boolean {
@@ -735,6 +744,36 @@ export function normalizeAndObserve(
   event: Record<string, unknown>,
   deps: RouterDeps,
 ): Record<string, unknown> | null {
+  // The native channel is the Desktop half of Plan 610 S1, and it is matched on
+  // the RAW type rather than on a normalised one: `normalizeWorkerEvent` has no
+  // arm for `run:event`, so it would pass the line through untouched and this
+  // tee would hand it to `observe` — which reverse-translates LEGACY frames and
+  // has nothing to say about a Runtime envelope. The ledger would stay empty
+  // while the writer sat there unused.
+  //
+  // It is handed over with `queueNativeRunEvent`, not `persistNativeRunEvent`,
+  // because this function is synchronous: it is called from a sync `onData`
+  // handler that has to return a frame, and `persistNativeRunEvent` is a promise
+  // the worker would still be writing past. The orchestrator serializes the
+  // append and drains the queue before the run settles, which is what stops the
+  // terminal envelope from being dropped by the `done` frame racing it.
+  if (event.type === 'run:event') {
+    try {
+      deps.runOrchestrator?.queueNativeRunEvent(sessionId, event);
+    } catch (err) {
+      // Same containment as `observe` below, for the same reason: the run layer
+      // must not be able to take down the user's message.
+      logger.warn('Native run event intake failed; nothing is written to SSE', {
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      }, LogComponent.Main);
+    }
+    // Written nowhere on SSE: `run:event` is the run layer's INPUT, and the
+    // envelope it carries is the durable record the renderer reads from the run
+    // routes instead. `RUN_LAYER_ONLY_FRAMES` owns the same decision for the GET
+    // reconnect path, which sees this line too and must not forward it either.
+    return null;
+  }
   const normalized = normalizeWorkerEvent(event);
   if (normalized === null) return null;
   // Never let the run layer break the SSE path. `observe` already swallows

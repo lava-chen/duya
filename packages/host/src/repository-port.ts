@@ -132,8 +132,17 @@ export interface RepositoryOwnership {
  */
 export interface RunRepository {
   createRun(input: CreateRunInput): RunOpenOutcome;
-  appendEvents(envelopes: readonly RunEventEnvelope[]): number;
-  settleRun(runId: string, terminal: RunTerminalState, metrics?: unknown): RunSettleOutcome;
+  /**
+   * Appends the envelopes under the presented attempt.
+   *
+   * The attempt is a SECOND argument because a fence cannot be anything else.
+   * `undefined` means "no attempt presented" and means an unfenced write — a
+   * port that could not carry it could only ever let a superseded attempt
+   * append.
+   */
+  appendEvents(envelopes: readonly RunEventEnvelope[], epoch?: number): number;
+  /** Settles the terminal, fenced by the presented attempt on the same terms. */
+  settleRun(runId: string, terminal: RunTerminalState, metrics?: unknown, epoch?: number): RunSettleOutcome;
   getRun(id: string): RunRow | null;
   listRunsBySession(sessionId: string, limit?: number): RunRow[];
   /** The durable transcript, from an exclusive `afterSeq` cursor. */

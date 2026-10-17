@@ -60,6 +60,16 @@ export type RunWriteState =
   | 'reconciled'
   /** Another writer committed a DIFFERENT terminal. The claim is lost. */
   | 'conflict'
+  /**
+   * The attempt that presented this write has been superseded.
+   *
+   * Distinct from `conflict` on purpose. A `conflict` blames ANOTHER WRITER for
+   * a terminal this attempt was still allowed to decide; `fenced` says the
+   * attempt was never allowed to decide it, so there is nobody to blame and
+   * nothing to reconcile — the batch is dropped and the run belongs to a newer
+   * attempt. Collapsing the two makes a slow worker look like a rival writer.
+   */
+  | 'fenced'
   /** This call inserted the run row. `run:create` only. */
   | 'created'
   /** The run row already existed with the SAME content. A retry. `run:create` only. */
@@ -103,6 +113,22 @@ export type RunWriteReceipt =
     }
   | { readonly state: 'created'; readonly runId: string }
   | { readonly state: 'reused'; readonly runId: string }
+  /**
+   * A superseded attempt offered this write.
+   *
+   * `presented` is the epoch the writer claimed; `current` is the attempt that
+   * actually holds write authority, or `null` when the hop that refused could
+   * not report it (a remote Host boundary answers with the refusal and not the
+   * row). `null` is honest here: the refusal is the fact, and the number is a
+   * diagnostic.
+   */
+  | {
+      readonly state: 'fenced';
+      readonly runId: string;
+      readonly reason: string;
+      readonly presented: number;
+      readonly current: number | null;
+    }
   | { readonly state: 'absent'; readonly runId: string; readonly reason: string }
   | { readonly state: 'busy'; readonly runId: string; readonly reason: string }
   | { readonly state: 'unavailable'; readonly runId: string; readonly reason: string }
@@ -196,6 +222,10 @@ export function writeRunReceiptOnWire(
     // would erase the one distinction the state exists to make.
     ...(receipt.state === 'applied' ? { applied: true } : {}),
     ...(receipt.state === 'conflict' ? { applied: false } : {}),
+    // The attempt numbers travel with a `fenced` receipt because the whole
+    // point of the state is to say WHICH attempt was superseded — a reader that
+    // only learns "fenced" cannot log the pair that drifted.
+    ...(receipt.state === 'fenced' ? { presented: receipt.presented, current: receipt.current } : {}),
     ...(extra ?? {}),
   };
 }
@@ -246,6 +276,7 @@ const KNOWN_STATES: ReadonlySet<string> = new Set<RunWriteState>([
   'applied',
   'reconciled',
   'conflict',
+  'fenced',
   'created',
   'reused',
   'absent',
@@ -329,6 +360,30 @@ export function failedReceipt(
   reason: string,
 ): RunWriteReceipt {
   return { state, runId, reason };
+}
+
+/**
+ * A receipt for a write refused by the attempt fence.
+ *
+ * Its own constructor rather than a `failedReceipt` argument, because `fenced`
+ * is not a failure of the DATABASE — it is a statement about which attempt may
+ * write, and it carries the two attempt numbers that statement is made of.
+ */
+export function fencedReceipt(
+  runId: string,
+  presented: number,
+  current: number | null,
+): RunWriteReceipt {
+  return {
+    state: 'fenced',
+    runId,
+    reason:
+      current === null
+        ? `run ${runId}: attempt ${presented} may no longer write (the attempt that holds write authority was not reported)`
+        : `run ${runId}: attempt ${presented} may no longer write, attempt ${current} holds it`,
+    presented,
+    current,
+  };
 }
 
 function sqliteCode(error: unknown): string | undefined {
@@ -422,6 +477,27 @@ export function readRunReceipt(reply: unknown, action: string, runId: string): R
       return failedReceipt('unreadable', runId, `${action} claimed ${state} with an unreadable committed terminal`);
     }
     return { state: 'conflict', runId: typeof record.runId === 'string' ? record.runId : runId, reason, committed };
+  }
+
+  if (state === 'fenced') {
+    // The two attempt numbers are the content of this state, so a receipt that
+    // cannot read them is not a `fenced` claim — it is an unreadable one. A
+    // missing `presented` would leave a caller unable to say which attempt was
+    // dropped, and a missing `current` is allowed ONLY as an explicit `null`
+    // (a remote hop that reports the refusal but not the row).
+    const presented = record.presented;
+    if (typeof presented !== 'number' || !Number.isInteger(presented)) {
+      return failedReceipt('unreadable', runId, `${action} claimed ${state} without an integer presented epoch`);
+    }
+    const current = record.current;
+    if (current !== null && (typeof current !== 'number' || !Number.isInteger(current))) {
+      return failedReceipt('unreadable', runId, `${action} claimed ${state} with an unreadable current epoch`);
+    }
+    return fencedReceipt(
+      typeof record.runId === 'string' && record.runId !== '' ? record.runId : runId,
+      presented,
+      current,
+    );
   }
 
   if (state === 'applied' || state === 'created' || state === 'reused') {

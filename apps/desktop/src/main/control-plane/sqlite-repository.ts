@@ -91,8 +91,11 @@ function bindCoreStores(
 ): ControlPlaneRepository {
   const runs: RunRepository = {
     createRun: (input) => stores.runs.createRun(input),
-    appendEvents: (envelopes) => stores.runs.appendEvents(envelopes),
-    settleRun: (runId, terminal, metrics) => stores.runs.settleRun(runId, terminal, metrics),
+    // The attempt is forwarded, never re-derived: this binding's whole job is
+    // to reach the store Desktop already opened, and a fence re-computed here
+    // would be a second answer to "which attempt is writing".
+    appendEvents: (envelopes, epoch) => stores.runs.appendEvents(envelopes, epoch),
+    settleRun: (runId, terminal, metrics, epoch) => stores.runs.settleRun(runId, terminal, metrics, epoch),
     getRun: (id) => stores.runs.getRun(id),
     listRunsBySession: (sessionId, limit) => stores.runs.listRunsBySession(sessionId, limit),
     listEvents: (runId, afterSeq, limit) => stores.runs.listEvents(runId, afterSeq, limit),

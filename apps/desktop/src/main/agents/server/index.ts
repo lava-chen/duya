@@ -7,6 +7,7 @@ import { logger, httpLogger, sessionLogger, workerLogger } from './logger';
 import { createHandleRequest, RouterDeps } from './router';
 import { InteragentRouter } from './interagent-router';
 import { RunOrchestrator, createWorkerExecutionChannel } from '@duya/host/run-orchestrator';
+import { createDesktopNativeRunEventWriter } from './native-run-event-writer';
 
 const PORT = 0;
 const HOST = '127.0.0.1';
@@ -327,6 +328,12 @@ const deps: RouterDeps = {
   // executor carrying an id no run row knew about.
   runOrchestrator: new RunOrchestrator({
     dbRequest,
+    // The ONE durable writer for Runtime-minted envelopes on this surface.
+    // Without it the orchestrator refuses every native `run:event` — and since
+    // the legacy reverse-translation stopped persisting, a Desktop chat turn
+    // would keep its run row and write no events at all. See the module for why
+    // `currentEpoch` is a fact here rather than a read it cannot perform.
+    nativeWriter: createDesktopNativeRunEventWriter({ request: dbRequest, logger }),
     logger,
     channel: createWorkerExecutionChannel({
       // The command is delivered by the host because the host owns

@@ -1,8 +1,20 @@
 import type { RunEventEnvelope, RunTerminalState } from '@duya/agent-protocol';
-import { RunEventConflictError, type RunOrigin } from '@duya/data/run-store';
+import { RunEpochFencedError, RunEventConflictError, type RunOrigin } from '@duya/data/run-store';
 
-import { classifySqlFailure, writeRunReceiptOnWire, type RunWriteReceipt } from './run-receipt.js';
+import { classifySqlFailure, fencedReceipt, writeRunReceiptOnWire, type RunWriteReceipt } from './run-receipt.js';
 import type { RunRepository } from './repository-port.js';
+
+/**
+ * The attempt a caller presented, or `undefined` when it presented none.
+ *
+ * `undefined` is NOT the same as `0`. Storage fences only what a writer
+ * claims: an append with no attempt is a deliberate unfenced write (a
+ * backfill, an administrative repair), and silently reading a missing epoch as
+ * `0` would give it the first attempt's authority instead.
+ */
+function readEpoch(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) ? value : undefined;
+}
 
 export interface RunControlPlaneLogger {
   info(message: string, context?: Record<string, unknown>): void;
@@ -99,7 +111,10 @@ export function createRunControlPlaneActions(options: {
     }
 
     try {
-      const written = runs.appendEvents(envelopes as RunEventEnvelope[]);
+      const written = runs.appendEvents(
+        envelopes as RunEventEnvelope[],
+        readEpoch(payload.epoch),
+      );
       return onWire({ state: 'applied', runId }, { written });
     } catch (error) {
       if (error instanceof RunEventConflictError) {
@@ -108,6 +123,18 @@ export function createRunControlPlaneActions(options: {
           seq: error.seq,
         });
         return onWire({ state: 'conflict', runId, reason: error.message });
+      }
+      if (error instanceof RunEpochFencedError) {
+        // Its own state, not `conflict`: a superseded attempt loses this write
+        // because it lost the RIGHT to write, and no other writer disagreed
+        // with it. Reporting a conflict here would blame a rival for a refusal
+        // that is entirely about the presenting attempt.
+        logger.warn('run:append refused — the presenting attempt has been superseded', {
+          runId,
+          presented: error.presented,
+          current: error.current,
+        });
+        return onWire(fencedReceipt(runId, error.presented, error.current));
       }
       const state = classifySqlFailure(error);
       logger.warn(`run:append failed — durable transcript degraded (${state})`, {
@@ -126,11 +153,20 @@ export function createRunControlPlaneActions(options: {
     }
 
     try {
-      const outcome = runs.settleRun(runId, terminal, payload.metrics);
+      const outcome = runs.settleRun(runId, terminal, payload.metrics, readEpoch(payload.epoch));
       switch (outcome.state) {
         case 'applied':
           logger.info('Run settled', { runId, status: terminal.status });
           return onWire({ state: 'applied', runId });
+        case 'fenced':
+          // The terminal CAS is fenced by the same attempt that fences the
+          // appends, so a superseded attempt cannot land a terminal either.
+          logger.warn('Run terminal refused — the presenting attempt has been superseded', {
+            runId,
+            presented: outcome.presented,
+            current: outcome.current,
+          });
+          return onWire(fencedReceipt(runId, outcome.presented, outcome.current));
         case 'reconciled':
           logger.warn('Run terminal CAS lost to a writer that agreed — the run is settled as asked', {
             runId,

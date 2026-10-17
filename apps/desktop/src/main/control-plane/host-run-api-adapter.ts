@@ -15,9 +15,11 @@ import { HostSessionHttpError } from '@duya/host/http-client';
 import type { ControlPlaneRequest } from '@duya/host/control-plane-service';
 import {
   failedReceipt,
+  fencedReceipt,
   writeRunReceiptOnWire,
   type RunWriteReceipt,
 } from '@duya/host/run-receipt';
+import { HostRunApiError } from '@duya/host/run-api';
 
 const EVENT_PAGE_SIZE = 1000;
 const RUN_ORIGINS = new Set<AgentRunOrigin>(['user', 'agent', 'background']);
@@ -138,9 +140,15 @@ async function appendEvents(api: HostRunApiV1, payload: Record<string, unknown>)
     return writeRunReceiptOnWire(failedReceipt('invalid', runId ?? '', 'run:append requires runId and an events array'));
   }
   try {
-    const written = await api.appendAgentRunEvents(runId as RunId, payload.events as RunEventEnvelope[]);
+    const written = await api.appendAgentRunEvents(
+      runId as RunId,
+      payload.events as RunEventEnvelope[],
+      readEpoch(payload.epoch),
+    );
     return writeRunReceiptOnWire({ state: 'applied', runId }, { written });
   } catch (error) {
+    const fenced = fencedBy(error, runId, readEpoch(payload.epoch));
+    if (fenced !== null) return writeRunReceiptOnWire(fenced);
     return writeRunReceiptOnWire(hostFailureReceipt('run:append', runId, error));
   }
 }
@@ -154,7 +162,7 @@ async function settleRun(api: HostRunApiV1, payload: Record<string, unknown>): P
   }
 
   try {
-    const result = await api.settleAgentRun(runId as RunId, terminal, metrics ?? undefined);
+    const result = await api.settleAgentRun(runId as RunId, terminal, metrics ?? undefined, readEpoch(payload.epoch));
     switch (result.state) {
       case 'applied':
         return writeRunReceiptOnWire({ state: 'applied', runId });
@@ -167,12 +175,52 @@ async function settleRun(api: HostRunApiV1, payload: Record<string, unknown>): P
           committed: result.committed,
           reason: `run ${runId} is durably ${result.committed.status}; this call proposed ${terminal.status}`,
         });
+      case 'fenced':
+        // A superseded attempt loses the terminal CAS too. It is reported as
+        // `fenced` and NOT as `conflict`: nothing else decided this run's
+        // history, and telling the caller another writer won would send it
+        // looking for a rival that does not exist.
+        return writeRunReceiptOnWire(fencedReceipt(runId, result.presented, result.current));
       case 'absent':
         return writeRunReceiptOnWire(failedReceipt('absent', runId, `run ${runId} has no row, so no terminal could be recorded`));
     }
   } catch (error) {
+    const fenced = fencedBy(error, runId, readEpoch(payload.epoch));
+    if (fenced !== null) return writeRunReceiptOnWire(fenced);
     return writeRunReceiptOnWire(hostFailureReceipt('run:complete', runId, error));
   }
+}
+
+/**
+ * The attempt a caller presented on the wire.
+ *
+ * `undefined` for a caller that presented none, which is an unfenced write by
+ * the caller's own choice — never a silent `0`, which would hand it the first
+ * attempt's authority.
+ */
+function readEpoch(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) ? value : undefined;
+}
+
+/**
+ * The `fenced` receipt behind a refusal, or `null` for any other error.
+ *
+ * The attempt fence arrives as a `409 attempt_fenced` over the Host Run API,
+ * because that boundary reports a status and a code rather than an outcome
+ * union. Translating it here keeps the refusal a distinct receipt state on the
+ * `db:request` wire instead of a generic conflict.
+ */
+function fencedBy(error: unknown, runId: string, presentedEpoch: number | undefined): RunWriteReceipt | null {
+  if (!(error instanceof HostRunApiError) || error.code !== 'attempt_fenced') return null;
+  const presented = error.fenced?.presented ?? presentedEpoch;
+  if (presented === undefined) {
+    // No attempt on either side of the boundary: a refusal whose subject cannot
+    // be named is reported as an unnamed claim, not as a fence with a guess. It
+    // is NOT reported as `fenced` — that state asserts an attempt, and an
+    // assertion this layer cannot support is the thing it must not publish.
+    return { state: 'conflict', runId, reason: error.message };
+  }
+  return fencedReceipt(runId, presented, error.fenced?.current ?? null);
 }
 
 async function readEvents(api: HostRunApiV1, payload: Record<string, unknown>): Promise<readonly RunEventEnvelope[]> {
