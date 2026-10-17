@@ -17,6 +17,7 @@ const STUB_WORKER_SOURCE = `
 // Mode comes from the filename (stub-worker-<mode>.cjs) — deterministic, no
 // reliance on environment propagation through the spawn path.
 const MODE = (__filename.includes('-hang-hard') && 'hang-hard')
+  || (__filename.includes('-permission') && 'permission')
   || (__filename.includes('-db') && 'db')
   || (__filename.includes('-hang') && 'hang')
   || 'complete';
@@ -51,6 +52,11 @@ process.stdin.on('data', (chunk) => {
     if (!line.trim()) continue;
     let command;
     try { command = JSON.parse(line); } catch { continue; }
+    if (command.type === 'permission:resolve' && MODE === 'permission') {
+      process.send({ type: 'chat:text', data: 'decision=' + command.decision });
+      process.send({ type: 'chat:done', sessionId: command.sessionId });
+      continue;
+    }
     // A production worker honours chat:interrupt: it stops the turn and
     // reports its own terminal frame — the CLEAN cancel path. ('hang-hard'
     // deliberately ignores the interrupt to exercise escalation.)
@@ -61,7 +67,12 @@ process.stdin.on('data', (chunk) => {
       continue;
     }
     if (command.type !== 'chat:start') continue;
-    if (MODE === 'db') {
+    process.send({ type: 'chat:turn_start', data: { turnCount: 1 } });
+    if (MODE === 'permission') {
+      process.send({ type: 'chat:tool_use', id: 'tool-approval', name: 'bash', input: { command: 'echo approved' } });
+      process.send({ type: 'chat:permission', sessionId: command.sessionId,
+        request: { id: 'approval-1', toolName: 'bash', toolInput: { command: 'echo approved' }, expiresAt: Date.now() + 300000 } });
+    } else if (MODE === 'db') {
       (async () => {
         try {
           const sessionId = command.sessionId;
@@ -102,7 +113,7 @@ process.on('disconnect', () => process.exit(0));
 
 async function writeStubWorker(
   directory: string,
-  mode: 'complete' | 'hang' | 'hang-hard' | 'db',
+  mode: 'complete' | 'hang' | 'hang-hard' | 'db' | 'permission',
 ): Promise<string> {
   const workerPath = path.join(directory, `stub-worker-${mode}.cjs`);
   await fs.writeFile(workerPath, STUB_WORKER_SOURCE, 'utf8');
@@ -143,6 +154,37 @@ async function startHostWithSession(
 }
 
 describe('Host-owned run execution', () => {
+  it.each(['allow', 'deny'] as const)('delivers a %s HTTP approval to the waiting child worker', async (status) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-run-approval-'));
+    let host: LocalHostHandle | undefined;
+    try {
+      const started = await startHostWithSession(root, await writeStubWorker(root, 'permission'));
+      host = started.host;
+      const { client, sessionId } = started;
+      const start = await client.startAgentRun({ sessionId, prompt: 'ask before tool execution' });
+      expect(start.accepted).toBe(true);
+      if (!start.accepted) return;
+      const events = [];
+      for await (const event of client.watchAgentRunEvents(start.runId)) {
+        events.push(event);
+        if (event.payload.type === 'permission.requested') {
+          expect((await client.listPendingPermissionRequests(sessionId)).map((p) => p.id)).toEqual(['approval-1']);
+          const resolution = { status, decision: status === 'allow' ? 'allow_once' : 'deny' };
+          expect((await client.resolvePermissionRequest('approval-1', resolution))?.status).toBe(status);
+          expect(await client.resolvePermissionRequest('approval-1', resolution)).toBeNull();
+        }
+      }
+      expect(events.some((e) => e.payload.type === 'permission.requested')).toBe(true);
+      const text = events.filter((e) => e.payload.type === 'assistant.text_block').map((e) => e.payload.text);
+      expect(text).toEqual(['decision=' + (status === 'allow' ? 'allow_once' : 'deny')]);
+      expect((await client.getAgentRun(start.runId))?.status).toBe('completed');
+      expect(await client.listPendingPermissionRequests(sessionId)).toEqual([]);
+    } finally {
+      await host?.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it('starts a real run, persists its events, and replays them after settle', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-run-exec-'));
     let host: LocalHostHandle | undefined;
@@ -172,6 +214,7 @@ describe('Host-owned run execution', () => {
       const events = await client.readAgentRunEvents(runId);
       const types = events.map((event) => event.payload.type);
       expect(types).toContain('assistant.text_block');
+      expect(types).toContain('turn.started');
       expect(types).toContain('run.completed');
 
       // Replay reads the same durable sequence from a fresh cursor.

@@ -430,6 +430,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           : createStdioDiagnosticsLogger();
       runExecution = new HostRunExecutionController({
         runs: core.stores.runs,
+        permissionRequests: createHostPermissionRequestApi(core.stores),
         sessionDefaults: async (sessionId) => {
           const row = core.stores.sessions.get(sessionId);
           if (row === null) return null;
@@ -509,7 +510,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       taskApi,
       projectApi: createHostProjectApi(core.stores.projects),
       researchApi: createHostResearchApi(core.stores),
-      permissionRequestApi: createHostPermissionRequestApi(core.stores),
+      permissionRequestApi: runExecution?.permissionRequests ?? createHostPermissionRequestApi(core.stores),
       toolApprovalApi: createHostToolApprovalApi(mainDatabase.db),
       lockApi,
       workspaceApi,
@@ -546,8 +547,12 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           // Stop supervised workers before the database handles they were
           // writing through the bridge disappear underneath them.
           try {
-            runExecution?.supervision.workerManager.stopIdleReaper();
-            runExecution?.supervision.workerManager.killAll();
+            try {
+              await runExecution?.permissionRequests?.closeAll();
+            } finally {
+              runExecution?.supervision.workerManager.stopIdleReaper();
+              runExecution?.supervision.workerManager.killAll();
+            }
           } catch {
             // A worker that already exited is not a shutdown failure.
           }

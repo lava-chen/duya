@@ -18,6 +18,7 @@ export class TurnQueue {
   private busy = false;
   private paused = false;
   private closed = false;
+  private resumeAfterActive = false;
   private draining: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: TurnQueueOptions) {}
@@ -30,7 +31,10 @@ export class TurnQueue {
     if (this.closed || text.trim() === '') return;
     // A fresh input after interruption is an explicit new intent. Older queued
     // drafts still require the user's resume decision before automatic drain.
-    if (this.paused && this.pending.length === 0 && !this.busy) this.paused = false;
+    if (this.paused && this.pending.length === 0) {
+      if (this.busy) this.resumeAfterActive = true;
+      else this.paused = false;
+    }
     this.pending.push(text);
     this.changed();
     this.drain();
@@ -38,12 +42,14 @@ export class TurnQueue {
 
   /** Explicit cancellation never silently starts queued work afterwards. */
   pause(): void {
+    this.resumeAfterActive = false;
     this.paused = true;
     this.changed();
   }
 
   resume(): void {
     if (this.closed) return;
+    if (this.busy && this.paused) this.resumeAfterActive = true;
     this.paused = false;
     this.changed();
     this.drain();
@@ -89,7 +95,8 @@ export class TurnQueue {
         if (text === undefined) break;
         this.changed();
         const outcome = await this.options.execute(text);
-        if (outcome !== 'completed') this.paused = true;
+        if (outcome !== 'completed') this.paused = outcome !== 'cancelled' || !this.resumeAfterActive;
+        this.resumeAfterActive = false;
       }
     } catch (error) {
       this.paused = true;

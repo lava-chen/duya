@@ -224,6 +224,11 @@ export async function driveRunWithEngine(request: EngineRunDriverRequest, onFram
             ports,
             ...(request.maxTurns === undefined ? {} : { maxTurns: request.maxTurns }),
             onEnvelope: (typed) => {
+                // Keep a machine-readable model-turn boundary alongside the
+                // legacy "Turn N" status line, which has no content identity.
+                if (typed.payload.type === 'turn.started') {
+                    onFrame({ type: 'chat:turn_start', data: { turnCount: typed.payload.index } });
+                }
                 for (const result of surface.projectUsageResults(typed.payload)) {
                     onFrame(result as unknown as Record<string, unknown>);
                 }
@@ -234,8 +239,15 @@ export async function driveRunWithEngine(request: EngineRunDriverRequest, onFram
                     const chatFrame = request.legacyFrameCodec(frame as {
                         readonly type: string;
                     });
-                    if (chatFrame !== null)
-                        onFrame(chatFrame as unknown as Record<string, unknown>);
+                    if (chatFrame !== null) {
+                        const content = typed.payload;
+                        const identity = content.type === 'assistant.text_delta' || content.type === 'assistant.text_block'
+                            || content.type === 'assistant.thinking_delta' || content.type === 'assistant.thinking_block'
+                            ? { messageId: content.messageId, index: content.index }
+                            : content.type === 'tool.progress'
+                                ? { id: content.toolCallId, elapsed_ms: content.elapsedMs } : {};
+                        onFrame({ ...chatFrame, ...identity } as Record<string, unknown>);
+                    }
                 }
             },
         });

@@ -222,8 +222,8 @@ export function translateFrame(
     case 'chat:text':
       return ok({
         type: 'assistant.text_block',
-        messageId: ctx.messageId,
-        index: 0,
+        messageId: str(data['messageId']) || ctx.messageId,
+        index: num(data['index']),
         text: readStreamText(raw),
       });
 
@@ -235,8 +235,8 @@ export function translateFrame(
     case 'text_delta':
       return ok({
         type: 'assistant.text_delta',
-        messageId: ctx.messageId,
-        index: 0,
+        messageId: str(data['messageId']) || ctx.messageId,
+        index: num(data['index']),
         delta: readStreamText(raw),
       });
 
@@ -244,16 +244,16 @@ export function translateFrame(
     case 'chat:thinking':
       return ok({
         type: 'assistant.thinking_block',
-        messageId: ctx.messageId,
-        index: 0,
+        messageId: str(data['messageId']) || ctx.messageId,
+        index: num(data['index']),
         thinking: readStreamText(raw),
       });
 
     case 'thinking_delta':
       return ok({
         type: 'assistant.thinking_delta',
-        messageId: ctx.messageId,
-        index: 0,
+        messageId: str(data['messageId']) || ctx.messageId,
+        index: num(data['index']),
         delta: readStreamText(raw),
       });
 

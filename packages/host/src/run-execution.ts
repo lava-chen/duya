@@ -30,6 +30,7 @@
 
 import type {
   CancelAgentRunResult,
+  HostPermissionRequestApiV1,
   RunId,
   StartAgentRunInput,
   StartAgentRunResult,
@@ -45,6 +46,7 @@ import {
 import { WorkerManager } from './worker-manager.js';
 import { SessionState, WorkerSessionRegistry } from './worker-session-registry.js';
 import { normalizeWorkerEvent } from './worker-frames.js';
+import { WorkerPermissionRequests } from './worker-permission-requests.js';
 
 /** Serves the worker's `db:request` frames from Host-owned stores. */
 export interface WorkerDbBridge {
@@ -80,6 +82,7 @@ export interface HostRunExecutionControllerOptions {
   /** Serves the worker's `db:request` frames. Required — see module doc. */
   readonly bridge: WorkerDbBridge;
   readonly logger: HostRunExecutionLogger;
+  readonly permissionRequests?: HostPermissionRequestApiV1;
   readonly worker: {
     resolveWorkerPath(): string;
     resolveBetterSqlite3Path(): string;
@@ -99,12 +102,14 @@ export class HostRunExecutionError extends Error {
 }
 
 export class HostRunExecutionController {
+  readonly permissionRequests: WorkerPermissionRequests | undefined;
   readonly #options: HostRunExecutionControllerOptions;
   readonly #registry: WorkerSessionRegistry;
   readonly #workerManager: WorkerManager;
   readonly #orchestrator: RunOrchestrator;
   /** runId -> sessionId for cancellation lookups. */
   readonly #sessionByRun = new Map<string, string>();
+  readonly #cancellingRuns = new Set<string>();
 
   constructor(options: HostRunExecutionControllerOptions) {
     this.#options = options;
@@ -158,8 +163,14 @@ export class HostRunExecutionController {
       }),
     });
 
+    this.permissionRequests = options.permissionRequests === undefined ? undefined
+      : new WorkerPermissionRequests(options.permissionRequests,
+        (sessionId, message) => this.#workerManager.sendCommand(sessionId, message),
+        (sessionId, runId) => !this.#cancellingRuns.has(runId) && this.#orchestrator.runForSession(sessionId) === runId);
     this.#workerManager.setMessageHandler((sessionId, msg) => {
-      void this.#onWorkerMessage(sessionId, msg);
+      void this.#onWorkerMessage(sessionId, msg).catch((error: unknown) => {
+        this.#options.logger.error('Worker event handling failed', error instanceof Error ? error : new Error(String(error)), { sessionId });
+      });
     });
   }
 
@@ -248,9 +259,20 @@ export class HostRunExecutionController {
     if (sessionId === null) {
       return { requested: false, runId, reason: `run ${runId} has no session binding` };
     }
-    const outcome = await this.#orchestrator.cancelSession(sessionId, reason ?? 'host_run_cancel');
-    if (outcome === null) {
-      return { requested: false, runId, reason: `run ${runId} is not live or recently ended` };
+    this.#cancellingRuns.add(runId);
+    let outcome;
+    try {
+      try {
+        await this.permissionRequests?.closeSession(sessionId, runId);
+      } catch (error) {
+        this.#options.logger.error('Closing cancelled run approvals failed', error instanceof Error ? error : new Error(String(error)), { runId });
+      }
+      outcome = await this.#orchestrator.cancelRun(sessionId, runId, reason ?? 'host_run_cancel');
+    } finally {
+      this.#cancellingRuns.delete(runId);
+    }
+    if (!outcome?.requested) {
+      return { requested: false, runId, reason: `run ${runId} is not live or retained by this Host` };
     }
     return { requested: true, runId };
   }
@@ -286,10 +308,27 @@ export class HostRunExecutionController {
     }
 
     if (typeof type === 'string' && (type.startsWith('chat:') || type.startsWith('compact:'))) {
+      if (type === 'chat:permission') {
+        const request = msg.request;
+        const runId = this.#orchestrator.runForSession(sessionId);
+        if (runId === null || request === null || typeof request !== 'object' || Array.isArray(request)) return;
+        if (this.permissionRequests === undefined) {
+          this.#workerManager.sendCommand(sessionId, { type: 'permission:resolve', sessionId, id: (request as Record<string, unknown>).id, decision: 'deny' });
+          this.#options.logger.warn('Worker approval responder unavailable', { sessionId, runId });
+          return;
+        }
+        try {
+          await this.permissionRequests.request(sessionId, runId, request as Record<string, unknown>);
+        } catch (error) {
+          this.#workerManager.sendCommand(sessionId, { type: 'permission:resolve', sessionId, id: (request as Record<string, unknown>).id, decision: 'deny' });
+          throw error;
+        }
+      }
       const normalized = normalizeWorkerEvent(msg);
       if (normalized === null) return;
       try {
         this.#orchestrator.observe(sessionId, normalized);
+        if (type === 'chat:done' || type === 'chat:error') await this.permissionRequests?.closeSession(sessionId);
       } catch {
         // observe already swallows per-frame failures; this is the backstop.
       }

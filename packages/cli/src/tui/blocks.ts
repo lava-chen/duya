@@ -118,7 +118,7 @@ export interface ToolBlock {
   name: string;
   preview: string;
   result?: string;
-  status: 'running' | 'ok' | 'error';
+  status: 'running' | 'ok' | 'error' | 'unknown';
 }
 
 export interface ErrorBlock {
@@ -244,9 +244,24 @@ export function resetBlockIds(): void {
   sequence = 0;
 }
 
+/** Identity of one assistant content block within a message. */
+export function blockKey(messageId: string, index: number): string {
+  return `${messageId}#${index}`;
+}
+
+/** Read the content-block identity from an event payload when present. */
+export function readBlockKey(payload: Record<string, unknown>): string | null {
+  const messageId = asString(payload['messageId']);
+  if (messageId === '') return null;
+  const index = payload['index'];
+  return blockKey(messageId, typeof index === 'number' && Number.isFinite(index) ? index : 0);
+}
+
 export class TranscriptModel {
   private readonly items: Block[] = [];
   private readonly toolsByCallId = new Map<string, ToolBlock>();
+  private readonly assistantsByKey = new Map<string, AssistantBlock>();
+  private readonly thinkingByKey = new Map<string, ThinkingBlock>();
   private assistant: AssistantBlock | null = null;
   private thinking: ThinkingBlock | null = null;
 
@@ -257,11 +272,9 @@ export class TranscriptModel {
 
   /** Add a block the user typed. */
   addUser(text: string): UserBlock {
+    this.closeOpenContent();
     const block: UserBlock = { kind: 'user', id: nextId('user'), text };
     this.items.push(block);
-    // A new prompt starts a new answer; the previous one is closed.
-    this.assistant = null;
-    this.thinking = null;
     return block;
   }
 
@@ -280,11 +293,20 @@ export class TranscriptModel {
    * Creates the block on first use. The SAME object is returned every time so
    * the caller can address one line rather than rebuilding it.
    */
-  appendTextDelta(text: string): AssistantBlock | null {
+  appendTextDelta(text: string, key: string | null = null): AssistantBlock | null {
     if (text.length === 0) return this.assistant;
-    if (this.assistant === null) {
+    if (key !== null) {
+      const existing = this.assistantsByKey.get(key);
+      if (existing !== undefined) {
+        existing.text += text;
+        return existing;
+      }
+    }
+    if (this.assistant === null || key !== null) {
+      if (this.assistant !== null) this.assistant.finalized = true;
       this.assistant = { kind: 'assistant', id: nextId('assistant'), text: '', finalized: false };
       this.items.push(this.assistant);
+      if (key !== null) this.assistantsByKey.set(key, this.assistant);
     }
     this.assistant.text += text;
     return this.assistant;
@@ -296,38 +318,76 @@ export class TranscriptModel {
    * REPLACES rather than appends: the block frame repeats content already
    * delivered as deltas. See the module comment.
    */
-  finalizeText(content: string): AssistantBlock | null {
-    if (this.assistant === null) {
+  finalizeText(content: string, key: string | null = null): AssistantBlock | null {
+    const block = key === null ? this.assistant : this.assistantsByKey.get(key) ?? null;
+    if (block === null) {
       if (content.length === 0) return null;
       this.assistant = { kind: 'assistant', id: nextId('assistant'), text: '', finalized: false };
       this.items.push(this.assistant);
+      if (key !== null) this.assistantsByKey.set(key, this.assistant);
     }
-    this.assistant.text = content;
-    this.assistant.finalized = true;
-    return this.assistant;
+    const target = block ?? this.assistant;
+    if (target === null) return null;
+    target.text = content;
+    target.finalized = true;
+    return target;
   }
 
   /** Append a streamed thinking fragment to the live thinking block. */
-  appendThinkingDelta(text: string): ThinkingBlock | null {
+  appendThinkingDelta(text: string, key: string | null = null): ThinkingBlock | null {
     if (text.length === 0) return this.thinking;
-    if (this.thinking === null) {
+    if (key !== null) {
+      const existing = this.thinkingByKey.get(key);
+      if (existing !== undefined) {
+        existing.text += text;
+        return existing;
+      }
+    }
+    if (this.thinking === null || key !== null) {
+      if (this.thinking !== null) this.thinking.finalized = true;
       this.thinking = { kind: 'thinking', id: nextId('thinking'), text: '', finalized: false };
       this.items.push(this.thinking);
+      if (key !== null) this.thinkingByKey.set(key, this.thinking);
     }
     this.thinking.text += text;
     return this.thinking;
   }
 
   /** Apply authoritative thinking content and mark the block final. */
-  finalizeThinking(content: string): ThinkingBlock | null {
-    if (this.thinking === null) {
+  finalizeThinking(content: string, key: string | null = null): ThinkingBlock | null {
+    const block = key === null ? this.thinking : this.thinkingByKey.get(key) ?? null;
+    if (block === null) {
       if (content.length === 0) return null;
       this.thinking = { kind: 'thinking', id: nextId('thinking'), text: '', finalized: false };
       this.items.push(this.thinking);
+      if (key !== null) this.thinkingByKey.set(key, this.thinking);
     }
-    this.thinking.text = content;
-    this.thinking.finalized = true;
-    return this.thinking;
+    const target = block ?? this.thinking;
+    if (target === null) return null;
+    target.text = content;
+    target.finalized = true;
+    return target;
+  }
+
+  /** Close the current content blocks without removing their keyed identity. */
+  closeOpenContent(): void {
+    if (this.assistant !== null) this.assistant.finalized = true;
+    if (this.thinking !== null) this.thinking.finalized = true;
+    this.assistant = null;
+    this.thinking = null;
+  }
+
+  /** A stopped stream cannot prove the outcome of an unfinished tool. */
+  finishRun(): boolean {
+    this.closeOpenContent();
+    let changed = false;
+    for (const block of this.toolsByCallId.values()) {
+      if (block.status !== 'running') continue;
+      block.status = 'unknown';
+      block.result ??= 'Run ended before a tool result was received.';
+      changed = true;
+    }
+    return changed;
   }
 
   /**
@@ -344,6 +404,7 @@ export class TranscriptModel {
       if (preview !== '') existing.preview = preview;
       return existing;
     }
+    this.closeOpenContent();
     const block: ToolBlock = {
       kind: 'tool',
       id: nextId('tool'),
@@ -398,19 +459,19 @@ export class TranscriptModel {
 
     switch (frame.type) {
       case 'text_delta': {
-        const block = this.appendTextDelta(readFrameContent(frame));
+        const block = this.appendTextDelta(readFrameContent(frame), readBlockKey(payload));
         return block === null ? { kind: 'none' } : { kind: 'mutate', block };
       }
       case 'text': {
-        const block = this.finalizeText(readFrameContent(frame));
+        const block = this.finalizeText(readFrameContent(frame), readBlockKey(payload));
         return block === null ? { kind: 'none' } : { kind: 'mutate', block };
       }
       case 'thinking_delta': {
-        const block = this.appendThinkingDelta(readFrameContent(frame));
+        const block = this.appendThinkingDelta(readFrameContent(frame), readBlockKey(payload));
         return block === null ? { kind: 'none' } : { kind: 'mutate', block };
       }
       case 'thinking': {
-        const block = this.finalizeThinking(readFrameContent(frame));
+        const block = this.finalizeThinking(readFrameContent(frame), readBlockKey(payload));
         return block === null ? { kind: 'none' } : { kind: 'mutate', block };
       }
 
@@ -513,6 +574,8 @@ export class TranscriptModel {
   clear(): void {
     this.items.length = 0;
     this.toolsByCallId.clear();
+    this.assistantsByKey.clear();
+    this.thinkingByKey.clear();
     this.assistant = null;
     this.thinking = null;
   }

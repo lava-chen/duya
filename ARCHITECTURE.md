@@ -950,6 +950,23 @@ domain or database-owner cutover to Host.
 
 ### Chat CLI TUI
 
+- Worker content frames retain the engine's message ID and content index through
+  the Host bridge. A run-only `chat:turn_start` marker preserves model-turn
+  boundaries alongside legacy status text; the TUI additionally scopes old
+  per-run content IDs by that turn. Thinking/text buffer transitions flush in
+  arrival order and authoritative blocks replace only their matching content.
+- `WorkerPermissionRequests` persists worker approvals before publishing them.
+  The existing permission-request HTTP endpoint returns decisions and answers
+  to the waiting worker, with deadline, cancellation and duplicate-reply guards.
+  TUI permission frames use the queued picker; tools awaiting approval are
+  visible, and the embedded Host diagnostics path is printed at startup.
+- Esc aborts the stream immediately but holds local turn admission until Host
+  cancellation and a terminal record are confirmed. A fresh prompt submitted
+  during cancellation waits for that barrier; older queued drafts still need
+  explicit resumption. Failed cancellation blocks subsequent run admission.
+  `build:cli-dev` rebuilds both the Host worker and the CLI so `dev:tui` cannot
+  silently execute a stale worker bundle.
+
 - The Host-backed entry uses `tui/host-event-stream.ts` to scope envelopes by
   session/run identity and sequence before projecting them into UI frames.
   `tui/turn-queue.ts` serializes locally pending follow-ups; cancellation and

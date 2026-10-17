@@ -33,7 +33,7 @@
 
 import blessed from 'blessed';
 import type { BlessedProgram, Widgets } from 'blessed';
-import { TranscriptModel, type LegacyFrame, type Block } from './blocks.js';
+import { TranscriptModel, readBlockKey, type LegacyFrame, type Block } from './blocks.js';
 import { DeltaBuffer } from './delta-buffer.js';
 import { RenderScheduler } from './render-scheduler.js';
 import { Pacer } from './pacer.js';
@@ -1465,21 +1465,25 @@ private paintCompletion(): void {
   /** Feed one frame from the run. The only entry point for run output. */
   push(frame: LegacyFrame): void {
     const activityChanged = this.updateActivity(frame);
+    const key = readBlockKey(frameRecord(frame.data));
     switch (frame.type) {
       case 'text_delta': {
-        this.textBuffer.append(readContent(frame), now());
+        if (!this.thinkingBuffer.isEmpty && this.commitBuffers()) this.noteTranscriptMutation();
+        this.commitIfBlockChanged(this.textBuffer, key);
+        this.textBuffer.append(readContent(frame), now(), key);
         this.drainBuffers();
         return;
       }
       case 'thinking_delta': {
-        this.thinkingBuffer.append(readContent(frame), now());
+        if (!this.textBuffer.isEmpty && this.commitBuffers()) this.noteTranscriptMutation();
+        this.commitIfBlockChanged(this.thinkingBuffer, key);
+        this.thinkingBuffer.append(readContent(frame), now(), key);
         this.drainBuffers();
         return;
       }
       case 'permission': {
-        // A fresh frame supersedes every ask still open — answering a stale
-        // one would deliver a decision to a request the run has moved past.
-        this.overlay.abortAll();
+        // Parallel tools can await independent approvals in the same run.
+        // The queue keeps them ordered; deadlines and run end close stale asks.
         this.showPermission(frame);
         return;
       }
@@ -1505,21 +1509,9 @@ private paintCompletion(): void {
         break;
     }
 
+    let transcriptChanged = this.commitBuffers();
     if (frame.type === 'text') this.textBuffer.reset();
     if (frame.type === 'thinking') this.thinkingBuffer.reset();
-    let transcriptChanged = false;
-    if (frame.type === 'done' || frame.type === 'error') {
-      const text = this.textBuffer.flush();
-      if (text !== '') {
-        this.model.appendTextDelta(text);
-        transcriptChanged = true;
-      }
-      const thinking = this.thinkingBuffer.flush();
-      if (thinking !== '') {
-        this.model.appendThinkingDelta(thinking);
-        transcriptChanged = true;
-      }
-    }
     const result = this.model.apply(frame);
     if (result.kind === 'append' || result.kind === 'mutate') transcriptChanged = true;
     if (transcriptChanged) this.noteTranscriptMutation();
@@ -1544,6 +1536,8 @@ private paintCompletion(): void {
       toolInput,
       reason: typeof data['reason'] === 'string' ? data['reason'] : '',
       blockedPath: typeof data['blockedPath'] === 'string' ? data['blockedPath'] : undefined,
+      expiresAt: typeof data['expiresAt'] === 'number' ? data['expiresAt'] : undefined,
+      mode,
       destructive: isDestructiveRequest(toolName, toolInput),
     });
   }
@@ -1591,6 +1585,32 @@ private paintCompletion(): void {
   /** Set by the wiring so a decision has somewhere to go. */
   onPermissionDecision?: (requestId: string, decision: PermissionDecision | null) => void;
 
+  /** Commit both streams before a non-delta event can append another block. */
+  private commitBuffers(): boolean {
+    let changed = false;
+    const textKey = this.textBuffer.key;
+    const text = this.textBuffer.flush();
+    if (text !== '') {
+      this.model.appendTextDelta(text, textKey);
+      this.noteQueued(text);
+      changed = true;
+    }
+    const thinkingKey = this.thinkingBuffer.key;
+    const thinking = this.thinkingBuffer.flush();
+    if (thinking !== '') {
+      this.model.appendThinkingDelta(thinking, thinkingKey);
+      this.noteQueued(thinking);
+      changed = true;
+    }
+    return changed;
+  }
+
+  /** Keep a buffered segment attached to its originating content block. */
+  private commitIfBlockChanged(buffer: DeltaBuffer, key: string | null): void {
+    if (buffer.isEmpty || buffer.key === key) return;
+    if (this.commitBuffers()) this.noteTranscriptMutation();
+  }
+
   /**
    * Commit buffered deltas into the block model.
    *
@@ -1601,15 +1621,17 @@ private paintCompletion(): void {
   private drainBuffers(): void {
     const at = now();
     let transcriptChanged = false;
+    const textKey = this.textBuffer.key;
     const text = this.textBuffer.take(at);
     if (text !== '') {
-      this.model.appendTextDelta(text);
+      this.model.appendTextDelta(text, textKey);
       transcriptChanged = true;
       this.noteQueued(text);
     }
+    const thinkingKey = this.thinkingBuffer.key;
     const thinking = this.thinkingBuffer.take(at);
     if (thinking !== '') {
-      this.model.appendThinkingDelta(thinking);
+      this.model.appendThinkingDelta(thinking, thinkingKey);
       transcriptChanged = true;
       this.noteQueued(thinking);
     }
@@ -1667,20 +1689,12 @@ private paintCompletion(): void {
       this.clearActiveActivity();
     }
     if (!busy) {
+      this.overlay.abortAll();
+      this.waitingForPermission = false;
       // A turn boundary commits whatever is left, so the transcript cannot
       // disagree with what actually happened.
-      const tail = this.textBuffer.flush();
-      let transcriptChanged = false;
-      if (tail !== '') {
-        this.model.appendTextDelta(tail);
-        transcriptChanged = true;
-      }
-      const thought = this.thinkingBuffer.flush();
-      if (thought !== '') {
-        this.model.appendThinkingDelta(thought);
-        transcriptChanged = true;
-      }
-      if (transcriptChanged) this.noteTranscriptMutation();
+      if (this.commitBuffers()) this.noteTranscriptMutation();
+      if (this.model.finishRun()) this.noteTranscriptMutation();
     }
     this.scheduleRender();
   }
