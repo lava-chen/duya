@@ -334,6 +334,26 @@ const deps: RouterDeps = {
     // would keep its run row and write no events at all. See the module for why
     // `currentEpoch` is a fact here rather than a read it cannot perform.
     nativeWriter: createDesktopNativeRunEventWriter({ request: dbRequest, logger }),
+    // ## `onEvent` is deliberately NOT wired here
+    //
+    // `onEvent` is the LIVE arm: it hands each canonical envelope to a consumer
+    // while the process still holds it, before and independently of the ledger.
+    // Desktop has no such consumer. Its renderer reads the transcript back from
+    // the `run_events` rows over HTTP (`GET /runs/:id/events` and friends), and
+    // its live chat stream is the worker's OWN legacy SSE frames, which
+    // `normalizeAndObserve` forwards untouched — wiring `onEvent` here would
+    // open a second delivery path onto the same renderer with no consumer
+    // behind it, and nothing would read what it published.
+    //
+    // The consequence is that `#releaseTerminalToConsumers` — the barrier that
+    // withholds a terminal until its commit is durable — has no Desktop consumer
+    // to protect. That is safe ONLY because every route that actually TELLS a
+    // Desktop client about a terminal goes through a durable gate instead:
+    // `settleSession`'s return value (the SSE and non-SSE chat paths), the
+    // cancel receipt (`handleDeleteChat`), and `resultFor` (the run-result
+    // route) all report `#durableTerminalFor`, never the Runtime's in-memory
+    // verdict. If a live consumer is ever added to this surface, it must be
+    // attached HERE so it inherits that barrier rather than bypassing it.
     logger,
     channel: createWorkerExecutionChannel({
       // The command is delivered by the host because the host owns

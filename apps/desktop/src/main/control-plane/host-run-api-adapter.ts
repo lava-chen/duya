@@ -3,6 +3,7 @@ import type {
   AgentRunOrigin,
   CreateAgentRunInput,
   HostRunApiV1,
+  RunAttemptFence,
   RunEventEnvelope,
   RunId,
   RunManifest,
@@ -23,6 +24,15 @@ import { HostRunApiError } from '@duya/host/run-api';
 
 const EVENT_PAGE_SIZE = 1000;
 const RUN_ORIGINS = new Set<AgentRunOrigin>(['user', 'agent', 'background']);
+
+/**
+ * The writer this adapter is, as named on every fence it forwards.
+ *
+ * Constant rather than per-caller because this hop is the durable writer even
+ * when the worker's request is what triggered it, and a refusal that cannot name
+ * its subject is the failure this whole fence contract is about.
+ */
+const CONTROL_PLANE_WRITER = 'desktop/host-run-api-adapter';
 
 /**
  * Adapt the trusted Agent Server's existing command vocabulary to the typed
@@ -139,15 +149,17 @@ async function appendEvents(api: HostRunApiV1, payload: Record<string, unknown>)
   if (runId === null || !Array.isArray(payload.events)) {
     return writeRunReceiptOnWire(failedReceipt('invalid', runId ?? '', 'run:append requires runId and an events array'));
   }
+  const fence = readAttemptFence(payload);
+  if (fence === null) return writeRunReceiptOnWire(missingFenceReceipt('run:append', runId, payload));
   try {
     const written = await api.appendAgentRunEvents(
       runId as RunId,
       payload.events as RunEventEnvelope[],
-      readEpoch(payload.epoch),
+      fence,
     );
     return writeRunReceiptOnWire({ state: 'applied', runId }, { written });
   } catch (error) {
-    const fenced = fencedBy(error, runId, readEpoch(payload.epoch));
+    const fenced = fencedBy(error, runId, fence.epoch);
     if (fenced !== null) return writeRunReceiptOnWire(fenced);
     return writeRunReceiptOnWire(hostFailureReceipt('run:append', runId, error));
   }
@@ -160,9 +172,11 @@ async function settleRun(api: HostRunApiV1, payload: Record<string, unknown>): P
   if (runId === null || terminal === null || (payload.metrics !== undefined && metrics === null)) {
     return writeRunReceiptOnWire(failedReceipt('invalid', runId ?? '', 'run:complete requires runId and a valid terminal/metrics pair'));
   }
+  const fence = readAttemptFence(payload);
+  if (fence === null) return writeRunReceiptOnWire(missingFenceReceipt('run:complete', runId, payload));
 
   try {
-    const result = await api.settleAgentRun(runId as RunId, terminal, metrics ?? undefined, readEpoch(payload.epoch));
+    const result = await api.settleAgentRun(runId as RunId, terminal, fence, metrics ?? undefined);
     switch (result.state) {
       case 'applied':
         return writeRunReceiptOnWire({ state: 'applied', runId });
@@ -185,21 +199,41 @@ async function settleRun(api: HostRunApiV1, payload: Record<string, unknown>): P
         return writeRunReceiptOnWire(failedReceipt('absent', runId, `run ${runId} has no row, so no terminal could be recorded`));
     }
   } catch (error) {
-    const fenced = fencedBy(error, runId, readEpoch(payload.epoch));
+    const fenced = fencedBy(error, runId, fence.epoch);
     if (fenced !== null) return writeRunReceiptOnWire(fenced);
     return writeRunReceiptOnWire(hostFailureReceipt('run:complete', runId, error));
   }
 }
 
 /**
- * The attempt a caller presented on the wire.
+ * The attempt fence a `db:request` writer presented, or `null` when it presented
+ * none.
  *
- * `undefined` for a caller that presented none, which is an unfenced write by
- * the caller's own choice — never a silent `0`, which would hand it the first
- * attempt's authority.
+ * `null` is a REFUSAL here, not a fallback to an unfenced write. `undefined` used
+ * to mean "unfenced by the caller's own choice" and it also meant "the caller
+ * forgot", because both arrive as a missing `epoch` — and the second one then
+ * wrote straight through the attempt fence while looking exactly like the first.
+ * The two callers that legitimately have no attempt are named
+ * {@link CONTROL_PLANE_WRITER}'s maintenance path, not this reader.
+ *
+ * `0` is never invented for a missing value either: it would hand an unfenced
+ * writer the first attempt's authority.
  */
-function readEpoch(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isInteger(value) ? value : undefined;
+function readAttemptFence(payload: Record<string, unknown>): RunAttemptFence | null {
+  const epoch = payload.epoch;
+  if (typeof epoch !== 'number' || !Number.isSafeInteger(epoch) || epoch < 0) return null;
+  return { epoch, writer: CONTROL_PLANE_WRITER };
+}
+
+/** The refusal a `db:request` writer gets when it presents no attempt. */
+function missingFenceReceipt(action: string, runId: string, payload: Record<string, unknown>): RunWriteReceipt {
+  const presented = payload.epoch === undefined ? 'no epoch' : `epoch ${String(payload.epoch)}`;
+  return failedReceipt(
+    'invalid',
+    runId,
+    `${action} from ${CONTROL_PLANE_WRITER} requires an attempt epoch (${presented}): a run write with no ` +
+    'attempt is refused rather than made unfenced',
+  );
 }
 
 /**
@@ -208,19 +242,40 @@ function readEpoch(value: unknown): number | undefined {
  * The attempt fence arrives as a `409 attempt_fenced` over the Host Run API,
  * because that boundary reports a status and a code rather than an outcome
  * union. Translating it here keeps the refusal a distinct receipt state on the
- * `db:request` wire instead of a generic conflict.
+ * `db:request` wire instead of a generic conflict — and it has to be translated
+ * from BOTH shapes, because the same refusal reaches this layer as a
+ * `HostRunApiError` in-process and as a `HostSessionHttpError` over HTTP. Only
+ * the in-process one used to be recognised, so a fenced append across the HTTP
+ * boundary was reported as a conflict and the caller went looking for a rival
+ * writer that does not exist.
  */
 function fencedBy(error: unknown, runId: string, presentedEpoch: number | undefined): RunWriteReceipt | null {
-  if (!(error instanceof HostRunApiError) || error.code !== 'attempt_fenced') return null;
-  const presented = error.fenced?.presented ?? presentedEpoch;
+  const fencedPair = readFencedRefusal(error);
+  if (fencedPair === null) return null;
+  const presented = fencedPair.fenced?.presented ?? presentedEpoch;
   if (presented === undefined) {
     // No attempt on either side of the boundary: a refusal whose subject cannot
     // be named is reported as an unnamed claim, not as a fence with a guess. It
     // is NOT reported as `fenced` — that state asserts an attempt, and an
     // assertion this layer cannot support is the thing it must not publish.
-    return { state: 'conflict', runId, reason: error.message };
+    return { state: 'conflict', runId, reason: messageOf(error) };
   }
-  return fencedReceipt(runId, presented, error.fenced?.current ?? null);
+  return fencedReceipt(runId, presented, fencedPair.fenced?.current ?? null);
+}
+
+/** The attempt pair behind an `attempt_fenced` refusal, from either error shape. */
+function readFencedRefusal(
+  error: unknown,
+): { readonly fenced?: { readonly presented: number; readonly current: number | null } } | null {
+  if (error instanceof HostRunApiError || error instanceof HostSessionHttpError) {
+    if (error.code !== 'attempt_fenced') return null;
+    return { ...(error.fenced === undefined ? {} : { fenced: error.fenced }) };
+  }
+  return null;
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function readEvents(api: HostRunApiV1, payload: Record<string, unknown>): Promise<readonly RunEventEnvelope[]> {

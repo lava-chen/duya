@@ -5,12 +5,14 @@ import {
   type AgentRunOrigin,
   type CreateAgentRunInput,
   type HostRunApiV1,
+  type RunAttemptFence,
   type RunEventEnvelope,
   type RunId,
   type RunMetrics,
   type ProtocolErrorInfo,
   type RunTerminalState,
   type SettleAgentRunResult,
+  type UnfencedRunWriteAuthorization,
 } from '@duya/agent-protocol';
 import type { CoreDataHostStores } from '@duya/data/core-data-host';
 import { RunEpochFencedError, RunEventConflictError, type RunRow } from '@duya/data/run-store';
@@ -73,7 +75,7 @@ export function createHostRunApi(stores: Pick<CoreDataHostStores, 'runs'>): Host
       return runs.listRunsBySession(sessionId, limit).map((row) => toAgentRunRecord(row));
     },
 
-    async appendAgentRunEvents(runId: RunId, events: readonly RunEventEnvelope[], epoch?: number) {
+    async appendAgentRunEvents(runId: RunId, events: readonly RunEventEnvelope[], fence: RunAttemptFence) {
       if (events.some((event) => event.runId !== runId)) {
         throw new HostRunApiError(400, 'run_event_id_mismatch', 'Every event must belong to the requested run');
       }
@@ -84,6 +86,10 @@ export function createHostRunApi(stores: Pick<CoreDataHostStores, 'runs'>): Host
       if (events.some((event) => event.sessionId !== run.session_id)) {
         throw new HostRunApiError(400, 'run_event_session_mismatch', 'Events must belong to the run session');
       }
+      // Read BEFORE the storage call, never defaulted: an unreadable fence is a
+      // refusal naming the writer, because "which attempt is this?" is the
+      // question a refused write exists to answer.
+      const epoch = readFenceEpoch(fence);
       try {
         return runs.appendEvents(events, epoch);
       } catch (error) {
@@ -104,8 +110,49 @@ export function createHostRunApi(stores: Pick<CoreDataHostStores, 'runs'>): Host
       }
     },
 
-    async settleAgentRun(runId: RunId, terminal: RunTerminalState, metrics: RunMetrics, epoch?: number) {
-      return runs.settleRun(runId, terminal, metrics, epoch) as SettleAgentRunResult;
+    async settleAgentRun(runId: RunId, terminal: RunTerminalState, fence: RunAttemptFence, metrics: RunMetrics) {
+      return runs.settleRun(runId, terminal, metrics, readFenceEpoch(fence)) as SettleAgentRunResult;
+    },
+
+    /**
+     * Deliberate unfenced append.
+     *
+     * Reached ONLY by naming it, with a reason and an author the caller had to
+     * type. It is not the fenced method with a fence left off, so no argument
+     * omission can land here — and it refuses an authorization it cannot read,
+     * rather than forwarding a write whose authority it never established.
+     */
+    async appendAgentRunEventsUnfenced(
+      runId: RunId,
+      events: readonly RunEventEnvelope[],
+      authorization: UnfencedRunWriteAuthorization,
+    ) {
+      readUnfencedAuthorization(authorization);
+      if (events.some((event) => event.runId !== runId)) {
+        throw new HostRunApiError(400, 'run_event_id_mismatch', 'Every event must belong to the requested run');
+      }
+      const run = runs.getRun(runId);
+      if (run === null) {
+        throw new HostRunApiError(404, 'run_not_found', `Run not found: ${runId}`);
+      }
+      try {
+        return runs.appendEvents(events, undefined);
+      } catch (error) {
+        if (error instanceof RunEventConflictError) {
+          throw new HostRunApiError(409, error.code, error.message);
+        }
+        throw error;
+      }
+    },
+
+    async settleAgentRunUnfenced(
+      runId: RunId,
+      terminal: RunTerminalState,
+      authorization: UnfencedRunWriteAuthorization,
+      metrics: RunMetrics,
+    ) {
+      readUnfencedAuthorization(authorization);
+      return runs.settleRun(runId, terminal, metrics, undefined) as SettleAgentRunResult;
     },
 
     async readAgentRunEvents(runId: RunId, query = {}) {
@@ -167,6 +214,62 @@ export function createHostRunApi(stores: Pick<CoreDataHostStores, 'runs'>): Host
       }
     },
   };
+}
+
+/**
+ * The attempt a fence presents, or a 400 naming the writer that failed to.
+ *
+ * A value that is missing, non-integer, negative or unattributed is REFUSED, not
+ * defaulted to `0`. This is the whole reason the fenced methods take a required
+ * fence: storage reads `undefined` as a deliberate unfenced write, so a fence
+ * that quietly became `undefined` here would be an unfenced write that looks
+ * exactly like a fenced one.
+ */
+function readFenceEpoch(fence: RunAttemptFence): number {
+  // Widened before it is read: the declared type says every caller passed a
+  // fence, and the whole point of this function is to be honest with the ones
+  // that did not.
+  const value: unknown = fence;
+  if (!isRecord(value) || typeof value.writer !== 'string' || value.writer.trim() === '') {
+    throw new HostRunApiError(
+      400,
+      'invalid_run_attempt_fence',
+      'A fenced run write requires an attempt fence naming the writer that presents it',
+    );
+  }
+  const writer = value.writer;
+  const epoch = value.epoch;
+  if (typeof epoch !== 'number' || !Number.isSafeInteger(epoch) || epoch < 0) {
+    throw new HostRunApiError(
+      400,
+      'invalid_run_attempt_fence',
+      `${writer} presented an attempt fence that is not a non-negative integer epoch`,
+    );
+  }
+  return epoch;
+}
+
+/**
+ * The authorization behind a deliberately unfenced write.
+ *
+ * Refuses anything it cannot read. An unfenced write is the one operation in
+ * this file that ignores the attempt fence, so the record of WHY must be as
+ * strong as the fence it replaces — otherwise "unfenced" becomes the answer to
+ * any problem, which is the degradation this contract exists to remove.
+ */
+function readUnfencedAuthorization(authorization: UnfencedRunWriteAuthorization): void {
+  const value: unknown = authorization;
+  if (
+    !isRecord(value) ||
+    typeof value.reason !== 'string' || value.reason.trim() === '' ||
+    typeof value.authorizedBy !== 'string' || value.authorizedBy.trim() === ''
+  ) {
+    throw new HostRunApiError(
+      400,
+      'invalid_unfenced_run_write',
+      'An unfenced run write requires an authorization carrying a reason and an author',
+    );
+  }
 }
 
 function waitForRunEventPoll(signal?: AbortSignal): Promise<void> {

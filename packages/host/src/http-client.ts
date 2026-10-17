@@ -65,7 +65,9 @@ import type {
   RunId,
   RunMetrics,
   RunTerminalState,
+  RunAttemptFence,
   SettleAgentRunResult,
+  UnfencedRunWriteAuthorization,
 } from '@duya/agent-protocol';
 import type { HostResearchAction, HostResearchApiV1 } from '@duya/agent-protocol/research-api';
 import type {
@@ -248,6 +250,16 @@ export class HostSessionHttpError extends Error {
     readonly status: number,
     readonly code: string,
     message?: string,
+    /**
+     * The attempt numbers behind a `409 attempt_fenced`, when the refusing hop
+     * reported them on the error payload.
+     *
+     * Carried because a fenced refusal and a conflict are opposite instructions
+     * for the caller — drop the batch, or reconcile with the committed terminal —
+     * and collapsing them at the HTTP boundary would force the caller to guess
+     * which one it is looking at.
+     */
+    readonly fenced?: { readonly presented: number; readonly current: number | null },
   ) {
     super(message ?? `Duya Host request failed (${status}: ${code})`);
     this.name = 'HostSessionHttpError';
@@ -343,11 +355,29 @@ export class HostSessionHttpClient implements
     );
   }
 
-  async appendAgentRunEvents(runId: RunId, events: readonly RunEventEnvelope[]): Promise<number> {
+  async appendAgentRunEvents(
+    runId: RunId,
+    events: readonly RunEventEnvelope[],
+    fence: RunAttemptFence,
+  ): Promise<number> {
     const result = await this.request<{ written: number }>(
       'POST',
       `/v1/agent-runs/${encodeURIComponent(runId)}/events`,
-      { events },
+      { events, fence: toWireFence(fence) },
+      RUN_REQUEST_TIMEOUT_MS,
+    );
+    return result.written;
+  }
+
+  async appendAgentRunEventsUnfenced(
+    runId: RunId,
+    events: readonly RunEventEnvelope[],
+    authorization: UnfencedRunWriteAuthorization,
+  ): Promise<number> {
+    const result = await this.request<{ written: number }>(
+      'POST',
+      `/v1/agent-runs/${encodeURIComponent(runId)}/events`,
+      { events, unfenced: authorization },
       RUN_REQUEST_TIMEOUT_MS,
     );
     return result.written;
@@ -356,12 +386,27 @@ export class HostSessionHttpClient implements
   async settleAgentRun(
     runId: RunId,
     terminal: RunTerminalState,
+    fence: RunAttemptFence,
     metrics?: RunMetrics,
   ): Promise<SettleAgentRunResult> {
     return this.request(
       'POST',
       `/v1/agent-runs/${encodeURIComponent(runId)}/terminal`,
-      { terminal, ...(metrics === undefined ? {} : { metrics }) },
+      { terminal, fence: toWireFence(fence), ...(metrics === undefined ? {} : { metrics }) },
+      RUN_REQUEST_TIMEOUT_MS,
+    );
+  }
+
+  async settleAgentRunUnfenced(
+    runId: RunId,
+    terminal: RunTerminalState,
+    authorization: UnfencedRunWriteAuthorization,
+    metrics?: RunMetrics,
+  ): Promise<SettleAgentRunResult> {
+    return this.request(
+      'POST',
+      `/v1/agent-runs/${encodeURIComponent(runId)}/terminal`,
+      { terminal, unfenced: authorization, ...(metrics === undefined ? {} : { metrics }) },
       RUN_REQUEST_TIMEOUT_MS,
     );
   }
@@ -1914,16 +1959,10 @@ export class HostSessionHttpClient implements
       throw new HostSessionHttpError(response.status, 'invalid_response');
     }
     if (!response.ok) {
-      const error = payload && typeof payload === 'object'
-        ? (payload as Record<string, unknown>).error
-        : undefined;
-      const code = error && typeof error === 'object' && typeof (error as Record<string, unknown>).code === 'string'
-        ? String((error as Record<string, unknown>).code)
-        : 'request_failed';
-      const message = error && typeof error === 'object' && typeof (error as Record<string, unknown>).message === 'string'
-        ? String((error as Record<string, unknown>).message)
-        : undefined;
-      throw new HostSessionHttpError(response.status, code, message);
+      // The shared reader, not an inline re-parse: this path used to be a
+      // second copy of the same logic, so the fenced attempt pair was carried on
+      // one error path and dropped on the other.
+      throw hostErrorFromPayload(response.status, payload);
     }
     return payload as T;
   }
@@ -1986,7 +2025,34 @@ function hostErrorFromPayload(status: number, payload: unknown): HostSessionHttp
   const error = isObject(payload) ? payload.error : undefined;
   const code = isObject(error) && typeof error.code === 'string' ? error.code : 'request_failed';
   const message = isObject(error) && typeof error.message === 'string' ? error.message : undefined;
-  return new HostSessionHttpError(status, code, message);
+  const fenced = isObject(error) ? readFencedPair(error.fenced) : null;
+  return new HostSessionHttpError(status, code, message, fenced ?? undefined);
+}
+
+/**
+ * The attempt numbers a refusing hop reported, or `null`.
+ *
+ * Only read off the `attempt_fenced` payload and only when BOTH numbers are
+ * well formed: a half-read pair would name an attempt nobody presented.
+ */
+function readFencedPair(value: unknown): { readonly presented: number; readonly current: number | null } | null {
+  if (!isObject(value)) return null;
+  const presented = value.presented;
+  if (typeof presented !== 'number' || !Number.isSafeInteger(presented)) return null;
+  const current = value.current;
+  if (current === null) return { presented, current: null };
+  if (typeof current === 'number' && Number.isSafeInteger(current)) return { presented, current };
+  return null;
+}
+
+/**
+ * The fence as it travels: a REQUIRED `fence` member, never a bare epoch.
+ *
+ * Serialized field by field rather than passed through, so a fence that lost its
+ * writer on the way here cannot reach the server looking fenced.
+ */
+function toWireFence(fence: RunAttemptFence): { epoch: number; writer: string } {
+  return { epoch: fence.epoch, writer: fence.writer };
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

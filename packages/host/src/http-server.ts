@@ -38,11 +38,14 @@ import type {
   SessionId,
   RunMetrics,
   RunTerminalState,
+  RunAttemptFence,
+  SettleAgentRunResult,
   StartAgentRunInput,
   TaskCreateInput,
   TaskId,
   TaskStatus,
   TaskUpdateInput,
+  UnfencedRunWriteAuthorization,
   WorkspaceId,
 } from '@duya/agent-protocol';
 import type {
@@ -2790,7 +2793,21 @@ export class HostSessionHttpServer {
           this.#sendJson(res, 400, { error: { code: 'invalid_agent_run_events' } });
           return;
         }
-        const written = await api.appendAgentRunEvents(runId, events);
+        const authority = parseRunWriteAuthority(body);
+        if (authority === null) {
+          this.#sendJson(res, 400, {
+            error: {
+              code: 'invalid_run_attempt_fence',
+              message:
+                'run event append requires a fence { epoch, writer }, or an explicit unfenced ' +
+                '{ reason, authorizedBy } authorization; a write with no attempt is refused, not made unfenced',
+            },
+          });
+          return;
+        }
+        const written = authority.kind === 'fenced'
+          ? await api.appendAgentRunEvents(runId, events, authority.fence)
+          : await requireUnfencedAppend(api, runId, events, authority);
         this.#sendJson(res, 200, { written });
         return;
       }
@@ -2818,11 +2835,26 @@ export class HostSessionHttpServer {
           this.#sendJson(res, 400, { error: { code: 'invalid_agent_run_terminal' } });
           return;
         }
-        const result = await api.settleAgentRun(
-          runId,
-          body.terminal as RunTerminalState,
-          body.metrics as RunMetrics | undefined,
-        );
+        const authority = parseRunWriteAuthority(body);
+        if (authority === null) {
+          this.#sendJson(res, 400, {
+            error: {
+              code: 'invalid_run_attempt_fence',
+              message:
+                'run settle requires a fence { epoch, writer }, or an explicit unfenced ' +
+                '{ reason, authorizedBy } authorization; a write with no attempt is refused, not made unfenced',
+            },
+          });
+          return;
+        }
+        const result = authority.kind === 'fenced'
+          ? await api.settleAgentRun(
+            runId,
+            body.terminal as RunTerminalState,
+            authority.fence,
+            body.metrics as RunMetrics | undefined,
+          )
+          : await requireUnfencedSettle(api, runId, body, authority);
         this.#sendJson(res, 200, result);
         return;
       }
@@ -4431,7 +4463,17 @@ export class HostSessionHttpServer {
       return;
     }
     if (error instanceof HostRunApiError) {
-      this.#sendJson(res, error.status, { error: { code: error.code, message: error.message } });
+      // The attempt pair rides along on a fence refusal. Without it the client
+      // sees a 409 it cannot tell from a conflict, and the caller's two opposite
+      // remedies (drop the batch, or reconcile with the committed terminal)
+      // collapse into one guess.
+      this.#sendJson(res, error.status, {
+        error: {
+          code: error.code,
+          message: error.message,
+          ...(error.fenced === undefined ? {} : { fenced: error.fenced }),
+        },
+      });
       return;
     }
     if (error instanceof HostLocalRolloutApiError) {
@@ -4519,6 +4561,100 @@ function parseStartAgentRunInput(value: unknown): StartAgentRunInput | null {
     ...(value.origin === undefined ? {} : { origin: value.origin as AgentRunOrigin }),
     ...(value.traceId === undefined || typeof value.traceId !== 'string' ? {} : { traceId: value.traceId }),
   };
+}
+
+/**
+ * Which authority a run write is presenting, or `null` when it presents none.
+ *
+ * Exactly one of two shapes, and `null` for everything else — including a body
+ * carrying both, and including a bare `epoch` number. The bare number is the
+ * shape this replaces: it reads as "the fence" when it is absent, so a caller
+ * that forgets it produced an unfenced write that looked fenced all the way to
+ * storage. `null` is a 400 on the route, which is the only answer that keeps
+ * "I have no attempt" from being something a caller can say by omission.
+ */
+type RunWriteAuthority =
+  | { readonly kind: 'fenced'; readonly fence: RunAttemptFence }
+  | { readonly kind: 'unfenced'; readonly authorization: UnfencedRunWriteAuthorization };
+
+function parseRunWriteAuthority(body: unknown): RunWriteAuthority | null {
+  if (!isRecord(body)) return null;
+  const hasFence = body.fence !== undefined;
+  const hasUnfenced = body.unfenced !== undefined;
+  if (hasFence === hasUnfenced) return null;
+  if (hasUnfenced) {
+    const raw = body.unfenced;
+    if (
+      !isRecord(raw) ||
+      typeof raw.reason !== 'string' || raw.reason.trim() === '' ||
+      typeof raw.authorizedBy !== 'string' || raw.authorizedBy.trim() === ''
+    ) {
+      return null;
+    }
+    return {
+      kind: 'unfenced',
+      authorization: { reason: raw.reason, authorizedBy: raw.authorizedBy },
+    };
+  }
+  const fence = parseRunAttemptFence(body.fence);
+  return fence === null ? null : { kind: 'fenced', fence };
+}
+
+/** A fence is an attempt AND the writer presenting it; neither half stands alone. */
+function parseRunAttemptFence(value: unknown): RunAttemptFence | null {
+  if (!isRecord(value)) return null;
+  const { epoch, writer } = value;
+  if (typeof epoch !== 'number' || !Number.isSafeInteger(epoch) || epoch < 0) return null;
+  if (typeof writer !== 'string' || writer.trim() === '') return null;
+  return { epoch, writer };
+}
+
+/**
+ * The unfenced append, or a 500-shaped refusal when this Host has no unfenced
+ * path to offer.
+ *
+ * Thrown rather than answered inline because both unfenced helpers need the same
+ * answer, and an implementation WITHOUT the optional method must refuse loudly:
+ * silently falling back to the fenced method here would be the exact degradation
+ * this route exists to prevent, one layer up.
+ */
+function requireUnfencedAppend(
+  api: HostRunApiV1,
+  runId: RunId,
+  events: readonly RunEventEnvelope[],
+  authority: { readonly authorization: UnfencedRunWriteAuthorization },
+): Promise<number> {
+  const append = api.appendAgentRunEventsUnfenced?.bind(api);
+  if (append === undefined) {
+    return Promise.reject(new HostRunApiError(
+      400,
+      'unfenced_run_write_unavailable',
+      'this Host offers no unfenced run append path',
+    ));
+  }
+  return append(runId, events, authority.authorization);
+}
+
+function requireUnfencedSettle(
+  api: HostRunApiV1,
+  runId: RunId,
+  body: Record<string, unknown>,
+  authority: { readonly authorization: UnfencedRunWriteAuthorization },
+): Promise<SettleAgentRunResult> {
+  const settle = api.settleAgentRunUnfenced?.bind(api);
+  if (settle === undefined) {
+    return Promise.reject(new HostRunApiError(
+      400,
+      'unfenced_run_write_unavailable',
+      'this Host offers no unfenced run settle path',
+    ));
+  }
+  return settle(
+    runId,
+    body.terminal as RunTerminalState,
+    authority.authorization,
+    body.metrics as RunMetrics | undefined,
+  );
 }
 
 function parseAgentRunEvents(value: unknown, runId: RunId): RunEventEnvelope[] | null {

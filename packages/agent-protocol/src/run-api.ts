@@ -52,6 +52,39 @@ export interface AgentRunRecord {
   readonly eventCount?: number;
 }
 
+/**
+ * The attempt a writer presents, and who is presenting it.
+ *
+ * REQUIRED on every execution write. An executing writer always knows the
+ * attempt it was opened under, so a fence it cannot name is a fence it cannot
+ * enforce — and an `epoch?: number` parameter made "I forgot the attempt" and
+ * "I deliberately have no attempt" the same value on the wire, with the first
+ * one silently degrading into an unfenced write. A required object removes that
+ * value: the compiler refuses the omission, and a boundary that only ever sees
+ * `unknown` refuses it at runtime instead.
+ *
+ * `writer` is carried rather than assumed so a refusal can NAME the writer that
+ * lost the fence instead of reporting an anonymous attempt.
+ */
+export interface RunAttemptFence {
+  readonly epoch: number;
+  readonly writer: string;
+}
+
+/**
+ * The opt-in that authorizes a write with NO attempt at all.
+ *
+ * Deliberately unfenced maintenance — a bulk backfill, an administrative repair
+ * — is a real need, so it stays reachable, but only by asking for it by name
+ * with a reason and an author on the record. Nothing about it is reachable by
+ * omitting an argument: the fenced methods above do not take it, and these two
+ * refuse an authorization they cannot read.
+ */
+export interface UnfencedRunWriteAuthorization {
+  readonly reason: string;
+  readonly authorizedBy: string;
+}
+
 export interface AgentRunEventQuery {
   /** Exclusive sequence cursor. */
   readonly afterSeq?: number;
@@ -71,18 +104,50 @@ export interface HostRunApiV1 {
   /**
    * Append the Runtime-minted envelopes of one attempt, verbatim.
    *
-   * `epoch` is the attempt presenting the write. It is optional because a
-   * caller with no fence to present (a bulk backfill, an administrative repair)
-   * still has a legitimate append to make; when it IS presented, storage must
-   * refuse a write from an attempt that has been superseded.
+   * `fence` is REQUIRED and cannot be `undefined`: see {@link RunAttemptFence}.
+   * When the presented attempt has been superseded, storage must refuse the
+   * write rather than accept it.
    */
-  appendAgentRunEvents(runId: RunId, events: readonly RunEventEnvelope[], epoch?: number): Promise<number>;
+  appendAgentRunEvents(
+    runId: RunId,
+    events: readonly RunEventEnvelope[],
+    fence: RunAttemptFence,
+  ): Promise<number>;
+  /**
+   * Land a terminal under the attempt that decided it.
+   *
+   * `fence` comes BEFORE the optional `metrics` on purpose: an optional
+   * parameter may not precede a required one, and a fence that can be left out
+   * of the argument list is exactly the fence this contract exists to make
+   * unavoidable.
+   */
   settleAgentRun(
     runId: RunId,
     terminal: RunTerminalState,
+    /** The attempt landing this terminal; REQUIRED, see {@link RunAttemptFence}. */
+    fence: RunAttemptFence,
     metrics?: RunMetrics,
-    /** The attempt landing this terminal; see {@link HostRunApiV1.appendAgentRunEvents}. */
-    epoch?: number,
+  ): Promise<SettleAgentRunResult>;
+  /**
+   * Deliberate unfenced maintenance append, reachable ONLY by naming it.
+   *
+   * Optional so an implementation that has no maintenance path to offer does not
+   * have to invent one; a caller that needs it on an implementation without it
+   * gets a loud `undefined is not a function` rather than a silent downgrade to
+   * the fenced method with a missing fence.
+   */
+  appendAgentRunEventsUnfenced?(
+    runId: RunId,
+    events: readonly RunEventEnvelope[],
+    authorization: UnfencedRunWriteAuthorization,
+  ): Promise<number>;
+  /** The unfenced settle twin of {@link HostRunApiV1.settleAgentRun}. */
+  settleAgentRunUnfenced?(
+    runId: RunId,
+    terminal: RunTerminalState,
+    /** Required by the same rule as the fenced settle: never left off a list. */
+    authorization: UnfencedRunWriteAuthorization,
+    metrics?: RunMetrics,
   ): Promise<SettleAgentRunResult>;
   readAgentRunEvents(
     runId: RunId,

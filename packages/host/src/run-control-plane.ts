@@ -5,15 +5,139 @@ import { classifySqlFailure, fencedReceipt, writeRunReceiptOnWire, type RunWrite
 import type { RunRepository } from './repository-port.js';
 
 /**
- * The attempt a caller presented, or `undefined` when it presented none.
+ * The writer this boundary records a refusal against.
  *
- * `undefined` is NOT the same as `0`. Storage fences only what a writer
- * claims: an append with no attempt is a deliberate unfenced write (a
- * backfill, an administrative repair), and silently reading a missing epoch as
- * `0` would give it the first attempt's authority instead.
+ * A refusal that cannot say who presented it cannot be acted on: the caller has
+ * to decide whether to retry with an attempt or to accept the refusal, and it
+ * cannot do either without knowing which of its writers was refused.
  */
-function readEpoch(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isInteger(value) ? value : undefined;
+const CONTROL_PLANE_WRITER = 'host/run-control-plane';
+
+/**
+ * The attempt a caller presented, or `null` when it presented none.
+ *
+ * ## `null` is a REFUSAL, not a fallback
+ *
+ * Storage fences only what a writer claims, so `undefined` here means a
+ * DELIBERATE unfenced write. That made a missing epoch and a forgotten one the
+ * same value, and the forgotten one is the dangerous half: on the path that
+ * serves production execution, a caller that simply omitted the attempt wrote
+ * straight through the fence while looking exactly like a maintenance repair.
+ *
+ * So the reading side refuses instead of defaulting. The deliberate unfenced
+ * write is still reachable — see {@link readUnfencedAuthorization} — but only by
+ * naming it with a reason and an author, which is a decision rather than an
+ * omission.
+ *
+ * `0` is not invented for a missing value either: it would hand an unfenced
+ * writer the first attempt's authority, which is precisely the thing this
+ * function exists to withhold.
+ */
+function readAttemptFence(payload: Record<string, unknown>): { readonly epoch: number } | null {
+  const epoch = payload.epoch;
+  if (typeof epoch !== 'number' || !Number.isSafeInteger(epoch) || epoch < 0) return null;
+  return { epoch };
+}
+
+/**
+ * The explicit authorization for a deliberately UNFENCED maintenance write, or
+ * `null` when the caller did not name one.
+ *
+ * Deliberately unfenced is a real need — a bulk backfill, an administrative
+ * repair of a run whose attempt history is gone — so it stays reachable. What
+ * must not stay reachable is arriving there by omission, and that is the whole
+ * difference between this and the previous `readEpoch`.
+ *
+ * `reason` and `authorizedBy` are both required and both non-empty, so an
+ * unfenced write is attributable to a decision and a person rather than to a
+ * missing field. A reason is not optional metadata here: it is the only thing
+ * that makes an unfenced write reviewable after the fact.
+ */
+function readUnfencedAuthorization(
+  payload: Record<string, unknown>,
+): { readonly reason: string; readonly authorizedBy: string } | null {
+  const candidate = payload.unfenced;
+  if (typeof candidate !== 'object' || candidate === null) return null;
+  const { reason, authorizedBy } = candidate as { reason?: unknown; authorizedBy?: unknown };
+  if (typeof reason !== 'string' || reason.trim() === '') return null;
+  if (typeof authorizedBy !== 'string' || authorizedBy.trim() === '') return null;
+  return { reason: reason.trim(), authorizedBy: authorizedBy.trim() };
+}
+
+/** The refusal a writer gets when it presents no readable attempt. */
+function missingFenceReceipt(action: string, runId: string, payload: Record<string, unknown>): RunWriteReceipt {
+  const presented = payload.epoch === undefined ? 'no epoch' : `epoch ${String(payload.epoch)}`;
+  return {
+    state: 'invalid',
+    runId,
+    reason:
+      `${action} from ${CONTROL_PLANE_WRITER} requires an attempt epoch (${presented}): a run write with no ` +
+      'attempt is refused rather than made unfenced. A deliberate unfenced write must name an ' +
+      '`unfenced` authorization with a reason and an author.',
+  };
+}
+
+/** The refusal a writer gets when it names an authorization it cannot read. */
+function missingAuthorizationReceipt(action: string, runId: string): RunWriteReceipt {
+  return {
+    state: 'invalid',
+    runId,
+    reason:
+      `${action}-unfenced from ${CONTROL_PLANE_WRITER} requires an \`unfenced\` authorization carrying ` +
+      'a non-empty reason and authorizedBy: an unfenced run write is a decision on the record, not a default.',
+  };
+}
+
+/**
+ * Whether the caller is ASKING for an unfenced write, as opposed to having
+ * forgotten the fence.
+ *
+ * `payload.unfenced` being present at all is the signal: a caller that never
+ * heard of the field cannot have set it by accident. What the object contains is
+ * validated separately, so a malformed authorization gets its OWN refusal
+ * (`missingAuthorizationReceipt`) rather than being reported as a forgotten
+ * fence — the two are different mistakes with different fixes, and telling a
+ * caller to add a field it already added is worse than silence.
+ */
+function namesUnfencedWrite(payload: Record<string, unknown>): boolean {
+  return typeof payload.unfenced === 'object' && payload.unfenced !== null;
+}
+
+/**
+ * A deliberately unfenced write is allowed through, and is always said out loud.
+ *
+ * Returning `true` means "this caller is authorized to write unfenced, having
+ * said so with a reason and an author"; `false` means it is refused and the
+ * caller should read the receipt for which of the two mistakes it made.
+ */
+function unfencedWriteAuthorized(
+  action: string,
+  runId: string,
+  payload: Record<string, unknown>,
+  logger: RunControlPlaneLogger,
+): boolean {
+  if (!namesUnfencedWrite(payload)) {
+    logger.warn(`${action} refused — the presenting writer named no attempt and no unfenced authorization`, {
+      runId,
+      writer: CONTROL_PLANE_WRITER,
+    });
+    return false;
+  }
+  const authorization = readUnfencedAuthorization(payload);
+  if (authorization === null) {
+    logger.warn(`${action} refused — an unfenced authorization was named but could not be read`, {
+      runId,
+      writer: CONTROL_PLANE_WRITER,
+    });
+    return false;
+  }
+  logger.warn(`${action} is landing UNFENCED — the caller named an explicit authorization`, {
+    runId,
+    writer: CONTROL_PLANE_WRITER,
+    reason: authorization.reason,
+    authorizedBy: authorization.authorizedBy,
+  });
+  return true;
 }
 
 export interface RunControlPlaneLogger {
@@ -109,11 +233,24 @@ export function createRunControlPlaneActions(options: {
     if (!Array.isArray(envelopes)) {
       return onWire({ state: 'invalid', runId, reason: 'run:append requires an events array' });
     }
+    // Fenced or deliberately unfenced — never accidentally either. See
+    // `readAttemptFence`: a missing attempt used to reach the repository as
+    // `undefined`, which storage reads as a deliberate unfenced write, so a
+    // caller that forgot the epoch wrote through the fence on the very path
+    // that serves production execution.
+    const fence = readAttemptFence(payload);
+    if (fence === null && !unfencedWriteAuthorized('run:append', runId, payload, logger)) {
+      return onWire(
+        namesUnfencedWrite(payload)
+          ? missingAuthorizationReceipt('run:append', runId)
+          : missingFenceReceipt('run:append', runId, payload),
+      );
+    }
 
     try {
       const written = runs.appendEvents(
         envelopes as RunEventEnvelope[],
-        readEpoch(payload.epoch),
+        fence === null ? undefined : fence.epoch,
       );
       return onWire({ state: 'applied', runId }, { written });
     } catch (error) {
@@ -151,9 +288,20 @@ export function createRunControlPlaneActions(options: {
     if (runId === '' || terminal == null || typeof terminal.status !== 'string') {
       return onWire({ state: 'invalid', runId, reason: 'run:complete requires runId and terminal' });
     }
+    // Same rule as `run:append`, and it matters MORE here: the terminal CAS is
+    // the write the attempt fence exists for, so an unfenced settle is how a
+    // superseded attempt lands a terminal it had no right to land.
+    const fence = readAttemptFence(payload);
+    if (fence === null && !unfencedWriteAuthorized('run:complete', runId, payload, logger)) {
+      return onWire(
+        namesUnfencedWrite(payload)
+          ? missingAuthorizationReceipt('run:complete', runId)
+          : missingFenceReceipt('run:complete', runId, payload),
+      );
+    }
 
     try {
-      const outcome = runs.settleRun(runId, terminal, payload.metrics, readEpoch(payload.epoch));
+      const outcome = runs.settleRun(runId, terminal, payload.metrics, fence === null ? undefined : fence.epoch);
       switch (outcome.state) {
         case 'applied':
           logger.info('Run settled', { runId, status: terminal.status });

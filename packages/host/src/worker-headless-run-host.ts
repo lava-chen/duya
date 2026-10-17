@@ -117,6 +117,7 @@ import type {
   RunTerminalState,
   RuntimeCapabilities,
   HostRunApiV1,
+  RunAttemptFence,
 } from '@duya/agent-protocol';
 import { manifestFingerprint, runInputRevision } from '@duya/agent-protocol';
 import { convertSSEToAgentMessage } from './worker-frame-codec.js';
@@ -138,6 +139,23 @@ const PROTOCOL = { major: 1, minor: 0 } as const;
 
 /** The schema revision the probe reports. Bumped only with the protocol. */
 const SCHEMA_REVISION = 1;
+
+/**
+ * The writer named on every durable fence this host presents.
+ *
+ * A refusal has to be able to say WHO lost the fence, so the name is a constant
+ * rather than something reconstructed at the far end of the boundary.
+ */
+const HEADLESS_RUN_HOST_WRITER = 'host/worker-headless-run-host';
+
+/**
+ * The attempt a run row is created at.
+ *
+ * A run row starts at epoch 0, and this host mints its own run id, creates the
+ * row itself and refuses anything but a fresh `created` row — so its attempt is
+ * the initial one by construction, not by assumption.
+ */
+const INITIAL_ATTEMPT_EPOCH = 0;
 
 /**
  * The assistant message a turn's FINALIZED frame reads.
@@ -690,6 +708,15 @@ export class HeadlessRunHost {
   readonly #runApi: HostRunApiV1 | undefined;
   readonly #mintRunId: () => RunId;
   readonly #now: () => number;
+  /**
+   * runId -> the attempt this host opened the run under.
+   *
+   * Captured at open, for the same reason `RunOrchestrator.#attemptByRun` is:
+   * a value re-read at write time is the CURRENT attempt, not THIS writer's, so
+   * re-reading hands a superseded attempt the newer attempt's authority and lets
+   * the write through the fence that exists to stop exactly that.
+   */
+  readonly #attemptByRun = new Map<RunId, number>();
 
   constructor(options: HeadlessRunHostOptions) {
     this.#session = options.createSession();
@@ -784,27 +811,58 @@ export class HeadlessRunHost {
 
   #persistence(runId: RunId): RunPersistence {
     const runApi = this.#runApi;
+    // Resolved per write, not once here: a host without a `runApi` is in-memory
+    // only and must not have to know an attempt to hold events it never writes
+    // anywhere durable.
+    const fenceFor = (): RunAttemptFence => ({ epoch: this.#attemptFor(runId), writer: HEADLESS_RUN_HOST_WRITER });
     return {
       append: async (envelopes) => {
         if (runApi && envelopes.length > 0) {
-          await runApi.appendAgentRunEvents(envelopes[0]!.runId, envelopes);
+          await runApi.appendAgentRunEvents(envelopes[0]!.runId, envelopes, fenceFor());
         }
         await this.#store.append(envelopes);
       },
       complete: async (terminal, metrics) => {
         if (!runApi) return;
-        const outcome = await runApi.settleAgentRun(runId, terminal, metrics);
-        // No `fenced` case here, and that is the type system being right rather
-        // than the check being forgotten: this path calls `settleAgentRun`
-        // without an epoch, so the store cannot return one. The moment an epoch
-        // IS threaded through, this branch has to grow a case in the same commit
-        // that makes it reachable — a superseded attempt must never be reported
-        // as a settled run, and nothing downstream would correct that.
+        const outcome = await runApi.settleAgentRun(runId, terminal, fenceFor(), metrics);
+        this.#attemptByRun.delete(runId);
+        // `fenced` is handled here because the fence is now presented for
+        // real: this attempt lost the right to decide the terminal, and nothing
+        // downstream would correct a run reported as settled on that basis.
+        if (outcome.state === 'fenced') {
+          throw new Error(
+            `Host refused to settle run ${runId}: attempt ${outcome.presented} was fenced` +
+            (outcome.current === null ? '' : `; attempt ${outcome.current} holds it`),
+          );
+        }
         if (outcome.state === 'conflict' || outcome.state === 'absent') {
           throw new Error(`Host refused to settle run ${runId}: ${outcome.state}`);
         }
       },
     };
+  }
+
+  /**
+   * The attempt this host opened `runId` under, or a loud refusal.
+   *
+   * `0` is a fact here rather than a placeholder, and the reasoning is the one
+   * the run layer already uses: a run row is created at epoch 0, and this host
+   * CREATES its own row and refuses anything but `created` (see `start`), so the
+   * only attempt that can ever write under this id is the initial one. The fence
+   * is therefore real — the moment the row moves to another attempt, every write
+   * from here is refused — and not the unfenced write this path used to be.
+   *
+   * A run the controller opened without `start` has no attempt this host can
+   * name, so it throws rather than presenting `0` on a guess.
+   */
+  #attemptFor(runId: RunId): number {
+    const attempt = this.#attemptByRun.get(runId);
+    if (attempt === undefined) {
+      throw new Error(
+        `${HEADLESS_RUN_HOST_WRITER} has no attempt for run ${runId}: refusing to write it unfenced`,
+      );
+    }
+    return attempt;
   }
 
   /** What this host can honestly do. Asked, never restated. */
@@ -864,6 +922,9 @@ export class HeadlessRunHost {
       if (created.runId !== runId || created.state !== 'created') {
         throw new Error(`Host did not create a fresh Agent Run record (${created.state})`);
       }
+      // Recorded BEFORE the controller starts, because `persistenceFor` is asked
+      // for during that start and reads the attempt from here.
+      this.#attemptByRun.set(runId, INITIAL_ATTEMPT_EPOCH);
     }
     const handle: RunHandle = await this.#controller.start(manifest, {
       prompt: intent.prompt,

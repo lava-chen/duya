@@ -107,6 +107,18 @@ const NOOP_RUN_ORCHESTRATOR_LOGGER: RunOrchestratorLogger = Object.freeze({
   error: () => undefined,
 });
 
+/**
+ * The one sentence a session with no live run is refused with.
+ *
+ * Two sites refuse it — the synchronous guard in `queueNativeRunEvent` and the
+ * awaited body of `#appendNativeRunEvent` — because a late frame can be caught
+ * by either depending on how far the session got before it ended. Two different
+ * sentences for one incident would make a log search for this refusal depend on
+ * which side of the boundary the frame landed.
+ */
+const noLiveRunReason = (sessionId: string): string =>
+  `session ${sessionId} has no live run; the envelope is dropped rather than appended to an ended or unopened run`;
+
 /** The `dbRequest` seam the router already threads through `RouterDeps`. */
 type DbRequest = ControlPlaneRequest;
 
@@ -171,6 +183,41 @@ export interface NativeRunEventWriter {
 export type NativeEventAcceptance =
   | { readonly accepted: true; readonly runId: string; readonly seq: number }
   | { readonly accepted: false; readonly runId: string | null; readonly reason: string };
+
+/**
+ * One run's attempt, with the two states the run layer can actually observe.
+ *
+ * ## What the run layer knows, and when
+ *
+ * It knows ONE thing about a run's attempt: the number it opened the run under,
+ * read from {@link NativeRunEventWriter.currentEpoch} at `openRun`. It does not
+ * watch that number afterwards, because the store owns it and this process may
+ * not even be able to read it (the Desktop writer hardcodes `0`, since the fork
+ * holds no connection). So the run layer learns a run has been ADVANCED only at
+ * the moment a write presents the stale attempt and comes back `fenced` — that
+ * refusal is the observation, and it is the earliest one available.
+ *
+ * `superseded` records that observation, so a caller can distinguish "this run's
+ * attempt is the one it was opened under" from "this run's attempt moved on and
+ * the move was observed at a write". `null` means no move was ever seen, which
+ * is not the same claim as "no move happened".
+ */
+export interface RunAttemptBinding {
+  /** The attempt this Host opened the run under. Never re-read from the store. */
+  readonly epoch: number;
+  /**
+   * Set when the run's bindings were released. A retired attempt may no longer
+   * establish itself for a new turn; it survives retirement only so the terminal
+   * CAS it has a right to make can still present it.
+   */
+  retired: boolean;
+  /**
+   * The attempt the store reported as holding write authority, once one has been
+   * observed on a `fenced` refusal. `null` until then, and `null` still after a
+   * refusal that could not report the current holder.
+   */
+  superseded: number | null;
+}
 
 export interface RunOrchestratorOptions {
   readonly dbRequest: DbRequest;
@@ -324,15 +371,30 @@ export class RunOrchestrator {
    */
   readonly #terminalAwaitingCommit = new Map<string, RunEventEnvelope>();
   /**
-   * runId -> the attempt this Host opened the run under.
+   * runId -> the attempt this Host opened the run under, and its lifecycle.
    *
-   * Captured ONCE, at open, and never re-read at settle time. The terminal CAS
-   * is fenced by the attempt that owns the run, so re-reading the CURRENT epoch
-   * when settling would let a superseded attempt present the newer attempt's
-   * number and land a terminal it had no right to land — the fence would pass
-   * exactly the case it exists for.
+   * Captured ONCE, at open, and never re-read from the store at settle time.
+   * The terminal CAS is fenced by the attempt that owns the run, so re-reading
+   * the CURRENT epoch when settling would let a superseded attempt present the
+   * newer attempt's number and land a terminal it had no right to land — the
+   * fence would pass exactly the case it exists for.
+   *
+   * It is a LIFECYCLE and not a number, because "captured once" alone left two
+   * holes this closes:
+   *
+   *  - **Retired, not deleted, at release.** `#release` runs BEFORE
+   *    `controller.settle` inside `#finish` — deliberately, because it deletes
+   *    the session binding every queued append checks, and the drain has already
+   *    completed by then. A binding deleted at that instant is gone before
+   *    `persistenceFor.complete` reads it, so the terminal CAS was sent with NO
+   *    `epoch` at all and the fence never applied to it. Retiring keeps the
+   *    number readable for the terminal write that still has a right to present
+   *    it, and the entry is dropped once the run has actually ended.
+   *  - **Dropped on a refused start.** `#forgetRun` released the model binding
+   *    but not the attempt, so every start that threw left one permanent entry
+   *    keyed by a run id that will never run.
    */
-  readonly #attemptByRun = new Map<string, number>();
+  readonly #attemptByRun = new Map<string, RunAttemptBinding>();
   /**
    * sessionId -> the tail of the serialized native-append chain for it.
    *
@@ -500,13 +562,20 @@ export class RunOrchestrator {
                 committed: committed.status,
               });
             }
+            // Fenced by the attempt this run was OPENED under — see
+            // `#attemptByRun` for why that value is captured and not re-read.
+            //
+            // It is presented even though the binding is already RETIRED by the
+            // time this runs: retirement happens at `#release`, which is the
+            // step before `controller.settle`, and dropping the number with the
+            // binding is what previously sent this terminal CAS with no `epoch`
+            // at all — an unfenced write on the one call the fence exists for.
+            const presented = this.#attemptByRun.get(runId);
             const reply = await request('run:complete', runId, {
               runId,
               terminal: committed,
               metrics,
-              // Fenced by the attempt this run was OPENED under — see
-              // `#attemptByRun` for why that value is captured and not re-read.
-              ...(this.#attemptByRun.has(runId) ? { epoch: this.#attemptByRun.get(runId) } : {}),
+              ...(presented === undefined ? {} : { epoch: presented.epoch }),
             });
             // `reconciled` resolves. It is NOT an acknowledgement failure: it
             // means another writer committed the SAME terminal, so the run IS
@@ -595,6 +664,24 @@ export class RunOrchestrator {
     // after the try block would never reach. One entry per refused run, for the
     // life of the agent-server process, is the leak this map could have become.
     this.#pendingSessionByRun.set(runId, sessionId);
+    // The attempt is established HERE, before `run:create`, and not at the
+    // dispatch below. Two paths out of this method close a run row that may
+    // ALREADY exist — `#closeAbandonedRun` on a `run:create` whose REPLY was
+    // unreadable, and the `run:complete` it sends — and both are fenced writes
+    // now: a payload with no readable attempt is refused rather than made
+    // unfenced, so an attempt captured only after a successful create leaves
+    // exactly the abandoned run with no way to record its terminal.
+    //
+    // Reading it before the row exists is not a guess. `currentEpoch` answers
+    // `null` for no row, which maps to `0`, and a row this Host creates is
+    // created at attempt 0 — so the value is the same one the post-create read
+    // would have produced, and it is now available to every exit.
+    const attemptEpoch = this.#attemptEpochFor(runId);
+    this.#beginAttempt(runId, attemptEpoch);
+    // Whether this run survived to dispatch. Read in the `finally` so the
+    // attempt is released on EVERY non-dispatch exit, not only on the ones that
+    // happen to remember to.
+    let dispatched = false;
     try {
       if (typeof intent.model === 'string' && intent.model !== '') {
         this.#modelByRun.set(runId, {
@@ -667,7 +754,7 @@ export class RunOrchestrator {
         // answers `absent` when it matched nothing, which is the truth for a
         // create that failed before its write. Both answers are logged, and
         // neither invents a run.
-        await this.#closeAbandonedRun(runId, sessionId, 'run_not_created', reason);
+        await this.#closeAbandonedRun(runId, sessionId, 'run_not_created', reason, attemptEpoch);
         return { accepted: false, runId: null, stage: 'run_not_created', reason };
       }
 
@@ -688,8 +775,8 @@ export class RunOrchestrator {
       // worker's very next frame was then teed into it. Binding first is also
       // what R2.1 requires now, since the dispatch happens inside this call and
       // its first frame can arrive before `openRun` returns.
-      const attemptEpoch = this.#attemptEpochFor(runId);
-      this.#attemptByRun.set(runId, attemptEpoch);
+      // The attempt is already established above, before `run:create` — the same
+      // value, read once.
       const handle = await this.#controller.start(built.manifest, {
         prompt: turnPrompt,
         sessionId,
@@ -712,6 +799,7 @@ export class RunOrchestrator {
         revision: inputHash,
       });
       this.#retain(runId, handle);
+      dispatched = true;
       return { accepted: true, runId };
     } catch (error) {
       this.#forgetRun(runId);
@@ -749,12 +837,17 @@ export class RunOrchestrator {
         sessionId,
         error: reason,
       });
-      await this.#closeAbandonedRun(runId, sessionId, 'unknown', reason);
+      await this.#closeAbandonedRun(runId, sessionId, 'unknown', reason, attemptEpoch);
       return { accepted: false, runId, stage: 'unknown', reason };
     } finally {
       // The one cleanup that has to cover every exit, including the early
       // `run_not_created` return above. See the note at the top of this method.
       this.#pendingSessionByRun.delete(runId);
+      // A run that never dispatched owns nothing worth keeping — not a model
+      // binding, and not an attempt. Read from the `dispatched` flag rather than
+      // from the return value because two of the three failure exits call
+      // `#closeAbandonedRun` FIRST, which needs the attempt still present.
+      if (!dispatched) this.#forgetRun(runId);
     }
   }
 
@@ -796,8 +889,24 @@ export class RunOrchestrator {
    * loudest thing available for a row that stays stranded — and R1.2's
    * deliberate "only `complete` itself failing leaves the row at `running`"
    * remains true, now with a log line naming it instead of silence.
+   *
+   * ## The attempt is a PARAMETER, not a lookup
+   *
+   * `attemptEpoch` is passed in rather than read from `#attemptByRun` so that
+   * "this close has no attempt to present" is unrepresentable instead of a
+   * silent `undefined`. It matters because `run:complete` is a FENCED write: a
+   * payload with no readable attempt is refused as invalid, and the refusal
+   * leaves the row exactly as stranded as not having called this at all. The
+   * value is the one `openRun` established before `run:create`, which is the
+   * same attempt the row was created under.
    */
-  async #closeAbandonedRun(runId: string, sessionId: string, stage: RunStartStage, reason: string): Promise<void> {
+  async #closeAbandonedRun(
+    runId: string,
+    sessionId: string,
+    stage: RunStartStage,
+    reason: string,
+    attemptEpoch: number,
+  ): Promise<void> {
     const error = {
       code: abandonedRunErrorCode(stage),
       message: `the run was created and then abandoned (${stage}): ${reason}`,
@@ -811,7 +920,7 @@ export class RunOrchestrator {
     // confirmed, THEN complete — so a crash between the two still leaves the
     // decided terminal in the log for a reconciler to find. One order, both
     // adapters, no divergence.
-    const appended = await this.#appendTerminalEvent(runId, sessionId, error);
+    const appended = await this.#appendTerminalEvent(runId, sessionId, error, attemptEpoch);
     if (!appended) {
       // The log could not take the event. The row is still settled below, so
       // this is a degraded transcript rather than a stranded run, and saying so
@@ -823,7 +932,7 @@ export class RunOrchestrator {
     }
     const terminal: RunTerminalState = { status: 'failed', error };
     try {
-      const reply = await this.#options.dbRequest('run:complete', { runId, terminal });
+      const reply = await this.#options.dbRequest('run:complete', { runId, terminal, epoch: attemptEpoch });
       const receipt = readRunReceipt(reply, 'run:complete', runId);
       if (isDurableWrite(receipt)) {
         this.#logger.warn('a run row that was created and never executed has been given a terminal', {
@@ -869,11 +978,16 @@ export class RunOrchestrator {
    * `run.started` landed before the failure already has events. Guessing would
    * collide with an existing `(runId, seq)` and the store would refuse the whole
    * batch as a content conflict.
+   *
+   * The attempt rides along because `run:append` is fenced exactly like
+   * `run:complete`: this is a write under the run's attempt, and a payload with
+   * no attempt is refused rather than made unfenced.
    */
   async #appendTerminalEvent(
     runId: string,
     sessionId: string,
     error: ProtocolErrorInfo,
+    attemptEpoch: number,
   ): Promise<boolean> {
     try {
       const existing = await this.#options.dbRequest('run:events', { runId, afterSeq: 0 });
@@ -881,6 +995,7 @@ export class RunOrchestrator {
       const highest = rows.reduce((max, row) => (typeof row.seq === 'number' && row.seq > max ? row.seq : max), 0);
       const reply = await this.#options.dbRequest('run:append', {
         runId,
+        epoch: attemptEpoch,
         events: [{ runId, sessionId, seq: highest + 1, payload: { type: 'run.failed', error } }],
       });
       return isDurableWrite(readRunReceipt(reply, 'run:append', runId));
@@ -916,23 +1031,47 @@ export class RunOrchestrator {
    * A READ. It waits on the runtime's completion promise and never settles the
    * run, so a host can ask for the receipt after the fact without becoming
    * another thing that can end a turn.
+   *
+   * ## The `RunResult` is REWRITTEN to the durable terminal
+   *
+   * `handle.result()` is the Runtime's own in-memory verdict, and it is exactly
+   * the value that survives when this Host has downgraded the terminal because
+   * the ledger lost events. Handing that to a consumer is how a Desktop client —
+   * which reads its run result from `GET /runs/result`, not from the `onEvent`
+   * arm — was told `completed` about a run the table calls `failed`.
+   *
+   * Only the terminal is replaced. The rest of the result is the runtime's: it
+   * is a receipt about the execution, and rewriting fields nobody disputed would
+   * be inventing data. When the terminal differs the disagreement is logged, so
+   * the substitution is never invisible.
    */
   async resultFor(sessionId: string): Promise<RunResult | null> {
     const runId = this.#bySession.get(sessionId) ?? this.#endedBySession.get(sessionId);
     if (runId === undefined) return null;
     const handle = this.#handleByRun.get(runId);
     if (handle === undefined) return null;
-    return handle.result();
+    const result = await handle.result();
+    const durable = this.#durableTerminalFor(runId, terminalOfResult(result));
+    if (durable === null || durable.status === result.status) return result;
+    // Only the status and its error move. Every other field of the result is the
+    // runtime's own receipt about the execution, and rewriting a field nobody
+    // disputed would be inventing data.
+    const error = durable.status === 'failed' ? durable.error : undefined;
+    return { ...result, status: durable.status, ...(error === undefined ? {} : { error }) };
   }
 
   /**
    * Drop every trace of a run that is not going to happen.
    *
    * Called on both failure paths out of `openRun`. Leaving the model binding
-   * behind would make it one more entry in a map with no delete.
+   * behind would make it one more entry in a map with no delete — and leaving
+   * the ATTEMPT binding behind was exactly that: the attempt is established two
+   * lines before `controller.start`, so every start that threw used to leave one
+   * permanent entry keyed by a run id that will never execute anything.
    */
   #forgetRun(runId: string): void {
     this.#modelByRun.delete(runId);
+    this.#attemptByRun.delete(runId);
   }
 
   /**
@@ -1045,12 +1184,55 @@ export class RunOrchestrator {
     const runId = this.#bySession.get(sessionId) ?? this.#endedBySession.get(sessionId);
     if (runId === undefined) return null;
     const decided = this.#controller.activeRun(runId)?.terminal ?? this.#controller.receiptFor(runId);
-    const committed = this.#committedTerminalByRun.get(runId);
-    if (committed === undefined) return decided;
-    // While the run is still live the Runtime's verdict is the live truth; the
-    // override exists only for a run that has already settled.
-    if (this.#controller.activeRun(runId) !== undefined) return decided;
-    return committed;
+    return this.#durableTerminalFor(runId, decided);
+  }
+
+  /**
+   * The DURABLE terminal for a run, in place of the Runtime's in-memory verdict.
+   *
+   * ## Why this exists at all
+   *
+   * The Runtime's verdict and the ledger's terminal are two different facts, and
+   * they disagree in exactly the cases a consumer must not be lied to about:
+   *
+   *  - this Host downgraded the terminal because the ledger lost native events
+   *    (`persistenceFor.complete`): the row is `failed`, the Runtime still
+   *    believes it succeeded;
+   *  - the Runtime degraded its own verdict because the durable barrier refused
+   *    (`persistence_failed`), which `settle` resolved to — that one agrees with
+   *    the row already, and passes through untouched.
+   *
+   * Every route that can TELL a consumer gets this: the settle return value, the
+   * `RunResult` read, and the cancel receipt. A consumer told `completed` over a
+   * row that says `failed` is the failure this whole layer exists to prevent, and
+   * one unguarded read route is enough to reproduce it.
+   *
+   * While the run is still LIVE the Runtime's verdict is the live truth — the
+   * ledger has not decided anything yet — so the override applies only to a run
+   * that has ended.
+   *
+   * A disagreement is LOGGED, not silently resolved: the row and the event
+   * stream naming different outcomes is a property an operator has to be able to
+   * find, and a quiet substitution would hide it.
+   */
+  #durableTerminalFor(
+    runId: string,
+    runtimeTerminal: RunTerminalState | null,
+  ): RunTerminalState | null {
+    const durable = this.#committedTerminalByRun.get(runId);
+    if (durable === undefined) return runtimeTerminal;
+    if (this.#controller.activeRun(runId) !== undefined) return runtimeTerminal;
+    if (runtimeTerminal !== null && durable.status !== runtimeTerminal.status) {
+      this.#logger.warn(
+        'the terminal reported to this consumer is the durable one, not the verdict the runtime reached',
+        {
+          runId,
+          durable: durable.status,
+          runtime: runtimeTerminal.status,
+        },
+      );
+    }
+    return durable;
   }
 
   /**
@@ -1084,7 +1266,7 @@ export class RunOrchestrator {
     // this run's settle.
     let drainedTail: Promise<unknown> | null = null;
     const settling: Promise<void> = this.#drainNativeQueue(sessionId)
-      .then((tail: Promise<unknown> | null) => {
+      .then(({ tail }: { tail: Promise<unknown> | null }) => {
         drainedTail = tail;
         // `#release` deletes the session->run binding every append checks, and
         // `#attemptByRun` with it. It is therefore reached only AFTER this
@@ -1129,9 +1311,18 @@ export class RunOrchestrator {
       })
       .finally(() => {
         if (this.#finishing.get(sessionId) === settling) this.#finishing.delete(sessionId);
+        // The run has ENDED here, so the attempt's lifecycle is over and the
+        // binding is dropped — a retired attempt must not survive its own run.
+        this.#forgetAttempt(runId);
         // Released with the run it was drained for, so a session cannot
-        // accumulate one entry per turn. Identity-guarded: a queue a NEWER run
-        // for this session has since chained onto is not this run's to delete.
+        // accumulate one entry per turn.
+        //
+        // Unconditional on the run's OWN tail, and no longer skipped when the
+        // session had nothing queued: after `#release` the session has no live
+        // run, so `queueNativeRunEvent` refuses rather than re-creating an entry
+        // (see the guard there). The identity check is kept for the one case
+        // that can still legitimately replace the tail — a session whose next
+        // run opened while this one was settling.
         if (drainedTail !== null && this.#nativeQueues.get(sessionId) === drainedTail) {
           this.#nativeQueues.delete(sessionId);
         }
@@ -1205,9 +1396,12 @@ export class RunOrchestrator {
       this.#endedBySession.set(sessionId, runId);
     }
     this.#modelByRun.delete(runId);
-    // The attempt is released with the rest of the run's bindings, so a later
-    // turn for the same session cannot present THIS run's attempt.
-    this.#attemptByRun.delete(runId);
+    // RETIRED, not deleted. This runs before `controller.settle`, so a delete
+    // here would take the number away from the terminal CAS that is about to be
+    // written and fence it with nothing. The binding is dropped by
+    // `#finish`'s own `finally`, once the run has actually ended — which is
+    // also what makes it impossible for a retired attempt to present again.
+    this.#retireAttempt(runId);
   }
 
   /**
@@ -1249,7 +1443,15 @@ export class RunOrchestrator {
       // already closed, or interrupt timeout). Release the Host's ownership and
       // close its live stream before acknowledging cancellation in every case.
       if (outcome.requested) await this.#finish(sessionId, runId, { cancelRequested: true });
-      return outcome;
+      // Read back through the DURABLE gate, and for BOTH cases. Rewriting only
+      // the `requested` arm left the more common one unguarded: a cancel
+      // against a run that had ALREADY settled — which is what the delete route
+      // does whenever the user stops a turn that has finished — returns the
+      // runtime's receipt untouched, and that receipt goes straight into the
+      // route's JSON body.
+      const durable = this.#durableTerminalFor(runId, outcome.terminal);
+      if (durable === null || durable === outcome.terminal) return outcome;
+      return { ...outcome, terminal: durable };
     } catch (error) {
       this.#logger.error(
         'Run cancel failed',
@@ -1262,7 +1464,13 @@ export class RunOrchestrator {
       // after the settle, because a receipt that does not exist yet is not a
       // terminal to report.
       await this.#finish(sessionId, runId, { cancelRequested: true });
-      const terminal = this.#controller.receiptFor(runId);
+      // Read once, after the settle, because a receipt that does not exist yet
+      // is not a terminal to report — and read back through the DURABLE gate for
+      // the same reason `resultFor` is: this receipt is put straight into the
+      // cancel route's JSON response, so a runtime verdict that the ledger does
+      // not back would be handed to the client as a cancellation that the row
+      // contradicts.
+      const terminal = this.#durableTerminalFor(runId, this.#controller.receiptFor(runId));
       // `null` rather than a fabricated `completed`: if the settle also failed,
       // this host has no terminal to give and must say so instead of inventing
       // a success for a run it could not close.
@@ -1343,6 +1551,35 @@ export class RunOrchestrator {
       this.#logger.warn(`dropped a native run:event — ${read.refusal}`, { sessionId, frame: 'run:event' });
       return;
     }
+    // ## A late frame must not resurrect an entry nothing will ever clean
+    //
+    // The chain below is UNCONDITIONALLY written to `#nativeQueues`, and the
+    // only cleanup is `#finish`'s `finally`, guarded on the tail it drained. A
+    // frame enqueued after that cleanup therefore re-created an entry that
+    // nothing deletes until this session's NEXT turn settles — and if the session
+    // never runs again, it is never deleted. The map had no bound.
+    //
+    // The ledger was never at risk (the append below refuses a session with no
+    // live run), so this was not a data-loss bug. It was an unbounded map keyed
+    // by session id, growing for every conversation that ever ended mid-write,
+    // which is a leak that only shows up as a slow memory climb with nothing to
+    // attribute it to.
+    //
+    // Refusing HERE is what closes it: the session has no live run, so this
+    // frame can never be appended, and declining to create the entry is what
+    // keeps "a session that never runs again retains nothing" true. The check is
+    // safe to make synchronously — the session is bound by `onDispatchReady`
+    // BEFORE the dispatch command is sent, so no frame the worker can produce
+    // can arrive before its run is bound.
+    if (!this.#bySession.has(sessionId)) {
+      this.#logger.warn(`dropped a native run:event — ${noLiveRunReason(sessionId)}`, {
+        sessionId,
+        runId: read.envelope.runId,
+        seq: read.envelope.seq,
+        epoch: read.epoch,
+      });
+      return;
+    }
     const previous = this.#nativeQueues.get(sessionId);
     const queued: Promise<unknown> = (previous ?? Promise.resolve())
       .then(() => this.#appendNativeRunEvent(sessionId, read.envelope, read.epoch))
@@ -1386,22 +1623,28 @@ export class RunOrchestrator {
    * threw would release the run with events still unattempted, which is the
    * failure this whole path exists to prevent.
    *
-   * @returns The tail it finished on, so the caller can clean up that exact
-   *   entry rather than whatever the map holds by the time it lands.
+   * @returns The tail it finished on, WRAPPED. It cannot be returned bare: this
+   *   function is `async`, and an async function unwraps a thenable it returns,
+   *   so a bare `return tail` would arrive at the caller as `tail`'s RESOLVED
+   *   VALUE. `drainedTail` was therefore always `undefined`, the identity check
+   *   in `#finish` never matched, and the queue entry was never deleted — for
+   *   every session that ever ran a native event, not only for the late frames
+   *   this guard was written for. A plain object is not a thenable, so it
+   *   survives the boundary intact.
    */
-  async #drainNativeQueue(sessionId: string): Promise<Promise<unknown> | null> {
+  async #drainNativeQueue(sessionId: string): Promise<{ tail: Promise<unknown> | null }> {
     for (;;) {
       const tail = this.#nativeQueues.get(sessionId);
-      if (tail === undefined) return null;
+      if (tail === undefined) return { tail: null };
       try {
         await tail;
       } catch (error) {
         this.#logger.error('draining the native run event queue failed', error instanceof Error ? error : new Error(String(error)), {
           sessionId,
         });
-        return tail;
+        return { tail };
       }
-      if (this.#nativeQueues.get(sessionId) === tail) return tail;
+      if (this.#nativeQueues.get(sessionId) === tail) return { tail };
     }
   }
 
@@ -1428,7 +1671,7 @@ export class RunOrchestrator {
       return {
         accepted: false,
         runId: null,
-        reason: `session ${sessionId} has no live run; the envelope is dropped rather than appended to an ended or unopened run`,
+        reason: noLiveRunReason(sessionId),
       };
     }
     if (envelope.runId !== liveRunId) {
@@ -1477,12 +1720,27 @@ export class RunOrchestrator {
         // all the counter is for.
         this.#nativeEventsByRun.set(liveRunId, (this.#nativeEventsByRun.get(liveRunId) ?? 0) + 1);
         return { accepted: true, runId: liveRunId, seq: envelope.seq };
-      case 'fenced':
+      case 'fenced': {
+        // ## This refusal is the run layer's ONLY view of an advanced attempt
+        //
+        // The store owns the attempt number and this process may not be able to
+        // read it (the Desktop writer hardcodes `0`), so nothing here polls and
+        // nothing here can notice a fence that has not fired yet. What CAN be
+        // done — and is done here — is name the attempt the run was OPENED
+        // under next to the one the store says holds authority, so the log says
+        // "moved from N to M" instead of restating the presented number.
+        const binding = this.#attemptByRun.get(liveRunId);
+        const established = binding?.epoch;
+        if (binding !== undefined) binding.superseded = outcome.current;
         this.#logger.warn('dropped a native run event from a superseded attempt', {
           runId: liveRunId,
           seq: envelope.seq,
+          established,
           presented: outcome.presented,
           current: outcome.current ?? 'not reported',
+          // Stated so a reader does not mistake this for a late discovery: the
+          // run layer learned it here, at write time, and not before.
+          learnedAt: 'the fenced write, not before',
         });
         return {
           accepted: false,
@@ -1492,6 +1750,7 @@ export class RunOrchestrator {
               ? `attempt ${outcome.presented} may no longer write`
               : `attempt ${outcome.presented} is superseded by ${outcome.current}`,
         };
+      }
       case 'conflict':
         this.#recordNativeLoss(liveRunId, envelope.seq);
         this.#logger.error('refused a native run event whose (run, seq) already holds different content', new Error(`run ${liveRunId} already records a different event at seq ${outcome.seq}`), {
@@ -1557,6 +1816,69 @@ export class RunOrchestrator {
   }
 
   /**
+   * Establish the attempt a run is opened under — the START of the lifecycle.
+   *
+   * Idempotent by refusal rather than by overwrite: a binding that already
+   * exists for this run id means the attempt was established once, and letting a
+   * second call reset `superseded` would erase the only observation the run layer
+   * ever gets that a fence fired.
+   */
+  #beginAttempt(runId: string, epoch: number): void {
+    const existing = this.#attemptByRun.get(runId);
+    if (existing !== undefined) {
+      this.#logger.warn('the attempt for this run was already established — keeping the first one', {
+        runId,
+        established: existing.epoch,
+        refused: epoch,
+      });
+      return;
+    }
+    this.#attemptByRun.set(runId, { epoch, retired: false, superseded: null });
+  }
+
+  /**
+   * Retire the attempt, which is NOT the same as forgetting it.
+   *
+   * Retired means "this run's bindings are gone, so no further frame can land
+   * under it" — and the number survives so the terminal CAS, which happens after
+   * `#release`, can still be fenced by the attempt it belongs to. Forgetting it
+   * is the END of the lifecycle and happens once the run has actually ended.
+   */
+  #retireAttempt(runId: string): void {
+    const binding = this.#attemptByRun.get(runId);
+    if (binding === undefined || binding.retired) return;
+    binding.retired = true;
+  }
+
+  /** The END of the lifecycle: the run is over and the attempt may not present. */
+  #forgetAttempt(runId: string): void {
+    this.#attemptByRun.delete(runId);
+  }
+
+  /**
+   * The attempt this Host is presenting for a run, for diagnostics and for the
+   * `onEvent` consumer. `null` for a run that has no live attempt — a run that
+   * never opened, one that never dispatched, and one that has ended are all
+   * `null`, because all three may no longer present.
+   */
+  attemptFor(runId: string): RunAttemptBinding | null {
+    const binding = this.#attemptByRun.get(runId);
+    if (binding === undefined || binding.retired) return null;
+    return { ...binding };
+  }
+
+  /**
+   * Attempt bindings still held.
+   *
+   * A leak detector, in the same shape as {@link retainedModelBindings}: one
+   * entry is opened per run and retired when it ends, so a number that only goes
+   * up is a number that is wrong.
+   */
+  get retainedAttempts(): number {
+    return this.#attemptByRun.size;
+  }
+
+  /**
    * Say out loud that a run's ledger has no Runtime identity in it.
    *
    * Without this, a worker that never emits `run:event` produces a run that
@@ -1616,6 +1938,20 @@ export class RunOrchestrator {
   /** Sessions with a live run. Should return to zero as sessions finish. */
   get retainedSessionRuns(): number {
     return this.#bySession.size;
+  }
+
+  /**
+   * Native-append queues still held, one per session with frames in flight.
+   *
+   * A leak detector, and the one that matters most here: an entry is created by
+   * a synchronous tee that cannot be awaited, so anything that creates one
+   * without a guaranteed remover is unbounded by construction. This number must
+   * return to zero when a session settles, and — because a late frame is refused
+   * rather than queued when the session has no live run — it must not come back
+   * for a session that never runs again.
+   */
+  get retainedNativeQueues(): number {
+    return this.#nativeQueues.size;
   }
 
   /**
@@ -1987,6 +2323,31 @@ export class RunLedgerIncompleteError extends Error {
   static describe(runId: string, lostEvents: number): string {
     return `run ${runId} lost ${lostEvents} durable run ${lostEvents === 1 ? 'event' : 'events'}`;
   }
+}
+
+/**
+ * A `RunResult` read as the terminal it names.
+ *
+ * `RunResult` and `RunTerminalState` are the same four statuses in two shapes —
+ * one carries an `error` and no `stopReason`, the other the reverse — so the
+ * comparison that decides whether a consumer is told the durable verdict has to
+ * start by putting the result on the terminal's side of that line. A `failed`
+ * with no error still gets a real `ProtocolErrorInfo`, because the failure code
+ * is the point of the arm and an absent one would be a fabricated terminal.
+ */
+function terminalOfResult(result: RunResult): RunTerminalState {
+  if (result.status === 'failed') {
+    const reported = result.error;
+    if (reported !== undefined) return { status: 'failed', error: reported };
+    return {
+      status: 'failed',
+      error: {
+        code: 'internal',
+        message: `run ${result.runId} reported a failure with no error code`,
+      },
+    };
+  }
+  return { status: result.status, ...(result.stopReason === undefined ? {} : { stopReason: result.stopReason }) };
 }
 
 /**
