@@ -19,6 +19,11 @@ import { renderTranscript, renderOneBlock, escapeTags } from '../transcript-view
 
 const OPTIONS = { expanded: false, showToolResults: true, toolResultLines: 5 };
 
+/** Drop blessed tags so layout assertions read the text a user sees. */
+function strip(text: string): string {
+  return text.replace(/\{[^}]*\}/gu, '');
+}
+
 function render(): string {
   const model = new TranscriptModel();
   model.addUser('你是谁');
@@ -188,25 +193,27 @@ describe('tool groups', () => {
     return model;
   }
 
-  it('renders the first call with its name and the rest as └ continuations', () => {
-    const rendered = renderTranscript(groupModel(), OPTIONS);
-    expect(rendered).toContain('read_file(a.ts)');
-    expect(rendered).toContain('└ b.ts');
+  it('summarises a batch under one header and lists every call as an equal child', () => {
+    const rendered = strip(renderTranscript(groupModel(), OPTIONS));
+    // One header carries the verb and the count; every call below it is an
+    // equal child row showing only its target.
+    expect(rendered).toContain('Read 3 files');
+    expect(rendered).toContain('├ a.ts');
     expect(rendered).toContain('└ c.ts');
-    // The group name appears exactly once.
-    expect(rendered.match(/read_file\(/gu)).toHaveLength(1);
+    // The tool name appears nowhere per call: repeating it was what made a
+    // batch read as unrelated rows.
+    expect(rendered).not.toContain('read_file(');
   });
 
-  it('keeps continuation line counts equal to the ungrouped form', () => {
-    // `revealSelectedBlock` locates the selection by summing per-block heights
-    // from `renderOneBlock`; a grouped render that produced fewer lines would
-    // scroll the selection off. `renderTranscript` joins blocks with '\n' and
-    // no separator rows, so the expected total is just the sum.
+  it('adds exactly one header row per batch to the ungrouped line count', () => {
+    // `revealSelectedBlock` sums per-block heights from the same plan, so the
+    // remaining invariant is that a batch costs exactly one extra row — its
+    // summary — and no separator rows.
     const grouped = renderTranscript(groupModel(), OPTIONS).split('\n').length;
     const ungrouped = groupModel().blocks
       .map((block) => renderOneBlock(block, OPTIONS).split('\n').length)
       .reduce((total, lines) => total + lines, 0);
-    expect(grouped).toBe(ungrouped);
+    expect(grouped).toBe(ungrouped + 1);
   });
 
   it('breaks the group when a different family intervenes', () => {
@@ -225,18 +232,19 @@ describe('tool groups', () => {
     expect(rendered).toContain('terminal(');
   });
 
-  it('groups the exploration family across different tool names', () => {
+  it('summarises a mixed exploration pass as operations, not as one of its tools', () => {
     const model = new TranscriptModel();
     model.apply({ type: 'tool_use', data: { id: 'e1', name: 'glob', input: { pattern: '**/*.ts' } } });
     model.apply({ type: 'tool_result', data: { id: 'e1', result: 'ok' } });
     model.apply({ type: 'tool_use', data: { id: 'e2', name: 'search_files', input: { pattern: 'x' } } });
     model.apply({ type: 'tool_result', data: { id: 'e2', result: 'ok' } });
 
-    const rendered = renderTranscript(model, OPTIONS);
-    // One head for the family, and the continuation names its own tool because
-    // the head's name no longer describes it.
-    expect(rendered.match(/glob\(/gu)).toHaveLength(1);
-    expect(rendered).toContain('└ search_files x');
+    const rendered = strip(renderTranscript(model, OPTIONS));
+    // `Listed 2 paths` would hide the search and `Searched 2 patterns` would
+    // hide the listing, so a mixed pass is `Explored`.
+    expect(rendered).toContain('Explored 2 operations');
+    expect(rendered).toContain('├ **/*.ts');
+    expect(rendered).toContain('└ x');
   });
 });
 

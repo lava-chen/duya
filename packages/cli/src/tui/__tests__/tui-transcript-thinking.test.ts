@@ -95,13 +95,15 @@ describe('thinking preview window', () => {
 
   it('shows a short block without an omission row', () => {
     const rendered = strip(renderTranscript(thinkingModel('one thought', 800))).split('\n');
-    expect(rendered).toEqual(['• Thought for 0.8s [+]', '    one thought']);
+    // Thinking is an execution node, so it carries the trail connector: the
+    // `└` says "nothing follows this in the turn".
+    expect(rendered).toEqual(['└ • Thought for 0.8s [+]', '    one thought']);
   });
 
   it('shows nothing below a head with no text yet', () => {
     // Whitespace-only content is the shape a block takes between "the model
     // started thinking" and "the first visible token arrived".
-    expect(strip(renderTranscript(thinkingModel(' ')))).toBe('• Thinking… [+]');
+    expect(strip(renderTranscript(thinkingModel(' ')))).toBe('└ • Thinking… [+]');
   });
 });
 

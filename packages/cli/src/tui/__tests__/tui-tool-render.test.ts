@@ -169,38 +169,88 @@ describe('rendered transcript', () => {
     expect(rendered).not.toContain('"matches"');
   });
 
-  it('groups consecutive exploration calls under one head', () => {
+  it('summarises a batch under one header instead of a head and continuations', () => {
     const model = new TranscriptModel();
     model.apply({ type: 'tool_use', data: { id: 't1', name: 'glob', input: { pattern: '**/*.ts' } } });
     model.apply({ type: 'tool_result', data: { id: 't1', result: 'ok' } });
     model.apply({ type: 'tool_use', data: { id: 't2', name: 'read', input: { path: 'src/a.ts' } } });
     model.apply({ type: 'tool_result', data: { id: 't2', result: 'ok' } });
     const rendered = strip(renderTranscript(model, DEFAULT_RENDER_OPTIONS));
-    // One head for the family, and the continuation names its own tool because
-    // the head's name no longer describes it.
-    expect(rendered.match(/glob\(/gu)).toHaveLength(1);
-    expect(rendered).toContain('└ read src/a.ts');
+    // The header carries the verb and the count; every call below it is an
+    // equal child row showing its target, never a parent/child pair. A glob
+    // plus a read is a MIXED pass, so the verb is `Explored`, not `Read`.
+    expect(rendered).toContain('Explored 2 operations');
+    expect(rendered).toContain('├ **/*.ts');
+    expect(rendered).toContain('└ src/a.ts');
   });
 
-  it('names a same-family continuation when the tool differs', () => {
+  it('names a shell batch by what it did rather than by one of its tools', () => {
     const model = new TranscriptModel();
     model.apply({ type: 'tool_use', data: { id: 's1', name: 'bash', input: { command: 'a' } } });
     model.apply({ type: 'tool_result', data: { id: 's1', result: 'ok' } });
     model.apply({ type: 'tool_use', data: { id: 's2', name: 'powershell', input: { command: 'b' } } });
     model.apply({ type: 'tool_result', data: { id: 's2', result: 'ok' } });
     const rendered = strip(renderTranscript(model, DEFAULT_RENDER_OPTIONS));
-    expect(rendered).toContain('└ powershell b');
+    expect(rendered).toContain('Ran 2 commands');
+    expect(rendered).toContain('├ a');
+    expect(rendered).toContain('└ b');
   });
 
-  it('renders a shell result with a command evidence line and the output', () => {
+  it('separates stanzas with one blank row and keeps a batch tight', () => {
+    const model = new TranscriptModel();
+    model.apply({ type: 'tool_use', data: { id: 's1', name: 'bash', input: { command: 'a' } } });
+    model.apply({ type: 'tool_result', data: { id: 's1', result: 'ok' } });
+    model.apply({ type: 'tool_use', data: { id: 's2', name: 'bash', input: { command: 'b' } } });
+    model.apply({ type: 'tool_result', data: { id: 's2', result: 'ok' } });
+    model.addNotice('done');
+    const lines = strip(renderTranscript(model, DEFAULT_RENDER_OPTIONS)).split('\n');
+    // No blank inside the batch, exactly one before the notice.
+    expect(lines.filter((line) => line === '')).toHaveLength(1);
+    expect(lines.indexOf('')).toBe(lines.length - 2);
+  });
+
+  it('puts every body two columns right of its own row text', () => {
+    const model = new TranscriptModel();
+    model.upsertTool('a', 'read', { path: 'a.ts' });
+    model.completeTool('a', 'A', false);
+    model.upsertTool('b', 'read', { path: 'b.ts' });
+    model.completeTool('b', 'B', false);
+    const lines = strip(renderTranscript(model, DEFAULT_RENDER_OPTIONS)).split('\n');
+    // The grid, pinned: connector at 0, its marker at 2, row text at 4, and a
+    // BODY always two columns right of the text it belongs to (col 6 here,
+    // col 4 under a standalone call). This is the rule the old mix of head and
+    // `└` continuation rows broke — a continuation's body sat flush with its
+    // own label while a head's body was indented.
+    expect(lines).toEqual([
+      '└ ✔ Read 2 files',
+      '  ├ a.ts [-]',
+      '  │   A',
+      '  └ b.ts [-]',
+      '      B',
+    ]);
+  });
+
+  it('does not repeat a command the label already shows in full', () => {
     const model = new TranscriptModel();
     model.apply({ type: 'tool_use', data: { id: 'b1', name: 'bash', input: { command: 'npm test' } } });
     model.apply({ type: 'tool_result', data: { id: 'b1', result: 'pass 1\npass 2\npass 3\nfail 4' } });
     const rendered = strip(renderTranscript(model, DEFAULT_RENDER_OPTIONS));
-    // `$ ` prefixes the evidence line; the head carries the bare bash(...)
-    // label, so the command text appears exactly once in this form.
-    expect(rendered.match(/\$ npm test/gu)).toHaveLength(1);
+    // `bash(npm test)` IS the evidence line when nothing was clipped; printing
+    // `$ npm test` again under it was the same string twice.
+    expect(rendered).toContain('bash(npm test)');
+    expect(rendered).not.toContain('$ npm test');
     expect(rendered).toContain('fail 4');
+  });
+
+  it('repeats a clipped command on its own evidence line', () => {
+    const command = 'find . -name "*.ts" -not -path "*/node_modules/*" | xargs wc -l | sort -n';
+    const model = new TranscriptModel();
+    model.apply({ type: 'tool_use', data: { id: 'b4', name: 'bash', input: { command } } });
+    model.apply({ type: 'tool_result', data: { id: 'b4', result: 'ok' } });
+    const rendered = strip(renderTranscript(model, DEFAULT_RENDER_OPTIONS));
+    // The row preview is clipped to one line, so the body is the only place
+    // the whole command survives.
+    expect(rendered).toContain(`$ ${command}`);
   });
 
   it('labels a shell result with an output-line count when details are hidden', () => {

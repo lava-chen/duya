@@ -2649,8 +2649,9 @@ exportHistory(): string[] {
     const options = this.renderOptions();
     // Heights come from the same cache the paint path reads, so the window
     // arithmetic here can never disagree with what is on screen. Blocks are
-    // joined with '\n' and no separator rows, so a block's start line is the
-    // plain sum of the heights before it — no per-block +1.
+    // joined with '\n', and a stanza gap is the FIRST line of the block below
+    // it, so a block's start line is the plain sum of the heights before it —
+    // no per-block +1.
     const heights = this.transcript.heights(this.model, options);
     let selectedStart = 0;
     for (let index = 0; index < this.selectedBlockIndex; index += 1) {

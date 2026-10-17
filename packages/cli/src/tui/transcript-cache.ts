@@ -15,33 +15,40 @@
  *
  * One cache entry per block id. The key is the block's kind-specific content
  * FNV-1a-hashed, plus every render-option facet that can change this block's
- * output: group-continuation flag, expansion state, tool-result visibility,
- * the result-line cap, and the theme. Hashing (not re-rendering) is the
- * cheap part — roughly two orders of magnitude — so correctness does not
- * depend on any mutation site remembering to bump a revision counter.
+ * output: its TRAIL SLOT (the plan — connector, batch header, rail, whether a
+ * separator row precedes it), expansion state, tool-result visibility, the
+ * result-line cap, and the theme. Hashing (not re-rendering) is the cheap part
+ * — roughly two orders of magnitude — so correctness does not depend on any
+ * mutation site remembering to bump a revision counter.
+ *
+ * The trail slot is in the key because the plan depends on NEIGHBOURS: the
+ * last execution unit of a turn draws `└` and the moment another tool arrives
+ * it must become `├`, with its children's rail flipping from spaces to `│`.
+ * A key that ignored neighbours would leave those rows stale.
  *
  * The selection prefix (`❯ `) is deliberately NOT cached: it is applied at
  * flatten time, so moving the history selection re-renders nothing.
  *
  * ## The line-count invariant
  *
- * `renderTranscript` joins blocks with `'\n'` and no separator rows, so the
- * flattened line count is exactly `Σ blockHeights` (the join's newline
- * terminates the previous block's last line; it does not open a new one).
- * `heights()` and `totalLines()` exist so scroll math can run off that sum
- * without building the flattened string, and `revealSelectedBlock` depends on
- * them agreeing with `paintTranscript`'s window to the line.
+ * `renderTranscript` joins blocks with `'\n'` and no standalone separator
+ * rows: a stanza gap is the FIRST line of the block below it, so the flattened
+ * line count stays exactly `Σ blockHeights` (the join's newline terminates the
+ * previous block's last line; it does not open a new one). `heights()` and
+ * `totalLines()` exist so scroll math can run off that sum without building
+ * the flattened string, and `revealSelectedBlock` depends on them agreeing
+ * with `paintTranscript`'s window to the line.
  */
 
 import type { Block, TranscriptModel } from './blocks.js';
 import {
   blockExpanded,
-  renderBlock,
-  renderToolContinuation,
+  planKey,
+  planTranscript,
+  renderPlannedBlock,
   stylesOf,
   type RenderOptions,
 } from './transcript-view.js';
-import { toolGroupKey } from './tool-render.js';
 
 /** FNV-1a, 32-bit. Not cryptographic — it guards against accidental drift, not adversaries. */
 function fnv1a(text: string): string {
@@ -95,21 +102,18 @@ export class TranscriptRenderer {
     const themeKey = options.theme === undefined ? 'dark' : fnv1a(JSON.stringify(options.theme));
     const result: string[][] = [];
     const seen = new Set<string>();
-    // Only a tool block directly after a tool block of the SAME FAMILY joins a
-    // group; any other block resets it. Mirrors `renderTranscript` exactly.
-    let pendingGroupKey: string | null = null;
-    let pendingGroupName: string | null = null;
+    // The trail depends on NEIGHBOURS — a connector flips `├` → `└` when a
+    // later block arrives, and a batch header counts its run — so the plan is
+    // part of every key. `planTranscript` is the same function the uncached
+    // renderer uses, which is what keeps the two paths byte-identical.
+    const plans = planTranscript(model.blocks);
 
-    for (const block of model.blocks) {
-      const groupKey = block.kind === 'tool' ? toolGroupKey(block.name) : null;
-      const continuation = block.kind === 'tool' && groupKey !== null && pendingGroupKey === groupKey;
-      // The continuation flag distinguishes the SAME-name ('c') and
-      // CROSS-name ('f') heads: they render different text from identical
-      // block content, so they cannot share a cache entry.
-      const sameName = continuation && pendingGroupName === block.name;
+    model.blocks.forEach((block, index) => {
+      const plan = plans[index];
+      if (plan === undefined) return;
       const key = [
         block.kind,
-        continuation ? (sameName ? 'c' : 'f') : '-',
+        planKey(plan),
         blockExpanded(block.id, options) ? 'e' : '-',
         options.showToolResults ? 'r' : '-',
         String(options.toolResultLines),
@@ -124,17 +128,12 @@ export class TranscriptRenderer {
         lines = hit.lines;
         this.stats.hits += 1;
       } else {
-        const rendered = continuation
-          ? renderToolContinuation(block, options, styles, pendingGroupName ?? undefined)
-          : renderBlock(block, options, styles);
-        lines = rendered.split('\n');
+        lines = renderPlannedBlock(block, plan, options, styles);
         this.cache.set(block.id, { key, lines });
         this.stats.misses += 1;
       }
       result.push(lines);
-      pendingGroupKey = groupKey;
-      pendingGroupName = block.kind === 'tool' ? block.name : null;
-    }
+    });
 
     this.prune(seen);
     return result;
@@ -163,8 +162,12 @@ export class TranscriptRenderer {
       const blockLines = blocks[index];
       if (blockLines === undefined) continue;
       if (block.id === options.selectedBlockId) {
-        const [first, ...rest] = blockLines;
-        if (first !== undefined) lines.push(`${styles.accent('❯')} ${first}`, ...rest);
+        // Same rule as `renderTranscript`: the caret rides the first non-empty
+        // row, because a stanza gap belongs to this block and comes first.
+        const target = blockLines.findIndex((line) => line !== '');
+        const at = target === -1 ? 0 : target;
+        const caret = `${styles.accent('❯')} ${blockLines[at]}`;
+        lines.push(...blockLines.slice(0, at), caret, ...blockLines.slice(at + 1));
       } else {
         lines.push(...blockLines);
       }

@@ -24,21 +24,41 @@
  * palette is the dark one, whose tags are byte-identical to the literals this
  * file used before theming — the markup tests pin them either way.
  *
- * ## Tool groups
+ * ## The trail
  *
- * Consecutive tool calls in the same FAMILY render as a GROUP: the first call
- * carries the name, the rest become `└ <preview>` continuations. The family is
- * `toolGroupKey(name)` — read/glob/grep share one exploration family, bash and
- * powershell one shell family, everything else is its own family — so a glob
- * followed by a read is one search pass rather than two heads.
+ * Execution — tool calls and thinking — hangs under the message that started
+ * it, drawn as the tree minimax-code draws:
  *
- * A continuation that is a DIFFERENT tool from its head carries the name
- * (`└ grep pattern: x`) because the head's name no longer describes it.
+ *     ● Let me look at the schema.
+ *     (continuation lines indent under the anchor)
  *
- * Only the head marker changes — never the line count — because
- * `TUIApp.revealSelectedBlock` locates the selection by summing
- * `renderOneBlock` heights, and a group that renders one line shorter than the
- * sum would scroll the selection off by that many lines.
+ *     ├ ✔ Explored 3 operations
+ *     │  ├ src/a.ts
+ *     │  │   line1
+ *     │  └ src/b.ts
+ *     └ ✔ bash(ls -la)
+ *         a
+ *
+ * Four rules make that hold together:
+ *
+ *  1. A UNIT is a maximal run of tool calls in one family; a run of TWO OR
+ *     MORE gets one header row that summarises it (`Explored 3 operations`)
+ *     plus one child row per call. The header is what makes a batch read as a
+ *     batch — without it the first call looks like a parent and the rest like
+ *     odd sub-calls, which is exactly how it looked before.
+ *  2. The connector at column 0 (`├`/`└`) says whether another execution unit
+ *     follows. Its marker sits at column 2, so every node's text starts there.
+ *  3. A body is ALWAYS two columns right of its own row's text: node bodies at
+ *     column 4, group children at column 4 and their bodies at column 6.
+ *  4. One blank row separates units that are not connected. "Connected" is
+ *     execution followed by execution — a tool after a tool, or after
+ *     thinking. Anything else (a paragraph, a notice) starts a new stanza.
+ *
+ * Only the markers change the text, never the line count of a block: the block
+ * model is a flat list, `renderTranscript` joins blocks with `'\n'`, and
+ * `TUIApp.revealSelectedBlock` locates the selection by summing per-block
+ * heights. A separator row therefore belongs to the block BELOW it, so the sum
+ * stays honest and no per-block `+1` appears anywhere.
  */
 
 import type { Block, TranscriptModel } from './blocks.js';
@@ -304,9 +324,30 @@ function renderTable(
  * see `stream-commit.ts` for why an unfinished code fence is deliberately shown.
  */
 function renderAssistant(text: string, finalized: boolean, styles: Styles): string {
-  if (finalized) return renderAssistantMarkdown(text, styles);
-  const commit = splitStreamCommit(text);
-  return renderAssistantMarkdown(commit.safe, styles);
+  const markdown = finalized
+    ? renderAssistantMarkdown(text, styles)
+    : renderAssistantMarkdown(splitStreamCommit(text).safe, styles);
+  return anchorAssistant(markdown, styles);
+}
+
+/**
+ * The assistant anchor.
+ *
+ * `●` at column 0 is what the execution connectors below point AT: without it
+ * a `├` at column 0 hangs from nothing. Every other line indents to the anchor's
+ * text column so wrapped prose keeps one left edge.
+ */
+const ASSISTANT_ANCHOR = '●';
+
+function anchorAssistant(markdown: string, styles: Styles): string {
+  const lines = markdown.split('\n');
+  const anchored = lines.map((line, index) => {
+    if (index === 0) return `${styles.bold(ASSISTANT_ANCHOR)} ${line}`;
+    // A blank line stays blank: trailing spaces are noise in a copied
+    // transcript and blessed would paint them either way.
+    return line === '' ? line : `  ${line}`;
+  });
+  return anchored.join('\n');
 }
 
 /** Render Markdown structure while keeping code and plain text safe for Blessed. */
@@ -414,7 +455,7 @@ function renderAssistantMarkdown(text: string, styles: Styles): string {
   return output.join('\n');
 }
 
-/** Status glyph and its style, shared by group heads and continuations. */
+/** Status glyph for one call, and for a batch's rolled-up header. */
 function toolStatusMark(
   status: 'running' | 'ok' | 'error' | 'unknown',
   styles: Styles,
@@ -442,11 +483,11 @@ function toolDisclosure(
 }
 
 /**
- * The body of a shell tool: the command on an evidence line, then its output.
+ * The body of a shell tool: maybe an evidence line, then the output.
  *
- * The command is repeated here rather than left to the head because the head's
- * preview is clipped to one line — `$ ` plus the WHOLE command is the reader's
- * only chance to see what actually ran. The output goes through
+ * The evidence line repeats the command only when the row's preview is CLIPPED
+ * to one line — that is the case where `$ ` plus the whole command is the
+ * reader's only chance to see what actually ran. The output goes through
  * `selectShellOutput`, whose choice of head/tail depends on the status.
  */
 function shellBody(
@@ -464,7 +505,10 @@ function shellBody(
   const selected = selectShellOutput(result, block.status, Math.max(1, budget));
   const lines: string[] = [];
   const command = block.command;
-  if (command !== undefined) {
+  // The evidence line exists because the ROW's preview is clipped to one line.
+  // When the preview IS the whole command there is nothing to add: repeating it
+  // printed the same string twice, once in the label and once under it.
+  if (command !== undefined && block.preview !== command) {
     lines.push(`${indent}${styles.accent('$')} ${escapeTags(command)}`);
   }
   // A shell command that PRINTS a diff (`git diff`, patch output) keeps its
@@ -513,59 +557,322 @@ function toolBody(
     : plainBody(block, result, options, styles, indent);
 }
 
-/** One tool call, as its call line plus optional result lines. */
-function renderTool(block: Extract<Block, { kind: 'tool' }>, options: RenderOptions, styles: Styles): string {
-  const label = block.preview === '' ? block.name : `${block.name}(${block.preview})`;
-  const isExpanded = blockExpanded(block.id, options);
-  const result = block.result?.trimEnd() ?? '';
-  const hasResult = result.trim() !== '';
-  const showDetails = options.collapsedBlockIds?.has(block.id) !== true &&
-    (options.showToolResults || isExpanded);
-
-  const head = `${toolStatusMark(block.status, styles)} ${escapeTags(label)}`;
-  const resultLines = hasResult ? result.trim().split(/\r?\n/u).length : 0;
-  const unit = isShellTool(block.name) ? 'output lines' : 'lines';
-  const lines = [`${head}${toolDisclosure(hasResult, resultLines, showDetails, styles, unit)}`];
-  if (block.status === 'running' || !showDetails) return lines.join('\n');
-  if (!hasResult) return lines.join('\n');
-
-  lines.push(...toolBody(block, result, options, styles, '    '));
-  return lines.join('\n');
+/**
+ * A batch summary — the row that makes three calls read as ONE thing.
+ *
+ * minimax-code's rule, ported: the verb is chosen from the SET of tools in the
+ * run (`Read 3 files`, `Searched 2 patterns`, `Explored 3 operations`), never
+ * from the first one, because "read then grep" summarised as `Read` would be a
+ * lie about half the batch.
+ */
+export interface GroupSummary {
+  readonly action: string;
+  readonly noun: string;
+  readonly size: number;
+  readonly failed: number;
+  readonly running: boolean;
 }
 
-/**
- * A tool call that continues a group started by the block above it.
- *
- * The group's head name is `headName`; when it differs from this block's name
- * the head shows the name too, because a `└ read src/a.ts` under a `grep` head
- * would claim the wrong tool. Line count matches `renderTool` exactly — see the
- * module comment. Exported for the per-block cache, which must reproduce the
- * group decision itself (the `continuation` flag is part of its cache key).
- */
-export function renderToolContinuation(
+/** Search-family names, used to pick the batch verb. */
+const SEARCH_TOOLS: ReadonlySet<string> = new Set(['grep', 'search_files']);
+
+/** Listing-family names, used to pick the batch verb. */
+const LIST_TOOLS: ReadonlySet<string> = new Set(['glob']);
+
+function normalizeToolName(name: string): string {
+  return name.trim().toLowerCase().replaceAll('-', '_');
+}
+
+type ExploreCategory = 'read' | 'search' | 'list';
+
+/** Which kind of exploration a call is, for the batch verb. */
+function exploreCategory(name: string): ExploreCategory {
+  const normalized = normalizeToolName(name);
+  if (SEARCH_TOOLS.has(normalized)) return 'search';
+  if (LIST_TOOLS.has(normalized)) return 'list';
+  return 'read';
+}
+
+/** Summarise a run of same-family calls. */
+function summarizeGroup(run: readonly Extract<Block, { kind: 'tool' }>[]): GroupSummary {
+  const running = run.some((block) => block.status === 'running');
+  const failed = run.filter((block) => block.status === 'error').length;
+  const size = run.length;
+  const family = toolGroupKey(run[0]?.name ?? '');
+  const pick = (done: string, active: string): string => (running ? active : done);
+
+  if (family === 'shell') {
+    return { action: pick('Ran', 'Running'), noun: 'commands', size, failed, running };
+  }
+  if (family === 'explore') {
+    const categories = new Set(run.map((block) => exploreCategory(block.name)));
+    // A mixed pass is `Explored`, never the verb of whichever call happened to
+    // come first: `Read 3 files` over two reads and a grep would be a lie.
+    if (categories.size > 1) {
+      return { action: pick('Explored', 'Exploring'), noun: 'operations', size, failed, running };
+    }
+    const only = [...categories][0] ?? 'read';
+    if (only === 'search') return { action: pick('Searched', 'Searching'), noun: 'patterns', size, failed, running };
+    if (only === 'list') return { action: pick('Listed', 'Listing'), noun: 'paths', size, failed, running };
+    return { action: pick('Read', 'Reading'), noun: 'files', size, failed, running };
+  }
+  // A family of one name (edit, todo, task…): the name IS the verb.
+  return { action: run[0]?.name ?? 'Called', noun: 'calls', size, failed, running };
+}
+
+/** Marker for a whole batch: any running wins, then any failure. */
+function groupStatusMark(summary: GroupSummary, styles: Styles): string {
+  if (summary.running) return styles.accent('⏺');
+  if (summary.failed === summary.size) return styles.error('✖');
+  if (summary.failed > 0) return styles.warning('✖');
+  return styles.success('✔');
+}
+
+/** The batch header row, without its connector. */
+function groupHeadRow(summary: GroupSummary, styles: Styles): string {
+  const label = `${summary.action} ${summary.size} ${summary.noun}`;
+  const failure = summary.failed === 0 ? '' : styles.error(` · ${summary.failed} failed`);
+  return `${groupStatusMark(summary, styles)} ${styles.bold(label)}${failure}`;
+}
+
+/** One tool call standing on its own: `read(src/a.ts)`. */
+function toolNodeRow(
   block: Extract<Block, { kind: 'tool' }>,
   options: RenderOptions,
   styles: Styles,
-  headName?: string,
+  connector: '├' | '└',
 ): string {
-  const isExpanded = blockExpanded(block.id, options);
+  const label = block.preview === '' ? block.name : `${block.name}(${block.preview})`;
+  return `${connector} ${toolStatusMark(block.status, styles)} ${escapeTags(label)}${toolDisclosureOf(block, options, styles)}`;
+}
+
+/** One call inside a batch: the bare target, at the batch's child column. */
+function groupChildRow(
+  block: Extract<Block, { kind: 'tool' }>,
+  plan: BlockPlan,
+  options: RenderOptions,
+  styles: Styles,
+): string {
+  const target = block.preview === '' ? block.name : block.preview;
+  return `${plan.rowPrefix}${styles.muted(escapeTags(target))}${toolDisclosureOf(block, options, styles)}`;
+}
+
+/** `[-]` / `[+ N lines]` for one tool call. */
+function toolDisclosureOf(
+  block: Extract<Block, { kind: 'tool' }>,
+  options: RenderOptions,
+  styles: Styles,
+): string {
   const result = block.result?.trimEnd() ?? '';
-  const hasResult = result.trim() !== '';
+  if (result.trim() === '') return '';
+  const isExpanded = blockExpanded(block.id, options);
   const showDetails = options.collapsedBlockIds?.has(block.id) !== true &&
     (options.showToolResults || isExpanded);
-
-  const preview = block.preview === '' ? '…' : block.preview;
-  const sameName = headName === undefined || headName === block.name;
-  const body = sameName ? `└ ${preview}` : `└ ${block.name} ${preview}`;
-  const head = `${toolStatusMark(block.status, styles)} ${styles.muted(escapeTags(body))}`;
-  const resultLines = hasResult ? result.trim().split(/\r?\n/u).length : 0;
+  const resultLines = result.trim().split(/\r?\n/u).length;
   const unit = isShellTool(block.name) ? 'output lines' : 'lines';
-  const lines = [`${head}${toolDisclosure(hasResult, resultLines, showDetails, styles, unit)}`];
-  if (block.status === 'running' || !showDetails) return lines.join('\n');
-  if (!hasResult) return lines.join('\n');
+  return toolDisclosure(true, resultLines, showDetails, styles, unit);
+}
 
-  lines.push(...toolBody(block, result, options, styles, '    '));
-  return lines.join('\n');
+/**
+ * What one block needs from its neighbours to draw itself.
+ *
+ * Computed once per render by `planTranscript` and reused by the cache, which
+ * keys on every field — a connector flips from `├` to `└` when a LATER block
+ * arrives, so a key that ignored neighbours would serve a stale row.
+ */
+export interface BlockPlan {
+  /** Draw one empty separator row above this block. */
+  readonly gap: boolean;
+  readonly role: 'plain' | 'node' | 'group-head' | 'group-child';
+  /** The `├`/`└` this block's own row starts with, or null when it draws none. */
+  readonly connector: '├' | '└' | null;
+  /** Prefix for a group child's row (four columns, ends in a space). */
+  readonly rowPrefix: string;
+  /** Prefix for this block's body rows. */
+  readonly bodyIndent: string;
+  /** Batch summary, on a group head only. */
+  readonly group: GroupSummary | null;
+}
+
+interface Unit {
+  readonly kind: 'group' | 'node' | 'plain';
+  readonly blocks: readonly Block[];
+  readonly group: GroupSummary | null;
+}
+
+/** A unit that draws a connector and takes part in the trail. */
+function isTrailUnit(unit: Unit): boolean {
+  return unit.kind !== 'plain';
+}
+
+/** Split the flat block list into the units the trail is drawn from. */
+function buildUnits(blocks: readonly Block[]): Unit[] {
+  const units: Unit[] = [];
+  let index = 0;
+  while (index < blocks.length) {
+    const block = blocks[index];
+    if (block === undefined) break;
+    if (block.kind === 'tool') {
+      const family = toolGroupKey(block.name);
+      let end = index;
+      while (end + 1 < blocks.length) {
+        const next = blocks[end + 1];
+        if (next === undefined || next.kind !== 'tool' || toolGroupKey(next.name) !== family) break;
+        end += 1;
+      }
+      const run = blocks.slice(index, end + 1) as Array<Extract<Block, { kind: 'tool' }>>;
+      units.push(run.length > 1
+        ? { kind: 'group', blocks: run, group: summarizeGroup(run) }
+        : { kind: 'node', blocks: run, group: null });
+      index = end + 1;
+      continue;
+    }
+    units.push({
+      kind: block.kind === 'thinking' ? 'node' : 'plain',
+      blocks: [block],
+      group: null,
+    });
+    index += 1;
+  }
+  return units;
+}
+
+/**
+ * Lay every block out: which units form the trail, where the connectors point,
+ * and where the blank rows go.
+ *
+ * A separator belongs to the block BELOW it, so `Σ heights` stays the flattened
+ * line count and `revealSelectedBlock` needs no per-block `+1`.
+ */
+export function planTranscript(blocks: readonly Block[]): BlockPlan[] {
+  const units = buildUnits(blocks);
+  const plans: BlockPlan[] = [];
+
+  units.forEach((unit, position) => {
+    const above = units[position - 1];
+    const below = units[position + 1];
+    // Connected = execution followed by execution. A paragraph or a notice
+    // starts a new stanza, which is where the blank row goes.
+    const connectedAbove = above !== undefined && isTrailUnit(above) && isTrailUnit(unit);
+    const connectedBelow = below !== undefined && isTrailUnit(below) && isTrailUnit(unit);
+    const gap = position > 0 && !connectedAbove;
+    const connector: '├' | '└' = connectedBelow ? '├' : '└';
+
+    if (unit.kind === 'group') {
+      unit.blocks.forEach((_, childIndex) => {
+        const last = childIndex === unit.blocks.length - 1;
+        plans.push({
+          gap: gap && childIndex === 0,
+          role: childIndex === 0 ? 'group-head' : 'group-child',
+          connector: childIndex === 0 ? connector : null,
+          // `│ ├ ` / `  └ `: the rail continues only while another unit below
+          // still belongs to the same trail.
+          rowPrefix: `${connectedBelow ? '│ ' : '  '}${last ? '└' : '├'} `,
+          // `│     ` / `      `: always sits two columns right of the target.
+          bodyIndent: `${connectedBelow ? '│ ' : '  '}${last ? '  ' : '│ '}  `,
+          group: unit.group,
+        });
+      });
+      return;
+    }
+
+    plans.push({
+      gap,
+      role: unit.kind === 'node' ? 'node' : 'plain',
+      connector: unit.kind === 'node' ? connector : null,
+      rowPrefix: '',
+      bodyIndent: connectedBelow ? '│   ' : '    ',
+      group: null,
+    });
+  });
+
+  return plans;
+}
+
+/** Everything about a plan that changes a block's rendered text. */
+export function planKey(plan: BlockPlan): string {
+  const group = plan.group === null
+    ? '-'
+    : `${plan.group.action}|${plan.group.noun}|${plan.group.size}|${plan.group.failed}|${plan.group.running ? 1 : 0}`;
+  return [
+    plan.gap ? 'g' : '-',
+    plan.role,
+    plan.connector ?? '-',
+    plan.rowPrefix,
+    plan.bodyIndent,
+    group,
+  ].join('|');
+}
+
+/** The rows under a node's own row: a tool result or a thinking preview. */
+function nodeBody(
+  block: Block,
+  plan: BlockPlan,
+  options: RenderOptions,
+  styles: Styles,
+): string[] {
+  if (block.kind === 'thinking') {
+    return thinkingBody(block, blockExpanded(block.id, options), styles, plan.bodyIndent);
+  }
+  if (block.kind !== 'tool') return [];
+
+  const result = block.result?.trimEnd() ?? '';
+  if (block.status === 'running' || result.trim() === '') return [];
+  const isExpanded = blockExpanded(block.id, options);
+  const showDetails = options.collapsedBlockIds?.has(block.id) !== true &&
+    (options.showToolResults || isExpanded);
+  if (!showDetails) return [];
+  return toolBody(block, result, options, styles, plan.bodyIndent);
+}
+
+/** Render one block with the layout the plan asks for. */
+export function renderPlannedBlock(
+  block: Block,
+  plan: BlockPlan,
+  options: RenderOptions,
+  styles: Styles,
+): string[] {
+  const rows: string[] = [];
+  if (plan.gap) rows.push('');
+
+  if (plan.role === 'plain') {
+    rows.push(...renderBlock(block, options, styles).split('\n'));
+    return rows;
+  }
+
+  if (plan.role === 'group-head') {
+    rows.push(`${plan.connector ?? '└'} ${groupHeadRow(plan.group ?? summarizeGroup([]), styles)}`);
+    // The head block IS the batch's first call, so its own target row follows
+    // the summary — the batch reads as `Read 3 files` then three targets, not
+    // as two of three targets.
+    if (block.kind === 'tool') {
+      rows.push(groupChildRow(block, plan, options, styles));
+      rows.push(...nodeBody(block, plan, options, styles));
+    }
+    return rows;
+  }
+
+  if (plan.role === 'group-child' && block.kind === 'tool') {
+    rows.push(groupChildRow(block, plan, options, styles));
+    rows.push(...nodeBody(block, plan, options, styles));
+    return rows;
+  }
+
+  // A node: a standalone tool call or a thinking block.
+  const connector = plan.connector ?? '└';
+  if (block.kind === 'thinking') {
+    const expanded = blockExpanded(block.id, options);
+    rows.push(
+      `${connector} ${styles.thinking(`• ${thinkingSummary(block)}`)}${styles.muted(expanded ? ' [−]' : ' [+]')}`,
+    );
+  } else if (block.kind === 'tool') {
+    rows.push(toolNodeRow(block, options, styles, connector));
+  } else {
+    rows.push(...renderBlock(block, options, styles).split('\n'));
+    return rows;
+  }
+  rows.push(...nodeBody(block, plan, options, styles));
+  return rows;
 }
 
 /**
@@ -587,17 +894,10 @@ export function renderToolContinuation(
  *   splitting and tagging tens of kilobytes to keep three lines is work no
  *   reader ever sees. The bound follows the same edge as the preview so the
  *   visible window never jumps when the cut lands mid-block.
+ *
+ * The head is drawn by `renderPlannedBlock`, which owns the connector: thinking
+ * is an execution node, so it carries the same `├`/`└` as a tool call.
  */
-function renderThinking(
-  block: Extract<Block, { kind: 'thinking' }>,
-  options: RenderOptions,
-  styles: Styles,
-): string {
-  const expanded = blockExpanded(block.id, options);
-  const head = `${styles.thinking(`• ${thinkingSummary(block)}`)}${styles.muted(expanded ? ' [−]' : ' [+]')}`;
-  const body = thinkingBody(block, expanded, styles);
-  return body.length === 0 ? head : `${head}\n${body.join('\n')}`;
-}
 
 /** Preview budget in whole lines, matching minimax-code's collapsed cell. */
 const THINKING_PREVIEW_LINES = 3;
@@ -635,16 +935,19 @@ function thinkingBody(
   block: Extract<Block, { kind: 'thinking' }>,
   expanded: boolean,
   styles: Styles,
+  indent = '    ',
 ): string[] {
   const source = block.text.replace(/\r\n?/gu, '\n').trimEnd();
   if (source === '') return [];
 
-  if (expanded) return thinkingRows(source.split('\n'), styles);
+  if (expanded) return thinkingRows(source.split('\n'), styles, indent);
 
   const edge = block.finalized ? 'head' : 'tail';
   const { text, truncated } = boundThinkingText(source, edge);
   const lines = text.split('\n');
-  if (lines.length <= THINKING_PREVIEW_LINES && !truncated) return thinkingRows(lines, styles);
+  if (lines.length <= THINKING_PREVIEW_LINES && !truncated) {
+    return thinkingRows(lines, styles, indent);
+  }
 
   const slice = edge === 'head'
     ? lines.slice(0, THINKING_PREVIEW_LINES)
@@ -660,8 +963,8 @@ function thinkingBody(
   const overflow = truncated
     ? `${edge === 'head' ? 'more' : 'earlier'} content`
     : `${omitted} ${edge === 'head' ? 'more' : 'earlier'} ${omitted === 1 ? 'line' : 'lines'}`;
-  const hint = styles.muted(`    … ${overflow}`);
-  const rows = thinkingRows(kept, styles);
+  const hint = styles.muted(`${indent}… ${overflow}`);
+  const rows = thinkingRows(kept, styles, indent);
   return edge === 'head' ? [...rows, hint] : [hint, ...rows];
 }
 
@@ -674,9 +977,9 @@ function trimBlankEdges(lines: readonly string[]): string[] {
   return lines.slice(start, end);
 }
 
-/** One muted row per source line, indented to the same column as tool results. */
-function thinkingRows(lines: readonly string[], styles: Styles): string[] {
-  return lines.map((line) => `    ${styles.muted(line)}`);
+/** One muted row per source line, at the node's body column. */
+function thinkingRows(lines: readonly string[], styles: Styles, indent: string): string[] {
+  return lines.map((line) => `${indent}${styles.muted(line)}`);
 }
 
 /** Cut a preview to the character bound along the edge the preview reads from. */
@@ -699,7 +1002,8 @@ export function blockExpanded(id: string, options: RenderOptions): boolean {
   return options.expanded || options.expandedBlockIds?.has(id) === true;
 }
 
-export function renderBlock(block: Block, options: RenderOptions, styles: Styles): string {
+/** Blocks that never take part in the trail. */
+function renderPlainBlock(block: Block, options: RenderOptions, styles: Styles): string {
   switch (block.kind) {
     case 'user':
       // FLAT: one style, no nesting, payload escaped. `›` lost its bold to
@@ -707,17 +1011,31 @@ export function renderBlock(block: Block, options: RenderOptions, styles: Styles
       return styles.user(`› ${block.text}`);
     case 'assistant':
       return renderAssistant(block.text, block.finalized, styles);
-    case 'thinking':
-      return renderThinking(block, options, styles);
-    case 'tool':
-      return renderTool(block, options, styles);
     case 'error':
       // Full width, never collapsed: an error the reader cannot see is an
       // error they will hit again next turn.
       return styles.error(`✗ ${block.message}`);
     case 'notice':
       return styles.muted(block.text);
+    // Node kinds are drawn by the trail; render them standalone here.
+    case 'thinking':
+    case 'tool':
+      return renderPlannedBlock(block, STANDALONE_PLAN, options, styles).join('\n');
   }
+}
+
+/** The plan for a block shown on its own (no trail above or below it). */
+const STANDALONE_PLAN: BlockPlan = {
+  gap: false,
+  role: 'node',
+  connector: '└',
+  rowPrefix: '',
+  bodyIndent: '    ',
+  group: null,
+};
+
+export function renderBlock(block: Block, options: RenderOptions, styles: Styles): string {
+  return renderPlainBlock(block, options, styles);
 }
 
 /**
@@ -731,25 +1049,22 @@ export function renderTranscript(
   options: RenderOptions = DEFAULT_RENDER_OPTIONS,
 ): string {
   const styles = stylesOf(options);
+  const plans = planTranscript(model.blocks);
   const lines: string[] = [];
-  // Only a tool block directly after a tool block of the SAME FAMILY joins a
-  // group; any other block resets it. The head's NAME is remembered too, so a
-  // cross-family-name continuation (a `read` under a `grep`) can carry it.
-  let pendingGroupKey: string | null = null;
-  let pendingGroupName: string | null = null;
 
-  for (const block of model.blocks) {
-    const key = block.kind === 'tool' ? toolGroupKey(block.name) : null;
-    const continuation = block.kind === 'tool' && key !== null && pendingGroupKey === key;
-    const rendered = continuation
-      ? renderToolContinuation(block, options, styles, pendingGroupName ?? undefined)
-      : renderBlock(block, options, styles);
-    lines.push(block.id === options.selectedBlockId
-      ? `${styles.accent('❯')} ${rendered}`
-      : rendered);
-    pendingGroupKey = key;
-    pendingGroupName = block.kind === 'tool' ? block.name : null;
-  }
+  model.blocks.forEach((block, index) => {
+    const plan = plans[index];
+    if (plan === undefined) return;
+    const rows = renderPlannedBlock(block, plan, options, styles);
+    if (block.id === options.selectedBlockId) {
+      // The selection caret goes on the block's first NON-EMPTY row: a stanza
+      // gap would otherwise swallow it and the reader would see nothing.
+      const target = rows.findIndex((row) => row !== '');
+      const at = target === -1 ? 0 : target;
+      rows[at] = `${styles.accent('❯')} ${rows[at]}`;
+    }
+    lines.push(...rows);
+  });
 
   return lines.join('\n');
 }

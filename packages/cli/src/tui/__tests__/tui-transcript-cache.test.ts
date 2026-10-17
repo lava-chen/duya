@@ -12,6 +12,11 @@ import { TranscriptRenderer } from '../transcript-cache.js';
 
 const OPTIONS = { ...DEFAULT_RENDER_OPTIONS, expanded: false, showToolResults: true, toolResultLines: 5 };
 
+/** Drop blessed tags so layout assertions read the text a user sees. */
+function strip(text: string): string {
+  return text.replace(/\{[^}]*\}/gu, '');
+}
+
 function seedModel(): TranscriptModel {
   const model = new TranscriptModel();
   model.addUser('summarize the repo');
@@ -138,12 +143,14 @@ describe('TranscriptRenderer', () => {
     expect(lines).not.toContain('boom');
   });
 
-  it('keeps group continuation rendering identical to the uncached path', () => {
+  it('keeps batch rendering identical to the uncached path', () => {
     const model = seedModel();
     const renderer = new TranscriptRenderer();
     const cached = renderer.lines(model, OPTIONS).join('\n');
-    // The second read_file renders as a └ continuation in both paths.
-    expect(cached).toContain('└ b.ts');
+    // Two reads = one header plus two child rows, and the cached path must
+    // agree with the uncached one about the header as well as the children.
+    expect(strip(cached)).toContain('Read 2 files');
+    expect(strip(cached)).toContain('└ b.ts');
     expect(cached).toBe(renderTranscript(model, OPTIONS));
   });
 });
