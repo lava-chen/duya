@@ -58,6 +58,7 @@ import {
   type ErrorCode,
   type ProtocolErrorInfo,
   type RunManifest,
+  type RunEventEnvelope,
   type RunResult,
   type RunTerminalState,
   type StopDisposition,
@@ -124,6 +125,10 @@ const RETAINED_HANDLES = 64;
 export interface RunOrchestratorOptions {
   readonly dbRequest: DbRequest;
   readonly logger?: RunOrchestratorLogger;
+  /** Receives canonical events while they are still in the active process. */
+  readonly onEvent?: (event: RunEventEnvelope) => void;
+  /** Called after the terminal has crossed the durable settlement boundary. */
+  readonly onRunSettled?: (runId: string) => void;
   /**
    * The worker's command channel. Supplied by the router, which owns
    * `WorkerManager`; the runtime reaches the worker only through this seam, so
@@ -739,6 +744,16 @@ export class RunOrchestrator {
     }
 
     const outcome = this.#controller.observeFrame(runId, frame);
+    if (outcome.envelope !== null) {
+      try {
+        this.#options.onEvent?.(outcome.envelope);
+      } catch (error) {
+        this.#logger.warn('live run event publication failed', {
+          runId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     if (outcome.envelope !== null && (outcome.envelope.payload.type === 'run.completed' || outcome.envelope.payload.type === 'run.failed')) {
       // The run has decided. Settle asynchronously: the terminal write is a
       // round trip to the main process and the router's caller is still inside
@@ -830,6 +845,14 @@ export class RunOrchestrator {
       })
       .finally(() => {
         if (this.#finishing.get(sessionId) === settling) this.#finishing.delete(sessionId);
+        try {
+          this.#options.onRunSettled?.(runId);
+        } catch (error) {
+          this.#logger.warn('live run event stream close failed', {
+            runId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       });
     this.#finishing.set(sessionId, settling);
     return settling;
@@ -874,8 +897,18 @@ export class RunOrchestrator {
     // neither a live run nor a recent one returns `null`.
     const runId = this.#bySession.get(sessionId) ?? this.#endedBySession.get(sessionId);
     if (runId === undefined) return null;
+    return this.cancelRun(sessionId, runId, reason);
+  }
+
+  /** Cancel one specific run, even if a newer run now belongs to its session. */
+  async cancelRun(sessionId: string, runId: string, reason: string): Promise<CancelOutcome | null> {
     try {
-      return await this.#controller.cancel(runId, { reason: `delete:${reason}` });
+      const outcome = await this.#controller.cancel(runId, { reason: `delete:${reason}` });
+      // The controller can settle without a worker terminal frame (hard stop,
+      // already closed, or interrupt timeout). Release the Host's ownership and
+      // close its live stream before acknowledging cancellation in every case.
+      if (outcome.requested) await this.#finish(sessionId, runId, { cancelRequested: true });
+      return outcome;
     } catch (error) {
       this.#logger.error(
         'Run cancel failed',

@@ -58,6 +58,26 @@ function makeApp(
 }
 
 describe('TUIApp permission picker', () => {
+  it('queues independent permission frames without denying the earlier tool', async () => {
+    const { app, stdin } = makeApp();
+    const decisions: Array<{ id: string; decision: Decision }> = [];
+    app.onPermissionDecision = (id, decision) => decisions.push({ id, decision });
+    app.start();
+    try {
+      await settle();
+      for (const id of ['p1', 'p2']) app.push({ type: 'permission', data: {
+        requestId: id, toolName: 'bash', toolInput: { command: 'echo fixture' },
+      } });
+      expect(decisions).toEqual([]);
+      stdin.write('y');
+      await settle();
+      expect(decisions).toEqual([{ id: 'p1', decision: 'once' }]);
+      stdin.write('n');
+      await settle();
+      expect(decisions).toEqual([{ id: 'p1', decision: 'once' }, { id: 'p2', decision: 'deny' }]);
+    } finally { app.stop(); }
+  });
+
   it('resolves a y press through the promise and the decision hook', async () => {
     const decisions: Array<{ id: string; decision: Decision }> = [];
     const { app, stdin } = makeApp();

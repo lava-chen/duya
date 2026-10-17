@@ -610,6 +610,10 @@ describe('a chat:start turn, assembled by the driver the entry calls', () => {
     // which is the frame the entry's handler turns into a turn boundary.
     const types = proof.frames.map((f) => f.type);
     expect(types).toContain('chat:done');
+    expect(types.filter((type) => type === 'chat:turn_start')).toHaveLength(proof.providerRequests.length);
+    const contentFrames = proof.frames.filter((frame) => frame.type === 'chat:text' || frame.type === 'chat:text_delta');
+    expect(contentFrames.length).toBeGreaterThan(0);
+    for (const frame of contentFrames) expect(frame).toMatchObject({ messageId: expect.any(String), index: expect.any(Number) });
     // Positively, not "no crash": the run announced its own start on the spine.
     expect(proof.outcome.announced.length).toBeGreaterThan(0);
   });

@@ -59,6 +59,26 @@ describe('projectHostEvent', () => {
 });
 
 describe('HostEventStream', () => {
+  it('keeps repeated legacy message IDs separate across model turns', () => {
+    const stream = new HostEventStream('session-1', 'run-1');
+    const transcript = new TranscriptModel();
+    let seq = 0;
+    const push = (payload: RunEvent) => {
+      const frame = stream.push(envelope(++seq, payload));
+      if (frame !== null) transcript.apply(frame);
+    };
+    for (const index of [1, 2]) {
+      push({ type: 'turn.started', turnId: `turn-${index}`, index, model: 'test', providerId: 'test', apiFormat: 'anthropic' });
+      push({ type: 'assistant.thinking_delta', messageId: 'm-run', index: 0, delta: `thought-${index}` });
+      push({ type: 'assistant.thinking_block', messageId: 'm-run', index: 0, thinking: `thought-${index}` });
+      push({ type: 'assistant.text_delta', messageId: 'm-run', index: 0, delta: `text-${index}` });
+      push({ type: 'assistant.text_block', messageId: 'm-run', index: 0, text: `text-${index}` });
+      push({ type: 'tool.call_started', toolCallId: `tool-${index}`, toolName: 'bash', arguments: {}, attempt: 1 });
+    }
+    expect(transcript.blocks.map((b) => b.kind === 'tool' ? b.callId : 'text' in b ? b.text : b.kind))
+      .toEqual(['thought-1', 'text-1', 'tool-1', 'thought-2', 'text-2', 'tool-2']);
+  });
+
   it('rejects other run or session envelopes and duplicate or older sequence numbers', () => {
     const stream = new HostEventStream('session-1', 'run-1');
     const event = { type: 'assistant.status', message: 'working' } as const;

@@ -103,7 +103,7 @@
     "postinstall": "electron-builder install-app-deps",
     "rebuild": "electron-rebuild",
     "rebuild:node": "node scripts/ensure-sqlite-abi.mjs node",
-    "build:cli-dev": "npm run build:packages -- --target @duya/cli && npm run build:cli-bundle",
+    "build:cli-dev": "npm run build:packages -- --target @duya/cli && node scripts/build-agent-bundle.mjs && npm run build:cli-bundle",
     "dev:tui": "node packages/cli/bundle/cli.cjs tui"
   },
   "devDependencies": {

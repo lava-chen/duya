@@ -37,6 +37,8 @@ import { classifyTool } from './orchestration/classify.js'
 import { ToolBatch, BATCH_STRATEGY } from './orchestration/types.js'
 import { createChildAbortController } from '../../abort/index.js'
 
+const SLOW_TOOL_STAGE_WARNING_MS = 15_000
+
 export type { CanUseToolFn, MessageUpdate } from './contracts.js';
 
 interface RenderedToolMessage {
@@ -1245,7 +1247,37 @@ export class StreamingToolExecutor<TContext extends object = object> {
     this.updateProgress(tool, { stage: 'checking_permissions', currentOperation: 'Checking permissions...', percentComplete: 10 })
 
     try {
-      const canUseResult = await this.canUseTool(tool.block.name, tool.block.input as Record<string, unknown>, tool.id)
+      let permissionAbortHandler: (() => void) | undefined
+      const permissionAbort = new Promise<never>((_, reject) => {
+        permissionAbortHandler = () => {
+          const error = new Error('AbortError')
+          error.name = 'AbortError'
+          reject(error)
+        }
+        if (toolAbortController.signal.aborted) permissionAbortHandler()
+        else toolAbortController.signal.addEventListener('abort', permissionAbortHandler, { once: true })
+      })
+      const permissionWarning = setTimeout(() => {
+        this.log('warn', '[StreamingToolExecutor] permission check is still pending', {
+          toolUseId: tool.id,
+          toolName: tool.block.name,
+          stage: 'checking_permissions',
+          elapsedMs: Date.now() - startTime,
+        })
+      }, SLOW_TOOL_STAGE_WARNING_MS)
+      if (typeof permissionWarning.unref === 'function') permissionWarning.unref()
+      let canUseResult: Awaited<ReturnType<typeof this.canUseTool>>
+      try {
+        canUseResult = await Promise.race([
+          this.canUseTool(tool.block.name, tool.block.input as Record<string, unknown>, tool.id),
+          permissionAbort,
+        ])
+      } finally {
+        clearTimeout(permissionWarning)
+        if (permissionAbortHandler) {
+          toolAbortController.signal.removeEventListener('abort', permissionAbortHandler)
+        }
+      }
       const canUse = typeof canUseResult === 'boolean' ? canUseResult : canUseResult.allowed
       const canUseBehavior = typeof canUseResult === 'boolean' ? undefined : canUseResult.behavior
       if (canUse && canUseBehavior === 'allow' && typeof canUseResult !== 'boolean' && canUseResult.userApproved === true) {
@@ -1382,6 +1414,15 @@ export class StreamingToolExecutor<TContext extends object = object> {
           reject(new Error(`Tool execution timed out after ${this.config.maxExecutionTimeMs}ms`))
         }, this.config.maxExecutionTimeMs)
       })
+      const executionWarning = setTimeout(() => {
+        this.log('warn', '[StreamingToolExecutor] tool execution is still pending', {
+          toolUseId: tool.id,
+          toolName: tool.block.name,
+          stage: 'executing_command',
+          elapsedMs: Date.now() - startTime,
+        })
+      }, SLOW_TOOL_STAGE_WARNING_MS)
+      if (typeof executionWarning.unref === 'function') executionWarning.unref()
 
       // Set up abort promise - reject when the per-tool abort controller fires.
       // This lets user interrupts cancel non-worker tools (Read, Write, Edit, etc.)
@@ -1502,6 +1543,7 @@ export class StreamingToolExecutor<TContext extends object = object> {
         // normal completion (kept alive by the unresolved timeoutPromise)
         // and the abort listener accumulates one entry per tool execution.
         if (timeoutHandle) clearTimeout(timeoutHandle)
+        clearTimeout(executionWarning)
         if (abortHandler) toolAbortController.signal.removeEventListener('abort', abortHandler)
       }
 

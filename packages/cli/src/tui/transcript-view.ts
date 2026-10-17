@@ -403,13 +403,14 @@ function renderAssistantMarkdown(text: string, styles: Styles): string {
 
 /** Status glyph and its style, shared by group heads and continuations. */
 function toolStatusMark(
-  status: 'running' | 'ok' | 'error',
+  status: 'running' | 'ok' | 'error' | 'unknown',
   styles: Styles,
 ): string {
   switch (status) {
     case 'running': return styles.accent('⏺');
     case 'ok': return styles.success('✔');
     case 'error': return styles.error('✖');
+    case 'unknown': return styles.muted('?');
   }
 }
 

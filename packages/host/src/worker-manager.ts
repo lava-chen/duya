@@ -548,9 +548,9 @@ export class WorkerManager {
       clearTimeout(forceKillTimeout);
       if (this.workers.get(sessionId) === child) {
         this.workers.delete(sessionId);
+        this.lastActivity.delete(sessionId);
         this.logger.info('Worker terminated', { sessionId });
       }
-      this.lastActivity.delete(sessionId);
       this.backgroundInFlightByWorker.delete(child);
       // Only drop the reaper exemption when no worker of this session still
       // runs background sub-agents (a draining worker's exit must not clear

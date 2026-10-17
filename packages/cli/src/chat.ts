@@ -46,6 +46,7 @@ interface RuntimeDescriptor {
 }
 
 export interface ChatCommandOptions {
+  readonly diagnosticsLogPath?: string;
   readonly origin?: string;
   readonly token?: string;
   readonly runtimeFile?: string;
@@ -409,8 +410,10 @@ export async function chatTui(
   let activeSession = initialSession;
   let activeRunId: RunId | null = null;
   let activeStream: AbortController | null = null;
+  const pendingCancellations = new Map<RunId, Promise<void>>();
   let busy = false;
   let cancellationRequested = false;
+  let unsettledRunId: RunId | null = null;
   let sessionTransition = false;
   let finished = false;
   let finish: () => void = () => {};
@@ -444,9 +447,10 @@ export async function chatTui(
   const queue = new TurnQueue({
     execute: runTurn,
     onChange: (snapshot) => {
+      const busyChanged = busy !== snapshot.busy;
       busy = snapshot.busy;
       if (!finished) {
-        tui.setBusy(busy);
+        if (busyChanged) tui.setBusy(busy);
         tui.refresh();
       }
     },
@@ -455,13 +459,34 @@ export async function chatTui(
     },
   });
 
-  function interrupt(): void {
-    cancellationRequested = true;
-    queue.pause();
-    if (activeRunId !== null) {
-      void client.cancelAgentRun(activeRunId, 'chat interrupt').catch((error: unknown) => {
+  function requestRemoteCancellation(runId: RunId, reason: string): Promise<void> {
+    const existing = pendingCancellations.get(runId);
+    if (existing !== undefined) return existing;
+    unsettledRunId = runId;
+    const pending = client.cancelAgentRun(runId, reason)
+      .then(async () => {
+        const record = await client.getAgentRun(runId);
+        if (record === null || !['completed', 'cancelled', 'failed'].includes(record.status)) {
+          throw new Error('Host has not confirmed that the previous run stopped. Retry after cancellation settles.');
+        }
+        if (unsettledRunId === runId) unsettledRunId = null;
+      })
+      .catch((error: unknown) => {
         if (!finished) tui.printError(error instanceof Error ? error.message : String(error));
       });
+    pendingCancellations.set(runId, pending);
+    return pending;
+  }
+  function interrupt(): void {
+    if (!busy) return;
+    cancellationRequested = true;
+    queue.pause();
+    tui.printNotice('Cancelling run; waiting for Host to stop the worker…');
+    // Stop waiting for the live SSE body immediately. Host cancellation is a
+    // separate request and can be slow when the worker/tool is wedged.
+    activeStream?.abort();
+    if (activeRunId !== null) {
+      void requestRemoteCancellation(activeRunId, 'chat interrupt');
     }
   }
 
@@ -477,10 +502,23 @@ export async function chatTui(
     onRecallQueued: () => queue.takeLast(),
     statusText: () => `${activeSession.providerId} 路 ${activeSession.model || options.model || 'default'} 路 ${activeSession.id.slice(0, 8)}`,
     isBusy: () => busy,
+    canAnswerPermissions: () => activeRunId !== null && !cancellationRequested,
     onSubmit: (text) => { void handleLine(text); },
     onInterrupt: interrupt,
     onExit: () => close(),
   });
+
+  tui.onPermissionDecision = (requestId, decision) => {
+    if (activeRunId === null || cancellationRequested) return;
+    void client.resolvePermissionRequest(requestId, {
+      status: decision === 'once' || decision === 'always' ? 'allow' : 'deny',
+      decision: decision === 'always' ? 'allow_for_session' : decision === 'once' ? 'allow_once' : 'deny',
+    }).then((request) => {
+      if (request === null && !finished) tui.printError('Permission request is no longer pending.');
+    }).catch((error: unknown) => {
+      if (!finished) tui.printError('Permission response failed: ' + (error instanceof Error ? error.message : String(error)));
+    });
+  };
 
   function close(): void {
     if (finished) return;
@@ -547,6 +585,15 @@ export async function chatTui(
   }
 
   async function runTurn(prompt: string): Promise<TurnOutcome> {
+    if (unsettledRunId !== null) {
+      await requestRemoteCancellation(unsettledRunId, 'chat cancellation retry');
+      if (unsettledRunId !== null) {
+        tui.printError('Previous run is still unconfirmed; no new run was started. Retry after checking the Host log.');
+        pendingCancellations.delete(unsettledRunId);
+        return 'failed';
+      }
+    }
+    if (finished) return 'cancelled';
     cancellationRequested = false;
     const runSessionId = activeSession.id;
     // Pending drafts enter the transcript only when admitted to a Host turn.
@@ -567,7 +614,8 @@ export async function chatTui(
       activeRunId = start.runId;
       // Interrupt/exit may arrive while the start request is still in flight.
       if (cancellationRequested || finished) {
-        await client.cancelAgentRun(start.runId, 'chat interrupted during startup');
+        await requestRemoteCancellation(start.runId, 'chat interrupted during startup');
+        return 'cancelled';
       }
       if (finished) return 'cancelled';
       const stream = new HostEventStream(runSessionId, start.runId);
@@ -593,9 +641,17 @@ export async function chatTui(
       }
       return 'completed';
     } catch (error) {
-      if (!finished) tui.printError(error instanceof Error ? error.message : String(error));
+      if (!finished && !cancellationRequested) {
+        tui.printError(error instanceof Error ? error.message : String(error));
+      }
       return cancellationRequested ? 'cancelled' : 'failed';
     } finally {
+      // An aborted SSE read is not a stopped worker. Retain queue admission
+      // until the Host cancellation request crosses its settlement barrier.
+      if (activeRunId !== null && cancellationRequested) {
+        await requestRemoteCancellation(activeRunId, 'chat interrupt');
+      }
+      if (activeRunId !== null) pendingCancellations.delete(activeRunId);
       activeStream = null;
       activeRunId = null;
       if (!finished) {
@@ -652,7 +708,8 @@ export async function chatTui(
   }
 
   tui.replaceTranscript(await loadSessionMessages(client, sessionId));
-  tui.printNotice(`session ${sessionId} 路 type a message, /resume to switch sessions`);
+  tui.printNotice(`session ${sessionId} · type a message, /resume to switch sessions`);
+  if (options.diagnosticsLogPath !== undefined) tui.printNotice('Logs: ' + options.diagnosticsLogPath);
   tui.start();
   await finishedPromise;
   return 0;
@@ -711,7 +768,7 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
       ? undefined
       : captureConsoleToFile(host.diagnosticsLogPath);
   try {
-    exitCode = await chatInteractive(client, sessionId, { ...options, origin: host.origin, token: host.token });
+    exitCode = await chatInteractive(client, sessionId, { ...options, origin: host.origin, token: host.token, diagnosticsLogPath: host.diagnosticsLogPath });
   } finally {
     try {
       await host.close();
