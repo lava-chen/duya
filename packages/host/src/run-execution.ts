@@ -197,7 +197,9 @@ export class HostRunExecutionController {
         }
       }
     }
-    if (!this.#workerManager.hasWorker(sessionId)) {
+    // A killed child can remain in the map until its exit event is reaped.
+    // It cannot receive another chat:start, so replace it immediately.
+    if (!this.#workerManager.hasWorker(sessionId) || this.#workerManager.getWorker(sessionId)?.killed) {
       try {
         this.#workerManager.spawnWorker(sessionId);
       } catch (error) {

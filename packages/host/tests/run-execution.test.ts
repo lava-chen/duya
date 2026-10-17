@@ -68,6 +68,11 @@ process.stdin.on('data', (chunk) => {
     }
     if (command.type !== 'chat:start') continue;
     process.send({ type: 'chat:turn_start', data: { turnCount: 1 } });
+    if (command.prompt === 'continue after stop') {
+      process.send({ type: 'chat:text', content: 'continued successfully' });
+      process.send({ type: 'chat:done', sessionId: command.sessionId });
+      continue;
+    }
     if (MODE === 'permission') {
       process.send({ type: 'chat:tool_use', id: 'tool-approval', name: 'bash', input: { command: 'echo approved' } });
       process.send({ type: 'chat:permission', sessionId: command.sessionId,
@@ -254,6 +259,12 @@ describe('Host-owned run execution', () => {
       }
       expect(record?.status).toBe('cancelled');
       expect(record?.terminal?.status).toBe('cancelled');
+      const next = await client.startAgentRun({ sessionId, prompt: 'continue after stop' });
+      expect(next).toMatchObject({ accepted: true });
+      if (next.accepted) {
+        for await (const _event of client.watchAgentRunEvents(next.runId)) { /* Drain to the real terminal. */ }
+        expect((await client.getAgentRun(next.runId))?.status).toBe('completed');
+      }
 
       await host.close();
       host = undefined;
@@ -343,6 +354,12 @@ describe('Host-owned run execution', () => {
       // not a fabricated cancelled.
       expect(record?.status).toBe('failed');
       expect((record?.terminal?.error as { details?: { escalated?: boolean } } | undefined)?.details?.escalated).toBe(true);
+      const next = await client.startAgentRun({ sessionId, prompt: 'continue after stop' });
+      expect(next).toMatchObject({ accepted: true });
+      if (next.accepted) {
+        for await (const _event of client.watchAgentRunEvents(next.runId)) { /* Drain to the real terminal. */ }
+        expect((await client.getAgentRun(next.runId))?.status).toBe('completed');
+      }
 
       await host.close();
       host = undefined;

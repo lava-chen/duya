@@ -2,6 +2,42 @@
 
 Status: implemented and locally verified; not merged. Scope: Host-backed `@duya/cli`.
 
+## Follow-up: stop and continue (2026-10-17)
+
+The real session reached a durable failed terminal at 10:01:01 but its next
+start at 10:01:08 was rejected by the Host's live-session map. The previous
+CLI-only admission barrier did not cover that Host bookkeeping leak.
+
+Before further runtime edits:
+
+1. Extend actual Host/HTTP/child-worker cancellation tests to start another run
+   immediately after both cooperative and escalated cancellation.
+2. Make successful cancellation go through the orchestrator's common release
+   and settlement path, preserving newer runs when an old run is cancelled.
+3. Exercise the real TUI stop/continue callbacks against that Host, including
+   queued prompts and startup interruption, rather than a mocked cancel API.
+4. Continue narrowing the grep stall using production dispatch evidence;
+   direct concurrent searches already complete in milliseconds.
+
+Follow-up result:
+
+- Both real Host stop/restart regressions failed before the fix with the same
+  live-run refusal. Routing cancellation through `RunOrchestrator.#finish`
+  releases ownership and closes the live stream before acknowledging it.
+- The forced-stop regression then exposed a second race: a killed child was
+  still present until its exit event. Run admission now replaces that child;
+  old exit cleanup preserves the replacement's activity timestamp.
+- 47/47 targeted tests passed across six files, including the actual TUI
+  callbacks with real HTTP, SSE, SQLite and forked workers for cooperative and
+  escalated stops. Only the terminal painter is substituted in that test.
+- Playwright + real PTY also verified Esc, submitting `continue` during the
+  five-second grace window, queueing, worker replacement and a completed next
+  turn with the actual TUI and Host. Screenshot:
+  `output/playwright/tui-foundation/host-stop-continued.png`.
+- `typecheck:all`, `architecture:check` and `build:cli-dev` passed again.
+- The original concurrent grep stall remains unlocated; recorded events show
+  no pending permission request. Direct searches do not reproduce the stall.
+
 ## Evidence and baseline
 
 - Existing unrelated edits in the primary checkout are preserved.

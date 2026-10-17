@@ -875,7 +875,12 @@ export class RunOrchestrator {
     const runId = this.#bySession.get(sessionId) ?? this.#endedBySession.get(sessionId);
     if (runId === undefined) return null;
     try {
-      return await this.#controller.cancel(runId, { reason: `delete:${reason}` });
+      const outcome = await this.#controller.cancel(runId, { reason: `delete:${reason}` });
+      // The controller can settle without a worker terminal frame (hard stop,
+      // already closed, or interrupt timeout). Release the Host's ownership and
+      // close its live stream before acknowledging cancellation in every case.
+      if (outcome.requested) await this.#finish(sessionId, runId, { cancelRequested: true });
+      return outcome;
     } catch (error) {
       this.#logger.error(
         'Run cancel failed',

@@ -964,6 +964,10 @@ domain or database-owner cutover to Host.
   cancellation and a terminal record are confirmed. A fresh prompt submitted
   during cancellation waits for that barrier; older queued drafts still need
   explicit resumption. Failed cancellation blocks subsequent run admission.
+  Host cancellation also awaits the orchestrator's common release path, even
+  when a forced stop produced no worker terminal frame. A killed child awaiting
+  its exit event is replaced before the next run; stale exit cleanup cannot
+  remove the replacement worker's activity state.
   `build:cli-dev` rebuilds both the Host worker and the CLI so `dev:tui` cannot
   silently execute a stale worker bundle.
 
