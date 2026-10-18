@@ -406,6 +406,7 @@ Four were wrong and are corrected below; these five were checked and are
 | [mcp-capability-core-convergence](./active/580-mcp-capability-core-convergence.md) | P0 | Run Phase 0's real-machine Notion baseline (instrumented around `RemoteMcpConnector`/`MCPClient` discovery) to record `pages=N, total=M` _(Phases 0/3/4/5 open)_ |
 | [session-archive-hardening](./active/582-session-archive-hardening.md) | P0 | Storage 与生命周期补强（G1–G4 / UI 轨 G5–G9）—— **此前未列入本索引，2026-10-03 补上**；前置 plan 549 已于 PR #56 落地 |
 | [tui-ux-overhaul](./active/611-tui-ux-overhaul.md) | P1 | CLI TUI Wave 1：主题 token 化 + 自动明暗、F1/Ctrl+R/Ctrl+P 窗口、busy 排队、粘贴 Map 修复、状态栏 token 条、工具组渲染 |
+| [cli-manual-compaction](./active/613-cli-manual-compaction.md) | P2 | CLI `/compact`：给 Host 补一条会话级压缩出口（转发既存的 `compact` worker 命令）+ CLI 命令注册与压缩后重载。**Phase 0 探针未跑**（冷 worker 摘要器能否拿到 provider 配置是 Go/No-Go） |
 
 ***
 
