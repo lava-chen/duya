@@ -23,8 +23,8 @@ import { describe, expect, it } from 'vitest';
 import { RunSession } from '@duya/client-core';
 import { envelope, RUN_ID, SESSION_ID } from '@duya/client-core/testing';
 import { TranscriptModel } from '../blocks.js';
-import { projectHostEvent } from '../host-event-stream.js';
-import { createRunSessionView, projectRunSessionView } from '../run-session-view.js';
+import { HostEventStream, projectHostEvent } from '../host-event-stream.js';
+import { createRunSessionView, projectRunSessionFrames, projectRunSessionView } from '../run-session-view.js';
 
 /**
  * One recorded run. Payload shapes come from the protocol's own fixtures where
@@ -137,5 +137,86 @@ describe('the view adapter states both from shared state', () => {
     // from state alone rather than from the delta would duplicate both facts
     // on every render tick.
     expect(projectRunSessionView(view, session.getSnapshot()).frames).toEqual([]);
+  });
+});
+
+/** Block identity without the generated ids, which depend on construction order. */
+function blockShape(model: TranscriptModel): string[] {
+  return model.blocks.map((block) => {
+    switch (block.kind) {
+      case 'assistant':
+        return `assistant:${block.text}`;
+      case 'thinking':
+        return `thinking:${block.text}`;
+      case 'tool':
+        return `tool:${block.callId}:${block.status}:${block.result ?? ''}`;
+      case 'notice':
+        return `notice:${block.text}`;
+      case 'error':
+        return `error:${block.message}`;
+      default:
+        return block.kind;
+    }
+  });
+}
+
+/** Frame types the legacy projector can also produce. */
+const LEGACY_HANDLED = new Set(['text', 'thinking', 'tool_use', 'tool_result', 'permission', 'done', 'error']);
+
+describe('the replay agrees with the legacy reducer', () => {
+  it('produces the same block sequence, plus exactly the two facts legacy drops', () => {
+    const events = recordedRun();
+
+    // The old path: every event, projected one at a time.
+    const legacy = new TranscriptModel();
+    const stream = new HostEventStream(SESSION_ID, RUN_ID);
+    for (const event of events) {
+      const frame = stream.push(event);
+      if (frame !== null) legacy.apply(frame);
+    }
+
+    // The new path: one replay built from the snapshot.
+    const session = new RunSession({ runId: RUN_ID, sessionId: SESSION_ID });
+    for (const event of events) session.apply(event);
+    const frames = projectRunSessionFrames(session.getSnapshot());
+
+    const replayed = new TranscriptModel();
+    for (const frame of frames) replayed.apply(frame);
+    const filtered = new TranscriptModel();
+    for (const frame of frames) if (LEGACY_HANDLED.has(frame.type)) filtered.apply(frame);
+
+    // Equality on the shared vocabulary is the claim that matters: switching the
+    // render source must not move a single block the user can already see.
+    expect(blockShape(filtered)).toEqual(blockShape(legacy));
+    // And the ONLY difference is the two facts the old path could not say.
+    expect(frames.filter((frame) => !LEGACY_HANDLED.has(frame.type)).map((frame) => frame.type))
+      .toEqual(['tool_timed_out', 'permission_resolved']);
+    // The timed-out row is marked but NOT completed: status stays `running`
+    // and no result is invented. Asserting `error` here would pin the opposite
+    // of the rule — a timeout is the volatile notice, not a completion.
+    expect(blockShape(replayed)).toContain('tool:call-1:running:');
+    expect(replayed.toolByCallId('call-1')?.timedOut).toBe(true);
+    expect(replayed.toolByCallId('call-1')?.result).toBeUndefined();
+  });
+
+  it('places a tool row where the run sequence put it, not after every message', () => {
+    // The regression this ordering exists to prevent: entity lists have no
+    // order between them, so "all messages then all tools" puts a tool line
+    // below text written after it.
+    const session = new RunSession({ runId: RUN_ID, sessionId: SESSION_ID });
+    for (const event of [
+      envelope('run.started', { seq: 1 }),
+      envelope('assistant.text_delta', { seq: 2, payload: { messageId: 'm1', delta: 'first' } }),
+      envelope('tool.call_started', { seq: 3, payload: { toolCallId: 'call-9', toolName: 'Bash', arguments: { command: 'ls' } } }),
+      envelope('tool.call_completed', { seq: 4, payload: { toolCallId: 'call-9', outcome: { outcome: 'success' }, content: 'ok' } }),
+      envelope('assistant.text_delta', { seq: 5, payload: { messageId: 'm2', delta: 'second' } }),
+    ]) {
+      session.apply(event);
+    }
+
+    const model = new TranscriptModel();
+    for (const frame of projectRunSessionFrames(session.getSnapshot())) model.apply(frame);
+
+    expect(blockShape(model)).toEqual(['assistant:first', 'tool:call-9:ok:ok', 'assistant:second']);
   });
 });
