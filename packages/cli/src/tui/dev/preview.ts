@@ -7,6 +7,17 @@ import type { RunEvent } from '@duya/agent-protocol';
 let interrupted = false;
 let closed = false;
 let answerPermission: ((allowed: boolean) => void) | null = null;
+/**
+ * Effort the preview composer is painted with.
+ *
+ * Mutable so `/effort` in the fixture actually recolours the box — the whole
+ * point of the border being an effort indicator is that it changes when the
+ * setting does, and a demo that only prints a notice cannot show that.
+ */
+let effort: string | null = 'high';
+/** Two more live switches, so the fixture can show a row actually taking effect. */
+let showThinking = true;
+let completionRows = 8;
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const queue = new TurnQueue({
   execute: async (prompt) => {
@@ -83,6 +94,15 @@ const tui = new TUIApp({
   keyOverrides: {},
   echoSubmitted: false,
   statusText: () => 'duya · local preview',
+  // Same footer wiring the chat entry uses, so `dev:tui` shows the real shape
+  // of the dock rather than a footer with an empty right column.
+  modelLabel: () => ({
+    provider: 'preview',
+    model: 'preview-model',
+    ...(effort === null ? {} : { thinking: effort }),
+  }),
+  effort: () => effort,
+  contextBudgetTokens: () => 200_000,
   queuedPrompts: () => queue.snapshot.pending,
   queuedCount: () => queue.snapshot.pending.length,
   queuePaused: () => queue.snapshot.paused,
@@ -91,6 +111,9 @@ const tui = new TUIApp({
   onRecallQueued: () => queue.takeLast(),
   completionSources: {
     slash: () => [
+      { label: '/model', value: '/model', description: 'Open the model selector', kind: 'slash_command' },
+      { label: '/effort', value: '/effort', description: 'Set reasoning effort (recolours the composer)', kind: 'slash_command' },
+      { label: '/settings', value: '/settings', description: 'Open the settings list', kind: 'slash_command' },
       { label: '/picker', value: '/picker', description: 'Open a session selector', kind: 'slash_command' },
       { label: '/queue', value: '/queue', description: 'Resume pending follow-ups', kind: 'slash_command' },
       { label: '/exit', value: '/exit', description: 'Exit the preview', kind: 'slash_command' },
@@ -101,6 +124,63 @@ const tui = new TUIApp({
   onSubmit: async (text) => {
     if (text === '/exit') stop();
     else if (text === '/queue') queue.resume();
+    else if (text === '/model') {
+      // Sample rows, shaped exactly like the real `/model` rows: id, then the
+      // qualifier column the docked list renders dim (window, flags, current).
+      const value = await tui.chooseFiltered('Select model · preview', [
+        { label: 'deepseek-flash', value: 'flash', description: '1.0M ctx · reasoning · current' },
+        { label: 'deepseek-pro', value: 'pro', description: '200k ctx · reasoning' },
+        { label: 'MiniMax-M3', value: 'm3', description: '1.0M ctx' },
+      ], { footer: 'type to filter · ↑↓ choose · Enter switch · Esc cancel' });
+      if (value !== null) tui.printNotice('Model switched to ' + value + ' (preview).');
+    }
+    else if (text === '/effort') {
+      const value = await tui.choose('Reasoning effort · preview', [
+        { label: 'Auto (model default)', value: 'auto', description: 'current' },
+        { label: 'Low', value: 'low' },
+        { label: 'Medium', value: 'medium' },
+        { label: 'High', value: 'high' },
+        { label: 'Max', value: 'max' },
+      ]);
+      if (value !== null) {
+        effort = value === 'auto' ? null : value;
+        tui.refresh();
+        tui.printNotice('Reasoning effort: ' + value + ' (preview).');
+      }
+    }
+    else if (text === '/settings') {
+      // The real rows, minus the Host: values live on the row, Enter cycles
+      // them in place, and the two restart-only rows say so.
+      let rows = [
+        { id: 'theme', label: 'Theme', valueLabel: 'Match terminal', detail: 'Colour theme. Applies on the next launch.' },
+        { id: 'effort', label: 'Reasoning effort', valueLabel: effort === null ? 'Auto' : effort, detail: 'How much thinking the next turns buy. Also the composer border.' },
+        { id: 'show-thinking', label: 'Thinking blocks', valueLabel: showThinking ? 'Shown' : 'Hidden', detail: 'Hidden drops reasoning from the transcript entirely.' },
+        { id: 'completion-rows', label: 'Completion rows', valueLabel: String(completionRows) + ' rows', detail: 'Rows the completion popup shows at once.' },
+      ];
+      await tui.openSettings({
+        title: 'Settings',
+        rows,
+        footer: 'type to filter · Enter/Space change · Esc close',
+        onActivate: (id) => {
+          if (id === 'theme') rows = rows.map((row) => (row.id === 'theme' ? { ...row, valueLabel: 'Dark' } : row));
+          if (id === 'effort') {
+            effort = effort === 'high' ? 'low' : 'high';
+            rows = rows.map((row) => (row.id === 'effort' ? { ...row, valueLabel: effort === null ? 'Auto' : effort } : row));
+          }
+          if (id === 'show-thinking') {
+            showThinking = !showThinking;
+            tui.applyTuiPreferences({ showThinking });
+            rows = rows.map((row) => (row.id === 'show-thinking' ? { ...row, valueLabel: showThinking ? 'Shown' : 'Hidden' } : row));
+          }
+          if (id === 'completion-rows') {
+            completionRows = completionRows >= 12 ? 5 : completionRows + 2;
+            tui.applyTuiPreferences({ completionRows });
+            rows = rows.map((row) => (row.id === 'completion-rows' ? { ...row, valueLabel: completionRows + ' rows' } : row));
+          }
+          return rows;
+        },
+      });
+    }
     else if (text === '/picker') {
       const value = await tui.chooseFiltered('Resume session', [
         { label: 'TUI foundation · event stream', value: 'events' },

@@ -37,6 +37,8 @@ import {
 } from '../index.js';
 import type { TuiSlashActions, TuiSlashContext, TuiSlashHost } from '../index.js';
 import { specsForSurface } from '@duya/command-catalog';
+import { ACTION_DEFS } from '../../actions.js';
+import { applyKeyOverrides } from '../../keymap.js';
 
 // ───────────────────────────── fixtures ─────────────────────────────
 
@@ -226,13 +228,17 @@ describe('slash registry', () => {
       'copy',
       'cost',
       'delete',
+      'effort',
       'export',
       'fork',
+      'hotkeys',
       'model',
       'permission',
       'rename',
+      'settings',
       'status',
       'stop',
+      'thinking',
       'transcript',
     ]);
   });
@@ -277,6 +283,165 @@ describe('slash registry', () => {
 
 // ───────────────────────────── handlers ─────────────────────────────
 
+describe('/effort', () => {
+  const capability = (options: readonly string[] | undefined) => ({
+    getProviderModelCapability: vi.fn(async () => ({
+      providerId: 'p1',
+      modelId: 'gpt-x',
+      supportsReasoning: true,
+      ...(options === undefined ? {} : { reasoningEffortOptions: options }),
+      source: 'user',
+      updatedAt: 1,
+    })),
+  });
+  const settings = (effort: string, extra: Readonly<Record<string, string>> = {}) => ({
+    getSettings: vi.fn(async () => ({ 'cli.tui.effort': effort, ...extra })),
+  });
+  /** The per-model map, as `/settings` writes it (one key, JSON object). */
+  const effortByModel = (map: Readonly<Record<string, string>>) => ({
+    'cli.tui.effortByModel': JSON.stringify(map),
+  });
+
+  it('offers auto plus the levels the model declares', async () => {
+    const choose = vi.fn(async () => 'high');
+    const ctx = makeContext({ ...capability(['low', 'high']), ...settings('medium') }, { choose });
+    await command('effort').run(ctx, '');
+    const offered = choose.mock.calls[0]?.[1] as readonly { value: string }[];
+    expect(offered.map((choice) => choice.value)).toEqual(['auto', 'low', 'high']);
+  });
+
+  it('marks the persisted level as the current row', async () => {
+    const choose = vi.fn(async () => null);
+    const ctx = makeContext({ ...capability(['low', 'high']), ...settings('high') }, { choose });
+    await command('effort').run(ctx, '');
+    const offered = choose.mock.calls[0]?.[1] as readonly { value: string; description?: string }[];
+    expect(offered.find((choice) => choice.value === 'high')?.description).toContain('current');
+    expect(offered.find((choice) => choice.value === 'low')?.description).toBeUndefined();
+  });
+
+  it('marks the EFFECTIVE level current, not the global one', async () => {
+    // The border already shows `high` because this model overrides it. A picker
+    // that ticked `low` would be pointing at a value nothing else believes.
+    const choose = vi.fn(async () => null);
+    const ctx = makeContext(
+      { ...capability(['low', 'high']), ...settings('low', effortByModel({ 'gpt-x': 'high' })) },
+      { choose },
+    );
+    await command('effort').run(ctx, '');
+    const offered = choose.mock.calls[0]?.[1] as readonly { value: string; description?: string }[];
+    expect(offered.find((choice) => choice.value === 'high')?.description).toContain('current');
+    expect(offered.find((choice) => choice.value === 'low')?.description).toBeUndefined();
+  });
+
+  it('tells the user why the border will not move when this model overrides', async () => {
+    const ctx = makeContext(
+      { ...capability(['low', 'medium', 'high']), ...settings('low', effortByModel({ 'gpt-x': 'high' })) },
+      {},
+    );
+    const outcome = await command('effort').run(ctx, 'medium');
+    expect(outcome).toEqual({ kind: 'effort_changed', effort: 'medium' });
+    // This command sets the GLOBAL default. Without this sentence a change
+    // that leaves this session's border untouched reads as a bug.
+    expect(ctx.notices.join('\n')).toContain('gpt-x keeps its own default (High)');
+  });
+
+  it('says nothing about overrides when there is none', async () => {
+    const ctx = makeContext({ ...capability(['low', 'medium']), ...settings('low') }, {});
+    await command('effort').run(ctx, 'medium');
+    expect(ctx.notices.join('\n')).not.toContain('keeps its own default');
+  });
+
+  it('falls back to the levels the Desktop offers when the model says nothing', async () => {
+    const choose = vi.fn(async () => null);
+    const ctx = makeContext({ ...capability(undefined), ...settings('auto') }, { choose });
+    await command('effort').run(ctx, '');
+    const offered = choose.mock.calls[0]?.[1] as readonly { value: string }[];
+    expect(offered.map((choice) => choice.value)).toEqual(['auto', 'low', 'medium', 'high', 'max']);
+  });
+
+  it('still opens the picker when the capability read fails', async () => {
+    const choose = vi.fn(async () => 'low');
+    const ctx = makeContext({
+      getProviderModelCapability: vi.fn(async () => { throw new Error('host down'); }),
+      ...settings('auto'),
+    }, { choose });
+    const outcome = await command('effort').run(ctx, '');
+    expect(choose).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({ kind: 'effort_changed', effort: 'low' });
+  });
+
+  it('accepts a level argument without opening the picker', async () => {
+    const choose = vi.fn(async () => null);
+    const ctx = makeContext({ ...capability(['low', 'high']), ...settings('auto') }, { choose });
+    const outcome = await command('effort').run(ctx, 'High');
+    expect(choose).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ kind: 'effort_changed', effort: 'high' });
+    expect(ctx.notices.join('\n')).toContain('Reasoning effort: High');
+  });
+
+  it('treats auto as "no override" so the model decides', async () => {
+    const ctx = makeContext({ ...capability(['low']), ...settings('high') }, { choose: async () => 'auto' });
+    const outcome = await command('effort').run(ctx, '');
+    expect(outcome).toEqual({ kind: 'effort_changed', effort: null });
+  });
+
+  it('rejects an unknown level and lists what is available', async () => {
+    const ctx = makeContext({ ...capability(['low', 'high']), ...settings('auto') });
+    const outcome = await command('effort').run(ctx, 'turbo');
+    expect(outcome).toEqual({ kind: 'handled' });
+    expect(ctx.errors.join('\n')).toContain('Unknown effort "turbo"');
+    expect(ctx.errors.join('\n')).toContain('auto, low, high');
+  });
+});
+
+describe('/hotkeys', () => {
+  const panelHost = () => {
+    const panels: Array<{ title: string; lines: readonly string[] }> = [];
+    return {
+      panels,
+      showPanel: (title: string, lines: readonly string[]) => { panels.push({ title, lines }); },
+    };
+  };
+
+  it('lists every binding, grouped, in one panel', async () => {
+    const host = panelHost();
+    const ctx = makeContext({}, host);
+    await command('hotkeys').run(ctx, '');
+
+    expect(host.panels).toHaveLength(1);
+    expect(host.panels[0]?.title).toBe('Key bindings');
+    const body = host.panels[0]?.lines.join('\n') ?? '';
+    expect(body).toContain('Global');
+    expect(body).toContain('Editor');
+    expect(body).toContain('Transcript');
+    expect(body).toContain('Ctrl+R');
+    // The row only exists because the binding does: see the `exit` def in
+    // `actions.ts`. An advertised key that is not listed here is a key the
+    // user has to discover by pressing it.
+    expect(body).toContain('Ctrl+D');
+  });
+
+  it('quotes the bindings in force, not the defaults they were overridden from', async () => {
+    const host = panelHost();
+    // What `~/.duya/config.toml` [tui.keys] produces. A list that printed the
+    // default would be describing a TUI that is not on the screen.
+    const effective = applyKeyOverrides(ACTION_DEFS, { history: 'Ctrl+J' });
+    const ctx = makeContext({}, { ...host, effectiveKeyBindings: () => effective });
+    await command('hotkeys').run(ctx, '');
+
+    const body = host.panels[0]?.lines.join('\n') ?? '';
+    expect(body).toContain('Ctrl+J');
+    expect(body).not.toContain('Ctrl+R\n');
+  });
+
+  it('still answers on a host with no panel', async () => {
+    const ctx = makeContext({}, { showPanel: undefined });
+    await command('hotkeys').run(ctx, '');
+    expect(ctx.notices.join('\n')).toContain('Ctrl+R');
+    expect(ctx.notices.join('\n')).toContain('Global');
+  });
+});
+
 describe('/model', () => {
   const capabilities = {
     listProviderModelCapabilities: vi.fn(async () => [
@@ -299,6 +464,19 @@ describe('/model', () => {
     expect(update.mock.calls[0]?.[2]).toEqual({ model: 'gpt-xl' });
     expect(outcome).toEqual({ kind: 'session_updated', session: { ...SESSION, model: 'gpt-xl' } });
     expect(ctx.notices.join('\n')).toContain('Model switched to gpt-xl');
+  });
+
+  it('lists the current model first, with its window and flags', async () => {
+    const choose = vi.fn(async () => null);
+    const ctx = makeContext({ ...capabilities, update: vi.fn() }, { choose });
+    await command('model').run(ctx, '');
+    const offered = choose.mock.calls[0]?.[1] as readonly { label: string; description?: string }[];
+    // The session's model is gpt-x: first row, marked, with pi-style units.
+    expect(offered[0]?.label).toBe('gpt-x');
+    expect(offered[0]?.description).toContain('200k ctx');
+    expect(offered[0]?.description).toContain('current');
+    expect(offered[1]?.label).toBe('gpt-xl');
+    expect(offered[1]?.description).toContain('1.0M ctx');
   });
 
   it('cancelling the picker changes nothing', async () => {

@@ -131,16 +131,18 @@ describe('TUIApp completion popup', () => {
 
     input.write('\x1b[B'); // down
     await settle();
-    input.write('\r'); // accept the SECOND row
+    // Tab, not Enter: Enter RUNS the row it accepted (see the next test), so
+    // only Tab can show which row the arrow landed on.
+    input.write('\t');
     await settle();
 
     // If the arrow had reached the editor it would have recalled history; if
-    // Enter had reached the prompt it would have submitted `/`.
+    // Tab had reached the input line it would have inserted two spaces.
     expect(app.inputText).toBe('/review ');
     app.stop();
   });
 
-  it('accepts on Enter without submitting the raw text', async () => {
+  it('runs the accepted command on ONE Enter, and never submits what was typed', async () => {
     const submitted: string[] = [];
     const { app, input } = makeApp(submitted);
     app.start();
@@ -151,10 +153,31 @@ describe('TUIApp completion popup', () => {
     input.write('\r');
     await settle();
 
-    // The completion was accepted into the buffer, so Enter did NOT submit.
-    // Submitting here is the bug: the user would get a run for `/rev`.
+    // Two failures this pins, one on each side of the same key:
+    //  - the half-typed `/rev` must never reach the prompt;
+    //  - the accepted `/review ` must RUN, because a completion that leaves the
+    //    command in the editor costs the user a second Enter for no reason.
+    // Trimmed on the way out: the trailing space the accept added is not part
+    // of the command the loop dispatches.
+    expect(submitted).toEqual(['/review']);
+    expect(app.inputText).toBe('');
+    app.stop();
+  });
+
+  it('leaves Enter as an insertion when the command is part of a longer line', async () => {
+    const submitted: string[] = [];
+    const { app, input } = makeApp(submitted);
+    app.start();
+    await settle();
+
+    await type(input, 'please run /rev');
+    input.write('\r');
+    await settle();
+
+    // Here the popup is completing a WORD, not choosing a command, so Enter
+    // must not send the sentence as a prompt.
     expect(submitted).toEqual([]);
-    expect(app.inputText).toBe('/review ');
+    expect(app.inputText).toBe('please run /review ');
     app.stop();
   });
 
@@ -250,8 +273,10 @@ describe('TUIApp completion popup', () => {
     app.start();
     await settle();
 
+    // Tab opens the second level: Enter on a bare command now RUNS it, which
+    // is the point, but this test is about the menu behind the space.
     await type(input, '/effort');
-    input.write('\r');
+    input.write('\t');
     await settle();
 
     expect(app.inputText).toBe('/effort ');

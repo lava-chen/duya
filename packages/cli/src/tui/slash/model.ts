@@ -19,10 +19,20 @@
 import type { HostSessionRecord } from '@duya/agent-protocol';
 import type { TuiSlashCommandDef, TuiSlashContext, TuiSlashOutcome } from './types.js';
 import { updateSession } from './shared.js';
+import { formatTokenCount } from '../footer.js';
+import type { TuiChoice } from '../TUIApp.js';
 
 interface ModelChoice {
   readonly modelId: string;
-  readonly label: string;
+  /** Columns shown after the model id: window size, current marker, flags. */
+  readonly description: string;
+  /** Current model first, then alphabetical — the row the user wants is at the top. */
+  readonly isCurrent: boolean;
+}
+
+/** `1.0M ctx` / `200k ctx`, pi's thresholds rather than `1000k`. */
+function describeWindow(window: number | undefined): string {
+  return window === undefined || window <= 0 ? '' : `${formatTokenCount(window)} ctx`;
 }
 
 async function listCandidates(ctx: TuiSlashContext): Promise<ModelChoice[]> {
@@ -33,15 +43,20 @@ async function listCandidates(ctx: TuiSlashContext): Promise<ModelChoice[]> {
     const modelId = record.modelId.trim();
     if (modelId === '' || seen.has(modelId)) continue;
     seen.add(modelId);
-    const window = record.contextWindow;
-    choices.push({
-      modelId,
-      label: window === undefined || window <= 0
-        ? modelId
-        : `${modelId}  (${Math.round(window / 1000)}k)`,
-    });
+    const flags = [
+      describeWindow(record.contextWindow),
+      record.supportsReasoning === true ? 'reasoning' : '',
+      record.supportsVision === true ? 'vision' : '',
+      modelId === ctx.session.model ? 'current' : '',
+    ].filter((flag) => flag !== '');
+    choices.push({ modelId, description: flags.join(' · '), isCurrent: modelId === ctx.session.model });
   }
-  return choices;
+  // The current model first: opening the picker is usually "what am I on, and
+  // what else is there", and a list sorted purely by id buries the answer.
+  return choices.sort((left, right) => {
+    if (left.isCurrent !== right.isCurrent) return left.isCurrent ? -1 : 1;
+    return left.modelId.localeCompare(right.modelId);
+  });
 }
 
 async function applyModel(
@@ -105,17 +120,18 @@ const MODEL_COMMAND: TuiSlashCommandDef = {
     let target: string;
 
     if (query === '') {
-      const current = ctx.session.model;
-      const options = choices.map((choice) => ({
-        label: choice.modelId === current ? `${choice.label}  (current)` : choice.label,
+      const options: TuiChoice[] = choices.map((choice) => ({
+        label: choice.modelId,
         value: choice.modelId,
+        ...(choice.description === '' ? {} : { description: choice.description }),
       }));
-      const title = `Select model (current: ${current || 'default'})`;
+      // pi's shape: a title that names the scope, a filter line the user can
+      // type into, and the current model already marked in its own row.
+      const title = `Select model · ${ctx.session.providerId}`;
+      const footer = 'type to filter · ↑↓ choose · Enter switch · Esc cancel';
       const picked = ctx.tui.chooseFiltered === undefined
         ? await ctx.tui.choose(title, options)
-        : await ctx.tui.chooseFiltered(title, options, {
-            footer: 'type to filter · ↑↓ choose · Enter select · Esc cancel',
-          });
+        : await ctx.tui.chooseFiltered(title, options, { footer });
       if (picked === null) return { kind: 'handled' };
       target = picked;
     } else {

@@ -31,7 +31,7 @@ export type {
 } from './types.js';
 
 export { detectPopoverTrigger } from './trigger.js';
-export { filterItems, filterItemsFuzzy } from './filter.js';
+export { filterItems, filterItemsFuzzy, filterItemsRanked } from './filter.js';
 export { resolveItemSelection, cycleIndex } from './insert.js';
 export { fuzzyMatch, fuzzyFilter } from './fuzzy.js';
 export type { FuzzyMatchResult } from './fuzzy.js';

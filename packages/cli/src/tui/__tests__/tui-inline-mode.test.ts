@@ -31,13 +31,16 @@ function sink(): { stream: Writable; text: () => string } {
   return { stream, text: () => Buffer.concat(chunks).toString('utf8') };
 }
 
-function makeApp(options: { inline?: boolean; submitted?: string[] } = {}) {
+function makeApp(
+  options: { inline?: boolean; submitted?: string[]; effort?: () => string | null } = {},
+) {
   const out = sink();
   const submitted = options.submitted ?? [];
   const app = new TUIApp({
     output: out.stream,
     input: new PassThrough(),
     inline: options.inline === true,
+    ...(options.effort === undefined ? {} : { effort: options.effort }),
     onSubmit: (text) => {
       submitted.push(text);
     },
@@ -137,29 +140,118 @@ describe('inline mode', () => {
     expect(submitted.length).toBeLessThanOrEqual(1);
   });
 
-  it('builds a full-screen buffer only while an overlay is open', async () => {
+  it('docks a slash secondary page into the composer slot instead of taking the screen', async () => {
     const { app, out } = makeApp({ inline: true });
     app.start();
     await settleRendered();
     expect(out.text()).not.toContain(ALT_BUFFER_ON);
 
-    // F1 opens the help window: a modal takeover, the one thing a full-screen
-    // buffer is for. This is codex's split — conversation in the normal screen,
-    // overlay in the alternate one.
+    // F1 opens the help panel. It used to be a centred modal in the alternate
+    // buffer; it now shares the composer's slot, the way pi's selectors do, so
+    // the conversation above it stays on screen and readable.
     (app as unknown as { program: { emit: (name: string, ...rest: unknown[]) => void } })
       .program.emit('key f1');
     await settleRendered();
-    expect(out.text()).toContain(ALT_BUFFER_ON);
+    const rendered = out.text();
+    expect(rendered).toContain('Key bindings');
+    expect(rendered).not.toContain(ALT_BUFFER_ON);
+    // No alternate buffer was ever built, so there is nothing to come back from.
+    const surface = (app as unknown as { fullScreen: { ready: boolean } }).fullScreen;
+    expect(surface.ready).toBe(false);
 
     (app as unknown as { program: { emit: (name: string, ...rest: unknown[]) => void } })
       .program.emit('key escape');
     await settleRendered();
     app.stop();
-    // Closed again, or the conversation would stay hidden behind a buffer the
-    // user can no longer get out of.
-    expect(out.text().split(ALT_BUFFER_ON).length - 1).toBeGreaterThanOrEqual(1);
-    const surface = (app as unknown as { fullScreen: { ready: boolean } }).fullScreen;
-    expect(surface.ready).toBe(false);
+    expect((app as unknown as { windowMgr: { isActive: boolean } }).windowMgr.isActive).toBe(false);
+  });
+
+  it('docks a selectable list into the composer slot and answers it with the keyboard', async () => {
+    const { app, out } = makeApp({ inline: true });
+    app.start();
+    await settleRendered();
+
+    const chosen = app.choose('Pick one', [
+      { label: 'alpha', value: 'a' },
+      { label: 'beta', value: 'b' },
+    ]);
+    await settleRendered();
+    // The panel replaces the composer, which means the prompt marker is gone
+    // and the two choices are on screen — all without an alternate buffer.
+    const rendered = out.text();
+    expect(rendered).toContain('Pick one');
+    expect(rendered).toContain('beta');
+    expect(rendered).not.toContain(ALT_BUFFER_ON);
+
+    (app as unknown as { program: { emit: (name: string, ...rest: unknown[]) => void } })
+      .program.emit('key down');
+    await settleRendered();
+    (app as unknown as { program: { emit: (name: string, ...rest: unknown[]) => void } })
+      .program.emit('key return');
+    await settleRendered();
+    await expect(chosen).resolves.toBe('b');
+    app.stop();
+  });
+
+  it('shows a two-row footer: the session location, then spend and model', async () => {
+    const out = sink();
+    const app = new TUIApp({
+      output: out.stream,
+      input: new PassThrough(),
+      inline: true,
+      workspaceDirectory: () => 'E:\\Projects\\duya',
+      modelLabel: () => ({ provider: 'deepseek', model: 'deepseek-flash' }),
+      contextBudgetTokens: () => 1_000_000,
+      onSubmit: () => {},
+    });
+    app.start();
+    app.push({ type: 'token_usage', data: { input_tokens: 49_000, output_tokens: 1600, total_tokens: 50_600 } });
+    await settleRendered();
+    app.stop();
+    const text = out.text();
+    // Row one: where the session is.
+    expect(text).toContain('duya');
+    // Row two: the counters on the left, the model against the right edge.
+    expect(text).toContain('↑49k');
+    expect(text).toContain('↓1.6k');
+    expect(text).toContain('(deepseek) deepseek-flash');
+  });
+
+  it('colours the composer rules by reasoning effort', async () => {
+    // pi's tell: the box you type into says how much thinking the next message
+    // buys. `auto` stays the muted grey the border has always been.
+    const quiet = makeApp({ inline: true });
+    quiet.app.start();
+    await settleRendered();
+    const quietRules = (quiet.app as unknown as { inlineInputLines: string[] }).inlineInputLines;
+    quiet.app.stop();
+    expect(quietRules[0]).toContain('{240-fg}');
+
+    const loud = makeApp({ inline: true, effort: () => 'high' });
+    loud.app.start();
+    await settleRendered();
+    const loudRules = (loud.app as unknown as { inlineInputLines: string[] }).inlineInputLines;
+    loud.app.stop();
+    expect(loudRules[0]).toContain('{134-fg}');
+    expect(loudRules[loudRules.length - 1]).toContain('{134-fg}');
+    // Only the rules are coloured: the text the user types keeps the terminal's
+    // own foreground.
+    expect(loudRules[1]).not.toContain('{134-fg}');
+  });
+
+  it('renders a docked list with its qualifier column', async () => {
+    const { app } = makeApp({ inline: true });
+    app.start();
+    await settleRendered();
+    void app.chooseFiltered('Select model · p1', [
+      { label: 'gpt-x', value: 'x', description: '200k ctx · current' },
+      { label: 'gpt-xl', value: 'xl', description: '1.0M ctx' },
+    ]);
+    await settleRendered();
+    const panel = (app as unknown as { inlineInputLines: string[] }).inlineInputLines.join('\n');
+    app.stop();
+    expect(panel).toContain('200k ctx · current');
+    expect(panel).toContain('1.0M ctx');
   });
 
   it('leaves the conversation on screen when it stops', async () => {

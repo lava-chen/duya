@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { detectPopoverTrigger, filterItems, resolveItemSelection, cycleIndex } from '../src/index.js';
+import {
+  detectPopoverTrigger,
+  filterItems,
+  filterItemsRanked,
+  resolveItemSelection,
+  cycleIndex,
+} from '../src/index.js';
 import type { PopoverItem } from '../src/index.js';
 
 /**
@@ -123,6 +129,59 @@ describe('filterItems', () => {
 
   it('returns nothing when nothing matches', () => {
     expect(filterItems(ITEMS, 'zzzz')).toEqual([]);
+  });
+});
+
+describe('filterItemsRanked', () => {
+  /**
+   * The order in these fixtures is the assertion: every case is arranged so
+   * that the expected winner is NOT the first item, because a ranking test
+   * where input order already agrees with the expected order passes for the
+   * wrong reason.
+   */
+  const ITEMS = [
+    item('settings', '/settings', 'Configure the terminal'),
+    item('sessions', '/sessions', 'Browse previous sessions'),
+    // Not "session": a description containing `ses` would make this row a
+    // description-tier hit and turn the ranking assertion into a sorting
+    // assertion about the tier boundary instead.
+    item('status', '/status', 'Show token usage'),
+  ];
+
+  it('puts the closest label match first, wherever it sits in the input', () => {
+    // 'ses' is a prefix of `/sessions` and a scattered hit in `/settings`
+    // (s-e…s), so the score — not the input order — has to decide.
+    expect(filterItemsRanked(ITEMS, 'ses').map((i) => i.value)).toEqual(['/sessions', '/settings']);
+  });
+
+  it('ranks an exact match above a merely good one', () => {
+    const items = [item('a-b-c-d', '/a-b-c-d'), item('abcd', '/abcd')];
+    expect(filterItemsRanked(items, 'abcd').map((i) => i.value)).toEqual(['/abcd', '/a-b-c-d']);
+  });
+
+  it('keeps a description-only hit, the way the substring filter did', () => {
+    const items = [item('review', '/review', 'Review a diff')];
+    expect(filterItemsRanked(items, 'diff').map((i) => i.value)).toEqual(['/review']);
+  });
+
+  it('puts description-only hits AFTER every label hit', () => {
+    const items = [
+      item('review', '/review', 'Document the diff'),
+      item('doctor', '/doctor', 'Diagnose project issues'),
+    ];
+    expect(filterItemsRanked(items, 'doc').map((i) => i.value)).toEqual(['/doctor', '/review']);
+  });
+
+  it('returns everything, in input order, for an empty filter', () => {
+    const ranked = filterItemsRanked(ITEMS, '');
+    expect(ranked.map((i) => i.value)).toEqual(['/settings', '/sessions', '/status']);
+    // A copy, so a caller that sorts or splices its result cannot reach back
+    // into the source array.
+    expect(ranked).not.toBe(ITEMS);
+  });
+
+  it('returns nothing when nothing matches', () => {
+    expect(filterItemsRanked(ITEMS, 'zzzz')).toEqual([]);
   });
 });
 

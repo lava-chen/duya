@@ -36,11 +36,16 @@ import { resolveDataRoot } from '@duya/data';
 import { TUIApp, shouldUseTui, type CompletionSources, type TuiChoice } from './tui/index.js';
 import { HostEventStream } from './tui/host-event-stream.js';
 import { TurnQueue, type TurnOutcome } from './tui/turn-queue.js';
+import { createFileCompletionSource } from './tui/candidates.js';
 import { captureConsoleToFile } from './tui/console-capture.js';
+import { normalizeEffort } from './tui/theme.js';
 import {
   DEFAULT_TUI_PREFERENCES,
+  effortForModel,
   readTuiPreferences,
   resolveEffectiveTuiPreferences,
+  TUI_EFFORT_SETTING,
+  type TuiPreferences,
 } from './tui/preferences.js';
 import {
   buildSlashCompletionRows,
@@ -500,6 +505,37 @@ export function inlineTuiRequested(env: NodeJS.ProcessEnv = process.env): boolea
   return value !== '0' && value.toLowerCase() !== 'false';
 }
 
+/**
+ * `auto` on the wire is "no effort field at all", which is what the worker
+ * reads as "let the model decide". One place, because the same question is
+ * asked at startup, after `/effort`, and after every model switch.
+ */
+function nullifyAuto(level: string): string | null {
+  return level === 'auto' ? null : level;
+}
+
+/**
+ * Re-read the saved preferences and resolve effort for a (new) model.
+ *
+ * Re-read rather than trust the in-memory set because `/settings` writes
+ * `cli.tui.effortByModel` straight to the Host: a model switch that used a
+ * stale map would silently apply last week's override. A failed read keeps the
+ * last known set — a preference must never strand the switch.
+ */
+async function reloadEffortForModel(
+  client: HostSessionHttpClient,
+  current: TuiPreferences,
+  model: string | undefined,
+): Promise<{ preferences: TuiPreferences; effort: string | null }> {
+  let preferences = current;
+  try {
+    preferences = await readTuiPreferences(client);
+  } catch {
+    // Keep `current`.
+  }
+  return { preferences, effort: nullifyAuto(effortForModel(preferences, model)) };
+}
+
 function sessionLabel(item: HostSessionListItem): string {
   const { session, timelineCount } = item;
   return [
@@ -540,6 +576,34 @@ export async function chatTui(
   if (initialSession === null) throw new Error(`session ${sessionId} does not exist on this Host`);
 
   let activeSession = initialSession;
+  /**
+   * Reasoning effort for subsequent runs, or null for "let the model decide".
+   *
+   * Held here rather than on the session record because the Host takes effort
+   * per run (`StartAgentRunInput.effort`) and never persists it. `/effort`
+   * rewrites this and persists the choice through the settings endpoint, so the
+   * composer border after a restart is the same colour the user left it.
+   *
+   * Seeded per MODEL (`cli.tui.effortByModel` first, then the global value):
+   * the level that is right for a cheap model is wrong for a reasoning one,
+   * and a default the user has to re-set after every `/model` is not a
+   * default. Re-resolved whenever the session's model actually changes.
+   */
+  let effort: string | null = nullifyAuto(effortForModel(effectivePreferences, initialSession.model));
+  /**
+   * Re-resolve effort when the active session's model actually changed.
+   *
+   * Not on every session swap: `/resume` into a session with the same model
+   * must keep the level the user picked a minute ago. Only a different model
+   * is a reason to drop their choice, and it is one because the choice was
+   * made FOR a model.
+   */
+  async function resyncEffortForModelChange(previousModel: string | undefined): Promise<void> {
+    if (activeSession.model === previousModel) return;
+    const reloaded = await reloadEffortForModel(client, savedPreferences, activeSession.model);
+    savedPreferences = reloaded.preferences;
+    effort = reloaded.effort;
+  }
   let activeRunId: RunId | null = null;
   let activeStream: AbortController | null = null;
   const pendingCancellations = new Map<RunId, Promise<void>>();
@@ -569,12 +633,18 @@ export async function chatTui(
     group: 'settings' as const,
   }));
   const slashRows: PopoverItem[] = [...sessionSlashRows, ...buildSlashCompletionRows()];
+  // `@` offers workspace paths. The walk is cached briefly rather than for the
+  // session — see `createFileCompletionSource` — because a chat session lives
+  // long enough for the tree to change under it.
+  const fileCandidates = createFileCompletionSource(path.resolve(process.cwd()));
   const completionSources: CompletionSources = {
     slash: () => slashRows,
     slashOptions: (command) => command === '/resume' || command === '/sessions' ? sessionRows : [],
     slashOptionsOnBare: (command) => command === '/resume' || command === '/sessions',
+    // No `context` rows: the legacy CLI's were product modes, and this surface
+    // has no mode registry. `@` is paths only.
     context: () => [],
-    files: () => [],
+    files: () => fileCandidates.list(),
   };
 
   const queue = new TurnQueue({
@@ -639,6 +709,31 @@ export async function chatTui(
     queuePaused: () => queue.snapshot.paused,
     onRecallQueued: () => queue.takeLast(),
     statusText: () => `${activeSession.providerId} · ${activeSession.model || options.model || 'default'} · ${activeSession.id.slice(0, 8)}`,
+    // The footer's right-hand column. Same facts as the status text above, but
+    // split so the model can be right-aligned against the token counters
+    // instead of sharing one crowded row with them.
+    modelLabel: () => ({
+      provider: activeSession.providerId,
+      model: activeSession.model || options.model || 'default',
+      // pi prints `deepseek-flash • high`; the suffix is the same effort the
+      // composer border is painted with, so the two cannot disagree.
+      ...(effort === null ? {} : { thinking: effort }),
+    }),
+    // The composer's border colour: pi's tell for how much thinking the next
+    // message will buy. Read through a callback so /effort repaints immediately.
+    effort: () => effort,
+    // `/settings` moves effort through the TUI; this is how the value reaches
+    // the variable the next run is started with. The border is the TUI's, the
+    // run's effort is this loop's, and they must not drift apart.
+    onEffortChange: (level) => { effort = level; },
+    // Transcript preferences, seeded from the saved set and moved live by
+    // `/settings`. Seed + callback, never re-read: the loop owns `effort` and
+    // the TUI owns the rest, and one owner each is what keeps them in step.
+    showThinking: effectivePreferences.showThinking,
+    expandBlocks: effectivePreferences.expandBlocks,
+    showToolResults: effectivePreferences.showToolResults,
+    maxInputRows: effectivePreferences.inputRows,
+    completionRows: effectivePreferences.completionRows,
     isBusy: () => busy,
     canAnswerPermissions: () => activeRunId !== null && !cancellationRequested,
     onSubmit: (text) => { void handleLine(text); },
@@ -707,7 +802,9 @@ export async function chatTui(
       tui.printError(`Session not found: ${selectedId}`);
       return;
     }
+    const previousModel = activeSession.model;
     activeSession = selected;
+    await resyncEffortForModelChange(previousModel);
     tui.replaceTranscript(await loadSessionMessages(client, selectedId));
     tui.printNotice(`Resumed "${selected.title || 'Untitled session'}".`);
   }
@@ -717,7 +814,9 @@ export async function chatTui(
       tui.printError('Wait for the current turn to finish before starting a new session.');
       return;
     }
+    const previousModel = activeSession.model;
     activeSession = await createChatSession(client, options);
+    await resyncEffortForModelChange(previousModel);
     sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
     tui.clearTranscript();
     tui.printNotice(`Started a new session (${activeSession.id.slice(0, 8)}).`);
@@ -734,7 +833,9 @@ export async function chatTui(
       tui.printError(`Session not found: ${sessionId}`);
       return;
     }
+    const previousModel = activeSession.model;
     activeSession = adopted;
+    await resyncEffortForModelChange(previousModel);
     sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
     tui.replaceTranscript(await loadSessionMessages(client, adopted.id));
     tui.printNotice(`Switched to "${adopted.title || 'Untitled session'}" (${adopted.id.slice(0, 8)}).`);
@@ -763,6 +864,7 @@ export async function chatTui(
         ...(options.model !== undefined ? { model: options.model } : {}),
         ...(options.providerId !== undefined ? { providerId: options.providerId } : {}),
         ...(options.apiFormat !== undefined ? { apiFormat: options.apiFormat } : {}),
+        ...(effort !== null ? { effort } : {}),
         workingDirectory: process.cwd(),
       });
       if (!start.accepted) {
@@ -880,8 +982,32 @@ export async function chatTui(
             args,
           );
           if (outcome.kind === 'session_updated') {
+            // `/model` is the case this exists for: per-model defaults are the
+            // whole point of `cli.tui.effortByModel`.
+            const previousModel = activeSession.model;
             activeSession = outcome.session;
+            await resyncEffortForModelChange(previousModel);
             if (!finished) tui.refresh();
+          } else if (outcome.kind === 'effort_changed') {
+            // Adopt first, persist after: the border must change even if the
+            // settings endpoint is unavailable, and a failed write is a
+            // preference that does not survive restart — not a lost turn.
+            effort = outcome.effort;
+            if (!finished) tui.refresh();
+            try {
+              await client.setSetting(TUI_EFFORT_SETTING, outcome.effort ?? 'auto');
+              // Keep the mirror honest: `/settings` writes its own keys, but
+              // this one went through the loop, and a model switch that reads
+              // a stale global would apply the wrong default.
+              savedPreferences = { ...savedPreferences, effort: normalizeEffort(outcome.effort ?? 'auto') };
+            } catch (error) {
+              if (!finished) {
+                tui.printError(
+                  'Effort applied for this session but could not be saved: '
+                  + (error instanceof Error ? error.message : String(error)),
+                );
+              }
+            }
           }
         }
         else if (name === 'help') {
@@ -930,7 +1056,13 @@ export async function chatTui(
   }
 
   tui.replaceTranscript(await loadSessionMessages(client, sessionId));
-  tui.printNotice(`session ${sessionId} · type a message, /resume to switch sessions`);
+  // The banner is a preference because `duya chat` gets piped into other
+  // things, and a line the user cannot switch off is a line they have to
+  // strip. The log path is not: it is how a stuck run gets diagnosed, and it
+  // only appears when diagnostics were asked for.
+  if (savedPreferences.startupBanner) {
+    tui.printNotice(`session ${sessionId} · type a message, /resume to switch sessions`);
+  }
   if (options.diagnosticsLogPath !== undefined) tui.printNotice('Logs: ' + options.diagnosticsLogPath);
   tui.start();
   await finishedPromise;

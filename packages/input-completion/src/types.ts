@@ -30,6 +30,14 @@ export type PopoverItemKind =
   /** Toggle a product mode (plan-task | research | conductor). */
   | 'mode'
   /**
+   * A workspace file path, offered under `@`.
+   *
+   * Distinct from the command kinds because accepting one inserts a MENTION
+   * (`@path`), not a command — and because a path is the one candidate that is
+   * ranked rather than substring-filtered (see `filterItemsFuzzy`).
+   */
+  | 'file'
+  /**
    * @deprecated Conductor is a regular `mode` item with
    * `modeValue: 'conductor'`. Retained for persisted state and external
    * callers; new items use `kind: 'mode'`.

@@ -55,10 +55,11 @@ import { buildComposerLayout } from './composer-layout.js';
 import { wrapWithCursor, type WrappedText } from './width.js';
 import { CompletionController, type CompletionKey, type CompletionSources } from './completion.js';
 import { WindowManager } from './window.js';
-import { ACTION_DEFS, helpGroups, keysColumn, type ActionDef } from './actions.js';
+import { ACTION_DEFS, helpGroups, KEYMAP_HEADINGS, keysColumn, type ActionDef } from './actions.js';
 import { applyKeyOverrides, loadKeyOverrides, toBlessedKeys, REBINDABLE_ACTIONS, validateKeyOverrides, type KeymapIssue } from './keymap.js';
-import { resolveThemeName, themeFor, type ThemeName } from './theme.js';
+import { resolveThemeName, themeFor, type ThemeName, effortBorderColor, effortBorderTag, normalizeEffort, type EffortLevel } from './theme.js';
 import { compactActivity } from './text.js';
+import { buildFooterLines, readGitBranch } from './footer.js';
 import { resolveStatusLabel } from './status-label.js';
 import { detectTerminalEnvironment, type TerminalEnvironment } from './terminal-env.js';
 import {
@@ -79,8 +80,19 @@ const SYNC_END = '\x1b[?2026l';
 /** Lines the input box may grow to before it scrolls internally. */
 const MAX_INPUT_ROWS = 8;
 
-/** Height of the status bar, in rows. */
+/** Height of the full-screen status bar, in rows. */
 const STATUS_ROWS = 1;
+
+/**
+ * Footer rows in inline mode.
+ *
+ * Two, like pi: the path row and the stats/model row. Inline mode is the
+ * default and the pi-aligned presentation, so it gets the footer that carries
+ * the same information in the same two places. Full-screen mode keeps its
+ * single status row — it is a fixed window with a bordered transcript, and
+ * spending another row on chrome there costs the conversation directly.
+ */
+const INLINE_FOOTER_ROWS = 2;
 
 /** Share of the terminal width the centred overlay takes. */
 const OVERLAY_WIDTH = '70%';
@@ -98,6 +110,16 @@ const WHEEL_STEP_LINES = 3;
 
 /** How long a second Ctrl+C stays lethal. */
 const DOUBLE_CTRL_C_MS = 2000;
+
+/**
+ * How long a git branch read is reused.
+ *
+ * The footer repaints per frame; a checkout is a human action measured in
+ * seconds. Two seconds is short enough that `git switch` shows up while the
+ * user is still looking at the line and long enough that a streaming turn does
+ * not stat `.git` sixty times a second.
+ */
+const GIT_BRANCH_TTL_MS = 2000;
 
 function transcriptText(content: string | readonly MessageContent[]): string {
   if (typeof content === 'string') return content;
@@ -123,6 +145,17 @@ export interface TuiChoice {
   readonly label: string;
   readonly value: string;
   readonly description?: string;
+}
+
+/** One row of a live settings list: a name, its current value, and what it does. */
+export interface TuiSettingsRow {
+  /** Stable identity: `onActivate` is called with it, not with the label. */
+  readonly id: string;
+  readonly label: string;
+  /** Right-hand column, e.g. `Dark`, `8 rows`, `Shown`. */
+  readonly valueLabel: string;
+  /** Explanation for the selected row, shown under the list. */
+  readonly detail?: string;
 }
 
 type InteractivePrompt =
@@ -151,6 +184,7 @@ function renderOptionsKey(options: RenderOptions, width: number): string {
     toolResultLines: options.toolResultLines,
     expandedBlockIds: ids(options.expandedBlockIds),
     collapsedBlockIds: ids(options.collapsedBlockIds),
+    showThinking: options.showThinking !== false,
     selectedBlockId: options.selectedBlockId ?? null,
     theme: options.theme ?? null,
   });
@@ -253,14 +287,88 @@ export interface TUIAppOptions {  /** Window title. */
    * Render into the terminal's own scrollback instead of a full-screen window.
    *
    * The conversation is printed as it finishes and stays readable after the TUI
-   * exits, which a fixed window cannot offer. Off by default while this is
-   * proven against real terminals; `DUYA_TUI_INLINE=1` turns it on.
+   * exits, which a fixed window cannot offer. This is the default (see
+   * `DEFAULT_TUI_PREFERENCES`) and the shape pi uses: a docked composer and
+   * footer at the bottom of the page, the conversation above them in ordinary
+   * scrollback. `DUYA_TUI_INLINE=0` turns it off.
    *
    * In this mode blessed's `Screen` is never constructed — it switches to the
    * alternate buffer in its constructor, and an alternate buffer has no
    * scrollback to commit into. Its `Program` is still used, for input only.
    */
   readonly inline?: boolean;
+  /**
+   * Directory the footer's first row shows. Defaults to `process.cwd()`.
+   *
+   * A callback rather than a string because a session can move (a resume into
+   * another workspace), and the footer must describe the session that is
+   * running, not the one that was launched.
+   */
+  readonly workspaceDirectory?: () => string;
+  /**
+   * Model identity for the footer's right-hand column.
+   *
+   * The TUI does not know what model a Host session is running — that lives in
+   * the session record — so the wiring reports it, exactly as it already does
+   * for `statusText`.
+   */
+  readonly modelLabel?: () => { provider?: string; model: string; thinking?: string };
+  /** Session name for the footer's path row, when the caller has one. */
+  readonly sessionName?: () => string | null;
+  /**
+   * Reasoning effort for the NEXT turn, as a string (`'low'`, `'high'`, …).
+   *
+   * Drives the composer's border colour — pi's tell for "how much thinking am
+   * I about to pay for". A callback, not a value: `/effort` changes it while
+   * the app is running, and the next repaint has to see the new level.
+   *
+   * When this returns null the last run's own effort (from `turn_start`) is
+   * used instead, so a Host that decides effort itself still gets a colour.
+   */
+  readonly effort?: () => string | null;
+  /**
+   * Called when `/settings` (or `/effort`) moves the effort level itself, so
+   * the chat loop can adopt it for the next run.
+   *
+   * The border colour is the TUI's; the value a run is started with is not.
+   * The loop owns that variable, and this is how a menu row that says `high`
+   * ends up sending `effort: 'high'` rather than merely painting a border.
+   */
+  readonly onEffortChange?: (effort: string | null) => void;
+  /** Thinking blocks in the transcript. `/settings` can flip this live. */
+  readonly showThinking?: boolean;
+  /** Show tool result bodies without per-block expansion. */
+  readonly showToolResults?: boolean;
+  /** Start with every block expanded — the saved state of the expand key. */
+  readonly expandBlocks?: boolean;
+  /**
+   * Rows the input box may grow to before it scrolls internally.
+   *
+   * Named `maxInputRows` because `inputRows` already means something else
+   * inside the app: how many rows the box is showing right now.
+   */
+  readonly maxInputRows?: number;
+}
+
+/**
+ * The preferences `/settings` can move without a restart.
+ *
+ * Deliberately a subset of `TuiPreferences`: theme and display mode rebuild the
+ * surface, so they stay restart-only and are labelled as such in the menu.
+ * Everything here is a field the next repaint reads.
+ */
+export interface TuiLivePreferences {
+  readonly effort?: string | null;
+  /**
+   * `null` means "follow the environment", which is what the `system` setting
+   * row means; the renderer re-probes rather than holding a resolved name.
+   */
+  readonly theme?: ThemeName | null;
+  readonly showThinking?: boolean;
+  readonly expandBlocks?: boolean;
+  readonly showToolResults?: boolean;
+  readonly completionRows?: number;
+  readonly inputRows?: number;
 }
 
 export class TUIApp {
@@ -300,8 +408,8 @@ export class TUIApp {
   private readonly output: NodeJS.WritableStream;
 
   private readonly completion: CompletionController;
-  /** Rows the popup shows. */
-  private readonly completionRows: number;
+  /** Rows the popup shows. Mutable: `/settings` resizes it while running. */
+  private completionRows: number;
 
   private readonly model = new TranscriptModel();
   private readonly editor = new InputEditor();
@@ -318,7 +426,20 @@ export class TUIApp {
   private readonly pacer = new Pacer();
   private readonly paste = new PasteBurstDetector();
 
-  private expanded = false;
+  /** Transcript-wide expansion; the same flag `/settings` calls expand blocks. */
+  private expanded: boolean;
+  /** Thinking blocks in the transcript. Off removes them from the plan. */
+  private showThinking: boolean;
+  /** Tool result bodies, independent of `expanded` (which also opens them). */
+  private showToolResults: boolean;
+  /**
+   * Rows the input box may GROW to.
+   *
+   * Not `inputRows`, which is how many rows it is showing right now and which
+   * the layout arithmetic subtracts from the screen — that one is measured,
+   * this one is a ceiling the user sets.
+   */
+  private maxInputRows: number;
   private focus: 'input' | 'transcript' = 'input';
   private selectedBlockIndex = -1;
   private readonly expandedBlockIds = new Set<string>();
@@ -370,7 +491,16 @@ export class TUIApp {
   /** Modal windows (F1 help, Ctrl+R history, Ctrl+P usage). */
   private readonly windowMgr = new WindowManager();
   /** Palette for the transcript and the windows. Assigned in the constructor. */
-  private readonly theme: ReturnType<typeof themeFor>;
+  /**
+   * Mutable because `/settings` changes it in place.
+   *
+   * Every read of it goes through this field rather than through a value
+   * captured at construction, which is the whole reason a theme switch can be
+   * immediate: the palette is looked up per paint, not baked into the first
+   * one. `display-mode` cannot work this way — inline vs full screen decides
+   * which surface object exists — so that row stays a restart.
+   */
+  private theme: ReturnType<typeof themeFor>;
   /**
    * The action table with this session's overrides applied. The help window
    * renders from it, and the rebindable global toggles dispatch from it —
@@ -389,6 +519,23 @@ export class TUIApp {
   private lastUsage: { input: number; output: number; total: number } | null = null;
   /** Sum of every `token_usage` total seen this session. */
   private sessionTokens = 0;
+  /**
+   * Last git branch read for the footer, and when.
+   *
+   * The footer repaints on every frame and a branch is a file read; caching for
+   * a couple of seconds keeps a streaming turn from reading `.git/HEAD` at
+   * frame rate while still noticing a checkout during a session.
+   */
+  private gitBranchCache: { readonly cwd: string; readonly branch: string | null; readonly at: number } | null = null;
+  /**
+   * Effort reported by the run currently (or last) streaming.
+   *
+   * `options.effort` describes what the NEXT turn will use; this is what the
+   * Host actually started the last one with. The former wins when present —
+   * the user just chose it — and this keeps the border honest when effort is
+   * decided elsewhere (a Desktop-scheduled run, a default in the worker).
+   */
+  private runEffort: string | null = null;
 
   /** Rows currently visible in the input box, for cursor clamping. */
   private inputRows = 1;
@@ -402,14 +549,7 @@ export class TUIApp {
     // Capabilities first: the theme fallback below is a rendering decision, so
     // it must not be made before we know what the terminal can render.
     this.terminalEnv = options.terminalEnv ?? detectTerminalEnvironment();
-    const requestedTheme = options.theme ?? resolveThemeName();
-    // A light theme on a 16-colour terminal does not degrade, it disintegrates:
-    // the palette is 256-colour numbers, so every tag quantises to something
-    // arbitrary. Falling back keeps the reading experience; the user can still
-    // force `light` on a 256-colour terminal where it works.
-    this.theme = themeFor(
-      requestedTheme === 'light' && !this.terminalEnv.supportsLightPalette ? 'dark' : requestedTheme,
-    );
+    this.theme = this.resolveTheme(options.theme ?? null);
     // Overrides resolved ONCE, here: config + env, with the injected map (a
     // test seam) winning outright when present.
     const keyOverrides = options.keyOverrides ?? loadKeyOverrides();
@@ -467,6 +607,12 @@ export class TUIApp {
         })
       : null;
     this.completionRows = Math.max(1, options.completionRows ?? 8);
+    this.expanded = options.expandBlocks ?? false;
+    this.showThinking = options.showThinking ?? true;
+    // Collapsed by default, like the `expanded` flag it shares a keybinding
+    // with: the transcript is a conversation, and a tool's JSON is a detail.
+    this.showToolResults = options.showToolResults ?? false;
+    this.maxInputRows = Math.max(1, options.maxInputRows ?? MAX_INPUT_ROWS);
     this.completion = new CompletionController(
       options.completionSources ?? EMPTY_COMPLETION_SOURCES,
     );
@@ -610,6 +756,105 @@ export class TUIApp {
     });
   }
 
+  /**
+   * Resolve a requested theme against what this terminal can actually render.
+   *
+   * `null` re-probes the environment, which is what the `system` setting means:
+   * a user who picks `system` mid-session expects a re-read, not the answer the
+   * process happened to compute at launch.
+   */
+  private resolveTheme(name: ThemeName | null): ReturnType<typeof themeFor> {
+    const requested = name ?? resolveThemeName();
+    // A light theme on a 16-colour terminal does not degrade, it disintegrates:
+    // the palette is 256-colour numbers, so every tag quantises to something
+    // arbitrary. Falling back keeps the reading experience; the user can still
+    // force `light` on a 256-colour terminal where it works.
+    return themeFor(
+      requested === 'light' && !this.terminalEnv.supportsLightPalette ? 'dark' : requested,
+    );
+  }
+
+  /**
+   * Switch the palette without restarting.
+   *
+   * The transcript is repainted from scratch rather than recoloured, because
+   * the theme tags are part of how lines were assembled: a cached transcript
+   * keeps the old tags and repainting it in place would leave half the screen
+   * on the previous palette.
+   */
+  setTheme(name: ThemeName | null): void {
+    const next = this.resolveTheme(name);
+    if (next.name === this.theme.name) return;
+    this.theme = next;
+    this.noteTranscriptMutation();
+    if (this.disposed) return;
+    this.scheduler.requestImmediate();
+  }
+
+  /** The theme actually in force, after the terminal's own fallback. */
+  activeThemeName(): ThemeName {
+    return this.theme.name;
+  }
+
+  /**
+   * Move the preferences the running TUI can move, and repaint.
+   *
+   * The menu calls this once per row change so the effect is visible before the
+   * menu is even closed — a settings list you have to leave to see the result
+   * of is a settings list you cannot tune. Effort additionally leaves through
+   * `onEffortChange`, because the value a run is started with belongs to the
+   * chat loop, not to the renderer.
+   */
+  applyTuiPreferences(patch: TuiLivePreferences): void {
+    if (patch.effort !== undefined) this.options.onEffortChange?.(patch.effort);
+    if (patch.theme !== undefined) this.setTheme(patch.theme);
+    if (patch.showThinking !== undefined) this.showThinking = patch.showThinking;
+    if (patch.expandBlocks !== undefined) this.expanded = patch.expandBlocks;
+    if (patch.showToolResults !== undefined) this.showToolResults = patch.showToolResults;
+    if (patch.completionRows !== undefined) {
+      this.completionRows = Math.max(1, patch.completionRows);
+    }
+    if (patch.inputRows !== undefined) this.maxInputRows = Math.max(1, patch.inputRows);
+    // Expanding or hiding blocks changes which lines exist, not just how they
+    // are coloured, so the assembled transcript is stale rather than merely
+    // dirty: drop it and let the next paint rebuild it.
+    if (patch.expandBlocks !== undefined || patch.showThinking !== undefined) {
+      this.noteTranscriptMutation();
+    }
+    if (this.disposed) return;
+    this.scheduler.requestImmediate();
+  }
+
+  /**
+   * The live preferences, so `/settings` can label rows with what is in force.
+   *
+   * Named after `TuiSlashHost.liveTuiPreferences` on purpose: the same method
+   * under two names is exactly how the menu ends up labelling a row with the
+   * SAVED value while the screen shows a different one, which is what happened
+   * when this was called `livePreferences` and the host contract called it
+   * `liveTuiPreferences` — the lookup silently fell through to a default.
+   */
+  liveTuiPreferences(): {
+    theme: ThemeName;
+    showThinking: boolean;
+    expandBlocks: boolean;
+    showToolResults: boolean;
+    completionRows: number;
+    inputRows: number;
+  } {
+    return {
+      // What is in force, not what was requested: on a 16-colour terminal a
+      // request for `light` is in force as `dark`, and a row that claimed
+      // otherwise would be lying about the screen in front of the user.
+      theme: this.theme.name,
+      showThinking: this.showThinking,
+      expandBlocks: this.expanded,
+      showToolResults: this.showToolResults,
+      completionRows: this.completionRows,
+      inputRows: this.maxInputRows,
+    };
+  }
+
   /** Show a read-only information panel from a slash command. */
   showPanel(
     title: string,
@@ -652,6 +897,48 @@ export class TUIApp {
     });
     this.scheduler.requestImmediate();
     return selection;
+  }
+
+  /**
+   * Open a live settings list: a filterable row per setting, whose Enter
+   * cycles the value in place and whose effect is visible immediately.
+   *
+   * `onActivate` returns the rows as they should now read; returning them (rather
+   * than having the caller call back in) keeps one owner of the list's content
+   * and makes a row that forgets to redraw impossible. The window stays open
+   * until Esc, and the promise settles then, so a slash command can `await` it
+   * and know when the user is done.
+   */
+  async openSettings(options: {
+    readonly title: string;
+    readonly rows: readonly TuiSettingsRow[];
+    readonly footer: string;
+    readonly onActivate: (id: string) => readonly TuiSettingsRow[] | void;
+  }): Promise<void> {
+    if (this.windowOpenBlocked()) return;
+    this.completion.close();
+    let settle: () => void = () => {};
+    const closed = new Promise<void>((resolve) => { settle = resolve; });
+    const toItems = (rows: readonly TuiSettingsRow[]) => rows.map((row) => ({
+      label: row.label,
+      value: row.id,
+      valueLabel: row.valueLabel,
+      ...(row.detail === undefined ? {} : { detail: row.detail }),
+    }));
+    this.windowMgr.open({
+      title: options.title,
+      items: toItems(options.rows),
+      filterable: true,
+      footer: options.footer,
+      onActivate: (id) => {
+        const next = options.onActivate(id);
+        if (next !== undefined) this.windowMgr.updateItems(toItems(next));
+        this.scheduler.requestImmediate();
+      },
+      onCancel: () => settle(),
+    });
+    this.scheduler.requestImmediate();
+    return closed;
   }
 
   /** Open a one-line prompt. Secret values render as bullets and bypass history. */
@@ -764,17 +1051,20 @@ export class TUIApp {
 
     const tail = this.workingTailLines();
     const queued = this.queuePreviewLines();
-    const chrome = [...tail, ...queued, ...this.inlinePopupLines, ...this.inlineInputLines, ...this.inlineStatusLines];
+    // Composer, then popup, then footer — pi's order. The candidate list hangs
+    // directly under the line being typed into, so the reader's eye does not
+    // have to jump over the input to find it, and the footer stays at the
+    // bottom of the page rather than being pushed up by a list that grew.
+    const chrome = [...tail, ...queued, ...this.inlineInputLines, ...this.inlinePopupLines, ...this.inlineStatusLines];
     // The caret's row is an index into `scroll`, so it is offset by everything
     // that sits above the composer. Its column is the editor's own column plus
     // the prompt marker's width, because that is what is actually printed.
     const caret =
-      this.focus === 'input' && this.interactivePrompt === null
+      this.focus === 'input' && !this.dockPanelActive()
         ? {
             row:
               tail.length +
               queued.length +
-              this.inlinePopupLines.length +
               this.inputCursor.cursorRow - 1,
             column: this.inputCursor.cursorCol + 1,
             region: 'chrome' as const,
@@ -794,9 +1084,12 @@ export class TUIApp {
 
   /** True when something needs the full-screen takeover. */
   private overlayActive(): boolean {
-    if (this.interactivePrompt !== null) return true;
-    if (this.overlay.body(this.options.canAnswerPermissions?.() ?? false) !== null) return true;
-    return this.windowMgr.isActive;
+    // ONLY the permission/question overlay. A slash secondary page, the
+    // settings menu and a login prompt are docked into the composer's slot
+    // (see `paintInput`), so they never take the alternate buffer away from
+    // the conversation — which is the whole difference the user sees between
+    // "my terminal" and "some app".
+    return this.overlay.body(this.options.canAnswerPermissions?.() ?? false) !== null;
   }
 
   /**
@@ -861,10 +1154,13 @@ export class TUIApp {
     const selectedBlock = this.model.blocks[this.selectedBlockIndex];
     return {
       expanded: this.expanded,
-      showToolResults: this.expanded,
+      // Either switch opens a result body: `expanded` is the transcript-wide
+      // toggle, this one is the standing preference from `/settings`.
+      showToolResults: this.expanded || this.showToolResults,
       toolResultLines: 5,
       expandedBlockIds: this.expandedBlockIds,
       collapsedBlockIds: this.collapsedBlockIds,
+      ...(this.showThinking ? {} : { showThinking: false }),
       theme: this.theme.tags,
       ...(this.focus === 'transcript' && selectedBlock !== undefined
         ? { selectedBlockId: selectedBlock.id }
@@ -943,9 +1239,28 @@ export class TUIApp {
     return asNumber(this.fullScreen.measure('input')?.innerHeight, 2);
   }
 
+  /** Rows the status/footer area owns, which differs by presentation. */
+  private footerRows(): number {
+    return this.inlineSurface === null ? STATUS_ROWS : INLINE_FOOTER_ROWS;
+  }
+
+  /**
+   * Rows from the bottom of the screen to the composer's lower edge.
+   *
+   * The status row, plus the completion popup when it is open: the popup hangs
+   * BELOW the composer (pi's order), so opening it lifts the input box by its
+   * own height instead of covering the transcript above it.
+   */
+  private composerBottom(size: TerminalSize): number {
+    return Math.min(STATUS_ROWS + this.popupRows(), Math.max(0, size.rows - 1));
+  }
+
   /** Rows the popup occupies right now, borders included. Zero when closed. */
   private popupRows(): number {
-    if (!this.completion.isOpen) return 0;
+    // A secondary page owns the slot the popup would hang below, so the popup
+    // reserves nothing while one is open — even if it was open before (F1
+    // pressed mid-prompt) and will be again after Esc.
+    if (!this.completion.isOpen || this.dockPanelActive()) return 0;
     const total = this.completion.snapshot.items.length;
     const rows = Math.min(this.completionRows, total);
     const hasOverflowMarker = total > rows;
@@ -971,7 +1286,7 @@ export class TUIApp {
   private paintInput(): void {
     const size = this.terminalSize();
     const inline = this.inlineSurface !== null;
-    const availableRows = Math.max(1, size.rows - STATUS_ROWS -
+    const availableRows = Math.max(1, size.rows - this.footerRows() -
       (inline ? this.workingTailLines().length + this.queuePreviewLines().length : 0) - this.popupRows());
     if (!inline) {
       // Blessed computes padding from the presence of a border object, even
@@ -980,10 +1295,21 @@ export class TUIApp {
         borderStyle: availableRows >= 3 ? 'composer' : 'none',
       });
     }
+
+    // A secondary page (a slash-command list, the settings menu, a login
+    // prompt) takes the composer's slot rather than a centred box: same rows,
+    // same rules, full width. That is pi's `showSelector`, and it is what keeps
+    // the conversation above the panel readable while the list is open.
+    const panel = this.dockPanelLines(Math.max(1, availableRows - 2), this.dockWidth(inline, size));
+    if (panel !== null) {
+      this.paintDockPanel(panel, inline, size);
+      return;
+    }
+
     const layout = buildComposerLayout(this.editor.text, this.editor.cursor, {
       columns: inline ? Math.max(1, size.columns - 1) : this.composerWidth(),
       terminalRows: availableRows,
-      maxRows: MAX_INPUT_ROWS,
+      maxRows: this.maxInputRows,
       unicode: this.terminalEnv.unicodeBox,
     });
     const borderRows = layout.lines.length - layout.bodyRows;
@@ -991,16 +1317,18 @@ export class TUIApp {
       const height = layout.bodyRows + this.inputChromeRows();
       const body = borderRows > 0 ? layout.lines.slice(1, -1) : layout.lines;
       this.fullScreen.update('input', {
-        borderColor: this.focus === 'input' ? 'gray' : 'black',
+        // The composer's frame is the effort indicator: the two rules the user
+        // types between carry the level the next message will run at.
+        borderColor: effortBorderColor(this.effortLevel()),
         height,
-        bottom: Math.min(STATUS_ROWS, Math.max(0, size.rows - 1)),
+        bottom: this.composerBottom(size),
         lines: body.map(escapeTags),
       });
       this.fullScreen.update('transcript', {
         bottom: height + STATUS_ROWS + this.popupRows(),
       });
     } else {
-      this.inlineInputLines = layout.lines.map(escapeTags);
+      this.inlineInputLines = this.colorComposerRules(layout.lines, borderRows > 0);
     }
     this.inputRows = layout.bodyRows;
     this.inputCursor = {
@@ -1008,6 +1336,94 @@ export class TUIApp {
       cursorRow: layout.cursorRow - (inline ? 0 : borderRows / 2),
       cursorCol: layout.cursorColumn - 1,
     };
+  }
+
+  /** True while a secondary page owns the composer's slot. */
+  private dockPanelActive(): boolean {
+    return this.interactivePrompt !== null || this.windowMgr.isActive;
+  }
+
+  /** Columns a docked panel may use, matching the composer's own width. */
+  private dockWidth(inline: boolean, size: TerminalSize): number {
+    return inline ? Math.max(1, size.columns - 1) : this.composerWidth();
+  }
+
+  /** Rows of the active secondary page, or null when the composer owns the slot. */
+  private dockPanelLines(maxRows: number, width: number): string[] | null {
+    if (this.interactivePrompt !== null) {
+      return this.renderInteractivePrompt(this.interactivePrompt, width, maxRows).split('\n');
+    }
+    if (!this.windowMgr.isActive) return null;
+    const body = this.windowMgr.renderDocked(maxRows, width);
+    return body === null ? null : [...body];
+  }
+
+  /**
+   * Paint a secondary page in the composer's slot.
+   *
+   * Inline mode frames it with the same two rules the composer uses, because
+   * the panel IS the composer as far as the layout is concerned — the same
+   * rows, in the same place, so opening `/model` does not move the footer. In
+   * full-screen mode the input region already draws those rules, so only the
+   * body is sent.
+   *
+   * The body arrives tagged (`{cyan-fg}❯ /model{/cyan-fg}`) and is therefore
+   * NOT escaped here: the window manager escapes the data it interpolates, and
+   * escaping the whole line would print the markup as text.
+   */
+  private paintDockPanel(body: readonly string[], inline: boolean, size: TerminalSize): void {
+    const budget = Math.max(1, size.rows - this.footerRows() - 2
+      - (inline ? this.workingTailLines().length + this.queuePreviewLines().length : 0));
+    const visible = body.slice(0, budget);
+    if (inline) {
+      const columns = Math.max(1, size.columns - 1);
+      const rule = this.mutedRule(columns);
+      this.inlineInputLines = [rule, ...visible, rule];
+    } else {
+      const height = visible.length + this.inputChromeRows();
+      this.fullScreen.update('input', {
+        borderColor: 'cyan',
+        height,
+        bottom: this.composerBottom(size),
+        lines: visible,
+      });
+      this.fullScreen.update('transcript', {
+        bottom: height + STATUS_ROWS + this.popupRows(),
+      });
+    }
+    this.inputRows = visible.length;
+    // The caret belongs to the composer; a panel has no text cursor of its own
+    // (a text prompt draws its own `|` marker inside the body).
+    this.inputCursor = { rows: visible, cursorRow: 1, cursorCol: 0 };
+  }
+
+  /** One horizontal rule in the theme's muted colour. */
+  private mutedRule(columns: number): string {
+    const tag = this.theme.tags.muted;
+    return `{${tag}}${'─'.repeat(Math.max(1, columns))}{/${tag}}`;
+  }
+
+  /** The effort level the next turn will run at. */
+  private effortLevel(): EffortLevel {
+    return normalizeEffort(this.options.effort?.() ?? this.runEffort);
+  }
+
+  /**
+   * Paint the composer's two rules in the effort colour.
+   *
+   * Only the RULES are coloured. The text keeps the terminal's own foreground,
+   * because a border that tints the thing you are typing is a filter, not an
+   * indicator — pi colours the frame for the same reason.
+   */
+  private colorComposerRules(lines: readonly string[], hasRules: boolean): string[] {
+    if (!hasRules || lines.length < 2) return lines.map(escapeTags);
+    const tag = effortBorderTag(this.effortLevel(), this.theme.name);
+    const tagBody = `{${tag}}`;
+    const close = `{/${tag}}`;
+    return lines.map((line, index) => {
+      const escaped = escapeTags(line);
+      return index === 0 || index === lines.length - 1 ? `${tagBody}${escaped}${close}` : escaped;
+    });
   }
 
   private queuePreviewLines(): string[] {
@@ -1022,7 +1438,7 @@ export class TUIApp {
   }
 
   private placeCursor(): void {
-    if (this.focus !== 'input' || this.interactivePrompt !== null) {
+    if (this.focus !== 'input' || this.dockPanelActive()) {
       this.program.hideCursor();
       return;
     }
@@ -1047,9 +1463,13 @@ export class TUIApp {
  * being overlapped — an overlapped popup would hide the very text the user is
  * completing against.
  */
-private paintCompletion(): void {
+  private paintCompletion(): void {
     const state = this.completion.snapshot;
-    if (!this.completion.isOpen) {
+    // A secondary page owns the slot the popup would open into. Hiding rather
+    // than closing keeps the popup's state intact for a window opened over
+    // typing (F1 mid-prompt) — on close the composer returns with its
+    // candidates, because the input never changed.
+    if (!this.completion.isOpen || this.dockPanelActive()) {
       if (this.inlineSurface !== null) this.inlinePopupLines = [];
       else this.fullScreen.update('completion', { hidden: true });
       return;
@@ -1083,10 +1503,13 @@ private paintCompletion(): void {
       return;
     }
 
-    // `+ 2` for the popup own border rows.
+    // `+ 2` for the popup own border rows. It sits BELOW the composer, above
+    // the status row — pi's order — so the input box is lifted by exactly the
+    // rows the popup occupies (`paintInput` does that lift) and the two never
+    // overlap.
     this.fullScreen.update('completion', {
       height: rows.length + 2,
-      bottom: this.visibleInputHeight() + STATUS_ROWS,
+      bottom: STATUS_ROWS,
       lines: rows,
       hidden: false,
     });
@@ -1141,13 +1564,64 @@ private paintCompletion(): void {
         ? '/queue resume · Esc edit queued'
         : this.completion.isOpen ? context
         : busy ? 'Enter queue · Esc interrupt' : '/ commands · F1 help';
-      this.inlineStatusLines = [escapeTags(compactActivity(text + usage + ' · ' + hint, width))];
+      this.inlineStatusLines = this.footerLines(width, hint + queueSegment);
       return;
     }
     const fixed = text + ' · ' + spinner + this.activityLabel(busy) + tail + usage + queueSegment + ' · ' + context;
     this.fullScreen.update('status', {
       lines: ['{gray-fg}' + escapeTags(compactActivity(fixed, width)) + '{/gray-fg}'],
     });
+  }
+
+  /**
+   * The inline footer, in two rows.
+   *
+   * Row one is the session's location — path, branch, session name — with the
+   * transient key hint right-aligned. Row two is the cost: tokens in, tokens
+   * out, the session total, the context percentage, and the model paying for
+   * it, right-aligned. See `footer.ts` for why the two are split rather than
+   * competing for one row.
+   */
+  private footerLines(width: number, hint: string): string[] {
+    const cwd = this.options.workspaceDirectory?.() ?? process.cwd();
+    const budget = this.options.contextBudgetTokens?.() ?? null;
+    return buildFooterLines({
+      width,
+      cwd,
+      branch: this.gitBranch(cwd),
+      sessionName: this.options.sessionName?.() ?? null,
+      hint,
+      stats: {
+        // `lastUsage` is the most recent billed call, not the turn total; the
+        // arrows are labelled accordingly, and the session sum is separate.
+        inputTokens: this.lastUsage?.input ?? 0,
+        outputTokens: this.lastUsage?.output ?? 0,
+        totalTokens: this.sessionTokens,
+        // Before the first billed call the footer says `?/window` rather than
+        // `0%`: the window is a property of the model, the usage is not yet a
+        // reading. Getting this wrong is how an idle prompt claims to have used
+        // nothing and implies the model is free.
+        contextPercent: budget !== null && budget > 0 && this.sessionTokens > 0
+          ? this.contextPercent()
+          : null,
+        contextBudget: budget,
+      },
+      model: this.options.modelLabel?.() ?? null,
+      styles: stylesOf({ theme: this.theme.tags }),
+      home: process.env['HOME'] ?? process.env['USERPROFILE'],
+    });
+  }
+
+  /** The branch for `cwd`, cached for `GIT_BRANCH_TTL_MS`. */
+  private gitBranch(cwd: string): string | null {
+    const at = Date.now();
+    const cached = this.gitBranchCache;
+    if (cached !== null && cached.cwd === cwd && at - cached.at < GIT_BRANCH_TTL_MS) {
+      return cached.branch;
+    }
+    const branch = readGitBranch(cwd);
+    this.gitBranchCache = { cwd, branch, at };
+    return branch;
   }
 
   /**
@@ -1271,6 +1745,15 @@ private paintCompletion(): void {
         this.activityPhase = 'working';
         return true;
       }
+      case 'turn_start': {
+        // The run's own effort, when the Host decided one. `updateActivity`
+        // returns whether the frame changed anything the CHROME shows, and the
+        // composer border is chrome — so a changed level must repaint.
+        const effort = frameString(data, 'effort');
+        if (effort === '' || effort === this.runEffort) return false;
+        this.runEffort = effort;
+        return true;
+      }
       case 'compact:start':
         this.activityPhase = 'compacting';
         this.activityMessage = '';
@@ -1309,36 +1792,20 @@ private paintCompletion(): void {
     this.waitingForPermission = false;
   }
 
+  /**
+   * Paint the permission/question overlay into the centred region.
+   *
+   * This region is now ONLY the permission ask. Secondary pages used to live
+   * here too, which is why opening `/model` covered the conversation with a box
+   * in the middle of the screen and jumped into the alternate buffer. They are
+   * docked into the composer's slot instead (`paintDockPanel`); a question that
+   * blocks a tool call is the one thing still worth interrupting the view for.
+   */
   private paintOverlay(): void {
     if (!this.fullScreen.ready) return;
-    const rows = this.fullScreen.rows;
-    if (this.interactivePrompt !== null) {
-      const prompt = this.interactivePrompt;
-      const body = this.renderInteractivePrompt(prompt);
-      this.fullScreen.update('overlay', {
-        height: Math.min(body.split('\n').length + 2, Math.max(5, rows - 2)),
-        borderColor: prompt.kind === 'text' && prompt.secret ? 'yellow' : 'cyan',
-        lines: body.split('\n'),
-        hidden: false,
-      });
-      return;
-    }
-
     const body = this.overlay.body(this.options.canAnswerPermissions?.() ?? false);
     if (body === null) {
-      // The region is shared: permission overlay first, then a modal window,
-      // then nothing. Only one of the three can be on screen.
-      const windowBody = this.windowMgr.render(Math.max(5, rows - 4));
-      if (windowBody === null) {
-        this.fullScreen.update('overlay', { hidden: true });
-        return;
-      }
-      this.fullScreen.update('overlay', {
-        height: windowBody.split('\n').length + 2,
-        borderColor: 'cyan',
-        lines: windowBody.split('\n'),
-        hidden: false,
-      });
+      this.fullScreen.update('overlay', { hidden: true });
       return;
     }
     // Height is set explicitly rather than left to the renderer's `'auto'`: a
@@ -1352,17 +1819,20 @@ private paintCompletion(): void {
     });
   }
 
-  private renderInteractivePrompt(prompt: InteractivePrompt): string {
+  private renderInteractivePrompt(prompt: InteractivePrompt, width: number, maxRows: number): string {
     const lines = [`{bold}{cyan-fg}${escapeTags(prompt.title)}{/cyan-fg}{/bold}`, ''];
+    // Title, a blank, the ellipsis markers and the hint row: the list gets
+    // whatever is left of the slot the composer would have occupied.
+    const visibleChoices = Math.max(1, Math.min(PROMPT_VISIBLE_CHOICES, maxRows - 4));
     if (prompt.kind === 'select') {
       const count = prompt.choices.length;
       const first = Math.max(0, Math.min(
-        prompt.selectedIndex - Math.floor(PROMPT_VISIBLE_CHOICES / 2),
-        Math.max(0, count - PROMPT_VISIBLE_CHOICES),
+        prompt.selectedIndex - Math.floor(visibleChoices / 2),
+        Math.max(0, count - visibleChoices),
       ));
       if (first > 0) lines.push('{gray-fg}  …{/gray-fg}');
-      const maxLineChars = Math.max(20, Math.floor(asNumber(process.stdout.columns, 80) * 0.7) - 6);
-      for (let i = first; i < Math.min(count, first + PROMPT_VISIBLE_CHOICES); i += 1) {
+      const maxLineChars = Math.max(20, Math.floor(Math.max(1, width) * 0.8) - 6);
+      for (let i = first; i < Math.min(count, first + visibleChoices); i += 1) {
         const choice = prompt.choices[i];
         if (choice === undefined) continue;
         const selected = i === prompt.selectedIndex;
@@ -1374,7 +1844,7 @@ private paintCompletion(): void {
         const row = `${selected ? '❯' : ' '} ${label}${description}`;
         lines.push(selected ? `{cyan-fg}${row}{/cyan-fg}` : row);
       }
-      if (first + PROMPT_VISIBLE_CHOICES < count) lines.push('{gray-fg}  …{/gray-fg}');
+      if (first + visibleChoices < count) lines.push('{gray-fg}  …{/gray-fg}');
       lines.push('', '{gray-fg}↑↓ choose · Enter select · Esc cancel{/gray-fg}');
       return lines.join('\n');
     }
@@ -1382,7 +1852,7 @@ private paintCompletion(): void {
     const codepoints = Array.from(prompt.value);
     const masked = prompt.secret ? codepoints.map(() => '*').join('') : prompt.value;
     const caret = prompt.secret ? Array.from(prompt.value.slice(0, prompt.cursor)).length : prompt.cursor;
-    const maxVisible = Math.max(12, Math.min(56, asNumber(process.stdout.columns, 80) - 20));
+    const maxVisible = Math.max(12, Math.min(56, Math.max(1, width) - 4));
     const start = Math.max(0, Math.min(caret - maxVisible + 1, masked.length - maxVisible));
     const visible = masked.slice(start, start + maxVisible);
     const visibleCaret = Math.max(0, Math.min(visible.length, caret - start));
@@ -1887,14 +2357,30 @@ private paintCompletion(): void {
     this.program.key(keys, handler);
   }
 
+  /**
+   * The key bindings actually in force this session.
+   *
+   * Named exactly `TuiSlashHost.effectiveKeyBindings` — when a TUI method and
+   * the host contract disagree on the name, the optional call silently falls
+   * through to a default, and that happened once already with
+   * `livePreferences`/`liveTuiPreferences`.
+   *
+   * What looks obvious here is the point: it returns the OVERRIDE-APPLIED
+   * table, because a `/hotkeys` list that quoted `~/.duya/config.toml`'s
+   * values without telling the user they were rebound — or rebound into
+   * nothing — would be describing a TUI that is not on the screen.
+   */
+  effectiveKeyBindings(): readonly ActionDef[] {
+    return this.actionDefs;
+  }
+
   /** F1: the keymap, rendered from the same table `bindKeys` documents. */
   private openHelpWindow(): void {
     if (this.windowOpenBlocked()) return;
     const styles = stylesOf({ theme: this.theme.tags });
-    const headings: Record<string, string> = { global: 'Global', editor: 'Editor', transcript: 'Transcript' };
     const lines: string[] = [];
     for (const group of helpGroups(this.actionDefs)) {
-      lines.push(styles.accent(headings[group.heading] ?? group.heading));
+      lines.push(styles.accent(KEYMAP_HEADINGS[group.heading] ?? group.heading));
       for (const def of group.rows) {
         lines.push(`  ${escapeTags(keysColumn(def))}${styles.muted(def.label)}`);
       }
@@ -2062,6 +2548,15 @@ exportHistory(): string[] {
     target.key(['C-c'], () => {
       if (this.interactivePrompt !== null) this.settleInteractivePrompt(null);
       else this.onCtrlC();
+    });
+    // Ctrl+D exits — but ONLY on an empty input, and never from under a modal.
+    // See the `exit` row in `actions.ts` for why it is not delete-forward.
+    target.key(['C-d'], () => {
+      if (this.interactivePrompt !== null || this.swallowForWindow()) return;
+      if (this.overlay.isActive || this.focus !== 'input') return;
+      if (!this.editor.isEmpty) return;
+      this.options.onExit?.();
+      this.stop();
     });
     // C-l (clear) and C-t (expand-all) are bound further down, from the
     // action table, so an override rewires them in one place.
@@ -2308,6 +2803,17 @@ exportHistory(): string[] {
       }
 
       if (typeof name === 'string' && TUIApp.SPECIAL_KEYS.has(name)) {
+        this.scheduler.requestImmediate();
+        return;
+      }
+      // A control chord is never content. blessed's `keys` module reports
+      // `\x04` as `{ name: 'd', ctrl: true }` — a ONE-character name that sails
+      // past every length guard below and lands in the editor as a raw byte.
+      // That both puts garbage in the prompt and makes the box non-empty, so
+      // the Ctrl+D handler downstream then declines to exit. Every other
+      // unbound Ctrl chord had the same bug: the byte was never visible, but
+      // it silently disarmed the binding that owned it.
+      if (key?.ctrl === true) {
         this.scheduler.requestImmediate();
         return;
       }

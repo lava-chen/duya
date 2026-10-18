@@ -244,6 +244,19 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     surfaces: ['desktop', 'cli'],
   },
   {
+    // pi's name for the same ladder. duya calls it effort because that is what
+    // the Desktop control and the wire field call it; this is the spelling a
+    // pi user types without thinking about it.
+    name: 'thinking',
+    label: 'Thinking level',
+    labelZh: '思考强度',
+    description: 'Set the thinking level for the next turns',
+    descriptionZh: '设置后续回合的思考强度',
+    argsHint: '[level]',
+    category: 'config',
+    surfaces: ['cli'],
+  },
+  {
     name: 'permission',
     label: 'Permission mode',
     labelZh: '权限模式',
@@ -259,22 +272,39 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     name: 'settings',
     label: 'TUI settings',
     labelZh: '终端设置',
-    description: 'Configure terminal theme and display mode',
-    descriptionZh: '配置终端主题和显示模式',
+    description: 'Configure the terminal: theme, display, effort, transcript',
+    descriptionZh: '配置终端：主题、显示、推理强度、会话记录',
     category: 'config',
     surfaces: ['cli'],
     availableWhileBusy: true,
   },
   {
+    name: 'hotkeys',
+    label: 'Keyboard shortcuts',
+    labelZh: '键盘快捷键',
+    description: 'Show every keyboard shortcut',
+    descriptionZh: '显示所有键盘快捷键',
+    category: 'config',
+    surfaces: ['cli'],
+    // Safe mid-turn: it reads the binding table and paints a panel, touching
+    // neither the transcript nor the run.
+    availableWhileBusy: true,
+  },
+  {
+    // One canonical `effort`, on both surfaces. It was briefly declared twice
+    // (once per surface) and the catalog's unique-name gate said so — a name
+    // that exists twice is a name that resolves differently depending on which
+    // half of the list you happen to read. The Desktop shows these levels in
+    // its composer control; the CLI validates against what the model declares.
     name: 'effort',
     label: 'Reasoning effort',
-    labelZh: '推理程度',
-    description: 'Set the reasoning effort',
-    descriptionZh: '设置推理程度',
-    argsHint: '[none|minimal|low|medium|high]',
+    labelZh: '推理强度',
+    description: 'Set reasoning effort for the next turns',
+    descriptionZh: '设置后续回合的推理强度',
+    argsHint: '[level]',
     subcommands: ['none', 'minimal', 'low', 'medium', 'high'],
     category: 'config',
-    surfaces: ['desktop'],
+    surfaces: ['desktop', 'cli'],
   },
   {
     name: 'login',

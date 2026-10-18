@@ -52,9 +52,26 @@ export const ACTION_DEFS: readonly ActionDef[] = [
   { id: 'yank-pop', keys: ['Alt+Y'], label: 'Cycle the yank through older kills', context: 'editor' },
   { id: 'indent', keys: ['Tab'], label: 'Indent · history recall when the line is empty', context: 'editor' },
   { id: 'complete', keys: ['/', '@'], label: 'Trigger command / file completion', context: 'editor' },
+  // Ctrl+D is deliberately NOT a delete-forward. Every line editor makes it
+  // one, and every one of them also makes it the exit gesture on an empty
+  // line — so here it only exits, and never on a line with text in it: a
+  // reflexive press that costs half a sentence is the worse trade.
+  { id: 'exit', keys: ['Ctrl+D'], label: 'Exit chat (only when the input is empty)', context: 'editor' },
   { id: 'block-select', keys: ['↑', '↓'], label: 'Move through transcript blocks', context: 'transcript' },
   { id: 'block-fold', keys: ['←', '→'], label: 'Fold / unfold the selected block', context: 'transcript' },
 ];
+
+/**
+ * Context → heading, shared by F1 and `/hotkeys`.
+ *
+ * Exported rather than repeated because the two surfaces must not disagree
+ * about what a group is called; `helpGroups` returns contexts, this maps them.
+ */
+export const KEYMAP_HEADINGS: Readonly<Record<string, string>> = {
+  global: 'Global',
+  editor: 'Editor',
+  transcript: 'Transcript',
+};
 
 /** Fixed width of the keys column in the help window. */
 const KEYS_COLUMN_WIDTH = 16;
