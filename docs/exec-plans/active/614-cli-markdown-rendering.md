@@ -247,11 +247,11 @@ Text     := <其余，直到下一个候选起手例外>
   - 执行记录：标题 1-2 级的 heading+bold 组合复用 Phase 2 的 `rawTagPair`（styles 函数会 escape，直接嵌套调用必双转义）；`tui-transcript-markup.test.ts:90` 的 `# ` 标记断言按新形态更新（本 phase 的行为变化点）。
   - 门禁：`tui-transcript-blocks.test.ts`（新增 7 例，含 V9 宽度与 D10 行数不变式）+ `tui-transcript-markup.test.ts`
 
-- [ ] **Phase 4 — 表格（I3）**
-  - [ ] 4.1 Bug A：`:319` `w + 2` → `w + 1`
-  - [ ] 4.2 Bug B：列宽改按 rendered 计算
-  - [ ] 4.3 两条**各自**的回归测试（列号 must be identical across all rows，含带 `` `code` `` / `**bold**` 单元格的场景）
-  - 门禁：`tui-transcript-table.test.ts`
+- [x] **Phase 4 — 表格（I3）**
+  - [x] 4.1 Bug A：`:319` `w + 2` → `w + 1`（┼ 精确落在 │ 列；每段 `w+1` = 单元格 `w` 列 + join 前导空格 1 列）
+  - [x] 4.2 Bug B：列宽改按 rendered 计算（`renderTable` 重构为「先渲染全部单元格 → `stripTags` → `visibleWidth` 取列宽 → 按 rendered 宽度 pad」；顺手修了 header 的 `accent(escapeTags(text))` 双转义——改用 `rawTagPair(styles.accent)` + 单次 escape）
+  - [x] 4.3 两条**各自**的回归测试（`tui-transcript-table.test.ts`：「rule junction exactly on its bar column」断言全部 │/┼ 共享同一组列位；「sizes columns on the rendered cell」断言 `**seed**` 渲染后无死空格且 V4 仍成立）
+  - 门禁：`tui-transcript-table.test.ts` 9/9 绿（存量 7 例零断言改动）
 
 - [ ] **Phase 5 — thinking（I5）**
   - [ ] 5.1 `thinkingRows` 改走 tokenizer，底色之上叠属性

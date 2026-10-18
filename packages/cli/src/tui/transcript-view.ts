@@ -243,13 +243,27 @@ function alignmentOf(delimiterCell: string): TableAlignment {
 }
 
 /**
+ * Remove blessed tags from a rendered cell so its VISIBLE width can be
+ * measured. `{open}` / `{close}` are restored FIRST — the tag-stripping
+ * pattern would otherwise eat them (plan 614 phase 1's ordering trap) — and
+ * restored literal braces may still match the strip pattern, which only
+ * slightly mis-measures a cell containing literal `{word}` text.
+ */
+function stripTags(rendered: string): string {
+  return rendered
+    .replace(/\{open\}/gu, '{')
+    .replace(/\{close\}/gu, '}')
+    .replace(/\{\/?[a-zA-Z0-9-]+\}/gu, '');
+}
+
+/**
  * A GFM pipe table as aligned ruled text.
  *
  * Rendered, not dumped: the raw `|---|` source is markup meant for a browser,
- * and in a terminal it reads as corruption. Columns are sized by VISIBLE width
- * (`visibleWidth`, CJK-aware — padding by `.length` would misalign every row
- * containing an ideograph), cells render inline markdown, and the delimiter
- * row's colons drive alignment.
+ * and in a terminal it reads as corruption. Columns are sized by the VISIBLE
+ * width of the RENDERED cells (`**bold**` measures as its text, not its
+ * markup), padding is CJK-aware via `visibleWidth`, and the delimiter row's
+ * colons drive alignment.
  */
 function renderTable(
   headerLine: string,
@@ -263,53 +277,66 @@ function renderTable(
   const rows = [splitTableRow(headerLine), ...dataRows];
 
   const columnCount = Math.max(aligns.length, ...rows.map((row) => row.length));
-  const widths: number[] = [];
-  for (const row of rows) {
-    for (let c = 0; c < columnCount; c += 1) {
-      const width = visibleWidth(row[c] ?? '');
-      widths[c] = Math.max(widths[c] ?? 0, Math.min(width, TABLE_CELL_MAX_WIDTH));
-    }
-  }
-
   const alignFor = (c: number): TableAlignment => aligns[c] ?? 'left';
 
-  /**
-   * Pad one cell to its column width. `render` is injected because the header
-   * must stay FLAT (`accent(escapeTags(text))` — one style, no nesting) while
-   * body cells render inline markdown, whose tags must never be padded over.
-   */
-  const padCell = (raw: string, c: number, render: (text: string) => string): string => {
-    const clipped = visibleWidth(raw) > TABLE_CELL_MAX_WIDTH
+  // A cell wider than this is truncated in the RAW text, before any markup
+  // exists — the same order invariant the escape carries (width.ts does not
+  // parse tags).
+  const clip = (raw: string): string =>
+    visibleWidth(raw) > TABLE_CELL_MAX_WIDTH
       ? truncateToWidth(raw, TABLE_CELL_MAX_WIDTH)
       : raw;
-    const gap = Math.max(0, widths[c] as number - visibleWidth(clipped));
+
+  const headerPair = rawTagPair(styles.accent);
+  const renderHeaderText = (text: string): string =>
+    `${headerPair.open}${escapeTags(text)}${headerPair.close}`;
+  const renderBodyText = (text: string): string => renderInlineMarkdown(text, styles);
+
+  // Render every cell ONCE, up front. Column widths are then measured on the
+  // rendered text: a cell like `**seed**` renders to `seed`, and sizing the
+  // column on the raw `**seed**` would leave two dead spaces of padding after
+  // every rendered cell in that column (Bug B).
+  const renderedRows = rows.map((row, rowIndex) =>
+    Array.from({ length: columnCount }, (_, c) => {
+      const cell = clip(row[c] ?? '');
+      return rowIndex === 0 ? renderHeaderText(cell) : renderBodyText(cell);
+    }),
+  );
+
+  const widths: number[] = [];
+  for (const rendered of renderedRows) {
+    rendered.forEach((cell, c) => {
+      widths[c] = Math.max(widths[c] ?? 0, visibleWidth(stripTags(cell)));
+    });
+  }
+
+  const padCell = (rendered: string, c: number): string => {
+    const gap = Math.max(0, (widths[c] ?? 0) - visibleWidth(stripTags(rendered)));
     switch (alignFor(c)) {
-      case 'right': return `${' '.repeat(gap)}${render(clipped)}`;
+      case 'right': return `${' '.repeat(gap)}${rendered}`;
       case 'center': {
         const left = Math.floor(gap / 2);
-        return `${' '.repeat(left)}${render(clipped)}${' '.repeat(gap - left)}`;
+        return `${' '.repeat(left)}${rendered}${' '.repeat(gap - left)}`;
       }
-      default: return `${render(clipped)}${' '.repeat(gap)}`;
+      default: return `${rendered}${' '.repeat(gap)}`;
     }
   };
 
-  const renderRow = (
-    row: readonly string[],
-    render: (text: string) => string,
-  ): string => row.map((cell, c) => padCell(cell, c, render)).join(styles.muted(' │ '));
+  const renderRow = (row: readonly string[]): string =>
+    row.map((cell, c) => padCell(cell, c)).join(styles.muted(' │ '));
 
   // Rows shorter than the table keep their trailing cells EMPTY rather than
   // shrinking the join: ragged row lengths would otherwise shift every column
   // border after the gap.
-  const normalize = (row: readonly string[]): string[] =>
-    Array.from({ length: columnCount }, (_, c) => row[c] ?? '');
-
-  const lines: string[] = [
-    renderRow(normalize(rows[0] ?? []), (text) => styles.accent(escapeTags(text))),
-  ];
-  lines.push(styles.muted(widths.map((w) => '─'.repeat(w + 2)).join('┼')));
-  for (const row of dataRows) {
-    lines.push(renderRow(normalize(row), (text) => renderInlineMarkdown(text, styles)));
+  const lines: string[] = [renderRow(renderedRows[0] ?? [])];
+  // `w + 1`, not `w + 2`: each rendered cell occupies exactly `w` columns and
+  // the join inserts ` │ ` (space, bar, space) between neighbours, so the bar
+  // sits one column PAST the cell's right edge — the rule segment covering the
+  // cell plus that one space is `w + 1` dashes, and the ┼ lands exactly on the
+  // bar. `w + 2` pushed every ┼ one column right of its bar (Bug A).
+  lines.push(styles.muted(widths.map((w) => '─'.repeat(w + 1)).join('┼')));
+  for (const rendered of renderedRows.slice(1)) {
+    lines.push(renderRow(rendered));
   }
   return lines.join('\n');
 }

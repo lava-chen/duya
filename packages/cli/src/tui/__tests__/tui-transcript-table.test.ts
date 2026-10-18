@@ -121,4 +121,47 @@ describe('assistant markdown tables', () => {
     // the dark palette).
     expect(rendered).toContain('{gray-fg}x{/gray-fg}');
   });
+
+  it('lands every rule junction exactly on its bar column (Bug A)', () => {
+    const rendered = renderAssistant([
+      '| ab | c |',
+      '|----|---|',
+      '| x | y |',
+    ].join('\n'));
+
+    const lines = stripTags(rendered);
+    const barColumns = (line: string): number[] =>
+      [...line].map((ch, index) => (ch === '│' || ch === '┼' ? index : -1)).filter((i) => i >= 0);
+    const bars = lines.filter((line) => line.includes('│')).map(barColumns);
+    const crosses = lines.filter((line) => line.includes('┼')).map(barColumns);
+    const all = [...bars, ...crosses];
+    expect(all.length).toBeGreaterThanOrEqual(3);
+    // One shared column position across every bar and junction: the rule was
+    // drawn with `w + 2` dashes per segment, which shifted each ┼ one column
+    // right of the │ it was supposed to replace.
+    expect(new Set(all.map(JSON.stringify)).size).toBe(1);
+  });
+
+  it('sizes columns on the rendered cell, not the raw markup (Bug B)', () => {
+    const rendered = renderAssistant([
+      '| name | val |',
+      '|------|-----|',
+      '| **seed** | 1 |',
+      '| hi | 2 |',
+    ].join('\n'));
+
+    const lines = stripTags(rendered);
+    // `**seed**` renders as `seed` (4 columns). Sizing on the raw 9-column
+    // markup left two dead spaces between the text and the bar.
+    const seedRow = lines.find((line) => line.includes('seed')) ?? '';
+    expect(seedRow).toContain('seed │');
+    expect(seedRow).not.toContain('seed  ');
+    // The uniform-column assertion still holds with markup in a cell (V4).
+    const barColumns = (line: string): number[] =>
+      [...line].map((ch, index) => (ch === '│' || ch === '┼' ? index : -1)).filter((i) => i >= 0);
+    const all = lines
+      .filter((line) => line.includes('│') || line.includes('┼'))
+      .map(barColumns);
+    expect(new Set(all.map(JSON.stringify)).size).toBe(1);
+  });
 });
