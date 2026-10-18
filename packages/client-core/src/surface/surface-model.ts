@@ -774,7 +774,13 @@ export class SurfaceModel {
         if (existing === undefined) this.turnsByOrder.push(turn);
         else this.replaceInOrder(turn);
         this.turnsById.set(turn.turnId, turn);
-        this.usage = event.usage;
+        // The run-level reading is the LAST turn that REPORTED usage, so an
+        // absent usage must leave it alone. Assigning `event.usage` straight
+        // through writes `undefined` into a `TokenUsage | null` field, and
+        // reading that back as a zero would erase the tokens an earlier turn
+        // really spent — the same "absent is not zero" rule as the turn field
+        // above, applied to the run total.
+        if (event.usage !== undefined) this.usage = event.usage;
         return { kind: 'turn', turn };
       }
 

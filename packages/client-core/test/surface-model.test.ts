@@ -626,6 +626,41 @@ describe('surface conformance: turn lifecycle', () => {
     expect(zero.turnById('turn-1')?.usage).toEqual({ inputTokens: 0, outputTokens: 0, totalTokens: 0 });
   });
 
+  it('does not let a turn that reported no usage erase the run-level reading', () => {
+    // The run-level `usageState` is the last REPORTING turn's usage, and it is
+    // a second, separate assignment from the turn field above — fixing one and
+    // not the other compiles fine while the run total silently reads `null`.
+    //
+    // The control group is the point: turn 1 reports 2 tokens FIRST, so the run
+    // has a real reading to lose. Without that seeding, "kept the reading" and
+    // "clobbered it to null" would both be observed as `null` on a model that
+    // had never seen a number, and the guard below would have no teeth.
+    const model = startedModel();
+    model.apply(
+      envelope('turn.completed', {
+        seq: 3,
+        payload: { turnId: 'turn-1', index: 0, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+      }),
+    );
+    expect(model.usageState?.totalTokens).toBe(2);
+
+    model.apply(envelope('turn.started', { seq: 4, payload: { turnId: 'turn-2', index: 1 } }));
+    model.apply(
+      envelope('turn.completed', {
+        seq: 5,
+        payload: { turnId: 'turn-2', index: 1, usage: undefined },
+      }),
+    );
+
+    // Absent is not zero, and absent is also not "the run never spent anything".
+    expect(model.usageState?.totalTokens).toBe(2);
+    expect(model.usageState).not.toEqual({ inputTokens: 0, outputTokens: 0, totalTokens: 0 });
+    expect(model.usageState).not.toBeNull();
+    // The silent turn itself is still recorded as having reported nothing.
+    expect(model.turnById('turn-2')?.usage).toBeNull();
+    expect(model.turnById('turn-1')?.usage?.totalTokens).toBe(2);
+  });
+
   it('keeps one turn per turn id and orders them by arrival', () => {
     const model = new SurfaceModel();
     model.apply(envelope('turn.started', { seq: 1, payload: { turnId: 'turn-a', index: 0 } }));
