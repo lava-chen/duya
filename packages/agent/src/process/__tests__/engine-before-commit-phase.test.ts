@@ -98,16 +98,25 @@ vi.mock('@duya/ai', async (importOriginal) => {
 const PRE_EXISTING = new Set(process.listeners('message'));
 const { duyaAgent } = await import('../../agent/DuyaAgent.js');
 const { TurnPipelinePublisher } = await import('../../tool/turn-pipeline-publisher.js');
-const { initDbClient } = await import('../../ipc/db-client.js');
+const { initDbClient, setDbTransport } = await import('../../ipc/db-client.js');
 const { composeLegacyRunPorts, createLegacyAssembleTurn, buildLegacyRunManifest, buildLegacyRunInput } =
   await import('../run-composition.js');
 import type { LegacyRunFacts, LegacyRunHost } from '../run-composition.js';
 
 let dbListener: ((m: unknown) => void) | null = null;
 const originalEnv = { ...process.env };
-let realSend: typeof process.send | undefined;
 const tempDirs: string[] = [];
 
+/**
+ * T04b: install a TRANSPORT, not a `process.send` replacement.
+ *
+ * The pool worker's `process.send` belongs to vitest, so a db request must
+ * never reach it. Swapping that global and restoring it in `afterEach` leaves
+ * a window: a request still in flight when the test stops awaiting reaches
+ * `process.nextTick` after the restore and goes out on the pool channel,
+ * where a plain object aborts the whole run before any summary prints. A
+ * transport has no global to restore, so there is nothing to race.
+ */
 function installFakeDbIpc(): void {
   if (!dbListener) {
     initDbClient();
@@ -116,17 +125,17 @@ function installFakeDbIpc(): void {
       .filter((l) => !PRE_EXISTING.has(l))[0] ?? null) as ((m: unknown) => void) | null;
     if (!dbListener) throw new Error('db-client registered no message listener');
   }
-  realSend = process.send;
-  process.send = ((msg: unknown) => {
-    const req = msg as { type?: string; action?: string; id?: string };
-    if (req?.type !== 'db:request') return true;
-    if (req.action !== 'modeState:get' && req.action !== 'mailbox:claimBatch') {
-      throw new Error(`unexpected db action in the before_commit proof: ${req.action}`);
-    }
-    const result = req.action === 'mailbox:claimBatch' ? { rows: [], claimTokens: [] } : null;
-    setImmediate(() => dbListener?.({ type: 'db:response', id: req.id, success: true, result }));
-    return true;
-  }) as unknown as typeof process.send;
+  setDbTransport({
+    send: (msg: unknown) => {
+      const req = msg as { type?: string; action?: string; id?: string };
+      if (req?.type !== 'db:request') return;
+      if (req.action !== 'modeState:get' && req.action !== 'mailbox:claimBatch') {
+        throw new Error(`unexpected db action in the before_commit proof: ${req.action}`);
+      }
+      const result = req.action === 'mailbox:claimBatch' ? { rows: [], claimTokens: [] } : null;
+      setImmediate(() => dbListener?.({ type: 'db:response', id: req.id, success: true, result }));
+    },
+  });
 }
 
 beforeEach(() => {
@@ -138,7 +147,6 @@ beforeEach(() => {
 
 afterEach(() => {
   process.env = { ...originalEnv };
-  process.send = realSend;
   vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0)) {
     try {

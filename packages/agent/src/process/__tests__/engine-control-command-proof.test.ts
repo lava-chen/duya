@@ -125,7 +125,7 @@ vi.mock('@duya/ai', async (importOriginal) => {
 const PRE_EXISTING = new Set(process.listeners('message'));
 const { duyaAgent } = await import('../../agent/DuyaAgent.js');
 const { TurnPipelinePublisher } = await import('../../tool/turn-pipeline-publisher.js');
-const { initDbClient } = await import('../../ipc/db-client.js');
+const { initDbClient, setDbTransport } = await import('../../ipc/db-client.js');
 // The PRODUCT's own recognition predicates, imported rather than re-described.
 // These are the two functions `createLegacyCommandPort` calls, and the two the
 // CLI registry and `DuyaAgent.streamChat` call. Importing them here is what
@@ -146,15 +146,18 @@ import type { LegacyRunFacts, LegacyRunHost } from '../run-composition.js';
 
 let dbListener: ((m: unknown) => void) | null = null;
 const originalEnv = { ...process.env };
-let realSend: typeof process.send | undefined;
 const ledgerDirs: string[] = [];
 const stdoutWrites: string[] = [];
 
 /**
  * Answer the DB actions a turn reaches for, exactly as the S3 proof does.
  *
- * Under a Vitest pool worker `process.send` is the POOL's channel, so it is
- * replaced and the db-client's own listener is called directly.
+ * T04b: under a Vitest pool worker `process.send` is the POOL's channel, so a
+ * db request must never go near it. This installs a TRANSPORT on the db
+ * client rather than replacing `process.send` and restoring it in
+ * `afterEach`: a request still in flight when the restore lands would go out
+ * on the pool channel and kill the run before any summary printed. A transport
+ * has no global to restore, so it cannot be raced.
  */
 function installFakeDbIpc(): void {
   if (!dbListener) {
@@ -164,17 +167,17 @@ function installFakeDbIpc(): void {
       .filter((l) => !PRE_EXISTING.has(l))[0] ?? null) as ((m: unknown) => void) | null;
     if (!dbListener) throw new Error('db-client registered no message listener');
   }
-  realSend = process.send;
-  process.send = ((msg: unknown) => {
-    const req = msg as { type?: string; action?: string; id?: string };
-    if (req?.type !== 'db:request') return true;
-    if (req.action !== 'modeState:get' && req.action !== 'mailbox:claimBatch') {
-      throw new Error(`unexpected db action in the command proof: ${req.action}`);
-    }
-    const result = req.action === 'mailbox:claimBatch' ? { rows: [], claimTokens: [] } : null;
-    setImmediate(() => dbListener?.({ type: 'db:response', id: req.id, success: true, result }));
-    return true;
-  }) as unknown as typeof process.send;
+  setDbTransport({
+    send: (msg: unknown) => {
+      const req = msg as { type?: string; action?: string; id?: string };
+      if (req?.type !== 'db:request') return;
+      if (req.action !== 'modeState:get' && req.action !== 'mailbox:claimBatch') {
+        throw new Error(`unexpected db action in the command proof: ${req.action}`);
+      }
+      const result = req.action === 'mailbox:claimBatch' ? { rows: [], claimTokens: [] } : null;
+      setImmediate(() => dbListener?.({ type: 'db:response', id: req.id, success: true, result }));
+    },
+  });
 }
 
 beforeEach(() => {
@@ -194,7 +197,6 @@ beforeEach(() => {
 
 afterEach(() => {
   process.env = { ...originalEnv };
-  process.send = realSend;
   vi.restoreAllMocks();
   for (const dir of ledgerDirs.splice(0)) {
     try {
