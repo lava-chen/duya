@@ -69,7 +69,7 @@ npx vitest run packages/host/tests/worker-product-runtime/native-event-ledger-ro
 | G7 | `apps/web` 不存在 | — | Wave 3 |
 | G8 | `packages/host/bundle/*` **tracked 但比源码旧**（在途未提交重建） | `packages/host/bundle/` | T03 |
 | G9 | 旧 Agent 退役 gate 仍 OPEN | `scripts/architecture/agent-retirement-gate.mjs` | Wave 3 |
-| G10 | **CI `test` job 恒红且不携带任何信息**：守卫读不到 vitest 汇总行（`collected: UNKNOWN`），master 每个 commit 都一样 | `.github/workflows/*` 内嵌守卫；run `39040547246` / `39044714745` | T04 |
+| G10 | **CI `test` job 恒红且不携带任何信息**：守卫读不到 vitest 汇总行（`collected: UNKNOWN`），master 每个 commit 都一样 | `.github/workflows/*` 内嵌守卫；run `39040547246` / `39044714745` | T04。**红因已定位到 T04b**（测试把普通对象送进 pool 的 `process.send`，run 在 reporter 打印前被杀）；守卫本身已中性化（`unread` 退出 0 / `no-log` 退出 1），不再是红因 |
 
 ---
 
@@ -189,19 +189,71 @@ T## 标题
 - 目标：让 `test` job 的结论重新具有信息量。**今天它红得毫无意义**：
   `gh run view 39040547246 --log-failed` 显示 master 每个 commit 都是
   `guard FAILED: could not read the vitest summary line. - test files collected: **UNKNOWN**`
-  —— 失败原因是守卫读不到汇总行（vitest 输出里的 `^[[` 是**字面文本**，ESC 字节
-  已被写入方剥掉，所以正则匹配不到），不是任何测试失败。
+  —— 而汇总行读不到，是因为 **run 在 reporter 打印之前就被杀了**，不是正则问题。
 - 后果：`test` 在 master 与每个 PR 上**恒红**，因此它区分不了
   “11 条已知红” 与 “新增了一条真回归”。#275 的测试结果完全不可用。
-- 首个失败证据：master `a24b14eb` 的 run `39040547246` job 日志本身
-  （`test (ubuntu-latest, 22.x)` → `##[error]Process completed with exit code 1`，
-  `collected: UNKNOWN`），与 #275 run `39044714745` 同一行——一模一样。
+- 首个失败证据（**实测，取代原卡的 `^[[` 字面量说法**）：master `a24b14eb` 的 run
+  `39040547246` job `117419024954` 与 #275 run `39044714745` 同一行
+  `##[error]Process completed with exit code 1` + `collected: UNKNOWN`。
+  取回原始 job 日志逐字节量：
+  - 真 ESC 字节 **43025** 个 —— vitest 的颜色码是**真 ESC**，写入方没有剥它；
+  - 字面量 `^[[` 出现 **0** 次 —— “ESC 被转义成 `^[[` 字面文本”这个旧诊断与字节**不符**，
+    它是错的（两条语法都留着接受，代价只是一个 alternation，但**不是 G10 的成因**）；
+  - `passed` 出现 **0** 次 —— vitest 汇总块必然含 “passed”，所以**日志里从来没有过汇总块**。
+  （本 PR 提交的逐字节摘录 `scripts/ci/__fixtures__/ci-crash-no-summary-39040547246.log`
+  复核同一结论：ESC 150 / `^[[` 0 / `passed` 0。）
+- 真正的失败形态：日志末尾是 **Unhandled Rejection**
+  `[vitest-pool]: Unexpected call to process.send()` →
+  `Caused by: TypeError … ERR_INVALID_ARG_TYPE`，栈底在
+  `node_modules/vitest/dist/chunks/coverage.*.js` 的 `deserialize`。
+  即：**某个测试把一个普通对象送进了 vitest forks pool 自己的 `process.send` 通道**，
+  run 在 reporter 打印汇总前死亡。**这条才是 T04 的完成判据**，已独立开卡为 T04b。
 - 步骤：
   1. 在守卫里同时接受 `^[[` 字面量与真 ESC 两种形态（或先不带 `--color` 重定向）。
   2. 加一条：解析不到汇总行时必须报 `UNKNOWN` 并**以中性退出**（不吞红，但也不把
      “没采到” 报成 “测试失败”）；真正的测试失败由 vitest 退出码决定。
+     —— **`unread` 中性、`no-log` 必须红**：日志**存在但没有汇总**说明守卫读到了输入、
+     读坏了，run 的真实结局另有记录；日志**根本不存在**说明是接线坏了，
+     守卫是唯一还能说话的东西，此时退出 0 等于把断线说成通过。
   3. 变异：把一个必然失败的测试注入 → job 必须因**测试**红；撤掉 → 因守卫解析而红不了。
 - 回退：单文件 revert（workflow 内嵌脚本或 `scripts/ci/test-summary-guard.mjs`）。
+
+### T04b 让任何测试都不可能把普通对象送进 pool 的 `process.send`（P0）
+
+- 车道 L-GATE ／ 前置 T04 ／ 规模 ~200 行（含 5 个测试文件改写）
+- 目标：把 T04 里那条 Unhandled Rejection 的**成因**消掉，而不是只让守卫学会闭嘴。
+  完成判据不是“日志变绿”，而是 **CI 的 `test` job 第一次真的打出 vitest 汇总行**
+  （`Test Files` / `Tests` 两行同时出现）。
+- 首个失败证据（本地实测，非 CI 转述）：
+  `npm test` 全量跑在 reporter 打印汇总前被杀，1.15 MB 日志里 `Test Files` 出现 **0 次**；
+  崩溃载荷是一个 `db:request`：
+  `{"type":"db:request","action":"message:append","payload":{"sessionId":"sess-1","messages":[{"id":"journal:u-1:user_msg_added",…}]}}`
+  → 栈：`[vitest-pool]: Unexpected call to process.send()` + `Buffer.from` 的
+  `ERR_INVALID_ARG_TYPE`。**载荷证明源头是 db 层，不是某个测试的断言。**
+- 根因（两条，同一个致命后果）：
+  1. `worker-db-client` 原有的守卫是 `if (!process.send) throw`。在 vitest forks worker 里
+     `process.send` **是存在的**——只是它属于 pool，不属于我们。守卫因此从未生效。
+  2. 打桩形状是“存下真 `process.send` → 换成假 → `afterEach` 还原”。只要还有一条
+     in-flight `db:request`（journal flush、mode-state 轮询）在 `process.nextTick`
+     之后才落地，它的发送就发生在**还原之后**，于是普通对象进了 pool 通道。
+- 修法（按要求取“更正确”的那条）：
+  - `packages/host/src/worker-db-client.ts` 注入 transport port：
+    `setDbTransport({ send })`。transport **没有全局可还原**，所以“还原”这件事本身消失了，
+    不存在可被竞态命中的窗口。
+  - 模块加载时记下 `PRISTINE_SEND`。解析顺序：已安装的 transport → 测试自己替换过的
+    `process.send`（与 PRISTINE 不同，说明是测试的假通道，安全）→ 生产真实通道。
+  - **护栏**：在测试进程里，若以上都没有，就**拒绝发送并抛出指名的错误**，
+    而不是把普通对象交给 pool。忘装 transport 的测试从“杀死整个 run”降级成
+    “一个点名道姓的红”。
+  - 4 个打桩点（`engine-event-spine-and-surface` / `engine-control-command-proof` /
+    `engine-declared-tools-refresh-proof` / `engine-before-commit-phase`）改为装 transport。
+  - `journal.test.ts` 的 `vi.mock` 指向错了 module id（打在 agent 侧兼容 shim 上，
+    而 host 的 `Journal` 直接 import `'../worker-db-client.js'`），mock 从未生效，
+    于是真实 db 流量一路走到 pool。改指 `@duya/host/worker-db-client`。
+  - `vitest.config.ts` 给 `@duya/host` 补上与其他包同款的 worktree-safe source alias。
+- 验证：新增 `packages/host/tests/worker-db-client-transport.test.ts` 钉住“拒绝”这条保证；
+  变异（把护栏条件短路）后 3 条里恰好 2 条转红。
+- 回退：单文件 revert（`worker-db-client.ts` + 5 个测试文件 + `vitest.config.ts`）。
 
 ### T01b 拓宽 `turn.completed` 的 `StopReason`（T01 的两个 refusal）
 
@@ -472,6 +524,7 @@ npm run electron:build
 | T02 计划↔代码同步 | L-GATE | — | todo | — |
 | T03 bundle 策略 | L-GATE | — | **done** | [#277](https://github.com/lava-chen/duya/pull/277) · merge `1a3412e3` · `scripts/architecture/bundle-verify.test.ts` 16/16 · 决策=tracked + git 输入比对（非字节比对，esbuild 产物不可复现） |
 | T04 修 CI test 门禁的 summary 解析 | L-GATE | — | **P0（比任何架构卡都优先）** | 见 §5 的 T04 卡 |
+| T04b 让任何测试都不可能把普通对象送进 pool 的 `process.send` | L-GATE | T04 | **P0（T04 的完成判据）** | 见 §5 的 T04b 卡 |
 | T05 修掉 `native-event-authority-loss` 里已失效的断言 | L-HOST | T01 | todo | 见 §5 的 T05 卡 |
 | T10 `RunSession` | L-CLIENT | — | todo | — |
 | T11 TUI 接共享状态 | L-CLIENT | T10、T13 | todo | — |

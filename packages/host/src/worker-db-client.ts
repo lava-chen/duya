@@ -43,12 +43,90 @@ function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
-// Send DB request and wait for response
-async function sendDbRequest(action: string, payload: unknown): Promise<unknown> {
-  // Check if we're in agent mode (forked child process)
-  if (!process.send) {
+/**
+ * T04b: the channel this module hands a request to.
+ *
+ * A db:request is a PLAIN OBJECT. That is fine when the destination is the
+ * host process over a real IPC channel, and fatal when the destination is
+ * vitest's forks pool: in a pool worker `process.send` is the POOL's own
+ * channel, and Node's serializer there does `Buffer.from(message)` on it,
+ * which throws `ERR_INVALID_ARG_TYPE` for a plain object and takes the entire
+ * run down before the reporter prints a summary.
+ *
+ * The old guard for this was `if (!process.send) throw`. It does not hold: in
+ * a pool worker `process.send` IS defined — it just is not ours. So any test
+ * that reached the db layer without a hand-rolled `process.send` stub handed
+ * a plain object to the pool channel. Making that unrepresentable is what this
+ * transport is for.
+ */
+export interface DbTransport {
+  send(request: DbRequest): void;
+}
+
+/**
+ * `process.send` as it was when this module loaded — i.e. before any test in
+ * this process replaced it. A test that swaps `process.send` has installed its
+ * OWN channel, and that one is safe to send to. The pool's channel is the one
+ * that is not.
+ */
+const PRISTINE_SEND = process.send;
+
+let installedTransport: DbTransport | null = null;
+
+/**
+ * Install the transport every subsequent db request goes through.
+ *
+ * Tests call this once, for the whole file, and pass `null` to restore the
+ * default. Installing rather than replacing `process.send` is what makes the
+ * "restored while a request is still in flight" race impossible: there is no
+ * global left to restore, so no restore can land between a request being
+ * queued and it being sent.
+ *
+ * @param transport the channel to use, or `null` to fall back to the default.
+ */
+export function setDbTransport(transport: DbTransport | null): void {
+  installedTransport = transport;
+}
+
+/**
+ * Pick the channel for one request.
+ *
+ * Order matters. An explicitly installed transport wins; then a `process.send`
+ * that a test swapped in (it differs from {@link PRISTINE_SEND}); then the
+ * real host channel in production.
+ *
+ * The refusal is the point of the exercise. Under a test runner, arriving here
+ * with nothing installed and nothing swapped means the only channel left is
+ * the pool's — so we throw with the two ways out named, instead of handing the
+ * pool a plain object and killing the run.
+ */
+function resolveTransport(): DbTransport {
+  if (installedTransport) return installedTransport;
+
+  const ambient = process.send;
+  if (ambient && ambient !== PRISTINE_SEND) {
+    return { send: (request) => { ambient(request); } };
+  }
+
+  if (process.env.VITEST) {
+    throw new Error(
+      'DB Client: refusing to send a db:request over process.send under a test ' +
+      'runner. In a vitest forks worker that channel belongs to the pool, and a ' +
+      'plain object there aborts the whole run before the summary prints. Fix the ' +
+      'test by calling setDbTransport({ send }) for the file (see ' +
+      'packages/host/testing/db-transport.ts) instead of assigning process.send.',
+    );
+  }
+
+  if (!ambient) {
     throw new Error('DB Client: Not in agent mode - process.send is not available');
   }
+  return { send: (request) => { ambient(request); } };
+}
+
+// Send DB request and wait for response
+async function sendDbRequest(action: string, payload: unknown): Promise<unknown> {
+  const transport = resolveTransport();
 
   const id = generateId();
 
@@ -73,7 +151,7 @@ async function sendDbRequest(action: string, payload: unknown): Promise<unknown>
     // Send request after registration is complete (next tick)
     process.nextTick(() => {
       try {
-        process.send!(request);
+        transport.send(request);
       } catch (err) {
         // H4: process.send can throw if the IPC channel is closed
         if (pendingRequests.has(id)) {

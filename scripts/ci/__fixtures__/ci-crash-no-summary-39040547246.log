@@ -1,0 +1,35 @@
+2026-10-17T14:31:15.4149042Z 
+2026-10-17T14:31:15.4150422Z [90mstdout[2m | packages/agent/src/process/__tests__/engine-event-spine-and-surface.test.ts[2m > [22m[2mplan 610 D1+D2: the event spine and the chat:* projection[2m > [22m[2mbinds the engine's store to the spine without dropping the host's progress mapper
+2026-10-17T14:31:15.4152005Z [22m[39m[2026-10-17T14:31:15.404Z] [INFO] [Agent] projectModelMessages: 1 agent messages +?1 model messages, 0 system segments
+2026-10-17T14:31:15.4152493Z 
+2026-10-17T14:31:15.4153196Z  [32m[39m packages/agent/src/process/__tests__/engine-event-spine-and-surface.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 77[2mms[22m[39m
+2026-10-17T14:31:15.4197545Z 
+2026-10-17T14:31:15.4198255Z [31m¯¯¯¯[39m[1m[41m Unhandled Rejection [49m[22m[31m¯¯¯¯¯[39m
+2026-10-17T14:31:15.4199364Z [31m[1mError[22m: [vitest-pool]: Unexpected call to process.send(). Make sure your test cases are not interfering with process's channel.
+2026-10-17T14:31:15.4201828Z Received value: {"type":"db:request","id":"1792247475385-5m4yw7h0q","action":"message:append","payload":{"sessionId":"sess-1","messages":[{"id":"journal:u-1:user_msg_added","session_id":"sess-1","kind":"user_msg_added","role":"user","content":"hello","timestamp":1000}],"turnId":"turn-1"}}[39m
+2026-10-17T14:31:15.4207264Z [90m [2mo[22m deserialize node_modules/vitest/dist/chunks/coverage.DL5VHqXY.js:[2m2592:11[22m[39m
+2026-10-17T14:31:15.4208860Z [90m [2mo[22m EventEmitter.onMessage node_modules/vitest/dist/chunks/index.B521nVV-.js:[2m89:13[22m[39m
+2026-10-17T14:31:15.4209810Z [90m [2mo[22m EventEmitter.emit node:events:[2m519:28[22m[39m
+2026-10-17T14:31:15.4211958Z [90m [2mo[22m Object.postMessage node_modules/vitest/dist/chunks/coverage.DL5VHqXY.js:[2m2575:37[22m[39m
+2026-10-17T14:31:15.4213317Z [90m [2mo[22m ChildProcess.<anonymous> node_modules/tinypool/dist/index.js:[2m163:86[22m[39m
+2026-10-17T14:31:15.4214324Z [90m [2mo[22m ChildProcess.emit node:events:[2m519:28[22m[39m
+2026-10-17T14:31:15.4228725Z [90m [2mo[22m emit node:internal/child_process:[2m949:14[22m[39m
+2026-10-17T14:31:15.4229746Z [90m [2mo[22m process.processTicksAndRejections node:internal/process/task_queues:[2m90:21[22m[39m
+2026-10-17T14:31:15.4230277Z 
+2026-10-17T14:31:15.4231445Z [31m[1mCaused by: TypeError[22m: The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received an instance of Object[39m
+2026-10-17T14:31:15.4232927Z [90m [2mo[22m Function.from node:buffer:[2m328:9[22m[39m
+2026-10-17T14:31:15.4233935Z [90m [2mo[22m deserialize node_modules/vitest/dist/chunks/coverage.DL5VHqXY.js:[2m2586:34[22m[39m
+2026-10-17T14:31:15.4235176Z [90m [2mo[22m EventEmitter.onMessage node_modules/vitest/dist/chunks/index.B521nVV-.js:[2m89:13[22m[39m
+2026-10-17T14:31:15.4236212Z [90m [2mo[22m EventEmitter.emit node:events:[2m519:28[22m[39m
+2026-10-17T14:31:15.4237300Z [90m [2mo[22m Object.postMessage node_modules/vitest/dist/chunks/coverage.DL5VHqXY.js:[2m2575:37[22m[39m
+2026-10-17T14:31:15.4238600Z [90m [2mo[22m ChildProcess.<anonymous> node_modules/tinypool/dist/index.js:[2m163:86[22m[39m
+2026-10-17T14:31:15.4239511Z [90m [2mo[22m ChildProcess.emit node:events:[2m519:28[22m[39m
+2026-10-17T14:31:15.4240283Z [90m [2mo[22m emit node:internal/child_process:[2m949:14[22m[39m
+2026-10-17T14:31:15.4241371Z [90m [2mo[22m process.processTicksAndRejections node:internal/process/task_queues:[2m90:21[22m[39m
+2026-10-17T14:31:15.4241895Z 
+2026-10-17T14:31:15.4243995Z [31m[2m¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯[22m[39m
+2026-10-17T14:31:15.4271515Z [31m[1mSerialized Error:[22m[39m [90m{ code: 'ERR_INVALID_ARG_TYPE' }[39m
+2026-10-17T14:31:15.4308436Z 
+2026-10-17T14:31:15.4308446Z 
+2026-10-17T14:31:15.4308451Z 
+2026-10-17T14:31:15.4946297Z ##[error]Process completed with exit code 1.

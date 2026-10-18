@@ -305,56 +305,19 @@ jobs:
         # include-glob change that only ever matches empty files. That exits 0
         # and looks identical to a healthy run. Assert the collected totals
         # are non-zero, so this job cannot go green by collecting nothing.
+        #
+        # T04b: this step used to carry an INLINE copy of the guard while
+        # `scripts/ci/test-summary-guard.mjs` held the real one — and the two
+        # disagreed about both failure branches. The inline copy exited 1 on
+        # `unread` (failing the job over its own parse failure) and 0 on
+        # `no-log` (passing a job whose log was never written). CI ran the
+        # inline copy, so correcting the script changed nothing about this job
+        # — which is why `guard FAILED: could not read the vitest summary
+        # line.` kept appearing no matter what the script said. There is one
+        # implementation now, and the workflow calls it.
         if: always()
         shell: bash
-        run: |
-          if [ ! -f vitest-output.log ]; then
-            echo "guard: no vitest-output.log — the test step never ran; its own failure is the signal."
-            exit 0
-          fi
-          node <<'EOF'
-          const fs = require('node:fs');
-          // Read as latin1 and drop NULs: vitest's summary is pure ASCII, so
-          // this recovers it byte-exactly whether tee wrote UTF-8 (the CI
-          // shell) or UTF-16LE (PowerShell's Tee-Object default).
-          const clean = fs
-            .readFileSync('vitest-output.log', 'latin1')
-            .replace(/\u0000/g, '')
-            // vitest colourises its summary; strip ANSI before matching.
-            .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
-          const total = (label) => {
-            // Take the LAST match, not the first: this log is megabytes of test
-            // output and any line starting with "Tests" would match first, but
-            // the real summary is always the final block.
-            const re = new RegExp(`^\\s*${label}\\s+(.*)$`, 'gm');
-            let hit = null;
-            let m;
-            while ((m = re.exec(clean)) !== null) hit = m[1];
-            const t = hit && hit.match(/\((\d+)\)\s*$/);
-            return t ? Number(t[1]) : null;
-          };
-          const files = total('Test Files');
-          const tests = total('Tests');
-          const report = [
-            '### npm test',
-            '',
-            `- test files collected: **${files ?? 'UNKNOWN'}**`,
-            `- tests collected: **${tests ?? 'UNKNOWN'}**`,
-          ].join('\n');
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY ?? 'guard-summary.md', report + '\n');
-          process.stdout.write(report + '\n');
-          if (files === null || tests === null) {
-            process.stderr.write('\nguard FAILED: could not read the vitest summary line.\n');
-            process.exit(1);
-          }
-          if (files === 0 || tests === 0) {
-            process.stderr.write(
-              `\nguard FAILED: collected ${files} file(s) / ${tests} test(s). ` +
-              'A zero-collection run is a failed run, not a pass.\n',
-            );
-            process.exit(1);
-          }
-          EOF
+        run: node scripts/ci/test-summary-guard.mjs vitest-output.log
 
       - name: Run tests with coverage
         if: matrix.os == 'ubuntu-latest'
