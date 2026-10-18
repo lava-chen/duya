@@ -64,8 +64,9 @@ describe('transcript-view markup', () => {
     const model = new TranscriptModel();
     model.appendTextDelta('const x = { a: 1 };');
     const rendered = renderTranscript(model, OPTIONS);
-    // `{ a: 1 }` would otherwise be read as an unterminated tag and dropped.
-    expect(rendered).toContain('\\{');
+    // `{ a: 1 }` would otherwise be read as a tag. `{open}` is blessed's own
+    // literal-brace escape; the old `\{` was never parsed as an escape at all.
+    expect(rendered).toContain('{open}');
     expect(rendered).toContain('a: 1');
   });
 
@@ -75,7 +76,7 @@ describe('transcript-view markup', () => {
     const rendered = renderTranscript(model, OPTIONS);
     // Exactly one unescaped opener would be the payload; the real style's
     // opener plus an escaped copy is what a correct render looks like.
-    expect(rendered).toContain('\\{bright-green-fg}');
+    expect(rendered).toContain('{open}bright-green-fg}');
   });
 
   it('renders common Markdown structure while preserving CJK and identifier text', () => {
@@ -114,7 +115,7 @@ describe('transcript-view markup', () => {
 
     expect(rendered).toContain('{gray-fg}  ┌─ ts · 1 line ─{/gray-fg}');
     expect(rendered).toContain('{gray-fg}  │ 1 │{/gray-fg}');
-    expect(rendered).toContain('const payload = \\{ ok: true };');
+    expect(rendered).toContain('const payload = {open} ok: true };');
     expect(rendered).toContain('{gray-fg}  └─{/gray-fg}');
   });
 
@@ -152,7 +153,7 @@ describe('transcript-view markup', () => {
       text: '```json\n{"ready": false}',
     });
 
-    expect(rendered).toContain('\\{"ready": false}');
+    expect(rendered).toContain('{open}"ready": false}');
     expect(rendered.endsWith('{gray-fg}  └─{/gray-fg}')).toBe(true);
   });
 
@@ -263,7 +264,7 @@ describe('themes', () => {
 
 describe('escapeTags', () => {
   it('escapes every brace, not just the first', () => {
-    expect(escapeTags('{a}{b}')).toBe('\\{a}\\{b}');
+    expect(escapeTags('{a}{b}')).toBe('{open}a}{open}b}');
   });
 
   it('leaves text without braces alone', () => {

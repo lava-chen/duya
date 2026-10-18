@@ -18,7 +18,9 @@ function renderAssistant(text: string): string {
 /** Tag-free display text, so alignment can be measured like the terminal sees it. */
 function stripTags(rendered: string): string[] {
   return rendered.split('\n')
-    .map((line) => line.replace(/\{\/?[a-z0-9-]+\}/gu, '').replace(/\\\{/gu, '{'));
+    // `{open}` must be restored BEFORE the tag strip, or the strip regex —
+    // whose body charset matches the word "open" — would delete it instead.
+    .map((line) => line.replace(/\{open\}/gu, '{').replace(/\{\/?[a-z0-9-]+\}/gu, ''));
 }
 
 describe('assistant markdown tables', () => {

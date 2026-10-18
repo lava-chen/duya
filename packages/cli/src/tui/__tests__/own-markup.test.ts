@@ -69,11 +69,37 @@ describe('renderMarkup against blessed ground truth', () => {
 });
 
 describe('escapeMarkup', () => {
-  it('strips braces so model content cannot inject markup', () => {
-    expect(escapeMarkup('a {cyan-fg}b{/cyan-fg} c')).toBe('a cyan-fgb/cyan-fg c');
+  it('rewrites braces into the {open} tag instead of deleting them', () => {
+    // The old form DELETED the braces: model JSON arrived visibly mangled.
+    // `{open}` is information-preserving and every TUI parser resolves it.
+    expect(escapeMarkup('a {cyan-fg}b{/cyan-fg} c'))
+      .toBe('a {open}cyan-fg}b{open}/cyan-fg} c');
+  });
+
+  it('round-trips through renderMarkup as a literal brace', () => {
+    expect(renderMarkup(escapeMarkup('function f() { return 1; }')))
+      .toBe('function f() { return 1; }');
   });
 
   it('leaves everything else alone', () => {
     expect(escapeMarkup('你好 world / path / 100%')).toBe('你好 world / path / 100%');
+  });
+});
+
+describe('renderMarkup literal-brace tags', () => {
+  // Ground truth probed against blessed 0.1.81: `{open}` yields `{`,
+  // `{close}` yields `}`, and the open/close check runs BEFORE the slash
+  // branch, so `{/open}` also yields `{` — hence `{open}bold}{/open}` is
+  // `{` + `bold}` + `{`, i.e. the trailing `{` is real.
+  it('resolves {open} and {close} like blessed does', () => {
+    expect(renderMarkup('{open}bold}{/open}')).toBe('{bold}{');
+    expect(renderMarkup('a{close}b')).toBe('a}b');
+    expect(renderMarkup('{/open}')).toBe('{');
+  });
+
+  it('does not let an escaped brace be re-read as markup', () => {
+    // The adversarial case the backslash scheme failed: this must render as
+    // text, never as a colour change.
+    expect(renderMarkup(escapeMarkup('{/gray-fg}'))).toBe('{/gray-fg}');
   });
 });

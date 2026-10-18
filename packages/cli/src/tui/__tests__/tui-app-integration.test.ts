@@ -389,8 +389,8 @@ describe('renderTranscript', () => {
     const model = new TranscriptModel();
     model.addUser('return {"a": 1}');
     const out = renderTranscript(model);
-    expect(out).toContain('\\{');
-    expect(escapeTags('{')).toBe('\\{');
+    expect(out).toContain('{open}');
+    expect(escapeTags('{')).toBe('{open}');
   });
 
   it('caps tool results rather than rendering an unbounded blob', () => {

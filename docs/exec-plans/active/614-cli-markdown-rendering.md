@@ -217,19 +217,21 @@ Text     := <其余，直到下一个候选起手例外>
 
 ## 6. Phases
 
-- [ ] **Phase 0 — 取证 + Go/No-Go**（不做产品改动）
-  - [ ] 0.1 补写 differential harness：把 §3.5 的 blessed 结论与 §3.3 的注入结论落成测试证据（`own-markup.test.ts` 的 "against blessed ground truth" 已有先例）。
-  - [ ] 0.2 写 `tui/__tests__/render-parity.harness.ts`：最小 cursor framebuffer（处理 `\x1b[r;cH` / `\x1b[<n>d` / `\r` / `\n` / SGR / 可打印字符），把两条链的字节回放成 glyph grid。
-  - [ ] 0.3 帧语料：空帧 / 单色文本 / 带头尾 status+input / CJK / 宽emoji / border / overlay 居中。
-  - [ ] **Go/No-Go**：grid 逐格一致 ⇒ 继续 D3；不一致 ⇒ 降级 D3′，**本计划 I9 撤销**，斜体降级为下划线。
+- [x] **Phase 0 — 取证 + Go/No-Go**（不做产品改动）——**结论：Go**（6 帧语料 own↔blessed glyph grid 逐格一致）
+  - [x] 0.1 补写 differential harness：把 §3.5 的 blessed 结论与 §3.3 的注入结论落成测试证据（`own-markup.test.ts` 的 "against blessed ground truth" 已有先例）。
+  - [x] 0.2 写 `tui/__tests__/render-parity.harness.ts`：最小 cursor framebuffer（处理 `\x1b[r;cH` / `\x1b[<n>d` / `\r` / `\n` / SGR / 可打印字符），把两条链的字节回放成 glyph grid。
+    - 实测补充：harness 第一轮假红是 blessed 的 **DEC ACS** charset shift（`\x1b(0` + `q` 画 `─`、`~` 画 `·`），own 直接写 Unicode —— 视觉相同字节不同，回放器必须解码 ACS。
+  - [x] 0.3 帧语料：空帧 / 单色文本 / 带头尾 status+input / CJK / 宽emoji / border / overlay 居中。
+  - [x] **Go/No-Go**：grid 逐格一致 ⇒ 继续 D3；不一致 ⇒ 降级 D3′，**本计划 I9 撤销**，斜体降级为下划线。
   - 门禁：`node node_modules/vitest/vitest.mjs run packages/cli/src/tui/__tests__/render-parity.test.ts`
 
-- [ ] **Phase 1 — 转义统一（I1，独立可提交）**
-  - [ ] 1.1 `escapeTags` → `{open}`（§5.1）
-  - [ ] 1.2 `own/markup.ts` 支持 `{open}` / `{close}`；`escapeMarkup` 改为输出 `{open}` 而非删除字符
-  - [ ] 1.3 `terminal/sgr.ts:112-117` 的 `\{` 判定改为 `{open}`
-  - [ ] 1.4 更新受影响断言：`tui-transcript-markup.test.ts:68,78,117,155,264-270`、`tui-app-integration.test.ts:392-393`、`tui-question-overlay.test.ts:226-227`、`tui-transcript-table.test.ts:21`
-  - [ ] 1.5 新增注入回归：`{bold}` / `{/gray-fg}` / `{/escape}` / `{{}}` 四种源文本必须原样可见
+- [x] **Phase 1 — 转义统一（I1，独立可提交）**
+  - [x] 1.1 `escapeTags` → `{open}`（§5.1）
+  - [x] 1.2 `own/markup.ts` 支持 `{open}` / `{close}`；`escapeMarkup` 改为输出 `{open}` 而非删除字符
+  - [x] 1.3 `terminal/sgr.ts:112-117` 的 `\{` 判定改为 `{open}`
+  - [x] 1.4 更新受影响断言：`tui-transcript-markup.test.ts:68,78,117,155,264-270`、`tui-app-integration.test.ts:392-393`、`tui-question-overlay.test.ts:226-227`、`tui-transcript-table.test.ts:21`
+  - [x] 1.5 新增注入回归：`{bold}` / `{/gray-fg}` / `{/escape}` / `{{}}` 四种源文本必须原样可见
+  - 执行记录：①`{/open}` 语义对齐 —— blessed 的 open/close 判定在 slash 分支**之前**，`{/open}` 也产出 `{`（探针实测），own/sgr 两链均已按此对齐；②sgr 首版实现漏发 tag 前的普通文本（`line.slice(index, brace)`），把 `{cyan-fg}x{/cyan-fg}` 变成 `\x1b[36m\x1b[39m`，已修；③`{close}` → `}`、`{open}` → `{`（对称字面量，blessed 原生）。存量红不受影响：worker-path 3 条、registry 22v23、host-event-projection（他人 untracked）。
   - 门禁：`node node_modules/vitest/vitest.mjs run packages/cli/src/tui` + `packages/cli` 全量 + `cd packages/cli && tsc -b`
 
 - [ ] **Phase 2 — inline tokenizer（I2）**
