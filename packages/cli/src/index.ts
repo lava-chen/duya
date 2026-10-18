@@ -24,7 +24,11 @@
 import { Command } from '@commander-js/extra-typings';
 import { startLocalHost } from '@duya/host/local-host';
 import { buildControlPlane } from './program/build-control-plane.js';
-import { runChatCommand, runTuiCommand, type ChatCommandOptions, type TuiCommandOptions } from './chat.js';
+import { runChatCommand, type ChatCommandOptions } from './chat.js';
+// `duya tui` boots an ephemeral Host, so it belongs to the bootstrap layer, not
+// to `chat.ts`. Keeping it out of the client entry is what lets gate G11-1
+// hold `chat.ts` free of the execution engine.
+import { runTuiCommand, type TuiCommandOptions } from './tui-command.js';
 import { resolveHostWorkerPath } from './worker-path.js';
 
 export { CLI_DESCRIPTORS } from './program/descriptors.js';
