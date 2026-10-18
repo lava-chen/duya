@@ -232,6 +232,35 @@ export function satisfies(
  * Kept separate on purpose. Mixing the two is the mistake that produces a
  * handshake where the runtime concludes a host can execute something because
  * the host offered to serve it.
+ *
+ * ## This is the EXECUTE side of the three-direction census
+ *
+ * Three vocabularies in this repo name capabilities, and none of them knows
+ * about the other two. Each name's direction is decided exactly once, in
+ * `docs/exec-plans/active/610-architecture-series/20-capability-directions.md`:
+ *
+ *  - EXECUTE — here: what the runtime can DO.
+ *  - CONSUME — `PROTOCOL_CAPABILITIES` in version.ts: what a consumer must
+ *    handle for a message to be useful to it.
+ *  - PROVIDE — `HOST_CAPABILITIES` in host-capabilities.ts: what a host can
+ *    OFFER a client.
+ *
+ * Three features sit on two sides of the same handshake under DIFFERENT names.
+ * The census records them as pairs rather than pretending they are one name,
+ * because the spellings carry different contracts:
+ *
+ *  - `tool_preview` (execute) vs `tool_call_preview` (consume). Both sides read
+ *    the same advertisement, `events.volatile` carrying `tool.call_preview`.
+ *  - `checkpoint_repository` (execute) vs `checkpoint_resume` (consume). The
+ *    consumption side is the weaker test: it only asks whether the event is
+ *    sendable, never whether a repository exists.
+ *  - `permission_coordinator` (execute) vs `permission_expiry` (consume). These
+ *    two are the same predicate under two names, which is the strongest evidence
+ *    that the naming, not the behaviour, is what drifted.
+ *
+ * The pairs are deliberately left unmerged here. Merging them is a semantic
+ * change to a published wire vocabulary, and a census is a document; it records
+ * the ambiguity instead of resolving it by assertion.
  */
 export const RUNTIME_CAPABILITIES = [
   /** A durable checkpoint repository exists and `checkpoint.saved` can be emitted. */
