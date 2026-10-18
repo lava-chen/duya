@@ -533,7 +533,7 @@ npm run electron:build
 | T03 bundle 策略 | L-GATE | — | **done** | [#277](https://github.com/lava-chen/duya/pull/277) · merge `1a3412e3` · `scripts/architecture/bundle-verify.test.ts` 16/16 · 决策=tracked + git 输入比对（非字节比对，esbuild 产物不可复现） |
 | T04 修 CI test 门禁的 summary 解析 | L-GATE | — | **P0（比任何架构卡都优先）** | 见 §5 的 T04 卡 |
 | T04b 让任何测试都不可能把普通对象送进 pool 的 `process.send` | L-GATE | T04 | **P0（T04 的完成判据）** | 见 §5 的 T04b 卡 |
-| T05 修掉 `native-event-authority-loss` 里已失效的断言 | L-HOST | T01 | todo | 见 §5 的 T05 卡 |
+| T05 修掉 `native-event-authority-loss` 里已失效的断言 | L-HOST | T01 | **done** | 用例更名并重写理由：T01 落地后 `run-engine.ts:894` 已调 `#publishTurnCompleted`（定义在 `:2801`），"引擎没有发射点"不再是事实；计数仍为 0 是因为**本夹具不发 usage**，属 T01 的两条 refusal 之一 · 6/6 通过 |
 | T10 `RunSession` | L-CLIENT | — | todo | — |
 | T11 TUI 接共享状态 | L-CLIENT | T10、T13 | todo | — |
 | T12 PTY 验收 + 删 reducer | L-CLIENT | T11 | todo | — |
