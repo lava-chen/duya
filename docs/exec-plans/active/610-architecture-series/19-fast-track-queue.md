@@ -531,8 +531,8 @@ npm run electron:build
 | T01b 拓宽 `turn.completed` 的 `StopReason` | L-HOST | T01 | **next** | 见 §5 的 T01b 卡 |
 | T02 计划↔代码同步 | L-GATE | — | todo | — |
 | T03 bundle 策略 | L-GATE | — | **done** | [#277](https://github.com/lava-chen/duya/pull/277) · merge `1a3412e3` · `scripts/architecture/bundle-verify.test.ts` 16/16 · 决策=tracked + git 输入比对（非字节比对，esbuild 产物不可复现） |
-| T04 修 CI test 门禁的 summary 解析 | L-GATE | — | **P0（比任何架构卡都优先）** | 见 §5 的 T04 卡 |
-| T04b 让任何测试都不可能把普通对象送进 pool 的 `process.send` | L-GATE | T04 | **P0（T04 的完成判据）** | 见 §5 的 T04b 卡 |
+| T04 修 CI test 门禁的 summary 解析 | L-GATE | — | **done（追踪表欠账，已补）** | [`a3aab276 fix(ci): fail the summary guard when the test log is missing`](https://github.com/lava-chen/duya/commit/a3aab276) · 守卫 `unread` 中性 / `no-log` 退出 1 |
+| T04b 让任何测试都不可能把普通对象送进 pool 的 `process.send` | L-GATE | T04 | **done（完成判据已实测）** | #279 merge `6ff661c3`（`50485c02`）· 判据是"CI 第一次同时打出两行汇总"，2026-10-18 在 run `39100448943` job `117595462000` 实测两行俱在：`Test Files 94 failed \| 1262 passed \| 9 skipped (1365)` 与 `Tests 338 failed \| 15112 passed \| 112 skipped (15562)`；守卫另报 `test files collected: 1365` / `tests collected: 15562` |
 | T05 修掉 `native-event-authority-loss` 里已失效的断言 | L-HOST | T01 | **done** | 用例更名并重写理由：T01 落地后 `run-engine.ts:894` 已调 `#publishTurnCompleted`（定义在 `:2801`），"引擎没有发射点"不再是事实；计数仍为 0 是因为**本夹具不发 usage**，属 T01 的两条 refusal 之一 · 6/6 通过 |
 | T10 `RunSession` | L-CLIENT | — | todo | — |
 | T11 TUI 接共享状态 | L-CLIENT | T10、T13 | todo | — |
