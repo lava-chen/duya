@@ -1,0 +1,141 @@
+/**
+ * The TUI's view adapter, checked against the legacy projector it replaces
+ * (plan 610 T11).
+ *
+ * ## What this file is for
+ *
+ * T11's failure evidence: feed one recorded run containing `tool.timed_out` and
+ * `permission.resolved`, and the view must say both. Today the legacy projector
+ * has no case for either, so `default:` returns `null` and the fact dies one
+ * layer before the user.
+ *
+ * ## The control is the whole point
+ *
+ * "The view emits a frame for the timeout" is a weak claim on its own — it is
+ * also what you would see if the event could never have been lost. So the first
+ * case pins the OPPOSITE direction on the same events: the legacy path drops
+ * them. Without that, a regression that broke the adapter and a fixture that
+ * never carried the event would be indistinguishable.
+ *
+ * Everything asserted is a concrete value. No case asserts only "did not throw".
+ */
+import { describe, expect, it } from 'vitest';
+import { RunSession } from '@duya/client-core';
+import { envelope, RUN_ID, SESSION_ID } from '@duya/client-core/testing';
+import { TranscriptModel } from '../blocks.js';
+import { projectHostEvent } from '../host-event-stream.js';
+import { createRunSessionView, projectRunSessionView } from '../run-session-view.js';
+
+/**
+ * One recorded run. Payload shapes come from the protocol's own fixtures where
+ * the fixture carries the type, and are written out where the card's point is a
+ * field the fixture does not vary.
+ */
+function recordedRun() {
+  return [
+    envelope('run.started', { seq: 1 }),
+    envelope('turn.started', { seq: 2, payload: { turnId: 'turn-1', index: 0 } }),
+    envelope('tool.call_started', {
+      seq: 3,
+      payload: { toolCallId: 'call-1', toolName: 'Bash', arguments: { command: 'sleep 999' } },
+    }),
+    envelope('permission.requested', {
+      seq: 4,
+      payload: {
+        requestId: 'req-1',
+        kind: 'tool_use',
+        toolCallId: 'call-1',
+        toolName: 'Bash',
+        toolInput: { command: 'rm -rf build' },
+        mode: 'generic',
+        startedAt: 0,
+        expiresAt: 300_000,
+      },
+    }),
+    envelope('tool.timed_out', {
+      seq: 5,
+      payload: { toolCallId: 'call-1', toolName: 'Bash', elapsedMs: 600_000 },
+    }),
+    envelope('permission.resolved', {
+      seq: 6,
+      payload: { requestId: 'req-1', action: 'deny', source: 'host', latencyMs: 42 },
+    }),
+    envelope('run.completed', { seq: 7, payload: { status: 'completed' } }),
+  ];
+}
+
+describe('the legacy projector is what loses these two facts', () => {
+  it('returns null for both, while still projecting the events around them', () => {
+    // The control. Each dropped event is shown next to one the projector DOES
+    // handle, so "drops it" cannot be confused with "projects nothing here".
+    expect(projectHostEvent({
+      type: 'tool.call_started',
+      toolCallId: 'call-1',
+      toolName: 'Bash',
+      arguments: { command: 'sleep 999' },
+    })).toEqual({ type: 'tool_use', data: { id: 'call-1', name: 'Bash', input: { command: 'sleep 999' } } });
+
+    expect(projectHostEvent({ type: 'tool.timed_out', toolCallId: 'call-1', toolName: 'Bash', elapsedMs: 600_000 }))
+      .toBeNull();
+    expect(projectHostEvent({ type: 'permission.resolved', requestId: 'req-1', action: 'deny', source: 'host', latencyMs: 42 }))
+      .toBeNull();
+  });
+});
+
+describe('the view adapter states both from shared state', () => {
+  it('emits a frame for each fact the legacy projector dropped', () => {
+    const session = new RunSession({ runId: RUN_ID, sessionId: SESSION_ID });
+    let view = createRunSessionView();
+    const emitted: string[] = [];
+
+    for (const event of recordedRun()) {
+      session.apply(event);
+      const projection = projectRunSessionView(view, session.getSnapshot());
+      view = projection.state;
+      for (const frame of projection.frames) emitted.push(frame.type);
+    }
+
+    // Exactly one frame each, and both land. The counts are part of the claim:
+    // an adapter that re-announced the timeout on every later snapshot would
+    // pass a "contains" assertion and fail this one.
+    expect(emitted).toEqual(['tool_timed_out', 'permission_resolved']);
+  });
+
+  it('reaches the transcript: the tool row is marked and the answer is stated', () => {
+    const session = new RunSession({ runId: RUN_ID, sessionId: SESSION_ID });
+    const model = new TranscriptModel();
+    let view = createRunSessionView();
+
+    for (const event of recordedRun()) {
+      session.apply(event);
+      const projection = projectRunSessionView(view, session.getSnapshot());
+      view = projection.state;
+      for (const frame of projection.frames) model.apply(frame);
+    }
+
+    const tool = model.toolByCallId('call-1');
+    expect(tool?.timedOut).toBe(true);
+    // A timeout is not a completion: no result is invented for a call that has
+    // not come back.
+    expect(tool?.result).toBeUndefined();
+
+    const lines = model.blocks.filter((block) => block.kind === 'notice');
+    expect(lines.map((block) => (block as { text: string }).text)).toEqual([
+      'Permission denied for Bash',
+    ]);
+  });
+
+  it('is idempotent: projecting again states nothing twice', () => {
+    const session = new RunSession({ runId: RUN_ID, sessionId: SESSION_ID });
+    let view = createRunSessionView();
+    for (const event of recordedRun()) {
+      session.apply(event);
+      view = projectRunSessionView(view, session.getSnapshot()).state;
+    }
+
+    // Same snapshot, no new events. A projection that re-derived its frames
+    // from state alone rather than from the delta would duplicate both facts
+    // on every render tick.
+    expect(projectRunSessionView(view, session.getSnapshot()).frames).toEqual([]);
+  });
+});
