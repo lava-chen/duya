@@ -1689,6 +1689,64 @@ Filterable by component: `LogComponent` constants (AgentProcess, IPC, DB, etc.)
 - Entry: `packages/agent/bundle/agent-process-entry.js`
 - Production: `resources/agent-bundle/agent-process-entry.js`
 
+### Host Worker Bundle (`packages/host/bundle/` — tracked, verified)
+
+**Decision (plan 610 T03): keep it tracked, and gate it.** The alternative —
+gitignore it and build on demand — was rejected because the bundle is not an
+optimisation: the packaged app ships `packages/host/bundle/` as
+`resources/harness-bundle/`, and `duya chat` spawns `worker-entry.js` straight
+out of a checkout. Ignoring it would make every consumer run `build:packages`
+before the app starts, and a missing artifact in a support log would look like a
+code bug. So the artifact stays in git, and the drift it invites is caught by a
+check instead of by convention.
+
+- Builder: `scripts/build-agent-bundle.mjs` (two esbuild entries —
+  `worker-entry.js` from `packages/cli/src/agent-worker-entry.ts`, and
+  `BashTool/BashWorker.js` from `packages/host/src/managed-shell/BashWorker.ts`,
+  which is spawned as its own process with `external: []`). It `rmSync`s the
+  directory and rebuilds, so the directory is fully owned by the build.
+- Inputs recorded by esbuild: `worker-metafile.json` (also committed — it is the
+  bundle's own record of the ~2200 files it was built from; ~1072 of them are
+  first-party and are the set the check judges).
+- Verify: `npm run bundle:verify` (`scripts/architecture/bundle-verify.mjs`).
+  Exit `0` fresh, `1` stale, `2` undetermined — `2` is not `0`, because "could
+  not measure" and "measured clean" are different answers.
+
+**How staleness is judged, and why not by rebuilding.** The obvious check is
+"rebuild and compare bytes", and it does not work here: esbuild's minified output
+for this entry is not reproducible. Two consecutive builds of identical source
+with identical options produced 5515115 / 5515139 / 5515105 bytes, diverging
+inside minified identifier allocation (`var bP=S(()=>{})` vs
+`var bP=S(()=>{"use strict"})`). A byte comparison against that reports stale on
+every run, for a bundle that is fresh.
+
+So the judgement is made from git, which is deterministic by construction: find
+the commit that last wrote `packages/host/bundle/`, read the input list in
+`worker-metafile.json`, and ask whether any of those files changed after it —
+counting committed history **and** the current working tree. This is why the rule
+is not "the directory was touched": an edit under `packages/host/src/__tests__/`
+is not a bundle input and stays green.
+
+The check answers about the metafile that is **checked in**, so its denominator
+follows that file, not the tree. A local `bundle:agent` run rewrites both the
+metafile and the artifact; until that result is committed, the check is judging a
+bundle that no longer exists in git — and it says so, because the rewrites are
+inputs that are now modified. Restoring `git checkout -- packages/host/bundle/`
+is the way back to a meaningful verdict while an unrelated change is in progress.
+
+**The rule for changes that touch the worker.** Edit source → rebuild → commit
+the source and `packages/host/bundle/` in the same change:
+
+```bash
+npm run build:packages -- --target @duya/host
+git add packages/host/bundle
+npm run bundle:verify
+```
+
+A bundle that is older than its source is not caught by any test: the artifact is
+byte-perfect, it is just perfect for a different tree. The consequence is silent —
+the CLI and the packaged app execute last week's worker.
+
 ### Packaging
 
 - electron-builder: `electron-builder.yml`
@@ -1723,6 +1781,7 @@ npm run build                  # Production build (Vite)
 npm run build:web             # Web frontend only
 npm run build:agent           # Build @duya/agent workspace (tsc)
 npm run bundle:agent          # Bundle Agent subprocess entry (esbuild)
+npm run bundle:verify         # Check packages/host/bundle/ is not older than its source
 npm run electron:build         # Build Agent + bundle + Vite + Electron
 
 # Typecheck
