@@ -105,7 +105,7 @@ function resolveTransport(): DbTransport {
 
   const ambient = process.send;
   if (ambient && ambient !== PRISTINE_SEND) {
-    return { send: (request) => { ambient(request); } };
+    return { send: (request) => { ambient.bind(process)(request); } };
   }
 
   if (process.env.VITEST) {
@@ -121,7 +121,7 @@ function resolveTransport(): DbTransport {
   if (!ambient) {
     throw new Error('DB Client: Not in agent mode - process.send is not available');
   }
-  return { send: (request) => { ambient(request); } };
+  return { send: (request) => { ambient.bind(process)(request); } };
 }
 
 // Send DB request and wait for response

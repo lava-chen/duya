@@ -79,6 +79,35 @@ describe('worker-db-client transport boundary', () => {
     }
   });
 
+  it('preserves the process receiver when using the production send fallback', async () => {
+    const originalSend = process.send;
+    let receiver: unknown;
+    const fallbackSend = function (this: NodeJS.Process, request: unknown): void {
+      receiver = this;
+      const req = request as { id: string };
+      setImmediate(() => {
+        dbListener?.({
+          type: 'db:response',
+          id: req.id,
+          success: true,
+          result: { id: 'session-1', title: 'from process.send' },
+        });
+      });
+    };
+
+    process.send = fallbackSend as typeof process.send;
+    setDbTransport(null);
+    try {
+      await expect(sessionDb.get('session-1')).resolves.toEqual({
+        id: 'session-1',
+        title: 'from process.send',
+      });
+      expect(receiver).toBe(process);
+    } finally {
+      process.send = originalSend;
+    }
+  });
+
   it('goes back to refusing once the transport is removed', async () => {
     // Guards against a latch: if `setDbTransport(null)` only ever added a
     // fallback, the first refusal would be a one-time accident rather than

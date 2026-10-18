@@ -17,6 +17,11 @@
  *
  * ## What is deliberately NOT hashed
  *
+ * **The Host-only `attemptEpoch`.** It is injected after the Host computes the
+ * digest and fences writes for one execution attempt; it is not part of the
+ * user's turn input. The worker recomputes this digest over the received
+ * options, so both sides must omit this Host authority field.
+ *
  * **Attachment payloads.** The contract carries attachments by REFERENCE — a
  * stored object id, not the bytes — and this digest has to respect that. A
  * chat turn may carry 50 MB of base64 (`DUYA_MAX_CHAT_PAYLOAD_SIZE`), and
@@ -45,10 +50,12 @@ export function runInputRevision(input: {
   readonly prompt: string;
   readonly options: Readonly<Record<string, unknown>>;
 }): string {
+  const options = optionsWithAttachmentRefs(input.options);
+  delete options['attemptEpoch'];
   const canonical = canonicalJson({
     sessionId: input.sessionId,
     prompt: input.prompt,
-    options: asJson(optionsWithAttachmentRefs(input.options), 'options'),
+    options: asJson(options, 'options'),
   });
   return sha256Hex(canonical);
 }
@@ -56,9 +63,9 @@ export function runInputRevision(input: {
 /**
  * Replace attachment payloads with their descriptor before hashing.
  *
- * Returns a new object; the caller's options are not touched, because the very
- * next thing that happens is the adapter handing those options to the executor
- * byte for byte.
+ * Returns a new object; the caller's options are not touched. The digest may
+ * omit Host-only fields from this copy without changing what the adapter sends
+ * to the executor.
  */
 function optionsWithAttachmentRefs(
   options: Readonly<Record<string, unknown>>,
