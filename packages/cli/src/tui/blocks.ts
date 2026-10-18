@@ -798,4 +798,33 @@ export class TranscriptModel {
     this.assistant = null;
     this.thinking = null;
   }
+
+  /**
+   * Replace everything the RUN contributed, keeping the local input blocks.
+   *
+   * ## Why this splices instead of replacing
+   *
+   * User blocks come from local input and never travel on a run event stream,
+   * so they are absent from a `RunSessionSnapshot` and no projection of shared
+   * state can rebuild them. A render source that swapped the whole transcript
+   * would delete the user's own prompts on every snapshot — which is why the
+   * switch this enables is a splice and not a wholesale `clear()`.
+   *
+   * The user prefix is taken as everything up to and including the LAST user
+   * block: input is always appended after the output it provoked, so the last
+   * user block is the boundary. Anything after it was run-derived.
+   *
+   * The frames replay through the ordinary `apply` path, so block ids keep
+   * advancing and no projection of block shapes is duplicated here.
+   */
+  replayRunSegment(frames: readonly LegacyFrame[]): void {
+    let lastUserIndex = -1;
+    for (let index = 0; index < this.items.length; index += 1) {
+      if (this.items[index]!.kind === 'user') lastUserIndex = index;
+    }
+    const userBlocks = this.items.slice(0, lastUserIndex + 1);
+    this.clear();
+    for (const block of userBlocks) this.items.push(block);
+    for (const frame of frames) this.apply(frame);
+  }
 }
