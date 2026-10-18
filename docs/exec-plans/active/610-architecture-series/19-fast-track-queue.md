@@ -539,7 +539,7 @@ npm run electron:build
 | T12 PTY 验收 + 删 reducer | L-CLIENT | T11 | todo | — |
 | T13 能力三向普查 | L-GATE | — | todo | — |
 | T14 G11-1 客户端闭包门禁 | L-GATE | T10 | **done（门禁在，树是红的）** | #277 · `client-closure-gate.test.ts` 18/18 · 实测 `client-core=2` 干净 / `cli/chat.ts=315` 红，链 `chat.ts→host/local-host.ts→run-execution.ts→run-orchestrator.ts→agent-runtime` |
-| T14b 门禁接线 + bundle 重建 + 超时卫生 | L-GATE | T14、T03 | **next** | 见 §5 的 T14b 卡 |
+| T14b 门禁接线 + bundle 重建 + 超时卫生 | L-GATE | T14、T03 | **done（三条失败证据里两条已过期）** | ① 两道门禁接进 **architecture** job（required 那个 job，`test` 从 265 行才开始），不是无人跑的脚本 · ② `bundle:verify` 实测已 `FRESH 0/1057`，bundle 随 #280 的 `1749a783` 重建过，**本卡这条"证据"早已过期**，无需重建 · ③ 两个 live-tree describe 加显式 `timeout: 30_000`，实测 2 文件 27 用例 17.7s（测试 4.9s / collect 16.6s）· 变异：接回引擎边 → 门禁 exit 1（闭包 219→318），还原 SHA-256 逐字节回 `37D09674…C9CC` |
 | T16 切断 `chat.ts` 到 runtime 的值导入边 | L-CLIENT | T10 或独立 | **done** | `runTuiCommand` 搬进新建的 `packages/cli/src/tui-command.ts` · `G11-1 PASS` exit 0 · `chat.ts` 闭包 320→219 · 变异接回值导入 → 门禁 exit 1 + gate 测试 3 红/16 绿 · `client-closure-gate.test.ts` 19/19 · `architecture:self-test` exit 0 · `tsc -p packages/cli` exit 0 |
 | T15 消费能力 + 降级 | L-CLIENT | T13、T14 | todo | — |
 | T20 Host session service | L-HOST | T00 | todo | — |
