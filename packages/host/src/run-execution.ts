@@ -138,6 +138,7 @@ export class HostRunExecutionController {
   readonly #workerManager: WorkerManager;
   readonly #orchestrator: RunOrchestrator;
   readonly #liveRunEvents = new LiveRunEventHub();
+  readonly #nativeRunIds = new Set<string>();
   /** runId -> sessionId for cancellation lookups. */
   readonly #sessionByRun = new Map<string, string>();
   readonly #cancellingRuns = new Set<string>();
@@ -220,10 +221,21 @@ export class HostRunExecutionController {
       dbRequest: localDbRequest,
       nativeWriter,
       logger: adaptOrchestratorLogger(options.logger),
-      onEvent: (event) => this.#liveRunEvents.publish(event),
-      onRunSettled: (runId) => this.#liveRunEvents.close(runId as RunId),
+      onEvent: (event) => {
+        if (!this.#nativeRunIds.has(event.runId)) this.#liveRunEvents.publish(event);
+      },
+      onRunSettled: (runId) => {
+        this.#liveRunEvents.close(runId as RunId);
+        this.#nativeRunIds.delete(runId);
+      },
       channel: createWorkerExecutionChannel({
-        dispatch: (command) => this.#workerManager.sendCommand(command.sessionId, { ...command }),
+        dispatch: (command) => {
+          // Select the canonical stream before startup status frames can arrive.
+          this.#nativeRunIds.add(command.runId);
+          const sent = this.#workerManager.sendCommand(command.sessionId, { ...command });
+          if (!sent) this.#nativeRunIds.delete(command.runId);
+          return sent;
+        },
         interrupt: (sessionId, graceMs, reason) =>
           this.#workerManager.interruptWorker(sessionId, graceMs, reason),
       }),
@@ -475,12 +487,17 @@ export class HostRunExecutionController {
       return;
     }
 
+    // A native worker owns the live identity as well as the durable identity.
+    // Legacy frames still feed settlement but must not mint a second live seq.
+    if (this.#orchestrator.runForSession(sessionId) === runId) this.#nativeRunIds.add(runId);
     const verdict = await this.#orchestrator.persistNativeRunEvent(
       sessionId,
       envelope as unknown as RunEventEnvelope,
       epoch,
     );
-    if (!verdict.accepted) {
+    if (verdict.accepted) {
+      this.#liveRunEvents.publish(envelope as unknown as RunEventEnvelope);
+    } else {
       this.#options.logger.warn(`dropped a native run:event — ${verdict.reason}`, {
         sessionId,
         runId,
