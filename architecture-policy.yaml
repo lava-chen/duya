@@ -765,7 +765,7 @@ modules:
     # Both declared rather than baselined: the CLI importing the same slash
     # vocabulary the Desktop imports is the entire point of the package, and the
     # `ai` functions are the ones plan 610 A0 §3.1 identified as IO-free.
-    requires: [input-completion, data, duya-host, agent-protocol, legacy-ai, command-catalog]
+    requires: [input-completion, data, duya-host, agent-protocol, client-core, legacy-ai, command-catalog]
     owner: agent
 
   - id: legacy-gateway
