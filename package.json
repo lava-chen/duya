@@ -26,6 +26,7 @@
     "build:voice": "npm run -w @duya/voice build",
     "build:computer-use": "npm run -w @duya/computer-use build",
     "bundle:agent": "npm run build:packages && node scripts/build-agent-bundle.mjs",
+    "plan:sync": "node scripts/architecture/plan-sync-check.mjs --strict",
     "bundle:verify": "node scripts/architecture/bundle-verify.mjs",
     "bundle:gateway": "node scripts/build-gateway-bundle.mjs",
     "build:cli-bundle": "node scripts/build-cli-bundle.mjs",

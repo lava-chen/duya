@@ -246,6 +246,18 @@ jobs:
       - name: Worker bundle freshness (bundle:verify)
         run: npm run bundle:verify
 
+      # T02. Plan 19 §11 calls itself the single source of truth for card status,
+      # and 19 §4 rule 4 says a card is done when it has a named test. That was
+      # an honour system, and it failed visibly on 2026-10-18: two cards read
+      # `todo` after landing (#277, #279), and two more carried failure evidence
+      # that no longer reproduced. All four were found by hand.
+      #
+      # The checker also refuses to pass when it finds no verifiable test names,
+      # so a table that quietly stops carrying evidence shows up as a failure
+      # rather than as a gate that agrees with everything.
+      - name: Plan tracking table matches the tree (T02)
+        run: npm run plan:sync
+
       # Both gates decide "clean" by a count being zero, and a count is also
       # zero when the walk followed nothing. These are guards, not second
       # verdicts: they never re-decide whether the gate passes, only whether it
