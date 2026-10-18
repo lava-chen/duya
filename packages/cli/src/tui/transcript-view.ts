@@ -86,6 +86,14 @@ export interface RenderOptions {
   readonly collapsedBlockIds?: ReadonlySet<string>;
   /** Mark one block as the current history selection. */
   readonly selectedBlockId?: string;
+  /**
+   * Let thinking blocks into the transcript at all.
+   *
+   * Default true. Hidden is not the same as collapsed: a collapsed block still
+   * costs a row and can be expanded, while a hidden one is absent from the
+   * plan — which is what someone who does not want to read reasoning wants.
+   */
+  readonly showThinking?: boolean;
   /** Theme token → blessed tag body. Defaults to the dark palette. */
   readonly theme?: ThemeTags;
 }
@@ -1044,15 +1052,29 @@ export function renderBlock(block: Block, options: RenderOptions, styles: Styles
  * Returns `''` rather than throwing for an empty model, so the first render
  * after startup does not have to special-case itself.
  */
+/**
+ * The blocks this render shows.
+ *
+ * Filtering here rather than inside `planTranscript` keeps one rule for both
+ * renderers (`renderTranscript` and the cached path): a plan stays index-
+ * aligned with the array it was planned from, so hiding a block cannot shift
+ * every later block's connector.
+ */
+export function visibleBlocks(blocks: readonly Block[], options: RenderOptions): readonly Block[] {
+  if (options.showThinking !== false) return blocks;
+  return blocks.filter((block) => block.kind !== 'thinking');
+}
+
 export function renderTranscript(
   model: TranscriptModel,
   options: RenderOptions = DEFAULT_RENDER_OPTIONS,
 ): string {
   const styles = stylesOf(options);
-  const plans = planTranscript(model.blocks);
+  const blocks = visibleBlocks(model.blocks, options);
+  const plans = planTranscript(blocks);
   const lines: string[] = [];
 
-  model.blocks.forEach((block, index) => {
+  blocks.forEach((block, index) => {
     const plan = plans[index];
     if (plan === undefined) return;
     const rows = renderPlannedBlock(block, plan, options, styles);

@@ -47,6 +47,7 @@ import {
   planTranscript,
   renderPlannedBlock,
   stylesOf,
+  visibleBlocks,
   type RenderOptions,
 } from './transcript-view.js';
 
@@ -106,9 +107,10 @@ export class TranscriptRenderer {
     // later block arrives, and a batch header counts its run — so the plan is
     // part of every key. `planTranscript` is the same function the uncached
     // renderer uses, which is what keeps the two paths byte-identical.
-    const plans = planTranscript(model.blocks);
+    const blocks = visibleBlocks(model.blocks, options);
+    const plans = planTranscript(blocks);
 
-    model.blocks.forEach((block, index) => {
+    blocks.forEach((block, index) => {
       const plan = plans[index];
       if (plan === undefined) return;
       const key = [
@@ -158,7 +160,7 @@ export class TranscriptRenderer {
     const blocks = this.blocks(model, options);
     const styles = stylesOf(options);
     const lines: string[] = [];
-    for (const [index, block] of model.blocks.entries()) {
+    for (const [index, block] of visibleBlocks(model.blocks, options).entries()) {
       const blockLines = blocks[index];
       if (blockLines === undefined) continue;
       if (block.id === options.selectedBlockId) {

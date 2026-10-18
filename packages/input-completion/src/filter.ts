@@ -59,6 +59,46 @@ export function filterItemsFuzzy<T extends Filterable>(
   return fuzzyFilter(items, filter, getText);
 }
 
+/**
+ * Filter AND RANK: the best label match first, description-only hits last.
+ *
+ * `filterItems` preserves input order, which is right when a list is short
+ * enough to scan and wrong when it is not — with 20 commands, `/set` has to
+ * put `/settings` at the TOP rather than wherever the catalog happens to list
+ * it, because the row the user presses Enter on is the row the popup
+ * highlighted.
+ *
+ * ## Why two tiers rather than one score
+ *
+ * The label tier is scored (`fuzzyFilter`), so a prefix beats a scattered
+ * subsequence beats a gap-riddled one. The description tier is not scored,
+ * because a description is prose: `/diff` reaching `/review` ("Review recent
+ * changes") is a hit worth keeping — it is the desktop's existing substring
+ * behaviour — but there is no defensible way to rank it against a label hit,
+ * so it is appended in input order instead of pretending to a precision it
+ * does not have.
+ *
+ * An empty filter returns the input untouched: an unranked list is what the
+ * user expects before they have typed anything, and "catalog order" is a real
+ * order rather than the absence of one.
+ */
+export function filterItemsRanked<T extends Filterable>(
+  items: readonly T[],
+  filter: string,
+  getText: (item: T) => string = (item) => item.label,
+): T[] {
+  if (filter === '') return [...items];
+
+  const ranked = fuzzyFilter(items, filter, getText);
+  const byLabel = new Set<T>(ranked);
+  const query = filter.toLowerCase();
+  const byDescription = items.filter(
+    (item) => !byLabel.has(item) && String(item.description ?? '').toLowerCase().includes(query),
+  );
+
+  return [...ranked, ...byDescription];
+}
+
 /** Compile-time reassurance that the shared type satisfies the minimum. */
 type _AssertPopoverItemIsFilterable = PopoverItem extends Filterable ? true : never;
 const _assert: _AssertPopoverItemIsFilterable = true;

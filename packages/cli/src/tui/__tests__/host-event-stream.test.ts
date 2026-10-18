@@ -133,3 +133,69 @@ describe('HostEventStream', () => {
     expect(stream.push(envelope(2, { type: 'assistant.text_block', text: 'late replay' }))).toBeNull();
   });
 });
+
+// ============================================================================
+// D9, second acceptance point: recording a refusal is not the same as showing it
+// ============================================================================
+//
+// The first acceptance point (in `packages/agent-runtime`, `engine-publication`)
+// covers "the refusal reaches the durable ledger". It does NOT cover the user.
+//
+// They are separate, and today they are separate in the bad direction: the ledger
+// loses the refusal entirely (D9), and once that is fixed the TUI would still not
+// show it — `projectHostEvent` has a case for `permission.requested` and none for
+// `permission.resolved`, so `default:` returns `null` and the event dies here,
+// one layer downstream of where it is lost today.
+//
+// This contract deliberately asserts only "the projector produces a frame for
+// it". What the TUI then does with that frame is the implementer's choice and
+// the shapes genuinely differ: the resolution could close the overlay, add a
+// transcript line, or mark the tool row as refused. Pinning one of those would
+// prejudge a decision that has not been made — the failure mode an earlier
+// version of the D9 contract in the runtime package had, where a predicate that
+// only matched `tool.*` would have rejected the correct fix.
+
+describe('a resolved permission reaches the TUI (D9)', () => {
+  it('carries the permission REQUEST today, which is what makes the gap a gap', () => {
+    // The control. Without it, "permission.resolved projects to null" would be
+    // indistinguishable from "this projector emits nothing for permission
+    // traffic at all" — a property of the fixture rather than a defect.
+    expect(projectHostEvent({
+      type: 'permission.requested',
+      requestId: 'req-1',
+      kind: 'tool_use',
+      toolCallId: 'call-1',
+      toolName: 'Bash',
+      toolInput: { command: 'rm -rf build' },
+      mode: 'generic',
+      startedAt: 0,
+      expiresAt: 300_000,
+    })).toEqual({
+      type: 'permission',
+      data: {
+        requestId: 'req-1',
+        toolName: 'Bash',
+        toolInput: { command: 'rm -rf build' },
+        reason: undefined,
+        mode: 'generic',
+        blockedPath: undefined,
+        expiresAt: 300_000,
+      },
+    });
+  });
+
+  it.fails('TARGET CONTRACT: the permission RESOLUTION is not dropped', () => {
+    // Shapes taken from the protocol's own fixtures
+    // (`agent-protocol/src/testing/fixtures.ts:109-114`) rather than invented,
+    // so the fix cannot claim the test fed it an impossible event.
+    const frame = projectHostEvent({
+      type: 'permission.resolved',
+      requestId: 'req-1',
+      action: 'deny',
+      source: 'host',
+      latencyMs: 42,
+    });
+
+    expect(frame, 'a recorded denial projects to null, so the user is never told').not.toBeNull();
+  });
+});
