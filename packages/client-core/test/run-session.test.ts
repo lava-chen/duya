@@ -121,6 +121,58 @@ describe('RunSession', () => {
     expect(JSON.stringify(traceOnly.getSnapshot())).not.toContain('trace-private');
   });
 
+  it('reconnects with the confirmed cursor and lands on the projection live delivery would have', () => {
+    // The plan's fourth evidence, in the only form that has teeth. A test that
+    // only inspects the BACKFILLED result passes just as happily when the live
+    // path is the broken one, so the live path is the control group: one
+    // transcript, two delivery routes, one projection.
+    //
+    // The window is deliberately SPARSE (seq 1 then 5). This protocol drops
+    // ephemeral events, so sparse windows are the normal case, and sparsity is
+    // also what separates the two plausible readings of the cursor: "highest
+    // confirmed seq" and "how many events I have seen" agree on a dense window
+    // and disagree here. Without it this case could not tell them apart.
+    const transcript = [
+      envelope('run.started', { seq: 1 }),
+      envelope('turn.started', { seq: 5, payload: { turnId: 'turn-1', index: 0 } }),
+      text(6, 'he'),
+      text(9, 'llo'),
+      envelope('turn.completed', { seq: 12, payload: { turnId: 'turn-1', index: 0 } }),
+    ];
+    // A Host that only ever answers "everything after this seq". The cursor is
+    // the client's choice, so a wrong cursor turns into a duplicate or a gap
+    // rather than into a quietly wrong projection.
+    const host = (afterSeq: number) => transcript.filter((event) => event.seq > afterSeq);
+
+    const live = new RunSession({ runId: RUN_ID, sessionId: SESSION_ID });
+    for (const event of transcript) live.apply(event);
+
+    const reconnecting = new RunSession({ runId: RUN_ID, sessionId: SESSION_ID });
+    expect(reconnecting.acceptWindow(host(0).slice(0, 2))).toEqual({
+      accepted: true,
+      applied: 2,
+      duplicates: 0,
+      lastAcceptedSeq: 5,
+    });
+    const cursor = reconnecting.getSnapshot().lastAcceptedSeq;
+    expect(cursor).toBe(5);
+
+    const result = reconnecting.acceptWindow(host(cursor));
+    expect(result).toEqual({ accepted: true, applied: 3, duplicates: 0, lastAcceptedSeq: 12 });
+
+    const viaLive = live.getSnapshot();
+    const viaReconnect = reconnecting.getSnapshot();
+    for (const field of ['run', 'turns', 'currentTurn', 'toolCalls', 'messages', 'timeline'] as const) {
+      expect(viaReconnect[field]).toEqual(viaLive[field]);
+    }
+    expect(viaReconnect.lastAcceptedSeq).toBe(viaLive.lastAcceptedSeq);
+    expect(viaReconnect.messages[0]?.text).toBe('hello');
+
+    // A backfill is ONE publish, not one per recovered event: a reconnect must
+    // not cost every subscriber a render per event it did not lose.
+    expect(viaReconnect.revision).toBe(2);
+  });
+
   it('rejects unordered windows atomically and exposes deeply frozen snapshots', () => {
     const session = new RunSession({ runId: RUN_ID, sessionId: SESSION_ID });
     const result = session.acceptWindow([text(4, 'later'), text(2, 'earlier')]);
