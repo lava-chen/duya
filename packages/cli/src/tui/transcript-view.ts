@@ -71,6 +71,10 @@ import {
 } from './tool-render.js';
 import { capLines, truncateToWidth, visibleWidth } from './width.js';
 import { DARK_THEME_TAGS, type ThemeTags } from './theme.js';
+import { escapeTags } from './markdown/escape.js';
+import { renderInlineTokens, tokenizeInline } from './markdown/inline.js';
+
+export { escapeTags } from './markdown/escape.js';
 
 /** How a transcript is currently being drawn. */
 export interface RenderOptions {
@@ -104,7 +108,15 @@ export const DEFAULT_RENDER_OPTIONS: RenderOptions = {
   toolResultLines: 5,
 };
 
-/** One flat style per call: no nesting, payload always escaped. */
+/**
+ * One style per call. The style FUNCTIONS stay flat — each wraps its argument
+ * in exactly one tag pair — but the inline tokenizer composes them, so a
+ * rendered line can carry nested pairs (`{bold}…{accent}…{/accent}…{/bold}`).
+ * Blessed restores the outer style on a close (plan 614 §3.5), which is what
+ * makes that composition safe; the "no nesting" rule this interface once
+ * enforced applied to hand-written call sites and is superseded for the
+ * tokenizer path.
+ */
 export interface Styles {
   bold(s: string): string;
   muted(s: string): string;
@@ -143,54 +155,14 @@ export function stylesOf(options: Pick<RenderOptions, 'theme'>): Styles {
 /**
  * Escape text for blessed's tag parser.
  *
- * A literal `{` in model output would otherwise be read as the start of a tag
- * and silently swallowed, so agent output containing braces — which is most
- * JSON, most code, and most stack traces — would lose characters.
- *
- * The escape is `{open}`, one of blessed's own tag bodies: `_parseTags` emits a
- * literal `{` for it (`element.js`, the `param === 'open'` branch). An earlier
- * scheme emitted `\{` on the theory that blessed honours backslash escapes; it
- * does not, so the backslash reached the screen as a visible stray character
- * AND the brace it "escaped" was still parsed as a tag — model text containing
- * `{bold}` or `{/gray-fg}` executed as markup. `{open}` is per-character, so it
- * cannot be terminated early the way the paired `{escape}…{/escape}` region
- * can by a literal `{/escape}` in the payload.
- *
- * Width caution: `{open}` is five characters and `width.ts` does not parse
- * tags, so anything that measures (`visibleWidth`, `truncateToWidth`, table
- * column sizing) must run BEFORE this escaping is applied.
+ * Lives in `markdown/escape.ts` so the inline tokenizer can use it without a
+ * module cycle; re-exported here because every existing caller (overlays,
+ * windows, the shell) imports it from this module.
  */
-export function escapeTags(text: string): string {
-  return text.replace(/\{/g, '{open}');
-}
 
 /** Render the useful Markdown subset without trusting model text as Blessed markup. */
 function renderInlineMarkdown(text: string, styles: Styles): string {
-  const tokenPattern = /(`+)([^`]+?)\1|\*\*([^*\n]+?)\*\*|__([^_\n]+?)__|\*([^*\s](?:[^*\n]*?[^*\s])?)\*|(?<![\w])_([^_\s](?:[^_\n]*?[^_\s])?)_(?![\w])|\[([^\]\n]+)\]\(([^)\s]+)\)/gu;
-  let rendered = '';
-  let cursor = 0;
-
-  for (const match of text.matchAll(tokenPattern)) {
-    const index = match.index;
-    const token = match[0];
-    rendered += escapeTags(text.slice(cursor, index));
-
-    if (match[2] !== undefined) {
-      rendered += styles.muted(match[2]);
-    } else if (match[3] !== undefined || match[4] !== undefined) {
-      rendered += styles.bold(match[3] ?? match[4] ?? '');
-    } else if (match[5] !== undefined || match[6] !== undefined) {
-      rendered += styles.accent(match[5] ?? match[6] ?? '');
-    } else if (match[7] !== undefined && match[8] !== undefined) {
-      rendered += `${escapeTags(match[7])} ${styles.link(`(${match[8]})`)}`;
-    } else {
-      rendered += escapeTags(token);
-    }
-
-    cursor = index + token.length;
-  }
-
-  return rendered + escapeTags(text.slice(cursor));
+  return renderInlineTokens(tokenizeInline(text), styles);
 }
 
 function renderCodeBlock(language: string, lines: readonly string[], styles: Styles): string {

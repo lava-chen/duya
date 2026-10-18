@@ -234,11 +234,12 @@ Text     := <其余，直到下一个候选起手例外>
   - 执行记录：①`{/open}` 语义对齐 —— blessed 的 open/close 判定在 slash 分支**之前**，`{/open}` 也产出 `{`（探针实测），own/sgr 两链均已按此对齐；②sgr 首版实现漏发 tag 前的普通文本（`line.slice(index, brace)`），把 `{cyan-fg}x{/cyan-fg}` 变成 `\x1b[36m\x1b[39m`，已修；③`{close}` → `}`、`{open}` → `{`（对称字面量，blessed 原生）。存量红不受影响：worker-path 3 条、registry 22v23、host-event-projection（他人 untracked）。
   - 门禁：`node node_modules/vitest/vitest.mjs run packages/cli/src/tui` + `packages/cli` 全量 + `cd packages/cli && tsc -b`
 
-- [ ] **Phase 2 — inline tokenizer（I2）**
-  - [ ] 2.1 `tui/markdown/inline.ts`：`tokenizeInline` + `renderInlineTokens`
-  - [ ] 2.2 放开 nesting：`Styles` 允许在底色之上叠属性；`:107` 的注释同步改写（否则下一个人会以为不能嵌套）
-  - [ ] 2.3 幂等/成对不变式测试：任意随机 token 组合，输出串里每个开 tag 必有闭合
-  - 门禁：`inline.test.ts` + 现有 `tui-transcript-markup.test.ts` 不得改断言（**行为兼容性是验收标准**）
+- [x] **Phase 2 — inline tokenizer（I2）**
+  - [x] 2.1 `tui/markdown/inline.ts`：`tokenizeInline` + `renderInlineTokens`
+  - [x] 2.2 放开 nesting：`Styles` 允许在底色之上叠属性；`:107` 的注释同步改写（否则下一个人会以为不能嵌套）
+  - [x] 2.3 幂等/成对不变式测试：任意随机 token 组合，输出串里每个开 tag 必有闭合（`tui/__tests__/inline-tokens.test.ts`：2,000 次 fuzz 成对性 + 500 次行数不变式 + 注入回归；`escapeTags` 抽到 `markdown/escape.ts` 断开模块环）
+  - 执行记录：①嵌套渲染不能直接调 styles 函数包「已渲染的子串」——styles 内部会 escape，`{open}` 会被二次转义成 `{open}open}`（屏上可见 "open}" 垃圾）；解法是哨兵探测（`probePair`）从 styles 提取裸 tag 对、tokenizer 自己发对，叶子文本只 escape 一次；Phase 5 thinking 叠属性复用同原语。②`escapeTags` 从 transcript-view 移到 `markdown/escape.ts`，transcript-view 原位 re-export 保持既有 import 兼容。
+  - 门禁：`inline.test.ts` + 现有 `tui-transcript-markup.test.ts` 不得改断言（**行为兼容性是验收标准**）——存量断言零改动通过
 
 - [ ] **Phase 3 — 块级形态（I4）**
   - [ ] 3.1 `RenderOptions` 新增 `width`；`TUIApp` 从 `measure('transcript').innerWidth` 注入；`renderOptionsKey` 纳入 `width`
