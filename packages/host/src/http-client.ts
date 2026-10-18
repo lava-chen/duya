@@ -68,6 +68,10 @@ import type {
   RunAttemptFence,
   SettleAgentRunResult,
   UnfencedRunWriteAuthorization,
+  HostCapability,
+  HostDeclaration,
+  ProtocolCapability,
+  ProtocolVersion,
 } from '@duya/agent-protocol';
 import type { HostResearchAction, HostResearchApiV1 } from '@duya/agent-protocol/research-api';
 import type {
@@ -266,6 +270,41 @@ export class HostSessionHttpError extends Error {
   }
 }
 
+/**
+ * What the Host answers a handshake with, on top of the legacy health payload.
+ *
+ * Every field here is ADDITIVE and optional. An older Host answers `/healthz`
+ * with `ok`/`apiVersion`/`databaseReady` and nothing else, which is why the
+ * client gate treats a missing `provides` as a refusal rather than as an
+ * all-clear: an absent declaration is not a declaration of everything.
+ *
+ * The two axes stay separate on purpose. `consumedBy` echoes what the CLIENT
+ * can consume (`PROTOCOL_CAPABILITIES`); `provides` is what the HOST can serve
+ * (`HOST_CAPABILITIES`). Collapsing them is the mistake
+ * `agent-protocol/src/version.ts:116` exists to make impossible.
+ */
+export interface HostHandshakeV1 extends HostHealthV1 {
+  readonly host?: { readonly name: string; readonly version: string; readonly kind: 'desktop' | 'web' | 'headless' };
+  readonly protocol?: ProtocolVersion;
+  readonly schemaRevision?: number;
+  /** What this Host can actually serve, derived from the APIs it registered. */
+  readonly provides?: readonly HostCapability[];
+  readonly limits?: { readonly maxFileBytes?: number; readonly absentCapabilityPolicy?: 'error' | 'disable' };
+  /** A stated reason for every name missing from `provides`. */
+  readonly unsupported?: Readonly<Record<string, string>>;
+  /** Echo of the consume-side declaration the client sent with the handshake. */
+  readonly consumedBy?: readonly ProtocolCapability[];
+}
+
+/**
+ * Declare what this client can consume, and read back what the Host provides.
+ *
+ * The declaration travels as a header rather than as a query string so the
+ * existing `/healthz` contract, its status code and its `ok` flag are untouched
+ * for any older client that still calls `getHealth()`.
+ */
+export const HOST_DECLARATION_HEADER = 'x-duya-host-declaration';
+
 /** Typed client for the versioned Host session, timeline, and task APIs. */
 export class HostSessionHttpClient implements
   HostSessionApiV1,
@@ -313,6 +352,13 @@ export class HostSessionHttpClient implements
 
   async getHealth(): Promise<HostHealthV1> {
     return this.request('GET', '/healthz');
+  }
+
+  /** Declare what this client consumes, and read the Host capability answer. */
+  async handshake(declaration: HostDeclaration): Promise<HostHandshakeV1> {
+    return this.request('GET', '/healthz', undefined, REQUEST_TIMEOUT_MS, {
+      [HOST_DECLARATION_HEADER]: JSON.stringify(declaration),
+    });
   }
 
   async createAgentRun(input: CreateAgentRunInput): Promise<CreateAgentRunResult> {
@@ -1943,8 +1989,9 @@ export class HostSessionHttpClient implements
     requestPath: string,
     body?: unknown,
     timeoutMs = REQUEST_TIMEOUT_MS,
+    extraHeaders?: Readonly<Record<string, string>>,
   ): Promise<T> {
-    const headers: Record<string, string> = { authorization: `Bearer ${this.token}` };
+    const headers: Record<string, string> = { authorization: `Bearer ${this.token}`, ...extraHeaders };
     if (body !== undefined) headers['content-type'] = 'application/json';
     const response = await fetch(`${this.origin}${requestPath}`, {
       method,

@@ -34509,7 +34509,7 @@
       "format": "esm"
     },
     "packages/host/src/http-client.ts": {
-      "bytes": 75895,
+      "bytes": 78199,
       "imports": [],
       "format": "esm"
     },
@@ -34662,7 +34662,7 @@
       "format": "esm"
     },
     "packages/host/src/http-server.ts": {
-      "bytes": 220248,
+      "bytes": 225460,
       "imports": [
         {
           "path": "node:crypto",
@@ -34673,6 +34673,11 @@
           "path": "node:http",
           "kind": "import-statement",
           "external": true
+        },
+        {
+          "path": "packages/agent-protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/agent-protocol"
         },
         {
           "path": "packages/host/src/local-rollout-api.ts",
@@ -42523,7 +42528,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/project-store.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/research-store.ts": {
           "bytesInOutput": 30
@@ -42559,10 +42564,10 @@
           "bytesInOutput": 48
         },
         "packages/agent-protocol/src/session-fork.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 22
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -42727,7 +42732,7 @@
           "bytesInOutput": 385
         },
         "packages/data/src/run-store.ts": {
-          "bytesInOutput": 7340
+          "bytesInOutput": 7353
         },
         "packages/data/src/workflow-run-store.ts": {
           "bytesInOutput": 30
@@ -42745,7 +42750,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/message-log.ts": {
-          "bytesInOutput": 115
+          "bytesInOutput": 128
         },
         "packages/data/src/archive-paths.ts": {
           "bytesInOutput": 29
@@ -42760,7 +42765,7 @@
           "bytesInOutput": 57
         },
         "packages/data/src/tool-approval-state.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/workbench-store.ts": {
           "bytesInOutput": 30
@@ -42808,7 +42813,7 @@
           "bytesInOutput": 40
         },
         "packages/data/src/workspace-resolver.ts": {
-          "bytesInOutput": 39
+          "bytesInOutput": 52
         },
         "packages/data/src/terminal-history-store.ts": {
           "bytesInOutput": 30
@@ -42838,7 +42843,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -47809,7 +47814,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 859
+          "bytesInOutput": 865
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -47920,7 +47925,7 @@
           "bytesInOutput": 2613
         },
         "packages/host/src/http-client.ts": {
-          "bytesInOutput": 32084
+          "bytesInOutput": 32215
         },
         "packages/host/src/local-host.ts": {
           "bytesInOutput": 956
@@ -47937,6 +47942,9 @@
         "packages/host/src/host-diagnostics-log.ts": {
           "bytesInOutput": 20
         },
+        "packages/host/src/http-server.ts": {
+          "bytesInOutput": 53
+        },
         "packages/host/src/local-rollout-api.ts": {
           "bytesInOutput": 5
         },
@@ -47945,9 +47953,6 @@
         },
         "packages/host/src/project-api.ts": {
           "bytesInOutput": 5
-        },
-        "packages/host/src/http-server.ts": {
-          "bytesInOutput": 27
         },
         "packages/host/src/tool-approval-api.ts": {
           "bytesInOutput": 5
@@ -48619,7 +48624,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 5516096
+      "bytes": 5516309
     }
   }
 }
