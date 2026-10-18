@@ -45,6 +45,12 @@ export interface RunSessionViewState {
   readonly timedOutTools: ReadonlySet<string>;
   /** `requestId` -> the action already rendered for it. */
   readonly resolvedPermissions: ReadonlyMap<string, PermissionAction>;
+  /** Turn ids whose retry has already been rendered. */
+  readonly retriedTurns: ReadonlySet<string>;
+  /** `mode|source` as last rendered, or `null` when none has been. */
+  readonly statedMode: string | null;
+  /** Fingerprint of the goal as last rendered. */
+  readonly statedGoal: string | null;
 }
 
 export interface RunSessionViewProjection {
@@ -53,7 +59,13 @@ export interface RunSessionViewProjection {
 }
 
 export function createRunSessionView(): RunSessionViewState {
-  return { timedOutTools: new Set<string>(), resolvedPermissions: new Map<string, PermissionAction>() };
+  return {
+    timedOutTools: new Set<string>(),
+    resolvedPermissions: new Map<string, PermissionAction>(),
+    retriedTurns: new Set<string>(),
+    statedMode: null,
+    statedGoal: null,
+  };
 }
 
 /**
@@ -102,7 +114,82 @@ export function projectRunSessionView(
     });
   }
 
-  return { frames, state: { timedOutTools, resolvedPermissions } };
+  // Seeded from the sets the loops ABOVE just wrote, not from `previous` again.
+  // Reading `previous` here would discard this projection's own tool and
+  // permission announcements, and the next snapshot would state them again.
+  const prior: RunSessionViewState = {
+    timedOutTools,
+    resolvedPermissions,
+    retriedTurns: new Set(previous.retriedTurns),
+    statedMode: previous.statedMode,
+    statedGoal: previous.statedGoal,
+  };
+  const all = [...frames, ...projectRunSessionDecisionFrames(snapshot, prior)];
+  return { frames: all, state: advanceRunSessionView(prior, snapshot) };
+}
+
+/**
+ * The three facts that change how the agent BEHAVES, as durable transcript rows.
+ *
+ * Owner decision (plan 610, T11/T12): these get a line the reader can scroll
+ * back to. Everything else the reducer declines to render stays chrome — a
+ * retry, a mode switch and a goal update are the answers to "why did it do
+ * that", and they are gone the moment the status line moves on.
+ *
+ * Emitted from the SHARED state rather than from the event, for the reason the
+ * rest of this module does: `assistant.mode_changed` is volatile, so after a
+ * reconnect the frame is gone while `snapshot.mode` still says what mode the
+ * run is in. Reading the fact off the state is what makes it survive.
+ */
+export function projectRunSessionDecisionFrames(snapshot: RunSessionSnapshot, previous: RunSessionViewState): LegacyFrame[] {
+  const frames: LegacyFrame[] = [];
+  const retriedTurns = new Set(previous.retriedTurns);
+
+  for (const turn of snapshot.turns) {
+    if (turn.retry === null || retriedTurns.has(turn.turnId)) continue;
+    retriedTurns.add(turn.turnId);
+    frames.push({
+      type: 'retry',
+      data: {
+        turnId: turn.turnId,
+        attempt: turn.retry.attempt,
+        maxAttempts: turn.retry.maxAttempts,
+        delayMs: turn.retry.delayMs,
+        reason: turn.retry.reason,
+      },
+    });
+  }
+
+  if (snapshot.mode !== null) {
+    const key = `${snapshot.mode}|${snapshot.modeSource ?? ''}`;
+    if (key !== previous.statedMode) {
+      frames.push({ type: 'mode_changed', data: { mode: snapshot.mode, source: snapshot.modeSource } });
+    }
+  }
+
+  if (snapshot.goal !== null) {
+    const key = JSON.stringify(snapshot.goal);
+    if (key !== previous.statedGoal) {
+      frames.push({ type: 'goal_updated', data: { ...snapshot.goal } });
+    }
+  }
+
+  return frames;
+}
+
+/** The state a delta projection ends in, given the decision frames it produced. */
+export function advanceRunSessionView(
+  previous: RunSessionViewState,
+  snapshot: RunSessionSnapshot,
+): RunSessionViewState {
+  const retriedTurns = new Set(previous.retriedTurns);
+  for (const turn of snapshot.turns) if (turn.retry !== null) retriedTurns.add(turn.turnId);
+  return {
+    ...previous,
+    retriedTurns,
+    statedMode: snapshot.mode === null ? previous.statedMode : `${snapshot.mode}|${snapshot.modeSource ?? ''}`,
+    statedGoal: snapshot.goal === null ? previous.statedGoal : JSON.stringify(snapshot.goal),
+  };
 }
 
 /**
@@ -146,6 +233,10 @@ export function projectRunSessionFrames(snapshot: RunSessionSnapshot): LegacyFra
   const settledTools = new Set<string>();
   const askedPermissions = new Set<string>();
   const resolvedPermissions = new Set<string>();
+  const retryingTurns = snapshot.turns.filter((turn) => turn.retry !== null);
+  let announcedRetries = 0;
+  let statedMode = false;
+  let statedGoal = false;
   let terminalStated = false;
 
   const messageIdOf = (payload: { readonly messageId?: string }): string | null =>
@@ -279,6 +370,45 @@ export function projectRunSessionFrames(snapshot: RunSessionSnapshot): LegacyFra
             reason: entry.resolution.reason,
           },
         });
+        break;
+      }
+
+      case 'turn.retry_scheduled': {
+        // One retry per turn, in the order the events arrived. The payload
+        // carries no turnId — `SurfaceModel` applies it to the current turn —
+        // so the turns are walked in start order, which is the order the
+        // events themselves arrive in.
+        const turn = retryingTurns[announcedRetries];
+        if (turn === undefined) break;
+        announcedRetries += 1;
+        frames.push({
+          type: 'retry',
+          data: {
+            turnId: turn.turnId,
+            attempt: turn.retry?.attempt ?? 0,
+            maxAttempts: turn.retry?.maxAttempts ?? 0,
+            delayMs: turn.retry?.delayMs ?? 0,
+            reason: turn.retry?.reason ?? '',
+          },
+        });
+        break;
+      }
+
+      case 'assistant.mode_changed': {
+        // Final state, so a run that switched twice replays the mode it ended
+        // in, once. Historical values are not in the snapshot; emitting the
+        // current mode at every event instead would state a switch that did not
+        // happen at that point.
+        if (snapshot.mode === null || statedMode) break;
+        statedMode = true;
+        frames.push({ type: 'mode_changed', data: { mode: snapshot.mode, source: snapshot.modeSource } });
+        break;
+      }
+
+      case 'assistant.goal_updated': {
+        if (snapshot.goal === null || statedGoal) break;
+        statedGoal = true;
+        frames.push({ type: 'goal_updated', data: { ...snapshot.goal } });
         break;
       }
 

@@ -215,6 +215,11 @@ function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+/** A finite number, or 0. A non-number is a missing number here, not a NaN one. */
+function asNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
 /**
  * Arguments worth previewing, per tool, in presentation order.
  *
@@ -758,6 +763,42 @@ export class TranscriptModel {
         return { kind: 'none' };
       }
 
+      case 'retry': {
+        // A retry is the answer to "why did it take that long", and the status
+        // line that carries it is overwritten by the next turn. Owner decision
+        // (plan 610): this one gets a durable row.
+        const reason = asString(payload['reason']);
+        const attempt = asNumber(payload['attempt']);
+        // `attempt` is a required field and 1-based, so a frame without one is
+        // not a retry. Without this the empty frame renders `attempt 0`, which
+        // is a fact the run never stated.
+        if (attempt < 1) return { kind: 'none' };
+        const maxAttempts = asNumber(payload['maxAttempts']);
+        const attemptText = maxAttempts === 0 ? `attempt ${attempt}` : `attempt ${attempt}/${maxAttempts}`;
+        return { kind: 'append', block: this.addNotice(`Retrying (${attemptText})${reason === '' ? '' : ` — ${reason}`}`) };
+      }
+
+      case 'mode_changed': {
+        // Same reasoning: the mode a run is in is what explains its behaviour
+        // afterwards, and the composer border is the only other place it shows.
+        const mode = asString(payload['mode']);
+        if (mode === '') return { kind: 'none' };
+        const source = asString(payload['source']);
+        return { kind: 'append', block: this.addNotice(`Mode: ${mode}${source === '' ? '' : ` (${source})`}`) };
+      }
+
+      case 'goal_updated': {
+        const state = asString(payload['state']);
+        const phase = asString(payload['phase']);
+        const objective = asString(payload['objective']);
+        const headline = [state, phase].filter((part) => part !== '').join(' · ');
+        if (headline === '') return { kind: 'none' };
+        // The objective is a sentence the agent wrote; clipped so a long one
+        // cannot push the rest of the transcript out of an 80-column window.
+        const clipped = objective.length > 80 ? `${objective.slice(0, 79)}…` : objective;
+        return { kind: 'append', block: this.addNotice(`Goal ${headline}${clipped === '' ? '' : ` — ${clipped}`}`) };
+      }
+
       case 'compact:start':
         return { kind: 'append', block: this.addNotice('compacting context…') };
       case 'compact:done':
@@ -773,9 +814,6 @@ export class TranscriptModel {
       case 'tool_progress':
       case 'tool_group_progress':
       case 'turn_start':
-      case 'retry':
-      case 'mode_changed':
-      case 'goal_updated':
       case 'compact:step':
       case 'compact:over_threshold':
       case 'agent_progress':
