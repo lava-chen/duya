@@ -97,6 +97,15 @@ export default defineConfig({
       // test file in the repo as an orphan.
       'packages/memory/src/**/*.test.ts',
       'packages/cli/src/**/*.test.ts',
+      // Plan 610 T15: the capability degradation suite sits in `test/`, not
+      // `src/`, because it drives the Host HTTP boundary end to end rather
+      // than unit-testing a CLI module. A tracked test file outside this array
+      // is one no runner collects, which `check-test-coverage` reports as an
+      // orphan and correctly calls a test nobody ever runs.
+      // No apostrophe characters in this comment: the coverage script reads the
+      // include array with a regex over quoted strings and does not strip
+      // comments, so one apostrophe here would swallow the glob below.
+      'packages/cli/test/**/*.test.ts',
       'packages/computer-use/src/**/*.test.ts',
       'scripts/**/*.test.ts',
       'packages/conductor/src/**/*.test.ts',

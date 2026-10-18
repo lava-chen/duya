@@ -25,7 +25,11 @@ describe('standalone local Host', () => {
       host = await startLocalHost(options);
       let client = new HostSessionHttpClient(host.origin, options.token);
 
-      expect(await client.getHealth()).toEqual({
+      // `toMatchObject`, not `toEqual`: the handshake carries additive
+      // capability fields beyond the three asserted here, and a client must be
+      // able to ignore the ones it does not know. Pinning the whole payload
+      // would make every additive field a breaking change for this test.
+      expect(await client.getHealth()).toMatchObject({
         ok: true,
         apiVersion: 1,
         databaseReady: true,
