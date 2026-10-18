@@ -253,9 +253,10 @@ Text     := <其余，直到下一个候选起手例外>
   - [x] 4.3 两条**各自**的回归测试（`tui-transcript-table.test.ts`：「rule junction exactly on its bar column」断言全部 │/┼ 共享同一组列位；「sizes columns on the rendered cell」断言 `**seed**` 渲染后无死空格且 V4 仍成立）
   - 门禁：`tui-transcript-table.test.ts` 9/9 绿（存量 7 例零断言改动）
 
-- [ ] **Phase 5 — thinking（I5）**
-  - [ ] 5.1 `thinkingRows` 改走 tokenizer，底色之上叠属性
-  - [ ] 5.2 不变式回归：thinking 预览截断后的行数不变（`tui-transcript-thinking.test.ts` 不得改行数断言）
+- [x] **Phase 5 — thinking（I5）**
+  - [x] 5.1 `thinkingRows` 改走 tokenizer，底色之上叠属性（muted 底色；`**bold**` → `{bold}{gray-fg}…{/gray-fg}{/bold}` 属性叠加；em/strike/link/image 折叠进底色，标记消失但不喧哗）
+  - [x] 5.2 不变式回归：thinking 预览截断后的行数不变（`tui-transcript-thinking.test.ts` 新增 3 例，存量 11 例零改动）
+  - 执行记录：首版 `base(render(children))` 双包底色（`{gray-fg}{gray-fg}…`），与 Phase 2 的双转义同构——**子渲染自带 base，父层只叠属性**，已在代码注释中写明该规则。
   - 门禁：`tui-transcript-thinking.test.ts` + `tui-app-integration.test.ts`
 
 - [ ] **Phase 6 — own 转默认 + 斜体/删除线（I8, I9，取决于 Phase 0）**

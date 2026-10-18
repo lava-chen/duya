@@ -139,3 +139,28 @@ describe('thinking character bound', () => {
     expect(rendered.join('\n').length).toBeLessThan(2_500);
   });
 });
+
+describe('thinking markdown (plan 614 phase 5)', () => {
+  it('stacks bold over the muted base for **strong** spans', () => {
+    const rendered = renderTranscript(thinkingModel('plan **A** then B'));
+    expect(rendered).toContain('{bold}{gray-fg}A{/gray-fg}{/bold}');
+  });
+
+  it('keeps the muted base for plain text and folds emphasis markers away', () => {
+    const rendered = renderTranscript(thinkingModel('plain *quiet* text'));
+    expect(strip(rendered)).toContain('plain quiet text');
+    expect(rendered).not.toContain('*quiet*');
+  });
+
+  it('does not change the preview line count (D10 invariant)', () => {
+    const text = FIVE_LINES.replace('second thought', 'has **bold** and `code`');
+    // Sealed, so the preview reads from the HEAD and rows 1-3 are on screen.
+    const rendered = renderTranscript(thinkingModel(text, 1_000));
+    const bodyRows = strip(rendered).split('\n').filter((line) =>
+      ['first thought', 'has bold and code'].some((prefix) => line.includes(prefix)),
+    ).length;
+    // Three preview rows plus the disclosure row; the tagged spans inside a
+    // row may never turn into extra rows.
+    expect(bodyRows).toBe(2);
+  });
+});

@@ -72,7 +72,7 @@ import {
 import { capLines, truncateToWidth, visibleWidth } from './width.js';
 import { DARK_THEME_TAGS, type ThemeTags } from './theme.js';
 import { escapeTags } from './markdown/escape.js';
-import { renderInlineTokens, rawTagPair, tokenizeInline } from './markdown/inline.js';
+import { renderInlineTokens, rawTagPair, tokenizeInline, type InlineToken } from './markdown/inline.js';
 
 export { escapeTags } from './markdown/escape.js';
 
@@ -1022,9 +1022,41 @@ function trimBlankEdges(lines: readonly string[]): string[] {
   return lines.slice(start, end);
 }
 
-/** One muted row per source line, at the node's body column. */
+/**
+ * One muted row per source line, at the node's body column.
+ *
+ * Reasoning now shares the assistant's tokenizer (D6) but keeps its own style
+ * layer: the whole line sits in the muted base, and `**bold**` spans stack the
+ * bold ATTRIBUTE on top of that colour (`{bold}{muted}…{/muted}{/bold}`) —
+ * colour tokens stay out of the reasoning body, so emphasis renders quietly
+ * (the markers go, the loudness does not come).
+ */
 function thinkingRows(lines: readonly string[], styles: Styles, indent: string): string[] {
-  return lines.map((line) => `${indent}${styles.muted(line)}`);
+  const mutedPair = rawTagPair(styles.muted);
+  const boldPair = rawTagPair(styles.bold);
+  const base = (text: string): string => `${mutedPair.open}${text}${mutedPair.close}`;
+  const render = (tokens: readonly InlineToken[]): string =>
+    tokens.map((token) => {
+      switch (token.kind) {
+        case 'text':
+        case 'code':
+          return base(escapeTags(token.text));
+        case 'strong':
+          // The children render themselves in the base colour; bold is the
+          // attribute layered OVER that, never a second base wrap.
+          return `${boldPair.open}${render(token.children)}${boldPair.close}`;
+        // Emphasis, strike, links, and images all fold into the base colour:
+        // the markup disappears, nothing shouts.
+        case 'emphasis':
+        case 'strike':
+          return render(token.children);
+        case 'link':
+          return base(escapeTags(token.label));
+        case 'image':
+          return base(escapeTags(token.alt));
+      }
+    }).join('');
+  return lines.map((line) => `${indent}${render(tokenizeInline(line))}`);
 }
 
 /** Cut a preview to the character bound along the edge the preview reads from. */
