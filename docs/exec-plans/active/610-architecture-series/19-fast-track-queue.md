@@ -218,6 +218,44 @@ T## 标题
   “没报”和“为 0”）；同步 `required.ts` / registry 的描述。
 - 回退：协议成员删除；不可与已落库的历史事件冲突（additive）。
 
+### T14b 门禁接线、bundle 重建与超时卫生
+
+- 车道 L-GATE ／ 前置 T14、T03 ／ 规模 ~40 行 + 一次 bundle 重建
+- 目标：让 #277 落地的两道门禁**真的生效**。今天它们存在、能变红、但没有任何东西跑它们。
+- 首个失败证据（三条，全部实测于 #277 的 worktree）：
+  1. `architecture:client-closure` 与 `bundle:verify` **没有接进 CI**（PR 自己写明“Not in this PR”）；
+  2. `bundle-verify` 在合并后的树上仍是 `STALE 24/1053`，其中 1 个输入**已删除**
+     （`packages/agent-runtime/src/surface/surface-model.ts` 被 `943225cf` 移走），
+     即 check-in 的 bundle 仍引用一个不存在的文件；
+  3. `scripts/architecture/browser-closure-gate.test.ts` 的 live-tree 用例
+     （`reaches across a package boundary`）**默认 10 s 超时**，实测单跑 9.9 s、
+     两文件并行即超时。**注意**：#277 说明里把它写成 “pre-existing red”，
+     但实测 master 上同一组合 27/27 通过、PR 分支同组合 1 失败 —— 它不是既有红，
+     是这条用例本来就贴着超时线，被并行拖过界。
+- 步骤：
+  1. 给所有 walk 全仓的 live-tree 用例显式 `timeout: 30_000`（或降低单次 walk 成本），
+     并记录实测耗时，避免再用默认值。
+  2. 重建 `packages/host/bundle` 并随同一次提交（`npm run build:packages -- --target @duya/host`），
+     让 `bundle:verify` 转绿；若决定不重建，必须在 ARCHITECTURE 写明“bundle 允许落后”并撤掉该门禁。
+  3. 把两道门禁接入 CI 与 `gate-scan-guard` 注册；接入前先确认它们在当前树上各自的预期结论
+     （`client-closure` 红属 T16，`bundle:verify` 应转绿）。
+- 回退：workflow 与 script 行删除；bundle 提交单独 revert。
+
+### T16 切断 `chat.ts` 到 runtime 的值导入边
+
+- 车道 L-CLIENT ／ 前置 无（可与 T10 并行） ／ 规模 ~30 行
+- 目标：让 G11-1 转绿。今天 `packages/cli/src/chat.ts` 经
+  `host/local-host.ts:84` → `run-execution.ts` → `run-orchestrator.ts:69` 值导入
+  `@duya/agent-runtime`；CLI 是一个**客户端**入口，它不该在自己的进程里装配执行引擎。
+- 首个失败证据：`node scripts/architecture/client-closure-gate.mjs` →
+  `G11-1 FAIL 1/2 client entries clean`，链与 `via` 已在输出里点名。
+- 步骤（二选一，取小者）：
+  1. `chat.ts` 对 `startLocalHost` 改用**动态** `import()`（唯一调用点在 `runTuiCommand`）；
+  2. 或把 `local-host.ts:84` 的 `HostRunExecutionController` 值导入延迟到调用时。
+- 收尾：G11-1 转绿后，`client-closure-gate.test.ts` 里那条“live tree is RED”的断言
+  **必须删除**（它在注释里已经写明：断言的是事实，不是判据；修好后它会红）。
+- 回退：动态导入改回静态即可。
+
 ### T05 修掉已失效的“引擎不发射 `turn.completed`”断言
 
 - 车道 L-HOST ／ 前置 T01 ／ 规模 ~20 行
@@ -432,14 +470,16 @@ npm run electron:build
 | T01 `turn.completed` 生产者 | L-HOST | T00 | **done** | [#275](https://github.com/lava-chen/duya/pull/275) · merge `00ac7149` · `packages/agent-runtime/test/turn-terminal-event.test.ts:5/5`（变更前 0/5）· roundtrip 7/7 · `architecture` check 绿 |
 | T01b 拓宽 `turn.completed` 的 `StopReason` | L-HOST | T01 | **next** | 见 §5 的 T01b 卡 |
 | T02 计划↔代码同步 | L-GATE | — | todo | — |
-| T03 bundle 策略 | L-GATE | — | todo | — |
+| T03 bundle 策略 | L-GATE | — | **done** | [#277](https://github.com/lava-chen/duya/pull/277) · merge `1a3412e3` · `scripts/architecture/bundle-verify.test.ts` 16/16 · 决策=tracked + git 输入比对（非字节比对，esbuild 产物不可复现） |
 | T04 修 CI test 门禁的 summary 解析 | L-GATE | — | **P0（比任何架构卡都优先）** | 见 §5 的 T04 卡 |
 | T05 修掉 `native-event-authority-loss` 里已失效的断言 | L-HOST | T01 | todo | 见 §5 的 T05 卡 |
 | T10 `RunSession` | L-CLIENT | — | todo | — |
 | T11 TUI 接共享状态 | L-CLIENT | T10、T13 | todo | — |
 | T12 PTY 验收 + 删 reducer | L-CLIENT | T11 | todo | — |
 | T13 能力三向普查 | L-GATE | — | todo | — |
-| T14 G11-1 客户端闭包门禁 | L-GATE | T10 | todo | — |
+| T14 G11-1 客户端闭包门禁 | L-GATE | T10 | **done（门禁在，树是红的）** | #277 · `client-closure-gate.test.ts` 18/18 · 实测 `client-core=2` 干净 / `cli/chat.ts=315` 红，链 `chat.ts→host/local-host.ts→run-execution.ts→run-orchestrator.ts→agent-runtime` |
+| T14b 门禁接线 + bundle 重建 + 超时卫生 | L-GATE | T14、T03 | **next** | 见 §5 的 T14b 卡 |
+| T16 切断 `chat.ts` 到 runtime 的值导入边 | L-CLIENT | T10 或独立 | todo | 见 §5 的 T16 卡 |
 | T15 消费能力 + 降级 | L-CLIENT | T13、T14 | todo | — |
 | T20 Host session service | L-HOST | T00 | todo | — |
 | T21 Desktop bridge 转发 | L-DESKTOP | T20 | todo | — |
