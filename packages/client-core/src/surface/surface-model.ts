@@ -721,7 +721,14 @@ export class SurfaceModel {
           durationMs: null,
         };
         this.turnsById.set(event.turnId, turn);
-        this.turnsByOrder.push(turn);
+        // Re-announcing a turn REPLACES its row rather than appending a second
+        // one. An unconditional push here would leave `turnsByOrder` holding a
+        // stale row for a `turnId` that `turnsById` already overwrote, so the
+        // two indexes would disagree on the same turn: `turns` would render it
+        // twice and `currentTurn` could return the retired copy. Keying the
+        // write through `replaceInOrder` keeps the ordered list at exactly one
+        // entry per turn and holds its original start position.
+        this.replaceInOrder(turn);
         return { kind: 'turn', turn };
       }
 
