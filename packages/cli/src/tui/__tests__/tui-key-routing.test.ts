@@ -158,6 +158,55 @@ describe('TUIApp key routing', () => {
     app.stop();
   });
 
+  /**
+   * Ctrl+D, driven by real bytes for the same reason Enter is: `bindKeys`
+   * mixes two dispatch paths blessed keeps apart, so a binding can look right
+   * in code and still be dead. `\x04` is what a terminal actually sends.
+   */
+  it('exits on Ctrl+D when the input is empty', async () => {
+    const out = sink();
+    const input = new PassThrough();
+    const exited: string[] = [];
+    const app = new TUIApp({
+      output: out.stream,
+      input,
+      onSubmit: () => {},
+      onExit: () => { exited.push('exit'); },
+    });
+    app.start();
+    await settle();
+
+    input.write('\x04');
+    await settle();
+
+    expect(exited).toEqual(['exit']);
+    app.stop();
+  });
+
+  it('leaves Ctrl+D inert when there is text to lose', async () => {
+    const out = sink();
+    const input = new PassThrough();
+    const exited: string[] = [];
+    const app = new TUIApp({
+      output: out.stream,
+      input,
+      onSubmit: () => {},
+      onExit: () => { exited.push('exit'); },
+    });
+    app.start();
+    await settle();
+
+    await type(input, 'half a sentence');
+    input.write('\x04');
+    await settle();
+
+    // The editor is untouched too: this is not delete-forward. A reflexive
+    // Ctrl+D that costs the user their draft is the worse trade.
+    expect(exited).toEqual([]);
+    expect(app.inputText).toBe('half a sentence');
+    app.stop();
+  });
+
   it('moves between input and transcript, selecting and folding individual blocks', async () => {
     const out = sink();
     const input = new PassThrough();

@@ -34,13 +34,17 @@ import type { TuiSlashCommandDef, TuiSlashGroup } from './types.js';
 import { SESSION_INFO_COMMANDS } from './session-info.js';
 import { SESSION_OPS_COMMANDS } from './session-ops.js';
 import { MODEL_COMMANDS } from './model.js';
+import { EFFORT_COMMANDS } from './effort.js';
 import { SETTINGS_COMMANDS } from './settings.js';
 import { EXPORT_COMMANDS } from './export.js';
+import { HOTKEYS_COMMANDS } from './hotkeys.js';
 
 /** Every command this surface can actually run. */
 export const TUI_SLASH_COMMANDS: readonly TuiSlashCommandDef[] = [
   ...MODEL_COMMANDS,
+  ...EFFORT_COMMANDS,
   ...SETTINGS_COMMANDS,
+  ...HOTKEYS_COMMANDS,
   ...SESSION_INFO_COMMANDS,
   ...SESSION_OPS_COMMANDS,
   ...EXPORT_COMMANDS,

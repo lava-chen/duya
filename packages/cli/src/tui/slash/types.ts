@@ -14,7 +14,8 @@
 
 import type { HostSessionRecord } from '@duya/agent-protocol';
 import type { HostSessionHttpClient } from '@duya/host/http-client';
-import type { TuiChoice } from '../TUIApp.js';
+import type { TuiChoice, TuiSettingsRow } from '../TUIApp.js';
+import type { ActionDef } from '../actions.js';
 
 /** The slice of `TUIApp` a slash command may touch. */
 export interface TuiSlashHost {
@@ -35,6 +36,40 @@ export interface TuiSlashHost {
     lines: readonly string[],
     options?: { readonly footer?: string; readonly scrollable?: boolean },
   ): void;
+  /**
+   * Live settings list: Enter cycles a value in place and the effect lands
+   * before the list closes. Resolves when the user leaves it.
+   */
+  openSettings?(options: {
+    readonly title: string;
+    readonly rows: readonly TuiSettingsRow[];
+    readonly footer: string;
+    readonly onActivate: (id: string) => readonly TuiSettingsRow[] | void;
+  }): Promise<void>;
+  /** Move the preferences the running TUI can move, and repaint. */
+  applyTuiPreferences?(patch: {
+    readonly effort?: string | null;
+    /** `null` follows the environment — the `system` theme row. */
+    readonly theme?: string | null;
+    readonly showThinking?: boolean;
+    readonly expandBlocks?: boolean;
+    readonly showToolResults?: boolean;
+    readonly completionRows?: number;
+    readonly inputRows?: number;
+  }): void;
+  /** The live preferences, so a menu row can describe what is actually in force. */
+  liveTuiPreferences?(): {
+    readonly theme: string;
+    readonly showThinking: boolean;
+    readonly expandBlocks: boolean;
+    readonly showToolResults: boolean;
+    readonly completionRows: number;
+    readonly inputRows: number;
+  };
+  /** The effective key bindings, so `/hotkeys` quotes what is really bound. */
+  effectiveKeyBindings?(): readonly ActionDef[];
+  /** Repaint now — used after a preference that the TUI itself does not hold. */
+  refresh?(): void;
 }
 
 export interface TuiSlashContext {
@@ -65,7 +100,15 @@ export interface TuiSlashActions {
 export type TuiSlashOutcome =
   | { readonly kind: 'handled' }
   /** The chat loop must adopt this session record (status line, next run). */
-  | { readonly kind: 'session_updated'; readonly session: HostSessionRecord };
+  | { readonly kind: 'session_updated'; readonly session: HostSessionRecord }
+  /**
+   * The chat loop must adopt this reasoning effort for subsequent runs.
+   *
+   * Effort is not part of the session record — the Host takes it per run — so it
+   * cannot ride `session_updated`. `null` means "let the model decide", which is
+   * also what the composer's neutral border means.
+   */
+  | { readonly kind: 'effort_changed'; readonly effort: string | null };
 
 export type TuiSlashGroup = 'Model' | 'Settings' | 'Session info' | 'Session ops' | 'Export';
 

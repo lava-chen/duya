@@ -120,3 +120,111 @@ export function resolveThemeName(env: NodeJS.ProcessEnv = process.env): ThemeNam
 export function themeFor(name: ThemeName): { readonly name: ThemeName; readonly tags: ThemeTags } {
   return { name, tags: PALETTES[name] };
 }
+
+/**
+ * Reasoning effort, as the composer border paints it.
+ *
+ * ## Why the border carries this
+ *
+ * pi does it (`theme.getThinkingBorderColor`), and it is the one piece of state
+ * that changes how expensive the NEXT message is without changing what the
+ * conversation looks like. Putting it on the box the user is typing into means
+ * "I am about to send this at max effort" is visible at the moment of typing,
+ * not one screen away in a settings panel.
+ *
+ * ## The ramp
+ *
+ * A single hue path from desaturated slate to orange as effort rises, so the
+ * levels read as a progression rather than as seven unrelated colours:
+ * auto → minimal → low → medium (violet) → high (magenta) → xhigh (pink) →
+ * max (orange). Values are 256-colour codes chosen against pi's own
+ * `thinkingOff…thinkingMax` palette; `auto` is the muted grey the border used
+ * to have, so "nothing selected" looks exactly as quiet as before.
+ */
+export type EffortLevel = 'auto' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+/** Levels in ascending order, for cycling and for the picker. */
+export const EFFORT_LEVELS: readonly EffortLevel[] = [
+  'auto',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+];
+
+/** Border tag body per level, per palette. */
+const EFFORT_BORDER_TAGS: Readonly<Record<ThemeName, Readonly<Record<EffortLevel, string>>>> = {
+  dark: {
+    auto: '240-fg',
+    minimal: '67-fg',
+    low: '68-fg',
+    medium: '98-fg',
+    high: '134-fg',
+    xhigh: '205-fg',
+    max: '208-fg',
+  },
+  light: {
+    auto: '250-fg',
+    minimal: '145-fg',
+    low: '103-fg',
+    medium: '104-fg',
+    high: '170-fg',
+    xhigh: '205-fg',
+    max: '216-fg',
+  },
+};
+
+/**
+ * Blessed's own border colour names, for the full-screen composer.
+ *
+ * The blessed box takes a colour NAME or number, and the 256-colour numbers the
+ * inline rules use do not survive its border path on every terminal. The
+ * full-screen presentation is the legacy one, so it gets the nearest named
+ * colour rather than a shared code path that renders wrong in one mode.
+ */
+const EFFORT_BORDER_NAMES: Readonly<Record<EffortLevel, string>> = {
+  auto: 'grey',
+  minimal: 'blue',
+  low: 'cyan',
+  medium: 'magenta',
+  high: 'bright-magenta',
+  xhigh: 'bright-red',
+  max: 'yellow',
+};
+
+/** Human label, for the picker and the notice after a change. */
+export const EFFORT_LABELS: Readonly<Record<EffortLevel, string>> = {
+  auto: 'Auto (model default)',
+  minimal: 'Minimal',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra high',
+  max: 'Max',
+};
+
+/**
+ * Normalize whatever the Host or a caller says into a level.
+ *
+ * Unknown strings fall back to `auto` rather than throwing: effort arrives from
+ * persisted settings and from run frames, and a value written by a newer build
+ * must not take the TUI down. `'off'`/`'none'` mean auto for the same reason —
+ * "no explicit effort" is exactly what auto is.
+ */
+export function normalizeEffort(value: string | null | undefined): EffortLevel {
+  const normalized = (value ?? '').trim().toLowerCase();
+  if (normalized === '' || normalized === 'off' || normalized === 'none' || normalized === 'default') return 'auto';
+  return (EFFORT_LEVELS as readonly string[]).includes(normalized) ? normalized as EffortLevel : 'auto';
+}
+
+/** Tag body for the composer rules/border at this effort. */
+export function effortBorderTag(level: EffortLevel, theme: ThemeName): string {
+  return EFFORT_BORDER_TAGS[theme][level];
+}
+
+/** Blessed border colour name for the full-screen composer at this effort. */
+export function effortBorderColor(level: EffortLevel): string {
+  return EFFORT_BORDER_NAMES[level];
+}

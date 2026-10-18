@@ -46,7 +46,16 @@ export function projectHostEvent(event: RunEvent): LegacyFrame | null {
     case 'assistant.status':
       return { type: 'status', data: { message: event.message } };
     case 'turn.started':
-      return { type: 'turn_start', data: { turnCount: event.index } };
+      // `effort` rides the turn envelope because it is decided per run, not per
+      // session. The TUI paints the composer border with it, so dropping it here
+      // would leave the border claiming the previous turn's level.
+      return {
+        type: 'turn_start',
+        data: {
+          turnCount: event.index,
+          ...(event.effort === undefined ? {} : { effort: event.effort }),
+        },
+      };
     case 'tool.progress':
       return { type: 'tool_progress', data: { toolName: event.toolCallId, elapsedSeconds: event.elapsedMs / 1000, title: event.title } };
     case 'tool.group_progress':
