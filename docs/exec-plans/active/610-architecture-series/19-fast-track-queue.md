@@ -301,12 +301,20 @@ T## 标题
   `@duya/agent-runtime`；CLI 是一个**客户端**入口，它不该在自己的进程里装配执行引擎。
 - 首个失败证据：`node scripts/architecture/client-closure-gate.mjs` →
   `G11-1 FAIL 1/2 client entries clean`，链与 `via` 已在输出里点名。
-- 步骤（二选一，取小者）：
-  1. `chat.ts` 对 `startLocalHost` 改用**动态** `import()`（唯一调用点在 `runTuiCommand`）；
-  2. 或把 `local-host.ts:84` 的 `HostRunExecutionController` 值导入延迟到调用时。
-- 收尾：G11-1 转绿后，`client-closure-gate.test.ts` 里那条“live tree is RED”的断言
-  **必须删除**（它在注释里已经写明：断言的是事实，不是判据；修好后它会红）。
-- 回退：动态导入改回静态即可。
+- 步骤（§12 的裁决覆盖上面两条：不用动态 `import()` 躲扫描）：
+  1. 把 `runTuiCommand` 整体搬进 `packages/cli/src/tui-command.ts`——`duya tui` 本来就是
+     **服务器引导**（它起一个 ephemeral Host），不是客户端入口；
+  2. `chat.ts` 保留 `chatTui` / `chatInteractive` 等纯 HTTP client 侧代码，不再值导入
+     `@duya/host/local-host`。
+- 收尾：G11-1 转绿后，`client-closure-gate.test.ts` 里那条"live tree is RED"的断言
+  **必须反转**（它在注释里已经写明：断言的是事实，不是判据；修好后它会红）。
+- 回退：把 `runTuiCommand` 搬回 `chat.ts`。
+
+**已落地**：`chat.ts` 闭包 **320 → 219**，`G11-1 PASS` exit 0。变异：把
+`@duya/host/local-host` 值导入接回 `chat.ts` → 门禁 exit 1（闭包回到 318）、
+gate 测试 **3 红 / 16 绿**（夹具组保持绿，正是分离该有的样子）；还原后 SHA-256
+逐字节回到 `37D09674…C9CC`。本地对照组（把两个源文件 stash 回 HEAD）证明
+`chat-tui-host-stop-continue` 的红与本卡无关。
 
 ### T05 修掉已失效的“引擎不发射 `turn.completed`”断言
 
@@ -532,7 +540,7 @@ npm run electron:build
 | T13 能力三向普查 | L-GATE | — | todo | — |
 | T14 G11-1 客户端闭包门禁 | L-GATE | T10 | **done（门禁在，树是红的）** | #277 · `client-closure-gate.test.ts` 18/18 · 实测 `client-core=2` 干净 / `cli/chat.ts=315` 红，链 `chat.ts→host/local-host.ts→run-execution.ts→run-orchestrator.ts→agent-runtime` |
 | T14b 门禁接线 + bundle 重建 + 超时卫生 | L-GATE | T14、T03 | **next** | 见 §5 的 T14b 卡 |
-| T16 切断 `chat.ts` 到 runtime 的值导入边 | L-CLIENT | T10 或独立 | todo | 见 §5 的 T16 卡 |
+| T16 切断 `chat.ts` 到 runtime 的值导入边 | L-CLIENT | T10 或独立 | **done** | `runTuiCommand` 搬进新建的 `packages/cli/src/tui-command.ts` · `G11-1 PASS` exit 0 · `chat.ts` 闭包 320→219 · 变异接回值导入 → 门禁 exit 1 + gate 测试 3 红/16 绿 · `client-closure-gate.test.ts` 19/19 · `architecture:self-test` exit 0 · `tsc -p packages/cli` exit 0 |
 | T15 消费能力 + 降级 | L-CLIENT | T13、T14 | todo | — |
 | T20 Host session service | L-HOST | T00 | todo | — |
 | T21 Desktop bridge 转发 | L-DESKTOP | T20 | todo | — |
