@@ -72,7 +72,7 @@ import {
 import { capLines, truncateToWidth, visibleWidth } from './width.js';
 import { DARK_THEME_TAGS, type ThemeTags } from './theme.js';
 import { escapeTags } from './markdown/escape.js';
-import { renderInlineTokens, tokenizeInline } from './markdown/inline.js';
+import { renderInlineTokens, rawTagPair, tokenizeInline } from './markdown/inline.js';
 
 export { escapeTags } from './markdown/escape.js';
 
@@ -100,6 +100,13 @@ export interface RenderOptions {
   readonly showThinking?: boolean;
   /** Theme token → blessed tag body. Defaults to the dark palette. */
   readonly theme?: ThemeTags;
+  /**
+   * Visible column budget for block renderers that span the pane width
+   * (horizontal rules). Omitted means "unknown": width-aware renderers fall
+   * back to their pre-`width` fixed shapes, which is what keeps every existing
+   * caller and test byte-identical until the shell starts injecting it.
+   */
+  readonly width?: number;
 }
 
 export const DEFAULT_RENDER_OPTIONS: RenderOptions = {
@@ -315,10 +322,10 @@ function renderTable(
  * — and every border moved — on each arriving row. Nothing else is held back;
  * see `stream-commit.ts` for why an unfinished code fence is deliberately shown.
  */
-function renderAssistant(text: string, finalized: boolean, styles: Styles): string {
+function renderAssistant(text: string, finalized: boolean, styles: Styles, width?: number): string {
   const markdown = finalized
-    ? renderAssistantMarkdown(text, styles)
-    : renderAssistantMarkdown(splitStreamCommit(text).safe, styles);
+    ? renderAssistantMarkdown(text, styles, width)
+    : renderAssistantMarkdown(splitStreamCommit(text).safe, styles, width);
   return anchorAssistant(markdown, styles);
 }
 
@@ -343,7 +350,7 @@ function anchorAssistant(markdown: string, styles: Styles): string {
 }
 
 /** Render Markdown structure while keeping code and plain text safe for Blessed. */
-function renderAssistantMarkdown(text: string, styles: Styles): string {
+function renderAssistantMarkdown(text: string, styles: Styles, width?: number): string {
   const lines = text.replace(/\r\n?/gu, '\n').split('\n');
   const output: string[] = [];
   let paragraph: string[] = [];
@@ -405,7 +412,18 @@ function renderAssistantMarkdown(text: string, styles: Styles): string {
     const heading = /^ {0,3}(#{1,6})\s+(.*)$/u.exec(line);
     if (heading !== null) {
       flushParagraph();
-      output.push(`${styles.heading(`${heading[1] ?? '#'} `)}${renderInlineMarkdown(heading[2] ?? '', styles)}`);
+      const level = (heading[1] ?? '#').length;
+      const text = renderInlineMarkdown(heading[2] ?? '', styles);
+      // Levels 1–2 read as document titles: heading colour AND bold. Deeper
+      // levels stay single-colour. The `#` marks themselves are Markdown
+      // syntax aimed at a browser, not content — they do not print (D5).
+      if (level <= 2) {
+        const headingTag = rawTagPair(styles.heading);
+        const boldTag = rawTagPair(styles.bold);
+        output.push(`${headingTag.open}${boldTag.open}${text}${boldTag.close}${headingTag.close}`);
+      } else {
+        output.push(styles.heading(text));
+      }
       continue;
     }
 
@@ -413,7 +431,13 @@ function renderAssistantMarkdown(text: string, styles: Styles): string {
     if (listItem !== null) {
       flushParagraph();
       const indent = (listItem[1] ?? '').slice(0, 6);
-      const marker = styles.accent(listItem[2] ?? '•');
+      const raw = listItem[2] ?? '';
+      // `-`/`*`/`+` are three spellings of one bullet; a terminal transcript
+      // shows the bullet, not which hyphen the model chose. Ordered markers
+      // keep their number — that part IS content (D5).
+      const marker = raw === '-' || raw === '*' || raw === '+'
+        ? styles.accent('•')
+        : styles.accent(raw);
       const content = listItem[3] ?? '';
       const task = /^\[([ xX])\]\s+(.*)$/u.exec(content);
       if (task !== null) {
@@ -436,7 +460,9 @@ function renderAssistantMarkdown(text: string, styles: Styles): string {
 
     if (/^ {0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})$/u.test(line)) {
       flushParagraph();
-      output.push(styles.muted('────────'));
+      // Span the pane when the caller knows its width; the old fixed eight
+      // dashes stay the fallback so width-blind callers render unchanged.
+      output.push(styles.muted('─'.repeat(Math.max(8, width ?? 8))));
       continue;
     }
 
@@ -1002,7 +1028,7 @@ function renderPlainBlock(block: Block, options: RenderOptions, styles: Styles):
       // achieve that, which is the trade the leak measured out.
       return styles.user(`› ${block.text}`);
     case 'assistant':
-      return renderAssistant(block.text, block.finalized, styles);
+      return renderAssistant(block.text, block.finalized, styles, options.width);
     case 'error':
       // Full width, never collapsed: an error the reader cannot see is an
       // error they will hit again next turn.

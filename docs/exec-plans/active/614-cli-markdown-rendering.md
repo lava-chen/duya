@@ -241,10 +241,11 @@ Text     := <其余，直到下一个候选起手例外>
   - 执行记录：①嵌套渲染不能直接调 styles 函数包「已渲染的子串」——styles 内部会 escape，`{open}` 会被二次转义成 `{open}open}`（屏上可见 "open}" 垃圾）；解法是哨兵探测（`probePair`）从 styles 提取裸 tag 对、tokenizer 自己发对，叶子文本只 escape 一次；Phase 5 thinking 叠属性复用同原语。②`escapeTags` 从 transcript-view 移到 `markdown/escape.ts`，transcript-view 原位 re-export 保持既有 import 兼容。
   - 门禁：`inline.test.ts` + 现有 `tui-transcript-markup.test.ts` 不得改断言（**行为兼容性是验收标准**）——存量断言零改动通过
 
-- [ ] **Phase 3 — 块级形态（I4）**
-  - [ ] 3.1 `RenderOptions` 新增 `width`；`TUIApp` 从 `measure('transcript').innerWidth` 注入；`renderOptionsKey` 纳入 `width`
-  - [ ] 3.2 标题分级、列表 `•`、分隔线按宽
-  - 门禁：`tui-transcript-markup.test.ts` + 新增 `tui-transcript-blocks.test.ts`
+- [x] **Phase 3 — 块级形态（I4）**
+  - [x] 3.1 `RenderOptions` 新增 `width`；`TUIApp` 从 `measure('transcript').innerWidth` 注入（inline 模式取终端全宽）；`renderOptionsKey` 纳入 `width`（transcript-cache per-block key 增加 `String(options.width ?? 0)`）
+  - [x] 3.2 标题分级（#:1-2 → heading 色 + bold 嵌套，#:3-6 → heading 单色，`#` 标记不再输出）、列表 `•`（`-`/`*`/`+` 统一，有序保留数字）、分隔线按宽（无 `width` 时退回固定 8）
+  - 执行记录：标题 1-2 级的 heading+bold 组合复用 Phase 2 的 `rawTagPair`（styles 函数会 escape，直接嵌套调用必双转义）；`tui-transcript-markup.test.ts:90` 的 `# ` 标记断言按新形态更新（本 phase 的行为变化点）。
+  - 门禁：`tui-transcript-blocks.test.ts`（新增 7 例，含 V9 宽度与 D10 行数不变式）+ `tui-transcript-markup.test.ts`
 
 - [ ] **Phase 4 — 表格（I3）**
   - [ ] 4.1 Bug A：`:319` `w + 2` → `w + 1`

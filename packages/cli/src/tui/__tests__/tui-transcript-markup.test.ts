@@ -87,7 +87,8 @@ describe('transcript-view markup', () => {
       text: '# 结果\n\n- **完成**\n- `snake_case`\n\n> 你好，*世界*',
     });
 
-    expect(rendered).toContain('{cyan-fg}# {/cyan-fg}结果');
+    // Level-1 heading: bold within the heading colour, `#` marker consumed.
+    expect(rendered).toContain('{cyan-fg}{bold}结果{/bold}{/cyan-fg}');
     expect(rendered).toContain('{bold}完成{/bold}');
     expect(rendered).toContain('{gray-fg}snake_case{/gray-fg}');
     expect(rendered).toContain('{gray-fg}│{/gray-fg} 你好，{cyan-fg}世界{/cyan-fg}');
