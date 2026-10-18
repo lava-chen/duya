@@ -186,6 +186,21 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     requiresSession: true,
   },
   {
+    // Plan 610 T15. The handshake answer is otherwise invisible: a refusal was
+    // correct and the person at the keyboard had no way to see why. `cli` only
+    // — the Desktop renders capabilities in its own settings surface, and
+    // advertising it here without a Desktop executor is exactly the
+    // advertised-but-unrunnable state the catalog's integrity tests forbid.
+    name: 'capabilities',
+    label: 'Show host capabilities',
+    labelZh: '显示 Host 能力',
+    description: 'Show what this Host serves and what this CLI may rely on',
+    descriptionZh: '显示该 Host 提供的能力，以及本 CLI 可以依赖的能力',
+    category: 'session',
+    surfaces: ['cli'],
+    requiresSession: false,
+  },
+  {
     // `copy` has a Desktop executor (executors/session.ts) that no popover entry
     // ever reached, so the handler was unreachable from the composer. Listed
     // here because the capability is real; the metadata simply had to be

@@ -38,14 +38,63 @@ export interface TuiCommandOptions {
   readonly apiFormat?: 'anthropic' | 'openai';
 }
 
+/** The Host the TUI talks to, however it came to be running. */
+export interface AttachedHost {
+  readonly origin: string;
+  readonly token: string;
+  close(): Promise<void>;
+  /** Absent when this process did not start the Host. */
+  readonly diagnosticsLogPath?: string;
+  /** False for an attached Host, which this process must not shut down. */
+  readonly started: boolean;
+}
+
+/**
+ * Attach to an ALREADY RUNNING Host instead of starting an ephemeral one.
+ *
+ * `runTuiCommand` otherwise always calls `startLocalHost`, which spawns a real
+ * worker — fine for a person at a terminal, fatal for an automated one: there
+ * is no way to point the TUI at a Host the test controls, so every acceptance
+ * run would need real credentials and a real agent turn.
+ *
+ * ## Why the opt-in is a separate flag
+ *
+ * Reading the origin alone would make a stray environment variable silently
+ * change what `duya tui` does — it would attach to someone else's Host instead
+ * of starting its own, and the only symptom would be a session that is not
+ * where the user expects. So attaching requires `DUYA_TUI_ATTACH=1` as well:
+ * the two variables together are a decision, one on its own is not.
+ *
+ * ## What an attached Host does not have
+ *
+ * No `diagnosticsLogPath`. That file is written by the process that STARTED the
+ * Host, and this process did not, so pointing at it would be a guess. Console
+ * capture is simply not installed in that case.
+ */
+export function attachedHostFromEnv(env: NodeJS.ProcessEnv): AttachedHost | null {
+  if (env.DUYA_TUI_ATTACH !== '1') return null;
+  const origin = env.DUYA_TUI_HOST_ORIGIN?.trim() ?? '';
+  if (origin === '') {
+    throw new Error('DUYA_TUI_ATTACH=1 requires DUYA_TUI_HOST_ORIGIN to name a Host, e.g. http://127.0.0.1:8710');
+  }
+  return {
+    origin,
+    token: env.DUYA_TUI_HOST_TOKEN?.trim() ?? '',
+    close: async () => {},
+    started: false,
+  };
+}
+
 /**
  * Entry for the `duya tui` command. Starts an ephemeral Host and opens the TUI
- * in the same process. The Host is shut down when the TUI exits. Which screen
- * model that TUI uses is `inlineTuiRequested`; this entry point is the same
- * either way. Returns the process exit code.
+ * in the same process, unless {@link attachedHostFromEnv} says to attach to a
+ * Host that is already running. The started Host is shut down when the TUI
+ * exits; an attached one is not this process's to close. Which screen model
+ * that TUI uses is `inlineTuiRequested`; this entry point is the same either
+ * way. Returns the process exit code.
  */
 export async function runTuiCommand(options: TuiCommandOptions): Promise<number> {
-  const host = await startLocalHost({
+  const host = attachedHostFromEnv(process.env) ?? await startLocalHost({
     port: options.port,
     ephemeral: true,
     workerPath: resolveHostWorkerPath(),
