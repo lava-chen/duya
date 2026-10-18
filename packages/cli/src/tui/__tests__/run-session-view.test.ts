@@ -144,6 +144,8 @@ describe('the view adapter states both from shared state', () => {
 function blockShape(model: TranscriptModel): string[] {
   return model.blocks.map((block) => {
     switch (block.kind) {
+      case 'user':
+        return `user:${block.text}`;
       case 'assistant':
         return `assistant:${block.text}`;
       case 'thinking':
@@ -218,5 +220,53 @@ describe('the replay agrees with the legacy reducer', () => {
     for (const frame of projectRunSessionFrames(session.getSnapshot())) model.apply(frame);
 
     expect(blockShape(model)).toEqual(['assistant:first', 'tool:call-9:ok:ok', 'assistant:second']);
+  });
+});
+
+describe('the render-source seam splices rather than replaces', () => {
+  it('keeps the local user blocks and rebuilds only the run-derived segment', () => {
+    // The constraint that decides how the switch may be wired: user blocks are
+    // local input and are NOT in the snapshot, so a render source that cleared
+    // the transcript would delete the user's own prompts on every snapshot.
+    const model = new TranscriptModel();
+    model.addUser('first prompt');
+    model.apply({ type: 'text', data: { content: 'answer one' } });
+    model.addUser('second prompt');
+    model.apply({ type: 'text', data: { content: 'answer two' } });
+
+    expect(blockShape(model)).toEqual([
+      'user:first prompt',
+      'assistant:answer one',
+      'user:second prompt',
+      'assistant:answer two',
+    ]);
+
+    model.replayRunSegment([{ type: 'text', data: { content: 'replayed answer' } }]);
+
+    // Both prompts survive, in order, and only the run's own output is replaced.
+    expect(blockShape(model)).toEqual([
+      'user:first prompt',
+      'assistant:answer one',
+      'user:second prompt',
+      'assistant:replayed answer',
+    ]);
+  });
+
+  it('drops a stale tool row rather than leaving it beside the replay', () => {
+    const model = new TranscriptModel();
+    model.addUser('do a thing');
+    model.apply({ type: 'tool_use', data: { id: 'call-old', name: 'Bash', input: { command: 'old' } } });
+    model.apply({ type: 'tool_result', data: { id: 'call-old', result: 'old output', error: false } });
+    expect(model.toolByCallId('call-old')).not.toBeNull();
+
+    model.replayRunSegment([
+      { type: 'tool_use', data: { id: 'call-new', name: 'Bash', input: { command: 'new' } } },
+    ]);
+
+    // The correlation map is rebuilt with the segment. Leaving the old row
+    // behind is how a replay ends up showing a tool call that never happened.
+    expect(model.toolByCallId('call-old')).toBeNull();
+    expect(model.toolByCallId('call-new')).not.toBeNull();
+    expect(blockShape(model)).toEqual(['user:do a thing', 'tool:call-new:running:']);
   });
 });
