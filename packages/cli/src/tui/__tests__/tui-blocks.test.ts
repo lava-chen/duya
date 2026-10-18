@@ -130,13 +130,23 @@ describe('TranscriptModel', () => {
       'tool_progress',
       'tool_group_progress',
       'turn_start',
-      'retry',
-      'mode_changed',
-      'goal_updated',
       'agent_progress',
       'done',
       'compact:step',
     ] as const) {
+      const frame: LegacyFrame = { type, data: { anything: 1 } };
+      expect(m.apply(frame).kind, `${type} must not cost a render`).toBe('none');
+    }
+    expect(m.blocks).toHaveLength(0);
+  });
+
+  it('still says nothing for a decision frame that carries no decision', () => {
+    // `retry`, `mode_changed` and `goal_updated` left the chrome group in plan
+    // 610: they render a durable row WHEN they state a fact. The half that is
+    // easy to lose is this one — a frame with no identifying field must not
+    // become `Retrying (attempt 0)`, which is a fact the run never stated.
+    const m = new TranscriptModel();
+    for (const type of ['retry', 'mode_changed', 'goal_updated'] as const) {
       const frame: LegacyFrame = { type, data: { anything: 1 } };
       expect(m.apply(frame).kind, `${type} must not cost a render`).toBe('none');
     }
