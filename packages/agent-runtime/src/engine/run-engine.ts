@@ -2792,17 +2792,24 @@ export class RunEngineImpl implements RunEngine {
    * Spending it per turn would both drown the diagnostics that mean something
    * and widen a surface another invariant pins.
    *
-   * The gap is registered instead of hidden: a turn left without a terminal is
-   * closed by the run's own terminal (`client-core/surface/surface-model.ts:691`
-   * retires every open turn on it), and `turn-terminal-event.test.ts` states
-   * which turns get one and why. Closing it for real means widening the event
-   * `StopReason` with `tool_use` -- a protocol change, and not this slice's.
+   * The gap is closed as of T01b: the event `StopReason` carries `tool_use` and
+   * `usage` is optional, so both cases report an ending instead of nothing.
+   * Neither ever published a `diagnostic`, and that remains deliberate — see
+   * the note above about why the ordinary continuation turn must not spend the
+   * ephemeral channel.
    */
   #publishTurnCompleted(ctx: RunContext, durationMs: number): void {
     const message = ctx.lastMessage.current;
     const stopReason = message?.eventStopReason ?? null;
     const usage = message?.usage;
-    if (message === null || stopReason === null || usage === undefined) return;
+    // T01b closed both of T01's refusals. `tool_use` is now stateable, so the
+    // ordinary continuation turn reports its ending too; and `usage` is
+    // optional on the payload, so a provider that reported none no longer
+    // costs the whole event. What is still refused is inventing a value:
+    // `usage` below is forwarded only when the provider actually sent one, and
+    // stays absent otherwise, because `SurfaceModel` folds it into the run's
+    // total and a fabricated zero would overwrite a real number.
+    if (message === null || stopReason === null) return;
     ctx.ports.events.publish({
       type: 'turn.completed',
       // The SAME id `#turnStartedEvent` minted for this turn. Not a new
@@ -2811,7 +2818,7 @@ export class RunEngineImpl implements RunEngine {
       turnId: `${ctx.runId}:turn:${ctx.turn}`,
       index: ctx.turn,
       stopReason,
-      usage,
+      ...(usage === undefined ? {} : { usage }),
       durationMs,
     });
   }
@@ -3532,7 +3539,7 @@ const STOP_REASON_TO_EVENT: Readonly<Record<ModelStopReason, StopReason | null>>
   stop_sequence: 'stop_sequence',
   cancelled: 'aborted',
   error: 'error',
-  tool_use: null,
+  tool_use: 'tool_use',
 });
 
 /**

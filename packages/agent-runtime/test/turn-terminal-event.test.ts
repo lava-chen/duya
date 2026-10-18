@@ -27,26 +27,24 @@
  * 3. The turn terminal precedes the run terminal, in the announced order and in
  *    the `seq` that order was minted from.
  *
- * ## The two refusals, and why they are not asserted as "must stay absent"
+ * ## The two refusals — closed by T01b
  *
- * The event's whole payload is REQUIRED, and the engine only publishes what it
- * OBSERVED. Two observations are not always available, and for those the
- * engine publishes nothing at all — it neither invents a value nor spends the
- * `diagnostic` channel on the ordinary case:
+ * The event's whole payload was REQUIRED, and the engine only publishes what it
+ * OBSERVED, so two observations that are not always available produced no event
+ * at all. Both are closed now, and the wording below is the record of that:
  *
- * | observation | why there is no event |
- * | --- | --- |
- * | a stop reason the union cannot state (`tool_use`) | the event `StopReason` has no such member (`events/payloads.ts:77`); the same refusal `#finalizeLastMessage` already makes. `tool_use` is the ORDINARY continuation turn, so a diagnostic here would warn once per model call and ride the ephemeral channel whose contract is "the three delta families and nothing else" |
- * | a usage the provider never reported | `usage` is required (`required.ts:80`) and G-5b (`GAPS.md:227`) forbids default-filling a source that said nothing. A zero would also overwrite a real total, because `SurfaceModel` folds this event's `usage` into the run's |
+ * | observation | used to | is now |
+ * | --- | --- | --- |
+ * | a stop reason the union could not state (`tool_use`) | `STOP_REASON_TO_EVENT` mapped it to `null`, so the ORDINARY continuation turn got no terminal | `StopReason` carries `tool_use` and the turn reports its ending |
+ * | a usage the provider never reported | `usage` was required, so silence was the only honest option | `usage` is optional and the absence is carried as an absence |
  *
- * Neither absence is pinned as "zero forever": a test that demanded it would
- * make closing the gap a regression (17 §6, plan 19 §10.3). What is asserted is
- * the invariant that keeps holding when the vocabulary widens — a terminal that
- * IS published never carries a value the provider did not report — plus the
- * positive statement of which turns get one today. A turn left without a
- * terminal is closed by the run's own (`client-core/surface/surface-model.ts:691`).
+ * Neither absence was pinned as "zero forever" — that is deliberate. A test
+ * demanding it would have made closing the gap a regression (17 §6, plan 19
+ * §10.3), and the three cases in the last describe are what replaced it: the
+ * invariant that keeps holding when the vocabulary widens, which is that a
+ * published terminal never carries a value the provider did not report.
  *
- * ## Registered as explicitly UNSUPPORTED by this slice
+ * ## Still registered as explicitly UNSUPPORTED by this slice
  *
  * A turn whose model stream is cancelled or fails mid-flight publishes no
  * `turn.completed` at all: there is no turn ending to report, and the run's own
@@ -413,49 +411,68 @@ describe('the engine publishes turn.completed for a turn that ran', () => {
 // 2. The two refusals — no event, and no invented value
 // ============================================================================
 
-describe('the engine refuses to invent a turn ending it did not observe', () => {
-  it('leaves a continuation turn open rather than naming a reason it was not given', async () => {
-    // The ordinary agent turn: the model asked for tools and the loop went
-    // round again. `tool_use` is a `ModelStopReason` but not an event
-    // `StopReason`, so turn 1 gets no terminal — and nothing is fabricated to
-    // give it one.
+describe('T01b: every turn that ran reports its ending', () => {
+  it('a tool-continuation turn also reports its ending', async () => {
+    // Was a refusal, and was the ORDINARY agent turn: the model asked for tools
+    // and the loop went round again. `tool_use` was a `ModelStopReason` with no
+    // member in the event `StopReason`, so the turn most likely to need a
+    // terminal was the one guaranteed not to get one.
     const h = harness([
       { tool: true, stop: 'tool_use', usage: { inputTokens: 10, outputTokens: 2 }, tookMs: 50 },
       { stop: 'end_turn', usage: { inputTokens: 20, outputTokens: 4 }, tookMs: 40 },
     ]);
     await h.completed;
 
-    // Both turns really opened, so the single terminal below is a STATEMENT
-    // about which turns are stateable rather than a run that skipped one.
-    expect(eventsOf(h.announced, 'turn.started')).toHaveLength(2);
-    expect(eventsOf(h.announced, 'turn.completed').map((e) => e.index)).toEqual([2]);
-
-    // The refusal costs no diagnostic: `tool_use` is not an anomaly, and the
-    // ephemeral channel's contract is the three delta families only.
+    const completed = eventsOf(h.announced, 'turn.completed');
+    expect(completed.map((e) => e.index)).toEqual([1, 2]);
+    expect(completed[0]?.stopReason).toBe('tool_use');
+    // The continuation is not an anomaly, so it still costs no diagnostic.
     expect(eventsOf(h.announced, 'diagnostic')).toEqual([]);
-
-    // The opening is still closed — by the RUN terminal, which is the fallback
-    // `SurfaceModel` documents. The run is not left looking live.
     expect(h.candidate?.state.status).toBe('completed');
   });
 
-  it('publishes no event rather than a usage the provider never sent', async () => {
-    // `usage` is REQUIRED on the payload, so the honest options are a reported
-    // number or no event — never a zero standing in for "unreported". A zero
-    // would be worse than silence here: `SurfaceModel` assigns this event's
-    // usage to the run's total, so the fabricated value would overwrite a real
-    // one. Closing this needs an OPTIONAL `usage` on the payload, which is a
-    // protocol change; the absence is registered here, not enshrined.
+  it('reports the ending of a turn whose provider sent no usage, carrying none', async () => {
+    // The other refusal: `usage` was REQUIRED, so the honest options were a
+    // reported number or no event at all. The field is optional now, and the
+    // absence is carried as an ABSENCE — `undefined`, never a zero. A zero would
+    // be worse than silence, because `SurfaceModel` folds this event's usage into
+    // the run's total and would overwrite a real one.
     const h = harness([{ stop: 'end_turn', tookMs: 30 }]);
     await h.completed;
 
-    const fabricated = eventsOf(h.announced, 'turn.completed').filter(
-      (event) => event.usage.totalTokens === 0,
-    );
-    expect(fabricated).toEqual([]);
-    // The turn really opened, so the assertion above is about a refusal and not
-    // about a turn that never happened.
+    const completed = eventsOf(h.announced, 'turn.completed');
+    expect(completed).toHaveLength(1);
+    expect(completed[0]?.usage).toBeUndefined();
+    expect(completed[0]?.stopReason).toBe('end_turn');
+    expect(completed[0]?.durationMs).toBe(30);
     expect(eventsOf(h.announced, 'turn.started')).toHaveLength(1);
     expect(h.candidate?.state.status).toBe('completed');
+  });
+
+  it('still never invents a usage — absence stays absence, and zero stays zero', async () => {
+    // The invariant that outlives the widening. Making `usage` optional is only
+    // safe while the engine passes the provider's value through untouched, so
+    // both directions are checked against LITERALS the harness supplied.
+    const absent = harness([{ stop: 'end_turn', tookMs: 10 }]);
+    await absent.completed;
+    // The event must EXIST before its usage can be absent. `[0]?.usage` alone
+    // would be `undefined` for a turn that got no terminal at all, so this case
+    // would have passed against the OLD refusal for the wrong reason — which is
+    // the shape of a guard that looks green while the thing it guards is broken.
+    const absentTerminals = eventsOf(absent.announced, 'turn.completed');
+    expect(absentTerminals).toHaveLength(1);
+    expect(absentTerminals[0]?.usage).toBeUndefined();
+
+    const reportedZero = harness([
+      { stop: 'end_turn', usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, tookMs: 10 },
+    ]);
+    await reportedZero.completed;
+    // A provider that really said zero is not the same fact as saying nothing,
+    // and the payload must be able to tell them apart.
+    expect(eventsOf(reportedZero.announced, 'turn.completed')[0]?.usage).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+    });
   });
 });

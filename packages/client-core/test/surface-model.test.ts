@@ -593,6 +593,39 @@ describe('surface conformance: turn lifecycle', () => {
     expect(model.currentTurn).toBeNull();
   });
 
+  it('tells an unreported usage apart from a reported zero', () => {
+    // T01b made `turn.completed.usage` optional, because a provider that
+    // reported nothing must not have a zero invented for it. The surface field
+    // is `TokenUsage | null`, so the translation has to be deliberate: a bare
+    // `event.usage` would put `undefined` where the rest of the model reads
+    // `null`, and a `?? {inputTokens: 0, ...}` would fabricate a number this
+    // field gets folded into the run's total.
+    const silent = startedModel();
+    silent.apply(
+      envelope('turn.completed', {
+        seq: 2,
+        // Explicitly `undefined`, not merely omitted: the shared `envelope()`
+        // helper fills each event type's default payload in, and `turn.completed`
+        // carries a usage there. Omitting the key would silently test the
+        // fixture's number instead of the absent case this is about.
+        payload: { turnId: 'turn-1', index: 0, usage: undefined },
+      }),
+    );
+    expect(silent.turnById('turn-1')?.usage).toBeNull();
+    expect(silent.turnById('turn-1')?.usage).not.toEqual({ inputTokens: 0, outputTokens: 0, totalTokens: 0 });
+
+    const zero = startedModel();
+    zero.apply(
+      envelope('turn.completed', {
+        seq: 2,
+        payload: { turnId: 'turn-1', index: 0, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } },
+      }),
+    );
+    // A provider that really said zero is a different fact from saying nothing,
+    // and the surface must keep them apart rather than flattening both to null.
+    expect(zero.turnById('turn-1')?.usage).toEqual({ inputTokens: 0, outputTokens: 0, totalTokens: 0 });
+  });
+
   it('keeps one turn per turn id and orders them by arrival', () => {
     const model = new SurfaceModel();
     model.apply(envelope('turn.started', { seq: 1, payload: { turnId: 'turn-a', index: 0 } }));

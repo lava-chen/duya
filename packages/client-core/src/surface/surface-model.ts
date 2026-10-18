@@ -763,7 +763,12 @@ export class SurfaceModel {
           phase: 'completed',
           retry: existing?.retry ?? null,
           stopReason: event.stopReason,
-          usage: event.usage,
+          // `usage` became optional in T01b, and `TurnSurface.usage` is
+          // `TokenUsage | null`. The translation is the whole point: an
+          // ABSENT usage is not a reported zero, and this field is folded into
+          // the run's total, so turning `undefined` into `{...0}` here would
+          // erase every real number the run had accumulated.
+          usage: event.usage ?? null,
           durationMs: event.durationMs,
         };
         if (existing === undefined) this.turnsByOrder.push(turn);
