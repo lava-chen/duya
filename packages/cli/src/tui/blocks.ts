@@ -142,6 +142,16 @@ export interface ToolBlock {
    * every tool input would grow the model for no reader-visible gain.
    */
   command?: string;
+  /**
+   * The call blew its deadline (`tool.timed_out`).
+   *
+   * Separate from `status` because the two facts differ and both are true: a
+   * timeout is what the volatile notice said, while a later durable completion
+   * carrying `outcome: 'timeout'` sets `status: 'error'` with a result. Reading
+   * either one as the other loses information the protocol deliberately keeps
+   * apart. Set by the T11 view adapter, which is the only producer.
+   */
+  timedOut?: boolean;
 }
 
 export interface ErrorBlock {
@@ -347,6 +357,20 @@ export function readBlockKey(payload: Record<string, unknown>): string | null {
 function sealThinkingDuration(block: ThinkingBlock, at: number): void {
   if (block.durationMs !== undefined || block.startedAt === undefined) return;
   block.durationMs = Math.max(0, at - block.startedAt);
+}
+
+/**
+ * One line saying how a permission question ended.
+ *
+ * The verb is derived from the protocol action, never from whether the user was
+ * the one who answered: a host denial and a timeout denial reach the reader
+ * through the same line, and the difference is in the audit chain, not the
+ * prompt.
+ */
+function permissionResolutionLine(action: string, toolName: string, reason: string): string {
+  const verb = action === 'deny' ? 'denied' : action === 'defer' ? 'deferred' : action;
+  const suffix = reason === '' ? '' : ` (${reason})`;
+  return `Permission ${verb}${toolName === '' ? '' : ` for ${toolName}`}${suffix}`;
 }
 
 export class TranscriptModel {
@@ -571,6 +595,21 @@ export class TranscriptModel {
     return this.toolsByCallId.get(callId) ?? null;
   }
 
+  /**
+   * Record that a call timed out, without inventing a result for it.
+   *
+   * A timeout is NOT a completion: the call may still finish, and the durable
+   * `tool.call_completed` that says so is a separate event. So this only sets
+   * the flag and leaves `result` alone — a block that reads `timedOut` with an
+   * empty result is the honest state of a call that has not come back yet.
+   */
+  markToolTimedOut(callId: string): ToolBlock | null {
+    const block = this.toolsByCallId.get(callId);
+    if (block === undefined) return null;
+    block.timedOut = true;
+    return block;
+  }
+
   /** Append a single-line notice. */
   addNotice(text: string): NoticeBlock {
     const block: NoticeBlock = { kind: 'notice', id: nextId('notice'), text };
@@ -644,6 +683,33 @@ export class TranscriptModel {
           payload['indeterminate'] === true,
         );
         return block === null ? { kind: 'none' } : { kind: 'mutate', block };
+      }
+
+      case 'tool_timed_out': {
+        const callId = asString(payload['id']);
+        if (callId === '') return { kind: 'none' };
+        // A timeout for a call never announced itself still gets a block, on
+        // the same reasoning as `tool_result`: the event must not be dropped
+        // just because the announcement was lost.
+        if (!this.toolsByCallId.has(callId)) {
+          this.upsertTool(callId, asString(payload['name']), undefined);
+        }
+        const block = this.markToolTimedOut(callId);
+        return block === null ? { kind: 'none' } : { kind: 'mutate', block };
+      }
+
+      case 'permission_resolved': {
+        // The durable answer to a question the user was asked. A notice, not a
+        // `status` frame: `status` is chrome the reader scrolls past, and an
+        // answer that vanishes with the activity row is the same loss as never
+        // receiving it at all.
+        const action = asString(payload['action']);
+        if (action === '') return { kind: 'none' };
+        const toolName = asString(payload['toolName']);
+        return {
+          kind: 'append',
+          block: this.addNotice(permissionResolutionLine(action, toolName, asString(payload['reason']))),
+        };
       }
 
       case 'permission': {
