@@ -33,6 +33,8 @@ import { HostSessionHttpClient } from '@duya/host/http-client';
 import { resolveDataRoot } from '@duya/data';
 import { TUIApp, shouldUseTui, type CompletionSources, type TuiChoice } from './tui/index.js';
 import { HostEventStream } from './tui/host-event-stream.js';
+import { createRunSessionView, projectRunSessionView } from './tui/run-session-view.js';
+import { RunSession } from '@duya/client-core';
 import { TurnQueue, type TurnOutcome } from './tui/turn-queue.js';
 import { createFileCompletionSource } from './tui/candidates.js';
 import { normalizeEffort } from './tui/theme.js';
@@ -889,10 +891,21 @@ export async function chatTui(
         return 'cancelled';
       }
       const stream = new HostEventStream(runSessionId, start.runId);
+      // T11 step 1 (coexistence). The run's state is now HELD by RunSession, and
+      // the view adapter states the two facts the legacy projector has no case
+      // for (`tool.timed_out`, `permission.resolved`). The legacy frames still
+      // drive every common event — the render-source switch is step 2 and is
+      // not done, so this is additive, not a replacement.
+      const runState = new RunSession({ runId: start.runId, sessionId: runSessionId });
+      let viewState = createRunSessionView();
       for await (const event of client.watchAgentRunEvents(start.runId, { signal: streamAbort.signal })) {
         if (finished) return 'cancelled';
         const frame = stream.push(event);
         if (frame !== null) tui.push(frame);
+        runState.apply(event);
+        const projection = projectRunSessionView(viewState, runState.getSnapshot());
+        viewState = projection.state;
+        for (const gap of projection.frames) tui.push(gap);
       }
       if (cancellationRequested || finished) return 'cancelled';
       const record = await client.getAgentRun(start.runId);
