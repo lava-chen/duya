@@ -696,6 +696,7 @@ export class RunOrchestrator {
       // is the opposite of what a manifest is for.
       const { prompt: turnPrompt, options: turnOptions, ...manifestIntent } = intent;
       const built = buildRunManifest({ ...manifestIntent, sessionId, runId });
+      const effectiveTurnOptions = optionsWithManifestBudget(built.manifest, turnOptions);
       // The input revision is computed ONCE here, by the protocol's canonical
       // function, and the SAME string goes to the Control Plane and to the
       // controller. The Control Plane persists it into the run row so a reused
@@ -703,7 +704,7 @@ export class RunOrchestrator {
       // command. Two derivations of one value in two places is the drift
       // `controller.ts:542-547` warns about, so the derivation happens at the
       // one call site that already holds all three inputs.
-      const inputHash = runInputRevision({ sessionId, prompt: turnPrompt, options: turnOptions });
+      const inputHash = runInputRevision({ sessionId, prompt: turnPrompt, options: effectiveTurnOptions });
       const created = await this.#options.dbRequest('run:create', {
         runId,
         sessionId,
@@ -781,8 +782,7 @@ export class RunOrchestrator {
         prompt: turnPrompt,
         sessionId,
         // `attemptEpoch` is read HERE, at open time, and injected AFTER
-        // `inputHash` was computed above — exactly like `maxTurns`, which the
-        // channel adds later. It is a Host→worker directive about WHICH attempt
+        // `inputHash` was computed above. It is a Host→worker directive about WHICH attempt
         // may write, not part of the user's turn input, so folding it into the
         // input revision would make the digest describe something the user never
         // said and would break the worker's own recomputation of it.
@@ -791,7 +791,7 @@ export class RunOrchestrator {
         // attempt. Re-reading the current epoch at settle time would hand a
         // superseded attempt the newer attempt's number and let its terminal
         // through the fence that exists to stop exactly that.
-        options: { ...turnOptions, attemptEpoch },
+        options: { ...effectiveTurnOptions, attemptEpoch },
         // The revision computed above, verbatim. Passing it is what keeps the
         // digest on the executor's command identical to the one now in the run
         // row; letting the controller recompute it would be a second
@@ -2580,15 +2580,13 @@ function refused(reason: string): ExecutionDispatchError {
  * the option `DuyaAgent` already checks before dispatching the next turn. A
  * ceiling of `0` is treated as absent, matching `isBudgetExhausted`'s own
  * `isPositive`: forwarding `0` would stop a healthy run after one turn.
+ * `openRun` applies the same effective option before hashing it, so the worker
+ * sees exactly the options the Control Plane bound to the input revision.
  */
 export function createWorkerExecutionChannel(binding: WorkerExecutionBinding): ExecutionChannel {
   return {
     async start(manifest, input): Promise<ExecutionHandle> {
-      const maxTurns = manifest.budget.maxTurns;
-      const options: Readonly<Record<string, unknown>> =
-        typeof maxTurns === 'number' && Number.isFinite(maxTurns) && maxTurns > 0
-          ? { ...input.options, maxTurns }
-          : input.options;
+      const options = optionsWithManifestBudget(manifest, input.options);
       const command: ChatStartCommand = {
         type: 'chat:start',
         sessionId: input.sessionId,
@@ -2626,6 +2624,17 @@ export function createWorkerExecutionChannel(binding: WorkerExecutionBinding): E
       };
     },
   };
+}
+
+/** Apply the manifest's executable turn ceiling with the same rule everywhere. */
+function optionsWithManifestBudget(
+  manifest: RunManifest,
+  options: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  const maxTurns = manifest.budget.maxTurns;
+  return typeof maxTurns === 'number' && Number.isFinite(maxTurns) && maxTurns > 0
+    ? { ...options, maxTurns }
+    : options;
 }
 
 const RUNTIME_VERSION = '0.1.0';

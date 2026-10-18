@@ -56,6 +56,24 @@ describe('runInputRevision', () => {
     expect(a).toBe(b);
   });
 
+  it('excludes the Host attempt fence while continuing to hash user options', () => {
+    const firstAttempt = runInputRevision({
+      ...base,
+      options: { language: 'zh', attemptEpoch: 4 },
+    });
+    const retryAttempt = runInputRevision({
+      ...base,
+      options: { language: 'zh', attemptEpoch: 5 },
+    });
+    const changedUserOption = runInputRevision({
+      ...base,
+      options: { language: 'en', attemptEpoch: 5 },
+    });
+
+    expect(retryAttempt).toBe(firstAttempt);
+    expect(changedUserOption).not.toBe(firstAttempt);
+  });
+
   it('ignores attachment payloads but not attachment identity', () => {
     // Two turns carrying the same five attachments must hash identically even
     // though their base64 differs — the contract carries attachments by

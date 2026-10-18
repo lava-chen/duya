@@ -22,6 +22,9 @@ const MODE = (__filename.includes('-hang-hard') && 'hang-hard')
   || (__filename.includes('-hang') && 'hang')
   || 'complete';
 let dbSeq = 0;
+let activeRun = null;
+let runSeq = 0;
+let textBlockIndex = 0;
 const dbPending = new Map();
 process.on('message', (msg) => {
   if (msg && msg.type === 'db:response' && dbPending.has(msg.id)) {
@@ -41,6 +44,72 @@ function dbRequest(action, payload) {
     }, 10000);
   });
 }
+function emitNative(payload) {
+  if (!activeRun) return;
+  process.send({
+    type: 'run:event',
+    epoch: activeRun.attemptEpoch,
+    envelope: {
+      runId: activeRun.runId,
+      sessionId: activeRun.sessionId,
+      seq: ++runSeq,
+      timestamp: Date.now(),
+      traceId: 'trace-' + activeRun.runId,
+      payload,
+    },
+  });
+}
+function beginRun(command) {
+  activeRun = {
+    runId: command.runId,
+    sessionId: command.sessionId,
+    attemptEpoch: command.options && command.options.attemptEpoch,
+    manifestHash: command.manifestHash,
+  };
+  runSeq = 0;
+  textBlockIndex = 0;
+  emitNative({
+    type: 'run.started',
+    manifestHash: activeRun.manifestHash,
+    protocol: { major: 1, minor: 0 },
+    runtime: { name: 'stub-worker', version: '1.0.0' },
+  });
+}
+function emitTurnStarted() {
+  emitNative({
+    type: 'turn.started',
+    turnId: activeRun.runId + ':turn:1',
+    index: 1,
+    model: 'stub-model',
+    providerId: 'stub-provider',
+    apiFormat: 'anthropic',
+  });
+}
+function emitTextBlock(text) {
+  emitNative({
+    type: 'assistant.text_block',
+    messageId: activeRun.runId + ':message:1',
+    index: textBlockIndex++,
+    text,
+  });
+}
+function emitTerminal(status) {
+  emitNative({
+    type: 'run.completed',
+    status,
+    ...(status === 'cancelled' ? { stopReason: 'aborted', cancelRequested: true } : { stopReason: 'end_turn' }),
+  });
+}
+function emitTurnCompleted(stopReason) {
+  emitNative({
+    type: 'turn.completed',
+    turnId: activeRun.runId + ':turn:1',
+    index: 1,
+    stopReason,
+    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    durationMs: 1,
+  });
+}
 let buffer = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
@@ -53,6 +122,16 @@ process.stdin.on('data', (chunk) => {
     let command;
     try { command = JSON.parse(line); } catch { continue; }
     if (command.type === 'permission:resolve' && MODE === 'permission') {
+      emitNative({
+        type: 'permission.resolved',
+        requestId: 'approval-1',
+        action: command.decision === 'deny' ? 'deny' : 'allow',
+        source: 'host',
+        latencyMs: 1,
+      });
+      emitTextBlock('decision=' + command.decision);
+      emitTurnCompleted(command.decision === 'deny' ? 'aborted' : 'end_turn');
+      emitTerminal('completed');
       process.send({ type: 'chat:text', data: 'decision=' + command.decision });
       process.send({ type: 'chat:done', sessionId: command.sessionId });
       continue;
@@ -62,21 +141,45 @@ process.stdin.on('data', (chunk) => {
     // deliberately ignores the interrupt to exercise escalation.)
     if (command.type === 'chat:interrupt') {
       if (MODE === 'hang') {
+        emitTerminal('cancelled');
         process.send({ type: 'chat:done', sessionId: command.sessionId });
       }
       continue;
     }
     if (command.type !== 'chat:start') continue;
+    beginRun(command);
+    emitTurnStarted();
     process.send({ type: 'chat:turn_start', data: { turnCount: 1 } });
     if (command.prompt === 'continue after stop') {
+      emitTextBlock('continued successfully');
+      emitTurnCompleted('end_turn');
+      emitTerminal('completed');
       process.send({ type: 'chat:text', content: 'continued successfully' });
       process.send({ type: 'chat:done', sessionId: command.sessionId });
       continue;
     }
     if (MODE === 'permission') {
+      emitNative({
+        type: 'tool.call_started',
+        toolCallId: 'tool-approval',
+        toolName: 'bash',
+        arguments: { command: 'echo approved' },
+        attempt: 1,
+      });
       process.send({ type: 'chat:tool_use', id: 'tool-approval', name: 'bash', input: { command: 'echo approved' } });
-      process.send({ type: 'chat:permission', sessionId: command.sessionId,
-        request: { id: 'approval-1', toolName: 'bash', toolInput: { command: 'echo approved' }, expiresAt: Date.now() + 300000 } });
+      const request = { id: 'approval-1', toolName: 'bash', toolInput: { command: 'echo approved' }, expiresAt: Date.now() + 300000 };
+      emitNative({
+        type: 'permission.requested',
+        requestId: request.id,
+        kind: 'tool_use',
+        toolCallId: 'tool-approval',
+        toolName: request.toolName,
+        toolInput: request.toolInput,
+        mode: 'generic',
+        startedAt: Date.now(),
+        expiresAt: request.expiresAt,
+      });
+      process.send({ type: 'chat:permission', sessionId: command.sessionId, request });
     } else if (MODE === 'db') {
       (async () => {
         try {
@@ -88,19 +191,28 @@ process.stdin.on('data', (chunk) => {
               { id: 'stub-msg-assistant', session_id: sessionId, role: 'assistant', content: 'pong from stub worker' },
             ],
           });
+          emitTextBlock('append=' + JSON.stringify(append));
           process.send({ type: 'chat:text', data: 'append=' + JSON.stringify(append) });
           const count = await dbRequest('message:getCount', { sessionId });
+          emitTextBlock('count=' + JSON.stringify(count));
           process.send({ type: 'chat:text', data: 'count=' + JSON.stringify(count) });
           const loaded = await dbRequest('session:loadMessages', { sessionId });
           const roles = (loaded.messages || []).map((m) => m.role).join(',');
+          emitTextBlock('roles=' + roles);
           process.send({ type: 'chat:text', data: 'roles=' + roles });
         } catch (err) {
+          emitTextBlock('dberror=' + (err && err.message));
           process.send({ type: 'chat:text', data: 'dberror=' + (err && err.message) });
         }
+        emitTurnCompleted('end_turn');
+        emitTerminal('completed');
         process.send({ type: 'chat:done', sessionId: command.sessionId });
       })();
     } else {
       if (MODE === 'complete') {
+        emitTextBlock('stub says hi');
+        emitTurnCompleted('end_turn');
+        emitTerminal('completed');
         process.send({ type: 'chat:text', data: 'stub says hi' });
         process.send({ type: 'chat:done', sessionId: command.sessionId });
       } else if (MODE === 'hang') {

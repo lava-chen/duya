@@ -2338,7 +2338,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             // as given; `undefined` serializes to an absent key, which the
             // Host rejects, exactly as it rejects a wrong number.
             onNativeEnvelope: (envelope) => {
-                sendEvent({ type: 'run:event', epoch: attemptEpoch, envelope });
+                // Standalone Host receives IPC; Desktop receives stdout.
+                // Mirror the same Runtime identity to each transport owner.
+                sendToMain({ type: 'run:event', epoch: attemptEpoch, envelope });
             },
         }, (frame) => {
             if (isTurnLevelUsageFrame(frame))
