@@ -56,24 +56,37 @@ const NAMED_FOREGROUND: Readonly<Record<string, string>> = {
   brightgrey: '37',
 };
 
-/** Attribute tags. One entry today; see the note above about adding more. */
+/**
+ * Attribute tags. `bold` is measured against blessed 0.1.81; `italic` (SGR 3)
+ * and `strike` (SGR 9) are NOT in blessed's `_attr` vocabulary — blessed prints
+ * them as literal text — so the blessed chain never receives them (see
+ * `transcript-view.ts` `stylesOf`, which folds them per renderer). The own
+ * renderer emits them as direct SGR parameters in attribute order
+ * (bold → italic → strike), then colour.
+ */
 const ATTRIBUTES: Readonly<Record<string, string>> = {
   bold: '1',
+  italic: '3',
+  strike: '9',
 };
 
 /** The effective style at one point in the output. */
 interface Style {
   readonly bold: boolean;
+  readonly italic: boolean;
+  readonly strike: boolean;
   /** An SGR foreground parameter, e.g. `36` or `38;5;241`. */
   readonly fg: string | null;
 }
 
-const PLAIN: Style = { bold: false, fg: null };
+const PLAIN: Style = { bold: false, italic: false, strike: false, fg: null };
 
 /** The SGR parameters for a style, in the order blessed emits them. */
 function sgrParameters(style: Style): string[] {
   const parameters: string[] = [];
   if (style.bold) parameters.push('1');
+  if (style.italic) parameters.push('3');
+  if (style.strike) parameters.push('9');
   if (style.fg !== null) parameters.push(style.fg);
   return parameters;
 }
@@ -88,7 +101,9 @@ const TAG = /\{(\/?)([a-zA-Z0-9#_-]+)\}/g;
  */
 function openingTag(body: string): Style | null {
   const attribute = ATTRIBUTES[body];
-  if (attribute !== undefined) return { bold: true, fg: null };
+  if (attribute !== undefined) {
+    return { bold: body === 'bold', italic: body === 'italic', strike: body === 'strike', fg: null };
+  }
   if (!body.endsWith('-fg')) return null;
 
   // Strip the `-fg` suffix, then strip dashes and spaces: blessed looks a
@@ -97,10 +112,12 @@ function openingTag(body: string): Style | null {
   // would silently drop the entire bright palette.
   const key = body.slice(0, body.length - '-fg'.length).toLowerCase().replace(/[- ]/g, '');
   const named = NAMED_FOREGROUND[key];
-  if (named !== undefined) return { bold: false, fg: named };
+  if (named !== undefined) return { bold: false, italic: false, strike: false, fg: named };
   if (/^\d{1,3}$/.test(key)) {
     const index = Number.parseInt(key, 10);
-    if (index >= 0 && index <= 255) return { bold: false, fg: `38;5;${index}` };
+    if (index >= 0 && index <= 255) {
+      return { bold: false, italic: false, strike: false, fg: `38;5;${index}` };
+    }
   }
   return null;
 }
@@ -108,12 +125,16 @@ function openingTag(body: string): Style | null {
 /** Fold the stack into the style that is actually in effect. */
 function effective(stack: readonly Style[]): Style {
   let bold = false;
+  let italic = false;
+  let strike = false;
   let fg: string | null = null;
   for (const frame of stack) {
     if (frame.bold) bold = true;
+    if (frame.italic) italic = true;
+    if (frame.strike) strike = true;
     if (frame.fg !== null) fg = frame.fg;
   }
-  return { bold, fg };
+  return { bold, italic, strike, fg };
 }
 
 /**
@@ -142,11 +163,20 @@ export function renderMarkup(line: string): string {
   let cursor = 0;
 
   /** Whether the terminal is currently in a styled state. */
-  const isStyled = (): boolean => written !== null && (written.bold || written.fg !== null);
+  const isStyled = (): boolean =>
+    written !== null && (written.bold || written.italic || written.strike || written.fg !== null);
 
   /** Emit the transition into `pending`, if there is one to make. */
   const settle = (): void => {
-    if (written !== null && written.bold === pending.bold && written.fg === pending.fg) return;
+    if (
+      written !== null &&
+      written.bold === pending.bold &&
+      written.italic === pending.italic &&
+      written.strike === pending.strike &&
+      written.fg === pending.fg
+    ) {
+      return;
+    }
     const parameters = sgrParameters(pending);
     // A reset is needed only if the terminal is actually IN a style. Blessing
     // it with "the terminal is already at default" is exactly why the first

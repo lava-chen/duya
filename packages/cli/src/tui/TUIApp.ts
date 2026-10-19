@@ -1162,6 +1162,9 @@ export class TUIApp {
       collapsedBlockIds: this.collapsedBlockIds,
       ...(this.showThinking ? {} : { showThinking: false }),
       theme: this.theme.tags,
+      // plan 615 Phase 0: markdown emphasis/strike map to italic/strike only
+      // when the surface can express those attributes.
+      renderer: this.renderer,
       // The pane width block renderers may span (horizontal rules). Inline
       // mode has no pane border, so the full terminal width is the budget;
       // full-screen asks the surface for the transcript pane's inner width.

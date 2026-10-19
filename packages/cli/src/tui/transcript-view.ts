@@ -101,6 +101,14 @@ export interface RenderOptions {
   /** Theme token → blessed tag body. Defaults to the dark palette. */
   readonly theme?: ThemeTags;
   /**
+   * Which screen renderer the output is destined for. Omitted means the
+   * blessed chain (the historical default), which cannot express `{italic}` /
+   * `{strike}` — blessed's `_attr` prints unknown tags as literal text — so
+   * the markdown mappers fold emphasis/strike into their pre-615 shapes. The
+   * own renderer accepts both attributes, so it gets the true SGR pairs.
+   */
+  readonly renderer?: 'blessed' | 'own';
+  /**
    * Visible column budget for block renderers that span the pane width
    * (horizontal rules). Omitted means "unknown": width-aware renderers fall
    * back to their pre-`width` fixed shapes, which is what keeps every existing
@@ -125,7 +133,13 @@ export const DEFAULT_RENDER_OPTIONS: RenderOptions = {
  * tokenizer path.
  */
 export interface Styles {
+  /** Which renderer these styles paint for; mappers branch on it. */
+  readonly renderer: 'blessed' | 'own';
   bold(s: string): string;
+  /** Emphasis. The own renderer emits `{italic}`; blessed folds to accent. */
+  italic(s: string): string;
+  /** Strike-through. The own renderer emits `{strike}`; blessed folds to muted. */
+  strike(s: string): string;
   muted(s: string): string;
   accent(s: string): string;
   success(s: string): string;
@@ -140,11 +154,14 @@ export interface Styles {
 }
 
 /** Build the style set for a render. The dark palette is the default. */
-export function stylesOf(options: Pick<RenderOptions, 'theme'>): Styles {
+export function stylesOf(options: Pick<RenderOptions, 'theme' | 'renderer'>): Styles {
   const tags = options.theme ?? DARK_THEME_TAGS;
   const flat = (tag: string, s: string): string => `{${tag}}${escapeTags(s)}{/${tag}}`;
   return {
+    renderer: options.renderer ?? 'blessed',
     bold: (s) => `{bold}${escapeTags(s)}{/bold}`,
+    italic: (s) => `{italic}${escapeTags(s)}{/italic}`,
+    strike: (s) => `{strike}${escapeTags(s)}{/strike}`,
     muted: (s) => flat(tags.muted, s),
     accent: (s) => flat(tags.accent, s),
     success: (s) => flat(tags.success, s),
@@ -1034,6 +1051,11 @@ function trimBlankEdges(lines: readonly string[]): string[] {
 function thinkingRows(lines: readonly string[], styles: Styles, indent: string): string[] {
   const mutedPair = rawTagPair(styles.muted);
   const boldPair = rawTagPair(styles.bold);
+  // plan 615 Phase 0: the own renderer can layer italic/strike attributes the
+  // same way it layers bold; the blessed chain keeps the fold (it cannot
+  // express those tags at all).
+  const italicPair = styles.renderer === 'own' ? rawTagPair(styles.italic) : null;
+  const strikePair = styles.renderer === 'own' ? rawTagPair(styles.strike) : null;
   const base = (text: string): string => `${mutedPair.open}${text}${mutedPair.close}`;
   const render = (tokens: readonly InlineToken[]): string =>
     tokens.map((token) => {
@@ -1046,10 +1068,16 @@ function thinkingRows(lines: readonly string[], styles: Styles, indent: string):
           // attribute layered OVER that, never a second base wrap.
           return `${boldPair.open}${render(token.children)}${boldPair.close}`;
         // Emphasis, strike, links, and images all fold into the base colour:
-        // the markup disappears, nothing shouts.
+        // the markup disappears, nothing shouts. On the own renderer the
+        // first two become attribute layers instead of folds.
         case 'emphasis':
+          return italicPair !== null
+            ? `${italicPair.open}${render(token.children)}${italicPair.close}`
+            : render(token.children);
         case 'strike':
-          return render(token.children);
+          return strikePair !== null
+            ? `${strikePair.open}${render(token.children)}${strikePair.close}`
+            : render(token.children);
         case 'link':
           return base(escapeTags(token.label));
         case 'image':

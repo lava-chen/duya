@@ -318,7 +318,10 @@ export class OwnKeyParser {
         return;
       }
       if (character === ' ') {
-        this.emitKey('space', sequence, { ...flags }, undefined);
+        // ch rides along like blessed's parser does: the editor inserts `ch`,
+        // and a space with no `ch` would be silently dropped (plan 615
+        // Phase 0: this ate every space once `own` became the default).
+        this.emitKey('space', sequence, { ...flags }, undefined, ' ');
       } else if (/^[A-Za-z]$/.test(character)) {
         this.emitKey(character.toLowerCase(), sequence, {
           ...flags,
@@ -339,7 +342,7 @@ export class OwnKeyParser {
     if (character === '\n') return this.emitKey('enter', sequence, flags);
     if (character === '\t') return this.emitKey('tab', sequence, flags);
     if (character === '\b' || codePoint === 0x7f) return this.emitKey('backspace', sequence, flags);
-    if (character === ' ') return this.emitKey('space', sequence, flags);
+    if (character === ' ') return this.emitKey('space', sequence, flags, undefined, ' ');
     if (codePoint > 0 && codePoint <= 0x1a) {
       return this.emitKey(String.fromCharCode(codePoint + 0x60), sequence, { ...flags, ctrl: true }, undefined, character);
     }

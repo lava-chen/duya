@@ -78,11 +78,20 @@ describe('tagsToAnsi', () => {
     expect(tagsToAnsi('{/241-fg}')).toBe('\x1b[39m');
   });
 
+  it('renders italic and strike as SGR 3/9 with their paired resets', () => {
+    // plan 615 Phase 0: the own renderer speaks these; the resets are the
+    // paired SGR 23/29, not a blanket 22.
+    expect(tagsToAnsi('{italic}x{/italic}')).toBe('\x1b[3mx\x1b[23m');
+    expect(tagsToAnsi('{strike}x{/strike}')).toBe('\x1b[9mx\x1b[29m');
+  });
+
   it('round-trips the exact tag set the renderers emit', () => {
     // The vocabulary below was read out of transcript-view.ts and theme.ts, not
     // recalled. If a renderer starts using a tag outside it, this fails.
     const vocabulary = [
       '{bold}', '{/bold}',
+      '{italic}', '{/italic}',
+      '{strike}', '{/strike}',
       '{cyan-fg}', '{/cyan-fg}',
       '{gray-fg}', '{/gray-fg}',
       '{red-fg}', '{/red-fg}',

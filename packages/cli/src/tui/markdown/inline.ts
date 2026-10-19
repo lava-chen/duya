@@ -260,12 +260,18 @@ function probePair(emit: (s: string) => string): { open: string; close: string }
  */
 export function renderInlineTokens(
   tokens: readonly InlineToken[],
-  styles: Pick<Styles, 'muted' | 'bold' | 'accent' | 'link'>,
+  styles: Pick<Styles, 'renderer' | 'muted' | 'bold' | 'accent' | 'link' | 'italic' | 'strike'>,
 ): string {
   const muted = probePair(styles.muted);
   const bold = probePair(styles.bold);
   const accent = probePair(styles.accent);
   const link = probePair(styles.link);
+  // plan 615 Phase 0: italic/strike are SGR 3/9 attributes the own renderer
+  // speaks natively; the blessed chain cannot (blessed's `_attr` prints the
+  // tags literally), so it keeps the pre-615 folds.
+  const useAttributes = styles.renderer === 'own';
+  const italic = useAttributes ? probePair(styles.italic) : null;
+  const strike = useAttributes ? probePair(styles.strike) : null;
 
   const render = (list: readonly InlineToken[]): string => {
     let out = '';
@@ -281,13 +287,18 @@ export function renderInlineTokens(
           out += `${bold.open}${render(token.children)}${bold.close}`;
           break;
         case 'emphasis':
-          out += `${accent.open}${render(token.children)}${accent.close}`;
+          out +=
+            italic !== null
+              ? `${italic.open}${render(token.children)}${italic.close}`
+              : `${accent.open}${render(token.children)}${accent.close}`;
           break;
         case 'strike':
-          // Strike is an SGR 9 attribute the blessed chain cannot express yet
-          // (plan 614 §5.3 defers the token to Phase 6); muted keeps it
-          // visible rather than invisible.
-          out += `${muted.open}${render(token.children)}${muted.close}`;
+          // Own renderer: a real SGR 9 attribute. Blessed chain: muted keeps
+          // the text visible rather than invisible.
+          out +=
+            strike !== null
+              ? `${strike.open}${render(token.children)}${strike.close}`
+              : `${muted.open}${render(token.children)}${muted.close}`;
           break;
         case 'link': {
           // D7's conservative shape, already the shipped behaviour: the label

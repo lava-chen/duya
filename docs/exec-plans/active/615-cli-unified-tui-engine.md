@@ -172,8 +172,14 @@ App (id: root)
 
 - [ ] **Phase 0 — 基准基线 + own 转默认（吸收 614 Phase 6）**
   - [ ] 0.1 `tui/__tests__/perf/` 基准 harness：伪造 PTY 输入流 + 高分辨率时钟，测输入→首字节绘制、流式帧间隔分布、10k block `totalLines()+paint` 耗时；Windows ConPTY 为第一环境
-  - [ ] 0.2 614 Phase 6 全量执行：own 转默认（`factory.ts:18` 翻转 + `screen-surface.test.ts` 断言更新）+ italic/strike 五处同改（614 D9 清单）+ `renderOptionsKey`/`/settings` help 文本
+  - [x] 0.2 614 Phase 6 全量执行：own 转默认（`factory.ts:18` 翻转 + `screen-surface.test.ts` 断言更新）+ italic/strike 五处同改（614 D9 清单）+ `renderOptionsKey`/`/settings` help 文本
+    - **执行记录（2026-10-19，worktree `plan-615-tui`）**：`selectScreenRenderer` 默认翻转，`DUYA_TUI_RENDERER=blessed` 为回滚开关。italic/strike 落地形态与 614 D9 清单的偏差：blessed 0.1.81 的 `program._attr` **没有** italic 分支（`{italic}` 会按未知 tag 原样输出），所以不是「五处都加标签」，而是——`own/markup.ts`（ATTRIBUTES `italic:'3'`/`strike:'9'` + Style 三布尔 + effective/sgrParameters，属性序 bold→italic→strike→fg）、`terminal/sgr.ts`（on=3/9，off=配对复位 23/29）两链直发；`transcript-view.ts` 加 `RenderOptions.renderer` + `Styles.renderer/italic/strike`，**markdown 映射点按 renderer 分支**：own 发真标签，blessed（含 renderer 未注入的历史调用方）保持 614 的折叠字节不变（emphasis→accent、strike→muted、thinking 折叠），`inline.ts`/`thinkingRows` 落分支。`transcript-cache` key 加 renderer 槽位；`TUIApp.renderOptions()` 注入 `this.renderer`。help 文本未加（blessed 回滚路径 italic 显示为字面 tag 的问题记录在案，随 D7 冻结/删除一并消失）。门禁：tsc -b 绿 + 相关 10 个测试文件 131/131 绿；packages/cli 全量见下一条执行记录。
   - [ ] 0.3 基线数字写回本计划 §8（V8/V9/V10 的「现状→目标」两栏）
+  - **翻转暴露的 parity 缺口（2026-10-19，Phase 0 剩余工作）**：own 转默认后 packages/cli 全量 20 红中，5 条是 OwnScreenSurface 的真实缺口（其余为已知存量红 worker-path×3 / registry×1 / chat-tui bundle 环境红×2，及 host-event-projection 未入 worktree 的差集）：
+    1. `tui-foundation` 2/3 行输入：own 的 `measure('input')` 不做低行数 composer 钳制（返回 5/6，期望 ≤rows-1）；blessed 在 2 行时丢边框。
+    2. `tui-app-integration` ×2：own 全屏帧缺 slash echo 文本（`/effort`）与 help 面板内容（`~/.duya/config.toml`）——echo/overlay 内容未进 own 的帧缓冲。
+    3. `tui-completion-popup` re-filter：own 帧残留 stale `/doctor` 行——diff 重绘未覆盖应清除的行。
+    已修：OwnKeyParser 对 space 发 `ch=undefined` 导致编辑器吞空格（own 转默认后必现，blessed 语义是 `ch=' '`）——两处分支补 `ch=' '`，级联修好 7 条断言。
   - 门禁：`env -u CODEBUDDY_SAFE_DELETE_BULK_STATE_DIR npm run typecheck:all` + `packages/cli` 全量 + parity harness + 基准脚本产出 JSON
 
 - [ ] **Phase 1 — StyledSpan 核心（I1，D2）**

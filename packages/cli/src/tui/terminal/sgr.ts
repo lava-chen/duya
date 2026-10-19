@@ -56,11 +56,17 @@ const NAMED_FOREGROUND: Readonly<Record<string, number>> = {
 const SGR = '\x1b[';
 const BOLD_ON = `${SGR}1m`;
 const BOLD_OFF = `${SGR}22m`;
+const ITALIC_ON = `${SGR}3m`;
+// SGR 23 is "not italic, not blackletter" — the paired reset for 3.
+const ITALIC_OFF = `${SGR}23m`;
+const STRIKE_ON = `${SGR}9m`;
+// SGR 29 is the paired reset for 9.
+const STRIKE_OFF = `${SGR}29m`;
 const FG_OFF = `${SGR}39m`;
 
 /** A tag that opens or closes an attribute. */
 type TagAction =
-  | { readonly kind: 'bold'; readonly on: boolean }
+  | { readonly kind: 'bold' | 'italic' | 'strike'; readonly on: boolean }
   /** A named colour, emitted as its direct SGR parameter (36 for cyan). */
   | { readonly kind: 'fg-named'; readonly code: number }
   /** A 256-colour palette entry, emitted as `38;5;n`. */
@@ -70,6 +76,10 @@ type TagAction =
 function parseTag(body: string): TagAction | null {
   if (body === 'bold') return { kind: 'bold', on: true };
   if (body === '/bold') return { kind: 'bold', on: false };
+  if (body === 'italic') return { kind: 'italic', on: true };
+  if (body === '/italic') return { kind: 'italic', on: false };
+  if (body === 'strike') return { kind: 'strike', on: true };
+  if (body === '/strike') return { kind: 'strike', on: false };
   if (body.startsWith('/')) {
     const name = body.slice(1);
     if (name.endsWith('-fg')) return { kind: 'fg-off' };
@@ -139,6 +149,10 @@ export function tagsToAnsi(line: string): string {
       out += line.slice(brace, close + 1);
     } else if (action.kind === 'bold') {
       out += action.on ? BOLD_ON : BOLD_OFF;
+    } else if (action.kind === 'italic') {
+      out += action.on ? ITALIC_ON : ITALIC_OFF;
+    } else if (action.kind === 'strike') {
+      out += action.on ? STRIKE_ON : STRIKE_OFF;
     } else if (action.kind === 'fg-named') {
       out += `${SGR}${action.code}m`;
     } else if (action.kind === 'fg-indexed') {

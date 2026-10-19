@@ -120,6 +120,9 @@ export class TranscriptRenderer {
         options.showToolResults ? 'r' : '-',
         String(options.toolResultLines),
         String(options.width ?? 0),
+        // plan 615 Phase 0: the renderer decides whether emphasis/strike
+        // render as italic/strike attributes or fold — a facet of the bytes.
+        options.renderer ?? 'blessed',
         themeKey,
         fnv1a(blockContent(block)),
       ].join('|');

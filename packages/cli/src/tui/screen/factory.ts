@@ -15,7 +15,10 @@ export type ScreenRenderer = 'blessed' | 'own';
 
 export function selectScreenRenderer(explicit?: ScreenRenderer): ScreenRenderer {
   if (explicit !== undefined) return explicit;
-  return process.env['DUYA_TUI_RENDERER'] === 'own' ? 'own' : 'blessed';
+  // plan 615 Phase 0 (absorbing 614 Phase 6): `own` is the default renderer.
+  // `DUYA_TUI_RENDERER=blessed` is the documented rollback switch, kept until
+  // plan 615 Phase 7 deletes the blessed screen path.
+  return process.env['DUYA_TUI_RENDERER'] === 'blessed' ? 'blessed' : 'own';
 }
 
 export function createScreenSurface(options: ScreenSurfaceFactoryOptions): ScreenSurface {

@@ -72,7 +72,8 @@ describe('ScreenSurface renderer selection', () => {
   const selections = [
     { env: 'own', expected: 'OwnScreenSurface' },
     { env: 'blessed', expected: 'BlessedScreenSurface' },
-    { env: undefined, expected: 'BlessedScreenSurface' },
+    // plan 615 Phase 0: own is the default; blessed needs the env opt-out.
+    { env: undefined, expected: 'OwnScreenSurface' },
   ] as const;
 
   it.each(selections)('selects $expected for DUYA_TUI_RENDERER=$env', ({ env, expected }) => {
