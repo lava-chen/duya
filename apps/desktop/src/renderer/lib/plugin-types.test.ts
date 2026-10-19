@@ -140,6 +140,26 @@ describe('PluginManifestSchema v2 (Plan 311)', () => {
     expect(isManifestV2(parsed)).toBe(true);
   });
 
+  it('preserves normalized App definitions received through the catalog', () => {
+    const apps = [
+      {
+        appId: 'dashboard',
+        entry: 'apps/dashboard/index.html',
+        requiredCapabilities: ['future.capability'],
+        stateSchemaVersion: 1,
+      },
+      {
+        appId: 'reports',
+        entry: 'apps/reports/index.html',
+        requiredCapabilities: [],
+        stateSchemaVersion: 2,
+      },
+    ];
+
+    const parsed = PluginManifestSchema.parse({ ...validV2, apps });
+    expect(parsed).toHaveProperty('apps', apps);
+  });
+
   it('rejects v2 manifest missing components', () => {
     const { components, ...rest } = validV2;
     const result = PluginManifestSchema.safeParse(rest);

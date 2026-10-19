@@ -2,6 +2,7 @@
 // the manifest shape). Erased at compile time — no runtime dependency on
 // src/ is introduced in the main-process bundle.
 import type { PluginPermission } from '../../renderer/lib/plugin-types';
+import type { PluginAppDefinition } from '@duya/plugin-core/apps/declarations';
 
 export type PluginCapabilityKind = 'skills' | 'mcp' | 'cli' | 'ui' | 'hooks';
 export type PluginSource = 'bundled' | 'builtin-directory' | 'marketplace' | 'local' | 'development';
@@ -149,6 +150,8 @@ export interface PluginManifest {
    * Each namespace value is an object (spec `additionalProperties`).
    */
   extensions?: Record<string, Record<string, unknown>>;
+  /** Package-local App definitions; instances and session runs are runtime state. */
+  apps?: PluginAppDefinition[];
   permissions: PluginPermissionRequest[];
   setup?: Array<{
     id: string;
@@ -340,6 +343,8 @@ export interface PluginRegistryFile {
 
 export interface PluginViewItem extends PluginRegistryEntry {
   capabilityKinds: PluginCapabilityKind[];
+  /** Safe manifest metadata projected for installed-list consumers. */
+  apps?: PluginAppDefinition[];
 }
 
 // ============================================================================

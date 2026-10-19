@@ -26,6 +26,7 @@ import path from 'path';
 import type { PluginCapabilityKind, PluginInterface, PluginManifest } from './types';
 import { discoverAllCapabilities } from '@duya/plugin-core/plugins/loader/capability-discovery';
 import { parseAppDeclarationFile } from '@duya/connectors/app-schema';
+import { PluginAppDefinitionsSchema } from '@duya/plugin-core/apps/declarations';
 import {
   allPluginManifestPaths,
   isNativeManifestPath,
@@ -222,6 +223,67 @@ function readAppConnectionIds(pluginRoot: string): string[] {
   return readAppConnectionDeclarations(pluginRoot).map((decl) => decl.id);
 }
 
+function getDuyaClientExtension(extensions: unknown): Record<string, unknown> | undefined {
+  if (!isObject(extensions)) return undefined;
+  const extension = extensions[DUYA_EXTENSION_NAMESPACE];
+  return isObject(extension) ? extension : undefined;
+}
+
+/** Parse package App metadata and ensure every entry resolves inside its package. */
+function readPluginAppDefinitions(
+  pluginRoot: string,
+  extension: Record<string, unknown> | undefined,
+): PluginManifest['apps'] {
+  const rawApps = extension?.apps;
+  if (rawApps === undefined) return undefined;
+
+  const parsed = PluginAppDefinitionsSchema.safeParse(rawApps);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const fieldPath = issue?.path.length ? `.${issue.path.join('.')}` : '';
+    throw new Error(
+      `Invalid plugin manifest field: extensions.${DUYA_EXTENSION_NAMESPACE}.apps${fieldPath} (${issue?.message ?? 'invalid declaration'})`,
+    );
+  }
+
+  if (parsed.data.length === 0) return parsed.data;
+  let packageRealPath: string;
+  try {
+    packageRealPath = fs.realpathSync(pluginRoot);
+  } catch {
+    throw new Error('Invalid plugin App package root');
+  }
+
+  return parsed.data.map((app) => {
+    const entryPath = path.resolve(packageRealPath, ...app.entry.split('/'));
+    let canonicalEntry: string;
+    try {
+      canonicalEntry = fs.realpathSync(entryPath);
+    } catch {
+      throw new Error(`Invalid plugin App entry: ${app.entry} is not a file`);
+    }
+
+    const relative = path.relative(packageRealPath, canonicalEntry);
+    if (
+      relative.length === 0 ||
+      relative === '..' ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    ) {
+      throw new Error(`Invalid plugin App entry: ${app.entry} resolves outside the package`);
+    }
+
+    try {
+      if (!fs.statSync(canonicalEntry).isFile()) {
+        throw new Error('not a file');
+      }
+    } catch {
+      throw new Error(`Invalid plugin App entry: ${app.entry} is not a file`);
+    }
+    return app;
+  });
+}
+
 function parseSetupField(
   item: unknown,
   index: number,
@@ -379,6 +441,7 @@ function readMinimalManifest(
     keywords: asOptionalStringArray(raw.keywords) ?? undefined,
     interface: interfaceBlock,
     extensions: parseExtensions(raw.extensions),
+    apps: readPluginAppDefinitions(pluginRoot, getDuyaClientExtension(raw.extensions)),
     capabilities: {
       skills: skillNames.length ? skillNames : undefined,
       mcpServers: mcpServers.length ? mcpServers : undefined,
@@ -409,7 +472,10 @@ function readMinimalManifest(
 // Legacy v1/v2 root `plugin.json` parser (marketplace / local compat)
 // ----------------------------------------------------------------------------
 
-function parseLegacyV1V2Manifest(raw: Record<string, unknown>): PluginManifest {
+function parseLegacyV1V2Manifest(
+  raw: Record<string, unknown>,
+  pluginRoot: string,
+): PluginManifest {
   const schemaVersion = asString(raw.schemaVersion, 'schemaVersion');
   if (schemaVersion !== 'duya.plugin.v1' && schemaVersion !== 'duya.plugin.v2') {
     throw new Error(`Unsupported schemaVersion: ${schemaVersion}`);
@@ -496,6 +562,7 @@ function parseLegacyV1V2Manifest(raw: Record<string, unknown>): PluginManifest {
     keywords: asOptionalStringArray(raw.keywords) ?? undefined,
     interface: parseInterfaceBlock(raw.interface),
     extensions: parseExtensions(raw.extensions),
+    apps: readPluginAppDefinitions(pluginRoot, getDuyaClientExtension(raw.extensions)),
     capabilities: {
       skills: capsRaw.skills ? asStringArray(capsRaw.skills, 'capabilities.skills') : undefined,
       mcpServers: Array.isArray(capsRaw.mcpServers)
@@ -575,6 +642,7 @@ interface DuyaClientExtension {
   interface: PluginInterface | undefined;
   cli: PluginManifest['capabilities']['cli'];
   ui: PluginManifest['capabilities']['ui'];
+  apps: PluginManifest['apps'];
 }
 
 /**
@@ -585,7 +653,10 @@ interface DuyaClientExtension {
  * Absent or malformed block → lenient defaults so a third-party standard
  * package never fails to load.
  */
-function parseDuyaClientExtension(raw: unknown): DuyaClientExtension {
+function parseDuyaClientExtension(
+  raw: unknown,
+  pluginRoot: string,
+): DuyaClientExtension {
   const empty: DuyaClientExtension = {
     permissions: [],
     setup: undefined,
@@ -594,6 +665,7 @@ function parseDuyaClientExtension(raw: unknown): DuyaClientExtension {
     interface: undefined,
     cli: undefined,
     ui: undefined,
+    apps: undefined,
   };
   if (!isObject(raw)) return empty;
 
@@ -666,6 +738,8 @@ function parseDuyaClientExtension(raw: unknown): DuyaClientExtension {
         }))
     : undefined;
 
+  const apps = readPluginAppDefinitions(pluginRoot, raw);
+
   return {
     permissions,
     setup,
@@ -674,6 +748,7 @@ function parseDuyaClientExtension(raw: unknown): DuyaClientExtension {
     interface: parseInterfaceBlock(raw.interface),
     cli,
     ui,
+    apps,
   };
 }
 
@@ -715,7 +790,8 @@ function readAgentPluginsManifest(pluginRoot: string, manifestPath: string): Plu
   const workflowNames = caps.workflows.map((w) => w.name);
 
   const duyaExt = parseDuyaClientExtension(
-    isObject(raw.extensions) ? (raw.extensions as Record<string, unknown>)[DUYA_EXTENSION_NAMESPACE] : undefined,
+    getDuyaClientExtension(raw.extensions),
+    pluginRoot,
   );
 
   return {
@@ -731,6 +807,7 @@ function readAgentPluginsManifest(pluginRoot: string, manifestPath: string): Plu
     keywords: asOptionalStringArray(raw.keywords) ?? undefined,
     interface: duyaExt.interface,
     extensions: parseExtensions(raw.extensions),
+    apps: duyaExt.apps,
     capabilities: {
       skills: skillNames.length ? skillNames : undefined,
       mcpServers: mcpServers.length ? mcpServers : undefined,
@@ -786,7 +863,7 @@ export function readPluginManifest(pluginRoot: string): PluginManifest {
     if (raw.$schema === AGENT_PLUGINS_PLUGIN_SCHEMA) {
       return readAgentPluginsManifest(pluginRoot, rootPath);
     }
-    return parseLegacyV1V2Manifest(raw);
+    return parseLegacyV1V2Manifest(raw, pluginRoot);
   }
 
   throw new Error(`plugin.json not found: ${pluginRoot}`);

@@ -67,6 +67,7 @@ export default defineConfig({
       'apps/desktop/src/renderer/**/*.test.tsx',
       'apps/desktop/src/renderer/**/*.spec.ts',
       'apps/desktop/src/main/**/*.test.ts',
+      'apps/web/tests/**/*.test.ts',
       // Plan 587 M5.2: the contracts boundary. Collected deliberately, because
       // a test file outside `include` is a test nobody ever runs, and
       // `check-test-coverage` treats it as exactly that.
