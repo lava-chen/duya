@@ -83,9 +83,10 @@ DUYA is a Windows desktop AI agent client with a modular architecture:
 ├─────────────────────────────────────────────────────────────┤
 │  Process layer 3 - Agent Workers (fork, one per session)    │
 │  ┌───────────────────────────────────────────────────────┐  │
-│  │  @duya/agent (workspace package)                      │  │
+│  │  @duya/host + @duya/agent-runtime + @duya/agent-core│  │
 │  │  @duya/ai (multi-protocol LLM adapter)                │  │
 │  │  entry: agent-process-entry.js                        │  │
+│  │  turn driver: driveRunWithEngine → RunEngineImpl   │  │
 │  └───────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 
@@ -392,14 +393,29 @@ attach or resume for a live run.
 The production worker's RunDriver now imports the Runtime-only event-spine
 factory from `@duya/host/run-event-spine`; the old Agent path is a compatibility
 re-export. Host owns the run session, event stream, emitter, and terminal
-candidate recorder. The RunDriver and its `DuyaAgent` provider/tool/context
-assembly remain in `@duya/agent`, so execution ownership has not moved to Host.
+candidate recorder. Execution ownership HAS moved: the agent class is now
+`WorkerSession implements AgentRuntime` in
+`@duya/host/worker-session-runtime`, and `packages/agent/src/agent/DuyaAgent.ts`
+is an eight-line shim (`export class duyaAgent extends WorkerSession`) kept only
+to bind the product tool registry. The executor is `RunEngineImpl` in
+`@duya/agent-runtime/engine`, reached exclusively through
+`driveRunWithEngine` (`@duya/host/worker-engine-driver`), which is the single
+turn driver for all three production entries: the worker process entry, the
+headless/CLI path, and sub-agent turns. None of them reaches the legacy
+`agent.streamChat` turn loop any more.
 The worker supervision implementation now lives in `@duya/host/worker-manager`.
 Desktop Agent Server supplies adapters for its in-memory session state, logger,
 and packaged worker paths, and still constructs the manager inside the
-Electron-supervised Agent Server process. Standalone Host and CLI do not yet
-compose this manager, and its worker entry still runs the legacy `@duya/agent`
-engine.
+Electron-supervised Agent Server process. Package retirement is NOT complete:
+`node scripts/architecture/agent-retirement-gate.mjs --json` still reports
+`status: OPEN` with `legacyPackagePresent: true` and
+`runtimeVerificationRequired: true`. Of the remaining hits, every
+production-source finding is a string literal in census metadata or
+user-facing error copy (for example
+`packages/host/src/worker-session-runtime.ts` pointing users at
+`packages/agent/src/agent-profile/types.ts`), not an import edge; the open work
+is build tooling, active configuration, and test targets. A closed static gate
+alone is still not runtime proof.
 The production `RunOrchestrator` and worker execution-channel adapter now live
 in `@duya/host/run-orchestrator`; Agent Server imports that Host subpath and
 injects its DB bridge, worker channel, and logger. The old Agent Server module
@@ -674,9 +690,11 @@ The AI event-to-`ModelPort` adapter now lives in
 `@duya/host/run-engine-model`; production run composition imports that Host
 subpath directly. The old `packages/agent/src/process/run-engine-model.ts`
 path remains a compatibility re-export. `@duya/agent-runtime` stays provider
-independent. The production driver still gets its `AIClient`, tool pipeline,
-and turn context from `DuyaAgent`, so this extraction does not yet remove the
-legacy Agent runtime dependency.
+independent. The production driver takes its `AIClient`, tool pipeline, and
+turn context from `WorkerSession` rather than the legacy Agent class, so this
+extraction no longer carries a legacy Agent runtime dependency; what remains is
+one boundary migration on the driver/session boundary, not a cutover still in
+front of us.
 
 `ControlPlaneService`, its bounded in-memory `HostMap`, the command/run receipt
 contracts, repository port, and pure trusted-sender decision now live in
@@ -943,13 +961,27 @@ domain or database-owner cutover to Host.
   注入两梯读回验证一键跑（plan 572 §7）；`scripts/reset-mac-tcc.sh` 重置授权。剩余真机 Gate
   依赖 macOS 13+（Electron 44 硬性要求）与 TCC 授权。
 
-## @duya/agent - Agent Core
+## @duya/agent-runtime - Agent Runtime
+
+The plan 587/610 cutover moved the agent out of `@duya/agent`. Current ownership:
+
+- `@duya/agent-core` - run reasoning, profiles, skills, modes, subagent and
+  usage contracts. Zero IO.
+- `@duya/agent-runtime` - `RunEngineImpl`, the single run execution engine, plus
+  run identity, event ordering, and the model/tool/context port contracts.
+- `@duya/host` - the product worker: `WorkerSession` (the agent class), the
+  concrete tool registry, compaction coordination, hooks, modes, and
+  `driveRunWithEngine`.
+- `@duya/agent` - legacy shell awaiting retirement; see
+  [Plan 610 slice 13](docs/exec-plans/active/610-architecture-series/13-agent-retirement-consumers.md).
 
 ### Entry Points
 
-- `packages/agent/src/agent/DuyaAgent.ts` - Main agent class
-- `packages/agent/src/session/MessageSession.ts` - Session management
-- `packages/agent/src/session/TaskStore.ts` - Task state
+- `packages/host/src/worker-session-runtime.ts` - `WorkerSession`, the agent class
+- `packages/host/src/worker-engine-driver.ts` - `driveRunWithEngine`, the turn driver
+- `packages/agent-runtime/src/engine/run-engine.ts` - `RunEngineImpl`, the executor
+- `packages/host/src/worker-process-entry.ts` - main worker process entry
+- `packages/cli/src/chat.ts` - `duya chat` / TUI, a pure Host HTTP client
 
 ### Chat CLI TUI
 
@@ -1247,6 +1279,48 @@ connection status DTO (optional `ledger` field). Admission gate: conformance
 L1–L9 (`packages/agent/tests/integration/mcp-conformance.test.ts`, AGENTS.md
 Gates).
 
+### Instruction files (`AGENTS.md`) — read-only visibility surface
+
+The worker's `AgentsMdManager` is the authority on which instruction files are
+in effect, but it lives inside the forked worker process. `/agents` in the CLI
+TUI (and the Desktop equivalent) makes that list visible without reaching into
+the worker: `GET /v1/sessions/:id/agents-files` →
+`createHostAgentsFilesApi` (`packages/host/src/agents-files-api.ts`) re-runs the
+SAME loader (`loadAgentsMdFiles`) over the SAME two inputs the worker used — the
+session's working directory and the project entity home — so the host resolves
+the list read-only instead of the event spine gaining a new frame type while the
+plan 610 retirement gate is still OPEN.
+
+Boundaries this contract draws deliberately:
+
+- **No file bodies cross the wire.** Only path, layer, globs, `@include` parent,
+  a rewritten flag, and the injected size. A display panel does not need the
+  text, and shipping it would put a whole AGENTS.md tree on the loopback API.
+- **`HostSessionRecord` still carries no raw paths.** The session's working
+  directory is resolved host-side from the session row; the client never chooses
+  or receives it, matching the write-side rule at
+  `@duya/agent-protocol/session-api.ts`.
+- **"no such session" and "no instruction files" are different answers.** The
+  route returns 404 for the former; a live session with no bound directory
+  returns 200 with `scope.unresolvedReason: 'no_cwd'`. The run path substitutes
+  the Host data root as a working-directory default
+  (`packages/host/src/local-host.ts`), and resolving instructions there would
+  answer a different question than the one asked.
+- **`nested_not_reproduced` is reported, never omitted.** The plan 408b nested
+  memory layer is chosen per turn from the paths that turn touches and lives in
+  a session-scoped set inside the worker; a host-side re-resolution cannot see
+  it. A panel listing five files while implying "that is everything" would be a
+  false claim.
+- **A project lookup failure degrades, it does not sink.** If the project store
+  throws, the cwd-derived layers still resolve and the `'Project entity'` layer
+  is simply absent, with a WARN.
+
+Known loader defect, pinned by test: `processRulesDir` keeps glob-bearing files
+only when its `conditionalOnly` flag is true, and all three call sites omit the
+argument, so every `.duya/rules/*.md` declaring frontmatter `paths:` is filtered
+out after being read. Fixing it would start injecting rules the agent has never
+seen, which is a behaviour decision rather than a bug fix.
+
 ### Mode System (Plan 224)
 
 Modes are declarative `ModeModifier` objects:
@@ -1540,7 +1614,7 @@ no Desktop Host is present.
 
 ```
 packages/
-├── agent/                @duya/agent - Agent core
+├── agent/                @duya/agent - Legacy shell (retirement OPEN, plan 610 s13)
 ├── agent-core/           @duya/agent-core - Run reasoning (zero IO)
 ├── agent-protocol/       @duya/agent-protocol - Transport-neutral wire contract
 ├── agent-runtime/        @duya/agent-runtime - Run execution engine
