@@ -173,6 +173,29 @@ export function cursorDown(n: number): string {
 }
 
 /**
+ * Ask for the kitty keyboard protocol, disambiguating escape codes.
+ *
+ * The flags are PUSHED (`>`), not set, so whatever the user's other tools asked
+ * for is restored by `popKittyKeyboardFlags` rather than guessed at. Flag 1 is
+ * "disambiguate escape codes": it makes Enter, Tab, Escape and friends arrive
+ * as `CSI … u` instead of the ambiguous `\r` / `\t` / bare ESC, which is what
+ * makes Shift+Enter distinguishable at all.
+ *
+ * OFF by default. Turning it on rewrites the encoding of every key, and the only
+ * way to know a terminal honours it is to watch what arrives — a terminal that
+ * ignores the push simply keeps sending legacy bytes, which is why the parser
+ * accepts both without being told which is in force.
+ */
+export function pushKittyKeyboardFlags(): string {
+  return `${CSI}>1u`;
+}
+
+/** Restore the keyboard flags that were in force before the push. */
+export function popKittyKeyboardFlags(): string {
+  return `${CSI}<u`;
+}
+
+/**
  * SGR parameters for one span's style, in the order this renderer emits them.
  *
  * Attributes first, then the foreground, then the background — the order

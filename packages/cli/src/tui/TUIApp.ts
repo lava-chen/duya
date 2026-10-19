@@ -56,7 +56,14 @@ import { escapeTags, stylesOf, type RenderOptions } from './transcript-view.js';
 import { TranscriptRenderer } from './transcript-cache.js';
 import type { EscapeSafeWriter } from './bounded-writer.js';
 import { TerminalSession } from './terminal/session.js';
-import { OwnKeyInput, OwnKeyParser } from './terminal/own-key-parser.js';
+import {
+  createInputDriver,
+  type InputEvent,
+  type InputMouseEvent,
+  type NormalizedKey,
+  type TerminalInputDriver,
+} from './terminal/input-driver.js';
+import { popKittyKeyboardFlags, pushKittyKeyboardFlags } from './terminal/ansi.js';
 import { buildComposerLayout } from './composer-layout.js';
 import { wrapWithCursor, type WrappedText } from './width.js';
 import { CompletionController, type CompletionKey, type CompletionSources } from './completion.js';
@@ -394,7 +401,26 @@ export class TUIApp {
   private disposed = false;
   private readonly terminal: TerminalSession;
   private readonly renderer: ScreenRenderer;
-  private readonly ownKeyInput: OwnKeyInput | null;
+  /**
+   * Own-renderer input. null on the blessed path, which keeps parsing input
+   * through blessed's own `Program` — the rollback switch has to roll back the
+   * input path too, or "roll back" would mean "run blessed's painter on our
+   * parser", a combination neither side was tested for.
+   */
+  private readonly inputDriver: TerminalInputDriver | null;
+  /**
+   * `key <full>` handlers, keyed by blessed-compatible name.
+   *
+   * A LIST per name, not a single handler, because blessed fires every listener
+   * registered for a name and the app has at least one case where that is
+   * deliberate (the same action reachable from two chords). Collapsing to one
+   * would silently drop a binding.
+   */
+  private readonly keyHandlers = new Map<string, (() => void)[]>();
+  /** The catch-all for keys no binding claimed, mirroring `keypress`. */
+  private keypressHandler: ((ch: string, key: NormalizedKey) => void) | null = null;
+  /** Mouse reports, when the surface wants them. */
+  private mouseHandler: ((event: InputMouseEvent) => void) | null = null;
   private readonly program: BlessedProgram;
   private readonly writer: EscapeSafeWriter;
   /** What the terminal can render, measured rather than assumed. */
@@ -652,15 +678,21 @@ export class TUIApp {
     this.bindPaste();
     this.bindResize();
 
-    this.ownKeyInput = this.renderer === 'own'
-      ? new OwnKeyInput(this.terminal.input, new OwnKeyParser({
-          keypress: (ch, key) => {
-            (programInput as PassThrough).emit('keypress', ch, key);
-          },
-          paste: (text) => this.handleBracketedPaste(text),
-          mouse: (event) => { this.program.emit('mouse', event); },
-        }))
+    // The own renderer reads bytes itself and dispatches through `keyHandlers`.
+    // Blessed's Program still gets a PassThrough so it never sees the real
+    // stream: two parsers on one stdin would each emit a key per keystroke.
+    this.inputDriver = this.renderer === 'own'
+      ? createInputDriver()
       : null;
+    this.inputDriver?.start(this.terminal.input, (event) => this.dispatchInput(event));
+
+    // Kitty keyboard flags are PUSHED only when the environment says the
+    // terminal speaks the protocol, and popped on teardown. Off by default:
+    // enabling it rewrites the encoding of every key, and a terminal that
+    // half-implements it would leave the user unable to type.
+    if (this.inputDriver !== null && this.inputDriver.capabilities().kitty && this.kittyKeyboard()) {
+      this.output.write(pushKittyKeyboardFlags());
+    }
 
     // Bracketed paste: blessed never enables it, and without it a paste
     // arrives as a key storm. See the module comment for why the markers
@@ -740,7 +772,15 @@ export class TUIApp {
     this.releaseAltScreen();
     this.inlineSurface?.stop();
     this.stopSpinner();
-    this.ownKeyInput?.dispose();
+    if (this.inputDriver !== null) {
+      // Pop whatever we pushed, BEFORE detaching: a pushed flag left behind
+      // outlives the process as a broken keyboard for the shell the user
+      // returns to.
+      if (this.inputDriver.capabilities().kitty && this.kittyKeyboard()) {
+        this.output.write(popKittyKeyboardFlags());
+      }
+      this.inputDriver.stop();
+    }
     this.program.destroy();
     this.terminal.dispose();
   }
@@ -2392,11 +2432,93 @@ export class TUIApp {
     if (def === undefined) return;
     const keys = toBlessedKeys(def.keys);
     if (keys.length === 0) return;
-    // On the program, not the screen: `Screen.prototype.key` is a one-line
-    // delegation to `Program.prototype.key` (blessed screen.js:1726), so this is
-    // the same binding in full-screen mode — and it is the only one available
-    // in inline mode, which deliberately has no Screen.
-    this.program.key(keys, handler);
+    // Same table as the hand-written bindings, so an override lands where the
+    // renderer actually reads it. On the blessed path this is still
+    // `Program.key` under the hood; `bindKey` is the one place that decides.
+    this.bindKey(keys, handler);
+  }
+
+  /**
+   * Register a handler for one or more blessed key names.
+   *
+   * The names are the `key.full` strings (`C-c`, `M-y`, `S-tab`, `enter`) —
+   * the SAME vocabulary `toBlessedKeys` produces, which is why overrides did
+   * not need a second translator when the own path arrived.
+   */
+  private bindKey(names: readonly string[], handler: () => void): void {
+    if (this.renderer !== 'own') {
+      this.program.key([...names], handler);
+      return;
+    }
+    for (const name of names) {
+      const existing = this.keyHandlers.get(name);
+      if (existing === undefined) this.keyHandlers.set(name, [handler]);
+      else existing.push(handler);
+    }
+  }
+
+  /** Register the catch-all that runs for keys no binding claimed. */
+  private onKeypress(handler: (ch: string, key: NormalizedKey) => void): void {
+    if (this.renderer !== 'own') {
+      this.program.on('keypress', (ch: string, key: blessed.Widgets.Events.IKeyEventArg) => {
+        // blessed's key object is structurally the subset `NormalizedKey`
+        // keeps, minus `full` — which only the own path computes, and which no
+        // handler reads.
+        handler(ch, key as unknown as NormalizedKey);
+      });
+      return;
+    }
+    this.keypressHandler = handler;
+  }
+
+  /** Register the mouse reporter. */
+  private onMouse(handler: (event: InputMouseEvent) => void): void {
+    if (this.renderer !== 'own') {
+      this.program.on('mouse', (key: { action?: string }) => {
+        handler(key as unknown as InputMouseEvent);
+      });
+      return;
+    }
+    this.mouseHandler = handler;
+  }
+
+  /**
+   * Dispatch one normalised input event.
+   *
+   * The ORDER is blessed's, and it is load-bearing: `program.js:408-411`
+   * emits `keypress` first and `key <full>` second. Reversing it would let the
+   * text handler insert a character for a key a binding had already claimed —
+   * the `\t` completion key would type a tab, and the same class of bug would
+   * hit every contended binding.
+   */
+  private dispatchInput(event: InputEvent): void {
+    switch (event.kind) {
+      case 'key': {
+        this.keypressHandler?.(event.key.ch ?? '', event.key);
+        const handlers = this.keyHandlers.get(event.key.full);
+        if (handlers === undefined) return;
+        for (const handler of handlers) handler();
+        return;
+      }
+      case 'paste':
+        this.handleBracketedPaste(event.text);
+        return;
+      case 'mouse':
+        this.mouseHandler?.(event.event);
+        return;
+    }
+  }
+
+  /**
+   * Whether to ask for the kitty keyboard protocol.
+   *
+   * Opt-in while it is new: the protocol re-encodes EVERY key, and the only
+   * evidence that a given terminal implements it correctly is that typing still
+   * works on it. `DUYA_TUI_KITTY=1` turns it on for exactly that trial; the
+   * environment-based capability check decides whether asking is even plausible.
+   */
+  private kittyKeyboard(): boolean {
+    return process.env['DUYA_TUI_KITTY'] === '1';
   }
 
   /**
@@ -2583,17 +2705,17 @@ exportHistory(): string[] {
   ]);
 
   private bindKeys(): void {
-    // Bound to the program, never to a Screen: see `bindAction`. Inline mode
-    // has no Screen, and a Screen's own key table is this program's table.
-    const target = this.program;
-
-    target.key(['C-c'], () => {
+    // Bound through `bindKey`, which routes to blessed's table on the blessed
+    // path and to `keyHandlers` on the own one. NEVER to a Screen: `Screen.key`
+    // is a delegation to `Program.key` (blessed screen.js:1726), and inline
+    // mode deliberately has no Screen.
+    this.bindKey(['C-c'], () => {
       if (this.interactivePrompt !== null) this.settleInteractivePrompt(null);
       else this.onCtrlC();
     });
     // Ctrl+D exits — but ONLY on an empty input, and never from under a modal.
     // See the `exit` row in `actions.ts` for why it is not delete-forward.
-    target.key(['C-d'], () => {
+    this.bindKey(['C-d'], () => {
       if (this.interactivePrompt !== null || this.swallowForWindow()) return;
       if (this.overlay.isActive || this.focus !== 'input') return;
       if (!this.editor.isEmpty) return;
@@ -2602,7 +2724,7 @@ exportHistory(): string[] {
     });
     // C-l (clear) and C-t (expand-all) are bound further down, from the
     // action table, so an override rewires them in one place.
-    target.key(['C-a'], () => {
+    this.bindKey(['C-a'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(0);
       else if (this.swallowForWindow()) return;
       else if (this.interactivePrompt === null && this.focus === 'input') {
@@ -2610,7 +2732,7 @@ exportHistory(): string[] {
         this.refreshInputCompletion();
       }
     });
-    target.key(['C-e'], () => {
+    this.bindKey(['C-e'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(this.interactivePrompt.value.length);
       else if (this.swallowForWindow()) return;
       else if (this.interactivePrompt === null && this.focus === 'input') {
@@ -2618,7 +2740,7 @@ exportHistory(): string[] {
         this.refreshInputCompletion();
       }
     });
-    target.key(['C-u'], () => {
+    this.bindKey(['C-u'], () => {
       if (this.interactivePrompt?.kind === 'text') this.updateTextPrompt({ value: this.interactivePrompt.value.slice(this.interactivePrompt.cursor), cursor: 0 });
       else if (this.swallowForWindow()) return;
       else if (this.interactivePrompt === null && this.focus === 'input') {
@@ -2626,7 +2748,7 @@ exportHistory(): string[] {
         this.refreshInputCompletion();
       }
     });
-    target.key(['C-k'], () => {
+    this.bindKey(['C-k'], () => {
       if (this.interactivePrompt?.kind === 'text') this.updateTextPrompt({ value: this.interactivePrompt.value.slice(0, this.interactivePrompt.cursor) });
       else if (this.swallowForWindow()) return;
       else if (this.interactivePrompt === null && this.focus === 'input') {
@@ -2634,7 +2756,7 @@ exportHistory(): string[] {
         this.refreshInputCompletion();
       }
     });
-    target.key(['C-w'], () => {
+    this.bindKey(['C-w'], () => {
       if (this.interactivePrompt?.kind === 'text') {
         const before = this.interactivePrompt.value.slice(0, this.interactivePrompt.cursor).replace(/\s+$/u, '').replace(/\S+$/u, '');
         this.updateTextPrompt({ value: before + this.interactivePrompt.value.slice(this.interactivePrompt.cursor), cursor: before.length });
@@ -2647,21 +2769,21 @@ exportHistory(): string[] {
     // Undo / kill-ring yank, ported from minimax-code's editor. C-z is safe
     // to bind: blessed reads the terminal in raw mode, so the SUSP character
     // never reaches the tty line discipline to suspend the process.
-    target.key(['C-z'], () => {
+    this.bindKey(['C-z'], () => {
       if (this.swallowForWindow()) return;
       if (this.interactivePrompt === null && this.focus === 'input') {
         this.editor.undo();
         this.refreshInputCompletion();
       }
     });
-    target.key(['C-y'], () => {
+    this.bindKey(['C-y'], () => {
       if (this.swallowForWindow()) return;
       if (this.interactivePrompt === null && this.focus === 'input') {
         this.editor.yank();
         this.refreshInputCompletion();
       }
     });
-    target.key(['M-y'], () => {
+    this.bindKey(['M-y'], () => {
       if (this.swallowForWindow()) return;
       if (this.interactivePrompt === null && this.focus === 'input') {
         this.editor.yankPop();
@@ -2700,8 +2822,8 @@ exportHistory(): string[] {
     // could never scroll the transcript at all. Only the wheel is consumed:
     // clicks stay with the terminal, so text selection keeps working.
     this.program.enableMouse();
-    this.program.on('mouse', (key: { action?: string }) => {
-      const action = key?.action;
+    this.onMouse((event) => {
+      const action = event.action;
       if (action !== 'wheelup' && action !== 'wheeldown') return;
       if (this.interactivePrompt !== null || this.overlay.isActive) return;
       if (this.windowMgr.isActive) {
@@ -2711,7 +2833,7 @@ exportHistory(): string[] {
       }
       this.scrollByLines(action === 'wheelup' ? -WHEEL_STEP_LINES : WHEEL_STEP_LINES);
     });
-    target.key(['left'], () => {
+    this.bindKey(['left'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(this.interactivePrompt.cursor - 1);
       else if (this.swallowForWindow()) return;
       else if (this.interactivePrompt === null && this.focus === 'transcript') this.setSelectedBlockExpanded(false);
@@ -2720,7 +2842,7 @@ exportHistory(): string[] {
         if (this.focus === 'input') this.refreshInputCompletion();
       }
     });
-    target.key(['right'], () => {
+    this.bindKey(['right'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(this.interactivePrompt.cursor + 1);
       else if (this.swallowForWindow()) return;
       else if (this.interactivePrompt === null && this.focus === 'transcript') this.setSelectedBlockExpanded(true);
@@ -2729,19 +2851,19 @@ exportHistory(): string[] {
         if (this.focus === 'input') this.refreshInputCompletion();
       }
     });
-    target.key(['C-left'], () => {
+    this.bindKey(['C-left'], () => {
       if (this.interactivePrompt === null && !this.swallowForWindow() && this.focus === 'input') {
         this.editor.moveWordLeft();
         this.refreshInputCompletion();
       }
     });
-    target.key(['C-right'], () => {
+    this.bindKey(['C-right'], () => {
       if (this.interactivePrompt === null && !this.swallowForWindow() && this.focus === 'input') {
         this.editor.moveWordRight();
         this.refreshInputCompletion();
       }
     });
-    target.key(['home'], () => {
+    this.bindKey(['home'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(0);
       else if (this.swallowForWindow()) return;
       else if (this.interactivePrompt === null && this.focus === 'input') {
@@ -2749,7 +2871,7 @@ exportHistory(): string[] {
         this.refreshInputCompletion();
       }
     });
-    target.key(['end'], () => {
+    this.bindKey(['end'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(this.interactivePrompt.value.length);
       else if (this.swallowForWindow()) return;
       else if (this.interactivePrompt === null && this.focus === 'input') {
@@ -2757,7 +2879,7 @@ exportHistory(): string[] {
         this.refreshInputCompletion();
       }
     });
-    target.key(['backspace'], () => {
+    this.bindKey(['backspace'], () => {
       // The overlay outranks the editor: the questionnaire's notes buffer is a
       // real text field, so a backspace under the modal must edit notes and
       // never the prompt underneath (the same rule the keypress path applies).
@@ -2773,7 +2895,7 @@ exportHistory(): string[] {
         this.refreshInputCompletion();
       }
     });
-    target.key(['delete'], () => {
+    this.bindKey(['delete'], () => {
       if (this.interactivePrompt?.kind === 'text') this.deletePromptForward();
       else if (this.windowMgr.isActive) {
         // Forward delete means nothing to a filter; swallow it so it cannot
@@ -2807,12 +2929,12 @@ exportHistory(): string[] {
     // Binding only the canonical name drops the duplicate by construction: no
     // dedup state, and no assumption about how fast the two arrivals land.
     for (const [name, completionKey] of Object.entries(TUIApp.CONTENDED_BINDINGS)) {
-      target.key([name], () => {
+      this.bindKey([name], () => {
         this.routeContended(completionKey);
       });
     }
 
-    target.key(['pageup'], () => {
+    this.bindKey(['pageup'], () => {
       if (this.interactivePrompt === null && this.windowMgr.isActive) {
         this.windowMgr.handleKey('pageup');
         this.scheduler.requestImmediate();
@@ -2820,7 +2942,7 @@ exportHistory(): string[] {
       }
       if (this.interactivePrompt === null) this.scrollBy(-1);
     });
-    target.key(['pagedown'], () => {
+    this.bindKey(['pagedown'], () => {
       if (this.interactivePrompt === null && this.windowMgr.isActive) {
         this.windowMgr.handleKey('pagedown');
         this.scheduler.requestImmediate();
@@ -2833,7 +2955,7 @@ exportHistory(): string[] {
     // blessed's key path a committed ideograph arrives with `key.name`
     // undefined and `ch` holding the character, so the name-keyed bindings
     // above never see it and it lands here instead.
-    target.on('keypress', (ch: string, key: blessed.Widgets.Events.IKeyEventArg) => {
+    this.onKeypress((ch: string, key: NormalizedKey) => {
       const name = key?.name;
 
       // The popup's keys are bound on the program channel above, so this path
@@ -2878,7 +3000,7 @@ exportHistory(): string[] {
       if (this.overlay.isActive) {
         // The overlay answers with single keys; they must not also land in
         // the prompt underneath it.
-        this.handleOverlayKey(ch, key);
+        this.handleOverlayKey(ch, key as unknown as blessed.Widgets.Events.IKeyEventArg);
         return;
       }
       if (this.focus === 'transcript') this.focus = 'input';

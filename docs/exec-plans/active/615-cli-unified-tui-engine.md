@@ -165,20 +165,33 @@ export interface UIComponent<P = ComponentProps> {
 }
 ```
 
-### 5.3 输入驱动（Phase 2 落地）
+### 5.3 输入驱动（Phase 2 已落地）
 
 ```ts
-// tui/terminal/input-driver.ts（包 OwnKeyParser）
+// tui/terminal/input-driver.ts
 export interface TerminalInputDriver {
   start(input: NodeJS.ReadableStream, onEvent: (e: InputEvent) => void): void;
   stop(): void;
   capabilities(): { kitty: boolean; mouse: boolean; bracketedPaste: boolean };
 }
+export interface NormalizedKey {
+  ch?: string; name?: string;
+  ctrl: boolean; meta: boolean; shift: boolean;
+  sequence: string; code?: string;
+  full: string;              // blessed 的 key.full，绑定表唯一读取的字段
+}
 export type InputEvent =
-  | { kind: 'key'; key: NormalizedKey }        // name + ctrl/alt/shift + codepoint
-  | { kind: 'mouse'; event: OwnMouseEvent; hit: { row: number; column: number } }
-  | { kind: 'paste'; text: string };
+  | { kind: 'key'; key: NormalizedKey }
+  | { kind: 'paste'; text: string }
+  | { kind: 'mouse'; event: InputMouseEvent };  // event.hit 预留给 Phase 3/4
 ```
+
+派生自实际落地。三处要点：
+
+- **`full` 是唯一绑定键**。`keyHandlers: Map<string, Handler[]>`，名字就是 `C-c` / `M-y` / `S-tab` / `return` / `f1`，与 `toBlessedKeys` 产出同一词汇 —— 所以用户按键覆盖不需要第二个翻译器。
+- **一次按键只发一个事件**（不复制 blessed 的 Enter 别名，见 Phase 2 执行记录）。
+- **`hit` 已进契约但无写入方**：单元格归属要等 SceneBuilder（Phase 3/4）才有答案，先把字段放好，加命中测试时只改驱动里构造事件的那一处。
+
 
 ### 5.4 缓存 key 对齐（Phase 4）
 
@@ -232,12 +245,17 @@ App (id: root)
   - **顺带修掉的真 bug**：`perf/baseline.test.ts` 的 `RENDER_OPTIONS.theme` 曾传 `stylesOf(...)`（token→**函数**）而不是 `ThemeTags`（token→**标签体**），于是 V5 的文档是在「标签体是字符串化的函数」这种畸形渲染下量的。测试文件被 `tsc -b` 排除，类型没挡住 —— 这条排除策略的代价，已写进该常量的注释。行数（2199 / 21999）修正后不变，故 §8.1 的 V5 结论仍成立，但耗时按修正后重测：13.1ms / 79.7ms。
   - **仍未做的**：`transcript-view.ts` 里 `rawTagPair` 还有 3 处（tool header、thinking 预览的 bold-on-muted）—— 它们是块级手工组合，等 Phase 5/6 组件化时一并消失。此处不迁，是因为 bold-on-muted 的**外层是 bold**、heading 的**外层是颜色**，两者用同一个规范序无法同时字节一致；信封机制能表达，但需要为每个组合点单独决定「谁是信封」，在没有消费者之前先做只是把复杂度提前。
 
-- [ ] **Phase 2 — Terminal Input Driver（I2）**
-  - [ ] 2.1 `tui/terminal/input-driver.ts` 包 OwnKeyParser；TUIApp 的 blessed program 输入路径切换到 driver（blessed program 仅存能力探测）
-  - [ ] 2.2 bracketed paste / paste-burst / IME 长按边界回归（现有 `tty.ts` 测试迁移）
-  - [ ] 2.3 Kitty keyboard 能力探测（`CSI ? u`）+ 增强键序解析；环境不支持时静默回退
-  - [ ] 2.4 鼠标 hit-testing：接 `SceneBuilder` 的 span 位置索引，wheel 路由到 viewport 滚动
-  - 门禁：`own-key-parser` 既有测试 + 新增 `input-driver.test.ts`（注入字节流，无 TTY）
+- [x] **Phase 2 — Terminal Input Driver（I2）**
+  - [x] 2.1 `tui/terminal/input-driver.ts` 包 OwnKeyParser；TUIApp 的 blessed program 输入路径切换到 driver（blessed program 仅存能力探测）
+    - **执行记录**：`createInputDriver()`（包 `OwnKeyParser` + `OwnKeyInput`，保留已被测过的 raw-mode 进出）、`normalizeKey()`、`fullKeyName()`、`detectCapabilities()`。TUIApp 的 21 处 `target.key([...])` 全换成 `bindKey()`（own 写 `keyHandlers`，blessed 仍走 `program.key`），`target.on('keypress')`/`('mouse')` 换成 `onKeypress()`/`onMouse()`，新增 `dispatchInput()`。**own 路径下 blessed 的 Program 拿到的是一个没人写的 PassThrough** —— 两个解析器同时挂在同一个 stdin 上，每个键都会触发两次。blessed 渲染路径（回滚开关）原样保留自己的解析与 `.key()` 表：回滚要连输入路径一起回滚，否则「回滚」= 用我们的解析器配 blessed 的键盘表，这个组合没人验证过。
+    - **刻意不复制 blessed 的 Enter 别名**：`program.js:397-399` 让 `return` 先以 `enter` 重发一次再落到 `return`，于是**一物理 Enter 派发两次**（`CONTENDED_BINDINGS`/`CONTENDED_ALIASES` 就是为它存在的）。driver 一次按键只发一个事件、名字为 `return`（正是 app 绑定的那个），重复派发从源头消失；`CONTENDED_ALIASES` 保持原样，因为 blessed 路径仍会看到重复。
+  - [x] 2.2 bracketed paste / paste-burst / IME 长按边界回归（现有 `tty.ts` 测试迁移）
+    - **执行记录**：`tty.ts` 其实是 TTY 检测，真正的输入回归散在 `own-key-parser` / `tui-paste-burst` / `tui-editor-width` / `tui-single-echo` / `tui-key-routing`。**三个 UI 套件（inline-mode / model-selector / settings-panel）原本用 `program.emit('key down')` 注入语义键**，own 派发器接管后全部失效；已改为写**真实字节**（新 `__tests__/key-injection.ts` 的 `press()`，含 `\x7f` backspace、SS3 F1–F4、CSI F5+ 等实测序列）。这是覆盖面的净提升：以前断言「我挂在某名字上的 handler 跑了」，现在断言「这次击键经真实解析后到达了用户会到达的 handler」，解析器或名字计算一变就会红。
+  - [x] 2.3 Kitty keyboard 能力探测（`CSI ? u`）+ 增强键序解析；环境不支持时静默回退
+    - **执行记录**：`OwnKeyParser.parseKitty()` 解析 `CSI key[:shifted[:base]] ; mods[:event] ; text u`（功能键映射到 `escape`/`return`/`tab`/`backspace`，ctrl 字母补控制字节，kitty 的 meta 位 32 视为 alt，release 事件与 57344+ 功能区间丢弃）。**解析无条件，启用要开关**：`DUYA_TUI_KITTY=1` 才写 `CSI >1 u`（push，退出时 `CSI <u` pop），条件是环境自报支持（`TERM=*-kitty` / `KITTY_WINDOW_ID` / `WEZTERM_PANE` / `TERM_PROGRAM=WezTerm|ghostty`）。理由：开这个协议会重写**每一个键**的编码，唯一能证明某终端实现正确的证据是「在那台机器上打字还正常」，所以默认关、留给真机矩阵（Phase 7）去开。
+  - [x] 2.4 鼠标 hit-testing：接 `SceneBuilder` 的 span 位置索引，wheel 路由到 viewport 滚动
+    - **执行记录（部分完成）**：鼠标事件已规范化进 `InputEvent`（`InputMouseEvent`，SGR 坐标零基），wheel 路由沿用既有实现（窗口管理器优先、否则滚 transcript）。**hit-testing 未做**：单元格→span 的归属要等 SceneBuilder 存在（Phase 3/4），没有索引可查时做命中测试只能是猜；`hit` 字段已进契约，届时只改驱动构造事件的一处。
+  - 门禁：`tsc -b --force` 绿；`packages/cli` 1049/1057（新增 `input-driver.test.ts` 23 条 + `key-injection.ts`），8 红与 Phase 1 完全一致（worker-path×3 / tui-pty×2 / registry×1 / host-stop-continue×2）；`tui` 目录 815/815 全绿。
 
 - [ ] **Phase 3 — Retained Component Tree 最小核（I3，D1/D9）**
   - [ ] 3.1 `tui/core/component.ts`：UIComponent/stable id/mount-update；无 diff、无异步
@@ -274,7 +292,7 @@ App (id: root)
 | # | 断言 | 验法 | 现状 | 目标 |
 |---|---|---|---|---|
 | V1 | 同一 token 树经 Span 与标签两条路径 glyph 等价 | Phase 1 parity 对拍 | 双路**逐字节**等价（span.test.ts 24 条，含 500 条随机输入；render-parity 增一帧 inline corpus） | 双路等价 |
-| V2 | blessed 不再出现在运行时输入/绘制路径 | Phase 2/5 后 grep import + parity | `TUIApp.ts:38` | 仅 blessed-surface |
+| V2 | blessed 不再出现在运行时输入/绘制路径 | Phase 2/5 后 grep import + parity | 输入路径已脱离 blessed（own 自有 `keyHandlers` + `dispatchInput`）；绘制仍经 blessed-surface 的回滚路径 | 仅 blessed-surface |
 | V3 | 键盘输入→绘制 P95 | Phase 0/7 基准 | own 32.0ms / blessed 48.5ms（见 §8.1） | <30ms |
 | V4 | 流式帧间隔 | 同上 | own p50 76.6ms / p95 79.4ms；blessed p50 77.2 / p95 83.9（同一 trailing-edge 机制） | ≥30FPS 等效 |
 | V5 | 10k block 滚动 paint 复杂度 | Phase 4 合成测试 | `totalLines()` 线性（2000 块 91ms，10× 块数 8× 时间）；二次测量 0 miss / 301 hit | O(visible) |
