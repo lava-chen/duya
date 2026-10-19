@@ -92,11 +92,24 @@ App that binds and never invokes cannot grow the table without bound.
   capability outside the manifest → zero.
 - Reverting fix (1) alone turns 6 of those 8 cases red, so the fixture
   binds to the defect rather than to a tautology.
-- `npm run typecheck:all` passes.
+- `npm run typecheck:all` passes (exit 0).
 - `packages/agent-runtime/tests/mcp-executor.test.ts` 11/11,
   `packages/host/tests/run-execution.test.ts` 12/12,
   `packages/host/tests/plugin-app-invocation-http.test.ts` 2/2,
   `packages/host/tests/plugin-app-bridge.test.ts` 24/24.
+- **Baseline comparison.** The repository is already red outside this
+  slice, so the change set was stashed back to `8ae799b2` and the same
+  three packages were re-run. The baseline and the change set produce the
+  **identical** failure set: 16 files / 38 tests across
+  `packages/agent-protocol`, `packages/agent-runtime`, and
+  `packages/host`. Those failures point at files this slice never
+  touches — for example `packages/agent/src/process/worker-protocol.ts`
+  is a 2-line re-export stub, and `packages/agent-protocol`'s import
+  graph, cycle budget, citation drift, and producer inventory gates
+  still point at the pre-migration `packages/agent` layout. This slice
+  adds no regression. A whole-repo run is not usable as a gate here:
+  under full parallelism vitest workers time out ("Timeout calling
+  onTaskUpdate") and 95 files are reported failed for that reason alone.
 
 ### Still open — T31 and T32 are not complete
 
