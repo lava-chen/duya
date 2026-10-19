@@ -179,6 +179,10 @@
       "types": "./dist/http-client.d.ts",
       "import": "./dist/http-client.js"
     },
+    "./plugin-app-bridge": {
+      "types": "./dist/plugin-app-bridge.d.ts",
+      "import": "./dist/plugin-app-bridge.js"
+    },
     "./local-host": {
       "types": "./dist/local-host.d.ts",
       "import": "./dist/local-host.js"
