@@ -93,6 +93,7 @@ import type {
   HostLocalProjectResolutionInput,
 } from './local-project-api.js';
 import { HostLocalRolloutApiError, type HostLocalRolloutApiV1 } from './local-rollout-api.js';
+import { HostWorkspaceFileApiError, type HostLocalWorkspaceFileApiV1 } from './local-workspace-file-api.js';
 import type { HostLocalAttachmentApiV1 } from '@duya/agent-protocol/session-api';
 import type { HostLocalSettingsApiV1 } from '@duya/agent-protocol/session-api';
 import type { GatewayUserMappingInput, HostLocalGatewayUserMapApiV1 } from '@duya/agent-protocol/gateway-user-map';
@@ -365,6 +366,8 @@ export interface HostSessionHttpServerOptions {
   readonly lockApi?: HostLockApiV1;
   readonly researchApi?: HostResearchApiV1;
   readonly workspaceApi?: HostWorkspaceRegistrationApiV1;
+  /** Local-only reads of workspace files, addressed by Workspace identity. */
+  readonly workspaceFileApi?: HostLocalWorkspaceFileApiV1;
   readonly token: string;
   readonly host?: string;
   readonly port?: number;
@@ -412,8 +415,13 @@ function registeredHostCapabilities(options: HostSessionHttpServerOptions): read
   // The core session API is required, so the control plane is always
   // authoritative for sessions and messages.
   provided.push('session_persistence');
-  // Reads and writes rollout files inside the workspace.
-  if (options.localRolloutApi) provided.push('workspace_filesystem');
+  // Reads and writes rollout files inside the workspace. The dedicated
+  // workspace-file read serves the same capability on its own, so either
+  // channel is enough to advertise it — and a Host with only the file read
+  // would otherwise refuse a capability it can in fact serve.
+  if (options.localRolloutApi !== undefined || options.workspaceFileApi !== undefined) {
+    provided.push('workspace_filesystem');
+  }
   // Local settings key/value access.
   if (options.localSettingsApi) provided.push('settings_store');
   return provided;
@@ -1986,6 +1994,15 @@ export class HostSessionHttpServer {
       await this.#registerLocalDirectory(req, res);
       return;
     }
+    if (req.method === 'POST' && url.pathname === '/v1/workspace/file') {
+      const workspaceFileApi = this.#options.workspaceFileApi;
+      if (!workspaceFileApi) {
+        this.#sendJson(res, 404, { error: { code: 'workspace_file_read_unavailable' } });
+        return;
+      }
+      await this.#readWorkspaceFile(req, res, workspaceFileApi);
+      return;
+    }
     if (req.method === 'POST' && url.pathname === '/v1/local/projects/resolve-path') {
       const localProjectApi = this.#options.localProjectApi;
       if (!localProjectApi) {
@@ -3434,6 +3451,41 @@ export class HostSessionHttpServer {
     }
   }
 
+  /**
+   * One workspace file read.
+   *
+   * The body carries a Workspace ID and a workspace-relative path, never a host
+   * path: a client that cannot name an absolute path cannot ask for one
+   * outside the workspace. The handler therefore validates SHAPE only, and the
+   * API behind it owns containment.
+   */
+  async #readWorkspaceFile(
+    req: IncomingMessage,
+    res: ServerResponse,
+    workspaceFileApi: HostLocalWorkspaceFileApiV1,
+  ): Promise<void> {
+    const body = await this.#readJson(req, res);
+    if (body === null) return;
+    if (
+      typeof body.workspaceId !== 'string' || body.workspaceId.length === 0 ||
+      typeof body.relativePath !== 'string' || body.relativePath.length === 0 ||
+      (body.maxBytes !== undefined && (typeof body.maxBytes !== 'number' || !Number.isSafeInteger(body.maxBytes)))
+    ) {
+      this.#sendJson(res, 400, { error: { code: 'invalid_workspace_file_read' } });
+      return;
+    }
+    try {
+      const result = await workspaceFileApi.readWorkspaceFile({
+        workspaceId: body.workspaceId as WorkspaceId,
+        relativePath: body.relativePath,
+        ...(body.maxBytes === undefined ? {} : { maxBytes: body.maxBytes }),
+      });
+      this.#sendJson(res, 200, result);
+    } catch (error) {
+      this.#sendApiError(res, error);
+    }
+  }
+
   async #importRollout(
     req: IncomingMessage,
     res: ServerResponse,
@@ -4598,6 +4650,13 @@ export class HostSessionHttpServer {
       return;
     }
     if (error instanceof HostLocalRolloutApiError) {
+      this.#sendJson(res, error.status, { error: { code: error.code, message: error.message } });
+      return;
+    }
+    if (error instanceof HostWorkspaceFileApiError) {
+      // The status is carried by the API on purpose: "no such file" and
+      // "resolves outside the workspace" must not read the same to a client,
+      // and a 500 for either would be a lie about what the Host knows.
       this.#sendJson(res, error.status, { error: { code: error.code, message: error.message } });
       return;
     }

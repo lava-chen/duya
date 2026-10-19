@@ -5,6 +5,14 @@
 本轮已实现 T20 的 Host 服务与真实 worker 接线；完成状态以本文末尾的实测记录为准。
 尚未实施 T21/T22/T23，不把接口单测写成产品链路验收。
 
+2026-10-19 再验证：#299 已合（`bed05724`）。#302 已整合当时最新 master
+（含 Wave 1 收口、workspace file API、T30 和 T40a）；源码自动合并，
+两个 worker bundle 生成产物冲突由同一合并源码重建解决。真实父子 worker + 权限/原生台账
+14 文件 **57/57**；`typecheck:all` exit 0；`architecture:check` 2784/2784，
+baseline 932 未改。同期补齐 Web workspace 缺失的 Node types 锁条目；
+在没有 junction/node_modules 的 manifest 临时目录以 npm ci dry-run 验证，未改共享依赖树。
+这次只收口可合入的 T20 服务/真实接线，不提前勾选 T21/T22/T23。
+
 ## 分工
 
 用户已有 agent 全权负责 Wave 0/1。按 T00–T16 归它的口径避让：不重做

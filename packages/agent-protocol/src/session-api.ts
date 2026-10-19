@@ -39,6 +39,36 @@ export interface HostWorkspaceRegistrationApiV1 {
   ): Promise<Extract<HostWorkspaceBinding, { readonly state: 'bound' }>>;
 }
 
+/**
+ * One workspace file read, addressed by Workspace IDENTITY rather than by a
+ * host filesystem path.
+ *
+ * This is the whole reason the read has its own route. Every existing file-
+ * carrying route on this Host (`/v1/local/rollouts/import` among them) takes an
+ * ABSOLUTE path from the client, which means the Host must re-derive
+ * containment from an untrusted string. A workspace-relative path resolved
+ * against a registered root cannot express `..`, a drive letter or a symlink
+ * that leaves the tree, so containment is structural here rather than a filter
+ * that has to be right every time someone adds a branch.
+ */
+export interface HostWorkspaceFileReadInput {
+  readonly workspaceId: WorkspaceId;
+  /** Workspace-relative, forward-slashed. Rejected rather than sanitised if it escapes. */
+  readonly relativePath: string;
+  /** Omit for the whole file, or cap the bytes returned. */
+  readonly maxBytes?: number;
+}
+
+export interface HostWorkspaceFileReadResult {
+  readonly workspaceId: WorkspaceId;
+  /** The path as the client asked for it, never the Host's resolved absolute path. */
+  readonly relativePath: string;
+  /** Bytes on disk, which is NOT the bytes returned when the read was capped. */
+  readonly totalBytes: number;
+  readonly content: string;
+  readonly truncated: boolean;
+}
+
 /** Local-only import metadata; workingDirectory is never accepted by remote APIs. */
 export interface HostLocalSessionImportInput {
   readonly sessionId: SessionId;

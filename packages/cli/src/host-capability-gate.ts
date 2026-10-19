@@ -57,7 +57,8 @@ import {
   type HostDeclaration,
   type ProtocolCapability,
 } from '@duya/agent-protocol';
-import type { HostRolloutImportResult } from '@duya/agent-protocol/session-api';
+import type { WorkspaceId } from '@duya/agent-protocol';
+import type { HostWorkspaceFileReadResult } from '@duya/agent-protocol/session-api';
 import type { HostHandshakeV1, HostSessionHttpClient } from '@duya/host/http-client';
 
 /**
@@ -163,31 +164,34 @@ export function negotiateHostCapabilities(
 }
 
 export type WorkspaceFileReadResult =
-  | { readonly status: 'read'; readonly result: HostRolloutImportResult }
+  | { readonly status: 'read'; readonly result: HostWorkspaceFileReadResult }
   | { readonly status: 'refused'; readonly reason: string };
 
 /**
  * Read a workspace file through the Host, but only if the Host said it can.
  *
- * The Host call is `POST /v1/local/rollouts/import`: the one route whose job
- * is reading a file out of the workspace on the client's behalf, with the Host
- * resolving the path and validating the transcript. A dedicated
- * `/v1/workspace/file` endpoint would be a Host route addition and belongs to
- * the L-HOST lane; this card wires the gate around the call that exists.
+ * The call is `POST /v1/workspace/file`, which takes a Workspace ID and a
+ * workspace-RELATIVE path. That is the whole reason it stopped riding
+ * `/v1/local/rollouts/import`: the rollout route is not a file read — it parses
+ * a transcript and restores a session — and it takes an ABSOLUTE path, so the
+ * caller would have been naming host filesystem paths on a capability called
+ * `workspace_filesystem`.
  *
- * A refusal returns before any request is issued, so an unsupported
- * capability costs one handshake rather than a failed round trip. A refusal
- * from the HOST is still thrown: the gate said the capability exists, not that
- * this caller may use it.
+ * A refusal returns before any request is issued, so an unsupported capability
+ * costs one handshake rather than a failed round trip. A refusal from the HOST
+ * is still thrown: the gate said the capability exists, not that this caller may
+ * use it, and a caller that swallowed it would report "no such file" for what
+ * is actually "you are not allowed to see that".
  */
 export async function requestWorkspaceFileRead(
   client: HostSessionHttpClient,
   handshake: HostHandshakeV1,
-  sourcePath: string,
+  workspaceId: WorkspaceId,
+  relativePath: string,
 ): Promise<WorkspaceFileReadResult> {
   const negotiation = negotiateHostCapabilities(CLI_HOST_DECLARATION, handshake, [WORKSPACE_READ_CAPABILITY]);
   const refusal = negotiation.refused[0];
   if (refusal !== undefined) return { status: 'refused', reason: refusal.reason };
-  const result = await client.importRollout({ sourcePath, mode: 'restore' });
+  const result = await client.readWorkspaceFile({ workspaceId, relativePath });
   return { status: 'read', result };
 }

@@ -235,6 +235,7 @@ describe('slash registry', () => {
       'hotkeys',
       'model',
       'permission',
+      'read-file',
       'rename',
       'settings',
       'status',

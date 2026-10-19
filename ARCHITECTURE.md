@@ -146,6 +146,18 @@ Renderer → Agent Server (HTTP POST) → Worker Process → LLM
   same lazy-spawn path.
 - Streaming via Server-Sent Events
 
+### Local browser transport (Plan 610 / T40a)
+
+`apps/web` supplies a Node-only BFF over the public standalone Host HTTP
+client. It binds loopback, discovers a live Host through its existing runtime
+descriptor, and keeps the Host bearer in the server process. A finite same-origin
+API validates Host/Origin/fetch-site and CSRF on mutations; approvals use the
+worker permission-request ledger. SSE forwards Host envelopes and cursors
+without renumbering and aborts its upstream reader on disconnect. Build it with
+`npm run build:web-app`, then run `npm run web-app` against an existing Host.
+This slice serves no browser UI; RunSession consumption and full browser/worker
+chat, cancellation and refresh-recovery acceptance remain outstanding.
+
 ### 3. MessagePort
 
 For high-frequency data: tool execution, tool streaming, config sync.
@@ -156,6 +168,19 @@ Exactly three channels are registered at runtime — `config`, `toolExec`,
 `agentControl` entry still listed in `DEFAULT_CHANNEL_DEFINITIONS`
 (`apps/desktop/src/main/types/port-types.ts:136`) is re-exported but has no
 production consumer, so it opens no port.
+
+## Plugin App declarations (Plan 610 / Wave 3)
+
+Plugin UI Apps are declared under `extensions["com.duya.client"].apps` and
+normalized to optional `PluginManifest.apps`. The shared, browser-safe schema
+is exported from `@duya/plugin-core/apps/declarations`; Desktop's existing
+manifest reader validates canonical package containment and regular entry
+files. App IDs, requested capabilities and state schema versions remain
+metadata, not grants or live instance state. The installed-plugin view projects
+only these App declarations, without exposing the rest of a manifest's MCP
+configuration. Codex's root `apps` connector-file reference is unchanged.
+Launch must recheck entry containment; instance persistence and iframe launch
+are subsequent slices. See `610-architecture-series/22-wave3-dispatch.md`.
 
 ## App Connections (Connectors)
 

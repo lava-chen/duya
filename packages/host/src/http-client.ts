@@ -9,6 +9,8 @@ import type {
   HostSessionForkInput,
   HostSessionForkResult,
   HostLocalRolloutImportInput,
+  HostWorkspaceFileReadInput,
+  HostWorkspaceFileReadResult,
   HostRolloutExportResult,
   HostRolloutImportResult,
   HostRolloutReconcileResult,
@@ -1002,6 +1004,17 @@ export class HostSessionHttpClient implements
 
   async importRollout(input: HostLocalRolloutImportInput): Promise<HostRolloutImportResult> {
     return this.request('POST', '/v1/local/rollouts/import', input);
+  }
+
+  /**
+   * Read one file out of a workspace, addressed by Workspace identity.
+   *
+   * No absolute path: the client names a workspace and a relative path, and the
+   * Host resolves it. There is therefore nothing here for a caller to point at
+   * a file outside the workspace — the question does not have a spelling.
+   */
+  async readWorkspaceFile(input: HostWorkspaceFileReadInput): Promise<HostWorkspaceFileReadResult> {
+    return this.request('POST', '/v1/workspace/file', input);
   }
 
   async createImportedSession(input: HostLocalSessionImportInput): Promise<HostLocalSessionImportResult> {
