@@ -31,13 +31,15 @@
  *    editor.
  */
 
-// The VALUE import survives only for `blessed.program`, which is the input
-// channel: keypress events still arrive through it, because parsing terminal
-// bytes into events is a separate seam from drawing and Phase 1 only moved the
-// drawing. When input moves too, this import goes with it.
-import blessed from 'blessed';
-import type { BlessedProgram, Widgets } from 'blessed';
-import { PassThrough } from 'node:stream';
+import {
+  cursorTo,
+  disableBracketedPaste,
+  disableMouseReporting,
+  enableBracketedPaste,
+  enableMouseReporting,
+  hideCursor,
+  showCursor,
+} from './terminal/ansi.js';
 import {
   createScreenSurface,
   selectScreenRenderer,
@@ -178,23 +180,19 @@ type InteractivePrompt =
 
 const PROMPT_VISIBLE_CHOICES = 9;
 
-/** Where the synchronized-output markers are written. */
 /**
- * What the TUI asked blessed to render with.
+ * What the renderer was built from.
  *
- * Published on the writer before `blessed.program`/`blessed.screen` are called,
- * and the same object is passed to them, so a test can assert the terminal's
- * capabilities actually reached the renderer rather than trusting that a
- * constant stayed correct.
+ * Published on the writer, so a test can assert the terminal's capabilities
+ * actually reached the renderer rather than trusting that a constant stayed
+ * correct. With no library in between, this IS the whole configuration: the
+ * three facts the old `blessed.program`/`blessed.screen` pair carried.
  */
 export interface RenderConfig {
-  readonly program: {
-    readonly terminal: string;
-    readonly colors: number;
-  };
-  readonly screen: {
-    readonly fullUnicode: boolean;
-  };
+  readonly terminal: string;
+  /** 16 for truecolor (blessed's own convention), otherwise an ANSI depth. */
+  readonly colors: number;
+  readonly unicode: boolean;
 }
 
 export interface TUIAppOptions {  /** Window title. */
@@ -396,7 +394,6 @@ export class TUIApp {
   private keypressHandler: ((ch: string, key: NormalizedKey) => void) | null = null;
   /** Mouse reports, when the surface wants them. */
   private mouseHandler: ((event: InputMouseEvent) => void) | null = null;
-  private readonly program: BlessedProgram;
   private readonly writer: EscapeSafeWriter;
   /** What the terminal can render, measured rather than assumed. */
   private readonly terminalEnv: TerminalEnvironment;
@@ -588,41 +585,16 @@ export class TUIApp {
     this.writer = this.terminal.writer;
     this.output = this.writer;
     const proxy = this.writer as unknown as Record<string, unknown>;
-    const programInput = this.renderer === 'own' ? new PassThrough() : this.terminal.input;
 
-    // The blessed options are built ONCE, published for tests, and then handed
-    // to blessed by reference — not rebuilt inside the call. That is what makes
-    // the wiring assertable: a test reading `renderConfig.program.colors` is
-    // reading the very object `Program` was constructed from, so putting a
-    // constant back inside `blessed.program({...})` cannot leave the published
-    // copy still agreeing with reality.
-    const programOptions = {
-      input: programInput as unknown as NodeJS.ReadStream,
-      output: this.writer as unknown as NodeJS.WriteStream,
+    // The renderer is owned end to end: nothing sits between this class and the
+    // byte stream. What `blessed.program` used to answer — terminal size, colour
+    // depth, unicode — are facts this app now reads for itself, so they are
+    // published as a plain record for tests to assert against.
+    const renderConfig: RenderConfig = {
       terminal: this.terminalEnv.term,
-      // The cursor is positioned explicitly after each render; letting
-      // blessed draw its own would fight the editor's cursor placement.
-      // `artificial: false` means blessed leaves the real terminal cursor
-      // alone rather than drawing a block over the cell.
-      cursor: { artificial: false, shape: 'line', blink: false, color: '' } as const,
-      // 16 covers truecolor too: blessed's `colors: 16` is the 24-bit path,
-      // while anything higher is the 256-colour palette.
       colors: this.terminalEnv.colorDepth === 'truecolor' ? 16 : this.terminalEnv.colorDepth,
+      unicode: this.terminalEnv.unicodeBox,
     };
-    this.program = blessed.program(programOptions);
-
-    const screenOptions = {
-      program: this.program,
-      smartCSR: true,
-      fullUnicode: this.terminalEnv.unicodeBox,
-      title: options.title ?? 'duya',
-    };
-    // Both option objects are published AND passed by reference, so what a test
-    // reads is what the renderer was constructed from. Publishing a copy instead
-    // would leave this seam able to describe a renderer that was never built —
-    // which is exactly what a `fullUnicode: true` left in the screen call did
-    // while every colour test stayed green.
-    const renderConfig: RenderConfig = { program: programOptions, screen: screenOptions };
     proxy.renderConfig = renderConfig;
 
     const inline = options.inline === true;
@@ -644,22 +616,17 @@ export class TUIApp {
     );
 
     this.fullScreen = createScreenSurface({
-      program: this.program,
-      screenOptions,
       statusRows: STATUS_ROWS,
       overlayWidth: OVERLAY_WIDTH,
       output: this.output,
       getSize: () => this.terminalSize(),
       unicodeBox: this.terminalEnv.unicodeBox,
-      renderer: this.renderer,
     });
 
     // Full-screen mode builds its five regions now. Inline mode keeps the
-    // alternate buffer unopened until an overlay raises it: `blessed.screen`
-    // enters that buffer as a side effect of construction, and there is no way
-    // back out of it in the middle of a frame. The surface creates it lazily for
-    // exactly that case, which is why the inline tail no longer needs its own
-    // copy of everything below.
+    // alternate buffer unopened until an overlay raises it: opening that buffer
+    // is irreversible for the rest of the frame, so it is raised lazily by
+    // exactly the case that needs it.
     if (!inline) this.fullScreen.attachAll();
 
     if (options.history !== undefined && options.history.length > 0) {
@@ -688,10 +655,10 @@ export class TUIApp {
       this.output.write(pushKittyKeyboardFlags());
     }
 
-    // Bracketed paste: blessed never enables it, and without it a paste
-    // arrives as a key storm. See the module comment for why the markers
-    // this causes are harmless.
-    this.program.setMode('?2004');
+    // Bracketed paste: without it a paste arrives as a key storm, and the
+    // newlines inside it submit. The driver recognises the markers and turns
+    // the whole payload into one `paste` event.
+    this.output.write(enableBracketedPaste());
   }
 
   /**
@@ -758,9 +725,10 @@ export class TUIApp {
     if (this.deltaDrainTimer !== null) clearTimeout(this.deltaDrainTimer);
     this.deltaDrainTimer = null;
     // Without this the terminal stays in mouse reporting after exit, and the
-    // shell the user returns to swallows clicks and wheel events.
-    this.program.disableMouse();
-    this.program.resetMode('?2004');
+    // shell the user returns to swallows clicks and wheel events. Both modes
+    // are written as raw sequences now, and both MUST be undone.
+    this.output.write(disableMouseReporting());
+    this.output.write(disableBracketedPaste());
     // Exactly one of these exists. Destroying a Screen leaves the alternate
     // buffer; `InlineSurface.stop` leaves the conversation on the normal one.
     this.releaseAltScreen();
@@ -775,7 +743,6 @@ export class TUIApp {
       }
       this.inputDriver.stop();
     }
-    this.program.destroy();
     this.terminal.dispose();
   }
 
@@ -1266,7 +1233,7 @@ export class TUIApp {
    * real window instead of a one-line one.
    */
   private visibleTranscriptRows(): number {
-    const screenRows = asNumber(this.program.rows, 24);
+    const screenRows = asNumber((this.output as { rows?: unknown }).rows, 24);
     // input box (rows + its two border rows), status bar, the popup while it is
     // open, and the transcript's own top and bottom border.
     return Math.max(
@@ -1509,7 +1476,7 @@ export class TUIApp {
 
   private placeCursor(): void {
     if (this.focus !== 'input' || this.dockPanelActive()) {
-      this.program.hideCursor();
+      this.output.write(hideCursor());
       return;
     }
     // Inline mode places its own caret, in absolute rows and columns, as part of
@@ -1521,8 +1488,10 @@ export class TUIApp {
     const row = Math.min(this.inputCursor.cursorRow, this.inputRows) - 1;
     const col = input.left + input.innerLeft + this.inputCursor.cursorCol;
     const y = input.top + input.innerTop + row;
-    this.program.move(Math.max(0, col), Math.max(0, y));
-    this.program.showCursor();
+    // `cursorTo` is 1-based; the region metrics are 0-based, so the conversion
+    // lives here and nowhere else.
+    this.output.write(cursorTo(Math.max(0, y) + 1, Math.max(0, col) + 1));
+    this.output.write(showCursor());
   }
 
   /**
@@ -2305,10 +2274,6 @@ export class TUIApp {
    * not need a second translator when the own path arrived.
    */
   private bindKey(names: readonly string[], handler: () => void): void {
-    if (this.renderer !== 'own') {
-      this.program.key([...names], handler);
-      return;
-    }
     for (const name of names) {
       const existing = this.keyHandlers.get(name);
       if (existing === undefined) this.keyHandlers.set(name, [handler]);
@@ -2318,26 +2283,11 @@ export class TUIApp {
 
   /** Register the catch-all that runs for keys no binding claimed. */
   private onKeypress(handler: (ch: string, key: NormalizedKey) => void): void {
-    if (this.renderer !== 'own') {
-      this.program.on('keypress', (ch: string, key: blessed.Widgets.Events.IKeyEventArg) => {
-        // blessed's key object is structurally the subset `NormalizedKey`
-        // keeps, minus `full` — which only the own path computes, and which no
-        // handler reads.
-        handler(ch, key as unknown as NormalizedKey);
-      });
-      return;
-    }
     this.keypressHandler = handler;
   }
 
   /** Register the mouse reporter. */
   private onMouse(handler: (event: InputMouseEvent) => void): void {
-    if (this.renderer !== 'own') {
-      this.program.on('mouse', (key: { action?: string }) => {
-        handler(key as unknown as InputMouseEvent);
-      });
-      return;
-    }
     this.mouseHandler = handler;
   }
 
@@ -2680,7 +2630,7 @@ exportHistory(): string[] {
     // arrow keys, and the arrows in input focus recall HISTORY, so the wheel
     // could never scroll the transcript at all. Only the wheel is consumed:
     // clicks stay with the terminal, so text selection keeps working.
-    this.program.enableMouse();
+    this.output.write(enableMouseReporting());
     this.onMouse((event) => {
       const action = event.action;
       if (action !== 'wheelup' && action !== 'wheeldown') return;
@@ -2859,7 +2809,7 @@ exportHistory(): string[] {
       if (this.overlay.isActive) {
         // The overlay answers with single keys; they must not also land in
         // the prompt underneath it.
-        this.handleOverlayKey(ch, key as unknown as blessed.Widgets.Events.IKeyEventArg);
+        this.handleOverlayKey(ch, key);
         return;
       }
       if (this.focus === 'transcript') this.focus = 'input';
@@ -3067,7 +3017,7 @@ exportHistory(): string[] {
     this.scheduler.requestImmediate();
   }
 
-  private handleOverlayKey(ch: string, key: blessed.Widgets.Events.IKeyEventArg): void {
+  private handleOverlayKey(ch: string, key: NormalizedKey): void {
     // The picker owns its own key semantics (y/a/n, 1-3, arrows, Enter,
     // Esc); unhandled keys are swallowed here so they cannot reach the
     // prompt underneath the modal.

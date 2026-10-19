@@ -281,3 +281,41 @@ export function spansToAnsi(spans: readonly StyledSpan[]): string {
   if (isStyled(written)) out += `${CSI}m`;
   return out;
 }
+
+/**
+ * Mouse reporting, SGR flavour.
+ *
+ * `1002` is button-event tracking: presses, releases and the wheel, without the
+ * motion-only flood `1003` would send. `1006` switches the report format from
+ * the legacy `ESC[M Cb Cx Cy` (three bytes, unable to express coordinates past
+ * column 223) to `ESC[<b;x;yM`, which is why the parser in `own-key-parser.ts`
+ * reads SGR and why enabling the pair together is not optional.
+ *
+ * Only the wheel is consumed; clicks stay with the terminal so text selection
+ * keeps working.
+ */
+export function enableMouseReporting(): string {
+  return `${CSI}?1002h${CSI}?1006h`;
+}
+
+/** Turn mouse reporting off. MUST run on exit, or the shell inherits it. */
+export function disableMouseReporting(): string {
+  return `${CSI}?1006l${CSI}?1002l`;
+}
+
+/**
+ * Bracketed paste.
+ *
+ * Without it a paste arrives as a key storm: the editor receives thousands of
+ * individual keypresses, so newlines submit and the paste is mangled. With it,
+ * the terminal wraps the payload in `ESC[200~ … ESC[201~` and the app can tell
+ * "the user typed this" from "this was inserted".
+ */
+export function enableBracketedPaste(): string {
+  return `${CSI}?2004h`;
+}
+
+/** Turn bracketed paste off. MUST run on exit. */
+export function disableBracketedPaste(): string {
+  return `${CSI}?2004l`;
+}

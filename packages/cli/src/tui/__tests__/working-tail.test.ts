@@ -16,7 +16,7 @@ import {
   workingTailLine,
   WORKING_TAIL_INTERVAL_MS,
 } from '../working-tail.js';
-import { tagsToAnsi } from '../terminal/sgr.js';
+import { lineToAnsi } from '../terminal/line.js';
 
 describe('nextSpinnerFrame', () => {
   it('advances and wraps', () => {
@@ -55,7 +55,7 @@ describe('nextSpinnerFrame', () => {
 
   it('has no glyph that the tag parser would treat as syntax', () => {
     // Not a style rule — a correctness rule. Each glyph is concatenated into
-    // `{cyan-fg}<glyph>{/cyan-fg}` and parsed by `tagsToAnsi`, where a backslash
+    // `{cyan-fg}<glyph>{/cyan-fg}` and parsed by `lineToAnsi`, where a backslash
     // before a brace is the escape for a literal brace. A `\` glyph consumed the
     // escape, printed `{/cyan-fg}` as text, and left the frame with half a
     // colour tag open. A brace would be worse: it would close the tag early.
@@ -91,11 +91,13 @@ describe('workingTailLine', () => {
       const set = unicode ? SPINNER_UNICODE : SPINNER_ASCII;
       for (let frame = 0; frame < set.length; frame += 1) {
         const line = workingTailLine({ frame, label: 'Working', unicode, columns: 80 });
-        const ansi = tagsToAnsi(line);
+        const ansi = lineToAnsi(line);
         expect(ansi).not.toContain('{');
         expect(ansi).not.toContain('}');
         expect(ansi).toContain('\x1b[36m');
-        expect(ansi).toContain('\x1b[39m');
+        // The span serialiser resets the whole attribute set rather than the
+        // colour alone (plan 615 Phase 5), so the close is `ESC[m`.
+        expect(ansi).toContain('\x1b[m');
       }
     }
   });

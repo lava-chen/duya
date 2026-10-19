@@ -40,6 +40,7 @@ import { TUIApp } from '../../TUIApp.js';
 import { detectTerminalEnvironment } from '../../terminal-env.js';
 import { MIN_RENDER_INTERVAL_MS } from '../../render-scheduler.js';
 import type { TranscriptModel } from '../../blocks.js';
+import type { ScreenRenderer } from '../../screen/index.js';
 
 const SYNC_BEGIN = '\u001b[?2026h';
 const SYNC_END = '\u001b[?2026l';
@@ -146,7 +147,7 @@ export function tapOutput(columns = 80, rows = 24): TappedOutput {
 }
 
 export interface HarnessOptions {
-  readonly renderer: 'blessed' | 'own';
+  readonly renderer: ScreenRenderer;
   readonly columns?: number;
   readonly rows?: number;
   readonly inline?: boolean;
@@ -314,7 +315,7 @@ export interface InputLatencyReport {
  * is what typing during a conversation actually costs.
  */
 export async function measureInputLatency(
-  renderer: 'blessed' | 'own',
+  renderer: ScreenRenderer,
   keystrokes = 20,
   prefill: PrefillOptions | null = { blocks: 40, linesPerBlock: 6 },
 ): Promise<InputLatencyReport> {
@@ -378,7 +379,7 @@ export interface StreamFrameReport {
  * measurement of `setTimeout`, not of the pipeline.
  */
 export async function measureStreamFrames(
-  renderer: 'blessed' | 'own',
+  renderer: ScreenRenderer,
   deltas = 60,
   spacingMs = 4,
 ): Promise<StreamFrameReport> {

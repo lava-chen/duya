@@ -32,10 +32,12 @@ const REPORT = process.env['DUYA_PERF_BASELINE'] === '1';
 const SETTLE = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe('TUI frame latency baseline', () => {
-  it('measures input→first-byte for both renderers', async () => {
-    const blessed = await measureInputLatency('blessed');
+  // plan 615 Phase 7 removed the second renderer, so there is no comparison
+  // left: these are the numbers the finished engine has to keep, not a
+  // scoreboard against an implementation that no longer exists.
+  it('measures input→first-byte', async () => {
     const own = await measureInputLatency('own');
-    if (REPORT) console.log('INPUT_LATENCY ' + JSON.stringify({ blessed, own }));
+    if (REPORT) console.log('INPUT_LATENCY ' + JSON.stringify({ own }));
 
     // An invariant, not a target: a keystroke must reach the terminal at all.
     // The exact ceiling lives in the plan, where it can be calibrated.
@@ -43,14 +45,12 @@ describe('TUI frame latency baseline', () => {
     // Deliberately loose. A tight bound here would turn a loaded CI box into a
     // false red; the real number is reported and compared between phases.
     expect(own.paintedP95).toBeLessThan(500);
-    expect(blessed.samples).toBeGreaterThan(0);
-    // Both renderers must bypass the throttle for input. The invariant is not
-    // "under N ms" — the paint cost is whatever the renderer and the machine
-    // make it (own ~31ms, blessed ~46ms on this box) — it is that the frame
-    // did NOT wait for a trailing-edge timer. Waiting would show up as a
-    // painted time at or beyond the interval, before any paint cost is paid.
+    // Input must bypass the throttle. The invariant is not "under N ms" — the
+    // paint cost is whatever the renderer and the machine make it (~31ms on
+    // this box) — it is that the frame did NOT wait for a trailing-edge timer.
+    // Waiting would show up as a painted time at or beyond the interval,
+    // before any paint cost is paid.
     expect(own.paintedP50).toBeLessThan(MIN_RENDER_INTERVAL_MS);
-    expect(blessed.paintedP50).toBeLessThan(MIN_RENDER_INTERVAL_MS);
     // And the dispatch must be effectively immediate: it happens on the input
     // event itself, before any timer or microtask.
     expect(own.dispatchP95).toBeLessThan(MIN_RENDER_INTERVAL_MS / 10);
@@ -58,13 +58,11 @@ describe('TUI frame latency baseline', () => {
     // the number representative, and a regression to a 200-byte frame would
     // silently make the comparison meaningless.
     expect(own.frameBytesP50).toBeGreaterThan(500);
-    expect(blessed.frameBytesP50).toBeGreaterThan(500);
   }, 60_000);
 
-  it('measures stream frame gaps for both renderers', async () => {
-    const blessed = await measureStreamFrames('blessed');
+  it('measures stream frame gaps', async () => {
     const own = await measureStreamFrames('own');
-    if (REPORT) console.log('STREAM_FRAMES ' + JSON.stringify({ blessed, own }));
+    if (REPORT) console.log('STREAM_FRAMES ' + JSON.stringify({ own }));
 
     // More than one frame means the stream was actually paced rather than
     // collapsed into the final state — which is the property the throttle
@@ -72,9 +70,7 @@ describe('TUI frame latency baseline', () => {
     expect(own.frames).toBeGreaterThan(1);
     // No gap may be shorter than the throttle: a violation means something
     // bypassed `RenderScheduler` and is rendering per delta.
-    for (const report of [blessed, own]) {
-      expect(report.p50).toBeGreaterThanOrEqual(MIN_RENDER_INTERVAL_MS * 0.9);
-    }
+    expect(own.p50).toBeGreaterThanOrEqual(MIN_RENDER_INTERVAL_MS * 0.9);
   }, 60_000);
 
   it('keeps totalLines() linear in blocks rather than quadratic', () => {

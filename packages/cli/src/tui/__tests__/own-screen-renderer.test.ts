@@ -1,7 +1,5 @@
 import { Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import type { BlessedProgram } from 'blessed';
-
 import { OwnScreenSurface } from '../screen/own/surface.js';
 
 function makeSurface(unicodeBox = true) {
@@ -12,11 +10,7 @@ function makeSurface(unicodeBox = true) {
       callback();
     },
   });
-  const program = {
-    enableMouse() {},
-  } as unknown as BlessedProgram;
   const surface = new OwnScreenSurface({
-    program,
     output,
     getSize: () => ({ columns: 80, rows: 24 }),
     statusRows: 1,

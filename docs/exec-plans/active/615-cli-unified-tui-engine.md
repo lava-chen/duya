@@ -341,18 +341,19 @@ App (id: root)
     - **结论**：1200 行是"职责边界"指标，不是"抽函数"指标。达成它要求先把输入分发（398 行）与 chrome 组合（496 行）拆成两个真正的子系统（各自持有状态），那是一次独立计划的量级；本轮把两块**已经存在的**组件接进生产路径，是为那次拆分清场。
   - 门禁：TUI 全量测试零断言改动（交互语义冻结的证明）— **已达成**：`tui` 876 → 885 全绿，0 处既有断言改动；`packages/cli` 1104 条里 1096 通过，8 红与 Phase 5 完全一致（worker-path×3 / tui-pty×2 / registry×1 / host-stop-continue×2）。
 
-- [ ] **Phase 7 — blessed 退役 + 终验（I8，D7③）**
-  - [ ] 7.1 删 `blessed-surface.ts`、`blessed-unicode.ts`、TUIApp blessed import、package.json 依赖
-  - [ ] 7.2 三环境基准复测（ConPTY / tmux / 真实 PTY），数字对照 Phase 0 基线写回 §8
-  - [ ] 7.3 真机矩阵：`duya chat` 全屏 + inline × 中文 IME + 鼠标 + 10k block 会话
-  - 门禁：`typecheck:all` + 全量测试 + 基准 JSON + 真机截图（替代 V10）
+- [~] **Phase 7 — blessed 退役 + 终验（I8，D7③）**
+  - [x] 7.1 删 blessed 渲染链：`blessed-surface.ts`、`TUIApp` 的 `blessed.program`/`BlessedProgram`/键路由 blessed 分支、`terminal/sgr.ts`（Phase 5 已无生产调用方）、`@types/blessed` 依赖。终端模式改为自有序列（`enableMouseReporting`/`disableMouseReporting`/`enableBracketedPaste`/`disableBracketedPaste`/`cursorTo`/`hideCursor`/`showCursor`），`OwnScreenSurface` 自己开启鼠标上报。`ScreenRenderer` 收成单成员别名 `= 'own'`，`DUYA_TUI_RENDERER=blessed` 被**忽略而非崩溃**（用户 shell profile 里可能还留着）。
+    - **`blessed-unicode.ts` → `terminal/cell-width.ts`（改名，内容不变）**：它是 blessed 的**唯一**残留依赖，且是数据表不是渲染器。宽度函数与渲染器的一致性正是它存在的理由（编辑器光标列必须等于单元格实际列），换第二份实现（`get-east-asian-width`）会在歧义宽度字符上漂一列。彻底删依赖 = 内联 `blessed/lib/unicode.js` 约 800 行（MIT，主要是三张范围表），那是**独立决定**，不塞进「渲染器归我们了」这一步。
+  - [~] 7.2 基准复测：**ConPTY 一档已测**（见 §8.2），数字与 Phase 0 的 own 列一致（painted P50 30.8ms，未回归）；tmux / 真实 PTY 两档**未测**（本机无对应环境，需在目标环境跑同一条命令）。
+  - [ ] 7.3 真机矩阵：`duya chat` 全屏 + inline × 中文 IME × 鼠标 × 10k block 会话。**未做**——需要人工在真终端上执行；这是 615 唯一无法用测试替代的门禁。
+  - 门禁：`typecheck:all` + 全量测试 + 基准 JSON + 真机截图（替代 V10）— 已达成前三项中的前两项：`tsc -b --force` 干净；`tui` **859/859** 全绿（删 `sgr.test.ts` 与 `render-parity.test.ts`，新增 `render-frames.test.ts`）；`packages/cli` 1078 条里 1070 通过，8 红与 Phase 5/6 完全一致。
 
 ## 8. Verification
 
 | # | 断言 | 验法 | 现状 | 目标 |
 |---|---|---|---|---|
-| V1 | 同一 token 树经 Span 与标签两条路径 glyph 等价 | Phase 1 parity 对拍 | 双路**逐字节**等价（span.test.ts 24 条，含 500 条随机输入；render-parity 增一帧 inline corpus） | 双路等价 |
-| V2 | blessed 不再出现在运行时输入/绘制路径 | Phase 2/5 后 grep import + parity | 输入路径已脱离 blessed（own 自有 `keyHandlers` + `dispatchInput`）；绘制仍经 blessed-surface 的回滚路径 | 仅 blessed-surface |
+| V1 | 同一 token 树经 Span 与标签两条路径 glyph 等价 | Phase 1 parity 对拍 | **达成**：`span.test.ts` 双路逐字节等价（含 500 条随机输入）；Phase 7 后对拍对象从「两个渲染器」改为「同一个渲染器的两种表示」（`render-frames.test.ts`） | 双路等价 |
+| V2 | blessed 不再出现在运行时输入/绘制路径 | Phase 2/5 后 grep import + parity | **达成**：Phase 7 后 `src/` 内零 blessed import，唯一残留是 `terminal/cell-width.ts` 引用它的宽度表（数据表，非渲染器） | 仅宽度表 |
 | V3 | 键盘输入→绘制 P95 | Phase 0/7 基准 | own 32.0ms / blessed 48.5ms（见 §8.1） | <30ms |
 | V4 | 流式帧间隔 | 同上 | own p50 76.6ms / p95 79.4ms；blessed p50 77.2 / p95 83.9（同一 trailing-edge 机制） | ≥30FPS 等效 |
 | V5 | 10k block 滚动 paint 复杂度 | Phase 4 合成测试 | `totalLines()` 线性（2000 块 91ms，10× 块数 8× 时间）；pane 一帧写 ≤ 视口行数、warm 帧 0 次 Markdown 重渲染（Phase 4） | O(visible) |
@@ -382,6 +383,22 @@ App (id: root)
 - **V4 两侧都是 76–79ms**，等于 `MIN_RENDER_INTERVAL_MS`（70ms）加定时器粒度。这不是达标 30FPS（33ms），而是**节流常量本身决定的**：要 30FPS 必须把常量降到 33ms 以下，那是一次独立的性能决策，Phase 0 不代做。
 - **帧字节数必须跨 `SYNC_END` 统计。** 两个 renderer 都不在 `SYNC_BEGIN`…`SYNC_END` 之间写像素（blessed 缓冲到 `_buf` 等 `nextTick`，own 走微任务），所以按标记内区间统计会得到 0；harness 因此从一帧的 `SYNC_BEGIN` 统计到下一帧的 `SYNC_BEGIN`。
 
+
+### 8.2 Phase 7 退役后复测（2026-10-19，Windows ConPTY 宿主，同一 worktree）
+
+测法不变，同一条命令，`DUYA_PERF_BASELINE=1`，连跑三次取中位。**只有一个 renderer，所以没有对照列** —— 这张表不再是记分卡，而是退役后的引擎要守住的地板。
+
+| 指标 | Phase 0 own | Phase 7 own（退役后） | 变化 |
+|---|---|---|---|
+| V3 dispatch P50 / P95 | 0.22 / 0.47ms | 0.24 / 0.43ms | 无 |
+| V3 painted P50 / P95 | 30.8 / 32.0ms | **30.8 / 32.4ms** | 无 |
+| V3 单帧字符数 P50 | 1843 | 1739 | −104 |
+| V4 帧间隔 P50 / P95 | 76.6 / 79.4ms | 77.2 / 79.3ms | 无 |
+| V5 `totalLines()` 200 / 2000 块 | 13.1 / 79.7ms | 16.5 / 87.1ms | +3.4 / +7.4ms（噪声量级） |
+
+- **退役没有回归**：延迟、流式节流、文档布局三项都在 Phase 0 的散布内。单帧字符数少了 104（−5.6%）；本轮没有对组帧路径做过改动，差异来自一次运行与另一次的浮动，未追查成因——记录实测值，不给它编一个解释。
+- **V5 两次读数 13.1/79.7ms → 16.5/87.1ms**。`totalLines()` 自 Phase 1 起没有被改动，比例也几乎不变，判定为机器状态的运行间浮动，不作为回归处理。若要钉死，该项需要一个与 `input latency` 分离的独立测量轮次（同一进程内先跑基准再跑布局，避免互相污染）。
+- **两档环境未复测**：tmux 与真实 PTY 需要在对应环境跑同一条命令，本机不具备。V10 因此仍未闭合。
 
 ## 9. 依赖与风险
 

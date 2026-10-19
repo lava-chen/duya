@@ -1,12 +1,10 @@
-import type { BlessedProgram } from 'blessed';
-
 import { changedRows, composeFrame, type SurfaceFrame } from './frame.js';
 import { layoutRegion, screenRegions, type SurfaceSize } from './geometry.js';
+import { enableMouseReporting } from '../../terminal/ansi.js';
 import type { RegionMetrics, RegionPatch, ScreenSurface, SurfaceRegion } from '../types.js';
 import type { SceneLine } from '../../core/span.js';
 
 export interface OwnSurfaceOptions {
-  readonly program: BlessedProgram;
   readonly output: NodeJS.WritableStream;
   readonly getSize: () => SurfaceSize;
   readonly statusRows: number;
@@ -215,7 +213,10 @@ export class OwnScreenSurface implements ScreenSurface {
   private enterAlternateBuffer(): void {
     if (this.activeFlag) return;
     this.options.output.write(ALT_SCREEN_ENTER);
-    this.options.program.enableMouse();
+    // The surface owns the modes it turns on. Mouse reporting used to be the
+    // program's job only because a program existed; the sequence is the same
+    // one, written by the same object that writes the screen.
+    this.options.output.write(enableMouseReporting());
     this.activeFlag = true;
     this.suspendedFlag = false;
     this.previousFrame = null;
