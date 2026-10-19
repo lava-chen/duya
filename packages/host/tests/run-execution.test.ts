@@ -17,6 +17,7 @@ const STUB_WORKER_SOURCE = `
 // Mode comes from the filename (stub-worker-<mode>.cjs) — deterministic, no
 // reliance on environment propagation through the spawn path.
 const MODE = (__filename.includes('-hang-hard') && 'hang-hard')
+  || (__filename.includes('-stdout-pressure') && 'stdout-pressure')
   || (__filename.includes('-permission') && 'permission')
   || (__filename.includes('-db') && 'db')
   || (__filename.includes('-hang') && 'hang')
@@ -158,7 +159,19 @@ process.stdin.on('data', (chunk) => {
       process.send({ type: 'chat:done', sessionId: command.sessionId });
       continue;
     }
-    if (MODE === 'permission') {
+    if (MODE === 'stdout-pressure') {
+      (async () => {
+        for (let index = 0; index < 128; index += 1) {
+          if (!process.stdout.write('x'.repeat(65536))) {
+            await new Promise((resolve) => process.stdout.once('drain', resolve));
+          }
+        }
+        emitTextBlock('stdout drained');
+        emitTurnCompleted('end_turn');
+        emitTerminal('completed');
+        process.send({ type: 'chat:done', sessionId: command.sessionId });
+      })();
+    } else if (MODE === 'permission') {
       emitNative({
         type: 'tool.call_started',
         toolCallId: 'tool-approval',
@@ -230,7 +243,7 @@ process.on('disconnect', () => process.exit(0));
 
 async function writeStubWorker(
   directory: string,
-  mode: 'complete' | 'hang' | 'hang-hard' | 'db' | 'permission',
+  mode: 'complete' | 'hang' | 'hang-hard' | 'db' | 'permission' | 'stdout-pressure',
 ): Promise<string> {
   const workerPath = path.join(directory, `stub-worker-${mode}.cjs`);
   await fs.writeFile(workerPath, STUB_WORKER_SOURCE, 'utf8');
@@ -271,6 +284,31 @@ async function startHostWithSession(
 }
 
 describe('Host-owned run execution', () => {
+  it('drains mirrored stdout so backpressure cannot block the IPC terminal', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-run-stdout-'));
+    let host: LocalHostHandle | undefined;
+    try {
+      const started = await startHostWithSession(root, await writeStubWorker(root, 'stdout-pressure'));
+      host = started.host;
+      const { client, sessionId } = started;
+      const start = await client.startAgentRun({ sessionId, prompt: 'fill stdout before completing over IPC' });
+      expect(start.accepted).toBe(true);
+      if (!start.accepted) return;
+      let run = await client.getAgentRun(start.runId);
+      const deadline = Date.now() + 5000;
+      while (run?.status === 'running' && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        run = await client.getAgentRun(start.runId);
+      }
+      expect(run?.status).toBe('completed');
+      const events = await client.readAgentRunEvents(start.runId);
+      expect(events.some((event) => event.payload.type === 'assistant.text_block' && event.payload.text === 'stdout drained')).toBe(true);
+    } finally {
+      await host?.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it.each(['allow', 'deny'] as const)('delivers a %s HTTP approval to the waiting child worker', async (status) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-run-approval-'));
     let host: LocalHostHandle | undefined;

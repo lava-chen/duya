@@ -60,10 +60,11 @@ import { SessionState, WorkerSessionRegistry } from './worker-session-registry.j
 import { normalizeWorkerEvent } from './worker-frames.js';
 import { WorkerPermissionRequests } from './worker-permission-requests.js';
 import { LiveRunEventHub } from './live-run-event-hub.js';
+import type { SessionServiceCaller } from './session-service.js';
 
 /** Serves the worker's `db:request` frames from Host-owned stores. */
 export interface WorkerDbBridge {
-  dispatch(action: string, payload: Record<string, unknown>): Promise<unknown>;
+  dispatch(action: string, payload: Record<string, unknown>, caller?: SessionServiceCaller): Promise<unknown>;
 }
 
 /** What the Host knows about a session before a turn, read from its own stores. */
@@ -139,6 +140,7 @@ export class HostRunExecutionController {
   readonly #orchestrator: RunOrchestrator;
   readonly #liveRunEvents = new LiveRunEventHub();
   readonly #nativeRunIds = new Set<string>();
+  readonly #delegationBySession = new Map<string, SessionServiceCaller>();
   /** runId -> sessionId for cancellation lookups. */
   readonly #sessionByRun = new Map<string, string>();
   readonly #cancellingRuns = new Set<string>();
@@ -230,6 +232,8 @@ export class HostRunExecutionController {
       },
       channel: createWorkerExecutionChannel({
         dispatch: (command) => {
+          const parent = this.#delegationBySession.get(command.sessionId);
+          if (parent) this.validateSessionCaller(parent);
           // Select the canonical stream before startup status frames can arrive.
           this.#nativeRunIds.add(command.runId);
           const sent = this.#workerManager.sendCommand(command.sessionId, { ...command });
@@ -252,9 +256,11 @@ export class HostRunExecutionController {
     });
   }
 
-  async startAgentRun(input: StartAgentRunInput): Promise<StartAgentRunResult> {
+  async startAgentRun(input: StartAgentRunInput, caller?: SessionServiceCaller): Promise<StartAgentRunResult> {
+    if (caller) this.validateSessionCaller(caller);
     const sessionId = input.sessionId;
     const defaults = await this.#options.sessionDefaults(sessionId);
+    if (caller) this.validateSessionCaller(caller);
     if (defaults === null) {
       return {
         accepted: false,
@@ -279,7 +285,10 @@ export class HostRunExecutionController {
     // It cannot receive another chat:start, so replace it immediately.
     if (!this.#workerManager.hasWorker(sessionId) || this.#workerManager.getWorker(sessionId)?.killed) {
       try {
-        this.#workerManager.spawnWorker(sessionId);
+        const worker = this.#workerManager.spawnWorker(sessionId);
+        // Standalone Host consumes events over IPC. Drain the mirrored stdout
+        // pipe too, or a long turn can block the worker once that pipe fills.
+        worker.stdout?.resume();
       } catch (error) {
         return {
           accepted: false,
@@ -289,7 +298,23 @@ export class HostRunExecutionController {
       }
     }
 
+    let inheritedMaxTurns: number | undefined;
+    if (caller) {
+      const row = this.#options.runs.getRun(caller.runId);
+      const manifest: unknown = row ? JSON.parse(row.manifest_json) : null;
+      if (manifest && typeof manifest === 'object' && 'budget' in manifest &&
+          manifest.budget && typeof manifest.budget === 'object' && 'maxTurns' in manifest.budget &&
+          typeof manifest.budget.maxTurns === 'number' && Number.isFinite(manifest.budget.maxTurns) &&
+          manifest.budget.maxTurns > 0) inheritedMaxTurns = manifest.budget.maxTurns;
+    }
+    const requested = input.options?.maxTurns;
+    const requestedMaxTurns = typeof requested === 'number' && Number.isFinite(requested) && requested > 0
+      ? requested : undefined;
+    const effectiveMaxTurns = inheritedMaxTurns === undefined ? requestedMaxTurns
+      : Math.min(inheritedMaxTurns, requestedMaxTurns ?? inheritedMaxTurns);
     const intent: RunTurnIntent = {
+      ...(caller === undefined ? {} : { parentRunId: caller.runId }),
+      ...(effectiveMaxTurns === undefined ? {} : { maxTurns: effectiveMaxTurns }),
       ...(input.workingDirectory === undefined
         ? { workingDirectory: defaults.workingDirectory }
         : { workingDirectory: input.workingDirectory }),
@@ -316,7 +341,15 @@ export class HostRunExecutionController {
       options: input.options ?? {},
     };
 
-    const acceptance = await this.#orchestrator.openRun(sessionId, intent);
+    if (caller) this.#delegationBySession.set(sessionId, caller);
+    let acceptance;
+    try {
+      acceptance = await this.#orchestrator.openRun(sessionId, intent);
+    } finally {
+      if (caller && this.#delegationBySession.get(sessionId) === caller) {
+        this.#delegationBySession.delete(sessionId);
+      }
+    }
     if (acceptance.accepted) {
       this.#sessionByRun.set(acceptance.runId, sessionId);
       this.#liveRunEvents.open(acceptance.runId as RunId);
@@ -370,16 +403,42 @@ export class HostRunExecutionController {
     return { workerManager: this.#workerManager, registry: this.#registry };
   }
 
+  /** A worker cannot lend its previous attempt the authority of a later run. */
+  validateSessionCaller(caller: SessionServiceCaller): void {
+    if (this.#cancellingRuns.has(caller.runId) ||
+        this.#orchestrator.runForSession(caller.sessionId) !== caller.runId ||
+        this.#options.runs.currentEpoch(caller.runId) !== caller.epoch ||
+        this.#options.runs.getRun(caller.runId)?.status !== 'running') {
+      throw new HostRunExecutionError(409, 'attempt_fenced', 'Session delegation attempt is no longer active.');
+    }
+  }
+
   async #serveDbRequest(sessionId: string, msg: Record<string, unknown>): Promise<void> {
     const id = msg.id as string;
+    const worker = this.#workerManager.getWorker(sessionId);
     try {
+      let caller: SessionServiceCaller | undefined;
+      if (typeof msg.action === 'string' && msg.action.startsWith('session:spawn')) {
+        const raw = msg.execution;
+        if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+          throw new HostRunExecutionError(403, 'missing_execution_context', 'Session delegation requires an execution context.');
+        }
+        const value = raw as Record<string, unknown>;
+        if (value.sessionId !== sessionId || typeof value.runId !== 'string' ||
+            !Number.isSafeInteger(value.epoch) || (value.epoch as number) < 0) {
+          throw new HostRunExecutionError(403, 'invalid_execution_context', 'Session delegation context does not match its worker.');
+        }
+        caller = { sessionId, runId: value.runId, epoch: value.epoch as number };
+        this.validateSessionCaller(caller);
+      }
       const result = await this.#options.bridge.dispatch(
         String(msg.action ?? ''),
         (msg.payload ?? {}) as Record<string, unknown>,
+        caller,
       );
-      this.#workerManager.getWorker(sessionId)?.send({ type: 'db:response', id, success: true, result });
+      worker?.send({ type: 'db:response', id, success: true, result });
     } catch (error) {
-      this.#workerManager.getWorker(sessionId)?.send({
+      worker?.send({
         type: 'db:response',
         id,
         success: false,

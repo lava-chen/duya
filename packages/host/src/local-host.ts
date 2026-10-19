@@ -38,6 +38,7 @@ import {
 } from '@duya/data/bot-session-paths';
 import type { HostWorkspaceAccess } from './session-api.js';
 import { createHostSessionApi, createHostWorkspaceRegistrationApi } from './session-api.js';
+import { createHostSessionService } from './session-service.js';
 import {
   createFileDiagnosticsLogger,
   createStdioDiagnosticsLogger,
@@ -428,6 +429,25 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
         diagnosticsSink === 'file'
           ? createFileDiagnosticsLogger(resolveHostDiagnosticsLogPath(dataRoot))
           : createStdioDiagnosticsLogger();
+      const sessionService = createHostSessionService({
+        sessions: api,
+        runs: createHostRunApi(core.stores),
+        execution: {
+          startAgentRun: (input, caller) => {
+            if (!runExecution) throw new Error('Host run execution is not ready.');
+            return runExecution.startAgentRun(input, caller);
+          },
+          cancelAgentRun: (runId, reason) => {
+            if (!runExecution) throw new Error('Host run execution is not ready.');
+            return runExecution.cancelAgentRun(runId, reason);
+          },
+        },
+        readLocalSession: async (id) => core.stores.sessions.get(id),
+        validateCaller: (caller) => {
+          if (!runExecution) throw new Error('Host run execution is not ready.');
+          runExecution.validateSessionCaller(caller);
+        },
+      });
       runExecution = new HostRunExecutionController({
         runs: core.stores.runs,
         permissionRequests: createHostPermissionRequestApi(core.stores),
@@ -440,9 +460,11 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
             workingDirectory,
             ...(row.model !== '' ? { model: row.model } : {}),
             ...(row.providerId !== '' ? { providerId: row.providerId } : {}),
+            ...(row.agentProfileId === null ? {} : { agentProfileId: row.agentProfileId }),
           };
         },
         bridge: createHostWorkerDbBridge({
+          sessionService,
           runs: core.stores.runs,
           sessions: core.stores.sessions,
           settings,

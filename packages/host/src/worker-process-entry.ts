@@ -38,6 +38,7 @@ import { backgroundAgentLifecycle } from '@duya/host/worker-subagents';
 import { sendEvent, parseStdin, type WorkerCommand, buildWorkflowRunEvent, buildMessageFinalizedEvent, type WorkflowRunCommand } from '@duya/host/worker-transport';
 import { convertSSEToAgentMessage } from '@duya/host/worker-frame-codec';
 import { driveRunWithEngine } from '@duya/host/worker-engine-driver';
+import { withWorkerDbRunContext } from './worker-db-context.js';
 import { getPendingInteragentCall } from '@duya/host/worker-interagent-calls';
 import { resolveTurnRunId } from '@duya/agent-runtime/turns/run-identity';
 import { launchSavedWorkflow } from './worker-workflows/runner.js';
@@ -2293,15 +2294,20 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             disabledLoopHooks: steering.disabledLoopHooks,
         } as ChatOptions;
         const attemptEpoch = readAttemptEpoch(msg.options);
-        const engineRun = await driveRunWithEngine({
-            agent,
+        const engineAgent = agent;
+        const engineRun = await withWorkerDbRunContext(
+          msg.runId && attemptEpoch !== undefined
+            ? { sessionId: msg.sessionId, runId: msg.runId, epoch: attemptEpoch }
+            : undefined,
+          () => driveRunWithEngine({
+            agent: engineAgent,
             sessionId: msg.sessionId,
             runId: resolveTurnRunId(msg.runId).runId as RunId,
             seqIndex: Date.now(),
             options: chatOptions,
             prompt: messageContent,
             ...(msg.inputRevision === undefined ? {} : { inputRevision: msg.inputRevision }),
-            model: agent.readWorkerProviderConfig().model,
+            model: engineAgent.readWorkerProviderConfig().model,
             providerId: currentProviderId,
             workingDirectory,
             permissionMode: manifestPermissionMode(resolved.agentMode),
@@ -2356,7 +2362,8 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
                     data?: unknown;
                 });
             }
-        });
+        })
+        );
         for (const frame of engineRun.railFrames) {
             handleStreamEvent(frame as unknown as {
                 type: string;
@@ -2820,7 +2827,9 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             log('[Agent-Process] No init received; self-initializing from config.toml');
             await handleCommand(selfInit);
             if (agent !== null) {
-                await handleChatStart(msg as ChatStartMessage);
+                // Use the normal non-blocking admission path so stdin can
+                // continue delivering approval and interrupt commands.
+                await handleCommand(msg);
             }
             else {
                 sendToMain({
