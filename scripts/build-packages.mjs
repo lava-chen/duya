@@ -152,6 +152,7 @@ const BUILD_ORDER = [
   // Level 5 — the Host composes the runtime and data packages; CLI connects to it.
   '@duya/host', //         -> @duya/agent-runtime, @duya/data, @duya/agent-protocol
   '@duya/cli', //          -> @duya/host, @duya/plugin-core, @duya/input-completion
+  '@duya/web', //          -> @duya/host, @duya/agent-protocol (Node BFF)
 
 
   // Level 6 — last. `@duya/agent` consumes the level-2 through level-5 packages,
@@ -187,6 +188,7 @@ function parseTarget(args) {
 }
 
 function packageDirectory(name) {
+  if (name === '@duya/web') return resolve(repoRoot, 'apps', 'web');
   if (!name.startsWith('@duya/')) {
     throw new Error(`Expected a @duya workspace package, got: ${name}`);
   }
