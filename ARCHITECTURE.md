@@ -134,6 +134,18 @@ Renderer → Agent Server (HTTP POST) → Worker Process → LLM
   same lazy-spawn path.
 - Streaming via Server-Sent Events
 
+### Local browser transport (Plan 610 / T40a)
+
+`apps/web` supplies a Node-only BFF over the public standalone Host HTTP
+client. It binds loopback, discovers a live Host through its existing runtime
+descriptor, and keeps the Host bearer in the server process. A finite same-origin
+API validates Host/Origin/fetch-site and CSRF on mutations; approvals use the
+worker permission-request ledger. SSE forwards Host envelopes and cursors
+without renumbering and aborts its upstream reader on disconnect. Build it with
+`npm run build:web-app`, then run `npm run web-app` against an existing Host.
+This slice serves no browser UI; RunSession consumption and full browser/worker
+chat, cancellation and refresh-recovery acceptance remain outstanding.
+
 ### 3. MessagePort
 
 For high-frequency data: tool execution, tool streaming, config sync.

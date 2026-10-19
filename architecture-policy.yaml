@@ -292,6 +292,13 @@ modules:
       - packages/agent-runtime/src/context/contextual-user-fragment.ts
     owner: agent
 
+  # Node-only local BFF. A future browser entry needs its own narrower module.
+  - id: web-server
+    roots: [apps/web/src/server, apps/web/tests/server]
+    managed: true
+    requires: [agent-protocol, duya-host]
+    owner: client
+
   # Client-side state projection from the Host's protocol events.
   - id: client-core
     roots: [packages/client-core]
