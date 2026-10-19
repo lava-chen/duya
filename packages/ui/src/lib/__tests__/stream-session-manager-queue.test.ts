@@ -15,7 +15,7 @@ describe('stream session queued user messages', () => {
   });
 
   it('promotes and starts queued mailbox rows in FIFO order', async () => {
-    const { streamSessionManager } = await import('../../../renderer/lib/stream-session-manager');
+    const { streamSessionManager } = await import('../stream-session-manager');
     const promoteQueued = vi.fn(async (id: string) => ({
       id,
       content: `server:${id}`,
@@ -61,7 +61,7 @@ describe('stream session queued user messages', () => {
   });
 
   it('skips a queued row already absorbed by the agent and starts the next one', async () => {
-    const { streamSessionManager } = await import('../../../renderer/lib/stream-session-manager');
+    const { streamSessionManager } = await import('../stream-session-manager');
     const promoteQueued = vi.fn(async (id: string) => (
       id === 'guided' ? null : { id, content: `server:${id}` }
     ));
@@ -95,7 +95,7 @@ describe('stream session queued user messages', () => {
   });
 
   it('cancels durable mailbox rows when the user clears the queue', async () => {
-    const { streamSessionManager } = await import('../../../renderer/lib/stream-session-manager');
+    const { streamSessionManager } = await import('../stream-session-manager');
     const cancel = vi.fn().mockResolvedValue(null);
     vi.stubGlobal('window', { electronAPI: { mailbox: { cancel } } });
     streamSessionManager.enqueueMessage('clear-session', {
