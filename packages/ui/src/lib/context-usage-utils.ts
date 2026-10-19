@@ -1,0 +1,574 @@
+/**
+ * context-usage-utils.ts
+ *
+ * Token estimation + category bucketing for the context usage ring.
+ *
+ * The backend only ships aggregate `tokenUsage` on the last assistant message,
+ * not per-message tokens. To produce a per-category grid (and a breakdown
+ * panel) we estimate each message's tokens locally using the same shape
+ * claude-code's `analyzeContext.ts` uses:
+ *
+ *   1. Base text: characters / 4 (rough BPE proxy; tool & attachment content
+ *      also goes through this since it ends up serialized as text in the
+ *      request body).
+ *   2. Each tool_use / tool_result block also pays a fixed ~6 token schema
+ *      overhead to account for `{"name": "...", "input": {...}}` wrapping
+ *      that doesn't show up in raw character count.
+ *   3. Thinking blocks: char/4, no extra overhead.
+ *   4. Attachments: char/4 of `text` if extracted, else a 700 token floor
+ *      per image (Anthropic's image budget is 1.6K tokens, but extracted
+ *      chunks usually yield a lower effective count).
+ *
+ * Category estimates are then normalized against the aggregate `used` from
+ * `tokenUsage` so the sum of category tokens == used (the grid can't lie
+ * about the total).
+ */
+import type { ContentBlock, Message } from '@/types/message';
+
+export type ContextCategory =
+  | 'user_text'
+  | 'assistant_text'
+  | 'tool_call'
+  | 'tool_result'
+  | 'thinking'
+  | 'attachment'
+  | 'compact_summary'
+  | 'subagent'
+  | 'system';
+
+export interface ContextSource {
+  /** Stable id: messageId:contentIndex */
+  id: string;
+  category: ContextCategory;
+  /** Short label used in tooltips & breakdown rows */
+  label: string;
+  /** Estimated tokens for this source (after normalization) */
+  tokens: number;
+  messageId: string;
+  /** First 120 chars, used in expandable detail rows */
+  preview?: string;
+  toolName?: string;
+  subAgentId?: string;
+  attachmentName?: string;
+}
+
+export interface ContextBreakdown {
+  sources: ContextSource[];
+  byCategory: Map<ContextCategory, ContextSource[]>;
+  /** Total of all sources after normalization — equals `used` when possible */
+  total: number;
+  /** Grid columns × rows (e.g. 10×10 = 100 cells for 200K context) */
+  columns: number;
+  rows: number;
+  /** One cell per non-deferred category, with `squareFullness` for the
+   *  glyph choice. Walked row-major when rendering. */
+  gridSquares: GridSquare[];
+  /** Each category's allocated square count, in CATEGORY_ORDER. Used by
+   *  the breakdown modal to label rows. */
+  categorySquareCounts: Map<ContextCategory, number>;
+  contextWindow: number;
+  rawMaxTokens: number;
+  state: 'normal' | 'warning' | 'critical';
+}
+
+export interface GridSquare {
+  category: ContextCategory;
+  /** 0..1, used to choose solid vs hollow glyph */
+  fullness: number;
+  /** True if this square represents the autocompact buffer (claude-code
+   *  shows it as a reserved row at the end of the used area) */
+  isReserved?: boolean;
+}
+
+const TOOL_SCHEMA_OVERHEAD_TOKENS = 6;
+const ATTACHMENT_IMAGE_FLOOR_TOKENS = 700;
+/** Grid dimensions follow claude-code: 10×10 for 200K context windows,
+ *  20×10 for 1M+. Total cells represent the *whole* context window — the
+ *  free portion is shown too, so users can see how much room is left. */
+export const GRID_COLUMNS = 10;
+export const GRID_ROWS_DEFAULT = 10;
+export const GRID_ROWS_LARGE = 10;
+export const GRID_COLUMNS_LARGE = 20;
+export const GRID_COLUMNS_NARROW = 5;
+export const GRID_ROWS_NARROW = 5;
+const LARGE_CONTEXT_THRESHOLD = 1_000_000;
+
+const CATEGORY_ORDER: ContextCategory[] = [
+  'system',
+  'compact_summary',
+  'attachment',
+  'tool_call',
+  'tool_result',
+  'thinking',
+  'user_text',
+  'assistant_text',
+  'subagent',
+];
+
+const CATEGORY_LABELS: Record<ContextCategory, string> = {
+  user_text: 'User',
+  assistant_text: 'Assistant',
+  tool_call: 'Tool calls',
+  tool_result: 'Tool results',
+  thinking: 'Thinking',
+  attachment: 'Attachments',
+  compact_summary: 'Compact summary',
+  subagent: 'Subagent',
+  system: 'System',
+};
+
+/** CJK characters consume ~1-2 tokens per character in BPE tokenizers while
+ *  ASCII/English averages ~4 characters per token. Same ratios as the
+ *  worker-side estimator (packages/agent/src/compact/tokenBudget.ts) so the
+ *  renderer's trailing estimate does not under-count Chinese content. */
+const CJK_REGEX = /[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g;
+const CJK_CHARS_PER_TOKEN = 2.5;
+const ASCII_CHARS_PER_TOKEN = 4;
+
+/** Language-aware character → token conversion (CJK ≈ 2.5 chars/token,
+ *  ASCII/code ≈ 4 chars/token). */
+export function estimateTokens(text: string): number {
+  if (!text) return 0;
+  const cjkCount = (text.match(CJK_REGEX) || []).length;
+  const otherCount = text.length - cjkCount;
+  return Math.ceil(cjkCount / CJK_CHARS_PER_TOKEN) + Math.ceil(otherCount / ASCII_CHARS_PER_TOKEN);
+}
+
+/**
+ * Cache-convention guard for `input_tokens`.
+ *
+ * Anthropic's `input_tokens` excludes BOTH cached (cache-read) and
+ * cache-creation tokens, so the true prompt size is
+ * `input + cacheRead + cacheWrite`. Some OpenAI-compatible gateways report
+ * `prompt_tokens` already including the cached portion. When either cache
+ * counter exceeds the reported input, the input clearly omits cache — add all
+ * cache back (pi does the same: input + cacheRead + cacheWrite). Otherwise the
+ * ring would show only the uncached delta and swing between hundreds and
+ * thousands as cache hits come and go. The `cacheWrite > input` clause covers
+ * the first request of a session, where cacheRead is still 0 but the full
+ * prefix (system + tools) is written to cache.
+ */
+export function normalizeInputTokens(
+  inputTokens: number,
+  cacheHitTokens: number,
+  cacheWriteTokens: number = 0,
+): number {
+  const input = inputTokens || 0;
+  const cacheHit = cacheHitTokens || 0;
+  const cacheWrite = cacheWriteTokens || 0;
+  return cacheHit > input || cacheWrite > input
+    ? input + cacheHit + cacheWrite
+    : input;
+}
+
+/**
+ * ONLY-NEW (non-resident) prompt volume for the session "t" total. This is
+ * the uncached delta plus the newly-written cache; `cacheHit` (cache-read) is
+ * a RE-READ of an already-counted prefix and must never accumulate across
+ * calls on cache-exclusive providers (MiniMax re-reports the whole cached
+ * prefix every call → N× inflation of the session total). Same cache-guard
+ * convention as `normalizeInputTokens`; the RESIDENT value (ring/compaction)
+ * is NOT what this returns.
+ */
+export function onlyNewInputTokens(
+  inputTokens: number,
+  cacheHitTokens: number,
+  cacheWriteTokens: number = 0,
+): number {
+  const input = inputTokens || 0;
+  const hit = cacheHitTokens || 0;
+  const write = cacheWriteTokens || 0;
+  return hit > input || write > input ? input + write : input;
+}
+
+/** Per-model pricing (USD per million tokens), resolved from the
+ *  provider_model_capabilities table — the same source the usage dashboard
+ *  aggregates with. Shape mirrors ModelCapabilityDTO['pricing']. */
+export interface ModelPricing {
+  inputPerMillion?: number;
+  outputPerMillion?: number;
+  cacheReadPerMillion?: number;
+  cacheWritePerMillion?: number;
+}
+
+/**
+ * Cost estimation (USD) for a token usage block using the model's real
+ * pricing. Without pricing it returns 0 — callers hide the cost figure
+ * instead of showing a number priced at the wrong model's rates.
+ */
+export function estimateCost(
+  inputTokens: number,
+  outputTokens: number,
+  cacheReadTokens: number,
+  cacheWriteTokens: number,
+  pricing?: ModelPricing,
+): number {
+  if (!pricing) return 0;
+  return (
+    (inputTokens * (pricing.inputPerMillion ?? 0)) / 1_000_000 +
+    (outputTokens * (pricing.outputPerMillion ?? 0)) / 1_000_000 +
+    (cacheReadTokens * (pricing.cacheReadPerMillion ?? 0)) / 1_000_000 +
+    (cacheWriteTokens * (pricing.cacheWritePerMillion ?? 0)) / 1_000_000
+  );
+}
+
+/**
+ * pi-style compact token formatting for the ring's stats line:
+ * `<1000` → integer, `<10k` → 1-dp k, `<1M` → integer k, `<10M` → 1-dp M, else integer M.
+ */
+export function formatTokensPi(count: number): string {
+  if (count < 1000) return count.toString();
+  if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+  if (count < 1000000) return `${Math.round(count / 1000)}k`;
+  if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
+  return `${Math.round(count / 1000000)}M`;
+}
+
+function blockToText(block: ContentBlock): string {
+  if (typeof block === 'string') return block;
+  if (typeof block?.text === 'string') return block.text;
+  if (typeof block?.content === 'string') return block.content;
+  if (typeof block?.input !== 'undefined') {
+    try {
+      return JSON.stringify(block.input);
+    } catch {
+      return '';
+    }
+  }
+  return '';
+}
+
+interface RawSource {
+  category: ContextCategory;
+  label: string;
+  tokens: number;
+  messageId: string;
+  preview?: string;
+  toolName?: string;
+  subAgentId?: string;
+  attachmentName?: string;
+}
+
+/** Build a per-message source list using local estimation. The sum of
+ *  returned token counts is *unnormalized* — call `normalizeAndBuildGrid`
+ *  to scale to the aggregate `used` from tokenUsage. */
+export function extractSources(messages: Message[]): RawSource[] {
+  const out: RawSource[] = [];
+
+  for (const msg of messages) {
+    if (msg.isCompactBoundary) continue;
+    if (msg.isCompactSummary) {
+      const text = typeof msg.content === 'string'
+        ? msg.content
+        : msg.content.map(blockToText).join('');
+      out.push({
+        category: 'compact_summary',
+        label: `Compact summary${msg.compactedMessageCount ? ` (${msg.compactedMessageCount} msgs)` : ''}`,
+        tokens: estimateTokens(text),
+        messageId: msg.id,
+        preview: text.slice(0, 120),
+      });
+      continue;
+    }
+
+    if (msg.subAgentId) {
+      // Subagent spans are charged to the parent assistant message; track a
+      // separate bucket so users can see how much went to delegation.
+      out.push({
+        category: 'subagent',
+        label: `Subagent ${msg.subAgentId.slice(0, 8)}`,
+        tokens: 0, // counted as part of assistant_text below
+        messageId: msg.id,
+        subAgentId: msg.subAgentId,
+      });
+    }
+
+    // Thinking block (assistant only, but harmless for any role)
+    if (msg.thinking) {
+      out.push({
+        category: 'thinking',
+        label: 'Thinking',
+        tokens: estimateTokens(msg.thinking),
+        messageId: msg.id,
+        preview: msg.thinking.slice(0, 120),
+      });
+    }
+
+    // Attachments — images are estimated by a floor since we don't know the
+    // exact resolution the API charges for. Extracted text uses char/4.
+    if (msg.attachments && msg.attachments.length > 0) {
+      for (const att of msg.attachments) {
+        const text = att.text ?? '';
+        const isImage = (att.type ?? '').startsWith('image/');
+        const tokens = isImage
+          ? Math.max(ATTACHMENT_IMAGE_FLOOR_TOKENS, estimateTokens(text))
+          : estimateTokens(text);
+        out.push({
+          category: 'attachment',
+          label: att.name || 'Attachment',
+          tokens,
+          messageId: msg.id,
+          attachmentName: att.name,
+          preview: att.name,
+        });
+      }
+    }
+
+    // Main content — walk ContentBlock[] or treat as a single string.
+    const content = msg.content;
+    if (typeof content === 'string') {
+      if (content.length === 0) continue;
+      out.push({
+        category: bucketForRole(msg),
+        label: labelForRole(msg),
+        tokens: estimateTokens(content),
+        messageId: msg.id,
+        preview: content.slice(0, 120),
+      });
+      continue;
+    }
+
+    if (Array.isArray(content)) {
+      for (let i = 0; i < content.length; i++) {
+        const block = content[i];
+        const text = blockToText(block);
+        if (!text && !block?.type) continue;
+        const type = block?.type as string | undefined;
+        if (type === 'tool_use') {
+          const toolName = (block as { name?: string }).name ?? 'tool';
+          out.push({
+            category: 'tool_call',
+            label: toolName,
+            tokens: estimateTokens(text) + TOOL_SCHEMA_OVERHEAD_TOKENS,
+            messageId: msg.id,
+            toolName,
+            preview: text.slice(0, 120) || toolName,
+          });
+        } else if (type === 'tool_result') {
+          out.push({
+            category: 'tool_result',
+            label: 'Tool result',
+            tokens: estimateTokens(text) + TOOL_SCHEMA_OVERHEAD_TOKENS,
+            messageId: msg.id,
+            preview: text.slice(0, 120),
+          });
+        } else if (type === 'thinking') {
+          out.push({
+            category: 'thinking',
+            label: 'Thinking',
+            tokens: estimateTokens(text),
+            messageId: msg.id,
+            preview: text.slice(0, 120),
+          });
+        } else if (type === 'text') {
+          out.push({
+            category: bucketForRole(msg),
+            label: labelForRole(msg),
+            tokens: estimateTokens(text),
+            messageId: msg.id,
+            preview: text.slice(0, 120),
+          });
+        } else {
+          // Unknown block type — bucket as system and keep cost minimal.
+          out.push({
+            category: 'system',
+            label: type ?? 'System',
+            tokens: estimateTokens(text) + TOOL_SCHEMA_OVERHEAD_TOKENS,
+            messageId: msg.id,
+            preview: text.slice(0, 120),
+          });
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
+function bucketForRole(msg: Message): ContextCategory {
+  if (msg.role === 'user') return 'user_text';
+  if (msg.role === 'assistant') return 'assistant_text';
+  if (msg.role === 'tool') return 'tool_result';
+  return 'system';
+}
+
+function labelForRole(msg: Message): string {
+  if (msg.role === 'user') return 'User';
+  if (msg.role === 'assistant') return 'Assistant';
+  if (msg.role === 'tool') return 'Tool result';
+  return 'System';
+}
+
+/** Normalize raw estimates so their sum equals `targetTotal`, then
+ *  distribute TOTAL_SQUARES cells across categories proportional to their
+ *  share of the *context window* (not the used portion). The free portion
+ *  gets a 'free' bucket so the grid represents the full window shape. */
+export function normalizeAndBuildGrid(
+  raw: RawSource[],
+  targetTotal: number,
+  contextWindow: number,
+  state: ContextBreakdown['state'],
+  narrow = false,
+): ContextBreakdown {
+  const { columns, rows, total: TOTAL_SQUARES } = gridDimensions(
+    contextWindow,
+    narrow,
+  );
+
+  const sum = raw.reduce((acc, s) => acc + s.tokens, 0);
+  const scale = sum > 0 && targetTotal > 0 ? targetTotal / sum : 0;
+
+  const sources: ContextSource[] = raw
+    .filter((s) => s.tokens > 0)
+    .map((s, i) => ({
+      id: `${s.messageId}:${i}`,
+      category: s.category,
+      label: s.label,
+      tokens: Math.max(1, Math.round(s.tokens * scale)),
+      messageId: s.messageId,
+      preview: s.preview,
+      toolName: s.toolName,
+      subAgentId: s.subAgentId,
+      attachmentName: s.attachmentName,
+    }))
+    .sort((a, b) => b.tokens - a.tokens);
+
+  const byCategory = new Map<ContextCategory, ContextSource[]>();
+  for (const s of sources) {
+    const list = byCategory.get(s.category) ?? [];
+    list.push(s);
+    byCategory.set(s.category, list);
+  }
+
+  // Sum tokens per category, then allocate squares proportional to
+  // share-of-context-window (not share-of-used). Free space = whatever
+  // is left.
+  const categoryTokens = new Map<ContextCategory, number>();
+  for (const s of sources) {
+    categoryTokens.set(
+      s.category,
+      (categoryTokens.get(s.category) ?? 0) + s.tokens,
+    );
+  }
+
+  const categorySquareCounts = new Map<ContextCategory, number>();
+  let allocated = 0;
+  const orderedNonFree: { cat: ContextCategory; tokens: number }[] = [];
+  for (const cat of CATEGORY_ORDER) {
+    const tokens = categoryTokens.get(cat) ?? 0;
+    if (tokens <= 0) continue;
+    orderedNonFree.push({ cat, tokens });
+  }
+  // Sort by tokens desc for visual prominence
+  orderedNonFree.sort((a, b) => b.tokens - a.tokens);
+
+  for (const { cat, tokens } of orderedNonFree) {
+    const squares = Math.max(
+      1,
+      Math.round((tokens / Math.max(1, contextWindow)) * TOTAL_SQUARES),
+    );
+    categorySquareCounts.set(cat, squares);
+    allocated += squares;
+  }
+  // Clamp allocated back to TOTAL_SQUARES — rounding can overshoot.
+  if (allocated > TOTAL_SQUARES) {
+    // Trim the largest category until it fits.
+    let overflow = allocated - TOTAL_SQUARES;
+    for (const { cat } of orderedNonFree) {
+      if (overflow <= 0) break;
+      const cur = categorySquareCounts.get(cat) ?? 0;
+      if (cur <= 1) continue;
+      const trim = Math.min(overflow, cur - 1);
+      categorySquareCounts.set(cat, cur - trim);
+      overflow -= trim;
+    }
+  }
+  const freeSquares = Math.max(0, TOTAL_SQUARES - allocated);
+
+  // Build the cell list in CATEGORY_ORDER (stable). Each cell carries its
+  // own fullness; the partial cell at the end of a category's run encodes
+  // the remainder.
+  const gridSquares: GridSquare[] = [];
+  for (const cat of CATEGORY_ORDER) {
+    const squares = categorySquareCounts.get(cat) ?? 0;
+    const tokens = categoryTokens.get(cat) ?? 0;
+    if (squares === 0) continue;
+    const tokensPerSquare = tokens / squares;
+    for (let i = 0; i < squares; i++) {
+      const isLast = i === squares - 1;
+      gridSquares.push({
+        category: cat,
+        // Full cell if tokensPerSquare >= 1 cell's worth (1 / TOTAL_SQUARES
+        // of the context window). The very last cell of a category's run
+        // may be fractional: encode the leftover tokens as a 0..1
+        // fraction of one cell. Previous formula
+        //   tokens - Math.floor(tokens - 1)
+        // simplified to 1 for integer tokens and clamped to 1 for
+        // fractional ones, so the partial cell always rendered as full —
+        // a category with 5 squares + 13 tokens would still show all 5
+        // squares at 100%.
+        fullness: isLast
+          ? Math.max(0, Math.min(1, tokensPerSquare - Math.floor(tokensPerSquare)))
+          : 1,
+      });
+    }
+  }
+  // Fill remaining with free-space cells. Free space is always "full" so
+  // the free glyph (⛶) is what users see; renderer decides.
+  for (let i = 0; i < freeSquares; i++) {
+    gridSquares.push({ category: '__free__' as unknown as ContextCategory, fullness: 1 });
+  }
+  // Pad to exactly TOTAL_SQUARES in case the trim above underflowed.
+  while (gridSquares.length < TOTAL_SQUARES) {
+    gridSquares.push({
+      category: '__free__' as unknown as ContextCategory,
+      fullness: 1,
+    });
+  }
+
+  return {
+    sources,
+    byCategory,
+    total: targetTotal,
+    columns,
+    rows,
+    gridSquares,
+    categorySquareCounts,
+    contextWindow,
+    rawMaxTokens: contextWindow,
+    state,
+  };
+}
+
+export function getCategoryLabel(category: ContextCategory): string {
+  return CATEGORY_LABELS[category] ?? category;
+}
+
+export const GRID_CONSTANTS = {
+  GRID_COLUMNS,
+  GRID_ROWS_DEFAULT,
+  GRID_ROWS_LARGE,
+  GRID_COLUMNS_LARGE,
+  GRID_COLUMNS_NARROW,
+  GRID_ROWS_NARROW,
+  LARGE_CONTEXT_THRESHOLD,
+} as const;
+
+/** Total cells for a given context window — mirrors claude-code's choice
+ *  of 10×10 for sub-1M and 20×10 for 1M+. Narrow screens collapse to 5×5
+ *  but we don't have terminal-width here; the modal/popover can call this
+ *  with the actual width to opt into the narrow variant. */
+export function gridDimensions(
+  contextWindow: number,
+  narrow = false,
+): { columns: number; rows: number; total: number } {
+  const large = contextWindow >= LARGE_CONTEXT_THRESHOLD;
+  if (narrow) {
+    const columns = large ? GRID_COLUMNS_NARROW : GRID_COLUMNS_NARROW;
+    const rows = large ? GRID_ROWS_NARROW : GRID_ROWS_NARROW;
+    return { columns, rows, total: columns * rows };
+  }
+  const columns = large ? GRID_COLUMNS_LARGE : GRID_COLUMNS;
+  const rows = large ? GRID_ROWS_LARGE : GRID_ROWS_DEFAULT;
+  return { columns, rows, total: columns * rows };
+}

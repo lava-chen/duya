@@ -1,0 +1,226 @@
+"use client";
+
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowLeftIcon, ArrowsClockwiseIcon, ChartBarIcon } from "@/components/icons";
+import { useTranslation } from "@/hooks/useTranslation";
+import { listProvidersIPC } from "@/lib/ipc-client";
+import type { Provider as IpccProvider } from "@/lib/ipc-client";
+import { isQuotaSupported } from "@/lib/providers/canCheckQuota";
+import { ProviderQuotaCard, type ProviderQuotaState } from "./ProviderQuotaCard";
+import { Button } from "@/components/ui/Button";
+
+interface ProviderQuotaViewProps {
+  onBack: () => void;
+}
+
+export const ProviderQuotaView: React.FC<ProviderQuotaViewProps> = ({ onBack }) => {
+  const { t } = useTranslation();
+  const [providers, setProviders] = useState<IpccProvider[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [quotaStates, setQuotaStates] = useState<Record<string, ProviderQuotaState>>({});
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Filter to providers whose providerType/baseUrl maps to a supported quota API
+  const supportedProviders = useMemo(
+    () => providers.filter((p) => isQuotaSupported(p.providerType, p.baseUrl) && p.hasApiKey),
+    [providers]
+  );
+
+  const loadProviders = useCallback(async () => {
+    try {
+      setLoading(true);
+      const list = await listProvidersIPC();
+      setProviders(list);
+    } catch (err) {
+      console.warn("[ProviderQuotaView] Failed to load providers:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadProviders();
+  }, [loadProviders]);
+
+  const fetchQuota = useCallback(async (provider: IpccProvider) => {
+    setQuotaStates((prev) => ({
+      ...prev,
+      [provider.id]: {
+        providerId: provider.id,
+        providerName: provider.name,
+        providerType: provider.providerType,
+        baseUrl: provider.baseUrl,
+        hasApiKey: provider.hasApiKey,
+        status: "loading",
+      },
+    }));
+
+    try {
+      // Pass only the provider id: the main process resolves the real API
+      // key from the on-disk provider, so the renderer never handles it.
+      const result = await window.electronAPI.net.getProviderUsage({
+        provider_id: provider.id,
+        provider_type: provider.providerType,
+        base_url: provider.baseUrl,
+      });
+
+      if (!result.success && result.error?.code === "NO_CREDENTIALS") {
+        setQuotaStates((prev) => ({
+          ...prev,
+          [provider.id]: {
+            providerId: provider.id,
+            providerName: provider.name,
+            providerType: provider.providerType,
+            baseUrl: provider.baseUrl,
+            hasApiKey: provider.hasApiKey,
+            status: "error",
+            message: t("usage.quotaNoApiKey"),
+          },
+        }));
+        return;
+      }
+
+      if (result.success) {
+        setQuotaStates((prev) => ({
+          ...prev,
+          [provider.id]: {
+            providerId: provider.id,
+            providerName: provider.name,
+            providerType: provider.providerType,
+            baseUrl: provider.baseUrl,
+            hasApiKey: provider.hasApiKey,
+            status: "success",
+            plan: result.plan,
+            quotas: result.quotas,
+            message: result.message,
+          },
+        }));
+      } else {
+        setQuotaStates((prev) => ({
+          ...prev,
+          [provider.id]: {
+            providerId: provider.id,
+            providerName: provider.name,
+            providerType: provider.providerType,
+            baseUrl: provider.baseUrl,
+            hasApiKey: provider.hasApiKey,
+            status: "error",
+            message: result.error?.message || result.message || t("usage.quotaError"),
+          },
+        }));
+      }
+    } catch (err) {
+      setQuotaStates((prev) => ({
+        ...prev,
+        [provider.id]: {
+          providerId: provider.id,
+          providerName: provider.name,
+          providerType: provider.providerType,
+          baseUrl: provider.baseUrl,
+          hasApiKey: provider.hasApiKey,
+          status: "error",
+          message: err instanceof Error ? err.message : String(err),
+        },
+      }));
+    }
+  }, [t]);
+
+  // Auto-fetch on mount once providers are loaded
+  useEffect(() => {
+    if (loading) return;
+    if (supportedProviders.length === 0) return;
+    supportedProviders.forEach((p) => {
+      if (!quotaStates[p.id]) {
+        void fetchQuota(p);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, supportedProviders.length]);
+
+  const handleRefresh = useCallback(async () => {
+    if (supportedProviders.length === 0) return;
+    setRefreshing(true);
+    setQuotaStates({});
+    await Promise.all(supportedProviders.map((p) => fetchQuota(p)));
+    setRefreshing(false);
+  }, [supportedProviders, fetchQuota]);
+
+  const orderedStates = useMemo(
+    () =>
+      supportedProviders
+        .map((p) => quotaStates[p.id])
+        .filter((s): s is ProviderQuotaState => Boolean(s)),
+    [supportedProviders, quotaStates]
+  );
+
+  return (
+    <div className="w-full max-w-6xl mx-auto space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={onBack}
+          >
+            <ArrowLeftIcon size={14} />
+            {t("usage.backToUsage")}
+          </Button>
+          <div>
+            <h2 className="text-[1.15rem] font-bold tracking-tight text-[var(--text)] font-[family-name:--font-copernicus]">
+              {t("usage.providerQuotaTitle")}
+            </h2>
+            <p className="text-sm text-[var(--muted)]">{t("usage.providerQuotaSubtitle")}</p>
+          </div>
+        </div>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={handleRefresh}
+          disabled={refreshing || supportedProviders.length === 0}
+        >
+          <ArrowsClockwiseIcon size={14} className={refreshing ? "animate-spin" : ""} />
+          {refreshing ? t("usage.refreshing") : t("usage.refresh")}
+        </Button>
+      </div>
+
+      {/* Content */}
+      {loading ? (
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)]/40 p-12 text-center text-sm text-[var(--muted)]">
+          {t("usage.loadingProviders")}
+        </div>
+      ) : supportedProviders.length === 0 ? (
+        <div className="rounded-xl border border-[var(--border)] bg-gradient-to-b from-[var(--surface)] to-[var(--bg-canvas)] p-12 text-center">
+          <div className="w-16 h-16 rounded-full bg-[var(--surface)] flex items-center justify-center mx-auto mb-4">
+            <ChartBarIcon size={28} className="text-[var(--muted)]" />
+          </div>
+          <h3 className="text-lg font-semibold text-[var(--text)] mb-2">
+            {t("usage.noQuotaProviders")}
+          </h3>
+          <p className="text-sm text-[var(--muted)] max-w-md mx-auto">
+            {t("usage.noQuotaProvidersDesc")}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {orderedStates.map((state) => (
+              <ProviderQuotaCard
+                key={state.providerId}
+                state={state}
+                onRetry={() => {
+                  const p = supportedProviders.find((sp) => sp.id === state.providerId);
+                  if (p) void fetchQuota(p);
+                }}
+              />
+            ))}
+          </div>
+
+          <div className="text-[11px] text-[var(--muted)] text-center pt-2">
+            {t("usage.supportedProvidersList")}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

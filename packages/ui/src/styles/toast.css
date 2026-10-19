@@ -1,0 +1,28 @@
+/*
+ * toast.css — 通知动效。
+ *
+ * 动效只做一件事：说明"这条通知是新出现的"。因此只用一次极短的淡入 + 上移，
+ * 不做回弹、不做缩放。DESIGN 原则：动效用于澄清状态变化，而不是装饰屏幕。
+ */
+
+@keyframes duya-toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.duya-toast-enter {
+  animation: duya-toast-enter 140ms ease-out both;
+}
+
+/* 尊重系统的"减少动态效果"设置。 */
+@media (prefers-reduced-motion: reduce) {
+  .duya-toast-enter {
+    animation: none;
+  }
+}

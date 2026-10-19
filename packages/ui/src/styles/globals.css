@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+@import "./base.css";
+@import "./sidebar.css";
+@import "./chat.css";
+@import "./bot.css";
+@import "./titlebar.css";
+@import "./settings.css";
+@import "./welcome.css";
+@import "./skills.css";
+@import "./workspace.css";
+@import "./preview.css";
+@import "./canvas.css";
+@import "./mailbox.css";
+@import "./preview-drawer.css";
+@import "./office-browser.css";
+@import "./conductor.css";
+@import "./code-review.css";
+@import "./composer-panels.css";
+@import "./pages.css";
+@import "./sidebar-sections.css";
+
+@plugin "@tailwindcss/typography";
+
+@theme {
+  --color-background: var(--main-bg);
+  --color-foreground: var(--foreground);
+  --color-muted-foreground: var(--muted);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-error: var(--error);
+  --color-error-soft: var(--error-soft);
+}
+
+/* ProjectsView: row hover-reveal checkbox + inline action buttons */
+.project-row {
+  transition: background-color 120ms ease;
+}
+
+.project-row:hover .project-row-checkbox {
+  opacity: 1 !important;
+}
+
+.project-row[data-selected] {
+  background-color: var(--surface-hover);
+}
+
+.project-row .project-row-action-btn {
+  opacity: 0.55;
+  transition: opacity 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+.project-row:hover .project-row-action-btn {
+  opacity: 1;
+}
+
+.project-row .project-row-action-btn:hover {
+  color: var(--text);
+}
+
+/* Running phase lamp pulse in the workflow timeline (WorkflowGraph). */
+@keyframes duya-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}

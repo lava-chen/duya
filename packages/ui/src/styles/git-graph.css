@@ -1,0 +1,491 @@
+/* git-graph.css — Git 图谱对话框：泳道图 + 提交表格
+ *
+ * 布局要点：图与表是同一个 CSS grid 的左右两列，行高都由 layout.rowHeight
+ * 提供，所以两边天然逐行对齐——不需要同步滚动，也不需要测量。
+ */
+
+.git-graph-pane {
+  display: flex;
+  flex-direction: column;
+  height: min(74vh, 700px);
+  min-height: 0;
+  background: var(--main-bg);
+  color: var(--text);
+}
+
+.git-graph-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+
+.git-graph-grid {
+  display: grid;
+  min-width: 620px;
+}
+
+/* ── 表头 ───────────────────────────────────────────────────── */
+
+.git-graph-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-solid);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.git-graph-head-gutter {
+  border-right: 1px solid var(--border);
+  padding: 8px 12px;
+}
+
+.git-graph-head-columns {
+  display: grid;
+}
+
+/* Column rules stay full-strength: they are the only vertical structure the
+   table has, so weakening them to --border-weak made the header read as one
+   undifferentiated smear. */
+.git-graph-head-columns > div {
+  padding: 8px 12px;
+  border-right: 1px solid var(--border);
+}
+
+.git-graph-head-columns > div:last-child {
+  border-right: none;
+}
+
+/* ── 泳道栏 ─────────────────────────────────────────────────── */
+
+.git-graph-canvas {
+  position: relative;
+  border-right: 1px solid var(--border);
+  background: var(--git-graph-gutter);
+}
+
+.git-graph-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+}
+
+.git-graph-path {
+  opacity: 0.55;
+  transition: opacity 120ms ease;
+}
+
+.git-graph-path.is-related {
+  opacity: 1;
+}
+
+.git-graph-path.is-faded {
+  opacity: 0.2;
+}
+
+.git-graph-node {
+  transition: opacity 120ms ease;
+}
+
+.git-graph-node.is-faded {
+  opacity: 0.7;
+}
+
+/* ── 提交行 ─────────────────────────────────────────────────── */
+
+/*
+ * No resting row rule. A hairline under every row turns the list into a data
+ * grid and doubles the horizontal noise; the lane rhythm and the column rules
+ * already carry the structure. The selection is what gets framed instead —
+ * see `.is-selected` below.
+ */
+.git-graph-row {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  border: none;
+  border-top: 1px solid transparent;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: background-color 100ms ease;
+}
+
+.git-graph-row.is-hovered {
+  background: var(--git-graph-row-hover);
+}
+
+/*
+ * The selected row is framed top and bottom, and its cells gain the column
+ * rules the resting rows do not have — so the eye lands on one commit without
+ * the rest of the table competing.
+ */
+.git-graph-row.is-selected {
+  border-top-color: var(--border);
+  border-bottom-color: var(--border);
+  background: var(--git-graph-row-selected);
+}
+
+.git-graph-row:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  outline-offset: -2px;
+}
+
+.git-graph-cell {
+  min-width: 0;
+  padding: 0 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-graph-row.is-selected .git-graph-cell {
+  border-left: 1px solid var(--border);
+}
+
+.git-graph-row.is-selected .git-graph-cell:first-child {
+  border-left-color: transparent;
+}
+
+.git-graph-cell-subject {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The author is how you scan "whose work is this" — worth a weight step up
+   from the date and hash columns. */
+.git-graph-cell-author {
+  font-weight: 500;
+}
+
+.git-graph-cell-hash {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.git-graph-subject {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--text);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-graph-merge {
+  flex: 0 0 auto;
+  color: var(--git-lane-2);
+}
+
+/* ── 分支 / 标签徽章 ────────────────────────────────────────── */
+
+.git-graph-refs {
+  display: inline-flex;
+  /* Loses width to the subject before the subject loses any to it, and clips
+     at its own edge when ref names are long. */
+  flex: 0 1 auto;
+  max-width: 62%;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.git-graph-ref {
+  display: inline-flex;
+  /*
+   * Never shrink. A flex-shrunk badge ellipsises its *own* label — you get
+   * `mast…` and `origin/mas…`, which is worse than showing fewer refs: every
+   * badge on the row is then unreadable instead of only the last one. Badges
+   * keep their natural width and the container clips at its edge instead.
+   */
+  flex: 0 0 auto;
+  max-width: 156px;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-solid);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* The glyph is what lets the badge be recognised before it is read: a branch
+   or a tag, at a glance, without parsing the name. */
+.git-graph-ref-icon {
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+
+.git-graph-ref-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 当前分支：整块染色 + 强调色描边，比普通分支高一级语义。 */
+.git-graph-ref-head {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, var(--main-bg));
+  color: var(--text);
+  font-weight: 500;
+}
+
+.git-graph-ref-head .git-graph-ref-icon {
+  color: var(--accent);
+  opacity: 1;
+}
+
+.git-graph-ref-tag {
+  border-color: color-mix(in srgb, var(--success) 55%, var(--border));
+  color: var(--text);
+}
+
+.git-graph-ref-tag .git-graph-ref-icon {
+  color: var(--success);
+  opacity: 1;
+}
+
+.git-graph-ref-remote {
+  border-color: var(--border-strong);
+  background: transparent;
+}
+
+/* 「+N」计数徽章：虚框、无底色，一眼看出它不是真分支。 */
+.git-graph-ref-overflow {
+  border-style: dashed;
+  background: transparent;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 分页 ───────────────────────────────────────────────────── */
+
+.git-graph-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-top: 1px solid var(--border);
+}
+
+.git-graph-more-button {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  transition: background-color 100ms ease, color 100ms ease;
+}
+
+.git-graph-more-button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.git-graph-more-button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* ── 选中提交详情 ───────────────────────────────────────────── */
+
+.git-graph-detail {
+  flex: 0 0 auto;
+  /* A long commit message must scroll inside the strip rather than eat the
+     commit table, which is the pane's primary content. */
+  max-height: 45%;
+  overflow: auto;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.git-graph-detail-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+}
+
+.git-graph-detail-subject {
+  min-width: 0;
+}
+
+.git-graph-detail-subject-text {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.git-graph-detail-fields {
+  display: grid;
+  gap: 8px 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.git-graph-detail-field {
+  min-width: 0;
+}
+
+/* Commit message body (`%b`). Pre-wrapped so the author's own line breaks
+   survive. No height cap here — the strip above owns the scrolling. */
+.git-graph-detail-body {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.git-graph-detail-label {
+  margin-bottom: 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.git-graph-detail-value {
+  display: block;
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-graph-detail-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* The sha is the one field worth taking away, so it is a control rather than
+   static text — and it stays left-aligned with the other values. */
+.git-graph-detail-copy {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: left;
+}
+
+.git-graph-detail-copy-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-graph-detail-copy:hover .git-graph-detail-copy-text {
+  color: var(--accent);
+}
+
+.git-graph-detail-copy-done {
+  flex: 0 0 auto;
+  color: var(--success);
+}
+
+.git-graph-detail-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+/* ── 空态与加载态 ───────────────────────────────────────────── */
+
+.git-graph-empty,
+.git-graph-status {
+  display: flex;
+  height: min(74vh, 700px);
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.git-graph-empty-title {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.git-graph-empty-text {
+  font-size: 13px;
+}
+
+/*
+ * Failures are shown as a card rather than a bare centred line: an error that
+ * arrives with no frame reads like a rendering glitch, and the card also caps
+ * the width so a long git stderr stays readable instead of spanning the modal.
+ */
+.git-graph-status-card {
+  max-width: 28rem;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-element);
+  background: var(--surface-solid);
+}
+
+.git-graph-status-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.git-graph-status-icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--error);
+}
+
+.git-graph-status-message {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.git-graph-status-title {
+  margin-bottom: 4px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+@keyframes git-graph-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .git-graph-spin {
+    animation: git-graph-spin 900ms linear infinite;
+  }
+}
