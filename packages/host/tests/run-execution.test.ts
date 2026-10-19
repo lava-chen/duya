@@ -17,6 +17,7 @@ const STUB_WORKER_SOURCE = `
 // Mode comes from the filename (stub-worker-<mode>.cjs) — deterministic, no
 // reliance on environment propagation through the spawn path.
 const MODE = (__filename.includes('-hang-hard') && 'hang-hard')
+  || (__filename.includes('-array-action') && 'array-action')
   || (__filename.includes('-stdout-pressure') && 'stdout-pressure')
   || (__filename.includes('-permission') && 'permission')
   || (__filename.includes('-db') && 'db')
@@ -32,7 +33,11 @@ process.on('message', (msg) => {
     const { resolve, reject } = dbPending.get(msg.id);
     dbPending.delete(msg.id);
     if (msg.success) resolve(msg.result);
-    else reject(new Error(msg.error || 'db:request failed'));
+    else {
+      const error = new Error(msg.error || 'db:request failed');
+      error.code = msg.code;
+      reject(error);
+    }
   }
 });
 function dbRequest(action, payload) {
@@ -193,6 +198,21 @@ process.stdin.on('data', (chunk) => {
         expiresAt: request.expiresAt,
       });
       process.send({ type: 'chat:permission', sessionId: command.sessionId, request });
+    } else if (MODE === 'array-action') {
+      (async () => {
+        try {
+          await dbRequest(['message:append'], {
+            sessionId: command.sessionId,
+            messages: [{ id: 'array-action-message', session_id: command.sessionId, role: 'assistant', content: 'must not persist' }],
+          });
+          emitTextBlock('array-action=unexpected-success');
+        } catch (err) {
+          emitTextBlock('array-action=' + (err && err.code) + ':' + (err && err.message));
+        }
+        emitTurnCompleted('end_turn');
+        emitTerminal('completed');
+        process.send({ type: 'chat:done', sessionId: command.sessionId });
+      })();
     } else if (MODE === 'db') {
       (async () => {
         try {
@@ -243,7 +263,7 @@ process.on('disconnect', () => process.exit(0));
 
 async function writeStubWorker(
   directory: string,
-  mode: 'complete' | 'hang' | 'hang-hard' | 'db' | 'permission' | 'stdout-pressure',
+  mode: 'complete' | 'hang' | 'hang-hard' | 'db' | 'array-action' | 'permission' | 'stdout-pressure',
 ): Promise<string> {
   const workerPath = path.join(directory, `stub-worker-${mode}.cjs`);
   await fs.writeFile(workerPath, STUB_WORKER_SOURCE, 'utf8');
@@ -284,6 +304,35 @@ async function startHostWithSession(
 }
 
 describe('Host-owned run execution', () => {
+  it('rejects a non-string worker DB action without dispatching or writing a transcript row', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-run-array-action-'));
+    let host: LocalHostHandle | undefined;
+    try {
+      const started = await startHostWithSession(root, await writeStubWorker(root, 'array-action'));
+      host = started.host;
+      const start = await started.client.startAgentRun({ sessionId: started.sessionId, prompt: 'probe non-string db action' });
+      expect(start.accepted).toBe(true);
+      if (!start.accepted) return;
+
+      let record = null;
+      for (let index = 0; index < 100; index += 1) {
+        record = await started.client.getAgentRun(start.runId);
+        if (record?.terminal) break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(record?.status).toBe('completed');
+      const events = await started.client.readAgentRunEvents(start.runId);
+      expect(events.some((event) => event.payload.type === 'assistant.text_block' &&
+        event.payload.text.includes('array-action=invalid_db_action:'))).toBe(true);
+
+      const timeline = await started.client.readMessages(started.sessionId, { limit: 50 });
+      expect(timeline.messages.some((item) => JSON.stringify(item.entry).includes('must not persist'))).toBe(false);
+    } finally {
+      await host?.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it('drains mirrored stdout so backpressure cannot block the IPC terminal', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-run-stdout-'));
     let host: LocalHostHandle | undefined;

@@ -134,29 +134,31 @@ describe('WorkerManager stale-worker delegation boundary', () => {
       });
       expect(forwarded.some(({ message }) => message.type === 'db:request' && message.id === staleId)).toBe(false);
 
-      const staleAppendId = 'stale-transcript-append';
-      const staleAppendResponse = nextMessage(oldChild, (message) =>
-        message.type === 'test:received' &&
-        (message.message as Record<string, unknown> | undefined)?.id === staleAppendId,
-      'superseded transcript append response');
-      oldChild.send({
-        type: 'test:emit',
-        id: 'old-late-append',
-        message: {
-          type: 'db:request',
-          id: staleAppendId,
-          action: 'message:append',
-          payload: { sessionId: SESSION_ID, messages: [{ content: 'late old answer' }] },
-        },
-      });
-      const appendReceived = await staleAppendResponse;
-      expect(appendReceived.message).toMatchObject({
-        type: 'db:response',
-        id: staleAppendId,
-        success: false,
-        code: 'superseded_worker',
-      });
-      expect(forwarded.some(({ message }) => message.type === 'db:request' && message.id === staleAppendId)).toBe(false);
+      for (const action of ['message:add', 'message:append', 'message:deleteBySession', 'message:replace']) {
+        const staleMutationId = `stale-transcript-${action}`;
+        const staleMutationResponse = nextMessage(oldChild, (message) =>
+          message.type === 'test:received' &&
+          (message.message as Record<string, unknown> | undefined)?.id === staleMutationId,
+        `superseded ${action} response`);
+        oldChild.send({
+          type: 'test:emit',
+          id: `old-late-${action}`,
+          message: {
+            type: 'db:request',
+            id: staleMutationId,
+            action,
+            payload: { sessionId: SESSION_ID, messages: [{ content: 'late old answer' }] },
+          },
+        });
+        const receivedMutation = await staleMutationResponse;
+        expect(receivedMutation.message).toMatchObject({
+          type: 'db:response',
+          id: staleMutationId,
+          success: false,
+          code: 'superseded_worker',
+        });
+        expect(forwarded.some(({ message }) => message.type === 'db:request' && message.id === staleMutationId)).toBe(false);
+      }
 
       // The stale worker's background-task control message remains active while
       // it drains; it is consumed by WorkerManager and never reaches the Host handler.
