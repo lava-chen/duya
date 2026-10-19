@@ -109,3 +109,7 @@ baseline 932 未改）；`architecture:self-test` exit 0。构建后 BFF CLI 真
    worker RPC 必须从真正的工具注册/审批 context 捕获 T31a 执行器，做 deny=0/allow=1 副作用验收。
 2. **T40b**：在本轮 BFF 上补 browser entry 和 RunSession transport；选会话/发送/工具流/审批/取消/
    刷新恢复做一次真 worker + Playwright 验收，不另写 reducer。T23 依赖缺口继续明确记录。
+
+## T31b backend slice (2026-10-19)
+
+Data now owns the plugin App instance table/store through CoreDataHost migration 40, with strict JSON snapshots, revision/schema CAS, terminal revocation, and reopen/isolation coverage. Host composes the store into its local API and serves authenticated `/v1/local/plugin-app-instances` routes; the real HTTP/reopen tests cover the production persistence boundary. This delivers the durable state/API seam only: no Desktop iframe launch/caller or worker RPC binds an App instance to the existing `plugin-app-bridge` MCP executor, so Apps still cannot invoke MCP through a production iframe path. T31/T32 remain incomplete pending that caller, approval-path integration, and two-App/two-instance acceptance.
