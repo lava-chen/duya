@@ -155,6 +155,10 @@
       "types": "./dist/workspace-resolver.d.ts",
       "import": "./dist/workspace-resolver.js"
     },
+    "./plugin-app-instance-store": {
+      "types": "./dist/plugin-app-instance-store.d.ts",
+      "import": "./dist/plugin-app-instance-store.js"
+    },
     "./terminal-history-store": {
       "types": "./dist/terminal-history-store.d.ts",
       "import": "./dist/terminal-history-store.js"

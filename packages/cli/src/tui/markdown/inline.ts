@@ -247,6 +247,8 @@ function probePair(emit: (s: string) => string): { open: string; close: string }
   return { open: wrapped.slice(0, at), close: wrapped.slice(at + PROBE_SENTINEL.length) };
 }
 
+export { probePair as rawTagPair };
+
 /**
  * Compress tokens back into a blessed tag string, guaranteeing every open tag
  * has its close (V5). The tag BODIES still come from the styles object — this
