@@ -24,18 +24,33 @@
  *  - **No `cycle` count promise.** `architecture:check` reports `cycle 16`; that
  *    is a baseline fingerprint count, and it moves when the RESOLVER changes as
  *    well as when the code does.
- *  - **Every count here is a count of what the resolver can see.** Bare
- *    `@duya/*` specifiers do not become edges: `resolveTarget` builds its
- *    candidates under `packages/<x>/`, and no package in this repo keeps an
- *    entry at its root (`src/index.ts`, never `index.ts`), so such a specifier
- *    only resolves when the import path itself names `dist`. Cross-package
- *    dependencies expressed by bare specifier are therefore INVISIBLE, which is
- *    why `electron-main -> pkg:agent-protocol` — a pair the host reaches
- *    hundreds of times — does not appear in this file at all. The pairs listed
- *    below are those written as relative paths. A number going down can mean the
- *    coupling was cut, or that the import was rewritten from a relative path to
- *    a bare one; `main-to-agent-value` is the entry where that distinction is
- *    spelled out, because that is exactly what happened to it.
+ *  - **Every count here is a count of what the resolver can see, and the
+ *    resolver cannot see a bare specifier at all.** `resolveTarget`
+ *    (`import-graph.mjs:283`) maps `@duya/<rest>` to `packages/<first segment of
+ *    rest>` — the subpath after the package name is DROPPED, not appended — and
+ *    then tries `<pkg>.ts`, `<pkg>/index.ts` and their `.tsx`/`.js`/`.mjs`
+ *    siblings. No package in this repo keeps an entry at its root (every entry is
+ *    `src/index.ts`, never `index.ts`), so nothing matches and the specifier
+ *    yields no edge. Measured 2026-10-20 against this tree: `@duya/agent-protocol`,
+ *    `@duya/ai`, `@duya/client-core`, `@duya/conductor/renderer`,
+ *    `@duya/input-completion`, `@duya/memory`, `@duya/ui` and
+ *    `@duya/ui/lib/ipc-client` all resolve to `null`. Cross-package dependencies
+ *    expressed by bare specifier are therefore INVISIBLE here in EVERY form,
+ *    which is why `electron-main -> pkg:agent-protocol` — a pair the host
+ *    reaches hundreds of times — does not appear in this file at all.
+ *
+ *    This is a property of THIS resolver, not of the repository. The boundary
+ *    gate resolves bare specifiers correctly: `audit-imports.mjs:74` builds a
+ *    registry from each package's `package.json` `name` and `exports`, and
+ *    `:165` resolves through `workspaceExportTargets`, which is why
+ *    `pkg:ui -> pkg:agent-protocol` does appear in `architecture:check`. Two
+ *    resolvers, one of them blind; every number in this file comes from the
+ *    blind one.
+ *
+ *    The pairs listed below are those written as relative paths. A number going
+ *    down can mean the coupling was cut, or that the import was rewritten from a
+ *    relative path to a bare one; `main-to-agent-value` is the entry where that
+ *    distinction is spelled out, because that is exactly what happened to it.
  *
  * ## The load-bearing test
  *
@@ -114,10 +129,12 @@ export const CUT_LIST: readonly CutEdge[] = [
     // The `@duya/memory`, `@duya/tooling` and `@duya/connectors` extractions did
     // move host-facing code out of `packages/agent` into declared packages. But
     // the main process reaches those packages by BARE specifier (`@duya/memory`),
-    // and `resolveTarget` cannot see a bare `@duya/*` specifier unless the import
-    // path itself names `dist`: its candidates are built under
+    // and `resolveTarget` cannot see a bare `@duya/*` specifier in any form: it
+    // keeps only the first segment after `@duya/`, builds its candidates under
     // `packages/<x>/` (`<x>.ts`, `<x>/index.ts`, …), and no package in this repo
-    // has a root `index.ts` — every entry is `src/index.ts`. So the 60 that M5.2
+    // has a root `index.ts` — every entry is `src/index.ts`. A `dist` in the
+    // specifier does not help either, because the subpath carrying it is dropped
+    // before the candidates are built (see this file's header). So the 60 that M5.2
     // measured were relative-path crossings into `packages/agent/src`, and what
     // replaced them resolves to nothing. The coupling may well still exist; what
     // shrank is the scanner's view of it. `apps/desktop/src/main` alone carries
