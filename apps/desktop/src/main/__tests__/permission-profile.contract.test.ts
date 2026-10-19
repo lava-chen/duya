@@ -1,23 +1,28 @@
 /**
  * permission-profile.contract.test.ts
  *
- * 强制 apps/desktop/src/main/lib/permission-profile.ts 与 apps/desktop/src/renderer/lib/permission-profile.ts 两份实现同步.
- * 任何函数签名、返回值、常量漂移都会失败.
+ * Forces apps/desktop/src/main/lib/permission-profile.ts and the shared
+ * packages/ui/src/lib/permission-profile.ts implementation to stay in sync
+ * (the renderer copy moved into @duya/ui with the shared-renderer migration,
+ * plan 610/24). Any function signature, return value, or constant drift fails.
  *
- * 两份实现必须保持逐字符相同的纯函数逻辑, 仅文件位置与导入路径不同.
+ * Both implementations must keep character-identical pure-function logic;
+ * only the file location and import paths differ. The test lives next to the
+ * main-process copy because that is the duplicate still being hand-maintained;
+ * importing the ui package from here is a declared desktop-host -> ui edge.
  */
 
 import { describe, it, expect } from 'vitest';
-import * as electronImpl from '../../../../../apps/desktop/src/main/lib/permission-profile';
-import * as rendererImpl from '../permission-profile';
+import * as electronImpl from '../lib/permission-profile';
+import * as uiImpl from '@duya/ui/lib/permission-profile';
 
-describe('permission-profile contract: electron vs renderer', () => {
-  const ELECTRON = electronImpl as typeof rendererImpl;
+describe('permission-profile contract: electron vs shared ui', () => {
+  const ELECTRON = electronImpl as typeof uiImpl;
 
   it('exports the same function names', () => {
     const electronNames = Object.keys(electronImpl).sort();
-    const rendererNames = Object.keys(rendererImpl).sort();
-    expect(electronNames).toEqual(rendererNames);
+    const uiNames = Object.keys(uiImpl).sort();
+    expect(electronNames).toEqual(uiNames);
   });
 
   it('settingsModeToProfile behaves identically for 12 inputs', () => {
@@ -36,7 +41,7 @@ describe('permission-profile contract: electron vs renderer', () => {
       '0',
     ];
     for (const input of cases) {
-      expect(electronImpl.settingsModeToProfile(input)).toBe(rendererImpl.settingsModeToProfile(input));
+      expect(electronImpl.settingsModeToProfile(input)).toBe(uiImpl.settingsModeToProfile(input));
     }
   });
 
@@ -54,35 +59,36 @@ describe('permission-profile contract: electron vs renderer', () => {
       'auto ',
     ];
     for (const input of cases) {
-      expect(electronImpl.profileToAgentMode(input)).toBe(rendererImpl.profileToAgentMode(input));
+      expect(electronImpl.profileToAgentMode(input)).toBe(uiImpl.profileToAgentMode(input));
     }
   });
 
   it('isValidProfile behaves identically', () => {
     const cases: unknown[] = ['default', 'auto', 'full_access', 'garbage', '', null, undefined, 0, true, false, {}, []];
     for (const input of cases) {
-      expect(electronImpl.isValidProfile(input)).toBe(rendererImpl.isValidProfile(input));
+      expect(electronImpl.isValidProfile(input)).toBe(uiImpl.isValidProfile(input));
     }
   });
 
   it('isValidAgentMode behaves identically', () => {
     const cases: unknown[] = ['default', 'auto', 'bypassPermissions', 'garbage', '', null, undefined, 0, true, false, {}, []];
     for (const input of cases) {
-      expect(electronImpl.isValidAgentMode(input)).toBe(rendererImpl.isValidAgentMode(input));
+      expect(electronImpl.isValidAgentMode(input)).toBe(uiImpl.isValidAgentMode(input));
     }
   });
 
   it('VALID_PROFILES / VALID_AGENT_MODES constants are equal', () => {
-    expect(electronImpl.VALID_PROFILES).toEqual(rendererImpl.VALID_PROFILES);
-    expect(electronImpl.VALID_AGENT_MODES).toEqual(rendererImpl.VALID_AGENT_MODES);
+    expect(electronImpl.VALID_PROFILES).toEqual(uiImpl.VALID_PROFILES);
+    expect(electronImpl.VALID_AGENT_MODES).toEqual(uiImpl.VALID_AGENT_MODES);
   });
 
   it('PermissionProfile / AgentPermissionMode types are structurally identical (sanity)', () => {
-    // 类型层不参与运行时, 但用一个运行时检查确保导出在两边一致.
-    expect(typeof electronImpl.settingsModeToProfile).toBe(typeof rendererImpl.settingsModeToProfile);
-    expect(typeof electronImpl.profileToAgentMode).toBe(typeof rendererImpl.profileToAgentMode);
-    expect(typeof electronImpl.isValidProfile).toBe(typeof rendererImpl.isValidProfile);
-    expect(typeof electronImpl.isValidAgentMode).toBe(typeof rendererImpl.isValidAgentMode);
+    // Types do not participate at runtime; a runtime check still proves the
+    // exports exist on both sides.
+    expect(typeof electronImpl.settingsModeToProfile).toBe(typeof uiImpl.settingsModeToProfile);
+    expect(typeof electronImpl.profileToAgentMode).toBe(typeof uiImpl.profileToAgentMode);
+    expect(typeof electronImpl.isValidProfile).toBe(typeof uiImpl.isValidProfile);
+    expect(typeof electronImpl.isValidAgentMode).toBe(typeof uiImpl.isValidAgentMode);
   });
 
   it('all output values are in the documented enum (no drift)', () => {
@@ -91,11 +97,11 @@ describe('permission-profile contract: electron vs renderer', () => {
 
     for (const input of ['bypass', 'auto', 'default', 'garbage', null, undefined] as const) {
       expect(profiles).toContain(electronImpl.settingsModeToProfile(input));
-      expect(profiles).toContain(rendererImpl.settingsModeToProfile(input));
+      expect(profiles).toContain(uiImpl.settingsModeToProfile(input));
     }
     for (const input of ['full_access', 'auto', 'default', 'garbage', null, undefined] as const) {
       expect(modes).toContain(electronImpl.profileToAgentMode(input));
-      expect(modes).toContain(rendererImpl.profileToAgentMode(input));
+      expect(modes).toContain(uiImpl.profileToAgentMode(input));
     }
   });
 });

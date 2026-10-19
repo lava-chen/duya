@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { WorkflowRunStatus } from '../../../../../../apps/desktop/src/main/db/core/workflow-store';
+import type { WorkflowRunStatus } from '@duya/agent-protocol';
 import {
   RUN_UI_STATUSES,
   isRunUiActive,
