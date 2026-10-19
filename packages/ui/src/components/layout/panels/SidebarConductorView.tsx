@@ -17,7 +17,7 @@ import { registerAllElements } from "@duya/conductor/renderer/elements";
 import { useCanvasCaptureRequest } from "@duya/conductor/renderer/hooks/useCanvasCaptureRequest";
 import "@duya/conductor/renderer/widgets";
 import type { CanvasPosition } from "@duya/conductor/renderer/types/conductor";
-import type { PageTab } from "./registry";
+import type { PageTab } from "./page-tab";
 import { useOptionalPanel } from "@/hooks/usePanel";
 import { useConversationStore } from "@/stores/conversation-store";
 import { IconButton } from "@/components/ui/IconButton";

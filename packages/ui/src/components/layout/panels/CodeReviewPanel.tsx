@@ -43,7 +43,7 @@ import {
   type GitCommitInfo,
 } from "@/lib/git-ipc";
 import { useOptionalPanel } from "@/hooks/usePanel";
-import type { PageTab } from "./registry";
+import type { PageTab } from "./page-tab";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";

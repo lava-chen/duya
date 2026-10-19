@@ -40,7 +40,7 @@ import {
 import type { SubagentRunStatus } from '@/lib/subagent-status';
 import { ReadOnlySessionChat } from '@/components/chat/ReadOnlySessionChat';
 import { ArrowSquareOutIcon, ChatCircleIcon } from '@/components/icons';
-import type { PageTab } from './registry';
+import type { PageTab } from './page-tab';
 
 /**
  * Status pill styling. `killed` is deliberately NOT styled like `failed`:

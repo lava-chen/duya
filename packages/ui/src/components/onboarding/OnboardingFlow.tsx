@@ -10,16 +10,10 @@ import { ConfigStep } from "./steps/ConfigStep";
 import { CompleteStep } from "./steps/CompleteStep";
 import type { QuickPreset } from "@/lib/provider-presets";
 import type { ProviderFormData } from "@/components/settings/ProviderConnectDialog";
-import type { Locale } from "@/i18n";
 import { getLocaleFromAcceptLanguage } from "@/i18n";
+import type { OnboardingState } from "./onboarding-state";
 
-export interface OnboardingState {
-  locale: Locale;
-  selectedPreset: QuickPreset | null;
-  apiKey: string;
-  selectedModel: string;
-  selectedModels: string[];
-}
+export type { OnboardingState } from "./onboarding-state";
 
 interface OnboardingFlowProps {
   onComplete?: () => void;

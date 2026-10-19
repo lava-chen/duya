@@ -5,7 +5,7 @@ import { useMemo, type ReactNode } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useOptionalPanel } from "@/hooks/usePanel";
 import { FileTreePanel } from "./FileTreePanel";
-import type { PageTab } from "./registry";
+import type { PageTab } from "./page-tab";
 
 export function PanelFileTreeSplit({
   workingDirectory,

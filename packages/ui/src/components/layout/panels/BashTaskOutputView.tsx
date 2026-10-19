@@ -20,7 +20,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { useBashTaskOutput } from '@/hooks/useBashTaskOutput';
 import { useBashTasks } from '@/hooks/useBashTasks';
 import type { BashBackgroundTaskSnapshot } from '@/types';
-import type { PageTab } from './registry';
+import type { PageTab } from './page-tab';
 
 const FOLLOW_BOTTOM_EPSILON_PX = 8;
 

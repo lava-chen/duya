@@ -17,7 +17,7 @@ import {
 } from "@/components/file-tree";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
-import type { PageId, PageTab } from "./registry";
+import type { PageId, PageTab } from "./page-tab";
 import { useOptionalPanel } from "@/hooks/usePanel";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";

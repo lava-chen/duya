@@ -26,7 +26,7 @@ import {
 import { useOptionalPanel } from "@/hooks/usePanel";
 import { useTheme } from "@/hooks/useTheme";
 import { useTranslation } from "@/hooks/useTranslation";
-import type { PageTab } from "./registry";
+import type { PageTab } from "./page-tab";
 
 interface PreviewPayload {
   success: boolean;

@@ -18,7 +18,7 @@ import {
 import { usePanel } from "@/hooks/usePanel";
 import { useSettings } from "@/hooks/useSettings";
 import { useTranslation } from "@/hooks/useTranslation";
-import type { PageTab } from "./registry";
+import type { PageTab } from "./page-tab";
 import { AgentBrowserTab } from "./AgentBrowserTab";
 import { IconButton } from "@/components/ui/IconButton";
 import { NewTabPage } from "@/components/browser/NewTabPage";

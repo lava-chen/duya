@@ -40,7 +40,7 @@ import {
 } from "@/stores/terminal-appearance-store";
 import { TERMINAL_THEME_PRESETS, resolveTerminalTheme } from "@/lib/terminal-themes";
 import { BashTaskOutputView } from "./BashTaskOutputView";
-import type { PageTab } from "./registry";
+import type { PageTab } from "./page-tab";
 
 interface Props {
   tab: PageTab;

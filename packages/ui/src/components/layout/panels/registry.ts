@@ -15,6 +15,7 @@ import {
   type IconProps,
 } from "@/components/icons";
 import type { TranslationKey } from "@/i18n";
+import type { PageId, PageTab } from "./page-tab";
 import { FileTreePanel } from "./FileTreePanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { BrowserPanel } from "./BrowserPanel";
@@ -39,15 +40,7 @@ const SessionMessagesPanel = lazy(() =>
   import("./SessionMessagesPanel").then((m) => ({ default: m.SessionMessagesPanel }))
 );
 
-export type PageId = "files" | "preview" | "review" | "workflow" | "conductor" | "terminal" | "browser" | "bot-settings" | "room-settings" | "session-messages";
-
-export interface PageTab {
-  id: string;
-  pageId: PageId;
-  title: string;
-  favicon?: string;
-  params?: Record<string, unknown>;
-}
+export type { PageId, PageTab } from "./page-tab";
 
 export interface PageDescriptor {
   id: PageId;

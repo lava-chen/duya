@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { useSettings } from "@/hooks/useSettings";
 import { QUICK_PRESETS } from "@/lib/provider-presets";
-import type { OnboardingState } from "../OnboardingFlow";
+import type { OnboardingState } from "../onboarding-state";
 import type { QuickPreset } from "@/lib/provider-presets";
 import { PresetIcon } from "@/components/settings/PresetIcon";
 import { ProviderConnectDialog, type ProviderFormData } from "@/components/settings/ProviderConnectDialog";

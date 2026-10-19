@@ -44,7 +44,7 @@ import { BotAvatarEditor } from "../BotAvatarEditor";
 import { AutoResizeTextarea } from "../../ui/AutoResizeTextarea";
 import type { BotContact } from "../sidebar/bot-contacts";
 import { BotRoutinesSection } from "./BotRoutinesSection";
-import type { PageTab } from "./registry";
+import type { PageTab } from "./page-tab";
 
 /** Narrow adapter: the panel only ever receives its own params shape. */
 function agentIdFromParams(params: Record<string, unknown> | undefined): string | null {

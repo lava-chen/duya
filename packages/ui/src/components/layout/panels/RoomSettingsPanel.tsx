@@ -28,7 +28,7 @@ import { BotCharacterAvatar } from "@/components/layout/sidebar/BotCharacterAvat
 import { useTranslation } from "@/hooks/useTranslation";
 import { listBots, type BotListItem } from "@/lib/agent-profile-ipc";
 import { GROUP_MEMBER_MAX } from "@/lib/room-session";
-import type { PageTab } from "./registry";
+import type { PageTab } from "./page-tab";
 
 /** Narrow adapter: the panel only ever receives its own params shape. */
 function roomIdFromParams(params: Record<string, unknown> | undefined): string | null {
