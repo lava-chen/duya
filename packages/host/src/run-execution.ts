@@ -61,6 +61,7 @@ import { normalizeWorkerEvent } from './worker-frames.js';
 import { WorkerPermissionRequests } from './worker-permission-requests.js';
 import { LiveRunEventHub } from './live-run-event-hub.js';
 import type { SessionServiceCaller } from './session-service.js';
+import type { ChildProcess } from 'node:child_process';
 
 /** Serves the worker's `db:request` frames from Host-owned stores. */
 export interface WorkerDbBridge {
@@ -249,8 +250,8 @@ export class HostRunExecutionController {
       : new WorkerPermissionRequests(options.permissionRequests,
         (sessionId, message) => this.#workerManager.sendCommand(sessionId, message),
         (sessionId, runId) => !this.#cancellingRuns.has(runId) && this.#orchestrator.runForSession(sessionId) === runId);
-    this.#workerManager.setMessageHandler((sessionId, msg) => {
-      void this.#onWorkerMessage(sessionId, msg).catch((error: unknown) => {
+    this.#workerManager.setMessageHandler((sessionId, msg, child) => {
+      void this.#onWorkerMessage(sessionId, msg, child).catch((error: unknown) => {
         this.#options.logger.error('Worker event handling failed', error instanceof Error ? error : new Error(String(error)), { sessionId });
       });
     });
@@ -413,10 +414,17 @@ export class HostRunExecutionController {
     }
   }
 
-  async #serveDbRequest(sessionId: string, msg: Record<string, unknown>): Promise<void> {
+  async #serveDbRequest(sessionId: string, msg: Record<string, unknown>, source: ChildProcess): Promise<void> {
     const id = msg.id as string;
-    const worker = this.#workerManager.getWorker(sessionId);
+    const worker = source;
     try {
+      if (worker !== this.#workerManager.getWorker(sessionId) && msg.action === 'message:append') {
+        worker.send({
+          type: 'db:response', id, success: false, code: 'superseded_worker',
+          error: 'Transcript append from a superseded worker is refused.',
+        });
+        return;
+      }
       let caller: SessionServiceCaller | undefined;
       if (typeof msg.action === 'string' && msg.action.startsWith('session:spawn')) {
         const raw = msg.execution;
@@ -430,6 +438,17 @@ export class HostRunExecutionController {
         }
         caller = { sessionId, runId: value.runId, epoch: value.epoch as number };
         this.validateSessionCaller(caller);
+      } else {
+        // The worker process is bound to one session, but the run that owns it
+        // is Host state. Derive the caller here so durable writes carry the
+        // owning run identity without trusting the worker payload. A worker
+        // serving work between runs has no live run and stays unstamped.
+        const liveRunId = this.#orchestrator.runForSession(sessionId);
+        const liveEpoch = liveRunId === null ? null : this.#options.runs.currentEpoch(liveRunId);
+        if (liveRunId !== null && liveEpoch !== null &&
+            this.#options.runs.getRun(liveRunId)?.status === 'running') {
+          caller = { sessionId, runId: liveRunId, epoch: liveEpoch };
+        }
       }
       const result = await this.#options.bridge.dispatch(
         String(msg.action ?? ''),
@@ -447,10 +466,10 @@ export class HostRunExecutionController {
     }
   }
 
-  async #onWorkerMessage(sessionId: string, msg: Record<string, unknown>): Promise<void> {
+  async #onWorkerMessage(sessionId: string, msg: Record<string, unknown>, source: ChildProcess): Promise<void> {
     const type = msg.type;
     if (type === 'db:request') {
-      await this.#serveDbRequest(sessionId, msg);
+      await this.#serveDbRequest(sessionId, msg, source);
       return;
     }
 
