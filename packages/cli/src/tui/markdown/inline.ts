@@ -241,10 +241,15 @@ function parseLinkTarget(
  */
 const PROBE_SENTINEL = '\u0000';
 
-function probePair(emit: (s: string) => string): { open: string; close: string } {
+/** Extract the bare `{tag}` / `{/tag}` pair behind one style function. */
+export function rawTagPair(emit: (s: string) => string): { open: string; close: string } {
   const wrapped = emit(PROBE_SENTINEL);
   const at = wrapped.indexOf(PROBE_SENTINEL);
   return { open: wrapped.slice(0, at), close: wrapped.slice(at + PROBE_SENTINEL.length) };
+}
+
+function probePair(emit: (s: string) => string): { open: string; close: string } {
+  return rawTagPair(emit);
 }
 
 /**
