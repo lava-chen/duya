@@ -21,9 +21,13 @@
  *    their size is an artefact of what the scanner currently counts. An SCC
  *    figure is a measurement of a scan, not a target. Naming one as a goal
  *    would be promising a number this slice has no mechanism to move.
- *  - **No `cycle` count promise.** `architecture:check` reports `cycle 16`; that
- *    is a baseline fingerprint count, and it moves when the RESOLVER changes as
- *    well as when the code does.
+ *  - **No `cycle` count promise.** `architecture:check` reports a `cycle`
+ *    fingerprint count, and it moves when the RESOLVER changes as well as when
+ *    the code does. The figure this file carried when it was written was 16; run
+ *    against this tree on 2026-10-20 the same gate prints `cycle 2`, with no
+ *    cycle-cutting work in between and no ladder of intermediate measurements to
+ *    explain the gap. That is itself the argument for naming no cycle target
+ *    here — the number answers to the scanner before it answers to the code.
  *  - **Every count here is a count of what the resolver can see, and the
  *    resolver cannot see a bare specifier at all.** `resolveTarget`
  *    (`import-graph.mjs:283`) maps `@duya/<rest>` to `packages/<first segment of
