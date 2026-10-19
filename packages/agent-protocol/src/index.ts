@@ -80,6 +80,7 @@ export * from './send-message-state.js';
 export * from './model-capabilities.js';
 export * from './app-connections.js';
 export * from './plugin-setup.js';
+export * from './plugin-app-instances.js';
 export * from './workbench.js';
 export * from './computer-use.js';
 export * from './import-batches.js';

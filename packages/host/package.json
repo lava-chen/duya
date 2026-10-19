@@ -111,6 +111,10 @@
       "types": "./dist/local-plugin-setup-api.d.ts",
       "import": "./dist/local-plugin-setup-api.js"
     },
+    "./local-plugin-app-instance-api": {
+      "types": "./dist/local-plugin-app-instance-api.d.ts",
+      "import": "./dist/local-plugin-app-instance-api.js"
+    },
     "./local-workbench-api": {
       "types": "./dist/local-workbench-api.d.ts",
       "import": "./dist/local-workbench-api.js"
