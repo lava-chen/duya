@@ -170,11 +170,14 @@ App (id: root)
 
 ## 7. Phases
 
-- [ ] **Phase 0 — 基准基线 + own 转默认（吸收 614 Phase 6）**
-  - [ ] 0.1 `tui/__tests__/perf/` 基准 harness：伪造 PTY 输入流 + 高分辨率时钟，测输入→首字节绘制、流式帧间隔分布、10k block `totalLines()+paint` 耗时；Windows ConPTY 为第一环境
+- [x] **Phase 0 — 基准基线 + own 转默认（吸收 614 Phase 6）**
+  - [x] 0.1 `tui/__tests__/perf/` 基准 harness：伪造 PTY 输入流 + 高分辨率时钟，测输入→首字节绘制、流式帧间隔分布、10k block `totalLines()+paint` 耗时；Windows ConPTY 为第一环境
+    - **执行记录（2026-10-19）**：`perf/harness.ts`（`tapOutput` 帧探针 / `makeHarness` / `measureInputLatency` / `measureStreamFrames` / `buildDocument`）+ `perf/baseline.test.ts`（4 条）。刻意为**不变量测试而非阈值测试** —— 阈值会把慢机器变成假红，数字靠 `DUYA_PERF_BASELINE=1` 输出、写进 §8.1、跨 Phase 比较。
+    - 实测踩到的三个坑，都已固化进 harness 注释：① `SYNC_BEGIN` 在 `paint()` 开头就写了，以它为准测的是「调度器决定画」不是「用户看到」，故 dispatch/painted 两栏分列；② 像素落在 `SYNC_END` **之后**（blessed 走 `nextTick`、own 走微任务），字节数必须跨到下一帧的 `SYNC_BEGIN`；③ 空会话帧只有 ~200 字节，延迟数测的是 `write()` 空转，故先 prefill 40 块 × 6 行再采样。
   - [x] 0.2 614 Phase 6 全量执行：own 转默认（`factory.ts:18` 翻转 + `screen-surface.test.ts` 断言更新）+ italic/strike 五处同改（614 D9 清单）+ `renderOptionsKey`/`/settings` help 文本
     - **执行记录（2026-10-19，worktree `plan-615-tui`）**：`selectScreenRenderer` 默认翻转，`DUYA_TUI_RENDERER=blessed` 为回滚开关。italic/strike 落地形态与 614 D9 清单的偏差：blessed 0.1.81 的 `program._attr` **没有** italic 分支（`{italic}` 会按未知 tag 原样输出），所以不是「五处都加标签」，而是——`own/markup.ts`（ATTRIBUTES `italic:'3'`/`strike:'9'` + Style 三布尔 + effective/sgrParameters，属性序 bold→italic→strike→fg）、`terminal/sgr.ts`（on=3/9，off=配对复位 23/29）两链直发；`transcript-view.ts` 加 `RenderOptions.renderer` + `Styles.renderer/italic/strike`，**markdown 映射点按 renderer 分支**：own 发真标签，blessed（含 renderer 未注入的历史调用方）保持 614 的折叠字节不变（emphasis→accent、strike→muted、thinking 折叠），`inline.ts`/`thinkingRows` 落分支。`transcript-cache` key 加 renderer 槽位；`TUIApp.renderOptions()` 注入 `this.renderer`。help 文本未加（blessed 回滚路径 italic 显示为字面 tag 的问题记录在案，随 D7 冻结/删除一并消失）。门禁：tsc -b 绿 + 相关 10 个测试文件 131/131 绿；packages/cli 全量见下一条执行记录。
-  - [ ] 0.3 基线数字写回本计划 §8（V8/V9/V10 的「现状→目标」两栏）
+  - [x] 0.3 基线数字写回本计划 §8（V8/V9/V10 的「现状→目标」两栏）
+    - 已完成：V3/V4/V5 的「现状」栏填实数并新增 §8.1（含测法、三点读数说明）。V8/V9/V10 保持原样 —— 它们不是基线指标（V8 是 Phase 5 的对拍结果、V9 靠测试迁移、V10 靠真机截图），Phase 0 能给它们的只有 V9 的「现状=通过」，已在原先填好。
   - **翻转暴露的 parity 缺口（2026-10-19，Phase 0 剩余工作）**：own 转默认后 packages/cli 全量 20 红中，5 条是 OwnScreenSurface 的真实缺口（其余为已知存量红 worker-path×3 / registry×1 / chat-tui bundle 环境红×2，及 host-event-projection 未入 worktree 的差集）：
     1. `tui-foundation` 2/3 行输入：own 的 `measure('input')` 不做低行数 composer 钳制（返回 5/6，期望 ≤rows-1）；blessed 在 2 行时丢边框。
     2. `tui-app-integration` ×2：own 全屏帧缺 slash echo 文本（`/effort`）与 help 面板内容（`~/.duya/config.toml`）——echo/overlay 内容未进 own 的帧缓冲。
@@ -232,14 +235,34 @@ App (id: root)
 |---|---|---|---|---|
 | V1 | 同一 token 树经 Span 与标签两条路径 glyph 等价 | Phase 1 parity 对拍 | 标签单路 | 双路等价 |
 | V2 | blessed 不再出现在运行时输入/绘制路径 | Phase 2/5 后 grep import + parity | `TUIApp.ts:38` | 仅 blessed-surface |
-| V3 | 键盘输入→绘制 P95 | Phase 0/7 基准 | 待测 | <30ms |
-| V4 | 流式帧间隔 | 同上 | trailing-edge 机制在 | ≥30FPS 等效 |
-| V5 | 10k block 滚动 paint 复杂度 | Phase 4 合成测试 | 缓存已有、裁剪无 | O(visible) |
+| V3 | 键盘输入→绘制 P95 | Phase 0/7 基准 | own 32.0ms / blessed 48.5ms（见 §8.1） | <30ms |
+| V4 | 流式帧间隔 | 同上 | own p50 76.6ms / p95 79.4ms；blessed p50 77.2 / p95 83.9（同一 trailing-edge 机制） | ≥30FPS 等效 |
+| V5 | 10k block 滚动 paint 复杂度 | Phase 4 合成测试 | `totalLines()` 线性（2000 块 91ms，10× 块数 8× 时间）；二次测量 0 miss / 301 hit | O(visible) |
 | V6 | 非可视 Block 零 Markdown 重渲染 | transcript-cache stats（hits/misses 已有） | 部分 | 断言钉死 |
 | V7 | 交互语义零变化 | Phase 6 全量测试零断言改动 | — | 零改动 |
 | V8 | 双模式同一 RenderScene | Phase 5 对拍 | 两套内核 | 一套管线 |
 | V9 | IME/中文/宽字符回归 | Phase 2 既有 width/编辑器测试迁移 + 真机 | 通过 | 通过 |
 | V10 | 真机三环境截图对照 | Phase 7 | — | 无可见 tag、无错位、IME 正常 |
+
+### 8.1 Phase 0 基准数字（2026-10-19，Windows ConPTY 宿主，worktree `plan-615-tui`）
+
+测法：`DUYA_PERF_BASELINE=1 node node_modules/vitest/vitest.mjs run packages/cli/src/tui/__tests__/perf/baseline.test.ts`。下表是**连跑三次的中位**；三次之间离散度 <2%（V3）与 <5%（V4），可作为 Phase 7 复测的对照。
+
+| 指标 | own（新默认） | blessed（回滚路径） | 测的是什么 |
+|---|---|---|---|
+| V3 dispatch P50 / P95 | 0.22 / 0.47ms | 0.29 / 0.91ms | 输入事件 → `paint()` 开始写帧。证明 `requestImmediate` 绕过节流 |
+| V3 painted P50 / P95 | **30.8 / 32.0ms** | **46.0 / 48.5ms** | 输入事件 → 本帧最后一个字节到达流。用户真实感知的那段时间 |
+| V3 单帧字符数 P50 | 1843 | 2004 | 40 块 × 6 行 prefill 后的一次输入帧 |
+| V4 帧间隔 P50 / P95 | 76.6 / 79.4ms | 77.2 / 83.9ms | 60 delta 流；两侧都在节流周期上，`withinInterval = 1.0` |
+| V5 `totalLines()` 200 / 2000 块 | 11.4ms / 90.9ms | 同一实现（`transcript-cache` 无分支） | 冷缓存一次全量布局：2199 / 21999 行 |
+| V5 热缓存二次测量 | 0 miss / 301 hit，0.8ms | 同上 | 文档不变时零 Markdown 重渲染（V6 的可测雏形） |
+
+三点读数说明：
+
+- **V3 的 30ms 是 paint 成本，不是策略成本。** dispatch 只有 0.2ms，说明节流被正确绕过；30ms 全花在组帧 + 写 ~1.8KB。own 比 blessed 快约 33%，这是本次切换的净收益，也是 `<30ms` 目标还没达成的原因 —— 差额要靠 Phase 3/4 的树形 measure 与视口裁剪，不是靠调调度器。
+- **V4 两侧都是 76–79ms**，等于 `MIN_RENDER_INTERVAL_MS`（70ms）加定时器粒度。这不是达标 30FPS（33ms），而是**节流常量本身决定的**：要 30FPS 必须把常量降到 33ms 以下，那是一次独立的性能决策，Phase 0 不代做。
+- **帧字节数必须跨 `SYNC_END` 统计。** 两个 renderer 都不在 `SYNC_BEGIN`…`SYNC_END` 之间写像素（blessed 缓冲到 `_buf` 等 `nextTick`，own 走微任务），所以按标记内区间统计会得到 0；harness 因此从一帧的 `SYNC_BEGIN` 统计到下一帧的 `SYNC_BEGIN`。
+
 
 ## 9. 依赖与风险
 
