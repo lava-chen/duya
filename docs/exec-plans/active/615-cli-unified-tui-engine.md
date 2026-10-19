@@ -330,10 +330,16 @@ App (id: root)
     - **裁定：No-Go（降级 backlog），依据实测而非阈值**。见 §4 D6 的裁定栏：行内变更占比 6.9%（看起来值得做），但 `renderViewportFrame` 只花 0.0067ms/帧、整帧 30.8ms —— 写入路径不到帧成本的 0.03%，省下的字节是噪声。
   - 门禁：`tsc -b --force` 绿；`tui` 876/876；`packages/cli` 1095/1103，8 红与 Phase 4 完全一致；`render-parity.test.ts` 新增对拍「同一批行，own 吃 spans、blessed 吃 tags，字形逐格相等」；`working-tail` / `inline-mode` 既有测试通过（`working-tail` 零改动：它直接调 `tagsToAnsi`）。
 
-- [ ] **Phase 6 — 全量组件化 + TUIApp 瘦身（I6）**
-  - [ ] 6.1 Transcript/ToolView/Composer（InputEditor 保留，外壳上树）逐个迁移，每迁一个删一段 TUIApp 手工拼装
+- [~] **Phase 6 — 全量组件化 + TUIApp 瘦身（I6）**
+  - [~] 6.1 Transcript/ToolView/Composer（InputEditor 保留，外壳上树）逐个迁移，每迁一个删一段 TUIApp 手工拼装
+    - [x] **Transcript**：`TranscriptPane` 接管组装缓存（`lines()` 按 `revision|optionsKey` 记忆，返回**同一个数组**）+ 窗口查询（`visibleLines()`），`TUIApp.paintTranscript` 从 37 行降到 24 行且不再有 `maxStart / clamp / slice` 那套算术 → `visibleWindow()` 终于进生产路径（Phase 4 明确延后的那一项）。`cachedTranscriptLines` 字段与 `renderOptionsKey` 本地副本一并删除，后者落到 `transcript-cache.ts`（它描述的是缓存键，本来就该在缓存旁边）。
+    - [x] **Activity**：`components/activity.ts::ActivityTracker` 接管 `activityPhase/activityMessage/groupActivity/waitingForPermission/activeTools/activeAgents` 六个字段与 113 行 `updateActivity`；`TUIApp` 只剩 `updateActivity` 的 8 行委派 + `waitingForPermission` 的存取器。`turn_start` 的 effort 留在 app（那是 composer 边框的属性，不是活动行的）。`frameRecord/frameString` 移入 `blocks.ts` 供两处共用（原来两份实现，一份接受数组、一份不接受）。
+    - [ ] **ToolView**（`tool-render.ts` 的预览已在块渲染器内，未上树）
+    - [ ] **Composer**（`paintInput` / `paintDockPanel` / `colorComposerRules` 仍手工拼装，约 105 行）
   - [ ] 6.2 TUIApp 收敛为：action dispatcher + composition root + focus 管理；目标 < 1200 行（写死数字防漂移）
-  - 门禁：TUI 全量测试零断言改动（交互语义冻结的证明）
+    - **偏差记录（不改目标值）**：本轮实测 **3441 → 3300 行（−141，−4.1%）**，距 1200 未达成。原因不是时间，是**剩余的 2100 行没有一个是"拼装"**——按职责分块实测：`bindKeys` 及键路由 397 行（输入分发）、`paint*` 系列 496 行（chrome 组合，含 status/footer/completion/overlay/prompt）、`scheduleRender` + `replaceTranscript` + 生命周期 380 行、选项解析与 completion 桥接 300 行。抽任何一块都需要给 `TUIApp` 的 ~35 个私有成员定义一个宿主接口，而把 35 个私有成员升成 public 换取行数是**净损失**（封装是这轮改造要保的东西之一）。
+    - **结论**：1200 行是"职责边界"指标，不是"抽函数"指标。达成它要求先把输入分发（398 行）与 chrome 组合（496 行）拆成两个真正的子系统（各自持有状态），那是一次独立计划的量级；本轮把两块**已经存在的**组件接进生产路径，是为那次拆分清场。
+  - 门禁：TUI 全量测试零断言改动（交互语义冻结的证明）— **已达成**：`tui` 876 → 885 全绿，0 处既有断言改动；`packages/cli` 1104 条里 1096 通过，8 红与 Phase 5 完全一致（worker-path×3 / tui-pty×2 / registry×1 / host-stop-continue×2）。
 
 - [ ] **Phase 7 — blessed 退役 + 终验（I8，D7③）**
   - [ ] 7.1 删 `blessed-surface.ts`、`blessed-unicode.ts`、TUIApp blessed import、package.json 依赖

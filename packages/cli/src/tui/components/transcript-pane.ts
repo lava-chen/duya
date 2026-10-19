@@ -27,7 +27,7 @@
 
 import type { RenderOptions } from '../transcript-view.js';
 import type { TranscriptModel } from '../blocks.js';
-import type { TranscriptRenderer } from '../transcript-cache.js';
+import { renderOptionsKey, type TranscriptRenderer } from '../transcript-cache.js';
 import { visibleWindow, type VisibleWindow } from '../core/visible-window.js';
 import type { SceneCanvas, UIComponent, Viewport } from '../core/component.js';
 
@@ -38,6 +38,12 @@ export interface TranscriptPaneProps {
   readonly options: RenderOptions;
   /** How far back from the newest line the reader has scrolled. 0 = follow. */
   readonly scrollLines: number;
+  /**
+   * Bumped by the owner whenever the document changed in a way the options key
+   * cannot see — a commit, a clear, a replay. Optional so a one-shot caller
+   * (tests, a static render) need not know about it.
+   */
+  readonly revision?: number;
 }
 
 export class TranscriptPane implements UIComponent<TranscriptPaneProps> {
@@ -46,6 +52,16 @@ export class TranscriptPane implements UIComponent<TranscriptPaneProps> {
   revision = 0;
   /** Blocks the last `paint` touched. The O(visible) claim, measured. */
   readonly stats = { blocksPainted: 0, linesPainted: 0 };
+  /**
+   * The assembled document, memoised on (revision, options key).
+   *
+   * This is the cache `TUIApp` used to keep as an ad-hoc field next to its paint
+   * method. It belongs here because the pane is the only thing that knows what
+   * the document IS: `TranscriptRenderer` caches per block, but concatenating
+   * 10k of them is O(document) work that a streaming frame must not repeat 60
+   * times a second for a transcript that did not change.
+   */
+  private document: { readonly key: string; readonly lines: readonly string[] } | null = null;
 
   constructor(props: TranscriptPaneProps, id = 'transcript') {
     this.id = id;
@@ -55,6 +71,28 @@ export class TranscriptPane implements UIComponent<TranscriptPaneProps> {
   /** The document height: what the pane would take if nothing competed for rows. */
   measure(width: number): number {
     return this.props.renderer.totalLines(this.props.model, this.optionsFor(width));
+  }
+
+  /** Every line of the document, assembled once per (revision, options) pair. */
+  lines(width: number): readonly string[] {
+    const options = this.optionsFor(width);
+    const key = `${this.props.revision ?? 0}|${renderOptionsKey(options, options.width ?? 0)}`;
+    if (this.document !== null && this.document.key === key) return this.document.lines;
+    const lines = this.props.renderer.lines(this.props.model, options);
+    this.document = { key, lines };
+    return lines;
+  }
+
+  /**
+   * The rows a viewport of `rows` shows, newest first when following.
+   *
+   * Slicing the assembled document rather than re-deriving it is what keeps a
+   * scroll from re-rendering Markdown: the window moves, the lines do not.
+   */
+  visibleLines(width: number, rows: number): readonly string[] {
+    const lines = this.lines(width);
+    const window = this.window(width, rows);
+    return lines.slice(window.lineStart, window.lineEnd);
   }
 
   /** The window for a given viewport height — the same answer for both modes. */

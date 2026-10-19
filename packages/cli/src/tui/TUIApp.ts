@@ -45,14 +45,16 @@ import {
   type ScreenRenderer,
   type ScreenSurface,
 } from './screen/index.js';
-import { TranscriptModel, readBlockKey, type LegacyFrame, type Block } from './blocks.js';
+import { frameRecord, frameString, TranscriptModel, readBlockKey, type LegacyFrame, type Block } from './blocks.js';
+import { ActivityTracker } from './components/activity.js';
+import { TranscriptPane } from './components/transcript-pane.js';
 import { DeltaBuffer, DEFAULT_STALE_MS } from './delta-buffer.js';
 import { RenderScheduler } from './render-scheduler.js';
 import { Pacer } from './pacer.js';
 import { PasteBurstDetector } from './paste-burst.js';
 import { InputEditor } from './editor.js';
 import { OverlayState, isDestructiveRequest, type PermissionDecision, type QuestionAnswers } from './overlay.js';
-import { escapeTags, stylesOf, type RenderOptions } from './transcript-view.js';
+import { DEFAULT_RENDER_OPTIONS, escapeTags, stylesOf, type RenderOptions } from './transcript-view.js';
 import { TranscriptRenderer } from './transcript-cache.js';
 import type { EscapeSafeWriter } from './bounded-writer.js';
 import { TerminalSession } from './terminal/session.js';
@@ -151,7 +153,6 @@ const EMPTY_COMPLETION_SOURCES: CompletionSources = {
   files: () => [],
 };
 
-type ActivityPhase = 'ready' | 'working' | 'thinking' | 'responding' | 'compacting' | 'complete' | 'failed';
 
 /** A row in a keyboard-driven modal picker. */
 export interface TuiChoice {
@@ -176,32 +177,6 @@ type InteractivePrompt =
   | { kind: 'text'; title: string; value: string; cursor: number; secret: boolean; placeholder: string };
 
 const PROMPT_VISIBLE_CHOICES = 9;
-
-function frameRecord(value: unknown): Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-function frameString(record: Record<string, unknown>, key: string): string {
-  return typeof record[key] === 'string' ? record[key] as string : '';
-}
-
-function renderOptionsKey(options: RenderOptions, width: number): string {
-  const ids = (values: ReadonlySet<string> | undefined): string[] =>
-    [...(values ?? [])].sort();
-  return JSON.stringify({
-    width,
-    expanded: options.expanded,
-    showToolResults: options.showToolResults,
-    toolResultLines: options.toolResultLines,
-    expandedBlockIds: ids(options.expandedBlockIds),
-    collapsedBlockIds: ids(options.collapsedBlockIds),
-    showThinking: options.showThinking !== false,
-    selectedBlockId: options.selectedBlockId ?? null,
-    theme: options.theme ?? null,
-  });
-}
 
 /** Where the synchronized-output markers are written. */
 /**
@@ -492,25 +467,44 @@ export class TUIApp {
    * re-renders only the block that actually changed.
    */
   private readonly transcript = new TranscriptRenderer();
-  /** Lines assembled for the last private model revision and render options. */
+  /**
+   * The transcript as a retained component.
+   *
+   * It owns the assembled-document cache and the windowing query, which used to
+   * be a pair of fields here plus arithmetic repeated in `paintTranscript`. The
+   * props are reassigned each frame; nothing else about it is per-frame state.
+   */
+  private readonly transcriptPane = new TranscriptPane({
+    renderer: this.transcript,
+    model: this.model,
+    options: DEFAULT_RENDER_OPTIONS,
+    scrollLines: 0,
+  });
+  /** Bumped on any private model change the options key cannot observe. */
   private transcriptRevision = 0;
-  private cachedTranscriptLines: {
-    readonly revision: number;
-    readonly optionsKey: string;
-    readonly lines: string[];
-  } | null = null;
   private lastCtrlCAt = Number.NEGATIVE_INFINITY;
   private running = false;
   /** Lines committed to the model but not yet accounted for by a render. */
   private queuedLines = 0;
   private oldestQueuedAt = Number.NEGATIVE_INFINITY;
   private busy = false;
-  private activityPhase: ActivityPhase = 'ready';
-  private activityMessage = '';
-  private groupActivity = '';
-  private waitingForPermission = false;
-  private readonly activeTools = new Map<string, { name: string; elapsedSeconds: number | null }>();
-  private readonly activeAgents = new Map<string, string>();
+  /**
+   * Who is doing what, right now. Owns the run-fact state machine; this class
+   * only decides when to repaint it (plan 615 Phase 6).
+   */
+  private readonly activity = new ActivityTracker();
+
+  /**
+   * Whether a modal owns the input. Stored on the tracker (it decides the label)
+   * and re-exposed here so the twenty call sites that ask the TUI stay readable.
+   */
+  private get waitingForPermission(): boolean {
+    return this.activity.waitingForPermission;
+  }
+
+  private set waitingForPermission(value: boolean) {
+    this.activity.waitingForPermission = value;
+  }
   /**
    * The working tail's spinner.
    *
@@ -1229,44 +1223,38 @@ export class TUIApp {
   /** Invalidate the assembled lines after a private transcript-model change. */
   private noteTranscriptMutation(): void {
     this.transcriptRevision += 1;
-    this.cachedTranscriptLines = null;
   }
 
+  /**
+   * Hand the pane this frame's inputs, then paint what it answers.
+   *
+   * The windowing arithmetic that used to live here (maxStart, clamp, slice) is
+   * `visibleWindow()` behind the pane now. Keeping it here meant the inline path
+   * had to re-express the same decision as a `viewEnd` offset, and two
+   * expressions of "which line is on top" is exactly the disagreement plan 615
+   * Phase 4 set out to remove.
+   */
   private paintTranscript(): void {
-    const options = this.renderOptions();
-    const optionsKey = renderOptionsKey(options, this.terminalSize().columns);
-    let lines: string[];
-    if (
-      this.cachedTranscriptLines?.revision === this.transcriptRevision &&
-      this.cachedTranscriptLines.optionsKey === optionsKey
-    ) {
-      lines = this.cachedTranscriptLines.lines;
-    } else {
-      lines = this.transcript.lines(this.model, options);
-      this.cachedTranscriptLines = {
-        revision: this.transcriptRevision,
-        optionsKey,
-        lines,
-      };
-    }
+    const width = this.terminalSize().columns;
+    const pane = this.transcriptPane;
+    pane.props = {
+      renderer: this.transcript,
+      model: this.model,
+      options: this.renderOptions(),
+      scrollLines: this.scrollLines,
+      revision: this.transcriptRevision,
+    };
     if (this.inlineSurface !== null) {
       // The WHOLE transcript, unwindowed. Deciding what the live area shows and
       // committing the rest to scrollback is the surface's job, and it cannot do
       // either if the transcript arrives pre-sliced: "which rows scrolled off" is
       // exactly the information that slicing destroys.
-      this.inlineTranscriptLines = lines;
+      this.inlineTranscriptLines = [...pane.lines(width)];
       return;
     }
-    const rows = this.visibleTranscriptRows();
-    // The window ends at the last line and only drops lines from the top, so
-    // "following" is the state where `scrollLines` is 0 rather than a special
-    // case. That is what stops a streaming answer from ending up with its
-    // newest lines stranded below the fold.
-    const maxStart = Math.max(0, lines.length - rows);
-    const start = Math.max(0, Math.min(maxStart, maxStart - this.scrollLines));
     this.fullScreen.update('transcript', {
       borderColor: this.focus === 'transcript' ? 'cyan' : 'gray',
-      lines: lines.slice(start),
+      lines: [...pane.visibleLines(width, this.visibleTranscriptRows())],
     });
   }
 
@@ -1720,157 +1708,28 @@ export class TUIApp {
 
   /** Show the most useful live activity without adding one transcript row per tick. */
   private activityLabel(busy: boolean): string {
-    if (this.waitingForPermission) return 'Waiting for approval';
-
-    const tools = [...this.activeTools.values()];
-    const tool = tools[tools.length - 1];
-    const agents = [...this.activeAgents.values()];
-    const agent = agents[agents.length - 1];
-    if (tool !== undefined) {
-      const elapsed = tool.elapsedSeconds === null || tool.elapsedSeconds < 1
-        ? ''
-        : ` (${Math.floor(tool.elapsedSeconds)}s)`;
-      const agentLabel = agent === undefined ? '' : ` / ${agent}`;
-      return compactActivity(`${tool.name}${elapsed}${agentLabel}`);
-    }
-    if (agent !== undefined) {
-      const count = agents.length > 1 ? `+${agents.length - 1} ` : '';
-      return compactActivity(`${count}${agent} working`);
-    }
-    if (this.groupActivity !== '') return compactActivity(this.groupActivity);
-    if (this.activityMessage !== '') return compactActivity(this.activityMessage);
-
-    switch (this.activityPhase) {
-      case 'thinking': return 'Thinking';
-      case 'responding': return 'Writing response';
-      case 'compacting': return 'Compacting context';
-      case 'complete': return 'Completed';
-      case 'failed': return 'Failed';
-      case 'working': return 'Working';
-      case 'ready': return busy ? 'Working' : 'Ready';
-    }
+    return this.activity.label(busy);
   }
 
-  /** Track only lifecycle facts already present in the run frame stream. */
+  /**
+   * Fold one frame into the activity tracker.
+   *
+   * `turn_start` is handled HERE rather than in the tracker: the only thing it
+   * changes that this app paints is the composer border's effort level, and
+   * that is a property of the composer, not of the activity line.
+   */
   private updateActivity(frame: LegacyFrame): boolean {
-    const data = frameRecord(frame.data);
-    switch (frame.type) {
-      case 'text_delta':
-        if (this.activityPhase === 'responding' && this.activityMessage === '' && this.groupActivity === '') return false;
-        this.activityPhase = 'responding';
-        this.activityMessage = '';
-        this.groupActivity = '';
-        return true;
-      case 'thinking_delta':
-        if (this.activityPhase === 'thinking' && this.activityMessage === '' && this.groupActivity === '') return false;
-        this.activityPhase = 'thinking';
-        this.activityMessage = '';
-        this.groupActivity = '';
-        return true;
-      case 'tool_use_started':
-      case 'tool_use': {
-        const id = frameString(data, 'id');
-        const name = frameString(data, 'name');
-        if (id === '' || name === '') return false;
-        this.activeTools.delete(id);
-        this.activeTools.set(id, { name, elapsedSeconds: null });
-        this.activityPhase = 'working';
-        this.activityMessage = '';
-        return true;
-      }
-      case 'tool_progress': {
-        // The legacy projector carries the tool call id in `toolName`.
-        const id = frameString(data, 'toolName');
-        const elapsed = data['elapsedSeconds'];
-        const tool = this.activeTools.get(id);
-        if (tool === undefined || typeof elapsed !== 'number' || !Number.isFinite(elapsed)) return false;
-        if (tool.elapsedSeconds !== null && Math.floor(tool.elapsedSeconds) === Math.floor(elapsed)) return false;
-        this.activeTools.set(id, { ...tool, elapsedSeconds: elapsed });
-        return true;
-      }
-      case 'tool_result': {
-        const id = frameString(data, 'id');
-        const removed = this.activeTools.delete(id);
-        if (removed) {
-          this.activityPhase = this.busy ? 'working' : 'ready';
-          this.activityMessage = '';
-          if (this.activeTools.size === 0) this.groupActivity = '';
-        }
-        return removed;
-      }
-      case 'tool_group_progress': {
-        const title = frameString(data, 'title');
-        if (title === '' || title === this.groupActivity) return false;
-        this.groupActivity = title;
-        return true;
-      }
-      case 'agent_progress': {
-        const eventType = frameString(data, 'agentEventType');
-        const id = frameString(data, 'subagentId');
-        if (eventType === 'subagent_started' && id !== '') {
-          const name = frameString(data, 'agentName') || frameString(data, 'agentType') || 'Agent';
-          this.activeAgents.delete(id);
-          this.activeAgents.set(id, name);
-          this.activityPhase = 'working';
-          return true;
-        }
-        if (eventType === 'subagent_completed' && id !== '') return this.activeAgents.delete(id);
-        return false;
-      }
-      case 'status': {
-        // Chrome, not content: `resolveStatusLabel` also resolves the desktop's
-        // `@i18n:` keys, so an unresolvable key drops out of the row instead of
-        // printing its own name at the user.
-        const label = resolveStatusLabel(frameString(data, 'message'));
-        if (label === null || label === this.activityMessage) return false;
-        this.activityMessage = label;
-        this.activityPhase = 'working';
-        return true;
-      }
-      case 'turn_start': {
-        // The run's own effort, when the Host decided one. `updateActivity`
-        // returns whether the frame changed anything the CHROME shows, and the
-        // composer border is chrome — so a changed level must repaint.
-        const effort = frameString(data, 'effort');
-        if (effort === '' || effort === this.runEffort) return false;
-        this.runEffort = effort;
-        return true;
-      }
-      case 'compact:start':
-        this.activityPhase = 'compacting';
-        this.activityMessage = '';
-        this.groupActivity = '';
-        return true;
-      case 'compact:done':
-        this.activityPhase = this.busy ? 'working' : 'ready';
-        this.groupActivity = '';
-        return true;
-      case 'compact:error':
-        this.activityPhase = 'working';
-        this.activityMessage = 'Compaction failed';
-        this.groupActivity = '';
-        return true;
-      case 'permission':
-        this.waitingForPermission = true;
-        return true;
-      case 'done':
-        this.activityPhase = 'complete';
-        this.clearActiveActivity();
-        return true;
-      case 'error':
-        this.activityPhase = 'failed';
-        this.clearActiveActivity();
-        return true;
-      default:
-        return false;
-    }
+    const changed = this.activity.apply(frame, this.busy);
+    if (frame.type !== 'turn_start') return changed;
+    const effort = frameString(frameRecord(frame.data), 'effort');
+    if (effort === '' || effort === this.runEffort) return changed;
+    this.runEffort = effort;
+    return true;
   }
+
 
   private clearActiveActivity(): void {
-    this.activeTools.clear();
-    this.activeAgents.clear();
-    this.groupActivity = '';
-    this.activityMessage = '';
+    this.activity.clear();
     this.waitingForPermission = false;
   }
 
@@ -2069,7 +1928,7 @@ export class TUIApp {
       this.overlay.show(request, (decision: PermissionDecision | null, answers?: QuestionAnswers) => {
         this.onPermissionDecision?.(request.requestId, decision, answers);
         this.waitingForPermission = this.overlay.isActive;
-        this.activityPhase = this.busy ? 'working' : 'ready';
+        this.activity.phase = this.busy ? 'working' : 'ready';
         resolve(decision);
         this.scheduleRender();
       });
@@ -2222,10 +2081,10 @@ export class TUIApp {
     this.busy = busy;
     this.pacer.reset();
     if (busy) {
-      this.activityPhase = 'working';
+      this.activity.phase = 'working';
       this.clearActiveActivity();
-    } else if (this.activityPhase !== 'complete' && this.activityPhase !== 'failed') {
-      this.activityPhase = 'ready';
+    } else if (this.activity.phase !== 'complete' && this.activity.phase !== 'failed') {
+      this.activity.phase = 'ready';
       this.clearActiveActivity();
     }
     if (!busy) {
@@ -2253,7 +2112,7 @@ export class TUIApp {
     this.selectedBlockIndex = -1;
     this.expandedBlockIds.clear();
     this.collapsedBlockIds.clear();
-    this.activityPhase = 'ready';
+    this.activity.phase = 'ready';
     this.clearActiveActivity();
     this.scheduler.requestImmediate();
   }
@@ -2339,7 +2198,7 @@ export class TUIApp {
     this.selectedBlockIndex = -1;
     this.expandedBlockIds.clear();
     this.collapsedBlockIds.clear();
-    this.activityPhase = 'ready';
+    this.activity.phase = 'ready';
     this.clearActiveActivity();
     this.noteTranscriptMutation();
     this.scheduler.requestImmediate();
