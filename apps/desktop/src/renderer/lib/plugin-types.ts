@@ -5,6 +5,8 @@ import type {
   WorkflowTemplateSummary,
   PermissionTier,
 } from '@duya/plugin-core';
+import { PluginAppDefinitionsSchema } from '@duya/plugin-core/apps/declarations';
+import type { PluginAppDefinition } from '@duya/plugin-core/apps/declarations';
 
 // ============================================================================
 // MCP re-exports from @duya/plugin-core (plan 97, Phase 0)
@@ -270,6 +272,7 @@ const PluginManifestV1Schema = z.object({
   entry: PluginEntrySchema,
   capabilities: PluginCapabilitiesSchema,
   permissions: z.array(PluginPermissionSchema).default([]),
+  apps: PluginAppDefinitionsSchema.optional(),
   dependencies: z.record(z.string(), z.string()).optional(),
   engines: PluginEnginesSchema,
 });
@@ -294,6 +297,7 @@ const PluginManifestV2Schema = z.object({
    */
   extensions: z.record(z.string(), z.record(z.string(), z.unknown())).default({}).optional(),
   permissions: z.array(PluginPermissionSchema).default([]),
+  apps: PluginAppDefinitionsSchema.optional(),
   dependencies: z.record(z.string(), z.string()).optional(),
   engines: PluginEnginesSchema,
 });
@@ -308,6 +312,7 @@ export type PluginManifestV1 = z.infer<typeof PluginManifestV1Schema>;
 export type PluginManifestV2 = z.infer<typeof PluginManifestV2Schema>;
 export type PluginCapabilities = z.infer<typeof PluginCapabilitiesSchema>;
 export type PluginPermission = z.infer<typeof PluginPermissionSchema>;
+export type { PluginAppDefinition };
 
 /**
  * Normalized components view, used by capability counting and the
@@ -508,6 +513,8 @@ export interface PluginRegistryEntry {
   setupRequired: boolean;
   setupFields: PluginSetupField[];
   manifest: PluginManifest;
+  /** Safe package-local App metadata; the rest of the main-process manifest stays private. */
+  apps?: PluginAppDefinition[];
 }
 
 export interface PluginSetupField {

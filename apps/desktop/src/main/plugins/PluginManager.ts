@@ -241,6 +241,10 @@ export class PluginManager {
       setupState,
       health,
       capabilityKinds: manifest ? listCapabilityKinds(manifest) : [],
+      apps: manifest?.apps?.map((app) => ({
+        ...app,
+        requiredCapabilities: [...app.requiredCapabilities],
+      })),
     };
   }
 
