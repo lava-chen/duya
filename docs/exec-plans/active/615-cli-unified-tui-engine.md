@@ -151,19 +151,47 @@ export function spansToAnsi(spans: readonly StyledSpan[]): string
 **一致性保证**：`spansToAnsi(spans)` 与 `renderMarkup(spansToTags(spans, ownView))` 在同一 corpus（含 500 条随机输入）上**逐字节相等**，这是 `span.test.ts` 的核心断言 —— 两个独立实现互相印证，而不是自己证明自己。
 
 
-### 5.2 组件接口（Phase 3 落地）
+### 5.2 组件接口（Phase 3 已落地）
+
+**实际形态（讨论稿的 `SceneBuilder` 收敛成 `SceneCanvas`，理由见下）**
 
 ```ts
 // tui/core/component.ts
-export interface ComponentProps { /* 每组件自定义 */ }
-export interface UIComponent<P = ComponentProps> {
-  readonly id: string;            // stable id：缓存 key / hit-test / focus 路由共用
-  props: P;
-  measure(width: number): number; // 行数（D10 行数不变式的树版）
-  paint(scene: SceneBuilder, viewport: Viewport): void;
-  children?: readonly UIComponent[];
+export interface Viewport { readonly row: number; readonly column: number; readonly width: number; readonly height: number }
+export interface UIComponent<P = unknown> {
+  readonly id: string;        // stable id：缓存 key / hit-test / focus 路由共用
+  props: P;                   // update() 原地替换
+  revision: number;           // update() 自增 —— §5.4 的 componentRev 提前落地
+  measure(width: number): number;              // 行数（D10 行数不变式的树版）
+  paint(scene: SceneCanvas, viewport: Viewport): void;
+  readonly children?: readonly UIComponent[];
 }
+export class SceneCanvas {
+  writeTagged(row, column, line): void;    // 吃标签串（legacy 渲染器的输出）
+  writeSpans(row, column, spans): void;
+  fill(row, column, count, glyph, style?): void;
+  textAt(row): string;                     // 断言与将来的 hit-test
+  toScene(): RenderScene;                  // cells → spans（相邻同色合并）
+}
+export function renderTree(root, width, height): RenderScene
+export function update(component, props): void   // 换 props + revision++，无 diff
+
+// tui/core/containers.ts
+export interface StackSlot { component: UIComponent; size: 'flex' | number; inset?: number; weight?: number }
+export class VStack implements UIComponent<readonly StackSlot[]>
+export class HStack implements UIComponent<readonly StackSlot[]>
+export class Overlay implements UIComponent<OverlayProps>   // base + overlay 两层
+export type OverlayAnchor = { kind: 'center' } | { kind: 'offset'; row; column } | { kind: 'bottom'; bottom: number }
 ```
+
+**偏差①：`SceneBuilder` → `SceneCanvas`（cells 而非 span 直写）。** Span 是好的**存储**格式（连续样式段，序列化器直接吃），是坏的**编辑**格式：overlay 要覆盖一条已有 span 的中间，HStack 要在一条 span 中间起笔。所以画布存 cell，`toScene()` 时压回 span 并合并相邻同色段。
+
+**偏差②：新增 `revision`。** §5.4 原本把它留给 Phase 4；`update()` 既然已经存在，让它自增是零成本，缓存 key 到时候直接读。
+
+**新增必需品 `core/tags.ts::tagsToSpans`。** 所有 legacy 渲染器（`buildFooterLines`、`QuestionAskState.render`、整个 `transcript-view.ts`）产出的是标签串，上画布必须先变成 span。它与 `spansToTags` 互为逆视图，并有往返测试（`spansToTags(tagsToSpans(line)) === line`）—— 这是能「逐个渲染器迁移上树」而其余路径照旧工作的前提。
+
+**发现：`statusRows` 与 status 区域的 height 是两个独立的数。** `geometry.ts` 用 `statusRows` 算别的区域的 `bottom`，而 status 自己的高度默认 `?? 1`；两者只在都为 1 时一致。若 `statusRows: 2`，`input` 与 `status` 之间会出现一行空隙。树的版本没有这个问题（status 的高度就是 `measure()`），Phase 5 接管区域 API 时这个参数应当消失。
+
 
 ### 5.3 输入驱动（Phase 2 已落地）
 
@@ -257,11 +285,16 @@ App (id: root)
     - **执行记录（部分完成）**：鼠标事件已规范化进 `InputEvent`（`InputMouseEvent`，SGR 坐标零基），wheel 路由沿用既有实现（窗口管理器优先、否则滚 transcript）。**hit-testing 未做**：单元格→span 的归属要等 SceneBuilder 存在（Phase 3/4），没有索引可查时做命中测试只能是猜；`hit` 字段已进契约，届时只改驱动构造事件的一处。
   - 门禁：`tsc -b --force` 绿；`packages/cli` 1049/1057（新增 `input-driver.test.ts` 23 条 + `key-injection.ts`），8 红与 Phase 1 完全一致（worker-path×3 / tui-pty×2 / registry×1 / host-stop-continue×2）；`tui` 目录 815/815 全绿。
 
-- [ ] **Phase 3 — Retained Component Tree 最小核（I3，D1/D9）**
-  - [ ] 3.1 `tui/core/component.ts`：UIComponent/stable id/mount-update；无 diff、无异步
-  - [ ] 3.2 VStack/HStack/Overlay 三种容器（`geometry.ts` 求解器树形化）
-  - [ ] 3.3 首批组件上树：StatusBar（footer.ts）+ QuestionOverlay——选它们是因为行数不变式最硬、回归面最小
-  - 门禁：`tui/core/component.test.ts` + `footer.ts`/`question-overlay.ts` 既有测试零改动通过
+- [x] **Phase 3 — Retained Component Tree 最小核（I3，D1/D9）**
+  - [x] 3.1 `tui/core/component.ts`：UIComponent/stable id/mount-update；无 diff、无异步
+    - **执行记录**：`UIComponent`（id/props/revision/measure/paint/children）、`SceneCanvas`、`renderTree()`、`paintComponent()`、`update()`、`leaf()`。刻意没有 diff、没有 dirty 传播、没有异步 —— `revision` 只是让「这个子树已过期」可观测，剪枝留给 Phase 4。
+  - [x] 3.2 VStack/HStack/Overlay 三种容器（`geometry.ts` 求解器树形化）
+    - **执行记录**：`core/containers.ts`。VStack/HStack 按 `'flex' | number` 分配、`inset` 双侧收缩、`weight` 加权；**余数给第一个 flex 槽**（丢掉会留下最后一行不画，给最后一个槽会把误差挪到 transcript 所在的顶部）。Overlay 只有 base+overlay 两层（区域模型就是一个浮动层压在一个堆叠底座上，通用 z-index 是另一种不需要的设计），anchor 三种：center / offset / bottom。
+    - **几何等价性是测出来的**：`component.test.ts` 用树重建区域布局，对 4 种终端尺寸 × 2 种 overlay 宽度逐一比对 `layoutRegion()` 给出的 5 个区域盒子（left/top/width/height 全等）。completion 的四列 gutter 与「浮在 input 上方」分别由 `width: vp => vp.width - 8` 和 `anchor: {kind:'bottom', bottom: 4}` 表达 —— 这正是原 switch 里 `left: 4 / top: rows - height - bottom` 的算术。
+  - [x] 3.3 首批组件上树：StatusBar（footer.ts）+ QuestionOverlay——选它们是因为行数不变式最硬、回归面最小
+    - **执行记录**：`components/status-bar.ts`（`measure() = 2`，paint 调 `buildFooterLines`）、`components/question-panel.ts`（`measure()` 与 `paint` 共用同一个 `render()` 结果，所以「量出来的行数」与「画出来的行数」不可能不一致 —— 这正是它取代 `height: 7` 硬编码的地方）。两个组件的断言是**逐字节的**：把画布行转回 ANSI，与 legacy 渲染器的 `renderMarkup(line)` 全等。
+    - **注意「上树」的边界**：它们已经能按树渲染（`renderTree` 测过），但**生产路径仍是 TUIApp 手工拼装** —— 消费者迁移按计划在 Phase 6 逐组件进行。Phase 3 交付的是「树存在且与旧布局逐像素一致」，不是「TUIApp 已经用树」。
+  - 门禁：`tsc -b --force` 绿；`tui` 856/856 全绿（`component.test.ts` 18 条）；`packages/cli` 1067/1075，8 红与 Phase 2 完全一致；**`footer.ts` / `question-overlay.ts` 的既有测试零改动通过**（这是本阶段最硬的约束）。
 
 - [ ] **Phase 4 — 增量布局 + 虚拟化文档（I4，D4）**
   - [ ] 4.1 树形 dirty 传播：`measure()` 结果带 revision，高度未变的子树剪枝
@@ -301,6 +334,7 @@ App (id: root)
 | V8 | 双模式同一 RenderScene | Phase 5 对拍 | 两套内核 | 一套管线 |
 | V9 | IME/中文/宽字符回归 | Phase 2 既有 width/编辑器测试迁移 + 真机 | 通过 | 通过 |
 | V10 | 真机三环境截图对照 | Phase 7 | — | 无可见 tag、无错位、IME 正常 |
+| V11 | 区域布局树与 geometry switch 盒子一致 | Phase 3 矩阵（4 尺寸 × 2 overlay 宽 × 5 区域） | 已全等（Phase 3） | 全等 |
 
 ### 8.1 Phase 0 基准数字（2026-10-19，Windows ConPTY 宿主，worktree `plan-615-tui`）
 
