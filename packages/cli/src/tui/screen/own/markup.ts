@@ -174,7 +174,14 @@ export function renderMarkup(line: string): string {
     // before the tag is applied, because the tag changes what comes after.
     emitText(line.slice(cursor, match.index));
 
-    if (opening === null) {
+    // Blessed's own literal-brace tags, which `escapeTags` now emits instead of
+    // the backslash form blessed never understood. Blessed resolves these
+    // BEFORE its open/close branch, so `{/open}` also yields `{`; mirror that.
+    // They must be handled here AND in `terminal/sgr.ts` — the same vocabulary
+    // has three parsers.
+    if (body === 'open' || body === 'close') {
+      emitText(body === 'open' ? '{' : '}');
+    } else if (opening === null) {
       // Unknown tag: it is text, not markup, so it goes out as written.
       emitText(raw);
     } else if (slash === '/') {
@@ -204,12 +211,13 @@ export function renderMarkup(line: string): string {
 }
 
 /**
- * Neutralise `{` and `}` so user text cannot inject markup.
+ * Escape `{` so user text cannot inject markup.
  *
- * Applied to every line the TUI builds from model content — a prompt, a tool
- * argument, a diff — before it is handed to a renderer. Without it, a file
- * containing `{cyan-fg}` in a tool result would repaint the rest of the screen.
+ * Emits blessed's own literal-brace tag rather than deleting the character: the
+ * old `replace(/[{}]/g, '')` lost information — model JSON arrived visibly
+ * mangled. `{open}` survives every parser in the TUI (blessed, this file, and
+ * `terminal/sgr.ts`) as a literal brace.
  */
 export function escapeMarkup(value: string): string {
-  return value.replace(/[{}]/g, '');
+  return value.replace(/\{/g, '{open}');
 }

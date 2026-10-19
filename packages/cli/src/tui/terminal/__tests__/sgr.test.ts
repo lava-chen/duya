@@ -49,12 +49,13 @@ describe('tagsToAnsi', () => {
     expect(tagsToAnsi('')).toBe('');
   });
 
-  it('emits an escaped brace literally, and consumes the escape marker', () => {
-    // Exactly what `escapeTags` produces: it escapes `{` only, because `}`
-    // alone cannot open a tag. The backslash is an escape marker, not output —
-    // printing it would put a stray `\` before every brace in the model's JSON.
-    expect(tagsToAnsi('\\{a}')).toBe('{a}');
-    expect(tagsToAnsi('function f() \\{ return 1; \\}')).toBe('function f() { return 1; \\}');
+  it('emits a literal brace for the {open} tag, matching escapeTags', () => {
+    // Exactly what `escapeTags` now produces: blessed's own literal-brace tag.
+    // The old `\{` form was never an escape in blessed at all — the backslash
+    // printed AND the brace still parsed as a tag.
+    expect(tagsToAnsi('{open}a}')).toBe('{a}');
+    expect(tagsToAnsi('function f() {open} return 1; }')).toBe('function f() { return 1; }');
+    expect(tagsToAnsi('{close}')).toBe('}');
     expect(tagsToAnsi('{"a": 1}')).toBe('{"a": 1}');
   });
 

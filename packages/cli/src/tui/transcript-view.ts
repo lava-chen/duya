@@ -71,6 +71,10 @@ import {
 } from './tool-render.js';
 import { capLines, truncateToWidth, visibleWidth } from './width.js';
 import { DARK_THEME_TAGS, type ThemeTags } from './theme.js';
+import { escapeTags } from './markdown/escape.js';
+import { renderInlineTokens, rawTagPair, tokenizeInline, type InlineToken } from './markdown/inline.js';
+
+export { escapeTags } from './markdown/escape.js';
 
 /** How a transcript is currently being drawn. */
 export interface RenderOptions {
@@ -96,6 +100,13 @@ export interface RenderOptions {
   readonly showThinking?: boolean;
   /** Theme token → blessed tag body. Defaults to the dark palette. */
   readonly theme?: ThemeTags;
+  /**
+   * Visible column budget for block renderers that span the pane width
+   * (horizontal rules). Omitted means "unknown": width-aware renderers fall
+   * back to their pre-`width` fixed shapes, which is what keeps every existing
+   * caller and test byte-identical until the shell starts injecting it.
+   */
+  readonly width?: number;
 }
 
 export const DEFAULT_RENDER_OPTIONS: RenderOptions = {
@@ -104,7 +115,15 @@ export const DEFAULT_RENDER_OPTIONS: RenderOptions = {
   toolResultLines: 5,
 };
 
-/** One flat style per call: no nesting, payload always escaped. */
+/**
+ * One style per call. The style FUNCTIONS stay flat — each wraps its argument
+ * in exactly one tag pair — but the inline tokenizer composes them, so a
+ * rendered line can carry nested pairs (`{bold}…{accent}…{/accent}…{/bold}`).
+ * Blessed restores the outer style on a close (plan 614 §3.5), which is what
+ * makes that composition safe; the "no nesting" rule this interface once
+ * enforced applied to hand-written call sites and is superseded for the
+ * tokenizer path.
+ */
 export interface Styles {
   bold(s: string): string;
   muted(s: string): string;
@@ -143,42 +162,14 @@ export function stylesOf(options: Pick<RenderOptions, 'theme'>): Styles {
 /**
  * Escape text for blessed's tag parser.
  *
- * A literal `{` in model output would otherwise be read as the start of a tag
- * and silently swallowed, so agent output containing braces — which is most
- * JSON, most code, and most stack traces — would lose characters. `{` has to
- * become `\{` for blessed to print it literally.
+ * Lives in `markdown/escape.ts` so the inline tokenizer can use it without a
+ * module cycle; re-exported here because every existing caller (overlays,
+ * windows, the shell) imports it from this module.
  */
-export function escapeTags(text: string): string {
-  return text.replace(/\{/g, '\\{');
-}
 
 /** Render the useful Markdown subset without trusting model text as Blessed markup. */
 function renderInlineMarkdown(text: string, styles: Styles): string {
-  const tokenPattern = /(`+)([^`]+?)\1|\*\*([^*\n]+?)\*\*|__([^_\n]+?)__|\*([^*\s](?:[^*\n]*?[^*\s])?)\*|(?<![\w])_([^_\s](?:[^_\n]*?[^_\s])?)_(?![\w])|\[([^\]\n]+)\]\(([^)\s]+)\)/gu;
-  let rendered = '';
-  let cursor = 0;
-
-  for (const match of text.matchAll(tokenPattern)) {
-    const index = match.index;
-    const token = match[0];
-    rendered += escapeTags(text.slice(cursor, index));
-
-    if (match[2] !== undefined) {
-      rendered += styles.muted(match[2]);
-    } else if (match[3] !== undefined || match[4] !== undefined) {
-      rendered += styles.bold(match[3] ?? match[4] ?? '');
-    } else if (match[5] !== undefined || match[6] !== undefined) {
-      rendered += styles.accent(match[5] ?? match[6] ?? '');
-    } else if (match[7] !== undefined && match[8] !== undefined) {
-      rendered += `${escapeTags(match[7])} ${styles.link(`(${match[8]})`)}`;
-    } else {
-      rendered += escapeTags(token);
-    }
-
-    cursor = index + token.length;
-  }
-
-  return rendered + escapeTags(text.slice(cursor));
+  return renderInlineTokens(tokenizeInline(text), styles);
 }
 
 function renderCodeBlock(language: string, lines: readonly string[], styles: Styles): string {
@@ -252,13 +243,27 @@ function alignmentOf(delimiterCell: string): TableAlignment {
 }
 
 /**
+ * Remove blessed tags from a rendered cell so its VISIBLE width can be
+ * measured. `{open}` / `{close}` are restored FIRST — the tag-stripping
+ * pattern would otherwise eat them (plan 614 phase 1's ordering trap) — and
+ * restored literal braces may still match the strip pattern, which only
+ * slightly mis-measures a cell containing literal `{word}` text.
+ */
+function stripTags(rendered: string): string {
+  return rendered
+    .replace(/\{open\}/gu, '{')
+    .replace(/\{close\}/gu, '}')
+    .replace(/\{\/?[a-zA-Z0-9-]+\}/gu, '');
+}
+
+/**
  * A GFM pipe table as aligned ruled text.
  *
  * Rendered, not dumped: the raw `|---|` source is markup meant for a browser,
- * and in a terminal it reads as corruption. Columns are sized by VISIBLE width
- * (`visibleWidth`, CJK-aware — padding by `.length` would misalign every row
- * containing an ideograph), cells render inline markdown, and the delimiter
- * row's colons drive alignment.
+ * and in a terminal it reads as corruption. Columns are sized by the VISIBLE
+ * width of the RENDERED cells (`**bold**` measures as its text, not its
+ * markup), padding is CJK-aware via `visibleWidth`, and the delimiter row's
+ * colons drive alignment.
  */
 function renderTable(
   headerLine: string,
@@ -272,53 +277,66 @@ function renderTable(
   const rows = [splitTableRow(headerLine), ...dataRows];
 
   const columnCount = Math.max(aligns.length, ...rows.map((row) => row.length));
-  const widths: number[] = [];
-  for (const row of rows) {
-    for (let c = 0; c < columnCount; c += 1) {
-      const width = visibleWidth(row[c] ?? '');
-      widths[c] = Math.max(widths[c] ?? 0, Math.min(width, TABLE_CELL_MAX_WIDTH));
-    }
-  }
-
   const alignFor = (c: number): TableAlignment => aligns[c] ?? 'left';
 
-  /**
-   * Pad one cell to its column width. `render` is injected because the header
-   * must stay FLAT (`accent(escapeTags(text))` — one style, no nesting) while
-   * body cells render inline markdown, whose tags must never be padded over.
-   */
-  const padCell = (raw: string, c: number, render: (text: string) => string): string => {
-    const clipped = visibleWidth(raw) > TABLE_CELL_MAX_WIDTH
+  // A cell wider than this is truncated in the RAW text, before any markup
+  // exists — the same order invariant the escape carries (width.ts does not
+  // parse tags).
+  const clip = (raw: string): string =>
+    visibleWidth(raw) > TABLE_CELL_MAX_WIDTH
       ? truncateToWidth(raw, TABLE_CELL_MAX_WIDTH)
       : raw;
-    const gap = Math.max(0, widths[c] as number - visibleWidth(clipped));
+
+  const headerPair = rawTagPair(styles.accent);
+  const renderHeaderText = (text: string): string =>
+    `${headerPair.open}${escapeTags(text)}${headerPair.close}`;
+  const renderBodyText = (text: string): string => renderInlineMarkdown(text, styles);
+
+  // Render every cell ONCE, up front. Column widths are then measured on the
+  // rendered text: a cell like `**seed**` renders to `seed`, and sizing the
+  // column on the raw `**seed**` would leave two dead spaces of padding after
+  // every rendered cell in that column (Bug B).
+  const renderedRows = rows.map((row, rowIndex) =>
+    Array.from({ length: columnCount }, (_, c) => {
+      const cell = clip(row[c] ?? '');
+      return rowIndex === 0 ? renderHeaderText(cell) : renderBodyText(cell);
+    }),
+  );
+
+  const widths: number[] = [];
+  for (const rendered of renderedRows) {
+    rendered.forEach((cell, c) => {
+      widths[c] = Math.max(widths[c] ?? 0, visibleWidth(stripTags(cell)));
+    });
+  }
+
+  const padCell = (rendered: string, c: number): string => {
+    const gap = Math.max(0, (widths[c] ?? 0) - visibleWidth(stripTags(rendered)));
     switch (alignFor(c)) {
-      case 'right': return `${' '.repeat(gap)}${render(clipped)}`;
+      case 'right': return `${' '.repeat(gap)}${rendered}`;
       case 'center': {
         const left = Math.floor(gap / 2);
-        return `${' '.repeat(left)}${render(clipped)}${' '.repeat(gap - left)}`;
+        return `${' '.repeat(left)}${rendered}${' '.repeat(gap - left)}`;
       }
-      default: return `${render(clipped)}${' '.repeat(gap)}`;
+      default: return `${rendered}${' '.repeat(gap)}`;
     }
   };
 
-  const renderRow = (
-    row: readonly string[],
-    render: (text: string) => string,
-  ): string => row.map((cell, c) => padCell(cell, c, render)).join(styles.muted(' │ '));
+  const renderRow = (row: readonly string[]): string =>
+    row.map((cell, c) => padCell(cell, c)).join(styles.muted(' │ '));
 
   // Rows shorter than the table keep their trailing cells EMPTY rather than
   // shrinking the join: ragged row lengths would otherwise shift every column
   // border after the gap.
-  const normalize = (row: readonly string[]): string[] =>
-    Array.from({ length: columnCount }, (_, c) => row[c] ?? '');
-
-  const lines: string[] = [
-    renderRow(normalize(rows[0] ?? []), (text) => styles.accent(escapeTags(text))),
-  ];
-  lines.push(styles.muted(widths.map((w) => '─'.repeat(w + 2)).join('┼')));
-  for (const row of dataRows) {
-    lines.push(renderRow(normalize(row), (text) => renderInlineMarkdown(text, styles)));
+  const lines: string[] = [renderRow(renderedRows[0] ?? [])];
+  // `w + 1`, not `w + 2`: each rendered cell occupies exactly `w` columns and
+  // the join inserts ` │ ` (space, bar, space) between neighbours, so the bar
+  // sits one column PAST the cell's right edge — the rule segment covering the
+  // cell plus that one space is `w + 1` dashes, and the ┼ lands exactly on the
+  // bar. `w + 2` pushed every ┼ one column right of its bar (Bug A).
+  lines.push(styles.muted(widths.map((w) => '─'.repeat(w + 1)).join('┼')));
+  for (const rendered of renderedRows.slice(1)) {
+    lines.push(renderRow(rendered));
   }
   return lines.join('\n');
 }
@@ -331,10 +349,10 @@ function renderTable(
  * — and every border moved — on each arriving row. Nothing else is held back;
  * see `stream-commit.ts` for why an unfinished code fence is deliberately shown.
  */
-function renderAssistant(text: string, finalized: boolean, styles: Styles): string {
+function renderAssistant(text: string, finalized: boolean, styles: Styles, width?: number): string {
   const markdown = finalized
-    ? renderAssistantMarkdown(text, styles)
-    : renderAssistantMarkdown(splitStreamCommit(text).safe, styles);
+    ? renderAssistantMarkdown(text, styles, width)
+    : renderAssistantMarkdown(splitStreamCommit(text).safe, styles, width);
   return anchorAssistant(markdown, styles);
 }
 
@@ -359,7 +377,7 @@ function anchorAssistant(markdown: string, styles: Styles): string {
 }
 
 /** Render Markdown structure while keeping code and plain text safe for Blessed. */
-function renderAssistantMarkdown(text: string, styles: Styles): string {
+function renderAssistantMarkdown(text: string, styles: Styles, width?: number): string {
   const lines = text.replace(/\r\n?/gu, '\n').split('\n');
   const output: string[] = [];
   let paragraph: string[] = [];
@@ -421,7 +439,18 @@ function renderAssistantMarkdown(text: string, styles: Styles): string {
     const heading = /^ {0,3}(#{1,6})\s+(.*)$/u.exec(line);
     if (heading !== null) {
       flushParagraph();
-      output.push(`${styles.heading(`${heading[1] ?? '#'} `)}${renderInlineMarkdown(heading[2] ?? '', styles)}`);
+      const level = (heading[1] ?? '#').length;
+      const text = renderInlineMarkdown(heading[2] ?? '', styles);
+      // Levels 1–2 read as document titles: heading colour AND bold. Deeper
+      // levels stay single-colour. The `#` marks themselves are Markdown
+      // syntax aimed at a browser, not content — they do not print (D5).
+      if (level <= 2) {
+        const headingTag = rawTagPair(styles.heading);
+        const boldTag = rawTagPair(styles.bold);
+        output.push(`${headingTag.open}${boldTag.open}${text}${boldTag.close}${headingTag.close}`);
+      } else {
+        output.push(styles.heading(text));
+      }
       continue;
     }
 
@@ -429,7 +458,13 @@ function renderAssistantMarkdown(text: string, styles: Styles): string {
     if (listItem !== null) {
       flushParagraph();
       const indent = (listItem[1] ?? '').slice(0, 6);
-      const marker = styles.accent(listItem[2] ?? '•');
+      const raw = listItem[2] ?? '';
+      // `-`/`*`/`+` are three spellings of one bullet; a terminal transcript
+      // shows the bullet, not which hyphen the model chose. Ordered markers
+      // keep their number — that part IS content (D5).
+      const marker = raw === '-' || raw === '*' || raw === '+'
+        ? styles.accent('•')
+        : styles.accent(raw);
       const content = listItem[3] ?? '';
       const task = /^\[([ xX])\]\s+(.*)$/u.exec(content);
       if (task !== null) {
@@ -452,7 +487,9 @@ function renderAssistantMarkdown(text: string, styles: Styles): string {
 
     if (/^ {0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})$/u.test(line)) {
       flushParagraph();
-      output.push(styles.muted('────────'));
+      // Span the pane when the caller knows its width; the old fixed eight
+      // dashes stay the fallback so width-blind callers render unchanged.
+      output.push(styles.muted('─'.repeat(Math.max(8, width ?? 8))));
       continue;
     }
 
@@ -985,9 +1022,41 @@ function trimBlankEdges(lines: readonly string[]): string[] {
   return lines.slice(start, end);
 }
 
-/** One muted row per source line, at the node's body column. */
+/**
+ * One muted row per source line, at the node's body column.
+ *
+ * Reasoning now shares the assistant's tokenizer (D6) but keeps its own style
+ * layer: the whole line sits in the muted base, and `**bold**` spans stack the
+ * bold ATTRIBUTE on top of that colour (`{bold}{muted}…{/muted}{/bold}`) —
+ * colour tokens stay out of the reasoning body, so emphasis renders quietly
+ * (the markers go, the loudness does not come).
+ */
 function thinkingRows(lines: readonly string[], styles: Styles, indent: string): string[] {
-  return lines.map((line) => `${indent}${styles.muted(line)}`);
+  const mutedPair = rawTagPair(styles.muted);
+  const boldPair = rawTagPair(styles.bold);
+  const base = (text: string): string => `${mutedPair.open}${text}${mutedPair.close}`;
+  const render = (tokens: readonly InlineToken[]): string =>
+    tokens.map((token) => {
+      switch (token.kind) {
+        case 'text':
+        case 'code':
+          return base(escapeTags(token.text));
+        case 'strong':
+          // The children render themselves in the base colour; bold is the
+          // attribute layered OVER that, never a second base wrap.
+          return `${boldPair.open}${render(token.children)}${boldPair.close}`;
+        // Emphasis, strike, links, and images all fold into the base colour:
+        // the markup disappears, nothing shouts.
+        case 'emphasis':
+        case 'strike':
+          return render(token.children);
+        case 'link':
+          return base(escapeTags(token.label));
+        case 'image':
+          return base(escapeTags(token.alt));
+      }
+    }).join('');
+  return lines.map((line) => `${indent}${render(tokenizeInline(line))}`);
 }
 
 /** Cut a preview to the character bound along the edge the preview reads from. */
@@ -1018,7 +1087,7 @@ function renderPlainBlock(block: Block, options: RenderOptions, styles: Styles):
       // achieve that, which is the trade the leak measured out.
       return styles.user(`› ${block.text}`);
     case 'assistant':
-      return renderAssistant(block.text, block.finalized, styles);
+      return renderAssistant(block.text, block.finalized, styles, options.width);
     case 'error':
       // Full width, never collapsed: an error the reader cannot see is an
       // error they will hit again next turn.

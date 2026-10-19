@@ -1162,6 +1162,12 @@ export class TUIApp {
       collapsedBlockIds: this.collapsedBlockIds,
       ...(this.showThinking ? {} : { showThinking: false }),
       theme: this.theme.tags,
+      // The pane width block renderers may span (horizontal rules). Inline
+      // mode has no pane border, so the full terminal width is the budget;
+      // full-screen asks the surface for the transcript pane's inner width.
+      width: this.inlineSurface !== null
+        ? this.terminalSize().columns
+        : asNumber(this.fullScreen.measure('transcript')?.innerWidth, this.terminalSize().columns),
       ...(this.focus === 'transcript' && selectedBlock !== undefined
         ? { selectedBlockId: selectedBlock.id }
         : {}),

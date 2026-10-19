@@ -20,11 +20,12 @@
  *
  * ## The rule about unknown tags
  *
- * Blessed swallows an unrecognised `{…}`: it vanishes, taking its text with
- * it. That is exactly the failure `escapeTags` exists to prevent — model
- * output containing JSON loses characters. Here an unknown tag is emitted
- * LITERALLY rather than dropped. Losing a character is unrecoverable;
- * printing `{something}` is merely ugly.
+ * Measured against blessed 0.1.81: an unrecognised `{…}` is printed literally
+ * (`_parseTags` bails to `out += cap[0]` when `program._attr` returns null), it
+ * does NOT vanish. This parser matches that — printing `{something}` is merely
+ * ugly, while losing a character would be unrecoverable. The tag that DOES
+ * swallow text is model markup that happens to name a real tag, which is what
+ * `escapeTags`' `{open}` exists to prevent.
  */
 
 /** Foreground colour names → SGR parameter. */
@@ -93,7 +94,11 @@ function parseTag(body: string): TagAction | null {
 /**
  * Convert one line of blessed-style markup into ANSI.
  *
- * `\{` is the escape for a literal brace, matching `escapeTags`.
+ * `{open}` / `{close}` are the literal-brace escapes `escapeTags` emits — the
+ * same vocabulary blessed resolves in `_parseTags` and `screen/own/markup.ts`
+ * resolves in `renderMarkup`. This parser must stay in lockstep with both: a
+ * tag one of them knows and this one does not prints as visible text on the
+ * inline path only.
  */
 export function tagsToAnsi(line: string): string {
   let out = '';
@@ -106,17 +111,6 @@ export function tagsToAnsi(line: string): string {
       break;
     }
 
-    // A backslash immediately before the brace marks it as literal. The
-    // backslash itself is consumed: it is an escape marker, not output, and
-    // printing it would put a stray `\` before every brace in the model's JSON.
-    const escaped = brace > index && line[brace - 1] === '\\';
-    out += line.slice(index, escaped ? brace - 1 : brace);
-    if (escaped) {
-      out += '{';
-      index = brace + 1;
-      continue;
-    }
-
     const close = line.indexOf('}', brace + 1);
     if (close === -1) {
       // An unterminated brace is just text.
@@ -124,7 +118,22 @@ export function tagsToAnsi(line: string): string {
       break;
     }
 
-    const action = parseTag(line.slice(brace + 1, close));
+    // Emit the plain text between the previous position and this tag first —
+    // every branch below advances `index` past the closing brace.
+    out += line.slice(index, brace);
+
+    const raw = line.slice(brace + 1, close);
+    // Blessed resolves open/close before its open/close branch, so `{/open}`
+    // also yields a literal `{`; mirror that. Everything downstream keeps the
+    // slash — `parseTag` needs it for `/bold` and `/-fg` closes.
+    const stripped = raw.startsWith('/') ? raw.slice(1) : raw;
+    if (stripped === 'open' || stripped === 'close') {
+      out += stripped === 'open' ? '{' : '}';
+      index = close + 1;
+      continue;
+    }
+
+    const action = parseTag(raw);
     if (action === null) {
       // Unknown tag: print it, do not lose it.
       out += line.slice(brace, close + 1);

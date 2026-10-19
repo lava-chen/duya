@@ -119,6 +119,7 @@ export class TranscriptRenderer {
         blockExpanded(block.id, options) ? 'e' : '-',
         options.showToolResults ? 'r' : '-',
         String(options.toolResultLines),
+        String(options.width ?? 0),
         themeKey,
         fnv1a(blockContent(block)),
       ].join('|');

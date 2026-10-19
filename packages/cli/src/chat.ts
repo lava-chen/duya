@@ -37,6 +37,7 @@ import { createRunSessionView, projectRunSessionView } from './tui/run-session-v
 import { RunSession } from '@duya/client-core';
 import { TurnQueue, type TurnOutcome } from './tui/turn-queue.js';
 import { createFileCompletionSource } from './tui/candidates.js';
+import { captureConsoleToFile } from './tui/console-capture.js';
 import { normalizeEffort } from './tui/theme.js';
 import {
   DEFAULT_TUI_PREFERENCES,

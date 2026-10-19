@@ -223,8 +223,8 @@ describe('QuestionAskState', () => {
     const body = ask.render();
     // Every model-authored `{` is escaped, so no live tag survives: an
     // unescaped `{red-fg}` would recolour everything after it.
-    expect(body).toContain('pick \\{red-fg}one');
-    expect(body).toContain('1. \\{bold}a');
+    expect(body).toContain('pick {open}red-fg}one');
+    expect(body).toContain('1. {open}bold}a');
     expect(body).not.toMatch(/(?<!\\)\{red-fg\}/u);
   });
 });
