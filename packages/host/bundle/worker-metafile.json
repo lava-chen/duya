@@ -165,7 +165,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/session-api.ts": {
-      "bytes": 17167,
+      "bytes": 18511,
       "imports": [],
       "format": "esm"
     },
@@ -34509,7 +34509,7 @@
       "format": "esm"
     },
     "packages/host/src/http-client.ts": {
-      "bytes": 78199,
+      "bytes": 78768,
       "imports": [],
       "format": "esm"
     },
@@ -34623,6 +34623,22 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/local-workspace-file-api.ts": {
+      "bytes": 6266,
+      "imports": [
+        {
+          "path": "node:fs/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/task-api.ts": {
       "bytes": 4871,
       "imports": [
@@ -34662,7 +34678,7 @@
       "format": "esm"
     },
     "packages/host/src/http-server.ts": {
-      "bytes": 225460,
+      "bytes": 228135,
       "imports": [
         {
           "path": "node:crypto",
@@ -34683,6 +34699,11 @@
           "path": "packages/host/src/local-rollout-api.ts",
           "kind": "import-statement",
           "original": "./local-rollout-api.js"
+        },
+        {
+          "path": "packages/host/src/local-workspace-file-api.ts",
+          "kind": "import-statement",
+          "original": "./local-workspace-file-api.js"
         },
         {
           "path": "packages/host/src/session-api.ts",
@@ -35122,7 +35143,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 27124,
+      "bytes": 27440,
       "imports": [
         {
           "path": "node:crypto",
@@ -35178,6 +35199,11 @@
           "path": "packages/host/src/local-rollout-api.ts",
           "kind": "import-statement",
           "original": "./local-rollout-api.js"
+        },
+        {
+          "path": "packages/host/src/local-workspace-file-api.ts",
+          "kind": "import-statement",
+          "original": "./local-workspace-file-api.js"
         },
         {
           "path": "packages/host/src/local-session-api.ts",
@@ -42528,7 +42554,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/project-store.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/research-store.ts": {
           "bytesInOutput": 30
@@ -42561,13 +42587,13 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 48
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-fork.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -42750,7 +42776,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/message-log.ts": {
-          "bytesInOutput": 128
+          "bytesInOutput": 115
         },
         "packages/data/src/archive-paths.ts": {
           "bytesInOutput": 29
@@ -42765,7 +42791,7 @@
           "bytesInOutput": 57
         },
         "packages/data/src/tool-approval-state.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/workbench-store.ts": {
           "bytesInOutput": 30
@@ -42813,7 +42839,7 @@
           "bytesInOutput": 40
         },
         "packages/data/src/workspace-resolver.ts": {
-          "bytesInOutput": 52
+          "bytesInOutput": 39
         },
         "packages/data/src/terminal-history-store.ts": {
           "bytesInOutput": 30
@@ -47436,7 +47462,7 @@
           "bytesInOutput": 2408
         },
         "packages/host/src/worker-context/attachment-context.ts": {
-          "bytesInOutput": 2263
+          "bytesInOutput": 2269
         },
         "packages/agent-runtime/src/adapters/run-engine-ports.ts": {
           "bytesInOutput": 3825
@@ -47925,7 +47951,7 @@
           "bytesInOutput": 2613
         },
         "packages/host/src/http-client.ts": {
-          "bytesInOutput": 32215
+          "bytesInOutput": 32293
         },
         "packages/host/src/local-host.ts": {
           "bytesInOutput": 956
@@ -47947,6 +47973,9 @@
         },
         "packages/host/src/local-rollout-api.ts": {
           "bytesInOutput": 5
+        },
+        "packages/host/src/local-workspace-file-api.ts": {
+          "bytesInOutput": 21
         },
         "packages/host/src/run-api.ts": {
           "bytesInOutput": 10
@@ -48624,7 +48653,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 5516309
+      "bytes": 5516376
     }
   }
 }

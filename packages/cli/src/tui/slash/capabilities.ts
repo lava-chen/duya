@@ -15,12 +15,10 @@
  *
  * ## What it deliberately does not do
  *
- * It does not read a workspace file. `requestWorkspaceFileRead` exists and is
- * tested, but the Host route behind it today is the rollout-import endpoint,
- * which is not a file read. Dressing that up as `/read-file` would invent an
- * endpoint the Host does not have. Until the L-HOST lane adds a real one, this
- * command shows the negotiation and the refusal text, which is the part a user
- * can act on.
+ * It does not read a workspace file. It is the DIAGNOSIS: what the Host serves,
+ * what this CLI consumes, and the Host's own sentence when a requirement is
+ * refused. The consumption half lives in `/read-file`, which asks for a file and
+ * therefore proves the capability is more than a name in a handshake.
  */
 
 import type { TuiSlashCommandDef, TuiSlashContext } from './types.js';

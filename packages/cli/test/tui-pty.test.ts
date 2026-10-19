@@ -225,7 +225,15 @@ process.on('disconnect', () => process.exit(0));
 describe('duya tui in a real 80-column PTY', () => {
   beforeAll(async () => {
     if (await bundleIsStale()) {
-      await execFileAsync('npm.cmd', ['run', 'build:cli-bundle'], { cwd: REPO_ROOT, timeout: 300_000 });
+      // Invoked as `node <script>` rather than `npm run build:cli-bundle`,
+      // because `execFile` cannot spawn `npm.cmd` on Windows — it throws at
+      // spawn time, which surfaced as a suite that failed with an empty message
+      // and every test reported as "skipped". The script is what the npm entry
+      // runs anyway, so this loses nothing.
+      await execFileAsync(process.execPath, [path.join(REPO_ROOT, 'scripts', 'build-cli-bundle.mjs')], {
+        cwd: REPO_ROOT,
+        timeout: 300_000,
+      });
     }
   }, 300_000);
 

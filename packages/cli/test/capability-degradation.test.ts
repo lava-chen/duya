@@ -35,6 +35,7 @@ import {
   HOST_CAPABILITY_OWNERS,
   PROTOCOL_CAPABILITIES,
   type HostCapability,
+  type WorkspaceId,
 } from '@duya/agent-protocol';
 import type { HostHandshakeV1 } from '@duya/host/http-client';
 import { HostSessionHttpClient } from '@duya/host/http-client';
@@ -47,9 +48,10 @@ import {
 } from '../src/host-capability-gate.js';
 
 const TOKEN = 'test-token';
+const WORKSPACE_ID = 'ws-degradation' as WorkspaceId;
 
-interface RolloutApiStub {
-  readonly calls: { sourcePath: string }[];
+interface WorkspaceFileStub {
+  readonly calls: { workspaceId: string; relativePath: string }[];
 }
 
 /**
@@ -57,43 +59,40 @@ interface RolloutApiStub {
  * refusal can be proven by an empty call log rather than by an assertion about
  * the absence of an exception.
  */
-function rolloutApiStub(): RolloutApiStub & HostSessionHttpServerOptions['localRolloutApi'] {
-  const calls: { sourcePath: string }[] = [];
+function workspaceFileStub(): WorkspaceFileStub & NonNullable<HostSessionHttpServerOptions['workspaceFileApi']> {
+  const calls: { workspaceId: string; relativePath: string }[] = [];
   const stub = {
     calls,
-    async importRollout(input: { readonly sourcePath: string }) {
-      calls.push({ sourcePath: input.sourcePath });
-      return { sessionId: 'imported-1', imported: 1, skipped: 0 };
-    },
-    async createImportedSession() {
-      return { sessionId: 'imported-1' };
-    },
-    async rollbackImportedSessions() {
-      return { deletedSessionIds: [], failedSessionIds: [] };
-    },
-    async exportRollout() {
-      return { absolutePath: '/workspace/out.jsonl', lines: 1, bytes: 1 };
+    async readWorkspaceFile(input: { readonly workspaceId: string; readonly relativePath: string }) {
+      calls.push({ workspaceId: input.workspaceId, relativePath: input.relativePath });
+      return {
+        workspaceId: input.workspaceId as never,
+        relativePath: input.relativePath,
+        totalBytes: 12,
+        content: 'notes content',
+        truncated: false,
+      };
     },
   };
-  return stub as unknown as RolloutApiStub & HostSessionHttpServerOptions['localRolloutApi'];
+  return stub as unknown as WorkspaceFileStub & NonNullable<HostSessionHttpServerOptions['workspaceFileApi']>;
 }
 
 describe('CLI capability degradation over the Host handshake', () => {
   let server: HostSessionHttpServer;
   let client: HostSessionHttpClient;
-  let rollouts: ReturnType<typeof rolloutApiStub>;
+  let workspaceFiles: ReturnType<typeof workspaceFileStub>;
 
   async function bootHost(options?: {
     readonly withWorkspaceRead: boolean;
     readonly identity?: HostSessionHttpServerOptions['identity'];
   }): Promise<void> {
-    rollouts = rolloutApiStub();
+    workspaceFiles = workspaceFileStub();
     server = new HostSessionHttpServer({
       api: {} as HostSessionHttpServerOptions['api'],
       taskApi: {} as HostSessionHttpServerOptions['taskApi'],
       token: TOKEN,
       ...(options?.identity === undefined ? {} : { identity: options.identity }),
-      ...(options?.withWorkspaceRead === true ? { localRolloutApi: rollouts } : {}),
+      ...(options?.withWorkspaceRead === true ? { workspaceFileApi: workspaceFiles } : {}),
     });
     await server.listen();
     client = new HostSessionHttpClient(`http://127.0.0.1:${server.port}`, TOKEN);
@@ -107,14 +106,14 @@ describe('CLI capability degradation over the Host handshake', () => {
     await bootHost({ withWorkspaceRead: false });
 
     const handshake = await client.handshake(CLI_HOST_DECLARATION);
-    const outcome = await requestWorkspaceFileRead(client, handshake, '/workspace/notes.md');
+    const outcome = await requestWorkspaceFileRead(client, handshake, WORKSPACE_ID, 'notes.md');
 
     expect(outcome.status).toBe('refused');
     expect(outcome.status === 'refused' && outcome.reason).toContain(WORKSPACE_READ_CAPABILITY);
     expect(outcome.status === 'refused' && outcome.reason).toContain('duya-host');
     expect(outcome.status === 'refused' && outcome.reason)
       .toBe('duya-host 0.1.0 does not provide workspace_filesystem: Host duya-host registers no channel that serves workspace_filesystem');
-    expect(rollouts.calls).toEqual([]);
+    expect(workspaceFiles.calls).toEqual([]);
 
     // The Host still answers, and still answers partially: dropping the
     // workspace API removes one name, not the whole declaration.
@@ -125,10 +124,14 @@ describe('CLI capability degradation over the Host handshake', () => {
     await bootHost({ withWorkspaceRead: true });
 
     const handshake = await client.handshake(CLI_HOST_DECLARATION);
-    const outcome = await requestWorkspaceFileRead(client, handshake, '/workspace/notes.md');
+    const outcome = await requestWorkspaceFileRead(client, handshake, WORKSPACE_ID, 'notes.md');
 
     expect(outcome.status).toBe('read');
-    expect(rollouts.calls).toEqual([{ sourcePath: '/workspace/notes.md' }]);
+    // The read carries Workspace IDENTITY and a relative path. There is no
+    // absolute host path anywhere in the request, which is what makes the
+    // capability a workspace capability rather than a filesystem one.
+    expect(workspaceFiles.calls).toEqual([{ workspaceId: WORKSPACE_ID, relativePath: 'notes.md' }]);
+    expect(outcome.status === 'read' && outcome.result.content).toBe('notes content');
   });
 
   it('refuses rather than assuming support when the Host declares no capabilities at all', async () => {
@@ -139,12 +142,12 @@ describe('CLI capability degradation over the Host handshake', () => {
     const silent: HostHandshakeV1 = { ...handshake, provides: undefined, unsupported: undefined };
 
     const negotiation = negotiateHostCapabilities(CLI_HOST_DECLARATION, silent, [WORKSPACE_READ_CAPABILITY]);
-    const outcome = await requestWorkspaceFileRead(client, silent, '/workspace/notes.md');
+    const outcome = await requestWorkspaceFileRead(client, silent, WORKSPACE_ID, 'notes.md');
 
     expect(negotiation.provided).toBeNull();
     expect(outcome.status).toBe('refused');
     expect(outcome.status === 'refused' && outcome.reason).toContain('did not declare');
-    expect(rollouts.calls).toEqual([]);
+    expect(workspaceFiles.calls).toEqual([]);
   });
 
   it('treats an advertised capability as a hint, not a credential', async () => {
@@ -155,9 +158,9 @@ describe('CLI capability degradation over the Host handshake', () => {
     // The gate passes on the same handshake, but the token does not, so the
     // Host still refuses. Advertising a capability grants nothing.
     const unauthenticated = new HostSessionHttpClient(`http://127.0.0.1:${server.port}`, 'wrong-token');
-    await expect(unauthenticated.importRollout({ sourcePath: '/workspace/notes.md', mode: 'restore' }))
+    await expect(unauthenticated.readWorkspaceFile({ workspaceId: WORKSPACE_ID, relativePath: 'notes.md' }))
       .rejects.toMatchObject({ status: 403, code: 'invalid_bearer_token' });
-    expect(rollouts.calls).toEqual([]);
+    expect(workspaceFiles.calls).toEqual([]);
   });
 
   it('reports a non-empty negotiation on both sides so an empty one cannot read as a pass', async () => {

@@ -47,6 +47,7 @@ import {
 } from './host-diagnostics-log.js';
 import { HostSessionHttpServer } from './http-server.js';
 import { createHostLocalRolloutApi } from './local-rollout-api.js';
+import { createHostLocalWorkspaceFileApi } from './local-workspace-file-api.js';
 import { createHostLocalSessionApi } from './local-session-api.js';
 import { createHostLocalAttachmentApi } from './local-attachment-api.js';
 import { createHostLocalSettingsApi } from './local-settings-api.js';
@@ -473,6 +474,9 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       api,
       localSessionApi: createHostLocalSessionApi({ stores: core.stores, sessions: api }),
       localRolloutApi: createHostLocalRolloutApi({ stores: core.stores, sessions: api, rolloutRoot }),
+  // The dedicated read, so `workspace_filesystem` has a channel whose job is
+  // reading a file rather than restoring a transcript through it.
+  workspaceFileApi: createHostLocalWorkspaceFileApi({ workspaces: workspaceAccess }),
       localAttachmentApi,
       localSettingsApi: createHostLocalSettingsApi(settings),
       localTerminalHistoryApi: createHostLocalTerminalHistoryApi(new TerminalHistoryStore(mainDatabase.db)),
