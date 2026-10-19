@@ -430,6 +430,17 @@ export class HostRunExecutionController {
         }
         caller = { sessionId, runId: value.runId, epoch: value.epoch as number };
         this.validateSessionCaller(caller);
+      } else {
+        // The worker process is bound to one session, but the run that owns it
+        // is Host state. Derive the caller here so durable writes carry the
+        // owning run identity without trusting the worker payload. A worker
+        // serving work between runs has no live run and stays unstamped.
+        const liveRunId = this.#orchestrator.runForSession(sessionId);
+        const liveEpoch = liveRunId === null ? null : this.#options.runs.currentEpoch(liveRunId);
+        if (liveRunId !== null && liveEpoch !== null &&
+            this.#options.runs.getRun(liveRunId)?.status === 'running') {
+          caller = { sessionId, runId: liveRunId, epoch: liveEpoch };
+        }
       }
       const result = await this.#options.bridge.dispatch(
         String(msg.action ?? ''),
