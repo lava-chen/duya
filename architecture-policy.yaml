@@ -294,9 +294,18 @@ modules:
 
   # Node-only local BFF. A future browser entry needs its own narrower module.
   - id: web-server
-    roots: [apps/web/src/server, apps/web/tests/server]
+    roots: [apps/web/src/server, apps/web/tests/server, apps/web/tests/fixtures]
     managed: true
     requires: [agent-protocol, duya-host]
+    owner: client
+
+  # Browser entry and transport. Keep Node-backed test fixtures in the
+  # web-server module above so the browser dependency contract stays narrow.
+  - id: web-client
+    roots: [apps/web/src/main.tsx, apps/web/src/client, apps/web/tests/client]
+    managed: true
+    requires: [agent-protocol, client-core, ui]
+    publicEntrypoints: [apps/web/src/main.tsx]
     owner: client
 
   # Client-side state projection from the Host's protocol events.
@@ -447,7 +456,7 @@ modules:
   - id: ui
     roots: [packages/ui]
     managed: false
-    requires: [agent-protocol, legacy-ai, command-catalog, connectors, legacy-conductor, input-completion, legacy-plugin-core]
+    requires: [agent-protocol, client-core, legacy-ai, command-catalog, connectors, legacy-conductor, input-completion, legacy-plugin-core]
     owner: ui
 
   - id: desktop-host

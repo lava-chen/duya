@@ -139,6 +139,11 @@ const BUILD_ORDER = [
   '@duya/client-core', // -> @duya/agent-protocol
   '@duya/computer-use', // -> @duya/ai
 
+  // Source-only shared React renderer. Its build step typechecks the public
+  // source tree (it intentionally emits no JS because both Vite surfaces
+  // consume the same source entry and stylesheet).
+  '@duya/ui', // -> protocol, ai, client-core, conductor, plugin-core, input-completion
+
   // Concrete browser/CUA and connector adapters consume the platform and
   // plugin contracts, while Runtime consumes their public tool contracts.
   '@duya/capabilities',
@@ -152,7 +157,7 @@ const BUILD_ORDER = [
   // Level 5 — the Host composes the runtime and data packages; CLI connects to it.
   '@duya/host', //         -> @duya/agent-runtime, @duya/data, @duya/agent-protocol
   '@duya/cli', //          -> @duya/host, @duya/plugin-core, @duya/input-completion
-  '@duya/web', //          -> @duya/host, @duya/agent-protocol (Node BFF)
+  '@duya/web', //          -> @duya/host, @duya/agent-protocol, @duya/ui (Node BFF + shared source renderer)
 
 
   // Level 6 — last. `@duya/agent` consumes the level-2 through level-5 packages,
