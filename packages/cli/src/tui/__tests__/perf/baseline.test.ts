@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest';
 import { TranscriptModel } from '../../blocks.js';
 import { TranscriptRenderer } from '../../transcript-cache.js';
 import { MIN_RENDER_INTERVAL_MS } from '../../render-scheduler.js';
-import { DEFAULT_RENDER_OPTIONS, stylesOf, type RenderOptions } from '../../transcript-view.js';
+import { DEFAULT_RENDER_OPTIONS, type RenderOptions } from '../../transcript-view.js';
 import {
   buildDocument,
   makeHarness,
@@ -138,11 +138,17 @@ describe('TUI frame latency baseline', () => {
  * numbers here are a floor rather than a worst case; the expensive shapes
  * (expanded thinking, tool results) are bounded by the same per-block cache
  * and were not what made the loop O(document).
+ *
+ * `theme` is DELIBERATELY omitted: `RenderOptions.theme` is a `ThemeTags`
+ * (token → tag body), and passing a `Styles` (token → function) instead makes
+ * every tag body a stringified function. Test files are excluded from
+ * `tsc -b`, so the compiler does not catch that; the first version of this
+ * constant did exactly that and silently measured a document rendered with
+ * garbage markup.
  */
 const RENDER_OPTIONS: RenderOptions = {
   ...DEFAULT_RENDER_OPTIONS,
   width: 80,
-  theme: stylesOf({ theme: null, renderer: 'own' }),
   renderer: 'own',
 };
 

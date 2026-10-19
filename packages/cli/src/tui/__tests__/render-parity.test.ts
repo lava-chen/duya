@@ -16,6 +16,8 @@ import blessed from 'blessed';
 
 import { createScreenSurface } from '../screen/index.js';
 import type { RegionPatch, SurfaceRegion } from '../screen/types.js';
+import { renderInlineTokens, tokenizeInline } from '../markdown/inline.js';
+import { stylesOf } from '../transcript-view.js';
 import { gridDiff, replay, SCREEN_COLUMNS, SCREEN_ROWS, type Grid } from './render-parity.harness.js';
 type Renderer = 'blessed' | 'own';
 
@@ -103,7 +105,7 @@ async function drive(renderer: Renderer): Promise<Grid[]> {
   const { surface, output } = makeSurface(renderer);
   const grids: Grid[] = [];
   try {
-    for (const step of SCRIPT) {
+    for (const step of scriptFor(renderer)) {
       for (const [region, patch] of Object.entries(step) as [SurfaceRegion, RegionPatch][]) {
         surface.update(region, patch);
       }
@@ -117,14 +119,52 @@ async function drive(renderer: Renderer): Promise<Grid[]> {
   return grids;
 }
 
+/**
+ * Inline Markdown chosen to exercise what the span layer now decides: nested
+ * constructs, a colour inside a bold run, a link, an image, and CJK next to
+ * styled ASCII.
+ */
+const INLINE_CORPUS: readonly string[] = [
+  'x **a `b` c** y',
+  '**粗体** 与 `代码` 并排',
+  '[docs](https://e.com)',
+  '![chart](/img.png)',
+  '~~del~~ and *em*',
+  'plain tail line',
+];
+
+/**
+ * The one step whose CONTENT depends on the renderer.
+ *
+ * Both renderers consume the same token tree, but each has its own tag
+ * spelling for the constructs it can paint: the own renderer has `{italic}`,
+ * blessed does not and folds emphasis to the accent colour. Feeding each
+ * renderer the spelling it would actually receive is the point — the claim
+ * being tested is "same Markdown, same glyphs", not "same bytes".
+ */
+function scriptFor(renderer: Renderer): readonly Step[] {
+  const styles = stylesOf({ renderer });
+  return [
+    ...SCRIPT,
+    {
+      transcript: {
+        lines: INLINE_CORPUS.map((markdown) => renderInlineTokens(tokenizeInline(markdown), styles)),
+        height: 8,
+      },
+    },
+  ];
+}
+
 describe('render parity (blessed vs own)', () => {
   it('draws the same glyphs for every frame of the script', async () => {
     const blessedGrids = await drive('blessed');
     const ownGrids = await drive('own');
-    expect(blessedGrids).toHaveLength(SCRIPT.length);
-    expect(ownGrids).toHaveLength(SCRIPT.length);
+    const frames = scriptFor('blessed').length;
+    expect(scriptFor('own')).toHaveLength(frames);
+    expect(blessedGrids).toHaveLength(frames);
+    expect(ownGrids).toHaveLength(frames);
 
-    for (let frame = 0; frame < SCRIPT.length; frame += 1) {
+    for (let frame = 0; frame < frames; frame += 1) {
       const left = blessedGrids[frame] as Grid;
       const right = ownGrids[frame] as Grid;
       const differences = gridDiff(left, right);
@@ -142,5 +182,19 @@ describe('render parity (blessed vs own)', () => {
     const grids = await drive('own');
     const flat = (grids[0] ?? []).map((row) => row.join('').replace(/\u0000/g, '')).join('\n');
     expect(flat).toContain('Line one of the transcript.');
+  });
+
+  it('draws the inline-Markdown frame, so the span corpus is not a no-op', async () => {
+    // Both spellings must reach the screen: the own one paints italic, the
+    // blessed one paints the accent fold, and neither may print a literal tag
+    // or a wrong glyph. `em` is the emphasis word in the corpus.
+    for (const renderer of ['blessed', 'own'] as const) {
+      const grids = await drive(renderer);
+      const last = (grids.at(-1) ?? []).map((row) => row.join('').replace(/\u0000/g, '')).join('\n');
+      expect(last, `${renderer} lost the emphasis word`).toContain('em');
+      expect(last, `${renderer} printed a literal tag`).not.toContain('{');
+      expect(last, `${renderer} lost the link label`).toContain('docs');
+      expect(last, `${renderer} lost the image badge`).toContain('[image]');
+    }
   });
 });

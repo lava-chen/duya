@@ -99,23 +99,57 @@ P95 输入→绘制 < 30ms；流式 ≥ 30 FPS（trailing-edge 间隔 ≤ 33ms�
 
 ## 5. 契约
 
-### 5.1 Span 与 Scene（Phase 1 落地，直接可抄）
+### 5.1 Span 与 Scene（Phase 1 已落地）
+
+**实际形态（与讨论稿的三处偏差已注明理由）**
 
 ```ts
+// tui/core/color.ts —— 颜色词汇的唯一来源
+export type SpanColor =
+  | { readonly kind: 'named'; readonly name: string }    // SGR 30–37 / 90–97，终端自有的 16 色
+  | { readonly kind: 'indexed'; readonly index: number }; // xterm-256 调色板项，38;5;n
+
 // tui/core/span.ts
-export interface StyledSpan {
-  readonly text: string;          // 已定宽：宽度信息由 width.ts 在 token 阶段保证
-  readonly fg?: number;           // 256 色索引；命名色在 ThemeToken→palette 时已解析
-  readonly bg?: number;
-  readonly attrs: ReadonlySet<'bold' | 'italic' | 'strike' | 'underline'>;
-  readonly linkId?: string;       // OSC 8 预留（O3 只留字段）
+export type SpanAttribute = 'bold' | 'italic' | 'strike' | 'underline';
+export interface SpanStyle {
+  readonly fg?: SpanColor;
+  readonly bg?: SpanColor;
+  /** 规范序（bold→italic→strike→underline）、去重后的数组。用 attrs() 构造。 */
+  readonly attrs?: readonly SpanAttribute[];
+  readonly linkId?: string;   // OSC 8 预留，序列化时为 no-op
 }
+export interface StyledSpan extends SpanStyle { readonly text: string }
 export interface RenderScene {
   readonly rows: readonly (readonly StyledSpan[])[];
-  readonly cursor?: { row: number; column: number };
-  readonly caret?: { row: number; column: number };  // transcript 选区
+  readonly cursor?: { readonly row: number; readonly column: number };
+  readonly caret?: { readonly row: number; readonly column: number };
 }
+export function tokensToSpans(tokens, roles: InlineSpanRoles, inherited?: SpanStyle): readonly StyledSpan[]
+export function mergeSpanStyles(outer, inner): SpanStyle   // 属性并集，颜色内层覆盖
+export function spanText(spans): string
 ```
+
+**偏差①：`fg?: number` → `SpanColor` 联合体。** 讨论稿的注释假定「命名色在 ThemeToken→palette 时已解析」，实际没有：`DARK_THEME_TAGS` 存的是 `gray-fg` 这样的**标签体**，而给定标签体再还原成数字会丢掉「命名」与「256 索引」的区别。二者不可互换：SGR 36（终端自有的 cyan，用户可重定义）不等于调色板第 6 项。压平会让 `{cyan-fg}` 与 `{6-fg}` 变成同一颜色，也会让 blessed 链无法从 Span 还原它要解析的标签。
+
+**偏差②：`attrs: Set` → 规范序数组。** 序列化必须确定：同一 span 每次都得产出同样的字节，否则缓存 key 与 parity 断言失去意义。Set 的迭代序是插入序，而插入序恰恰是压平丢弃的那个事实。数组 + `attrs()` 归一化让 `[…attrs]` 本身成为字节序。
+
+**偏差③：Scene 暂未产出。** `RenderScene` 类型已定，但 Phase 1 的消费者仍是「行字符串」（region API 吃 tagged lines）。真正开始产出 Scene 是 Phase 5（`RenderScene` 成为两个 Output 的唯一输入），届时 `cursor`/`caret` 才有明确的写入方。
+
+**两个序列化器 + 一个信封**
+
+```ts
+// markdown/inline.ts —— 标签兼容视图（过渡层，Phase 5 只留 blessed 一条腿）
+export function spansToTags(spans, view: SpanTagView, envelope?: SpanStyle): string
+// terminal/ansi.ts —— 直发 SGR
+export function spansToAnsi(spans: readonly StyledSpan[]): string
+```
+
+- **最小转换**：只发本条与上一条**不同**的标签，所以 `**a `b` c**` 是 `{bold}a {gray-fg}b{/gray-fg} c{/bold}`，而不是每段都关掉再重开 `{bold}`。长度随「样式变化次数」而不是「文本量」增长。
+- **信封（envelope）**：块级样式作为外层框，Span 相对它发增量。这是 `# 结果` 能保持 `{cyan-fg}{bold}…{/bold}{/cyan-fg}`（颜色在外、粗体在内）而 `code` 又能替换自己那段的颜色的原因 —— 事后包字符串做不到，因为那样「谁在外层」就由字符串拼接顺序决定了。
+- **渲染器差异只在视图里**：`tokensToSpans` 对强调一律产出 `italic` 属性，**与目标渲染器无关**；blessed 没有 italic 这件事在 `spansToTags` 里折叠成 accent 颜色。把折叠提前会让共享表示变成 blessed 的形状，第三个渲染器一来就崩（V8）。
+
+**一致性保证**：`spansToAnsi(spans)` 与 `renderMarkup(spansToTags(spans, ownView))` 在同一 corpus（含 500 条随机输入）上**逐字节相等**，这是 `span.test.ts` 的核心断言 —— 两个独立实现互相印证，而不是自己证明自己。
+
 
 ### 5.2 组件接口（Phase 3 落地）
 
@@ -185,12 +219,18 @@ App (id: root)
     已修：OwnKeyParser 对 space 发 `ch=undefined` 导致编辑器吞空格（own 转默认后必现，blessed 语义是 `ch=' '`）——两处分支补 `ch=' '`，级联修好 7 条断言。
   - 门禁：`env -u CODEBUDDY_SAFE_DELETE_BULK_STATE_DIR npm run typecheck:all` + `packages/cli` 全量 + parity harness + 基准脚本产出 JSON
 
-- [ ] **Phase 1 — StyledSpan 核心（I1，D2）**
-  - [ ] 1.1 `tui/core/span.ts`：Span/Scene 类型 + `tokensToSpans()`（吃 `InlineToken`，含 heading/list 组合逻辑自 `renderAssistantMarkdown` 迁入）
-  - [ ] 1.2 `ansi.ts` 增加 Span→ANSI 序列化器（SGR 合并、OSC 8 字段序列化为 no-op）
-  - [ ] 1.3 `renderInlineTokens` 改为 Span→标签串的兼容视图；blessed-surface 走兼容视图，OwnSurface 直吃 Span
-  - [ ] 1.4 三链一致性测试：同一 token 树经 Span 与经标签两条路径，glyph grid 等价（复用 614 parity harness）
-  - 门禁：`tui/__tests__/span.test.ts`（新增）+ `render-parity.test.ts` + `packages/cli` 全量
+- [x] **Phase 1 — StyledSpan 核心（I1，D2）**
+  - [x] 1.1 `tui/core/span.ts`：Span/Scene 类型 + `tokensToSpans()`（吃 `InlineToken`，含 heading/list 组合逻辑自 `renderAssistantMarkdown` 迁入）
+    - **执行记录**：`core/color.ts`（颜色词汇唯一来源，替换 `terminal/sgr.ts` 与 `screen/own/markup.ts` 各自的表）+ `core/span.ts`（类型、`attrs()`/`mergeSpanStyles()`/`withSpanStyle()`/`spanText()`/`sameStyle()`、`tokensToSpans()`）。**heading 的组合逻辑迁为 envelope**（`renderInlineTokens(tokens, styles, envelope)`），不再手工拼 `rawTagPair` 对；list/quote/hr 的 marker 仍是单色 `styles.accent(...)` 直接产出，未改 —— 它们本来就没有嵌套，迁移只增加风险。
+  - [x] 1.2 `ansi.ts` 增加 Span→ANSI 序列化器（SGR 合并、OSC 8 字段序列化为 no-op）
+    - **执行记录**：`spansToAnsi()`，按「终端当前实际所处的样式」diff 发射而不是每 span 一套序列，属性序 bold→italic→strike→underline→fg→bg。`linkId` 明确为 no-op（OSC 8 不改变画出什么，且标签词汇里没有对应拼写）。bg 可表达但标签视图表达不了，已注明。
+  - [x] 1.3 `renderInlineTokens` 改为 Span→标签串的兼容视图；blessed-surface 走兼容视图，OwnSurface 直吃 Span
+    - **执行记录**：`renderInlineTokens = spansToTags(tokensToSpans(...))`，签名向后兼容（多出可选 envelope 参数）。`Styles` 增加 `tags: ThemeTags`，让「某个语义 token 是什么颜色」是查表而不是拿哨兵探函数。**OwnSurface 尚未直吃 Span** —— 它的 region API 仍以 tagged lines 为契约，这一步归 Phase 5（与 Scene 产出同步）；Phase 1 只保证 Span 已经是唯一的样式决策点。
+  - [x] 1.4 三链一致性测试：同一 token 树经 Span 与经标签两条路径 glyph 等价（复用 614 parity harness）
+    - **执行记录**：`__tests__/span.test.ts` 24 条 —— token→span 全类型映射、颜色词汇（命名/索引不互转、拼写往返、越界拒绝）、嵌套压平（内层色覆盖、属性并集）、文本保真（宽度预算依赖它）、标签最小转换与配平、`spansToAnsi` 与 `renderMarkup∘spansToTags` 在 corpus + 500 条确定性随机输入上**逐字节相等**。`render-parity.test.ts` 增加一帧 inline-Markdown corpus（每渲染器用自己该收到的标签拼写生成），断言 blessed 与 own 画出相同字形、且都不出现字面 tag。
+  - 门禁：`tsc -b` 绿；`packages/cli` 1026/1034，8 红与 Phase 0 前完全一致（worker-path×3 / tui-pty×2 / registry×1 / host-stop-continue×2）。
+  - **顺带修掉的真 bug**：`perf/baseline.test.ts` 的 `RENDER_OPTIONS.theme` 曾传 `stylesOf(...)`（token→**函数**）而不是 `ThemeTags`（token→**标签体**），于是 V5 的文档是在「标签体是字符串化的函数」这种畸形渲染下量的。测试文件被 `tsc -b` 排除，类型没挡住 —— 这条排除策略的代价，已写进该常量的注释。行数（2199 / 21999）修正后不变，故 §8.1 的 V5 结论仍成立，但耗时按修正后重测：13.1ms / 79.7ms。
+  - **仍未做的**：`transcript-view.ts` 里 `rawTagPair` 还有 3 处（tool header、thinking 预览的 bold-on-muted）—— 它们是块级手工组合，等 Phase 5/6 组件化时一并消失。此处不迁，是因为 bold-on-muted 的**外层是 bold**、heading 的**外层是颜色**，两者用同一个规范序无法同时字节一致；信封机制能表达，但需要为每个组合点单独决定「谁是信封」，在没有消费者之前先做只是把复杂度提前。
 
 - [ ] **Phase 2 — Terminal Input Driver（I2）**
   - [ ] 2.1 `tui/terminal/input-driver.ts` 包 OwnKeyParser；TUIApp 的 blessed program 输入路径切换到 driver（blessed program 仅存能力探测）
@@ -233,7 +273,7 @@ App (id: root)
 
 | # | 断言 | 验法 | 现状 | 目标 |
 |---|---|---|---|---|
-| V1 | 同一 token 树经 Span 与标签两条路径 glyph 等价 | Phase 1 parity 对拍 | 标签单路 | 双路等价 |
+| V1 | 同一 token 树经 Span 与标签两条路径 glyph 等价 | Phase 1 parity 对拍 | 双路**逐字节**等价（span.test.ts 24 条，含 500 条随机输入；render-parity 增一帧 inline corpus） | 双路等价 |
 | V2 | blessed 不再出现在运行时输入/绘制路径 | Phase 2/5 后 grep import + parity | `TUIApp.ts:38` | 仅 blessed-surface |
 | V3 | 键盘输入→绘制 P95 | Phase 0/7 基准 | own 32.0ms / blessed 48.5ms（见 §8.1） | <30ms |
 | V4 | 流式帧间隔 | 同上 | own p50 76.6ms / p95 79.4ms；blessed p50 77.2 / p95 83.9（同一 trailing-edge 机制） | ≥30FPS 等效 |

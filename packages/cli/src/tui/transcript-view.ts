@@ -73,6 +73,8 @@ import { capLines, truncateToWidth, visibleWidth } from './width.js';
 import { DARK_THEME_TAGS, type ThemeTags } from './theme.js';
 import { escapeTags } from './markdown/escape.js';
 import { renderInlineTokens, rawTagPair, tokenizeInline, type InlineToken } from './markdown/inline.js';
+import { colorFromTagBody } from './core/color.js';
+import type { SpanStyle } from './core/span.js';
 
 export { escapeTags } from './markdown/escape.js';
 
@@ -135,6 +137,17 @@ export const DEFAULT_RENDER_OPTIONS: RenderOptions = {
 export interface Styles {
   /** Which renderer these styles paint for; mappers branch on it. */
   readonly renderer: 'blessed' | 'own';
+  /**
+   * The raw theme tokens, alongside the functions above.
+   *
+   * The functions wrap text in tags, which is the right shape for the
+   * hand-written call sites that compose a line out of literals. The span layer
+   * needs the COLOUR behind a token rather than a wrapper around text, and
+   * probing a function with a sentinel to recover its tag body (`rawTagPair`)
+   * works but cannot be used to ask "what colour is `muted`" without building a
+   * string first. Carrying the tokens makes that a lookup.
+   */
+  readonly tags: ThemeTags;
   bold(s: string): string;
   /** Emphasis. The own renderer emits `{italic}`; blessed folds to accent. */
   italic(s: string): string;
@@ -159,6 +172,7 @@ export function stylesOf(options: Pick<RenderOptions, 'theme' | 'renderer'>): St
   const flat = (tag: string, s: string): string => `{${tag}}${escapeTags(s)}{/${tag}}`;
   return {
     renderer: options.renderer ?? 'blessed',
+    tags,
     bold: (s) => `{bold}${escapeTags(s)}{/bold}`,
     italic: (s) => `{italic}${escapeTags(s)}{/italic}`,
     strike: (s) => `{strike}${escapeTags(s)}{/strike}`,
@@ -457,17 +471,23 @@ function renderAssistantMarkdown(text: string, styles: Styles, width?: number): 
     if (heading !== null) {
       flushParagraph();
       const level = (heading[1] ?? '#').length;
-      const text = renderInlineMarkdown(heading[2] ?? '', styles);
       // Levels 1–2 read as document titles: heading colour AND bold. Deeper
       // levels stay single-colour. The `#` marks themselves are Markdown
       // syntax aimed at a browser, not content — they do not print (D5).
-      if (level <= 2) {
-        const headingTag = rawTagPair(styles.heading);
-        const boldTag = rawTagPair(styles.bold);
-        output.push(`${headingTag.open}${boldTag.open}${text}${boldTag.close}${headingTag.close}`);
-      } else {
-        output.push(styles.heading(text));
-      }
+      //
+      // The level's style is an ENVELOPE rather than a pair of tags around the
+      // rendered string: that is what keeps the colour outside the inline
+      // styles (`{cyan-fg}{bold}…{/bold}{/cyan-fg}`) while still letting an
+      // inner construct like `code` replace it for its own run. Wrapping the
+      // string afterwards would work too, but then the colour would be decided
+      // by string concatenation instead of by the same span layer that decides
+      // everything else.
+      const headingColour = colorFromTagBody(styles.tags.heading);
+      const envelope: SpanStyle = {
+        ...(headingColour === undefined ? {} : { fg: headingColour }),
+        ...(level <= 2 ? { attrs: ['bold' as const] } : {}),
+      };
+      output.push(renderInlineTokens(tokenizeInline(heading[2] ?? ''), styles, envelope));
       continue;
     }
 

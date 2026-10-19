@@ -28,30 +28,7 @@
  * `escapeTags`' `{open}` exists to prevent.
  */
 
-/** Foreground colour names → SGR parameter. */
-const NAMED_FOREGROUND: Readonly<Record<string, number>> = {
-  black: 30,
-  red: 31,
-  green: 32,
-  yellow: 33,
-  blue: 34,
-  magenta: 35,
-  cyan: 36,
-  white: 37,
-  'bright-black': 90,
-  'bright-red': 91,
-  'bright-green': 92,
-  'bright-yellow': 93,
-  'bright-blue': 94,
-  'bright-magenta': 95,
-  'bright-cyan': 96,
-  'bright-white': 97,
-  // blessed spells "gray"/"grey" as bright black. The light palette in
-  // `theme.ts` says so in as many words: `{gray-fg}` is called out as
-  // "bright black" when justifying 256-colour substitutes for it.
-  gray: 90,
-  grey: 90,
-};
+import { colorFromTagBody, sgrParameterFor, type SpanColor } from '../core/color.js';
 
 const SGR = '\x1b[';
 const BOLD_ON = `${SGR}1m`;
@@ -67,10 +44,8 @@ const FG_OFF = `${SGR}39m`;
 /** A tag that opens or closes an attribute. */
 type TagAction =
   | { readonly kind: 'bold' | 'italic' | 'strike'; readonly on: boolean }
-  /** A named colour, emitted as its direct SGR parameter (36 for cyan). */
-  | { readonly kind: 'fg-named'; readonly code: number }
-  /** A 256-colour palette entry, emitted as `38;5;n`. */
-  | { readonly kind: 'fg-indexed'; readonly code: number }
+  /** A foreground colour, in either vocabulary. */
+  | { readonly kind: 'fg'; readonly color: SpanColor }
   | { readonly kind: 'fg-off' };
 
 function parseTag(body: string): TagAction | null {
@@ -85,20 +60,10 @@ function parseTag(body: string): TagAction | null {
     if (name.endsWith('-fg')) return { kind: 'fg-off' };
     return null;
   }
-  if (!body.endsWith('-fg')) return null;
-
-  const value = body.slice(0, -'-fg'.length);
-  if (value === '') return null;
-
-  // A 256-colour number, e.g. `241-fg`. Guard against `999999-fg` being read
-  // as a valid colour: the range is closed and anything outside it is a typo.
-  if (/^\d+$/u.test(value)) {
-    const code = Number.parseInt(value, 10);
-    return code >= 0 && code <= 255 ? { kind: 'fg-indexed', code } : null;
-  }
-
-  const named = NAMED_FOREGROUND[value];
-  return named === undefined ? null : { kind: 'fg-named', code: named };
+  // The colour vocabulary is `core/color.ts`, shared with the own renderer and
+  // the span layer. Anything it does not recognise is not a tag.
+  const color = colorFromTagBody(body);
+  return color === undefined ? null : { kind: 'fg', color };
 }
 
 /**
@@ -153,10 +118,10 @@ export function tagsToAnsi(line: string): string {
       out += action.on ? ITALIC_ON : ITALIC_OFF;
     } else if (action.kind === 'strike') {
       out += action.on ? STRIKE_ON : STRIKE_OFF;
-    } else if (action.kind === 'fg-named') {
-      out += `${SGR}${action.code}m`;
-    } else if (action.kind === 'fg-indexed') {
-      out += `${SGR}38;5;${action.code}m`;
+    } else if (action.kind === 'fg') {
+      // One branch for both vocabularies: `sgrParameterFor` already answers
+      // `36` for named colours and `38;5;241` for indexed ones.
+      out += `${SGR}${sgrParameterFor(action.color)}m`;
     } else {
       out += FG_OFF;
     }

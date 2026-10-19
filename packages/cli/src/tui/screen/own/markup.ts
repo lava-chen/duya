@@ -28,33 +28,7 @@
  * attribute would need a measurement, not an extrapolation.
  */
 
-/** The blessed colour names this TUI uses, with their ANSI SGR foreground. */
-const NAMED_FOREGROUND: Readonly<Record<string, string>> = {
-  black: '30',
-  red: '31',
-  green: '32',
-  yellow: '33',
-  blue: '34',
-  magenta: '35',
-  cyan: '36',
-  white: '37',
-  // Blessed numbers its palette 0-15, where 8-15 are the bright variants and
-  // map to SGR 90-97. `gray` is 8, which is why it renders as bright black.
-  gray: '90',
-  grey: '90',
-  lightgray: '37',
-  lightgrey: '37',
-  brightblack: '90',
-  brightred: '91',
-  brightgreen: '92',
-  brightyellow: '93',
-  brightblue: '94',
-  brightmagenta: '95',
-  brightcyan: '96',
-  brightwhite: '97',
-  brightgray: '37',
-  brightgrey: '37',
-};
+import { colorFromTagBody, sgrParameterFor } from '../../core/color.js';
 
 /**
  * Attribute tags. `bold` is measured against blessed 0.1.81; `italic` (SGR 3)
@@ -98,28 +72,20 @@ const TAG = /\{(\/?)([a-zA-Z0-9#_-]+)\}/g;
  * knows. Null is deliberate: the token is then passed through as text, which is
  * what blessed does with an unrecognised tag and what keeps a mistyped colour
  * visible instead of silently rendering as default.
+ *
+ * The colour lookup is `core/color.ts`, shared with the span layer and the
+ * inline SGR writer. It flattens the name the way blessed does, so
+ * `{bright-green-fg}` and `{brightgreen-fg}` are the same tag — matching only
+ * the hyphenated spelling used to silently drop the whole bright palette.
  */
 function openingTag(body: string): Style | null {
   const attribute = ATTRIBUTES[body];
   if (attribute !== undefined) {
     return { bold: body === 'bold', italic: body === 'italic', strike: body === 'strike', fg: null };
   }
-  if (!body.endsWith('-fg')) return null;
-
-  // Strip the `-fg` suffix, then strip dashes and spaces: blessed looks a
-  // colour up by that flattened name, so `{bright-green-fg}` and
-  // `{brightgreen-fg}` are the same tag. Matching only the hyphenated spelling
-  // would silently drop the entire bright palette.
-  const key = body.slice(0, body.length - '-fg'.length).toLowerCase().replace(/[- ]/g, '');
-  const named = NAMED_FOREGROUND[key];
-  if (named !== undefined) return { bold: false, italic: false, strike: false, fg: named };
-  if (/^\d{1,3}$/.test(key)) {
-    const index = Number.parseInt(key, 10);
-    if (index >= 0 && index <= 255) {
-      return { bold: false, italic: false, strike: false, fg: `38;5;${index}` };
-    }
-  }
-  return null;
+  const color = colorFromTagBody(body);
+  if (color === undefined) return null;
+  return { bold: false, italic: false, strike: false, fg: sgrParameterFor(color) };
 }
 
 /** Fold the stack into the style that is actually in effect. */

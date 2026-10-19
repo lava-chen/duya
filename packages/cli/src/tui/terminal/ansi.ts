@@ -26,6 +26,9 @@
  * same primitive codex uses (`insert_history.rs:165-178`).
  */
 
+import { sgrParameterFor, type SpanColor } from '../core/color.js';
+import { hasAttr, sameStyle, type StyledSpan } from '../core/span.js';
+
 /** CSI introducer. */
 const CSI = '\x1b[';
 /** ESC. */
@@ -167,4 +170,79 @@ export function cursorUp(n: number): string {
 /** Move the cursor down `n` rows without changing the column. */
 export function cursorDown(n: number): string {
   return n <= 0 ? '' : `${CSI}${n}B`;
+}
+
+/**
+ * SGR parameters for one span's style, in the order this renderer emits them.
+ *
+ * Attributes first, then the foreground, then the background — the order
+ * `own/markup.ts` measured against blessed, kept here so the two paths produce
+ * the same bytes for the same screen.
+ */
+function spanParameters(span: StyledSpan): string[] {
+  const parameters: string[] = [];
+  if (hasAttr(span, 'bold')) parameters.push('1');
+  if (hasAttr(span, 'italic')) parameters.push('3');
+  if (hasAttr(span, 'strike')) parameters.push('9');
+  if (hasAttr(span, 'underline')) parameters.push('4');
+  if (span.fg !== undefined) parameters.push(sgrParameterFor(span.fg));
+  if (span.bg !== undefined) parameters.push(backgroundParameterFor(span.bg));
+  return parameters;
+}
+
+/** A background is the foreground code shifted up by ten (30→40, 90→100). */
+function backgroundParameterFor(color: SpanColor): string {
+  return color.kind === 'indexed' ? `48;5;${color.index}` : String(Number(sgrParameterFor(color)) + 10);
+}
+
+/** Whether a style asks the terminal to leave its default state. */
+function isStyled(span: StyledSpan | null): boolean {
+  if (span === null) return false;
+  return (span.attrs ?? []).length > 0 || span.fg !== undefined || span.bg !== undefined;
+}
+
+/**
+ * Serialise one line of spans to ANSI.
+ *
+ * ## Why the transitions, not the spans
+ *
+ * The obvious implementation emits a full style per span. That inflates every
+ * line with resets and re-opens that change nothing, and — worse — it would
+ * produce different bytes from the tag path for the same screen, which is the
+ * one thing the parity tests exist to catch. So the style the terminal is
+ * ACTUALLY in is tracked and only real changes are emitted: a bold run
+ * containing a muted word emits `ESC[1m`, `ESC[m ESC[38;5;241m`, then back.
+ *
+ * That is the same rule `own/markup.ts` measured and `spansToTags` applies on
+ * the tag side, reached independently here — which is why the test asserting
+ * the two agree is a real check rather than a tautology.
+ *
+ * ## OSC 8 is deliberately absent
+ *
+ * `linkId` is carried on the span and ignored here. Hyperlinks change what the
+ * terminal does with a click, not what it draws, and the tag vocabulary has no
+ * spelling for them yet; emitting them now would make the two paths differ for
+ * a feature nobody has asked to see on screen (plan 615 §O3).
+ */
+export function spansToAnsi(spans: readonly StyledSpan[]): string {
+  let out = '';
+  /** The style the terminal is in, or null before anything has been written. */
+  let written: StyledSpan | null = null;
+
+  for (const span of spans) {
+    if (span.text === '') continue;
+    if (written === null || !sameStyle(written, span)) {
+      const parameters = spanParameters(span);
+      // Reset only when the terminal is actually in a style: the first styled
+      // run of a line therefore starts without a leading `ESC[m`, which is
+      // what the tag path produces too.
+      out += isStyled(written) ? `${CSI}m` : '';
+      out += parameters.length === 0 ? '' : `${CSI}${parameters.join(';')}m`;
+      written = span;
+    }
+    out += span.text;
+  }
+
+  if (isStyled(written)) out += `${CSI}m`;
+  return out;
 }
