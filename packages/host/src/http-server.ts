@@ -4735,6 +4735,7 @@ function parseStartAgentRunInput(value: unknown): StartAgentRunInput | null {
       ? {}
       : { providerId: value.providerId }),
     ...(value.apiFormat === undefined ? {} : { apiFormat: value.apiFormat }),
+    ...(value.effort === undefined || typeof value.effort !== 'string' ? {} : { effort: value.effort }),
     ...(value.workingDirectory === undefined || typeof value.workingDirectory !== 'string'
       ? {}
       : { workingDirectory: value.workingDirectory }),
