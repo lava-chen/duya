@@ -218,6 +218,15 @@ import type {
 } from '@duya/agent-protocol/app-connections';
 import type { HostLocalPluginSetupApiV1 } from '@duya/agent-protocol/plugin-setup';
 import type {
+  HostPluginAppInstanceApiV1,
+  HostPluginAppInstanceCreateInput,
+  HostPluginAppInstanceWriteInput,
+  HostPluginAppInstanceStatusInput,
+  PluginAppInstanceRecord,
+  PluginAppInstanceWriteResult,
+  PluginAppInstanceStatusResult,
+} from '@duya/agent-protocol';
+import type {
   CreateDataSourceInput,
   DataSourceRefreshOutcome,
   DataSourceRow,
@@ -327,6 +336,7 @@ export class HostSessionHttpClient implements
   HostLocalProviderModelCapabilityApiV1,
   HostLocalAppConnectionApiV1,
   HostLocalPluginSetupApiV1,
+  HostPluginAppInstanceApiV1,
   HostLocalWorkbenchApiV1,
   HostLocalSidebarSectionsApiV1,
   HostLocalUsageApiV1,
@@ -1410,6 +1420,41 @@ export class HostSessionHttpClient implements
       { id },
     );
     return result.removed;
+  }
+
+  async createPluginAppInstance(input: HostPluginAppInstanceCreateInput): Promise<PluginAppInstanceRecord> {
+    const result = await this.request<{ instance: PluginAppInstanceRecord }>(
+      'POST', '/v1/local/plugin-app-instances', input,
+    );
+    return result.instance;
+  }
+
+  async getPluginAppInstance(instanceId: string): Promise<PluginAppInstanceRecord | null> {
+    const result = await this.request<{ instance: PluginAppInstanceRecord | null }>(
+      'GET', `/v1/local/plugin-app-instances/${encodeURIComponent(instanceId)}`,
+    );
+    return result.instance;
+  }
+
+  async listPluginAppInstances(pluginId: string, appId?: string): Promise<readonly PluginAppInstanceRecord[]> {
+    const query = new URLSearchParams({ pluginId });
+    if (appId !== undefined) query.set('appId', appId);
+    const result = await this.request<{ instances: PluginAppInstanceRecord[] }>(
+      'GET', `/v1/local/plugin-app-instances?${query.toString()}`,
+    );
+    return result.instances;
+  }
+
+  async writePluginAppInstanceState(
+    instanceId: string, input: HostPluginAppInstanceWriteInput,
+  ): Promise<PluginAppInstanceWriteResult> {
+    return this.request('POST', `/v1/local/plugin-app-instances/${encodeURIComponent(instanceId)}/state`, input);
+  }
+
+  async setPluginAppInstanceStatus(
+    instanceId: string, input: HostPluginAppInstanceStatusInput,
+  ): Promise<PluginAppInstanceStatusResult> {
+    return this.request('POST', `/v1/local/plugin-app-instances/${encodeURIComponent(instanceId)}/status`, input);
   }
 
   async listPluginSetupValues(): Promise<Record<string, Record<string, string>>> {

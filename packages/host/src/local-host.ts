@@ -65,6 +65,7 @@ import { createHostLocalModelCapabilityApi } from './local-model-capability-api.
 import { createHostLocalProviderModelCapabilityApi } from './local-provider-model-capability-api.js';
 import { createHostLocalAppConnectionApi } from './local-app-connection-api.js';
 import { createHostLocalPluginSetupApi } from './local-plugin-setup-api.js';
+import { createHostPluginAppInstanceApi } from './local-plugin-app-instance-api.js';
 import { createHostLocalWorkbenchApi } from './local-workbench-api.js';
 import { createHostLocalSidebarSectionsApi } from './local-sidebar-sections-api.js';
 import { createHostLocalUsageApi } from './local-usage-api.js';
@@ -518,6 +519,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
         new AppConnectionStore(mainDatabase.db, deriveConnectionSlug),
       ),
       localPluginSetupApi: createHostLocalPluginSetupApi(new PluginSetupStore(mainDatabase.db)),
+      pluginAppInstanceApi: createHostPluginAppInstanceApi(core.stores.appInstances),
       localWorkbenchApi: createHostLocalWorkbenchApi(new WorkbenchDataStore(mainDatabase.db)),
       localSidebarSectionsApi: createHostLocalSidebarSectionsApi(new SidebarSectionsStore(mainDatabase.db)),
       localUsageApi: createHostLocalUsageApi({
