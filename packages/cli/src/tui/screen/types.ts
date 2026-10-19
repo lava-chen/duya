@@ -70,15 +70,27 @@ export interface RegionPatch {
  * left inside it, and only whoever placed the border knows that. Measuring
  * locally would be the same class of bug as asking for "the width minus the
  * padding" without knowing whether there is any padding.
+ *
+ * `innerWidth`/`innerHeight` follow blessed's `iwidth`/`iheight`, which is the
+ * long-standing contract here because blessed was the only renderer for most of
+ * this code's life: they are the space the border COSTS, not the space left
+ * inside it, so the content box is `width - innerWidth`. Reading them as
+ * "content width" is the easy mistake — it inverts the meaning on exactly the
+ * borderless regions where the number is zero. `own` reproduces blessed's
+ * convention rather than its own more natural one for that reason: a caller
+ * must not have to know which renderer it is talking to.
  */
 export interface RegionMetrics {
   /** Outer columns, border included. */
   readonly width: number;
-  /** Columns available for content. */
+  /**
+   * Columns the border (and padding) consume; `width - innerWidth` is the
+   * content width. Named after blessed's `iwidth` and kept for compatibility.
+   */
   readonly innerWidth: number;
   /** Outer rows, border included. */
   readonly height: number;
-  /** Rows available for content. */
+  /** Rows the border consumes; `height - innerHeight` is the content height. */
   readonly innerHeight: number;
   /** Column of the region's outer left edge. */
   readonly left: number;

@@ -32,6 +32,8 @@ export class OwnScreenSurface implements ScreenSurface {
   private suspendedFlag = false;
   private activeFlag = false;
   private laidOutFlag = false;
+  /** A frame is already queued for the next microtask. */
+  private renderScheduled = false;
 
   constructor(private readonly options: OwnSurfaceOptions) {}
 
@@ -79,28 +81,36 @@ export class OwnScreenSurface implements ScreenSurface {
     if (!this.attached.has(region)) return null;
     if (!this.laidOutFlag) {
       const patch = this.patches.get(region);
-      const configuredHeight =
-        patch?.height ??
-        (region === 'input'
-          ? 3
-          : region === 'status'
-            ? this.options.statusRows
-            : region === 'overlay'
-              ? 7
-              : region === 'completion'
-                ? 3
-                : 0);
-      return {
-        width: 0,
-        innerWidth: 2,
-        height: configuredHeight,
-        innerHeight: 2,
-        left: 0,
-        top: 0,
-        innerLeft: 1,
-        innerTop: 1,
-        laidOut: false,
-      };
+      const size = this.currentSize();
+      // Before the first frame there is no laid-out box to report, so answer
+      // from the geometry the FIRST frame will use. Three traps are encoded
+      // here, each of which bit once `own` became the default renderer
+      // (plan 615 Phase 0):
+      //
+      //  - `width: 0` made `TUIApp.composerWidth()` fall through to its
+      //    fallback on every frame, clipping typed text to nothing.
+      //  - A fixed `innerHeight: 2` fed `inputChromeRows()` a value that
+      //    disagreed with the borderStyle the same frame asked for, so the
+      //    composer grew 2 rows per paint on a 2-row terminal until it sat at
+      //    `top: -5`.
+      //  - `innerWidth`/`innerHeight` must report what the border COSTS, which
+      //    is blessed's `iwidth`/`iheight`, not how much is left inside. The
+      //    content size is `width - innerWidth`; reporting the content width
+      //    made `composerWidth()` answer 80-78 = 2 and clip typed text to two
+      //    columns. Any framed region has this sign error, so the borderless
+      //    case (where both conventions read 0) hides it.
+      const layout = layoutRegion(
+        region,
+        patch,
+        {
+          size,
+          statusRows: this.options.statusRows,
+          overlayWidth: this.options.overlayWidth,
+          unicodeBox: this.options.unicodeBox,
+        },
+        false,
+      );
+      return layout.metrics;
     }
     return layoutRegion(
       region,
@@ -119,7 +129,34 @@ export class OwnScreenSurface implements ScreenSurface {
     return this.lastContent.get(region) ?? [];
   }
 
+  /**
+   * Compose and write the frame.
+   *
+   * The write is coalesced onto the microtask queue rather than done inline.
+   * That is blessed's behaviour, and the reason it matters is not throughput:
+   * a burst that arrives in one tick — a paste, or `input.write('rev')` — calls
+   * `render()` once per character while `update()` has already been called
+   * once per character. Writing each frame would put interim states on screen
+   * that the caller never asked for and, worse, that its own assertions then
+   * see (a completion list two keystrokes stale). Coalescing means the frame
+   * is composed from the patches AS THEY ARE at flush time, so only the state
+   * the user ends up looking at is ever written.
+   *
+   * `laidOut` flips at compose time, so `measure()` keeps the "not placed yet"
+   * answer until a frame has actually been composed — the distinction the
+   * cursor routine relies on.
+   */
   render(): void {
+    if (!this.readyFlag || this.suspendedFlag) return;
+    if (this.renderScheduled) return;
+    this.renderScheduled = true;
+    queueMicrotask(() => {
+      this.renderScheduled = false;
+      this.flushFrame();
+    });
+  }
+
+  private flushFrame(): void {
     if (!this.readyFlag || this.suspendedFlag) return;
     const composed = composeFrame(
       this.patches,

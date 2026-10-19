@@ -159,10 +159,11 @@ describe('ScreenSurface regions', () => {
     expect(surface.measure('status')?.height).toBe(1);
   });
 
-  it('reports measured geometry rather than letting callers compute it', async () => {
-    // `innerWidth`/`innerHeight` already account for whether a border exists.
-    // A renderer that reported raw numbers here would make the composer wrap
-    // two columns off on exactly the terminals that dropped their border.
+  it('reports the border cost, not the content size, in innerWidth/innerHeight', async () => {
+    // blessed's `iwidth`/`iheight`: what the border consumes. Callers derive
+    // the content box as `width - innerWidth`, so a renderer that reported the
+    // content size instead would clip typed text on every FRAMED region (and
+    // look correct on borderless ones, where both readings are 0).
     const { surface } = makeSurface(implementation.renderer, { attach: true });
     surface.update('input', { lines: ['x'], height: 3 });
     // `laidOut` is false until the renderer has actually placed the region, and
@@ -173,13 +174,15 @@ describe('ScreenSurface regions', () => {
 
     const framed = surface.measure('input');
     expect(framed?.laidOut).toBe(true);
-    expect(framed?.innerHeight).toBeLessThanOrEqual(framed?.height ?? 0);
+    expect(framed?.innerWidth).toBe(2);
+    expect(framed?.innerHeight).toBe(2);
 
     surface.update('input', { borderStyle: 'none' });
     surface.render();
     await settle();
     const bare = surface.measure('input');
-    expect(bare?.innerHeight).not.toBe(framed?.innerHeight);
+    expect(bare?.innerWidth).toBe(0);
+    expect(bare?.innerHeight).toBe(0);
     surface.destroy();
   });
 

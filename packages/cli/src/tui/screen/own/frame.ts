@@ -50,57 +50,57 @@ function putCell(grid: Cell[][], rowIndex: number, column: number, text: string,
   }
 }
 
-function putText(
-  grid: Cell[][],
-  rowIndex: number,
-  startColumn: number,
-  maxWidth: number,
-  text: string,
-  style: string,
-): number {
-  const row = grid[rowIndex];
-  if (row === undefined) return startColumn;
-  let column = startColumn;
-  const stop = Math.min(row.length, startColumn + maxWidth);
-  for (const glyph of Array.from(text)) {
-    const width = visibleWidth(glyph);
-    if (width === 0) {
-      const previous = row[column - 1];
-      if (previous !== undefined && !previous.continuation) previous.text += glyph;
-      continue;
-    }
-    if (column + width > stop) break;
-    putCell(grid, rowIndex, column, glyph, style);
-    column += width;
-  }
-  return column;
-}
-
+/**
+ * Draw one logical markup line, wrapping onto following rows when it is wider
+ * than the region.
+ *
+ * blessed wraps inside its element (`_clines`) and this renderer has to match
+ * it: without wrapping a notice wider than the pane is silently cut at the
+ * right edge, so text that blessed shows in full simply vanishes. Wrapping is
+ * a PAINT concern only — `content()` still reports the logical lines the caller
+ * handed over, which is why this does not touch the patch.
+ *
+ * Returns how many rows were consumed so the caller can advance the cursor.
+ */
 function drawMarkupLine(
   grid: Cell[][],
   row: number,
   column: number,
   maxWidth: number,
   line: string,
-): void {
+  maxRows: number,
+): number {
   // Content is one logical row. Control bytes are not printable terminal text.
   const safe = line.replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
   const rendered = renderMarkup(safe);
+  if (maxRows <= 0) return 0;
   const sgr = /\u001b\[([0-9;]*)m/g;
   let cursor = 0;
+  let writeRow = row;
   let writeColumn = column;
-  const stopColumn = column + maxWidth;
+  let rowsUsed = 1;
   let style = '';
+  const stopColumn = column + maxWidth;
   const emit = (text: string): void => {
-    if (writeColumn >= stopColumn) return;
-    writeColumn = putText(
-      grid,
-      row,
-      writeColumn,
-      stopColumn - writeColumn,
-      text,
-      style,
-    );
+    for (const glyph of Array.from(text)) {
+      const width = visibleWidth(glyph);
+      if (width === 0) {
+        // A zero-width glyph (a combining mark) belongs to the cell before it.
+        // Dropping it would decompose accented text into two visible glyphs.
+        const previous = grid[writeRow]?.[writeColumn - 1];
+        if (previous !== undefined && !previous.continuation) previous.text += glyph;
+        continue;
+      }
+      if (writeColumn + width > stopColumn) {
+        // Out of columns: continue on the next row, keeping the current style.
+        if (rowsUsed >= maxRows) return;
+        writeRow += 1;
+        writeColumn = column;
+        rowsUsed += 1;
+      }
+      putCell(grid, writeRow, writeColumn, glyph, style);
+      writeColumn += width;
+    }
   };
   let match = sgr.exec(rendered);
   while (match !== null) {
@@ -110,6 +110,7 @@ function drawMarkupLine(
     match = sgr.exec(rendered);
   }
   emit(rendered.slice(cursor));
+  return rowsUsed;
 }
 
 function borderSgr(color: string): string {
@@ -183,13 +184,18 @@ function drawRegion(grid: Cell[][], layout: RegionLayout, unicodeBox: boolean): 
   drawBorder(grid, layout, unicodeBox);
   const contentLeft = metrics.left + metrics.innerLeft;
   const contentTop = metrics.top + metrics.innerTop;
-  for (let index = 0; index < layout.lines.length && index < metrics.innerHeight; index += 1) {
-    drawMarkupLine(
+  // One logical line can occupy several physical rows when it wraps, so the
+  // cursor advances by what the last line CONSUMED rather than by index.
+  let cursorRow = 0;
+  for (const line of layout.lines) {
+    if (cursorRow >= layout.contentHeight) break;
+    cursorRow += drawMarkupLine(
       grid,
-      contentTop + index,
+      contentTop + cursorRow,
       contentLeft,
-      metrics.innerWidth,
-      layout.lines[index] ?? '',
+      layout.contentWidth,
+      line,
+      layout.contentHeight - cursorRow,
     );
   }
 }

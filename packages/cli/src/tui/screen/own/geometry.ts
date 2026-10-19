@@ -11,6 +11,19 @@ export interface RegionLayout {
   readonly borderColor: string;
   readonly hidden: boolean;
   readonly lines: readonly string[];
+  /**
+   * Columns the content is drawn into, border excluded.
+   *
+   * Kept beside `metrics.innerWidth` rather than folded into it because the
+   * two conventions differ: blessed's `iwidth` is the space the border EATS
+   * (`width - iwidth` is the content width), while callers that lay text out
+   * want the content width itself. `metrics` speaks blessed's convention so
+   * both renderers answer the same question the same way; the painter, which
+   * is private to this renderer, uses these.
+   */
+  readonly contentWidth: number;
+  /** Rows the content is drawn into, border excluded. */
+  readonly contentHeight: number;
 }
 
 export interface GeometryOptions {
@@ -162,14 +175,20 @@ export function layoutRegion(
       top: box.top,
       innerLeft: inset.left,
       innerTop: inset.top,
-      innerWidth: Math.max(0, box.width - inset.left - inset.right),
-      innerHeight: Math.max(0, box.height - inset.top - inset.bottom),
+      // blessed's `iwidth`/`iheight`: what the border costs, NOT what is left
+      // inside it. Every `RegionMetrics` consumer does `width - innerWidth`
+      // (see `TUIApp.composerWidth`), so reporting the content width here made
+      // `own` and `blessed` disagree by the border on every framed region.
+      innerWidth: inset.left + inset.right,
+      innerHeight: inset.top + inset.bottom,
       laidOut,
     },
     borderStyle,
     borderColor: patch?.borderColor ?? DEFAULT_BORDER_COLOR[region],
     hidden: patch?.hidden ?? DEFAULT_HIDDEN[region],
     lines: patch?.lines ?? [],
+    contentWidth: Math.max(0, box.width - inset.left - inset.right),
+    contentHeight: Math.max(0, box.height - inset.top - inset.bottom),
   };
 }
 

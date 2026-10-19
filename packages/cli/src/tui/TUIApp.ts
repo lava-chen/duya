@@ -38,7 +38,13 @@
 import blessed from 'blessed';
 import type { BlessedProgram, Widgets } from 'blessed';
 import { PassThrough } from 'node:stream';
-import { createScreenSurface, selectScreenRenderer, type ScreenRenderer, type ScreenSurface } from './screen/index.js';
+import {
+  createScreenSurface,
+  selectScreenRenderer,
+  type RegionMetrics,
+  type ScreenRenderer,
+  type ScreenSurface,
+} from './screen/index.js';
 import { TranscriptModel, readBlockKey, type LegacyFrame, type Block } from './blocks.js';
 import { DeltaBuffer, DEFAULT_STALE_MS } from './delta-buffer.js';
 import { RenderScheduler } from './render-scheduler.js';
@@ -1167,10 +1173,13 @@ export class TUIApp {
       renderer: this.renderer,
       // The pane width block renderers may span (horizontal rules). Inline
       // mode has no pane border, so the full terminal width is the budget;
-      // full-screen asks the surface for the transcript pane's inner width.
+      // full-screen asks the surface for the transcript pane and subtracts the
+      // border it costs. `innerWidth` is that cost — blessed's `iwidth` — not
+      // the content width, so a borderless transcript reports 0 and yields the
+      // full pane width rather than a zero-column wrap budget.
       width: this.inlineSurface !== null
         ? this.terminalSize().columns
-        : asNumber(this.fullScreen.measure('transcript')?.innerWidth, this.terminalSize().columns),
+        : transcriptWidth(this.fullScreen.measure('transcript'), this.terminalSize().columns),
       ...(this.focus === 'transcript' && selectedBlock !== undefined
         ? { selectedBlockId: selectedBlock.id }
         : {}),
@@ -1243,9 +1252,33 @@ export class TUIApp {
     );
   }
 
-  /** Widget border rows; tiny fullscreen composers temporarily omit borders. */
+  /**
+   * Pixel rows the composer spends on chrome (border or blank padding), which
+   * is NOT the same as the box's inner height.
+   *
+   * This used to return `measure('input').innerHeight`, which fed the height
+   * of the PREVIOUS frame back into the next one: on a 2-row terminal the box
+   * measured 6 tall, that 6 became `inputChromeRows()`, and the composer was
+   * re-laid out at 8 — the input slid off the top of the screen (plan 615
+   * Phase 0 probe: `top: -5`, `height: 6` on a 2-row terminal). Blessing that
+   * value works only because blessed re-derives `iheight` from a fixed 3-row
+   * box each frame; growth never compounds there.
+   *
+   * Derived from the terminal's row budget instead, so it is a function of
+   * size and NOT of the previous frame: a composer gets a border only when
+   * there is room for one plus at least one body row.
+   */
   private inputChromeRows(): number {
-    return asNumber(this.fullScreen.measure('input')?.innerHeight, 2);
+    const availableRows = Math.max(
+      1,
+      this.terminalSize().rows -
+        this.footerRows() -
+        (this.inlineSurface !== null
+          ? this.workingTailLines().length + this.queuePreviewLines().length
+          : 0) -
+        this.popupRows(),
+    );
+    return availableRows >= 3 ? 2 : 0;
   }
 
   /** Rows the status/footer area owns, which differs by presentation. */
@@ -3256,6 +3289,19 @@ function formatTokens(count: number): string {
  */
 function asNumber(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+/**
+ * Columns the transcript may wrap at, from the surface's own measurement.
+ *
+ * Falls back to the terminal width when there is no layout yet, and treats a
+ * non-positive result as "no layout" rather than as a real one-column budget:
+ * a zero-width wrap would put every glyph on its own line.
+ */
+function transcriptWidth(measured: RegionMetrics | null, fallback: number): number {
+  if (measured === null || measured.width <= 0) return fallback;
+  const content = measured.width - measured.innerWidth;
+  return content > 0 ? content : fallback;
 }
 
 /** Read `data.content`, tolerating both shapes the wire uses. */
