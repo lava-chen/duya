@@ -201,6 +201,21 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     requiresSession: false,
   },
   {
+    // Plan 610 T15. The first command that actually CONSUMES a Host capability:
+    // `/capabilities` prints the negotiation, this one asks for a file, so the
+    // advertised name is proved rather than assumed. `cli` only — there is no
+    // Desktop executor, and advertising it there is the advertised-but-
+    // unrunnable state the catalog's integrity tests forbid.
+    name: 'read-file',
+    label: 'Read workspace file',
+    labelZh: '读取工作区文件',
+    description: 'Read a file from this session\'s workspace through the Host',
+    descriptionZh: '通过 Host 读取当前会话工作区中的文件',
+    category: 'session',
+    surfaces: ['cli'],
+    requiresSession: true,
+  },
+  {
     // `copy` has a Desktop executor (executors/session.ts) that no popover entry
     // ever reached, so the handler was unreachable from the composer. Listed
     // here because the capability is real; the metadata simply had to be
