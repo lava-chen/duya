@@ -1,6 +1,7 @@
+import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readLocalHostRuntime } from '@duya/host/local-host';
 import { createWebBff } from './web-bff.js';
 
@@ -44,15 +45,43 @@ function resolveWebPort(env: NodeJS.ProcessEnv): number | undefined {
   return port;
 }
 
+/**
+ * Where the browser build lives relative to the compiled entry. `main.js`
+ * runs from `dist/server/`, so the bundle the build produced is the sibling
+ * `dist/browser/`. Resolved from `import.meta.url` rather than the process
+ * working directory, so it holds however the CLI was launched.
+ */
+export function browserBuildRoot(moduleUrl: string = import.meta.url): string {
+  return fileURLToPath(new URL('../browser/', moduleUrl));
+}
+
+/**
+ * Returns the build root only when it actually holds a document, so a missing
+ * or half-finished browser build leaves the server API-only instead of failing
+ * to start.
+ */
+export async function resolveStaticRoot(candidate: string = browserBuildRoot()): Promise<string | undefined> {
+  try {
+    const stats = await fs.stat(path.join(candidate, 'index.html'));
+    return stats.isFile() ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function main(): Promise<void> {
   const connection = await resolveHostConnection();
   const port = resolveWebPort(process.env);
+  const staticRoot = await resolveStaticRoot();
   const bff = await createWebBff({
     hostOrigin: connection.origin,
     hostToken: connection.token,
     ...(port === undefined ? {} : { port }),
+    ...(staticRoot === undefined ? {} : { staticRoot }),
   });
-  process.stdout.write(`Duya web BFF listening at ${bff.origin}\n`);
+  process.stdout.write(
+    `Duya web BFF listening at ${bff.origin}${staticRoot === undefined ? '' : ' (serving browser build)'}\n`,
+  );
 
   let closing: Promise<void> | undefined;
   const close = (): void => {

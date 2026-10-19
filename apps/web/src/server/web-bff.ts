@@ -6,6 +6,7 @@ import {
   type ServerResponse,
 } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import * as path from 'node:path';
 import {
   CURRENT_HOST_DECLARATION,
   type HostPermissionRequestResolveInput,
@@ -14,6 +15,7 @@ import {
   type SessionId,
 } from '@duya/agent-protocol';
 import { HostSessionHttpClient, HostSessionHttpError } from '@duya/host/http-client';
+import { resolveStaticAsset, streamStaticFile } from './static-files.js';
 
 const LOOPBACK = '127.0.0.1';
 const MAX_JSON_BODY_BYTES = 64 * 1024;
@@ -27,6 +29,12 @@ export interface WebBffOptions {
   readonly hostToken: string;
   /** Defaults to an ephemeral port so callers can safely start multiple instances. */
   readonly port?: number;
+  /**
+   * Optional absolute root of a built browser bundle. When supplied, GET/HEAD
+   * for `/` and `/assets/...` are served from this same listener; omit it to
+   * keep the server API-only, which is the pre-existing behaviour.
+   */
+  readonly staticRoot?: string;
 }
 
 export interface WebBffHandle {
@@ -44,7 +52,15 @@ export async function createWebBff(options: WebBffOptions): Promise<WebBffHandle
   const csrfToken = randomBytes(32).toString('hex');
   const activeStreams = new Set<ServerResponse>();
   const server = createServer((request, response) => {
-    void routeRequest({ request, response, client, csrfToken, activeStreams, origin: currentOrigin(server) })
+    void routeRequest({
+      request,
+      response,
+      client,
+      csrfToken,
+      activeStreams,
+      origin: currentOrigin(server),
+      ...(options.staticRoot === undefined ? {} : { staticRoot: options.staticRoot }),
+    })
       .catch(() => sendJson(response, 500, { error: { code: 'internal_error' } }));
   });
 
@@ -82,6 +98,7 @@ interface RequestContext {
   readonly csrfToken: string;
   readonly activeStreams: Set<ServerResponse>;
   readonly origin: string;
+  readonly staticRoot?: string;
 }
 
 async function routeRequest(context: RequestContext): Promise<void> {
@@ -97,19 +114,20 @@ async function routeRequest(context: RequestContext): Promise<void> {
     sendJson(response, 403, { error: { code: 'host_not_allowed' } });
     return;
   }
-  if (!isAllowedFetchSite(request)) {
-    sendJson(response, 403, { error: { code: 'cross_site_request' } });
-    return;
-  }
-
   const requestUrl = parseRequestUrl(request.url, origin);
   if (!requestUrl) {
     sendJson(response, 400, { error: { code: 'invalid_url' } });
     return;
   }
+  if (!isAllowedFetchSite(request) && !isDirectDocumentNavigation(context, requestUrl.pathname)) {
+    sendJson(response, 403, { error: { code: 'cross_site_request' } });
+    return;
+  }
 
   if (!requestUrl.pathname.startsWith('/api/')) {
-    sendJson(response, 404, { error: { code: 'not_found' } });
+    // Without a staticRoot this stays the pre-existing 404, and the API path
+    // below keeps its original ordering, so the finite API contract is intact.
+    await serveStatic(context, requestUrl.pathname);
     return;
   }
 
@@ -250,6 +268,35 @@ async function routeRequest(context: RequestContext): Promise<void> {
   } catch (error) {
     sendHostError(response, error);
   }
+}
+
+/**
+ * Serves the built browser bundle on the same loopback listener as the API.
+ *
+ * Host, Sec-Fetch-Site and Origin are already enforced by the caller, so this
+ * handler only decides method and file. Rejections reuse the JSON error shape
+ * and never carry a filesystem path.
+ */
+async function serveStatic(context: RequestContext, pathname: string): Promise<void> {
+  const { request, response, staticRoot } = context;
+  if (staticRoot === undefined) {
+    sendJson(response, 404, { error: { code: 'not_found' } });
+    return;
+  }
+  if (!isAllowedOrigin(request, context.origin)) {
+    sendJson(response, 403, { error: { code: 'origin_not_allowed' } });
+    return;
+  }
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    sendJson(response, 405, { error: { code: 'method_not_allowed' } });
+    return;
+  }
+  const asset = await resolveStaticAsset(staticRoot, pathname);
+  if (asset.kind === 'rejected') {
+    sendJson(response, asset.status, { error: { code: asset.code } });
+    return;
+  }
+  streamStaticFile(response, asset, request.method === 'HEAD');
 }
 
 async function sendHandshake(context: RequestContext): Promise<void> {
@@ -481,6 +528,16 @@ function isAllowedFetchSite(request: IncomingMessage): boolean {
   return site === undefined || site === 'same-origin';
 }
 
+function isDirectDocumentNavigation(context: RequestContext, pathname: string): boolean {
+  const { request } = context;
+  return context.staticRoot !== undefined &&
+    (pathname === '/' || pathname === '/index.html') &&
+    (request.method === 'GET' || request.method === 'HEAD') &&
+    request.headers['sec-fetch-site'] === 'none' &&
+    request.headers['sec-fetch-mode'] === 'navigate' &&
+    request.headers['sec-fetch-dest'] === 'document';
+}
+
 function isAllowedOrigin(request: IncomingMessage, origin: string): boolean {
   const supplied = request.headers.origin;
   if (supplied !== undefined) return supplied === origin;
@@ -558,6 +615,16 @@ function validateOptions(options: WebBffOptions): void {
   if (options.hostToken.trim().length === 0) throw new Error('Web BFF requires a Host bearer token');
   if (options.port !== undefined && (!Number.isInteger(options.port) || options.port < 0 || options.port > 65535)) {
     throw new Error('Web BFF port must be an integer between 0 and 65535');
+  }
+  if (options.staticRoot !== undefined) {
+    if (options.staticRoot.includes('\0')) {
+      throw new Error('Web BFF static root must not contain a NUL byte');
+    }
+    // An absolute root keeps the containment check anchored to one known
+    // directory instead of whatever the process working directory happens to be.
+    if (!path.isAbsolute(options.staticRoot)) {
+      throw new Error('Web BFF static root must be an absolute path');
+    }
   }
 }
 
