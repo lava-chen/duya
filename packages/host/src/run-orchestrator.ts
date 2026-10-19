@@ -2586,7 +2586,15 @@ function refused(reason: string): ExecutionDispatchError {
 export function createWorkerExecutionChannel(binding: WorkerExecutionBinding): ExecutionChannel {
   return {
     async start(manifest, input): Promise<ExecutionHandle> {
-      const options = optionsWithManifestBudget(manifest, input.options);
+      // The worker reads effort out of the message options (`ChatOptions.effort`
+      // → the Anthropic thinking budget), while the manifest carries it under
+      // `agent.effort`. Lifting it here keeps ONE source of truth: a caller sets
+      // `effort` on the start request and both consumers see the same value,
+      // instead of the worker silently ignoring a manifest-level override.
+      const options = {
+        ...optionsWithManifestBudget(manifest, input.options),
+        ...(manifest.agent?.effort === undefined ? {} : { effort: manifest.agent.effort }),
+      };
       const command: ChatStartCommand = {
         type: 'chat:start',
         sessionId: input.sessionId,
