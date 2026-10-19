@@ -57,6 +57,7 @@ import { PendingWakeStore } from './pending-wakes.js';
 import { RunStore } from './run-store.js';
 import { WorkflowRunStore } from './workflow-run-store.js';
 import { WorkspaceStore } from './workspace-store.js';
+import { PluginAppInstanceStore } from './plugin-app-instance-store.js';
 
 // ─── TaskStore ───
 
@@ -1158,6 +1159,8 @@ export interface CoreDataStores {
   runs: RunStore;
   workflowRuns: WorkflowRunStore;
   workspaces: WorkspaceStore;
+  /** Plan 610 T31b: durable Plugin App instance identity + opaque state. */
+  appInstances: PluginAppInstanceStore;
 }
 
 /** Construct the Electron-free core data stores over a Host-owned handle. */
@@ -1182,6 +1185,7 @@ export function createCoreDataStores(
     runs: new RunStore(db),
     workflowRuns: new WorkflowRunStore(db),
     workspaces: new WorkspaceStore(db),
+    appInstances: new PluginAppInstanceStore(db),
   };
 }
 
@@ -1204,6 +1208,7 @@ export function collectCoreDataMigrations(): Migration[] {
     ...RunStore.migrations,
     ...WorkflowRunStore.migrations,
     ...WorkspaceStore.migrations,
+    ...PluginAppInstanceStore.migrations,
   ].sort((a, b) => a.id - b.id);
 }
 

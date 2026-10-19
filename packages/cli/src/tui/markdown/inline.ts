@@ -267,6 +267,8 @@ export function rawTagPair(emit: (s: string) => string): { open: string; close: 
   return { open: wrapped.slice(0, at), close: wrapped.slice(at + PROBE_SENTINEL.length) };
 }
 
+export { probePair as rawTagPair };
+
 /**
  * Everything the tag view needs from the theme: which renderer will parse the
  * tags, and the two colours an attribute may be degraded to.
