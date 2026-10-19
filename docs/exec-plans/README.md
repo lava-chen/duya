@@ -408,6 +408,7 @@ Four were wrong and are corrected below; these five were checked and are
 | [tui-ux-overhaul](./active/611-tui-ux-overhaul.md) | P1 | CLI TUI Wave 1：主题 token 化 + 自动明暗、F1/Ctrl+R/Ctrl+P 窗口、busy 排队、粘贴 Map 修复、状态栏 token 条、工具组渲染 |
 | [cli-manual-compaction](./active/613-cli-manual-compaction.md) | P2 | CLI `/compact`：给 Host 补一条会话级压缩出口（转发既存的 `compact` worker 命令）+ CLI 命令注册与压缩后重载。**Phase 0 探针未跑**（冷 worker 摘要器能否拿到 provider 配置是 Go/No-Go） |
 | [cli-markdown-rendering](./active/614-cli-markdown-rendering.md) | P1 | CLI Markdown 渲染补齐（thinking + assistant 最终回答）：手写 inline tokenizer、表格列边错位修复、thinking 走 Markdown、标题/列表/分隔线、**斜体/删除线**；并把 `escapeTags` 的 `\{` 换成 blessed 原生的 `{open}`（顺带修掉模型文本可注入标签 + 每个 `{` 前多打印反斜杠的存量 bug）。**Phase 0 未跑**（own↔blessed 视觉等价是 own 转默认的 Go/No-Go） |
+| [cli-unified-tui-engine](./active/615-cli-unified-tui-engine.md) | P1 | 统一 TUI 引擎：声明式组件树（手写 retained tree，不引 React/Yoga）+ StyledSpan 内部表示（最后一步才转 ANSI）+ 增量布局与虚拟化（复用 transcript-cache 三件套）+ 双模式渲染统一到 RenderScene（ScrollbackOutput=InlineSurface 内核 / AltScreenOutput=OwnScreenSurface 内核）+ 独立 Terminal Input Driver（Kitty protocol 为可选增强）；blessed 三步退役（转默认→冻结→删除）。性能验收（输入→绘制 P95<30ms、流式 30FPS、10k block）为**待测目标**，Phase 0 先建 Windows ConPTY/tmux/真实 PTY 基线。**3 条待裁定未决**（614 Phase 6 归宿 / 性能数值校准 / blessed 回滚开关保留期），Phase 0 未启动 |
 
 ***
 
