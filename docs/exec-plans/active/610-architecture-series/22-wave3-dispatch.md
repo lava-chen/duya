@@ -4,6 +4,10 @@
 本文件细化 [19 §8](19-fast-track-queue.md#8-wave-3--骨架开工前必须先由-owner-用当时代码细化)，不另建总队列。
 Wave 2 的 #299/#302 尚未合并；T23 仍未验收。不得把本轮写成 Web/Desktop 全面切换。
 
+交付：T30 [#303](https://github.com/lava-chen/duya/pull/303) 已合（`f671f847`）；
+T40a [#305](https://github.com/lava-chen/duya/pull/305) 已合（`a80026cb`）；
+T31a [#304](https://github.com/lava-chen/duya/pull/304) 已推送，尚待 master 必需检查，未绕过保护规则。
+
 ## 冻结范围与文件所有权
 
 | 车道 | 独占实现 | 本轮验收 |
