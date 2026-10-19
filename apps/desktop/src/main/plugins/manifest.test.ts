@@ -10,7 +10,7 @@
 // - `readPluginManifestLenient` degrades gracefully (never throws)
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'fs';
+import fs, { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -42,6 +42,142 @@ afterEach(() => {
 // ----------------------------------------------------------------------------
 
 describe('readPluginManifest — minimal .duya-plugin/plugin.json', () => {
+  it('preserves multiple namespaced App definitions and validates package entries', () => {
+    mkdirSync(join(dir, '.duya-plugin'));
+    mkdirSync(join(dir, 'apps', 'dashboard'), { recursive: true });
+    mkdirSync(join(dir, 'apps', 'reports'), { recursive: true });
+    writeFileSync(join(dir, 'apps', 'dashboard', 'index.html'), '<main>Dashboard</main>');
+    writeFileSync(join(dir, 'apps', 'reports', 'index.html'), '<main>Reports</main>');
+    writeFileSync(join(dir, '.app.json'), JSON.stringify({ apps: [{ id: 'github' }] }));
+    writeFileSync(
+      join(dir, '.duya-plugin', 'plugin.json'),
+      JSON.stringify({
+        name: 'multi-app-plugin',
+        extensions: {
+          'com.duya.client': {
+            apps: [
+              {
+                appId: 'dashboard',
+                entry: 'apps/dashboard/index.html',
+                requiredCapabilities: ['future.capability'],
+                stateSchemaVersion: 1,
+              },
+              {
+                appId: 'reports',
+                entry: 'apps/reports/index.html',
+                requiredCapabilities: [],
+                stateSchemaVersion: 2,
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.apps).toEqual([
+      {
+        appId: 'dashboard',
+        entry: 'apps/dashboard/index.html',
+        requiredCapabilities: ['future.capability'],
+        stateSchemaVersion: 1,
+      },
+      {
+        appId: 'reports',
+        entry: 'apps/reports/index.html',
+        requiredCapabilities: [],
+        stateSchemaVersion: 2,
+      },
+    ]);
+    expect(manifest.components?.appConnections).toEqual(['github']);
+  });
+
+  it('rejects duplicate App ids and invalid declarations', () => {
+    mkdirSync(join(dir, '.duya-plugin'));
+    mkdirSync(join(dir, 'apps'), { recursive: true });
+    writeFileSync(join(dir, 'apps', 'index.html'), '<main>App</main>');
+    const app = {
+      appId: 'dashboard',
+      entry: 'apps/index.html',
+      requiredCapabilities: [],
+      stateSchemaVersion: 1,
+    };
+    const writeManifest = (apps: unknown[]) =>
+      writeFileSync(
+        join(dir, '.duya-plugin', 'plugin.json'),
+        JSON.stringify({
+          name: 'invalid-app-plugin',
+          extensions: { 'com.duya.client': { apps } },
+        }),
+      );
+
+    writeManifest([app, app]);
+    expect(() => readPluginManifest(dir)).toThrow(/duplicate.*appId/i);
+
+    writeManifest([{ ...app, appId: 'Bad ID' }]);
+    expect(() => readPluginManifest(dir)).toThrow(/appId/i);
+
+    writeManifest([{ ...app, requiredCapabilities: [''] }]);
+    expect(() => readPluginManifest(dir)).toThrow(/requiredCapabilities/i);
+
+    writeManifest([{ ...app, stateSchemaVersion: 0 }]);
+    expect(() => readPluginManifest(dir)).toThrow(/stateSchemaVersion/i);
+  });
+
+  it('rejects App entry traversal and symlinks escaping the plugin package', () => {
+    mkdirSync(join(dir, '.duya-plugin'));
+    mkdirSync(join(dir, 'apps', 'external'), { recursive: true });
+    writeFileSync(join(dir, 'apps', 'external', 'index.html'), '<main>External</main>');
+    const writeManifest = (entry: string) =>
+      writeFileSync(
+        join(dir, '.duya-plugin', 'plugin.json'),
+        JSON.stringify({
+          name: 'unsafe-app-plugin',
+          extensions: {
+            'com.duya.client': {
+              apps: [
+                {
+                  appId: 'external',
+                  entry,
+                  requiredCapabilities: [],
+                  stateSchemaVersion: 1,
+                },
+              ],
+            },
+          },
+        }),
+      );
+
+    writeManifest('../outside/index.html');
+    expect(() => readPluginManifest(dir)).toThrow(/entry/i);
+
+    const realpath = vi.spyOn(fs, 'realpathSync').mockImplementation((candidate) => {
+      const candidatePath = String(candidate);
+      if (candidatePath.endsWith(join('apps', 'external', 'index.html'))) {
+        return join(dir, '..', 'outside', 'index.html');
+      }
+      return candidatePath;
+    });
+    writeManifest('apps/external/index.html');
+    try {
+      expect(() => readPluginManifest(dir)).toThrow(/entry/i);
+    } finally {
+      realpath.mockRestore();
+    }
+  });
+
+  it('leaves legacy manifests without app declarations unchanged', () => {
+    mkdirSync(join(dir, '.duya-plugin'));
+    writeFileSync(
+      join(dir, '.duya-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'legacy-plugin', version: '1.0.0', description: 'No Apps.' }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.apps).toBeUndefined();
+    expect(manifest.components?.appConnections).toEqual([]);
+  });
+
   it('parses identity fields and derives id from name', () => {
     mkdirSync(join(dir, '.duya-plugin'));
     writeFileSync(
@@ -811,6 +947,7 @@ describe('readPluginManifest — Codex layout via the format registry', () => {
     expect(manifest.interface?.icon).toBe('./assets/logo-padded.png');
     expect(manifest.interface?.displayName).toBe('Figma');
     expect(manifest.interface?.brandColor).toBe('#1ABCFE');
+    expect(manifest.apps).toBeUndefined();
   });
 
   it('defaults the author when a foreign manifest omits it', () => {

@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { PluginAppDefinition } from '@duya/plugin-core/apps/declarations'
 import type {
   ProjectDatabaseChangeEvent,
   ProjectDatabaseRequest,
@@ -919,6 +920,7 @@ export interface PluginRegistryEntry {
     placeholder?: string
   }>
   manifest: Record<string, unknown>
+  apps?: PluginAppDefinition[]
 }
 
 export interface PluginHealthIssue {

@@ -145,6 +145,19 @@ Exactly three channels are registered at runtime — `config`, `toolExec`,
 (`apps/desktop/src/main/types/port-types.ts:136`) is re-exported but has no
 production consumer, so it opens no port.
 
+## Plugin App declarations (Plan 610 / Wave 3)
+
+Plugin UI Apps are declared under `extensions["com.duya.client"].apps` and
+normalized to optional `PluginManifest.apps`. The shared, browser-safe schema
+is exported from `@duya/plugin-core/apps/declarations`; Desktop's existing
+manifest reader validates canonical package containment and regular entry
+files. App IDs, requested capabilities and state schema versions remain
+metadata, not grants or live instance state. The installed-plugin view projects
+only these App declarations, without exposing the rest of a manifest's MCP
+configuration. Codex's root `apps` connector-file reference is unchanged.
+Launch must recheck entry containment; instance persistence and iframe launch
+are subsequent slices. See `610-architecture-series/22-wave3-dispatch.md`.
+
 ## App Connections (Connectors)
 
 Unified AppConnector registry (Plan 455): first-party providers, plugin `.app.json`
