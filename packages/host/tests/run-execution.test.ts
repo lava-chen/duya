@@ -468,6 +468,15 @@ describe('Host-owned run execution', () => {
       expect(contents).toContain('ping from stub worker');
       expect(contents).toContain('pong from stub worker');
 
+      // The Host stamps every message row a worker writes during a live run
+      // with the owning run id - the worker payload is not authority.
+      const stamped = page.messages.filter((item) =>
+        (item.entry as { type?: string } | undefined)?.type === 'message');
+      expect(stamped.length).toBeGreaterThanOrEqual(2);
+      for (const item of stamped) {
+        expect((item.entry as { runId?: string }).runId).toBe(runId);
+      }
+
       await host.close();
       host = undefined;
     } finally {
