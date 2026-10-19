@@ -113,3 +113,33 @@ baseline 932 未改）；`architecture:self-test` exit 0。构建后 BFF CLI 真
 ## T31b backend slice (2026-10-19)
 
 Data now owns the plugin App instance table/store through CoreDataHost migration 40, with strict JSON snapshots, revision/schema CAS, terminal revocation, and reopen/isolation coverage. Host composes the store into its local API and serves authenticated `/v1/local/plugin-app-instances` routes; the real HTTP/reopen tests cover the production persistence boundary. This delivers the durable state/API seam only: no Desktop iframe launch/caller or worker RPC binds an App instance to the existing `plugin-app-bridge` MCP executor, so Apps still cannot invoke MCP through a production iframe path. T31/T32 remain incomplete pending that caller, approval-path integration, and two-App/two-instance acceptance.
+
+### T31b verification (2026-10-19 review pass)
+
+Contract check against dispatch doc 23 §"T31b store 合同": compliant. Writes are
+CAS on `(revision, state_schema_version, status)` inside one IMMEDIATE
+transaction with a guarded second assertion; rejections are returned as
+`not_found` / `stale_revision` / `schema_mismatch` / `inactive` and never
+reset or migrate the payload; `disabled` re-enables, `revoked` is terminal
+(`invalid_transition`); state validation rejects undefined/NaN/functions/
+symbols/bigint/Date/Map/Set/class instances/circular refs/accessors/array
+holes/extra array properties and the 256 KiB UTF-8 limit counts bytes; the
+table stores no session/run id, nonce, capability grant, or MCP credential
+(pinned by `PRAGMA table_info`); migration 40 was free in the core sequence
+(highest prior core id 39) and is asserted collision-free against the whole
+aggregate; routes run behind the Host's existing bearer + Origin checks and
+reject forged authority fields in the body.
+
+Verified in this worktree: `npx vitest run` on
+`packages/data/tests/plugin-app-instance-store.test.ts` +
+`packages/host/tests/plugin-app-instance-http.test.ts` — **17/17 pass**;
+scoped `tsc --noEmit` for `@duya/agent-protocol`, `@duya/data`, `@duya/host`
+— all exit 0; `architecture:check` — OK, no new boundary violations (baseline
+untouched). Byte-identical duplicate: the `wave3-product` worktree carries the
+same data/host/protocol hunks and new files uncommitted; at merge the
+coordinator must keep exactly one copy.
+
+Still open for full T31/T32 (unchanged by this slice): instance lifecycle UI
+in Desktop, production iframe creation plus the worker-RPC caller that
+captures T31a executors from the real tool registry/approval context, MCP
+approval-path integration for Apps, and the two-App/two-instance sample.
