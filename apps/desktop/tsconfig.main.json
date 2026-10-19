@@ -13,6 +13,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/main/*"],
+      "@duya/ui": ["../../packages/ui/src/index.ts"],
+      "@duya/ui/*": ["../../packages/ui/src/*"],
       "@duya/data": ["../../packages/data/dist/index.d.ts"],
       "@duya/data/*": ["../../packages/data/dist/*"],
       "@duya/host": ["../../packages/host/dist/index.d.ts"],
