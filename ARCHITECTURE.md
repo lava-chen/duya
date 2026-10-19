@@ -170,6 +170,13 @@ configuration. Codex's root `apps` connector-file reference is unchanged.
 Launch must recheck entry containment; instance persistence and iframe launch
 are subsequent slices. See `610-architecture-series/22-wave3-dispatch.md`.
 
+`@duya/host/plugin-app-bridge` provides the T31a validation kernel around a
+Host-created source/origin/nonce and session/run binding. It accepts only
+captured MCP descriptors, validates an isolated argument snapshot, and calls
+the existing Runtime MCP executor with a fresh Host invocation ID/context.
+The guarded invoker rechecks the binding after permission waits. This is an
+additive binding seam: no Desktop iframe or worker RPC invokes it yet.
+
 ## App Connections (Connectors)
 
 Unified AppConnector registry (Plan 455): first-party providers, plugin `.app.json`

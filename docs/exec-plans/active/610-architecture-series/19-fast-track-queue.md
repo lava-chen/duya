@@ -547,7 +547,7 @@ npm run electron:build
 | T21 Desktop bridge 转发 | L-DESKTOP | T20 | todo | — |
 | T22 Bot 投递对账 | L-HOST | T20 | todo | — |
 | T23 Desktop 首块接共享状态 | L-DESKTOP | T10、T14 | todo | — |
-| T30 App manifest | L-APP | T14、T15 | implemented / unmerged | 2026-10-19：合同、独占路径与证据见 [22](22-wave3-dispatch.md)；共享 schema + 真 manifest parser + 已安装列表投影；不含 App 实例 |
+| T30 App manifest | L-APP | T14、T15 | merged | 2026-10-19：#303 / `f671f847`；合同、独占路径与证据见 [22](22-wave3-dispatch.md)；共享 schema + 真 manifest parser + 已安装列表投影；不含 App 实例 |
 | T31 App Bridge | L-APP | T30 | partial / unmerged | 22 的 T31a 只实现绑定校验和 Runtime MCP 审批执行内核；待实例 store、worker RPC、iframe 生产调用 |
-| T40 最小 Web | L-APP | T20、T23 | partial / unmerged | 22 的 T40a 交付 loopback 同源 BFF；浏览器 UI、RunSession 消费和真刷新恢复待验收，T23 依赖不变 |
+| T40 最小 Web | L-APP | T20、T23 | partial | 2026-10-19：T40a #305 / `a80026cb` 已合；22 的 loopback 同源 BFF 已落地；浏览器 UI、RunSession 消费和真刷新恢复待验收，T23 依赖不变 |
 | T32、T41、T50、T60 | 见 §8 | — | skeleton | 本轮未实现 |
