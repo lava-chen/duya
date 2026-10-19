@@ -26,7 +26,7 @@ import {
 } from '@/components/icons';
 import { useTranslation } from '@/hooks/useTranslation';
 import { ImagePreview } from '@/components/chat/preview/ImagePreview';
-import { rewriteMediaSrc } from '@/components/chat/markdownComponents';
+import { rewriteMediaSrc } from '@/lib/rewrite-media-src';
 import { ReadOnlySessionChat } from '@/components/chat/ReadOnlySessionChat';
 import { useConversationStore } from '@/stores/conversation-store';
 import {

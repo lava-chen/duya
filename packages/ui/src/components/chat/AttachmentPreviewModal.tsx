@@ -8,7 +8,7 @@ import { XIcon, FileTextIcon, DownloadSimpleIcon as DownloadIcon } from '@/compo
 import type { FileAttachment } from '@/types/message';
 import { IconButton } from '@/components/ui/IconButton';
 import { Button } from '@/components/ui/Button';
-import { rewriteMediaSrc } from './markdownComponents';
+import { rewriteMediaSrc } from '@/lib/rewrite-media-src';
 
 export type PreviewType = 'image' | 'pdf' | 'code' | 'doc' | 'text' | 'unknown';
 

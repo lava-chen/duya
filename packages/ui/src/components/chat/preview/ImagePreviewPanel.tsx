@@ -14,7 +14,7 @@ import React from 'react';
 import { FileTextIcon, DownloadSimpleIcon as DownloadIcon } from '@/components/icons';
 import { Button } from '@/components/ui/Button';
 import type { FileAttachment } from '@/types/message';
-import { rewriteMediaSrc } from '../markdownComponents';
+import { rewriteMediaSrc } from '@/lib/rewrite-media-src';
 
 export type PreviewType = 'image' | 'pdf' | 'code' | 'doc' | 'text' | 'unknown';
 

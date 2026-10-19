@@ -38,7 +38,7 @@ import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
 import type { FileAttachment } from '@/types/message';
 import { FileAttachmentCard } from './FileAttachmentCard';
-import { rewriteMediaSrc } from './markdownComponents';
+import { rewriteMediaSrc } from '@/lib/rewrite-media-src';
 
 export interface AttachmentBarProps {
   attachments: FileAttachment[];

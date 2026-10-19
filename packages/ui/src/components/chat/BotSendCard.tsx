@@ -21,7 +21,7 @@
 
 import React, { useState } from 'react';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { rewriteMediaSrc } from './markdownComponents';
+import { rewriteMediaSrc } from '@/lib/rewrite-media-src';
 import { ImagePreview } from './preview/ImagePreview';
 import type { Message, SendMessageCardMeta } from '@/types/message';
 

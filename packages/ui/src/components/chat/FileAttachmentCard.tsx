@@ -1,6 +1,6 @@
 import { XIcon } from '../icons';
 import { IconButton } from '@/components/ui/IconButton';
-import { rewriteMediaSrc } from './markdownComponents';
+import { rewriteMediaSrc } from '@/lib/rewrite-media-src';
 
 interface FileAttachmentCardProps {
   id: string;

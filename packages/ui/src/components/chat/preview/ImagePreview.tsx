@@ -20,7 +20,7 @@
 import React, { useEffect } from 'react';
 import { XIcon } from '@/components/icons';
 import { IconButton } from '@/components/ui/IconButton';
-import { rewriteMediaSrc } from '../markdownComponents';
+import { rewriteMediaSrc } from '@/lib/rewrite-media-src';
 import {
   ImagePreviewPanel,
   panelTitle,
