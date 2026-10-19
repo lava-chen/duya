@@ -299,62 +299,39 @@ jobs:
           set -o pipefail
           npm test 2>&1 | tee vitest-output.log
 
+      # Plan 610 T04 / G10. This guard used to be an inline heredoc that exited
+      # 1 whenever it could not find the vitest summary line. That made the `test`
+      # job red on every commit of master — run 39040547246, and PR #275's run
+      # 39044714745 carry the same line — with `collected: UNKNOWN`: a verdict
+      # about the guard's own parsing wearing the costume of a suite failure. With
+      # known-red tests on master, a job that is red for an unrelated reason
+      # cannot tell debt from a new regression, so its answer is unusable.
+      #
+      # The real cause, measured on those two job logs: there is NO summary block
+      # to read. `grep -c passed` is 0 in both — vitest's summary always says
+      # "passed" — because the run dies in an unhandled rejection inside the
+      # vitest pool before the reporter prints. The log really does contain ~43k
+      # ESC bytes and 0 literal `^[[` sequences, so "the writer stripped ESC"
+      # was not the cause either; the parser accepts both spellings anyway,
+      # because a guard that rejects an encoding it has not seen reports nothing.
+      #
+      # The exit contract now lives in `scripts/ci/test-summary-guard.mjs` and is
+      # covered by `scripts/ci/test-summary-guard.test.ts`, whose fixtures are
+      # byte-exact captures of those runs. `unread` exits 0: whether the suite
+      # passed is decided by the exit code of the `Run tests` step above, which
+      # `set -o pipefail` already propagates. Only a genuinely zero-collection run
+      # fails here — that one really is a suite failure wearing the guard's name.
       - name: "Guard: tests must actually be collected"
         # Vitest already fails when zero test FILES match, but "files matched
         # and zero tests ran" is still reachable — every file skipped, or an
         # include-glob change that only ever matches empty files. That exits 0
         # and looks identical to a healthy run. Assert the collected totals
         # are non-zero, so this job cannot go green by collecting nothing.
+        #
+        # What this step deliberately does NOT do any more is fail on "could not
+        # parse". See the exit contract in the script.
         if: always()
-        shell: bash
-        run: |
-          if [ ! -f vitest-output.log ]; then
-            echo "guard: no vitest-output.log — the test step never ran; its own failure is the signal."
-            exit 0
-          fi
-          node <<'EOF'
-          const fs = require('node:fs');
-          // Read as latin1 and drop NULs: vitest's summary is pure ASCII, so
-          // this recovers it byte-exactly whether tee wrote UTF-8 (the CI
-          // shell) or UTF-16LE (PowerShell's Tee-Object default).
-          const clean = fs
-            .readFileSync('vitest-output.log', 'latin1')
-            .replace(/\u0000/g, '')
-            // vitest colourises its summary; strip ANSI before matching.
-            .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
-          const total = (label) => {
-            // Take the LAST match, not the first: this log is megabytes of test
-            // output and any line starting with "Tests" would match first, but
-            // the real summary is always the final block.
-            const re = new RegExp(`^\\s*${label}\\s+(.*)$`, 'gm');
-            let hit = null;
-            let m;
-            while ((m = re.exec(clean)) !== null) hit = m[1];
-            const t = hit && hit.match(/\((\d+)\)\s*$/);
-            return t ? Number(t[1]) : null;
-          };
-          const files = total('Test Files');
-          const tests = total('Tests');
-          const report = [
-            '### npm test',
-            '',
-            `- test files collected: **${files ?? 'UNKNOWN'}**`,
-            `- tests collected: **${tests ?? 'UNKNOWN'}**`,
-          ].join('\n');
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY ?? 'guard-summary.md', report + '\n');
-          process.stdout.write(report + '\n');
-          if (files === null || tests === null) {
-            process.stderr.write('\nguard FAILED: could not read the vitest summary line.\n');
-            process.exit(1);
-          }
-          if (files === 0 || tests === 0) {
-            process.stderr.write(
-              `\nguard FAILED: collected ${files} file(s) / ${tests} test(s). ` +
-              'A zero-collection run is a failed run, not a pass.\n',
-            );
-            process.exit(1);
-          }
-          EOF
+        run: node scripts/ci/test-summary-guard.mjs vitest-output.log
 
       - name: Run tests with coverage
         if: matrix.os == 'ubuntu-latest'

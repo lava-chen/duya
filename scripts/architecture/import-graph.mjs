@@ -82,22 +82,80 @@ export const IMPORT_RE = new RegExp(
 const TYPE_ONLY_PREFIX = /(?:^|[\s;}])(?:import|export)\s+type\s/;
 
 /**
+ * How far back to look before giving up on finding the statement head.
+ *
+ * This is NOT a window size any more — see `isTypeOnlyStatement`. It is only a
+ * floor: a statement longer than this still gets its head found, because the
+ * search retries at a larger reach instead of silently declaring "no head".
+ */
+const STATEMENT_LOOKBACK = 400;
+
+/**
+ * Find the start of the smallest `import`/`export` statement that ends at
+ * `matchIndex`, or -1 when the text before it contains no such head.
+ *
+ * The old implementation sliced a fixed 400-character window and cut it at the
+ * last `;` or `\n}`, which silently misclassified every multi-line type-only
+ * import longer than the window:
+ *
+ *     import type {            <- head, 400+ chars before the specifier
+ *       A, B, C, ... 25 items
+ *     } from '@duya/agent-protocol';
+ *
+ * The last `\n}` in that window is the import's OWN closing brace, so the
+ * slice began at `"\n} "`, the head was gone, and the statement was reported as
+ * a VALUE import. Measured on this tree: `packages/client-core/src/surface/
+ * surface-model.ts:41` is a 22-line `import type` that was classified value,
+ * which inflated that package's value closure from 1 file to 66. The bug
+ * direction is "closure too large", so it never produced a false green — but it
+ * does make a type-only reference look like runtime coupling, which is exactly
+ * the distinction every closure gate here is built on.
+ *
+ * The fix walks backwards from the match to the nearest `import`/`export`
+ * keyword that is not itself preceded by another statement terminator, and
+ * grows the reach until it either finds a head or runs out of text.
+ */
+export function statementHead(text, matchIndex) {
+  let reach = STATEMENT_LOOKBACK;
+  for (;;) {
+    const from = Math.max(0, matchIndex - reach);
+    const window = text.slice(from, matchIndex);
+    // The head must start at a statement boundary, and nothing between the head
+    // and the specifier may contain `from`/`require` — otherwise we are looking
+    // at an earlier statement that happens to end with a keyword.
+    const re = /(?:^|[\s;}])(?:import|export)\b/g;
+    let best = -1;
+    let m;
+    while ((m = re.exec(window))) {
+      const after = window.slice(m.index + m[0].length);
+      if (/\bfrom\b/.test(after) || /\brequire\b/.test(after)) continue;
+      // Keep the leading delimiter: `TYPE_ONLY_PREFIX` anchors on `(?:^|[\s;}])`
+      // before the keyword, so a slice that starts AT `import` only matches via
+      // the `^` alternative and loses the keyword itself on re-slicing.
+      best = from + m.index;
+    }
+    if (best !== -1) return best;
+    if (from === 0) return -1;
+    reach *= 4;
+  }
+}
+
+/**
  * Is the import statement ending at `matchIndex` type-only?
  *
  * `IMPORT_RE` captures only the specifier, so the `import type` keyword sits
- * earlier in the same statement. The window is cut at the previous statement
- * terminator, so a type-only import at the top of a file cannot vouch for a
- * value import at the bottom of it.
+ * earlier in the same statement. The head is located by `statementHead`, not by
+ * "the last `;` or `\n}` in a fixed window" — that shortcut cut long multi-line
+ * type-only imports in half (see `statementHead` for the measurement).
  *
  * `import('y')` and `require('y')` have no keyword before their specifier
  * inside their own parentheses, so they classify as `value` — which is correct:
  * both emit a real load.
  */
 export function isTypeOnlyStatement(text, matchIndex) {
-  const window = text.slice(Math.max(0, matchIndex - 400), matchIndex);
-  const boundary = Math.max(window.lastIndexOf(";"), window.lastIndexOf("\n}"));
-  const statement = boundary === -1 ? window : window.slice(boundary);
-  return TYPE_ONLY_PREFIX.test(statement);
+  const head = statementHead(text, matchIndex);
+  if (head === -1) return false;
+  return TYPE_ONLY_PREFIX.test(text.slice(head, matchIndex));
 }
 
 export function walk(dir, out = []) {
