@@ -218,6 +218,18 @@ function backgroundParameterFor(color: SpanColor): string {
   return color.kind === 'indexed' ? `48;5;${color.index}` : String(Number(sgrParameterFor(color)) + 10);
 }
 
+/**
+ * The SGR parameters for a span, joined — what a CELL carries as its style.
+ *
+ * Exported because the own screen painter stores exactly this string per cell
+ * and compares cells by it. Sharing the function is what keeps a cell painted
+ * from spans and a cell painted from tags byte-identical: both end up with the
+ * parameter list this produces.
+ */
+export function spanStyleParameters(span: StyledSpan): string {
+  return spanParameters(span).join(';');
+}
+
 /** Whether a style asks the terminal to leave its default state. */
 function isStyled(span: StyledSpan | null): boolean {
   if (span === null) return false;

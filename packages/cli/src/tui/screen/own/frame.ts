@@ -1,6 +1,8 @@
 import { visibleWidth } from '../../width.js';
 import { renderMarkup } from './markup.js';
 import { layoutRegion, screenRegions, type GeometryOptions, type RegionLayout } from './geometry.js';
+import { spanStyleParameters } from '../../terminal/ansi.js';
+import type { SceneLine, StyledSpan } from '../../core/span.js';
 import type { RegionPatch, SurfaceRegion } from '../types.js';
 
 interface Cell {
@@ -113,6 +115,75 @@ function drawMarkupLine(
   return rowsUsed;
 }
 
+/**
+ * Draw one line of spans, with the same wrapping rules as the markup path.
+ *
+ * This is the same algorithm without the SGR parsing: a span already carries its
+ * style, so there is nothing to scan, no escape bytes to strip and no chance of a
+ * malformed sequence reaching a cell. The style string it stores is
+ * `spanStyleParameters`, the SAME function `spansToAnsi` uses — which is why a
+ * cell painted from spans and a cell painted from tags compare equal, and why
+ * the parity test between the two paths is a real check.
+ */
+function drawSpanLine(
+  grid: Cell[][],
+  row: number,
+  column: number,
+  maxWidth: number,
+  spans: readonly StyledSpan[],
+  maxRows: number,
+): number {
+  if (maxRows <= 0) return 0;
+  let writeRow = row;
+  let writeColumn = column;
+  let rowsUsed = 1;
+  const stopColumn = column + maxWidth;
+
+  const emit = (text: string, style: string): void => {
+    for (const glyph of Array.from(text)) {
+      const width = visibleWidth(glyph);
+      if (width === 0) {
+        const previous = grid[writeRow]?.[writeColumn - 1];
+        if (previous !== undefined && !previous.continuation) previous.text += glyph;
+        continue;
+      }
+      if (writeColumn + width > stopColumn) {
+        // Wrap onto the next row, keeping the span's style across the fold.
+        if (rowsUsed >= maxRows) return;
+        writeRow += 1;
+        writeColumn = column;
+        rowsUsed += 1;
+      }
+      putCell(grid, writeRow, writeColumn, glyph, style);
+      writeColumn += width;
+    }
+  };
+
+  for (const span of spans) {
+    // Content is one logical row: control bytes are not printable text. Same
+    // filter as the markup path, applied per span because that is the unit that
+    // carries the text here.
+    const text = span.text.replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+    if (text === '') continue;
+    emit(text, spanStyleParameters(span));
+  }
+  return rowsUsed;
+}
+
+/** Draw one line in whichever representation it arrived in. */
+function drawLine(
+  grid: Cell[][],
+  row: number,
+  column: number,
+  maxWidth: number,
+  line: SceneLine,
+  maxRows: number,
+): number {
+  return typeof line === 'string'
+    ? drawMarkupLine(grid, row, column, maxWidth, line, maxRows)
+    : drawSpanLine(grid, row, column, maxWidth, line, maxRows);
+}
+
 function borderSgr(color: string): string {
   const key = color.toLowerCase().replace(/-fg$/, '').replace(/[- ]/g, '');
   const named: Readonly<Record<string, string>> = {
@@ -189,7 +260,7 @@ function drawRegion(grid: Cell[][], layout: RegionLayout, unicodeBox: boolean): 
   let cursorRow = 0;
   for (const line of layout.lines) {
     if (cursorRow >= layout.contentHeight) break;
-    cursorRow += drawMarkupLine(
+    cursorRow += drawLine(
       grid,
       contentTop + cursorRow,
       contentLeft,

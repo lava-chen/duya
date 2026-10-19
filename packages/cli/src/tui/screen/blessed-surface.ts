@@ -18,6 +18,8 @@
 
 import blessed from 'blessed';
 import type { BlessedProgram, Widgets } from 'blessed';
+import { lineToTags } from '../terminal/line.js';
+import type { SceneLine } from '../core/span.js';
 
 import type { RegionMetrics, RegionPatch, ScreenSurface, SurfaceRegion } from './types.js';
 
@@ -141,7 +143,7 @@ const OVERLAY_ONLY: readonly SurfaceRegion[] = ['overlay'];
 export class BlessedScreenSurface implements ScreenSurface {
   private screen: ManagedScreen | null = null;
   private readonly boxes = new Map<SurfaceRegion, Box>();
-  private readonly lastContent = new Map<SurfaceRegion, readonly string[]>();
+  private readonly lastContent = new Map<SurfaceRegion, readonly SceneLine[]>();
   private suspendedFlag = false;
 
   constructor(private readonly options: BlessedSurfaceOptions) {}
@@ -234,7 +236,10 @@ export class BlessedScreenSurface implements ScreenSurface {
     if (box === undefined) return;
 
     if (patch.lines !== undefined) {
-      box.setContent(patch.lines.join('\n'));
+      // blessed is the last leg that still speaks tags: it parses them itself,
+      // so a span line has to be spelled back into that vocabulary here. Sending
+      // it ANSI instead would print the escapes as literal text.
+      box.setContent(patch.lines.map((line) => lineToTags(line)).join('\n'));
       this.lastContent.set(region, patch.lines);
     }
     if (patch.height !== undefined) box.height = patch.height;
@@ -293,7 +298,7 @@ export class BlessedScreenSurface implements ScreenSurface {
     };
   }
 
-  content(region: SurfaceRegion): readonly string[] {
+  content(region: SurfaceRegion): readonly SceneLine[] {
     return this.lastContent.get(region) ?? [];
   }
 

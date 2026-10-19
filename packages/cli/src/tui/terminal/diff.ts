@@ -41,7 +41,6 @@ import {
   endSynchronizedOutput,
   eraseLineRight,
 } from './ansi.js';
-import { tagsToAnsi } from './sgr.js';
 
 export interface ViewportGeometry {
   /** 1-based screen row the viewport's first row occupies. */
@@ -68,8 +67,11 @@ export interface ViewportFrame extends ViewportGeometry {
  * on rather than truncated: a silent truncation in a TUI means the user loses
  * text and nothing says so.
  *
- * Both are converted to ANSI before comparison, so what is compared is exactly
- * what is written.
+ * Both are ALREADY ANSI. The conversion happens once, in `InlineSurface`, so
+ * what is compared here is byte-for-byte what is written — and so there is one
+ * tag parser in the inline path instead of two that could disagree (plan 615
+ * Phase 5). Passing tagged rows would compare tag strings and then write them
+ * as literal text, which is how a `{gray-fg}` ends up visible in the terminal.
  */
 export function renderViewportFrame(
   previous: readonly string[],
@@ -89,8 +91,8 @@ export function renderViewportFrame(
   // than the viewport" as a first frame, which it is not.
   const fullRedraw = options.forceFullRedraw === true || previous.length === 0;
 
-  const previousAnsi = previous.map(tagsToAnsi);
-  const nextAnsi = next.map(tagsToAnsi);
+  const previousAnsi = previous;
+  const nextAnsi = next;
 
   const parts: string[] = [disableLineWrap(), beginSynchronizedOutput()];
   let rewritten = 0;

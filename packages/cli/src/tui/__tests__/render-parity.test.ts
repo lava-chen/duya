@@ -16,7 +16,7 @@ import blessed from 'blessed';
 
 import { createScreenSurface } from '../screen/index.js';
 import type { RegionPatch, SurfaceRegion } from '../screen/types.js';
-import { renderInlineTokens, tokenizeInline } from '../markdown/inline.js';
+import { renderInlineTokens, spansToTags, tagViewOf, tokenizeInline } from '../markdown/inline.js';
 import { stylesOf } from '../transcript-view.js';
 import { gridDiff, replay, SCREEN_COLUMNS, SCREEN_ROWS, type Grid } from './render-parity.harness.js';
 type Renderer = 'blessed' | 'own';
@@ -196,5 +196,59 @@ describe('render parity (blessed vs own)', () => {
       expect(last, `${renderer} lost the link label`).toContain('docs');
       expect(last, `${renderer} lost the image badge`).toContain('[image]');
     }
+  });
+});
+
+/**
+ * Drive one step and return the screen it produced.
+ *
+ * A single-frame version of `drive`, for the cases where the point is the
+ * CONTENT of one frame rather than the sequence.
+ */
+async function driveOnce(renderer: Renderer, step: Step): Promise<Grid> {
+  const { surface, output } = makeSurface(renderer);
+  try {
+    for (const [region, patch] of Object.entries(step) as [SurfaceRegion, RegionPatch][]) {
+      surface.update(region, patch);
+    }
+    surface.render();
+    await settle();
+    return replay(output.text());
+  } finally {
+    surface.destroy();
+  }
+}
+
+describe('span lines and tag lines paint the same screen (plan 615 Phase 5)', () => {
+  const BLESSED_STYLES = stylesOf({ renderer: 'blessed' });
+
+  /** The same content, as spans. */
+  const SPANS = [
+    [{ text: 'plain ' }, { text: 'muted', fg: { kind: 'named' as const, name: 'gray' } }],
+    [{ text: 'bold', attrs: ['bold' as const] }, { text: ' then muted', fg: { kind: 'named' as const, name: 'gray' } }],
+    [{ text: '中文与 ascii 混排' }],
+    [{ text: 'indexed', fg: { kind: 'indexed' as const, index: 241 } }],
+  ];
+
+  it('draws the same glyphs whether the rows arrive as spans or as tags', async () => {
+    // `own` eats the spans directly; blessed parses the tag spelling of the SAME
+    // spans. If the two disagreed, moving a renderer from strings to spans would
+    // silently change the screen — including where a line wraps.
+    const spanned = await driveOnce('own', {
+      transcript: { lines: SPANS, height: 8 },
+    });
+    const tagged = await driveOnce('blessed', {
+      transcript: { lines: SPANS.map((line) => spansToTags(line, tagViewOf(BLESSED_STYLES))), height: 8 },
+    });
+
+    expect(gridDiff(tagged, spanned)).toBe('');
+  });
+
+  it('is not vacuous: the frame actually contains the text', async () => {
+    const grid = await driveOnce('own', { transcript: { lines: SPANS, height: 8 } });
+    const flat = grid.map((row) => row.join('').replace(/\u0000/g, '')).join('\n');
+    expect(flat).toContain('plain muted');
+    expect(flat).toContain('中文与 ascii 混排');
+    expect(flat).not.toContain('{');
   });
 });

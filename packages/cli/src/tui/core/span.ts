@@ -81,6 +81,21 @@ export interface StyledSpan extends SpanStyle {
 }
 
 /**
+ * One line of screen content, in either representation.
+ *
+ * The legacy one is a blessed-tagged string; the target one is spans. Both are
+ * accepted at the rendering seam (plan 615 Phase 5) so the layers above can move
+ * to spans one caller at a time while everything else keeps working — and so the
+ * two spellings can be compared on the same screen, which is what the parity
+ * tests do.
+ *
+ * The tag spelling exists only for blessed now. Every other consumer converts to
+ * spans or ANSI at the boundary, which is why `terminal/line.ts` is the only
+ * place that knows both.
+ */
+export type SceneLine = string | readonly StyledSpan[];
+
+/**
  * One frame's worth of styled text.
  *
  * `cursor` is where the terminal caret goes; `caret` is the transcript's

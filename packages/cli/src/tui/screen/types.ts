@@ -35,6 +35,9 @@
  * the status row is pinned to the bottom, the `/` popup floats above the input,
  * and the overlay is the one centred modal.
  */
+
+import type { SceneLine } from '../core/span.js';
+
 export type SurfaceRegion = 'transcript' | 'input' | 'status' | 'overlay' | 'completion';
 
 /**
@@ -44,8 +47,15 @@ export type SurfaceRegion = 'transcript' | 'input' | 'status' | 'overlay' | 'com
  * an omission as a reset would blank the region.
  */
 export interface RegionPatch {
-  /** Body lines, border rows excluded. */
-  readonly lines?: readonly string[];
+  /**
+   * Body lines, border rows excluded.
+   *
+   * Either representation: a blessed-tagged string (what every renderer written
+   * before plan 615 emits) or styled spans (what the tree emits). The seam
+   * accepts both so the layers above can migrate one caller at a time, and so
+   * the two spellings of the same screen can be compared against each other.
+   */
+  readonly lines?: readonly SceneLine[];
   /** Total rows the region occupies, its own border rows included. */
   readonly height?: number;
   /** Rows between the region's bottom edge and the terminal's bottom edge. */
@@ -151,7 +161,7 @@ export interface ScreenSurface {
    * appears in the output contiguously. Anything that needs to know what a
    * region is displaying has to ask the thing that was told, not the stream.
    */
-  content(region: SurfaceRegion): readonly string[];
+  content(region: SurfaceRegion): readonly SceneLine[];
   /** Repaint. Safe to call when no screen exists. */
   render(): void;
   /** Re-enter the alternate buffer, clearing the suspended flag. */

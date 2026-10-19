@@ -3,6 +3,7 @@ import type { BlessedProgram } from 'blessed';
 import { changedRows, composeFrame, type SurfaceFrame } from './frame.js';
 import { layoutRegion, screenRegions, type SurfaceSize } from './geometry.js';
 import type { RegionMetrics, RegionPatch, ScreenSurface, SurfaceRegion } from '../types.js';
+import type { SceneLine } from '../../core/span.js';
 
 export interface OwnSurfaceOptions {
   readonly program: BlessedProgram;
@@ -26,7 +27,7 @@ const ALT_SCREEN_LEAVE = '\u001b[0m\u001b[?1049l';
 export class OwnScreenSurface implements ScreenSurface {
   private readonly attached = new Set<SurfaceRegion>();
   private readonly patches = new Map<SurfaceRegion, RegionPatch>();
-  private readonly lastContent = new Map<SurfaceRegion, readonly string[]>();
+  private readonly lastContent = new Map<SurfaceRegion, readonly SceneLine[]>();
   private previousFrame: SurfaceFrame | null = null;
   private readyFlag = false;
   private suspendedFlag = false;
@@ -125,7 +126,7 @@ export class OwnScreenSurface implements ScreenSurface {
     ).metrics;
   }
 
-  content(region: SurfaceRegion): readonly string[] {
+  content(region: SurfaceRegion): readonly SceneLine[] {
     return this.lastContent.get(region) ?? [];
   }
 

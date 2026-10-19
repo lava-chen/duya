@@ -1,6 +1,19 @@
 /**
  * Blessed-style tags → ANSI SGR.
  *
+ * ## Status: no production caller (plan 615 Phase 5)
+ *
+ * The inline write path used this to turn tagged rows into bytes. It now parses
+ * tags into spans and serialises those (`terminal/line.ts` → `spansToAnsi`),
+ * which is the same serializer the own screen painter and the scene canvas use —
+ * so a row cannot be compared as one colour and written as another, and a tagged
+ * line paints identically to its span spelling.
+ *
+ * The module stays because its tests are the measurement record for the tag
+ * vocabulary (paired resets, named vs indexed, unknown-tag-is-text) and because
+ * `working-tail.test.ts` uses it as a reference. Phase 7 deletes it together
+ * with the tag vocabulary.
+ *
  * ## Why the tag vocabulary survives the move off blessed
  *
  * The renderers in `transcript-view.ts` emit `{cyan-fg}…{/cyan-fg}` and the

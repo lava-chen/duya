@@ -88,6 +88,12 @@ Span = `{ text, fg?, bg?, attrs (bold/italic/strike/underline), width, linkId? }
 **D6 — 字符区间 Diff 是可选增强，先测再定。**
 行级 diff 已消除大部分重绘；字符区间 diff 的收益要在 Phase 0 基准里量化（长行重绘占比）才有资格排期。**Go/No-Go**：若 P95 达标（<30ms）则降级为 backlog。
 
+> **裁定（2026-10-19，Phase 5）：No-Go —— 降级为 backlog。**
+> 原触发表述是「P95 达标则降级」，但基线 P95 = 32.0ms，**没达标**，所以这条规则没有触发；裁定因此改为依据实测，而不是依据那个数字。
+> 实测（24 行 × 80 列的一帧，流式中）：一帧只重写 **2 行**，这 2 行里只有 **11/160 个字节**不同（行内变更占比 **6.9%**）—— 单看这个数，字符区间 diff 能把写出的字节从 206 降到 ~60。
+> 但 `renderViewportFrame` 本身耗时 **0.0067ms/帧**，而整帧（输入→最后一个字节）是 **30.8ms**。也就是说写入路径占不到帧成本的 **0.03%**，省下的 ~140 字节是噪声；那 30ms 花在组帧（tokens → spans → cells）上。
+> 结论：字符区间 diff 优化的是最便宜的那一步，却要处理宽字符、跨 span 的 SGR、以及「行尾擦除」这条现在保证不留残影的契约。**不做**。重新评估的条件写实：只有当实测显示写入路径成为帧成本主体（例如极慢终端、或组帧降到 1ms 以下），才值得回头看。
+
 **D7 — blessed 退役三步走。**
 ① 转默认：`factory.ts:18` 默认翻转为 `'own'`，env 反向为 `DUYA_TUI_RENDERER=blessed` 回滚开关（= 614 Phase 6 的 6.1/6.3，并入本计划 Phase 0，连带 italic/strike 五处同改 6.2）；② 冻结：blessed-surface 不再接收新特性，parity harness 持续跑；③ 删除：I8 全部迁完后删 `blessed-surface.ts`、`blessed-unicode.ts`、`TUIApp` 的 blessed import 与依赖声明。
 
@@ -313,11 +319,16 @@ App (id: root)
     - **顺带纠正一个隐含假设**：一个 block 不等于一行（200 个单行 block 排出 399 行，渲染器会加分隔行）。所以「第 N 行属于哪个 block」必须问 `heights()`，凡是按 1 block = 1 line 写的推算都是错的 —— 测试里已改成从渲染器取真实行。
   - 门禁：`tsc -b --force` 绿；`tui` 872/872；`packages/cli` 1083/1091，8 红与前完全一致；`transcript-cache` 既有测试零改动通过（新 key 槽位恒为 0，命中计数不变）。
 
-- [ ] **Phase 5 — 帧调度统一（I5，D5/D6）**
-  - [ ] 5.1 RenderScene 成为两个 Output 的唯一输入；RenderScheduler 调度不变
-  - [ ] 5.2 `ScrollbackOutput`（InlineSurface 内核）与 `AltScreenOutput`（OwnScreenSurface 内核）改吃 Span 流；标签层只剩 blessed-surface 一条腿
-  - [ ] 5.3 （Go/No-Go D6）字符区间 diff：仅当 Phase 0 基线显示行内重绘占比显著才实施
-  - 门禁：`render-parity.test.ts`（两 Output 对拍）+ working-tail/inline-mode 既有测试
+- [x] **Phase 5 — 帧调度统一（I5，D5/D6）**
+  - [x] 5.1 RenderScene 成为两个 Output 的唯一输入；RenderScheduler 调度不变
+    - **执行记录**：新增 `SceneLine = string | readonly StyledSpan[]`（`core/span.ts`），`RegionPatch.lines` 与 `InlineFrame.scroll/chrome` 的类型都变成 `readonly SceneLine[]`。**RenderScene 的一行就是 `StyledSpan[]`**，所以一个 scene 天然能喂给两个 Output —— 不需要第二个字段，也不需要每个消费者写一遍「优先 spans，退化 tags」的分支。`RenderScheduler` 一行未改（trailing-edge + `requestImmediate` 语义原样）。
+  - [x] 5.2 `ScrollbackOutput`（InlineSurface 内核）与 `AltScreenOutput`（OwnScreenSurface 内核）改吃 Span 流；标签层只剩 blessed-surface 一条腿
+    - **执行记录**：转换收敛到 `terminal/line.ts` 一处（`lineToSpans` / `lineToAnsi` / `lineToTags`）。own 全屏路径新增 `drawSpanLine`（同一套折行算法，去掉 SGR 解析；cell 的样式串来自 `spanStyleParameters`，与 `spansToAnsi` 同一函数 —— 这是两条路径逐格相等的原因）。**inline 路径现在只有一个序列化器**：`lineToAnsi` 一律走 tags→spans→`spansToAnsi`，`diff.ts` 不再自己转换，「比较的就是写出的字节」从注释变成结构保证。
+    - **标签层现状**：只剩 blessed-surface 一处消费（`lineToTags`）。`terminal/sgr.ts` 因此没有生产调用方了 —— 它的测试是 tag 词汇的实测记录、`working-tail.test.ts` 还拿它当参照，所以留到 Phase 7 与 tag 词汇一起删（模块头已标注）。
+    - **一处既有断言因此改了字节**：`surface.test.ts` 期望滚回区里是 `\x1b[90m…\x1b[39m`（paired reset），统一到 span 序列化器后是 `\x1b[m`（整段复位）。两者屏幕一致，契约（「进滚回区的是 ANSI，绝不是 tag」）不变，改的是实现细节的字节。
+  - [x] 5.3 （Go/No-Go D6）字符区间 diff：仅当 Phase 0 基线显示行内重绘占比显著才实施
+    - **裁定：No-Go（降级 backlog），依据实测而非阈值**。见 §4 D6 的裁定栏：行内变更占比 6.9%（看起来值得做），但 `renderViewportFrame` 只花 0.0067ms/帧、整帧 30.8ms —— 写入路径不到帧成本的 0.03%，省下的字节是噪声。
+  - 门禁：`tsc -b --force` 绿；`tui` 876/876；`packages/cli` 1095/1103，8 红与 Phase 4 完全一致；`render-parity.test.ts` 新增对拍「同一批行，own 吃 spans、blessed 吃 tags，字形逐格相等」；`working-tail` / `inline-mode` 既有测试通过（`working-tail` 零改动：它直接调 `tagsToAnsi`）。
 
 - [ ] **Phase 6 — 全量组件化 + TUIApp 瘦身（I6）**
   - [ ] 6.1 Transcript/ToolView/Composer（InputEditor 保留，外壳上树）逐个迁移，每迁一个删一段 TUIApp 手工拼装

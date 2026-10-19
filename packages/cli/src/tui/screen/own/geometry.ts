@@ -1,4 +1,5 @@
 import type { RegionMetrics, RegionPatch, SurfaceRegion } from '../types.js';
+import type { SceneLine } from '../../core/span.js';
 
 export interface SurfaceSize {
   readonly columns: number;
@@ -10,7 +11,8 @@ export interface RegionLayout {
   readonly borderStyle: NonNullable<RegionPatch['borderStyle']>;
   readonly borderColor: string;
   readonly hidden: boolean;
-  readonly lines: readonly string[];
+  /** Body lines in either representation: tags or spans. */
+  readonly lines: readonly SceneLine[];
   /**
    * Columns the content is drawn into, border excluded.
    *
