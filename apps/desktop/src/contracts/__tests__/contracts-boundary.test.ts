@@ -102,7 +102,11 @@ describe('the contracts directory is a contract surface', () => {
   it('is imported by all three processes, so the boundary is doing work', () => {
     // A contracts directory nothing reaches is an unused directory. This also
     // pins the claim that the hop is now host-internal: the three consumers
-    // are main, preload and renderer, and none of them imports another.
+    // are main, preload and the renderer graph, and none of them imports
+    // another. Since plan 610/24 the renderer graph lives in `packages/ui`
+    // (mounted by Desktop, soon by Web), so the consumer scan walks both
+    // trees: apps/desktop processes classify by their fourth path segment,
+    // and anything under packages/ui is the shared renderer consumer.
     const specs: string[] = [];
     const walk = (dir: string) => {
       for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -124,8 +128,15 @@ describe('the contracts directory is a contract surface', () => {
       }
     };
     walk(path.join(REPO_ROOT, 'apps/desktop/src'));
+    walk(path.join(REPO_ROOT, 'packages/ui/src'));
 
-    const consumers = new Set(specs.map((s) => s.split(' -> ')[0].split('/')[3]));
+    const consumers = new Set(
+      specs.map((s) => {
+        const file = s.split(' -> ')[0];
+        if (file.startsWith('packages/ui/')) return 'renderer';
+        return file.split('/')[3];
+      }),
+    );
     expect([...consumers].sort()).toEqual(expect.arrayContaining(['main', 'preload', 'renderer']));
   });
 });
