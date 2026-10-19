@@ -225,6 +225,11 @@ import type {
   PluginAppInstanceRecord,
   PluginAppInstanceWriteResult,
   PluginAppInstanceStatusResult,
+  HostPluginAppInvocationApiV1,
+  PluginAppInvocationBindInput,
+  PluginAppInvocationBinding,
+  PluginAppInvocationInput,
+  PluginAppInvocationResult,
 } from '@duya/agent-protocol';
 import type {
   CreateDataSourceInput,
@@ -337,6 +342,7 @@ export class HostSessionHttpClient implements
   HostLocalAppConnectionApiV1,
   HostLocalPluginSetupApiV1,
   HostPluginAppInstanceApiV1,
+  HostPluginAppInvocationApiV1,
   HostLocalWorkbenchApiV1,
   HostLocalSidebarSectionsApiV1,
   HostLocalUsageApiV1,
@@ -1455,6 +1461,35 @@ export class HostSessionHttpClient implements
     instanceId: string, input: HostPluginAppInstanceStatusInput,
   ): Promise<PluginAppInstanceStatusResult> {
     return this.request('POST', `/v1/local/plugin-app-instances/${encodeURIComponent(instanceId)}/status`, input);
+  }
+
+  async bindPluginAppInvocation(input: PluginAppInvocationBindInput): Promise<PluginAppInvocationBinding> {
+    const result = await this.request<{ binding: PluginAppInvocationBinding }>(
+      'POST', '/v1/local/plugin-app-invocations/bind', input,
+    );
+    return result.binding;
+  }
+
+  async invokePluginAppTool(input: PluginAppInvocationInput): Promise<PluginAppInvocationResult> {
+    return this.request(
+      'POST',
+      `/v1/local/plugin-app-invocations/${encodeURIComponent(input.bindingId)}/invoke`,
+      {
+        nonce: input.nonce,
+        toolId: input.toolId,
+        arguments: input.arguments,
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+      },
+    );
+  }
+
+  async revokePluginAppInvocation(bindingId: string, nonce: string): Promise<boolean> {
+    const result = await this.request<{ revoked: boolean }>(
+      'DELETE',
+      `/v1/local/plugin-app-invocations/${encodeURIComponent(bindingId)}`,
+      { nonce },
+    );
+    return result.revoked;
   }
 
   async listPluginSetupValues(): Promise<Record<string, Record<string, string>>> {

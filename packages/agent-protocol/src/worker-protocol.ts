@@ -135,6 +135,48 @@ export interface ChatInterruptCommand {
   type: 'chat:interrupt';
 }
 
+/** Host-only MCP catalog inspection for a bound Plugin App run. */
+export interface PluginAppDescribeToolsCommand {
+  type: 'plugin-app:describe-tools';
+  sessionId: string;
+  runId: string;
+  epoch: number;
+  requestId: string;
+}
+
+/** Host-only invocation; all authority fields were minted by the Host. */
+export interface PluginAppInvokeCommand {
+  type: 'plugin-app:invoke';
+  sessionId: string;
+  runId: string;
+  epoch: number;
+  requestId: string;
+  bindingId: string;
+  nonce: string;
+  toolId: string;
+  schemaRevision: string;
+  capabilityId: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface PluginAppDescribeToolsResponse {
+  type: 'plugin-app:tools';
+  sessionId: string;
+  runId: string;
+  epoch: number;
+  requestId: string;
+  tools: import('./plugin-app-invocations.js').PluginAppMcpDescriptor[];
+}
+
+export interface PluginAppInvokeResponse {
+  type: 'plugin-app:result';
+  sessionId: string;
+  runId: string;
+  epoch: number;
+  requestId: string;
+  result: import('./plugin-app-invocations.js').PluginAppInvocationResult;
+}
+
 export interface CompactCommand {
   type: 'compact';
   sessionId: string;
@@ -228,6 +270,8 @@ export type WorkerCommand =
   | InitCommand
   | ChatStartCommand
   | ChatInterruptCommand
+  | PluginAppDescribeToolsCommand
+  | PluginAppInvokeCommand
   | CompactCommand
   | SideQuestionCommand
   | ConfigUpdateCommand

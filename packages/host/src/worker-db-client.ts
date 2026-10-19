@@ -224,6 +224,12 @@ export function initDbClient(): void {
   }
 }
 
+/** Worker-side final invocation check; Host derives session/run/epoch from IPC. */
+export const pluginAppBindingDb = {
+  isCurrent: async (bindingId: string, nonce: string, toolId: string): Promise<boolean> =>
+    (await sendDbRequest('plugin-app:binding-current', { bindingId, nonce, toolId })) === true,
+};
+
 // ==================== Session Operations ====================
 
 export const sessionDb = {
