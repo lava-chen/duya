@@ -63,6 +63,10 @@ src/stories/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+# T04b: the summary guard's regression fixtures ARE CI job logs, captured
+# verbatim and asserted on byte-for-byte. `*.log` above would drop them and
+# the tests that need them would fail in CI for a reason no one could see.
+!scripts/ci/__fixtures__/*.log
 
 # OS files
 .DS_Store

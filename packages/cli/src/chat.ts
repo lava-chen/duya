@@ -30,11 +30,11 @@ import type {
 import { projectTimelinePersistenceMessages } from '@duya/agent-protocol/transcript';
 import type { PopoverItem } from '@duya/input-completion';
 import { HostSessionHttpClient } from '@duya/host/http-client';
-import { startLocalHost } from '@duya/host/local-host';
-import { resolveHostWorkerPath } from './worker-path.js';
 import { resolveDataRoot } from '@duya/data';
 import { TUIApp, shouldUseTui, type CompletionSources, type TuiChoice } from './tui/index.js';
 import { HostEventStream } from './tui/host-event-stream.js';
+import { createRunSessionView, projectRunSessionView } from './tui/run-session-view.js';
+import { RunSession } from '@duya/client-core';
 import { TurnQueue, type TurnOutcome } from './tui/turn-queue.js';
 import { createFileCompletionSource } from './tui/candidates.js';
 import { captureConsoleToFile } from './tui/console-capture.js';
@@ -121,13 +121,19 @@ function resolveConnection(options: ChatCommandOptions): ResolvedConnection {
   );
 }
 
-const DIM = '\x1b[2m';
-const RESET = '\x1b[0m';
 const BRIGHT_CYAN = '\x1b[96m';
 const YELLOW = '\x1b[33m';
-const RED = '\x1b[31m';
 
-function write(line: string): void {
+/**
+ * Plain-terminal line writer and the three codes `tui-command.ts` needs to
+ * print its pre-TUI status and error lines. The Host bootstrap prints through
+ * the client's writer so the plain-output path has exactly one implementation.
+ */
+export const DIM = '\x1b[2m';
+export const RESET = '\x1b[0m';
+export const RED = '\x1b[31m';
+
+export function write(line: string): void {
   process.stdout.write(`${line}\n`);
 }
 
@@ -358,7 +364,13 @@ function runShellLine(command: string): Promise<ShellResult> {
   });
 }
 
-async function chatInteractive(
+/**
+ * Drive the full-screen / inline TUI against an already-connected Host client.
+ *
+ * Exported for `tui-command.ts`, which is the bootstrap half of `duya tui`:
+ * it owns starting the Host, this owns everything after the client exists.
+ */
+export async function chatInteractive(
   client: HostSessionHttpClient,
   sessionId: SessionId,
   options: ChatCommandOptions,
@@ -428,7 +440,8 @@ async function chatInteractive(
   return 0;
 }
 
-async function createChatSession(
+/** Exported for `tui-command.ts`; see the note on `chatInteractive`. */
+export async function createChatSession(
   client: HostSessionHttpClient,
   options: ChatCommandOptions,
 ): Promise<HostSessionRecord> {
@@ -879,10 +892,21 @@ export async function chatTui(
         return 'cancelled';
       }
       const stream = new HostEventStream(runSessionId, start.runId);
+      // T11 step 1 (coexistence). The run's state is now HELD by RunSession, and
+      // the view adapter states the two facts the legacy projector has no case
+      // for (`tool.timed_out`, `permission.resolved`). The legacy frames still
+      // drive every common event — the render-source switch is step 2 and is
+      // not done, so this is additive, not a replacement.
+      const runState = new RunSession({ runId: start.runId, sessionId: runSessionId });
+      let viewState = createRunSessionView();
       for await (const event of client.watchAgentRunEvents(start.runId, { signal: streamAbort.signal })) {
         if (finished) return 'cancelled';
         const frame = stream.push(event);
         if (frame !== null) tui.push(frame);
+        runState.apply(event);
+        const projection = projectRunSessionView(viewState, runState.getSnapshot());
+        viewState = projection.state;
+        for (const gap of projection.frames) tui.push(gap);
       }
       if (cancellationRequested || finished) return 'cancelled';
       const record = await client.getAgentRun(start.runId);
@@ -1067,70 +1091,6 @@ export async function chatTui(
   tui.start();
   await finishedPromise;
   return 0;
-}
-
-export interface TuiCommandOptions {
-  readonly port?: number;
-  readonly session?: string;
-  readonly model?: string;
-  readonly providerId?: string;
-  readonly apiFormat?: 'anthropic' | 'openai';
-}
-
-/**
- * Entry for the `duya tui` command. Starts an ephemeral Host and opens the TUI
- * in the same process. The Host is shut down when the TUI exits. Which screen
- * model that TUI uses is `inlineTuiRequested`; this entry point is the same
- * either way. Returns the process exit code.
- */
-export async function runTuiCommand(options: TuiCommandOptions): Promise<number> {
-  const host = await startLocalHost({
-    port: options.port,
-    ephemeral: true,
-    workerPath: resolveHostWorkerPath(),
-  });
-  const client = new HostSessionHttpClient(host.origin, host.token ?? '');
-  try {
-    const health = await client.getHealth();
-    write(`${DIM}duya tui · Host ${host.origin} (api v${health.apiVersion})${RESET}`);
-  } catch (error) {
-    write(`${RED}Host failed to start: ${error instanceof Error ? error.message : String(error)}${RESET}`);
-    return 1;
-  }
-
-  let sessionId: SessionId;
-  if (options.session !== undefined && options.session.trim().length > 0) {
-    sessionId = options.session.trim() as SessionId;
-    const existing = await client.readLocalSession(sessionId, { includeAllSessions: true });
-    if (existing === null) {
-      write(`${RED}session ${sessionId} does not exist on this Host${RESET}`);
-      return 1;
-    }
-  } else {
-    const created = await createChatSession(client, { ...options, origin: host.origin, token: host.token });
-    sessionId = created.id;
-  }
-
-  let exitCode = 0;
-  // From here the TUI owns this terminal. `blessed` renders through its own
-  // writer, so any `console.*` call from this process lands inline in the
-  // transcript and buries the turn the user asked for. Route it to the Host's
-  // diagnostics log for the rest of the TUI's life. `process.stdout` and
-  // `process.stderr` are deliberately NOT patched —that is what blessed draws.
-  const consoleCapture =
-    host.diagnosticsLogPath === undefined
-      ? undefined
-      : captureConsoleToFile(host.diagnosticsLogPath);
-  try {
-    exitCode = await chatInteractive(client, sessionId, { ...options, origin: host.origin, token: host.token, diagnosticsLogPath: host.diagnosticsLogPath });
-  } finally {
-    try {
-      await host.close();
-    } finally {
-      consoleCapture?.restore();
-    }
-  }
-  return exitCode;
 }
 
 /** Entry for the `duya chat` command. Returns the process exit code. */

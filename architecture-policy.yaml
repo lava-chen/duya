@@ -292,6 +292,13 @@ modules:
       - packages/agent-runtime/src/context/contextual-user-fragment.ts
     owner: agent
 
+  # Node-only local BFF. A future browser entry needs its own narrower module.
+  - id: web-server
+    roots: [apps/web/src/server, apps/web/tests/server]
+    managed: true
+    requires: [agent-protocol, duya-host]
+    owner: client
+
   # Client-side state projection from the Host's protocol events.
   - id: client-core
     roots: [packages/client-core]
@@ -765,7 +772,7 @@ modules:
     # Both declared rather than baselined: the CLI importing the same slash
     # vocabulary the Desktop imports is the entire point of the package, and the
     # `ai` functions are the ones plan 610 A0 §3.1 identified as IO-free.
-    requires: [input-completion, data, duya-host, agent-protocol, legacy-ai, command-catalog]
+    requires: [input-completion, data, duya-host, agent-protocol, client-core, legacy-ai, command-catalog]
     owner: agent
 
   - id: legacy-gateway

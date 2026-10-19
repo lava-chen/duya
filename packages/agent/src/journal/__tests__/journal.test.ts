@@ -25,7 +25,17 @@ const recordedEmits: Array<{
   turnId: string | null;
 }> = [];
 
-vi.mock('../../ipc/db-client.js', () => ({
+// T04b: this mock used to be aimed at `../../ipc/db-client.js` — the agent-side
+// compatibility shim. That is NOT the module the code under test imports:
+// `packages/agent/src/journal/Journal.ts` re-exports
+// `@duya/host/worker-journal/Journal`, and host's own `Journal.ts` imports
+// `messageDb` from `'../worker-db-client.js'`. Two spellings, two module ids,
+// so the mock never intercepted anything. Every test below therefore ran
+// against the REAL db client, whose requests went out on the ambient
+// `process.send` — which, in a vitest forks worker, is the pool's own channel.
+// That is what killed the run before the reporter printed a summary.
+// Mock the id the consumer actually imports, so the db traffic stops here.
+vi.mock('@duya/host/worker-db-client', () => ({
   messageDb: {
     append: (sessionId: string, messages: unknown[], turnId: string | null) => {
       recordedAppends.push({ sessionId, messages, turnId });
@@ -257,7 +267,7 @@ describe('Journal', () => {
     // test only. The success:false branch in fireEventRaw must invoke
     // onError with the new "emit returned" wording — not the old
     // "append returned" string.
-    const { messageDb } = await import('../../ipc/db-client.js');
+    const { messageDb } = await import('@duya/host/worker-db-client');
     const realEmit = messageDb.emit;
     const spy = vi.spyOn(messageDb, 'emit').mockImplementationOnce(
       (_sessionId, _event, _turnId) =>

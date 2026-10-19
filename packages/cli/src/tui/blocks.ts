@@ -142,6 +142,16 @@ export interface ToolBlock {
    * every tool input would grow the model for no reader-visible gain.
    */
   command?: string;
+  /**
+   * The call blew its deadline (`tool.timed_out`).
+   *
+   * Separate from `status` because the two facts differ and both are true: a
+   * timeout is what the volatile notice said, while a later durable completion
+   * carrying `outcome: 'timeout'` sets `status: 'error'` with a result. Reading
+   * either one as the other loses information the protocol deliberately keeps
+   * apart. Set by the T11 view adapter, which is the only producer.
+   */
+  timedOut?: boolean;
 }
 
 export interface ErrorBlock {
@@ -203,6 +213,11 @@ function payloadOf(frame: LegacyFrame): Record<string, unknown> {
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+/** A finite number, or 0. A non-number is a missing number here, not a NaN one. */
+function asNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 /**
@@ -347,6 +362,20 @@ export function readBlockKey(payload: Record<string, unknown>): string | null {
 function sealThinkingDuration(block: ThinkingBlock, at: number): void {
   if (block.durationMs !== undefined || block.startedAt === undefined) return;
   block.durationMs = Math.max(0, at - block.startedAt);
+}
+
+/**
+ * One line saying how a permission question ended.
+ *
+ * The verb is derived from the protocol action, never from whether the user was
+ * the one who answered: a host denial and a timeout denial reach the reader
+ * through the same line, and the difference is in the audit chain, not the
+ * prompt.
+ */
+function permissionResolutionLine(action: string, toolName: string, reason: string): string {
+  const verb = action === 'deny' ? 'denied' : action === 'defer' ? 'deferred' : action;
+  const suffix = reason === '' ? '' : ` (${reason})`;
+  return `Permission ${verb}${toolName === '' ? '' : ` for ${toolName}`}${suffix}`;
 }
 
 export class TranscriptModel {
@@ -571,6 +600,21 @@ export class TranscriptModel {
     return this.toolsByCallId.get(callId) ?? null;
   }
 
+  /**
+   * Record that a call timed out, without inventing a result for it.
+   *
+   * A timeout is NOT a completion: the call may still finish, and the durable
+   * `tool.call_completed` that says so is a separate event. So this only sets
+   * the flag and leaves `result` alone — a block that reads `timedOut` with an
+   * empty result is the honest state of a call that has not come back yet.
+   */
+  markToolTimedOut(callId: string): ToolBlock | null {
+    const block = this.toolsByCallId.get(callId);
+    if (block === undefined) return null;
+    block.timedOut = true;
+    return block;
+  }
+
   /** Append a single-line notice. */
   addNotice(text: string): NoticeBlock {
     const block: NoticeBlock = { kind: 'notice', id: nextId('notice'), text };
@@ -646,6 +690,33 @@ export class TranscriptModel {
         return block === null ? { kind: 'none' } : { kind: 'mutate', block };
       }
 
+      case 'tool_timed_out': {
+        const callId = asString(payload['id']);
+        if (callId === '') return { kind: 'none' };
+        // A timeout for a call never announced itself still gets a block, on
+        // the same reasoning as `tool_result`: the event must not be dropped
+        // just because the announcement was lost.
+        if (!this.toolsByCallId.has(callId)) {
+          this.upsertTool(callId, asString(payload['name']), undefined);
+        }
+        const block = this.markToolTimedOut(callId);
+        return block === null ? { kind: 'none' } : { kind: 'mutate', block };
+      }
+
+      case 'permission_resolved': {
+        // The durable answer to a question the user was asked. A notice, not a
+        // `status` frame: `status` is chrome the reader scrolls past, and an
+        // answer that vanishes with the activity row is the same loss as never
+        // receiving it at all.
+        const action = asString(payload['action']);
+        if (action === '') return { kind: 'none' };
+        const toolName = asString(payload['toolName']);
+        return {
+          kind: 'append',
+          block: this.addNotice(permissionResolutionLine(action, toolName, asString(payload['reason']))),
+        };
+      }
+
       case 'permission': {
         const requestId = asString(payload['requestId']);
         if (requestId === '') return { kind: 'none' };
@@ -692,6 +763,42 @@ export class TranscriptModel {
         return { kind: 'none' };
       }
 
+      case 'retry': {
+        // A retry is the answer to "why did it take that long", and the status
+        // line that carries it is overwritten by the next turn. Owner decision
+        // (plan 610): this one gets a durable row.
+        const reason = asString(payload['reason']);
+        const attempt = asNumber(payload['attempt']);
+        // `attempt` is a required field and 1-based, so a frame without one is
+        // not a retry. Without this the empty frame renders `attempt 0`, which
+        // is a fact the run never stated.
+        if (attempt < 1) return { kind: 'none' };
+        const maxAttempts = asNumber(payload['maxAttempts']);
+        const attemptText = maxAttempts === 0 ? `attempt ${attempt}` : `attempt ${attempt}/${maxAttempts}`;
+        return { kind: 'append', block: this.addNotice(`Retrying (${attemptText})${reason === '' ? '' : ` — ${reason}`}`) };
+      }
+
+      case 'mode_changed': {
+        // Same reasoning: the mode a run is in is what explains its behaviour
+        // afterwards, and the composer border is the only other place it shows.
+        const mode = asString(payload['mode']);
+        if (mode === '') return { kind: 'none' };
+        const source = asString(payload['source']);
+        return { kind: 'append', block: this.addNotice(`Mode: ${mode}${source === '' ? '' : ` (${source})`}`) };
+      }
+
+      case 'goal_updated': {
+        const state = asString(payload['state']);
+        const phase = asString(payload['phase']);
+        const objective = asString(payload['objective']);
+        const headline = [state, phase].filter((part) => part !== '').join(' · ');
+        if (headline === '') return { kind: 'none' };
+        // The objective is a sentence the agent wrote; clipped so a long one
+        // cannot push the rest of the transcript out of an 80-column window.
+        const clipped = objective.length > 80 ? `${objective.slice(0, 79)}…` : objective;
+        return { kind: 'append', block: this.addNotice(`Goal ${headline}${clipped === '' ? '' : ` — ${clipped}`}`) };
+      }
+
       case 'compact:start':
         return { kind: 'append', block: this.addNotice('compacting context…') };
       case 'compact:done':
@@ -707,9 +814,6 @@ export class TranscriptModel {
       case 'tool_progress':
       case 'tool_group_progress':
       case 'turn_start':
-      case 'retry':
-      case 'mode_changed':
-      case 'goal_updated':
       case 'compact:step':
       case 'compact:over_threshold':
       case 'agent_progress':
@@ -731,5 +835,34 @@ export class TranscriptModel {
     this.thinkingByKey.clear();
     this.assistant = null;
     this.thinking = null;
+  }
+
+  /**
+   * Replace everything the RUN contributed, keeping the local input blocks.
+   *
+   * ## Why this splices instead of replacing
+   *
+   * User blocks come from local input and never travel on a run event stream,
+   * so they are absent from a `RunSessionSnapshot` and no projection of shared
+   * state can rebuild them. A render source that swapped the whole transcript
+   * would delete the user's own prompts on every snapshot — which is why the
+   * switch this enables is a splice and not a wholesale `clear()`.
+   *
+   * The user prefix is taken as everything up to and including the LAST user
+   * block: input is always appended after the output it provoked, so the last
+   * user block is the boundary. Anything after it was run-derived.
+   *
+   * The frames replay through the ordinary `apply` path, so block ids keep
+   * advancing and no projection of block shapes is duplicated here.
+   */
+  replayRunSegment(frames: readonly LegacyFrame[]): void {
+    let lastUserIndex = -1;
+    for (let index = 0; index < this.items.length; index += 1) {
+      if (this.items[index]!.kind === 'user') lastUserIndex = index;
+    }
+    const userBlocks = this.items.slice(0, lastUserIndex + 1);
+    this.clear();
+    for (const block of userBlocks) this.items.push(block);
+    for (const frame of frames) this.apply(frame);
   }
 }

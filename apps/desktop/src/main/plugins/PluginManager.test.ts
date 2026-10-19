@@ -9,6 +9,12 @@ const state = vi.hoisted(() => ({
   fixtureDir: '',
   cacheDir: '',
   storeEntries: [] as Array<Record<string, unknown>>,
+  catalogApps: undefined as Array<{
+    appId: string;
+    entry: string;
+    requiredCapabilities: string[];
+    stateSchemaVersion: number;
+  }> | undefined,
   storeUpsertPlugin: vi.fn(),
 }));
 
@@ -49,9 +55,10 @@ vi.mock('./catalog', () => ({
         capabilities: {
           skills: ['test-skill'],
           mcpServers: [
-            { name: 'test-mcp', command: 'node', args: ['server.js'] },
+            { name: 'test-mcp', command: 'node', args: ['server.js'], env: { API_TOKEN: 'must-not-leak' } },
           ],
         },
+        apps: state.catalogApps,
         components: {
           mcpServers: ['test-mcp'],
           appConnections: [],
@@ -188,6 +195,7 @@ describe('PluginManager.installFromCatalog', () => {
     state.fixtureDir = path.join(state.tempRoot, 'fixture', 'test-plugin');
     state.cacheDir = path.join(state.tempRoot, 'cache', 'com.duya.test-plugin', '0.1.0');
     state.storeEntries = [];
+    state.catalogApps = undefined;
     state.storeUpsertPlugin.mockReset();
 
     fs.mkdirSync(path.join(state.tempRoot, 'installed'), { recursive: true });
@@ -242,5 +250,74 @@ describe('PluginManager.installFromCatalog', () => {
 
     // MCP server config is copied from the fixture dir.
     expect(existsSync(path.join(state.cacheDir, 'mcp', 'servers.json'))).toBe(true);
+  });
+
+  it('projects only normalized App metadata into the installed list', () => {
+    const apps = [
+      {
+        appId: 'search-panel',
+        entry: 'apps/search/index.html',
+        requiredCapabilities: ['mcp.read'],
+        stateSchemaVersion: 1,
+      },
+      {
+        appId: 'settings-panel',
+        entry: 'apps/settings/index.html',
+        requiredCapabilities: [],
+        stateSchemaVersion: 3,
+      },
+    ];
+    state.catalogApps = apps;
+    state.storeEntries = [{
+      id: 'com.duya.test-plugin',
+      name: 'test-plugin',
+      version: '0.1.0',
+      enabled: true,
+      installPath: state.cacheDir,
+      dataPath: path.join(state.tempRoot, 'data', 'com.duya.test-plugin'),
+      source: 'marketplace',
+      trustLevel: 'official',
+      scope: 'user',
+      marketplace: 'official',
+      autoUpdate: false,
+      installedAt: '2026-10-19T00:00:00.000Z',
+      updatedAt: '2026-10-19T00:00:00.000Z',
+      grantedPermissions: [],
+      setupState: 'complete',
+      health: { status: 'ready', reasons: [], checkedAt: '2026-10-19T00:00:00.000Z' },
+    }];
+
+    const [plugin] = new PluginManager().listInstalled();
+
+    expect(plugin?.apps).toEqual(apps);
+    expect(plugin).not.toHaveProperty('manifest');
+    expect(plugin).not.toHaveProperty('capabilities');
+    expect(JSON.stringify(plugin)).not.toContain('must-not-leak');
+  });
+
+  it('leaves apps undefined for legacy installed plugin manifests', () => {
+    state.catalogApps = undefined;
+    state.storeEntries = [{
+      id: 'com.duya.test-plugin',
+      name: 'test-plugin',
+      version: '0.1.0',
+      enabled: true,
+      installPath: state.cacheDir,
+      dataPath: path.join(state.tempRoot, 'data', 'com.duya.test-plugin'),
+      source: 'marketplace',
+      trustLevel: 'official',
+      scope: 'user',
+      marketplace: 'official',
+      autoUpdate: false,
+      installedAt: '2026-10-19T00:00:00.000Z',
+      updatedAt: '2026-10-19T00:00:00.000Z',
+      grantedPermissions: [],
+      setupState: 'complete',
+      health: { status: 'ready', reasons: [], checkedAt: '2026-10-19T00:00:00.000Z' },
+    }];
+
+    const [plugin] = new PluginManager().listInstalled();
+
+    expect(plugin?.apps).toBeUndefined();
   });
 });

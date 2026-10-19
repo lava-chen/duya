@@ -147,7 +147,13 @@ describe('G10 goes RED on a Node built-in attached to a renderer-shaped entry', 
   });
 });
 
-describe('G10 on the live tree', () => {
+// ## Why the block carries an explicit timeout
+//
+// Same reason as the G11-1 live block, and it is the case the timeout card
+// (#277's review) named: these cases walk the real tree from real roots, and
+// the default left no headroom once a sibling file joined the run. A gate that
+// flips on scheduling noise trains people to ignore it.
+describe('G10 on the live tree', { timeout: 30_000 }, () => {
   const report = collectBrowserClosureReport();
 
   it('is green, and reports the scope the verdict is about', () => {

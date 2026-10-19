@@ -224,6 +224,7 @@ describe('slash registry', () => {
     // values against the actual names would pass no matter what was added.
     expect([...names].sort()).toEqual([
       'archive',
+      'capabilities',
       'context',
       'copy',
       'cost',
@@ -234,6 +235,7 @@ describe('slash registry', () => {
       'hotkeys',
       'model',
       'permission',
+      'read-file',
       'rename',
       'settings',
       'status',

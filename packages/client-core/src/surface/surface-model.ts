@@ -721,7 +721,14 @@ export class SurfaceModel {
           durationMs: null,
         };
         this.turnsById.set(event.turnId, turn);
-        this.turnsByOrder.push(turn);
+        // Re-announcing a turn REPLACES its row rather than appending a second
+        // one. An unconditional push here would leave `turnsByOrder` holding a
+        // stale row for a `turnId` that `turnsById` already overwrote, so the
+        // two indexes would disagree on the same turn: `turns` would render it
+        // twice and `currentTurn` could return the retired copy. Keying the
+        // write through `replaceInOrder` keeps the ordered list at exactly one
+        // entry per turn and holds its original start position.
+        this.replaceInOrder(turn);
         return { kind: 'turn', turn };
       }
 
@@ -756,13 +763,24 @@ export class SurfaceModel {
           phase: 'completed',
           retry: existing?.retry ?? null,
           stopReason: event.stopReason,
-          usage: event.usage,
+          // `usage` became optional in T01b, and `TurnSurface.usage` is
+          // `TokenUsage | null`. The translation is the whole point: an
+          // ABSENT usage is not a reported zero, and this field is folded into
+          // the run's total, so turning `undefined` into `{...0}` here would
+          // erase every real number the run had accumulated.
+          usage: event.usage ?? null,
           durationMs: event.durationMs,
         };
         if (existing === undefined) this.turnsByOrder.push(turn);
         else this.replaceInOrder(turn);
         this.turnsById.set(turn.turnId, turn);
-        this.usage = event.usage;
+        // The run-level reading is the LAST turn that REPORTED usage, so an
+        // absent usage must leave it alone. Assigning `event.usage` straight
+        // through writes `undefined` into a `TokenUsage | null` field, and
+        // reading that back as a zero would erase the tokens an earlier turn
+        // really spent — the same "absent is not zero" rule as the turn field
+        // above, applied to the run total.
+        if (event.usage !== undefined) this.usage = event.usage;
         return { kind: 'turn', turn };
       }
 

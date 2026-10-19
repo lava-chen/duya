@@ -605,6 +605,12 @@ export class RunEngineImpl implements RunEngine {
           break;
         }
         spend.beginTurn(turn);
+        // The turn's own start, for `turn.completed`'s `durationMs`. A LOCAL
+        // rather than a `RunContext` field: nothing outside this iteration
+        // reads it, and the context is rebuilt every turn anyway. Taken after
+        // `beginTurn` and not before, so the duration covers exactly the turns
+        // the ledger counted.
+        const turnBeganAt = this.#options.now();
 
         const ctx: RunContext = {
           runId,
@@ -872,6 +878,20 @@ export class RunEngineImpl implements RunEngine {
             transcript: this.#transcriptFor(ctx, assembled, ctx.deferred.current),
           });
         }
+
+        // ── The turn's terminal ──────────────────────────────────────────────
+        // HERE, after the drain and the preflight pass, and BEFORE the stop
+        // decision: this is the last point every turn that actually ran passes
+        // through. `#shouldStop` decides whether the RUN continues, so a turn
+        // that ends the run has to state its own ending before it is answered —
+        // and it necessarily precedes the run terminal, which the outer
+        // `finally` only PROPOSES (`#terminalCandidate` -> `proposeTerminal`).
+        //
+        // `seq` is not passed and cannot be: `publish` takes a `RunEvent`, and
+        // the run's emitter mints the number (`ports.ts:1020`). That is what
+        // keeps this event on the run's ONE sequence instead of starting a
+        // per-turn counter the way a locally numbered event would.
+        this.#publishTurnCompleted(ctx, this.#options.now() - turnBeganAt);
 
         // ── Decision 4: decide to stop ───────────────────────────────────────
         if (isAborted(signal)) {
@@ -2725,6 +2745,85 @@ export class RunEngineImpl implements RunEngine {
   }
 
   /**
+   * The `turn.completed` event — the terminal `turn.started` never had.
+   *
+   * ## Why the payload comes off `lastMessage`, and not off an exit code
+   *
+   * `#streamModel` holds the assembled turn message on the run's `lastMessage`
+   * cell (`:1255`) and fills it with exactly what the provider reported: the
+   * stop reason through `stop()` and the usage through `addUsage`. Reading it
+   * back here is the only source that is an OBSERVATION rather than a
+   * derivation — the caller's `turnBeganAt` supplies the interval, and nothing
+   * else in this method is computed.
+   *
+   * ## The paths that never reach this method
+   *
+   * Every exit that is not a finished turn: a cancel or provider error
+   * mid-stream, a throw that reaches the loop's `catch` after the stream
+   * opened, a proactive compaction that failed, a soft stop, and a run stopped
+   * at the budget check above turn 1. Those turns never produced an answer, so
+   * there is no turn ending to report, and the run's own terminal carries what
+   * happened. Manufacturing a `turn.completed` for them would be the same lie
+   * `resolveRunOutcome` refuses when it reads a cancellation as `completed`
+   * rather than `failed`.
+   *
+   * ## Two refusals, and why they are SILENT rather than diagnosed
+   *
+   * The payload is entirely REQUIRED (`events/required.ts:80`) and the engine
+   * publishes only what it observed, so the two observations that can be
+   * missing are refused rather than defaulted:
+   *
+   *  - `tool_use` is a `ModelStopReason` with no member in the event's
+   *    `StopReason` (`events/payloads.ts:77`). `end_turn` would name a reason
+   *    the provider never gave and `completed` would claim a normal finish that
+   *    did not happen. This is the same predicate `#finalizeLastMessage`
+   *    already refuses on (`:1543`).
+   *  - A missing `usage` means the provider reported no spend. A zero is not a
+   *    default here, it is a claim -- and a consumer folds this event's `usage`
+   *    into the run's total (`client-core/surface/surface-model.ts:770`), so
+   *    the fabricated zero would overwrite a real number.
+   *
+   * Neither refusal publishes a `diagnostic`, and that is a deliberate
+   * departure from `#finalizeLastMessage`'s counted-diagnostic rule. That rule
+   * fits a ONCE-PER-RUN hole; `tool_use` is the ORDINARY continuation turn --
+   * a tool-calling run would warn once per model call -- and `diagnostic` is
+   * volatile, so it rides the ephemeral channel whose whole contract is "the
+   * three delta families and nothing else" (`stream-delta-emission.test.ts`).
+   * Spending it per turn would both drown the diagnostics that mean something
+   * and widen a surface another invariant pins.
+   *
+   * The gap is closed as of T01b: the event `StopReason` carries `tool_use` and
+   * `usage` is optional, so both cases report an ending instead of nothing.
+   * Neither ever published a `diagnostic`, and that remains deliberate — see
+   * the note above about why the ordinary continuation turn must not spend the
+   * ephemeral channel.
+   */
+  #publishTurnCompleted(ctx: RunContext, durationMs: number): void {
+    const message = ctx.lastMessage.current;
+    const stopReason = message?.eventStopReason ?? null;
+    const usage = message?.usage;
+    // T01b closed both of T01's refusals. `tool_use` is now stateable, so the
+    // ordinary continuation turn reports its ending too; and `usage` is
+    // optional on the payload, so a provider that reported none no longer
+    // costs the whole event. What is still refused is inventing a value:
+    // `usage` below is forwarded only when the provider actually sent one, and
+    // stays absent otherwise, because `SurfaceModel` folds it into the run's
+    // total and a fabricated zero would overwrite a real number.
+    if (message === null || stopReason === null) return;
+    ctx.ports.events.publish({
+      type: 'turn.completed',
+      // The SAME id `#turnStartedEvent` minted for this turn. Not a new
+      // identity: a consumer pairs the two, and a terminal under a second id
+      // would leave the opening permanently open.
+      turnId: `${ctx.runId}:turn:${ctx.turn}`,
+      index: ctx.turn,
+      stopReason,
+      ...(usage === undefined ? {} : { usage }),
+      durationMs,
+    });
+  }
+
+  /**
    * Subtask reclamation, owned here.
    *
    * A `terminate` that throws must not replace a real terminal with a synthetic
@@ -3440,7 +3539,7 @@ const STOP_REASON_TO_EVENT: Readonly<Record<ModelStopReason, StopReason | null>>
   stop_sequence: 'stop_sequence',
   cancelled: 'aborted',
   error: 'error',
-  tool_use: null,
+  tool_use: 'tool_use',
 });
 
 /**

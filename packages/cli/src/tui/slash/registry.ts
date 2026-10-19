@@ -37,6 +37,8 @@ import { MODEL_COMMANDS } from './model.js';
 import { EFFORT_COMMANDS } from './effort.js';
 import { SETTINGS_COMMANDS } from './settings.js';
 import { EXPORT_COMMANDS } from './export.js';
+import { CAPABILITIES_COMMANDS } from './capabilities.js';
+import { READ_FILE_COMMANDS } from './read-file.js';
 import { HOTKEYS_COMMANDS } from './hotkeys.js';
 
 /** Every command this surface can actually run. */
@@ -48,6 +50,8 @@ export const TUI_SLASH_COMMANDS: readonly TuiSlashCommandDef[] = [
   ...SESSION_INFO_COMMANDS,
   ...SESSION_OPS_COMMANDS,
   ...EXPORT_COMMANDS,
+  ...CAPABILITIES_COMMANDS,
+  ...READ_FILE_COMMANDS,
 ];
 
 const BY_NAME = new Map<string, TuiSlashCommandDef>();

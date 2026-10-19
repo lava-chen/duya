@@ -9,6 +9,10 @@
     "dist"
   ],
   "exports": {
+    "./apps/declarations": {
+      "types": "./dist/apps/declarations.d.ts",
+      "default": "./dist/apps/declarations.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"

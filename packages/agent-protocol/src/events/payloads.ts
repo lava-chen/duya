@@ -80,7 +80,17 @@ export type StopReason =
   | 'end_turn'
   | 'stop_sequence'
   | 'aborted'
-  | 'error';
+  | 'error'
+  /**
+   * The model asked for tools and the loop will continue.
+   *
+   * Added by T01b. Until then this was a `ModelStopReason` with no member in
+   * the event union, which meant the ORDINARY agent turn — a tool call followed
+   * by another model call — was the one turn guaranteed never to report its
+   * ending. A consumer could not tell "this turn finished" from "this turn was
+   * never allowed to finish", which is the gap 17 §5 S2 asked to close.
+   */
+  | 'tool_use';
 
 export interface TokenUsage {
   readonly inputTokens: number;
@@ -260,7 +270,13 @@ export interface TurnCompletedPayload {
   readonly turnId: TurnId;
   readonly index: number;
   readonly stopReason: StopReason;
-  readonly usage: TokenUsage;
+  /**
+   * Optional since T01b: a provider that reports no usage must not have a zero
+   * invented for it, and `SurfaceModel` folds this value into the run's total,
+   * so a fabricated zero would OVERWRITE a real one. `undefined` means "the
+   * provider said nothing" and is not the same fact as a reported zero.
+   */
+  readonly usage?: TokenUsage;
   readonly durationMs: Millis;
 }
 

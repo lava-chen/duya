@@ -106,22 +106,26 @@ vi.mock('@duya/ai', async (importOriginal) => {
 const PRE_EXISTING = new Set(process.listeners('message'));
 const { duyaAgent } = await import('../../agent/DuyaAgent.js');
 const { TurnPipelinePublisher } = await import('../../tool/turn-pipeline-publisher.js');
-const { initDbClient } = await import('../../ipc/db-client.js');
+const { initDbClient, setDbTransport } = await import('../../ipc/db-client.js');
 const { composeLegacyRunPorts, createLegacyAssembleTurn, buildLegacyRunManifest, buildLegacyRunInput } =
   await import('../run-composition.js');
 import type { LegacyRunFacts, LegacyRunHost } from '../run-composition.js';
 
 let dbListener: ((m: unknown) => void) | null = null;
 const originalEnv = { ...process.env };
-let realSend: typeof process.send | undefined;
 
 /** Ledger temp dirs, removed after the test so a failing run leaves nothing. */
 const ledgerDirs: string[] = [];
 
 /**
  * Answer the two DB actions a turn reaches for. Under a Vitest pool worker
- * `process.send` is the POOL's channel, so it is replaced and the db-client's
- * own listener is called directly.
+ * `process.send` is the POOL's channel, so a db request must never go near
+ * it. T04b: install a TRANSPORT rather than replacing `process.send` and
+ * restoring it in `afterEach`. Restoring leaves a window for a request that
+ * is still in flight when the test stops awaiting — it would reach
+ * `process.nextTick` after the restore and go out on the pool channel, taking
+ * the run down before the reporter prints. A transport has no global to
+ * restore, so it cannot be raced.
  */
 function installFakeDbIpc(): void {
   if (!dbListener) {
@@ -131,17 +135,17 @@ function installFakeDbIpc(): void {
       .filter((l) => !PRE_EXISTING.has(l))[0] ?? null) as ((m: unknown) => void) | null;
     if (!dbListener) throw new Error('db-client registered no message listener');
   }
-  realSend = process.send;
-  process.send = ((msg: unknown) => {
-    const req = msg as { type?: string; action?: string; id?: string };
-    if (req?.type !== 'db:request') return true;
-    if (req.action !== 'modeState:get' && req.action !== 'mailbox:claimBatch') {
-      throw new Error(`unexpected db action: ${req.action}`);
-    }
-    const result = req.action === 'mailbox:claimBatch' ? { rows: [], claimTokens: [] } : null;
-    setImmediate(() => dbListener?.({ type: 'db:response', id: req.id, success: true, result }));
-    return true;
-  }) as unknown as typeof process.send;
+  setDbTransport({
+    send: (msg: unknown) => {
+      const req = msg as { type?: string; action?: string; id?: string };
+      if (req?.type !== 'db:request') return;
+      if (req.action !== 'modeState:get' && req.action !== 'mailbox:claimBatch') {
+        throw new Error(`unexpected db action: ${req.action}`);
+      }
+      const result = req.action === 'mailbox:claimBatch' ? { rows: [], claimTokens: [] } : null;
+      setImmediate(() => dbListener?.({ type: 'db:response', id: req.id, success: true, result }));
+    },
+  });
 }
 
 beforeEach(() => {
@@ -153,7 +157,6 @@ beforeEach(() => {
 
 afterEach(() => {
   process.env = { ...originalEnv };
-  process.send = realSend;
   vi.restoreAllMocks();
   providerCalls = 0;
   for (const dir of ledgerDirs.splice(0)) {

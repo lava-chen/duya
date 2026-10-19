@@ -77,7 +77,7 @@ export const REQUIRED_FIELDS = {
   // ── turn ───────────────────────────────────────────────────────────────
   'turn.started': { turnId: true, index: true, model: true, providerId: true, apiFormat: true, effort: false },
   'turn.retry_scheduled': { attempt: true, maxAttempts: true, delayMs: true, reason: true },
-  'turn.completed': { turnId: true, index: true, stopReason: true, usage: true, durationMs: true },
+  'turn.completed': { turnId: true, index: true, stopReason: true, usage: false, durationMs: true },
 
   // ── assistant ──────────────────────────────────────────────────────────
   'assistant.text_block': { messageId: true, index: true, text: true, textSignature: false, phase: false },

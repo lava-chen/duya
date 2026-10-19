@@ -116,6 +116,55 @@ describe('type-only statements are told apart from value statements', () => {
     ]);
   });
 
+  it('reads a type-only import whose specifier list is longer than the lookback', () => {
+    // Plan 610 T14. The previous implementation cut a fixed 400-character
+    // window at the last `;` or `\n}`, so a multi-line `import type` longer than
+    // that window lost its head: the last `\n}` was the import's OWN closing
+    // brace, the slice began at `"\n} "`, and the statement was reported as a
+    // VALUE import.
+    //
+    // Measured on this tree before the fix: `packages/client-core/src/surface/
+    // surface-model.ts:41` is a 22-line `import type` (381 characters from the
+    // keyword to the specifier) that was classified value, which inflated that
+    // package's value closure from 1 file to 66 by dragging in all of
+    // `@duya/agent-protocol`. The erring direction is "closure too large", so it
+    // never produced a false pass — but it made a type-only reference look like
+    // runtime coupling, which is the distinction every closure gate here rests
+    // on.
+    const names = Array.from({ length: 40 }, (_, i) => `  Type${i},`);
+    const src = `import type {\n${names.join('\n')}\n} from './big.js';\n`;
+    expect(src.length).toBeGreaterThan(400);
+    expect(importsOfVia(src)).toEqual([{ spec: './big.js', typeOnly: true }]);
+  });
+
+  it('still reads a long value import as a value edge', () => {
+    // The negative direction for the fix above: a long named-value import must
+    // not be swept into "type-only" by a statement-head search that walks too far
+    // back. Without this, widening the lookback could make the gate blind in the
+    // dangerous direction.
+    const names = Array.from({ length: 40 }, (_, i) => `  value${i},`);
+    const src = `import {\n${names.join('\n')}\n} from './big.js';\n`;
+    expect(src.length).toBeGreaterThan(400);
+    expect(importsOfVia(src)).toEqual([{ spec: './big.js', typeOnly: false }]);
+  });
+
+  it('does not carry a statement head across a previous statement', () => {
+    // The head search must stop at the import it is classifying. A value import
+    // followed by a long type-only one: each keeps its own classification, in
+    // both orders.
+    const names = Array.from({ length: 40 }, (_, i) => `  Type${i},`);
+    const longType = `import type {\n${names.join('\n')}\n} from './a.js';\n`;
+    const value = "import { b } from './b.js';\n";
+    expect(importsOfVia(`${value}${longType}`)).toEqual([
+      { spec: './b.js', typeOnly: false },
+      { spec: './a.js', typeOnly: true },
+    ]);
+    expect(importsOfVia(`${longType}${value}`)).toEqual([
+      { spec: './a.js', typeOnly: true },
+      { spec: './b.js', typeOnly: false },
+    ]);
+  });
+
   it('ignores an import inside a comment', () => {
     // `strip-comments.mjs` exists because a doc comment quoting `from '...'`
     // became a live edge. An edge that is only prose must stay invisible.

@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 
 // Follow this checkout's declared exports, including relocated source subpaths.
 // Shared dependency junctions otherwise let Vite read the primary manifest.
-const WORKSPACE_SOURCE_ALIASES = ['host', 'data', 'capabilities', 'agent-runtime', 'agent-core', 'agent-protocol', 'client-core'].flatMap((name) => {
+const WORKSPACE_SOURCE_ALIASES = ['host', 'data', 'capabilities', 'agent-runtime', 'agent-core', 'agent-protocol', 'client-core', 'command-catalog'].flatMap((name) => {
   const directory = new URL(`./packages/${name}/`, import.meta.url)
   const manifest = JSON.parse(readFileSync(new URL('package.json', directory), 'utf8')) as {
     name: string;
@@ -46,6 +46,17 @@ const TOOLING_SRC = fileURLToPath(new URL('./packages/tooling/src', import.meta.
 // SOURCE so the agent shims and capability tests exercise the edited code
 // without a build first, and so module identity is shared across shims.
 const CAPABILITIES_SRC = fileURLToPath(new URL('./packages/capabilities/src', import.meta.url))
+// T04b: the host package for the same worktree-safety reason as every entry
+// above, and for one extra reason that only shows up here. `host` owns
+// `worker-db-client`, and host's own modules import it by RELATIVE path
+// (`./worker-db-client.js`) while the agent-side shim
+// (`packages/agent/src/ipc/db-client.ts`) imports it by PACKAGE NAME. Leaving
+// both to resolve through the node_modules junction pins them to the primary
+// checkout, so a `vi.mock` aimed at one of those ids cannot intercept the
+// other -- and the unmocked side then puts a plain object on the vitest pool's
+// own channel. Aliasing both spellings onto THIS checkout's source is what
+// makes one module id again.
+const HOST_SRC = fileURLToPath(new URL('./packages/host/src', import.meta.url))
 
 export default defineConfig({
   test: {
@@ -56,6 +67,7 @@ export default defineConfig({
       'apps/desktop/src/renderer/**/*.test.tsx',
       'apps/desktop/src/renderer/**/*.spec.ts',
       'apps/desktop/src/main/**/*.test.ts',
+      'apps/web/tests/**/*.test.ts',
       // Plan 587 M5.2: the contracts boundary. Collected deliberately, because
       // a test file outside `include` is a test nobody ever runs, and
       // `check-test-coverage` treats it as exactly that.
@@ -86,6 +98,15 @@ export default defineConfig({
       // test file in the repo as an orphan.
       'packages/memory/src/**/*.test.ts',
       'packages/cli/src/**/*.test.ts',
+      // Plan 610 T15: the capability degradation suite sits in `test/`, not
+      // `src/`, because it drives the Host HTTP boundary end to end rather
+      // than unit-testing a CLI module. A tracked test file outside this array
+      // is one no runner collects, which `check-test-coverage` reports as an
+      // orphan and correctly calls a test nobody ever runs.
+      // No apostrophe characters in this comment: the coverage script reads the
+      // include array with a regex over quoted strings and does not strip
+      // comments, so one apostrophe here would swallow the glob below.
+      'packages/cli/test/**/*.test.ts',
       'packages/computer-use/src/**/*.test.ts',
       'scripts/**/*.test.ts',
       'packages/conductor/src/**/*.test.ts',
@@ -162,6 +183,10 @@ export default defineConfig({
       // The input-completion core shared by the desktop composer and the CLI
       // TUI. Source, not dist, for the same worktree-safety reason.
       { find: /^@duya\/input-completion$/, replacement: fileURLToPath(new URL('./packages/input-completion/src', import.meta.url)) + '/index.ts' },
+      // T04b. Subpath rule before the bare name, same as the protocol package
+      // above, so a declared subpath is never swallowed.
+      { find: /^@duya\/host\/(.*)$/, replacement: HOST_SRC + '/$1' },
+      { find: /^@duya\/host$/, replacement: HOST_SRC + '/index.ts' },
       // Plan 583 ISS-02 + 610 A5 continuation (2026-10-10): the duya-file
       // media allowlist consumes the root-boundary primitive from
       // `@duya/sandbox` (moved out of packages/agent/src/tool/allowedRoots.ts).

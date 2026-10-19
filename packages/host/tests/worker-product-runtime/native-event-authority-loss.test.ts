@@ -376,22 +376,22 @@ describe('plan-610 S0 — native Runtime events on the production worker path', 
   // Layer A2 — a CORRECTION to the plan's premise, pinned as executable truth.
   // ==========================================================================
 
-  it('never mints turn.completed: the engine has no emit site for it', async () => {
+  it('emits no turn.completed when the provider reports no usage, and that is T01\'s refusal', async () => {
     const run = await runOnce(false);
 
-    // Plan 610 file 17 §2 nominates `turn.completed` as the event that "reaches
-    // the engine but is missing from the Host ledger". Measured on the real
-    // production path, it is not: `run-engine.ts` contains no `turn.completed`
-    // emit site at all. Every occurrence in the tree is either a projector drop
-    // arm, a surface mapping, or a synthetic test envelope.
+    // This used to be named "never mints turn.completed: the engine has no emit
+    // site for it". That stopped being true when T01 landed (#275, `d0d0e7f0`):
+    // `run-engine.ts` now calls `#publishTurnCompleted` at the end of every turn
+    // and defines it at `run-engine.ts:2801`. The count below is still 0, so the
+    // assertion kept passing — but it was passing because THIS fixture sends no
+    // usage frame, which is one of T01's two refusals, not because the engine
+    // is mute. A green that survives the arrival of its opposite is a green that
+    // proves nothing; the name and the reason were the defect, not the number.
     //
-    // This matters for S1 in the worst direction — `turn.completed` is a PHANTOM
-    // the Host can never receive and the engine can never produce, so a plan that
-    // reads "the projector drops it" as "deliver it" would build a channel for an
-    // event with no producer. The genuine losses are measured below instead.
+    // What it does pin, and is worth keeping: an ordinary turn still has its
+    // OPEN, so the zero below is a real absence of the terminal rather than a
+    // run that skipped turn boundaries entirely.
     expect(nativeCount(run.native, 'turn.completed')).toBe(0);
-    // The turn OPEN is present, so the count above is a real absence and not a
-    // run that silently skipped turn boundaries.
     expect(nativeCount(run.native, 'turn.started')).toBe(2);
   });
 
