@@ -305,6 +305,9 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
           const sessionId = requireString(payload, 'sessionId', 'message:append');
           const messages = payload.messages as Array<Record<string, unknown>> | undefined;
           const turnId = payload.turnId as string | null | undefined;
+          // The worker payload is not authority for run identity. Capture the
+          // run from the Host caller only when it owns this target session.
+          const runId = caller?.sessionId === sessionId ? caller.runId : undefined;
           if (!messages || !Array.isArray(messages)) {
             return { success: false, reason: 'invalid_messages' };
           }
@@ -317,7 +320,9 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
               ),
             );
             const receipt = await api.appendTimeline(sessionId, {
-              entries: events.map((event) => event.payload),
+              entries: events.map((event) => runId === undefined || event.payload.type !== 'message'
+                ? event.payload
+                : { ...event.payload, runId }),
               ...(turnId !== undefined ? { turnId } : {}),
             });
             return { success: true, count: (receipt as { writtenCount?: number }).writtenCount ?? events.length };
