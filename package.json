@@ -77,6 +77,7 @@
     "architecture:headless": "node scripts/architecture/headless-load-gate.mjs",
     "architecture:browser-closure": "node scripts/architecture/browser-closure-gate.mjs",
     "architecture:client-closure": "node scripts/architecture/client-closure-gate.mjs",
+    "architecture:ipc-census": "node scripts/architecture/ipc-channel-census.mjs",
     "pretest": "npm run bundle:agent && node scripts/ensure-sqlite-abi.mjs node",
     "check:encoding": "node scripts/check-text-encoding.mjs",
     "check:manifest-keys": "node scripts/check-manifest-keys.mjs",
@@ -110,7 +111,7 @@
     "rebuild": "electron-rebuild",
     "rebuild:node": "node scripts/ensure-sqlite-abi.mjs node",
     "build:cli-dev": "npm run build:packages -- --target @duya/cli && node scripts/build-agent-bundle.mjs && npm run build:cli-bundle",
-    "dev:tui": "node packages/cli/bundle/cli.cjs tui"
+    "dev:tui": "npm run build:cli-dev && node packages/cli/bundle/cli.cjs tui"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",

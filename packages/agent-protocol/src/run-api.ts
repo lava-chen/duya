@@ -169,6 +169,15 @@ export interface StartAgentRunInput {
   readonly model?: string;
   readonly providerId?: string;
   readonly apiFormat?: 'anthropic' | 'openai';
+  /**
+   * Reasoning effort for this run (`low`/`medium`/`high`/`max`, plus whatever a
+   * model's `reasoningEffortOptions` declares).
+   *
+   * A per-run override, not a session property: effort is what the user is
+   * willing to pay for THIS message, and the Desktop composer already treats it
+   * that way. Omitted means "the worker's default for this model".
+   */
+  readonly effort?: string;
   readonly workingDirectory?: string;
   readonly origin?: AgentRunOrigin;
   /** Caller correlation id; the Host still mints the canonical run id. */
