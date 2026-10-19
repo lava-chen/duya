@@ -711,7 +711,7 @@ export class RunOrchestrator {
         manifest: built.manifest,
         manifestHash: built.manifestHash,
         inputHash,
-        ...(intent.parentRunId === undefined ? {} : { parentRunId: intent.parentRunId }),
+        ...(intent.parentRunId === undefined ? {} : { parentRunId: intent.parentRunId, origin: 'agent' }),
       });
       const createdReceipt = readRunReceipt(created, 'run:create', runId);
 

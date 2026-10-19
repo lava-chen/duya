@@ -45,6 +45,18 @@ DUYA is a Windows desktop AI agent client with a modular architecture:
   the Host worker bundle. The new child startup/command channel has been
   verified; complete CLI/Desktop execution with the old package absent remains
   pending.
+- **Standalone child sessions**: the worker's existing `session` tool reaches
+  `session-service.ts` through the Host worker DB bridge. The service creates
+  real sessions and launches their runs through the same execution controller;
+  it records session lineage, parent run identity and the tracked child run.
+  Private worker requests carry their captured session/run/attempt identity;
+  Host rejects expired attempts and messages from replaced workers. Children
+  inherit provider, permission profile and turn limits, and currently share the
+  parent's canonical workspace directory. `get` reads the tracked run's durable
+  output; `reply` launches another run and `cancel` targets its captured run ID.
+  This composition returns an explicit query-based completion policy. Automatic
+  parent wake delivery/restart reconciliation and Desktop delegation migration
+  remain separate work (610 T21/T22).
 - **AI Layer**: `@duya/ai` multi-protocol adapter
 - **Database**: SQLite via better-sqlite3; default data root is `~/.duya`,
   with `DUYA_DATA_ROOT` overriding the shared root for databases, rollouts, and

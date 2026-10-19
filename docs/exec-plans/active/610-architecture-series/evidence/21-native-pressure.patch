@@ -1,0 +1,129 @@
+diff --git a/packages/host/tests/worker-transport-write-queue.test.ts b/packages/host/tests/worker-transport-write-queue.test.ts
+index 831f9d15..275c58c5 100644
+--- a/packages/host/tests/worker-transport-write-queue.test.ts
++++ b/packages/host/tests/worker-transport-write-queue.test.ts
+@@ -3,22 +3,65 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
+ 
+ import { sendEvent } from '../src/worker-transport.js';
+ 
+-const originalWrite = process.stdout.write.bind(process.stdout);
+-
+ /** Force backpressure so frames pile up in the queue instead of draining. */
+ function stallStdout(): { setStalled: (stalled: boolean) => void } {
+   let stalled = true;
+   const spy = vi.spyOn(process.stdout, 'write').mockImplementation(((
+-    chunk: unknown,
+-    ...rest: unknown[]
++    _chunk: unknown,
+   ) => {
+     if (stalled) return false;
+-    return (originalWrite as (...a: unknown[]) => boolean)(chunk, ...rest);
++    return true;
+   }) as never);
+ 
+   return { setStalled: (value: boolean) => { stalled = value; } };
+ }
+ 
++function drainCapturedFrames(setStalled: (stalled: boolean) => void): string[] {
++  const spy = vi.mocked(process.stdout.write);
++  const attemptedBeforeDrain = spy.mock.calls.map((call) => String(call[0]));
++  const drained: string[] = [];
++  setStalled(false);
++  spy.mockImplementation(((chunk: unknown) => {
++    drained.push(String(chunk));
++    return true;
++  }) as never);
++
++  try {
++    process.stdout.emit('drain');
++    return [...attemptedBeforeDrain, ...drained];
++  } finally {
++    // Restore stdout before assertions/reporting so the test cannot swallow
++    // Vitest's own output. The worker queue has also drained synchronously.
++    spy.mockRestore();
++  }
++}
++
++function nativeRunEvent(seq: number, text = 'native event'): Record<string, unknown> {
++  return {
++    type: 'run:event',
++    epoch: 7,
++    envelope: {
++      runId: 'run-pressure-test',
++      sessionId: 'session-pressure-test',
++      seq,
++      payload: { type: 'assistant.text_block', text },
++    },
++  };
++}
++
++function readNativeFrames(frames: readonly string[]): Array<{
++  epoch: unknown;
++  envelope: { runId?: unknown; seq?: unknown };
++}> {
++  return frames
++    .map((frame) => JSON.parse(frame) as Record<string, unknown>)
++    .filter((frame) => frame.type === 'run:event')
++    .map((frame) => ({
++      epoch: frame.epoch,
++      envelope: frame.envelope as { runId?: unknown; seq?: unknown },
++    }));
++}
++
+ afterEach(() => {
+   vi.restoreAllMocks();
+ });
+@@ -37,10 +80,7 @@ describe('sendEvent backpressure queue', () => {
+       sendEvent({ type: 'chat:text', n: i });
+     }
+ 
+-    setStalled(false);
+-    process.stdout.emit('drain');
+-
+-    const drained = spy.mock.calls.map((call) => String(call[0]));
++    const drained = drainCapturedFrames(setStalled);
+     // One frame went out before stalling; the rest drained on `drain`.
+     const total = drained.length;
+     expect(total).toBeGreaterThan(0);
+@@ -64,4 +104,41 @@ describe('sendEvent backpressure queue', () => {
+     expect(written).toHaveLength(50);
+     expect(written[49]).toContain('"n":49');
+   });
++
++  it('does not silently shed native run events when the frame cap is reached', () => {
++    const { setStalled } = stallStdout();
++    const expectedSeqs = Array.from({ length: 2101 }, (_, index) => index + 1);
++
++    try {
++      for (const seq of expectedSeqs) sendEvent(nativeRunEvent(seq));
++    } finally {
++      const observed = readNativeFrames(drainCapturedFrames(setStalled));
++      expect(observed.every((event) =>
++        event.epoch === 7 && event.envelope.runId === 'run-pressure-test'
++      )).toBe(true);
++      const observedSeqs = observed.map((event) => event.envelope.seq);
++      const missingSeqs = expectedSeqs.filter((seq) => !observedSeqs.includes(seq));
++      expect(missingSeqs, 'missing native run:event sequence numbers').toEqual([]);
++    }
++  });
++
++  it('does not silently shed native run events when the character cap is reached', () => {
++    const { setStalled } = stallStdout();
++    // Keep well below the frame cap while crossing the 4 MiB character cap.
++    const expectedSeqs = Array.from({ length: 80 }, (_, index) => index + 1);
++
++    try {
++      for (const seq of expectedSeqs) {
++        sendEvent(nativeRunEvent(seq, 'x'.repeat(60_000)));
++      }
++    } finally {
++      const observed = readNativeFrames(drainCapturedFrames(setStalled));
++      expect(observed.every((event) =>
++        event.epoch === 7 && event.envelope.runId === 'run-pressure-test'
++      )).toBe(true);
++      const observedSeqs = observed.map((event) => event.envelope.seq);
++      const missingSeqs = expectedSeqs.filter((seq) => !observedSeqs.includes(seq));
++      expect(missingSeqs, 'missing native run:event sequence numbers').toEqual([]);
++    }
++  });
+ });

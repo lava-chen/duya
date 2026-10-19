@@ -536,6 +536,7 @@ describe('plan-610 S0 — what the Host ledger actually holds after a real turn'
 const DURABLE_TYPES: ReadonlySet<string> = new Set([
   'run.started',
   'turn.started',
+  'turn.completed',
   'tool.call_started',
   'tool.call_completed',
   'assistant.text_block',

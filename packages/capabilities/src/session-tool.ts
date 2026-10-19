@@ -38,6 +38,12 @@ export interface SessionSpawnDetails {
   linesRemoved: number;
   updatedAt: number;
   createdAt: number;
+  runId?: string;
+  output?: string;
+}
+
+interface SessionCompletionReceipt {
+  readonly completionNotification?: 'automatic' | 'query';
 }
 
 export type SessionSpawnOperation<T> = { ok: true } & T | { ok: false; reason: string };
@@ -45,10 +51,10 @@ export type SessionSpawnOperation<T> = { ok: true } & T | { ok: false; reason: s
 /** Host worker-DB actions used by the session tool. */
 export interface SessionToolPort {
   getCallerSessionId(contextSessionId?: string): string;
-  spawn(input: { parentSessionId: string; workingDirectory: string; prompt: string; model?: string }): Promise<SessionSpawnOperation<{ sessionId: string; parentId: string }>>;
+  spawn(input: { parentSessionId: string; workingDirectory: string; prompt: string; model?: string }): Promise<SessionSpawnOperation<{ sessionId: string; parentId: string } & SessionCompletionReceipt>>;
   list(parentSessionId: string): Promise<SessionSpawnOperation<{ sessions: SessionSpawnSession[] }>>;
   get(sessionId: string, callerSessionId: string): Promise<SessionSpawnOperation<{ session: SessionSpawnDetails }>>;
-  reply(input: { sessionId: string; callerSessionId: string; prompt: string; model?: string }): Promise<SessionSpawnOperation<{ sessionId: string }>>;
+  reply(input: { sessionId: string; callerSessionId: string; prompt: string; model?: string }): Promise<SessionSpawnOperation<{ sessionId: string } & SessionCompletionReceipt>>;
   cancel(sessionId: string, callerSessionId: string): Promise<SessionSpawnOperation<{ sessionId: string }>>;
   rename(sessionId: string, callerSessionId: string, title: string): Promise<SessionSpawnOperation<{ sessionId: string }>>;
 }
@@ -101,7 +107,7 @@ export class SessionTool extends BaseTool {
   run in its OWN session with its own transcript and working directory
   (e.g. a deep refactor, a large build, an isolated experiment).
 - When you want a normal project session and a bot/agent session to be connected:
-  spawn real project sessions to do work, then get woken with their results.
+  spawn real project sessions to do work, then follow the returned completion policy.
 - Delegation preference: when a task is concrete engineering work that can be
   scoped to a project (reading/writing files, editing code, running builds,
   refactoring, isolated experiments), prefer SPAWNING a child session to do the
@@ -110,17 +116,19 @@ export class SessionTool extends BaseTool {
   reply for follow-ups, cancel to stop, list to manage all your children).
 
 ## Behavior
-- ASYNC + auto-wake: spawn/reply return immediately; the child runs in its own
-  session and you are auto-woken with its result when it finishes. Do NOT poll.
+- ASYNC: spawn/reply return immediately; the child runs in its own session.
+  Follow the returned completion policy: some Hosts auto-wake the parent;
+  others require action "get" to retrieve the tracked run's result.
 - Management is scoped to sessions you spawned (the parent). Use list/get/reply/
   cancel/rename to continuously manage them across turns.
 
 ## Actions
 - spawn: workingDirectory (required) + prompt (required) + model (optional).
 - list: list child sessions you spawned.
-- get: sessionId → status, working directory, and diff stats (+N/-M files).
+- get: sessionId → status, tracked run result when available, working directory,
+  and diff stats (+N/-M files).
 - reply: sessionId + prompt → send a follow-up prompt to the child (async run;
-  you are woken again on completion).
+  follow the returned completion policy).
 - cancel: sessionId → interrupt the child's active run.
 - rename: sessionId + title → rename the child.
 
@@ -180,8 +188,10 @@ export class SessionTool extends BaseTool {
             name: this.name,
             result:
               `Spawned session ${result.sessionId} in ${workingDirectory}. It is running asynchronously ` +
-              `in its own session (visible in the sidebar). You will be auto-woken with its result when ` +
-              `it finishes — do not poll.`,
+              `in its own session (visible in the sidebar). ` +
+              (result.completionNotification === 'query'
+                ? `This Host does not send completion notifications yet; use action "get" for its run result.`
+                : `You will be auto-woken with its result when it finishes — do not poll.`),
           };
         }
 
@@ -222,6 +232,8 @@ export class SessionTool extends BaseTool {
               `Session ${s.id} — ${s.title || '(untitled)'}\n` +
               `Status: ${changeBits.join(', ')}\n` +
               `Working directory: ${s.workingDirectory}\n` +
+              (s.runId ? `Run: ${s.runId}\n` : '') +
+              (s.output ? `Result:\n${s.output.slice(0, 16000)}${s.output.length > 16000 ? '\n[Result truncated]' : ''}\n` : '') +
               `Use action "reply" to send a follow-up, "cancel" to interrupt, or "rename" to title it.`,
           };
         }
@@ -241,8 +253,10 @@ export class SessionTool extends BaseTool {
             id: randomUUID(),
             name: this.name,
             result:
-              `Sent follow-up to ${sessionId}. It runs asynchronously — you will be auto-woken ` +
-              `with the result when it finishes. Do not poll.`,
+              `Sent follow-up to ${sessionId}. It runs asynchronously. ` +
+              (result.completionNotification === 'query'
+                ? `This Host does not send completion notifications yet; use action "get" for its run result.`
+                : `You will be auto-woken with the result when it finishes. Do not poll.`),
           };
         }
 

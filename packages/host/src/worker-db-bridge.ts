@@ -41,6 +41,7 @@ import type { RunRepository } from './repository-port.js';
 import { createRunControlPlaneActions, type RunControlPlaneLogger } from './run-control-plane.js';
 import { createHostToolApprovalApi } from './tool-approval-api.js';
 import type { WorkerDbBridge } from './run-execution.js';
+import type { createHostSessionService, SessionServiceCaller } from './session-service.js';
 import {
   hostMessageItemsToIpcMessages,
   ipcMessageToNewEvent,
@@ -78,6 +79,7 @@ export interface WorkerBridgeLocalSessions {
 }
 
 export interface HostWorkerDbBridgeOptions {
+  readonly sessionService?: ReturnType<typeof createHostSessionService>;
   /** Durable run ledger — serves `run:*` exactly like the ledger API. */
   readonly runs: RunRepository;
   /** Session store — serves worker session reads. */
@@ -188,11 +190,21 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
   };
 
   return {
-    async dispatch(action: string, payload: Record<string, unknown>): Promise<unknown> {
+    async dispatch(action: string, payload: Record<string, unknown>, caller?: SessionServiceCaller): Promise<unknown> {
       const handled = await controlPlane.dispatchControlPlaneAction(action, payload);
       if (handled !== undefined) return handled;
 
       switch (action) {
+        case 'session:spawn':
+        case 'session:spawnList':
+        case 'session:spawnGet':
+        case 'session:spawnReply':
+        case 'session:spawnCancel':
+        case 'session:spawnRename': {
+          if (!options.sessionService) throw new WorkerDbBridgeError('unimplemented_domain', 'Session delegation requires the Host session service.');
+          if (!caller) throw new WorkerDbBridgeError('invalid_payload', 'Session delegation requires trusted worker context.');
+          return options.sessionService.dispatch(action, payload, caller);
+        }
         case 'modelCapability:get':
           return modelCapabilities.getModelCapability(requireString(payload, 'modelName', action));
         case 'modelCapability:set':

@@ -365,6 +365,11 @@ export class WorkerManager {
         }
         return;
       }
+      if (this.workers.get(sessionId) !== child && msg.type === 'db:request' &&
+          typeof msg.action === 'string' && msg.action.startsWith('session:spawn')) {
+        child.send({ type: 'db:response', id: msg.id, success: false, error: 'Session delegation from a superseded worker is refused.' });
+        return;
+      }
       // conductor:executor:rpc, appConnection:invoke,
       // appConnection:listDescriptors, appConnection:catalog,
       // computer-use:execute, and computer-use:cua are
