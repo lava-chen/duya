@@ -160,8 +160,10 @@ describe('G10 on the live tree', { timeout: 30_000 }, () => {
     expect(report.findings).toEqual([]);
     expect(isBrowserClosureClean(report)).toBe(true);
     // The scope is named, not implied: 610 §4 rule 1 forbids a bare count.
-    expect(report.scope).toBe('apps/desktop/src/renderer');
-    expect(report.summary).toBe(`0/${report.walked} Node built-ins in apps/desktop/src/renderer`);
+    // Both product entries are named: the Desktop renderer and the Web seed.
+    const scope = BROWSER_ENTRIES.map((entry) => entry.rel).join(' + ');
+    expect(report.scope).toBe(scope);
+    expect(report.summary).toBe(`0/${report.walked} Node built-ins in ${scope}`);
   });
 
   it('walked hundreds of files, so green is not "inspected nothing"', () => {
@@ -184,13 +186,12 @@ describe('G10 on the live tree', { timeout: 30_000 }, () => {
     expect(crossed).toContain('packages/conductor/src/renderer/index.ts');
   });
 
-  it('names the web entry as absent rather than skipping it silently', () => {
-    // 610 §4 names `apps/web/src/main.tsx` as an entry. It does not exist yet,
-    // and the honest report is "absent", not silence — the day the skeleton
-    // lands, this assertion is the one that has to be revisited.
-    expect(BROWSER_ENTRIES.map((e) => e.rel)).toContain('apps/web/src/main.tsx');
-    expect(report.absentEntries).toContain('apps/web/src/main.tsx');
-    expect(seedsFor('apps/web/src/main.tsx')).toBeNull();
+  it('walks the actual web product entry instead of an absent placeholder', () => {
+    expect(BROWSER_ENTRIES.map((e) => e.rel)).toContain('apps/web/src/browser/main.tsx');
+    expect(report.absentEntries).not.toContain('apps/web/src/browser/main.tsx');
+    expect(seedsFor('apps/web/src/browser/main.tsx')).toEqual(['apps/web/src/browser/main.tsx']);
+    const closure = browserClosure(seedsFor('apps/web/src/browser/main.tsx') ?? []);
+    expect([...closure.keys()]).toContain('packages/client-core/src/session/run-session.ts');
   });
 });
 

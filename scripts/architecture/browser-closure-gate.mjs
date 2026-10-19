@@ -73,17 +73,12 @@ import { isTestPath, resolveRepoSpecifier } from './boundary-gates.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * The browser entry points, each with whether it exists yet.
- *
- * `apps/web/src/main.tsx` is the entry a Web client will have and does not have
- * yet. It is listed rather than omitted on purpose: an absent entry is a fact
- * this gate reports (`absentEntries`), so the day the skeleton lands the gate
- * starts covering it with no edit here. Inventing an `apps/web` skeleton to
- * satisfy the entry list would create a second, fake client.
+ * Product browser entry points. The Web seed is its actual Vite entry;
+ * missing entries remain visible through absentEntries.
  */
 export const BROWSER_ENTRIES = [
   { rel: 'apps/desktop/src/renderer', kind: 'dir' },
-  { rel: 'apps/web/src/main.tsx', kind: 'file' },
+  { rel: 'apps/web/src/browser/main.tsx', kind: 'file' },
 ];
 
 /**

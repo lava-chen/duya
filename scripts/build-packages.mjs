@@ -67,6 +67,7 @@ const repoRoot = resolve(scriptDir, '..');
  */
 const BUILD_ORDER = [
   // Level 1 — no `@duya/*` imports.
+  '@duya/ui',
   // `@duya/ai` used to sit here, but plan 587 T3.1 gave it one
   // (`@duya/agent-protocol/transcript`, the moved transcript vocabulary), so
   // it moves down a level. Keeping it in level 1 would have `@duya/ai`
