@@ -127,7 +127,68 @@ async function getWithHostHeader(url: string, host: string): Promise<number> {
   });
 }
 
+async function getWithHeaders(url: string, headers: Record<string, string>): Promise<{ readonly status: number; readonly body: string; readonly responseHeaders: Headers }> {
+  return new Promise((resolve, reject) => {
+    const request = requestHttp(new URL(url), { headers }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on('data', (chunk: Buffer) => chunks.push(chunk));
+      response.on('end', () => {
+        const responseHeaders = new Headers();
+        for (const [name, value] of Object.entries(response.headers)) {
+          if (value !== undefined) responseHeaders.set(name, Array.isArray(value) ? value.join(', ') : value);
+        }
+        resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8'), responseHeaders });
+      });
+    });
+    request.once('error', reject);
+    request.end();
+  });
+}
+
 describe('Web BFF over the real local Host HTTP listener', () => {
+  it('serves same-origin browser assets and permits only browser document navigation with sec-fetch-site none', async () => {
+    const host = await startTestHost();
+    const staticRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-web-static-'));
+    roots.push(staticRoot);
+    await fs.writeFile(path.join(staticRoot, 'index.html'), '<main>shared app shell</main>');
+    await fs.mkdir(path.join(staticRoot, 'assets'));
+    await fs.writeFile(path.join(staticRoot, 'assets', 'app.js'), 'globalThis.webAppReady = true;');
+    await fs.mkdir(path.join(staticRoot, 'fonts'));
+    await fs.writeFile(path.join(staticRoot, 'fonts', 'sample.woff2'), Buffer.from([0, 1, 2, 3]));
+    const bff = await createWebBff({ hostOrigin: host.origin, hostToken: HOST_TOKEN, staticRoot });
+    bffs.push(bff);
+
+    const navigationHeaders = {
+      'sec-fetch-site': 'none',
+      'sec-fetch-mode': 'navigate',
+      'sec-fetch-dest': 'document',
+    };
+    const navigation = await getWithHeaders(`${bff.origin}/chat/session-123`, {
+      host: new URL(bff.origin).host,
+      ...navigationHeaders,
+    });
+    const script = await fetch(`${bff.origin}/assets/app.js`);
+    const font = await fetch(`${bff.origin}/fonts/sample.woff2`);
+    const unlisted = await fetch(`${bff.origin}/private.txt`);
+    const nonNavigation = await getWithHeaders(`${bff.origin}/chat/session-123`, {
+      host: new URL(bff.origin).host,
+      'sec-fetch-site': 'none',
+      'sec-fetch-mode': 'cors',
+      'sec-fetch-dest': 'empty',
+    });
+
+    expect(navigation.status).toBe(200);
+    expect(navigation.body).toContain('shared app shell');
+    expect(navigation.responseHeaders.get('content-security-policy')).toContain("script-src 'self'");
+    expect(navigation.responseHeaders.get('content-security-policy')).not.toContain('unsafe-eval');
+    expect(script.headers.get('content-type')).toContain('text/javascript');
+    expect(script.headers.get('content-security-policy')).toContain("script-src 'self'");
+    expect(await script.text()).toContain('webAppReady');
+    expect(font.headers.get('content-type')).toBe('font/woff2');
+    expect(unlisted.status).toBe(404);
+    expect(nonNavigation.status).toBe(403);
+  }, 30_000);
+
   it('keeps the Host bearer server-side and exposes only a redacted capability handshake', async () => {
     const host = await startTestHost();
     const bff = await startTestBff(host);
@@ -206,6 +267,77 @@ describe('Web BFF over the real local Host HTTP listener', () => {
     expect(sessionBody.session.id).toBe(session.id);
     expect(runBody.runs).toEqual([]);
     expect(response.headers.get('access-control-allow-origin')).toBeNull();
+  }, 30_000);
+
+  it('limits browser session creation to Host-registered workspace references', async () => {
+    const host = await startTestHost();
+    const hostClient = new HostSessionHttpClient(host.origin, HOST_TOKEN);
+    const workspaceDirectory = roots[roots.length - 1];
+    if (workspaceDirectory === undefined) throw new Error('test workspace directory missing');
+    const workspace = await hostClient.registerLocalDirectory(workspaceDirectory);
+    const bff = await startTestBff(host);
+    const { csrfToken } = await readBootstrap(bff);
+
+    const createdResponse = await fetch(`${bff.origin}/api/sessions`, {
+      method: 'POST',
+      headers: mutationHeaders(bff, csrfToken),
+      body: JSON.stringify({
+        workspaceId: workspace.workspaceId,
+        workspaceRootId: workspace.rootId,
+        workspaceRelativePath: '',
+        title: 'Created in Web',
+        mode: 'code',
+      }),
+    });
+    const created = await createdResponse.json() as { session: { id: string; updatedAt: number; title: string } };
+    expect(createdResponse.status).toBe(201);
+    expect(created.session.title).toBe('Created in Web');
+
+    const updatedResponse = await fetch(`${bff.origin}/api/sessions/${encodeURIComponent(created.session.id)}`, {
+      method: 'PATCH',
+      headers: mutationHeaders(bff, csrfToken),
+      body: JSON.stringify({ expectedUpdatedAt: created.session.updatedAt, patch: { title: 'Updated in Web' } }),
+    });
+    const updated = await updatedResponse.json() as { updated: boolean; session?: { title: string; updatedAt: number } };
+    expect(updatedResponse.status).toBe(200);
+    expect(updated.updated).toBe(true);
+    expect(updated.session?.title).toBe('Updated in Web');
+    if (updated.session === undefined) throw new Error('Host update omitted the session record');
+
+    const deletedResponse = await fetch(
+      `${bff.origin}/api/sessions/${encodeURIComponent(created.session.id)}?expectedUpdatedAt=${updated.session.updatedAt}`,
+      { method: 'DELETE', headers: { origin: bff.origin, 'x-duya-csrf': csrfToken } },
+    );
+    expect(deletedResponse.status).toBe(200);
+
+    const rawPathResponse = await fetch(`${bff.origin}/api/sessions`, {
+      method: 'POST',
+      headers: mutationHeaders(bff, csrfToken),
+      body: JSON.stringify({ workingDirectory: workspaceDirectory, title: 'Must be rejected' }),
+    });
+    const unboundResponse = await fetch(`${bff.origin}/api/sessions`, {
+      method: 'POST',
+      headers: mutationHeaders(bff, csrfToken),
+      body: JSON.stringify({ title: 'Must be rejected' }),
+    });
+    const invalidPermissionCreate = await fetch(`${bff.origin}/api/sessions`, {
+      method: 'POST',
+      headers: mutationHeaders(bff, csrfToken),
+      body: JSON.stringify({
+        workspaceId: workspace.workspaceId,
+        workspaceRootId: workspace.rootId,
+        permissionMode: ['auto'],
+      }),
+    });
+    const invalidPermissionPatch = await fetch(`${bff.origin}/api/sessions/${encodeURIComponent(created.session.id)}`, {
+      method: 'PATCH',
+      headers: mutationHeaders(bff, csrfToken),
+      body: JSON.stringify({ patch: { permissionMode: ['auto'] } }),
+    });
+    expect(rawPathResponse.status).toBe(400);
+    expect(unboundResponse.status).toBe(400);
+    expect(invalidPermissionCreate.status).toBe(400);
+    expect(invalidPermissionPatch.status).toBe(400);
   }, 30_000);
 
   it('does not confuse tool approval ledger entries with worker PermissionRequests', async () => {
@@ -316,6 +448,59 @@ describe('Web BFF over the real local Host HTTP listener', () => {
     expect(started).toEqual([{ sessionId: 'session-1', prompt: 'hello', origin: 'user' }]);
     expect(cancelResponse.status).toBe(200);
     expect(cancelled).toEqual([{ runId, reason: 'user_cancel' }]);
+  }, 30_000);
+
+  it('carries the model, provider and thinking effort the shared renderer sends', async () => {
+    const started: StartAgentRunInput[] = [];
+    const runId = 'run-web-bff-effort' as RunId;
+    const host = new HostSessionHttpServer({
+      api: {} as HostSessionHttpServerOptions['api'],
+      taskApi: {} as HostSessionHttpServerOptions['taskApi'],
+      token: HOST_TOKEN,
+      runExecutionApi: {
+        async startAgentRun(input) {
+          started.push(input);
+          return { accepted: true, stage: 'dispatched', runId };
+        },
+      },
+    });
+    const bff = await startBffForHostServer(host);
+    const bootstrap = await readBootstrap(bff);
+
+    const startResponse = await fetch(`${bff.origin}/api/runs/start`, {
+      method: 'POST',
+      headers: mutationHeaders(bff, bootstrap.csrfToken),
+      body: JSON.stringify({
+        sessionId: 'session-1',
+        prompt: 'hello',
+        model: 'proof-model',
+        providerId: 'browser-proof',
+        effort: 'high',
+      }),
+    });
+    const unknownEffort = await fetch(`${bff.origin}/api/runs/start`, {
+      method: 'POST',
+      headers: mutationHeaders(bff, bootstrap.csrfToken),
+      body: JSON.stringify({ sessionId: 'session-1', prompt: 'hello', effort: 'turbo' }),
+    });
+    const rawOptions = await fetch(`${bff.origin}/api/runs/start`, {
+      method: 'POST',
+      headers: mutationHeaders(bff, bootstrap.csrfToken),
+      body: JSON.stringify({ sessionId: 'session-1', prompt: 'hello', options: { maxTurns: 999 } }),
+    });
+
+    expect(startResponse.status).toBe(202);
+    expect(started).toEqual([{
+      sessionId: 'session-1',
+      prompt: 'hello',
+      origin: 'user',
+      model: 'proof-model',
+      providerId: 'browser-proof',
+      options: { effort: 'high' },
+    }]);
+    expect(unknownEffort.status).toBe(400);
+    expect(rawOptions.status).toBe(400);
+    expect(started).toHaveLength(1);
   }, 30_000);
 
   it('replays SSE after the supplied cursor and preserves the Host event envelopes', async () => {
