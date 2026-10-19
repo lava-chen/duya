@@ -114,14 +114,32 @@ Platform implementations:
   `src-renderer -> pkg:ui` thin re-export adapters. Both are baseline/policy
   seam requests (see below); no gate was weakened and no fingerprint added.
 
-## Seam requests (policy owners)
+## Seam requests — fulfilled in this lane (2026-10-19/20)
 
-- `architecture-policy.yaml`: declare the `pkg:ui` module with the renderer's
-  historical dependency set (`agent-protocol`, `ai`, `conductor/renderer`,
-  `connectors`, `plugin-core`, `input-completion`, `command-catalog`).
-- `.architecture-baseline.json`: absorb the relocated `pkg:ui -> pkg:*` edges
-  and the `src-renderer -> pkg:ui` adapter edges listed above (relocation, not
-  new coupling). Owner lane only; not done here.
+- `architecture-policy.yaml`: the `ui` module is declared with its measured
+  requires (`agent-protocol`, `client-core`, `legacy-ai`, `command-catalog`,
+  `connectors`, `legacy-conductor`, `input-completion`, `legacy-plugin-core`),
+  and `desktop-contracts` declares `requires: [ui]` so the thin re-export stubs
+  read as the vocabulary edges they are rather than as forbidden reach-backs.
+- `.architecture-baseline.json`: no absorption was needed, and none was done.
+  Declaring the module moved the relocated `pkg:ui -> pkg:*` edges from
+  not-permitted to permitted, so the baseline TIGHTENED by 30 fingerprints
+  instead of growing; the reconciliation is recorded in the policy file
+  (`127 + 2651 = 2778`). Two more fingerprints left the baseline because the move
+  upgraded tolerated `src-renderer -> electron-main` debt into a forbidden
+  `packages/** -> apps/desktop/**` edge, which can never be baselined — so that
+  debt was paid instead of re-filed.
+- Measured after both landed: `npm run architecture:check` prints `OK — no new
+  boundary violations`, exit 0 (2026-10-20).
+- Caveat, now its own card: the requires list above was declared from what the
+  boundary gate can see, and the boundary gate resolves bare specifiers while the
+  slice inventory does not. `pkg:ui`'s edges keep their numbers in the cut list
+  only for the imports written as relative paths; the bare ones
+  (`@duya/agent-protocol`, `@duya/ai`, `@duya/client-core`,
+  `@duya/conductor/renderer`, `@duya/input-completion`) are invisible there. See
+  T19 in [19-fast-track-queue](19-fast-track-queue.md). Do not "fix" this by
+  adding fingerprints — the declaration is correct and the count that disagrees
+  with it is the blind one.
 
 ## Progress
 
