@@ -1046,6 +1046,11 @@ export async function truncateMessagesFromInclusiveIPC(
 
 // Provider operations
 export async function listProvidersIPC(): Promise<Provider[]> {
+  // Providers are a local configuration the browser surface does not manage:
+  // the Host owns the model a run uses, and the Web has no settings surface
+  // that could change it. An empty roster is the truthful answer; reaching
+  // for the preload would fail the whole fetch.
+  if (window.electronAPI?.provider === undefined) return []
   const raw = await window.electronAPI!.provider!.list() as BackendProvider[]
   return raw.map(backendProviderToProvider)
 }
@@ -1310,6 +1315,11 @@ export async function getNoProjectWorkspaceIPC(): Promise<string> {
 }
 
 export async function getProjectGroupsIPC(): Promise<ProjectGroup[]> {
+  // A project is a local directory, and the browser surface has neither a
+  // project table nor local file access. Answering with an empty roster
+  // keeps the session list loadable; throwing here would fail the whole
+  // read and leave the surface with no sessions at all.
+  if (window.electronAPI?.project === undefined) return [];
   const [dbProjectsRaw, noProjectWorkspace] = await Promise.all([
     window.electronAPI!.project.getGroups() as Promise<DbProjectGroup[]>,
     getNoProjectWorkspaceIPC(),
