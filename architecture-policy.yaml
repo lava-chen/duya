@@ -428,6 +428,28 @@ modules:
     requires: []
     owner: agent
 
+  # `ui` (2026-10-19, plan 610/24 shared renderer): the ENTIRE former Desktop
+  # renderer moved here (`apps/desktop/src/renderer` -> `packages/ui/src`, 842
+  # files) so Desktop and Web mount the same app root. The package is pure TS
+  # source consumed in place (`exports: "." -> "./src/index.ts"`), no dist.
+  # Its requires are the measured import set of the moved code (git grep over
+  # `packages/ui`): the wire types it already spoke as a renderer
+  # (`agent-protocol`), model metadata (`legacy-ai`), the slash-command
+  # vocabulary (`command-catalog`), the conductor canvas
+  # (`legacy-conductor`, all via its renderer subpath), inline completion
+  # (`input-completion`) and the plugin app contract (`legacy-plugin-core`).
+  # Declared rather than baselined: these are the same edges the renderer
+  # module had before the move — relocation, not new coupling.
+  #
+  # `connectors` is one measured edge: `types/app-connection.ts` imports the
+  # `AppConnectorId` type from `@duya/connectors/app-connector-id` (type-only,
+  # the same edge the renderer had before the move).
+  - id: ui
+    roots: [packages/ui]
+    managed: false
+    requires: [agent-protocol, legacy-ai, command-catalog, connectors, legacy-conductor, input-completion, legacy-plugin-core]
+    owner: ui
+
   - id: desktop-host
     roots: [apps/desktop]
     managed: false
@@ -454,7 +476,7 @@ modules:
     #
     # `command-catalog`: see its module declaration above. Two edges —
     # `lib/commands/registry.ts` and its test — both intentional.
-    requires: [agent-protocol, agent-core, agent-runtime, capabilities, legacy-plugin-core, connectors, desktop-contracts, memory, input-completion, sandbox, data, duya-host, legacy-ai, command-catalog]
+    requires: [agent-protocol, agent-core, agent-runtime, capabilities, legacy-plugin-core, connectors, desktop-contracts, memory, input-completion, sandbox, data, duya-host, legacy-ai, command-catalog, ui]
     owner: desktop
 
   - id: repo-tooling
@@ -474,7 +496,12 @@ modules:
   - id: desktop-contracts
     roots: [apps/desktop/src/contracts]
     managed: false
-    requires: []
+    # `ui` (2026-10-19, plan 610/24): `contracts/git.ts` and `contracts/import.ts`
+    # are thin re-export stubs over `@duya/ui/contracts/*` after the renderer
+    # moved into the shared ui package. Declared, not baselined — the contracts
+    # module exists precisely so these vocabulary edges are visible, and the ui
+    # package is now where that vocabulary lives.
+    requires: [ui]
     owner: desktop    # Added by plan 587 M5.2, with `apps/desktop/src/contracts` itself, so that
     # the host importing its own contract vocabulary is a DECLARED dependency
     # rather than 13 new blocking `module-dependency` violations.
