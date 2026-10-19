@@ -19,3 +19,8 @@ export function getUiServices(): UiServices {
   }
   return configuredServices;
 }
+
+/** Non-throwing access for compatibility wrappers that retain their Desktop path. */
+export function peekUiServices(): UiServices | null {
+  return configuredServices;
+}

@@ -12,6 +12,8 @@ import type { ContentBlock } from '@/types/message'
 import type { SendMessageCardMeta } from '@/types/message'
 import type { MemoryEntry } from '@/types'
 import type { UsageSummary } from '@/types/usage'
+import type { HostMessageItem, HostSessionRecord } from '@duya/agent-protocol'
+import { peekUiServices } from '@/services'
 
 // Types matching the store's expected format (camelCase)
 export interface Thread {
@@ -85,6 +87,8 @@ export interface Message {
   subAgentId: string | null
   attachments: FileAttachment[] | null
   createdAt: number
+  /** Host-captured run identity, preserved for RunSession de-duplication. */
+  runId?: string
   /** User-facing prompt (with pasted-content markers) for user messages. */
   displayContent?: string | ContentBlock[]
   /** Plan 491 P1.2: Source of the message for bot-direct filtering. */
@@ -537,6 +541,11 @@ function backendProjectToProject(db: DbProjectGroup): ProjectGroup {
 
 // Thread operations
 export async function listThreadsIPC(): Promise<Thread[]> {
+  const services = peekUiServices()
+  if (services) {
+    const page = await services.sessions.list()
+    return page.sessions.map(({ session }) => hostSessionToThread(session))
+  }
   const dbThreads = await window.electronAPI!.thread!.list() as DbThread[]
   return dbThreads.map(dbThreadToThread).filter((t): t is Thread => t !== null)
 }
@@ -549,6 +558,13 @@ export async function getUsageSummaryIPC(): Promise<UsageSummary> {
 }
 
 export async function getThreadIPC(id: string): Promise<{ thread: Thread; messages: Message[] } | null> {
+  const services = peekUiServices()
+  if (services) {
+    const session = await services.sessions.get(id as HostSessionRecord['id'])
+    if (!session) return null
+    const messages = await readAllHostMessages(id, services)
+    return { thread: hostSessionToThread(session), messages }
+  }
   const dbThread = await window.electronAPI!.thread!.get(id) as DbThread | undefined
   if (!dbThread) return null
   // Plan 548: chat UI history view keeps pre-compaction turns visible.
@@ -576,7 +592,35 @@ export async function createThreadIPC(data: {
   parentId?: string | null
   agentType?: string
   agentName?: string
+  /** Host-backed source whose registered workspace binding may be reused. */
+  sourceSessionId?: string
 }): Promise<Thread | null> {
+  const services = peekUiServices()
+  if (services) {
+    if (data.sourceSessionId === undefined) {
+      throw new Error('workspace_binding_required: Select an existing Host-registered workspace session before creating a Web chat.')
+    }
+    const sourceSession = await services.sessions.get(data.sourceSessionId as HostSessionRecord['id'])
+    const workspace = sourceSession?.workspace
+    if (workspace?.state !== 'bound') {
+      throw new Error('workspace_binding_required: The selected Host session has no registered workspace binding.')
+    }
+    const session = await services.sessions.create({
+      id: data.id as HostSessionRecord['id'],
+      workspaceId: workspace.workspaceId,
+      workspaceRootId: workspace.rootId,
+      workspaceRelativePath: workspace.relativePath,
+      ...(data.title === undefined ? {} : { title: data.title }),
+      ...(data.projectName === undefined ? {} : { projectName: data.projectName }),
+      ...(data.model === undefined ? {} : { model: data.model }),
+      ...(data.mode === undefined ? {} : { mode: data.mode }),
+      ...(data.providerId === undefined ? {} : { providerId: data.providerId as HostSessionRecord['providerId'] }),
+      ...(data.parentId === undefined ? {} : { parentSessionId: data.parentId as HostSessionRecord['parentSessionId'] }),
+      ...(data.agentType === undefined ? {} : { agentType: data.agentType }),
+      ...(data.agentName === undefined ? {} : { agentName: data.agentName }),
+    })
+    return hostSessionToThread(session)
+  }
   // permissionProfile 不在前端传, 由后端 query 层 (resolvePermissionProfile) 统一 fallback.
   // 避免前端忘传 / 误传导致权限路径不一致.
   const dbThread = await window.electronAPI!.thread!.create({
@@ -606,6 +650,27 @@ export async function updateThreadIPC(id: string, data: {
   providerId?: string
   agent_profile_id?: string | null
 }): Promise<Thread | null> {
+  const services = peekUiServices()
+  if (services) {
+    if (data.workingDirectory !== undefined || data.contextSummary !== undefined) {
+      throw new Error('unsupported_session_update: Web cannot write local paths or legacy context summaries.')
+    }
+    const permissionMode = data.permissionProfile
+    if (permissionMode !== undefined && permissionMode !== 'default' && permissionMode !== 'auto' && permissionMode !== 'full_access') {
+      throw new Error('unsupported_permission_profile')
+    }
+    const result = await services.sessions.update(id as HostSessionRecord['id'], undefined, {
+      ...(data.title === undefined ? {} : { title: data.title }),
+      ...(data.projectName === undefined ? {} : { projectName: data.projectName }),
+      ...(data.model === undefined ? {} : { model: data.model }),
+      ...(data.mode === undefined ? {} : { mode: data.mode }),
+      ...(data.status === undefined ? {} : { status: data.status }),
+      ...(data.providerId === undefined ? {} : { providerId: data.providerId as HostSessionRecord['providerId'] }),
+      ...(permissionMode === undefined ? {} : { permissionMode }),
+      ...(data.agent_profile_id === undefined ? {} : { agentProfileId: data.agent_profile_id as HostSessionRecord['agentProfileId'] }),
+    })
+    return result.updated ? hostSessionToThread(result.session) : null
+  }
   const dbThread = await window.electronAPI!.thread!.update(id, {
     title: data.title,
     working_directory: data.workingDirectory,
@@ -622,11 +687,25 @@ export async function updateThreadIPC(id: string, data: {
 }
 
 export async function listThreadsByParentIdIPC(parentId: string): Promise<Thread[]> {
+  const services = peekUiServices()
+  if (services) {
+    const page = await services.sessions.list({ includeArchived: true })
+    return page.sessions
+      .filter(({ session }) => session.parentSessionId === parentId)
+      .map(({ session }) => hostSessionToThread(session))
+  }
   const dbThreads = await window.electronAPI!.thread!.listByParentId(parentId) as DbThread[]
   return dbThreads.map(dbThreadToThread).filter((t): t is Thread => t !== null)
 }
 
 export async function deleteThreadIPC(id: string): Promise<boolean> {
+  const services = peekUiServices()
+  if (services) {
+    const session = await services.sessions.get(id as HostSessionRecord['id'])
+    if (!session) return false
+    const result = await services.sessions.delete(session.id, session.updatedAt)
+    return result.deleted
+  }
   return window.electronAPI!.thread!.delete(id) as Promise<boolean>
 }
 
@@ -652,10 +731,12 @@ export type ArchiveResult =
     }
 
 export async function archiveThreadIPC(sessionId: string): Promise<ArchiveResult> {
+  if (peekUiServices()) throw new Error('archive_not_supported: Host Web API does not expose safe rollout archival.')
   return window.electronAPI!.session!.archive(sessionId)
 }
 
 export async function unarchiveThreadIPC(sessionId: string): Promise<boolean> {
+  if (peekUiServices()) throw new Error('unarchive_not_supported: Host Web API does not expose safe rollout restoration.')
   return window.electronAPI!.session!.unarchive(sessionId)
 }
 
@@ -668,6 +749,12 @@ export async function unarchiveThreadIPC(sessionId: string): Promise<boolean> {
  * `archivedAt` / `archivedPath` columns.
  */
 export async function listArchivedThreadsIPC(): Promise<Thread[]> {
+  const services = peekUiServices()
+  if (services) {
+    const page = await services.sessions.list({ includeArchived: true })
+    return page.sessions.filter(({ session }) => session.status === 'archived')
+      .map(({ session }) => hostSessionToThread(session))
+  }
   // The listArchived IPC returns rows shaped like a stripped-down
   // DbThread (only id, title, working_directory, project_name, status,
   // timestamps, archived_*); missing fields default to safe zeros via
@@ -732,6 +819,9 @@ export async function addMessageIPC(data: {
   subAgentId?: string | null
   attachments?: FileAttachment[]
 }): Promise<Message | null> {
+  if (peekUiServices()) {
+    throw new Error('durable_message_write_requires_run: Web transcript rows are written only by the Host run execution.')
+  }
   const dbMessage = await window.electronAPI!.message!.add({
     id: data.id,
     session_id: data.sessionId,
@@ -767,6 +857,8 @@ export async function replaceMessagesIPC(
 }
 
 export async function getMessagesBySessionIPC(sessionId: string): Promise<Message[]> {
+  const services = peekUiServices()
+  if (services) return await readAllHostMessages(sessionId, services)
   const dbMessages = await window.electronAPI!.message!.getBySession(sessionId) as DbMessage[]
   return dbMessages.map(dbMessageToMessage)
 }
@@ -791,6 +883,125 @@ export function isBotDirectVisibleSource(source: string | null | undefined): boo
   // classifier existed — not visible by the same rule the projection uses.
   if (!source) return false;
   return BOT_DIRECT_VISIBLE_SOURCES.has(source);
+}
+
+function hostSessionToThread(session: HostSessionRecord): Thread {
+  const workspace = session.workspace.state === 'bound' ? session.workspace : null
+  const extensions = session.extensions
+  const extensionFlag = (key: string): number | undefined => {
+    const value = extensions[key]
+    return value === 0 || value === 1 ? value : undefined
+  }
+  return {
+    id: session.id,
+    title: session.title,
+    // This is Host's relative path, never the local absolute workspace root.
+    workingDirectory: workspace?.relativePath ?? null,
+    projectName: session.projectName || null,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    model: session.model,
+    systemPrompt: '',
+    status: session.status,
+    mode: session.mode,
+    permissionProfile: session.permissionMode,
+    providerId: session.providerId,
+    contextSummary: '',
+    contextSummaryUpdatedAt: 0,
+    isDeleted: 0,
+    generation: 0,
+    agentProfileId: session.agentProfileId,
+    parentId: session.parentSessionId,
+    agentType: session.agentType,
+    agentName: session.agentName,
+    planModeEnabled: extensionFlag('plan_mode_enabled'),
+    goalModeEnabled: extensionFlag('goal_mode_enabled'),
+    archivedAt: session.status === 'archived' ? session.updatedAt : null,
+    recencyAt: session.recencyAt ?? session.updatedAt,
+    lastTurnStartedAt: session.lastTurnStartedAt,
+  }
+}
+
+async function readAllHostMessages(
+  sessionId: string,
+  services: NonNullable<ReturnType<typeof peekUiServices>>,
+): Promise<Message[]> {
+  const messages: Message[] = []
+  let cursor: string | undefined
+  const cursors = new Set<string>()
+  do {
+    const page = await services.sessions.readMessages(sessionId as HostSessionRecord['id'], {
+      limit: 100,
+      includeSuperseded: true,
+      ...(cursor ? { cursor } : {}),
+    })
+    for (const item of page.messages) {
+      const message = hostMessageItemToMessage(item, sessionId)
+      if (message !== null) messages.push(message)
+    }
+    cursor = page.nextCursor ?? undefined
+    if (cursor !== undefined && cursors.has(cursor)) throw new Error('Host message pagination cursor repeated')
+    if (cursor !== undefined) cursors.add(cursor)
+  } while (cursor !== undefined)
+  return messages
+}
+
+function hostMessageItemToMessage(item: HostMessageItem, sessionId: string): Message | null {
+  if (item.entry.type === 'compaction') {
+    return {
+      id: item.id,
+      sessionId,
+      role: 'assistant',
+      content: item.entry.summary,
+      name: null,
+      toolCallId: null,
+      tokenUsage: null,
+      msgType: 'text',
+      thinking: null,
+      toolName: null,
+      toolInput: null,
+      parentToolCallId: null,
+      vizSpec: null,
+      status: 'done',
+      seqIndex: item.sequence,
+      durationMs: null,
+      subAgentId: null,
+      attachments: null,
+      createdAt: item.createdAt,
+      isCompactSummary: true,
+      compactBoundaryId: item.entry.id,
+      compactedMessageCount: item.entry.compactedMessageIds.length,
+    }
+  }
+  if (item.entry.type !== 'message') return null
+  const stored = item.entry.message
+  if (stored.visibility === 'hidden') return null
+  const role = stored.role
+  if (role !== 'user' && role !== 'assistant' && role !== 'system' && role !== 'tool') return null
+  const content = stored.content
+  return {
+    id: item.id,
+    sessionId,
+    role,
+    content: typeof content === 'string' ? content : content as unknown as ContentBlock[],
+    name: 'name' in stored && typeof stored.name === 'string' ? stored.name : null,
+    toolCallId: null,
+    tokenUsage: null,
+    msgType: 'text',
+    thinking: null,
+    toolName: null,
+    toolInput: null,
+    parentToolCallId: null,
+    vizSpec: null,
+    status: 'done',
+    seqIndex: item.sequence,
+    durationMs: null,
+    subAgentId: null,
+    attachments: null,
+    createdAt: item.createdAt,
+    ...(item.entry.runId === undefined ? {} : { runId: item.entry.runId }),
+    ...(item.entry.source === undefined ? {} : { source: item.entry.source }),
+  }
 }
 
 /**
