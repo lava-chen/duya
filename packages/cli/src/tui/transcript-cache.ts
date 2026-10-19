@@ -124,6 +124,10 @@ export class TranscriptRenderer {
         // render as italic/strike attributes or fold — a facet of the bytes.
         options.renderer ?? 'blessed',
         themeKey,
+        // plan 615 §5.4: a component can change a block's height without
+        // changing its content, so its revision has to be part of the key or
+        // the cached lines would report the old height for new layout.
+        String(options.componentRevisions?.get(block.id) ?? 0),
         fnv1a(blockContent(block)),
       ].join('|');
 

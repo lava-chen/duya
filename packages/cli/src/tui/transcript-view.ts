@@ -117,6 +117,19 @@ export interface RenderOptions {
    * caller and test byte-identical until the shell starts injecting it.
    */
   readonly width?: number;
+  /**
+   * Per-block component revision, folded into the transcript cache key.
+   *
+   * Once a block is drawn by a tree component, its HEIGHT can change without
+   * its content changing — a component makes its own layout decision (a tool
+   * card collapsing, a preview truncating) that the content hash cannot see. A
+   * cache keyed only on content would then serve the old height and the
+   * document would disagree with itself about where a block starts.
+   *
+   * Phase 4 adds the slot; Phase 6 is what fills it, because that is when
+   * blocks become components. Absent means revision 0 for every block.
+   */
+  readonly componentRevisions?: ReadonlyMap<string, number>;
 }
 
 export const DEFAULT_RENDER_OPTIONS: RenderOptions = {

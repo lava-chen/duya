@@ -221,9 +221,13 @@ export type InputEvent =
 - **`hit` 已进契约但无写入方**：单元格归属要等 SceneBuilder（Phase 3/4）才有答案，先把字段放好，加命中测试时只改驱动里构造事件的那一处。
 
 
-### 5.4 缓存 key 对齐（Phase 4）
+### 5.4 缓存 key 对齐（Phase 4 已落地）
 
-`transcript-cache.ts` 的 per-block key 追加组件 revision：`componentRev`（组件 update 改变高度时自增）。防止组件化后缓存命中旧高度。
+`transcript-cache.ts` 的 per-block key 追加一个 `componentRev` 槽位，值取自 `RenderOptions.componentRevisions?.get(block.id) ?? 0`。
+
+为什么必须是「选项里的 map」而不是「组件自报」：`RenderOptions` 是渲染函数唯一的输入，而 block 目前还不是组件。放在选项里，Phase 6 把 block 变成组件时只需在调用处填这个 map，缓存层不用再改一次；也避免了给 `Block` 数据接口加字段。
+
+槽位现在恒为 0（因为还没有组件），但**不是空的**：`virtual-doc.test.ts` 有测试证明改 revision 会 miss、改回来会命中 —— 否则这行代码只是装饰。
 
 ## 6. UI 规格
 
@@ -296,12 +300,18 @@ App (id: root)
     - **注意「上树」的边界**：它们已经能按树渲染（`renderTree` 测过），但**生产路径仍是 TUIApp 手工拼装** —— 消费者迁移按计划在 Phase 6 逐组件进行。Phase 3 交付的是「树存在且与旧布局逐像素一致」，不是「TUIApp 已经用树」。
   - 门禁：`tsc -b --force` 绿；`tui` 856/856 全绿（`component.test.ts` 18 条）；`packages/cli` 1067/1075，8 红与 Phase 2 完全一致；**`footer.ts` / `question-overlay.ts` 的既有测试零改动通过**（这是本阶段最硬的约束）。
 
-- [ ] **Phase 4 — 增量布局 + 虚拟化文档（I4，D4）**
-  - [ ] 4.1 树形 dirty 传播：`measure()` 结果带 revision，高度未变的子树剪枝
-  - [ ] 4.2 TranscriptPane 接 `TranscriptRenderer.heights()`：视口裁剪（全屏）+ scrollback commit 判定（inline）统一为一个 `visibleWindow()` 查询
-  - [ ] 4.3 缓存 key 加 `componentRev`（§5.4）
-  - [ ] 4.4 10k block 合成负载测试：totalLines + 可视区 paint 的复杂度断言（O(blocks visible)，非 O(blocks total)）
-  - 门禁：`tui/__tests__/virtual-doc.test.ts` + `transcript-cache` 既有测试
+- [x] **Phase 4 — 增量布局 + 虚拟化文档（I4，D4）**
+  - [x] 4.1 树形 dirty 传播：`measure()` 结果带 revision，高度未变的子树剪枝
+    - **执行记录**：`core/measure.ts::MeasureCache`。签名 = 整棵子树的 `id@revision(width)` 串接，**不是**只看节点自己 —— VStack 自己的 revision 在子节点 update 时不会变，只按自己取 key 会让它永远报旧高度（有测试钉住这条：改子节点 → 容器必须 miss）。代价是每次 measure 走一遍树（节点数个位数），换来的是 10k block 的叶子只在真变化时才算。
+  - [x] 4.2 TranscriptPane 接 `TranscriptRenderer.heights()`：视口裁剪（全屏）+ scrollback commit 判定（inline）统一为一个 `visibleWindow()` 查询
+    - **执行记录**：`core/visible-window.ts`（`heights` + `viewportRows` + `scrollLines` → `lineStart/lineEnd/firstBlock/lastBlock/following`）+ `components/transcript-pane.ts`（`measure()` = 文档总高，`paint()` 只写窗口内的行，`window(width, rows)` 就是那个统一查询）。`following` 由 `offset === 0` 推出而不是单独一个布尔：两处状态一定会漂移，一处不会。零高 block 在定位时跳过，否则折叠处的空块会白拉一个 block 进来画。
+    - **边界**：`paintTranscript` 与 `InlineSurface.render({viewEnd})` **尚未改读这个查询** —— 那需要把区域 API 换成 Scene（Phase 5）。此阶段交付的是查询本身与它在 pane 里的用法，两条旧路径的行为不变（全量测试为证）。
+  - [x] 4.3 缓存 key 加 `componentRev`（§5.4）
+    - **执行记录**：见 §5.4。槽位由 `RenderOptions.componentRevisions` 提供，Phase 6 填值。
+  - [x] 4.4 10k block 合成负载测试：totalLines + 可视区 paint 的复杂度断言（O(blocks visible)，非 O(blocks total)）
+    - **执行记录**：`__tests__/virtual-doc.test.ts` 16 条。10k block、24 行视口：warm 帧 `renderer.stats.misses` 增量为 **0**（零 Markdown 重渲染），`pane.stats.blocksPainted ≤ 25`、`linesPainted = 24` —— 即写入量由视口决定而非文档规模；重复绘制整帧全部命中。
+    - **顺带纠正一个隐含假设**：一个 block 不等于一行（200 个单行 block 排出 399 行，渲染器会加分隔行）。所以「第 N 行属于哪个 block」必须问 `heights()`，凡是按 1 block = 1 line 写的推算都是错的 —— 测试里已改成从渲染器取真实行。
+  - 门禁：`tsc -b --force` 绿；`tui` 872/872；`packages/cli` 1083/1091，8 红与前完全一致；`transcript-cache` 既有测试零改动通过（新 key 槽位恒为 0，命中计数不变）。
 
 - [ ] **Phase 5 — 帧调度统一（I5，D5/D6）**
   - [ ] 5.1 RenderScene 成为两个 Output 的唯一输入；RenderScheduler 调度不变
@@ -328,8 +338,8 @@ App (id: root)
 | V2 | blessed 不再出现在运行时输入/绘制路径 | Phase 2/5 后 grep import + parity | 输入路径已脱离 blessed（own 自有 `keyHandlers` + `dispatchInput`）；绘制仍经 blessed-surface 的回滚路径 | 仅 blessed-surface |
 | V3 | 键盘输入→绘制 P95 | Phase 0/7 基准 | own 32.0ms / blessed 48.5ms（见 §8.1） | <30ms |
 | V4 | 流式帧间隔 | 同上 | own p50 76.6ms / p95 79.4ms；blessed p50 77.2 / p95 83.9（同一 trailing-edge 机制） | ≥30FPS 等效 |
-| V5 | 10k block 滚动 paint 复杂度 | Phase 4 合成测试 | `totalLines()` 线性（2000 块 91ms，10× 块数 8× 时间）；二次测量 0 miss / 301 hit | O(visible) |
-| V6 | 非可视 Block 零 Markdown 重渲染 | transcript-cache stats（hits/misses 已有） | 部分 | 断言钉死 |
+| V5 | 10k block 滚动 paint 复杂度 | Phase 4 合成测试 | `totalLines()` 线性（2000 块 91ms，10× 块数 8× 时间）；pane 一帧写 ≤ 视口行数、warm 帧 0 次 Markdown 重渲染（Phase 4） | O(visible) |
+| V6 | 非可视 Block 零 Markdown 重渲染 | transcript-cache stats（hits/misses 已有） | 已断言：10k block warm 帧 miss 增量 0（Phase 4） | 断言钉死 |
 | V7 | 交互语义零变化 | Phase 6 全量测试零断言改动 | — | 零改动 |
 | V8 | 双模式同一 RenderScene | Phase 5 对拍 | 两套内核 | 一套管线 |
 | V9 | IME/中文/宽字符回归 | Phase 2 既有 width/编辑器测试迁移 + 真机 | 通过 | 通过 |
