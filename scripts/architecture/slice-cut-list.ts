@@ -24,6 +24,18 @@
  *  - **No `cycle` count promise.** `architecture:check` reports `cycle 16`; that
  *    is a baseline fingerprint count, and it moves when the RESOLVER changes as
  *    well as when the code does.
+ *  - **Every count here is a count of what the resolver can see.** Bare
+ *    `@duya/*` specifiers do not become edges: `resolveTarget` builds its
+ *    candidates under `packages/<x>/`, and no package in this repo keeps an
+ *    entry at its root (`src/index.ts`, never `index.ts`), so such a specifier
+ *    only resolves when the import path itself names `dist`. Cross-package
+ *    dependencies expressed by bare specifier are therefore INVISIBLE, which is
+ *    why `electron-main -> pkg:agent-protocol` — a pair the host reaches
+ *    hundreds of times — does not appear in this file at all. The pairs listed
+ *    below are those written as relative paths. A number going down can mean the
+ *    coupling was cut, or that the import was rewritten from a relative path to
+ *    a bare one; `main-to-agent-value` is the entry where that distinction is
+ *    spelled out, because that is exactly what happened to it.
  *
  * ## The load-bearing test
  *
@@ -88,48 +100,47 @@ export const CUT_LIST: readonly CutEdge[] = [
     id: 'main-to-renderer-value',
     rank: 1,
     pair: 'electron-main -> src-renderer',
-    edges: 32,
+    edges: 28,
     because: 'b',
     why: 'The main process importing renderer modules as VALUES. This is the direction the policy calls backwards and the one the value edges make concrete: they are not type-only imports that a DTO could satisfy, they are runtime loads. 00-contracts.md §A says a DTO in `apps/desktop/src/contracts` is the fix, and a DTO is only a fix for the type-shaped share of these.',
-    cut: 'M5.2 took the type share. `renderer/types/import.ts` moved to `apps/desktop/src/contracts/import.ts` and both sides now read it from there, which removed this edge: 33 -> 32. The remaining 32 are the genuinely behavioural share — `providers/legacy.ts` (13), the provider services (9), `providers/index.ts` (2), `plugin-types.ts` / `plugin-error-messages.ts` (3), a test importing a renderer manager (3), and a test importing a renderer helper (1). Those are M5.5\'s consolidation behind ports, not a DTO, and none of them can be moved without moving behaviour.',
+    cut: 'M5.2 took the type share. `renderer/types/import.ts` moved to `apps/desktop/src/contracts/import.ts` and both sides now read it from there, which removed this edge: 33 -> 32. Re-measured against the tree this list now describes, the pair stands at 28. All 28 targets still live under `apps/desktop/src/renderer`, which is what makes them this pair rather than a `pkg:ui` one: `lib/providers/*` accounts for 24 (`legacy.ts` 13, `domain/ProviderValidation.ts` 3, `catalog.ts` 2, `secret.ts` 2, `index.ts` 2, `health/ProviderHealthService.ts` 1, `models/ModelSyncService.ts` 1) and the other 4 are `lib/plugin-error-messages.ts` (2), `types/usage.ts` (1) and one test importing `lib/errors/extractErrorMessage.ts` (1). These are the genuinely behavioural share — a runtime provider service, not a shape a DTO can satisfy. They are M5.5\'s consolidation behind ports, not a DTO, and none of them can be moved without moving behaviour.',
   },
   {
     id: 'main-to-agent-value',
-    rank: 2,
+    rank: 3,
     pair: 'electron-main -> pkg:agent',
-    // 91 -> 60 (plan 610 A5). The pair SHRANK by 31 rather than growing: the
-    // `@duya/memory`, `@duya/tooling` and `@duya/connectors` extractions moved
-    // host-facing code out of `packages/agent` into declared packages, so the
-    // main process now reaches them directly instead of through the legacy
-    // agent root. Measured on the same口径 this verifier uses (value edges only,
-    // cross-owner pairs); the broader cross-boundary count including type edges
-    // is 114 and is a different question.
+    // 91 -> 60 -> 1, and the LAST step is a measurement change more than a cut.
     //
-    // The remaining 60 are spread across 45 files with a maximum of 3 in any one
-    // of them, six of which are test files. The flatness is the point: there is
-    // no single host seam left to cut, which is what "逐项解除" costs when the
-    // set has already been thinned.
-    edges: 60,
+    // The `@duya/memory`, `@duya/tooling` and `@duya/connectors` extractions did
+    // move host-facing code out of `packages/agent` into declared packages. But
+    // the main process reaches those packages by BARE specifier (`@duya/memory`),
+    // and `resolveTarget` cannot see a bare `@duya/*` specifier unless the import
+    // path itself names `dist`: its candidates are built under
+    // `packages/<x>/` (`<x>.ts`, `<x>/index.ts`, …), and no package in this repo
+    // has a root `index.ts` — every entry is `src/index.ts`. So the 60 that M5.2
+    // measured were relative-path crossings into `packages/agent/src`, and what
+    // replaced them resolves to nothing. The coupling may well still exist; what
+    // shrank is the scanner's view of it. `apps/desktop/src/main` alone carries
+    // 284 bare `@duya/*` imports, none of which produces an edge.
+    //
+    // The single surviving edge is relative, and it belongs to a TEST rather than
+    // to production code. It stays in this list rather than moving to `CLOSED`
+    // because `CLOSED` is for pairs that measure zero: an entry there would have
+    // to state `edgesAfter: 0` and the verifier re-derives that number, so filing
+    // a live edge as closed would be a false claim the gate would then have to be
+    // taught to tolerate.
+    edges: 1,
     because: 'c',
-    why: 'The largest host -> workspace value edge set in the tree, and the reason the plan calls the cut "逐项解除" (edge by edge) rather than one move. NOT all 60 are in scope: the rank is a statement that the SET must shrink, not that every edge must go. Several are legitimate composition in the host. The value/type split is what makes the per-edge triage possible, and it is why this is rank 2 rather than rank 1.',
-    cut: 'M5.2, edge by edge, with the measurement above as the checklist. An edge stays when the host genuinely composes the runtime.',
-  },
-  {
-    id: 'renderer-to-main-value',
-    rank: 2,
-    pair: 'src-renderer -> electron-main',
-    edges: 2,
-    because: 'b',
-    why: 'The renderer importing main-process modules. The policy already forbids this direction (`from: src/** to: apps/desktop/src/main/**`) and these are tolerated baseline debt. Small, and entirely type-shaped in intent, so a contracts module plausibly removes all of them.',
-    cut: 'M5.2 took the type share: `main/ipc/git-types.ts` moved to `apps/desktop/src/contracts/git.ts`, which the renderer now reads by a host-internal relative path, so 4 -> 2. The 2 that remain are NOT the same kind of thing and are recorded in NOT_CUT rather than left to look like oversights: `app-connection-ipc.ts` -> `main/services/app-connections/types.ts` is one DTO module that is 95% types and 1 function (`toStatusDTO`), so it needs the file split before it can move without moving a mapper, and `permission-profile.contract.test.ts` is a deliberate contract test. Neither is closed by this slice.',
+    why: 'This pair held the largest host -> workspace value edge set this scanner could see — 91 when M5.1 wrote this, 60 when M5.2 did — and was the reason the plan calls the cut "逐项解除" (edge by edge) rather than one move. It now measures 1, but the honest reading of that number is narrower than "the set was cut": the extractions swapped relative paths for bare `@duya/*` specifiers, which this graph does not resolve, so the old edges did not all go — some of them stopped being observable. Filling that blind spot is its own work item, because it would move every count in this file at once.',
+    cut: 'NOT established by this slice, and not closeable with this scanner. The single measured edge runs from a test rather than from production code: `apps/desktop/src/main/channels/__tests__/connector-secret-store.test.ts` -> `packages/agent/src/channels/types.ts`, a wire type still read from the legacy agent root by relative path. It is kept as the honest residue instead of being deleted. Whether the other 59 are really gone cannot be answered until `resolveTarget` learns to resolve a bare `@duya/*` specifier to `packages/<x>/src/index.ts`; until then this entry should not be read as evidence that the host -> agent coupling was removed.',
   },
   {
     id: 'main-to-gateway-value',
     rank: 3,
     pair: 'electron-main -> pkg:gateway',
-    edges: 11,
+    edges: 8,
     because: 'c',
-    why: 'The host supervising gateway channel adapters. This edge is CORRECT in direction — the host owns the process — so it is not a violation. It is on the list only because the gateway adapters are capability adapters that M5.5 consolidates behind ports, and the edge count is the measure of how much host surface is entangled with them.',
+    why: 'The host supervising gateway channel adapters. This edge is CORRECT in direction — the host owns the process — so it is not a violation. It is on the list only because the gateway adapters are capability adapters that M5.5 consolidates behind ports, and the edge count (11 when M5.1 wrote this, 8 measured now) is the measure of how much host surface is entangled with them.',
     cut: 'M5.5, and it may legitimately survive as a composition edge. Recorded so the number is not rediscovered as a surprise.',
   },
 ];
@@ -185,6 +196,15 @@ export const CLOSED: readonly ClosedEdge[] = [
     moved: 'All 15 edges were relative paths out of `packages/agent` into host code, and every one started in a test file, so no production code moved. 14 reached `apps/desktop/src/main/memory-state/migrations/*.sql.ts` from two files: `packages/agent/src/memory-state/__tests__/fixture.ts` and `packages/agent/src/memory-rollout/__tests__/extractor.retry.test.ts`. The agent package now states the schema it REQUIRES in its own `packages/agent/src/memory-state/__tests__/schema-ddl.ts`, materialised by the fixture, and the host pins that copy to its own migrations in `apps/desktop/src/main/memory-state/__tests__/agent-fixture-drift.test.ts`. The 15th edge, `packages/agent/tests/unit/automationScheduler.test.ts` -> `apps/desktop/src/main/automation/schedule.ts`, was a test for host code living in the agent package: the test moved to the host, where the implementation already lives. Four of its five cases were ALREADY pinned by `apps/desktop/src/main/automation/schedule.test.ts`; the one unique case (the schedule timezone changing the result) was relocated with the file, so no case was dropped.',
     paidFor: 'NOTHING. The first version of the drift test imported the agent DDL, which `architecture:check` correctly reported as a new `package-boundary-escape` (162 -> 163) and refused. Importing it would only have traded this cut for the same coupling pointing the other way, so the test READS the agent file as text by path instead: no import, no edge, and the `paidFor` slot exists precisely so that a cut which does cost an edge has to say so out loud. Net cross-package value edges 177 -> 163 after this cut, and `electron-main -> pkg:agent` stayed at 91.',
   },
+  {
+    id: 'renderer-to-main-value',
+    pair: 'src-renderer -> electron-main',
+    edgesBefore: 2,
+    edgesAfter: 0,
+    slice: '610 M5.2, then the renderer extraction',
+    moved: 'Both tolerated edges are gone, and neither went because its import was deleted — both went because the files carrying them left the renderer. `app-connection-ipc.ts` now lives in `packages/ui/src/lib/` and reads its DTO from `packages/ui/src/types/app-connection.ts`, so the reach into `main/services/app-connections/types.ts` became a same-package import. `permission-profile.contract.test.ts` now sits on the main side (`apps/desktop/src/main/__tests__/`), importing its own implementation and the renderer one from `@duya/ui/lib/permission-profile`: the edge reversed in intent rather than weakening, and the check that holds preload, main and renderer to one behaviour still exists, which is what the edge was for.',
+    paidFor: 'NOTHING in this direction. One caveat is recorded rather than hidden: the reversal the second file creates is NOT visible in this graph. `packages/ui/src` imports five workspace packages by value (`@duya/agent-protocol`, `@duya/ai`, `@duya/client-core`, `@duya/conductor/renderer`, `@duya/input-completion`) and `main` now imports `@duya/ui/lib/permission-profile`, but the measured pair list contains no `pkg:ui` row in either direction. The cause is the resolver blind spot described in this file\'s header, not a clean zero: bare `@duya/*` specifiers resolve only through a named `dist` path. So reading this closure as "the reversal cost nothing measured" would be reading a gap as a measurement, and closing that gap is its own work item because it would move every count in this file at once.',
+  },
 ];
 
 export const NOT_CUT: readonly NonCut[] = [
@@ -197,16 +217,16 @@ export const NOT_CUT: readonly NonCut[] = [
     why: 'That is a baseline fingerprint count over SCCs, and it moves when the resolver changes as much as when the code does. It is not a migration target and is not promised to move.',
   },
   {
-    subject: 'the 92 `electron-main -> pkg:agent` edges taken as a block',
-    why: 'Size is not a reason. The set must shrink, but several edges are legitimate host composition of the runtime. Promising all 92 would be promising an outcome this slice cannot justify edge by edge.',
+    subject: 'the single `electron-main -> pkg:agent` edge left after the A5 extractions',
+    why: 'It is recorded in `CUT_LIST`, because it still exists, and named here so the drop from 91 to 1 is not mistaken for a measurement error. The survivor is a test reading `packages/agent/src/channels/types.ts`, a wire type that moves when the port that owns it moves. Leaving one test-only edge is deliberate: forcing it now would trade a test import for a new reverse dependency, which is not a cut.',
   },
   {
     subject: 'test-to-test edges inside one package',
     why: 'A test importing a sibling fixture creates no runtime coupling. `audit-modules.mjs` already excludes test files from its cycle graph for exactly this reason, and the value graph here inherits that judgement.',
   },
   {
-    subject: 'the 2 `src-renderer -> electron-main` edges left after M5.2',
-    why: 'Recorded separately so they do not read as oversights. One is `permission-profile.contract.test.ts` importing `main/lib/permission-profile` on purpose: that test exists to hold the preload, main and renderer to the same behaviour, so the edge IS the mechanism and cutting it would delete the check. The other, `app-connection-ipc.ts` -> `main/services/app-connections/types.ts`, is a DTO module that is not yet movable because it also exports the `toStatusDTO` mapper; moving the types without the mapper means splitting the file, which belongs with the preload/main/renderer DTO work rather than in a slice that was already carrying two cuts.',
+    subject: 'the `src-renderer -> electron-main` direction, named here since M5.1',
+    why: 'It is CLOSED now (2 -> 0), and `CLOSED` carries the reasoning and the evidence. It stays named here as well because this list is where a reader who remembers the two tolerated edges looks first, and a silent disappearance from both lists would be exactly the rot this file exists to prevent.',
   },
 ];
 
@@ -230,11 +250,14 @@ export const CUT_LIST_INVARIANTS = {
    * be forgotten either — if an edge reappears in that direction, the
    * `accounts for every workspace -> host value edge in the list` test fails
    * because the pair would be measured again and named by nothing.
+   *
+   * `src-renderer -> electron-main` left the same way and for the same reason:
+   * it measures zero now, so it moved to `CLOSED` rather than staying here as a
+   * second phantom obligation.
    */
   requiredPairs: [
     'electron-main -> src-renderer',
     'electron-main -> pkg:agent',
-    'src-renderer -> electron-main',
   ],
   /** Boundaries a value edge may cross INTO for the list to be complete. */
   hostBoundaries: [...HOST_BOUNDARIES],
