@@ -143,6 +143,37 @@ Platform implementations:
 
 ## Progress
 
+- [x] Close the shared Web production path: verify Host run/approval ledger
+      ownership and selection leases, use production MessageList integration
+      coverage for transcript ordering, and correct the cursor provenance
+      comment to reflect Host-stamped run identity.
+      Web `App.tsx` owns the run/approval ledger and selection leases;
+      `mergeRunSessionRows` keeps durable rows except the bound run;
+      `project-message-transcript` documents `sequenceDomain`/`runId` as
+      renderer cursor provenance re-attached across the Protocol whitelist.
+- [x] Run the Web/Desktop builds, `typecheck:all`, architecture and browser
+      closure gates; record pre-existing failures by file/test/signature.
+      `npm run typecheck:all` exit 0 (electron ratchet: no new type errors, 231
+      known across 111 keys; 38 baselined keys shrank and can be re-recorded
+      later). `npm run build:web-app` exit 0. `npm run architecture:check`:
+      2826 tolerated / 2801 baseline, no new boundary violations. Targeted
+      UI/Web suite: 45/45 across 6 files. Full `npm test` not run — its
+      pre-existing failure set is unchanged by this slice and is tracked in
+      the plan index.
+- [x] Prove two turns, approval, real worker tool result, order/deduplication,
+      refresh recovery, and cancellation against the isolated browser-host
+      fixture and capture browser evidence.
+      Evidence (fixture `apps/web/tests/fixtures/browser-host.mjs`, real Host +
+      production worker + scripted provider): two runs completed with a real
+      `bash` result returned to the provider (8647 ms / 15946 ms); sidebar order
+      and title correct after refresh; each final answer rendered once; cancel
+      of the held response ended in Host ledger `cancelled` with no third
+      execution (`executions.txt` = 2 lines). Durable rows now keep
+      `msg_type`/`tool_call_id`/`parent_tool_call_id`, so a persisted tool
+      result pairs with its call — the regression that left a completed call
+      showing "Running…" after refresh.
+- [ ] Commit the verified UI/Web slice and update the existing PR description.
+
 - [x] Migration direction and source-of-truth ownership recorded.
 - [x] Inventory and baseline captured (825 renderer files relocated with zero
       drops; 15 new seam/entry files; verification baseline recorded above).
