@@ -1079,6 +1079,13 @@ The plan 587/610 cutover moved execution out of `@duya/agent`. Current ownership
   and restore the selected session's persisted transcript. `/new`, `/clear`,
   and `/exit` are handled in the same entry. Non-interactive terminals retain
   the readline fallback.
+- A chat surface creates a Host session when it opens, because a run has to
+  belong to one. A surface that is opened and closed without a message would
+  leave that session behind, so the resume picker offers only sessions with a
+  non-empty timeline, and `packages/cli/src/owned-sessions.ts` deletes the
+  sessions a surface created and never used when that surface closes. A
+  session the user resumed belongs to whoever created it and is never
+  deleted.
 - `packages/agent/src/cli/tui-session.ts` is the temporary host adapter: it
   connects the legacy chat CLI's run events, persistence, and Agent-specific
   completion candidates to the TUI. The planned CLI/Run API migration will
