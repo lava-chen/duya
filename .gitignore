@@ -112,16 +112,16 @@ scripts/_scratch-*.js
 scripts/probe-*.cjs
 test-results/
 
-# Docs (keep only product-specs, release-notes, recovered-plans, and architecture)
+# Versioned documentation categories. See docs/README.md before adding one.
 docs/*/
 !docs/product-specs/
 !docs/release-notes/
-!docs/recovered-plans/
 !docs/architecture/
-# Exec plans: track what is still being worked on, not the history.
-# `active/` and `backlog/` are the plans a new session reads, so they must be
-# in the repo. `completed/` is a local archive — the index names those in plain
-# text instead of linking, precisely because they are not versioned.
+!docs/design-docs/
+!docs/references/
+!docs/development/
+# New completed plans go to exec-plans/archive/ and remain versioned.
+# completed/ mixes tracked legacy files and local history; do not bulk-add it.
 !docs/exec-plans/
 docs/exec-plans/completed/
 docs/exec-plans/*.json
@@ -129,6 +129,8 @@ docs/exec-plans/*.json
 # at active/587-agent-harness-monorepo/reference/10-tech-debt-tracker.md.
 docs/exec-plans/tech-debt-tracker.md
 docs/*.md
+!docs/README.md
+!docs/AGENTS.md
 
 # Tests
 # Tests: the root-level `tests/` scratch directory is ignored, EXCEPT the
@@ -206,11 +208,8 @@ probe-desktop-capture*.png
 .tmp-diag.ps1
 .tmp-kill.ps1
 
-# Local-only parallel docs workspace (163 files, ~3.2 MB, 0 tracked). A
-# scratch surface that shadows the tracked `docs/` tree: agent-runs, research,
-# prototypes, generated, skills. Nothing here is source — `docs/` remains the
-# versioned location, so this must never be negated the way `docs/*/` rules
-# are for product-specs / release-notes / recovered-plans.
+# Local drafts, research and run artifacts; see docs/README.md for promotion.
+# No versioned instruction may require files from this machine-local directory.
 docs-local/
 
 # Plan 572: Swift AX helper build artifacts (source + build script are committed)
