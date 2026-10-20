@@ -157,11 +157,20 @@ test("packages/* 各子包至少有一个规则文件(子包级约束)", async (
   const files = await walk(pkgRoot);
   const missing = [];
   for (const pkg of pkgDirs) {
-    const has = files.some((f) =>
-      f.path.startsWith(`packages/${pkg}/`) &&
-      ["CLAUDE.md", "AGENTS.md", "CLAUDE.local.md", "AGENTS.local.md",
-       ".cursorrules", ".clinerules"].includes(f.name)
-    );
+    // `f.path` comes from path.relative(), which yields BACKSLASHES on
+    // win32. Comparing it against a hard-coded "packages/<pkg>/" prefix
+    // therefore never matched on Windows, so this test was permanently red
+    // there regardless of whether the rule file existed. Normalize
+    // separators first; on POSIX this is a no-op and behavior is unchanged.
+    const prefix = `packages/${pkg}/`;
+    const has = files.some((f) => {
+      const normalized = f.path.replace(/\\/g, "/");
+      return (
+        normalized.startsWith(prefix) &&
+        ["CLAUDE.md", "AGENTS.md", "CLAUDE.local.md", "AGENTS.local.md",
+         ".cursorrules", ".clinerules"].includes(f.name)
+      );
+    });
     if (!has) missing.push(pkg);
   }
   assert.deepEqual(
@@ -228,9 +237,15 @@ test("规则文件里的相对路径引用全部能解析", async () => {
       if (/^<\w+>$/.test(ref) || /^\{\{/.test(ref)) continue;
       // 跳过已包含文件后缀的位置:line:col 形式 (e.g. AGENTS.md -> src/foo.ts:45)
       if (/:\d+:\d+$/.test(ref)) continue;
-      const resolved = resolve(baseDir, ref);
-      if (!existsSync(resolved)) {
-        broken.push({ from: f.path, ref, resolved: relative(ROOT, resolved) });
+      // A ref may be repo-root-relative (e.g. `packages/ui/src/App.tsx`) or
+      // relative to the rule file that mentions it (e.g. `src/main/` inside
+      // packages/<pkg>/AGENTS.md). Resolving only against the rule file's own
+      // directory reported every root-relative ref as broken, which buried the
+      // genuinely broken ones. Try both, and only report when neither exists.
+      const fromRoot = resolve(ROOT, ref);
+      const fromFile = resolve(baseDir, ref);
+      if (!existsSync(fromRoot) && !existsSync(fromFile)) {
+        broken.push({ from: f.path, ref, resolved: relative(ROOT, fromRoot) });
       }
     }
   }
