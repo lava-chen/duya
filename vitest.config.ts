@@ -15,9 +15,18 @@ const WORKSPACE_SOURCE_ALIASES = ['host', 'data', 'capabilities', 'agent-runtime
     const target = typeof value === 'string' ? value : value.types ?? value.import ?? value.default
     if (!target) throw new Error(`Missing source export target: ${manifest.name}${key}`)
     const specifier = manifest.name + (key === '.' ? '' : key.slice(1))
-    const pattern = specifier.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('(.*)')
+    const escape = (part: string): string => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const [head, ...rest] = specifier.split('*')
+    const tail = rest.join('*')
+    // A wildcard subpath may be spelled with the extension the source file
+    // uses (`.../foo.js`). Capturing the extension separately keeps the
+    // template's own suffix from doubling it into `foo.js.ts`, which does
+    // not exist — so both spellings resolve to the same file.
+    const pattern = specifier.includes('*')
+      ? `^${escape(head)}(.*?)(\\.[jt]s)?${escape(tail)}$`
+      : `^${escape(specifier)}$`
     const source = target.replace(/^\.\/dist\//, './src/').replace(/\.d\.ts$/, '.ts').replace(/\.js$/, '.ts')
-    return { find: new RegExp(`^${pattern}$`), replacement: fileURLToPath(new URL(source.replace('*', '$1'), directory)) }
+    return { find: new RegExp(pattern), replacement: fileURLToPath(new URL(source.replace('*', '$1'), directory)) }
   })
 })
 

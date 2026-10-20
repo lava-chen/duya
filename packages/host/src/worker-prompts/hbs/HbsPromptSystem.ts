@@ -9,7 +9,7 @@
  *
  * Behaviour contract:
  *
- *   - The renderer is bound to `<packages/agent/src/prompts/assets>` so
+ *   - The renderer is bound to `<packages/host/src/worker-prompts/assets>` so
  *     templates can be referenced by short relative paths (e.g.
  *     `modules/identity.hbs`).
  *   - Assembly of the static half (profile gating, prompt-cache keying,
@@ -49,7 +49,7 @@ import { HbsPromptRenderer } from './HandlebarsRenderer.js';
  *     `resources/agent-bundle/`); `scripts/build-agent-bundle.mjs` copies
  *     the tree there.
  */
-function resolveAssetsRoot(): string {
+export function resolvePromptAssetsRoot(): string {
   const here = dirname(fileURLToPath(import.meta.url));
   const candidates: [string, string] = [resolve(here, '../assets'), resolve(here, 'assets')];
   for (const candidate of candidates) {
@@ -61,7 +61,7 @@ function resolveAssetsRoot(): string {
   return candidates[0];
 }
 
-const ASSETS_ROOT = resolveAssetsRoot();
+const ASSETS_ROOT = resolvePromptAssetsRoot();
 
 /**
  * Build the structured vars the `dynamic/skills-metadata.hbs` template
@@ -273,7 +273,7 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
 }
 
 export interface HbsPromptSystemOptions {
-  /** Override the assets root. Default: `<packages/agent/src/prompts/assets>`. */
+  /** Override the assets root. Default: `<packages/host/src/worker-prompts/assets>`. */
   assetsRoot?: string;
 }
 

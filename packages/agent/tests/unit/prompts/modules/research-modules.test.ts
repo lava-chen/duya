@@ -8,14 +8,13 @@
  * paragraph.
  */
 
-import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { HbsPromptSystem } from '../../../../src/prompts/hbs/HbsPromptSystem.js';
+import { HbsPromptSystem, resolvePromptAssetsRoot } from '../../../../src/prompts/hbs/HbsPromptSystem.js';
 import type { PromptContext } from '../../../../src/prompts/types.js';
 
-const ASSETS_ROOT = resolve(__dirname, '../../../../src/prompts/assets');
+const ASSETS_ROOT = resolvePromptAssetsRoot();
 
 function context(language?: string): PromptContext {
   return {

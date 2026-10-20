@@ -6,11 +6,10 @@
  * scenario asserts the paragraphs that must (not) appear. Byte-level
  * parity against the legacy TS function was locked before the sweep.
  */
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { HbsPromptSystem } from '../../../../src/prompts/hbs/HbsPromptSystem.js';
+import { HbsPromptSystem, resolvePromptAssetsRoot } from '../../../../src/prompts/hbs/HbsPromptSystem.js';
 
-const ASSETS_ROOT = resolve(__dirname, '../../../../src/prompts/assets');
+const ASSETS_ROOT = resolvePromptAssetsRoot();
 
 function ctxWith(overrides: any = {}) {
   return {

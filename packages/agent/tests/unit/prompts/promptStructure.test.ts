@@ -1,15 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { resolve } from 'node:path'
 import type { AgentsFileInfo } from '../../../src/agentsmd/types.js'
 import { getAgentsMdManager } from '../../../src/agentsmd/index.js'
 import type { PromptSkill } from '../../../src/skills/types.js'
 import { getSkillRegistry, resetSkillRegistry } from '../../../src/skills/registry.js'
 import { PromptsRegistry } from '../../../src/prompts/registry.js'
-import { HbsPromptSystem } from '../../../src/prompts/hbs/HbsPromptSystem.js'
+import { HbsPromptSystem, resolvePromptAssetsRoot } from '../../../src/prompts/hbs/HbsPromptSystem.js'
 import type { PromptContext } from '../../../src/prompts/types.js'
 
 const hbs = new HbsPromptSystem({
-  assetsRoot: resolve(__dirname, '../../../src/prompts/assets'),
+  assetsRoot: resolvePromptAssetsRoot(),
 })
 // Project-instructions index and the code system section render through
 // their modules (Plan 551); the AgentsMd manager spy below still drives

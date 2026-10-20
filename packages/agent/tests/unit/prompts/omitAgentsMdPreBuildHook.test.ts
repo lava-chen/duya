@@ -14,7 +14,9 @@ const initSpy = vi.hoisted(() => ({
   fn: vi.fn(async () => false),
 }));
 
-vi.mock('../../../src/prompts/dynamic/agentsMdSection.js', () => ({
+// The configs live in @duya/host and import the AGENTS.md hook by RELATIVE
+// path; mocking the agent-side shim would not intercept that import.
+vi.mock('@duya/host/worker-prompts/dynamic/agentsMdSection.js', () => ({
   initializeAgentsMd: initSpy.fn,
 }));
 

@@ -7,11 +7,10 @@
  * the gateway composite (continuity + '\n\n' + index).
  */
 
-import { resolve } from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { HbsPromptSystem } from '../../../../src/prompts/hbs/HbsPromptSystem.js';
+import { HbsPromptSystem, resolvePromptAssetsRoot } from '../../../../src/prompts/hbs/HbsPromptSystem.js';
 import type { PromptContext } from '../../../../src/prompts/types.js';
 
 const mocks = vi.hoisted(() => ({
@@ -22,7 +21,7 @@ vi.mock('../../../../src/agentsmd/index.js', () => ({
   getAgentsMdManager: mocks.getAgentsMdManager,
 }));
 
-const ASSETS_ROOT = resolve(__dirname, '../../../../src/prompts/assets');
+const ASSETS_ROOT = resolvePromptAssetsRoot();
 
 function baseContext(): PromptContext {
   return {

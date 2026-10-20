@@ -9,11 +9,10 @@
  * amortises across renders.
  */
 
-import { resolve } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { HbsPromptSystem } from '../../../../src/prompts/hbs/HbsPromptSystem.js';
+import { HbsPromptSystem, resolvePromptAssetsRoot } from '../../../../src/prompts/hbs/HbsPromptSystem.js';
 import { PromptSystem } from '../../../../src/prompts/PromptSystem.js';
 import { generalConfig } from '../../../../src/prompts/configs/general.js';
 import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from '../../../../src/prompts/types.js';
@@ -22,7 +21,7 @@ import { getSkillRegistry, resetSkillRegistry } from '../../../../src/skills/reg
 import type { PromptSkill } from '../../../../src/skills/types.js';
 import { PRESET_AGENT_PROFILES } from '../../../../src/agent-profile/types.js';
 
-const ASSETS_ROOT = resolve(__dirname, '../../../../src/prompts/assets');
+const ASSETS_ROOT = resolvePromptAssetsRoot();
 
 function context(overrides: Partial<PromptContext> = {}): PromptContext {
   return {
