@@ -74,19 +74,28 @@ function optionsWithAttachmentRefs(
   if (files === undefined) return { ...options };
   const rest: Record<string, unknown> = { ...options };
   delete rest['files'];
-  rest['attachmentRefs'] = attachmentRefs(files);
+  rest['attachmentRefs'] = attachmentDescriptor(files);
   return rest;
 }
 
 /**
- * `{ count, ids }` for an attachment list, and `{ count: 0 }` for anything that
- * is not one.
+ * The attachment DESCRIPTOR: how many, and which ids.
  *
- * An id that is absent becomes `null` rather than being dropped, so the array's
- * LENGTH is preserved. Dropping it would make a one-attachment turn and a
- * two-attachment turn with no ids hash identically.
+ * This is the identity an attachment list has, and it is the only part of an
+ * attachment that decides anything about the turn. The payloads — base64
+ * image chunks, extracted document text — are not identity: two turns with
+ * the same five attachments hash the same, and two turns with different
+ * files do not.
+ *
+ * It is exported because a run's input snapshot has to name the same
+ * attachments the digest named, and two derivations of one identity is how a
+ * record and a digest end up disagreeing about the same turn.
+ *
+ * An id that is absent becomes `null` rather than being dropped, so the
+ * array's LENGTH is preserved. Dropping it would make a one-attachment turn
+ * and a two-attachment turn with no ids hash identically.
  */
-function attachmentRefs(files: unknown): JsonObject {
+export function attachmentDescriptor(files: unknown): JsonObject {
   if (!Array.isArray(files)) return { count: 0 };
   return {
     count: files.length,
@@ -96,6 +105,16 @@ function attachmentRefs(files: unknown): JsonObject {
       return typeof id === 'string' ? id : null;
     }),
   };
+}
+
+/**
+ * The digest of an attachment list's descriptor.
+ *
+ * The same value `runInputRevision` folds into the turn's digest, derived
+ * once.
+ */
+export function attachmentDigest(files: unknown): string {
+  return sha256Hex(canonicalJson(attachmentDescriptor(files)));
 }
 
 /**

@@ -1,6 +1,7 @@
 import type { RunEventEnvelope } from './envelope.js';
 import type { RunManifest } from './manifest.js';
-import type { RunId, SessionId } from './primitives.js';
+import type { FileAttachment } from './file-attachment.js';
+import type { PermissionPolicyMode, PermissionRulesWire, RunId, SessionId } from './primitives.js';
 import type { RunMetrics, RunTerminalState } from './run.js';
 
 export type AgentRunOrigin = 'user' | 'agent' | 'background';
@@ -164,6 +165,16 @@ export interface HostRunApiV1 {
 export interface StartAgentRunInput {
   readonly sessionId: SessionId;
   readonly prompt: string;
+  /**
+   * The turn's free-form options.
+   *
+   * A BAG, not a contract: it carries whatever the worker needs that the
+   * protocol has no field for (attachments, the display text, the mention
+   * lists). It is deliberately not the place a caller states what the Host
+   * must decide — the fields below are. A bag that could name the permission
+   * mode would be a second authority for it, and the Host's own resolution
+   * would be the one that got overridden.
+   */
   readonly options?: Readonly<Record<string, unknown>>;
   /** Optional turn overrides; the Host falls back to the persisted session row. */
   readonly model?: string;
@@ -182,12 +193,68 @@ export interface StartAgentRunInput {
   readonly origin?: AgentRunOrigin;
   /** Caller correlation id; the Host still mints the canonical run id. */
   readonly traceId?: string;
+  /**
+   * The permission mode the CALLER asks this turn to run under.
+   *
+   * A request, not an authorisation. The Host validates it, holds a delegated
+   * run to its parent's mode, and records what it resolved on the manifest —
+   * the manifest is the run's authoritative record of how it was configured.
+   * Omitted means "the Host's own default for this session".
+   */
+  readonly permissionMode?: PermissionPolicyMode;
+  /**
+   * The agent profile this turn runs under, overriding the session's.
+   *
+   * `null` means "no profile". A profile names a toolset, so it is a
+   * configuration value and not a per-turn option.
+   */
+  readonly agentProfileId?: string | null;
+  /**
+   * The files the user attached to this turn.
+   *
+   * The EXISTING attachment shape and the EXISTING carrier: the worker reads
+   * them from the turn's `files` option and commits them onto the user
+   * message, and the turn's digest names them by their ids rather than by
+   * their payloads. Nothing here opens a second path to a file — the Host
+   * forwards the references the client already holds.
+   */
+  readonly attachments?: readonly FileAttachment[];
+  /**
+   * The modes this turn declares it runs under.
+   *
+   * A declaration, not an instruction: the manifest records what the turn
+   * asked for, and the worker resolves the modes it actually has.
+   */
+  readonly modes?: readonly string[];
+  /**
+   * The tools this turn declares it uses.
+   *
+   * The same kind of declaration as {@link modes}: a snapshot of what the
+   * turn believes it can reach, recorded on the manifest.
+   */
+  readonly tools?: readonly string[];
+  /**
+   * The permission rules for this turn, in WIRE form.
+   *
+   * The protocol's own shape — a flat record of source to tool names — so a
+   * rule table can cross the boundary without a conversion nobody can read.
+   */
+  readonly permissionRules?: PermissionRulesWire;
 }
 
+/**
+ * The stages a start can end at.
+ *
+ * `refused_invalid_input` is its own stage because "the request named
+ * something the Host will not run" and "the Host tried and could not run it"
+ * are different facts, and a caller that cannot tell them apart retries a
+ * request that will never succeed.
+ */
 export type StartAgentRunStage =
   | 'created'
   | 'dispatched'
   | 'refused_no_session'
+  | 'refused_invalid_input'
   | 'refused_run_open_failed'
   | 'refused_dispatch_failed';
 

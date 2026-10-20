@@ -46,6 +46,7 @@ import type {
   PluginAppMcpDescriptor,
   PluginAppInvocationResult,
 } from '@duya/agent-protocol';
+import { isPermissionPolicyMode, lessPermissivePermissionMode, type PermissionPolicyMode } from '@duya/agent-protocol';
 import { randomUUID } from 'node:crypto';
 import type { RunRepository } from './repository-port.js';
 import { RunEventConflictError, RunEpochFencedError } from '@duya/data/run-store';
@@ -60,6 +61,7 @@ import {
   type RunTurnIntent,
 } from './run-orchestrator.js';
 import { WorkerManager } from './worker-manager.js';
+import { resolveTurnOverrides } from './run-turn-overrides.js';
 import { SessionState, WorkerSessionRegistry } from './worker-session-registry.js';
 import { normalizeWorkerEvent } from './worker-frames.js';
 import { WorkerPermissionRequests } from './worker-permission-requests.js';
@@ -88,6 +90,35 @@ export interface HostTurnDefaults {
   readonly providerId?: string;
   readonly apiFormat?: 'anthropic' | 'openai';
   readonly agentProfileId?: string | null;
+  /**
+   * The session's standing permission mode, already in the protocol's space.
+   *
+   * It is the mode a turn runs under when the turn asks for none. The
+   * translation from the session row's own vocabulary happens where that row
+   * is read, using the repository's own bridge — a second translation here
+   * would be a second answer to the same question.
+   */
+  readonly permissionMode?: PermissionPolicyMode;
+  /**
+   * The ceiling a CHILD session may not exceed.
+   *
+   * A spawned session inherits its parent's permission mode, and that
+   * inherited mode is the limit: a turn in the child may ask for a NARROWER
+   * mode than the child runs under, and never a wider one. Without this the
+   * inheritance would be advisory — the first turn in the child could ask
+   * for `bypassPermissions` and the parent's policy would be a suggestion.
+   */
+  readonly parentPermissionMode?: PermissionPolicyMode;
+  /**
+   * The host's standing permission switch.
+   *
+   * The HOST's value, not a caller's: there is no request field for it and
+   * the turn's option bag may not carry one. A caller that wants the switch
+   * moved has to move the Host's configuration — a request that could set it
+   * would make the switch a thing the caller decides, which is the opposite
+   * of what a standing switch is.
+   */
+  readonly hostSwitch?: 'ask' | 'always' | 'never';
 }
 
 /**
@@ -324,6 +355,7 @@ export class HostRunExecutionController {
     }
 
     let inheritedMaxTurns: number | undefined;
+    let parentPermissionMode: PermissionPolicyMode | undefined;
     if (caller) {
       const row = this.#options.runs.getRun(caller.runId);
       const manifest: unknown = row ? JSON.parse(row.manifest_json) : null;
@@ -331,12 +363,63 @@ export class HostRunExecutionController {
           manifest.budget && typeof manifest.budget === 'object' && 'maxTurns' in manifest.budget &&
           typeof manifest.budget.maxTurns === 'number' && Number.isFinite(manifest.budget.maxTurns) &&
           manifest.budget.maxTurns > 0) inheritedMaxTurns = manifest.budget.maxTurns;
+      // The parent's RECORDED policy is the ceiling for a delegated turn. Read
+      // it from the manifest rather than from the parent run's live state: the
+      // manifest is the frozen fact the parent actually ran under, and it is
+      // the same value a reader of the run row will see.
+      if (manifest && typeof manifest === 'object' && 'permissionPolicy' in manifest &&
+          manifest.permissionPolicy && typeof manifest.permissionPolicy === 'object' &&
+          'mode' in manifest.permissionPolicy &&
+          isPermissionPolicyMode(manifest.permissionPolicy.mode)) {
+        parentPermissionMode = manifest.permissionPolicy.mode;
+      }
     }
     const requested = input.options?.maxTurns;
     const requestedMaxTurns = typeof requested === 'number' && Number.isFinite(requested) && requested > 0
       ? requested : undefined;
     const effectiveMaxTurns = inheritedMaxTurns === undefined ? requestedMaxTurns
       : Math.min(inheritedMaxTurns, requestedMaxTurns ?? inheritedMaxTurns);
+
+    // The Host resolves the turn's configuration before anything runs. An
+    // invalid value refuses the turn rather than starting it under a mode
+    // the caller did not ask for, and a turn is held to every ceiling that
+    // applies to it: the run that delegated it, and the session it was
+    // spawned into.
+    const ceiling = narrowestMode(
+      parentPermissionMode,
+      defaults.parentPermissionMode,
+    );
+    const overrides = resolveTurnOverrides({
+      request: {
+        permissionMode: input.permissionMode,
+        agentProfileId: input.agentProfileId,
+        effort: input.effort,
+        attachments: input.attachments,
+        modes: input.modes,
+        tools: input.tools,
+        permissionRules: input.permissionRules,
+      },
+      standing: {
+        ...(defaults.permissionMode === undefined ? {} : { permissionMode: defaults.permissionMode }),
+        ...(defaults.agentProfileId === undefined ? {} : { agentProfileId: defaults.agentProfileId }),
+      },
+      ...(ceiling === undefined ? {} : { parent: { permissionMode: ceiling } }),
+      options: input.options ?? {},
+    });
+    if (!overrides.ok) {
+      return {
+        accepted: false,
+        stage: 'refused_invalid_input',
+        reason: `${overrides.field} ${overrides.reason}`,
+      };
+    }
+    if (overrides.strippedOptionKeys.length > 0) {
+      this.#options.logger.warn('the turn options named fields the Host decides; the Host values were used', {
+        sessionId,
+        stripped: overrides.strippedOptionKeys,
+      });
+    }
+
     const intent: RunTurnIntent = {
       ...(caller === undefined ? {} : { parentRunId: caller.runId }),
       ...(effectiveMaxTurns === undefined ? {} : { maxTurns: effectiveMaxTurns }),
@@ -360,13 +443,29 @@ export class HostRunExecutionController {
           : {}),
       // Effort has no persisted default: a session row does not carry one, so
       // an omitted override means the worker decides for this model.
-      ...(input.effort === undefined ? {} : { effort: input.effort }),
-      ...(defaults.agentProfileId !== undefined && defaults.agentProfileId !== null
-        ? { agentProfileId: defaults.agentProfileId }
-        : {}),
+      ...(overrides.effort === undefined ? {} : { effort: overrides.effort }),
+      // The mode the run is RECORDED under. It is the Host's resolution, not
+      // the caller's request: a delegated turn was already held to its
+      // parent's policy above.
+      ...(overrides.permissionMode === undefined ? {} : { permissionMode: overrides.permissionMode }),
+      // A per-turn profile wins over the session's, and `null` means "no
+      // profile" rather than "unset".
+      ...(overrides.agentProfileId === undefined ? {} : { agentProfileId: overrides.agentProfileId }),
+      // What the turn DECLARES it runs under. The manifest records the
+      // declaration; the worker resolves what it actually has.
+      ...(overrides.modes === undefined ? {} : { modes: overrides.modes }),
+      ...(overrides.tools === undefined ? {} : { tools: overrides.tools }),
+      ...(overrides.permissionRules === undefined
+        ? {}
+        : { permissionRules: overrides.permissionRules }),
+      // The host's standing switch is the HOST's value, not the caller's:
+      // there is no request field for it, and the bag may not carry one.
+      ...(defaults.hostSwitch === undefined ? {} : { hostSwitch: defaults.hostSwitch }),
       ...(input.traceId === undefined ? {} : { traceId: input.traceId }),
       prompt: input.prompt,
-      options: input.options ?? {},
+      // The bag the Host hands on: the adjudicated keys are gone, and the
+      // resolved values are in them.
+      options: overrides.options,
     };
 
     if (caller) this.#delegationBySession.set(sessionId, caller);
@@ -797,4 +896,23 @@ function adaptOrchestratorLogger(logger: UpstreamLogger): RunOrchestratorLogger 
     warn: (message, data) => logger.warn(message, data),
     error: (message, error, data) => logger.error(message, error, data),
   };
+}
+
+/**
+ * The tightest of the ceilings that apply to one turn.
+ *
+ * A turn can be bound by two different parents — the run that delegated it
+ * and the session it was spawned into — and the tightest of the two is the
+ * one it has to respect. Taking the loosest would let a turn escape the
+ * tighter of the two by picking the other.
+ */
+function narrowestMode(
+  ...modes: readonly (PermissionPolicyMode | undefined)[]
+): PermissionPolicyMode | undefined {
+  let narrowest: PermissionPolicyMode | undefined;
+  for (const mode of modes) {
+    if (mode === undefined) continue;
+    narrowest = narrowest === undefined ? mode : lessPermissivePermissionMode(mode, narrowest);
+  }
+  return narrowest;
 }
