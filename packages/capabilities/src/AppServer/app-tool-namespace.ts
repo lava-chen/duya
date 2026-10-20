@@ -139,3 +139,21 @@ export function resolveAppToolBaseName(modelVisibleName: string): string | undef
 export function isAppToolName(modelVisibleName: string): boolean {
   return resolveAppToolBaseName(modelVisibleName) !== undefined;
 }
+
+/**
+ * The name every product rule is written against.
+ *
+ * The `duya_app` server's tools reach the model under a namespaced name
+ * (`mcp_duya_app_canvas_manage`), while the rules that refer to them — the
+ * canvas permission short-circuit, the always-allowed set, the agent
+ * profiles' `canvas:*` patterns — are written against the ORIGINAL name
+ * (`canvas_manage`).
+ *
+ * Resolving once, here, is what stops the namespace from becoming a way
+ * around those rules: a rule that says "deny the canvas tools" has to deny
+ * them under whichever name they arrive. A tool that is not one of ours
+ * resolves to itself, so every caller can use this unconditionally.
+ */
+export function appToolOriginalName(modelVisibleName: string): string {
+  return resolveAppToolBaseName(modelVisibleName) ?? modelVisibleName;
+}

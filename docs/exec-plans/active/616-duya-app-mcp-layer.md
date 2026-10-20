@@ -264,7 +264,7 @@ if (source) {
 | **T610c** | canvas 16 工具迁入 `duya_app`（从 conductor mode 注入改为 MCP 工具），**保留 canvas 专属渲染** | `packages/capabilities/src/canvas/**`、`packages/host/src/worker-modes/modifiers/conductor-mode.ts`、`apps/desktop/src/renderer/components/chat/tools/**` | renderer：旧名 `canvas_manage` 走 CanvasConductorToolRow、新名 `mcp_duya_app_canvas_manage` 也走同一行；今天只有旧名路径 |
 | **T610d** | bot 8 工具 + browser 迁入 `duya_app` | `packages/host/src/worker-tool-bindings/**`、`packages/host/src/worker-tools/**`、`packages/capabilities/src/BrowserTool/**` | registry 快照断言：bot/browser 工具的 owner 是 `mcp` 且内部键前缀是 `mcp__duya_app__` |
 | **T610d2** | §3.1 的其余 17 个产品能力迁入 `duya_app`（computer_use/cua、vision、image_generate、widget、module、duya_cli、session、MessageSession、SessionSearch、Brief、memory_write、write_stage1_policy、plan、update_state、send_artifact） | 同 T610d | 同 T610d；断言「基础工具清单之外的注册工具全部落在 `mcp__duya_app__` 前缀下」 |
-| **T610e** | 权限 / profile 规则改用**反解后的原名**匹配（C2–C5 收口）+ 新增 `source: 'app'` 分支（C9） | `packages/agent-runtime/src/authorization/**`、`packages/capabilities/src/permissions/**`、`packages/host/src/worker-profiles/types.ts` | profile 规则 `'canvas:*'` 在新名下仍能 deny；`isCanvasTool` 对新名仍返回 true；`source: 'app'` 不短路灾难检查 |
+| **T610e** | 权限 / profile 规则改用**反解后的原名**匹配（C2–C5 收口）+ 新增 `source: 'app'` 分支（C9）。**权限层那半已交付**（§4.4：`isCanvasTool` / always-allowed / 精确规则 / profile pattern 都按原名匹配）；剩 `source: 'app'` 与 renderer 那半 | `packages/agent-runtime/src/authorization/**`、`packages/capabilities/src/permissions/**`、`packages/host/src/worker-profiles/types.ts` | profile 规则 `'canvas:*'` 在新名下仍能 deny；`isCanvasTool` 对新名仍返回 true；`source: 'app'` 不短路灾难检查 |
 
 **C2–C5 必须落在 T610c/e，不能拖到最后**——否则 T610c 一改名，renderer 和权限立刻回归，
 中间态比改造前更糟。
@@ -330,6 +330,41 @@ base name 不在封闭清单里）→ 清单内 42 个名字逐个可反解 → 
 
 **未做**（留给后续卡，按设计如此）：本卡只交付**判定的共享面**。谁调用它——renderer 路由
 （T610c）、profile 规则与权限短路（T610e）——留给那些卡。
+
+### 4.4 权限层按原名匹配（2026-10-20，C3–C5 的前半）
+
+`resolveAppToolBaseName` 的第一个消费者：**权限层与 profile 规则**改成按**原名**匹配，
+而不是按模型可见名。
+
+| 文件 | 改动 |
+|---|---|
+| `packages/capabilities/src/AppServer/app-tool-namespace.ts` | 加 `appToolOriginalName(name)`：是 app 工具就返回原名，不是就返回自己。调用方可以无条件用它 |
+| `packages/agent-runtime/src/authorization/permissions/permissions.ts` | `isCanvasTool` 先反解（canvas 的无条件 allow 才不失效）；`GLOBAL_ALWAYS_ALLOWED_TOOLS` 先反解；`toolMatchesRule` 按原名比对精确规则 |
+| `packages/agent-runtime/src/authorization/tool-filter.ts` | `anyPatternMatches` 先按可见名、再按原名匹配通配 pattern；deferred 工具的「精确名提升」与 allowlist 门也认原名 |
+
+**为什么这一步不能等**：命名空间如果只在渲染层被认出来、权限层不认，那它就不是命名，
+是**绕过**——一条写给 `canvas_manage` 的 deny 规则会在工具搬到 `mcp_duya_app_` 后面
+的那一刻失效。所以反解必须先于任何工具迁移落地。
+
+**C14 — profile 里写的 `'canvas:*'` 今天就是个 no-op。**
+`matchToolPattern` 的 `:*` 分支取前缀 `canvas:`，而画布工具的真名是 `canvas_manage`
+（下划线）。`'canvas:*'` 既不匹配旧名也不匹配新名——**今天如此，改名之后也如此**。
+这不是本次改动引入的，但它意味着 plan §C3 举的那个例子并不成立；真正生效的是
+`'canvas_*'` 这类 pattern，以及按原名写的精确规则。**记在这里，是为了让 T610e 改
+profile 规则时不要以为 `'canvas:*'` 今天在生效。**
+
+**C15 — `'SendMessage'` 与 wire name `'send_message'` 大小写不一致，这条放行今天就失效。**
+`GLOBAL_ALWAYS_ALLOWED_TOOLS` 写的是 `'SendMessage'`，实际注册名是 `send_message`
+（`SEND_MESSAGE_TOOL_NAME`），`LEGACY_TOOL_NAME_ALIASES` 也没有这一条映射。
+本次改动**不动它**：反解只让「原名在集合里」的工具继续放行，`'SendMessage'` 与
+`'send_message'` 大小写不同这件事和命名空间无关，是既有的独立缺陷。修它等于给一个
+能对外发消息的工具开 unconditional allow，属于要单独裁定的权限变更，不该顺手带上。
+
+**测试**（`packages/agent-runtime/test/authorization/app-tool-rule-resolution.test.ts`，
+11 用例）：画布短路在命名空间名下仍然 allow / always-allowed 集合仍然 allow / 精确 deny
+规则按原名仍然 deny / 画布短路仍然**先于**用户规则（既有次序没被挪动）/ profile 的
+`canvas_manage` 与 `canvas_*` 通配对新名生效 / deferred 工具按原名提升 / 调用方 denylist
+按原名生效 / 非 app 工具不受影响。
 
 ## 5. 验收证据（必须是正面的）
 
