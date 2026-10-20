@@ -224,6 +224,16 @@ export class OwnKeyParser {
       return;
     }
 
+    // Kitty keyboard protocol. Parsed unconditionally: a terminal only sends
+    // these when it was asked to (`terminal/ansi.ts` `pushKittyKeyboardFlags`),
+    // so recognising them costs nothing and drops nothing when the protocol is
+    // off. Before this branch existed they fell through every table and were
+    // silently discarded.
+    if (final === 'u') {
+      this.parseKitty(body);
+      return;
+    }
+
     const parameters = body.split(';');
     const hasNumericModifiers = parameters.length === 2
       && parameters.every((parameter) => parameter.length > 0 && Number.isInteger(Number(parameter)));
@@ -276,6 +286,88 @@ export class OwnKeyParser {
     }
   }
 
+  /**
+   * Kitty keyboard protocol: `CSI key[:shifted[:base]] ; mods[:event] ; text u`.
+   *
+   * `key` is the Unicode code point of the key ("report all keys as escape
+   * codes") or one of the functional codes below. `mods` is a bitmask plus one;
+   * bit 6 (`32`) is the protocol's "meta" alias for alt, which some terminals
+   * send instead of bit 2. `event` 3 is a key RELEASE — only delivered when
+   * release reporting was requested, which this app never asks for, so it is
+   * dropped rather than guessed at.
+   *
+   * The mapping to the app's names is deliberately the conservative one: only
+   * the keys the key table actually binds get a name. Everything else goes
+   * through `emitCharacter`, which is the same path a legacy printable byte
+   * takes, so a protocol this app did not ask for cannot invent behaviour.
+   */
+  private parseKitty(body: string): void {
+    const parts = body.split(';');
+    const codeText = (parts[0] ?? '').split(':')[0] ?? '';
+    const modText = parts[1] ?? '1';
+    const textPart = parts[2];
+    if (!/^\d+$/u.test(codeText)) return;
+
+    const code = Number.parseInt(codeText, 10);
+    const modifierParts = modText.split(':');
+    const modifierText = modifierParts[0] ?? '1';
+    const eventType = Number.parseInt(modifierParts[1] ?? '1', 10);
+    if (!/^\d+$/u.test(modifierText)) return;
+    if (eventType === 3) return;
+
+    const modifier = Number.parseInt(modifierText, 10) - 1;
+    const flags = {
+      shift: (modifier & 1) !== 0,
+      meta: (modifier & 2) !== 0 || (modifier & 32) !== 0,
+      ctrl: (modifier & 4) !== 0,
+    };
+    const sequence = `\x1b[${body}u`;
+
+    // Functional keys. Enter maps to `return`, the same name the legacy `\r`
+    // path produces, because that is the name the key table binds — a kitty
+    // terminal must not deliver a key the app cannot reach.
+    const functional: Readonly<Record<number, readonly [string, string]>> = {
+      27: ['escape', sequence],
+      13: ['return', '\r'],
+      9: ['tab', '\t'],
+      127: ['backspace', sequence],
+      8: ['backspace', sequence],
+    };
+    const mapped = functional[code];
+    if (mapped !== undefined) {
+      this.emitKey(mapped[0], mapped[1], flags, sequence);
+      return;
+    }
+
+    // The kitty functional range (57344+) and control codes have no printable
+    // meaning here; a surrogate is not a code point at all.
+    if (code < 0x20 || (code >= 0xd800 && code <= 0xdfff) || code >= 57344) return;
+
+    // The protocol can carry the produced text explicitly; prefer it, because
+    // it is what the terminal decided the key types, not what we infer.
+    let text = '';
+    if (textPart !== undefined && textPart !== '') {
+      const points = textPart.split(':').map((part) => Number.parseInt(part, 10));
+      if (points.every((point) => Number.isInteger(point) && point > 0)) {
+        text = String.fromCodePoint(...points);
+      }
+    }
+    if (text === '') text = String.fromCodePoint(code);
+
+    if (flags.ctrl) {
+      const lower = text.toLowerCase();
+      if (/^[a-z]$/u.test(lower)) {
+        // The control byte is what the legacy encoding would have delivered,
+        // and the editor/handler chain expects it for the `ch` guard.
+        this.emitKey(lower, sequence, flags, undefined, String.fromCharCode(lower.charCodeAt(0) - 0x60));
+        return;
+      }
+      this.emitKey(text, sequence, flags);
+      return;
+    }
+    this.emitCharacter(text, sequence, flags);
+  }
+
   private parseSs3(sequence: Buffer): void {
     const body = sequence.subarray(2, sequence.length - 1).toString('ascii');
     const final = String.fromCharCode(sequence[sequence.length - 1] as number);
@@ -318,7 +410,10 @@ export class OwnKeyParser {
         return;
       }
       if (character === ' ') {
-        this.emitKey('space', sequence, { ...flags }, undefined);
+        // ch rides along like blessed's parser does: the editor inserts `ch`,
+        // and a space with no `ch` would be silently dropped (plan 615
+        // Phase 0: this ate every space once `own` became the default).
+        this.emitKey('space', sequence, { ...flags }, undefined, ' ');
       } else if (/^[A-Za-z]$/.test(character)) {
         this.emitKey(character.toLowerCase(), sequence, {
           ...flags,
@@ -339,7 +434,7 @@ export class OwnKeyParser {
     if (character === '\n') return this.emitKey('enter', sequence, flags);
     if (character === '\t') return this.emitKey('tab', sequence, flags);
     if (character === '\b' || codePoint === 0x7f) return this.emitKey('backspace', sequence, flags);
-    if (character === ' ') return this.emitKey('space', sequence, flags);
+    if (character === ' ') return this.emitKey('space', sequence, flags, undefined, ' ');
     if (codePoint > 0 && codePoint <= 0x1a) {
       return this.emitKey(String.fromCharCode(codePoint + 0x60), sequence, { ...flags, ctrl: true }, undefined, character);
     }

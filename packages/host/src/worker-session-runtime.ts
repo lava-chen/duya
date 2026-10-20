@@ -9,6 +9,9 @@ import { parseMailboxAttachments } from '@duya/host/worker-context/attachment-im
 import { isModelLikelyMultimodal } from '@duya/capabilities/utils/multimodal-detection';
 import { resolveTurnRunId } from '@duya/agent-runtime/turns/run-identity';
 import { DEFAULT_MAX_OUTPUT_TOKENS, } from '@duya/host/worker-run-contracts';
+import type { PluginAppInvocationResult, PluginAppMcpDescriptor } from '@duya/agent-protocol';
+import { validateCatalogToolArguments } from '@duya/agent-runtime/tools/discovery/dispatcherFromRegistry';
+import type { ToolCatalogEntry } from '@duya/agent-runtime/tools/catalog/catalog-types';
 import type { AgentOptions, AgentRuntimeMode, ChatOptions, FileAttachment, Message, AssistantMessage, MessageContent, ToolUseContent, Tool, ToolUse, SSEEvent, SessionInfo, ToolUseContext, ToolResultContent, AgentProgressEvent, AppState, } from '@duya/host/worker-run-contracts';
 import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName } from '@duya/host/worker-prompts/index';
 import { handleGoalCommand, isGoalControlCommand } from '@duya/host/worker-modes/goal/goal-commands';
@@ -118,6 +121,17 @@ const TOOL_GROUP_PROGRESS_INSTRUCTIONS = [
     'Use the provider structured commentary channel when it is explicitly available; otherwise call the private progress-title tool shown in the available tools with {title}.',
     'Never derive a title from hidden reasoning or ordinary assistant prose. The progress-title call is private and does not perform work.',
 ].join(' ');
+
+/**
+ * A catalog row is an MCP tool when it carries MCP identity. The catalog
+ * source kind records ownership, not transport: a plugin-owned MCP server
+ * reports `plugin`, a bundled one reports `mcp`.
+ */
+function isMcpCatalogEntry(entry: ToolCatalogEntry): boolean {
+    if (!entry.definition.mcpInfo) return false;
+    return entry.source.kind === 'mcp' || entry.source.kind === 'plugin';
+}
+
 export class WorkerSession implements AgentRuntime {
     readTurnSequence(): number {
         return 0;
@@ -218,6 +232,7 @@ export class WorkerSession implements AgentRuntime {
                     }
                     : undefined })
         };
+        this.currentToolUseContext = toolUseContext;
         request.bindToolUseContext(toolUseContext);
         resolved.catalogTool.setContextView(toolUseContext, resolved.catalogView);
         resolved.toolInvokeExecutor.setDispatcherForContext(toolUseContext, request.toolInvokeDispatcher);
@@ -366,6 +381,7 @@ export class WorkerSession implements AgentRuntime {
         const controller = new AbortController();
         this.abortController = controller;
         this.currentTurnId = options?.turnId ?? null;
+        this.currentRunId = options?.runId ?? null;
         this.forkTurn = null;
         this.turnOutputSink = null;
         this._consumeApprovedEffect = options?.consumeApprovedEffect;
@@ -393,6 +409,10 @@ export class WorkerSession implements AgentRuntime {
                 closed = true;
                 if (this.abortController === controller)
                     this.abortController = null;
+                if (this.currentToolUseContext?.abortController === controller)
+                    this.currentToolUseContext = undefined;
+                if (this.currentRunId === (options?.runId ?? null))
+                    this.currentRunId = null;
                 this.currentTurnId = null;
                 this.forkTurn = null;
                 this.turnOutputSink = null;
@@ -810,6 +830,7 @@ export class WorkerSession implements AgentRuntime {
     private syncedMessageIds: Set<string> = new Set();
     private compactionController!: MessageCompactionController;
     private abortController: AbortController | null = null;
+    private currentToolUseContext: ToolUseContext | undefined;
     private sessionInfo: SessionInfo;
     private compactionManager: CompactionManager;
     private apiKey: string;
@@ -1182,6 +1203,7 @@ export class WorkerSession implements AgentRuntime {
     }
     journal: import('@duya/host/worker-journal/Journal').Journal | undefined;
     private currentTurnId: string | null = null;
+    private currentRunId: string | null = null;
     private forkTurn: {
         replyToId: string;
         userId: string;
@@ -2040,6 +2062,80 @@ export class WorkerSession implements AgentRuntime {
             void previousManager.disconnectAll().catch(() => undefined);
         }
         return replaceResult;
+    }
+    describePluginAppMcpTools(runId: string): PluginAppMcpDescriptor[] {
+        if (!this.abortController || this.abortController.signal.aborted || this.currentRunId !== runId) {
+            throw new Error('Plugin App tool catalog requires the active Host run.');
+        }
+        return this.activeMCPRegistry.snapshot(this.providerNameToInternalKey).catalogEntries
+            .filter((entry) => isMcpCatalogEntry(entry))
+            .map((entry) => {
+                const info = entry.definition.mcpInfo!;
+                return {
+                    toolId: entry.toolId,
+                    schemaRevision: entry.schemaRevision,
+                    descriptor: {
+                        source: info.source,
+                        serverName: info.serverName,
+                        toolName: info.toolName,
+                        ...(info.connectionId === undefined ? {} : { connectionId: info.connectionId }),
+                        ...(info.pluginId === undefined ? {} : { pluginId: info.pluginId }),
+                    },
+                };
+            });
+    }
+    async invokePluginAppMcpTool(input: {
+        runId: string;
+        toolId: string;
+        schemaRevision: string;
+        arguments: Record<string, unknown>;
+        isBindingCurrent(): Promise<boolean>;
+    }): Promise<PluginAppInvocationResult> {
+        const fail = (code: string, message: string): PluginAppInvocationResult => ({ ok: false, code, message });
+        const controller = this.abortController;
+        const parentContext = this.currentToolUseContext;
+        if (!controller || controller.signal.aborted || this.currentRunId !== input.runId ||
+            !parentContext || parentContext.abortController !== controller ||
+            !parentContext.requestPermission) {
+            return fail('attempt_fenced', 'Plugin App invocation requires the active run permission context.');
+        }
+        const entry = this.activeMCPRegistry.getCatalogEntryById(input.toolId);
+        if (!entry || !isMcpCatalogEntry(entry)) {
+            return fail('tool_unavailable', 'The requested MCP tool is not in the live worker catalog.');
+        }
+        if (entry.schemaRevision !== input.schemaRevision) {
+            return fail('schema_changed', 'The live MCP tool schema changed after binding.');
+        }
+        const validation = validateCatalogToolArguments(entry, input.arguments);
+        if (validation !== 'valid') {
+            return fail(validation === 'invalid' ? 'invalid_arguments' : 'schema_unavailable',
+                'Tool arguments do not match the live MCP descriptor schema.');
+        }
+        let bindingIsCurrent = false;
+        try { bindingIsCurrent = await input.isBindingCurrent(); } catch { /* Fail closed on a Host check failure. */ }
+        if (!bindingIsCurrent) {
+            return fail('binding_revoked', 'The Plugin App binding is no longer current.');
+        }
+        const executor = entry.executor;
+        if (!executor) return fail('tool_unavailable', 'The live MCP executor is unavailable.');
+        const invocationContext: ToolUseContext = {
+            ...parentContext,
+            toolUseId: crypto.randomUUID(),
+            pluginAppInvocationGuard: input.isBindingCurrent,
+        };
+        try {
+            const result = await executor.execute(input.arguments, this.workingDirectory, invocationContext);
+            if (result.error) {
+                const reason = (result as { metadata?: { reason?: string } }).metadata?.reason;
+                return fail(reason === 'authority_revoked' ? 'binding_revoked' : 'tool_denied', result.result);
+            }
+            return {
+                ok: true,
+                result: { id: result.id, name: result.name, result: result.result },
+            };
+        } catch {
+            return fail('tool_failed', 'The MCP executor failed.');
+        }
     }
     resolveMCPToolNameToInternalKey(name: string): string {
         return this.providerNameToInternalKey.get(name) ?? name;

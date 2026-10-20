@@ -155,6 +155,20 @@ describe('renderInlineTokens', () => {
     const rendered = renderInlineTokens(tokenizeInline('{a} **{b}**'), styles);
     expect(rendered).toBe('{open}a} {bold}{open}b}{/bold}');
   });
+
+  it('maps emphasis/strike to italic/strike for the own renderer (plan 615 Phase 0)', () => {
+    const own = stylesOf({ renderer: 'own' });
+    const rendered = renderInlineTokens(tokenizeInline('*e* ~~s~~'), own);
+    expect(rendered).toBe('{italic}e{/italic} {strike}s{/strike}');
+  });
+
+  it('keeps the blessed folds when the renderer is not the own renderer', () => {
+    // Omitted renderer = the blessed chain: unknown tags would print as
+    // literal text there, so the folds stay.
+    const blessed = stylesOf({ renderer: 'blessed' });
+    const rendered = renderInlineTokens(tokenizeInline('*e* ~~s~~'), blessed);
+    expect(rendered).toBe('{cyan-fg}e{/cyan-fg} {gray-fg}s{/gray-fg}');
+  });
 });
 
 describe('inline render fuzz — pairing, line count, and injection', () => {

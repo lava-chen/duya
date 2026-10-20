@@ -730,11 +730,11 @@ if (gotTheLock) {
           defaultShortcut: shortcut,
           doubleTap: true,
           doubleTapWindowMs: 600,
-          // Dev: vite serves the orb entry at /apps/desktop/src/renderer/orb/ (multi-input
+          // Dev: vite serves the orb entry at /packages/ui/src/orb/ (multi-input
           // keeps the source-relative path). Vite runs on port 3000
           // in this project (see package.json electron:dev).
           orbDevUrl: !app.isPackaged
-            ? (process.env.DUYA_ORB_DEV_URL ?? 'http://localhost:3000/src/orb/')
+            ? (process.env.DUYA_ORB_DEV_URL ?? 'http://localhost:3000/packages/ui/src/orb/')
             : undefined,
           orbResourcesPath: app.isPackaged
             ? path.join(process.resourcesPath, 'orb')

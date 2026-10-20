@@ -189,6 +189,23 @@ the existing Runtime MCP executor with a fresh Host invocation ID/context.
 The guarded invoker rechecks the binding after permission waits. This is an
 additive binding seam: no Desktop iframe or worker RPC invokes it yet.
 
+`@duya/host/local-plugin-app-invocation-api` adds the T31b Host-owned
+command caller. `POST /v1/local/plugin-app-invocations/bind` mints a
+short-lived binding after checking the durable instance, the trusted
+manifest, the live session run, the Host grants, and the canonical
+descriptor-to-capability mapping; the invoke request carries only the
+binding id, nonce, tool id, and arguments, never a run, epoch, grant, or
+connector identity. The Host then drives the worker over its stdin command
+channel (`plugin-app:describe-tools`, `plugin-app:invoke`), and the worker
+answers from the live MCP catalog generation using that generation's
+executor. The Runtime MCP executor gained an optional `beforeInvoke` port,
+so the worker re-queries the Host after the approval wait and directly
+before the connector call: a revoked grant, a flipped mapping, a stale
+epoch, or a revoked instance stops the call with zero side effects. The
+standalone Host has no trusted manifest, grant, or capability resolver
+yet, so bind answers 503 and no authority is inferred. See
+`610-architecture-series/25-wave3-app-invocation.md`.
+
 ## App Connections (Connectors)
 
 Unified AppConnector registry (Plan 455): first-party providers, plugin `.app.json`

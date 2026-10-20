@@ -31,26 +31,43 @@
  *    editor.
  */
 
-// The VALUE import survives only for `blessed.program`, which is the input
-// channel: keypress events still arrive through it, because parsing terminal
-// bytes into events is a separate seam from drawing and Phase 1 only moved the
-// drawing. When input moves too, this import goes with it.
-import blessed from 'blessed';
-import type { BlessedProgram, Widgets } from 'blessed';
-import { PassThrough } from 'node:stream';
-import { createScreenSurface, selectScreenRenderer, type ScreenRenderer, type ScreenSurface } from './screen/index.js';
-import { TranscriptModel, readBlockKey, type LegacyFrame, type Block } from './blocks.js';
+import {
+  cursorTo,
+  disableBracketedPaste,
+  disableMouseReporting,
+  enableBracketedPaste,
+  enableMouseReporting,
+  hideCursor,
+  showCursor,
+} from './terminal/ansi.js';
+import {
+  createScreenSurface,
+  selectScreenRenderer,
+  type RegionMetrics,
+  type ScreenRenderer,
+  type ScreenSurface,
+} from './screen/index.js';
+import { frameRecord, frameString, TranscriptModel, readBlockKey, type LegacyFrame, type Block } from './blocks.js';
+import { ActivityTracker } from './components/activity.js';
+import { TranscriptPane } from './components/transcript-pane.js';
 import { DeltaBuffer, DEFAULT_STALE_MS } from './delta-buffer.js';
 import { RenderScheduler } from './render-scheduler.js';
 import { Pacer } from './pacer.js';
 import { PasteBurstDetector } from './paste-burst.js';
 import { InputEditor } from './editor.js';
 import { OverlayState, isDestructiveRequest, type PermissionDecision, type QuestionAnswers } from './overlay.js';
-import { escapeTags, stylesOf, type RenderOptions } from './transcript-view.js';
+import { DEFAULT_RENDER_OPTIONS, escapeTags, stylesOf, type RenderOptions } from './transcript-view.js';
 import { TranscriptRenderer } from './transcript-cache.js';
 import type { EscapeSafeWriter } from './bounded-writer.js';
 import { TerminalSession } from './terminal/session.js';
-import { OwnKeyInput, OwnKeyParser } from './terminal/own-key-parser.js';
+import {
+  createInputDriver,
+  type InputEvent,
+  type InputMouseEvent,
+  type NormalizedKey,
+  type TerminalInputDriver,
+} from './terminal/input-driver.js';
+import { popKittyKeyboardFlags, pushKittyKeyboardFlags } from './terminal/ansi.js';
 import { buildComposerLayout } from './composer-layout.js';
 import { wrapWithCursor, type WrappedText } from './width.js';
 import { CompletionController, type CompletionKey, type CompletionSources } from './completion.js';
@@ -138,7 +155,6 @@ const EMPTY_COMPLETION_SOURCES: CompletionSources = {
   files: () => [],
 };
 
-type ActivityPhase = 'ready' | 'working' | 'thinking' | 'responding' | 'compacting' | 'complete' | 'failed';
 
 /** A row in a keyboard-driven modal picker. */
 export interface TuiChoice {
@@ -164,49 +180,19 @@ type InteractivePrompt =
 
 const PROMPT_VISIBLE_CHOICES = 9;
 
-function frameRecord(value: unknown): Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-function frameString(record: Record<string, unknown>, key: string): string {
-  return typeof record[key] === 'string' ? record[key] as string : '';
-}
-
-function renderOptionsKey(options: RenderOptions, width: number): string {
-  const ids = (values: ReadonlySet<string> | undefined): string[] =>
-    [...(values ?? [])].sort();
-  return JSON.stringify({
-    width,
-    expanded: options.expanded,
-    showToolResults: options.showToolResults,
-    toolResultLines: options.toolResultLines,
-    expandedBlockIds: ids(options.expandedBlockIds),
-    collapsedBlockIds: ids(options.collapsedBlockIds),
-    showThinking: options.showThinking !== false,
-    selectedBlockId: options.selectedBlockId ?? null,
-    theme: options.theme ?? null,
-  });
-}
-
-/** Where the synchronized-output markers are written. */
 /**
- * What the TUI asked blessed to render with.
+ * What the renderer was built from.
  *
- * Published on the writer before `blessed.program`/`blessed.screen` are called,
- * and the same object is passed to them, so a test can assert the terminal's
- * capabilities actually reached the renderer rather than trusting that a
- * constant stayed correct.
+ * Published on the writer, so a test can assert the terminal's capabilities
+ * actually reached the renderer rather than trusting that a constant stayed
+ * correct. With no library in between, this IS the whole configuration: the
+ * three facts the old `blessed.program`/`blessed.screen` pair carried.
  */
 export interface RenderConfig {
-  readonly program: {
-    readonly terminal: string;
-    readonly colors: number;
-  };
-  readonly screen: {
-    readonly fullUnicode: boolean;
-  };
+  readonly terminal: string;
+  /** 16 for truecolor (blessed's own convention), otherwise an ANSI depth. */
+  readonly colors: number;
+  readonly unicode: boolean;
 }
 
 export interface TUIAppOptions {  /** Window title. */
@@ -388,8 +374,26 @@ export class TUIApp {
   private disposed = false;
   private readonly terminal: TerminalSession;
   private readonly renderer: ScreenRenderer;
-  private readonly ownKeyInput: OwnKeyInput | null;
-  private readonly program: BlessedProgram;
+  /**
+   * Own-renderer input. null on the blessed path, which keeps parsing input
+   * through blessed's own `Program` — the rollback switch has to roll back the
+   * input path too, or "roll back" would mean "run blessed's painter on our
+   * parser", a combination neither side was tested for.
+   */
+  private readonly inputDriver: TerminalInputDriver | null;
+  /**
+   * `key <full>` handlers, keyed by blessed-compatible name.
+   *
+   * A LIST per name, not a single handler, because blessed fires every listener
+   * registered for a name and the app has at least one case where that is
+   * deliberate (the same action reachable from two chords). Collapsing to one
+   * would silently drop a binding.
+   */
+  private readonly keyHandlers = new Map<string, (() => void)[]>();
+  /** The catch-all for keys no binding claimed, mirroring `keypress`. */
+  private keypressHandler: ((ch: string, key: NormalizedKey) => void) | null = null;
+  /** Mouse reports, when the surface wants them. */
+  private mouseHandler: ((event: InputMouseEvent) => void) | null = null;
   private readonly writer: EscapeSafeWriter;
   /** What the terminal can render, measured rather than assumed. */
   private readonly terminalEnv: TerminalEnvironment;
@@ -460,25 +464,44 @@ export class TUIApp {
    * re-renders only the block that actually changed.
    */
   private readonly transcript = new TranscriptRenderer();
-  /** Lines assembled for the last private model revision and render options. */
+  /**
+   * The transcript as a retained component.
+   *
+   * It owns the assembled-document cache and the windowing query, which used to
+   * be a pair of fields here plus arithmetic repeated in `paintTranscript`. The
+   * props are reassigned each frame; nothing else about it is per-frame state.
+   */
+  private readonly transcriptPane = new TranscriptPane({
+    renderer: this.transcript,
+    model: this.model,
+    options: DEFAULT_RENDER_OPTIONS,
+    scrollLines: 0,
+  });
+  /** Bumped on any private model change the options key cannot observe. */
   private transcriptRevision = 0;
-  private cachedTranscriptLines: {
-    readonly revision: number;
-    readonly optionsKey: string;
-    readonly lines: string[];
-  } | null = null;
   private lastCtrlCAt = Number.NEGATIVE_INFINITY;
   private running = false;
   /** Lines committed to the model but not yet accounted for by a render. */
   private queuedLines = 0;
   private oldestQueuedAt = Number.NEGATIVE_INFINITY;
   private busy = false;
-  private activityPhase: ActivityPhase = 'ready';
-  private activityMessage = '';
-  private groupActivity = '';
-  private waitingForPermission = false;
-  private readonly activeTools = new Map<string, { name: string; elapsedSeconds: number | null }>();
-  private readonly activeAgents = new Map<string, string>();
+  /**
+   * Who is doing what, right now. Owns the run-fact state machine; this class
+   * only decides when to repaint it (plan 615 Phase 6).
+   */
+  private readonly activity = new ActivityTracker();
+
+  /**
+   * Whether a modal owns the input. Stored on the tracker (it decides the label)
+   * and re-exposed here so the twenty call sites that ask the TUI stay readable.
+   */
+  private get waitingForPermission(): boolean {
+    return this.activity.waitingForPermission;
+  }
+
+  private set waitingForPermission(value: boolean) {
+    this.activity.waitingForPermission = value;
+  }
   /**
    * The working tail's spinner.
    *
@@ -562,41 +585,16 @@ export class TUIApp {
     this.writer = this.terminal.writer;
     this.output = this.writer;
     const proxy = this.writer as unknown as Record<string, unknown>;
-    const programInput = this.renderer === 'own' ? new PassThrough() : this.terminal.input;
 
-    // The blessed options are built ONCE, published for tests, and then handed
-    // to blessed by reference — not rebuilt inside the call. That is what makes
-    // the wiring assertable: a test reading `renderConfig.program.colors` is
-    // reading the very object `Program` was constructed from, so putting a
-    // constant back inside `blessed.program({...})` cannot leave the published
-    // copy still agreeing with reality.
-    const programOptions = {
-      input: programInput as unknown as NodeJS.ReadStream,
-      output: this.writer as unknown as NodeJS.WriteStream,
+    // The renderer is owned end to end: nothing sits between this class and the
+    // byte stream. What `blessed.program` used to answer — terminal size, colour
+    // depth, unicode — are facts this app now reads for itself, so they are
+    // published as a plain record for tests to assert against.
+    const renderConfig: RenderConfig = {
       terminal: this.terminalEnv.term,
-      // The cursor is positioned explicitly after each render; letting
-      // blessed draw its own would fight the editor's cursor placement.
-      // `artificial: false` means blessed leaves the real terminal cursor
-      // alone rather than drawing a block over the cell.
-      cursor: { artificial: false, shape: 'line', blink: false, color: '' } as const,
-      // 16 covers truecolor too: blessed's `colors: 16` is the 24-bit path,
-      // while anything higher is the 256-colour palette.
       colors: this.terminalEnv.colorDepth === 'truecolor' ? 16 : this.terminalEnv.colorDepth,
+      unicode: this.terminalEnv.unicodeBox,
     };
-    this.program = blessed.program(programOptions);
-
-    const screenOptions = {
-      program: this.program,
-      smartCSR: true,
-      fullUnicode: this.terminalEnv.unicodeBox,
-      title: options.title ?? 'duya',
-    };
-    // Both option objects are published AND passed by reference, so what a test
-    // reads is what the renderer was constructed from. Publishing a copy instead
-    // would leave this seam able to describe a renderer that was never built —
-    // which is exactly what a `fullUnicode: true` left in the screen call did
-    // while every colour test stayed green.
-    const renderConfig: RenderConfig = { program: programOptions, screen: screenOptions };
     proxy.renderConfig = renderConfig;
 
     const inline = options.inline === true;
@@ -618,22 +616,17 @@ export class TUIApp {
     );
 
     this.fullScreen = createScreenSurface({
-      program: this.program,
-      screenOptions,
       statusRows: STATUS_ROWS,
       overlayWidth: OVERLAY_WIDTH,
       output: this.output,
       getSize: () => this.terminalSize(),
       unicodeBox: this.terminalEnv.unicodeBox,
-      renderer: this.renderer,
     });
 
     // Full-screen mode builds its five regions now. Inline mode keeps the
-    // alternate buffer unopened until an overlay raises it: `blessed.screen`
-    // enters that buffer as a side effect of construction, and there is no way
-    // back out of it in the middle of a frame. The surface creates it lazily for
-    // exactly that case, which is why the inline tail no longer needs its own
-    // copy of everything below.
+    // alternate buffer unopened until an overlay raises it: opening that buffer
+    // is irreversible for the rest of the frame, so it is raised lazily by
+    // exactly the case that needs it.
     if (!inline) this.fullScreen.attachAll();
 
     if (options.history !== undefined && options.history.length > 0) {
@@ -646,20 +639,26 @@ export class TUIApp {
     this.bindPaste();
     this.bindResize();
 
-    this.ownKeyInput = this.renderer === 'own'
-      ? new OwnKeyInput(this.terminal.input, new OwnKeyParser({
-          keypress: (ch, key) => {
-            (programInput as PassThrough).emit('keypress', ch, key);
-          },
-          paste: (text) => this.handleBracketedPaste(text),
-          mouse: (event) => { this.program.emit('mouse', event); },
-        }))
+    // The own renderer reads bytes itself and dispatches through `keyHandlers`.
+    // Blessed's Program still gets a PassThrough so it never sees the real
+    // stream: two parsers on one stdin would each emit a key per keystroke.
+    this.inputDriver = this.renderer === 'own'
+      ? createInputDriver()
       : null;
+    this.inputDriver?.start(this.terminal.input, (event) => this.dispatchInput(event));
 
-    // Bracketed paste: blessed never enables it, and without it a paste
-    // arrives as a key storm. See the module comment for why the markers
-    // this causes are harmless.
-    this.program.setMode('?2004');
+    // Kitty keyboard flags are PUSHED only when the environment says the
+    // terminal speaks the protocol, and popped on teardown. Off by default:
+    // enabling it rewrites the encoding of every key, and a terminal that
+    // half-implements it would leave the user unable to type.
+    if (this.inputDriver !== null && this.inputDriver.capabilities().kitty && this.kittyKeyboard()) {
+      this.output.write(pushKittyKeyboardFlags());
+    }
+
+    // Bracketed paste: without it a paste arrives as a key storm, and the
+    // newlines inside it submit. The driver recognises the markers and turns
+    // the whole payload into one `paste` event.
+    this.output.write(enableBracketedPaste());
   }
 
   /**
@@ -726,16 +725,24 @@ export class TUIApp {
     if (this.deltaDrainTimer !== null) clearTimeout(this.deltaDrainTimer);
     this.deltaDrainTimer = null;
     // Without this the terminal stays in mouse reporting after exit, and the
-    // shell the user returns to swallows clicks and wheel events.
-    this.program.disableMouse();
-    this.program.resetMode('?2004');
+    // shell the user returns to swallows clicks and wheel events. Both modes
+    // are written as raw sequences now, and both MUST be undone.
+    this.output.write(disableMouseReporting());
+    this.output.write(disableBracketedPaste());
     // Exactly one of these exists. Destroying a Screen leaves the alternate
     // buffer; `InlineSurface.stop` leaves the conversation on the normal one.
     this.releaseAltScreen();
     this.inlineSurface?.stop();
     this.stopSpinner();
-    this.ownKeyInput?.dispose();
-    this.program.destroy();
+    if (this.inputDriver !== null) {
+      // Pop whatever we pushed, BEFORE detaching: a pushed flag left behind
+      // outlives the process as a broken keyboard for the shell the user
+      // returns to.
+      if (this.inputDriver.capabilities().kitty && this.kittyKeyboard()) {
+        this.output.write(popKittyKeyboardFlags());
+      }
+      this.inputDriver.stop();
+    }
     this.terminal.dispose();
   }
 
@@ -1162,12 +1169,18 @@ export class TUIApp {
       collapsedBlockIds: this.collapsedBlockIds,
       ...(this.showThinking ? {} : { showThinking: false }),
       theme: this.theme.tags,
+      // plan 615 Phase 0: markdown emphasis/strike map to italic/strike only
+      // when the surface can express those attributes.
+      renderer: this.renderer,
       // The pane width block renderers may span (horizontal rules). Inline
       // mode has no pane border, so the full terminal width is the budget;
-      // full-screen asks the surface for the transcript pane's inner width.
+      // full-screen asks the surface for the transcript pane and subtracts the
+      // border it costs. `innerWidth` is that cost — blessed's `iwidth` — not
+      // the content width, so a borderless transcript reports 0 and yields the
+      // full pane width rather than a zero-column wrap budget.
       width: this.inlineSurface !== null
         ? this.terminalSize().columns
-        : asNumber(this.fullScreen.measure('transcript')?.innerWidth, this.terminalSize().columns),
+        : transcriptWidth(this.fullScreen.measure('transcript'), this.terminalSize().columns),
       ...(this.focus === 'transcript' && selectedBlock !== undefined
         ? { selectedBlockId: selectedBlock.id }
         : {}),
@@ -1177,44 +1190,38 @@ export class TUIApp {
   /** Invalidate the assembled lines after a private transcript-model change. */
   private noteTranscriptMutation(): void {
     this.transcriptRevision += 1;
-    this.cachedTranscriptLines = null;
   }
 
+  /**
+   * Hand the pane this frame's inputs, then paint what it answers.
+   *
+   * The windowing arithmetic that used to live here (maxStart, clamp, slice) is
+   * `visibleWindow()` behind the pane now. Keeping it here meant the inline path
+   * had to re-express the same decision as a `viewEnd` offset, and two
+   * expressions of "which line is on top" is exactly the disagreement plan 615
+   * Phase 4 set out to remove.
+   */
   private paintTranscript(): void {
-    const options = this.renderOptions();
-    const optionsKey = renderOptionsKey(options, this.terminalSize().columns);
-    let lines: string[];
-    if (
-      this.cachedTranscriptLines?.revision === this.transcriptRevision &&
-      this.cachedTranscriptLines.optionsKey === optionsKey
-    ) {
-      lines = this.cachedTranscriptLines.lines;
-    } else {
-      lines = this.transcript.lines(this.model, options);
-      this.cachedTranscriptLines = {
-        revision: this.transcriptRevision,
-        optionsKey,
-        lines,
-      };
-    }
+    const width = this.terminalSize().columns;
+    const pane = this.transcriptPane;
+    pane.props = {
+      renderer: this.transcript,
+      model: this.model,
+      options: this.renderOptions(),
+      scrollLines: this.scrollLines,
+      revision: this.transcriptRevision,
+    };
     if (this.inlineSurface !== null) {
       // The WHOLE transcript, unwindowed. Deciding what the live area shows and
       // committing the rest to scrollback is the surface's job, and it cannot do
       // either if the transcript arrives pre-sliced: "which rows scrolled off" is
       // exactly the information that slicing destroys.
-      this.inlineTranscriptLines = lines;
+      this.inlineTranscriptLines = [...pane.lines(width)];
       return;
     }
-    const rows = this.visibleTranscriptRows();
-    // The window ends at the last line and only drops lines from the top, so
-    // "following" is the state where `scrollLines` is 0 rather than a special
-    // case. That is what stops a streaming answer from ending up with its
-    // newest lines stranded below the fold.
-    const maxStart = Math.max(0, lines.length - rows);
-    const start = Math.max(0, Math.min(maxStart, maxStart - this.scrollLines));
     this.fullScreen.update('transcript', {
       borderColor: this.focus === 'transcript' ? 'cyan' : 'gray',
-      lines: lines.slice(start),
+      lines: [...pane.visibleLines(width, this.visibleTranscriptRows())],
     });
   }
 
@@ -1226,7 +1233,7 @@ export class TUIApp {
    * real window instead of a one-line one.
    */
   private visibleTranscriptRows(): number {
-    const screenRows = asNumber(this.program.rows, 24);
+    const screenRows = asNumber((this.output as { rows?: unknown }).rows, 24);
     // input box (rows + its two border rows), status bar, the popup while it is
     // open, and the transcript's own top and bottom border.
     return Math.max(
@@ -1240,9 +1247,33 @@ export class TUIApp {
     );
   }
 
-  /** Widget border rows; tiny fullscreen composers temporarily omit borders. */
+  /**
+   * Pixel rows the composer spends on chrome (border or blank padding), which
+   * is NOT the same as the box's inner height.
+   *
+   * This used to return `measure('input').innerHeight`, which fed the height
+   * of the PREVIOUS frame back into the next one: on a 2-row terminal the box
+   * measured 6 tall, that 6 became `inputChromeRows()`, and the composer was
+   * re-laid out at 8 — the input slid off the top of the screen (plan 615
+   * Phase 0 probe: `top: -5`, `height: 6` on a 2-row terminal). Blessing that
+   * value works only because blessed re-derives `iheight` from a fixed 3-row
+   * box each frame; growth never compounds there.
+   *
+   * Derived from the terminal's row budget instead, so it is a function of
+   * size and NOT of the previous frame: a composer gets a border only when
+   * there is room for one plus at least one body row.
+   */
   private inputChromeRows(): number {
-    return asNumber(this.fullScreen.measure('input')?.innerHeight, 2);
+    const availableRows = Math.max(
+      1,
+      this.terminalSize().rows -
+        this.footerRows() -
+        (this.inlineSurface !== null
+          ? this.workingTailLines().length + this.queuePreviewLines().length
+          : 0) -
+        this.popupRows(),
+    );
+    return availableRows >= 3 ? 2 : 0;
   }
 
   /** Rows the status/footer area owns, which differs by presentation. */
@@ -1445,7 +1476,7 @@ export class TUIApp {
 
   private placeCursor(): void {
     if (this.focus !== 'input' || this.dockPanelActive()) {
-      this.program.hideCursor();
+      this.output.write(hideCursor());
       return;
     }
     // Inline mode places its own caret, in absolute rows and columns, as part of
@@ -1457,8 +1488,10 @@ export class TUIApp {
     const row = Math.min(this.inputCursor.cursorRow, this.inputRows) - 1;
     const col = input.left + input.innerLeft + this.inputCursor.cursorCol;
     const y = input.top + input.innerTop + row;
-    this.program.move(Math.max(0, col), Math.max(0, y));
-    this.program.showCursor();
+    // `cursorTo` is 1-based; the region metrics are 0-based, so the conversion
+    // lives here and nowhere else.
+    this.output.write(cursorTo(Math.max(0, y) + 1, Math.max(0, col) + 1));
+    this.output.write(showCursor());
   }
 
   /**
@@ -1644,157 +1677,28 @@ export class TUIApp {
 
   /** Show the most useful live activity without adding one transcript row per tick. */
   private activityLabel(busy: boolean): string {
-    if (this.waitingForPermission) return 'Waiting for approval';
-
-    const tools = [...this.activeTools.values()];
-    const tool = tools[tools.length - 1];
-    const agents = [...this.activeAgents.values()];
-    const agent = agents[agents.length - 1];
-    if (tool !== undefined) {
-      const elapsed = tool.elapsedSeconds === null || tool.elapsedSeconds < 1
-        ? ''
-        : ` (${Math.floor(tool.elapsedSeconds)}s)`;
-      const agentLabel = agent === undefined ? '' : ` / ${agent}`;
-      return compactActivity(`${tool.name}${elapsed}${agentLabel}`);
-    }
-    if (agent !== undefined) {
-      const count = agents.length > 1 ? `+${agents.length - 1} ` : '';
-      return compactActivity(`${count}${agent} working`);
-    }
-    if (this.groupActivity !== '') return compactActivity(this.groupActivity);
-    if (this.activityMessage !== '') return compactActivity(this.activityMessage);
-
-    switch (this.activityPhase) {
-      case 'thinking': return 'Thinking';
-      case 'responding': return 'Writing response';
-      case 'compacting': return 'Compacting context';
-      case 'complete': return 'Completed';
-      case 'failed': return 'Failed';
-      case 'working': return 'Working';
-      case 'ready': return busy ? 'Working' : 'Ready';
-    }
+    return this.activity.label(busy);
   }
 
-  /** Track only lifecycle facts already present in the run frame stream. */
+  /**
+   * Fold one frame into the activity tracker.
+   *
+   * `turn_start` is handled HERE rather than in the tracker: the only thing it
+   * changes that this app paints is the composer border's effort level, and
+   * that is a property of the composer, not of the activity line.
+   */
   private updateActivity(frame: LegacyFrame): boolean {
-    const data = frameRecord(frame.data);
-    switch (frame.type) {
-      case 'text_delta':
-        if (this.activityPhase === 'responding' && this.activityMessage === '' && this.groupActivity === '') return false;
-        this.activityPhase = 'responding';
-        this.activityMessage = '';
-        this.groupActivity = '';
-        return true;
-      case 'thinking_delta':
-        if (this.activityPhase === 'thinking' && this.activityMessage === '' && this.groupActivity === '') return false;
-        this.activityPhase = 'thinking';
-        this.activityMessage = '';
-        this.groupActivity = '';
-        return true;
-      case 'tool_use_started':
-      case 'tool_use': {
-        const id = frameString(data, 'id');
-        const name = frameString(data, 'name');
-        if (id === '' || name === '') return false;
-        this.activeTools.delete(id);
-        this.activeTools.set(id, { name, elapsedSeconds: null });
-        this.activityPhase = 'working';
-        this.activityMessage = '';
-        return true;
-      }
-      case 'tool_progress': {
-        // The legacy projector carries the tool call id in `toolName`.
-        const id = frameString(data, 'toolName');
-        const elapsed = data['elapsedSeconds'];
-        const tool = this.activeTools.get(id);
-        if (tool === undefined || typeof elapsed !== 'number' || !Number.isFinite(elapsed)) return false;
-        if (tool.elapsedSeconds !== null && Math.floor(tool.elapsedSeconds) === Math.floor(elapsed)) return false;
-        this.activeTools.set(id, { ...tool, elapsedSeconds: elapsed });
-        return true;
-      }
-      case 'tool_result': {
-        const id = frameString(data, 'id');
-        const removed = this.activeTools.delete(id);
-        if (removed) {
-          this.activityPhase = this.busy ? 'working' : 'ready';
-          this.activityMessage = '';
-          if (this.activeTools.size === 0) this.groupActivity = '';
-        }
-        return removed;
-      }
-      case 'tool_group_progress': {
-        const title = frameString(data, 'title');
-        if (title === '' || title === this.groupActivity) return false;
-        this.groupActivity = title;
-        return true;
-      }
-      case 'agent_progress': {
-        const eventType = frameString(data, 'agentEventType');
-        const id = frameString(data, 'subagentId');
-        if (eventType === 'subagent_started' && id !== '') {
-          const name = frameString(data, 'agentName') || frameString(data, 'agentType') || 'Agent';
-          this.activeAgents.delete(id);
-          this.activeAgents.set(id, name);
-          this.activityPhase = 'working';
-          return true;
-        }
-        if (eventType === 'subagent_completed' && id !== '') return this.activeAgents.delete(id);
-        return false;
-      }
-      case 'status': {
-        // Chrome, not content: `resolveStatusLabel` also resolves the desktop's
-        // `@i18n:` keys, so an unresolvable key drops out of the row instead of
-        // printing its own name at the user.
-        const label = resolveStatusLabel(frameString(data, 'message'));
-        if (label === null || label === this.activityMessage) return false;
-        this.activityMessage = label;
-        this.activityPhase = 'working';
-        return true;
-      }
-      case 'turn_start': {
-        // The run's own effort, when the Host decided one. `updateActivity`
-        // returns whether the frame changed anything the CHROME shows, and the
-        // composer border is chrome — so a changed level must repaint.
-        const effort = frameString(data, 'effort');
-        if (effort === '' || effort === this.runEffort) return false;
-        this.runEffort = effort;
-        return true;
-      }
-      case 'compact:start':
-        this.activityPhase = 'compacting';
-        this.activityMessage = '';
-        this.groupActivity = '';
-        return true;
-      case 'compact:done':
-        this.activityPhase = this.busy ? 'working' : 'ready';
-        this.groupActivity = '';
-        return true;
-      case 'compact:error':
-        this.activityPhase = 'working';
-        this.activityMessage = 'Compaction failed';
-        this.groupActivity = '';
-        return true;
-      case 'permission':
-        this.waitingForPermission = true;
-        return true;
-      case 'done':
-        this.activityPhase = 'complete';
-        this.clearActiveActivity();
-        return true;
-      case 'error':
-        this.activityPhase = 'failed';
-        this.clearActiveActivity();
-        return true;
-      default:
-        return false;
-    }
+    const changed = this.activity.apply(frame, this.busy);
+    if (frame.type !== 'turn_start') return changed;
+    const effort = frameString(frameRecord(frame.data), 'effort');
+    if (effort === '' || effort === this.runEffort) return changed;
+    this.runEffort = effort;
+    return true;
   }
+
 
   private clearActiveActivity(): void {
-    this.activeTools.clear();
-    this.activeAgents.clear();
-    this.groupActivity = '';
-    this.activityMessage = '';
+    this.activity.clear();
     this.waitingForPermission = false;
   }
 
@@ -1993,7 +1897,7 @@ export class TUIApp {
       this.overlay.show(request, (decision: PermissionDecision | null, answers?: QuestionAnswers) => {
         this.onPermissionDecision?.(request.requestId, decision, answers);
         this.waitingForPermission = this.overlay.isActive;
-        this.activityPhase = this.busy ? 'working' : 'ready';
+        this.activity.phase = this.busy ? 'working' : 'ready';
         resolve(decision);
         this.scheduleRender();
       });
@@ -2146,10 +2050,10 @@ export class TUIApp {
     this.busy = busy;
     this.pacer.reset();
     if (busy) {
-      this.activityPhase = 'working';
+      this.activity.phase = 'working';
       this.clearActiveActivity();
-    } else if (this.activityPhase !== 'complete' && this.activityPhase !== 'failed') {
-      this.activityPhase = 'ready';
+    } else if (this.activity.phase !== 'complete' && this.activity.phase !== 'failed') {
+      this.activity.phase = 'ready';
       this.clearActiveActivity();
     }
     if (!busy) {
@@ -2177,7 +2081,7 @@ export class TUIApp {
     this.selectedBlockIndex = -1;
     this.expandedBlockIds.clear();
     this.collapsedBlockIds.clear();
-    this.activityPhase = 'ready';
+    this.activity.phase = 'ready';
     this.clearActiveActivity();
     this.scheduler.requestImmediate();
   }
@@ -2263,7 +2167,7 @@ export class TUIApp {
     this.selectedBlockIndex = -1;
     this.expandedBlockIds.clear();
     this.collapsedBlockIds.clear();
-    this.activityPhase = 'ready';
+    this.activity.phase = 'ready';
     this.clearActiveActivity();
     this.noteTranscriptMutation();
     this.scheduler.requestImmediate();
@@ -2356,11 +2260,74 @@ export class TUIApp {
     if (def === undefined) return;
     const keys = toBlessedKeys(def.keys);
     if (keys.length === 0) return;
-    // On the program, not the screen: `Screen.prototype.key` is a one-line
-    // delegation to `Program.prototype.key` (blessed screen.js:1726), so this is
-    // the same binding in full-screen mode — and it is the only one available
-    // in inline mode, which deliberately has no Screen.
-    this.program.key(keys, handler);
+    // Same table as the hand-written bindings, so an override lands where the
+    // renderer actually reads it. On the blessed path this is still
+    // `Program.key` under the hood; `bindKey` is the one place that decides.
+    this.bindKey(keys, handler);
+  }
+
+  /**
+   * Register a handler for one or more blessed key names.
+   *
+   * The names are the `key.full` strings (`C-c`, `M-y`, `S-tab`, `enter`) —
+   * the SAME vocabulary `toBlessedKeys` produces, which is why overrides did
+   * not need a second translator when the own path arrived.
+   */
+  private bindKey(names: readonly string[], handler: () => void): void {
+    for (const name of names) {
+      const existing = this.keyHandlers.get(name);
+      if (existing === undefined) this.keyHandlers.set(name, [handler]);
+      else existing.push(handler);
+    }
+  }
+
+  /** Register the catch-all that runs for keys no binding claimed. */
+  private onKeypress(handler: (ch: string, key: NormalizedKey) => void): void {
+    this.keypressHandler = handler;
+  }
+
+  /** Register the mouse reporter. */
+  private onMouse(handler: (event: InputMouseEvent) => void): void {
+    this.mouseHandler = handler;
+  }
+
+  /**
+   * Dispatch one normalised input event.
+   *
+   * The ORDER is blessed's, and it is load-bearing: `program.js:408-411`
+   * emits `keypress` first and `key <full>` second. Reversing it would let the
+   * text handler insert a character for a key a binding had already claimed —
+   * the `\t` completion key would type a tab, and the same class of bug would
+   * hit every contended binding.
+   */
+  private dispatchInput(event: InputEvent): void {
+    switch (event.kind) {
+      case 'key': {
+        this.keypressHandler?.(event.key.ch ?? '', event.key);
+        const handlers = this.keyHandlers.get(event.key.full);
+        if (handlers === undefined) return;
+        for (const handler of handlers) handler();
+        return;
+      }
+      case 'paste':
+        this.handleBracketedPaste(event.text);
+        return;
+      case 'mouse':
+        this.mouseHandler?.(event.event);
+        return;
+    }
+  }
+
+  /**
+   * Whether to ask for the kitty keyboard protocol.
+   *
+   * Opt-in while it is new: the protocol re-encodes EVERY key, and the only
+   * evidence that a given terminal implements it correctly is that typing still
+   * works on it. `DUYA_TUI_KITTY=1` turns it on for exactly that trial; the
+   * environment-based capability check decides whether asking is even plausible.
+   */
+  private kittyKeyboard(): boolean {
+    return process.env['DUYA_TUI_KITTY'] === '1';
   }
 
   /**
@@ -2547,17 +2514,17 @@ exportHistory(): string[] {
   ]);
 
   private bindKeys(): void {
-    // Bound to the program, never to a Screen: see `bindAction`. Inline mode
-    // has no Screen, and a Screen's own key table is this program's table.
-    const target = this.program;
-
-    target.key(['C-c'], () => {
+    // Bound through `bindKey`, which routes to blessed's table on the blessed
+    // path and to `keyHandlers` on the own one. NEVER to a Screen: `Screen.key`
+    // is a delegation to `Program.key` (blessed screen.js:1726), and inline
+    // mode deliberately has no Screen.
+    this.bindKey(['C-c'], () => {
       if (this.interactivePrompt !== null) this.settleInteractivePrompt(null);
       else this.onCtrlC();
     });
     // Ctrl+D exits — but ONLY on an empty input, and never from under a modal.
     // See the `exit` row in `actions.ts` for why it is not delete-forward.
-    target.key(['C-d'], () => {
+    this.bindKey(['C-d'], () => {
       if (this.interactivePrompt !== null || this.swallowForWindow()) return;
       if (this.overlay.isActive || this.focus !== 'input') return;
       if (!this.editor.isEmpty) return;
@@ -2566,7 +2533,7 @@ exportHistory(): string[] {
     });
     // C-l (clear) and C-t (expand-all) are bound further down, from the
     // action table, so an override rewires them in one place.
-    target.key(['C-a'], () => {
+    this.bindKey(['C-a'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(0);
       else if (this.swallowForWindow()) return;
       else if (this.interactivePrompt === null && this.focus === 'input') {
@@ -2574,7 +2541,7 @@ exportHistory(): string[] {
         this.refreshInputCompletion();
       }
     });
-    target.key(['C-e'], () => {
+    this.bindKey(['C-e'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(this.interactivePrompt.value.length);
       else if (this.swallowForWindow()) return;
       else if (this.interactivePrompt === null && this.focus === 'input') {
@@ -2582,7 +2549,7 @@ exportHistory(): string[] {
         this.refreshInputCompletion();
       }
     });
-    target.key(['C-u'], () => {
+    this.bindKey(['C-u'], () => {
       if (this.interactivePrompt?.kind === 'text') this.updateTextPrompt({ value: this.interactivePrompt.value.slice(this.interactivePrompt.cursor), cursor: 0 });
       else if (this.swallowForWindow()) return;
       else if (this.interactivePrompt === null && this.focus === 'input') {
@@ -2590,7 +2557,7 @@ exportHistory(): string[] {
         this.refreshInputCompletion();
       }
     });
-    target.key(['C-k'], () => {
+    this.bindKey(['C-k'], () => {
       if (this.interactivePrompt?.kind === 'text') this.updateTextPrompt({ value: this.interactivePrompt.value.slice(0, this.interactivePrompt.cursor) });
       else if (this.swallowForWindow()) return;
       else if (this.interactivePrompt === null && this.focus === 'input') {
@@ -2598,7 +2565,7 @@ exportHistory(): string[] {
         this.refreshInputCompletion();
       }
     });
-    target.key(['C-w'], () => {
+    this.bindKey(['C-w'], () => {
       if (this.interactivePrompt?.kind === 'text') {
         const before = this.interactivePrompt.value.slice(0, this.interactivePrompt.cursor).replace(/\s+$/u, '').replace(/\S+$/u, '');
         this.updateTextPrompt({ value: before + this.interactivePrompt.value.slice(this.interactivePrompt.cursor), cursor: before.length });
@@ -2611,21 +2578,21 @@ exportHistory(): string[] {
     // Undo / kill-ring yank, ported from minimax-code's editor. C-z is safe
     // to bind: blessed reads the terminal in raw mode, so the SUSP character
     // never reaches the tty line discipline to suspend the process.
-    target.key(['C-z'], () => {
+    this.bindKey(['C-z'], () => {
       if (this.swallowForWindow()) return;
       if (this.interactivePrompt === null && this.focus === 'input') {
         this.editor.undo();
         this.refreshInputCompletion();
       }
     });
-    target.key(['C-y'], () => {
+    this.bindKey(['C-y'], () => {
       if (this.swallowForWindow()) return;
       if (this.interactivePrompt === null && this.focus === 'input') {
         this.editor.yank();
         this.refreshInputCompletion();
       }
     });
-    target.key(['M-y'], () => {
+    this.bindKey(['M-y'], () => {
       if (this.swallowForWindow()) return;
       if (this.interactivePrompt === null && this.focus === 'input') {
         this.editor.yankPop();
@@ -2663,9 +2630,9 @@ exportHistory(): string[] {
     // arrow keys, and the arrows in input focus recall HISTORY, so the wheel
     // could never scroll the transcript at all. Only the wheel is consumed:
     // clicks stay with the terminal, so text selection keeps working.
-    this.program.enableMouse();
-    this.program.on('mouse', (key: { action?: string }) => {
-      const action = key?.action;
+    this.output.write(enableMouseReporting());
+    this.onMouse((event) => {
+      const action = event.action;
       if (action !== 'wheelup' && action !== 'wheeldown') return;
       if (this.interactivePrompt !== null || this.overlay.isActive) return;
       if (this.windowMgr.isActive) {
@@ -2675,7 +2642,7 @@ exportHistory(): string[] {
       }
       this.scrollByLines(action === 'wheelup' ? -WHEEL_STEP_LINES : WHEEL_STEP_LINES);
     });
-    target.key(['left'], () => {
+    this.bindKey(['left'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(this.interactivePrompt.cursor - 1);
       else if (this.swallowForWindow()) return;
       else if (this.interactivePrompt === null && this.focus === 'transcript') this.setSelectedBlockExpanded(false);
@@ -2684,7 +2651,7 @@ exportHistory(): string[] {
         if (this.focus === 'input') this.refreshInputCompletion();
       }
     });
-    target.key(['right'], () => {
+    this.bindKey(['right'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(this.interactivePrompt.cursor + 1);
       else if (this.swallowForWindow()) return;
       else if (this.interactivePrompt === null && this.focus === 'transcript') this.setSelectedBlockExpanded(true);
@@ -2693,19 +2660,19 @@ exportHistory(): string[] {
         if (this.focus === 'input') this.refreshInputCompletion();
       }
     });
-    target.key(['C-left'], () => {
+    this.bindKey(['C-left'], () => {
       if (this.interactivePrompt === null && !this.swallowForWindow() && this.focus === 'input') {
         this.editor.moveWordLeft();
         this.refreshInputCompletion();
       }
     });
-    target.key(['C-right'], () => {
+    this.bindKey(['C-right'], () => {
       if (this.interactivePrompt === null && !this.swallowForWindow() && this.focus === 'input') {
         this.editor.moveWordRight();
         this.refreshInputCompletion();
       }
     });
-    target.key(['home'], () => {
+    this.bindKey(['home'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(0);
       else if (this.swallowForWindow()) return;
       else if (this.interactivePrompt === null && this.focus === 'input') {
@@ -2713,7 +2680,7 @@ exportHistory(): string[] {
         this.refreshInputCompletion();
       }
     });
-    target.key(['end'], () => {
+    this.bindKey(['end'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(this.interactivePrompt.value.length);
       else if (this.swallowForWindow()) return;
       else if (this.interactivePrompt === null && this.focus === 'input') {
@@ -2721,7 +2688,7 @@ exportHistory(): string[] {
         this.refreshInputCompletion();
       }
     });
-    target.key(['backspace'], () => {
+    this.bindKey(['backspace'], () => {
       // The overlay outranks the editor: the questionnaire's notes buffer is a
       // real text field, so a backspace under the modal must edit notes and
       // never the prompt underneath (the same rule the keypress path applies).
@@ -2737,7 +2704,7 @@ exportHistory(): string[] {
         this.refreshInputCompletion();
       }
     });
-    target.key(['delete'], () => {
+    this.bindKey(['delete'], () => {
       if (this.interactivePrompt?.kind === 'text') this.deletePromptForward();
       else if (this.windowMgr.isActive) {
         // Forward delete means nothing to a filter; swallow it so it cannot
@@ -2771,12 +2738,12 @@ exportHistory(): string[] {
     // Binding only the canonical name drops the duplicate by construction: no
     // dedup state, and no assumption about how fast the two arrivals land.
     for (const [name, completionKey] of Object.entries(TUIApp.CONTENDED_BINDINGS)) {
-      target.key([name], () => {
+      this.bindKey([name], () => {
         this.routeContended(completionKey);
       });
     }
 
-    target.key(['pageup'], () => {
+    this.bindKey(['pageup'], () => {
       if (this.interactivePrompt === null && this.windowMgr.isActive) {
         this.windowMgr.handleKey('pageup');
         this.scheduler.requestImmediate();
@@ -2784,7 +2751,7 @@ exportHistory(): string[] {
       }
       if (this.interactivePrompt === null) this.scrollBy(-1);
     });
-    target.key(['pagedown'], () => {
+    this.bindKey(['pagedown'], () => {
       if (this.interactivePrompt === null && this.windowMgr.isActive) {
         this.windowMgr.handleKey('pagedown');
         this.scheduler.requestImmediate();
@@ -2797,7 +2764,7 @@ exportHistory(): string[] {
     // blessed's key path a committed ideograph arrives with `key.name`
     // undefined and `ch` holding the character, so the name-keyed bindings
     // above never see it and it lands here instead.
-    target.on('keypress', (ch: string, key: blessed.Widgets.Events.IKeyEventArg) => {
+    this.onKeypress((ch: string, key: NormalizedKey) => {
       const name = key?.name;
 
       // The popup's keys are bound on the program channel above, so this path
@@ -3050,7 +3017,7 @@ exportHistory(): string[] {
     this.scheduler.requestImmediate();
   }
 
-  private handleOverlayKey(ch: string, key: blessed.Widgets.Events.IKeyEventArg): void {
+  private handleOverlayKey(ch: string, key: NormalizedKey): void {
     // The picker owns its own key semantics (y/a/n, 1-3, arrows, Enter,
     // Esc); unhandled keys are swallowed here so they cannot reach the
     // prompt underneath the modal.
@@ -3253,6 +3220,19 @@ function formatTokens(count: number): string {
  */
 function asNumber(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+/**
+ * Columns the transcript may wrap at, from the surface's own measurement.
+ *
+ * Falls back to the terminal width when there is no layout yet, and treats a
+ * non-positive result as "no layout" rather than as a real one-column budget:
+ * a zero-width wrap would put every glyph on its own line.
+ */
+function transcriptWidth(measured: RegionMetrics | null, fallback: number): number {
+  if (measured === null || measured.width <= 0) return fallback;
+  const content = measured.width - measured.innerWidth;
+  return content > 0 ? content : fallback;
 }
 
 /** Read `data.content`, tolerating both shapes the wire uses. */

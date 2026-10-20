@@ -17,8 +17,10 @@ const STUB_WORKER_SOURCE = `
 // Mode comes from the filename (stub-worker-<mode>.cjs) — deterministic, no
 // reliance on environment propagation through the spawn path.
 const MODE = (__filename.includes('-hang-hard') && 'hang-hard')
+  || (__filename.includes('-array-action') && 'array-action')
   || (__filename.includes('-stdout-pressure') && 'stdout-pressure')
   || (__filename.includes('-permission') && 'permission')
+  || (__filename.includes('-plugin-app') && 'plugin-app')
   || (__filename.includes('-db') && 'db')
   || (__filename.includes('-hang') && 'hang')
   || 'complete';
@@ -26,13 +28,18 @@ let dbSeq = 0;
 let activeRun = null;
 let runSeq = 0;
 let textBlockIndex = 0;
+let pendingPluginInvoke = null;
 const dbPending = new Map();
 process.on('message', (msg) => {
   if (msg && msg.type === 'db:response' && dbPending.has(msg.id)) {
     const { resolve, reject } = dbPending.get(msg.id);
     dbPending.delete(msg.id);
     if (msg.success) resolve(msg.result);
-    else reject(new Error(msg.error || 'db:request failed'));
+    else {
+      const error = new Error(msg.error || 'db:request failed');
+      error.code = msg.code;
+      reject(error);
+    }
   }
 });
 function dbRequest(action, payload) {
@@ -122,6 +129,58 @@ process.stdin.on('data', (chunk) => {
     if (!line.trim()) continue;
     let command;
     try { command = JSON.parse(line); } catch { continue; }
+    if (command.type === 'permission:resolve' && MODE === 'plugin-app' && pendingPluginInvoke) {
+      const pending = pendingPluginInvoke;
+      pendingPluginInvoke = null;
+      (async () => {
+        if (!String(command.decision).startsWith('allow')) {
+          process.send({ type: 'plugin-app:result', sessionId: pending.sessionId, runId: pending.runId,
+            epoch: pending.epoch, requestId: pending.requestId,
+            result: { ok: false, code: 'tool_denied', message: 'Permission denied' } });
+          return;
+        }
+        const stillCurrent = await dbRequest('plugin-app:binding-current', {
+          bindingId: pending.bindingId, nonce: pending.nonce, toolId: pending.toolId,
+        });
+        process.send({ type: 'plugin-app:result', sessionId: pending.sessionId, runId: pending.runId,
+          epoch: pending.epoch, requestId: pending.requestId,
+          result: stillCurrent
+            ? { ok: true, result: { sideEffects: 1 } }
+            : { ok: false, code: 'binding_revoked', message: 'Binding was revoked after approval' } });
+      })().catch((err) => process.send({ type: 'plugin-app:result', sessionId: pending.sessionId,
+        runId: pending.runId, epoch: pending.epoch, requestId: pending.requestId,
+        result: { ok: false, code: 'worker_error', message: String(err && err.message) } }));
+      continue;
+    }
+    if (command.type === 'plugin-app:describe-tools' && MODE === 'plugin-app') {
+      process.send({ type: 'plugin-app:tools', sessionId: command.sessionId, runId: command.runId,
+        epoch: command.epoch, requestId: command.requestId, tools: [{
+          toolId: 'mcp:server/dashboard.read', schemaRevision: 'schema-1',
+          descriptor: { source: 'plugin', serverName: 'dashboard', toolName: 'read', pluginId: 'com.duya.sample' },
+        }] });
+      continue;
+    }
+    if (command.type === 'plugin-app:invoke' && MODE === 'plugin-app') {
+      (async () => {
+        const stillCurrent = await dbRequest('plugin-app:binding-current', {
+          bindingId: command.bindingId, nonce: command.nonce, toolId: command.toolId,
+        });
+        if (!stillCurrent) {
+          process.send({ type: 'plugin-app:result', sessionId: command.sessionId, runId: command.runId,
+            epoch: command.epoch, requestId: command.requestId,
+            result: { ok: false, code: 'binding_revoked', message: 'Binding is not current' } });
+          return;
+        }
+        pendingPluginInvoke = command;
+        process.send({ type: 'chat:permission', sessionId: command.sessionId, request: {
+          id: command.requestId, toolName: 'dashboard.read', toolInput: command.arguments,
+          expiresAt: Date.now() + 300000,
+        } });
+      })().catch((err) => process.send({ type: 'plugin-app:result', sessionId: command.sessionId,
+        runId: command.runId, epoch: command.epoch, requestId: command.requestId,
+        result: { ok: false, code: 'worker_error', message: String(err && err.message) } }));
+      continue;
+    }
     if (command.type === 'permission:resolve' && MODE === 'permission') {
       emitNative({
         type: 'permission.resolved',
@@ -193,6 +252,21 @@ process.stdin.on('data', (chunk) => {
         expiresAt: request.expiresAt,
       });
       process.send({ type: 'chat:permission', sessionId: command.sessionId, request });
+    } else if (MODE === 'array-action') {
+      (async () => {
+        try {
+          await dbRequest(['message:append'], {
+            sessionId: command.sessionId,
+            messages: [{ id: 'array-action-message', session_id: command.sessionId, role: 'assistant', content: 'must not persist' }],
+          });
+          emitTextBlock('array-action=unexpected-success');
+        } catch (err) {
+          emitTextBlock('array-action=' + (err && err.code) + ':' + (err && err.message));
+        }
+        emitTurnCompleted('end_turn');
+        emitTerminal('completed');
+        process.send({ type: 'chat:done', sessionId: command.sessionId });
+      })();
     } else if (MODE === 'db') {
       (async () => {
         try {
@@ -243,7 +317,7 @@ process.on('disconnect', () => process.exit(0));
 
 async function writeStubWorker(
   directory: string,
-  mode: 'complete' | 'hang' | 'hang-hard' | 'db' | 'permission' | 'stdout-pressure',
+  mode: 'complete' | 'hang' | 'hang-hard' | 'db' | 'array-action' | 'permission' | 'plugin-app' | 'stdout-pressure',
 ): Promise<string> {
   const workerPath = path.join(directory, `stub-worker-${mode}.cjs`);
   await fs.writeFile(workerPath, STUB_WORKER_SOURCE, 'utf8');
@@ -259,6 +333,7 @@ interface StartedHost {
 async function startHostWithSession(
   root: string,
   workerPath: string,
+  pluginAppInvocationAuthority?: import('../src/local-plugin-app-invocation-api.js').HostPluginAppInvocationAuthority,
 ): Promise<StartedHost> {
   const dataRoot = path.join(root, 'data');
   const host = await startLocalHost({
@@ -270,6 +345,7 @@ async function startHostWithSession(
     port: 0,
     token: 'run-execution-test-token',
     workerPath,
+    ...(pluginAppInvocationAuthority === undefined ? {} : { pluginAppInvocationAuthority }),
     betterSqlite3Path: path.join(process.cwd(), 'node_modules', 'better-sqlite3'),
   });
   const client = new HostSessionHttpClient(host.origin, 'run-execution-test-token');
@@ -284,6 +360,35 @@ async function startHostWithSession(
 }
 
 describe('Host-owned run execution', () => {
+  it('rejects a non-string worker DB action without dispatching or writing a transcript row', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-run-array-action-'));
+    let host: LocalHostHandle | undefined;
+    try {
+      const started = await startHostWithSession(root, await writeStubWorker(root, 'array-action'));
+      host = started.host;
+      const start = await started.client.startAgentRun({ sessionId: started.sessionId, prompt: 'probe non-string db action' });
+      expect(start.accepted).toBe(true);
+      if (!start.accepted) return;
+
+      let record = null;
+      for (let index = 0; index < 100; index += 1) {
+        record = await started.client.getAgentRun(start.runId);
+        if (record?.terminal) break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(record?.status).toBe('completed');
+      const events = await started.client.readAgentRunEvents(start.runId);
+      expect(events.some((event) => event.payload.type === 'assistant.text_block' &&
+        event.payload.text.includes('array-action=invalid_db_action:'))).toBe(true);
+
+      const timeline = await started.client.readMessages(started.sessionId, { limit: 50 });
+      expect(timeline.messages.some((item) => JSON.stringify(item.entry).includes('must not persist'))).toBe(false);
+    } finally {
+      await host?.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it('drains mirrored stdout so backpressure cannot block the IPC terminal', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-run-stdout-'));
     let host: LocalHostHandle | undefined;
@@ -468,6 +573,15 @@ describe('Host-owned run execution', () => {
       expect(contents).toContain('ping from stub worker');
       expect(contents).toContain('pong from stub worker');
 
+      // The Host stamps every message row a worker writes during a live run
+      // with the owning run id - the worker payload is not authority.
+      const stamped = page.messages.filter((item) =>
+        (item.entry as { type?: string } | undefined)?.type === 'message');
+      expect(stamped.length).toBeGreaterThanOrEqual(2);
+      for (const item of stamped) {
+        expect((item.entry as { runId?: string }).runId).toBe(runId);
+      }
+
       await host.close();
       host = undefined;
     } finally {
@@ -541,4 +655,73 @@ describe('Host-owned run execution', () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it.each(['allow', 'deny', 'revoke', 'remap'] as const)(
+    'routes a trusted Plugin App invocation through the live worker and rechecks after %s approval',
+    async (decision) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-run-plugin-app-'));
+      let host: LocalHostHandle | undefined;
+      let descriptorMappingCurrent = true;
+      try {
+        const authority: import('../src/local-plugin-app-invocation-api.js').HostPluginAppInvocationAuthority = {
+          resolveApp: async (pluginId, appId) => pluginId === 'com.duya.sample' && appId === 'counter'
+            ? { appId, entry: 'apps/counter.html', requiredCapabilities: ['mcp:dashboard.read'], stateSchemaVersion: 1 }
+            : null,
+          resolveGrantedCapabilities: async () => ['mcp:dashboard.read'],
+          resolveToolCapability: ({ descriptor }) =>
+            descriptorMappingCurrent &&
+            descriptor.source === 'plugin' && descriptor.serverName === 'dashboard' &&
+              descriptor.toolName === 'read' && descriptor.pluginId === 'com.duya.sample'
+              ? 'mcp:dashboard.read' : null,
+        };
+        const started = await startHostWithSession(root, await writeStubWorker(root, 'plugin-app'), authority);
+        host = started.host;
+        const { client, sessionId } = started;
+        const instance = await client.createPluginAppInstance({
+          pluginId: 'com.duya.sample', appId: 'counter', stateSchemaVersion: 1, state: {},
+        });
+        const run = await client.startAgentRun({ sessionId, prompt: 'keep the App invocation run active' });
+        expect(run.accepted).toBe(true);
+        if (!run.accepted) return;
+        const binding = await client.bindPluginAppInvocation({
+          pluginId: instance.pluginId, appId: instance.appId, instanceId: instance.instanceId, sessionId,
+        });
+        const invocation = client.invokePluginAppTool({
+          bindingId: binding.bindingId,
+          nonce: binding.nonce,
+          toolId: 'mcp:server/dashboard.read',
+          arguments: { query: 'status' },
+        });
+        let pending: readonly import('@duya/agent-protocol').HostPermissionRequest[] = [];
+        const deadline = Date.now() + 5000;
+        while (pending.length === 0 && Date.now() < deadline) {
+          pending = await client.listPendingPermissionRequests(sessionId);
+          if (pending.length === 0) await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        expect(pending).toHaveLength(1);
+        if (pending.length === 0) return;
+        if (decision === 'revoke') {
+          await client.setPluginAppInstanceStatus(instance.instanceId, { expectedRevision: 1, status: 'revoked' });
+        }
+        if (decision === 'remap') descriptorMappingCurrent = false;
+        const granted = decision !== 'deny';
+        await client.resolvePermissionRequest(pending[0]!.id, {
+          status: granted ? 'allow' : 'deny',
+          decision: granted ? 'allow' : 'deny',
+        });
+        const result = await invocation;
+        if (decision === 'allow') {
+          expect(result).toMatchObject({ ok: true, result: { sideEffects: 1 } });
+        } else {
+          expect(result).toMatchObject({
+            ok: false,
+            code: decision === 'deny' ? 'tool_denied' : 'binding_revoked',
+          });
+        }
+      } finally {
+        await host?.close();
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

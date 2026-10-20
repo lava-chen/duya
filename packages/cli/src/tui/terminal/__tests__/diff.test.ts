@@ -68,11 +68,15 @@ describe('renderViewportFrame', () => {
     expect(frame.output).not.toContain('\x1b[J');
   });
 
-  it('converts markup before comparing, so a tag change is a visible change', () => {
-    // Same glyphs, different colour: the strings differ before conversion, and
-    // comparing post-conversion keeps that honest either way.
-    const same = renderViewportFrame(['{cyan-fg}a'], ['{cyan-fg}a'], GEO);
-    const recoloured = renderViewportFrame(['{cyan-fg}a'], ['{red-fg}a'], GEO);
+  it('compares what it writes, so a recolour is a visible change', () => {
+    // Rows arrive as ANSI: `InlineSurface` converts once, at composition time
+    // (plan 615 Phase 5). What is compared here is therefore byte-for-byte what
+    // is written, which is the property that matters — the diff cannot decide a
+    // row is unchanged and then write something different for it.
+    const cyan = '\x1b[36ma';
+    const red = '\x1b[31ma';
+    const same = renderViewportFrame([cyan], [cyan], GEO);
+    const recoloured = renderViewportFrame([cyan], [red], GEO);
     expect(same.rewritten).toBe(0);
     expect(recoloured.rewritten).toBe(1);
     expect(recoloured.output).toContain('\x1b[31m');

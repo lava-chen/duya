@@ -120,7 +120,14 @@ export class TranscriptRenderer {
         options.showToolResults ? 'r' : '-',
         String(options.toolResultLines),
         String(options.width ?? 0),
+        // plan 615 Phase 0: the renderer decides whether emphasis/strike
+        // render as italic/strike attributes or fold — a facet of the bytes.
+        options.renderer ?? 'blessed',
         themeKey,
+        // plan 615 §5.4: a component can change a block's height without
+        // changing its content, so its revision has to be part of the key or
+        // the cached lines would report the old height for new layout.
+        String(options.componentRevisions?.get(block.id) ?? 0),
         fnv1a(blockContent(block)),
       ].join('|');
 
@@ -189,4 +196,33 @@ export class TranscriptRenderer {
       if (!seen.has(id)) this.cache.delete(id);
     }
   }
+}
+
+/**
+ * Everything about a render that changes the BYTES, as one comparable string.
+ *
+ * The document-level cache is only sound if its key covers every input the
+ * renderer reads. This is that list, and it is separate from the per-block key
+ * on purpose: expanding one block must invalidate the assembled document even
+ * though every other block's bytes are unchanged.
+ *
+ * Sets are SORTED before they are stringified. Their insertion order is not a
+ * fact about the output, and keying on it would make two identical documents
+ * compare unequal — a cache that misses forever looks exactly like a cache that
+ * works, until you measure it.
+ */
+export function renderOptionsKey(options: RenderOptions, width: number): string {
+  const ids = (values: ReadonlySet<string> | undefined): string[] =>
+    [...(values ?? [])].sort();
+  return JSON.stringify({
+    width,
+    expanded: options.expanded,
+    showToolResults: options.showToolResults,
+    toolResultLines: options.toolResultLines,
+    expandedBlockIds: ids(options.expandedBlockIds),
+    collapsedBlockIds: ids(options.collapsedBlockIds),
+    showThinking: options.showThinking !== false,
+    selectedBlockId: options.selectedBlockId ?? null,
+    theme: options.theme ?? null,
+  });
 }

@@ -1,0 +1,341 @@
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { CodeBlock } from './CodeBlock';
+import { openLocalArtifactTarget, isLikelyLocalFileReference, isLocalhostUrl, fileNameFromPath, isPathInsideRoot, parseInternalCanvasLink, openConductorCanvas, tryDecodeURI } from '@/lib/chat-file-links';
+import { rewriteMediaSrc } from '@/lib/rewrite-media-src';
+import { useConversationStore } from '@/stores/conversation-store';
+import { ImagePreview } from './preview/ImagePreview';
+import { FileIcon, ChalkboardIcon } from '../icons';
+import { Button } from '@/components/ui/Button';
+import { fileExtensionFromName, getFileTypeIcon } from '../file-tree/file-type-icon';
+import { useLinkOpener } from '@/hooks/useLinkOpener';
+import { useLinkFavicon } from '@/lib/link-favicon';
+import { parsePluginMentionHref } from '@/lib/plugin-mention-display';
+import { PluginMentionLinkChip } from './PluginMentionChip';
+import { MarkdownTableFrame } from './MarkdownTableFrame';
+
+// Inline media: renders <img> thumbnails that open the lightbox on click,
+// or <video controls> elements for common video extensions so the same
+// `![alt](url)` syntax handles both. External URLs load directly via the
+// Electron renderer; absolute filesystem paths route through the
+// `duya-file://` custom protocol so the renderer can read local files.
+const VIDEO_EXT_RE = /\.(mp4|webm|mov|ogg|m4v)(?:\?|#|$)/i;
+
+// `rewriteMediaSrc` and its Windows-path helpers live in
+// `@/lib/rewrite-media-src` so `preview/ImagePreview` can use them without
+// importing this component module (that was a render-time import cycle).
+
+function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
+  const [open, setOpen] = useState(false);
+  if (!src) return null;
+  const altText = alt ?? '';
+  const resolvedSrc = rewriteMediaSrc(src);
+
+  if (VIDEO_EXT_RE.test(resolvedSrc)) {
+    return (
+      <video
+        controls
+        preload="metadata"
+        className="markdown-video"
+        aria-label={altText || 'video'}
+      >
+        <source src={resolvedSrc} />
+      </video>
+    );
+  }
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="markdown-image-button"
+        onClick={() => setOpen(true)}
+        aria-label={`Enlarge image: ${altText}`}
+      >
+        <img src={resolvedSrc} alt={altText} className="markdown-image" loading="lazy" />
+      </Button>
+      <ImagePreview
+          open={open}
+          onClose={() => setOpen(false)}
+          variant="lightbox"
+          src={resolvedSrc}
+          alt={altText || 'image'}
+        />
+    </>
+  );
+}
+
+// Match a bare filename or filename with a line suffix, e.g. `network.py`
+// or `network.py:12`. We deliberately exclude anything that contains a slash
+// or a scheme so we can fall back to the normal link logic for real paths.
+const BARE_FILE_REFERENCE_RE = /^[^/\\:?#\s]+\.\w+(?::\d+)?$/;
+
+/**
+ * Base directory of the markdown source currently being rendered. Lets
+ * relative links inside a markdown FILE (e.g. the sidebar file preview)
+ * resolve against the file's own directory instead of the active chat
+ * thread's workspace. When absent (chat messages), MarkdownAnchor falls
+ * back to the thread working directory.
+ */
+export const MarkdownBaseDirectoryContext = createContext<string | null>(null);
+
+/**
+ * Label for a plugin mention chip: the link text with the prompt-taught
+ * leading `@` removed. Non-string children (e.g. emphasis inside the label)
+ * yield undefined so the chip falls back to `@<pluginId>`.
+ */
+function pluginMentionLabel(children: React.ReactNode): string | undefined {
+  const text = typeof children === 'string'
+    ? children
+    : Array.isArray(children) && children.length === 1 && typeof children[0] === 'string'
+      ? children[0]
+      : undefined;
+  return text?.replace(/^@/, '') || undefined;
+}
+
+function MarkdownAnchor({ href, children }: { href?: string; children?: React.ReactNode }) {
+  const { openLinksInExternalBrowser, openLink } = useLinkOpener();
+  const baseDirectory = useContext(MarkdownBaseDirectoryContext);
+  const activeThreadId = useConversationStore((s) => s.activeThreadId);
+  const threads = useConversationStore((s) => s.threads);
+  const cwd = baseDirectory ?? threads.find((thread) => thread.id === activeThreadId)?.workingDirectory;
+
+  // If the model only wrote a bare filename (e.g. `network.py` or
+  // `network.py:12`) and we know the working directory, resolve it against
+  // the workspace root so it still renders as a clickable file pill. This
+  // is a renderer-side safety net for models that fail to supply an
+  // absolute or relative path.
+  let resolvedHref = href;
+  let isBareFileName = false;
+  if (typeof href === 'string' && cwd && BARE_FILE_REFERENCE_RE.test(href)) {
+    const separator = /[\\/]/.test(cwd) ? cwd.match(/[\\/]/)?.[0] ?? '/' : '/';
+    resolvedHref = `${cwd.replace(/[\\/]+$/, '')}${separator}${href}`;
+    isBareFileName = true;
+  }
+
+  // Decode percent-encoded paths / URLs (e.g. `E:/.../%E5%8F%91%E7%A5%A8` →
+  // `E:/.../发票`) before any downstream classification. Models sometimes
+  // emit the URL-encoded form in both the link label and the destination;
+  // decoding once here means the local-file branch sees the real path
+  // (so its basename extraction produces readable Chinese) and external
+  // links render decoded text. The original href is still passed to
+  // `<a>` below so the click target is exactly what the model wrote —
+  // navigation is unaffected.
+  if (typeof resolvedHref === 'string') {
+    resolvedHref = tryDecodeURI(resolvedHref);
+  }
+
+  // `plugin://<pluginId>` links are plugin @-mentions (`[@Name](plugin://id)`,
+  // the syntax the agent prompt itself emits). Render the same chip the
+  // composer uses — never a link — so this must run before the local-file and
+  // external branches, which would otherwise turn it into a dead link.
+  const pluginMentionId = typeof href === 'string' ? parsePluginMentionHref(href) : null;
+  if (pluginMentionId) {
+    return (
+      <PluginMentionLinkChip pluginId={pluginMentionId} label={pluginMentionLabel(children)} />
+    );
+  }
+
+  // Internal canvas routes (`/duya/canvas/<id>`, taught to the agent by the
+  // conductor prompt) must be classified BEFORE the local-file check: any
+  // `/...` href otherwise matches isLikelyLocalFileReference and renders as
+  // a dead filesystem pill.
+  const canvasLinkId = typeof href === 'string' ? parseInternalCanvasLink(href) : null;
+
+  const isLocalFile = typeof resolvedHref === 'string' && isLikelyLocalFileReference(resolvedHref);
+  // Localhost URLs (e.g. `http://localhost:8000/`) follow the same routing
+  // as other web links based on the `open_links_in_external_browser` config.
+  const isLocalServer = typeof href === 'string' && isLocalhostUrl(href);
+
+  if (isLocalServer && href) {
+    return (
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="text-sky-500 dark:text-sky-300 hover:underline decoration-dotted underline-offset-2 transition-colors font-mono font-semibold text-[13.5px] bg-sky-500/5 hover:bg-sky-500/10 px-1 py-0.5 rounded border border-sky-500/20 cursor-pointer"
+        onClick={() => openLink(href)}
+        title={openLinksInExternalBrowser ? `Open in default browser: ${href}` : `Open in DUYA browser: ${href}`}
+      >
+        {children}
+      </Button>
+    );
+  }
+
+  // Canvas links render as a pill that opens the canvas in the sidebar
+  // Conductor panel (same window-event channel as the other panels).
+  if (canvasLinkId) {
+    return (
+      <button
+        type="button"
+        className="markdown-file-link"
+        onClick={() => openConductorCanvas(canvasLinkId)}
+        title="Open canvas in sidebar"
+      >
+        <ChalkboardIcon size={13} aria-hidden="true" />
+        <span className="markdown-file-link__name">{children ?? 'Canvas'}</span>
+      </button>
+    );
+  }
+
+  // Local file references render as a pill: file icon + blue filename.
+  // The raw link target may be a full path with a line suffix; the visible
+  // text should be the clean filename (matching the iconography users see
+  // in the rest of the DUYA UI).
+  if (isLocalFile && resolvedHref) {
+    const displayName = fileNameFromPath(resolvedHref);
+    const TypeIcon = getFileTypeIcon(fileExtensionFromName(displayName));
+    // Standalone preview is reserved for chat-message clicks where the
+    // agent referenced a file OUTSIDE the chat workspace. In that case
+    // we don't want the preview panel to mount the file's directory as
+    // its project root — it would expose arbitrary external directories
+    // via the integrated file tree.
+    //
+    // Sidebar markdown previews (`baseDirectory` set) always keep the
+    // legacy fallback to the file's own directory so navigating between
+    // relative links inside a README stays rooted in the same project.
+    //
+    // Chat-message clicks to a file INSIDE the chat workspace keep the
+    // chat cwd as the preview root so the project tree still renders
+    // (otherwise the user would lose the tree even when clicking on a
+    // file in their own project).
+    const fileOutsideChatWorkspace =
+      baseDirectory === null && !!cwd && !isPathInsideRoot(resolvedHref, cwd);
+    const standalone = fileOutsideChatWorkspace;
+    return (
+      <button
+        type="button"
+        className="markdown-file-link"
+        onClick={() => openLocalArtifactTarget(resolvedHref, cwd, undefined, { standalone })}
+        title={resolvedHref}
+      >
+        {TypeIcon ? (
+          <TypeIcon size={13} aria-hidden="true" />
+        ) : (
+          <FileIcon size={13} aria-hidden="true" />
+        )}
+        <span className="markdown-file-link__name">{displayName}</span>
+      </button>
+    );
+  }
+
+  // External web links: also decode the addressable href so the
+  // browser's right-click "Copy link" / hover tooltip show the
+  // readable form (e.g. `https://example.com/发票`) instead of the
+  // raw percent-encoded form. `openLink` already validates against
+  // `http(s):` schemes and is unaffected by percent-decoding.
+  const externalHref = typeof href === 'string' ? tryDecodeURI(href) : href;
+
+  return (
+    <a
+      href={externalHref}
+      className="markdown-file-link markdown-link-external"
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => {
+        e.preventDefault();
+        if (externalHref) openLink(externalHref);
+      }}
+      title={openLinksInExternalBrowser ? `Open in default browser: ${externalHref}` : `Open in DUYA browser: ${externalHref}`}
+    >
+      {typeof externalHref === 'string' && <LinkFavicon url={externalHref} />}
+      {typeof children === 'string' ? tryDecodeURI(children) : children}
+    </a>
+  );
+}
+
+function LinkFavicon({ url }: { url: string }) {
+  const favicon = useLinkFavicon(url);
+  const [imgFailed, setImgFailed] = useState(false);
+  if (!favicon || imgFailed) return null;
+  return (
+    <img
+      src={favicon}
+      alt=""
+      loading="lazy"
+      onError={() => setImgFailed(true)}
+      className="markdown-link-external__favicon"
+    />
+  );
+}
+
+export const markdownComponents = {
+  h1: ({ children }: { children?: React.ReactNode }) => (
+    <h1 className="text-lg font-bold text-foreground mt-3 mb-1.5">{children}</h1>
+  ),
+  h2: ({ children }: { children?: React.ReactNode }) => (
+    <h2 className="text-base font-semibold text-foreground mt-2.5 mb-1.5">{children}</h2>
+  ),
+  h3: ({ children }: { children?: React.ReactNode }) => (
+    <h3 className="text-[15px] font-semibold text-foreground mt-2 mb-1">{children}</h3>
+  ),
+  p: ({ children }: { children?: React.ReactNode }) => (
+    <p className="text-[15px] text-foreground leading-[1.5] mb-1.5">{children}</p>
+  ),
+  ul: ({ children }: { children?: React.ReactNode }) => (
+    <ul className="list-disc list-outside text-[15px] text-foreground mb-2 pl-5 space-y-0.5">{children}</ul>
+  ),
+  ol: ({ children }: { children?: React.ReactNode }) => (
+    <ol className="list-decimal list-outside text-[15px] text-foreground mb-2 pl-5 space-y-0.5">{children}</ol>
+  ),
+  li: ({ children }: { children?: React.ReactNode }) => (
+    <li className="text-[15px] text-foreground leading-[1.5] pl-1">{children}</li>
+  ),
+  a: MarkdownAnchor,
+  img: MarkdownImage,
+  code: ({ children, className, ...props }: { children?: React.ReactNode; className?: string }) => {
+    const match = /language-(\w+)/.exec(className || '');
+    const raw = String(children ?? '');
+    const hasNewline = raw.includes('\n');
+    const isBlock = hasNewline || match;
+
+    if (!isBlock) {
+      // Strip backticks that may be included in the content
+      let textContent = raw.trim();
+      while (textContent.startsWith('`')) textContent = textContent.slice(1);
+      while (textContent.endsWith('`')) textContent = textContent.slice(0, -1);
+
+      return (
+        <code
+          className="px-[0.35rem] py-[0.15rem] rounded-[4px] text-[13.5px] font-normal text-[#b487e0] dark:text-[#a87ad6]"
+          style={{
+            fontFamily: "'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            overflowWrap: 'anywhere',
+          }}
+          {...props}
+        >
+          {textContent}
+        </code>
+      );
+    }
+
+    return <CodeBlock className={className}>{children}</CodeBlock>;
+  },
+  pre: ({ children }: { children?: React.ReactNode }) => (
+    <div className="my-4 code-block-wrapper">{children}</div>
+  ),
+  blockquote: ({ children }: { children?: React.ReactNode }) => (
+    <blockquote className="border-l-[3px] border-muted-foreground/30 pl-4 my-3 text-muted-foreground">
+      {children}
+    </blockquote>
+  ),
+  hr: () => <hr className="border-border/50 my-3" />,
+  table: ({ children }: { children?: React.ReactNode }) => (
+    <MarkdownTableFrame>{children}</MarkdownTableFrame>
+  ),
+  thead: ({ children }: { children?: React.ReactNode }) => <thead>{children}</thead>,
+  tbody: ({ children }: { children?: React.ReactNode }) => <tbody>{children}</tbody>,
+  tr: ({ children }: { children?: React.ReactNode }) => <tr>{children}</tr>,
+  th: ({ children }: { children?: React.ReactNode }) => (
+    <th className="markdown-table__heading">{children}</th>
+  ),
+  td: ({ children }: { children?: React.ReactNode }) => (
+    <td className="markdown-table__cell">{children}</td>
+  ),
+  strong: ({ children }: { children?: React.ReactNode }) => (
+    <strong className="font-semibold text-foreground">{children}</strong>
+  ),
+};

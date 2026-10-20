@@ -26,6 +26,9 @@
  * same primitive codex uses (`insert_history.rs:165-178`).
  */
 
+import { sgrParameterFor, type SpanColor } from '../core/color.js';
+import { hasAttr, sameStyle, type StyledSpan } from '../core/span.js';
+
 /** CSI introducer. */
 const CSI = '\x1b[';
 /** ESC. */
@@ -167,4 +170,152 @@ export function cursorUp(n: number): string {
 /** Move the cursor down `n` rows without changing the column. */
 export function cursorDown(n: number): string {
   return n <= 0 ? '' : `${CSI}${n}B`;
+}
+
+/**
+ * Ask for the kitty keyboard protocol, disambiguating escape codes.
+ *
+ * The flags are PUSHED (`>`), not set, so whatever the user's other tools asked
+ * for is restored by `popKittyKeyboardFlags` rather than guessed at. Flag 1 is
+ * "disambiguate escape codes": it makes Enter, Tab, Escape and friends arrive
+ * as `CSI … u` instead of the ambiguous `\r` / `\t` / bare ESC, which is what
+ * makes Shift+Enter distinguishable at all.
+ *
+ * OFF by default. Turning it on rewrites the encoding of every key, and the only
+ * way to know a terminal honours it is to watch what arrives — a terminal that
+ * ignores the push simply keeps sending legacy bytes, which is why the parser
+ * accepts both without being told which is in force.
+ */
+export function pushKittyKeyboardFlags(): string {
+  return `${CSI}>1u`;
+}
+
+/** Restore the keyboard flags that were in force before the push. */
+export function popKittyKeyboardFlags(): string {
+  return `${CSI}<u`;
+}
+
+/**
+ * SGR parameters for one span's style, in the order this renderer emits them.
+ *
+ * Attributes first, then the foreground, then the background — the order
+ * `own/markup.ts` measured against blessed, kept here so the two paths produce
+ * the same bytes for the same screen.
+ */
+function spanParameters(span: StyledSpan): string[] {
+  const parameters: string[] = [];
+  if (hasAttr(span, 'bold')) parameters.push('1');
+  if (hasAttr(span, 'italic')) parameters.push('3');
+  if (hasAttr(span, 'strike')) parameters.push('9');
+  if (hasAttr(span, 'underline')) parameters.push('4');
+  if (span.fg !== undefined) parameters.push(sgrParameterFor(span.fg));
+  if (span.bg !== undefined) parameters.push(backgroundParameterFor(span.bg));
+  return parameters;
+}
+
+/** A background is the foreground code shifted up by ten (30→40, 90→100). */
+function backgroundParameterFor(color: SpanColor): string {
+  return color.kind === 'indexed' ? `48;5;${color.index}` : String(Number(sgrParameterFor(color)) + 10);
+}
+
+/**
+ * The SGR parameters for a span, joined — what a CELL carries as its style.
+ *
+ * Exported because the own screen painter stores exactly this string per cell
+ * and compares cells by it. Sharing the function is what keeps a cell painted
+ * from spans and a cell painted from tags byte-identical: both end up with the
+ * parameter list this produces.
+ */
+export function spanStyleParameters(span: StyledSpan): string {
+  return spanParameters(span).join(';');
+}
+
+/** Whether a style asks the terminal to leave its default state. */
+function isStyled(span: StyledSpan | null): boolean {
+  if (span === null) return false;
+  return (span.attrs ?? []).length > 0 || span.fg !== undefined || span.bg !== undefined;
+}
+
+/**
+ * Serialise one line of spans to ANSI.
+ *
+ * ## Why the transitions, not the spans
+ *
+ * The obvious implementation emits a full style per span. That inflates every
+ * line with resets and re-opens that change nothing, and — worse — it would
+ * produce different bytes from the tag path for the same screen, which is the
+ * one thing the parity tests exist to catch. So the style the terminal is
+ * ACTUALLY in is tracked and only real changes are emitted: a bold run
+ * containing a muted word emits `ESC[1m`, `ESC[m ESC[38;5;241m`, then back.
+ *
+ * That is the same rule `own/markup.ts` measured and `spansToTags` applies on
+ * the tag side, reached independently here — which is why the test asserting
+ * the two agree is a real check rather than a tautology.
+ *
+ * ## OSC 8 is deliberately absent
+ *
+ * `linkId` is carried on the span and ignored here. Hyperlinks change what the
+ * terminal does with a click, not what it draws, and the tag vocabulary has no
+ * spelling for them yet; emitting them now would make the two paths differ for
+ * a feature nobody has asked to see on screen (plan 615 §O3).
+ */
+export function spansToAnsi(spans: readonly StyledSpan[]): string {
+  let out = '';
+  /** The style the terminal is in, or null before anything has been written. */
+  let written: StyledSpan | null = null;
+
+  for (const span of spans) {
+    if (span.text === '') continue;
+    if (written === null || !sameStyle(written, span)) {
+      const parameters = spanParameters(span);
+      // Reset only when the terminal is actually in a style: the first styled
+      // run of a line therefore starts without a leading `ESC[m`, which is
+      // what the tag path produces too.
+      out += isStyled(written) ? `${CSI}m` : '';
+      out += parameters.length === 0 ? '' : `${CSI}${parameters.join(';')}m`;
+      written = span;
+    }
+    out += span.text;
+  }
+
+  if (isStyled(written)) out += `${CSI}m`;
+  return out;
+}
+
+/**
+ * Mouse reporting, SGR flavour.
+ *
+ * `1002` is button-event tracking: presses, releases and the wheel, without the
+ * motion-only flood `1003` would send. `1006` switches the report format from
+ * the legacy `ESC[M Cb Cx Cy` (three bytes, unable to express coordinates past
+ * column 223) to `ESC[<b;x;yM`, which is why the parser in `own-key-parser.ts`
+ * reads SGR and why enabling the pair together is not optional.
+ *
+ * Only the wheel is consumed; clicks stay with the terminal so text selection
+ * keeps working.
+ */
+export function enableMouseReporting(): string {
+  return `${CSI}?1002h${CSI}?1006h`;
+}
+
+/** Turn mouse reporting off. MUST run on exit, or the shell inherits it. */
+export function disableMouseReporting(): string {
+  return `${CSI}?1006l${CSI}?1002l`;
+}
+
+/**
+ * Bracketed paste.
+ *
+ * Without it a paste arrives as a key storm: the editor receives thousands of
+ * individual keypresses, so newlines submit and the paste is mangled. With it,
+ * the terminal wraps the payload in `ESC[200~ … ESC[201~` and the app can tell
+ * "the user typed this" from "this was inserted".
+ */
+export function enableBracketedPaste(): string {
+  return `${CSI}?2004h`;
+}
+
+/** Turn bracketed paste off. MUST run on exit. */
+export function disableBracketedPaste(): string {
+  return `${CSI}?2004l`;
 }

@@ -114,6 +114,8 @@ export interface MessageEntry {
   createdAt: number;
   message: AgentMessage;
   source?: MessageSource;
+  /** Host-captured producing run; absent on legacy/imported timeline entries. */
+  runId?: string;
 }
 
 export interface CompactionEntry {

@@ -62,7 +62,6 @@
     "blessed": "^0.1.81"
   },
   "devDependencies": {
-    "@types/blessed": "^0.1.25",
     "@duya/plugin-core": "0.1.0",
     "@types/node": "^20.0.0",
     "typescript": "^5.3.3"

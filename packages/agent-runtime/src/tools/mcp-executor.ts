@@ -21,6 +21,8 @@ export interface MCPExecutorPorts<TContext extends object> {
     context: TContext,
     request: ToolPermissionRequest,
   ): Promise<ToolPermissionDecision | undefined>;
+  /** Optional final authority check immediately before the captured side effect. */
+  beforeInvoke?(context: TContext, input: Record<string, unknown>): Promise<boolean>;
   logger?: ToolExecutionLogger;
 }
 
@@ -45,13 +47,50 @@ export function createMCPToolExecutor<TContext extends object>(
   const gateErrorResult = (
     gateKind: 'deny' | 'ask',
     message: string,
-  ): RuntimeToolResult & { metadata: { source: McpToolSource; gateKind: 'deny' | 'ask' } } => ({
+    reason?: 'authority_revoked',
+  ): RuntimeToolResult & { metadata: { source: McpToolSource; gateKind: 'deny' | 'ask'; reason?: 'authority_revoked' } } => ({
     id: `${toolName}-gate`,
     name: toolName,
     result: message,
     error: true,
-    metadata: { source, gateKind },
+    metadata: { source, gateKind, ...(reason === undefined ? {} : { reason }) },
     });
+
+  const guardedInvoke = async (
+    context: TContext | undefined,
+    input: Record<string, unknown>,
+  ): Promise<RuntimeToolResult> => {
+    if (context && ports.beforeInvoke) {
+      let allowed = false;
+      try { allowed = await ports.beforeInvoke(context, input); } catch { allowed = false; }
+      if (!allowed) {
+        return gateErrorResult(
+          'deny',
+          '[MCP permission gate] Invocation authority was revoked before execution.',
+          'authority_revoked',
+        );
+      }
+    }
+    // Plan 616 T610b — establish the ambient app-tool context for the
+    // duration of the call.
+    //
+    // An in-process MCP server (`duya_app`) runs its tool implementation
+    // in THIS process, but the MCP wire carries only `name` +
+    // `arguments` — the live `ToolUseContext` (host IPC function,
+    // session id, per-turn state) cannot survive that boundary. The
+    // ambient context is how the tool reaches it.
+    //
+    // The scope is established HERE, at the executor, because this is
+    // the single point every MCP tool call passes through — including
+    // the deferred path (`tool_invoke` → dispatcher → this executor).
+    // AsyncLocalStorage keeps concurrent calls isolated, so two
+    // in-flight tools never see each other's context.
+    //
+    // It wraps the INVOCATION, not the guard: `beforeInvoke` is a
+    // host-side authority check that runs before the tool exists, so
+    // it must not see the tool's ambient context.
+    return withAppToolContext(context, () => invoke(input));
+  };
 
   return {
     execute: async (input, _workingDirectory, context) => {
@@ -94,7 +133,7 @@ export function createMCPToolExecutor<TContext extends object>(
               source,
               mode: activeMode,
             }, 'MCP');
-            return invoke(input);
+            return guardedInvoke(context, input);
           }
 
           const userDecision = await ports.requestPermission(context, {
@@ -120,7 +159,7 @@ export function createMCPToolExecutor<TContext extends object>(
               source,
               mode: activeMode,
             }, 'MCP');
-            return invoke(input);
+            return guardedInvoke(context, input);
           }
           if (userDecision === 'deny') {
             logger?.warn?.('[MCP] tool call denied by user', { toolName, source }, 'MCP');
@@ -150,21 +189,7 @@ export function createMCPToolExecutor<TContext extends object>(
         }
       }
 
-      // Plan 616 T610b — establish the ambient app-tool context for the
-      // duration of the call.
-      //
-      // An in-process MCP server (`duya_app`) runs its tool implementation
-      // in THIS process, but the MCP wire carries only `name` +
-      // `arguments` — the live `ToolUseContext` (host IPC function,
-      // session id, per-turn state) cannot survive that boundary. The
-      // ambient context is how the tool reaches it.
-      //
-      // The scope is established HERE, at the executor, because this is
-      // the single point every MCP tool call passes through — including
-      // the deferred path (`tool_invoke` → dispatcher → this executor).
-      // AsyncLocalStorage keeps concurrent calls isolated, so two
-      // in-flight tools never see each other's context.
-      return withAppToolContext(context, () => invoke(input));
+      return guardedInvoke(context, input);
     },
   };
 }

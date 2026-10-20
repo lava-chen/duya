@@ -14,6 +14,7 @@ import { PassThrough, Writable } from 'node:stream';
 import { TUIApp } from '../TUIApp.js';
 import { resolveTuiSlashCommand } from '../slash/index.js';
 import { detectTerminalEnvironment, type TerminalEnvironment } from '../terminal-env.js';
+import { press } from './key-injection.js';
 
 const ALT_BUFFER_ON = '\x1b[?1049h';
 const plain = (value: string): string => value.replace(/\{[^}]*\}/gu, '');
@@ -28,7 +29,7 @@ function richTerminal(): TerminalEnvironment {
 
 function makeApp(
   options: { readonly terminalEnv?: TerminalEnvironment } = {},
-): { app: TUIApp; out: () => string; program: { emit: (name: string) => void } } {
+): { app: TUIApp; out: () => string; input: PassThrough } {
   const chunks: Buffer[] = [];
   const stream = new Writable({
     write(chunk, _enc, cb) {
@@ -38,9 +39,10 @@ function makeApp(
   });
   (stream as unknown as { columns: number }).columns = 100;
   (stream as unknown as { rows: number }).rows = 30;
+  const input = new PassThrough();
   const app = new TUIApp({
     output: stream,
-    input: new PassThrough(),
+    input,
     inline: true,
     theme: 'dark',
     terminalEnv: options.terminalEnv ?? richTerminal(),
@@ -50,7 +52,7 @@ function makeApp(
   return {
     app,
     out: () => Buffer.concat(chunks).toString('utf8'),
-    program: (app as unknown as { program: { emit: (name: string) => void } }).program,
+    input,
   };
 }
 
@@ -84,7 +86,7 @@ function client(saved: Readonly<Record<string, string>> = {}) {
 
 describe('/settings in the TUI', () => {
   it('paints one list with a value column, an explanation, and filtering', async () => {
-    const { app, out, program } = makeApp();
+    const { app, out, input } = makeApp();
     app.start();
     await settle();
 
@@ -108,7 +110,7 @@ describe('/settings in the TUI', () => {
     expect(panel).toContain('type to filter');
     expect(out()).not.toContain(ALT_BUFFER_ON);
 
-    program.emit('key escape');
+    press(input, 'escape');
     await running;
     app.stop();
   });
@@ -130,7 +132,7 @@ describe('/settings in the TUI', () => {
   });
 
   it('cycles a row in place and saves it without closing the list', async () => {
-    const { app, program } = makeApp();
+    const { app, input } = makeApp();
     app.start();
     await settle();
 
@@ -141,7 +143,7 @@ describe('/settings in the TUI', () => {
     await settle();
 
     // First row is Theme, saved as `system`: one Enter is `dark`.
-    program.emit('key return');
+    press(input, 'return');
     await settle();
     expect(fake.calls).toEqual([['cli.tui.theme', 'dark']]);
 
@@ -154,18 +156,18 @@ describe('/settings in the TUI', () => {
     // And the switch reached the SCREEN, not just the row: `dark` was already
     // in force, so the claim is only worth anything on the next step.
     expect(app.activeThemeName()).toBe('dark');
-    program.emit('key return');
+    press(input, 'return');
     await settle();
     expect(app.activeThemeName()).toBe('light');
     expect(app.liveTuiPreferences().theme).toBe('light');
 
-    program.emit('key escape');
+    press(input, 'escape');
     await running;
     app.stop();
   });
 
   it('moves a transcript preference live and tells the TUI about it', async () => {
-    const { app, program } = makeApp();
+    const { app, input } = makeApp();
     app.start();
     await settle();
     expect(app.liveTuiPreferences().showThinking).toBe(true);
@@ -179,15 +181,15 @@ describe('/settings in the TUI', () => {
     // Row five is Thinking blocks: theme, display mode, effort, per-model
     // effort, then it. The count is the assertion — a row inserted above this
     // one silently moves this test onto the wrong switch.
-    for (let step = 0; step < 4; step += 1) program.emit('key down');
+    for (let step = 0; step < 4; step += 1) press(input, 'down');
     await settle();
-    program.emit('key return');
+    press(input, 'return');
     await settle();
 
     expect(fake.calls).toEqual([['cli.tui.showThinking', 'false']]);
     expect(app.liveTuiPreferences().showThinking).toBe(false);
 
-    program.emit('key escape');
+    press(input, 'escape');
     await running;
     app.stop();
   });
@@ -196,7 +198,7 @@ describe('/settings in the TUI', () => {
 describe('/settings per-model effort', () => {
   /** Row four: theme, display mode, effort, then this one. */
   async function openOnModelEffort(saved: Readonly<Record<string, string>> = {}) {
-    const { app, program } = makeApp();
+    const { app, input } = makeApp();
     app.start();
     await settle();
     const command = resolveTuiSlashCommand('settings');
@@ -207,10 +209,10 @@ describe('/settings per-model effort', () => {
     return {
       app,
       fake,
-      program,
+      input,
       panel: () => (app as unknown as { inlineInputLines: string[] }).inlineInputLines.map(plain).join('\n'),
       close: async () => {
-        program.emit('key escape');
+        press(input, 'escape');
         await running;
         app.stop();
       },
@@ -226,9 +228,9 @@ describe('/settings per-model effort', () => {
 
   it('writes one JSON key, not a per-model setting that could never be listed', async () => {
     const open = await openOnModelEffort();
-    for (let step = 0; step < 3; step += 1) open.program.emit('key down');
+    for (let step = 0; step < 3; step += 1) press(open.input, 'down');
     await settle();
-    open.program.emit('key return');
+    press(open.input, 'return');
     await settle();
 
     // `auto` → `low`, and the whole map under one key: the settings endpoint
@@ -249,20 +251,20 @@ describe('/settings per-model effort', () => {
     // row's detail — so walk down to it before reading its explanation. Two
     // effort rows showing different values with no note reads as a menu that
     // disagrees with itself.
-    for (let step = 0; step < 2; step += 1) open.program.emit('key down');
+    for (let step = 0; step < 2; step += 1) press(open.input, 'down');
     await settle();
     expect(open.panel()).toContain('overrides it with High');
 
-    open.program.emit('key down');
+    press(open.input, 'down');
     await settle();
     // high → max
-    open.program.emit('key return');
+    press(open.input, 'return');
     await settle();
     expect(open.fake.calls).toEqual([['cli.tui.effortByModel', '{"deepseek-flash":"max"}']]);
 
     // max → auto, which is the "no override" answer: the key is written empty
     // rather than with an `auto` entry, so absence is the only spelling.
-    open.program.emit('key return');
+    press(open.input, 'return');
     await settle();
     expect(open.fake.calls.at(-1)).toEqual(['cli.tui.effortByModel', '{}']);
     expect(open.panel()).toContain('Follows default · Low');
