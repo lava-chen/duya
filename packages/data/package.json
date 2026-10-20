@@ -159,6 +159,10 @@
       "types": "./dist/plugin-app-instance-store.d.ts",
       "import": "./dist/plugin-app-instance-store.js"
     },
+    "./plugin-app-grant-store": {
+      "types": "./dist/plugin-app-grant-store.d.ts",
+      "import": "./dist/plugin-app-grant-store.js"
+    },
     "./terminal-history-store": {
       "types": "./dist/terminal-history-store.d.ts",
       "import": "./dist/terminal-history-store.js"
