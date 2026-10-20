@@ -366,6 +366,7 @@ Four were wrong and are corrected below; these five were checked and are
 | --- | --- | --- |
 | **[610-architecture-series](./active/610-architecture-series/README.md)** | **P0** | **唯一的架构计划，仍 Active。** 执行队列唯一入口是 [19 — 快速执行队列](./active/610-architecture-series/19-fast-track-queue.md)：PR 级 T 卡、独占路径、首个失败证据、验收命令。**当前 next action = T01（`turn.completed` 生产者）**；T00（落盘 S1 fence）在共享检出静止后立即提交。S0/S1 已基本落地（`15fa4850` / `cdee21d5` / `a935741f` / `ac1f5183`）——[17](./active/610-architecture-series/17-shared-agent-platform-execution.md) §5 的切片状态已过期，架构裁决仍以 17 为准。 |
 | [587-agent-harness-monorepo](./active/587-agent-harness-monorepo/README.md) | P1 | 合同与历史推导已被 610 第 01 章接管(`01-layered-architecture/10-takeover-from-587.md`)。**不再单独排期**,只作为查证来源 |
+| [619-prompt-assembly-context-channel](./active/619-prompt-assembly-context-channel.md) | P0 | 提示词组装改造：单串 system + 消息通道分流 + rollout 留痕（对齐 Claude Code 的注入模型）。**当前 next action = Phase 0**（只加观测：逐段 sha256 observer + 分段 dump，不改行为）；前置已提交 `33e03d11`（修 prompt 套件的资产路径 / mock 漂移 / vitest 子路径 alias 双扩展名） |
 
 > **只有一个架构计划。** 610 的切片表 A0–A7 / B1–B3 / C1 是全部的架构工作,
 > 每一片的唯一下一动作与完成标志见
