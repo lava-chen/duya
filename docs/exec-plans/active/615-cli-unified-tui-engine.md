@@ -351,6 +351,7 @@ App (id: root)
 ### 7.4 Closeout verification (2026-10-20)
 
 - `packages/cli/test/tui-pty.test.ts`: **2/2 pass** on Windows ConPTY (80 columns), with a controlled Host and fake worker. Each case sends text and a distinct CR, asserts exactly one Host run, then exercises allow or deny and confirms the worker received that decision. On exit the test checks the process code and mouse, bracketed-paste, and alternate-screen disable sequences.
+- `packages/cli/src/tui/__tests__/tui-completion-popup.test.ts`: **14/14 pass**, including slash popup display, keyboard selection, and refiltering as more text is typed. This suite uses the TUI input stream, not a PTY; backspace reopening/closing behavior remains outside the verified PTY evidence.
 - The two historical PTY failures were harness false negatives: `readScreen(raw)` strips escapes from an append-only output transcript, so an earlier composer string cannot disappear from it after the UI clears. Waiting for the permission picker and checking the Host run count is the correct observable submission proof. No production input or paste behavior changed.
 - The remaining known full-suite red signatures are worker-path×3, registry×1, and host-stop-continue×2, compared by `(file, test, signature)` against the clean base. The two stop/continue failures reproduce on the base; worker-path and registry failures are also baseline signatures. Do not treat the old aggregate count as current test evidence.
 

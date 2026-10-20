@@ -73,9 +73,10 @@ tokens ──tokensToSpans──▶ StyledSpan[] ──┬─▶ spansToTags  �
 - `packages/cli` `tsc -b --force` 干净
 - `tui` **859 / 859** 全绿（计划阶段结果）
 - Windows ConPTY PTY acceptance：`packages/cli/test/tui-pty.test.ts` **2 / 2** 通过。使用 80 列真实 `node-pty`、受控 Host 和 fake worker；分别走 allow/deny，验证一次物理 Enter 只创建一个 run、worker 收到实际决策、退出码为 0，并发出 mouse / bracketed-paste / alternate-screen 恢复序列。
+- `packages/cli/src/tui/__tests__/tui-completion-popup.test.ts` **14 / 14** 通过，覆盖 slash popup、键盘接受和继续输入时重新筛选；backspace 重筛选/移除 slash 未由 PTY 验证，仍待人工终端验收。
 - 历史 `packages/cli` **1070 / 1078** 的 8 个失败里，两个 `tui-pty` 失败来自测试把追加式 ANSI 字节流误当成当前屏幕、等待已清除的旧 composer 文本消失。改为等待 permission picker 并检查 Host run 数后，PTY 两例在当前分支通过；没有生产输入修复。剩余 6 个已知失败按 `(file, test, signature)` 与 baseline 对照仍属既有项：worker-path×3 / registry×1 / host-stop-continue×2；网络用例在沙箱中的 loopback `EACCES` 不计作产品断言结果。
 - `npm run typecheck:all`：通过（Electron ratchet 无新错误）；`npm run architecture:check`：通过（0 新增违规）；`npm run bundle:verify`：通过（0/1064 worker bundle inputs changed）。
-- `npm run electron:build`：待串行构建窗口复验；首次默认堆运行在 Vite chunk rendering 阶段 OOM。Agent、CLI、Gateway bundles 已成功生成；临时输出未纳入本次改动。
+- `npm run electron:build`：本 worktree 两次都在 Vite `rendering chunks` 阶段 OOM，其中第二次已设 `NODE_OPTIONS=--max-old-space-size=6144`；Agent、CLI、Gateway bundles 在本地构建成功。另一个隔离 worktree 使用 Node v24.16.0 和相同 6144 MB heap 完整构建通过（Vite 46.54s），因此本 worktree 的 renderer build 仍需由 PR CI 验证；临时输出未纳入本次改动。
 - 基准测试**刻意不做阈值断言**：阈值会把慢机器变成误报失败，改为断言不变量 + `DUYA_PERF_BASELINE=1` 输出 JSON 跨阶段对比
 
 ---
