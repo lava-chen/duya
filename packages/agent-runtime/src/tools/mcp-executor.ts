@@ -2,6 +2,7 @@ import type { RuntimeToolResult, ToolExecutor } from './catalog/registry.js';
 import { decideMcpSource } from '../authorization/permissions/permissions.js';
 import { resolveAskWithoutUser } from '../authorization/permissions/askWithoutUser.js';
 import type { PermissionMode, McpToolSource } from '../authorization/permissions/types.js';
+import { withAppToolContext } from '@duya/capabilities/AppServer/app-tool-context';
 import type {
   ToolExecutionLogger,
   ToolPermissionDecision,
@@ -149,7 +150,21 @@ export function createMCPToolExecutor<TContext extends object>(
         }
       }
 
-      return invoke(input);
+      // Plan 616 T610b — establish the ambient app-tool context for the
+      // duration of the call.
+      //
+      // An in-process MCP server (`duya_app`) runs its tool implementation
+      // in THIS process, but the MCP wire carries only `name` +
+      // `arguments` — the live `ToolUseContext` (host IPC function,
+      // session id, per-turn state) cannot survive that boundary. The
+      // ambient context is how the tool reaches it.
+      //
+      // The scope is established HERE, at the executor, because this is
+      // the single point every MCP tool call passes through — including
+      // the deferred path (`tool_invoke` → dispatcher → this executor).
+      // AsyncLocalStorage keeps concurrent calls isolated, so two
+      // in-flight tools never see each other's context.
+      return withAppToolContext(context, () => invoke(input));
     },
   };
 }

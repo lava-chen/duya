@@ -59,6 +59,11 @@ function timeoutMs(seconds: number | undefined, fallback: number): number {
   return Math.max(1, Math.round(seconds * 1000));
 }
 
+/** True for a plain object (the shape tool-result metadata must have). */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /**
  * Race `promise` against a timer; rejects with a descriptive error on expiry.
  *
@@ -626,6 +631,13 @@ class MCPClient {
         result: composed.text,
         ...(composed.hasNonText ? { blocks: content as unknown[] } : {}),
         ...(result.structuredContent !== undefined ? { structured: result.structuredContent } : {}),
+        // Plan 616 T610b: the tool-result metadata rides along so the
+        // renderer can build rich rows (browser results, CUA app info,
+        // vision previews) for tools served over MCP. The MCP result
+        // schema is loose, so the field survives the round trip — but it
+        // has to be copied back onto the ToolResult here, or it is lost
+        // between the wire and the renderer.
+        ...(isRecord(result.metadata) ? { metadata: result.metadata } : {}),
       };
       if (result.isError) {
         // Plan 580 D9: a JSON-RPC-level success carrying isError=true is a

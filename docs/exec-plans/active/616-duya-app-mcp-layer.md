@@ -233,7 +233,7 @@ if (source) {
 | 卡 | 交付 | 独占路径 | 首个失败证据 |
 |---|---|---|---|
 | **T610a** ✅ | `duya_app` 进程内 MCP server 骨架：`MCPManager` 支持 `transport: 'in-process'`，`duya_app` server 起来、`tools/list` 返回工具、连接成功 | `packages/capabilities/src/MCP/**`、`packages/capabilities/src/AppServer/**` | `packages/capabilities/tests/mcp/in-process-app-server.test.ts`：「in-process transport 能 connect 并列出工具」— 今天 `MCPServerConfig.transport` 只有 `'stdio' \| 'streamable-http'`，编译期即红 |
-| **T610b** | 上下文穿透管道：ALS 承载活 `ToolUseContext`；`duya_app` 工具能读到 `ipcRequest` / `sessionId`，并发调用不串 | `packages/capabilities/src/AppServer/**`、`packages/capabilities/src/MCP/MCPManager.ts` | `packages/capabilities/tests/mcp/in-process-app-context.test.ts`：「canvas 风格工具在 server 侧能拿到 ipcRequest 函数」+「5 个并发调用各自拿到自己的 context」— 今天无任何通道 |
+| **T610b** ✅ | 上下文穿透管道：ALS 承载活 `ToolUseContext`；`duya_app` 工具能读到 `ipcRequest` / `sessionId`，并发调用不串 | `packages/capabilities/src/AppServer/**`、`packages/capabilities/src/MCP/MCPManager.ts`、`packages/agent-runtime/src/tools/mcp-executor.ts` | `packages/capabilities/tests/mcp/in-process-app-context.test.ts`：「canvas 风格工具在 server 侧能拿到 ipcRequest 函数」+「5 个并发调用各自拿到自己的 context」— 今天无任何通道 |
 | **T610c** | canvas 16 工具迁入 `duya_app`（从 conductor mode 注入改为 MCP 工具），**保留 canvas 专属渲染** | `packages/capabilities/src/canvas/**`、`packages/host/src/worker-modes/modifiers/conductor-mode.ts`、`apps/desktop/src/renderer/components/chat/tools/**` | renderer：旧名 `canvas_manage` 走 CanvasConductorToolRow、新名 `mcp_duya_app_canvas_manage` 也走同一行；今天只有旧名路径 |
 | **T610d** | bot 8 工具 + browser 迁入 `duya_app` | `packages/host/src/worker-tool-bindings/**`、`packages/host/src/worker-tools/**`、`packages/capabilities/src/BrowserTool/**` | registry 快照断言：bot/browser 工具的 owner 是 `mcp` 且内部键前缀是 `mcp__duya_app__` |
 | **T610d2** | §3.1 的其余 17 个产品能力迁入 `duya_app`（computer_use/cua、vision、image_generate、widget、module、duya_cli、session、MessageSession、SessionSearch、Brief、memory_write、write_stage1_policy、plan、update_state、send_artifact） | 同 T610d | 同 T610d；断言「基础工具清单之外的注册工具全部落在 `mcp__duya_app__` 前缀下」 |
@@ -241,6 +241,39 @@ if (source) {
 
 **C2–C5 必须落在 T610c/e，不能拖到最后**——否则 T610c 一改名，renderer 和权限立刻回归，
 中间态比改造前更糟。
+
+### 4.1 T610b 交付记录（2026-10-20）
+
+**生产改动**（3 个文件，~120 行）：
+
+| 文件 | 改动 |
+|---|---|
+| `packages/capabilities/src/AppServer/app-tool-context.ts` | 新建。ALS 存取对：`withAppToolContext(value, fn)` / `currentAppToolContext<T>()`。**按引用存，不拷贝**——canvas 工具会原地改写 context（`context.canvasTarget = {}`），拷贝会静默丢这些改动；并发隔离由 ALS 自身提供，不靠拷贝 |
+| `packages/capabilities/src/AppServer/in-process-app-server.ts` | 加 `tools/call` 处理器：查表 → 读 ALS context → 执行 capability 工具 → 回 MCP 结果。工具定义从「只广告」升级为「可执行」（`AppServerTool.execute`） |
+| `packages/agent-runtime/src/tools/mcp-executor.ts` | **生产接线点**：`invoke(input)` 被包进 `withAppToolContext(context, …)`。选这里是因为**每一次 MCP 工具调用都经过这个 executor**——eager 直调与 deferred（`tool_invoke` → dispatcher → executor）两条路都覆盖到，且只有一处 |
+| `packages/capabilities/src/MCP/MCPManager.ts` | `MCPClient.callTool` 重建 `ToolResult` 时补回 `result.metadata`（见下 C10） |
+
+**测试**（8 用例，跨两个包）：
+- `packages/capabilities/tests/mcp/in-process-app-context.test.ts`（6）：机制层——server 侧读到活 context / 5 个并发调用各自隔离 / 无 context 时优雅降级 / 穿过 `await` 不丢 / app server 真的执行 capability 工具 / metadata 往返保真。
+- `packages/agent-runtime/test/tools/execution/mcp-executor-app-context.test.ts`（2）：**生产接线层**——经由真正的 `createMCPToolExecutor` 建立的 scope 能被 server 侧读到，且并发不串。
+
+### 4.2 T610b 的两个实测结论
+
+**C10 — `ToolResult.metadata` 原本不穿 MCP 往返（已修）。**
+
+`MCPClient.callTool` 从 MCP 结果重建 `ToolResult` 时，只搬了 `content` / `structuredContent`，
+**丢掉了 `metadata`**。而 renderer 的富行（browser 的 `browserResults`、CUA 的 `cuaApp`、
+vision 预览）正是从 `tool.metadata` 读的——**任何工具迁进 `duya_app` 都会掉渲染**。
+
+实测：MCP 结果 schema 是宽松的（`metadata` 能过线），所以**丢的是重建那一步，不是协议**。
+修法：`MCPClient.callTool` 重建时把 `result.metadata` 抄回 `ToolResult.metadata`。
+
+**C11 — `duya_app` 的工具结果不能只回文本。**
+
+capability 工具的 `ToolResult` 有 `result`（文本）/ `metadata` / `structured` / `error` 四个面。
+app server 的 `tools/call` 必须逐个映射，不能只回 `content[].text`：
+`metadata` → 结果的 `metadata`（配合 C10 的修法往返保真）、`structured` → `structuredContent`、
+`error` → `isError`。
 
 ## 5. 验收证据（必须是正面的）
 
