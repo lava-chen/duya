@@ -36,6 +36,7 @@ import { ensureSession, startStream, stopStream, subscribeSession, getSnapshot, 
 import { useSettings } from "@/hooks/useSettings";
 import { ConductorHostProvider } from "@/conductor-host-provider";
 import type { Message, StreamPhase, FileAttachment } from "@/types/message";
+import type { PermissionRequestEvent } from "@/types/stream";
 import {
   dbMessageToMessage,
   isBotDirectVisibleSource,
@@ -44,6 +45,13 @@ import {
 import { stripPastedContentMarkers } from "@/lib/message-content-parser";
 import { interruptChat } from "@/lib/agent-sse-client";
 import { SearchCommandPalette } from "@/components/SearchCommandPalette";
+import { UiServicesProvider } from "@/hooks/useUiServices";
+import { getUiServices, type UiServices } from "@/services";
+import type { UiRunSession } from "@/services/ui-services";
+import type { RunSessionSnapshot } from "@duya/client-core";
+import type { HostPermissionRequest } from "@duya/agent-protocol";
+import { mergeRunSessionRows } from "@/lib/run-session-view";
+import { RunAttachmentGate } from "@/lib/run-attachment-gate";
 
 /** Boot splash lifecycle. Re-exported from StartupLanding for convenience. */
 type BootSplashPhase = StartupLandingPhase;
@@ -65,6 +73,19 @@ function deriveProvisionalTitle(content: string): string | null {
     .trim();
   if (normalized.length < 4) return null;
   return normalized.slice(0, 48).trim();
+}
+
+function CapabilityUnavailable({ title }: { title: string }) {
+  return (
+    <section className="flex h-full min-h-0 items-center justify-center p-8" role="status">
+      <div className="max-w-lg text-center">
+        <h1 className="text-lg font-semibold text-foreground">{title}</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          当前 Web Host 尚未提供此功能。请在桌面端继续使用。
+        </p>
+      </div>
+    </section>
+  );
 }
 
 interface PendingPersistedHandoff {
@@ -98,20 +119,41 @@ export function App({ onReady }: { onReady?: () => void } = {}) {
       }),
     [],
   );
-  return (
+  const uiServices = resolveUiServices();
+  const app = (
     <QueryClientProvider client={queryClient}>
       <I18nProvider>
         <FontProvider>
-          <ConductorHostProvider>
-            <AppShellInner onReady={onReady} />
-          </ConductorHostProvider>
+          {uiServices?.platform === 'web' || uiServices?.capabilities.conductor === false ? (
+            <AppShellInner onReady={onReady} uiServices={uiServices} />
+          ) : (
+            <ConductorHostProvider>
+              <AppShellInner onReady={onReady} uiServices={uiServices} />
+            </ConductorHostProvider>
+          )}
         </FontProvider>
       </I18nProvider>
     </QueryClientProvider>
   );
+  return uiServices === null ? app : (
+    <UiServicesProvider services={uiServices}>{app}</UiServicesProvider>
+  );
 }
 
-function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
+function resolveUiServices(): UiServices | null {
+  try {
+    return getUiServices();
+  } catch (error) {
+    // The existing Desktop shell continues through its established preload
+    // adapter until its Host migration is complete. Browser entry points must
+    // configure an explicit Host adapter before mounting this shared App.
+    if (typeof window !== "undefined" && window.electronAPI) return null;
+    if (import.meta.env.MODE === "test") return null;
+    throw error;
+  }
+}
+
+function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServices: UiServices | null } = { uiServices: null }) {
   // Actions: stable references via useShallow — avoids re-renders when
   // the store returns new references for other (unrelated) state fields.
   const {
@@ -133,16 +175,23 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
   // State: individual field subscriptions to avoid subscribing to the
   // entire store. threadMessages is derived here so only the active
   // thread's message-array changes trigger re-renders of child ChatViews.
-  const { currentView, isHydrated, isNewChatDrafting, activeThreadId, messages } =
+  const { currentView, isHydrated, isNewChatDrafting, newChatSourceSessionId, activeThreadId, messages } =
     useConversationStore(
       useShallow((s) => ({
         currentView: s.currentView,
         isHydrated: s.isHydrated,
         isNewChatDrafting: s.isNewChatDrafting,
+        newChatSourceSessionId: s.newChatSourceSessionId,
         activeThreadId: s.activeThreadId,
         messages: s.messages,
       }))
     );
+  const selectedThreadRef = useRef(activeThreadId);
+  const selectionLeaseRef = useRef(0);
+  if (selectedThreadRef.current !== activeThreadId) {
+    selectedThreadRef.current = activeThreadId;
+    selectionLeaseRef.current += 1;
+  }
 
   const [workflowRunRequest, setWorkflowRunRequest] = useState<WorkflowRunNavigationRequest | null>(null);
   const consumeWorkflowRunRequest = useCallback(() => setWorkflowRunRequest(null), []);
@@ -165,10 +214,175 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     };
   }, [setCurrentView]);
 
-  const threadMessages = useMemo(
-    () => (activeThreadId ? messages[activeThreadId] ?? [] : []),
-    [activeThreadId, messages],
-  );
+  const [hostRunSnapshot, setHostRunSnapshot] = useState<RunSessionSnapshot | null>(null);
+  const [hostLedgerPermission, setHostLedgerPermission] = useState<HostPermissionRequest | null>(null);
+  const [hostSendError, setHostSendError] = useState<string | null>(null);
+  const hostRunSessionRef = useRef<UiRunSession | null>(null);
+  const hostRunIdRef = useRef<string | null>(null);
+  const hostRunAbortRef = useRef<AbortController | null>(null);
+  const runAttachmentGateRef = useRef(new RunAttachmentGate());
+  const bindHostRun = useCallback((runId: string, sessionId: string, lease: number) => {
+    const isCurrentSelection = () => selectedThreadRef.current === sessionId && selectionLeaseRef.current === lease;
+    if (!isCurrentSelection() || !uiServices) return () => {};
+    hostRunAbortRef.current?.abort();
+    hostRunSessionRef.current?.stop();
+    const abort = new AbortController();
+    hostRunAbortRef.current = abort;
+    hostRunIdRef.current = runId;
+    const runSession = uiServices.runs.openSession(runId, sessionId, abort.signal);
+    hostRunSessionRef.current = runSession;
+    const initialSnapshot = runSession.getSnapshot();
+    if (isCurrentSelection()) {
+      setHostRunSnapshot(initialSnapshot);
+      const durableStatus = runSession.getDurableStatus();
+      setIsStreaming(durableStatus === null || durableStatus === 'running');
+    }
+    const unsubscribe = runSession.subscribe(() => {
+      const snapshot = runSession.getSnapshot();
+      if (!isCurrentSelection()) return;
+      setHostRunSnapshot(snapshot);
+      const durableStatus = runSession.getDurableStatus();
+      setIsStreaming(durableStatus === null || durableStatus === 'running');
+    });
+    runSession.start();
+    void runSession.settled().finally(() => {
+      if (hostRunSessionRef.current !== runSession) return;
+      const durableStatus = runSession.getDurableStatus();
+      if (durableStatus === 'completed') {
+        setHostSendError(null);
+      } else if (durableStatus === 'cancelled') {
+        setHostSendError('The Host confirmed that this run was cancelled.');
+      } else if (durableStatus === 'failed') {
+        setHostSendError('The Host recorded this run as failed.');
+      } else if (durableStatus === 'budget_exhausted') {
+        setHostSendError('The Host stopped this run after it exhausted its budget.');
+      } else {
+        // Stream completion alone is not proof of durable settlement.
+        setHostSendError('The Host has not confirmed a terminal run status.');
+      }
+      void loadThreadMessages(sessionId, { force: true }).finally(() => {
+        if (hostRunSessionRef.current !== runSession || !isCurrentSelection()) return;
+        // Keep the authoritative terminal projection mounted so tool cards and
+        // interleaved assistant rows remain visible after the live stream ends.
+        setIsStreaming(false);
+      });
+    });
+    return () => {
+      unsubscribe();
+      abort.abort();
+      runSession.stop();
+    };
+  }, [loadThreadMessages, uiServices]);
+
+  useEffect(() => {
+    if (!uiServices || !activeThreadId) {
+      setHostRunSnapshot(null);
+      hostRunIdRef.current = null;
+      return;
+    }
+    setIsStreaming(false);
+    setHostSendError(null);
+    setHostRunSnapshot(null);
+    hostRunIdRef.current = null;
+    const lease = selectionLeaseRef.current;
+    const restoreGeneration = runAttachmentGateRef.current.beginRestore();
+    const abort = new AbortController();
+    let dispose: (() => void) | undefined;
+    void uiServices.runs.listBySession(activeThreadId).then((runs) => {
+      if (abort.signal.aborted || !runAttachmentGateRef.current.isCurrent(restoreGeneration) ||
+          selectionLeaseRef.current !== lease || selectedThreadRef.current !== activeThreadId) return;
+      const run = [...runs].sort((a, b) => a.createdAt - b.createdAt).at(-1);
+      if (!run) {
+        setHostRunSnapshot(null);
+        return;
+      }
+      dispose = bindHostRun(run.runId, activeThreadId, lease);
+    }).catch(() => {
+      if (!abort.signal.aborted && runAttachmentGateRef.current.isCurrent(restoreGeneration) &&
+          selectionLeaseRef.current === lease && selectedThreadRef.current === activeThreadId) {
+        setHostRunSnapshot(null);
+      }
+    });
+    return () => {
+      abort.abort();
+      dispose?.();
+      if (hostRunSessionRef.current) {
+        hostRunSessionRef.current.stop();
+        hostRunSessionRef.current = null;
+      }
+    };
+  }, [activeThreadId, bindHostRun, uiServices]);
+
+  useEffect(() => {
+    if (!uiServices || !activeThreadId) {
+      setHostLedgerPermission(null);
+      return;
+    }
+    const lease = selectionLeaseRef.current;
+    const controller = new AbortController();
+    const refresh = () => {
+      void uiServices.approvals.listPending(activeThreadId).then((requests) => {
+        if (controller.signal.aborted || selectionLeaseRef.current !== lease || selectedThreadRef.current !== activeThreadId) return;
+        setHostLedgerPermission(requests.find((request) => request.sessionId === activeThreadId) ?? null);
+      }).catch(() => {
+        if (!controller.signal.aborted && selectionLeaseRef.current === lease && selectedThreadRef.current === activeThreadId) {
+          setHostLedgerPermission(null);
+        }
+      });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 1_500);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+    };
+  }, [activeThreadId, uiServices]);
+
+  const threadMessages = useMemo(() => {
+    const durable = activeThreadId ? messages[activeThreadId] ?? [] : [];
+    if (!uiServices || hostRunSnapshot?.sessionId !== activeThreadId) return durable;
+    return mergeRunSessionRows(durable, hostRunSnapshot);
+  }, [activeThreadId, hostRunSnapshot, messages, uiServices]);
+  const hostPermission = useMemo(() => {
+    const permission = hostRunSnapshot?.permissions.find((item) => item.awaitingAnswer);
+    if (permission) {
+      const mode: PermissionRequestEvent['mode'] = permission.mode === 'ask_user_question' || permission.toolName === 'AskUserQuestion'
+      ? 'ask_user_question'
+      : permission.mode === 'exit_plan_mode' || permission.toolName === 'ExitPlanMode'
+        ? 'exit_plan_mode'
+        : 'generic';
+      return {
+        id: permission.requestId,
+        toolName: permission.toolName,
+        toolInput: { ...permission.toolInput },
+        mode,
+        expiresAt: permission.expiresAt,
+        ...(permission.reason ? { decisionReason: permission.reason } : {}),
+      };
+    }
+    const ledgerPermission = hostLedgerPermission;
+    if (!ledgerPermission || ledgerPermission.status !== 'pending') return null;
+    const mode: PermissionRequestEvent['mode'] = ledgerPermission.toolName === 'AskUserQuestion'
+      ? 'ask_user_question'
+      : ledgerPermission.toolName === 'ExitPlanMode' ? 'exit_plan_mode' : 'generic';
+    return {
+      id: ledgerPermission.id,
+      toolName: ledgerPermission.toolName,
+      toolInput: { ...(ledgerPermission.toolInput ?? {}) },
+      mode,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      ...(ledgerPermission.message ? { decisionReason: ledgerPermission.message } : {}),
+    };
+  }, [hostLedgerPermission, hostRunSnapshot]);
+  const respondToHostPermission = useCallback((decision: 'allow' | 'allow_session' | 'deny') => {
+    if (!uiServices || !hostPermission) return;
+    void uiServices.approvals.resolve(hostPermission.id, {
+      status: decision === 'deny' ? 'deny' : 'allow',
+      decision,
+    }).catch((error: unknown) => {
+      setHostSendError(error instanceof Error ? error.message : 'The Host could not resolve this approval.');
+    });
+  }, [hostPermission, uiServices]);
   const { settings } = useSettings();
 
   const [isStreaming, setIsStreaming] = useState(false);
@@ -250,7 +464,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
   // by `done`; only then reload the durable rows, while keeping the existing
   // stream view visible until that reload has reached the conversation store.
   useEffect(() => {
-    if (!activeThreadId) return;
+    if (uiServices || !activeThreadId) return;
 
     ensureSession(activeThreadId);
     const initialSnapshot = getSnapshot(activeThreadId);
@@ -293,7 +507,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     });
 
     return unsubscribe;
-  }, [activeThreadId, loadThreadMessages]);
+  }, [activeThreadId, loadThreadMessages, uiServices]);
 
   // A background sub-agent finishing after its parent turn completes is now
   // handled in the mailbox event listener (mailbox-store.ts): a
@@ -430,6 +644,64 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       // a marker through (e.g. a unit test that constructs one).
       const plainContent = stripPastedContentMarkers(content);
 
+      if (uiServices) {
+        if (files?.length) {
+          setHostSendError('Attachments are not available for this Host connection yet. Remove the attachments and try again.');
+          return;
+        }
+        setHostSendError(null);
+        const thread = useConversationStore.getState().threads.find((item) => item.id === activeThreadId);
+        const title = deriveProvisionalTitle(plainContent);
+        if (thread && DEFAULT_THREAD_TITLES.has(thread.title) && title) {
+          updateThreadTitle(activeThreadId, title, { sync: false });
+          void uiServices.sessions.update(activeThreadId, thread.updatedAt, { title }).then((result) => {
+            if (!result.updated) {
+              setHostSendError('The Host session changed before its title could be saved.');
+            }
+          }).catch((error: unknown) => {
+            setHostSendError(error instanceof Error ? error.message : 'The Host could not save the session title.');
+          });
+        }
+        const userMessage: Message = {
+          id: crypto.randomUUID(),
+          role: 'user',
+          content,
+          displayContent,
+          timestamp: Date.now(),
+          metadata: { optimistic: true },
+        };
+        // The Host already owns this selected session. The store's legacy
+        // first-message title sync would route it through createThreadIPC,
+        // incorrectly requiring a source workspace binding and treating the
+        // existing Host session as a new Web-created session.
+        addMessage(activeThreadId, userMessage, { persist: false, syncTitle: false, updateTitle: false });
+        // A delayed listBySession restore for this same selection must never
+        // replace the run this send is about to start.
+        runAttachmentGateRef.current.invalidateRestores();
+        setIsStreaming(true);
+        const sendLease = selectionLeaseRef.current;
+        void uiServices.runs.start({
+          sessionId: activeThreadId,
+          prompt: plainContent,
+          ...(model ? { model } : {}),
+          ...(effort ? { effort } : {}),
+          ...(thread?.providerId ? { providerId: thread.providerId } : {}),
+        }).then((result) => {
+          if (selectionLeaseRef.current !== sendLease || selectedThreadRef.current !== activeThreadId) return;
+          if (!result.accepted) {
+            setIsStreaming(false);
+            setHostSendError(`The Host could not start this run: ${result.reason}`);
+            return;
+          }
+          bindHostRun(result.runId, activeThreadId, sendLease);
+        }).catch((error: unknown) => {
+          if (selectionLeaseRef.current !== sendLease || selectedThreadRef.current !== activeThreadId) return;
+          setIsStreaming(false);
+          setHostSendError(error instanceof Error ? error.message : 'The Host could not start this run.');
+        });
+        return;
+      }
+
       // Resolve the thread's providerId so the worker uses the right
       // API key/baseURL. Without this, picking a model from a
       // non-default provider still uses the active provider's config
@@ -546,7 +818,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         });
       });
     },
-    [activeThreadId, addMessage, settings.titleGenerationModel, updateThreadTitle],
+    [activeThreadId, addMessage, bindHostRun, settings.titleGenerationModel, uiServices, updateThreadTitle],
   );
 
   // Plan 491 P1.1 / 477 P3.1: dedicated bot-direct send path. The workspace
@@ -716,6 +988,18 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
 
   const handleInterrupt = useCallback(() => {
     if (!activeThreadId) return;
+    if (uiServices && hostRunIdRef.current && hostRunSessionRef.current?.getSnapshot().sessionId === activeThreadId) {
+      const runId = hostRunIdRef.current;
+      const cancelLease = selectionLeaseRef.current;
+      void uiServices.runs.cancel(runId).then((result) => {
+        if (selectionLeaseRef.current !== cancelLease || selectedThreadRef.current !== activeThreadId) return;
+        if (!result.requested) setHostSendError(`The Host could not cancel this run: ${result.reason}`);
+      }).catch((error: unknown) => {
+        if (selectionLeaseRef.current !== cancelLease || selectedThreadRef.current !== activeThreadId) return;
+        setHostSendError(error instanceof Error ? error.message : 'The Host could not cancel this run.');
+      });
+      return;
+    }
     const now = Date.now();
 
     if (isStreaming) {
@@ -742,7 +1026,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
 
     // First press while idle: no-op
     lastCancelTimeRef.current = now;
-  }, [activeThreadId, isStreaming]);
+  }, [activeThreadId, isStreaming, uiServices]);
 
   const isPendingHandoffForActiveThread = pendingPersistedHandoff?.sessionId === activeThreadId;
   const hasDurableHandoffMessage = isPendingHandoffForActiveThread
@@ -804,10 +1088,32 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
   );
 
   const renderView = () => {
+    if (uiServices?.platform === 'web') {
+      const capabilityByView: Partial<Record<string, keyof UiServices['capabilities']>> = {
+        skills: 'extensions',
+        automation: 'automation',
+        workflow: 'workflows',
+        projects: 'localFileAccess',
+        conductor: 'conductor',
+        settings: 'settings',
+        extensions: 'extensions',
+      };
+      const requiredCapability = capabilityByView[currentView];
+      if (requiredCapability && !uiServices.capabilities[requiredCapability]) {
+        return <CapabilityUnavailable title="此功能暂不可用" />;
+      }
+      if (!activeThreadId && !newChatSourceSessionId && (currentView === 'chat' || currentView === 'home' || isNewChatDrafting)) {
+        return <CapabilityUnavailable title="尚无已授权的工作区会话" />;
+      }
+      if (currentView === 'chat' && !uiServices.capabilities.bots && resolveChatMode(activeThreadId) !== 'workspace') {
+        return <CapabilityUnavailable title="机器人和共享房间暂不可用" />;
+      }
+    }
+
     // Lazy new-chat composer: no backing thread yet. Shown before the user
     // sends anything, so an unsent draft never appears in the sidebar.
     if (isNewChatDrafting) {
-      return <NewChatView onSendMessage={handleSendMessage} />;
+      return <NewChatView onSendMessage={handleSendMessage} workspaceSelectionEnabled={uiServices?.capabilities.localFileAccess !== false} />;
     }
 
     if (shouldRenderChat) {
@@ -855,8 +1161,13 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
               onInterrupt={handleInterrupt}
               isStreaming={isStreaming || isFinalizing}
               isFinalizing={isFinalizing}
+              hostRunActive={uiServices !== null && (hostRunSnapshot?.run.status === 'pending' || hostRunSnapshot?.run.status === 'running')}
+              hostSendError={hostSendError}
+              hostPermission={hostPermission}
+              onHostPermissionResponse={respondToHostPermission}
+              allowPermissionModeChange={uiServices?.platform !== 'web'}
               hasQueuedMessages={hasQueuedMessages(activeThreadId)}
-              onLivePermissionChange={(mode) => {
+              onLivePermissionChange={uiServices?.platform === 'web' ? undefined : (mode) => {
                 const agentMode = mode === 'bypass' ? 'bypassPermissions' : mode === 'ask' ? 'default' : 'auto';
                 void window.electronAPI?.agent?.setAgentPermissionMode(activeThreadId, agentMode);
               }}
@@ -915,7 +1226,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
   return (
     <I18nProvider>
       <FontProvider>
-        <AppShell>{renderView()}</AppShell>
+        <AppShell capabilities={uiServices?.capabilities}>{renderView()}</AppShell>
         <SearchCommandPalette />
         {bootPhase !== "hidden" && (
           <StartupLanding phase={bootPhase} status={bootStatus} />

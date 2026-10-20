@@ -22,6 +22,7 @@ interface SessionSelectorProps {
   /** Optional: create a no-project session (shared ~/.duya/workspace). */
   onNewNoProjectSession?: () => void;
   onSelectThread: (threadId: string) => void;
+  workspaceSelectionEnabled?: boolean;
   /**
    * When provided, replaces the "build in X" header with this greeting line
    * and moves the project selector to a row below the input area.
@@ -39,6 +40,7 @@ export function SessionSelector({
   onUseExistingFolder,
   onNewNoProjectSession,
   onSelectThread,
+  workspaceSelectionEnabled = true,
   greeting,
   showRecentThreads = true,
   maxRecentThreads = 5,
@@ -190,7 +192,7 @@ export function SessionSelector({
     </div>
   );
 
-  const projectSelector = (
+  const projectSelector = workspaceSelectionEnabled ? (
     <div className="welcome-project-selector">
       <DropdownMenu
         trigger={
@@ -221,6 +223,10 @@ export function SessionSelector({
           }
         }}
       />
+    </div>
+  ) : (
+    <div className="welcome-project-selector text-xs text-muted-foreground" role="status">
+      将沿用当前已授权会话的工作区
     </div>
   );
 

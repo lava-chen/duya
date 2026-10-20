@@ -979,27 +979,33 @@ function hostMessageItemToMessage(item: HostMessageItem, sessionId: string): Mes
   const role = stored.role
   if (role !== 'user' && role !== 'assistant' && role !== 'system' && role !== 'tool') return null
   const content = stored.content
+  const runId = item.entry.type === 'message' ? item.entry.runId : undefined
+  // The durable row already carries the renderer identity in snake_case
+  // (`msg_type`, `tool_call_id`, `parent_tool_call_id`, …). Dropping it made
+  // every persisted tool result arrive as a plain text row with no id, so its
+  // tool_use could never pair and the transcript showed the call as still
+  // running after the run had completed.
   return {
     id: item.id,
     sessionId,
     role,
     content: typeof content === 'string' ? content : content as unknown as ContentBlock[],
     name: 'name' in stored && typeof stored.name === 'string' ? stored.name : null,
-    toolCallId: null,
+    toolCallId: typeof stored.tool_call_id === 'string' ? stored.tool_call_id : null,
     tokenUsage: null,
-    msgType: 'text',
-    thinking: null,
-    toolName: null,
-    toolInput: null,
-    parentToolCallId: null,
-    vizSpec: null,
-    status: 'done',
+    msgType: typeof stored.msg_type === 'string' ? stored.msg_type : 'text',
+    thinking: typeof stored.thinking === 'string' ? stored.thinking : null,
+    toolName: typeof stored.tool_name === 'string' ? stored.tool_name : null,
+    toolInput: typeof stored.tool_input === 'string' ? stored.tool_input : null,
+    parentToolCallId: typeof stored.parent_tool_call_id === 'string' ? stored.parent_tool_call_id : null,
+    vizSpec: typeof stored.viz_spec === 'string' ? stored.viz_spec : null,
+    status: typeof stored.status === 'string' ? stored.status : 'done',
     seqIndex: item.sequence,
-    durationMs: null,
-    subAgentId: null,
-    attachments: null,
+    durationMs: typeof stored.duration_ms === 'number' ? stored.duration_ms : null,
+    subAgentId: typeof stored.sub_agent_id === 'string' ? stored.sub_agent_id : null,
+    attachments: Array.isArray(stored.attachments) ? stored.attachments as FileAttachment[] : null,
     createdAt: item.createdAt,
-    ...(item.entry.runId === undefined ? {} : { runId: item.entry.runId }),
+    ...(runId === undefined ? {} : { runId }),
     ...(item.entry.source === undefined ? {} : { source: item.entry.source }),
   }
 }

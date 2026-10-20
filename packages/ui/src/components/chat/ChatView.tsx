@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import { createPortal } from 'react-dom';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { Message } from '@/types';
+import type { PermissionRequestEvent } from '@/types/stream';
 import { MessageList, type MessageListRef } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { ChatErrorBanner } from './ChatErrorBanner';
@@ -82,11 +83,17 @@ interface ChatViewProps {
   onSendMessage: (content: string, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, effort?: string, displayContent?: string, conductorMode?: boolean, queuedMailboxId?: string, permissionMode?: 'ask' | 'auto' | 'bypass') => void;
   /** Live mid-run permission switch, forwarded to the running agent. */
   onLivePermissionChange?: (mode: 'ask' | 'auto' | 'bypass') => void;
+  allowPermissionModeChange?: boolean;
   onInterrupt?: () => void;
   isStreaming?: boolean;
   /** The final persisted reply is loading; keep the existing stream view until it arrives. */
   isFinalizing?: boolean;
   hasQueuedMessages?: boolean;
+  /** A Host RunSession supplies live rows directly from its authoritative snapshot. */
+  hostRunActive?: boolean;
+  hostSendError?: string | null;
+  hostPermission?: PermissionRequestEvent | null;
+  onHostPermissionResponse?: (decision: 'allow' | 'allow_session' | 'deny') => void;
 }
 
 const NOOP_OPEN_PANEL = () => '';
@@ -148,10 +155,15 @@ export function ChatView({
   messages,
   onSendMessage,
   onLivePermissionChange,
+  allowPermissionModeChange = true,
   onInterrupt,
   isStreaming = false,
   isFinalizing = false,
   hasQueuedMessages = false,
+  hostRunActive = false,
+  hostSendError = null,
+  hostPermission = null,
+  onHostPermissionResponse,
 }: ChatViewProps) {
   const { t } = useTranslation();
   const { settings, save: saveSettings } = useSettings();
@@ -173,10 +185,11 @@ export function ChatView({
   // survives session switches and is the worker's durable default.
   const [permissionMode, setPermissionMode] = useState<'ask' | 'auto' | 'bypass'>('auto');
   const handlePermissionModeChange = useCallback((mode: 'ask' | 'auto' | 'bypass') => {
+    if (!allowPermissionModeChange) return;
     setPermissionMode(mode);
     onLivePermissionChange?.(mode);
     updateThreadIPC(sessionId, { permissionProfile: permissionModeUiToProfile(mode) }).catch(console.error);
-  }, [onLivePermissionChange, sessionId]);
+  }, [allowPermissionModeChange, onLivePermissionChange, sessionId]);
 
   // Sync effort from settings when settings load for the first time.
   useEffect(() => {
@@ -567,9 +580,14 @@ export function ChatView({
     sessionId,
     permissionProfile,
   });
+  const activePermission = hostPermission ?? pendingPermission;
+  const activePermissionResolved = hostPermission ? null : permissionResolved;
+  const respondToActivePermission = hostPermission
+    ? (decision: 'allow' | 'allow_session' | 'deny') => onHostPermissionResponse?.(decision)
+    : respondToPermission;
   const isAskUserQuestionPending =
-    pendingPermission?.toolName === 'AskUserQuestion' ||
-    pendingPermission?.mode === 'ask_user_question';
+    activePermission?.toolName === 'AskUserQuestion' ||
+    activePermission?.mode === 'ask_user_question';
 
   // Load session model and permission mode on mount
   // Priority: 1) session saved model (if not default) 2) lastSelectedModel
@@ -1500,6 +1518,7 @@ export function ChatView({
 
       <div className="chat-body-row">
         <div className="chat-main-column">
+      {hostSendError && <div className="mx-4 mt-3 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-700" role="alert">{hostSendError}</div>}
       <div className="flex-1 min-h-0">
         {messages.length === 0 && !isStreaming && !editDraft ? (
           /* Empty state with SessionSelector and centered input */
@@ -1538,7 +1557,7 @@ export function ChatView({
                     effort={effort}
                     onEffortChange={setEffort}
                     permissionMode={permissionMode}
-                    onPermissionModeChange={handlePermissionModeChange}
+                    onPermissionModeChange={allowPermissionModeChange ? handlePermissionModeChange : undefined}
                     placeholder={t('chat.typeMessage')}
                     messages={messages}
                     conductorEnabled={conductorEnabled}
@@ -1571,7 +1590,7 @@ export function ChatView({
             <MessageList
               ref={messageListRef}
               messages={renderedMessages}
-              isStreaming={isStreaming}
+              isStreaming={isStreaming && !hostRunActive}
               isFinalizing={isFinalizing}
               onForceStop={handleStop}
               onScrollStateChange={handleScrollStateChange}
@@ -1617,9 +1636,9 @@ export function ChatView({
 
             {!isAskUserQuestionPending && (
               <PermissionPrompt
-                pendingPermission={pendingPermission}
-                permissionResolved={permissionResolved}
-                onPermissionResponse={respondToPermission}
+                pendingPermission={activePermission}
+                permissionResolved={activePermissionResolved}
+                onPermissionResponse={respondToActivePermission}
                 permissionProfile={permissionProfile}
               />
             )}
@@ -1630,9 +1649,9 @@ export function ChatView({
                 composer (no longer a floating pill above it). */}
             {isAskUserQuestionPending ? (
               <PermissionPrompt
-                pendingPermission={pendingPermission}
-                permissionResolved={permissionResolved}
-                onPermissionResponse={respondToPermission}
+                pendingPermission={activePermission}
+                permissionResolved={activePermissionResolved}
+                onPermissionResponse={respondToActivePermission}
                 permissionProfile={permissionProfile}
               />
             ) : (
@@ -1687,7 +1706,7 @@ export function ChatView({
                 effort={effort}
                 onEffortChange={setEffort}
                 permissionMode={permissionMode}
-                onPermissionModeChange={handlePermissionModeChange}
+                onPermissionModeChange={allowPermissionModeChange ? handlePermissionModeChange : undefined}
                 messages={messages}
                 conductorEnabled={conductorEnabled}
                 onConductorChange={handleConductorChange}

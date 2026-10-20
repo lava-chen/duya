@@ -86,6 +86,7 @@ function resolveLinkedBrowserScreenshotAttachment(
 }
 
 function formatMessageTime(timestamp: number, t: (key: import('@/i18n').TranslationKey, params?: Record<string, string | number>) => string, locale: 'en' | 'zh' = 'en'): string {
+  if (!Number.isFinite(timestamp)) return '';
   const date = new Date(timestamp);
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -990,9 +991,11 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
                 </div>
               )}
               <div className="flex justify-end items-center gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                <span className="text-[11px] text-muted-foreground/60 tabular-nums">
-                  {formatMessageTime(message.timestamp, t, locale)}
-                </span>
+                {Number.isFinite(message.timestamp) && (
+                  <span className="text-[11px] text-muted-foreground/60 tabular-nums">
+                    {formatMessageTime(message.timestamp, t, locale)}
+                  </span>
+                )}
                 <IconButton
                   variant="ghost"
                   size="sm"
@@ -1113,9 +1116,11 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
             the footer returns once the run ends. */}
         {!isLiveRun && (
           <div className="flex items-center gap-2 mt-3">
-            <span className="text-[11px] text-muted-foreground/60 tabular-nums">
-              {formatMessageTime(message.timestamp, t, locale)}
-            </span>
+            {Number.isFinite(message.timestamp) && (
+              <span className="text-[11px] text-muted-foreground/60 tabular-nums">
+                {formatMessageTime(message.timestamp, t, locale)}
+              </span>
+            )}
             <IconButton
               variant="ghost"
               size="md"

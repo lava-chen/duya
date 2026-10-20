@@ -139,8 +139,12 @@ export interface Message {
   vizSpec?: string | null;
   status?: string;
   seqIndex?: number | null;
+  /** Identifies which cursor domain produced seqIndex when several timelines are merged. */
+  sequenceDomain?: 'message-log' | 'run-event';
   durationMs?: number | null;
   subAgentId?: string | null;
+  /** Durable Host run identity; used to de-duplicate live RunSession rows. */
+  runId?: string;
   /** File attachments (images, etc.) associated with this message */
   attachments?: FileAttachment[];
   /** True if this message is a compact boundary marker (separates old/new content) */

@@ -17,6 +17,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import type { Message } from '@/types';
+import { projectMessageTranscript } from '@/lib/project-message-transcript';
 
 // Mock all child components to isolate MessageList
 vi.mock('./MessageItem', () => ({
@@ -38,6 +39,7 @@ vi.mock('@/hooks/useStreamingAgentProgress', () => ({
 }));
 
 import { MessageList } from './MessageList';
+import { MessageItem } from './MessageItem';
 
 // Mock scrollIntoView since JSDOM doesn't support it
 beforeEach(() => {
@@ -85,6 +87,72 @@ function createMockMessage(overrides: Partial<Message> = {}): Message {
 }
 
 describe('MessageList', () => {
+  it('orders transcript-projected Host rows in the two real cursor domains', () => {
+    const projected = projectMessageTranscript([
+      createMockMessage({ id: 'log-10', role: 'user', content: 'durable row', seqIndex: 10 }),
+      createMockMessage({
+        id: 'run:run-1:b', role: 'user', content: 'live later', seqIndex: 2,
+        sequenceDomain: 'run-event', runId: 'run-1', timestamp: Number.NaN,
+      }),
+      createMockMessage({
+        id: 'run:run-1:c', role: 'user', content: 'live earlier', seqIndex: 1,
+        sequenceDomain: 'run-event', runId: 'run-1', timestamp: Number.NaN,
+      }),
+    ]).messages;
+
+    render(<MessageList messages={projected} sessionId="session-1" />);
+
+    expect(screen.getAllByTestId('message-item').map((item) => item.getAttribute('data-message-id')))
+      .toEqual(['log-10', 'run:run-1:c', 'run:run-1:b']);
+  });
+
+  it('keeps unknown-time rows stable and still orders sequence rows by their cursor', () => {
+    const messages: Message[] = [
+      createMockMessage({ id: 'history-seq-100', timestamp: 1, seqIndex: 100, runId: 'previous-run' }),
+      createMockMessage({ id: 'current-user-seq-101', role: 'user', timestamp: 2, seqIndex: 101, runId: 'live-run' }),
+      createMockMessage({ id: 'seq-2', timestamp: Number.NaN, seqIndex: 2, runId: 'live-run', sequenceDomain: 'run-event' }),
+      createMockMessage({ id: 'seq-1', timestamp: Number.NaN, seqIndex: 1, runId: 'live-run', sequenceDomain: 'run-event' }),
+      createMockMessage({ id: 'unknown-a', timestamp: Number.NaN, seqIndex: null }),
+      createMockMessage({ id: 'unknown-b', timestamp: Number.NaN, seqIndex: null }),
+    ];
+
+    render(<MessageList messages={messages} sessionId="session-1" />);
+
+    expect(screen.getAllByTestId('message-item').map((item) => item.getAttribute('data-message-id'))).toEqual([
+      'history-seq-100', 'current-user-seq-101', 'seq-1', 'seq-2', 'unknown-a', 'unknown-b',
+    ]);
+  });
+
+  it('gives a synthesized orphan tool-result row no wall clock, not the grouping instant', () => {
+    // A durable tool_result whose tool_use is missing (truncated history,
+    // legacy import) is rendered through a row MessageList synthesizes itself.
+    // That row never came from the Host, and the tool call it stands in for
+    // has no time this component can read, so it must not claim the instant
+    // the list happened to be grouped. MessageItem renders a non-finite
+    // timestamp as no time, which is what this row is.
+    vi.mocked(MessageItem).mockClear();
+
+    const messages: Message[] = [
+      createMockMessage({ id: 'u1', role: 'user', content: 'Run the tool', timestamp: 1000 }),
+      createMockMessage({
+        id: 'durable-result',
+        role: 'tool',
+        content: 'orphaned tool output',
+        timestamp: 2000,
+        tool_call_id: 'call-orphan',
+      }),
+    ];
+
+    render(<MessageList messages={messages} sessionId="session-1" />);
+
+    const synthesized = vi.mocked(MessageItem).mock.calls
+      .map(([props]) => props.message)
+      .find((message) => message.id === 'orphan-result-call-orphan');
+
+    expect(synthesized).toBeDefined();
+    expect(Number.isFinite(synthesized!.timestamp)).toBe(false);
+  });
+
   // =========================================================================
   // Basic Rendering
   // =========================================================================

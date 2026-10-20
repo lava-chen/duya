@@ -31,6 +31,7 @@ import { t } from '@/i18n';
 import { useContextUsageStore } from '@/stores/context-usage-store';
 import { registerLoadedMessages, isSessionBusy } from '@/lib/stream-session-manager';
 import { isPlaceholderThreadId } from '@/components/layout/sidebar/section-system';
+import { peekUiServices } from '@/services';
 
 // Thread interface - uses camelCase for frontend consistency
 // generation is optional since older threads may not have it
@@ -187,6 +188,8 @@ interface ConversationState {
   newChatDraft: NewChatDraft;
   /** True while the "new chat" composer is open with no backing thread. */
   isNewChatDrafting: boolean;
+  /** Host session whose trusted workspace binding may be reused by the draft. */
+  newChatSourceSessionId: string | null;
   /** Project preselected for the next new-chat composer (from a project-group
    *  "new thread" entry). Consumed by NewChatView as its initial project. */
   newChatPresetProject: { workingDirectory: string; projectName: string } | null;
@@ -224,7 +227,7 @@ interface ConversationState {
   loadArchivedThreads: () => Promise<void>;
   setActiveThread: (id: string) => void;
   goToParentSession: () => void;
-  addMessage: (threadId: string, message: Message, options?: { persist?: boolean }) => void;
+  addMessage: (threadId: string, message: Message, options?: { persist?: boolean; syncTitle?: boolean; updateTitle?: boolean }) => void;
   clearMessages: (threadId: string) => void;
   rewindToMessage: (threadId: string, messageId: string) => Promise<{ restoredFiles?: string[] }>;
   /**
@@ -233,7 +236,7 @@ interface ConversationState {
    * (edited) message after this resolves.
    */
   deleteMessageAndAfter: (threadId: string, messageId: string) => Promise<{ restoredFiles?: string[] }>;
-  updateThreadTitle: (id: string, title: string) => void;
+  updateThreadTitle: (id: string, title: string, options?: { sync?: boolean }) => void;
   setThreadWorkingDirectory: (id: string, workingDirectory: string, projectName: string) => void;
   setThreadModel: (id: string, model: string, providerId?: string) => void;
   /** Update conductor mode binding on the thread (local + DB IPC). */
@@ -536,7 +539,7 @@ export function isThreadEvictable(
     && !isBusy(prevThreadId);
 }
 
-function mapIpcMessagesToStore(messages: IpcMessage[]): Message[] {
+export function mapIpcMessagesToStore(messages: IpcMessage[]): Message[] {
   return messages.map((m) => ({
     id: m.id,
     role: m.role,
@@ -545,6 +548,7 @@ function mapIpcMessagesToStore(messages: IpcMessage[]): Message[] {
     name: m.name ?? undefined,
     tool_call_id: m.toolCallId ?? undefined,
     timestamp: m.createdAt,
+    ...(m.runId === undefined ? {} : { runId: m.runId }),
     tokenUsage: m.tokenUsage
       ? (typeof m.tokenUsage === 'string'
           ? JSON.parse(m.tokenUsage)
@@ -629,6 +633,7 @@ export const useConversationStore = create<ConversationState>()(
       noProjectWorkspace: '',
       newChatDraft: EMPTY_NEW_CHAT_DRAFT,
       isNewChatDrafting: false,
+      newChatSourceSessionId: null,
       newChatPresetProject: null,
       // Plan 491 P0.1: message delivery phase tracking (renderer-only, not persisted)
       messageDelivery: {},
@@ -678,14 +683,17 @@ export const useConversationStore = create<ConversationState>()(
       },
 
       createThread: async (options) => {
-        const { threads, activeThreadId, noProjectWorkspace } = get();
+        const { threads, activeThreadId, noProjectWorkspace, newChatSourceSessionId } = get();
+        const sourceSessionId = activeThreadId ?? newChatSourceSessionId;
+        const uiServices = peekUiServices();
+        const hostManagedWeb = uiServices?.platform === 'web';
 
         // Determine working directory: use provided, or fall back to active thread's
         let workingDirectory: string | null | undefined = options?.workingDirectory;
         let projectName: string | null | undefined = options?.projectName;
 
         // No-project session: pin to the shared ~/.duya/workspace.
-        if (options?.noProject) {
+        if (options?.noProject && !hostManagedWeb) {
           workingDirectory = noProjectWorkspace || (await getNoProjectWorkspaceIPC());
           projectName = null;
         }
@@ -698,8 +706,14 @@ export const useConversationStore = create<ConversationState>()(
           }
         }
 
-        // If still no workingDirectory, return null to signal caller to prompt for folder selection
-        if (!workingDirectory) {
+        // Web cannot open/register a local folder. New sessions can only reuse
+        // a workspace binding already issued by Host for the selected session.
+        if (hostManagedWeb && !sourceSessionId) {
+          return null;
+        }
+        // If still no workingDirectory, return null to signal caller to prompt for folder selection.
+        // A Web session uses its selected Host session's binding instead.
+        if (!workingDirectory && !hostManagedWeb) {
           return null;
         }
 
@@ -762,7 +776,7 @@ export const useConversationStore = create<ConversationState>()(
         const thread: Thread = {
           id: crypto.randomUUID(),
           title: 'New Thread',
-          workingDirectory,
+          workingDirectory: workingDirectory ?? null,
           projectName: projectName ?? null,
           createdAt: now,
           updatedAt: now,
@@ -770,6 +784,31 @@ export const useConversationStore = create<ConversationState>()(
           model,
           agentProfileId,
         };
+
+        if (hostManagedWeb && sourceSessionId) {
+          try {
+            const hostThread = await createThreadIPC({
+              id: thread.id,
+              title: thread.title,
+              model: thread.model,
+              providerId: thread.providerId,
+              sourceSessionId,
+            });
+            if (!hostThread) return null;
+            set((state) => ({
+              threads: [hostThread, ...state.threads],
+              activeThreadId: hostThread.id,
+              newChatSourceSessionId: null,
+              messages: { ...state.messages, [hostThread.id]: [] },
+            }));
+            notifyThreadsChanged();
+            return hostThread;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'Workspace binding unavailable';
+            toast.error('无法创建 Web 对话', { description: message });
+            return null;
+          }
+        }
 
         set((state) => ({
           threads: [thread, ...state.threads],
@@ -1190,7 +1229,7 @@ export const useConversationStore = create<ConversationState>()(
 
           // Auto-update thread title from first user message
           let updatedTitleThreads = updatedThreads;
-          if (message.role === 'user' && threadMessages.length === 0) {
+          if (message.role === 'user' && threadMessages.length === 0 && options?.updateTitle !== false) {
             titlePreview =
               message.content.slice(0, 40) +
               (message.content.length > 40 ? '...' : '');
@@ -1207,7 +1246,7 @@ export const useConversationStore = create<ConversationState>()(
         });
 
         // Sync title update to database if this is the first user message
-        if (shouldUpdateTitle && titlePreview) {
+        if (shouldUpdateTitle && titlePreview && options?.syncTitle !== false) {
           const thread = get().threads.find((t) => t.id === threadId);
           if (thread) {
             get().syncThreadToDatabase({ ...thread, title: titlePreview });
@@ -1256,7 +1295,7 @@ export const useConversationStore = create<ConversationState>()(
         return { restoredFiles: result.restoredFiles };
       },
 
-      updateThreadTitle: (id, title) => {
+      updateThreadTitle: (id, title, options) => {
         // Plan 582 (G7): patch both rosters, otherwise an archived row's
         // rename is a visual no-op.
         set((state) => patchThreadLocal(state, id, (t) => ({ ...t, title, updatedAt: Date.now() })));
@@ -1265,7 +1304,7 @@ export const useConversationStore = create<ConversationState>()(
         // Plan 582 (G7): look the thread up in either roster — reading
         // `threads` only meant an archived row never reached the DB.
         const thread = findThreadLocal(get(), id);
-        if (thread) {
+        if (thread && options?.sync !== false) {
           get().syncThreadTitleToDatabase(id, title);
         }
       },
@@ -1584,9 +1623,11 @@ export const useConversationStore = create<ConversationState>()(
       },
 
       startNewChat: (project) => {
+        const sourceSessionId = peekUiServices()?.platform === 'web' ? get().activeThreadId : null;
         set({
           isNewChatDrafting: true,
           activeThreadId: null,
+          newChatSourceSessionId: sourceSessionId,
           currentView: 'chat',
           parentSessionId: null,
           newChatPresetProject: project ?? null,
@@ -1606,7 +1647,7 @@ export const useConversationStore = create<ConversationState>()(
       },
 
       exitNewChatDraft: () => {
-        set({ isNewChatDrafting: false });
+        set({ isNewChatDrafting: false, newChatSourceSessionId: null });
       },
 
       // Plan 491 P0.1: message delivery phase actions

@@ -92,6 +92,7 @@ import {
 } from "./sidebar/bot-contacts";
 import { EditBotDialog } from "./EditBotDialog";
 import { createConfigAgent, deleteConfigAgent } from "@/lib/agent-profile-ipc";
+import type { UiServices } from "@/services/ui-services";
 
 type ThemeMode = "light" | "dark";
 
@@ -160,10 +161,11 @@ interface AppSidebarProps {
   collapsed?: boolean;
   /** Expand back to the full sidebar (rail items call it before acting). */
   onExpand?: () => void;
+  capabilities?: UiServices["capabilities"];
 }
 
 export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
-  function AppSidebar({ isSettingsPage = false, collapsed = false, onExpand, style }, ref) {
+  function AppSidebar({ isSettingsPage = false, collapsed = false, onExpand, style, capabilities }, ref) {
     const { t } = useTranslation();
     const { settings, loading, error, save } = useSettings();
     const [isLoading, setIsLoading] = useState(true);
@@ -172,7 +174,12 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
     const [editBotContact, setEditBotContact] = useState<BotContact | null>(null);
     // Sidebar top tab switcher (work / bots) — defaults to bots.
-    const [sidebarTab, setSidebarTab] = useState<SidebarTab>("bots");
+    const [sidebarTab, setSidebarTab] = useState<SidebarTab>(capabilities?.bots === false ? "work" : "bots");
+    const isUnavailable = (capability: keyof UiServices["capabilities"]) => capabilities?.[capability] === false;
+    const unavailableTitle = (title: string) => `${title} · 仅桌面端可用`;
+    const capabilityForView: Record<Extract<ViewType, 'conductor' | 'automation' | 'workflow' | 'projects'>, keyof UiServices['capabilities']> = {
+      conductor: 'conductor', automation: 'automation', workflow: 'workflows', projects: 'localFileAccess',
+    };
     const {
       pinned: pinnedBots,
       sections: botSectionGroups,
@@ -362,6 +369,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       archivedThreads,
       loadArchivedThreads,
       activeThreadId,
+      newChatSourceSessionId,
       loadFromDatabase,
       isHydrated,
       createThread,
@@ -380,6 +388,9 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       noProjectWorkspace,
       startNewChat,
     } = useConversationStore();
+    // Declared after the store read: it depends on the selection, and the
+    // selection did not exist when this component's first lines ran.
+    const newChatUnavailable = capabilities?.localFileAccess === false && !activeThreadId && !newChatSourceSessionId;
     const panel = useOptionalPanel();
     const openOrActivatePage = panel?.openOrActivatePage ?? (() => {});
 
@@ -1041,7 +1052,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                 type="button"
                 className="rail-btn"
                 aria-label={t("sidebar.create.title")}
-                title={t("sidebar.create.title")}
+                disabled={isBotsTab ? isUnavailable('bots') : newChatUnavailable}
+                title={newChatUnavailable ? unavailableTitle(t('nav.newChat')) : t("sidebar.create.title")}
               >
                 <PlusIcon size={17} />
               </button>
@@ -1070,6 +1082,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                     label: t("nav.newChat"),
                     iconLeft: <ChatCirclePlusIcon size={14} />,
                     onSelect: () => startNewChat(),
+                    disabled: newChatUnavailable,
+                    description: newChatUnavailable ? '需先选择一个已授权的工作区会话' : undefined,
                   },
                   {
                     kind: "action" as const,
@@ -1077,6 +1091,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                     label: t("project.newProject"),
                     iconLeft: <FolderIcon size={14} />,
                     onSelect: () => handleNewBlankProject(),
+                    disabled: isUnavailable('localFileAccess'),
+                    description: isUnavailable('localFileAccess') ? '仅桌面端可选择本机目录' : undefined,
                   },
                 ]}
           />
@@ -1110,14 +1126,16 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           ) : (
             mainNavItems.map((item) => {
               const Icon = item.icon;
+              const unavailable = isUnavailable(capabilityForView[item.view as keyof typeof capabilityForView]);
               return (
                 <button
                   key={item.view}
                   type="button"
-                  className={`rail-btn${currentView === item.view ? " active" : ""}`}
-                  title={t(item.labelKey)}
+                  disabled={unavailable}
+                  className={`rail-btn${currentView === item.view ? " active" : ""}${unavailable ? " opacity-50 cursor-not-allowed" : ""}`}
+                  title={unavailable ? unavailableTitle(t(item.labelKey)) : t(item.labelKey)}
                   aria-label={t(item.labelKey)}
-                  onClick={() => railNavClick(item.view)}
+                  onClick={() => { if (!unavailable) railNavClick(item.view); }}
                 >
                   <Icon size={17} />
                 </button>
@@ -1127,19 +1145,21 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           <div className="rail-spacer" />
           <button
             type="button"
-            className={`rail-btn${currentView === 'extensions' ? " active" : ""}`}
-            title={t('nav.extensions')}
+            disabled={isUnavailable('extensions')}
+            className={`rail-btn${currentView === 'extensions' ? " active" : ""}${isUnavailable('extensions') ? " opacity-50 cursor-not-allowed" : ""}`}
+            title={isUnavailable('extensions') ? unavailableTitle(t('nav.extensions')) : t('nav.extensions')}
             aria-label={t('nav.extensions')}
-            onClick={() => setCurrentView('extensions')}
+            onClick={() => { if (!isUnavailable('extensions')) setCurrentView('extensions'); }}
           >
             <PlugIcon size={17} />
           </button>
           <button
             type="button"
-            className="rail-btn"
-            title={t('common.settings')}
+            disabled={isUnavailable('settings')}
+            className={`rail-btn${isUnavailable('settings') ? " opacity-50 cursor-not-allowed" : ""}`}
+            title={isUnavailable('settings') ? unavailableTitle(t('common.settings')) : t('common.settings')}
             aria-label={t('common.settings')}
-            onClick={() => enterSettings()}
+            onClick={() => { if (!isUnavailable('settings')) enterSettings(); }}
           >
             <GearSixIcon size={17} />
           </button>
@@ -1227,8 +1247,10 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
               type="button"
               role="tab"
               aria-selected={sidebarTab === "bots"}
-              className={`sidebar-tab${sidebarTab === "bots" ? " active" : ""}`}
-              onClick={() => setSidebarTab("bots")}
+              disabled={isUnavailable('bots')}
+              className={`sidebar-tab${sidebarTab === "bots" ? " active" : ""}${isUnavailable('bots') ? " opacity-50 cursor-not-allowed" : ""}`}
+              title={isUnavailable('bots') ? unavailableTitle(t("sidebar.tab.bots")) : undefined}
+              onClick={() => { if (!isUnavailable('bots')) setSidebarTab("bots"); }}
             >
               {t("sidebar.tab.bots")}
               {unseenFinishedCount > 0 && (
@@ -1249,7 +1271,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                     type="button"
                     className="sidebar-top-create-btn"
                     aria-label={t("sidebar.create.title")}
-                    title={t("sidebar.create.title")}
+                    disabled={isUnavailable('bots')}
+                    title={isUnavailable('bots') ? unavailableTitle(t("sidebar.create.title")) : t("sidebar.create.title")}
                   >
                     <PlusIcon size={15} />
                   </button>
@@ -1278,7 +1301,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                     type="button"
                     className="sidebar-top-create-btn"
                     aria-label={t("sidebar.create.title")}
-                    title={t("sidebar.create.title")}
+                    disabled={newChatUnavailable}
+                    title={newChatUnavailable ? unavailableTitle(t('nav.newChat')) : t("sidebar.create.title")}
                   >
                     <PlusIcon size={15} />
                   </button>
@@ -1290,6 +1314,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                     label: t("nav.newChat"),
                     iconLeft: <ChatCirclePlusIcon size={14} />,
                     onSelect: () => startNewChat(),
+                    disabled: newChatUnavailable,
+                    description: newChatUnavailable ? '需先选择一个已授权的工作区会话' : undefined,
                   },
                   {
                     kind: "action",
@@ -1297,6 +1323,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                     label: t("project.newProject"),
                     iconLeft: <FolderIcon size={14} />,
                     onSelect: () => handleNewBlankProject(),
+                    disabled: isUnavailable('localFileAccess'),
+                    description: isUnavailable('localFileAccess') ? '仅桌面端可选择本机目录' : undefined,
                   },
                 ]}
               />
@@ -1325,8 +1353,9 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             <button
               type="button"
               onClick={() => startNewChat()}
-              className="sidebar-new-chat-btn"
-              title={t('nav.newChat')}
+              disabled={newChatUnavailable}
+              className={`sidebar-new-chat-btn${newChatUnavailable ? " opacity-50 cursor-not-allowed" : ""}`}
+              title={newChatUnavailable ? unavailableTitle(t('nav.newChat')) : t('nav.newChat')}
             >
               <ChatCirclePlusIcon size={16} />
               <span>{t('nav.newChat')}</span>
@@ -1344,12 +1373,14 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             };
 
             return (
-              <button
+                <button
                 key={item.view}
                 type="button"
-                onClick={handleNavClick}
+                  disabled={isUnavailable(capabilityForView[item.view as keyof typeof capabilityForView])}
+                  onClick={() => { if (!isUnavailable(capabilityForView[item.view as keyof typeof capabilityForView])) handleNavClick(); }}
                 data-testid={`nav-${item.view}`}
-                className={`sidebar-primary-link${isActive ? " active" : ""}`}
+                  className={`sidebar-primary-link${isActive ? " active" : ""}${isUnavailable(capabilityForView[item.view as keyof typeof capabilityForView]) ? " opacity-50 cursor-not-allowed" : ""}`}
+                  title={isUnavailable(capabilityForView[item.view as keyof typeof capabilityForView]) ? unavailableTitle(t(item.labelKey)) : undefined}
               >
                 <span className="nav-icon">
                   <Icon size={16} />
@@ -1896,8 +1927,10 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         <div className="sidebar-bottom">
           <button
             type="button"
-            className="sidebar-settings"
-            onClick={() => setCurrentView('extensions')}
+            disabled={isUnavailable('extensions')}
+            className={`sidebar-settings${isUnavailable('extensions') ? " opacity-50 cursor-not-allowed" : ""}`}
+            title={isUnavailable('extensions') ? unavailableTitle(t('nav.extensions')) : undefined}
+            onClick={() => { if (!isUnavailable('extensions')) setCurrentView('extensions'); }}
           >
             <span className="nav-icon">
               <PlugIcon size={16} />
@@ -1908,8 +1941,10 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           <div className="sidebar-bottom-row">
             <button
               type="button"
-              className="sidebar-settings"
-              onClick={enterSettings}
+              disabled={isUnavailable('settings')}
+              className={`sidebar-settings${isUnavailable('settings') ? " opacity-50 cursor-not-allowed" : ""}`}
+              title={isUnavailable('settings') ? unavailableTitle(t('common.settings')) : undefined}
+              onClick={() => { if (!isUnavailable('settings')) enterSettings(); }}
             >
               <span className="nav-icon">
                 <GearSixIcon size={16} />

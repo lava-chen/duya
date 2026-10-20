@@ -74,6 +74,21 @@ function assistantMessage(overrides: Partial<Message>): Message {
 }
 
 describe('MessageItem action grouping', () => {
+  it('hides the timestamp footer when the projected row has no known time', () => {
+    render(
+      <MessageItem
+        message={assistantMessage({
+          content: 'Live answer',
+          timestamp: Number.NaN,
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId('markdown')).toHaveTextContent('Live answer');
+    expect(screen.queryByText('Invalid Date')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy message' })).toBeInTheDocument();
+  });
+
   it('renders text-only assistant replies outside the actions group', () => {
     render(
       <MessageItem

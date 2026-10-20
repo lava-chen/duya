@@ -10,6 +10,7 @@ import { PanelProvider, usePanel } from "@/hooks/usePanel";
 import { PanelZone } from "@/components/layout/PanelZone";
 import { TaskDrawerToggle } from "@/components/layout/TaskDrawerToggle";
 import { useBackdropRepair } from "@/lib/backdrop-repair";
+import type { UiServices } from "@/services/ui-services";
 
 // Custom event for triggering onboarding reset
 const RESET_ONBOARDING_EVENT = "duya:reset-onboarding";
@@ -19,6 +20,7 @@ const OnboardingFlow = lazy(() => import("@/components/onboarding/OnboardingFlow
 
 interface AppShellProps {
   children: any;
+  capabilities?: UiServices["capabilities"];
 }
 
 const MIN_SIDEBAR_WIDTH = 200;
@@ -32,7 +34,7 @@ const SIDEBAR_COLLAPSED_KEY = "duya-sidebar-collapsed";
 // sidebar's right edge. No dedicated strip element, no layout footprint.
 const RESIZER_EDGE_PX = 4;
 
-function AppShellInner({ children }: AppShellProps) {
+function AppShellInner({ children, capabilities }: AppShellProps) {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [forceShowOnboarding, setForceShowOnboarding] = useState(false);
   const { currentView, isHydrated, activeThreadId, settingsTab } = useConversationStore();
@@ -265,6 +267,7 @@ function AppShellInner({ children }: AppShellProps) {
         >
           <AppSidebar
             ref={sidebarRef}
+            capabilities={capabilities}
             collapsed={sidebarCollapsed}
             onExpand={() => setSidebarCollapsed(false)}
             style={{
@@ -293,10 +296,10 @@ function AppShellInner({ children }: AppShellProps) {
   );
 }
 
-export function AppShell({ children }: AppShellProps) {
+export function AppShell({ children, capabilities }: AppShellProps) {
   return (
     <PanelProvider>
-      <AppShellInner>{children}</AppShellInner>
+      <AppShellInner capabilities={capabilities}>{children}</AppShellInner>
     </PanelProvider>
   );
 }

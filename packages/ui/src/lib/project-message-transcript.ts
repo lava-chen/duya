@@ -107,6 +107,44 @@ function resolveDisplayContent(msg: Message): Message {
 }
 
 // ---------------------------------------------------------------------------
+// Cursor provenance
+// ---------------------------------------------------------------------------
+
+/**
+ * The two fields the Protocol round-trip cannot carry, and why they are
+ * re-attached HERE instead of being added to the Protocol message shape.
+ *
+ * `sequenceDomain` + `runId` are RENDERER-SIDE cursor provenance: `MsgType`-
+ * independent bookkeeping that tells `MessageList`'s
+ * `sortMessagesForConversation` which cursor a `seqIndex` was read on, so a
+ * durable row (message-log cursor) and a live RunSession row (run-event cursor)
+ * with unrelated, overlapping sequence numbers are never merged into one
+ * sort key. `sequenceDomain` is renderer cursor provenance; it is not stored
+ * in MessageLog. Host already stamps `runId` onto its durable run projection,
+ * while live RunSession rows also carry the Host run identity. The Protocol
+ * transcript projection does not preserve either field, so the Protocol boundary — whose
+ * `LEGACY_KNOWN_KEYS` whitelist in
+ * `packages/agent-protocol/src/message-ingest.ts` drops every key it does not
+ * list — legitimately strips them.
+ *
+ * Widening that whitelist is the alternative, and is rejected: it is a
+ * cross-lane change to a `managed: true` package (zero tolerance, cannot be
+ * baselined) for renderer cursor metadata consumed by this renderer. The
+ * fields are therefore captured before
+ * `ingestMessages` and re-attached after `projectTranscriptMessages`.
+ */
+type CursorProvenance = Pick<Message, 'sequenceDomain' | 'runId'>;
+
+function cursorProvenanceOf(msg: Message | undefined): CursorProvenance | null {
+  if (!msg) return null;
+  if (msg.sequenceDomain === undefined && msg.runId === undefined) return null;
+  return {
+    ...(msg.sequenceDomain === undefined ? {} : { sequenceDomain: msg.sequenceDomain }),
+    ...(msg.runId === undefined ? {} : { runId: msg.runId }),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Projector
 // ---------------------------------------------------------------------------
 
@@ -124,12 +162,49 @@ function resolveDisplayContent(msg: Message): Message {
  */
 export function projectMessageTranscript(messages: Message[]): ProjectedTranscript {
   const agentMessages = ingestMessages(messages.map(toAgentMessage));
+
+  // Capture cursor provenance keyed by the id the row carries BACK OUT, read
+  // off the ingested row — not off the input row. The two are NOT the same key:
+  // `ingestMessages` mints `legacy-message-<index>` for a row that arrived
+  // without an id (for the roles that go through `baseFields`), while
+  // `toRendererMessage` coerces a row that reached it without one to `''`.
+  // Reading `agentMessages[index].id` reproduces ingest's role-dependent id
+  // rule exactly, without duplicating it here, and `projectTranscriptMessages`
+  // preserves both the order and the id of every row it keeps — so a row with
+  // no id at all is still re-attached correctly (it comes back under whatever
+  // id ingest gave it, and the lookup key follows the same rule).
+  //
+  // A QUEUE per key, not one slot per key: rows that end up sharing a key
+  // (the id-less ones above) are re-attached in source order, and a row that
+  // shares its key with an earlier one is not silently overwritten. The
+  // pairing is exact for the rows that actually carry provenance — the live
+  // RunSession rows, whose ids are `run:<runId>:<messageId|toolCallId>`,
+  // unique by construction and never hidden — and for a duplicate key the
+  // source order is the only true pairing left: the projector preserves the
+  // order of the rows it keeps, and a hidden row never consumes an entry of a
+  // key a later visible row also holds (hidden rows come from
+  // `baseFields`-derived synthetic ids, so they cannot share a visible row id).
+  const pendingProvenance = new Map<string, CursorProvenance[]>();
+  for (let index = 0; index < messages.length; index += 1) {
+    const provenance = cursorProvenanceOf(messages[index]);
+    if (!provenance) continue;
+    const key = agentMessages[index]?.id ?? '';
+    const queue = pendingProvenance.get(key);
+    if (queue) queue.push(provenance);
+    else pendingProvenance.set(key, [provenance]);
+  }
+
   const projected = projectTranscriptMessages(agentMessages);
 
   const visible: Message[] = [];
   for (const agentMsg of projected) {
     const msg = toRendererMessage(agentMsg);
-    visible.push(resolveDisplayContent(msg));
+    // `shift` (not `get`): the projector DROPS rows (hidden / branched), and
+    // the rows it keeps keep their relative order — so consuming the queue in
+    // order pairs each visible row with its own source entry, never with the
+    // first entry of its key.
+    const provenance = pendingProvenance.get(msg.id)?.shift();
+    visible.push(resolveDisplayContent(provenance ? { ...msg, ...provenance } : msg));
   }
 
   return { messages: visible };

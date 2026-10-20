@@ -29,6 +29,7 @@ import type { FileAttachment } from '@/types/message';
 type PermissionModeUi = 'ask' | 'auto' | 'bypass';
 
 interface NewChatViewProps {
+  workspaceSelectionEnabled?: boolean;
   onSendMessage: (
     content: string,
     model?: string,
@@ -44,7 +45,7 @@ interface NewChatViewProps {
   ) => void;
 }
 
-export function NewChatView({ onSendMessage }: NewChatViewProps) {
+export function NewChatView({ onSendMessage, workspaceSelectionEnabled = true }: NewChatViewProps) {
   const { t } = useTranslation();
   const { settings, save: saveSettings, loading: settingsLoading } = useSettings();
   // Actions: stable references via useShallow
@@ -458,6 +459,7 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
         <SessionSelector
           greeting={greeting}
           selectedProject={selectedProject}
+          workspaceSelectionEnabled={workspaceSelectionEnabled}
           onSelectProject={handleSelectProject}
           onNewBlankProject={handleNewBlankProject}
           onUseExistingFolder={handleUseExistingFolder}

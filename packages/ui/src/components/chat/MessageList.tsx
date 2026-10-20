@@ -291,7 +291,14 @@ function buildGroupedMessages(orderedMessages: Message[]): GroupedMessage[] {
           id: `orphan-result-${toolUseId}`,
           role: 'assistant',
           content: '',
-          timestamp: Date.now(),
+          // No wall clock. The row is synthesized here from a durable tool
+          // result whose tool_use is missing, and neither the call nor its
+          // result carries a time this component can read (ToolResultInfo has
+          // no timestamp). `Date.now()` would claim the call happened at the
+          // instant the list was grouped; a non-finite timestamp renders as no
+          // time (MessageItem.formatMessageTime), the same rule the live run
+          // rows use for their unknown time.
+          timestamp: Number.NaN,
           msgType: 'tool_use',
           tool_call_id: toolUseId,
           toolName: 'tool_result',
@@ -482,26 +489,39 @@ function roleOrder(message: Message): number {
 }
 
 function sortMessagesForConversation(messages: Message[]): Message[] {
-  return messages
-    .map((message, index) => ({ message, index }))
-    .sort((a, b) => {
-      const aSeq = a.message.seqIndex;
-      const bSeq = b.message.seqIndex;
+  const sorted = [...messages];
+  let start = 0;
+  while (start < sorted.length) {
+    const first = sorted[start];
+    const hasSequence = Number.isFinite(first?.seqIndex);
+    const sequenceDomain = first?.sequenceDomain ?? 'message-log';
+    const runId = first?.runId;
+    const segmentKey = hasSequence ? `${sequenceDomain}:${sequenceDomain === 'run-event' ? runId ?? '' : ''}` : 'time';
+    let end = start + 1;
+    while (end < sorted.length) {
+      const current = sorted[end];
+      if (Number.isFinite(current?.seqIndex) !== hasSequence) break;
+      const currentDomain = current?.sequenceDomain ?? 'message-log';
+      const currentKey = Number.isFinite(current?.seqIndex)
+        ? `${currentDomain}:${currentDomain === 'run-event' ? current?.runId ?? '' : ''}`
+        : 'time';
+      if (currentKey !== segmentKey) break;
+      end += 1;
+    }
 
-      if (aSeq != null && bSeq != null) {
-        const seqDelta = aSeq - bSeq;
-        if (seqDelta !== 0) return seqDelta;
-
-        const roleDelta = roleOrder(a.message) - roleOrder(b.message);
-        if (roleDelta !== 0) return roleDelta;
-      } else {
-        const timeDelta = a.message.timestamp - b.message.timestamp;
-        if (timeDelta !== 0) return timeDelta;
-      }
-
-      return a.index - b.index;
-    })
-    .map(({ message }) => message);
+    const segment = sorted.slice(start, end);
+    if (hasSequence) {
+      segment.sort((left, right) => {
+        const seqDelta = (left.seqIndex ?? 0) - (right.seqIndex ?? 0);
+        return seqDelta || roleOrder(left) - roleOrder(right);
+      });
+    } else if (segment.every((message) => Number.isFinite(message.timestamp))) {
+      segment.sort((left, right) => left.timestamp - right.timestamp);
+    }
+    sorted.splice(start, segment.length, ...segment);
+    start = end;
+  }
+  return sorted;
 }
 
 function textFromContent(content: Message['content'] | Message['displayContent']): string {
