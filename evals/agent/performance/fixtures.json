@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "provider": {
+    "kind": "deterministic-scripted",
+    "description": "In-process scripted ModelPort; zero provider/network wait by design."
+  },
+  "scenarios": [
+    { "id": "J1-engine-start", "kind": "text", "toolCalls": 0 },
+    { "id": "J2-tool-roundtrip-1", "kind": "tool-loop", "toolCalls": 1 },
+    { "id": "J2-tool-roundtrip-10", "kind": "tool-loop", "toolCalls": 10 },
+    { "id": "J2-tool-roundtrip-50", "kind": "tool-loop", "toolCalls": 50 },
+    { "id": "J3-history-100", "kind": "history", "historyMessages": 100, "toolCalls": 0, "samples": 10, "warmups": 2 },
+    { "id": "J3-history-1000", "kind": "history", "historyMessages": 1000, "toolCalls": 0, "samples": 5, "warmups": 1 },
+    { "id": "J3-history-10000", "kind": "history", "historyMessages": 10000, "toolCalls": 0, "samples": 5, "warmups": 1 },
+    { "id": "J3-tool-catalog-20", "kind": "tool-catalog", "toolCatalogSize": 20, "toolCalls": 0, "samples": 10, "warmups": 2 },
+    { "id": "J3-tool-catalog-100", "kind": "tool-catalog", "toolCatalogSize": 100, "toolCalls": 0, "samples": 10, "warmups": 2 },
+    { "id": "J3-tool-catalog-500", "kind": "tool-catalog", "toolCatalogSize": 500, "toolCalls": 0, "samples": 5, "warmups": 1 },
+    { "id": "J3-tool-catalog-1000", "kind": "tool-catalog", "toolCatalogSize": 1000, "toolCalls": 0, "samples": 5, "warmups": 1 },
+    { "id": "J4-engine-event-burst-20", "kind": "event-burst", "eventFrames": 20, "toolCalls": 0, "samples": 10, "warmups": 2 },
+    { "id": "J4-engine-event-burst-100", "kind": "event-burst", "eventFrames": 100, "toolCalls": 0, "samples": 10, "warmups": 2 },
+    { "id": "J4-engine-event-burst-500", "kind": "event-burst", "eventFrames": 500, "toolCalls": 0, "samples": 5, "warmups": 1 },
+    { "id": "J5-concurrency-1", "kind": "concurrency", "concurrentRuns": 1, "toolCalls": 10, "samples": 10, "warmups": 2 },
+    { "id": "J5-concurrency-4", "kind": "concurrency", "concurrentRuns": 4, "toolCalls": 10, "samples": 10, "warmups": 2 },
+    { "id": "J5-concurrency-10", "kind": "concurrency", "concurrentRuns": 10, "toolCalls": 10, "samples": 5, "warmups": 1 }
+  ]
+}

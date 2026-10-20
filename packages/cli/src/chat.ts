@@ -33,7 +33,7 @@ import { describeSpec, findSpec, type CommandLocale } from '@duya/command-catalo
 import { HostSessionHttpClient } from '@duya/host/http-client';
 import { resolveDataRoot } from '@duya/data';
 import { TUIApp, shouldUseTui, type CompletionSources, type TuiChoice } from './tui/index.js';
-import type { QuestionAnswers } from './tui/overlay.js';
+import { isDestructiveRequest, type QuestionAnswers } from './tui/overlay.js';
 import { HostEventStream } from './tui/host-event-stream.js';
 import { createRunSessionView, projectRunSessionView } from './tui/run-session-view.js';
 import { RunSession } from '@duya/client-core';
@@ -730,12 +730,31 @@ export async function chatTui(
     if (existing !== undefined) return existing;
     unsettledRunId = runId;
     const pending = client.cancelAgentRun(runId, reason)
-      .then(async () => {
-        const record = await client.getAgentRun(runId);
-        if (record === null || !['completed', 'cancelled', 'failed'].includes(record.status)) {
+      .then(async (result) => {
+        // The Host settles the run durably BEFORE it acknowledges the cancel,
+        // so the terminal normally travels with the acknowledgement. The
+        // extra read is the fallback for a Host that had no terminal to
+        // report — not the normal path.
+        const terminal = result.requested ? result.terminal : undefined;
+        let status: string | undefined = terminal?.status;
+        if (status === undefined) {
+          const record = await client.getAgentRun(runId);
+          status = record?.status;
+        }
+        if (status === undefined || !['completed', 'cancelled', 'failed'].includes(status)) {
           throw new Error('Host has not confirmed that the previous run stopped. Retry after cancellation settles.');
         }
         if (unsettledRunId === runId) unsettledRunId = null;
+        // Say how the run ended. Without this the terminal is only ever seen
+        // as the absence of more output, and a cancelled turn is
+        // indistinguishable from a turn that died.
+        if (!finished && terminal !== undefined) {
+          if (terminal.status === 'failed') {
+            tui.printError(`Run failed: ${terminal.error.code}: ${terminal.error.message}`);
+          } else {
+            tui.printNotice(`Run ${terminal.status}${terminal.stopReason === undefined ? '' : ' (' + terminal.stopReason + ')'}.`);
+          }
+        }
       })
       .catch((error: unknown) => {
         if (!finished) tui.printError(error instanceof Error ? error.message : String(error));
@@ -958,12 +977,21 @@ export async function chatTui(
           for (const request of requests) {
             if (activeRunId !== start.runId || cancellationRequested || finished) return;
             if (request.status !== 'pending' || request.createdAt < runStartedAt) continue;
+            // The worker's own words. The reason and the mode are producer
+            // facts — a prompt that says "generic" because the record lost
+            // them asks the user a different question than the one the
+            // worker asked, and the mode decides which card is shown.
+            const mode = request.mode === 'ask_user_question' || request.mode === 'exit_plan_mode'
+              ? request.mode
+              : 'generic';
             void tui.requestPermissionApproval({
               requestId: request.id,
               toolName: request.toolName,
               toolInput: request.toolInput ?? {},
-              reason: 'This tool is waiting for your approval.',
-              expiresAt: request.createdAt + 300_000,
+              reason: request.reason ?? 'This tool is waiting for your approval.',
+              ...(request.expiresAt === null ? {} : { expiresAt: request.expiresAt }),
+              mode,
+              destructive: isDestructiveRequest(request.toolName, request.toolInput),
             });
           }
         } catch (error) {

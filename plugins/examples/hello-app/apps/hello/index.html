@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Hello App</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        margin: 0;
+        padding: 16px;
+        font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      h1 {
+        font-size: 14px;
+        margin: 0 0 4px;
+      }
+      p {
+        margin: 0 0 12px;
+        opacity: 0.75;
+      }
+      button {
+        font: inherit;
+        padding: 6px 12px;
+        border-radius: 6px;
+        border: 1px solid rgba(128, 128, 128, 0.4);
+        background: transparent;
+        cursor: pointer;
+      }
+      pre {
+        margin: 12px 0 0;
+        padding: 10px;
+        border-radius: 6px;
+        background: rgba(128, 128, 128, 0.12);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Hello App</h1>
+    <p>
+      This page is an external Plugin App. It runs sandboxed, has no
+      <code>electronAPI</code>, and reaches the agent only through the
+      session its host minted.
+    </p>
+    <button id="bind" type="button">Bind to the active run</button>
+    <pre id="out">Not bound yet.</pre>
+
+    <script>
+      // The host protocol. The guest names only the method; the plugin, the
+      // App, the instance and the chat session all come from the host.
+      var CHANNEL = "duya.plugin-app";
+
+      function call(method, extra) {
+        return new Promise(function (resolve) {
+          var id = "req-" + Math.random().toString(36).slice(2);
+          var handler = function (event) {
+            var data = event.data;
+            if (!data || data.channel !== CHANNEL || data.id !== id) return;
+            window.removeEventListener("message", handler);
+            resolve(data);
+          };
+          window.addEventListener("message", handler);
+          var message = { channel: CHANNEL, id: id, method: method };
+          if (extra) {
+            for (var key in extra) {
+              if (Object.prototype.hasOwnProperty.call(extra, key)) message[key] = extra[key];
+            }
+          }
+          window.parent.postMessage(message, "*");
+        });
+      }
+
+      document.getElementById("bind").addEventListener("click", function () {
+        var out = document.getElementById("out");
+        out.textContent = "Binding…";
+        call("bind").then(function (result) {
+          out.textContent = JSON.stringify(result, null, 2);
+        });
+      });
+    </script>
+  </body>
+</html>

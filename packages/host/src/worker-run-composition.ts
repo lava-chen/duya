@@ -1,6 +1,6 @@
 import type { AIClient } from '@duya/ai';
 import type { ApprovalRequest, ApprovalVerdict, AssembledTurn, ExtensionPort, ModelFrame, ModelMessage, ModelRequest, RunEnginePorts, RunCommandPort, RunEventEmitter, RunInputSnapshot, TerminalCandidate, ToolCallRequest, ToolDescriptor, ToolDrainItem, ToolDispatchTicket, ToolOutcome, TransientContextFragment, TurnAssemblyInput, } from '@duya/agent-runtime';
-import { canonicalJson, sha256Hex, type PermissionPolicyMode, type RunId, type RunManifest, type TokenUsage as ProtocolTokenUsage, } from '@duya/agent-protocol';
+import { attachmentDigest, canonicalJson, sha256Hex, type FileAttachment, type PermissionPolicyMode, type RunId, type RunManifest, type TokenUsage as ProtocolTokenUsage, } from '@duya/agent-protocol';
 import type { TokenUsage } from '@duya/host/worker-run-contracts';
 import type { AssistantMessage, Message, MessageContent, SSEEvent } from '@duya/host/worker-run-contracts';
 import type { Tool } from '@duya/host/worker-run-contracts';
@@ -10,7 +10,8 @@ import { createClientModelPort } from '@duya/host/run-engine-model';
 import { createLegacyCommandPort } from '@duya/host/worker-command-port';
 import { renderSystemReminder } from '@duya/agent-core/context/reminders';
 import { normalizeCanUseToolDecision } from '@duya/agent-runtime/authorization/tool-invoke-decision';
-import { adaptLoopNudgeContext } from '@duya/host/worker-context/runtime-context-adapters';
+import { adaptAttachmentContext, adaptLoopNudgeContext } from '@duya/host/worker-context/runtime-context-adapters';
+import { persistLargePastedAttachments } from '@duya/host/worker-context/attachment-context';
 import { projectRuntimeContextToProviderMessage } from '@duya/agent-core/message/message-projectors';
 import { buildEnginePorts, toDrainItem } from '@duya/agent-runtime/adapters/run-engine-ports';
 import type { CompactionSources, LegacyEngineSources } from '@duya/agent-runtime/adapters/run-engine-ports';
@@ -89,6 +90,14 @@ export interface LegacyRunHost {
     readonly workingDirectory?: string;
     readonly wakeRun: boolean;
     readonly imageInputSupported?: boolean;
+    /**
+     * The turn's reasoning effort, as the Host adjudicated it.
+     *
+     * Forwarded to the provider by the model port, because the effort is what
+     * becomes the provider's thinking budget. OMITTED means the Host resolved
+     * no effort and the provider's own default applies.
+     */
+    readonly effort?: string;
     readonly beginTicket?: (call: ToolCallRequest) => Promise<ToolDispatchTicket>;
     readonly settleTicket?: (input: {
         readonly attemptKey: string;
@@ -113,6 +122,7 @@ export function composeLegacyRunSources(agent: EngineProductSession, host: Legac
             ...(host.onPerCallUsage === undefined
                 ? {}
                 : { onPerCallUsage: host.onPerCallUsage }),
+            ...(host.effort === undefined ? {} : { effort: host.effort }),
         }).stream(request, signal),
         queueTool: (call: ToolCallRequest) => pipelines.queue({ id: call.callId, name: call.name, input: call.input }),
         async *drainTools(): AsyncIterable<ToolDrainItem> {
@@ -226,7 +236,31 @@ export function selectRunDriverLeg(agent: EngineProductSession, run: RunHandle):
     }
     return { kind: 'engine' };
 }
-export function createLegacyAssembleTurn(handle: RunTurnAssembly): (input: TurnAssemblyInput) => Promise<AssembledTurn> {
+/**
+ * The turn's assembly: the messages and the tool surface the model sees.
+ *
+ * ## Why the attachments are added here
+ *
+ * The legacy loop injects the attachment context right before it opens the
+ * provider request (`worker-session-runtime.ts`, `_injectRuntimeContext`): the
+ * attached files become a hidden runtime-context message, so the model reads
+ * their extracted text without the user seeing a second message about them.
+ *
+ * The engine path never runs that loop, and the turn's assembly is the point
+ * that replaces it -- the Host assembles the turn, and the engine asks for the
+ * assembled turn. So the attachment context is added here, through the SAME
+ * helpers the legacy path uses (`persistLargePastedAttachments` ->
+ * `adaptAttachmentContext` -> `projectRuntimeContextToProviderMessage`), rather
+ * than through a second derivation of "what an attachment says to the model".
+ *
+ * The attachment's PAYLOAD is not the run input's business: the snapshot
+ * names the attachments by reference (`attachmentPart`), and this message is
+ * assembled from the same attachment list the worker received.
+ */
+export function createLegacyAssembleTurn(
+    handle: RunTurnAssembly,
+    attachments?: readonly FileAttachment[],
+): (input: TurnAssemblyInput) => Promise<AssembledTurn> {
     return async (input: TurnAssemblyInput): Promise<AssembledTurn> => {
         const messages = handle.projectTurnMessages();
         const assembly = handle.assemble({
@@ -235,14 +269,35 @@ export function createLegacyAssembleTurn(handle: RunTurnAssembly): (input: TurnA
             messages,
             tools: handle.tools as Tool[],
         });
+        const withAttachments = await appendAttachmentContext(messages, attachments);
         return {
             systemPrompt: assembly.systemPrompt,
-            messages: toModelMessages(messages),
+            messages: toModelMessages(withAttachments),
             tools: assembly.tools.map(toToolDescriptor),
             catalogRevision: String(handle.resolved.registry.getCatalogRevision()),
             revision: input.digest,
         };
     };
+}
+/**
+ * The attachment context message, appended to the turn's messages.
+ *
+ * Returns the messages UNCHANGED when the turn carried no attachments, so a
+ * turn without files takes the same path it took before this existed.
+ */
+async function appendAttachmentContext(
+    messages: readonly Message[],
+    attachments: readonly FileAttachment[] | undefined,
+): Promise<readonly Message[]> {
+    if (attachments === undefined || attachments.length === 0) return messages;
+    // The same preparation the legacy path does: a pasted text too large to
+    // inline is persisted and referenced by path instead.
+    const prepared = await persistLargePastedAttachments(attachments);
+    const context = adaptAttachmentContext(prepared);
+    if (context === null) return messages;
+    const projected = projectRuntimeContextToProviderMessage(context);
+    if (projected === null || projected === undefined) return messages;
+    return [...messages, projected];
 }
 export function toModelMessages(messages: readonly Message[]): ModelMessage[] {
     return messages.map((message, index) => ({
@@ -271,6 +326,24 @@ export interface LegacyRunFacts {
     readonly permissionMode: PermissionPolicyMode;
     readonly roots?: readonly string[];
     readonly maxTurns?: number;
+    /**
+     * The turn's attachments, as the worker received them.
+     *
+     * They are already durable — the attachment store holds them and the user
+     * message carries them — so the run input names them BY REFERENCE, with
+     * the same digest the turn's own input revision uses. The payloads never
+     * enter the snapshot: a turn may carry 50 MB of base64, and a record
+     * that copies it decides nothing about the turn's identity.
+     */
+    readonly attachments?: readonly FileAttachment[];
+    /**
+     * The run layer's own bag for this turn.
+     *
+     * The worker's options mix the turn's configuration with the worker's
+     * ports, and only the first is the run layer's; see
+     * {@link runLayerOptions}.
+     */
+    readonly options?: Readonly<Record<string, unknown>>;
 }
 const SYNTHESISED = { source: 'unsupported', synthesised: true } as const;
 export function buildLegacyRunManifest(facts: LegacyRunFacts): RunManifest {
@@ -324,15 +397,97 @@ export function buildLegacyRunInput(facts: LegacyRunFacts, prompt: {
             digest: historyDigest(history),
             locator: `transcript://${facts.sessionId}`,
         },
-        attachments: { kind: 'inline', value: [] },
+        attachments: attachmentPart(facts.attachments, facts.sessionId),
         catalog: {
             kind: 'by_ref',
             digest: `catalog-rev-${facts.catalogRevision}`,
             locator: `catalog://${facts.catalogRevision}`,
         },
         steering: [],
-        options: { permissionMode: facts.permissionMode },
+        options: { ...(facts.options ?? {}), permissionMode: facts.permissionMode },
     } as unknown as RunInputSnapshot;
+}
+/**
+ * The attachments part of a run's input.
+ *
+ * BY REFERENCE, with the digest the turn's own input revision uses, so the
+ * snapshot and the digest name the same attachments. The alternative — the
+ * payloads inline — would make every snapshot as large as the turn's
+ * attachments and would make the record a second copy of the bytes rather
+ * than a name for them.
+ *
+ * An empty list stays INLINE, because "this turn carried nothing" is a fact
+ * and not a reference to a store that was never written to.
+ */
+function attachmentPart(
+    attachments: readonly FileAttachment[] | undefined,
+    sessionId: string,
+): { readonly kind: 'by_ref'; readonly digest: string; readonly locator: string } | { readonly kind: 'inline'; readonly value: readonly never[] } {
+    if (attachments === undefined || attachments.length === 0) {
+        return { kind: 'inline', value: [] };
+    }
+    return {
+        kind: 'by_ref',
+        digest: attachmentDigest(attachments),
+        locator: `attachments://${sessionId}`,
+    };
+}
+/**
+ * The run layer's own view of the turn's options.
+ *
+ * The worker hands the driver a `ChatOptions` that mixes two different
+ * things: the turn's CONFIGURATION (data — the effort, the profile, the
+ * mode) and the worker's own PORTS (functions and class instances — the
+ * permission bridge, the tool registry, the IPC channel).
+ *
+ * Only the first is the run layer's bag, and a snapshot is a record: it
+ * cannot hold a function. So the ports are dropped by what they ARE rather
+ * than by a list of their names — a list would go stale the moment a port is
+ * added, and the stale entry would be a silent drop of real configuration.
+ *
+ * The attachments are excluded here because the snapshot has a part for
+ * them, and a second copy of the same files would be a second answer to
+ * "which attachments did this turn carry".
+ */
+export function runLayerOptions(options: Readonly<Record<string, unknown>>): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(options)) {
+        if (key === 'attachments' || key === 'files') continue;
+        if (isRunLayerData(value)) out[key] = value;
+    }
+    return out;
+}
+/**
+ * Whether a value is DATA the run layer may record.
+ *
+ * A plain object, an array, or a primitive — and nothing deeper. A class
+ * instance is not data: it serialises to `{}` and would make a populated
+ * registry indistinguishable from an empty one.
+ */
+function isRunLayerData(value: unknown, depth = 0): boolean {
+    if (depth > 4) return false;
+    if (value === null) return true;
+    switch (typeof value) {
+        case 'string':
+        case 'boolean':
+            return true;
+        case 'number':
+            return Number.isFinite(value);
+        case 'undefined':
+            return false;
+        case 'object':
+            break;
+        default:
+            return false;
+    }
+    if (Array.isArray(value)) {
+        return value.every((item) => isRunLayerData(item, depth + 1));
+    }
+    const prototype = Object.getPrototypeOf(value) as object | null;
+    if (prototype !== Object.prototype && prototype !== null) return false;
+    return Object.values(value as Record<string, unknown>).every(
+        (nested) => nested === undefined || isRunLayerData(nested, depth + 1),
+    );
 }
 function historyDigest(history: readonly {
     role: 'user' | 'assistant' | 'tool';

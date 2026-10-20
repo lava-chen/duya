@@ -13,6 +13,7 @@ evals/agent/
   cases/        the versioned case format, and the cases themselves (*.json)
   fixtures/     the one adapter from a case to the harness's input type
   runner/       the loop over cases, the report, and the process entry point
+  performance/  deterministic Agent core performance matrix, fixtures, and reports
   evaluators/   the four families, the failing-layer vocabulary, the live path
   reports/      generated output (gitignored — an artefact, not source)
 ```
@@ -190,6 +191,25 @@ node scripts/eval-agent.mjs --list
 
 Both exit with the report's own code. `smoke` requires completeness: any unknown
 or skipped check is exit 2. `extended` reports reach gaps as data.
+
+The separate core performance entry point reuses this eval tree and its ignored
+reports directory while keeping its measured scope explicit:
+
+```bash
+npm run eval:agent:core
+npm run eval:agent:core:check
+npm run eval:agent:core:compare -- evals/agent/reports/baseline.json evals/agent/reports/core-latest.json
+npm run eval:agent:tui
+npm run eval:agent:tui:compare -- evals/agent/reports/tui-baseline.json evals/agent/reports/tui-latest.json
+npm run eval:agent:all
+```
+
+It exercises the production `RunEngineImpl` through deterministic in-process
+ports. It is an engine microbenchmark, not a replacement for the existing
+production-loop eval and not yet the independent Host+Worker benchmark. See
+[`performance/README.md`](performance/README.md) for covered indicators and
+integration gaps. TUI rendering has a separate report and comparator so it can
+be tuned without mixing its cost into the Agent-core measurements.
 
 **No automated trigger is added.** These are the two named commands and the data
 contract; whether and when they run is the user's call under the authorisation

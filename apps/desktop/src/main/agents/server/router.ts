@@ -484,6 +484,72 @@ export function parsePath(url: string): { pathname: string; parts: string[] } {
  */
 const RUN_LAYER_ONLY_FRAMES: ReadonlySet<string> = new Set(['chat:message_finalized', 'run:event']);
 
+/**
+ * The attempt a transport correlated a worker request with, or `null`.
+ *
+ * The Agent Server owns the run ledger and the worker supervisor, so it is
+ * the only party that can say "this child is the live worker of this session,
+ * under this run and epoch". That correlation is returned to the caller as a
+ * separate value instead of being written into the request body, because the
+ * body is owned by the worker: a worker that could state its own session, run
+ * and epoch would be able to name another worker's attempt.
+ */
+function correlateWorkerAttempt(
+  sessionId: string,
+  child: ChildProcess,
+  message: Record<string, unknown>,
+  deps: Pick<RouterDeps, 'workerManager' | 'runOrchestrator'>,
+): { sessionId: string; runId: string; epoch: number } | null {
+  if (message.action !== 'plugin-app:binding-current') return null;
+  const execution = message.execution;
+  if (!execution || typeof execution !== 'object' || Array.isArray(execution)) return null;
+  const candidate = execution as Record<string, unknown>;
+  const runId = deps.runOrchestrator?.runForSession(sessionId);
+  const attempt = runId ? deps.runOrchestrator?.attemptFor(runId) : null;
+  if (!runId || !attempt || attempt.retired) return null;
+  if (child !== deps.workerManager.getWorker(sessionId)) return null;
+  if (candidate.sessionId !== sessionId || candidate.runId !== runId) return null;
+  if (!Number.isSafeInteger(candidate.epoch) || candidate.epoch !== attempt.epoch) return null;
+  return { sessionId, runId, epoch: attempt.epoch };
+}
+
+/**
+ * Forward one worker's database request to the Main process, and announce the
+ * attempt the transport correlated it with.
+ *
+ * The body is the worker's own, so every transport-only field it carries is
+ * a forged claim and is stripped before the request leaves the Agent Server.
+ * The correlation the Agent Server made is announced on a SEPARATE message
+ * type instead, so the body stays a body and Main reads the correlation from
+ * the transport fact.
+ *
+ * Exported for tests only. The router calls it; nothing else does.
+ */
+export function forwardWorkerDbRequest(
+  sessionId: string,
+  child: ChildProcess,
+  message: Record<string, unknown>,
+  deps: Pick<RouterDeps, 'workerManager' | 'runOrchestrator'>,
+  workerDbRequests: Map<string, ChildProcess>,
+): void {
+  if (typeof message.id !== 'string' || !process.send) return;
+  const forwarded: Record<string, unknown> = { ...message };
+  // The worker owns this payload. Any transport-only field it sent is a
+  // forged claim, so it is stripped before the request leaves the Agent
+  // Server.
+  delete forwarded.trustedPluginAppCaller;
+  delete forwarded.trustedAttempt;
+  // The Agent Server's own correlation is announced on a SEPARATE message
+  // type, not as a field of the forwarded request. Main then reads it from
+  // the transport fact, and the request body stays a body.
+  const trustedAttempt = correlateWorkerAttempt(sessionId, child, message, deps);
+  if (trustedAttempt) {
+    process.send({ type: 'desktop-plugin-app:trusted-attempt', id: message.id, ...trustedAttempt });
+  }
+  workerDbRequests.set(message.id, child);
+  process.send(forwarded);
+}
+
 /** True when the frame is normalised but must not reach an SSE client. */
 export function isRunLayerOnlyFrame(normalized: Record<string, unknown> | null): boolean {
   return normalized !== null && RUN_LAYER_ONLY_FRAMES.has(String(normalized['type']));
@@ -1076,8 +1142,7 @@ async function handlePostChat(
 
         child.on('message', (msg: Record<string, unknown>) => {
           if (msg.type === 'db:request' && typeof msg.id === 'string' && process.send) {
-            workerDbRequests.set(msg.id, child);
-            process.send(msg);
+            forwardWorkerDbRequest(sessionId, child, msg, deps, workerDbRequests);
             return;
           }
           if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
@@ -2568,8 +2633,7 @@ async function lazySpawnWorkerForCompact(
 
   child.on('message', (msg: Record<string, unknown>) => {
     if (msg.type === 'db:request' && typeof msg.id === 'string' && process.send) {
-      workerDbRequests.set(msg.id, child);
-      process.send(msg);
+      forwardWorkerDbRequest(sessionId, child, msg, deps, workerDbRequests);
       return;
     }
     if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {

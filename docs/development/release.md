@@ -1,138 +1,32 @@
-# Release Tag
+# 版本与发布
 
-`package.json` `version` is the **source of truth** for the released artifact.
-`electron-builder` reads the version from `package.json`, not from the git tag.
-If `package.json:version` still points to a previously-released version,
-`electron-builder --publish always` will skip creating the new release and exit 0
-(silent no-op).
+发布必须已获用户授权；只要求推荐版本时，先给出具体数字、变更依据与待验收项，不执行 tag 或发布。
+已有明确授权时沿用，不重复确认。
 
-- **MUST bump `package.json` `version` in the same commit as the release tag.**
-- Pre-tag checklist:
-  1. Pick the next version (see [How to recommend a tag](#how-to-recommend-a-tag) below).
-  2. Update `package.json` `version` (e.g. `0.1.3-beta.2` → `0.1.3-beta.3`).
-  3. Commit the bump before tagging (`chore(release): bump version to <X>`).
-  4. Tag the bump commit, not an earlier one.
-  5. `git push origin <branch>` then `git push origin v<X>`.
-  6. The CI release workflow is the only thing that should ever create a GitHub Release.
-- If a tag is pushed without the corresponding `package.json` bump, the release will fail
-  silently (workflow job shows `success`, but no Release is created on GitHub). Always verify
-  the Release exists with `gh release view <tag>` after a release run.
+## 准备
 
-## How to recommend a tag
+1. 核对 `package.json`、最近已发布 tag 及其后提交，区分破坏性变化、功能与修复。
+2. 按现有发布线推荐明确版本；`0.x` 的 PATCH 与 MINOR 仍是不同位数，不把二者混用。
+   已有策略不能确定候选时先确认版本，不在发布过程中悄悄改策略。
+3. 用户要求 beta，或打包、安装、公开接口变化尚待实包验收时，推荐预发布版本并列出缺口。
+4. 更新 `docs/release-notes/v<X>.md`、`package.json` 版本及需要同步的锁文件；只暂存发布所需改动。
+5. 版本变更先在独立 worktree 经门禁、实包 smoke 与 PR 集成；发布授权不豁免 PR。tag 指向版本匹配的集成提交。
 
-When the user asks "what tag should I cut?" (or "打 tag 时根据规则自己推荐一个最合适的 tag"),
-follow this procedure. Do not silently pick a number — always **show the recommendation,
-the reasoning, and any detected breaking changes, and ask the user to confirm before tagging**.
+## 执行与验证
 
-1. **Collect the candidate set.**
-   - `git tag --list 'v*' --sort=-v:refname | head -5` — most recent tags.
-   - `git log <last-tag>..HEAD --oneline` — commits since the last tag.
-   - `cat package.json | grep '"version"'` — current declared version.
-   - The current `package.json` `version` is the **floor**: the next tag must be `>=` it.
-
-2. **Classify every commit** since the last tag with the highest applicable
-   Conventional-Commit type:
-   - `BREAKING CHANGE:` footer or `!` after type/scope → **MAJOR**
-   - `feat:` → **MINOR**
-   - `fix:`, `refactor:`, `perf:`, `docs:`, `test:`, `build:`, `ci:`, `chore:` → **PATCH**
-   - `revert:` is treated as the type of the reverted commit.
-
-3. **Apply semver, project-specific overrides below**, then pick the highest.
-
-4. **Recommend** the version, the bump type, and one-line evidence
-   (e.g. *"3 `feat:`, 12 `fix:`, 0 `BREAKING CHANGE`. Recommend `0.1.5` (MINOR)."*).
-   Wait for user confirmation before tagging.
-
-### Semver rules for duya
-
-`0.x` is pre-1.0, so MAJOR bumps are not yet meaningful — use MINOR to signal
-"anything beyond fixes." This matches the existing trajectory
-(`0.1.1` → `0.1.2` → `0.1.3-beta.*` → `0.1.4`).
-
-| Highest commit type | Current `0.x` | Next tag (default) |
-| ------------------- | ------------- | ------------------- |
-| `BREAKING CHANGE`   | `0.1.x`       | bump MINOR (e.g. `0.1.4` → `0.2.0`) |
-| `feat`              | `0.1.x`       | bump MINOR (e.g. `0.1.4` → `0.1.5`) |
-| `fix` / others      | `0.1.x`       | PATCH and MINOR are the same shape below `1.0` — a fix-only line still bumps the minor counter (`0.1.4` → `0.1.5`) |
-| anything            | `1.x.y`       | standard semver (MAJOR/MINOR/PATCH as above) |
-
-**Pre-release (`-beta.N`) decision** — default to a stable release, not a beta, unless
-any of the following are true:
-
-- The user asked for a beta explicitly.
-- The last shipped tag was itself a beta and the packaged build has not yet been smoke-tested.
-- A `feat:` landed that touches the packaging / install path (`electron:pack`,
-  `electron-builder`, `electron:build`) and a packaged smoke test is still pending.
-- A `BREAKING CHANGE` landed against a public CLI / IPC surface and we want early adopters
-  to test before promoting to stable.
-
-If any of the above, recommend e.g. `0.1.5-beta.1` (increment `.N` from the most recent
-`-beta.M` on the same MINOR line; reset `.N` to `1` when MINOR advances).
-
-### Confirmation template
-
-Show the user this block and wait for `ok` / a different number:
-
-```
-Recommended tag:  v0.1.5
-  - reason:      3 feat(agent/electron/cli), 12 fix/refactor, 0 BREAKING
-  - current:     0.1.4  (package.json)
-  - last tag:    v0.1.4 (2026-06-09, 41 commits ago)
-  - pre-release: no — packaged smoke not pending, no beta requested
-
-Confirm to:  1) bump package.json → 0.1.5
-             2) chore(release) commit
-             3) git tag -a v0.1.5 -F docs/release-notes/v0.1.5.md
-             4) push branch + tag
-```
-
-### Tag message
-
-Annotated tag, body from `docs/release-notes/v<X>.md` (one bullet per headline change,
-no prose). Example:
+以下占位符替换为已授权版本；核对集成 SHA、远端同名 tag 与既有副作用后执行：
 
 ```bash
-git tag -a v0.1.5 -F docs/release-notes/v0.1.5.md
-git push origin master v0.1.5
+git tag -a v<X> -F docs/release-notes/v<X>.md
+git push origin v<X>
+gh run list --workflow release.yml --limit 5
+gh release view v<X>
 ```
 
-The release-notes file is the only place where the changelog lives in long form.
-Do not duplicate it into the tag body.
+GitHub Release 只由 `.github/workflows/release.yml` 创建。核对对应 tag 的 workflow 结果、Release、目标平台产物及可下载性；
+仅 push 成功、CI 显示 success 或 `gh release view` 返回条目都不足以证明产物完整。
 
-### Execution workflow
+## 中断接续
 
-After the user confirms the recommendation, run these steps in order:
-
-1. Make sure `docs/release-notes/v<X>.md` exists. Create it from the headline changelog
-   bullets if it does not.
-2. Bump `package.json` `version` to `<X>`.
-3. Stage and commit the bump and the release notes:
-   ```bash
-   git add package.json docs/release-notes/v<X>.md
-   git commit -m "chore(release): bump version to <X>"
-   ```
-4. Create an annotated tag using the release notes as the tag body:
-   ```bash
-   git tag -a v<X> -F docs/release-notes/v<X>.md
-   ```
-5. Push the branch and the tag together to trigger the release workflow:
-   ```bash
-   git push origin <branch> v<X>
-   ```
-6. Verify the push succeeded:
-   ```bash
-   git branch -vv
-   git ls-remote --tags origin refs/tags/v<X>
-   ```
-7. Check the repository Actions page to confirm the release workflow started and monitor
-   it to completion.
-
-If a previous attempt partially completed (commit exists but tag/push failed), inspect the
-current state first to avoid duplicates:
-
-```bash
-git status
-git log --oneline -3
-git tag --list 'v<X>*'
-git ls-remote --tags origin refs/tags/v<X>
-```
+先核对版本提交、tag 的本地 / 远端指向、workflow 和 Release，再决定补哪一步；不重复提交或覆盖已发布 tag。
+把 tag、SHA、CI / Release 链接和实包验证范围写回本次计划。

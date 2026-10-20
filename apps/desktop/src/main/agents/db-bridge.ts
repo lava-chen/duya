@@ -53,12 +53,14 @@ import {
   getDesktopHostLocalTurnReviewApi,
   getDesktopHostLocalChannelPersistenceApi,
   getDesktopHostProjectApi,
+  getDesktopHostPluginAppInvocationApi,
 } from '../cli/desktop-host-api';
 import { resolveDataRoot } from '@duya/data/data-paths';
 import { normalizePath } from '@duya/data/path-utils';
 import { getControlPlane } from '@duya/host/control-plane-service';
 import { COMMAND_SCHEMA_VERSION, type CommandSenderFacts } from '@duya/host/command-receipt';
 import { writeRunReceiptOnWire } from '@duya/host/run-receipt';
+import { authorizePluginAppBindingCheck } from './plugin-app-binding-check';
 import type { WorkflowRunSnapshot, WorkflowRunStatus, WorkflowTriggerKind } from '@duya/agent-protocol/workflow-runs';
 
 /**
@@ -368,6 +370,7 @@ export async function dispatchDbAction(
   action: string,
   payload: unknown,
   sender?: CommandSenderFacts,
+  trustedAttempt?: CommandSenderFacts['trustedAttempt'],
 ): Promise<unknown> {
   if (isHostResearchAction(action)) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
@@ -453,6 +456,16 @@ export async function dispatchDbAction(
       // `receipt.write` for every action in this arm did — hands the caller a
       // `{state:'unreadable'}` object where a run row was asked for.
       return receipt.result;
+    }
+
+    case 'plugin-app:binding-current': {
+      return authorizePluginAppBindingCheck({
+        payload: p,
+        ...(sender ? { sender } : {}),
+        ...(trustedAttempt ? { trustedAttempt } : {}),
+        isBindingCurrent: (bindingId, nonce, toolId, caller) =>
+          getDesktopHostPluginAppInvocationApi().isBindingCurrent(bindingId, nonce, toolId, caller),
+      });
     }
 
     // ==================== Session actions (Host API compatibility adapter) ====================
@@ -2425,7 +2438,12 @@ export async function handleDbRequest(msg: DbRequest, sender?: CommandSenderFact
   const { id, action, payload } = msg;
 
   try {
-    const result = await dispatchDbAction(action, payload, sender);
+    // The trusted Plugin App attempt is NOT read from the request body. A
+    // worker owns the body it sends, so an attempt claim inside it is that
+    // worker's own claim about its identity. Only the transport that actually
+    // correlated the worker with the orchestrator's live attempt may supply
+    // one, and it does so through the sender facts.
+    const result = await dispatchDbAction(action, payload, sender, sender?.trustedAttempt);
     return { type: 'db:response', id, success: true, result };
   } catch (error) {
     getLogger().error(`DB request failed: ${action}`, error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.AgentCommunicator);

@@ -148,7 +148,7 @@ class MCPClient {
    * by `applyMCPConfiguration` from the resolved config; defaults
    * to `'unknown'` when the caller did not stamp the field.
    */
-  getSource(): 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown' {
+  getSource(): 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown' | 'app' {
     return this.config.source ?? 'unknown';
   }
 
@@ -893,7 +893,7 @@ export class MCPManager {
       toolName: string;
       description: string;
       input_schema: Record<string, unknown>;
-      source: 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown';
+      source: 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown' | 'app';
       connectionId?: string;
       pluginId?: string;
       nameOverride?: string;

@@ -41,6 +41,9 @@ import type {
   RunAttemptFence,
   SettleAgentRunResult,
   StartAgentRunInput,
+  PermissionPolicyMode,
+  PermissionRulesWire,
+  FileAttachment,
   TaskCreateInput,
   TaskId,
   TaskStatus,
@@ -53,6 +56,7 @@ import {
   HOST_CAPABILITIES,
   HOST_CAPABILITY_OWNERS,
   PROTOCOL_SCHEMA_REVISION,
+  isPermissionPolicyMode,
   isProtocolCapability,
   type HostCapability,
   type HostIdentity,
@@ -4783,6 +4787,23 @@ function parseStartAgentRunInput(value: unknown): StartAgentRunInput | null {
   if (
     value.apiFormat !== undefined && value.apiFormat !== 'anthropic' && value.apiFormat !== 'openai'
   ) return null;
+  // A malformed turn override is a 400, not a field to drop. The Host's own
+  // rule is that an input it cannot honour refuses the turn; the wire has to
+  // say the same thing, or a caller that sends `permissionMode: "auto"`
+  // (the AGENT's vocabulary, not the protocol's) would get a run under
+  // `default` and no idea why.
+  if (value.permissionMode !== undefined && !isPermissionPolicyMode(value.permissionMode)) return null;
+  if (
+    value.agentProfileId !== undefined && value.agentProfileId !== null &&
+    (typeof value.agentProfileId !== 'string' || value.agentProfileId.trim().length === 0)
+  ) return null;
+  if (value.effort !== undefined && (typeof value.effort !== 'string' || value.effort.trim().length === 0)) {
+    return null;
+  }
+  if (value.attachments !== undefined && !Array.isArray(value.attachments)) return null;
+  if (value.modes !== undefined && !Array.isArray(value.modes)) return null;
+  if (value.tools !== undefined && !Array.isArray(value.tools)) return null;
+  if (value.permissionRules !== undefined && !isRecord(value.permissionRules)) return null;
   return {
     sessionId: value.sessionId as SessionId,
     prompt: value.prompt,
@@ -4792,12 +4813,26 @@ function parseStartAgentRunInput(value: unknown): StartAgentRunInput | null {
       ? {}
       : { providerId: value.providerId }),
     ...(value.apiFormat === undefined ? {} : { apiFormat: value.apiFormat }),
-    ...(value.effort === undefined || typeof value.effort !== 'string' ? {} : { effort: value.effort }),
+    ...(value.effort === undefined ? {} : { effort: value.effort }),
     ...(value.workingDirectory === undefined || typeof value.workingDirectory !== 'string'
       ? {}
       : { workingDirectory: value.workingDirectory }),
     ...(value.origin === undefined ? {} : { origin: value.origin as AgentRunOrigin }),
     ...(value.traceId === undefined || typeof value.traceId !== 'string' ? {} : { traceId: value.traceId }),
+    ...(value.permissionMode === undefined
+      ? {}
+      : { permissionMode: value.permissionMode as PermissionPolicyMode }),
+    ...(value.agentProfileId === undefined
+      ? {}
+      : { agentProfileId: value.agentProfileId as string | null }),
+    ...(value.attachments === undefined
+      ? {}
+      : { attachments: value.attachments as readonly FileAttachment[] }),
+    ...(value.modes === undefined ? {} : { modes: value.modes as readonly string[] }),
+    ...(value.tools === undefined ? {} : { tools: value.tools as readonly string[] }),
+    ...(value.permissionRules === undefined
+      ? {}
+      : { permissionRules: value.permissionRules as PermissionRulesWire }),
   };
 }
 

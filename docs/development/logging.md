@@ -1,71 +1,16 @@
-# Logging
+# 结构化日志
 
-## System
+修改日志前按根规则使用所属包的结构化 logger，不记录密钥、消息正文或含个人信息的数据。
 
-Use the structured logger from `apps/desktop/src/main/logging/logger.ts`.
-**Never use `console.log/warn/error` directly.**
+| 级别 | 用途 |
+| --- | --- |
+| DEBUG | 有界诊断信息 |
+| INFO | 启动、用户动作、生命周期里程碑 |
+| WARN | 可恢复异常、重试、降级 |
+| ERROR | 影响操作结果的失败 |
 
-```typescript
-import { initLogger, getLogger, LogComponent } from '../logging/logger';
+沿用 component 标识，关联非敏感 run / task ID，记录动作、结果和失败原因；避免整对象与结果集输出。
+Desktop 入口：`apps/desktop/src/main/logging/logger.ts`。共享包使用本包 logger，不反向依赖 Electron。
 
-// Module-level singleton (call once per module)
-const logger = initLogger({ level: 'WARN' });
-
-// Or get existing instance
-const logger = getLogger();
-```
-
-## Levels
-
-| Level | Console | File | When to use |
-|-------|---------|------|-------------|
-| `DEBUG` | No | Yes | Detailed diagnostics (query params, loop iterations, etc.) |
-| `INFO` | Yes | Yes | Significant events: server start, task completion, user actions |
-| `WARN` | Yes | Yes | Unexpected but recoverable (config missing, fallback triggered) |
-| `ERROR` | Yes | Yes | Operation failed but app can continue, caught exceptions with context |
-| `FATAL` | Yes | Yes | App cannot continue, needs immediate attention |
-
-**Default level is `WARN`**. INFO+ goes to console; DEBUG only to file.
-
-## Component Tag
-
-Always pass a `component` string (use `LogComponent` constants) so logs are filterable:
-
-```typescript
-logger.info('Agent process started', { pid: process.pid }, LogComponent.AgentProcess);
-```
-
-## What to Log
-
-- **INFO**: Boot events, user-initiated actions, significant state changes, task milestones
-- **WARN**: Missing config with fallback, retry attempts, degraded behavior
-- **ERROR**: Failures that affect user but app continues, caught exceptions with context
-- **DEBUG**: Query parameters, loop counters, raw data samples, detailed control flow
-
-## What NOT to Log
-
-- Database query results (unless debugging a specific issue — use DEBUG)
-- Large objects or arrays
-- User input or message content
-- File paths or data that could contain user info
-- `console.log` debugging artifacts left in code
-
-## Performance
-
-Use `logger.time()` and `logger.timeAsync()` for tracking operation duration:
-
-```typescript
-const end = logger.time('document parse');
-// ... work ...
-end(); // Logs: "document parse completed" with duration in ms
-
-await logger.timeAsync('gateway request', async () => {
-  return await gateway.request(...);
-});
-```
-
-## File Output
-
-Logs written to `<userData>/logs/app.log` (`app.getPath('userData')`; on Windows that is
-`%APPDATA%/duya`), rotated daily, retained 7 days. Use `LOG_LEVEL=DEBUG` env var to enable
-verbose console output for debugging.
+Desktop 文件日志位于当前 Electron userData 的 `logs/app.log`；先核对 namespace、初始化、过滤级别与输出目标。
+调试产物留在本地，任务计划只保存复现步骤与必要摘要。

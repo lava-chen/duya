@@ -96,7 +96,17 @@ export function createMCPToolExecutor<TContext extends object>(
     execute: async (input, _workingDirectory, context) => {
       const activeMode = context ? ports.getPermissionMode(context) : undefined;
       const decision = decideMcpSource(source, activeMode, toolName);
-      if (decision.behavior === 'deny') {
+      // `undefined` means the provenance alone carries no verdict. That is
+      // the app layer's answer (`source: 'app'`): it is first-party, but
+      // NOT unconditional — the unified chain decides it, exactly as it
+      // did before those tools moved behind the namespace.
+      //
+      // The unified chain HAS already run by the time this executor is
+      // reached: the streaming executor calls `canUseTool` before it
+      // executes a tool, and the deferred dispatcher checks permission
+      // before it dispatches. So the correct behaviour here is to add no
+      // verdict of our own — neither a second prompt nor a bypass.
+      if (decision?.behavior === 'deny') {
         logger?.warn?.('[MCP] tool call denied by permission gate', {
           toolName,
           source,
@@ -105,7 +115,7 @@ export function createMCPToolExecutor<TContext extends object>(
         return gateErrorResult('deny', `[MCP permission gate] ${decision.message}`);
       }
 
-      if (decision.behavior === 'ask') {
+      if (decision?.behavior === 'ask') {
         logger?.warn?.('[MCP] tool call requires user approval', {
           toolName,
           source,

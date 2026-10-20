@@ -150,7 +150,7 @@ export interface MCPServerConfig {
     url?: string;
     headers?: Record<string, string>;
     allowedAgentIds?: string[];
-    source?: 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown';
+    source?: 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown' | 'app';
     envPassthrough?: 'allowlist' | 'inherit';
     nameOverride?: string;
     startupTimeoutSec?: number;

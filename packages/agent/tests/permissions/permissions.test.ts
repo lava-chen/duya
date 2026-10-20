@@ -175,39 +175,60 @@ describe('decideMcpSource (unified MCP provenance gate)', () => {
   const d = (source: McpToolSource, mode?: string, toolName = 'tool/x') =>
     decideMcpSource(source, (mode as never) ?? undefined, toolName)
 
+  /**
+   * The source gate's answer, or a loud failure. `undefined` is a real
+   * answer (the app source has no verdict) — so a test that expects a
+   * behaviour must say so explicitly instead of tripping over it.
+   */
+  const behaviorOf = (source: McpToolSource, mode?: string): string => {
+    const decision = d(source, mode)
+    if (!decision) throw new Error(`expected a decision for source "${source}"`)
+    return decision.behavior
+  }
+
   it('allows bundled tool in any / undefined mode', () => {
-    expect(d('bundled', undefined).behavior).toBe('allow')
-    expect(d('bundled', 'default').behavior).toBe('allow')
+    expect(behaviorOf('bundled', undefined)).toBe('allow')
+    expect(behaviorOf('bundled', 'default')).toBe('allow')
   })
 
   it('allows plugin/local in bypass modes (user explicit intent)', () => {
-    expect(d('plugin', 'bypassPermissions').behavior).toBe('allow')
-    expect(d('local', 'dontAsk').behavior).toBe('allow')
+    expect(behaviorOf('plugin', 'bypassPermissions')).toBe('allow')
+    expect(behaviorOf('local', 'dontAsk')).toBe('allow')
   })
 
   it('prompts for plugin/local/unknown in non-bypass modes (never silent)', () => {
     for (const mode of [undefined, 'default', 'auto', 'plan', 'acceptEdits'] as const) {
-      expect(d('plugin', mode).behavior).toBe('ask')
-      expect(d('local', mode).behavior).toBe('ask')
-      expect(d('unknown', mode).behavior).toBe('ask')
+      expect(behaviorOf('plugin', mode)).toBe('ask')
+      expect(behaviorOf('local', mode)).toBe('ask')
+      expect(behaviorOf('unknown', mode)).toBe('ask')
+    }
+  })
+
+  it('gives the app source no verdict of its own (plan 616 C9)', () => {
+    // The app layer is first-party but not unconditional: it must not
+    // borrow `bundled`'s short-circuit, and it must not prompt either.
+    // The full chain decides it.
+    for (const mode of [undefined, 'default', 'auto', 'bypassPermissions', 'dontAsk'] as const) {
+      expect(d('app', mode)).toBeUndefined()
     }
   })
 
   it('allows settings in any mode (explicit user config = trust)', () => {
     for (const mode of ['default', 'auto', undefined]) {
-      expect(d('settings', mode).behavior).toBe('allow')
+      expect(behaviorOf('settings', mode)).toBe('allow')
     }
   })
 
   it('includes the tool name in the ask message', () => {
     const r = d('plugin', 'default', 'marketplace/dangerous')
+    if (!r) throw new Error('expected a decision for a third-party source')
     expect(r.behavior).toBe('ask')
     expect(r.message).toContain('marketplace/dangerous')
   })
 
   it('settings ask/allow reason names the tool', () => {
     const r = d('settings', 'default', 'cfg/tool')
-    if (r.behavior !== 'allow' || !r.decisionReason || r.decisionReason.type !== 'safetyCheck') {
+    if (!r || r.behavior !== 'allow' || !r.decisionReason || r.decisionReason.type !== 'safetyCheck') {
       throw new Error('expected settings allow with safetyCheck reason')
     }
     expect(r.decisionReason.reason).toContain('cfg/tool')

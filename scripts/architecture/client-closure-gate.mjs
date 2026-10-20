@@ -96,6 +96,11 @@ export const FORBIDDEN_PACKAGES = ['@duya/agent-runtime', '@duya/agent-core'];
 export const CLIENT_ENTRIES = [
   { rel: 'packages/client-core/src/index.ts', kind: 'file' },
   { rel: 'packages/cli/src/chat.ts', kind: 'file' },
+  // The TUI is a client surface too, and it is the one that renders what the
+  // run layer produces. Registering its public entry means a future import
+  // that drags the runtime into the renderer is caught HERE rather than by
+  // the fact that `chat.ts` happens to re-export it.
+  { rel: 'packages/cli/src/tui/index.ts', kind: 'file' },
 ];
 
 const FORBIDDEN_DIRS = FORBIDDEN_PACKAGES.map((name) => `packages/${name.slice('@duya/'.length)}/`);

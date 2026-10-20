@@ -1,6 +1,6 @@
 # M5.1 — the slice inventory and the cut list
 
-> Plan 587 [M5.1](../../exec-plans/active/587-agent-harness-monorepo/06-package-and-host-migration.md).
+> Plan 587 [M5.1](../exec-plans/active/587-agent-harness-monorepo/06-package-and-host-migration.md).
 > This slice produces a MAP and a VERIFIER. It moves no code; M5.2 onwards does
 > that. Every number below is re-derived from the tree by
 > `scripts/architecture/import-graph.mjs` and checked on every `npm test` run.

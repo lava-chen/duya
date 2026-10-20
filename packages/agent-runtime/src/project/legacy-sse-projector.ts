@@ -142,6 +142,10 @@ export function projectToLegacyFrame(
           // the questionnaire overlay over the allow/deny picker off this, and
           // it must not be re-derived from the tool name.
           mode: event.mode,
+          // The deadline belongs on the frame too: the approval surface
+          // counts down on it, and a frame without one leaves the question
+          // open forever.
+          expiresAt: event.expiresAt,
         },
       };
 

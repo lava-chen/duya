@@ -64,6 +64,60 @@ export type PermissionPolicyMode =
   | 'dontAsk';
 
 /**
+ * Every policy mode, in one place.
+ *
+ * A closed list is what lets a boundary REJECT an unknown mode instead of
+ * storing it: a mode the Host does not recognise is a request it cannot
+ * honour, and honouring it by falling back to a default is the silent
+ * substitution this package exists to prevent.
+ */
+export const PERMISSION_POLICY_MODES: readonly PermissionPolicyMode[] = [
+  'default',
+  'acceptEdits',
+  'plan',
+  'bypassPermissions',
+  'dontAsk',
+];
+
+/** Narrow an unknown value to a policy mode, or refuse it. */
+export function isPermissionPolicyMode(value: unknown): value is PermissionPolicyMode {
+  return typeof value === 'string' && (PERMISSION_POLICY_MODES as readonly string[]).includes(value);
+}
+
+/**
+ * How permissive each policy mode is, least first.
+ *
+ * The order is the product's, not a guess: `plan` is read-only planning;
+ * `default` asks; `acceptEdits` answers the edit tier without asking;
+ * `dontAsk` never asks but keeps the tools' own safety checks; and
+ * `bypassPermissions` never asks and skips them too (the policy module's
+ * `isBypassMode` treats the last two as bypass, and only
+ * `bypassPermissions` additionally drops the internal path checks).
+ *
+ * It exists so a delegated run can be held to its parent's policy: a child
+ * may ask for a NARROWER mode than the run that spawned it, and never a
+ * wider one. Without an order that rule cannot be stated, and a rule that
+ * cannot be stated is a rule that is not enforced.
+ */
+export const PERMISSION_POLICY_MODE_PERMISSIVENESS: Readonly<Record<PermissionPolicyMode, number>> = {
+  plan: 0,
+  default: 1,
+  acceptEdits: 2,
+  dontAsk: 3,
+  bypassPermissions: 4,
+};
+
+/** The narrower of two policy modes. Ties resolve to the first argument. */
+export function lessPermissivePermissionMode(
+  requested: PermissionPolicyMode,
+  ceiling: PermissionPolicyMode,
+): PermissionPolicyMode {
+  return PERMISSION_POLICY_MODE_PERMISSIVENESS[requested] <= PERMISSION_POLICY_MODE_PERMISSIVENESS[ceiling]
+    ? requested
+    : ceiling;
+}
+
+/**
  * Permission rules keyed by source, in a form that survives JSON.
  *
  * The in-repo `ToolPermissionRulesBySource` is already `{ [source]?: string[] }`

@@ -976,6 +976,32 @@ export interface MarketplaceSyncOutcomeDTO {
   error?: string
 }
 
+export interface PluginAppAPI {
+  /**
+   * Launch an installed Plugin App as an externally hosted mini app.
+   *
+   * The trusted renderer names the plugin, the App and the chat session;
+   * the Main process resolves the App's entry file inside the installed
+   * package and mints the session. The App itself never names its own
+   * authority.
+   */
+  open: (payload: { pluginId: string; appId: string; chatSessionId: string }) => Promise<{
+    ok: boolean
+    error?: string
+    sessionId?: string
+    launchNonce?: string
+    entryUrl?: string
+  }>
+  /** Relay one guest message into the Host, re-checked against the session. */
+  call: (payload: { sessionId: string; launchNonce: string; message: unknown }) => Promise<{
+    ok: boolean
+    error?: string
+    result?: unknown
+  }>
+  /** Close the session and revoke the binding it minted. */
+  close: (payload: { sessionId: string }) => Promise<{ ok: boolean }>
+}
+
 export interface PluginAPI {
   catalog: {
     list: (filters?: {
@@ -1502,6 +1528,7 @@ export interface ElectronAPI {
   botTurn: BotTurnAPI
   hooks: HooksAPI
   plugin: PluginAPI
+  pluginApp: PluginAppAPI
   appConnection: AppConnectionAPI
   terminal: TerminalAPI
   bashTasks: BashTaskAPI
@@ -2924,6 +2951,17 @@ const electronAPI: ElectronAPI = {
     workflowGet: (payload: { pluginId: string; workflowId: string }) => ipcRenderer.invoke('plugin:workflow:get', payload),
     setupLoad: (pluginId: string) => ipcRenderer.invoke('plugin:setup:load', pluginId),
     setupSave: (payload: { pluginId: string; values: Record<string, string> }) => ipcRenderer.invoke('plugin:setup:save', payload),
+  },
+  // Plugin App host — launches an installed App as an externally hosted
+  // mini app. The guest itself never reaches this API: it has no preload
+  // and can only post a message to the renderer that hosts it, which
+  // relays it here with the session handle.
+  pluginApp: {
+    open: (payload: { pluginId: string; appId: string; chatSessionId: string }) =>
+      ipcRenderer.invoke('plugin-app:open', payload),
+    call: (payload: { sessionId: string; launchNonce: string; message: unknown }) =>
+      ipcRenderer.invoke('plugin-app:call', payload),
+    close: (payload: { sessionId: string }) => ipcRenderer.invoke('plugin-app:close', payload),
   },
   // App Connection — Plan 312. Only status DTOs cross IPC; tokens stay
   // in the main process.

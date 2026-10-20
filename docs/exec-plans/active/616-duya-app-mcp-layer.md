@@ -1,9 +1,10 @@
 # 616 — duya_app 内置 MCP 层（产品能力从基础工具集剥离）
 
-> **状态**：Proposed（2026-10-19）
+> **状态**：进行中（2026-10-20：T610a / T610b / T610n / T610e 权限层已交付，PR #318）
 > **归属**：独立计划（与 [610 架构收口系列](./610-architecture-series/README.md) 正交）
 > **前置**：[580 MCP 能力核收敛](./580-mcp-capability-core-convergence.md)（catalog/exposure/tool_invoke 机制）、[452 MCP Direct 暴露](./452-mcp-direct-and-plugin-unification.md)（暴露开关）
 > **用户决策**（2026-10-19）：canvas 系列 + bot 系列 + browser 系列工具，从常规注册工具改为 **内置 MCP server `duya_app`** 的工具；只保留基础工具在常规工具集。
+> **用户决策**（2026-10-20）：**canvas 系列不再由 616 迁移**——即将从 app 内部剥离、改为对外提供服务，由他人负责。616 保留的是**共享面**（命名空间反解 + 权限 + profile 规则），不是某一类工具的注册面。
 
 ## 0. 一句话
 
@@ -261,10 +262,10 @@ if (source) {
 | **T610a** ✅ | `duya_app` 进程内 MCP server 骨架：`MCPManager` 支持 `transport: 'in-process'`，`duya_app` server 起来、`tools/list` 返回工具、连接成功 | `packages/capabilities/src/MCP/**`、`packages/capabilities/src/AppServer/**` | `packages/capabilities/tests/mcp/in-process-app-server.test.ts`：「in-process transport 能 connect 并列出工具」— 今天 `MCPServerConfig.transport` 只有 `'stdio' \| 'streamable-http'`，编译期即红 |
 | **T610b** ✅ | 上下文穿透管道：ALS 承载活 `ToolUseContext`；`duya_app` 工具能读到 `ipcRequest` / `sessionId`，并发调用不串 | `packages/capabilities/src/AppServer/**`、`packages/capabilities/src/MCP/MCPManager.ts`、`packages/agent-runtime/src/tools/mcp-executor.ts` | `packages/capabilities/tests/mcp/in-process-app-context.test.ts`：「canvas 风格工具在 server 侧能拿到 ipcRequest 函数」+「5 个并发调用各自拿到自己的 context」— 今天无任何通道 |
 | **T610n** ✅ | `duya_app` 工具命名空间：从模型可见名反解原名的**共享纯函数**（C7b）——renderer 路由 / profile 规则 / 权限短路三处共用一个判定，不各写一遍前缀判断 | `packages/capabilities/src/AppServer/app-tool-namespace.ts` | `packages/capabilities/tests/mcp/app-tool-namespace.test.ts`：「`mcp_duya_app_canvas_manage` 反解回 `canvas_manage`」+「用户自建 server `duya_app_lit` 的同名族不被误认」 |
-| **T610c** | canvas 16 工具迁入 `duya_app`（从 conductor mode 注入改为 MCP 工具），**保留 canvas 专属渲染** | `packages/capabilities/src/canvas/**`、`packages/host/src/worker-modes/modifiers/conductor-mode.ts`、`apps/desktop/src/renderer/components/chat/tools/**` | renderer：旧名 `canvas_manage` 走 CanvasConductorToolRow、新名 `mcp_duya_app_canvas_manage` 也走同一行；今天只有旧名路径 |
+| **T610c** ⛔ | canvas 16 工具迁入 `duya_app`。**2026-10-20 用户决策：canvas 系列不再由 616 承担**——即将从 app 内部剥离、改为对外提供服务，由他人负责。616 只保留命名空间 / 权限 / profile 规则这套**共享面**，不承担 canvas 的注册面迁移与 renderer 路由 | — | — |
 | **T610d** | bot 8 工具 + browser 迁入 `duya_app` | `packages/host/src/worker-tool-bindings/**`、`packages/host/src/worker-tools/**`、`packages/capabilities/src/BrowserTool/**` | registry 快照断言：bot/browser 工具的 owner 是 `mcp` 且内部键前缀是 `mcp__duya_app__` |
 | **T610d2** | §3.1 的其余 17 个产品能力迁入 `duya_app`（computer_use/cua、vision、image_generate、widget、module、duya_cli、session、MessageSession、SessionSearch、Brief、memory_write、write_stage1_policy、plan、update_state、send_artifact） | 同 T610d | 同 T610d；断言「基础工具清单之外的注册工具全部落在 `mcp__duya_app__` 前缀下」 |
-| **T610e** | 权限 / profile 规则改用**反解后的原名**匹配（C2–C5 收口）+ 新增 `source: 'app'` 分支（C9）。**权限层那半已交付**（§4.4：`isCanvasTool` / always-allowed / 精确规则 / profile pattern 都按原名匹配）；剩 `source: 'app'` 与 renderer 那半 | `packages/agent-runtime/src/authorization/**`、`packages/capabilities/src/permissions/**`、`packages/host/src/worker-profiles/types.ts` | profile 规则 `'canvas:*'` 在新名下仍能 deny；`isCanvasTool` 对新名仍返回 true；`source: 'app'` 不短路灾难检查 |
+| **T610e** ✅ | 权限 / profile 规则改用**反解后的原名**匹配（C2–C5 收口）+ 新增 `source: 'app'` 分支（C9）。**已交付**（PR #318，§4.5）：`source: 'app'` 不短路灾难检查；无条件放行改由**宿主注册身份**授权而不是从名字推断；规则对**三种拼写**匹配（原名 / 模型可见名 / registry 内部键）。**剩 renderer 那半**（新名 → 专属行路由） | `packages/agent-runtime/src/authorization/**`、`packages/capabilities/src/permissions/**`、`packages/host/src/worker-profiles/types.ts` | profile 规则 `'canvas:*'` 在新名下仍能 deny；`isCanvasTool` 对新名仍返回 true；`source: 'app'` 不短路灾难检查 |
 
 **C2–C5 必须落在 T610c/e，不能拖到最后**——否则 T610c 一改名，renderer 和权限立刻回归，
 中间态比改造前更糟。
@@ -366,6 +367,59 @@ profile 规则时不要以为 `'canvas:*'` 今天在生效。**
 `canvas_manage` 与 `canvas_*` 通配对新名生效 / deferred 工具按原名提升 / 调用方 denylist
 按原名生效 / 非 app 工具不受影响。
 
+### 4.5 T610e 交付记录（2026-10-20，PR #318）
+
+权限层这半已交付。审查中查出一个**真实漏网路径**，同卡修掉（见 C17）。
+
+**生产改动**：
+
+| 文件 | 改动 |
+|---|---|
+| `packages/capabilities/src/AppServer/app-tool-namespace.ts` | 加 `AppToolRegistration` / `isTrustedAppToolRegistration` / `APP_TOOL_SOURCE = 'app'`。**授权读注册身份，不读名字** |
+| `packages/capabilities/src/MCP/ports.ts`、`MCP/MCPManager.ts`、`packages/host/src/worker-run-contracts.ts`、`packages/agent-runtime/src/tools/catalog/registry.ts` | `source` 维度加 `'app'` |
+| `packages/agent-runtime/src/authorization/permissions/permissions.ts` | 规则双向匹配；`canUseAppNameShortcut` / `isCanvasTool` 改按注册身份授权；`decideMcpSource('app')` 返回 `undefined`（不短路，继续走完整链） |
+| `packages/agent-runtime/src/authorization/permission-gate.ts` | `makeAppToolRegistrationLookup(registry)`：从 registry 的 `mcpInfo` 读出注册身份，注入权限上下文 |
+| `packages/agent-runtime/src/tools/mcp-executor.ts` | `decision?.behavior === 'deny' / 'ask'`——`undefined` = 无裁决，**不二次弹窗也不绕过** |
+
+**C16 — 模型可见名不是唯一键，授权不能从名字推断。**
+分配器把 `__` 折叠成 `_`，所以 `server=duya_app, tool=canvas_manage` 与
+`server=duya, tool=app_canvas_manage` **分配到字节相同的 `mcp_duya_app_canvas_manage`**。
+第三方 server 因此能「冒名」我们的名字——按名字放行，等于把 app 层的无条件 allow 送给它。
+
+解法分两层，缺一不可：
+- **名字**只用于**规则匹配**（用户写 `canvas_manage`，规则必须继续指认 canvas 工具）；
+- **授权**（无条件 allow、always-allowed 集合）读**宿主注册的身份**
+  （`mcpInfo.serverName === 'duya_app' && mcpInfo.source === 'app'`）。
+
+注册身份怎么到权限链：`applyMCPConfiguration` 用 `capturedMcpInfo.source` 建
+`createMCPToolExecutor`，并以 `internalKey` 注册进 registry（definition 带 `mcpInfo`）；
+`worker-session-runtime` 把同一个 registry 交给 `buildPermissions`；`ToolRegistry.findEntry`
+内部键与模型可见名都能命中。
+
+**实测事实（别照抄旧结论）**：统一权限链的 step 0（`context.source`）在生产路径
+**从未被赋值**——宿主 `buildPermissions` 注入的 context 没有 `source` 字段，那段是死代码。
+**生产里真正生效的 source 闸是 MCP executor**（`tools/mcp-executor.ts`），它按 `mcpInfo.source` 裁决。
+PR #318 的测试把这个事实钉住了。
+
+**C17 — deferred 路径按内部键走权限链，规则与短路双双失效（本卡修掉）。**
+`tool_invoke` → `dispatcherFromRegistry.ts` 用 `current.internalName`（registry 内部键
+`mcp__duya_app__canvas_manage`）调 `checkPermission`，而反解只认模型可见名
+`mcp_duya_app_canvas_manage`。结果：**按原名写的 deny 规则静默失效**（规则还在设置里，
+但不保护任何东西），无条件放行也退化成 ask。
+
+修法：命名空间模块认识**第三种拼写**（registry 内部键），`appToolOriginalName` 对三种拼写
+一律反解回原名，规则匹配再加上模型可见名这一拼。**授权仍然只认注册身份**——内部键自称
+命名空间而没有可信注册，照样拿不到无条件放行。
+
+**测试**（`npx vitest run`，5 文件 / 91 用例，2026-10-20 实测全绿）：
+`app-tool-rule-resolution`（20）/ `app-tool-source-gate`（19）/
+`app-tool-internal-key-resolution`（13，本卡新增）/ `app-tool-namespace`（9）/
+`packages/agent/tests/permissions/permissions.test.ts`（30）。
+
+**反向证明**：把生产改动 stash 掉再跑，`app-tool-internal-key-resolution` 13 例里 **8 例报红**
+（always-allowed / canvas 短路 / deny（原名）/ deny（可见名）/ ask / allow / 内容规则 /
+registry 双拼写查找），另外 5 例是「不给无条件放行」的反向守卫，两态都该绿。
+
 ## 5. 验收证据（必须是正面的）
 
 - `npm run typecheck:all` exit 0。**T610a 已达成**（`typecheck:all` exit 0；electron ratchet 231 known / 0 new）。
@@ -375,11 +429,11 @@ profile 规则时不要以为 `'canvas:*'` 今天在生效。**
 - `packages/capabilities` 整包测试：615 用例中 3 红（`powershell-tool` / `shell-providers` /
   `vision-tool`）——**stash 基线对比确认是既有红，与本卡无关**（2026-10-20 实测）。
 - `npx vitest run packages/capabilities/tests/mcp/app-tool-namespace.test.ts` 全绿。
-  **T610n 已达成**（5 用例）。
+  **T610n 已达成**（9 用例，含内部键拼写 4 例）。
 - `npm run bundle:verify` exit 0。**T610n 已达成**（2026-10-20 实测）——`packages/host/bundle/`
   是入库的构建产物，架构门禁按 git 历史判定它是否 stale；改了它的输入就必须同卡重建并提交。
 - renderer：`apps/desktop/src/renderer/components/chat/tools/` 现有测试全绿 + 新增 canvas
-  新名路由测试（T610c）。
+  新名路由测试（T610c —— **2026-10-20 起 canvas 迁出 616，renderer 路由随剩余产品能力走**）。
 - **反向证明（必须做）**：把 T610c 的「反解原名」改回「直接用模型可见名」，renderer 与权限
   测试必须报红——证明门禁真的在守，而不是恒绿。
 - T610d 落地后，模型可见工具名列表里 `mcp_duya_app_*` 出现且基础工具名**一字未改**

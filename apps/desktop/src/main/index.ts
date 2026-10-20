@@ -66,6 +66,7 @@ import { syncBuiltinPlugins } from './plugins/catalog';
 import { registerUpdaterHandlers } from './ipc/updater-handlers';
 import { registerAgentServerHandlers } from './ipc/agent-server-handlers';
 import { registerPluginHandlers } from './ipc/plugin-handlers';
+import { registerPluginAppHostHandlers } from './plugins/plugin-app-host';
 import { reconcilePluginAppDeclarations } from './services/app-connections/declarative/reconcile';
 import { getAppConnectionService } from './services/app-connections/app-connection-service';
 import { registerAppConnectionHandlers } from './ipc/app-connection-handlers';
@@ -1177,6 +1178,7 @@ try {
   );
 }
 registerPluginHandlers();
+registerPluginAppHostHandlers();
 registerAppConnectionHandlers();
 // Plan 460: register connector declarations from enabled plugins'
 // `.app.json` files (idempotent; safe to run before any connection exists).

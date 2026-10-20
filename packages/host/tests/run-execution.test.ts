@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import type { HostPermissionRequest } from '@duya/agent-protocol';
 import { HostSessionHttpClient } from '../src/http-client.js';
 import { startLocalHost, type LocalHostHandle } from '../src/local-host.js';
 
@@ -239,7 +240,7 @@ process.stdin.on('data', (chunk) => {
         attempt: 1,
       });
       process.send({ type: 'chat:tool_use', id: 'tool-approval', name: 'bash', input: { command: 'echo approved' } });
-      const request = { id: 'approval-1', toolName: 'bash', toolInput: { command: 'echo approved' }, expiresAt: Date.now() + 300000 };
+      const request = { id: 'approval-1', toolName: 'bash', toolInput: { command: 'echo approved' }, mode: 'exit_plan_mode', reason: 'The command writes outside the workspace', expiresAt: Date.now() + 300000 };
       emitNative({
         type: 'permission.requested',
         requestId: request.id,
@@ -247,7 +248,8 @@ process.stdin.on('data', (chunk) => {
         toolCallId: 'tool-approval',
         toolName: request.toolName,
         toolInput: request.toolInput,
-        mode: 'generic',
+        mode: request.mode,
+        reason: request.reason,
         startedAt: Date.now(),
         expiresAt: request.expiresAt,
       });
@@ -428,7 +430,24 @@ describe('Host-owned run execution', () => {
       for await (const event of client.watchAgentRunEvents(start.runId)) {
         events.push(event);
         if (event.payload.type === 'permission.requested') {
-          expect((await client.listPendingPermissionRequests(sessionId)).map((p) => p.id)).toEqual(['approval-1']);
+          // The record is written when the Host receives the worker's LEGACY
+          // frame — a different message from the native event this branch
+          // just saw. The read waits for it instead of assuming it landed.
+          let pending: readonly HostPermissionRequest[] = [];
+          const deadline = Date.now() + 5000;
+          while (Date.now() < deadline) {
+            pending = await client.listPendingPermissionRequests(sessionId);
+            if (pending.length > 0) break;
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+          expect(pending.map((p) => p.id)).toEqual(['approval-1']);
+          // The record keeps the worker's own words. These are producer
+          // facts: the mode says which question the user is being asked and
+          // the reason says why, and neither is derivable from the tool
+          // name. A record that lost them leaves the reader to guess.
+          expect(pending[0]?.mode).toBe('exit_plan_mode');
+          expect(pending[0]?.reason).toBe('The command writes outside the workspace');
+          expect(pending[0]?.expiresAt).toBeTypeOf('number');
           const resolution = { status, decision: status === 'allow' ? 'allow_once' : 'deny' };
           expect((await client.resolvePermissionRequest('approval-1', resolution))?.status).toBe(status);
           expect(await client.resolvePermissionRequest('approval-1', resolution)).toBeNull();
@@ -505,6 +524,12 @@ describe('Host-owned run execution', () => {
 
       const cancel = await client.cancelAgentRun(runId, 'test cancel');
       expect(cancel.requested).toBe(true);
+      // The terminal travels with the acknowledgement whenever the Host has
+      // one: a client that has to ask again to learn how the run ended is a
+      // client that can show "cancelling…" forever.
+      if (cancel.requested && cancel.terminal !== undefined) {
+        expect(cancel.terminal.status).toBe('cancelled');
+      }
 
       let record = null;
       for (let i = 0; i < 150; i += 1) {

@@ -362,16 +362,23 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
     }
     const ledgerPermission = hostLedgerPermission;
     if (!ledgerPermission || ledgerPermission.status !== 'pending') return null;
-    const mode: PermissionRequestEvent['mode'] = ledgerPermission.toolName === 'AskUserQuestion'
+    // The record now carries the worker's own mode, reason and deadline.
+    // The tool-name inference stays as the fallback for records written
+    // before those columns existed — a name is a guess, and a guess is
+    // only better than nothing.
+    const mode: PermissionRequestEvent['mode'] = ledgerPermission.mode === 'ask_user_question' || ledgerPermission.toolName === 'AskUserQuestion'
       ? 'ask_user_question'
-      : ledgerPermission.toolName === 'ExitPlanMode' ? 'exit_plan_mode' : 'generic';
+      : ledgerPermission.mode === 'exit_plan_mode' || ledgerPermission.toolName === 'ExitPlanMode'
+        ? 'exit_plan_mode'
+        : 'generic';
+    const decisionReason = ledgerPermission.reason ?? ledgerPermission.message ?? undefined;
     return {
       id: ledgerPermission.id,
       toolName: ledgerPermission.toolName,
       toolInput: { ...(ledgerPermission.toolInput ?? {}) },
       mode,
-      expiresAt: Number.MAX_SAFE_INTEGER,
-      ...(ledgerPermission.message ? { decisionReason: ledgerPermission.message } : {}),
+      expiresAt: ledgerPermission.expiresAt ?? Number.MAX_SAFE_INTEGER,
+      ...(decisionReason ? { decisionReason } : {}),
     };
   }, [hostLedgerPermission, hostRunSnapshot]);
   const respondToHostPermission = useCallback((decision: 'allow' | 'allow_session' | 'deny') => {

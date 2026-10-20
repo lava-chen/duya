@@ -3,14 +3,14 @@
 > **状态**：Proposed（2026-10-20 立项）
 > **归属**：**[616](./616-duya-app-mcp-layer.md) 的加强版 / 续章**——不是并列的第二个真相源。
 > 616 的分期表不重开，本章只在其未覆盖的「桌面外壳面」上补卡。
-> **硬前置**：[616](./616-duya-app-mcp-layer.md) T610b（ALS 上下文穿透管道，**未交付**）
-> + T610e（`source: 'app'` 权限分支，**未交付**）
+> **硬前置**：[616](./616-duya-app-mcp-layer.md) T610b（ALS 上下文穿透管道）
+> + T610e（`source: 'app'` 权限分支）；交付状态从 616 的验证记录核对，不在此复制。
 > **参照**：Claude Code Desktop 自带的 61 个 `mcp__ccd__*` 工具（§1 逐域实测清单）
 > **关联**：[617 基础工具接口 v2](./617-basic-tool-interface-v2.md)（正交，618 不碰基础工具）
 > · [571 Tab Shell Workbench](../backlog/571-tab-shell-workbench.md) ·
 > [527 Dock 布局树](../backlog/527-dock-layout-and-window-management.md) ·
 > [582 会话归档加固](./582-session-archive-hardening.md) ·
-> [496 worktree 框架](./496-worktree-framework-implementation.md)（Draft，未启动）
+> [496 worktree 框架](./496-worktree-framework-implementation.md)（已有隔离实现，剩余范围见该计划）
 
 ---
 

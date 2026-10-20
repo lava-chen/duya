@@ -1,63 +1,30 @@
-# Testing
+# 测试与验证
 
-DUYA uses a three-layer testing strategy. Pick the layer that matches the question
-you're asking.
+在当前检出根目录执行，先选择能验证本次变化的最小范围。相关测试通过不代表整仓门禁通过。
 
-## 1. Unit tests (Vitest, fast, no Electron)
+| 要回答的问题 | 验证方式 | 入口 |
+| --- | --- | --- |
+| 纯逻辑、状态、适配器是否正确 | `npx vitest run <test-files>` | `vitest.config.ts`、包内 / colocated 测试 |
+| Electron main / preload / IPC 是否接通 | 先 `npm run electron:build`，再 `npm run test:e2e:ipc` 或 `test:e2e:smoke` | `e2e/playwright.config.ts`、`e2e/helpers.ts` |
+| 真实 worker turn 是否闭环 | `npm run test:e2e:turn`，核对所改生产链路 | `e2e/turn/` |
+| UI 行为、状态或样式是否正确 | Playwright MCP 操作受影响流程并保留结果 | 浏览器预览或真实 Electron，按能力选择 |
 
-- **Runner**: `vitest` 3.x. Config: `vitest.config.ts`.
-- **Location**:
-  - `packages/ui/src/**/*.test.ts` / `*.test.tsx` — colocated with renderer code
-  - `packages/*/tests/**/*.test.ts` — colocated with workspace package code
-  - `apps/desktop/src/main/ipc/__tests__/*.test.ts` — IPC handler unit tests
-- **Run**: `npm run test`, `npm run test:watch`, `npm run test:coverage`.
-- **IPC handler test pattern** (critical): see
-  `apps/desktop/src/main/ipc/__tests__/url-safety.test.ts` (pure function) and
-  `apps/desktop/src/main/ipc/__tests__/logger-handlers.test.ts` (mocked module).
-  - All mock state must live inside `vi.hoisted(() => ({ ... }))` so the
-    `vi.mock` factory (also hoisted) and the test bodies share one singleton.
-  - `vi.mock` paths are **relative to the test file**, not the source file.
-    From `apps/desktop/src/main/ipc/__tests__/foo.test.ts`, the logger module is
-    `'../../logging/logger'`, not `'../logging/logger'`.
-  - For a stable `getLogger()` mock, return `mocks.logger` from the factory — not a
-    fresh object each call (otherwise `mockReturnValueOnce` calls are lost between tests).
+## 环境与隔离
 
-## 2. E2E tests (Playwright `_electron`, real binary)
+- 测试、服务和构建产物来自同一检出；E2E 的 `reuseExistingServer` 可能复用别的 Vite，先核对 URL 与服务根。
+- Electron 测试使用独立 namespace / userData；只读 `window.electronAPI` 不能证明页面挂载或 onboarding 已完成。
+- 浏览器预览可以检查 renderer；涉及 preload、IPC 或 worker 时使用真实 Electron / 子进程。
+- 缺 dist 时按[构建指南](build.md)准备；不要用旧构建产物或共享工作区状态解释测试成功。
 
-- **Runner**: `@playwright/test` driving the real Electron main process via the
-  `_electron` API. See `e2e/playwright.config.ts`.
-- **Location**: `e2e/smoke/smoke.spec.ts`, `e2e/ipc/*.spec.ts`.
-- **Run**: `npm run test:e2e`, `npm run test:e2e:smoke`, `npm run test:e2e:ipc`.
-- **Requires**: `npm run electron:build` first (produces `dist-electron/`).
-  The Vite dev server is auto-started by Playwright's `webServer` config
-  (`reuseExistingServer: true` lets you run `npm run dev` in parallel).
-- **Isolation**: each spec passes a unique `--duya-namespace=<name>` so its userData
-  (and SQLite DB) is fresh. `DUYA_TEST=1` enables test-mode hooks
-  (single-instance bypass, no DevTools, etc.).
-- **Pattern**: `helpers.ts` exports `launchDuya({ namespace })` and
-  `invokeApi(page, 'settings.get', 'key')` which calls into `window.electronAPI` in the
-  renderer. `closeDuya()` force-kills the process tree on Windows if the graceful close
-  times out.
+## IPC mock
 
-## 3. UI verification (Playwright MCP, dev server only)
+共享状态放在 `vi.hoisted` 中；`vi.mock` 路径相对测试文件，logger mock 返回同一个实例。
+参考 `apps/desktop/src/main/ipc/__tests__/url-safety.test.ts` 与 `logger-handlers.test.ts`。
+mock 验证局部行为，不能替代上表的真实接线验收。
 
-- For interactive UI smoke checks during development. Start the Vite dev server first
-  (`npm run dev`), then use MCP tools.
-- Example: `mcp__playwright browser_navigate http://localhost:3000`,
-  `mcp__playwright browser_snapshot`.
+## 基线与交付
 
-## Running tests from a worktree
-
-Run vitest **from the repository root**. The root config's `setupFiles` resolve
-relative to the root, so running `npx vitest` inside a package makes every suite fail
-on a missing `test-setup.ts`.
-
-## Test debt
-
-`npm test` is red by design today (pre-existing debt). The red is the signal and it is
-deliberately left visible in CI — no `|| true`, no `continue-on-error`, no glob skips.
-
-**A full parallel vitest run is not a usable gate**: workers time out under parallel
-load and report dozens of false failures on top of the real red. To decide whether a
-change regressed anything, run the affected package's suites **serially** and compare
-against a stashed baseline.
+改动前或独立基线检出记录 SHA、OS、Node、构建状态及失败；改动后用同一条件比较文件、用例与错误签名。
+并发或负载相关失败先单独复现；不要为取基线自动 stash 他人的工作。
+把命令、退出码、关键结果与未覆盖范围写回任务计划，原始日志留本地。
+纯文档整理检查链接、Git 可见性、编码和 diff；代码行为变化执行根 AGENTS 的交付门禁。

@@ -701,11 +701,18 @@ export function readPermissionRequest(value: unknown): HostPermissionRequest | n
   if (typeof id !== 'string' || id === '') return null;
   const toolInput = value['toolInput'];
   const sessionId = value['sessionId'];
+  const mode = readString(value, 'mode');
+  const reason = readString(value, 'reason');
   return {
     id,
     sessionId: typeof sessionId === 'string' && sessionId !== '' ? sessionId : null,
     toolName: readString(value, 'toolName'),
     toolInput: isRecord(toolInput) ? (toolInput as Readonly<Record<string, unknown>>) : null,
+    // The producer's own words. A Host that predates these columns sends
+    // none, and an absent fact is null — not a guess.
+    mode: mode === '' ? null : mode,
+    expiresAt: readOptionalMillis(value, 'expiresAt'),
+    reason: reason === '' ? null : reason,
     status: readPermissionStatus(value['status']),
     decision: typeof value['decision'] === 'string' ? value['decision'] : null,
     message: typeof value['message'] === 'string' ? value['message'] : null,

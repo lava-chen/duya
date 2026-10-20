@@ -312,6 +312,18 @@ export interface PermissionRequest {
   sessionId: string | null;
   toolName: string;
   toolInput: Record<string, unknown> | null;
+  /**
+   * Which interactive situation raised the request, as the worker said it.
+   *
+   * Stored rather than re-derived: a client that only has the tool name
+   * cannot tell an `exit_plan_mode` request from a generic one, and the two
+   * ask the user different questions.
+   */
+  mode: string | null;
+  /** When the worker raised the request. Null when it did not say. */
+  expiresAt: number | null;
+  /** Why the request was raised, in the worker's words. */
+  reason: string | null;
   status: PermissionStatus;
   decision: string | null;
   message: string | null;
@@ -326,6 +338,9 @@ export interface PermissionCreateInput {
   sessionId?: string | null;
   toolName: string;
   toolInput?: Record<string, unknown> | null;
+  mode?: string | null;
+  expiresAt?: number | null;
+  reason?: string | null;
 }
 
 export interface PermissionResolveInput {
@@ -362,6 +377,35 @@ export class PermissionLedger {
         `);
       },
     },
+    {
+      // id 42: the three facts a client cannot re-derive from the tool name.
+      //
+      // `mode` says which question the user is being asked, `reason` says why
+      // it was raised, `expires_at` says when the answer stops mattering. All
+      // three are PRODUCER facts: the worker is the only thing that knows
+      // them, and a client that reconstructs them from the tool name is
+      // guessing. They were dropped at the store boundary, so the one
+      // consumer that reads the ledger back (the approval surface) had to
+      // show a generic prompt and a made-up reason.
+      //
+      // The columns are added one at a time and only when missing, so a
+      // database that already has them is left alone. The runner's
+      // `id <= current` guard means this runs exactly once per database.
+      id: 42,
+      name: 'add_permission_request_facts',
+      up: (db) => {
+        const columns = (db.prepare('PRAGMA table_info(permission_requests)').all() as Array<{ name: string }>)
+          .map((column) => column.name);
+        const additions: Array<[string, string]> = [
+          ['mode', 'ALTER TABLE permission_requests ADD COLUMN mode TEXT'],
+          ['expires_at', 'ALTER TABLE permission_requests ADD COLUMN expires_at INTEGER'],
+          ['reason', 'ALTER TABLE permission_requests ADD COLUMN reason TEXT'],
+        ];
+        for (const [name, ddl] of additions) {
+          if (!columns.includes(name)) db.exec(ddl);
+        }
+      },
+    },
   ];
 
   private readonly db: SqliteDatabase;
@@ -373,9 +417,9 @@ export class PermissionLedger {
     this.db
       .prepare(
         `INSERT INTO permission_requests (
-          id, session_id, tool_name, tool_input, status, created_at
+          id, session_id, tool_name, tool_input, mode, expires_at, reason, status, created_at
         ) VALUES (
-          @id, @session_id, @tool_name, @tool_input, 'pending', @created_at
+          @id, @session_id, @tool_name, @tool_input, @mode, @expires_at, @reason, 'pending', @created_at
         )`,
       )
       .run({
@@ -383,6 +427,9 @@ export class PermissionLedger {
         session_id: input.sessionId ?? null,
         tool_name: input.toolName,
         tool_input: input.toolInput ? JSON.stringify(input.toolInput) : null,
+        mode: input.mode ?? null,
+        expires_at: input.expiresAt ?? null,
+        reason: input.reason ?? null,
         created_at: now,
       });
     return this.get(input.id)!;
@@ -1239,6 +1286,9 @@ interface PermissionRow {
   session_id: string | null;
   tool_name: string;
   tool_input: string | null;
+  mode: string | null;
+  expires_at: number | null;
+  reason: string | null;
   status: PermissionStatus;
   decision: string | null;
   message: string | null;
@@ -1284,6 +1334,9 @@ function rowToPermission(row: PermissionRow): PermissionRequest {
     sessionId: row.session_id,
     toolName: row.tool_name,
     toolInput: row.tool_input ? safeParseObject(row.tool_input) : null,
+    mode: row.mode ?? null,
+    expiresAt: row.expires_at ?? null,
+    reason: row.reason ?? null,
     status: row.status,
     decision: row.decision,
     message: row.message,

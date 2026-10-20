@@ -29,6 +29,7 @@ import type { Message } from '@duya/agent-protocol/transcript';
 
 import type { ToolRegistry } from '../tools/catalog/registry.js';
 import type { ToolPermissionCheckContext } from './permissions/permissions.js';
+import type { AppToolRegistration } from '@duya/capabilities/AppServer/app-tool-namespace';
 import type {
   AdditionalWorkingDirectory,
   LocalToolPermission,
@@ -116,6 +117,36 @@ function makeRiskTierLookup(
 }
 
 /**
+ * Resolve a tool's HOST-REGISTERED identity from the registry.
+ *
+ * The app layer's unconditional allows (the canvas short-circuit) must be
+ * earned by identity, not by a name that merely spells like ours: the
+ * model-visible name is not a unique key — a third-party server named `duya`
+ * exposing `app_canvas_manage` is allocated the very same
+ * `mcp_duya_app_canvas_manage` (plan 616 §C16). The registry holds the
+ * `mcpInfo` the HOST recorded, so it is the registry that answers "is this
+ * ours".
+ *
+ * Returns `undefined` for tools that were never MCP registrations — the
+ * ordinary builtin path, where the tool's real name is the name we were
+ * given and there is nothing to impersonate.
+ */
+function makeAppToolRegistrationLookup(
+  registry: ToolRegistry | undefined,
+): ((toolName: string) => AppToolRegistration | undefined) | undefined {
+  if (!registry) return undefined;
+  return (toolName: string) => {
+    const info = registry.getTool(toolName)?.mcpInfo;
+    if (!info) return undefined;
+    return {
+      serverName: info.serverName,
+      toolName: info.toolName,
+      source: info.source,
+    };
+  };
+}
+
+/**
  * Pure functional core. Tests pin the assembly contract here.
  *
  * Behaviour matches the legacy `_buildPermissionContext` line-for-line:
@@ -136,6 +167,7 @@ export function buildPermissions(
   registry: ToolRegistry | undefined,
 ): BuiltPermissions {
   const riskTierLookup = makeRiskTierLookup(registry);
+  const appToolRegistrationLookup = makeAppToolRegistrationLookup(registry);
 
   const permissionContext: ToolPermissionCheckContext = {
     getAppState: () => ({
@@ -158,6 +190,9 @@ export function buildPermissions(
     llmClient: deps.llmClient,
     classifierModel: deps.model,
     messages: deps.getMessages() as Message[],
+    ...(appToolRegistrationLookup === undefined
+      ? {}
+      : { resolveAppToolRegistration: appToolRegistrationLookup }),
   };
 
   const canUseTool: CanUseToolFn = memoizeInvocationDecision(async (

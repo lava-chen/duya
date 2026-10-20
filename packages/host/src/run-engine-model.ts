@@ -479,6 +479,29 @@ export interface LegacyModelSources {
  */
 export interface ClientModelPortOptions {
   /**
+   * The turn's reasoning effort, as the Host resolved it.
+   *
+   * The provider's own name for it is `effort` (`chatOptions.effort`), and the
+   * Anthropic client turns it into `thinking.budget_tokens` -- so this is the
+   * only place the level becomes a budget.
+   *
+   * It is a PORT OPTION rather than a field on the engine's `ModelRequest`
+   * because the engine has no honest source for it: the request contract
+   * (`packages/agent-runtime/src/engine/ports.ts`) names the model, the
+   * provider, the token ceiling and the temperature, and adding a fifth field
+   * to a shared contract for one provider's vocabulary would put a
+   * provider-shaped value into a runtime-shaped one. The HOST knows the
+   * effort -- it adjudicated it -- and the host owns this port, so the host
+   * hands it over.
+   *
+   * OMITTED means "the Host resolved no effort", and the client's own default
+   * applies. That is not the same as an effort of `medium`: the client
+   * resolves `undefined` to `medium` for REASONING models and to no thinking
+   * at all for models that do not reason, so an invented default here would
+   * change what the provider is asked for.
+   */
+  readonly effort?: string;
+  /**
    * Called once per provider `result` frame, pre-narrowing.
    *
    * OMITTED means the caller wants no per-call usage. An all-zero provider block
@@ -553,6 +576,10 @@ export function createClientModelPort(
         // cannot tell the two apart on the wire.
         ...(request.maxOutputTokens === undefined ? {} : { maxTokens: request.maxOutputTokens }),
         ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
+        // The Host's adjudicated effort. Forwarded verbatim: the provider's
+        // budget is derived from it, and a rewritten level would be a level
+        // nobody asked for.
+        ...(options?.effort === undefined ? {} : { effort: options.effort }),
         // Forwarded, never wrapped. See the header.
         signal,
         ...(request.model === undefined ? {} : { model: request.model }),

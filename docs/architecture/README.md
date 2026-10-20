@@ -1,7 +1,8 @@
-# 架构重构入口
+# 架构资料入口
 
-Monorepo / Agent Harness 的唯一执行路线为 [587 主计划](../exec-plans/active/587-agent-harness-monorepo/README.md)。
+当前实现查 [ARCHITECTURE.md](../../ARCHITECTURE.md)与源码；定位查 [ARCHITECTURE_MAP.md](../../ARCHITECTURE_MAP.md)。
 
-所有阶段、统一合同、迁移映射、旧任务接管、验收及handoff集中在该目录。原architecture系列与RFC集中到其[reference目录](../exec-plans/active/587-agent-harness-monorepo/reference/README.md)，旧活动计划原文集中到[history目录](../exec-plans/active/587-agent-harness-monorepo/history/README.md)。
+架构执行顺序只在 [610 执行队列](../exec-plans/active/610-architecture-series/19-fast-track-queue.md)维护。
+[587](../exec-plans/active/587-agent-harness-monorepo/README.md)及其 reference / history 是历史合同与推导，不能另排执行队列。
 
-当前系统实现仍以根[ARCHITECTURE.md](../../ARCHITECTURE.md)及当前源码为准。历史测量/Status不作为当前已验收声明。
+本目录保留旧路径与 [M5.1 调查](m5-1-slice-inventory.md)；新设计放 `docs/design-docs/`，不在此另建架构体系。

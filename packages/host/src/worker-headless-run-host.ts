@@ -785,13 +785,16 @@ export class HeadlessRunHost {
    * keeps `permission.requested` honest rather than confidently wrong.
    */
   #contextFor(manifest: RunManifest): TranslateContext {
-    const startedAt = this.#now();
     return {
       messageId: `m-${manifest.runId}`,
       permission: {
         classify: () => 'generic',
         mode: 'generic',
-        expiresInMs: startedAt + manifest.permissionPolicy.defaultTimeoutMs,
+        // A DURATION, not a deadline: the translator adds it to `startedAt`
+        // to mint `expiresAt`. Adding the wall clock here made every
+        // headless permission expire in the year 2084, which is the same as
+        // never expiring.
+        expiresInMs: manifest.permissionPolicy.defaultTimeoutMs,
         now: this.#now,
       },
       nextTurn: (() => {

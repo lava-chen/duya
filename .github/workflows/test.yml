@@ -19,11 +19,11 @@ on:
   pull_request:
     branches: [master]
   schedule:
-    # Full cross-platform regression run, once per day (18:20 China time).
+    # Cross-platform regression signal without charging every merge for the full matrix.
     - cron: '20 10 * * *'
 
-# One run per ref, with scheduled cross-platform validation isolated from
-# branch pushes so a merge cannot cancel the nightly baseline check.
+# Keep the scheduled run independent so a new push cannot cancel the nightly
+# cross-platform signal.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}
   cancel-in-progress: true
@@ -267,8 +267,8 @@ jobs:
       - name: Plan tracking table matches the tree (T02)
         run: npm run plan:sync
 
-      # The rules-compliance checker is the gate that keeps AGENTS.md honest:
-      # it asserts every package ships a rule file of at least 200 bytes
+      # The rules-compliance checker is the gate that keeps AGENTS.md / CLAUDE.md
+      # honest: it asserts every package ships a rule file of at least 200 bytes
       # and that every path those files cite still resolves. It was wired to
       # `npm run test:rules`, but no workflow ever called it — so the 24 package
       # guides added in #317 had no automated check at all, and neither did the
@@ -296,11 +296,43 @@ jobs:
         if: always()
         run: node scripts/architecture/gate-scan-guard.mjs a1
 
+  # ── Resolve changed-file scopes once for both test and build jobs ─────────
+  changes:
+    name: test scope
+    runs-on: ubuntu-latest
+    outputs:
+      unit_scope: ${{ steps.resolve.outputs.unit_scope }}
+      e2e_scope: ${{ steps.resolve.outputs.e2e_scope }}
+      build_scope: ${{ steps.resolve.outputs.build_scope }}
+      e2e_files: ${{ steps.resolve.outputs.e2e_files }}
+      unit_files: ${{ steps.resolve.outputs.unit_files }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Resolve test scope
+        id: resolve
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # For pull_request events, github.sha is a synthetic merge commit.
+          # Diff the PR's own head so commits newly merged to master are not
+          # misclassified as changes from this PR.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: npm run ci:test-scope
+
   # ── Typecheck + tests ─────────────────────────────────────────────────────
   test:
-    # The PR receives the validation result before merge. Avoid repeating the
-    # long suite on every master push; the scheduled run owns the full matrix.
-    if: github.event_name != 'push'
+    if: >-
+      github.event_name != 'push' &&
+      (needs.changes.outputs.unit_scope != 'skip' || needs.changes.outputs.e2e_scope != 'skip')
+    needs: changes
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -308,14 +340,11 @@ jobs:
       # moment one OS fails, and a cancelled leg is reported as `cancelled` —
       # not `passed`, but it reads like an absence of evidence rather than a
       # result, and a half-cancelled matrix is easy to misread as "only the
-      # broken OS is broken". The cost is runner minutes on master pushes,
-      # where a failing ubuntu leg also pays for windows and macos to finish.
-      # That is the deliberate price of every leg reporting a true result.
+      # broken OS is broken". The scheduled matrix keeps each platform leg
+      # running to a real result even when another platform fails.
       fail-fast: false
       matrix:
-        # Pull requests get one Linux leg with changed tests. The scheduled
-        # full-suite run keeps all three platforms in view without making every
-        # Agent wait through the same known-red 20-minute suite.
+        # PRs get one Linux leg; scheduled runs own the full cross-platform suite.
         os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
         node-version: [22.x]
 
@@ -323,32 +352,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # Vitest --changed compares the PR tree with its base commit.
           fetch-depth: 0
-
-      - name: Resolve test scope
-        id: test-scope
-        shell: bash
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          if [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
-            echo "scope=full" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          changed_files="$(git diff --name-only "$BASE_SHA...$GITHUB_SHA")"
-          if [ -z "$changed_files" ]; then
-            echo "scope=skip" >> "$GITHUB_OUTPUT"
-          elif printf '%s\n' "$changed_files" | grep -Eq '(^vitest\.config\.|^vitest\.workspace\.|(^|/)package(-lock)?\.json$|^tsconfig[^/]*\.json$|^scripts/(check-test-coverage|ci)/|^\.github/workflows/)'; then
-            echo "scope=full" >> "$GITHUB_OUTPUT"
-          elif printf '%s\n' "$changed_files" | grep -Eq '^(apps|packages|scripts)/'; then
-            echo "scope=changed" >> "$GITHUB_OUTPUT"
-          else
-            echo "scope=skip" >> "$GITHUB_OUTPUT"
-          fi
-
-          echo "Selected test scope: $(tail -n 1 "$GITHUB_OUTPUT" | cut -d= -f2)"
 
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
@@ -357,11 +361,10 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        if: steps.test-scope.outputs.scope != 'skip'
         run: npm ci
 
       - name: Run typecheck
-        if: steps.test-scope.outputs.scope != 'skip'
+        if: needs.changes.outputs.build_scope != 'skip'
         # The renderer's `tsc --noEmit` aborts the Node process with
         # `Abort trap: 6` (exit 134) on the macOS runner under the default
         # heap — a V8 out-of-memory, not a type error. ubuntu passes the same
@@ -371,21 +374,29 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=6144
         run: npm run typecheck:all
 
-      # PRs run only tests related to the changed tree. Test-runner, dependency,
-      # and coverage-discovery changes fall back to the full suite. No tests
-      # selected for a code PR fail visibly; documentation-only PRs skip this
-      # step explicitly. The scheduled run owns the full OS matrix.
       - name: Run tests
-        if: steps.test-scope.outputs.scope != 'skip'
+        if: needs.changes.outputs.unit_scope != 'skip'
         shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -o pipefail
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ "${{ steps.test-scope.outputs.scope }}" = "changed" ]; then
-            npm test -- --changed="${{ github.event.pull_request.base.sha }}" 2>&1 | tee vitest-output.log
+          # Keep file execution serial for stable temporary test namespaces.
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ "${{ needs.changes.outputs.unit_scope }}" = "changed" ]; then
+            mapfile -t unit_files < <(node -e 'for (const file of JSON.parse(process.argv[1])) console.log(file)' '${{ needs.changes.outputs.unit_files }}')
+            if [ "${#unit_files[@]}" -eq 0 ]; then
+              echo "Changed unit scope has no test or source targets; refusing to silently skip tests" >&2
+              exit 1
+            fi
+            if [ "${{ needs.changes.outputs.build_scope }}" = "skip" ]; then
+              npx vitest run --no-file-parallelism "${unit_files[@]}" 2>&1 | tee vitest-output.log
+            else
+              npm test -- --changed="$BASE_SHA" --no-file-parallelism 2>&1 | tee vitest-output.log
+            fi
           elif [ "$GITHUB_EVENT_NAME" = "schedule" ] && [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            npm test -- --coverage 2>&1 | tee vitest-output.log
+            npm test -- --coverage --no-file-parallelism 2>&1 | tee vitest-output.log
           else
-            npm test 2>&1 | tee vitest-output.log
+            npm test -- --no-file-parallelism 2>&1 | tee vitest-output.log
           fi
 
       # Plan 610 T04 / G10. This guard used to be an inline heredoc that exited
@@ -428,7 +439,7 @@ jobs:
         # implementation now, and the workflow calls it.
         # What this step deliberately does NOT do any more is fail on "could not
         # parse". See the exit contract in the script.
-        if: always() && steps.test-scope.outputs.scope != 'skip'
+        if: always() && needs.changes.outputs.unit_scope != 'skip'
         shell: bash
         run: node scripts/ci/test-summary-guard.mjs vitest-output.log
 
@@ -441,10 +452,8 @@ jobs:
 
   # ── Build / packaged parity ───────────────────────────────────────────────
   build:
-    # Build before merge on one Linux leg; the scheduled matrix checks
-    # platform-specific packaging. Avoid repeating the same full build after
-    # every master merge.
-    if: github.event_name != 'push'
+    if: github.event_name != 'push' && needs.changes.outputs.build_scope != 'skip'
+    needs: [architecture, changes]
     runs-on: ${{ matrix.os }}
     # Plan 587 G0.2: this was `needs: test`, and because `npm test` is red the
     # whole build job was SKIPPED — so `electron:build` and the macOS packaged
@@ -458,13 +467,12 @@ jobs:
     #     burning the build matrix. `architecture` is the right pick: it is
     #     ~3s of static analysis, needs no `dist/`, and a boundary violation
     #     genuinely means the build is building something wrong.
-    #   * PRs retain one Ubuntu build. The scheduled run owns the platform
-    #     matrix; pushes to master do not repeat work already checked before
-    #     merge.
-    needs: architecture
+    #   * What this costs: `build` no longer runs after the tests, so a
+    #     test-only regression will not gate the build job. The test job stays
+    #     visible and independent; the platform matrix runs on the schedule.
 
     strategy:
-      # PRs build on Ubuntu. The scheduled full matrix retains Windows/macOS
+      # PRs build on Ubuntu only; the scheduled matrix retains Windows/macOS
       # packaging and parity evidence without repeating it after every merge.
       fail-fast: false
       matrix:
@@ -496,10 +504,32 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=6144
         run: npm run electron:build
 
+      - name: Run affected Electron E2E tests
+        if: >-
+          needs.changes.outputs.e2e_scope != 'skip' &&
+          (github.event_name == 'pull_request' ||
+           (github.event_name == 'schedule' && matrix.os == 'ubuntu-latest'))
+        shell: bash
+        env:
+          E2E_SCOPE: ${{ needs.changes.outputs.e2e_scope }}
+          E2E_FILES: ${{ needs.changes.outputs.e2e_files }}
+        run: |
+          set -o pipefail
+          if [ "$E2E_SCOPE" = "full" ]; then
+            xvfb-run -a npm run test:e2e
+          else
+            mapfile -t e2e_files < <(node -e 'for (const file of JSON.parse(process.argv[1])) console.log(file)' "$E2E_FILES")
+            if [ "${#e2e_files[@]}" -eq 0 ]; then
+              echo "E2E scope was changed but no spec files were selected" >&2
+              exit 1
+            fi
+            xvfb-run -a npm run test:e2e -- "${e2e_files[@]}"
+          fi
+
       - name: Package (macOS only)
         # Run the full electron-builder packaging on macOS so afterPack path
         # bugs (which only manifest inside the .app bundle) are caught on
-        # every master push, not only on release tags.
+        # every scheduled cross-platform run, not only on release tags.
         #
         # `--publish never` is the fix, and it is load-bearing rather than
         # decoration. electron-builder.yml declares a `github` publish provider,

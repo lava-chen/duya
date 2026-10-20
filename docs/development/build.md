@@ -1,69 +1,29 @@
-# Build System
+# 构建与打包
 
-| Component         | Technology                      | Config                       |
-| ----------------- | ------------------------------- | ---------------------------- |
-| Frontend          | Vite 6 + React 19 + Zero Router | `vite.config.ts`             |
-| Desktop Shell     | Electron 44.2.0 (**requires macOS 13+**; GUI gates run on macOS 13+ hosts) | `apps/desktop/src/main/index.ts` |
-| Electron Compiler | esbuild                         | `scripts/build-electron.mjs` |
-| Packager          | electron-builder                | `electron-builder.yml`       |
-| Agent Core        | TypeScript                      | `packages/agent-core/`        |
-| Testing           | Vitest + Playwright             | `vitest.config.ts`           |
+先按改动选择命令；workspace 构建顺序由 `scripts/build-packages.mjs` 维护。
 
-## Worker Bundle (MUST FOLLOW)
+| 改动或操作 | 命令 | 产物 / 用途 |
+| --- | --- | --- |
+| workspace 接口与依赖 | `npm run build:packages` | 按依赖顺序生成各包产物 |
+| 新检出运行 TUI | `npm run build:cli-dev` | 准备 CLI 与 worker，再运行 `dev:tui` |
+| main / preload | `npm run build:electron` | 更新 `dist-electron/`，再启动 Electron 验证 |
+| worker bundle | `npm run bundle:agent` | `packages/host/bundle/worker-entry.js` |
+| CLI bundle | `npm run build:cli-bundle` | `packages/cli/bundle/cli.cjs` |
+| 完整桌面构建 / E2E 前置 | `npm run electron:build` | worker、CLI、Gateway、Vite、Electron |
 
-- Format: CommonJS (`format: 'cjs'`). Output: `packages/host/bundle/worker-entry.js`.
-  The esbuild entry point is `packages/cli/src/agent-worker-entry.ts`, **not** a file
-  inside `packages/agent/` (`scripts/build-agent-bundle.mjs:30`).
-- `bundle: true` inlines all runtime dependencies. Only `better-sqlite3` (native) and
-  `BashWorker.js` (worker) remain external.
-- **`blessed` is external in the CHAT CLI entry only.** It cannot be bundled:
-  `blessed/lib/widget.js` enumerates its own `widgets/` directory with `readdirSync` and
-  `require`s each file at runtime, which esbuild cannot see. First symptom is a
-  misleading `Could not resolve 'term.js'` / `'pty.js'` — two packages blessed never
-  declares but requires inside a widget method. Marking those external only moves the
-  failure to runtime. The packaged worker entry never imports `cli/`, so it needs none of
-  this; if that stops being true, fix the chat CLI entry rather than copying its externals up.
-- Production resolves: primary `resources/harness-bundle/worker-entry.js`, fallback paths
-  only for debug.
-- Self-contained: no `node_modules` copying in `afterPack`.
-- `better-sqlite3`: packaged to `resources/better-sqlite3/`, shared by main and agent.
-  Agent receives `DUYA_BETTER_SQLITE3_PATH` env var.
-- `BashWorker.js`: bundled to `resources/harness-bundle/BashTool/`. Worker uses
-  `process.execPath` as Node.js runtime in production.
-- Prompt `.hbs` assets: copied to `resources/harness-bundle/assets/` by
-  `scripts/build-agent-bundle.mjs`.
-- `packages/host/bundle/` is **tracked in git** (the old `packages/agent/bundle/` was
-  gitignored and no longer exists).
-- Pre-release checks:
-  - `release/win-unpacked/resources/harness-bundle/worker-entry.js` exists
-  - `release/win-unpacked/resources/harness-bundle/assets/dynamic/environment.hbs` exists
-  - `release/win-unpacked/resources/harness-bundle/BashTool/BashWorker.js` exists
-  - `release/win-unpacked/resources/better-sqlite3/build/Release/better_sqlite3.node` exists
-  - First packaged chat turn reaches Agent `ready` (no timeout)
-  - `app.log` has no `ERR_MODULE_NOT_FOUND`
+## 构建边界
 
-## Why the CLI is a bundle and not `dist/`
+- worker 入口是 `packages/cli/src/agent-worker-entry.ts`，输出归 Host；`packages/agent/` 不再承接新实现。
+- worker 与 CLI 都是 CJS bundle；`tsc` 的 dist 不等价于可运行 CLI，不能假定提示词资产已复制。
+- worker 外部依赖以 `scripts/build-agent-bundle.mjs` 为准，CLI 以 `scripts/build-cli-bundle.mjs` 为准。
+  不在文档复制易过期清单，也不要把 CLI 的 externals 直接套给 worker。
+- BashWorker 是独立入口，必须能在子进程中加载；提示词资产与原生模块也要验证真实打包路径。
+- 生成目录沿用 `bundle/`；改变输出位置时同步打包资源映射和架构扫描规则。
+- `packages/host/bundle/` 已跟踪；重建后检查其 diff，不手工合并生成内容。
 
-`node packages/cli/dist/index.js` does **not** run, for two independent reasons. Each was
-found by fixing the first and watching the second appear:
+## 打包验收
 
-1. **Extensionless specifiers.** Node's ESM loader rejects them.
-   `packages/plugin-core` is emitted under `module: ESNext` + `moduleResolution: bundler`,
-   which permits and emits `./scope` rather than `./scope.js`. It is the only workspace
-   package that emits any.
-2. **No assets.** `tsc` emits JavaScript and declarations only. The `.hbs` prompt assets
-   are never copied, and the prompt loader throws at module scope when it cannot find them
-   ("fail loud, a missing prompt asset must never degrade into an empty persona").
+检查资源映射 `electron-builder.yml` 与 `scripts/after-pack.js`，确认 worker、CLI、BashWorker、提示词及原生依赖随包可加载。
+从实际打包应用完成首轮聊天，核对 worker 就绪、工具结果与最终回答；文件存在或构建退出 0 不足以证明可用。
 
-So a thin wrapper over `dist` cannot work, and making `dist` loadable would mean changing
-every asset-dependent package plus teaching `build-packages.mjs` to copy assets — its own
-header calls that array the single source of build order.
-
-**Do not give this artifact its own output directory.** Every gate under
-`scripts/architecture/` skips directories named exactly `bundle`; a `bundle-cli/` directory
-is not skipped, and its generated JavaScript was then scanned as first-party source and
-reported as a new `module-dependency` violation.
-
-Note the two distinct bundles: `npm run bundle:agent` emits
-`packages/host/bundle/worker-entry.js` (the worker process), and `npm run build:cli-bundle`
-emits `packages/cli/bundle/cli.cjs` (the CLI).
+失败先查[排障表](footguns.md)，保留首个错误与失败进程。构建不替代类型检查，交付门禁见根 AGENTS。

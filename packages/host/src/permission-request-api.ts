@@ -14,6 +14,9 @@ function toHostPermissionRequest(permission: StoredPermission): HostPermissionRe
     sessionId: permission.sessionId,
     toolName: permission.toolName,
     toolInput: permission.toolInput,
+    mode: permission.mode,
+    expiresAt: permission.expiresAt,
+    reason: permission.reason,
     status: permission.status,
     decision: permission.decision,
     message: permission.message,
@@ -35,6 +38,9 @@ export function createHostPermissionRequestApi(
         sessionId: input.sessionId ?? null,
         toolName: input.toolName,
         toolInput: input.toolInput === undefined ? null : input.toolInput,
+        mode: input.mode === undefined ? null : input.mode,
+        expiresAt: input.expiresAt === undefined ? null : input.expiresAt,
+        reason: input.reason === undefined ? null : input.reason,
       });
       return toHostPermissionRequest(created);
     },
