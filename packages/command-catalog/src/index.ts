@@ -41,6 +41,9 @@
 /** A front end that can host a slash-command menu. */
 export type CommandSurface = 'desktop' | 'cli';
 
+/** Shared UI language preference used by the Desktop and terminal surfaces. */
+export type CommandLocale = 'en' | 'zh';
+
 /** Grouping for menus and `/help`. Shared so both surfaces section alike. */
 export type CommandCategory = 'session' | 'config' | 'info' | 'tools' | 'exit';
 
@@ -624,7 +627,7 @@ export function specsForSurface(
 }
 
 /** Chinese description when present, else the English one. */
-export function describeSpec(spec: CommandSpec, locale: 'zh' | 'en' = 'zh'): string {
+export function describeSpec(spec: CommandSpec, locale: CommandLocale = 'zh'): string {
   return locale === 'zh' ? (spec.descriptionZh ?? spec.description) : spec.description;
 }
 

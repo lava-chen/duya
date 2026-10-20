@@ -358,6 +358,9 @@ export class HostRunExecutionController {
         : defaults.apiFormat !== undefined
           ? { apiFormat: defaults.apiFormat }
           : {}),
+      // Effort has no persisted default: a session row does not carry one, so
+      // an omitted override means the worker decides for this model.
+      ...(input.effort === undefined ? {} : { effort: input.effort }),
       ...(defaults.agentProfileId !== undefined && defaults.agentProfileId !== null
         ? { agentProfileId: defaults.agentProfileId }
         : {}),

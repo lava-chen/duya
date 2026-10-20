@@ -78,6 +78,7 @@ export * from './gateway-message-mirror.js';
 export * from './gateway-threads.js';
 export * from './send-message-state.js';
 export * from './model-capabilities.js';
+export * from './provider-catalog.js';
 export * from './app-connections.js';
 export * from './plugin-setup.js';
 export * from './plugin-app-instances.js';

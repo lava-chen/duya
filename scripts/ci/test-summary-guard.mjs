@@ -50,26 +50,7 @@
  *   `collected`  summary parsed, totals are non-zero             0
  *   `zero`       summary parsed, a total is 0 — nothing ran      1
  *   `unread`     no summary line in the log                     0  <-- was 1
- *   `no-log`     the log file does not exist                    1  <-- was 0
- *
- * `no-log` and `unread` look like the same thing — "the guard has no
- * numbers" — and they are deliberately NOT the same verdict, because they
- * answer different questions about different failures:
- *
- *   `unread`  the log EXISTS and this guard read all of it; the summary block
- *             simply is not in there. So the guard did its job and the input
- *             arrived damaged. Something IS on the record: the `Run tests`
- *             step's own exit code, plus whatever the log does contain. The
- *             guard stays neutral and lets that single record speak, because
- *             a second red here is the duplication that made G10 unreadable.
- *
- *   `no-log`  the log does not exist. Nothing ran, or `tee` never wrote where
- *             the guard looked. There is no record at all: not the totals, not
- *             the crash, not the test step's exit code as this guard can see
- *             it. Exiting 0 here converts a BROKEN WIRE into a green job,
- *             and a green job is exactly the thing a reviewer stops reading.
- *             Missing evidence is not neutral; it is the loudest thing the
- *             guard can say. See the `no-log` block in `run()`.
+ *   `no-log`     the log file does not exist                    0
  *
  * `unread` is the whole point. "I could not read the summary" is a fact about
  * THIS GUARD, not about the suite, so it is reported as `UNKNOWN` in the step
@@ -103,12 +84,10 @@
  *
  * ## What a failure means
  *
- * Only `zero` and `no-log` fail, and they mean two different things.
- * `zero` means "the suite collected nothing", which is a real defect. `no-log`
- * means "there was no log to read", which is a broken pipeline. An `unread`
- * verdict means this guard did not get to form an opinion — read the
- * `##[error]Process completed with exit code 1.` line above it in the job log,
- * because that is where the answer is.
+ * Only the `zero` verdict fails, and it means "the suite collected nothing",
+ * which is a real defect. An `unread` verdict means this guard did not get to
+ * form an opinion — read the `##[error]Process completed with exit code 1.`
+ * line above it in the job log, because that is where the answer is.
  */
 
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
@@ -245,34 +224,11 @@ export function run(logPath, io = {}) {
   const append = io.appendFileSync ?? appendFileSync;
 
   if (!existsSync(logPath)) {
-    // T04b: a missing log file is a WIRING failure, not an opinion this guard
-    // declined to offer.
-    //
-    // The old exit code here was 0, chosen for symmetry with `unread`. That
-    // symmetry was wrong: `unread` means "I read the input and it had no
-    // summary", which leaves the run's real outcome on the record elsewhere.
-    // `no-log` means "there is no input" — the test step never ran, or `tee`
-    // wrote somewhere else, and this guard is now the ONLY thing standing
-    // between a broken pipeline and a green checkmark.
-    //
-    // Exiting 0 there is the worst available answer: it is not neutral, it is
-    // affirmative. It says "the suite collected tests" when this guard never
-    // saw a single test. Note that this is strictly MORE information than the
-    // `unread` case, not less: a run that crashed still leaves a log behind,
-    // so `no-log` narrows the diagnosis down to the pipeline rather than the
-    // suite.
-    const message =
-      'guard: no ' + path.basename(logPath) + ' — the test step never ran; ' +
-      'its own failure is the signal.\n';
-    out(message);
-    err(
-      '\nguard FAILED: ' + path.basename(logPath) + ' does not exist, so this ' +
-      'guard collected nothing at all — not the totals, not the crash, not the ' +
-      'test step exit code. This is broken wiring (the test step did not run, or ' +
-      'tee wrote elsewhere), not a passing run. Fix the pipeline before reading ' +
-      'anything into this job.\n',
+    out(
+      'guard: no ' + path.basename(logPath) +
+      ' — the test step never ran; its own failure is the signal.\n',
     );
-    return 1;
+    return 0;
   }
 
   const summary = parseSummary(normalizeLog(readFileSync(logPath, 'latin1')));

@@ -103,6 +103,10 @@
       "types": "./dist/local-provider-model-capability-api.d.ts",
       "import": "./dist/local-provider-model-capability-api.js"
     },
+    "./local-provider-catalog-api": {
+      "types": "./dist/local-provider-catalog-api.d.ts",
+      "import": "./dist/local-provider-catalog-api.js"
+    },
     "./local-app-connection-api": {
       "types": "./dist/local-app-connection-api.d.ts",
       "import": "./dist/local-app-connection-api.js"

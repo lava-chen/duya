@@ -28,6 +28,7 @@ import {
   describeSpec,
   formatSpecLabel,
   specsForSurface,
+  type CommandLocale,
   type CommandSpec,
 } from '@duya/command-catalog';
 import type { TuiSlashCommandDef, TuiSlashGroup } from './types.js';
@@ -84,11 +85,14 @@ export function advertisedSpecs(options: { readonly busy?: boolean } = {}): read
 }
 
 /** Rows for the `/` completion popup. */
-export function buildSlashCompletionRows(options: { readonly busy?: boolean } = {}): PopoverItem[] {
+export function buildSlashCompletionRows(options: {
+  readonly busy?: boolean;
+  readonly locale?: CommandLocale;
+} = {}): PopoverItem[] {
   return advertisedSpecs(options).map((spec) => ({
     label: `/${spec.name}`,
     value: `/${spec.name}`,
-    description: describeSpec(spec),
+    description: describeSpec(spec, options.locale),
     kind: 'slash_command' as const,
     category: 'command' as const,
     group: 'settings' as const,
@@ -103,7 +107,7 @@ const GROUP_ORDER: readonly TuiSlashGroup[] = ['Model', 'Settings', 'Session inf
  * categories and rendered from the SAME specs the popup uses — so `/help` and
  * the popup cannot list different things.
  */
-export function buildSlashHelpSections(): ReadonlyArray<{
+export function buildSlashHelpSections(locale: CommandLocale = 'zh'): ReadonlyArray<{
   readonly title: string;
   readonly lines: readonly string[];
 }> {
@@ -116,9 +120,18 @@ export function buildSlashHelpSections(): ReadonlyArray<{
       .filter((spec): spec is CommandSpec => spec !== undefined);
     const labels = specs.map((spec) => formatSpecLabel(spec));
     const width = Math.max(...labels.map((label) => label.length));
+    const title = locale === 'zh'
+      ? ({
+          Model: '模型',
+          Settings: '设置',
+          'Session info': '会话信息',
+          'Session ops': '会话操作',
+          Export: '导出',
+        } as const)[group]
+      : group;
     sections.push({
-      title: group,
-      lines: labels.map((label, index) => `  ${label.padEnd(width)}  ${describeSpec(specs[index] as CommandSpec)}`),
+      title,
+      lines: labels.map((label, index) => `  ${label.padEnd(width)}  ${describeSpec(specs[index] as CommandSpec, locale)}`),
     });
   }
   return sections;

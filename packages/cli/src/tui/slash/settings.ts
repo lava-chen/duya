@@ -19,6 +19,7 @@
 
 import type { TuiSlashCommandDef, TuiSlashContext, TuiSlashOutcome } from './types.js';
 import type { TuiSettingsRow } from '../TUIApp.js';
+import type { CommandLocale } from '@duya/command-catalog';
 import { EFFORT_LABELS, normalizeEffort, type EffortLevel, type ThemeName } from '../theme.js';
 import {
   COMPLETION_ROWS_RANGE,
@@ -37,6 +38,7 @@ import {
   TUI_EFFORT_SETTING,
   TUI_EXPAND_BLOCKS_SETTING,
   TUI_INPUT_ROWS_SETTING,
+  TUI_LOCALE_SETTING,
   TUI_SHOW_THINKING_SETTING,
   TUI_SHOW_TOOL_RESULTS_SETTING,
   TUI_STARTUP_BANNER_SETTING,
@@ -54,6 +56,7 @@ const INPUT_ROW_CHOICES: readonly number[] = [4, 6, 8, 12, 16];
 const DEFAULT_EFFORT_LEVELS: readonly EffortLevel[] = ['auto', 'low', 'medium', 'high', 'max'];
 
 type SettingId =
+  | 'language'
   | 'theme'
   | 'display-mode'
   | 'effort'
@@ -78,6 +81,7 @@ interface LivePreferences {
 /** What the running TUI can be told to change right now. */
 interface LivePatch {
   readonly effort?: string | null;
+  readonly locale?: CommandLocale;
   /** `null` = follow the environment, which is what the `system` row means. */
   readonly theme?: ThemeName | null;
   readonly showThinking?: boolean;
@@ -157,6 +161,14 @@ class SettingsState {
     const live = this.live;
     return [
       {
+        id: 'language',
+        label: prefs.locale === 'zh' ? '语言' : 'Language',
+        valueLabel: prefs.locale === 'zh' ? '中文' : 'English',
+        detail: prefs.locale === 'zh'
+          ? '桌面端和 TUI 共用的界面语言，立即生效。'
+          : 'Language used by the Desktop and TUI. Applies immediately.',
+      },
+      {
         id: 'theme',
         label: 'Theme',
         valueLabel: describeTuiTheme(prefs.theme),
@@ -234,6 +246,14 @@ class SettingsState {
    */
   cycle(id: SettingId): SettingsChange {
     switch (id) {
+      case 'language': {
+        const locale: CommandLocale = this.preferences.locale === 'en' ? 'zh' : 'en';
+        this.preferences = { ...this.preferences, locale };
+        return {
+          patch: { locale },
+          settings: { [TUI_LOCALE_SETTING]: locale },
+        };
+      }
       case 'theme': {
         const theme = nextIn<TuiThemePreference>(['system', 'dark', 'light'], this.preferences.theme);
         this.preferences = { ...this.preferences, theme };
@@ -351,6 +371,10 @@ const SETTINGS_COMMAND: TuiSlashCommandDef = {
       );
       return { kind: 'handled' };
     }
+    // The Desktop may have changed the shared locale since this TUI started.
+    // Opening Settings is the next settings read, so bring command rendering
+    // up to date before showing the row values.
+    ctx.tui.applyTuiPreferences?.({ locale: saved.locale });
 
     // Effort levels are per model, and the list is read once up front: the row
     // cycles synchronously, and an async step inside Enter would let the menu
@@ -402,6 +426,7 @@ export const SETTINGS_COMMANDS: readonly TuiSlashCommandDef[] = [SETTINGS_COMMAN
 
 /** The row ids, for tests. */
 export const SETTINGS_ROW_IDS: readonly SettingId[] = [
+  'language',
   'theme',
   'display-mode',
   'effort',
