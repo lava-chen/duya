@@ -37,6 +37,7 @@ import {
   recordAutoModeDenial,
   isAutoModeAllowlistedTool,
 } from './classifier.js'
+import { appToolOriginalName } from '@duya/capabilities/AppServer/app-tool-namespace'
 import {
   riskTierToBehavior,
   analyzeCommandSafety,
@@ -90,7 +91,11 @@ function toolMatchesRule(
   if (rule.ruleValue.ruleContent !== undefined) {
     return false
   }
-  return rule.ruleValue.toolName === toolName
+  // A rule names the tool it applies to. The `duya_app` server's tools
+  // arrive namespaced, so the rule has to be matched against the
+  // ORIGINAL name — otherwise a deny rule written before the migration
+  // would stop applying to the very tool it was written for.
+  return rule.ruleValue.toolName === appToolOriginalName(toolName)
 }
 
 export function toolAlwaysAllowedRule(
@@ -196,7 +201,12 @@ const LOW_RISK_BROWSER_OPERATIONS = new Set([
 const CANVAS_TOOL_PREFIX = 'canvas_';
 
 function isCanvasTool(toolName: string): boolean {
-  return toolName.startsWith(CANVAS_TOOL_PREFIX) || toolName === 'database_manage';
+  // Resolve the namespace first: the `duya_app` server exposes the canvas
+  // tools as `mcp_duya_app_canvas_manage`, but this short-circuit is
+  // written against the original name. Matching the visible name would
+  // silently drop the canvas tools out of their unconditional allow.
+  const original = appToolOriginalName(toolName);
+  return original.startsWith(CANVAS_TOOL_PREFIX) || original === 'database_manage';
 }
 
 export interface ToolPermissionCheckContext {
@@ -323,7 +333,7 @@ export function createHasPermissionsToUseTool(ports: PermissionEvaluationPorts):
 
     // 2. Internal-only tools that only read or mutate the application's own
     // state should not be gated by permission modes or user rules.
-    if (GLOBAL_ALWAYS_ALLOWED_TOOLS.has(toolName)) {
+    if (GLOBAL_ALWAYS_ALLOWED_TOOLS.has(appToolOriginalName(toolName))) {
       return {
         behavior: 'allow',
         decisionReason: {

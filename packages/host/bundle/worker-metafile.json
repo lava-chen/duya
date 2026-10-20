@@ -20097,7 +20097,7 @@
       "format": "esm"
     },
     "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js": {
-      "bytes": 53923,
+      "bytes": 51762,
       "imports": [
         {
           "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js",
@@ -25731,7 +25731,7 @@
       "format": "esm"
     },
     "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.js": {
-      "bytes": 5247,
+      "bytes": 1478,
       "imports": [],
       "format": "esm"
     },
@@ -25747,7 +25747,7 @@
       "format": "esm"
     },
     "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth.js": {
-      "bytes": 8736,
+      "bytes": 8232,
       "imports": [
         {
           "path": "../../../node_modules/zod/v4/index.js",
@@ -25768,7 +25768,7 @@
       "format": "esm"
     },
     "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.js": {
-      "bytes": 47017,
+      "bytes": 40372,
       "imports": [
         {
           "path": "../../../node_modules/pkce-challenge/dist/index.node.js",
@@ -25799,11 +25799,6 @@
           "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/errors.js",
           "kind": "import-statement",
           "original": "../server/auth/errors.js"
-        },
-        {
-          "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.js",
-          "kind": "import-statement",
-          "original": "../shared/transport.js"
         }
       ],
       "format": "esm"
@@ -25830,7 +25825,7 @@
       "format": "esm"
     },
     "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js": {
-      "bytes": 23781,
+      "bytes": 22564,
       "imports": [
         {
           "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/shared/mediaType.js",
@@ -25860,8 +25855,13 @@
       ],
       "format": "esm"
     },
+    "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/inMemory.js": {
+      "bytes": 1717,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/capabilities/src/MCP/ports.ts": {
-      "bytes": 2027,
+      "bytes": 3336,
       "imports": [],
       "format": "esm"
     },
@@ -26020,7 +26020,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/MCP/MCPManager.ts": {
-      "bytes": 34354,
+      "bytes": 38917,
       "imports": [
         {
           "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js",
@@ -26036,6 +26036,11 @@
           "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js",
           "kind": "import-statement",
           "original": "@modelcontextprotocol/sdk/client/streamableHttp.js"
+        },
+        {
+          "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/inMemory.js",
+          "kind": "import-statement",
+          "original": "@modelcontextprotocol/sdk/inMemory.js"
         },
         {
           "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/types.js",
@@ -26111,6 +26116,11 @@
           "original": "./rule-accessors.js"
         }
       ],
+      "format": "esm"
+    },
+    "packages/capabilities/src/AppServer/app-tool-namespace.ts": {
+      "bytes": 5907,
+      "imports": [],
       "format": "esm"
     },
     "packages/capabilities/src/contracts/tool.ts": {
@@ -26443,250 +26453,250 @@
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js": {
+    "../../../node_modules/diff/libesm/diff/base.js": {
       "bytes": 12008,
       "imports": [],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/diff/character.js": {
+    "../../../node_modules/diff/libesm/diff/character.js": {
       "bytes": 228,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js",
+          "path": "../../../node_modules/diff/libesm/diff/base.js",
           "kind": "import-statement",
           "original": "./base.js"
         }
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/util/string.js": {
+    "../../../node_modules/diff/libesm/util/string.js": {
       "bytes": 7127,
       "imports": [],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/diff/word.js": {
+    "../../../node_modules/diff/libesm/diff/word.js": {
       "bytes": 13933,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js",
+          "path": "../../../node_modules/diff/libesm/diff/base.js",
           "kind": "import-statement",
           "original": "./base.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/util/string.js",
+          "path": "../../../node_modules/diff/libesm/util/string.js",
           "kind": "import-statement",
           "original": "../util/string.js"
         }
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/util/params.js": {
+    "../../../node_modules/diff/libesm/util/params.js": {
       "bytes": 410,
       "imports": [],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/diff/line.js": {
+    "../../../node_modules/diff/libesm/diff/line.js": {
       "bytes": 2629,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js",
+          "path": "../../../node_modules/diff/libesm/diff/base.js",
           "kind": "import-statement",
           "original": "./base.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/util/params.js",
+          "path": "../../../node_modules/diff/libesm/util/params.js",
           "kind": "import-statement",
           "original": "../util/params.js"
         }
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/diff/sentence.js": {
+    "../../../node_modules/diff/libesm/diff/sentence.js": {
       "bytes": 1904,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js",
+          "path": "../../../node_modules/diff/libesm/diff/base.js",
           "kind": "import-statement",
           "original": "./base.js"
         }
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/diff/css.js": {
+    "../../../node_modules/diff/libesm/diff/css.js": {
       "bytes": 275,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js",
+          "path": "../../../node_modules/diff/libesm/diff/base.js",
           "kind": "import-statement",
           "original": "./base.js"
         }
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/diff/json.js": {
+    "../../../node_modules/diff/libesm/diff/json.js": {
       "bytes": 2914,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js",
+          "path": "../../../node_modules/diff/libesm/diff/base.js",
           "kind": "import-statement",
           "original": "./base.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/line.js",
+          "path": "../../../node_modules/diff/libesm/diff/line.js",
           "kind": "import-statement",
           "original": "./line.js"
         }
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/diff/array.js": {
+    "../../../node_modules/diff/libesm/diff/array.js": {
       "bytes": 370,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js",
+          "path": "../../../node_modules/diff/libesm/diff/base.js",
           "kind": "import-statement",
           "original": "./base.js"
         }
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/patch/line-endings.js": {
+    "../../../node_modules/diff/libesm/patch/line-endings.js": {
       "bytes": 2334,
       "imports": [],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/patch/parse.js": {
-      "bytes": 6218,
+    "../../../node_modules/diff/libesm/patch/parse.js": {
+      "bytes": 23719,
       "imports": [],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/util/distance-iterator.js": {
+    "../../../node_modules/diff/libesm/util/distance-iterator.js": {
       "bytes": 1487,
       "imports": [],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/patch/apply.js": {
+    "../../../node_modules/diff/libesm/patch/apply.js": {
       "bytes": 12892,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/util/string.js",
+          "path": "../../../node_modules/diff/libesm/util/string.js",
           "kind": "import-statement",
           "original": "../util/string.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/patch/line-endings.js",
+          "path": "../../../node_modules/diff/libesm/patch/line-endings.js",
           "kind": "import-statement",
           "original": "./line-endings.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/patch/parse.js",
+          "path": "../../../node_modules/diff/libesm/patch/parse.js",
           "kind": "import-statement",
           "original": "./parse.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/util/distance-iterator.js",
+          "path": "../../../node_modules/diff/libesm/util/distance-iterator.js",
           "kind": "import-statement",
           "original": "../util/distance-iterator.js"
         }
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/patch/reverse.js": {
-      "bytes": 1081,
+    "../../../node_modules/diff/libesm/patch/reverse.js": {
+      "bytes": 3061,
       "imports": [],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/patch/create.js": {
-      "bytes": 9499,
+    "../../../node_modules/diff/libesm/patch/create.js": {
+      "bytes": 15125,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/line.js",
+          "path": "../../../node_modules/diff/libesm/diff/line.js",
           "kind": "import-statement",
           "original": "../diff/line.js"
         }
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/convert/dmp.js": {
+    "../../../node_modules/diff/libesm/convert/dmp.js": {
       "bytes": 580,
       "imports": [],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/convert/xml.js": {
+    "../../../node_modules/diff/libesm/convert/xml.js": {
       "bytes": 781,
       "imports": [],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/index.js": {
+    "../../../node_modules/diff/libesm/index.js": {
       "bytes": 1914,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js",
+          "path": "../../../node_modules/diff/libesm/diff/base.js",
           "kind": "import-statement",
           "original": "./diff/base.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/character.js",
+          "path": "../../../node_modules/diff/libesm/diff/character.js",
           "kind": "import-statement",
           "original": "./diff/character.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/word.js",
+          "path": "../../../node_modules/diff/libesm/diff/word.js",
           "kind": "import-statement",
           "original": "./diff/word.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/line.js",
+          "path": "../../../node_modules/diff/libesm/diff/line.js",
           "kind": "import-statement",
           "original": "./diff/line.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/sentence.js",
+          "path": "../../../node_modules/diff/libesm/diff/sentence.js",
           "kind": "import-statement",
           "original": "./diff/sentence.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/css.js",
+          "path": "../../../node_modules/diff/libesm/diff/css.js",
           "kind": "import-statement",
           "original": "./diff/css.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/json.js",
+          "path": "../../../node_modules/diff/libesm/diff/json.js",
           "kind": "import-statement",
           "original": "./diff/json.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/array.js",
+          "path": "../../../node_modules/diff/libesm/diff/array.js",
           "kind": "import-statement",
           "original": "./diff/array.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/patch/apply.js",
+          "path": "../../../node_modules/diff/libesm/patch/apply.js",
           "kind": "import-statement",
           "original": "./patch/apply.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/patch/parse.js",
+          "path": "../../../node_modules/diff/libesm/patch/parse.js",
           "kind": "import-statement",
           "original": "./patch/parse.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/patch/reverse.js",
+          "path": "../../../node_modules/diff/libesm/patch/reverse.js",
           "kind": "import-statement",
           "original": "./patch/reverse.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/patch/create.js",
+          "path": "../../../node_modules/diff/libesm/patch/create.js",
           "kind": "import-statement",
           "original": "./patch/create.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/convert/dmp.js",
+          "path": "../../../node_modules/diff/libesm/convert/dmp.js",
           "kind": "import-statement",
           "original": "./convert/dmp.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/convert/xml.js",
+          "path": "../../../node_modules/diff/libesm/convert/xml.js",
           "kind": "import-statement",
           "original": "./convert/xml.js"
         }
@@ -26707,7 +26717,7 @@
           "external": true
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/index.js",
+          "path": "../../../node_modules/diff/libesm/index.js",
           "kind": "import-statement",
           "original": "diff"
         },
@@ -26894,6 +26904,85 @@
           "path": "packages/capabilities/src/file-read-state.ts",
           "kind": "import-statement",
           "original": "../file-read-state.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/server.js": {
+      "bytes": 10095,
+      "imports": [
+        {
+          "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/types.js",
+          "kind": "import-statement",
+          "original": "../../types.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/server/index.js": {
+      "bytes": 20763,
+      "imports": [
+        {
+          "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js",
+          "kind": "import-statement",
+          "original": "../shared/protocol.js"
+        },
+        {
+          "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/types.js",
+          "kind": "import-statement",
+          "original": "../types.js"
+        },
+        {
+          "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/validation/ajv-provider.js",
+          "kind": "import-statement",
+          "original": "../validation/ajv-provider.js"
+        },
+        {
+          "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js",
+          "kind": "import-statement",
+          "original": "./zod-compat.js"
+        },
+        {
+          "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/server.js",
+          "kind": "import-statement",
+          "original": "../experimental/tasks/server.js"
+        },
+        {
+          "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/helpers.js",
+          "kind": "import-statement",
+          "original": "../experimental/tasks/helpers.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/capabilities/src/AppServer/app-tool-context.ts": {
+      "bytes": 3385,
+      "imports": [
+        {
+          "path": "node:async_hooks",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/capabilities/src/AppServer/in-process-app-server.ts": {
+      "bytes": 6071,
+      "imports": [
+        {
+          "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/server/index.js",
+          "kind": "import-statement",
+          "original": "@modelcontextprotocol/sdk/server/index.js"
+        },
+        {
+          "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/types.js",
+          "kind": "import-statement",
+          "original": "@modelcontextprotocol/sdk/types.js"
+        },
+        {
+          "path": "packages/capabilities/src/AppServer/app-tool-context.ts",
+          "kind": "import-statement",
+          "original": "./app-tool-context.js"
         }
       ],
       "format": "esm"
@@ -27312,7 +27401,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/index.ts": {
-      "bytes": 7850,
+      "bytes": 8674,
       "imports": [
         {
           "path": "packages/capabilities/src/contracts/index.ts",
@@ -27398,6 +27487,21 @@
           "path": "packages/capabilities/src/permissions/index.ts",
           "kind": "import-statement",
           "original": "./permissions/index.js"
+        },
+        {
+          "path": "packages/capabilities/src/AppServer/in-process-app-server.ts",
+          "kind": "import-statement",
+          "original": "./AppServer/in-process-app-server.js"
+        },
+        {
+          "path": "packages/capabilities/src/AppServer/app-tool-context.ts",
+          "kind": "import-statement",
+          "original": "./AppServer/app-tool-context.js"
+        },
+        {
+          "path": "packages/capabilities/src/AppServer/app-tool-namespace.ts",
+          "kind": "import-statement",
+          "original": "./AppServer/app-tool-namespace.js"
         },
         {
           "path": "packages/capabilities/src/fs-contributors.ts",
@@ -27513,7 +27617,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/authorization/permissions/permissions.ts": {
-      "bytes": 28811,
+      "bytes": 29560,
       "imports": [
         {
           "path": "packages/agent-runtime/src/authorization/permissions/types.ts",
@@ -27534,6 +27638,11 @@
           "path": "packages/agent-runtime/src/authorization/permissions/classifier.ts",
           "kind": "import-statement",
           "original": "./classifier.js"
+        },
+        {
+          "path": "packages/capabilities/src/AppServer/app-tool-namespace.ts",
+          "kind": "import-statement",
+          "original": "@duya/capabilities/AppServer/app-tool-namespace"
         },
         {
           "path": "packages/agent-runtime/src/authorization/permissions/policy.ts",
@@ -27570,7 +27679,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/mcp-executor.ts": {
-      "bytes": 6929,
+      "bytes": 8043,
       "imports": [
         {
           "path": "packages/agent-runtime/src/authorization/permissions/permissions.ts",
@@ -27581,6 +27690,11 @@
           "path": "packages/agent-runtime/src/authorization/permissions/askWithoutUser.ts",
           "kind": "import-statement",
           "original": "../authorization/permissions/askWithoutUser.js"
+        },
+        {
+          "path": "packages/capabilities/src/AppServer/app-tool-context.ts",
+          "kind": "import-statement",
+          "original": "@duya/capabilities/AppServer/app-tool-context"
         }
       ],
       "format": "esm"
@@ -35122,7 +35236,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-transcript-mutations.ts": {
-      "bytes": 351,
+      "bytes": 362,
       "imports": [],
       "format": "esm"
     },
@@ -37558,8 +37672,14 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/authorization/tool-filter.ts": {
-      "bytes": 6168,
-      "imports": [],
+      "bytes": 7242,
+      "imports": [
+        {
+          "path": "packages/capabilities/src/AppServer/app-tool-namespace.ts",
+          "kind": "import-statement",
+          "original": "@duya/capabilities/AppServer/app-tool-namespace"
+        }
+      ],
       "format": "esm"
     },
     "packages/host/src/connector-services/worker-mcp.ts": {
@@ -42291,6 +42411,11 @@
           "external": true
         },
         {
+          "path": "node:async_hooks",
+          "kind": "require-call",
+          "external": true
+        },
+        {
           "path": "node:buffer",
           "kind": "require-call",
           "external": true
@@ -42880,10 +43005,10 @@
           "bytesInOutput": 48
         },
         "packages/agent-protocol/src/session-fork.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 22
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -43054,7 +43179,7 @@
           "bytesInOutput": 397
         },
         "packages/data/src/run-store.ts": {
-          "bytesInOutput": 7353
+          "bytesInOutput": 7340
         },
         "packages/data/src/workflow-run-store.ts": {
           "bytesInOutput": 30
@@ -43081,10 +43206,10 @@
           "bytesInOutput": 115
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 34
+          "bytesInOutput": 21
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -43171,7 +43296,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -43195,7 +43320,7 @@
           "bytesInOutput": 328
         },
         "packages/host/src/worker-logger.ts": {
-          "bytesInOutput": 4315
+          "bytesInOutput": 4332
         },
         "packages/capabilities/src/utils/urlSafety.ts": {
           "bytesInOutput": 3576
@@ -45433,13 +45558,13 @@
           "bytesInOutput": 237
         },
         "../../../node_modules/ajv/dist/vocabularies/applicator/oneOf.js": {
-          "bytesInOutput": 924
+          "bytesInOutput": 929
         },
         "../../../node_modules/ajv/dist/vocabularies/applicator/allOf.js": {
           "bytesInOutput": 416
         },
         "../../../node_modules/ajv/dist/vocabularies/applicator/if.js": {
-          "bytesInOutput": 1121
+          "bytesInOutput": 1126
         },
         "../../../node_modules/ajv/dist/vocabularies/applicator/thenElse.js": {
           "bytesInOutput": 287
@@ -45460,7 +45585,7 @@
           "bytesInOutput": 257
         },
         "../../../node_modules/ajv/dist/vocabularies/discriminator/types.js": {
-          "bytesInOutput": 185
+          "bytesInOutput": 189
         },
         "../../../node_modules/ajv/dist/vocabularies/discriminator/index.js": {
           "bytesInOutput": 2310
@@ -45469,7 +45594,7 @@
           "bytesInOutput": 2485
         },
         "../../../node_modules/ajv/dist/ajv.js": {
-          "bytesInOutput": 1722
+          "bytesInOutput": 1727
         },
         "../../../node_modules/ajv-formats/dist/formats.js": {
           "bytesInOutput": 7793
@@ -46420,7 +46545,7 @@
           "bytesInOutput": 29
         },
         "../../../node_modules/@jimp/plugin-crop/dist/esm/index.js": {
-          "bytesInOutput": 1969
+          "bytesInOutput": 1971
         },
         "../../../node_modules/@jimp/plugin-cover/node_modules/zod/v3/helpers/util.js": {
           "bytesInOutput": 1735
@@ -47377,7 +47502,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1007
+          "bytesInOutput": 1005
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -47557,7 +47682,7 @@
           "bytesInOutput": 530
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/types.js": {
-          "bytesInOutput": 12765
+          "bytesInOutput": 12759
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/interfaces.js": {
           "bytesInOutput": 69
@@ -47572,10 +47697,10 @@
           "bytesInOutput": 271
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js": {
-          "bytesInOutput": 16761
+          "bytesInOutput": 16109
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/validation/ajv-provider.js": {
-          "bytesInOutput": 459
+          "bytesInOutput": 458
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/client.js": {
           "bytesInOutput": 1239
@@ -47584,7 +47709,7 @@
           "bytesInOutput": 705
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js": {
-          "bytesInOutput": 10446
+          "bytesInOutput": 10442
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js": {
           "bytesInOutput": 2471
@@ -47899,13 +48024,13 @@
           "bytesInOutput": 192
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.js": {
-          "bytesInOutput": 1625
+          "bytesInOutput": 275
         },
         "../../../node_modules/pkce-challenge/dist/index.node.js": {
           "bytesInOutput": 846
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth.js": {
-          "bytesInOutput": 4573
+          "bytesInOutput": 4499
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth-utils.js": {
           "bytesInOutput": 446
@@ -47914,7 +48039,7 @@
           "bytesInOutput": 1604
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.js": {
-          "bytesInOutput": 11993
+          "bytesInOutput": 10592
         },
         "../../../node_modules/eventsource-parser/dist/index.js": {
           "bytesInOutput": 3426
@@ -47923,7 +48048,10 @@
           "bytesInOutput": 334
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js": {
-          "bytesInOutput": 7584
+          "bytesInOutput": 7076
+        },
+        "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/inMemory.js": {
+          "bytesInOutput": 619
         },
         "packages/capabilities/src/MCP/ports.ts": {
           "bytesInOutput": 59
@@ -47956,7 +48084,7 @@
           "bytesInOutput": 390
         },
         "packages/capabilities/src/MCP/MCPManager.ts": {
-          "bytesInOutput": 10308
+          "bytesInOutput": 11350
         },
         "packages/agent-runtime/src/authorization/permissions/types.ts": {
           "bytesInOutput": 0
@@ -47969,6 +48097,9 @@
         },
         "packages/agent-runtime/src/authorization/permissions/classifier.ts": {
           "bytesInOutput": 7014
+        },
+        "packages/capabilities/src/AppServer/app-tool-namespace.ts": {
+          "bytesInOutput": 922
         },
         "packages/capabilities/src/contracts/index.ts": {
           "bytesInOutput": 0
@@ -48018,10 +48149,10 @@
         "packages/capabilities/src/EditTool/EditTool.ts": {
           "bytesInOutput": 11546
         },
-        "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js": {
+        "../../../node_modules/diff/libesm/diff/base.js": {
           "bytesInOutput": 2784
         },
-        "../../../packages/capabilities/node_modules/diff/libesm/diff/line.js": {
+        "../../../node_modules/diff/libesm/diff/line.js": {
           "bytesInOutput": 630
         },
         "packages/capabilities/src/GlobTool/GlobTool.ts": {
@@ -48035,6 +48166,9 @@
         },
         "packages/capabilities/src/ApplyPatchTool/ApplyPatchTool.ts": {
           "bytesInOutput": 7238
+        },
+        "packages/capabilities/src/AppServer/app-tool-context.ts": {
+          "bytesInOutput": 104
         },
         "packages/capabilities/src/utils/shell/providers.ts": {
           "bytesInOutput": 1011
@@ -48103,13 +48237,13 @@
           "bytesInOutput": 25
         },
         "packages/agent-runtime/src/authorization/permissions/permissions.ts": {
-          "bytesInOutput": 8004
+          "bytesInOutput": 8024
         },
         "packages/agent-runtime/src/authorization/permissions/askWithoutUser.ts": {
           "bytesInOutput": 602
         },
         "packages/agent-runtime/src/tools/mcp-executor.ts": {
-          "bytesInOutput": 2204
+          "bytesInOutput": 2215
         },
         "packages/host/src/connector-services/apply.ts": {
           "bytesInOutput": 4007
@@ -48142,7 +48276,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 859
+          "bytesInOutput": 865
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -48595,7 +48729,7 @@
           "bytesInOutput": 717
         },
         "packages/agent-runtime/src/authorization/tool-filter.ts": {
-          "bytesInOutput": 768
+          "bytesInOutput": 966
         },
         "packages/host/src/connector-services/worker-mcp.ts": {
           "bytesInOutput": 5
@@ -48967,7 +49101,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 5524766
+      "bytes": 5523653
     }
   }
 }

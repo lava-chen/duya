@@ -13,6 +13,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import {
   CallToolResultSchema,
@@ -20,6 +21,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import type { ToolResult } from '@duya/ai';
 import type {
+  InProcessMcpServer,
   MCPConnectionStatus,
   MCPLogger,
   MCPManagerOptions,
@@ -55,6 +57,11 @@ const LIST_CHANGED_DEBOUNCE_MS = 500;
 function timeoutMs(seconds: number | undefined, fallback: number): number {
   if (seconds === undefined) return fallback;
   return Math.max(1, Math.round(seconds * 1000));
+}
+
+/** True for a plain object (the shape tool-result metadata must have). */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**
@@ -122,6 +129,13 @@ class MCPClient {
   private closing = false;
   /** Plan 580 D2: set by MCPManager; fires after a successful rediscovery. */
   private onToolsChanged: ((serverName: string) => void) | undefined;
+  /**
+   * Plan 616 T610a — the server half of the linked in-memory transport
+   * pair, and the host-owned server it belongs to. Both are set by
+   * `buildTransport()` and consumed by `connect()` / `disconnect()`.
+   */
+  private inProcessServerTransport: Transport | undefined;
+  private inProcessServer: InProcessMcpServer | undefined;
 
   constructor(config: MCPServerConfig, options: MCPManagerOptions = {}) {
     this.config = config;
@@ -326,8 +340,27 @@ class MCPClient {
    * `InMemoryTransport` pair and exercise the REAL connect → notify →
    * rediscover → degrade path against a fixture server without
    * spawning a subprocess.
+   *
+   * Plan 616 T610a adds the `'in-process'` kind: the server is a
+   * host-owned object living in THIS process (e.g. `duya_app`), so the
+   * client and the server are joined by a linked in-memory transport
+   * pair instead of a subprocess. The pair is created here (synchronously,
+   * keeping this method's contract) and the server half is connected by
+   * `connect()` — which is where the async half lives.
    */
   protected buildTransport(): Transport {
+    if (this.config.transport === 'in-process') {
+      const server = this.config.inProcessServer;
+      if (!server) {
+        throw new Error(
+          `In-process MCP server "${this.config.name}" requires an inProcessServer instance.`,
+        );
+      }
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      this.inProcessServerTransport = serverTransport;
+      this.inProcessServer = server;
+      return clientTransport;
+    }
     if (this.config.transport === 'streamable-http') {
       if (!this.config.url) {
         throw new Error('Streamable HTTP MCP server requires a URL');
@@ -373,6 +406,15 @@ class MCPClient {
     try {
       this.connectionStatus = 'connecting';
       this.transport = this.buildTransport();
+
+      // Plan 616 T610a — the in-process server half of the linked
+      // transport pair must be connected BEFORE the client handshake:
+      // the client's `initialize` request is answered by the server, so
+      // the server has to be listening first. The server lives in this
+      // process, so this is a local call, not a spawn.
+      if (this.inProcessServer && this.inProcessServerTransport) {
+        await this.inProcessServer.connect(this.inProcessServerTransport);
+      }
 
       // Plan 580 D2: `tools.listChanged` is a SERVER capability (the server
       // declares it will push `notifications/tools/list_changed`); the MCP
@@ -493,6 +535,22 @@ class MCPClient {
       await this.transport.close();
       this.transport = null;
     }
+    // Plan 616 T610a — the in-process server owns resources the client
+    // side does not (its own transport end, its handler registrations),
+    // so it is closed explicitly. A failure here must not mask the
+    // disconnect itself.
+    if (this.inProcessServer) {
+      try {
+        await this.inProcessServer.close();
+      } catch (error) {
+        this.logger.warn(
+          `[MCP] In-process server "${this.config.name}" failed to close cleanly: ` +
+            (error instanceof Error ? error.message : String(error)),
+        );
+      }
+      this.inProcessServer = undefined;
+      this.inProcessServerTransport = undefined;
+    }
     this.connectionStatus = 'disconnected';
     this.tools = [];
     this.logger.info(`[MCP] Disconnected from server: ${this.config.name}`);
@@ -573,6 +631,13 @@ class MCPClient {
         result: composed.text,
         ...(composed.hasNonText ? { blocks: content as unknown[] } : {}),
         ...(result.structuredContent !== undefined ? { structured: result.structuredContent } : {}),
+        // Plan 616 T610b: the tool-result metadata rides along so the
+        // renderer can build rich rows (browser results, CUA app info,
+        // vision previews) for tools served over MCP. The MCP result
+        // schema is loose, so the field survives the round trip — but it
+        // has to be copied back onto the ToolResult here, or it is lost
+        // between the wire and the renderer.
+        ...(isRecord(result.metadata) ? { metadata: result.metadata } : {}),
       };
       if (result.isError) {
         // Plan 580 D9: a JSON-RPC-level success carrying isError=true is a
@@ -662,6 +727,23 @@ class MCPClient {
 /**
  * MCP Manager - Manages multiple MCP server connections
  */
+/**
+ * Stable per-instance identity for an in-process MCP server (plan 616
+ * T610a). WeakMap-keyed so the id lives exactly as long as the server
+ * object — no leak, and two different server instances never share one.
+ */
+const inProcessServerIds = new WeakMap<object, string>();
+let inProcessServerSeq = 0;
+
+function inProcessServerIdentity(server: InProcessMcpServer | undefined): string {
+  if (!server) return 'none';
+  const existing = inProcessServerIds.get(server as unknown as object);
+  if (existing) return existing;
+  const id = `in-process-${++inProcessServerSeq}`;
+  inProcessServerIds.set(server as unknown as object, id);
+  return id;
+}
+
 export class MCPManager {
   private clients: Map<string, MCPClient> = new Map();
   /** Plan 580 D2: post-rediscovery callback wired by apply.ts. */
@@ -696,6 +778,16 @@ export class MCPManager {
       env: config.env,
       url: config.url,
       headers: config.headers,
+      // Plan 616 T610a — an in-process server is identified by the object
+      // itself, not by its (absent) spawn parameters. Two distinct server
+      // instances must NOT share a signature: the reuse path in
+      // `applyMCPConfiguration` would otherwise keep the OLD client
+      // (and its old transport pair) pointed at a discarded server.
+      // The same instance keeps the same id, so a reload that hands over
+      // the same live server still reuses the connection.
+      ...(config.transport === 'in-process'
+        ? { inProcessServerId: inProcessServerIdentity(config.inProcessServer) }
+        : {}),
     });
   }
 
