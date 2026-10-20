@@ -321,7 +321,10 @@ jobs:
         id: resolve
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.sha }}
+          # For pull_request events, github.sha is a synthetic merge commit.
+          # Diff the PR's own head so commits newly merged to master are not
+          # misclassified as changes from this PR.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: npm run ci:test-scope
 
   # ── Typecheck + tests ─────────────────────────────────────────────────────
