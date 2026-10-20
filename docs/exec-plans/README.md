@@ -36,7 +36,7 @@ is not the ledger and is not tracked.
 
 **What is in version control:** `active/` and `backlog/` only — those are what a
 new session reads. `completed/` is a local archive, so the Completed section
-below names plans in **plain text rather than links**: 264 of the 366 completed
+below names plans in **plain text rather than links**: 264 of the 367 completed
 plans on disk were never committed, and a link to them would be dead on a fresh
 clone. A plan becomes tracked when it is written, and stays tracked after it
 moves to `completed/` only if it was already added.
@@ -310,7 +310,7 @@ ends with a *different* set of failures, that is on you.
 
 ***
 
-## Active Plans (37)
+## Active Plans
 
 > 架构主线已收束为 **610 一项**（原 600/601/602 已收为其三章；587 的合同被其第 01 章接管）。
 > 其他产品计划保留独立范围。**架构执行顺序以 610 为准**，不能从历史编号另排队列。
@@ -433,7 +433,7 @@ Designed, not started. Nothing here is promised work.
 
 ***
 
-## Completed Plans (366)
+## Completed Plans (367)
 
 Archived for decision logs. Not an index of current work.
 
@@ -460,7 +460,7 @@ Archived for decision logs. Not an index of current work.
 - prompt-asset-cleanup · element-tree-enumeration-overlay · bash-foreground-soft-yield · structural-computer-use · workflow-run-live-nodes-and-agent-watch · macos-native-computer-use
 - windows-cua-alignment · context-accounting-ledger · cua-minimized-window-access · duya-agent-api-design · duya-agent-core-implementation · duya-agent-integration
 
-### Infrastructure & Research (53)
+### Infrastructure & Research (54)
 
 - bash-worker-implementation · 09-bug-sweep · automation-cronjob-workflow · agent-core-audit · localhost-auto-open-from-bash · singleton-daemon-architecture
 - agent-harness-project-grounding · built-in-browser-fallback · async-task-inbox · cookie-import-app-bound-fix · recent-session-directory · gateway-agent-capability-and-workspace
@@ -470,7 +470,7 @@ Archived for decision logs. Not an index of current work.
 - compact-ui-history-retention · archive-design-parity-with-codex · agent-directory-restructuring · goal-mode-v2 · minimax-small-wins · code-review-line-comments
 - research-mode · gateway-ipc-refactor · browser-parallel-isolation · async-nonblocking-subagent · research-mode-loop-improvement · external-agent-import
 - tool-path-permission-refactor · chat-ux-improvement-plan · duya-implementation-phase1 · duya-implementation-phase2-3 · duya-implementation-phase4-5 · duya-project-structure
-- duya-source-code-integration · first-test-problems-analysis · first-test-problems · harness-comparison-docs · problems
+- duya-source-code-integration · first-test-problems-analysis · first-test-problems · harness-comparison-docs · problems · architecture-knowledge-map
 
 ### App Shell / UI (46)
 

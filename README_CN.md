@@ -362,7 +362,11 @@ Duya 被构建为一个桌面应用，分离了 UI、Electron 主进程、本地
 * HTTP + SSE / IPC 桥
 * 浏览器自动化后端
 * 插件 / 技能 / MCP 导向的扩展层
-* `@duya/agent`
+* `@duya/agent-protocol`
+* `@duya/agent-core`
+* `@duya/agent-runtime`
+* `@duya/host`
+* `@duya/ui`
 * `@duya/cli`
 * `@duya/conductor`
 * `@duya/gateway`
@@ -426,7 +430,7 @@ npm run test
 常用脚本：
 
 ```bash
-npm run build:agent
+npm run build:packages
 npm run build:cli
 npm run build:conductor
 npm run build:gateway
@@ -439,15 +443,19 @@ npm run diagnose:env
 ## 仓库结构
 
 ```text
-src/                  渲染器 UI
-electron/             Electron 主进程、IPC、本地服务
-packages/agent/       智能体运行时、工具、提示词、模式
-packages/cli/         桌面控制面 CLI
-packages/conductor/   画布 / conductor 子系统
-packages/gateway/     外部渠道网关包
+packages/ui/           共享渲染器（React 19）：组件、状态、hooks、样式
+packages/host/         产品 worker：run 编排、worker 监管、工具注册表
+packages/agent-*/      harness 核心：线协议、run 推理、run 执行引擎
+packages/capabilities/ 工具实现：文件系统、shell、浏览器、MCP
+packages/agent/        旧壳包（退役进行中）
+apps/desktop/          Electron 应用：主进程、preload、渲染器外壳
+apps/web/              面向独立 Host 的浏览器客户端
 scripts/              构建、打包、诊断脚本
 docs/                 架构、执行计划、发布说明
 ```
+
+完整的包清单见 [ARCHITECTURE.md](./ARCHITECTURE.md)；「这个症状该打开哪个包」
+见 [ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md)。
 
 ---
 

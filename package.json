@@ -60,7 +60,6 @@
     "typecheck:electron": "npm run build:packages && node scripts/typecheck-electron-gate.mjs",
     "typecheck:electron:baseline": "node scripts/typecheck-electron-gate.mjs --write",
     "typecheck:protocol": "npm run -w @duya/agent-protocol typecheck",
-    "typecheck:ui": "npm run -w @duya/ui typecheck",
     "typecheck:core": "npm run -w @duya/agent-core typecheck",
     "typecheck:client-core": "npm run -w @duya/client-core typecheck",
     "typecheck:runtime": "npm run build:packages -- --target @duya/agent-runtime && npm run -w @duya/agent-runtime typecheck",
@@ -69,7 +68,7 @@
     "typecheck:plugin-core": "npm run -w @duya/plugin-core typecheck",
     "typecheck:conductor": "npm run -w @duya/conductor typecheck",
     "typecheck:voice": "npm run -w @duya/voice typecheck",
-    "typecheck:all": "npm run check:encoding && npm run check:manifest-keys && npm run check:test-coverage && npm run check:no-ts-suppress && npm run check:packaged-artifacts && npm run build:protocol && npm run typecheck:protocol && npm run typecheck:client-core && npm run typecheck:core && npm run build:core && npm run typecheck:runtime && npm run typecheck:web && npm run typecheck:electron && npm run typecheck:agent && npm run typecheck:cli && npm run typecheck:web-app && npm run typecheck:ui && npm run typecheck:conductor && npm run typecheck:voice && npm run typecheck:evals",
+    "typecheck:all": "npm run check:encoding && npm run check:manifest-keys && npm run check:test-coverage && npm run check:no-ts-suppress && npm run check:packaged-artifacts && npm run build:protocol && npm run typecheck:protocol && npm run typecheck:client-core && npm run typecheck:core && npm run build:core && npm run typecheck:runtime && npm run typecheck:web && npm run typecheck:electron && npm run typecheck:agent && npm run typecheck:cli && npm run typecheck:web-app && npm run typecheck:conductor && npm run typecheck:voice && npm run typecheck:evals",
     "architecture:check": "node scripts/architecture/architecture-check.mjs",
     "architecture:self-test": "node scripts/architecture/architecture-check.mjs --self-test",
     "architecture:slice-graph": "node scripts/architecture/import-graph.mjs",
@@ -78,6 +77,7 @@
     "architecture:headless": "node scripts/architecture/headless-load-gate.mjs",
     "architecture:browser-closure": "node scripts/architecture/browser-closure-gate.mjs",
     "architecture:client-closure": "node scripts/architecture/client-closure-gate.mjs",
+    "architecture:ipc-census": "node scripts/architecture/ipc-channel-census.mjs",
     "pretest": "npm run bundle:agent && node scripts/ensure-sqlite-abi.mjs node",
     "check:encoding": "node scripts/check-text-encoding.mjs",
     "check:manifest-keys": "node scripts/check-manifest-keys.mjs",
@@ -111,6 +111,7 @@
     "rebuild": "electron-rebuild",
     "rebuild:node": "node scripts/ensure-sqlite-abi.mjs node",
     "build:cli-dev": "npm run build:packages -- --target @duya/cli && node scripts/build-agent-bundle.mjs && npm run build:cli-bundle",
+    "build:tui": "npm run build:cli-dev",
     "dev:tui": "node packages/cli/bundle/cli.cjs tui"
   },
   "devDependencies": {

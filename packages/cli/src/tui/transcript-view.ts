@@ -69,12 +69,20 @@ import {
   selectShellOutput,
   toolGroupKey,
 } from './tool-render.js';
-import { capLines, truncateToWidth, visibleWidth } from './width.js';
+import { capLines, codePointWidth, truncateToWidth, visibleWidth, wrapWithCursor } from './width.js';
 import { DARK_THEME_TAGS, type ThemeTags } from './theme.js';
 import { escapeTags } from './markdown/escape.js';
-import { renderInlineTokens, rawTagPair, tokenizeInline, type InlineToken } from './markdown/inline.js';
+import {
+  rawTagPair,
+  spanRolesOf,
+  spansToTags,
+  tagViewOf,
+  tokenizeInline,
+  type InlineToken,
+} from './markdown/inline.js';
+import { wrapAtoms, wrapSpans } from './markdown/wrap.js';
 import { colorFromTagBody } from './core/color.js';
-import type { SpanStyle } from './core/span.js';
+import { spanText, tokensToSpans, PLAIN_STYLE, type SpanStyle, type StyledSpan } from './core/span.js';
 
 export { escapeTags } from './markdown/escape.js';
 
@@ -137,6 +145,15 @@ export const DEFAULT_RENDER_OPTIONS: RenderOptions = {
   showToolResults: true,
   toolResultLines: 5,
 };
+
+/**
+ * The columns the assistant anchor costs every row.
+ *
+ * `● ` on the first row of a block, two spaces on the rest — either way two
+ * columns, so a line's content budget is the pane width minus these.
+ */
+const ANCHOR_COLUMNS = 2;
+
 
 /**
  * One style per call. The style FUNCTIONS stay flat — each wraps its argument
@@ -211,9 +228,40 @@ export function stylesOf(options: Pick<RenderOptions, 'theme' | 'renderer'>): St
  * windows, the shell) imports it from this module.
  */
 
-/** Render the useful Markdown subset without trusting model text as Blessed markup. */
-function renderInlineMarkdown(text: string, styles: Styles): string {
-  return renderInlineTokens(tokenizeInline(text), styles);
+/**
+ * One Markdown line as the rows it occupies.
+ *
+ * The ORDER is the whole point: parse, THEN fold. Folding the raw source
+ * breaks a construct at the break — `**bold` ends one row and `**` starts the
+ * next — and the markers that were supposed to disappear become exactly what
+ * the reader sees. The same fold cuts a link in half and leaves `](…)`
+ * behind. minimax-code does it in this order too: `marked` parses, the
+ * tokens render to styled text, and only then does `wrapTextWithAnsi` fold
+ * the result to the pane width.
+ *
+ * `width` omitted means "no budget": the line is returned whole, which is
+ * what every width-blind caller (and every existing test) expects.
+ */
+function renderInlineRows(
+  text: string,
+  styles: Styles,
+  width: number | undefined,
+  envelope: SpanStyle = PLAIN_STYLE,
+): string[] {
+  const view = tagViewOf(styles);
+  const spans = tokensToSpans(tokenizeInline(text), spanRolesOf(styles));
+  if (width === undefined) return [spansToTags(spans, view, envelope)];
+  return wrapSpans(spans, width).map((row) => spansToTags(row, view, envelope));
+}
+
+/**
+ * The columns an assistant line may use.
+ *
+ * The anchor costs two columns of every row (`● ` on the first, two spaces
+ * on the rest), so the content budget is the pane width minus those two.
+ */
+function contentColumns(width: number | undefined): number | undefined {
+  return width === undefined ? undefined : Math.max(1, Math.floor(width) - ANCHOR_COLUMNS);
 }
 
 function renderCodeBlock(language: string, lines: readonly string[], styles: Styles): string {
@@ -277,6 +325,15 @@ function splitTableRow(line: string): string[] {
 /** A column wider than this is truncated; a table one cell wide is unreadable anyway. */
 const TABLE_CELL_MAX_WIDTH = 48;
 
+/**
+ * The longest word a column may be squeezed to.
+ *
+ * Below this the column breaks a word in half, which is worse than a narrow
+ * column. minimax-code caps the same way (`maxUnbrokenWordWidth = 30`).
+ */
+const TABLE_MIN_WORD_WIDTH = 30;
+
+
 type TableAlignment = 'left' | 'center' | 'right';
 
 function alignmentOf(delimiterCell: string): TableAlignment {
@@ -284,20 +341,6 @@ function alignmentOf(delimiterCell: string): TableAlignment {
   if (cell.startsWith(':') && cell.endsWith(':')) return 'center';
   if (cell.endsWith(':')) return 'right';
   return 'left';
-}
-
-/**
- * Remove blessed tags from a rendered cell so its VISIBLE width can be
- * measured. `{open}` / `{close}` are restored FIRST — the tag-stripping
- * pattern would otherwise eat them (plan 614 phase 1's ordering trap) — and
- * restored literal braces may still match the strip pattern, which only
- * slightly mis-measures a cell containing literal `{word}` text.
- */
-function stripTags(rendered: string): string {
-  return rendered
-    .replace(/\{open\}/gu, '{')
-    .replace(/\{close\}/gu, '}')
-    .replace(/\{\/?[a-zA-Z0-9-]+\}/gu, '');
 }
 
 /**
@@ -314,73 +357,165 @@ function renderTable(
   delimiterLine: string,
   dataLines: readonly string[],
   styles: Styles,
+  width?: number,
 ): string {
   const delimiterCells = splitTableRow(delimiterLine);
   const aligns: TableAlignment[] = delimiterCells.map(alignmentOf);
-  const dataRows = dataLines.map((row) => splitTableRow(row));
-  const rows = [splitTableRow(headerLine), ...dataRows];
-
-  const columnCount = Math.max(aligns.length, ...rows.map((row) => row.length));
+  const rawRows = [splitTableRow(headerLine), ...dataLines.map((row) => splitTableRow(row))];
+  const columnCount = Math.max(aligns.length, ...rawRows.map((row) => row.length));
   const alignFor = (c: number): TableAlignment => aligns[c] ?? 'left';
 
-  // A cell wider than this is truncated in the RAW text, before any markup
-  // exists — the same order invariant the escape carries (width.ts does not
-  // parse tags).
-  const clip = (raw: string): string =>
-    visibleWidth(raw) > TABLE_CELL_MAX_WIDTH
+  const cells = rawRows.map((row) =>
+    Array.from({ length: columnCount }, (_, c) => row[c] ?? ''),
+  );
+  const bodyRowCount = Math.max(0, cells.length - 1);
+
+  // Without a viewport there is nothing to fold toward, so an over-wide cell
+  // is truncated the way it always was. With a viewport it FOLDS instead —
+  // a table that loses half its cells is not a table.
+  const legacy = width === undefined;
+  const cellSource = (rowIndex: number, column: number): string => {
+    const raw = cells[rowIndex]?.[column] ?? '';
+    return legacy && visibleWidth(raw) > TABLE_CELL_MAX_WIDTH
       ? truncateToWidth(raw, TABLE_CELL_MAX_WIDTH)
       : raw;
+  };
 
+  const view = tagViewOf(styles);
   const headerPair = rawTagPair(styles.accent);
   const renderHeaderText = (text: string): string =>
     `${headerPair.open}${escapeTags(text)}${headerPair.close}`;
-  const renderBodyText = (text: string): string => renderInlineMarkdown(text, styles);
 
-  // Render every cell ONCE, up front. Column widths are then measured on the
-  // rendered text: a cell like `**seed**` renders to `seed`, and sizing the
-  // column on the raw `**seed**` would leave two dead spaces of padding after
-  // every rendered cell in that column (Bug B).
-  const renderedRows = rows.map((row, rowIndex) =>
-    Array.from({ length: columnCount }, (_, c) => {
-      const cell = clip(row[c] ?? '');
-      return rowIndex === 0 ? renderHeaderText(cell) : renderBodyText(cell);
-    }),
+  // The header is flat accent over escaped text; the body carries inline
+  // Markdown, lowered to spans so the width measured is the width shown.
+  const headerText = (column: number): string => cellSource(0, column);
+  const bodySpans = (rowIndex: number, column: number): readonly StyledSpan[] =>
+    tokensToSpans(tokenizeInline(cellSource(rowIndex, column)), spanRolesOf(styles));
+
+  // Column widths: the natural width is what the cell NEEDS, the minimum is
+  // what it cannot go below without cutting a word in half.
+  const naturalWidths = Array.from({ length: columnCount }, (_, c) =>
+    Math.max(
+      3,
+      visibleWidth(headerText(c)),
+      ...Array.from({ length: bodyRowCount }, (_, r) => visibleWidth(spanText(bodySpans(r + 1, c)))),
+    ),
   );
+  const minimumWidths = Array.from({ length: columnCount }, (_, c) => {
+    const texts = [
+      headerText(c),
+      ...Array.from({ length: bodyRowCount }, (_, r) => spanText(bodySpans(r + 1, c))),
+    ];
+    const longestWord = Math.max(
+      1,
+      ...texts.map((text) => Math.max(
+        1,
+        ...text.split(/\s+/u).filter(Boolean).map(visibleWidth),
+      )),
+    );
+    return Math.max(3, Math.min(longestWord, TABLE_MIN_WORD_WIDTH));
+  });
 
-  const widths: number[] = [];
-  for (const rendered of renderedRows) {
-    rendered.forEach((cell, c) => {
-      widths[c] = Math.max(widths[c] ?? 0, visibleWidth(stripTags(cell)));
-    });
+  // Reserve two columns for the assistant anchor and three between each pair
+  // of cells (` │ `). Older callers without a viewport retain the compact
+  // fixed-width rendering used by the renderer contract tests.
+  const contentWidth = legacy ? undefined : Math.max(1, Math.floor(width ?? 0) - ANCHOR_COLUMNS);
+  const cellBudget = contentWidth === undefined
+    ? undefined
+    : Math.max(0, contentWidth - 3 * (columnCount - 1));
+  const widths = [...naturalWidths];
+  if (cellBudget !== undefined && widths.reduce((sum, item) => sum + item, 0) > cellBudget) {
+    const minimums = minimumWidths.map((item) => Math.min(item, Math.max(1, Math.floor(cellBudget / columnCount))));
+    const minimumTotal = minimums.reduce((sum, item) => sum + item, 0);
+    if (minimumTotal <= cellBudget) {
+      const remaining = cellBudget - minimumTotal;
+      const overflow = naturalWidths.map((item, index) => Math.max(0, item - minimums[index]!));
+      const totalOverflow = overflow.reduce((sum, item) => sum + item, 0);
+      for (let c = 0; c < widths.length; c += 1) {
+        const share = totalOverflow === 0 ? 0 : Math.floor((overflow[c]! / totalOverflow) * remaining);
+        widths[c] = minimums[c]! + share;
+      }
+      let spare = cellBudget - widths.reduce((sum, item) => sum + item, 0);
+      for (let c = 0; spare > 0 && c < widths.length; c = (c + 1) % widths.length) {
+        if (widths[c]! < naturalWidths[c]!) {
+          widths[c] = widths[c]! + 1;
+          spare -= 1;
+        }
+      }
+    } else {
+      for (let c = 0; c < widths.length; c += 1) {
+        widths[c] = Math.max(1, Math.floor(cellBudget / columnCount));
+      }
+      for (let c = 0, spare = cellBudget - widths.reduce((sum, item) => sum + item, 0); spare > 0; c += 1, spare -= 1) {
+        const index = c % widths.length;
+        widths[index] = (widths[index] ?? 0) + 1;
+      }
+    }
   }
 
-  const padCell = (rendered: string, c: number): string => {
-    const gap = Math.max(0, (widths[c] ?? 0) - visibleWidth(stripTags(rendered)));
+  /** One rendered row of a cell: what the reader sees, and how it is drawn. */
+  interface CellRow {
+    readonly plain: string;
+    readonly tagged: string;
+  }
+
+  const headerRows = (column: number): CellRow[] => {
+    const text = headerText(column);
+    if (legacy) return [{ plain: text, tagged: renderHeaderText(text) }];
+    return wrapWithCursor(text, widths[column] ?? 1, 0).rows.map((line) => ({
+      plain: line,
+      tagged: renderHeaderText(line),
+    }));
+  };
+
+  const bodyRows = (rowIndex: number, column: number): CellRow[] => {
+    const spans = bodySpans(rowIndex, column);
+    if (legacy) return [{ plain: spanText(spans), tagged: spansToTags(spans, view) }];
+    return wrapSpans(spans, widths[column] ?? 1).map((row) => ({
+      plain: spanText(row),
+      tagged: spansToTags(row, view),
+    }));
+  };
+
+  const padCell = (cell: CellRow, c: number): string => {
+    const gap = Math.max(0, (widths[c] ?? 0) - visibleWidth(cell.plain));
     switch (alignFor(c)) {
-      case 'right': return `${' '.repeat(gap)}${rendered}`;
+      case 'right': return `${' '.repeat(gap)}${cell.tagged}`;
       case 'center': {
         const left = Math.floor(gap / 2);
-        return `${' '.repeat(left)}${rendered}${' '.repeat(gap - left)}`;
+        return `${' '.repeat(left)}${cell.tagged}${' '.repeat(gap - left)}`;
       }
-      default: return `${rendered}${' '.repeat(gap)}`;
+      default: return `${cell.tagged}${' '.repeat(gap)}`;
     }
   };
 
-  const renderRow = (row: readonly string[]): string =>
-    row.map((cell, c) => padCell(cell, c)).join(styles.muted(' │ '));
+  const EMPTY_CELL: CellRow = { plain: '', tagged: '' };
 
   // Rows shorter than the table keep their trailing cells EMPTY rather than
   // shrinking the join: ragged row lengths would otherwise shift every column
   // border after the gap.
-  const lines: string[] = [renderRow(renderedRows[0] ?? [])];
+  const renderRows = (rowsPerCell: readonly CellRow[][]): string[] => {
+    const height = Math.max(1, ...rowsPerCell.map((cell) => cell.length));
+    return Array.from({ length: height }, (_, lineIndex) =>
+      rowsPerCell
+        .map((cell, c) => padCell(cell[lineIndex] ?? EMPTY_CELL, c))
+        .join(styles.muted(' │ ')),
+    );
+  };
+
+  const lines: string[] = renderRows(
+    Array.from({ length: columnCount }, (_, c) => headerRows(c)),
+  );
   // `w + 1`, not `w + 2`: each rendered cell occupies exactly `w` columns and
   // the join inserts ` │ ` (space, bar, space) between neighbours, so the bar
   // sits one column PAST the cell's right edge — the rule segment covering the
   // cell plus that one space is `w + 1` dashes, and the ┼ lands exactly on the
   // bar. `w + 2` pushed every ┼ one column right of its bar (Bug A).
   lines.push(styles.muted(widths.map((w) => '─'.repeat(w + 1)).join('┼')));
-  for (const rendered of renderedRows.slice(1)) {
-    lines.push(renderRow(rendered));
+  for (let rowIndex = 1; rowIndex < cells.length; rowIndex += 1) {
+    lines.push(...renderRows(
+      Array.from({ length: columnCount }, (_, c) => bodyRows(rowIndex, c)),
+    ));
   }
   return lines.join('\n');
 }
@@ -428,7 +563,18 @@ function renderAssistantMarkdown(text: string, styles: Styles, width?: number): 
 
   const flushParagraph = (): void => {
     if (paragraph.length === 0) return;
-    output.push(paragraph.map((line) => renderInlineMarkdown(line, styles)).join('\n'));
+    // A paragraph is FOLDED to the pane width. A line wider than the pane is
+    // not a long line, it is a lost one: the inline writer disables wrap
+    // around a frame, so the terminal cuts the overflow, and on Windows
+    // ConPTY a line that reaches the last column wraps anyway and lands the
+    // frame one row lower than intended. Both symptoms come from this one
+    // missing fold.
+    const budget = contentColumns(width);
+    const rows: string[] = [];
+    for (const line of paragraph) {
+      rows.push(...renderInlineRows(line, styles, budget));
+    }
+    output.push(rows.join('\n'));
     paragraph = [];
   };
 
@@ -469,6 +615,7 @@ function renderAssistantMarkdown(text: string, styles: Styles, width?: number): 
         lines[index + 1] ?? '',
         lines.slice(index + 2, end),
         styles,
+        width,
       ));
       index = end - 1;
       continue;
@@ -500,7 +647,7 @@ function renderAssistantMarkdown(text: string, styles: Styles, width?: number): 
         ...(headingColour === undefined ? {} : { fg: headingColour }),
         ...(level <= 2 ? { attrs: ['bold' as const] } : {}),
       };
-      output.push(renderInlineTokens(tokenizeInline(heading[2] ?? ''), styles, envelope));
+      output.push(...renderInlineRows(heading[2] ?? '', styles, contentColumns(width), envelope));
       continue;
     }
 
@@ -517,13 +664,28 @@ function renderAssistantMarkdown(text: string, styles: Styles, width?: number): 
         : styles.accent(raw);
       const content = listItem[3] ?? '';
       const task = /^\[([ xX])\]\s+(.*)$/u.exec(content);
+      const plainMarker = raw === '-' || raw === '*' || raw === '+' ? '•' : raw;
+      const listPrefix = `${indent}${marker} `;
+      const renderListContent = (value: string, prefix: string, continuationPrefix: string): void => {
+        const plainPrefix = visibleWidth(prefix.replace(/\{[^}]*\}/gu, ''));
+        const available = width === undefined
+          ? undefined
+          : Math.max(1, Math.floor(width) - ANCHOR_COLUMNS - plainPrefix);
+        // Parse first, fold second. Folding the raw source breaks `**bold`
+        // and links AT the break, and the markers are what the reader sees.
+        const rows = renderInlineRows(value, styles, available);
+        rows.forEach((row, rowIndex) => {
+          output.push(`${rowIndex === 0 ? prefix : continuationPrefix}${row}`);
+        });
+      };
       if (task !== null) {
         const checked = (task[1] ?? '').toLowerCase() === 'x';
         // A pending checkbox stays muted; a completed one takes success.
         const checkboxTagged = checked ? styles.success('☑') : styles.muted('☐');
-        output.push(`${indent}${marker} ${checkboxTagged} ${renderInlineMarkdown(task[2] ?? '', styles)}`);
+        const prefix = `${listPrefix}${checkboxTagged} `;
+        renderListContent(task[2] ?? '', prefix, `${indent}${' '.repeat(visibleWidth(plainMarker) + 3)}`);
       } else {
-        output.push(`${indent}${marker} ${renderInlineMarkdown(content, styles)}`);
+        renderListContent(content, listPrefix, `${indent}${' '.repeat(visibleWidth(plainMarker) + 1)}`);
       }
       continue;
     }
@@ -531,7 +693,16 @@ function renderAssistantMarkdown(text: string, styles: Styles, width?: number): 
     const quote = /^ {0,3}>\s?(.*)$/u.exec(line);
     if (quote !== null) {
       flushParagraph();
-      output.push(`${styles.muted('│')} ${renderInlineMarkdown(quote[1] ?? '', styles)}`);
+      // The quote bar costs two columns of every row it draws.
+      const budget = contentColumns(width);
+      const rows = renderInlineRows(
+        quote[1] ?? '',
+        styles,
+        budget === undefined ? undefined : Math.max(1, budget - 2),
+      );
+      rows.forEach((row, index) => {
+        output.push(`${styles.muted('│')} ${index === 0 ? row : `  ${row}`}`);
+      });
       continue;
     }
 
@@ -907,7 +1078,7 @@ function nodeBody(
   styles: Styles,
 ): string[] {
   if (block.kind === 'thinking') {
-    return thinkingBody(block, blockExpanded(block.id, options), styles, plan.bodyIndent);
+    return thinkingBody(block, blockExpanded(block.id, options), styles, plan.bodyIndent, options.width);
   }
   if (block.kind !== 'tool') return [];
 
@@ -1000,6 +1171,14 @@ const THINKING_PREVIEW_LINES = 3;
 /** Characters kept from a preview before line selection. See `renderThinking`. */
 const THINKING_PREVIEW_MAX_CHARS = 2_000;
 
+/**
+ * A Markdown list item inside reasoning.
+ *
+ * The marker is syntax, not content: `- packages/host/src/…` is a list, and
+ * a terminal that shows the `-` shows the reader their own source code.
+ */
+const THINKING_LIST = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/u;
+
 /** Head text: what the block did, and for how long it was doing it. */
 function thinkingSummary(block: Extract<Block, { kind: 'thinking' }>): string {
   if (!block.finalized) return 'Thinking…';
@@ -1031,36 +1210,38 @@ function thinkingBody(
   expanded: boolean,
   styles: Styles,
   indent = '    ',
+  width?: number,
 ): string[] {
   const source = block.text.replace(/\r\n?/gu, '\n').trimEnd();
   if (source === '') return [];
 
-  if (expanded) return thinkingRows(source.split('\n'), styles, indent);
+  if (expanded) return thinkingRows(source.split('\n'), styles, indent, width);
 
   const edge = block.finalized ? 'head' : 'tail';
   const { text, truncated } = boundThinkingText(source, edge);
-  const lines = text.split('\n');
-  if (lines.length <= THINKING_PREVIEW_LINES && !truncated) {
-    return thinkingRows(lines, styles, indent);
-  }
+  const rows = thinkingRows(text.split('\n'), styles, indent, width);
+  if (rows.length <= THINKING_PREVIEW_LINES && !truncated) return rows;
 
+  // The preview is three ROWS, not three source lines: a folded line is
+  // several rows, and a budget counted in source lines would grow with the
+  // width of the reasoning. minimax-code bounds its previews the same way
+  // (`truncateToVisualLines`).
   const slice = edge === 'head'
-    ? lines.slice(0, THINKING_PREVIEW_LINES)
-    : lines.slice(-THINKING_PREVIEW_LINES);
+    ? rows.slice(0, THINKING_PREVIEW_LINES)
+    : rows.slice(-THINKING_PREVIEW_LINES);
   // Blank rows are what separates paragraphs in reasoning, so a slice can end
   // on one and waste a third of the budget on an empty line. Trim them from
   // the edges only — an inner blank still separates the two thoughts it sits
   // between. The omitted count is recomputed from what is actually shown.
   const kept = trimBlankEdges(slice);
-  const omitted = lines.length - kept.length;
+  const omitted = rows.length - kept.length;
   // A character bound can hide more than `omitted` lines, so it reports the
   // kind of overflow rather than a count that would be a lie.
   const overflow = truncated
     ? `${edge === 'head' ? 'more' : 'earlier'} content`
     : `${omitted} ${edge === 'head' ? 'more' : 'earlier'} ${omitted === 1 ? 'line' : 'lines'}`;
   const hint = styles.muted(`${indent}… ${overflow}`);
-  const rows = thinkingRows(kept, styles, indent);
-  return edge === 'head' ? [...rows, hint] : [hint, ...rows];
+  return edge === 'head' ? [...kept, hint] : [hint, ...kept];
 }
 
 /** Drop blank rows from both ends, keeping the blanks in between. */
@@ -1080,8 +1261,22 @@ function trimBlankEdges(lines: readonly string[]): string[] {
  * bold ATTRIBUTE on top of that colour (`{bold}{muted}…{/muted}{/bold}`) —
  * colour tokens stay out of the reasoning body, so emphasis renders quietly
  * (the markers go, the loudness does not come).
+ *
+ * Two things the assistant's renderer has, and this one needs as much:
+ *
+ * - The line is FOLDED to the pane width. A reasoning line wider than the
+ *   pane is a line the terminal cuts, and reasoning is the part of a turn a
+ *   reader cannot re-derive.
+ * - A Markdown LIST is drawn as a list. `- packages/host/src/…` is reasoning
+ *   WRITTEN as a list, and the `-` is Markdown syntax rather than content:
+ *   leaving it on screen is the same residue as a stray `**`.
  */
-function thinkingRows(lines: readonly string[], styles: Styles, indent: string): string[] {
+function thinkingRows(
+  lines: readonly string[],
+  styles: Styles,
+  indent: string,
+  width: number | undefined,
+): string[] {
   const mutedPair = rawTagPair(styles.muted);
   const boldPair = rawTagPair(styles.bold);
   // plan 615 Phase 0: the own renderer can layer italic/strike attributes the
@@ -1089,35 +1284,106 @@ function thinkingRows(lines: readonly string[], styles: Styles, indent: string):
   // express those tags at all).
   const italicPair = styles.renderer === 'own' ? rawTagPair(styles.italic) : null;
   const strikePair = styles.renderer === 'own' ? rawTagPair(styles.strike) : null;
-  const base = (text: string): string => `${mutedPair.open}${text}${mutedPair.close}`;
-  const render = (tokens: readonly InlineToken[]): string =>
-    tokens.map((token) => {
+
+  /** One tag pair around a run of text. */
+  interface Wrapper {
+    readonly open: string;
+    readonly close: string;
+  }
+
+  /** One run of text and the tags that wrap it, outermost first. */
+  interface Atom {
+    readonly text: string;
+    readonly wrappers: readonly Wrapper[];
+  }
+
+  const atomsOf = (tokens: readonly InlineToken[], outer: readonly Wrapper[]): Atom[] => {
+    const out: Atom[] = [];
+    for (const token of tokens) {
       switch (token.kind) {
         case 'text':
         case 'code':
-          return base(escapeTags(token.text));
+          out.push({ text: token.text, wrappers: [...outer, mutedPair] });
+          break;
         case 'strong':
           // The children render themselves in the base colour; bold is the
           // attribute layered OVER that, never a second base wrap.
-          return `${boldPair.open}${render(token.children)}${boldPair.close}`;
+          out.push(...atomsOf(token.children, [...outer, boldPair]));
+          break;
         // Emphasis, strike, links, and images all fold into the base colour:
         // the markup disappears, nothing shouts. On the own renderer the
         // first two become attribute layers instead of folds.
         case 'emphasis':
-          return italicPair !== null
-            ? `${italicPair.open}${render(token.children)}${italicPair.close}`
-            : render(token.children);
+          out.push(...atomsOf(token.children, italicPair === null ? outer : [...outer, italicPair]));
+          break;
         case 'strike':
-          return strikePair !== null
-            ? `${strikePair.open}${render(token.children)}${strikePair.close}`
-            : render(token.children);
+          out.push(...atomsOf(token.children, strikePair === null ? outer : [...outer, strikePair]));
+          break;
         case 'link':
-          return base(escapeTags(token.label));
+          out.push({ text: token.label, wrappers: [...outer, mutedPair] });
+          break;
         case 'image':
-          return base(escapeTags(token.alt));
+          out.push({ text: token.alt, wrappers: [...outer, mutedPair] });
+          break;
       }
-    }).join('');
-  return lines.map((line) => `${indent}${render(tokenizeInline(line))}`);
+    }
+    return out;
+  };
+
+  const sameWrappers = (a: readonly Wrapper[], b: readonly Wrapper[]): boolean =>
+    a.length === b.length && a.every((wrapper, index) =>
+      wrapper.open === b[index]?.open && wrapper.close === b[index]?.close);
+
+  /** Merge neighbouring runs that wear the same tags. */
+  const merge = (atoms: readonly Atom[]): Atom[] => {
+    const out: Atom[] = [];
+    for (const atom of atoms) {
+      const last = out[out.length - 1];
+      if (last !== undefined && sameWrappers(last.wrappers, atom.wrappers)) {
+        out[out.length - 1] = { text: last.text + atom.text, wrappers: last.wrappers };
+        continue;
+      }
+      out.push(atom);
+    }
+    return out;
+  };
+
+  const renderAtom = (atom: Atom): string =>
+    `${atom.wrappers.map((wrapper) => wrapper.open).join('')}${escapeTags(atom.text)}` +
+    `${atom.wrappers.slice().reverse().map((wrapper) => wrapper.close).join('')}`;
+
+  const budget = width === undefined ? undefined : Math.max(1, Math.floor(width) - indent.length);
+  const rows: string[] = [];
+  for (const line of lines) {
+    const list = THINKING_LIST.exec(line);
+    const marker = list === null
+      ? null
+      : (list[2] === '-' || list[2] === '*' || list[2] === '+' ? '•' : list[2]);
+    const content = list === null ? line : (list[3] ?? '');
+    const atoms: Atom[] = marker === null
+      ? atomsOf(tokenizeInline(content), [])
+      : [
+        { text: `${marker} `, wrappers: [mutedPair] },
+        ...atomsOf(tokenizeInline(content), []),
+      ];
+    const folded = budget === undefined
+      ? [merge(atoms)]
+      : wrapAtoms(
+        atoms.map((atom) => ({ text: atom.text, style: atom })),
+        budget,
+        codePointWidth,
+      ).map((row) => merge(row.map((item) => ({
+        // The folded row carries the SPLIT text; the style carries the run it
+        // came from. Taking the style's own text back would restore the whole
+        // line on every row.
+        text: item.text,
+        wrappers: item.style.wrappers,
+      }))));
+    for (const row of folded) {
+      rows.push(`${indent}${row.map(renderAtom).join('')}`);
+    }
+  }
+  return rows;
 }
 
 /** Cut a preview to the character bound along the edge the preview reads from. */

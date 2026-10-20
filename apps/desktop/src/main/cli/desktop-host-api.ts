@@ -75,6 +75,7 @@ import { createHostLocalGatewayThreadApi } from '@duya/host/local-gateway-thread
 import { createHostLocalSendMessageStateApi } from '@duya/host/local-send-message-state-api';
 import { createHostLocalModelCapabilityApi } from '@duya/host/local-model-capability-api';
 import { createHostLocalProviderModelCapabilityApi } from '@duya/host/local-provider-model-capability-api';
+import { createHostLocalProviderCatalogApi } from '@duya/host/local-provider-catalog-api';
 import { createHostLocalAppConnectionApi } from '@duya/host/local-app-connection-api';
 import { createHostLocalPluginSetupApi } from '@duya/host/local-plugin-setup-api';
 import { createHostPluginAppInstanceApi } from '@duya/host/local-plugin-app-instance-api';
@@ -344,6 +345,7 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     localProviderModelCapabilityApi: createHostLocalProviderModelCapabilityApi(
       new ProviderModelCapabilityStore(mainDatabase),
     ),
+    localProviderCatalogApi: createHostLocalProviderCatalogApi(),
     localAppConnectionApi: createHostLocalAppConnectionApi(
       new AppConnectionStore(mainDatabase, deriveConnectionSlug),
     ),

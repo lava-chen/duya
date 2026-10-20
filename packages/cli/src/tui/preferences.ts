@@ -1,10 +1,13 @@
 /** Persistent preferences for the standalone chat TUI. */
 
 import type { HostSessionHttpClient } from '@duya/host/http-client';
+import type { CommandLocale } from '@duya/command-catalog';
 import { normalizeEffort, resolveThemeName, type EffortLevel, type ThemeName } from './theme.js';
 
 export const TUI_THEME_SETTING = 'cli.tui.theme';
 export const TUI_DISPLAY_MODE_SETTING = 'cli.tui.displayMode';
+/** Shared Desktop and TUI language setting. */
+export const TUI_LOCALE_SETTING = 'locale';
 /**
  * Transcript and composer preferences that take effect the moment they change.
  *
@@ -49,6 +52,8 @@ export type TuiThemePreference = 'system' | ThemeName;
 export type TuiDisplayMode = 'fullscreen' | 'inline';
 
 export interface TuiPreferences {
+  /** Shared Desktop/TUI language preference from the global `locale` setting. */
+  readonly locale: CommandLocale;
   readonly theme: TuiThemePreference;
   readonly displayMode: TuiDisplayMode;
   readonly effort: EffortLevel;
@@ -89,6 +94,7 @@ export interface EffectiveTuiPreferences extends TuiPreferences {
 }
 
 export const DEFAULT_TUI_PREFERENCES: TuiPreferences = {
+  locale: 'en',
   theme: 'system',
   // Inline, because that is what a terminal chat is supposed to look like: the
   // conversation scrolls in the terminal's own scrollback, and the composer
@@ -183,10 +189,12 @@ export function effortForModel(preferences: TuiPreferences, modelId: string | un
 }
 
 export function parseTuiPreferences(values: Readonly<Record<string, string>>): TuiPreferences {
+  const storedLocale = values[TUI_LOCALE_SETTING];
   const storedTheme = values[TUI_THEME_SETTING];
   const storedDisplayMode = values[TUI_DISPLAY_MODE_SETTING];
   const storedEffort = values[TUI_EFFORT_SETTING];
   return {
+    locale: storedLocale === 'zh' || storedLocale === 'en' ? storedLocale : DEFAULT_TUI_PREFERENCES.locale,
     theme: storedTheme === 'dark' || storedTheme === 'light' || storedTheme === 'system'
       ? storedTheme
       : DEFAULT_TUI_PREFERENCES.theme,
