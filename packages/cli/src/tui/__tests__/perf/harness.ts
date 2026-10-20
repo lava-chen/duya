@@ -59,7 +59,7 @@ export interface FrameSample {
 export interface TappedOutput {
   readonly stream: Writable;
   readonly frames: FrameSample[];
-  /** Total characters written, for a sanity check that frames actually happened. */
+  /** Total UTF-8 bytes written, for a sanity check that frames actually happened. */
   totalBytes(): number;
   /** Close the frame still accumulating so its `bytes`/`doneAt` are final. */
   seal(): void;
@@ -91,20 +91,24 @@ export interface TappedOutput {
 export function tapOutput(columns = 80, rows = 24): TappedOutput {
   const frames: FrameSample[] = [];
   let pending = '';
-  let chars = 0;
+  let bytes = 0;
+  let openStartByte = 0;
+  let lastWriteAt = performance.now();
   let openAt = -1;
   let openIndex = -1;
-  const seal = (): void => {
+  const seal = (endByte = bytes): void => {
     if (openIndex === -1) return;
     const frame = frames[openIndex] as { doneAt: number; bytes: number };
-    frame.doneAt = performance.now();
-    frame.bytes = chars;
+    frame.doneAt = lastWriteAt;
+    frame.bytes = endByte - openStartByte;
     openIndex = -1;
   };
   const stream = new Writable({
     write(chunk: Buffer, _encoding, callback) {
       const text = chunk.toString('utf8');
-      chars += text.length;
+      const scanStartByte = bytes - Buffer.byteLength(pending);
+      bytes += Buffer.byteLength(text);
+      lastWriteAt = performance.now();
       // A chunk may hold the tail of one frame and the head of the next, so the
       // scan runs over the carry-over rather than per chunk.
       const scan = pending + text;
@@ -116,9 +120,11 @@ export function tapOutput(columns = 80, rows = 24): TappedOutput {
         if (begin === -1 && end === -1) break;
         if (begin !== -1 && (end === -1 || begin < end)) {
           // The previous frame's output ends where this one starts.
-          seal();
+          const beginByte = scanStartByte + Buffer.byteLength(scan.slice(0, begin));
+          seal(beginByte);
           openAt = performance.now();
           openIndex = frames.length;
+          openStartByte = beginByte;
           frames.push({ at: openAt, doneAt: openAt, bytes: 0 });
           cursor = begin + SYNC_BEGIN.length;
         } else {
@@ -140,7 +146,7 @@ export function tapOutput(columns = 80, rows = 24): TappedOutput {
   return {
     stream,
     frames,
-    totalBytes: () => chars,
+    totalBytes: () => bytes,
     /** Close the frame still accumulating. Call before reading its `bytes`. */
     seal: () => seal(),
   };
@@ -151,6 +157,8 @@ export interface HarnessOptions {
   readonly columns?: number;
   readonly rows?: number;
   readonly inline?: boolean;
+  readonly input?: PassThrough;
+  readonly output?: TappedOutput;
 }
 
 /** Fill the transcript so latency is measured on a realistic frame. */
@@ -186,8 +194,8 @@ const settleFrame = (): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, 0));
 
 export function makeHarness(options: HarnessOptions): Harness {
-  const output = tapOutput(options.columns ?? 80, options.rows ?? 24);
-  const input = new PassThrough();
+  const output = options.output ?? tapOutput(options.columns ?? 80, options.rows ?? 24);
+  const input = options.input ?? new PassThrough();
   const app = new TUIApp({
     input,
     output: output.stream,
@@ -362,10 +370,15 @@ export async function measureInputLatency(
 export interface StreamFrameReport {
   readonly renderer: string;
   readonly deltas: number;
+  readonly durationMs: number;
   readonly frames: number;
+  readonly coalescedDeltas: number;
+  readonly outputBytesPerSecond: number;
   readonly p50: number;
   readonly p95: number;
   readonly max: number;
+  readonly outputBytes: number;
+  readonly meanFrameBytes: number;
   /** Share of frames that arrived inside the throttle's own interval. */
   readonly withinInterval: number;
 }
@@ -387,6 +400,7 @@ export async function measureStreamFrames(
   try {
     await settleFrame();
     const before = harness.output.frames.length;
+    const startedAt = performance.now();
     for (let index = 0; index < deltas; index += 1) {
       harness.app.push({ type: 'text_delta', data: { content: 'token ' } });
       if (spacingMs > 0) {
@@ -397,7 +411,10 @@ export async function measureStreamFrames(
     await new Promise<void>((resolve) =>
       setTimeout(resolve, MIN_RENDER_INTERVAL_MS * 2),
     );
+    const durationMs = performance.now() - startedAt;
+    harness.output.seal();
     const frames = harness.output.frames.slice(before);
+    const outputBytes = frames.reduce((sum, frame) => sum + frame.bytes, 0);
     const gaps: number[] = [];
     for (let index = 1; index < frames.length; index += 1) {
       gaps.push(frames[index]!.at - frames[index - 1]!.at);
@@ -405,8 +422,15 @@ export async function measureStreamFrames(
     return {
       renderer,
       deltas,
+      durationMs,
       frames: frames.length,
+      coalescedDeltas: Math.max(0, deltas - frames.length),
       ...summarize(gaps),
+      outputBytes,
+      outputBytesPerSecond: durationMs === 0 ? 0 : outputBytes / (durationMs / 1000),
+      meanFrameBytes: frames.length === 0
+        ? 0
+        : frames.reduce((sum, frame) => sum + frame.bytes, 0) / frames.length,
       withinInterval: gaps.length === 0
         ? 0
         : gaps.filter((gap) => gap <= MIN_RENDER_INTERVAL_MS * 1.5).length / gaps.length,
