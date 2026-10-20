@@ -29,6 +29,246 @@ iframe→Main 边界与双实例样例仍未接线，T31/T32 不因此完成。
 先执行 H0/H1，定位工具结果到下一轮模型请求之间首次偏离；与 S1 安全收口分开取证，
 不在根因未明时增加自动继续或扩大重构。
 
+三端（TUI / agent 执行层 / Desktop）的当前实测红绿基线与缺陷分类见
+[20 — 三端深度排查](./20-three-surface-bug-sweep.md)。**读红绿数字只从它读**：
+实测 124 条红里只有 10 条指向真实产品缺陷（D1 legacy-only run 以 `completed` 结算且
+台账为空 / D2 `worker-frames.ts` 重复死分支 / D3 `live-ring-refresh-frame` 守卫失去
+分辨力 / D4 skill 优先级 plugin 与 plain bundled 同分、胜负看发现顺序 / D8 被拒绝的
+工具调用在 TUI 转录本里不留任何痕迹 / **D9 [HIGH] 被拒调用的「报告」是协议非法的
+孤立事件，`RunLedger` 判 `tool_completed_without_start` 抛异常，`#mint` 转成 refuse
+返回值，而 `RunEventStorePort.publish` 的签名是 `void` —— 流、转录本、`danglingToolCalls()`
+三处全都没有任何记录，且引擎原则上无从得知这次丢弃** / **D10 [MED] census 里
+`permission.resolved` 的生产者是幽灵 `RunController.respondPermission`（真方法叫
+`respondToPermission`），而「每行都指向存在的代码」那条守卫只验文件路径、丢掉符号** /
+**D11 [MED] `normalizeWorkerEvent` 两份独立实现，其中一份的注释声称它们是同一个** /
+**D12 [MED-HIGH] `createIsolatedWorktree` 两份实现，生产跑的那份零测试，
+测试守的是已不可达的另一份**），
+外加一条**曾被实现搬家掏空的覆盖（D6，已闭合）**：Desktop `run-orchestrator.ts` 变成
+`@duya/host` 垫片后，「run 行先于派发落地」与「并发会话互不串 run」两条保证全仓失去
+唯一用例，现已在新文件
+`packages/host/tests/worker-product-runtime/run-open-durability-and-isolation.test.ts`
+按新机制重述并做双向变异证明。**D7 是它的推广版且更严重**：Desktop 主进程 9 个测试文件里
+`new RunOrchestrator(` 出现 19 处，只有 `terminal-publication-barrier.test.ts` 一处接了
+`nativeWriter`；其余 8 个推的全是 legacy `chat:*` 帧并断言它们会落成 durable log ——
+**那正是权限翻转刻意删掉的契约，接线也救不回来**。于是「Reference Run, closed」与
+「run-create-ack real bridge」这两份**仅有的真桥接闭环证明**守的是一个已废除的主题，
+**Desktop 侧原生路径闭环从未被证明过**。已新增
+`apps/desktop/src/main/__tests__/desktop-native-run-closed-loop.test.ts` 补上
+（首次运行 2/2 绿，即生产接线本身是通的），并用「拿掉 `nativeWriter`」这个 D7 缺陷本身
+做变异证明。桌面端 ~70 条同源于 IPC 转发层迁移后**覆盖归零**，不是 70 个 bug。
+
+**D9 是本轮证据最硬的一条，且是唯一做了双向证明的缺陷。** 它的目标合同以
+`it.fails` 承载（本仓库首次使用该记法），只断言三个候选修法**共同**的性质，不钉具体
+事件形状；因为 `it.fails` 的 body 对任何抛错都算通过，所以额外验了「今天因目标断言
+失败而通过」与「临时修好生产分支后报 `Expect test to fail`」两个方向，变异后
+`run-engine.ts` 按 SHA-256 逐字节还原。**过程中被一个对照组救下来的错误结论**：
+第一次测到该 run settle 成 `runtime_crash`，差点报成「拒绝会把整轮跑崩」的 HIGH，
+但允许的对照组 settle 成完全一样 —— 那是 harness 固有形状，与拒绝无关。
+
+**D10 是 D9 的结构性成因。** 协议里那条为「记录一次拒绝」而设计的 durable 事件
+`permission.resolved` **没有生产者**，引擎才被迫退用协议非法的 `tool.timed_out`。
+`run-session.ts:337-344` 与 `control-plane-census.ts:171` 为此互相打脸，且都自称权威。
+它的成因是一条**只验一半的门禁**：`splitRef` 返回 `{path, symbol}`，`symbol` 半只在
+`schema` 字段上被验，`producer`/`handler`/`consumer` 点名的代码改名了也不会红。
+70 条引用中 27 条是严格 `path:Class.method`（可机械校验），**恰好 2 条失败、25 条通过**；
+另 43 条混散文，从哪截断附注属作者约定，本轮不动。
+**§D10 已闭合（2026-10-18，本系列第一条真正改生产代码的闭合）**：两行幽灵指针已修
+（`git diff --stat` = 2 增 2 删）。执行顺序是**先等信号再删 `.fails`**——修完跑测试拿到
+`Error: Expect test to fail` 才动手删，因为 `it.fails` 不会因碰巧通过而失效，
+所以「合同成立了」是被**宣告**的而不是被假定的。变异证明（本系列第一次对生产代码做）：
+改回幽灵名 → 2 failed 变 **3 failed**，新增那条的失败信息**逐字点名两条幽灵引用**；
+改回后哈希 `9FA215EE…A81A` 逐字一致。闭合后该文件 2 failed / 73 passed，
+那 2 条正是进来前就红的 `workflow_run` / `research_updated`（另一条独立守卫，无关）；
+`packages/agent-runtime` 全量 2 files / 3 tests / 1067 passed，红数与基线一致。
+
+**这条闭合的意义不在那两行，在守卫**：守它们的 `every row points at code that exists`
+**名字比它做的事强**——它只验文件路径存在，指针可以指向任何东西而它照样绿，
+这正是幽灵能同时出现在两行、而守卫两次放过的原因。**今天起它会验符号了。**
+
+**§D9.4 查实了 D9 最后一个未决项，并修正了我自己 §D9.3 的断言重点。**
+⚠️ **本节的结论已被 §D9.7 更正适用范围**——逐跳接线仍成立，但那条路挂在 orchestrator 腿
+而它在生产里不可达，所以「生产里 request 会入账」不成立。
+legacy `chat:permission` 帧逐跳走到 `RunController.observeFrame` 并落进**同一个 ledger**
+（`sendToMain` 同时 `process.send` 和 `sendEvent` → router `normalizeAndObserve:782`
+→ `observe` → `observeFrame`），所以修法**不必**让引擎补发 `permission.requested`
+（那反而会撞 `permission_requested_twice`）。
+但生产帧里**没有 `toolCallId`**——`createPermissionHandler` 发的是 `{id, toolName, …}`
+且 `id` 就是 `approval.callId`，所以那条链接走 **`requestId`**。
+已把用例改成生产真实帧形并把 `toolCallId` 缺席钉住，免得后来的人照可选字段实现。
+
+**§D9.5 补上了第二个验收点，「记录」与「用户看见」分开坏。**
+ledger 侧整条拒绝被丢（D9）；投影侧就算 ledger 修好也会在**下一层**再丢一次——
+`projectHostEvent` 有 `permission.requested` 的 case、没有 `permission.resolved` 的 case，
+`default:` 返回 `null`。契约**只断言「投影器为它产出一个 frame」**，不钉转录本长什么样
+（关 overlay / 加一行 / 标工具行都合法，钉一种就是预判还没做的决定），
+事件形状取自协议自己的 fixture，双向证明已做。
+**两个验收点都要过**，只修 ledger 会得到「有记录但看不见」。
+
+同轮踩到一个还原陷阱：`host-event-stream.ts` 当时是**脏的**（并行 session 在加 `effort`），
+`git checkout --` 会把别人的在途改动一起回退；改用**反向替换 + SHA-256 比对**，
+还原后并行 session 的改动完好无损。**共享检出上，脏文件一律不走 `git checkout`。**
+
+**D11 [MED]（追接线时撞上）**：`normalizeWorkerEvent` 有两份独立实现
+（`packages/host/src/worker-frames.ts:28` 与 `apps/desktop/.../router.ts:505`），
+各自被不同调用方使用，而 `run-execution.ts:24` 的注释写着「**the SAME normalizer** the
+Desktop router uses」——**它不是同一个**。实测 host 39 臂 / router 35 臂，
+`chat:text_delta` + `chat:thinking_delta` 只在 host 那份有（正是 D2 记的那段重复死分支）。
+
+**D12 [MED-HIGH]** 是本轮收尾定性那批桌面红时撞上的：
+`createIsolatedWorktree` 有**两份实现**——生产跑 `packages/host/worker-subagents/worktree.ts`
+（`service.ts:53` 导入），而**唯一的 worktree 测试跑的是 `packages/agent` 那份**（已不可达，
+其 `SubagentTool.ts` 已是 "Compatibility exports" 垫片），**Host 侧零测试**。
+194 / 197 行，常见路径落到同一数据根，但 `DUYA_DATA_ROOT` 与 `DUYA_APP_DATA_PATH`
+**同时**设置时优先级相反——**用户撞到的是活的那份，被测的是死的那份**。
+先否掉过一个更严重的结论（以为两份会把 worktree 建在不同目录、隔离承诺不一致）。
+**调用点普查把它从推断变成已证**：全仓 `createIsolatedWorktree(` 的生产调用点**只有**
+`service.ts:434`，其余全是那个测试文件自己的调用 ⇒ 「agent 那份生产不可达」是事实。
+`h8-2-consumer-inventory` 里那条名为「worktree … **consumed not reimplemented**」的红
+正是**因为它的前提变成了假的**——它报警报对了。
+
+**那批 10 条红本轮全部定性完毕**（此前我记成「3 条未定性」，数字错了）：
+`automation-fire-persistence` ×3 是**过期 mock**（生产调 `wakes.listPendingWakes()`，
+mock 里只有 `listAll`）；`h8-2-worker-run-channel-seam` ×2 是**过期测试**（生产加了
+attempt 围栏，用例的 `run:complete` 没带 `epoch`，实测拒绝原文明写
+「a run write with no attempt is refused rather than made unfenced」）；
+`h8-2-consumer-inventory` ×4 是漂移的普查表，其中一条指向 D12。
+**但那两条过期测试留下一个覆盖空档**：名为「takes the child to a durable terminal that the
+run layer will answer for」的耐久性保证在失败处就停住，**今天实际无人验证**
+（**该空档已在 §D13 闭合**：按 D6 的做法用活的机制重述，首跑即绿 + 变异证明）。
+
+**§D13 补上了第三条被掏空的保证**：child 走到 durable terminal、且**父 run 不被连带结算**。
+新用例复用 D6 那套真装置（真 `RunOrchestrator` + 真 `RunController` + 真 SQLite `RunStore`），
+从数据库读回 `parent_run_id` 证明链路持久，父行按**正面主张**断言（仍 `running`、
+`finished_at` 为 `null`）——结算子 run 时顺手结算父 run，会让「子代理跑完一轮」
+看起来像「整段对话结束了」。变异（在 harness 里让结算连父一起结算）→ 只有这一条转红。
+同目录合跑 19 files / 117 tests / 5 红，与进来前**逐字相同**（116→117 即新增那条）。
+
+同轮踩到一个关于**哈希校验本身**的坑：还原脚本的基线哈希是每次调用重算的，
+而 `restore` 那次记的是变异后的值，于是正确的还原被报成 `HASH MISMATCH`。
+**基线必须一次捕获并持久化**——否则「不一致」这个信号同时表示「还原破坏了文件」
+和「我的记账错了」，两者不可区分。这次靠三条旁证（无残留文本 / `settleRun(` 只 1 处 /
+CRLF 计数一致）确认还原是对的。
+
+**一条带过六轮的错误结论，已更正。** 我从第一轮起反复写「adapter 的 `__binaryResponse`
+传输路径**零覆盖**」，还把它挂成待办六轮——**它错了，而我从没验证过**。
+`tool-protocol-adaptation.test.ts` 有真 `new Response(sseBody)` 夹具，`:311`/`:346`
+两条专门针对 Plan 418（畸形帧被跳过、可修复帧被修复），实测 4 passed。
+真正缺的只是**真 HTTP 传输**（自建服务器、真实分块与背压），响应体处理**是有覆盖的**。
+**教训：看一个既有结论值不值得信，看它被复述了多少次，而不是被验证了多少次。**
+
+**D12 补记**：那份守死副本的 worktree 测试**实测 6 passed**（907ms 的真实
+`git worktree` 操作）——它们守着一份生产从不执行的副本，绿得毫无意义。
+
+**§D12 已闭合（2026-10-18）：6 条已搬到你用户跑的那份实现上，并补了一条死版写不出的。**
+新位置 `packages/host/tests/worker-subagents/worktree-isolation.test.ts`，**7/7 绿**。
+逐行对齐也做完了（上一节欠的）：两份各 194/197 行，**190 行逐字相同**，
+只差 2 处 import 和 `worktreeBaseDir` 末行——所以**隔离承诺本身没有分叉**。
+「同时设置时优先级相反」这条**核实为准确**，机制是死版那个 `getDuyaRoot` 是个 re-export
+→ `getManagedShellDataRoot`（`managed-shell/paths.ts:6-12`），条件是
+`!DUYA_DATA_ROOT && DUYA_APP_DATA_PATH`；活版则是 `DUYA_APP_DATA_PATH || resolveDataRoot()`。
+
+新增那条**只有活版写得出来**（死版的行为就是相反方向本身，表现不出差异）：
+两个变量都设置时活版服从 `DUYA_APP_DATA_PATH`。顺带查清一个真实后果——
+设了 `DUYA_DATA_ROOT` 的用户若同时残留 `DUYA_APP_DATA_PATH`，**worktree 落旧根而数据库落新根，
+「一份数据」分两处**。这是有意的（注释明写「Keep the historical application data override」），
+所以**记录不报缺陷**，但此前两边都没测过。
+
+变异证明**故意做成精确形状**（反转优先级但保留后备）→ **7 变 1 failed**，
+唯一红的就是新那条，**前 6 条两个方向都绿**（同时证明迁移等价、测试没因搬家变弱）。
+保留后备还有个安全理由：worktree 始终落在临时目录；直接改成 `resolveDataRoot()`
+会让变异态往用户真实 `~/.duya/worktrees` 写 worktree——**变异不该给用户机器留垃圾。**
+还原按字节校验 `BAA8A9E2…F9F72` 一致。**生产代码零改动。**
+
+**仍未做**：死副本 `packages/agent/.../worktree.ts` 还在，它那 6 条测试也还在跑。
+删它属退役动作、且在 `packages/agent`（并行 session 可能涉及），本轮只报告不删。
+
+**§D9.1 / §D9.2 把 D9 的修法从「三个候选待选」收敛成了一条，并把它验穿了。**
+协议自己在 `legacy/sse-event.ts` 里写明了 `permission.resolved` 的存在理由：
+「The legacy surface had permission_request and no resolution event, so an
+answered or timed-out permission **left no audit trail**」——**缺口早被识别，事件早被声明，
+ledger 早强制了配对，只是没人发**。词典（`LEGACY_PERMISSION_ACTION_MAP`）与 Desktop 侧
+`recordPermissionDecision` 都已现成，**缺的只是「发成一条 run 事件」**。而归属问题也不再是
+口径问题：Control Plane 那条路只覆盖 Desktop 两个 surface，**TUI 完全不走它**。
+三方向实测：只发 `permission.resolved` → **仍被 ledger 拒**（`permission_resolved_without_request`，
+和现在的 `tool.timed_out` 撞同一个坑）；**成对发布** → 合同翻绿 ✅。
+另外查出 TUI 投影器没有 `permission.resolved` 的 case（`default: return null` 静默丢弃），
+所以**光发事件 = 有记录但看不见**，投影侧必须一并改，否则用户仍无感。
+
+**§D9.3 用真实 `RunController` 查实了那个未验证项，并抬高了一条约束的等级。**
+好消息：legacy 的 `chat:permission` 帧**确实**经 `observeFrame → translateFrame →
+active.emitter` 落进**同一个 `RunLedger`**（`controller.ts:537/554/832`），且 `toolCallId`
+在翻译中存活——**所以引擎不必自己发 `permission.requested`**。
+坏消息（变异实测出来的）：若在 request 缺失时发 `permission.resolved`，返回的不是 `null`
+而是 **`run.failed`**——**不是丢事件，是把整个 run 判死**。
+因此实现顺序必须是「确认 request 已入账 → 才发 resolved」，而不是反过来。
+这比今天静默丢弃更糟，所以它现在是**硬约束**而不是注意事项。
+
+**§D9.6 把上面那条「好消息」推翻了一半，而推翻它的是实测。** 追「生产里谁真的发那条
+`chat:permission` 帧」时撞到 `gateRunApproval`（`worker-run-composition.ts:207-215`，
+由 `worker-engine-driver.ts:202` 绑成 `ports.approval.authorize`）：
+
+```ts
+void askApproval;   // ← host 那个会发 chat:permission、会 await 人回答的 approver
+void signal;
+return { allowed: true, scope: 'once' } as const;
+```
+
+内层 approver 被**显式 `void` 掉**，不是恰好没被用到；而闸门只拦 `behavior === 'deny'`，
+`buildPermissions` 用来表示「这个要问人」的 `'ask'` 正好落在放行那一支。
+
+新增 `packages/host/tests/worker-product-runtime/gate-run-approval-reachability.test.ts`
+（4/4 绿 + 双向变异 2 failed/2 passed + 按字节还原 `6D8510DF…13B6`，**生产源码零改动**）：
+① `ask` → `allowed: true`；② `ask`/`allow`/`deny` 三档下内层 approver **0 次**被调；
+③ 只差一个变量的 `deny` 对照组确实走到另一条分支。
+
+**净推论：engine 腿上经由 `ports.approval.authorize` 的用户询问根本不会发生**，
+于是不会有 `permission.requested` 入账——§D9.2 那个修法在真实生产路径上会撞
+`permission_resolved_without_request` 并**判死整个 run**，而不是修好它。
+所以 **D9 的修法暂缓实施，先定口径**：engine 腿到底该不该有用户询问？
+若本就不该有，那要记录的是一次**策略拒绝**，而 `permission.resolved` 按定义是
+**用户决策**的审计事件，用它记策略拒绝是语义错配。`gateRunApproval` 的注释
+（「the port is present because it is required, not because it decides」）说明现状是
+**有意的**，所以这是口径问题不是待修 bug——**动 `run-engine.ts` 有把 HIGH 修成更坏的风险。**
+
+**未验证**：legacy 腿（`StreamingToolExecutor` / `ToolExecutionPipeline` 同样拿
+`canUseTool`）是否仍然问用户，本轮**没查**。所以「用户的审批意见被忽略」这句话
+本轮**不成立**，不记成已验证。这条是下一步的第一优先。
+
+**方法论，同族复发第二次**：这条用例第一版用返回 **allow** 的 approver spy，
+变异后它**依然绿**——因为「gate 自己放行」和「gate 转发给一个同意的 approver」
+产出完全相同的返回值。把 spy 改成**拒绝**后才有牙齿。
+**守卫的强度取决于它给对照组留了多少空间，而不是它断言得多具体**
+（第一次是 §D9.2 的谓词只收 `tool.` 前缀）。
+
+同目录合跑 **20 files / 121 tests / 5 红**，与进来前的 19/117/5 **逐字相同**
+（差值恰为新增这一文件 +4 条全绿）。
+
+**§D9.7 把上面再推进一步，并更正了 §D9.3 / §D9.4 的适用范围。** 追「生产里谁真的发
+`chat:permission` 帧」的结论是**没有任何生产者**，三条互相独立的证据同向：
+
+1. engine 腿不调用用户的 approver（§D9.6，实测 + 双向变异）；
+2. `packages/agent-protocol/GAPS.md:110-112` **仓库自己**写着「permission 流程是断的，
+   **这是有意的，好过发一个假的**」，`worker-adapter.ts:192-196` 与之一致；
+3. 唯一会把它翻译成 `permission.requested` 的 `observeFrame` 挂在 orchestrator 腿上，
+   而生产注册的 **6 个模式零个带 `orchestrator`**（`modifiers/index.ts:15-20`）。
+
+第 3 条不用 grep 服人：新增
+`packages/host/tests/worker-product-runtime/orchestrator-leg-reachability.test.ts`
+（**4/4 绿**）import 真实 `modifiers/index.js` 触发注册后**直接问注册表本身**，
+配 3 条判别性对照（先断言注册表非空 / 注册一个带 orchestrator 的探针后同段代码能读出 /
+   该字段确实让 `selectRunDriverLeg` 选中 orchestrator 腿）。
+**未做生产变异**（要改在途车道文件），判别性靠同文件对照组，证据等级如实标注。
+
+**被更正的是适用范围，不是实测**：§D9.3/D9.4 那两条 `RunController` 用例仍然是对的，
+但 `observeFrame` 那条腿生产不可达，所以「修法可以依赖 request 已入账」作废。
+
+**净结论与定位调整**：engine 腿**本就不该有人问**，D9 要记的是一次**策略拒绝**
+而不是**用户决策**，所以补 `permission.resolved` 生产者这个候选**可以划掉**
+（语义错配 + 会判死 run）。剩下的是选型问题（为策略拒绝另选事件，`diagnostic` 是候选），
+仍需人拍板，但问题已从「怎么补生产者」变成「这类拒绝该记成什么」。
+**同时要下调本条的紧迫性**：GAPS.md 与本报告两处独立记录同一事实，
+说明这是**当初被有意切断、尚未接上的中间态**，不是本轮新破的管道。
+
 ## 当前状态（2026-10-13，退役协同工作树）
 
 **610 仍为 Active，尚未完成。** A3 的生产轮次循环迁移已由 `4444c7cf` 落地并随 PR #262 合并；当前 `DuyaAgent.ts` 已没有 `streamChat` 方法。索引里“A3 是当前 next action”的说法过时。
