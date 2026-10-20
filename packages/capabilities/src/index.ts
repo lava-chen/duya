@@ -85,6 +85,19 @@ export { FileSnapshotStore, sha256Of, getSnapshotRootDir } from './file-snapshot
 // Permissions — vocabulary + policy (moved from the agent).
 export * from './permissions/index.js';
 
+// App server — the host-owned, in-process MCP server (`duya_app`).
+// Plan 616: first-party product capabilities (canvas / bot / browser)
+// speak the MCP contract so they reach the model through the same
+// pipeline as external MCP servers.
+export {
+  createInProcessAppServer,
+} from './AppServer/in-process-app-server.js';
+export type {
+  AppServerToolDefinition,
+  InProcessAppServer,
+  InProcessAppServerOptions,
+} from './AppServer/in-process-app-server.js';
+
 // Tooling projection — the `tools`-slot contributor declarations.
 export { createFileSystemToolContributors } from './fs-contributors.js';
 

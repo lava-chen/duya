@@ -63,6 +63,7 @@ import { createHostLocalGatewayThreadApi } from './local-gateway-thread-api.js';
 import { createHostLocalSendMessageStateApi } from './local-send-message-state-api.js';
 import { createHostLocalModelCapabilityApi } from './local-model-capability-api.js';
 import { createHostLocalProviderModelCapabilityApi } from './local-provider-model-capability-api.js';
+import { createHostLocalProviderCatalogApi } from './local-provider-catalog-api.js';
 import { createHostLocalAppConnectionApi } from './local-app-connection-api.js';
 import { createHostLocalPluginSetupApi } from './local-plugin-setup-api.js';
 import { createHostPluginAppInstanceApi } from './local-plugin-app-instance-api.js';
@@ -565,6 +566,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       localProviderModelCapabilityApi: createHostLocalProviderModelCapabilityApi(
         new ProviderModelCapabilityStore(mainDatabase.db),
       ),
+      localProviderCatalogApi: createHostLocalProviderCatalogApi(),
       localAppConnectionApi: createHostLocalAppConnectionApi(
         new AppConnectionStore(mainDatabase.db, deriveConnectionSlug),
       ),

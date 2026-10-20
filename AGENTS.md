@@ -26,11 +26,17 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 ## Map
 
 - Frontend: `apps/desktop/src/renderer/` (Vite + React 19 + Zero Router)
-- Agent core: `packages/agent/` (@duya/agent, workspace package)
-  - `packages/agent-protocol/` — transport-neutral wire contract
+- Agent core (plan 587/610 cutover — the legacy `@duya/agent` is a shell):
+  - `packages/agent-runtime/` — `RunEngineImpl`, the run execution engine
   - `packages/agent-core/` — run reasoning, zero IO
-  - `packages/agent-runtime/` — run execution engine
-  - All three are `managed: true` (Gates): zero tolerance, never baselined.
+  - `packages/agent-protocol/` — transport-neutral wire contract
+  - `packages/host/` — product worker: `WorkerSession` (the agent class),
+    concrete tool registry, `driveRunWithEngine` (the single turn driver)
+  - `packages/agent/` — legacy shell awaiting retirement; gate is still OPEN
+    (`node scripts/architecture/agent-retirement-gate.mjs --json`). See
+    `docs/exec-plans/active/610-architecture-series/13-agent-retirement-consumers.md`.
+  - All three protocol/core/runtime packages are `managed: true` (Gates):
+    zero tolerance, never baselined.
 - Desktop app: `apps/desktop/` (@duya/desktop, workspace package)
   - `src/main/` — Electron main process (+ Gateway). The Agent Server is a
     separate spawned child process, not in-process.
@@ -82,8 +88,8 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - **HTTP+SSE 三层分离**：Main Process ↔ Agent Server (HTTP+SSE) ↔ Worker Processes
 - **IPC**: IPC invoke/handle (`db:*`, `gateway:*`, `automation:*`, `logger:*`, etc.) + Agent Server HTTP endpoints
 - **MessagePort**: 仅用于 config/toolExec/toolStream 三通道，不含 agentControl
-- **Database**: SQLite via better-sqlite3. Default path: `~/.duya/duya-main.db` on all platforms; `DUYA_DATA_ROOT` overrides the default root; `duya-core.db` and `memory-state.db` are siblings. `storage.database_path` in `~/.duya/config.toml` remains an explicit override. `@duya/data` owns Electron-independent paths, safe legacy DB copying, the main database connection/schema lifecycle, `CoreDatabase`, `RunStore`, CoreDataStores, and the append-only MessageLog implementation. Desktop Main still owns the app-wide accessor, path validation, safe-mode policy, shutdown coordination, memory-state connection/schema, WorkflowRunStore, legacy import, and CoreStores composition pending Host extraction. The standalone chat CLI persists sessions and transcripts through Host APIs under the same root, but its run executor still comes from the legacy `@duya/agent` package. Desktop also still starts the legacy Agent worker; process ownership and execution have not converged on Host yet.
-- **Agent core** runs in isolated child_process. Built separately as workspace package.
+- **Database**: SQLite via better-sqlite3. Default path: `~/.duya/duya-main.db` on all platforms; `DUYA_DATA_ROOT` overrides the default root; `duya-core.db` and `memory-state.db` are siblings. `storage.database_path` in `~/.duya/config.toml` remains an explicit override. `@duya/data` owns Electron-independent paths, safe legacy DB copying, the main database connection/schema lifecycle, `CoreDatabase`, `RunStore`, CoreDataStores, and the append-only MessageLog implementation. Desktop Main still owns the app-wide accessor, path validation, safe-mode policy, shutdown coordination, memory-state connection/schema, WorkflowRunStore, legacy import, and CoreStores composition pending Host extraction. The standalone chat CLI persists sessions and transcripts through Host APIs under the same root, and its run executor is `RunEngineImpl` in `@duya/agent-runtime`, driven from `@duya/host`.
+- **Agent worker** runs in an isolated child_process (fork, one per session). Built separately as workspace package.
 - **Logging**: Structured logger (`apps/desktop/src/main/logging/logger.ts`), level `WARN` by default, console output only for WARN+. See [Logging](#logging).
 - esbuild does NOT type check. Always run `npm run typecheck:all` before committing.
 - After significant changes: update [ARCHITECTURE.md](./ARCHITECTURE.md).

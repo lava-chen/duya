@@ -296,3 +296,187 @@ describe('gaps are recorded rather than omitted', () => {
     }
   });
 });
+
+// ============================================================================
+// The half of a reference this file does not check
+// ============================================================================
+//
+// `splitRef` returns BOTH halves of `path:Symbol`, and only the path half is
+// asserted anywhere above. The symbol half is checked for the `schema` field
+// alone, and even then only when `isComplete(row)` holds. So `producer`,
+// `handler` and `consumer` name code that can be renamed, moved or deleted
+// without turning anything red.
+//
+// That is not hypothetical. `RunController.respondPermission` does not exist
+// anywhere in the repository -- the real method is `respondToPermission`
+// (`controller.ts:1216`) -- and the census names the phantom TWICE: as the
+// `handler` of the `permission.respond` control row and as the `producer` of
+// the durable `permission.resolved` event. The guard above, whose name claims
+// "every row points at code that exists", passed on both.
+//
+// ## Why only the STRICT subset is collected
+//
+// 43 of the 70 colon-bearing references are prose with a note attached
+// ("translateFrame and ...", "handleChatCommand (worker subprocess), ...") and
+// choosing where the note starts is an authoring-convention question, not a
+// fact this file can assert. The 27 written as a bare `path:Class.method`
+// carry no such ambiguity, so they are checkable without a judgement call --
+// and they are where the phantom lives.
+
+/** `path/to/file.ts:Class.method`, and nothing else. No prose, no notes. */
+const STRICT_MEMBER_REF = /^[\w./@-]+\.tsx?:[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*$/;
+
+/**
+ * `path/to/file.ts:name` — ONE segment, no class.
+ *
+ * ## Why this shape exists separately
+ *
+ * The member form above was added for D10, and it has a blind spot: a reference
+ * to a free function or a bare type (`…:buildWorkflowRunEvent`,
+ * `…:WorkflowRunEvent`) does NOT match it, so those references were verified by
+ * file existence only — the exact hole D10 was about, one shape over.
+ *
+ * That hole was live, not theoretical. The `workflow_run` and
+ * `research_updated` rows named `packages/agent/src/process/worker-protocol.ts`
+ * for BOTH producer and schema. That file still exists — it is a single
+ * `export * from '@duya/host/worker-transport'` line — so the file check passed
+ * while both symbols had moved to `packages/agent-protocol/src/worker-protocol.ts`
+ * and NOTHING imports the shell any more. Both fields were naming a dead path,
+ * and nothing went red.
+ */
+const STRICT_SYMBOL_REF = /^[\w./@-]+\.tsx?:[A-Za-z_$][\w$]*$/;
+
+interface MemberRef {
+  readonly row: string;
+  readonly field: string;
+  readonly ref: string;
+  readonly path: string;
+  /** Empty for a single-segment reference, which names no class. */
+  readonly className: string;
+  readonly method: string;
+}
+
+/** Every strict `path:Class.method` OR `path:name` reference, split apart. */
+function strictMemberRefs(): MemberRef[] {
+  const fields = ['producer', 'handler', 'consumer', 'schema'] as const;
+  const out: MemberRef[] = [];
+  for (const row of CONTROL_PLANE_CENSUS) {
+    for (const field of fields) {
+      const ref = row[field];
+      if (typeof ref !== 'string' || ref.includes(NOT_YET)) continue;
+      const isMember = STRICT_MEMBER_REF.test(ref);
+      const isSymbol = !isMember && STRICT_SYMBOL_REF.test(ref);
+      if (!isMember && !isSymbol) continue;
+      const at = ref.lastIndexOf(':');
+      const path = ref.slice(0, at);
+      // Split once and index by SHAPE, never by position alone. A
+      // single-segment reference splits to exactly one name, so a positional
+      // `[className, method]` destructure puts that name in `className` and
+      // leaves `method` undefined — which then reads as '' and matches almost
+      // any source text, reporting every `path:name` reference as resolved.
+      // That is a guard that cannot fail, and it is exactly what the two
+      // explicit assertions below caught.
+      const [first, second] = ref.slice(at + 1).split('.');
+      out.push({
+        row: row.message,
+        field,
+        ref,
+        path,
+        className: isMember ? first ?? '' : '',
+        method: isMember ? second ?? '' : first ?? '',
+      });
+    }
+  }
+  return out;
+}
+
+/** Strict references whose class or method the named file does not declare. */
+function unresolvedMemberRefs(): { ref: MemberRef; why: string }[] {
+  return strictMemberRefs().flatMap((ref) => {
+    const file = join(REPO_ROOT, ref.path);
+    if (!existsSync(file)) return [{ ref, why: 'the named file does not exist' }];
+    const source = readFileSync(file, 'utf8');
+    // Only a MEMBER reference names a class. A single-segment reference names
+    // none, and checking it against an empty className would be a regex that
+    // matches everything — the kind of guard that appears to work because it
+    // cannot fail.
+    if (ref.className !== '') {
+      if (!new RegExp(`\\b(?:class|interface|const)\\s+${ref.className}\\b`).test(source)) {
+        return [{ ref, why: `${ref.className} is not declared in ${ref.path}` }];
+      }
+    }
+    // Three shapes, because the single-segment form introduced one the member
+    // form never had to meet: a free function shows up as a call or a
+    // declaration, a member as a declaration/getter, and a bare TYPE
+    // (`export interface X {`) as neither — its name is followed by `{` or `=`,
+    // not by `(` or `<`.
+    const declared = new RegExp(
+      `(^|[^.\\w$])${ref.method}\\s*[(<]` +
+        `|(?:get|set|async)\\s+${ref.method}\\b` +
+        `|(?:export\\s+)?(?:abstract\\s+)?(?:interface|type|class|function|const|let|var|enum)\\s+${ref.method}\\b`,
+    );
+    return declared.test(source) ? [] : [{ ref, why: `${ref.method} is not declared in ${ref.path}` }];
+  });
+}
+
+describe('a census reference names a member, not only a file (D10)', () => {
+  it('the collector finds the strict subset and most of it resolves', () => {
+    // The control that keeps the contract below honest. An `it.fails` body
+    // passes on ANY failure, so a collector that was itself broken -- one that
+    // parsed zero refs, or that reported EVERY ref as unresolved -- would make
+    // the target contract pass for a reason that has nothing to do with the
+    // defect. This asserts the collector is working before anything is allowed
+    // to depend on it, and unlike a defect pin it stays green as the census is
+    // corrected.
+    const refs = strictMemberRefs();
+    const unresolved = unresolvedMemberRefs();
+
+    // Enough of them exist that "found a lot" means "parsed the census", not
+    // "matched two rows by luck".
+    expect(refs.length).toBeGreaterThan(20);
+    // And the check can actually succeed, rather than failing everything.
+    expect(unresolved.length).toBeLessThan(refs.length);
+    // A reference the census is definitely right about, so a regex that
+    // silently stopped matching anything would go red here instead of
+    // silently making the contract pass.
+    expect(
+      unresolved.some((u) => u.ref.method === 'observe' && u.ref.className === 'RunSession'),
+      'the known-good RunSession.observe reference was reported as unresolved',
+    ).toBe(false);
+
+    // The single-segment form has to actually be COLLECTED, or the whole
+    // extension above is a no-op that reports green because it sees nothing.
+    // A guard that passes on an empty set is the shape this file exists to
+    // stop trusting, so the collection is asserted explicitly rather than
+    // inferred from "the contract is green".
+    const symbolOnly = refs.filter((r) => r.className === '');
+    expect(
+      symbolOnly.length,
+      'no `path:name` reference was collected — the single-segment guard is inert',
+    ).toBeGreaterThan(0);
+    // And it is collecting the ones that were silently wrong, not some other
+    // subset: these two named a file that exists but declares nothing.
+    expect(
+      symbolOnly.some((r) => r.method === 'buildWorkflowRunEvent'),
+      'buildWorkflowRunEvent is no longer collected',
+    ).toBe(true);
+    expect(
+      symbolOnly.some((r) => r.method === 'ResearchUpdatedEvent'),
+      'ResearchUpdatedEvent is no longer collected',
+    ).toBe(true);
+  });
+
+  it('every strict reference names a declared member', () => {
+    // D10 closed on 2026-10-18. This was an `it.fails` for the census naming
+    // `RunController.respondPermission`, which exists nowhere -- the real
+    // method is `respondToPermission` (`controller.ts:1216`). Both rows now
+    // name it, and this became a FAILING `it.fails`, which was the signal to
+    // delete the `.fails` and keep the assertion.
+    //
+    // The `.fails` is what makes that signal trustworthy: it cannot stop being
+    // true by quietly passing, so "the contract holds" is announced rather than
+    // assumed. Leaving it behind would have let the next rename pass silently
+    // again -- which is the failure this whole file exists to prevent.
+    expect(unresolvedMemberRefs().map((u) => `${u.ref.ref} (${u.ref.row}) — ${u.why}`)).toEqual([]);
+  });
+});

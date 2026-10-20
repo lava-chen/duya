@@ -696,7 +696,7 @@ export class RunOrchestrator {
       // is the opposite of what a manifest is for.
       const { prompt: turnPrompt, options: turnOptions, ...manifestIntent } = intent;
       const built = buildRunManifest({ ...manifestIntent, sessionId, runId });
-      const effectiveTurnOptions = optionsWithManifestBudget(built.manifest, turnOptions);
+      const effectiveTurnOptions = effectiveRunOptions(built.manifest, turnOptions);
       // The input revision is computed ONCE here, by the protocol's canonical
       // function, and the SAME string goes to the Control Plane and to the
       // controller. The Control Plane persists it into the run row so a reused
@@ -2586,7 +2586,19 @@ function refused(reason: string): ExecutionDispatchError {
 export function createWorkerExecutionChannel(binding: WorkerExecutionBinding): ExecutionChannel {
   return {
     async start(manifest, input): Promise<ExecutionHandle> {
-      const options = optionsWithManifestBudget(manifest, input.options);
+      // The worker reads effort out of the message options (`ChatOptions.effort`
+      // → the Anthropic thinking budget), while the manifest carries it under
+      // `agent.effort`. Lifting it here keeps ONE source of truth: a caller sets
+      // `effort` on the start request and both consumers see the same value,
+      // instead of the worker silently ignoring a manifest-level override.
+      //
+      // The lift MUST be the same rule the pin used (`effectiveRunOptions`),
+      // because the worker recomputes the input digest over the options it
+      // actually received and refuses a run whose digest does not match the
+      // pinned one. Two copies of this rule is how a run with an effort set
+      // ended up refused with `input_binding_mismatch`: the pin hashed the
+      // options WITHOUT effort while the worker received them WITH it.
+      const options = effectiveRunOptions(manifest, input.options);
       const command: ChatStartCommand = {
         type: 'chat:start',
         sessionId: input.sessionId,
@@ -2635,6 +2647,29 @@ function optionsWithManifestBudget(
   return typeof maxTurns === 'number' && Number.isFinite(maxTurns) && maxTurns > 0
     ? { ...options, maxTurns }
     : options;
+}
+
+/**
+ * The options the worker will actually receive, derived ONCE.
+ *
+ * Two manifest fields have to cross into the worker's message options: the
+ * turn ceiling (`budget.maxTurns`) and the reasoning effort (`agent.effort`).
+ * Both the pin (`openRun`) and the execution channel go through this
+ * function, because the worker recomputes the input digest over the options
+ * it received and refuses the run when it does not match the pinned digest.
+ *
+ * Duplicating the lift on one side is not a style question: hashing options
+ * WITHOUT effort while sending them WITH it produces
+ * `input_binding_mismatch` on every run that carries an effort, and nothing
+ * else — the same code path is green for every run without one.
+ */
+function effectiveRunOptions(
+  manifest: RunManifest,
+  options: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  const budgeted = optionsWithManifestBudget(manifest, options);
+  const effort = manifest.agent?.effort;
+  return effort === undefined ? budgeted : { ...budgeted, effort };
 }
 
 const RUNTIME_VERSION = '0.1.0';

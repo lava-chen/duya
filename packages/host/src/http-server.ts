@@ -139,6 +139,7 @@ import type {
   HostLocalProviderModelCapabilityApiV1,
   ProviderModelCapabilityRecord,
 } from '@duya/agent-protocol/model-capabilities';
+import type { HostLocalProviderCatalogApiV1 } from '@duya/agent-protocol/provider-catalog';
 import type {
   HostAppConnectionStatus,
   HostAppConnectionWriteInput,
@@ -340,6 +341,8 @@ export interface HostSessionHttpServerOptions {
   readonly localModelCapabilityApi?: HostLocalModelCapabilityApiV1;
   /** Local-only persistence for provider/model capability overrides. */
   readonly localProviderModelCapabilityApi?: HostLocalProviderModelCapabilityApiV1;
+  /** Local-only read of the configured provider/model catalog. */
+  readonly localProviderCatalogApi?: HostLocalProviderCatalogApiV1;
   /** Local-only persisted App Connection metadata; never includes credentials. */
   readonly localAppConnectionApi?: HostLocalAppConnectionApiV1;
   /** Local-only access to plugin setup values, which may contain credentials. */
@@ -1122,6 +1125,19 @@ export class HostSessionHttpServer {
             return;
         }
         this.#sendJson(res, 200, { success: true });
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/provider-catalog' && req.method === 'GET') {
+      const api = this.#options.localProviderCatalogApi;
+      if (!api) {
+        this.#sendJson(res, 404, { error: { code: 'provider_catalog_api_unavailable' } });
+        return;
+      }
+      try {
+        this.#sendJson(res, 200, { catalog: await api.getProviderCatalog() });
       } catch (error) {
         this.#sendApiError(res, error);
       }
@@ -4776,6 +4792,7 @@ function parseStartAgentRunInput(value: unknown): StartAgentRunInput | null {
       ? {}
       : { providerId: value.providerId }),
     ...(value.apiFormat === undefined ? {} : { apiFormat: value.apiFormat }),
+    ...(value.effort === undefined || typeof value.effort !== 'string' ? {} : { effort: value.effort }),
     ...(value.workingDirectory === undefined || typeof value.workingDirectory !== 'string'
       ? {}
       : { workingDirectory: value.workingDirectory }),

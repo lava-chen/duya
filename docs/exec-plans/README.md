@@ -310,7 +310,7 @@ ends with a *different* set of failures, that is on you.
 
 ***
 
-## Active Plans (37)
+## Active Plans (38)
 
 > 架构主线已收束为 **610 一项**（原 600/601/602 已收为其三章；587 的合同被其第 01 章接管）。
 > 其他产品计划保留独立范围。**架构执行顺序以 610 为准**，不能从历史编号另排队列。
@@ -410,6 +410,8 @@ Four were wrong and are corrected below; these five were checked and are
 | [cli-manual-compaction](./active/613-cli-manual-compaction.md) | P2 | CLI `/compact`：给 Host 补一条会话级压缩出口（转发既存的 `compact` worker 命令）+ CLI 命令注册与压缩后重载。**Phase 0 探针未跑**（冷 worker 摘要器能否拿到 provider 配置是 Go/No-Go） |
 | [cli-markdown-rendering](./active/614-cli-markdown-rendering.md) | P1 | CLI Markdown 渲染补齐（thinking + assistant 最终回答）：手写 inline tokenizer、表格列边错位修复、thinking 走 Markdown、标题/列表/分隔线、**斜体/删除线**；并把 `escapeTags` 的 `\{` 换成 blessed 原生的 `{open}`（顺带修掉模型文本可注入标签 + 每个 `{` 前多打印反斜杠的存量 bug）。**Phase 0 未跑**（own↔blessed 视觉等价是 own 转默认的 Go/No-Go） |
 | [cli-unified-tui-engine](./active/615-cli-unified-tui-engine.md) | P1 | 统一 TUI 引擎：声明式组件树（手写 retained tree，不引 React/Yoga）+ StyledSpan 内部表示（最后一步才转 ANSI）+ 增量布局与虚拟化（复用 transcript-cache 三件套）+ 双模式渲染统一到 RenderScene（ScrollbackOutput=InlineSurface 内核 / AltScreenOutput=OwnScreenSurface 内核）+ 独立 Terminal Input Driver（Kitty protocol 为可选增强）；blessed 三步退役（转默认→冻结→删除）。性能验收（输入→绘制 P95<30ms、流式 30FPS、10k block）为**待测目标**，Phase 0 先建 Windows ConPTY/tmux/真实 PTY 基线。**3 条待裁定未决**（614 Phase 6 归宿 / 性能数值校准 / blessed 回滚开关保留期），Phase 0 未启动 |
+| [duya-app-mcp-layer](./active/616-duya-app-mcp-layer.md) | P1 | **工具面分层**：canvas 16 + bot 8 + browser + 其余 17 个产品能力（computer_use/cua、vision、image_generate、widget、module、duya_cli、session、MessageSession、SessionSearch、Brief、memory_write、write_stage1_policy、plan、update_state、send_artifact）收进 host-owned 进程内 MCP server `duya_app`（`mcp__duya_app__<tool>` / `mcp_duya_app_<tool>` / `tool_id: mcp:duya_app:<tool>`），走 deferred 暴露 + `tool_catalog` 发现；基础工具 17 个（bash/read/write/edit/apply_patch/glob/grep/todo/task/…）留在常规注册层且 **wire name 一字不改**。对标 Codex 的 `codex_apps`（但 Codex 的 app 全是远程的，duya 的是本地进程内，形态是本期的原创）。6 张 T 卡 T610a–e + d2；**C2–C5（renderer 路由 / profile 规则 / canvas 权限短路 / bot 放行）必须随改名同卡落地**，否则中间态比改造前更糟。**C9：`source:'bundled'` 会在权限链 step 0 短路、跳过灾难检查与宿主开关，`duya_app` 必须用新的 `source:'app'`**。上下文穿透已实测可行（**AsyncLocalStorage**，5 并发调用各自隔离、穿过 await 无泄漏；优于 `_meta` 走私）。T610a 已交付 |
+| [duya-desktop-management-layer](./active/618-duya-desktop-management-layer.md) | P1 | **616 的加强版**：616 收「产品能力面」，本章收「**桌面外壳面**」——侧边栏分组、面板 / 视图、会话生命周期、目录授权。新 namespace `duya_desktop`（**15 个离散工具** + `duya desktop` CLI 命令族，deferred 暴露 + `tool_catalog` 发现）。对标 Claude Code Desktop 的 **61 个 `mcp__ccd__*` 工具**，只抄「作用于 Desktop 自己」这一条，**不抄数量**（不新造第二套 MCP 机制）。6 张 T 卡 T618a–f；**硬前置 = 616 T610b（ALS 上下文管道）+ T610e（`source:'app'` 权限分支）**——`T618c` 不得早于 T610e 交付，否则写操作会走 `bundled` 短路路径跳过灾难检查。**T618f（视图控制面）另需 571/527 冻结 viewId 契约**，不得自造 view 命名。PR 监控 / worktree / 窗口布局划到范围外 |
 
 ***
 

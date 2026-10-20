@@ -13,6 +13,7 @@
  */
 
 import type { HostSessionRecord } from '@duya/agent-protocol';
+import type { CommandLocale } from '@duya/command-catalog';
 import type { HostSessionHttpClient } from '@duya/host/http-client';
 import type { TuiChoice, TuiSettingsRow } from '../TUIApp.js';
 import type { ActionDef } from '../actions.js';
@@ -49,6 +50,7 @@ export interface TuiSlashHost {
   /** Move the preferences the running TUI can move, and repaint. */
   applyTuiPreferences?(patch: {
     readonly effort?: string | null;
+    readonly locale?: CommandLocale;
     /** `null` follows the environment — the `system` theme row. */
     readonly theme?: string | null;
     readonly showThinking?: boolean;

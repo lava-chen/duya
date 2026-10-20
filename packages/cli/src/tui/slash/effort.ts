@@ -41,25 +41,55 @@ const DEFAULT_MODEL_EFFORTS: readonly string[] = ['low', 'medium', 'high', 'max'
 /**
  * Levels this model accepts, `auto` first.
  *
- * Capability rows are per model, so the list changes when the model does — the
- * reason this is resolved per invocation rather than cached at module load.
+ * Three sources, in this order:
+ *
+ * 1. The provider catalog — the built-in model directory knows each model's
+ *    own ladder (`MiniMax-M3` answers to off/low/medium/high/max, a GLM
+ *    model to off/low/medium/high). This is the per-model tiering the user
+ *    configured providers carry.
+ * 2. `ProviderModelCapabilityRecord.reasoningEffortOptions` — the override
+ *    table the Desktop provider editor writes.
+ * 3. The four levels the Desktop offers, when neither source says anything.
+ *
+ * The catalog is read per invocation rather than cached at module load:
+ * capability rows are per model, so the list changes when the model does.
  */
 async function optionsFor(ctx: TuiSlashContext): Promise<EffortLevel[]> {
-  let declared: readonly string[] = [];
-  try {
-    const capability = await ctx.client.getProviderModelCapability(ctx.session.providerId, ctx.session.model);
-    declared = capability?.reasoningEffortOptions ?? [];
-  } catch {
-    // A capability read is advisory: the picker must still open when the Host
-    // cannot answer, otherwise a provider hiccup looks like "no effort control".
-  }
-  const declaredLevels = declared
+  const declared = await declaredLevels(ctx);
+  const levels = declared
     .map((value) => normalizeEffort(value))
     .filter((level) => level !== 'auto');
-  const levels = declaredLevels.length > 0
-    ? [...new Set(declaredLevels)]
+  const supported = levels.length > 0
+    ? [...new Set(levels)]
     : DEFAULT_MODEL_EFFORTS.map((value) => normalizeEffort(value));
-  return ['auto', ...levels.filter((level) => level !== 'auto')];
+  return ['auto', ...supported.filter((level) => level !== 'auto')];
+}
+
+/**
+ * The tiers this model declares, from whichever source answers.
+ *
+ * Every read here is ADVISORY: the picker must still open when the Host
+ * cannot answer, otherwise a provider hiccup looks like "no effort control".
+ */
+async function declaredLevels(ctx: TuiSlashContext): Promise<string[]> {
+  const model = ctx.session.model ?? '';
+  try {
+    const catalog = await ctx.client.getProviderCatalog();
+    const provider = catalog.providers.find((entry) => entry.providerId === ctx.session.providerId);
+    const entry = provider?.models.find((candidate) => candidate.modelId === model);
+    const tiers = entry?.reasoningEffortOptions ?? [];
+    if (tiers.length > 0) return [...tiers];
+  } catch {
+    // No catalog: fall through to the override table.
+  }
+  try {
+    const capability = await ctx.client.getProviderModelCapability(ctx.session.providerId, model);
+    return capability?.reasoningEffortOptions === undefined
+      ? []
+      : [...capability.reasoningEffortOptions];
+  } catch {
+    return [];
+  }
 }
 
 /**

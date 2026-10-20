@@ -29,9 +29,11 @@ import type {
 } from '@duya/agent-protocol';
 import { projectTimelinePersistenceMessages } from '@duya/agent-protocol/transcript';
 import type { PopoverItem } from '@duya/input-completion';
+import { describeSpec, findSpec, type CommandLocale } from '@duya/command-catalog';
 import { HostSessionHttpClient } from '@duya/host/http-client';
 import { resolveDataRoot } from '@duya/data';
 import { TUIApp, shouldUseTui, type CompletionSources, type TuiChoice } from './tui/index.js';
+import type { QuestionAnswers } from './tui/overlay.js';
 import { HostEventStream } from './tui/host-event-stream.js';
 import { createRunSessionView, projectRunSessionView } from './tui/run-session-view.js';
 import { RunSession } from '@duya/client-core';
@@ -264,41 +266,47 @@ async function chatOnce(
  * `/export`) live in `./tui/slash/` and append their own groups at render
  * time — see `buildSlashHelpSections`.
  */
-const HELP_SECTIONS: ReadonlyArray<{ readonly title: string; readonly lines: readonly string[] }> = [
-  {
-    title: 'Session',
-    lines: [
-      '/new                    Start a new session (fresh id, empty history)',
-      '/resume [query]         Search and resume a previous session',
-      '/sessions               Alias for /resume',
-      '/clear                  Clear the transcript view',
-      '/exit, /quit, /q        Leave the chat',
-    ],
-  },
-  {
-    title: 'Queue',
-    lines: [
-      '/queue                  Show queued follow-ups (resume or clear)',
-      '/queue clear            Discard queued follow-ups',
-      '/queue resume           Resume queued follow-ups',
-    ],
-  },
-  {
-    title: 'Info',
-    lines: [
-      '/help                   Show this list',
-      '!cmd                    Run a shell command here (e.g. !git status)',
-    ],
-  },
-  {
-    title: 'Elsewhere',
-    lines: [
-      'The Desktop composer exposes more: permission modes, panel commands',
-      '(/diff /memory /mcp), user skills as slash commands, and mode toggles.',
-      'Type /help in the Desktop composer for that set.',
-    ],
-  },
-];
+function helpSections(locale: CommandLocale): ReadonlyArray<{
+  readonly title: string;
+  readonly lines: readonly string[];
+}> {
+  const chinese = locale === 'zh';
+  const description = (name: string, fallback: string): string => {
+    const spec = findSpec(name);
+    return spec === undefined ? fallback : describeSpec(spec, locale);
+  };
+  return [
+    {
+      title: chinese ? '会话' : 'Session',
+      lines: [
+        `/new                    ${description('new', chinese ? '开始新会话' : 'Start a new session')}`,
+        `/resume [query]         ${description('resume', chinese ? '搜索并恢复历史会话' : 'Search and resume a previous session')}`,
+        `/sessions               ${chinese ? '浏览历史会话' : 'Browse previous sessions'}`,
+        `/clear                  ${description('clear', chinese ? '清空当前对话' : 'Clear the conversation')}`,
+        `/exit, /quit, /q        ${chinese ? '退出当前聊天' : 'Leave the chat'}`,
+      ],
+    },
+    {
+      title: chinese ? '队列' : 'Queue',
+      lines: chinese
+        ? ['/queue                  查看排队的后续消息', '/queue clear            丢弃排队消息', '/queue resume           继续处理排队消息']
+        : ['/queue                  Show queued follow-ups (resume or clear)', '/queue clear            Discard queued follow-ups', '/queue resume           Resume queued follow-ups'],
+    },
+    {
+      title: chinese ? '信息' : 'Info',
+      lines: [
+        `/help                   ${description('help', chinese ? '显示命令列表' : 'Show this list')}`,
+        chinese ? '!cmd                    在此终端执行 shell 命令（例如 !git status）' : '!cmd                    Run a shell command here (e.g. !git status)',
+      ],
+    },
+    {
+      title: chinese ? '桌面端' : 'Desktop',
+      lines: chinese
+        ? ['桌面端还提供权限模式、面板命令（/diff /memory /mcp）、用户技能和模式切换。', '在桌面端输入 /help 查看完整列表。']
+        : ['The Desktop composer also exposes permission modes, panel commands', '(/diff /memory /mcp), user skills as slash commands, and mode toggles.', 'Type /help in the Desktop composer for that set.'],
+    },
+  ];
+}
 
 /** Hard cap on combined stdout+stderr for a `!cmd` line, in characters. */
 const BANG_OUTPUT_LIMIT = 8000;
@@ -583,6 +591,7 @@ export async function chatTui(
     // Keep environment/default behavior if the Host's local settings endpoint
     // is unavailable, so an optional preference never prevents starting chat.
   }
+  let locale: CommandLocale = savedPreferences.locale;
   const effectivePreferences = resolveEffectiveTuiPreferences(savedPreferences);
 
   const initialSession = await client.get(sessionId, { includeAllSessions: true });
@@ -629,29 +638,36 @@ export async function chatTui(
   const finishedPromise = new Promise<void>((resolve) => { finish = resolve; });
 
   let sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
-  const sessionSlashRows: PopoverItem[] = [
-    ['/resume', 'Resume a previous session'],
-    ['/sessions', 'Browse previous sessions'],
-    ['/new', 'Start a new session'],
-    ['/clear', 'Clear the visible transcript'],
-    ['/queue', 'Resume or clear pending follow-ups'],
-    ['/help', 'Show chat commands'],
-    ['/exit', 'End this chat'],
-  ].map(([label, description]) => ({
-    label: label ?? '',
-    value: label ?? '',
-    description: description ?? '',
-    kind: 'slash_command' as const,
-    category: 'command' as const,
-    group: 'settings' as const,
-  }));
-  const slashRows: PopoverItem[] = [...sessionSlashRows, ...buildSlashCompletionRows()];
+  const sessionSlashRows = (): PopoverItem[] => {
+    const commands: readonly (readonly [string, string, string, string])[] = [
+      ['/resume', 'resume', 'Search and resume a previous session', '搜索并切换到之前的会话'],
+      ['/sessions', 'resume', 'Browse previous sessions', '浏览历史会话'],
+      ['/new', 'new', 'Start a new session', '开始一个新会话'],
+      ['/clear', 'clear', 'Clear the visible transcript', '清空当前对话'],
+      ['/queue', 'queue', 'Resume or clear pending follow-ups', '继续或清除排队的后续消息'],
+      ['/help', 'help', 'Show chat commands', '显示聊天命令'],
+      ['/exit', 'exit', 'End this chat', '结束当前聊天'],
+    ];
+    return commands.map(([label, specName, english, chinese]) => {
+      const spec = findSpec(specName);
+      return {
+        label,
+        value: label,
+        description: spec === undefined
+          ? locale === 'zh' ? chinese : english
+          : describeSpec(spec, locale),
+        kind: 'slash_command' as const,
+        category: 'command' as const,
+        group: 'settings' as const,
+      };
+    });
+  };
   // `@` offers workspace paths. The walk is cached briefly rather than for the
   // session — see `createFileCompletionSource` — because a chat session lives
   // long enough for the tree to change under it.
   const fileCandidates = createFileCompletionSource(path.resolve(process.cwd()));
   const completionSources: CompletionSources = {
-    slash: () => slashRows,
+    slash: () => [...sessionSlashRows(), ...buildSlashCompletionRows({ locale })],
     slashOptions: (command) => command === '/resume' || command === '/sessions' ? sessionRows : [],
     slashOptionsOnBare: (command) => command === '/resume' || command === '/sessions',
     // No `context` rows: the legacy CLI's were product modes, and this surface
@@ -739,6 +755,7 @@ export async function chatTui(
     // the variable the next run is started with. The border is the TUI's, the
     // run's effort is this loop's, and they must not drift apart.
     onEffortChange: (level) => { effort = level; },
+    onLocaleChange: (nextLocale) => { locale = nextLocale; },
     // Transcript preferences, seeded from the saved set and moved live by
     // `/settings`. Seed + callback, never re-read: the loop owns `effort` and
     // the TUI owns the rest, and one owner each is what keeps them in step.
@@ -754,11 +771,12 @@ export async function chatTui(
     onExit: () => close(),
   });
 
-  tui.onPermissionDecision = (requestId, decision) => {
+  tui.onPermissionDecision = (requestId, decision, answers?: QuestionAnswers) => {
     if (activeRunId === null || cancellationRequested) return;
     void client.resolvePermissionRequest(requestId, {
       status: decision === 'once' || decision === 'always' ? 'allow' : 'deny',
       decision: decision === 'always' ? 'allow_for_session' : decision === 'once' ? 'allow_once' : 'deny',
+      ...(answers === undefined ? {} : { updatedInput: { answers } }),
     }).then((request) => {
       if (request === null && !finished) tui.printError('Permission request is no longer pending.');
     }).catch((error: unknown) => {
@@ -868,6 +886,8 @@ export async function chatTui(
     const streamAbort = new AbortController();
     activeStream = streamAbort;
     const runSessionId = activeSession.id;
+    const runStartedAt = Date.now();
+    let permissionPollTimer: ReturnType<typeof setInterval> | null = null;
     // Pending drafts enter the transcript only when admitted to a Host turn.
     tui.printUser(prompt);
     try {
@@ -886,6 +906,39 @@ export async function chatTui(
         return 'failed';
       }
       activeRunId = start.runId;
+      let permissionPollInFlight = false;
+      let permissionPollErrorReported = false;
+      const pollPendingPermissions = async (): Promise<void> => {
+        if (permissionPollInFlight || activeRunId !== start.runId || cancellationRequested || finished) return;
+        permissionPollInFlight = true;
+        try {
+          const requests = await client.listPendingPermissionRequests(runSessionId);
+          for (const request of requests) {
+            if (activeRunId !== start.runId || cancellationRequested || finished) return;
+            if (request.status !== 'pending' || request.createdAt < runStartedAt) continue;
+            void tui.requestPermissionApproval({
+              requestId: request.id,
+              toolName: request.toolName,
+              toolInput: request.toolInput ?? {},
+              reason: 'This tool is waiting for your approval.',
+              expiresAt: request.createdAt + 300_000,
+            });
+          }
+        } catch (error) {
+          if (!permissionPollErrorReported && !finished) {
+            permissionPollErrorReported = true;
+            tui.printError(
+              'Could not check pending permissions: '
+              + (error instanceof Error ? error.message : String(error)),
+            );
+          }
+        } finally {
+          permissionPollInFlight = false;
+        }
+      };
+      void pollPendingPermissions();
+      permissionPollTimer = setInterval(() => { void pollPendingPermissions(); }, 1000);
+      permissionPollTimer.unref?.();
       // Interrupt/exit may arrive while the start request is still in flight.
       if (cancellationRequested || finished) {
         await requestRemoteCancellation(start.runId, 'chat interrupted during startup');
@@ -915,7 +968,18 @@ export async function chatTui(
         return 'failed';
       }
       if (record.status === 'failed') {
-        tui.printError('Run ' + start.runId + ' failed.');
+        // The REASON, not just the id: a run that fails inside the worker
+        // (a refused input binding, a provider auth failure) is only
+        // diagnosable from the terminal's error, and "run <id> failed" sent
+        // the user to the Host log to find out why.
+        const terminal = record.terminal;
+        const failure = terminal !== null && terminal.status === 'failed' ? terminal.error : undefined;
+        tui.printError(
+          'Run ' + start.runId + ' failed.'
+          + (failure === undefined
+            ? ''
+            : ' ' + failure.code + ': ' + failure.message),
+        );
         return 'failed';
       }
       if (cancellationRequested || record.status === 'cancelled') return 'cancelled';
@@ -930,6 +994,7 @@ export async function chatTui(
       }
       return cancellationRequested ? 'cancelled' : 'failed';
     } finally {
+      if (permissionPollTimer !== null) clearInterval(permissionPollTimer);
       // An aborted SSE read is not a stopped worker. Retain queue admission
       // until the Host cancellation request crosses its settlement barrier.
       if (activeRunId !== null && cancellationRequested) {
@@ -1035,8 +1100,8 @@ export async function chatTui(
           }
         }
         else if (name === 'help') {
-          tui.printNotice('Available commands:');
-          for (const section of [...HELP_SECTIONS, ...buildSlashHelpSections()]) {
+          tui.printNotice(locale === 'zh' ? '可用命令：' : 'Available commands:');
+          for (const section of [...helpSections(locale), ...buildSlashHelpSections(locale)]) {
             tui.printNotice(`[${section.title}]`);
             for (const line of section.lines) tui.printNotice(`  ${line}`);
           }
