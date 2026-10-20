@@ -3,7 +3,10 @@
 每个包一份 `packages/<pkg>/AGENTS.md`（`apps/<app>/AGENTS.md` 同理）。
 目标读者是**下一个来这个包排障的 agent**，不是来读产品介绍的。
 
-## 结构（固定五段，顺序不变）
+已交付的 24 份都按下面的结构写，可以直接抄
+`packages/agent-core/AGENTS.md`（最短）或 `packages/agent-runtime/AGENTS.md`（最密）。
+
+## 结构（固定四段，顺序不变）
 
 ```markdown
 # @duya/<pkg>
@@ -12,9 +15,11 @@
 
 ## 1. 负责 / 不负责
 
-| 负责 | 不负责（去哪个包） |
-| --- | --- |
-| ... | ... → `@duya/xxx` |
+负责：
+- <能力>（`packages/<pkg>/src/...ts:12`）
+
+不负责：
+- <不在本包的事> → `@duya/xxx`（`packages/<other>/src/...ts:34`）
 
 ## 2. 关键文件
 
@@ -22,21 +27,22 @@
 | --- | --- |
 | `packages/<pkg>/src/...ts:12` | ... |
 
-## 3. 对外接口
+消费方：`packages/<consumer>/src/...ts:53`（谁在用、怎么用）。
 
-被谁依赖、依赖它的契约是什么。写清楚**入参 / 出参 / 状态存哪**。
-
-## 4. 排障入口
+## 3. 排障入口
 
 | 症状 | 先看这里 | 为什么 |
 | --- | --- | --- |
-| ... | `packages/<pkg>/src/...ts:88` | ... |
+| <用户看得见的症状> | `packages/<pkg>/src/...ts:88` | ... |
 
-## 5. 边界约束
+## 4. 边界约束
 
-这个包受哪条架构规则约束（`architecture-policy.yaml` 的 layer / managed 状态），
-以及本地开发时最常踩的坑。
+- 架构层 `<layer>`（`architecture-policy.yaml:80`），模块 `<module>` `managed: true`（`:246`）：不得依赖 <被禁的路径>（`:135`）。
+- <这个包特有的本地坑 / 判据>。
 ```
+
+**四段的分工**：第 1 段回答「问题该去哪一层找」，第 2 段回答「这个包的地形」，
+第 3 段回答「症状 → 文件」，第 4 段回答「哪些改动会被门禁挡住」。
 
 ## 硬性要求
 
@@ -44,7 +50,7 @@
 2. **每条非平凡断言都要带 `path:line`**，相对仓库根。
    反例：「这个包负责运行引擎」——不可查。
    正例：「`RunEngineImpl` 在 `packages/agent-runtime/src/engine/run-engine.ts:31`」。
-3. **第 4 节是核心**。至少 3 行症状→文件。宁可少写一句套话，也要把入口写准。
+3. **第 3 节是核心**。至少 3 行症状→文件，宁可少写一句套话，也要把入口写准。
 4. **第 1 节的「不负责」列必须指向真实存在的另一个包**，不要写「不负责 UI」这种没有落点的说法。
    这正是「知道去哪找」的关键。
 5. **不要复述根 `AGENTS.md` 或 `ARCHITECTURE.md` 的通用内容**（日志规范、提交规范、门禁命令）。
@@ -80,3 +86,6 @@
 node tests/rules-compliance.test.mjs   # 测试 2 必须转绿
 npm run check:encoding                # 必须绿
 ```
+
+CI 里这两条由 `architecture` job 自动执行（见 `.github/workflows/test.yml`
+的 `Rule files reference paths that still exist` 步骤），本地跑是为了早发现。

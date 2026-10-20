@@ -36,7 +36,7 @@ is not the ledger and is not tracked.
 
 **What is in version control:** `active/` and `backlog/` only — those are what a
 new session reads. `completed/` is a local archive, so the Completed section
-below names plans in **plain text rather than links**: 264 of the 366 completed
+below names plans in **plain text rather than links**: 264 of the 367 completed
 plans on disk were never committed, and a link to them would be dead on a fresh
 clone. A plan becomes tracked when it is written, and stays tracked after it
 moves to `completed/` only if it was already added.
@@ -366,7 +366,6 @@ Four were wrong and are corrected below; these five were checked and are
 | --- | --- | --- |
 | **[610-architecture-series](./active/610-architecture-series/README.md)** | **P0** | **唯一的架构计划，仍 Active。** 执行队列唯一入口是 [19 — 快速执行队列](./active/610-architecture-series/19-fast-track-queue.md)：PR 级 T 卡、独占路径、首个失败证据、验收命令。**当前 next action = T01（`turn.completed` 生产者）**；T00（落盘 S1 fence）在共享检出静止后立即提交。S0/S1 已基本落地（`15fa4850` / `cdee21d5` / `a935741f` / `ac1f5183`）——[17](./active/610-architecture-series/17-shared-agent-platform-execution.md) §5 的切片状态已过期，架构裁决仍以 17 为准。 |
 | [587-agent-harness-monorepo](./active/587-agent-harness-monorepo/README.md) | P1 | 合同与历史推导已被 610 第 01 章接管(`01-layered-architecture/10-takeover-from-587.md`)。**不再单独排期**,只作为查证来源 |
-| [619-architecture-knowledge-map](./active/619-architecture-knowledge-map/README.md) | P2 | 补齐架构知识层：22 个包的包级 `AGENTS.md`（`tests/rules-compliance.test.mjs` 测试 2 当前 22 红）、`ARCHITECTURE_MAP.md` 排障导航、修正 `ARCHITECTURE.md` / `README` 的失效路径。**next action = `node tests/rules-compliance.test.mjs` 与 `npm run check:encoding` 全绿后提 PR** |
 
 > **只有一个架构计划。** 610 的切片表 A0–A7 / B1–B3 / C1 是全部的架构工作,
 > 每一片的唯一下一动作与完成标志见
@@ -434,7 +433,7 @@ Designed, not started. Nothing here is promised work.
 
 ***
 
-## Completed Plans (366)
+## Completed Plans (367)
 
 Archived for decision logs. Not an index of current work.
 
@@ -461,7 +460,7 @@ Archived for decision logs. Not an index of current work.
 - prompt-asset-cleanup · element-tree-enumeration-overlay · bash-foreground-soft-yield · structural-computer-use · workflow-run-live-nodes-and-agent-watch · macos-native-computer-use
 - windows-cua-alignment · context-accounting-ledger · cua-minimized-window-access · duya-agent-api-design · duya-agent-core-implementation · duya-agent-integration
 
-### Infrastructure & Research (53)
+### Infrastructure & Research (54)
 
 - bash-worker-implementation · 09-bug-sweep · automation-cronjob-workflow · agent-core-audit · localhost-auto-open-from-bash · singleton-daemon-architecture
 - agent-harness-project-grounding · built-in-browser-fallback · async-task-inbox · cookie-import-app-bound-fix · recent-session-directory · gateway-agent-capability-and-workspace
@@ -471,7 +470,7 @@ Archived for decision logs. Not an index of current work.
 - compact-ui-history-retention · archive-design-parity-with-codex · agent-directory-restructuring · goal-mode-v2 · minimax-small-wins · code-review-line-comments
 - research-mode · gateway-ipc-refactor · browser-parallel-isolation · async-nonblocking-subagent · research-mode-loop-improvement · external-agent-import
 - tool-path-permission-refactor · chat-ux-improvement-plan · duya-implementation-phase1 · duya-implementation-phase2-3 · duya-implementation-phase4-5 · duya-project-structure
-- duya-source-code-integration · first-test-problems-analysis · first-test-problems · harness-comparison-docs · problems
+- duya-source-code-integration · first-test-problems-analysis · first-test-problems · harness-comparison-docs · problems · architecture-knowledge-map
 
 ### App Shell / UI (46)
 
