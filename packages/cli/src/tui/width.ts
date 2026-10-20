@@ -12,7 +12,7 @@
  * ## Why the width function is blessed's
  *
  * `visibleWidth` delegates to `blessed/lib/unicode.js`, the same table blessed
- * uses to lay out every cell it draws. See `blessed-unicode.d.ts` for why an
+ * uses to lay out every cell it draws. See `terminal/cell-width.ts` for why an
  * external width table is deliberately not used: two tables disagreeing at an
  * ambiguous-width boundary is exactly how a cursor drifts off its glyph.
  *
@@ -23,18 +23,18 @@
  * blessed's job, and mixing the two is how width bugs are invented.
  */
 
-import { strWidth as blessedStrWidth, charWidth as blessedCharWidth } from './blessed-unicode.js';
+import { strWidth as cellStrWidth, charWidth as cellCharWidth } from './terminal/cell-width.js';
 
 /** Visible cell width of a plain-text string. */
 export function visibleWidth(text: string): number {
   if (text.length === 0) return 0;
-  return blessedStrWidth(text);
+  return cellStrWidth(text);
 }
 
 /** Visible cell width of one code point. */
 export function codePointWidth(cp: string): number {
   if (cp.length === 0) return 0;
-  return blessedCharWidth(cp, 0);
+  return cellCharWidth(cp, 0);
 }
 
 /**

@@ -259,10 +259,10 @@ Text     := <其余，直到下一个候选起手例外>
   - 执行记录：首版 `base(render(children))` 双包底色（`{gray-fg}{gray-fg}…`），与 Phase 2 的双转义同构——**子渲染自带 base，父层只叠属性**，已在代码注释中写明该规则。
   - 门禁：`tui-transcript-thinking.test.ts` + `tui-app-integration.test.ts`
 
-- [ ] **Phase 6 — own 转默认 + 斜体/删除线（I8, I9，取决于 Phase 0）**
-  - [ ] 6.1 `selectScreenRenderer` 默认改为 `own`，保留 `DUYA_TUI_RENDERER=blessed` 作为回滚
-  - [ ] 6.2 `ThemeToken` / 两套 palette / `own/markup.ts` 的 `ATTRIBUTES`+`Style` / `terminal/sgr.ts parseTag` / `Styles` 接口 —— 五处同改（D9）
-  - [ ] 6.3 `screen-surface.test.ts:78-88` 的 renderer-selection 断言更新
+- [ ] **Phase 6 — own 转默认 + 斜体/删除线（I8, I9，取决于 Phase 0）**（**已并入 plan 615 Phase 0.2 执行**，见 615 执行记录；此处勾选反映 615 worktree 的落地状态）
+  - [x] 6.1 `selectScreenRenderer` 默认改为 `own`，保留 `DUYA_TUI_RENDERER=blessed` 作为回滚
+  - [x] 6.2 `ThemeToken` / 两套 palette / `own/markup.ts` 的 `ATTRIBUTES`+`Style` / `terminal/sgr.ts parseTag` / `Styles` 接口 —— 五处同改（D9）。**偏差**：blessed `_attr` 无 italic，故 italic/strike 只进 own/sgr 两链；`Styles` 加 `renderer` 字段，blessed 链映射点保持折叠字节不变
+  - [x] 6.3 `screen-surface.test.ts:78-88` 的 renderer-selection 断言更新
   - [ ] 6.4 真机：`duya chat` 全屏 + inline 两种模式各截一次图，确认无可见 tag、无错位、italic 生效
   - 门禁：`env -u CODEBUDDY_SAFE_DELETE_BULK_STATE_DIR npm run typecheck:all` + `packages/cli` 全量 + `parity` harness
 

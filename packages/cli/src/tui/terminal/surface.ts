@@ -49,7 +49,8 @@
 
 import { cursorTo as cursorToSequence, hideCursor, showCursor } from './ansi.js';
 import { renderViewportFrame } from './diff.js';
-import { tagsToAnsi } from './sgr.js';
+import { lineToAnsi } from './line.js';
+import type { SceneLine } from '../core/span.js';
 import {
   conversationRegionBottom,
   detectScrollbackStrategy,
@@ -104,14 +105,14 @@ export interface InlineFrame {
    * its top are committed to the terminal's scrollback, which is why this is not
    * pre-windowed: windowing it here would make "what scrolled off" unknowable.
    */
-  readonly scroll: readonly string[];
+  readonly scroll: readonly SceneLine[];
   /**
    * Composer, popup and status, bottom-anchored and never scrolled. Kept
    * separate from `scroll` for two reasons: it must not be committed, and the
    * slack between a short `scroll` and the bottom of the screen has to be blank
    * rows ABOVE it, not below.
    */
-  readonly chrome: readonly string[];
+  readonly chrome: readonly SceneLine[];
   /** Caret: a row index in scroll or chrome and a 1-based column, or null. */
   readonly caret: {
     readonly row: number;
@@ -216,7 +217,7 @@ export class InlineSurface {
         // printed as literal `{gray-fg}` in their history and no later frame can
         // take it back. `renderViewportFrame` converts the live area on the same
         // terms.
-        const rows = scroll.slice(this.#liveStart, this.#liveStart + plan.overflow).map(tagsToAnsi);
+        const rows = scroll.slice(this.#liveStart, this.#liveStart + plan.overflow).map(lineToAnsi);
         const commit = planCommit(rows, {
           size,
           chromeRows: chrome.length,
@@ -237,8 +238,16 @@ export class InlineSurface {
     // The slack goes ABOVE the chrome. Padding the composed document to capacity
     // instead would put blank rows under the status line, which is the one place
     // on screen that must never be blank.
+    //
+    // Conversion to ANSI happens HERE and only here: the diff compares the same
+    // strings it writes, so a row cannot be "equal" as tags and different on
+    // screen, and the inline path stops carrying a tag parser of its own.
     const slack = liveRows - window.length;
-    const live = [...window, ...new Array<string>(Math.max(0, slack)).fill(''), ...chrome];
+    const live = [
+      ...window.map(lineToAnsi),
+      ...new Array<string>(Math.max(0, slack)).fill(''),
+      ...chrome.map(lineToAnsi),
+    ];
 
     const geometry = { topRow: Math.max(1, capacity - live.length + 1), rows: capacity };
     // A resize changes both the viewport height and the row every live row sits
