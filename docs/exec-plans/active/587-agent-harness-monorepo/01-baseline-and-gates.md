@@ -1,6 +1,6 @@
 # G0 — 当前基线与可信治理
 
-前置：无。出口：后续实施可辨别新回归。Next：**G0.2 合同/迁移测试独立 CI job**（`test.yml` 现只有 `architecture`/`test`/`build`），其后才是 required checks。复用现有gate，不另造同功能脚本。
+前置：无。出口：PR 在几分钟内拿到与改动相关的 Linux 测试反馈；整仓与跨平台回归集中在集成批次/定时任务；精确基线允许清债但阻止新增失败。Next：在 GitHub runner 上验证本节 PR 快速通道，再采集当前 Linux/Windows/macOS 基线；精确基线比较器和 merge queue 验证后再启用 required checks。
 >
 > **阶段状态（2026-10-04 对 `55384c55` 核对）**：G0.1–G0.4 的交付项都已合并；**本阶段仍是 In progress**，因为 G0.2 剩两件事没做——合同/迁移测试没有独立 job，required status checks 仍是空的（`gh api` 实测：ruleset `17257193` 的规则仍只有 `deletion` + `non_fast_forward`）。G0.2 曾经把 `architecture` 设为 required 又**回滚**，回滚原因（跨平台假阳性）已由 #146 修好，但**规则集没有再次落**。#193 把 slice inventory 从冻结树改成属性断言，陈旧记录漂移随之消解；`architecture:baseline --write` 仍从未运行。
 
@@ -26,6 +26,25 @@
 ## G0.2 CI 与 required checks
 
 范围：`.github/workflows/test.yml`、`scripts/architecture/*`、现有Electron类型门禁及仓库ruleset。
+
+### 2026-10-20：多 PR 开发的门禁分层提案
+
+本节是当前接续点；下方日期更早的记录保留为历史证据，不能替代当前 runner 基线。目标是让每个 Agent PR 快速得到可行动的结果，同时保留 Linux 错误发现能力；不以跳过断言或把整仓失败标成成功来缩短 CI。
+
+**现状证据（2026-10-20）**：最近 30 个 PR（#294–#323）全量测试均失败。#321 Ubuntu 收集 1426 个文件，100 个文件失败、1317 个通过、9 个跳过；测试耗时约 21 分钟。失败同时出现在 `apps/desktop`、`packages/ui`、`packages/agent` 等路径。GitHub ruleset `17257193` 只要求 `architecture`；测试不是合并门禁。历史 snapshot 的 Windows 45 / Ubuntu 64（55384c55、2026-10-04 记录）及 22 个 Ubuntu-only 失败只证明平台差异真实存在，不能当成当前白名单。
+
+**目标层级**：
+
+1. PR 快速通道保留 `architecture`、`typecheck:all` 和 Ubuntu 上与改动相关的 Vitest 测试；对 Vitest 配置、锁文件、测试发现规则或 CI 基础设施的改动回退到更广的验证。普通 PR 不跑覆盖率版整仓 `npm test`。代码改动没有选出任何相关测试时必须报错并解释范围，文档专用 PR 才可明确跳过相关测试。
+2. merge queue 对组合后的候选树运行 Ubuntu 整仓测试一次。失败比较机器可读的精确基线 `(file, test, error code/signature)`：新增或变化的失败阻塞；被修掉的失败从清单中扣除。不得按失败总数容忍漂移、`continue-on-error`、glob 排除或更新基线自动吸收失败。改动测试发现规则时运行完整检查。
+3. 定时任务运行 Linux、Windows、macOS 完整测试矩阵并保留结果。平台基线独立记录、按精确签名比较；负责人和复查期限随每条已知债记录。夜间 job 发现新失败需产生可直接归类的报告。
+4. 只有快速门禁、基线比较器和 merge queue 在真实 GitHub runner 上连续验证后，才调整 ruleset；先列出确切 check 名和差异，再执行外部设置变更。当前不可把 `test` 直接设为 required，因为整仓基线为红。
+
+**实施顺序**：先以当前 master SHA 在 Linux、Windows、macOS 各跑一次完整 suite，保存失败测试名与规范化错误签名，确认同一 runner 的重跑稳定性；随后落 PR 快速通道和其零测试保护；再实现/验证精确基线比较与 merge queue；最后把跨平台整仓矩阵改为定时运行并复核 ruleset。归因错误不能用基线放行，必须修产品或夹具；历史 2026-10-06 数据不直接迁入当前 baseline。
+
+**本轮已落地（尚待真实 runner 验证）**：`.github/workflows/test.yml` 为 PR 选择 Ubuntu 单平台；代码改动跑 `vitest --changed=<base SHA>`，Vitest/依赖/测试发现/CI workflow 配置变化回退到完整 suite，文档专用 PR 显式跳过测试。PR 保留 typecheck 和 architecture，并在 Ubuntu 构建；push 不重复跑完整测试/构建矩阵；每天 18:20（中国时间）运行 Linux、Windows、macOS 完整测试和构建矩阵，Ubuntu 保留 coverage。验证记录：`master @ bf316d81369be3ce8add03c185e9938210d7a41f`，Windows / Node 24.16.0 / npm 11.13.0；共享检出另有既存脏改动，本轮只动 workflow、此计划及执行计划索引。YAML parser、`git diff --check`、`npm run plan:sync` 均 exit 0；npm 启动器对 `M:\npm-global\node_modules\npm\bin\npm-cli.js` 打印权限警告，但命令仍完成。未运行本地测试，也未触发真实 GitHub workflow，因此 job 条件、改动测试选择和耗时仍需 runner 验证。未改 GitHub ruleset；精确基线比较器与 merge queue 仍未实现。
+
+**本轮验收边界**：PR 在 Ubuntu 执行改动相关测试；UI/Host 变更的相关测试不能因测试发现失败而静默跳过；普通 PR 不执行覆盖率整仓 suite。先不改 GitHub ruleset，直到精确基线与 merge queue 实际通过。
 
 > **跨平台门禁缺陷（G0.2-C 的真实阻塞项）**：`architecture:check` 在 Windows 绿、在 ubuntu 红。根因已定位为门禁自身缺陷，而非代码分歧——共享的 import 正则 `/(?:from\s+|import\s*\(|require\s*\()\s*["']([^"']+)["']/g`（`audit-imports.mjs:170`、`audit-modules.mjs:67`、`verify-cycle.mjs:5`、以及 `strip-comments.test.ts` 的本地副本）里 `[^"']` **允许跨越 CR/LF**，于是匹配会从代码里某个引号一路吃到几十行外的另一个引号，把文件自身代码当成 import specifier；且该 specifier 里**嵌入了真实换行符**。`.gitattributes` 的 `* text=auto` 使 Windows 检出 CRLF、Linux/macOS 检出 LF，于是同一处假违规在两个平台产生**不同指纹**：基线是 Windows 录的，Linux 上匹配不上→既报"新增违规"又报"1条基线不再触发"。
 > 实证（`apps/desktop/src/renderer/components/layout/panels/code-review-diff.ts`，约181行有 `line.startsWith('diff --git ')`）：CRLF输入得到假specifier `.length);\r\n    else if (line.startsWith(`，LF输入得到 `.length);\n    else if (line.startsWith(`。这同时说明**现有架构baseline是Windows口径**，与项目索引记录的"Linux上多出一批失败"属同一类跨平台漂移。
