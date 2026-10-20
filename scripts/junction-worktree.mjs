@@ -233,12 +233,15 @@ for (const pkg of pkgs) {
   if (!scopeParent) continue;
   const pkgDirInWorktree = join(worktreeRoot, pkg.rel);
 
-  // One overlay per top-level workspace parent that contains importers:
-  // `packages/` covers every package, `apps/` covers apps/desktop.
-  const parentRel = pkg.rel.split(/[\\/]/)[0];
-  const overlayScope = join(worktreeRoot, parentRel, 'node_modules', scopeParent);
-
-  link(pkgDirInWorktree, join(overlayScope, pkg.name.slice(scopeParent.length + 1)));
+  // Each top-level workspace parent can contain importers of any workspace
+  // package. In particular, Desktop's tsconfig includes packages/ui sources,
+  // so app-originating imports such as @duya/agent-protocol must resolve to
+  // this worktree too; otherwise TypeScript may deduplicate against a primary
+  // package declaration reached earlier through apps/desktop.
+  for (const parentRel of new Set(pkgs.map((candidate) => candidate.rel.split(/[\\/]/)[0]))) {
+    const overlayScope = join(worktreeRoot, parentRel, 'node_modules', scopeParent);
+    link(pkgDirInWorktree, join(overlayScope, pkg.name.slice(scopeParent.length + 1)));
+  }
 }
 
 // --- 3. report -------------------------------------------------------------

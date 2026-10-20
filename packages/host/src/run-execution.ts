@@ -49,6 +49,7 @@ import type {
 import { randomUUID } from 'node:crypto';
 import type { RunRepository } from './repository-port.js';
 import { RunEventConflictError, RunEpochFencedError } from '@duya/data/run-store';
+import { isWorkerTranscriptMutationAction } from './worker-transcript-mutations.js';
 import { createRunControlPlaneActions, type RunControlPlaneLogger } from './run-control-plane.js';
 import {
   RunOrchestrator,
@@ -556,18 +557,27 @@ export class HostRunExecutionController {
   }
 
   async #serveDbRequest(sessionId: string, msg: Record<string, unknown>, source: ChildProcess): Promise<void> {
-    const id = msg.id as string;
+    const id = typeof msg.id === 'string' ? msg.id : '';
     const worker = source;
+    if (typeof msg.action !== 'string' || msg.action.length === 0) {
+      worker.send({
+        type: 'db:response', id, success: false, code: 'invalid_db_action',
+        error: 'DB request action must be a non-empty string.',
+      });
+      return;
+    }
+    const action = msg.action;
     try {
-      if (worker !== this.#workerManager.getWorker(sessionId) && msg.action === 'message:append') {
+      if (worker !== this.#workerManager.getWorker(sessionId) &&
+          isWorkerTranscriptMutationAction(action)) {
         worker.send({
           type: 'db:response', id, success: false, code: 'superseded_worker',
-          error: 'Transcript append from a superseded worker is refused.',
+          error: 'Transcript mutation from a superseded worker is refused.',
         });
         return;
       }
       let caller: SessionServiceCaller | undefined;
-      if (typeof msg.action === 'string' && msg.action.startsWith('session:spawn')) {
+      if (action.startsWith('session:spawn')) {
         const raw = msg.execution;
         if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
           throw new HostRunExecutionError(403, 'missing_execution_context', 'Session delegation requires an execution context.');
@@ -592,7 +602,7 @@ export class HostRunExecutionController {
         }
       }
       const result = await this.#options.bridge.dispatch(
-        String(msg.action ?? ''),
+        action,
         (msg.payload ?? {}) as Record<string, unknown>,
         caller,
       );
