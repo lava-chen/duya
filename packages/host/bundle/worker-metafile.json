@@ -43271,10 +43271,10 @@
           "bytesInOutput": 115
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 21
+          "bytesInOutput": 34
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -43388,7 +43388,7 @@
           "bytesInOutput": 4332
         },
         "packages/capabilities/src/utils/urlSafety.ts": {
-          "bytesInOutput": 3589
+          "bytesInOutput": 3576
         },
         "../../../node_modules/@iarna/toml/lib/parser.js": {
           "bytesInOutput": 1902
@@ -44960,7 +44960,7 @@
           "bytesInOutput": 1949
         },
         "packages/capabilities/src/BrowserTool/ports.ts": {
-          "bytesInOutput": 240
+          "bytesInOutput": 227
         },
         "packages/capabilities/src/BrowserTool/stealth.ts": {
           "bytesInOutput": 7748
@@ -45944,7 +45944,7 @@
           "bytesInOutput": 225
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1916
@@ -47954,7 +47954,7 @@
           "bytesInOutput": 2408
         },
         "packages/host/src/worker-context/attachment-context.ts": {
-          "bytesInOutput": 2263
+          "bytesInOutput": 2269
         },
         "packages/agent-runtime/src/adapters/run-engine-ports.ts": {
           "bytesInOutput": 3825
@@ -49169,7 +49169,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 5524368
+      "bytes": 5524385
     }
   }
 }
