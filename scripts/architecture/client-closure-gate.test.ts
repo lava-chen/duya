@@ -230,10 +230,11 @@ describe('G11-1 goes RED when a client entry value-imports the runtime', () => {
 describe('G11-1 on the live tree', () => {
   const reports = collectClientClosureReport();
 
-  it('measures both roots, named, one report each', () => {
+  it('measures every root, named, one report each', () => {
     expect(reports.map((r) => r.entry)).toEqual([
       'packages/client-core/src/index.ts',
       'packages/cli/src/chat.ts',
+      'packages/cli/src/tui/index.ts',
     ]);
     expect(reports.every((r) => r.absent === false)).toBe(true);
   });
@@ -255,41 +256,38 @@ describe('G11-1 on the live tree', () => {
     expect(core.walked).toBeLessThan(10);
   });
 
-  it('reports the CLI entry RED, with the four-hop chain that causes it', () => {
-    // The known red. Asserted as a FACT, not absorbed: if someone severs the
-    // edge, this test fails and points at the line below — which is the correct
-    // prompt to delete the assertion, not to loosen it.
+  it('reports the CLI entry CLEAN — the four-hop chain is severed at the source', () => {
+    // The chain this gate was written for was
+    //   chat.ts → host/local-host.ts → run-execution.ts → run-orchestrator.ts
+    //          → agent-runtime
+    // and it is gone: `runTuiCommand` moved into `packages/cli/src/tui-command.ts`,
+    // so the only value import of `@duya/host/local-host` is in the bootstrap
+    // (`tui-command.ts` and `index.ts`), which is not a client entry.
+    //
+    // Asserted as a FACT, not absorbed: if someone wires the Host back into
+    // `chat.ts`, this test goes red and names the edge that did it.
     const cli = reports[1];
-    expect(isClientClosureClean(cli)).toBe(false);
+    expect(isClientClosureClean(cli)).toBe(true);
+    expect(cli.findings).toEqual([]);
 
-    const runtime = cli.findings.find((f) => f.package === '@duya/agent-runtime');
-    expect(runtime).toBeDefined();
-    expect(runtime?.chain).toEqual([
-      'packages/cli/src/chat.ts',
-      'packages/host/src/local-host.ts',
-      'packages/host/src/run-execution.ts',
-      'packages/host/src/run-orchestrator.ts',
-      'packages/agent-runtime/src/index.ts',
-    ]);
-    // `via` names the edge to sever: `run-orchestrator.ts` imports the runtime
-    // barrel, but the FIRST hop a client-side fix can remove is `local-host.ts`'s
-    // value import of `./run-execution.js`.
-    expect(runtime?.via).toBe('packages/host/src/run-orchestrator.ts');
-
-    // The closure is large, so this red is not the "inspected nothing" shape.
+    // The closure is large, so this green is not the "inspected nothing" shape.
     expect(cli.walked).toBeGreaterThan(200);
   });
 
   it('states the whole verdict with the denominator, not a bare count', () => {
-    // `<bad>/<walked>` per entry and `1/2 entries clean` overall: a number without
-    // its denominator cannot be read, and cannot be told apart from a collapse.
+    // `<bad>/<walked>` per entry and `3/3 entries clean` overall: a number
+    // without its denominator cannot be read, and cannot be told apart from
+    // a collapse.
     expect(reports[0].summary).toBe(
       `0/${reports[0].walked} forbidden packages in packages/client-core/src/index.ts`,
     );
     expect(reports[1].summary).toBe(
-      `2/${reports[1].walked} forbidden packages in packages/cli/src/chat.ts`,
+      `0/${reports[1].walked} forbidden packages in packages/cli/src/chat.ts`,
     );
-    expect(isEveryClientEntryClean(reports)).toBe(false);
+    expect(reports[2].summary).toBe(
+      `0/${reports[2].walked} forbidden packages in packages/cli/src/tui/index.ts`,
+    );
+    expect(isEveryClientEntryClean(reports)).toBe(true);
   });
 
   it('walks into the runtime only through host, never directly from the client', () => {
@@ -297,10 +295,12 @@ describe('G11-1 on the live tree', () => {
     // imported `@duya/agent-runtime` itself, the fix would be one line in the CLI;
     // it does not, so the fix belongs to `packages/host` (or to the CLI turning
     // `startLocalHost` into a dynamic import at its single call site).
-    const direct = importsOf(path.join(ROOT, 'packages/cli/src/chat.ts')).filter((i) =>
-      FORBIDDEN_PACKAGES.some((p) => i.spec === p || i.spec.startsWith(`${p}/`)),
-    );
-    expect(direct).toEqual([]);
+    for (const entry of ['packages/cli/src/chat.ts', 'packages/cli/src/tui/index.ts']) {
+      const direct = importsOf(path.join(ROOT, entry)).filter((i) =>
+        FORBIDDEN_PACKAGES.some((p) => i.spec === p || i.spec.startsWith(`${p}/`)),
+      );
+      expect(direct, entry).toEqual([]);
+    }
   });
 });
 
@@ -391,7 +391,25 @@ describe('the gate reads the tree, not a fixture it left behind', () => {
     expect(CLIENT_ENTRIES.map((e) => e.rel)).toEqual([
       'packages/client-core/src/index.ts',
       'packages/cli/src/chat.ts',
+      'packages/cli/src/tui/index.ts',
     ]);
     expect(CLIENT_ENTRIES.every((e) => e.kind === 'file')).toBe(true);
+  });
+});
+
+describe('the TUI is a client surface, and the gate now measures it', () => {
+  const reports = collectClientClosureReport();
+
+  it('measures it — a new entry that scans nothing is a false green', () => {
+    // The same shape the gate was written to defend: an entry that is absent,
+    // or whose closure is just the entry itself, proves nothing. The TUI
+    // entry is registered so that a future import that drags the runtime
+    // into the renderer is reported HERE rather than by accident through
+    // `chat.ts`.
+    const tui = reports[2];
+    expect(tui).toBeDefined();
+    expect(tui?.entry).toBe('packages/cli/src/tui/index.ts');
+    expect(tui?.absent).toBe(false);
+    expect(tui?.walked).toBeGreaterThan(1);
   });
 });
