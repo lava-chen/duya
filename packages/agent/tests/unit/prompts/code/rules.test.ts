@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { resolve } from 'node:path'
-import { HbsPromptSystem } from '../../../../src/prompts/hbs/HbsPromptSystem.js'
+import { HbsPromptSystem, resolvePromptAssetsRoot } from '../../../../src/prompts/hbs/HbsPromptSystem.js'
 import { TOOL_NAMES } from '../../../../src/prompts/types.js'
 import type { PromptContext } from '../../../../src/prompts/types.js'
 
 const hbs = new HbsPromptSystem({
-  assetsRoot: resolve(__dirname, '../../../../src/prompts/assets'),
+  assetsRoot: resolvePromptAssetsRoot(),
 })
 
 function makeCtx(enabledTools: string[] = []): PromptContext {
