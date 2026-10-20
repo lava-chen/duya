@@ -37,7 +37,7 @@ import {
   recordAutoModeDenial,
   isAutoModeAllowlistedTool,
 } from './classifier.js'
-import { appToolOriginalName } from '@duya/capabilities/AppServer/app-tool-namespace'
+import { appToolOriginalName, isTrustedAppToolRegistration, type AppToolRegistration } from '@duya/capabilities/AppServer/app-tool-namespace'
 import {
   riskTierToBehavior,
   analyzeCommandSafety,
@@ -84,6 +84,34 @@ const GLOBAL_ALWAYS_ALLOWED_TOOLS = new Set([
   'send_artifact',
 ])
 
+/**
+ * Does a rule name this tool?
+ *
+ * A rule names a tool by ONE of its two spellings, and which one it uses
+ * is not something the rule can know:
+ *
+ *   - the ORIGINAL name (`canvas_manage`) — how the rule was written
+ *     before the tool moved behind the `duya_app` namespace, and how the
+ *     agent profiles write it;
+ *   - the FULL VISIBLE name (`mcp_duya_app_canvas_manage`) — what the
+ *     model calls the tool today, and therefore what a user reading the
+ *     transcript sees and copies into a rule.
+ *
+ * Comparing the rule against the original name alone silently misses the
+ * second case: a deny rule entered as `mcp_duya_app_update_state` would
+ * never fire, because the tool's original name is `update_state`. The
+ * rule would look present in the settings UI and protect nothing.
+ *
+ * So the rule is matched against BOTH spellings. A rule that names
+ * either one applies to the tool.
+ */
+function ruleNamesTool(ruleToolName: string, toolName: string): boolean {
+  if (ruleToolName === toolName) return true;
+  const original = appToolOriginalName(toolName);
+  if (original === toolName) return false;
+  return ruleToolName === original;
+}
+
 function toolMatchesRule(
   toolName: string,
   rule: PermissionRule,
@@ -92,10 +120,12 @@ function toolMatchesRule(
     return false
   }
   // A rule names the tool it applies to. The `duya_app` server's tools
-  // arrive namespaced, so the rule has to be matched against the
-  // ORIGINAL name — otherwise a deny rule written before the migration
-  // would stop applying to the very tool it was written for.
-  return rule.ruleValue.toolName === appToolOriginalName(toolName)
+  // arrive namespaced, so the rule is matched against BOTH the original
+  // name and the full visible name — otherwise a deny rule written
+  // before the migration would stop applying to the very tool it was
+  // written for, and a rule written after it (with the visible name the
+  // user actually sees) would never apply at all.
+  return ruleNamesTool(rule.ruleValue.toolName, toolName)
 }
 
 export function toolAlwaysAllowedRule(
@@ -141,7 +171,7 @@ export function getRuleByContentsForToolName(
   }
   for (const rule of rules) {
     if (
-      rule.ruleValue.toolName === toolName &&
+      ruleNamesTool(rule.ruleValue.toolName, toolName) &&
       rule.ruleValue.ruleContent !== undefined &&
       rule.ruleBehavior === behavior
     ) {
@@ -200,11 +230,52 @@ const LOW_RISK_BROWSER_OPERATIONS = new Set([
 
 const CANVAS_TOOL_PREFIX = 'canvas_';
 
-function isCanvasTool(toolName: string): boolean {
-  // Resolve the namespace first: the `duya_app` server exposes the canvas
-  // tools as `mcp_duya_app_canvas_manage`, but this short-circuit is
-  // written against the original name. Matching the visible name would
-  // silently drop the canvas tools out of their unconditional allow.
+/**
+ * May this tool use the app layer's NAME-BASED shortcuts?
+ *
+ * Two shortcuts in this file are keyed by tool name: the canvas
+ * short-circuit (an unconditional allow) and the always-allowed set. Both
+ * existed before the `duya_app` namespace, when a tool's name WAS its
+ * identity. After the namespace they are keyed by a MODEL-VISIBLE name,
+ * and that name is not a unique key: a third-party server named `duya`
+ * that exposes a tool called `app_canvas_manage` is allocated the very
+ * same `mcp_duya_app_canvas_manage` (plan 616 §C16). Handing an
+ * unconditional allow to a name is therefore handing it to whoever spells
+ * like us.
+ *
+ * So the shortcuts are earned by IDENTITY:
+ *
+ *   - a tool the host registered under the `duya_app` server with the `app`
+ *     provenance is ours — the shortcut applies, and the ORIGINAL name is
+ *     what the shortcut is written against;
+ *   - a tool that was never an MCP registration keeps the old behaviour:
+ *     its name is its real name, no allocator was involved, and there is
+ *     nothing to impersonate;
+ *   - a name that CLAIMS the app namespace (`mcp_duya_app_…`) without a
+ *     trusted registration gets no shortcut. The full chain decides it.
+ */
+function canUseAppNameShortcut(
+  toolName: string,
+  registration: AppToolRegistration | undefined,
+): boolean {
+  if (registration) {
+    return isTrustedAppToolRegistration(registration);
+  }
+  // No registration at all. The name still decides whether it CLAIMS the
+  // app namespace: `appToolOriginalName` rewrites only names that carry
+  // the `mcp_duya_app_` prefix AND resolve against our closed tool set.
+  return appToolOriginalName(toolName) === toolName;
+}
+
+/**
+ * Is this the app layer's own canvas tool?
+ *
+ * The canvas short-circuit is an UNCONDITIONAL allow — it sits above the
+ * user rules, the risk tiers, the catastrophic check and the host switch.
+ * See `canUseAppNameShortcut` for why the name alone is not enough.
+ */
+function isCanvasTool(toolName: string, registration: AppToolRegistration | undefined): boolean {
+  if (!canUseAppNameShortcut(toolName, registration)) return false;
   const original = appToolOriginalName(toolName);
   return original.startsWith(CANVAS_TOOL_PREFIX) || original === 'database_manage';
 }
@@ -218,12 +289,30 @@ export interface ToolPermissionCheckContext {
   localDenialTracking?: DenialTrackingState
   abortController: AbortController
   /**
-   * Provenance of an MCP tool (bundled/settings/plugin/local/unknown). When
+   * Provenance of an MCP tool (bundled/settings/plugin/local/unknown/app). When
    * present, the gate trusts only bundled + settings servers automatically and
    * prompts for third-party sources — see the short-circuit in
    * `hasPermissionsToUseTool`. Absent for built-in tools.
+   *
+   * `'app'` is the one provenance that produces NO source-level verdict: the
+   * app layer's tools keep the full chain (catastrophic check, host standing
+   * switch, risk tiers, classifier) — plan 616 §C9.
    */
   source?: McpToolSource
+  /**
+   * The host-registered identity of a tool, when the caller can supply it.
+   *
+   * The app layer's unconditional allows (the canvas short-circuit, the
+   * always-allowed set) need PROOF of ownership, not a name that merely
+   * looks right: the model-visible name is not a unique key, so a
+   * third-party server can be allocated the same name our own tool gets
+   * (plan 616 §C16). The host owns the registry, so it is the host that
+   * answers "is this ours".
+   *
+   * Returning `undefined` means "no registration for this name" — the
+   * builtin path, where the tool's real name is the name we were given.
+   */
+  resolveAppToolRegistration?: (toolName: string) => AppToolRegistration | undefined
   /** LLM client for auto mode classifier */
   llmClient?: PermissionClassifierClient
   /** Model name for auto mode classifier */
@@ -240,16 +329,40 @@ export type HasPermissionsFn = (
 
 /**
  * Shared MCP source predicate — the single decision for MCP tools by their
- * provenance (`bundled`/`settings`/`plugin`/`local`/`unknown`) and the active
- * mode. Both the unified gate (`hasPermissionsToUseTool`, step 0) and the MCP
- * executor in `mcp/apply.ts` call this, so the MCP permission decision lives
- * in exactly one place. Never silently auto-approves third-party sources.
+ * provenance (`bundled`/`settings`/`app`/`plugin`/`local`/`unknown`) and the
+ * active mode. Both the unified gate (`hasPermissionsToUseTool`, step 0) and
+ * the MCP executor (`tools/mcp-executor.ts`) call this, so the MCP permission
+ * decision lives in exactly one place. Never silently auto-approves third-party
+ * sources.
+ *
+ * ## `undefined` means "the source alone does not settle this"
+ *
+ * The return type is `PermissionDecision | undefined`, and `undefined` is a
+ * first-class answer: it says "this provenance carries no verdict — keep
+ * going". The caller then continues down the full chain (user rules, risk
+ * tiers, the catastrophic check, the host standing switch, the classifier).
+ *
+ * ## Why `app` is not `bundled`
+ *
+ * `bundled` short-circuits to `allow`. That is right for a packaged
+ * external server whose tools we merely ship. It is wrong for the app
+ * layer: `duya_app` owns the tools that can message users, schedule
+ * routines and drive the browser, and the whole point of moving them
+ * behind a namespace is that they KEEP their checks.
+ *
+ * So `app` returns `undefined`: the app layer is first-party, but
+ * "first-party" is not "unconditional". Its verdict comes from the full
+ * chain, exactly as it did before the tools moved behind the namespace.
+ * Borrowing `bundled`'s short-circuit here would skip the catastrophic
+ * check, the host standing switch and the risk tiers for the tools that
+ * can reach furthest outside the app — the opposite of what the
+ * namespace is for (plan 616 §C9).
  */
 export function decideMcpSource(
   source: McpToolSource,
   mode: PermissionMode | undefined,
   toolName: string,
-): PermissionDecision {
+): PermissionDecision | undefined {
   if (source === 'bundled') {
     return {
       behavior: 'allow',
@@ -259,6 +372,13 @@ export function decideMcpSource(
         classifierApprovable: false,
       },
     }
+  }
+  if (source === 'app') {
+    // No source-level verdict. The app layer's tools are first-party, but
+    // they can reach outside the app, so the decision belongs to the full
+    // chain — the same chain they went through before they were moved
+    // behind the namespace. The caller treats `undefined` as "continue".
+    return undefined
   }
   if (mode === 'bypassPermissions' || mode === 'dontAsk') {
     return {
@@ -311,16 +431,30 @@ export function createHasPermissionsToUseTool(ports: PermissionEvaluationPorts):
     // allowed automatically; `bypassPermissions` / `dontAsk` override the
     // source prompt, mirroring the role the old `evaluateMcpToolPermission`
     // played before it was folded into this single gate.
+    //
+    // `app` is the exception: `decideMcpSource` returns no verdict for it, so
+    // the gate FALLS THROUGH to the full chain below (catastrophic check, host
+    // standing switch, risk tiers, classifier). The app layer's tools are
+    // first-party but not unconditional — plan 616 §C9.
     const source = context.source
     if (source) {
-      return decideMcpSource(source, appState.toolPermissionContext.mode, toolName)
+      const sourceDecision = decideMcpSource(source, appState.toolPermissionContext.mode, toolName)
+      if (sourceDecision) {
+        return sourceDecision
+      }
     }
 
     // 1. Canvas and project-database tools operate entirely within the
     // application's own project workspace. They do not touch external systems, so they
     // must be unconditionally allowed regardless of permission mode or user
     // rules.
-    if (isCanvasTool(toolName)) {
+    //
+    // The short-circuit is earned by IDENTITY, not by spelling: a tool whose
+    // visible name claims the `duya_app` namespace only gets it when the host
+    // registered it under the app server with the `app` provenance
+    // (`resolveAppToolRegistration`). See `isCanvasTool`.
+    const appToolRegistration = context.resolveAppToolRegistration?.(toolName)
+    if (isCanvasTool(toolName, appToolRegistration)) {
       return {
         behavior: 'allow',
         decisionReason: {
@@ -333,7 +467,14 @@ export function createHasPermissionsToUseTool(ports: PermissionEvaluationPorts):
 
     // 2. Internal-only tools that only read or mutate the application's own
     // state should not be gated by permission modes or user rules.
-    if (GLOBAL_ALWAYS_ALLOWED_TOOLS.has(appToolOriginalName(toolName))) {
+    //
+    // Same identity rule as the canvas short-circuit above: the set is
+    // written against the ORIGINAL name, so a tool that merely spells like
+    // an app tool must not inherit the unconditional allow.
+    if (
+      canUseAppNameShortcut(toolName, appToolRegistration) &&
+      GLOBAL_ALWAYS_ALLOWED_TOOLS.has(appToolOriginalName(toolName))
+    ) {
       return {
         behavior: 'allow',
         decisionReason: {
