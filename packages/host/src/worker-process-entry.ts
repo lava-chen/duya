@@ -1609,6 +1609,14 @@ function createPermissionHandler(sessId: string): (request: {
     toolInput: Record<string, unknown>;
     mode?: string;
     expiresAt: number;
+    /**
+     * Why the request was raised, in the executor's words.
+     *
+     * A producer fact: only the executor knows what made the tool need
+     * approval. Dropping it here left every client with a generic prompt
+     * and no reason, and neither can be reconstructed from the tool name.
+     */
+    decisionReason?: string;
     metadata?: {
         toolParamsDisplay?: Array<{
             name: string;
@@ -1649,6 +1657,9 @@ function createPermissionHandler(sessId: string): (request: {
                     toolInput: request.toolInput,
                     mode: request.mode,
                     expiresAt: request.expiresAt,
+                    ...(request.decisionReason === undefined
+                        ? {}
+                        : { reason: request.decisionReason }),
                     ...(descriptor
                         ? {
                             connector: {

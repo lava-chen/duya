@@ -120,6 +120,27 @@ describe('translateFrame — the producer vocabulary', () => {
     });
   });
 
+  it('takes the request mode off the frame, not off the per-run context', () => {
+    // The executor is what raised the request, so the frame carries the
+    // interactive situation. The context's mode is a per-run constant (the
+    // Host's is hardcoded to `generic`), so preferring it would replace a
+    // stated fact with a value nobody chose — and the two situations ask the
+    // user different questions.
+    const { event } = roundTrip({
+      type: 'permission',
+      data: { requestId: 'p1', toolName: 'ExitPlanMode', mode: 'exit_plan_mode' },
+    });
+    expect(event).toMatchObject({ type: 'permission.requested', mode: 'exit_plan_mode' });
+  });
+
+  it('keeps the worker\'s reason, so the prompt can say why', () => {
+    const { event } = roundTrip({
+      type: 'permission',
+      data: { requestId: 'p1', toolName: 'Bash', reason: 'writes outside the workspace' },
+    });
+    expect(event).toMatchObject({ type: 'permission.requested', reason: 'writes outside the workspace' });
+  });
+
   it('maps usage only when there is numeric evidence of tokens', () => {
     // A zero-usage event would be a fabricated accounting entry.
     const withUsage = translateFrame({ type: 'token_usage', data: { input_tokens: 5, output_tokens: 7 } }, ctx);

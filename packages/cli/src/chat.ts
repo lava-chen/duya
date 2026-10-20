@@ -33,7 +33,7 @@ import { describeSpec, findSpec, type CommandLocale } from '@duya/command-catalo
 import { HostSessionHttpClient } from '@duya/host/http-client';
 import { resolveDataRoot } from '@duya/data';
 import { TUIApp, shouldUseTui, type CompletionSources, type TuiChoice } from './tui/index.js';
-import type { QuestionAnswers } from './tui/overlay.js';
+import { isDestructiveRequest, type QuestionAnswers } from './tui/overlay.js';
 import { HostEventStream } from './tui/host-event-stream.js';
 import { createRunSessionView, projectRunSessionView } from './tui/run-session-view.js';
 import { RunSession } from '@duya/client-core';
@@ -958,12 +958,21 @@ export async function chatTui(
           for (const request of requests) {
             if (activeRunId !== start.runId || cancellationRequested || finished) return;
             if (request.status !== 'pending' || request.createdAt < runStartedAt) continue;
+            // The worker's own words. The reason and the mode are producer
+            // facts — a prompt that says "generic" because the record lost
+            // them asks the user a different question than the one the
+            // worker asked, and the mode decides which card is shown.
+            const mode = request.mode === 'ask_user_question' || request.mode === 'exit_plan_mode'
+              ? request.mode
+              : 'generic';
             void tui.requestPermissionApproval({
               requestId: request.id,
               toolName: request.toolName,
               toolInput: request.toolInput ?? {},
-              reason: 'This tool is waiting for your approval.',
-              expiresAt: request.createdAt + 300_000,
+              reason: request.reason ?? 'This tool is waiting for your approval.',
+              ...(request.expiresAt === null ? {} : { expiresAt: request.expiresAt }),
+              mode,
+              destructive: isDestructiveRequest(request.toolName, request.toolInput),
             });
           }
         } catch (error) {

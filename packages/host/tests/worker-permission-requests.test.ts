@@ -7,7 +7,8 @@ function fixture() {
   const records: HostPermissionRequestApiV1 = {
     async createPermissionRequest(input) {
       const request: HostPermissionRequest = { ...input, sessionId: input.sessionId ?? null,
-        toolInput: input.toolInput ?? null, status: 'pending', decision: null, message: null,
+        toolInput: input.toolInput ?? null, mode: input.mode ?? null, expiresAt: input.expiresAt ?? null,
+        reason: input.reason ?? null, status: 'pending', decision: null, message: null,
         updatedPermissions: null, updatedInput: null, createdAt: Date.now(), resolvedAt: null };
       requests.set(input.id, request);
       return request;
@@ -67,5 +68,24 @@ describe('worker permission lifecycle', () => {
     expect(f.send).toHaveBeenCalledWith('s', expect.objectContaining({
       decision: 'allow_for_session', updatedInput: { answers: { choice: 'yes' } },
     }));
+  });
+  it('keeps the worker\'s own words, so a reader is not left guessing', async () => {
+    // The mode, the reason and the deadline are the worker's facts. A client
+    // that reads the ledger back can only show them if they were stored —
+    // none of the three is derivable from the tool name.
+    const f = fixture();
+    const expiresAt = Date.now() + 60_000;
+    await f.broker.request('s', 'r', {
+      id: 'p',
+      toolName: 'ExitPlanMode',
+      toolInput: { plan: 'do the thing' },
+      mode: 'exit_plan_mode',
+      reason: 'The plan is ready for approval',
+      expiresAt,
+    });
+    const stored = f.requests.get('p');
+    expect(stored?.mode).toBe('exit_plan_mode');
+    expect(stored?.reason).toBe('The plan is ready for approval');
+    expect(stored?.expiresAt).toBe(expiresAt);
   });
 });

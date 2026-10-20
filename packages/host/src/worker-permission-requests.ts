@@ -42,13 +42,19 @@ export class WorkerPermissionRequests implements HostPermissionRequestApiV1 {
     const input = request.toolInput;
     const toolInput = input !== null && typeof input === 'object' && !Array.isArray(input)
       ? input as Record<string, unknown> : {};
-    await this.records.createPermissionRequest({ id, sessionId, toolName, toolInput });
+    const expiresAt = typeof request.expiresAt === 'number' && Number.isFinite(request.expiresAt)
+      ? Math.min(request.expiresAt, Date.now() + 300_000) : Date.now() + 300_000;
+    // The worker's own words, kept. `mode` says which question is being
+    // asked, `reason` says why — neither is derivable from the tool name,
+    // and a client that reconstructs them is guessing. A client that reads
+    // the ledger back has to show what the worker actually said.
+    const mode = typeof request.mode === 'string' ? request.mode : null;
+    const reason = typeof request.reason === 'string' ? request.reason : null;
+    await this.records.createPermissionRequest({ id, sessionId, toolName, toolInput, mode, expiresAt, reason });
     if (!this.isLive(sessionId, runId)) {
       await this.records.resolvePermissionRequest(id, { status: 'aborted', decision: 'deny' });
       return;
     }
-    const expiresAt = typeof request.expiresAt === 'number' && Number.isFinite(request.expiresAt)
-      ? Math.min(request.expiresAt, Date.now() + 300_000) : Date.now() + 300_000;
     const timer = setTimeout(() => {
       void this.resolvePermissionRequest(id, { status: 'timeout', decision: 'deny' }).catch(() => {
         // Fail closed even if persistence is unavailable at the deadline.
