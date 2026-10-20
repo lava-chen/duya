@@ -15,6 +15,16 @@
 //   - none is UTF-16 (BOM'd or not) — the shape that produced the failure
 //     described in .gitattributes
 //   - no file that starts with a shebang has CRLF on that line
+//   - none carries mojibake
+//
+// Why mojibake is a separate rule and not a stronger UTF-8 check: mojibake
+// is BYTE-VALID UTF-8. When GBK-mojibake text is written back out, the
+// damaged pair (U+9225 followed by an ASCII `?`) is itself a well-formed
+// multi-byte sequence, so `isValidUtf8` returns true and every rule above
+// passes. A decode gate therefore cannot fail on this defect class no matter
+// how strict it gets — only a content inspection can. That is why the rules
+// below look at characters, not bytes. See `MOJIBAKE_RULES` for the
+// false-positive argument per rule.
 //
 // Usage:
 //   node scripts/check-text-encoding.mjs          # check (CI)
@@ -44,6 +54,69 @@ const UTF16BE_BOM = [0xfe, 0xff];
 
 function startsWith(bytes, sig) {
   return bytes.length >= sig.length && sig.every((b, i) => bytes[i] === b);
+}
+
+/**
+ * Mojibake signatures, each with the false-positive argument that earns it a
+ * place in the gate.
+ *
+ * Every literal below is written as a \u escape on purpose. Spelling the
+ * patterns out as real characters would put the very bytes this gate hunts
+ * for inside the gate, and the detector would eventually trip over its own
+ * source. Keeping this table pure ASCII makes that structurally impossible.
+ *
+ * The recurring hazard: several signatures are themselves valid CJK
+ * codepoints (U+9225 is an obscure ideograph; U+9539 is a component
+ * character). A naive blacklist of "these characters" would fire on any
+ * legitimately Chinese source file. The rules are therefore written to match
+ * the DAMAGED CONTEXT rather than the damaged character alone:
+ *
+ *   - CJK-range rules require an adjacent ASCII `?` or the full three-char
+ *     锟斤拷 token. Real Chinese text does not place a halfwidth `?`
+ *     directly against a CJK ideograph, and 锟斤拷 is not a word.
+ *   - Latin-1/CP1252 rules require a lead byte followed by the specific
+ *     sequence that only a double-decode produces.
+ *   - U+FFFD is the replacement character itself and is never authored.
+ *
+ * Deliberately NOT matched: a bare U+9225 / U+9539, or any generic
+ * "CJK ideograph followed by ?". Both are individually plausible in genuine
+ * Chinese prose, and a gate that cries wolf on real content gets deleted.
+ */
+const MOJIBAKE_RULES = [
+  // The replacement character. Only ever produced by a lossy decode.
+  { label: 'replacement-char', re: /\uFFFD/ },
+  // A UTF-8 BOM that was decoded as CP1252/Latin-1 somewhere upstream.
+  { label: 'bom-decoded-as-latin1', re: /\u00EF\u00BF\u00BD/ },
+  // UTF-8 bytes decoded as CP1252 twice: an em dash or curly quote. This
+  // subsumes the curly-quote variants, which share its first two characters,
+  // so they need no separate rule.
+  { label: 'cp1252-punctuation', re: /\u00E2\u20AC/ },
+  // UTF-8 bytes decoded as CP1252: a Latin-1 letter carrying a diacritic.
+  { label: 'cp1252-letter', re: /\u00C3[\u0080-\u00FF]/ },
+  // The GBK signature: an em dash (E2 80 94) read as GBK, where the third
+  // byte has no mapping and becomes `?`. Committed in
+  // packages/cli/src/chat.ts and printed by `duya chat`.
+  { label: 'gbk-em-dash', re: /\u9225\?/ },
+  // The canonical UTF-8-through-GBK replacement token.
+  { label: 'gbk-replacement', re: /\u9539\u65A4\u62C7/ },
+];
+
+/**
+ * Report every mojibake signature in `text`, with 1-based line numbers.
+ *
+ * @param {string} text Decoded file content.
+ * @returns {{ label: string, line: number, sample: string }[]}
+ */
+export function findMojibake(text) {
+  const findings = [];
+  for (const { label, re } of MOJIBAKE_RULES) {
+    const pattern = new RegExp(re.source, 'g');
+    for (const match of text.matchAll(pattern)) {
+      const line = text.slice(0, match.index).split('\n').length;
+      findings.push({ label, line, sample: match[0] });
+    }
+  }
+  return findings.sort((a, b) => a.line - b.line);
 }
 
 /** Strict UTF-8 decode; throws on any invalid sequence. */
@@ -87,6 +160,16 @@ function collectViolations() {
       violations.push({ file, reason: 'not-utf8' });
       continue;
     }
+    // Mojibake decodes cleanly, so it can only be caught by looking at the
+    // characters themselves. This runs on every BOM-less, valid-UTF-8 file.
+    const mojibake = findMojibake(new TextDecoder('utf-8').decode(bytes));
+    if (mojibake.length > 0) {
+      const lines = [...new Set(mojibake.map((m) => m.line))].join(', ');
+      const labels = [...new Set(mojibake.map((m) => m.label))].join(', ');
+      // `reason` stays stable so the baseline ratchet keys on a defect class,
+      // not on line numbers that any unrelated edit above would shift.
+      violations.push({ file, reason: 'mojibake', detail: `${labels} on line(s) ${lines}` });
+    }
     // A shebang terminated with CRLF. Node loads these fine (it strips the
     // shebang itself), but Vite/esbuild's transform removes only the `#!...`
     // text and leaves the trailing \r, which is an illegal token. The
@@ -127,14 +210,16 @@ if (newOnes.length > 0) {
   process.stderr.write(
     `check-text-encoding: ${newOnes.length} NEW encoding violation(s).\n`
     + 'Text content must be UTF-8 with no BOM. See .editorconfig.\n'
-    + newOnes.map((v) => `  ${v.file}  (${v.reason})`).join('\n')
-    + '\n',
+    + newOnes.map((v) => `  ${v.file}  (${v.reason}${v.detail ? `: ${v.detail}` : ''})`).join('\n')
+    + '\n'
+    + 'If the flagged bytes were already damaged on disk, fix the text; if they\n'
+    + 'were damaged in transit, fix the tool that produced them.\n',
   );
   process.exit(1);
 }
 
 if (known.length === 0) {
-  process.stdout.write('check-text-encoding: OK — every tracked text file is BOM-less UTF-8.\n');
+  process.stdout.write('check-text-encoding: OK — every tracked text file is BOM-less UTF-8 with no mojibake.\n');
 } else {
   process.stdout.write(`check-text-encoding: OK — no new violations (${known.length} known).\n`);
 }

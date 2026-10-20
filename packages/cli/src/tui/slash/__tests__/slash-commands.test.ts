@@ -312,6 +312,33 @@ describe('/effort', () => {
     expect(offered.map((choice) => choice.value)).toEqual(['auto', 'low', 'high']);
   });
 
+  it('takes the tiers from the provider catalog when the catalog knows them', async () => {
+    // The catalog carries the model's OWN ladder (MiniMax M3 answers to
+    // low/medium/high/max), which the override table does not have on a
+    // machine whose providers came from the configuration file.
+    const choose = vi.fn(async () => null);
+    const ctx = makeContext({
+      getProviderCatalog: vi.fn(async () => ({
+        providers: [
+          {
+            providerId: 'p1',
+            name: 'Provider One',
+            providerType: 'anthropic',
+            hasApiKey: true,
+            models: [
+              { modelId: 'gpt-x', reasoningEffortOptions: ['low', 'medium', 'high', 'max'] },
+            ],
+          },
+        ],
+        configRoot: '/tmp/duya-config',
+      })),
+      ...settings('medium'),
+    }, { choose });
+    await command('effort').run(ctx, '');
+    const offered = choose.mock.calls[0]?.[1] as readonly { value: string }[];
+    expect(offered.map((choice) => choice.value)).toEqual(['auto', 'low', 'medium', 'high', 'max']);
+  });
+
   it('marks the persisted level as the current row', async () => {
     const choose = vi.fn(async () => null);
     const ctx = makeContext({ ...capability(['low', 'high']), ...settings('high') }, { choose });
@@ -445,11 +472,40 @@ describe('/hotkeys', () => {
 });
 
 describe('/model', () => {
+  /**
+   * The catalog the Host reads from `~/.duya/config.toml`: every configured
+   * provider with the models it serves.
+   */
+  const catalog = {
+    providers: [
+      {
+        providerId: 'p1',
+        name: 'Provider One',
+        providerType: 'anthropic',
+        hasApiKey: true,
+        models: [
+          {
+            modelId: 'gpt-x',
+            contextWindow: 200_000,
+            supportsReasoning: true,
+            reasoningEffortOptions: ['low', 'medium', 'high'],
+          },
+          { modelId: 'gpt-xl', contextWindow: 1_000_000 },
+        ],
+      },
+      {
+        providerId: 'p2',
+        name: 'Provider Two',
+        providerType: 'openrouter',
+        hasApiKey: true,
+        models: [{ modelId: 'gpt-x', contextWindow: 500_000 }],
+      },
+    ],
+    configRoot: '/tmp/duya-config',
+  };
+
   const capabilities = {
-    listProviderModelCapabilities: vi.fn(async () => [
-      { providerId: 'p1', modelId: 'gpt-x', contextWindow: 200_000, source: 'user', updatedAt: 1 },
-      { providerId: 'p1', modelId: 'gpt-xl', contextWindow: 1_000_000, source: 'user', updatedAt: 1 },
-    ]),
+    getProviderCatalog: vi.fn(async () => catalog),
   };
 
   it('picks from the provider catalog and returns the new session', async () => {
@@ -459,13 +515,28 @@ describe('/model', () => {
     }));
     const ctx = makeContext(
       { ...capabilities, update },
-      { choose: async () => 'gpt-xl' },
+      { choose: async () => 'p1::gpt-xl' },
     );
     const outcome = await command('model').run(ctx, '');
     expect(update).toHaveBeenCalledTimes(1);
     expect(update.mock.calls[0]?.[2]).toEqual({ model: 'gpt-xl' });
     expect(outcome).toEqual({ kind: 'session_updated', session: { ...SESSION, model: 'gpt-xl' } });
     expect(ctx.notices.join('\n')).toContain('Model switched to gpt-xl');
+  });
+
+  it('switches provider and model together when the pick is another provider', async () => {
+    const update = vi.fn(async () => ({
+      updated: true as const,
+      session: { ...SESSION, providerId: 'p2', model: 'gpt-x' } as HostSessionRecord,
+    }));
+    const ctx = makeContext(
+      { ...capabilities, update },
+      { choose: async () => 'p2::gpt-x' },
+    );
+    const outcome = await command('model').run(ctx, '');
+    expect(update.mock.calls[0]?.[2]).toEqual({ model: 'gpt-x', providerId: 'p2' });
+    expect(outcome.kind).toBe('session_updated');
+    expect(ctx.notices.join('\n')).toContain('Provider changed too.');
   });
 
   it('lists the current model first, with its window and flags', async () => {
@@ -475,10 +546,16 @@ describe('/model', () => {
     const offered = choose.mock.calls[0]?.[1] as readonly { label: string; description?: string }[];
     // The session's model is gpt-x: first row, marked, with pi-style units.
     expect(offered[0]?.label).toBe('gpt-x');
+    expect(offered[0]?.description).toContain('Provider One');
     expect(offered[0]?.description).toContain('200k ctx');
     expect(offered[0]?.description).toContain('current');
+    expect(offered[0]?.description).toContain('low/medium/high');
     expect(offered[1]?.label).toBe('gpt-xl');
     expect(offered[1]?.description).toContain('1.0M ctx');
+    // The other provider's model of the same id is offered too, with its own
+    // provider named — that is the whole point of reading the catalog.
+    expect(offered[2]?.label).toBe('gpt-x');
+    expect(offered[2]?.description).toContain('Provider Two');
   });
 
   it('cancelling the picker changes nothing', async () => {
@@ -537,10 +614,32 @@ describe('/model', () => {
 
   it('explains an empty catalog instead of offering an empty picker', async () => {
     const ctx = makeContext({
-      listProviderModelCapabilities: async () => [],
+      getProviderCatalog: async () => ({ providers: [], configRoot: '/tmp/duya-config' }),
     });
     await command('model').run(ctx, '');
-    expect(ctx.errors.join('\n')).toContain('no models registered');
+    expect(ctx.errors.join('\n')).toContain('No models are configured');
+  });
+
+  it('names the configuration file when it cannot be read', async () => {
+    const ctx = makeContext({
+      getProviderCatalog: async () => ({
+        providers: [],
+        configRoot: '/tmp/duya-config',
+        error: 'No provider configuration found at /tmp/duya-config/config.toml.',
+      }),
+    });
+    await command('model').run(ctx, '');
+    expect(ctx.errors.join('\n')).toContain('/tmp/duya-config/config.toml');
+  });
+
+  it('switches by a provider-qualified name', async () => {
+    const update = vi.fn(async () => ({
+      updated: true as const,
+      session: { ...SESSION, providerId: 'p2', model: 'gpt-x' } as HostSessionRecord,
+    }));
+    const ctx = makeContext({ ...capabilities, update });
+    await command('model').run(ctx, 'p2/gpt-x');
+    expect(update.mock.calls[0]?.[2]).toEqual({ model: 'gpt-x', providerId: 'p2' });
   });
 });
 

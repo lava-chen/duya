@@ -119,6 +119,10 @@
       "types": "./dist/model-capabilities.d.ts",
       "import": "./dist/model-capabilities.js"
     },
+    "./provider-catalog": {
+      "types": "./dist/provider-catalog.d.ts",
+      "import": "./dist/provider-catalog.js"
+    },
     "./app-connections": {
       "types": "./dist/app-connections.d.ts",
       "import": "./dist/app-connections.js"

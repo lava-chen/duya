@@ -44,7 +44,7 @@ writeFileSync(contentFile, `<div class="${probes.join(' ')}"></div>`);
 // 解析受临时目录影响。
 writeFileSync(
   entryFile,
-  `@import ${JSON.stringify(join(ROOT, 'src', 'styles', 'globals.css').replace(/\\/g, '/'))};\n` +
+  `@import ${JSON.stringify(join(ROOT, 'packages', 'ui', 'src', 'styles', 'globals.css').replace(/\\/g, '/'))};\n` +
     `@source ${JSON.stringify(contentFile.replace(/\\/g, '/'))};\n`,
 );
 

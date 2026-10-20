@@ -86,7 +86,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Message, SSEEvent, ToolUseContext } from '@duya/host/worker-run-contracts';
 import type { WorkerSession } from '@duya/host/worker-session-runtime';
-import { makeWorkerSession } from './engine-turn-harness.js';
 
 /** Ledger temp dirs, removed after each test so a failing run leaves nothing. */
 const tempDirs: string[] = [];
@@ -226,7 +225,31 @@ vi.mock('@duya/ai', async (importOriginal) => {
   return { ...actual, createAIClient: () => delegating, createAIClientWithRetry: () => delegating };
 });
 
+/**
+ * The 'message' listeners already attached to this process BEFORE any duya
+ * module is imported -- i.e. the Vitest pool worker's own IPC listeners.
+ *
+ * Captured HERE, above every dynamic import below, and that ordering is
+ * load-bearing rather than stylistic. `worker-db-client` runs `initDbClient()`
+ * on MODULE LOAD (`worker-db-client.ts:1158`), and that one-shot latch
+ * (`:131`) means the listener is attached by the first import that reaches it
+ * -- never by a later explicit call. `engine-turn-harness` reaches it
+ * transitively (`engine-turn-harness.ts:67` -> `worker-tools/assembly` ->
+ * `assembly.ts:1` `worker-session-runtime` -> `worker-db-client`), so while
+ * this file imported the harness with a STATIC import the snapshot below ran
+ * after the db listener had already attached and swallowed it. The subtraction
+ * then found nothing and `installFakeDbIpc` threw "db-client registered no
+ * message listener" for both engine-arm tests.
+ *
+ * So the harness is imported dynamically HERE, below the snapshot, and the
+ * sibling `turn-loop-product-behavior.test.ts` already orders it exactly this
+ * way. The db-client's listener is indistinguishable from the pool's by name;
+ * it is reached by subtracting this set, and delivered to directly, because
+ * emitting a plain object on the pool's own channel makes that channel run
+ * `Buffer.from` on it and throw.
+ */
 const PRE_EXISTING = new Set(process.listeners('message'));
+const { makeWorkerSession } = await import('./engine-turn-harness.js');
 const { ToolRegistry } = await import('@duya/host/worker-tool-registry');
 const { initDbClient } = await import('@duya/host/worker-db-client');
 
@@ -236,6 +259,9 @@ let realSend: typeof process.send | undefined;
 
 function installFakeDbIpc(): void {
   if (!dbListener) {
+    // `initDbClient()` already ran on module load (see `PRE_EXISTING` above),
+    // so this call is an idempotent no-op that only GUARANTEES presence. The
+    // listener to keep is then the one absent from the pre-existing (pool) set.
     initDbClient();
     dbListener = (process
       .listeners('message')

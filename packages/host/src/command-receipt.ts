@@ -120,6 +120,23 @@ export interface CommandSenderFacts {
   readonly registeredSessionId: string | null;
   /** `DUYA_AGENT_ROLE` of the sending process, e.g. `chat` / `workflow-runtime`. */
   readonly role: string | null;
+  /**
+   * The attempt a transport correlated this sender with, when it did so.
+   *
+   * A transport that owns the run ledger may establish that the child that
+   * sent a request is the live worker of a specific session, run and attempt.
+   * That correlation is a fact about the TRANSPORT, so it travels beside the
+   * sender facts rather than inside the request body: a request body is owned
+   * by whoever sent it, and a sender that may state its own identity has no
+   * authority to do so.
+   *
+   * `undefined` when the transport made no such correlation.
+   */
+  readonly trustedAttempt?: {
+    readonly sessionId: string;
+    readonly runId: string;
+    readonly epoch: number;
+  };
 }
 
 /** Which roles this host lets speak Control Plane commands. */

@@ -209,6 +209,7 @@ import type {
   HostLocalProviderModelCapabilityApiV1,
   ProviderModelCapabilityRecord,
 } from '@duya/agent-protocol/model-capabilities';
+import type { HostProviderCatalog } from '@duya/agent-protocol/provider-catalog';
 import type {
   HostAppConnectionRecord,
   HostAppConnectionStatus,
@@ -1330,6 +1331,21 @@ export class HostSessionHttpClient implements
 
   async deleteModelCapability(modelName: string): Promise<{ readonly success: boolean }> {
     return this.request('POST', '/v1/local/model-capability/delete', { modelName });
+  }
+
+  /**
+   * The configured provider/model catalog.
+   *
+   * This is what the model picker reads: the configured providers and the
+   * models they serve. The capability table next to it holds OVERRIDES and is
+   * empty on most machines, so it cannot answer "which models can I pick".
+   */
+  async getProviderCatalog(): Promise<HostProviderCatalog> {
+    const result = await this.request<{ catalog: HostProviderCatalog }>(
+      'GET',
+      '/v1/local/provider-catalog',
+    );
+    return result.catalog;
   }
 
   async listProviderModelCapabilities(providerId: string): Promise<readonly ProviderModelCapabilityRecord[]> {
