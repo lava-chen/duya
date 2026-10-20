@@ -504,7 +504,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/plugin-app-instances.ts": {
-      "bytes": 2652,
+      "bytes": 2707,
       "imports": [],
       "format": "esm"
     },
@@ -955,7 +955,7 @@
       "format": "esm"
     },
     "packages/data/src/plugin-app-instance-store.ts": {
-      "bytes": 23754,
+      "bytes": 24396,
       "imports": [
         {
           "path": "node:buffer",
@@ -966,7 +966,7 @@
       "format": "esm"
     },
     "packages/data/src/plugin-app-grant-store.ts": {
-      "bytes": 10125,
+      "bytes": 10394,
       "imports": [
         {
           "path": "node:buffer",
@@ -25486,7 +25486,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/permissions/types.ts": {
-      "bytes": 13679,
+      "bytes": 14112,
       "imports": [],
       "format": "esm"
     },
@@ -25871,7 +25871,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/MCP/ports.ts": {
-      "bytes": 3336,
+      "bytes": 3863,
       "imports": [],
       "format": "esm"
     },
@@ -26030,7 +26030,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/MCP/MCPManager.ts": {
-      "bytes": 38917,
+      "bytes": 38933,
       "imports": [
         {
           "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js",
@@ -26129,7 +26129,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/AppServer/app-tool-namespace.ts": {
-      "bytes": 6066,
+      "bytes": 11238,
       "imports": [],
       "format": "esm"
     },
@@ -26966,7 +26966,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/AppServer/app-tool-context.ts": {
-      "bytes": 3472,
+      "bytes": 3385,
       "imports": [
         {
           "path": "node:async_hooks",
@@ -27627,7 +27627,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/authorization/permissions/permissions.ts": {
-      "bytes": 29560,
+      "bytes": 37118,
       "imports": [
         {
           "path": "packages/agent-runtime/src/authorization/permissions/types.ts",
@@ -27689,7 +27689,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/mcp-executor.ts": {
-      "bytes": 8043,
+      "bytes": 8707,
       "imports": [
         {
           "path": "packages/agent-runtime/src/authorization/permissions/permissions.ts",
@@ -27940,7 +27940,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/catalog/registry.ts": {
-      "bytes": 28421,
+      "bytes": 28429,
       "imports": [
         {
           "path": "packages/capabilities/src/BaseTool.ts",
@@ -34869,7 +34869,7 @@
       "format": "esm"
     },
     "packages/host/src/local-plugin-app-instance-api.ts": {
-      "bytes": 1668,
+      "bytes": 1716,
       "imports": [
         {
           "path": "node:crypto",
@@ -34885,7 +34885,7 @@
       "format": "esm"
     },
     "packages/host/src/plugin-app-instance-routes.ts": {
-      "bytes": 4241,
+      "bytes": 4330,
       "imports": [],
       "format": "esm"
     },
@@ -34912,7 +34912,7 @@
       "format": "esm"
     },
     "packages/plugin-core/src/apps/declarations.ts": {
-      "bytes": 5994,
+      "bytes": 6149,
       "imports": [
         {
           "path": "../../../node_modules/zod/index.js",
@@ -34923,7 +34923,7 @@
       "format": "esm"
     },
     "packages/host/src/local-plugin-app-grant-api.ts": {
-      "bytes": 4829,
+      "bytes": 4960,
       "imports": [
         {
           "path": "node:crypto",
@@ -34944,7 +34944,7 @@
       "format": "esm"
     },
     "packages/host/src/plugin-app-grant-routes.ts": {
-      "bytes": 3961,
+      "bytes": 4063,
       "imports": [
         {
           "path": "packages/host/src/local-plugin-app-grant-api.ts",
@@ -37052,7 +37052,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-run-contracts.ts": {
-      "bytes": 10125,
+      "bytes": 10133,
       "imports": [],
       "format": "esm"
     },
@@ -37618,7 +37618,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/authorization/permission-gate.ts": {
-      "bytes": 11680,
+      "bytes": 13154,
       "imports": [
         {
           "path": "packages/agent-runtime/src/authorization/invocation-decision.ts",
@@ -43148,7 +43148,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/research-api.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/agent-protocol/src/agent-dm.ts": {
           "bytesInOutput": 700
@@ -43271,10 +43271,10 @@
           "bytesInOutput": 115
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 34
+          "bytesInOutput": 21
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -43385,10 +43385,10 @@
           "bytesInOutput": 328
         },
         "packages/host/src/worker-logger.ts": {
-          "bytesInOutput": 4332
+          "bytesInOutput": 4315
         },
         "packages/capabilities/src/utils/urlSafety.ts": {
-          "bytesInOutput": 3576
+          "bytesInOutput": 3589
         },
         "../../../node_modules/@iarna/toml/lib/parser.js": {
           "bytesInOutput": 1902
@@ -44960,7 +44960,7 @@
           "bytesInOutput": 1949
         },
         "packages/capabilities/src/BrowserTool/ports.ts": {
-          "bytesInOutput": 227
+          "bytesInOutput": 240
         },
         "packages/capabilities/src/BrowserTool/stealth.ts": {
           "bytesInOutput": 7748
@@ -47567,7 +47567,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1005
+          "bytesInOutput": 1007
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -47954,7 +47954,7 @@
           "bytesInOutput": 2408
         },
         "packages/host/src/worker-context/attachment-context.ts": {
-          "bytesInOutput": 2269
+          "bytesInOutput": 2263
         },
         "packages/agent-runtime/src/adapters/run-engine-ports.ts": {
           "bytesInOutput": 3825
@@ -48164,7 +48164,7 @@
           "bytesInOutput": 7014
         },
         "packages/capabilities/src/AppServer/app-tool-namespace.ts": {
-          "bytesInOutput": 922
+          "bytesInOutput": 1164
         },
         "packages/capabilities/src/contracts/index.ts": {
           "bytesInOutput": 0
@@ -48302,13 +48302,13 @@
           "bytesInOutput": 25
         },
         "packages/agent-runtime/src/authorization/permissions/permissions.ts": {
-          "bytesInOutput": 8024
+          "bytesInOutput": 8263
         },
         "packages/agent-runtime/src/authorization/permissions/askWithoutUser.ts": {
           "bytesInOutput": 602
         },
         "packages/agent-runtime/src/tools/mcp-executor.ts": {
-          "bytesInOutput": 2215
+          "bytesInOutput": 2217
         },
         "packages/host/src/connector-services/apply.ts": {
           "bytesInOutput": 4007
@@ -48764,7 +48764,7 @@
           "bytesInOutput": 478
         },
         "packages/agent-runtime/src/authorization/permission-gate.ts": {
-          "bytesInOutput": 1733
+          "bytesInOutput": 1924
         },
         "packages/host/src/authorization/worker-permission-gate.ts": {
           "bytesInOutput": 684
@@ -49169,7 +49169,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 5524385
+      "bytes": 5525027
     }
   }
 }
