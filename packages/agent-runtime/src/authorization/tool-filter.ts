@@ -12,6 +12,7 @@
 
 import type { AgentProfile } from '@duya/agent-core';
 import type { ToolExposure } from '../tools/catalog/catalog-types.js';
+import { appToolOriginalName } from '@duya/capabilities/AppServer/app-tool-namespace';
 
 // ============================================================
 // Wildcard Matching
@@ -39,8 +40,22 @@ export function matchToolPattern(toolName: string, pattern: string): boolean {
   return false;
 }
 
+/**
+ * Does any pattern match this tool?
+ *
+ * The pattern is tried against the model-visible name first, then against
+ * the ORIGINAL name. The `duya_app` server's tools reach the model as
+ * `mcp_duya_app_canvas_manage`, but the profiles that describe them are
+ * written against `canvas_manage` — a profile saying `canvas:*` must keep
+ * meaning the canvas tools after they move behind the namespace, and a
+ * namespace that quietly defeated the profile rules would be a hole in
+ * the permission model rather than a naming detail.
+ */
 function anyPatternMatches(toolName: string, patterns: string[]): boolean {
-  return patterns.some((p) => matchToolPattern(toolName, p));
+  if (patterns.some((p) => matchToolPattern(toolName, p))) return true;
+  const original = appToolOriginalName(toolName);
+  if (original === toolName) return false;
+  return patterns.some((p) => matchToolPattern(original, p));
 }
 
 // ============================================================
@@ -80,7 +95,8 @@ export function isToolVisible(
   // Catalog wrappers are infrastructure. They remain available under a
   // profile allowlist; the catalog view independently filters every target.
   const isCatalogRouter = toolName === 'tool_catalog' || toolName === 'tool_invoke';
-  if (c.disabledTools?.includes(toolName)) return false;
+  const originalName = appToolOriginalName(toolName);
+  if (c.disabledTools?.includes(toolName) || c.disabledTools?.includes(originalName)) return false;
   if (c.profileDisallowedPatterns?.length && anyPatternMatches(toolName, c.profileDisallowedPatterns)) return false;
   if (isCatalogRouter) return true;
 
@@ -99,7 +115,9 @@ export function isToolVisible(
   if (exposure === 'deferred') {
     const promoted =
       c.allowedTools?.includes(toolName) === true ||
-      c.profileAllowedPatterns?.includes(toolName) === true;
+      c.allowedTools?.includes(originalName) === true ||
+      c.profileAllowedPatterns?.includes(toolName) === true ||
+      c.profileAllowedPatterns?.includes(originalName) === true;
     if (!discovered.has(toolName) && !promoted) {
       return false;
     }
@@ -107,7 +125,7 @@ export function isToolVisible(
   // Eager tools are declared on every request and pass through to constraints.
 
   // 2. Allowlist (caller exact + profile wildcard)
-  if (c.allowedTools?.length && !c.allowedTools.includes(toolName)) return false;
+  if (c.allowedTools?.length && !c.allowedTools.includes(toolName) && !c.allowedTools.includes(originalName)) return false;
   if (c.profileAllowedPatterns?.length && !anyPatternMatches(toolName, c.profileAllowedPatterns)) return false;
 
   return true;

@@ -40,6 +40,7 @@ import { RunSession } from '@duya/client-core';
 import { TurnQueue, type TurnOutcome } from './tui/turn-queue.js';
 import { createFileCompletionSource } from './tui/candidates.js';
 import { captureConsoleToFile } from './tui/console-capture.js';
+import { OwnedSessions } from './owned-sessions.js';
 import { normalizeEffort } from './tui/theme.js';
 import {
   DEFAULT_TUI_PREFERENCES,
@@ -382,8 +383,9 @@ export async function chatInteractive(
   client: HostSessionHttpClient,
   sessionId: SessionId,
   options: ChatCommandOptions,
+  owned?: OwnedSessions,
 ): Promise<number> {
-  if (shouldUseTui()) return chatTui(client, sessionId, options);
+  if (shouldUseTui()) return chatTui(client, sessionId, options, owned);
 
   write(`${DIM}session ${sessionId} —type a message, /exit to quit${RESET}`);
   const rl = readline.createInterface({
@@ -393,6 +395,8 @@ export async function chatInteractive(
   });
   let interrupt: (() => void) | null = null;
   let stopping = false;
+  /** Runs still streaming; a live run owns the session and may still write to it. */
+  let activeRuns = 0;
   rl.on('SIGINT', () => {
     if (interrupt !== null) {
       interrupt();
@@ -417,6 +421,7 @@ export async function chatInteractive(
       }
       interrupt = null;
       void (async () => {
+        activeRuns += 1;
         try {
           const start = await client.startAgentRun({
             sessionId,
@@ -429,6 +434,10 @@ export async function chatInteractive(
           if (!start.accepted) {
             write(`${RED}run refused: ${start.stage} —${start.reason ?? ''}${RESET}`);
           } else {
+            // See the TUI path: a session a turn was started on is never
+            // deleted, because the worker is the one that writes the user's
+            // message into the timeline.
+            owned?.markUsed(sessionId);
             const terminal = await driveRun(client, start.runId, (cancel) => {
               interrupt = cancel;
             });
@@ -437,6 +446,7 @@ export async function chatInteractive(
         } catch (error) {
           write(`${RED}error: ${error instanceof Error ? error.message : String(error)}${RESET}`);
         } finally {
+          activeRuns -= 1;
           interrupt = null;
           if (!stopping) rl.prompt();
         }
@@ -444,6 +454,10 @@ export async function chatInteractive(
     });
     rl.on('close', resolve);
   });
+  // A run that is still streaming owns the session: the worker may be about to
+  // persist the user's message into it. Leave the row alone until it settles
+  // — a session deleted under a live run loses the turn it was given.
+  if (activeRuns === 0) await owned?.releaseEmpty(client);
   write(`${DIM}goodbye —session ${sessionId}${RESET}`);
   return 0;
 }
@@ -467,6 +481,25 @@ export async function createChatSession(
   });
 }
 
+/**
+ * The sessions of this workspace that are worth resuming.
+ *
+ * A session with an empty timeline is skipped. Those are the rows a chat
+ * surface leaves behind when it is opened and closed without a message: the
+ * Host session has to exist before a run can belong to it, so the surface
+ * creates one up front and the row survives the exit. Offering those in the
+ * resume picker is offering a conversation that has none — and there is one
+ * of them for every chat that was opened and closed, so the list fills up
+ * with ghosts the user cannot tell apart from real sessions.
+ *
+ * The row itself is cleaned up by `OwnedSessions` when the surface that
+ * created it closes; this filter is what keeps the already-existing ghosts
+ * out of the list.
+ */
+function isResumable(item: HostSessionListItem): boolean {
+  return item.timelineCount > 0;
+}
+
 async function listWorkspaceSessions(
   client: HostSessionHttpClient,
   current: HostSessionRecord,
@@ -482,7 +515,7 @@ async function listWorkspaceSessions(
       includeDeleted: false,
       ...(cursor === undefined ? {} : { cursor }),
     });
-    sessions.push(...page.sessions);
+    sessions.push(...page.sessions.filter(isResumable));
     cursor = page.nextCursor ?? undefined;
   } while (cursor !== undefined);
   return sessions;
@@ -583,6 +616,7 @@ export async function chatTui(
   client: HostSessionHttpClient,
   sessionId: SessionId,
   options: ChatCommandOptions,
+  owned?: OwnedSessions,
 ): Promise<number> {
   let savedPreferences = DEFAULT_TUI_PREFERENCES;
   try {
@@ -800,6 +834,11 @@ export async function chatTui(
       } finally {
         await queue.whenIdle();
         await Promise.all([...pendingCancellations.values()]);
+        // The queue is idle and every cancellation has settled, so no run can
+        // still write to the session: whatever it holds now is final. A
+        // session this surface created and never used is a ghost, and this is
+        // the last moment where deleting it cannot race a turn.
+        await owned?.releaseEmpty(client);
         finish();
       }
     })();
@@ -847,6 +886,9 @@ export async function chatTui(
     }
     const previousModel = activeSession.model;
     activeSession = await createChatSession(client, options);
+    // This surface created it, so this surface cleans it up: a `/new` that
+    // is never typed into is a ghost of the same kind as the opening one.
+    owned?.own(activeSession.id);
     await resyncEffortForModelChange(previousModel);
     sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
     tui.clearTranscript();
@@ -939,6 +981,11 @@ export async function chatTui(
       void pollPendingPermissions();
       permissionPollTimer = setInterval(() => { void pollPendingPermissions(); }, 1000);
       permissionPollTimer.unref?.();
+      // A turn was started on this session, so it is no longer a session
+      // this surface may delete: the worker writes the user's message into
+      // the timeline, and a turn cancelled before that leaves the session
+      // empty even though the user typed something.
+      owned?.markUsed(runSessionId);
       // Interrupt/exit may arrive while the start request is still in flight.
       if (cancellationRequested || finished) {
         await requestRemoteCancellation(start.runId, 'chat interrupted during startup');
@@ -1171,6 +1218,7 @@ export async function runChatCommand(options: ChatCommandOptions): Promise<numbe
   }
 
   let sessionId: SessionId;
+  const owned = new OwnedSessions();
   if (options.session !== undefined && options.session.trim().length > 0) {
     sessionId = options.session.trim() as SessionId;
     const existing = await client.readLocalSession(sessionId, { includeAllSessions: true });
@@ -1181,10 +1229,17 @@ export async function runChatCommand(options: ChatCommandOptions): Promise<numbe
   } else {
     const created = await createChatSession(client, options);
     sessionId = created.id;
+    owned.own(created.id);
   }
 
   if (options.print !== undefined) {
-    return chatOnce(client, sessionId, options.print, options);
+    try {
+      return await chatOnce(client, sessionId, options.print, options);
+    } finally {
+      // A refused run leaves the session empty; a completed one has the
+      // prompt in it. Either way the check is the same.
+      await owned.releaseEmpty(client);
+    }
   }
-  return chatInteractive(client, sessionId, options);
+  return chatInteractive(client, sessionId, options, owned);
 }

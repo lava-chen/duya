@@ -4,10 +4,6 @@
 > **归属**：独立计划（与 [610 架构收口系列](./610-architecture-series/README.md) 正交）
 > **前置**：[580 MCP 能力核收敛](./580-mcp-capability-core-convergence.md)（catalog/exposure/tool_invoke 机制）、[452 MCP Direct 暴露](./452-mcp-direct-and-plugin-unification.md)（暴露开关）
 > **用户决策**（2026-10-19）：canvas 系列 + bot 系列 + browser 系列工具，从常规注册工具改为 **内置 MCP server `duya_app`** 的工具；只保留基础工具在常规工具集。
-> **加强版**：[618 桌面端管理控制面](./618-duya-desktop-management-layer.md)（2026-10-20 立项）——
-> 本计划收的是「**产品能力**」；**「桌面外壳」**（侧边栏分组 / 面板视图 / 会话生命周期 /
-> 目录授权）由 618 补齐，走同一套进程内 MCP 管道。**本计划的分期表不重开**，
-> 618 以 T610b（ALS 管道）+ T610e（`source:'app'`）为硬前置。
 
 ## 0. 一句话
 
@@ -110,6 +106,32 @@ browser / computer_use / vision / image_generate / widget / module / duya_cli �
 `name` / `input` / `result` / `metadata`；`mcpInfo` 不进 renderer 载荷
 （`packages/host/src/worker-session-runtime.ts:2050` 只在 worker 内部用）。
 → 路由匹配不能依赖 `mcpInfo`，得靠一个**可从工具名反解**的稳定标识。
+
+**C7b — 但模型可见名是【可逆】的，这解掉了 C2–C5 的全部匹配问题。**（2026-10-20 实测）
+
+用生产分配器 `computeProviderName` 实测，`duya_app` 的工具名是**纯前缀拼接**、无截断无
+哈希无去重后缀：
+
+```
+canvas_manage  => mcp_duya_app_canvas_manage
+send_message   => mcp_duya_app_send_message
+browser        => mcp_duya_app_browser
+computer_cua   => mcp_duya_app_computer_cua
+manage_routine => mcp_duya_app_manage_routine
+```
+
+（`duya_app` 的 scoped server name 无 `:`，不触发 `plugin:` 命名空间分支；工具名本身不含
+`__`，不触发 `__2` 去重后缀；`mcp_duya_app_` 前缀 13 字符 + 最长工具名，远低于 64 上限，
+不触发哈希截断。）
+
+**因此 C2–C5 有一个统一解法**：加一个纯函数
+`resolveAppToolBaseName(modelVisibleName): string | undefined`
+——命中 `mcp_duya_app_` 前缀就剥掉返回原名，否则返回 `undefined`。renderer 路由、
+profile allow/deny 匹配、`isCanvasTool` 权限短路三处**共用这一个函数**，而不是各写一遍
+前缀判断。
+
+**这个函数必须放在 `packages/capabilities`（或更低的共享包）**：renderer（`apps/desktop`）
+与权限（`packages/agent-runtime`）都要用，而 `apps/desktop` 不依赖 `packages/agent-runtime`。
 
 **C8 — 上下文穿透：AsyncLocalStorage 可行，且优于 `_meta` 走私。**（2026-10-19 实测）
 
@@ -237,14 +259,112 @@ if (source) {
 | 卡 | 交付 | 独占路径 | 首个失败证据 |
 |---|---|---|---|
 | **T610a** ✅ | `duya_app` 进程内 MCP server 骨架：`MCPManager` 支持 `transport: 'in-process'`，`duya_app` server 起来、`tools/list` 返回工具、连接成功 | `packages/capabilities/src/MCP/**`、`packages/capabilities/src/AppServer/**` | `packages/capabilities/tests/mcp/in-process-app-server.test.ts`：「in-process transport 能 connect 并列出工具」— 今天 `MCPServerConfig.transport` 只有 `'stdio' \| 'streamable-http'`，编译期即红 |
-| **T610b** | 上下文穿透管道：ALS 承载活 `ToolUseContext`；`duya_app` 工具能读到 `ipcRequest` / `sessionId`，并发调用不串 | `packages/capabilities/src/AppServer/**`、`packages/capabilities/src/MCP/MCPManager.ts` | `packages/capabilities/tests/mcp/in-process-app-context.test.ts`：「canvas 风格工具在 server 侧能拿到 ipcRequest 函数」+「5 个并发调用各自拿到自己的 context」— 今天无任何通道 |
+| **T610b** ✅ | 上下文穿透管道：ALS 承载活 `ToolUseContext`；`duya_app` 工具能读到 `ipcRequest` / `sessionId`，并发调用不串 | `packages/capabilities/src/AppServer/**`、`packages/capabilities/src/MCP/MCPManager.ts`、`packages/agent-runtime/src/tools/mcp-executor.ts` | `packages/capabilities/tests/mcp/in-process-app-context.test.ts`：「canvas 风格工具在 server 侧能拿到 ipcRequest 函数」+「5 个并发调用各自拿到自己的 context」— 今天无任何通道 |
+| **T610n** ✅ | `duya_app` 工具命名空间：从模型可见名反解原名的**共享纯函数**（C7b）——renderer 路由 / profile 规则 / 权限短路三处共用一个判定，不各写一遍前缀判断 | `packages/capabilities/src/AppServer/app-tool-namespace.ts` | `packages/capabilities/tests/mcp/app-tool-namespace.test.ts`：「`mcp_duya_app_canvas_manage` 反解回 `canvas_manage`」+「用户自建 server `duya_app_lit` 的同名族不被误认」 |
 | **T610c** | canvas 16 工具迁入 `duya_app`（从 conductor mode 注入改为 MCP 工具），**保留 canvas 专属渲染** | `packages/capabilities/src/canvas/**`、`packages/host/src/worker-modes/modifiers/conductor-mode.ts`、`apps/desktop/src/renderer/components/chat/tools/**` | renderer：旧名 `canvas_manage` 走 CanvasConductorToolRow、新名 `mcp_duya_app_canvas_manage` 也走同一行；今天只有旧名路径 |
 | **T610d** | bot 8 工具 + browser 迁入 `duya_app` | `packages/host/src/worker-tool-bindings/**`、`packages/host/src/worker-tools/**`、`packages/capabilities/src/BrowserTool/**` | registry 快照断言：bot/browser 工具的 owner 是 `mcp` 且内部键前缀是 `mcp__duya_app__` |
 | **T610d2** | §3.1 的其余 17 个产品能力迁入 `duya_app`（computer_use/cua、vision、image_generate、widget、module、duya_cli、session、MessageSession、SessionSearch、Brief、memory_write、write_stage1_policy、plan、update_state、send_artifact） | 同 T610d | 同 T610d；断言「基础工具清单之外的注册工具全部落在 `mcp__duya_app__` 前缀下」 |
-| **T610e** | 权限 / profile 规则改用**反解后的原名**匹配（C2–C5 收口）+ 新增 `source: 'app'` 分支（C9） | `packages/agent-runtime/src/authorization/**`、`packages/capabilities/src/permissions/**`、`packages/host/src/worker-profiles/types.ts` | profile 规则 `'canvas:*'` 在新名下仍能 deny；`isCanvasTool` 对新名仍返回 true；`source: 'app'` 不短路灾难检查 |
+| **T610e** | 权限 / profile 规则改用**反解后的原名**匹配（C2–C5 收口）+ 新增 `source: 'app'` 分支（C9）。**权限层那半已交付**（§4.4：`isCanvasTool` / always-allowed / 精确规则 / profile pattern 都按原名匹配）；剩 `source: 'app'` 与 renderer 那半 | `packages/agent-runtime/src/authorization/**`、`packages/capabilities/src/permissions/**`、`packages/host/src/worker-profiles/types.ts` | profile 规则 `'canvas:*'` 在新名下仍能 deny；`isCanvasTool` 对新名仍返回 true；`source: 'app'` 不短路灾难检查 |
 
 **C2–C5 必须落在 T610c/e，不能拖到最后**——否则 T610c 一改名，renderer 和权限立刻回归，
 中间态比改造前更糟。
+
+### 4.1 T610b 交付记录（2026-10-20）
+
+**生产改动**（3 个文件，~120 行）：
+
+| 文件 | 改动 |
+|---|---|
+| `packages/capabilities/src/AppServer/app-tool-context.ts` | 新建。ALS 存取对：`withAppToolContext(value, fn)` / `currentAppToolContext<T>()`。**按引用存，不拷贝**——canvas 工具会原地改写 context（`context.canvasTarget = {}`），拷贝会静默丢这些改动；并发隔离由 ALS 自身提供，不靠拷贝 |
+| `packages/capabilities/src/AppServer/in-process-app-server.ts` | 加 `tools/call` 处理器：查表 → 读 ALS context → 执行 capability 工具 → 回 MCP 结果。工具定义从「只广告」升级为「可执行」（`AppServerTool.execute`） |
+| `packages/agent-runtime/src/tools/mcp-executor.ts` | **生产接线点**：`invoke(input)` 被包进 `withAppToolContext(context, …)`。选这里是因为**每一次 MCP 工具调用都经过这个 executor**——eager 直调与 deferred（`tool_invoke` → dispatcher → executor）两条路都覆盖到，且只有一处。（合入 master 后 master 新增了 `guardedInvoke`——调用前的授权复核——ALS 包装因此落在 `guardedInvoke` **内部**：`beforeInvoke` 是宿主侧的授权检查，发生在工具存在之前，不该看到工具的 ambient context） |
+| `packages/capabilities/src/MCP/MCPManager.ts` | `MCPClient.callTool` 重建 `ToolResult` 时补回 `result.metadata`（见下 C10） |
+
+**测试**（8 用例，跨两个包）：
+- `packages/capabilities/tests/mcp/in-process-app-context.test.ts`（6）：机制层——server 侧读到活 context / 5 个并发调用各自隔离 / 无 context 时优雅降级 / 穿过 `await` 不丢 / app server 真的执行 capability 工具 / metadata 往返保真。
+- `packages/agent-runtime/test/tools/execution/mcp-executor-app-context.test.ts`（2）：**生产接线层**——经由真正的 `createMCPToolExecutor` 建立的 scope 能被 server 侧读到，且并发不串。
+
+### 4.2 T610b 的两个实测结论
+
+**C10 — `ToolResult.metadata` 原本不穿 MCP 往返（已修）。**
+
+`MCPClient.callTool` 从 MCP 结果重建 `ToolResult` 时，只搬了 `content` / `structuredContent`，
+**丢掉了 `metadata`**。而 renderer 的富行（browser 的 `browserResults`、CUA 的 `cuaApp`、
+vision 预览）正是从 `tool.metadata` 读的——**任何工具迁进 `duya_app` 都会掉渲染**。
+
+实测：MCP 结果 schema 是宽松的（`metadata` 能过线），所以**丢的是重建那一步，不是协议**。
+修法：`MCPClient.callTool` 重建时把 `result.metadata` 抄回 `ToolResult.metadata`。
+
+**C11 — `duya_app` 的工具结果不能只回文本。**
+
+capability 工具的 `ToolResult` 有 `result`（文本）/ `metadata` / `structured` / `error` 四个面。
+app server 的 `tools/call` 必须逐个映射，不能只回 `content[].text`：
+`metadata` → 结果的 `metadata`（配合 C10 的修法往返保真）、`structured` → `structuredContent`、
+`error` → `isError`。
+
+### 4.3 T610n 交付记录（2026-10-20）
+
+**生产改动**（1 个文件，~110 行）：
+
+| 文件 | 改动 |
+|---|---|
+| `packages/capabilities/src/AppServer/app-tool-namespace.ts` | 新建。`DUYA_APP_SERVER_NAME` / `DUYA_APP_TOOL_PREFIX`（`mcp_duya_app_`）/ `DUYA_APP_TOOL_NAMES`（42 条封闭清单）/ `resolveAppToolBaseName(modelVisibleName): string \| undefined` / `isAppToolName(name)` |
+
+**测试**（`packages/capabilities/tests/mcp/app-tool-namespace.test.ts`，5 用例）：前缀反解 → 非
+`duya_app` 名返回 `undefined` → **`duya_app_lit` 这类用户自建 server 不被误认**（前缀相同但
+base name 不在封闭清单里）→ 清单内 42 个名字逐个可反解 → 边界（`mcp_duya_app_` 本身不命中）。
+
+**C12 — 为什么判定用「封闭清单」而不是「只看前缀」。**
+前缀 `mcp_duya_app_` 本身是**歧义**的：用户自建的 MCP server 叫 `duya_app_lit` 时，它的工具
+同样以 `mcp_duya_app_lit_` 开头，也就同样以 `mcp_duya_app_` 开头。只看前缀会把外部工具
+误认成我们的 app 工具——而这个误认的后果是**权限短路**（`isCanvasTool` 命中就无条件放行）。
+所以判定必须落在**我们自己服务的那批工具名**上。
+
+**C13 — 42 条清单对着实际注册面逐条核过。**
+清单不是照抄 plan §3 的表格，而是对着真实注册面核出来的：canvas 16 = `packages/capabilities/src/canvas/`
+的 16 个 `TOOL_NAME`（含 `database_manage`——`isCanvasTool` 把它算作 canvas 家族）；bot 8 =
+`agent-management-tool.ts` / `AppConnectorManageTool` / `SendMessageTool` 等的 `*_TOOL_NAME`
+常量；其余 17 = `packages/host/src/worker-tools/builtin.ts:64-139` 的实际注册面。
+**注意 `send_message` 是小写**（`SEND_MESSAGE_TOOL_NAME`），而 `BOT_TOOLSET` 里那个
+`SendMessage` 是另一个更早的名字——按注册面写，不按记忆写。
+
+**未做**（留给后续卡，按设计如此）：本卡只交付**判定的共享面**。谁调用它——renderer 路由
+（T610c）、profile 规则与权限短路（T610e）——留给那些卡。
+
+### 4.4 权限层按原名匹配（2026-10-20，C3–C5 的前半）
+
+`resolveAppToolBaseName` 的第一个消费者：**权限层与 profile 规则**改成按**原名**匹配，
+而不是按模型可见名。
+
+| 文件 | 改动 |
+|---|---|
+| `packages/capabilities/src/AppServer/app-tool-namespace.ts` | 加 `appToolOriginalName(name)`：是 app 工具就返回原名，不是就返回自己。调用方可以无条件用它 |
+| `packages/agent-runtime/src/authorization/permissions/permissions.ts` | `isCanvasTool` 先反解（canvas 的无条件 allow 才不失效）；`GLOBAL_ALWAYS_ALLOWED_TOOLS` 先反解；`toolMatchesRule` 按原名比对精确规则 |
+| `packages/agent-runtime/src/authorization/tool-filter.ts` | `anyPatternMatches` 先按可见名、再按原名匹配通配 pattern；deferred 工具的「精确名提升」与 allowlist 门也认原名 |
+
+**为什么这一步不能等**：命名空间如果只在渲染层被认出来、权限层不认，那它就不是命名，
+是**绕过**——一条写给 `canvas_manage` 的 deny 规则会在工具搬到 `mcp_duya_app_` 后面
+的那一刻失效。所以反解必须先于任何工具迁移落地。
+
+**C14 — profile 里写的 `'canvas:*'` 今天就是个 no-op。**
+`matchToolPattern` 的 `:*` 分支取前缀 `canvas:`，而画布工具的真名是 `canvas_manage`
+（下划线）。`'canvas:*'` 既不匹配旧名也不匹配新名——**今天如此，改名之后也如此**。
+这不是本次改动引入的，但它意味着 plan §C3 举的那个例子并不成立；真正生效的是
+`'canvas_*'` 这类 pattern，以及按原名写的精确规则。**记在这里，是为了让 T610e 改
+profile 规则时不要以为 `'canvas:*'` 今天在生效。**
+
+**C15 — `'SendMessage'` 与 wire name `'send_message'` 大小写不一致，这条放行今天就失效。**
+`GLOBAL_ALWAYS_ALLOWED_TOOLS` 写的是 `'SendMessage'`，实际注册名是 `send_message`
+（`SEND_MESSAGE_TOOL_NAME`），`LEGACY_TOOL_NAME_ALIASES` 也没有这一条映射。
+本次改动**不动它**：反解只让「原名在集合里」的工具继续放行，`'SendMessage'` 与
+`'send_message'` 大小写不同这件事和命名空间无关，是既有的独立缺陷。修它等于给一个
+能对外发消息的工具开 unconditional allow，属于要单独裁定的权限变更，不该顺手带上。
+
+**测试**（`packages/agent-runtime/test/authorization/app-tool-rule-resolution.test.ts`，
+11 用例）：画布短路在命名空间名下仍然 allow / always-allowed 集合仍然 allow / 精确 deny
+规则按原名仍然 deny / 画布短路仍然**先于**用户规则（既有次序没被挪动）/ profile 的
+`canvas_manage` 与 `canvas_*` 通配对新名生效 / deferred 工具按原名提升 / 调用方 denylist
+按原名生效 / 非 app 工具不受影响。
 
 ## 5. 验收证据（必须是正面的）
 
@@ -254,6 +374,10 @@ if (source) {
   这是 `applyMCPConfiguration` / `configSignature` 复用路径的回归面。
 - `packages/capabilities` 整包测试：615 用例中 3 红（`powershell-tool` / `shell-providers` /
   `vision-tool`）——**stash 基线对比确认是既有红，与本卡无关**（2026-10-20 实测）。
+- `npx vitest run packages/capabilities/tests/mcp/app-tool-namespace.test.ts` 全绿。
+  **T610n 已达成**（5 用例）。
+- `npm run bundle:verify` exit 0。**T610n 已达成**（2026-10-20 实测）——`packages/host/bundle/`
+  是入库的构建产物，架构门禁按 git 历史判定它是否 stale；改了它的输入就必须同卡重建并提交。
 - renderer：`apps/desktop/src/renderer/components/chat/tools/` 现有测试全绿 + 新增 canvas
   新名路由测试（T610c）。
 - **反向证明（必须做）**：把 T610c 的「反解原名」改回「直接用模型可见名」，renderer 与权限
@@ -295,8 +419,6 @@ if (source) {
 - 不在这一期做 Codex 式的 `AppToolPolicy` config layer 体系（`apps.toml` 的
   enabled/approval/omit_tools_from）。本期只做「分层 + 命名空间 + 暴露」；
   per-app 策略是后续增量。
-- **不覆盖「桌面外壳面」**——侧边栏分组、面板 / 视图、会话生命周期、目录授权属于
-  [618](./618-duya-desktop-management-layer.md) 的范围。本期只做产品能力。
 
 ## 7. 与既有计划的关系
 
@@ -308,7 +430,3 @@ if (source) {
   `duya_app` 走同一套 `[tools] exposure` 开关。
 - **与 580 的关系**：580 建的 catalog / exposure / tool_invoke / 稳定 tool_id 是本期的地基，
   本期不改 580 的任何机制形状。
-- **加强版是 [618](./618-duya-desktop-management-layer.md)**：本期收「产品能力面」，
-  618 收「桌面外壳面」。两期共用同一套进程内 MCP 机制、`source: 'app'` 权限分支与
-  deferred 暴露；**618 以本期的 T610b（ALS 管道）与 T610e（`source:'app'`）为硬前置**，
-  不得在本期分期表里另起炉灶。

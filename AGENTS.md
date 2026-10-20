@@ -17,7 +17,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
   Its contracts, phase gates, migration map, and handoff log supersede the
   archived 429/550/583–586 plans and the historical M/PP/C schedules.
 - For multi-step tasks: use `/plan` mode before writing code
-- Replies: repo-root refs only: `apps/desktop/src/renderer/components/chat/MessageList.tsx:45`. No absolute paths, no `~/`.
+- Replies: repo-root refs only: `packages/ui/src/components/chat/MessageList.tsx:45`. No absolute paths, no `~/`.
 - Missing deps: `npm install`, retry once, then report first actionable error.
 - **Baseline is not all green**: `npm test` currently fails (see the exec-plans
   baseline). Record the failure set before you start so you can tell your own
@@ -25,45 +25,51 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 
 ## Map
 
-- Frontend: `apps/desktop/src/renderer/` (Vite + React 19 + Zero Router)
-- Agent core (plan 587/610 cutover — the legacy `@duya/agent` is a shell):
-  - `packages/agent-runtime/` — `RunEngineImpl`, the run execution engine
+- Frontend: `packages/ui/src/` — the shared renderer (React 19). The Desktop
+  (`packages/ui/src/`) and the Web app (`apps/web/src/main.tsx`) both
+  mount it; the Desktop copy is a mount shell only. Routing is a `currentView`
+  string in a zustand store (`packages/ui/src/App.tsx:1122`), not Zero Router.
+- Harness core:
+  - `packages/agent-protocol/` — transport-neutral wire contract (zero runtime deps)
   - `packages/agent-core/` — run reasoning, zero IO
-  - `packages/agent-protocol/` — transport-neutral wire contract
-  - `packages/host/` — product worker: `WorkerSession` (the agent class),
-    concrete tool registry, `driveRunWithEngine` (the single turn driver)
-  - `packages/agent/` — legacy shell awaiting retirement; gate is still OPEN
-    (`node scripts/architecture/agent-retirement-gate.mjs --json`). See
-    `docs/exec-plans/active/610-architecture-series/13-agent-retirement-consumers.md`.
-  - All three protocol/core/runtime packages are `managed: true` (Gates):
-    zero tolerance, never baselined.
+  - `packages/agent-runtime/` — run execution engine (`RunEngineImpl`)
+  - `packages/host/` — product worker: run manifest, `RunOrchestrator`, worker
+    supervision, tool registry, DB bridge
+  - `packages/cli/` — CLI control plane + terminal TUI; also the worker bundle's
+    esbuild entry (`packages/cli/src/agent-worker-entry.ts`)
+  - `packages/agent/` — legacy shell, retirement OPEN
 - Desktop app: `apps/desktop/` (@duya/desktop, workspace package)
-  - `src/main/` — Electron main process (+ Gateway). The Agent Server is a
+  - `apps/desktop/src/main/` — Electron main process (+ Gateway). The Agent Server is a
     separate spawned child process, not in-process.
-  - `src/preload/` — context bridge
-  - `src/renderer/` — Vite + React 19 + Zero Router frontend
-- Other workspaces: `packages/{ai,cli,command-catalog,computer-use,conductor,connectors,data,gateway,host,input-completion,memory,plugin-core,sandbox,tooling,voice}/`
+  - `apps/desktop/src/preload/` — context bridge
+  - `apps/desktop/src/renderer/` — mount shell for the shared renderer
+- Web app: `apps/web/` — browser client over a loopback BFF to the standalone Host
+- Other packages: `packages/{ai,capabilities,client-core,command-catalog,computer-use,conductor,connectors,data,gateway,input-completion,memory,plugin-core,sandbox,tooling,voice}/`
+- **Which package to open for a symptom**:
+  [ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md). Every package also has
+  its own `packages/<pkg>/AGENTS.md` with responsibilities, key files, and
+  debug entry points.
 - Slash command definitions live in `packages/command-catalog/` only — the Desktop
-  composer (`apps/desktop/src/renderer/lib/commands/registry.ts`) and the CLI TUI
+  composer (`packages/ui/src/lib/commands/registry.ts`) and the CLI TUI
   (`packages/cli/src/tui/slash/registry.ts`) both project it. Add a command there
   plus a handler on the owning surface; never hand-copy a definition. Lookup is
   unfiltered by `surfaces` (only popups filter), array order is presentation
   order, and the package must stay in level 1 of `scripts/build-packages.mjs`.
   See [ARCHITECTURE.md § Slash Command Catalog](./ARCHITECTURE.md).
 - Build scripts: `scripts/` (esbuild configs)
-- Docs: `docs/{design-docs,exec-plans,generated,product-specs,references}/`
-- Scoped guides: `docs/exec-plans/README.md`, `docs/design-docs/core-beliefs.md`
+- Docs: `docs/{design-docs,exec-plans,product-specs,references}/`
+- Scoped guides: `docs/exec-plans/README.md`, `ARCHITECTURE_MAP.md`
 
 ## Code Review Workspace
 
-- Sidebar page: `apps/desktop/src/renderer/components/layout/panels/CodeReviewPanel.tsx`; register it
-  through `apps/desktop/src/renderer/components/layout/panels/registry.ts` and pass the session
-  working directory from `apps/desktop/src/renderer/components/layout/PanelZone.tsx`.
+- Sidebar page: `packages/ui/src/components/layout/panels/CodeReviewPanel.tsx`; register it
+  through `packages/ui/src/components/layout/panels/registry.ts` and pass the session
+  working directory from `packages/ui/src/components/layout/PanelZone.tsx`.
 - Scope is always `HEAD` to the current working tree. It is read-only: never
   add stage, commit, push, reset, or other mutating Git controls here.
 - Bridge contract: `git:review` lists porcelain status plus numstat totals;
   `git:review-diff` returns the selected patch. Keep renderer shapes in
-  `apps/desktop/src/renderer/lib/git-ipc.ts` synchronized with
+  `packages/ui/src/lib/git-ipc.ts` synchronized with
   `apps/desktop/src/preload/index.ts` and
   `apps/desktop/src/main/ipc/git-handlers.ts`.
 - Security boundary: accept only changed, project-relative paths; reject
@@ -75,11 +81,11 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
   the selected file through the existing chat attachment event.
 - Line comments (plan 572): the toolbar's 预览 toggle renders a single file
   via `code-review-code-viewer.tsx` (`@pierre/diffs`) where hover/click on
-  lines attaches comments. Comments live in `apps/desktop/src/renderer/lib/code-comment-store.ts`
+  lines attaches comments. Comments live in `packages/ui/src/lib/code-comment-store.ts`
   (bucketed per workspace); the composer strip reads the same store and
   injects pending ones as a `# Code comments:` block on send.
 - Verify parser behavior in
-  `apps/desktop/src/renderer/components/layout/panels/code-review-diff.test.ts`, bridge behavior in
+  `packages/ui/src/components/layout/panels/code-review-diff.test.ts`, bridge behavior in
   `apps/desktop/src/main/ipc/__tests__/git-handlers.test.ts`, then exercise the panel in a
   real Electron renderer; browser-only Vite cannot validate the preload path.
 
@@ -88,12 +94,12 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - **HTTP+SSE 三层分离**：Main Process ↔ Agent Server (HTTP+SSE) ↔ Worker Processes
 - **IPC**: IPC invoke/handle (`db:*`, `gateway:*`, `automation:*`, `logger:*`, etc.) + Agent Server HTTP endpoints
 - **MessagePort**: 仅用于 config/toolExec/toolStream 三通道，不含 agentControl
-- **Database**: SQLite via better-sqlite3. Default path: `~/.duya/duya-main.db` on all platforms; `DUYA_DATA_ROOT` overrides the default root; `duya-core.db` and `memory-state.db` are siblings. `storage.database_path` in `~/.duya/config.toml` remains an explicit override. `@duya/data` owns Electron-independent paths, safe legacy DB copying, the main database connection/schema lifecycle, `CoreDatabase`, `RunStore`, CoreDataStores, and the append-only MessageLog implementation. Desktop Main still owns the app-wide accessor, path validation, safe-mode policy, shutdown coordination, memory-state connection/schema, WorkflowRunStore, legacy import, and CoreStores composition pending Host extraction. The standalone chat CLI persists sessions and transcripts through Host APIs under the same root, and its run executor is `RunEngineImpl` in `@duya/agent-runtime`, driven from `@duya/host`.
-- **Agent worker** runs in an isolated child_process (fork, one per session). Built separately as workspace package.
+- **Database**: SQLite via better-sqlite3. Default path: `~/.duya/duya-main.db` on all platforms; `DUYA_DATA_ROOT` overrides the default root; `duya-core.db` and `memory-state.db` are siblings. `storage.database_path` in `~/.duya/config.toml` remains an explicit override. `@duya/data` owns Electron-independent paths, safe legacy DB copying, the main database connection/schema lifecycle, `CoreDatabase`, `RunStore`, CoreDataStores, and the append-only MessageLog implementation. Desktop Main still owns the app-wide accessor, path validation, safe-mode policy, shutdown coordination, memory-state connection/schema, WorkflowRunStore, legacy import, and CoreStores composition pending Host extraction. The standalone chat CLI persists sessions and transcripts through Host APIs under the same root, but its run executor still comes from the legacy `@duya/agent` package. Desktop also still starts the legacy Agent worker; process ownership and execution have not converged on Host yet.
+- **Agent core** runs in isolated child_process. Built separately as workspace package.
 - **Logging**: Structured logger (`apps/desktop/src/main/logging/logger.ts`), level `WARN` by default, console output only for WARN+. See [Logging](#logging).
 - esbuild does NOT type check. Always run `npm run typecheck:all` before committing.
 - After significant changes: update [ARCHITECTURE.md](./ARCHITECTURE.md).
-- **Mode architecture (plan 224)**: Popover "modes" (plan-task / research / conductor / goal) are declarative `ModeModifier` objects registered in `packages/agent/src/modes/index.ts`. Two paradigms: modifier (tools/prompt/hooks, composed via `applyModes`) and orchestrator (takes over stream). Orthogonal to `AgentProfile` (base toolset) and `PermissionMode` (auth). See [ARCHITECTURE.md § Profile/Mode/Permission](./ARCHITECTURE.md#profile--mode--permission-三层正交plan-224). New mode = 3 steps: write `<mode>-mode.ts` → `modeModifierRegistry.register()` → add popover item + `mode-id.ts` entry. No `DuyaAgent` / `builtin.ts` changes needed. Goal (plan 411) is a session-level mode with a 10-state `ModeTracker` + N-skeptic verification; Research (plan 423) is a session-level deep-research state machine (9-state `ResearchTracker` + `research_start`/`research_report`/`research_continue`/`research_fanout` tools + per-state tool gating + `research_updated` SSE card). Stateful modes declare `tracker` and register it on `modeTrackerEngine` (plan 413); the `ModeCoordinator` injects per-round continuation, persists snapshots, and gates tools by lifecycle state.
+- **Mode architecture (plan 224)**: Popover "modes" (plan-task / research / conductor / goal) are declarative `ModeModifier` objects registered in `packages/host/src/worker-modes/modifiers/index.ts`. Two paradigms: modifier (tools/prompt/hooks, composed via `applyModes`) and orchestrator (takes over stream). Orthogonal to `AgentProfile` (base toolset) and `PermissionMode` (auth). See [ARCHITECTURE.md § Profile/Mode/Permission](./ARCHITECTURE.md#profile--mode--permission-三层正交plan-224). New mode = 3 steps: write `<mode>-mode.ts` → `modeModifierRegistry.register()` → add popover item + `mode-id.ts` entry. No `DuyaAgent` / `builtin.ts` changes needed. Goal (plan 411) is a session-level mode with a 10-state `ModeTracker` + N-skeptic verification; Research (plan 423) is a session-level deep-research state machine (9-state `ResearchTracker` + `research_start`/`research_report`/`research_continue`/`research_fanout` tools + per-state tool gating + `research_updated` SSE card). Stateful modes declare `tracker` and register it on `modeTrackerEngine` (plan 413); the `ModeCoordinator` injects per-round continuation, persists snapshots, and gates tools by lifecycle state.
 
 ## Commands
 
@@ -105,9 +111,9 @@ npm run electron:dev           # Vite + Electron together
 # Build & Typecheck
 npm run build                  # Production build (Vite)
 npm run build:web             # Web frontend only
-npm run build:agent           # Build @duya/agent workspace (tsc)
-npm run bundle:agent          # Bundle Agent subprocess entry (esbuild)
-npm run electron:build         # Build Agent + bundle + Vite + Electron
+npm run build:packages        # Build all workspace packages in dependency order
+npm run bundle:agent          # Bundle the worker entry -> packages/host/bundle/worker-entry.js
+npm run electron:build         # Build worker + CLI + gateway bundles + Vite + Electron
 npm run typecheck:all         # Workspace checks + Electron error ratchet — MUST run before commit
 npm run -w @duya/desktop typecheck:main     # Raw main check; pre-existing backlog remains
 npm run -w @duya/desktop typecheck:renderer # renderer layer (same scope as typecheck:web)
@@ -123,34 +129,25 @@ npm run electron:pack:win     # Windows (.exe installer)
 npm run electron:pack:mac     # macOS (.dmg)
 npm run electron:pack:linux   # Linux (AppImage, .deb, .rpm)
 
-# Agent CLI (standalone) — the CHAT entry (REPL, -t, --print, --headless)
-npm run chat-cli [options]         # run the prebuilt bundle/cli-entry.js
-npm run chat-cli:build [options]   # = build:chat-cli && chat-cli (rebuild first)
-npm run chat-cli -- --print "..."  # extra flags pass through npm's `--`
-# ⚠ `chat-cli` runs a BUILD ARTIFACT. `packages/agent/bundle/` is gitignored
-#   (.gitignore), so a fresh clone or a new worktree has no `cli-entry.js` and
-#   `chat-cli` dies with MODULE_NOT_FOUND. Run `build:chat-cli` (or
-#   `chat-cli:build`) first there.
-#   -V, --version                  Output the version number
-#   -k, --api-key <key>            API key for LLM provider
-#   -m, --model <model>            Model to use
-#   -u, --base-url <url>           Base URL for API
-#   -p, --provider <provider>      LLM provider protocol: anthropic or openai
-#   -w, --workspace <dir>          Workspace directory
-#   -t, --task <task>              Execute task and exit (non-interactive mode)
-#   --print                        Print mode: single query and exit
-#   --headless                     Headless mode: read from script file
-#   --script <path>                Script file path for headless mode
-#   --continue [sessionId]         Continue a previous session (optional ID)
-#   --resume [sessionId]           Resume a session (alias for --continue)
-#   --summary-provider <provider>  Session-search summarizer: anthropic or openai
-#   --summary-api-key <key>        Summarizer API key
-#   --summary-model <model>        Summarizer model
-#   --summary-base-url <url>       Summarizer base URL
+# DUYA CLI (standalone) — the Host control plane
+npm run build:cli-dev           # build packages + worker bundle + CLI bundle
+npm run dev:tui                 # run the TUI (node packages/cli/bundle/cli.cjs tui)
+npm run build:cli-bundle        # -> packages/cli/bundle/cli.cjs (gitignored)
+# ⚠ `dev:tui` runs a BUILD ARTIFACT. `packages/cli/bundle/` is gitignored, so a
+#   fresh clone or a new worktree has no `cli.cjs` and it dies with
+#   MODULE_NOT_FOUND. Run `build:cli-dev` (or `build:cli-bundle`) first there.
 #
-# ⚠ `--print` / `--headless` do NOT go through commander: `cli/index.ts` scans
-# raw `process.argv` first and dispatches through a hand-rolled `parseCLIArgs`
-# that reads only `--model`, `--cwd`/`-c` and `--format`. Consequences:
+# Top-level commands (packages/cli/src/index.ts:46):
+#   serve   Start the local Duya Host service
+#   chat    Chat through a running Duya Host
+#   tui     Start an ephemeral Duya Host and open the TUI
+#   ...     status, plugins, sessions, crons, channels
+# The command registry is packages/cli/src/program/descriptors.ts; run
+# `duya <cmd> --help` for flags.
+#
+# ⚠ `--print` / `--headless` do NOT go through commander: the CLI scans raw
+#   `process.argv` first and dispatches through a hand-rolled parser that reads
+#   only `--model`, `--cwd`/`-c` and `--format`. Consequences:
 #   - `--format <text|json|markdown>` works there but is absent from `--help`.
 #   - `-k`, `-u`, `-p` and `-w` are silently DROPPED in those two modes
 #     (api key / base URL / provider fall back to env and `~/.duya/config.toml`).
@@ -158,28 +155,23 @@ npm run chat-cli -- --print "..."  # extra flags pass through npm's `--`
 #   Interactive mode is unaffected — it uses commander.
 ```
 
-### Why the chat CLI is a bundle and not `dist/`
+### Why the CLI is a bundle and not `dist/`
 
-`node packages/agent/dist/cli/index.js` does **not** run, for two independent
+`node packages/cli/dist/index.js` does **not** run, for two independent
 reasons. Each was found by fixing the first and watching the second appear:
 
 1. **Extensionless specifiers.** Node's ESM loader rejects them.
    `packages/plugin-core` is emitted under `module: ESNext` +
    `moduleResolution: bundler`, which permits and emits `./scope` rather than
-   `./scope.js`. Measured across all 11 workspace packages, plugin-core is the
-   only one that emits any — 41 specifiers across 44 files; the other ten,
-   `packages/agent` included, are on `NodeNext` and emit 0.
-2. **No assets.** `tsc` emits JavaScript and declarations only. The 20+
-   `.hbs` files under `src/prompts/assets/` are never copied, and
-   `prompts/bot/basicPrompt.ts` throws at module scope when it cannot find them
-   ("fail loud, a missing prompt asset must never degrade into an empty bot
-   persona").
+   `./scope.js`. It is the only workspace package that emits any.
+2. **No assets.** `tsc` emits JavaScript and declarations only. The `.hbs`
+   prompt assets are never copied, and the prompt loader throws at module scope
+   when it cannot find them ("fail loud, a missing prompt asset must never
+   degrade into an empty persona").
 
 So a thin wrapper over `dist` cannot work, and making `dist` loadable would mean
 changing every asset-dependent package plus teaching `build-packages.mjs` to
 copy assets — its own header calls that array the single source of build order.
-esbuild settles both in one pass, so `bundle:agent` emits `bundle/cli-entry.js`
-alongside the agent worker, and both share the one `bundle/assets` copy.
 
 **Do not give this artifact its own output directory.** Every gate under
 `scripts/architecture/` skips directories named exactly `bundle`; a
@@ -187,10 +179,9 @@ alongside the agent worker, and both share the one `bundle/assets` copy.
 scanned as first-party source and reported as a new `module-dependency`
 violation.
 
-Note the distinct `npm run build:cli-bundle` → `packages/cli/bundle/cli.cjs`.
-That is the **desktop control plane** (`status`, `plugin`, `session`, `mcp`, …)
-and needs a running desktop app. It has no `-t` and no `--print`, and it does not
-run a chat turn. The chat entry is `bundle/cli-entry.js`.
+Note the two distinct bundles: `npm run bundle:agent` emits
+`packages/host/bundle/worker-entry.js` (the worker process), and
+`npm run build:cli-bundle` emits `packages/cli/bundle/cli.cjs` (the CLI).
 
 ## Gates
 
@@ -200,9 +191,12 @@ run a chat turn. The chat entry is `bundle/cli-entry.js`.
   `.architecture-baseline.json`, and only *new* ones block. Never add a
   fingerprint to the baseline to silence something you just introduced — fix
   the edge, or use `--write` only when a migration legitimately removed debt.
-  Modules declared `managed: true` in `architecture-policy.yaml`
-  (`agent-protocol`, `agent-core`, `agent-runtime`, `legacy-plugin-core`)
-  have zero tolerance and cannot be baselined at all.
+  Modules declared `managed: true` in `architecture-policy.yaml` have zero
+  tolerance and cannot be baselined at all. There are **16** of them
+  (`agent-protocol`, `agent-core`, `agent-runtime`, `data`, `duya-host`,
+  `client-core`, `command-catalog`, `connectors`, `input-completion`,
+  `sandbox`, `memory`, `tooling`, `capabilities`, `legacy-plugin-core`,
+  `web-server`, `web-client`) — read the file rather than trusting this list.
   - **Verify CI enforcement separately.** The workflow now watches `master`
     and runs `typecheck:all`; this does not imply `architecture:check` is a
     required check. Plan 587 G0 owns that remaining gate and ruleset work.
@@ -512,7 +506,7 @@ gh release view <tag>                  # verify release exists
 - Comments: English only. Never write comments in Chinese.
 - External boundaries: prefer `zod` or existing schema helpers.
 - UI: use CSS variables from `globals.css` (`var(--bg-canvas)`, `var(--text)`, `var(--accent)`). Support both light and dark modes (`data-theme`).
-- Follow existing patterns in `apps/desktop/src/renderer/components/` before creating new ones.
+- Follow existing patterns in `packages/ui/src/components/` before creating new ones.
 - Use Tailwind + custom CSS classes from `globals.css`.
 
 ## Logging
@@ -582,7 +576,8 @@ await logger.timeAsync('gateway request', async () => {
 
 ### File Output
 
-Logs written to `%APPDATA%/DUYA/logs/app.log`, rotated daily, retained 7 days. Use `LOG_LEVEL=DEBUG` env var to enable verbose console output for debugging.
+Logs written to `<userData>/logs/app.log` (`app.getPath('userData')`; on Windows
+that is `%APPDATA%/duya`), rotated daily, retained 7 days. Use `LOG_LEVEL=DEBUG` env var to enable verbose console output for debugging.
 
 ## Tests
 
@@ -593,7 +588,7 @@ question you're asking.
 
 - **Runner**: `vitest` 3.x. Config: `vitest.config.ts`.
 - **Location**:
-  - `src/**/*.test.ts` / `*.test.tsx` — colocated with frontend code
+  - `packages/ui/src/**/*.test.ts` / `*.test.tsx` — colocated with renderer code
   - `packages/*/tests/**/*.test.ts` — colocated with workspace package code
   - `apps/desktop/src/main/ipc/__tests__/*.test.ts` — IPC handler unit tests
 - **Run**: `npm run test`, `npm run test:watch`, `npm run test:coverage`.
@@ -641,23 +636,27 @@ question you're asking.
 | Desktop Shell     | Electron 44.2.0 (**requires macOS 13+**; GUI gates run on macOS 13+ hosts) | `apps/desktop/src/main/index.ts` |
 | Electron Compiler | esbuild                         | `scripts/build-electron.mjs` |
 | Packager          | electron-builder                | `electron-builder.yml`       |
-| Agent Core        | TypeScript                      | `packages/agent/`            |
+| Agent Core        | TypeScript                      | `packages/agent-core/`        |
 | Testing           | Vitest + Playwright             | `vitest.config.ts`           |
 
-### Agent Bundle (MUST FOLLOW)
+### Worker Bundle (MUST FOLLOW)
 
-- Format: CommonJS (`format: 'cjs'`). Output: `packages/agent/bundle/agent-process-entry.js`
+- Format: CommonJS (`format: 'cjs'`). Output: `packages/host/bundle/worker-entry.js`.
+  The esbuild entry point is `packages/cli/src/agent-worker-entry.ts`, **not** a
+  file inside `packages/agent/` (`scripts/build-agent-bundle.mjs:30`).
 - `bundle: true` inlines all runtime dependencies. Only `better-sqlite3` (native) and `BashWorker.js` (worker) remain external.
 - **`blessed` is external in the CHAT CLI entry only.** It cannot be bundled: `blessed/lib/widget.js` enumerates its own `widgets/` directory with `readdirSync` and `require`s each file at runtime, which esbuild cannot see. First symptom is a misleading `Could not resolve 'term.js'` / `'pty.js'` — two packages blessed never declares but requires inside a widget method. Marking those external only moves the failure to runtime. The packaged worker entry never imports `cli/`, so it needs none of this; if that stops being true, fix the chat CLI entry rather than copying its externals up.
-- Production resolves: primary `resources/agent-bundle/agent-process-entry.js`, fallback paths only for debug.
+- Production resolves: primary `resources/harness-bundle/worker-entry.js`, fallback paths only for debug.
 - Self-contained: no `node_modules` copying in `afterPack`.
 - `better-sqlite3`: packaged to `resources/better-sqlite3/`, shared by main and agent. Agent receives `DUYA_BETTER_SQLITE3_PATH` env var.
-- `BashWorker.js`: bundled to `resources/agent-bundle/BashTool/`. Worker uses `process.execPath` as Node.js runtime in production.
-- Prompt `.hbs` assets: copied to `resources/agent-bundle/assets/` by `scripts/build-agent-bundle.mjs` (HbsPromptSystem resolves `./assets` relative to the bundle; tsc dist gets its own copy in `packages/agent` build).
+- `BashWorker.js`: bundled to `resources/harness-bundle/BashTool/`. Worker uses `process.execPath` as Node.js runtime in production.
+- Prompt `.hbs` assets: copied to `resources/harness-bundle/assets/` by `scripts/build-agent-bundle.mjs`.
+- `packages/host/bundle/` is **tracked in git** (the old `packages/agent/bundle/`
+  was gitignored and no longer exists).
 - Pre-release checks:
-  - `release/win-unpacked/resources/agent-bundle/agent-process-entry.js` exists
-  - `release/win-unpacked/resources/agent-bundle/assets/dynamic/language.hbs` exists
-  - `release/win-unpacked/resources/agent-bundle/BashTool/BashWorker.js` exists
+  - `release/win-unpacked/resources/harness-bundle/worker-entry.js` exists
+  - `release/win-unpacked/resources/harness-bundle/assets/dynamic/environment.hbs` exists
+  - `release/win-unpacked/resources/harness-bundle/BashTool/BashWorker.js` exists
   - `release/win-unpacked/resources/better-sqlite3/build/Release/better_sqlite3.node` exists
   - First packaged chat turn reaches Agent `ready` (no timeout)
   - `app.log` has no `ERR_MODULE_NOT_FOUND`
@@ -703,8 +702,10 @@ question you're asking.
 
 - Editing `apps/desktop/src/preload/index.ts` without rebuilding Electron
 - **Main/preload use a type-error ratchet, not a zero-error gate**: `typecheck:all` includes `typecheck:electron`; raw main/preload checks still have legacy debt. Main changes also require `npm run build:electron` and relevant tests. Current remediation is tracked by [plan 587 G0](./docs/exec-plans/active/587-agent-harness-monorepo/01-baseline-and-gates.md); historical measurements are reference data.
-- Modifying `packages/agent` exports without rebuilding (`npm run build:agent` / `npm run bundle:agent`)
-- Adding to `apps/desktop/src/renderer/app/api/` routes without verifying path doesn't conflict
+- Modifying `packages/agent` exports without rebuilding (`npm run build:packages`).
+  Note `bundle:agent` bundles the **worker** entry, not the agent package.
+- Adding a route to the Web BFF (`apps/web/src/server/web-bff.ts`) without
+  checking its CSRF and origin guards
 - Skipping Playwright verification for UI changes
 - Forgetting `npm run typecheck:all` before committing
 - NOT checking active plans before starting work ⚠️
@@ -724,7 +725,7 @@ question you're asking.
 | `ARCHITECTURE.md`     | Architecture, database schema, data flows, module APIs      |
 | `docs/design-docs/`   | Design decisions and core beliefs                           |
 | `docs/exec-plans/`    | Execution plans (`README.md` is the index; `active/`, `backlog/`, `completed/`, `tech-debt-tracker.md`) |
-| `docs/generated/`     | Auto-generated docs                                         |
+| `ARCHITECTURE_MAP.md` | Symptom → package/file lookup; the "where do I look" index |
 | `docs/product-specs/` | Product specifications and onboarding                       |
 
 ## Principles

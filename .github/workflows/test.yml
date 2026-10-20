@@ -19,6 +19,13 @@ on:
   pull_request:
     branches: [master]
 
+# One run per ref. Without this, three pushes in a row start three full
+# pipelines at once; the older ones keep burning runners and report on a tree
+# nobody will merge. Superseded runs are cancelled instead.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ── Architecture boundary gate ────────────────────────────────────────────
   # Standalone job. It is `needs`-free, so it reports independently of the
@@ -258,6 +265,20 @@ jobs:
       - name: Plan tracking table matches the tree (T02)
         run: npm run plan:sync
 
+      # The rules-compliance checker is the gate that keeps AGENTS.md / CLAUDE.md
+      # honest: it asserts every package ships a rule file of at least 200 bytes
+      # and that every path those files cite still resolves. It was wired to
+      # `npm run test:rules`, but no workflow ever called it — so the 24 package
+      # guides added in #317 had no automated check at all, and neither did the
+      # `path:line` references the docs are built around.
+      #
+      # Its own staleness rule reads file mtimes, and a fresh CI checkout stamps
+      # every file with the checkout time, so that rule is a no-op here by
+      # construction. The other five rules are real assertions, and none of them
+      # touches the network: the LLM call lives behind LIVE=1, which CI never sets.
+      - name: Rule files reference paths that still exist
+        run: npm run test:rules
+
       # Both gates decide "clean" by a count being zero, and a count is also
       # zero when the walk followed nothing. These are guards, not second
       # verdicts: they never re-decide whether the gate passes, only whether it
@@ -282,13 +303,17 @@ jobs:
       # moment one OS fails, and a cancelled leg is reported as `cancelled` —
       # not `passed`, but it reads like an absence of evidence rather than a
       # result, and a half-cancelled matrix is easy to misread as "only the
-      # broken OS is broken". The real cost is runner minutes: a push that
-      # fails on ubuntu now also pays for windows and macos to finish
-      # (~3 x npm ci + typecheck + vitest). That is the deliberate price of
-      # every leg reporting a true result instead of being cancelled.
+      # broken OS is broken". The cost is runner minutes on master pushes,
+      # where a failing ubuntu leg also pays for windows and macos to finish.
+      # That is the deliberate price of every leg reporting a true result.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # PRs run one leg. The suite is long, `test` is not a required check
+        # (master's baseline is still red), and a review branch gains little
+        # from three copies of the same assertion. Every push to master still
+        # runs the full 3-OS matrix, so OS-specific regressions surface within
+        # one merge instead of on the next PR.
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
         node-version: [22.x]
 
     steps:
@@ -328,7 +353,13 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          npm test 2>&1 | tee vitest-output.log
+          # Ubuntu is the coverage leg: run the suite ONCE with coverage
+          # instead of following it with a second full `test:coverage` pass.
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            npm test -- --coverage 2>&1 | tee vitest-output.log
+          else
+            npm test 2>&1 | tee vitest-output.log
+          fi
 
       # Plan 610 T04 / G10. This guard used to be an inline heredoc that exited
       # 1 whenever it could not find the vitest summary line. That made the `test`
@@ -374,10 +405,6 @@ jobs:
         shell: bash
         run: node scripts/ci/test-summary-guard.mjs vitest-output.log
 
-      - name: Run tests with coverage
-        if: matrix.os == 'ubuntu-latest'
-        run: npm run test:coverage
-
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@v3
@@ -397,7 +424,7 @@ jobs:
     # Chosen shape: depend on `architecture` instead. Rationale and cost:
     #   * We want `electron:build` evidence regardless of test debt.
     #   * We still want SOME cheap upstream, so a broken boundary stops us
-    #     burning 3 x electron:build. `architecture` is the right pick: it is
+    #     burning the build matrix. `architecture` is the right pick: it is
     #     ~3s of static analysis, needs no `dist/`, and a boundary violation
     #     genuinely means the build is building something wrong.
     #   * What this costs: `build` no longer runs after the tests, so a
@@ -410,11 +437,12 @@ jobs:
 
     strategy:
       # Same rationale as the test matrix: never let one OS's failure cancel
-      # the others, so every leg reports a true build result. Cost is the same
-      # — a failing leg now pays for the other two to finish.
+      # the others. PRs build on ubuntu only — the Windows and macOS legs
+      # (including electron-builder packaging and the .app parity check) run on
+      # every master push, where release-shaped regressions must surface.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
         node-version: [22.x]
 
     steps:
@@ -445,7 +473,7 @@ jobs:
       - name: Package (macOS only)
         # Run the full electron-builder packaging on macOS so afterPack path
         # bugs (which only manifest inside the .app bundle) are caught on
-        # every PR, not only on release tags.
+        # every master push, not only on release tags.
         #
         # `--publish never` is the fix, and it is load-bearing rather than
         # decoration. electron-builder.yml declares a `github` publish provider,

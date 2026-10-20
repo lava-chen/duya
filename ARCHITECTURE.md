@@ -95,10 +95,9 @@ DUYA is a Windows desktop AI agent client with a modular architecture:
 ├─────────────────────────────────────────────────────────────┤
 │  Process layer 3 - Agent Workers (fork, one per session)    │
 │  ┌───────────────────────────────────────────────────────┐  │
-│  │  @duya/host + @duya/agent-runtime + @duya/agent-core│  │
+│  │  @duya/agent (workspace package)                      │  │
 │  │  @duya/ai (multi-protocol LLM adapter)                │  │
 │  │  entry: agent-process-entry.js                        │  │
-│  │  turn driver: driveRunWithEngine → RunEngineImpl   │  │
 │  └───────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 
@@ -454,29 +453,14 @@ attach or resume for a live run.
 The production worker's RunDriver now imports the Runtime-only event-spine
 factory from `@duya/host/run-event-spine`; the old Agent path is a compatibility
 re-export. Host owns the run session, event stream, emitter, and terminal
-candidate recorder. Execution ownership HAS moved: the agent class is now
-`WorkerSession implements AgentRuntime` in
-`@duya/host/worker-session-runtime`, and `packages/agent/src/agent/DuyaAgent.ts`
-is an eight-line shim (`export class duyaAgent extends WorkerSession`) kept only
-to bind the product tool registry. The executor is `RunEngineImpl` in
-`@duya/agent-runtime/engine`, reached exclusively through
-`driveRunWithEngine` (`@duya/host/worker-engine-driver`), which is the single
-turn driver for all three production entries: the worker process entry, the
-headless/CLI path, and sub-agent turns. None of them reaches the legacy
-`agent.streamChat` turn loop any more.
+candidate recorder. The RunDriver and its `DuyaAgent` provider/tool/context
+assembly remain in `@duya/agent`, so execution ownership has not moved to Host.
 The worker supervision implementation now lives in `@duya/host/worker-manager`.
 Desktop Agent Server supplies adapters for its in-memory session state, logger,
 and packaged worker paths, and still constructs the manager inside the
-Electron-supervised Agent Server process. Package retirement is NOT complete:
-`node scripts/architecture/agent-retirement-gate.mjs --json` still reports
-`status: OPEN` with `legacyPackagePresent: true` and
-`runtimeVerificationRequired: true`. Of the remaining hits, every
-production-source finding is a string literal in census metadata or
-user-facing error copy (for example
-`packages/host/src/worker-session-runtime.ts` pointing users at
-`packages/agent/src/agent-profile/types.ts`), not an import edge; the open work
-is build tooling, active configuration, and test targets. A closed static gate
-alone is still not runtime proof.
+Electron-supervised Agent Server process. Standalone Host and CLI do not yet
+compose this manager, and its worker entry still runs the legacy `@duya/agent`
+engine.
 The production `RunOrchestrator` and worker execution-channel adapter now live
 in `@duya/host/run-orchestrator`; Agent Server imports that Host subpath and
 injects its DB bridge, worker channel, and logger. The old Agent Server module
@@ -751,11 +735,9 @@ The AI event-to-`ModelPort` adapter now lives in
 `@duya/host/run-engine-model`; production run composition imports that Host
 subpath directly. The old `packages/agent/src/process/run-engine-model.ts`
 path remains a compatibility re-export. `@duya/agent-runtime` stays provider
-independent. The production driver takes its `AIClient`, tool pipeline, and
-turn context from `WorkerSession` rather than the legacy Agent class, so this
-extraction no longer carries a legacy Agent runtime dependency; what remains is
-one boundary migration on the driver/session boundary, not a cutover still in
-front of us.
+independent. The production driver still gets its `AIClient`, tool pipeline,
+and turn context from `DuyaAgent`, so this extraction does not yet remove the
+legacy Agent runtime dependency.
 
 `ControlPlaneService`, its bounded in-memory `HostMap`, the command/run receipt
 contracts, repository port, and pure trusted-sender decision now live in
@@ -940,7 +922,7 @@ domain or database-owner cutover to Host.
 - Catalog: `createProviderCatalog()`
 - Auth: OAuth, API Key, Device Code
 
-### 3. Models Layer (`packages/ai/src/models/`)
+### 3. Models Layer (`packages/ai/src/providers/`)
 
 - Model capability detection
 - Thinking level mapping
@@ -1022,26 +1004,26 @@ domain or database-owner cutover to Host.
   注入两梯读回验证一键跑（plan 572 §7）；`scripts/reset-mac-tcc.sh` 重置授权。剩余真机 Gate
   依赖 macOS 13+（Electron 44 硬性要求）与 TCC 授权。
 
-## @duya/agent-runtime - Agent Runtime
+## @duya/agent - Legacy Shell
 
-The plan 587/610 cutover moved the agent out of `@duya/agent`. Current ownership:
+The plan 587/610 cutover moved execution out of `@duya/agent`. Current ownership:
 
-- `@duya/agent-core` - run reasoning, profiles, skills, modes, subagent and
-  usage contracts. Zero IO.
+- `@duya/agent-core` - run reasoning, profiles, skills, modes, subagent and usage
+  contracts. Zero IO.
 - `@duya/agent-runtime` - `RunEngineImpl`, the single run execution engine, plus
   run identity, event ordering, and the model/tool/context port contracts.
 - `@duya/host` - the product worker: `WorkerSession` (the agent class), the
   concrete tool registry, compaction coordination, hooks, modes, and
   `driveRunWithEngine`.
-- `@duya/agent` - legacy shell awaiting retirement; see
-  [Plan 610 slice 13](docs/exec-plans/active/610-architecture-series/13-agent-retirement-consumers.md).
+- `@duya/agent` - legacy shell awaiting retirement; the gate is still OPEN
+  (`node scripts/architecture/agent-retirement-gate.mjs --json`).
 
 ### Entry Points
 
 - `packages/host/src/worker-session-runtime.ts` - `WorkerSession`, the agent class
 - `packages/host/src/worker-engine-driver.ts` - `driveRunWithEngine`, the turn driver
 - `packages/agent-runtime/src/engine/run-engine.ts` - `RunEngineImpl`, the executor
-- `packages/host/src/worker-process-entry.ts` - main worker process entry
+- `packages/host/src/worker-process-entry.ts` - the worker process entry
 - `packages/cli/src/chat.ts` - `duya chat` / TUI, a pure Host HTTP client
 
 ### Chat CLI TUI
@@ -1077,81 +1059,11 @@ The plan 587/610 cutover moved the agent out of `@duya/agent`. Current ownership
   chrome until admitted, and shutdown waits for startup/cancellation before the
   caller closes its Host. The CLI does not become a second run executor.
 - `tui/terminal/session.ts` owns injected geometry, the output writer and resize
-  forwarding/cleanup. Only the permission/question overlay borrows the alternate
-  screen (it is a blocking question); it does so without destroying the shared
-  keyboard Program and invalidates the live viewport on return.
-  `composer-layout.ts` supplies a cursor-following multiline window and bounded
-  horizontal-rule layout. **Inline is the default**: the conversation is
-  committed into the terminal's own scrollback and the dock at the bottom of the
-  page holds, in pi's order, the composer (or the active secondary page), the
-  completion popup below it, and a two-row footer (`tui/footer.ts`) — path and
-  branch with the key hint right-aligned, then token counters with the model
-  flush right. Full screen remains available through `/settings` /
-  `cli.tui.displayMode`; `DUYA_TUI_INLINE=0` forces it.
-- Slash secondary pages (`/model`, `/settings`, `/resume`, F1, Ctrl+R, Ctrl+P,
-  and the login prompts) are **docked into the composer's slot** via
-  `WindowManager.renderDocked`, not drawn as a centred modal: same rows, same
-  width, conversation still visible above. `WindowManager.render` keeps the
-  centred modal form for the permission overlay, which shares its state
-  machine (selection, filtering, Esc) rather than reimplementing it.
-- `/settings` is one list, pi-style, not a menu of menus (`slash/settings.ts`
-  → `TUIApp.openSettings`): each row carries its current value in a right-hand
-  column (`WindowItem.valueLabel`), the selected row explains itself underneath
-  (`WindowItem.detail`), typing filters, and Enter/Space cycles the value
-  **in place** through `WindowSpec.onActivate` — the window stays open, so a
-  second change is one keystroke away. Every row is a real branch in the
-  renderer, moved by `TUIApp.applyTuiPreferences`: effort, thinking-block
-  visibility, block expansion, tool results, completion rows, input-box rows
-  **and the theme** land immediately — the palette is looked up per paint, so a
-  theme switch is a repaint. Only display mode and the startup banner are
-  labelled `Applies on the next launch`, because those decide which surface
-  object exists and the terminal surface is built once. Row values come from
-  `TUIApp.liveTuiPreferences()` — what is in force, not what was saved — so a
-  light theme that fell back to dark reads `Dark`.
-  `cli.tui.*` keys are persisted through the Host's local settings endpoint, and
-  a failed write is reported as "applied now, not saved" rather than silently
-  losing the preference. `/thinking` is `/effort` under pi's name (same
-  handler, second registration).
-- **Key bindings** live in one table (`tui/actions.ts` `ACTION_DEFS`), rendered
-  by two surfaces and therefore unable to drift from what `bindKeys` really
-  bound: F1 opens it as a modal, `/hotkeys` writes it into the transcript — pi
-  has the second form because a modal vanishes the moment you reach for a key,
-  and because F1 is itself a key many terminals never deliver. Both quote
-  `TUIApp.effectiveKeyBindings()`, the **`[tui.keys]`-override-applied** table,
-  never the defaults it was overridden from. `Ctrl+D` exits on an EMPTY input
-  and is inert otherwise: it is the one line-editor gesture people press by
-  reflex, so it is deliberately not also delete-forward.
-  ⚠️ The `keypress` handler must drop every chord with `key.ctrl === true`
-  BEFORE its `name.length > 1` guard: blessed's `keys` module reports `\x04`
-  as `{ name: 'd', ctrl: true }`, a one-character name that otherwise sails
-  through and is inserted as a raw byte — visible garbage in the prompt, and
-  enough to make the box non-empty so the Ctrl+D handler then declines to
-  exit. Every unbound Ctrl chord had the same latent bug.
-- The docked composer's two rules are an **effort indicator**: `theme.ts` maps
-  `auto → minimal → low → medium → high → xhigh → max` onto a 256-colour ramp
-  (pi's `thinkingOff…thinkingMax`), `TUIAppOptions.effort` reports the level for
-  the next turn, and `turn.started.effort` fills in the level a run actually
-  started with when the caller does not know one. `/effort` writes the choice
-  (`cli.tui.effort`) through the settings endpoint and returns
-  `{ kind: 'effort_changed' }` so `chat.ts` adopts it and passes it to
-  `StartAgentRunInput.effort`; the Host copies it to `manifest.agent.effort` and
-  `createWorkerExecutionChannel` lifts it into the worker's `ChatOptions.effort`
-  (the Anthropic thinking-budget input). The footer's `model • effort` suffix
-  reads the same value, so border and footer cannot disagree.
-- Effort is **two-tier**: a global default plus a per-model override. `/effort`
-  (and its alias `/thinking`) writes the GLOBAL value to `cli.tui.effort`; the
-  `Effort · <model>` row in `/settings` writes that one model's override into
-  `cli.tui.effortByModel` — **one JSON object under one key**, because the
-  settings endpoint is a flat string map with no prefix enumeration, so a
-  `cli.tui.effort.<modelId>` key could be written but never listed or cleared.
-  `auto` is never stored: absence of the model's key *is* "no override".
-  `effortForModel(preferences, modelId)` is the single resolver, and `chat.ts`
-  re-reads and re-resolves it whenever the session's **model actually changes**
-  (`/model`, `/resume` into another model's session, `/fork`) — not on every
-  session swap, since silently dropping a level the user picked a minute ago
-  would not be a feature. When a per-model override is in force, `/effort`
-  prints which level this model keeps, because otherwise a global change that
-  leaves the border untouched reads as a bug.
+  forwarding/cleanup. Inline modal views borrow the alternate screen without
+  destroying the shared keyboard Program, then invalidate the live viewport on
+  return. `composer-layout.ts` supplies a cursor-following multiline window and
+  bounded horizontal-rule layout. Fullscreen remains the default; inline is
+  available through `DUYA_TUI_INLINE=1`.
 - TUIApp memoizes assembled transcript lines across input-only and animation
   frames using its private document revision and presentation options. Public
   `TranscriptRenderer` content-hash semantics remain unchanged. Stable-prefix
@@ -1167,19 +1079,17 @@ The plan 587/610 cutover moved the agent out of `@duya/agent`. Current ownership
   and restore the selected session's persisted transcript. `/new`, `/clear`,
   and `/exit` are handled in the same entry. Non-interactive terminals retain
   the readline fallback.
+- A chat surface creates a Host session when it opens, because a run has to
+  belong to one. A surface that is opened and closed without a message would
+  leave that session behind, so the resume picker offers only sessions with a
+  non-empty timeline, and `packages/cli/src/owned-sessions.ts` deletes the
+  sessions a surface created and never used when that surface closes. A
+  session the user resumed belongs to whoever created it and is never
+  deleted.
 - `packages/agent/src/cli/tui-session.ts` is the temporary host adapter: it
   connects the legacy chat CLI's run events, persistence, and Agent-specific
   completion candidates to the TUI. The planned CLI/Run API migration will
   replace this adapter; it is separate from the Host HTTP `duya chat` entry.
-- Completion ranks what it offers (`filterItemsRanked` in
-  `@duya/input-completion`): a fuzzy score on the label, best first, with
-  description-only hits appended behind every label hit. Ranking is what makes
-  the popup's first row the command the user meant, which is what Enter acts
-  on. Enter on a command row RUNS it in one keystroke, but only when the
-  command is the whole line — `please run /mod` + Enter completes a word inside
-  a sentence and must not send it as a prompt. `Tab` is the insert-only
-  counterpart, so a command whose argument the user wants to type by hand
-  (`/export <dir>`) still has a key that does not run it.
 - Focus starts in the input. Tab switches to history when the input is empty
   (and inserts indentation when it has text); F6 switches focus at any time.
   Up/Down recalls prompt history in the input and selects transcript blocks in
@@ -1258,7 +1168,7 @@ aliases, short titles in both locales, descriptions, argument shape
 and whether the Desktop's gateway adapters serve it (`gateway`). Both front ends
 project it:
 
-- `apps/desktop/src/renderer/lib/commands/registry.ts` maps each spec onto the
+- `packages/ui/src/lib/commands/registry.ts` maps each spec onto the
   renderer's `CommandDef` and answers `resolveCommand` /
   `getCommandsForPlatform` / `getCommandsByCategory`.
 - `packages/cli/src/tui/slash/registry.ts` intersects the catalog's CLI view with
@@ -1289,7 +1199,7 @@ a clean checkout.
 
 ### Tool System
 
-- `packages/agent/src/tools/` - Built-in tools
+- `packages/agent/src/tool/` - Built-in tools
 - `packages/agent/src/mcp/` - MCP server integration
 - Tool protocol adapter layer (Plan 418)
 
@@ -1419,48 +1329,6 @@ connection status DTO (optional `ledger` field). Admission gate: conformance
 L1–L9 (`packages/agent/tests/integration/mcp-conformance.test.ts`, AGENTS.md
 Gates).
 
-### Instruction files (`AGENTS.md`) — read-only visibility surface
-
-The worker's `AgentsMdManager` is the authority on which instruction files are
-in effect, but it lives inside the forked worker process. `/agents` in the CLI
-TUI (and the Desktop equivalent) makes that list visible without reaching into
-the worker: `GET /v1/sessions/:id/agents-files` →
-`createHostAgentsFilesApi` (`packages/host/src/agents-files-api.ts`) re-runs the
-SAME loader (`loadAgentsMdFiles`) over the SAME two inputs the worker used — the
-session's working directory and the project entity home — so the host resolves
-the list read-only instead of the event spine gaining a new frame type while the
-plan 610 retirement gate is still OPEN.
-
-Boundaries this contract draws deliberately:
-
-- **No file bodies cross the wire.** Only path, layer, globs, `@include` parent,
-  a rewritten flag, and the injected size. A display panel does not need the
-  text, and shipping it would put a whole AGENTS.md tree on the loopback API.
-- **`HostSessionRecord` still carries no raw paths.** The session's working
-  directory is resolved host-side from the session row; the client never chooses
-  or receives it, matching the write-side rule at
-  `@duya/agent-protocol/session-api.ts`.
-- **"no such session" and "no instruction files" are different answers.** The
-  route returns 404 for the former; a live session with no bound directory
-  returns 200 with `scope.unresolvedReason: 'no_cwd'`. The run path substitutes
-  the Host data root as a working-directory default
-  (`packages/host/src/local-host.ts`), and resolving instructions there would
-  answer a different question than the one asked.
-- **`nested_not_reproduced` is reported, never omitted.** The plan 408b nested
-  memory layer is chosen per turn from the paths that turn touches and lives in
-  a session-scoped set inside the worker; a host-side re-resolution cannot see
-  it. A panel listing five files while implying "that is everything" would be a
-  false claim.
-- **A project lookup failure degrades, it does not sink.** If the project store
-  throws, the cwd-derived layers still resolve and the `'Project entity'` layer
-  is simply absent, with a WARN.
-
-Known loader defect, pinned by test: `processRulesDir` keeps glob-bearing files
-only when its `conditionalOnly` flag is true, and all three call sites omit the
-argument, so every `.duya/rules/*.md` declaring frontmatter `paths:` is filtered
-out after being read. Fixing it would start injecting rules the agent has never
-seen, which is a behaviour decision rather than a bug fix.
-
 ### Mode System (Plan 224)
 
 Modes are declarative `ModeModifier` objects:
@@ -1540,9 +1408,9 @@ Convergence pass over the eight incrementally-stacked compaction plans (422 → 
 Three surgical fixes layered on top of the Plan 422 / Plan 495 stack after a user-reported compaction-loop bug in 2026-09-10:
 
 - **Capability resolution audit log** (`apps/desktop/src/main/services/providers/provider-store.ts:resolveRuntimeCapability`): the silent `DEFAULT_CONTEXT_WINDOW = 200_000` fallback (`packages/agent/src/compact/types.ts`) was hidden from users on 1M-context models whose id is not in `allProviderModels` (custom OpenRouter-style ids, third-party relays). Each call now emits an info-level audit line with `{ providerId, modelId, contextWindow, source: 'config' | 'db' | 'preset' }` on the three success branches and a warn-level line with `{ providerId, modelId, apiFormat }` plus a concrete pointer to `[options].model_context[modelId]` in `config.toml` when all three layers miss. `DuyaAgent`'s constructor mirrors the same warn with `{ runtimeConfigHasCapabilities, model, apiFormat }`. Users can `grep 'fallback to 200000' app.log` and recover in one step. Override priority: `config.options.model_context[modelId]` > DB row > built-in `allProviderModels`.
-- **Turn-based + token-based cooldown** (`packages/agent/src/agent/DuyaAgent.ts:1594`, gates `imageTriggered || compactionController.shouldCompact()`): the proactive checkpoint now skips when `turnsSinceLastCompact < MIN_TURNS_SINCE_COMPACT (3)` OR `tokensGrowthSinceCompact < MIN_TOKENS_GROWTH_SINCE_COMPACT (30_000)`. Cooldown baseline pins on every successful proactive compaction via the new `lastCompactionTurn` and `lastCompactionObservedTokens` instance fields. The Pi/grok-style design lets the agent run at least three tool-use turns after each compaction; image-volume triggers (`compact/imageParts.ts`, Plan 495) bypass the gate so multimodal floods are still handled immediately.
+- **Turn-based + token-based cooldown** (`packages/host/src/worker-session-runtime.ts:877-878`, gates `imageTriggered || compactionController.shouldCompact()`): the proactive checkpoint now skips when `turnsSinceLastCompact < MIN_TURNS_SINCE_COMPACT (3)` OR `tokensGrowthSinceCompact < MIN_TOKENS_GROWTH_SINCE_COMPACT (30_000)`. Cooldown baseline pins on every successful proactive compaction via the new `lastCompactionTurn` and `lastCompactionObservedTokens` instance fields. The Pi/grok-style design lets the agent run at least three tool-use turns after each compaction; image-volume triggers (`compact/imageParts.ts`, Plan 495) bypass the gate so multimodal floods are still handled immediately.
 - **`overThresholdAfterCompact` becomes an active loop brake** (`packages/agent/src/compact/CompactionManager.ts:compact`): the flag that Plan 422 computed but never consumed is now wired. When `overThresholdAfterCompact === true` (e.g. system prompt + reinject overshoot), `suppression.trySuppress('size')` fires and a new `compaction_over_threshold` event emits with `{ tokensRetained, available }`. The next `shouldCompact()` returns false at the existing suppression gate until a future successful compaction shrinks `finalTokens` below `available` — breaking the loop where Plan 422 ran every other turn because the post-compaction context kept re-crossing the threshold. `Suppression.trySuppress(type): boolean` (idempotent) lives on the 3-state `Suppression` machine inside `CompactionManager`; the former 5-state `CompactSuppression` API in `compactErrors.ts` was deleted in plan 552 (zero production call sites).
-- **Per-step lifecycle events** (`packages/agent/src/compact/CompactionManager.ts` + `packages/agent/src/process/worker-protocol.ts` + `apps/desktop/src/renderer/lib/stream-session-manager.ts` + `apps/desktop/src/renderer/stores/compaction-store.ts`): a new `compaction_step` event (`projecting | cutting | summarizing | rebuilding | reinjecting | trimming`, `started | finished`) plus `compaction_over_threshold` flow as `compact:step` and `compact:over_threshold` SSE frames. The renderer mirrors them into the `compaction-store` (`CompactionPhase` union extended) and into the inline `CompactSummary` row, replacing the legacy single-spinner `'Compacting context...'` with `Summarizing 32 messages...`, `Re-injecting files, skills and tools (6 cached)...`, `Trimming — still over budget`, etc. i18n keys live in `apps/desktop/src/renderer/i18n/en.ts` / `apps/desktop/src/renderer/i18n/zh.ts` under `streaming.toolAction.compact.step.{phase}`. `ActionRowChrome` accepts a `verbText?: string` precedence over `verbKey` for callers that need interpolation variables. `@duya/ai`'s `SSEEvent` union gained the four `compact:*` frame types so the legacy `as unknown as SSEEvent` casts in `DuyaAgent.ts` could finally be removed at a future cleanup.
+- **Per-step lifecycle events** (`packages/agent/src/compact/CompactionManager.ts` + `packages/agent/src/process/worker-protocol.ts` + `packages/ui/src/lib/stream-session-manager.ts` + `packages/ui/src/stores/compaction-store.ts`): a new `compaction_step` event (`projecting | cutting | summarizing | rebuilding | reinjecting | trimming`, `started | finished`) plus `compaction_over_threshold` flow as `compact:step` and `compact:over_threshold` SSE frames. The renderer mirrors them into the `compaction-store` (`CompactionPhase` union extended) and into the inline `CompactSummary` row, replacing the legacy single-spinner `'Compacting context...'` with `Summarizing 32 messages...`, `Re-injecting files, skills and tools (6 cached)...`, `Trimming — still over budget`, etc. i18n keys live in `packages/ui/src/i18n/en.ts` / `packages/ui/src/i18n/zh.ts` under `streaming.toolAction.compact.step.{phase}`. `ActionRowChrome` accepts a `verbText?: string` precedence over `verbKey` for callers that need interpolation variables. `@duya/ai`'s `SSEEvent` union gained the four `compact:*` frame types so the legacy `as unknown as SSEEvent` casts in `DuyaAgent.ts` could finally be removed at a future cleanup.
 
 ### Long-Session Parity Additions (Plan 495)
 
@@ -1586,7 +1454,7 @@ A bot's runtime identity lives in `<duyaRoot>/agents/<id>/profile.json` (`apps/d
 
 Plan 502: `title` is fully wired for the host side — create/edit dialogs and `BotSettingsPanel` expose a role-title input, creation seeds it via `AgentUpsertInput.title` → `seedBotProfileIfMissing`, and the sidebar renders it as the contact subtitle (`BotContactListItem`: `title || description`). The model still cannot set it. Bot ids are minted at a SINGLE point in the main process (grok `agent-session.ts` parity: ids are never user-authored): `config:agents:create` accepts an empty id and slugs it from the display name via `slugifyBotIdFromName`, then `allocateBotId` allocates a collision-free id against config keys, on-disk trees, and `.deleted` tombstones; the old renderer-side `deriveBotIdFromName` duplicate is removed. Ids stay readable slugs (unlike grok's opaque uuids) because they double as config keys and `send_to_agent` addresses.
 
-Avatar rendering priority (`apps/desktop/src/renderer/components/layout/sidebar/BotCharacterAvatar.tsx`): image → colored initial circle → deterministic-hue fallback. The image is served to the renderer over the `duya-file://` protocol (`apps/desktop/src/main/index.ts`); `listBots()` pre-builds the URL with a `?v=<mtime>` cache-buster, so the renderer never handles raw paths.
+Avatar rendering priority (`packages/ui/src/components/layout/sidebar/BotCharacterAvatar.tsx`): image → colored initial circle → deterministic-hue fallback. The image is served to the renderer over the `duya-file://` protocol (`apps/desktop/src/main/index.ts`); `listBots()` pre-builds the URL with a `?v=<mtime>` cache-buster, so the renderer never handles raw paths.
 
 Write paths, all converging on profile.json:
 
@@ -1634,7 +1502,7 @@ Multi-bot rooms (≤6 members + user) in one shared transcript. The room is a **
 ### Sub-agent Runtime & Side Panel (Plan 571)
 
 **Lifecycle vocabulary.** A sub-agent run has exactly five states, defined once in
-`apps/desktop/src/renderer/lib/subagent-status.ts` and consumed by every surface:
+`packages/ui/src/lib/subagent-status.ts` and consumed by every surface:
 `pending | running | completed | failed | killed`.
 `killed` is first-class: `BackgroundAgentLifecycle.kill()` already records it agent-side, and
 before plan 571 the renderer had **three** incompatible spellings of the same lifecycle
@@ -1684,12 +1552,12 @@ worker is no longer resident, which the panel treats as a no-op rather than an e
 **Result contract.** The `task` tool returns a discriminated shape keyed on `status`
 (`pending | running | completed | failed | killed`) carrying `sessionId`, `taskId`, `outputFilePath`,
 `totalToolUseCount`, `totalDurationMs`, `totalTokens`, `usage`, `workingDirectory`, `isolation`, and
-`warnings`. `apps/desktop/src/renderer/lib/subagent-result.ts` parses it and still accepts the pre-571 field names
+`warnings`. `packages/ui/src/lib/subagent-result.ts` parses it and still accepts the pre-571 field names
 (`childSessionId`, `backgroundTaskId`, `outputFile`, `isAsync`) so already-persisted history keeps
 rendering. A background launch receipt is a *successful* result that says nothing about the child —
 it must never be read as completion.
 
-## Package Workspace
+## Workspace Subsystems
 
 ### Canvas Workbench Runtime (Plan 570)
 
@@ -1752,57 +1620,118 @@ no Desktop Host is present.
 
 ## Package Workspace
 
+26 workspace packages. The layering below is not advisory — it is enforced by
+`architecture-policy.yaml` and checked by `npm run architecture:check`.
+
 ```
 packages/
-├── agent/                @duya/agent - Legacy shell (retirement OPEN, plan 610 s13)
-├── agent-core/           @duya/agent-core - Run reasoning (zero IO)
-├── agent-protocol/       @duya/agent-protocol - Transport-neutral wire contract
-├── agent-runtime/        @duya/agent-runtime - Run execution engine
+├── agent-protocol/       @duya/agent-protocol - Transport-neutral wire contract (zero runtime deps)
+├── agent-core/           @duya/agent-core - Pure run reasoning: terminal state, budget, durability (zero IO)
+├── agent-runtime/        @duya/agent-runtime - Run execution engine: run identity, sequence, RunEvent stream
+├── host/                 @duya/host - Electron-independent Host services, worker session, tool registry, RunOrchestrator
 ├── ai/                   @duya/ai - Multi-protocol LLM adapter
-├── capabilities/         @duya/capabilities - Filesystem and shell tool implementations
-├── cli/                  @duya/cli - CLI tools
-├── computer-use/         @duya/computer-use - Computer use capability
-├── conductor/            @duya/conductor - Conductor component
-├── gateway/              @duya/gateway - Gateway component
-├── plugin-core/          @duya/plugin-core - Plugin system
-└── voice/                @duya/voice - Voice component
+├── capabilities/         @duya/capabilities - Tool implementations: FS tool stack, tool contracts, path policy
+├── data/                 @duya/data - SQLite ownership, migrations, durable stores
+├── memory/               @duya/memory - Memory V2 domain: on-disk layout, curation ledger, extraction pipeline
+├── plugin-core/          @duya/plugin-core - Plugin error handling, security, policy engine
+├── tooling/              @duya/tooling - Extension contract + ExtensionRegistry with 13 independent slots
+├── sandbox/              @duya/sandbox - Cross-platform command sandboxing (Docker / bubblewrap / none)
+├── computer-use/         @duya/computer-use - Computer Use Mode desktop backend (nut.js + desktopCapturer)
+├── client-core/          @duya/client-core - Client-side run surface state derived from protocol events
+├── ui/                   @duya/ui - Shared renderer: components, stores, hooks, i18n, styles
+├── command-catalog/      @duya/command-catalog - Canonical slash-command metadata
+├── input-completion/     @duya/input-completion - Surface-neutral completion contract (pure functions)
+├── connectors/           @duya/connectors - App Connector id vocabulary + `.app.json` schema (zero IO)
+├── conductor/            @duya/conductor - Canvas workspace UI
+├── cli/                  @duya/cli - CLI control plane + reusable terminal TUI
+├── gateway/              @duya/gateway - External channel gateway
+├── voice/                @duya/voice - Voice input: mic -> streaming STT -> text
+└── agent/                @duya/agent - Legacy shell (retirement OPEN, plan 610 slice 13)
 
 apps/
-└── desktop/              @duya/desktop - Electron app (main/preload/renderer)
+├── desktop/              @duya/desktop - Electron main process, preload bridge, renderer shell
+└── web/                  @duya/web - Local browser client transport for Duya Host
 ```
 
-`agent-protocol`, `agent-core`, and `agent-runtime` are the plan 587
-`managed: true` boundaries (`architecture-policy.yaml`) — zero tolerance, never
-baselined.
+### Dependency layers
+
+A module may only depend **downward**. The layers are declared in
+`architecture-policy.yaml` (`layers:`) and the `modules:` block gives each
+module its root, `managed` flag, and its `requires:` list.
+
+| Layer | Packages | Note |
+| --- | --- | --- |
+| `protocol` | `agent-protocol` | Zero runtime dependencies. Everything speaks it. |
+| `core` | `agent-core`, `ai` | `agent-core` performs no IO. `ai` is core by declaration — its IO is inventoried as a carve-out, not smuggled. |
+| `runtime` | `agent-runtime` | Provider-independent run execution. |
+| `host` | `desktop`, `cli`, `gateway` | Composition layer. |
+
+`agent-protocol`, `agent-core`, and `agent-runtime` are `managed: true`
+boundaries — zero tolerance, never baselined. `requires:` lists are *declared*
+edges: counted and visible, never blocking on their own. A dependency edge that
+is not declared is what the gate blocks on.
+
+### Where a symptom lives
+
+This is the short version. The full symptom-to-file table, with evidence for
+every row, is in [ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md); each
+package also carries its own `AGENTS.md` with the same information scoped to
+that package.
+
+| Symptom | Open this first |
+| --- | --- |
+| Run will not start / run identity wrong | `packages/agent-runtime/src/engine/` |
+| Events arrive out of order | `packages/agent-runtime/` (RunEvent stream) |
+| Tool call hangs | `packages/host/` (tool registry) then `packages/capabilities/` |
+| Permission prompt never appears | `packages/host/` (permission resolution) |
+| Cancel does nothing | `packages/host/src/run-orchestrator.ts` |
+| Provider or model ignored | `packages/ai/src/providers/` |
+| Worker crashes on boot | `packages/host/src/worker-process-entry.ts` |
+| DB write rejected | `packages/data/` (schema ownership) |
+| Renderer blank / component missing | `packages/ui/src/components/` |
+| IPC call fails | `apps/desktop/src/main/` + `apps/desktop/src/preload/` |
+| Web client cannot reach Host | `apps/web/src/server/` |
 
 ## Frontend Architecture
+
+The renderer is **shared**: the React app lives in `@duya/ui` and both the
+Desktop shell and the Web client mount it. `packages/ui/src/` is a
+thin mount shell, not the app.
 
 ### Directory
 
 ```
-apps/desktop/src/renderer/
-├── components/
-│   ├── chat/           # Chat UI (MessageList, Input, etc.)
-│   ├── layout/          # Panel, Sidebar, Header
-│   ├── settings/        # Settings pages
-│   ├── automation/      # Automation rules
-│   ├── browser-use/    # Browser control
-│   ├── browser-use-panel/
-│   ├── extensions/     # Extension management
-│   ├── providers/      # Provider configuration
-│   ├── skills/         # Skill management
-│   └── ui/             # Shared UI components
+packages/ui/src/            # Shared renderer (React 19 + Zero Router)
+├── components/           # chat, layout, settings, automation, browser,
+│                         # extensions, providers, skills, projects, workflow,
+│                         # diff, file-tree, ide, import, onboarding, usage, ...
 ├── contexts/            # React contexts
-├── hooks/              # Custom hooks
-├── lib/                # Utilities (git-ipc, etc.)
-├── stores/             # State management
-└── types/              # TypeScript types
+├── contracts/           # Renderer-side contracts
+├── data/                # Static data
+├── hooks/               # Custom hooks
+├── i18n/                # Localization
+├── lib/                 # Utilities (git-ipc, etc.)
+├── orb/                 # Orb surface
+├── services/            # Renderer service wrappers
+├── stores/              # Zustand stores (conversation, projects, workflow, ...)
+├── styles/              # CSS
+└── types/               # TypeScript types
+
+packages/ui/src/ # Desktop mount shell only
+├── main.tsx             # Mounts the shared app
+├── lib/
+└── types/
+
+apps/web/src/            # Browser client
+├── client/              # Browser-side transport
+├── server/              # BFF: local browser client -> Host
+└── main.tsx
 ```
 
 ### State Management
 
-- Zustand stores in `apps/desktop/src/renderer/stores/`
-- React Context for global state
+- Zustand stores in `packages/ui/src/stores/`
+- React Context for global state in `packages/ui/src/contexts/`
 
 ## Security
 
@@ -1900,8 +1829,8 @@ Filterable by component: `LogComponent` constants (AgentProcess, IPC, DB, etc.)
 ### Agent Bundle
 
 - Format: CommonJS
-- Entry: `packages/agent/bundle/agent-process-entry.js`
-- Production: `resources/agent-bundle/agent-process-entry.js`
+- Entry: `packages/host/bundle/worker-entry.js`
+- Production: `resources/harness-bundle/worker-entry.js`
 
 ### Host Worker Bundle (`packages/host/bundle/` — tracked, verified)
 
@@ -1938,7 +1867,7 @@ So the judgement is made from git, which is deterministic by construction: find
 the commit that last wrote `packages/host/bundle/`, read the input list in
 `worker-metafile.json`, and ask whether any of those files changed after it —
 counting committed history **and** the current working tree. This is why the rule
-is not "the directory was touched": an edit under `packages/host/src/__tests__/`
+is not "the directory was touched": an edit under `packages/host/tests/`
 is not a bundle input and stays green.
 
 The check answers about the metafile that is **checked in**, so its denominator

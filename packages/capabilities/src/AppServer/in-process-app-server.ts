@@ -42,10 +42,12 @@
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
 import type { InProcessMcpServer } from '../MCP/ports.js';
+import type { ToolResult } from '@duya/ai';
+import { currentAppToolContext, type AppToolContext } from './app-tool-context.js';
 
 /** One tool advertised by the app server. */
 export interface AppServerToolDefinition {
@@ -56,19 +58,34 @@ export interface AppServerToolDefinition {
   inputSchema: Record<string, unknown>;
 }
 
+/**
+ * A tool the app server can EXECUTE, not just advertise.
+ *
+ * The executor is the capability's own — the same object the tool would
+ * have been registered with directly. It receives the live host context
+ * (see `app-tool-context.ts`), so an app tool keeps full access to the
+ * host IPC, the session, and the per-turn state.
+ */
+export interface AppServerTool extends AppServerToolDefinition {
+  /**
+   * Run the tool. `context` is the ambient host context, or `undefined`
+   * when the call did not come from a turn.
+   */
+  execute(input: Record<string, unknown>, context: AppToolContext | undefined): Promise<ToolResult>;
+}
+
 export interface InProcessAppServerOptions {
   /** Server name; also the namespace segment of every tool's internal key. */
   name: string;
   version?: string;
-  tools: readonly AppServerToolDefinition[];
+  tools: readonly AppServerTool[];
 }
 
 /**
  * The app server instance.
  *
  * `connect` / `close` mirror the MCP SDK `Server` surface so the client
- * treats it exactly like a remote server; `server` is exposed for the
- * advanced wiring (the `tools/call` handler lands in T610b).
+ * treats it exactly like a remote server.
  */
 export interface InProcessAppServer extends InProcessMcpServer {
   readonly server: Server;
@@ -77,15 +94,18 @@ export interface InProcessAppServer extends InProcessMcpServer {
 /**
  * Build the `duya_app` MCP server.
  *
- * Only `tools/list` is wired here — the skeleton. `tools/call` is added
- * in T610b together with the context pipeline; until then the server
- * advertises its tools but cannot execute them.
+ * `tools/list` advertises the tools; `tools/call` executes one. The
+ * executor runs inside the ambient app-tool context, so it can reach the
+ * host IPC and the per-turn state exactly as a directly-registered
+ * capability tool would.
  */
 export function createInProcessAppServer(options: InProcessAppServerOptions): InProcessAppServer {
   const server = new Server(
     { name: options.name, version: options.version ?? '0.1.0' },
     { capabilities: { tools: {} } },
   );
+
+  const toolsByName = new Map(options.tools.map((tool) => [tool.name, tool]));
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: options.tools.map((tool) => ({
@@ -94,6 +114,33 @@ export function createInProcessAppServer(options: InProcessAppServerOptions): In
       inputSchema: tool.inputSchema as { type: 'object' },
     })),
   }));
+
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const tool = toolsByName.get(request.params.name);
+    if (!tool) {
+      return {
+        content: [{ type: 'text', text: `Unknown tool: ${request.params.name}` }],
+        isError: true,
+      };
+    }
+
+    // The ambient context is the host's live ToolUseContext. It is
+    // undefined when the call did not come from a turn — the tool must
+    // degrade gracefully rather than crash.
+    const context = currentAppToolContext();
+    const result = await tool.execute(request.params.arguments ?? {}, context);
+
+    return {
+      content: [{ type: 'text', text: result.result }],
+      ...(result.error ? { isError: true } : {}),
+      // The result metadata rides along so the renderer can build rich
+      // tool rows (browser results, CUA app info, vision previews)
+      // without parsing the text. The MCP result schema is loose, so
+      // this survives the round trip.
+      ...(result.metadata ? { metadata: result.metadata } : {}),
+      ...(result.structured !== undefined ? { structuredContent: result.structured } : {}),
+    };
+  });
 
   return {
     server,

@@ -36,7 +36,7 @@ is not the ledger and is not tracked.
 
 **What is in version control:** `active/` and `backlog/` only — those are what a
 new session reads. `completed/` is a local archive, so the Completed section
-below names plans in **plain text rather than links**: 264 of the 366 completed
+below names plans in **plain text rather than links**: 264 of the 367 completed
 plans on disk were never committed, and a link to them would be dead on a fresh
 clone. A plan becomes tracked when it is written, and stays tracked after it
 moves to `completed/` only if it was already added.
@@ -291,7 +291,7 @@ ends with a *different* set of failures, that is on you.
 | [03 SQLite 驱动](./active/610-architecture-series/03-sqlite-driver/README.md) | 602（`Phase 0`–`3`） | C 线，**可选旁支**，已退出关键路径 |
 | [10 切片 A1 契约](./active/610-architecture-series/10-slice-a1-g7-loop-detection.md) | — | **已完成(PR #219)**,未决问题已答 |
 | [11 切片 A0 契约](./active/610-architecture-series/11-slice-a0-client-runtime-axis.md) | — | 客户端运行时轴,**可与 A3 并行** |
-| [24 共享渲染器](./active/610-architecture-series/24-shared-renderer.md) | — | 渲染器已迁入 `@duya/ui` 且 Desktop 挂公共 App（分支 `codex/wave3-shared-renderer`）。`pkg:ui` 策略/基线接缝**已落地并实测 `architecture:check` exit 0**（计划 Seam requests 一节）；余项：Web 线切共享 Root、Electron 运行时 + Playwright 目检，以及 `pkg:ui` 在切片清单里仍不可见这件事（已单开 T19，别用加指纹的方式"修"） |
+| [24 共享渲染器](./active/610-architecture-series/24-shared-renderer.md) | — | **已完成**：渲染器迁入 `@duya/ui`、Desktop 挂公共 App（#311 merge `d63201ba`）、Web 切共享 Root，Electron 运行时已用真二进制验收（smoke 6/6 + archive UI 5/5 + 真 turn 1/1，`aa9b100d` 上的 `dist-electron/main.js`）；Playwright 像素目检按 owner 范围（UI 不管）不做。`pkg:ui` 在切片清单里仍不可见这件事归 T19（别用加指纹的方式"修"） |
 
 **推进顺序、每片的唯一 next action 与完成标志、放弃条件，只在 610 里回答一次。**
 587 的合同与历史推导已被第 01 章接管，不再单独排期。
@@ -310,7 +310,7 @@ ends with a *different* set of failures, that is on you.
 
 ***
 
-## Active Plans (38)
+## Active Plans
 
 > 架构主线已收束为 **610 一项**（原 600/601/602 已收为其三章；587 的合同被其第 01 章接管）。
 > 其他产品计划保留独立范围。**架构执行顺序以 610 为准**，不能从历史编号另排队列。
@@ -410,8 +410,7 @@ Four were wrong and are corrected below; these five were checked and are
 | [cli-manual-compaction](./active/613-cli-manual-compaction.md) | P2 | CLI `/compact`：给 Host 补一条会话级压缩出口（转发既存的 `compact` worker 命令）+ CLI 命令注册与压缩后重载。**Phase 0 探针未跑**（冷 worker 摘要器能否拿到 provider 配置是 Go/No-Go） |
 | [cli-markdown-rendering](./active/614-cli-markdown-rendering.md) | P1 | CLI Markdown 渲染补齐（thinking + assistant 最终回答）：手写 inline tokenizer、表格列边错位修复、thinking 走 Markdown、标题/列表/分隔线、**斜体/删除线**；并把 `escapeTags` 的 `\{` 换成 blessed 原生的 `{open}`（顺带修掉模型文本可注入标签 + 每个 `{` 前多打印反斜杠的存量 bug）。**Phase 0 未跑**（own↔blessed 视觉等价是 own 转默认的 Go/No-Go） |
 | [cli-unified-tui-engine](./active/615-cli-unified-tui-engine.md) | P1 | 统一 TUI 引擎：声明式组件树（手写 retained tree，不引 React/Yoga）+ StyledSpan 内部表示（最后一步才转 ANSI）+ 增量布局与虚拟化（复用 transcript-cache 三件套）+ 双模式渲染统一到 RenderScene（ScrollbackOutput=InlineSurface 内核 / AltScreenOutput=OwnScreenSurface 内核）+ 独立 Terminal Input Driver（Kitty protocol 为可选增强）；blessed 三步退役（转默认→冻结→删除）。性能验收（输入→绘制 P95<30ms、流式 30FPS、10k block）为**待测目标**，Phase 0 先建 Windows ConPTY/tmux/真实 PTY 基线。**3 条待裁定未决**（614 Phase 6 归宿 / 性能数值校准 / blessed 回滚开关保留期），Phase 0 未启动 |
-| [duya-app-mcp-layer](./active/616-duya-app-mcp-layer.md) | P1 | **工具面分层**：canvas 16 + bot 8 + browser + 其余 17 个产品能力（computer_use/cua、vision、image_generate、widget、module、duya_cli、session、MessageSession、SessionSearch、Brief、memory_write、write_stage1_policy、plan、update_state、send_artifact）收进 host-owned 进程内 MCP server `duya_app`（`mcp__duya_app__<tool>` / `mcp_duya_app_<tool>` / `tool_id: mcp:duya_app:<tool>`），走 deferred 暴露 + `tool_catalog` 发现；基础工具 17 个（bash/read/write/edit/apply_patch/glob/grep/todo/task/…）留在常规注册层且 **wire name 一字不改**。对标 Codex 的 `codex_apps`（但 Codex 的 app 全是远程的，duya 的是本地进程内，形态是本期的原创）。6 张 T 卡 T610a–e + d2；**C2–C5（renderer 路由 / profile 规则 / canvas 权限短路 / bot 放行）必须随改名同卡落地**，否则中间态比改造前更糟。**C9：`source:'bundled'` 会在权限链 step 0 短路、跳过灾难检查与宿主开关，`duya_app` 必须用新的 `source:'app'`**。上下文穿透已实测可行（**AsyncLocalStorage**，5 并发调用各自隔离、穿过 await 无泄漏；优于 `_meta` 走私）。T610a 已交付 |
-| [duya-desktop-management-layer](./active/618-duya-desktop-management-layer.md) | P1 | **616 的加强版**：616 收「产品能力面」，本章收「**桌面外壳面**」——侧边栏分组、面板 / 视图、会话生命周期、目录授权。新 namespace `duya_desktop`（**15 个离散工具** + `duya desktop` CLI 命令族，deferred 暴露 + `tool_catalog` 发现）。对标 Claude Code Desktop 的 **61 个 `mcp__ccd__*` 工具**，只抄「作用于 Desktop 自己」这一条，**不抄数量**（不新造第二套 MCP 机制）。6 张 T 卡 T618a–f；**硬前置 = 616 T610b（ALS 上下文管道）+ T610e（`source:'app'` 权限分支）**——`T618c` 不得早于 T610e 交付，否则写操作会走 `bundled` 短路路径跳过灾难检查。**T618f（视图控制面）另需 571/527 冻结 viewId 契约**，不得自造 view 命名。PR 监控 / worktree / 窗口布局划到范围外 |
+| [duya-app-mcp-layer](./active/616-duya-app-mcp-layer.md) | P1 | **工具面分层**：canvas 16 + bot 8 + browser + 其余 17 个产品能力（computer_use/cua、vision、image_generate、widget、module、duya_cli、session、MessageSession、SessionSearch、Brief、memory_write、write_stage1_policy、plan、update_state、send_artifact）收进 host-owned 进程内 MCP server `duya_app`（`mcp__duya_app__<tool>` / `mcp_duya_app_<tool>` / `tool_id: mcp:duya_app:<tool>`），走 deferred 暴露 + `tool_catalog` 发现；基础工具 17 个（bash/read/write/edit/apply_patch/glob/grep/todo/task/…）留在常规注册层且 **wire name 一字不改**。对标 Codex 的 `codex_apps`（但 Codex 的 app 全是远程的，duya 的是本地进程内，形态是本期的原创）。6 张 T 卡 T610a–e + d2；**C2–C5（renderer 路由 / profile 规则 / canvas 权限短路 / bot 放行）必须随改名同卡落地**，否则中间态比改造前更糟。**C9：`source:'bundled'` 会在权限链 step 0 短路、跳过灾难检查与宿主开关，`duya_app` 必须用新的 `source:'app'`**。上下文穿透已实测可行（**AsyncLocalStorage**，5 并发调用各自隔离、穿过 await 无泄漏；优于 `_meta` 走私）。**T610a（进程内 MCP transport）/ T610b（AsyncLocalStorage 上下文穿透）/ T610n（`duya_app` 工具命名空间 + 反解共享纯函数）已交付** |
 
 ***
 
@@ -434,7 +433,7 @@ Designed, not started. Nothing here is promised work.
 
 ***
 
-## Completed Plans (366)
+## Completed Plans (367)
 
 Archived for decision logs. Not an index of current work.
 
@@ -461,7 +460,7 @@ Archived for decision logs. Not an index of current work.
 - prompt-asset-cleanup · element-tree-enumeration-overlay · bash-foreground-soft-yield · structural-computer-use · workflow-run-live-nodes-and-agent-watch · macos-native-computer-use
 - windows-cua-alignment · context-accounting-ledger · cua-minimized-window-access · duya-agent-api-design · duya-agent-core-implementation · duya-agent-integration
 
-### Infrastructure & Research (53)
+### Infrastructure & Research (54)
 
 - bash-worker-implementation · 09-bug-sweep · automation-cronjob-workflow · agent-core-audit · localhost-auto-open-from-bash · singleton-daemon-architecture
 - agent-harness-project-grounding · built-in-browser-fallback · async-task-inbox · cookie-import-app-bound-fix · recent-session-directory · gateway-agent-capability-and-workspace
@@ -471,7 +470,7 @@ Archived for decision logs. Not an index of current work.
 - compact-ui-history-retention · archive-design-parity-with-codex · agent-directory-restructuring · goal-mode-v2 · minimax-small-wins · code-review-line-comments
 - research-mode · gateway-ipc-refactor · browser-parallel-isolation · async-nonblocking-subagent · research-mode-loop-improvement · external-agent-import
 - tool-path-permission-refactor · chat-ux-improvement-plan · duya-implementation-phase1 · duya-implementation-phase2-3 · duya-implementation-phase4-5 · duya-project-structure
-- duya-source-code-integration · first-test-problems-analysis · first-test-problems · harness-comparison-docs · problems
+- duya-source-code-integration · first-test-problems-analysis · first-test-problems · harness-comparison-docs · problems · architecture-knowledge-map
 
 ### App Shell / UI (46)
 
