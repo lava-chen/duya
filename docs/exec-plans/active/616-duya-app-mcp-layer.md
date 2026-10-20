@@ -107,6 +107,32 @@ browser / computer_use / vision / image_generate / widget / module / duya_cli �
 （`packages/host/src/worker-session-runtime.ts:2050` 只在 worker 内部用）。
 → 路由匹配不能依赖 `mcpInfo`，得靠一个**可从工具名反解**的稳定标识。
 
+**C7b — 但模型可见名是【可逆】的，这解掉了 C2–C5 的全部匹配问题。**（2026-10-20 实测）
+
+用生产分配器 `computeProviderName` 实测，`duya_app` 的工具名是**纯前缀拼接**、无截断无
+哈希无去重后缀：
+
+```
+canvas_manage  => mcp_duya_app_canvas_manage
+send_message   => mcp_duya_app_send_message
+browser        => mcp_duya_app_browser
+computer_cua   => mcp_duya_app_computer_cua
+manage_routine => mcp_duya_app_manage_routine
+```
+
+（`duya_app` 的 scoped server name 无 `:`，不触发 `plugin:` 命名空间分支；工具名本身不含
+`__`，不触发 `__2` 去重后缀；`mcp_duya_app_` 前缀 13 字符 + 最长工具名，远低于 64 上限，
+不触发哈希截断。）
+
+**因此 C2–C5 有一个统一解法**：加一个纯函数
+`resolveAppToolBaseName(modelVisibleName): string | undefined`
+——命中 `mcp_duya_app_` 前缀就剥掉返回原名，否则返回 `undefined`。renderer 路由、
+profile allow/deny 匹配、`isCanvasTool` 权限短路三处**共用这一个函数**，而不是各写一遍
+前缀判断。
+
+**这个函数必须放在 `packages/capabilities`（或更低的共享包）**：renderer（`apps/desktop`）
+与权限（`packages/agent-runtime`）都要用，而 `apps/desktop` 不依赖 `packages/agent-runtime`。
+
 **C8 — 上下文穿透：AsyncLocalStorage 可行，且优于 `_meta` 走私。**（2026-10-19 实测）
 
 MCP `tools/call` 只带 `name` + `arguments`，而 canvas/bot/browser 工具需要活的

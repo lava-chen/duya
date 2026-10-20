@@ -93,10 +93,22 @@ export {
   createInProcessAppServer,
 } from './AppServer/in-process-app-server.js';
 export type {
+  AppServerTool,
   AppServerToolDefinition,
   InProcessAppServer,
   InProcessAppServerOptions,
 } from './AppServer/in-process-app-server.js';
+export {
+  withAppToolContext,
+  currentAppToolContext,
+} from './AppServer/app-tool-context.js';
+export type { AppToolContext } from './AppServer/app-tool-context.js';
+export {
+  DUYA_APP_SERVER_NAME,
+  DUYA_APP_TOOL_PREFIX,
+  resolveAppToolBaseName,
+  isAppToolName,
+} from './AppServer/app-tool-namespace.js';
 
 // Tooling projection — the `tools`-slot contributor declarations.
 export { createFileSystemToolContributors } from './fs-contributors.js';
