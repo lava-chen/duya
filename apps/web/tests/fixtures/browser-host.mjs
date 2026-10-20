@@ -4,11 +4,14 @@ import http from 'node:http';
 import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 import { fileURLToPath } from 'node:url';
-import { startLocalHost } from '@duya/host/local-host';
-import { HostSessionHttpClient } from '@duya/host/http-client';
-import { createWebBff } from '../../dist/server/web-bff.js';
+
+await import('./register-dist-resolver.mjs');
+const { startLocalHost } = await import('@duya/host/local-host');
+const { HostSessionHttpClient } = await import('@duya/host/http-client');
 
 const repo = fileURLToPath(new URL('../../../../', import.meta.url));
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-web-worker-proof-'));
@@ -87,9 +90,25 @@ for (const [id, title] of [['browser-proof', '浏览器验收 · 受控模型'],
     workspaceRelativePath: binding.relativePath, title, projectName: '架构验收', status: 'active',
     model: 'proof-model', providerId: 'browser-proof', permissionMode: 'default' });
 }
-const bff = await createWebBff({ hostOrigin: host.origin, hostToken: token,
-  staticRoot: path.join(repo, 'apps/web/dist/client') });
-const metadata = { origin: bff.origin, dataRoot: root, sessionId: 'browser-proof' };
+// Start the app the way `npm start` does: the built BFF entry owns the
+// internal web-bff module, and this fixture only consumes its public origin.
+const bff = spawn(process.execPath, [
+  '--import', pathToFileURL(path.join(repo, 'apps/web/tests/fixtures/register-dist-resolver.mjs')).href,
+  path.join(repo, 'apps/web/dist/server/main.js'),
+], {
+  env: { ...process.env, DUYA_HOST_ORIGIN: host.origin, DUYA_HOST_TOKEN: token, DUYA_WEB_PORT: '0' },
+  stdio: ['ignore', 'pipe', 'inherit'],
+});
+const bffOrigin = await new Promise((resolve, reject) => {
+  let output = '';
+  bff.stdout.on('data', (chunk) => {
+    output += chunk;
+    const match = /Duya web BFF listening at (http:\/\/\S+)/.exec(output);
+    if (match) resolve(match[1]);
+  });
+  bff.once('exit', (code) => reject(new Error(`web BFF exited before listening (code ${code})`)));
+});
+const metadata = { origin: bffOrigin, dataRoot: root, sessionId: 'browser-proof' };
 await fs.writeFile(path.join(root, 'browser-proof.json'), JSON.stringify(metadata, null, 2));
 process.stdout.write(JSON.stringify(metadata) + '\n');
 let closing = false;
@@ -97,7 +116,8 @@ async function close() {
   if (closing) return;
   closing = true;
   for (const response of heldResponses) response.destroy();
-  await bff.close();
+  bff.kill('SIGTERM');
+  await new Promise((resolve) => bff.once('exit', resolve));
   await host.close();
   provider.closeAllConnections();
   await new Promise((resolve) => provider.close(resolve));
