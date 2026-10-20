@@ -9,6 +9,17 @@
 
 ---
 
+## Phase 3 恢复材料
+
+2026-10-20 将独立恢复目录的说明归并于此。原材料来自 `phase3-membership-479`，
+来源提交 `e32f75d089bc60f6a6fd932c56548aeb29ee5b32`；以下是历史契约，不代表当前已接线或已验证。
+
+- `update_state target='project'` 的 create / join / leave 应幂等，成员列表保存在 `agents/<agentId>/state/projects.json`。
+- 旧实现包含 ID 路径校验、临时文件加 rename 写入及测试；其中的 Electron 路径、logger 与 RPC 接线已过期，不能直接照搬。
+- 恢复旧文件可从保留它们的提交读取：`git show 8a01159c40e08a4f02b80d94078a2f1bb98dbc6f:docs/recovered-plans/479-p3-membership/<file>`；
+  文件名为 `README.md`、`tierMembership.ts`、`tierMembership.test.ts`。源码不再作为文档目录中的可执行副本维护。
+- 重启 Phase 3 前，先核对 Host 的 `readJoinedProjects`、实际写入入口和权限链，再为当前生产接口补验收；不要从旧恢复说明推导当前缺口。
+
 ## 1. grok 三层记忆机制（调研结论，sand-memory.ts 已核实）
 
 | 层 | 内容 | 写入 | 关键常量/规则 |
