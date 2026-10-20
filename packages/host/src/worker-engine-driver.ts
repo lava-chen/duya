@@ -7,7 +7,7 @@ import type { LegacyFrameCodec } from '@duya/agent-runtime';
 import type { AssistantMessage, ChatOptions, MessageContent, SSEEvent, TokenUsage } from '@duya/host/worker-run-contracts';
 import type { EngineProductSession } from '@duya/host/worker-run-session-port';
 import type { TurnPipelinePublisher } from '@duya/agent-runtime/tools/turn-pipeline-publisher';
-import { buildLegacyRunInput, buildLegacyRunManifest, composeLegacyRunPorts, createLegacyAssembleTurn, gateRunApproval, selectRunDriverLeg, type LegacyRunFacts, type LegacyRunHost, } from '@duya/host/worker-run-composition';
+import { buildLegacyRunInput, buildLegacyRunManifest, composeLegacyRunPorts, createLegacyAssembleTurn, gateRunApproval, runLayerOptions, selectRunDriverLeg, type LegacyRunFacts, type LegacyRunHost, } from '@duya/host/worker-run-composition';
 import { createRunEventSpine } from '@duya/host/run-event-spine';
 import { executeRunEngine } from '@duya/host/run-engine-execution';
 import { createToolSideEffectLedger, defaultLedgerDir, ledgerFile } from '@duya/host/worker-tool-ledger';
@@ -155,6 +155,15 @@ export async function driveRunWithEngine(request: EngineRunDriverRequest, onFram
             catalogRevision: agent.activeMCPRegistry.getCatalogRevision(),
             permissionMode: request.permissionMode,
             ...(request.maxTurns === undefined ? {} : { maxTurns: request.maxTurns }),
+            // The turn's attachments, as the worker received them. They are
+            // named BY REFERENCE on the run input; the payloads stay where
+            // they are, on the user message the agent commits.
+            ...(request.options.attachments === undefined
+                ? {}
+                : { attachments: request.options.attachments }),
+            // The run layer's own bag for this turn. The worker's options
+            // also carry its ports, and a snapshot cannot hold a function.
+            options: runLayerOptions(request.options as unknown as Record<string, unknown>),
         };
         const manifest: RunManifest = buildLegacyRunManifest(facts);
         const input: RunInputSnapshot = buildLegacyRunInput(facts, {
@@ -197,7 +206,11 @@ export async function driveRunWithEngine(request: EngineRunDriverRequest, onFram
         });
         const host: LegacyRunHost = {
             turnPipelines,
-            assembleTurn: createLegacyAssembleTurn(assembly),
+            // The turn's attachments reach the model through the assembly, and
+            // the effort reaches it through the model port. Both are the
+            // Host's own values, carried from the adjudicated turn options.
+            assembleTurn: createLegacyAssembleTurn(assembly, request.options.attachments),
+            ...(request.options.effort === undefined ? {} : { effort: request.options.effort }),
             refreshDeclaredTools: () => assembly.refreshDeclaredTools(),
             askApproval: gateRunApproval(assembly, request.askApproval),
             emitter: spine.emitter,

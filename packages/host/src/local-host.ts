@@ -47,6 +47,7 @@ import {
   type HostDiagnosticsSink,
 } from './host-diagnostics-log.js';
 import { HostSessionHttpServer } from './http-server.js';
+import { manifestPermissionMode, profileToAgentMode } from '@duya/agent-runtime/authorization/profile-bridge';
 import { createHostLocalRolloutApi } from './local-rollout-api.js';
 import { createHostLocalWorkspaceFileApi } from './local-workspace-file-api.js';
 import { createHostLocalSessionApi } from './local-session-api.js';
@@ -508,11 +509,28 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           if (row === null) return null;
           const workingDirectory =
             row.workingDirectory !== '' ? row.workingDirectory : dataRoot;
+          // A spawned session INHERITS its parent's permission mode, and that
+          // inherited mode is the ceiling for the child's turns: a turn in the
+          // child may narrow it, never widen it. The ceiling is read from the
+          // parent session's own row, so it moves with the parent instead of
+          // being copied at spawn time and going stale.
+          const parent = row.parentSessionId === null
+            ? null
+            : core.stores.sessions.get(row.parentSessionId);
           return {
             workingDirectory,
             ...(row.model !== '' ? { model: row.model } : {}),
             ...(row.providerId !== '' ? { providerId: row.providerId } : {}),
             ...(row.agentProfileId === null ? {} : { agentProfileId: row.agentProfileId }),
+            // The session's own permission mode, translated by the
+            // repository's bridge rather than by a second mapping here: the
+            // worker resolves the same row through the same function, so the
+            // manifest and the run agree without a second answer to the same
+            // question.
+            permissionMode: manifestPermissionMode(profileToAgentMode(row.permissionMode)),
+            ...(parent === null
+              ? {}
+              : { parentPermissionMode: manifestPermissionMode(profileToAgentMode(parent.permissionMode)) }),
           };
         },
         bridge: createHostWorkerDbBridge({
