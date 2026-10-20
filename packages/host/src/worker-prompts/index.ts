@@ -31,6 +31,16 @@ export { PromptCache, createPromptCache } from './cache.js'
 // Constants
 export { cachedPromptSection, volatilePromptSection, prependBullets } from './constants/promptSections.js'
 
+// Section digests (plan 619 Phase 0 — the observation seam)
+export {
+  digestOf,
+  hasPromptObserver,
+  reportPromptDigests,
+  sectionDigest,
+  setPromptObserver,
+} from './observer.js'
+export type { PromptObserver, PromptSectionDigest } from './observer.js'
+
 // Prompt System base + registry
 export { PromptSystem } from './PromptSystem.js'
 export { PromptsRegistry, resolvePromptSystemName } from './registry.js'
