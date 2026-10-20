@@ -71,8 +71,11 @@ tokens ──tokensToSpans──▶ StyledSpan[] ──┬─▶ spansToTags  �
 ## 门禁
 
 - `packages/cli` `tsc -b --force` 干净
-- `tui` **859 / 859** 全绿
-- `packages/cli` **1070 / 1078**，8 红与改造前**完全一致**（worker-path×3 / tui-pty×2 / registry×1 / host-stop-continue×2，均为存量、非本次引入）
+- `tui` **859 / 859** 全绿（计划阶段结果）
+- Windows ConPTY PTY acceptance：`packages/cli/test/tui-pty.test.ts` **2 / 2** 通过。使用 80 列真实 `node-pty`、受控 Host 和 fake worker；分别走 allow/deny，验证一次物理 Enter 只创建一个 run、worker 收到实际决策、退出码为 0，并发出 mouse / bracketed-paste / alternate-screen 恢复序列。
+- 历史 `packages/cli` **1070 / 1078** 的 8 个失败里，两个 `tui-pty` 失败来自测试把追加式 ANSI 字节流误当成当前屏幕、等待已清除的旧 composer 文本消失。改为等待 permission picker 并检查 Host run 数后，PTY 两例在当前分支通过；没有生产输入修复。剩余 6 个已知失败按 `(file, test, signature)` 与 baseline 对照仍属既有项：worker-path×3 / registry×1 / host-stop-continue×2；网络用例在沙箱中的 loopback `EACCES` 不计作产品断言结果。
+- `npm run typecheck:all`：通过（Electron ratchet 无新错误）；`npm run architecture:check`：通过（0 新增违规）；`npm run bundle:verify`：通过（0/1064 worker bundle inputs changed）。
+- `npm run electron:build`：待串行构建窗口复验；首次默认堆运行在 Vite chunk rendering 阶段 OOM。Agent、CLI、Gateway bundles 已成功生成；临时输出未纳入本次改动。
 - 基准测试**刻意不做阈值断言**：阈值会把慢机器变成误报失败，改为断言不变量 + `DUYA_PERF_BASELINE=1` 输出 JSON 跨阶段对比
 
 ---
@@ -81,7 +84,7 @@ tokens ──tokensToSpans──▶ StyledSpan[] ──┬─▶ spansToTags  �
 
 1. **`TUIApp` 仍 3250 行**，计划目标是 <1200。剩余部分不是「拼装」：键表与路由 397 行、chrome 绘制 496 行、调度与生命周期 380 行、选项 300 行。抽任何一块都要给约 35 个**私有**成员定义宿主接口，而把私有升成 public 来换行数是**净损失** —— 封装正是这次要保住的东西。判定：这是**职责边界**指标，需要一次独立计划先把「输入分发」和「chrome 组合」拆成各自持有状态的子系统。
 2. **宽度表仍依赖 `blessed/lib/unicode.js`**（`terminal/cell-width.ts`）。它是数据表不是渲染器，保留是为了一致性：渲染器按这个数推进 cell、光标列也由它推导，换第二份表会在歧义宽度字符上让光标偏一列。彻底删依赖 = 内联约 800 行 MIT 范围表，是另一个决定。
-3. **真机验证未做**：tmux / 真实 PTY 两档基准，以及 `duya chat` 全屏 + inline × 中文 IME × 鼠标 × 10k block 会话的矩阵。这是本计划唯一无法用测试替代的门禁。
+3. **V10 部分未闭合**：Windows ConPTY 已验证全屏 composer 输入、一次 Enter、Host run、allow/deny、长工具参数换行，以及退出时终端模式恢复。仍未人工验证 inline 模式、中文 IME、真实鼠标点击/滚动、长会话与 10k block 的交互表现，也未测 tmux 和非 Windows PTY；这些不能由当前受控 Host PTY 用例替代。
 
 ## 审阅建议
 

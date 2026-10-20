@@ -309,12 +309,15 @@ describe('duya tui in a real 80-column PTY', () => {
       await until(() => screen().includes('run the thing'), 'the prompt to be echoed');
       await settle();
       term.write('\r');
-      await until(() => !screen().includes('❯ run the thing'), 'the composer to submit');
+      // A raw output transcript is append-only: a cleared composer remains in
+      // its history. The permission picker is the observable proof that Enter
+      // submitted and the run reached the worker.
+      await until(() => screen().includes('Allow once'), 'the permission picker after submit');
+      expect(await client.listAgentRunsBySession(sessionId)).toHaveLength(1);
 
       // 2. The permission request is on screen, and all three choices fit in
       //    80 columns. A picker that needs 100 columns would silently drop the
       //    bottom option, and there is no other way to see that.
-      await until(() => screen().includes('Allow once'), 'the permission picker');
       const withPicker = screen();
       expect(withPicker).toContain('[1] Allow once');
       expect(withPicker).toContain('[2] Always allow');
@@ -332,6 +335,10 @@ describe('duya tui in a real 80-column PTY', () => {
       term.write('\u0003');
       const code = await exitCode(term);
       expect(code).toBe(0);
+      expect(raw).toContain('\u001b[?1006l');
+      expect(raw).toContain('\u001b[?1002l');
+      expect(raw).toContain('\u001b[?2004l');
+      expect(raw).toContain('\u001b[?1049l');
     } finally {
       try { term.kill(); } catch { /* already gone */ }
       await host.close();

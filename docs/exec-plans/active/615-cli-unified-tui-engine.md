@@ -345,8 +345,14 @@ App (id: root)
   - [x] 7.1 删 blessed 渲染链：`blessed-surface.ts`、`TUIApp` 的 `blessed.program`/`BlessedProgram`/键路由 blessed 分支、`terminal/sgr.ts`（Phase 5 已无生产调用方）、`@types/blessed` 依赖。终端模式改为自有序列（`enableMouseReporting`/`disableMouseReporting`/`enableBracketedPaste`/`disableBracketedPaste`/`cursorTo`/`hideCursor`/`showCursor`），`OwnScreenSurface` 自己开启鼠标上报。`ScreenRenderer` 收成单成员别名 `= 'own'`，`DUYA_TUI_RENDERER=blessed` 被**忽略而非崩溃**（用户 shell profile 里可能还留着）。
     - **`blessed-unicode.ts` → `terminal/cell-width.ts`（改名，内容不变）**：它是 blessed 的**唯一**残留依赖，且是数据表不是渲染器。宽度函数与渲染器的一致性正是它存在的理由（编辑器光标列必须等于单元格实际列），换第二份实现（`get-east-asian-width`）会在歧义宽度字符上漂一列。彻底删依赖 = 内联 `blessed/lib/unicode.js` 约 800 行（MIT，主要是三张范围表），那是**独立决定**，不塞进「渲染器归我们了」这一步。
   - [~] 7.2 基准复测：**ConPTY 一档已测**（见 §8.2），数字与 Phase 0 的 own 列一致（painted P50 30.8ms，未回归）；tmux / 真实 PTY 两档**未测**（本机无对应环境，需在目标环境跑同一条命令）。
-  - [ ] 7.3 真机矩阵：`duya chat` 全屏 + inline × 中文 IME × 鼠标 × 10k block 会话。**未做**——需要人工在真终端上执行；这是 615 唯一无法用测试替代的门禁。
-  - 门禁：`typecheck:all` + 全量测试 + 基准 JSON + 真机截图（替代 V10）— 已达成前三项中的前两项：`tsc -b --force` 干净；`tui` **859/859** 全绿（删 `sgr.test.ts` 与 `render-parity.test.ts`，新增 `render-frames.test.ts`）；`packages/cli` 1078 条里 1070 通过，8 红与 Phase 5/6 完全一致。
+  - [~] 7.3 终端矩阵：Windows ConPTY 下的全屏 composer 输入、Enter 提交、受控 Host run、allow/deny 和终端模式恢复已由真实 PTY 测试覆盖；inline 模式、中文 IME、鼠标交互、长会话/10k block 的人工终端验收，以及 tmux / 非 Windows PTY 尚未验证。
+  - 阶段原始门禁记录：`tsc -b --force` 干净；`tui` **859/859** 全绿（删 `sgr.test.ts` 与 `render-parity.test.ts`，新增 `render-frames.test.ts`）；当时 `packages/cli` 1078 条里 1070 通过。下面的收口记录更新了其中两个 PTY 用例的归因和当前证据。
+
+### 7.4 Closeout verification (2026-10-20)
+
+- `packages/cli/test/tui-pty.test.ts`: **2/2 pass** on Windows ConPTY (80 columns), with a controlled Host and fake worker. Each case sends text and a distinct CR, asserts exactly one Host run, then exercises allow or deny and confirms the worker received that decision. On exit the test checks the process code and mouse, bracketed-paste, and alternate-screen disable sequences.
+- The two historical PTY failures were harness false negatives: `readScreen(raw)` strips escapes from an append-only output transcript, so an earlier composer string cannot disappear from it after the UI clears. Waiting for the permission picker and checking the Host run count is the correct observable submission proof. No production input or paste behavior changed.
+- The remaining known full-suite red signatures are worker-path×3, registry×1, and host-stop-continue×2, compared by `(file, test, signature)` against the clean base. The two stop/continue failures reproduce on the base; worker-path and registry failures are also baseline signatures. Do not treat the old aggregate count as current test evidence.
 
 ## 8. Verification
 
