@@ -163,7 +163,7 @@ Duya separates responsibilities so one chat loop does not own the entire applica
 
 This process separation improves interruption, recovery, and session isolation. It is not a promise of a hardened operating-system sandbox on every platform.
 
-Core stack: Electron, Vite, React 19, TypeScript, SQLite / better-sqlite3, HTTP + SSE, and child-process agent workers. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the detailed data flows and [docs/SECURITY.md](./docs/design-docs/SECURITY.md) for the current security model and limitations.
+Core stack: Electron, Vite, React 19, TypeScript, SQLite / better-sqlite3, HTTP + SSE, and child-process agent workers. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the detailed data flows and [ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md) for the package map.
 
 ---
 
@@ -202,15 +202,20 @@ npm run diagnose:env
 ### Repository structure
 
 ```text
-src/                  Renderer UI
-electron/             Electron main process, IPC, and local services
-packages/agent/       Agent runtime, tools, prompts, and modes
-packages/cli/         Desktop control-plane CLI
-packages/conductor/   Canvas and Conductor subsystem
-packages/gateway/     External channel gateway package
-scripts/              Build, bundle, packaging, and diagnostics
-docs/                 Architecture, execution plans, and release notes
+packages/ui/           Shared renderer (React 19): components, stores, hooks, styles
+packages/host/         Product worker: run orchestration, worker supervision, tool registry
+packages/agent-*/      Harness core: wire protocol, run reasoning, run engine
+packages/capabilities/ Tool implementations: filesystem, shell, browser, MCP
+packages/agent/        Legacy shell (retirement in progress)
+apps/desktop/          Electron app: main process, preload, renderer shell
+apps/web/              Browser client for the standalone Host
+scripts/               Build, bundle, packaging, and diagnostics
+docs/                  Architecture, execution plans, and release notes
 ```
+
+The full package map is in [ARCHITECTURE.md](./ARCHITECTURE.md). For "which
+package do I open for this symptom?", see
+[ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md).
 
 Before contributing, read [AGENTS.md](./AGENTS.md) and check the active work in [docs/exec-plans/README.md](./docs/exec-plans/README.md).
 

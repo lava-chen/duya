@@ -310,7 +310,7 @@ ends with a *different* set of failures, that is on you.
 
 ***
 
-## Active Plans (37)
+## Active Plans
 
 > 架构主线已收束为 **610 一项**（原 600/601/602 已收为其三章；587 的合同被其第 01 章接管）。
 > 其他产品计划保留独立范围。**架构执行顺序以 610 为准**，不能从历史编号另排队列。
@@ -366,6 +366,7 @@ Four were wrong and are corrected below; these five were checked and are
 | --- | --- | --- |
 | **[610-architecture-series](./active/610-architecture-series/README.md)** | **P0** | **唯一的架构计划，仍 Active。** 执行队列唯一入口是 [19 — 快速执行队列](./active/610-architecture-series/19-fast-track-queue.md)：PR 级 T 卡、独占路径、首个失败证据、验收命令。**当前 next action = T01（`turn.completed` 生产者）**；T00（落盘 S1 fence）在共享检出静止后立即提交。S0/S1 已基本落地（`15fa4850` / `cdee21d5` / `a935741f` / `ac1f5183`）——[17](./active/610-architecture-series/17-shared-agent-platform-execution.md) §5 的切片状态已过期，架构裁决仍以 17 为准。 |
 | [587-agent-harness-monorepo](./active/587-agent-harness-monorepo/README.md) | P1 | 合同与历史推导已被 610 第 01 章接管(`01-layered-architecture/10-takeover-from-587.md`)。**不再单独排期**,只作为查证来源 |
+| [619-architecture-knowledge-map](./active/619-architecture-knowledge-map/README.md) | P2 | 补齐架构知识层：22 个包的包级 `AGENTS.md`（`tests/rules-compliance.test.mjs` 测试 2 当前 22 红）、`ARCHITECTURE_MAP.md` 排障导航、修正 `ARCHITECTURE.md` / `README` 的失效路径。**next action = `node tests/rules-compliance.test.mjs` 与 `npm run check:encoding` 全绿后提 PR** |
 
 > **只有一个架构计划。** 610 的切片表 A0–A7 / B1–B3 / C1 是全部的架构工作,
 > 每一片的唯一下一动作与完成标志见
