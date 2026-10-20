@@ -55,6 +55,14 @@ export interface HostPluginAppInvocationOptions {
 export interface HostPluginAppInvocationInternalApi extends HostPluginAppInvocationApiV1 {
   /** Worker-only final side-effect fence; caller identity is derived by RunExecution. */
   isBindingCurrent(bindingId: string, nonce: string, toolId: string, caller: SessionServiceCaller): Promise<boolean>;
+  /**
+   * The attempt epoch a live binding was minted under.
+   *
+   * The public binding shape deliberately does not carry the epoch, so a
+   * privileged caller that must fence its own per-attempt state needs this.
+   * `null` when the binding is unknown or already expired.
+   */
+  bindingEpoch(bindingId: string): number | null;
 }
 
 interface StoredBinding extends PluginAppInvocationBinding {
@@ -208,6 +216,11 @@ export function createHostPluginAppInvocationApi(
       if (!binding || binding.nonce !== nonce) return false;
       bindings.delete(bindingId);
       return true;
+    },
+    bindingEpoch(bindingId: string): number | null {
+      const binding = bindings.get(bindingId);
+      if (!binding || Date.now() >= binding.expiresAt) return null;
+      return binding.epoch;
     },
     async isBindingCurrent(bindingId: string, nonce: string, toolId: string, caller: SessionServiceCaller): Promise<boolean> {
       const binding = bindings.get(bindingId);

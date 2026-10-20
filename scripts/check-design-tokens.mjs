@@ -29,8 +29,11 @@ import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const STYLES_DIR = join(ROOT, 'src', 'styles');
-const SRC_DIR = join(ROOT, 'src');
+const STYLES_DIR = join(ROOT, 'packages', 'ui', 'src', 'styles');
+const SOURCE_DIRS = [
+  join(ROOT, 'packages', 'ui', 'src'),
+  join(ROOT, 'packages', 'conductor', 'src'),
+];
 const BASE_CSS = join(STYLES_DIR, 'base.css');
 const GLOBALS_CSS = join(STYLES_DIR, 'globals.css');
 
@@ -94,7 +97,7 @@ function main() {
   const baseCss = readIfExists(BASE_CSS);
   const globalsCss = readIfExists(GLOBALS_CSS);
   if (!baseCss || !globalsCss) {
-    console.error('[design-tokens] cannot read style sources; expected src/styles/{base,globals}.css');
+    console.error('[design-tokens] cannot read style sources; expected packages/ui/src/styles/{base,globals}.css');
     process.exit(1);
   }
 
@@ -104,7 +107,7 @@ function main() {
   /** name -> [{ file, line, className }] */
   const violations = new Map();
 
-  for (const file of walkSourceFiles(SRC_DIR)) {
+  for (const file of SOURCE_DIRS.flatMap((dir) => [...walkSourceFiles(dir)])) {
     const content = readFileSync(file, 'utf8');
     const lines = content.split('\n');
     lines.forEach((line, index) => {
@@ -140,7 +143,7 @@ function main() {
   console.error('[design-tokens] undeclared semantic color utilities found.\n');
   console.error(
     'These classes generate NO CSS because their token is missing from the\n' +
-      '`@theme` block in src/styles/globals.css. Add `--color-<name>: var(--<name>);`\n' +
+      '`@theme` block in packages/ui/src/styles/globals.css. Add `--color-<name>: var(--<name>);`\n' +
       'there, or stop using the class.\n',
   );
   for (const [name, usages] of [...violations.entries()].sort((a, b) => b[1].length - a[1].length)) {
