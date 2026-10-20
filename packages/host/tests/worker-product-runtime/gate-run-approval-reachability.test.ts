@@ -43,7 +43,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { gateRunApproval, type LegacyRunHost } from '../../src/worker-run-composition.js';
 import type { RunTurnAssembly } from '../../src/worker-run-session-port.js';
-import type { ApprovalRequest } from '@duya/agent-runtime/engine/ports';
+import type { ApprovalRequest } from '@duya/agent-runtime';
 
 function request(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
     return {
