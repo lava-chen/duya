@@ -446,6 +446,14 @@ export function translateFrame(
  * `expiresAt` is computed from the manifest's `defaultTimeoutMs` rather than
  * read off the frame, because the legacy shape let the agent mint the value
  * while the worker set the timer — two clocks that could disagree.
+ *
+ * The mode is the one exception, and it is an exception in the frame's
+ * favour: the worker DOES carry the interactive situation on the frame
+ * (`generic` / `ask_user_question` / `exit_plan_mode`), because the executor
+ * is what raised the request. `ctx.permission.mode` is a per-run constant —
+ * the Host's is hardcoded to `generic` — so preferring it would replace a
+ * fact the frame states with a value nobody chose. The context is still the
+ * fallback for a frame that carries no mode at all.
  */
 function translatePermission(
   data: Readonly<Record<string, unknown>>,
@@ -455,6 +463,10 @@ function translatePermission(
   const requestId = str(data['requestId'] ?? data['id']);
   if (requestId === '') return unmapped(data);
 
+  const frameMode = str(data['mode']);
+  const mode = frameMode === 'generic' || frameMode === 'ask_user_question' || frameMode === 'exit_plan_mode'
+    ? frameMode
+    : ctx.permission.mode;
   const startedAt = ctx.permission.now();
   return ok({
     type: 'permission.requested',
@@ -462,7 +474,7 @@ function translatePermission(
     kind: ctx.permission.classify(toolName),
     toolName,
     toolInput: obj(data['input'] ?? data['toolInput']),
-    mode: ctx.permission.mode,
+    mode,
     startedAt,
     expiresAt: startedAt + ctx.permission.expiresInMs,
     ...(str(data['toolCallId']) !== '' ? { toolCallId: str(data['toolCallId']) } : {}),
