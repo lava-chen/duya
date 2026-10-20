@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/utils";
 import type { PluginRegistryEntry, PluginCatalogEntry } from "@/lib/plugin-types";
 import { RuntimeStatusBadge } from "./RuntimeStatusBadge";
+import { PluginAppLauncher } from "@/components/plugin-apps/PluginAppLauncher";
 
 interface PluginManagementViewProps {
   installed: PluginRegistryEntry[];
@@ -131,16 +132,16 @@ export function PluginManagementView({
                 (item.permissionDenied?.length ?? 0) > 0;
 
               return (
-                <div
-                  key={item.id}
-                  className={cn(
-                    "flex items-center gap-3 rounded-lg border px-4 py-3 transition-colors cursor-pointer",
-                    hasIssues
-                      ? "border-amber-500/20 bg-amber-500/[0.02] hover:bg-amber-500/[0.04]"
-                      : "border-border/40 bg-surface/40 hover:bg-surface/60"
-                  )}
-                  onClick={() => onPluginClick(item.id)}
-                >
+                <div key={item.id} className="space-y-2">
+                  <div
+                    className={cn(
+                      "flex items-center gap-3 rounded-lg border px-4 py-3 transition-colors cursor-pointer",
+                      hasIssues
+                        ? "border-amber-500/20 bg-amber-500/[0.02] hover:bg-amber-500/[0.04]"
+                        : "border-border/40 bg-surface/40 hover:bg-surface/60"
+                    )}
+                    onClick={() => onPluginClick(item.id)}
+                  >
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-xs font-semibold text-accent">
                     {monogram}
                   </div>
@@ -174,6 +175,10 @@ export function PluginManagementView({
                       Remove
                     </Button>
                   </div>
+                  </div>
+                  {item.apps && item.apps.length > 0 ? (
+                    <PluginAppLauncher pluginId={item.id} apps={item.apps} />
+                  ) : null}
                 </div>
               );
             })}

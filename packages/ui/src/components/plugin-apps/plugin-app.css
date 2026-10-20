@@ -1,0 +1,33 @@
+/* Plugin App host — an externally hosted mini app embedded in the app. */
+
+.plugin-app-host {
+  display: flex;
+  flex: 1;
+  min-height: 320px;
+  overflow: hidden;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-canvas);
+}
+
+.plugin-app-host webview {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+.plugin-app-host-loading {
+  padding: 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.plugin-app-host-error {
+  padding: 12px 14px;
+  border: var(--border-width) solid var(--error-soft);
+  border-radius: 8px;
+  background: var(--error-soft);
+  color: var(--error);
+  font-size: 13px;
+}

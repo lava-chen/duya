@@ -137,6 +137,7 @@ let sessionApiClient: HostSessionHttpClient | null = null;
 let runningHandle: DesktopHostApiHandle | null = null;
 let startup: Promise<DesktopHostApiHandle> | null = null;
 let pluginAppInvocationInternalApi: HostPluginAppInvocationInternalApi | null = null;
+let pluginAppInstanceApiRef: ReturnType<typeof createHostPluginAppInstanceApi> | null = null;
 
 async function writeRuntimeFile(filePath: string, runtime: HostApiRuntime): Promise<void> {
   const directory = path.dirname(filePath);
@@ -214,6 +215,7 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
   // the same one.
   const pluginAppAuthority = createDesktopPluginAppAuthority(stores.appGrants);
   const pluginAppInstanceApi = createHostPluginAppInstanceApi(stores.appInstances);
+  pluginAppInstanceApiRef = pluginAppInstanceApi;
   const pluginAppGrantApi = createHostPluginAppGrantApi({
     store: stores.appGrants,
     authority: pluginAppAuthority,
@@ -573,6 +575,11 @@ export function getDesktopHostGoalApi(): HostGoalApiV1 {
 export function getDesktopHostPluginAppInvocationApi(): HostPluginAppInvocationInternalApi {
   if (!pluginAppInvocationInternalApi) throw new Error('Desktop Host Plugin App invocation API is not running');
   return pluginAppInvocationInternalApi;
+}
+
+export function getDesktopHostPluginAppInstanceApi(): ReturnType<typeof createHostPluginAppInstanceApi> {
+  if (!pluginAppInstanceApiRef) throw new Error('Desktop Host Plugin App instance API is not running');
+  return pluginAppInstanceApiRef;
 }
 
 export function getDesktopHostModeStateApi(): HostModeStateApiV1 {

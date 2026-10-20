@@ -1,0 +1,26 @@
+{
+  "name": "hello-app",
+  "id": "com.duya.examples.hello-app",
+  "version": "0.1.0",
+  "description": "A minimal external Plugin App. It proves the mini app door: an App that lives outside the product, runs sandboxed, and reaches the agent only through the session the host minted for it.",
+  "author": {
+    "name": "Duya"
+  },
+  "interface": {
+    "displayName": "Hello App",
+    "shortDescription": "Minimal external Plugin App",
+    "category": "development"
+  },
+  "extensions": {
+    "com.duya.client": {
+      "apps": [
+        {
+          "appId": "hello",
+          "entry": "apps/hello/index.html",
+          "requiredCapabilities": [],
+          "stateSchemaVersion": 1
+        }
+      ]
+    }
+  }
+}
