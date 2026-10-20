@@ -54,16 +54,24 @@ duya-canvas plugin（装在插件目录里，不在 workspace 里）
 S1 先行是因为 S2–S5 全部依赖「外部 mini app 能被加载」这一前提；声明面（manifest）与
 落地依赖（Host 三套 API）都已存在，缺的只是宿主。
 
-## 4. 与 616 的交集与接缝
+## 4. 与 616 的接缝（已由 owner 裁决）
 
 616 走的是**内置进程内 MCP**：canvas 工具从 conductor mode 注入改为 `duya_app` 这个
 host-owned MCP server 的工具（`docs/exec-plans/active/616-duya-app-mcp-layer.md` §4 的 T610c）。
-本计划走的是**外部 plugin**：工具由 plugin 自带的 MCP server 提供，宿主只保留通用 MCP client。
 
-两者在 `packages/capabilities/src/canvas/**`、`conductor-mode.ts`、renderer 工具行三处重叠。
-处置：**S4 之前不碰这三处**；S4 开工前先与 616 的 owner 对一次接缝（616 的 T610c 是否已合）。
-若 616 的 T610c 已合，本计划的 S4 改为「把 616 注入的工具换成 plugin MCP server 提供」，
-不重复做改名与权限规则那一半。
+**2026-10-20 owner 决策**：616 的 T610c 已标 ⛔ ——「canvas 系列不再由 616 承担，即将从 app
+内部剥离、改为对外提供服务，由他人负责」。616 只保留**共享面**：命名空间 / 权限 / profile
+规则（T610e 已交付，PR #318）。
+
+因此接缝已定，不再是待协调项：
+
+| 归属 | 内容 |
+| --- | --- |
+| 616 | 命名空间反解、`source: 'app'` 权限分支、profile 规则 —— 外部 plugin 的工具**复用**这一层 |
+| 本计划（S4） | canvas 的**注册面**迁移：谁提供这些工具（外部 plugin 的 MCP server，而不是 conductor mode 注入）+ renderer 路由 |
+
+S4 开工前的动作只剩一个：**读 616 的 T610e 交付（PR #318）已交付的共享面**，在其之上换掉
+注册面，不重复做改名与权限规则那一半。
 
 ## 5. 未覆盖（不属于本计划的完成声明）
 
