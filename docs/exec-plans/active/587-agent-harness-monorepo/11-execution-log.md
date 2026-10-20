@@ -1333,3 +1333,44 @@ still fail before collection with `EPERM` resolving
 imports. No end-to-end Host Run API, Host-connected CLI, or packaged Desktop
 tool turn was verified in this slice.
 
+## CI changed-scope and Electron E2E routing (2026-10-20)
+
+Worked in isolated branch `codex/ci-test-routing`, based on `origin/master`
+`8a01159c40e08a4f02b80d94078a2f1bb98dbc6f`; the primary checkout was left
+untouched. The test workflow now resolves PR file scope once, runs changed
+Vitest suites serially for implementation edits, routes focused Playwright
+specs after `electron:build`, and runs full Electron smoke tests for
+Desktop/shared-UI and E2E/build infrastructure changes. Workflow/resolver-only
+changes run focused unit tests and skip product build; Vitest config, lockfile,
+and workspace manifest changes run the full unit suite. It falls back to full
+test scopes when the diff cannot be resolved. Documentation-only PRs skip
+product tests/build. A daily schedule owns the full three-OS test and packaging
+matrix plus full Electron smoke on Ubuntu; master push events do not repeat
+PR/scheduled suites. This does not change required-check rules or mask the
+documented full-suite failures.
+
+Added resolver coverage for documentation-only, source, E2E spec/shared
+infrastructure, test/lock/workflow infrastructure, Desktop/shared-UI changes,
+CI-only changes, missing PR SHAs, schedule, push, and empty diffs. The worktree
+was rebased onto latest `origin/master` `ab39a15`, which includes `5d604efe`
+(encoding-gate repair) and `5c88a378` (Host Runtime public-import repair).
+Temporary duplicate diagnosis edits were removed and are not part of this CI
+change.
+
+Validation on Windows / Node from the managed worktree:
+
+- `npx vitest run scripts/ci/test-scope.test.ts --no-file-parallelism --reporter=dot` — passed after the routing regression coverage was added (23 tests).
+- `npm run test:e2e -- --list e2e/smoke/smoke.spec.ts` with lifecycle scripts disabled — passed; Playwright discovered all six selected smoke tests.
+- `node --check scripts/ci/test-scope.mjs` and YAML parse / workflow dependency checks — passed; schedule selection returned `unit=full,e2e=full,build=run`.
+- Initial GitHub PR run #480 exposed an important false-positive: the root `ci:test-scope` npm script edit was treated as a product manifest change (`unit=changed,e2e=full,build=run`). Vitest's `--changed` then selected a broad set including unrelated agent/Host/Desktop tests; the Electron E2E job ran 21.2 minutes (57 passed, 17 failed, 9 did not run, plus one runner error).
+- Exact `npm test -- --changed=<base SHA> --no-file-parallelism` invocation — passed; Vitest selected one file and passed all 22 scope tests (45.34s local Windows scan/run).
+- `npm run architecture:check` — passed on rebased head (2,892 tolerated, 0 new).
+- `npm run typecheck:all` — passed on rebased head; 231 existing Electron diagnostics across 111 keys remain baselined, with no new errors.
+- The first remote run also confirmed typecheck and architecture pass, but exposed that `--changed` plus a root manifest script edit is too broad for CI-only changes. Resolver follow-up now recognizes only the exact `ci:test-scope` script-only manifest diff, emits explicit unit test targets, and skips product typecheck/build/E2E for CI-only wiring. General root manifest edits remain full-suite changes. The updated local resolver selects `unit=changed,e2e=skip,build=skip` with only `scripts/ci/test-scope.test.ts` for this PR; the next GitHub run must verify that exact selection.
+- GitHub runs #482/#483 exposed the actual diff-boundary bug: `HEAD_SHA` was `github.sha`, the synthetic PR merge commit. The PR event's base SHA was still `ab39a15`, while the synthetic merge used newer `master` `7e60070` as its first parent; diffing those refs included 15 commits and unrelated Desktop/Agent files. The workflow now supplies `github.event.pull_request.head.sha` for PRs and falls back to `github.sha` for other events. The resolver-only manifest check remains as defense in depth; the next remote run must prove the PR file list is now only the seven branch changes.
+- Real Electron E2E execution is not available locally; the smoke spec was list-validated only. GitHub connector confirmed repository push/merge access; PR creation and remote checks are pending the corrected run.
+
+The workflow now serializes Vitest files for both changed and full scopes, and
+for the scheduled coverage run, to avoid cross-file temporary namespace races.
+Final branch SHA and PR/check status will be recorded before handoff.
+
