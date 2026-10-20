@@ -484,6 +484,35 @@ export function parsePath(url: string): { pathname: string; parts: string[] } {
  */
 const RUN_LAYER_ONLY_FRAMES: ReadonlySet<string> = new Set(['chat:message_finalized', 'run:event']);
 
+/**
+ * The attempt a transport correlated a worker request with, or `null`.
+ *
+ * The Agent Server owns the run ledger and the worker supervisor, so it is
+ * the only party that can say "this child is the live worker of this session,
+ * under this run and epoch". That correlation is returned to the caller as a
+ * separate value instead of being written into the request body, because the
+ * body is owned by the worker: a worker that could state its own session, run
+ * and epoch would be able to name another worker's attempt.
+ */
+function correlateWorkerAttempt(
+  sessionId: string,
+  child: ChildProcess,
+  message: Record<string, unknown>,
+  deps: RouterDeps,
+): { sessionId: string; runId: string; epoch: number } | null {
+  if (message.action !== 'plugin-app:binding-current') return null;
+  const execution = message.execution;
+  if (!execution || typeof execution !== 'object' || Array.isArray(execution)) return null;
+  const candidate = execution as Record<string, unknown>;
+  const runId = deps.runOrchestrator?.runForSession(sessionId);
+  const attempt = runId ? deps.runOrchestrator?.attemptFor(runId) : null;
+  if (!runId || !attempt || attempt.retired) return null;
+  if (child !== deps.workerManager.getWorker(sessionId)) return null;
+  if (candidate.sessionId !== sessionId || candidate.runId !== runId) return null;
+  if (!Number.isSafeInteger(candidate.epoch) || candidate.epoch !== attempt.epoch) return null;
+  return { sessionId, runId, epoch: attempt.epoch };
+}
+
 function forwardWorkerDbRequest(
   sessionId: string,
   child: ChildProcess,
@@ -493,19 +522,17 @@ function forwardWorkerDbRequest(
 ): void {
   if (typeof message.id !== 'string' || !process.send) return;
   const forwarded: Record<string, unknown> = { ...message };
-  if (message.action === 'plugin-app:binding-current') {
-    const execution = message.execution;
-    if (execution && typeof execution === 'object' && !Array.isArray(execution)) {
-      const candidate = execution as Record<string, unknown>;
-      const runId = deps.runOrchestrator?.runForSession(sessionId);
-      const attempt = runId ? deps.runOrchestrator?.attemptFor(runId) : null;
-      if (runId && attempt && child === deps.workerManager.getWorker(sessionId) && candidate.sessionId === sessionId &&
-          candidate.runId === runId && Number.isSafeInteger(candidate.epoch) && candidate.epoch === attempt.epoch) {
-        // This context is minted by the Agent Server only after correlating the
-        // worker ChildProcess, its session, and the orchestrator's live attempt.
-        forwarded.trustedPluginAppCaller = { sessionId, runId, epoch: attempt.epoch };
-      }
-    }
+  // The worker owns this payload. Any transport-only field it sent is a
+  // forged claim, so it is stripped before the request leaves the Agent
+  // Server.
+  delete forwarded.trustedPluginAppCaller;
+  delete forwarded.trustedAttempt;
+  // The Agent Server's own correlation is announced on a SEPARATE message
+  // type, not as a field of the forwarded request. Main then reads it from
+  // the transport fact, and the request body stays a body.
+  const trustedAttempt = correlateWorkerAttempt(sessionId, child, message, deps);
+  if (trustedAttempt) {
+    process.send({ type: 'desktop-plugin-app:trusted-attempt', id: message.id, ...trustedAttempt });
   }
   workerDbRequests.set(message.id, child);
   process.send(forwarded);

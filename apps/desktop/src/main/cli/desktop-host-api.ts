@@ -217,8 +217,8 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     store: stores.appGrants,
     authority: pluginAppAuthority,
   });
-  const workerGenerationByBinding = new Map<string, { generation: string; expiresAt: number }>();
-  const workerGenerationByAttempt = new Map<string, string>();
+  const workerGenerationByBinding = new Map<string, { generation: number; expiresAt: number }>();
+  const workerGenerationByAttempt = new Map<string, number>();
   const pruneExpiredPluginAppBindingGenerations = () => {
     const now = Date.now();
     for (const [bindingId, binding] of workerGenerationByBinding) {
@@ -230,7 +230,7 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
       const response = await requestAgentServerPluginApp({
         operation: 'describe-tools', sessionId: input.sessionId, runId: input.runId, epoch: input.epoch,
       });
-      if (!response.success || !('tools' in response.result) || typeof response.result.workerGeneration !== 'string') {
+      if (!response.success || !('tools' in response.result) || typeof response.result.workerGeneration !== 'number') {
         throw new Error('plugin_app_worker_unavailable');
       }
       workerGenerationByAttempt.set(`${input.sessionId}:${input.runId}:${input.epoch}`, response.result.workerGeneration);
@@ -281,8 +281,16 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     ...pluginAppInvocationCore,
     async bindPluginAppInvocation(input: Parameters<typeof pluginAppInvocationCore.bindPluginAppInvocation>[0]) {
       const binding = await pluginAppInvocationCore.bindPluginAppInvocation(input);
-      const workerGeneration = workerGenerationByAttempt.get(`${binding.sessionId}:${binding.runId}:${stores.runs.currentEpoch(binding.runId)}`);
-      if (!workerGeneration) {
+      // The binding's epoch is the epoch it was minted under, which is the
+      // epoch its worker generation was captured for. Re-reading the store's
+      // current epoch here would look up a different attempt when the run
+      // advanced during the bind, and would bind the caller's request to a
+      // worker generation that never served the bind.
+      const boundEpoch = pluginAppInvocationCore.bindingEpoch(binding.bindingId);
+      const workerGeneration = boundEpoch === null
+        ? undefined
+        : workerGenerationByAttempt.get(`${binding.sessionId}:${binding.runId}:${boundEpoch}`);
+      if (workerGeneration === undefined) {
         await pluginAppInvocationCore.revokePluginAppInvocation(binding.bindingId, binding.nonce);
         throw new Error('plugin_app_worker_replaced');
       }

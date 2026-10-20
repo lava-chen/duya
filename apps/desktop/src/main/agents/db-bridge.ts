@@ -335,7 +335,6 @@ export interface DbRequest {
   id: string;
   action: string;
   payload: unknown;
-  trustedPluginAppCaller?: { sessionId: string; runId: string; epoch: number };
 }
 
 export interface DbResponse {
@@ -370,7 +369,7 @@ export async function dispatchDbAction(
   action: string,
   payload: unknown,
   sender?: CommandSenderFacts,
-  trustedPluginAppCaller?: DbRequest['trustedPluginAppCaller'],
+  trustedAttempt?: CommandSenderFacts['trustedAttempt'],
 ): Promise<unknown> {
   if (isHostResearchAction(action)) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
@@ -459,7 +458,7 @@ export async function dispatchDbAction(
     }
 
     case 'plugin-app:binding-current': {
-      const caller = trustedPluginAppCaller;
+      const caller = trustedAttempt;
       if (!caller || sender?.role !== 'agent-server' || sender.registeredSessionId !== null ||
           typeof caller.sessionId !== 'string' || typeof caller.runId !== 'string' || !Number.isSafeInteger(caller.epoch)) return false;
       if (!p || typeof p !== 'object' || Array.isArray(p) ||
@@ -2443,7 +2442,12 @@ export async function handleDbRequest(msg: DbRequest, sender?: CommandSenderFact
   const { id, action, payload } = msg;
 
   try {
-    const result = await dispatchDbAction(action, payload, sender, msg.trustedPluginAppCaller);
+    // The trusted Plugin App attempt is NOT read from the request body. A
+    // worker owns the body it sends, so an attempt claim inside it is that
+    // worker's own claim about its identity. Only the transport that actually
+    // correlated the worker with the orchestrator's live attempt may supply
+    // one, and it does so through the sender facts.
+    const result = await dispatchDbAction(action, payload, sender, sender?.trustedAttempt);
     return { type: 'db:response', id, success: true, result };
   } catch (error) {
     getLogger().error(`DB request failed: ${action}`, error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.AgentCommunicator);

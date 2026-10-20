@@ -10,18 +10,26 @@ type Pending = {
   readonly child: ChildProcess;
   readonly runId: string;
   readonly epoch: number;
+  readonly workerGeneration: number;
   readonly operation: 'describe-tools' | 'invoke-tool';
   readonly resolve: (value: PluginAppMcpDescriptor[] | PluginAppInvocationResult) => void;
   readonly reject: (reason: Error) => void;
   readonly timer: ReturnType<typeof setTimeout>;
 };
 
-/** Finite Main→Agent Server bridge, fenced by the live run and worker process. */
+/**
+ * Finite Main→Agent Server bridge, fenced by the live run and worker process.
+ *
+ * Every request is bound to four facts taken from the real producers — the
+ * orchestrator's attempt (`runId`, `epoch`), the supervisor's live worker
+ * (`child`), and the supervisor's worker generation — and a reply is only
+ * accepted when it carries back the same four. A reply that names a different
+ * worker, a different run, a different epoch, or a different generation is a
+ * reply from a superseded attempt, and it is dropped rather than settled.
+ */
 export class DesktopPluginAppServerBridge {
   readonly #orchestrator: RunOrchestrator;
   readonly #workers: WorkerManager;
-  readonly #workerGenerations = new WeakMap<ChildProcess, string>();
-  readonly #exitListeners = new WeakSet<ChildProcess>();
   readonly #pending = new Map<string, Pending>();
 
   constructor(orchestrator: RunOrchestrator, workers: WorkerManager) {
@@ -43,9 +51,9 @@ export class DesktopPluginAppServerBridge {
         case 'describe-tools': {
           const attempt = this.#currentAttempt(request.sessionId);
           if (!attempt || attempt.runId !== request.runId || attempt.epoch !== request.epoch) throw new Error('plugin_app_session_not_running');
-          const tools = await this.#requestWorker(request.sessionId, attempt.child, request.runId, request.epoch, 'describe-tools', {
-            type: 'plugin-app:describe-tools', sessionId: request.sessionId, runId: request.runId,
-            epoch: request.epoch, requestId: randomUUID(),
+          const tools = await this.#requestWorker(request.sessionId, attempt.child, attempt.runId, attempt.epoch, attempt.workerGeneration, 'describe-tools', {
+            type: 'plugin-app:describe-tools', sessionId: request.sessionId, runId: attempt.runId,
+            epoch: attempt.epoch, requestId: randomUUID(),
           });
           if (!Array.isArray(tools)) throw new Error('plugin_app_worker_response_invalid');
           return this.#ok(request.requestId, { tools, workerGeneration: attempt.workerGeneration });
@@ -55,9 +63,9 @@ export class DesktopPluginAppServerBridge {
           if (!attempt || attempt.runId !== request.runId || attempt.epoch !== request.epoch || attempt.workerGeneration !== request.workerGeneration) {
             throw new Error('plugin_app_worker_replaced');
           }
-          const result = await this.#requestWorker(request.sessionId, attempt.child, request.runId, request.epoch, 'invoke-tool', {
-            type: 'plugin-app:invoke', sessionId: request.sessionId, runId: request.runId,
-            epoch: request.epoch, requestId: randomUUID(), bindingId: request.bindingId,
+          const result = await this.#requestWorker(request.sessionId, attempt.child, attempt.runId, attempt.epoch, attempt.workerGeneration, 'invoke-tool', {
+            type: 'plugin-app:invoke', sessionId: request.sessionId, runId: attempt.runId,
+            epoch: attempt.epoch, requestId: randomUUID(), bindingId: request.bindingId,
             nonce: request.nonce, toolId: request.toolId, schemaRevision: request.schemaRevision,
             capabilityId: request.capabilityId, arguments: request.arguments,
           });
@@ -74,9 +82,14 @@ export class DesktopPluginAppServerBridge {
   handleWorkerMessage(sessionId: string, message: Record<string, unknown>, child: ChildProcess): boolean {
     if ((message.type !== 'plugin-app:tools' && message.type !== 'plugin-app:result') || typeof message.requestId !== 'string') return false;
     const pending = this.#pending.get(message.requestId);
+    // A reply with no pending request is a late answer to a request that was
+    // already settled or timed out. It is consumed here so it cannot fall
+    // through to another handler, and it settles nothing.
     if (!pending) return true;
     if (pending.child !== child || pending.sessionId !== sessionId || message.sessionId !== sessionId ||
-        message.runId !== pending.runId || message.epoch !== pending.epoch || this.#workers.getWorker(sessionId) !== child) return true;
+        message.runId !== pending.runId || message.epoch !== pending.epoch ||
+        this.#workers.getWorker(sessionId) !== child ||
+        this.#workers.workerGeneration(sessionId) !== pending.workerGeneration) return true;
     this.#pending.delete(message.requestId);
     clearTimeout(pending.timer);
     if (message.type === 'plugin-app:tools' && pending.operation === 'describe-tools' && Array.isArray(message.tools)) {
@@ -98,17 +111,22 @@ export class DesktopPluginAppServerBridge {
     }
   }
 
-  #currentAttempt(sessionId: string): { runId: string; epoch: number; workerGeneration: string; child: ChildProcess } | null {
+  /**
+   * The live attempt for a session, or `null` when there is none.
+   *
+   * `runId` and `epoch` come from the orchestrator, which owns the run
+   * ledger; `child` and `workerGeneration` come from the worker supervisor,
+   * which owns the worker processes. A retired attempt is not a live one, and
+   * a session whose worker has exited has no live worker to talk to.
+   */
+  #currentAttempt(sessionId: string): { runId: string; epoch: number; workerGeneration: number; child: ChildProcess } | null {
     const runId = this.#orchestrator.runForSession(sessionId);
     const attempt = runId ? this.#orchestrator.attemptFor(runId) : null;
-    if (!runId || !attempt) return null;
+    if (!runId || !attempt || attempt.retired) return null;
     const child = this.#workers.getWorker(sessionId);
     if (!child || child.killed || child.exitCode !== null) return null;
-    let workerGeneration = this.#workerGenerations.get(child);
-    if (!workerGeneration) {
-      workerGeneration = randomUUID();
-      this.#workerGenerations.set(child, workerGeneration);
-    }
+    const workerGeneration = this.#workers.workerGeneration(sessionId);
+    if (workerGeneration === null) return null;
     return { runId, epoch: attempt.epoch, workerGeneration, child };
   }
 
@@ -117,6 +135,7 @@ export class DesktopPluginAppServerBridge {
     child: ChildProcess,
     runId: string,
     epoch: number,
+    workerGeneration: number,
     operation: Pending['operation'],
     command: Record<string, unknown>,
   ): Promise<PluginAppMcpDescriptor[] | PluginAppInvocationResult> {
@@ -127,11 +146,7 @@ export class DesktopPluginAppServerBridge {
         this.#pending.delete(requestId);
         reject(new Error('plugin_app_worker_timeout'));
       }, operation === 'invoke-tool' ? 330_000 : 30_000);
-      this.#pending.set(requestId, { sessionId, child, runId, epoch, operation, resolve, reject, timer });
-      if (!this.#exitListeners.has(child)) {
-        this.#exitListeners.add(child);
-        child.once('exit', () => this.workerExited(child));
-      }
+      this.#pending.set(requestId, { sessionId, child, runId, epoch, workerGeneration, operation, resolve, reject, timer });
       if (child.killed || child.exitCode !== null || this.#workers.getWorker(sessionId) !== child) {
         this.#pending.delete(requestId);
         clearTimeout(timer);

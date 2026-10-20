@@ -37,6 +37,17 @@ const pendingPluginAppServerRequests = new Map<string, {
   timer: ReturnType<typeof setTimeout>;
 }>();
 
+/**
+ * Attempt correlations the Agent Server announced for in-flight requests.
+ *
+ * The Agent Server owns the run ledger and the worker supervisor, so it is
+ * the only party that can establish that a request came from the live worker
+ * of a given session, run and epoch. It announces that on its own message
+ * type, and Main consumes the announcement with the request it belongs to.
+ * A worker never writes here.
+ */
+const trustedPluginAppAttempts = new Map<string, { sessionId: string; runId: string; epoch: number }>();
+
 export function requestAgentServerPluginApp(
   request: DesktopPluginAppServerCall,
 ): Promise<DesktopPluginAppServerResponse> {
@@ -218,11 +229,30 @@ export function spawnAgentServer(): Promise<number> {
         return;
       }
 
+      if (msg.type === 'desktop-plugin-app:trusted-attempt' && typeof msg.id === 'string') {
+        // The Agent Server announced that it correlated a worker request with
+        // the orchestrator's live attempt. It is kept beside the request and
+        // consumed by that request, rather than being carried inside the
+        // request body, which the worker owns.
+        const attempt = {
+          sessionId: typeof msg.sessionId === 'string' ? msg.sessionId : '',
+          runId: typeof msg.runId === 'string' ? msg.runId : '',
+          epoch: typeof msg.epoch === 'number' && Number.isSafeInteger(msg.epoch) ? msg.epoch : -1,
+        };
+        if (attempt.sessionId && attempt.runId && attempt.epoch >= 0) {
+          trustedPluginAppAttempts.set(msg.id, attempt);
+        }
+        return;
+      }
+
       if (msg.type === 'db:request') {
         // Plan 587 C6.1: this is the second real transport for `db:request`, and
         // it is NOT in the chat pool's map — the agent server is its own child.
         // Threading its pid and role is what lets the Control Plane authorise it
         // rather than refuse it.
+        const requestId = typeof msg.id === 'string' ? msg.id : null;
+        const trustedAttempt = requestId ? trustedPluginAppAttempts.get(requestId) : undefined;
+        if (requestId) trustedPluginAppAttempts.delete(requestId);
         handleDbRequest(msg, {
           // `child.pid` is `number | undefined`; the sender contract wants
           // `null` for "no pid", and `undefined` would read as a present but
@@ -231,6 +261,7 @@ export function spawnAgentServer(): Promise<number> {
           senderPid: child.pid ?? null,
           registeredSessionId: null,
           role: 'agent-server',
+          ...(trustedAttempt ? { trustedAttempt } : {}),
         }).then((response) => {
           if (!child.killed) {
             child.send(response);
@@ -678,6 +709,9 @@ export function spawnAgentServer(): Promise<number> {
 
     child.on('exit', (code, signal) => {
       rejectPluginAppServerRequests(child);
+      // An Agent Server that died cannot announce any further attempt
+      // correlation, so the ones it already announced are dropped with it.
+      trustedPluginAppAttempts.clear();
       unregisterSpawnedWorker(child.pid, child);
       if (!settled) {
         settled = true;

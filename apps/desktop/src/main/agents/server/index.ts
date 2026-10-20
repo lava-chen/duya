@@ -34,6 +34,13 @@ workerManager.setCrashHandler((sessionId) => {
   checkpointBatcher.flush();
 });
 
+// A worker that exits takes every in-flight Plugin App request bound to it
+// with it. The bridge settles those as failures instead of leaving them to
+// time out.
+workerManager.setWorkerExitHandler((_sessionId, child) => {
+  desktopPluginAppBridge?.workerExited(child);
+});
+
 const pendingDbRequests = new Map<string, {
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
