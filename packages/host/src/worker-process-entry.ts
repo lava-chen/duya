@@ -14,7 +14,7 @@ import type { ProviderRuntimeConfig } from '@duya/ai';
 import { logger } from '@duya/host/worker-logger';
 import { parseUsageCall, createTurnUsageLedger, foldUsageCall } from '@duya/agent-core/usage/call-usage';
 import { seedTokenUsageFromHistory, parsePersistedTokenUsage } from '@duya/agent-core/usage/seed-token-usage';
-import { messageDb, attachmentDb, pluginDb, settingDb, sessionDb, toolApprovalDb, turnReviewDb, goalDb, } from '@duya/host/worker-db-client';
+import { messageDb, attachmentDb, pluginDb, settingDb, sessionDb, toolApprovalDb, turnReviewDb, goalDb, pluginAppBindingDb, } from '@duya/host/worker-db-client';
 import { createSurfaceAwarePermissionHandler } from '@duya/host/authorization/worker-approval-card';
 import { enqueue, dequeue, hasCommandsInQueue, clearCommandQueue, getCommandQueueLength, } from '@duya/host/worker-command-queue';
 import type { QueuedCommand } from '@duya/host/worker-command-queue';
@@ -3062,6 +3062,46 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                     sessionForMcp.notifyMcpReady();
                 }
             })();
+            break;
+        }
+        case 'plugin-app:describe-tools': {
+            const command = msg as unknown as import('@duya/agent-protocol/worker-protocol').PluginAppDescribeToolsCommand;
+            if (command.sessionId !== sessionId || typeof command.runId !== 'string' ||
+                !Number.isSafeInteger(command.epoch) || typeof command.requestId !== 'string') break;
+            try {
+                const tools = requireWorkerSession().describePluginAppMcpTools(command.runId);
+                sendToMain({
+                    type: 'plugin-app:tools', sessionId: command.sessionId, runId: command.runId,
+                    epoch: command.epoch, requestId: command.requestId, tools,
+                });
+            } catch (error) {
+                log(`[Agent-Process] Plugin App tool catalog unavailable: ${error instanceof Error ? error.message : String(error)}`);
+                sendToMain({
+                    type: 'plugin-app:tools', sessionId: command.sessionId, runId: command.runId,
+                    epoch: command.epoch, requestId: command.requestId, tools: [],
+                });
+            }
+            break;
+        }
+        case 'plugin-app:invoke': {
+            const command = msg as unknown as import('@duya/agent-protocol/worker-protocol').PluginAppInvokeCommand;
+            if (command.sessionId !== sessionId || typeof command.runId !== 'string' ||
+                !Number.isSafeInteger(command.epoch) || typeof command.requestId !== 'string' ||
+                typeof command.bindingId !== 'string' || typeof command.nonce !== 'string' ||
+                typeof command.toolId !== 'string' || typeof command.schemaRevision !== 'string' ||
+                typeof command.capabilityId !== 'string' || command.arguments === null ||
+                typeof command.arguments !== 'object' || Array.isArray(command.arguments)) break;
+            const result = await requireWorkerSession().invokePluginAppMcpTool({
+                runId: command.runId,
+                toolId: command.toolId,
+                schemaRevision: command.schemaRevision,
+                arguments: command.arguments,
+                isBindingCurrent: () => pluginAppBindingDb.isCurrent(command.bindingId, command.nonce, command.toolId),
+            });
+            sendToMain({
+                type: 'plugin-app:result', sessionId: command.sessionId, runId: command.runId,
+                epoch: command.epoch, requestId: command.requestId, result,
+            });
             break;
         }
         case 'chat:start': {

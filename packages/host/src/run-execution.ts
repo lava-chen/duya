@@ -43,7 +43,10 @@ import type {
   RunEventEnvelope,
   StartAgentRunInput,
   StartAgentRunResult,
+  PluginAppMcpDescriptor,
+  PluginAppInvocationResult,
 } from '@duya/agent-protocol';
+import { randomUUID } from 'node:crypto';
 import type { RunRepository } from './repository-port.js';
 import { RunEventConflictError, RunEpochFencedError } from '@duya/data/run-store';
 import { isWorkerTranscriptMutationAction } from './worker-transcript-mutations.js';
@@ -68,6 +71,15 @@ import type { ChildProcess } from 'node:child_process';
 export interface WorkerDbBridge {
   dispatch(action: string, payload: Record<string, unknown>, caller?: SessionServiceCaller): Promise<unknown>;
 }
+
+/** Catalog inspection needs no user decision, so it can fail fast. */
+const PLUGIN_APP_DESCRIBE_TIMEOUT_MS = 30_000;
+/**
+ * An invocation waits on a user approval card that stays valid for five
+ * minutes. The Host deadline must outlast that window, otherwise a slow
+ * approval reads as a timeout while the worker still runs the side effect.
+ */
+const PLUGIN_APP_INVOKE_TIMEOUT_MS = 330_000;
 
 /** What the Host knows about a session before a turn, read from its own stores. */
 export interface HostTurnDefaults {
@@ -146,6 +158,17 @@ export class HostRunExecutionController {
   /** runId -> sessionId for cancellation lookups. */
   readonly #sessionByRun = new Map<string, string>();
   readonly #cancellingRuns = new Set<string>();
+  readonly #pendingPluginAppRequests = new Map<string, {
+    readonly sessionId: string;
+    readonly runId: string;
+    readonly epoch: number;
+    readonly kind: 'tools' | 'result';
+    readonly child: ChildProcess;
+    readonly resolve: (value: unknown) => void;
+    readonly reject: (error: Error) => void;
+    readonly timer: ReturnType<typeof setTimeout>;
+    readonly onWorkerExit: () => void;
+  }>();
 
   constructor(options: HostRunExecutionControllerOptions) {
     this.#options = options;
@@ -415,6 +438,124 @@ export class HostRunExecutionController {
     }
   }
 
+  currentSessionAttempt(sessionId: string): { readonly runId: string; readonly epoch: number } | null {
+    const runId = this.#orchestrator.runForSession(sessionId);
+    if (runId === null) return null;
+    const epoch = this.#options.runs.currentEpoch(runId);
+    if (epoch === null || this.#options.runs.getRun(runId)?.status !== 'running') return null;
+    return { runId, epoch };
+  }
+
+  async isCurrentSessionAttempt(sessionId: string, runId: string, epoch: number): Promise<boolean> {
+    try {
+      this.validateSessionCaller({ sessionId, runId, epoch });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async describePluginAppMcpTools(input: {
+    sessionId: string; runId: string; epoch: number;
+  }): Promise<readonly PluginAppMcpDescriptor[]> {
+    return this.#requestPluginAppWorker({
+      type: 'plugin-app:describe-tools',
+      ...input,
+    }, 'tools') as Promise<readonly PluginAppMcpDescriptor[]>;
+  }
+
+  async invokePluginAppMcpTool(input: {
+    sessionId: string;
+    runId: string;
+    epoch: number;
+    bindingId: string;
+    nonce: string;
+    toolId: string;
+    schemaRevision: string;
+    capabilityId: string;
+    arguments: Record<string, unknown>;
+    requestId: string;
+  }): Promise<PluginAppInvocationResult> {
+    return this.#requestPluginAppWorker({ type: 'plugin-app:invoke', ...input }, 'result') as Promise<PluginAppInvocationResult>;
+  }
+
+  #requestPluginAppWorker(
+    command: Record<string, unknown>,
+    kind: 'tools' | 'result',
+  ): Promise<unknown> {
+    const sessionId = command.sessionId;
+    const runId = command.runId;
+    const epoch = command.epoch;
+    if (typeof sessionId !== 'string' || typeof runId !== 'string' ||
+        typeof epoch !== 'number' || !Number.isSafeInteger(epoch)) {
+      return Promise.reject(new HostRunExecutionError(400, 'invalid_plugin_app_command', 'Plugin App command is malformed.'));
+    }
+    const caller = { sessionId, runId, epoch };
+    try { this.validateSessionCaller(caller); }
+    catch (error) { return Promise.reject(error); }
+    const child = this.#workerManager.getWorker(sessionId);
+    if (!child || child.killed) {
+      return Promise.reject(new HostRunExecutionError(409, 'worker_unavailable', 'The bound session worker is unavailable.'));
+    }
+    const requestId = randomUUID();
+    return new Promise((resolve, reject) => {
+      let onWorkerExit = (): void => undefined;
+      const timer = setTimeout(() => {
+        this.#pendingPluginAppRequests.delete(requestId);
+        child.off('exit', onWorkerExit);
+        reject(new HostRunExecutionError(504, 'plugin_app_worker_timeout', 'Plugin App worker did not respond.'));
+      }, kind === 'result' ? PLUGIN_APP_INVOKE_TIMEOUT_MS : PLUGIN_APP_DESCRIBE_TIMEOUT_MS);
+      onWorkerExit = (): void => {
+        this.#pendingPluginAppRequests.delete(requestId);
+        clearTimeout(timer);
+        reject(new HostRunExecutionError(409, 'worker_unavailable', 'The bound session worker exited before answering.'));
+      };
+      this.#pendingPluginAppRequests.set(requestId, {
+        sessionId, runId, epoch, kind, child, resolve, reject, timer, onWorkerExit,
+      });
+      child.once('exit', onWorkerExit);
+      if (!this.#workerManager.sendCommand(sessionId, { ...command, requestId })) {
+        clearTimeout(timer);
+        child.off('exit', onWorkerExit);
+        this.#pendingPluginAppRequests.delete(requestId);
+        reject(new HostRunExecutionError(409, 'worker_unavailable', 'The Plugin App command could not be delivered.'));
+      }
+    });
+  }
+
+  #acceptPluginAppWorkerResponse(sessionId: string, msg: Record<string, unknown>, source: ChildProcess): boolean {
+    const requestId = msg.requestId;
+    if (typeof requestId !== 'string') return false;
+    const pending = this.#pendingPluginAppRequests.get(requestId);
+    if (!pending) return true;
+    this.#pendingPluginAppRequests.delete(requestId);
+    clearTimeout(pending.timer);
+    pending.child.off('exit', pending.onWorkerExit);
+    try {
+      if (pending.sessionId !== sessionId || pending.child !== source ||
+          this.#workerManager.getWorker(sessionId) !== source ||
+          msg.sessionId !== sessionId || msg.runId !== pending.runId || msg.epoch !== pending.epoch ||
+          msg.type !== (pending.kind === 'tools' ? 'plugin-app:tools' : 'plugin-app:result')) {
+        throw new HostRunExecutionError(409, 'plugin_app_response_mismatch', 'Plugin App worker response does not match its request.');
+      }
+      this.validateSessionCaller({ sessionId, runId: pending.runId, epoch: pending.epoch });
+      if (pending.kind === 'tools') {
+        if (!Array.isArray(msg.tools)) throw new HostRunExecutionError(502, 'invalid_plugin_app_tools', 'Worker returned an invalid MCP descriptor list.');
+        pending.resolve(msg.tools);
+      } else {
+        const result = msg.result;
+        if (result === null || typeof result !== 'object' || Array.isArray(result) ||
+            typeof (result as Record<string, unknown>).ok !== 'boolean') {
+          throw new HostRunExecutionError(502, 'invalid_plugin_app_result', 'Worker returned an invalid invocation result.');
+        }
+        pending.resolve(result);
+      }
+    } catch (error) {
+      pending.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+    return true;
+  }
+
   async #serveDbRequest(sessionId: string, msg: Record<string, unknown>, source: ChildProcess): Promise<void> {
     const id = typeof msg.id === 'string' ? msg.id : '';
     const worker = source;
@@ -478,6 +619,10 @@ export class HostRunExecutionController {
 
   async #onWorkerMessage(sessionId: string, msg: Record<string, unknown>, source: ChildProcess): Promise<void> {
     const type = msg.type;
+    if (type === 'plugin-app:tools' || type === 'plugin-app:result') {
+      this.#acceptPluginAppWorkerResponse(sessionId, msg, source);
+      return;
+    }
     if (type === 'db:request') {
       await this.#serveDbRequest(sessionId, msg, source);
       return;

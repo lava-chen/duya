@@ -100,6 +100,28 @@ describe('createMCPToolExecutor', () => {
     expect(harness.invoke).toHaveBeenCalledOnce();
   });
 
+  it('rechecks Host binding authority after approval and stops before the connector call when revoked', async () => {
+    const harness = setup('allow');
+    harness.ports.beforeInvoke = vi.fn(async () => false);
+    const executor = createMCPToolExecutor({
+      toolName: 'search',
+      source: 'plugin',
+      invoke: harness.invoke,
+      ports: harness.ports,
+    });
+
+    const result = await executor.execute({ query: 'water' }, undefined, harness.context);
+
+    expect(harness.ports.requestPermission).toHaveBeenCalledOnce();
+    expect(harness.ports.beforeInvoke).toHaveBeenCalledOnce();
+    expect(harness.invoke).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      error: true,
+      result: '[MCP permission gate] Invocation authority was revoked before execution.',
+    });
+    expect((result as { metadata?: { reason?: string } }).metadata?.reason).toBe('authority_revoked');
+  });
+
   it('does not invoke after a user denies', async () => {
     const harness = setup('deny');
     const executor = createMCPToolExecutor({

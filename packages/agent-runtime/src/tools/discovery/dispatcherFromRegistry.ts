@@ -65,6 +65,18 @@ function getCatalogValidator(entry: ToolCatalogEntry): ValidateFunction {
   return validator;
 }
 
+/** Validate untrusted arguments against one captured catalog entry's schema. */
+export function validateCatalogToolArguments(
+  entry: ToolCatalogEntry,
+  input: Record<string, unknown>,
+): 'valid' | 'invalid' | 'schema-unavailable' {
+  try {
+    return getCatalogValidator(entry)(input) ? 'valid' : 'invalid';
+  } catch {
+    return 'schema-unavailable';
+  }
+}
+
 function errorResult(title: string, body: string): ToolInvokeOutcome;
 function errorResult(errorCode: string, title: string, body: string): ToolInvokeOutcome;
 function errorResult(first: string, second: string, third?: string): ToolInvokeOutcome {

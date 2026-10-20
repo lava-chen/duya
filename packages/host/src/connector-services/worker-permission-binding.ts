@@ -23,7 +23,7 @@ export {
   MCPRegistryReplaceError,
 } from '@duya/host/connector-services/apply';
 
-interface AgentMCPApplyTarget extends WorkerMCPApplyTarget<ToolUseContext> {
+export interface AgentMCPApplyTarget extends WorkerMCPApplyTarget<ToolUseContext> {
   getPermissionMode?(): PermissionMode;
 }
 
@@ -38,7 +38,8 @@ const agentMcpExecutorLogger: ToolExecutionLogger = {
   warn: (message, context, component) => logger.warn(message, context, component),
 };
 
-function createExecutorPorts(
+/** Wire the Runtime MCP executor ports to a worker session's approval and App guards. */
+export function createWorkerMCPExecutorPorts(
   agent: AgentMCPApplyTarget,
 ): MCPExecutorPorts<ToolUseContext> {
   return {
@@ -61,6 +62,9 @@ function createExecutorPorts(
           : { decisionReason: request.decisionReason }),
       });
     },
+    beforeInvoke: async (context) => context.pluginAppInvocationGuard === undefined
+      ? true
+      : context.pluginAppInvocationGuard(),
     logger: agentMcpExecutorLogger,
   };
 }
@@ -68,7 +72,7 @@ function createExecutorPorts(
 /** Keep the legacy worker API while forwarding the state machine to Host. */
 export function applyMCPConfiguration(opts: ApplyOpts): Promise<MCPApplyResult> {
   const { agent, reason, agentProfileId } = opts;
-  const ports = createExecutorPorts(agent);
+  const ports = createWorkerMCPExecutorPorts(agent);
   return applyWorkerMCPConfiguration({
     target: agent,
     executorPorts: ports,

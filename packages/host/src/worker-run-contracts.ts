@@ -183,6 +183,8 @@ export interface ToolUseContext {
     options: ToolUseContextOptions;
     pushApiMetricsEntry?: (ttftMs: number) => void;
     requestPermission?: (request: PermissionRequestEvent) => Promise<'allow' | 'deny' | 'paused'>;
+    /** Internal Host-owned App invocation recheck; never serialized from an App. */
+    pluginAppInvocationGuard?: () => Promise<boolean>;
     consumeApprovedEffect?: (toolName: string, toolInput?: Record<string, unknown>) => Promise<boolean>;
     approvedAlwaysAllowTools?: string[];
     reportAgentProgress?: (event: AgentProgressEvent) => void;

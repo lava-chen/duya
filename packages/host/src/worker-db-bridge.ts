@@ -42,6 +42,7 @@ import { createRunControlPlaneActions, type RunControlPlaneLogger } from './run-
 import { createHostToolApprovalApi } from './tool-approval-api.js';
 import type { WorkerDbBridge } from './run-execution.js';
 import type { createHostSessionService, SessionServiceCaller } from './session-service.js';
+import type { HostPluginAppInvocationInternalApi } from './local-plugin-app-invocation-api.js';
 import {
   hostMessageItemsToIpcMessages,
   ipcMessageToNewEvent,
@@ -96,6 +97,7 @@ export interface HostWorkerDbBridgeOptions {
   readonly lockApi?: HostLockApiV1;
   readonly modeStateApi?: HostModeStateApiV1;
   readonly taskApi?: HostTaskApiV1;
+  readonly pluginAppInvocationApi?: HostPluginAppInvocationInternalApi;
   /**
    * Parsed-document attachments for `session:loadMessages`. Desktop serves
    * this from its attachment store; a standalone Host returns an empty list
@@ -195,6 +197,16 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
       if (handled !== undefined) return handled;
 
       switch (action) {
+        case 'plugin-app:binding-current': {
+          if (!caller || options.pluginAppInvocationApi === undefined) return false;
+          const bindingId = requireString(payload, 'bindingId', action);
+          const nonce = requireString(payload, 'nonce', action);
+          const toolId = requireString(payload, 'toolId', action);
+          if (Object.keys(payload).some((key) => !['bindingId', 'nonce', 'toolId'].includes(key))) {
+            throw new WorkerDbBridgeError('invalid_payload', 'plugin-app:binding-current accepts only bindingId, nonce, and toolId.');
+          }
+          return options.pluginAppInvocationApi.isBindingCurrent(bindingId, nonce, toolId, caller);
+        }
         case 'session:spawn':
         case 'session:spawnList':
         case 'session:spawnGet':
