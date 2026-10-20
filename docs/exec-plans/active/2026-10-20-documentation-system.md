@@ -1,7 +1,8 @@
 # 精简文档入口与长程开发接续
 
-状态：待 draft PR / 基线门禁修复 · 负责人：会话 `01a15907-e31a-7d13-b232-d6e88fde95b5`
+状态：draft PR #324 / 待基线门禁修复 · 负责人：会话 `01a15907-e31a-7d13-b232-d6e88fde95b5`
 分支：`codex/docs-pr-worktree-policy` · worktree：managed `docs-pr-worktree-policy` · PR 基线：`8a01159c`
+PR：[324](https://github.com/lava-chen/duya/pull/324) · owner：本会话 · 集成：未授权 / 未合并
 
 ## 目标与边界
 
@@ -89,7 +90,7 @@ Claude Desktop UI 报告与 4 张截图归并到被忽略的本地 research 主�
 新规则直接写在根 AGENTS：所有 agent、文档和小改均使用独立 worktree，所有变更经 PR，不直推 master/main，不自行合并。
 分配、依赖、修改、验证、commit、PR、授权集成、合并后重验、安全回收和回收后清单核对逐段规定产出。
 
-创建时基于本地 `d226a74d`；发现其包含其他会话两个脚本提交，最终文档分支会排除它们，以远端 `8a01159c` 为基线。
+创建时基于本地 `d226a74d`；发现其包含其他会话两个脚本提交，已通过 rebase 排除它们，以远端 `8a01159c` 为基线；首个文档提交为 `c74a889a`。
 依赖经 junction-worktree dry-run 后配置了 62 个链接；没有通过共享 node_modules 安装依赖。
 独立检出已重跑 typecheck:all 与 architecture:check，仍分别失败于 UI 契约编码和 Host 测试 deep-import；不改基线或生产代码掩盖失败。
 这些失败源文件、对应检查器及架构策略与 PR 基线一致，基线对比证据另行记录。
@@ -99,5 +100,7 @@ Claude Desktop UI 报告与 4 张截图归并到被忽略的本地 research 主�
 失败源文件与检查器相对 origin/master 的 diff exit 0，证明基线对比成立。
 
 当前成果供 draft PR 审阅，禁止作为全绿集成。尚未获得合并授权，worktree 和分支必须保留。
-下一动作：核对文档链接和切片、提交并创建 draft PR；之后由集成者处理已记录基线失败，review/CI 通过且获授权后合并与重验。
-回收由创建本检出的管理工具执行；合并前不归档，ignored 验证产物先决定是否保留，结束后核对 worktree 清单与成果可达性。
+PR #324 已创建并确认为 OPEN / draft，head 为本任务分支、base 为 master；创建后只读核对远端 master 仍为 `8a01159c`。
+下一动作：处理已记录基线失败并完成 review/CI；获集成授权后由集成者合并与重验，当前 agent 不自行合并。
+回收状态：未回收，因为 PR 等待审阅 / 门禁处理；任务分支与检出均保留，当前 Git 工作区在本记录更新前干净。
+回收由创建本检出的管理工具执行；合并前不归档，ignored 验证产物和本地原始调研先保存到所需位置，结束后核对 worktree 清单与成果可达性。
