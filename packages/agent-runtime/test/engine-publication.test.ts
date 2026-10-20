@@ -541,24 +541,157 @@ describe('permission.requested is not the engine s to publish', () => {
     // Recorded here so the omission is a measurement rather than a gap. The
     // engine never sees a `requestId`, and `kind` / `mode` / `startedAt` are
     // documented producer facts -- an engine-published one would be an
-    // invented approval identity. Its owner is the `ApprovalPort`
-    // implementation, publishing inside `authorize`
-    // (`run-engine-ports.ts:299-305`), which is the only place that has seen
-    // the request the user was actually shown.
+    // invented approval identity.
     //
-    // The run below DID reach `approval.authorize` and was refused, so this is
-    // the run where publishing one would have been most tempting and most
-    // wrong: a denial with a fabricated `requestId` is an approval the run
-    // never recorded an answer for.
+    // (This block used to point at `run-engine-ports.ts:299-305` for "the owner
+    // is the ApprovalPort implementation, publishing inside `authorize`". That
+    // line range is the `interTurn` documentation. The real binding is
+    // `run-engine-ports.ts:879`, and it is a bare pass-through --
+    // `authorize: (request, signal) => sources.askApproval(request, signal)` --
+    // that publishes nothing. Same failure class as D10: a stale pointer that
+    // reads as authority.)
+    //
+    // In production the request does reach the transcript, but not from the
+    // engine: the worker entry sends a LEGACY `chat:permission` frame
+    // (`worker-process-entry.ts:createPermissionHandler`) and the legacy
+    // translator turns it into `permission.requested`
+    // (`translate/chat-event-translator.ts:450-471`). The engine's involvement
+    // is only the `askApproval` call that precedes that frame.
     const h = harness({ denyApproval: true });
     await h.completed;
 
     // The premise, asserted: the engine really did ask and really was refused.
     expect(h.order).toContain('approval.authorize');
     expect(only(h.offered, 'permission.requested')).toEqual([]);
+    // Nor a resolution. `authorize` publishing one would be the natural place,
+    // and it publishes neither -- which is why D9's `tool.timed_out` is the
+    // only thing the engine emits about a refusal, and why that thing is
+    // dropped. See `control-plane-census.ts` for the census row that claims a
+    // producer for this event (D10): the symbol it names does not exist.
+    expect(only(h.offered, 'permission.resolved')).toEqual([]);
     // The refusal is reported, not dropped -- `tool.timed_out` at elapsed 0 is
     // how `#dispatchCall` reports an unapproved call, and it keeps a broken
     // bridge from reading as a user saying no.
     expect(only(h.offered, 'tool.timed_out').length).toBe(1);
+  });
+});
+
+// ============================================================================
+// 5. D9 -- the refusal that is reported to NOBODY
+// ============================================================================
+//
+// The test above is true and it is also the start of the problem: it reads the
+// OFFER (`RunEventStorePort.publish` was called), not what any consumer
+// received. Those are different things, and on this path they come apart.
+//
+// Measured chain, each link verified rather than inferred:
+//
+//   1. `#dispatchCall` (`run-engine.ts:1591-1602`) returns on `!verdict.allowed`
+//      having published `tool.timed_out` and having published NO
+//      `tool.call_started` -- the start is published further down, at `:1618`,
+//      which this `return` never reaches.
+//   2. `RunLedger.#assertPayload` (`run-ledger.ts:221-231`) treats a
+//      `tool.timed_out` with no authoritative start as the invariant breach
+//      `tool_completed_without_start` and THROWS.
+//   3. `RunEventEmitter.#mint` (`event-emitter.ts:580-595`) catches that
+//      `LifecycleViolation` and converts it into a refusal RETURN VALUE.
+//   4. The production port is `void sources.emitter.emit(event)`
+//      (`adapters/run-engine-ports.ts:888-890`), and `publish` is typed
+//      `(event: RunEvent): void` (`ports.ts:1030`), so the engine has no way to
+//      observe the refusal even in principle.
+//
+// Net: the user denies a tool call and there is no record of it anywhere --
+// not in the stream the TUI renders, not in the durable transcript, and not in
+// `danglingToolCalls()`, which only counts calls that started. The comment at
+// `run-engine.ts:1592-1594` claims the event "keeps a broken bridge from
+// reading as a user saying no"; today it cannot reach the thing that would
+// have to break, or any other consumer.
+
+describe('a DENIED tool call is reported by the engine and received by nobody (D9)', () => {
+  /** Tool event TYPES, from either a delivered envelope list or an offer list. */
+  function toolEventsOf(envelopes: readonly RunEventEnvelope[]): string[] {
+    return envelopes
+      .map((envelope) => envelope.payload.type)
+      .filter((type) => type.startsWith('tool.'));
+  }
+
+  /**
+   * Anything a consumer could read AS THE REFUSAL.
+   *
+   * Deliberately wider than `toolEventsOf`. The fix for this defect is expected
+   * to publish `permission.resolved` rather than any tool event -- the protocol
+   * already declares that event for exactly this gap and the ledger already
+   * enforces its pairing -- so a contract that demanded a `tool.*` arrival would
+   * stay red after the correct fix. That is the contract prejudging the shape it
+   * exists to leave open, which is the failure mode `it.fails` makes easy to
+   * walk into.
+   */
+  function refusalEventsOf(envelopes: readonly RunEventEnvelope[]): string[] {
+    return envelopes
+      .map((envelope) => envelope.payload.type)
+      .filter((type) => type.startsWith('tool.') || type.startsWith('permission.'));
+  }
+
+  /** The same, over the raw offers the engine handed the port. */
+  function offeredToolTypes(h: ReturnType<typeof harness>): string[] {
+    return h.offered.map((event) => event.type).filter((type) => type.startsWith('tool.'));
+  }
+
+  it('measures the drop, with the ALLOWED run in the same harness as the control', async () => {
+    // The control is what keeps this from being a vacuous measurement. It runs
+    // the same harness, the same emitter and the same session, and it does carry
+    // tool events end to end -- so their absence below is caused by the denial,
+    // not by a fixture that cannot carry them.
+    const allowed = harness({ batch: [outcome()] });
+    await allowed.completed;
+    expect(toolEventsOf(allowed.announced)).toEqual(['tool.call_started', 'tool.call_completed']);
+    expect(toolEventsOf(allowed.appended)).toEqual(['tool.call_started', 'tool.call_completed']);
+
+    const denied = harness({ denyApproval: true });
+    await denied.completed;
+
+    // The premise: the engine really did try to report the refusal.
+    expect(offeredToolTypes(denied)).toEqual(['tool.timed_out']);
+
+    // And the measurement: it reached nobody. Widened to permission events too,
+    // because a refusal record that merely stopped being a TOOL event would
+    // still be invisible if it never reached a consumer at all.
+    expect(refusalEventsOf(denied.announced)).toEqual([]);
+    expect(refusalEventsOf(denied.appended)).toEqual([]);
+
+    // Nor is it flagged as unanswered. `danglingToolCalls` only counts calls
+    // that STARTED (`run-ledger.ts:143-147`), and this one never did -- so the
+    // ledger is consistent, and nothing anywhere says a call was proposed.
+    expect(denied.session.danglingToolCalls()).toEqual([]);
+  });
+
+  it.fails('TARGET CONTRACT: a denial leaves a record a consumer can read', async () => {
+    // Carried as a target contract because the FIX SHAPE IS NOT YET DECIDED and
+    // each candidate changes what a consumer reads:
+    //
+    //   - publish `tool.call_started` before the refusal, so the pair the ledger
+    //     demands exists and the TUI can render a call that never ran;
+    //   - add a refusal event the ledger accepts without a start;
+    //   - give `publish` a return value so a refused emission is visible to the
+    //     engine, which today cannot tell that its event was dropped.
+    //
+    // All three agree on the one property asserted here, which is the property
+    // the defect actually violates: WHATEVER the fix publishes, a user who
+    // denied a tool call must leave something in the stream or the durable log.
+    // Asserting the weaker shared property rather than one candidate's exact
+    // shape is deliberate -- pinning a shape here would prejudge the decision.
+    //
+    // NOTE: an `it.fails` body passes on ANY throw, so this test is only honest
+    // because it was verified to fail for THIS reason and to stop failing when
+    // the production branch is repaired. Both directions were measured; see the
+    // D9 entry in `20-three-surface-bug-sweep.md`.
+    const h = harness({ denyApproval: true });
+    await h.completed;
+
+    const delivered = refusalEventsOf(h.announced);
+    expect(
+      delivered.length,
+      `a denial reached no consumer: offered=${JSON.stringify(h.offered.map((e) => e.type))}`,
+    ).toBeGreaterThan(0);
   });
 });
