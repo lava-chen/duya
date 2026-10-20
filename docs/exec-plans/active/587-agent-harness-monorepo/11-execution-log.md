@@ -1367,6 +1367,7 @@ Validation on Windows / Node from the managed worktree:
 - `npm run architecture:check` — passed on rebased head (2,892 tolerated, 0 new).
 - `npm run typecheck:all` — passed on rebased head; 231 existing Electron diagnostics across 111 keys remain baselined, with no new errors.
 - The first remote run also confirmed typecheck and architecture pass, but exposed that `--changed` plus a root manifest script edit is too broad for CI-only changes. Resolver follow-up now recognizes only the exact `ci:test-scope` script-only manifest diff, emits explicit unit test targets, and skips product typecheck/build/E2E for CI-only wiring. General root manifest edits remain full-suite changes. The updated local resolver selects `unit=changed,e2e=skip,build=skip` with only `scripts/ci/test-scope.test.ts` for this PR; the next GitHub run must verify that exact selection.
+- GitHub run #482 revealed the parsed-manifest comparison did not recognize the synthetic PR merge ref, even though the same logic passed against the local branch ref. The resolver now checks the actual three-dot `package.json` diff and accepts only the single added `ci:test-scope` line; another remote run is required to verify this boundary.
 - Real Electron E2E execution is not available locally; the smoke spec was list-validated only. GitHub connector confirmed repository push/merge access; PR creation and remote checks are pending the corrected run.
 
 The workflow now serializes Vitest files for both changed and full scopes, and

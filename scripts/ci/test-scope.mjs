@@ -95,21 +95,12 @@ function unitFilesFor(files, ciOnlyChanges) {
 
 function isCiRoutingManifestOnly(baseSha, headSha) {
   try {
-    const readManifest = (ref) => JSON.parse(execFileSync('git', ['show', `${ref}:package.json`], { encoding: 'utf8' }));
-    const before = readManifest(baseSha);
-    const after = readManifest(headSha);
-    const stripScripts = (manifest) => {
-      const copy = structuredClone(manifest);
-      delete copy.scripts;
-      return copy;
-    };
-    const beforeScripts = { ...before.scripts };
-    const afterScripts = { ...after.scripts };
-    delete afterScripts['ci:test-scope'];
-    return !Object.hasOwn(before.scripts ?? {}, 'ci:test-scope')
-      && after.scripts?.['ci:test-scope'] === 'node scripts/ci/test-scope.mjs'
-      && JSON.stringify(stripScripts(before)) === JSON.stringify(stripScripts(after))
-      && JSON.stringify(beforeScripts) === JSON.stringify(afterScripts);
+    const diff = execFileSync('git', [
+      'diff', '--unified=0', `${baseSha}...${headSha}`, '--', 'package.json',
+    ], { encoding: 'utf8' });
+    const changedLines = diff.split(/\r?\n/).filter((line) => /^[+-]/.test(line) && !/^(?:\+\+\+|---)/.test(line));
+    return changedLines.length === 1
+      && /^\+\s*"ci:test-scope":\s*"node scripts\/ci\/test-scope\.mjs",?$/.test(changedLines[0]);
   } catch {
     return false;
   }
