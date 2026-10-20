@@ -7,7 +7,7 @@
 // It is deliberately import-free so that last hop stays a type-only edge:
 // nothing here can pull main-process code into the renderer bundle. This
 // header previously claimed the renderer "cannot import from the Electron
-// side" 鈥?true of runtime code, false of types, and `src/global.d.ts`
+// side" —true of runtime code, false of types, and `src/global.d.ts`
 // had been importing `ElectronAPI` from the preload bridge all along.
 
 export interface GitStatusFileChange {
@@ -122,7 +122,7 @@ export interface GitListCommitsResult {
   commits: GitCommitInfo[];
 }
 
-/** One branch reference 鈥?local or remote. `current` is only present for the
+/** One branch reference —local or remote. `current` is only present for the
  *  active local branch; `remote` is only present for remote-tracking refs. */
 export interface GitBranchRef {
   name: string;
