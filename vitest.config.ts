@@ -63,9 +63,9 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: [
-      'apps/desktop/src/renderer/**/*.test.ts',
-      'apps/desktop/src/renderer/**/*.test.tsx',
-      'apps/desktop/src/renderer/**/*.spec.ts',
+      'packages/ui/src/**/*.test.ts',
+      'packages/ui/src/**/*.test.tsx',
+      'packages/ui/src/**/*.spec.ts',
       'apps/desktop/src/main/**/*.test.ts',
       'apps/web/tests/**/*.test.ts',
       // Plan 587 M5.2: the contracts boundary. Collected deliberately, because
@@ -140,7 +140,10 @@ export default defineConfig({
     extensions: ['.mjs', '.mts', '.ts', '.tsx', '.js', '.jsx', '.json'],
     alias: [
       ...WORKSPACE_SOURCE_ALIASES,
-      { find: '@', replacement: path.resolve(__dirname, './apps/desktop/src/renderer') },
+      { find: '@', replacement: path.resolve(__dirname, './packages/ui/src') },
+      { find: '@duya/ui/styles.css', replacement: path.resolve(__dirname, './packages/ui/src/styles/globals.css') },
+      { find: /^@duya\/ui\/(.*)$/, replacement: path.resolve(__dirname, './packages/ui/src') + '/$1' },
+      { find: '@duya/ui', replacement: path.resolve(__dirname, './packages/ui/src/index.ts') },
       // Pin better-sqlite3 to the root-managed copy. packages/agent pins
       // v11 (no node-24 prebuilt exists), so its package-local duplicate
       // loads with a stale NODE_MODULE_VERSION; the root copy is the one

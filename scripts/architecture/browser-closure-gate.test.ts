@@ -160,14 +160,19 @@ describe('G10 on the live tree', { timeout: 30_000 }, () => {
     expect(report.findings).toEqual([]);
     expect(isBrowserClosureClean(report)).toBe(true);
     // The scope is named, not implied: 610 §4 rule 1 forbids a bare count.
-    expect(report.scope).toBe('apps/desktop/src/renderer');
-    expect(report.summary).toBe(`0/${report.walked} Node built-ins in apps/desktop/src/renderer`);
+    expect(report.scope).toBe('packages/ui/src + apps/desktop/src/renderer');
+    expect(report.summary).toBe(
+      `0/${report.walked} Node built-ins in packages/ui/src + apps/desktop/src/renderer`,
+    );
   });
 
   it('walked hundreds of files, so green is not "inspected nothing"', () => {
-    // A floor, not an exact count: the renderer grows, and a test that pinned
-    // 789 would fail on every added component without anything regressing.
-    // The point is only that the walk opened a large first-party graph.
+    // A floor, not an exact count: the shared renderer grows, and a test that
+    // pinned 789 would fail on every added component without anything
+    // regressing. The point is only that the walk opened a large first-party
+    // graph. Since plan 610/24 the graph is seeded from `packages/ui/src`
+    // directly — the old renderer directory is down to mounting stubs, and a
+    // walk that stopped there inspected a tenth of the closure.
     expect(report.walked).toBeGreaterThan(500);
     expect(report.entries[0].seeds).toBeGreaterThan(100);
   });
@@ -178,7 +183,7 @@ describe('G10 on the live tree', { timeout: 30_000 }, () => {
     // findings and be right by accident; this asserts the boundary is crossed
     // by looking for a first-party workspace file in the closure, resolved from
     // a specifier rather than from the seed list.
-    const closure = browserClosure(seedsFor('apps/desktop/src/renderer') ?? []);
+    const closure = browserClosure(seedsFor('packages/ui/src') ?? []);
     const crossed = [...closure.keys()].filter((f) => f.startsWith('packages/'));
     expect(crossed.length).toBeGreaterThan(50);
     expect(crossed).toContain('packages/conductor/src/renderer/index.ts');

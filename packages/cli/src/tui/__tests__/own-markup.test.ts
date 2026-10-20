@@ -103,3 +103,24 @@ describe('renderMarkup literal-brace tags', () => {
     expect(renderMarkup(escapeMarkup('{/gray-fg}'))).toBe('{/gray-fg}');
   });
 });
+
+describe('renderMarkup italic/strike (plan 615 Phase 0)', () => {
+  // These two attributes are NOT in blessed's vocabulary — the own renderer
+  // emits them as direct SGR parameters. Attribute order is canonical:
+  // bold → italic → strike, then colour.
+  it('emits italic as SGR 3 with the line-end reset', () => {
+    expect(renderMarkup('{italic}x{/italic}')).toBe('\x1b[3mx\x1b[m');
+    expect(renderMarkup('{strike}x{/strike}')).toBe('\x1b[9mx\x1b[m');
+  });
+
+  it('folds stacked attributes into one run, attributes before colour', () => {
+    expect(renderMarkup('{bold}{italic}x')).toBe('\x1b[1;3mx\x1b[m');
+    expect(renderMarkup('{italic}{cyan-fg}x')).toBe('\x1b[3;36mx\x1b[m');
+  });
+
+  it('steps the attribute back down on a close', () => {
+    // After {/italic} bold is still in effect: the transition re-emits the
+    // effective style from a reset (blessed's diff-the-effective-style rule).
+    expect(renderMarkup('{bold}{italic}x{/italic}y')).toBe('\x1b[1;3mx\x1b[m\x1b[1my\x1b[m');
+  });
+});

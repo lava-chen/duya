@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { readFile, realpath } from 'node:fs/promises';
 import {
   createServer,
   type IncomingMessage,
@@ -6,10 +7,13 @@ import {
   type ServerResponse,
 } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import * as path from 'node:path';
 import {
   CURRENT_HOST_DECLARATION,
   type HostPermissionRequestResolveInput,
+  type HostSessionCreateInput,
   type HostSessionListQuery,
+  type HostSessionPatch,
   type RunEventEnvelope,
   type SessionId,
 } from '@duya/agent-protocol';
@@ -20,6 +24,12 @@ const MAX_JSON_BODY_BYTES = 64 * 1024;
 const SSE_HEARTBEAT_MS = 15_000;
 const MAX_SSE_BUFFERED_BYTES = 256 * 1024;
 const VALID_PERMISSION_DECISIONS = ['allow', 'always', 'deny'] as const;
+/**
+ * Thinking-effort levels the worker understands (`ModelThinkingLevel` in
+ * `@duya/ai`). The browser may pick one; it may not invent one.
+ */
+const VALID_RUN_EFFORTS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+const CONTENT_SECURITY_POLICY = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'";
 
 export interface WebBffOptions {
   /** Loopback Host origin. The Host bearer stays in this server process. */
@@ -27,6 +37,8 @@ export interface WebBffOptions {
   readonly hostToken: string;
   /** Defaults to an ephemeral port so callers can safely start multiple instances. */
   readonly port?: number;
+  /** Built browser assets served from the same origin as the API. */
+  readonly staticRoot?: string;
 }
 
 export interface WebBffHandle {
@@ -44,7 +56,10 @@ export async function createWebBff(options: WebBffOptions): Promise<WebBffHandle
   const csrfToken = randomBytes(32).toString('hex');
   const activeStreams = new Set<ServerResponse>();
   const server = createServer((request, response) => {
-    void routeRequest({ request, response, client, csrfToken, activeStreams, origin: currentOrigin(server) })
+    void routeRequest({
+      request, response, client, csrfToken, activeStreams, origin: currentOrigin(server),
+      ...(options.staticRoot === undefined ? {} : { staticRoot: options.staticRoot }),
+    })
       .catch(() => sendJson(response, 500, { error: { code: 'internal_error' } }));
   });
 
@@ -82,6 +97,7 @@ interface RequestContext {
   readonly csrfToken: string;
   readonly activeStreams: Set<ServerResponse>;
   readonly origin: string;
+  readonly staticRoot?: string;
 }
 
 async function routeRequest(context: RequestContext): Promise<void> {
@@ -108,13 +124,19 @@ async function routeRequest(context: RequestContext): Promise<void> {
     return;
   }
 
-  if (!requestUrl.pathname.startsWith('/api/')) {
-    sendJson(response, 404, { error: { code: 'not_found' } });
+  if (!isAllowedOrigin(request, origin)) {
+    sendJson(response, 403, { error: { code: 'origin_not_allowed' } });
     return;
   }
 
-  if (!isAllowedOrigin(request, origin)) {
-    sendJson(response, 403, { error: { code: 'origin_not_allowed' } });
+  if (context.staticRoot && (request.method === 'GET' || request.method === 'HEAD') &&
+      !requestUrl.pathname.startsWith('/api/')) {
+    await serveStatic(context.staticRoot, requestUrl.pathname, response, request.method === 'HEAD');
+    return;
+  }
+
+  if (!requestUrl.pathname.startsWith('/api/')) {
+    sendJson(response, 404, { error: { code: 'not_found' } });
     return;
   }
 
@@ -144,6 +166,16 @@ async function routeRequest(context: RequestContext): Promise<void> {
       return;
     }
 
+    if (request.method === 'POST' && requestUrl.pathname === '/api/sessions') {
+      const input = parseCreateSessionInput(await readJsonBody(request));
+      if (input === null) {
+        sendJson(response, 400, { error: { code: 'invalid_session_create' } });
+        return;
+      }
+      sendJson(response, 201, { session: await context.client.create(input) });
+      return;
+    }
+
     const sessionMatch = /^\/api\/sessions\/([^/]+)$/.exec(requestUrl.pathname);
     if (request.method === 'GET' && sessionMatch) {
       const sessionId = decodePathPart(sessionMatch[1]);
@@ -153,6 +185,31 @@ async function routeRequest(context: RequestContext): Promise<void> {
       }
       const session = await context.client.get(sessionId);
       sendJson(response, session ? 200 : 404, session ? { session } : { error: { code: 'session_not_found' } });
+      return;
+    }
+
+    const sessionMutationMatch = /^\/api\/sessions\/([^/]+)$/.exec(requestUrl.pathname);
+    if (sessionMutationMatch && request.method === 'PATCH') {
+      const sessionId = decodePathPart(sessionMutationMatch[1]);
+      const parsed = parseSessionPatch(await readJsonBody(request));
+      if (!sessionId || parsed === null) {
+        sendJson(response, 400, { error: { code: 'invalid_session_update' } });
+        return;
+      }
+      const result = await context.client.update(sessionId, parsed.expectedUpdatedAt, parsed.patch);
+      sendJson(response, result.updated ? 200 : result.reason === 'conflict' ? 409 : 404, result);
+      return;
+    }
+
+    if (sessionMutationMatch && request.method === 'DELETE') {
+      const sessionId = decodePathPart(sessionMutationMatch[1]);
+      const expectedUpdatedAt = parseExpectedUpdatedAt(requestUrl.searchParams.get('expectedUpdatedAt'));
+      if (!sessionId || expectedUpdatedAt === null || hasUnexpectedKeys(requestUrl.searchParams, ['expectedUpdatedAt'])) {
+        sendJson(response, 400, { error: { code: 'invalid_session_delete' } });
+        return;
+      }
+      const result = await context.client.delete(sessionId, expectedUpdatedAt);
+      sendJson(response, result.deleted ? 200 : result.reason === 'conflict' ? 409 : 404, result);
       return;
     }
 
@@ -202,6 +259,12 @@ async function routeRequest(context: RequestContext): Promise<void> {
         sessionId: body.sessionId as SessionId,
         prompt: body.prompt,
         origin: 'user',
+        ...(body.model === undefined ? {} : { model: body.model }),
+        ...(body.providerId === undefined ? {} : { providerId: body.providerId }),
+        // The thinking level is a turn OPTION, not a protocol field: the Host
+        // hands the options bag to the worker unchanged, which is the same
+        // channel the Desktop renderer uses.
+        ...(body.effort === undefined ? {} : { options: { effort: body.effort } }),
       }));
       return;
     }
@@ -348,24 +411,81 @@ async function writeRunEvent(
 }
 
 function parseSessionListQuery(params: URLSearchParams): HostSessionListQuery | null {
-  if (hasUnexpectedKeys(params, ['limit', 'includeArchived'])) return null;
+  if (hasUnexpectedKeys(params, ['limit', 'includeArchived', 'cursor'])) return null;
   const limit = parseLimit(params.get('limit'), 50, 100);
   const includeArchived = parseBoolean(params.get('includeArchived'));
-  if (limit === null || includeArchived === null) return null;
+  const cursor = params.get('cursor');
+  if (limit === null || includeArchived === null || (cursor !== null && (cursor.length === 0 || cursor.length > 2_048))) return null;
   return {
     limit,
     ...(includeArchived === undefined ? {} : { includeArchived }),
+    ...(cursor === null ? {} : { cursor }),
   };
 }
 
-function parseMessageQuery(params: URLSearchParams): { readonly cursor?: string; readonly limit?: number } | null {
-  if (hasUnexpectedKeys(params, ['cursor', 'limit'])) return null;
+function parseCreateSessionInput(value: Record<string, unknown> | null): HostSessionCreateInput | null {
+  const allowed = [
+    'workspaceId', 'workspaceRootId', 'workspaceRelativePath', 'title', 'projectName',
+    'model', 'providerId', 'mode', 'permissionMode', 'agentProfileId', 'parentSessionId',
+    'agentType', 'agentName', 'draft',
+  ] as const;
+  if (value === null || !hasOnlyKeys(value, allowed)) return null;
+  if (!isBoundedString(value.workspaceId, 1, 256) ||
+      !(value.workspaceRootId === null || isBoundedString(value.workspaceRootId, 1, 256))) return null;
+  if (value.workspaceRelativePath !== undefined && !isWorkspaceRelativePath(value.workspaceRelativePath)) return null;
+  for (const key of ['title', 'projectName', 'model', 'providerId', 'mode', 'agentType', 'agentName'] as const) {
+    if (value[key] !== undefined && (typeof value[key] !== 'string' || value[key].length > 300)) return null;
+  }
+  if (value.permissionMode !== undefined &&
+      (typeof value.permissionMode !== 'string' || !['default', 'auto', 'full_access'].includes(value.permissionMode))) return null;
+  if (value.agentProfileId !== undefined && value.agentProfileId !== null && !isBoundedString(value.agentProfileId, 1, 256)) return null;
+  if (value.parentSessionId !== undefined && value.parentSessionId !== null && !isBoundedString(value.parentSessionId, 1, 256)) return null;
+  if (value.draft !== undefined && value.draft !== null && (typeof value.draft !== 'string' || value.draft.length > 64 * 1024)) return null;
+  return value as HostSessionCreateInput;
+}
+
+function parseSessionPatch(value: Record<string, unknown> | null): { readonly expectedUpdatedAt?: number; readonly patch: HostSessionPatch } | null {
+  if (value === null || !hasOnlyKeys(value, ['expectedUpdatedAt', 'patch']) || !isRecord(value.patch)) return null;
+  const expectedUpdatedAt = value.expectedUpdatedAt;
+  if (expectedUpdatedAt !== undefined && (!Number.isSafeInteger(expectedUpdatedAt) || (expectedUpdatedAt as number) < 0)) return null;
+  const patch = value.patch;
+  const allowed = ['title', 'projectName', 'status', 'model', 'providerId', 'mode', 'permissionMode', 'agentProfileId', 'parentSessionId', 'agentType', 'agentName', 'draft'];
+  if (!hasOnlyKeys(patch, allowed)) return null;
+  for (const key of ['title', 'projectName', 'status', 'model', 'providerId', 'mode', 'agentType', 'agentName'] as const) {
+    if (patch[key] !== undefined && (typeof patch[key] !== 'string' || patch[key].length > 300)) return null;
+  }
+  if (patch.permissionMode !== undefined &&
+      (typeof patch.permissionMode !== 'string' || !['default', 'auto', 'full_access'].includes(patch.permissionMode))) return null;
+  if (patch.agentProfileId !== undefined && patch.agentProfileId !== null && !isBoundedString(patch.agentProfileId, 1, 256)) return null;
+  if (patch.parentSessionId !== undefined && patch.parentSessionId !== null && !isBoundedString(patch.parentSessionId, 1, 256)) return null;
+  if (patch.draft !== undefined && patch.draft !== null && (typeof patch.draft !== 'string' || patch.draft.length > 64 * 1024)) return null;
+  return { ...(typeof expectedUpdatedAt === 'number' ? { expectedUpdatedAt } : {}), patch: patch as HostSessionPatch };
+}
+
+function parseExpectedUpdatedAt(raw: string | null): number | null | undefined {
+  if (raw === null) return undefined;
+  if (!/^\d+$/.test(raw)) return null;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+function isWorkspaceRelativePath(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 2_048 && !value.startsWith('/') &&
+    !value.startsWith('\\') && !/^[a-zA-Z]:/.test(value) && !value.includes('\\') &&
+    !value.split('/').includes('..') && !value.includes('\0');
+}
+
+function parseMessageQuery(params: URLSearchParams): { readonly cursor?: string; readonly limit?: number; readonly includeSuperseded?: boolean } | null {
+  if (hasUnexpectedKeys(params, ['cursor', 'limit', 'includeSuperseded'])) return null;
   const cursor = params.get('cursor');
   const limit = parseLimit(params.get('limit'), 50, 100);
-  if (limit === null || (cursor !== null && (cursor.length === 0 || cursor.length > 2_048))) return null;
+  const includeSuperseded = parseBoolean(params.get('includeSuperseded'));
+  if (limit === null || includeSuperseded === null ||
+      (cursor !== null && (cursor.length === 0 || cursor.length > 2_048))) return null;
   return {
     ...(cursor === null ? {} : { cursor }),
     limit,
+    ...(includeSuperseded === undefined ? {} : { includeSuperseded }),
   };
 }
 
@@ -422,12 +542,25 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
   return isRecord(value) ? value : null;
 }
 
+/**
+ * The run-start body the browser may send.
+ *
+ * A local path is NOT among them: the worker runs inside a workspace the Host
+ * registered, and a directory the browser names would move that boundary.
+ */
 function isStartRunInput(value: Record<string, unknown> | null): value is Record<string, unknown> & {
   readonly sessionId: string;
   readonly prompt: string;
+  readonly model?: string;
+  readonly providerId?: string;
+  readonly effort?: string;
 } {
-  return value !== null && hasOnlyKeys(value, ['sessionId', 'prompt']) &&
-    isBoundedString(value.sessionId, 1, 256) && isBoundedString(value.prompt, 1, 64 * 1024);
+  return value !== null && hasOnlyKeys(value, ['sessionId', 'prompt', 'model', 'providerId', 'effort']) &&
+    isBoundedString(value.sessionId, 1, 256) && isBoundedString(value.prompt, 1, 64 * 1024) &&
+    (value.model === undefined || isBoundedString(value.model, 1, 300)) &&
+    (value.providerId === undefined || isBoundedString(value.providerId, 1, 300)) &&
+    (value.effort === undefined ||
+      (typeof value.effort === 'string' && VALID_RUN_EFFORTS.includes(value.effort as (typeof VALID_RUN_EFFORTS)[number])));
 }
 
 function isCancelRunInput(value: Record<string, unknown> | null): value is Record<string, unknown> & { readonly reason?: string } {
@@ -478,7 +611,91 @@ function isExpectedHost(request: IncomingMessage, origin: string): boolean {
 
 function isAllowedFetchSite(request: IncomingMessage): boolean {
   const site = request.headers['sec-fetch-site'];
-  return site === undefined || site === 'same-origin';
+  if (site === undefined || site === 'same-origin') return true;
+  return site === 'none' && request.method === 'GET' &&
+    request.headers['sec-fetch-mode'] === 'navigate' &&
+    request.headers['sec-fetch-dest'] === 'document';
+}
+
+async function serveStatic(root: string, pathname: string, response: ServerResponse, headOnly: boolean): Promise<void> {
+  let relativePath: string;
+  try {
+    relativePath = decodeURIComponent(pathname).replace(/^\/+/, '');
+  } catch {
+    sendJson(response, 400, { error: { code: 'invalid_static_path' } });
+    return;
+  }
+  if (relativePath.includes('\0') || relativePath.split(/[\\/]/).includes('..')) {
+    sendJson(response, 400, { error: { code: 'invalid_static_path' } });
+    return;
+  }
+  if (!(relativePath === 'index.html' || relativePath.startsWith('assets/') || relativePath.startsWith('fonts/') ||
+      relativePath === 'icon.png' || relativePath === 'favicon.ico')) {
+    if (path.extname(relativePath) !== '') {
+      sendJson(response, 404, { error: { code: 'not_found' } });
+      return;
+    }
+    relativePath = '';
+  }
+  const rootPath = path.resolve(root);
+  let rootRealPath: string;
+  try {
+    rootRealPath = await realpath(rootPath);
+  } catch {
+    sendJson(response, 404, { error: { code: 'not_found' } });
+    return;
+  }
+  const requestedPath = path.resolve(rootPath, relativePath || 'index.html');
+  if (requestedPath !== rootPath && !requestedPath.startsWith(`${rootPath}${path.sep}`)) {
+    sendJson(response, 400, { error: { code: 'invalid_static_path' } });
+    return;
+  }
+  try {
+    const requestedRealPath = await realpath(requestedPath);
+    if (requestedRealPath !== rootRealPath && !requestedRealPath.startsWith(`${rootRealPath}${path.sep}`)) {
+      sendJson(response, 404, { error: { code: 'not_found' } });
+      return;
+    }
+    const contents = await readFile(requestedRealPath);
+    sendStaticBytes(response, requestedRealPath, contents, headOnly);
+    return;
+  } catch {
+    // Browser routes fall back to the application shell; unknown assets do not.
+  }
+  if (path.extname(relativePath) !== '') {
+    sendJson(response, 404, { error: { code: 'not_found' } });
+    return;
+  }
+  const indexPath = path.join(rootPath, 'index.html');
+  try {
+    const indexRealPath = await realpath(indexPath);
+    if (indexRealPath !== rootRealPath && !indexRealPath.startsWith(`${rootRealPath}${path.sep}`)) {
+      sendJson(response, 404, { error: { code: 'not_found' } });
+      return;
+    }
+    const contents = await readFile(indexRealPath);
+    sendStaticBytes(response, indexRealPath, contents, headOnly);
+  } catch {
+    sendJson(response, 404, { error: { code: 'not_found' } });
+  }
+}
+
+function sendStaticBytes(response: ServerResponse, filePath: string, contents: Buffer, headOnly: boolean): void {
+  const contentTypeByExtension: Readonly<Record<string, string>> = {
+    '.css': 'text/css; charset=utf-8',
+    '.html': 'text/html; charset=utf-8',
+    '.ico': 'image/x-icon',
+    '.js': 'text/javascript; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.png': 'image/png',
+    '.svg': 'image/svg+xml',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2',
+  };
+  const contentType = contentTypeByExtension[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream';
+  if (response.destroyed || response.headersSent) return;
+  response.writeHead(200, { 'content-type': contentType, 'content-length': contents.byteLength });
+  response.end(headOnly ? undefined : contents);
 }
 
 function isAllowedOrigin(request: IncomingMessage, origin: string): boolean {
@@ -505,6 +722,7 @@ function parseRequestUrl(rawUrl: string | undefined, origin: string): URL | null
 
 function addSecurityHeaders(response: ServerResponse): void {
   response.setHeader('cache-control', 'no-store');
+  response.setHeader('content-security-policy', CONTENT_SECURITY_POLICY);
   response.setHeader('x-content-type-options', 'nosniff');
   response.setHeader('referrer-policy', 'no-referrer');
 }

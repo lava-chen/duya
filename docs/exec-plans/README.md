@@ -291,6 +291,7 @@ ends with a *different* set of failures, that is on you.
 | [03 SQLite 驱动](./active/610-architecture-series/03-sqlite-driver/README.md) | 602（`Phase 0`–`3`） | C 线，**可选旁支**，已退出关键路径 |
 | [10 切片 A1 契约](./active/610-architecture-series/10-slice-a1-g7-loop-detection.md) | — | **已完成(PR #219)**,未决问题已答 |
 | [11 切片 A0 契约](./active/610-architecture-series/11-slice-a0-client-runtime-axis.md) | — | 客户端运行时轴,**可与 A3 并行** |
+| [24 共享渲染器](./active/610-architecture-series/24-shared-renderer.md) | — | **已完成**：渲染器迁入 `@duya/ui`、Desktop 挂公共 App（#311 merge `d63201ba`）、Web 切共享 Root，Electron 运行时已用真二进制验收（smoke 6/6 + archive UI 5/5 + 真 turn 1/1，`aa9b100d` 上的 `dist-electron/main.js`）；Playwright 像素目检按 owner 范围（UI 不管）不做。`pkg:ui` 在切片清单里仍不可见这件事归 T19（别用加指纹的方式"修"） |
 
 **推进顺序、每片的唯一 next action 与完成标志、放弃条件，只在 610 里回答一次。**
 587 的合同与历史推导已被第 01 章接管，不再单独排期。
@@ -408,6 +409,8 @@ Four were wrong and are corrected below; these five were checked and are
 | [tui-ux-overhaul](./active/611-tui-ux-overhaul.md) | P1 | CLI TUI Wave 1：主题 token 化 + 自动明暗、F1/Ctrl+R/Ctrl+P 窗口、busy 排队、粘贴 Map 修复、状态栏 token 条、工具组渲染 |
 | [cli-manual-compaction](./active/613-cli-manual-compaction.md) | P2 | CLI `/compact`：给 Host 补一条会话级压缩出口（转发既存的 `compact` worker 命令）+ CLI 命令注册与压缩后重载。**Phase 0 探针未跑**（冷 worker 摘要器能否拿到 provider 配置是 Go/No-Go） |
 | [cli-markdown-rendering](./active/614-cli-markdown-rendering.md) | P1 | CLI Markdown 渲染补齐（thinking + assistant 最终回答）：手写 inline tokenizer、表格列边错位修复、thinking 走 Markdown、标题/列表/分隔线、**斜体/删除线**；并把 `escapeTags` 的 `\{` 换成 blessed 原生的 `{open}`（顺带修掉模型文本可注入标签 + 每个 `{` 前多打印反斜杠的存量 bug）。**Phase 0 未跑**（own↔blessed 视觉等价是 own 转默认的 Go/No-Go） |
+| [cli-unified-tui-engine](./active/615-cli-unified-tui-engine.md) | P1 | 统一 TUI 引擎：声明式组件树（手写 retained tree，不引 React/Yoga）+ StyledSpan 内部表示（最后一步才转 ANSI）+ 增量布局与虚拟化（复用 transcript-cache 三件套）+ 双模式渲染统一到 RenderScene（ScrollbackOutput=InlineSurface 内核 / AltScreenOutput=OwnScreenSurface 内核）+ 独立 Terminal Input Driver（Kitty protocol 为可选增强）；blessed 三步退役（转默认→冻结→删除）。性能验收（输入→绘制 P95<30ms、流式 30FPS、10k block）为**待测目标**，Phase 0 先建 Windows ConPTY/tmux/真实 PTY 基线。**3 条待裁定未决**（614 Phase 6 归宿 / 性能数值校准 / blessed 回滚开关保留期），Phase 0 未启动 |
+| [duya-app-mcp-layer](./active/616-duya-app-mcp-layer.md) | P1 | **工具面分层**：canvas 16 + bot 8 + browser + 其余 17 个产品能力（computer_use/cua、vision、image_generate、widget、module、duya_cli、session、MessageSession、SessionSearch、Brief、memory_write、write_stage1_policy、plan、update_state、send_artifact）收进 host-owned 进程内 MCP server `duya_app`（`mcp__duya_app__<tool>` / `mcp_duya_app_<tool>` / `tool_id: mcp:duya_app:<tool>`），走 deferred 暴露 + `tool_catalog` 发现；基础工具 17 个（bash/read/write/edit/apply_patch/glob/grep/todo/task/…）留在常规注册层且 **wire name 一字不改**。对标 Codex 的 `codex_apps`（但 Codex 的 app 全是远程的，duya 的是本地进程内，形态是本期的原创）。6 张 T 卡 T610a–e + d2；**C2–C5（renderer 路由 / profile 规则 / canvas 权限短路 / bot 放行）必须随改名同卡落地**，否则中间态比改造前更糟。**C9：`source:'bundled'` 会在权限链 step 0 短路、跳过灾难检查与宿主开关，`duya_app` 必须用新的 `source:'app'`**。上下文穿透已实测可行（**AsyncLocalStorage**，5 并发调用各自隔离、穿过 await 无泄漏；优于 `_meta` 走私）。**T610a（进程内 MCP transport）/ T610b（AsyncLocalStorage 上下文穿透）/ T610n（`duya_app` 工具命名空间 + 反解共享纯函数）已交付** |
 
 ***
 

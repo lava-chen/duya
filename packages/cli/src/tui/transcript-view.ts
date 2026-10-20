@@ -73,6 +73,8 @@ import { capLines, truncateToWidth, visibleWidth } from './width.js';
 import { DARK_THEME_TAGS, type ThemeTags } from './theme.js';
 import { escapeTags } from './markdown/escape.js';
 import { renderInlineTokens, rawTagPair, tokenizeInline, type InlineToken } from './markdown/inline.js';
+import { colorFromTagBody } from './core/color.js';
+import type { SpanStyle } from './core/span.js';
 
 export { escapeTags } from './markdown/escape.js';
 
@@ -101,12 +103,33 @@ export interface RenderOptions {
   /** Theme token → blessed tag body. Defaults to the dark palette. */
   readonly theme?: ThemeTags;
   /**
+   * Which screen renderer the output is destined for. Omitted means the
+   * blessed chain (the historical default), which cannot express `{italic}` /
+   * `{strike}` — blessed's `_attr` prints unknown tags as literal text — so
+   * the markdown mappers fold emphasis/strike into their pre-615 shapes. The
+   * own renderer accepts both attributes, so it gets the true SGR pairs.
+   */
+  readonly renderer?: 'blessed' | 'own';
+  /**
    * Visible column budget for block renderers that span the pane width
    * (horizontal rules). Omitted means "unknown": width-aware renderers fall
    * back to their pre-`width` fixed shapes, which is what keeps every existing
    * caller and test byte-identical until the shell starts injecting it.
    */
   readonly width?: number;
+  /**
+   * Per-block component revision, folded into the transcript cache key.
+   *
+   * Once a block is drawn by a tree component, its HEIGHT can change without
+   * its content changing — a component makes its own layout decision (a tool
+   * card collapsing, a preview truncating) that the content hash cannot see. A
+   * cache keyed only on content would then serve the old height and the
+   * document would disagree with itself about where a block starts.
+   *
+   * Phase 4 adds the slot; Phase 6 is what fills it, because that is when
+   * blocks become components. Absent means revision 0 for every block.
+   */
+  readonly componentRevisions?: ReadonlyMap<string, number>;
 }
 
 export const DEFAULT_RENDER_OPTIONS: RenderOptions = {
@@ -125,7 +148,24 @@ export const DEFAULT_RENDER_OPTIONS: RenderOptions = {
  * tokenizer path.
  */
 export interface Styles {
+  /** Which renderer these styles paint for; mappers branch on it. */
+  readonly renderer: 'blessed' | 'own';
+  /**
+   * The raw theme tokens, alongside the functions above.
+   *
+   * The functions wrap text in tags, which is the right shape for the
+   * hand-written call sites that compose a line out of literals. The span layer
+   * needs the COLOUR behind a token rather than a wrapper around text, and
+   * probing a function with a sentinel to recover its tag body (`rawTagPair`)
+   * works but cannot be used to ask "what colour is `muted`" without building a
+   * string first. Carrying the tokens makes that a lookup.
+   */
+  readonly tags: ThemeTags;
   bold(s: string): string;
+  /** Emphasis. The own renderer emits `{italic}`; blessed folds to accent. */
+  italic(s: string): string;
+  /** Strike-through. The own renderer emits `{strike}`; blessed folds to muted. */
+  strike(s: string): string;
   muted(s: string): string;
   accent(s: string): string;
   success(s: string): string;
@@ -140,11 +180,15 @@ export interface Styles {
 }
 
 /** Build the style set for a render. The dark palette is the default. */
-export function stylesOf(options: Pick<RenderOptions, 'theme'>): Styles {
+export function stylesOf(options: Pick<RenderOptions, 'theme' | 'renderer'>): Styles {
   const tags = options.theme ?? DARK_THEME_TAGS;
   const flat = (tag: string, s: string): string => `{${tag}}${escapeTags(s)}{/${tag}}`;
   return {
+    renderer: options.renderer ?? 'blessed',
+    tags,
     bold: (s) => `{bold}${escapeTags(s)}{/bold}`,
+    italic: (s) => `{italic}${escapeTags(s)}{/italic}`,
+    strike: (s) => `{strike}${escapeTags(s)}{/strike}`,
     muted: (s) => flat(tags.muted, s),
     accent: (s) => flat(tags.accent, s),
     success: (s) => flat(tags.success, s),
@@ -440,17 +484,23 @@ function renderAssistantMarkdown(text: string, styles: Styles, width?: number): 
     if (heading !== null) {
       flushParagraph();
       const level = (heading[1] ?? '#').length;
-      const text = renderInlineMarkdown(heading[2] ?? '', styles);
       // Levels 1–2 read as document titles: heading colour AND bold. Deeper
       // levels stay single-colour. The `#` marks themselves are Markdown
       // syntax aimed at a browser, not content — they do not print (D5).
-      if (level <= 2) {
-        const headingTag = rawTagPair(styles.heading);
-        const boldTag = rawTagPair(styles.bold);
-        output.push(`${headingTag.open}${boldTag.open}${text}${boldTag.close}${headingTag.close}`);
-      } else {
-        output.push(styles.heading(text));
-      }
+      //
+      // The level's style is an ENVELOPE rather than a pair of tags around the
+      // rendered string: that is what keeps the colour outside the inline
+      // styles (`{cyan-fg}{bold}…{/bold}{/cyan-fg}`) while still letting an
+      // inner construct like `code` replace it for its own run. Wrapping the
+      // string afterwards would work too, but then the colour would be decided
+      // by string concatenation instead of by the same span layer that decides
+      // everything else.
+      const headingColour = colorFromTagBody(styles.tags.heading);
+      const envelope: SpanStyle = {
+        ...(headingColour === undefined ? {} : { fg: headingColour }),
+        ...(level <= 2 ? { attrs: ['bold' as const] } : {}),
+      };
+      output.push(renderInlineTokens(tokenizeInline(heading[2] ?? ''), styles, envelope));
       continue;
     }
 
@@ -1034,6 +1084,11 @@ function trimBlankEdges(lines: readonly string[]): string[] {
 function thinkingRows(lines: readonly string[], styles: Styles, indent: string): string[] {
   const mutedPair = rawTagPair(styles.muted);
   const boldPair = rawTagPair(styles.bold);
+  // plan 615 Phase 0: the own renderer can layer italic/strike attributes the
+  // same way it layers bold; the blessed chain keeps the fold (it cannot
+  // express those tags at all).
+  const italicPair = styles.renderer === 'own' ? rawTagPair(styles.italic) : null;
+  const strikePair = styles.renderer === 'own' ? rawTagPair(styles.strike) : null;
   const base = (text: string): string => `${mutedPair.open}${text}${mutedPair.close}`;
   const render = (tokens: readonly InlineToken[]): string =>
     tokens.map((token) => {
@@ -1046,10 +1101,16 @@ function thinkingRows(lines: readonly string[], styles: Styles, indent: string):
           // attribute layered OVER that, never a second base wrap.
           return `${boldPair.open}${render(token.children)}${boldPair.close}`;
         // Emphasis, strike, links, and images all fold into the base colour:
-        // the markup disappears, nothing shouts.
+        // the markup disappears, nothing shouts. On the own renderer the
+        // first two become attribute layers instead of folds.
         case 'emphasis':
+          return italicPair !== null
+            ? `${italicPair.open}${render(token.children)}${italicPair.close}`
+            : render(token.children);
         case 'strike':
-          return render(token.children);
+          return strikePair !== null
+            ? `${strikePair.open}${render(token.children)}${strikePair.close}`
+            : render(token.children);
         case 'link':
           return base(escapeTags(token.label));
         case 'image':

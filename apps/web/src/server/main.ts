@@ -1,6 +1,6 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readLocalHostRuntime } from '@duya/host/local-host';
 import { createWebBff } from './web-bff.js';
 
@@ -50,6 +50,7 @@ export async function main(): Promise<void> {
   const bff = await createWebBff({
     hostOrigin: connection.origin,
     hostToken: connection.token,
+    staticRoot: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../client'),
     ...(port === undefined ? {} : { port }),
   });
   process.stdout.write(`Duya web BFF listening at ${bff.origin}\n`);

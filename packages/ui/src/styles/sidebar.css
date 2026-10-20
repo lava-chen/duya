@@ -1,0 +1,1777 @@
+/*
+ * sidebar.css — extracted from src/styles/globals.css (domain split).
+ * Do not edit the ordering of rules within this file; the entry file
+ * imports domain files in cascade order.
+ */
+/* Collapsed icon rail (title-bar sidebar toggle): icons only, fixed narrow
+   width set by app-shell. Icons act in place (view/tab/theme switches) —
+   expansion is the brand-chip toggle's job. */
+.app-sidebar.app-sidebar-rail {
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.6rem 0.4rem;
+}
+
+.app-sidebar-rail .rail-btn {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.app-sidebar-rail .rail-btn svg {
+  width: 18px !important;
+  height: 18px !important;
+  stroke-width: 1.75;
+}
+
+.app-sidebar-rail .rail-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.app-sidebar-rail .rail-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.app-sidebar-rail .rail-divider {
+  width: 24px;
+  height: 1px;
+  flex-shrink: 0;
+  background: var(--border);
+  margin: 0.2rem 0;
+}
+
+/* Bots-tab rail roster: every bot's avatar, scrollable like the tab list.
+   The scrollbar is hidden — the rail scrolls by wheel and should read as a
+   dense column of avatars, not a pane with a scrollbar. */
+.app-sidebar-rail .rail-bot-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.app-sidebar-rail .rail-bot-list::-webkit-scrollbar {
+  display: none;
+}
+
+.app-sidebar-rail .rail-bot {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* No circular hover fill: the avatar already reacts (bloub animates), and a
+   rounded highlight behind it read as a stray shadow on the rail. */
+
+/* Hover detail card (portaled to body, fixed next to the avatar).
+   Background uses the opaque command-menu token — `--surface` is
+   translucent under the glass theme and the card would show the chat
+   content bleeding through. */
+.rail-bot-card {
+  z-index: 1100;
+  width: 250px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--command-menu-bg);
+  border: 1px solid var(--command-menu-border, var(--border));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+  transform: translateY(-50%);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.rail-bot-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.rail-bot-card-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-bot-card-status {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.rail-bot-card-preview {
+  margin-top: 7px;
+  color: var(--muted);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.app-sidebar-rail .rail-spacer {
+  flex: 1;
+}
+
+/* Sidebar resize: no dedicated element — app-shell.tsx hit-tests the
+   sidebar's right edge (±4px) directly, so the layout stays seamless. */
+
+.app-sidebar {
+  /* Glassmorphism: a translucent frosted pane floating over the shell's
+     aurora gradient (and, on native platforms, the OS wallpaper). */
+  /* No backdrop-filter here: on native (data-backdrop) windows the OS Mica
+     material already blurs the backdrop cheaply, so a translucent fill alone
+     reads as glass. A CSS blur would re-sample the full-height surface on
+     every repaint (double-blur cost + fullscreen/repaint instability). */
+  background: color-mix(in srgb, var(--bg-canvas) 78%, transparent);
+  padding: 0.95rem 0.5rem 0.95rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.95rem;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* macOS: the custom TitleBar is hidden (window uses hiddenInset, so traffic
+   lights sit in the top-left of the content area). Give the sidebar extra
+   top padding so the first row clears the window controls on every DPI. */
+.app-shell-root[data-platform="mac"] .app-sidebar {
+  padding-top: 1.75rem;
+}
+
+/* Native window backdrop — activated when the main process created the window
+   with Mica (Windows 11) or vibrancy (macOS). The index.html boot script sets
+   `<html data-backdrop="mica|vibrancy">` from the preload-reported flag, and
+   the OS paints a wallpaper-derived tint behind the window. We drop the opaque
+   fallback backgrounds so that tint shows through the chrome, then lay subtle
+   glass scrims (--glass-*) over the surfaces that must stay readable:
+     transparent : .app-shell / .app-main-wrapper / .app-main — the "gaps"
+     --glass-chrome : sidebar, titlebar, status bar — light tint
+     --glass-main   : chat canvas, right panels — high-opacity, crisp text
+   Platforms without a native material (Windows 10, Linux, web) never get the
+   data-backdrop attribute and keep the opaque --sidebar-bg fallback gradient. */
+html[data-backdrop] {
+  background: transparent;
+}
+html[data-backdrop] body {
+  background-color: transparent;
+  background-image: none;
+}
+html[data-backdrop] .app-shell,
+html[data-backdrop] .app-main-wrapper,
+html[data-backdrop] .app-main {
+  background: transparent;
+}
+html[data-backdrop] .titlebar-drag-region,
+html[data-backdrop] .app-sidebar,
+html[data-backdrop] .app-status-bar {
+  background: var(--glass-chrome);
+}
+html[data-backdrop] .sidebar-panel-inner {
+  background: var(--glass-main);
+}
+/* Glass edge on the main pane: a 1px top-lit gradient stroke drawn in the
+   border-box layer, so it follows the rounded top-left corner without
+   affecting layout (box-sizing is border-box globally). */
+html[data-backdrop] .app-main-inner {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--glass-main), var(--glass-main)) padding-box,
+    var(--glass-edge) border-box;
+}
+
+/* Windows fullscreen→windowed repaint guard (plan 426 follow-up). After a
+   native fullscreen transition Chromium's compositor can leave any remaining
+   backdrop-filter layers (small popovers/panels kept for layered glass)
+   sampling a stale backdrop. backdrop-repair.ts drops data-glass-repair on
+   <html> for a single frame; the near-zero blur forces those layers to
+   rebuild and re-sample, then real blur returns. The 0.02px-vs-4~20px delta
+   is imperceptible. Most of the heavy chrome uses Mica + translucent fill
+   only (no CSS blur), so the rebuild cost is now bounded to the few small
+   elements that still opt in. */
+html[data-glass-repair] .conductor-panel,
+html[data-glass-repair] .conductor-zoom-pill,
+html[data-glass-repair] .conductor-popover,
+html[data-glass-repair] .canvas-presentation-toggle,
+html[data-glass-repair] .finite-widget-drag-handle,
+html[data-glass-repair] .finite-freeform-drag-handle,
+html[data-glass-repair] .finite-canvas-only-note,
+html[data-glass-repair] .attachment-preview-close,
+html[data-glass-repair] .terminal-selection-menu,
+html[data-glass-repair] .image-preview-overlay,
+html[data-glass-repair] .skills-modal-overlay,
+html[data-glass-repair] .attachment-preview-overlay {
+  backdrop-filter: blur(0.02px);
+  -webkit-backdrop-filter: blur(0.02px);
+}
+
+.sidebar-logo {
+  width: 1.8rem;
+  height: 1.8rem;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  background: linear-gradient(140deg, #7f6fff, #4a6dff);
+  box-shadow: 0 8px 20px -12px #3e4ee0;
+}
+
+/* "新对话" + primary nav behave as ONE list, so the .app-sidebar column gap
+   (0.95rem) must not fall between them — it would push 新对话 an extra gap
+   away from 画布, breaking the uniform row pitch the nav rows share. The
+   buttons carry their own padding, so gap: 0 here reproduces exactly the
+   nav's internal rhythm. */
+.sidebar-primary-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.sidebar-primary-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.sidebar-primary-link {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  margin: 0 0.5rem;
+  border-radius: 0.375rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  line-height: 1.4;
+  width: calc(100% - 1rem);
+  box-sizing: border-box;
+}
+
+.sidebar-primary-link svg {
+  width: 18px !important;
+  height: 18px !important;
+  flex-shrink: 0;
+  display: block;
+  stroke-width: 1.75;
+}
+
+/* Icon container for consistent alignment */
+.sidebar-primary-link .nav-icon {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sidebar-new-chat-btn svg {
+  width: 18px !important;
+  height: 18px !important;
+  stroke-width: 1.75;
+}
+
+.sidebar-primary-link:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.sidebar-primary-link.active {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.sidebar-new-chat-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  margin: 0 0.5rem;
+  border-radius: 0.375rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  line-height: 1.4;
+  width: calc(100% - 1rem);
+  box-sizing: border-box;
+}
+
+.sidebar-new-chat-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.sidebar-divider {
+  border-top: 1px solid var(--border);
+  margin-top: 0.22rem;
+}
+
+.sidebar-section-label {
+  color: var(--muted);
+  /* Inherit body font stack (Styrene → Segoe UI / PingFang SC / YaHei)
+     instead of the mono stack — the mono fallback (Cascadia / Consolas)
+     has no CJK glyphs, so Chinese section headers used to land on a
+     different system font and look visibly heavier than the items below. */
+  font-family: inherit;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  padding: 0 0.16rem;
+}
+
+.sidebar-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0.5rem;
+  margin: 0 0.5rem 0.3rem;
+}
+
+.sidebar-section-action {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0.2rem;
+  border-radius: 0.3rem;
+  display: grid;
+  place-items: center;
+  transition: background-color 0.2s ease, color 0.2s ease;
+  box-sizing: border-box;
+  width: 22px;
+  height: 22px;
+}
+
+.sidebar-section-action:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.sidebar-section-action.active {
+  background: var(--surface);
+  color: var(--accent);
+}
+
+.sidebar-project-menu {
+  position: fixed;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--command-menu-bg);
+  border: 1px solid var(--command-menu-border);
+  min-width: 150px;
+  z-index: 100;
+  overflow: visible;
+}
+
+.sidebar-project-menu-item {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0.3rem 0.6rem;
+  border-radius: 0.3rem;
+  font-size: 0.78rem;
+  text-align: left;
+  justify-content: flex-start;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.sidebar-project-menu-item:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.sidebar-project-menu-item.disabled,
+.sidebar-project-menu-item:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.sidebar-project-menu-item.has-description {
+  /* Two-line rows need a bit more vertical padding and a column flex
+     so the label sits above the description. */
+  align-items: flex-start;
+  padding: 0.45rem 0.6rem;
+}
+
+.sidebar-project-menu-item.has-description .sidebar-project-menu-item-icon {
+  /* Top-align the leading icon with the label line so the description
+     below does not stretch it down. */
+  align-self: center;
+  margin-top: 1px;
+}
+
+.sidebar-project-menu-item-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 0%;
+  gap: 1px;
+}
+
+.sidebar-project-menu-item-label,
+.sidebar-project-menu-item-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-project-menu-item-label {
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+
+.sidebar-project-menu-item-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-project-menu-item-description {
+  font-size: 0.7rem;
+  color: var(--muted);
+  line-height: 1.2;
+}
+
+.sidebar-project-menu-item.has-submenu {
+  position: relative;
+}
+
+.sidebar-project-submenu {
+  /* The submenu is portaled to <body> by DropdownMenu.SubmenuItem so it
+     escapes the parent list's overflow clipping. Position comes from
+     floating-ui (usePopoverPlacement); width comes from the parent
+     DropdownMenu's `minWidth` / `maxWidth` props (passed through as
+     inline styles) so a fixed-width picker host stays consistent.
+     Visual chrome mirrors `.sidebar-project-menu` exactly — same
+     background, border, radius, padding — and deliberately has NO
+     box-shadow, so the submenu reads as a continuation of the parent
+     rather than a floating dialog. */
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--command-menu-bg);
+  border: 1px solid var(--command-menu-border);
+  z-index: 1100; /* above the parent menu's 1000 */
+}
+
+.sidebar-project-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0.25rem 0.6rem;
+}
+
+.sidebar-project-menu-header {
+  /* Optional slot above the items (e.g. search input). Visual separator
+     matches the divider rhythm and keeps the header from collapsing into
+     the first item when the menu opens. */
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  margin: 0 0 4px;
+}
+
+.sidebar-project-menu-header > * {
+  /* Hosts typically render an input that should fill the row, not its
+     intrinsic width. */
+  width: 100%;
+}
+
+.sidebar-project-menu-list {
+  /* The list is the only part that scrolls when `maxHeight` (set by
+     the popover in DropdownMenu) clips the content. The container
+     stays flexible so a short list does not get a phantom scrollbar. */
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
+  max-width: 100%;
+  scrollbar-width: thin;
+  scrollbar-color: var(--muted) transparent;
+}
+
+.sidebar-project-menu-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar-project-menu-list::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 60%, transparent);
+  border-radius: 3px;
+}
+
+.sidebar-project-menu-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-project-menu-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-project-menu-section-title {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  padding: 0.25rem 0.6rem 0.1rem;
+  user-select: none;
+}
+
+.sidebar-project-menu-check {
+  display: inline-flex;
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.sidebar-project-submenu {
+  position: absolute;
+  left: calc(100% - 4px);
+  top: -6px;
+  padding: 6px 0;
+  border-radius: 0.5rem;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), 0 2px 8px rgba(0, 0, 0, 0.15);
+  min-width: 150px;
+  z-index: 101;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 1.5rem 1rem;
+  color: var(--muted);
+}
+
+.empty-state p {
+  margin: 0 0 0.8rem;
+  font-size: 0.82rem;
+}
+
+.empty-state-action {
+  border: 1px dashed var(--border);
+  border-radius: 0.58rem;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0.56rem 0.8rem;
+  font-size: 0.8rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.empty-state-action:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+  border-color: var(--accent);
+  border-style: solid;
+}
+
+.project-group-item {
+  margin-bottom: 0;
+}
+
+.project-group-header {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  height: 38px;
+  padding: 0 0.625rem;
+  margin: 0 0.5rem;
+  width: calc(100% - 1rem);
+  box-sizing: border-box;
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 450;
+  cursor: pointer;
+  position: relative;
+  border-radius: 9px;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.project-group-header:hover {
+  background: color-mix(in srgb, var(--text) 4.5%, transparent);
+  color: var(--text);
+}
+
+/* Plus button in project group header */
+.project-group-add-btn {
+  box-sizing: border-box;
+  width: 22px;
+  height: 22px;
+  padding: 0.2rem;
+  border: none;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+}
+
+.project-group-header:hover .project-group-add-btn,
+.project-group-add-btn:hover {
+  opacity: 1;
+}
+
+.project-group-add-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* Three dots menu button in project group header */
+.project-group-menu-btn {
+  box-sizing: border-box;
+  width: 22px;
+  height: 22px;
+  padding: 0.2rem;
+  border: none;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+}
+
+.project-group-header:hover .project-group-menu-btn,
+.project-group-menu-btn:hover {
+  opacity: 1;
+}
+
+.project-group-menu-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* Project dropdown menu */
+.project-dropdown-menu {
+  /* Plan 471 v11: same thin-card aesthetic as the @-mention popover
+     (command-menu-popover) — no shadow, 12px radius, command-menu tokens. */
+  position: fixed;
+  z-index: 1000;
+  min-width: 160px;
+  background: var(--command-menu-bg);
+  border: 1px solid var(--command-menu-border);
+  border-radius: 12px;
+  padding: 0.25rem;
+}
+
+.project-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-radius: 0.3rem;
+  cursor: pointer;
+  text-align: left;
+  /* Plan 471 v4: override Button's `justify-center` so the icon and
+     label sit flush-left in the dropdown row. The default Button layout
+     centers contents, which is wrong for menu items. */
+  justify-content: flex-start;
+  transition: background-color 0.15s ease;
+}
+
+.project-dropdown-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.project-dropdown-item.danger {
+  color: #ef4444;
+}
+
+.project-dropdown-item.danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.project-dropdown-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0.25rem 0;
+}
+
+.project-group-icon {
+  flex-shrink: 0;
+  opacity: 0.7;
+  width: 16px !important;
+  height: 16px !important;
+  stroke-width: 1.75;
+}
+
+.project-group-name {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 450;
+}
+
+/* -----------------------------------------------------------------------
+ * Sidebar geometry tokens
+ *
+ * The sidebar's hierarchy has a single vertical line — the "name column" —
+ * that should run through every project-name AND every thread-title.
+ * Rather than scatter magic numbers (0.5rem / 0.625rem / 16px) across
+ * multiple rules, we express every horizontal offset as "distance from
+ * the sidebar's outer-left to the name column" and read that single
+ * value in every rule that needs alignment.
+ *
+ * Derivation (do not change without re-deriving everything below):
+ *   --sidebar-name-column-x
+ *     = project-group-header.margin-left        (0.5rem)
+ *     + project-group-header.padding-left       (0.625rem)
+ *     + project-group-icon width                (16px)
+ *     + project-group-header gap (icon→name)    (0.25rem)
+ *     = 1.375rem + 16px = 38px
+ *
+ * Read by:
+ *   - .project-group-threads .thread-item → padding-left after the
+ *     container's half-rem inset, keeping thread titles aligned with
+ *     project names while row surfaces span the same width as headers.
+ *
+ * If you change --sidebar-icon-size, .project-group-header padding-left,
+ * or .project-group-header gap, update --sidebar-name-column-x too.
+ * --------------------------------------------------------------------- */
+:root {
+  --sidebar-icon-size: 16px;
+  --sidebar-header-x-pad: 0.625rem;
+  --sidebar-header-gap: 0.25rem;
+  --sidebar-name-column-x: calc(
+    0.5rem + var(--sidebar-header-x-pad) + var(--sidebar-icon-size) + var(--sidebar-header-gap)
+  );
+}
+
+.project-group-threads {
+  /* Match the project header's side margins so thread hover/active
+   * surfaces span the same width, while row titles keep their alignment. */
+  margin: 0.1rem 0.5rem 0;
+}
+
+.project-group-expand-all {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 28px;
+  box-sizing: border-box;
+  padding: 0 0.625rem 0 calc(var(--sidebar-name-column-x) - 0.5rem);
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 9px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  width: 100%;
+  text-align: left;
+  opacity: 0.5;
+}
+
+.project-group-expand-all:hover {
+  background: color-mix(in srgb, var(--text) 4.5%, transparent);
+  color: var(--text);
+  opacity: 1;
+}
+
+.thread-list {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Single-list view: align session rows to the first-level inset shared by
+   the other sidebar buttons (`sidebar-primary-link`, `project-group-header`).
+   `width: auto` lets the grid row stretch to fill the track minus the side
+   margins (the base `.thread-item` `width: 100%` would otherwise overflow the
+   right edge when combined with a margin). `min-width: 0` lets the ellipsis
+   apply to the nowrap title. Bot contact rows share the same inset so the
+   Bots section lines up with the nav buttons above and session rows below. */
+.flat-thread-list .thread-item,
+.sidebar-section-body .thread-item,
+.flat-thread-list .bot-contact-item,
+.sidebar-section-body .bot-contact-item {
+  width: auto;
+  margin: 0 0.5rem;
+  min-width: 0;
+}
+
+.app-sidebar .project-group-threads .thread-item {
+  /* These rows are already inset by their parent container. Reset the
+   * section-wide thread gutter so their surfaces match the project header. */
+  width: 100%;
+  margin: 0;
+  padding-left: calc(var(--sidebar-name-column-x) - 0.5rem);
+}
+
+.thread-item {
+  box-sizing: border-box;
+  position: relative;
+  border: 0;
+  border-radius: 0.35rem;
+  text-align: left;
+  /* Plan sidebar-edge: drop horizontal padding so the title sits flush with
+   * the row's left edge (matching project-group-header's flush geometry) and
+   * the hover overlay hugs the right edge. Vertical padding kept for hit
+   * height. The horizontal gap below replaces the old padding-x. */
+  padding: 0.2rem 0;
+  column-gap: 0.25rem;
+  margin: 0;
+  width: 100%;
+  max-width: 100%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.25rem;
+  min-height: 0;
+}
+
+.thread-item:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.thread-item.active {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.thread-item-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  transition: padding-right 0.2s ease;
+}
+
+.thread-item:hover .thread-item-title {
+  /* Smaller reservation since the hover overlay sits flush against the
+   * right edge of the row instead of inside the old 0.5rem right gutter. */
+  padding-right: 1.6rem;
+}
+
+.thread-item-actions {
+  position: relative;
+  flex-shrink: 0;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.thread-item-actions-default {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  transition: opacity 0.15s ease;
+}
+
+/* The pin + menu buttons are a sibling of `.thread-item-actions`, positioned
+   against the row itself so they always sit inside its right padding and are
+   never clipped by the list's overflow. On hover they overlay the default
+   content (which fades out), giving a clean replace-not-overlap effect. */
+.thread-item-actions-hover {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.thread-item:hover .thread-item-actions-hover,
+.thread-item:focus-within .thread-item-actions-hover,
+.thread-item-actions-hover.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.thread-item:hover .thread-item-actions-default,
+.thread-item:focus-within .thread-item-actions-default,
+.thread-item:has(.thread-item-actions-hover.open) .thread-item-actions-default {
+  opacity: 0;
+}
+
+.thread-item-time {
+  font-size: 0.75rem;
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: opacity 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Sidebar navigation rows use a consistent, full-width hit target. The
+   shared ThreadListItem also appears outside the sidebar, so keep this
+   geometry and the softer state colors scoped to the navigation surface. */
+.app-sidebar .thread-item {
+  height: 38px;
+  min-height: 38px;
+  flex: 0 0 38px;
+  padding: 0 10px;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 450;
+}
+
+.app-sidebar .thread-item:hover {
+  background: color-mix(in srgb, var(--text) 4.5%, transparent);
+}
+
+.app-sidebar .thread-item.active {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.app-sidebar .thread-item:hover .thread-item-title {
+  padding-right: 52px;
+}
+
+.app-sidebar .thread-item-actions-hover {
+  right: 6px;
+}
+
+.app-sidebar .thread-item-time {
+  font-size: 11px;
+  opacity: 0.42;
+}
+
+/* Plan 549 (Track B): archived rows dim the title text and use a
+ * muted sub-line for the archive timestamp. The archived-at sub-line
+ * reuses the same font-size as .thread-item-time so layout stays stable. */
+.thread-item.archived {
+  opacity: 0.62;
+}
+
+.thread-item.archived .thread-item-title {
+  font-style: italic;
+}
+
+.thread-item.archived:hover {
+  opacity: 0.92;
+}
+
+.thread-item-archived-at {
+  font-size: 0.75rem;
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: opacity 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-style: italic;
+}
+
+.app-sidebar .thread-item-archived-at {
+  font-size: 11px;
+  opacity: 0.42;
+}
+
+/* Running indicator in thread item */
+.thread-item-running-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.thread-item-running-indicator .animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Three dots menu button in thread item */
+.thread-item-menu-btn {
+  border: none;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  padding: 0.15rem;
+}
+
+.thread-item-menu-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* Plan 331 Phase 4: pin toggle button (shown on hover) and the always-on
+   pinned indicator. The pin button sits just left of the three-dots menu
+   button; the indicator replaces the timestamp on pinned threads. */
+.thread-item-pin-btn {
+  border: none;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  padding: 0.15rem;
+}
+
+.thread-item-pin-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.thread-item-pinned-indicator {
+  color: var(--accent);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Thread rename input */
+.thread-item-rename-input {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.78rem;
+  color: var(--text);
+  outline: none;
+}
+
+.thread-item-rename-input:focus {
+  border-color: var(--accent);
+}
+
+/* Thread dropdown menu — item styling only.
+   The container + divider are owned by `DropdownMenu`
+   (`.sidebar-project-menu` / `.sidebar-project-menu-divider`); the
+   per-item className is still injected via `className: "thread-dropdown-item"`
+   so the visual stays byte-for-byte equivalent to the prior
+   hand-rolled implementation. */
+.thread-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-radius: 0.3rem;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.15s ease;
+}
+
+.thread-dropdown-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.thread-dropdown-item.danger {
+  color: #ef4444;
+}
+
+.thread-dropdown-item.danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+/* ── Sidebar top (work / bots) ───────────────────────────────────────
+   Mirrors the reference sidebar: a segmented pill control (work / bots)
+   on top, a full-width glass search chip below it, then content. The
+   primary nav row is NOT part of the Bots view — it only renders on the
+   Work tab (see app-sidebar.tsx). */
+.sidebar-top {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.5rem 0.75rem 0;
+}
+
+.sidebar-top-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+/* Right-aligned action group (create "+" + search) that lives at the end of
+   the tab row. Keeping it as a single flex child means a single
+   `margin-left: auto` pushes both icons to the far right in every state. */
+.sidebar-top-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+.sidebar-tab-group {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+  flex-shrink: 0;
+  padding: 0.16rem;
+  border-radius: 0.65rem;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.sidebar-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 0.26rem 0.6rem;
+  border-radius: 0.45rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.sidebar-tab:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.sidebar-tab.active {
+  color: var(--text);
+  font-weight: 600;
+  /* 88%-opaque fill over Mica gives a crisper pill than a blur would. */
+  background: color-mix(in srgb, var(--bg-canvas) 88%, transparent);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--text) 14%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.sidebar-tab-badge {
+  position: absolute;
+  top: 0.02rem;
+  right: 0.02rem;
+  min-width: 0.8rem;
+  height: 0.8rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: var(--accent, #4b8bff);
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 600;
+  line-height: 0.8rem;
+  text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 0 1.5px var(--bg-canvas);
+}
+
+/* Search icon button on the Work/Bots tab row (opens the Cmd/Ctrl+K palette).
+   Sits at the far right of the tab row, right after the create button. */
+.sidebar-top-search-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border: 0;
+  border-radius: 0.45rem;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.18s ease, background-color 0.18s ease;
+}
+.sidebar-top-search-btn:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+/* Unified create "+" button: right-aligned right next to the search icon
+   (not against the tab selector), opens a chooser for a new bot vs. a new
+   group chat. Same geometry as the search button. */
+.sidebar-top-create-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border: 0;
+  border-radius: 0.45rem;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.18s ease, background-color 0.18s ease;
+}
+.sidebar-top-create-btn:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+/* Compact bot-section action row inside the Bots tab (hidden toggle + ⋯). */
+.sidebar-bots-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.15rem;
+  padding: 0.15rem 0.75rem 0.1rem;
+}
+
+.sidebar-bots-actions .sidebar-section-action {
+  width: 1.6rem;
+  height: 1.6rem;
+}
+
+/* Bot contacts (plan 483) ────────────────────────────────────────────
+   Telegram-style rows in the sidebar Bots section. Mirrors the
+   `.thread-item` geometry (same radius, padding, hover/active surfaces)
+   but with a character avatar + two-line body + trailing activity. */
+/* Fallback initial avatar: deterministic hue + centered initial.
+   Circular (50%) — matches the reference sidebar's round contact tiles.
+   The width/height/font-size are set inline from the `size` prop. */
+.bot-contact-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 50%;
+  color: #ffffff;
+  font-weight: 600;
+  line-height: 1;
+  user-select: none;
+  /* NOTE: no box-level translateY here. The streaming ring
+     (.bot-contact-running-ring) centers itself on the wrap via `inset`, and
+     its `spin` animation owns `transform`, so translating this circle out of
+     place would make the ring and the avatar non-concentric. The emoji stays
+     optically centered on its own line box. */
+  /* Glass tile: a top-lit translucent sheen layered over the identity color
+     (set inline as background-color), so the emoji reads in 3/4 light and
+     the tile reads as a tiny frosted-glass badge floating on the sidebar. */
+  background-image:
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.32),
+      rgba(255, 255, 255, 0.06) 46%,
+      rgba(0, 0, 0, 0.1)
+    );
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.42),
+    inset 0 -2px 3px rgba(0, 0, 0, 0.18),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+    0 1px 2px rgba(0, 0, 0, 0.18),
+    0 5px 14px -4px rgba(0, 0, 0, 0.28);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+/* Emoji glyph stays visually centered in the circle: nudge it up on its OWN
+   box (not the parent circle), so the tile's geometry stays concentric with
+   the streaming ring while the emoji reads optically centered. */
+.bot-contact-avatar-glyph {
+  transform: translateY(-2px);
+}
+
+/* Bot avatar: the animated agent face (SVG). No circular clip — the face
+   draws its own fixed superellipse body, and its motion/arcs may exceed the
+   box, so the element must not round or clip it. */
+.bot-character-avatar {
+  display: block;
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+.bot-contact-item {
+  box-sizing: border-box;
+  position: relative;
+  border: 0;
+  border-radius: 0.5rem;
+  text-align: left;
+  padding: 0.52rem 0.625rem; /* taller roster row; px aligns with group header */
+  margin: 0;
+  width: 100%;
+  max-width: 100%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 0;
+}
+
+.bot-contact-item:hover {
+  background: var(--rk-background);
+  color: var(--text);
+}
+
+.bot-contact-item.active {
+  background: var(--rk-card);
+  color: var(--text);
+}
+
+/* Hidden (restore) view: dimmed, clearly non-primary. */
+.bot-contact-item.hidden {
+  opacity: 0.55;
+}
+.bot-contact-item.hidden:hover {
+  opacity: 0.85;
+}
+
+.bot-contact-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+/* Compact row head: name baseline row with the trailing time on the right. */
+.bot-contact-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.bot-contact-name {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text);
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.bot-contact-pin-indicator {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+/* Title tag: a small accent pill shown next to the bot name when the bot's
+   profile carries a `title` (role/position). Rendered inline so it reads as
+   metadata about the bot; shrinks to ellipsis instead of crowding the row. */
+.bot-contact-title-tag {
+  flex-shrink: 0;
+  font-size: 0.6rem;
+  line-height: 1.2;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  white-space: nowrap;
+  max-width: 9em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bot-contact-desc {
+  font-size: 0.72rem;
+  color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Plan 483 P1.4: the latest user-visible message preview. Compact muted
+   line under the name; collapses with `…` so long prompts do not balloon
+   the row. */
+.bot-contact-preview {
+  font-size: 0.74rem;
+  color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  line-height: 1.25;
+  transition: padding-right 0.2s ease;
+}
+
+.bot-contact-item:hover .bot-contact-preview {
+  padding-right: 2rem;
+}
+
+/* Status pill in the trailing slot — used when the user submitted a
+   follow-up that is queued behind another active run. Kept compact so
+   it does not crowd the relative-time text in the idle state. */
+.bot-contact-status-pill {
+  font-size: 0.66rem;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.bot-contact-status-pill.queued {
+  /* Mirrors the busy-dot hue so the row feels consistent across
+     running / queued states without leaning on a louder accent. */
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* Plan 516 — sidebar "waiting on user" pill. The bound session is
+   paused on a permission request (AskUserQuestion, generic tool
+   approval, or connector auth), so the user can answer / approve from
+   any view — they just need to see which row needs their attention.
+   Amber-tinted to stand out from the queued pill without competing
+   with the red error badge on the avatar. */
+.bot-contact-status-pill.awaiting-input {
+  background: color-mix(in srgb, #f59e0b 22%, transparent);
+  color: #b45309;
+}
+
+[data-theme="dark"] .bot-contact-status-pill.awaiting-input {
+  background: color-mix(in srgb, #f59e0b 28%, transparent);
+  color: #fbbf24;
+}
+
+.bot-contact-trailing {
+  position: relative;
+  flex-shrink: 0;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  transition: opacity 0.15s ease;
+}
+
+.bot-contact-time {
+  font-size: 0.7rem;
+  color: var(--muted);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Plan 483 P1.4 follow-up: avatar corner badges. While the bot's bound
+   session is streaming, the rakazo BotAvatar shows its own glow ring +
+   working eyes (no extra orbit here). When idle, a bottom-right corner
+   dot marks "finished but unseen" (green) or "last run errored" (red);
+   both clear when the user opens the bot. */
+.bot-contact-avatar-wrap {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-flex;
+}
+
+.bot-contact-badge {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  /* Halo matching the row background so the dot reads on both themes. */
+  border: 2px solid var(--bg-canvas);
+  z-index: 1;
+}
+
+.bot-contact-badge.unseen {
+  background: #22c55e;
+}
+
+.bot-contact-badge.error {
+  background: var(--error);
+}
+
+/* Plan 483 P1.4 follow-up: loading ring around the avatar while the bot's
+   session is streaming (foreground or background). Drafted as the avatar's
+   own glow in the original P1.4 comment; rendered at the wrap level so it
+   works for both avatar images and emoji tiles. `canSend`-derived working
+   state means the ring only appears while a stream is genuinely live. */
+.bot-contact-running-ring {
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    var(--accent) 90deg,
+    transparent 220deg,
+    transparent 360deg
+  );
+  -webkit-mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - 2.5px),
+    #000 calc(100% - 2px)
+  );
+  mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - 2.5px),
+    #000 calc(100% - 2px)
+  );
+  animation: spin 1s linear infinite;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* Hover action buttons overlay the trailing area (same replace-not-overlap
+   trick as `.thread-item-actions-hover`). */
+.bot-contact-actions-hover {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.bot-contact-item:hover .bot-contact-actions-hover,
+.bot-contact-item:focus-within .bot-contact-actions-hover,
+.bot-contact-actions-hover.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.bot-contact-item:hover .bot-contact-trailing,
+.bot-contact-item:focus-within .bot-contact-trailing,
+.bot-contact-item:has(.bot-contact-actions-hover.open) .bot-contact-trailing {
+  opacity: 0;
+}
+
+.bot-contact-pin-btn,
+.bot-contact-menu-btn {
+  border: none;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  padding: 0.15rem;
+}
+
+.bot-contact-pin-btn:hover,
+.bot-contact-menu-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* Restore button on hidden rows (always visible, unlike hover actions). */
+.bot-contact-restore-btn {
+  border: none;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0.15rem;
+}
+
+.bot-contact-restore-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.bot-pinned-group .bot-contact-item,
+.bot-hidden-group .bot-contact-item,
+.sidebar-section-group .bot-contact-item {
+  margin-top: 0;
+}
+
+/* Sidebar bot groups (sections): a full-width collapsible header, modeled
+   on rakazo's roster sidebar — title on the left, a trailing carets that
+   rotates -90° when collapsed, a soft pill background on hover. No count
+   badge and no per-group action button; the header row is the whole
+   click target. */
+.sidebar-section-group + .sidebar-section-group {
+  margin-top: 0.5rem;
+}
+
+.sidebar-section-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.375rem 0.625rem; /* rakazo py-1.5 px-2.5 — aligns with bot rows */
+  border: 0;
+  border-radius: 0.5rem; /* rakazo rounded-lg */
+  background: transparent;
+  color: color-mix(in srgb, var(--muted) 80%, transparent);
+  font-size: 0.78rem; /* rakazo 12.5px */
+  font-weight: 500;
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.sidebar-section-group-header:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.sidebar-section-group-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sidebar-section-group-caret {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  opacity: 0.7;
+  transition: transform 0.2s ease;
+}
+
+.sidebar-section-group-caret.collapsed {
+  transform: rotate(-90deg);
+}
+
+.sidebar-section-group-body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Bot dropdown menu (mirrors `.thread-dropdown-menu`). */
+.bot-dropdown-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 180px;
+  background: var(--command-menu-bg);
+  border: 1px solid var(--command-menu-border);
+  border-radius: 12px;
+  padding: 0.25rem;
+}
+
+.bot-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-radius: 0.3rem;
+  cursor: pointer;
+  text-align: left;
+  /* Override Button's `justify-center` so the icon and label sit flush-left
+     (matches `.project-dropdown-item`). */
+  justify-content: flex-start;
+  transition: background-color 0.15s ease;
+}
+
+.bot-dropdown-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.bot-dropdown-item.danger {
+  color: #ef4444;
+}
+
+.bot-dropdown-item.danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.bot-dropdown-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0.25rem 0;
+}

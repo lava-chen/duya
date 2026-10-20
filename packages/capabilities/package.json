@@ -279,6 +279,14 @@
       "types": "./dist/MCP/*.d.ts",
       "default": "./dist/MCP/*.js"
     },
+    "./AppServer": {
+      "types": "./dist/AppServer/in-process-app-server.d.ts",
+      "import": "./dist/AppServer/in-process-app-server.js"
+    },
+    "./AppServer/*": {
+      "types": "./dist/AppServer/*.d.ts",
+      "import": "./dist/AppServer/*.js"
+    },
     "./SubagentTool": {
       "types": "./dist/SubagentTool/index.d.ts",
       "import": "./dist/SubagentTool/index.js"

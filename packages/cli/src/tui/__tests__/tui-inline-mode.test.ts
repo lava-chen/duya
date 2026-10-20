@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import { PassThrough, Writable } from 'stream';
 
 import { TUIApp } from '../TUIApp.js';
+import { press } from './key-injection.js';
 import { MIN_RENDER_INTERVAL_MS } from '../render-scheduler.js';
 
 /** `\x1b[?1049h`: enter the alternate screen buffer. */
@@ -36,16 +37,17 @@ function makeApp(
 ) {
   const out = sink();
   const submitted = options.submitted ?? [];
+  const input = new PassThrough();
   const app = new TUIApp({
     output: out.stream,
-    input: new PassThrough(),
+    input,
     inline: options.inline === true,
     ...(options.effort === undefined ? {} : { effort: options.effort }),
     onSubmit: (text) => {
       submitted.push(text);
     },
   });
-  return { app, out, submitted };
+  return { app, out, submitted, input };
 }
 
 async function settle(): Promise<void> {
@@ -124,14 +126,13 @@ describe('inline mode', () => {
 
   it('keeps keys working without a Screen to bind them to', async () => {
     const submitted: string[] = [];
-    const { app } = makeApp({ inline: true, submitted });
+    const { app, input } = makeApp({ inline: true, submitted });
     app.start();
     app.push({ type: 'text_delta', data: { content: 'ready\n' } });
     // Keys are bound to the Program now. `Screen.prototype.key` was only ever a
     // delegation to it, so nothing about the binding changed — but the Screen it
     // used to be reached through does not exist inline.
-    (app as unknown as { program: { emit: (name: string, ...rest: unknown[]) => void } })
-      .program.emit('key C-m');
+    press(input, 'C-m');
     await settleRendered();
     app.stop();
     // The editor had nothing typed, so Enter submits the empty buffer; what
@@ -141,7 +142,7 @@ describe('inline mode', () => {
   });
 
   it('docks a slash secondary page into the composer slot instead of taking the screen', async () => {
-    const { app, out } = makeApp({ inline: true });
+    const { app, out, input } = makeApp({ inline: true });
     app.start();
     await settleRendered();
     expect(out.text()).not.toContain(ALT_BUFFER_ON);
@@ -149,8 +150,7 @@ describe('inline mode', () => {
     // F1 opens the help panel. It used to be a centred modal in the alternate
     // buffer; it now shares the composer's slot, the way pi's selectors do, so
     // the conversation above it stays on screen and readable.
-    (app as unknown as { program: { emit: (name: string, ...rest: unknown[]) => void } })
-      .program.emit('key f1');
+    press(input, 'f1');
     await settleRendered();
     const rendered = out.text();
     expect(rendered).toContain('Key bindings');
@@ -159,15 +159,14 @@ describe('inline mode', () => {
     const surface = (app as unknown as { fullScreen: { ready: boolean } }).fullScreen;
     expect(surface.ready).toBe(false);
 
-    (app as unknown as { program: { emit: (name: string, ...rest: unknown[]) => void } })
-      .program.emit('key escape');
+    press(input, 'escape');
     await settleRendered();
     app.stop();
     expect((app as unknown as { windowMgr: { isActive: boolean } }).windowMgr.isActive).toBe(false);
   });
 
   it('docks a selectable list into the composer slot and answers it with the keyboard', async () => {
-    const { app, out } = makeApp({ inline: true });
+    const { app, out, input } = makeApp({ inline: true });
     app.start();
     await settleRendered();
 
@@ -183,11 +182,9 @@ describe('inline mode', () => {
     expect(rendered).toContain('beta');
     expect(rendered).not.toContain(ALT_BUFFER_ON);
 
-    (app as unknown as { program: { emit: (name: string, ...rest: unknown[]) => void } })
-      .program.emit('key down');
+    press(input, 'down');
     await settleRendered();
-    (app as unknown as { program: { emit: (name: string, ...rest: unknown[]) => void } })
-      .program.emit('key return');
+    press(input, 'return');
     await settleRendered();
     await expect(chosen).resolves.toBe('b');
     app.stop();

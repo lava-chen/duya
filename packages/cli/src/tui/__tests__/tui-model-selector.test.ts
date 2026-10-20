@@ -16,12 +16,13 @@ import { describe, expect, it } from 'vitest';
 import { PassThrough, Writable } from 'node:stream';
 
 import { TUIApp } from '../TUIApp.js';
+import { press } from './key-injection.js';
 import { resolveTuiSlashCommand } from '../slash/index.js';
 
 const ALT_BUFFER_ON = '\x1b[?1049h';
 const plain = (value: string): string => value.replace(/\{[^}]*\}/gu, '');
 
-function makeApp(): { app: TUIApp; out: () => string } {
+function makeApp(): { app: TUIApp; out: () => string; input: PassThrough } {
   const chunks: Buffer[] = [];
   const stream = new Writable({
     write(chunk, _enc, cb) {
@@ -31,14 +32,15 @@ function makeApp(): { app: TUIApp; out: () => string } {
   });
   (stream as unknown as { columns: number }).columns = 100;
   (stream as unknown as { rows: number }).rows = 30;
+  const input = new PassThrough();
   const app = new TUIApp({
     output: stream,
-    input: new PassThrough(),
+    input,
     inline: true,
     modelLabel: () => ({ provider: 'deepseek', model: 'deepseek-flash' }),
     onSubmit: () => {},
   });
-  return { app, out: () => Buffer.concat(chunks).toString('utf8') };
+  return { app, out: () => Buffer.concat(chunks).toString('utf8'), input };
 }
 
 const settle = async (): Promise<void> => {
@@ -56,7 +58,7 @@ function session(): Record<string, unknown> {
 
 describe('/model in the TUI', () => {
   it('paints the selector in the dock with window, flags and current', async () => {
-    const { app, out } = makeApp();
+    const { app, out, input } = makeApp();
     app.start();
     await settle();
 
@@ -81,13 +83,13 @@ describe('/model in the TUI', () => {
     // A secondary page is docked, never an alternate-buffer takeover.
     expect(out()).not.toContain(ALT_BUFFER_ON);
 
-    (app as unknown as { program: { emit: (name: string) => void } }).program.emit('key escape');
+    press(input, 'escape');
     await running;
     app.stop();
   });
 
   it('adopts the row the user chooses', async () => {
-    const { app } = makeApp();
+    const { app, input } = makeApp();
     app.start();
     await settle();
 
@@ -108,10 +110,9 @@ describe('/model in the TUI', () => {
     await settle();
 
     // Second row is deepseek-pro: one step down, then Enter.
-    const program = (app as unknown as { program: { emit: (name: string) => void } }).program;
-    program.emit('key down');
+    press(input, 'down');
     await settle();
-    program.emit('key return');
+    press(input, 'return');
     const outcome = await running;
     app.stop();
 

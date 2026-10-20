@@ -1,0 +1,1142 @@
+'use client';
+
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import type { Message, ToolUseInfo, ToolResultInfo } from '@/types';
+import { ToolActionsGroup, pairTools, type ActionItem, type ToolAction } from './ToolActionsGroup';
+import { MarkdownRenderer } from './MarkdownRenderer';
+import { PluginMentionText } from './PluginMentionChip';
+import {
+  CopyIcon,
+  CheckIcon,
+  NotePencilIcon,
+  ArrowUpIcon,
+  XIcon,
+  ExternalLinkIcon,
+  CaretDownIcon,
+} from '@/components/icons';
+import { FileAttachmentCard } from './FileAttachmentCard';
+import { AttachmentBar } from './AttachmentBar';
+import { ImagePreview } from './preview/ImagePreview';
+import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
+import { parseMessageContentWithPasted, type PastedContentInfo } from '@/lib/message-content-parser';
+import { joinMarkdownFragments, mergeMarkdownFragments } from '@/lib/markdown-text-merge';
+import { decodeMessageAttachments } from '@/lib/decode-message-attachments';
+import { parseAllShowWidgets } from '@/lib/widget-parser';
+import { WidgetRenderer } from './WidgetRenderer';
+import { WidgetErrorBoundary } from './WidgetErrorBoundary';
+import { CompactBoundary } from './CompactBoundary';
+import { CompactSummary } from './CompactSummary';
+import { useConversationStore } from '@/stores/conversation-store';
+import { useShowHookInvocations } from '@/hooks/useShowHookInvocations';
+import type { FileAttachment } from '@/types/message';
+import { useTranslation } from '@/hooks/useTranslation';
+import { openLocalFileTarget } from '@/lib/chat-file-links';
+import {
+  browserReferenceDisplaySummary,
+  parseBrowserReferenceDisplayContent,
+  type BrowserReferenceDisplayData,
+} from '@/lib/browser-reference-display';
+import { parseToolInputSafe, buildToolAction } from './tools/normalize';
+import { extractResearchReport, ResearchReportCard, type ResearchReportData } from './ResearchReportCard';
+import { ChatNotice } from './ChatNotice';
+import type { ChatNotice as ChatNoticeData } from './tools/types';
+
+function isImageAttachment(attachment: FileAttachment): boolean {
+  if (attachment.kind === 'image') return true;
+  if (attachment.type.startsWith('image/')) return true;
+  return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(attachment.name);
+}
+
+function isBrowserScreenshotAttachment(attachment: FileAttachment): boolean {
+  return (
+    attachment.kind === 'browser-ref' &&
+    (attachment.metadata as { elementKind?: string } | undefined)?.elementKind === 'screenshot'
+  );
+}
+
+function resolveLinkedBrowserScreenshotAttachment(
+  attachment: FileAttachment,
+  attachments: FileAttachment[],
+): FileAttachment | undefined {
+  if (!isBrowserScreenshotAttachment(attachment)) return undefined;
+
+  const linkedImageId = (attachment.metadata as { attachmentId?: string } | undefined)?.attachmentId;
+  const linkedById = linkedImageId ? attachments.find((item) => item.id === linkedImageId) : undefined;
+  if (linkedById && isImageAttachment(linkedById)) {
+    return linkedById;
+  }
+
+  const index = attachments.findIndex((item) => item.id === attachment.id);
+  if (index < 0) return undefined;
+
+  const candidates: Array<FileAttachment | undefined> = [
+    attachments[index - 1],
+    attachments[index + 1],
+    attachments[index - 2],
+    attachments[index + 2],
+  ];
+
+  return candidates.find(
+    (candidate) =>
+      !!candidate &&
+      isImageAttachment(candidate) &&
+      candidate.name.startsWith('browser-screenshot-'),
+  );
+}
+
+function formatMessageTime(timestamp: number, t: (key: import('@/i18n').TranslationKey, params?: Record<string, string | number>) => string, locale: 'en' | 'zh' = 'en'): string {
+  if (!Number.isFinite(timestamp)) return '';
+  const date = new Date(timestamp);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const oneWeekAgo = new Date(today);
+  oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+
+  // Locale-aware time formatting: zh uses 24-hour with 上午/下午, en uses 12-hour AM/PM.
+  const timeStr = date.toLocaleTimeString(locale === 'zh' ? 'zh-CN' : 'en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: locale !== 'zh',
+  });
+
+  if (date >= today) {
+    return timeStr;
+  } else if (date >= yesterday) {
+    return t('time.formatWithYesterday', { label: t('time.yesterday'), time: timeStr });
+  } else if (date >= oneWeekAgo) {
+    const weekdayIndex = date.getDay();
+    const weekdayKey = [
+      'time.weekdaySunday',
+      'time.weekdayMonday',
+      'time.weekdayTuesday',
+      'time.weekdayWednesday',
+      'time.weekdayThursday',
+      'time.weekdayFriday',
+      'time.weekdaySaturday',
+    ][weekdayIndex] as import('@/i18n').TranslationKey;
+    return t('time.formatWithYesterday', { label: t(weekdayKey), time: timeStr });
+  } else {
+    const dateStr = date.toLocaleDateString(locale === 'zh' ? 'zh-CN' : 'en-US', {
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+    });
+    return t('time.formatWithDate', { date: dateStr, time: timeStr });
+  }
+}
+
+interface MessageItemProps {
+  message: Message;
+  toolResults?: ToolResultInfo[];
+  onToolResult?: (toolUseId: string, approved: boolean) => void;
+  // Messages merged from the same round (thinking + tool_use + text)
+  mergedMessages?: Message[];
+  // Only the last user message is editable.
+  isEditable?: boolean;
+  // Called when the user edits and sends. The parent deletes the message
+  // (and everything after it) then re-sends the edited text.
+  onEditMessage?: (messageId: string) => void;
+  /** Per-session Focus mode: collapse the round into one big action group
+   *  and hide intermediate text outputs — only the final reply shows. */
+  focusMode?: boolean;
+  /** Plan 447: this round belongs to the turn currently being streamed.
+   *  Render its tool group in the live (chrome-less) presentation instead
+   *  of the finished collapsed summary, so a mid-run refresh keeps the
+   *  same visual state the run had before the reload. */
+  isLiveRun?: boolean;
+}
+
+function parseMessageContent(content: string | unknown[], msgType?: string): {
+  text: string;
+  toolUses: ToolUseInfo[];
+  thinkingContent?: string;
+} {
+  const toolUses: ToolUseInfo[] = [];
+  let text = '';
+  let thinkingContent: string | undefined;
+
+  if (msgType === 'thinking') {
+    return { text: '', toolUses, thinkingContent: typeof content === 'string' ? content : JSON.stringify(content) };
+  }
+
+  if (msgType === 'tool_use') {
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block && typeof block === 'object') {
+          const b = block as Record<string, unknown>;
+          if (b.type === 'tool_use') {
+            toolUses.push({
+              id: b.id as string,
+              name: b.name as string,
+              input: b.input as Record<string, unknown> || {},
+              groupId: typeof b.groupId === 'string' ? b.groupId : undefined,
+              progressTitle: typeof b.progressTitle === 'string' ? b.progressTitle : undefined,
+              progressSource: typeof b.progressSource === 'string' ? b.progressSource as ToolUseInfo['progressSource'] : undefined,
+            });
+          }
+        }
+      }
+    } else {
+      // Backward compat: string content for tool_use (unlikely after parsing)
+      toolUses.push({ id: '', name: '', input: {} });
+    }
+    return { text, toolUses, thinkingContent };
+  }
+
+  if (Array.isArray(content)) {
+    const textParts: string[] = [];
+
+    content.forEach(block => {
+      if (block && typeof block === 'object') {
+        const b = block as Record<string, unknown>;
+        if (b.type === 'text' && b.phase !== 'commentary' && b.text) {
+          textParts.push(b.text as string);
+        } else if (b.type === 'tool_use') {
+          toolUses.push({
+            id: b.id as string,
+            name: b.name as string,
+            input: b.input as Record<string, unknown> || {},
+            groupId: typeof b.groupId === 'string' ? b.groupId : undefined,
+            progressTitle: typeof b.progressTitle === 'string' ? b.progressTitle : undefined,
+            progressSource: typeof b.progressSource === 'string' ? b.progressSource as ToolUseInfo['progressSource'] : undefined,
+          });
+        } else if (b.type === 'thinking' && b.thinking) {
+          const rawThinking = b.thinking;
+          thinkingContent = typeof rawThinking === 'string' ? rawThinking : JSON.stringify(rawThinking);
+        }
+      }
+    });
+
+    // Join text blocks through the smart fragment merge so block-level
+    // markdown (### heading, - list, 1. numbered, tables, code fences)
+    // in a later block is neither swallowed into the previous paragraph
+    // nor split mid-construct by an injected blank line.
+    text = textParts.length > 1 ? joinMarkdownFragments(textParts) : (textParts[0] ?? '');
+    return { text, toolUses, thinkingContent };
+  }
+
+  if (typeof content === 'string') {
+    text = content;
+    return { text, toolUses };
+  }
+
+  return { text, toolUses };
+}
+
+/**
+ * Extract plain Markdown text from a message's content (string or Anthropic-style
+ * content blocks). For arrays, joins all `text` blocks — used for clipboard copy
+ * so we never leak raw block JSON to the user.
+ */
+function extractMarkdownFromBlocks(content: string | unknown[]): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue;
+    const b = block as Record<string, unknown>;
+    if (b.type === 'text' && b.phase !== 'commentary' && typeof b.text === 'string') {
+      parts.push(b.text);
+    }
+  }
+  return parts.join('');
+}
+
+function AssistantContent({
+  text,
+  sourceMessageId,
+}: {
+  text: string;
+  sourceMessageId?: string;
+}) {
+  const hasWidgetFence = text.includes('```show-widget');
+
+  if (!hasWidgetFence) {
+    return <MarkdownRenderer>{text}</MarkdownRenderer>;
+  }
+
+  const segments = parseAllShowWidgets(text);
+  const hasWidgets = segments.some(s => s.type === 'widget');
+
+  if (!hasWidgets) {
+    return <MarkdownRenderer>{text}</MarkdownRenderer>;
+  }
+
+  return (
+    <>
+      {segments.map((seg, i) => {
+        if (seg.type === 'text') {
+          return (
+            <MarkdownRenderer key={`t-${i}`}>
+              {seg.content || ''}
+            </MarkdownRenderer>
+          );
+        }
+        if (seg.type === 'widget' && seg.data) {
+          return (
+            <WidgetErrorBoundary key={`w-${i}`} widgetCode={seg.data.widget_code}>
+              <WidgetRenderer
+                widgetCode={seg.data.widget_code}
+                isStreaming={false}
+                sourceMessageId={sourceMessageId}
+                sourceLabel="Chat message"
+              />
+            </WidgetErrorBoundary>
+          );
+        }
+        return null;
+      })}
+    </>
+  );
+}
+
+function InterleavedContent({ actions, sourceMessageId }: { actions: ActionItem[]; sourceMessageId?: string }) {
+  // Renders only the widget actions in order. Text actions that remain in
+  // `actions` are the intermediate fragments kept inside the action group
+  // (ToolActionsGroup renders them via TextRow); the trailing final run
+  // is lifted into `finalText` upstream. Nothing text-ish renders here.
+  return (
+    <>
+      {actions.map((action, i) => {
+        switch (action.kind) {
+          case 'widget':
+            return (
+              <WidgetErrorBoundary key={`w-${i}`} widgetCode={action.content}>
+                <WidgetRenderer
+                  widgetCode={action.content}
+                  isStreaming={false}
+                  sourceMessageId={action.sourceMessageId ?? sourceMessageId}
+                  sourceLabel={action.sourceLabel ?? 'Chat message'}
+                />
+              </WidgetErrorBoundary>
+            );
+          default:
+            return null;
+        }
+      })}
+    </>
+  );
+}
+
+
+// Memory / routine tool families surface as centered chat hints rather
+// than collapsible tool chrome rows. The bot's memory writes and routine
+// maintenance read as status updates to the human, so we lift them into
+// `kind: 'notice'` actions and render them as quiet centered pills.
+const MEMORY_NOTICE_TOOLS = new Set(['memory_write', 'update_state']);
+const ROUTINE_NOTICE_TOOLS = new Set(['manage_routine']);
+
+/**
+ * Decide whether a tool call should render as a centered `ChatNotice`
+ * (memory / routine) instead of a tool chrome row. Returns null for tools
+ * that keep the normal chrome treatment.
+ */
+function toNotice(
+  toolName: string | undefined | null,
+  input: Record<string, unknown> | unknown,
+  result: ToolResultInfo | undefined,
+): ChatNoticeData | null {
+  const name = (toolName || '').toLowerCase();
+  if (ROUTINE_NOTICE_TOOLS.has(name)) {
+    return { kind: 'routine', toolName: name, input, result: result?.content, isError: result?.is_error };
+  }
+  if (MEMORY_NOTICE_TOOLS.has(name)) {
+    return { kind: 'memory', toolName: name, input, result: result?.content, isError: result?.is_error };
+  }
+  return null;
+}
+
+function messageToActionItems(
+  msg: Message,
+  toolResultMap: Map<string, ToolResultInfo>
+): ActionItem[] {
+  const actions: ActionItem[] = [];
+
+  if (msg.msgType === 'viz' && msg.vizSpec) {
+    actions.push({ kind: 'widget', content: msg.vizSpec, sourceMessageId: msg.id, sourceLabel: 'Chat visualization' });
+    return actions;
+  }
+
+  if (msg.msgType === 'thinking') {
+    const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+    if (content.trim()) {
+      actions.push({ kind: 'thinking', content });
+    }
+    return actions;
+  }
+
+  // Plan 437: hook rows. Persisted by the agent at the turn-end boundary
+  // as `msg_type: 'hook_invocation'` system messages with the structured
+  // HookInvokedEvent serialized into `tool_input`. Rebuild the
+  // `HookAction` here so reload / cross-device sync keep the hook
+  // history visible alongside tool_use / tool_result.
+  if (msg.msgType === 'hook_invocation') {
+    const hookAction = parseHookMessage(msg);
+    if (hookAction) {
+      actions.push({ kind: 'hook', hook: hookAction });
+    }
+    return actions;
+  }
+
+  if (msg.msgType === 'tool_use' && msg.toolName) {
+    const toolUseId = msg.tool_call_id || msg.id;
+    const result = toolUseId ? toolResultMap.get(toolUseId) : undefined;
+    const notice = toNotice(msg.toolName, parseToolInputSafe(msg.toolInput) as Record<string, unknown>, result);
+    if (notice) {
+      actions.push({ kind: 'notice', notice });
+      return actions;
+    }
+    actions.push({
+      kind: 'tool',
+      tool: buildToolAction(
+        toolUseId,
+        msg.toolName,
+        parseToolInputSafe(msg.toolInput),
+        result,
+        msg.durationMs,
+      ),
+    });
+    return actions;
+  }
+
+  // Parse array content (Anthropic-style blocks)
+  if (Array.isArray(msg.content)) {
+    for (const block of msg.content) {
+      if (!block || typeof block !== 'object') continue;
+      const b = block as Record<string, unknown>;
+      if (b.type === 'text' && b.phase !== 'commentary' && b.text && String(b.text).trim()) {
+        actions.push({ kind: 'text', content: String(b.text) });
+      } else if (b.type === 'tool_use') {
+        if (b.name === 'show_widget') {
+          const widgetCode = (b.input as Record<string, unknown>)?.widget_code;
+          if (typeof widgetCode === 'string' && widgetCode.trim()) {
+            actions.push({ kind: 'widget', content: widgetCode, sourceMessageId: msg.id, sourceLabel: 'Chat visualization' });
+          }
+          continue;
+        }
+        const toolId = String(b.id || '');
+        const result = toolId ? toolResultMap.get(toolId) : undefined;
+        const notice = toNotice(String(b.name || ''), (b.input as Record<string, unknown>) || {}, result);
+        if (notice) {
+          actions.push({ kind: 'notice', notice });
+          continue;
+        }
+        const toolAction = buildToolAction(
+          toolId,
+          String(b.name || ''),
+          (b.input as Record<string, unknown>) || {},
+          result,
+          undefined,
+          undefined,
+          typeof b.groupId === 'string' ? b.groupId : undefined,
+          typeof b.progressTitle === 'string' ? b.progressTitle : undefined,
+          typeof b.progressSource === 'string' ? b.progressSource as ToolUseInfo['progressSource'] : undefined,
+        );
+        actions.push({ kind: 'tool', tool: toolAction });
+      } else if (b.type === 'thinking' && b.thinking) {
+        const rawThinking = b.thinking;
+        const thinkingStr = typeof rawThinking === 'string' ? rawThinking : JSON.stringify(rawThinking);
+        if (thinkingStr.trim()) {
+          actions.push({ kind: 'thinking', content: thinkingStr });
+        }
+      }
+    }
+    return actions;
+  }
+
+  // String content is plain text (JSON arrays already parsed in ipc-client)
+  if (typeof msg.content === 'string') {
+    const withPasted = parseMessageContentWithPasted(msg.content);
+    if (withPasted.text.trim()) {
+      actions.push({ kind: 'text', content: withPasted.text });
+    }
+    return actions;
+  }
+
+  return actions;
+}
+
+/**
+ * Plan 437: rebuild a `HookAction` from a persisted `msg_type:
+ * 'hook_invocation'` row. The agent serializes the structured
+ * `HookInvokedEvent` into `msg.toolInput` (JSON). Returns null when the
+ * row is malformed (e.g. legacy hook row from before this plan) — the
+ * caller treats null as "skip this row" rather than crashing.
+ */
+function parseHookMessage(msg: Message): import('@/types/hooks').HookAction | null {
+  const hookName = msg.toolName;
+  if (!hookName) return null;
+  let parsed: Record<string, unknown> = {};
+  if (typeof msg.toolInput === 'string' && msg.toolInput.trim()) {
+    try {
+      const obj = JSON.parse(msg.toolInput);
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+        parsed = obj as Record<string, unknown>;
+      }
+    } catch {
+      // Legacy / malformed row — fall through with defaults below.
+    }
+  }
+  const hookType = (typeof parsed.hookType === 'string' ? parsed.hookType : 'command') as
+    | 'command'
+    | 'process'
+    | 'prompt'
+    | 'http'
+    | 'agent';
+  const status = (typeof parsed.status === 'string' ? parsed.status : 'ok') as
+    | 'ok'
+    | 'error'
+    | 'timeout'
+    | 'skipped';
+  return {
+    id: msg.id,
+    hookEventName: hookName,
+    hookType,
+    hookName: typeof parsed.hookName === 'string' ? parsed.hookName : hookName,
+    matcher: typeof parsed.matcher === 'string' ? parsed.matcher : undefined,
+    additionalContext: typeof msg.content === 'string' ? msg.content : undefined,
+    exitCode: typeof parsed.exitCode === 'number' ? parsed.exitCode : undefined,
+    async: parsed.async === true,
+    backgroundTaskId: typeof parsed.backgroundTaskId === 'string' ? parsed.backgroundTaskId : undefined,
+    durationMs: typeof parsed.durationMs === 'number' ? parsed.durationMs : msg.durationMs ?? 0,
+    status,
+    errorMessage: typeof parsed.errorMessage === 'string' ? parsed.errorMessage : undefined,
+    seq: typeof parsed.seq === 'number' ? parsed.seq : 0,
+    toolName: typeof parsed.toolName === 'string' ? parsed.toolName : undefined,
+    toolUseId: typeof parsed.toolUseId === 'string' ? parsed.toolUseId : undefined,
+  };
+}
+
+function sortMessagesByOrder(messages: Message[]): Message[] {
+  return [...messages].sort((a, b) => {
+    if (a.seqIndex != null && b.seqIndex != null) {
+      return a.seqIndex - b.seqIndex;
+    }
+    return a.timestamp - b.timestamp;
+  });
+}
+
+function toolResultsEqual(a: ToolResultInfo[] = [], b: ToolResultInfo[] = []): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    const left = a[index];
+    const right = b[index];
+    if (
+      left.tool_use_id !== right.tool_use_id
+      || left.content !== right.content
+      || left.is_error !== right.is_error
+      || left.duration_ms !== right.duration_ms
+      || JSON.stringify(left.metadata ?? null) !== JSON.stringify(right.metadata ?? null)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function messagesEqual(a: Message[] = [], b: Message[] = []): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+}
+
+function messageItemPropsEqual(prev: MessageItemProps, next: MessageItemProps): boolean {
+  return prev.message === next.message
+    && toolResultsEqual(prev.toolResults, next.toolResults)
+    && messagesEqual(prev.mergedMessages, next.mergedMessages)
+    && prev.onToolResult === next.onToolResult
+    && prev.isEditable === next.isEditable
+    && prev.onEditMessage === next.onEditMessage
+    && prev.focusMode === next.focusMode
+    && prev.isLiveRun === next.isLiveRun;
+}
+
+function MessageItemComponent({ message, toolResults = [], onToolResult, mergedMessages = [], isEditable, onEditMessage, focusMode = false, isLiveRun = false }: MessageItemProps) {
+  const [copied, setCopied] = useState(false);
+  // Preview modal state
+  const [previewAttachment, setPreviewAttachment] = useState<FileAttachment | null>(null);
+  const [previewPastedContent, setPreviewPastedContent] = useState<{ id: string; content: string; preview: string } | null>(null);
+
+  const { t, locale } = useTranslation();
+  const activeThreadId = useConversationStore(s => s.activeThreadId);
+  const threads = useConversationStore(s => s.threads);
+  // Plan 437: toggle for hook rows in the chat flow. Re-read on every
+  // render so a mid-session toggle in Settings → Hooks drops hook rows
+  // from both fresh rounds and reloaded history.
+  const showHookInvocations = useShowHookInvocations();
+  const workingDirectory = threads.find(thread => thread.id === activeThreadId)?.workingDirectory;
+  // When viewing a sub-agent session the parent session id is set on the
+  // store. In that view we drop the ToolActionsGroup collapsible toggle
+  // so every tool call renders expanded (matching the main interface).
+  const isSubAgentSession = useConversationStore(s => s.parentSessionId !== null);
+
+  // Build tool result map for quick lookup
+  const toolResultMap = useMemo(() => {
+    const map = new Map<string, ToolResultInfo>();
+    for (const r of toolResults) {
+      map.set(r.tool_use_id, r);
+    }
+    return map;
+  }, [toolResults]);
+
+  // Parse main message content (including pasted content markers).
+// For user messages with displayContent, render the original prompt
+// instead of the full assembled context (pre-analysis + attachment text).
+//
+// Plan 220 Phase 3: route through `decodeMessageAttachments` so legacy
+// `<pasted-content>` and `[[duya-browser-ref:...]]` markers found in
+// `content` are promoted to typed attachments and stripped from the
+// returned text. New messages never hit this path because the write
+// side no longer emits markers.
+const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
+    const displaySource =
+      message.role === 'user' && message.displayContent !== undefined
+        ? message.displayContent
+        : message.content;
+    const parsed = parseMessageContent(displaySource, message.msgType);
+    const decoded = decodeMessageAttachments(parsed.text, message.attachments);
+    return {
+      text: decoded.text,
+      pastedContents: decoded.attachments
+        .filter(
+          (a): a is FileAttachment & { kind: 'pasted-text' } => a.kind === 'pasted-text',
+        )
+        .map((a) => ({
+          id: a.id,
+          preview: a.previewText ?? '',
+          fullContent: a.text ?? '',
+        })),
+      // Plan 220: all non-file/image kinds (pasted-text, terminal-ref,
+      // browser-ref, file-tree-ref) render through AttachmentBar in
+      // history mode for visual consistency with the input view.
+      // `kind === undefined` is excluded here so legacy file/image
+      // attachments (persisted before the discriminator existed) are
+      // rendered by FileAttachmentCard above the bubble, not as chips.
+      refAttachments: decoded.attachments.filter(
+        (a) => a.kind !== 'file' && !isImageAttachment(a),
+      ),
+    };
+  }, [message.content, message.displayContent, message.msgType, message.role]);
+
+  // Build ordered action items from all messages in this round
+  const { notices, actions, finalText, allPastedContents } = useMemo(() => {
+    const allMessages = sortMessagesByOrder([message, ...mergedMessages]);
+    const rawActions: ActionItem[] = [];
+    const allPasted: PastedContentInfo[] = [...pastedContents];
+
+    for (const msg of allMessages) {
+      // Plan 437: drop hook messages when the user has turned the
+      // toggle off in Settings → Hooks. Persisted hook rows would
+      // otherwise reappear after reload, breaking the toggle contract.
+      if (msg.msgType === 'hook_invocation' && !showHookInvocations) continue;
+      const msgActions = messageToActionItems(msg, toolResultMap);
+      rawActions.push(...msgActions);
+
+      // Also collect pasted contents from merged messages only (not the main message)
+      if (msg.id !== message.id && typeof msg.content === 'string' && msg.msgType !== 'thinking' && msg.msgType !== 'tool_use') {
+        const withPasted = parseMessageContentWithPasted(msg.content);
+        allPasted.push(...withPasted.pastedContents);
+      }
+    }
+
+    // Merge consecutive text actions into a single text action
+    // to prevent markdown fragmentation when text is split across multiple messages.
+    // The smart merge keeps tables / code fences contiguous across the seam
+    // while ordinary blocks still separate with a blank line.
+    const mergedActions: ActionItem[] = [];
+    for (const action of rawActions) {
+      if (action.kind === 'text') {
+        const last = mergedActions[mergedActions.length - 1];
+        if (last && last.kind === 'text') {
+          last.content = mergeMarkdownFragments(last.content, action.content);
+        } else {
+          mergedActions.push({ ...action });
+        }
+      } else {
+        mergedActions.push(action);
+      }
+    }
+
+    // Separate the agent's actual final reply from the work log.
+    // Text-only assistant rounds are normal replies, not "actions".
+    // Mixed rounds keep intermediate text (the "I'll check this now"
+    // fragments emitted between tool calls) inline in the action group
+    // in chronological order, and lift only the trailing text run —
+    // everything after the LAST tool/thinking action — into `finalText`
+    // as the real final output. Fragments inside the trailing run are
+    // smart-joined into one markdown document so constructs spanning
+    // fragments (table rows, code fences) keep parsing instead of
+    // rendering half a construct plus literal markdown symbols.
+
+    // Memory / routine notice actions are lifted out of the work run
+    // entirely: they render as centered hints above the group, never
+    // participate in work-group detection, and never suppress the final
+    // text — a round that only wrote memory and replied must still show
+    // the reply as finalText.
+    const notices: ChatNoticeData[] = [];
+    const workActions = mergedActions.filter((action) => {
+      if (action.kind === 'notice') {
+        notices.push(action.notice);
+        return false;
+      }
+      return true;
+    });
+
+    const hasWidgetActions = workActions.some(a => a.kind === 'widget');
+    const hasThinkingOrTool = workActions.some(a => a.kind === 'thinking' || a.kind === 'tool');
+
+    if (!hasThinkingOrTool && !hasWidgetActions) {
+      const plainTexts = workActions
+        .filter((action): action is ActionItem & { kind: 'text' } => action.kind === 'text')
+        .map(action => action.content);
+
+      return {
+        notices,
+        actions: [],
+        finalText: joinMarkdownFragments(plainTexts),
+        allPastedContents: allPasted,
+      };
+    }
+
+    let lastWorkIndex = -1;
+    workActions.forEach((action, index) => {
+      if (action.kind === 'tool' || action.kind === 'thinking') lastWorkIndex = index;
+    });
+
+    const resultActions: ActionItem[] = [];
+    const finalFragments: string[] = [];
+    for (let index = 0; index < workActions.length; index++) {
+      const action = workActions[index]!;
+      if (index > lastWorkIndex && action.kind === 'text') {
+        finalFragments.push(action.content);
+        continue;
+      }
+      // Widgets (and any work action) stay as ordered actions wherever
+      // they appear — InterleavedContent renders them at the correct
+      // point in the bubble, before the final reply.
+      resultActions.push(action);
+    }
+
+    return {
+      notices,
+      actions: resultActions,
+      finalText: joinMarkdownFragments(finalFragments),
+      allPastedContents: allPasted,
+    };
+  }, [message, mergedMessages, toolResultMap, pastedContents]);
+
+  // Extract the deep-research report from the `research_report` tool action
+  // (if present). When found, it renders as a standalone card (ResearchReportCard)
+  // in place of the trailing final text, so the report survives as a document.
+  const researchReport = useMemo<ResearchReportData | null>(() => {
+    for (const a of actions) {
+      if (a.kind !== 'tool' || !a.tool) continue;
+      if (a.tool.name.toLowerCase() !== 'research_report') continue;
+      if (a.tool.result === undefined) continue; // still running
+      return extractResearchReport(a.tool.input, a.tool.result);
+    }
+    return null;
+  }, [actions]);
+
+  // Full wall-clock duration for the entire assistant round.
+  // The agent records the end-to-end time (stream start -> final text) on the
+  // final assistant message; intermediate deltas don't carry it. Take the max
+  // non-null value across the round so the user sees the real response time
+  // (including model thinking and gaps between tool calls).
+  const totalRoundDurationMs = useMemo(() => {
+    const allMessages = sortMessagesByOrder([message, ...mergedMessages]);
+    let max = 0;
+    for (const msg of allMessages) {
+      if (msg.durationMs != null && msg.durationMs > max) {
+        max = msg.durationMs;
+      }
+    }
+    return max > 0 ? max : null;
+  }, [message, mergedMessages]);
+
+  const copyToClipboard = async () => {
+    try {
+      let copyContent: string;
+      if (message.role === 'user') {
+        const source = message.displayContent !== undefined
+          ? message.displayContent
+          : message.content;
+        if (typeof source === 'string') {
+          const parsed = parseBrowserReferenceDisplayContent(source);
+          copyContent = [
+            parsed.text,
+            ...parsed.references.map(browserReferenceDisplaySummary),
+          ].filter(Boolean).join('\n\n');
+        } else {
+          copyContent = extractMarkdownFromBlocks(source);
+        }
+      } else {
+        // Assistant: prefer the visible final text. If a round is still in
+        // progress (no finalText yet), fall back to joining the text blocks
+        // in content so we never leak raw JSON like [{"type":"text",...},...].
+        if (finalText && finalText.trim()) {
+          copyContent = finalText;
+        } else {
+          copyContent = extractMarkdownFromBlocks(message.content);
+        }
+      }
+      await navigator.clipboard.writeText(copyContent || '');
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* ignore */ }
+  };
+
+  // Preview handlers
+  const handleOpenAttachmentPreview = (attachment: FileAttachment) => {
+    setPreviewAttachment(attachment);
+    setPreviewPastedContent(null);
+  };
+
+  // Plan 220: unified preview handler for all ref attachment kinds
+  // (pasted-text, terminal-ref, browser-ref, file-tree-ref). Pastes
+  // route through the pasted-content preview modal; other kinds route
+  // through the attachment preview modal.
+  const handleOpenRefPreview = (att: FileAttachment) => {
+    if (att.kind === 'pasted-text') {
+      setPreviewPastedContent({
+        id: att.id,
+        content: att.text ?? '',
+        preview: att.previewText ?? att.name,
+      });
+      setPreviewAttachment(null);
+    } else {
+      handleOpenAttachmentPreview(att);
+    }
+  };
+
+  const handleOpenPastedPreview = (content: PastedContentInfo) => {
+    setPreviewPastedContent({ id: content.id, content: content.fullContent, preview: content.preview });
+    setPreviewAttachment(null);
+  };
+
+  const handleClosePreview = () => {
+    setPreviewAttachment(null);
+    setPreviewPastedContent(null);
+  };
+
+  // Restore the full message to the main composer without rewinding yet.
+  const handleStartEdit = () => onEditMessage?.(message.id);
+
+  const isUser = message.role === 'user';
+  const hasPastedContents = allPastedContents.length > 0;
+
+  // System-generated task-notification messages are injected as role:'user'
+  // for the LLM (LLM APIs have no native system role for this), but they
+  // carry raw <task-notification> XML that must not surface as a chat
+  // bubble for the human reader. Hide them. Detection prefers the typed
+  // metadata flag set by DuyaAgent; the string-prefix sniff is a fallback
+  // for messages that predate the metadata flag.
+  const isTaskNotification = message.isTaskNotification === true ||
+    (isUser && typeof message.content === 'string' &&
+     message.content.trimStart().startsWith('<task-notification>'));
+  if (isTaskNotification) {
+    return null;
+  }
+
+  // Strip any pasted full content that may have leaked into the
+  // main text. Only run when the LLM-facing combined content is
+  // actually being parsed (i.e. the first paste sits at the head
+  // of the string, followed by a `\n\n` separator that joins it
+  // to the user's typed text). Otherwise the parser has already
+  // produced a clean text, and a naive substring match could
+  // accidentally eat user-typed text that happens to start with
+  // a pasted fragment.
+  const displayText = useMemo(() => {
+    if (!hasPastedContents) return mainText;
+    let cleaned = mainText;
+    for (const pasted of allPastedContents) {
+      if (cleaned === pasted.fullContent) {
+        return '';
+      }
+      if (cleaned.startsWith(pasted.fullContent + '\n\n')) {
+        cleaned = cleaned.slice(pasted.fullContent.length).trimStart();
+      } else if (cleaned.endsWith('\n\n' + pasted.fullContent)) {
+        cleaned = cleaned.slice(0, cleaned.length - pasted.fullContent.length).trimEnd();
+      }
+    }
+    return cleaned;
+  }, [mainText, allPastedContents, hasPastedContents]);
+
+  const userBrowserReferences = useMemo(() => {
+    if (!isUser || !displayText) {
+      return { text: displayText, references: [] as BrowserReferenceDisplayData[] };
+    }
+    return parseBrowserReferenceDisplayContent(displayText);
+  }, [displayText, isUser]);
+
+  const linkedBrowserScreenshotImageIds = new Set(
+    (message.attachments ?? [])
+      .map((attachment) => resolveLinkedBrowserScreenshotAttachment(attachment, message.attachments ?? [])?.id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0),
+  );
+  // Render image attachments alongside file attachments. Pasted images
+  // store a data URL on `url` (no `thumbnail`/`displayUrl`), so pass
+  // `url` through as a preview-source fallback for image kinds.
+  // `kind === undefined` covers legacy attachments persisted before
+  // Plan 220 introduced the discriminator — they are all file/image.
+  const fileAttachments = message.attachments?.filter(
+    (a) =>
+      (a.kind === 'file' || isImageAttachment(a)) &&
+      !linkedBrowserScreenshotImageIds.has(a.id),
+  ) || [];
+
+  if (message.isCompactBoundary) {
+    return (
+      <CompactBoundary
+        compactedMessageCount={message.compactedMessageCount || 0}
+        timestamp={message.timestamp}
+      />
+    );
+  }
+
+  if (message.isCompactSummary) {
+    const summaryContent = typeof message.content === 'string'
+      ? message.content
+      : Array.isArray(message.content)
+        ? message.content.map((b: any) => b.text || '').join('')
+        : '';
+    return (
+      <CompactSummary
+        content={summaryContent}
+        compactedMessageCount={message.compactedMessageCount || 0}
+      />
+    );
+  }
+
+  if (isUser) {
+    return (
+      <div data-message-id={message.id} className="flex justify-end py-3 px-4 group">
+        <div className="max-w-full @min-[624px]:max-w-xl flex flex-col items-end">
+          {/* File & Image Attachments (PDF, DOCX, PNG, etc.) - Above message bubble */}
+          {fileAttachments.length > 0 && (
+            <div className="flex flex-wrap justify-end gap-2 mb-2">
+              {fileAttachments.map((attachment, attachmentIndex) => (
+                <FileAttachmentCard
+                  key={`file-attachment-${attachment.id ?? attachmentIndex}-${attachmentIndex}`}
+                  id={attachment.id}
+                  name={attachment.name}
+                  thumbnail={
+                    attachment.displayUrl
+                    || attachment.thumbnail
+                    || (isImageAttachment(attachment) ? (attachment.url || attachment.path) : undefined)
+                  }
+                  url={attachment.url || attachment.path}
+                  width={120}
+                  onClick={() => handleOpenAttachmentPreview(attachment)}
+                />
+              ))}
+            </div>
+          )}
+          {/* Plan 220: Unified reference attachment cards (pasted-text,
+              terminal-ref, browser-ref, file-tree-ref). Replaces the
+              bespoke pasted-content list and BrowserReferenceCard. */}
+          {refAttachments.length > 0 && (
+            <div className="flex flex-wrap justify-end gap-2 mb-2">
+              <AttachmentBar
+                attachments={refAttachments}
+                mode="history"
+                onPreview={handleOpenRefPreview}
+              />
+            </div>
+          )}
+          {/* Legacy pasted-content cards (from markers in old messages).
+              Kept as a fallback for allPastedContents that didn't make
+              it through decodeMessageAttachments (e.g. merged messages
+              from compacted history). */}
+          {hasPastedContents && refAttachments.length === 0 && (
+            <div className="flex flex-wrap justify-end gap-2 mb-2">
+              {allPastedContents.map((content) => (
+                <div
+                  key={content.id}
+                  className="message-pasted-content-item cursor-pointer hover:border-accent-soft hover:bg-surface-hover transition-all"
+                  onClick={() => handleOpenPastedPreview(content)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleOpenPastedPreview(content); }}
+                >
+                  <div className="message-pasted-content-preview">
+                    {content.preview}
+                  </div>
+                  <div className="message-pasted-content-label">
+                    PASTED
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <>
+              {userBrowserReferences.text && (
+                <div
+                  className="rounded-2xl rounded-tr-sm px-4 py-2.5"
+                  style={{ backgroundColor: 'rgba(0, 0, 0, 0.06)' }}
+                >
+                  <p
+                    className="text-sm whitespace-pre-wrap break-words"
+                    style={{ color: 'var(--text)', overflowWrap: 'anywhere' }}
+                  >
+                    <PluginMentionText text={userBrowserReferences.text} />
+                  </p>
+                </div>
+              )}
+              <div className="flex justify-end items-center gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                {Number.isFinite(message.timestamp) && (
+                  <span className="text-[11px] text-muted-foreground/60 tabular-nums">
+                    {formatMessageTime(message.timestamp, t, locale)}
+                  </span>
+                )}
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  shape="square"
+                  aria-label="Copy message"
+                  onClick={copyToClipboard}
+                  className="hover:bg-muted/50"
+                  title="Copy message"
+                >
+                  {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                </IconButton>
+                {isEditable && onEditMessage && (
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    shape="square"
+                    aria-label={locale === 'zh' ? '编辑并重新发送' : 'Edit and resend'}
+                    onClick={handleStartEdit}
+                    className="hover:bg-muted/50"
+                    title={locale === 'zh' ? '编辑并重新发送' : 'Edit and resend'}
+                  >
+                    <NotePencilIcon size={12} />
+                  </IconButton>
+                )}
+              </div>
+          </>
+        </div>
+
+        {/* Preview Modal */}
+        <ImagePreview
+          open={previewAttachment !== null || previewPastedContent !== null}
+          onClose={handleClosePreview}
+          variant="panel"
+          attachment={previewAttachment}
+          pastedContent={previewPastedContent}
+        />
+      </div>
+    );
+  }
+
+  const hasActions = actions.length > 0;
+  const hasWidgets = actions.some(a => a.kind === 'widget');
+  const hasToolActions = actions.some(a => a.kind === 'tool' || a.kind === 'thinking');
+  // When widgets are present, InterleavedContent renders the widget
+  // blocks (and only those), so exclude widget actions from the group
+  // to avoid rendering each widget twice. Text / thinking / tool actions
+  // all stay in the group — intermediate text renders inline in order
+  // via TextRow, and the trailing run is already lifted into finalText,
+  // so nothing is double-rendered.
+  const toolOnlyActions = hasWidgets
+    ? actions.filter(a => a.kind !== 'widget')
+    : actions;
+  // Focus mode: every text left in `actions` is intermediate narration
+  // (the trailing run was already lifted into `finalText` upstream), so
+  // drop them all — the round renders as one big group + the final reply.
+  const groupActions = focusMode
+    ? toolOnlyActions.filter(a => a.kind !== 'text')
+    : toolOnlyActions;
+
+  return (
+    <div data-message-id={message.id} className="py-3 px-4">
+      <div className="w-full">
+        {notices.length > 0 && (
+          <div className="flex flex-col items-center gap-1 py-1">
+            {notices.map((n, i) => (
+              <ChatNotice key={`notice-${i}`} notice={n} />
+            ))}
+          </div>
+        )}
+        {hasWidgets ? (
+          <>
+            {hasToolActions && (
+              <ToolActionsGroup
+                actions={groupActions}
+                isStreaming={isLiveRun}
+                totalDurationMs={totalRoundDurationMs}
+                forceExpanded={isSubAgentSession}
+                focusMode={focusMode}
+              />
+            )}
+            <InterleavedContent actions={actions} sourceMessageId={message.id} />
+            {researchReport ? (
+              <div className="mt-2">
+                <ResearchReportCard data={researchReport} />
+              </div>
+            ) : (
+              finalText && (
+                <AssistantContent text={finalText} sourceMessageId={message.id} />
+              )
+            )}
+          </>
+        ) : (
+          <>
+            {hasActions && (
+              <ToolActionsGroup
+                actions={groupActions}
+                isStreaming={isLiveRun}
+                totalDurationMs={totalRoundDurationMs}
+                forceExpanded={isSubAgentSession}
+                focusMode={focusMode}
+              />
+            )}
+            {researchReport ? (
+              <div className="mt-2">
+                <ResearchReportCard data={researchReport} />
+              </div>
+            ) : (
+              finalText && (
+                <AssistantContent text={finalText} sourceMessageId={message.id} />
+              )
+            )}
+          </>
+        )}
+
+        {/* Plan 447: hide the time + copy chrome for rounds of the turn
+            currently being streamed — pre-refresh they render inside one
+            continuous StreamingMessage with no per-round separators, and
+            the footer returns once the run ends. */}
+        {!isLiveRun && (
+          <div className="flex items-center gap-2 mt-3">
+            {Number.isFinite(message.timestamp) && (
+              <span className="text-[11px] text-muted-foreground/60 tabular-nums">
+                {formatMessageTime(message.timestamp, t, locale)}
+              </span>
+            )}
+            <IconButton
+              variant="ghost"
+              size="md"
+              shape="square"
+              aria-label="Copy message"
+              onClick={copyToClipboard}
+              className="hover:bg-muted/50 text-muted-foreground/60 hover:text-foreground"
+              title="Copy message"
+            >
+              {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+            </IconButton>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export const MessageItem = React.memo(MessageItemComponent, messageItemPropsEqual);

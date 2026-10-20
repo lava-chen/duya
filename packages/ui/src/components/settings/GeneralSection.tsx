@@ -1,0 +1,724 @@
+"use client";
+
+import { useSettings } from "@/hooks/useSettings";
+import { useLinkOpener } from "@/hooks/useLinkOpener";
+import {
+  setBusyMessageMode,
+  useBusyMessageModeValue,
+  type BusyMessageMode,
+} from "@/stores/busy-message-mode-store";
+import { useIPC } from "@/hooks/useIPC";
+import {
+  setTurnChangesCard,
+  useTurnChangesCardEnabled,
+} from "@/stores/turn-changes-card-store";
+import {
+  SpinnerGapIcon,
+  FolderIcon,
+  XIcon,
+  ArrowLeftIcon,
+  DatabaseIcon,
+  CheckCircleIcon,
+  LightningIcon,
+  InfoIcon,
+} from "@/components/icons";
+import { useTranslation } from "@/hooks/useTranslation";
+import { SUPPORTED_LOCALES, type Locale, type TranslationKey } from "@/i18n";
+import { useState, useEffect, useCallback } from "react";
+import { checkMigrationNeededIPC, migrateDatabaseIPC } from "@/lib/ipc-client";
+import { testNotification } from "@/lib/notification";
+import {
+  SettingsSection,
+  SettingsCard,
+  SettingsCardFooter,
+  SettingsRow,
+  SettingsToggle,
+  SettingsSelectRow,
+  SettingsInput,
+} from "@/components/settings/ui";
+import { ImportFlow } from "@/components/import/ImportFlow";
+import { historyImportIPC, detectImportIPC } from "@/lib/import-ipc";
+import type { ImportSource } from "../../contracts/import";
+import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
+
+interface MigrationInfo {
+  needed: boolean;
+  sourcePath: string | null;
+  targetExists: boolean;
+  sourceSize: string | null;
+}
+
+export function GeneralSection() {
+  const { t, locale, setLocale } = useTranslation();
+  const { settings, loading, error, save, saving } = useSettings();
+  const { openLinksInExternalBrowser, setOpenLinksInExternalBrowser } = useLinkOpener();
+  const busyMessageMode = useBusyMessageModeValue();
+  const turnChangesCard = useTurnChangesCardEnabled();
+  const { listProviders } = useIPC();
+
+  const [autoStart, setAutoStart] = useState(false);
+  const [autoStartCanChange, setAutoStartCanChange] = useState(true);
+  const [autoStartSupported, setAutoStartSupported] = useState(true);
+  const [autoStartLoading, setAutoStartLoading] = useState(true);
+
+  const [showRestartPrompt, setShowRestartPrompt] = useState(false);
+  const [originalDbPath, setOriginalDbPath] = useState("");
+  const [migrationInfo, setMigrationInfo] = useState<MigrationInfo | null>(null);
+  const [pendingPath, setPendingPath] = useState<string | null>(null);
+  const [isMigrating, setIsMigrating] = useState(false);
+  const [migrationError, setMigrationError] = useState<string | null>(null);
+
+  const [notificationTestStatus, setNotificationTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
+
+  // Import state
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [showImportFlow, setShowImportFlow] = useState(false);
+  const [lastImportTime, setLastImportTime] = useState<number | null>(null);
+  const [detectedSources, setDetectedSources] = useState<Record<string, boolean>>({});
+  const [selectedSources, setSelectedSources] = useState<Record<string, boolean>>({});
+
+  // Gateway models from providers
+  const [gatewayModels, setGatewayModels] = useState<{ value: string; label: string }[]>([]);
+
+  useEffect(() => {
+    async function loadAutoStartStatus() {
+      if (typeof window !== "undefined" && window.electronAPI?.settings) {
+        try {
+          const status = await window.electronAPI.settings.getAutoStartStatus();
+          setAutoStart(status.enabled);
+          setAutoStartCanChange(status.canChange);
+          setAutoStartSupported(status.supported ?? true);
+        } catch (err) {
+          console.error("Failed to load auto-start status:", err);
+        } finally {
+          setAutoStartLoading(false);
+        }
+      } else {
+        setAutoStartLoading(false);
+      }
+    }
+    loadAutoStartStatus();
+  }, []);
+
+  // Load import history and detect available sources
+  useEffect(() => {
+    async function loadImportInfo() {
+      try {
+        const [history, detected] = await Promise.all([
+          historyImportIPC(),
+          detectImportIPC(),
+        ]);
+        if (history.length > 0) {
+          setLastImportTime(history[0].createdAt);
+        }
+        const sources: Record<string, boolean> = {};
+        if (detected.claude) sources["claude-code"] = true;
+        if (detected.codex) sources["codex"] = true;
+        setDetectedSources(sources);
+        setSelectedSources({ ...sources });
+      } catch (err) {
+        console.error("Failed to load import info:", err);
+      }
+    }
+    loadImportInfo();
+  }, []);
+
+  useEffect(() => {
+    if (settings?.databasePath !== undefined && !originalDbPath) {
+      setOriginalDbPath(settings.databasePath);
+    }
+  }, [settings?.databasePath, originalDbPath]);
+
+  // Load gateway models from providers
+  useEffect(() => {
+    async function loadGatewayModels() {
+      try {
+        const providers = await listProviders();
+        const models: { value: string; label: string }[] = [];
+
+        // With the multi-provider model, every configured provider
+        // is a gateway-model candidate. We do NOT filter on
+        // `isActive` (the single-active era); the user picks any
+        // configured provider from the dropdown.
+        for (const provider of providers) {
+
+          // Parse options to get enabled_models
+          let enabledModels: string[] = [];
+          try {
+            const opts = JSON.parse(provider.options || "{}");
+            enabledModels = opts.enabled_models || [];
+          } catch {
+            // Ignore parse errors
+          }
+
+          // Add models from enabled_models
+          for (const modelId of enabledModels) {
+            // Avoid duplicates
+            if (!models.some(m => m.value === modelId)) {
+              models.push({
+                value: modelId,
+                label: `${provider.name} - ${modelId}`,
+              });
+            }
+          }
+
+          // Also add default model if configured
+          try {
+            const roleModels = JSON.parse(provider.extraEnv || "{}");
+            const defaultModel = roleModels.default;
+            if (defaultModel && !models.some(m => m.value === defaultModel)) {
+              models.push({
+                value: defaultModel,
+                label: `${provider.name} - ${defaultModel}`,
+              });
+            }
+          } catch {
+            // Ignore parse errors
+          }
+        }
+
+        setGatewayModels(models);
+      } catch (err) {
+        console.error("Failed to load gateway models:", err);
+        setGatewayModels([]);
+      }
+    }
+
+    loadGatewayModels();
+  }, [listProviders]);
+
+  const handleAutoStartChange = async (enabled: boolean) => {
+    if (!window.electronAPI?.settings) return;
+    try {
+      const result = await window.electronAPI.settings.setAutoStart(enabled);
+      if (result.success) {
+        setAutoStart(enabled);
+      } else if (result.supported === false) {
+        console.warn("Auto-start is not supported on this platform");
+      }
+    } catch (err) {
+      console.error("Failed to set auto-start:", err);
+    }
+  };
+
+  const checkMigration = async (newPath: string): Promise<MigrationInfo> => {
+    try {
+      const result = await checkMigrationNeededIPC(newPath);
+      return {
+        needed: result.needed,
+        sourcePath: result.sourcePath,
+        targetExists: result.targetExists,
+        sourceSize: null,
+      };
+    } catch {
+      throw new Error("Failed to check migration status");
+    }
+  };
+
+  const executeMigration = async (sourcePath: string, targetPath: string) => {
+    setIsMigrating(true);
+    setMigrationError(null);
+    try {
+      await migrateDatabaseIPC(sourcePath, targetPath);
+      return true;
+    } catch (err) {
+      setMigrationError(err instanceof Error ? err.message : "Migration failed");
+      return false;
+    } finally {
+      setIsMigrating(false);
+    }
+  };
+
+  const selectDatabaseFolder = async () => {
+    if (typeof window !== "undefined" && window.electronAPI?.dialog) {
+      try {
+        const result = await window.electronAPI.dialog.openFolder({
+          title: "Select Database Directory",
+          defaultPath: settings?.databasePath || undefined,
+        });
+        if (result && !result.canceled && result.filePaths.length > 0) {
+          const newPath = result.filePaths[0];
+          const info = await checkMigration(newPath);
+          if (info.needed) {
+            setMigrationInfo(info);
+            setPendingPath(newPath);
+          } else if (info.targetExists) {
+            await save({ databasePath: newPath });
+            setShowRestartPrompt(true);
+          } else {
+            await save({ databasePath: newPath });
+            if (originalDbPath && originalDbPath !== newPath) {
+              setShowRestartPrompt(true);
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Failed to open folder dialog:", err);
+      }
+    }
+  };
+
+  const selectWorkspaceFolder = async () => {
+    if (typeof window !== "undefined" && window.electronAPI?.dialog) {
+      try {
+        const result = await window.electronAPI.dialog.openFolder({
+          title: "Select Workspace Directory",
+          defaultPath: settings?.workspaceDir || undefined,
+        });
+        if (result && !result.canceled && result.filePaths.length > 0) {
+          await save({ workspaceDir: result.filePaths[0] });
+        }
+      } catch (err) {
+        console.error("Failed to open folder dialog:", err);
+      }
+    }
+  };
+
+  const handleMigrateConfirm = async () => {
+    if (!migrationInfo?.sourcePath || !pendingPath) return;
+    const success = await executeMigration(migrationInfo.sourcePath, pendingPath);
+    if (success) {
+      await save({ databasePath: pendingPath });
+      setMigrationInfo(null);
+      setPendingPath(null);
+      setShowRestartPrompt(true);
+    }
+  };
+
+  const handleMigrateCancel = async () => {
+    if (!pendingPath) return;
+    await save({ databasePath: pendingPath });
+    setMigrationInfo(null);
+    setPendingPath(null);
+    setShowRestartPrompt(true);
+  };
+
+  const closeMigrationDialog = () => {
+    setMigrationInfo(null);
+    setPendingPath(null);
+    setMigrationError(null);
+  };
+
+  const resetDatabasePath = async () => {
+    await save({ databasePath: "" });
+    if (originalDbPath) {
+      setShowRestartPrompt(true);
+    }
+  };
+
+  const handleTestNotification = async () => {
+    setNotificationTestStatus("testing");
+    try {
+      const success = await testNotification();
+      setNotificationTestStatus(success ? "success" : "error");
+    } catch {
+      setNotificationTestStatus("error");
+    }
+  };
+
+  const handleReimport = () => {
+    setShowImportModal(true);
+  };
+
+  const handleImportContinue = () => {
+    setShowImportModal(false);
+    setShowImportFlow(true);
+  };
+
+  const handleImportCustom = () => {
+    setShowImportModal(false);
+    setShowImportFlow(true);
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-12">
+        <SpinnerGapIcon size={18} className="animate-spin" />
+        <span className="text-sm text-muted-foreground">{t("common.loading")}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="settings-section">
+      {/* Error Banner */}
+      {error && (
+        <div className="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3">
+          <p className="text-sm text-destructive">{error}</p>
+        </div>
+      )}
+
+      {/* Restart Prompt */}
+      {showRestartPrompt && (
+        <div className="mb-4 rounded-lg border border-blue-500/30 bg-blue-500/10 p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-start gap-3">
+              <InfoIcon size={18} className="text-blue-500 mt-0.5 shrink-0" />
+              <div>
+                <p className="font-medium text-sm">{t("settings.general.databasePathChanged")}</p>
+                <p className="text-sm text-muted-foreground">{t("settings.general.restartRequired")}</p>
+              </div>
+            </div>
+            <IconButton
+              variant="ghost"
+              size="sm"
+              aria-label={t("common.close")}
+              onClick={() => setShowRestartPrompt(false)}
+              className="shrink-0"
+            >
+              <XIcon size={16} />
+            </IconButton>
+          </div>
+        </div>
+      )}
+
+      {/* Migration Dialog */}
+      {migrationInfo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/50" onClick={closeMigrationDialog} />
+          <div className="relative z-10 w-full max-w-md mx-4 bg-surface border border-border/50 rounded-xl shadow-xl p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center">
+                <DatabaseIcon size={20} className="text-accent" />
+              </div>
+              <h3 className="text-lg font-semibold">{t("settings.general.migrateDatabase")}</h3>
+            </div>
+            <p className="text-sm text-muted-foreground mb-4">
+              {t("settings.general.migrateDatabaseDesc")}
+            </p>
+            <div className="space-y-2 mb-4 p-3 rounded-lg bg-muted/50">
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-muted-foreground">{t("settings.general.from")}</span>
+                <span className="font-mono text-xs truncate">{migrationInfo.sourcePath}</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-muted-foreground">{t("settings.general.to")}</span>
+                <span className="font-mono text-xs truncate">{pendingPath}</span>
+              </div>
+            </div>
+            {migrationError && (
+              <div className="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3">
+                <p className="text-sm text-destructive">{migrationError}</p>
+              </div>
+            )}
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                variant="ghost"
+                onClick={closeMigrationDialog}
+                disabled={isMigrating}
+              >
+                {t("settings.general.cancel")}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={handleMigrateCancel}
+                disabled={isMigrating}
+              >
+                {t("settings.general.useNewLocation")}
+              </Button>
+              <Button
+                variant="primary"
+                onClick={handleMigrateConfirm}
+                disabled={isMigrating}
+              >
+                {isMigrating && <SpinnerGapIcon size={14} className="animate-spin" />}
+                {isMigrating ? t("settings.general.migrating") : t("settings.general.migrateData")}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Application Section */}
+      <SettingsSection title={t("settings.general.application")} description={t("settings.general.applicationDesc")}>
+        <SettingsCard>
+          <SettingsSelectRow
+            label={t("settings.general.language")}
+            description={t("settings.general.languageDesc")}
+            value={locale}
+            onValueChange={(v) => {
+              const newLocale = v as Locale;
+              setLocale(newLocale);
+              save({ locale: newLocale });
+            }}
+            options={SUPPORTED_LOCALES.map((l) => ({ value: l.value, label: l.label }))}
+          />
+          <SettingsRow
+            label={t("settings.general.autoStart")}
+            description={
+              autoStartSupported
+                ? t("settings.general.autoStartDesc")
+                : t("settings.general.autoStartUnsupported")
+            }
+          >
+            {autoStartLoading ? (
+              <SpinnerGapIcon size={16} className="animate-spin text-muted-foreground" />
+            ) : (
+              <SettingsToggle
+                label=""
+                checked={autoStart}
+                onCheckedChange={handleAutoStartChange}
+                disabled={!autoStartCanChange || !autoStartSupported}
+              />
+            )}
+          </SettingsRow>
+          <SettingsRow
+            label={t("settings.general.dataStorage")}
+            description={t("settings.general.dataStorageDesc")}
+            action={
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground max-w-[200px] truncate">
+                  {settings?.databasePath || t("settings.general.defaultLocation")}
+                </span>
+                <IconButton
+                  variant="default"
+                  size="sm"
+                  aria-label={t("common.open")}
+                  title={t("common.open")}
+                  onClick={selectDatabaseFolder}
+                >
+                  <FolderIcon size={16} />
+                </IconButton>
+                {settings?.databasePath && (
+                  <IconButton
+                    variant="default"
+                    size="sm"
+                    aria-label={t("common.reset")}
+                    title={t("common.reset")}
+                    onClick={resetDatabasePath}
+                  >
+                    <XIcon size={16} />
+                  </IconButton>
+                )}
+              </div>
+            }
+          />
+          <SettingsRow
+            label={t("settings.general.defaultWorkspace")}
+            description={t("settings.general.defaultWorkspaceDesc")}
+            action={
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground max-w-[200px] truncate">
+                  {settings?.workspaceDir || t("settings.general.defaultWorkspacePlaceholder")}
+                </span>
+                <IconButton
+                  variant="default"
+                  size="sm"
+                  aria-label={t("common.change")}
+                  title={t("common.change")}
+                  onClick={selectWorkspaceFolder}
+                >
+                  <FolderIcon size={16} />
+                </IconButton>
+                {settings?.workspaceDir && (
+                  <IconButton
+                    variant="default"
+                    size="sm"
+                    aria-label={t("common.reset")}
+                    title={t("common.reset")}
+                    onClick={() => save({ workspaceDir: undefined })}
+                  >
+                    <XIcon size={16} />
+                  </IconButton>
+                )}
+              </div>
+            }
+          />
+          <SettingsToggle
+            label={t("settings.general.openLinksInExternalBrowser")}
+            description={t("settings.general.openLinksInExternalBrowserDesc")}
+            checked={openLinksInExternalBrowser}
+            onCheckedChange={setOpenLinksInExternalBrowser}
+          />
+          <SettingsSelectRow
+            label={t("settings.general.busyMessageMode")}
+            description={t("settings.general.busyMessageModeDesc")}
+            value={busyMessageMode}
+            onValueChange={(value) => setBusyMessageMode(value as BusyMessageMode)}
+            options={[
+              { value: "followup", label: t("settings.general.busyMessageModeFollowup") },
+              { value: "queued", label: t("settings.general.busyMessageModeQueued") },
+            ]}
+          />
+          <SettingsToggle
+            label={t("settings.general.turnChangesCard")}
+            description={t("settings.general.turnChangesCardDesc")}
+            checked={turnChangesCard}
+            onCheckedChange={setTurnChangesCard}
+          />
+          </SettingsCard>
+      </SettingsSection>
+
+      {/* Notifications Section */}
+      <SettingsSection title={t("settings.general.notifications")} description={t("settings.general.notificationsDesc")}>
+        <SettingsCard>
+          <SettingsToggle
+            label={t("settings.general.enableNotifications")}
+            description={t("settings.general.enableNotificationsDesc")}
+            checked={settings?.notificationsEnabled ?? true}
+            onCheckedChange={(checked) => save({ notificationsEnabled: checked })}
+          />
+          <SettingsToggle
+            label={t("settings.general.soundEffects")}
+            description={t("settings.general.soundEffectsDesc")}
+            checked={settings?.soundEffectsEnabled ?? true}
+            onCheckedChange={(checked) => save({ soundEffectsEnabled: checked })}
+          />
+          <SettingsCardFooter>
+            <Button
+              variant="secondary"
+              onClick={handleTestNotification}
+              disabled={notificationTestStatus === "testing" || !settings?.notificationsEnabled}
+            >
+              {notificationTestStatus === "testing" ? (
+                <SpinnerGapIcon size={14} className="animate-spin" />
+              ) : notificationTestStatus === "success" ? (
+                <CheckCircleIcon size={14} className="text-green-500" />
+              ) : notificationTestStatus === "error" ? (
+                <XIcon size={14} className="text-destructive" />
+              ) : (
+                <LightningIcon size={14} />
+              )}
+              {notificationTestStatus === "testing"
+                ? t("settings.general.testing")
+                : notificationTestStatus === "success"
+                ? t("settings.general.connected")
+                : notificationTestStatus === "error"
+                ? t("settings.general.failed")
+                : t("settings.general.testNotification")}
+            </Button>
+          </SettingsCardFooter>
+        </SettingsCard>
+      </SettingsSection>
+
+      {/* Import Section */}
+      <SettingsSection title={t("settings.general.importTitle")} description={t("settings.general.importDesc")}>
+        <SettingsCard>
+          <SettingsRow
+            label={t("settings.general.importedAgentSettings")}
+            description={
+              lastImportTime
+                ? t("settings.general.lastImported", {
+                    time: new Date(lastImportTime).toLocaleDateString(),
+                  })
+                : t("settings.general.noImportHistory")
+            }
+            action={
+              <Button
+                variant="secondary"
+                onClick={handleReimport}
+              >
+                {t("settings.general.reimport")}
+              </Button>
+            }
+          />
+        </SettingsCard>
+      </SettingsSection>
+
+      {/* Import Modal */}
+      {showImportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setShowImportModal(false)} />
+          <div className="relative z-10 w-full max-w-md mx-4 bg-[var(--bg-surface)] border border-border/50 rounded-xl shadow-xl p-6">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-semibold">{t("settings.general.importFromAIApps")}</h3>
+              <IconButton
+                variant="ghost"
+                size="sm"
+                aria-label="Close"
+                onClick={() => setShowImportModal(false)}
+              >
+                <XIcon size={18} />
+              </IconButton>
+            </div>
+
+            <div className="mb-4">
+              <p className="text-sm text-muted-foreground mb-3">{t("settings.general.detectedApps")}</p>
+              <div className="space-y-3">
+                {Object.keys(detectedSources).length === 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    {t("settings.general.noDetectedApps")}
+                  </p>
+                )}
+                {detectedSources["claude-code"] && (
+                  <div className="flex items-center justify-between p-3 bg-muted/30 rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-lg bg-[#d97757]/10 flex items-center justify-center text-[#d97757] text-sm font-bold">
+                        &lt;/&gt;
+                      </div>
+                      <span className="text-sm font-medium">Claude Code</span>
+                    </div>
+                    <SettingsToggle
+                      label=""
+                      checked={selectedSources["claude-code"] ?? false}
+                      onCheckedChange={(checked) =>
+                        setSelectedSources((prev) => ({ ...prev, "claude-code": checked }))
+                      }
+                    />
+                  </div>
+                )}
+                {detectedSources["codex"] && (
+                  <div className="flex items-center justify-between p-3 bg-muted/30 rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-lg bg-accent/10 flex items-center justify-center text-accent text-sm font-bold">
+                        ⚡
+                      </div>
+                      <span className="text-sm font-medium">Codex</span>
+                    </div>
+                    <SettingsToggle
+                      label=""
+                      checked={selectedSources["codex"] ?? false}
+                      onCheckedChange={(checked) =>
+                        setSelectedSources((prev) => ({ ...prev, codex: checked }))
+                      }
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <p className="text-xs text-muted-foreground mb-6">
+              {t("settings.general.importDisclaimer")}
+            </p>
+
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                variant="ghost"
+                onClick={() => setShowImportModal(false)}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={handleImportCustom}
+              >
+                {t("settings.general.customize")}
+              </Button>
+              <Button
+                variant="primary"
+                onClick={handleImportContinue}
+                disabled={!Object.values(selectedSources).some(Boolean)}
+              >
+                {t("common.continue")}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import Flow Overlay */}
+      {showImportFlow && (
+        <ImportFlow
+          onComplete={() => {
+            setShowImportFlow(false);
+            historyImportIPC().then((history) => {
+              if (history.length > 0) setLastImportTime(history[0].createdAt);
+            });
+          }}
+          onClose={() => setShowImportFlow(false)}
+        />
+      )}
+    </div>
+  );
+}

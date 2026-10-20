@@ -1,0 +1,102 @@
+/**
+ * Plan 616 — the `duya_app` tool namespace.
+ *
+ * ## What this pins
+ *
+ * The model-visible name of every `duya_app` tool is a PURE prefix
+ * concatenation — `canvas_manage` becomes `mcp_duya_app_canvas_manage` —
+ * with no truncation, no hash suffix, and no de-duplication suffix.
+ *
+ * That reversibility is load-bearing, not incidental. Three separate
+ * consumers need to recognise "this is the canvas tool" (or the bot
+ * tool, or the browser tool) from the model-visible name alone:
+ *
+ *   - the desktop renderer, which routes a tool to its dedicated row
+ *     (the renderer never sees `mcpInfo` — plan 616 §C7);
+ *   - the agent profiles, whose allow/deny patterns are written against
+ *     the ORIGINAL name (`canvas:*`, `duya:*`);
+ *   - the permission gate, which keeps the canvas tools' unconditional
+ *     allow (`isCanvasTool`).
+ *
+ * If the naming ever stopped being invertible, all three would need a
+ * registry lookup instead of a pure function — and the renderer could
+ * not do it at all.
+ *
+ * So this test asserts the naming with the REAL production allocator,
+ * and asserts the reverse mapping round-trips.
+ */
+
+import { describe, it, expect } from 'vitest';
+import { computeProviderName, AnthropicToolNamePolicy } from '@duya/plugin-core';
+
+import {
+  DUYA_APP_SERVER_NAME,
+  DUYA_APP_TOOL_NAMES,
+  DUYA_APP_TOOL_PREFIX,
+  resolveAppToolBaseName,
+  isAppToolName,
+} from '../../src/AppServer/app-tool-namespace.js';
+import { getCanvasConductorTools } from '../../src/canvas/index.js';
+
+/** The tool names `duya_app` will carry (plan 616 §3 and §3.1). */
+const APP_TOOL_NAMES = DUYA_APP_TOOL_NAMES;
+
+/** Allocate the model-visible name exactly as production does. */
+function providerNameFor(toolName: string, used: Set<string>): string {
+  return computeProviderName(
+    `mcp__${DUYA_APP_SERVER_NAME}__${toolName}`,
+    used,
+    AnthropicToolNamePolicy,
+  );
+}
+
+describe('plan 616 — the duya_app tool namespace', () => {
+  it('every app tool name is a pure prefix concatenation', () => {
+    const used = new Set<string>();
+    for (const toolName of APP_TOOL_NAMES) {
+      const modelVisible = providerNameFor(toolName, used);
+      used.add(modelVisible);
+
+      // No truncation, no hash suffix, no de-duplication suffix.
+      expect(modelVisible).toBe(`${DUYA_APP_TOOL_PREFIX}${toolName}`);
+    }
+  });
+
+  it('the model-visible name maps back to the original tool name', () => {
+    const used = new Set<string>();
+    for (const toolName of APP_TOOL_NAMES) {
+      const modelVisible = providerNameFor(toolName, used);
+      used.add(modelVisible);
+
+      expect(resolveAppToolBaseName(modelVisible)).toBe(toolName);
+      expect(isAppToolName(modelVisible)).toBe(true);
+    }
+  });
+
+  it('names from other providers are not app tools', () => {
+    // Base tools keep their own names and must not be mistaken for app tools.
+    for (const name of ['bash', 'read', 'write', 'edit', 'grep', 'todo', 'task']) {
+      expect(resolveAppToolBaseName(name)).toBeUndefined();
+      expect(isAppToolName(name)).toBe(false);
+    }
+
+    // Another MCP provider's tool must not match either.
+    expect(resolveAppToolBaseName('mcp_github_create_issue')).toBeUndefined();
+    expect(resolveAppToolBaseName('mcp_duya_app_lit_create_issue')).toBeUndefined();
+  });
+
+  it('a bare prefix with no tool name is not an app tool', () => {
+    expect(resolveAppToolBaseName(DUYA_APP_TOOL_PREFIX)).toBeUndefined();
+    expect(isAppToolName(DUYA_APP_TOOL_PREFIX)).toBe(false);
+  });
+
+  it('the app tool set covers every canvas tool the app server serves', () => {
+    // The set is what makes name resolution unambiguous, so it must not
+    // drift from what the server actually registers. The canvas family
+    // is the largest group and is served by the capability layer today.
+    const canvasToolNames = getCanvasConductorTools().map((tool) => tool.definition.name);
+    for (const name of canvasToolNames) {
+      expect(DUYA_APP_TOOL_NAMES).toContain(name);
+    }
+  });
+});

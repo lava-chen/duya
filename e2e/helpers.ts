@@ -109,7 +109,12 @@ export async function launchDuya(opts: LaunchOptions): Promise<DuyaApp> {
     // Wait for the renderer to finish loading AND the preload-exposed
     // window.electronAPI to be available. domcontentloaded alone is not
     // enough — the contextBridge injection happens after the DOM event.
-    await page.waitForLoadState('domcontentloaded');
+    //
+    // The timeout is well above Playwright's 30s default: on a cold Vite
+    // dependency cache the shared renderer's first transform can outlast 30s,
+    // and the old default failed the very first launch of a run while the app
+    // was in fact mounting (the diagnostic snapshot showed the full shell).
+    await page.waitForLoadState('domcontentloaded', { timeout: 60_000 });
     await page.waitForFunction(
       () => typeof (window as unknown as { electronAPI?: unknown }).electronAPI !== 'undefined',
       { timeout: 30_000 },

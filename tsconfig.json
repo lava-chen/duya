@@ -3,6 +3,8 @@
   "include": [
     "apps/desktop/src/renderer/**/*.ts",
     "apps/desktop/src/renderer/**/*.tsx",
+    "packages/ui/src/**/*.ts",
+    "packages/ui/src/**/*.tsx",
     "packages/conductor/src/renderer/**/*.ts",
     "packages/conductor/src/renderer/**/*.tsx"
   ],
@@ -11,6 +13,9 @@
     "dist",
     "apps/desktop/src/renderer/**/*.stories.tsx",
     "apps/desktop/src/renderer/**/*.stories.ts",
-    "apps/desktop/src/renderer/**/__stories__/**"
+    "apps/desktop/src/renderer/**/__stories__/**",
+    "packages/ui/src/**/*.stories.tsx",
+    "packages/ui/src/**/*.stories.ts",
+    "packages/ui/src/**/__stories__/**"
   ]
 }

@@ -1,6 +1,7 @@
 import { fork, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import type { StopDisposition } from '@duya/agent-protocol';
+import { isWorkerTranscriptMutationAction } from './worker-transcript-mutations.js';
 import {
   createWorkerEnvironment,
   getWorkerMaxMemoryMB,
@@ -367,14 +368,14 @@ export class WorkerManager {
       }
       if (this.workers.get(sessionId) !== child && msg.type === 'db:request') {
         const action = typeof msg.action === 'string' ? msg.action : '';
-        if (action.startsWith('session:spawn') || action === 'message:append') {
+        if (action.startsWith('session:spawn') || isWorkerTranscriptMutationAction(action)) {
           child.send({
             type: 'db:response',
             id: msg.id,
             success: false,
             code: 'superseded_worker',
-            error: action === 'message:append'
-              ? 'Transcript append from a superseded worker is refused.'
+            error: isWorkerTranscriptMutationAction(action)
+              ? 'Transcript mutation from a superseded worker is refused.'
               : 'Session delegation from a superseded worker is refused.',
           });
           return;
