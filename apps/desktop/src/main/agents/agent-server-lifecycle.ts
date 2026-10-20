@@ -1,4 +1,5 @@
 import { spawn, ChildProcess } from 'child_process';
+import { randomUUID } from 'node:crypto';
 import * as path from 'path';
 import * as fs from 'fs';
 import { app, BrowserWindow } from 'electron';
@@ -16,6 +17,8 @@ import { dispatchComputerUseAction } from '../ipc/computer-use';
 import { dispatchCuaTool } from '../ipc/cua-handlers';
 import { handleMemoryTierRpc } from '../memory-state/tier-rpc';
 import { handleBotIdentityRpc } from '../config/bot-identity-rpc';
+import type { DesktopPluginAppServerCall, DesktopPluginAppServerRequest, DesktopPluginAppServerResponse } from './plugin-app-server-rpc';
+import { PluginAppTrustedAttemptStore } from './plugin-app-trusted-attempts';
 
 let agentServerPort: number | null = null;
 let agentServerProcess: ChildProcess | null = null;
@@ -28,6 +31,76 @@ let isShuttingDown = false;
 let restartCount = 0;
 const MAX_RESTART_ATTEMPTS = 10;
 let conductorExecutorProxy: ConductorExecutorProxy | null = null;
+const pendingPluginAppServerRequests = new Map<string, {
+  child: ChildProcess;
+  resolve: (response: DesktopPluginAppServerResponse) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}>();
+
+/**
+ * Attempt correlations the Agent Server announced for in-flight requests.
+ *
+ * The Agent Server owns the run ledger and the worker supervisor, so it is
+ * the only party that can establish that a request came from the live worker
+ * of a given session, run and epoch. It announces that on its own message
+ * type, and Main consumes the announcement with the request it belongs to.
+ * A worker never writes here.
+ *
+ * The store pairs each announcement with the child that made it, so a
+ * correlation is consumed only by the process that established it, and dies
+ * with that process.
+ */
+const trustedPluginAppAttempts = new PluginAppTrustedAttemptStore();
+
+export function requestAgentServerPluginApp(
+  request: DesktopPluginAppServerCall,
+): Promise<DesktopPluginAppServerResponse> {
+  const child = agentServerProcess;
+  if (!child || child.killed || child.exitCode !== null || !child.send) {
+    return Promise.reject(new Error('plugin_app_agent_server_unavailable'));
+  }
+  const requestId = randomUUID();
+  const message = { ...request, type: 'desktop-plugin-app:request' as const, requestId } as DesktopPluginAppServerRequest;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingPluginAppServerRequests.delete(requestId);
+      reject(new Error('plugin_app_agent_server_timeout'));
+    }, request.operation === 'invoke-tool' ? 360_000 : 35_000);
+    pendingPluginAppServerRequests.set(requestId, { child, resolve, reject, timer });
+    try {
+      child.send(message, (error) => {
+        if (!error) return;
+        const pending = pendingPluginAppServerRequests.get(requestId);
+        if (!pending) return;
+        pendingPluginAppServerRequests.delete(requestId);
+        clearTimeout(timer);
+        reject(error);
+      });
+    } catch (error) {
+      pendingPluginAppServerRequests.delete(requestId);
+      clearTimeout(timer);
+      reject(error instanceof Error ? error : new Error('plugin_app_agent_server_unavailable'));
+    }
+  });
+}
+
+function settlePluginAppServerRequest(child: ChildProcess, response: DesktopPluginAppServerResponse): void {
+  const pending = pendingPluginAppServerRequests.get(response.requestId);
+  if (!pending || pending.child !== child) return;
+  pendingPluginAppServerRequests.delete(response.requestId);
+  clearTimeout(pending.timer);
+  pending.resolve(response);
+}
+
+function rejectPluginAppServerRequests(child: ChildProcess): void {
+  for (const [requestId, pending] of pendingPluginAppServerRequests) {
+    if (pending.child !== child) continue;
+    pendingPluginAppServerRequests.delete(requestId);
+    clearTimeout(pending.timer);
+    pending.reject(new Error('plugin_app_agent_server_restarted'));
+  }
+}
 
 export function setConductorExecutorProxy(proxy: ConductorExecutorProxy | null): void {
   conductorExecutorProxy = proxy;
@@ -129,6 +202,10 @@ export function spawnAgentServer(): Promise<number> {
     let stdoutBuffer = '';
 
     child.on('message', (msg: any) => {
+      if (msg.type === 'desktop-plugin-app:response' && typeof msg.requestId === 'string') {
+        settlePluginAppServerRequest(child, msg as DesktopPluginAppServerResponse);
+        return;
+      }
       if (msg.type === 'bash_task:update' && typeof msg.sessionId === 'string') {
         // Rebroadcast the bash background task snapshot to every renderer.
         // The renderer's useBashTasks hook filters by activeThreadId.
@@ -157,11 +234,25 @@ export function spawnAgentServer(): Promise<number> {
         return;
       }
 
+      if (msg.type === 'desktop-plugin-app:trusted-attempt' && typeof msg.id === 'string') {
+        // The Agent Server announced that it correlated a worker request with
+        // the orchestrator's live attempt. It is kept beside the request and
+        // consumed by that request, rather than being carried inside the
+        // request body, which the worker owns.
+        trustedPluginAppAttempts.announceFromMessage(child, msg);
+        return;
+      }
+
       if (msg.type === 'db:request') {
         // Plan 587 C6.1: this is the second real transport for `db:request`, and
         // it is NOT in the chat pool's map — the agent server is its own child.
         // Threading its pid and role is what lets the Control Plane authorise it
         // rather than refuse it.
+        const requestId = typeof msg.id === 'string' ? msg.id : null;
+        // The correlation is taken ONCE, and only by the child that announced
+        // it. A second request carrying the same id is refused rather than
+        // inheriting the first one's authority.
+        const trustedAttempt = requestId ? trustedPluginAppAttempts.consume(child, requestId) : undefined;
         handleDbRequest(msg, {
           // `child.pid` is `number | undefined`; the sender contract wants
           // `null` for "no pid", and `undefined` would read as a present but
@@ -170,6 +261,7 @@ export function spawnAgentServer(): Promise<number> {
           senderPid: child.pid ?? null,
           registeredSessionId: null,
           role: 'agent-server',
+          ...(trustedAttempt ? { trustedAttempt } : {}),
         }).then((response) => {
           if (!child.killed) {
             child.send(response);
@@ -616,6 +708,12 @@ export function spawnAgentServer(): Promise<number> {
     registerSpawnedWorker(child.pid, 'agent-server', child);
 
     child.on('exit', (code, signal) => {
+      rejectPluginAppServerRequests(child);
+      // An Agent Server that died cannot announce any further attempt
+      // correlation, so the ones it already announced are dropped with it —
+      // and only its OWN. A replacement Agent Server's correlations belong to
+      // a different process and are still live.
+      trustedPluginAppAttempts.release(child);
       unregisterSpawnedWorker(child.pid, child);
       if (!settled) {
         settled = true;

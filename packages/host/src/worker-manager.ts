@@ -67,10 +67,23 @@ export interface WorkerInterrupt {
 
 export class WorkerManager {
   private workers = new Map<string, ChildProcess>();
+  /**
+   * Monotonic worker generation, minted by the supervisor that actually owns
+   * the worker processes.
+   *
+   * A session's worker is replaced on chat, on idle reaping, and on crash.
+   * A caller that captured a worker handle needs to know whether the handle it
+   * holds is still the live one, and process identity alone cannot answer that:
+   * the OS may reuse a pid. This counter is the supervisor's own answer, so it
+   * cannot be forged by, or drift from, the process it describes.
+   */
+  private workerGenerationCounter = 0;
+  private workerGenerationByChild = new WeakMap<ChildProcess, number>();
   private readonly sessionLifecycle: WorkerSessionLifecycle;
   private readonly options: WorkerManagerOptions;
   private readonly logger: WorkerManagerLogger;
   private onWorkerCrash: ((sessionId: string) => void) | null = null;
+  private onWorkerExit: ((sessionId: string, child: ChildProcess) => void) | null = null;
   private onWorkerMessage: ((sessionId: string, msg: Record<string, unknown>, child: ChildProcess) => void) | null = null;
   // H6: Track intentionally killed workers so their exit is not misjudged as a crash
   private intentionalKills = new WeakSet<ChildProcess>();
@@ -110,6 +123,19 @@ export class WorkerManager {
 
   setCrashHandler(handler: (sessionId: string) => void): void {
     this.onWorkerCrash = handler;
+  }
+
+  /**
+   * Observe every worker process exit, including a worker that was already
+   * replaced.
+   *
+   * The crash handler only reports the CURRENT worker of a session, so a
+   * caller that holds a handle to a replaced worker never learns that it died.
+   * A caller fencing in-flight work against a specific worker process needs
+   * that notification, so this reports the child that actually exited.
+   */
+  setWorkerExitHandler(handler: (sessionId: string, child: ChildProcess) => void): void {
+    this.onWorkerExit = handler;
   }
 
   setMessageHandler(handler: (sessionId: string, msg: Record<string, unknown>, child: ChildProcess) => void): void {
@@ -265,6 +291,8 @@ export class WorkerManager {
 
     this.workers.set(sessionId, child);
     this.lastActivity.set(sessionId, Date.now());
+    this.workerGenerationCounter += 1;
+    this.workerGenerationByChild.set(child, this.workerGenerationCounter);
 
     // C5: Transition state after worker is registered. The caller may have already
     // transitioned (e.g. handlePostChat uses transitionState as a concurrency lock),
@@ -290,6 +318,16 @@ export class WorkerManager {
     }
 
     child.on('exit', (code, signal) => {
+      // Every exit is reported, including a worker that was already replaced:
+      // a caller holding a handle to that child must learn that it died.
+      try {
+        this.onWorkerExit?.(sessionId, child);
+      } catch (err) {
+        this.logger.warn('Worker exit handler failed', {
+          sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       // Only clean up if this child is still the current worker for this session
       const current = this.workers.get(sessionId);
       if (current !== child) {
@@ -698,6 +736,19 @@ export class WorkerManager {
 
   getWorker(sessionId: string): ChildProcess | undefined {
     return this.workers.get(sessionId);
+  }
+
+  /**
+   * The generation of the session's current worker.
+   *
+   * `null` when the session has no live worker. The value changes every time
+   * the worker is replaced, so a caller that captured one can detect that the
+   * worker it holds is no longer the live one.
+   */
+  workerGeneration(sessionId: string): number | null {
+    const child = this.workers.get(sessionId);
+    if (!child) return null;
+    return this.workerGenerationByChild.get(child) ?? null;
   }
 
   hasWorker(sessionId: string): boolean {

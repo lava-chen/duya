@@ -224,20 +224,7 @@ describe('G11-1 goes RED when a client entry value-imports the runtime', () => {
   });
 });
 
-// ## Why the block carries an explicit timeout
-//
-// `collectClientClosureReport()` with no argument walks the whole tree from
-// real roots, and these six cases share one walk done at collection time. The
-// budget is explicit because the default is the thing that bit us: this block
-// sat at 9.9 s single-file on the machine where it was measured, which is under
-// vitest's default by a hair, so adding any sibling file pushed it over. A
-// flaky verdict about whether a client entry still reaches the engine is worse
-// than a slow one — a reader cannot tell a real regression from a clock.
-//
-// Measured after the fix on Windows: 2 files / 27 tests in 17.7 s wall, of
-// which 4.9 s is test time and 16.6 s is collect. The walk dominates collect,
-// so the number to watch is tree size, not test logic.
-describe('G11-1 on the live tree', { timeout: 30_000 }, () => {
+describe('G11-1 on the live tree', () => {
   const reports = collectClientClosureReport();
 
   it('measures both roots, named, one report each', () => {

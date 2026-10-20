@@ -265,6 +265,20 @@ jobs:
       - name: Plan tracking table matches the tree (T02)
         run: npm run plan:sync
 
+      # The rules-compliance checker is the gate that keeps AGENTS.md / CLAUDE.md
+      # honest: it asserts every package ships a rule file of at least 200 bytes
+      # and that every path those files cite still resolves. It was wired to
+      # `npm run test:rules`, but no workflow ever called it — so the 24 package
+      # guides added in #317 had no automated check at all, and neither did the
+      # `path:line` references the docs are built around.
+      #
+      # Its own staleness rule reads file mtimes, and a fresh CI checkout stamps
+      # every file with the checkout time, so that rule is a no-op here by
+      # construction. The other five rules are real assertions, and none of them
+      # touches the network: the LLM call lives behind LIVE=1, which CI never sets.
+      - name: Rule files reference paths that still exist
+        run: npm run test:rules
+
       # Both gates decide "clean" by a count being zero, and a count is also
       # zero when the walk followed nothing. These are guards, not second
       # verdicts: they never re-decide whether the gate passes, only whether it
@@ -347,6 +361,28 @@ jobs:
             npm test 2>&1 | tee vitest-output.log
           fi
 
+      # Plan 610 T04 / G10. This guard used to be an inline heredoc that exited
+      # 1 whenever it could not find the vitest summary line. That made the `test`
+      # job red on every commit of master — run 39040547246, and PR #275's run
+      # 39044714745 carry the same line — with `collected: UNKNOWN`: a verdict
+      # about the guard's own parsing wearing the costume of a suite failure. With
+      # known-red tests on master, a job that is red for an unrelated reason
+      # cannot tell debt from a new regression, so its answer is unusable.
+      #
+      # The real cause, measured on those two job logs: there is NO summary block
+      # to read. `grep -c passed` is 0 in both — vitest's summary always says
+      # "passed" — because the run dies in an unhandled rejection inside the
+      # vitest pool before the reporter prints. The log really does contain ~43k
+      # ESC bytes and 0 literal `^[[` sequences, so "the writer stripped ESC"
+      # was not the cause either; the parser accepts both spellings anyway,
+      # because a guard that rejects an encoding it has not seen reports nothing.
+      #
+      # The exit contract now lives in `scripts/ci/test-summary-guard.mjs` and is
+      # covered by `scripts/ci/test-summary-guard.test.ts`, whose fixtures are
+      # byte-exact captures of those runs. `unread` exits 0: whether the suite
+      # passed is decided by the exit code of the `Run tests` step above, which
+      # `set -o pipefail` already propagates. Only a genuinely zero-collection run
+      # fails here — that one really is a suite failure wearing the guard's name.
       - name: "Guard: tests must actually be collected"
         # Vitest already fails when zero test FILES match, but "files matched
         # and zero tests ran" is still reachable — every file skipped, or an
@@ -363,6 +399,8 @@ jobs:
         # — which is why `guard FAILED: could not read the vitest summary
         # line.` kept appearing no matter what the script said. There is one
         # implementation now, and the workflow calls it.
+        # What this step deliberately does NOT do any more is fail on "could not
+        # parse". See the exit contract in the script.
         if: always()
         shell: bash
         run: node scripts/ci/test-summary-guard.mjs vitest-output.log

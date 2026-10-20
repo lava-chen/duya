@@ -8,6 +8,8 @@ import { createHandleRequest, RouterDeps } from './router';
 import { InteragentRouter } from './interagent-router';
 import { RunOrchestrator, createWorkerExecutionChannel } from '@duya/host/run-orchestrator';
 import { createDesktopNativeRunEventWriter } from './native-run-event-writer';
+import { DesktopPluginAppServerBridge } from './plugin-app-bridge';
+import type { DesktopPluginAppServerRequest } from '../plugin-app-server-rpc';
 
 const PORT = 0;
 const HOST = '127.0.0.1';
@@ -39,8 +41,28 @@ const pendingDbRequests = new Map<string, {
 }>();
 
 const workerDbRequests = new Map<string, import('child_process').ChildProcess>();
+let desktopPluginAppBridge: DesktopPluginAppServerBridge | null = null;
+
+// A worker that exits takes every in-flight request bound to it with it. The
+// Plugin App bridge settles those as failures instead of leaving them to time
+// out, and the database routing entries for that worker go with it: a dead
+// worker cannot answer, so an entry left behind would route a late response
+// to a process that is gone.
+workerManager.setWorkerExitHandler((_sessionId, child) => {
+  desktopPluginAppBridge?.workerExited(child);
+  for (const [requestId, requestChild] of workerDbRequests) {
+    if (requestChild === child) workerDbRequests.delete(requestId);
+  }
+});
 
 process.on('message', (msg: Record<string, unknown>) => {
+  if (msg.type === 'desktop-plugin-app:request' && typeof msg.requestId === 'string' && desktopPluginAppBridge) {
+    void desktopPluginAppBridge.handle(msg as unknown as DesktopPluginAppServerRequest).then((response) => {
+      process.send?.(response);
+    });
+    return;
+  }
+
   if (msg.type === 'db:response' && typeof msg.id === 'string') {
     const workerChild = workerDbRequests.get(msg.id);
     if (workerChild) {
@@ -205,7 +227,8 @@ const interagentRouter = new InteragentRouter({
   workerDbRequests,
 });
 
-workerManager.setMessageHandler((sessionId, msg) => {
+workerManager.setMessageHandler((sessionId, msg, child) => {
+  if (desktopPluginAppBridge?.handleWorkerMessage(sessionId, msg, child)) return;
   if (msg.type === 'bash_task:update' && msg.sessionId === sessionId) {
     // Forward the bash background task snapshot to the main process so it
     // can rebroadcast to every BrowserWindow. The renderer subscribes via
@@ -371,6 +394,8 @@ const deps: RouterDeps = {
     }),
   }),
 };
+
+desktopPluginAppBridge = new DesktopPluginAppServerBridge(deps.runOrchestrator!, workerManager);
 
 const handleRequest = createHandleRequest(deps, workerDbRequests, activeConnections, () => isShuttingDown);
 

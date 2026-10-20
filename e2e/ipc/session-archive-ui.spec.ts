@@ -221,10 +221,6 @@ test.beforeAll(async () => {
 
   dua = await launchDuya({ namespace });
 
-  // Pin the locale so the label assertions below are deterministic instead of
-  // depending on whatever the host machine's language resolves to.
-  await invokeApi(dua.page, 'settingsDb.set', 'locale', 'en');
-
   // Seed every thread up front, in one pass. `recency_at` is stamped from the
   // clock, so the G8 trio is created with deliberate gaps — otherwise three
   // creates inside the same millisecond tie, and the ordering assertion below
@@ -253,6 +249,35 @@ test.beforeAll(async () => {
     );
   });
 
+  await dua.page.reload({ waitUntil: 'domcontentloaded' });
+  await waitForInteractiveShell();
+
+  // Pin the locale AFTER the onboarding flow can no longer mount. Onboarding
+  // detects `navigator.language` on mount and saves it asynchronously, so a pin
+  // written before the first reload loses the race against that save (it landed
+  // second on a zh-CN host and resurrected the Chinese labels this spec's
+  // English queries assume). The seeded `duya-onboarding-completed` flag above
+  // makes the reload below skip onboarding, so nothing can overwrite it.
+  await invokeApi(dua.page, 'settingsDb.set', 'locale', 'en');
+  // The store rewrites `duya-conversations` between reloads — with a fresh
+  // `lastSyncAt`, which would short-circuit the next hydration. Re-seed it so
+  // the second reload still loads the seeded rows from the database.
+  await dua.page.evaluate(() => {
+    window.localStorage.setItem(
+      'duya-conversations',
+      JSON.stringify({
+        state: {
+          currentView: 'chat',
+          settingsTab: 'general',
+          activeThreadId: null,
+          collapsedProjects: [],
+          expandedThreads: [],
+          lastSyncAt: 0,
+        },
+        version: 0,
+      }),
+    );
+  });
   await dua.page.reload({ waitUntil: 'domcontentloaded' });
   await waitForInteractiveShell();
   await showWorkTab();

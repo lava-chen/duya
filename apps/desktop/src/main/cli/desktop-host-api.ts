@@ -75,8 +75,13 @@ import { createHostLocalGatewayThreadApi } from '@duya/host/local-gateway-thread
 import { createHostLocalSendMessageStateApi } from '@duya/host/local-send-message-state-api';
 import { createHostLocalModelCapabilityApi } from '@duya/host/local-model-capability-api';
 import { createHostLocalProviderModelCapabilityApi } from '@duya/host/local-provider-model-capability-api';
+import { createHostLocalProviderCatalogApi } from '@duya/host/local-provider-catalog-api';
 import { createHostLocalAppConnectionApi } from '@duya/host/local-app-connection-api';
 import { createHostLocalPluginSetupApi } from '@duya/host/local-plugin-setup-api';
+import { createHostPluginAppInstanceApi } from '@duya/host/local-plugin-app-instance-api';
+import { createHostPluginAppGrantApi } from '@duya/host/local-plugin-app-grant-api';
+import { createHostPluginAppInvocationApi, type HostPluginAppInvocationInternalApi } from '@duya/host/local-plugin-app-invocation-api';
+import { createDesktopPluginAppAuthority } from '../plugins/plugin-app-authority';
 import { createHostLocalWorkbenchApi } from '@duya/host/local-workbench-api';
 import { createHostLocalSidebarSectionsApi } from '@duya/host/local-sidebar-sections-api';
 import { createHostLocalUsageApi } from '@duya/host/local-usage-api';
@@ -109,6 +114,8 @@ import { getCoreStores } from '../db/core-connection';
 import { getDatabase } from '../db/connection';
 import { getLogger, LogComponent } from '../logging/logger';
 import { deriveConnectionSlug } from '@duya/plugin-core/mcp/core/alias';
+import { requestAgentServerPluginApp } from '../agents/agent-server-lifecycle';
+import type { PluginAppInvocationResult, PluginAppMcpDescriptor } from '@duya/agent-protocol';
 
 const HOST = '127.0.0.1' as const;
 
@@ -129,6 +136,7 @@ export interface DesktopHostApiHandle {
 let sessionApiClient: HostSessionHttpClient | null = null;
 let runningHandle: DesktopHostApiHandle | null = null;
 let startup: Promise<DesktopHostApiHandle> | null = null;
+let pluginAppInvocationInternalApi: HostPluginAppInvocationInternalApi | null = null;
 
 async function writeRuntimeFile(filePath: string, runtime: HostApiRuntime): Promise<void> {
   const directory = path.dirname(filePath);
@@ -201,6 +209,102 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     stores,
     legacyAttachments: new MainAttachmentStore(mainDatabase),
   });
+  // Plugin App authorization: the durable grant ledger plus the installed
+  // plugin manifests are the only authority, and both Plugin App APIs read
+  // the same one.
+  const pluginAppAuthority = createDesktopPluginAppAuthority(stores.appGrants);
+  const pluginAppInstanceApi = createHostPluginAppInstanceApi(stores.appInstances);
+  const pluginAppGrantApi = createHostPluginAppGrantApi({
+    store: stores.appGrants,
+    authority: pluginAppAuthority,
+  });
+  const workerGenerationByBinding = new Map<string, { generation: number; expiresAt: number }>();
+  const workerGenerationByAttempt = new Map<string, number>();
+  const pruneExpiredPluginAppBindingGenerations = () => {
+    const now = Date.now();
+    for (const [bindingId, binding] of workerGenerationByBinding) {
+      if (now >= binding.expiresAt) workerGenerationByBinding.delete(bindingId);
+    }
+  };
+  const pluginAppWorker = {
+    async describeMcpTools(input: { sessionId: string; runId: string; epoch: number }): Promise<readonly PluginAppMcpDescriptor[]> {
+      const response = await requestAgentServerPluginApp({
+        operation: 'describe-tools', sessionId: input.sessionId, runId: input.runId, epoch: input.epoch,
+      });
+      if (!response.success || !('tools' in response.result) || typeof response.result.workerGeneration !== 'number') {
+        throw new Error('plugin_app_worker_unavailable');
+      }
+      workerGenerationByAttempt.set(`${input.sessionId}:${input.runId}:${input.epoch}`, response.result.workerGeneration);
+      return response.result.tools;
+    },
+    async invokeMcpTool(input: {
+      sessionId: string; runId: string; epoch: number; bindingId: string; nonce: string;
+      toolId: string; schemaRevision: string; capabilityId: string; arguments: Record<string, unknown>; requestId: string;
+    }): Promise<PluginAppInvocationResult> {
+      pruneExpiredPluginAppBindingGenerations();
+      const bindingGeneration = workerGenerationByBinding.get(input.bindingId);
+      if (!bindingGeneration) return { ok: false, code: 'worker_unavailable', message: 'The bound worker is no longer available.' };
+      const response = await requestAgentServerPluginApp({
+        operation: 'invoke-tool', sessionId: input.sessionId, runId: input.runId, epoch: input.epoch,
+        workerGeneration: bindingGeneration.generation, bindingId: input.bindingId, nonce: input.nonce, toolId: input.toolId,
+        schemaRevision: input.schemaRevision, capabilityId: input.capabilityId, arguments: input.arguments,
+      });
+      if (!response.success || !('result' in response.result)) {
+        return { ok: false, code: 'worker_unavailable', message: response.success ? 'Invalid worker response.' : response.error.message };
+      }
+      return response.result.result;
+    },
+  };
+  const pluginAppInvocationCore = createHostPluginAppInvocationApi({
+    getInstance: (instanceId) => pluginAppInstanceApi.getPluginAppInstance(instanceId),
+    authority: pluginAppAuthority,
+    worker: pluginAppWorker,
+    currentRun: async (sessionId) => {
+      const response = await requestAgentServerPluginApp({ operation: 'current-attempt', sessionId });
+      if (!response.success || !('attempt' in response.result) || response.result.attempt === null) return null;
+      const { runId, epoch, workerGeneration } = response.result.attempt;
+      const run = stores.runs.getRun(runId);
+      const currentEpoch = stores.runs.currentEpoch(runId);
+      if (!run || run.session_id !== sessionId || run.status !== 'running' || currentEpoch !== epoch) return null;
+      workerGenerationByAttempt.set(`${sessionId}:${runId}:${epoch}`, workerGeneration);
+      return { runId, epoch };
+    },
+    isCurrentRun: async (sessionId, runId, epoch) => {
+      const run = stores.runs.getRun(runId);
+      if (!run || run.session_id !== sessionId || run.status !== 'running' || stores.runs.currentEpoch(runId) !== epoch) return false;
+      const workerGeneration = workerGenerationByAttempt.get(`${sessionId}:${runId}:${epoch}`);
+      if (!workerGeneration) return false;
+      const response = await requestAgentServerPluginApp({ operation: 'validate-attempt', sessionId, runId, epoch, workerGeneration });
+      return response.success && 'current' in response.result && response.result.current;
+    },
+  });
+  const pluginAppInvocationApi = {
+    ...pluginAppInvocationCore,
+    async bindPluginAppInvocation(input: Parameters<typeof pluginAppInvocationCore.bindPluginAppInvocation>[0]) {
+      const binding = await pluginAppInvocationCore.bindPluginAppInvocation(input);
+      // The binding's epoch is the epoch it was minted under, which is the
+      // epoch its worker generation was captured for. Re-reading the store's
+      // current epoch here would look up a different attempt when the run
+      // advanced during the bind, and would bind the caller's request to a
+      // worker generation that never served the bind.
+      const boundEpoch = pluginAppInvocationCore.bindingEpoch(binding.bindingId);
+      const workerGeneration = boundEpoch === null
+        ? undefined
+        : workerGenerationByAttempt.get(`${binding.sessionId}:${binding.runId}:${boundEpoch}`);
+      if (workerGeneration === undefined) {
+        await pluginAppInvocationCore.revokePluginAppInvocation(binding.bindingId, binding.nonce);
+        throw new Error('plugin_app_worker_replaced');
+      }
+      pruneExpiredPluginAppBindingGenerations();
+      workerGenerationByBinding.set(binding.bindingId, { generation: workerGeneration, expiresAt: Date.now() + 5 * 60_000 });
+      return binding;
+    },
+    async revokePluginAppInvocation(bindingId: string, nonce: string) {
+      workerGenerationByBinding.delete(bindingId);
+      return pluginAppInvocationCore.revokePluginAppInvocation(bindingId, nonce);
+    },
+  };
+  pluginAppInvocationInternalApi = pluginAppInvocationApi;
   const server = new HostSessionHttpServer({
     api,
     localSessionApi: createHostLocalSessionApi({
@@ -241,10 +345,14 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     localProviderModelCapabilityApi: createHostLocalProviderModelCapabilityApi(
       new ProviderModelCapabilityStore(mainDatabase),
     ),
+    localProviderCatalogApi: createHostLocalProviderCatalogApi(),
     localAppConnectionApi: createHostLocalAppConnectionApi(
       new AppConnectionStore(mainDatabase, deriveConnectionSlug),
     ),
     localPluginSetupApi: createHostLocalPluginSetupApi(new PluginSetupStore(mainDatabase)),
+    pluginAppInstanceApi,
+    pluginAppGrantApi,
+    pluginAppInvocationApi,
     localWorkbenchApi: createHostLocalWorkbenchApi(new WorkbenchDataStore(mainDatabase)),
     localSidebarSectionsApi: createHostLocalSidebarSectionsApi(new SidebarSectionsStore(mainDatabase)),
     localUsageApi: createHostLocalUsageApi({
@@ -460,6 +568,11 @@ export function getDesktopHostWorkflowRunApi(): WorkflowRunApiV1 {
 export function getDesktopHostGoalApi(): HostGoalApiV1 {
   if (!sessionApiClient) throw new Error('Desktop Host goal API is not running');
   return sessionApiClient;
+}
+
+export function getDesktopHostPluginAppInvocationApi(): HostPluginAppInvocationInternalApi {
+  if (!pluginAppInvocationInternalApi) throw new Error('Desktop Host Plugin App invocation API is not running');
+  return pluginAppInvocationInternalApi;
 }
 
 export function getDesktopHostModeStateApi(): HostModeStateApiV1 {

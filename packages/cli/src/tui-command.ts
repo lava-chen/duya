@@ -29,6 +29,7 @@ import { startLocalHost } from '@duya/host/local-host';
 import { resolveHostWorkerPath } from './worker-path.js';
 import { captureConsoleToFile } from './tui/console-capture.js';
 import { chatInteractive, createChatSession, write, DIM, RED, RESET } from './chat.js';
+import { OwnedSessions } from './owned-sessions.js';
 
 export interface TuiCommandOptions {
   readonly port?: number;
@@ -109,6 +110,7 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
   }
 
   let sessionId: SessionId;
+  const owned = new OwnedSessions();
   if (options.session !== undefined && options.session.trim().length > 0) {
     sessionId = options.session.trim() as SessionId;
     const existing = await client.readLocalSession(sessionId, { includeAllSessions: true });
@@ -119,6 +121,7 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
   } else {
     const created = await createChatSession(client, { ...options, origin: host.origin, token: host.token });
     sessionId = created.id;
+    owned.own(created.id);
   }
 
   let exitCode = 0;
@@ -132,7 +135,7 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
       ? undefined
       : captureConsoleToFile(host.diagnosticsLogPath);
   try {
-    exitCode = await chatInteractive(client, sessionId, { ...options, origin: host.origin, token: host.token, diagnosticsLogPath: host.diagnosticsLogPath });
+    exitCode = await chatInteractive(client, sessionId, { ...options, origin: host.origin, token: host.token, diagnosticsLogPath: host.diagnosticsLogPath }, owned);
   } finally {
     try {
       await host.close();

@@ -88,6 +88,7 @@ import {
 import { InlineSurface } from './terminal/surface.js';
 import { conversationRegionBottom, type TerminalSize } from './terminal/viewport.js';
 import type { Message as TranscriptMessage, MessageContent } from '@duya/agent-protocol/transcript';
+import type { CommandLocale } from '@duya/command-catalog';
 
 /** DECSET 2026: begin synchronized update. */
 const SYNC_BEGIN = '\x1b[?2026h';
@@ -321,6 +322,8 @@ export interface TUIAppOptions {  /** Window title. */
    * ends up sending `effort: 'high'` rather than merely painting a border.
    */
   readonly onEffortChange?: (effort: string | null) => void;
+  /** Shared Desktop/TUI language preference; slash descriptions update live. */
+  readonly onLocaleChange?: (locale: CommandLocale) => void;
   /** Thinking blocks in the transcript. `/settings` can flip this live. */
   readonly showThinking?: boolean;
   /** Show tool result bodies without per-block expansion. */
@@ -345,6 +348,7 @@ export interface TUIAppOptions {  /** Window title. */
  */
 export interface TuiLivePreferences {
   readonly effort?: string | null;
+  readonly locale?: CommandLocale;
   /**
    * `null` means "follow the environment", which is what the `system` setting
    * row means; the renderer re-probes rather than holding a resolved name.
@@ -418,6 +422,8 @@ export class TUIApp {
   private readonly model = new TranscriptModel();
   private readonly editor = new InputEditor();
   private readonly overlay = new OverlayState();
+  /** Permission events and Host polling can report the same pending ask. */
+  private readonly permissionRequestIds = new Set<string>();
   /** Login/provider wizard prompt. Values never pass through the chat editor. */
   private interactivePrompt: InteractivePrompt | null = null;
   private interactivePromptResolver: ((value: string | null) => void) | null = null;
@@ -814,6 +820,7 @@ export class TUIApp {
    */
   applyTuiPreferences(patch: TuiLivePreferences): void {
     if (patch.effort !== undefined) this.options.onEffortChange?.(patch.effort);
+    if (patch.locale !== undefined) this.options.onLocaleChange?.(patch.locale);
     if (patch.theme !== undefined) this.setTheme(patch.theme);
     if (patch.showThinking !== undefined) this.showThinking = patch.showThinking;
     if (patch.expandBlocks !== undefined) this.expanded = patch.expandBlocks;
@@ -1888,6 +1895,8 @@ export class TUIApp {
       readonly destructive?: boolean;
     },
   ): Promise<PermissionDecision | null> {
+    if (this.permissionRequestIds.has(request.requestId)) return Promise.resolve(null);
+    this.permissionRequestIds.add(request.requestId);
     // A permission question outranks any modal window; the manager and the
     // overlay share one box, so leaving the window open would let the next
     // paint draw it over the question.

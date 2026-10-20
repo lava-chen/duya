@@ -47,10 +47,33 @@ const settle = async (): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, 60));
 };
 
-const CATALOG = [
-  { providerId: 'deepseek', modelId: 'deepseek-flash', contextWindow: 1_000_000, supportsReasoning: true, source: 'preset', updatedAt: 0 },
-  { providerId: 'deepseek', modelId: 'deepseek-pro', contextWindow: 200_000, source: 'preset', updatedAt: 0 },
-];
+const CATALOG = {
+  providers: [
+    {
+      providerId: 'deepseek',
+      name: 'DeepSeek',
+      providerType: 'openai-compatible',
+      hasApiKey: true,
+      models: [
+        {
+          modelId: 'deepseek-flash',
+          contextWindow: 1_000_000,
+          supportsReasoning: true,
+          reasoningEffortOptions: ['low', 'medium', 'high'],
+        },
+        { modelId: 'deepseek-pro', contextWindow: 200_000 },
+      ],
+    },
+    {
+      providerId: 'minimax-cn',
+      name: 'MiniMax CN',
+      providerType: 'anthropic',
+      hasApiKey: true,
+      models: [{ modelId: 'MiniMax-M3', contextWindow: 1_000_000 }],
+    },
+  ],
+  configRoot: '/tmp/duya-config',
+};
 
 function session(): Record<string, unknown> {
   return { id: 's1', providerId: 'deepseek', model: 'deepseek-flash' };
@@ -65,7 +88,7 @@ describe('/model in the TUI', () => {
     const command = resolveTuiSlashCommand('model');
     if (command === undefined) throw new Error('/model is not registered');
     const client = {
-      listProviderModelCapabilities: async () => CATALOG,
+      getProviderCatalog: async () => CATALOG,
       update: async () => ({ updated: true, session: session() }),
     };
     const running = command.run(
@@ -75,10 +98,15 @@ describe('/model in the TUI', () => {
     await settle();
 
     const panel = (app as unknown as { inlineInputLines: string[] }).inlineInputLines.map(plain).join('\n');
-    expect(panel).toContain('Select model · deepseek');
+    expect(panel).toContain('Select model · 2 providers');
     // The current model is first and says so, with pi's units in its qualifier.
-    expect(panel).toContain('❯ deepseek-flash  1.0M ctx · reasoning · current');
-    expect(panel).toContain('deepseek-pro  200k ctx');
+    expect(panel).toContain('❯ deepseek-flash');
+    expect(panel).toContain('DeepSeek · 1.0M ctx · reasoning · low/medium/high · current');
+    expect(panel).toContain('deepseek-pro');
+    expect(panel).toContain('200k ctx');
+    // Another provider's model is in the same list, with its provider named.
+    expect(panel).toContain('MiniMax-M3');
+    expect(panel).toContain('MiniMax CN');
     expect(panel).toContain('type to filter');
     // A secondary page is docked, never an alternate-buffer takeover.
     expect(out()).not.toContain(ALT_BUFFER_ON);
@@ -95,10 +123,14 @@ describe('/model in the TUI', () => {
 
     const command = resolveTuiSlashCommand('model');
     if (command === undefined) throw new Error('/model is not registered');
-    const updates: Array<{ model?: string }> = [];
+    const updates: Array<{ model?: string; providerId?: string }> = [];
     const client = {
-      listProviderModelCapabilities: async () => CATALOG,
-      update: async (_sessionId: string, _expectedUpdatedAt: unknown, patch: { model?: string }) => {
+      getProviderCatalog: async () => CATALOG,
+      update: async (
+        _sessionId: string,
+        _expectedUpdatedAt: unknown,
+        patch: { model?: string; providerId?: string },
+      ) => {
         updates.push(patch);
         return { updated: true, session: { ...session(), model: patch.model } };
       },
@@ -118,5 +150,41 @@ describe('/model in the TUI', () => {
 
     expect(updates).toEqual([{ model: 'deepseek-pro' }]);
     expect(outcome.kind).toBe('session_updated');
+  });
+
+  it('switches the provider with the model when the row belongs to another provider', async () => {
+    const { app, input } = makeApp();
+    app.start();
+    await settle();
+
+    const command = resolveTuiSlashCommand('model');
+    if (command === undefined) throw new Error('/model is not registered');
+    const updates: Array<{ model?: string; providerId?: string }> = [];
+    const client = {
+      getProviderCatalog: async () => CATALOG,
+      update: async (
+        _sessionId: string,
+        _expectedUpdatedAt: unknown,
+        patch: { model?: string; providerId?: string },
+      ) => {
+        updates.push(patch);
+        return { updated: true, session: { ...session(), ...patch } };
+      },
+    };
+    const running = command.run(
+      { client: client as never, session: session() as never, tui: app, busy: false },
+      '',
+    );
+    await settle();
+
+    // Third row is the other provider's model.
+    press(input, 'down');
+    press(input, 'down');
+    await settle();
+    press(input, 'return');
+    await running;
+    app.stop();
+
+    expect(updates).toEqual([{ model: 'MiniMax-M3', providerId: 'minimax-cn' }]);
   });
 });

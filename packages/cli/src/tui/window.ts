@@ -170,7 +170,13 @@ export class WindowManager {
     // typed in the wrong order should still rank the real match first. The
     // matcher is the same one `@`-file completion uses, so the ranking the
     // user learned in the popup is the ranking they get here.
-    return fuzzyFilter(spec.items, this.filter, (item) => item.label);
+    //
+    // The DESCRIPTION is part of the searchable text, not decoration: a model
+    // row's qualifier names its provider, so typing a provider name has to
+    // narrow the list to that provider's models.
+    return fuzzyFilter(spec.items, this.filter, (item) => (
+      item.description === undefined ? item.label : `${item.label} ${item.description}`
+    ));
   }
 
   /**

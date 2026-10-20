@@ -30,30 +30,45 @@ import {
 } from '@/lib/context-usage-utils';
 import { modelCapabilityService } from '@/lib/providers/models/ModelCapabilityService';
 import { computeContextEstimate, findModelById, resolveContextWindow } from '@duya/ai';
+import { getActiveLocale } from '@/i18n';
 
 function helpText(): string {
+  const locale = getActiveLocale();
+  const chinese = locale === 'zh';
   const byCategory = getCommandsForPlatform('app');
   const groups = new Map<string, string[]>();
   for (const cmd of byCategory) {
     const alias = cmd.aliases?.length ? ` (/${cmd.aliases.join(', /')})` : '';
     const args = cmd.argsHint ? ` ${cmd.argsHint}` : '';
-    const desc = cmd.descriptionZh ?? cmd.description;
+    const desc = chinese ? cmd.descriptionZh ?? cmd.description : cmd.description;
     const line = `/${cmd.name}${args}${alias} — ${desc}`;
     const list = groups.get(cmd.category) ?? [];
     list.push(line);
     groups.set(cmd.category, list);
   }
   const order = ['session', 'config', 'info', 'tools', 'exit'];
-  const lines: string[] = ['可用命令 / Available commands:', ''];
+  const categoryLabelsZh: Readonly<Record<string, string>> = {
+    session: '会话',
+    config: '设置',
+    info: '信息',
+    tools: '工具',
+    exit: '退出',
+  };
+  const lines: string[] = [chinese ? '可用命令：' : 'Available commands:', ''];
   for (const category of order) {
     const list = groups.get(category);
     if (!list?.length) continue;
-    lines.push(`[${category}]`);
+    const title = chinese ? categoryLabelsZh[category] ?? category : category;
+    lines.push(`[${title}]`);
     lines.push(...list.map((l) => `  ${l}`));
     lines.push('');
   }
-  lines.push('输入 ! 开头可直接执行 shell 命令（如 !ls）。');
-  lines.push('未知的 /command 会作为普通消息发送给 agent。');
+  lines.push(chinese
+    ? '输入 ! 开头可直接执行 shell 命令（例如 !git status）。'
+    : 'Start a line with ! to run a shell command (for example, !git status).');
+  lines.push(chinese
+    ? '未知的 /command 会作为普通消息发送给 agent。'
+    : 'An unknown /command is sent to the agent as a regular message.');
   return lines.join('\n');
 }
 

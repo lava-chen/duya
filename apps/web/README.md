@@ -1,7 +1,8 @@
 # Duya local Web transport
 
-This workspace currently provides the T40a Node BFF, not a browser UI. It
-connects to an existing standalone Host and listens only on `127.0.0.1`.
+This workspace currently provides the T40a Node BFF and a browser client that
+mounts `@duya/ui` (see `src/main.tsx`). It connects to an existing standalone
+Host and listens only on `127.0.0.1`.
 
 Start the local Host with `duya serve`, then from the repository root:
 
@@ -35,7 +36,7 @@ Mutation requests require exact same-origin `Origin`, JSON content type,
 and `x-duya-csrf` from bootstrap. Cross-site fetches and foreign Host headers
 are rejected. The server exposes no arbitrary proxy and adds no CORS grants.
 SSE preserves Host envelopes/sequence numbers and aborts the upstream reader
-on browser disconnect. This slice includes no HTML/static server, App iframe,
+on browser disconnect. This slice includes no App iframe,
 remote deployment, or authentication for network access.
 
 Tests use a real Host HTTP listener and temporary SQLite storage. Run
