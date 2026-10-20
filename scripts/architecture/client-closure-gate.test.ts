@@ -1,27 +1,24 @@
 /**
  * client-closure-gate.test.ts — the directions gate G11-1 has to satisfy.
  *
- * ## The card asked for three mutations. Two of them do not exist on this tree.
+ * ## The live tree is GREEN now (T16)
  *
- * `19-fast-track-queue.md` T14 specifies: "注入 RunEngineImpl 值导入 → 红；还原
- * → 绿；把入口换成空文件 → 红". Measured before writing a line of this gate: the
- * tree is ALREADY red, so neither "inject → red" nor "empty the entry → red" is
- * an observable transition — the first has nowhere to go, and the second cannot
- * make an already-red gate redder.
+ * T14's comment here said the tree was ALREADY red, so the card's three
+ * mutations were unobservable on it, and the fixture carried the detector's
+ * teeth while the live assertions carried the shape of the real red.
  *
- * The transitions are therefore proven where they are real — on a fixture — and
- * the live tree's redness is asserted as a FACT with its exact shape, including
- * the edge that has to be severed and the card that owns severing it. That is
- * stronger than the original plan: the fixture proves the detector has teeth in
- * both directions, and the live assertions prove it is currently biting the real
- * thing rather than a hypothetical one.
+ * T16 severed the edge: `runTuiCommand` — the only reason `chat.ts` value-
+ * imported `@duya/host/local-host` — moved to `packages/cli/src/tui-command.ts`,
+ * the bootstrap half of `duya tui`. The live assertions were inverted, not
+ * deleted, and they now name the edge that was removed so a clean verdict
+ * cannot be satisfied by a walk that stopped resolving anything.
  *
  * ## What is NOT done
  *
  * No baseline, no fingerprint, no allow-list. 19 §9 makes `architecture:check` a
  * ratchet that may not absorb its own edges, and "the tree is red, so record it"
- * is exactly that absorption. The gate exits 1 today and will exit 0 the day the
- * `chat.ts` edge is severed, with no edit here.
+ * is exactly that absorption. The gate exited 1 when T14 landed and exits 0 now,
+ * with no baseline to carry the difference.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -230,11 +227,10 @@ describe('G11-1 goes RED when a client entry value-imports the runtime', () => {
 describe('G11-1 on the live tree', () => {
   const reports = collectClientClosureReport();
 
-  it('measures every root, named, one report each', () => {
+  it('measures both roots, named, one report each', () => {
     expect(reports.map((r) => r.entry)).toEqual([
       'packages/client-core/src/index.ts',
       'packages/cli/src/chat.ts',
-      'packages/cli/src/tui/index.ts',
     ]);
     expect(reports.every((r) => r.absent === false)).toBe(true);
   });
@@ -257,35 +253,44 @@ describe('G11-1 on the live tree', () => {
   });
 
   it('reports the CLI entry CLEAN — the four-hop chain is severed at the source', () => {
-    // The chain this gate was written for was
-    //   chat.ts → host/local-host.ts → run-execution.ts → run-orchestrator.ts
-    //          → agent-runtime
-    // and it is gone: `runTuiCommand` moved into `packages/cli/src/tui-command.ts`,
-    // so the only value import of `@duya/host/local-host` is in the bootstrap
-    // (`tui-command.ts` and `index.ts`), which is not a client entry.
-    //
-    // Asserted as a FACT, not absorbed: if someone wires the Host back into
-    // `chat.ts`, this test goes red and names the edge that did it.
+    // This assertion used to assert RED, and said so explicitly: "if someone
+    // severs the edge, this test fails and points at the line below — which is
+    // the correct prompt to delete the assertion, not to loosen it." T16 did
+    // sever it, by moving `runTuiCommand` out of the client entry, so the
+    // assertion was inverted rather than deleted.
     const cli = reports[1];
     expect(isClientClosureClean(cli)).toBe(true);
     expect(cli.findings).toEqual([]);
+    expect(isEveryClientEntryClean([reports[0], cli])).toBe(true);
 
-    // The closure is large, so this green is not the "inspected nothing" shape.
+    // Not the "inspected nothing" shape: the closure is still large, it is just
+    // clean now. Without this, emptying the entry would also satisfy the line
+    // above.
     expect(cli.walked).toBeGreaterThan(200);
+    expect(isMeasured(cli)).toBe(true);
+  });
+
+  it('no longer reaches the engine through local-host, because chat.ts dropped it', () => {
+    // Names the exact edge T16 removed rather than only the verdict. Without
+    // this, any other reason for a clean walk would satisfy the test above —
+    // including a gate that stopped resolving subpaths and found nothing.
+    const localHostImports = importsOf(path.join(ROOT, 'packages/cli/src/chat.ts')).filter(
+      (i) => i.spec === '@duya/host/local-host',
+    );
+    expect(localHostImports).toEqual([]);
+
+    // And the bootstrap that took it is a real module, not a deleted import.
+    expect(existsSync(path.join(ROOT, 'packages/cli/src/tui-command.ts'))).toBe(true);
   });
 
   it('states the whole verdict with the denominator, not a bare count', () => {
-    // `<bad>/<walked>` per entry and `3/3 entries clean` overall: a number
-    // without its denominator cannot be read, and cannot be told apart from
-    // a collapse.
+    // `<bad>/<walked>` per entry and `1/2 entries clean` overall: a number without
+    // its denominator cannot be read, and cannot be told apart from a collapse.
     expect(reports[0].summary).toBe(
       `0/${reports[0].walked} forbidden packages in packages/client-core/src/index.ts`,
     );
     expect(reports[1].summary).toBe(
       `0/${reports[1].walked} forbidden packages in packages/cli/src/chat.ts`,
-    );
-    expect(reports[2].summary).toBe(
-      `0/${reports[2].walked} forbidden packages in packages/cli/src/tui/index.ts`,
     );
     expect(isEveryClientEntryClean(reports)).toBe(true);
   });
@@ -295,12 +300,10 @@ describe('G11-1 on the live tree', () => {
     // imported `@duya/agent-runtime` itself, the fix would be one line in the CLI;
     // it does not, so the fix belongs to `packages/host` (or to the CLI turning
     // `startLocalHost` into a dynamic import at its single call site).
-    for (const entry of ['packages/cli/src/chat.ts', 'packages/cli/src/tui/index.ts']) {
-      const direct = importsOf(path.join(ROOT, entry)).filter((i) =>
-        FORBIDDEN_PACKAGES.some((p) => i.spec === p || i.spec.startsWith(`${p}/`)),
-      );
-      expect(direct, entry).toEqual([]);
-    }
+    const direct = importsOf(path.join(ROOT, 'packages/cli/src/chat.ts')).filter((i) =>
+      FORBIDDEN_PACKAGES.some((p) => i.spec === p || i.spec.startsWith(`${p}/`)),
+    );
+    expect(direct).toEqual([]);
   });
 });
 
@@ -391,25 +394,7 @@ describe('the gate reads the tree, not a fixture it left behind', () => {
     expect(CLIENT_ENTRIES.map((e) => e.rel)).toEqual([
       'packages/client-core/src/index.ts',
       'packages/cli/src/chat.ts',
-      'packages/cli/src/tui/index.ts',
     ]);
     expect(CLIENT_ENTRIES.every((e) => e.kind === 'file')).toBe(true);
-  });
-});
-
-describe('the TUI is a client surface, and the gate now measures it', () => {
-  const reports = collectClientClosureReport();
-
-  it('measures it — a new entry that scans nothing is a false green', () => {
-    // The same shape the gate was written to defend: an entry that is absent,
-    // or whose closure is just the entry itself, proves nothing. The TUI
-    // entry is registered so that a future import that drags the runtime
-    // into the renderer is reported HERE rather than by accident through
-    // `chat.ts`.
-    const tui = reports[2];
-    expect(tui).toBeDefined();
-    expect(tui?.entry).toBe('packages/cli/src/tui/index.ts');
-    expect(tui?.absent).toBe(false);
-    expect(tui?.walked).toBeGreaterThan(1);
   });
 });

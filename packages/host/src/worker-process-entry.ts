@@ -3102,13 +3102,14 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                 typeof command.toolId !== 'string' || typeof command.schemaRevision !== 'string' ||
                 typeof command.capabilityId !== 'string' || command.arguments === null ||
                 typeof command.arguments !== 'object' || Array.isArray(command.arguments)) break;
-            const result = await requireWorkerSession().invokePluginAppMcpTool({
+            const result = await withWorkerDbRunContext({ sessionId: command.sessionId, runId: command.runId, epoch: command.epoch }, () =>
+              requireWorkerSession().invokePluginAppMcpTool({
                 runId: command.runId,
                 toolId: command.toolId,
                 schemaRevision: command.schemaRevision,
                 arguments: command.arguments,
                 isBindingCurrent: () => pluginAppBindingDb.isCurrent(command.bindingId, command.nonce, command.toolId),
-            });
+              }));
             sendToMain({
                 type: 'plugin-app:result', sessionId: command.sessionId, runId: command.runId,
                 epoch: command.epoch, requestId: command.requestId, result,

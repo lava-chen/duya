@@ -53,7 +53,7 @@ export interface RuntimeToolDefinition {
   mcpInfo?: {
     serverName: string;
     toolName: string;
-    source: 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown';
+    source: 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown' | 'app';
     connectionId?: string;
     pluginId?: string;
   };

@@ -7,7 +7,18 @@ export type MCPConnectionStatus =
   | 'error'
   | 'degraded';
 
-export type MCPToolSource = 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown';
+/**
+ * Provenance bucket of an MCP server, as the runtime permission gate
+ * sees it.
+ *
+ * `'app'` is the app layer's own bucket (plan 616): the host-owned
+ * `duya_app` server. It is NOT `bundled`. `bundled` short-circuits the
+ * permission chain to `allow`; `app` must not, because the app layer owns
+ * tools that reach outside the app (sending messages to users, scheduling
+ * routines) and those still need the catastrophic check, the host standing
+ * switch and the risk tiers. See plan 616 §C9.
+ */
+export type MCPToolSource = 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown' | 'app';
 
 export interface MCPSamplingRateLimitConfig {
   maxRpm?: number;
