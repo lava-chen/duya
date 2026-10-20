@@ -18,12 +18,14 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  schedule:
+    # Cross-platform regression signal without charging every merge for the full matrix.
+    - cron: '20 10 * * *'
 
-# One run per ref. Without this, three pushes in a row start three full
-# pipelines at once; the older ones keep burning runners and report on a tree
-# nobody will merge. Superseded runs are cancelled instead.
+# Keep the scheduled run independent so a new push cannot cancel the nightly
+# cross-platform signal.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -294,8 +296,43 @@ jobs:
         if: always()
         run: node scripts/architecture/gate-scan-guard.mjs a1
 
+  # ── Resolve changed-file scopes once for both test and build jobs ─────────
+  changes:
+    name: test scope
+    runs-on: ubuntu-latest
+    outputs:
+      unit_scope: ${{ steps.resolve.outputs.unit_scope }}
+      e2e_scope: ${{ steps.resolve.outputs.e2e_scope }}
+      build_scope: ${{ steps.resolve.outputs.build_scope }}
+      e2e_files: ${{ steps.resolve.outputs.e2e_files }}
+      unit_files: ${{ steps.resolve.outputs.unit_files }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Resolve test scope
+        id: resolve
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # For pull_request events, github.sha is a synthetic merge commit.
+          # Diff the PR's own head so commits newly merged to master are not
+          # misclassified as changes from this PR.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: npm run ci:test-scope
+
   # ── Typecheck + tests ─────────────────────────────────────────────────────
   test:
+    if: >-
+      github.event_name != 'push' &&
+      (needs.changes.outputs.unit_scope != 'skip' || needs.changes.outputs.e2e_scope != 'skip')
+    needs: changes
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -303,22 +340,19 @@ jobs:
       # moment one OS fails, and a cancelled leg is reported as `cancelled` —
       # not `passed`, but it reads like an absence of evidence rather than a
       # result, and a half-cancelled matrix is easy to misread as "only the
-      # broken OS is broken". The cost is runner minutes on master pushes,
-      # where a failing ubuntu leg also pays for windows and macos to finish.
-      # That is the deliberate price of every leg reporting a true result.
+      # broken OS is broken". The scheduled matrix keeps each platform leg
+      # running to a real result even when another platform fails.
       fail-fast: false
       matrix:
-        # PRs run one leg. The suite is long, `test` is not a required check
-        # (master's baseline is still red), and a review branch gains little
-        # from three copies of the same assertion. Every push to master still
-        # runs the full 3-OS matrix, so OS-specific regressions surface within
-        # one merge instead of on the next PR.
+        # PRs get one Linux leg; scheduled runs own the full cross-platform suite.
         os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
         node-version: [22.x]
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
@@ -330,6 +364,7 @@ jobs:
         run: npm ci
 
       - name: Run typecheck
+        if: needs.changes.outputs.build_scope != 'skip'
         # The renderer's `tsc --noEmit` aborts the Node process with
         # `Abort trap: 6` (exit 134) on the macOS runner under the default
         # heap — a V8 out-of-memory, not a type error. ubuntu passes the same
@@ -339,26 +374,29 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=6144
         run: npm run typecheck:all
 
-      # `npm test` is red by design today (pre-existing debt). That red is the
-      # signal and it is deliberately left visible: no `|| true`, no
-      # `continue-on-error`, no glob skips. The repo-wide test debt and the
-      # gate that reports it both stay exactly as they are.
-      #
-      # `shell: bash` is set for this step only, so the same
-      # `set -o pipefail` + `tee` pattern works on all three runners and the
-      # summary can be re-read by the guard below. The command executed is
-      # still plain `npm test`; the shell only wraps the log capture. Git
-      # Bash is preinstalled on windows-latest.
       - name: Run tests
+        if: needs.changes.outputs.unit_scope != 'skip'
         shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -o pipefail
-          # Ubuntu is the coverage leg: run the suite ONCE with coverage
-          # instead of following it with a second full `test:coverage` pass.
-          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            npm test -- --coverage 2>&1 | tee vitest-output.log
+          # Keep file execution serial for stable temporary test namespaces.
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ "${{ needs.changes.outputs.unit_scope }}" = "changed" ]; then
+            mapfile -t unit_files < <(node -e 'for (const file of JSON.parse(process.argv[1])) console.log(file)' '${{ needs.changes.outputs.unit_files }}')
+            if [ "${#unit_files[@]}" -eq 0 ]; then
+              echo "Changed unit scope has no test or source targets; refusing to silently skip tests" >&2
+              exit 1
+            fi
+            if [ "${{ needs.changes.outputs.build_scope }}" = "skip" ]; then
+              npx vitest run --no-file-parallelism "${unit_files[@]}" 2>&1 | tee vitest-output.log
+            else
+              npm test -- --changed="$BASE_SHA" --no-file-parallelism 2>&1 | tee vitest-output.log
+            fi
+          elif [ "$GITHUB_EVENT_NAME" = "schedule" ] && [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            npm test -- --coverage --no-file-parallelism 2>&1 | tee vitest-output.log
           else
-            npm test 2>&1 | tee vitest-output.log
+            npm test -- --no-file-parallelism 2>&1 | tee vitest-output.log
           fi
 
       # Plan 610 T04 / G10. This guard used to be an inline heredoc that exited
@@ -401,12 +439,12 @@ jobs:
         # implementation now, and the workflow calls it.
         # What this step deliberately does NOT do any more is fail on "could not
         # parse". See the exit contract in the script.
-        if: always()
+        if: always() && needs.changes.outputs.unit_scope != 'skip'
         shell: bash
         run: node scripts/ci/test-summary-guard.mjs vitest-output.log
 
       - name: Upload coverage to Codecov
-        if: matrix.os == 'ubuntu-latest'
+        if: github.event_name == 'schedule' && matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@v3
         with:
           files: ./coverage/lcov.info
@@ -414,6 +452,8 @@ jobs:
 
   # ── Build / packaged parity ───────────────────────────────────────────────
   build:
+    if: github.event_name != 'push' && needs.changes.outputs.build_scope != 'skip'
+    needs: [architecture, changes]
     runs-on: ${{ matrix.os }}
     # Plan 587 G0.2: this was `needs: test`, and because `npm test` is red the
     # whole build job was SKIPPED — so `electron:build` and the macOS packaged
@@ -429,17 +469,11 @@ jobs:
     #     genuinely means the build is building something wrong.
     #   * What this costs: `build` no longer runs after the tests, so a
     #     test-only regression will not gate the build job. The test job stays
-    #     a fully visible, independent red — nothing is hidden, it simply is
-    #     not a precondition for building. The real price is runner minutes:
-    #     `build` now runs on every push where architecture is green, which is
-    #     today, i.e. always.
-    needs: architecture
+    #     visible and independent; the platform matrix runs on the schedule.
 
     strategy:
-      # Same rationale as the test matrix: never let one OS's failure cancel
-      # the others. PRs build on ubuntu only — the Windows and macOS legs
-      # (including electron-builder packaging and the .app parity check) run on
-      # every master push, where release-shaped regressions must surface.
+      # PRs build on Ubuntu only; the scheduled matrix retains Windows/macOS
+      # packaging and parity evidence without repeating it after every merge.
       fail-fast: false
       matrix:
         os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
@@ -470,10 +504,32 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=6144
         run: npm run electron:build
 
+      - name: Run affected Electron E2E tests
+        if: >-
+          needs.changes.outputs.e2e_scope != 'skip' &&
+          (github.event_name == 'pull_request' ||
+           (github.event_name == 'schedule' && matrix.os == 'ubuntu-latest'))
+        shell: bash
+        env:
+          E2E_SCOPE: ${{ needs.changes.outputs.e2e_scope }}
+          E2E_FILES: ${{ needs.changes.outputs.e2e_files }}
+        run: |
+          set -o pipefail
+          if [ "$E2E_SCOPE" = "full" ]; then
+            xvfb-run -a npm run test:e2e
+          else
+            mapfile -t e2e_files < <(node -e 'for (const file of JSON.parse(process.argv[1])) console.log(file)' "$E2E_FILES")
+            if [ "${#e2e_files[@]}" -eq 0 ]; then
+              echo "E2E scope was changed but no spec files were selected" >&2
+              exit 1
+            fi
+            xvfb-run -a npm run test:e2e -- "${e2e_files[@]}"
+          fi
+
       - name: Package (macOS only)
         # Run the full electron-builder packaging on macOS so afterPack path
         # bugs (which only manifest inside the .app bundle) are caught on
-        # every master push, not only on release tags.
+        # every scheduled cross-platform run, not only on release tags.
         #
         # `--publish never` is the fix, and it is load-bearing rather than
         # decoration. electron-builder.yml declares a `github` publish provider,
