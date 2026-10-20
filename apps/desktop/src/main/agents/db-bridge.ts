@@ -53,6 +53,7 @@ import {
   getDesktopHostLocalTurnReviewApi,
   getDesktopHostLocalChannelPersistenceApi,
   getDesktopHostProjectApi,
+  getDesktopHostPluginAppInvocationApi,
 } from '../cli/desktop-host-api';
 import { resolveDataRoot } from '@duya/data/data-paths';
 import { normalizePath } from '@duya/data/path-utils';
@@ -334,6 +335,7 @@ export interface DbRequest {
   id: string;
   action: string;
   payload: unknown;
+  trustedPluginAppCaller?: { sessionId: string; runId: string; epoch: number };
 }
 
 export interface DbResponse {
@@ -368,6 +370,7 @@ export async function dispatchDbAction(
   action: string,
   payload: unknown,
   sender?: CommandSenderFacts,
+  trustedPluginAppCaller?: DbRequest['trustedPluginAppCaller'],
 ): Promise<unknown> {
   if (isHostResearchAction(action)) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
@@ -453,6 +456,21 @@ export async function dispatchDbAction(
       // `receipt.write` for every action in this arm did — hands the caller a
       // `{state:'unreadable'}` object where a run row was asked for.
       return receipt.result;
+    }
+
+    case 'plugin-app:binding-current': {
+      const caller = trustedPluginAppCaller;
+      if (!caller || sender?.role !== 'agent-server' || sender.registeredSessionId !== null ||
+          typeof caller.sessionId !== 'string' || typeof caller.runId !== 'string' || !Number.isSafeInteger(caller.epoch)) return false;
+      if (!p || typeof p !== 'object' || Array.isArray(p) ||
+          Object.keys(p).some((key) => !['bindingId', 'nonce', 'toolId'].includes(key)) ||
+          typeof p.bindingId !== 'string' || typeof p.nonce !== 'string' || typeof p.toolId !== 'string') return false;
+      return getDesktopHostPluginAppInvocationApi().isBindingCurrent(
+        p.bindingId,
+        p.nonce,
+        p.toolId,
+        { sessionId: caller.sessionId, runId: caller.runId, epoch: caller.epoch },
+      );
     }
 
     // ==================== Session actions (Host API compatibility adapter) ====================
@@ -2425,7 +2443,7 @@ export async function handleDbRequest(msg: DbRequest, sender?: CommandSenderFact
   const { id, action, payload } = msg;
 
   try {
-    const result = await dispatchDbAction(action, payload, sender);
+    const result = await dispatchDbAction(action, payload, sender, msg.trustedPluginAppCaller);
     return { type: 'db:response', id, success: true, result };
   } catch (error) {
     getLogger().error(`DB request failed: ${action}`, error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.AgentCommunicator);

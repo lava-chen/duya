@@ -1,4 +1,5 @@
 import { spawn, ChildProcess } from 'child_process';
+import { randomUUID } from 'node:crypto';
 import * as path from 'path';
 import * as fs from 'fs';
 import { app, BrowserWindow } from 'electron';
@@ -16,6 +17,7 @@ import { dispatchComputerUseAction } from '../ipc/computer-use';
 import { dispatchCuaTool } from '../ipc/cua-handlers';
 import { handleMemoryTierRpc } from '../memory-state/tier-rpc';
 import { handleBotIdentityRpc } from '../config/bot-identity-rpc';
+import type { DesktopPluginAppServerCall, DesktopPluginAppServerRequest, DesktopPluginAppServerResponse } from './plugin-app-server-rpc';
 
 let agentServerPort: number | null = null;
 let agentServerProcess: ChildProcess | null = null;
@@ -28,6 +30,61 @@ let isShuttingDown = false;
 let restartCount = 0;
 const MAX_RESTART_ATTEMPTS = 10;
 let conductorExecutorProxy: ConductorExecutorProxy | null = null;
+const pendingPluginAppServerRequests = new Map<string, {
+  child: ChildProcess;
+  resolve: (response: DesktopPluginAppServerResponse) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}>();
+
+export function requestAgentServerPluginApp(
+  request: DesktopPluginAppServerCall,
+): Promise<DesktopPluginAppServerResponse> {
+  const child = agentServerProcess;
+  if (!child || child.killed || child.exitCode !== null || !child.send) {
+    return Promise.reject(new Error('plugin_app_agent_server_unavailable'));
+  }
+  const requestId = randomUUID();
+  const message = { ...request, type: 'desktop-plugin-app:request' as const, requestId } as DesktopPluginAppServerRequest;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingPluginAppServerRequests.delete(requestId);
+      reject(new Error('plugin_app_agent_server_timeout'));
+    }, request.operation === 'invoke-tool' ? 360_000 : 35_000);
+    pendingPluginAppServerRequests.set(requestId, { child, resolve, reject, timer });
+    try {
+      child.send(message, (error) => {
+        if (!error) return;
+        const pending = pendingPluginAppServerRequests.get(requestId);
+        if (!pending) return;
+        pendingPluginAppServerRequests.delete(requestId);
+        clearTimeout(timer);
+        reject(error);
+      });
+    } catch (error) {
+      pendingPluginAppServerRequests.delete(requestId);
+      clearTimeout(timer);
+      reject(error instanceof Error ? error : new Error('plugin_app_agent_server_unavailable'));
+    }
+  });
+}
+
+function settlePluginAppServerRequest(child: ChildProcess, response: DesktopPluginAppServerResponse): void {
+  const pending = pendingPluginAppServerRequests.get(response.requestId);
+  if (!pending || pending.child !== child) return;
+  pendingPluginAppServerRequests.delete(response.requestId);
+  clearTimeout(pending.timer);
+  pending.resolve(response);
+}
+
+function rejectPluginAppServerRequests(child: ChildProcess): void {
+  for (const [requestId, pending] of pendingPluginAppServerRequests) {
+    if (pending.child !== child) continue;
+    pendingPluginAppServerRequests.delete(requestId);
+    clearTimeout(pending.timer);
+    pending.reject(new Error('plugin_app_agent_server_restarted'));
+  }
+}
 
 export function setConductorExecutorProxy(proxy: ConductorExecutorProxy | null): void {
   conductorExecutorProxy = proxy;
@@ -129,6 +186,10 @@ export function spawnAgentServer(): Promise<number> {
     let stdoutBuffer = '';
 
     child.on('message', (msg: any) => {
+      if (msg.type === 'desktop-plugin-app:response' && typeof msg.requestId === 'string') {
+        settlePluginAppServerRequest(child, msg as DesktopPluginAppServerResponse);
+        return;
+      }
       if (msg.type === 'bash_task:update' && typeof msg.sessionId === 'string') {
         // Rebroadcast the bash background task snapshot to every renderer.
         // The renderer's useBashTasks hook filters by activeThreadId.
@@ -616,6 +677,7 @@ export function spawnAgentServer(): Promise<number> {
     registerSpawnedWorker(child.pid, 'agent-server', child);
 
     child.on('exit', (code, signal) => {
+      rejectPluginAppServerRequests(child);
       unregisterSpawnedWorker(child.pid, child);
       if (!settled) {
         settled = true;

@@ -484,6 +484,33 @@ export function parsePath(url: string): { pathname: string; parts: string[] } {
  */
 const RUN_LAYER_ONLY_FRAMES: ReadonlySet<string> = new Set(['chat:message_finalized', 'run:event']);
 
+function forwardWorkerDbRequest(
+  sessionId: string,
+  child: ChildProcess,
+  message: Record<string, unknown>,
+  deps: RouterDeps,
+  workerDbRequests: Map<string, ChildProcess>,
+): void {
+  if (typeof message.id !== 'string' || !process.send) return;
+  const forwarded: Record<string, unknown> = { ...message };
+  if (message.action === 'plugin-app:binding-current') {
+    const execution = message.execution;
+    if (execution && typeof execution === 'object' && !Array.isArray(execution)) {
+      const candidate = execution as Record<string, unknown>;
+      const runId = deps.runOrchestrator?.runForSession(sessionId);
+      const attempt = runId ? deps.runOrchestrator?.attemptFor(runId) : null;
+      if (runId && attempt && child === deps.workerManager.getWorker(sessionId) && candidate.sessionId === sessionId &&
+          candidate.runId === runId && Number.isSafeInteger(candidate.epoch) && candidate.epoch === attempt.epoch) {
+        // This context is minted by the Agent Server only after correlating the
+        // worker ChildProcess, its session, and the orchestrator's live attempt.
+        forwarded.trustedPluginAppCaller = { sessionId, runId, epoch: attempt.epoch };
+      }
+    }
+  }
+  workerDbRequests.set(message.id, child);
+  process.send(forwarded);
+}
+
 /** True when the frame is normalised but must not reach an SSE client. */
 export function isRunLayerOnlyFrame(normalized: Record<string, unknown> | null): boolean {
   return normalized !== null && RUN_LAYER_ONLY_FRAMES.has(String(normalized['type']));
@@ -1076,8 +1103,7 @@ async function handlePostChat(
 
         child.on('message', (msg: Record<string, unknown>) => {
           if (msg.type === 'db:request' && typeof msg.id === 'string' && process.send) {
-            workerDbRequests.set(msg.id, child);
-            process.send(msg);
+            forwardWorkerDbRequest(sessionId, child, msg, deps, workerDbRequests);
             return;
           }
           if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
@@ -2568,8 +2594,7 @@ async function lazySpawnWorkerForCompact(
 
   child.on('message', (msg: Record<string, unknown>) => {
     if (msg.type === 'db:request' && typeof msg.id === 'string' && process.send) {
-      workerDbRequests.set(msg.id, child);
-      process.send(msg);
+      forwardWorkerDbRequest(sessionId, child, msg, deps, workerDbRequests);
       return;
     }
     if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {

@@ -20,6 +20,19 @@ The worker accepts the command only over its Host stdin protocol. It resolves ex
 
 ## Implementation sequence
 
+### Desktop bridge execution steps (2026-10-20)
+
+1. Add a finite Main↔Agent Server IPC request map with process-identity fencing,
+   timeouts, and rejection of pending requests on child exit/restart.
+2. In the existing Agent Server orchestrator/WorkerManager, expose only the
+   live attempt, catalog description, and invoke operations; bind every request
+   to the same session/run/epoch and worker generation.
+3. Inject those operations into Desktop's existing Host invocation authority,
+   checking the persisted RunStore epoch and binding generation at the final
+   worker-side authority check.
+4. Add focused tests for active-run refusal, worker replacement, late replies,
+   and final authority recheck; defer UI/iframe integration to `packages/ui`.
+
 1. Preserve the merged Host→worker invocation path and durable instance API; keep the grant store and grant-backed Desktop resolver as the sole consent source. Close the authority inconsistency where capability enumeration can advertise an active-but-drifted grant while descriptor resolution rejects it.
 2. Trace the actual Desktop Agent Server owner and expose its current run/epoch plus existing worker dispatch through a narrow authenticated Main↔Host adapter. Do not create a second engine or infer authority from the Desktop Host API's unrelated local state.
 3. Wire Desktop manifest/grant authority into that live Host, then add a user approval entry point and verify grant, revoke, mapping drift, attempt change, and final-invoke recheck behavior.
