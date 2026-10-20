@@ -200,7 +200,21 @@ export type StartAgentRunResult =
     };
 
 export type CancelAgentRunResult =
-  | { readonly requested: true; readonly runId: RunId }
+  | {
+      readonly requested: true;
+      readonly runId: RunId;
+      /**
+       * The terminal the run reached, when the Host has one.
+       *
+       * The Host settles the run durably BEFORE it acknowledges the cancel,
+       * so the terminal is known by the time the acknowledgement arrives.
+       * Returning it saves the client a second round trip to learn how the
+       * run ended — and how it ended is the difference between a turn the
+       * user stopped and a turn that died, which a client that only sees
+       * `requested` cannot tell apart.
+       */
+      readonly terminal?: RunTerminalState;
+    }
   | { readonly requested: false; readonly runId: RunId; readonly reason: string };
 
 /** One message the caller wants injected into a run that is already executing. */

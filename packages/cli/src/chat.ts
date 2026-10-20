@@ -730,12 +730,31 @@ export async function chatTui(
     if (existing !== undefined) return existing;
     unsettledRunId = runId;
     const pending = client.cancelAgentRun(runId, reason)
-      .then(async () => {
-        const record = await client.getAgentRun(runId);
-        if (record === null || !['completed', 'cancelled', 'failed'].includes(record.status)) {
+      .then(async (result) => {
+        // The Host settles the run durably BEFORE it acknowledges the cancel,
+        // so the terminal normally travels with the acknowledgement. The
+        // extra read is the fallback for a Host that had no terminal to
+        // report — not the normal path.
+        const terminal = result.requested ? result.terminal : undefined;
+        let status: string | undefined = terminal?.status;
+        if (status === undefined) {
+          const record = await client.getAgentRun(runId);
+          status = record?.status;
+        }
+        if (status === undefined || !['completed', 'cancelled', 'failed'].includes(status)) {
           throw new Error('Host has not confirmed that the previous run stopped. Retry after cancellation settles.');
         }
         if (unsettledRunId === runId) unsettledRunId = null;
+        // Say how the run ended. Without this the terminal is only ever seen
+        // as the absence of more output, and a cancelled turn is
+        // indistinguishable from a turn that died.
+        if (!finished && terminal !== undefined) {
+          if (terminal.status === 'failed') {
+            tui.printError(`Run failed: ${terminal.error.code}: ${terminal.error.message}`);
+          } else {
+            tui.printNotice(`Run ${terminal.status}${terminal.stopReason === undefined ? '' : ' (' + terminal.stopReason + ')'}.`);
+          }
+        }
       })
       .catch((error: unknown) => {
         if (!finished) tui.printError(error instanceof Error ? error.message : String(error));

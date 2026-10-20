@@ -416,7 +416,13 @@ export class HostRunExecutionController {
     if (!outcome?.requested) {
       return { requested: false, runId, reason: `run ${runId} is not live or retained by this Host` };
     }
-    return { requested: true, runId };
+    // The terminal travels with the acknowledgement. `cancelRun` settles the
+    // run durably before it returns, so by now the terminal is a fact and not
+    // a guess — and a client that has to ask again to learn how the run
+    // ended is a client that can show "cancelling…" forever.
+    return outcome.terminal === null
+      ? { requested: true, runId }
+      : { requested: true, runId, terminal: outcome.terminal };
   }
 
   watchLiveAgentRunEvents(
