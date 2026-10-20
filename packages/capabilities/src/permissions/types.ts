@@ -11,8 +11,15 @@
  * Provenance bucket of an MCP tool. Used by the unified permission gate to
  * trust first-party / user-configured servers without prompting, while keeping
  * market-installed or manual-path third-party tools behind a prompt.
+ *
+ * `'app'` is the app layer's own bucket (plan 616): the host-owned
+ * `duya_app` server. It is NOT `bundled`. `bundled` short-circuits the
+ * permission chain to `allow`; `app` must NOT, because the app layer owns
+ * tools that reach outside the app (sending messages to users, scheduling
+ * routines) and those still need the catastrophic check, the host standing
+ * switch and the risk tiers. See plan 616 §C9.
  */
-export type McpToolSource = 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown'
+export type McpToolSource = 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown' | 'app'
 
 export const EXTERNAL_PERMISSION_MODES = [
   'acceptEdits',
