@@ -208,16 +208,35 @@ UI 必须知道的硬边界：
   `db-bridge.ts` 直接 import 会拉起整个 Electron Main 图并在 10s 内超时，所以判定逻辑必须可单测。
 - **worker 退出时清掉它的 `workerDbRequests` 路由条目**（`apps/desktop/src/main/agents/server/index.ts`）。
 
-### 证据（`a951f039` + 本轮未提交改动，worktree `wave3-app-state`）
+### 证据（分支 `codex/wave3-app-desktop-bridge`，worktree `wave3-app-state`）
+
+具名测试（本地 Windows）：
 
 - `apps/desktop/src/main/agents/__tests__/plugin-app-trusted-attempts.test.ts` 10/10
 - `apps/desktop/src/main/agents/__tests__/plugin-app-binding-check.test.ts` 9/9
 - `apps/desktop/src/main/agents/server/__tests__/plugin-app-bridge.test.ts` 13/13
 - `apps/desktop/src/main/agents/server/__tests__/plugin-app-bridge-real.test.ts` 7/7（**真实 worker 子进程**）
 - `apps/desktop/src/main/agents/server/__tests__/plugin-app-trusted-attempt.test.ts` 8/8（**真实 RunOrchestrator + 真实 WorkerManager**）
-- 变异证明：去掉 router 的字段剥除 → 1 条红；去掉 foreign-child 判定 → 2 条红；
-  去掉 epoch 判定 → 1 条红；去掉 session/run 交叉判定 → 1 条红；去掉 action 判定 → 1 条红。
-  另两处变异（`attempt.retired`、`execution` 形状）是**冗余防御**，变异后仍全绿——
-  `attemptFor` 已过滤 retired，后续 session/run 判定也覆盖了形状。
+
+变异证明：去掉 router 的字段剥除 → 1 条红；去掉 foreign-child 判定 → 2 条红；
+去掉 epoch 判定 → 1 条红；去掉 session/run 交叉判定 → 1 条红；去掉 action 判定 → 1 条红。
+另两处变异（`attempt.retired`、`execution` 形状）是**冗余防御**，变异后仍全绿——
+`attemptFor` 已过滤 retired，后续 session/run 判定也覆盖了形状。
+
+CI scope：本 PR 只动 `apps/` 与 `packages/`，不碰依赖、vitest 配置、测试发现规则或
+`.github/workflows/`，因此按当前 `test.yml` 走 `scope=changed`（Ubuntu 单腿跑
+`npm test -- --changed=<base>`），外加 typecheck、architecture 与 Ubuntu build。
+
+两处门禁红**不是本车道修的**：master 上的 `check:encoding` 与 `architecture:check`
+各有一条新增违规，owner 已分别在 `5d604efe`（mojibake 源头）与 `5c88a378`
+（受管模块的深导入）修掉，本分支合并了它们。车道内只保留一条提交。
+
+### 未覆盖（不属本 PR 的完成声明）
+
+- `db-bridge.ts` 的 dispatcher 本体**不可单测**：直接 import 会拉起整个 Electron Main 图并在 10s 内超时。
+  它的 Plugin App 判定已抽到可测模块，dispatcher 只做委派。
+- 人工授权 UI、iframe→Main 的 source/origin/nonce 校验、两个 App / 两个实例样本：仍未实现。
+- 仓库全量测试不是可用门禁（master 基线本身红）；本 PR 以 changed scope 的具名结果为证据。
+
 
 
