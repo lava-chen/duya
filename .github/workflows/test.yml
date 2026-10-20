@@ -265,6 +265,20 @@ jobs:
       - name: Plan tracking table matches the tree (T02)
         run: npm run plan:sync
 
+      # The rules-compliance checker is the gate that keeps AGENTS.md / CLAUDE.md
+      # honest: it asserts every package ships a rule file of at least 200 bytes
+      # and that every path those files cite still resolves. It was wired to
+      # `npm run test:rules`, but no workflow ever called it — so the 24 package
+      # guides added in #317 had no automated check at all, and neither did the
+      # `path:line` references the docs are built around.
+      #
+      # Its own staleness rule reads file mtimes, and a fresh CI checkout stamps
+      # every file with the checkout time, so that rule is a no-op here by
+      # construction. The other five rules are real assertions, and none of them
+      # touches the network: the LLM call lives behind LIVE=1, which CI never sets.
+      - name: Rule files reference paths that still exist
+        run: npm run test:rules
+
       # Both gates decide "clean" by a count being zero, and a count is also
       # zero when the walk followed nothing. These are guards, not second
       # verdicts: they never re-decide whether the gate passes, only whether it
