@@ -84,6 +84,7 @@ sandbox, tooling, ui, voice
 | D7 | `docs/exec-plans/README.md` | 修改：索引加本计划一行 | 协调者 |
 | D8 | `tests/rules-compliance.test.mjs` | 修改：修 Windows 分隔符 bug | 协调者 |
 | D9 | `apps/{desktop,web}/AGENTS.md` | 新增：两个 app 的包级指南 | worker × 1 |
+| D10 | `docs/exec-plans/completed/619-architecture-knowledge-map-template.md` | 新增：包级 `AGENTS.md` 的写法模板（新增包时照抄） | 协调者 |
 
 **并发写者必须文件所有权互斥。** 见 §5。
 
