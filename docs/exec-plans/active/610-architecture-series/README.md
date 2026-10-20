@@ -14,6 +14,10 @@ Wave 3 的首轮独占路径与细化合同见 [22 — Wave 3 首轮执行](22-w
 T30 先落 App 声明；T31a 是 bridge kernel，T40a 是本机 Web BFF。
 两者仍需要后续的生产调用与浏览器验收，不以这一轮代表完整 T31/T40 完成。
 
+T31b 的 Host→worker 调用后端切片见 [25 — Wave 3 App invocation](25-wave3-app-invocation.md)：
+Host 拥有 binding、授权复查与 worker 命令通道，但 Desktop 可信 resolver、
+iframe→Main 边界与双实例样例仍未接线，T31/T32 不因此完成。
+
 共享 Agent 平台的架构裁决（职责边界、Rust 取舍、唯一执行事件序列）见
 [17 — 共享 Agent 平台执行计划](17-shared-agent-platform-execution.md)。
 **17 §5 的切片状态已过期**：S0 已收口、S1 基本落地（`15fa4850` / `cdee21d5` /

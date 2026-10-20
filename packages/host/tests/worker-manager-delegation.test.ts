@@ -76,7 +76,7 @@ describe('WorkerManager stale-worker delegation boundary', () => {
       process.send({ type: 'test:ready' });
     `);
 
-    const forwarded: Array<{ sessionId: string; message: Record<string, unknown> }> = [];
+    const forwarded: Array<{ sessionId: string; message: Record<string, unknown>; child: ChildProcess }> = [];
     const manager = new WorkerManager(
       {
         getState: () => 'IDLE',
@@ -89,7 +89,7 @@ describe('WorkerManager stale-worker delegation boundary', () => {
         resolveBetterSqlite3Path: () => path.join(fixtureDir, 'unused-better-sqlite3'),
       },
     );
-    manager.setMessageHandler((sessionId, message) => forwarded.push({ sessionId, message }));
+    manager.setMessageHandler((sessionId, message, child) => forwarded.push({ sessionId, message, child }));
 
     const children: ChildProcess[] = [];
     try {
@@ -134,6 +134,30 @@ describe('WorkerManager stale-worker delegation boundary', () => {
       });
       expect(forwarded.some(({ message }) => message.type === 'db:request' && message.id === staleId)).toBe(false);
 
+      const staleAppendId = 'stale-transcript-append';
+      const staleAppendResponse = nextMessage(oldChild, (message) =>
+        message.type === 'test:received' &&
+        (message.message as Record<string, unknown> | undefined)?.id === staleAppendId,
+      'superseded transcript append response');
+      oldChild.send({
+        type: 'test:emit',
+        id: 'old-late-append',
+        message: {
+          type: 'db:request',
+          id: staleAppendId,
+          action: 'message:append',
+          payload: { sessionId: SESSION_ID, messages: [{ content: 'late old answer' }] },
+        },
+      });
+      const appendReceived = await staleAppendResponse;
+      expect(appendReceived.message).toMatchObject({
+        type: 'db:response',
+        id: staleAppendId,
+        success: false,
+        code: 'superseded_worker',
+      });
+      expect(forwarded.some(({ message }) => message.type === 'db:request' && message.id === staleAppendId)).toBe(false);
+
       // The stale worker's background-task control message remains active while
       // it drains; it is consumed by WorkerManager and never reaches the Host handler.
       const keepDrainingAck = nextMessage(oldChild, (message) => message.type === 'test:ack' && message.id === 'old-still-draining', 'draining worker update');
@@ -159,6 +183,7 @@ describe('WorkerManager stale-worker delegation boundary', () => {
         () => forwarded.some(({ sessionId, message }) => sessionId === SESSION_ID && message.type === currentMessage.type),
         'current worker message forwarding',
       );
+      expect(forwarded.find(({ message }) => message.type === currentMessage.type)?.child).toBe(replacement);
       expect(manager.getWorker(SESSION_ID)).toBe(replacement);
     } finally {
       manager.stopIdleReaper();

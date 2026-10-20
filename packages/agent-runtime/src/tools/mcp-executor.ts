@@ -20,6 +20,8 @@ export interface MCPExecutorPorts<TContext extends object> {
     context: TContext,
     request: ToolPermissionRequest,
   ): Promise<ToolPermissionDecision | undefined>;
+  /** Optional final authority check immediately before the captured side effect. */
+  beforeInvoke?(context: TContext, input: Record<string, unknown>): Promise<boolean>;
   logger?: ToolExecutionLogger;
 }
 
@@ -44,13 +46,32 @@ export function createMCPToolExecutor<TContext extends object>(
   const gateErrorResult = (
     gateKind: 'deny' | 'ask',
     message: string,
-  ): RuntimeToolResult & { metadata: { source: McpToolSource; gateKind: 'deny' | 'ask' } } => ({
+    reason?: 'authority_revoked',
+  ): RuntimeToolResult & { metadata: { source: McpToolSource; gateKind: 'deny' | 'ask'; reason?: 'authority_revoked' } } => ({
     id: `${toolName}-gate`,
     name: toolName,
     result: message,
     error: true,
-    metadata: { source, gateKind },
+    metadata: { source, gateKind, ...(reason === undefined ? {} : { reason }) },
     });
+
+  const guardedInvoke = async (
+    context: TContext | undefined,
+    input: Record<string, unknown>,
+  ): Promise<RuntimeToolResult> => {
+    if (context && ports.beforeInvoke) {
+      let allowed = false;
+      try { allowed = await ports.beforeInvoke(context, input); } catch { allowed = false; }
+      if (!allowed) {
+        return gateErrorResult(
+          'deny',
+          '[MCP permission gate] Invocation authority was revoked before execution.',
+          'authority_revoked',
+        );
+      }
+    }
+    return invoke(input);
+  };
 
   return {
     execute: async (input, _workingDirectory, context) => {
@@ -93,7 +114,7 @@ export function createMCPToolExecutor<TContext extends object>(
               source,
               mode: activeMode,
             }, 'MCP');
-            return invoke(input);
+            return guardedInvoke(context, input);
           }
 
           const userDecision = await ports.requestPermission(context, {
@@ -119,7 +140,7 @@ export function createMCPToolExecutor<TContext extends object>(
               source,
               mode: activeMode,
             }, 'MCP');
-            return invoke(input);
+            return guardedInvoke(context, input);
           }
           if (userDecision === 'deny') {
             logger?.warn?.('[MCP] tool call denied by user', { toolName, source }, 'MCP');
@@ -149,7 +170,7 @@ export function createMCPToolExecutor<TContext extends object>(
         }
       }
 
-      return invoke(input);
+      return guardedInvoke(context, input);
     },
   };
 }

@@ -35,6 +35,7 @@ export * from './workspace-store.js';
 export * from './workspace-identity.js';
 export * from './workspace-resolver.js';
 export * from './plugin-app-instance-store.js';
+export * from './plugin-app-grant-store.js';
 export * from './terminal-history-store.js';
 export * from './gateway-user-map-store.js';
 export * from './gateway-channel-directory-store.js';
