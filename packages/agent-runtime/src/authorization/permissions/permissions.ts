@@ -37,7 +37,7 @@ import {
   recordAutoModeDenial,
   isAutoModeAllowlistedTool,
 } from './classifier.js'
-import { appToolOriginalName, isTrustedAppToolRegistration, type AppToolRegistration } from '@duya/capabilities/AppServer/app-tool-namespace'
+import { appToolOriginalName, appToolVisibleName, isTrustedAppToolRegistration, type AppToolRegistration } from '@duya/capabilities/AppServer/app-tool-namespace'
 import {
   riskTierToBehavior,
   analyzeCommandSafety,
@@ -87,7 +87,7 @@ const GLOBAL_ALWAYS_ALLOWED_TOOLS = new Set([
 /**
  * Does a rule name this tool?
  *
- * A rule names a tool by ONE of its two spellings, and which one it uses
+ * A rule names a tool by ONE of its spellings, and which one it uses
  * is not something the rule can know:
  *
  *   - the ORIGINAL name (`canvas_manage`) — how the rule was written
@@ -104,12 +104,23 @@ const GLOBAL_ALWAYS_ALLOWED_TOOLS = new Set([
  *
  * So the rule is matched against BOTH spellings. A rule that names
  * either one applies to the tool.
+ *
+ * ## The tool itself arrives under a THIRD spelling
+ *
+ * The caller names the tool by the spelling IT holds: the streaming
+ * executor holds the model-visible name, the deferred `tool_invoke`
+ * dispatcher holds the registry's internal key
+ * (`mcp__duya_app__canvas_manage`). The rule knows neither — it was
+ * written by a human. So the rule is matched against the visible
+ * spelling too, which is what keeps a rule written as
+ * `mcp_duya_app_update_state` firing on the deferred path as well.
  */
 function ruleNamesTool(ruleToolName: string, toolName: string): boolean {
   if (ruleToolName === toolName) return true;
   const original = appToolOriginalName(toolName);
   if (original === toolName) return false;
-  return ruleToolName === original;
+  if (ruleToolName === original) return true;
+  return ruleToolName === appToolVisibleName(original);
 }
 
 function toolMatchesRule(
@@ -263,7 +274,8 @@ function canUseAppNameShortcut(
   }
   // No registration at all. The name still decides whether it CLAIMS the
   // app namespace: `appToolOriginalName` rewrites only names that carry
-  // the `mcp_duya_app_` prefix AND resolve against our closed tool set.
+  // the `mcp_duya_app_` prefix (or the registry's `mcp__duya_app__`
+  // internal key) AND resolve against our closed tool set.
   return appToolOriginalName(toolName) === toolName;
 }
 

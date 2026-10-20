@@ -141,6 +141,47 @@ export function isAppToolName(modelVisibleName: string): boolean {
 }
 
 /**
+ * The registry's INTERNAL key for an MCP tool: `mcp__<server>__<tool>`.
+ *
+ * The registry stores MCP tools under their internal key and shows the
+ * model the model-visible name. The permission chain is called with BOTH
+ * spellings: the streaming executor with the visible name (the model's
+ * own spelling) and the deferred `tool_invoke` dispatcher with the
+ * internal key (the registry's storage spelling).
+ *
+ * A tool addressed by one spelling must be recognised under the other.
+ * Otherwise the same rule would apply to a direct call and silently stop
+ * applying to the very same tool reached through the catalog — which is
+ * exactly the hole the namespace was supposed to close.
+ */
+export const DUYA_APP_INTERNAL_KEY_PREFIX = `mcp__${DUYA_APP_SERVER_NAME}__`;
+
+/**
+ * Recover the original tool name from the registry's internal key, or
+ * `undefined` when the key belongs to some other server.
+ *
+ * The same closed set decides here as for the model-visible name: a key
+ * is one of ours only if its tool segment is a tool `duya_app` serves.
+ */
+export function resolveAppToolBaseNameFromInternalKey(internalKey: string): string | undefined {
+  if (!internalKey.startsWith(DUYA_APP_INTERNAL_KEY_PREFIX)) {
+    return undefined;
+  }
+  const base = internalKey.slice(DUYA_APP_INTERNAL_KEY_PREFIX.length);
+  return APP_TOOL_NAME_SET.has(base) ? base : undefined;
+}
+
+/**
+ * The model-visible name of an app tool's original name.
+ *
+ * The inverse of `appToolOriginalName` for the visible spelling — the
+ * namespace is a pure prefix concatenation, so the round trip is exact.
+ */
+export function appToolVisibleName(originalName: string): string {
+  return `${DUYA_APP_TOOL_PREFIX}${originalName}`;
+}
+
+/**
  * The name every product rule is written against.
  *
  * The `duya_app` server's tools reach the model under a namespaced name
@@ -153,6 +194,14 @@ export function isAppToolName(modelVisibleName: string): boolean {
  * around those rules: a rule that says "deny the canvas tools" has to deny
  * them under whichever name they arrive. A tool that is not one of ours
  * resolves to itself, so every caller can use this unconditionally.
+ *
+ * ## It accepts EVERY spelling the tool arrives under
+ *
+ * The same tool reaches the permission chain under two names: the
+ * model-visible one (the streaming executor) and the registry's internal
+ * key (the deferred `tool_invoke` dispatcher). Both must resolve to the
+ * same original name, or the rules would hold for one call path and not
+ * for the other.
  *
  * ## This is a NAME operation, not an identity proof
  *
@@ -174,8 +223,12 @@ export function isAppToolName(modelVisibleName: string): boolean {
  * AUTHORIZATION decisions use `isTrustedAppToolRegistration`, which reads
  * the identity the HOST registered rather than the name the model sees.
  */
-export function appToolOriginalName(modelVisibleName: string): string {
-  return resolveAppToolBaseName(modelVisibleName) ?? modelVisibleName;
+export function appToolOriginalName(toolName: string): string {
+  return (
+    resolveAppToolBaseName(toolName) ??
+    resolveAppToolBaseNameFromInternalKey(toolName) ??
+    toolName
+  );
 }
 
 /**
