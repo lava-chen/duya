@@ -58,8 +58,12 @@ worker 事件
 | `packages/ui/src/services/sse.ts` | 125 | `SseFrameDecoder`（UTF-8 流式、CRLF 归一化） |
 | `packages/ui/src/services/envelope.ts` | 119 | `decodeRunFrame` / `readRunEventEnvelope`（校验 runId/sessionId/seq/timestamp/traceId） |
 | `packages/ui/src/services/run-session-stream.ts` | 339 | 传输抽象（`RunStreamOpener` 端口，非 URL）+ resume cursor + 增量 accept + stall watchdog + backoff |
-| `packages/ui/src/services/host-api.ts` | 283 | `HostApiBridge` 端口 + `createHostHttpBridge`（bearer + SSE 流） |
+| `packages/ui/src/services/host-api.ts` | 293 | `HostApiBridge` 端口 + `createHostHttpBridge`（bearer + SSE 流） |
 | `packages/ui/src/services/ui-run-session.ts` | 201 | 组合层：**自己持有 `RunSession`**，流式与轮询回退投进同一 surface；**终态只报不发明** |
+| `packages/ui/src/services/ui-services-factory.ts` | 143 | **由 bridge 构造 `UiServices` 的唯一实现**（Web/Desktop 共用），只映射不裁决 |
+| `packages/ui/src/services/ui-services-factory.test.ts` | 137 | 5 条定向用例：字段不发明、迟到的列表被丢弃、已放弃的选择不再发请求、start 输入原样透传、Host 拒绝不被吞 |
+| `apps/desktop/src/renderer/lib/desktop-ui-services.ts` | 107 | Desktop 适配器薄壳：只提供端点（`origin` + `token`）与能力报告 |
+| `apps/web/src/client/{sse,envelope}.ts` | 改写 | **改为对 `packages/ui/src/services/*` 的 re-export**，消除第二份实现；导出名不变，Web 既有测试零改动通过 |
 
 设计要点：
 
@@ -71,11 +75,47 @@ worker 事件
 
 | 门禁 | 结果 |
 | --- | --- |
-| `tsc -p packages/ui --noEmit` | **0 错误**（初次跑出 13962 条 TS2307 = 主仓库 `packages/*/dist` 未构建的**环境红**；主仓库 `npm run build:packages` 构建 23 包后归零，剩余 2 条真错误已修） |
+| `tsc --noEmit`（根 tsconfig：覆盖 `packages/ui/**` + `apps/desktop/src/renderer/**`） | **0 错误** |
+| `npm run -w @duya/web typecheck`（`apps/web`） | **0 错误** |
+| `vitest run packages/ui/src/services/ apps/web/tests/client/` | **56/56 通过**（7 文件） |
+| `node scripts/architecture/architecture-check.mjs` | **OK — no new boundary violations**（2877 tolerated） |
+| `npm run typecheck:all` | ⛔ **环境红，未能跑完**（见下） |
 
-修掉的 2 条真错误：`host-api.ts` 的 `toQueryValues` 形参原为 `Record<string, unknown>`，
-而协议的 query 类型是**普通 interface**（无隐式索引签名）⇒ 赋值被拒。已放宽为 `object`，
-调用点不必再写 cast。
+**`typecheck:all` 为什么没跑完**（不是本卡引入的）：
+
+```
+[build-packages 10/10] @duya/agent-runtime
+src/tools/mcp-executor.ts(5,36): error TS2307:
+  Cannot find module '@duya/capabilities/AppServer/app-tool-context'
+```
+
+根因是 worktree 的 `node_modules` 是指向**主仓库**的 junction，
+`node_modules/@duya/capabilities` ⇒ 主仓库 `packages/capabilities`。
+而主检出停在**落后的 `master`（`3c1e26d0`）**，且 `packages/capabilities/` 存在
+**另一 session 的未提交改动**（`MM packages/capabilities/package.json`、
+`?? packages/capabilities/src/AppServer/`）——主仓库的 `dist/AppServer/`
+只有 `in-process-app-server.*`，缺 `app-tool-namespace` 与 `app-tool-context`。
+worktree 自己的 `packages/capabilities/dist/AppServer/` 是**齐的**（它构建成功），
+但 `packages/agent-runtime` 解析 `@duya/capabilities` 时走的是 junction ⇒ 指向落后的主仓库。
+
+⇒ 与本卡改动无关：本卡只碰 `packages/ui/src/services/**`、
+`apps/desktop/src/renderer/lib/**`、`apps/web/src/client/**`，
+`packages/agent-runtime` 不导入其中任何一个。
+根 `tsc --noEmit`（覆盖本卡全部改动面）为 0 错误，可作为等价信号。
+
+**修掉的真错误**（Web 类型检查抓出，非根 tsc 抓出——两者 `lib` 不同）：
+
+1. `services/index.ts` 导出了并不存在的 `RunEventStreamState`（实际名为 `RunStreamState`）
+2. `ui-services-factory.ts` 的第二处 `signal?.aborted === true`：早返回后
+   TS 的控制流分析已把它收窄为 `false | undefined`，故第二次比较被判为「不可能」。
+   已改为经 `abandoned()` 函数读取——abort 是**运行时事实**，
+   类型层面的收窄不该让它变得不可观测。
+3. 测试里 `vi.fn(async () => …)` 未声明参数，`mock.calls[0][0]` 取不到元素。
+
+> 注：测试放在 `packages/ui/src/services/` 而不是 `apps/desktop/src/renderer/`，因为
+> `vitest.config.ts` 的 include 数组**不含** `apps/desktop/src/renderer/**` ——
+> 放在那儿会被 `check-test-coverage` 判为「没有运行器收集的孤儿测试」。
+> 共享的组合层因此下沉到 `packages/ui`，Desktop 侧只留薄壳。
 
 ---
 
@@ -151,48 +191,107 @@ preload 本卡不可改，故仍需接缝。
 
 ## 5. 能力保留清单（不能为接适配器静默删除现有功能）
 
-Desktop 旧路径 `client.startChat` 的 `ChatOptions`
-（`packages/ui/src/lib/stream-session-manager.ts:1991-2034`）带 **20+** 字段；
-而 Host 分支 `uiServices.runs.start`（`packages/ui/src/App.tsx:683-688`）只带 **5** 个
-（`sessionId` / `prompt` / `model` / `effort` / `providerId`）。
+### 5.1 结论先行
 
-**直接切换会静默丢掉下面这些。** 承载路径已查证：
+**Desktop 旧路径与 Host run 路径不是同一条能力面。**
+旧路径（`client.startChat` → agent server → `chat:start`）带 **20+** 个 turn 字段；
+Host run 路径（`startAgentRun` → manifest → `buildLegacyRunInput`）**只带 1 个**。
 
-`StartAgentRunInput.options`（`packages/agent-protocol/src/run-api.ts:167`）
-→ `packages/host/src/run-execution.ts:366` `options: input.options ?? {}`
-→ `packages/host/src/run-orchestrator.ts:2589,2603` `optionsWithManifestBudget(...)` → `ChatStartCommand.options`
-→ `packages/agent-protocol/src/worker-protocol.ts:40-...` `ChatStartCommand.options`
-→ worker `chat:start`（`packages/host/src/worker-process-entry.ts:3107`）
+**所以「适配器接上就切生产入口」会静默删功能。** 下面每一行都带 file:line。
 
-即：**能力字段经 `options` 可无损抵达 worker**，且 `ChatStartCommand.options` 已静态声明
-`permissionModeOverride`(47) / `files`(48) / `agentProfileId`(60) / `outputStyleConfig` /
-`displayContent` / `mentionedSkills` / `mentionedPlugins` / `effort` / `maxTurns` / `allowedTools`。
+### 5.2 两条路径各自读什么（实测）
 
-| 旧路径字段 | 承载点 | 状态 |
+**旧路径**（`packages/host/src/worker-process-entry.ts` 的 `handleChatStart`）读：
+
+`options.files`(1751-1755) · `options.permissionModeOverride`(1851) ·
+`options.titleGenerationModel`(1700) · `options.wakeless`(1691) ·
+`options.messages` / `systemPrompt` / `language` / `mentionedSkills` / `mentionedPlugins` /
+`mentionedProviders` / `agentProfileId` / `model` / `defaultWorkspaceDirectory` /
+`workingDirectory` / `runtimeConfig`（`worker-session-runtime.ts`）
+
+**Host run 路径**（`packages/host/src/worker-run-composition.ts:310-333`）读：
+
+```ts
+attachments: { kind: 'inline', value: [] },
+options: { permissionMode: facts.permissionMode },
+```
+
+**只有 `permissionMode` 一个键，附件是硬空数组。**
+`facts.permissionMode` ← `manifest.permissionPolicy.mode`
+（`worker-headless-run-host.ts:551`）← `intent.permissionMode ?? 'default'`
+（`manifest-factory.ts:204-205`）。
+
+而 `run-execution.ts:340-367` 构造 intent 时**没有设置 `permissionMode`**，也没有设置 `effort`：
+
+| intent 字段 | 来源 | 结果 |
 | --- | --- | --- |
-| `model` / `providerId` | `StartAgentRunInput` 顶层 | ✅ 已通 |
-| `workingDirectory` | `StartAgentRunInput` 顶层 | ✅ 已通 |
-| `effort` | `options.effort` | ✅ `UiStartRunInput` 已扩展 |
-| `permissionModeOverride` | `options.permissionModeOverride` | ⚠️ 需扩展 `UiStartRunInput` |
-| `files`（附件） | `options.files` | ⚠️ 需扩展 + 需确认 worker 侧文件落盘 |
-| `agentProfileId` | `options.agentProfileId` | ⚠️ 需扩展 |
-| `outputStyleConfig` | `options.outputStyleConfig` | ⚠️ 需扩展 |
-| `displayContent` | `options.displayContent` | ⚠️ 需扩展 |
-| `mentionedSkills` / `mentionedPlugins` | `options.*` | ⚠️ 需扩展 |
-| `mentionedProviders` | `options.*` | ⚠️ `ChatStartCommand.options` 未静态声明，**需确认** |
-| `mode` | `options.mode` | ⚠️ 未静态声明，**需确认** |
-| `conductorMode` / `conductorCanvasId` | `options.*` | ⚠️ 未静态声明，**需确认** |
-| `maxTokens` / `maxTurns` | `options.maxTurns` 已声明 / `maxTokens` 未声明 | ⚠️ 部分 |
-| `systemPrompt` / `language` | `options.*` 已声明 | ⚠️ 需扩展 |
-| `titleGenerationModel(+Config)` | `options.*` | ⚠️ 未声明，**需确认** |
-| `providerConfig` | `options.*` | ⚠️ 未声明，**需确认** |
-| `defaultWorkspaceDirectory` | `options.*` | ⚠️ 未声明，**需确认** |
-| `securityScanEnabled` | `options.*` | ⚠️ 未声明，**需确认** |
-| `backgroundTaskResume` / `clientMsgId` | `options.*` / `traceId` | ⚠️ 未声明，**需确认** |
+| `workingDirectory` | `input.workingDirectory`（343-345） | ✅ |
+| `model` / `providerId` / `apiFormat` | `input.*`（346-360） | ✅ |
+| `maxTurns` | `input.options.maxTurns`（335-342） | ✅ |
+| `agentProfileId` | **`defaults.agentProfileId`**（361-363），**不是** input | ⚠️ 只能取默认值 |
+| `permissionMode` | **未设置** | ❌ 恒为 `'default'` |
+| `effort` | **未设置** | ❌ 丢失 |
+| `modes` / `tools` / `permissionRules` / `hostSwitch` | **未设置** | ❌ 丢失 |
 
-「未静态声明」= `ChatStartCommand.options` 的类型里没有该键。`options` 在 Host 侧是
-`Readonly<Record<string, unknown>>` 自由字典，**能**透传；但 worker 侧是否读取该键
-必须逐个查证，**不能假设**。这一列是 Task #4 的工作量主体。
+### 5.3 逐字段矩阵（Desktop 旧路径 → Host run 路径）
+
+| Desktop 旧路径字段 | Host run 路径承载 | 状态 |
+| --- | --- | --- |
+| `model` | `manifest.agent.model` ← `input.model` | ✅ |
+| `providerId` | `manifest.agent.providerId` ← `input.providerId` | ✅ |
+| `workingDirectory` | `manifest.cwd` ← `input.workingDirectory` | ✅ |
+| `maxTurns` | `manifest.budget.maxTurns` ← `input.options.maxTurns` | ✅ |
+| `permissionModeOverride` | `manifest.permissionPolicy.mode` ← `intent.permissionMode` | ❌ **未接线**（恒 `'default'`） |
+| `effort` | `manifest.agent.effort` ← `intent.effort` | ❌ **未接线** |
+| `agentProfileId` | `manifest.agent.profileId` ← `defaults.agentProfileId` | ⚠️ 只能取默认值，**不能按 turn 覆盖** |
+| `files`（附件） | `attachments.value` 恒为 `[]` | ❌ **无通路** |
+| `outputStyleConfig` / `displayContent` / `systemPrompt` / `language` | 无 | ❌ 丢失 |
+| `mentionedProviders` / `mentionedSkills` / `mentionedPlugins` | 无 | ❌ 丢失 |
+| `mode` / `conductorMode` / `conductorCanvasId` | 无 | ❌ 丢失 |
+| `titleGenerationModel(+Config)` / `providerConfig` / `securityScanEnabled` | 无 | ❌ 丢失 |
+| `maxTokens` | 无 | ❌ 丢失 |
+| `defaultWorkspaceDirectory` / `backgroundTaskResume` / `clientMsgId` | 无 | ❌ 丢失 |
+
+`StartAgentRunInput.options`（`agent-protocol/src/run-api.ts:167`）确实是自由字典，
+`run-execution.ts:366` 也确实把它整包传进 `intent.options` ——
+**但 Host run 路径在 `buildLegacyRunInput` 处只取 `permissionMode` 一个键，其余连同
+`intent.options` 一起被丢掉。** 协议能传 ≠ 路径会传。
+
+### 5.4 对本卡的影响
+
+1. `UiStartRunInput` 扩字段**不够**：扩展只让请求带上这些字段，Host run 路径仍然不读。
+2. 附件（`files`）在 Host run 路径上**完全没有载体**，
+   `worker-headless-run-host.ts` 的注释也写明「a headless host has NO wake source and its
+   prompt is a plain string, so no image or document block can reach the turn」。
+3. ⇒ **保留 Desktop 现有能力必须由 Host 侧补**，而 `packages/host/**` 是公共单写者文件
+   （19-plan §3）⇒ **接缝请求 C**（见 §4）。
+
+---
+
+## 4bis. 接缝请求 C（必需）— Host run 路径的能力保全
+
+**改哪个文件**：`packages/host/src/run-execution.ts`（intent 构造，`:340-367`）、
+`packages/host/src/worker-run-composition.ts`（`buildLegacyRunInput`，`:310-333`）、
+`packages/host/src/manifest-factory.ts`（intent → manifest，`:200-252`）。
+
+**为什么不能放自己车道**：`packages/host/**` 属 L-HOST / 公共单写者，19-plan §3。
+
+**要什么**（每条都对应 §5.3 的一行 ❌）：
+
+| # | 要求 | 落点 |
+| --- | --- | --- |
+| C1 | `permissionMode` 能从 start 请求到达 manifest | `run-execution.ts` 填 `intent.permissionMode`（`manifest-factory.ts` 已有该字段） |
+| C2 | `effort` 能从 start 请求到达 manifest | `run-execution.ts` 填 `intent.effort`（`manifest-factory.ts:247` 已在读） |
+| C3 | `agentProfileId` 能按 turn 覆盖 | `run-execution.ts` 用 `input.options.agentProfileId` 优先于 `defaults` |
+| C4 | 附件能到达 turn | `buildLegacyRunInput` 的 `attachments` 不再恒空；需 Host 侧定义承载形态 |
+| C5 | `modes` / `tools` / `permissionRules` / `hostSwitch` 能到达 manifest | `run-execution.ts` 填对应 intent 字段（`RunTurnIntent` 已有） |
+
+**验收**：Host 侧一条测试——用 `startAgentRun` 发起带 `permissionMode`/`effort`/`agentProfileId`
+的 run，断言产出的 manifest 的 `permissionPolicy.mode` / `agent.effort` / `agent.profileId`
+与请求一致；附件另有一条断言其到达 turn 输入。
+
+**不回退方案**：若 C1–C5 不做，T23 只能切「不带附件、不带权限模式覆盖、不带 effort、
+不带 agent profile」的 Desktop —— 那是**删功能**，不是接共享状态。故 **C1–C3 是 T23 上线的硬前置**。
 
 ---
 
@@ -214,9 +313,37 @@ Desktop 旧路径 `client.startChat` 的 `ChatOptions`
 
 ## 7. 未覆盖 / 风险
 
-- **请求 A 未落地前，本卡无法产出真实验收证据**：`packages/ui` 侧已就绪，但没有真实传输就没有真实 run。
-- §5 表格中标「需确认」的能力字段：**逐个查证 worker 侧是否读取**，不得假设透传即生效。
+### 7.1 硬阻塞（不解决就不能切生产入口）
+
+| # | 阻塞 | 归属 | 后果 |
+| --- | --- | --- | --- |
+| A | renderer 读不到 Host durable ledger | App 桥接 / router owner | 没有真实 run ⇒ 无验收证据 |
+| B | 取消动作在 Host 模式下的落点未定 | App 桥接 / router owner | 取消无法只在 ledger 确认后显示完成 |
+| C1 | `permissionMode` 未从 start 请求到达 manifest | **L-HOST**（`packages/host/**`） | 用户选的权限模式**静默失效** |
+| C2 | `effort` 未从 start 请求到达 manifest | L-HOST | 思考档位**静默失效** |
+| C3 | `agentProfileId` 只能取默认值 | L-HOST | 无法按 turn 选 profile |
+| C4 | 附件在 Host run 路径无载体（`attachments.value` 恒空） | L-HOST | **附件功能整体消失** |
+| C5 | `modes` / `tools` / `permissionRules` / `hostSwitch` 未接线 | L-HOST | 模式/工具/规则丢失 |
+
+C1–C4 是**删功能**，不是接共享状态。**T23 的「保留现有能力」这一条无法在 Desktop 侧单独完成。**
+
+### 7.2 本卡已做但未验证到底
+
+- §5.3 矩阵已逐行实测到 file:line，但**没有真实 run 走一遍**证明「丢失」发生在用户面前
+  （真实 run 需要 A 先落地）。
+- `apps/web/src/client/{sse,envelope}.ts` **已收敛**为对 `packages/ui/src/services/*` 的 re-export
+  （两者原本逐字节相同，导出名不变，Web 既有 51 条测试零改动通过）。
+- `apps/web/src/client/run-stream.ts` **仍是第二份实现**：本卡的 `run-session-stream.ts`
+  把传输从 URL 改成了**端口**（`RunStreamOpener`），签名不同，不能直接 re-export。
+  收敛需要改 Web 的 `RunEventStream` 调用点与其测试
+  （`apps/web/tests/client/run-stream.test.ts` 13 条），属**跨车道**改动 ——
+  `apps/web/src/client/**` 归属未在 19-plan §3 列明，**先确认归属再动**。
+
+### 7.3 纪律
+
 - 旧 `subscribeSession` / `startStream` 路径与 Host 路径**不可同时运行**（两份裁决状态）——
-  切换必须一次性，且放在适配完整并验证之后。
+  切换必须一次性，且放在 A + C1–C4 落地并验证之后。
 - `packages/ui/src/App.tsx:150` 的 `return null` 行为保留：没有适配器时 Desktop 仍渲染空白，
   这是现状，不在本卡改动范围内。
+- `apps/desktop/src/renderer/main.tsx` **未改**（未调用 `configureUiServices`）——
+  符合「适配完整并验证后，再切换对应生产入口」。
