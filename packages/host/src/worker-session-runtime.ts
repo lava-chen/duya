@@ -13,7 +13,7 @@ import type { PluginAppInvocationResult, PluginAppMcpDescriptor } from '@duya/ag
 import { validateCatalogToolArguments } from '@duya/agent-runtime/tools/discovery/dispatcherFromRegistry';
 import type { ToolCatalogEntry } from '@duya/agent-runtime/tools/catalog/catalog-types';
 import type { AgentOptions, AgentRuntimeMode, ChatOptions, FileAttachment, Message, AssistantMessage, MessageContent, ToolUseContent, Tool, ToolUse, SSEEvent, SessionInfo, ToolUseContext, ToolResultContent, AgentProgressEvent, AppState, } from '@duya/host/worker-run-contracts';
-import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName } from '@duya/host/worker-prompts/index';
+import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName, hasPromptObserver, reportPromptDigests, sectionDigest, } from '@duya/host/worker-prompts/index';
 import { handleGoalCommand, isGoalControlCommand } from '@duya/host/worker-modes/goal/goal-commands';
 import { handleTranscriptCommand, isTranscriptControlCommand, } from '@duya/host/worker-session/transcript-commands';
 import { sendEvent, buildClipboardWriteEvent } from '@duya/host/worker-transport';
@@ -1527,6 +1527,11 @@ export class WorkerSession implements AgentRuntime {
         logger.info(`[Agent] Using prompt system '${sysName}'${appliedProfile ? ` for profile: ${appliedProfile.name}` : ' (default)'}`);
         logger.info(`[Agent] Resolved prompt profile: enableSections=${JSON.stringify(promptProfile.enableSections ?? [])}, disableSections=${JSON.stringify(promptProfile.disableSections ?? [])}`);
         let systemPromptContent: string;
+        // Host-appended blocks, tracked separately from the PromptSystem
+        // sections: they are concatenated into the same string but they do
+        // not come from a profile, and plan 619 Phase 0 needs to tell the
+        // two apart when asking "what changed between turns".
+        const hostBlocks: { name: string; content: string }[] = [];
         if (options?.disableSystemPrompt) {
             systemPromptContent = '';
             logger.info('[Agent] streamChat: System prompt disabled (empty)');
@@ -1556,6 +1561,7 @@ export class WorkerSession implements AgentRuntime {
             if (readToolExposureConfig().exposure === 'search') {
                 const mcpCatalog = buildMCPCapabilityCatalog(this.activeMCPRegistry.getAllTools().filter((tool) => this.activeMCPRegistry.getOwner(tool.name) === 'mcp'), { entryPoint: 'tool_catalog' });
                 if (mcpCatalog) {
+                    hostBlocks.push({ name: 'host:mcp_catalog', content: mcpCatalog });
                     systemPromptContent = systemPromptContent
                         ? `${systemPromptContent}\n\n${mcpCatalog}`
                         : mcpCatalog;
@@ -1563,22 +1569,26 @@ export class WorkerSession implements AgentRuntime {
             }
             const appsSection = buildAppsSystemSection(getCachedAppConnectionDescriptors());
             if (appsSection) {
+                hostBlocks.push({ name: 'host:apps', content: appsSection });
                 systemPromptContent = systemPromptContent
                     ? `${systemPromptContent}\n\n${appsSection}`
                     : appsSection;
             }
         }
         if (options?.systemPromptPrefix) {
+            hostBlocks.push({ name: 'host:prefix', content: options.systemPromptPrefix });
             systemPromptContent = options.systemPromptPrefix + '\n\n' + systemPromptContent;
             logger.info('[Agent] streamChat: Added system prompt prefix');
         }
         if (appliedProfile) {
             const identityBlock = buildAgentIdentityBlock(appliedProfile);
+            hostBlocks.push({ name: 'host:identity', content: identityBlock });
             systemPromptContent = identityBlock + '\n\n' + systemPromptContent;
         }
         if (!this.omitAgentsMd && !options?.disableSystemPrompt) {
             const agentsMdSection = getAgentsMdManager().buildAgentsMdSection();
             if (agentsMdSection) {
+                hostBlocks.push({ name: 'host:agents_md', content: agentsMdSection });
                 systemPromptContent = systemPromptContent
                     ? `${systemPromptContent}\n\n${agentsMdSection}`
                     : agentsMdSection;
@@ -1597,6 +1607,7 @@ export class WorkerSession implements AgentRuntime {
                 });
                 this._syncBotProfileBaseline(appliedProfile.id, botContext, summaryEpoch);
                 if (botSections) {
+                    hostBlocks.push({ name: 'host:bot', content: botSections });
                     systemPromptContent = systemPromptContent
                         ? `${systemPromptContent}\n\n${botSections}`
                         : botSections;
@@ -1617,11 +1628,24 @@ export class WorkerSession implements AgentRuntime {
                 '- Never guess a deferred tool\'s arguments from its name, description, or search summary. If the schema is missing or stale, read it again before invoking.',
                 '- A catalog or invocation configuration error describes current-session tool availability; it does not prove that the user\'s connector is unauthorized.',
             ].join('\n');
+            hostBlocks.push({ name: 'host:deferred_tool_protocol', content: deferredToolProtocol });
             systemPromptContent = systemPromptContent
                 ? `${systemPromptContent}\n\n${deferredToolProtocol}`
                 : deferredToolProtocol;
         }
+        this._reportHostBlockDigests(hostBlocks);
         return systemPromptContent;
+    }
+
+    /**
+     * Report digests for the host-appended prompt blocks (plan 619 Phase 0).
+     * No-op unless a digest sink is installed.
+     */
+    private _reportHostBlockDigests(blocks: readonly { name: string; content: string }[]): void {
+        if (blocks.length === 0 || !hasPromptObserver()) return;
+        reportPromptDigests(
+            blocks.map((block) => sectionDigest(block.name, block.content, true)),
+        );
     }
     private botProfileBaselines = new Map<string, {
         baseline: ProfileBaseline;

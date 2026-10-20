@@ -37,6 +37,12 @@ import { PromptCache, createPromptCache } from './cache.js'
 import type { PromptProfile } from './modes/types.js'
 import { DEFAULT_PROMPT_PROFILE, isSectionEnabled } from './modes/index.js'
 import { cachedPromptSection, volatilePromptSection } from './constants/promptSections.js'
+import {
+  digestOf,
+  hasPromptObserver,
+  reportPromptDigests,
+  sectionDigest,
+} from './observer.js'
 import { getShellForPrompt } from '@duya/capabilities/utils/shellDetector'
 import { logger } from '../worker-logger.js'
 import { HbsPromptSystem } from './hbs/HbsPromptSystem.js'
@@ -315,8 +321,16 @@ export class PromptSystem {
    * Set `DUYA_DUMP_PROMPT` to a directory path to capture exactly what the
    * model sees — the ground truth for "why did the model behave as if
    * section X did not exist".
+   *
+   * With `DUYA_DUMP_PROMPT_SECTIONS=1` the dump also lands per section:
+   * one file per section plus an `index.json` carrying the digests. That
+   * is how plan 619 Phase 0 answers "which section changed between turns"
+   * — the joined text alone cannot, because the join erases the seams.
    */
-  private maybeDumpPrompt(prompt: readonly string[]): void {
+  private maybeDumpPrompt(
+    prompt: readonly string[],
+    sections?: readonly { name: string; content: string; volatile: boolean }[],
+  ): void {
     const dir = process.env.DUYA_DUMP_PROMPT
     if (!dir) return
     try {
@@ -325,11 +339,44 @@ export class PromptSystem {
       const file = path.join(dir, `${this.config.name}-${stamp}.txt`)
       fs.writeFileSync(file, prompt.join('\n\n'), 'utf-8')
       logger.info(`[PromptSystem] Dumped system prompt to ${file}`)
+      if (process.env.DUYA_DUMP_PROMPT_SECTIONS === '1' && sections) {
+        this.dumpPromptSections(dir, `${this.config.name}-${stamp}`, sections)
+      }
     } catch (error) {
       logger.warn(
         `[PromptSystem] Failed to dump system prompt: ${error instanceof Error ? error.message : String(error)}`,
       )
     }
+  }
+
+  /** Write one file per section plus an index carrying the digests. */
+  private dumpPromptSections(
+    dir: string,
+    basename: string,
+    sections: readonly { name: string; content: string; volatile: boolean }[],
+  ): void {
+    const target = path.join(dir, `${basename}.sections`)
+    fs.mkdirSync(target, { recursive: true })
+    const index = sections.map((section) => ({
+      sectionName: section.name,
+      hash: digestOf(section.content),
+      length: section.content.length,
+      volatile: section.volatile,
+      file: `${section.name}.txt`,
+    }))
+    for (const section of sections) {
+      fs.writeFileSync(
+        path.join(target, `${section.name}.txt`),
+        section.content,
+        'utf-8',
+      )
+    }
+    fs.writeFileSync(
+      path.join(target, 'index.json'),
+      JSON.stringify({ promptSystem: this.config.name, sections: index }, null, 2),
+      'utf-8',
+    )
+    logger.info(`[PromptSystem] Dumped ${sections.length} prompt section(s) to ${target}`)
   }
 
   /** Returns the system name (e.g., 'general', 'code'). */
@@ -521,20 +568,55 @@ export class PromptSystem {
     const volatileResults = await Promise.all(
       volatileSections.map(section => Promise.resolve(section.compute())),
     )
-    const volatileContent = volatileResults.filter(
-      (c): c is string => c !== null,
-    )
+    const volatileContent: string[] = []
+    const volatileNames: string[] = []
+    volatileResults.forEach((content, index) => {
+      if (content === null) return
+      const section = volatileSections[index]
+      if (!section) return
+      volatileContent.push(content)
+      volatileNames.push(section.name)
+    })
 
     // Cached sections: consult cache, populate on miss.
-    const { staticContent } = await this.resolveSections(cachedSections)
+    const { staticContent, staticNames } = await this.resolveSections(cachedSections)
 
     const prompt = asSystemPrompt([
       ...staticContent,
       SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
       ...volatileContent,
     ])
-    this.maybeDumpPrompt(prompt)
+    const sections = [
+      ...staticNames.map((name, index) => ({
+        name,
+        content: staticContent[index] ?? '',
+        volatile: false,
+      })),
+      ...volatileNames.map((name, index) => ({
+        name,
+        content: volatileContent[index] ?? '',
+        volatile: true,
+      })),
+    ]
+    this.reportDigests(sections)
+    this.maybeDumpPrompt(prompt, sections)
     return prompt
+  }
+
+  /**
+   * Report one digest per rendered section (plan 619 Phase 0).
+   *
+   * Only runs when a digest sink is installed or the segmented dump is
+   * enabled — an uninstrumented build skips the hashing entirely.
+   */
+  private reportDigests(
+    sections: readonly { name: string; content: string; volatile: boolean }[],
+  ): void {
+    if (!hasPromptObserver() && process.env.DUYA_DUMP_PROMPT_SECTIONS !== '1') return
+    const digests = sections.map((section) =>
+      sectionDigest(section.name, section.content, section.volatile),
+    )
+    reportPromptDigests(digests)
   }
 
   /**
@@ -543,7 +625,7 @@ export class PromptSystem {
    */
   private async resolveSections(
     cachedSections: PromptSection[],
-  ): Promise<{ staticContent: string[] }> {
+  ): Promise<{ staticContent: string[]; staticNames: string[] }> {
     const slots: (string | null)[] = new Array(cachedSections.length).fill(null)
     const missIndices: number[] = []
     const missSections: PromptSection[] = []
@@ -574,8 +656,16 @@ export class PromptSystem {
       })
     }
 
-    const staticContent = slots.filter((c): c is string => c !== null)
-    return { staticContent }
+    const staticContent: string[] = []
+    const staticNames: string[] = []
+    slots.forEach((content, index) => {
+      if (content === null) return
+      const section = cachedSections[index]
+      if (!section) return
+      staticContent.push(content)
+      staticNames.push(section.name)
+    })
+    return { staticContent, staticNames }
   }
 
   /**
