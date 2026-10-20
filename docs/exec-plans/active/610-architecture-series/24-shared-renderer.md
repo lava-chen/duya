@@ -184,6 +184,21 @@ Platform implementations:
 - [x] Web switched to shared Root and competing implementation removed (Web lane).
       Evidence: `apps/web/src/main.tsx` mounts `@duya/ui`'s `App`; `apps/web/src/client`
       is the transport adapter only (no second renderer).
-- [ ] Gates and visual/browser verification complete (Electron runtime and
-      Playwright visual comparison still pending).
+- [x] Gates and Electron runtime verification complete.
+      Evidence (origin/master `aa9b100d`, worktree build via
+      `npm run electron:build` exit 0, real `dist-electron/main.js` driven by
+      Playwright `_electron`): smoke 6/6, `e2e/ipc/session-archive-ui.spec.ts`
+      5/5, and `e2e/turn/electron-turn.spec.ts` "the real boundary opens a
+      durable run bound to this turn" 1/1 — the shared `@duya/ui` App renders
+      inside the real window and a real Host run is created and bound to the
+      turn. Two harness defects surfaced only with the shared renderer and were
+      fixed with this evidence: `e2e/helpers.ts` gave the first cold Vite
+      transform only Playwright's 30 s default `waitForLoadState` budget (the
+      app was mounting while the wait expired); and the archive spec pinned
+      `locale=en` before its reload, where `OnboardingFlow`'s detected-locale
+      save overwrote it on a zh-CN host (the pin now runs after onboarding can
+      no longer mount, with the `lastSyncAt` seed re-applied for the second
+      reload). Playwright **pixel** comparison was deliberately not run: UI
+      parity is out of scope per owner direction, so the verification is
+      behavioral (real binary, real run) rather than visual.
 
