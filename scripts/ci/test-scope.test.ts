@@ -7,6 +7,7 @@ describe('classifyChangedFiles', () => {
       e2eScope: 'skip',
       buildScope: 'skip',
       e2eFiles: [],
+      unitFiles: [],
     });
   });
 
@@ -16,6 +17,7 @@ describe('classifyChangedFiles', () => {
       e2eScope: 'skip',
       buildScope: 'run',
       e2eFiles: [],
+      unitFiles: ['packages/host/src/run.ts'],
     });
   });
 
@@ -25,6 +27,7 @@ describe('classifyChangedFiles', () => {
       e2eScope: 'changed',
       buildScope: 'run',
       e2eFiles: ['e2e/smoke/smoke.spec.ts'],
+      unitFiles: [],
     });
   });
 
@@ -34,6 +37,7 @@ describe('classifyChangedFiles', () => {
       e2eScope: 'full',
       buildScope: 'run',
       e2eFiles: [],
+      unitFiles: [],
     });
   });
 
@@ -46,6 +50,7 @@ describe('classifyChangedFiles', () => {
       e2eScope: 'changed',
       buildScope: 'run',
       e2eFiles: ['e2e/ipc/system.spec.ts'],
+      unitFiles: ['packages/desktop/src/main/ipc-handler.ts'],
     });
   });
 
@@ -68,6 +73,7 @@ describe('classifyChangedFiles', () => {
       e2eScope: 'full',
       buildScope: 'run',
       e2eFiles: [],
+      unitFiles: [],
     });
   });
 
@@ -84,12 +90,27 @@ describe('classifyChangedFiles', () => {
       unitScope: 'changed',
       e2eScope: 'skip',
       buildScope: 'skip',
+      unitFiles: ['scripts/ci/test-scope.test.ts'],
     });
   });
 
-  it('keeps build and E2E validation for root package manifest changes', () => {
-    expect(classifyChangedFiles(['package.json'])).toMatchObject({
+  it('treats only the CI resolver npm script manifest edit as CI-only', () => {
+    expect(classifyChangedFiles([
+      '.github/workflows/test.yml',
+      'package.json',
+      'scripts/ci/test-scope.mjs',
+      'scripts/ci/test-scope.test.ts',
+    ], { ciRoutingManifestOnly: true })).toMatchObject({
       unitScope: 'changed',
+      e2eScope: 'skip',
+      buildScope: 'skip',
+      unitFiles: ['scripts/ci/test-scope.test.ts'],
+    });
+  });
+
+  it('runs full unit, build and E2E validation for general root manifest changes', () => {
+    expect(classifyChangedFiles(['package.json'])).toMatchObject({
+      unitScope: 'full',
       e2eScope: 'full',
       buildScope: 'run',
     });
@@ -117,6 +138,7 @@ describe('classifyChangedFiles', () => {
       e2eScope: 'full',
       buildScope: 'run',
       e2eFiles: [],
+      unitFiles: [],
     });
   });
 
@@ -126,6 +148,7 @@ describe('classifyChangedFiles', () => {
       e2eScope: 'full',
       buildScope: 'run',
       e2eFiles: [],
+      unitFiles: [],
     });
   });
 
@@ -135,6 +158,7 @@ describe('classifyChangedFiles', () => {
       e2eScope: 'full',
       buildScope: 'run',
       e2eFiles: [],
+      unitFiles: [],
     });
   });
 
@@ -144,6 +168,7 @@ describe('classifyChangedFiles', () => {
       e2eScope: 'skip',
       buildScope: 'skip',
       e2eFiles: [],
+      unitFiles: [],
     });
   });
 });

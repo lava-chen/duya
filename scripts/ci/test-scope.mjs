@@ -31,45 +31,88 @@ function matchesAny(files, patterns) {
 }
 
 /** Classify a PR's changed paths without silently treating unknown files as docs. */
-export function classifyChangedFiles(changedPaths) {
-  const files = [...new Set(changedPaths.map(normalizePath).filter(Boolean))].sort();
+export function classifyChangedFiles(changedPaths, options = {}) {
+  return classifyChangedFilesWithOptions(changedPaths, options);
+}
+
+function classifyChangedFilesWithOptions(changedPaths, { ciRoutingManifestOnly = false } = {}) {
+  const allFiles = [...new Set(changedPaths.map(normalizePath).filter(Boolean))].sort();
+  const files = ciRoutingManifestOnly ? allFiles.filter((file) => file !== 'package.json') : allFiles;
   if (files.length === 0) {
-    return { unitScope: 'full', e2eScope: 'full', buildScope: 'run', e2eFiles: [] };
+    return { unitScope: 'full', e2eScope: 'full', buildScope: 'run', e2eFiles: [], unitFiles: [] };
   }
 
   if (files.every((file) => DOCS_ONLY.test(file))) {
-    return { unitScope: 'skip', e2eScope: 'skip', buildScope: 'skip', e2eFiles: [] };
+    return { unitScope: 'skip', e2eScope: 'skip', buildScope: 'skip', e2eFiles: [], unitFiles: [] };
   }
 
-  const unitFiles = files.filter((file) => !DOCS_ONLY.test(file) && !file.startsWith('e2e/'));
-  const workspaceManifestChanged = unitFiles.some((file) => file !== 'package.json' && /(^|\/)package\.json$/.test(file));
-  const unitInfrastructureChanged = matchesAny(unitFiles.filter((file) => file !== 'package.json'), UNIT_INFRA)
-    || workspaceManifestChanged;
-  const unitScope = unitFiles.length === 0
+  const unitPaths = files.filter((file) => !DOCS_ONLY.test(file) && !file.startsWith('e2e/'));
+  const workspaceManifestChanged = unitPaths.some((file) => file !== 'package.json' && /(^|\/)package\.json$/.test(file));
+  const unitInfrastructureChanged = matchesAny(unitPaths.filter((file) => file !== 'package.json'), UNIT_INFRA)
+    || workspaceManifestChanged
+    || (files.includes('package.json') && !ciRoutingManifestOnly);
+  const unitScope = unitPaths.length === 0
     ? 'skip'
     : unitInfrastructureChanged
       ? 'full'
-      : unitFiles.some((file) => /^(?:apps|packages|scripts|evals|tests|\.github\/workflows)\//.test(file)) || unitFiles.includes('package.json') || fileIsRootTestInput(unitFiles)
+      : unitPaths.some((file) => /^(?:apps|packages|scripts|evals|tests|\.github\/workflows)\//.test(file)) || unitPaths.includes('package.json') || fileIsRootTestInput(unitPaths)
         ? 'changed'
         : 'full';
 
   const e2ePaths = files.filter((file) => file.startsWith('e2e/'));
   const desktopAppChanged = files.some((file) => /^(?:apps\/desktop|packages\/ui)\//.test(file));
-  const e2eInfraChanged = desktopAppChanged
+  const e2eInfraChanged = (!ciRoutingManifestOnly && files.includes('package.json'))
+    || desktopAppChanged
     || matchesAny(files, E2E_INFRA)
     || e2ePaths.some((file) => file === 'e2e/playwright.config.ts' || file === 'e2e/helpers.ts' || !/\.spec\.[cm]?[jt]sx?$/.test(file));
   const e2eFiles = e2ePaths.filter((file) => /\.spec\.[cm]?[jt]sx?$/.test(file));
   const e2eScope = e2eInfraChanged ? 'full' : e2eFiles.length > 0 ? 'changed' : 'skip';
-  const ciOnlyChanges = files.every((file) => DOCS_ONLY.test(file)
+  const ciOnlyChanges = allFiles.every((file) => DOCS_ONLY.test(file)
     || file.startsWith('.github/workflows/')
-    || file.startsWith('scripts/ci/'));
+    || file.startsWith('scripts/ci/')
+    || (ciRoutingManifestOnly && file === 'package.json'));
+  const unitFiles = unitScope === 'changed'
+    ? [...new Set(unitFilesFor(files, ciOnlyChanges))].sort()
+    : [];
 
   return {
     unitScope,
     e2eScope,
     buildScope: ciOnlyChanges ? 'skip' : 'run',
     e2eFiles: e2eScope === 'changed' ? e2eFiles : [],
+    unitFiles,
   };
+}
+
+function unitFilesFor(files, ciOnlyChanges) {
+  const sourceOrTest = files.filter((file) => /^(?:apps|packages|scripts|evals|tests)\/.+\.[cm]?[jt]sx?$/.test(file));
+  if (ciOnlyChanges) {
+    const changedTests = sourceOrTest.filter((file) => /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(file));
+    return changedTests.length > 0 ? changedTests : ['scripts/ci/test-scope.test.ts'];
+  }
+  return sourceOrTest;
+}
+
+function isCiRoutingManifestOnly(baseSha, headSha) {
+  try {
+    const readManifest = (ref) => JSON.parse(execFileSync('git', ['show', `${ref}:package.json`], { encoding: 'utf8' }));
+    const before = readManifest(baseSha);
+    const after = readManifest(headSha);
+    const stripScripts = (manifest) => {
+      const copy = structuredClone(manifest);
+      delete copy.scripts;
+      return copy;
+    };
+    const beforeScripts = { ...before.scripts };
+    const afterScripts = { ...after.scripts };
+    delete afterScripts['ci:test-scope'];
+    return !Object.hasOwn(before.scripts ?? {}, 'ci:test-scope')
+      && after.scripts?.['ci:test-scope'] === 'node scripts/ci/test-scope.mjs'
+      && JSON.stringify(stripScripts(before)) === JSON.stringify(stripScripts(after))
+      && JSON.stringify(beforeScripts) === JSON.stringify(afterScripts);
+  } catch {
+    return false;
+  }
 }
 
 function fileIsRootTestInput(files) {
@@ -78,10 +121,10 @@ function fileIsRootTestInput(files) {
 
 export function getScopesForEvent(eventName, env = process.env) {
   if (eventName === 'schedule') {
-    return { unitScope: 'full', e2eScope: 'full', buildScope: 'run', e2eFiles: [] };
+    return { unitScope: 'full', e2eScope: 'full', buildScope: 'run', e2eFiles: [], unitFiles: [] };
   }
   if (eventName === 'push') {
-    return { unitScope: 'skip', e2eScope: 'skip', buildScope: 'skip', e2eFiles: [] };
+    return { unitScope: 'skip', e2eScope: 'skip', buildScope: 'skip', e2eFiles: [], unitFiles: [] };
   }
   if (eventName !== 'pull_request') {
     throw new Error(`Unsupported workflow event: ${eventName || '(missing)'}`);
@@ -90,15 +133,18 @@ export function getScopesForEvent(eventName, env = process.env) {
   const { BASE_SHA: baseSha, HEAD_SHA: headSha } = env;
   if (!baseSha || !headSha) {
     process.stderr.write('PR base/head SHA unavailable; selecting full unit and E2E suites.\n');
-    return { unitScope: 'full', e2eScope: 'full', buildScope: 'run', e2eFiles: [] };
+    return { unitScope: 'full', e2eScope: 'full', buildScope: 'run', e2eFiles: [], unitFiles: [] };
   }
 
   try {
     const output = execFileSync('git', ['diff', '--name-only', `${baseSha}...${headSha}`], { encoding: 'utf8' });
-    return classifyChangedFiles(output.split(/\r?\n/));
+    const paths = output.split(/\r?\n/);
+    return classifyChangedFilesWithOptions(paths, {
+      ciRoutingManifestOnly: paths.includes('package.json') && isCiRoutingManifestOnly(baseSha, headSha),
+    });
   } catch (error) {
     process.stderr.write(`Could not resolve PR changes; selecting full suites: ${String(error)}\n`);
-    return { unitScope: 'full', e2eScope: 'full', buildScope: 'run', e2eFiles: [] };
+    return { unitScope: 'full', e2eScope: 'full', buildScope: 'run', e2eFiles: [], unitFiles: [] };
   }
 }
 
@@ -108,6 +154,7 @@ function writeOutputs(scopes, outputPath = process.env.GITHUB_OUTPUT) {
     `e2e_scope=${scopes.e2eScope}`,
     `build_scope=${scopes.buildScope}`,
     `e2e_files=${JSON.stringify(scopes.e2eFiles)}`,
+    `unit_files=${JSON.stringify(scopes.unitFiles)}`,
   ].join('\n') + '\n';
   if (outputPath) appendFileSync(outputPath, lines, 'utf8');
   else process.stdout.write(lines);

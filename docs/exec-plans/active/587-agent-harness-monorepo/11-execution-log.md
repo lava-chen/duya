@@ -1359,14 +1359,15 @@ change.
 
 Validation on Windows / Node from the managed worktree:
 
-- `npm test -- scripts/ci/test-scope.test.ts --no-file-parallelism --reporter=dot` with lifecycle scripts disabled — passed (22 tests).
+- `npx vitest run scripts/ci/test-scope.test.ts --no-file-parallelism --reporter=dot` — passed after the routing regression coverage was added (23 tests).
 - `npm run test:e2e -- --list e2e/smoke/smoke.spec.ts` with lifecycle scripts disabled — passed; Playwright discovered all six selected smoke tests.
 - `node --check scripts/ci/test-scope.mjs` and YAML parse / workflow dependency checks — passed; schedule selection returned `unit=full,e2e=full,build=run`.
-- PR diff resolver — `unit=changed,e2e=full,build=run`.
+- Initial GitHub PR run #480 exposed an important false-positive: the root `ci:test-scope` npm script edit was treated as a product manifest change (`unit=changed,e2e=full,build=run`). Vitest's `--changed` then selected a broad set including unrelated agent/Host/Desktop tests; the Electron E2E job ran 21.2 minutes (57 passed, 17 failed, 9 did not run, plus one runner error).
 - Exact `npm test -- --changed=<base SHA> --no-file-parallelism` invocation — passed; Vitest selected one file and passed all 22 scope tests (45.34s local Windows scan/run).
 - `npm run architecture:check` — passed on rebased head (2,892 tolerated, 0 new).
 - `npm run typecheck:all` — passed on rebased head; 231 existing Electron diagnostics across 111 keys remain baselined, with no new errors.
-- Real Electron E2E execution is not available locally; the smoke spec was list-validated only. GitHub connector confirmed repository push/merge access; PR creation and remote checks are pending.
+- The first remote run also confirmed typecheck and architecture pass, but exposed that `--changed` plus a root manifest script edit is too broad for CI-only changes. Resolver follow-up now recognizes only the exact `ci:test-scope` script-only manifest diff, emits explicit unit test targets, and skips product typecheck/build/E2E for CI-only wiring. General root manifest edits remain full-suite changes. The updated local resolver selects `unit=changed,e2e=skip,build=skip` with only `scripts/ci/test-scope.test.ts` for this PR; the next GitHub run must verify that exact selection.
+- Real Electron E2E execution is not available locally; the smoke spec was list-validated only. GitHub connector confirmed repository push/merge access; PR creation and remote checks are pending the corrected run.
 
 The workflow now serializes Vitest files for both changed and full scopes, and
 for the scheduled coverage run, to avoid cross-file temporary namespace races.
