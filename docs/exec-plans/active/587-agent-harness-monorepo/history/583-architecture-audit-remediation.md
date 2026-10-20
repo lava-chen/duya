@@ -1,4 +1,6 @@
 > Historical / superseded for execution. 原位置：`docs/exec-plans/active/583-architecture-audit-remediation.md`。
+
+> 路径说明（2026-10-20）：文中的 recovered 路径是历史位置；来源与契约已并入 [479 恢复摘要](../../479-bot-memory-isolation-tiers.md#phase-3-恢复材料)。
 > 唯一执行入口：[587 主计划](../README.md)；设计冲突以 [00 合同](../00-contracts.md) 为准。旧 Status / checkbox / 行号保留为历史证据。
 
 # 583 — 架构审计整改（5 域并行审计的 108 项缺口收敛：契约无单一事实源、门禁缺失、信任模型未落地）
