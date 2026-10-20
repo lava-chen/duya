@@ -1,6 +1,6 @@
 # 权限事实不丢 + 取消有终态 + 门禁覆盖 TUI
 
-> **Status**: 代码已改（worktree `worktree-tui-permission-cancel-fix`），门禁/typecheck 待跑
+> **Status**: ✅ 已落地（PR #325，分支 `fix/tui-permission-and-cancel-terminal`）
 > **Priority**: P1
 > **Created**: 2026-10-20
 > **Related**: [610-architecture-series](./610-architecture-series/README.md) §D9 / §D9.7、[611-tui-bugfix-slice](./611-tui-bugfix-slice.md)
@@ -145,12 +145,29 @@ durable terminal，所以 TUI 取消后再查状态是「确认」而不是「�
 
 ```bash
 npm run typecheck:all
-npx vitest run packages/host/tests/run-execution.test.ts
-npx vitest run packages/host/tests/worker-permission-requests.test.ts
-npx vitest run packages/agent-runtime/test/translator-projector.test.ts
-npx vitest run scripts/architecture/client-closure-gate.test.ts
+npx vitest run packages/host/tests packages/agent-runtime/test \
+  apps/desktop/src/main/db/core/__tests__/stores.test.ts \
+  apps/desktop/src/main/ipc/__tests__/core-db-adapters.test.ts \
+  apps/web/tests/server/web-bff.test.ts scripts/architecture/client-closure-gate.test.ts
 node scripts/architecture/client-closure-gate.mjs
 ```
+
+**实测（2026-10-20，PR #325）**：
+
+| 项 | 结果 |
+|---|---|
+| `npm run typecheck:all` | exit 0 |
+| `architecture:check` / `:boundaries` / `:self-test` / `:browser-closure` / `:headless` / `:client-closure` | 全绿 |
+| `bundle:verify` | FRESH（bundle 与源码同卡重建） |
+| `plan:sync` / `test:rules` | 全绿 |
+| 定向 vitest | 13 红 —— 与 `master` 上**同一条 13 条**；本分支另外**修好了**门禁自测里原本红的 2 条。无新增红 |
+
+`master` 上另有两条**与本 plan 无关**的既有红，顺手一并修掉（都在本 PR 里）：
+
+- `packages/ui/src/contracts/git.ts` 两处 em-dash 被按 GBK 解码 —— `check:encoding`
+  是 `typecheck:all` 的第一步，它红着整条门禁就跑不起来
+- `gate-run-approval-reachability.test.ts` 里的深导入 —— 架构门禁报为新增违规
+  （主检出里已有一处**未提交**的同款修复）
 
 ## 未做
 
