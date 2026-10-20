@@ -172,14 +172,18 @@ Platform implementations:
       `msg_type`/`tool_call_id`/`parent_tool_call_id`, so a persisted tool
       result pairs with its call — the regression that left a completed call
       showing "Running…" after refresh.
-- [ ] Commit the verified UI/Web slice and update the existing PR description.
+- [x] Commit the verified UI/Web slice and update the existing PR description.
+      Evidence: branch `codex/wave3-shared-renderer`, PR #311 description carries
+      the Web delivery and browser-acceptance evidence.
 
 - [x] Migration direction and source-of-truth ownership recorded.
 - [x] Inventory and baseline captured (825 renderer files relocated with zero
       drops; 15 new seam/entry files; verification baseline recorded above).
 - [x] Complete renderer moved under `packages/ui`; Desktop imports its public App/styles.
 - [x] Minimal service/platform contract frozen and communicated to Web lane.
-- [ ] Web switched to shared Root and competing implementation removed (Web lane).
+- [x] Web switched to shared Root and competing implementation removed (Web lane).
+      Evidence: `apps/web/src/main.tsx` mounts `@duya/ui`'s `App`; `apps/web/src/client`
+      is the transport adapter only (no second renderer).
 - [ ] Gates and visual/browser verification complete (Electron runtime and
       Playwright visual comparison still pending).
 
