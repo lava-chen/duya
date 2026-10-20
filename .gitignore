@@ -112,12 +112,18 @@ scripts/_scratch-*.js
 scripts/probe-*.cjs
 test-results/
 
-# Docs (keep only product-specs, release-notes, recovered-plans, and architecture)
+# Docs (keep only product-specs, release-notes, recovered-plans, architecture,
+# and development)
 docs/*/
 !docs/product-specs/
 !docs/release-notes/
 !docs/recovered-plans/
 !docs/architecture/
+# Development docs: the executable procedures AGENTS.md links to (worktree
+# lifecycle, engineering loop, testing, build, logging, release, footguns).
+# They are referenced from AGENTS.md, so they have to be versioned — a link to
+# an untracked file is a broken link on a fresh clone.
+!docs/development/
 # Exec plans: track what is still being worked on, not the history.
 # `active/` and `backlog/` are the plans a new session reads, so they must be
 # in the repo. `completed/` is a local archive — the index names those in plain

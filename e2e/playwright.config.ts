@@ -4,7 +4,7 @@ import * as path from 'node:path';
 /**
  * Playwright config for DUYA Electron E2E tests.
  *
- * Architecture (see AGENTS.md → Tests):
+ * Architecture (see docs/development/testing.md):
  *   - Main track: @playwright/test `_electron` API launches the real Electron
  *     main process with DUYA_TEST=1 + --duya-namespace=<spec>. Each spec gets
  *     an isolated userData directory (fresh SQLite DB, fresh settings).

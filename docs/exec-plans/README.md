@@ -351,12 +351,11 @@ the order you can work in:
 ### Verified: what the next-action column claims
 
 Each row was checked against the working tree, not against its plan file.
-Four were wrong and are corrected below; these five were checked and are
+Four were wrong and are corrected below; these four were checked and are
 **still true**, so the row is safe to act on:
 
 | Plan | Checked | Result |
 | --- | --- | --- |
-| 496 | `packages/agent/src/worktree/` | does not exist — "0 code" is accurate |
 | 443 | `DUYA_RIPGREP_PATH` in `GrepTool` | not wired |
 | 585 | `ephemeral-batcher.ts` | not created |
 | 573 | browsing-history table + `browser:history-*` IPC | neither exists |
@@ -393,7 +392,7 @@ Four were wrong and are corrected below; these five were checked and are
 | [bot-toolset-turn-tool-alignment](./active/490-bot-toolset-turn-tool-alignment.md) | P0 | Add the workspace-constrained bash mode to `BashTool` (P2 BoxShell) |
 | [bot-chat-messaging-feel](./active/491-bot-chat-messaging-feel.md) | P0 | Implement the P0.1 delivery phase machine in `conversation-store` _(1/11 done)_ |
 | [bot-to-bot-grok-parity](./active/492-bot-to-bot-grok-parity.md) | P0 | Extend the bot-direct source whitelist so agent DM entries render (P3) |
-| [worktree-framework-implementation](./active/496-worktree-framework-implementation.md) | P0 | Create `packages/agent/src/worktree/` and wire SubagentTool `isolation:'worktree'` _(research done, 0 code)_ |
+| [worktree-framework-implementation](./active/496-worktree-framework-implementation.md) | P0 | Unify the worktree lifecycle (host + legacy agent), then add the cleanup paths and `worktreeSummary` _(isolation shipped in `packages/host/src/worker-subagents/worktree.ts`)_ |
 | [bot-connector-elicitation](./active/503-bot-connector-elicitation.md) | P1 | Add the `disconnect_app` action + tool row in `AppConnectorManageTool` _(P6b only open item)_ |
 | [image-preview-modal-unification](./active/511-image-preview-modal-unification.md) | P1 | Delete the 3 legacy preview components, then collapse the `preview.css` legacy rules _(Phases 3-4 unfinished)_ |
 | [code-review-history](./active/518-code-review-history.md) | P2 | Build `<HistoryPanel>` (Branches/Commits tabs) and wire it into CodeReviewPanel _(Phase 2 UI missing)_ |
