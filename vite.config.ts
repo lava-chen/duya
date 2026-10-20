@@ -15,7 +15,10 @@ export default defineConfig({
     // browser until the `.js` artifacts are regenerated.
     extensions: ['.mjs', '.mts', '.ts', '.tsx', '.js', '.jsx', '.json'],
     alias: [
-      { find: '@', replacement: path.resolve(__dirname, './apps/desktop/src/renderer') },
+      { find: '@', replacement: path.resolve(__dirname, './packages/ui/src') },
+      { find: '@duya/ui/styles.css', replacement: path.resolve(__dirname, './packages/ui/src/styles/globals.css') },
+      { find: /^@duya\/ui\/(.*)$/, replacement: path.resolve(__dirname, './packages/ui/src') + '/$1' },
+      { find: '@duya/ui', replacement: path.resolve(__dirname, './packages/ui/src/index.ts') },
       { find: /^@duya\/conductor\/renderer\/(.*)$/, replacement: path.resolve(__dirname, './packages/conductor/src/renderer/') + '/$1' },
       { find: '@duya/conductor/renderer', replacement: path.resolve(__dirname, './packages/conductor/src/renderer/index') },
     ],
@@ -93,9 +96,9 @@ export default defineConfig({
         main: path.resolve(__dirname, 'index.html'),
         // Plan 453 Task F: Wake Agent orb entry. Build output mirrors the
         // source path under `dist/`, so it lands in
-        // `dist/apps/desktop/src/renderer/orb/` and is packaged separately
+        // `dist/packages/ui/src/orb/` and is packaged separately
         // as a resource (referenced by electron-builder extraResources).
-        orb: path.resolve(__dirname, 'apps/desktop/src/renderer/orb/index.html'),
+        orb: path.resolve(__dirname, 'packages/ui/src/orb/index.html'),
       },
       output: {
         manualChunks(id) {

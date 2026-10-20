@@ -1,0 +1,526 @@
+/*
+ * pages.css — extracted from src/styles/globals.css (domain split).
+ * Do not edit the ordering of rules within this file; the entry file
+ * imports domain files in cascade order.
+ */
+/* ============================================
+   Unified Page Framework (page-* / modal-*)
+   Shared by all main-window views: canvas,
+   automation, gateway, extensions.
+   ============================================ */
+
+/* Page frame owns vertical scrolling + the centered max-width column.
+   The host .app-content drops its own padding so the frame controls it. */
+.app-content:has(.page-frame) {
+  padding: 0;
+}
+
+.page-frame {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.page-frame-inner {
+  width: 100%;
+  max-width: var(--page-max-width);
+  margin: 0 auto;
+  padding: var(--page-pad-y) var(--page-pad-x) 3.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--page-gap);
+  min-height: 100%;
+}
+
+/* Page header — title / subtitle / action cluster */
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.page-header-text {
+  min-width: 0;
+}
+
+.page-title {
+  font-size: var(--page-title-size);
+  font-weight: var(--page-title-weight);
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  color: var(--foreground);
+}
+
+.page-subtitle {
+  margin-top: 0.375rem;
+  font-size: var(--page-subtitle-size);
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+/* Page tabs — underline variant (top-level section switcher) */
+.page-tabs {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.page-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.625rem 0 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color 0.15s ease;
+  white-space: nowrap;
+}
+
+.page-tab:hover {
+  color: var(--foreground);
+}
+
+.page-tab:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.page-tab.active {
+  color: var(--foreground);
+}
+
+.page-tab.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 1px 1px 0 0;
+  background: var(--foreground);
+}
+
+.page-tab-count {
+  display: inline-flex;
+  align-items: center;
+  min-width: 1.25rem;
+  justify-content: center;
+  padding: 0 0.375rem;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.4;
+  background: var(--surface-hover);
+  color: var(--muted);
+}
+
+.page-tab-count.active {
+  background: var(--foreground);
+  color: var(--main-bg);
+}
+
+/* Page tabs — pill variant (ZCode-style rounded-full pills; the active
+ * pill uses the selected-surface tint instead of an accent fill). */
+.page-tabs-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.page-tab-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.3125rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+  white-space: nowrap;
+}
+
+.page-tab-pill:hover {
+  color: var(--foreground);
+  background: var(--surface-hover);
+}
+
+.page-tab-pill:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.page-tab-pill.active {
+  color: var(--foreground);
+  background: var(--surface-hover);
+}
+
+.page-tab-pill .page-tab-count {
+  background: var(--surface-hover);
+}
+
+.page-tab-pill.active .page-tab-count {
+  background: var(--main-bg);
+  color: var(--muted);
+}
+
+/* Page card — unified surface */
+.page-card {
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+.page-card-pad-sm {
+  padding: 0.75rem;
+}
+
+.page-card-pad-md {
+  padding: 1.25rem;
+}
+
+.page-card-pad-lg {
+  padding: 1.5rem;
+}
+
+.page-card-hover {
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.page-card-hover:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+/* Empty state */
+.page-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 3rem 1.5rem;
+  min-height: 12rem;
+}
+
+.page-empty-state-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  opacity: 0.4;
+  margin-bottom: 0.75rem;
+}
+
+.page-empty-state-title {
+  font-size: var(--page-card-title-size);
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.page-empty-state-desc {
+  margin-top: 0.25rem;
+  font-size: var(--page-caption-size);
+  line-height: 1.5;
+  color: var(--muted);
+  max-width: 30rem;
+}
+
+.page-empty-state-action {
+  margin-top: 1.25rem;
+}
+
+/* Modal — unified dialog shell */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.modal-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: 90vh;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  background: var(--main-bg);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+
+.modal-panel.modal-size-sm { max-width: 28rem; }
+.modal-panel.modal-size-md { max-width: 40rem; }
+.modal-panel.modal-size-lg { max-width: 56rem; }
+.modal-panel.modal-size-xl { max-width: 64rem; }
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.modal-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.modal-title-block {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.modal-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.modal-subtitle {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 0.125rem;
+  line-height: 1.3;
+}
+
+.modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.25rem;
+}
+
+.modal-description {
+  font-size: 0.8125rem;
+  color: var(--muted);
+  margin-bottom: 1rem;
+  line-height: 1.5;
+}
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 1rem 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+/* ─── Search command palette (Cmd/Ctrl + K) ─────────────── */
+.search-palette-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.search-palette {
+  width: 100%;
+  max-width: 36rem;
+  max-height: 70vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--main-bg, #ffffff);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.search-palette-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 0 1.25rem;
+}
+
+.search-palette-input {
+  flex: 1;
+  min-width: 0;
+  height: 3rem;
+  font-size: 0.95rem;
+  color: var(--foreground);
+  background: transparent;
+  border: none;
+  outline: none;
+}
+
+.search-palette-input::placeholder {
+  color: var(--muted);
+}
+
+.search-palette-hint {
+  flex-shrink: 0;
+  padding: 0.15rem 0.45rem;
+  border-radius: 0.375rem;
+  font-size: 0.6875rem;
+  color: var(--muted);
+  background: var(--surface-hover);
+}
+
+.search-palette-results {
+  overflow-y: auto;
+  padding: 0.25rem;
+}
+
+.search-palette-empty {
+  padding: 1.5rem 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.search-palette-group-label {
+  padding: 0.5rem 0.625rem 0.25rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.search-palette-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  width: 100%;
+  padding: 0.375rem 0.625rem;
+  border-radius: 0.5rem;
+  text-align: start;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.search-palette-row:hover {
+  background: var(--surface-hover);
+}
+.search-palette-row.is-active {
+  background: color-mix(in srgb, var(--accent, #4b8bff) 12%, transparent);
+}
+.search-palette-row.is-active .search-palette-title-text {
+  color: var(--accent, #4b8bff);
+}
+
+.search-palette-row-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.search-palette-title-text {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-palette-kbd {
+  flex-shrink: 0;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.375rem;
+  font-size: 0.6875rem;
+  color: #9ca3af;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.search-palette-snippet {
+  font-size: 0.75rem;
+  color: #9ca3af;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Compact mode — tighter page padding, consistent with settings pages */
+html.compact .app-content:has(.page-frame) {
+  padding: 0;
+}
+
+html.compact .page-frame-inner {
+  padding: 1.25rem 1.25rem 2.5rem;
+}
+
+/* ─── Workflow detail page (inline styles can't express :hover / :focus) ─── */
+
+.wf-detail-run {
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.wf-detail-run:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.wf-detail-ghost {
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.wf-detail-ghost:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.wf-detail-ghost:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Metadata editor fields (说明 / 使用时机 / 参数格). The boxed surface comes
+   from the inline style; the focus ring lives here. */
+.wf-detail-field:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.wf-detail-field:hover:not(:focus) {
+  border-color: var(--border-strong);
+}
+

@@ -291,6 +291,7 @@ ends with a *different* set of failures, that is on you.
 | [03 SQLite 驱动](./active/610-architecture-series/03-sqlite-driver/README.md) | 602（`Phase 0`–`3`） | C 线，**可选旁支**，已退出关键路径 |
 | [10 切片 A1 契约](./active/610-architecture-series/10-slice-a1-g7-loop-detection.md) | — | **已完成(PR #219)**,未决问题已答 |
 | [11 切片 A0 契约](./active/610-architecture-series/11-slice-a0-client-runtime-axis.md) | — | 客户端运行时轴,**可与 A3 并行** |
+| [24 共享渲染器](./active/610-architecture-series/24-shared-renderer.md) | — | 渲染器已迁入 `@duya/ui` 且 Desktop 挂公共 App（分支 `codex/wave3-shared-renderer`）。`pkg:ui` 策略/基线接缝**已落地并实测 `architecture:check` exit 0**（计划 Seam requests 一节）；余项：Web 线切共享 Root、Electron 运行时 + Playwright 目检，以及 `pkg:ui` 在切片清单里仍不可见这件事（已单开 T19，别用加指纹的方式"修"） |
 
 **推进顺序、每片的唯一 next action 与完成标志、放弃条件，只在 610 里回答一次。**
 587 的合同与历史推导已被第 01 章接管，不再单独排期。

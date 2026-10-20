@@ -1,0 +1,29 @@
+{
+  "extends": "../../apps/desktop/tsconfig.renderer.json",
+  "compilerOptions": {
+    "incremental": false,
+    "noEmit": true,
+    "types": ["vite/client"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "../../apps/desktop/src/contracts/**/*.ts",
+    "../../apps/desktop/src/preload/**/*.d.ts",
+    "../../apps/desktop/src/renderer/global.d.ts",
+    "../../apps/desktop/src/renderer/vite-env.d.ts",
+    "../conductor/src/renderer/**/*.ts",
+    "../conductor/src/renderer/**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/**/__tests__/**",
+    "src/**/*.stories.ts",
+    "src/**/*.stories.tsx",
+    "../conductor/src/renderer/**/*.test.ts",
+    "../conductor/src/renderer/**/*.test.tsx"
+  ]
+}

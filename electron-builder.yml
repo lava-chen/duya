@@ -60,9 +60,9 @@ extraResources:
     to: harness-bundle/
     filter: ["**/*", "!worker-metafile.json"]
   # Plan 453 Task F: Wake Agent orb renderer. Vite emits at
-  # `dist/apps/desktop/src/renderer/orb/index.html` (the source path is
+  # `dist/packages/ui/src/orb/index.html` (the source path is
   # preserved verbatim under dist/).
-  - from: dist/apps/desktop/src/renderer/orb/
+  - from: dist/packages/ui/src/orb/
     to: orb/
     filter: ["**/*"]
   # Prebuilt ripgrep binary fetched by scripts/fetch-ripgrep.mjs (pinned

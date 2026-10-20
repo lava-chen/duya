@@ -15,7 +15,10 @@
     "incremental": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/renderer/*"],
+      "@/*": ["../../packages/ui/src/*"],
+      "@duya/ui": ["../../packages/ui/src/index.ts"],
+      "@duya/ui/*": ["../../packages/ui/src/*"],
+      "@duya/ui/styles.css": ["../../packages/ui/src/styles/globals.css"],
       "@duya/plugin-core": ["../../packages/plugin-core/dist/index.d.ts"],
       "@duya/plugin-core/*": ["../../packages/plugin-core/dist/*"],
       "@duya/connectors": ["../../packages/connectors/dist/index.d.ts"],
@@ -31,6 +34,8 @@
     "src/contracts/**/*.ts",
     "src/renderer/**/*.ts",
     "src/renderer/**/*.tsx",
+    "../../packages/ui/src/**/*.ts",
+    "../../packages/ui/src/**/*.tsx",
     "../../packages/conductor/src/renderer/**/*.ts",
     "../../packages/conductor/src/renderer/**/*.tsx"
   ],
@@ -39,6 +44,9 @@
     "../../dist",
     "src/renderer/**/*.stories.tsx",
     "src/renderer/**/*.stories.ts",
-    "src/renderer/**/__stories__/**"
+    "src/renderer/**/__stories__/**",
+    "../../packages/ui/src/**/*.stories.tsx",
+    "../../packages/ui/src/**/*.stories.ts",
+    "../../packages/ui/src/**/__stories__/**"
   ]
 }

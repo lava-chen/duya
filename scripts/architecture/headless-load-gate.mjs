@@ -241,6 +241,42 @@ function resolveWithExtensions(base) {
  * the source that produces it. It is a resolution rule, not a gate rule, so it
  * lives here rather than in `import-graph.mjs`, which another slice owns.
  */
+/**
+ * Fallback for `@duya/<pkg>/<sub>` specifiers whose subpath does NOT mirror
+ * the src/ layout. `resolveRepoSpecifier` maps specifier segments straight
+ * onto `packages/<pkg>/src/`, so a package like `@duya/agent-runtime`
+ * publishing `./contextual-user-fragment` from `src/context/contextual-user-fragment.ts`
+ * returns null there — and the specifier would fall through to esbuild's
+ * default resolution, which follows the exports map into `dist/` and fails on
+ * a checkout that has never built. Instead, read the exports map entry, keep
+ * the runtime condition, and apply the same dist/ -> src/ twin rule 2 below
+ * applies to literal dist paths. Only exact-key entries are handled: wildcard
+ * subpaths (`./message/*`) mirror their src/ layout, so resolveRepoSpecifier
+ * already resolves them.
+ */
+function resolveViaExportsMap(spec) {
+  const segments = spec.split('/');
+  const pkgName = segments[1];
+  const rest = segments.slice(2);
+  if (!pkgName || rest.length === 0) return null;
+  const pkgRoot = path.join(REPO_ROOT, 'packages', pkgName);
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+  const exportsMap = manifest?.exports;
+  if (!exportsMap || typeof exportsMap !== 'object') return null;
+  const entry = exportsMap[`./${rest.join('/')}`];
+  if (!entry) return null;
+  const target = typeof entry === 'string' ? entry : entry.import ?? entry.default;
+  if (typeof target !== 'string') return null;
+  const twin = path.join(pkgRoot, target.replace(/^\.\//, '').replace(/^dist\//, 'src/'));
+  const found = resolveWithExtensions(twin);
+  return found ? { path: found } : null;
+}
+
 function workspaceSrcPlugin() {
   return {
     name: 'duya-workspace-src',
@@ -248,7 +284,8 @@ function workspaceSrcPlugin() {
       b.onResolve({ filter: /^@duya\// }, (args) => {
         const from = args.importer ? rel(args.importer) : SERVER_ENTRY;
         const to = resolveRepoSpecifier(args.path, from);
-        return to ? { path: path.join(REPO_ROOT, to) } : null;
+        if (to) return { path: path.join(REPO_ROOT, to) };
+        return resolveViaExportsMap(args.path);
       });
       b.onResolve({ filter: /packages[/\\][^/\\]+[/\\]dist[/\\]/ }, (args) => {
         const abs = path.isAbsolute(args.path) ? args.path : path.resolve(path.dirname(args.importer), args.path);

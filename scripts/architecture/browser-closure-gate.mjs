@@ -75,6 +75,17 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 /**
  * The browser entry points, each with whether it exists yet.
  *
+ * `packages/ui/src` is the shared app root the renderer moved into (plan
+ * 610/24): Desktop mounts it and Web will mount the same package, so the
+ * first-party browser graph lives there now and must be seeded directly. The
+ * walk cannot hop here from `apps/desktop/src/renderer` alone — that directory
+ * is down to thin mounting stubs, and the shared package's own `@/` imports do
+ * not resolve through `resolveRepoSpecifier`, so without the seed the walk
+ * would inspect a tenth of the graph and stay green by accident.
+ *
+ * `apps/desktop/src/renderer` stays listed: it still carries the desktop
+ * mounting stubs and is where a future desktop-only hop would land.
+ *
  * `apps/web/src/main.tsx` is the entry a Web client will have and does not have
  * yet. It is listed rather than omitted on purpose: an absent entry is a fact
  * this gate reports (`absentEntries`), so the day the skeleton lands the gate
@@ -82,6 +93,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
  * satisfy the entry list would create a second, fake client.
  */
 export const BROWSER_ENTRIES = [
+  { rel: 'packages/ui/src', kind: 'dir' },
   { rel: 'apps/desktop/src/renderer', kind: 'dir' },
   { rel: 'apps/web/src/main.tsx', kind: 'file' },
 ];

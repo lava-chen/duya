@@ -294,9 +294,18 @@ modules:
 
   # Node-only local BFF. A future browser entry needs its own narrower module.
   - id: web-server
-    roots: [apps/web/src/server, apps/web/tests/server]
+    roots: [apps/web/src/server, apps/web/tests/server, apps/web/tests/fixtures]
     managed: true
     requires: [agent-protocol, duya-host]
+    owner: client
+
+  # Browser entry and transport. Keep Node-backed test fixtures in the
+  # web-server module above so the browser dependency contract stays narrow.
+  - id: web-client
+    roots: [apps/web/src/main.tsx, apps/web/src/client, apps/web/tests/client]
+    managed: true
+    requires: [agent-protocol, client-core, ui]
+    publicEntrypoints: [apps/web/src/main.tsx]
     owner: client
 
   # Client-side state projection from the Host's protocol events.
@@ -428,6 +437,28 @@ modules:
     requires: []
     owner: agent
 
+  # `ui` (2026-10-19, plan 610/24 shared renderer): the ENTIRE former Desktop
+  # renderer moved here (`apps/desktop/src/renderer` -> `packages/ui/src`, 842
+  # files) so Desktop and Web mount the same app root. The package is pure TS
+  # source consumed in place (`exports: "." -> "./src/index.ts"`), no dist.
+  # Its requires are the measured import set of the moved code (git grep over
+  # `packages/ui`): the wire types it already spoke as a renderer
+  # (`agent-protocol`), model metadata (`legacy-ai`), the slash-command
+  # vocabulary (`command-catalog`), the conductor canvas
+  # (`legacy-conductor`, all via its renderer subpath), inline completion
+  # (`input-completion`) and the plugin app contract (`legacy-plugin-core`).
+  # Declared rather than baselined: these are the same edges the renderer
+  # module had before the move — relocation, not new coupling.
+  #
+  # `connectors` is one measured edge: `types/app-connection.ts` imports the
+  # `AppConnectorId` type from `@duya/connectors/app-connector-id` (type-only,
+  # the same edge the renderer had before the move).
+  - id: ui
+    roots: [packages/ui]
+    managed: false
+    requires: [agent-protocol, client-core, legacy-ai, command-catalog, connectors, legacy-conductor, input-completion, legacy-plugin-core]
+    owner: ui
+
   - id: desktop-host
     roots: [apps/desktop]
     managed: false
@@ -454,7 +485,7 @@ modules:
     #
     # `command-catalog`: see its module declaration above. Two edges —
     # `lib/commands/registry.ts` and its test — both intentional.
-    requires: [agent-protocol, agent-core, agent-runtime, capabilities, legacy-plugin-core, connectors, desktop-contracts, memory, input-completion, sandbox, data, duya-host, legacy-ai, command-catalog]
+    requires: [agent-protocol, agent-core, agent-runtime, capabilities, legacy-plugin-core, connectors, desktop-contracts, memory, input-completion, sandbox, data, duya-host, legacy-ai, command-catalog, ui]
     owner: desktop
 
   - id: repo-tooling
@@ -474,7 +505,12 @@ modules:
   - id: desktop-contracts
     roots: [apps/desktop/src/contracts]
     managed: false
-    requires: []
+    # `ui` (2026-10-19, plan 610/24): `contracts/git.ts` and `contracts/import.ts`
+    # are thin re-export stubs over `@duya/ui/contracts/*` after the renderer
+    # moved into the shared ui package. Declared, not baselined — the contracts
+    # module exists precisely so these vocabulary edges are visible, and the ui
+    # package is now where that vocabulary lives.
+    requires: [ui]
     owner: desktop    # Added by plan 587 M5.2, with `apps/desktop/src/contracts` itself, so that
     # the host importing its own contract vocabulary is a DECLARED dependency
     # rather than 13 new blocking `module-dependency` violations.
@@ -1060,7 +1096,27 @@ selfTest:
   # CLEAN tree (origin/master plus this commit, no unrelated working-tree files):
   # counting 160. The `.architecture-baseline.json` was NOT re-recorded and remains
   # 932 fingerprints.
-  module-dependency: 160
+  # 160 -> 127 (2026-10-19, plan 610/24 shared renderer). THREE moves, all
+  # attributed by measurement:
+  #   -30 reclassification: the whole Desktop renderer moved into the declared
+  #       `ui` module (policy note above), so its not-permitted cross-package
+  #       edges became permitted edges of the declared `requires` list. The
+  #       relation still reconciles: 127 + 2651 = 2778 = crossBoundaryEdges.
+  #   -2  debt PAID, not re-baselined: `run-status.test.ts` imported the engine's
+  #       WorkflowRunStatus type straight out of the main process
+  #       (apps/desktop/src/main/db/core/workflow-store) and the
+  #       permission-profile contract test imported the main copy from inside
+  #       packages/ui. The migration INTO packages/** upgraded both edges from
+  #       tolerated src-renderer -> electron-main debt to FORBIDDEN
+  #       packages/** -> apps/desktop/** — so the debt was paid instead:
+  #       the type import now comes from `@duya/agent-protocol` (the canonical
+  #       vocabulary home, workflow-runs.ts), and the contract test moved next
+  #       to the main copy it guards (apps/desktop/src/main/__tests__/),
+  #       importing the shared implementation via the declared
+  #       desktop-host -> ui edge. Their old src-renderer fingerprints also
+  #       left the baseline (the forbidden rule can never be baselined).
+  #   +0  no new not-permitted edge from the ~800-file move itself.
+  module-dependency: 127
   # 349 -> 343 (2026-10-10, plan 610 A5 continuation). Ledger, not vibes:
   #   +2  group-handlers.ts / group-turn-dispatcher.ts — their cross-package
   #       RELATIVE imports (`../../../../../packages/agent/src/message/

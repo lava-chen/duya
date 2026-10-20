@@ -5,16 +5,25 @@
   "type": "module",
   "description": "Local browser client transport for Duya Host",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json && vite build --config vite.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.browser.json --noEmit",
+    "dev": "vite --config vite.config.ts",
     "start": "node dist/server/main.js"
   },
   "dependencies": {
     "@duya/agent-protocol": "0.1.0",
-    "@duya/host": "0.1.0"
+    "@duya/client-core": "0.1.0",
+    "@duya/host": "0.1.0",
+    "@duya/ui": "0.1.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
     "@types/node": "^20.0.0",
-    "typescript": "^5.3.3"
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^5.3.3",
+    "vite": "^6.4.3"
   }
 }
