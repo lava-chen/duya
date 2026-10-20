@@ -128,7 +128,9 @@ function resolveTransport(): DbTransport {
 
 // Send DB request and wait for response
 async function sendDbRequest(action: string, payload: unknown): Promise<unknown> {
-  const execution = action.startsWith('session:spawn') ? workerDbRunContext() : undefined;
+  const execution = action.startsWith('session:spawn') || action === 'plugin-app:binding-current'
+    ? workerDbRunContext()
+    : undefined;
   // Legacy Desktop interagent turns have no Host run identity yet. Preserve
   // their existing bridge; the standalone Host rejects unscoped requests at
   // its receiving boundary rather than inventing a current attempt here.
