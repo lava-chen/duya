@@ -1,8 +1,42 @@
 # 496 — Worktree 框架完整实现（Agent 内建隔离工作树 + 主会话进出 + 全栈防护）
 
-> **Status**: Draft · **Priority**: TBD · **Owner**: TBD
+> **Status**: Active（部分实现） · **Priority**: P1 · **Owner**: TBD
+> **Next**: 统一 worktree 生命周期接口（host / legacy agent 归并）→ foreground/background 清理路径 + `worktreeSummary`（kept/cleaned）
 > **立项**: 2026-09-10（用户在 worktree 框架状态审计后要求"完整功能实现计划"，并指定 `E:\cloned-projects\codex` 与 `E:\cloned-projects\grok-build` 为参考源码）
 > **2026-09-10 修订**: 用户指出默认路径应为 **`.duya/worktrees/`**（不是 `.claude/worktrees/`，后者是 Claude Code 的本地配置前缀，与本项目无关）；同时要求 plan 内容**聚焦参考项目具体代码实现细节**，不再展开 duya 自身规则与历史背景
+
+---
+
+## 0.1 现状核对（2026-10-20）
+
+> 下文第 0 / 1 节是 2026-09-10 的快照，**已过时**——运行时隔离 worktree 早已落地。
+
+**已实现**（不是 stub 了）：
+
+| 能力 | 位置 |
+| --- | --- |
+| 子代理 `isolation: 'worktree'` 真建 worktree，错误分型（`not_a_git_repo` / `no_head` / `dirty_worktree` / `worktree_add_failed` / `resolve_failed`） | `packages/host/src/worker-subagents/worktree.ts` |
+| 接入运行：拒绝 `isolation` + `resume_from` 组合、子代理 cwd 重写到 worktree 根、注入 spawn notice、回执透出 worktree 分支 | `packages/host/src/worker-subagents/service.ts` |
+| 路径落在 duya data root 下 `worktrees/<repo>-<hash>/<slug>-<suffix>`（仓库外，用户 `git status` 看不见） | 同上 `worktreeBaseDir()` |
+| 开发用 worktree 的全流程文档化（创建 / junction overlay / 中途同步 base / 并行冲突 / 巡检 / 误删恢复） | `docs/development/worktree.md` |
+| 安全拆卸 fail-closed：身份验证（必须是已注册 linked worktree）、脏工作树拒绝、locked 拒绝、reparse point 残留即中止、**删掉 `rm -rf` 回退**，带 7 个用例的回归测试 | `scripts/remove-worktree.sh`、`scripts/remove-worktree.test.ts` |
+
+**仍未实现**（本 plan 的剩余范围）：
+
+1. **统一生命周期接口**：host 与 legacy agent 各有一份几乎逐字重复的 `createIsolatedWorktree`
+   （`packages/host/src/worker-subagents/worktree.ts` 用 data root，
+   `packages/agent/src/tool/SubagentTool/worktree.ts` 用 `~/.duya/worktrees`）。实际生效的是
+   host 那份，agent 那份只被自己的测试引用。应当归并为一个权威实现 + 一层 shim。
+2. **清理路径**：foreground / background 两条结束路径都要回收 worktree，脏的**保留**并回报原因；
+   回执需要 `worktreeSummary`（path / branch / kept / cleaned）。当前 worktree 与分支只增不减。
+3. **主会话进出**：`EnterWorktreeTool` / `ExitWorktreeTool`（Phase 3，勾选框全空）。
+4. **锁与 journal**：无法表达「这个 worktree 正被某个会话占用」，也没有把
+   path / branch / base commit / 验证证据统一落盘。
+5. **路径规范**：原计划写 `.duya/worktrees/`，实际落地为 duya data root 下的 `worktrees/`。
+   决策记录以实现为准，本 plan 后续按 data root 写。
+
+> 拆分与回收的执行细则见 `docs/development/worktree.md`；多 Agent 闭环契约见
+> `docs/development/engineering-loop.md`。
 
 ---
 
@@ -17,7 +51,7 @@
 
 ---
 
-## 1. duya 现役 worktree 状态（一句话）
+## 1. duya 现役 worktree 状态（**2026-09-10 快照，已过时**）
 
 master HEAD `529335e7`：`packages/agent/src/worktree/` 不存在；SubagentTool `isolation?: 'worktree'` 是 schema stub，无副作用；活跃 worktree 落在 `E:/Projects/duya-wt/`（外置盘符，与新规 `.duya/worktrees/` 不一致）。
 
