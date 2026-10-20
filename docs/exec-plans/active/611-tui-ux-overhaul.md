@@ -7,7 +7,7 @@
 
 > **Status**: Wave 1–4 landed（2026-10-11/12）· **Priority**: P1 · **Owner**: agent
 > **立项**: 2026-10-11（对标 `E:\cloned-projects\grok-build` 的 `xai-grok-pager` TUI，调研见
-> `docs-local/research/grok-build-tui-comparison.md`）
+> 本机 Grok TUI 调研，非版本化依赖）
 > **分界**: 本 plan 只覆盖 `packages/cli/src/tui` + `packages/agent/src/cli` 接线；权限审批链路
 > （需要 headless host 增加 permissionResponder）单独立项，见 §6 非目标。
 > **Wave 1 验收实测**: `packages/cli/src/tui` 13 文件 178 用例全绿；`packages/agent/src/cli`
@@ -187,7 +187,7 @@ duya TUI 工程底子好（三级流式流水线、DECSET 2026、码点编辑器
 
 ## 8. 七项目全面对比调研（2026-10-12，Wave 3+ 输入）
 
-报告：`docs-local/research/tui-agents-comprehensive-comparison.md`。
+本机存在补充对比报告；其原始材料不随 Git 分发。执行以本计划的契约与验收为准。
 对象：codex（489 文件 ratatui）/ pi（pi-tui 原版）/ minimax-code / claude-code-haha（改造 Ink）/
 DeepSeek-TUI（287 文件）/ grok-build / prime-agent（pi-tui 衍生）。
 

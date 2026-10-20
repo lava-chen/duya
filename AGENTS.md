@@ -1,737 +1,88 @@
 # AGENTS.md
 
-> Map to the knowledge base — not a 1,000-page manual.
+Duya：本地优先的 agent 工作台。此文件只放全仓约束；细节按链接读取。
 
-Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
+## 开始
 
-## Start
+1. 读 [计划入口](docs/exec-plans/README.md)，定位用户本次任务；不要自动接手无关的队首任务。
+2. 只读核对共享状态后，先分配自己的独立 managed worktree；所有编辑、计划记录、构建与提交都在该检出进行。
+3. 读目标子树的 `AGENTS.md`；多步骤任务先写计划，跨会话任务使用[计划模板](docs/exec-plans/template.md)。
+4. 阅读下表中本任务涉及的指南，再执行操作；普通链接不保证自动加载，不能省略读取。
 
-- Repo: `https://github.com/lava-chen/duya`&#x20;
-- Before ANY work: read [docs/exec-plans/README.md](./docs/exec-plans/README.md) for current work status.
-  Its **Verified baseline** section records which gates are green, which are red,
-  and the ordering constraints — read that section before picking up a plan.
-- Verify feature/plan is still active; read relevant active plan file for progress
-- Read [ARCHITECTURE.md](./ARCHITECTURE.md) before starting — contains database schema, data flows, module details
-- Monorepo / Agent Harness refactoring: follow the sole execution queue in
-  [plan 587](./docs/exec-plans/active/587-agent-harness-monorepo/README.md).
-  Its contracts, phase gates, migration map, and handoff log supersede the
-  archived 429/550/583–586 plans and the historical M/PP/C schedules.
-- For multi-step tasks: use `/plan` mode before writing code
-- Replies: repo-root refs only: `packages/ui/src/components/chat/MessageList.tsx:45`. No absolute paths, no `~/`.
-- Missing deps: `npm install`, retry once, then report first actionable error.
-- **Baseline is not all green**: `npm test` currently fails (see the exec-plans
-  baseline). Record the failure set before you start so you can tell your own
-  regressions from the pre-existing ones.
+| 本次操作 | 必须读取 |
+| --- | --- |
+| 每个 agent 开工及 worktree 全生命周期 | [worktree](docs/development/worktree.md) |
+| 跨会话任务、派工或集成 | [工程闭环](docs/development/engineering-loop.md) |
+| 测试、UI、IPC 或运行时修改 | [测试](docs/development/testing.md) |
+| main / preload、bundle、依赖或打包修改 | [构建](docs/development/build.md) |
+| 日志修改 / Code Review 面板修改 | [日志](docs/development/logging.md) / [面板契约](docs/development/code-review.md) |
+| 版本、tag 或发布 | [发布](docs/development/release.md) |
 
-## Map
+架构与定位：[ARCHITECTURE.md](ARCHITECTURE.md) · [ARCHITECTURE_MAP.md](ARCHITECTURE_MAP.md)；[排障](docs/development/footguns.md)按症状查。
 
-- Frontend: `packages/ui/src/` — the shared renderer (React 19). The Desktop
-  (`packages/ui/src/`) and the Web app (`apps/web/src/main.tsx`) both
-  mount it; the Desktop copy is a mount shell only. Routing is a `currentView`
-  string in a zustand store (`packages/ui/src/App.tsx:1122`), not Zero Router.
-- Harness core:
-  - `packages/agent-protocol/` — transport-neutral wire contract (zero runtime deps)
-  - `packages/agent-core/` — run reasoning, zero IO
-  - `packages/agent-runtime/` — run execution engine (`RunEngineImpl`)
-  - `packages/host/` — product worker: run manifest, `RunOrchestrator`, worker
-    supervision, tool registry, DB bridge
-  - `packages/cli/` — CLI control plane + terminal TUI; also the worker bundle's
-    esbuild entry (`packages/cli/src/agent-worker-entry.ts`)
-  - `packages/agent/` — legacy shell, retirement OPEN
-- Desktop app: `apps/desktop/` (@duya/desktop, workspace package)
-  - `apps/desktop/src/main/` — Electron main process (+ Gateway). The Agent Server is a
-    separate spawned child process, not in-process.
-  - `apps/desktop/src/preload/` — context bridge
-  - `apps/desktop/src/renderer/` — mount shell for the shared renderer
-- Web app: `apps/web/` — browser client over a loopback BFF to the standalone Host
-- Other packages: `packages/{ai,capabilities,client-core,command-catalog,computer-use,conductor,connectors,data,gateway,input-completion,memory,plugin-core,sandbox,tooling,voice}/`
-- **Which package to open for a symptom**:
-  [ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md). Every package also has
-  its own `packages/<pkg>/AGENTS.md` with responsibilities, key files, and
-  debug entry points.
-- Slash command definitions live in `packages/command-catalog/` only — the Desktop
-  composer (`packages/ui/src/lib/commands/registry.ts`) and the CLI TUI
-  (`packages/cli/src/tui/slash/registry.ts`) both project it. Add a command there
-  plus a handler on the owning surface; never hand-copy a definition. Lookup is
-  unfiltered by `surfaces` (only popups filter), array order is presentation
-  order, and the package must stay in level 1 of `scripts/build-packages.mjs`.
-  See [ARCHITECTURE.md § Slash Command Catalog](./ARCHITECTURE.md).
-- Build scripts: `scripts/` (esbuild configs)
-- Docs: `docs/{design-docs,exec-plans,product-specs,references}/`
-- Scoped guides: `docs/exec-plans/README.md`, `ARCHITECTURE_MAP.md`
+## 定位
 
-## Code Review Workspace
+| 范围 | 入口与边界 |
+| --- | --- |
+| UI | `packages/ui/` 共享 renderer；`apps/desktop/`、`apps/web/` 挂载 |
+| Harness | `agent-protocol` 线上契约；`agent-core` 零 IO 推理；`agent-runtime` 执行引擎 |
+| Host / CLI | `packages/host/` 管产品 worker、工具与 DB 桥；`packages/cli/` 管 CLI / TUI 与 worker 构建入口 |
+| 遗留层 | `packages/agent/` 正在退役，不新增实现 |
+| Slash 命令 | 只在 `packages/command-catalog/` 定义，Desktop / TUI 从其投影 |
 
-- Sidebar page: `packages/ui/src/components/layout/panels/CodeReviewPanel.tsx`; register it
-  through `packages/ui/src/components/layout/panels/registry.ts` and pass the session
-  working directory from `packages/ui/src/components/layout/PanelZone.tsx`.
-- Scope is always `HEAD` to the current working tree. It is read-only: never
-  add stage, commit, push, reset, or other mutating Git controls here.
-- Bridge contract: `git:review` lists porcelain status plus numstat totals;
-  `git:review-diff` returns the selected patch. Keep renderer shapes in
-  `packages/ui/src/lib/git-ipc.ts` synchronized with
-  `apps/desktop/src/preload/index.ts` and
-  `apps/desktop/src/main/ipc/git-handlers.ts`.
-- Security boundary: accept only changed, project-relative paths; reject
-  absolute paths, traversal, `.git` metadata, and untracked symlinks resolving
-  outside the workspace. Keep diff output bounded at 1 MB and retain safe
-  partial output when the child-process buffer is exhausted.
-- UI contract: changed-file filter/tree, unified diff by default, split diff
-  only in expanded mode, optional context folding and wrapping, and hand off
-  the selected file through the existing chat attachment event.
-- Line comments (plan 572): the toolbar's 预览 toggle renders a single file
-  via `code-review-code-viewer.tsx` (`@pierre/diffs`) where hover/click on
-  lines attaches comments. Comments live in `packages/ui/src/lib/code-comment-store.ts`
-  (bucketed per workspace); the composer strip reads the same store and
-  injects pending ones as a `# Code comments:` block on send.
-- Verify parser behavior in
-  `packages/ui/src/components/layout/panels/code-review-diff.test.ts`, bridge behavior in
-  `apps/desktop/src/main/ipc/__tests__/git-handlers.test.ts`, then exercise the panel in a
-  real Electron renderer; browser-only Vite cannot validate the preload path.
-
-## Architecture
-
-- **HTTP+SSE 三层分离**：Main Process ↔ Agent Server (HTTP+SSE) ↔ Worker Processes
-- **IPC**: IPC invoke/handle (`db:*`, `gateway:*`, `automation:*`, `logger:*`, etc.) + Agent Server HTTP endpoints
-- **MessagePort**: 仅用于 config/toolExec/toolStream 三通道，不含 agentControl
-- **Database**: SQLite via better-sqlite3. Default path: `~/.duya/duya-main.db` on all platforms; `DUYA_DATA_ROOT` overrides the default root; `duya-core.db` and `memory-state.db` are siblings. `storage.database_path` in `~/.duya/config.toml` remains an explicit override. `@duya/data` owns Electron-independent paths, safe legacy DB copying, the main database connection/schema lifecycle, `CoreDatabase`, `RunStore`, CoreDataStores, and the append-only MessageLog implementation. Desktop Main still owns the app-wide accessor, path validation, safe-mode policy, shutdown coordination, memory-state connection/schema, WorkflowRunStore, legacy import, and CoreStores composition pending Host extraction. The standalone chat CLI persists sessions and transcripts through Host APIs under the same root, but its run executor still comes from the legacy `@duya/agent` package. Desktop also still starts the legacy Agent worker; process ownership and execution have not converged on Host yet.
-- **Agent core** runs in isolated child_process. Built separately as workspace package.
-- **Logging**: Structured logger (`apps/desktop/src/main/logging/logger.ts`), level `WARN` by default, console output only for WARN+. See [Logging](#logging).
-- esbuild does NOT type check. Always run `npm run typecheck:all` before committing.
-- After significant changes: update [ARCHITECTURE.md](./ARCHITECTURE.md).
-- **Mode architecture (plan 224)**: Popover "modes" (plan-task / research / conductor / goal) are declarative `ModeModifier` objects registered in `packages/host/src/worker-modes/modifiers/index.ts`. Two paradigms: modifier (tools/prompt/hooks, composed via `applyModes`) and orchestrator (takes over stream). Orthogonal to `AgentProfile` (base toolset) and `PermissionMode` (auth). See [ARCHITECTURE.md § Profile/Mode/Permission](./ARCHITECTURE.md#profile--mode--permission-三层正交plan-224). New mode = 3 steps: write `<mode>-mode.ts` → `modeModifierRegistry.register()` → add popover item + `mode-id.ts` entry. No `DuyaAgent` / `builtin.ts` changes needed. Goal (plan 411) is a session-level mode with a 10-state `ModeTracker` + N-skeptic verification; Research (plan 423) is a session-level deep-research state machine (9-state `ResearchTracker` + `research_start`/`research_report`/`research_continue`/`research_fanout` tools + per-state tool gating + `research_updated` SSE card). Stateful modes declare `tracker` and register it on `modeTrackerEngine` (plan 413); the `ModeCoordinator` injects per-round continuation, persists snapshots, and gates tools by lifecycle state.
-
-## Commands
+## 开发
 
 ```bash
-# Development
-npm run dev                    # Vite dev server only (port 3000)
-npm run electron:dev           # Vite + Electron together
-
-# Build & Typecheck
-npm run build                  # Production build (Vite)
-npm run build:web             # Web frontend only
-npm run build:packages        # Build all workspace packages in dependency order
-npm run bundle:agent          # Bundle the worker entry -> packages/host/bundle/worker-entry.js
-npm run electron:build         # Build worker + CLI + gateway bundles + Vite + Electron
-npm run typecheck:all         # Workspace checks + Electron error ratchet — MUST run before commit
-npm run -w @duya/desktop typecheck:main     # Raw main check; pre-existing backlog remains
-npm run -w @duya/desktop typecheck:renderer # renderer layer (same scope as typecheck:web)
-
-# Testing
-npm run test                   # Vitest tests
-npm run test:watch            # Vitest watch mode
-npm run test:coverage         # Tests with coverage
-
-# Packaging
-npm run electron:pack         # Package current platform
-npm run electron:pack:win     # Windows (.exe installer)
-npm run electron:pack:mac     # macOS (.dmg)
-npm run electron:pack:linux   # Linux (AppImage, .deb, .rpm)
-
-# DUYA CLI (standalone) — the Host control plane
-npm run build:cli-dev           # build packages + worker bundle + CLI bundle
-npm run dev:tui                 # run the TUI (node packages/cli/bundle/cli.cjs tui)
-npm run build:cli-bundle        # -> packages/cli/bundle/cli.cjs (gitignored)
-# ⚠ `dev:tui` runs a BUILD ARTIFACT. `packages/cli/bundle/` is gitignored, so a
-#   fresh clone or a new worktree has no `cli.cjs` and it dies with
-#   MODULE_NOT_FOUND. Run `build:cli-dev` (or `build:cli-bundle`) first there.
-#
-# Top-level commands (packages/cli/src/index.ts:46):
-#   serve   Start the local Duya Host service
-#   chat    Chat through a running Duya Host
-#   tui     Start an ephemeral Duya Host and open the TUI
-#   ...     status, plugins, sessions, crons, channels
-# The command registry is packages/cli/src/program/descriptors.ts; run
-# `duya <cmd> --help` for flags.
-#
-# ⚠ `--print` / `--headless` do NOT go through commander: the CLI scans raw
-#   `process.argv` first and dispatches through a hand-rolled parser that reads
-#   only `--model`, `--cwd`/`-c` and `--format`. Consequences:
-#   - `--format <text|json|markdown>` works there but is absent from `--help`.
-#   - `-k`, `-u`, `-p` and `-w` are silently DROPPED in those two modes
-#     (api key / base URL / provider fall back to env and `~/.duya/config.toml`).
-#   - `--cwd` is assigned to BOTH `baseUrl` and `workspace`.
-#   Interactive mode is unaffected — it uses commander.
+npm run dev                  # Vite :3000
+npm run electron:dev         # Vite + Electron
+npm run build:packages       # workspace build order
+npm run build:cli-dev        # build before dev:tui in a new checkout
+npm run dev:tui              # runs packages/cli/bundle/cli.cjs
+npm run typecheck:all
+npm run architecture:check
+npm test
+npm run electron:build       # required before test:e2e
 ```
 
-### Why the CLI is a bundle and not `dist/`
-
-`node packages/cli/dist/index.js` does **not** run, for two independent
-reasons. Each was found by fixing the first and watching the second appear:
-
-1. **Extensionless specifiers.** Node's ESM loader rejects them.
-   `packages/plugin-core` is emitted under `module: ESNext` +
-   `moduleResolution: bundler`, which permits and emits `./scope` rather than
-   `./scope.js`. It is the only workspace package that emits any.
-2. **No assets.** `tsc` emits JavaScript and declarations only. The `.hbs`
-   prompt assets are never copied, and the prompt loader throws at module scope
-   when it cannot find them ("fail loud, a missing prompt asset must never
-   degrade into an empty persona").
-
-So a thin wrapper over `dist` cannot work, and making `dist` loadable would mean
-changing every asset-dependent package plus teaching `build-packages.mjs` to
-copy assets — its own header calls that array the single source of build order.
-
-**Do not give this artifact its own output directory.** Every gate under
-`scripts/architecture/` skips directories named exactly `bundle`; a
-`bundle-cli/` directory is not skipped, and its generated JavaScript was then
-scanned as first-party source and reported as a new `module-dependency`
-violation.
-
-Note the two distinct bundles: `npm run bundle:agent` emits
-`packages/host/bundle/worker-entry.js` (the worker process), and
-`npm run build:cli-bundle` emits `packages/cli/bundle/cli.cjs` (the CLI).
-
-## Gates
-
-- Pre-commit: `npm run typecheck:all` MUST pass. esbuild does not type check.
-- Architecture boundaries: `npm run architecture:check` MUST pass. It is a
-  ratchet, not a lint: pre-existing violations are frozen in
-  `.architecture-baseline.json`, and only *new* ones block. Never add a
-  fingerprint to the baseline to silence something you just introduced — fix
-  the edge, or use `--write` only when a migration legitimately removed debt.
-  Modules declared `managed: true` in `architecture-policy.yaml` have zero
-  tolerance and cannot be baselined at all. There are **16** of them
-  (`agent-protocol`, `agent-core`, `agent-runtime`, `data`, `duya-host`,
-  `client-core`, `command-catalog`, `connectors`, `input-completion`,
-  `sandbox`, `memory`, `tooling`, `capabilities`, `legacy-plugin-core`,
-  `web-server`, `web-client`) — read the file rather than trusting this list.
-  - **Verify CI enforcement separately.** The workflow now watches `master`
-    and runs `typecheck:all`; this does not imply `architecture:check` is a
-    required check. Plan 587 G0 owns that remaining gate and ruleset work.
-  - Verify the gate itself still sees everything after touching the resolver or
-    the audit scripts: `npm run architecture:self-test`.
-- MCP connectors: a new or changed connector MUST pass the conformance suite
-  (`packages/agent/tests/integration/mcp-conformance.test.ts`, L1–L9) before
-  merge — transactional discovery, replace-set, catalog retrieval, deterministic
-  invoke, error taxonomy, and lifecycle truth (plan 580).
-- UI changes: verify with Playwright MCP after implementation. Do not skip.
-- No commit of secrets, API keys, credentials.
-- Build gate: `npm run electron:build` before push if build output, packaging, or lazy/module boundaries can change.
-- Release tag: `package.json:version` MUST match the tag being pushed (see Git → Release Tag).
-
-## Git
-
-- Commits: [Conventional Commits](https://www.conventionalcommits.org/) format. English only.
-- Title format: `<type>(<scope>): <description>`
-  - `type`: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `build`, `ci`
-  - `scope`: optional, e.g. `agent`, `ui`, `electron`, `bridge`, `tool`, `db`
-  - `description`: imperative mood, lowercase, no period at end. Max 72 chars.
-- Body (when needed): explain **what** and **why**, not **how**. Wrap at 72 chars.
-- Breaking change: add `BREAKING CHANGE:` footer or `!` after type/scope.
-- Examples:
-  - `feat(agent): add streaming timeout config`
-  - `fix(ui): resolve message list scroll jump on new messages`
-  - `refactor(electron): extract ipc handlers to separate modules`
-  - `docs: update AGENTS.md commit message format`
-- Atomic: one logical change per commit. Do not mix unrelated fixes.
-- Landing changes that warrant isolation (large features, framework
-  shifts, multi-module work — see [Worktree → PR workflow](#worktree--pr-workflow)):
-  open a worktree + PR and merge via `gh pr merge --merge` so the merge
-  node stays visible in the graph. Never squash, never fast-forward-only.
-  Small fixes may skip the worktree and commit straight to `master`.
-
-### Worktree → PR workflow
-
-Use this workflow for **large feature additions or framework changes**
-(`feat:` scope spanning multiple modules, mode/profile/permission
-shifts, Agent Server / IPC surface changes, packaging or build-system
-rework, anything touching plan 224/411/413/423 mode machinery). It is
-the safe default when the diff is hard to review in one sitting or
-risks breaking `master` for other agents / the packaged build.
-
-**Small changes and small bug fixes may be committed straight to
-`master`**: typo / comment fixes, scoped `fix:` to one or two files,
-config tweaks, dependency bumps, doc updates, or any change small
-enough to revert in a single commit. Skip the worktree, skip the PR,
-commit + push directly. Use judgment — when in doubt, default to
-worktree.
-
-Standard loop for agent / parallel work — verified end to end
-(implement → commit → PR #14 → merge). The shared checkout is never
-touched until the merge lands on `origin/master`.
-
-1. **Isolate**: work in a git worktree under `.claude/worktrees/<name>`
-   on its own branch, based on `origin/master`. An isolated session must
-   not edit the shared checkout or cd back into it.
-2. **Worktree setup**: run `node scripts/junction-worktree.mjs <worktree-path>`
-   before any tsc/vitest run. It is idempotent and creates **no** link inside
-   the primary checkout. It does two separate jobs, and the second one is the
-   one that matters:
-
-   a. Third-party deps come from the primary — `<worktree>/node_modules` plus
-      each workspace package's own `node_modules` (`agent`, `conductor`,
-      `gateway`, `plugin-core`, `voice`, `cli`, `computer-use`). Missing
-      junctions produce fake TS2307 errors.
-
-   b. Workspace packages must resolve to the **worktree's own** copies. The
-      primary's `node_modules/@duya/*` are junctions back into the primary's
-      `packages/*`, so a plain `node_modules` link silently makes
-      `@duya/agent-runtime` resolve to the **primary's** `dist/*.d.ts` — build
-      output compiled from whatever branch the primary last had checked out.
-      Every worktree then typechecks against that one shared set of
-      declarations: exactly one branch can be self-consistent, the others fail
-      with errors naming symbols that do not exist in their own source
-      (e.g. `TS2741: Property 'modeExit' is missing … but required in type
-      'RunEnginePorts'`), and the lucky one is only passing by coincidence. The
-      script's fix is a real overlay at `packages/node_modules/@duya/*` and
-      `apps/node_modules/@duya/*` — real directories inside the worktree, which
-      Node and TS check *before* `<worktree>/node_modules`, so `@duya/*` wins
-      while third-party deps still fall through to the shared link. ~14
-      junctions, a few KB.
-
-   Then build the dependency (`npm run build:core`) before `typecheck:runtime` —
-   their `types` point at `dist/`, so a missing build is a TS2307 that looks like
-   a wiring fault.
-
-   Never `npm install` inside a worktree to fix resolution: writing
-   `<worktree>/node_modules/@duya/*` goes *through* the junction and rewrites
-   the **primary's** links, which breaks every other worktree at once.
-2b. **Tearing a worktree down**: those junctions point back INTO the primary
-   checkout, so any recursive delete that follows them deletes the primary
-   checkout's sources. This has now happened **twice** on this repo:
-   **3,471** tracked files on 2026-08-25, and **3,492** more on 2026-10-03.
-
-   **Always use `scripts/remove-worktree.sh <name-or-path> [--delete-branch]`.**
-   It lists every reparse point, unlinks each one with `cmd rmdir` *without*
-   `/s`, then **re-scans and aborts if any junction survived** — only then does
-   it let git remove the worktree. That re-scan is the whole point: it is what
-   makes the delete safe, and it is the step every manual procedure skips.
-
-   Do **not** hand-roll a teardown. Specifically, `rm -- <dir>` and the
-   runtime's recoverable trash launcher are **not** safe here: this file
-   previously claimed they "treat a reparse point as an object and do not
-   traverse it". That claim is false — following AGENTS.md that way on
-   2026-10-03 wiped 3,492 tracked files from the primary checkout. Never use
-   `Remove-Item -Recurse`, `cmd /c rd /s /q`, or a shell `rm -rf` on a
-   worktree path either.
-
-   If a single junction must go on its own, `cmd /c rmdir <junction>` (no `/s`)
-   detaches the link without following it — never with `/s`. And if you ever
-   do hit this: the deletions are **unstaged working-tree deletions**, so
-   `git restore .` in the primary checkout brings every tracked file back from
-   HEAD. Check `git status --short` for a pure ` D` pattern (nothing staged)
-   before restoring, so you do not clobber real work.
-3. **Verify in place**: targeted `npx vitest run <files>` +
-   `npm run typecheck:web`, plus any other package gates the diff
-   touches. Known footgun: `typecheck:cli` OOM-crashes tsc under the
-   default heap — retry with
-   `NODE_OPTIONS=--max-old-space-size=6144 npx tsc -p packages/cli --noEmit`.
-4. **Commit** in the worktree: Conventional Commits, atomic per plan,
-   debug residue stripped. Committing on your own branch needs no
-   confirmation.
-5. **Push**: `git push -u origin <branch>`.
-6. **PR**: `gh pr create --base master --head <branch>` — conventional
-   title; body covers what / why / verification and ends with the
-   Claude Code footer.
-7. **Merge**: `gh pr merge <n> --merge` (merge commit, keeps history
-   explicit; no squash, no fast-forward-only).
-8. **Verify**: `gh pr view <n> --json state` or
-   `git fetch origin master && git log --oneline -3 origin/master`.
-9. **Sync back**: local `master` often carries unpushed commits — pull /
-   rebase it after the merge lands; delete the merged worktree branch.
-
-### Release Tag
-
-`package.json` `version` is the **source of truth** for the released
-artifact. `electron-builder` reads the version from `package.json`,
-not from the git tag. If `package.json:version` still points to a
-previously-released version, `electron-builder --publish always`
-will skip creating the new release and exit 0 (silent no-op).
-
-- **MUST bump `package.json` `version` in the same commit as the release tag.**
-- Pre-tag checklist:
-  1. Pick the next version (see [How to recommend a tag](#how-to-recommend-a-tag) below).
-  2. Update `package.json` `version` (e.g. `0.1.3-beta.2` → `0.1.3-beta.3`).
-  3. Commit the bump before tagging (`chore(release): bump version to <X>`).
-  4. Tag the bump commit, not an earlier one.
-  5. `git push origin <branch>` then `git push origin v<X>`.
-  6. The CI release workflow is the only thing that should ever create a GitHub Release.
-- If a tag is pushed without the corresponding `package.json` bump, the release will fail silently (workflow job shows `success`, but no Release is created on GitHub). Always verify the Release exists with `gh release view <tag>` after a release run.
-
-#### How to recommend a tag
-
-When the user asks "what tag should I cut?" (or "打 tag 时根据规则自己推荐一个最合适的 tag"), follow this procedure. Do not silently pick a number — always **show the recommendation, the reasoning, and any detected breaking changes, and ask the user to confirm before tagging**.
-
-1. **Collect the candidate set.**
-   - `git tag --list 'v*' --sort=-v:refname | head -5` — most recent tags.
-   - `git log <last-tag>..HEAD --oneline` — commits since the last tag.
-   - `cat package.json | grep '"version"'` — current declared version.
-   - The current `package.json` `version` is the **floor**: the next tag must be `>=` it.
-
-2. **Classify every commit** since the last tag with the highest applicable Conventional-Commit type:
-   - `BREAKING CHANGE:` footer or `!` after type/scope → **MAJOR**
-   - `feat:` → **MINOR**
-   - `fix:`, `refactor:`, `perf:`, `docs:`, `test:`, `build:`, `ci:`, `chore:` → **PATCH**
-   - `revert:` is treated as the type of the reverted commit.
-
-3. **Apply semver, project-specific overrides below**, then pick the highest.
-
-4. **Recommend** the version, the bump type, and one-line evidence
-   (e.g. *"3 `feat:`, 12 `fix:`, 0 `BREAKING CHANGE`. Recommend
-   `0.1.5` (MINOR)."*). Wait for user confirmation before tagging.
-
-##### Semver rules for duya
-
-`0.x` is pre-1.0, so MAJOR bumps are not yet meaningful — use
-MINOR to signal "anything beyond fixes." This matches the existing
-trajectory (`0.1.1` → `0.1.2` → `0.1.3-beta.*` → `0.1.4`).
-
-| Highest commit type | Current `0.x` | Next tag (default)                                       |
-| ------------------- | ------------- | -------------------------------------------------------- |
-| `BREAKING CHANGE`   | `0.1.x`       | bump MINOR (e.g. `0.1.4` → `0.2.0`)                      |
-| `feat`              | `0.1.x`       | bump MINOR (e.g. `0.1.4` → `0.1.5`)                      |
-| `fix` / others      | `0.1.x`       | bump PATCH (e.g. `0.1.4` → `0.1.4` already; new tag is `0.1.4` is invalid — bump PATCH once you have at least one fix: `0.1.4` → `0.1.5` is wrong for fix-only; correct shape is to enter `1.0` first, but for `0.x` treat PATCH-only the same as MINOR, i.e. `0.1.4` → `0.1.5`) |
-| anything            | `1.x.y`       | standard semver (MAJOR/MINOR/PATCH as above)             |
-
-**Pre-release (`-beta.N`) decision** — default to a stable release,
-not a beta, unless any of the following are true:
-- The user asked for a beta explicitly.
-- The last shipped tag was itself a beta and the packaged build
-  has not yet been smoke-tested.
-- A `feat:` landed that touches the packaging / install path
-  (`electron:pack`, `electron-builder`, `electron:build`) and a
-  packaged smoke test is still pending.
-- A `BREAKING CHANGE` landed against a public CLI / IPC surface
-  and we want early adopters to test before promoting to stable.
-
-If any of the above, recommend e.g. `0.1.5-beta.1` (increment `.N`
-from the most recent `-beta.M` on the same MINOR line; reset `.N` to
-`1` when MINOR advances).
-
-##### Confirmation template
-
-Show the user this block and wait for `ok` / a different number:
-
-```
-Recommended tag:  v0.1.5
-  - reason:      3 feat(agent/electron/cli), 12 fix/refactor, 0 BREAKING
-  - current:     0.1.4  (package.json)
-  - last tag:    v0.1.4 (2026-06-09, 41 commits ago)
-  - pre-release: no — packaged smoke not pending, no beta requested
-
-Confirm to:  1) bump package.json → 0.1.5
-             2) chore(release) commit
-             3) git tag -a v0.1.5 -F docs/release-notes/v0.1.5.md
-             4) push branch + tag
-```
-
-##### Tag message
-
-Annotated tag, body from `docs/release-notes/v<X>.md` (one bullet
-per headline change, no prose). Example:
-
-```bash
-git tag -a v0.1.5 -F docs/release-notes/v0.1.5.md
-git push origin master v0.1.5
-```
-
-The release-notes file is the only place where the changelog lives
-in long form. Do not duplicate it into the tag body.
-
-##### Execution workflow
-
-After the user confirms the recommendation, run these steps in order:
-
-1. Make sure `docs/release-notes/v<X>.md` exists. Create it from the
-   headline changelog bullets if it does not.
-2. Bump `package.json` `version` to `<X>`.
-3. Stage and commit the bump and the release notes:
-   ```bash
-   git add package.json docs/release-notes/v<X>.md
-   git commit -m "chore(release): bump version to <X>"
-   ```
-4. Create an annotated tag using the release notes as the tag body:
-   ```bash
-   git tag -a v<X> -F docs/release-notes/v<X>.md
-   ```
-5. Push the branch and the tag together to trigger the release workflow:
-   ```bash
-   git push origin <branch> v<X>
-   ```
-6. Verify the push succeeded:
-   ```bash
-   git branch -vv
-   git ls-remote --tags origin refs/tags/v<X>
-   ```
-7. Check the repository Actions page to confirm the release workflow
-   started and monitor it to completion.
-
-If a previous attempt partially completed (commit exists but tag/push
-failed), inspect the current state first to avoid duplicates:
-
-```bash
-git status
-git log --oneline -3
-git tag --list 'v<X>*'
-git ls-remote --tags origin refs/tags/v<X>
-```
-
-## GitHub CLI (gh)
-
-Use [gh](https://cli.github.com/) for GitHub-specific operations. It uses the
-GitHub API and is more reliable than raw git in certain network conditions
-(e.g., in China accessing GitHub via HTTPS).
-
-### Key Commands
-
-```bash
-# Sync branches (preferred over git fetch when network is unstable)
-gh repo sync                          # sync all branches
-gh repo sync -b <branch>              # sync specific branch
-gh repo sync --force                  # force sync to remote state
-
-# PR operations
-gh pr create --base <target> --head <source>  # create PR
-gh pr merge <pr-number> --merge        # merge PR
-gh pr view <pr-number> --json state    # check PR status
-
-# Release verification
-gh release view <tag>                  # verify release exists
-```
-
-### When to Use gh
-
-- **Network issues**: Use `gh repo sync` when `git fetch`/`git pull` to GitHub
-  fails or times out — it uses GitHub API instead of git protocol
-- **PR workflow**: Use `gh pr create` and `gh pr merge` instead of manual git
-  push + browser PR creation
-- **Release verification**: Use `gh release view <tag>` to confirm releases
-  were actually created (git tag push ≠ GitHub Release created)
-
-## Code
-
-- TS strict. Avoid `any`; prefer real types, `unknown`, narrow adapters.
-- Comments: English only. Never write comments in Chinese.
-- External boundaries: prefer `zod` or existing schema helpers.
-- UI: use CSS variables from `globals.css` (`var(--bg-canvas)`, `var(--text)`, `var(--accent)`). Support both light and dark modes (`data-theme`).
-- Follow existing patterns in `packages/ui/src/components/` before creating new ones.
-- Use Tailwind + custom CSS classes from `globals.css`.
-
-## Logging
-
-### System
-
-Use the structured logger from `apps/desktop/src/main/logging/logger.ts`. **Never use `console.log/warn/error`** directly.
-
-```typescript
-import { initLogger, getLogger, LogComponent } from '../logging/logger';
-
-// Module-level singleton (call once per module)
-const logger = initLogger({ level: 'WARN' });
-
-// Or get existing instance
-const logger = getLogger();
-```
-
-### Levels
-
-| Level | Console | File | When to use |
-|-------|---------|------|-------------|
-| `DEBUG` | No | Yes | Detailed diagnostics (query params, loop iterations, etc.) |
-| `INFO`  | Yes | Yes | Significant events: server start, task completion, user actions |
-| `WARN`  | Yes | Yes | Unexpected but recoverable (config missing, fallback triggered) |
-| `ERROR` | Yes | Yes | Operation failed but app can continue |
-| `FATAL` | Yes | Yes | App cannot continue, needs immediate attention |
-
-**Default level is `WARN`**. INFO+ goes to console; DEBUG only to file.
-
-### Component Tag
-
-Always pass a `component` string (use `LogComponent` constants) so logs are filterable:
-
-```typescript
-logger.info('Agent process started', { pid: process.pid }, LogComponent.AgentProcess);
-```
-
-### What to Log
-
-- **INFO**: Boot events, user-initiated actions, significant state changes, task milestones
-- **WARN**: Missing config with fallback, retry attempts, degraded behavior
-- **ERROR**: Failures that affect user but app continues, caught exceptions with context
-- **DEBUG**: Query parameters, loop counters, raw data samples, detailed control flow
-
-### What NOT to Log
-
-- Database query results (unless debugging a specific issue — use DEBUG)
-- Large objects or arrays
-- User input or message content
-- File paths or data that could contain user info
-- `console.log` debugging artifacts left in code
-
-### Performance
-
-Use `logger.time()` and `logger.timeAsync()` for tracking operation duration:
-
-```typescript
-const end = logger.time('document parse');
-// ... work ...
-end(); // Logs: "document parse completed" with duration in ms
-
-await logger.timeAsync('gateway request', async () => {
-  return await fetch(url);
-});
-```
-
-### File Output
-
-Logs written to `<userData>/logs/app.log` (`app.getPath('userData')`; on Windows
-that is `%APPDATA%/duya`), rotated daily, retained 7 days. Use `LOG_LEVEL=DEBUG` env var to enable verbose console output for debugging.
-
-## Tests
-
-DUYA uses a three-layer testing strategy. Pick the layer that matches the
-question you're asking.
-
-### 1. Unit tests (Vitest, fast, no Electron)
-
-- **Runner**: `vitest` 3.x. Config: `vitest.config.ts`.
-- **Location**:
-  - `packages/ui/src/**/*.test.ts` / `*.test.tsx` — colocated with renderer code
-  - `packages/*/tests/**/*.test.ts` — colocated with workspace package code
-  - `apps/desktop/src/main/ipc/__tests__/*.test.ts` — IPC handler unit tests
-- **Run**: `npm run test`, `npm run test:watch`, `npm run test:coverage`.
-- **IPC handler test pattern** (critical): see
-  `apps/desktop/src/main/ipc/__tests__/url-safety.test.ts` (pure function) and
-  `apps/desktop/src/main/ipc/__tests__/logger-handlers.test.ts` (mocked module).
-  - All mock state must live inside `vi.hoisted(() => ({ ... }))` so the
-    `vi.mock` factory (also hoisted) and the test bodies share one singleton.
-  - `vi.mock` paths are **relative to the test file**, not the source file.
-    From `apps/desktop/src/main/ipc/__tests__/foo.test.ts`, the logger module is
-    `'../../logging/logger'`, not `'../logging/logger'`.
-  - For a stable `getLogger()` mock, return `mocks.logger` from the
-    factory — not a fresh object each call (otherwise
-    `mockReturnValueOnce` calls are lost between tests).
-
-### 2. E2E tests (Playwright `_electron`, real binary)
-
-- **Runner**: `@playwright/test` driving the real Electron main process
-  via the `_electron` API. See `e2e/playwright.config.ts`.
-- **Location**: `e2e/smoke/smoke.spec.ts`, `e2e/ipc/*.spec.ts`.
-- **Run**: `npm run test:e2e`, `npm run test:e2e:smoke`, `npm run test:e2e:ipc`.
-- **Requires**: `npm run electron:build` first (produces `dist-electron/`).
-  The Vite dev server is auto-started by Playwright's `webServer` config
-  (`reuseExistingServer: true` lets you run `npm run dev` in parallel).
-- **Isolation**: each spec passes a unique `--duya-namespace=<name>` so
-  its userData (and SQLite DB) is fresh. `DUYA_TEST=1` enables
-  test-mode hooks (single-instance bypass, no DevTools, etc.).
-- **Pattern**: `helpers.ts` exports `launchDuya({ namespace })` and
-  `invokeApi(page, 'settings.get', 'key')` which calls into
-  `window.electronAPI` in the renderer. `closeDuya()` force-kills the
-  process tree on Windows if the graceful close times out.
-
-### 3. UI verification (Playwright MCP, dev server only)
-
-- For interactive UI smoke checks during development. Start the Vite
-  dev server first (`npm run dev`), then use MCP tools.
-- Example: `mcp__playwright browser_navigate http://localhost:3000`,
-  `mcp__playwright browser_snapshot`.
-
-## Build System
-
-| Component         | Technology                      | Config                       |
-| ----------------- | ------------------------------- | ---------------------------- |
-| Frontend          | Vite 6 + React 19 + Zero Router | `vite.config.ts`             |
-| Desktop Shell     | Electron 44.2.0 (**requires macOS 13+**; GUI gates run on macOS 13+ hosts) | `apps/desktop/src/main/index.ts` |
-| Electron Compiler | esbuild                         | `scripts/build-electron.mjs` |
-| Packager          | electron-builder                | `electron-builder.yml`       |
-| Agent Core        | TypeScript                      | `packages/agent-core/`        |
-| Testing           | Vitest + Playwright             | `vitest.config.ts`           |
-
-### Worker Bundle (MUST FOLLOW)
-
-- Format: CommonJS (`format: 'cjs'`). Output: `packages/host/bundle/worker-entry.js`.
-  The esbuild entry point is `packages/cli/src/agent-worker-entry.ts`, **not** a
-  file inside `packages/agent/` (`scripts/build-agent-bundle.mjs:30`).
-- `bundle: true` inlines all runtime dependencies. Only `better-sqlite3` (native) and `BashWorker.js` (worker) remain external.
-- **`blessed` is external in the CHAT CLI entry only.** It cannot be bundled: `blessed/lib/widget.js` enumerates its own `widgets/` directory with `readdirSync` and `require`s each file at runtime, which esbuild cannot see. First symptom is a misleading `Could not resolve 'term.js'` / `'pty.js'` — two packages blessed never declares but requires inside a widget method. Marking those external only moves the failure to runtime. The packaged worker entry never imports `cli/`, so it needs none of this; if that stops being true, fix the chat CLI entry rather than copying its externals up.
-- Production resolves: primary `resources/harness-bundle/worker-entry.js`, fallback paths only for debug.
-- Self-contained: no `node_modules` copying in `afterPack`.
-- `better-sqlite3`: packaged to `resources/better-sqlite3/`, shared by main and agent. Agent receives `DUYA_BETTER_SQLITE3_PATH` env var.
-- `BashWorker.js`: bundled to `resources/harness-bundle/BashTool/`. Worker uses `process.execPath` as Node.js runtime in production.
-- Prompt `.hbs` assets: copied to `resources/harness-bundle/assets/` by `scripts/build-agent-bundle.mjs`.
-- `packages/host/bundle/` is **tracked in git** (the old `packages/agent/bundle/`
-  was gitignored and no longer exists).
-- Pre-release checks:
-  - `release/win-unpacked/resources/harness-bundle/worker-entry.js` exists
-  - `release/win-unpacked/resources/harness-bundle/assets/dynamic/environment.hbs` exists
-  - `release/win-unpacked/resources/harness-bundle/BashTool/BashWorker.js` exists
-  - `release/win-unpacked/resources/better-sqlite3/build/Release/better_sqlite3.node` exists
-  - First packaged chat turn reaches Agent `ready` (no timeout)
-  - `app.log` has no `ERR_MODULE_NOT_FOUND`
-
-## Workflow
-
-### Start New Task
-
-1. Read AGENTS.md (this file) ← REQUIRED
-2. Check `docs/exec-plans/README.md` for current work status ← REQUIRED
-   - The **Active Plans** table is the commitment list. Every row states one
-     concrete next action — start from the top. Do not read a plan's own
-     `Status:` header as truth; it goes stale. The index is the source of truth.
-   - `backlog/` is an idea shelf, not a promise. Promoting something out of it
-     means moving the file to `active/` and giving it a next action.
-3. Find the top active plan, or create a new one and give it a next action
-4. Read the plan file to understand current progress
-5. Read ARCHITECTURE.md for technical details
-
-### During Implementation
-
-1. Follow the plan's checkboxes and phases
-2. Run `npm run typecheck:all` before any commit
-3. For UI changes: verify with Playwright MCP
-4. Test your changes work correctly
-
-### Complete Task
-
-1. Mark completed checkboxes `[x]` in the plan file
-2. Update `docs/exec-plans/README.md` in the same commit:
-   - Plan fully landed → move the file to `docs/exec-plans/completed/` and drop
-     its Active row (its name joins the matching completed group)
-   - Partially landed but still valid → keep it in `active/` and rewrite its
-     Next action to the new one
-   - Turned out wrong, blocked, or not worth doing → move it to
-     `docs/exec-plans/backlog/` with a one-line reason
-   - Never leave a finished plan in `active/`. Archiving is part of the work,
-     not a later cleanup chore.
-3. If architectural change: update ARCHITECTURE.md
-4. Commit with clear English message
-
-## Footguns
-
-- Editing `apps/desktop/src/preload/index.ts` without rebuilding Electron
-- **Main/preload use a type-error ratchet, not a zero-error gate**: `typecheck:all` includes `typecheck:electron`; raw main/preload checks still have legacy debt. Main changes also require `npm run build:electron` and relevant tests. Current remediation is tracked by [plan 587 G0](./docs/exec-plans/active/587-agent-harness-monorepo/01-baseline-and-gates.md); historical measurements are reference data.
-- Modifying `packages/agent` exports without rebuilding (`npm run build:packages`).
-  Note `bundle:agent` bundles the **worker** entry, not the agent package.
-- Adding a route to the Web BFF (`apps/web/src/server/web-bff.ts`) without
-  checking its CSRF and origin guards
-- Skipping Playwright verification for UI changes
-- Forgetting `npm run typecheck:all` before committing
-- NOT checking active plans before starting work ⚠️
-- `better-sqlite3` **不再**是当年那个 ABI 定时炸弹 ⚠️（实测 2026-10-05）：13.0.3 依赖 `node-addon-api`,即 **N-API** 插件,自带的预编译文件叫 `prebuilds/<platform>-<arch>.node`,**文件名里没有 ABI**。`lib/binding.js` **先读** `prebuilds/`,只有找不到才回退到 `build/{Debug,Release}/`,而标准 `npm ci` 根本不填 `build/`。实测：同一个 `prebuilds/win32-x64.node` 在 Node 24.16.0（`modules` 137）和 Electron 44.2.0（`modules` 149）下**都能加载**。所以"Node 与 Electron 需要两份不同的构建、来回切换二进制"这条只对 ≤ v11 成立,现已失效。`scripts/ensure-sqlite-abi.mjs` 仍挂在 DB 相关入口的 `pre-` 钩子上（`pretest*` → node,`preelectron:*` / e2e → electron）,其 marker 缓存按**全部候选绑定的存在性 + mtime + size** 判定,而不是单条路径（PR #217 修了按 `build/Release/better_sqlite3.node` 取键时"数据库打不开却报 ABI 绿"的假绿）。真的看到 `NODE_MODULE_VERSION` 不匹配再跑 `npm run rebuild:node`（node）/ `npm run rebuild`（electron）;但**先别假定需要换二进制**——健康安装本来就该没有 `build/Release`,把它当成损坏信号会得到一个假红。
-- Electron window blank: check DevTools console, verify `http://localhost:3000` reachable
-- The `electron` package ships **no install script** ⚠️ (verified on 44.2.0: no `scripts` field in its package.json, and no `hasInstallScript` for it in `package-lock.json`), so its ~370 MB binary is downloaded lazily on the first `require('electron')` — a clean `npm ci` leaves no `node_modules/electron/dist/` and no `path.txt`, on every OS. `scripts/electron-binary.mjs` therefore resolves the binary through `require('electron')`, which is also the step that produces it. Expect the first `preelectron:*` / e2e run after a clean install to print `Downloading Electron binary...` and take minutes. Do not silence that by pre-creating `path.txt` — an unreadable pointer is exactly what the resolver exists to survive.
-- Renderer E2E may load **another checkout's** Vite ⚠️: `e2e/playwright.config.ts` sets `reuseExistingServer: true`, so it silently reuses whatever already answers on `:3000`, and `getRendererUrl()` probes a hardcoded 3000–3005 with no env override. From a worktree that means the app can render a page served by the primary checkout — where `packages/*` may not resolve, so `globals.css` transform throws, React never mounts, and the failure surfaces 15s later as a mystery "element not found". `window.electronAPI` looks perfectly healthy throughout (the preload is per-webContents, not per-URL), so "wait for the bridge" is not a sufficient readiness check. Free port 3000 before running renderer E2E, or assert the app actually mounted — `e2e/ipc/session-archive-ui.spec.ts` does both.
-- `e2e/helpers.ts` does NOT dismiss onboarding ⚠️: the block is guarded by `if (process.env.DUYA_TEST === '1')`, which reads the **Playwright runner** process, while `DUYA_TEST=1` is only injected into the **Electron child** env. Nothing exports it in the runner, so the block never runs. It is not only a modal: the conversation store stays below `isHydrated`, `loadFromDatabase()` is never called, and no thread row renders at all. Seed `duya-onboarding-completed` + `duya-conversations` in localStorage and reload, the way `e2e/ipc/file-workspace.spec.ts` does. Also note the sidebar's work/bots split is plain component state defaulting to `bots`, so session sections only render after switching to the Work tab.
-- NEVER hand-roll a worktree teardown on Windows ⚠️: GNU rm does not treat NTFS junctions as symlinks — it recurses THROUGH them. Worktrees contain junctioned `node_modules`, and npm workspaces makes `node_modules/@duya/*` junction back into `packages/*`, so one recursive delete of `.claude/worktrees/<name>` wipes every workspace package's sources in the primary checkout. This happened twice: 3,471 files on 2026-08-25 and 3,492 on 2026-10-03. **`rm --` and the recoverable trash launcher are unsafe too** — they traverse reparse points here, despite an earlier version of this file claiming otherwise. Always use `scripts/remove-worktree.sh <name>`, which unlinks all reparse points, **re-scans and aborts if any remain**, and only then deletes. Recovery if it happens anyway: the deletions are unstaged, so `git restore .` in the primary checkout restores every tracked file from HEAD.
-- Bug hunt: when looking for defects, cross-check new diffs against `docs/exec-plans/completed/2026-09-bug-sweep.md` first — it catalogs the recurring shapes (async-as-value, non-null assertion, silent API fallthrough, fractional-cell math, port 0, etc.) with concrete duya examples and detection rules.
-
-## Docs Structure
-
-| Path                  | Purpose                                                     |
-| --------------------- | ----------------------------------------------------------- |
-| `AGENTS.md`           | This file — main entry point (start here)                   |
-| `ARCHITECTURE.md`     | Architecture, database schema, data flows, module APIs      |
-| `docs/design-docs/`   | Design decisions and core beliefs                           |
-| `docs/exec-plans/`    | Execution plans (`README.md` is the index; `active/`, `backlog/`, `completed/`, `tech-debt-tracker.md`) |
-| `ARCHITECTURE_MAP.md` | Symptom → package/file lookup; the "where do I look" index |
-| `docs/product-specs/` | Product specifications and onboarding                       |
-
-## Principles
-
-- **Progressive disclosure**: Start small, guide to deeper info
-- **Code is truth**: Versioned artifacts in repo are the source of truth
-- **Verification first**: Build test/verification tools before the feature
-- **Check plans first**: Always verify current work status before starting
-
+- 缺依赖先确认 `node_modules` 是否为共享 junction；禁止穿过共享链接运行安装。
+  独立依赖目录可 `npm install` 后重试一次，仍失败就报告首个可执行错误。
+- TypeScript strict；用 `unknown` 窄化外部数据，边界使用已有 schema helper 或 zod。
+- 注释用英文。日志用所属包的结构化 logger，禁止生产代码 `console.log/warn/error`，不记录密钥或消息正文。
+- UI 使用 `globals.css` 的主题变量，适配 light / dark。
+
+## 验证
+
+- 提交前运行 `npm run typecheck:all` 和 `npm run architecture:check`。
+  架构门禁只允许既有 baseline；不得加指纹掩盖新增违规，managed 模块零容忍。
+- 先记录相关测试的基线失败，再比较改动；失败按文件、用例、错误签名比较，不能只报数量。
+- 从当前检出根目录先跑相关测试；失败先定位，不吞退出码、不跳过用例或放宽断言换绿。
+- UI 改动用 Playwright MCP 真跑；MCP 连接器改动过 conformance L1–L9
+  （`packages/agent/tests/integration/mcp-conformance.test.ts`）。
+- main / preload 修改后重建 Electron；UI 服务与构建产物必须来自当前检出，mock 通过不能代替真实 IPC / worker 链路验收。
+- 打包或懒加载边界变化时，推送前跑 `npm run electron:build`；架构变化同步 `ARCHITECTURE.md`。
+- 验证记录带 SHA、dirty 范围、环境、命令和退出码；区分已实现、已验证、已合并。
+  细则见[测试](docs/development/testing.md)与[构建](docs/development/build.md)。
+
+## 隔离与接续
+
+- 每个 agent 必须使用独立 managed worktree：主 agent、子 agent、单 agent、文档与小修复均无例外；共享检出只读。
+- 完整流程：分配并登记 owner/base → 配置依赖 → 修改 → 验证 → commit → PR → review/CI → 授权集成 → 重验 → 安全回收并核对清单。
+- 新 worktree 不包含主检出的未提交改动；依赖这些改动时先保存并核对任务切片，再选择 base。
+- PR 未集成或验证失败就保留分支、worktree 与接续记录。回收前核对 owner 已退出、成果可达和 ignored 文件；managed 走管理工具，手工走 `scripts/remove-worktree.sh`，禁止递归删除或强制清理。
+- 中断后先核对 Git、PR 与已发生的副作用；先保存剩余成果，禁止用整树 restore / reset 试探恢复。
+- 停下前更新同一计划：分支与 base/当前 SHA、未提交路径、验证命令与结果、外部副作用、阻塞和下一条动作。
+
+## 交付
+
+- 一个 commit 一个逻辑变更；只暂存本任务文件，不提交密钥或临时产物。
+- Conventional Commits，英文、祈使句、小写、无句号、标题不超过 72 字符。
+- 所有变更只通过 PR 交付；禁止直接 push `master` / `main`，无文档或小改例外。任务分支发布只用于本任务 PR。
+- 本轮以 PR 供审阅，不自行合并；获集成授权后由集成者在 review/CI 通过时用 merge commit 合并，再同步、重验与回收。GitHub 操作优先 `gh`。
+- 发布须有用户授权；tag 必须指向版本匹配的提交，由 release workflow 发布，并核验 Release 与产物。
+
+## 文档与工具
+
+- 写文档前读 [docs/AGENTS.md](docs/AGENTS.md)；原始调查报告和截图放 `docs-local/research/<topic>/`，恢复材料并入所属计划，不新建 docs 顶层分类。
+- `.codegraph/` 存在时，理解或定位代码先用 CodeGraph；未索引的文档、配置可直接读。
+- 涉及共享任务或 handoff 时，先用 `workspace_get_context` 读取状态；工具不可用时从版本化计划与 Git 对账并说明限制。
+- Workspace：建任务或记忆前先搜索；进度用 activity 工具记摘要，不存原始日志、凭据或未经验证的结论。
