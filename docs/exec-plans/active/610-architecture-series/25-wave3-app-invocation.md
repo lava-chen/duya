@@ -20,11 +20,11 @@ The worker accepts the command only over its Host stdin protocol. It resolves ex
 
 ## Implementation sequence
 
-1. Define strict Host-to-worker command/result and Host binding API contracts, plus the narrow authenticated `/v1/local/plugin-app-invocations` route and typed Host client. Host creates, revokes, and consumes bindings; invoke callers cannot choose session/run/epoch/granted capabilities or connector identity.
-2. Add Host composition ports for trusted manifest resolution, Host grant resolution, current attempt lookup, and worker dispatch. Validate that the trusted manifest has the exact app definition and state schema version recorded on the instance; validate active attempt and grants immediately before dispatch.
-3. Add a worker command handler tied to a live run, the active MCP catalog revision, canonical schema, and existing executor/approval ports. Reject duplicate or unknown tool IDs and malformed/oversized/non-JSON arguments. Re-query Host binding validity after approval before the connector side effect.
-4. Add attempt-fenced request/reply correlation so worker results cannot resolve another binding or run. Revocation and run settlement remove the Host binding and cause an in-flight post-approval check to reject.
-5. Add focused tests for the actual Host→worker command path: deny approval means zero connector calls; allow means exactly one; forged authority fields, unavailable grant source, wrong instance/plugin/App/schema, missing tool/schema, stale epoch, and revocation during approval mean zero calls. Keep the existing strict DOM source/origin kernel tests green.
+1. Preserve the merged Host→worker invocation path and durable instance API; keep the grant store and grant-backed Desktop resolver as the sole consent source. Close the authority inconsistency where capability enumeration can advertise an active-but-drifted grant while descriptor resolution rejects it.
+2. Trace the actual Desktop Agent Server owner and expose its current run/epoch plus existing worker dispatch through a narrow authenticated Main↔Host adapter. Do not create a second engine or infer authority from the Desktop Host API's unrelated local state.
+3. Wire Desktop manifest/grant authority into that live Host, then add a user approval entry point and verify grant, revoke, mapping drift, attempt change, and final-invoke recheck behavior.
+4. Add the Electron iframe→Main source/origin/launch-nonce boundary and validate the proof before Main invokes the typed Host adapter. Keep shared renderer work out of the legacy `apps/desktop/src/renderer` tree until the `packages/ui` migration lands.
+5. Exercise two App IDs and two durable instances, including restart persistence and cross-instance isolation. Run focused tests, `typecheck:all`, and `architecture:check`; report any boundary that remains fixture-only.
 
 ## First production acceptance test and completion boundary
 
@@ -141,4 +141,25 @@ App that binds and never invokes cannot grow the table without bound.
 6. **No real MCP protocol end to end.** The connector is a controlled
    counter behind the real executor; a real MCP server round trip through
    `MCPManager` is still unproven for this path.
+
+### Grant API contract check (2026-10-19)
+
+`PluginAppGrantWriteInput` now carries the exact `tools` scope the privileged
+caller showed; it does not accept a caller-supplied revision. The route rejects
+unknown fields (including `mappingRevision`) and extra fields inside each tool
+pair. Host compares the submitted scope to the current trusted manifest and
+computes the persisted mapping digest itself. HTTP coverage includes scope
+mismatch, malformed nested scope, missing resolver, browser Origin rejection,
+grant/list/revoke. The grant endpoint is a privileged bearer-token/no-Origin
+surface; it does not prove human approval, and no install audit permission is
+used as a grant.
+
+The durable grant store is **not currently consumed by the invocation
+authority**. Invocation still calls the externally injected
+`resolveGrantedCapabilities`; `StartLocalHostOptions.pluginAppInvocationAuthority`
+has no Desktop composition. When that composition is added, it must read active
+grant rows and verify their stored tool scope/revision against the trusted
+mapping. It must not auto-grant, infer a capability from a tool name, or treat
+the install audit ledger as user consent. The Desktop resolver and iframe→Main
+source/origin/nonce boundary remain open as listed above.
 

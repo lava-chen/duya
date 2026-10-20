@@ -150,6 +150,8 @@ import { HostPluginAppInstanceApiError } from './local-plugin-app-instance-api.j
 import { routePluginAppInstances } from './plugin-app-instance-routes.js';
 import type { HostPluginAppInvocationApiV1 } from '@duya/agent-protocol';
 import { routePluginAppInvocations } from './plugin-app-invocation-routes.js';
+import type { HostPluginAppGrantApiV1 } from '@duya/agent-protocol';
+import { routePluginAppGrants } from './plugin-app-grant-routes.js';
 import type {
   CreateDataSourceInput,
   HostLocalWorkbenchApiV1,
@@ -343,6 +345,7 @@ export interface HostSessionHttpServerOptions {
   /** Local-only access to plugin setup values, which may contain credentials. */
   readonly localPluginSetupApi?: HostLocalPluginSetupApiV1;
   readonly pluginAppInstanceApi?: HostPluginAppInstanceApiV1;
+  readonly pluginAppGrantApi?: HostPluginAppGrantApiV1;
   readonly pluginAppInvocationApi?: HostPluginAppInvocationApiV1;
   /** Local-only Workbench persistence; source configs may contain credentials. */
   readonly localWorkbenchApi?: HostLocalWorkbenchApiV1;
@@ -1373,6 +1376,13 @@ export class HostSessionHttpServer {
       } catch (error) {
         this.#sendApiError(res, error);
       }
+      return;
+    }
+    if (url.pathname === '/v1/local/plugin-app-grants') {
+      await routePluginAppGrants(req, url, res, this.#options.pluginAppGrantApi, {
+        readJson: (request, response) => this.#readJson(request, response),
+        sendJson: (response, status, body) => this.#sendJson(response, status, body),
+      });
       return;
     }
     if (url.pathname === '/v1/local/plugin-app-invocations' ||
