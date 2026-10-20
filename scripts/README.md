@@ -94,6 +94,14 @@
 | `junction-worktree.mjs` (+ `junction-worktree.bat`) | worktree 依赖 junction 建立 |
 | `junction-workspace-pkgs.bat` | 被 `junction-worktree.mjs` 调用 |
 | `remove-worktree.sh` | **AGENTS.md 强制**：Windows 拆卸唯一入口，禁止手工 `rm -rf` |
+| `remove-worktree.test.ts` | 拆卸脚本的 fail-closed 行为测试（`vitest.config.ts` 的 `scripts/**/*.test.ts` 收） |
+
+### 会话数据恢复
+
+| 脚本 | 说明 |
+| --- | --- |
+| `import-legacy-rollouts.mjs` | 从 rollout JSONL 反推丢失的 `sessions` 元数据行（plan 328 迁移后遗症）。默认 dry run，`--apply` 才写，`--undo` 可回滚 |
+| `verify-import.mjs` | 校验上一步的导入结果 |
 
 ### 子目录
 
