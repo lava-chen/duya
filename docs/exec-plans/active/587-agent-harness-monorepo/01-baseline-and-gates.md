@@ -43,6 +43,9 @@
   已知代价（有意接受）：①`@duya/agent`既是最后一位又是自身前置，拓扑runner会判为环，显式数组靠约定吸收，重排无人拦截——这是scripts相对references最锐利的弱点；②`typecheck:all`现在把整个次序构建3次（经`typecheck:web`/`typecheck:electron`/`typecheck:agent`，各约25s），staleness跳过可回收，但手写mtime判断可能跳过必要重建并**静默放行typecheck门禁**，故选择正确性优先；③`build:agent`已是误名（实建全部11个），待CI在范围内时改名并去掉别名。
 - [ ] 将合同/迁移相关测试接入独立job，保持完整testjob的红色真实可见。
   PR #140已让`test` job与`build`解耦，`npm test`的红色保持完整可见（未减少collect、未加`|| true`/glob跳过）。合同/迁移测试的独立job仍待做。
+- [ ] 验证PR CI的按改动范围路由、Electron E2E调用和夜间跨平台矩阵；不得以跳过失败用例制造绿灯。
+  本切片在最新`origin/master`上新增可测的scope resolver：纯文档跳过产品测试/构建，CI workflow/resolver改动只跑其相关测试，Vitest配置、依赖锁、workspace manifest变化跑完整单测；常规代码改动跑Vitest changed scope和构建。E2E spec按文件执行；Desktop/共享UI及E2E/build基础设施变化跑全量Electron smoke，无法解析PR diff时全量兜底。PR使用Ubuntu，夜间计划任务运行三OS单测/打包并在Ubuntu跑全量Electron smoke；CI-only改动不触发产品构建。既有测试债仍完整可见，未加allow-failure、忽略失败或修改required checks。
+  切片进行中，最新`origin/master`已先行合入`5d604efe`（修复`packages/ui/src/contracts/git.ts`注释乱码）和`5c88a378`（Host测试改用Runtime包公开入口）；本分支重放到最新master后不重复包含这两处修复。G0.2、required-check规则及full-suite既有失败债仍未整体关闭。
 - [ ] 处理既有测试债并收敛fullsuite；在此之前如需迁移ratchet，必须以具体失败签名比较且对新增失败失败，不能`|| true`、glob跳过或只比较总数。
   **未完成，且已从"尚未开始"推进很远。** G0.1 的基线是 45 文件/101 测试/103 tuple（Windows warm）。CI 口径（master push，collect 三OS相同才可比）：ubuntu **72 文件/216 测试 → 19/42**，macos **80/247 → 28/80**，windows **49/123 → 13/34**。驱动的合并切片：#183（`build` job heap + 测试前 `bundle:agent`）、#184（族A 跨平台夹具，20 文件 93 个失败）、#185（族C/D/E）、#186（POSIX 产品缺陷 `env.ts` 分隔符 + cookie 路径）、#187（恢复 notebook 读取）、#189（族F/G/I/J1）、#192（J3/J4/J5 + 两个真实产品缺陷）、#193（inventory 属性断言）。
   **仍是红的，且 macOS 是最差的一条腿**（80 vs ubuntu 42）。已证确定性、需产品决定而**刻意未修**的：WorkflowPanel 12（面板被重写成 legacy stub）、plan315 2 + plan486 2（投影路径行为回归）、permissions-gate 2、sync-protection 1（`44109a68` 造成 plugin 与 plain-bundled 同分 2 的真实 tie）。未归因：族A 剩余文件 + `git-handlers.test.ts`（1，`git:review-diff` 错误文本不同）。**本条不因数字下降而勾选**——fullsuite 未绿。
