@@ -88,6 +88,12 @@ Span = `{ text, fg?, bg?, attrs (bold/italic/strike/underline), width, linkId? }
 **D6 — 字符区间 Diff 是可选增强，先测再定。**
 行级 diff 已消除大部分重绘；字符区间 diff 的收益要在 Phase 0 基准里量化（长行重绘占比）才有资格排期。**Go/No-Go**：若 P95 达标（<30ms）则降级为 backlog。
 
+> **裁定（2026-10-19，Phase 5）：No-Go —— 降级为 backlog。**
+> 原触发表述是「P95 达标则降级」，但基线 P95 = 32.0ms，**没达标**，所以这条规则没有触发；裁定因此改为依据实测，而不是依据那个数字。
+> 实测（24 行 × 80 列的一帧，流式中）：一帧只重写 **2 行**，这 2 行里只有 **11/160 个字节**不同（行内变更占比 **6.9%**）—— 单看这个数，字符区间 diff 能把写出的字节从 206 降到 ~60。
+> 但 `renderViewportFrame` 本身耗时 **0.0067ms/帧**，而整帧（输入→最后一个字节）是 **30.8ms**。也就是说写入路径占不到帧成本的 **0.03%**，省下的 ~140 字节是噪声；那 30ms 花在组帧（tokens → spans → cells）上。
+> 结论：字符区间 diff 优化的是最便宜的那一步，却要处理宽字符、跨 span 的 SGR、以及「行尾擦除」这条现在保证不留残影的契约。**不做**。重新评估的条件写实：只有当实测显示写入路径成为帧成本主体（例如极慢终端、或组帧降到 1ms 以下），才值得回头看。
+
 **D7 — blessed 退役三步走。**
 ① 转默认：`factory.ts:18` 默认翻转为 `'own'`，env 反向为 `DUYA_TUI_RENDERER=blessed` 回滚开关（= 614 Phase 6 的 6.1/6.3，并入本计划 Phase 0，连带 italic/strike 五处同改 6.2）；② 冻结：blessed-surface 不再接收新特性，parity harness 持续跑；③ 删除：I8 全部迁完后删 `blessed-surface.ts`、`blessed-unicode.ts`、`TUIApp` 的 blessed import 与依赖声明。
 
@@ -99,56 +105,135 @@ P95 输入→绘制 < 30ms；流式 ≥ 30 FPS（trailing-edge 间隔 ≤ 33ms�
 
 ## 5. 契约
 
-### 5.1 Span 与 Scene（Phase 1 落地，直接可抄）
+### 5.1 Span 与 Scene（Phase 1 已落地）
+
+**实际形态（与讨论稿的三处偏差已注明理由）**
 
 ```ts
+// tui/core/color.ts —— 颜色词汇的唯一来源
+export type SpanColor =
+  | { readonly kind: 'named'; readonly name: string }    // SGR 30–37 / 90–97，终端自有的 16 色
+  | { readonly kind: 'indexed'; readonly index: number }; // xterm-256 调色板项，38;5;n
+
 // tui/core/span.ts
-export interface StyledSpan {
-  readonly text: string;          // 已定宽：宽度信息由 width.ts 在 token 阶段保证
-  readonly fg?: number;           // 256 色索引；命名色在 ThemeToken→palette 时已解析
-  readonly bg?: number;
-  readonly attrs: ReadonlySet<'bold' | 'italic' | 'strike' | 'underline'>;
-  readonly linkId?: string;       // OSC 8 预留（O3 只留字段）
+export type SpanAttribute = 'bold' | 'italic' | 'strike' | 'underline';
+export interface SpanStyle {
+  readonly fg?: SpanColor;
+  readonly bg?: SpanColor;
+  /** 规范序（bold→italic→strike→underline）、去重后的数组。用 attrs() 构造。 */
+  readonly attrs?: readonly SpanAttribute[];
+  readonly linkId?: string;   // OSC 8 预留，序列化时为 no-op
 }
+export interface StyledSpan extends SpanStyle { readonly text: string }
 export interface RenderScene {
   readonly rows: readonly (readonly StyledSpan[])[];
-  readonly cursor?: { row: number; column: number };
-  readonly caret?: { row: number; column: number };  // transcript 选区
+  readonly cursor?: { readonly row: number; readonly column: number };
+  readonly caret?: { readonly row: number; readonly column: number };
 }
+export function tokensToSpans(tokens, roles: InlineSpanRoles, inherited?: SpanStyle): readonly StyledSpan[]
+export function mergeSpanStyles(outer, inner): SpanStyle   // 属性并集，颜色内层覆盖
+export function spanText(spans): string
 ```
 
-### 5.2 组件接口（Phase 3 落地）
+**偏差①：`fg?: number` → `SpanColor` 联合体。** 讨论稿的注释假定「命名色在 ThemeToken→palette 时已解析」，实际没有：`DARK_THEME_TAGS` 存的是 `gray-fg` 这样的**标签体**，而给定标签体再还原成数字会丢掉「命名」与「256 索引」的区别。二者不可互换：SGR 36（终端自有的 cyan，用户可重定义）不等于调色板第 6 项。压平会让 `{cyan-fg}` 与 `{6-fg}` 变成同一颜色，也会让 blessed 链无法从 Span 还原它要解析的标签。
+
+**偏差②：`attrs: Set` → 规范序数组。** 序列化必须确定：同一 span 每次都得产出同样的字节，否则缓存 key 与 parity 断言失去意义。Set 的迭代序是插入序，而插入序恰恰是压平丢弃的那个事实。数组 + `attrs()` 归一化让 `[…attrs]` 本身成为字节序。
+
+**偏差③：Scene 暂未产出。** `RenderScene` 类型已定，但 Phase 1 的消费者仍是「行字符串」（region API 吃 tagged lines）。真正开始产出 Scene 是 Phase 5（`RenderScene` 成为两个 Output 的唯一输入），届时 `cursor`/`caret` 才有明确的写入方。
+
+**两个序列化器 + 一个信封**
+
+```ts
+// markdown/inline.ts —— 标签兼容视图（过渡层，Phase 5 只留 blessed 一条腿）
+export function spansToTags(spans, view: SpanTagView, envelope?: SpanStyle): string
+// terminal/ansi.ts —— 直发 SGR
+export function spansToAnsi(spans: readonly StyledSpan[]): string
+```
+
+- **最小转换**：只发本条与上一条**不同**的标签，所以 `**a `b` c**` 是 `{bold}a {gray-fg}b{/gray-fg} c{/bold}`，而不是每段都关掉再重开 `{bold}`。长度随「样式变化次数」而不是「文本量」增长。
+- **信封（envelope）**：块级样式作为外层框，Span 相对它发增量。这是 `# 结果` 能保持 `{cyan-fg}{bold}…{/bold}{/cyan-fg}`（颜色在外、粗体在内）而 `code` 又能替换自己那段的颜色的原因 —— 事后包字符串做不到，因为那样「谁在外层」就由字符串拼接顺序决定了。
+- **渲染器差异只在视图里**：`tokensToSpans` 对强调一律产出 `italic` 属性，**与目标渲染器无关**；blessed 没有 italic 这件事在 `spansToTags` 里折叠成 accent 颜色。把折叠提前会让共享表示变成 blessed 的形状，第三个渲染器一来就崩（V8）。
+
+**一致性保证**：`spansToAnsi(spans)` 与 `renderMarkup(spansToTags(spans, ownView))` 在同一 corpus（含 500 条随机输入）上**逐字节相等**，这是 `span.test.ts` 的核心断言 —— 两个独立实现互相印证，而不是自己证明自己。
+
+
+### 5.2 组件接口（Phase 3 已落地）
+
+**实际形态（讨论稿的 `SceneBuilder` 收敛成 `SceneCanvas`，理由见下）**
 
 ```ts
 // tui/core/component.ts
-export interface ComponentProps { /* 每组件自定义 */ }
-export interface UIComponent<P = ComponentProps> {
-  readonly id: string;            // stable id：缓存 key / hit-test / focus 路由共用
-  props: P;
-  measure(width: number): number; // 行数（D10 行数不变式的树版）
-  paint(scene: SceneBuilder, viewport: Viewport): void;
-  children?: readonly UIComponent[];
+export interface Viewport { readonly row: number; readonly column: number; readonly width: number; readonly height: number }
+export interface UIComponent<P = unknown> {
+  readonly id: string;        // stable id：缓存 key / hit-test / focus 路由共用
+  props: P;                   // update() 原地替换
+  revision: number;           // update() 自增 —— §5.4 的 componentRev 提前落地
+  measure(width: number): number;              // 行数（D10 行数不变式的树版）
+  paint(scene: SceneCanvas, viewport: Viewport): void;
+  readonly children?: readonly UIComponent[];
 }
+export class SceneCanvas {
+  writeTagged(row, column, line): void;    // 吃标签串（legacy 渲染器的输出）
+  writeSpans(row, column, spans): void;
+  fill(row, column, count, glyph, style?): void;
+  textAt(row): string;                     // 断言与将来的 hit-test
+  toScene(): RenderScene;                  // cells → spans（相邻同色合并）
+}
+export function renderTree(root, width, height): RenderScene
+export function update(component, props): void   // 换 props + revision++，无 diff
+
+// tui/core/containers.ts
+export interface StackSlot { component: UIComponent; size: 'flex' | number; inset?: number; weight?: number }
+export class VStack implements UIComponent<readonly StackSlot[]>
+export class HStack implements UIComponent<readonly StackSlot[]>
+export class Overlay implements UIComponent<OverlayProps>   // base + overlay 两层
+export type OverlayAnchor = { kind: 'center' } | { kind: 'offset'; row; column } | { kind: 'bottom'; bottom: number }
 ```
 
-### 5.3 输入驱动（Phase 2 落地）
+**偏差①：`SceneBuilder` → `SceneCanvas`（cells 而非 span 直写）。** Span 是好的**存储**格式（连续样式段，序列化器直接吃），是坏的**编辑**格式：overlay 要覆盖一条已有 span 的中间，HStack 要在一条 span 中间起笔。所以画布存 cell，`toScene()` 时压回 span 并合并相邻同色段。
+
+**偏差②：新增 `revision`。** §5.4 原本把它留给 Phase 4；`update()` 既然已经存在，让它自增是零成本，缓存 key 到时候直接读。
+
+**新增必需品 `core/tags.ts::tagsToSpans`。** 所有 legacy 渲染器（`buildFooterLines`、`QuestionAskState.render`、整个 `transcript-view.ts`）产出的是标签串，上画布必须先变成 span。它与 `spansToTags` 互为逆视图，并有往返测试（`spansToTags(tagsToSpans(line)) === line`）—— 这是能「逐个渲染器迁移上树」而其余路径照旧工作的前提。
+
+**发现：`statusRows` 与 status 区域的 height 是两个独立的数。** `geometry.ts` 用 `statusRows` 算别的区域的 `bottom`，而 status 自己的高度默认 `?? 1`；两者只在都为 1 时一致。若 `statusRows: 2`，`input` 与 `status` 之间会出现一行空隙。树的版本没有这个问题（status 的高度就是 `measure()`），Phase 5 接管区域 API 时这个参数应当消失。
+
+
+### 5.3 输入驱动（Phase 2 已落地）
 
 ```ts
-// tui/terminal/input-driver.ts（包 OwnKeyParser）
+// tui/terminal/input-driver.ts
 export interface TerminalInputDriver {
   start(input: NodeJS.ReadableStream, onEvent: (e: InputEvent) => void): void;
   stop(): void;
   capabilities(): { kitty: boolean; mouse: boolean; bracketedPaste: boolean };
 }
+export interface NormalizedKey {
+  ch?: string; name?: string;
+  ctrl: boolean; meta: boolean; shift: boolean;
+  sequence: string; code?: string;
+  full: string;              // blessed 的 key.full，绑定表唯一读取的字段
+}
 export type InputEvent =
-  | { kind: 'key'; key: NormalizedKey }        // name + ctrl/alt/shift + codepoint
-  | { kind: 'mouse'; event: OwnMouseEvent; hit: { row: number; column: number } }
-  | { kind: 'paste'; text: string };
+  | { kind: 'key'; key: NormalizedKey }
+  | { kind: 'paste'; text: string }
+  | { kind: 'mouse'; event: InputMouseEvent };  // event.hit 预留给 Phase 3/4
 ```
 
-### 5.4 缓存 key 对齐（Phase 4）
+派生自实际落地。三处要点：
 
-`transcript-cache.ts` 的 per-block key 追加组件 revision：`componentRev`（组件 update 改变高度时自增）。防止组件化后缓存命中旧高度。
+- **`full` 是唯一绑定键**。`keyHandlers: Map<string, Handler[]>`，名字就是 `C-c` / `M-y` / `S-tab` / `return` / `f1`，与 `toBlessedKeys` 产出同一词汇 —— 所以用户按键覆盖不需要第二个翻译器。
+- **一次按键只发一个事件**（不复制 blessed 的 Enter 别名，见 Phase 2 执行记录）。
+- **`hit` 已进契约但无写入方**：单元格归属要等 SceneBuilder（Phase 3/4）才有答案，先把字段放好，加命中测试时只改驱动里构造事件的那一处。
+
+
+### 5.4 缓存 key 对齐（Phase 4 已落地）
+
+`transcript-cache.ts` 的 per-block key 追加一个 `componentRev` 槽位，值取自 `RenderOptions.componentRevisions?.get(block.id) ?? 0`。
+
+为什么必须是「选项里的 map」而不是「组件自报」：`RenderOptions` 是渲染函数唯一的输入，而 block 目前还不是组件。放在选项里，Phase 6 把 block 变成组件时只需在调用处填这个 map，缓存层不用再改一次；也避免了给 `Block` 数据接口加字段。
+
+槽位现在恒为 0（因为还没有组件），但**不是空的**：`virtual-doc.test.ts` 有测试证明改 revision 会 miss、改回来会命中 —— 否则这行代码只是装饰。
 
 ## 6. UI 规格
 
@@ -170,70 +255,157 @@ App (id: root)
 
 ## 7. Phases
 
-- [ ] **Phase 0 — 基准基线 + own 转默认（吸收 614 Phase 6）**
-  - [ ] 0.1 `tui/__tests__/perf/` 基准 harness：伪造 PTY 输入流 + 高分辨率时钟，测输入→首字节绘制、流式帧间隔分布、10k block `totalLines()+paint` 耗时；Windows ConPTY 为第一环境
-  - [ ] 0.2 614 Phase 6 全量执行：own 转默认（`factory.ts:18` 翻转 + `screen-surface.test.ts` 断言更新）+ italic/strike 五处同改（614 D9 清单）+ `renderOptionsKey`/`/settings` help 文本
-  - [ ] 0.3 基线数字写回本计划 §8（V8/V9/V10 的「现状→目标」两栏）
+- [x] **Phase 0 — 基准基线 + own 转默认（吸收 614 Phase 6）**
+  - [x] 0.1 `tui/__tests__/perf/` 基准 harness：伪造 PTY 输入流 + 高分辨率时钟，测输入→首字节绘制、流式帧间隔分布、10k block `totalLines()+paint` 耗时；Windows ConPTY 为第一环境
+    - **执行记录（2026-10-19）**：`perf/harness.ts`（`tapOutput` 帧探针 / `makeHarness` / `measureInputLatency` / `measureStreamFrames` / `buildDocument`）+ `perf/baseline.test.ts`（4 条）。刻意为**不变量测试而非阈值测试** —— 阈值会把慢机器变成假红，数字靠 `DUYA_PERF_BASELINE=1` 输出、写进 §8.1、跨 Phase 比较。
+    - 实测踩到的三个坑，都已固化进 harness 注释：① `SYNC_BEGIN` 在 `paint()` 开头就写了，以它为准测的是「调度器决定画」不是「用户看到」，故 dispatch/painted 两栏分列；② 像素落在 `SYNC_END` **之后**（blessed 走 `nextTick`、own 走微任务），字节数必须跨到下一帧的 `SYNC_BEGIN`；③ 空会话帧只有 ~200 字节，延迟数测的是 `write()` 空转，故先 prefill 40 块 × 6 行再采样。
+  - [x] 0.2 614 Phase 6 全量执行：own 转默认（`factory.ts:18` 翻转 + `screen-surface.test.ts` 断言更新）+ italic/strike 五处同改（614 D9 清单）+ `renderOptionsKey`/`/settings` help 文本
+    - **执行记录（2026-10-19，worktree `plan-615-tui`）**：`selectScreenRenderer` 默认翻转，`DUYA_TUI_RENDERER=blessed` 为回滚开关。italic/strike 落地形态与 614 D9 清单的偏差：blessed 0.1.81 的 `program._attr` **没有** italic 分支（`{italic}` 会按未知 tag 原样输出），所以不是「五处都加标签」，而是——`own/markup.ts`（ATTRIBUTES `italic:'3'`/`strike:'9'` + Style 三布尔 + effective/sgrParameters，属性序 bold→italic→strike→fg）、`terminal/sgr.ts`（on=3/9，off=配对复位 23/29）两链直发；`transcript-view.ts` 加 `RenderOptions.renderer` + `Styles.renderer/italic/strike`，**markdown 映射点按 renderer 分支**：own 发真标签，blessed（含 renderer 未注入的历史调用方）保持 614 的折叠字节不变（emphasis→accent、strike→muted、thinking 折叠），`inline.ts`/`thinkingRows` 落分支。`transcript-cache` key 加 renderer 槽位；`TUIApp.renderOptions()` 注入 `this.renderer`。help 文本未加（blessed 回滚路径 italic 显示为字面 tag 的问题记录在案，随 D7 冻结/删除一并消失）。门禁：tsc -b 绿 + 相关 10 个测试文件 131/131 绿；packages/cli 全量见下一条执行记录。
+  - [x] 0.3 基线数字写回本计划 §8（V8/V9/V10 的「现状→目标」两栏）
+    - 已完成：V3/V4/V5 的「现状」栏填实数并新增 §8.1（含测法、三点读数说明）。V8/V9/V10 保持原样 —— 它们不是基线指标（V8 是 Phase 5 的对拍结果、V9 靠测试迁移、V10 靠真机截图），Phase 0 能给它们的只有 V9 的「现状=通过」，已在原先填好。
+  - **翻转暴露的 parity 缺口（2026-10-19，Phase 0 剩余工作）**：own 转默认后 packages/cli 全量 20 红中，5 条是 OwnScreenSurface 的真实缺口（其余为已知存量红 worker-path×3 / registry×1 / chat-tui bundle 环境红×2，及 host-event-projection 未入 worktree 的差集）：
+    1. `tui-foundation` 2/3 行输入：own 的 `measure('input')` 不做低行数 composer 钳制（返回 5/6，期望 ≤rows-1）；blessed 在 2 行时丢边框。
+    2. `tui-app-integration` ×2：own 全屏帧缺 slash echo 文本（`/effort`）与 help 面板内容（`~/.duya/config.toml`）——echo/overlay 内容未进 own 的帧缓冲。
+    3. `tui-completion-popup` re-filter：own 帧残留 stale `/doctor` 行——diff 重绘未覆盖应清除的行。
+    已修：OwnKeyParser 对 space 发 `ch=undefined` 导致编辑器吞空格（own 转默认后必现，blessed 语义是 `ch=' '`）——两处分支补 `ch=' '`，级联修好 7 条断言。
   - 门禁：`env -u CODEBUDDY_SAFE_DELETE_BULK_STATE_DIR npm run typecheck:all` + `packages/cli` 全量 + parity harness + 基准脚本产出 JSON
 
-- [ ] **Phase 1 — StyledSpan 核心（I1，D2）**
-  - [ ] 1.1 `tui/core/span.ts`：Span/Scene 类型 + `tokensToSpans()`（吃 `InlineToken`，含 heading/list 组合逻辑自 `renderAssistantMarkdown` 迁入）
-  - [ ] 1.2 `ansi.ts` 增加 Span→ANSI 序列化器（SGR 合并、OSC 8 字段序列化为 no-op）
-  - [ ] 1.3 `renderInlineTokens` 改为 Span→标签串的兼容视图；blessed-surface 走兼容视图，OwnSurface 直吃 Span
-  - [ ] 1.4 三链一致性测试：同一 token 树经 Span 与经标签两条路径，glyph grid 等价（复用 614 parity harness）
-  - 门禁：`tui/__tests__/span.test.ts`（新增）+ `render-parity.test.ts` + `packages/cli` 全量
+- [x] **Phase 1 — StyledSpan 核心（I1，D2）**
+  - [x] 1.1 `tui/core/span.ts`：Span/Scene 类型 + `tokensToSpans()`（吃 `InlineToken`，含 heading/list 组合逻辑自 `renderAssistantMarkdown` 迁入）
+    - **执行记录**：`core/color.ts`（颜色词汇唯一来源，替换 `terminal/sgr.ts` 与 `screen/own/markup.ts` 各自的表）+ `core/span.ts`（类型、`attrs()`/`mergeSpanStyles()`/`withSpanStyle()`/`spanText()`/`sameStyle()`、`tokensToSpans()`）。**heading 的组合逻辑迁为 envelope**（`renderInlineTokens(tokens, styles, envelope)`），不再手工拼 `rawTagPair` 对；list/quote/hr 的 marker 仍是单色 `styles.accent(...)` 直接产出，未改 —— 它们本来就没有嵌套，迁移只增加风险。
+  - [x] 1.2 `ansi.ts` 增加 Span→ANSI 序列化器（SGR 合并、OSC 8 字段序列化为 no-op）
+    - **执行记录**：`spansToAnsi()`，按「终端当前实际所处的样式」diff 发射而不是每 span 一套序列，属性序 bold→italic→strike→underline→fg→bg。`linkId` 明确为 no-op（OSC 8 不改变画出什么，且标签词汇里没有对应拼写）。bg 可表达但标签视图表达不了，已注明。
+  - [x] 1.3 `renderInlineTokens` 改为 Span→标签串的兼容视图；blessed-surface 走兼容视图，OwnSurface 直吃 Span
+    - **执行记录**：`renderInlineTokens = spansToTags(tokensToSpans(...))`，签名向后兼容（多出可选 envelope 参数）。`Styles` 增加 `tags: ThemeTags`，让「某个语义 token 是什么颜色」是查表而不是拿哨兵探函数。**OwnSurface 尚未直吃 Span** —— 它的 region API 仍以 tagged lines 为契约，这一步归 Phase 5（与 Scene 产出同步）；Phase 1 只保证 Span 已经是唯一的样式决策点。
+  - [x] 1.4 三链一致性测试：同一 token 树经 Span 与经标签两条路径 glyph 等价（复用 614 parity harness）
+    - **执行记录**：`__tests__/span.test.ts` 24 条 —— token→span 全类型映射、颜色词汇（命名/索引不互转、拼写往返、越界拒绝）、嵌套压平（内层色覆盖、属性并集）、文本保真（宽度预算依赖它）、标签最小转换与配平、`spansToAnsi` 与 `renderMarkup∘spansToTags` 在 corpus + 500 条确定性随机输入上**逐字节相等**。`render-parity.test.ts` 增加一帧 inline-Markdown corpus（每渲染器用自己该收到的标签拼写生成），断言 blessed 与 own 画出相同字形、且都不出现字面 tag。
+  - 门禁：`tsc -b` 绿；`packages/cli` 1026/1034，8 红与 Phase 0 前完全一致（worker-path×3 / tui-pty×2 / registry×1 / host-stop-continue×2）。
+  - **顺带修掉的真 bug**：`perf/baseline.test.ts` 的 `RENDER_OPTIONS.theme` 曾传 `stylesOf(...)`（token→**函数**）而不是 `ThemeTags`（token→**标签体**），于是 V5 的文档是在「标签体是字符串化的函数」这种畸形渲染下量的。测试文件被 `tsc -b` 排除，类型没挡住 —— 这条排除策略的代价，已写进该常量的注释。行数（2199 / 21999）修正后不变，故 §8.1 的 V5 结论仍成立，但耗时按修正后重测：13.1ms / 79.7ms。
+  - **仍未做的**：`transcript-view.ts` 里 `rawTagPair` 还有 3 处（tool header、thinking 预览的 bold-on-muted）—— 它们是块级手工组合，等 Phase 5/6 组件化时一并消失。此处不迁，是因为 bold-on-muted 的**外层是 bold**、heading 的**外层是颜色**，两者用同一个规范序无法同时字节一致；信封机制能表达，但需要为每个组合点单独决定「谁是信封」，在没有消费者之前先做只是把复杂度提前。
 
-- [ ] **Phase 2 — Terminal Input Driver（I2）**
-  - [ ] 2.1 `tui/terminal/input-driver.ts` 包 OwnKeyParser；TUIApp 的 blessed program 输入路径切换到 driver（blessed program 仅存能力探测）
-  - [ ] 2.2 bracketed paste / paste-burst / IME 长按边界回归（现有 `tty.ts` 测试迁移）
-  - [ ] 2.3 Kitty keyboard 能力探测（`CSI ? u`）+ 增强键序解析；环境不支持时静默回退
-  - [ ] 2.4 鼠标 hit-testing：接 `SceneBuilder` 的 span 位置索引，wheel 路由到 viewport 滚动
-  - 门禁：`own-key-parser` 既有测试 + 新增 `input-driver.test.ts`（注入字节流，无 TTY）
+- [x] **Phase 2 — Terminal Input Driver（I2）**
+  - [x] 2.1 `tui/terminal/input-driver.ts` 包 OwnKeyParser；TUIApp 的 blessed program 输入路径切换到 driver（blessed program 仅存能力探测）
+    - **执行记录**：`createInputDriver()`（包 `OwnKeyParser` + `OwnKeyInput`，保留已被测过的 raw-mode 进出）、`normalizeKey()`、`fullKeyName()`、`detectCapabilities()`。TUIApp 的 21 处 `target.key([...])` 全换成 `bindKey()`（own 写 `keyHandlers`，blessed 仍走 `program.key`），`target.on('keypress')`/`('mouse')` 换成 `onKeypress()`/`onMouse()`，新增 `dispatchInput()`。**own 路径下 blessed 的 Program 拿到的是一个没人写的 PassThrough** —— 两个解析器同时挂在同一个 stdin 上，每个键都会触发两次。blessed 渲染路径（回滚开关）原样保留自己的解析与 `.key()` 表：回滚要连输入路径一起回滚，否则「回滚」= 用我们的解析器配 blessed 的键盘表，这个组合没人验证过。
+    - **刻意不复制 blessed 的 Enter 别名**：`program.js:397-399` 让 `return` 先以 `enter` 重发一次再落到 `return`，于是**一物理 Enter 派发两次**（`CONTENDED_BINDINGS`/`CONTENDED_ALIASES` 就是为它存在的）。driver 一次按键只发一个事件、名字为 `return`（正是 app 绑定的那个），重复派发从源头消失；`CONTENDED_ALIASES` 保持原样，因为 blessed 路径仍会看到重复。
+  - [x] 2.2 bracketed paste / paste-burst / IME 长按边界回归（现有 `tty.ts` 测试迁移）
+    - **执行记录**：`tty.ts` 其实是 TTY 检测，真正的输入回归散在 `own-key-parser` / `tui-paste-burst` / `tui-editor-width` / `tui-single-echo` / `tui-key-routing`。**三个 UI 套件（inline-mode / model-selector / settings-panel）原本用 `program.emit('key down')` 注入语义键**，own 派发器接管后全部失效；已改为写**真实字节**（新 `__tests__/key-injection.ts` 的 `press()`，含 `\x7f` backspace、SS3 F1–F4、CSI F5+ 等实测序列）。这是覆盖面的净提升：以前断言「我挂在某名字上的 handler 跑了」，现在断言「这次击键经真实解析后到达了用户会到达的 handler」，解析器或名字计算一变就会红。
+  - [x] 2.3 Kitty keyboard 能力探测（`CSI ? u`）+ 增强键序解析；环境不支持时静默回退
+    - **执行记录**：`OwnKeyParser.parseKitty()` 解析 `CSI key[:shifted[:base]] ; mods[:event] ; text u`（功能键映射到 `escape`/`return`/`tab`/`backspace`，ctrl 字母补控制字节，kitty 的 meta 位 32 视为 alt，release 事件与 57344+ 功能区间丢弃）。**解析无条件，启用要开关**：`DUYA_TUI_KITTY=1` 才写 `CSI >1 u`（push，退出时 `CSI <u` pop），条件是环境自报支持（`TERM=*-kitty` / `KITTY_WINDOW_ID` / `WEZTERM_PANE` / `TERM_PROGRAM=WezTerm|ghostty`）。理由：开这个协议会重写**每一个键**的编码，唯一能证明某终端实现正确的证据是「在那台机器上打字还正常」，所以默认关、留给真机矩阵（Phase 7）去开。
+  - [x] 2.4 鼠标 hit-testing：接 `SceneBuilder` 的 span 位置索引，wheel 路由到 viewport 滚动
+    - **执行记录（部分完成）**：鼠标事件已规范化进 `InputEvent`（`InputMouseEvent`，SGR 坐标零基），wheel 路由沿用既有实现（窗口管理器优先、否则滚 transcript）。**hit-testing 未做**：单元格→span 的归属要等 SceneBuilder 存在（Phase 3/4），没有索引可查时做命中测试只能是猜；`hit` 字段已进契约，届时只改驱动构造事件的一处。
+  - 门禁：`tsc -b --force` 绿；`packages/cli` 1049/1057（新增 `input-driver.test.ts` 23 条 + `key-injection.ts`），8 红与 Phase 1 完全一致（worker-path×3 / tui-pty×2 / registry×1 / host-stop-continue×2）；`tui` 目录 815/815 全绿。
 
-- [ ] **Phase 3 — Retained Component Tree 最小核（I3，D1/D9）**
-  - [ ] 3.1 `tui/core/component.ts`：UIComponent/stable id/mount-update；无 diff、无异步
-  - [ ] 3.2 VStack/HStack/Overlay 三种容器（`geometry.ts` 求解器树形化）
-  - [ ] 3.3 首批组件上树：StatusBar（footer.ts）+ QuestionOverlay——选它们是因为行数不变式最硬、回归面最小
-  - 门禁：`tui/core/component.test.ts` + `footer.ts`/`question-overlay.ts` 既有测试零改动通过
+- [x] **Phase 3 — Retained Component Tree 最小核（I3，D1/D9）**
+  - [x] 3.1 `tui/core/component.ts`：UIComponent/stable id/mount-update；无 diff、无异步
+    - **执行记录**：`UIComponent`（id/props/revision/measure/paint/children）、`SceneCanvas`、`renderTree()`、`paintComponent()`、`update()`、`leaf()`。刻意没有 diff、没有 dirty 传播、没有异步 —— `revision` 只是让「这个子树已过期」可观测，剪枝留给 Phase 4。
+  - [x] 3.2 VStack/HStack/Overlay 三种容器（`geometry.ts` 求解器树形化）
+    - **执行记录**：`core/containers.ts`。VStack/HStack 按 `'flex' | number` 分配、`inset` 双侧收缩、`weight` 加权；**余数给第一个 flex 槽**（丢掉会留下最后一行不画，给最后一个槽会把误差挪到 transcript 所在的顶部）。Overlay 只有 base+overlay 两层（区域模型就是一个浮动层压在一个堆叠底座上，通用 z-index 是另一种不需要的设计），anchor 三种：center / offset / bottom。
+    - **几何等价性是测出来的**：`component.test.ts` 用树重建区域布局，对 4 种终端尺寸 × 2 种 overlay 宽度逐一比对 `layoutRegion()` 给出的 5 个区域盒子（left/top/width/height 全等）。completion 的四列 gutter 与「浮在 input 上方」分别由 `width: vp => vp.width - 8` 和 `anchor: {kind:'bottom', bottom: 4}` 表达 —— 这正是原 switch 里 `left: 4 / top: rows - height - bottom` 的算术。
+  - [x] 3.3 首批组件上树：StatusBar（footer.ts）+ QuestionOverlay——选它们是因为行数不变式最硬、回归面最小
+    - **执行记录**：`components/status-bar.ts`（`measure() = 2`，paint 调 `buildFooterLines`）、`components/question-panel.ts`（`measure()` 与 `paint` 共用同一个 `render()` 结果，所以「量出来的行数」与「画出来的行数」不可能不一致 —— 这正是它取代 `height: 7` 硬编码的地方）。两个组件的断言是**逐字节的**：把画布行转回 ANSI，与 legacy 渲染器的 `renderMarkup(line)` 全等。
+    - **注意「上树」的边界**：它们已经能按树渲染（`renderTree` 测过），但**生产路径仍是 TUIApp 手工拼装** —— 消费者迁移按计划在 Phase 6 逐组件进行。Phase 3 交付的是「树存在且与旧布局逐像素一致」，不是「TUIApp 已经用树」。
+  - 门禁：`tsc -b --force` 绿；`tui` 856/856 全绿（`component.test.ts` 18 条）；`packages/cli` 1067/1075，8 红与 Phase 2 完全一致；**`footer.ts` / `question-overlay.ts` 的既有测试零改动通过**（这是本阶段最硬的约束）。
 
-- [ ] **Phase 4 — 增量布局 + 虚拟化文档（I4，D4）**
-  - [ ] 4.1 树形 dirty 传播：`measure()` 结果带 revision，高度未变的子树剪枝
-  - [ ] 4.2 TranscriptPane 接 `TranscriptRenderer.heights()`：视口裁剪（全屏）+ scrollback commit 判定（inline）统一为一个 `visibleWindow()` 查询
-  - [ ] 4.3 缓存 key 加 `componentRev`（§5.4）
-  - [ ] 4.4 10k block 合成负载测试：totalLines + 可视区 paint 的复杂度断言（O(blocks visible)，非 O(blocks total)）
-  - 门禁：`tui/__tests__/virtual-doc.test.ts` + `transcript-cache` 既有测试
+- [x] **Phase 4 — 增量布局 + 虚拟化文档（I4，D4）**
+  - [x] 4.1 树形 dirty 传播：`measure()` 结果带 revision，高度未变的子树剪枝
+    - **执行记录**：`core/measure.ts::MeasureCache`。签名 = 整棵子树的 `id@revision(width)` 串接，**不是**只看节点自己 —— VStack 自己的 revision 在子节点 update 时不会变，只按自己取 key 会让它永远报旧高度（有测试钉住这条：改子节点 → 容器必须 miss）。代价是每次 measure 走一遍树（节点数个位数），换来的是 10k block 的叶子只在真变化时才算。
+  - [x] 4.2 TranscriptPane 接 `TranscriptRenderer.heights()`：视口裁剪（全屏）+ scrollback commit 判定（inline）统一为一个 `visibleWindow()` 查询
+    - **执行记录**：`core/visible-window.ts`（`heights` + `viewportRows` + `scrollLines` → `lineStart/lineEnd/firstBlock/lastBlock/following`）+ `components/transcript-pane.ts`（`measure()` = 文档总高，`paint()` 只写窗口内的行，`window(width, rows)` 就是那个统一查询）。`following` 由 `offset === 0` 推出而不是单独一个布尔：两处状态一定会漂移，一处不会。零高 block 在定位时跳过，否则折叠处的空块会白拉一个 block 进来画。
+    - **边界**：`paintTranscript` 与 `InlineSurface.render({viewEnd})` **尚未改读这个查询** —— 那需要把区域 API 换成 Scene（Phase 5）。此阶段交付的是查询本身与它在 pane 里的用法，两条旧路径的行为不变（全量测试为证）。
+  - [x] 4.3 缓存 key 加 `componentRev`（§5.4）
+    - **执行记录**：见 §5.4。槽位由 `RenderOptions.componentRevisions` 提供，Phase 6 填值。
+  - [x] 4.4 10k block 合成负载测试：totalLines + 可视区 paint 的复杂度断言（O(blocks visible)，非 O(blocks total)）
+    - **执行记录**：`__tests__/virtual-doc.test.ts` 16 条。10k block、24 行视口：warm 帧 `renderer.stats.misses` 增量为 **0**（零 Markdown 重渲染），`pane.stats.blocksPainted ≤ 25`、`linesPainted = 24` —— 即写入量由视口决定而非文档规模；重复绘制整帧全部命中。
+    - **顺带纠正一个隐含假设**：一个 block 不等于一行（200 个单行 block 排出 399 行，渲染器会加分隔行）。所以「第 N 行属于哪个 block」必须问 `heights()`，凡是按 1 block = 1 line 写的推算都是错的 —— 测试里已改成从渲染器取真实行。
+  - 门禁：`tsc -b --force` 绿；`tui` 872/872；`packages/cli` 1083/1091，8 红与前完全一致；`transcript-cache` 既有测试零改动通过（新 key 槽位恒为 0，命中计数不变）。
 
-- [ ] **Phase 5 — 帧调度统一（I5，D5/D6）**
-  - [ ] 5.1 RenderScene 成为两个 Output 的唯一输入；RenderScheduler 调度不变
-  - [ ] 5.2 `ScrollbackOutput`（InlineSurface 内核）与 `AltScreenOutput`（OwnScreenSurface 内核）改吃 Span 流；标签层只剩 blessed-surface 一条腿
-  - [ ] 5.3 （Go/No-Go D6）字符区间 diff：仅当 Phase 0 基线显示行内重绘占比显著才实施
-  - 门禁：`render-parity.test.ts`（两 Output 对拍）+ working-tail/inline-mode 既有测试
+- [x] **Phase 5 — 帧调度统一（I5，D5/D6）**
+  - [x] 5.1 RenderScene 成为两个 Output 的唯一输入；RenderScheduler 调度不变
+    - **执行记录**：新增 `SceneLine = string | readonly StyledSpan[]`（`core/span.ts`），`RegionPatch.lines` 与 `InlineFrame.scroll/chrome` 的类型都变成 `readonly SceneLine[]`。**RenderScene 的一行就是 `StyledSpan[]`**，所以一个 scene 天然能喂给两个 Output —— 不需要第二个字段，也不需要每个消费者写一遍「优先 spans，退化 tags」的分支。`RenderScheduler` 一行未改（trailing-edge + `requestImmediate` 语义原样）。
+  - [x] 5.2 `ScrollbackOutput`（InlineSurface 内核）与 `AltScreenOutput`（OwnScreenSurface 内核）改吃 Span 流；标签层只剩 blessed-surface 一条腿
+    - **执行记录**：转换收敛到 `terminal/line.ts` 一处（`lineToSpans` / `lineToAnsi` / `lineToTags`）。own 全屏路径新增 `drawSpanLine`（同一套折行算法，去掉 SGR 解析；cell 的样式串来自 `spanStyleParameters`，与 `spansToAnsi` 同一函数 —— 这是两条路径逐格相等的原因）。**inline 路径现在只有一个序列化器**：`lineToAnsi` 一律走 tags→spans→`spansToAnsi`，`diff.ts` 不再自己转换，「比较的就是写出的字节」从注释变成结构保证。
+    - **标签层现状**：只剩 blessed-surface 一处消费（`lineToTags`）。`terminal/sgr.ts` 因此没有生产调用方了 —— 它的测试是 tag 词汇的实测记录、`working-tail.test.ts` 还拿它当参照，所以留到 Phase 7 与 tag 词汇一起删（模块头已标注）。
+    - **一处既有断言因此改了字节**：`surface.test.ts` 期望滚回区里是 `\x1b[90m…\x1b[39m`（paired reset），统一到 span 序列化器后是 `\x1b[m`（整段复位）。两者屏幕一致，契约（「进滚回区的是 ANSI，绝不是 tag」）不变，改的是实现细节的字节。
+  - [x] 5.3 （Go/No-Go D6）字符区间 diff：仅当 Phase 0 基线显示行内重绘占比显著才实施
+    - **裁定：No-Go（降级 backlog），依据实测而非阈值**。见 §4 D6 的裁定栏：行内变更占比 6.9%（看起来值得做），但 `renderViewportFrame` 只花 0.0067ms/帧、整帧 30.8ms —— 写入路径不到帧成本的 0.03%，省下的字节是噪声。
+  - 门禁：`tsc -b --force` 绿；`tui` 876/876；`packages/cli` 1095/1103，8 红与 Phase 4 完全一致；`render-parity.test.ts` 新增对拍「同一批行，own 吃 spans、blessed 吃 tags，字形逐格相等」；`working-tail` / `inline-mode` 既有测试通过（`working-tail` 零改动：它直接调 `tagsToAnsi`）。
 
-- [ ] **Phase 6 — 全量组件化 + TUIApp 瘦身（I6）**
-  - [ ] 6.1 Transcript/ToolView/Composer（InputEditor 保留，外壳上树）逐个迁移，每迁一个删一段 TUIApp 手工拼装
+- [~] **Phase 6 — 全量组件化 + TUIApp 瘦身（I6）**
+  - [~] 6.1 Transcript/ToolView/Composer（InputEditor 保留，外壳上树）逐个迁移，每迁一个删一段 TUIApp 手工拼装
+    - [x] **Transcript**：`TranscriptPane` 接管组装缓存（`lines()` 按 `revision|optionsKey` 记忆，返回**同一个数组**）+ 窗口查询（`visibleLines()`），`TUIApp.paintTranscript` 从 37 行降到 24 行且不再有 `maxStart / clamp / slice` 那套算术 → `visibleWindow()` 终于进生产路径（Phase 4 明确延后的那一项）。`cachedTranscriptLines` 字段与 `renderOptionsKey` 本地副本一并删除，后者落到 `transcript-cache.ts`（它描述的是缓存键，本来就该在缓存旁边）。
+    - [x] **Activity**：`components/activity.ts::ActivityTracker` 接管 `activityPhase/activityMessage/groupActivity/waitingForPermission/activeTools/activeAgents` 六个字段与 113 行 `updateActivity`；`TUIApp` 只剩 `updateActivity` 的 8 行委派 + `waitingForPermission` 的存取器。`turn_start` 的 effort 留在 app（那是 composer 边框的属性，不是活动行的）。`frameRecord/frameString` 移入 `blocks.ts` 供两处共用（原来两份实现，一份接受数组、一份不接受）。
+    - [ ] **ToolView**（`tool-render.ts` 的预览已在块渲染器内，未上树）
+    - [ ] **Composer**（`paintInput` / `paintDockPanel` / `colorComposerRules` 仍手工拼装，约 105 行）
   - [ ] 6.2 TUIApp 收敛为：action dispatcher + composition root + focus 管理；目标 < 1200 行（写死数字防漂移）
-  - 门禁：TUI 全量测试零断言改动（交互语义冻结的证明）
+    - **偏差记录（不改目标值）**：本轮实测 **3441 → 3300 行（−141，−4.1%）**，距 1200 未达成。原因不是时间，是**剩余的 2100 行没有一个是"拼装"**——按职责分块实测：`bindKeys` 及键路由 397 行（输入分发）、`paint*` 系列 496 行（chrome 组合，含 status/footer/completion/overlay/prompt）、`scheduleRender` + `replaceTranscript` + 生命周期 380 行、选项解析与 completion 桥接 300 行。抽任何一块都需要给 `TUIApp` 的 ~35 个私有成员定义一个宿主接口，而把 35 个私有成员升成 public 换取行数是**净损失**（封装是这轮改造要保的东西之一）。
+    - **结论**：1200 行是"职责边界"指标，不是"抽函数"指标。达成它要求先把输入分发（398 行）与 chrome 组合（496 行）拆成两个真正的子系统（各自持有状态），那是一次独立计划的量级；本轮把两块**已经存在的**组件接进生产路径，是为那次拆分清场。
+  - 门禁：TUI 全量测试零断言改动（交互语义冻结的证明）— **已达成**：`tui` 876 → 885 全绿，0 处既有断言改动；`packages/cli` 1104 条里 1096 通过，8 红与 Phase 5 完全一致（worker-path×3 / tui-pty×2 / registry×1 / host-stop-continue×2）。
 
-- [ ] **Phase 7 — blessed 退役 + 终验（I8，D7③）**
-  - [ ] 7.1 删 `blessed-surface.ts`、`blessed-unicode.ts`、TUIApp blessed import、package.json 依赖
-  - [ ] 7.2 三环境基准复测（ConPTY / tmux / 真实 PTY），数字对照 Phase 0 基线写回 §8
-  - [ ] 7.3 真机矩阵：`duya chat` 全屏 + inline × 中文 IME + 鼠标 + 10k block 会话
-  - 门禁：`typecheck:all` + 全量测试 + 基准 JSON + 真机截图（替代 V10）
+- [~] **Phase 7 — blessed 退役 + 终验（I8，D7③）**
+  - [x] 7.1 删 blessed 渲染链：`blessed-surface.ts`、`TUIApp` 的 `blessed.program`/`BlessedProgram`/键路由 blessed 分支、`terminal/sgr.ts`（Phase 5 已无生产调用方）、`@types/blessed` 依赖。终端模式改为自有序列（`enableMouseReporting`/`disableMouseReporting`/`enableBracketedPaste`/`disableBracketedPaste`/`cursorTo`/`hideCursor`/`showCursor`），`OwnScreenSurface` 自己开启鼠标上报。`ScreenRenderer` 收成单成员别名 `= 'own'`，`DUYA_TUI_RENDERER=blessed` 被**忽略而非崩溃**（用户 shell profile 里可能还留着）。
+    - **`blessed-unicode.ts` → `terminal/cell-width.ts`（改名，内容不变）**：它是 blessed 的**唯一**残留依赖，且是数据表不是渲染器。宽度函数与渲染器的一致性正是它存在的理由（编辑器光标列必须等于单元格实际列），换第二份实现（`get-east-asian-width`）会在歧义宽度字符上漂一列。彻底删依赖 = 内联 `blessed/lib/unicode.js` 约 800 行（MIT，主要是三张范围表），那是**独立决定**，不塞进「渲染器归我们了」这一步。
+  - [~] 7.2 基准复测：**ConPTY 一档已测**（见 §8.2），数字与 Phase 0 的 own 列一致（painted P50 30.8ms，未回归）；tmux / 真实 PTY 两档**未测**（本机无对应环境，需在目标环境跑同一条命令）。
+  - [~] 7.3 终端矩阵：Windows ConPTY 下的全屏 composer 输入、Enter 提交、受控 Host run、allow/deny 和终端模式恢复已由真实 PTY 测试覆盖；inline 模式、中文 IME、鼠标交互、长会话/10k block 的人工终端验收，以及 tmux / 非 Windows PTY 尚未验证。
+  - 阶段原始门禁记录：`tsc -b --force` 干净；`tui` **859/859** 全绿（删 `sgr.test.ts` 与 `render-parity.test.ts`，新增 `render-frames.test.ts`）；当时 `packages/cli` 1078 条里 1070 通过。下面的收口记录更新了其中两个 PTY 用例的归因和当前证据。
+
+### 7.4 Closeout verification (2026-10-20)
+
+- `packages/cli/test/tui-pty.test.ts`: **2/2 pass** on Windows ConPTY (80 columns), with a controlled Host and fake worker. Each case sends real `/rev`, DEL (`0x7f`) and BS (`0x08`) bytes; output deltas prove candidates expand as the text narrows (`/rename`, `/read-file`) and disappear when `/` is removed. Host run count stays zero until the prompt is submitted. Each case then asserts exactly one Host run, exercises allow or deny, and confirms the worker received that decision. On exit the test checks the process code and mouse, bracketed-paste, and alternate-screen disable sequences.
+- `packages/cli/src/tui/__tests__/tui-completion-popup.test.ts`: **14/14 pass**, including slash popup display, keyboard selection, and refiltering as more text is typed; DEL/BS behavior is also covered through the real PTY input bytes above.
+- The two historical PTY submission failures were harness false negatives: `readScreen(raw)` strips escapes from an append-only output transcript, so an earlier composer string cannot disappear from it after the UI clears. Waiting for the permission picker and checking the Host run count is the correct observable submission proof. Slash popup assertions use only output deltas to prove candidate expansion and closure. No production input or paste behavior changed.
+- The remaining known full-suite red signatures are worker-path×3, registry×1, and host-stop-continue×2, compared by `(file, test, signature)` against the clean base. The two stop/continue failures reproduce on the base; worker-path and registry failures are also baseline signatures. Do not treat the old aggregate count as current test evidence.
 
 ## 8. Verification
 
 | # | 断言 | 验法 | 现状 | 目标 |
 |---|---|---|---|---|
-| V1 | 同一 token 树经 Span 与标签两条路径 glyph 等价 | Phase 1 parity 对拍 | 标签单路 | 双路等价 |
-| V2 | blessed 不再出现在运行时输入/绘制路径 | Phase 2/5 后 grep import + parity | `TUIApp.ts:38` | 仅 blessed-surface |
-| V3 | 键盘输入→绘制 P95 | Phase 0/7 基准 | 待测 | <30ms |
-| V4 | 流式帧间隔 | 同上 | trailing-edge 机制在 | ≥30FPS 等效 |
-| V5 | 10k block 滚动 paint 复杂度 | Phase 4 合成测试 | 缓存已有、裁剪无 | O(visible) |
-| V6 | 非可视 Block 零 Markdown 重渲染 | transcript-cache stats（hits/misses 已有） | 部分 | 断言钉死 |
+| V1 | 同一 token 树经 Span 与标签两条路径 glyph 等价 | Phase 1 parity 对拍 | **达成**：`span.test.ts` 双路逐字节等价（含 500 条随机输入）；Phase 7 后对拍对象从「两个渲染器」改为「同一个渲染器的两种表示」（`render-frames.test.ts`） | 双路等价 |
+| V2 | blessed 不再出现在运行时输入/绘制路径 | Phase 2/5 后 grep import + parity | **达成**：Phase 7 后 `src/` 内零 blessed import，唯一残留是 `terminal/cell-width.ts` 引用它的宽度表（数据表，非渲染器） | 仅宽度表 |
+| V3 | 键盘输入→绘制 P95 | Phase 0/7 基准 | own 32.0ms / blessed 48.5ms（见 §8.1） | <30ms |
+| V4 | 流式帧间隔 | 同上 | own p50 76.6ms / p95 79.4ms；blessed p50 77.2 / p95 83.9（同一 trailing-edge 机制） | ≥30FPS 等效 |
+| V5 | 10k block 滚动 paint 复杂度 | Phase 4 合成测试 | `totalLines()` 线性（2000 块 91ms，10× 块数 8× 时间）；pane 一帧写 ≤ 视口行数、warm 帧 0 次 Markdown 重渲染（Phase 4） | O(visible) |
+| V6 | 非可视 Block 零 Markdown 重渲染 | transcript-cache stats（hits/misses 已有） | 已断言：10k block warm 帧 miss 增量 0（Phase 4） | 断言钉死 |
 | V7 | 交互语义零变化 | Phase 6 全量测试零断言改动 | — | 零改动 |
 | V8 | 双模式同一 RenderScene | Phase 5 对拍 | 两套内核 | 一套管线 |
 | V9 | IME/中文/宽字符回归 | Phase 2 既有 width/编辑器测试迁移 + 真机 | 通过 | 通过 |
 | V10 | 真机三环境截图对照 | Phase 7 | — | 无可见 tag、无错位、IME 正常 |
+| V11 | 区域布局树与 geometry switch 盒子一致 | Phase 3 矩阵（4 尺寸 × 2 overlay 宽 × 5 区域） | 已全等（Phase 3） | 全等 |
+
+### 8.1 Phase 0 基准数字（2026-10-19，Windows ConPTY 宿主，worktree `plan-615-tui`）
+
+测法：`DUYA_PERF_BASELINE=1 node node_modules/vitest/vitest.mjs run packages/cli/src/tui/__tests__/perf/baseline.test.ts`。下表是**连跑三次的中位**；三次之间离散度 <2%（V3）与 <5%（V4），可作为 Phase 7 复测的对照。
+
+| 指标 | own（新默认） | blessed（回滚路径） | 测的是什么 |
+|---|---|---|---|
+| V3 dispatch P50 / P95 | 0.22 / 0.47ms | 0.29 / 0.91ms | 输入事件 → `paint()` 开始写帧。证明 `requestImmediate` 绕过节流 |
+| V3 painted P50 / P95 | **30.8 / 32.0ms** | **46.0 / 48.5ms** | 输入事件 → 本帧最后一个字节到达流。用户真实感知的那段时间 |
+| V3 单帧字符数 P50 | 1843 | 2004 | 40 块 × 6 行 prefill 后的一次输入帧 |
+| V4 帧间隔 P50 / P95 | 76.6 / 79.4ms | 77.2 / 83.9ms | 60 delta 流；两侧都在节流周期上，`withinInterval = 1.0` |
+| V5 `totalLines()` 200 / 2000 块 | 11.4ms / 90.9ms | 同一实现（`transcript-cache` 无分支） | 冷缓存一次全量布局：2199 / 21999 行 |
+| V5 热缓存二次测量 | 0 miss / 301 hit，0.8ms | 同上 | 文档不变时零 Markdown 重渲染（V6 的可测雏形） |
+
+三点读数说明：
+
+- **V3 的 30ms 是 paint 成本，不是策略成本。** dispatch 只有 0.2ms，说明节流被正确绕过；30ms 全花在组帧 + 写 ~1.8KB。own 比 blessed 快约 33%，这是本次切换的净收益，也是 `<30ms` 目标还没达成的原因 —— 差额要靠 Phase 3/4 的树形 measure 与视口裁剪，不是靠调调度器。
+- **V4 两侧都是 76–79ms**，等于 `MIN_RENDER_INTERVAL_MS`（70ms）加定时器粒度。这不是达标 30FPS（33ms），而是**节流常量本身决定的**：要 30FPS 必须把常量降到 33ms 以下，那是一次独立的性能决策，Phase 0 不代做。
+- **帧字节数必须跨 `SYNC_END` 统计。** 两个 renderer 都不在 `SYNC_BEGIN`…`SYNC_END` 之间写像素（blessed 缓冲到 `_buf` 等 `nextTick`，own 走微任务），所以按标记内区间统计会得到 0；harness 因此从一帧的 `SYNC_BEGIN` 统计到下一帧的 `SYNC_BEGIN`。
+
+
+### 8.2 Phase 7 退役后复测（2026-10-19，Windows ConPTY 宿主，同一 worktree）
+
+测法不变，同一条命令，`DUYA_PERF_BASELINE=1`，连跑三次取中位。**只有一个 renderer，所以没有对照列** —— 这张表不再是记分卡，而是退役后的引擎要守住的地板。
+
+| 指标 | Phase 0 own | Phase 7 own（退役后） | 变化 |
+|---|---|---|---|
+| V3 dispatch P50 / P95 | 0.22 / 0.47ms | 0.24 / 0.43ms | 无 |
+| V3 painted P50 / P95 | 30.8 / 32.0ms | **30.8 / 32.4ms** | 无 |
+| V3 单帧字符数 P50 | 1843 | 1739 | −104 |
+| V4 帧间隔 P50 / P95 | 76.6 / 79.4ms | 77.2 / 79.3ms | 无 |
+| V5 `totalLines()` 200 / 2000 块 | 13.1 / 79.7ms | 16.5 / 87.1ms | +3.4 / +7.4ms（噪声量级） |
+
+- **退役没有回归**：延迟、流式节流、文档布局三项都在 Phase 0 的散布内。单帧字符数少了 104（−5.6%）；本轮没有对组帧路径做过改动，差异来自一次运行与另一次的浮动，未追查成因——记录实测值，不给它编一个解释。
+- **V5 两次读数 13.1/79.7ms → 16.5/87.1ms**。`totalLines()` 自 Phase 1 起没有被改动，比例也几乎不变，判定为机器状态的运行间浮动，不作为回归处理。若要钉死，该项需要一个与 `input latency` 分离的独立测量轮次（同一进程内先跑基准再跑布局，避免互相污染）。
+- **两档环境未复测**：tmux 与真实 PTY 需要在对应环境跑同一条命令，本机不具备。V10 因此仍未闭合。
 
 ## 9. 依赖与风险
 

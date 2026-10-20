@@ -1,5 +1,5 @@
 /**
- * Inline Markdown tokenizer and its tag emitter.
+ * Inline Markdown: the tokenizer, and the tag view over its spans.
  *
  * ## Why a tokenizer replaces the regex
  *
@@ -9,16 +9,25 @@
  * one more unmaintainable group per token kind. The grammar is small enough to
  * scan by hand and the scan is what plan 614 §5.2 specifies.
  *
+ * ## Where the styles are decided now (plan 615 Phase 1)
+ *
+ * The token tree is lowered to `StyledSpan[]` by `core/span.ts`, and both
+ * writers consume that: `spansToTags` here (the blessed-tag compatibility
+ * view) and `spansToAnsi` in `terminal/ansi.ts`. Nothing in this file decides
+ * what a construct MEANS any more — only how to spell it as a tag. That split
+ * is what makes it possible to ask "do the two spellings paint the same
+ * screen?" and get an honest answer (see `__tests__/span.test.ts`).
+ *
  * ## The contract with the callers
  *
  * - Input is ONE line. Nothing here introduces a newline: the block line-count
  *   invariant (`transcript-view.ts` header, rule at the top) is a hard
  *   constraint, and the table renderer relies on cell renders staying one row.
- * - Text payloads must go through `escapeTags` exactly once. The style
- *   functions (`stylesOf`) already escape their argument, so this module only
- *   escapes the segments it emits BARE (plain text, link labels, image alt).
- * - `renderInlineTokens` emits only complete `{tag}…{/tag}` pairs around its
- *   children, so pairing is structural — the fuzz test pins it anyway (V5).
+ * - Text payloads are escaped to blessed's vocabulary (`{open}`) exactly once,
+ *   in `spansToTags`. Spans carry RAW text, which is what lets the ANSI writer
+ *   emit it unchanged.
+ * - `renderInlineTokens` emits only complete `{tag}…{/tag}` pairs, so pairing
+ *   is structural — the fuzz test pins it anyway (V5).
  *
  * ## What is deliberately NOT here
  *
@@ -29,6 +38,16 @@
  */
 
 import { escapeTags } from './escape.js';
+import { colorFromTagBody, sameColor, tagBodyFor, type SpanColor } from '../core/color.js';
+import {
+  attrs,
+  mergeSpanStyles,
+  tokensToSpans,
+  PLAIN_STYLE,
+  type InlineSpanRoles,
+  type SpanStyle,
+  type StyledSpan,
+} from '../core/span.js';
 import type { Styles } from '../transcript-view.js';
 
 /** One inline construct. `text` is a literal run; the rest carry children. */
@@ -248,63 +267,170 @@ export function rawTagPair(emit: (s: string) => string): { open: string; close: 
   return { open: wrapped.slice(0, at), close: wrapped.slice(at + PROBE_SENTINEL.length) };
 }
 
-function probePair(emit: (s: string) => string): { open: string; close: string } {
-  return rawTagPair(emit);
+/**
+ * Everything the tag view needs from the theme: which renderer will parse the
+ * tags, and the two colours an attribute may be degraded to.
+ */
+export interface SpanTagView {
+  readonly renderer: 'blessed' | 'own';
+  /** Where `italic` goes when the renderer cannot paint it. */
+  readonly accent: SpanColor;
+  /** Where `strike` goes when the renderer cannot paint it. */
+  readonly muted: SpanColor;
+}
+
+/** Resolve the tag view from the style set a caller already has. */
+export function tagViewOf(styles: Pick<Styles, 'renderer' | 'tags'>): SpanTagView {
+  return {
+    renderer: styles.renderer,
+    accent: colorFromTagBody(styles.tags.accent) ?? { kind: 'named', name: 'cyan' },
+    muted: colorFromTagBody(styles.tags.muted) ?? { kind: 'named', name: 'gray' },
+  };
+}
+
+/** Resolve the span roles (the colours inline Markdown needs) from the theme. */
+export function spanRolesOf(styles: Pick<Styles, 'tags'>): InlineSpanRoles {
+  return {
+    muted: colorFromTagBody(styles.tags.muted) ?? { kind: 'named', name: 'gray' },
+    accent: colorFromTagBody(styles.tags.accent) ?? { kind: 'named', name: 'cyan' },
+    link: colorFromTagBody(styles.tags.link) ?? { kind: 'named', name: 'gray' },
+  };
+}
+
+/**
+ * The tags that open one style, in the order they should nest.
+ *
+ * `order` is not arbitrary. The envelope (a heading's colour around a whole
+ * line) opens colour-first, because that is the shape the pre-615 renderer
+ * emitted and the markup tests pin it. A per-span delta opens attributes
+ * first, which is the rule `own/markup.ts` measured against blessed: it emits
+ * `{bold}{241-fg}` as `1;38;5;241`, and the same internal order keeps the tag
+ * strings readable next to the bytes they produce.
+ */
+function openTags(style: SpanStyle, order: 'color-first' | 'attrs-first', view: SpanTagView): string[] {
+  const colour = style.fg === undefined ? [] : [`{${tagBodyFor(style.fg)}}`];
+  const attributes = (style.attrs ?? []).map((attribute) => `{${attribute}}`);
+  return order === 'color-first' ? [...colour, ...attributes] : [...attributes, ...colour];
+}
+
+/**
+ * Apply the renderer's limitations to a span's style.
+ *
+ * Blessed has no italic and no strike (its `_attr` prints the tags literally),
+ * so those attributes have to become colours there. This is deliberately in the
+ * TAG view and not in `tokensToSpans`: the span says what the text MEANS, and
+ * each output decides how to approximate it. Putting the fold earlier would
+ * make the shared representation a blessed-shaped one.
+ */
+function resolveForRenderer(style: SpanStyle, view: SpanTagView): SpanStyle {
+  if (view.renderer === 'own') return style;
+  const listed = style.attrs ?? [];
+  let fg = style.fg;
+  let changed = false;
+  if (listed.includes('strike')) {
+    fg = view.muted;
+    changed = true;
+  }
+  if (listed.includes('italic')) {
+    // Italic is applied last: when a span somehow carries both, emphasis is the
+    // stronger signal and the more recent one in the source order.
+    fg = view.accent;
+    changed = true;
+  }
+  if (!changed) return style;
+  const kept = attrs(...listed.filter((attribute) => attribute !== 'italic' && attribute !== 'strike'));
+  return {
+    ...(fg === undefined ? {} : { fg }),
+    ...(kept.length === 0 ? {} : { attrs: kept }),
+    ...(style.bg === undefined ? {} : { bg: style.bg }),
+    ...(style.linkId === undefined ? {} : { linkId: style.linkId }),
+  };
+}
+
+/** Tags for the parts of `style` the envelope does not already establish. */
+function deltaTags(style: SpanStyle, envelope: SpanStyle, view: SpanTagView): string[] {
+  const out: string[] = [];
+  const inherited = new Set(envelope.attrs ?? []);
+  for (const attribute of style.attrs ?? []) {
+    if (!inherited.has(attribute)) out.push(`{${attribute}}`);
+  }
+  if (style.fg !== undefined && !sameColor(style.fg, envelope.fg)) out.push(`{${tagBodyFor(style.fg)}}`);
+  if (style.bg !== undefined && !sameColor(style.bg, envelope.bg)) out.push(`{${tagBodyFor(style.bg)}}`);
+  return out;
+}
+
+/** Longest common prefix length of two tag lists. */
+function commonPrefix(a: readonly string[], b: readonly string[]): number {
+  let index = 0;
+  while (index < a.length && index < b.length && a[index] === b[index]) index += 1;
+  return index;
+}
+
+/**
+ * Serialise spans to blessed-style tags — the compatibility view.
+ *
+ * Two properties matter and both are tested:
+ *
+ * - **Minimal transitions.** Only the tags that CHANGED are emitted, so a
+ *   coloured run inside a bold run reads `{bold}a {gray-fg}b{/gray-fg} c{/bold}`
+ *   rather than closing and reopening `{bold}` around every span. That is what
+ *   keeps the string the size of the style changes instead of the size of the
+ *   text, and it is why the envelope is emitted once rather than merged into
+ *   each span.
+ * - **Balanced, LIFO closes.** Every open tag is closed in reverse order, which
+ *   the fuzz test in `inline-tokens.test.ts` pins for 2,000 random inputs.
+ *
+ * The envelope is the outer frame: a heading's colour, and later any
+ * block-level style. Spans are then emitted as deltas against it, which is what
+ * lets `# **x**` print `{cyan-fg}{bold}x{/bold}{/cyan-fg}` — the colour
+ * surviving around the bold rather than being replaced by it.
+ */
+export function spansToTags(
+  spans: readonly StyledSpan[],
+  view: SpanTagView,
+  envelope: SpanStyle = PLAIN_STYLE,
+): string {
+  const outer = resolveForRenderer(envelope, view);
+  const outerTags = openTags(outer, 'color-first', view);
+  let out = outerTags.join('');
+  let open = outerTags;
+
+  for (const span of spans) {
+    const style = resolveForRenderer(mergeSpanStyles(outer, span), view);
+    const target = [...outerTags, ...deltaTags(style, outer, view)];
+    const shared = commonPrefix(open, target);
+    for (let index = open.length - 1; index >= shared; index -= 1) {
+      out += `{/${closeBody(open[index] ?? '')}}`;
+    }
+    out += target.slice(shared).join('');
+    out += escapeTags(span.text);
+    open = target;
+  }
+
+  for (let index = open.length - 1; index >= 0; index -= 1) {
+    out += `{/${closeBody(open[index] ?? '')}}`;
+  }
+  return out;
+}
+
+/** `{bold}` → `bold`, so the matching close can be built. */
+function closeBody(openTag: string): string {
+  return openTag.slice(1, -1);
 }
 
 /**
  * Compress tokens back into a blessed tag string, guaranteeing every open tag
- * has its close (V5). The tag BODIES still come from the styles object — this
- * function decides which children each pair wraps and escapes the leaf text
- * exactly once.
+ * has its close (V5).
+ *
+ * Since Phase 1 this is a VIEW over `tokensToSpans`, not a separate renderer:
+ * the token→style decisions live in `core/span.ts` and are shared with the
+ * ANSI writer, so the two cannot drift. The tag spelling still comes from the
+ * theme, which is what keeps every existing markup test byte-identical.
  */
 export function renderInlineTokens(
   tokens: readonly InlineToken[],
-  styles: Pick<Styles, 'muted' | 'bold' | 'accent' | 'link'>,
+  styles: Pick<Styles, 'renderer' | 'tags'>,
+  envelope: SpanStyle = PLAIN_STYLE,
 ): string {
-  const muted = probePair(styles.muted);
-  const bold = probePair(styles.bold);
-  const accent = probePair(styles.accent);
-  const link = probePair(styles.link);
-
-  const render = (list: readonly InlineToken[]): string => {
-    let out = '';
-    for (const token of list) {
-      switch (token.kind) {
-        case 'text':
-          out += escapeTags(token.text);
-          break;
-        case 'code':
-          out += `${muted.open}${escapeTags(token.text)}${muted.close}`;
-          break;
-        case 'strong':
-          out += `${bold.open}${render(token.children)}${bold.close}`;
-          break;
-        case 'emphasis':
-          out += `${accent.open}${render(token.children)}${accent.close}`;
-          break;
-        case 'strike':
-          // Strike is an SGR 9 attribute the blessed chain cannot express yet
-          // (plan 614 §5.3 defers the token to Phase 6); muted keeps it
-          // visible rather than invisible.
-          out += `${muted.open}${render(token.children)}${muted.close}`;
-          break;
-        case 'link': {
-          // D7's conservative shape, already the shipped behaviour: the label
-          // stays readable, the target rides along in the link style.
-          out += `${escapeTags(token.label)} ${link.open}(${escapeTags(token.target)})${link.close}`;
-          break;
-        }
-        case 'image': {
-          // D8: give the alt text and say it is an image — never pretend one
-          // was shown. The old regex path rendered this as `!alt (url)`.
-          out += `${escapeTags(token.alt)} ${muted.open}[image]${muted.close} ${link.open}(${escapeTags(token.target)})${link.close}`;
-          break;
-        }
-      }
-    }
-    return out;
-  };
-
-  return render(tokens);
+  return spansToTags(tokensToSpans(tokens, spanRolesOf(styles)), tagViewOf(styles), envelope);
 }

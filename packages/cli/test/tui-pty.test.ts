@@ -305,16 +305,61 @@ describe('duya tui in a real 80-column PTY', () => {
       // 1. Typed input reaches the composer and starts a run.
       await until(() => screen().includes('duya tui'), 'the TUI to boot');
       await settle();
+
+      // 1a. The slash popup is driven by real terminal input bytes. Narrow to
+      // one result, then send DEL and BS separately to broaden the candidates
+      // again before deleting the trigger. Inspect only each newly painted
+      // output segment: older ANSI transcript bytes are intentionally retained.
+      const slashOffset = raw.length;
+      term.write('/rev');
+      await until(
+        () => readScreen(raw.slice(slashOffset)).includes('previous session'),
+        'the narrowed slash candidate frame',
+      );
+      await settle();
+      const narrowedFrame = readScreen(raw.slice(slashOffset));
+      expect(narrowedFrame).toContain('/resume');
+      expect(narrowedFrame).not.toContain('/rename');
+      const delOffset = raw.length;
+      term.write('\x7f'); // DEL: /rev -> /re
+      await until(() => raw.length > delOffset, 'the DEL redraw');
+      await settle();
+      const delFrame = readScreen(raw.slice(delOffset));
+      expect(delFrame).toContain('/rename');
+      const bsOffset = raw.length;
+      term.write('\x08'); // BS: /re -> /r, widening the candidate set
+      await until(() => raw.length > bsOffset, 'the BS redraw');
+      await settle();
+      const broadenedFrame = readScreen(raw.slice(bsOffset));
+      expect(broadenedFrame).toContain('/rename');
+      expect(broadenedFrame).toContain('/read-file');
+
+      const closeOffset = raw.length;
+      term.write('\x08'); // /r -> /
+      await until(() => raw.length > closeOffset, 'the slash-only redraw');
+      await settle();
+      const removeTriggerOffset = raw.length;
+      term.write('\x7f'); // / -> empty; popup must close
+      await until(() => raw.length > removeTriggerOffset, 'the popup-close redraw');
+      await settle();
+      const closedFrame = readScreen(raw.slice(removeTriggerOffset));
+      expect(closedFrame).not.toMatch(/\/(?:resume|rename)\b/);
+      expect(await client.listAgentRunsBySession(sessionId)).toHaveLength(0);
+
+      // 1b. Typed input reaches the composer and starts a run.
       term.write('run the thing');
       await until(() => screen().includes('run the thing'), 'the prompt to be echoed');
       await settle();
       term.write('\r');
-      await until(() => !screen().includes('❯ run the thing'), 'the composer to submit');
+      // A raw output transcript is append-only: a cleared composer remains in
+      // its history. The permission picker is the observable proof that Enter
+      // submitted and the run reached the worker.
+      await until(() => screen().includes('Allow once'), 'the permission picker after submit');
+      expect(await client.listAgentRunsBySession(sessionId)).toHaveLength(1);
 
       // 2. The permission request is on screen, and all three choices fit in
       //    80 columns. A picker that needs 100 columns would silently drop the
       //    bottom option, and there is no other way to see that.
-      await until(() => screen().includes('Allow once'), 'the permission picker');
       const withPicker = screen();
       expect(withPicker).toContain('[1] Allow once');
       expect(withPicker).toContain('[2] Always allow');
@@ -332,6 +377,10 @@ describe('duya tui in a real 80-column PTY', () => {
       term.write('\u0003');
       const code = await exitCode(term);
       expect(code).toBe(0);
+      expect(raw).toContain('\u001b[?1006l');
+      expect(raw).toContain('\u001b[?1002l');
+      expect(raw).toContain('\u001b[?2004l');
+      expect(raw).toContain('\u001b[?1049l');
     } finally {
       try { term.kill(); } catch { /* already gone */ }
       await host.close();

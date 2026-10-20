@@ -13,6 +13,36 @@ function isPackageRelativePosixPath(value: string): boolean {
   return segments.every((segment) => segment.length > 0 && segment !== '.' && segment !== '..');
 }
 
+/**
+ * One MCP tool an App capability covers.
+ *
+ * `serverName` and `toolName` are the MCP protocol identities the plugin's
+ * own manifest declares, not provider-visible display names. The Host
+ * resolves them against the live catalog by canonical tool identity and
+ * refuses a match that does not belong to the declaring plugin, so a
+ * same-named tool from another plugin never satisfies a mapping.
+ */
+export const PluginAppCapabilityToolSchema = z
+  .object({
+    serverName: z.string().min(1).max(128),
+    toolName: z.string().min(1).max(128),
+  })
+  .strict();
+
+/**
+ * Explicit mapping from an App capability to the MCP tools it covers.
+ *
+ * The mapping is declared, never derived: a capability ID is a plugin
+ * contract, and inferring it from a server or tool name would let one
+ * plugin's declaration silently claim another's tools.
+ */
+export const PluginAppCapabilityMappingSchema = z
+  .object({
+    capability: z.string().min(1).max(128).regex(CAPABILITY_ID_PATTERN),
+    tools: z.array(PluginAppCapabilityToolSchema).max(256),
+  })
+  .strict();
+
 /** A package-local App declaration; it describes metadata, not a grant. */
 export const PluginAppDefinitionSchema = z
   .object({
@@ -22,10 +52,18 @@ export const PluginAppDefinitionSchema = z
       .array(z.string().min(1).max(128).regex(CAPABILITY_ID_PATTERN))
       .max(64),
     stateSchemaVersion: z.number().int().positive(),
+    /**
+     * Which MCP tools each requested capability covers. Optional, because an
+     * App may request a capability it does not exercise yet; when present it
+     * must be unambiguous and must name only requested capabilities.
+     */
+    capabilityTools: z.array(PluginAppCapabilityMappingSchema).max(64).optional(),
   })
   .strict();
 
 export type PluginAppDefinition = z.infer<typeof PluginAppDefinitionSchema>;
+export type PluginAppCapabilityTool = z.infer<typeof PluginAppCapabilityToolSchema>;
+export type PluginAppCapabilityMapping = z.infer<typeof PluginAppCapabilityMappingSchema>;
 
 export const PluginAppDefinitionsSchema = z
   .array(PluginAppDefinitionSchema)
@@ -41,5 +79,77 @@ export const PluginAppDefinitionsSchema = z
         });
       }
       seen.add(app.appId);
+
+      const requested = new Set(app.requiredCapabilities);
+      const mappedCapabilities = new Set<string>();
+      const toolOwners = new Map<string, string>();
+      (app.capabilityTools ?? []).forEach((mapping, mappingIndex) => {
+        const path = [index, 'capabilityTools', mappingIndex];
+        if (!requested.has(mapping.capability)) {
+          ctx.addIssue({
+            code: 'custom',
+            message: `Capability ${mapping.capability} is mapped but not requested`,
+            path: [...path, 'capability'],
+          });
+        }
+        if (mappedCapabilities.has(mapping.capability)) {
+          ctx.addIssue({
+            code: 'custom',
+            message: `Duplicate capability mapping: ${mapping.capability}`,
+            path: [...path, 'capability'],
+          });
+        }
+        mappedCapabilities.add(mapping.capability);
+        mapping.tools.forEach((tool, toolIndex) => {
+          const key = `${tool.serverName}\u0000${tool.toolName}`;
+          const owner = toolOwners.get(key);
+          if (owner !== undefined) {
+            ctx.addIssue({
+              code: 'custom',
+              message: `Tool ${tool.serverName}/${tool.toolName} is mapped by both ${owner} and ${mapping.capability}`,
+              path: [...path, 'tools', toolIndex],
+            });
+          }
+          toolOwners.set(key, mapping.capability);
+        });
+      });
     });
   });
+
+/** Stable identity of one mapped tool, independent of declaration order. */
+export function pluginAppCapabilityToolKey(tool: PluginAppCapabilityTool): string {
+  return `${tool.serverName}\u0000${tool.toolName}`;
+}
+
+/**
+ * The tools a capability currently maps to, sorted for stable comparison.
+ * Returns null when the App declares no mapping for that capability.
+ */
+export function pluginAppCapabilityTools(
+  app: PluginAppDefinition,
+  capability: string,
+): PluginAppCapabilityTool[] | null {
+  const mapping = (app.capabilityTools ?? []).find((entry) => entry.capability === capability);
+  if (!mapping) return null;
+  return mapping.tools
+    .map((tool) => ({ serverName: tool.serverName, toolName: tool.toolName }))
+    .sort((left, right) => pluginAppCapabilityToolKey(left).localeCompare(pluginAppCapabilityToolKey(right)));
+}
+
+/**
+ * True when the declared mapping covers a tool the approved scope did not.
+ *
+ * A narrowed mapping stays covered by the existing grant; a widened one
+ * needs a fresh approval, because the user consented to a smaller tool
+ * scope than the plugin now asks for.
+ */
+export function pluginAppCapabilityMappingExpands(
+  app: PluginAppDefinition,
+  capability: string,
+  approvedTools: readonly PluginAppCapabilityTool[],
+): boolean {
+  const declared = pluginAppCapabilityTools(app, capability);
+  if (declared === null) return false;
+  const approved = new Set(approvedTools.map((tool) => pluginAppCapabilityToolKey(tool)));
+  return declared.some((tool) => !approved.has(pluginAppCapabilityToolKey(tool)));
+}

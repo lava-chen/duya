@@ -204,11 +204,28 @@ export function readFrameContent(frame: LegacyFrame): string {
   return '';
 }
 
+/**
+ * Read a frame payload as a record, or `{}` when it is not one.
+ *
+ * Exported because the activity tracker and the app both need it: two copies of
+ * "is this payload an object" is how one of them ends up accepting an array and
+ * reading `data[0]` as a field name.
+ */
+export function frameRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+/** A string field of a payload, or `''` — never `undefined` leaking into a template. */
+export function frameString(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === 'string' ? value : '';
+}
+
 /** Read `data` as a record, or `{}` when it is not one. */
 function payloadOf(frame: LegacyFrame): Record<string, unknown> {
-  return typeof frame.data === 'object' && frame.data !== null && !Array.isArray(frame.data)
-    ? (frame.data as Record<string, unknown>)
-    : {};
+  return frameRecord(frame.data);
 }
 
 function asString(value: unknown): string {

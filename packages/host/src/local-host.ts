@@ -66,6 +66,10 @@ import { createHostLocalProviderModelCapabilityApi } from './local-provider-mode
 import { createHostLocalAppConnectionApi } from './local-app-connection-api.js';
 import { createHostLocalPluginSetupApi } from './local-plugin-setup-api.js';
 import { createHostPluginAppInstanceApi } from './local-plugin-app-instance-api.js';
+import { createHostPluginAppInvocationApi, type HostPluginAppInvocationAuthority } from './local-plugin-app-invocation-api.js';
+import { createHostPluginAppGrantApi } from './local-plugin-app-grant-api.js';
+import { createHostPluginAppGrantAuthority } from './local-plugin-app-grant-authority.js';
+import type { PluginAppDefinition } from '@duya/plugin-core/apps/declarations';
 import { createHostLocalWorkbenchApi } from './local-workbench-api.js';
 import { createHostLocalSidebarSectionsApi } from './local-sidebar-sections-api.js';
 import { createHostLocalUsageApi } from './local-usage-api.js';
@@ -148,6 +152,17 @@ export interface StartLocalHostOptions {
    * Agent Server uses.
    */
   readonly workerPath?: string;
+  /** Trusted Desktop-owned installed-manifest and grant resolver; omitted fails Plugin App binding closed. */
+  readonly pluginAppInvocationAuthority?: HostPluginAppInvocationAuthority;
+  /**
+   * Trusted installed-manifest resolution. Combined with the Host's own
+   * durable grant ledger it composes the default Plugin App authority, so
+   * the grant API and the invocation API consume one authorization source.
+   */
+  readonly pluginAppManifestResolver?: (
+    pluginId: string,
+    appId: string,
+  ) => Promise<PluginAppDefinition | null>;
   /** better-sqlite3 directory for the worker environment; defaults to ./node_modules. */
   readonly betterSqlite3Path?: string;
   /**
@@ -421,7 +436,41 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     const modeStateApi = createHostModeStateApi(core.stores);
     const taskApi = createHostTaskApi(core.stores);
     const lockApi = createHostLockApi(core.stores);
+    const pluginAppInstanceApi = createHostPluginAppInstanceApi(core.stores.appInstances);
+    // One authorization source for both Plugin App APIs. An injected
+    // authority wins; otherwise the Host composes one from its own durable
+    // grant ledger and the trusted manifest resolver.
+    const pluginAppAuthority = options.pluginAppInvocationAuthority ??
+      (options.pluginAppManifestResolver === undefined
+        ? undefined
+        : createHostPluginAppGrantAuthority({
+          store: core.stores.appGrants,
+          resolveApp: options.pluginAppManifestResolver,
+        }));
     let runExecution: HostRunExecutionController | null = null;
+    const pluginAppGrantApi = createHostPluginAppGrantApi({
+      store: core.stores.appGrants,
+      ...(pluginAppAuthority === undefined ? {} : { authority: pluginAppAuthority }),
+    });
+    const pluginAppInvocationApi = createHostPluginAppInvocationApi({
+      getInstance: (instanceId) => pluginAppInstanceApi.getPluginAppInstance(instanceId),
+      ...(pluginAppAuthority === undefined
+        ? {}
+        : { authority: pluginAppAuthority }),
+      currentRun: async (sessionId) => runExecution?.currentSessionAttempt(sessionId) ?? null,
+      isCurrentRun: async (sessionId, runId, epoch) =>
+        runExecution?.isCurrentSessionAttempt(sessionId, runId, epoch) ?? false,
+      worker: {
+        describeMcpTools: async (input) => {
+          if (!runExecution) throw new Error('Host run execution is unavailable.');
+          return runExecution.describePluginAppMcpTools(input);
+        },
+        invokeMcpTool: async (input) => {
+          if (!runExecution) throw new Error('Host run execution is unavailable.');
+          return runExecution.invokePluginAppMcpTool(input);
+        },
+      },
+    });
     const diagnosticsSink = resolveDiagnosticsSink({
       ...(options.ephemeral === undefined ? {} : { ephemeral: options.ephemeral }),
       ...(options.diagnostics === undefined ? {} : { diagnostics: options.diagnostics }),
@@ -482,6 +531,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           lockApi,
           modeStateApi,
           taskApi,
+          pluginAppInvocationApi,
           logger: executionLogger,
         }),
         logger: executionLogger,
@@ -519,7 +569,9 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
         new AppConnectionStore(mainDatabase.db, deriveConnectionSlug),
       ),
       localPluginSetupApi: createHostLocalPluginSetupApi(new PluginSetupStore(mainDatabase.db)),
-      pluginAppInstanceApi: createHostPluginAppInstanceApi(core.stores.appInstances),
+      pluginAppInstanceApi,
+      pluginAppInvocationApi,
+      pluginAppGrantApi,
       localWorkbenchApi: createHostLocalWorkbenchApi(new WorkbenchDataStore(mainDatabase.db)),
       localSidebarSectionsApi: createHostLocalSidebarSectionsApi(new SidebarSectionsStore(mainDatabase.db)),
       localUsageApi: createHostLocalUsageApi({

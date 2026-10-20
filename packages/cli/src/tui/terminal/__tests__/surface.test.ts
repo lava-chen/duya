@@ -307,7 +307,10 @@ describe('InlineSurface', () => {
       caret: null,
     });
     const out = h.written();
-    expect(out).toContain('\x1b[90m<row 0>\x1b[39m');
+    // Rows are converted once, through the span serializer, so the reset is the
+    // full `ESC[m` rather than the paired `ESC[39m`. The contract being pinned is
+    // the same: what reaches the scrollback is ANSI, never a tag.
+    expect(out).toContain('\x1b[90m<row 0>\x1b[m');
     expect(out).not.toContain('{gray-fg}');
     expect(out).not.toContain('{/gray-fg}');
   });
@@ -319,5 +322,58 @@ describe('InlineSurface', () => {
     h.surface.stop();
     // Stopping restores the cursor and erases nothing.
     expect(since(h.written(), before)).toBe('\x1b[?25h');
+  });
+});
+
+describe('span rows (plan 615 Phase 5)', () => {
+  /**
+   * The seam takes a line in either spelling, and the inline writer must not be
+   * able to tell which one it got: it converts once, at composition time, so a
+   * span row and its tag spelling produce THE SAME BYTES.
+   *
+   * That is the whole point of the phase. If they differed, moving a renderer
+   * from strings to spans would silently change the scrollback it commits — and
+   * a committed row cannot be taken back.
+   */
+  it('writes a span row exactly as it writes the tagged spelling', () => {
+    const tagged = harness(6);
+    tagged.surface.render({
+      scroll: ['{red-fg}a{/red-fg}', '{bold}b{/bold}'],
+      chrome: ['{cyan-fg}S{/cyan-fg}'],
+      caret: null,
+    });
+
+    const spanned = harness(6);
+    spanned.surface.render({
+      scroll: [
+        [{ text: 'a', fg: { kind: 'named', name: 'red' } }],
+        [{ text: 'b', attrs: ['bold'] }],
+      ],
+      chrome: [[{ text: 'S', fg: { kind: 'named', name: 'cyan' } }]],
+      caret: null,
+    });
+
+    expect(spanned.written()).toBe(tagged.written());
+    expect(spanned.written()).not.toContain('{');
+  });
+
+  it('commits a span row as ANSI, not as tags', () => {
+    // The commit path is separate from the live-area write, so it has to be
+    // checked separately: a tag that survives into the user's scrollback is
+    // printed once and can never be corrected.
+    const h = harness(3);
+    h.surface.render({
+      scroll: [
+        [{ text: 'gone', fg: { kind: 'named', name: 'red' } }],
+        [{ text: 'gone2' }],
+        [{ text: 'a' }],
+        [{ text: 'b' }],
+      ],
+      chrome: ['S'],
+      caret: null,
+    });
+    const written = h.written();
+    expect(written).toContain('\x1b[31mgone');
+    expect(written).not.toContain('StyledSpan');
   });
 });

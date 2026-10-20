@@ -70,7 +70,7 @@ export class WorkerManager {
   private readonly options: WorkerManagerOptions;
   private readonly logger: WorkerManagerLogger;
   private onWorkerCrash: ((sessionId: string) => void) | null = null;
-  private onWorkerMessage: ((sessionId: string, msg: Record<string, unknown>) => void) | null = null;
+  private onWorkerMessage: ((sessionId: string, msg: Record<string, unknown>, child: ChildProcess) => void) | null = null;
   // H6: Track intentionally killed workers so their exit is not misjudged as a crash
   private intentionalKills = new WeakSet<ChildProcess>();
   // Plan 426 Phase 2: idle recycling. lastActivityAt refreshes on every
@@ -111,7 +111,7 @@ export class WorkerManager {
     this.onWorkerCrash = handler;
   }
 
-  setMessageHandler(handler: (sessionId: string, msg: Record<string, unknown>) => void): void {
+  setMessageHandler(handler: (sessionId: string, msg: Record<string, unknown>, child: ChildProcess) => void): void {
     this.onWorkerMessage = handler;
   }
 
@@ -365,10 +365,20 @@ export class WorkerManager {
         }
         return;
       }
-      if (this.workers.get(sessionId) !== child && msg.type === 'db:request' &&
-          typeof msg.action === 'string' && msg.action.startsWith('session:spawn')) {
-        child.send({ type: 'db:response', id: msg.id, success: false, error: 'Session delegation from a superseded worker is refused.' });
-        return;
+      if (this.workers.get(sessionId) !== child && msg.type === 'db:request') {
+        const action = typeof msg.action === 'string' ? msg.action : '';
+        if (action.startsWith('session:spawn') || action === 'message:append') {
+          child.send({
+            type: 'db:response',
+            id: msg.id,
+            success: false,
+            code: 'superseded_worker',
+            error: action === 'message:append'
+              ? 'Transcript append from a superseded worker is refused.'
+              : 'Session delegation from a superseded worker is refused.',
+          });
+          return;
+        }
       }
       // conductor:executor:rpc, appConnection:invoke,
       // appConnection:listDescriptors, appConnection:catalog,
@@ -382,7 +392,7 @@ export class WorkerManager {
         return;
       }
       if (this.onWorkerMessage) {
-        this.onWorkerMessage(sessionId, msg);
+        this.onWorkerMessage(sessionId, msg, child);
       }
     });
 

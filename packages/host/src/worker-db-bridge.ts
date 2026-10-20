@@ -42,6 +42,7 @@ import { createRunControlPlaneActions, type RunControlPlaneLogger } from './run-
 import { createHostToolApprovalApi } from './tool-approval-api.js';
 import type { WorkerDbBridge } from './run-execution.js';
 import type { createHostSessionService, SessionServiceCaller } from './session-service.js';
+import type { HostPluginAppInvocationInternalApi } from './local-plugin-app-invocation-api.js';
 import {
   hostMessageItemsToIpcMessages,
   ipcMessageToNewEvent,
@@ -96,6 +97,7 @@ export interface HostWorkerDbBridgeOptions {
   readonly lockApi?: HostLockApiV1;
   readonly modeStateApi?: HostModeStateApiV1;
   readonly taskApi?: HostTaskApiV1;
+  readonly pluginAppInvocationApi?: HostPluginAppInvocationInternalApi;
   /**
    * Parsed-document attachments for `session:loadMessages`. Desktop serves
    * this from its attachment store; a standalone Host returns an empty list
@@ -195,6 +197,16 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
       if (handled !== undefined) return handled;
 
       switch (action) {
+        case 'plugin-app:binding-current': {
+          if (!caller || options.pluginAppInvocationApi === undefined) return false;
+          const bindingId = requireString(payload, 'bindingId', action);
+          const nonce = requireString(payload, 'nonce', action);
+          const toolId = requireString(payload, 'toolId', action);
+          if (Object.keys(payload).some((key) => !['bindingId', 'nonce', 'toolId'].includes(key))) {
+            throw new WorkerDbBridgeError('invalid_payload', 'plugin-app:binding-current accepts only bindingId, nonce, and toolId.');
+          }
+          return options.pluginAppInvocationApi.isBindingCurrent(bindingId, nonce, toolId, caller);
+        }
         case 'session:spawn':
         case 'session:spawnList':
         case 'session:spawnGet':
@@ -305,6 +317,9 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
           const sessionId = requireString(payload, 'sessionId', 'message:append');
           const messages = payload.messages as Array<Record<string, unknown>> | undefined;
           const turnId = payload.turnId as string | null | undefined;
+          // The worker payload is not authority for run identity. Capture the
+          // run from the Host caller only when it owns this target session.
+          const runId = caller?.sessionId === sessionId ? caller.runId : undefined;
           if (!messages || !Array.isArray(messages)) {
             return { success: false, reason: 'invalid_messages' };
           }
@@ -317,7 +332,9 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
               ),
             );
             const receipt = await api.appendTimeline(sessionId, {
-              entries: events.map((event) => event.payload),
+              entries: events.map((event) => runId === undefined || event.payload.type !== 'message'
+                ? event.payload
+                : { ...event.payload, runId }),
               ...(turnId !== undefined ? { turnId } : {}),
             });
             return { success: true, count: (receipt as { writtenCount?: number }).writtenCount ?? events.length };
