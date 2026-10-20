@@ -36,6 +36,9 @@ function createBridge(options: { epoch?: number; retired?: boolean } = {}) {
       currentWorker = worker;
       currentGeneration += 1;
     },
+    bumpGeneration: () => {
+      currentGeneration += 1;
+    },
     removeWorker: () => {
       currentWorker = undefined;
     },
@@ -161,5 +164,115 @@ describe('DesktopPluginAppServerBridge', () => {
     expect(bridge.handleWorkerMessage('session-1', {
       type: 'plugin-app:tools', requestId: 'main-loop-0', sessionId: 'session-1', runId: 'run-1', epoch: 4, tools: [],
     }, child)).toBe(true);
+  });
+
+  it('routes an invocation through the captured worker and settles with its answer', async () => {
+    const { bridge, child, commands } = createBridge();
+    const pending = bridge.handle({
+      type: 'desktop-plugin-app:request', requestId: 'main-invoke', operation: 'invoke-tool',
+      sessionId: 'session-1', runId: 'run-1', epoch: 4, workerGeneration: 1,
+      bindingId: 'binding', nonce: 'nonce', toolId: 'tool', schemaRevision: 'rev', capabilityId: 'cap', arguments: {},
+    });
+    const command = commands[0]!;
+    expect(command).toMatchObject({
+      type: 'plugin-app:invoke', sessionId: 'session-1', runId: 'run-1', epoch: 4,
+      bindingId: 'binding', nonce: 'nonce', toolId: 'tool', schemaRevision: 'rev', capabilityId: 'cap',
+    });
+    bridge.handleWorkerMessage('session-1', {
+      type: 'plugin-app:result', requestId: command.requestId, sessionId: 'session-1', runId: 'run-1', epoch: 4,
+      result: { ok: true, result: 'done' },
+    }, child);
+    expect(await pending).toMatchObject({
+      success: true,
+      result: { result: { ok: true, result: 'done' } },
+    });
+  });
+
+  it('drops a reply from the live worker once its generation moved on', async () => {
+    const { bridge, child, commands, bumpGeneration } = createBridge();
+    const pending = bridge.handle({
+      type: 'desktop-plugin-app:request', requestId: 'main-generation', operation: 'describe-tools',
+      sessionId: 'session-1', runId: 'run-1', epoch: 4,
+    });
+    const command = commands[0]!;
+    // The worker process is the same one, but the supervisor counted a
+    // replacement, so the generation the request was bound to is no longer
+    // the live one.
+    bumpGeneration();
+    bridge.handleWorkerMessage('session-1', {
+      type: 'plugin-app:tools', requestId: command.requestId, sessionId: 'session-1', runId: 'run-1', epoch: 4, tools: [],
+    }, child);
+    // The stale reply settled nothing; the request is still open.
+    expect(bridge.handleWorkerMessage('session-1', {
+      type: 'plugin-app:tools', requestId: command.requestId, sessionId: 'session-1', runId: 'run-1', epoch: 4, tools: [],
+    }, child)).toBe(true);
+  });
+
+  it('rejects a reply that does not answer the operation it was sent for', async () => {
+    const { bridge, child, commands } = createBridge();
+    const pending = bridge.handle({
+      type: 'desktop-plugin-app:request', requestId: 'main-mismatch', operation: 'describe-tools',
+      sessionId: 'session-1', runId: 'run-1', epoch: 4,
+    });
+    const command = commands[0]!;
+    // An invocation answer to a catalog request is not an answer to it.
+    bridge.handleWorkerMessage('session-1', {
+      type: 'plugin-app:result', requestId: command.requestId, sessionId: 'session-1', runId: 'run-1', epoch: 4,
+      result: { ok: true, result: 'done' },
+    }, child);
+    expect(await pending).toMatchObject({ success: false, error: { code: 'plugin_app_worker_response_invalid' } });
+  });
+
+  it('drops the pending request when the worker never answers', async () => {
+    vi.useFakeTimers();
+    try {
+      const { bridge, child, commands } = createBridge();
+      const pending = bridge.handle({
+        type: 'desktop-plugin-app:request', requestId: 'main-timeout', operation: 'describe-tools',
+        sessionId: 'session-1', runId: 'run-1', epoch: 4,
+      });
+      const command = commands[0]!;
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      const response = await pending;
+      expect(response).toMatchObject({ success: false, error: { code: 'plugin_app_worker_timeout' } });
+
+      // The request is gone from the pending table, so a late answer is
+      // consumed and settles nothing.
+      expect(bridge.handleWorkerMessage('session-1', {
+        type: 'plugin-app:tools', requestId: command.requestId, sessionId: 'session-1', runId: 'run-1', epoch: 4, tools: [],
+      }, child)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps two concurrent invocations apart, and each settles with its own answer', async () => {
+    const { bridge, child, commands } = createBridge();
+    const first = bridge.handle({
+      type: 'desktop-plugin-app:request', requestId: 'main-a', operation: 'invoke-tool',
+      sessionId: 'session-1', runId: 'run-1', epoch: 4, workerGeneration: 1,
+      bindingId: 'binding', nonce: 'nonce', toolId: 'tool', schemaRevision: 'rev', capabilityId: 'cap', arguments: { n: 1 },
+    });
+    const second = bridge.handle({
+      type: 'desktop-plugin-app:request', requestId: 'main-b', operation: 'invoke-tool',
+      sessionId: 'session-1', runId: 'run-1', epoch: 4, workerGeneration: 1,
+      bindingId: 'binding', nonce: 'nonce', toolId: 'tool', schemaRevision: 'rev', capabilityId: 'cap', arguments: { n: 2 },
+    });
+    // Two calls, two request ids: the bridge never reuses a correlation.
+    expect(commands[0]!.requestId).not.toBe(commands[1]!.requestId);
+
+    bridge.handleWorkerMessage('session-1', {
+      type: 'plugin-app:result', requestId: commands[1]!.requestId, sessionId: 'session-1', runId: 'run-1', epoch: 4,
+      result: { ok: true, result: 'second' },
+    }, child);
+    bridge.handleWorkerMessage('session-1', {
+      type: 'plugin-app:result', requestId: commands[0]!.requestId, sessionId: 'session-1', runId: 'run-1', epoch: 4,
+      result: { ok: true, result: 'first' },
+    }, child);
+
+    const [a, b] = await Promise.all([first, second]);
+    expect(a).toMatchObject({ requestId: 'main-a', success: true, result: { result: { result: 'first' } } });
+    expect(b).toMatchObject({ requestId: 'main-b', success: true, result: { result: { result: 'second' } } });
   });
 });

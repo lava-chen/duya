@@ -176,3 +176,48 @@ mapping. It must not auto-grant, infer a capability from a tool name, or treat
 the install audit ledger as user consent. The Desktop resolver and iframe→Main
 source/origin/nonce boundary remain open as listed above.
 
+## UI 合同冻结（2026-10-20，Desktop 后端切片）
+
+UI 车道只消费下面四组合同。后端已实现并有测试；**iframe 与人工授权不在本 PR**。
+
+| 面 | 入口 | 形状 | 失败 |
+| --- | --- | --- | --- |
+| installed apps | `PluginManager.listInstalled()` → `PluginViewItem.apps`（`apps/desktop/src/main/plugins/types.ts:347`） | `PluginAppDefinition`：`appId` / `entry` / `requiredCapabilities` / `stateSchemaVersion` / `capabilityTools?`（`packages/plugin-core/src/apps/declarations.ts:47`） | 只有 **installed 且 enabled** 的插件的 manifest 算数（`apps/desktop/src/main/plugins/plugin-app-authority.ts:20`）；capabilities 是**请求**不是授予 |
+| instances/state | `HostPluginAppInstanceApiV1`（`packages/agent-protocol/src/plugin-app-instances.ts:49`） | create / get / list / `writePluginAppInstanceState`（`expectedRevision` + `expectedSchemaVersion`）/ `setPluginAppInstanceStatus` | 写拒绝：`not_found` / `stale_revision` / `schema_mismatch` / `inactive` / `invalid_transition`；入参 `plugin_app_instance_invalid_input` 400、`plugin_app_instance_state_too_large` 413 |
+| grant review | `HostPluginAppGrantApiV1`（`packages/agent-protocol/src/plugin-app-invocations.ts:97`） | list / grant（**必须带当前 manifest 的精确 tool scope**）/ revoke | `plugin_app_grant_scope_mismatch` 409、`plugin_app_capability_not_requested` 409、`plugin_app_capability_unmapped` 409、`plugin_app_manifest_unavailable` 404、`plugin_app_grant_authority_unavailable` 503 |
+| bind/invoke/close | `HostPluginAppInvocationApiV1`（`packages/agent-protocol/src/plugin-app-invocations.ts:41`） | bind → `bindingId` + `nonce` + `runId` + `stateSchemaVersion`（**不含 epoch**）；invoke 只收 `bindingId` / `nonce` / `toolId` / `arguments`；close = `revokePluginAppInvocation` | bind：`plugin_app_instance_unavailable` 404、`plugin_app_manifest_mismatch` 409、`plugin_app_session_not_running` 409、`plugin_app_tool_identity_ambiguous` 409、`plugin_app_grant_authority_unavailable` 503。invoke：`binding_invalid` / `attempt_fenced` / `instance_inactive` / `manifest_mismatch` / `capability_revoked` / `tool_unavailable` / `authority_unavailable` / `worker_unavailable` |
+
+UI 必须知道的硬边界：
+
+- **bind 输入不含 run/epoch/grant/manifest/connector 身份**，这些由 Host 推导。
+- **binding 不公开 epoch**。需要按 attempt 做判断时用 `bindingEpoch(bindingId)`（`packages/host/src/local-plugin-app-invocation-api.ts:220`）。
+- **绑定 5 分钟过期**，过期后 invoke 返回 `binding_invalid`。
+- **只允许 active run**：没有 active run 时 bind 直接 409。
+- **人工授权 UI 未实现**：grant 路由是 bearer-token + 拒 Origin 的特权面，它本身不证明人点了同意。
+- **iframe→Main 的 source/origin/nonce 校验未实现**：本切片不含 iframe。
+
+## Desktop 桥验收（2026-10-20）
+
+`ca0c60f3` + `508b7ab4` 接上的生产桥，在本轮补齐了 Main 侧的 child 绑定与清理：
+
+- **Main 的可信 sideband 按 child + requestId 关联，且只消费一次。** 之前它只按 requestId 存，
+  且任一 Agent Server 退出就 `clear()` 全部条目——替换期间新旧 Agent Server 会互相清对方的关联。
+  现在关联带宣布它的 child，只能被同一个 child 消费，退出时只释放自己的条目
+  （`apps/desktop/src/main/agents/plugin-app-trusted-attempts.ts`）。
+- **db-bridge 的 Plugin App 判定抽成独立模块**（`apps/desktop/src/main/agents/plugin-app-binding-check.ts`）。
+  `db-bridge.ts` 直接 import 会拉起整个 Electron Main 图并在 10s 内超时，所以判定逻辑必须可单测。
+- **worker 退出时清掉它的 `workerDbRequests` 路由条目**（`apps/desktop/src/main/agents/server/index.ts`）。
+
+### 证据（`a951f039` + 本轮未提交改动，worktree `wave3-app-state`）
+
+- `apps/desktop/src/main/agents/__tests__/plugin-app-trusted-attempts.test.ts` 10/10
+- `apps/desktop/src/main/agents/__tests__/plugin-app-binding-check.test.ts` 9/9
+- `apps/desktop/src/main/agents/server/__tests__/plugin-app-bridge.test.ts` 13/13
+- `apps/desktop/src/main/agents/server/__tests__/plugin-app-bridge-real.test.ts` 7/7（**真实 worker 子进程**）
+- `apps/desktop/src/main/agents/server/__tests__/plugin-app-trusted-attempt.test.ts` 8/8（**真实 RunOrchestrator + 真实 WorkerManager**）
+- 变异证明：去掉 router 的字段剥除 → 1 条红；去掉 foreign-child 判定 → 2 条红；
+  去掉 epoch 判定 → 1 条红；去掉 session/run 交叉判定 → 1 条红；去掉 action 判定 → 1 条红。
+  另两处变异（`attempt.retired`、`execution` 形状）是**冗余防御**，变异后仍全绿——
+  `attemptFor` 已过滤 retired，后续 session/run 判定也覆盖了形状。
+
+

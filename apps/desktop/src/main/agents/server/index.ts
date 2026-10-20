@@ -34,13 +34,6 @@ workerManager.setCrashHandler((sessionId) => {
   checkpointBatcher.flush();
 });
 
-// A worker that exits takes every in-flight Plugin App request bound to it
-// with it. The bridge settles those as failures instead of leaving them to
-// time out.
-workerManager.setWorkerExitHandler((_sessionId, child) => {
-  desktopPluginAppBridge?.workerExited(child);
-});
-
 const pendingDbRequests = new Map<string, {
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
@@ -49,6 +42,18 @@ const pendingDbRequests = new Map<string, {
 
 const workerDbRequests = new Map<string, import('child_process').ChildProcess>();
 let desktopPluginAppBridge: DesktopPluginAppServerBridge | null = null;
+
+// A worker that exits takes every in-flight request bound to it with it. The
+// Plugin App bridge settles those as failures instead of leaving them to time
+// out, and the database routing entries for that worker go with it: a dead
+// worker cannot answer, so an entry left behind would route a late response
+// to a process that is gone.
+workerManager.setWorkerExitHandler((_sessionId, child) => {
+  desktopPluginAppBridge?.workerExited(child);
+  for (const [requestId, requestChild] of workerDbRequests) {
+    if (requestChild === child) workerDbRequests.delete(requestId);
+  }
+});
 
 process.on('message', (msg: Record<string, unknown>) => {
   if (msg.type === 'desktop-plugin-app:request' && typeof msg.requestId === 'string' && desktopPluginAppBridge) {

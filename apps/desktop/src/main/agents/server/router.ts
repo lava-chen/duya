@@ -498,7 +498,7 @@ function correlateWorkerAttempt(
   sessionId: string,
   child: ChildProcess,
   message: Record<string, unknown>,
-  deps: RouterDeps,
+  deps: Pick<RouterDeps, 'workerManager' | 'runOrchestrator'>,
 ): { sessionId: string; runId: string; epoch: number } | null {
   if (message.action !== 'plugin-app:binding-current') return null;
   const execution = message.execution;
@@ -513,11 +513,23 @@ function correlateWorkerAttempt(
   return { sessionId, runId, epoch: attempt.epoch };
 }
 
-function forwardWorkerDbRequest(
+/**
+ * Forward one worker's database request to the Main process, and announce the
+ * attempt the transport correlated it with.
+ *
+ * The body is the worker's own, so every transport-only field it carries is
+ * a forged claim and is stripped before the request leaves the Agent Server.
+ * The correlation the Agent Server made is announced on a SEPARATE message
+ * type instead, so the body stays a body and Main reads the correlation from
+ * the transport fact.
+ *
+ * Exported for tests only. The router calls it; nothing else does.
+ */
+export function forwardWorkerDbRequest(
   sessionId: string,
   child: ChildProcess,
   message: Record<string, unknown>,
-  deps: RouterDeps,
+  deps: Pick<RouterDeps, 'workerManager' | 'runOrchestrator'>,
   workerDbRequests: Map<string, ChildProcess>,
 ): void {
   if (typeof message.id !== 'string' || !process.send) return;

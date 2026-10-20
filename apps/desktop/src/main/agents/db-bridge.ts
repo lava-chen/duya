@@ -60,6 +60,7 @@ import { normalizePath } from '@duya/data/path-utils';
 import { getControlPlane } from '@duya/host/control-plane-service';
 import { COMMAND_SCHEMA_VERSION, type CommandSenderFacts } from '@duya/host/command-receipt';
 import { writeRunReceiptOnWire } from '@duya/host/run-receipt';
+import { authorizePluginAppBindingCheck } from './plugin-app-binding-check';
 import type { WorkflowRunSnapshot, WorkflowRunStatus, WorkflowTriggerKind } from '@duya/agent-protocol/workflow-runs';
 
 /**
@@ -458,18 +459,13 @@ export async function dispatchDbAction(
     }
 
     case 'plugin-app:binding-current': {
-      const caller = trustedAttempt;
-      if (!caller || sender?.role !== 'agent-server' || sender.registeredSessionId !== null ||
-          typeof caller.sessionId !== 'string' || typeof caller.runId !== 'string' || !Number.isSafeInteger(caller.epoch)) return false;
-      if (!p || typeof p !== 'object' || Array.isArray(p) ||
-          Object.keys(p).some((key) => !['bindingId', 'nonce', 'toolId'].includes(key)) ||
-          typeof p.bindingId !== 'string' || typeof p.nonce !== 'string' || typeof p.toolId !== 'string') return false;
-      return getDesktopHostPluginAppInvocationApi().isBindingCurrent(
-        p.bindingId,
-        p.nonce,
-        p.toolId,
-        { sessionId: caller.sessionId, runId: caller.runId, epoch: caller.epoch },
-      );
+      return authorizePluginAppBindingCheck({
+        payload: p,
+        ...(sender ? { sender } : {}),
+        ...(trustedAttempt ? { trustedAttempt } : {}),
+        isBindingCurrent: (bindingId, nonce, toolId, caller) =>
+          getDesktopHostPluginAppInvocationApi().isBindingCurrent(bindingId, nonce, toolId, caller),
+      });
     }
 
     // ==================== Session actions (Host API compatibility adapter) ====================
