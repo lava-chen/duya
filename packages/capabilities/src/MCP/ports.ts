@@ -15,6 +15,27 @@ export interface MCPSamplingRateLimitConfig {
   maxToolRounds?: number;
 }
 
+/**
+ * A host-owned MCP server that lives in the SAME process as the MCP client
+ * (plan 616 T610a).
+ *
+ * `duya_app` is the first such server: the product capabilities (canvas /
+ * bot / browser) are implemented in-process, so the server is handed to the
+ * client as an object rather than spawned as a subprocess. Two consequences
+ * the design depends on:
+ *
+ *  1. The client and the server share one process, so the live
+ *     `ToolUseContext` (host IPC functions, session id, per-turn state)
+ *     reaches the tool implementation without crossing a serialization
+ *     boundary — see the AsyncLocalStorage pipeline (plan 616 T610b).
+ *  2. `connect` / `close` mirror the MCP SDK `Server` surface, so the
+ *     client treats it exactly like a remote server.
+ */
+export interface InProcessMcpServer {
+  connect(transport: unknown): Promise<void>;
+  close(): Promise<void>;
+}
+
 /** Transport configuration consumed by the capability-owned MCP client. */
 export interface MCPServerConfig {
   name: string;
@@ -23,7 +44,15 @@ export interface MCPServerConfig {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
-  transport?: 'stdio' | 'streamable-http';
+  /**
+   * `'in-process'` connects to a host-owned server object handed over in
+   * `inProcessServer` instead of spawning a subprocess. It exists so
+   * first-party product capabilities can speak the same MCP contract as
+   * external servers (plan 616).
+   */
+  transport?: 'stdio' | 'streamable-http' | 'in-process';
+  /** The host-owned server, required when `transport === 'in-process'`. */
+  inProcessServer?: InProcessMcpServer;
   url?: string;
   headers?: Record<string, string>;
   allowedAgentIds?: string[];
