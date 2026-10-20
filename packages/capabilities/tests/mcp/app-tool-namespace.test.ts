@@ -33,7 +33,10 @@ import {
   DUYA_APP_SERVER_NAME,
   DUYA_APP_TOOL_NAMES,
   DUYA_APP_TOOL_PREFIX,
+  appToolOriginalName,
+  appToolVisibleName,
   resolveAppToolBaseName,
+  resolveAppToolBaseNameFromInternalKey,
   isAppToolName,
 } from '../../src/AppServer/app-tool-namespace.js';
 import { getCanvasConductorTools } from '../../src/canvas/index.js';
@@ -98,5 +101,44 @@ describe('plan 616 — the duya_app tool namespace', () => {
     for (const name of canvasToolNames) {
       expect(DUYA_APP_TOOL_NAMES).toContain(name);
     }
+  });
+});
+
+describe('plan 616 — the registry\'s internal key resolves to the same tool', () => {
+  it('resolves every app tool from its internal key', () => {
+    // The registry stores MCP tools under `mcp__<server>__<tool>` and
+    // shows the model the visible name. The permission chain is called
+    // with both, so both must resolve to the same original name.
+    for (const toolName of APP_TOOL_NAMES) {
+      const internalKey = `mcp__${DUYA_APP_SERVER_NAME}__${toolName}`;
+      expect(resolveAppToolBaseNameFromInternalKey(internalKey)).toBe(toolName);
+      expect(appToolOriginalName(internalKey)).toBe(toolName);
+    }
+  });
+
+  it('resolves the model-visible name and the internal key alike', () => {
+    for (const toolName of APP_TOOL_NAMES) {
+      const modelVisible = appToolVisibleName(toolName);
+      const internalKey = `mcp__${DUYA_APP_SERVER_NAME}__${toolName}`;
+      expect(appToolOriginalName(modelVisible)).toBe(toolName);
+      expect(appToolOriginalName(internalKey)).toBe(toolName);
+    }
+  });
+
+  it('leaves another server\'s internal key alone', () => {
+    // A third-party server is not ours, whatever its tool is called.
+    expect(resolveAppToolBaseNameFromInternalKey('mcp__github__create_issue')).toBeUndefined();
+    expect(appToolOriginalName('mcp__github__create_issue')).toBe('mcp__github__create_issue');
+    // Not even when the tool segment is one of ours.
+    expect(resolveAppToolBaseNameFromInternalKey('mcp__duya__canvas_manage')).toBeUndefined();
+    expect(appToolOriginalName('mcp__duya__canvas_manage')).toBe('mcp__duya__canvas_manage');
+  });
+
+  it('leaves an unknown tool of our own server alone', () => {
+    // The closed set is what makes the namespace unambiguous: a tool the
+    // app server does not serve is not one of ours, however it is spelled.
+    expect(resolveAppToolBaseNameFromInternalKey('mcp__duya_app__not_a_tool')).toBeUndefined();
+    expect(appToolOriginalName('mcp__duya_app__not_a_tool')).toBe('mcp__duya_app__not_a_tool');
+    expect(appToolOriginalName('mcp_duya_app_not_a_tool')).toBe('mcp_duya_app_not_a_tool');
   });
 });
