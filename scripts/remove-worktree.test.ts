@@ -184,7 +184,7 @@ describe.skipIf(!BASH)('remove-worktree.sh is fail-closed', () => {
     expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(toBashPath(worktree));
   });
 
-  it('refuses Windows removal when PowerShell is missing instead of using find', () => {
+  it.skipIf(process.platform !== 'win32')('refuses Windows removal when PowerShell is missing instead of using find', () => {
     const { repo, worktree } = makeRepo();
     const shimDir = join(tmpdir(), 'duya-missing-powershell-' + process.pid + '-' + roots.length);
     mkdirSync(shimDir, { recursive: true });
