@@ -19,7 +19,7 @@
 | 接入运行：拒绝 `isolation` + `resume_from` 组合、子代理 cwd 重写到 worktree 根、注入 spawn notice、回执透出 worktree 分支 | `packages/host/src/worker-subagents/service.ts` |
 | 路径落在 duya data root 下 `worktrees/<repo>-<hash>/<slug>-<suffix>`（仓库外，用户 `git status` 看不见） | 同上 `worktreeBaseDir()` |
 | 开发用 worktree 的全流程文档化（创建 / junction overlay / 中途同步 base / 并行冲突 / 巡检 / 误删恢复） | `docs/development/worktree.md` |
-| 安全拆卸 fail-closed：身份验证（必须是已注册 linked worktree）、脏工作树拒绝、locked 拒绝、reparse point 残留即中止、**删掉 `rm -rf` 回退**，带 7 个用例的回归测试 | `scripts/remove-worktree.sh`、`scripts/remove-worktree.test.ts` |
+| 安全拆卸 fail-closed：身份验证（必须是已注册 linked worktree）、脏工作树与 locked worktree 均拒绝、reparse point 残留即中止、**删掉 `rm -rf` 回退**，带拒绝路径与干净拆卸用例的回归测试 | `scripts/remove-worktree.sh`、`scripts/remove-worktree.test.ts` |
 
 **仍未实现**（本 plan 的剩余范围）：
 

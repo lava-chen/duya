@@ -11,8 +11,8 @@
 # is mutated; if any check cannot be satisfied the script aborts and changes
 # nothing at all. In particular it will never:
 #   - remove a directory that is not a registered linked worktree of THIS repo
-#   - discard uncommitted work (dirty worktrees are refused; --force preserves
-#     the work as a patch + untracked tarball first)
+#   - discard uncommitted work (dirty worktrees are always refused; --force
+#     is not supported)
 #   - remove a worktree git has marked locked (an active session holds it)
 #   - follow a junction/reparse point (links are unlinked first and the tree is
 #     re-scanned; any survivor aborts the run)
@@ -22,7 +22,7 @@
 # to refuse (dirty / locked / submodule).
 #
 # Usage:
-#   scripts/remove-worktree.sh <worktree-name-or-path> [--delete-branch] [--force] [--dry-run]
+#   scripts/remove-worktree.sh <worktree-name-or-path> [--delete-branch] [--dry-run]
 #
 # Examples:
 #   scripts/remove-worktree.sh fix-automation-issues
@@ -42,13 +42,11 @@ fail() {
 
 TARGET=""
 DELETE_BRANCH=0
-FORCE=0
 DRY_RUN=0
 
 for arg in "$@"; do
   case "$arg" in
     --delete-branch) DELETE_BRANCH=1 ;;
-    --force) FORCE=1 ;;
     --dry-run) DRY_RUN=1 ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "error: unknown option: $arg" >&2; usage >&2; exit 2 ;;
@@ -130,68 +128,96 @@ BRANCH=$(git -C "$TARGET" branch --show-current 2>/dev/null || true)
 # ---- Check 4: uncommitted work must not be discarded ----------------------
 STATUS=$(git -C "$TARGET" status --porcelain 2>/dev/null) || fail "could not read git status of $TARGET"
 if [ -n "$STATUS" ]; then
-  if [ "$FORCE" != "1" ]; then
-    echo "error: $TARGET has uncommitted changes:" >&2
-    echo "$STATUS" | sed 's/^/    /' >&2
-    echo "commit or stash them first, or re-run with --force to preserve them under" >&2
-    echo ".claude/worktree-snapshots/ before removal." >&2
-    exit 1
-  fi
+  echo "error: $TARGET has uncommitted changes:" >&2
+  echo "$STATUS" | sed 's/^/    /' >&2
+  echo "commit or stash them before removal." >&2
+  exit 1
 fi
 
 echo "==> worktree: $TARGET_ABS (branch: ${BRANCH:-detached})"
 
 if [ "$DRY_RUN" = "1" ]; then
   echo "==> [dry-run] identity, lock and cleanliness checks passed"
-  if [ -n "$STATUS" ]; then
-    echo "==> [dry-run] would preserve uncommitted work, then remove the worktree"
-  else
-    echo "==> [dry-run] would remove the worktree (clean)"
-  fi
+  echo "==> [dry-run] would remove the worktree (clean)"
   [ "$DELETE_BRANCH" = "1" ] && echo "==> [dry-run] would delete branch $BRANCH if it is merged"
   exit 0
 fi
 
-# ---- Step 1: preserve uncommitted work (only reachable via --force) ------
-if [ -n "$STATUS" ]; then
-  SNAP_DIR="$REPO_ROOT/.claude/worktree-snapshots/$(basename "$TARGET_ABS")-$(date -u +%Y%m%dT%H%M%SZ)"
-  mkdir -p "$SNAP_DIR"
-  git -C "$TARGET" diff HEAD --binary > "$SNAP_DIR/worktree.patch"
-  git -C "$TARGET" ls-files --others --exclude-standard -z > "$SNAP_DIR/untracked.list"
-  if [ -s "$SNAP_DIR/untracked.list" ]; then
-    tar -czf "$SNAP_DIR/untracked.tgz" -C "$TARGET_ABS" --null -T "$SNAP_DIR/untracked.list"
-  fi
-  echo "==> preserved uncommitted work in: $SNAP_DIR"
-fi
-
 # ---- Step 2: unlink every junction / symlink inside the worktree ----------
-# `cmd dir /a:l` lists reparse points (Windows paths); `rmdir` WITHOUT /s
-# removes the link itself and never touches the target. This must happen
-# before any recursive delete touches the tree.
+# PowerShell enumerates reparse points without following them; rmdir without /s
+# removes each reported link itself and never touches its target.
+scan_reparse_points() {
+  local output
+  if command -v powershell.exe >/dev/null 2>&1; then
+    if ! output=$(DUYA_REPARSE_SCAN_ROOT="$TARGET_ABS_WIN" powershell.exe -NoProfile -NonInteractive -Command '
+      $ErrorActionPreference = "Stop"
+      [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+      try {
+        $root = [System.IO.Path]::GetFullPath($env:DUYA_REPARSE_SCAN_ROOT)
+        $pending = [System.Collections.Generic.Stack[string]]::new()
+        $pending.Push($root)
+        while ($pending.Count -gt 0) {
+          $current = $pending.Pop()
+          foreach ($entry in (Get-ChildItem -LiteralPath $current -Force -ErrorAction Stop)) {
+            if ($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+              [Console]::Out.WriteLine($entry.FullName)
+            } elseif ($entry.PSIsContainer) {
+              $pending.Push($entry.FullName)
+            }
+          }
+        }
+        exit 0
+      } catch {
+        [Console]::Error.WriteLine($_.Exception.Message)
+        exit 1
+      }
+    ' 2>&1); then
+      [ -n "$output" ] && echo "$output" >&2
+      return 1
+    fi
+  else
+    # find does not follow symlinks unless explicitly asked to do so.
+    if ! output=$(find "$TARGET" -type l -print 2>&1); then
+      [ -n "$output" ] && echo "$output" >&2
+      return 1
+    fi
+  fi
+  printf '%s' "$output"
+}
+
 echo "==> unlinking junctions/symlinks"
-JUNCTIONS=$(cd "$TARGET" && cmd //c "dir /s /b /a:l" 2>/dev/null || true)
+JUNCTIONS=$(scan_reparse_points) || fail "could not scan reparse points under $TARGET; worktree retained"
 UNLINKED=0
 if [ -n "$JUNCTIONS" ]; then
   while IFS= read -r j; do
+    j=$(printf '%s' "$j" | tr -d '\r')
     [ -n "$j" ] || continue
-    # j is a Windows path (backslashes) — hand it straight back to cmd.
+    JUNCTION_NORM=$(norm "$j")
+    case "/$JUNCTION_NORM/" in
+      *"/../"*|*"/./"*) fail "scanner returned a non-canonical path; worktree retained: $j" ;;
+    esac
+    case "$JUNCTION_NORM" in
+      "$TARGET_NORM"/*) ;;
+      *) fail "scanner returned a path outside the worktree; worktree retained: $j" ;;
+    esac
+    # j is a Windows absolute path — hand it straight back to cmd.
     if cmd //c rmdir "\\\\?\\""$j" >/dev/null 2>&1; then
       echo "    unlinked: $j"
       UNLINKED=$((UNLINKED + 1))
     else
       # Fail-closed: a link we could not unlink is a link a recursive delete
       # would follow. Stop before touching anything else.
-      fail "could not unlink (locked?): $j — nothing was removed"
+      fail "could not unlink (locked?): $j — worktree retained; some links may already be unlinked"
     fi
   done <<< "$JUNCTIONS"
 fi
 echo "    unlinked $UNLINKED junction(s)"
 
-# Re-scan: if any reparse point remains, ABORT — a recursive delete now
-# would follow it into the primary checkout.
-LEFTOVER=$(cd "$TARGET" && cmd //c "dir /s /b /a:l" 2>/dev/null || true)
+# Re-scan: if any reparse point remains, ABORT before asking Git to remove the
+# worktree. A failed scan is different from a successful scan with no results.
+LEFTOVER=$(scan_reparse_points) || fail "could not verify reparse-point removal under $TARGET; worktree retained"
 if [ -n "$LEFTOVER" ]; then
-  echo "error: junctions remain after unlink attempt — NOT deleting:" >&2
+  echo "error: junctions remain after unlink attempt — worktree retained:" >&2
   echo "$LEFTOVER" >&2
   echo "close whatever holds them locked and retry." >&2
   exit 1
@@ -202,12 +228,8 @@ fi
 # `pwd -W` is mangled by MSYS argument conversion.
 if git worktree remove "$TARGET" 2>/dev/null; then
   echo "==> removed via git worktree remove"
-elif [ "$FORCE" = "1" ]; then
-  git worktree remove --force "$TARGET" \
-    || fail "git could not remove $TARGET (locked files?) — nothing else was touched"
-  echo "==> removed via git worktree remove --force"
 else
-  fail "git refused to remove $TARGET (modified files, submodules, or a locked worktree). Nothing was deleted. Re-run with --force after preserving your work."
+  fail "git refused to remove $TARGET (modified files, submodules, or a locked worktree). worktree retained."
 fi
 
 git worktree prune

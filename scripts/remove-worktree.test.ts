@@ -1,11 +1,12 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const SCRIPT = resolve('scripts/remove-worktree.sh');
 const roots: string[] = [];
+const junctions: string[] = [];
 
 /**
  * bash (MSYS) treats a backslash in an argument as an escape character and
@@ -41,21 +42,31 @@ function makeRepo(): { repo: string; worktree: string } {
   git(repo, ['config', 'user.email', 'test@example.com']);
   git(repo, ['config', 'user.name', 'test']);
   writeFileSync(join(repo, 'README.md'), 'hello\n');
+  writeFileSync(join(repo, '.gitignore'), 'node_modules/\n');
   git(repo, ['add', '.']);
   git(repo, ['commit', '-m', 'init']);
   git(repo, ['worktree', 'add', '-b', 'feature/x', worktree]);
   return { repo, worktree };
 }
 
-function removeWt(cwd: string, target: string, extra: string[] = []) {
+function removeWt(cwd: string, target: string, extra: string[] = [], env: NodeJS.ProcessEnv = process.env) {
   return spawnSync('bash', [toBashPath(SCRIPT), toBashPath(target), ...extra], {
     cwd,
     encoding: 'utf8',
+    env,
     shell: false,
   });
 }
 
 afterEach(() => {
+  for (const junction of junctions.splice(0)) {
+    try {
+      lstatSync(junction);
+      rmdirSync(junction);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -93,6 +104,24 @@ describe.skipIf(!BASH)('remove-worktree.sh is fail-closed', () => {
     expect(readFileSync(join(worktree, 'README.md'), 'utf8')).toBe('changed\n');
   });
 
+  it.skipIf(process.platform !== 'win32')('unlinks a temporary junction without touching its target', () => {
+    const { repo, worktree } = makeRepo();
+    const root = roots[roots.length - 1];
+    const target = join(root, 'junction-target');
+    const marker = join(target, 'keep.txt');
+    const junction = join(worktree, 'node_modules');
+    mkdirSync(target);
+    writeFileSync(marker, 'keep me\n');
+    symlinkSync(target, junction, 'junction');
+    junctions.push(junction);
+
+    const result = removeWt(repo, worktree);
+
+    expect(result.status).toBe(0);
+    expect(existsSync(worktree)).toBe(false);
+    expect(readFileSync(marker, 'utf8')).toBe('keep me\n');
+  });
+
   it('removes a clean worktree and keeps the branch', () => {
     const { repo, worktree } = makeRepo();
 
@@ -103,24 +132,95 @@ describe.skipIf(!BASH)('remove-worktree.sh is fail-closed', () => {
     expect(git(repo, ['branch', '--list', 'feature/x'])).toContain('feature/x');
   });
 
-  it('preserves dirty work under a snapshot when --force is given', () => {
+  it('does not let --force remove a dirty worktree', () => {
     const { repo, worktree } = makeRepo();
-    writeFileSync(join(worktree, 'README.md'), 'forced\n');
+    writeFileSync(join(worktree, 'README.md'), 'changed\n');
 
     const result = removeWt(repo, worktree, ['--force']);
 
-    expect(result.status).toBe(0);
-    expect(existsSync(worktree)).toBe(false);
-    const snapshots = join(repo, '.claude', 'worktree-snapshots');
-    expect(existsSync(snapshots)).toBe(true);
-    const entries = execFileSync('bash', ['-c', `ls "${toBashPath(snapshots)}"`], { encoding: 'utf8' });
-    expect(entries.trim().length).toBeGreaterThan(0);
-    const patch = execFileSync(
-      'bash',
-      ['-c', `cat "${toBashPath(snapshots)}"/*/worktree.patch`],
-      { encoding: 'utf8' },
-    );
-    expect(patch).toContain('forced');
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('unknown option: --force');
+    expect(existsSync(worktree)).toBe(true);
+    expect(readFileSync(join(worktree, 'README.md'), 'utf8')).toBe('changed\n');
+  });
+
+  it('does not call git remove when the reparse-point scan fails', () => {
+    const { repo, worktree } = makeRepo();
+    const shimDir = join(tmpdir(), 'duya-scan-failure-' + process.pid + '-' + roots.length);
+    mkdirSync(shimDir, { recursive: true });
+    roots.push(shimDir);
+    const scanner = join(shimDir, process.platform === 'win32' ? 'powershell.exe' : 'find');
+    writeFileSync(scanner, '#!/bin/sh\necho controlled-scan-failure >&2\nexit 23\n');
+    chmodSync(scanner, 0o755);
+    const env = { ...process.env, PATH: shimDir + (process.platform === 'win32' ? ';' : ':') + (process.env.PATH ?? '') };
+
+    const result = removeWt(repo, worktree, [], env);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('controlled-scan-failure');
+    expect(result.stderr).toContain('could not scan reparse points');
+    expect(existsSync(worktree)).toBe(true);
+    expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(toBashPath(worktree));
+  });
+
+  it('does not call git remove when the post-unlink scan fails', () => {
+    const { repo, worktree } = makeRepo();
+    const shimDir = join(tmpdir(), 'duya-rescan-failure-' + process.pid + '-' + roots.length);
+    mkdirSync(shimDir, { recursive: true });
+    roots.push(shimDir);
+    const scanner = join(shimDir, process.platform === 'win32' ? 'powershell.exe' : 'find');
+    const stateFile = join(shimDir, 'scan-state');
+    writeFileSync(scanner, [
+      '#!/bin/sh',
+      'if [ -e "$DUYA_SCAN_STATE" ]; then echo controlled-rescan-failure >&2; exit 23; fi',
+      ': > "$DUYA_SCAN_STATE"',
+      'exit 0',
+      '',
+    ].join('\n'));
+    chmodSync(scanner, 0o755);
+    const env = {
+      ...process.env,
+      DUYA_SCAN_STATE: stateFile,
+      PATH: shimDir + (process.platform === 'win32' ? ';' : ':') + (process.env.PATH ?? ''),
+    };
+
+    const result = removeWt(repo, worktree, [], env);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('controlled-rescan-failure');
+    expect(result.stderr).toContain('could not verify reparse-point removal');
+    expect(existsSync(worktree)).toBe(true);
+    expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(toBashPath(worktree));
+  });
+
+  it('refuses a scanner path that escapes the worktree', () => {
+    const { repo, worktree } = makeRepo();
+    const shimDir = join(tmpdir(), 'duya-scan-escape-' + process.pid + '-' + roots.length);
+    mkdirSync(shimDir, { recursive: true });
+    roots.push(shimDir);
+    const scanner = join(shimDir, process.platform === 'win32' ? 'powershell.exe' : 'find');
+    writeFileSync(scanner, ['#!/bin/sh', 'printf "%s/../outside/link\\n" "$DUYA_REPARSE_SCAN_ROOT"', 'exit 0', ''].join('\n'));
+    chmodSync(scanner, 0o755);
+    const env = { ...process.env, PATH: shimDir + (process.platform === 'win32' ? ';' : ':') + (process.env.PATH ?? '') };
+
+    const result = removeWt(repo, worktree, [], env);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('non-canonical path');
+    expect(existsSync(worktree)).toBe(true);
+    expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(toBashPath(worktree));
+  });
+
+  it('refuses a locked worktree and leaves it registered', () => {
+    const { repo, worktree } = makeRepo();
+    git(repo, ['worktree', 'lock', worktree]);
+
+    const result = removeWt(repo, worktree);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('git has it locked');
+    expect(existsSync(worktree)).toBe(true);
+    expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(toBashPath(worktree));
   });
 
   it('changes nothing in --dry-run mode', () => {
