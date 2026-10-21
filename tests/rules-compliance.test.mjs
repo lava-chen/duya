@@ -152,7 +152,13 @@ test("packages/* 各子包至少有一个规则文件(子包级约束)", async (
   const pkgRoot = join(ROOT, "packages");
   if (!existsSync(pkgRoot)) return; // 不是 monorepo 就跳过
   const pkgDirs = (await readdir(pkgRoot, { withFileTypes: true }))
-    .filter((d) => d.isDirectory() && !d.name.startsWith("."))
+    // `node_modules` is skipped for the same reason the walk skips it: it is
+    // not a package, and a worktree's junction overlay (scripts/
+    // junction-worktree.mjs) creates `packages/node_modules` in EVERY
+    // worktree. Without this, the gate was permanently red in every worktree
+    // and green only in a fresh checkout — a gate that cannot run where the
+    // work happens.
+    .filter((d) => d.isDirectory() && !d.name.startsWith(".") && !SKIP_DIRS.has(d.name))
     .map((d) => d.name);
   const files = await walk(pkgRoot);
   const missing = [];
