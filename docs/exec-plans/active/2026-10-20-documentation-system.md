@@ -1,8 +1,8 @@
 # 精简文档入口与长程开发接续
 
-状态：draft PR #324 / 待基线门禁修复 · 负责人：会话 `01a15907-e31a-7d13-b232-d6e88fde95b5`
+状态：active · PR #324 已合并；剩余历史门禁项见第四轮接续 · 负责人：会话 `01a15907-e31a-7d13-b232-d6e88fde95b5`
 分支：`codex/docs-pr-worktree-policy` · worktree：managed `docs-pr-worktree-policy` · PR 基线：`8a01159c`
-PR：[324](https://github.com/lava-chen/duya/pull/324) · owner：本会话 · 集成：未授权 / 未合并
+PR：[324](https://github.com/lava-chen/duya/pull/324) · 2026-10-20 已合并，merge commit 04a778df1151341060becc4033095c535d492deb
 
 ## 目标与边界
 
@@ -77,7 +77,7 @@ Claude Desktop UI 报告与 4 张截图归并到被忽略的本地 research 主�
 3 份恢复材料与保留提交的内容一致（排除 checkout 的 CRLF / LF 差异）；本次 diff 空白检查通过。
 
 文档整理已落盘；先前三轮未暂存、提交、创建 PR 或合并；第四轮状态见下文。前轮门禁结果见对应记录，不作为当前 HEAD 的重新验证。
-下一步：在独立任务中确认并处理上表两处基线失败，再重跑根门禁；不要为文档整理扩大生产修改或重录架构 baseline。
+下一步：两处基线门禁的后续处置独立记录；本轮仅修订 worktree 文档规则，不将旧门禁状态当作本轮验证。
 本任务路径为根 AGENTS / 文档忽略规则及文档入口、流程和计划；496 原有改动、脚本和 CI 均非本任务实现。
 本地归档有路径与哈希 manifest；旧目录移除，原文件内容保留。文档契约不代表自动 lease / journal / 恢复功能已实现。
 
@@ -99,8 +99,34 @@ Claude Desktop UI 报告与 4 张截图归并到被忽略的本地 research 主�
 独立文档检查：20 个入口、136 个本地链接（去除原始调研入口后）、UTF-8 与 Git 可见性通过；暂存范围仅文档和忽略规则。
 失败源文件与检查器相对 origin/master 的 diff exit 0，证明基线对比成立。
 
-当前成果供 draft PR 审阅，禁止作为全绿集成。尚未获得合并授权，worktree 和分支必须保留。
-PR #324 已创建并确认为 OPEN / draft，head 为本任务分支、base 为 master；创建后只读核对远端 master 仍为 `8a01159c`。
-下一动作：处理已记录基线失败并完成 review/CI；获集成授权后由集成者合并与重验，当前 agent 不自行合并。
-回收状态：未回收，因为 PR 等待审阅 / 门禁处理；任务分支与检出均保留，当前 Git 工作区在本记录更新前干净。
-回收由创建本检出的管理工具执行；合并前不归档，ignored 验证产物和本地原始调研先保存到所需位置，结束后核对 worktree 清单与成果可达性。
+当时的提交先以 draft 等待审阅；随后 PR #324 已合并。此处不推断其 CI 全绿状态。
+PR #324 最终为 MERGED（2026-10-20 15:28 UTC），base 为 master，merge commit 04a778df1151341060becc4033095c535d492deb。合并前核对的远端 master 为 `8a01159c`。
+历史接续：PR #324 合并与后续 master 验证由相应任务记录承接；本轮不重跑旧检查或重新判断其结果。
+回收状态：该旧 worktree 当前仍登记；由原 owner 核对退出、ignored 文件与回收条件。
+回收应由创建本检出的管理工具执行；ignored 验证产物和本地原始调研先保存到所需位置，结束后核对 worktree 清单与成果可达性。当前机器仍登记该旧 worktree；本轮不清理其他任务的检出。
+
+## 第五轮：统一 worktree 交付与 CI 规则（2026-10-21）
+
+任务：本会话 01a15923-7626-78d3-ab42-99673de96e51。分支 codex/worktree-policy-clarification；base 325cdded0799b9ae0fc815ce3accf06ae4c66852；managed worktree worktree-policy-clarification。
+范围：根 AGENTS.md、worktree / engineering-loop 指南与本计划的本轮记录。共享检出中的未跟踪 docs/references/tui-slash-command-survey.md 属于其他工作，不带入本任务。
+
+目标与验收：统一 worktree 选择、PR 合并门槛和依赖 / 生成文件复用规则；链接、编码、空白检查通过；PR 最新 head 的必需 review 与 CI 通过后合并；合并后核对 master 和改动内容，再由 managed-worktree 管理工具安全回收并复核清单。
+
+进度：
+- [x] 核对根规则、专题指南及相关文档归属，记录互相矛盾之处。
+- [x] 在独立 managed worktree 修订规则并保留本轮任务记录。
+- [x] 完成本地文档验证并复核改动；随后在本检出提交。
+- [ ] 创建 PR；满足必需门禁后 merge，并重验 master。
+- [ ] 保存成果可达性证据后归档本 worktree，核对 worktree 清单。
+
+决策：所有 agent 改动默认使用独立 worktree 与 PR；managed 优先，只有 Harness 创建工具不可用时允许指南规定的手工 linked worktree。仅必需 review / CI 构成强制合并门槛；非必需失败必须记录并由获授权集成者评估，不能自动视为绿灯，也不能绕过仓库必需检查。共享依赖仅限兼容锁文件 / 平台的只读复用，构建与测试后必须核对生成文件状态。
+
+验证记录与 PR / 集成 / 回收结果在本节追加。未完成前，本计划和 worktree 均保持 active。
+
+本轮本地验证（2026-10-21；base 325cdded0799b9ae0fc815ce3accf06ae4c66852）：
+
+| SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| base SHA；4 个任务文件 dirty | Windows / PowerShell | 四文件 UTF-8、BOM、相对链接和链接锚点检查 | exit 0 | AGENTS.md、worktree.md、engineering-loop.md、计划记录均通过 |
+| base SHA；4 个任务文件 dirty | Windows / PowerShell | git diff --check | exit 0 | 无空白错误 |
+| base SHA；仅文档与计划改动 | Windows | 代码测试、typecheck、architecture | 未运行 | 没有代码或运行时改动；按文档门禁完成链接、编码、diff 检查 |
