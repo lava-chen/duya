@@ -163,6 +163,41 @@ describe.skipIf(!BASH)('remove-worktree.sh is fail-closed', () => {
     expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(toBashPath(worktree));
   });
 
+  it('refuses Windows removal when PowerShell is missing instead of using find', () => {
+    const { repo, worktree } = makeRepo();
+    const shimDir = join(tmpdir(), 'duya-missing-powershell-' + process.pid + '-' + roots.length);
+    mkdirSync(shimDir, { recursive: true });
+    roots.push(shimDir);
+    const scannerMarker = join(shimDir, 'find-called');
+    const findShim = join(shimDir, 'find');
+    writeFileSync(findShim, [
+      '#!/bin/sh',
+      ': > "$DUYA_FIND_MARKER"',
+      'exit 0',
+      '',
+    ].join('\n'));
+    chmodSync(findShim, 0o755);
+    const env = {
+      ...process.env,
+      OS: 'Windows_NT',
+      DUYA_FIND_MARKER: scannerMarker,
+      PATH: [
+        shimDir,
+        'C:\\Program Files\\Git\\bin',
+        'C:\\Program Files\\Git\\usr\\bin',
+        'C:\\Program Files\\Git\\cmd',
+      ].join(';'),
+    };
+
+    const result = removeWt(repo, worktree, [], env);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('PowerShell is required');
+    expect(existsSync(scannerMarker)).toBe(false);
+    expect(existsSync(worktree)).toBe(true);
+    expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(toBashPath(worktree));
+  });
+
   it('does not call git remove when the post-unlink scan fails', () => {
     const { repo, worktree } = makeRepo();
     const shimDir = join(tmpdir(), 'duya-rescan-failure-' + process.pid + '-' + roots.length);

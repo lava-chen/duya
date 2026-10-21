@@ -146,9 +146,23 @@ fi
 # ---- Step 2: unlink every junction / symlink inside the worktree ----------
 # PowerShell enumerates reparse points without following them; rmdir without /s
 # removes each reported link itself and never touches its target.
+is_windows() {
+  case "$OS" in
+    Windows_NT) return 0 ;;
+  esac
+  case "$OSTYPE" in
+    msys*|mingw*|cygwin*) return 0 ;;
+  esac
+  return 1
+}
+
 scan_reparse_points() {
   local output
-  if command -v powershell.exe >/dev/null 2>&1; then
+  if is_windows; then
+    if ! command -v powershell.exe >/dev/null 2>&1; then
+      echo "error: PowerShell is required to scan Windows reparse points; worktree retained" >&2
+      return 1
+    fi
     if ! output=$(DUYA_REPARSE_SCAN_ROOT="$TARGET_ABS_WIN" powershell.exe -NoProfile -NonInteractive -Command '
       $ErrorActionPreference = "Stop"
       [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
