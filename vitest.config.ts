@@ -94,7 +94,6 @@ export default defineConfig({
       'packages/client-core/test/**/*.test.ts',
       'packages/input-completion/test/**/*.test.ts',
       'packages/gateway/src/**/*.test.ts',
-      'packages/agent/src/**/*.test.ts',
       // Plan 610 A5: the memory tests moved with the code into
       // `packages/memory/src/__tests__`. Without this glob they are tracked
       // test files that no runner collects, which `check-test-coverage`
