@@ -322,9 +322,16 @@ CLAUDE.md 同款位置；改动频率极低）。
 
 11 号是**共享测试基础设施**的缺陷：任何新写的测试只要用 `.js` 拼包子路径就会踩到。
 
-### 9.3 当前分支验证（待本轮执行）
+### 9.3 集成分支验证（2026-10-21）
 
-验证记录将在本分支 typecheck、architecture 与 prompt tests 结束后补入；旧 Qoder worktree 的报告不作为此 SHA 的通过证据。
+当前实现边界：可选逐段 SHA-256 observer 接缝，没有生产 sink、真实会话 hash 表、rollout writer 或 619 Phase 1–4 的产品闭环。以下门禁只证明列出的代码与构建结果；不代表 session recording 或 rollout 完成。
+
+- 分支 `codex/integrate-platform-handoffs`，base `origin/master@325cdded`；应用边界、SSE与 worktree 安全切片后，源码组合为 `43c9c7c2`。
+- `npm run typecheck:all`：`43c9c7c2`，exit 0；`build:packages` 只执行一次，所有原 TypeScript/Electron 检查保留；recorder 的 node:test 4/4。
+- Prompt observer：`npx vitest run packages/host/tests/worker-prompts/prompt-digest.test.ts`，7/7；Plugin App Host API 测试7/7、Desktop Host 测试1/1。SSE decoder 与 Web stream consumer 各13/13。
+- `project-modules.test.ts` 的两条 instruction-index 断言在 observer 之前的基线 `a5a01c99967f8f447881e31d101389a0e3b9d4be` 已同样失败（3 passed / 2 failed）；当前失败集相同，不归因于 observer。
+- Windows worktree 安全测试在 Git Bash `PATH` 前置下14/14（`d8a0d306`；仅缺 PowerShell 的 Windows-specific fixture 在非 Windows 平台 skip）；`architecture:check` 在 `68e60f96` 无新增违规。
+- `npm run electron:build` 在 `68e60f96` exit 0；bundle commit `4f83de28` 后 `npm run bundle:verify` 为 FRESH，0/1083 inputs changed。
 
 ### 9.4 与 620 的分工（2026-10-21 补）
 

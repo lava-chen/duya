@@ -1,7 +1,7 @@
 # 620 — 会话记录架构：单源分类学 + 落盘来源补全 + 语料自包含
 
 状态：active · 实现待认领 · 更新：2026-10-21
-当前集成分支：`codex/integrate-prompt-observer` · base：`325cdded`（origin/master）
+当前集成分支：`codex/integrate-platform-handoffs` · base：`325cdded`（origin/master）
 620 实现：待认领 · 集成授权：已给 · 尚未合并；本次没有读取 `~/.duya`、SQLite 或 rollout 文件。
 
 关联：[619 提示词组装](./619-prompt-assembly-context-channel.md)（**Phase A 是 619 Phase 4 的硬前置**）·
@@ -195,16 +195,18 @@ npx vitest run packages/host/tests packages/agent-protocol/test packages/data 2>
 | SHA / dirty 范围 | 环境 | 命令或操作 | 结果 | 证据 |
 | --- | --- | --- | --- | --- |
 | `325cdded` source snapshot | Windows worktree | 源码级阅读 | 已核对计划范围与可见生产链路；未读取用户数据 | 本计划源代码引用 |
+| `4f83de28` integration checkpoint | Windows | `npm run typecheck:all`; `npm run electron:build`; `npm run bundle:verify` | typecheck/build exit 0; bundle FRESH 0/1083 | 只证明集成分支门禁；不表示 620 Phase A–C 已实现 |
+| `d8a0d306` worktree test | Windows + Git Bash | `npx vitest run scripts/remove-worktree.test.ts` | 14/14 passed | 非 Windows skip 缺 PowerShell 的平台专属 fixture，其余测试照常执行 |
 | — | — | 本地 rollout / DB 扫描 | 未执行 | 本任务明确不读真实用户数据 |
 
-历史 worktree 的 typecheck、architecture 或用户语料统计不作为当前分支验证；实现时在本表追加本树 SHA 与可复现命令。
+旧工作树的 typecheck、architecture 或用户语料统计不作为当前分支证据。当前集成门禁仅记录可复现的构建结果；不读取真实 rollout / DB，也不声明 620 Phase A–C 已实现。
 ## 接续 / 结果
 
 已实现：无（本文件为计划）；prompt observer 仅提供可选摘要接缝，不属于 620 交付。
 已验证：源码级审查；无真实 DB / rollout 扫描，不声明历史语料分布。
-未提交路径：本计划文件与目录登记行（若本分支继续维护）。
+本计划与目录登记行随集成分支提交；它们是计划，不是 620 实现。
 副作用：无。
 
 下一步：由 owner 认领 **A1**，先在固定测试中建立分类表单一权威，再按计划逐步覆盖消费者；任何需真实数据的验收先定义匿名化、访问和留存边界并单独授权。
 
-集成状态：已授权创建计划与 observer PR，尚未合并；本计划实现仍待认领。
+集成状态：计划与 observer 接缝已进入集成分支；620 Phase A 实现仍待认领，PR / merge 状态以仓库为准。
