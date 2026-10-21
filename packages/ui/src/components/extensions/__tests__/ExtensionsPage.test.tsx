@@ -105,6 +105,12 @@ describe('ExtensionsPage', () => {
     }, { timeout: 20000 });
 
     expect(screen.getByText(/extensions\.tabs\.installed/i)).toBeInTheDocument();
+
+    // The page OPENS on the marketplace: it is the tab the state starts on and
+    // the first one in the tab list. Nothing asserted that before, so the
+    // default tab could be swapped and every user would land on the other
+    // panel without a single test turning red.
+    expect(await screen.findByTestId('marketplace-page-stub')).toBeInTheDocument();
   }, 60000);
 
   it('renders the marketplace as a sibling page (not a modal)', async () => {
