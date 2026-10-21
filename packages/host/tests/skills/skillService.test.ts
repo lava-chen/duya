@@ -1,5 +1,7 @@
 /**
- * packages/agent/tests/skills/skillService.test.ts
+ * Moved from packages/agent/tests/skills/skillService.test.ts, which was
+ * removed with the retiring agent package. This file is the surviving home of
+ * that coverage.
  *
  * Plan 435 — CLI display-layer unification: `listSkillDTOs` must cover
  * every skill source the GUI shows (user / project / custom / system /

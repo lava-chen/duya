@@ -20,10 +20,12 @@
  * handles these six scenarios. A scenario testable only after the cutover is a
  * scenario that has never been tested.
  *
- * `packages/agent/tests/unit/agent/turn-loop-product-behavior.test.ts` is the
- * product-level safety net that already exists, and it drives the LEGACY
- * driver. This file is its engine-level counterpart: the same six scenarios,
- * the same shape of assertion, against the driver that will replace it.
+ * The legacy product-level safety net
+ * (`packages/agent/tests/unit/agent/turn-loop-product-behavior.test.ts`) drove
+ * the LEGACY driver and was removed together with the retiring agent package.
+ * This file is the engine-level counterpart that outlives it: the same six
+ * scenarios, the same shape of assertion, against the driver that will replace
+ * it.
  *
  * ## The two rules every test here is built to satisfy
  *

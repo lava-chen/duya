@@ -1,4 +1,6 @@
-// packages/agent/tests/tool/canvas-conductor-prompt.test.ts
+// Moved from packages/agent/tests/tool/canvas-conductor-prompt.test.ts, which
+// was removed with the retiring agent package. This file is the surviving
+// home of that coverage.
 // Regression guard for two prompt contracts:
 //
 // 1. Canvas chat links — the conductor prompt must teach the canonical
