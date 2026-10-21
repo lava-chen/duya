@@ -107,8 +107,9 @@ base：5b12f721 · owner：mavis
 
 ## 接续 / 结果
 
-PR #339（性能与质量，6 个 commit）：https://github.com/lava-chen/duya/pull/339
-独立 PR（测试退役，2 个 commit）：分支 `codex/agent-test-retirement`，单独审查覆盖率与迁移依据。
+PR #339（性能与质量，8 个 commit）：https://github.com/lava-chen/duya/pull/339
+独立 PR（测试退役，3 个 commit）：分支 `codex/agent-test-retirement`（PR #342），
+单独审查覆盖率与迁移依据。
 
 回收：未回收（PR 未集成，未经授权不合并）。
 
@@ -116,10 +117,14 @@ CI 归因结论（相对对照 run 的双向差集）：
 
 | | 新增红 | 不再红 | 既有红 |
 | --- | --- | --- | --- |
-| 单元测试 | **0** | 36 | 59 |
+| 单元测试（#339） | **0** | 36 | 59 |
+| 单元测试（#342） | **0** | 36 | 59 |
 | E2E | **0** | 2 | 15 |
 
+CI 提速效果：Vitest 阶段 34 分钟 → 12.7 分钟；E2E 移出 PR 路径后，
+`build` job 从 17 分钟降到约 3 分钟（只剩 `electron:build`）。
+
 遗留（已写入 PR body 的"本次不做"）：
-最慢 7 个测试文件的内部重构、E2E 复用单次 Electron 启动、`typecheck:all` 按依赖图拆分、
-12 个"实现已迁移、无人测试"的契约补测试、把触碰进程全局状态的测试文件（静态扫出 23 个）
-单独分组串行跑。
+最慢 7 个测试文件的内部重构、E2E 复用单次 Electron 启动（等 E2E 重回 PR 路径时再做）、
+`typecheck:all` 按依赖图拆分、12 个"实现已迁移、无人测试"的契约补测试、
+把触碰进程全局状态的测试文件（静态扫出 23 个）单独分组串行跑。
