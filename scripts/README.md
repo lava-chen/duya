@@ -62,7 +62,7 @@
 | `check-text-encoding.mjs` | `npm run check:encoding` | |
 | `check-manifest-keys.mjs` | `npm run check:manifest-keys` | |
 | `check-no-ts-suppress.mjs` | `npm run check:no-ts-suppress` | |
-| `check-test-coverage.mjs` | `npm run check:test-coverage` | |
+| `check-test-coverage.mjs` | `npm run check:test-coverage` | 精确登记的 alternate runner 接入 `typecheck:all`。 |
 | `check-packaged-artifacts.mjs` | `npm run check:packaged-artifacts` | |
 | `typecheck-electron-gate.mjs` | `npm run typecheck:electron` | |
 | `verify-packaged-parity.mjs` | `npm run electron:verify:packaged` | |
@@ -105,6 +105,7 @@
 | `__tests__/` | `scripts/` 下脚本自身的测试 |
 
 ### 基线文件
+`check-test-coverage.mjs` 只接受源码映射中逐项登记的 alternate runner 路径。每项必须对应精确的 npm 脚本命令，并由 `typecheck:all` 精确调用；其余未收集测试仍会使门禁失败。recorder 的 Node 测试是单独登记项，不豁免整个 `evals/` 目录。
 
 `packaged-artifact-baseline.json`、`test-coverage-baseline.json`、
 `text-encoding-baseline.json`、`typecheck-electron-baseline.txt`
