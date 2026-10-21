@@ -95,6 +95,13 @@ duyaUI.pen
 
 # Agent tools
 /.codex/
+!/.codex/
+/.codex/*
+!/.codex/skills/
+/.codex/skills/*
+!/.codex/skills/visual-component-verify/
+/.codex/skills/visual-component-verify/*
+!/.codex/skills/visual-component-verify/SKILL.md
 .claude/
 .trae/
 .trae-html-share-packages/
