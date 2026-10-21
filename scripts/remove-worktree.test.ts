@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -15,6 +15,28 @@ const junctions: string[] = [];
  */
 function toBashPath(value: string): string {
   return value.replace(/\\/g, '/');
+}
+
+/**
+ * The path git PRINTS a worktree under.
+ *
+ * On Windows the two are not always the same string. `os.tmpdir()` hands
+ * back the 8.3 SHORT form of the user's temp directory
+ * (`C:\Users\RUNNER~1\AppData\Local\Temp`) while git prints the LONG one
+ * (`C:\Users\runneradmin\AppData\Local\Temp`) — the same directory, spelled
+ * two ways, so a `toContain` on the raw path fails even though nothing is
+ * wrong.
+ *
+ * Measured on the Windows runner (run 39643430577): three of these cases
+ * failed on exactly that difference, and the same assertion passes on Linux
+ * and macOS where there is one spelling.
+ */
+function listedWorktreePath(worktree: string): string {
+  try {
+    return toBashPath(realpathSync(worktree));
+  } catch {
+    return toBashPath(worktree);
+  }
 }
 
 function haveBash(): boolean {
@@ -151,7 +173,7 @@ describe.skipIf(!BASH)('remove-worktree.sh is fail-closed', () => {
     expect(result.stderr).toContain('detached HEAD is not contained');
     expect(existsSync(worktree)).toBe(true);
     expect(git(worktree, ['rev-parse', 'HEAD']).trim()).toBe(detachedHead);
-    expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(toBashPath(worktree));
+    expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(listedWorktreePath(worktree));
   });
   it('does not let --force remove a dirty worktree', () => {
     const { repo, worktree } = makeRepo();
@@ -181,7 +203,7 @@ describe.skipIf(!BASH)('remove-worktree.sh is fail-closed', () => {
     expect(result.stderr).toContain('controlled-scan-failure');
     expect(result.stderr).toContain('could not scan reparse points');
     expect(existsSync(worktree)).toBe(true);
-    expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(toBashPath(worktree));
+    expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(listedWorktreePath(worktree));
   });
 
   it.skipIf(process.platform !== 'win32')('refuses Windows removal when PowerShell is missing instead of using find', () => {
@@ -216,7 +238,7 @@ describe.skipIf(!BASH)('remove-worktree.sh is fail-closed', () => {
     expect(result.stderr).toContain('PowerShell is required');
     expect(existsSync(scannerMarker)).toBe(false);
     expect(existsSync(worktree)).toBe(true);
-    expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(toBashPath(worktree));
+    expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(listedWorktreePath(worktree));
   });
 
   it('does not call git remove when the post-unlink scan fails', () => {
@@ -246,7 +268,7 @@ describe.skipIf(!BASH)('remove-worktree.sh is fail-closed', () => {
     expect(result.stderr).toContain('controlled-rescan-failure');
     expect(result.stderr).toContain('could not verify reparse-point removal');
     expect(existsSync(worktree)).toBe(true);
-    expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(toBashPath(worktree));
+    expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(listedWorktreePath(worktree));
   });
 
   it('refuses a scanner path that escapes the worktree', () => {
@@ -264,7 +286,7 @@ describe.skipIf(!BASH)('remove-worktree.sh is fail-closed', () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('non-canonical path');
     expect(existsSync(worktree)).toBe(true);
-    expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(toBashPath(worktree));
+    expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(listedWorktreePath(worktree));
   });
 
   it('refuses a locked worktree and leaves it registered', () => {
@@ -276,7 +298,7 @@ describe.skipIf(!BASH)('remove-worktree.sh is fail-closed', () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('git has it locked');
     expect(existsSync(worktree)).toBe(true);
-    expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(toBashPath(worktree));
+    expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(listedWorktreePath(worktree));
   });
 
   it('changes nothing in --dry-run mode', () => {
