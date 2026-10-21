@@ -191,7 +191,20 @@ export function findMetadataOnlyManifests(baseSha, headSha, changedPaths) {
 }
 
 export function getScopesForEvent(eventName, env = process.env) {
-  if (eventName === 'schedule') {
+  if (eventName === 'schedule' || eventName === 'workflow_dispatch') {
+    // The manual trigger and the nightly both mean "run everything, on every
+    // platform". The nightly has been handled since the schedule trigger
+    // existed; the manual trigger was added to the workflow at the same time
+    // the Electron E2E suite moved OFF the pull-request path, so that the
+    // suite could still be run on demand — and it never could, because this
+    // function threw on any event it did not name. The scope job failed, so
+    // every job that depends on it was skipped, including the one the manual
+    // trigger exists to run.
+    //
+    // Measured on run 39642411510 (a manual dispatch on master): the scope
+    // job failed after 7 seconds with `Unsupported workflow event:
+    // workflow_dispatch`, and the typecheck, test and build jobs all went to
+    // `skipped`. The escape hatch was a door that opened onto a wall.
     return { unitScope: 'full', e2eScope: 'full', buildScope: 'run', e2eFiles: [], unitFiles: [] };
   }
   if (eventName === 'push') {

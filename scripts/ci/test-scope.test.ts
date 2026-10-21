@@ -162,6 +162,22 @@ describe('classifyChangedFiles', () => {
     });
   });
 
+  it('runs the same suites on a manual dispatch, because that is what the trigger is for', () => {
+    // The manual trigger was added to the workflow at the same time the
+    // Electron E2E suite moved OFF the pull-request path, so the suite could
+    // still be run on demand. It could not: this function threw on the event
+    // name, the scope job failed, and every job that depends on it was
+    // skipped — including the one the trigger exists to run. Measured on run
+    // 39642411510.
+    expect(getScopesForEvent('workflow_dispatch', {})).toEqual({
+      unitScope: 'full',
+      e2eScope: 'full',
+      buildScope: 'run',
+      e2eFiles: [],
+      unitFiles: [],
+    });
+  });
+
   it('skips product tests for master pushes because PRs and the schedule own them', () => {
     expect(getScopesForEvent('push', {})).toEqual({
       unitScope: 'skip',
