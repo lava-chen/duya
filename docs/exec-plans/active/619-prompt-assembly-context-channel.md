@@ -1,6 +1,6 @@
 # 619 — 提示词组装改造：单串 system + 消息通道分流 + rollout 留痕
 
-> **Status**: Planning · **Priority**: P0 · **Owner**: TBD
+> **Status**: Active · **Priority**: P0 · **Owner**: /root/app_closeout (observer slice)
 > **立项**: 2026-10-20（复盘：Claude Code 的原始 transcript 暴露了它的提示词注入模型——
 > system prompt 是**分段数组**，易变上下文走**独立注入通道**，每次注入**留痕**。duya 的结构
 > 几乎全有：分段数组、`SYSTEM_PROMPT_DYNAMIC_BOUNDARY`、`PromptSegment` 的 id/placement、
@@ -8,7 +8,10 @@
 > 第二通道的 hash 去重——但**全被 join 掉或从未被消费**。）
 > **前置基座**: 550/551/557（.hbs 模板与模块注册表）、567（reminder source taxonomy）、
 > 408（AGENTS.md 进 system）、561（模型调用轨迹，backlog）
-> **与 561 的边界**: 见 §7。**不重复 561 的事**。
+> **硬前置**: [620 会话记录架构](./620-session-record-architecture.md) **Phase A**
+> （分类学单源）——Phase 4 要新增 `prompt_snapshot` 行类型，而今天加一种记录类型要在
+> **七处**锁步手抄。先做 Phase 4 就是亲手造出第八处。619 的 Phase 0–3 不受此约束，可并行。
+> **与 561 / 620 的边界**: 见 §7。**不重复它们的事**。`codex/integrate-prompt-observer` 基于 `325cdded`；observer 仅提供可选 hash 接缝，尚无生产 sink、rollout 写入或真实会话采样。
 
 ---
 
@@ -16,6 +19,10 @@
 
 把 duya 的提示词组装改成「**一条稳定的 system 串 + 消息通道承载易变上下文 + rollout 逐轮留痕**」
 三层结构，对齐 Claude Code 的注入模型；并在同一轮里修掉调研挖出的 8 个既有缺陷。
+
+### 0.1 当前实现边界
+
+当前代码只提供 opt-in 的逐段 SHA-256 回调；生产路径没有安装 observer，因此不会采集摘要，也没有 `PromptSnapshot` / rollout writer。`DUYA_DUMP_PROMPT_SECTIONS=1` 是独立的显式本地调试路径，会把分段明文写入调用方指定目录，不代表 session recording。任何全文落盘前，必须先定义数据分类、脱敏、保留期限、访问与导出边界；本轮不启用该路径或扫描真实用户数据。
 
 ---
 
@@ -111,22 +118,16 @@ CLAUDE.md 同款位置；改动频率极低）。
 
 ## 4. 分阶段实施
 
-### Phase 0 — 观测基线与契约冻结（只加观测，不改行为）
+### Phase 0 — 观测接缝（只加观测，不改行为）
 
-- `packages/host/src/worker-prompts/PromptSystem.ts:493-538`：新增
-  `PromptSystemConfig.observer?: (digest: PromptSectionDigest[]) => void`，为每段算 sha256；
-  observer 未设置时零开销。
-- `packages/host/src/worker-prompts/PromptSystem.ts:319-333` `maybeDumpPrompt`：加分段 dump
-  模式（`DUYA_DUMP_PROMPT_SECTIONS=1` → 每段一文件 + index.json），默认行为不变。
-- `packages/host/src/worker-session-runtime.ts:1520-1625`：对 host 侧追加块（identity /
-  prefix / MCP catalog / Apps / AGENTS.md / bot / deferred）各算 hash，一并交给 observer。
-- `packages/host/src/worker-prompts/constants/promptSections.ts:48-58`：`volatilePromptSection`
-  的 `_reason` 真正落到 `PromptSection.description`。
-- 新测试：observer 未开时 `buildSystemPrompt` 字节与今天**逐字相同**（回归红线）。
+- `packages/host/src/worker-prompts/observer.ts` 提供进程级 `setPromptObserver`；已安装时按 section 计算 SHA-256 摘要，未安装时生产者跳过 hash 计算。
+- `PromptSystem` 和 `worker-session-runtime` 在实际组装处报告逐段摘要；callback 异常被隔离，不得影响 prompt 结果。
+- `DUYA_DUMP_PROMPT_SECTIONS=1` 可显式写分段调试文件；它包含明文，和 observer / rollout 记录分开评估。
+- 具名测试覆盖摘要、字节不变、无 observer 行为和 observer 抛错时 prompt 不变。
 
-**完成标志**：一个 ≥5 轮真实会话产出逐段 hash 表，能回答「哪些段在变、变了多少次」；
-归类表被实测确认或修正。
+**当前状态**：接缝和定向测试已加入本分支；没有生产 sink，因此尚无真实会话 hash 表。Phase 0 的产品采样验收仍未完成，不能据此决定 Phase 1 的上下文归类。
 
+---
 ### Phase 1 — 修 8 个既有缺陷（见 §5）
 
 落地 (b) 的「只加告警」部分与 (c)(d)(e)(f)(g)(h)；(a) 留到 Phase 2（与分区一起，否则
@@ -171,15 +172,24 @@ CLAUDE.md 同款位置；改动频率极低）。
 
 ### Phase 4 — Rollout 留痕（记全文 + 体积控制）
 
+> **前置**：[620 Phase A](./620-session-record-architecture.md) 必须先落地。A 完成后本 Phase 的
+> 「同步七处」缩成「在权威处加一个 type」；A 未落地就动手，`prompt_snapshot` 自己会变成第八处手抄。
+
 - **新行类型 `prompt_snapshot`**（加在权威处 `packages/agent-protocol/src/rollout-events.ts`，
   不是 worker 侧镜像）：`{type,id,turnId,createdAt,systemPrompt:{hash,length,content?,
   contentOmitted?},contextBlocks:[{id,source,role,hash,length,content?,contentOmitted?}],
   overridden?}`。
-- 同步：`ROLLOUT_EVENT_TYPES`、`isRolloutEvent` 的**内联字面量**（`:201-221`，注释说明
-  vitest/esbuild 会丢跨模块 const 引用）、`packages/data/src/message-log.ts:59` `EventKind`
+- 同步点（**620 A 之后应全部自动派生，此处保留清单只为在 A 未落地时兜底**）：
+  `ROLLOUT_EVENT_TYPES`（`rollout-events.ts:191`）、`isRolloutEvent` 的**内联字面量**
+  （`:201-221`，`:186-190` 注释说明 vitest/esbuild 会丢跨模块 const 引用）、
+  `packages/data/src/message-log.ts:59` `EventKind` + `deriveKind:2644`
   （`message_index.kind` 是裸 TEXT 无 CHECK，**无需迁移**）、
-  `packages/host/src/http-server.ts:5137-5183` `isDurableTimelineEntry`（不加则 HTTP 端点
-  `default: return false` 拒收）、`packages/host/src/worker-journal/types.ts` 镜像。
+  `packages/host/src/http-server.ts:5172` `isDurableTimelineEntry`
+  （`default: return false` 在 `:5215`；不加则 HTTP 端点整批 400 `invalid_timeline_entries`，
+  见 `:3783-3784`）、`packages/host/src/worker-journal/types.ts:27-51` 镜像、
+  重新打包 `packages/host/bundle/worker-entry.js`。
+- **不越界**：`hook_invoked` 只在镜像里存在（`worker-journal/types.ts:45`），protocol 缺位，
+  真发出来 `deriveKind` 会抛 TypeError——归 620 A5 裁定，本计划不碰。
 - **新** `packages/host/src/worker-context/prompt-ledger.ts`：per-session 状态
   `{lastSystemHash, blockHashes, fullWrites}`；`record(turnId, systemPrompt, blocks)`。
   **变化才写全文**（约束 B 的自保控制之一）+ 可选配额 `DUYA_PROMPT_LEDGER_MAX_FULL`
@@ -235,25 +245,35 @@ CLAUDE.md 同款位置；改动频率极低）。
 
 ---
 
-## 7. 与 561（模型调用轨迹，backlog P0）的边界
+## 7. 与 561 / 620 的边界
 
-| | 619（本计划） | 561 |
-| --- | --- | --- |
-| 观测点 | **host 组装层**，每轮一次 | **api/wire 层**，每次 LLM 调用一次 |
-| 行类型 | `prompt_snapshot` | `model_call`（+ `visible` 一等字段） |
-| system 文本 | host 组装终态（含 mode prefix / AGENTS.md / identity） | wire 终态（会被 `options.systemPrompt` 覆盖、带 cache_control 包装） |
-| payload 全文 | 不做 | 561 Phase 4 做 |
-| UI | 不做 | 561 Phase 6 做 |
+三个计划各拥有一片，重叠处只在「system 文本」这一个字段上，用 `overridden` 标记区分：
 
-- 正常路径两者逐字相同；`options.systemPrompt` 覆盖 / `disableSystemPrompt` 时不同 → 619 的行
-  加 `overridden?: boolean` 标记。
-- 619 **先于** 561 落地：把易变上下文挪走后，561 记的 system 才是稳定、值得缓存的。
+| | **619**（本计划） | **620** 会话记录架构 | **561** 模型调用轨迹 |
+| --- | --- | --- | --- |
+| 观测点 | host 组装层，每轮一次 | 分类学与落盘来源，跨所有记录 | api/wire 层，每次 LLM 调用一次 |
+| 行类型 | `prompt_snapshot` | 复活 `system_context`；单源化全部 type | `model_call`（+ `visible` 一等字段） |
+| system 文本 | host 组装终态（含 mode prefix / AGENTS.md / identity） | 不拥有 | wire 终态（会被 `options.systemPrompt` 覆盖、带 cache_control 包装） |
+| payload 全文 | system + 注入块 | 运行时上下文注入全文 | 561 Phase 4 做 |
+| UI | 不做 | 不做 | 561 Phase 6 做 |
+
+**落地顺序：620 Phase A → 619 Phase 0–4 → 561。**
+
+- 620 A 先于 619 Phase 4：否则 `prompt_snapshot` 是第八处手抄（见 Phase 4 的前置注）。
+  619 的 Phase 0–3 不碰行类型，可与 620 A 并行。
+- 619 先于 561：把易变上下文挪走后，561 记的 system 才是稳定、值得缓存的。
+- 正常路径 619 与 561 的 system 逐字相同；`options.systemPrompt` 覆盖 / `disableSystemPrompt`
+  时不同 → 619 的行加 `overridden?: boolean` 标记。
 - 619 的新类型加在 **protocol 侧**（权威），worker 侧只同步；自带 union 覆盖测试。
 - **不越界**修 `hook_invoked`（它在 protocol 的 `isRolloutEvent` 里缺位 → `deriveKind` 会抛）
-  ——那是 561 Phase 1 的任务，只在注释里标注。
-- **不引入 `visible` 字段**（561 的事）；`effectiveMessageTimeline` 本来就滤掉所有非
-  message/compaction 行，语义已正确。
+  ——归 620 A5，只在注释里标注。
+- **不越界**复活 `system_context`（18 种 `RuntimeContextSource` 的注入落盘）——归 620 Phase B。
+  619 的 context rail **不进 timeline**（§8.2），两者不会打架：rail 是「这轮请求带了什么」，
+  `system_context` 是「harness 往会话里注入了什么」。
+- **不引入 `visible` 字段**（561 的事）；`effectiveMessageTimeline`（`message-log.ts:2864`）
+  本来就滤掉所有非 message/compaction 行，语义已正确。
 - **不新建落盘通道**。
+- **隐私门槛**：`systemPrompt` 与 context blocks 可能含用户内容、工作区材料和工具目录。定义并验证脱敏、保留/删除、访问/导出控制前，不实现全文 rollout 写入；hash-only observer 不构成录制授权。
 
 ---
 
@@ -301,3 +321,13 @@ CLAUDE.md 同款位置；改动频率极低）。
 | 11 | 子路径 import 带 `.js` 时 "Cannot find module" | vitest alias 把子路径的 `.js` 与模板的 `.ts` 叠成 `foo.js.ts` | alias 单独捕获扩展名，两种拼写都落到同一文件 |
 
 11 号是**共享测试基础设施**的缺陷：任何新写的测试只要用 `.js` 拼包子路径就会踩到。
+
+### 9.3 当前分支验证（待本轮执行）
+
+验证记录将在本分支 typecheck、architecture 与 prompt tests 结束后补入；旧 Qoder worktree 的报告不作为此 SHA 的通过证据。
+
+### 9.4 与 620 的分工（2026-10-21 补）
+
+会话记录格式的完整对照见 [620](./620-session-record-architecture.md)。本计划只拥有
+system prompt 与注入块这一片；620 拥有分类学单源、运行时上下文落盘、工具结果结构面与
+语料自包含。**Phase 4 必须等 620 Phase A**。

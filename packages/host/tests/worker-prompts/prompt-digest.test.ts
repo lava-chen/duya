@@ -99,6 +99,19 @@ describe('plan 619 phase 0 — prompt section digests', () => {
     expect(collected.length).toBeGreaterThan(0);
   });
 
+  it('keeps prompt assembly intact when the optional observer throws', async () => {
+    const system = new PromptSystem(generalConfig);
+    const ctx = context();
+    const withoutObserver = await system.buildSystemPrompt(ctx);
+
+    setPromptObserver(() => {
+      throw new Error('observer unavailable');
+    });
+    const withFailingObserver = await system.buildSystemPrompt(ctx);
+
+    expect(withFailingObserver).toEqual(withoutObserver);
+  });
+
   it('reports nothing when no observer is installed', async () => {
     const system = new PromptSystem(generalConfig);
     const prompt = await system.buildSystemPrompt(context());

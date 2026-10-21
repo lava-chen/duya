@@ -52,7 +52,11 @@ export function hasPromptObserver(): boolean {
 /** Report digests to the installed sink. A no-op when none is installed. */
 export function reportPromptDigests(digests: readonly PromptSectionDigest[]): void {
   if (!observer) return
-  observer(digests)
+  try {
+    observer(digests)
+  } catch {
+    // Observation is optional and must never interrupt prompt assembly.
+  }
 }
 
 /** SHA-256 of a rendered section's bytes, hex encoded. */
