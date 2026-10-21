@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -18,25 +18,30 @@ function toBashPath(value: string): string {
 }
 
 /**
- * The path git PRINTS a worktree under.
+ * The path a worktree is listed under, in a form that does not depend on how
+ * the platform spells the directories ABOVE it.
  *
- * On Windows the two are not always the same string. `os.tmpdir()` hands
- * back the 8.3 SHORT form of the user's temp directory
+ * On Windows the two spellings differ: `os.tmpdir()` hands back the 8.3 SHORT form of the user's temp directory
  * (`C:\Users\RUNNER~1\AppData\Local\Temp`) while git prints the LONG one
  * (`C:\Users\runneradmin\AppData\Local\Temp`) — the same directory, spelled
  * two ways, so a `toContain` on the raw path fails even though nothing is
  * wrong.
  *
- * Measured on the Windows runner (run 39643430577): three of these cases
- * failed on exactly that difference, and the same assertion passes on Linux
- * and macOS where there is one spelling.
+ * `realpathSync` does NOT close the gap: it resolves junctions and symlinks,
+ * but it leaves the 8.3 short form alone on Windows. Measured on the Windows
+ * runner (run 39655210137): the assertion still asked for the short
+ * spelling after the realpath change, so it was still asking for a name git
+ * does not use.
+ *
+ * So the comparison is made on the TAIL of the path — the temp root's own
+ * name and the worktree directory inside it. That tail is unique per case
+ * (the temp root is created per case, with a random suffix) and both sides
+ * spell it the same way, which is what the assertion is actually about:
+ * this worktree is still registered with git.
  */
 function listedWorktreePath(worktree: string): string {
-  try {
-    return toBashPath(realpathSync(worktree));
-  } catch {
-    return toBashPath(worktree);
-  }
+  const segments = toBashPath(worktree).split('/').filter((segment) => segment.length > 0);
+  return segments.slice(-2).join('/');
 }
 
 function haveBash(): boolean {
