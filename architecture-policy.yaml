@@ -1116,7 +1116,23 @@ selfTest:
   #       desktop-host -> ui edge. Their old src-renderer fingerprints also
   #       left the baseline (the forbidden rule can never be baselined).
   #   +0  no new not-permitted edge from the ~800-file move itself.
-  module-dependency: 127
+  # 127 -> 123 (2026-10-21, PR #339 agent test retirement). The four edges that
+  # left the counter left with the FILES that carried them. Attributed by
+  # measurement, not inferred: the same patched checker was run over the base
+  # tree (577c7749) and over this tree, and the per-file carrier sets were
+  # diffed. Every count that changed belonged to a file this slice DELETED:
+  #   packages/agent/src/agent/__tests__/permissions-gate.test.ts   1 -> 0
+  #   packages/agent/tests/mcp/runtime-closure.test.ts               2 -> 0
+  #   packages/agent/tests/unit/tool/builtin-surface.test.ts         1 -> 0
+  # Zero files that still exist changed their count, so the resolver did not
+  # lose sight of a violation — the debt was deleted, not hidden. The kept
+  # `packages/agent/tests/integration/mcp-conformance.test.ts` (4 edges) is
+  # unchanged on both sides.
+  # The relation still reconciles: 123 + 2639 = 2762 = crossBoundaryEdges.
+  # `.architecture-baseline.json` was NOT re-recorded for this: it holds 2785
+  # fingerprints with 0 resolved, because the four departed fingerprints were
+  # already gone from it.
+  module-dependency: 123
   # 349 -> 343 (2026-10-10, plan 610 A5 continuation). Ledger, not vibes:
   #   +2  group-handlers.ts / group-turn-dispatcher.ts — their cross-package
   #       RELATIVE imports (`../../../../../packages/agent/src/message/
