@@ -370,7 +370,29 @@ describe('duya tui in a real 80-column PTY', () => {
       expect(withPicker).toContain('[2] Always allow');
       expect(withPicker).toContain('[3] Deny');
       // The long command is what forced the wrap; it must still be readable.
-      expect(withPicker).toContain('pty-acceptance-with-a-long-argument');
+      //
+      // The screen is 80 columns wide, so the command wraps SOMEWHERE — and
+      // where it wraps depends on how much of the line precedes it, which
+      // moves with the session id and the host port in the header. A plain
+      // `toContain` on the command therefore breaks whenever the wrap lands
+      // inside the substring being looked for, and that is a property of the
+      // terminal's width rather than of the CLI: the same build passes and
+      // fails depending on the port the host happened to pick.
+      //
+      // Two things are removed before the comparison. Whitespace, because the
+      // wrap turns into a line break and `readScreen` folds that into a
+      // space. And the box-drawing characters, because the permission panel
+      // draws a border and the border is redrawn at every wrap point — so the
+      // command arrives with a `│` in the middle of it. Neither is part of
+      // the command.
+      //
+      // The claim being checked is that the WHOLE command is on screen, and
+      // that claim holds wherever the wrap fell — and it is a stronger claim
+      // than the one it replaces, which only looked for the first 37
+      // characters.
+      const readable = (text: string): string =>
+        text.replace(/[\u2500-\u257f]/g, '').replace(/\s+/g, '');
+      expect(readable(withPicker)).toContain(readable(LONG_COMMAND));
 
       // 3. The keystroke becomes a resolution the worker actually received.
       term.write(key);
