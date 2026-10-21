@@ -45,7 +45,7 @@ Duya 既提供可以直接使用的产品界面，也提供便于继续开发的
 - **工具执行可观察：** 通过工具记录查看浏览器、文件和命令执行过程；敏感操作受权限模式约束。
 - **浏览器与研究：** 通过浏览器工具打开页面、交互、截屏，并将结果写回项目。
 - **模型可配置：** 可连接远程模型服务或兼容接口，也可使用本地 Ollama。远程请求会将所需上下文发送给对应服务商。
-- **扩展能力：** 通过工具模块、Skills、MCP 和仍在发展的插件体系接入更多功能。
+- **扩展能力：** 通过工具模块、Skills、MCP 和仍在发展的插件体系接入更多功能。MCP 与插件配置目前主要通过 Desktop 和 CLI 控制面完成；Web 尚未提供扩展管理界面。插件信任级别和权限控制不等同于操作系统级的安全沙箱。
 - **会话与产物：** 本地持久化执行记录、项目上下文和输出；部分文档预览、可视化与 Conductor 画布仍属实验性工作流。
 
 ## 快速开始
@@ -73,14 +73,22 @@ npm run dev:tui
 
 ### Web：连接本地 Host
 
-先通过可用的 CLI 运行 `duya serve`，再在仓库根目录执行：
+Web 仍是早期的本地开发入口：BFF 只监听 `127.0.0.1` 并连接独立 Host，不提供公网访问认证或托管部署。全新检出时，先在一个终端构建并启动 Host：
+
+```bash
+npm install
+npm run build:cli-dev
+node packages/cli/bundle/cli.cjs serve
+```
+
+再在另一个终端构建并启动 Web 客户端：
 
 ```bash
 npm run build:web-app
 npm run web-app
 ```
 
-浏览器入口通过本地 BFF 与 Host 通信。当前不提供面向公网的身份认证，也不能直接当作远程托管的 Web Agent 服务。详细限制与连接方式参见 [apps/web/README.md](./apps/web/README.md)。
+CLI 和 Web workspace 目前不是单独发布、可通过包管理器安装的软件包。浏览器入口通过本地 BFF 与 Host 通信。详细限制与连接方式参见 [apps/web/README.md](./apps/web/README.md)。
 
 ## 架构
 

@@ -19,9 +19,9 @@
 
 > **Project status:** Desktop is in public beta. The terminal TUI is under active development, and the Web client is an early-stage, local-only interface. These surfaces share a foundation but do not yet have feature parity.
 
-Duya is an open-source Agent foundation, not just a desktop chat client. The monorepo separates the agent protocol, reasoning and execution engine, Host orchestration, tools, persistence, and client presentation. The goal is to run project-aware agents through different interfaces without rebuilding the agent for each one.
+Duya is an open-source Agent foundation, not just a desktop chat client. The monorepo separates the agent protocol, reasoning and execution engine, Host orchestration, tools, persistence, and client presentation. The goal is to run project-aware agents through different interfaces without rebuilding the agent for each one. Its workspace packages are still under active development and are not currently published as stable public SDKs.
 
-"Local-first" refers to local Host/workspace operation and state, not a guarantee of offline execution. Remote model providers receive the context needed for model requests; browser and connected tools make their own network calls. You can use local Ollama for local inference. The Web client currently connects only to a loopback Host; it is not a hosted multi-user service.
+"Local-first" refers to local Host/workspace operation and state, not a guarantee of offline execution. Remote model providers receive the context needed for model requests; browser and connected tools make their own network calls. You can use local Ollama for local inference. The Web BFF listens only on loopback and normally connects to the local standalone Host; it is not a hosted multi-user service.
 
 ---
 
@@ -55,7 +55,7 @@ You can send a correction or new constraint while the task is still running. Duy
 
 All three build on a shared set of packages: **Agent Protocol → Agent Core / Runtime → Host → clients**. The Host manages runs, workers, permissions, and event transport; client interfaces present and control that work. Each surface has different maturity and capabilities today.
 
-Duya also exposes extension points through tool capabilities, Skills, MCP, and its evolving plugin system. See [ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md) for source-level ownership and [apps/web/README.md](./apps/web/README.md) for Web limitations.
+Duya also exposes extension points through tool capabilities, Skills, MCP, and its evolving plugin system. MCP and plugin configuration is available through the Desktop and CLI control paths; the Web client does not yet provide extension management. Plugin trust and permission controls are not a guarantee of a hardened operating-system sandbox. See [ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md) for source-level ownership and [apps/web/README.md](./apps/web/README.md) for Web limitations.
 
 ---
 
@@ -138,14 +138,22 @@ The TUI starts an ephemeral local Host by default. For other CLI commands, see [
 
 ### Web: connect to a local Host
 
-The Web client is local-only, requires a running standalone Host (`duya serve` from an available CLI), and does not offer remote authentication or hosting:
+The Web client is an early local development surface. The BFF listens on `127.0.0.1` and connects to a running standalone Host; it does not provide remote-user authentication or a hosted deployment. From a fresh checkout, start the Host in one terminal:
+
+```bash
+npm install
+npm run build:cli-dev
+node packages/cli/bundle/cli.cjs serve
+```
+
+Then build and start the Web client in another terminal:
 
 ```bash
 npm run build:web-app
 npm run web-app
 ```
 
-See [apps/web/README.md](./apps/web/README.md) for Host discovery, configuration, and current acceptance-test limitations.
+The CLI and Web workspaces are not separately published installable packages. See [apps/web/README.md](./apps/web/README.md) for Host discovery, configuration, and current acceptance-test limitations.
 
 ---
 
@@ -193,7 +201,7 @@ Duya's **shared Agent foundation** is independent of any one interface:
 - **`apps/desktop`**, **`packages/cli`**, and **`apps/web`** implement the Electron, terminal, and browser entry points respectively.
 - Browser, filesystem, shell, MCP, plugin, and other capabilities plug into the Host/runtime stack rather than defining the product boundary.
 
-Agent execution can use child processes with event and permission boundaries. This is not a guarantee of a hardened OS sandbox on every platform.
+Agent execution can use child processes with event and permission boundaries. Plugin trust controls and command sandbox options do not provide a universal hardened OS sandbox for every plugin, tool, platform, or configuration.
 
 Core technologies include TypeScript, Node.js, React 19, Electron, SQLite / better-sqlite3, HTTP + SSE, and worker processes. See [ARCHITECTURE.md](./ARCHITECTURE.md) and [ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md) for the authoritative package and data-flow details.
 
