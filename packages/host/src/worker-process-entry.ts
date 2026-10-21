@@ -2318,6 +2318,11 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             options: chatOptions,
             prompt: messageContent,
             ...(msg.inputRevision === undefined ? {} : { inputRevision: msg.inputRevision }),
+            // The Control Plane's fingerprint of the frozen manifest, verified
+            // against the manifest it sent above. `run.started` must carry
+            // THIS hash: it is the one the `runs` row recorded, and the ledger's
+            // first event is what a reader ties back to that row.
+            ...(msg.manifestHash === undefined ? {} : { manifestHash: msg.manifestHash }),
             model: engineAgent.readWorkerProviderConfig().model,
             providerId: currentProviderId,
             workingDirectory,
