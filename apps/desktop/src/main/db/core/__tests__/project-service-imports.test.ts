@@ -53,10 +53,21 @@ describe('projectService import graph', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('still reads the core store through the existing core-connection seam', () => {
-    // The core DB is resolved lazily via `getCoreStores()` and that import is
-    // intentionally retained — it is a db/-local module, not an app-module
-    // escape. This test documents why the two handles differ.
-    expect(specifiers).toContain('../core-connection');
+  it('still reads the core store through a db/-local seam', () => {
+    // The core projects table is reached through `./project-store`, a db/-local
+    // module that re-exports @duya/data/project-store, and the HANDLE ITSELF
+    // is injected (`ProjectServiceOptions.projectsDb`) rather than resolved
+    // from a global. So there is still no "convenient default" that would
+    // make db/core un-extractable — which is what this file guards.
+    //
+    // The seam MOVED when the core aggregates moved to @duya/data: the module
+    // used to be `../core-connection` (a `getCoreStores()` call), and that
+    // import is gone. What the assertion protects is unchanged: the core
+    // store is read through a db/-local module, not through an app-module
+    // escape and not through a second database handle.
+    expect(specifiers).toContain('./project-store');
+    // No relative import may climb out of db/core for a handle — that is
+    // the shape the "convenient default" would take.
+    expect(specifiers.filter((spec) => spec.startsWith('../../'))).toEqual([]);
   });
 });

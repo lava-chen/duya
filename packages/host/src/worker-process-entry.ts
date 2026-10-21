@@ -1577,6 +1577,61 @@ function sendToMain(msg: Record<string, unknown>): void {
     process.send?.(msg);
     sendEvent(msg);
 }
+
+/**
+ * Announce a refused run on the native channel, so the ledger records WHY it ended.
+ *
+ * ## Why the refusal needs an event of its own
+ *
+ * The durable `run_events` ledger is written by the native `run:event` channel
+ * only. A manifest refusal happens BEFORE the engine starts, so the emitter
+ * that mints every other event never runs — and without this the row is
+ * settled while the ledger behind it stays empty.
+ *
+ * That is the state this layer's own sibling path calls the worst outcome:
+ * `RunOrchestrator.#closeAbandonedRun` appends the terminal EVENT as well as
+ * the terminal STATE, and says why — "settling the row alone leaves
+ * `run_events` with no record of how the run ended". A reconciler reading the
+ * ledger has to be able to tell a refusal from a run that never started.
+ *
+ * ## Why the sequence is 1
+ *
+ * The refusal is decided before `run.started` is minted, so this is the FIRST
+ * event of the run and the sequence starts at 1. `(runId, seq)` is the event
+ * identity, so the number is not free — it is the run's first claim on its own
+ * ledger.
+ *
+ * ## Why the epoch is required
+ *
+ * `run:event` is a FENCED write: the Host refuses an envelope whose attempt
+ * does not match the run's. An absent epoch is therefore refused rather than
+ * defaulted, and this announcement is skipped when the Host did not supply one
+ * — the legacy `chat:error` below still carries the refusal to the client, so
+ * the turn is not silently dropped.
+ */
+function announceRefusedRun(
+    runId: string | undefined,
+    sessionId: string,
+    epoch: number | undefined,
+    error: { code: string; message: string },
+): void {
+    if (runId === undefined || runId === '' || epoch === undefined) {
+        log('[chat:start] refused run was not announced on the native channel — no run id or attempt epoch');
+        return;
+    }
+    sendToMain({
+        type: 'run:event',
+        epoch,
+        envelope: {
+            runId,
+            sessionId,
+            seq: 1,
+            timestamp: Date.now(),
+            traceId: `refused-${runId}`,
+            payload: { type: 'run.failed', error },
+        },
+    });
+}
 async function persistTurnReview(currentSessionId: string, turnId: string, baseline: unknown): Promise<void> {
     if (!baseline)
         return;
@@ -1779,11 +1834,20 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         });
         if (!verdict.ok) {
             log(`[chat:start] refused ${verdict.code}: ${verdict.detail} (runId=${msg.runId ?? 'none'}, session=${msg.sessionId})`);
+            const protocolCode = manifestRejectionProtocolCode(verdict.code);
+            const refusalMessage = `run refused (${verdict.code}): ${verdict.detail}`;
+            // The ledger must say how this run ended, not just the row.
+            announceRefusedRun(
+                msg.runId,
+                msg.sessionId,
+                readAttemptEpoch(msg.options),
+                { code: protocolCode, message: refusalMessage },
+            );
             sendToMain({
                 type: 'chat:error',
                 sessionId: msg.sessionId,
-                message: `run refused (${verdict.code}): ${verdict.detail}`,
-                code: manifestRejectionProtocolCode(verdict.code),
+                message: refusalMessage,
+                code: protocolCode,
             } as never);
             return;
         }
@@ -2318,6 +2382,11 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             options: chatOptions,
             prompt: messageContent,
             ...(msg.inputRevision === undefined ? {} : { inputRevision: msg.inputRevision }),
+            // The Control Plane's fingerprint of the frozen manifest, verified
+            // against the manifest it sent above. `run.started` must carry
+            // THIS hash: it is the one the `runs` row recorded, and the ledger's
+            // first event is what a reader ties back to that row.
+            ...(msg.manifestHash === undefined ? {} : { manifestHash: msg.manifestHash }),
             model: engineAgent.readWorkerProviderConfig().model,
             providerId: currentProviderId,
             workingDirectory,

@@ -60,6 +60,10 @@
 - [618 桌面管理层](active/618-duya-desktop-management-layer.md)：616 的 Proposed 续章；前置交付状态从 616 核对，不能直接当作 ready。
 - [587 历史主线](active/587-agent-harness-monorepo/README.md)：610 的合同来源，不单独排期。
 
+## 已归档
+
+- [2026-10-21 master CI 修复](archive/2026-10-21-ci-green-master.md)：收敛 master 上 95 个失败测试文件与 17 个 E2E 失败；根因、Linux 独有失败与三个 E2E 产品 bug 的修法见正文。
+
 ## Backlog
 
 设计或等待条件，不承诺开工；原有理由同样需在认领前核对。

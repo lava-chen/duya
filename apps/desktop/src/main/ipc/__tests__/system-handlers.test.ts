@@ -128,12 +128,20 @@ async function invokeHandler(
 }
 
 /**
+ * The routing id Electron hands the window's main frame. It is NOT 0 —
+ * Electron allocates frame ids per renderer process and a fresh BrowserWindow
+ * reports 1 (measured on Electron 44). The guard compares the sending frame
+ * against the sender's own `mainFrame`, so the fixture models both.
+ */
+const MAIN_FRAME_ROUTING_ID = 1;
+
+/**
  * An IPC event that `assertTrustedSender` accepts: the main window's own
- * webContents, main frame (routingId 0), on the app origin.
+ * webContents, main frame, on the app origin.
  */
 const TRUSTED_EVENT = {
-  sender: { id: mocks.MAIN_WINDOW_ID },
-  senderFrame: { routingId: 0, url: mocks.MAIN_WINDOW_URL },
+  sender: { id: mocks.MAIN_WINDOW_ID, mainFrame: { routingId: MAIN_FRAME_ROUTING_ID } },
+  senderFrame: { routingId: MAIN_FRAME_ROUTING_ID, url: mocks.MAIN_WINDOW_URL },
 };
 
 import { registerSystemHandlers } from '../system-handlers';
@@ -377,8 +385,8 @@ describe('system-handlers', () => {
     it('refuses an untrusted sender before touching the filesystem', async () => {
       mocks.fsState.mkdirSync.mockClear();
       const guestEvent = {
-        sender: { id: mocks.MAIN_WINDOW_ID + 1 },
-        senderFrame: { routingId: 0, url: mocks.MAIN_WINDOW_URL },
+        sender: { id: mocks.MAIN_WINDOW_ID + 1, mainFrame: { routingId: MAIN_FRAME_ROUTING_ID } },
+        senderFrame: { routingId: MAIN_FRAME_ROUTING_ID, url: mocks.MAIN_WINDOW_URL },
       };
       await expect(
         invokeHandler('app:create-project-folder', guestEvent, 'my-project'),
@@ -388,7 +396,7 @@ describe('system-handlers', () => {
 
     it('refuses an iframe inside the main window', async () => {
       const iframeEvent = {
-        sender: { id: mocks.MAIN_WINDOW_ID },
+        sender: { id: mocks.MAIN_WINDOW_ID, mainFrame: { routingId: MAIN_FRAME_ROUTING_ID } },
         senderFrame: { routingId: 7, url: mocks.MAIN_WINDOW_URL },
       };
       await expect(

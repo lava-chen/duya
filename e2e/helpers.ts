@@ -11,7 +11,7 @@
  * via contextBridge) is available — so calling it triggers real IPC
  * invoke/handle roundtrips through ipcMain.
  */
-import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
+import { _electron as electron, expect, type ElectronApplication, type Page } from '@playwright/test';
 import * as path from 'node:path';
 
 export interface LaunchOptions {
@@ -158,6 +158,46 @@ export async function launchDuya(opts: LaunchOptions): Promise<DuyaApp> {
     await app.close().catch(() => {});
     throw err;
   }
+}
+
+/**
+ * Open the Conductor view in the running app.
+ *
+ * ## Why this is a helper and not three copies of the same three lines
+ *
+ * The sidebar has two tabs. The primary navigation — the row that carries
+ * the Conductor entry — renders on the WORK tab only; the Bots tab is a flat
+ * contact list. The app starts on the Bots tab, so a spec that goes straight
+ * for `nav-conductor` waits out its timeout against a button that is not in
+ * the DOM, and the canvas it is trying to reach never appears.
+ *
+ * Every Conductor spec needs the same two steps in the same order, and every
+ * one of them used to carry its own copy of the wait — so the failure was
+ * three identical 20-second timeouts instead of one readable error.
+ */
+export async function openConductorView(page: Page): Promise<void> {
+  await showWorkTab(page);
+  await page.getByTestId('nav-conductor').click({ timeout: 20_000 });
+}
+
+/**
+ * Switch the app sidebar to its Work tab.
+ *
+ * The sidebar has two top tabs and comes up on Bots. The primary nav —
+ * conductor, automation, workflow, projects — renders ONLY on the Work tab,
+ * so `nav-conductor` is not in the DOM at all until the tab is switched.
+ *
+ * The tab is addressed by its test id rather than by its accessible name: the
+ * name is the localised label, so a runner whose locale is not English would
+ * not find a tab called "Work" at all.
+ */
+export async function showWorkTab(page: Page): Promise<void> {
+  const workTab = page.getByTestId('sidebar-tab-work');
+  await expect(workTab).toBeVisible({ timeout: 20_000 });
+  if ((await workTab.getAttribute('aria-selected')) !== 'true') {
+    await workTab.click();
+  }
+  await expect(workTab).toHaveAttribute('aria-selected', 'true');
 }
 
 /**

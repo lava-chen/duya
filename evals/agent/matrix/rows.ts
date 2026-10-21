@@ -167,17 +167,15 @@ export const MATRIX: readonly MatrixRow[] = [
       'A socket that dies mid-stream reaches the run as a named, retryable transport failure rather than a silent completion.',
     status: 'unsupported',
     reason:
-      'The E4.1 offline provider can emit an `event: error` frame, but it cannot drop a TCP connection part-way through a response: `writeTurn` always ends with `res.end()`. A real mid-stream disconnect therefore needs either a provider fixture that destroys the socket (a change to E4.1, out of scope for this slice) or a live provider. The two halves BELOW the wire are already covered and are cited here so the gap is narrow and named rather than assumed.',
+      'The E4.1 offline provider can emit an `event: error` frame, but it cannot drop a TCP connection part-way through a response: `writeTurn` always ends with `res.end()`. A real mid-stream disconnect therefore needs either a provider fixture that destroys the socket (a change to E4.1, out of scope for this slice) or a live provider. The two halves BELOW the wire are already covered and are cited here so the gap is narrow and named rather than assumed.' +
+      ' The second half — the agent\'s own replay decision — lost its only citation when the retiring ' +
+      '`packages/agent` package\'s test suite was removed; the decision now lives in ' +
+      '`packages/host/src/worker-execution/stream-retry.ts` and no worker suite asserts it.',
     evidence: [
       {
         file: 'packages/ai/test/errors.test.ts',
         name: 'transport stream-death patterns',
         why: 'the real error classifier maps transport stream death to a retryable connection error',
-      },
-      {
-        file: 'packages/agent/src/agent/__tests__/stream-retry.test.ts',
-        name: 'replays retryable transport deaths before the turn is committed',
-        why: 'the real agent decides to replay a retryable death — and does not after a commit',
       },
     ],
   },
@@ -220,17 +218,14 @@ export const MATRIX: readonly MatrixRow[] = [
     scenario: 'hardkill',
     assertion:
       'An escalated stop reports `runtime_crash` rather than a cooperative cancel, and the kill reaches a real process tree.',
-    status: 'covered-by-existing-suite',
+    status: 'unsupported',
+    reason:
+      'The surviving citation proves the reporting half: an escalated stop is recorded as `runtime_crash`. The other half — that the kill reaches a real process tree — was proved only by `packages/agent/src/utils/__tests__/processTreeKill.test.ts`, which was removed with the retiring agent package. That behaviour now lives in the worker layer, in `packages/host/src/managed-shell/process-tree-kill.ts`, and no worker suite asserts it.',
     evidence: [
       {
         file: 'apps/desktop/src/main/__tests__/run-cancel-stop-path.test.ts',
         name: 'reports an escalated stop as escalated, and records runtime_crash',
         why: 'the real stop path distinguishes escalated from cooperative and names the code',
-      },
-      {
-        file: 'packages/agent/src/utils/__tests__/processTreeKill.test.ts',
-        name: 'falls back to direct SIGKILL when the child has no process group',
-        why: 'the real kill helper spawns `taskkill /F /T` on Windows and escalates to SIGKILL on Unix',
       },
     ],
     divergence:
@@ -260,7 +255,7 @@ export const MATRIX: readonly MatrixRow[] = [
     status: 'covered-by-existing-suite',
     evidence: [
       {
-        file: 'packages/agent/src/tool/AppConnectionTool/__tests__/executor-deadline-result.test.ts',
+        file: 'packages/capabilities/tests/app-connection/executor-deadline-result.test.ts',
         name: 'marks isError from the MCP envelope without a breaker surface',
         why: 'a real tool result carries the upstream error flag through the real executor result shape',
       },
@@ -279,12 +274,7 @@ export const MATRIX: readonly MatrixRow[] = [
     status: 'covered-by-existing-suite',
     evidence: [
       {
-        file: 'packages/agent/tests/tool/BashTool/timeout-contract.test.ts',
-        name: 'caps foreground timeout at 5 minutes',
-        why: 'the real tool validates and caps its own timeout, and refuses a larger one',
-      },
-      {
-        file: 'packages/agent/src/tool/AppConnectionTool/__tests__/executor-deadline-result.test.ts',
+        file: 'packages/capabilities/tests/app-connection/executor-deadline-result.test.ts',
         name: 'stamps deadlineAt (+120s) and a +30s IPC buffer into the request',
         why: 'a real connector request carries a real deadline the executor can act on',
       },
@@ -312,13 +302,13 @@ export const MATRIX: readonly MatrixRow[] = [
     status: 'covered-by-existing-suite',
     evidence: [
       {
-        file: 'packages/agent/tests/unit/tool/orchestration/dependency-graph-orchestrator.test.ts',
-        name: 'orders tools by their declared prerequisites',
+        file: 'packages/agent-runtime/test/tools/execution/tool-execution-pipeline.test.ts',
+        name: 'serialises a dependent tool behind its prerequisite',
         why: 'the real orchestrator plans the read before the dependent write',
       },
       {
-        file: 'packages/agent/tests/unit/tool/orchestration/dependency-graph-orchestrator.test.ts',
-        name: 'flags unmet prerequisites as unresolved',
+        file: 'packages/agent-runtime/test/tools/execution/tool-execution-pipeline.test.ts',
+        name: 'surfaces missing prerequisite as a synthetic tool_use_error',
         why: 'a prerequisite that never runs is reported, not silently dropped',
       },
     ],
@@ -329,17 +319,14 @@ export const MATRIX: readonly MatrixRow[] = [
     scenario: '同 path 写串行 / two writes to one path are serialised',
     assertion:
       'Two concurrent operations on one file never interleave, and the real write tool is held behind the queue rather than running beside it.',
-    status: 'proved-real',
+    status: 'unsupported',
+    reason:
+      'The real-queue evidence for this row was `packages/agent/src/tool/__tests__/file-mutation-queue.test.ts`, removed with the retiring agent package. The queue now lives in `packages/capabilities/src/file-mutation-queue.ts` and is driven by the worker\'s tool layer, but no worker suite asserts that two operations on one file are held behind it any more. The row is open, not proved.',
     evidence: [
       {
-        file: 'packages/agent/src/tool/__tests__/file-mutation-queue.test.ts',
-        name: 'blocks a real WriteTool call behind a held operation on the same path',
-        why: 'the real `WriteTool` is observed waiting on the real queue while it is held — the wiring, not a plan',
-      },
-      {
-        file: 'packages/agent/src/tool/__tests__/file-mutation-queue.test.ts',
-        name: 'never lets two operations on one file interleave, and loses no payload',
-        why: 'read-modify-write on a real file shows the order on disk and in the log',
+        file: 'packages/capabilities/src/file-mutation-queue.ts',
+        name: 'withFileMutationQueue',
+        why: 'the module that owns this behaviour today; it is cited to name the owner of the contract, not to prove it — the suite that used to assert it was removed with the retiring agent package',
       },
     ],
   },
@@ -348,16 +335,11 @@ export const MATRIX: readonly MatrixRow[] = [
     row: 'different-path-parallel',
     scenario: '不同 path 并行 / writes to different paths run in parallel',
     assertion: 'Different resolved paths do not share a lock, so unrelated mutations are not serialised behind one another.',
-    status: 'proved-real',
+    status: 'covered-by-existing-suite',
     evidence: [
       {
-        file: 'packages/agent/src/tool/__tests__/file-mutation-queue.test.ts',
-        name: 'runs different paths at the same time rather than behind one global lock',
-        why: 'the real queue, measured on three real files with a floor a shared lock could not meet',
-      },
-      {
-        file: 'packages/agent/tests/unit/tool/orchestration/dependency-graph-orchestrator.test.ts',
-        name: 'packs disjoint-path writes into a single wave',
+        file: 'packages/agent-runtime/test/tools/execution/tool-execution-pipeline.test.ts',
+        name: 'runs two writers with disjoint paths in parallel (write-path semantics)',
         why: 'the planner agrees, so the queue is not the only thing keeping writes apart',
       },
     ],
@@ -368,12 +350,14 @@ export const MATRIX: readonly MatrixRow[] = [
     scenario: '同文件真实别名冲突 / two names for one real file',
     assertion:
       'A filesystem alias of a file shares that file\'s queue key, because the key is the resolved realpath and not the literal string.',
-    status: 'proved-real',
+    status: 'unsupported',
+    reason:
+      'The alias-key evidence was `packages/agent/src/tool/__tests__/file-mutation-queue.test.ts`, removed with the retiring agent package. The queue key is computed in `packages/capabilities/src/file-mutation-queue.ts`, in the worker\'s tool layer, and no worker suite asserts it. The row is open, not proved.',
     evidence: [
       {
-        file: 'packages/agent/src/tool/__tests__/file-mutation-queue.test.ts',
-        name: 'serialises an alias against the real path, because the key is the resolved path',
-        why: 'a real symlink (or a real directory junction where symlinks are unavailable) resolves onto the same file, and both writes land in one ordered chain',
+        file: 'packages/capabilities/src/file-mutation-queue.ts',
+        name: 'withFileMutationQueue',
+        why: 'the module that owns this behaviour today; it is cited to name the owner of the contract, not to prove it — the suite that used to assert it was removed with the retiring agent package',
       },
     ],
   },
@@ -444,12 +428,12 @@ export const MATRIX: readonly MatrixRow[] = [
     status: 'covered-by-existing-suite',
     evidence: [
       {
-        file: 'packages/agent/src/hooks/__tests__/events.test.ts',
+        file: 'packages/host/tests/worker-hooks/events.test.ts',
         name: 'downgrades async: true to sync on decision events (PreToolUse)',
         why: 'a veto cannot be async — the real runner forces it synchronous',
       },
       {
-        file: 'packages/agent/src/hooks/__tests__/executor.test.ts',
+        file: 'packages/host/tests/worker-hooks/executor.test.ts',
         name: 'PostToolUse matcher filters by tool name; no matcher matches everything',
         why: 'the real matcher selects hooks by the tool under the event',
       },
@@ -463,7 +447,7 @@ export const MATRIX: readonly MatrixRow[] = [
     status: 'covered-by-existing-suite',
     evidence: [
       {
-        file: 'packages/agent/src/hooks/__tests__/executor.test.ts',
+        file: 'packages/host/tests/worker-hooks/executor.test.ts',
         name: 'injects a non-zero-exit command diagnostic back to the model (verifier)',
         why: 'the real executor turns a failure into context the model can act on',
       },
@@ -477,12 +461,12 @@ export const MATRIX: readonly MatrixRow[] = [
     status: 'covered-by-existing-suite',
     evidence: [
       {
-        file: 'packages/agent/src/hooks/__tests__/loop-bus.test.ts',
+        file: 'packages/host/tests/worker-hooks/loop-bus.test.ts',
         name: 'first block_finalize wins at PreFinalize and short-circuits lower priorities',
         why: 'the real bus resolves a veto deterministically',
       },
       {
-        file: 'packages/agent/src/hooks/__tests__/builtin-loop-hooks.test.ts',
+        file: 'packages/host/tests/worker-hooks/builtin-loop-hooks.test.ts',
         name: 'vetoes finalize once when pending/in-progress tasks remain',
         why: 'a real builtin gate vetoes a premature finish',
       },
@@ -496,7 +480,7 @@ export const MATRIX: readonly MatrixRow[] = [
     status: 'covered-by-existing-suite',
     evidence: [
       {
-        file: 'packages/agent/src/hooks/__tests__/executor.test.ts',
+        file: 'packages/host/tests/worker-hooks/executor.test.ts',
         name: 'PreTurn registration collects command additionalContext into a custom inject',
         why: 'the real bridge from a configured PreTurn hook into the turn injection channel',
       },
@@ -510,7 +494,7 @@ export const MATRIX: readonly MatrixRow[] = [
     status: 'covered-by-existing-suite',
     evidence: [
       {
-        file: 'packages/agent/src/hooks/__tests__/loop-bus.test.ts',
+        file: 'packages/host/tests/worker-hooks/loop-bus.test.ts',
         name: 'dispatches in priority order regardless of registration order',
         why: 'the real bus ordering, which is the whole claim',
       },
@@ -524,12 +508,12 @@ export const MATRIX: readonly MatrixRow[] = [
     status: 'covered-by-existing-suite',
     evidence: [
       {
-        file: 'packages/agent/src/hooks/__tests__/executor.test.ts',
+        file: 'packages/host/tests/worker-hooks/executor.test.ts',
         name: 'kills the process and fails open on timeout',
         why: 'the real process hook is killed at its deadline and the turn continues',
       },
       {
-        file: 'packages/agent/src/hooks/__tests__/executor.test.ts',
+        file: 'packages/host/tests/worker-hooks/executor.test.ts',
         name: 'fails open on non-zero exit and reports the exit code',
         why: 'a killed hook is a diagnostic, not a refusal of the turn',
       },
@@ -546,7 +530,7 @@ export const MATRIX: readonly MatrixRow[] = [
     status: 'covered-by-existing-suite',
     evidence: [
       {
-        file: 'packages/agent/src/modes/__tests__/registry.test.ts',
+        file: 'packages/host/tests/worker-modes/modifiers/registry.test.ts',
         name: 'resolves a single mode',
         why: 'the real registry, whose registered set is the closed list the assertion names',
       },
@@ -562,12 +546,12 @@ export const MATRIX: readonly MatrixRow[] = [
     status: 'covered-by-existing-suite',
     evidence: [
       {
-        file: 'packages/agent/src/modes/plan/__tests__/plan-tracker.test.ts',
+        file: 'packages/host/tests/worker-modes/plan/plan-tracker.test.ts',
         name: 'drives the user lifecycle: enter → pending → activate → active → exit_approved → inactive',
         why: 'the real plan tracker and its own transition rules',
       },
       {
-        file: 'packages/agent/src/modes/engine/__tests__/run-lifecycle-tracker.test.ts',
+        file: 'packages/agent-core/test/modes/run-lifecycle-tracker.test.ts',
         name: 'each state refuses events outside its row (spot matrix)',
         why: 'the real lifecycle matrix refuses the illegal transitions',
       },
@@ -578,17 +562,14 @@ export const MATRIX: readonly MatrixRow[] = [
     row: 'mode-stateful-goal',
     scenario: 'stateful Goal',
     assertion: 'A goal is state that survives a fold and a cold start, and pauses idempotently.',
-    status: 'covered-by-existing-suite',
+    status: 'unsupported',
+    reason:
+      'The pause/resume idempotence is still covered. The cold-start half — that a goal survives a fold and a restart — was proved only by `packages/agent/src/modes/goal/__tests__/goal-commands.test.ts`, removed with the retiring agent package. That behaviour now lives in `packages/host/src/worker-modes/goal/goal-commands.ts`, and no worker suite asserts it.',
     evidence: [
       {
-        file: 'packages/agent/src/modes/goal/__tests__/goal-tracker.test.ts',
+        file: 'packages/host/tests/worker-modes/goal/goal-tracker.test.ts',
         name: 'pause from active → user_paused, records message; resume → active',
         why: 'the real goal tracker transitions and is idempotent while paused',
-      },
-      {
-        file: 'packages/agent/src/modes/goal/__tests__/goal-commands.test.ts',
-        name: 'pause works right after a cold start from the persisted fold',
-        why: 'the state survives persistence rather than living in memory',
       },
     ],
   },
@@ -600,7 +581,7 @@ export const MATRIX: readonly MatrixRow[] = [
     status: 'covered-by-existing-suite',
     evidence: [
       {
-        file: 'packages/agent/src/modes/research-mode/__tests__/research-tracker.test.ts',
+        file: 'packages/host/tests/worker-modes/research-mode/research-tracker.test.ts',
         name: 'ResearchTracker — pause / resume / blocked',
         why: 'the real research tracker and its pause/resume/blocked family',
       },
@@ -611,17 +592,14 @@ export const MATRIX: readonly MatrixRow[] = [
     row: 'mode-continuation',
     scenario: 'continuation',
     assertion: 'A mode that continues a run re-enters the turn with its own context rather than starting over.',
-    status: 'covered-by-existing-suite',
+    status: 'unsupported',
+    reason:
+      'The continuation gate is still covered. The other half — that the continued run re-enters the turn with its own context — was proved only by `packages/agent/tests/unit/runtime-context-adapters.test.ts`, removed with the retiring agent package. The adapter now lives in `packages/host/src/worker-context/runtime-context-adapters.ts`, and no worker suite asserts it.',
     evidence: [
       {
-        file: 'packages/agent/src/hooks/__tests__/builtin-loop-hooks.test.ts',
+        file: 'packages/host/tests/worker-hooks/builtin-loop-hooks.test.ts',
         name: 'vetoes finalize while the goal is active',
         why: 'the real continuation gate, and its cap',
-      },
-      {
-        file: 'packages/agent/tests/unit/runtime-context-adapters.test.ts',
-        name: 'adapts goal continuation with source=goal_summary, visible',
-        why: 'the real adapter that projects a continuation into a visible turn',
       },
     ],
   },
@@ -633,12 +611,12 @@ export const MATRIX: readonly MatrixRow[] = [
     status: 'covered-by-existing-suite',
     evidence: [
       {
-        file: 'packages/agent/src/modes/engine/__tests__/engine.test.ts',
+        file: 'packages/host/tests/worker-modes/engine/engine.test.ts',
         name: 'collects persisted snapshots for all registered trackers',
         why: 'the real engine collects the whole set',
       },
       {
-        file: 'packages/agent/src/modes/engine/__tests__/engine.test.ts',
+        file: 'packages/host/tests/worker-modes/engine/engine.test.ts',
         name: 'returns false when restoring an unregistered mode',
         why: 'a snapshot for a mode that is not registered is refused',
       },
@@ -652,7 +630,7 @@ export const MATRIX: readonly MatrixRow[] = [
     status: 'covered-by-existing-suite',
     evidence: [
       {
-        file: 'packages/agent/src/modes/engine/__tests__/run-lifecycle-tracker.test.ts',
+        file: 'packages/agent-core/test/modes/run-lifecycle-tracker.test.ts',
         name: 'failed / interrupted / cancelled never accept complete',
         why: 'the real anti-downgrade rule for a finished run',
       },
@@ -685,17 +663,19 @@ export const MATRIX: readonly MatrixRow[] = [
     row: 'nested-agents',
     scenario: 'AGENTS 嵌套',
     assertion: 'A nested `AGENTS.md` is loaded for its own subtree, and released back into the prompt when the agent leaves it.',
-    status: 'covered-by-existing-suite',
+    status: 'unsupported',
+    reason:
+      'Both citations were in the retiring agent package. The behaviour now lives in the worker layer, in `packages/host/src/worker-agents-md/`, which no worker suite imports, so the row is open rather than covered.',
     evidence: [
       {
-        file: 'packages/agent/tests/unit/agentsmd/nested-loader.test.ts',
-        name: 'discovers AGENTS.md in subdirectories below cwd (shallow to deep)',
-        why: 'the real nested loader, in the order it resolves them',
+        file: 'packages/host/src/worker-agents-md/nested-loader.ts',
+        name: 'collectNestedMemoryFiles',
+        why: 'the module that owns this behaviour today; it is cited to name the owner of the contract, not to prove it — the suite that used to assert it was removed with the retiring agent package',
       },
       {
-        file: 'packages/agent/tests/unit/agentsmd/release-reinject.test.ts',
-        name: 're-injects a previously injected nested file after release',
-        why: 'the real release/reinject cycle, and its cross-project guard',
+        file: 'packages/host/src/worker-agents-md/manager.ts',
+        name: 'AgentsMdManager',
+        why: 'the module that owns this behaviour today; it is cited to name the owner of the contract, not to prove it — the suite that used to assert it was removed with the retiring agent package',
       },
     ],
   },
@@ -707,12 +687,7 @@ export const MATRIX: readonly MatrixRow[] = [
     status: 'covered-by-existing-suite',
     evidence: [
       {
-        file: 'packages/agent/src/prompts/dynamic/__tests__/skillsMetadata.test.ts',
-        name: 'classifies bundled + system as internal, everything else as external',
-        why: 'the real dynamic prompt assembly, which is what the provider request is built from',
-      },
-      {
-        file: 'packages/agent/src/config/__tests__/tool-exposure.test.ts',
+        file: 'packages/host/tests/worker-config/tool-exposure.test.ts',
         name: 'reads [tools] on_demand_discovery = true from config.toml',
         why: 'the real tool-exposure decision, read from the live configuration rather than a frozen list',
       },
@@ -727,12 +702,12 @@ export const MATRIX: readonly MatrixRow[] = [
     status: 'covered-by-existing-suite',
     evidence: [
       {
-        file: 'packages/agent/tests/unit/message-compaction-controller.test.ts',
+        file: 'packages/host/tests/runtime-context-contracts/message-compaction-controller.test.ts',
         name: 'appends a CompactionEntry without removing or overwriting original MessageEntries',
         why: 'the real controller is append-only, which is what makes a compaction auditable',
       },
       {
-        file: 'packages/agent/tests/unit/message-compaction-controller.test.ts',
+        file: 'packages/host/tests/runtime-context-contracts/message-compaction-controller.test.ts',
         name: 'walks the boundary back to a user turn when the strategy retains from a tool_result',
         why: 'the real boundary rule that keeps a tool call paired with its result',
       },
@@ -747,7 +722,7 @@ export const MATRIX: readonly MatrixRow[] = [
     status: 'covered-by-existing-suite',
     evidence: [
       {
-        file: 'packages/agent/src/hooks/__tests__/loop-bus.test.ts',
+        file: 'packages/host/tests/worker-hooks/loop-bus.test.ts',
         name: 'produces nudges that are never persisted (persistableMessages filter)',
         why: 'the real filter that keeps a hook nudge out of the durable record',
       },
@@ -761,17 +736,19 @@ export const MATRIX: readonly MatrixRow[] = [
     scenario: '缓存稳定段',
     assertion:
       'An unchanged tree reuses the same object identities, and a changed tree rebuilds only what changed.',
-    status: 'covered-by-existing-suite',
+    status: 'unsupported',
+    reason:
+      'Both citations were in the retiring agent package. The behaviour now lives in the worker layer, in `packages/host/src/skills/rootSnapshotCache.ts` and `packages/host/src/skills/loader.ts`, which no worker suite asserts, so the row is open rather than covered.',
     evidence: [
       {
-        file: 'packages/agent/tests/skills/rootSnapshotCache.test.ts',
-        name: 'reuses object references on hit without calling resolve',
-        why: 'the real cache, measured by identity rather than by equality',
+        file: 'packages/host/src/skills/rootSnapshotCache.ts',
+        name: 'rootSnapshotCache',
+        why: 'the module that owns this behaviour today; it is cited to name the owner of the contract, not to prove it — the suite that used to assert it was removed with the retiring agent package',
       },
       {
-        file: 'packages/agent/tests/skills/snapshotIntegration.test.ts',
-        name: 'rebuilds only the changed skill; siblings keep their identity',
-        why: 'the real loader keeps stable segments stable across one change',
+        file: 'packages/host/src/skills/loader.ts',
+        name: 'loadSkills',
+        why: 'the module that owns this behaviour today; it is cited to name the owner of the contract, not to prove it — the suite that used to assert it was removed with the retiring agent package',
       },
     ],
   },
@@ -783,22 +760,19 @@ export const MATRIX: readonly MatrixRow[] = [
     scenario: '执行期间补消息 / 补图片',
     assertion:
       'A message and an image queued while a turn is running are drained into that turn as runtime context, and an unclaimed row is not injected.',
-    status: 'covered-by-existing-suite',
+    status: 'unsupported',
+    reason:
+      'All three citations were in the retiring agent package. The behaviour now lives in the worker layer, in `packages/host/src/worker-context/runtime-context-adapters.ts` and `packages/host/src/worker-context/mailbox-attachment-context.ts`, which no worker suite imports, so the row is open rather than covered.',
     evidence: [
       {
-        file: 'packages/agent/tests/unit/runtime-context-adapters.test.ts',
-        name: 'wraps queued and followup rows in a single runtime_context message',
-        why: 'the real adapter that drains the mailbox into the running turn',
+        file: 'packages/host/src/worker-context/runtime-context-adapters.ts',
+        name: 'adaptMailboxRows',
+        why: 'the module that owns this behaviour today; it is cited to name the owner of the contract, not to prove it — the suite that used to assert it was removed with the retiring agent package',
       },
       {
-        file: 'packages/agent/src/message/mailbox-attachment-context.test.ts',
-        name: 'projects image-only guidance with both distinct images and attachment text',
-        why: 'the real image projection, including the text-only-model path',
-      },
-      {
-        file: 'packages/agent/src/message/mailbox-attachment-context.test.ts',
-        name: 'does not inject an unclaimed row',
-        why: 'injection requires a claim — the negative half of the row',
+        file: 'packages/host/src/worker-context/mailbox-attachment-context.ts',
+        name: 'prepareMailboxGuidance',
+        why: 'the module that owns this behaviour today; it is cited to name the owner of the contract, not to prove it — the suite that used to assert it was removed with the retiring agent package',
       },
     ],
   },
@@ -810,7 +784,7 @@ export const MATRIX: readonly MatrixRow[] = [
     status: 'covered-by-existing-suite',
     evidence: [
       {
-        file: 'packages/agent/src/utils/attachment-images.test.ts',
+        file: 'packages/host/tests/worker-context/attachment-images.test.ts',
         name: 'preserves different images with the same filename and legacy ID',
         why: 'the real attachment identity, and it does not key on the filename',
       },
@@ -822,13 +796,10 @@ export const MATRIX: readonly MatrixRow[] = [
     scenario: '背景 subagent 完成',
     assertion:
       'A background task completing mid-run becomes a hidden transient notification, and the row it reserved is finalised rather than re-injected.',
-    status: 'covered-by-existing-suite',
+    status: 'unsupported',
+    reason:
+      'The finalisation half is still covered. The projection half — that the completion becomes a hidden transient `runtime_context` — was proved only by `packages/agent/tests/unit/runtime-context-adapters.test.ts`, removed with the retiring agent package. The adapter now lives in `packages/host/src/worker-context/runtime-context-adapters.ts`, and no worker suite asserts it.',
     evidence: [
-      {
-        file: 'packages/agent/tests/unit/runtime-context-adapters.test.ts',
-        name: 'produces a hidden transient runtime_context with source=background_notification',
-        why: 'the real adapter for a task notification',
-      },
       {
         file: 'apps/desktop/src/main/db/core/__tests__/mailbox.test.ts',
         name: 'a notification reserved by a crashed run is finalized applied, not re-injected (crash window)',
@@ -841,13 +812,10 @@ export const MATRIX: readonly MatrixRow[] = [
     row: 'dedup',
     scenario: '去重',
     assertion: 'A row drained twice is dropped the second time, and partial overlap keeps whatever is new.',
-    status: 'covered-by-existing-suite',
+    status: 'unsupported',
+    reason:
+      'The surviving citation covers the crash window, not the dedupe. The claim that a row drained twice is dropped the second time was proved only by `packages/agent/tests/unit/runtime-context-adapters.test.ts`, removed with the retiring agent package. The adapter now lives in `packages/host/src/worker-context/runtime-context-adapters.ts`, and no worker suite asserts it.',
     evidence: [
-      {
-        file: 'packages/agent/tests/unit/runtime-context-adapters.test.ts',
-        name: 'drops a task notification drained twice by task-id',
-        why: 'the real dedupe keyed on the identity the store owns',
-      },
       {
         file: 'apps/desktop/src/main/db/core/__tests__/mailbox.test.ts',
         name: 'enqueue is idempotent on client_msg_id collision',

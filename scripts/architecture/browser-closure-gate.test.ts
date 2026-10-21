@@ -156,13 +156,23 @@ describe('G10 goes RED on a Node built-in attached to a renderer-shaped entry', 
 describe('G10 on the live tree', { timeout: 30_000 }, () => {
   const report = collectBrowserClosureReport();
 
+  /**
+   * The scope the verdict is about, as a LITERAL.
+   *
+   * Not `BROWSER_ENTRIES.map(...).join(' + ')`: that would compare the gate's
+   * output against the gate's own input and prove nothing (this file's header
+   * rule: "Nothing here asserts a quantity against itself"). The literal is
+   * what makes a silently widened or narrowed scope a failure.
+   */
+  const EXPECTED_SCOPE = 'packages/ui/src + apps/desktop/src/renderer + apps/web/src/main.tsx';
+
   it('is green, and reports the scope the verdict is about', () => {
     expect(report.findings).toEqual([]);
     expect(isBrowserClosureClean(report)).toBe(true);
     // The scope is named, not implied: 610 §4 rule 1 forbids a bare count.
-    expect(report.scope).toBe('packages/ui/src + apps/desktop/src/renderer');
+    expect(report.scope).toBe(EXPECTED_SCOPE);
     expect(report.summary).toBe(
-      `0/${report.walked} Node built-ins in packages/ui/src + apps/desktop/src/renderer`,
+      `0/${report.walked} Node built-ins in ${EXPECTED_SCOPE}`,
     );
   });
 
@@ -189,13 +199,34 @@ describe('G10 on the live tree', { timeout: 30_000 }, () => {
     expect(crossed).toContain('packages/conductor/src/renderer/index.ts');
   });
 
-  it('names the web entry as absent rather than skipping it silently', () => {
-    // 610 §4 names `apps/web/src/main.tsx` as an entry. It does not exist yet,
-    // and the honest report is "absent", not silence — the day the skeleton
-    // lands, this assertion is the one that has to be revisited.
+  it('names the web entry as measured, and an absent entry as absent', () => {
+    // 610 §4 names `apps/web/src/main.tsx` as an entry. It did not exist when
+    // this file was written, and the honest report then was "absent". The
+    // skeleton has since landed, so the honest report is no longer "absent"
+    // but "present and measured" — the gate was written to cover that day
+    // with no edit to its entry list, and it did.
+    //
+    // The ABSENT half is still the behaviour under test: an entry that is
+    // named but not on disk must be REPORTED as absent, never skipped
+    // silently, or a missing root would read as a green gate.
     expect(BROWSER_ENTRIES.map((e) => e.rel)).toContain('apps/web/src/main.tsx');
-    expect(report.absentEntries).toContain('apps/web/src/main.tsx');
-    expect(seedsFor('apps/web/src/main.tsx')).toBeNull();
+    expect(report.absentEntries).not.toContain('apps/web/src/main.tsx');
+    expect(seedsFor('apps/web/src/main.tsx')).not.toBeNull();
+
+    // It is really measured, not merely listed: the web entry contributes
+    // seeds, and its closure is walked like every other entry's.
+    const web = report.entries.find((e) => e.rel === 'apps/web/src/main.tsx');
+    expect(web).toBeDefined();
+    expect(web?.seeds).toBeGreaterThan(0);
+    expect(web?.closure).toBeGreaterThan(0);
+
+    // An entry that is absent is named, and contributes nothing to the walk.
+    const absent = collectBrowserClosureReport([
+      { rel: 'apps/web/src/__not_on_this_tree__.tsx', kind: 'file' },
+    ]);
+    expect(absent.absentEntries).toEqual(['apps/web/src/__not_on_this_tree__.tsx']);
+    expect(absent.entries).toEqual([]);
+    expect(absent.walked).toBe(0);
   });
 });
 

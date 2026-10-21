@@ -423,6 +423,12 @@ describe('a slow consumer costs memory and latency, never content or durable fra
     // The plan's 10-minute scenario. VIRTUAL minutes: there is no real timer in
     // this file, so this is a ten-minute-simulation result and not a
     // wall-clock one. The wall-clock figure was NOT measured.
+    //
+    // The 30s budget is explicit because this scenario is deliberately the
+    // heaviest in the suite (30_000 deltas through the real batcher) and the
+    // global 10s default is a budget for ordinary tests. Measured on a
+    // 20-core dev machine the scenario takes ~13s, so under the default it
+    // failed on wall-clock, not on a contract.
     const m = await runScenario({
       name: 'slow-consumer-10-virtual-minutes',
       deltaRatePerSecond: 50,
@@ -439,7 +445,7 @@ describe('a slow consumer costs memory and latency, never content or durable fra
     expect(m.frameReductionPercent).toBeGreaterThanOrEqual(60);
     // The delay stays bounded by the window even after ten virtual minutes.
     expect(m.p95LatencyMs).toBeLessThanOrEqual(50);
-  });
+  }, 30_000);
 
   it('reports the queue high-water mark it reached under that consumer', async () => {
     const m = await runScenario({

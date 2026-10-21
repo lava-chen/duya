@@ -581,7 +581,14 @@ export async function loadAgentsMdFiles(
     // Collect all directories from cwd to root
     while (currentDir !== path.parse(currentDir).root) {
       dirs.push(currentDir)
-      currentDir = path.dirname(currentDir)
+      const parent = path.dirname(currentDir)
+      // `path.dirname` has fixed points ('.' -> '.', and on POSIX a path in
+      // another dialect such as 'E:\\Projects\\duya' collapses to '.'), so
+      // the root comparison above is NOT enough to guarantee termination.
+      // Without this guard the walk never ends and `dirs.push` eventually
+      // throws `RangeError: Invalid array length`.
+      if (parent === currentDir) break
+      currentDir = parent
     }
 
     // Process from root to cwd (lowest to highest priority)
@@ -625,7 +632,12 @@ export async function loadAgentsMdFiles(
 
     while (currentDir !== path.parse(currentDir).root) {
       dirs.push(currentDir)
-      currentDir = path.dirname(currentDir)
+      const parent = path.dirname(currentDir)
+      // Same fixed-point guard as the project walk above: `path.dirname`
+      // does not always make progress, and an unbounded walk here throws
+      // `RangeError: Invalid array length` once the array overflows.
+      if (parent === currentDir) break
+      currentDir = parent
     }
 
     for (const dir of dirs.reverse()) {

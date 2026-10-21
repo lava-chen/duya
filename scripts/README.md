@@ -95,6 +95,13 @@
 | `junction-workspace-pkgs.bat` | 被 `junction-worktree.mjs` 调用 |
 | `remove-worktree.sh` | **AGENTS.md 强制**：Windows 拆卸唯一入口，禁止手工 `rm -rf` |
 
+### 会话数据恢复
+
+| 脚本 | 入口 | 说明 |
+| --- | --- | --- |
+| `import-legacy-rollouts.mjs` | `npm run sessions:rebuild-from-rollouts` | 从 rollout JSONL 反推丢失的 `sessions` 元数据行（plan 328 迁移后遗症）。默认 dry run，`--apply` 才写，`--undo` 可回滚 |
+| `verify-import.mjs` | `npm run sessions:verify-import` | 校验上一步的导入结果 |
+
 ### 子目录
 
 | 目录 | 用途 |

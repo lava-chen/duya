@@ -14,18 +14,18 @@
  * ## `seq` ownership moved from the host to the runtime
  *
  * The id space is PER-SESSION but the counter is PER-TURN. Every POST reopens
- * the stream with `let seqNum = 0` (router.ts:1557) and increments from there
- * (router.ts:1801), writing that value as the SSE `id:` and pushing it into the
- * session-wide ring via `updateLastEventId` / `recordEvent` (router.ts:1802-1803).
+ * the stream with `let seqNum = 0` (router.ts:1694) and increments from there
+ * (router.ts:1832), writing that value as the SSE `id:` and pushing it into the
+ * session-wide ring via `updateLastEventId` / `recordEvent` (router.ts:1833-1834).
  * `session.lastEventId` and the ring are never reset between turns, so **turn
  * two re-mints ids 1..M that turn one already used.**
  *
  * The reconnect path is NOT the broken part — it was already fixed. Replay
- * writes each record's original `eventId` (router.ts:2910-2923) and the live
- * counter resumes from `session.lastEventId` (router.ts:2936, with the regression note
- * at router.ts:2931-2935 recording the `let seqNum = 0` bug that preceded it). What
+ * writes each record's original `eventId` (router.ts:3115-3126) and the live
+ * counter resumes from `session.lastEventId` (router.ts:3140, with the regression note
+ * at router.ts:3135-3139 recording the `let seqNum = 0` bug that preceded it). What
  * breaks is the collision above: `getEventsSince(sessionId, lastEventId)`
- * (router.ts:2910) filters on `eventId > lastEventId`, so after a second turn a
+ * (router.ts:3114) filters on `eventId > lastEventId`, so after a second turn a
  * reconnecting client can be handed turn-one events, or be handed nothing at
  * all, depending on which turn wrote last.
  *
@@ -66,11 +66,11 @@ export interface RunEventEnvelope<T extends RunEvent = RunEvent> {
    * and that is not a collision.
    *
    * The current implementation gets this wrong in the opposite direction. The
-   * SSE counter is re-initialised to 0 on every POST (router.ts:1329) while
+   * SSE counter is re-initialised to 0 on every POST (router.ts:1694) while
    * `session.lastEventId` and the replay ring are per-session and never reset
-   * (router.ts:1569-1570, server/types.ts:39), so turn two re-issues ids turn
+   * (router.ts:3114, packages/host/src/worker-session-registry.ts:18), so turn two re-issues ids turn
    * one already used and `getEventsSince`'s `eventId > lastEventId` filter stops
-   * meaning anything (router.ts:2411). Collapsing the two scopes into one
+   * meaning anything (packages/host/src/worker-session-registry.ts:195). Collapsing the two scopes into one
    * session-wide counter is what makes that unrecoverable: there is no way to
    * say which run an id belongs to.
    *

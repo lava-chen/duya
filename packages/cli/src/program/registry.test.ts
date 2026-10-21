@@ -33,6 +33,7 @@ describe('CLI_DESCRIPTORS — frozen v1.0.0', () => {
     'skill',
     'mcp',
     'provider',
+    'model',
     'channel',
     'cron',
     'message',
@@ -50,7 +51,7 @@ describe('CLI_DESCRIPTORS — frozen v1.0.0', () => {
     'projects',
   ];
 
-  it('has all 22 expected top-level command paths (plan 536)', () => {
+  it('has all 23 expected top-level command paths (plan 536)', () => {
     const actual = CLI_DESCRIPTORS.map((d) => d.name);
     expect(actual).toEqual(EXPECTED_PATHS);
   });

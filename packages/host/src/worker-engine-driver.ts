@@ -31,6 +31,22 @@ export interface EngineRunDriverRequest {
     readonly options: ChatOptions;
     readonly prompt: string | MessageContent[];
     readonly inputRevision?: string;
+    /**
+     * The Control Plane's fingerprint of the FROZEN manifest — the one the
+     * `runs` row recorded.
+     *
+     * `run.started` names the manifest the run was given, so a reader can tie
+     * the event back to the row. The manifest this driver builds for the
+     * engine (`buildLegacyRunManifest`) is a DIFFERENT artifact: a projection
+     * of the legacy run facts, with its own provenance, and nothing anywhere
+     * records ITS fingerprint. Hashing that one into `run.started` made the
+     * event's `manifestHash` disagree with the row's `manifest_hash` — the
+     * two columns that exist to cross-check each other.
+     *
+     * A caller with no Control Plane run row (a sub-agent turn) has nothing to
+     * agree with, and falls back to the manifest it actually ran.
+     */
+    readonly manifestHash?: string;
     readonly model: string;
     readonly providerId: string;
     readonly workingDirectory: string;
@@ -189,7 +205,11 @@ export async function driveRunWithEngine(request: EngineRunDriverRequest, onFram
         });
         const started = spine.emitter.emit({
             type: 'run.started',
-            manifestHash: manifestFingerprint(manifest),
+            // The Control Plane's fingerprint when there is one: it is the hash
+            // the `runs` row recorded, and `run.started` is what ties the
+            // ledger's first event to that row. The legacy manifest's own
+            // fingerprint is the fallback for a run with no Control Plane.
+            manifestHash: request.manifestHash ?? manifestFingerprint(manifest),
             protocol: PROTOCOL,
             runtime: RUNTIME_IDENTITY,
         });

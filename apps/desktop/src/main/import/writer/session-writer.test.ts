@@ -1,12 +1,35 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
+// `initLogger` is called at module scope by `services/network/provider-usage`,
+// which this file's import graph reaches. A mock without that export fails
+// collection before a single test runs.
 vi.mock('../../logging/logger', () => ({
+  initLogger: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
   getLogger: () => ({
     debug: vi.fn(),
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
   }),
+  LogComponent: new Proxy({}, { get: (_t, p) => String(p) }),
+}));
+
+// `session-writer` reaches the Desktop Host API for the WRITE path only. The
+// two parsers under test never touch it, and importing the real module pulls
+// in the whole Electron main-process graph (~10s), which is more than
+// vitest's 10s hook budget for the dynamic import below.
+vi.mock('../../cli/desktop-host-api', () => ({
+  getDesktopHostLocalRolloutApi: () => {
+    throw new Error('desktop-host-api is not available in the parser unit test');
+  },
+  getDesktopHostSessionApi: () => {
+    throw new Error('desktop-host-api is not available in the parser unit test');
+  },
 }));
 
 let parseCodexJsonlLine: typeof import('./session-writer').parseCodexJsonlLine;

@@ -14,11 +14,13 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import type { RunEventEnvelope } from '@duya/agent-protocol';
 import {
   RunOrchestrator,
   createWorkerExecutionChannel,
   type WorkerInterrupt,
 } from '../agents/server/run-orchestrator';
+import { createDesktopNativeRunEventWriter } from '../agents/server/native-run-event-writer';
 
 const COOPERATIVE_INTERRUPT: WorkerInterrupt = {
   accepted: true,
@@ -175,22 +177,53 @@ describe('a result that does not throw is not a success (R1.3 item 1)', () => {
   });
 
   it('degrades a run whose run:append reply claims success without a written count', async () => {
-    // The FIRST append is `run.started`, and an unacknowledged start means the
-    // run is never dispatched — so the malformed reply has to be aimed at a
-    // LATER append to exercise the degraded-terminal path rather than the
-    // start-refused one.
-    let appends = 0;
-    const { request } = scripted({
-      'run:append': (payload) => {
-        appends += 1;
-        if (appends === 1) {
-          return { ok: true, state: 'applied', runId: payload.runId, written: (payload.events as unknown[]).length };
-        }
-        return { ok: true, state: 'applied', runId: payload.runId };
-      },
+    // The durable append is the NATIVE channel's write now, and its reply is
+    // the Control Plane's. A reply that says `applied` but carries NO
+    // `written` count is not evidence that anything was written: `0` would
+    // mean "every envelope in this batch was already durable", and a MISSING
+    // count means the peer is not speaking this protocol at all.
+    //
+    // The REAL Desktop writer is used, because that is where the decision
+    // lives: `toAppendOutcome` reads the count off the raw reply and refuses
+    // the batch when there is none. The orchestrator's half — a run whose
+    // durable transcript lost an event may not be reported as a success — is
+    // what this asserts, and it is asserted through the real writer rather
+    // than a double that would only prove the double.
+    const { request } = scripted({});
+    const orchestrator = new RunOrchestrator({
+      dbRequest: request,
+      nativeWriter: createDesktopNativeRunEventWriter({
+        request: async (action, payload) => {
+          // Success claimed, count absent. The historical shape of a reply
+          // that says more than it proves.
+          if (action === 'run:append') return { ok: true, state: 'applied', runId: payload.runId };
+          return request(action, payload);
+        },
+        logger: { warn: () => undefined },
+      }),
+      channel: createWorkerExecutionChannel({
+        dispatch: () => true,
+        interrupt: () => COOPERATIVE_INTERRUPT,
+      }),
     });
-    const { orchestrator } = makeOrchestrator(request);
-    const { result } = await settleWith(orchestrator, 's-append-unreadable');
+    const runId = await open(orchestrator, 's-append-unreadable');
+
+    // The Runtime's own first envelope, refused because its acknowledgement
+    // cannot be read.
+    await orchestrator.persistNativeRunEvent(
+      's-append-unreadable',
+      {
+        runId,
+        sessionId: 's-append-unreadable',
+        seq: 1,
+        payload: { type: 'run.started' },
+      } as unknown as RunEventEnvelope,
+      0,
+    );
+    orchestrator.observe('s-append-unreadable', { type: 'done' });
+    await orchestrator.settleSession('s-append-unreadable');
+
+    const result = await orchestrator.resultFor('s-append-unreadable');
     expect(result?.status).toBe('failed');
     expect(result?.error?.code).toBe('persistence_failed');
   });

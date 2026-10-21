@@ -2,7 +2,7 @@
   "name": "@duya/desktop",
   "version": "0.8.1",
   "private": true,
-  "description": "DUYA desktop shell — Electron main process, preload bridge, and renderer",
+  "description": "Duya Desktop client — Electron workbench for the shared agent Host",
   "main": "src/main/index.ts",
   "dependencies": {
     "@duya/host": "0.1.0",

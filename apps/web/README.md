@@ -1,10 +1,22 @@
-# Duya local Web transport
+# Duya Web client (local-only)
 
-This workspace currently provides the T40a Node BFF and a browser client that
-mounts `@duya/ui` (see `src/main.tsx`). It connects to an existing standalone
-Host and listens only on `127.0.0.1`.
+This is the early-stage browser interface for Duya's shared agent foundation, not a hosted multi-user product. Desktop is the primary public-beta client and the TUI has its own terminal entry point; the surfaces do not yet have feature parity.
 
-Start the local Host with `duya serve`, then from the repository root:
+This private workspace currently provides the T40a Node BFF and a browser
+client that mounts `@duya/ui` (see `src/main.tsx`). The BFF listens only on
+`127.0.0.1` and connects to an existing standalone Host. The workspace is not
+a separately published Web package or a remote multi-user service.
+
+From a fresh checkout, install dependencies and build/start the standalone Host
+in one terminal:
+
+```sh
+npm install
+npm run build:cli-dev
+node packages/cli/bundle/cli.cjs serve
+```
+
+In another terminal, build and start the Web client from the repository root:
 
 ```sh
 npm run build:web-app
@@ -14,7 +26,8 @@ npm run web-app
 The BFF discovers the standard Host runtime descriptor beneath
 `DUYA_DATA_ROOT` (default `~/.duya`). `DUYA_HOST_ORIGIN` plus `DUYA_HOST_TOKEN`
 can override discovery for another local Host. Neither is a browser setting.
-`DUYA_WEB_PORT` optionally selects a port; the default is ephemeral.
+`DUYA_WEB_PORT` optionally selects a port; the default is ephemeral. The BFF's
+loopback binding and CSRF checks do not provide authentication for network access.
 
 Browser API routes:
 

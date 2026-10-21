@@ -313,6 +313,34 @@ describe('Phase 3B-0.2: Available winner precedence', () => {
     expect(winner).not.toBeNull();
     expect(winner!.customized).toBe(true);
   });
+
+  // ── The order the winner may NOT depend on ─────────────────────────────
+  it('W10: plugin beats plain bundled in BOTH candidate orders', () => {
+    // W2 says the plugin wins. On its own that was a claim about ONE order,
+    // and the order was the bug: `plugin` and a plain bundled skill scored
+    // the same, so the first candidate discovered won. The scanner reads the
+    // bundled skills directory BEFORE the plugins' (`skillService.ts`:
+    // bundled, then user, then plugin), so a plugin's skill was always
+    // shadowed by a same-named built-in, and the Phase 3B-0 lock
+    // (`user = customized-bundled > plugin > plain bundled`) was not what the
+    // product did.
+    //
+    // So the discriminating claim is the ORDER-INDEPENDENCE, and it is
+    // asserted through BOTH entry points: the single-name winner and the
+    // whole-set resolver the production scanner actually calls.
+    const bundled = { name: 'foo', origin: 'bundled' as const, customized: false, hasMarker: true };
+    const plugin = { name: 'foo', origin: 'plugin' as const, pluginId: 'com.example.x' };
+
+    expect(pickWinner([bundled, plugin])!.origin).toBe('plugin');
+    expect(pickWinner([plugin, bundled])!.origin).toBe('plugin');
+
+    expect(resolveAvailable([bundled, plugin]).map((s) => s.origin)).toEqual(['plugin']);
+    expect(resolveAvailable([plugin, bundled]).map((s) => s.origin)).toEqual(['plugin']);
+
+    // And the winner is the plugin's in full, not just by origin: the plugin
+    // id is what identifies WHICH plugin supplied it.
+    expect(pickWinner([bundled, plugin])!.pluginId).toBe('com.example.x');
+  });
 });
 
 import {

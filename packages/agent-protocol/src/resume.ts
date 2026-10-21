@@ -5,7 +5,7 @@
  * between a `tool.call_started` and its terminal event is REJECTED.** Tool side
  * effects are not transactional, so mid-tool recovery silently re-executes
  * them. Today's 500-event replay ring is lossy and untyped
- * (`SessionEventRecord.data: unknown`, server/types.ts:32-37) and nothing
+ * (`SessionEventRecord.data: unknown`, packages/host/src/worker-session-registry.ts:32-37) and nothing
  * prevents it. The protocol has to.
  */
 
