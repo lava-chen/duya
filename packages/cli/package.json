@@ -1,0 +1,70 @@
+{
+  "name": "@duya/cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DUYA command-line control plane and reusable terminal TUI",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "bundle"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./contract": {
+      "types": "./dist/contract/index.d.ts",
+      "default": "./dist/contract/index.js"
+    },
+    "./tui": {
+      "types": "./dist/tui/index.d.ts",
+      "default": "./dist/tui/index.js"
+    },
+    "./providers": {
+      "types": "./dist/providers.d.ts",
+      "default": "./dist/providers.js"
+    },
+    "./host-session": {
+      "types": "./dist/host-session.d.ts",
+      "default": "./dist/host-session.js"
+    },
+    "./host-task-store": {
+      "types": "./dist/host-task-store.d.ts",
+      "default": "./dist/host-task-store.js"
+    },
+    "./transcript-persistence": {
+      "types": "./dist/transcript-persistence.d.ts",
+      "default": "./dist/transcript-persistence.js"
+    },
+    "./worker-services": {
+      "types": "./dist/worker-services.d.ts",
+      "import": "./dist/worker-services.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@commander-js/extra-typings": "^14.0.0",
+    "@duya/agent-protocol": "0.1.0",
+    "@duya/client-core": "0.1.0",
+    "@duya/ai": "0.1.0",
+      "@duya/command-catalog": "0.1.0",
+    "@duya/data": "0.1.0",
+    "@duya/host": "0.1.0",
+    "@duya/input-completion": "0.1.0",
+    "@iarna/toml": "^2.2.5",
+    "blessed": "^0.1.81"
+  },
+  "devDependencies": {
+    "@types/blessed": "^0.1.25",
+    "@duya/plugin-core": "0.1.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.3"
+  }
+}

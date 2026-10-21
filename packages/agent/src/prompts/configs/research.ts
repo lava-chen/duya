@@ -1,0 +1,1 @@
+export * from '@duya/host/worker-prompts/configs/research';

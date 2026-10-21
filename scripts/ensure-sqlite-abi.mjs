@@ -1,0 +1,337 @@
+#!/usr/bin/env node
+/**
+ * ensure-sqlite-abi.mjs — make `node_modules/better-sqlite3` load under the
+ * requested runtime.
+ *
+ * better-sqlite3 is a V8-ABI native module: the Electron runtime (main +
+ * agent workers, spawned with ELECTRON_RUN_AS_NODE=1) and the local Node.js
+ * used by Vitest need DIFFERENT builds (they report different
+ * process.versions.modules — e.g. ABI 132 for Electron 36 vs ABI 137 on
+ * Node 24). One `build/Release/better_sqlite3.node` can only serve one ABI,
+ * so any switch between `npm test` and `npm run electron:dev` requires
+ * swapping it.
+ *
+ * Instead of recompiling from source (slow, needs the VS toolchain, and
+ * `npm rebuild`/`node-gyp` can clobber the working binary), this script
+ * swaps in the matching PREBUILT binary:
+ *
+ *   - node:     `prebuild-install --force` (current Node ABI, cached)
+ *   - electron: copy `<pkg>/bin/<platform>-<arch>-<abi>/better-sqlite3.node`
+ *               (the Electron prebuilt matching the installed Electron ABI)
+ *               into build/Release, or download it via
+ *               `prebuild-install --runtime electron --target <version>`.
+ *
+ * It is wired as the `pre`-hook of the DB-touching entry points
+ * (`pretest*` → node, `preelectron:*` → electron) and as the
+ * implementation of `npm run rebuild:node`, so the NODE_MODULE_VERSION
+ * mismatch error never reaches the user again.
+ *
+ * Usage: node scripts/ensure-sqlite-abi.mjs <node|electron>
+ * Exit codes: 0 = ready, 1 = failed to prepare (diagnostics printed).
+ *
+ * Exit 1 covers two DISTINCT conditions, and they are reported distinctly
+ * because they call for different fixes:
+ *   - the binding does not load under the target and the swap could not
+ *     repair it (a real ABI mismatch), and
+ *   - the target runtime itself could not be obtained, so no probe was
+ *     possible (no Electron binary — see scripts/electron-binary.mjs).
+ * The second is NOT downgraded to a warning. A build that cannot verify its
+ * native binding is not a build that has verified it, and this script is the
+ * only thing standing between a wrong-ABI binary and a runtime crash.
+ */
+
+import { spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+
+import {
+  MISSING_PACKAGE,
+  resolveElectronBinary,
+} from './electron-binary.mjs';
+
+const require = createRequire(import.meta.url);
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const MODULE = 'better-sqlite3';
+const MARKER = path.join(root, 'node_modules', '.better-sqlite3-abi.json');
+
+const target = process.argv[2];
+if (target !== 'node' && target !== 'electron') {
+  console.error('[abi] usage: node scripts/ensure-sqlite-abi.mjs <node|electron>');
+  process.exit(2);
+}
+
+function pkgDir(name) {
+  try {
+    return path.dirname(require.resolve(`${name}/package.json`));
+  } catch {
+    return null;
+  }
+}
+
+function electronVersion() {
+  const dir = pkgDir('electron');
+  if (!dir) return null;
+  try {
+    return require(path.join(dir, 'package.json')).version;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Normalize `node_modules/electron/path.txt` for the current platform.
+ *
+ * The upstream `electron` install.js writes the correct per-platform value
+ * (`electron.exe` on win32, `electron` on linux, `Electron.app/.../Electron`
+ * on darwin) — without a trailing newline. But node_modules is often copied
+ * across platforms (CI cache, devcontainer, manual rsync) and a file written
+ * on linux surfaces on Windows as `electron\n`. The downstream `cli.js`
+ * (and our own spawn) does not trim(), so `electron .` then fails with
+ * `ENOENT ... \electron\n`. Detect the cross-platform artifact and rewrite
+ * the file in place — idempotent and self-healing.
+ */
+function normalizeElectronPathTxt() {
+  const dir = pkgDir('electron');
+  if (!dir) return;
+  const pathTxt = path.join(dir, 'path.txt');
+  if (!fs.existsSync(pathTxt)) return;
+  const expected =
+    process.platform === 'win32'
+      ? 'electron.exe'
+      : process.platform === 'darwin'
+        ? 'Electron.app/Contents/MacOS/Electron'
+        : 'electron';
+  const current = fs.readFileSync(pathTxt, 'utf8');
+  const normalized = current.replace(/\r?\n/g, '');
+  if (normalized === expected && !current.includes('\n')) return;
+  try {
+    fs.writeFileSync(pathTxt, expected);
+    console.error(
+      `[abi] rewrote electron/path.txt (${JSON.stringify(current)} -> ${JSON.stringify(expected)}) for ${process.platform}.`,
+    );
+  } catch (err) {
+    console.error(`[abi] failed to rewrite electron/path.txt: ${err.message}`);
+  }
+}
+
+normalizeElectronPathTxt();
+
+/**
+ * Probe that the native binding REALLY loads under the target runtime.
+ * `require('better-sqlite3')` alone does NOT load the addon (it is loaded
+ * lazily in the Database constructor), so instantiate an in-memory DB.
+ */
+function loadsUnder(command, env) {
+  const res = spawnSync(
+    command,
+    ['-e', `new (require(${JSON.stringify(MODULE)}))(':memory:');`],
+    { cwd: root, encoding: 'utf8', env, timeout: 30000 },
+  );
+  if (res.status === 0) return { ok: true, error: null };
+  const error = (res.stderr || res.stdout || '').trim();
+  return { ok: false, error: error.split('\n')[0] || `exit code ${res.status}` };
+}
+
+const dir = pkgDir(MODULE);
+if (!dir) {
+  console.error(`[abi] ${MODULE} is not installed — run \`npm install\` first.`);
+  process.exit(1);
+}
+
+const binPath = path.join(dir, 'build', 'Release', 'better_sqlite3.node');
+
+/**
+ * Fingerprint every file `lib/binding.js` could actually load, in its own
+ * resolution order.
+ *
+ * better-sqlite3 >= 12 is an N-API addon: it depends on `node-addon-api` and
+ * ships prebuilds named `<platform>-<arch>.node` with no ABI in the name.
+ * `getBinding()` reads `prebuilds/` FIRST and only falls back to the node-gyp
+ * outputs under `build/`. So `build/Release/better_sqlite3.node` is the wrong
+ * thing to key a cache on in both directions:
+ *
+ *   - treated as "absent means broken", it reports a HEALTHY N-API install as
+ *     broken on every run after the first (a stock `npm ci` leaves no
+ *     `build/Release` at all, and the module still loads — verified on both
+ *     Node 24.16.0 and Electron 44.2.0/ABI 149 from the same prebuild);
+ *   - treated as "absent means unchanged" (which is what `mtime || 0` does),
+ *     a marker written while the binding was unloadable keeps matching forever,
+ *     so every `pretest` reports a green ABI for a database that cannot open.
+ *
+ * Recording presence, mtime and size for each candidate lets the fast path
+ * tell "unchanged and present" apart from "unchanged and unloadable".
+ */
+function bindingFingerprint() {
+  const rel = [];
+  const prebuilds = path.join(dir, 'prebuilds');
+  if (fs.existsSync(prebuilds)) {
+    for (const entry of fs.readdirSync(prebuilds)) {
+      if (entry.endsWith('.node')) rel.push(`prebuilds/${entry}`);
+    }
+  }
+  rel.push('build/Release/better_sqlite3.node');
+  rel.push('build/Debug/better_sqlite3.node');
+
+  const parts = [];
+  for (const name of rel.sort()) {
+    const p = path.join(dir, ...name.split('/'));
+    if (!fs.existsSync(p)) {
+      parts.push(`${name}~absent`);
+      continue;
+    }
+    const st = fs.statSync(p);
+    parts.push(`${name}~${st.mtimeMs}~${st.size}`);
+  }
+  return parts.join(',');
+}
+
+const binding = bindingFingerprint();
+const nodeAbi = process.versions.modules;
+const electronVer = electronVersion();
+
+// Fast path: unchanged since the last successful verification for this target.
+try {
+  const marker = JSON.parse(fs.readFileSync(MARKER, 'utf8'));
+  if (
+    marker.target === target &&
+    marker.binding === binding &&
+    marker.nodeAbi === nodeAbi &&
+    marker.electronVersion === electronVer
+  ) {
+    // Unchanged since a probe that really ran, and the probe can only have
+    // succeeded while a binding was on disk. The old key (`mtime || 0`) could
+    // not make that claim: `absent` and `mtime === 0` were the same value, so a
+    // marker written against a missing binary matched forever and every `pretest`
+    // reported a green ABI for a database that could not open.
+    process.exit(0);
+  }
+} catch {
+  // No marker yet — verify.
+}
+
+// Resolve the probe command. The electron target goes through the resolver in
+// scripts/electron-binary.mjs rather than reading `dist/` + `path.txt` here:
+// electron@44.2.0 ships no install script, so on a clean checkout neither
+// exists until something requires the package, and a check that only reads
+// those two files can never succeed.
+const resolved = target === 'electron' ? resolveElectronBinary({ packageDir: pkgDir('electron'), requireFn: require }) : null;
+const command = resolved ? resolved.binary : process.execPath;
+const env = target === 'electron' ? { ...process.env, ELECTRON_RUN_AS_NODE: '1' } : process.env;
+if (!command) {
+  // An absent binary is NOT an ABI mismatch, and collapsing the two into one
+  // message is what made this failure undiagnosable in CI. Name the cause
+  // that was actually observed. This still exits non-zero: an unverifiable
+  // target is not a verified one, and a green build must never mean "we could
+  // not check".
+  if (resolved.reason === MISSING_PACKAGE) {
+    console.error(`[abi] cannot verify the electron target: ${resolved.detail}`);
+  } else {
+    console.error(
+      `[abi] cannot verify the electron target: no Electron binary (${resolved.detail}).\n` +
+        '      electron ships no install script, so its binary is downloaded on first use —\n' +
+        '      run `npx install-electron` to materialise it, then retry.',
+    );
+  }
+  process.exit(1);
+}
+
+const check = loadsUnder(command, env);
+if (check.ok) {
+  try {
+    fs.mkdirSync(path.dirname(MARKER), { recursive: true });
+    fs.writeFileSync(
+      MARKER,
+      JSON.stringify({ target, binding, nodeAbi, electronVersion: electronVer }),
+      'utf8',
+    );
+  } catch {
+    // Marker is a cache — failure to write is not fatal.
+  }
+  process.exit(0);
+}
+
+console.error(`[abi] better-sqlite3 does not load under ${target} (${check.error}) — swapping in the ${target} prebuilt…`);
+
+let healed = false;
+if (target === 'electron') {
+  // Offline-first: the Electron prebuilt ships in <pkg>/bin/<platform>-<arch>-<abi>/.
+  // Fallback: repo-level prebuilds/ — survives `npm ci`, which wipes <pkg>/bin.
+  // The artifact is regenerated per Electron target (see
+  // prebuilds/better-sqlite3-electron-win32-x64.node) via `npx prebuild-install
+  // --runtime electron --target <ver>` (Electron prebuilds for better-sqlite3
+  // are published upstream) and committed so dev/pack work offline.
+  const candidates = [];
+  const binDir = path.join(dir, 'bin');
+  if (fs.existsSync(binDir)) {
+    for (const sub of fs.readdirSync(binDir)) {
+      candidates.push(path.join(binDir, sub, 'better-sqlite3.node'));
+    }
+  }
+  candidates.push(path.join(root, 'prebuilds', 'better-sqlite3-electron-win32-x64.node'));
+  for (const prebuilt of candidates) {
+    if (!fs.existsSync(prebuilt)) continue;
+    try {
+      fs.mkdirSync(path.dirname(binPath), { recursive: true });
+      fs.copyFileSync(prebuilt, binPath);
+      console.error(`[abi] copied the Electron prebuilt (${path.relative(root, prebuilt)}) into build/Release.`);
+      healed = true;
+      break;
+    } catch (err) {
+      console.error(`[abi] copy failed: ${err.message}`);
+    }
+  }
+}
+
+if (!healed) {
+  // Fallback: download the prebuilt for the target runtime (cached first).
+  const prebuildInstall = path.join(root, 'node_modules', 'prebuild-install', 'bin.js');
+  if (fs.existsSync(prebuildInstall)) {
+    const args = [prebuildInstall, '--force'];
+    if (target === 'electron' && electronVer) {
+      args.push('--runtime', 'electron', '--target', electronVer);
+    }
+    const res = spawnSync(process.execPath, args, {
+      cwd: dir,
+      stdio: 'inherit',
+      env: process.env,
+      timeout: 300000,
+    });
+    healed = res.status === 0;
+    if (!healed) {
+      console.error(
+        `[abi] prebuild-install failed (exit ${res.status}). Close DUYA and retry; the swap needs to ` +
+          'overwrite build/Release/better_sqlite3.node (locked while Electron is running).',
+      );
+    }
+  } else {
+    console.error('[abi] cannot locate prebuild-install (reinstall deps first).');
+  }
+}
+
+if (!healed) process.exit(1);
+
+const reCheck = loadsUnder(command, env);
+if (!reCheck.ok) {
+  console.error(`[abi] still broken after swap: ${reCheck.error}`);
+  process.exit(1);
+}
+
+console.error(`[abi] better-sqlite3 is ready for the ${target} runtime.`);
+try {
+  fs.mkdirSync(path.dirname(MARKER), { recursive: true });
+  fs.writeFileSync(
+    MARKER,
+    JSON.stringify({
+      target,
+      binding: bindingFingerprint(),
+      nodeAbi,
+      electronVersion: electronVer,
+    }),
+    'utf8',
+  );
+} catch {
+  // Non-fatal.
+}
+process.exit(0);

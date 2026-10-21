@@ -1,0 +1,113 @@
+/**
+ * Command System Types
+ *
+ * Unified command definitions for both App and Gateway.
+ */
+
+import type { Message } from '@/types';
+import type { CommandAppBridge } from './executors/bridge';
+
+// ============================================================================
+// Platform
+// ============================================================================
+
+export type CommandPlatform = 'app' | 'gateway';
+
+// ============================================================================
+// Category
+// ============================================================================
+
+export type CommandCategory =
+  | 'session'   // 会话管理: new, clear, reset
+  | 'config'    // 配置: model, personality
+  | 'info'      // 信息: help, status, cost, usage
+  | 'tools'     // 工具和技能: review, commit, plan
+  | 'exit';     // 退出 (App only)
+
+// ============================================================================
+// Command Definition
+// ============================================================================
+
+export interface CommandDef {
+  /** Canonical name without slash: "new" */
+  name: string;
+  /** Alternative names: ["reset"] */
+  aliases?: readonly string[];
+  /** Short English label shown in menus (e.g. "New session") */
+  label?: string;
+  /** Short Chinese label shown in menus (e.g. "新建会话") */
+  labelZh?: string;
+  /** Human-readable description (primary locale) */
+  description: string;
+  /** Optional Chinese description used when the menu is rendered in zh-CN. */
+  descriptionZh?: string;
+  /** Category for grouping */
+  category: CommandCategory;
+  /** Argument placeholder shown in help: "<prompt>", "[model]" */
+  argsHint?: string;
+  /** Tab-completable subcommands: ["on", "off"] */
+  subcommands?: readonly string[];
+  /** Available platforms */
+  platforms?: readonly CommandPlatform[];
+  /** Execute locally (App-side) */
+  execute?: CommandExecutor;
+  /** Gateway handler name (mutually exclusive with execute) */
+  gatewayHandler?: string;
+  /** Requires an active session to execute */
+  requiresSession?: boolean;
+  /** Config gate path: "display.toolProgress" */
+  configGate?: string;
+}
+
+// ============================================================================
+// Execution
+// ============================================================================
+
+export interface CommandContext {
+  sessionId?: string;
+  messages?: Message[];
+  args: string[];
+  /** The raw command token as typed, e.g. "/deep-research" (alias-resolved name is on `args`). */
+  raw: string;
+  platform?: string;
+  platformChatId?: string;
+  /** Clear all messages in the session */
+  clearMessages?: () => void;
+  /** Switch to a new session */
+  resetSession?: () => Promise<{ oldSessionId: string; newSessionId: string }>;
+  /** Send reply via adapter */
+  sendReply?: (text: string) => Promise<void>;
+  /**
+   * Live app bridge, injected by `runSlashCommand`. Executors act on the
+   * desktop app exclusively through this (never import components/stores
+   * that need React context). Absent in gateway/non-desktop contexts.
+   */
+  app?: CommandAppBridge;
+}
+
+export type CommandResult =
+  | { type: 'text'; content: string }
+  | { type: 'error'; message: string }
+  | { type: 'session_reset'; newSessionId?: string }
+  | { type: 'dismiss' }  // No output (handled internally)
+  | { type: 'forward'; prompt: string };  // Forward to agent
+
+export type CommandExecutor = (
+  ctx: CommandContext
+) => CommandResult | Promise<CommandResult>;
+
+// ============================================================================
+// Help Generation
+// ============================================================================
+
+export interface HelpEntry {
+  name: string;
+  description: string;
+  argsHint?: string;
+  aliases?: readonly string[];
+}
+
+export interface HelpSection {
+  category: CommandCategory;
+  entries: HelpEntry[];
+}

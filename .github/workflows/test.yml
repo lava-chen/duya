@@ -1,0 +1,464 @@
+name: Test
+
+on:
+  push:
+    # Plan 583 ISS-01: this workflow previously watched `main`/`develop`,
+    # neither of which exists in this repository — `origin/HEAD` is
+    # `master`, and `gh pr create --base master` is the documented flow in
+    # AGENTS.md. The triggers therefore never matched and the workflow never
+    # ran, which is how a P0 type error and a P0 build break both reached
+    # master.
+    #
+    # Plan 587 G0.2 correction: `main`/`develop` are now DROPPED instead of
+    # being kept "in case they are ever created". A branch in a trigger list
+    # is a claim that the branch is a live review target; neither branch
+    # exists, so the claim was false, and a false claim in a file people read
+    # to answer "what does CI run on?" is worse than no claim. Re-adding one
+    # is a one-line diff on the day the branch is actually created.
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  # ── Architecture boundary gate ────────────────────────────────────────────
+  # Standalone job. It is `needs`-free, so it reports independently of the
+  # (currently red) test matrix instead of being skipped by it.
+  #
+  # Runs on ONE OS deliberately: this is pure static analysis over the
+  # source tree — no compile, no native module, no OS-specific behaviour.
+  # Measured locally at ~3s per invocation, against a 3-OS `npm ci` + typecheck
+  # matrix measured in minutes. Three copies would buy no extra signal.
+  architecture:
+    name: architecture
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # `fetch-depth: 0` is required by the resolver-change detection
+          # below, which diffs against the event's base sha. This is the only
+          # job that pays for full history, and it is the cheapest job here.
+          fetch-depth: 0
+
+      - name: Setup Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # No built `dist/` is required. Measured on a clean checkout with every
+      # `dist/` absent: `architecture:check` exits 0 (802 total / 802
+      # tolerated / 802 baseline) and `architecture:self-test` exits 0. The
+      # resolver works from the *declared* `exports` maps in each
+      # `package.json`, not from built artifacts, so this job must NOT build
+      # first — building here would only add minutes and hide a future
+      # accidental dist dependency behind a slow cache hit.
+      - name: Architecture boundary check
+        # This is the gate's verdict. Exit 1 = new violations; the message
+        # names the file, the rule and the reason.
+        run: npm run architecture:check
+
+      - name: "Guard: the check must have scanned something"
+        # `architecture-check.mjs` exits 0 whenever `blocking.length === 0`,
+        # which is ALSO true when it scanned nothing at all — e.g. if a
+        # future refactor breaks the module-root matcher so every file maps to
+        # no module, `total` collapses to 0 and the gate reports "OK — no new
+        # boundary violations" while enforcing nothing. A gate that cannot
+        # tell "clean" from "blind" is the exact failure this repo already
+        # paid for once. So assert a non-zero scan.
+        #
+        # Runs even when the step above failed (`always()`), but only fires on
+        # a zero scan: when the real check fails on new violations `total` is
+        # still > 0, so this adds no second, confusing red signal.
+        if: always()
+        run: |
+          node <<'EOF'
+          const { execFileSync } = require('node:child_process');
+          const fs = require('node:fs');
+          // `--json` exits 1 when it FOUND blocking violations, and 2 when the
+          // engine itself failed. Status 1 is the normal outcome of a real gate
+          // failure — the check step above is already red for it — so the guard
+          // must report the counts and then stay out of the way rather than
+          // pile on a second, vaguer failure.
+          let report = null;
+          let engineFailed = false;
+          try {
+            report = JSON.parse(execFileSync(
+              'node',
+              ['scripts/architecture/architecture-check.mjs', '--json'],
+              { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+            ));
+          } catch (err) {
+            // Non-zero exit still prints a JSON report on stdout; recover it.
+            try {
+              report = JSON.parse((err.stdout ?? '').toString());
+            } catch {
+              engineFailed = true;
+            }
+          }
+          if (!report) {
+            process.stdout.write('guard: --json produced no report; deferring to the check step.\n');
+            process.exit(0);
+          }
+          const total = report.total ?? 0;
+          const summary = [
+            '### architecture:check',
+            '',
+            '| metric | value |',
+            '| --- | --- |',
+            `| violations found | ${total} |`,
+            `| tolerated (baselined) | ${report.tolerated} |`,
+            `| new (blocking) | ${report.blocking} |`,
+            `| baseline size | ${report.baselineSize} |`,
+            '',
+            ...Object.entries(report.counts ?? {}).map(([rule, n]) => `- \`${rule}\`: ${n}`),
+          ].join('\n');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY ?? 'guard-summary.md', summary + '\n');
+          process.stdout.write(summary + '\n');
+          if (engineFailed) {
+            process.stderr.write('\nguard: architecture-check engine failed; deferring to the check step.\n');
+            process.exit(0);
+          }
+          if (report.blocking > 0) {
+            // Real violations, already reported by the check step. Do not
+            // duplicate the failure.
+            process.stdout.write('guard: new violations present; the check step is the verdict.\n');
+            process.exit(0);
+          }
+          if (total === 0) {
+            process.stderr.write(
+              '\nguard FAILED: architecture:check found 0 violations, so it proved nothing.\n' +
+              'A clean scan and a blind scan look identical here. Treat this as a\n' +
+              'resolver failure (scripts/architecture/), not as a clean repo.\n',
+            );
+            process.exit(1);
+          }
+          EOF
+
+      # Plan 610 S4c-d3. `architecture:boundaries` (scripts/architecture/
+      # boundary-gates.mjs) is a SEPARATE gate with a SEPARATE baseline
+      # (`boundary-gates-baseline.json`) and it had a `package.json` script that
+      # no CI job ever called — so G7's verdict was computed locally and never
+      # enforced. It is wired here now.
+      #
+      # Placed AFTER the `architecture:check` guard rather than beside it, and
+      # that is not cosmetic: the guard exits 1 when the check scanned nothing,
+      # and a step inserted between the check and its guard would mean the guard
+      # reported on a check that had already been superseded by a different gate.
+      #
+      # Exit contract: 1 when a finding's fingerprint is absent from
+      # `boundary-gates-baseline.json`. No `--write` here, ever — the gate is
+      # only meaningful while the baseline is frozen and reviewed by a human.
+      #
+      # NOT gated on the resolver-change step below, deliberately. That step
+      # exists because `architecture:self-test` compares live counts against a
+      # frozen snapshot, so it may only fire when the resolver or its
+      # expectations move. This gate's baseline is a list of fingerprints, not a
+      # count, so an ordinary source change that adds a violation must fail
+      # immediately rather than wait for a resolver edit to reveal it.
+      - name: Architecture plan-600 boundary gates
+        run: npm run architecture:boundaries
+
+      - name: Detect architecture resolver changes
+        id: resolver
+        run: |
+          set -uo pipefail
+          PATTERN='^(scripts/architecture/|architecture-policy\.yaml$|\.architecture-baseline\.json$)'
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
+          changed=false
+          if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] \
+             && git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            if git diff --name-only "$BASE" "$GITHUB_SHA" | grep -Eq "$PATTERN"; then
+              changed=true
+            fi
+          else
+            # Base sha unusable (first push to a new branch, force-push,
+            # shallow ref). Run the gate rather than silently skip it.
+            changed=true
+          fi
+          echo "resolver-changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "resolver changed: $changed"
+
+      # `architecture:self-test` is NOT run unconditionally, and that is a
+      # deliberate choice rather than a shortcut. It compares the resolver's
+      # live counts against a frozen snapshot in architecture-policy.yaml
+      # (548/35/16/162/25/16/0). Any legitimate debt paydown — which is the
+      # entire point of the ratchet, and what every plan-587 migration step
+      # does — lowers a count and therefore turns an unconditional self-test
+      # red until a human recomputes the snapshot. Gating on resolver-file
+      # changes keeps the assertion meaningful (it fires exactly when the
+      # resolver or its expectations move) without punishing real progress.
+      - name: Architecture resolver self-test
+        if: steps.resolver.outputs.resolver-changed == 'true'
+        run: npm run architecture:self-test
+
+      # ---------------------------------------------------------------------
+      # G10 + A1: gates that existed, had unit tests, and ran in CI's vitest
+      # (vitest.config.ts includes `scripts/**/*.test.ts`) -- but were NEVER
+      # EXECUTED as gates. `browser-closure-gate.mjs` had no package.json
+      # script at all; `headless-load-gate.mjs` had one that nothing called.
+      # A gate whose only CI presence is its own unit test is evidence that
+      # the gate's LOGIC is correct, and no evidence that anyone is watching
+      # the tree it guards. The window was open: plan 610 A0 measured the
+      # browser closure at 0/789 built-ins and that number was produced by a
+      # human running a script by hand.
+      #
+      # They run here, in the existing `architecture` job. G10 reads the source
+      # graph; A1 also bundles and loads the Desktop CLI handler closure, so its
+      # Host dependency artifacts must be built in this clean checkout.
+      #
+      # Plan-600 gates G1-G9 run separately above with their own fingerprint
+      # baseline. This block runs the source-closure checks G10 and A1.
+      # ---------------------------------------------------------------------
+      - name: Browser entry closure (G10)
+        run: npm run architecture:browser-closure
+
+      - name: Build Host dependency closure for A1
+        run: node scripts/build-packages.mjs --target @duya/host
+
+      - name: Headless load of the cli handler layer (A1)
+        run: npm run architecture:headless
+
+      # T14b. These two shipped in #277 and nothing ever ran them: the PR said
+      # so itself ("Not in this PR"), and a grep of `.github/workflows` found no
+      # reference to either script. A gate with no runner is a comment that costs
+      # a runner to write.
+      #
+      # `client-closure` is the one that holds `packages/cli/src/chat.ts` free of
+      # the execution engine — the edge a future web or desktop client is built
+      # on, so it is exactly the gate that must not rot. It exits non-zero on a
+      # forbidden edge, and the gate's own tests cover the degenerate cases.
+      - name: Client entry closure (G11-1)
+        run: npm run architecture:client-closure
+
+      # The bundle is tracked, so a source edit that is never rebuilt is a lie
+      # the next reader has to discover. This compares the committed bundle
+      # against every first-party input changed since the bundle commit; it does
+      # not build, so it runs before the A1 step above has anything to do with it.
+      - name: Worker bundle freshness (bundle:verify)
+        run: npm run bundle:verify
+
+      # T02. Plan 19 §11 calls itself the single source of truth for card status,
+      # and 19 §4 rule 4 says a card is done when it has a named test. That was
+      # an honour system, and it failed visibly on 2026-10-18: two cards read
+      # `todo` after landing (#277, #279), and two more carried failure evidence
+      # that no longer reproduced. All four were found by hand.
+      #
+      # The checker also refuses to pass when it finds no verifiable test names,
+      # so a table that quietly stops carrying evidence shows up as a failure
+      # rather than as a gate that agrees with everything.
+      - name: Plan tracking table matches the tree (T02)
+        run: npm run plan:sync
+
+      # Both gates decide "clean" by a count being zero, and a count is also
+      # zero when the walk followed nothing. These are guards, not second
+      # verdicts: they never re-decide whether the gate passes, only whether it
+      # looked at anything. A red gate with a non-empty scope fails the step
+      # above and passes this one; a green gate over an empty scope fails here.
+      # Same reasoning as the `architecture:check` guard above, applied to the
+      # two gates that were about to be promoted without it.
+      - name: "Guard: G10 must have scanned something"
+        if: always()
+        run: node scripts/architecture/gate-scan-guard.mjs g10
+
+      - name: "Guard: A1 must have scanned something"
+        if: always()
+        run: node scripts/architecture/gate-scan-guard.mjs a1
+
+  # ── Typecheck + tests ─────────────────────────────────────────────────────
+  test:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      # Without this, the default `fail-fast: true` cancels the other legs the
+      # moment one OS fails, and a cancelled leg is reported as `cancelled` —
+      # not `passed`, but it reads like an absence of evidence rather than a
+      # result, and a half-cancelled matrix is easy to misread as "only the
+      # broken OS is broken". The real cost is runner minutes: a push that
+      # fails on ubuntu now also pays for windows and macos to finish
+      # (~3 x npm ci + typecheck + vitest). That is the deliberate price of
+      # every leg reporting a true result instead of being cancelled.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node-version: [22.x]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run typecheck
+        # The renderer's `tsc --noEmit` aborts the Node process with
+        # `Abort trap: 6` (exit 134) on the macOS runner under the default
+        # heap — a V8 out-of-memory, not a type error. ubuntu passes the same
+        # step with the default heap, so this is runner memory, not code.
+        # Same remedy AGENTS.md already documents for `typecheck:cli`.
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: npm run typecheck:all
+
+      # `npm test` is red by design today (pre-existing debt). That red is the
+      # signal and it is deliberately left visible: no `|| true`, no
+      # `continue-on-error`, no glob skips. The repo-wide test debt and the
+      # gate that reports it both stay exactly as they are.
+      #
+      # `shell: bash` is set for this step only, so the same
+      # `set -o pipefail` + `tee` pattern works on all three runners and the
+      # summary can be re-read by the guard below. The command executed is
+      # still plain `npm test`; the shell only wraps the log capture. Git
+      # Bash is preinstalled on windows-latest.
+      - name: Run tests
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee vitest-output.log
+
+      - name: "Guard: tests must actually be collected"
+        # Vitest already fails when zero test FILES match, but "files matched
+        # and zero tests ran" is still reachable — every file skipped, or an
+        # include-glob change that only ever matches empty files. That exits 0
+        # and looks identical to a healthy run. Assert the collected totals
+        # are non-zero, so this job cannot go green by collecting nothing.
+        #
+        # T04b: this step used to carry an INLINE copy of the guard while
+        # `scripts/ci/test-summary-guard.mjs` held the real one — and the two
+        # disagreed about both failure branches. The inline copy exited 1 on
+        # `unread` (failing the job over its own parse failure) and 0 on
+        # `no-log` (passing a job whose log was never written). CI ran the
+        # inline copy, so correcting the script changed nothing about this job
+        # — which is why `guard FAILED: could not read the vitest summary
+        # line.` kept appearing no matter what the script said. There is one
+        # implementation now, and the workflow calls it.
+        if: always()
+        shell: bash
+        run: node scripts/ci/test-summary-guard.mjs vitest-output.log
+
+      - name: Run tests with coverage
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run test:coverage
+
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest'
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage/lcov.info
+          fail_ci_if_error: false
+
+  # ── Build / packaged parity ───────────────────────────────────────────────
+  build:
+    runs-on: ${{ matrix.os }}
+    # Plan 587 G0.2: this was `needs: test`, and because `npm test` is red the
+    # whole build job was SKIPPED — so `electron:build` and the macOS packaged
+    # parity check have produced no CI evidence on any recent SHA, on any OS.
+    # `needs:` in CI is a sequencing device, not a gate: its only effect here
+    # was to suppress the job permanently.
+    #
+    # Chosen shape: depend on `architecture` instead. Rationale and cost:
+    #   * We want `electron:build` evidence regardless of test debt.
+    #   * We still want SOME cheap upstream, so a broken boundary stops us
+    #     burning 3 x electron:build. `architecture` is the right pick: it is
+    #     ~3s of static analysis, needs no `dist/`, and a boundary violation
+    #     genuinely means the build is building something wrong.
+    #   * What this costs: `build` no longer runs after the tests, so a
+    #     test-only regression will not gate the build job. The test job stays
+    #     a fully visible, independent red — nothing is hidden, it simply is
+    #     not a precondition for building. The real price is runner minutes:
+    #     `build` now runs on every push where architecture is green, which is
+    #     today, i.e. always.
+    needs: architecture
+
+    strategy:
+      # Same rationale as the test matrix: never let one OS's failure cancel
+      # the others, so every leg reports a true build result. Cost is the same
+      # — a failing leg now pays for the other two to finish.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node-version: [22.x]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        # `vite build` aborts with `Abort trap: 6` (exit 134) on the macOS
+        # runner under the default ~2 GB V8 heap — runner memory, not a build
+        # error; ubuntu and windows pass this identical step at the default
+        # heap. Same value and same reasoning as the release workflow's
+        # identical step (release.yml), and as this job's typecheck step
+        # above (5bf3220a). Raise it for all platforms so one value works
+        # across the matrix.
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: npm run electron:build
+
+      - name: Package (macOS only)
+        # Run the full electron-builder packaging on macOS so afterPack path
+        # bugs (which only manifest inside the .app bundle) are caught on
+        # every PR, not only on release tags.
+        #
+        # `--publish never` is the fix, and it is load-bearing rather than
+        # decoration. electron-builder.yml declares a `github` publish provider,
+        # and with NO publish flag on the command line PublishManager infers
+        # one: on a push event `isPullRequest()` is false (GITHUB_BASE_REF is
+        # unset), `getCiTag()` is null for a branch build, so `isCI` promotes
+        # the policy to `onTagOrDraft` and every produced artifact is scheduled
+        # for upload. Constructing the GitHub publisher then throws
+        # "GitHub Personal Access Token is not set" and the job exits 1 —
+        # AFTER the .app/DMG/zip exist and afterPack has verified the agent
+        # bundle inside the package, so the parity step below never ran once.
+        # Run 37194425248 is exactly that failure.
+        #
+        # A verification run has no business publishing, so publishing is
+        # removed from the run rather than tolerated in it: no GH_TOKEN is
+        # added, and the exit code stays the packaging exit code. release.yml
+        # passes the symmetric `--publish always` alongside GH_TOKEN for the
+        # real release, so the release path is untouched.
+        #
+        # electron-builder is invoked directly, the same shape release.yml uses
+        # after its own `Build application` step. That drops the second
+        # `npm run electron:build` that `npm run electron:pack:mac` re-ran on
+        # top of the `Build application` step above: same build output, same
+        # artifacts and same afterPack verification, one build instead of two.
+        if: matrix.os == 'macos-latest'
+        run: npx electron-builder --mac --config electron-builder.yml --publish never
+
+      - name: Verify packaged artifacts (macOS only)
+        if: matrix.os == 'macos-latest'
+        run: node scripts/verify-packaged-parity.mjs --platform mac
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.os }}
+          path: |
+            dist/
+            dist-electron/
+            packages/host/bundle/
+          retention-days: 7

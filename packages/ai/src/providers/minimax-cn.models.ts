@@ -1,0 +1,96 @@
+// Model data. MiniMax M3/M2.x via Anthropic-compatible API (China region).
+// Same models as Global, but hosted on the CN endpoint api.minimaxi.com.
+//
+// M3 advertises a 1M total context (input + output); see
+// `packages/ai/src/providers/minimax.models.ts` for the rationale and the
+// `packages/ai/src/api/anthropic-messages.ts:62-65` upstream-doc reference.
+// Listing M3 at 200K here caused premature auto-compaction (the model is
+// actually allowed up to ~1M, but duya treated it as 200K).
+import type { Model } from '../types.js';
+
+export const minimaxCnModels: Model<'anthropic'>[] = [
+  {
+    id: 'MiniMax-M3',
+    name: 'MiniMax M3 (CN)',
+    api: 'anthropic',
+    providerId: 'minimax-cn',
+    baseUrl: 'https://api.minimaxi.com/anthropic',
+    reasoning: true,
+    thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },
+    compat: { forceAdaptiveThinking: true, maxOutputTokens: 128000, allowEmptySignature: true },
+    input: ['text', 'image'],
+    contextWindow: 1000000,
+    maxTokens: 128000,
+    cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0, tiers: [{ inputTokensAbove: 512000, input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0 }] },
+  },
+  {
+    id: 'MiniMax-M2.7',
+    name: 'MiniMax M2.7 (CN)',
+    api: 'anthropic',
+    providerId: 'minimax-cn',
+    baseUrl: 'https://api.minimaxi.com/anthropic',
+    reasoning: true,
+    thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },
+    compat: { forceAdaptiveThinking: true, maxOutputTokens: 131072, allowEmptySignature: true },
+    input: ['text', 'image'],
+    contextWindow: 200000,
+    maxTokens: 131072,
+    cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
+  },
+  {
+    id: 'MiniMax-M2.7-highspeed',
+    name: 'MiniMax M2.7 Highspeed (CN)',
+    api: 'anthropic',
+    providerId: 'minimax-cn',
+    baseUrl: 'https://api.minimaxi.com/anthropic',
+    reasoning: true,
+    thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },
+    compat: { forceAdaptiveThinking: true, maxOutputTokens: 131072, allowEmptySignature: true },
+    input: ['text', 'image'],
+    contextWindow: 200000,
+    maxTokens: 131072,
+    cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
+  },
+  {
+    id: 'MiniMax-M2.5',
+    name: 'MiniMax M2.5 (CN)',
+    api: 'anthropic',
+    providerId: 'minimax-cn',
+    baseUrl: 'https://api.minimaxi.com/anthropic',
+    reasoning: true,
+    thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },
+    compat: { forceAdaptiveThinking: true, maxOutputTokens: 131072, allowEmptySignature: true },
+    input: ['text', 'image'],
+    contextWindow: 200000,
+    maxTokens: 131072,
+    cost: { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.375 },
+  },
+  {
+    id: 'MiniMax-M2.1',
+    name: 'MiniMax M2.1 (CN)',
+    api: 'anthropic',
+    providerId: 'minimax-cn',
+    baseUrl: 'https://api.minimaxi.com/anthropic',
+    reasoning: true,
+    thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },
+    compat: { forceAdaptiveThinking: true, maxOutputTokens: 131072, allowEmptySignature: true },
+    input: ['text', 'image'],
+    contextWindow: 200000,
+    maxTokens: 131072,
+    cost: { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.375 },
+  },
+  {
+    id: 'MiniMax-M2',
+    name: 'MiniMax M2 (CN)',
+    api: 'anthropic',
+    providerId: 'minimax-cn',
+    baseUrl: 'https://api.minimaxi.com/anthropic',
+    reasoning: true,
+    thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },
+    compat: { forceAdaptiveThinking: true, maxOutputTokens: 131072, allowEmptySignature: true },
+    input: ['text', 'image'],
+    contextWindow: 200000,
+    maxTokens: 131072,
+    cost: { input: 0.3, output: 1.2, cacheRead: 0, cacheWrite: 0 },
+  },
+];

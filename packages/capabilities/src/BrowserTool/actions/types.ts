@@ -1,0 +1,45 @@
+import type { z } from 'zod/v4';
+import type { ToolResult } from '../../contracts/tool.js';
+import type { ICDPClient } from '../CDPClient.js';
+import type { SnapshotEngine } from '../SnapshotEngine.js';
+import type { FallbackBrowser } from '../FallbackBrowser.js';
+import type { BrowserBackendMode, BrowserMode, NetworkEnvironment } from '../types.js';
+import type { PlatformContent, ExtractionOptions } from '../platform-extractors/types.js';
+
+export interface ActionContext {
+  cdp: ICDPClient | null;
+  snapshotEngine: SnapshotEngine | null;
+  fallbackBrowser: FallbackBrowser | null;
+  mode: BrowserMode;
+  browserBackendMode: BrowserBackendMode;
+  extensionAvailable: boolean;
+  /** Probed network environment ('domestic' | 'overseas' | 'unknown'); undefined when not probed yet. */
+  networkEnvironment?: NetworkEnvironment;
+  /** Sync a freshly probed network environment back onto the tool instance. */
+  setNetworkEnvironment?: (env: NetworkEnvironment) => void;
+  platformHookManager: {
+    shouldApplyHooks(url: string): boolean;
+    applyPostNavigateHooks(cdp: ICDPClient, url: string): Promise<void>;
+    hasExtractor(url: string): boolean;
+    extractContent(cdp: ICDPClient, url: string, options?: ExtractionOptions): Promise<PlatformContent | null>;
+  };
+  checkDomainBlocked(url: string): boolean;
+  getBrowserPool(): import('../BrowserPool.js').BrowserPool;
+  /** Stable identifier for the current agent turn — used to scope screenshot files. */
+  sessionId?: string;
+}
+
+export interface ActionHandler<TInput = Record<string, unknown>> {
+  readonly operation: string;
+  readonly schema: z.ZodType<TInput>;
+  /**
+   * Omit this action from the auto-generated tool schema (the LLM-facing
+   * operation enum, field shapes, and any `anyOf` variant). The action stays
+   * registered in the ActionRegistry and remains dispatchable by operation
+   * name — surface it to the model through the tool prompt instead.
+   */
+  readonly hidden?: boolean;
+  execute(input: TInput, ctx: ActionContext): Promise<Record<string, unknown>>;
+}
+
+export type ActionResult = ToolResult;

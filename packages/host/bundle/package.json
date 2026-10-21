@@ -1,0 +1,7 @@
+{
+  "name": "@duya/host-worker-bundle",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Agent process bundle - CommonJS format for Node.js subprocess"
+}

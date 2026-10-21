@@ -1,0 +1,193 @@
+import { getLogger, LogComponent } from '../logging/logger';
+import { stopAgentServer } from '../agents/agent-server-lifecycle';
+import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
+import { getChannelManager } from '../messaging/port-manager';
+import { getPerformanceMonitor } from '../services/performance-monitor';
+import { stopGatewayProcess } from '../gateway/index';
+import { getSessionManager } from '../agents/session-manager';
+import { stopBrowserDaemon } from '../services/browser/daemon';
+import { getAutomationScheduler } from '../automation/Scheduler';
+import { getDatabase } from '../ipc/db-handlers';
+import { closeDatabase, stopWalCheckpoint } from '../db/connection';
+import { closeCoreDatabase } from '../db/core-connection';
+import { cleanupUpdater } from '../services/updater';
+import { shutdownProjectDatabaseService } from '../project-database/service';
+
+let isShuttingDown = false;
+
+export function getIsShuttingDown(): boolean {
+  return isShuttingDown;
+}
+
+export async function performGracefulShutdown(): Promise<void> {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  const logger = getLogger();
+  logger.info('Starting graceful shutdown...', undefined, 'Main');
+
+  // 0. Stop CLI API server (Phase 0) — runs first so we don't accept new
+  // requests after other subsystems begin tearing down.
+  try {
+    const { stopCliApiServer } = await import('../cli/cli-api-server');
+    await stopCliApiServer();
+    logger.info('CLI API server stopped', undefined, 'Main');
+  } catch (err) {
+    logger.error(
+      'Error stopping CLI API server',
+      err instanceof Error ? err : new Error(String(err)),
+      undefined,
+      LogComponent.Main,
+    );
+  }
+
+  // 0.5 Stop Agent Server
+  try {
+    await stopAgentServer();
+  } catch (err) {
+    logger.error('Error stopping agent server', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
+
+  // 1. Stop all Agent processes
+  try {
+    const agentPool = getAgentProcessPool();
+    await agentPool.shutdown();
+  } catch (err) {
+    logger.error('Error shutting down agent pool', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
+
+  // 2. Shutdown channel manager
+  try {
+    const channelMgr = getChannelManager();
+    channelMgr.shutdown();
+  } catch (err) {
+    logger.error('Error shutting down channel manager', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
+
+  // 3. Stop performance monitor
+  try {
+    getPerformanceMonitor().shutdown();
+  } catch (err) {
+    logger.error('Error shutting down performance monitor', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
+
+  // 4. Stop gateway process
+  try {
+    await stopGatewayProcess();
+  } catch (err) {
+    logger.error('Error stopping gateway process', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
+
+  // 5. Shutdown session manager
+  try {
+    getSessionManager().shutdown();
+  } catch (err) {
+    logger.error('Error shutting down session manager', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
+
+  // 6. Stop Browser Daemon
+  try {
+    await stopBrowserDaemon();
+    logger.info('Browser Daemon stopped', undefined, 'Main');
+  } catch (err) {
+    logger.error('Error stopping Browser Daemon', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
+
+  // 6.45 Stop computer-use-demo daemon (Plan 453 Task D).
+  try {
+    const { getComputerUseDaemon } = await import('../services/computer-use-daemon');
+    const cuDaemon = getComputerUseDaemon();
+    await cuDaemon.stop();
+    logger.info('ComputerUseDaemon stopped', undefined, 'Main');
+  } catch (err) {
+    // getComputerUseDaemon throws when init() never ran; that's OK
+    // when the user hasn't enabled wake-agent.
+    logger.info(
+      'ComputerUseDaemon not initialized; skipping',
+      undefined,
+      'Main',
+    );
+  }
+
+  // 6.5 Stop automation scheduler
+  try {
+    getAutomationScheduler()?.shutdown();
+  } catch (err) {
+    logger.error('Error shutting down automation scheduler', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
+
+  // 6.6 Cleanup updater
+  try {
+    cleanupUpdater();
+  } catch (err) {
+    logger.error('Error cleaning up updater', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
+
+  // 6.65 Stop memory worker (Plan 305). Awaits in-flight extracts so
+  // we don't leave dangling leases. No-op when the worker was never
+  // started (env gate unset).
+  try {
+    const { getMemoryWorkerHandle } = await import('../memory/memory-worker');
+    const handle = getMemoryWorkerHandle();
+    if (handle) {
+      await handle.shutdown();
+      logger.info('Memory worker stopped', undefined, 'Main');
+    }
+  } catch (err) {
+    logger.error('Error shutting down memory worker', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
+
+  // 6.7 Stop an in-flight recording and release the badge window
+  // (Plan 556 Phase 5). A recording left running would keep its hook
+  // worker and UIA probe alive past shutdown and never write the
+  // session's endedAt.
+  try {
+    const [{ getRecorderService }, { hideRecorderBadge }] = await Promise.all([
+      import('../services/recorder/service'),
+      import('../services/recorder/badge'),
+    ]);
+    await getRecorderService().dispose();
+    hideRecorderBadge();
+    logger.info('Recorder stopped', undefined, 'Main');
+  } catch (err) {
+    logger.error('Error stopping recorder', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
+
+  // 7. ConfigStore needs no explicit shutdown — set() persists atomically
+  // and there is no auto-save timer to stop. (The legacy ConfigManager's
+  // shutdown() closed its subscription ports; that code path is gone.)
+
+  // 7.5 Stop WAL checkpoint scheduler
+  try {
+    stopWalCheckpoint();
+  } catch (err) {
+    logger.error('Error stopping WAL checkpoint scheduler', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
+
+  // 7.5b Close core database (duya-core.db + rollout)
+  try {
+    closeCoreDatabase();
+  } catch (err) {
+    logger.error('Error closing core database', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.DB);
+  }
+
+  // 7.6 Checkpoint and close project-local database connections.
+  try {
+    await shutdownProjectDatabaseService();
+  } catch (err) {
+    logger.error('Error shutting down project database service', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.DB);
+  }
+
+  // 8. Close database connection (last step)
+  try {
+    const database = getDatabase();
+    if (database) {
+      closeDatabase();
+      logger.info('Database connection closed', undefined, 'Main');
+    }
+  } catch (error) {
+    logger.error('Failed to close database', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
+  }
+
+  logger.info('Graceful shutdown complete', undefined, 'Main');
+}

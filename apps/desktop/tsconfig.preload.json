@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "typeRoots": ["../../node_modules/@types"],
+    "baseUrl": ".",
+    "paths": {
+      "@duya/plugin-core": ["../../packages/plugin-core/dist/index.d.ts"],
+      "@duya/plugin-core/*": ["../../packages/plugin-core/dist/*"],
+      "@duya/connectors": ["../../packages/connectors/dist/index.d.ts"],
+      "@duya/connectors/*": ["../../packages/connectors/dist/*"]
+    }
+  },
+  "include": ["src/contracts/**/*.ts", "src/preload/**/*.ts"],
+  "exclude": ["node_modules", "**/*.test.ts"]
+}

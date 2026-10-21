@@ -1,0 +1,221 @@
+/**
+ * @duya/gateway - Platform Gateway for External Integrations
+ *
+ * This package provides the gateway functionality for connecting
+ * external platforms (Telegram, Feishu, WeChat, Discord) to the DUYA agent.
+ *
+ * Runs as a child_process forked from Electron Main Process.
+ */
+
+export * from './types.js';
+export { GatewayManager } from './gateway-manager.js';
+export { PlatformAdapter, createAdapter, registerAdapterFactory } from './adapters/base.js';
+export { IpcClient } from './ipc-client.js';
+export { matchProfileRoute, parseProfileRoutes, sortRoutes } from './profile-routing.js';
+export type { ProfileRoute, ProfileMatchInput } from './profile-routing.js';
+export { getProxyStatus } from './proxy-fetch.js';
+
+// Command system (plan 520: detection + registry + help only — execution
+// moved to the Main Process; these exports are consumed there)
+export { resolveCommand, getCommandNamesForPlatform, isGatewayKnownCommand, getAllCommands, registerDynamicCommands, COMMAND_REGISTRY } from './commands/registry.js';
+export { generateHelpText, getCommandHelp } from './commands/help.js';
+export { detectCommand, shouldInterceptCommand } from './commands/dispatcher.js';
+
+// ---------------------------------------------------------------------------
+// Subprocess entry point (when run via child_process.fork)
+// ---------------------------------------------------------------------------
+
+import { GatewayManager } from './gateway-manager.js';
+import type {
+  GatewayInitConfig,
+  MainToGatewayMessage,
+  GatewayToMainMessage,
+  StreamEvent,
+} from './types.js';
+
+// Register adapter imports (side-effect registration)
+import './adapters/index.js';
+import { qrRegisterBegin, qrRegisterPoll } from './adapters/feishu/qr-registration.js';
+
+let gatewayManager: GatewayManager | null = null;
+
+function send(message: GatewayToMainMessage): void {
+  const result = process.send?.(message);
+  if (result === false) {
+    console.error('[Gateway] process.send returned false, message queue full');
+  }
+  if (!process.send) {
+    console.error('[Gateway] process.send is undefined');
+  }
+}
+
+function handleMessage(msg: MainToGatewayMessage): void {
+  switch (msg.type) {
+    case 'init': {
+      if (!gatewayManager) {
+        gatewayManager = new GatewayManager();
+      }
+      gatewayManager.init(msg.config).then(async () => {
+        console.log('[Gateway] init complete, starting adapters...');
+        await gatewayManager!.start();
+        const status = gatewayManager!.getStatus();
+        const activeCount = status.adapters.filter(a => a.running).length;
+        const totalCount = status.adapters.length;
+        console.log(`[Gateway] Init complete: ${activeCount}/${totalCount} adapters running`);
+        send({
+          type: 'gateway:init:complete',
+          success: true,
+          adapters: status.adapters,
+        });
+      }).catch((err) => {
+        send({ type: 'gateway:init:complete', success: false, error: String(err) });
+      });
+      break;
+    }
+
+    case 'gateway:start': {
+      console.log('[Gateway] Received gateway:start, id:', msg.id);
+      gatewayManager?.start().then(() => {
+        console.log('[Gateway] gateway:start completed, sending response id:', msg.id);
+        send({ type: 'gateway:start:response', id: msg.id, success: true });
+      }).catch((err) => {
+        console.log('[Gateway] gateway:start failed, sending response id:', msg.id);
+        send({ type: 'gateway:start:response', id: msg.id, success: false, error: String(err) });
+      });
+      break;
+    }
+
+    case 'gateway:stop': {
+      gatewayManager?.stop().then(() => {
+        send({ type: 'gateway:stop:response', id: msg.id, success: true });
+      }).catch((err) => {
+        send({ type: 'gateway:stop:response', id: msg.id, success: false, error: String(err) });
+      });
+      break;
+    }
+
+    case 'gateway:reload': {
+      gatewayManager?.reloadConfig(msg.config).then(() => {
+        send({ type: 'gateway:ready' });
+      }).catch((err) => {
+        send({ type: 'gateway:error', error: String(err) });
+      });
+      break;
+    }
+
+    case 'gateway:getStatus': {
+      const status = gatewayManager?.getStatus() ?? {
+        running: false,
+        adapters: [],
+        autoStart: false,
+      };
+      // Send status as a response - Main Process matches by type
+      process.send?.({ type: 'gateway:getStatus:response', id: msg.id, status });
+      break;
+    }
+
+    case 'gateway:outbound': {
+      const outMsg = msg as { sessionId: string; platform?: string; platformChatId?: string; event: StreamEvent };
+      // Pass platformChatId directly if available to avoid DB race condition
+      if (outMsg.platformChatId && outMsg.platform) {
+        gatewayManager?.handleOutboundEvent(outMsg.sessionId, outMsg.event, outMsg.platform, outMsg.platformChatId).catch((err) => {
+          console.error('[Gateway] Error handling outbound event:', err);
+        });
+      } else {
+        gatewayManager?.handleOutboundEvent(outMsg.sessionId, outMsg.event).catch((err) => {
+          console.error('[Gateway] Error handling outbound event:', err);
+        });
+      }
+      break;
+    }
+
+    case 'gateway:agent_busy': {
+      const busyMsg = msg as { platform: string; platformChatId: string; busy: boolean; ok?: boolean };
+      gatewayManager?.handleAgentBusy(busyMsg.platform, busyMsg.platformChatId, busyMsg.busy, busyMsg.ok);
+      break;
+    }
+
+    // CLI control-plane send (plan 520 retained): duya channel send →
+    // POST /v1/channels/send → requestChannelSend → this handler.
+    case 'gateway:send': {
+      const sendMsg = msg as { id: string; platform: string; platformChatId: string; text: string; filePath?: string };
+      gatewayManager?.sendMessage(sendMsg.platform, sendMsg.platformChatId, sendMsg.text, sendMsg.filePath)
+        .then((result) => {
+          send({ type: 'gateway:send:response', id: sendMsg.id, ...result });
+        })
+        .catch((err) => {
+          console.error('[Gateway] Error handling gateway:send:', err);
+          send({ type: 'gateway:send:response', id: sendMsg.id, ok: false, error: err instanceof Error ? err.message : String(err) });
+        });
+      break;
+    }
+
+    case 'db:response': {
+      // Forward db responses to IpcClient for pending request resolution
+      gatewayManager?.getIpcClient().handleResponse(msg);
+      break;
+    }
+
+    case 'gateway:display_state': {
+      const ds = msg as { platform: string; platformChatId: string; state: string };
+      gatewayManager?.handleDisplayState(ds.platform, ds.platformChatId, ds.state);
+      break;
+    }
+
+    case 'gateway:feishu:qr:begin': {
+      const qrMsg = msg as { id: string; domain?: string };
+      const domain = (qrMsg.domain as 'feishu' | 'lark') || 'feishu';
+      console.log('[Gateway] gateway:feishu:qr:begin received, id:', qrMsg.id, 'domain:', domain);
+      qrRegisterBegin(domain).then((result) => {
+        console.log('[Gateway] gateway:feishu:qr:begin result:', result);
+        send({ type: 'gateway:feishu:qr:begin:response', id: qrMsg.id, result });
+      }).catch((err) => {
+        console.error('[Gateway] gateway:feishu:qr:begin error:', err);
+        send({ type: 'gateway:feishu:qr:begin:response', id: qrMsg.id, result: null, error: String(err) });
+      });
+      break;
+    }
+
+    case 'gateway:feishu:qr:poll': {
+      const qrMsg = msg as { id: string; begin: { device_code: string; interval: number; expire_in: number }; domain?: string };
+      const domain = (qrMsg.domain as 'feishu' | 'lark') || 'feishu';
+      qrRegisterPoll(qrMsg.begin, domain).then((result) => {
+        send({ type: 'gateway:feishu:qr:poll:response', id: qrMsg.id, result });
+      }).catch((err) => {
+        send({ type: 'gateway:feishu:qr:poll:response', id: qrMsg.id, result: null, error: String(err) });
+      });
+      break;
+    }
+
+    default: {
+      console.log(`[Gateway] Unknown message type: ${(msg as { type: string }).type}`);
+    }
+  }
+}
+
+// Set up IPC message listener
+process.on('message', (msg: MainToGatewayMessage) => {
+  handleMessage(msg);
+});
+
+// Handle process lifecycle
+process.on('uncaughtException', (err) => {
+  console.error('[Gateway] Uncaught exception:', err);
+  send({ type: 'gateway:error', error: String(err) });
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[Gateway] Unhandled rejection:', reason);
+  send({ type: 'gateway:error', error: String(reason) });
+});
+
+process.on('SIGTERM', async () => {
+  console.log('[Gateway] SIGTERM received, shutting down...');
+  await gatewayManager?.stop();
+  gatewayManager?.getIpcClient().rejectAll('Gateway shutting down');
+  process.exit(0);
+});
+
+// Signal ready
+console.log('[Gateway] Subprocess starting...');
+send({ type: 'gateway:ready' });

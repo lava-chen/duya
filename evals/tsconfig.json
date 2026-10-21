@@ -1,0 +1,12 @@
+{
+  "extends": "../apps/desktop/tsconfig.main.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "outDir": "./.tsbuild-out",
+    "types": ["node"]
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules", "reports", ".tsbuild-out"]
+}

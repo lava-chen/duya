@@ -1,0 +1,528 @@
+/**
+ * agent-shell.ts - Stateless shell helpers for `duyaAgent` (Plan 334 Phase 4+5).
+ *
+ * These were private methods of `DuyaAgent`. They are lifted out into pure
+ * functions that read the agent's instance state through a typed
+ * {@link AgentShellContext}. The host class stays a thin shell that owns the
+ * state and delegates prompt/tool/permission/projection assembly to this
+ * module, keeping the loop and the shell decoupled and unit-testable.
+ */
+
+import type { AIClient } from '@duya/ai';
+import { renderSystemReminder } from '../reminders.js';
+import { getAgentsMdManager } from '../../agentsmd/index.js';
+import { getAgentProfileService } from '../../agent-profile/AgentProfileService.js';
+import { isToolVisible, type ToolVisibilityConstraints } from '../../agent-profile/ToolFilter.js';
+import type { AgentProfile } from '@duya/agent-core';
+import { buildAgentContext, extractLegacySystemSegments, projectModelMessages as projectModelMessagesCore } from '../../message/index.js';
+import type { MessageTimelineEntry } from '../../message/index.js';
+import { buildMCPCapabilityCatalog } from '../../mcp/capability-catalog.js';
+import type { ToolPermissionCheckContext } from '../../permissions/permissions.js';
+import { permissionRuleValueToString } from '../../permissions/rules.js';
+import type {
+  AdditionalWorkingDirectory,
+  PermissionMode,
+  PermissionRuleSource,
+  ToolPermissionContext,
+  LocalToolPermission,
+  ToolPermissionRulesBySource,
+} from '../../permissions/types.js';
+import {
+  DEFAULT_PROMPT_PROFILE,
+  getPromptProfileForAgentProfile,
+  PromptsRegistry,
+  resolvePromptSystemName,
+} from '../../prompts/index.js';
+import type { PromptSystem } from '../../prompts/index.js';
+import type { ToolRegistry } from '../../tool/registry.js';
+import { readToolExposureConfig } from '../../config/tool-exposure.js';
+import { ToolCatalogTool, type ToolCatalogView } from '../../tool/ToolCatalogTool/ToolCatalogTool.js';
+import { ToolInvokeTool } from '../../tool/ToolInvokeTool/ToolInvokeTool.js';
+import type { AgentDefinition } from '../../tool/SubagentTool/index.js';
+import type { SubagentRunDeps } from '../../tool/SubagentTool/runAgent.js';
+import type { ChatOptions, Message, MessageContent, SSEEvent, Tool, WidgetStyleSignature } from '../../types.js';
+import { logger } from '../../utils/logger.js';
+import { buildAgentIdentityBlock, EMPTY_DISCOVERED } from '../utils/agent-helpers.js';
+import { collectActiveModes } from '../../modes/apply-modes.js';
+import { modeModifierRegistry } from '../../modes/index.js';
+import type { ModeModifier, ModeModifierContext, OrchestratorDeps, ToolRegistration } from '../../modes/index.js';
+
+/**
+ * The narrow slice of `duyaAgent` instance state these helpers read. Kept as a
+ * single cohesive type so the host can build it once and pass it along.
+ */
+export interface AgentShellContext {
+  sessionId?: string;
+  workingDirectory?: string;
+  /**
+   * Plan 525 / 408 follow-up: project-entity home directory
+   * (`~/.duya/projects/<projectId>/`). Threaded from the parent
+   * DuyaAgent into the sub-agent shell so the agentsmd loader sees the
+   * same `'Project entity'` AGENTS.md the parent prompt is built from.
+   */
+  projectHome?: string;
+  defaultWorkspaceDirectory?: string;
+  communicationPlatform?: import('../../prompts/types.js').CommunicationPlatform;
+  language?: string;
+  model: string;
+  llmClient: AIClient;
+  abortController: AbortController;
+  permissionMode: PermissionMode;
+  additionalWorkingDirectories: Map<string, AdditionalWorkingDirectory>;
+  alwaysAllowRules: ToolPermissionRulesBySource;
+  alwaysDenyRules: ToolPermissionRulesBySource;
+  alwaysAskRules: ToolPermissionRulesBySource;
+  blockedDomains: string[];
+  browserBackendMode: 'auto' | 'extension' | 'built-in' | 'human-like';
+  providerNameToInternalKey: Map<string, string>;
+  activeMCPRegistry: ToolRegistry;
+  messages: () => Message[];
+  timelineSnapshot: () => readonly MessageTimelineEntry[];
+  widgetStyleHistory: WidgetStyleSignature[];
+  /** Plan 487: host-level standing permission switch (mirrors DuyaAgent.hostToolPermission). */
+  hostToolPermission?: LocalToolPermission;
+}
+
+/** Resolve an agent profile by id, logging the outcome. */
+export function resolveAgentProfile(agentProfileId: string | undefined): AgentProfile | undefined {
+  if (!agentProfileId) return undefined;
+  const profile = getAgentProfileService().get(agentProfileId);
+  if (profile) {
+    logger.info(
+      `[Agent] Applying agent profile: ${profile.name} (${profile.id}), promptSystem=${profile.promptSystem || 'general'}`,
+    );
+    return profile;
+  }
+  logger.warn(`[Agent] Agent profile not found: ${agentProfileId}`);
+  return undefined;
+}
+
+/**
+ * Resolve the effective tool set for a turn: pick the registry (custom or the
+ * long-lived MCP catalog), merge App Connection tools, apply visibility
+ * filters, and validate profile allow-lists.
+ */
+export async function resolveTools(
+  ctx: AgentShellContext,
+  options?: ChatOptions,
+  appliedProfile?: AgentProfile,
+): Promise<{
+  tools: Tool[];
+  registry: ToolRegistry;
+  agentDefinitions: AgentDefinition[];
+  constraints: ToolVisibilityConstraints;
+  catalogTool: ToolCatalogTool;
+  catalogView: ToolCatalogView;
+  toolInvokeExecutor: ToolInvokeTool;
+}> {
+  logger.info(`[Agent] streamChat: Loading tools...`);
+  let registry = options?.toolRegistry;
+  if (!registry) {
+    registry = ctx.activeMCPRegistry;
+    try {
+      const { getCachedAppConnectionDescriptors, registerAppConnectionTools } =
+        await import('../../tool/AppConnectionTool/index.js');
+      const descriptors = getCachedAppConnectionDescriptors();
+      if (descriptors.length > 0) registerAppConnectionTools(registry, descriptors);
+    } catch (err) {
+      logger.warn(`[Agent] Failed to merge App Connection tools: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  const constraints: ToolVisibilityConstraints = {
+    disabledTools: options?.disabledTools,
+    allowedTools: options?.allowedTools,
+    profileAllowedPatterns: appliedProfile?.allowedTools,
+    profileDisallowedPatterns: appliedProfile?.disallowedTools,
+  };
+  if (!registry.has('tool_catalog')) {
+    const catalog = new ToolCatalogTool();
+    registry.register(catalog.toTool(), catalog, { exposure: 'eager' });
+  }
+  if (!registry.has('tool_invoke')) {
+    const invoke = new ToolInvokeTool();
+    registry.register(invoke.toTool(), invoke, { exposure: 'eager' });
+  }
+  const catalogTool = registry.getExecutor('tool_catalog');
+  const toolInvokeExecutor = registry.getExecutor('tool_invoke');
+  if (!(catalogTool instanceof ToolCatalogTool) || !(toolInvokeExecutor instanceof ToolInvokeTool)) {
+    throw new Error('Tool catalog executors are missing or have incompatible registrations.');
+  }
+  const snapshot = registry.snapshot(ctx.providerNameToInternalKey);
+  const allTools = snapshot.tools;
+  const mcpToolCount = allTools.filter((t) => registry.getOwner(t.name) === 'mcp').length;
+  logger.debug(`[Agent] Tool snapshot: ${allTools.length} total (${mcpToolCount} MCP, ${allTools.length - mcpToolCount} non-MCP)`);
+  const eligibleToolIds = new Set(
+    snapshot.catalogEntries
+      .filter((entry) => isToolVisible(entry.definition.name, entry.exposure === 'hidden' ? 'hidden' : 'eager', EMPTY_DISCOVERED, constraints))
+      .map((entry) => entry.toolId),
+  );
+  const directToolIds = new Set(
+    snapshot.catalogEntries
+      .filter((entry) => isToolVisible(entry.definition.name, entry.exposure, EMPTY_DISCOVERED, constraints))
+      .map((entry) => entry.toolId),
+  );
+  const catalogView: ToolCatalogView = {
+    snapshot,
+    registry,
+    eligibleToolIds,
+    directToolIds,
+    loadedSchemaRevisions: new Map(),
+    loadedSchemaRounds: new Map(),
+    currentRound: 0,
+  };
+  catalogTool.setView(catalogView);
+  const tools: Tool[] = [];
+  for (const t of allTools) {
+    const exposure = snapshot.getExposure(t.name);
+    if (!isToolVisible(t.name, exposure, EMPTY_DISCOVERED, constraints)) continue;
+    tools.push(t);
+  }
+  logger.info(`[Agent] streamChat: ${tools.length}/${allTools.length} tools visible after visibility filter`);
+  if (appliedProfile?.allowedTools?.length && tools.length === 0) {
+    throw new Error(
+      `Agent profile "${appliedProfile.id}" allowedTools matched zero tools ` +
+      `(all ${allTools.length} tools were denied). ` +
+      `Patterns: ${appliedProfile.allowedTools.join(', ')}. ` +
+      `Check packages/agent/src/agent-profile/types.ts and the tool name constants.`,
+    );
+  }
+  const { getAgentDefinitions } = await import('../../tool/SubagentTool/index.js');
+  const agentDefinitions = getAgentDefinitions();
+  logger.info(`[Agent] streamChat: Loaded ${agentDefinitions.length} agent definitions`);
+  return { tools, registry, agentDefinitions, constraints, catalogTool, catalogView, toolInvokeExecutor };
+}
+
+/** Build the turn's system prompt (prompt system, MCP catalog, overrides, profile identity). */
+export async function buildSystemPrompt(
+  ctx: AgentShellContext,
+  tools: Tool[],
+  options?: ChatOptions,
+  appliedProfile?: AgentProfile,
+): Promise<string> {
+  const sysName = resolvePromptSystemName(appliedProfile?.promptSystem);
+  const promptProfile = appliedProfile
+    ? getPromptProfileForAgentProfile(appliedProfile)
+    : DEFAULT_PROMPT_PROFILE;
+  const promptSystem: PromptSystem =
+    PromptsRegistry.getOrCreate(sysName, promptProfile)
+    ?? PromptsRegistry.getOrCreate('general', promptProfile)!;
+  logger.info(`[Agent] Using prompt system '${sysName}'${appliedProfile ? ` for profile: ${appliedProfile.name}` : ' (default)'}`);
+
+  let systemPromptContent: string;
+  if (options?.disableSystemPrompt) {
+    systemPromptContent = '';
+  } else if (options?.systemPrompt) {
+    systemPromptContent = options.systemPrompt;
+  } else {
+    const enabledToolNames = tools.map((t) => t.name);
+    const context = promptSystem.buildContext({
+      sessionId: ctx.sessionId,
+      workingDirectory: ctx.workingDirectory,
+      modelId: ctx.model,
+      modelName: ctx.model,
+      enabledTools: new Set(enabledToolNames),
+      outputStyleConfig: options?.outputStyleConfig,
+      researchIntent: options?.researchIntent,
+      researchProjectId: options?.researchProjectId,
+      communicationPlatform: ctx.communicationPlatform,
+      language: ctx.language,
+      // Plan 525 / 408 follow-up: pass the project-entity home into the
+      // sub-agent's promptSystem.buildContext → preBuildHook →
+      // initializeAgentsMd so sub-agents (when omitClaudeMd is not set)
+      // share the parent's project-entity AGENTS.md.
+      projectHome: ctx.projectHome,
+    });
+    const systemPromptResult = await promptSystem.buildSystemPrompt(context);
+    systemPromptContent = [...systemPromptResult].join('\n\n');
+  }
+
+  if (!options?.disableSystemPrompt) {
+    // Four-tier exposure: the bounded MCP directory is only useful when MCP
+    // tools are absent from the request's tools array (exposure = "search").
+    // Under `full`/`hint` the tools are declared on every request.
+    if (readToolExposureConfig().exposure !== 'full') {
+      const mcpCatalog = buildMCPCapabilityCatalog(
+        ctx.activeMCPRegistry.getAllTools().filter(
+          (tool) => ctx.activeMCPRegistry.getOwner(tool.name) === 'mcp',
+        ),
+        { entryPoint: 'tool_catalog' },
+      );
+      if (mcpCatalog) {
+        systemPromptContent = systemPromptContent ? `${systemPromptContent}\n\n${mcpCatalog}` : mcpCatalog;
+      }
+    }
+  }
+
+  if (options?.systemPromptPrefix) {
+    systemPromptContent = options.systemPromptPrefix + '\n\n' + systemPromptContent;
+  }
+
+  if (appliedProfile) {
+    const identityBlock = buildAgentIdentityBlock(appliedProfile);
+    systemPromptContent = identityBlock + '\n\n' + systemPromptContent;
+  }
+
+  // Plan 408 Phase 5: AGENTS.md lives in the system field so it sits on the
+  // system-prefix cache breakpoint (Phase 4).
+  if (!options?.disableSystemPrompt) {
+    const agentsMdSection = getAgentsMdManager().buildAgentsMdSection();
+    if (agentsMdSection) {
+      systemPromptContent = systemPromptContent
+        ? `${systemPromptContent}\n\n${agentsMdSection}`
+        : agentsMdSection;
+    }
+  }
+
+  // Plan 424: config-driven custom agent global instructions
+  // (loaded from `agents_md`). Injected as its own <system-reminder> block
+  // so the agent's own rules stay separated from project AGENTS.md.
+  // Plan 567: envelope via the canonical wrapper (source taxonomy entry
+  // `agent_global_instructions`).
+  if (appliedProfile?.globalInstructions) {
+    const globalInstructionsBlock = renderSystemReminder(
+      `<agent_global_instructions>\n${appliedProfile.globalInstructions}\n</agent_global_instructions>`,
+      'agent_global_instructions',
+    );
+    systemPromptContent = systemPromptContent
+      ? `${systemPromptContent}\n\n${globalInstructionsBlock}`
+      : globalInstructionsBlock;
+  }
+
+  return systemPromptContent;
+}
+
+/** Group permission rules by their source into the shape the checker expects. */
+export function groupRulesBySource(
+  rules: Array<{ source: PermissionRuleSource; ruleValue: { toolName: string; ruleContent?: string } }>,
+): ToolPermissionRulesBySource {
+  const grouped: ToolPermissionRulesBySource = {};
+  for (const rule of rules) {
+    const serialized = permissionRuleValueToString(rule.ruleValue);
+    const list = grouped[rule.source] ?? [];
+    list.push(serialized);
+    grouped[rule.source] = list;
+  }
+  return grouped;
+}
+
+/** Build the permission-check context for the current turn. */
+export function buildPermissionContext(
+  ctx: AgentShellContext,
+  registry?: ToolRegistry,
+): ToolPermissionCheckContext {
+  return {
+    getAppState: () => ({
+      toolPermissionContext: {
+        mode: ctx.permissionMode,
+        additionalWorkingDirectories: ctx.additionalWorkingDirectories,
+        alwaysAllowRules: ctx.alwaysAllowRules,
+        alwaysDenyRules: ctx.alwaysDenyRules,
+        alwaysAskRules: ctx.alwaysAskRules,
+        isBypassPermissionsModeAvailable: true,
+        defaultWorkspaceDirectory: ctx.defaultWorkspaceDirectory,
+        getToolRiskTier: registry
+          ? (toolName: string) => registry.getMeta(toolName)?.riskTier
+          : undefined,
+        // Plan 487: host-level standing permission switch (read from
+        // session init payload by AgentShellContext upstream).
+        hostToolPermission: ctx.hostToolPermission,
+      } as ToolPermissionContext,
+    }),
+    abortController: ctx.abortController,
+    llmClient: ctx.llmClient,
+    classifierModel: ctx.model,
+    messages: ctx.messages(),
+  };
+}
+
+/** Project the timeline to the model boundary (system content merged into the prompt). */
+export function projectModelMessages(
+  ctx: AgentShellContext,
+  systemPromptContent: string,
+): { systemPromptContent: string; messages: Message[] } {
+  const snapshot = ctx.timelineSnapshot();
+  const context = buildAgentContext(snapshot);
+  const systemSegments = extractLegacySystemSegments(context.messages, context.compaction);
+  const projection = projectModelMessagesCore(context.messages, { systemSegments });
+  const systemFromProjection = typeof projection.system === 'string' ? projection.system : '';
+  const merged = systemPromptContent && systemFromProjection
+    ? `${systemPromptContent}\n\n---\n\n## Conversation Context\n\n${systemFromProjection}`
+    : (systemPromptContent || systemFromProjection);
+  logger.info(
+    `[Agent] projectModelMessages: ${context.messages.length} agent messages → ${projection.messages.length} model messages, ${systemSegments.length} system segments`,
+  );
+  return { systemPromptContent: merged, messages: [...projection.messages] };
+}
+
+/**
+ * Generator adapter that bridges a push-based `emit` event sink (the stateless
+ * loop) back into an `AsyncGenerator`, preserving the outer `streamChat`
+ * generator contract (plan 334 D1 / Phase 2.5). `onFinally` runs after the run
+ * promise settles so the host can persist the loop's working state.
+ */
+export async function* streamLoopEvents<T, U>(
+  run: (emit: (event: T) => void) => Promise<unknown>,
+  onFinally?: () => void,
+): AsyncGenerator<U, void, unknown> {
+  const queue: T[] = [];
+  let done = false;
+  let error: unknown;
+  let wakeResolve: (() => void) | null = null;
+  const wake = () => wakeResolve?.();
+  const emit = (event: T): void => {
+    queue.push(event);
+    wake();
+  };
+  const runPromise = (async () => {
+    try {
+      await run(emit);
+    } catch (err) {
+      error = err;
+    } finally {
+      done = true;
+      wake();
+    }
+  })();
+  try {
+    while (true) {
+      while (queue.length > 0) {
+        yield queue.shift()! as U;
+      }
+      if (done) break;
+      await new Promise<void>((resolve) => {
+        wakeResolve = resolve;
+        if (queue.length > 0 || done) resolve();
+      });
+      wakeResolve = null;
+    }
+  } finally {
+    if (error) {
+      logger.error('[Agent] streamLoopEvents failed', error instanceof Error ? error : new Error(String(error)));
+    }
+    onFinally?.();
+    await runPromise.catch(() => undefined);
+  }
+}
+
+/**
+ * Plan 610 A5: assemble the sub-agent composition deps for the shell path.
+ *
+ * Same shape as `DuyaAgent.initToolCatalog` builds, and deliberately not
+ * shared through a module of its own: a shared builder would have to import
+ * both `DuyaAgent` and `builtin`, and `DuyaAgent` imports this helper, so the
+ * builder would close the very cycle this work removes.
+ */
+async function createShellSubagentRunDeps(): Promise<SubagentRunDeps> {
+  const [{ duyaAgent }, { createBuiltinRegistry }] = await Promise.all([
+    import('../DuyaAgent.js'),
+    import('../../tool/builtin.js'),
+  ]);
+  const deps: SubagentRunDeps = {
+    createSubAgent: (agentOptions) => new duyaAgent(agentOptions),
+    // Argument-less, matching what `runAgent` did before the cut.
+    createToolRegistry: () => createBuiltinRegistry(deps),
+  };
+  return deps;
+}
+
+/**
+ * Dispatch to an orchestrator-paradigm ModeModifier (plan 224 Phase 1.5+).
+ * Yields SSE events directly to the stream.
+ */
+export async function* dispatchOrchestratorMode(
+  ctx: AgentShellContext,
+  mod: ModeModifier,
+  prompt: string | MessageContent[],
+  options?: ChatOptions,
+): AsyncGenerator<SSEEvent, void, unknown> {
+  const queryText = typeof prompt === 'string'
+    ? prompt
+    : prompt.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
+  const toolRegistry = ctx.activeMCPRegistry;
+  const catalogTool = toolRegistry.getExecutor('tool_catalog');
+  if (catalogTool instanceof ToolCatalogTool) {
+    const snapshot = toolRegistry.snapshot(ctx.providerNameToInternalKey);
+    const constraints: ToolVisibilityConstraints = {
+      disabledTools: options?.disabledTools,
+      allowedTools: options?.allowedTools,
+    };
+    const eligibleToolIds = new Set(
+      snapshot.catalogEntries
+        .filter((entry) => isToolVisible(entry.definition.name, entry.exposure === 'hidden' ? 'hidden' : 'eager', EMPTY_DISCOVERED, constraints))
+        .map((entry) => entry.toolId),
+    );
+    const directToolIds = new Set(
+      snapshot.catalogEntries
+        .filter((entry) => isToolVisible(entry.definition.name, entry.exposure, EMPTY_DISCOVERED, constraints))
+        .map((entry) => entry.toolId),
+    );
+    catalogTool.setView({
+      snapshot,
+      registry: toolRegistry,
+      eligibleToolIds,
+      directToolIds,
+      loadedSchemaRevisions: new Map(),
+      loadedSchemaRounds: new Map(),
+      currentRound: 0,
+    });
+  }
+
+  const orchestratorActiveModes = collectActiveModes(options ?? {});
+  const orchestratorResolved = orchestratorActiveModes.length > 0
+    ? modeModifierRegistry.resolve(orchestratorActiveModes)
+    : null;
+  // Plan 610 A5: the sub-agent composition deps for this shell. Built from the
+  // same two modules the worker path uses, each loaded lazily so this helper
+  // stays a leaf. `agent-shell -> DuyaAgent` and `agent-shell -> builtin` were
+  // both measured against the module graph and introduce no cycle.
+  const subagentDeps = await createShellSubagentRunDeps();
+  if (orchestratorResolved) {
+    const ctxForModes: ModeModifierContext = {
+      sessionId: ctx.sessionId ?? '',
+      workingDirectory: ctx.workingDirectory ?? '',
+      subagentDeps,
+      state: {
+        conductorCanvasId: options?.conductorCanvasId,
+        widgetStyleHistory: ctx.widgetStyleHistory,
+      },
+    };
+    for (const inject of orchestratorResolved.tools.injects) {
+      const items = typeof inject === 'function' ? inject(ctxForModes) : inject;
+      for (const tr of items) {
+        if (!toolRegistry.has(tr.definition.name)) toolRegistry.register(tr.definition, tr.executor);
+      }
+    }
+  }
+
+  const deps: OrchestratorDeps = {
+    llmClient: ctx.llmClient,
+    abortController: ctx.abortController,
+    sessionId: ctx.sessionId,
+    workingDirectory: ctx.workingDirectory,
+    toolRegistry,
+    chatOptions: options as Record<string, unknown> | undefined,
+    blockedDomains: ctx.blockedDomains,
+  };
+
+  const modeCtx: ModeModifierContext = {
+    sessionId: ctx.sessionId ?? '',
+    workingDirectory: ctx.workingDirectory ?? '',
+    subagentDeps,
+    state: {},
+  };
+
+  logger.info(`[Agent] Dispatching to orchestrator mode: ${mod.id}`);
+  const orchestrator = mod.orchestrator;
+  if (!orchestrator) {
+    yield { type: 'error', data: `Mode "${mod.id}" has no orchestrator` } as SSEEvent;
+    return;
+  }
+
+  try {
+    yield* orchestrator.execute(queryText, modeCtx, deps);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error(`[Agent] Orchestrator mode "${mod.id}" execution failed: ${message}`);
+    yield { type: 'error', data: `${mod.id} mode error: ${message}` } as SSEEvent;
+  }
+}

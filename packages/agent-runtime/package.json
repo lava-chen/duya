@@ -1,0 +1,121 @@
+{
+  "name": "@duya/agent-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The run execution engine: implements AgentRuntimeApi, owns run identity, sequence numbers, and the RunEvent stream, and projects those events back onto the legacy SSE contract the product UI already consumes.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    "./tools/catalog": {
+      "types": "./dist/tools/catalog/index.d.ts",
+      "import": "./dist/tools/catalog/index.js"
+    },
+    "./contextual-user-fragment": {
+      "types": "./dist/context/contextual-user-fragment.d.ts",
+      "import": "./dist/context/contextual-user-fragment.js"
+    },
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./authorization/permissions/*": {
+      "types": "./dist/authorization/permissions/*.d.ts",
+      "import": "./dist/authorization/permissions/*.js"
+    },
+    "./authorization/permission-gate": {
+      "types": "./dist/authorization/permission-gate.d.ts",
+      "import": "./dist/authorization/permission-gate.js"
+    },
+    "./message/*": {
+      "types": "./dist/message/*.d.ts",
+      "import": "./dist/message/*.js"
+    },
+    "./tools/execution": {
+      "types": "./dist/tools/execution/index.d.ts",
+      "import": "./dist/tools/execution/index.js"
+    },
+    "./tools/execution/*": {
+      "types": "./dist/tools/execution/*.d.ts",
+      "import": "./dist/tools/execution/*.js"
+    },
+    "./hooks/*": {
+      "types": "./dist/hooks/*.d.ts",
+      "import": "./dist/hooks/*.js"
+    },
+    "./tools/mcp-executor": {
+      "types": "./dist/tools/mcp-executor.d.ts",
+      "import": "./dist/tools/mcp-executor.js"
+    },
+    "./authorization/profile-bridge": {
+      "types": "./dist/authorization/profile-bridge.d.ts",
+      "import": "./dist/authorization/profile-bridge.js"
+    },
+    "./tools/turn-pipeline-publisher": {
+      "types": "./dist/tools/turn-pipeline-publisher.d.ts",
+      "import": "./dist/tools/turn-pipeline-publisher.js"
+    },
+    "./context/compact": {
+      "types": "./dist/context/compact/index.d.ts",
+      "import": "./dist/context/compact/index.js"
+    },
+    "./context/compact/*": {
+      "types": "./dist/context/compact/*.d.ts",
+      "import": "./dist/context/compact/*.js"
+    },
+    "./tools/discovery": {
+      "types": "./dist/tools/discovery/index.d.ts",
+      "import": "./dist/tools/discovery/index.js"
+    },
+    "./tools/discovery/*": {
+      "types": "./dist/tools/discovery/*.d.ts",
+      "import": "./dist/tools/discovery/*.js"
+    },
+    "./turns/*": {
+      "types": "./dist/turns/*.d.ts",
+      "import": "./dist/turns/*.js"
+    },
+    "./authorization/tool-invoke-decision": {
+      "types": "./dist/authorization/tool-invoke-decision.d.ts",
+      "import": "./dist/authorization/tool-invoke-decision.js"
+    },
+    "./authorization/tool-filter": {
+      "types": "./dist/authorization/tool-filter.d.ts",
+      "import": "./dist/authorization/tool-filter.js"
+    },
+    "./adapters/*": {
+      "types": "./dist/adapters/*.d.ts",
+      "import": "./dist/adapters/*.js"
+    },
+    "./abort": {
+      "types": "./dist/abort/index.d.ts",
+      "import": "./dist/abort/index.js"
+    },
+    "./tools/catalog/*": {
+      "types": "./dist/tools/catalog/*.d.ts",
+      "import": "./dist/tools/catalog/*.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "clean": "node -e \"for(const t of ['dist','tsconfig.tsbuildinfo'])require('fs').rmSync(t,{recursive:true,force:true})\"",
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@duya/capabilities": "0.1.0",
+    "@duya/client-core": "0.1.0",
+    "@duya/plugin-core": "0.1.0",
+    "@duya/agent-core": "0.1.0",
+    "@duya/agent-protocol": "0.1.0",
+    "ajv": "^8.20.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "vitest": "^3.0.0"
+  }
+}

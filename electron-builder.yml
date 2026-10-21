@@ -1,0 +1,204 @@
+appId: com.duya.app
+productName: DUYA
+
+npmRebuild: false
+
+# Publish configuration
+# - github: uploads release assets to GitHub Releases during build
+# - generic: tells auto-updater where to download updates at runtime
+publish:
+  - provider: github
+    owner: lava-chen
+    repo: duya
+    releaseType: release
+  - provider: generic
+    url: https://update.duya.dev
+    channel: latest
+
+directories:
+  output: release
+
+files:
+  - package.json
+  - dist-electron/**/*
+  - dist/**/*
+  # Native modules kept inside dist/node_modules by scripts/build-electron.mjs
+  # must survive the "!node_modules" exclusion below so bundled external
+  # require('better-sqlite3') / require('node-pty') resolve in production.
+  - dist/node_modules/better-sqlite3/***
+  - dist/node_modules/bindings/***
+  - dist/node_modules/file-uri-to-path/***
+  - dist/node_modules/node-pty/***
+  - "!node_modules"
+  - "!apps"
+  - "!build"
+  - "!scripts"
+  - "!docs"
+  - "!release"
+  - "!packages"
+  - "!data"
+  - "!.duya"
+
+# extraResources: Files copied to resources/ directory, outside of app.asar
+# The agent bundle is built with esbuild (bundle: true) so all runtime
+# dependencies are inlined into a single file. No node_modules copying needed.
+extraResources:
+  - from: resources/automation-templates/
+    to: automation-templates/
+    filter: ["**/*"]
+  - from: assets/
+    to: assets/
+    filter: ["**/*"]
+  - from: node_modules/better-sqlite3/
+    to: better-sqlite3/
+    filter:
+      - "**/*"
+      - "!test/**"
+      - "!benchmark/**"
+      - "!docs/**"
+  - from: packages/host/bundle/
+    to: harness-bundle/
+    filter: ["**/*", "!worker-metafile.json"]
+  # Plan 453 Task F: Wake Agent orb renderer. Vite emits at
+  # `dist/apps/desktop/src/renderer/orb/index.html` (the source path is
+  # preserved verbatim under dist/).
+  - from: dist/apps/desktop/src/renderer/orb/
+    to: orb/
+    filter: ["**/*"]
+  # Prebuilt ripgrep binary fetched by scripts/fetch-ripgrep.mjs (pinned
+  # release, cached, non-fatal when offline). resolveBundledRipgrepPath()
+  # publishes it as DUYA_RIPGREP_PATH for the agent's grep tool. The fetch
+  # script always creates the directory (even on failure) so this glob never
+  # hits a missing source.
+  - from: resources/ripgrep/
+    to: ripgrep/
+    filter: ["**/*"]
+  - from: packages/cli/bundle/
+    to: cli-bundle/
+    filter: ["**/*"]
+  - from: packages/gateway/bundle/
+    to: gateway-bundle/
+    filter: ["**/*"]
+  # @duya/voice worker (tsc output, CommonJS). resolveSttWorkerPath() expects
+  # resources/voice/worker.js in packaged builds.
+  - from: packages/voice/dist/
+    to: voice/
+    filter: ["**/*"]
+  # Plan 556 recorder hook worker: uiohook-napi child entry (ESM) plus its
+  # native dependency, laid out under resources/computer-use/ so the
+  # sibling node_modules/ resolves. The package.json marker (type: module)
+  # keeps the entry loading as ESM outside the workspace.
+  - from: packages/computer-use/dist/recorder/hook-worker-entry.js
+    to: computer-use/hook-worker-entry.js
+  - from: packages/computer-use/dist/recorder/keymap.js
+    to: computer-use/keymap.js
+  - from: packages/computer-use/recorder-worker.package.json
+    to: computer-use/package.json
+  - from: node_modules/uiohook-napi/
+    to: computer-use/node_modules/uiohook-napi/
+    filter: ["**/*"]
+  # Plan 556 phase 2: persistent PowerShell UIA probe spawned by the
+  # recorder service (resources/recorder/ → resources/recorder/).
+  - from: resources/recorder/
+    to: recorder/
+    filter: ["**/*"]
+  - from: packages/host/skills/
+    to: agent/skills/
+    filter: ["**/*"]
+  # Plan 455 follow-up: builtin plugins (github / notion / zotero / ...)
+  # ship in extraResources so syncBuiltinPlugins() can copy them to
+  # ~/.duya/plugins/cache/builtin/ at startup.
+  - from: packages/plugin-core/src/plugins/builtin/
+    to: builtin-plugins/
+    filter: ["**/*"]
+  - from: public/
+    to: public/
+    filter: ["**/*"]
+  - from: resources/browser-extension/
+    to: extension/
+    filter: ["**/*"]
+  - from: node_modules/node-pty/
+    to: node-pty/
+    filter: ["**/*"]
+  # The document-parser sidecar (PDF/Office extraction) was removed from
+  # the codebase; there is no extraResources entry for it anymore.
+
+afterPack: scripts/after-pack.js
+afterSign: scripts/after-sign.js
+
+# Native modules need external files available outside app.asar.
+asarUnpack:
+  - "**/better-sqlite3/build/Release/*.node"
+  - "**/node-pty/build/Release/*.node"
+  - "**/node-pty/prebuilds/**/*"
+
+mac:
+  icon: assets/macos/icon.icns
+  # Plan 572: the AX helper binary ships only on mac builds, and every
+  # osascript-driven AppleScript needs an Apple Events usage string —
+  # apps linked against the 10.14+ SDK are killed without it the first
+  # time they `tell application "Safari" ...`.
+  extendInfo:
+    NSAppleEventsUsageDescription: "DUYA needs to control other apps to read browser URLs and automate actions you request."
+  extraResources:
+    - from: resources/ax-helper/bin/
+      to: ax-helper/
+      filter: ["ax-helper"]
+  category: public.app-category.developer-tools
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  # Keep false here so local builds without Apple credentials succeed.
+  # Notarization is performed conditionally by scripts/after-sign.js when
+  # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID are set in CI.
+  notarize: false
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+
+dmg:
+  # DMG window with the standard "drag to Applications" affordance.
+  title: "${productName} ${version}"
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+win:
+  icon: assets/windows/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  deleteAppDataOnUninstall: false
+  artifactName: "${productName}.Setup.${version}.${ext}"
+  installerIcon: assets/windows/icon.ico
+
+linux:
+  maintainer: DUYA Team <opensource@duya.dev>
+  icon: assets/linux/icons/512x512.png
+  category: Development
+  artifactName: "${productName}-${version}-${arch}.${ext}"
+  desktop:
+    entry:
+      Name: DUYA Beta
+      Comment: AI Agent Desktop Client (Beta)
+      Categories: Development;IDE;
+      StartupWMClass: duya
+  target:
+    - AppImage
+    - deb
+    - rpm

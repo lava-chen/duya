@@ -1,0 +1,212 @@
+import { proxyRequest } from '../proxy';
+import { getLogger, LogComponent } from '../../logging/logger';
+import { getConfigStore } from '../../config/store-instance';
+import { readGatewaySettingFromStore } from '../../config/gateway-setting-adapter';
+import { getWeixinAccounts } from '../weixin-account-store';
+
+export async function testBridgeChannel(channel: string): Promise<{ success: boolean; message: string; details?: string }> {
+  switch (channel) {
+    case 'telegram': {
+      // Read from ConfigStore (single source of truth since plan 334/335);
+      // the SQLite settings table no longer holds the token.
+      const token = readGatewaySettingFromStore(getConfigStore(), 'telegram_bot_token');
+      if (!token) {
+        return { success: false, message: 'Bot token not configured', details: 'Please enter your Telegram bot token' };
+      }
+      try {
+        const { status, data } = await proxyRequest(
+          `https://api.telegram.org/bot${token}/getMe`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+          }
+        );
+        if (status === 200) {
+          const json = JSON.parse(data) as { ok: boolean; result?: { username?: string }; description?: string };
+          if (json.ok) {
+            return { success: true, message: 'Connection successful', details: `Connected to bot @${json.result?.username || 'unknown'}` };
+          }
+          return { success: false, message: 'Telegram API error', details: json.description || 'Invalid bot token' };
+        }
+        return { success: false, message: `HTTP ${status}`, details: data || 'Invalid bot token or network error' };
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        getLogger().error('Telegram test error', err instanceof Error ? err : new Error(errorMessage), undefined, LogComponent.NetHandlers);
+        return { success: false, message: 'Connection failed', details: errorMessage };
+      }
+    }
+
+    case 'qq': {
+      const appId = readGatewaySettingFromStore(getConfigStore(), 'bridge_qq_app_id');
+      const appSecret = readGatewaySettingFromStore(getConfigStore(), 'bridge_qq_app_secret');
+      if (!appId || !appSecret) {
+        return { success: false, message: 'App ID or Secret not configured', details: 'Please enter both App ID and App Secret' };
+      }
+      try {
+        const response = await fetch('https://api.sgroup.qq.com/oauth2/access_token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `grant_type=client_credentials&client_id=${appId}&client_secret=${appSecret}`,
+          signal: AbortSignal.timeout(5000),
+        });
+        if (response.ok) {
+          const data = await response.json() as { access_token?: string; code?: number };
+          if (data.access_token) {
+            return { success: true, message: 'Connection successful', details: 'QQ Guild API access granted' };
+          }
+        }
+        return { success: false, message: 'Authentication failed', details: 'Invalid App ID or App Secret' };
+      } catch {
+        return { success: false, message: 'Connection failed', details: 'Network error' };
+      }
+    }
+
+    case 'feishu': {
+      const appId = readGatewaySettingFromStore(getConfigStore(), 'bridge_feishu_app_id');
+      const appSecret = readGatewaySettingFromStore(getConfigStore(), 'bridge_feishu_app_secret');
+      if (!appId || !appSecret) {
+        return { success: false, message: 'App ID or Secret not configured', details: 'Please enter both App ID and App Secret' };
+      }
+      try {
+        const response = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+          signal: AbortSignal.timeout(5000),
+        });
+        if (response.ok) {
+          const data = await response.json() as { code: number; msg: string; tenant_access_token?: string };
+          if (data.code === 0 && data.tenant_access_token) {
+            return { success: true, message: 'Connection successful', details: 'Feishu API access granted' };
+          }
+        }
+        const data = await response.json() as { msg?: string };
+        return { success: false, message: 'Authentication failed', details: data.msg || 'Invalid App ID or App Secret' };
+      } catch {
+        return { success: false, message: 'Connection failed', details: 'Network error' };
+      }
+    }
+
+    case 'weixin': {
+      const configStore = getConfigStore();
+      const enabledAccounts = getWeixinAccounts().filter((account) => account.enabled);
+      const selectedAccountId = readGatewaySettingFromStore(configStore, 'weixin_account_id');
+      const accountRow = enabledAccounts.find((account) => account.account_id === selectedAccountId)
+        ?? enabledAccounts[enabledAccounts.length - 1];
+
+      if (accountRow?.token) {
+        getLogger().info(
+          '[WeixinTest] Testing account from ConfigStore',
+          { accountId: accountRow.account_id, userId: accountRow.user_id },
+          LogComponent.NetHandlers
+        );
+
+        try {
+          const baseUrl = accountRow.base_url || 'https://ilinkai.weixin.qq.com';
+          const randomUin = Buffer.from(String(Math.floor(Math.random() * 4294967295)), 'utf-8').toString('base64');
+
+          const response = await fetch(`${baseUrl}/ilink/bot/getupdates`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'AuthorizationType': 'ilink_bot_token',
+              'Authorization': `Bearer ${accountRow.token}`,
+              'X-WECHAT-UIN': randomUin,
+            },
+            body: JSON.stringify({
+              get_updates_buf: '',
+              base_info: { channel_version: '1.0.2' }
+            }),
+            signal: AbortSignal.timeout(5_000),
+          });
+
+          if (response.ok) {
+            const data = await response.json() as { ret?: number; errcode?: number; errmsg?: string };
+            const apiErrcode = data.errcode ?? data.ret ?? 0;
+            getLogger().info(
+              '[WeixinTest] getupdates response',
+              { errcode: data.errcode, ret: data.ret, apiErrcode, errmsg: data.errmsg },
+              LogComponent.NetHandlers
+            );
+            if (apiErrcode === 0) {
+              return {
+                success: true,
+                message: 'WeChat connection successful',
+                details: `Connected as ${accountRow.account_id}`
+              };
+            } else if (apiErrcode === -14) {
+              return {
+                success: false,
+                message: 'Session paused',
+                details: 'WeChat session is temporarily paused (will auto-retry in 60 minutes). If this persists, please scan QR code again.'
+              };
+            } else {
+              return {
+                success: false,
+                message: 'WeChat API error',
+                details: data.errmsg || `Error code: ${apiErrcode}`
+              };
+            }
+          } else {
+            return {
+              success: false,
+              message: 'Connection failed',
+              details: `HTTP ${response.status}`
+            };
+          }
+        } catch (err) {
+          if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+            getLogger().info(
+              '[WeixinTest] getupdates timeout - token is valid (no new messages)',
+              { accountId: accountRow.account_id },
+              LogComponent.NetHandlers
+            );
+            return {
+              success: true,
+              message: 'WeChat connection successful',
+              details: `Connected as ${accountRow.account_id}`
+            };
+          }
+          return {
+            success: false,
+            message: 'Connection failed',
+            details: err instanceof Error ? err.message : 'Network error'
+          };
+        }
+      } else {
+        const token = readGatewaySettingFromStore(configStore, 'weixin_bot_token');
+        if (token) {
+          getLogger().warn(
+            '[WeixinTest] No enabled account in ConfigStore, falling back to legacy token',
+            undefined,
+            LogComponent.NetHandlers
+          );
+          try {
+            const baseUrl = 'https://ilinkai.weixin.qq.com';
+            const response = await fetch(`${baseUrl}/ilink/bot/getupdates?bot_token=${encodeURIComponent(token)}&cursor=`, {
+              method: 'GET',
+              signal: AbortSignal.timeout(10_000),
+            });
+
+            if (response.ok) {
+              const data = await response.json() as { ret?: number; errcode?: number; errmsg?: string };
+              const apiErrcode = data.errcode ?? data.ret ?? 0;
+              if (apiErrcode === 0) {
+                return { success: true, message: 'WeChat connection successful', details: 'Connected (legacy mode)' };
+              } else if (apiErrcode === -14) {
+                return { success: false, message: 'Session expired', details: 'Please scan QR code again to re-authenticate' };
+              } else {
+                return { success: false, message: 'WeChat API error', details: data.errmsg || `Error code: ${apiErrcode}` };
+              }
+            }
+          } catch { /* ignore */ }
+        }
+      }
+      return { success: false, message: 'WeChat requires QR code login', details: 'No WeChat token found. Please scan QR code to authenticate.' };
+    }
+
+    default:
+      return { success: false, message: `Unknown channel: ${channel}` };
+  }
+}

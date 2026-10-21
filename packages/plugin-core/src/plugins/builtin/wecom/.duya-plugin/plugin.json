@@ -1,0 +1,41 @@
+{
+  "name": "wecom",
+  "version": "0.1.0",
+  "description": "WeCom (WeChat Work) enterprise collaboration plugin: messaging, contacts, meetings, schedules, todos, docs, spreadsheets, smart sheets. All operations go through the external `wecom-cli` command-line program.",
+  "author": {
+    "name": "TRAE",
+    "url": "https://www.trae.ai/"
+  },
+  "homepage": "https://github.com/lava-chen/duya",
+  "license": "MIT",
+  "keywords": [
+    "wecom",
+    "wechat-work",
+    "enterprise-wechat",
+    "messaging",
+    "contacts",
+    "meeting",
+    "schedule",
+    "todo",
+    "document",
+    "spreadsheet",
+    "smartsheet"
+  ],
+  "setup": [
+    {
+      "id": "wecom-cli",
+      "label": "Path to the wecom-cli executable (must be on PATH)",
+      "type": "path",
+      "required": true
+    }
+  ],
+  "interface": {
+    "displayName": "WeCom",
+    "shortDescription": "WeCom enterprise collaboration: messaging, contacts, meetings, schedules, todos, documents",
+    "longDescription": "WeCom plugin. All operations are executed through the external `wecom-cli` command-line program (`wecom-cli <category> <tool> '<json>'`). The plugin ships the skill documentation only; you must provide the `wecom-cli` binary and WeCom credentials (access token / bot id / secret) yourself, usually via environment variables, because duya does not bundle native binaries or authenticate against WeCom directly.",
+    "category": "communication",
+    "brandColor": "#2BAD13",
+    "icon": "./assets/icon.svg",
+    "screenshots": []
+  }
+}

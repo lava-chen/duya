@@ -1,0 +1,20 @@
+/**
+ * core store barrel — flat 7-file layout under `apps/desktop/src/main/db/core/`.
+ * Each aggregate owns its own module; types are inline-exported, no
+ * separate types.ts. See `docs/design-docs/2026-08-06-core-database-architecture.md`.
+ */
+
+export * from './database';
+export * from './message-log';
+export * from './archive-paths';
+export * from './legacy-archive-migration';
+export * from './session-store';
+export * from './mailbox';
+export * from './stores';
+export * from './legacy-import';
+export * from './pending-wakes';
+export * from './project-store';
+export * from './research-store';
+export * from './conductor-store';
+export * from './workflow-store';
+export * from './run-store';

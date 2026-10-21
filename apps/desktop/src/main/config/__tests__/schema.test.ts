@@ -1,0 +1,42 @@
+import { describe, it, expect } from 'vitest';
+import { DEFAULT_CONFIG, mergeConfig, type DuyaConfig } from '../schema';
+
+describe('DuyaConfig schema', () => {
+  it('DEFAULT_CONFIG has _config_version 1 and single memory block', () => {
+    expect(DEFAULT_CONFIG._config_version).toBe(1);
+    expect(DEFAULT_CONFIG.memory).toBeDefined();
+    // no top-level provider/model key collision: memory is a single merged block
+    expect(DEFAULT_CONFIG.memory.provider).toBe('');
+    expect(DEFAULT_CONFIG.memory.model).toBe('');
+  });
+
+  it('mergeConfig fills missing keys from defaults and keeps supplied values', () => {
+    const merged = mergeConfig({ storage: { database_path: '/custom/db' } });
+    expect(merged.storage.database_path).toBe('/custom/db');
+    expect(merged.security.secrets_encrypted).toBe(false);
+    // `agent.max_turns` is intentionally absent from DEFAULT_CONFIG — the
+    // agent is uncapped by default (pi-aligned). mergeConfig must not
+    // synthesise one from defaults.
+    expect(merged.agent.max_turns).toBeUndefined();
+    // Mid-run messages queue by default; users opt into immediate followup
+    // via Settings → General (or agent.busy_message_mode in config.toml).
+    expect(merged.agent.busy_message_mode).toBe('queued');
+  });
+
+  it('DEFAULT_CONFIG keeps the queued mid-run message default', () => {
+    expect(DEFAULT_CONFIG.agent.busy_message_mode).toBe('queued');
+  });
+
+  it('DEFAULT_CONFIG reserves Codex-aligned blocks (skills/projects/features/apps)', () => {
+    expect(DEFAULT_CONFIG.skills).toEqual([]);
+    expect(DEFAULT_CONFIG.projects).toEqual({});
+    expect(DEFAULT_CONFIG.features).toEqual({});
+    expect(DEFAULT_CONFIG.apps).toEqual({});
+  });
+
+  it('mergeConfig does not mutate DEFAULT_CONFIG', () => {
+    const before = JSON.stringify(DEFAULT_CONFIG);
+    mergeConfig({ agent: { max_turns: 5 } } as Partial<DuyaConfig>);
+    expect(JSON.stringify(DEFAULT_CONFIG)).toBe(before);
+  });
+});

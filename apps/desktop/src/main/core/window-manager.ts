@@ -1,0 +1,365 @@
+import { app, BrowserWindow, shell, dialog, MessageChannelMain } from 'electron';
+import * as path from 'path';
+import * as fs from 'fs';
+import * as http from 'http';
+import * as os from 'os';
+import { isDev, isPreviewMode, isTestMode } from './bootstrap';
+import { getLogger, LogComponent } from '../logging/logger';
+import { getChannelManager } from '../messaging/port-manager';
+import { wasLaunchedAsHidden } from '../services/auto-start';
+import { getNodeExecutable } from '../services/dev-detector';
+import { isHttpUrl } from '../ipc/system-handlers';
+import { setMainWindow } from '../services/browser/daemon';
+import { attachWebviewGuard } from './webview-guard';
+import { loadWindowState, saveWindowState } from './window-state';
+
+const logger = getLogger();
+
+// Module-level window state
+let mainWindow: BrowserWindow | null = null;
+let isQuitting = false;
+
+// Export getters/setters
+export function getMainWindow(): BrowserWindow | null {
+  return mainWindow;
+}
+
+export function getIsQuitting(): boolean {
+  return isQuitting;
+}
+
+export function setIsQuitting(value: boolean): void {
+  isQuitting = value;
+}
+
+// =============================================================================
+// Icon Path Helpers
+// =============================================================================
+
+export function getIconPath(): string {
+  const getAssetPath = (...paths: string[]) => path.join(__dirname, '..', 'assets', ...paths);
+  if (process.platform === 'win32') {
+    return isDev ? getAssetPath('windows', 'icon.ico') : path.join(process.resourcesPath, 'assets', 'windows', 'icon.ico');
+  }
+  if (process.platform === 'darwin') {
+    return isDev ? getAssetPath('macos', 'icon.icns') : path.join(process.resourcesPath, 'assets', 'macos', 'icon.icns');
+  }
+  return isDev ? getAssetPath('linux', 'icons', '512x512.png') : path.join(process.resourcesPath, 'assets', 'linux', 'icons', '512x512.png');
+}
+
+// =============================================================================
+// Renderer URL Detection
+// =============================================================================
+
+async function detectDevServerPort(): Promise<number | null> {
+  const portsToCheck = [3000, 3001, 3002, 3003, 3004, 3005];
+
+  const checkPort = (port: number): Promise<boolean> => {
+    return new Promise((resolve) => {
+      const req = http.request({
+        hostname: 'localhost',
+        port,
+        path: '/',
+        method: 'HEAD',
+        timeout: 3000,
+      }, (res) => {
+        resolve(res.statusCode !== undefined);
+      });
+
+      req.on('error', () => resolve(false));
+      req.on('timeout', () => {
+        req.destroy();
+        resolve(false);
+      });
+
+      req.end();
+    });
+  };
+
+  for (const port of portsToCheck) {
+    const isReady = await checkPort(port);
+    if (isReady) {
+      logger.info(`Detected Vite dev server on port ${port}`, undefined, LogComponent.Main);
+      return port;
+    }
+  }
+
+  return null;
+}
+
+export async function getRendererUrl(): Promise<string> {
+  if (isPreviewMode) {
+    const distPath = path.join(process.cwd(), 'dist');
+    const indexPath = path.join(distPath, 'index.html');
+    if (fs.existsSync(indexPath)) {
+      logger.info('Preview mode: loading from dist/', undefined, LogComponent.Main);
+      return `file://${indexPath}`;
+    }
+    logger.warn('Preview mode: dist/index.html not found, trying Vite preview on port 4173', undefined, LogComponent.Main);
+    const previewPort = await detectDevServerPort();
+    if (previewPort && previewPort !== 3000) {
+      return `http://localhost:${previewPort}`;
+    }
+    logger.warn('Preview mode: falling back to port 4173', undefined, LogComponent.Main);
+    return 'http://localhost:4173';
+  }
+
+  if (isDev) {
+    const detectedPort = await detectDevServerPort();
+    if (detectedPort) {
+      return `http://localhost:${detectedPort}`;
+    }
+    logger.warn('Could not detect Vite dev server port, falling back to 3000', undefined, LogComponent.Main);
+    return 'http://localhost:3000';
+  }
+
+  const distPath = path.join(process.resourcesPath, 'app.asar', 'dist');
+  const indexPath = path.join(distPath, 'index.html');
+  return `file://${indexPath}`;
+}
+
+// =============================================================================
+// Main Window
+// =============================================================================
+
+export async function createWindow(): Promise<void> {
+  const isHiddenLaunch = wasLaunchedAsHidden();
+  if (isHiddenLaunch) {
+    logger.info('App launched as hidden login item, starting minimized to tray', undefined, LogComponent.Main);
+  }
+
+  // Plan 331 Phase 3: restore last window bounds. Falls back to the
+  // 1280×860 default when no state exists or the saved bounds are
+  // off-screen (e.g. external monitor disconnected).
+  const saved = loadWindowState();
+
+  const windowOptions: Electron.BrowserWindowConstructorOptions = {
+    width: saved?.width ?? 1280,
+    height: saved?.height ?? 860,
+    x: saved?.x,
+    y: saved?.y,
+    minWidth: 1024,
+    minHeight: 600,
+    title: 'DUYA Beta',
+    icon: getIconPath(),
+    show: !isHiddenLaunch,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      webviewTag: true,
+    },
+  };
+
+  if (process.platform === 'darwin') {
+    windowOptions.titleBarStyle = 'hiddenInset';
+  } else if (process.platform === 'win32') {
+    windowOptions.titleBarStyle = 'hidden';
+    windowOptions.titleBarOverlay = {
+      color: '#00000000',
+      symbolColor: '#888888',
+      height: 44,
+    };
+  }
+
+  // Native window backdrop so the chrome can follow the desktop wallpaper in
+  // real time (never a hardcoded color):
+  //   - Windows 11 → Mica: OS paints a wallpaper-tinted material behind the
+  //     window. No frosted blur — the "translucent, not matte" look.
+  //   - macOS      → vibrancy 'under-window': the system material samples the
+  //     desktop wallpaper behind the window, same visual intent as Mica.
+  //   - Anything else keeps the opaque CSS fallback (pastel gradient).
+  // The renderer learns which material is active through the
+  // `--duya-backdrop` argv flag (read synchronously in the preload) and
+  // switches the chrome surfaces to glass in globals.css.
+  let windowBackdrop = '';
+  if (process.platform === 'darwin') {
+    windowOptions.vibrancy = 'under-window';
+    windowOptions.visualEffectState = 'active';
+    windowBackdrop = 'vibrancy';
+  } else if (process.platform === 'win32') {
+    // Windows 11 starts at NT build 22000. Windows 10 returns 10240-19045.
+    const build = Number(os.release().split('.')[2] ?? '0');
+    if (build >= 22000) {
+      windowOptions.backgroundMaterial = 'mica';
+      windowBackdrop = 'mica';
+    }
+  }
+  windowOptions.webPreferences!.additionalArguments = [`--duya-backdrop=${windowBackdrop}`];
+
+  mainWindow = new BrowserWindow(windowOptions);
+
+  // Restore maximized state after the window is created — setting
+  // `maximized: true` in the constructor options is not honored on
+  // all platforms, so we call `maximize()` explicitly when needed.
+  if (saved?.maximized) {
+    mainWindow.maximize();
+  }
+
+  // Electron drops the DWM backdrop attribute whenever the window changes
+  // native state (maximize / fullscreen / restore), so Mica silently
+  // disappears until the window is recreated. Re-apply it after every
+  // state transition; the short delay is needed because re-applying
+  // synchronously inside the event lands before DWM finishes the
+  // transition and gets overwritten again.
+  if (windowBackdrop === 'mica') {
+    const reapplyMica = (): void => {
+      setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.setBackgroundMaterial('mica');
+        }
+      }, 120);
+    };
+    mainWindow.on('maximize', reapplyMica);
+    mainWindow.on('unmaximize', reapplyMica);
+    mainWindow.on('restore', reapplyMica);
+    mainWindow.on('enter-full-screen', reapplyMica);
+    mainWindow.on('leave-full-screen', reapplyMica);
+  }
+
+  // Register the main window with the browser daemon so it can forward
+  // webview CDP commands to the renderer via IPC.
+  setMainWindow(mainWindow);
+
+  mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+    if (isHttpUrl(targetUrl)) {
+      shell.openExternal(targetUrl);
+    }
+    // Always deny opening inside the BrowserWindow, regardless of protocol.
+    return { action: 'deny' };
+  });
+
+  // Plan 583 / ISS-15: the window enables `webviewTag`, so the renderer picks
+  // every guest's webPreferences. Pin a main-process floor before the guest
+  // is created.
+  // Plan 583 / ISS-15: the window enables `webviewTag`, so the renderer picks
+  // every guest's webPreferences. Pin a main-process floor before the guest
+  // is created.
+  attachWebviewGuard(mainWindow.webContents, (fields) => {
+    logger.warn(
+      `Renderer requested unsafe <webview> preferences; pinned: ${fields.join(', ')}`,
+      undefined,
+      LogComponent.Main,
+    );
+  });
+
+  mainWindow.webContents.on('will-navigate', (event, targetUrl) => {
+    let appOrigin: string;
+    try {
+      appOrigin = new URL(mainWindow!.webContents.getURL()).origin;
+    } catch {
+      event.preventDefault();
+      return;
+    }
+    let targetOrigin: string;
+    try {
+      targetOrigin = new URL(targetUrl).origin;
+    } catch {
+      event.preventDefault();
+      return;
+    }
+    if (targetOrigin !== appOrigin) {
+      event.preventDefault();
+      // Only forward http(s) URLs to the OS; everything else is blocked.
+      if (isHttpUrl(targetUrl)) {
+        shell.openExternal(targetUrl);
+      }
+    }
+  });
+
+  // Surface renderer-side failures to the main-process log so white-screen
+  // crashes are diagnosable without manually opening DevTools.
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (isMainFrame) {
+      logger.error(
+        `Renderer did-fail-load: code=${errorCode} desc=${errorDescription} url=${validatedURL}`,
+        undefined,
+        LogComponent.Main,
+      );
+    }
+  });
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    logger.error(
+      `Renderer process gone: reason=${details.reason} exitCode=${details.exitCode}`,
+      undefined,
+      LogComponent.Main,
+    );
+  });
+  // Electron 25+ passes a single event object (level/message/sourceId/
+  // lineNumber); the old positional signature was removed.
+  mainWindow.webContents.on('console-message', (event) => {
+    if (event.level >= 2) {
+      logger.error(
+        `Renderer console: ${event.message} (${event.sourceId}:${event.lineNumber})`,
+        undefined,
+        LogComponent.Main,
+      );
+    }
+  });
+  mainWindow.webContents.on('preload-error', (_event, preloadPath, error) => {
+    logger.error(
+      `Preload error at ${preloadPath}: ${error instanceof Error ? error.message : String(error)}`,
+      undefined,
+      LogComponent.Main,
+    );
+  });
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    logger.info('Window did-finish-load, setting up ports...', undefined, LogComponent.Main);
+
+    const channelManager = getChannelManager();
+    if (channelManager) {
+      const configChannel = new MessageChannelMain();
+      channelManager.registerChannel('config', configChannel.port1);
+
+      mainWindow?.webContents.postMessage('config-port', null, [configChannel.port2]);
+      logger.info('Config port sent to renderer', undefined, LogComponent.Main);
+
+      const conductorChannel = new MessageChannelMain();
+      channelManager.registerChannel('conductor', conductorChannel.port1);
+      mainWindow?.webContents.postMessage('conductor-port', null, [conductorChannel.port2]);
+
+      logger.info('Conductor port sent to renderer', undefined, LogComponent.Main);
+    }
+  });
+
+  try {
+    const rendererUrl = await getRendererUrl();
+    logger.info(`Loading URL: ${rendererUrl}`, undefined, 'Main');
+    mainWindow.loadURL(rendererUrl);
+
+    if (isDev && !isPreviewMode && !isTestMode) {
+      mainWindow.webContents.openDevTools();
+    }
+  } catch (err) {
+    logger.error('Failed to start renderer', err instanceof Error ? err : new Error(String(err)), undefined, 'Main');
+    dialog.showErrorBox('Startup Error', `Failed to start application: ${err}`);
+  }
+
+  mainWindow.on('close', (event) => {
+    // Plan 331 Phase 3: persist bounds before the window hides or closes
+    // so the next launch restores the same position. `getNormalBounds()`
+    // returns the un-maximized rect when maximized, which is what we want
+    // to restore — combined with the `maximized` flag above.
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try {
+        const bounds = mainWindow.getNormalBounds();
+        saveWindowState({
+          ...bounds,
+          maximized: mainWindow.isMaximized(),
+        });
+      } catch {
+        // Best-effort — skip saving if the window is already torn down.
+      }
+    }
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow?.hide();
+    }
+  });
+
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+    setMainWindow(null);
+  });
+}

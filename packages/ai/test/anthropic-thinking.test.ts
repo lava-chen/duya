@@ -1,0 +1,170 @@
+/**
+ * Contract tests for resolveAnthropicThinking.
+ *
+ * Verifies the Anthropic `thinking` parameter resolution from model
+ * capabilities and user-requested effort level. Covers four branches:
+ *  1. 'off' effort → undefined (thinking disabled).
+ *  2. forceAdaptiveThinking models → { type: 'adaptive' } (MiniMax M3),
+ *     including when effort is undefined (auto defaults to adaptive/medium).
+ *  3. Standard reasoning models → { type: 'enabled', budget_tokens } on auto
+ *     (defaults to 'medium') and explicit levels, with the budget clamped to
+ *     maxTokens - 1.
+ *  4. Non-reasoning models → undefined regardless of effort.
+ */
+import { describe, it, expect } from 'vitest';
+import { resolveAnthropicThinking } from '../src/api/anthropic-messages.js';
+import { anthropicModels } from '../src/providers/anthropic.models.js';
+import { minimaxModels } from '../src/providers/minimax.models.js';
+
+describe('resolveAnthropicThinking', () => {
+  // Look models up BY ID — positional indexing broke when the catalog
+  // gained new entries (claude-3.5 was removed upstream entirely).
+  const claudeSonnet4 = anthropicModels.find(m => m.id === 'claude-sonnet-5')
+    ?? anthropicModels.find(m => m.reasoning === true)!; // reasoning: true
+  const claude35 = anthropicModels.find(m => m.reasoning === false)!; // non-reasoning
+  const minimaxM3 = minimaxModels[0]; // forceAdaptiveThinking: true
+
+  describe('effort "off" → undefined', () => {
+    it('returns undefined when effort is "off"', () => {
+      expect(resolveAnthropicThinking(claudeSonnet4, 'off')).toBeUndefined();
+    });
+
+    it('returns undefined for "off" even on forceAdaptiveThinking models', () => {
+      expect(resolveAnthropicThinking(minimaxM3, 'off')).toBeUndefined();
+    });
+  });
+
+  describe('forceAdaptiveThinking on auto → { type: "adaptive" }', () => {
+    it('returns { type: "adaptive" } for undefined effort on forceAdaptiveThinking models', () => {
+      expect(resolveAnthropicThinking(minimaxM3, undefined)).toEqual({ type: 'adaptive', display: 'summarized' });
+    });
+  });
+
+  describe('forceAdaptiveThinking → { type: "adaptive" }', () => {
+    it('MiniMax M3 Anthropic preset has forceAdaptiveThinking: true', () => {
+      expect(minimaxM3.compat?.forceAdaptiveThinking).toBe(true);
+    });
+
+    it('returns { type: "adaptive" } for "low"', () => {
+      expect(resolveAnthropicThinking(minimaxM3, 'low')).toEqual({ type: 'adaptive', display: 'summarized' });
+    });
+
+    it('returns { type: "adaptive" } for "medium"', () => {
+      expect(resolveAnthropicThinking(minimaxM3, 'medium')).toEqual({ type: 'adaptive', display: 'summarized' });
+    });
+
+    it('returns { type: "adaptive" } for "high"', () => {
+      expect(resolveAnthropicThinking(minimaxM3, 'high')).toEqual({ type: 'adaptive', display: 'summarized' });
+    });
+
+    it('returns { type: "adaptive" } for "max"', () => {
+      expect(resolveAnthropicThinking(minimaxM3, 'max')).toEqual({ type: 'adaptive', display: 'summarized' });
+    });
+
+    it('returns { type: "adaptive" } regardless of effort value (no budget mapping)', () => {
+      // The adaptive branch short-circuits before the BUDGET map lookup,
+      // so any non-off effort yields the same shape.
+      expect(resolveAnthropicThinking(minimaxM3, 'minimal')).toEqual({ type: 'adaptive', display: 'summarized' });
+      expect(resolveAnthropicThinking(minimaxM3, 'xhigh')).toEqual({ type: 'adaptive', display: 'summarized' });
+    });
+  });
+
+  describe('standard reasoning models → { type: "enabled", budget_tokens }', () => {
+    // Synthetic small-cap model so clamp behavior is exercised regardless of
+    // the real catalog values (real Claude caps are 128000 and never clamp).
+    // BUDGET map: minimal=1024, low=1024, medium=4096, high=16384,
+    //             xhigh=24576, max=32000.
+    // Clamp rule: budget_tokens = Math.min(BUDGET[effort], maxTokens - 1).
+    const clampModel = { ...claudeSonnet4, maxTokens: 16000 };
+    const maxBudget = clampModel.maxTokens - 1; // 15999
+
+    it('Claude Sonnet 5 is a reasoning model without forceAdaptiveThinking', () => {
+      expect(claudeSonnet4.reasoning).toBe(true);
+      expect(claudeSonnet4.compat?.forceAdaptiveThinking).toBeFalsy();
+    });
+
+    it('returns budget_tokens 1024 for "minimal"', () => {
+      expect(resolveAnthropicThinking(claudeSonnet4, 'minimal')).toEqual({
+        type: 'enabled',
+        budget_tokens: 1024,
+      });
+    });
+
+    it('returns budget_tokens 1024 for "low"', () => {
+      expect(resolveAnthropicThinking(claudeSonnet4, 'low')).toEqual({
+        type: 'enabled',
+        budget_tokens: 1024,
+      });
+    });
+
+    it('defaults auto (undefined) to "medium" budget_tokens', () => {
+      expect(resolveAnthropicThinking(claudeSonnet4, undefined)).toEqual({
+        type: 'enabled',
+        budget_tokens: 4096,
+      });
+    });
+
+    it('returns budget_tokens 4096 for "medium"', () => {
+      expect(resolveAnthropicThinking(claudeSonnet4, 'medium')).toEqual({
+        type: 'enabled',
+        budget_tokens: 4096,
+      });
+    });
+
+    it('clamps "high" (16384) to maxTokens - 1 when maxTokens is smaller', () => {
+      // 16384 > 15999 → clamped to 15999
+      expect(resolveAnthropicThinking(clampModel, 'high')).toEqual({
+        type: 'enabled',
+        budget_tokens: maxBudget,
+      });
+    });
+
+    it('clamps "xhigh" (24576) to maxTokens - 1', () => {
+      expect(resolveAnthropicThinking(clampModel, 'xhigh')).toEqual({
+        type: 'enabled',
+        budget_tokens: maxBudget,
+      });
+    });
+
+    it('clamps "max" (32000) to maxTokens - 1', () => {
+      expect(resolveAnthropicThinking(clampModel, 'max')).toEqual({
+        type: 'enabled',
+        budget_tokens: maxBudget,
+      });
+    });
+
+    it('never exceeds maxTokens - 1 for any effort', () => {
+      const efforts = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+      for (const effort of efforts) {
+        const result = resolveAnthropicThinking(clampModel, effort);
+        expect(result).toBeDefined();
+        if (result && result.type === 'enabled') {
+          expect(result.budget_tokens).toBeLessThanOrEqual(maxBudget);
+        }
+      }
+    });
+
+    it('returns undefined for an unrecognized effort string', () => {
+      // BUDGET has no entry for this → budget is falsy → undefined.
+      expect(resolveAnthropicThinking(claudeSonnet4, 'bogus')).toBeUndefined();
+    });
+  });
+
+  describe('non-reasoning models → undefined', () => {
+    it('Claude 3.5 Sonnet has reasoning disabled', () => {
+      expect(claude35.reasoning).toBe(false);
+    });
+
+    it('returns undefined regardless of effort', () => {
+      expect(resolveAnthropicThinking(claude35, 'low')).toBeUndefined();
+      expect(resolveAnthropicThinking(claude35, 'medium')).toBeUndefined();
+      expect(resolveAnthropicThinking(claude35, 'high')).toBeUndefined();
+      expect(resolveAnthropicThinking(claude35, 'max')).toBeUndefined();
+    });
+
+    it('returns undefined even when effort is a valid reasoning level', () => {
+      // The reasoning guard short-circuits before the effort check.
+      expect(resolveAnthropicThinking(claude35, 'xhigh')).toBeUndefined();
+    });
+  });
+});

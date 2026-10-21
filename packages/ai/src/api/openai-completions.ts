@@ -1,0 +1,1104 @@
+/**
+ * packages/ai/src/api/openai-completions.ts
+ *
+ * OpenAI Chat Completions API implementation.
+ * Migrated from packages/agent/src/llm/openai-client.ts.
+ *
+ * Key changes (spec §8.2):
+ * - thinkingFormat switch (5 branches) replaces hardcoded reasoning_content handling
+ * - <think> tag state machine for think-tag-fallback format
+ * - reasoning_content field name stored as ThinkingContent.thinkingSignature
+ *
+ * Utility functions (toOpenAIMessages, appendThinking/Text/ToolCall) are
+ * re-implemented here to avoid a circular dependency on @duya/agent.
+ */
+
+import OpenAI from 'openai';
+import type {
+  AIClient, AIClientOptions, AssistantMessage, AssistantMessageEvent,
+  Message, Model, ModelCompat, SSEEvent,
+  TextContent, ThinkingContent, ToolUseContent,
+} from '../types.js';
+import { transformMessages } from './transform-messages.js';
+import { summarizeProviderBlock } from './degrade.js';
+import { emitSSE } from './emit-sse.js';
+import { ThinkTagParser } from '../utils/think-tag-parser.js';
+import { collectDiagnostics } from '../utils/simple-options.js';
+import { withIdleTimeout } from '../utils/idle-timeout.js';
+import { sortToolsByName } from '../utils/tool-order.js';
+import { localRuntimeApiKeyOrPlaceholder } from './local-runtime.js';
+import { normalizeUsage, type UsageLike } from '../utils/usage.js';
+
+// =============================================================================
+// Tool call ID synthesis
+// =============================================================================
+
+const VALID_ID_REGEX = /[^a-zA-Z0-9_-]/g;
+
+/**
+ * Synthesize a valid runtime tool call ID when the provider returns an
+ * empty or invalid one (MiniMax-M3 on OpenAI-compatible endpoints does
+ * this in multi-turn conversations). An empty id would be written to the
+ * DB as a NULL tool_call_id, breaking tool_use/tool_result pairing after
+ * a hot restart.
+ */
+export function synthesizeRuntimeToolId(rawId: string | undefined | null): string {
+  const cleaned = (rawId || '').replace(VALID_ID_REGEX, '_');
+  if (cleaned) return cleaned;
+  const rand = globalThis.crypto.randomUUID().replace(/-/g, '_');
+  return `toolu_synth_${rand}`;
+}
+
+// =============================================================================
+// Types
+// =============================================================================
+
+/** Structural type for OpenAI streaming tool call delta (SDK-version-safe). */
+interface OpenAIToolCallDelta {
+  index?: number | null;
+  id?: string;
+  type?: string;
+  function?: { name?: string; arguments?: string };
+}
+
+/**
+ * OpenRouter (and similar aggregators) attach a top-level `provider` object
+ * to the chunk / response body naming the upstream route that served the
+ * request. The OpenAI SDK types don't include it, so we narrow via this
+ * structural cast instead of reaching for `any`.
+ */
+interface OpenRouterProviderMeta {
+  provider?: { name?: string };
+}
+
+/**
+ * OpenAI Chat Completions reports cache hits in
+ * `usage.prompt_tokens_details.cached_tokens` (OpenAI / GLM / DeepSeek /
+ * Kimi all follow this standard). The SDK's `Usage` type omits the field,
+ * so we narrow via this structural cast.
+ */
+interface OpenAIPromptDetails {
+  prompt_tokens_details?: { cached_tokens?: number };
+}
+
+/**
+ * Map an OpenAI Chat Completions usage block to duya's `TokenUsage` shape.
+ *
+ * OpenAI's `prompt_tokens` already includes the cached portion, so it maps
+ * 1:1 to `input_tokens` without inflating the total — `cached_tokens` is
+ * only split out so the pipeline can report cache hit rate and price cache
+ * reads at the discounted rate. Without this mapping, every OpenAI-protocol
+ * provider shows a 0% cache hit rate.
+ */
+export function mapOpenAIUsage(
+  promptTokens: number | undefined,
+  completionTokens: number | undefined,
+  cachedTokens: number | undefined,
+): { input_tokens: number; output_tokens: number; cache_hit_tokens: number } {
+  return {
+    input_tokens: promptTokens || 0,
+    output_tokens: completionTokens || 0,
+    cache_hit_tokens: cachedTokens || 0,
+  };
+}
+
+/** Read `prompt_tokens_details.cached_tokens` off a raw usage block. */
+function cachedTokensFrom(usage: unknown): number | undefined {
+  return (usage as OpenAIPromptDetails | undefined)?.prompt_tokens_details?.cached_tokens;
+}
+
+/** Internal accumulator type for streaming JSON arguments. */
+type ToolUseWithRaw = ToolUseContent & { _rawInput?: string };
+
+// =============================================================================
+// Compat resolution (defaults layer, official-harness parity)
+// =============================================================================
+
+/**
+ * Per-provider compat defaults detected from providerId/baseUrl, following
+ * pi-mono's detectCompat pattern: a model catalog entry only needs explicit
+ * `compat` when it deviates from its provider's norm, and user-configured
+ * custom endpoints get sane behavior with zero configuration.
+ *
+ * Explicit `model.compat` fields always win over these defaults.
+ */
+export function detectOpenAICompatDefaults(
+  model: Pick<Model<'openai-chat'>, 'providerId' | 'baseUrl'>,
+): Partial<Pick<ModelCompat, 'openAIThinkingFormat' | 'requiresReasoningContentOnAssistantMessages'>> {
+  const provider = model.providerId;
+  const url = model.baseUrl ?? '';
+
+  if (provider === 'deepseek' || url.includes('deepseek.com')) {
+    return {
+      openAIThinkingFormat: 'deepseek-style',
+      requiresReasoningContentOnAssistantMessages: true,
+    };
+  }
+  if (provider === 'qwen' || url.includes('dashscope.aliyuncs.com')) {
+    return { openAIThinkingFormat: 'qwen-style' };
+  }
+  if (provider === 'glm' || url.includes('bigmodel.cn')) {
+    return { openAIThinkingFormat: 'glm-style' };
+  }
+  // Moonshot K-series models are always-thinking; reasoning arrives in the
+  // reasoning_content field with no request-side toggle.
+  if (provider === 'kimi' || url.includes('moonshot')) {
+    return { openAIThinkingFormat: 'reasoning-content' };
+  }
+  if (provider === 'openrouter' || url.includes('openrouter.ai')) {
+    return { openAIThinkingFormat: 'openrouter-style' };
+  }
+  return {};
+}
+
+// =============================================================================
+// Thinking resolver
+// =============================================================================
+
+/**
+ * Resolve OpenAI-style thinking parameters from model capabilities and
+ * user-requested effort level.
+ *
+ * - Non-reasoning models → undefined.
+ * - effort 'off': hybrid-thinking formats (deepseek-style / glm-style /
+ *   qwen-style) send an EXPLICIT disable toggle so the model actually stops
+ *   thinking; other formats → undefined (official-harness parity: Z.ai,
+ *   DeepSeek and Qwen hybrid models default to thinking ON when the toggle
+ *   is absent).
+ * - effort undefined (auto) → treated as 'medium' for reasoning models.
+ * - model.compat?.openAIThinkingFormat selects the wire shape:
+ *   - openai-standard:   reasoning_effort parameter (OpenAI o1/o3).
+ *   - reasoning-content: no param; reasoning arrives in reasoning_content.
+ *   - qwen-style:        enable_thinking (+ thinking_budget when enabled).
+ *   - glm-style:         thinking { type: enabled|disabled } (Zhipu API only
+ *                        documents `type`; no budget_tokens).
+ *   - deepseek-style:    thinking { type: enabled|disabled }.
+ *   - openrouter-style:  reasoning { effort } ('none' disables).
+ *   - think-tag-fallback: no param; reasoning arrives in <think> tags.
+ */
+export function resolveOpenAIThinking(
+  model: Model<'openai-chat'>,
+  effort?: string,
+): Record<string, unknown> | undefined {
+  if (!model.reasoning) return undefined;
+
+  const compat = { ...detectOpenAICompatDefaults(model), ...model.compat };
+  const format = compat.openAIThinkingFormat;
+  if (!format) return undefined;
+
+  // effort 'off' — only formats with an explicit toggle can honor it.
+  if (effort === 'off') {
+    switch (format) {
+      case 'deepseek-style':
+      case 'glm-style':
+        return { thinking: { type: 'disabled' } };
+      case 'qwen-style':
+        return { enable_thinking: false };
+      case 'openrouter-style':
+        return { reasoning: { effort: 'none' } };
+      default:
+        return undefined;
+    }
+  }
+
+  const effectiveEffort = effort ?? 'medium';
+
+  // Map effort to intensity strings understood by different providers.
+  const EFFORT_MAP: Record<string, string> = {
+    minimal: 'low',
+    low: 'low',
+    medium: 'medium',
+    high: 'high',
+    xhigh: 'high',
+    max: 'high',
+  };
+
+  const mappedEffort = EFFORT_MAP[effectiveEffort];
+  if (!mappedEffort) return undefined;
+
+  switch (format) {
+    case 'openai-standard':
+      // OpenAI o1/o3: reasoning_effort parameter
+      return { reasoning_effort: mappedEffort };
+    case 'reasoning-content':
+      // DeepSeek, Qwen: no special parameter, reasoning comes in reasoning_content field
+      return undefined;
+    case 'qwen-style':
+      // Qwen: enable_thinking parameter
+      return { enable_thinking: true, thinking_budget: getBudgetForEffort(effectiveEffort) };
+    case 'glm-style':
+      // GLM/Zhipu: thinking toggle only — the API does not accept budget_tokens.
+      return { thinking: { type: 'enabled' } };
+    case 'deepseek-style':
+      // DeepSeek V4+ hybrid thinking: enabled/disabled toggle.
+      return { thinking: { type: 'enabled' } };
+    case 'openrouter-style':
+      // OpenRouter aggregates reasoning behind one param; 'none' disables it
+      // for hybrid models (official-harness parity).
+      return { reasoning: { effort: mappedEffort } };
+    case 'think-tag-fallback':
+      // No special parameter, thinking comes in <think> tags in content
+      return undefined;
+    default:
+      return undefined;
+  }
+}
+
+function getBudgetForEffort(effort: string): number {
+  const BUDGET: Record<string, number> = {
+    minimal: 1024,
+    low: 4096,
+    medium: 8192,
+    high: 16384,
+    xhigh: 24576,
+    max: 32000,
+  };
+  return BUDGET[effort] || 8192;
+}
+
+// =============================================================================
+// Message conversion
+// =============================================================================
+
+/**
+ * Remove orphaned tool_use / tool_result pairs from the intermediate
+ * Message[] before OpenAI conversion.
+ *
+ * OpenAI-compatible endpoints (MiniMax etc.) reject an assistant message that
+ * carries tool_calls whose results are missing from the immediately-following
+ * message (HTTP 400, e.g. "messages.1.3: tool_use ids were found without
+ * tool_result blocks immediately after"). A history can lose a tool_result
+ * legitimately — an interrupted round, a dropped tool_call_id, or an async
+ * result that never landed — and the OpenAI path has no self-healing (unlike
+ * the Anthropic path in anthropic-messages.ts). This repairs the pair both
+ * ways: tool_use blocks without a result are dropped (with a text fallback so
+ * the assistant turn is never empty), and tool_result messages without a
+ * matching tool_use are dropped.
+ */
+export function repairToolPairing(messages: Message[]): Message[] {
+  const toolUseIds = new Set<string>();
+  const toolResultIds = new Set<string>();
+
+  for (const m of messages) {
+    if (m.role === 'assistant' && Array.isArray(m.content)) {
+      for (const block of m.content) {
+        if (block.type === 'tool_use') toolUseIds.add(block.id);
+      }
+    }
+    if (m.role === 'tool') {
+      if (m.tool_call_id) toolResultIds.add(m.tool_call_id);
+      if (Array.isArray(m.content)) {
+        for (const block of m.content) {
+          if (block.type === 'tool_result') toolResultIds.add(block.tool_use_id);
+        }
+      }
+    }
+    if (m.role === 'user' && Array.isArray(m.content)) {
+      for (const block of m.content) {
+        if (block.type === 'tool_result') toolResultIds.add(block.tool_use_id);
+      }
+    }
+  }
+
+  const result: Message[] = [];
+  for (const m of messages) {
+    if (m.role === 'assistant' && Array.isArray(m.content)) {
+      // Drop orphan tool_use blocks; keep the turn non-empty with text.
+      const filtered = m.content.filter(
+        (b) => b.type !== 'tool_use' || toolResultIds.has(b.id),
+      );
+      result.push(
+        filtered.length === 0
+          ? { ...m, content: [{ type: 'text', text: '(tool call removed)' }] }
+          : { ...m, content: filtered },
+      );
+      continue;
+    }
+    if (m.role === 'tool') {
+      // An empty or unmatched tool_call_id can never be paired; drop the
+      // whole message so no dangling tool message reaches the API.
+      if (!m.tool_call_id || !toolUseIds.has(m.tool_call_id)) continue;
+      if (Array.isArray(m.content)) {
+        const filtered = m.content.filter(
+          (b) => b.type !== 'tool_result' || toolUseIds.has(b.tool_use_id),
+        );
+        if (filtered.length > 0) result.push({ ...m, content: filtered });
+      } else {
+        result.push(m);
+      }
+      continue;
+    }
+    if (m.role === 'user' && Array.isArray(m.content)) {
+      const filtered = m.content.filter(
+        (b) => b.type !== 'tool_result' || toolUseIds.has(b.tool_use_id),
+      );
+      result.push(
+        filtered.length === 0
+          ? { ...m, content: [{ type: 'text', text: '(tool result removed)' }] }
+          : { ...m, content: filtered },
+      );
+      continue;
+    }
+    result.push(m);
+  }
+  return result;
+}
+
+/**
+ * Wire field that a thinking block replays into, keyed by the signature
+ * recorded at stream time (`reasoning_content` / `reasoning` /
+ * `reasoning_text` — see appendThinking). DeepSeek thinking mode REQUIRES
+ * the reasoning_content of all previous turns to be passed back whenever the
+ * request carries tools, and otherwise rejects the request with HTTP 400
+ * "The `reasoning_content` in the thinking mode must be passed back to the
+ * API". This surfaces right after a compaction rebase (the rewritten message
+ * prefix re-validates the whole history server-side). Endpoints that don't
+ * accept the field ignore it.
+ */
+const THINKING_REPLAY_FIELD_BY_SIGNATURE: Record<
+  string,
+  'reasoning_content' | 'reasoning' | 'reasoning_text'
+> = {
+  reasoning_content: 'reasoning_content',
+  reasoning: 'reasoning',
+  reasoning_text: 'reasoning_text',
+};
+
+/**
+ * Assistant wire message extended with the provider reasoning replay fields
+ * (DeepSeek/Qwen/GLM-style extensions beyond the OpenAI schema; the OpenAI
+ * SDK JSON-serializes params verbatim, so extra fields pass through).
+ */
+type AssistantWireMessage = OpenAI.Chat.ChatCompletionAssistantMessageParam &
+  Partial<Record<'reasoning_content' | 'reasoning' | 'reasoning_text', string>>;
+
+/**
+ * Convert duya Message[] to OpenAI ChatCompletionMessageParam[].
+ *
+ * System messages are skipped (they are passed separately via the systemPrompt
+ * option). Tool results inside user messages become 'tool' role messages.
+ * Thinking blocks in assistant history are replayed into their original
+ * reasoning wire field (reasoning_content / reasoning / reasoning_text) —
+ * required by DeepSeek thinking mode when the request carries tools, and
+ * ignored by endpoints that don't accept the field. Cross-model thinking has
+ * already been downgraded to plain text by transformMessages, and 'think-tag'
+ * thinking (extracted from content tags) stays dropped.
+ *
+ * When `opts.requiresEmptyReasoningContent` is set (DeepSeek), assistant
+ * messages that carried no thinking get `reasoning_content: ''` so the
+ * field is always present — the endpoint rejects thinking-mode requests
+ * with tools otherwise (official-harness parity).
+ */
+// Exported for tests (same seam rationale as parseAnthropicEvent).
+export function toOpenAIMessages(
+  messages: Message[],
+  opts?: { requiresEmptyReasoningContent?: boolean },
+): OpenAI.Chat.ChatCompletionMessageParam[] {
+  // Repair orphaned tool_use/tool_result pairs before conversion so the
+  // request never carries a tool call without its result (provider 400).
+  messages = repairToolPairing(messages);
+  const result: OpenAI.Chat.ChatCompletionMessageParam[] = [];
+
+  for (const msg of messages) {
+    if (msg.role === 'system') {
+      // System messages are passed separately via the systemPrompt option.
+      continue;
+    }
+
+    if (msg.role === 'user') {
+      if (typeof msg.content === 'string') {
+        result.push({ role: 'user', content: msg.content });
+      } else if (Array.isArray(msg.content)) {
+        const parts: OpenAI.Chat.ChatCompletionContentPart[] = [];
+        for (const block of msg.content) {
+          if (block.type === 'text') {
+            parts.push({ type: 'text', text: block.text });
+          } else if (block.type === 'image') {
+            parts.push({
+              type: 'image_url',
+              image_url: {
+                url: block.source.type === 'url'
+                  ? block.source.data
+                  : `data:${block.source.media_type};base64,${block.source.data}`,
+              },
+            });
+          } else if (block.type === 'tool_result') {
+            // Tool results go as 'tool' role messages in OpenAI format.
+            const content = typeof block.content === 'string'
+              ? block.content
+              : JSON.stringify(block.content);
+            result.push({
+              role: 'tool',
+              tool_call_id: block.tool_use_id,
+              content,
+            });
+          }
+        }
+        if (parts.length > 0) {
+          result.push({ role: 'user', content: parts });
+        }
+      }
+    } else if (msg.role === 'assistant') {
+      if (typeof msg.content === 'string') {
+        result.push({ role: 'assistant', content: msg.content });
+      } else if (Array.isArray(msg.content)) {
+        const textParts: string[] = [];
+        const toolCalls: OpenAI.Chat.ChatCompletionMessageToolCall[] = [];
+        const thinkingReplay: Partial<
+          Record<'reasoning_content' | 'reasoning' | 'reasoning_text', string>
+        > = {};
+        for (const block of msg.content) {
+          if (block.type === 'text') {
+            textParts.push(block.text);
+          } else if (block.type === 'thinking') {
+            // Replay same-model thinking into the wire field it originally
+            // came from (transformMessages already downgraded cross-model
+            // thinking to text, so any thinking block reaching here is
+            // same-model). DeepSeek thinking mode requires this whenever the
+            // request carries tools; endpoints that ignore the field are
+            // unaffected. 'think-tag' thinking arrived inside content tags —
+            // replaying it as a reasoning field would be a foreign format.
+            const replayField =
+              THINKING_REPLAY_FIELD_BY_SIGNATURE[block.thinkingSignature ?? ''];
+            if (replayField && block.thinking) {
+              const existing = thinkingReplay[replayField];
+              thinkingReplay[replayField] = existing
+                ? `${existing}\n\n${block.thinking}`
+                : block.thinking;
+            }
+          } else if (block.type === 'tool_use') {
+            toolCalls.push({
+              id: block.id,
+              type: 'function',
+              function: {
+                name: block.name,
+                arguments: JSON.stringify(block.input),
+              },
+            });
+          } else if (block.type === 'provider_block') {
+            // Plan 440 phase 1: Chat Completions has no inbound carrier for
+            // provider blocks — degrade to the bounded summary line so the
+            // step stays visible without breaking the wire format.
+            textParts.push(summarizeProviderBlock(block));
+          }
+        }
+        const assistantMsg: AssistantWireMessage = {
+          role: 'assistant',
+          content: textParts.join('') || null,
+        };
+        if (toolCalls.length > 0) {
+          assistantMsg.tool_calls = toolCalls;
+        }
+        if (thinkingReplay.reasoning_content !== undefined) {
+          assistantMsg.reasoning_content = thinkingReplay.reasoning_content;
+        }
+        if (thinkingReplay.reasoning !== undefined) {
+          assistantMsg.reasoning = thinkingReplay.reasoning;
+        }
+        if (thinkingReplay.reasoning_text !== undefined) {
+          assistantMsg.reasoning_text = thinkingReplay.reasoning_text;
+        }
+        // DeepSeek thinking mode: the reasoning_content field must be present
+        // on every assistant message (empty string when the turn had none).
+        if (
+          opts?.requiresEmptyReasoningContent &&
+          assistantMsg.reasoning_content === undefined
+        ) {
+          assistantMsg.reasoning_content = '';
+        }
+        result.push(assistantMsg);
+      }
+    } else if (msg.role === 'tool') {
+      // OpenAI Chat Completions tool messages only accept a string `content`.
+      // When a tool returned inline images (MessageContent[] array, e.g.
+      // ReadTool on a pure image file), extract the text blocks and append a
+      // fallback hint for image blocks so the model knows an image was present
+      // but cannot be delivered through this API surface. Vision-capable
+      // OpenAI models can still see user-message image_url blocks, but tool
+      // message content has no image carrier in the spec.
+      let content: string;
+      if (typeof msg.content === 'string') {
+        content = msg.content;
+      } else if (Array.isArray(msg.content)) {
+        const parts: string[] = [];
+        let hasImage = false;
+        for (const block of msg.content) {
+          if (block.type === 'text') {
+            parts.push(block.text);
+          } else if (block.type === 'image') {
+            hasImage = true;
+          }
+        }
+        if (hasImage) {
+          parts.push('(image omitted: OpenAI tool messages cannot carry images. Use the vision tool to analyze the image.)');
+        }
+        content = parts.join('\n').trim();
+      } else {
+        content = JSON.stringify(msg.content);
+      }
+      result.push({
+        role: 'tool',
+        tool_call_id: msg.tool_call_id || '',
+        content,
+      });
+    }
+  }
+
+  return result;
+}
+
+// =============================================================================
+// Event helpers
+// =============================================================================
+
+/**
+ * Append a thinking delta to the assistant message. Consecutive thinking
+ * deltas are merged into the same block. The signature records which wire
+ * field produced the thinking (e.g. 'reasoning_content', 'reasoning',
+ * 'think-tag') so consumers can distinguish sources.
+ */
+function appendThinking(
+  msg: AssistantMessage,
+  text: string,
+  signature: string,
+): AssistantMessageEvent {
+  const last = msg.content[msg.content.length - 1];
+  let contentIndex = msg.content.length - 1;
+  if (!last || last.type !== 'thinking') {
+    msg.content.push({ type: 'thinking', thinking: '', thinkingSignature: signature });
+    contentIndex = msg.content.length - 1;
+  }
+  const block = msg.content[contentIndex];
+  if (block.type === 'thinking') {
+    block.thinking += text;
+    block.thinkingSignature = signature;
+  }
+  return { type: 'thinking_delta', contentIndex, delta: text, partial: msg };
+}
+
+/** Append a text delta to the assistant message, merging into the last text block. */
+function appendText(msg: AssistantMessage, text: string): AssistantMessageEvent {
+  const last = msg.content[msg.content.length - 1];
+  let contentIndex = msg.content.length - 1;
+  if (!last || last.type !== 'text') {
+    msg.content.push({ type: 'text', text: '' });
+    contentIndex = msg.content.length - 1;
+  }
+  const block = msg.content[contentIndex];
+  if (block.type === 'text') {
+    block.text += text;
+  }
+  return { type: 'text_delta', contentIndex, delta: text, partial: msg };
+}
+
+/**
+ * Append a tool call delta to the assistant message. OpenAI streams
+ * tool_calls with an `index` field that identifies which tool call the
+ * delta belongs to (not the content index). We maintain a Map from
+ * OpenAI index → content index in assistantMsg.content.
+ *
+ * Returns null if the delta carries no useful information (shouldn't happen
+ * in practice, but keeps the call site clean).
+ */
+function appendToolCall(
+  msg: AssistantMessage,
+  delta: OpenAIToolCallDelta,
+  indexMap: Map<number, number>,
+): AssistantMessageEvent | null {
+  const toolCallIdx = delta.index ?? 0;
+  const existingContentIdx = indexMap.get(toolCallIdx);
+
+  if (existingContentIdx === undefined) {
+    // New tool call — push a new tool_use block. Synthesize a valid id
+    // when the provider sends an empty/invalid one; subsequent deltas for
+    // the same tool_call match via indexMap and never re-assign the id.
+    const rawId = delta.id;
+    const synthId = synthesizeRuntimeToolId(rawId);
+    if (synthId !== rawId) {
+      console.warn('[duya-ai] Synthesized empty tool_call id', {
+        name: delta.function?.name,
+        synthId,
+      });
+    }
+    const newBlock: ToolUseContent = {
+      type: 'tool_use',
+      id: synthId,
+      name: delta.function?.name ?? '',
+      input: {},
+    };
+    msg.content.push(newBlock);
+    const contentIndex = msg.content.length - 1;
+    indexMap.set(toolCallIdx, contentIndex);
+    // Initialize raw input accumulator (parsed at finalizeToolCalls).
+    (newBlock as ToolUseWithRaw)._rawInput = '';
+    return { type: 'toolcall_start', contentIndex, partial: msg };
+  }
+
+  // Accumulate JSON arguments on the existing block.
+  const block = msg.content[existingContentIdx];
+  if (block.type === 'tool_use') {
+    const raw = (block as ToolUseWithRaw)._rawInput || '';
+    const newArgs = delta.function?.arguments ?? '';
+    (block as ToolUseWithRaw)._rawInput = raw + newArgs;
+    return {
+      type: 'toolcall_delta',
+      contentIndex: existingContentIdx,
+      delta: newArgs,
+      partial: msg,
+    };
+  }
+  return null;
+}
+
+/** Parse accumulated JSON strings for all tool_use blocks and drop _rawInput. */
+function finalizeToolCalls(msg: AssistantMessage): void {
+  for (const block of msg.content) {
+    if (block.type === 'tool_use') {
+      const raw = (block as ToolUseWithRaw)._rawInput;
+      if (raw !== undefined) {
+        try {
+          block.input = JSON.parse(raw) as Record<string, unknown>;
+        } catch {
+          block.input = {};
+        }
+        delete (block as ToolUseWithRaw)._rawInput;
+      }
+    }
+  }
+}
+
+// =============================================================================
+// Finish reason mapping
+// =============================================================================
+
+/**
+ * Premature-stream-end guard (Plan 439). A clean iterator end without any
+ * `finish_reason` means the connection died before the provider sent its
+ * terminal frame — the accumulated output is truncated, and a half-streamed
+ * tool call would otherwise be finalized with garbage/empty arguments and
+ * executed. Throwing here routes the failure into the retry/replay path
+ * (classifyError matches "stream ended without finish_reason" as
+ * CONNECTION_ERROR). Servers that legitimately never send a finish_reason
+ * opt out via `compat.supportsFinishReason === false`.
+ */
+export function assertFinishReasonReceived(args: {
+  hasFinishReason: boolean;
+  compat?: { supportsFinishReason?: boolean } | null;
+}): void {
+  if (args.hasFinishReason) return;
+  if (args.compat?.supportsFinishReason === false) return;
+  throw new Error('OpenAI-compatible stream ended without finish_reason');
+}
+
+/**
+ * Map an OpenAI Chat Completions `finish_reason` to duya's `StopReason`.
+ *
+ * 'length' maps to 'max_tokens' (NOT the run-level 'max_turns'): it means the
+ * per-request output budget was exhausted, which is exactly the condition the
+ * DuyaAgent truncation guard (plan 418 L2) keys on to fail partially-streamed
+ * tool calls instead of executing truncated arguments.
+ */
+// Exported for tests (same seam rationale as parseAnthropicEvent).
+export function mapFinishReason(reason: string): AssistantMessage['stopReason'] {
+  switch (reason) {
+    case 'stop': return 'end_turn';
+    case 'tool_calls': return 'tool_use';
+    case 'length': return 'max_tokens';
+    case 'content_filter': return 'error';
+    default: return 'completed';
+  }
+}
+
+// =============================================================================
+// Client factory
+// =============================================================================
+
+/**
+ * Build an AIClient backed by the OpenAI Chat Completions API.
+ *
+ * The returned client implements the AIClient interface from types.ts:
+ * - streamChat yields SSEEvent and returns the final AssistantMessage.
+ * - chat performs a non-streaming request and returns { content, usage }.
+ */
+export function createOpenAICompletionsClient(options: AIClientOptions): AIClient {
+  // Local-runtime compatibility shim: LM Studio / Ollama don't require
+  // auth, but the OpenAI Node SDK constructor throws when `apiKey` is
+  // empty AND no `OPENAI_API_KEY` env var is set. Inject a stable
+  // placeholder when the runtime is local; the placeholder is
+  // forwarded as `Authorization: Bearer lm-studio-local` but LM Studio
+  // ignores it. See `local-runtime.ts` for the rationale.
+  const client = new OpenAI({
+    apiKey: localRuntimeApiKeyOrPlaceholder(options.apiKey),
+    baseURL: options.baseURL,
+    defaultHeaders: options.headers,
+  });
+
+  return {
+    async *streamChat(messages, chatOptions) {
+      // 1. Build model from options + capabilities.
+      const model: Model<'openai-chat'> = {
+        id: options.model,
+        name: options.model,
+        api: 'openai-chat',
+        providerId: options.providerId,
+        baseUrl: options.baseURL,
+        reasoning: !!options.modelCapabilities?.openAIThinkingFormat,
+        compat: options.modelCapabilities,
+        input: ['text', 'image'],
+        contextWindow: 128000,
+        maxTokens: 4096,
+      };
+
+      // 2. Transform messages (isSameModel guard — downgrades cross-model
+      //    thinking to plain text and discards signatures).
+      const transformed = transformMessages(messages, model);
+
+      // 3. Convert to OpenAI format.
+      const resolvedCompat = { ...detectOpenAICompatDefaults(model), ...model.compat };
+      const openaiMessages = toOpenAIMessages(transformed, {
+        requiresEmptyReasoningContent:
+          !!resolvedCompat.requiresReasoningContentOnAssistantMessages,
+      });
+
+      // Add system message if provided.
+      if (chatOptions?.systemPrompt) {
+        openaiMessages.unshift({ role: 'system', content: chatOptions.systemPrompt });
+      }
+
+      // 4. Resolve thinking params from model + effort.
+      // reasoningSettings takes precedence over the simple effort field.
+      const effectiveEffort = chatOptions?.reasoningSettings?.intensity
+        ?? chatOptions?.effort;
+      const thinkingParams = resolveOpenAIThinking(model, effectiveEffort);
+
+      // 5. Setup think-tag parser if format requires it.
+      const useThinkTagParser = resolvedCompat.openAIThinkingFormat === 'think-tag-fallback';
+      const thinkParser = useThinkTagParser ? new ThinkTagParser() : null;
+
+      // 6. Build request params.
+      // totalOutputBudget takes precedence. For OpenAI, max_tokens (or
+      // max_completion_tokens for reasoning models) is the total output budget.
+      // reasoningBudget is intentionally not used here: OpenAI's reasoning_effort
+      // controls the reasoning budget implicitly.
+      const maxTokens = chatOptions?.totalOutputBudget
+        ?? chatOptions?.maxOutputTokens
+        ?? chatOptions?.maxTokens
+        ?? 4096;
+      const params: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
+        model: options.model,
+        messages: openaiMessages,
+        max_tokens: maxTokens,
+        temperature: chatOptions?.temperature,
+        stream: true,
+        stream_options: { include_usage: true },
+        // Plan 523 P4: `toolChoice: 'none'` omits the tools field so the
+        // summarizer model cannot invoke tools (the DSML/tool-call leak guard).
+        ...(chatOptions?.tools?.length && chatOptions?.toolChoice !== 'none'
+          ? {
+              tools: sortToolsByName(chatOptions.tools).map(t => ({
+                type: 'function' as const,
+                function: {
+                  name: t.name,
+                  description: t.description,
+                  parameters: t.input_schema,
+                },
+              })),
+            }
+          : {}),
+        ...thinkingParams,
+      };
+
+      // 7. Initialize assistant message accumulator.
+      const assistantMsg: AssistantMessage = {
+        role: 'assistant',
+        content: [],
+        api: 'openai-chat',
+        providerId: options.providerId,
+        model: options.model,
+        usage: { input_tokens: 0, output_tokens: 0 },
+        stopReason: 'completed',
+        timestamp: Date.now(),
+      };
+
+      // Map OpenAI tool_call index → contentIndex in assistantMsg.content.
+      const toolCallIndexMap = new Map<number, number>();
+
+      // 7.5. Emit parameter diagnostics before the stream starts.
+      const diagnostics = collectDiagnostics(model, {
+        effort: chatOptions?.effort,
+        temperature: chatOptions?.temperature,
+        maxOutputTokens: chatOptions?.maxOutputTokens,
+        reasoningBudget: chatOptions?.reasoningBudget,
+        totalOutputBudget: chatOptions?.totalOutputBudget,
+      });
+      for (const diag of diagnostics) {
+        yield {
+          type: 'system',
+          data: diag.message,
+          metadata: { diagnostic: diag },
+        };
+      }
+
+      // 8. Open the stream. Cast to AsyncIterable to satisfy TS — the SDK
+      //    return type depends on the `stream` literal, which we set above.
+      const stream = await client.chat.completions.create(
+        params,
+        chatOptions?.signal ? { signal: chatOptions.signal } : undefined,
+      ) as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>;
+
+      // Aggregators (e.g. OpenRouter) include a top-level `provider.name` on
+      // chunks; captured across the whole stream and folded into usage below.
+      let upstreamProvider: string | undefined;
+
+      // Plan 439: set once any choice carries a terminal `finish_reason`.
+      let hasFinishReason = false;
+
+      // 9. Drain chunks. withIdleTimeout guards against stalled streams
+      //    from OpenAI-compatible endpoints hanging the agent forever;
+      //    the TimeoutError propagates to DuyaAgent's retry logic.
+      for await (const chunk of withIdleTimeout(stream)) {
+        // 9.0. Capture upstream provider metadata (OpenRouter et al.).
+        const chunkProvider = (chunk as unknown as OpenRouterProviderMeta).provider?.name;
+        if (chunkProvider) {
+          upstreamProvider = chunkProvider;
+        }
+
+        const choice = chunk.choices?.[0];
+
+        // Some chunks only carry usage (no choices) — capture and continue.
+        if (!choice) {
+          if (chunk.usage) {
+            // normalizeUsage is the canonical extractor (Anthropic TTLs,
+            // OpenAI prompt_tokens_details, reasoning). input_tokens is
+            // overridden with the raw prompt_tokens to match the downstream
+            // contract: agent-process-entry and useContextUsage.normalizeInputTokens
+            // treat input_tokens as cache-inclusive and re-derive the
+            // non-cached split themselves.
+            const n = normalizeUsage(chunk.usage as UsageLike);
+            assistantMsg.usage = {
+              input_tokens: chunk.usage.prompt_tokens ?? 0,
+              output_tokens: n.output,
+              cache_hit_tokens: n.cacheRead,
+              cache_creation_tokens: n.cacheWrite,
+              total_tokens: n.total,
+            };
+          }
+          continue;
+        }
+
+        const delta = choice.delta;
+        if (delta) {
+          // 9a. reasoning_content / reasoning / reasoning_text → thinking_delta.
+          //     Use string type guard to avoid SDK type errors on providers
+          //     that send non-string reasoning fields.
+          const reasoningFields = ['reasoning_content', 'reasoning', 'reasoning_text'];
+          for (const field of reasoningFields) {
+            const reasoningText = (delta as unknown as Record<string, unknown>)[field];
+            if (typeof reasoningText === 'string' && reasoningText.length > 0) {
+              const internalEvent = appendThinking(assistantMsg, reasoningText, field);
+              const sse = emitSSE(internalEvent);
+              if (sse) yield sse;
+            }
+          }
+
+          // 9b. content field → text_delta (or think-tag parsing).
+          if (typeof delta.content === 'string' && delta.content.length > 0) {
+            if (thinkParser) {
+              const { thinking, text } = thinkParser.feed(delta.content);
+              if (thinking) {
+                const internalEvent = appendThinking(assistantMsg, thinking, 'think-tag');
+                const sse = emitSSE(internalEvent);
+                if (sse) yield sse;
+              }
+              if (text) {
+                const internalEvent = appendText(assistantMsg, text);
+                const sse = emitSSE(internalEvent);
+                if (sse) yield sse;
+              }
+            } else {
+              const internalEvent = appendText(assistantMsg, delta.content);
+              const sse = emitSSE(internalEvent);
+              if (sse) yield sse;
+            }
+          }
+
+          // 9b'. refusal → text_delta (plan 440 P0). A refusing model
+          //     streams its reply through delta.refusal with delta.content
+          //     null — without this branch the assistant message would be
+          //     silently empty.
+          const refusalText = (delta as unknown as Record<string, unknown>).refusal;
+          if (typeof refusalText === 'string' && refusalText.length > 0) {
+            const internalEvent = appendText(assistantMsg, refusalText);
+            const sse = emitSSE(internalEvent);
+            if (sse) yield sse;
+          }
+
+          // 9b''. Annotations (search-preview citations etc.) attach to the
+          //     text block they annotate — capture-only, rendering is a
+          //     frontend concern (plan 440 phase 2).
+          const deltaAnnotations = (delta as unknown as Record<string, unknown>).annotations;
+          if (Array.isArray(deltaAnnotations) && deltaAnnotations.length > 0) {
+            const lastBlock = assistantMsg.content[assistantMsg.content.length - 1];
+            if (lastBlock && lastBlock.type === 'text') {
+              lastBlock.annotations = [...(lastBlock.annotations ?? []), ...deltaAnnotations];
+            }
+          }
+
+          // 9c. tool_calls → toolcall_start/delta.
+          if (delta.tool_calls) {
+            for (const toolCallDelta of delta.tool_calls) {
+              const internalEvent = appendToolCall(
+                assistantMsg,
+                toolCallDelta as OpenAIToolCallDelta,
+                toolCallIndexMap,
+              );
+              if (internalEvent) {
+                const sse = emitSSE(internalEvent);
+                if (sse) yield sse;
+              }
+            }
+          }
+        }
+
+        // 9d. Track usage if present (final chunk carries it).
+        if (chunk.usage) {
+          // normalizeUsage is the canonical extractor (Anthropic TTLs,
+          // OpenAI prompt_tokens_details, reasoning). input_tokens is
+          // overridden with the raw prompt_tokens to match the downstream
+          // contract: agent-process-entry and useContextUsage.normalizeInputTokens
+          // treat input_tokens as cache-inclusive and re-derive the
+          // non-cached split themselves.
+          const n = normalizeUsage(chunk.usage as UsageLike);
+          assistantMsg.usage = {
+            input_tokens: chunk.usage.prompt_tokens ?? 0,
+            output_tokens: n.output,
+            cache_hit_tokens: n.cacheRead,
+            cache_creation_tokens: n.cacheWrite,
+            total_tokens: n.total,
+          };
+        }
+
+        // 9d'. Observability metadata — captured verbatim when present,
+        //      never required (plan 440 phase 2).
+        const serviceTier = (chunk as unknown as Record<string, unknown>).service_tier;
+        if (typeof serviceTier === 'string' && serviceTier.length > 0) {
+          assistantMsg.providerMeta = { ...assistantMsg.providerMeta, serviceTier };
+        }
+        if (choice.logprobs) {
+          assistantMsg.providerMeta = { ...assistantMsg.providerMeta, logprobs: choice.logprobs };
+        }
+
+        // 9e. Map finish reason.
+        if (choice.finish_reason) {
+          hasFinishReason = true;
+          assistantMsg.stopReason = mapFinishReason(choice.finish_reason);
+        }
+      }
+
+      // 9f. Premature-end guard: a clean iterator end with no finish_reason
+      //     means the provider connection died mid-generation. Throw so the
+      //     truncated output is retried/replayed instead of executed.
+      assertFinishReasonReceived({ hasFinishReason, compat: options.modelCapabilities });
+
+      // 10. Finalize tool calls — parse accumulated JSON strings.
+      finalizeToolCalls(assistantMsg);
+
+      // 10.5 Emit `toolcall_end` for every tool_use block.
+      //
+      // Chat Completions has no per-tool-call terminal frame — the
+      // choice-level `finish_reason` is the only terminal signal, and it
+      // arrives on the choice, not on a tool call. emitSSE maps
+      // `toolcall_end` to the `tool_use` SSE event, which is the ONLY event
+      // DuyaAgent's loop consumes to run tools (executor.addTool +
+      // needsFollowUp). Without this, tool use on every openai-chat endpoint
+      // silently no-ops: the UI flashes `tool_use_started`, but no tool ever
+      // executes and the run finalizes as 'completed' right after the first
+      // turn. The anthropic-messages and openai-responses clients both emit
+      // toolcall_end; this client was the only one missing it.
+      //
+      // Truncated blocks (finish_reason 'length') are emitted too, so the
+      // plan-418 max_tokens truncation guard in DuyaAgent sees them in
+      // assistantContent and fails them instead of executing garbage.
+      for (let i = 0; i < assistantMsg.content.length; i++) {
+        const block = assistantMsg.content[i];
+        if (block.type === 'tool_use') {
+          const sse = emitSSE({
+            type: 'toolcall_end',
+            contentIndex: i,
+            toolCall: block,
+            partial: assistantMsg,
+          });
+          if (sse) yield sse;
+        }
+      }
+
+      // 11. Flush think-tag parser if active (emit any remaining buffer).
+      if (thinkParser) {
+        const { thinking, text } = thinkParser.flush();
+        if (thinking) {
+          const internalEvent = appendThinking(assistantMsg, thinking, 'think-tag');
+          const sse = emitSSE(internalEvent);
+          if (sse) yield sse;
+        }
+        if (text) {
+          const internalEvent = appendText(assistantMsg, text);
+          const sse = emitSSE(internalEvent);
+          if (sse) yield sse;
+        }
+      }
+
+      // 12. Yield final result event with token usage (if captured).
+      if (assistantMsg.usage) {
+        if (upstreamProvider) {
+          assistantMsg.usage.upstreamProvider = upstreamProvider;
+        }
+        yield { type: 'result', data: assistantMsg.usage };
+      }
+
+      // 13. Yield `done` event so DuyaAgent's turn-finalization logic
+      // (which depends on the `done` SSE event) is triggered. Without
+      // this, the agent loop never pushes the assistant message, never
+      // executes tools, and hangs indefinitely.
+      yield { type: 'done', reason: assistantMsg.stopReason || 'completed' };
+
+      return assistantMsg;
+    },
+
+    async chat(messages, chatOptions) {
+      const openaiMessages = toOpenAIMessages(messages);
+      if (chatOptions?.systemPrompt) {
+        openaiMessages.unshift({ role: 'system', content: chatOptions.systemPrompt });
+      }
+      const response = await client.chat.completions.create({
+        model: options.model,
+        messages: openaiMessages,
+        max_tokens: chatOptions?.maxTokens ?? 1024,
+        temperature: chatOptions?.temperature ?? 1,
+      });
+      const providerName = (response as unknown as OpenRouterProviderMeta).provider?.name;
+      return {
+        // Plan 440 P0: a refusing model returns its reply in message.refusal
+        // with content null — surface it instead of an empty string.
+        content: response.choices[0]?.message?.refusal
+          || response.choices[0]?.message?.content
+          || '',
+        usage: response.usage ? {
+          ...mapOpenAIUsage(
+            response.usage.prompt_tokens,
+            response.usage.completion_tokens,
+            cachedTokensFrom(response.usage),
+          ),
+          ...(providerName ? { upstreamProvider: providerName } : {}),
+        } : undefined,
+      };
+    },
+
+    async embed(texts) {
+      const response = await client.embeddings.create({
+        model: options.model,
+        input: texts,
+      });
+      return response.data.map((item) => item.embedding);
+    },
+  };
+}

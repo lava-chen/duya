@@ -1,0 +1,798 @@
+// `app` is only defined inside the Electron main process. In RUN_AS_NODE
+// child processes (e.g. agent-server), the CLI server and vitest,
+// `require('electron')` either resolves to a path string (dev, where a
+// local node_modules/electron exists) or throws MODULE_NOT_FOUND (packaged:
+// app.asar ships no electron module). Resolve it lazily inside a try/catch so
+// the module-level `getLogger()` calls in boot-config.ts / connection.ts don't
+// crash the packaged agent-server before a logger exists.
+let app: import('electron').App | undefined
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  app = (require('electron') as { app?: import('electron').App }).app
+} catch {
+  app = undefined
+}
+import * as path from 'path'
+import * as fs from 'fs'
+import * as os from 'os'
+import { EventEmitter } from 'events'
+
+// `app` is undefined when this module is loaded outside of Electron
+// (e.g. in vitest, the CLI server, or the agent-server child process
+// spawned with ELECTRON_RUN_AS_NODE=1). Use safe accessors so the
+// module-level `getLogger()` calls in boot-config.ts / connection.ts
+// don't crash with "Cannot read properties of undefined (reading
+// 'isPackaged')" before the test gets a chance to inject its own db.
+function safeIsPackaged(): boolean {
+  try {
+    return Boolean((app as { isPackaged?: unknown } | undefined | null)?.isPackaged)
+  } catch {
+    return false
+  }
+}
+
+// Exported for child-process diagnostics (worker-manager passes the dir to
+// workers so component traces can write dedicated files, pi-style).
+export function safeUserDataPath(): string {
+  try {
+    if (app && typeof app.getPath === 'function') {
+      return app.getPath('userData')
+    }
+  } catch {
+    // fall through to default
+  }
+  return process.env.DUYA_CLI_USER_DATA_DIR ?? path.join(os.tmpdir(), 'duya')
+}
+
+/**
+ * Professional Logger - Advanced Application Logging System
+ *
+ * Features:
+ * - Structured JSON logging with context support
+ * - Async stream-based writing for non-blocking I/O
+ * - Daily log rotation with configurable retention (default: 7 days)
+ * - Log sampling to prevent flooding
+ * - Trace ID support for distributed tracing
+ * - Multiple output formats (text, json)
+ * - Log level filtering
+ * - Export logs for bug reporting
+ */
+
+export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'FATAL'
+
+export interface LogContext {
+  [key: string]: unknown
+}
+
+// =============================================================================
+// Standard Component Names - Use these constants for consistent logging
+// =============================================================================
+
+export const LogComponent = {
+  // Core system
+  Main: 'Main',
+  Logger: 'Logger',
+  ConfigManager: 'ConfigManager',
+  ChannelManager: 'ChannelManager',
+  PortManager: 'PortManager',
+  SessionManager: 'SessionManager',
+  PerformanceMonitor: 'PerformanceMonitor',
+
+  // Database
+  DB: 'DB',
+  DBMigration: 'DBMigration',
+
+  // Agent system
+  AgentProcessPool: 'AgentProcessPool',
+  AgentProcess: 'AgentProcess',
+  AgentCommunicator: 'AgentCommunicator',
+
+  // Gateway & network
+  Gateway: 'Gateway',
+  GatewayCommunicator: 'GatewayCommunicator',
+  NetHandlers: 'NetHandlers',
+  LinkPreview: 'LinkPreview',
+  BrowserDaemon: 'BrowserDaemon',
+
+  // Automation
+  Automation: 'Automation',
+  Conductor: 'Conductor',
+  Orb: 'Orb',
+  ComputerUseDaemon: 'ComputerUseDaemon',
+  ComputerUse: 'ComputerUse',
+  ComputerUseAudit: 'ComputerUseAudit',
+
+  // Boot & settings
+  BootConfig: 'BootConfig',
+  Settings: 'Settings',
+
+  // Preload (renderer side)
+  Preload: 'Preload',
+
+  // Generic
+  Updater: 'Updater',
+  Notification: 'Notification',
+  Skills: 'Skills',
+  Files: 'Files',
+  DocumentParser: 'DocumentParser',
+  Voice: 'Voice',
+
+  // Token accounting — emits at INFO so we can trace context growth
+  // and cache accounting without grepping the file. Use debug to disable.
+  TokenCalc: 'TokenCalc',
+} as const
+
+export type LogComponentName = (typeof LogComponent)[keyof typeof LogComponent]
+
+export interface LogEntry {
+  timestamp: string
+  level: LogLevel
+  message: string
+  component?: string
+  traceId?: string
+  context?: LogContext
+  error?: {
+    message: string
+    stack?: string
+    code?: string
+  }
+  duration?: number
+}
+
+export interface LoggerConfig {
+  level: LogLevel
+  format: 'text' | 'json'
+  retentionDays: number
+  maxFileSizeMB: number
+  sampleRate: number
+  async: boolean
+  console: boolean
+  includeStackTrace: boolean
+}
+
+export interface LogStats {
+  totalLogs: number
+  errorCount: number
+  warnCount: number
+  lastError?: LogEntry
+  startTime: Date
+}
+
+const LOG_LEVEL_PRIORITY: Record<LogLevel, number> = {
+  DEBUG: 0,
+  INFO: 1,
+  WARN: 2,
+  ERROR: 3,
+  FATAL: 4,
+}
+
+class Logger extends EventEmitter {
+  private logDir: string
+  private logPath: string
+  private config: LoggerConfig
+  private writeStream: fs.WriteStream | null = null
+  private isDev: boolean
+  private stats: LogStats
+  private logQueue: string[] = []
+  private isWriting = false
+  private flushInterval: NodeJS.Timeout | null = null
+  private currentTraceId: string | null = null
+  private currentDate: string = ''
+  private currentFileSerial: number = 0
+  private readonly MAX_QUEUE_SIZE = 5000
+
+  constructor(config: Partial<LoggerConfig> = {}) {
+    super()
+    this.isDev = !safeIsPackaged()
+    this.logDir = path.join(safeUserDataPath(), 'logs')
+    this.logPath = path.join(this.logDir, 'app.log')
+
+    this.config = {
+      level: (process.env.LOG_LEVEL as LogLevel) || 'INFO',
+      format: (process.env.LOG_FORMAT as 'text' | 'json') || 'text',
+      retentionDays: 7,
+      maxFileSizeMB: 50,
+      sampleRate: 1.0,
+      async: true,
+      console: this.isDev,
+      includeStackTrace: true,
+      ...config,
+    }
+
+    this.stats = {
+      totalLogs: 0,
+      errorCount: 0,
+      warnCount: 0,
+      startTime: new Date(),
+    }
+
+    this.ensureLogDir()
+    this.cleanupOldLogs()
+    this.rotateIfNeeded()
+    this.initWriteStream()
+    this.startFlushInterval()
+
+    process.on('exit', () => this.cleanup())
+    process.on('SIGINT', () => this.cleanup())
+    process.on('SIGTERM', () => this.cleanup())
+  }
+
+  private ensureLogDir(): void {
+    if (!fs.existsSync(this.logDir)) {
+      fs.mkdirSync(this.logDir, { recursive: true })
+    }
+  }
+
+  private initWriteStream(): void {
+    if (!this.config.async) return
+
+    try {
+      this.rotateIfNeeded()
+      this.writeStream = fs.createWriteStream(this.logPath, {
+        flags: 'a',
+        encoding: 'utf-8',
+        autoClose: true,
+      })
+
+      this.writeStream.on('error', (err) => {
+        this.emit('error', err)
+      })
+    } catch (error) {
+      // Fallback: cannot use logger here since it's being initialized
+      // eslint-disable-next-line no-console
+      console.error('[Logger] Failed to create write stream:', error)
+    }
+  }
+
+  private startFlushInterval(): void {
+    if (this.config.async) {
+      this.flushInterval = setInterval(() => {
+        this.flush()
+      }, 1000) // Flush every second
+    }
+  }
+
+  private getTimestamp(): string {
+    return new Date().toISOString()
+  }
+
+  private shouldLog(level: LogLevel): boolean {
+    return LOG_LEVEL_PRIORITY[level] >= LOG_LEVEL_PRIORITY[this.config.level]
+  }
+
+  private shouldSample(): boolean {
+    return Math.random() < this.config.sampleRate
+  }
+
+  private formatEntry(entry: LogEntry): string {
+    if (this.config.format === 'json') {
+      return JSON.stringify(entry) + '\n'
+    }
+
+    // Text format
+    let line = `[${entry.timestamp}] [${entry.level}]`
+
+    if (entry.component) {
+      line += ` [${entry.component}]`
+    }
+
+    if (entry.traceId) {
+      line += ` [${entry.traceId}]`
+    }
+
+    line += ` ${entry.message}`
+
+    if (entry.duration !== undefined) {
+      line += ` (${entry.duration}ms)`
+    }
+
+    if (entry.context && Object.keys(entry.context).length > 0) {
+      try {
+        line += ` ${JSON.stringify(entry.context)}`
+      } catch {
+        line += ' [Context serialization failed]'
+      }
+    }
+
+    if (entry.error) {
+      line += `\n  Error: ${entry.error.message}`
+      if (entry.error.stack && this.config.includeStackTrace) {
+        line += `\n  Stack: ${entry.error.stack}`
+      }
+      if (entry.error.code) {
+        line += `\n  Code: ${entry.error.code}`
+      }
+    }
+
+    return line + '\n'
+  }
+
+  private createLogEntry(
+    level: LogLevel,
+    message: string,
+    options: {
+      component?: string
+      context?: LogContext
+      error?: Error
+      duration?: number
+    } = {}
+  ): LogEntry {
+    const entry: LogEntry = {
+      timestamp: this.getTimestamp(),
+      level,
+      message,
+      component: options.component,
+      traceId: this.currentTraceId || undefined,
+      context: options.context,
+      duration: options.duration,
+    }
+
+    if (options.error) {
+      entry.error = {
+        message: options.error.message,
+        stack: options.error.stack,
+        code: (options.error as { code?: string }).code,
+      }
+    }
+
+    return entry
+  }
+
+  private write(entry: LogEntry): void {
+    this.stats.totalLogs++
+    if (entry.level === 'ERROR' || entry.level === 'FATAL') {
+      this.stats.errorCount++
+      this.stats.lastError = entry
+    } else if (entry.level === 'WARN') {
+      this.stats.warnCount++
+    }
+
+    const formatted = this.formatEntry(entry)
+
+    if (this.config.console) {
+      const consoleMethod =
+        entry.level === 'ERROR' || entry.level === 'FATAL'
+          ? console.error
+          : entry.level === 'WARN'
+            ? console.warn
+            : entry.level === 'DEBUG'
+              ? console.debug
+              : console.log
+      consoleMethod(formatted.trim())
+    }
+
+    if (this.config.async && this.writeStream) {
+      this.rotateIfNeeded()
+      if (this.logQueue.length >= this.MAX_QUEUE_SIZE) {
+        this.logQueue.shift()
+      }
+      this.logQueue.push(formatted)
+    } else {
+      try {
+        this.rotateIfNeeded()
+        fs.appendFileSync(this.logPath, formatted, 'utf-8')
+      } catch {
+        // Fallback if file write fails
+      }
+    }
+
+    this.emit('log', entry)
+  }
+
+  private flush(): void {
+    if (this.isWriting || this.logQueue.length === 0 || !this.writeStream) {
+      return
+    }
+
+    this.isWriting = true
+    const batch = this.logQueue.splice(0, 100).join('')
+
+    this.writeStream.write(batch, (err) => {
+      this.isWriting = false
+      if (err) {
+        // Put failed logs back to queue for retry
+        this.logQueue.unshift(batch)
+      }
+    })
+  }
+
+  private getDateString(): string {
+    return new Date().toISOString().split('T')[0]
+  }
+
+  private rotateIfNeeded(): void {
+    try {
+      const today = this.getDateString()
+      const dateChanged = today !== this.currentDate;
+
+      let sizeExceeded = false;
+      if (!dateChanged) {
+        try {
+          if (fs.existsSync(this.logPath)) {
+            const stats = fs.statSync(this.logPath);
+            if (stats.size > this.config.maxFileSizeMB * 1024 * 1024) {
+              sizeExceeded = true;
+            }
+          }
+        } catch {
+          // best-effort
+        }
+      }
+
+      if (!dateChanged && !sizeExceeded) {
+        return;
+      }
+
+      // Close current stream
+      if (this.writeStream) {
+        this.writeStream.end()
+        this.writeStream = null
+      }
+
+      // Archive current log if it exists and has content
+      if (this.currentDate && fs.existsSync(this.logPath)) {
+        const stats = fs.statSync(this.logPath)
+        if (stats.size > 0) {
+          const suffix = sizeExceeded
+            ? `${this.currentDate}.${++this.currentFileSerial}`
+            : this.currentDate;
+          const backupPath = path.join(this.logDir, `app.log.${suffix}`)
+          fs.renameSync(this.logPath, backupPath)
+        } else {
+          fs.unlinkSync(this.logPath)
+        }
+      }
+
+      if (dateChanged) {
+        this.currentFileSerial = 0;
+      }
+      this.currentDate = today
+      this.cleanupOldLogs()
+    } catch {
+      // Silently fail on rotation error
+    }
+  }
+
+  private cleanupOldLogs(): void {
+    try {
+      const cutoff = new Date()
+      cutoff.setDate(cutoff.getDate() - this.config.retentionDays)
+      const cutoffStr = cutoff.toISOString().split('T')[0]
+
+      const files = fs.readdirSync(this.logDir)
+      for (const file of files) {
+        if (file.startsWith('app.log.') && file !== 'app.log') {
+          const datePart = file.slice(8) // Remove 'app.log.' prefix
+          if (datePart < cutoffStr) {
+            fs.unlinkSync(path.join(this.logDir, file))
+          }
+        }
+      }
+    } catch {
+      // Silently fail on cleanup error
+    }
+  }
+
+  private cleanup(): void {
+    if (this.flushInterval) {
+      clearInterval(this.flushInterval)
+      this.flushInterval = null
+    }
+
+    this.flush()
+
+    if (this.writeStream) {
+      this.writeStream.end()
+      this.writeStream = null
+    }
+  }
+
+  // Trace ID management
+  setTraceId(traceId: string | null): void {
+    this.currentTraceId = traceId
+  }
+
+  withTrace<T>(traceId: string, fn: () => T): T {
+    const prevTraceId = this.currentTraceId
+    this.currentTraceId = traceId
+    try {
+      return fn()
+    } finally {
+      this.currentTraceId = prevTraceId
+    }
+  }
+
+  async withTraceAsync<T>(traceId: string, fn: () => Promise<T>): Promise<T> {
+    const prevTraceId = this.currentTraceId
+    this.currentTraceId = traceId
+    try {
+      return await fn()
+    } finally {
+      this.currentTraceId = prevTraceId
+    }
+  }
+
+  // Public logging API
+  debug(message: string, context?: LogContext, component?: string): void {
+    if (!this.shouldLog('DEBUG') || !this.shouldSample()) return
+    this.write(this.createLogEntry('DEBUG', message, { component, context }))
+  }
+
+  info(message: string, context?: LogContext, component?: string): void {
+    if (!this.shouldLog('INFO') || !this.shouldSample()) return
+    this.write(this.createLogEntry('INFO', message, { component, context }))
+  }
+
+  warn(message: string, context?: LogContext, component?: string): void {
+    if (!this.shouldLog('WARN') || !this.shouldSample()) return
+    this.write(this.createLogEntry('WARN', message, { component, context }))
+  }
+
+  error(message: string, error?: Error, context?: LogContext, component?: string): void {
+    if (!this.shouldLog('ERROR')) return
+    this.write(this.createLogEntry('ERROR', message, { component, context, error }))
+  }
+
+  fatal(message: string, error?: Error, context?: LogContext, component?: string): void {
+    if (!this.shouldLog('FATAL')) return
+    this.write(this.createLogEntry('FATAL', message, { component, context, error }))
+  }
+
+  // Performance tracking
+  time(label: string, component?: string): () => void {
+    const start = Date.now()
+    return () => {
+      const duration = Date.now() - start
+      this.debug(`${label} completed`, { duration }, component)
+    }
+  }
+
+  async timeAsync<T>(label: string, fn: () => Promise<T>, component?: string): Promise<T> {
+    const start = Date.now()
+    try {
+      const result = await fn()
+      const duration = Date.now() - start
+      this.debug(`${label} completed`, { duration }, component)
+      return result
+    } catch (error) {
+      const duration = Date.now() - start
+      this.error(`${label} failed`, error as Error, { duration }, component)
+      throw error
+    }
+  }
+
+  /**
+   * Token-calculation trace. Emits at INFO so the operator can see exactly
+   * which inputs fed each estimator output and how the value grew between
+   * calls. Tag every token-counting site with a stable `label` so multiple
+   * log runs can be diffed (e.g. `'computeContextEstimate'`).
+   */
+  tokenTrace(
+    label: string,
+    payload: {
+      sessionId?: string
+      /** Anchor index / message id this estimate attached to, when applicable. */
+      anchor?: string | number | null
+      /** Raw usage block from the provider (input / output / cache / total). */
+      usage?: Record<string, number | undefined> | null
+      /** Result returned by the estimator (used / anchor / trailing). */
+      result?: Record<string, number | null | undefined>
+      /** Trailing messages that were char-estimated beyond the anchor. */
+      trailing?: number
+      /** Free-form extra fields (model, model window, total budget). */
+      [k: string]: unknown
+    },
+  ): void {
+    if (!this.shouldLog('INFO') || !this.shouldSample()) return
+    const ctx: LogContext = {}
+    for (const [k, v] of Object.entries(payload)) {
+      if (v === undefined) continue
+      ctx[k] = v as unknown
+    }
+    this.write(this.createLogEntry('INFO', `[token:${label}]`, { component: LogComponent.TokenCalc, context: ctx }))
+  }
+
+  // Configuration
+  updateConfig(config: Partial<LoggerConfig>): void {
+    this.config = { ...this.config, ...config }
+    this.info('Logger configuration updated', { config: this.config }, 'Logger')
+  }
+
+  getConfig(): LoggerConfig {
+    return { ...this.config }
+  }
+
+  // Stats
+  getStats(): LogStats {
+    return { ...this.stats }
+  }
+
+  // Export logs
+  exportLogs(format: 'text' | 'json' = 'text'): string {
+    try {
+      this.flush()
+
+      let content = ''
+      const logs: LogEntry[] = []
+
+      // Get all date-based backup files
+      const files = fs.readdirSync(this.logDir)
+        .filter(f => f.startsWith('app.log.') && f !== 'app.log')
+        .sort()
+
+      // Read backup files in order (oldest first)
+      for (const file of files) {
+        const backupPath = path.join(this.logDir, file)
+        const data = fs.readFileSync(backupPath, 'utf-8')
+        if (format === 'json') {
+          data.split('\n').forEach(line => {
+            if (line.trim()) {
+              try {
+                logs.push(JSON.parse(line))
+              } catch {
+                // Skip invalid lines
+              }
+            }
+          })
+        } else {
+          content += data + '\n'
+        }
+      }
+
+      // Read current log
+      if (fs.existsSync(this.logPath)) {
+        const data = fs.readFileSync(this.logPath, 'utf-8')
+        if (format === 'json') {
+          data.split('\n').forEach(line => {
+            if (line.trim()) {
+              try {
+                logs.push(JSON.parse(line))
+              } catch {
+                // Skip invalid lines
+              }
+            }
+          })
+          return JSON.stringify(logs, null, 2)
+        } else {
+          content += data
+        }
+      }
+
+      return content || 'No logs available'
+    } catch (error) {
+      return `Failed to export logs: ${error}`
+    }
+  }
+
+  exportLogsToFile(targetPath: string, format: 'text' | 'json' = 'text'): boolean {
+    try {
+      const content = this.exportLogs(format)
+      fs.writeFileSync(targetPath, content)
+      return true
+    } catch (error) {
+      this.error('Failed to export logs to file', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Logger)
+      return false
+    }
+  }
+
+  // Get log file info
+  getLogPath(): string {
+    return this.logPath
+  }
+
+  getLogDir(): string {
+    return this.logDir
+  }
+
+  getLogSize(): number {
+    try {
+      if (!fs.existsSync(this.logPath)) {
+        return 0
+      }
+      return fs.statSync(this.logPath).size
+    } catch {
+      return 0
+    }
+  }
+
+  getLogSizeFormatted(): string {
+    const size = this.getLogSize()
+    if (size < 1024) {
+      return `${size} B`
+    } else if (size < 1024 * 1024) {
+      return `${(size / 1024).toFixed(2)} KB`
+    } else {
+      return `${(size / (1024 * 1024)).toFixed(2)} MB`
+    }
+  }
+
+  // Clear logs
+  clearLogs(): boolean {
+    try {
+      this.flush()
+
+      if (this.writeStream) {
+        this.writeStream.end()
+        this.writeStream = null
+      }
+
+      // Delete current log
+      if (fs.existsSync(this.logPath)) {
+        fs.unlinkSync(this.logPath)
+      }
+
+      // Delete all backup files
+      const files = fs.readdirSync(this.logDir)
+      for (const file of files) {
+        if (file.startsWith('app.log.') && file !== 'app.log') {
+          fs.unlinkSync(path.join(this.logDir, file))
+        }
+      }
+
+      this.stats = {
+        totalLogs: 0,
+        errorCount: 0,
+        warnCount: 0,
+        startTime: new Date(),
+      }
+
+      this.initWriteStream()
+
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  // Search logs
+  searchLogs(query: string, level?: LogLevel): LogEntry[] {
+    try {
+      const logs: LogEntry[] = []
+      const content = this.exportLogs('json')
+      const allLogs: LogEntry[] = JSON.parse(content)
+
+      return allLogs.filter(entry => {
+        const matchesQuery =
+          entry.message.toLowerCase().includes(query.toLowerCase()) ||
+          entry.component?.toLowerCase().includes(query.toLowerCase()) ||
+          entry.traceId?.toLowerCase().includes(query.toLowerCase())
+
+        const matchesLevel = level ? entry.level === level : true
+
+        return matchesQuery && matchesLevel
+      })
+    } catch {
+      return []
+    }
+  }
+}
+
+// Singleton instance
+let loggerInstance: Logger | null = null
+
+export function initLogger(config?: Partial<LoggerConfig>): Logger {
+  if (!loggerInstance) {
+    loggerInstance = new Logger(config)
+  } else if (config?.level && config.level !== loggerInstance.getConfig().level) {
+    // Allow later callers (e.g. provider-usage) to raise the verbosity
+    // after bootstrap pinned it to WARN. Without this the per-module
+    // override is silently ignored and "quota returns nothing" is
+    // invisible to operators.
+    loggerInstance.updateConfig({ level: config.level })
+  }
+  return loggerInstance
+}
+
+export function getLogger(): Logger {
+  if (!loggerInstance) {
+    return initLogger()
+  }
+  return loggerInstance
+}
+
+// Utility to generate trace IDs
+export function generateTraceId(): string {
+  return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+}
+
+export default Logger

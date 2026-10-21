@@ -1,0 +1,302 @@
+/**
+ * apps/desktop/src/main/cli/handlers/extra2.ts
+ *
+ * Phase 4.4: cron enable/disable/logs + gateway reload-secrets + gateway rpc.
+ *
+ *   POST /v1/crons/:id/enable      — set status = 'enabled'
+ *   POST /v1/crons/:id/disable     — set status = 'disabled'
+ *   GET  /v1/crons/:id/logs        — return the last N run records
+ *   POST /v1/gateway/reload-secrets — re-resolve secret refs (stub)
+ *   POST /v1/gateway/rpc            — proxy to the gateway subprocess (stub)
+ *
+ * The gateway rpc / reload-secrets paths in Phase 4.4 are stubs that
+ * record the audit event and return ok:false with a clear reason
+ * pointing at Plan 200 R4. They exist so the CLI surface is stable
+ * while the underlying gateway work lands.
+ */
+
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { getAutomationScheduler } from '../../automation/Scheduler.js';
+import { getDesktopHostLocalSessionApi } from '../desktop-host-api';
+import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
+
+interface ElectronApp {
+  getPath(name: 'userData'): string;
+}
+
+/**
+ * Electron is OPTIONAL in this layer: the same handler graph has to load in a
+ * process that has no Electron runtime
+ * (`01-headless-control-plane.md` §2.1). A module-scope
+ * `import { app } from 'electron'` is evaluated when the module is and throws
+ * THERE, taking the whole graph with it, so `app` is resolved through a
+ * guarded require and reported as absent instead.
+ */
+function electronApp(): ElectronApp | undefined {
+  try {
+    const { app } = require('electron') as { app?: ElectronApp };
+    return app;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * `DUYA_CLI_USER_DATA_DIR` is the existing headless entry point
+ * (`handlers/plugins.ts:170`) and wins whenever it is set. Without Electron,
+ * `~/.duya` is the same directory the sessions / attachments paths already
+ * use; returning `''` instead would resolve the audit / config paths below
+ * against the process cwd, which is not a directory anyone chose.
+ */
+function getUserDataDir(): string {
+  const envOverride = process.env.DUYA_CLI_USER_DATA_DIR;
+  if (envOverride && envOverride.trim().length > 0) return envOverride;
+  const app = electronApp();
+  if (app && typeof app.getPath === 'function') return app.getPath('userData');
+  return join(homedir(), '.duya');
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  const text = JSON.stringify(body);
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(text),
+  });
+  res.end(text);
+}
+
+function readInvokedByHeader(
+  req: IncomingMessage,
+  correlationId: string | undefined,
+): AuditEvent['invokedBy'] {
+  const raw = req.headers['x-duya-invoked-by'];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== 'string') return 'cli';
+  if (value === 'agent-tool') {
+    const cid = correlationId ?? req.headers['x-correlation-id'];
+    if (typeof cid === 'string' && cid.trim().length > 0) {
+      return `agent-tool:${cid}`;
+    }
+    return 'agent-tool';
+  }
+  return 'cli';
+}
+
+async function recordAudit(
+  req: IncomingMessage,
+  correlationId: string | undefined,
+  kind: AuditEvent['kind'],
+  id: string,
+  note?: string,
+): Promise<void> {
+  const userDataDir = getUserDataDir();
+  if (!userDataDir) return;
+  const event: AuditEvent = {
+    kind,
+    id,
+    ts: Date.now(),
+    invokedBy: readInvokedByHeader(req, correlationId),
+    ...(correlationId ? { correlationId } : {}),
+    ...(note ? { note } : {}),
+  };
+  await appendAuditEvent(userDataDir, event);
+}
+
+// ---------------------------------------------------------------------------
+// cron enable / disable
+// ---------------------------------------------------------------------------
+
+async function setCronStatus(
+  req: IncomingMessage,
+  res: ServerResponse,
+  id: string,
+  next: 'enabled' | 'disabled',
+  correlationId?: string,
+): Promise<void> {
+  try {
+    const scheduler = getAutomationScheduler();
+    if (!scheduler) {
+      sendJson(res, 503, {
+        error: { code: 'scheduler_unavailable', message: 'automation scheduler is not ready' },
+      });
+      return;
+    }
+    const current = scheduler.listCrons().find((c) => c.id === id);
+    if (!current) {
+      sendJson(res, 404, { error: { code: 'cron_not_found', message: id } });
+      return;
+    }
+    scheduler.updateCron(id, { enabled: next === 'enabled' });
+    await recordAudit(
+      req,
+      correlationId,
+      next === 'enabled' ? 'cron.enable' : 'cron.disable',
+      id,
+      `from=${current.enabled ? 'enabled' : 'disabled'}`,
+    );
+    sendJson(res, 200, { ok: true, id, status: next, previousStatus: current.enabled ? 'enabled' : 'disabled' });
+  } catch (err) {
+    sendJson(res, 500, {
+      error: { code: 'internal_error', message: err instanceof Error ? err.message : String(err) },
+    });
+  }
+}
+
+export async function handleCronEnable(
+  req: IncomingMessage,
+  res: ServerResponse,
+  id: string,
+  correlationId?: string,
+): Promise<void> {
+  return setCronStatus(req, res, id, 'enabled', correlationId);
+}
+
+export async function handleCronDisable(
+  req: IncomingMessage,
+  res: ServerResponse,
+  id: string,
+  correlationId?: string,
+): Promise<void> {
+  return setCronStatus(req, res, id, 'disabled', correlationId);
+}
+
+// ---------------------------------------------------------------------------
+// cron logs (last N runs)
+// ---------------------------------------------------------------------------
+
+interface CronRunRow {
+  id: string;
+  started_at: number;
+  ended_at: number | null;
+  run_status: string;
+  error_message: string | null;
+  output: string | null;
+  logs: string | null;
+}
+
+export async function handleCronLogs(
+  _req: IncomingMessage,
+  res: ServerResponse,
+  id: string,
+): Promise<void> {
+  void _req;
+  try {
+    const scheduler = getAutomationScheduler();
+    const job = scheduler?.listCrons().find((c) => c.id === id);
+    if (!scheduler || !job) {
+      sendJson(res, 404, { error: { code: 'cron_not_found', message: id } });
+      return;
+    }
+    const url = _req.url ?? '';
+    const qIdx = url.indexOf('?');
+    let limit = 20;
+    if (qIdx >= 0) {
+      for (const part of url.slice(qIdx + 1).split('&')) {
+        const eq = part.indexOf('=');
+        if (eq < 0) continue;
+        const k = part.slice(0, eq);
+        const v = part.slice(eq + 1);
+        if (k === 'limit') limit = Math.max(1, Math.min(200, Number(v) || limit));
+      }
+    }
+    // A cron's run history is its ordinary sessions (id prefix `cron:<jobId>:`).
+    let localSessions: ReturnType<typeof getDesktopHostLocalSessionApi>;
+    try {
+      localSessions = getDesktopHostLocalSessionApi();
+    } catch {
+      sendJson(res, 503, { error: { code: 'db_unavailable', message: 'database is not ready' } });
+      return;
+    }
+    const rows = await localSessions.listLocalSessionSummariesByPrefix({
+      idPrefix: `cron:${id}:`,
+      limit,
+    });
+    const runs: CronRunRow[] = rows.map((r, i) => ({
+      id: r.id,
+      started_at: r.createdAt,
+      ended_at: r.updatedAt,
+      run_status: i === 0 && job.lastError ? 'failed' : 'success',
+      error_message: i === 0 ? (job.lastError ?? null) : null,
+      output: null,
+      logs: null,
+    }));
+    sendJson(res, 200, { id, runs });
+  } catch (err) {
+    sendJson(res, 500, {
+      error: { code: 'internal_error', message: err instanceof Error ? err.message : String(err) },
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// gateway reload-secrets (stub — ships fully in Plan 200 R4)
+// ---------------------------------------------------------------------------
+
+export async function handleGatewayReloadSecrets(
+  req: IncomingMessage,
+  res: ServerResponse,
+  correlationId?: string,
+): Promise<void> {
+  await recordAudit(req, correlationId, 'gateway.reload_secrets', 'gateway');
+  sendJson(res, 200, {
+    ok: false,
+    reason: 'gateway_secret_reload_ships_in_plan_200_r4',
+  });
+}
+
+// ---------------------------------------------------------------------------
+// gateway rpc (stub proxy)
+// ---------------------------------------------------------------------------
+
+async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    const MAX = 1024 * 1024;
+    req.on('data', (c: Buffer) => {
+      total += c.length;
+      if (total > MAX) {
+        reject(new Error('request body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf-8');
+      if (text.length === 0) {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(text) as Record<string, unknown>);
+      } catch (err) {
+        reject(err);
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+export async function handleGatewayRpc(
+  req: IncomingMessage,
+  res: ServerResponse,
+  correlationId?: string,
+): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    sendJson(res, 400, { error: { code: 'invalid_request', message: err instanceof Error ? err.message : String(err) } });
+    return;
+  }
+  const method = typeof body.method === 'string' ? body.method : '';
+  await recordAudit(req, correlationId, 'gateway.rpc', 'gateway', `method=${method}`);
+  sendJson(res, 200, {
+    ok: false,
+    method,
+    reason: 'gateway_rpc_proxy_ships_in_plan_200_r4',
+  });
+}

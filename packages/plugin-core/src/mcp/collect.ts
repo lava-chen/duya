@@ -1,0 +1,178 @@
+// packages/plugin-core/src/mcp/collect.ts
+// Environment-agnostic MCP candidate collector.
+//
+// Pure transforms + a single `buildMCPCandidates(input)` assembly.
+// No DB / IPC / plugin-manager access — those live in the source
+// adapters (electron collect-main / agent collect-worker). Both
+// adapters fetch their own data and feed this engine a
+// `MCPCollectorInput`.
+//
+// This module is browser-safe. It imports only TYPES (`import type` is
+// erased at compile time and creates no runtime coupling), so unlike
+// `./resolve` there is no reason to keep its functions out of the barrel.
+// Measured by plan 610's G10 gate: `collect.ts` is inside the desktop
+// renderer's value-import closure and contributes zero Node built-ins.
+// The two comments above this one used to claim the opposite — they said this
+// module imports `fs` and `path` and must stay off the barrel — which had
+// drifted from the code. Corrected rather than deleted, because the policy
+// itself (keep Node-touching loaders off the barrel) is still right; it just
+// does not apply to this file.
+
+import type { MCPCandidate, MCPCollectionResult } from './discovery';
+
+/** One user/settings MCP server entry, regardless of source. */
+export interface MCPCollectorSettingsItem {
+  name: string;
+  connectionId?: string;
+  transport?: 'stdio' | 'streamable-http';
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  enabled?: boolean;
+  allowedAgentIds?: string[];
+  nameOverride?: string;
+  startupTimeoutSec?: number;
+  toolTimeoutSec?: number;
+  toolTimeouts?: Record<string, number>;
+  envPassthrough?: 'allowlist' | 'inherit';
+  useShell?: boolean;
+}
+
+/** A plugin's MCP server declarations, narrowed from the manifest. */
+export interface MCPCollectorPluginEntry {
+  id: string;
+  name: string;
+  enabled?: boolean;
+  installPath?: string;
+  dataPath?: string;
+  manifest?: {
+    capabilities?: {
+      mcpServers?: Array<{
+        name: string;
+        transport?: 'stdio' | 'streamable-http' | 'sse';
+        command?: string;
+        args?: string[];
+        env?: Record<string, string>;
+        url?: string;
+        headers?: Record<string, string>;
+        nameOverride?: string;
+        startupTimeoutSec?: number;
+        toolTimeoutSec?: number;
+        toolTimeouts?: Record<string, number>;
+        envPassthrough?: 'allowlist' | 'inherit';
+        useShell?: boolean;
+      }>;
+    };
+  };
+}
+
+/** Fully-resolved input for the pure collector. */
+export interface MCPCollectorInput {
+  installedPlugins: MCPCollectorPluginEntry[];
+  /** The user-managed source: DUYA userData/mcp.toml. */
+  userTomlItems?: MCPCollectorSettingsItem[];
+}
+
+// ---------------------------------------------------------------------------
+// Per-source candidate builders
+// ---------------------------------------------------------------------------
+
+export function buildCandidatesFromPluginEntry(
+  entry: MCPCollectorPluginEntry,
+): MCPCandidate[] {
+  if (entry.enabled !== true) return [];
+  if (!entry.id) return [];
+  if (!entry.installPath) return [];
+  const mcpServers = entry.manifest?.capabilities?.mcpServers ?? [];
+  const out: MCPCandidate[] = [];
+  for (const server of mcpServers) {
+    // Agent Plugins `sse` servers are recognized at the manifest/discovery
+    // layer only (plan 335). The MCP runtime pipeline does not support
+    // `sse` transport, so they are filtered out here and never connect.
+    if (server.transport === 'sse') continue;
+    if (!server.name || (!server.command && !server.url)) continue;
+    out.push({
+      source: 'plugin',
+      pluginId: entry.id,
+      pluginName: entry.name,
+      pluginRoot: entry.installPath,
+      pluginDataPath: entry.dataPath,
+      rawConfig: {
+        name: server.name,
+        transport: server.transport,
+        command: server.command,
+        args: server.args,
+        env: server.env,
+        url: server.url,
+        headers: server.headers,
+        nameOverride: server.nameOverride,
+        startupTimeoutSec: server.startupTimeoutSec,
+        toolTimeoutSec: server.toolTimeoutSec,
+        toolTimeouts: server.toolTimeouts,
+        envPassthrough: server.envPassthrough,
+        useShell: server.useShell,
+      },
+    });
+  }
+  return out;
+}
+
+export function buildCandidatesFromSettingsEntries(
+  sourceSubOrigin: 'tomlFile',
+  entries: MCPCollectorSettingsItem[],
+): MCPCandidate[] {
+  const out: MCPCandidate[] = [];
+  for (const item of entries) {
+    if (item.enabled === false) continue;
+    if (!item.name || (!item.command && !item.url)) continue;
+    out.push({
+      source: 'settings',
+      sourceSubOrigin,
+      rawConfig: {
+        name: item.name,
+        connectionId: item.connectionId,
+        transport: item.transport,
+        command: item.command,
+        args: item.args,
+        env: item.env,
+        url: item.url,
+        headers: item.headers,
+        allowedAgentIds: item.allowedAgentIds,
+        nameOverride: item.nameOverride,
+        startupTimeoutSec: item.startupTimeoutSec,
+        toolTimeoutSec: item.toolTimeoutSec,
+        toolTimeouts: item.toolTimeouts,
+        envPassthrough: item.envPassthrough,
+        useShell: item.useShell,
+      },
+    });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Pure: build candidates from fully-resolved input
+// ---------------------------------------------------------------------------
+
+/**
+ * Pure transform. Assembles every candidate from the two live data
+ * sources: the plugin registry (installed plugin manifests) and the
+ * user mcp.toml. Returns `MCPCollectionResult` with an empty `issues`
+ * array — the engine's single transform never reads files, so
+ * source-read issues are produced by the adapters upstream.
+ */
+export function buildMCPCandidates(input: MCPCollectorInput): MCPCollectionResult {
+  const candidates: MCPCandidate[] = [];
+
+  for (const plugin of input.installedPlugins) {
+    candidates.push(...buildCandidatesFromPluginEntry(plugin));
+  }
+
+  if (input.userTomlItems) {
+    candidates.push(...buildCandidatesFromSettingsEntries('tomlFile', input.userTomlItems));
+  }
+
+  return { candidates, issues: [] };
+}

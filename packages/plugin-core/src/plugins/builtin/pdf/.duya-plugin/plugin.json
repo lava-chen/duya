@@ -1,0 +1,30 @@
+{
+  "name": "pdf",
+  "version": "0.1.0",
+  "description": "Read, create, inspect, render, verify, and extract PDF files by reusing duya's bundled pdf office skill.",
+  "author": {
+    "name": "Duya"
+  },
+  "homepage": "https://github.com/lava-chen/duya",
+  "license": "MIT",
+  "keywords": [
+    "pdf",
+    "pdfs",
+    "document",
+    "documents",
+    "report",
+    "render",
+    "review",
+    "extract",
+    "extraction"
+  ],
+  "interface": {
+    "displayName": "PDF",
+    "shortDescription": "Read, create, and verify PDF files",
+    "longDescription": "Read, create, inspect, render, verify, and extract content from PDF files locally. Reuses duya's bundled pdf office skill. Use PDF when the durable output or target is a PDF file and visual layout fidelity matters.",
+    "category": "productivity",
+    "brandColor": "#DC2626",
+    "icon": "./assets/icon.svg",
+    "screenshots": []
+  }
+}

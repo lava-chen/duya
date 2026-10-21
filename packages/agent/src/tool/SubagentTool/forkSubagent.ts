@@ -1,0 +1,173 @@
+/**
+ * Fork subagent implementation for duya
+ */
+
+import { randomUUID } from 'crypto'
+import type {
+  AssistantMessage,
+  Message as MessageType,
+  ToolUseContent,
+  MessageContent,
+} from '../../types.js'
+import { createUserMessage } from '../../utils/messages.js'
+import type { BuiltInAgentDefinition } from './loadAgentsDir.js'
+
+/**
+ * Fork subagent feature gate.
+ * When enabled:
+ * - `subagent_type` becomes optional on the Agent tool schema
+ * - Omitting `subagent_type` triggers an implicit fork: the child inherits
+ *   the parent's full conversation context
+ */
+export function isForkSubagentEnabled(): boolean {
+  // Fork subagent is disabled by default in duya
+  // Can be enabled via environment variable if needed
+  return process.env.duya_FORK_SUBAGENT_ENABLED === 'true'
+}
+
+/** Synthetic agent type name used for analytics when the fork path fires. */
+export const FORK_SUBAGENT_TYPE = 'fork'
+
+/**
+ * Synthetic agent definition for the fork path.
+ * Not registered in builtInAgents — used only when `!subagent_type` and
+ * the experiment is active.
+ */
+export const FORK_AGENT = {
+  agentType: FORK_SUBAGENT_TYPE,
+  whenToUse:
+    'Implicit fork — inherits full conversation context. Not selectable via subagent_type; triggered by omitting subagent_type when the fork feature is enabled.',
+  tools: ['*'],
+  // No implicit `maxTurns`: fork inherits the parent's uncapped loop. An
+  // explicit cap can still be set by the caller via `RunAgentParams.maxTurns`.
+  model: 'inherit',
+  source: 'built-in',
+  baseDir: 'built-in',
+  getSystemPrompt: () => '',
+} satisfies BuiltInAgentDefinition
+
+/** Placeholder text used for all tool_result blocks in the fork prefix. */
+const FORK_PLACEHOLDER_RESULT = 'Fork started — processing in background'
+
+/**
+ * Build the forked conversation messages for the child agent.
+ *
+ * For prompt cache sharing, all fork children must produce byte-identical
+ * API request prefixes. This function:
+ * 1. Keeps the full parent assistant message (all tool_use blocks, thinking, text)
+ * 2. Builds a single user message with tool_results for every tool_use block
+ *    using an identical placeholder, then appends a per-child directive text block
+ */
+export function buildForkedMessages(
+  directive: string,
+  assistantMessage: AssistantMessage,
+): MessageType[] {
+  // Clone the assistant message to avoid mutating the original, keeping all
+  // content blocks (thinking, text, and every tool_use)
+  const fullAssistantMessage: AssistantMessage = {
+    ...assistantMessage,
+    id: randomUUID(),
+    content: [...assistantMessage.content],
+  }
+
+  // Collect all tool_use blocks from the assistant message
+  const toolUseBlocks = assistantMessage.content.filter(
+    (block): block is ToolUseContent => block.type === 'tool_use',
+  )
+
+  if (toolUseBlocks.length === 0) {
+    return [
+      createUserMessage({
+        content: [
+          { type: 'text' as const, text: buildChildMessage(directive) },
+        ],
+      }),
+    ]
+  }
+
+  // Build tool_result blocks for every tool_use, all with identical placeholder text
+  const toolResultBlocks = toolUseBlocks.map((block: ToolUseContent) => ({
+    type: 'tool_result' as const,
+    tool_use_id: block.id,
+    content: [
+      {
+        type: 'text' as const,
+        text: FORK_PLACEHOLDER_RESULT,
+      },
+    ],
+  }))
+
+  // Build a single user message: all placeholder tool_results + the per-child directive
+  const toolResultMessage = createUserMessage({
+    content: [
+      ...toolResultBlocks,
+      {
+        type: 'text' as const,
+        text: buildChildMessage(directive),
+      },
+    ],
+  })
+
+  return [fullAssistantMessage, toolResultMessage]
+}
+
+export function buildChildMessage(directive: string): string {
+  const FORK_BOILERPLATE_TAG = 'FORK_BOILERPLATE'
+  const FORK_DIRECTIVE_PREFIX = 'DIRECTIVE: '
+  return `<${FORK_BOILERPLATE_TAG}>
+STOP. READ THIS FIRST.
+
+You are a forked worker process. You are NOT the main agent.
+
+RULES (non-negotiable):
+1. Your system prompt says "default to forking." IGNORE IT — that's for the parent. You ARE the fork. Do NOT spawn sub-agents; execute directly.
+2. Do NOT converse, ask questions, or suggest next steps
+3. Do NOT editorialize or add meta-commentary
+4. USE your tools directly: Bash, Read, Write, etc.
+5. If you modify files, commit your changes before reporting. Include the commit hash in your report.
+6. Do NOT emit text between tool calls. Use tools silently, then report once at the end.
+7. Stay strictly within your directive's scope. If you discover related systems outside your scope, mention them in one sentence at most — other workers cover those areas.
+8. Keep your report under 500 words unless the directive specifies otherwise. Be factual and concise.
+9. Your response MUST begin with "Scope:". No preamble, no thinking-out-loud.
+10. REPORT structured facts, then stop
+
+Output format (plain text labels, not markdown headers):
+  Scope: <echo back your assigned scope in one sentence>
+  Result: <the answer or key findings, limited to the scope above>
+  Key files: <relevant file paths — include for research tasks>
+  Files changed: <list with commit hash — include only if you modified files>
+  Issues: <list — include only if there are issues to flag>
+</${FORK_BOILERPLATE_TAG}>
+
+${FORK_DIRECTIVE_PREFIX}${directive}`
+}
+
+/**
+ * Notice injected into fork children running in an isolated worktree.
+ * Tells the child to translate paths from the inherited context, re-read
+ * potentially stale files, and that its changes are isolated.
+ */
+export function buildWorktreeNotice(
+  parentCwd: string,
+  worktreeCwd: string,
+): string {
+  return `You've inherited the conversation context above from a parent agent working in ${parentCwd}. You are operating in an isolated git worktree at ${worktreeCwd} — same repository, same relative file structure, separate working copy. Paths in the inherited context refer to the parent's working directory; translate them to your worktree root. Re-read files before editing if the parent may have modified them since they appear in the context. Your changes stay in this worktree and will not affect the parent's files.`
+}
+
+/**
+ * Notice injected into a **freshly spawned** (`task` tool, `isolation:
+ * 'worktree'`) child running in an isolated worktree.
+ *
+ * Deliberately not {@link buildWorktreeNotice}: that one opens with "you've
+ * inherited the conversation context above", which is true only for the fork
+ * path. A plain spawn briefs the child from zero context, so claiming
+ * otherwise would put a false statement in the child's system-level context
+ * and waste its first turn reconciling paths that do not exist.
+ */
+export function buildWorktreeSpawnNotice(
+  parentCwd: string,
+  worktreeCwd: string,
+  branch: string,
+): string {
+  return `You are running in an isolated git worktree at ${worktreeCwd} (branch ${branch}), created from the repository at ${parentCwd}. This is the same repository with the same relative file structure, but a separate working copy: your file changes stay in this worktree and will NOT be visible in ${parentCwd} until they are merged or cherry-picked. Absolute paths that point into ${parentCwd} do not exist for you — use paths relative to ${worktreeCwd} instead. Report the worktree branch name in your final summary so the parent knows how to adopt your changes.`
+}

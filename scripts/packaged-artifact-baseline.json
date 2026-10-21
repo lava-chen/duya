@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "note": "Known defects for scripts/check-packaged-artifacts.mjs. An entry here downgrades a finding to KNOWN-DEFECT: it is printed loudly and counted, but does not fail the run. A known defect is NEVER counted as a pass. Delete the entry once the defect is actually fixed, so the gate can start enforcing it.",
+  "defects": []
+}

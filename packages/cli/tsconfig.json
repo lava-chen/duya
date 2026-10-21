@@ -1,0 +1,40 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "paths": {
+      "@duya/host/local-host": ["../host/dist/local-host.d.ts"],
+      "@duya/host/http-client": ["../host/dist/http-client.d.ts"],
+      "@duya/host": ["../host/dist/index.d.ts"],
+      "@duya/client-core/testing": ["../client-core/dist/testing/index.d.ts"],
+      "@duya/client-core": ["../client-core/dist/index.d.ts"],
+      "@duya/agent-protocol": ["../agent-protocol/dist/index.d.ts"],
+      "@duya/agent-protocol/session-api": ["../agent-protocol/dist/session-api.d.ts"],
+      "@duya/agent-protocol/transcript": ["../agent-protocol/dist/transcript.d.ts"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "bundle",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/**/*.spec.ts",
+    "src/**/*.spec.tsx",
+    "src/**/__tests__/**"
+  ]
+}

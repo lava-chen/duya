@@ -1,0 +1,107 @@
+{
+  "name": "@duya/memory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Memory V2 domain: the on-disk memory layout, the curation ledger and its projections, rollout leases, the projection outbox, and the stage-1 extraction pipeline.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./canonical_file": {
+      "types": "./dist/canonical_file.d.ts",
+      "default": "./dist/canonical_file.js"
+    },
+    "./curation_ledger": {
+      "types": "./dist/curation_ledger.d.ts",
+      "default": "./dist/curation_ledger.js"
+    },
+    "./curation_projection": {
+      "types": "./dist/curation_projection.d.ts",
+      "default": "./dist/curation_projection.js"
+    },
+    "./curation_projection_live": {
+      "types": "./dist/curation_projection_live.d.ts",
+      "default": "./dist/curation_projection_live.js"
+    },
+    "./eligibility": {
+      "types": "./dist/eligibility.d.ts",
+      "default": "./dist/eligibility.js"
+    },
+    "./entity_dirs": {
+      "types": "./dist/entity_dirs.d.ts",
+      "default": "./dist/entity_dirs.js"
+    },
+    "./extractor": {
+      "types": "./dist/extractor.d.ts",
+      "default": "./dist/extractor.js"
+    },
+    "./lease": {
+      "types": "./dist/lease.d.ts",
+      "default": "./dist/lease.js"
+    },
+    "./memory_layout": {
+      "types": "./dist/memory_layout.d.ts",
+      "default": "./dist/memory_layout.js"
+    },
+    "./memory_paths": {
+      "types": "./dist/memory_paths.d.ts",
+      "default": "./dist/memory_paths.js"
+    },
+    "./outbox": {
+      "types": "./dist/outbox.d.ts",
+      "default": "./dist/outbox.js"
+    },
+    "./projectionContent": {
+      "types": "./dist/projectionContent.d.ts",
+      "default": "./dist/projectionContent.js"
+    },
+    "./reconcile": {
+      "types": "./dist/reconcile.d.ts",
+      "default": "./dist/reconcile.js"
+    },
+    "./stage1_policy_editor": {
+      "types": "./dist/stage1_policy_editor.d.ts",
+      "default": "./dist/stage1_policy_editor.js"
+    },
+    "./system_log": {
+      "types": "./dist/system_log.d.ts",
+      "default": "./dist/system_log.js"
+    },
+    "./tierConflicts": {
+      "types": "./dist/tierConflicts.d.ts",
+      "default": "./dist/tierConflicts.js"
+    },
+    "./wakeup": {
+      "types": "./dist/wakeup.d.ts",
+      "default": "./dist/wakeup.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "default": "./dist/testing/index.js"
+    }
+  },
+  "scripts": {
+    "build": "npm run clean && tsc --incremental",
+    "clean": "node -e \"for (const t of ['dist','tsconfig.tsbuildinfo']) require('fs').rmSync(t,{recursive:true,force:true})\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@duya/ai": "0.1.0",
+    "better-sqlite3": "^13.0.3",
+    "yaml": "^2.8.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.3",
+    "vitest": "^3.0.0"
+  }
+}

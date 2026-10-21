@@ -1,0 +1,536 @@
+/**
+ * Research mode tools (plan 423 Phase 2).
+ *
+ * Two model-facing tools are injected by research mode:
+ *
+ *  - `research_start`: enter research mode with a query. Called when the
+ *    user asks the agent to research a topic; transitions the tracker
+ *    `idle → clarifying` and seeds the research payload.
+ *  - `research_report`: finalize the run. `completed: true` is only legal
+ *    while synthesizing — it transitions `synthesizing → complete` and
+ *    persists, so the lifecycle stays enforced by the pure state machine
+ *    (a self-reported completion from any other state is rejected).
+ *
+ * Both persist the snapshot immediately on a real transition so a cold
+ * session load can restore the run even without a live SSE event.
+ */
+
+import { readFile } from 'node:fs/promises';
+import { z } from 'zod';
+import { expandPath } from '@duya/capabilities/utils/path';
+import type {
+  RuntimeToolDefinition,
+  RuntimeToolResult,
+  ToolExecutor,
+} from '@duya/agent-runtime/tools/catalog';
+import type { ModeTracker } from '@duya/agent-core/modes/tracker';
+import type { ResearchModeToolPorts, WorkerModeEventEmitter, WorkerModeToolContext } from '../tool-ports.js';
+import { researchModeTracker } from './research-tracker.js';
+import type { ResearchState, ResearchEvent } from './research-tracker.js';
+import {
+  getResearchFanoutTool,
+  RESEARCH_FANOUT_TOOL_NAME,
+} from './research-fanout.js';
+import { persistSnapshot } from '../engine/persistence.js';
+import { emitResearchUpdated } from './research-events.js';
+export { emitResearchUpdated } from './research-events.js';
+
+export const RESEARCH_START_TOOL_NAME = 'research_start';
+export const RESEARCH_REPORT_TOOL_NAME = 'research_report';
+export const RESEARCH_CONTINUE_TOOL_NAME = 'research_continue';
+export const RESEARCH_ADVANCE_TOOL_NAME = 'research_advance';
+export { RESEARCH_FANOUT_TOOL_NAME } from './research-fanout.js';
+
+/** Stable error codes for research tool rejections. */
+export const RESEARCH_ERROR_CODES = {
+  INVALID_INPUT: 'research_invalid_input',
+  ALREADY_ACTIVE: 'research_already_active',
+  NOT_SYNTHESIZING: 'research_report_not_synthesizing',
+  COMPLETE: 'research_report_complete',
+  REPORT_FILE_READ_FAILED: 'research_report_file_read_failed',
+  REPORT_NO_CONTENT: 'research_report_no_content',
+  NOT_PAUSED: 'research_continue_not_paused',
+  NO_ADVANCE: 'research_advance_no_advance',
+} as const;
+
+export type ResearchErrorCode = (typeof RESEARCH_ERROR_CODES)[keyof typeof RESEARCH_ERROR_CODES];
+
+const researchStartInputSchema = z.object({
+  query: z
+    .string()
+    .min(1)
+    .describe('The research topic or question to investigate.'),
+});
+
+const researchStartDefinition: RuntimeToolDefinition = {
+  name: RESEARCH_START_TOOL_NAME,
+  description:
+    'Start a deep research investigation on the given query. Call this when the user asks you to research a topic. Returns the research state.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      query: {
+        type: 'string',
+        description: 'The research topic or question to investigate.',
+      },
+    },
+    required: ['query'],
+  },
+};
+
+function createResearchStartExecutor(emitEvent?: WorkerModeEventEmitter): ToolExecutor<WorkerModeToolContext> {
+  return {
+  async execute(
+    input: Record<string, unknown>,
+    _workingDirectory?: string,
+    context?: WorkerModeToolContext,
+  ): Promise<RuntimeToolResult> {
+    const parse = researchStartInputSchema.safeParse(input);
+    if (!parse.success) {
+      return errorInput(RESEARCH_START_TOOL_NAME, parse.error.message);
+    }
+    const query = parse.data.query;
+    const changed = researchModeTracker.transition({ type: 'start', query });
+    if (changed) {
+      const sessionId = context?.options.sessionId;
+      if (sessionId) {
+        await persistSnapshot(
+          researchModeTracker as unknown as ModeTracker<string, string, unknown>,
+          sessionId,
+        );
+      }
+    }
+    emitResearchUpdated(context?.options.sessionId, emitEvent);
+    return {
+      id: crypto.randomUUID(),
+      name: RESEARCH_START_TOOL_NAME,
+      result: JSON.stringify({
+        started: changed,
+        state: researchModeTracker.state(),
+        phase: researchModeTracker.phase(),
+        query: researchModeTracker.query(),
+        message: changed
+          ? 'Research started. Work through clarify → plan → search → evaluate, then call research_report(completed: true) when you synthesize the report.'
+          : researchModeTracker.state() === 'idle'
+            ? 'Research not started (empty query).'
+            : `A research run is already ${
+                researchModeTracker.state() === 'complete'
+                  ? 'complete. Clear it (or start a fresh query) before beginning a new one.'
+                  : `active (${researchModeTracker.state()}). Continue it or clear before starting a new one.`
+              }`,
+      }),
+      error: changed ? false : true,
+    };
+  },
+  };
+}
+const researchReportInputSchema = z.object({
+  completed: z
+    .boolean()
+    .describe('Whether the research report is fully written and ready to finalize.'),
+  message: z
+    .string()
+    .optional()
+    .describe('Optional completion summary or status message.'),
+  title: z
+    .string()
+    .optional()
+    .describe('Short report title shown in the report card header.'),
+  file_path: z
+    .string()
+    .optional()
+    .describe(
+      'Path to the final report markdown file you wrote to disk locally. Provide this instead of report_markdown when you have already written the report with the write tool — the content is read from the file so you do not need to duplicate it in this call. Can be absolute or relative to the working directory.',
+    ),
+  report_markdown: z
+    .string()
+    .optional()
+    .describe(
+      'The full final report as markdown. Provide this only when you have NOT written the report to a file. Prefer file_path when the report exists on disk so you do not copy the whole text into the tool call.',
+    ),
+});
+
+const researchReportDefinition: RuntimeToolDefinition = {
+  name: RESEARCH_REPORT_TOOL_NAME,
+  description:
+    'Finalize the research run. Call with completed=true only when you have actually written the report while synthesizing — the lifecycle enforces this. Write the full report to a local markdown file with the write tool, then pass its path in file_path with a short title in title so it renders as a document card. If you have not written a file, pass the full markdown in report_markdown instead. Use a plain message without report_markdown/file_path for status-only updates.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      completed: {
+        type: 'boolean',
+        description: 'Whether the research report is fully written and ready to finalize.',
+      },
+      message: {
+        type: 'string',
+        description: 'Optional completion summary or status message.',
+      },
+      title: {
+        type: 'string',
+        description: 'Short report title shown in the report card header.',
+      },
+      file_path: {
+        type: 'string',
+        description:
+          'Path to the final report markdown file you wrote to disk locally. Provide this instead of report_markdown when the report is already written — the content is read from the file.',
+      },
+      report_markdown: {
+        type: 'string',
+        description:
+          'The full final report as markdown. Provide this only when you have NOT written the report to a file.',
+      },
+    },
+    required: ['completed'],
+  },
+};
+
+function createResearchReportExecutor(emitEvent?: WorkerModeEventEmitter): ToolExecutor<WorkerModeToolContext> {
+  return {
+  async execute(
+    input: Record<string, unknown>,
+    workingDirectory?: string,
+    context?: WorkerModeToolContext,
+  ): Promise<RuntimeToolResult> {
+    const parse = researchReportInputSchema.safeParse(input);
+    if (!parse.success) {
+      return errorInput(RESEARCH_REPORT_TOOL_NAME, parse.error.message);
+    }
+    const { completed, message, title, file_path, report_markdown } = parse.data;
+
+    const state = researchModeTracker.state();
+    if (state === 'idle') {
+      return errorNoRun(RESEARCH_REPORT_TOOL_NAME);
+    }
+    if (state === 'complete') {
+      return errorCompleted(RESEARCH_REPORT_TOOL_NAME);
+    }
+
+    if (completed) {
+      // Only legal while synthesizing — the report must actually be written.
+      if (state !== 'synthesizing') {
+        return {
+          id: crypto.randomUUID(),
+          name: RESEARCH_REPORT_TOOL_NAME,
+          result: JSON.stringify({
+            error: `research_report(completed: true) is only valid while synthesizing (current state: ${state}). Write the report first, or gather/evaluate more evidence before finalizing.`,
+            error_code: RESEARCH_ERROR_CODES.NOT_SYNTHESIZING,
+          }),
+          error: true,
+        };
+      }
+
+      // Prefer the locally-written report file when a file_path is given so
+      // the model does not duplicate the full report text in the tool call.
+      let reportBody = report_markdown;
+      if (file_path) {
+        try {
+          reportBody = await readFile(expandPath(file_path, workingDirectory), 'utf-8');
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return {
+            id: crypto.randomUUID(),
+            name: RESEARCH_REPORT_TOOL_NAME,
+            result: JSON.stringify({
+              error: `Failed to read report file '${file_path}': ${msg}. Write the report with the write tool first, then pass its path in file_path.`,
+              error_code: RESEARCH_ERROR_CODES.REPORT_FILE_READ_FAILED,
+            }),
+            error: true,
+          };
+        }
+      }
+      if (!reportBody || reportBody.trim().length === 0) {
+        return {
+          id: crypto.randomUUID(),
+          name: RESEARCH_REPORT_TOOL_NAME,
+          result: JSON.stringify({
+            error:
+              'research_report(completed: true) requires report content. Pass a readable file_path (the report you wrote locally) or the full report_markdown.',
+            error_code: RESEARCH_ERROR_CODES.REPORT_NO_CONTENT,
+          }),
+          error: true,
+        };
+      }
+
+      const changed = researchModeTracker.transition({ type: 'report_done' });
+      if (changed) {
+        const sessionId = context?.options.sessionId;
+        if (sessionId) {
+          await persistSnapshot(
+            researchModeTracker as unknown as ModeTracker<string, string, unknown>,
+            sessionId,
+          );
+        }
+      }
+      emitResearchUpdated(context?.options.sessionId, emitEvent);
+      return {
+        id: crypto.randomUUID(),
+        name: RESEARCH_REPORT_TOOL_NAME,
+        result: JSON.stringify({
+          accepted: changed,
+          state: researchModeTracker.state(),
+          phase: researchModeTracker.phase(),
+          query: researchModeTracker.query(),
+          message: changed
+            ? 'Research complete — report finalized.'
+            : 'Research could not be finalized (unexpected state).',
+          title: title ?? undefined,
+          file_path: file_path ?? undefined,
+          report_markdown: reportBody,
+        }),
+        error: changed ? false : true,
+      };
+    }
+
+    // Status-only update — no transition.
+    return {
+      id: crypto.randomUUID(),
+      name: RESEARCH_REPORT_TOOL_NAME,
+      result: JSON.stringify({
+        accepted: true,
+        state: researchModeTracker.state(),
+        phase: researchModeTracker.phase(),
+        query: researchModeTracker.query(),
+        message: message ?? undefined,
+        title: title ?? undefined,
+        file_path: file_path ?? undefined,
+        report_markdown: report_markdown ?? undefined,
+      }),
+      error: false,
+    };
+  },
+  };
+}
+const researchContinueInputSchema = z.object({
+  instruction: z
+    .string()
+    .optional()
+    .describe('Optional user answer / continuation note that resolves the pause.'),
+});
+
+/**
+ * Resume a paused research run. Legal only while `awaiting_input` or
+ * `blocked` (including a cold-restore fold): transitions via `user_input`
+ * back to the remembered workflow state so the investigation continues.
+ * A no-op status in every other active state; rejected when idle/complete.
+ */
+const researchContinueDefinition: RuntimeToolDefinition = {
+  name: RESEARCH_CONTINUE_TOOL_NAME,
+  description:
+    'Resume a research run that is paused awaiting input (awaiting_input / blocked). Call this once the user has answered the pending question so the investigation continues. No-op if the research is already progressing.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      instruction: {
+        type: 'string',
+        description: 'Optional user answer / continuation note that resolves the pause.',
+      },
+    },
+  },
+};
+
+function createResearchContinueExecutor(emitEvent?: WorkerModeEventEmitter): ToolExecutor<WorkerModeToolContext> {
+  return {
+  async execute(
+    input: Record<string, unknown>,
+    _workingDirectory?: string,
+    context?: WorkerModeToolContext,
+  ): Promise<RuntimeToolResult> {
+    const parse = researchContinueInputSchema.safeParse(input);
+    if (!parse.success) {
+      return errorInput(RESEARCH_CONTINUE_TOOL_NAME, parse.error.message);
+    }
+    const { instruction } = parse.data;
+
+    const state = researchModeTracker.state();
+    if (state === 'idle') {
+      return errorNoRun(RESEARCH_CONTINUE_TOOL_NAME);
+    }
+    if (state === 'complete') {
+      return errorCompleted(RESEARCH_CONTINUE_TOOL_NAME);
+    }
+    if (state !== 'awaiting_input' && state !== 'blocked') {
+      return {
+        id: crypto.randomUUID(),
+        name: RESEARCH_CONTINUE_TOOL_NAME,
+        result: JSON.stringify({
+          resumed: false,
+          state: researchModeTracker.state(),
+          phase: researchModeTracker.phase(),
+          query: researchModeTracker.query(),
+          message: `Research is already progressing (${state}) — nothing to resume.`,
+          error_code: RESEARCH_ERROR_CODES.NOT_PAUSED,
+        }),
+        error: true,
+      };
+    }
+
+    const changed = researchModeTracker.transition({ type: 'user_input' });
+    if (changed) {
+      const sessionId = context?.options.sessionId;
+      if (sessionId) {
+        await persistSnapshot(
+          researchModeTracker as unknown as ModeTracker<string, string, unknown>,
+          sessionId,
+        );
+      }
+    }
+    emitResearchUpdated(context?.options.sessionId, emitEvent);
+    return {
+      id: crypto.randomUUID(),
+      name: RESEARCH_CONTINUE_TOOL_NAME,
+      result: JSON.stringify({
+        resumed: changed,
+        state: researchModeTracker.state(),
+        phase: researchModeTracker.phase(),
+        query: researchModeTracker.query(),
+        message: changed
+          ? `Research resumed — back in ${researchModeTracker.state()} state.${instruction ? ` User note: ${instruction}` : ''}`
+          : 'Research could not be resumed (unexpected state).',
+      }),
+      error: changed ? false : true,
+    };
+  },
+  };
+}
+/**
+ * Advance the research lifecycle to its next phase. Legal only while in a
+ * forward workflow state: clarifying → planning → gathering → evaluating →
+ * synthesizing. This is the model-facing handle that actually drives the
+ * state machine forward (research_start only opens the run; research_report
+ * only finalizes from synthesizing). No-op or rejected in pause/terminal
+ * states.
+ */
+const researchAdvanceDefinition: RuntimeToolDefinition = {
+  name: RESEARCH_ADVANCE_TOOL_NAME,
+  description:
+    'Advance the research run to its next phase. Call this when you have finished the current phase: clarifying → planning → gathering → evaluating → synthesizing. Once you have written the report, call research_report(completed: true) instead.',
+  input_schema: {
+    type: 'object',
+    properties: {},
+  },
+};
+
+function createResearchAdvanceExecutor(emitEvent?: WorkerModeEventEmitter): ToolExecutor<WorkerModeToolContext> {
+  return {
+  async execute(
+    _input: Record<string, unknown>,
+    _workingDirectory?: string,
+    context?: WorkerModeToolContext,
+  ): Promise<RuntimeToolResult> {
+    const state = researchModeTracker.state();
+    if (state === 'idle') {
+      return errorNoRun(RESEARCH_ADVANCE_TOOL_NAME);
+    }
+    if (state === 'complete') {
+      return errorCompleted(RESEARCH_ADVANCE_TOOL_NAME);
+    }
+
+    // Forward-only phases advance to their natural successor.
+    const advanceTo: Partial<Record<ResearchState, ResearchEvent>> = {
+      clarifying: { type: 'plan' },
+      planning: { type: 'search' },
+      gathering: { type: 'evaluate' },
+      evaluating: { type: 'synthesize' },
+    };
+    const event = advanceTo[state];
+    if (!event) {
+      return {
+        id: crypto.randomUUID(),
+        name: RESEARCH_ADVANCE_TOOL_NAME,
+        result: JSON.stringify({
+          advanced: false,
+          state: researchModeTracker.state(),
+          phase: researchModeTracker.phase(),
+          query: researchModeTracker.query(),
+          message: `Cannot advance from ${state}. ${
+            state === 'synthesizing'
+              ? 'Write the report and call research_report(completed: true).'
+              : state === 'awaiting_input' || state === 'blocked'
+                ? 'Call research_continue once the user unblocks it.'
+                : ''
+          }`,
+          error_code: RESEARCH_ERROR_CODES.NO_ADVANCE,
+        }),
+        error: true,
+      };
+    }
+
+    const changed = researchModeTracker.transition(event);
+    if (changed) {
+      const sessionId = context?.options.sessionId;
+      if (sessionId) {
+        await persistSnapshot(
+          researchModeTracker as unknown as ModeTracker<string, string, unknown>,
+          sessionId,
+        );
+      }
+    }
+    emitResearchUpdated(context?.options.sessionId, emitEvent);
+    return {
+      id: crypto.randomUUID(),
+      name: RESEARCH_ADVANCE_TOOL_NAME,
+      result: JSON.stringify({
+        advanced: changed,
+        state: researchModeTracker.state(),
+        phase: researchModeTracker.phase(),
+        query: researchModeTracker.query(),
+        message: changed
+          ? `Research advanced to ${researchModeTracker.state()}.`
+          : 'Research could not advance (unexpected state).',
+      }),
+      error: changed ? false : true,
+    };
+  },
+  };
+}
+function errorInput(name: string, detail: string): RuntimeToolResult {
+  return {
+    id: crypto.randomUUID(),
+    name,
+    result: JSON.stringify({
+      error: `Invalid input: ${detail}`,
+      error_code: RESEARCH_ERROR_CODES.INVALID_INPUT,
+    }),
+    error: true,
+  };
+}
+
+function errorNoRun(name: string): RuntimeToolResult {
+  return {
+    id: crypto.randomUUID(),
+    name,
+    result: JSON.stringify({
+      error: 'No research run is active. Start one with research_start.',
+      error_code: RESEARCH_ERROR_CODES.ALREADY_ACTIVE,
+    }),
+    error: true,
+  };
+}
+
+function errorCompleted(name: string): RuntimeToolResult {
+  return {
+    id: crypto.randomUUID(),
+    name,
+    result: JSON.stringify({
+      error: 'The research run is already complete. Start a new one with research_start.',
+      error_code: RESEARCH_ERROR_CODES.COMPLETE,
+    }),
+    error: true,
+  };
+}
+
+/**
+ * ToolRegistration pairs injected by research mode (plan 423 §4, §Phase 3).
+ *
+ * Plan 610 A5: `deps` is required — the fan-out tool spawns Research
+ * sub-agents, so it takes its `SubagentTool` instance from the injection site.
+ */
+export function getResearchTools(ports: ResearchModeToolPorts): Array<{ definition: RuntimeToolDefinition; executor: ToolExecutor<WorkerModeToolContext> }> {
+  return [
+    { definition: researchStartDefinition, executor: createResearchStartExecutor(ports.emitEvent) },
+    { definition: researchReportDefinition, executor: createResearchReportExecutor(ports.emitEvent) },
+    { definition: researchContinueDefinition, executor: createResearchContinueExecutor(ports.emitEvent) },
+    { definition: researchAdvanceDefinition, executor: createResearchAdvanceExecutor(ports.emitEvent) },
+    getResearchFanoutTool(ports.runSubagentTool, ports.emitEvent),
+  ];
+}

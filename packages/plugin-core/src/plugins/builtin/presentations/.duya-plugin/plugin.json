@@ -1,0 +1,30 @@
+{
+  "name": "presentations",
+  "version": "0.1.0",
+  "description": "Create, edit, render, verify, and export presentation slide decks (.pptx) by reusing duya's bundled pptx office skill.",
+  "author": {
+    "name": "Duya"
+  },
+  "homepage": "https://github.com/lava-chen/duya",
+  "license": "MIT",
+  "keywords": [
+    "slides",
+    "slide",
+    "deck",
+    "slidedeck",
+    "presentation",
+    "presentations",
+    "powerpoint",
+    "ppt",
+    "pptx"
+  ],
+  "interface": {
+    "displayName": "Presentations",
+    "shortDescription": "Create and edit presentations",
+    "longDescription": "Create, edit, inspect, render, verify, and export presentation slide decks locally, including PPTX authoring. Reuses duya's bundled pptx office skill. Use Presentations when the durable output or target is a deck, slidedeck, presentation deck, slide deck, slides, PowerPoint, presentation, or speaker notes.",
+    "category": "productivity",
+    "brandColor": "#C43E1C",
+    "icon": "./assets/icon.svg",
+    "screenshots": []
+  }
+}

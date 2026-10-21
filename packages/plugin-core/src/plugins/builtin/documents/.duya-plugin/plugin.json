@@ -1,0 +1,29 @@
+{
+  "name": "documents",
+  "version": "0.1.0",
+  "description": "Create and edit Word document artifacts (.docx) by reusing duya's bundled docx office skill.",
+  "author": {
+    "name": "Duya"
+  },
+  "homepage": "https://github.com/lava-chen/duya",
+  "license": "MIT",
+  "keywords": [
+    "doc",
+    "docs",
+    "document",
+    "documents",
+    "word",
+    "memo",
+    "docx",
+    "artifacts"
+  ],
+  "interface": {
+    "displayName": "Documents",
+    "shortDescription": "Create and edit document artifacts",
+    "longDescription": "Create, edit, inspect, render, verify, and export DOCX document artifacts locally. Reuses duya's bundled docx office skill. Use Documents when the durable output or target is a document, doc, docs, Word file, memo, report, or writing artifact.",
+    "category": "productivity",
+    "brandColor": "#2563EB",
+    "icon": "./assets/icon.svg",
+    "screenshots": []
+  }
+}

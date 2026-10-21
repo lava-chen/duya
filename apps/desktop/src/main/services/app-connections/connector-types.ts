@@ -1,0 +1,108 @@
+/**
+ * Connector tool descriptors — Plan 312 Phase 3.
+ *
+ * A {@link ConnectorToolDescriptor} is the LLM-facing shape of a tool
+ * whose actual API call happens in the main process. Descriptors are
+ * sent to the agent process (without tokens); when the agent invokes
+ * the tool, the call is bridged back via `appConnection:invoke` IPC.
+ *
+ * Per the plan, each provider ships a minimal smoke toolset here
+ * (1-2 read-only tools). The full tool catalog belongs to Plan 313.
+ */
+
+import type { ProviderId, RiskTier } from './types.js';
+
+/**
+ * JSON-schema input spec for a connector tool. Plan 580 D4: this is the
+ * CANONICAL schema, verbatim from the remote server (any JSON-schema
+ * shape, including combinator roots like `oneOf`) — never trimmed or
+ * type-rewritten. The agent side re-uses it verbatim for Ajv / catalog
+ * detail / schema revision; the model-facing projection is generated at
+ * the last mile via `projectForProvider`. No token fields ever appear.
+ */
+export type ConnectorInputSchema = Record<string, unknown>;
+
+/**
+ * Describes a connector tool the agent can discover via `tool_catalog`
+ * and invoke. The descriptor is provider-owned; the executor lives in
+ * the main process.
+ */
+export interface ConnectorToolDescriptor {
+  /** LLM-visible tool name, e.g. `google_drive_list_files`. */
+  name: string;
+  /** Short description shown to the LLM. */
+  description: string;
+  /** JSON-schema for the tool's input parameters (LLM-facing). */
+  inputSchema: ConnectorInputSchema;
+  /** Concise summary used by `tool_catalog` for ranking. */
+  inputSchemaSummary: string;
+  /** Risk tier — drives the agent-side permission gate (Plan 312 §6). */
+  riskTier: RiskTier;
+  /**
+   * How `riskTier` was derived (Plan 449): `'annotations'` means the remote
+   * server published hints we trusted for a read tier; `'fallback'` means
+   * fail-closed defaulting.
+   */
+  tierSource?: 'annotations' | 'fallback';
+  /** Human-readable tool title from server annotations (approval UI). */
+  title?: string;
+  /**
+   * True when the user globally approved this provider+tool pair (Plan 449).
+   * The agent-side permission gate skips the write/modify ask; destructive
+   * strong-confirm is never skipped.
+   */
+  preApproved?: boolean;
+  /** Owning provider. */
+  provider: ProviderId;
+  /**
+   * Display label stamped by the ConnectorService (Plan 450 Phase G), e.g.
+   * `Notion`. Agent-side prompts use it for human-readable app lists; not
+   * set by connectors themselves.
+   */
+  providerLabel?: string;
+  /**
+   * Connection id this descriptor is bound to. The agent-side executor
+   * passes this back to the main process so the right token is used.
+   */
+  connectionId: string;
+  /**
+   * Plan 580 D7: stable namespace slug of the owning connection ('' =
+   * the provider's first connection, bare namespace). Stamped by
+   * ConnectorService after listing; the agent derives the tool's
+   * discovery namespace from provider + this value.
+   */
+  connectionSlug?: string;
+  /**
+   * Connector-internal action key (e.g. `drive.list_files`). The
+   * descriptor's `name` is the LLM-facing alias; `action` is the
+   * stable dispatch key the connector's `invoke()` switches on.
+   */
+  action: string;
+}
+
+/** Result of a connector invocation returned to the agent. */
+export interface ConnectorInvokeResult {
+  /** True when the provider API call succeeded. */
+  success: boolean;
+  /** Structured data (already redacted) for the agent to consume. */
+  data?: unknown;
+  /** Error envelope on failure. */
+  error?: { code: string; message: string; retriable: boolean };
+}
+
+/**
+ * Per-provider connector module. The main process owns instances of
+ * this interface; the agent process only sees the descriptors.
+ */
+export interface ConnectorModule {
+  /** Provider id this connector serves. */
+  provider: ProviderId;
+  /** Stable list of tool descriptors (no tokens). */
+  listDescriptors(connectionId: string): ConnectorToolDescriptor[];
+  /**
+   * Execute an action with a pre-fetched access token. The connector
+   * attaches the token to outbound HTTP requests itself; tokens never
+   * leave this method's call frame.
+   */
+  invoke(action: string, args: unknown, accessToken: string): Promise<ConnectorInvokeResult>;
+}

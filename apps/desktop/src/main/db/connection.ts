@@ -1,0 +1,419 @@
+/**
+ * connection.ts - Database lifecycle management (The Ledger)
+ *
+ * Extracted from db-handlers.ts. Handles the singleton SQLite connection:
+ * loading the native module, initializing the database, Safe Mode detection,
+ * statistics, and size warnings.
+ *
+ * Database file: duya-main.db (path resolved from boot.json)
+ * Uses WAL mode for read/write concurrency.
+ * Safe Mode: If database path is invalid, returns error instead of crashing.
+ */
+
+import * as path from 'path';
+import * as fs from 'fs';
+import { createRequire } from 'module';
+import { migratePreviousDefaultDatabases } from '@duya/data/database-migration';
+import {
+  resolveDatabasePath,
+  validateDatabasePath,
+  initBootConfig,
+  renameLegacyDatabase,
+} from '../config/boot-config';
+import { getLogger, LogComponent } from '../logging/logger';
+import { dataLogger, mainSchemaPorts } from './schema';
+import { getCoreStoresOrNull } from './core-connection';
+import { databaseHost } from './database-host';
+
+type BetterSqlite3 = InstanceType<typeof import('better-sqlite3')>;
+
+let BetterSqlite3Ctor: typeof import('better-sqlite3');
+let db: BetterSqlite3 | null = null;
+let safeModeReason: string | null = null;
+
+// Module-level logger instance for database operations
+const dbLogger = getLogger();
+
+/**
+ * Stop the WAL checkpoint scheduler started by the shared helper and run a
+ * final TRUNCATE checkpoint. No-op if no scheduler is active. Public API
+ * kept stable for `apps/desktop/src/main/core/graceful-shutdown.ts`.
+ */
+export function stopWalCheckpoint(): void {
+  databaseHost.stopMainWalCheckpoint();
+}
+
+/** Close the main database through its Data package owner. */
+export function closeDatabase(): void {
+  databaseHost.closeMainDatabase();
+  db = null;
+}
+
+interface ElectronApp {
+  isPackaged: boolean;
+}
+
+/**
+ * Electron is OPTIONAL here: this module is inside the value-import closure of
+ * the headless control plane's server entry
+ * (`01-headless-control-plane.md` §2.1). A module-scope
+ * `import { app } from 'electron'` is evaluated when the module is and throws
+ * THERE, taking the whole graph with it, so `app` is resolved through a
+ * guarded require.
+ */
+function electronApp(): ElectronApp | undefined {
+  try {
+    const { app } = require('electron') as { app?: ElectronApp };
+    return app;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A headless control plane is, by definition, NOT a packaged Electron app, so
+ * the absent-host answer (`false`) is the truthful one rather than a degraded
+ * guess: the caller then takes the `require('better-sqlite3')` branch below,
+ * which is exactly the branch a dev checkout takes.
+ */
+function isPackagedHost(): boolean {
+  const app = electronApp();
+  return app ? app.isPackaged : false;
+}
+
+function loadBetterSqlite3(): typeof import('better-sqlite3') {
+  const logger = getLogger();
+  // app.isPackaged returns true when Playwright _electron launches the
+  // Electron binary directly, even in dev. Verify the resources/better-sqlite3
+  // directory actually exists before taking the packaged branch — otherwise
+  // fall back to require('better-sqlite3') from node_modules.
+  const packagedBetterSqlite3Path = path.join(process.resourcesPath, 'better-sqlite3');
+  const usePackagedPath = isPackagedHost() && fs.existsSync(packagedBetterSqlite3Path);
+
+  if (usePackagedPath) {
+    const betterSqlite3Path = packagedBetterSqlite3Path;
+    const nativeBindingPath = path.join(betterSqlite3Path, 'build', 'Release', 'better_sqlite3.node');
+
+    logger.info('Loading better-sqlite3', { path: betterSqlite3Path, nativeBinding: nativeBindingPath }, LogComponent.DB);
+
+    // Load from unpacked extraResources path directly.
+    // Requiring by package name here fails in production because there is no
+    // node_modules tree under resources/better-sqlite3.
+    const requireFromPackage = createRequire(path.join(betterSqlite3Path, 'package.json'));
+    const BetterSqlite3 = requireFromPackage('./');
+
+    BetterSqlite3Ctor = class extends BetterSqlite3 {
+      constructor(filename: string) {
+        super(filename, { nativeBinding: nativeBindingPath });
+      }
+    } as unknown as typeof import('better-sqlite3');
+
+    logger.info('better-sqlite3 constructor loaded with custom nativeBinding', undefined, LogComponent.DB);
+    return BetterSqlite3Ctor;
+  } else {
+    BetterSqlite3Ctor = require('better-sqlite3');
+    return BetterSqlite3Ctor;
+  }
+}
+
+// ============================================================
+// Database Initialization (with Safe Mode support)
+// ============================================================
+
+export interface DbInitResult {
+  success: boolean;
+  dbPath?: string;
+  error?: string;
+  safeMode?: boolean;
+}
+
+/**
+ * Initialize database using path from boot.json.
+ * Implements Defense 2 (Safe Mode): if DB path is invalid, returns error
+ * instead of crashing the app.
+ */
+export function initDatabaseFromBoot(): DbInitResult {
+  const logger = getLogger();
+  if (db) {
+    return { success: true, dbPath: getDatabasePath() };
+  }
+
+  // Step 1: Resolve database path from boot.json
+  const { dbPath, needsBootWrite, needsDbRename, legacyDbPath } = resolveDatabasePath();
+  logger.info('Resolved database path', { dbPath }, LogComponent.DB);
+
+  // Step 2: Handle legacy duya.db -> duya-main.db rename
+  if (needsDbRename) {
+    const renamed = renameLegacyDatabase(dbPath);
+    if (renamed) {
+      logger.info('Renamed legacy database file', undefined, LogComponent.DB);
+    }
+  }
+
+  // Step 3: Validate the database path
+  const validation = validateDatabasePath(dbPath);
+  if (!validation.valid) {
+    logger.error('Database path validation failed', new Error(validation.reason), { dbPath }, LogComponent.DB);
+    safeModeReason = validation.reason ?? null;
+    return {
+      success: false,
+      dbPath,
+      error: validation.reason,
+      safeMode: true,
+    };
+  }
+
+  // Copy the old Electron-default database set before writing the new path or
+  // opening SQLite. Keep the source files as recoverable backups. A failed
+  // migration must not fall through and create a fresh, empty database.
+  if (legacyDbPath) {
+    try {
+      const { copied } = migratePreviousDefaultDatabases(legacyDbPath, dbPath);
+      if (copied.length > 0) {
+        logger.info(
+          'Copied the previous default database set into ~/.duya; source files were retained',
+          { legacyDbPath, dbPath, copied },
+          LogComponent.DB,
+        );
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      logger.error(
+        'Failed to migrate the previous default database set',
+        error instanceof Error ? error : new Error(errorMsg),
+        { legacyDbPath, dbPath },
+        LogComponent.DB,
+      );
+      safeModeReason = errorMsg;
+      return { success: false, dbPath, error: errorMsg, safeMode: true };
+    }
+  }
+
+  // Step 4: Write boot.json if needed (first run or migration)
+  if (needsBootWrite) {
+    initBootConfig(dbPath);
+  }
+
+  // Step 5: Initialize the database
+  try {
+    if (!BetterSqlite3Ctor) {
+      BetterSqlite3Ctor = loadBetterSqlite3();
+    }
+
+    const mainDatabase = databaseHost.openMainDatabase({
+      filename: dbPath,
+      sqlite: BetterSqlite3Ctor,
+      ports: mainSchemaPorts,
+      logger: dataLogger,
+    });
+    db = mainDatabase.db;
+    logger.info('Database opened successfully', { dbPath }, LogComponent.DB);
+
+    safeModeReason = null;
+    return { success: true, dbPath };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    logger.error('Failed to initialize database', error instanceof Error ? error : new Error(errorMsg), { dbPath }, LogComponent.DB);
+    safeModeReason = errorMsg;
+    return {
+      success: false,
+      dbPath,
+      error: errorMsg,
+      safeMode: true,
+    };
+  }
+}
+
+/**
+ * Legacy initDatabase function - kept for backward compatibility.
+ * Now delegates to initDatabaseFromBoot().
+ */
+export function initDatabase(dbDir: string): BetterSqlite3 {
+  const logger = getLogger();
+  if (db) return db;
+
+  if (!BetterSqlite3Ctor) {
+    BetterSqlite3Ctor = loadBetterSqlite3();
+  }
+
+  const dbPath = path.join(dbDir, 'duya-main.db');
+
+  // Also check for old duya.db
+  const oldDbPath = path.join(dbDir, 'duya.db');
+  if (fs.existsSync(oldDbPath) && !fs.existsSync(dbPath)) {
+    fs.renameSync(oldDbPath, dbPath);
+    const oldWal = oldDbPath + '-wal';
+    const newWal = dbPath + '-wal';
+    if (fs.existsSync(oldWal)) fs.renameSync(oldWal, newWal);
+    const oldShm = oldDbPath + '-shm';
+    const newShm = dbPath + '-shm';
+    if (fs.existsSync(oldShm)) fs.renameSync(oldShm, newShm);
+    logger.info('Renamed legacy duya.db to duya-main.db', undefined, LogComponent.DB);
+  }
+
+  logger.info('Initializing database', { dbPath }, LogComponent.DB);
+
+  const mainDatabase = databaseHost.openMainDatabase({
+    filename: dbPath,
+    sqlite: BetterSqlite3Ctor,
+    ports: mainSchemaPorts,
+    logger: dataLogger,
+  });
+  db = mainDatabase.db;
+  logger.info('Database opened successfully', { dbPath }, LogComponent.DB);
+
+  return db;
+}
+
+export function getDatabase(): BetterSqlite3 | null {
+  return db;
+}
+
+export function getDatabasePath(): string {
+  if (db) {
+    return db.name;
+  }
+  return resolveDatabasePath().dbPath;
+}
+
+export function isSafeMode(): boolean {
+  return safeModeReason !== null;
+}
+
+export function getSafeModeReason(): string | null {
+  return safeModeReason;
+}
+
+export interface DatabaseStats {
+  /** Database file path */
+  path: string;
+  /** File size in bytes */
+  sizeBytes: number;
+  /** File size in human-readable format */
+  sizeFormatted: string;
+  /** Total message count */
+  messageCount: number;
+  /** Total session count */
+  sessionCount: number;
+  /** WAL file size in bytes (0 if WAL not present) */
+  walSizeBytes: number;
+}
+
+/**
+ * Get database file size and message statistics.
+ * Returns null if database is not initialized.
+ */
+export function getDatabaseStats(): DatabaseStats | null {
+  if (!db) return null;
+
+  const dbPath = db.name;
+
+  let sizeBytes = 0;
+  let walSizeBytes = 0;
+
+  try {
+    const stat = fs.statSync(dbPath);
+    sizeBytes = stat.size;
+  } catch {
+    // File may not exist yet
+  }
+
+  try {
+    const walPath = dbPath + '-wal';
+    if (fs.existsSync(walPath)) {
+      walSizeBytes = fs.statSync(walPath).size;
+    }
+  } catch {
+    // WAL file may not exist
+  }
+
+  let messageCount = 0;
+  let sessionCount = 0;
+
+  // Plan 328 Phase 5: count from core stores instead of legacy tables.
+  // Falls back to 0 when core stores are unavailable (safe mode / pre-init).
+  const stores = getCoreStoresOrNull();
+  if (stores) {
+    try {
+      sessionCount = stores.sessions.list({ includeDeleted: true }).length;
+    } catch {
+      // best-effort
+    }
+    try {
+      // messageLog has no global count; sum per-session counts would be
+      // expensive. Use the message_index table directly via the core db.
+      const coreDb = stores.coreDb.db;
+      const row = coreDb.prepare('SELECT COUNT(*) as count FROM message_index').get() as { count: number };
+      messageCount = row?.count ?? 0;
+    } catch {
+      // best-effort
+    }
+  }
+
+  const totalSize = sizeBytes + walSizeBytes;
+
+  return {
+    path: dbPath,
+    sizeBytes: totalSize,
+    sizeFormatted: formatBytes(totalSize),
+    messageCount,
+    sessionCount,
+    walSizeBytes,
+  };
+}
+
+/**
+ * Check if database size exceeds the recommended threshold.
+ * Returns a warning message if threshold exceeded, null otherwise.
+ */
+export function checkDatabaseSizeWarning(): string | null {
+  const stats = getDatabaseStats();
+  if (!stats) return null;
+
+  const SIZE_WARNING_THRESHOLD = 100 * 1024 * 1024; // 100 MB
+
+  if (stats.sizeBytes > SIZE_WARNING_THRESHOLD) {
+    return `Database size (${stats.sizeFormatted}) exceeds 100MB. Consider running VACUUM to reclaim space. Messages: ${stats.messageCount}, Sessions: ${stats.sessionCount}`;
+  }
+
+  return null;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  const size = bytes / Math.pow(1024, i);
+  return `${size.toFixed(1)} ${units[i]}`;
+}
+
+// ============================================================
+// Re-exports for module access
+// ============================================================
+
+export { db, safeModeReason };
+
+export function getDb(): BetterSqlite3 | null {
+  return db;
+}
+
+/**
+ * Get the loaded better-sqlite3 constructor. Returns null if not yet loaded
+ * (call `initDatabaseFromBoot()` first). Used by `initCoreDatabase()` to
+ * share the same native binding between the legacy and core databases.
+ */
+export function getSqliteCtor(): typeof import('better-sqlite3') | null {
+  return BetterSqlite3Ctor;
+}
+
+export function setDb(d: BetterSqlite3 | null): void {
+  db = d;
+}
+
+export function getSafeModeReasonValue(): string | null {
+  return safeModeReason;
+}
+
+export function setSafeModeReason(reason: string | null): void {
+  safeModeReason = reason;
+}

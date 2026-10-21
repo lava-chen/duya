@@ -1,0 +1,232 @@
+import type { Database } from 'better-sqlite3';
+
+/**
+ * Memory eligibility query (Plan 302 Phase B, design v3 Scheduler 决策).
+ *
+ * Picks rollouts that are due for Stage 1 extraction. The SQL below is
+ * the design doc's authoritative query verbatim:
+ *   - only `agent_type='main'` rollouts; automation sessions carry
+ *     `agent_type='main' + mode='automation'` and are excluded HERE
+ *     (the catalog sync copies values verbatim, it does not filter)
+ *   - only active sources within the idle/window bounds
+ *   - eligible when: never successfully extracted, OR the source
+ *     advanced since the last success (D3 re-extract), OR a previous
+ *     attempt failed and its backoff elapsed
+ *   - permanently retired rollouts are hard-excluded
+ *   - ordered by idle time DESC (longest-idle first)
+ *
+ * The DB handle is injected as the first parameter (packages/agent
+ * must not import the Electron DB singleton; Plan 305 wires it).
+ *
+ * Shadow mode: no production caller until Plan 305 wires the worker.
+ */
+
+export const DEFAULT_ELIGIBILITY_LIMIT = 16;
+// Token budget control (Plan 417 follow-up): a session must be idle 4h
+// before extraction. Lowered from 12h so Phase 1 produces rollouts sooner;
+// sessions still need to go quiet before they qualify.
+export const DEFAULT_IDLE_MS = 4 * 3600 * 1000; // 4h
+export const DEFAULT_WINDOW_MS = 30 * 86400 * 1000; // 30d
+/** Minimum message count for a session to be eligible for extraction. Filters out very thin sessions. */
+export const DEFAULT_MIN_MESSAGE_COUNT = 3;
+
+export interface EligibleRollout {
+  rolloutId: string;
+  lastMessageAt: number; // ms
+  sourceFingerprint: string;
+}
+
+const SELECT_ELIGIBLE_SQL = `
+SELECT r.rollout_id, r.last_message_at, r.source_fingerprint
+FROM rollout_catalog r
+WHERE r.agent_type = 'main'
+  AND r.mode IS NOT 'automation'
+  AND r.source_status = 'active'
+  AND r.message_count >= :minMessageCount
+  AND r.last_message_at < :now - :idleMs
+  AND r.last_message_at > :now - :windowMs
+  AND (
+    -- Case 1: never successfully extracted.
+    NOT EXISTS (
+      SELECT 1 FROM stage1_outputs s
+      WHERE s.rollout_id = r.rollout_id
+        AND s.job_status IN ('succeeded','succeeded_no_output'))
+    OR EXISTS (
+      SELECT 1 FROM stage1_outputs s
+      WHERE s.rollout_id = r.rollout_id
+        AND s.job_status IN ('succeeded','succeeded_no_output')
+        AND (s.source_updated_at < r.last_message_at
+             OR s.source_content_hash != r.source_fingerprint))
+    OR EXISTS (
+      SELECT 1 FROM rollout_leases l
+      WHERE l.rollout_id = r.rollout_id
+        AND l.job_status = 'failed'
+        AND (l.next_retry_at IS NULL OR l.next_retry_at <= :now))
+  )
+  -- Backoff guard (applies to every case above): while a rollout has a
+  -- failed lease still in its retry backoff, it must NOT be selected. The
+  -- re-extract branch (Case 2) has no inline guard, so without this global
+  -- clause a permanently-failing re-extract would be picked every tick,
+  -- acquireLease would return busy, and it would be skipped as a noop —
+  -- occupying a concurrency slot forever and starving every other rollout.
+  AND NOT EXISTS (
+    SELECT 1 FROM rollout_leases l
+    WHERE l.rollout_id = r.rollout_id
+      AND l.job_status = 'failed'
+      AND l.next_retry_at IS NOT NULL
+      AND l.next_retry_at > :now)
+  AND NOT EXISTS (SELECT 1 FROM rollout_retired t WHERE t.rollout_id = r.rollout_id)
+`;
+
+/** ORDER BY / LIMIT tail — the optional bot-exclusion clause is spliced in
+ * BEFORE these (appending after LIMIT would fold the clause into the LIMIT
+ * expression, where the `r` alias is out of scope). */
+const SELECT_ELIGIBLE_SQL_TAIL = `
+ORDER BY (:now - r.last_message_at) DESC
+LIMIT :limit
+`;
+
+interface EligibleRow {
+  rollout_id: string;
+  last_message_at: number;
+  source_fingerprint: string | null;
+}
+
+export function selectEligible(
+  db: Database,
+  input: {
+    now: number; // ms
+    limit?: number; // default 16
+    idleMs?: number; // default 6h
+    windowMs?: number; // default 30d
+    minMessageCount?: number; // default 6
+    /**
+     * Bot profile ids whose sessions never enter the session memory
+     * pipeline (Plan 479): a bot's memory is fed by update_state writes
+     * into its own tier, not by Stage 1 extraction over its chat
+     * sessions. Null agent_profile_id (plain desktop sessions) and ids
+     * outside the list stay eligible.
+     */
+    excludeAgentProfileIds?: string[];
+  }
+): EligibleRollout[] {
+  const excluded = input.excludeAgentProfileIds ?? [];
+  const params: Record<string, unknown> = {
+    now: input.now,
+    limit: input.limit ?? DEFAULT_ELIGIBILITY_LIMIT,
+    idleMs: input.idleMs ?? DEFAULT_IDLE_MS,
+    windowMs: input.windowMs ?? DEFAULT_WINDOW_MS,
+    minMessageCount: input.minMessageCount ?? DEFAULT_MIN_MESSAGE_COUNT,
+  };
+  let exclusionClause = '';
+  if (excluded.length > 0) {
+    const placeholders = excluded
+      .map((id, i) => {
+        params[`ex${i}`] = id;
+        return `:ex${i}`;
+      })
+      .join(', ');
+    exclusionClause = `\n  AND (r.agent_profile_id IS NULL OR r.agent_profile_id NOT IN (${placeholders}))`;
+  }
+
+  const rows = db
+    .prepare(SELECT_ELIGIBLE_SQL + exclusionClause + SELECT_ELIGIBLE_SQL_TAIL)
+    .all(params) as EligibleRow[];
+
+  return rows.map((row) => ({
+    rolloutId: row.rollout_id,
+    lastMessageAt: row.last_message_at,
+    sourceFingerprint: row.source_fingerprint ?? '',
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// diagnoseEligibility
+// ---------------------------------------------------------------------------
+
+export interface EligibilityDiagnostic {
+  total: number;
+  /** Sessions belonging to excluded bot profiles (never eligible). */
+  botExcluded: number;
+  activeMain: number;
+  enoughMessages: number;
+  idleReady: number;
+  alreadyExtracted: number;
+}
+
+/**
+ * Explain WHY no rollout is currently eligible for Stage 1 extraction.
+ *
+ * Phase 1 silently does nothing when `selectEligible` returns empty, which
+ * makes "no new rollout for a long time" hard to diagnose. This helper
+ * buckets the catalog by the `selectEligible` gates so the worker can log a
+ * concrete reason (e.g. "sessions not idle 12h yet" vs "already extracted").
+ *
+ * The counts are cumulative filters in the same order as `selectEligible`:
+ *   total            → all catalog rows
+ *   activeMain       → agent_type='main' AND source_status='active'
+ *   enoughMessages   → activeMain AND message_count >= minMessageCount
+ *   idleReady        → enoughMessages AND idle (idleMs) AND within windowMs
+ *   alreadyExtracted → activeMain with a succeeded stage1_outputs row
+ */
+export function diagnoseEligibility(
+  db: Database,
+  input: {
+    now: number;
+    idleMs?: number;
+    windowMs?: number;
+    minMessageCount?: number;
+    /** Mirrors selectEligible's bot exclusion — counted as `botExcluded`. */
+    excludeAgentProfileIds?: string[];
+  }
+): EligibilityDiagnostic {
+  const now = input.now;
+  const idleMs = input.idleMs ?? DEFAULT_IDLE_MS;
+  const windowMs = input.windowMs ?? DEFAULT_WINDOW_MS;
+  const minMessageCount = input.minMessageCount ?? DEFAULT_MIN_MESSAGE_COUNT;
+  const excluded = input.excludeAgentProfileIds ?? [];
+
+  const botExcluded =
+    excluded.length > 0
+      ? (
+          db
+            .prepare(
+              `SELECT COUNT(*) AS c FROM rollout_catalog WHERE agent_profile_id IN (${excluded
+                .map(() => '?')
+                .join(', ')})`
+            )
+            .get(...excluded) as { c: number }
+        ).c
+      : 0;
+
+  const row = db
+    .prepare(
+      `SELECT
+         COUNT(*) AS total,
+         SUM(CASE WHEN agent_type = 'main' AND source_status = 'active' THEN 1 ELSE 0 END) AS active_main,
+         SUM(CASE WHEN agent_type = 'main' AND source_status = 'active' AND message_count >= ? THEN 1 ELSE 0 END) AS enough_messages,
+         SUM(CASE WHEN agent_type = 'main' AND source_status = 'active' AND mode IS NOT 'automation' AND message_count >= ?
+                   AND last_message_at < ? - ? AND last_message_at > ? - ? THEN 1 ELSE 0 END) AS idle_ready,
+         SUM(CASE WHEN agent_type = 'main' AND source_status = 'active' AND EXISTS (
+               SELECT 1 FROM stage1_outputs s
+               WHERE s.rollout_id = r.rollout_id
+                 AND s.job_status IN ('succeeded','succeeded_no_output')) THEN 1 ELSE 0 END) AS already_extracted
+       FROM rollout_catalog r`
+    )
+    .get(minMessageCount, minMessageCount, now, idleMs, now, windowMs) as {
+    total: number;
+    active_main: number;
+    enough_messages: number;
+    idle_ready: number;
+    already_extracted: number;
+  };
+
+  return {
+    total: row.total || 0,
+    botExcluded,
+    activeMain: row.active_main || 0,
+    enoughMessages: row.enough_messages || 0,
+    idleReady: row.idle_ready || 0,
+    alreadyExtracted: row.already_extracted || 0,
+  };
+}

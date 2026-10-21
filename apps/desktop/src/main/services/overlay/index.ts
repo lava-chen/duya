@@ -1,0 +1,373 @@
+/**
+ * services/overlay/index.ts — element-tree visualization overlay
+ * (plan 562 Phase 3).
+ *
+ * A single transparent, click-through, always-on-top BrowserWindow
+ * covering the display that contains the enumerated elements. The page
+ * draws one rect + index badge per interactive element so the user can
+ * aim clicks at numbered targets while recording (plan 562 D6: the
+ * overlay is passive — clicks pass through to the REAL elements and
+ * are captured by the hook worker + probe attach; the overlay never
+ * takes input).
+ *
+ * Modeled on `apps/desktop/src/main/services/computer-use-overlay.ts`: data-URL
+ * page, no preload, `setIgnoreMouseEvents(true)`, and content
+ * protection ON so desktop captures never show the frames to the model.
+ * Like the stop chip, the page hardcodes its colors — design tokens do
+ * not exist inside a sandboxed data-URL page, so it mirrors the badge
+ * chip style (dark surface + purple accent).
+ *
+ * Defense in depth (plan 562 §5 缺口2): the page re-asserts the
+ * interactive whitelist on EVERY draw, independently of
+ * `selectVisibleOverlayElements` on the main side. Anything without a
+ * whitelisted ControlType, a usable rect, or `interactive !== false` is
+ * dropped rather than drawn. SOM capture-channel elements are not
+ * accepted at all (they carry no `interactive` provenance).
+ *
+ * Lifecycle: `showOverlayElements` shows/refreshes; `clearOverlayElements`,
+ * recorder stop, and display metrics changes tear the window down (it
+ * is rebuilt on the next show, so a resolution/monitor change can never
+ * leave a stale-positioned frame behind). The overlay is main-internal:
+ * the only caller is the recorder service, so no renderer channel feeds
+ * it (the former `overlay:show-elements` / `overlay:clear` IPC surface
+ * was removed with the rest of the unused overlay channels).
+ */
+
+import { BrowserWindow, screen } from 'electron';
+
+import { getLogger, LogComponent } from '../../logging/logger.js';
+import { selectVisibleOverlayElements } from './geometry.js';
+
+const logger = getLogger();
+
+let overlayWindow: BrowserWindow | null = null;
+let overlayLoad: Promise<void> | null = null;
+let screenListenersWired = false;
+
+// ────────────────────────────────────────────────────────────────────
+// Page (no preload — data URL + executeJavaScript injection)
+// ────────────────────────────────────────────────────────────────────
+
+/**
+ * Mirror of DEFAULT_INTERACTIVE_CONTROL_TYPES (packages/computer-use),
+ * plan 576 vocabulary. `document` is deliberately excluded here even
+ * though the CUA tree whitelists it: the overlay draws a frame per
+ * element and a frame over the whole page is pure noise for the
+ * recorder user — Document content stays visible in the tree channel.
+ */
+const PAGE_WHITELIST = [
+  'button', 'splitbutton', 'edit', 'hyperlink', 'checkbox', 'radiobutton',
+  'combobox', 'tabitem', 'menuitem', 'slider', 'listitem', 'toggleswitch',
+  'dataitem', 'treeitem', 'spinner',
+];
+
+const OVERLAY_HTML =
+  'data:text/html;charset=utf-8,' +
+  encodeURIComponent(`<!doctype html>
+<html><head><style>
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden;
+    font-family: 'Segoe UI', system-ui, sans-serif; user-select: none; }
+  .frame {
+    position: absolute;
+    border: 1.5px solid rgba(168, 85, 247, 0.9);
+    border-radius: 4px;
+    background: rgba(168, 85, 247, 0.08);
+    pointer-events: none;
+  }
+  .badge {
+    position: absolute;
+    min-width: 16px; height: 16px;
+    padding: 0 4px;
+    border-radius: 9999px;
+    background: rgba(24, 24, 27, 0.85);
+    border: 1px solid rgba(168, 85, 247, 0.55);
+    color: #e9d5ff;
+    font-size: 10px; line-height: 14px;
+    text-align: center;
+    pointer-events: none;
+  }
+</style></head>
+<body><div id="elements"></div>
+<script>
+  var WHITELIST = ${JSON.stringify(PAGE_WHITELIST)};
+
+  // Renderer-side defense (plan 562 §5 缺口2): re-assert the interactive
+  // whitelist on the consuming side. Anything without a whitelisted
+  // ControlType, a usable rect, or interactive !== false is dropped.
+  function isInteractive(el) {
+    if (!el || el.interactive === false) return false;
+    var r = el.rect;
+    if (!r || !(r.w > 0) || !(r.h > 0)) return false;
+    var t = (el.controlType || '').toLowerCase();
+    if (!t) return false;
+    return WHITELIST.indexOf(t) !== -1;
+  }
+
+  window.__overlayShow = function (raw) {
+    var list;
+    try { list = JSON.parse(raw); } catch (e) { list = null; }
+    if (!Array.isArray(list)) list = [];
+    var origin = window.__overlayOrigin || { x: 0, y: 0 };
+    var root = document.getElementById('elements');
+    root.innerHTML = '';
+    var count = 0;
+    for (var i = 0; i < list.length; i++) {
+      var el = list[i];
+      if (!isInteractive(el)) continue;
+      count++;
+      var r = el.rect;
+      var frame = document.createElement('div');
+      frame.className = 'frame';
+      frame.style.left = (r.x - origin.x) + 'px';
+      frame.style.top = (r.y - origin.y) + 'px';
+      frame.style.width = r.w + 'px';
+      frame.style.height = r.h + 'px';
+      var badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.textContent = String(Number.isInteger(el.overlayIndex) ? el.overlayIndex : count);
+      badge.style.left = (r.x - origin.x) + 'px';
+      badge.style.top = (r.y - origin.y - 8) + 'px';
+      root.appendChild(frame);
+      root.appendChild(badge);
+    }
+    window.__overlayCount = count;
+    window.__overlayRenderedAt = Date.now();
+  };
+</script></body></html>`);
+
+// ────────────────────────────────────────────────────────────────────
+// Window management
+// ────────────────────────────────────────────────────────────────────
+
+function createOverlayWindow(displayBounds: Electron.Rectangle): BrowserWindow {
+  const win = new BrowserWindow({
+    x: displayBounds.x,
+    y: displayBounds.y,
+    width: displayBounds.width,
+    height: displayBounds.height,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    focusable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    hasShadow: false,
+    fullscreenable: false,
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+    },
+  });
+  // Never steal focus, never intercept clicks, never appear in captures.
+  win.setAlwaysOnTop(true, 'screen-saver');
+  win.setIgnoreMouseEvents(true);
+  win.setContentProtection(true);
+  overlayLoad = win.loadURL(OVERLAY_HTML).then(() => undefined);
+  win.once('ready-to-show', () => win.showInactive());
+  return win;
+}
+
+function destroyOverlayWindow(): void {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.destroy();
+  }
+  overlayWindow = null;
+  overlayLoad = null;
+}
+
+/**
+ * Rebuild on display/monitor/scale changes: a stale window would draw
+ * frames at outdated positions. The window is recreated lazily by the
+ * next show, so a metrics change mid-idle costs nothing.
+ */
+function wireScreenListeners(): void {
+  if (screenListenersWired) {
+    return;
+  }
+  screenListenersWired = true;
+  screen.on('display-metrics-changed', () => {
+    if (overlayWindow) {
+      logger.debug('overlay: display metrics changed — rebuilding on next show', undefined, LogComponent.ComputerUse);
+      destroyOverlayWindow();
+    }
+  });
+  screen.on('display-removed', () => {
+    if (overlayWindow) {
+      destroyOverlayWindow();
+    }
+  });
+}
+
+interface RectLike {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+function rectOf(entry: Record<string, unknown>): RectLike | null {
+  const rect = entry['rect'];
+  if (typeof rect !== 'object' || rect === null) {
+    return null;
+  }
+  const r = rect as Record<string, unknown>;
+  if (
+    typeof r['x'] !== 'number' ||
+    typeof r['y'] !== 'number' ||
+    typeof r['w'] !== 'number' ||
+    typeof r['h'] !== 'number'
+  ) {
+    return null;
+  }
+  return { x: r['x'], y: r['y'], w: r['w'], h: r['h'] };
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Public API (wired in apps/desktop/src/main/ipc/recorder-handlers.ts)
+// ────────────────────────────────────────────────────────────────────
+
+/**
+ * Show (or refresh) the element frames.
+ *
+ * `elements` is expected to be UI Automation probe output from the
+ * recorder service — the caller is main-internal and there is no
+ * renderer payload to gate here. The structural checks the old
+ * `sanitizeOverlayElements` gate used to perform are now enforced
+ * where the data is actually used: entries without a usable numeric
+ * rect are skipped, and `selectVisibleOverlayElements` drops
+ * non-interactive control types, off-display frames, and anything past
+ * the visible-count cap. The page re-asserts the interactive whitelist
+ * on every draw. Cosmetic failures are logged and swallowed — the
+ * overlay must never break the recording pipeline.
+ */
+export function showOverlayElements(elements: readonly Record<string, unknown>[]): void {
+  try {
+    wireScreenListeners();
+
+    // UI Automation BoundingRectangle values are physical screen pixels,
+    // while Electron screen bounds and renderer CSS coordinates are DIPs.
+    // Normalize before picking a display or subtracting its origin; mixing
+    // these spaces misplaces frames on scaled displays.
+    const positionedElements = process.platform === 'win32'
+      ? elements.map((entry) => {
+          const rect = rectOf(entry);
+          if (!rect) return entry;
+          const dipRect = screen.screenToDipRect(null, {
+            x: rect.x,
+            y: rect.y,
+            width: rect.w,
+            height: rect.h,
+          });
+          return {
+            ...entry,
+            rect: { x: dipRect.x, y: dipRect.y, w: dipRect.width, h: dipRect.height },
+          };
+        })
+      : elements;
+
+    // Resolve a display from the normalized tree, then compact it using that
+    // display's dimensions before creating or updating the overlay window.
+    let union: RectLike | null = null;
+    for (const entry of positionedElements) {
+      const rect = rectOf(entry);
+      if (!rect) continue;
+      union = union
+        ? {
+            x: Math.min(union.x, rect.x),
+            y: Math.min(union.y, rect.y),
+            w: Math.max(union.x + union.w, rect.x + rect.w) - Math.min(union.x, rect.x),
+            h: Math.max(union.y + union.h, rect.y + rect.h) - Math.min(union.y, rect.y),
+          }
+        : rect;
+    }
+    const initialDisplay = union
+      ? screen.getDisplayMatching({ x: union.x, y: union.y, width: union.w, height: union.h })
+      : screen.getPrimaryDisplay();
+    const compactElements = selectVisibleOverlayElements(positionedElements, initialDisplay.bounds);
+    if (compactElements.length === 0) {
+      clearOverlayElements();
+      return;
+    }
+
+    union = null;
+    for (const entry of compactElements) {
+      const rect = rectOf(entry);
+      if (!rect) continue;
+      union = union
+        ? {
+            x: Math.min(union.x, rect.x),
+            y: Math.min(union.y, rect.y),
+            w: Math.max(union.x + union.w, rect.x + rect.w) - Math.min(union.x, rect.x),
+            h: Math.max(union.y + union.h, rect.y + rect.h) - Math.min(union.y, rect.y),
+          }
+        : rect;
+    }
+    const display = union
+      ? screen.getDisplayMatching({ x: union.x, y: union.y, width: union.w, height: union.h })
+      : initialDisplay;
+
+    if (!overlayWindow || overlayWindow.isDestroyed()) {
+      overlayWindow = createOverlayWindow(display.bounds);
+    } else {
+      const bounds = overlayWindow.getBounds();
+      if (
+        bounds.x !== display.bounds.x ||
+        bounds.y !== display.bounds.y ||
+        bounds.width !== display.bounds.width ||
+        bounds.height !== display.bounds.height
+      ) {
+        destroyOverlayWindow();
+        overlayWindow = createOverlayWindow(display.bounds);
+      }
+    }
+
+    const origin = display.bounds;
+    const payload = JSON.stringify({
+      x: origin.x,
+      y: origin.y,
+    });
+    const win = overlayWindow;
+    const ready = overlayLoad ?? Promise.resolve();
+    // The page reads a flat { x, y } origin. Update it and the element list
+    // together so one refresh cannot draw with another refresh's origin.
+    // Wait for navigation before injection; otherwise its new document can
+    // discard the script along with the initial about:blank context.
+    void ready
+      .then(() => {
+        if (win.isDestroyed() || overlayWindow !== win) return undefined;
+        return win.webContents.executeJavaScript(
+          `window.__overlayOrigin = ${payload}; window.__overlayShow(${JSON.stringify(JSON.stringify(compactElements))}); true;`,
+        );
+      })
+      .catch(() => {
+        // Page not ready yet or window torn down — next show retries.
+      });
+
+    logger.debug(
+      'overlay: showing elements',
+      { count: compactElements.length, total: elements.length, displayId: display.id },
+      LogComponent.ComputerUse,
+    );
+  } catch (err) {
+    logger.warn(
+      'overlay: failed to show elements',
+      { error: err instanceof Error ? err.message : String(err) },
+      LogComponent.ComputerUse,
+    );
+  }
+}
+
+/** Hide the overlay (recorder stop / overlay:clear / shutdown). */
+export function clearOverlayElements(): void {
+  if (overlayWindow) {
+    destroyOverlayWindow();
+    logger.debug('overlay: cleared', undefined, LogComponent.ComputerUse);
+  }
+}
+
+export function isElementOverlayActive(): boolean {
+  return overlayWindow !== null && !overlayWindow.isDestroyed();
+}

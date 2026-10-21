@@ -1,0 +1,158 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            platform: win
+          - os: macos-latest
+            platform: mac
+          - os: ubuntu-latest
+            platform: linux
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Setup Python (Windows native modules)
+        if: matrix.os == 'windows-2022'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Python (macOS native modules)
+        if: matrix.os == 'macos-latest'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup MSVC toolchain (Windows native modules)
+        if: matrix.os == 'windows-2022'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download Electron binary
+        # Electron 44+ ships its npm package without a postinstall hook, so a
+        # clean checkout has no node_modules/electron/dist. Download it
+        # explicitly: ensure-sqlite-abi.mjs (preelectron:build hook) probes
+        # the real Electron binary to verify the better-sqlite3 ABI, and
+        # exits 1 when the binary is missing.
+        run: node node_modules/electron/install.js
+
+      - name: Build workspace packages
+        # Single-pass build. This used to need a two-pass hack to break a
+        # `@duya/agent` <-> `@duya/conductor` cycle: pass 1 built conductor
+        # with errors suppressed via `|| echo` so `@duya/agent/*` types
+        # resolved, then conductor's dist was cleaned and rebuilt. Plan M4
+        # removed the last agent -> conductor import (the widget primitives
+        # moved into `packages/agent/src/tool/WidgetRenderer/`), so there is
+        # no cycle left and every package builds exactly once.
+        # build:agent already runs build:cli + build:conductor + agent.
+        run: npm run build:agent && npm run build:gateway
+
+      - name: Build application
+        env:
+          # Vite on macOS arm64 runners OOMs at the default ~2 GB V8 heap
+          # while transforming 25k+ modules. Raise the limit for all
+          # platforms so the same value works across the matrix.
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: npm run electron:build
+
+      - name: Verify agent-bundle
+        # after-pack.js (scripts/after-pack.js) requires
+        # packages/host/bundle/worker-entry.js to exist before it
+        # will sign-off the build. macOS arm64 runners have OOM'd inside
+        # `npm run bundle:agent` historically; catch the failure here
+        # with a clear error rather than letting electron-builder fail
+        # in afterPack with a confusing "agent-bundle missing" message.
+        shell: bash
+        run: |
+          if [ ! -f packages/host/bundle/worker-entry.js ]; then
+            echo "::error::worker-entry.js missing after npm run electron:build"
+            echo "::group::packages/host/bundle contents"
+            ls -la packages/host/bundle/ 2>&1 || echo "(directory does not exist)"
+            echo "::endgroup::"
+            exit 1
+          fi
+          echo "harness-bundle present: $(du -h packages/host/bundle/worker-entry.js | cut -f1)"
+
+      - name: Build and Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS code signing + notarization. When these secrets are absent
+          # the build produces an unsigned (ad-hoc) app; when present,
+          # after-sign.js notarizes the app automatically. Add these as
+          # repository secrets to enable signed macOS releases.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        # Explicit bash shell across all platforms. The script below uses
+        # POSIX-only syntax (`[ -z "$VAR" ]`, `unset`) which Windows
+        # PowerShell cannot parse (ParserError "Missing '(' after 'if'").
+        # Pinning to bash lets the same step run on windows-2022, macos,
+        # and ubuntu runners without per-platform wrappers.
+        shell: bash
+        # Empty CSC_LINK (secret not set) makes electron-builder treat the
+        # empty string as a certificate file path, failing with "not a file".
+        # Unset empty signing vars and disable auto-discovery so the build
+        # proceeds unsigned instead of crashing. The macOS target config
+        # deliberately produces both arm64 and x64 artifacts from the Apple
+        # Silicon runner; afterPack receives the target architecture for each
+        # pass and rebuilds its native modules accordingly.
+        run: |
+          if [ -z "$CSC_LINK" ]; then
+            unset CSC_LINK CSC_KEY_PASSWORD
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+          fi
+          [ -z "$APPLE_ID" ] && unset APPLE_ID || true
+          [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] && unset APPLE_APP_SPECIFIC_PASSWORD || true
+          [ -z "$APPLE_TEAM_ID" ] && unset APPLE_TEAM_ID || true
+          if [ "${{ matrix.platform }}" = "mac" ]; then
+            npx electron-builder --mac --config electron-builder.yml --publish always
+          else
+            npx electron-builder --config electron-builder.yml --publish always
+          fi
+
+      - name: Verify packaged artifacts
+        # Runs after the build to confirm critical files landed inside the
+        # packaged app (catches afterPack path bugs that only manifest on
+        # macOS where resources live inside the .app bundle).
+        if: success() || failure()
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform }}" = "mac" ]; then
+            node scripts/verify-packaged-parity.mjs --platform mac --arch arm64
+            node scripts/verify-packaged-parity.mjs --platform mac --arch x64
+          else
+            node scripts/verify-packaged-parity.mjs
+          fi
+
+      - name: Upload artifacts (fallback)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts-${{ matrix.platform }}
+          path: |
+            release/
+            dist/

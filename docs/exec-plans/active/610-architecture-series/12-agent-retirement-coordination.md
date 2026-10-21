@@ -1,0 +1,287 @@
+# Agent retirement coordination
+
+Status: active. Owner: root coordinator. Started: 2026-10-13.
+
+## Objective and finish line
+
+Run the existing Duya product through the monorepo owners with no source,
+package, build, asset, or runtime dependency on `packages/agent`, then remove
+that directory. Preserve active tools, bot exposure, modes, workflows,
+subagents, prompts, permissions, persistence, and Desktop/CLI behavior.
+RunEngine remains the sole model/tool/next-turn loop owner.
+
+This is an execution slice of 610, not another architecture program. No new
+remote runtime, client, arbitrary recovery feature, or Session schema redesign.
+Do not rename/copy the monolith into a replacement umbrella package. Move
+responsibilities to existing owners and cut their real consumers.
+
+## Isolation and inherited baseline
+
+- Checkout: `.claude/worktrees/agent-retirement`, `codex/agent-retirement`.
+- Base: `4fc047c5`; existing dirty changes copied before new implementation.
+- Primary checkout is preserved. Worktree dependency overlays use its own
+  workspace sources and shared third-party dependencies.
+- Initial `npm test` stopped in pretest at capabilities build: TS7016 for
+  picomatch. The existing declaration remains in the retiring package.
+  Capture the full test failure set after resolving this prerequisite.
+- A green compile or stub worker is insufficient evidence for retirement.
+
+## Ownership and sequence
+
+| Agent | Current exclusive slice | Required proof |
+| --- | --- | --- |
+| Luna host_worker | Concrete child-run binding and SubagentTool Host adapter after verified workflow runner/child/backend and modifier/Canvas cuts | Same Host engine driver, required factories, actual child result and cancellation; no second agent loop |
+| Luna tools_domains | SendMessage, UpdateState, Plan, ManageRoutine and DuyaCli tools after verified subagent service slice | Cap executors with required effects, Host production binding; CLI command runner injected without Host-to-CLI cycle |
+| Luna retirement_validation | BackgroundTask, Skill and mode-switch tools after verified session/room/interagent tools | Preserve task lifecycle, existing mode state transitions and skill IO; share the actual Host invocation registry |
+| Root | Baseline, shared contracts, permissions/executor cut, manifests/lock/build order/policy, integration and all final acceptance | Single authorization consumption; package gates, real production worker/CLI/Desktop evidence |
+
+Agents edit only the isolated checkout and their assigned paths. Shared files
+are coordinator-owned. Report new ownership/dependency edges before widening
+the slice. No commits, push, baseline re-recording or test weakening by agents.
+
+Next waves: runtime tool executor and context/compaction adapters; remaining
+domain/mode/prompt implementations and worker assembly; production worker and
+Desktop launch cutover; remove compatibility consumers and old package.
+Every wave updates this file with completed facts and outstanding consumers.
+
+## Final acceptance
+
+1. Source/import/build/asset consumers of old Agent are zero (historical docs
+   may explain the retired path).
+2. Production worker builds and loads with the old directory unavailable.
+3. Same engine serves standalone Host/CLI and Desktop; multi-turn tool use,
+   approval allow/deny, cancellation, durable result/replay, child runs and
+   workflows preserve their existing contracts.
+4. Required typecheck and architecture gates pass; compare full-suite failures
+   by test identity/error against inherited baseline. Build/package entry and
+   assets are verified, with real Electron checks for bridge changes.
+5. Only then delete old source and remove package metadata. Removing a junction
+   or worktree always follows the repository's documented safe teardown.
+
+## Progress
+
+- Three GPT-6 Luna max agents completed the initial dependency/ownership audit.
+- Independent Host/CLI execution exists; worker still resolves the old bundle.
+- Frozen inherited baseline (separate checkout, plus the picomatch typing
+  prerequisite): 14,565 tests, 14,314 passed, 157 failed, 94 pending; 43 failed
+  file records. Failure identities/errors are saved for regression comparison.
+- Initial architecture baseline: 1,588 tolerated findings, zero new violations;
+  no baseline rewrite. New package entry points must be declared, not baselined.
+- First cut: Host owns worker DB and OS context; Runtime owns the contextual
+  fragment. Nine focused files / 85 tests and Host typecheck passed. Desktop
+  OS callers now use the Host subpath and inject Main logging.
+- Browser/OS capability build passed; behavioral suites are moving with their
+  implementation and mock paths are being checked against actual owner modules.
+- Runtime invocation decision binding plus the production approval/pipeline
+  regression passed two files / 16 tests. Runtime/Host builds and Agent
+  compatibility typecheck passed together after the first wave.
+- Workspace context/activity tools named by AGENTS are unavailable in this
+  session; coordinator messages and this document carry the shared handoff.
+
+### Verified ownership cuts as of 2026-10-14
+
+- Core owns message projection, reminders, wake/preemption, usage accounting,
+  pinned-manifest verification and mode tracker contracts. Protocol owns
+  attachment and worker wire DTOs. Core strict build passed.
+- Runtime owns contextual permission evaluation, invocation decision binding,
+  catalog registry/snapshots, MCP source guard and real tool execution pipeline.
+  Runtime execution verification: 3 files / 31 tests, including four actual
+  RunEngine model/tool/result/next-model tests. Compaction closure is verified below.
+- Capabilities owns Browser/OS/CUA and connector tools through injected effects.
+  Browser/CUA verification: 30 files / 292 tests. Connector tools: 40 tests;
+  MCP lifecycle/conformance and config/guard cuts: 45 tests plus 26 adapter tests.
+- Host owns worker DB/transport/logger, skill filesystem services and assets,
+  prompts/AGENTS loading, attachments, hooks, task/journal services, managed
+  shell, connector assembly and product mode coordination. Prompts: 11 files /
+  157 tests; managed shell: 7 files / 80 tests; Goal/Research: 5 files / 70 tests.
+- Twenty-three Desktop consumer references use the actual new owners. Launch
+  selectors, worker bootstrap and final composition still depend on Agent.
+- Compatibility exports remain temporary. The old package has not been retired.
+  No current full-suite, production worker absence test or Electron acceptance
+  has passed yet. Final acceptance above remains mandatory.
+- Full-suite inherited failures are recorded by identity for later comparison.
+  Shared manifest/export/build integration stays coordinator-owned. The import
+  gate now resolves declared workspace exports; mutation checks proved it still
+  rejects a forbidden Runtime-to-Host edge and a private deep import.
+- Tests use a worktree-local E-drive temporary directory after C-drive temp
+  exhaustion. This infrastructure failure is separate from behavioral failures.
+- Context/compaction closure: 230 Runtime/Host tests, 197 old caller tests and
+  50 real engine compaction integration tests passed. Product coordinator now
+  belongs to Host; neutral engine-port adaptation belongs to Runtime. Durable
+  tool ledger belongs to Host. After these final owner cuts, five focused files
+  / 74 tests passed. One old coordinator cooldown assertion remains a recorded
+  inherited failure with the same test identity and error.
+- Discovery meta tools and real deferred dispatcher now belong to Runtime.
+  MCP dispatch preserves the model-call context, binds a distinct invocation
+  identity to the actual deferred tool/arguments and reuses explicit consent.
+  Persisted approval is consumed once across gate/dispatcher/MCP source guard.
+  Approval suites: 49 tests; Runtime execution regression: 31 tests, all passed.
+- Turn assembly, immutable turn context and call-streak tracking now belong to
+  Runtime; 66 contract/product/producer tests passed. A stale inherited producer
+  assertion was updated to trace driver -> Host executor -> engine constructor.
+- Profile storage/config are Host-owned, pure bot toolset and agent mentions
+  Core-owned, tool visibility Runtime-owned, skill/plugin injections Host-owned.
+  Eight focused files / 83 tests passed. Optional vision configuration/client
+  now belongs to Host. Prompt asset build source now comes from Host.
+- Host owns the optional tool worker pool and its concrete shell child entry.
+  A self-contained child bundle plus the real pool started a child, received its
+  ready frame, executed PowerShell via IPC and observed the expected tool output
+  with exit code zero. This verifies that child path, not the main agent worker.
+  The child producer in the existing bundle script now points to Host source.
+- Durable approval-card persistence/surface handling moved to Host: 6 tests
+  passed. Runtime request identity/schema-budget/visibility and Core timestamp
+  rendering suites: 21 tests passed; Core and Runtime strict builds passed.
+- Code census confirmed four live synchronous image attachment reads in the
+  main worker. These bypass the IPC path and open their own main DB handle.
+  The bounded remaining cut adds image reads to the existing local attachment
+  API, merges Main/Core image rows through their existing owners and makes the
+  worker await that facade. The parsed-document and modern session/timeline
+  routes stay on their existing Host services.
+- Local reference checks: Codex centralizes policy/reviewer routing under
+  `core/src/tools/approvals.rs` and dispatch lifecycle in `tools/registry.rs`;
+  Pi has a provider-neutral loop calling supplied tool executors. Duya's cut
+  follows the same responsibility distinction: concrete tool effects in
+  Capabilities, invocation gate/loop in Runtime, product approval UI/persistence
+  in Host/Data. Package names are not treated as proof of runtime ownership.
+- Main image hydration now uses the existing Host attachment API and Main/Core
+  handles. Protocol/Core/Capabilities/Runtime/Data builds and 41 focused tests
+  passed. No extra SQLite opener was introduced; the old SQL module remains
+  pending final caller retirement.
+- Product run options and invocation context are Host assembly contracts; the
+  neutral tool descriptor and child definition reuse Runtime/Core contracts.
+  Host owns conditional-skill registry assembly and the bound permission,
+  executor, compaction and MCP services. Actual product/child-engine regression:
+  35 tests passed after these service cuts.
+- Widget tool is a capability with a required review port; Host owns headless
+  rendering, vision wiring and image generation configuration/provider effects.
+  Thirty behavior tests passed. A real independent Chromium rendered and
+  disposed a 720x240 PNG; the artifact was visually inspected.
+- Modifier/Canvas cut: 89 tests passed. Workflow runner, child transport and
+  GUI/browser backends now belong to Host and require explicit execution ports;
+  18 files / 290 workflow tests passed. Old child entry remains an adapter until
+  the production bootstrap is rewired.
+- Session search/management, room messaging, agent management and direct-message
+  tool cuts: 9 files / 72 tests passed. The worker's old invocation-registry
+  path re-exports the same Host map used by the moved tool; three owner tests
+  verify nonce/terminal correlation and local timeout cleanup.
+- Main run composition and driver now belong to Host and depend on an explicit
+  product-session interface rather than the Agent class. The old driver path is
+  a re-export. Driver/composition/child/progress batch: 41 of 42 tests initially
+  passed; the remaining ownership assertion was updated to follow the actual
+  Host driver and its old shim, then the real-agent proof suite passed 20/20.
+  The product session class and main entry are still required remaining cuts.
+
+### Coordinator checkpoint at 2026-10-14 19:39+ Asia/Shanghai
+
+- WorkerSession product state/assembly is now in Host, with required registry
+  construction. Host builtin/bot registries require explicit CLI command
+  services; CLI worker-services composes the existing descriptor runner without
+  introducing a Host-to-CLI dependency. Host/CLI package build and Host strict
+  checking passed for these slices.
+- Goal/Research child execution and computer-use mode effects are explicitly
+  bound in WorkerSession rather than relying on legacy mode adapters.
+- Real-estimator test suites moved to Host's production context-model port:
+  22 files / 230 tests passed. Architecture checking passed with zero new
+  violations, without baseline/policy edits. Later selector edits still need
+  a fresh gate after the new producer exists.
+- Main-worker persistence wrappers use the existing message/attachment IPC
+  APIs; 3 files / 12 tests verify append receipts and parsed-document fields.
+- As of the user's cost/status request, the Host main worker entry, CLI thin
+  worker bootstrap and new bundled worker artifact do not yet exist. Selector
+  edits are partial and cannot be considered a completed production switch.
+  Old-package absence, full-suite regression comparison and CLI/Desktop
+  acceptance remain unverified. The old package is still present.
+- Parallel agents were interrupted for this cost/status checkpoint. No new
+  tests or background work are being dispatched during the status response.
+  The goal remains incomplete; no commit, push or merge has been performed.
+
+### Coordinator checkpoint: main worker entry and executable cut
+
+- Host now owns `worker-process-entry.ts`, with required process assembly.
+  CLI's `agent-worker-entry.ts` supplies command services and calls that same
+  Host start path. The former Agent entry is only a temporary import adapter.
+  WorkerSession exposes a typed provider-config snapshot rather than the entry
+  reading private fields through an untyped Agent instance. Workflow execution
+  ports retain their launch-time provider snapshot across worker re-init.
+- The existing bundle producer emits `packages/host/bundle/worker-entry.js` and
+  its shell child. Desktop resource configuration and after-pack/artifact checks
+  target `harness-bundle/worker-entry.js`. Declared workspace exports resolve to
+  this checkout's source, avoiding primary-checkout junction declarations.
+- Final bundle dependency metadata has 2,174 input files and **zero** inputs
+  under `packages/agent/src` or `packages/agent/dist`. A real child started,
+  answered the actual ping command, cleaned up on parent disconnect and exited
+  zero. This is startup/transport proof, not a complete provider/chat run.
+- Eight owner/entry regression files passed all 53 tests. They cover the actual
+  Host product driver, model/tool/result feedback, context producers, event
+  normalization, terminal latch and command-loop import/start contract. Initial
+  owner-test import/listener-order failures left by interrupted delegation were
+  repaired without reducing assertions. Host/CLI strict checks passed.
+- Architecture checking passed with zero new violations; no baseline or policy
+  exemptions were added. Sandbox image prewarming remains a concrete shell
+  capability effect, called from Host bootstrap. Staged artifact checking passed;
+  installed-package/runtime checks remain explicitly unverified.
+- Agents remain stopped. Remaining work: complete current CLI/Desktop runs with
+  the old package unavailable, migrate/retire remaining old-package tests and
+  build metadata, run full regression/gates, then remove the legacy package.
+  Full typecheck:all, architecture:self-test, full-suite failure comparison and
+  Electron/package acceptance have not yet passed for the complete retirement.
+  No commit, push, PR, merge or legacy-directory deletion has been performed.
+
+### Coordinator checkpoint: real standalone CLI with the legacy package absent
+
+- The old Agent directory was temporarily moved outside `packages/` during both
+  worker/CLI builds and the actual CLI -> standalone Host -> spawned worker run.
+  It was restored after all verification child processes closed. Primary
+  checkout and user configuration were not changed.
+- The loopback OpenAI Chat Completions fixture emitted streaming tool previews,
+  argument deltas and complete calls. The actual worker searched the catalog,
+  executed the real filesystem `read` tool on a newly-created random marker file,
+  delivered both results to later model HTTP requests and completed the CLI with
+  exit zero. Three model requests covered catalog -> file read -> final answer.
+  Evidence: `.migration-cli-absence-smoke.json`. This proves actual production
+  CLI/Host/worker wiring with a local provider fixture, not a remote paid-provider
+  run or Electron rendering.
+- Actual execution exposed and fixed three production gaps rather than bypassing
+  them: the standalone worker bridge now serves model-capability cache actions
+  through the existing Host/Data API; Runtime announces tool previews without
+  executing partial arguments; discovery bindings survive per-invocation options
+  copies while staying isolated between turns. The provider-neutral ModelMessage
+  also preserves tool-call correlation through Host/engine/provider conversions.
+- Focused regression evidence: model-cache database roundtrip 1/1; preview and
+  engine loop 23/23; discovery binding and cross-turn rejection 10/10; model
+  correlation 1/1. Runtime and Host strict checks passed. Architecture checking
+  again passed with no new violations and no baseline/policy exemptions.
+- Worker logging now honors the existing data-root resolver so temporary runs
+  keep their log files inside their isolated root.
+- Remaining census is 248 confirmed textual old-package references outside the
+  retiring directory. It includes build metadata, tests, historical ownership
+  tables/comments and guard patterns; it is not a count of live imports. Desktop
+  execution, package absence during complete build/gates, full-suite comparison,
+  old test/source retirement and actual package deletion remain unfinished.
+  Agents remain stopped; no commit, push, PR or merge has been performed.
+
+### Coordinator handoff: Host worker bundle checkpoint
+
+- The Host-owned worker entry and CLI worker bootstrap now feed the existing
+  bundle producer. Desktop and standalone selectors target that bundle, and
+  release/artifact checks look for the Host worker entry. The legacy
+  `packages/agent` package remains in this checkpoint; its eventual deletion is
+  still the final retirement step.
+- A local-provider run completed through `duya chat` with the legacy package
+  absent: catalog lookup, real filesystem read, both tool results returned to
+  later model requests, and final answer observed. The loopback fixture used
+  three model requests. The run did not use a remote provider.
+- A separate Electron run with the legacy package absent exercised the real
+  main process, preload, Agent Server HTTP route, Host worker, model/tool result
+  loop, and durable `completed` run row. Renderer reload did not expose the
+  generated thread title in the expected task view, so visible Desktop chat
+  acceptance remains open.
+- `npm run typecheck:all`, `npm run architecture:check`, and
+  `npm run architecture:self-test` passed for this checkpoint. Focused Host
+  worker tests passed 53/53 and 26/26 in the two migration groups. The full
+  Vitest suite and its prior-failure comparison were not run for this cut.
+- Handoff work remains: finish the visible Desktop chat path; reconcile the
+  full-suite failure set; retire the remaining legacy tests/build metadata and
+  textual references; then remove `packages/agent` and verify clean builds and
+  packaged execution with the directory absent. Do not mark Host/Desktop
+  runtime convergence complete from the CLI and worker proofs alone.

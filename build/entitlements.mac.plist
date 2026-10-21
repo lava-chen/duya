@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Main-app entitlements (hardened runtime, non-sandboxed distribution).
+  The default V8 JIT entitlements Electron needs, plus the Apple Events
+  usage the plan 572 AppleScript channel requires (kTCCServiceAppleEvents
+  itself is a TCC grant, not an entitlement — the sandbox-only
+  com.apple.security.automation.apple-events key is intentionally absent
+  because duya ships non-sandboxed via Mac direct distribution).
+-->
+<dict>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<key>com.apple.security.cs.allow-dyld-environment-variables</key>
+	<true/>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>

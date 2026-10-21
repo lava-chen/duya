@@ -1,0 +1,32 @@
+{
+  "name": "spreadsheets",
+  "version": "0.1.0",
+  "description": "Create, edit, analyze, visualize, render, and export spreadsheets (XLSX/CSV/TSV) by reusing duya's bundled xlsx office skill.",
+  "author": {
+    "name": "Duya"
+  },
+  "homepage": "https://github.com/lava-chen/duya",
+  "license": "MIT",
+  "keywords": [
+    "sheet",
+    "sheets",
+    "spreadsheet",
+    "spreadsheets",
+    "excel",
+    "microsoft excel",
+    "csv",
+    "xlsx",
+    "xls",
+    "tsv",
+    "workbook"
+  ],
+  "interface": {
+    "displayName": "Spreadsheets",
+    "shortDescription": "Create and edit spreadsheet files",
+    "longDescription": "Create, edit, inspect, render, verify, and export XLSX, CSV, and TSV spreadsheets locally. Reuses duya's bundled xlsx office skill. Use Spreadsheets when the durable output or target is a spreadsheet, workbook, sheet, Google Sheet, or CSV file.",
+    "category": "productivity",
+    "brandColor": "#107C41",
+    "icon": "./assets/icon.svg",
+    "screenshots": []
+  }
+}

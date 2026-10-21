@@ -1,0 +1,1953 @@
+# Architecture boundary policy (plan 584 PP-0, task 0.1)
+#
+# Enforced by scripts/architecture/architecture-check.mjs.
+# Design source: docs/architecture/05-architecture-governance.md §2.
+#
+# ── Strategy: progressive enforcement ──────────────────────────────────────
+#
+# `managedOnly: true` + every legacy module `managed: false` means the
+# checker BLOCKS on two things and nothing else:
+#
+#   1. any violation inside a `managed: true` module   (zero tolerance)
+#   2. any violation whose fingerprint is not in .architecture-baseline.json
+#
+# Everything already in the baseline is tolerated debt. Each migration step
+# flips one module to `managed: true` and deletes that module's fingerprints
+# from the baseline, so the debt is paid down monotonically instead of being
+# cleaned up in one unreviewable sprint.
+#
+# The baseline is a RATCHET, not a wish list. A strict gate over ~800
+# pre-existing violations would be permanently red, and a permanently red gate
+# gets ignored — the same failure mode that let ~898 unchecked electron type
+# errors and a never-firing CI workflow reach master.
+
+version: 1
+
+global:
+  # Fail on new violations only. The baseline absorbs the legacy ones.
+  baselineFile: .architecture-baseline.json
+
+  # Only `managed: true` modules get zero-tolerance enforcement. Unmanaged
+  # modules are still measured, still reported, and still blocked on growth —
+  # they just may carry baselined debt.
+  managedOnly: true
+
+  # Every rule below that is not explicitly switched off is evaluated.
+  rules:
+    module-dependency: true
+    # Plan 586. A cross-module edge the source module DECLARES in its
+    # `requires` list. Counted, never blocking.
+    #
+    # It exists because `module-dependency` originally recorded every
+    # cross-boundary edge unconditionally, and a `managed: true` module blocks
+    # on any violation it contains — so the two managed packages that declare
+    # dependencies (`agent-core` and `agent-runtime`, both requiring
+    # `agent-protocol`) were permanently red. A `requires` list nobody can
+    # satisfy is not a boundary; the graph stays visible here instead.
+    module-dependency-permitted: true
+    forbidden-dependency: true
+    package-boundary-escape: true
+    # Plan 600 G2. A `core` module performs no IO.
+    #
+    # `layer-purity.ts` has asserted this since 587 M5.3 and carries 23 passing
+    # unit tests, but nothing ever CALLED it. Verified by injection on master
+    # @ 0870966e: appending `import { readFileSync } from 'node:fs'` to
+    # `packages/agent-core/src/run-outcome.ts` left `npm run architecture:check`
+    # reporting "OK" with exit 0. A gate with green tests that no build step
+    # runs is evidence on a screen, not a boundary.
+    #
+    # `architecture-check.mjs` now invokes it through `core-io-scan.mjs`. A
+    # scanner that fails to run is reported as a violation, never skipped.
+    core-io: true
+    deep-import: true
+    cycle: true
+    missing-module-artifact: true
+
+    # ── Not yet enabled: these have no reproducible baseline yet. ──────────
+    # Enabled as a follow-up once each can be counted deterministically, so the
+    # baseline never has to absorb a number we cannot reproduce.
+    #   max-file-lines              (05 §3 marks it 待测)
+    #   max-contract-lines          (05 §3 marks it 待测)
+    #   max-public-methods          (05 §3 marks it 待测)
+    #   layer-direction             (05 §3 marks it 待测)
+    #   domain-io                   (needed by plan 584 drift test #1 as well)
+    #   ui-implementation-import    (05 §3 says 23; not re-verified yet)
+    #   disallowed-process-spawn    (05 §3.1 says "50+", which is not a count)
+
+# ── Dependency layers: a module may only depend downward ───────────────────
+layers:
+  - protocol # agent-protocol, shared
+  - core # agent-core, ai
+  #
+  # M5.3: this line was `core # agent-core, agent-tools, ai` and was
+  # DECORATIVE — `architecture-check.mjs` never reads the `layers:` block
+  # (verified: grepping it for `layer` returns zero matches), so "a core module
+  # performs no IO" was a claim with no machinery behind it. Two things changed.
+  #
+  # 1. `agent-tools` was REMOVED because no such package exists on disk
+  #    (measured: `Test-Path packages/agent-tools` -> False). It named a
+  #    boundary that was never built, which is how a layer list starts lying.
+  #
+  # 2. `ai` STAYS core, deliberately, and the reason is measured rather than
+  #    argued:
+  #      - `packages/agent-protocol` and `packages/agent-core` import NOTHING
+  #        from `@duya/ai` (measured). `agent-core.requires` lists `ai`, but no
+  #        such edge exists, so nothing at layer `core` can reach `ai`'s IO
+  #        through a declared dependency.
+  #      - the overwhelming majority of `packages/ai` is pure wire-shape
+  #        translation: of its source subtrees, `providers/`, `system-one/` and
+  #        `utils/` have zero network/crypto sites.
+  #    Relabelling `ai` non-core would have been the WORSE option: it would have
+  #    made a package that can `fetch` reachable from `core` by declaration
+  #    while calling it something other than core. That is precisely the
+  #    "IO smuggled in through an input" the plan exists to remove.
+  #
+  #    Instead the IO is INVENTORIED and WATCHED.
+  #    `scripts/architecture/layer-purity.ts` walks every core root and asserts
+  #    the set of IO-performing files is exactly a declared carve-out. Adding a
+  #    `fetch(` to a `core` root now fails `npx vitest run scripts/architecture`.
+  #    Proven by mutation: inserting one `fetch(` into
+  #    `packages/ai/src/providers/minimax.models.ts` fails with
+  #    "fetch in a layer-legacy-ai module, which declares no IO".
+  #
+  #    The carve-out is 6 files, and running the gate is what FOUND three of
+  #    them (the host-clock sites) that M5.1's hand-kept list of three did not
+  #    contain. A hand-kept list stops finding the fourth; a gate does not.
+  #    Each entry, and the follow-on port that retires it, is recorded in
+  #    `layer-purity.ts` `CORE_MODULES`.
+  - runtime # agent-runtime
+  - host # desktop, cli, gateway
+# harness/ lives outside the workspace and is validated separately (05 §4.4).
+
+# ── Edges forbidden regardless of what `requires` says ─────────────────────
+forbiddenDependencies:
+  - from: packages/agent-protocol/**
+    to:
+      - packages/agent-core/**
+      - packages/agent-runtime/**
+      - electron/**
+      - src/**
+    reason: >-
+      protocol must be a true leaf with zero implementation dependencies.
+      grok's sampling-types claimed "no I/O" while its Cargo.toml pulled in
+      reqwest plus 16 internal crates (02-reference-repo-boundaries.md:271-280).
+
+  - from: packages/agent-core/**
+    to:
+      - electron/**
+      - apps/desktop/**
+      - src/**
+      - packages/computer-use/**
+    reason: agent-core must not depend on any host (16 measured violations).
+
+  - from: src/**
+    to:
+      - electron/**
+      - apps/desktop/src/main/**
+    reason: renderer must not depend on the main process (9 measured violations).
+
+  # Not in 05 §2's list, but it is the single largest boundary problem in the
+  # repo (01-current-state-audit.md 核心结论 #6: 57 edges, 24 of them from the
+  # provider layer) and plan 06 stage M3 exists to remove it. Added here so a
+  # NEW main->renderer edge is blocked while the debt is burned down.
+  - from: electron/**
+    to:
+      - src/**
+      - apps/desktop/src/renderer/**
+    reason: >-
+      the main process must not depend on renderer types. 57 measured edges;
+      the provider layer alone accounts for 24. This is the direction that is
+      backwards today, and 06 stage M3 (packages/shared) is what unwinds it.
+
+  - from: packages/**
+    to:
+      - electron/**
+      - src/**
+      - apps/desktop/**
+    reason: >-
+      workspace packages must not depend back on the host
+      (57 measured violations; these are what plan 584 PP-3/PP-11 remove).
+
+  - from: packages/agent-*/
+    to:
+      - packages/ui/**
+      - packages/conductor/**
+    reason: agent must not depend on UI (2 measured violations).
+
+# ── Capability edges that are explicitly permitted ─────────────────────────
+#
+# REMOVED: an `allowedDependencies` block that granted
+# `packages/agent-runtime/**` -> {plugin-core, computer-use, ai}.
+#
+# Two independent reasons, and the second is why this must not simply be
+# "wired up" later:
+#
+#   1. Nothing ever read it. `scripts/architecture/**` holds no reference to
+#      this key, so it was never a permissive rule — it was a dead block that
+#      merely LOOKED like permission, to anyone reading this file.
+#   2. Wiring it would RELAX a boundary plan 610 deliberately tightened. The
+#      `agent-runtime` module declaration below lists `agent-tools`, `ai` and
+#      `plugin-core` as REMOVED from its `requires`. Granting the same edges
+#      here by a second route would quietly undo that, and no gate would say so.
+#
+# So the correct state is no block at all: the absence IS the boundary. If a
+# real edge ever needs to be permitted, declare it on that module's own
+# `requires` list, which `moduleDependencyPermitted` already reads.
+
+# ── Module declarations ────────────────────────────────────────────────────
+modules:
+  # ── Target state: declared now so the rules bind the moment the directory
+  #    appears. The directories do not exist yet (plan 584 PP-1 creates
+  #    agent-protocol); a root that does not exist simply matches nothing.
+  - id: agent-protocol
+    roots: [packages/agent-protocol]
+    managed: true # zero tolerance from the first commit
+    requires: []
+    publicEntrypoints:
+      - packages/agent-protocol/src/index.ts
+      - packages/agent-protocol/src/message-timeline.ts
+      - packages/agent-protocol/src/session-api.ts
+      - packages/agent-protocol/src/rollout-events.ts
+    owner: agent-harness
+
+  - id: data
+    roots: [packages/data]
+    managed: true
+    requires: [agent-protocol]
+    publicEntrypoints:
+      - packages/data/src/index.ts
+      - packages/data/src/data-paths.ts
+      - packages/data/src/database-migration.ts
+      - packages/data/src/core-database.ts
+      - packages/data/src/run-store.ts
+    owner: host
+
+  - id: duya-host
+    roots: [packages/host]
+    managed: true
+    requires: [agent-protocol, agent-runtime, agent-core, legacy-ai, data, capabilities, memory, legacy-plugin-core, legacy-computer-use]
+    publicEntrypoints:
+      - packages/host/src/index.ts
+      - packages/host/src/session-api.ts
+      - packages/host/src/http-client.ts
+      - packages/host/src/local-host.ts
+      - packages/host/src/run-engine-model.ts
+      - packages/host/src/group-turn.ts
+      - packages/host/src/control-plane-service.ts
+      - packages/host/src/command-receipt.ts
+      - packages/host/src/run-receipt.ts
+      - packages/host/src/repository-port.ts
+      - packages/host/src/trusted-sender-core.ts
+      - packages/host/src/run-control-plane.ts
+      - packages/host/src/worker-db-client.ts
+      - packages/host/src/worker-os-context/index.ts
+    owner: host
+
+  - id: agent-core
+    roots: [packages/agent-core]
+    managed: true
+    # Plan 610: `ai` REMOVED, and that removal is the point — do not "restore"
+    # it as `legacy-ai`.
+    #
+    # `ai` did not match any declared module id (the id is `legacy-ai`), so it
+    # resolved to `false` and permitted NOTHING. Measured: agent-core has 12
+    # cross-module edges, all to `agent-protocol`, and ZERO to `packages/ai`.
+    # Deleting the entry changes no edge's classification today.
+    #
+    # Renaming it to `legacy-ai` WOULD change enforcement, in the wrong
+    # direction: a resolvable entry puts every future `agent-core -> packages/ai`
+    # edge into `module-dependency-permitted`, and that rule is in
+    # MEASUREMENT_RULES — permitted edges are pushed straight to `tolerated` and
+    # NEVER block, not even inside a `managed: true` module. So the rename would
+    # pre-authorise, forever, exactly the edge the `layers:` block says core must
+    # not be able to take. Leaving it unresolvable is what keeps that edge
+    # blocking if someone ever adds it.
+    #
+    # The layering intent ("`ai` is core") lives in `layers:` above, where it is
+    # argued from measurement. It does not belong in a `requires` entry, because
+    # a `requires` entry that resolves is a standing permission.
+    requires: [agent-protocol]
+    publicEntrypoints:
+      - packages/agent-core/src/index.ts
+      - packages/agent-core/src/skills/skill-scanner.ts
+      - packages/agent-core/src/skills/resolver.ts
+    owner: agent
+
+  - id: agent-runtime
+    roots: [packages/agent-runtime]
+    managed: true
+    # Plan 610: `agent-tools`, `ai` and `plugin-core` REMOVED. Same reasoning as
+    # agent-core above, plus `agent-tools` names nothing at all — there is no
+    # `packages/agent-tools` on disk, no module id for it, and no module whose
+    # `roots` covers such a path.
+    #
+    # Measured: agent-runtime has 130 cross-module edges — 126 to
+    # `agent-protocol`, 4 to `agent-core` — and ZERO to `packages/ai`,
+    # `packages/plugin-core`, `packages/computer-use`, or any `UNRESOLVED:`
+    # owner. The `agent-runtime -> plugin-core / computer-use / ai` edges that
+    # `allowedDependencies` below claims are granted do not exist.
+    requires: [agent-protocol, client-core, agent-core, capabilities, legacy-plugin-core]
+    publicEntrypoints:
+      - packages/agent-runtime/src/index.ts
+      - packages/agent-runtime/src/context/contextual-user-fragment.ts
+    owner: agent
+
+  # Node-only BFF and its isolated real-worker acceptance fixture.
+  - id: web-server
+    roots: [apps/web/src/server, apps/web/tests/server, apps/web/tests/fixtures]
+    managed: true
+    requires: [agent-protocol, duya-host]
+    owner: client
+
+  - id: web-client
+    roots: [apps/web/src/browser, apps/web/src/client, apps/web/tests/client]
+    managed: true
+    requires: [agent-protocol, client-core, shared-ui]
+    owner: client
+
+  - id: shared-ui
+    roots: [packages/ui]
+    managed: true
+    requires: []
+    publicEntrypoints:
+      - packages/ui/src/index.ts
+      - packages/ui/src/layout/index.ts
+      - packages/ui/src/markdown/index.ts
+    owner: client
+
+  # Client-side state projection from the Host's protocol events.
+  - id: client-core
+    roots: [packages/client-core]
+    managed: true
+    requires: [agent-protocol]
+    publicEntrypoints:
+      - packages/client-core/src/index.ts
+    owner: client
+
+  # ── Legacy: managed: false, each flipped as its migration lands ─────────
+  - id: legacy-agent
+    roots: [packages/agent]
+    managed: false
+    # Plan 587 R2.2: `agent-protocol` is added for manifest verification. The
+    # worker now VERIFIES the manifest binding
+    # it is handed — `verifyRunManifestBinding` recomputes the manifest
+    # fingerprint and the input digest over what actually arrived — and those
+    # two hashes live in the protocol package. A worker that could not reach
+    # them would have to reimplement canonical JSON and sha256, and a second
+    # implementation of the digest is a second source of truth for exactly the
+    # value whose whole purpose is to be checked. So the edge is declared
+    # rather than avoided.
+    #
+    # Plan 587 profile contract extraction: `agent-core` owns AgentProfile and
+    # PromptProfileOverride, so the legacy Agent imports those types from the
+    # lower-level package while its callers migrate. The package dependency is
+    # explicit and the edge is acyclic.
+    #
+    # Plan 587 M5.5: `agent-runtime` is added, for `ProcessScope` ONLY
+    # (`agent-runtime/src/process/process-scope.ts`). The three sites that owned
+    # a spawned child's lifetime -- `tool/BashTool/managed-bash.ts`,
+    # `tool/WorkerPool.ts`, `tool/BashTool/BashWorker.ts` -- each carried its own
+    # timer/listener/descriptor bookkeeping, and `WorkerPool` and `BashWorker`
+    # each re-implemented the Windows `taskkill /F /T` escalation that
+    # `utils/processTreeKill.ts` already owns and tests. The port that fixes
+    # that has to be reachable from here.
+    #
+    # The direction is the one the migration wants, not the one it fears:
+    # `agent-runtime` requires only `agent-protocol` and `agent-core`, so this
+    # edge is acyclic and points from the legacy executor TOWARDS the engine
+    # that is meant to replace it. Measured: no new `cycle` finding.
+    #
+    # What is NOT taken: `ProcessScope` deliberately does not own the platform
+    # kill strategy, so this edge buys a lifetime abstraction and not a
+    # relocation of `processTreeKill` -- which stays put, with its test and its
+    # `evals/agent` matrix row, because moving it would have been churn.
+    #
+    # Plan 610: `input-completion` is added for the CLI TUI's `/` and `@`
+    # popups. The direction is the point -- the contract has exactly two
+    # consumers, this CLI and the desktop composer, and the failure mode of
+    # "each side implements its own" is a second `detectPopoverTrigger` that
+    # drifts. It is a pure-rules leaf (Node builtins only, `requires: []`), so
+    # the edge adds no cycle and pulls no engine into the terminal entry.
+    # The temporary CLI session adapter consumes the terminal-only TUI package;
+    # the CLI package itself has no Agent runtime dependency.
+    #
+    # Plan 610 A8: `capabilities` is added because the filesystem tool stack
+    # (Read/Write/Edit/Glob/Grep/ApplyPatch), BaseTool, the tool contracts, the
+    # session-level file state modules, and the path-permission policy moved
+    # into that package; the agent consumes them through byte-compatible shims
+    # at the old import paths. The edge points the direction the retirement
+    # (A7) wants: legacy executor TOWARDS the capability package.
+    requires: [agent-protocol, agent-core, agent-runtime, legacy-ai, repo-tooling, memory, sandbox, input-completion, legacy-cli, duya-host, capabilities]
+    owner: agent
+    migrateTo: agent-core
+
+  - id: legacy-desktop
+    roots: [src, electron]
+    managed: false
+    requires: [memory]
+    owner: desktop
+    migrateTo: apps/desktop
+
+  # The host, at its CURRENT location. `legacy-desktop` above still points at
+  # the pre-monorepo roots, so before this entry existed `moduleOf()` returned
+  # `null` for every file under `apps/desktop` — and a `null` module has no
+  # `requires` list, which means the declared-dependency rule could not bind
+  # the host at all. The gap was invisible precisely because it disabled a
+  # check.
+  #
+  # `requires` names only what plan 586 actually added: the Control Plane
+  # (manifest factory, run store) speaks the protocol, and the agent-server
+  # hosts the runtime. `agent` is deliberately ABSENT — electron-main already
+  # reaches into `packages/agent/src` by relative path, and that pre-existing
+  # debt is measured as `package-boundary-escape`, not excused by a declaration
+  # this plan did not earn.
+  #
+  # `plugin-core` is added by plan 587 M5.2, and it is the one case where a
+  # declaration REPLACES measured debt rather than excusing new debt. M5.2
+  # repointed 16 host imports that reached into `packages/plugin-core/src` by
+  # relative path at the package's DECLARED subpaths
+  # (`@duya/plugin-core/formats/registry` and seven siblings, each given a real
+  # `exports` entry). That removed 16 `package-boundary-escape` violations --
+  # 162 -> 146, measured -- and in doing so made the dependency VISIBLE to the
+  # declared-dependency rule for the first time, where it had been invisible
+  # precisely because it was spelled as a relative path. Those 16 edges land in
+  # `module-dependency` (blocking) without this line, which would be the rule
+  # reporting reality correctly. With it they land in
+  # `module-dependency-permitted`, which counts and never blocks.
+  #
+  # The honest reading: the host has always depended on plugin-core. Before
+  # M5.2 that dependency was hidden inside a path; now it is declared.
+  #
+  # The id is `legacy-plugin-core`, not `plugin-core`: `requires` names a
+  # MODULE, and the rule resolves a name to that module's `roots` before
+  # comparing. A name with no matching module silently permits nothing.
+  # `@duya/command-catalog` (2026-10-17, landed with the bang-command stack
+  # `c3a1ed41`): the ONE place a slash command is defined — name, aliases,
+  # descriptions, argument shape, and which surfaces advertise it. Measured:
+  # 579 lines in `packages/command-catalog/src/index.ts`, `private: true`, and
+  # **zero dependencies**.
+  #
+  # It was undeclared until now, and per the rule above a name with no matching
+  # module silently permits nothing — so all four edges into it were reported as
+  # blocking `module-dependency` violations, including two from the CLI. Declared
+  # rather than baselined: a zero-dependency, metadata-only package that both
+  # clients import on purpose is the intended shape, not legacy debt, and the
+  # alternative would be four permanent fingerprints for a contract that is
+  # supposed to be shared.
+  #
+  # Behaviour deliberately does NOT live here — the Desktop acts on a renderer
+  # bridge, the CLI acts over Host HTTP. That split is why the package can be
+  # shared without dragging either transport into the other.
+  - id: command-catalog
+    roots: [packages/command-catalog]
+    managed: true
+    requires: []
+    owner: agent
+
+  - id: desktop-host
+    roots: [apps/desktop]
+    managed: false
+    # `sandbox` (2026-10-10): plan 610 A5 continuation — the `duya-file://`
+    # media allowlist (plan 583 ISS-02) and the IPC path checks consume
+    # `isPathWithinRoots` from `@duya/sandbox` after it moved out of
+    # `packages/agent/src/tool/allowedRoots.ts`. Declared here rather than
+    # baselined: the App depending on the sandbox primitives package is the
+    # intended shape of the A5 split, not legacy debt.
+    # `legacy-ai` (2026-10-17): two edges, from the slash-command executors that
+    # landed with `c3a1ed41` — `lib/commands/executors/info.ts` imports
+    # `computeContextEstimate`, `findModelById`, `resolveContextWindow` from
+    # `@duya/ai`, and `lib/commands/registry.test.ts` does not reach `ai` at all
+    # (that one is `command-catalog`). These are the exact functions plan 610 A0
+    # §3.1 named as the ones the renderer wanted from `ai`.
+    #
+    # Declared, not baselined, because they are pure model-metadata maths with no
+    # IO, and `ai` carries exactly one Node-touching file
+    # (`api/bedrock-converse.ts`, already excluded from every isomorphic claim).
+    # This does widen the permission for the whole `apps/desktop` tree, which is
+    # the standing-permission hazard the `agent-core` note below describes; the
+    # mitigation is that `legacy-ai` stays `managed: false`, so the edge is
+    # visible in every audit rather than tolerated silently.
+    #
+    # `command-catalog`: see its module declaration above. Two edges —
+    # `lib/commands/registry.ts` and its test — both intentional.
+    requires: [agent-protocol, agent-core, agent-runtime, capabilities, legacy-plugin-core, connectors, desktop-contracts, memory, input-completion, sandbox, data, duya-host, legacy-ai, command-catalog]
+    owner: desktop
+
+  - id: repo-tooling
+    roots: [scripts]
+    managed: false
+    requires: []
+    owner: tooling
+    # Repository tooling (architecture gates, build scripts) is not a product
+    # module, but product tests legitimately import the gate detectors to
+    # assert what they forbid -- e.g. `isTurnLoopModule` and `TURN_LOOP_SHAPE`
+    # from `scripts/architecture/boundary-gates.mjs`. The audit emits no owner
+    # label for this tree, so those edges arrived as `UNRESOLVED:scripts/...`
+    # and were reported as blocking `module-dependency` violations that no
+    # `requires` entry could ever permit. Declaring the root turns them into
+    # a recognised edge instead of a permanent false positive.
+
+  - id: desktop-contracts
+    roots: [apps/desktop/src/contracts]
+    managed: false
+    requires: []
+    owner: desktop    # Added by plan 587 M5.2, with `apps/desktop/src/contracts` itself, so that
+    # the host importing its own contract vocabulary is a DECLARED dependency
+    # rather than 13 new blocking `module-dependency` violations.
+    #
+    # `import-graph.mjs` already treated this directory as a host boundary
+    # (`ownerOf` -> `desktop-contracts`, and it is in `HOST_BOUNDARIES`), so the
+    # graph side of the decision existed before the policy side did. This entry
+    # closes that half. `requires: []` is the point: the directory is vocabulary
+    # only, and `apps/desktop/src/contracts/__tests__/contracts-boundary.test.ts`
+    # fails if it ever gains a value, an `electron` import, or a host import.
+  - id: legacy-plugin-core
+    roots: [packages/plugin-core]
+    managed: true # plan 584 / 06-M1: the package now ships a real `exports`
+    # map, so its subpaths are a declared surface rather than an accident.
+    requires: []
+    # The id keeps its `legacy-` prefix for now only to avoid churning a
+    # `--scope` argument that is currently unused; rename it to
+    # `plugin-core` alongside the other managed modules when convenient.
+    #
+    # Mirrors the subpaths in packages/plugin-core/package.json `exports`.
+    # The check classifies an import as public from that `exports` map, not
+    # from this list, so this block is documentation of the intended surface.
+    publicEntrypoints:
+      - packages/plugin-core/src/index.ts
+      - packages/plugin-core/src/mcp/collect.ts
+      - packages/plugin-core/src/mcp/user-config.ts
+      - packages/plugin-core/src/mcp/resolve.ts
+      - packages/plugin-core/src/mcp/core/index.ts
+      - packages/plugin-core/src/mcp/core/alias.ts
+      - packages/plugin-core/src/mcp/core/deadline.ts
+      - packages/plugin-core/src/mcp/core/descriptor.ts
+      - packages/plugin-core/src/mcp/core/error-taxonomy.ts
+      - packages/plugin-core/src/mcp/core/ledger-types.ts
+      - packages/plugin-core/src/mcp/core/list-tools.ts
+      - packages/plugin-core/src/mcp/core/projection.ts
+      - packages/plugin-core/src/security/path-validator.ts
+    owner: extensibility
+
+  # Plan 610 A5 — the first of the six new packages.
+  #
+  # `managed: true` from the first commit, on the `agent-protocol` precedent:
+  # a vocabulary leaf with `requires: []` has nothing to baseline, so
+  # baselining it would only buy the appearance of leniency. Measured: zero
+  # `@duya/*` imports — only `zod` and a sibling module.
+  #
+  # Scope note: this declares the App-connector ID and schema ONLY. The
+  # AppConnectionTool / AppConnectorManageTool tools are NOT here — they are
+  # blocked on `Tool` / `ToolUseContext` / `ToolExecutor` / `ToolMetaInput`
+  # living inside `packages/agent`, and on `tooling` and `capabilities`
+  # existing. A name with no matching module silently permits nothing, so
+  # declaring them early would declare a permission nothing can use.
+  - id: connectors
+    roots: [packages/connectors]
+    managed: true
+    requires: []
+    publicEntrypoints:
+      - packages/connectors/src/index.ts
+      - packages/connectors/src/app-connector-id.ts
+      - packages/connectors/src/app-schema.ts
+    owner: extensibility
+
+  # Plan 610. The input-completion contract shared by the desktop composer and
+  # the CLI TUI. `managed: true` from the first commit, like every other package
+  # this series has created: it is the only module in the tree whose entire
+  # reason to exist is to be imported from two hosts at once, so the one thing it
+  # must never acquire is a dependency. It has zero, and `requires: []` says so.
+  #
+  # Declared rather than baselined. Without this entry the imports are reported
+  # as blocking `module-dependency` violations, and the only way to silence them
+  # with `--write` would be to record a NEW violation — turning deliberate
+  # dependencies into permanent debt. A `requires` entry on each host is a
+  # standing permission instead, and `architecture-check.mjs` still COUNTS
+  # permitted edges in its own rule, so a future edit to those lists shows up as
+  # a count change rather than as silence.
+  - id: input-completion
+    roots: [packages/input-completion]
+    managed: true
+    requires: []
+    publicEntrypoints:
+      - packages/input-completion/src/index.ts
+    owner: desktop
+
+  # Plan 610 A5. `@duya/sandbox` is the sandbox enforcement implementation moved
+  # out of `packages/agent/src/sandbox`.
+  #
+  # `managed: true`, on the `agent-protocol` precedent: a leaf whose imports are
+  # Node builtins only has nothing to baseline, so baselining it would buy the
+  # appearance of leniency rather than any.
+  #
+  # `legacy-agent` requires it because the entry still lazily loads the sandbox
+  # when `sandboxEnabled` is not false. That import is DYNAMIC on purpose — it
+  # keeps the sandbox module graph out of every cold-start worker — which means
+  # a grep for static imports will not find it. Declaring the edge is what makes
+  # the load visible to the gate instead of merely absent from the census.
+  - id: sandbox
+    roots: [packages/sandbox]
+    managed: true
+    requires: []
+    publicEntrypoints:
+      - packages/sandbox/src/index.ts
+    owner: agent
+
+  # Plan 610 A5. `@duya/memory` is the agent-side memory implementation moved
+  # out of `packages/agent/src/{memory-state,memory-rollout}`.
+  #
+  # `managed: true` — zero tolerance from the first commit, like every other
+  # package this series has created. It has exactly one `@duya/*` dependency,
+  # `@duya/ai`, and nothing about it is baselined, so there is no debt here to
+  # be lenient about. A package that starts tolerant has to be tightened later,
+  # and tightening a baseline is the operation this project has forbidden.
+  - id: memory
+    roots: [packages/memory]
+    managed: true
+    # `legacy-ai`, NOT `ai`. `moduleDependencyPermitted` resolves a `requires`
+    # entry by looking up a module whose `id` matches the string exactly, and
+    # the module owning `packages/ai` is named `legacy-ai`. A `requires: [ai]`
+    # finds nothing, `?? false` makes it permit nothing, and the edge it was
+    # meant to allow is reported as a violation instead — which is exactly the
+    # "a `requires` list nobody can satisfy is not a boundary" failure the
+    # header of `architecture-check.mjs` documents.
+    requires: [legacy-ai]
+    publicEntrypoints:
+      - packages/memory/src/index.ts
+      - packages/memory/src/testing/index.ts
+    owner: agent
+
+  # Plan 610 A8. `@duya/tooling` is the extension contract plus assembly:
+  # 13 narrow contributor interfaces, an ExtensionRegistry with 13
+  # independent slots, and assembly-time validation. It existed before this
+  # entry (its gate tests are T1-T3); the entry makes the census see it.
+  #
+  # `managed: true` from the first commit, like every package this series
+  # created: it imports no `@duya/*` package at all, so there is nothing to
+  # baseline and nothing to be lenient about. G7 forbids it from ever
+  # importing capabilities / connectors / memory.
+  - id: tooling
+    roots: [packages/tooling]
+    managed: true
+    requires: []
+    publicEntrypoints:
+      - packages/tooling/src/index.ts
+    owner: agent
+
+  # Plan 610 A8. `@duya/capabilities` is the capability implementations, slice
+  # 1 = filesystem: Read/Write/Edit/Glob/Grep/ApplyPatch, BaseTool, the pure
+  # tool contracts (with ToolUseContext narrowed to the structural field set
+  # the tools read), the session-level file state modules
+  # (read-state / mutation-queue / snapshot), the path-permission policy, and
+  # the small utils those files need. The agent consumes all of it through
+  # byte-compatible shims at the old import paths.
+  #
+  # `managed: true` from the first commit, on the sandbox/memory precedent.
+  # requires declares the four real edges: the `ToolResult` runtime type
+  # (`legacy-ai`, the same edge `memory` declares), transcript types
+  # (`agent-protocol`), path containment (`sandbox`), and the
+  # `ToolContributor` declaration (`tooling`). G23 forbids lifecycle types
+  # here -- the caller context is deliberately a narrow structural type.
+  - id: capabilities
+    roots: [packages/capabilities]
+    managed: true
+    requires: [legacy-ai, agent-protocol, sandbox, tooling, legacy-computer-use, legacy-plugin-core]
+    publicEntrypoints:
+      # Barrel + the two curated subpath barrels.
+      - packages/capabilities/src/index.ts
+      - packages/capabilities/src/contracts/index.ts
+      - packages/capabilities/src/permissions/index.ts
+      # BaseTool (agent shim `tool/BaseTool.ts` re-exports from here).
+      - packages/capabilities/src/BaseTool.ts
+      # FS tools (agent shims re-export each file).
+      - packages/capabilities/src/ReadTool/ReadTool.ts
+      - packages/capabilities/src/ReadTool/schema.ts
+      - packages/capabilities/src/ReadTool/security.ts
+      - packages/capabilities/src/ReadTool/path-suggest.ts
+      - packages/capabilities/src/WriteTool/WriteTool.ts
+      - packages/capabilities/src/EditTool/EditTool.ts
+      - packages/capabilities/src/GlobTool/GlobTool.ts
+      - packages/capabilities/src/GrepTool/GrepTool.ts
+      - packages/capabilities/src/GrepTool/sanitize.ts
+      - packages/capabilities/src/ApplyPatchTool/ApplyPatchTool.ts
+      # Session-level filesystem state.
+      - packages/capabilities/src/file-read-state.ts
+      - packages/capabilities/src/file-mutation-queue.ts
+      - packages/capabilities/src/file-snapshot.ts
+      - packages/capabilities/src/file-snapshot-store.ts
+      # Shared utils the moved code needs (agent shims re-export each).
+      - packages/capabilities/src/utils/path.ts
+      - packages/capabilities/src/utils/notebook.ts
+      - packages/capabilities/src/utils/multimodal-detection.ts
+      - packages/capabilities/src/utils/bash/shellQuote.ts
+      - packages/capabilities/src/utils/bash/commands.ts
+      - packages/capabilities/src/BrowserTool/BrowserPool.ts
+      - packages/capabilities/src/BrowserTool/BrowserTool.ts
+      - packages/capabilities/src/BrowserTool/CDPClient.ts
+      - packages/capabilities/src/BrowserTool/DomainBlocker.ts
+      - packages/capabilities/src/BrowserTool/FallbackBrowser.ts
+      - packages/capabilities/src/BrowserTool/HumanLikeCDPClient.ts
+      - packages/capabilities/src/BrowserTool/ParallelFetcher.ts
+      - packages/capabilities/src/BrowserTool/ResultFormatter.ts
+      - packages/capabilities/src/BrowserTool/SchemaGenerator.ts
+      - packages/capabilities/src/BrowserTool/SnapshotEngine.ts
+      - packages/capabilities/src/BrowserTool/WebviewCDPClient.ts
+      - packages/capabilities/src/BrowserTool/actions/ActionRegistry.ts
+      - packages/capabilities/src/BrowserTool/actions/close.ts
+      - packages/capabilities/src/BrowserTool/actions/computer.ts
+      - packages/capabilities/src/BrowserTool/actions/cookies.ts
+      - packages/capabilities/src/BrowserTool/actions/evaluate.ts
+      - packages/capabilities/src/BrowserTool/actions/forms.ts
+      - packages/capabilities/src/BrowserTool/actions/index.ts
+      - packages/capabilities/src/BrowserTool/actions/interaction.ts
+      - packages/capabilities/src/BrowserTool/actions/navigation.ts
+      - packages/capabilities/src/BrowserTool/actions/network.ts
+      - packages/capabilities/src/BrowserTool/actions/parallel.ts
+      - packages/capabilities/src/BrowserTool/actions/post.ts
+      - packages/capabilities/src/BrowserTool/actions/screenshot.ts
+      - packages/capabilities/src/BrowserTool/actions/search.ts
+      - packages/capabilities/src/BrowserTool/actions/snapshot.ts
+      - packages/capabilities/src/BrowserTool/actions/tabs.ts
+      - packages/capabilities/src/BrowserTool/actions/twitterPost.ts
+      - packages/capabilities/src/BrowserTool/actions/types.ts
+      - packages/capabilities/src/BrowserTool/backend-resolver.ts
+      - packages/capabilities/src/BrowserTool/constants.ts
+      - packages/capabilities/src/BrowserTool/imageUtils.ts
+      - packages/capabilities/src/BrowserTool/index.ts
+      - packages/capabilities/src/BrowserTool/input-dispatch.ts
+      - packages/capabilities/src/BrowserTool/networkEnv.ts
+      - packages/capabilities/src/BrowserTool/platform-adapters/types.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/BaseExtractor.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/_shared/public-api.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/ali1688/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/article/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/arxiv/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/bilibili/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/capability-guides.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/github/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/google-search/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/hacker-news/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/instagram/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/jd/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/pubmed/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/reddit/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/rednote/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/taobao/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/tiktok/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/twitter/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/types.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/wechat-article/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/weibo/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/wikipedia/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/xianyu/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/youtube/index.ts
+      - packages/capabilities/src/BrowserTool/platform-extractors/zhihu/index.ts
+      - packages/capabilities/src/BrowserTool/platform-hooks/PlatformHookManager.ts
+      - packages/capabilities/src/BrowserTool/platform-hooks/platforms/bilibili.ts
+      - packages/capabilities/src/BrowserTool/platform-hooks/platforms/twitter.ts
+      - packages/capabilities/src/BrowserTool/platform-hooks/platforms/weixin-mp.ts
+      - packages/capabilities/src/BrowserTool/platform-hooks/platforms/youtube.ts
+      - packages/capabilities/src/BrowserTool/platform-hooks/types.ts
+      - packages/capabilities/src/BrowserTool/ports.ts
+      - packages/capabilities/src/BrowserTool/prompt.ts
+      - packages/capabilities/src/BrowserTool/safety.ts
+      - packages/capabilities/src/BrowserTool/selfHealing.ts
+      - packages/capabilities/src/BrowserTool/stealth.ts
+      - packages/capabilities/src/BrowserTool/types.ts
+      - packages/capabilities/src/OSTool/ComputerCuaTool.ts
+      - packages/capabilities/src/OSTool/ComputerUseDecideTool.ts
+      - packages/capabilities/src/OSTool/ComputerUseTool.ts
+      - packages/capabilities/src/OSTool/constants.ts
+      - packages/capabilities/src/OSTool/context-tool.ts
+      - packages/capabilities/src/OSTool/index.ts
+      - packages/capabilities/src/OSTool/ports.ts
+      - packages/capabilities/src/OSTool/schema.ts
+      - packages/capabilities/src/utils/urlSafety.ts
+    owner: agent
+
+  - id: legacy-ai
+    roots: [packages/ai]
+    managed: false
+    requires: []
+    owner: agent
+
+  - id: legacy-cli
+    roots: [packages/cli]
+    managed: false
+    # CLI serves the local Host and uses its authenticated session API. Data
+    # ownership and database handles stay in the Host package.
+    # `legacy-ai` and `command-catalog` (2026-10-17): two edges each, from the
+    # TUI slash registry that landed with `c3a1ed41`.
+    # `slash/session-info.ts` imports `computeContextEstimate` and
+    # `resolveContextWindow` from the `@duya/ai/context` subpath — pure metadata,
+    # no IO. `slash/registry.ts` and `slash/__tests__/slash-commands.test.ts`
+    # import the shared command vocabulary, which is metadata by construction
+    # (that package has zero dependencies).
+    #
+    # Both declared rather than baselined: the CLI importing the same slash
+    # vocabulary the Desktop imports is the entire point of the package, and the
+    # `ai` functions are the ones plan 610 A0 §3.1 identified as IO-free.
+    requires: [input-completion, data, duya-host, agent-protocol, client-core, legacy-ai, command-catalog]
+    owner: agent
+
+  - id: legacy-gateway
+    roots: [packages/gateway]
+    managed: false
+    requires: []
+    owner: platform
+
+  - id: legacy-conductor
+    roots: [packages/conductor]
+    managed: false
+    requires: []
+    owner: canvas
+
+  - id: legacy-computer-use
+    roots: [packages/computer-use]
+    managed: false
+    requires: []
+    owner: os
+
+  - id: legacy-voice
+    roots: [packages/voice]
+    managed: false
+    requires: []
+    owner: voice
+
+# ── Self-test expectations ─────────────────────────────────────────────────
+#
+# `--self-test` asserts the checker can count every known violation. A mismatch
+# means the resolver has a hole, not that the codebase got cleaner.
+#
+# MEASURED at master @ b6f8e7c0 (2026-10-01), not copied from the docs.
+# 05-architecture-governance.md §5 still quotes the 7c5bf050-era numbers and
+# they have since drifted — cross-boundary 568 -> 567, unresolved 34 -> 41.
+# That drift is exactly why this block lives in the policy, where it is
+# re-measurable, instead of in prose.
+#
+# ## Re-measured 2026-10-08: module-dependency 567 -> 562, escapes 153 -> 161
+#
+# Two resolver defects, both found by the protocol package refusing to be
+# clean. Neither is code drift, and the protocol package contributes ZERO of
+# either.
+#
+# (1) Counts depended on local build state. 16 electron-main deep imports are
+#     written against `packages/agent/dist/...` (e.g. `electron/services/wake.ts`
+#     importing `../../packages/agent/dist/context/os-context/index.js`).
+#     A clone that never built read them as `unresolved` and did not count them;
+#     anyone who ran `npm run typecheck:all` — which runs `build:agent` via
+#     `typecheck:web` — saw 8 extra edges and a red gate. Same commit, two
+#     verdicts. `audit-imports.mjs` now maps a specifier into OUR OWN
+#     `packages/<x>/dist/` back onto the `src/` file that produced it.
+#     Verified identical with and without `dist/` present (161 / 161).
+#     These are the higher, true numbers, not a regression.
+#
+# (2) Comments were parsed as code. Both audits regex the raw file text, so a
+#     doc comment quoting `from '...'` became an edge, and a commented-out
+#     import counted as a live one — meaning deleting the comment would look
+#     like it removed a violation. Six false edges, zero real ones lost
+#     (verified by diffing the edge set before and after). Fixed with
+#     `scripts/architecture/strip-comments.mjs`, which replaces the `SKIP_SPEC`
+#     band-aid that had been patched by name. The module-dependency count fell
+#     570 -> 562; escape, deep-import, cycle and missing-artifact are unchanged,
+#     which is the evidence that only prose was removed.
+#
+# Recompute with:
+#   node scripts/architecture/audit-imports.mjs
+#   node scripts/architecture/audit-modules.mjs
+#
+# ## Re-measured 2026-10-02 (plan 586): three expectations corrected
+#
+# All three were already wrong before this plan touched them, and
+# `--self-test` was already exiting 2 — a gate that is always red is a gate
+# nobody reads, which is the exact failure the ratchet comment above describes.
+#
+#   forbidden-dependency  82 -> 16   The 82 predates the policy's own
+#     `forbiddenDependencies` list being split by layer; 16 is what the
+#     current rules actually produce. Re-measured, not argued.
+#   module-dependency     562 -> 564  564 was already off by 2 on master
+#     (pre-existing drift). 564 adds 2 more edges than the resolver fix alone
+#     would leave, because `apps/desktop` is now a DECLARED module (it never
+#     was — `legacy-desktop` still pointed at the pre-monorepo roots), so the
+#     7 host -> {agent-protocol, agent-runtime} edges plan 586 introduces are
+#     now counted as permitted rather than blocking. See `desktop-host` below
+#     and the prefix-matching fix in `architecture-check.mjs`.
+#   deep-import          117 -> 93   A RESOLVER FIX, not a cleanup.
+#     `audit-imports.mjs` compared an `exports` map's "./testing" key against
+#     the raw specifier remainder "/testing", so every declared subpath export
+#     in the repo was reported as reaching past the public entrypoints. 24 of
+#     the 117 were false. `@duya/agent/message` and
+#     `@duya/agent-protocol/testing` are both in their package's `exports`.
+#
+# The 35 permitted module edges are measured separately and never block; see
+# the `module-dependency-permitted` rule above and the `desktop-host` entry.
+## Re-measured 2026-10-03 (master @ 0dfaf650): four expectations moved
+
+# Preceded by a **baseline that had gone stale against the resolver itself**, which is
+# why this re-measurement and a `--write` had to happen together. Recorded here because
+# the failure mode is the one the ratchet comment above warns about.
+
+# **(1) The baseline was recorded by the PRE-FIX resolver.** The two resolver fixes
+    # documented below (`strip-comments.mjs`; the `packages/<x>/dist/` -> `src/`
+    # back-mapping) changed the fingerprints, but `.architecture-baseline.json`
+    # was never re-recorded. Result: **815 of 941 baseline fingerprints no longer
+    # triggered, and all 802 current violations read as "not in baseline"** — 641
+    # blocking. The debt was neither real nor new; it was the same legacy edges
+    # encoded by a different resolver. `selfTest` had been maintained; the baseline
+    # had not.
+
+# **(2) Two counts were genuinely off the last measurement, in the SAME direction.**
+    # `package-boundary-escape` 161 -> 162 and `deep-import` 24 -> 25. Both are the
+    # agent class, and both trace to the plan-583 remediation stack
+    # (`fix/583-track-a-p0` / `fix/583-track-q-test-debt-2`), which added one more
+    # `@duya/agent/tool/allowedRoots` deep import and one more relative-path escape
+    # into `packages/agent`. Verified by `git log` on the two files, not assumed.
+    # **This is legacy debt that arrived after the last measurement, not a fresh
+    # regression** — it belongs in the baseline, and `--write` puts it there.
+
+# **(3) Two counts improved, from the same merges.** `module-dependency` 563 -> 548
+    # (`refactor(agent): drop two dead modules with no production callers` removed
+    # edges that were counted but unreachable) and `cycle` 17 -> 16. These are the
+    # ratchet working: debt paid down, not re-baselined.
+
+# Re-measured 2026-10-03 (plan 587 G0.3): resolver change, 1 parse change, 0 new
+#
+# The `architecture` CI job was green on Windows and RED on ubuntu for the same
+# commit, which is why it could not be a required check. Cause: the shared import
+# regex let its specifier class `[^`']` match CR and LF, so a match could open
+# inside ordinary code and close on a quote several lines later. In
+# `code-review-diff.ts` the string literal `'rename from '` supplies the `from `
+# keyword, and the capture then ran to the next quote in the file, producing the
+# "specifier" `.length);\r\n    else if (line.startsWith(`, classified
+# `UNRESOLVED:` and counted. The capture also held the RAW line ending, so under
+# `* text=auto` that junk fingerprinted differently per platform: the
+# Windows-recorded entry `5404f9b06a31899c` stopped triggering on Linux while its
+# LF twin read as a brand new violation. Identical code, opposite verdict.
+#
+# Fixed at the source: a specifier is never multi-line, so all five copies of the
+# regex (audit-imports, audit-modules, verify-cycle, validate-scc, and the copy
+# kept in strip-comments.test.ts) now exclude CR and LF. Second, independent
+# guarantee: `architecture-check.mjs` normalises line endings at the one place a
+# fingerprint is minted, so no raw source text can make a fingerprint depend on
+# the platform's checkout. `SKIP_SPEC` -- the two specifiers someone hit and
+# suppressed by name -- is deleted: it was already dead (0 of 14120 specifiers
+# matched it) and a gate patched by the strings it mis-parses is a hole with no
+# alarm on it.
+#
+# **Fingerprint classification (G0.3), by set and not by count: 801 kept
+# unchanged, 1 removed, 0 added.** The single removal is a PARSE CHANGE -- a slice
+# of `code-review-diff.ts`'s own source that was never a module edge. No legacy
+# debt was removed and no genuinely new violation was absorbed, which is the
+# condition under which `--write` is permitted.
+#
+# Re-measured 2026-10-03 (plan 587 R1.2): 1 new, 0 parse changes, 0 debt removed
+#
+# `module-dependency-permitted` 35 -> 36 and NOTHING else moved. The edge is
+# `run-persistence-sequence.test.ts` -> `@duya/agent-protocol`, which the
+# `agent-runtime` module's own `requires` list permits, so the checker is
+# reporting the policy working rather than a breach. This is a MEASUREMENT
+# moving, not a gate relaxing: the rule never blocks, it never consults the
+# baseline, and the baseline is untouched. `module-dependency` stayed at 547,
+# so no edge crossed from permitted into not-permitted.
+
+# Re-measured 2026-10-03 (plan 587 R2.1): 4 new, 0 parse changes, 0 debt removed
+#
+# `module-dependency-permitted` 36 -> 40 and NOTHING else moved. All four edges
+# are new IMPORT STATEMENTS in files this slice changed, each from a module to a
+# target its own `requires` list already declares, so the checker is reporting
+# the policy working rather than a breach. Measured, not inferred: reverting the
+# three `agent-runtime` files alone drops the count to 38, which attributes +2
+# to that package and +2 to `desktop-host`.
+#
+#   agent-runtime (+2, requires: [agent-protocol, ...])
+#     transport/execution-channel.ts   a second `@duya/agent-protocol` import
+#                                      statement, for the canonical-JSON digest
+#     index.ts                         re-exports the protocol's `RunHandle`
+#                                      rather than declaring a second shape
+#   desktop-host (+2, requires: [agent-protocol, ...])
+#     agents/server/run-orchestrator.ts imports `manifestFingerprint` as a VALUE,
+#                                      to put the manifest reference on the one
+#                                      `chat:start` command
+#     __tests__/run-entry-manifest-fixture.ts   a TYPE-only `RunManifest` import
+#
+# The two test files that drive the new behaviour deliberately import NOTHING
+# cross-module beyond that fixture — `run-entry-single-dispatch.test.ts`,
+# `run-entry-non-sse.test.ts` and `run-input-revision.test.ts` reach the runtime
+# through relative paths — which is why the delta is 4 and not 6. That was a
+# deliberate choice, not a happy accident: every extra cross-package import in a
+# new test file moves a managed module's number, and the count is only useful as
+# a signal while it stays boring.
+#
+# This is a MEASUREMENT moving, not a gate relaxing: the rule never blocks, it
+# never consults the baseline, and the baseline is untouched. `module-dependency`
+# stayed at 547, so no edge crossed from permitted into not-permitted.
+
+selfTest:
+  # 548 -> 547: one counted edge was never real. The parser had carved
+  # `.length);\n    else if (line.startsWith(` out of `code-review-diff.ts`'s own
+  # source and reported it as an `UNRESOLVED:` module-dependency edge; a
+  # specifier can no longer span lines, so it is not counted. Every other rule is
+  # byte-identical, and 801 of the 802 baseline fingerprints were kept.
+  # 547 -> 559 (plan 587 T3.1): TWELVE new, all the single edge
+  # `pkg:ai -> pkg:agent-protocol` for the specifier
+  # `@duya/agent-protocol/transcript`. Attributed by measurement — two
+  # `audit-imports.mjs --json` runs, edge set against edge set, 598 -> 610 with
+  # exactly 12 added and 0 removed, and ZERO of them sourced from the new
+  # `agent-protocol/src/transcript/` module. Full attribution and the reason the
+  # edge is correct rather than merely tolerated is in the T3.1 block at the end
+  # of this file. The 12 are: +10 in `packages/ai/src/types.ts` (one import plus
+  # nine `export type { ... } from` re-exports), +1 in the new
+  # `packages/ai/src/tool-result-wire.ts`, +1 in its test.
+  #
+  # 559 -> 464 by plan 587 M5.2. The value is declared once, above; the
+  # full-slice record and the +79 reclassification it depends on are in the
+  # M5.2 block near the end of this file.
+  # 460 -> 380 and 233 -> 370 (measured; `--self-test` blocked until these were
+  # updated). The two moved by the SAME 89 in OPPOSITE directions, which is the
+  # signature of reclassification rather than a new or a lost edge: 89 edges
+  # stopped being counted as violations and started being counted as declared
+  # dependencies. `total` is unchanged at 931 before and after, so nothing left
+  # the graph.
+  #
+  # Those 89 are the two false-positive families that blocked plan 600 S2, and
+  # both trace to ONE root cause with two instances -- an owner label that no
+  # policy entry could match:
+  #
+  #   (a) `scripts/architecture/boundary-gates.mjs`. A product test asserting
+  #       what a gate forbids must import the detector (`isTurnLoopModule`,
+  #       `TURN_LOOP_SHAPE`). `ownerOf` labelled every file under `scripts/` as
+  #       `other`, and `other` carries no `requires` list, so those edges could
+  #       never be permitted.
+  #   (b) `@duya/ai` from `packages/agent`. `legacy-agent.requires` listed only
+  #       `[agent-protocol, agent-runtime]`, yet 54 files in that module already
+  #       imported `@duya/ai` on master. Those older edges sat in the baseline;
+  #       the S2 files (`model-leg`, `run-engine-model` and their tests) were
+  #       new and therefore blocking.
+  #
+  # `audit-imports.mjs` and `import-graph.mjs` each carry their OWN `ownerOf`
+  # and both had to be taught `scripts` -- the same dual-map hole plan 587 M5.2
+  # hit with `desktop-contracts`, whose comment is preserved in both files.
+  #
+  # NOT a weakened gate, and proven so. Two mutations were run against this
+  # change: a `packages/agent` file importing a genuinely undeclared package
+  # still turns the check red (blocking 1 -> 2, naming that file), and reverting
+  # returns it to 1. The `repo-tooling` entry is a TARGET-side exemption only:
+  # `scripts/` is absent from `audit-imports.mjs:ROOTS`
+  # (`["apps","packages","tests","e2e"]`), so it is never a scan SOURCE and
+  # cannot host an unchecked edge.
+  #
+  # 380 -> 349 (plan 610 A5). ALL THIRTY-ONE REMOVED, none added.
+  #
+  # Attributed by measurement, not inferred: this series recorded the counter at
+  # 380 immediately before `@duya/memory` landed (`ac7a1995`) and 349 immediately
+  # after, so the extraction accounts for the whole delta. The edges that
+  # disappeared were cross-module imports that became INTRA-package once the
+  # agent-side memory implementation moved into a declared workspace package --
+  # they were never legal, merely tolerated debt, and paying them is the point of
+  # the slice.
+  #
+  # WHY LOWERING THE PIN IS NOT A FALSE GREEN. This pin exists so that a resolver
+  # which has gone BLIND and a codebase which has genuinely IMPROVED are not
+  # mistaken for each other; the numbers can only tell them apart if the pin is
+  # re-measured whenever the count legitimately moves. Holding 380 would make
+  # every future migration fail this check, and the only way to satisfy it would
+  # be to stop migrating.
+  #
+  # `.architecture-baseline.json` is deliberately NOT re-recorded by this edit.
+  # It still carries all 930 fingerprints, 108 of which no longer trigger; the
+  # baseline's own note sanctions deleting them "as their migration lands", and
+  # that is a separate, explicitly-forbidden operation. This pin is a test
+  # expectation; the baseline is a debt ledger. They are different instruments.
+  # 198 -> 160 (2026-10-17): THIRTY-EIGHT fewer NOT-PERMITTED edges, caused by
+  # declaration rather than by any code change. `command-catalog` had no module
+  # declaration at all, and the rule above is that a name with no matching module
+  # silently permits nothing -- so all four edges into it counted as blocking.
+  # Declaring it (`roots: [packages/command-catalog]`, `requires: []`) reclassified
+  # those four, and naming `legacy-ai` + `command-catalog` in `desktop-host.requires`
+  # and `legacy-cli.requires` reclassified the CLI and host edges to the same two
+  # packages that were already being imported on purpose.
+  #
+  # This is a RECLASSIFICATION, not a disappearance, and the relation below is what
+  # proves it: `module-dependency 160` + `module-dependency-permitted 2467` = 2627 =
+  # `crossBoundaryEdges`, exactly the same edge total as before the change. Nothing
+  # stopped being counted; edges moved from the blocking side to the permitted side,
+  # which is the intended outcome of declaring rather than baselining. Verified on a
+  # CLEAN tree (origin/master plus this commit, no unrelated working-tree files):
+  # counting 160. The `.architecture-baseline.json` was NOT re-recorded and remains
+  # 932 fingerprints.
+  module-dependency: 160
+  # 349 -> 343 (2026-10-10, plan 610 A5 continuation). Ledger, not vibes:
+  #   +2  group-handlers.ts / group-turn-dispatcher.ts — their cross-package
+  #       RELATIVE imports (`../../../../../packages/agent/src/message/
+  #       message-source`) became declared-subpath `@duya/agent/message`
+  #       imports. Escapes invisible to this gate became visible (and
+  #       baselined) module edges: fingerprints b7118efb6afbe6c4 /
+  #       908c21f0f70be587 in `.architecture-baseline.json`.
+  #   -8  pre-existing drift from merges that landed after the 2026-10-06
+  #       re-measurement (A3 / PR #262 among them). This slice's own edges
+  #       net to +2 on this pin, so the deficit was already present at HEAD
+  #       before the slice (349 expected vs 341 counted) and is recorded as
+  #       measured here. Not attributable within this slice — flagged for
+  #       the next re-measurement owner.
+  # 51 -> 61 (plan 587 T3.2): TEN new, all one owner pair, 0 removed.
+  #
+  # `module-dependency` is UNCHANGED at 559, and that is the load-bearing half:
+  # no edge became a NON-permitted dependency, so no managed module's zero
+  # tolerance is affected. Only the permitted counter moved.
+  #
+  # ATTRIBUTED BY MEASUREMENT, not inferred. `scripts/architecture/audit-imports.mjs`
+  # run on master @ 62eacb35 and again with the T3.2 tree, whole-output diffed:
+  # files scanned 3174 -> 3184 (+10, the ten new files), file edges 14260 ->
+  # 14301, internal edges 8354 -> 8384, cross-boundary edges 610 -> 620, and
+  # the owner-pair histogram line
+  #     18 pkg:agent-runtime -> pkg:agent-protocol
+  # becomes
+  #     28 pkg:agent-runtime -> pkg:agent-protocol
+  # The pair moved by exactly TEN, which is the +10 in the counter above, so
+  # every new edge is accounted for and none is from another pair. A
+  # `--json` edge-set diff agrees: 9 added, 0 removed, all
+  # `packages/agent-runtime/** -> packages/agent-protocol/src/index.ts` (six
+  # files; `event-emitter.ts` alone contributes three, one per import
+  # statement). The 9-vs-10 difference is the two counters deduplicating
+  # differently, not a missing edge — the pair histogram is the number that
+  # reconciles, and it reconciles exactly.
+  #
+  # WHY THE EDGE IS THE RIGHT SHAPE. T3.2 put the run's single emit entry point
+  # (`events/event-emitter.ts`), the structural dispatcher
+  # (`events/structural-dispatch.ts`) and the control-plane census
+  # (`control-plane-census.ts`) in `agent-runtime`, and all three need the
+  # protocol's vocabulary as VALUES, not just types: the `EVENT_META` registry
+  # for durability and criticality, `checkRequiredFields` for the per-field
+  # manifest, `verdictForUnknownType` for the critical/extension boundary, and
+  # `LifecycleViolation` to tell a lifecycle refusal from a malformed field.
+  # `agent-runtime` already declares `requires: [agent-core, agent-protocol]`,
+  # so these are permitted edges and the policy working as declared. The
+  # direction is the sanctioned one: runtime depends DOWNWARD on protocol,
+  # which is the dependency contract §A states.
+  #
+  # What T3.2 did NOT do is add a new module. `criticality.ts` and
+  # `worker-event-completeness.ts` are leaves inside `agent-protocol` and
+  # `packages/agent` respectively and import nothing outside their own
+  # package, so neither contributes an edge of its own; verified by reading
+  # their import blocks, not by inspection of the counts.
+  #
+  # Four of the ten are in `test/`. A new test file in `agent-runtime` that
+  # imports `@duya/agent-protocol` adds one permitted edge, which is the
+  # established shape for this module — `reference-run.test.ts`,
+  # `run-correctness-seams.test.ts` and `run-persistence-sequence.test.ts`
+  # already do it, and the R2.1 block above records the same thing happening
+  # for `run-persistence-sequence.test.ts`.
+  #
+  # 35 -> 36: ONE genuinely new, legitimately permitted edge.
+  # `packages/agent-runtime/test/run-persistence-sequence.test.ts` (plan 587
+  # R1.2) imports `@duya/agent-protocol` TYPES -- RunManifest, RunBudget,
+  # RunTerminalState, RunResult and friends -- and the module declares
+  # `requires: [agent-protocol, ...]`, so `moduleDependencyPermitted` classes it
+  # as permitted. The count is per OCCURRENCE of (rule, file, detail), so a new
+  # test file in this module adds exactly 1, and removing that one import takes
+  # it back to 35 (verified both ways, not inferred). `module-dependency` stays
+  # at 547, which is the load-bearing part: the edge did not become a
+  # non-permitted dependency, and this rule never blocks even inside a managed
+  # module, so a managed module's zero tolerance is untouched. The two sibling
+  # run-layer suites (`reference-run.test.ts`, `run-correctness-seams.test.ts`)
+  # already import the same package the same way, so this is the established
+  # shape for a test in `agent-runtime` and not a new kind of edge.
+  #
+  # 36 -> 40 (plan 587 R2.1): FOUR new, all permitted, all attributable — see
+  # the block above `selfTest`. Two are in this module
+  # (`transport/execution-channel.ts` gained a second `@duya/agent-protocol`
+  # import statement for the canonical-JSON digest, and `index.ts` re-exports
+  # the protocol's `RunHandle`); two are in `desktop-host`
+  # (`run-orchestrator.ts` imports `manifestFingerprint` as a value, and one new
+  # test fixture imports `RunManifest` as a type). Verified by reverting the
+  # `agent-runtime` files alone and re-measuring 38, not by inspection.
+  # `module-dependency` is still 547, which is the load-bearing half: no edge
+  # became non-permitted, so no managed module's zero tolerance is affected.
+  #
+  # 40 -> 44 (plan 587 R2.2): FOUR new, all permitted, all attributable. The
+  # worker now VERIFIES the manifest binding it is handed
+  # (`packages/agent/src/process/run-manifest-verification.ts`), and verifying a
+  # sha256 fingerprint and an input digest requires the protocol package that
+  # defines both. `legacy-agent.requires` gains `agent-protocol` for it — this
+  # module's FIRST declared dependency, and the reason the edges are permitted
+  # rather than merely tolerated. Without that verification `manifestHash` and
+  # `inputRevision` were digests nobody compared: a comment with hex in it.
+  #
+  # Attributed BY MEASUREMENT, not inspection. Reverting only the three
+  # `packages/agent` files' protocol imports (the two sources and the new test)
+  # and re-running the checker measured 41, not 40 — so those three account for
+  # three edges, and the fourth is the new `desktop-host` test file
+  # `apps/desktop/src/main/__tests__/run-manifest-config.test.ts` importing
+  # `RunManifest` / `manifestFingerprint`: the same shape R2.1 recorded for its
+  # own new fixture. `module-dependency` measured 547 both with and without the
+  # change, which is the load-bearing half — declaring the edge moved a
+  # BLOCKING violation into a COUNTED one, so no managed module's zero tolerance
+  # is affected. No other row in this table moved, and `--write` was not run.
+  # Re-measured 2026-10-03 (plan 587 R2.3): 3 new, 0 parse changes, 0 debt removed
+  #
+  # 44 -> 47, and NOTHING else in this table moved. Attributed BY MEASUREMENT, by
+  # running `audit-imports.mjs --json` in this worktree and in a scratch worktree
+  # pinned at 0db6ffe8 (the R2.2 tip) and diffing the two cross-boundary edge
+  # sets: 591 -> 594, exactly three added and none removed.
+  #
+  #   1. `apps/desktop/src/main/agents/server/worker-manager.ts`
+  #      -> `@duya/agent-protocol`   (the only SOURCE edge; a type-only import of
+  #      `StopDisposition`, which is what makes the interrupt's outcome readable
+  #      by the run layer instead of being logged and forgotten)
+  #   2. `packages/agent-runtime/test/run-cancel-budget.test.ts`
+  #      -> `@duya/agent-protocol`   (new test file, type-only)
+  #   3. `apps/desktop/src/main/__tests__/run-cancel-stop-path.test.ts`
+  #      -> `@duya/agent-protocol`   (new test file, type-only)
+  #
+  # Edges 2 and 3 are the same shape R1.2 and R2.2 recorded: the count is per
+  # OCCURRENCE of (rule, file, detail), so each new test file in a managed module
+  # that imports the protocol adds exactly 1. `agent-runtime` declares
+  # `requires: [agent-protocol, ...]`, and edge 1 is a main-process file already
+  # covered by the desktop host module, so `moduleDependencyPermitted` classes all
+  # three as permitted and COUNTS them instead of blocking.
+  #
+  # `module-dependency` measured 547 both with and without the change, which is
+  # the load-bearing half: declaring these edges moved COUNTED violations, and no
+  # managed module's zero tolerance is affected. This is a MEASUREMENT moving,
+  # not a gate relaxing -- `module-dependency-permitted` is in MEASUREMENT_RULES,
+  # it never blocks and never consults the baseline. `--write` was not run, and
+  # the baseline section is byte-identical.
+  #
+  # Note on the base measurement: this branch tip measures 810 tolerated (not the
+  # 806 quoted in the R2.3 brief) when the checker is run as-is in a scratch
+  # worktree at 0db6ffe8. The +7 attributed to R2.3 is therefore +3 here, and the
+  # other 4 belong to whatever moved between the quoted figure and 0db6ffe8.
+  #
+  # Re-measured 2026-10-03 (plan 587 R2.4): 4 new, 0 parse changes, 0 debt removed
+  #
+  # 47 -> 51, and NOTHING else in this table moved. Attributed BY MEASUREMENT, by
+  # running `audit-imports.mjs --json` in this worktree and again with every
+  # `apps/` and `packages/` change stashed (i.e. at 9803b5fd) and diffing the two
+  # cross-boundary edge sets: 594 -> 598, exactly four added and none removed.
+  # All four point at `@duya/agent-protocol`'s public entry, and three of the four
+  # are type-only:
+  #
+  #   1. `apps/desktop/src/main/control-plane/permission-vocabulary.ts`
+  #      -> `@duya/agent-protocol`   (the only VALUE edge: `isPermissionAction`,
+  #      the one function that keeps the legacy tables honest about which strings
+  #      are actions. Reading the canonical set from the protocol rather than
+  #      redeclaring it is what stops this module from becoming a fourth
+  #      vocabulary.)
+  #   2. `apps/desktop/src/main/control-plane/permission-coordinator.ts`
+  #      -> `@duya/agent-protocol`   (type-only: PermissionRequest /
+  #      PermissionResolution / PermissionAck / PermissionScope)
+  #   3. `apps/desktop/src/main/__tests__/permission-round-trip.test.ts`
+  #      -> `@duya/agent-protocol`   (new test file, type-only)
+  #   4. `packages/agent-runtime/test/run-permission-respond.test.ts`
+  #      -> `@duya/agent-protocol`   (new test file, type-only)
+  #
+  # Edges 3 and 4 are the same shape R1.2, R2.2 and R2.3 recorded: the count is
+  # per OCCURRENCE of (rule, file, detail), so each new test file in a managed
+  # module that imports the protocol adds exactly 1. Edges 1 and 2 are the same
+  # shape R2.3's `worker-manager.ts` edge recorded, for a host-side file the
+  # desktop host module already covers. `moduleDependencyPermitted` classifies
+  # all four as permitted and COUNTS them instead of blocking.
+  #
+  # `module-dependency` measured 547 both with and without the change, which is
+  # the load-bearing half: declaring these edges moved COUNTED violations, and no
+  # managed module's zero tolerance is affected. `module-dependency-permitted` is
+  # in MEASUREMENT_RULES -- it never blocks and never consults the baseline.
+  # `--write` was not run, and the baseline section is byte-identical.
+  # 61 -> 78 (plan 587 T3.3): SEVENTEEN new, all one direction, 0 removed.
+  #
+  # Every one is `pkg:agent-runtime -> pkg:agent-protocol` (10 from the four new
+  # `src/replay/*.ts` files, one of them via the `/transcript` subpath; 7 more
+  # from the new test files' own imports). The two `index.ts` edits add only
+  # RELATIVE re-exports, so they contribute no cross-boundary edge themselves.
+  #
+  # `module-dependency` is UNCHANGED at 559, and that is the load-bearing half:
+  # no edge became a NON-permitted dependency, so no managed module's zero
+  # tolerance is affected. Only the permitted counter moved.
+  #
+  # Attributed BY MEASUREMENT: two `audit-imports.mjs --json` runs on this
+  # branch, edge set against edge set, plus a third with the four source files
+  # reverted alone (which measures 11 fewer, and turns every re-export
+  # unresolved — so it is a valid attribution and an invalid total). The full
+  # attribution, the reason the direction is the correct one, and the note that
+  # `agent-protocol` stays a leaf are in the T3.3 block at the end of this file.
+  # 78 -> 94 (plan 587 T3.4): SIXTEEN new, all one direction, and `module-dependency`
+  # is UNCHANGED at 559, which is again the load-bearing half — no edge became a
+  # NON-permitted dependency, so no managed module's zero tolerance is affected.
+  #
+  # Two independent measurements, both on this branch, neither of them inferred:
+  #
+  #   1. SOURCE contribution = 5. `audit-imports.mjs --json` edge sets diffed,
+  #      intact tree against the tree with the five new
+  #      `src/events/{coalesce,backpressure,stream-fanout,control-channel,coalesce-guards}.ts`
+  #      removed. Exactly five edges appear, and all five are
+  #      `pkg:agent-runtime -> pkg:agent-protocol`, one per new file. The two
+  #      `index.ts` re-export blocks are RELATIVE, so they contribute no
+  #      cross-boundary edge of their own.
+  #   2. TEST contribution = 9. The seven new files in `test/` removed with the
+  #      sources and `index.ts` left in place, so nothing dangles and the run is a
+  #      valid comparable: `architecture-check.mjs` reports
+  #      `module-dependency-permitted` 94 -> 85. (The raw edge diff shows six
+  #      `-> pkg:agent-protocol` edges from those files; the counter counts
+  #      occurrences, and the difference is not separately broken out.)
+  #
+  # The remaining 2 of the 16 are NOT separately attributed, and this block says
+  # so rather than inventing a split. Both removal directions are confounded in
+  # the way the T3.3 block above records: removing the sources leaves the five
+  # `index.ts` re-exports unresolved, and `architecture-check.mjs` then FAILS
+  # outright with 28 new `[module-dependency]` violations rather than reporting a
+  # lower count. Reverting `index.ts` instead does not work either — it breaks
+  # the eight pre-existing consumers T3.2 and T3.3 added, which show up as
+  # `UNRESOLVED:@duya/agent-runtime` edges.
+  #
+  # `@duya/agent-protocol` remains a true leaf: `forbidden-dependency` is
+  # unchanged at 16 and no edge has `packages/agent-protocol/src/**` as its
+  # source. T3.4 added nothing to the protocol package — the registry's
+  # `durability` column is what the coalescing policy reads, so there is no
+  # second durability table to drift.
+  #
+  # ── Re-measured 2026-10-03 (plan 587 T3.5, branch 587/t3-5-transports on top of
+  # master @ 6c6fef28): 21 new, all one direction, 0 removed ──────────────────
+  #
+  #   module-dependency               559 -> 559   UNCHANGED, and that is the
+  #                                                load-bearing half.
+  #   module-dependency-permitted      94 -> 115   +21
+  #   tolerated (baselined)          872 -> 893   +21, the same 21.
+  #   baseline size                 811 -> 811   untouched; `--write` was NOT run.
+  #
+  # Every one of the 21 is the edge `pkg:agent-runtime -> pkg:agent-protocol`.
+  # `agent-runtime` declares `agent-protocol` in its `requires` list and the
+  # `layers:` list puts `runtime` above `protocol`, so the edges point DOWNWARD
+  # and land in `module-dependency-permitted` — counted, never blocking. No
+  # managed module's zero tolerance is affected, which is why
+  # `module-dependency` did not move at all.
+  #
+  # ATTRIBUTED BY MEASUREMENT, not inferred. Two `audit-imports.mjs --json` runs,
+  # edge sets diffed, on this branch: first with the whole T3.5 tree, then with
+  # ONLY `src/transport/` stashed (the nine new source files) while `index.ts` and
+  # every test file stayed in place.
+  #
+  #   1. SOURCE contribution = 8, exactly. One `pkg:agent-runtime ->
+  #      pkg:agent-protocol` edge per new source file that imports the protocol:
+  #      line-codec, transport-port, subprocess-transport, http-sse-transport,
+  #      in-process-transport, capability-probe, transport-guards, equivalence.
+  #      `error-taxonomy.ts` is the ninth file and contributes NONE, because it
+  #      imports nothing from the protocol at all — the taxonomy is deliberately
+  #      self-contained so no `ErrorCode` set can be silently re-derived there.
+  #   2. The remaining 13 are the new TEST files' own `@duya/agent-protocol`
+  #      imports, same direction. The counter counts OCCURRENCES of
+  #      (rule, file, detail), so one test file with several specifiers
+  #      contributes several. 8 + 13 = 21.
+  #   3. The diff ALSO reports 46 "removed" edges, and they are an ARTIFACT of
+  #      the revert rather than a real subtraction — the same confound the T3.3
+  #      and T3.4 blocks above record. Removing the sources while keeping
+  #      `index.ts` and the tests turns all nine `index.ts` re-exports and all
+  #      the tests' `../src/transport/*.js` imports `UNRESOLVED`, which
+  #      `architecture-check.mjs` then reports as NEW `[module-dependency]`
+  #      violations. The `with` set is therefore 750 edges and the `without` set
+  #      788, which is why the honest reading is the 8 real source edges and NOT
+  #      the raw set difference. Reverting `index.ts` instead is not available
+  #      either: it breaks the pre-existing consumers T3.2/T3.3/T3.4 added.
+  #
+  # WHY THE DIRECTION IS THE CORRECT SHAPE. A transport's vocabulary is the
+  # protocol's: `RunEventEnvelope`, `RunManifest`, `ReplayCursor`, `HostDeclaration`
+  # and the error codes are all wire data defined in the leaf package, and T3.5
+  # added no new wire type. What T3.5 added is a PORT, three adapters over it, a
+  # capability probe, an error taxonomy and a normalisation — all of which are
+  # runtime-layer code reaching DOWN for vocabulary. Nothing here points up, and
+  # `@duya/agent-protocol` stays a true leaf.
+  # 115 -> 116 (plan 587 E4.1): ONE further permitted edge, 0 removed, added
+  # on top of T3.5's twenty-two. T3.5's own attribution above is unchanged and
+  # still records its own increment as 115 at the time it measured it.
+  #
+  # The edge is a single one:
+  # `apps/desktop/src/main/__tests__/eval-legacy-loop.ts` ->
+  # `packages/agent-protocol/src/index.ts` for the specifier
+  # `@duya/agent-protocol`, contributed by the E4.1 eval harness. It reads the
+  # persisted manifest back off disk and fingerprints it with the protocol's
+  # own `manifestFingerprint`, and that is the point of the assertion: "the hash
+  # on the run row is the hash the protocol computes" is only meaningful if the
+  # fingerprint comes from the protocol rather than from a re-declared copy of
+  # the hashing rule. Direction is correct and `agent-protocol` remains a leaf -
+  # nothing in it imports anything from `apps/`.
+  #
+  # `module-dependency` is UNCHANGED at 559, and that remains the load-bearing
+  # half: no edge became a NON-permitted dependency, so no managed module's
+  # zero tolerance is affected. `module-dependency-permitted` is counted, never
+  # blocking, and never consults the baseline.
+  #
+  # Attributed BY MEASUREMENT on the E4.1 branch: two `audit-imports.mjs --json`
+  # runs, edge set against edge set, 637 -> 638 with exactly 1 added and 0
+  # removed, the "before" run taken with the three source files and the seven
+  # eval files reverted ALONE. `.architecture-baseline.json` was not touched and
+  # `--write` was not run.
+  # 116 -> 118 is NOT mine and is recorded here so the next reader does not
+  # attribute it to whoever touches this line next: 116 was the value E4.1
+  # recorded, and the T3.1..T3.5 + E4.1 stack that landed after it (master
+  # @ f63cb0e9) already counts 118. I measured that by stashing the whole diff
+  # on this branch and re-running the check: 118 -> 119 with my change, exactly
+  # 1 added and 0 removed.
+  #
+  # 118 -> 119 is MINE, and it is a MEASURED value, not a gate relaxation. The
+  # one edge is
+  # `apps/desktop/src/main/db/core/__tests__/run-store-idempotency.test.ts` ->
+  # `packages/agent-protocol/src/index.ts` for the specifier
+  # `@duya/agent-protocol`, contributed by the R1.3 store test. It needs the
+  # protocol's own `RunEventEnvelope` and `RunTerminalState` to build the
+  # fixtures the content-conflict comparison reads, and the comparison is only
+  # meaningful against the real envelope type rather than a re-declared copy.
+  # Direction is correct and `agent-protocol` remains a leaf. The other two R1.3
+  # test files add no edge: they import only from `apps/desktop/src/main`.
+  #
+  # `module-dependency` is UNCHANGED at 559, and that remains the load-bearing
+  # half: no edge became a NON-permitted dependency, so no managed module's
+  # zero tolerance is affected. `module-dependency-permitted` is counted, never
+  # blocking, and never consults the baseline. `.architecture-baseline.json` was
+  # not touched and `architecture:baseline` (`--write`) was not run.
+  #
+  # 119 -> 123 (plan 587 E4.2, layered ON TOP of the 119 above — upstream's block
+  # and attribution are left intact): FOUR new permitted edges, all of them test
+  # files importing `@duya/agent-protocol`, and all measured rather than counted
+  # by eye. `node scripts/architecture/audit-imports.mjs --json` reports 682
+  # cross-boundary edges, of which exactly four name a file added by this slice:
+  #
+  #   apps/desktop/src/main/db/core/__tests__/run-store-reopen.test.ts
+  #       -> packages/agent-protocol/src/index.ts   (x2: one `import type`, one
+  #          `import { manifestFingerprint }`)
+  #   packages/agent-runtime/test/capability-pause-closed.test.ts
+  #       -> packages/agent-protocol/src/index.ts
+  #   packages/agent-runtime/test/run-resource-growth.test.ts
+  #       -> packages/agent-protocol/src/index.ts
+  #
+  # Every one is a declared edge, not an escape: both owning modules already
+  # require `agent-protocol` in their `requires` lists, and the protocol package
+  # remains a leaf with no dependency of its own. `run-store-reopen` needs the
+  # protocol's real `RunEventEnvelope` to write a durable event AND
+  # `manifestFingerprint` to write a manifest hash the store will later verify —
+  # a hand-written digest would have made `verifyManifest` report a mismatch,
+  # which is correct behaviour and the wrong fixture. The two `agent-runtime`
+  # tests need the protocol's `RunManifest` / `RunTerminalState` / error code to
+  # build a real run and read its real capability advertisement.
+  #
+  # `module-dependency` is UNCHANGED at 559 again, which is still the load-bearing
+  # half. `.architecture-baseline.json` was not touched and
+  # `architecture:baseline` (`--write`) was NOT run for this increment.
+  # 123 -> 124 (plan 587 R1.4): ONE further permitted edge, 0 removed, layered on
+  # top of E4.2's four rather than replacing them. E4.2's attribution above is
+  # unchanged.
+  #
+  # Worth recording, because it cost a wrong number: R1.4 originally measured
+  # 119 -> 120 on a base that predated E4.2, so its bare figure was stale by
+  # exactly those four. Two independently measured deltas from different bases do
+  # not add up, and taking one branch number over the other would have recorded a
+  # figure the resolver disagrees with. The value here is measured on the tree
+  # that actually contains both changes.
+  #
+  # The edge is one test-tree import of `@duya/agent-protocol` from
+  # `packages/agent-runtime/test/run-result-surface.test.ts`. The assertions it
+  # carries are the point of the slice: a missing usage field must read as
+  # `unknown` rather than `0`, and an unimplemented surface must read as
+  # `unsupported` rather than `[]`. Direction is correct; `agent-protocol`
+  # remains a leaf - nothing in it imports anything from `packages/`.
+  #
+  # `module-dependency` is UNCHANGED at 559, and that remains the load-bearing
+  # half: no edge became a NON-permitted dependency, so no managed module zero
+  # tolerance is affected. `module-dependency-permitted` is counted, never
+  # blocking, and never consults the baseline.
+  #
+  # Attributed BY MEASUREMENT: the new test file reverted ALONE, edge set against
+  # edge set, exactly 1 added and 0 removed. `.architecture-baseline.json` was not
+  # touched and `--write` was not run.
+  #
+  # 124 -> 126 (plan 587 C6.1): TWO further permitted edges, 0 removed, layered on
+  # top of R1.4's one rather than replacing it. R1.4's attribution above is
+  # unchanged.
+  #
+  # Measured on the rebased tree. C6.1 was originally built on `c0253805`, which
+  # predates E4.2 and R1.4, and a self-test run there reported `expected 123,
+  # counted 125`. That bare figure is stale in the SAME way R1.4's 119 -> 120 was:
+  # it measures a base that does not contain the other two increments, so the two
+  # numbers cannot be added. The branch was rebased onto `dc46dac4` and the value
+  # below is measured on the tree that actually contains E4.2, R1.4 and C6.1.
+  #
+  # Both edges are `electron-main -> pkg:agent-protocol`, target
+  # `packages/agent-protocol/src/index.ts`, and BOTH are `import type` — erased at
+  # runtime, so neither adds a load-time dependency. They are:
+  #
+  #   + apps/desktop/src/main/control-plane/repository-port.ts
+  #       (RunEventEnvelope, RunTerminalState — the port must alias R1.3's own
+  #        outcome types rather than restate them, or two declarations of one
+  #        fact drift the first time a field is added to one of them)
+  #   + apps/desktop/src/main/control-plane/control-plane-service.ts
+  #       (RunHandle — the host map's value type)
+  #
+  # Direction is correct and matches the 21 pre-existing edges of the same pair:
+  # both owning modules already declare `agent-protocol` in their `requires`
+  # lists, and the protocol package remains a leaf with no dependency of its own.
+  # `agent-protocol` is the one managed module that is not itself a cross-boundary
+  # edge here, so no zero-tolerance module is affected.
+  #
+  # `module-dependency` is UNCHANGED at 559, and that remains the load-bearing
+  # half: no edge became a NON-permitted dependency. `module-dependency-permitted`
+  # is counted, never blocking, and never consults the baseline.
+  #
+  # HALF 3 — the contracts directory (`apps/desktop/src/contracts`).
+  # `main/ipc/git-types.ts` -> `contracts/git.ts` and
+  # `renderer/types/import.ts` -> `contracts/import.ts`, with every consumer
+  # repointed. Measured: `src-renderer -> electron-main` 4 -> 2 and
+  # `electron-main -> src-renderer` 33 -> 32. Both remaining renderer->main
+  # edges are recorded in NOT_CUT with their reasons; the 32 main->renderer
+  # edges are the behavioural share and are M5.5's, not a DTO's.
+  #
+  # `total` RISES here, 854 -> 863, and that is the honest reading rather than
+  # a regression: 13 host -> contracts edges became VISIBLE. They were
+  # unclassifiable before, because `audit-imports.mjs`'s `ownerOf` had never
+  # heard of `apps/desktop/src/contracts` and returned `other` — an owner with
+  # no `requires` list, so those edges could not be permitted by any policy
+  # entry and were reported as blocking. `import-graph.mjs` already returned
+  # `desktop-contracts` and listed it in `HOST_BOUNDARIES`; the two owner maps
+  # disagreed. Both are fixed, `ownerToRoot` in `architecture-check.mjs` now
+  # knows the label, and a `desktop-contracts` module entry declares it. A
+  # boundary that cannot see its own contract directory is a hole, and closing
+  # it necessarily reports more.
+  #
+  #   rule                        after H1+H2   +H3   final
+  #   module-dependency                   464    -4     460
+  #   module-dependency-permitted         203   +13     216
+  #   forbidden-dependency                   0     0       0
+  #   package-boundary-escape             146     0     146
+  #   deep-import                          25     0      25
+  #   total                               854     9     863
+  #
+  # `.architecture-baseline.json` was not touched and `--write` was not run.
+  #
+  # 216 -> 218 (plan 587 M5.5): the `ProcessScope` port and the two declaration
+  # statements that make it reachable from `packages/agent`.
+  #
+  #   rule                        M5.2 final   M5.5   final
+  #   module-dependency                  460     0     460
+  #   module-dependency-permitted        216    +2     218
+  #   package-boundary-escape           146     0     146
+  #   deep-import                        25     0      25
+  #   cycle                              16     0      16
+  #   total                             863    +2     865
+  #
+  # ATTRIBUTED BY MEASUREMENT, not inferred. Two `audit-imports.mjs --json`
+  # runs, whole edge sets diffed pair by pair with the new source files removed
+  # for the first run (the first attempt was contaminated by the new TEST file
+  # still being on disk, which is why the clean run is the one quoted here):
+  #
+  #   pkg:agent -> pkg:agent-runtime   0 -> 2   (+1 target, 2 import statements)
+  #   every other cross-boundary pair   unchanged
+  #   deepImportEdges                  25 -> 25
+  #   packageBoundaryEscapeEdges      146 -> 146
+  #   unresolved                        9 -> 9
+  #
+  # The +2 is two import statements naming the SAME target
+  # `packages/agent-runtime/src/index.ts`: one production
+  # (`tool/BashTool/managed-bash.ts`) and one test
+  # (`tool/BashTool/__tests__/managed-bash.test.ts`). Both land here rather than
+  # in blocking `module-dependency` because `agent-runtime` was added to
+  # `legacy-agent.requires` -- which is why `module-dependency` did not move at
+  # all. `cycle` staying at 16 is the load-bearing half: `agent-runtime` requires
+  # only `agent-protocol` and `agent-core`, so this edge is acyclic and does not
+  # close a loop through the legacy executor.
+  #
+  # This is an INCREASE, recorded rather than absorbed. The alternative was to
+  # leave `packages/agent` unable to reach the port, which would have meant
+  # either three more copies of the same lifetime bookkeeping or a relocation
+  # of `processTreeKill` that the eval matrix row
+  # `evals/agent/matrix/rows.ts` pins by path.
+  # 218 -> 220 (plan 587 M5.5): TWO further permitted edges, 0 removed, measured on
+  # the tree after M5.2 merged. Attribution by two audit-imports.mjs --json runs with
+  # the new files removed for the first: the entire delta is the single pair
+  # pkg:agent -> pkg:agent-runtime, 0 -> 2, same target (1 production, 1 test).
+  # module-dependency is UNCHANGED at 460, which is the load-bearing half: no edge became
+  # a NON-permitted dependency, so no managed module zero tolerance is affected.
+  # .architecture-baseline.json was not touched and --write was not run.
+  #
+  # 220 -> 227 (plan 587 D7.1): SEVEN new, 0 removed, measured on the tree
+  # carrying the checkpoint / side-effect state machine.
+  #
+  # ATTRIBUTED BY MEASUREMENT, not inferred. Two `audit-imports.mjs --json`
+  # runs, whole-output diffed as edge SETS, with every D7.1 file removed for
+  # the first (reverted via `git stash push -u`, so the base run saw the tree
+  # at 9045e445 with no D7.1 file present at all):
+  #
+  #   cross-boundary edges (deduplicated)   571 -> 577   +6
+  #   ADDED 6, REMOVED 0. Every one is the single pair
+  #   `pkg:agent-runtime -> pkg:agent-protocol`:
+  #     src/checkpoint/checkpoint-store.ts     2 statements
+  #     src/checkpoint/branch-plan.ts         1
+  #     test/checkpoint-store.test.ts          1
+  #     test/checkpoint-side-effects.test.ts   1
+  #     test/checkpoint-branch.test.ts         1
+  #     test/checkpoint-unsupported.test.ts    1
+  #
+  # The counter reads +7 while the edge SET moves +6, and the difference is
+  # not a rounding artefact: `module-dependency-permitted` counts import
+  # STATEMENTS, and `checkpoint-store.ts` has two naming the same target (a
+  # type-only import and a value import). The deduplicated set therefore has
+  # one fewer entry than the counter. Recorded because a future reader who
+  # re-runs the diff will hit the same 7-vs-6 discrepancy and should not have
+  # to re-derive it.
+  #
+  # Three files contribute NO edge, and that is measured rather than assumed:
+  # `src/checkpoint/unsupported.ts` imports nothing from the protocol;
+  # `d71-kill-recovery.test.ts` imports the runtime only; and
+  # `d71-kill-worker.mjs` reaches the built protocol through a computed
+  # `path.join(...)` + `pathToFileURL`, which is not a static specifier and so
+  # produces no edge for the resolver to see.
+  #
+  # The load-bearing half: `module-dependency` is UNCHANGED at 460, so no edge
+  # became a NON-permitted dependency and no managed module's zero tolerance is
+  # affected. `module-dependency-permitted` is in `MEASUREMENT_RULES` -- it is
+  # counted, never blocking, and never consults the baseline. The direction is
+  # correct rather than merely tolerated: `agent-runtime` is layer `runtime` and
+  # `agent-protocol` is layer `protocol`, so these edges point DOWNWARD, and
+  # `pkg:agent-runtime` already declares `agent-protocol` in its `requires`
+  # list. `cycle` is UNCHANGED at 16, which is the same statement about
+  # acyclicity the M5.5 block above makes.
+  #
+  # `.architecture-baseline.json` was not touched and `architecture:baseline`
+  # (`--write`) was not run.
+  #
+  # 227 -> 233 (plan 587 H8.1, replayed onto this base): SIX new, 0 removed.
+  # This is a REPLAY of PR #178 (commit 1e5e821b), which was opened against
+  # 902cff84 and never merged. The +6 is the size that slice measured then,
+  # RE-DERIVED on the current base rather than carried over.
+  #
+  # ATTRIBUTED BY MEASUREMENT. Two `audit-imports.mjs --json` runs, whole edge
+  # SETS diffed pair by pair, the first taken with this worktree DETACHED at
+  # origin/master @ 08065a7c so the four new files could not contaminate it.
+  # Deliberately NOT `git stash`: `refs/stash` is per-repository, so a
+  # clean-tree stash push is a silent no-op whose later pop would steal another
+  # session's stash.
+  #
+  #   crossBoundaryEdges              687 ->  693   +6, 0 removed
+  #   deepImportEdges                  25 ->   25
+  #   packageBoundaryEscapeEdges      146 ->  146
+  #   unresolved                        9 ->    9
+  #
+  # The six, one per import statement, all the two sanctioned downward pairs
+  # pkg:agent -> pkg:agent-runtime and pkg:agent -> pkg:agent-protocol:
+  #
+  #   cli/index.ts                     -> @duya/agent-runtime  1
+  #   process/headless-run-host.ts     -> @duya/agent-runtime  1
+  #   process/headless-run-host.ts     -> @duya/agent-protocol 2
+  #                                                 (one `import type`, one value
+  #                                                  import for `manifestFingerprint`)
+  #   process/__tests__/headless-run-host.test.ts
+  #                                      -> @duya/agent-runtime  1
+  #   process/__tests__/headless-run-host.test.ts
+  #                                      -> @duya/agent-protocol  1
+  #
+  # `legacy-agent.requires` already carries `[agent-protocol, agent-runtime]`
+  # (M5.5 added the runtime for `ProcessScope`), so these land in
+  # `module-dependency-permitted` and `module-dependency` is UNCHANGED at 460 --
+  # the load-bearing half: no edge became a NON-permitted dependency, so no
+  # managed module's zero tolerance is affected. `module-dependency-permitted` is
+  # in `MEASUREMENT_RULES` (architecture-check.mjs:482): counted and reported,
+  # never blocking.
+  #
+  # DIFFERENCE FROM WHAT PR #178 RECORDED, stated rather than reconciled by
+  # inspection. That slice measured its +6 as FIVE cross-boundary edges plus one
+  # intra-package edge (`sse-frame-codec.ts` -> `worker-protocol.js`). On this
+  # base the whole +6 is cross-boundary, because the edge set carries
+  # `headless-run-host.ts` -> `@duya/agent-protocol` TWICE (a type-only import and
+  # a value import) where it carried it once. The SUM and the DIRECTION are
+  # unchanged; only the split between the two sets differs. `cycle` is UNCHANGED
+  # at 16, measured.
+  #
+  # `.architecture-baseline.json` was not touched and `architecture:baseline`
+  # (`--write`) was not run.
+  # 233 -> 370: see the `module-dependency` block above. Same 89 edges, moved
+  # from the violation set into the permitted set.
+  #
+  # 370 -> 375 by plan 600 S1a (`rescue/600-lost-slices`): the recovered
+  # `packages/agent-runtime/src/transport/run-routing.ts` reaches
+  # `@duya/agent-protocol` twice and `./execution-channel.js` once, and
+  # `agent-runtime` declares all three, so they are permitted rather than
+  # blocking. 5 more edges, all declared.
+  #
+  # The same file also shows a SECOND blind spot in `strip-comments`, found by
+  # the same measurement: `run-routing.ts:73` is a line inside a JSDoc block,
+  # and stripping leaves `go and find it`, which `IMPORT_RE` then captures as
+  # a specifier. Not fixed here for the same reason as the bare-`import` gap
+  # above -- it is a distinct defect in a different script.
+  #
+  # 375 -> NOT PINNED (see `selfTestRelations` below). The constant stood here
+  # from 370 onward and was already stale twice before this edit: recorded 370,
+  # master measured 375, and every later legitimate edge forced a re-record.
+  # 375 is left here as the value this relation was measured against; the
+  # history above it is preserved because the edges it describes are real.
+  #
+  # WHY A RELATION INSTEAD OF A NUMBER. `module-dependency-permitted` is in
+  # `MEASUREMENT_RULES` (`architecture-check.mjs:540`): counted, reported,
+  # never blocking. Pinning a rule whose whole purpose is to stay VISIBLE to a
+  # constant inverted that purpose -- the number could only be kept still by
+  # freezing the codebase, so any contributor writing a test that imported a
+  # public type from another workspace package saw `architecture:self-test`
+  # fail with no violation anywhere in the tree. Measured cost of that, not
+  # asserted: 49 of the 52 test files in `packages/agent-runtime/test/` already
+  # import `@duya/agent-protocol` (39 of them for `RunEvent` itself), and
+  # `run-engine-compaction.test.ts` was pushed into deriving the type from
+  # `RunEventStorePort` to dodge the counter.
+  #
+  # The count is also not a property of PRODUCTION structure alone: of the 375
+  # permitted edges, 149 are test-sourced (113 distinct test files) and 226 are
+  # production. So the constant was pinning a number that no amount of care
+  # about module boundaries could hold still.
+  #
+  # `module-dependency` at 380 below stays a hard constant, and it is the
+  # load-bearing half: an edge that is NOT declared is still caught, in a test
+  # as much as in production. What is given up is only the requirement that a
+  # correctly-permitted edge be paid for with a policy edit.
+  # 16 -> 0: every `forbidden-dependency` in the tree was one of the 16
+  # `pkg:agent` -> `apps/desktop` statements removed above.
+  forbidden-dependency: 0
+
+  # 161 -> 162: one more relative-path escape into packages/agent, from the
+  # plan-583 stack. Now 126 agent / 16 plugin-core / 13 gateway / 7 conductor.
+  # 162 -> 146 by plan 587 M5.2: the 16 host imports that reached into
+  # `packages/plugin-core/src` by relative path now use declared subpaths. The
+  # 126 agent escapes are untouched — that is the pair the same slice CUT.
+  #
+  # 146 -> 115 (plan 610 A5). The delta is THIRTY-ONE, the same number the
+  # `module-dependency` pin lost in the same slice, which is the expected shape:
+  # the same 31 imports stopped crossing a module boundary AND stopped escaping a
+  # package root, because the code moved into a package of its own.
+  #
+  # HONEST ATTRIBUTION: unlike `module-dependency`, this pin does not have its own
+  # recorded before/after pair from the extraction. The shared delta and the
+  # mechanism are consistent with it, but "31 and 31" is corroboration, not a
+  # measurement. What makes this safe to pin is the mutation proof that must be
+  # re-run whenever these numbers move: inject one real escape and this pin must
+  # go red.
+  package-boundary-escape: 21
+  # 115 -> 113 (2026-10-10, plan 610 A5 continuation): the two cross-package
+  # relative imports in group-handlers.ts / group-turn-dispatcher.ts
+  # (`../../../../../packages/agent/src/message/message-source`) became
+  # declared-subpath `@duya/agent/message` imports. Measured, not inferred:
+  # after the conversion those two files appeared in architecture:check's
+  # "not in baseline" set only as module-dependency; no escape edge remains
+  # for either file.
+  # Was 24. The 25 are 2x `@duya/agent/tool/allowedRoots`
+  # (`main/core/media-allowlist.ts`, `main/ipc/system-handlers.ts`) and
+  # 23 `src-renderer` -> `@duya/conductor/renderer/*`; neither is plugin-core.
+  # The second allowedRoots import arrived with the plan-583 stack.
+  # 25 -> 22 by plan 610 A0, measured on `plan/610-a0-client-axis`. The three
+  # that stopped being violations are the BARE `@duya/conductor/renderer`
+  # specifier — twice in `ModelSelector.tsx` (an `import type` and an
+  # `export type`) and once in `conductor-host-provider.tsx`. A `deep` import is
+  # one that bypasses the target's exports map, and A0 added `./renderer` and
+  # `./renderer/*` to `packages/conductor/package.json`, so these three now
+  # resolve through a declared subpath instead of around one. The other 20
+  # `src-renderer` -> `@duya/conductor/renderer/*` edges in this count were
+  # already resolving to declared subpaths and are untouched; 0 edges were
+  # added. Attributed by diffing `audit-imports.mjs --json` `deepImportEdges`
+  # with and without the manifest change (25 -> 22, 3 removed, 0 added), not by
+  # inspection. This is a MEASUREMENT moving because the coupling is genuinely
+  # gone, not a gate relaxing: the resolver still sees every remaining edge, and
+  # `npm run architecture:baseline` was NOT re-recorded.
+  deep-import: 0
+  # 22 -> 20 (2026-10-10, plan 610 A5 continuation): the 2x
+  # `@duya/agent/tool/allowedRoots` deep imports named above
+  # (`main/core/media-allowlist.ts`, `main/ipc/system-handlers.ts`) are gone —
+  # the primitive moved to `@duya/sandbox` (`allowed-roots.ts`) and both
+  # files now import the package's declared public entry, permitted by the
+  # `desktop-host.requires` sandbox entry. The remaining 20
+  # `src-renderer` -> `@duya/conductor/renderer/*` edges are untouched.
+  # Was 17. The 42-file SCC remains; the count fell because
+  # `fix/conductor-copy-and-dead-code` (PR #130) removed an edge.
+  #
+  # 16 -> 10 by plan 600 S2, measured on `refactor/600-s2-turn-handover`
+  # @ `67dc98d2` (PR #210). Six cyclic groups stopped being cycles as the run
+  # engine was lifted out of `DuyaAgent`; this is the S2 work paying off, not a
+  # policy edit.
+  #
+  # 10 -> 9 by excluding type-only edges from the SCC graph, and the COUNT
+  # moving by one understates what changed. The largest group collapsed from
+  # 273 to 22, and 7 groups that were previously invisible became separately
+  # visible, so this edit RAISED the blocking count from 1 to 7 while lowering
+  # the group count. Both are the same fact seen from two sides.
+  #
+  # Root cause of the 273: `IMPORT_RE` cannot distinguish
+  # `import type { X } from './y'` (erased by tsc, no runtime edge) from
+  # `import { X } from './y'`. `packages/agent/src/types.ts` is a
+  # type-aggregation module that `import type`s four implementation modules, so
+  # four ghost edges pulled 251 unrelated files into one component -- 136 of
+  # them under `src/tool/`, plus `prompts/` (27), `modes/` (18) and `compact/`
+  # (17). Those files were not mutually dependent; they merely shared a
+  # type-level entry point.
+  #
+  # The inline modifier (`import { type X }`) is deliberately NOT stripped:
+  # 274 files use it and tsc still emits those statements, so the module edge
+  # is real. Nor is `import type` removed from the module FINGERPRINT pass
+  # (`audit-modules.mjs` uses the same regex there) -- a type-only cross-module
+  # edge is still coupling worth baselining, it just cannot close a runtime
+  # cycle.
+  #
+  # The 7 now-visible groups are REAL runtime cycles, measured, not new debt
+  # from this edit: 22 (`modes/index.ts` -> mode modules -> `tool/builtin.ts` ->
+  # `DuyaAgent.ts` -> back), and 4 / 3 / 2 / 2 / 2 / 2. They were present the
+  # whole time and simply sat inside the 273-component. Splitting them is
+  # real work for a follow-up; they are baselined here so the gate is honest
+  # about what it can and cannot currently see.
+  #
+  # KNOWN BLIND SPOT, found by mutation-testing this very change and NOT
+  # introduced by it: `IMPORT_RE` matches `from `, `import(` and `require(`, so
+  # a side-effect import written as a bare `import './x.js';` produces no edge
+  # at all, and a cycle built from two of them is invisible here. Left alone
+  # deliberately -- widening the regex moves every count in this file and is a
+  # separate piece of work, not something to smuggle into a change whose whole
+  # justification is that it made the gate MORE accurate.
+  #
+  # 9 -> 8 (plan 610). The size-15 SCC anchored on `packages/agent/src/agent/
+  # DuyaAgent.ts` stopped existing; it did not shrink. `SubagentTool` stopped
+  # being a module-level singleton and became one instance per registry, and the
+  # two composition dependencies `runAgent` used to resolve through module
+  # imports (`DuyaAgent` as a value import, and a DYNAMIC `import('../builtin.js')`
+  # -- both are real edges to the resolver) now arrive as required fields on
+  # `RunAgentParams`.
+  #
+  # MUTATION-PROVEN, not asserted: re-introducing either edge turns this count back
+  # into 9 and the gate red. The two edges were re-introduced one at a time and
+  # each was observed to restore a cycle, with different fingerprints (size 15
+  # anchored on DuyaAgent; size 4 anchored on SubagentTool) -- so this is two
+  # genuinely separate edges, not one change reported twice.
+  cycle: 2
+  # Was 1: plugin-core was the only package under packages/ with no
+  # `exports` map. The rule is declarative — it reads package.json only, so
+  # this stays 0 regardless of whether dist/ has been built.
+  missing-module-artifact: 0
+
+# Relationships the self-test asserts INSTEAD OF a constant, for the rules whose
+# count is expected to move as the codebase grows.
+#
+#   sum:    rules whose counts are added together
+#   equals: the quantity that sum must match
+#
+# `architecture-check.mjs` evaluates each entry and fails the self-test if the
+# two sides differ. The check is meaningful rather than tautological because it
+# is NOT the same computation as the counting: `module-dependency` and
+# `module-dependency-permitted` are assigned per edge by
+# `moduleDependencyPermitted()`, while the right-hand side is the raw edge count
+# the audit reported. An edge that escaped classification, or was counted on
+# both sides, breaks it.
+selfTestRelations:
+  # 380 + 375 = 755, measured against 755 cross-boundary edges on
+  # `origin/master` @ 2902d8aa. Every cross-boundary edge is classified as
+  # exactly one of permitted / not-permitted, so this is the property that was
+  # actually true all along; the 375 constant was a weaker, brittle
+  # restatement of it.
+  - id: permitted-plus-blocking-covers-every-edge
+    sum: [module-dependency, module-dependency-permitted]
+    equals: crossBoundaryEdges
+
+# Re-measured 2026-10-03 (plan 587 T3.1, branch 587/t3-1-wire-single-source
+# on top of master @ 9a37112c): 12 new, all one specifier, 0 removed
+#
+#   module-dependency  547 -> 559   12 new, every one of them the edge
+#                                   `pkg:ai -> pkg:agent-protocol` for the
+#                                   specifier `@duya/agent-protocol/transcript`.
+#                                   Nothing else in this table moved.
+#   module-dependency-permitted   51 -> 51   UNCHANGED, and that is the
+#                                   load-bearing half. See below.
+#
+# ATTRIBUTED BY MEASUREMENT, not inferred. Two runs of
+# `scripts/architecture/audit-imports.mjs --json`, diffed edge set against edge
+# set: 598 -> 610 cross-boundary edges, exactly 12 added and 0 removed.
+#
+#   +10  packages/ai/src/types.ts              the 1 import plus 9
+#                                             `export type { ... } from`
+#                                             re-export statements
+#   + 1  packages/ai/src/tool-result-wire.ts   the serializer's two
+#                                             `ToolResultWire` /
+#                                             `DeferredToolExtras` types
+#   + 1  packages/ai/test/tool-result-wire.test.ts   the new test file
+#
+# ZERO edges have the new module as their source. `packages/agent-protocol/src/
+# transcript/` imports nothing outside its own package, so it is a genuine leaf
+# and satisfies `forbiddenDependencies` at `packages/agent-protocol/**` with no
+# exception needed. This was verified the hard way: re-running the checker with
+# the three `packages/ai` source files reverted, but the new
+# `agent-protocol/src/transcript/` still present, returns EXACTLY the baseline
+# numbers (547 / 817). The whole delta is the `ai` -> `agent-protocol` import;
+# the new module contributes none of it.
+#
+# WHY THE EDGE IS THE RIGHT SHAPE. T3.1 moved the definition of the transcript
+# vocabulary — `Message`, the content blocks, `TokenUsage`, `UsageCall`,
+# `StopReason`, the permission and progress shapes, and the wire half of
+# `ToolResult` — out of `@duya/ai` and into the protocol package, which is the
+# only way "one source of truth for wire data" is true rather than aspirational.
+# The alternative was a second copy of every one of those shapes, and a copy is
+# precisely the failure this plan exists to remove. The direction is the safe
+# one: `ai` (layer `core`) now depends DOWNWARD on `protocol`, matching the
+# `layers:` list above.
+#
+# `module-dependency-permitted` staying at 51 is correct rather than a missed
+# update. Unlike `agent-core` and `agent-runtime`, `pkg:ai` is not a DECLARED
+# module in this policy — there is no `- id: ai` entry — so
+# `moduleDependencyPermitted` has no `requires` list to consult and classifies
+# these as counted violations instead of permitted edges. Adding an `ai` module
+# to convert 12 violations into 12 permitted edges would change how a large
+# existing surface is classified for no boundary gain, so it was NOT done here.
+# `--write` was not run; the baseline section is byte-identical, and
+# `tolerated (baselined) 817 -> 829` is the expected consequence of raising this
+# expectation by exactly the measured 12.
+#
+# Re-measured 2026-10-03 (plan 587 T3.3, branch 587/t3-3-seq-cursor on top of
+# master @ 3b121ba2): 17 new, all one direction, 0 removed
+#
+#   module-dependency               559 -> 559   UNCHANGED, and that is the
+#                                                load-bearing half.
+#   module-dependency-permitted      61 -> 78   +17, every one of them the edge
+#                                                `pkg:agent-runtime ->
+#                                                 pkg:agent-protocol`.
+#   tolerated (baselined)           839 -> 856   +17, the same 17.
+#   baseline size                   811 -> 811   untouched; `--write` was NOT run.
+#
+# ATTRIBUTED BY MEASUREMENT, not inferred. Both ends of the delta were run on
+# this branch: first at `3b121ba2` with no replay code present, then with it.
+#
+#   scripts/architecture/audit-imports.mjs --json, edge sets diffed:
+#
+#     + 11 edges from the four new source files, all
+#       `pkg:agent-runtime -> pkg:agent-protocol`:
+#         src/replay/replay-repository.ts     3
+#         src/replay/transcript-snapshot.ts   4  (one via the `/transcript` subpath)
+#         src/replay/replay-subscription.ts   2
+#         src/replay/replay-guards.ts         2
+#     +  7 edges from the new test files' own imports, same direction
+#       (replay-window 2, replay-guards 2, replay-subscription 1, and the
+#       relative-import tests, which are not cross-boundary at all)
+#
+# The two `index.ts` edits add RELATIVE re-exports (`./replay.js`,
+# `./replay/replay-repository.js`), so they contribute no cross-boundary edge of
+# their own.
+#
+# Reverting the four source files ALONE (tests and index edits kept) and
+# re-running the audit returns 11 fewer edges — but it also turns every
+# re-export above into an UNRESOLVED spec, which the audit then counts
+# separately: that run reports 643 edges, i.e. 17 MORE than the intact tree. So
+# the revert run is a valid attribution of the 11 source edges and an INVALID
+# total. The intact-tree number is the one to compare, and it is what is
+# recorded here. (Reverting source alone also turns the checker red on
+# `module-dependency` 559 -> 576, because those 17 re-exports stop resolving —
+# which is itself the clearest statement that the new index.ts exports are load
+# bearing rather than decorative.)
+#
+# WHY THE DIRECTION IS THE RIGHT SHAPE. `agent-runtime` is layer `runtime` and
+# `agent-protocol` is layer `protocol` in the `layers:` list above, so these
+# edges point DOWNWARD, and `pkg:agent-runtime` already declares
+# `agent-protocol` in its `requires` list — which is exactly why they land in
+# `module-dependency-permitted` (counted, never blocking) instead of
+# `module-dependency` (blocking). T3.3 needed nothing from the protocol that
+# was not already its vocabulary: a run's `seq`, its `RunEventEnvelope`, its
+# `RunId`, and the transcript types T3.1 moved. The replay contract itself
+# (`ReplayCursor`, `ReplayWindow`) was added to the protocol package as a new
+# leaf module with no dependency of its own, because a cursor is wire data.
+#
+# `@duya/agent-protocol` stays a true leaf: `forbidden-dependency` is unchanged
+# at 16 and no edge has `packages/agent-protocol/src/replay.ts` as its source.

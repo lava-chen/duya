@@ -1,0 +1,25 @@
+{
+  "width": 1200,
+  "height": 430,
+  "fps": 24,
+  "duration": 5,
+  "colors": 256,
+  "max_size_mb": 3,
+  "layers": [
+    {
+      "id": "source-elements",
+      "enter": { "start": 0.25, "end": 1.0, "from": [-24, 0] },
+      "exit": { "start": 4.2, "end": 4.95, "to": [-8, 0] }
+    },
+    {
+      "id": "structure-elements",
+      "enter": { "start": 1.0, "end": 1.85, "from": [0, 20] },
+      "exit": { "start": 4.2, "end": 4.95, "to": [0, -6] }
+    },
+    {
+      "id": "result-element",
+      "enter": { "start": 1.8, "end": 2.65, "from": [24, 0] },
+      "exit": { "start": 4.2, "end": 4.95, "to": [8, 0] }
+    }
+  ]
+}

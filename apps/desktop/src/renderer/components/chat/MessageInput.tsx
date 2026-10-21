@@ -1,0 +1,2600 @@
+import { Button } from '@/components/ui/Button';
+import type { ComposerEditDraft } from '@/lib/chat-edit-draft';
+// MessageInput.tsx - Message input component with file attachments, model/effort selection, and badge support
+
+'use client';
+
+import React, { useMemo, useState, useRef, useCallback, KeyboardEvent, FormEvent, useEffect } from 'react';
+import { ArrowUpIcon,
+  SearchIcon,
+  XIcon,
+  XCircleIcon,
+  PaperclipIcon,
+  PlusIcon,
+  HandIcon,
+  ShieldCheckIcon,
+  ShieldWarningIcon,
+  PlugIcon,
+} from '@/components/icons';
+import { Select } from 'antd';
+import type { CliBadge, PopoverItem, PopoverMode } from '@/types/slash-command';
+import { FileAttachment } from '@/types/message';
+import type { ModeModifierId } from '@/types/mode-id';
+import {
+  toggleModeInSet,
+  isModeExcludedByActive,
+  MODE_KIND,
+} from '@/types/mode-id';
+import {
+  buildCliAppend,
+  resolveDirectSlash,
+  filterItems,
+  htmlToPlainText,
+  type PluginMentionTarget,
+} from '@/lib/message-input-logic';
+import {
+  runSlashCommand,
+  setCommandAppBridge,
+  type CommandAppBridge,
+  type SlashCommandPanel,
+} from '@/lib/commands/executors';
+import { CommandResultDialog } from './CommandResultDialog';
+import { useBangMode } from '@/hooks/useBangMode';
+import { useConversationStore } from '@/stores/conversation-store';
+import { toast as showToast } from '@/components/ui/toast';
+import { openTurnReviewInSidePanel } from '@/lib/review-panel';
+import { dispatchOpenSessionPanel } from '@/lib/open-session-panel-event';
+import { InputDialog } from '@/components/ui/InputDialog';
+import type { ModelProviderSelectorHandle } from './ModelProviderSelector';
+import { ModelProviderSelector, type ModelOption, type ProviderModelGroup } from './ModelProviderSelector';
+import { BackgroundTasksIndicator } from './BackgroundTasksIndicator';
+import { ContextUsageRing, ContextUsagePanel } from './ContextUsageRing';
+import type { ModelPricing } from '@/lib/context-usage-utils';
+
+import {
+  getEffortOptionsForCapability,
+  getEffortOptionsForModel,
+} from '@duya/ai';
+import { useAttachments, makeFileTreeRefAttachment } from '@/hooks/useAttachments';
+import { AttachmentBar } from './AttachmentBar';
+import { CodeCommentStrip } from './CodeCommentStrip';
+import {
+  dispatchAddAttachment,
+  ADD_ATTACHMENT_EVENT,
+  type AddAttachmentDetail,
+} from '@/lib/add-attachment-event';
+import {
+  buildCodeCommentsPromptBlock,
+  markCodeCommentsSent,
+} from '@/lib/code-comment-store';
+import { fetchMCPInventorySnapshot } from '@/lib/mcp-inventory-ipc';
+import {
+  PREFILL_CHAT_INPUT_EVENT,
+  consumePendingPrefill,
+} from '@/lib/prefill-chat-input-event';
+import { useTranslation } from '@/hooks/useTranslation';
+import { listProvidersIPC, listOutputStylesIPC, type Provider } from '@/lib/ipc-client';
+import { saveDraftIPC, getDraftIPC } from '@/lib/ipc-client';
+import { isKeylessLocalProvider } from '@/lib/providers';
+import { modelCapabilityService } from '@/lib/providers/models/ModelCapabilityService';
+import { useSlashCommands } from '@/hooks/useSlashCommands';
+import { SlashCommandPopover } from './SlashCommandPopover';
+import { useFocusModeStore, selectFocusEnabled } from '@/stores/focus-mode-store';
+import { RichTextInput } from './RichTextInput';
+import { VoiceButton, useVoiceConfigured } from './VoiceButton';
+import { applyDictation } from '@/lib/voice/dictation';
+import { InlineTaskRow } from './InlineTaskRow';
+import type { UseGitStatusResult } from '@/hooks/useGitStatus';
+import type { GitTurnReview } from '@/lib/git-ipc';
+import type { Task } from '@duya/agent-protocol';
+import type { Message } from '@/types/message';
+import { IconButton } from '@/components/ui/IconButton';
+import { getPluginAPI } from '@/lib/plugin-ipc';
+import { usePluginMentionStore } from '@/stores/plugin-mention-store';
+import { normalizeManifestComponents } from '@/lib/plugin-types';
+
+function getEditableCursorPosition(element: HTMLElement | null, fallback: number): number {
+  if (!element) return fallback;
+  if ('selectionStart' in element && typeof element.selectionStart === 'number') {
+    return element.selectionStart;
+  }
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return fallback;
+  const range = selection.getRangeAt(0);
+  if (!element.contains(range.endContainer)) return fallback;
+  const preRange = document.createRange();
+  preRange.selectNodeContents(element);
+  preRange.setEnd(range.endContainer, range.endOffset);
+  return preRange.toString().length;
+}
+
+/**
+ * Plugin brand icon for the @ popover. Uses the resolved `duya-file://` icon
+ * URL when the plugin declares one; falls back to the generic plug icon when
+ * absent or when the image fails to load (mirrors TileIcon in InstalledPage).
+ */
+function PluginPopoverIcon({
+  iconUrl,
+  size = 14,
+  className,
+}: {
+  iconUrl?: string;
+  size?: number;
+  className?: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  if (!iconUrl || failed) return <PlugIcon size={size} className={className} />;
+  return (
+    <img
+      src={iconUrl}
+      width={size}
+      height={size}
+      className={className}
+      alt=""
+      style={{ objectFit: 'contain', borderRadius: 4 }}
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+function StopIcon({ size = 16, className }: { size?: number; className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className={className}
+    >
+      <rect x="6" y="4" width="4" height="16" rx="1" />
+      <rect x="14" y="4" width="4" height="16" rx="1" />
+    </svg>
+  );
+}
+
+interface MessageInputProps {
+  editDraft?: ComposerEditDraft | null;
+  onCancelEdit?: () => void;
+  onSend: (
+    content: string,
+    files?: FileAttachment[],
+    outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null,
+    mode?: string,
+    displayContent?: string,
+    conductorMode?: boolean,
+  ) => void | Promise<void>;
+  onRecapRequest?: () => Promise<{
+    success: boolean;
+    recap: string | null;
+    error?: string;
+  }>;
+  onStop?: () => void;
+  disabled?: boolean;
+  isStreaming?: boolean;
+  hasQueuedMessages?: boolean;
+  sessionId?: string;
+  modelName?: string;
+  /**
+   * The provider is resolved from the selected option at the same time as
+   * the model. Keeping the pair together prevents a model switch from being
+   * persisted with the previous provider.
+   */
+  onModelChange?: (model: string, providerId?: string) => void;
+  effort?: string;
+  onEffortChange?: (effort: string | undefined) => void;
+  /** Current permission mode (Ask / Auto / Bypass). Managed by the parent so
+   *  a live change is forwarded to the running agent mid-run. */
+  permissionMode?: PermissionModeUi;
+  onPermissionModeChange?: (mode: PermissionModeUi) => void;
+  placeholder?: string;
+  // Slash-command popover placement. Default `top` keeps the popup above the
+  // input (chat history). Pass `bottom` on the welcome / start page where
+  // there is more room below the input.
+  popoverPlacement?: 'top' | 'bottom';
+  // For chat commands (/help, /clear, /cost) - execute locally
+  onExecuteCommand?: (command: string) => { content: string } | null;
+  // For clearing messages (/clear)
+  onClearMessages?: () => void;
+  // Messages for context usage calculation
+  messages?: Message[];
+  /**
+   * Embedded context-usage ring + expandable stats panel. The ring lives in
+   * the bottom toolbar next to the model selector; clicking it toggles the
+   * stats panel rendered below the input box (the bottom-anchored composer
+   * pushes the input up — no space is reserved while collapsed). The window
+   * is the model's pinned capability value; pricing feeds the $ figure.
+   */
+  contextWindow?: number;
+  contextPricing?: ModelPricing;
+  // Conductor mode toggle state (independent of plan/research modes).
+  conductorEnabled?: boolean;
+  onConductorChange?: (enabled: boolean) => void;
+  /**
+   * Plan 413e: plan-task is a session-level toggle persisted to
+   * `sessions.extensions.plan_mode_enabled` (mirrors conductor). The prop
+   * is the DB-restored value; changes flow up via `onPlanModeChange` so
+   * ChatView can persist them. The popover toggle keeps this state across
+   * messages — `clearMessageModes` preserves plan-task after each send.
+   */
+  planModeEnabled?: boolean;
+  onPlanModeChange?: (enabled: boolean) => void;
+  /**
+   * Plan 413e: goal mode is a session-level toggle persisted to
+   * `sessions.extensions.goal_mode_enabled` (mirrors plan-task). The prop
+   * is the DB-restored value; changes flow up via `onGoalModeChange` so
+   * ChatView can persist them.
+   */
+  goalModeEnabled?: boolean;
+  onGoalModeChange?: (enabled: boolean) => void;
+  /**
+   * Plan 224 follow-up: agent-initiated runtime plan mode (set by the
+   * agent calling EnterPlanMode / SwitchMode tool). Visually merged
+   * with the popover plan-task chip — both drive the same blue glow
+   * on the input surface. Session-scoped: stays on until the agent
+   * exits plan mode (or session switches).
+   */
+  agentPlanMode?: boolean;
+  // Manual context compaction trigger
+  onCompact?: () => void;
+  isCompacting?: boolean;
+  /**
+   * Lazy new-chat draft mode. When set, the input has no backing session
+   * (`sessionId` stays undefined). It restores `initialDraft` on mount and
+   * reports every text/attachment change back via `onDraftChange` so the
+   * caller can persist an unsent draft that survives navigation/restarts.
+   */
+  draftMode?: boolean;
+  initialDraft?: { text: string; attachments: FileAttachment[] };
+  onDraftChange?: (text: string, attachments: FileAttachment[]) => void;
+  /**
+   * Plan 416: in-input task progress. When provided, the composer
+   * grows a row above the textarea that surfaces the agent's todo
+   * list. Defaults to none — callers (ChatView) pass the active
+   * thread's tasks + git status.
+   */
+  tasks?: Task[];
+  gitStatus?: UseGitStatusResult;
+  onToggleTaskStatus?: (task: Task) => void;
+  workingDirectory?: string | null;
+  showFileChanges?: boolean;
+  /** Plan 308 Phase 2: persisted review of the last completed turn. */
+  turnReview?: GitTurnReview | null;
+}
+
+interface EffortOption {
+  value: string;
+  label: string;
+}
+
+/**
+ * Pick the sendable mode from an activeModes set.
+ *
+ * plan-task (session-level), research (message-level) and goal are passed
+ * to `onSend` as the `mode` argument; the agent reads this to resolve its
+ * mode dispatch. Conductor is excluded here — it is the only mode with its
+ * own flag (`conductorMode`).
+ *
+ * Goal takes precedence when it coexists with plan-task: goal is a
+ * self-driven execution mode (plan 411) and must reach the agent even if
+ * plan-task (a parallel, non-exclusive tracker) is also toggled on.
+ * Otherwise the first non-conductor mode wins.
+ */
+export function pickMessageMode(activeModes: Set<ModeModifierId>): string | undefined {
+  if (activeModes.has('goal')) return 'goal';
+  for (const mode of activeModes) {
+    if (mode !== 'conductor') return mode;
+  }
+  return undefined;
+}
+
+/**
+ * State updater that clears message-level modes (research) while keeping
+ * session-level modes (conductor, plan-task). Used after each send so
+ * per-message modes reset but session toggles persist across messages.
+ */
+export function clearMessageModes(prev: Set<ModeModifierId>): Set<ModeModifierId> {
+  const next = new Set<ModeModifierId>();
+  for (const mode of prev) {
+    if (MODE_KIND[mode] === 'session') {
+      next.add(mode);
+    }
+  }
+  return next;
+}
+
+/**
+ * Inline labels for thinking levels not covered by i18n keys.
+ * The 5 standard levels (auto/low/medium/high/max) use i18n; minimal
+ * and xhigh fall back to these English strings.
+ */
+const EFFORT_LABELS: Partial<Record<string, string>> = {
+  minimal: 'Minimal',
+  xhigh: 'Extra High',
+};
+
+function useEffortOptions(
+  t: (key: 'messageInput.effortAuto' | 'messageInput.effortLow' | 'messageInput.effortMedium' | 'messageInput.effortHigh' | 'messageInput.effortMax') => string,
+  modelId?: string,
+  capability?: {
+  supportsReasoning?: boolean;
+  reasoningEffortOptions?: string[];
+} | null,
+): EffortOption[] {
+  // 1. Prefer per-model capability options (LM Studio's
+  //    `capabilities.reasoning.allowed_options` after normalization).
+  //    This makes the effort dropdown reflect exactly the levels the
+  //    running model supports, instead of the static catalog's
+  //    full list — important for LM Studio users running a quantized
+  //    7B that only exposes `[low, medium]`.
+  if (capability) {
+    const capOptions = getEffortOptionsForCapability(capability);
+    if (capOptions) {
+      return capOptions.map((opt) => {
+        const inline = EFFORT_LABELS[opt.level];
+        if (inline) return { value: opt.value, label: inline };
+        return { value: opt.value, label: opt.level };
+      });
+    }
+  }
+  // 2. Fall back to the static @duya/ai catalog (OpenAI o1/o3,
+  //    Anthropic extended-thinking, etc.).
+  if (modelId) {
+    const modelOptions = getEffortOptionsForModel(modelId);
+    if (modelOptions) {
+      return modelOptions.map(opt => {
+        const inline = EFFORT_LABELS[opt.level];
+        if (inline) return { value: opt.value, label: inline };
+        switch (opt.level) {
+          case 'off': return { value: opt.value, label: t('messageInput.effortAuto') };
+          case 'low': return { value: opt.value, label: t('messageInput.effortLow') };
+          case 'medium': return { value: opt.value, label: t('messageInput.effortMedium') };
+          case 'high': return { value: opt.value, label: t('messageInput.effortHigh') };
+          case 'max': return { value: opt.value, label: t('messageInput.effortMax') };
+          default: return { value: opt.value, label: opt.level };
+        }
+      });
+    }
+  }
+
+  // Fallback: show all 5 default options
+  return [
+    { value: '', label: t('messageInput.effortAuto') },
+    { value: 'low', label: t('messageInput.effortLow') },
+    { value: 'medium', label: t('messageInput.effortMedium') },
+    { value: 'high', label: t('messageInput.effortHigh') },
+    { value: 'max', label: t('messageInput.effortMax') },
+  ];
+}
+
+interface EffortSelectorProps {
+  value: string | undefined;
+  onChange: (value: string) => void;
+  modelId?: string;
+}
+
+function EffortSelector({ value, onChange, modelId }: EffortSelectorProps) {
+  const { t } = useTranslation();
+  const options = useEffortOptions(t, modelId);
+  const selectedLabel = options.find(opt => opt.value === (value || ''))?.label || t('messageInput.effortAuto');
+
+  return (
+    <Select
+      value={value || ''}
+      onChange={onChange}
+      variant="borderless"
+      dropdownMatchSelectWidth={false}
+      className="effort-selector"
+      popupClassName="effort-dropdown"
+      options={options.map(opt => ({
+        value: opt.value,
+        label: opt.label,
+      }))}
+    >
+    </Select>
+  );
+}
+
+/** User-facing permission mode in the composer (mirrors Conductor's selector). */
+export type PermissionModeUi = 'ask' | 'auto' | 'bypass';
+
+interface PermissionModeSelectorProps {
+  value: PermissionModeUi;
+  onChange: (mode: PermissionModeUi) => void;
+}
+
+const PERMISSION_MODES: Array<{
+  id: PermissionModeUi;
+  icon: typeof HandIcon;
+  labelKey: 'messageInput.permissionAsk' | 'messageInput.permissionAuto' | 'messageInput.permissionBypass';
+}> = [
+  { id: 'ask', icon: HandIcon, labelKey: 'messageInput.permissionAsk' },
+  { id: 'auto', icon: ShieldCheckIcon, labelKey: 'messageInput.permissionAuto' },
+  { id: 'bypass', icon: ShieldWarningIcon, labelKey: 'messageInput.permissionBypass' },
+];
+
+/**
+ * Compact permission-mode toggle (Ask → Auto → Bypass → Ask). Shows the
+ * current mode's icon + localized label; clicking cycles to the next mode.
+ * Exported for reuse outside the composer (cron editor bottom bar).
+ */
+export function PermissionModeSelector({ value, onChange }: PermissionModeSelectorProps) {
+  const { t } = useTranslation();
+  const current = PERMISSION_MODES.find((m) => m.id === value) ?? PERMISSION_MODES[1];
+  const Icon = current.icon;
+  const isBypass = value === 'bypass';
+  const handleClick = () => {
+    const idx = PERMISSION_MODES.findIndex((m) => m.id === current.id);
+    onChange(PERMISSION_MODES[(idx + 1) % PERMISSION_MODES.length].id);
+  };
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      className={`permission-mode-toggle flex items-center gap-1 rounded-md px-1.5 py-1 text-[13px] hover:bg-accent/50 hover:text-foreground transition-colors ${
+        isBypass ? 'text-[var(--warning)]' : 'text-muted-foreground'
+      }`}
+      title={PERMISSION_MODES.map((m) => t(m.labelKey)).join(' / ')}
+    >
+      <Icon size={14} />
+      <span>{t(current.labelKey)}</span>
+    </button>
+  );
+}
+
+export function MessageInput({
+  editDraft,
+  onCancelEdit,
+  onSend,
+  onRecapRequest,
+  onStop,
+  disabled: disabledProp = false,
+  isStreaming = false,
+  hasQueuedMessages = false,
+  sessionId,
+  modelName,
+  onModelChange,
+  effort,
+  onEffortChange,
+  permissionMode,
+  onPermissionModeChange,
+  placeholder,
+  popoverPlacement = 'top',
+  onExecuteCommand,
+  onClearMessages,
+  messages = [],
+  contextWindow,
+  contextPricing,
+  conductorEnabled,
+  onConductorChange,
+  planModeEnabled,
+  onPlanModeChange,
+  goalModeEnabled,
+  onGoalModeChange,
+  agentPlanMode = false,
+  onCompact,
+  isCompacting,
+  draftMode = false,
+  initialDraft,
+  onDraftChange,
+  tasks,
+  gitStatus,
+  onToggleTaskStatus,
+  workingDirectory,
+  showFileChanges,
+  turnReview,
+}: MessageInputProps) {
+  const { t } = useTranslation();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const disabled = disabledProp || isSubmitting;
+  const [inputValue, setInputValue] = useState('');
+  // Slash-command / bang output surface (shared CommandResultDialog).
+  const [commandResult, setCommandResult] = useState<{
+    title: string;
+    content: string;
+    mono?: boolean;
+    isError?: boolean;
+  } | null>(null);
+  // Single-line prompt bridge for executors (e.g. /rename).
+  const [promptRequest, setPromptRequest] = useState<{
+    title: string;
+    placeholder?: string;
+    initialValue?: string;
+    resolve: (value: string | null) => void;
+  } | null>(null);
+  // `!cmd` bash-prefix runner (hooks/useBangMode — desktop shell execution).
+  const { run: bangRun } = useBangMode();
+  // Imperative handle so `/model` (no args) can open the picker.
+  const modelSelectorRef = useRef<ModelProviderSelectorHandle>(null);
+  // Plan 220: hidden prompt prefix that panels inject via
+  // `duya:set-hidden-prompt`. Sent to the LLM ahead of `inputValue`
+  // but invisible to the user — keeps the input box showing only what
+  // the user actually typed, while still routing auto-generated
+  // context (e.g. file selection) to the model.
+  const [hiddenPrompt, setHiddenPrompt] = useState<string>('');
+  // Clean up double-quoted model names in initial value (legacy data cleanup)
+  const cleanInitialModel = (modelName || '').replace(/^"|"$/g, '');
+  const [selectedModel, setSelectedModel] = useState<string>(cleanInitialModel);
+  const [selectedEffort, setSelectedEffort] = useState<string | undefined>(effort);
+  // Keep the local selector in sync with the parent's effort. The parent
+  // restores the per-session/global effort asynchronously after mount, so
+  // the initial useState value alone would silently drift back to Auto.
+  useEffect(() => {
+    setSelectedEffort(effort);
+  }, [effort]);
+  const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [hasProvider, setHasProvider] = useState(false);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [activeProviderId, setActiveProviderId] = useState<string | null>(null);
+  // Map model ID (with prefix) to provider ID
+  const [modelProviderMap, setModelProviderMap] = useState<Map<string, string>>(new Map());
+  const textareaRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const hasFetchedModels = useRef(false);
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevSessionIdRef = useRef<string | undefined>(sessionId);
+  const draftLoadedRef = useRef(false);
+  const prePasteValueRef = useRef<string>('');
+  // Embedded context-usage panel (toggled by the ring in the toolbar).
+  const [contextPanelOpen, setContextPanelOpen] = useState(false);
+
+  useEffect(() => {
+    prePasteValueRef.current = inputValue;
+  }, [inputValue]);
+
+  // CLI badge state (for AI-requested CLI tools)
+  const [cliBadge, setCliBadge] = useState<CliBadge | null>(null);
+
+  // Slash command popover state
+  const [popoverMode, setPopoverMode] = useState<PopoverMode>(null);
+  const [popoverItems, setPopoverItems] = useState<PopoverItem[]>([]);
+  const [popoverFilter, setPopoverFilter] = useState('');
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [triggerPos, setTriggerPos] = useState<number | null>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Attachment menu state
+  const [skills, setSkills] = useState<Array<{ name: string; description?: string; source?: string }>>([]);
+  const [mcpServers, setMcpServers] = useState<Array<{
+    name: string;
+    description?: string;
+    enabled?: boolean;
+    writable?: boolean;
+    source?: 'settings' | 'plugin' | 'bundled';
+    connectionStatus?: 'connected' | 'disconnected' | 'connecting' | 'error' | 'unknown';
+    toolCount?: number;
+    tools?: Array<{
+      name: string;
+      description?: string;
+      annotations?: {
+        readOnly?: boolean;
+        destructive?: boolean;
+        openWorld?: boolean;
+      };
+    }>;
+    lastIssue?: { phase: 'connection' | 'registration' | 'discovery'; humanMessage: string; severity: 'critical' | 'warning' | 'info' };
+  }>>([]);
+  const [responseStyles, setResponseStyles] = useState<Array<{ id: string; name: string; description?: string; prompt: string; keepCodingInstructions?: boolean; isBuiltin?: boolean }>>([]);
+  const [selectedStyleId, setSelectedStyleId] = useState<string | null>(null);
+  // Plan 224 Phase 5: unified activeModes set. Holds all active popover
+  // modes (plan-task | research | conductor). Conductor and plan-task
+  // (session-level) are synced with the `conductorEnabled` / `planModeEnabled`
+  // props via the effects below; research (message-level) is pure local
+  // state cleared after each send.
+  const [activeModes, setActiveModes] = useState<Set<ModeModifierId>>(new Set());
+  // Tracks the last known conductor slot state to prevent sync loops
+  // between the `conductorEnabled` prop and `activeModes`.
+  const conductorSlotRef = useRef<boolean>(false);
+  // Plan 413e: same slot guard for the plan-task session toggle
+  // (`planModeEnabled` prop ↔ activeModes).
+  const planModeSlotRef = useRef<boolean>(false);
+  // Plan 413e: same slot guard for the goal mode session toggle
+  // (`goalModeEnabled` prop ↔ activeModes).
+  const goalModeSlotRef = useRef<boolean>(false);
+  // Mirror activeModes in a ref so handleToggleMode can read the latest
+  // value synchronously without adding activeModes to its dependency
+  // array. This also lets us call onConductorChange OUTSIDE the
+  // setActiveModes updater — calling a parent setState from inside an
+  // updater runs during render and throws "Cannot update a component
+  // while rendering a different component".
+  const activeModesRef = useRef<Set<ModeModifierId>>(activeModes);
+  activeModesRef.current = activeModes;
+
+  // Plan 224 follow-up: unified plan-mode indicator. Active when the
+  // user toggled Plan Mode in the popover (plan 413e: now a session-level
+  // toggle persisted to DB) OR when the agent self-entered plan mode via
+  // the EnterPlanMode / SwitchMode tool (session-level, surfaced via the
+  // agentPlanMode prop). Both paths drive the same blue glow + chip.
+  const planModeActive = activeModes.has('plan-task') || agentPlanMode;
+
+  // Sync conductor slot from the prop (DB is the source of truth for
+  // session-level conductor). When the parent passes a new
+  // `conductorEnabled` value (e.g. session switch, external toggle),
+  // update `activeModes` to match. The ref prevents re-triggering when
+  // the change originated from user action (which already updated the ref).
+  // This is a one-way sync (prop → state); the reverse path (state → parent)
+  // is handled explicitly in `handleToggleMode` and `handleForwardMessage`
+  // to avoid a render-frame race where the effect would read stale
+  // `activeModes` and call `onConductorChange(false)`, clobbering the DB.
+  useEffect(() => {
+    const next = !!conductorEnabled;
+    if (next === conductorSlotRef.current) return;
+    conductorSlotRef.current = next;
+    setActiveModes((prev) => {
+      const hasConductor = prev.has('conductor');
+      if (next === hasConductor) return prev;
+      const updated = new Set(prev);
+      if (next) updated.add('conductor');
+      else updated.delete('conductor');
+      return updated;
+    });
+  }, [conductorEnabled]);
+
+  // Plan 413e: sync the plan-task slot from the prop (DB is the source of
+  // truth for the session-level plan toggle). Mirrors the conductor sync
+  // above — one-way (prop → state); the reverse path is handled in
+  // `handleToggleMode` via `onPlanModeChange`.
+  useEffect(() => {
+    const next = !!planModeEnabled;
+    if (next === planModeSlotRef.current) return;
+    planModeSlotRef.current = next;
+    setActiveModes((prev) => {
+      const hasPlan = prev.has('plan-task');
+      if (next === hasPlan) return prev;
+      const updated = new Set(prev);
+      if (next) updated.add('plan-task');
+      else updated.delete('plan-task');
+      return updated;
+    });
+  }, [planModeEnabled]);
+
+  // Plan 413e: sync the goal mode slot from the prop (DB is the source of
+  // truth for the session-level goal toggle). Mirrors the plan-task sync —
+  // one-way (prop → state); the reverse path is handled in
+  // `handleToggleMode` via `onGoalModeChange`.
+  useEffect(() => {
+    const next = !!goalModeEnabled;
+    if (next === goalModeSlotRef.current) return;
+    goalModeSlotRef.current = next;
+    setActiveModes((prev) => {
+      const hasGoal = prev.has('goal');
+      if (next === hasGoal) return prev;
+      const updated = new Set(prev);
+      if (next) updated.add('goal');
+      else updated.delete('goal');
+      return updated;
+    });
+  }, [goalModeEnabled]);
+
+  // Unified mode toggle — applies mutual-exclusion rules. Research is pure
+  // local state; conductor and plan-task persistence is handled by
+  // explicitly calling `onConductorChange` / `onPlanModeChange` here (user
+  // action) rather than via an effect, to avoid the render-frame race
+  // described above.
+  const handleToggleMode = useCallback((mode: ModeModifierId) => {
+    const prev = activeModesRef.current;
+    // Block activation if it conflicts with an already-active mode.
+    if (!prev.has(mode) && isModeExcludedByActive(prev, mode)) {
+      return;
+    }
+    const next = toggleModeInSet(prev, mode);
+    // Persist conductor/plan-task changes to the parent (DB) immediately.
+    // We compare against `prev` (not `next`) to detect the actual toggle
+    // direction. NOTE: these callbacks MUST be called outside the
+    // setActiveModes updater — updaters run during render, and calling a
+    // parent setState from inside one throws "Cannot update a component
+    // while rendering a different component".
+    if (mode === 'conductor') {
+      const willEnable = !prev.has('conductor');
+      conductorSlotRef.current = willEnable;
+      onConductorChange?.(willEnable);
+    }
+    if (mode === 'plan-task') {
+      const willEnable = !prev.has('plan-task');
+      planModeSlotRef.current = willEnable;
+      onPlanModeChange?.(willEnable);
+    }
+    if (mode === 'goal') {
+      const willEnable = !prev.has('goal');
+      goalModeSlotRef.current = willEnable;
+      onGoalModeChange?.(willEnable);
+    }
+    setActiveModes(next);
+    textareaRef.current?.focus();
+  }, [onConductorChange, onPlanModeChange, onGoalModeChange]);
+
+  // Drag-and-drop state — counter ref avoids flicker when crossing child boundaries
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const dragCounterRef = useRef(0);
+
+  const closePopover = useCallback(() => {
+    setPopoverMode(null);
+    setPopoverItems([]);
+    setPopoverFilter('');
+    setSelectedIndex(0);
+    setTriggerPos(null);
+  }, []);
+
+  const filteredItems = (popoverMode === 'skill' || popoverMode === 'context')
+    ? filterItems(popoverItems, popoverFilter)
+    : popoverItems;
+
+  // Build @-popover items for INSTALLED PLUGINS (one row per plugin, not per
+  // connector). Each item uses `value = pluginId` so the file-mention insert
+  // path writes `@<pluginId> ` into the textarea; on submit the
+  // stream-session-manager rewrites that token to `[@Name](plugin://id)` and
+  // merges the plugin's connected app connectors into `mentionedProviders`
+  // (existing app-tool injection + connector-activation reminder).
+  const [pluginItems, setPluginItems] = useState<PopoverItem[]>([]);
+
+  // Same plugin list, reduced to what <RichTextInput> needs to turn a bare
+  // `@<pluginId>` token into an icon + name chip: id, display name, icon URL.
+  const [pluginMentionTargets, setPluginMentionTargets] = useState<PluginMentionTarget[]>([]);
+
+  // The sent user bubble renders the same chip, so every refresh here has to
+  // reach the shared store as well as the composer.
+  const publishMentionTargets = useCallback((next: PluginMentionTarget[]) => {
+    setPluginMentionTargets(next);
+    usePluginMentionStore.getState().setTargets(next);
+  }, []);
+
+  // Refresh the @ plugin list on mount, on sessionId change, and every time
+  // the user opens the `@` context popover (typed or via plus button). Covers
+  // the case where a plugin was installed in Settings *after* the chat tab
+  // mounted — useEffect-[] alone left the list permanently empty.
+  const refreshPluginItems = useCallback(async () => {
+    const api = getPluginAPI();
+    if (!api) {
+      setPluginItems([]);
+      publishMentionTargets([]);
+      return;
+    }
+    try {
+      const res = await api.registry.list();
+      const items: PopoverItem[] = (res.data ?? [])
+        .filter((p) => p.enabled !== false)
+        .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
+        .flatMap((p) => {
+          // Per-plugin tolerance: a plugin whose manifest fails to normalize
+          // (e.g. absent/corrupt across IPC) degrades to a bare entry instead
+          // of throwing and blanking the whole list.
+          const iconOf = (({ size = 16, className }: { size?: number; className?: string }) => (
+            <PluginPopoverIcon iconUrl={p.icon} size={size} className={className} />
+          )) as unknown as PopoverItem['icon'];
+          try {
+            const comps = p.manifest
+              ? normalizeManifestComponents(p.manifest)
+              : undefined;
+            const labels: string[] = [];
+            if (comps && comps.skills.length > 0) labels.push(`${comps.skills.length} skill${comps.skills.length > 1 ? 's' : ''}`);
+            if (comps && comps.mcpServers.length > 0) labels.push(`${comps.mcpServers.length} MCP server${comps.mcpServers.length > 1 ? 's' : ''}`);
+            if (comps && comps.appConnections.length > 0) labels.push(`${comps.appConnections.length} app${comps.appConnections.length > 1 ? 's' : ''}`);
+            const capability = labels.join(' · ');
+            const description = capability
+              ? p.description
+                ? `${capability} — ${p.description}`
+                : capability
+              : p.description || undefined;
+            return [{
+              label: p.name || p.id,
+              value: p.id,
+              description,
+              icon: iconOf,
+              // Plan 450: the `apps` group is consumed by SlashCommandPopover
+              // under context mode (rendered as the "Plugins" section).
+              group: 'apps' as const,
+              category: 'context' as const,
+              source: 'plugin' as const,
+              installedSource: 'agents' as const,
+            } satisfies PopoverItem];
+          } catch {
+            return [{
+              label: p.name || p.id,
+              value: p.id,
+              description: p.description || undefined,
+              icon: iconOf,
+              group: 'apps' as const,
+              category: 'context' as const,
+              source: 'plugin' as const,
+              installedSource: 'agents' as const,
+            } satisfies PopoverItem];
+          }
+        });
+      setPluginItems(items);
+      publishMentionTargets(
+        (res.data ?? [])
+          .filter((p) => p.enabled !== false)
+          .map((p) => ({ pluginId: p.id, name: p.name || p.id, iconUrl: p.icon })),
+      );
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[MessageInput] refreshPluginItems failed:', err);
+      setPluginItems([]);
+      publishMentionTargets([]);
+    }
+  }, [publishMentionTargets]);
+
+  useEffect(() => {
+    void refreshPluginItems();
+  }, [refreshPluginItems, sessionId, popoverMode]);
+
+  useEffect(() => {
+    const onFocus = () => {
+      void refreshPluginItems();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [refreshPluginItems]);
+
+  const {
+    insertItem,
+    handleInputChange: handleSlashInputChange,
+    contextItems,
+  } = useSlashCommands({
+    textareaRef,
+    inputValue,
+    setInputValue,
+    popoverMode,
+    popoverFilter,
+    triggerPos,
+    setPopoverMode,
+    setPopoverFilter,
+    setPopoverItems,
+    setSelectedIndex,
+    setTriggerPos,
+    closePopover,
+    sessionId,
+    pluginItems,
+  });
+
+  // Per-session Focus display mode — toggled from the slash popover.
+  const focusEnabled = useFocusModeStore((s) => selectFocusEnabled(s, sessionId));
+  const handleToggleFocus = useCallback(() => {
+    if (sessionId) useFocusModeStore.getState().toggle(sessionId);
+  }, [sessionId]);
+
+  // Open the `@` context popup (添加附件 + mode + MCP) — the plus button opens
+  // this directly. Populates items from the static `contextItems` builder.
+  const openContextPopover = useCallback(() => {
+    setPopoverMode('context');
+    setPopoverFilter('');
+    setTriggerPos(null);
+    setSelectedIndex(0);
+    setPopoverItems(contextItems);
+  }, [contextItems]);
+
+  // Plan 220 Phase 4: unified attachment state. Single source of truth for
+  // files, paste, terminal refs, browser refs, and file-tree refs. Replaces
+  // the 5 separate state carriers (fileChips / terminalReferenceChips /
+  // browserReferenceChips / pastedContents / attachedFiles) that existed
+  // before this refactor.
+  const {
+    attachments,
+    parseErrors,
+    isParsing,
+    addAttachment,
+    addPastedText,
+    addFile,
+    addBrowserScreenshot,
+    remove: removeAttachment,
+    clear: clearAttachments,
+    buildModelContent,
+    buildDisplayContent,
+    hasUnparsedDocs,
+  } = useAttachments();
+
+  const priorDraftRef = useRef<{ text: string; hiddenPrompt: string; attachments: FileAttachment[] } | null>(null);
+  const editDraftRef = useRef(editDraft);
+  editDraftRef.current = editDraft;
+  const sendingRef = useRef(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!editDraft) { priorDraftRef.current = null; return; }
+    if (!priorDraftRef.current) priorDraftRef.current = { text: inputValue, hiddenPrompt, attachments };
+    setInputValue(editDraft.text);
+    setHiddenPrompt('');
+    clearAttachments();
+    addAttachment(editDraft.attachments);
+    setSendError(null);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+    // Each request replaces the editor once; typing must not reapply it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editDraft?.key]);
+  const cancelEdit = () => {
+    const previous = priorDraftRef.current;
+    setInputValue(previous?.text ?? '');
+    setHiddenPrompt(previous?.hiddenPrompt ?? '');
+    clearAttachments();
+    if (previous) addAttachment(previous.attachments);
+    priorDraftRef.current = null;
+    setSendError(null);
+    onCancelEdit?.();
+  };
+
+  // Lazy new-chat draft mode. Restore the saved draft once on mount, then
+  // report every change back so the caller can persist it across
+  // navigation/restarts. The restore is guarded by a ref so React StrictMode
+  // double-mounting (or session changes) never re-injects the draft.
+  const draftRestoredRef = useRef(false);
+  useEffect(() => {
+    if (!draftMode) return;
+    if (draftRestoredRef.current) return;
+    draftRestoredRef.current = true;
+    if (initialDraft) {
+      if (initialDraft.text) {
+        setInputValue(initialDraft.text);
+      }
+      if (initialDraft.attachments.length > 0) {
+        addAttachment(initialDraft.attachments);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftMode]);
+
+  useEffect(() => {
+    if (!draftMode || !onDraftChange) return;
+    onDraftChange(inputValue, attachments);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inputValue, attachments, draftMode]);
+
+  // Plan 220 Phase 4: single listener for `duya:add-attachment` plus
+  // legacy event name aliases (kept for one minor version per Plan 220
+  // §Design). The legacy aliases just re-dispatch as the new event so
+  // panels can migrate independently.
+  useEffect(() => {
+    const handleAddAttachment = (e: Event) => {
+      const detail = (e as CustomEvent<AddAttachmentDetail>).detail;
+      if (!detail) return;
+
+      switch (detail.kind) {
+        case 'pasted-text': {
+          addPastedText(detail.text);
+          break;
+        }
+        case 'file-tree-ref': {
+          // Skip if a chip for this exact path + range is already
+          // attached. Plan 220: range-scoped refs (with lineStart/
+          // lineEnd) are deduplicated independently from path-only
+          // refs, so a user can attach both the file and a selection.
+          const already = attachments.some(
+            (a) =>
+              a.kind === 'file-tree-ref' &&
+              a.path === detail.path &&
+              (a.metadata as { lineStart?: number; lineEnd?: number } | undefined)
+                ?.lineStart === detail.lineStart &&
+              (a.metadata as { lineStart?: number; lineEnd?: number } | undefined)
+                ?.lineEnd === detail.lineEnd,
+          );
+          if (already) break;
+          addAttachment(
+            makeFileTreeRefAttachment({
+              path: detail.path,
+              lineStart: detail.lineStart,
+              lineEnd: detail.lineEnd,
+              selectedText: detail.selectedText,
+            }),
+          );
+          break;
+        }
+        case 'terminal-ref': {
+          if (!detail.text?.trim()) break;
+          addAttachment({
+            id: crypto.randomUUID(),
+            kind: 'terminal-ref',
+            name: detail.shell,
+            type: 'text/plain',
+            url: '',
+            size: detail.text.length,
+            text: detail.text.trim(),
+            previewText: (() => {
+              const first =
+                detail.text
+                  .trim()
+                  .split(/\r?\n/)
+                  .find((line) => line.trim())?.trim() ?? 'Terminal selection';
+              return first;
+            })(),
+            metadata: {
+              shell: detail.shell,
+              cwd: detail.cwd,
+              createdAt: Date.now(),
+            },
+          });
+          break;
+        }
+        case 'browser-ref': {
+          const ref = detail.reference;
+          const att =
+            detail.attachment ??
+            (ref.attachment
+              ? { ...ref.attachment, kind: 'image' as const }
+              : undefined);
+          if (ref.kind === 'screenshot' && att) {
+            addBrowserScreenshot(
+              {
+                elementKind: 'screenshot',
+                label: ref.label,
+                title: ref.title,
+                url: ref.url,
+                text: ref.content,
+                attachmentId: att.id,
+              },
+              att,
+            );
+          } else {
+            addAttachment({
+              id: crypto.randomUUID(),
+              kind: 'browser-ref',
+              name: ref.label,
+              type: 'text/plain',
+              url: '',
+              size: ref.content.length,
+              text: ref.content,
+              previewText: ref.title || ref.label,
+              metadata: {
+                url: ref.url,
+                elementKind: ref.kind,
+                title: ref.title,
+              },
+            });
+          }
+          break;
+        }
+        case 'file': {
+          addAttachment(detail.file);
+          break;
+        }
+        default: {
+          // Exhaustive check — invalid kind does nothing.
+          break;
+        }
+      }
+
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        adjustTextareaHeight();
+      });
+    };
+
+    window.addEventListener(ADD_ATTACHMENT_EVENT, handleAddAttachment as EventListener);
+
+    // Legacy alias listeners: re-dispatch under the new event name so
+    // existing panels keep working without modification.
+    const legacyFileTree = (e: Event) => {
+      const detail = (e as CustomEvent<{
+        path: string;
+        lineStart?: number;
+        lineEnd?: number;
+        selectedText?: string;
+      }>).detail;
+      if (detail?.path) {
+        dispatchAddAttachment({
+          kind: 'file-tree-ref',
+          path: detail.path,
+          lineStart: detail.lineStart,
+          lineEnd: detail.lineEnd,
+          selectedText: detail.selectedText,
+        });
+      }
+    };
+    const legacyTerminal = (e: Event) => {
+      const detail = (e as CustomEvent<{ shell: string; cwd: string; text: string }>).detail;
+      if (detail) {
+        dispatchAddAttachment({
+          kind: 'terminal-ref',
+          shell: detail.shell,
+          cwd: detail.cwd,
+          text: detail.text,
+        });
+      }
+    };
+    const legacyBrowser = (e: Event) => {
+      const detail = (e as CustomEvent<{
+        text?: string;
+        attachment?: FileAttachment;
+        reference?: {
+          kind: 'element' | 'screenshot';
+          label: string;
+          title: string;
+          url: string;
+          content: string;
+          attachmentId?: string;
+        };
+      }>).detail;
+      if (!detail) return;
+      if (detail.reference) {
+        const ref = detail.reference;
+        dispatchAddAttachment({
+          kind: 'browser-ref',
+          reference: {
+            kind: ref.kind,
+            label: ref.label,
+            title: ref.title,
+            url: ref.url,
+            content: ref.content,
+            attachment: detail.attachment,
+          },
+          attachment: detail.attachment,
+        });
+      } else if (detail.text) {
+        // Plain text insert (legacy) — fall through to typed text path.
+        // We surface this as a terminal-ref for parity, but with empty shell/cwd
+        // the attachment's preview line becomes the text itself.
+        dispatchAddAttachment({
+          kind: 'terminal-ref',
+          shell: 'browser',
+          cwd: '',
+          text: detail.text,
+        });
+      }
+    };
+
+    window.addEventListener('file-tree-add-to-input', legacyFileTree as EventListener);
+    window.addEventListener('terminal-add-to-input', legacyTerminal as EventListener);
+    window.addEventListener('browser-add-to-input', legacyBrowser as EventListener);
+
+    // Plan 220: `duya:set-hidden-prompt` lets panels inject a context
+    // prefix that the LLM will see ahead of the user's typed input,
+    // but the user themselves does NOT see in the input box. The
+    // prompt is cleared on the next send (so the next message starts
+    // fresh) and is appended by `buildModelContent` during submit.
+    const handleSetHiddenPrompt = (e: Event) => {
+      const detail = (e as CustomEvent<{ value: string }>).detail;
+      if (typeof detail?.value === 'string') {
+        setHiddenPrompt(detail.value);
+        requestAnimationFrame(() => {
+          textareaRef.current?.focus();
+          adjustTextareaHeight();
+        });
+      }
+    };
+    window.addEventListener('duya:set-hidden-prompt', handleSetHiddenPrompt as EventListener);
+
+    // Plan 311: `duya:prefill-chat-input` lets panels (e.g. the
+    // Capabilities detail page) drop a workflow template prompt into
+    // the input box. The value is visible and editable — it is NOT
+    // auto-sent. The user reviews it and presses Enter when ready.
+    const handlePrefillChatInput = (e: Event) => {
+      const detail = (e as CustomEvent<{ value: string }>).detail;
+      if (typeof detail?.value === 'string') {
+        setInputValue(detail.value);
+        requestAnimationFrame(() => {
+          textareaRef.current?.focus();
+          adjustTextareaHeight();
+        });
+      }
+    };
+    window.addEventListener(PREFILL_CHAT_INPUT_EVENT, handlePrefillChatInput as EventListener);
+
+    // Conductor canvas UI (ObjectAgentPrompt / ConductorComposer) forwards
+    // submissions here. We enable conductor mode on the current session and
+    // populate the input box with the forwarded text (+ element context).
+    const handleForwardMessage = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        text?: string;
+        canvasId?: string;
+        sessionId?: string;
+        elementContext?: unknown;
+      } | undefined;
+      if (!detail?.text) return;
+      // Implicitly enable conductor mode on the current session.
+      // Call `onConductorChange` directly (user-driven path) instead of
+      // relying on an effect, to avoid the render-frame race that
+      // previously clobbered the DB value during session restore.
+      if (detail.sessionId && onConductorChange) {
+        setActiveModes((prev) => {
+          if (prev.has('conductor')) return prev;
+          const next = new Set(prev);
+          next.add('conductor');
+          return next;
+        });
+        conductorSlotRef.current = true;
+        onConductorChange(true);
+      }
+      // Compose forwarded text. If element context is provided, prepend it as
+      // a synthetic block so the agent knows what was selected on the canvas.
+      const ctxPrefix = detail.elementContext
+        ? `[Selected canvas element context: ${JSON.stringify(detail.elementContext)}]\n\n`
+        : '';
+      const forwarded = `${ctxPrefix}${detail.text}`;
+      setInputValue(forwarded);
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        adjustTextareaHeight();
+      });
+    };
+    window.addEventListener('conductor:forward-message', handleForwardMessage as EventListener);
+
+    return () => {
+      window.removeEventListener(ADD_ATTACHMENT_EVENT, handleAddAttachment as EventListener);
+      window.removeEventListener('file-tree-add-to-input', legacyFileTree as EventListener);
+      window.removeEventListener('terminal-add-to-input', legacyTerminal as EventListener);
+      window.removeEventListener('browser-add-to-input', legacyBrowser as EventListener);
+      window.removeEventListener('duya:set-hidden-prompt', handleSetHiddenPrompt as EventListener);
+      window.removeEventListener(PREFILL_CHAT_INPUT_EVENT, handlePrefillChatInput as EventListener);
+      window.removeEventListener('conductor:forward-message', handleForwardMessage as EventListener);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attachments, onConductorChange]);
+
+  // Plan 311: consume a pending workflow prefill that arrived while
+  // `MessageInput` was unmounted (e.g. the user launched a workflow
+  // from the Capabilities settings page, which then navigated to
+  // chat). The stash is cleared on read so it only fires once.
+  useEffect(() => {
+    const pending = consumePendingPrefill();
+    if (pending) {
+      setInputValue(pending);
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        adjustTextareaHeight();
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Build content with attachments + hidden prompt baked in. The
+  // `hiddenPrompt` is the auto-injected context that the LLM should
+  // see but the user does NOT (it stays out of the inputValue they
+  // edit). `buildModelContent` from the hook handles the 5 attachment
+  // kinds; we prepend the hidden prompt here.
+  const buildContentWithChips = useCallback(
+    (textValue: string): string => {
+      const base = buildModelContent(textValue);
+      // Review-panel line comments ride after the user's text (ZCode's
+      // `# Code comments:` block); the strip above the input shows what
+      // will be attached and markCodeCommentsSent() flags them after send.
+      const commentsBlock = workingDirectory
+        ? buildCodeCommentsPromptBlock(workingDirectory)
+        : '';
+      const withHidden = hiddenPrompt && hiddenPrompt.trim()
+        ? `${hiddenPrompt}\n\n${base}`
+        : base;
+      return commentsBlock
+        ? `${withHidden}${withHidden ? '\n\n' : ''}${commentsBlock}`
+        : withHidden;
+    },
+    [buildModelContent, hiddenPrompt, workingDirectory],
+  );
+
+  const buildDisplayContentWithChips = useCallback(
+    (textValue: string): string => buildDisplayContent(textValue),
+    [buildDisplayContent],
+  );
+
+  // Sync model with prop
+  // Also clean up double-quoted model names (legacy data cleanup)
+  useEffect(() => {
+    if (modelName) {
+      const cleanModelName = modelName.startsWith('"') && modelName.endsWith('"')
+        ? modelName.slice(1, -1)
+        : modelName;
+      setSelectedModel(cleanModelName);
+    }
+  }, [modelName]);
+
+  // Fetch available models from providers API
+  // Collect models from all configured providers
+  const fetchModels = useCallback(async () => {
+    setModelsLoading(true);
+    try {
+      const providers = await listProvidersIPC();
+      if (providers && providers.length > 0) {
+        // Fix the hasApiKey field if it's missing
+        providers.forEach((p) => {
+          const pAny = p as Provider & Record<string, unknown>;
+          const hasKey = pAny.hasApiKey ?? pAny.has_api_key ?? !!(p.apiKey && p.apiKey.length > 0);
+          if (pAny.hasApiKey === undefined && hasKey) {
+            (p as Provider & { hasApiKey: boolean }).hasApiKey = hasKey;
+          }
+        });
+
+        // Find the default provider for tracking. With the
+        // multi-provider model, the default is the implicit
+        // fallback; we surface it first, then fall back to the
+        // first configured provider. (The local `activeProviderId`
+        // state is a misnomer from the single-active era — it
+        // tracks the default, not a hard lock.)
+        const defaultProvider = providers.find(
+          (p) => p.isDefault && (p.hasApiKey || isKeylessLocalProvider(p.providerType, p.baseUrl)),
+        );
+        const activeProvider =
+          defaultProvider ?? providers.find(
+            (p) => p.hasApiKey || isKeylessLocalProvider(p.providerType, p.baseUrl),
+          );
+
+        if (activeProvider) {
+          setHasProvider(true);
+          setActiveProviderId(activeProvider.id);
+        }
+
+        // Collect models from all providers
+        // Only use enabled_models from provider options - no preset defaults
+        // Format: "[providerName] modelId"
+        const allModels: ModelOption[] = [];
+        const modelIds = new Set<string>(); // Deduplication
+        const providerMap = new Map<string, string>(); // modelId -> providerId
+
+        for (const provider of providers) {
+          // Skip providers without API key (except Ollama / LM Studio,
+          // which are local OpenAI-compatible runtimes with no auth).
+          if (!provider.hasApiKey && !isKeylessLocalProvider(provider.providerType, provider.baseUrl)) {
+            continue;
+          }
+
+          // Plan 209 P4-prime: build the per-provider model list
+          // with a layered fallback. The order is:
+          //   1. options.enabled_models (the authoritative list
+          //      written by ProviderEditView)
+          //   2. options.defaultModel (written by the legacy
+          //      ModelSelectionSection — the only field that
+          //      existed before Plan 205)
+          //   3. (no preset fallback here; the model list must
+          //      reflect user choice, not preset defaults)
+          //
+          // Without this fallback, providers whose only persisted
+          // option is `defaultModel` (e.g. set via the global
+          // ModelSelectionSection) appear with no models in the
+          // dropdown even though a working model is configured.
+          let enabledModels: string[] = [];
+          try {
+            const opts = JSON.parse(provider.options || '{}');
+            if (opts.enabled_models && Array.isArray(opts.enabled_models) && opts.enabled_models.length > 0) {
+              enabledModels = opts.enabled_models;
+            } else if (typeof opts.defaultModel === 'string' && opts.defaultModel.length > 0) {
+              enabledModels = [opts.defaultModel];
+            }
+          } catch { /* ignore */ }
+
+          // Add enabled models to the list with provider prefix
+          for (const id of enabledModels) {
+            const cleanId = id.startsWith('"') && id.endsWith('"') ? id.slice(1, -1) : id;
+            // Use provider name for display, but keep provider id in the map for API calls
+            const providerName = provider.name || provider.providerType || provider.id;
+            const prefixedId = `[${providerName}] ${cleanId}`;
+            if (!modelIds.has(prefixedId)) {
+              modelIds.add(prefixedId);
+              // Pull capability flags (vision / tool-use / reasoning /
+              // format / isLoaded / reasoning-effort-options) from the
+              // in-memory capability service so the chat input
+              // dropdown can render them as badges without a second
+              // IPC roundtrip. The service is seeded by
+              // `useProviderModels` after a successful
+              // `/api/v1/models` fetch, so models whose provider was
+              // never fetched simply lack flags (graceful degradation).
+              const cap = modelCapabilityService.getModelCapability(provider.id, cleanId);
+              allModels.push({
+                id: prefixedId,
+                display_name: cleanId,
+                ...(cap?.contextWindow && cap.contextWindow > 0
+                  ? { context_length: cap.contextWindow }
+                  : {}),
+                ...(cap?.supportsVision !== undefined
+                  ? { supportsVision: cap.supportsVision }
+                  : {}),
+                ...(cap?.supportsToolUse !== undefined
+                  ? { supportsToolUse: cap.supportsToolUse }
+                  : {}),
+                ...(cap?.supportsReasoning !== undefined
+                  ? { supportsReasoning: cap.supportsReasoning }
+                  : {}),
+                ...(cap?.reasoningEffortOptions !== undefined && cap.reasoningEffortOptions.length > 0
+                  ? { reasoningEffortOptions: cap.reasoningEffortOptions }
+                  : {}),
+                ...(cap?.isLoaded === true ? { isLoaded: true } : {}),
+              });
+              providerMap.set(prefixedId, provider.id);
+            }
+          }
+        }
+
+        setAvailableModels(allModels);
+        setProviders(
+          providers.filter(
+            (p) => p.hasApiKey || isKeylessLocalProvider(p.providerType, p.baseUrl),
+          ),
+        );
+        setModelProviderMap(providerMap);
+        setModelsLoading(false);
+        return;
+      }
+    } catch (err) {
+      console.error('[MessageInput] Error fetching providers:', err);
+    }
+    setHasProvider(false);
+    setAvailableModels([]);
+    setModelsLoading(false);
+  }, []);
+
+  // Fetch models on mount, when session changes, and when window regains focus
+  // (user may have changed providers in Settings while this component was mounted)
+  useEffect(() => {
+    fetchModels();
+
+    // Retry after 2 seconds if provider not found (ConfigManager might still be loading)
+    const retryTimer = setTimeout(() => {
+      if (!hasProvider) {
+        fetchModels();
+      }
+    }, 2000);
+
+    // Also retry after 5 seconds as a fallback
+    const fallbackTimer = setTimeout(() => {
+      if (!hasProvider) {
+        fetchModels();
+      }
+    }, 5000);
+
+    // Refresh models when user returns from Settings or another window
+    const handleFocus = () => {
+      fetchModels();
+    };
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      clearTimeout(retryTimer);
+      clearTimeout(fallbackTimer);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [fetchModels, hasProvider, sessionId]);
+
+  // Refresh the MCP server list. Shared by the initial load and the
+  // manual "reconnect" action in the input-box MCP menu: both re-pull
+  // the capability snapshot so the live connection status + tool list
+  // reflect what the worker actually has running after a reload.
+  const refreshMcpServers = useCallback(async () => {
+    const snapshot = await fetchMCPInventorySnapshot();
+    if (snapshot) {
+      const servers = snapshot.effectiveServers
+        .filter((s) => s.name)
+        .map((s) => ({
+          name: s.name,
+          description: s.command || s.url,
+          enabled: s.effectiveEnabled,
+          writable: s.writable,
+          source: s.source,
+          // Live runtime status from worker's mcp:status:snapshot
+          // via the capability-management aggregator.
+          connectionStatus: s.connectionStatus,
+          toolCount: s.tools?.length,
+          tools: s.tools,
+          lastIssue: s.lastIssue,
+        }));
+      setMcpServers(servers);
+      return;
+    } else if (window.electronAPI?.settings?.getMcpServers) {
+      const mcpResult = await window.electronAPI.settings.getMcpServers();
+      if (mcpResult.success && Array.isArray(mcpResult.data)) {
+        setMcpServers(
+          mcpResult.data
+            .filter((item: { name?: string }) => typeof item?.name === 'string' && item.name.length > 0)
+            .map((item: { name: string; command?: string; enabled?: boolean }) => ({
+              name: item.name,
+              description: item.command,
+              enabled: item.enabled !== false,
+            }))
+        );
+        return;
+      } else {
+        setMcpServers([]);
+        return;
+      }
+    } else if (window.electronAPI?.settingsDb?.getJson) {
+      const mcpData = await window.electronAPI.settingsDb.getJson<
+        Array<{ name?: string; command?: string; enabled?: boolean }> | Record<string, { description?: string; enabled?: boolean }>
+      >('mcpServers', []);
+      const servers = Array.isArray(mcpData)
+        ? mcpData
+            .filter((item): item is { name: string; command?: string; enabled?: boolean } => typeof item?.name === 'string' && item.name.length > 0)
+            .map((item) => ({
+              name: item.name,
+              description: item.command,
+              enabled: item.enabled !== false,
+            }))
+        : Object.entries(mcpData || {}).map(([name, config]) => ({
+            name,
+            description: config?.description,
+            enabled: config?.enabled !== false,
+          }));
+      setMcpServers(servers);
+    }
+  }, []);
+
+  // Fetch skills, MCP servers, and output styles
+  useEffect(() => {
+    const fetchSkillsAndMcp = async () => {
+      try {
+        // Fetch skills from filesystem via IPC (same as Agent uses)
+        if (window.electronAPI?.skills?.list) {
+          const result = await window.electronAPI.skills.list();
+          if (result.success && Array.isArray(result.skills)) {
+            // Filter to only user-invocable skills (same as claude-code-haha)
+            const filteredSkills = (result.skills as Array<{ userInvocable?: boolean; enabled?: boolean; name: string; description?: string; category?: string; whenToUse?: string }>)
+              .filter((s) => s.userInvocable !== false && s.enabled !== false)
+              .map((s) => ({
+                name: s.name,
+                description: s.description || s.whenToUse || '',
+                source: s.category || 'other',
+              }));
+            setSkills(filteredSkills);
+          }
+        }
+
+        // Fetch MCP servers from inventory snapshot (includes both
+        // settings-configured and plugin-declared servers)
+        await refreshMcpServers();
+
+        // Fetch output styles
+        try {
+          const styles = await listOutputStylesIPC();
+          setResponseStyles(styles);
+        } catch {
+          // output styles not available in this environment
+        }
+      } catch (error) {
+        console.error('[MessageInput] Error fetching skills/MCP/styles:', error);
+      }
+    };
+
+    fetchSkillsAndMcp();
+  }, [sessionId, refreshMcpServers]);
+
+  // Load draft when session changes
+  useEffect(() => {
+    const prevId = prevSessionIdRef.current;
+    prevSessionIdRef.current = sessionId;
+    draftLoadedRef.current = false;
+
+    if (!sessionId) return;
+
+    getDraftIPC(sessionId)
+      .then((draft) => {
+        if (draft && prevSessionIdRef.current === sessionId && !editDraftRef.current) {
+          setInputValue(draft);
+          draftLoadedRef.current = true;
+          requestAnimationFrame(() => adjustTextareaHeight());
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      if (draftTimerRef.current) {
+        clearTimeout(draftTimerRef.current);
+        draftTimerRef.current = null;
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
+  // Debounced draft save on input change
+  useEffect(() => {
+    if (!sessionId || !draftLoadedRef.current) return;
+
+    if (draftTimerRef.current) {
+      clearTimeout(draftTimerRef.current);
+    }
+
+    draftTimerRef.current = setTimeout(() => {
+      saveDraftIPC(sessionId, inputValue).catch(() => {});
+    }, 300);
+
+    return () => {
+      if (draftTimerRef.current) {
+        clearTimeout(draftTimerRef.current);
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inputValue, sessionId]);
+
+  // Save draft on window close
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (sessionId && inputValue) {
+        saveDraftIPC(sessionId, inputValue).catch(() => {});
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [sessionId, inputValue]);
+
+  const adjustTextareaHeight = useCallback(() => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      textarea.style.height = 'auto';
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 150)}px`;
+    }
+  }, []);
+
+  // Group models by provider for the multi-level ModelProviderSelector.
+  const providerGroups: ProviderModelGroup[] = useMemo(() => {
+    return providers
+      .map((provider) => {
+        const providerName = provider.name || provider.providerType || provider.id;
+        const prefix = `[${providerName}] `;
+        const models = availableModels.filter((m) => m.id.startsWith(prefix));
+        return { id: provider.id, name: providerName, models };
+      })
+      .filter((g) => g.models.length > 0);
+  }, [providers, availableModels]);
+
+  // Raw model id (no provider prefix) used to resolve thinking-effort options.
+  const rawSelectedModelId = useMemo(() => {
+    const match = selectedModel.match(/^\[([^\]]+)\]\s*(.+)$/);
+    return match ? match[2] : selectedModel;
+  }, [selectedModel]);
+
+  const selectedModelCapability = useMemo(() => {
+    if (!rawSelectedModelId) return null;
+    const providerId = modelProviderMap.get(selectedModel);
+    if (!providerId) return null;
+    return modelCapabilityService.getModelCapability(providerId, rawSelectedModelId);
+  }, [rawSelectedModelId, selectedModel, modelProviderMap]);
+
+  const modelEffortOptions = useMemo(
+    () =>
+      useEffortOptions(t, rawSelectedModelId, selectedModelCapability),
+    [t, rawSelectedModelId, selectedModelCapability],
+  );
+
+  // Handle model change
+  const handleModelChange = useCallback((modelId: string) => {
+    setSelectedModel(modelId);
+    const providerId = modelProviderMap.get(modelId);
+    onModelChange?.(modelId, providerId);
+  }, [onModelChange, modelProviderMap]);
+
+  // Handle effort change
+  const handleEffortChange = useCallback((value: string | null) => {
+    const newEffort = value || undefined;
+    setSelectedEffort(newEffort);
+    onEffortChange?.(newEffort);
+  }, [onEffortChange]);
+
+  // Handle input change
+  const handleInputChange = useCallback(
+    async (val: string) => {
+      setInputValue(val);
+      prePasteValueRef.current = val;
+      adjustTextareaHeight();
+      await handleSlashInputChange(val);
+    },
+    [adjustTextareaHeight, handleSlashInputChange],
+  );
+
+  const requestRecap = useCallback(async () => {
+    if (onRecapRequest) {
+      return onRecapRequest();
+    }
+    if (!sessionId) {
+      return { success: false, recap: null, error: '暂无活动对话。' };
+    }
+    const result = await window.electronAPI?.recap.request(sessionId);
+    return result ?? { success: false, recap: null, error: '对话回顾不可用。' };
+  }, [onRecapRequest, sessionId]);
+
+  // Slash-command app bridge — executors in lib/commands/executors act on the
+  // live app through this singleton. Registered from the composer because it
+  // owns the props that back most actions; store-backed actions (new session,
+  // panels) are wired directly here. Cleared on unmount so a stale composer
+  // can't serve commands.
+  useEffect(() => {
+    const bridge: CommandAppBridge = {
+      sendPrompt: (prompt) =>
+        onSend(
+          prompt,
+          undefined,
+          null,
+          pickMessageMode(activeModesRef.current),
+          prompt,
+          activeModesRef.current.has('conductor') || undefined,
+        ),
+      getSessionSnapshot: () => ({
+        sessionId,
+        model: (modelName || '').replace(/^"|"$/g, '') || undefined,
+        effort: selectedEffort,
+        permissionMode,
+        workingDirectory,
+        messageCount: messages?.length,
+      }),
+      clearMessages: () => {
+        onClearMessages?.();
+      },
+      resetSession: async () => {
+        const oldSessionId = sessionId ?? '';
+        useConversationStore.getState().startNewChat();
+        return { oldSessionId, newSessionId: '' };
+      },
+      stopTurn: () => {
+        onStop?.();
+      },
+      compactContext: () => {
+        onCompact?.();
+      },
+      requestRecap: () => requestRecap(),
+      setSessionModel: (model, providerId) => {
+        onModelChange?.(model, providerId);
+      },
+      setEffort: (next) => {
+        setSelectedEffort(next);
+        onEffortChange?.(next);
+      },
+      setPermissionMode: (mode) => {
+        onPermissionModeChange?.(mode);
+      },
+      toggleMode: (mode) => {
+        handleToggleMode(mode);
+      },
+      openModelPicker: () => {
+        modelSelectorRef.current?.open();
+      },
+      openPanel: (panel: SlashCommandPanel) => {
+        if (panel === 'code-review') {
+          openTurnReviewInSidePanel({
+            workingDirectory: workingDirectory ?? null,
+            sessionId: sessionId ?? null,
+          });
+          return;
+        }
+        if (panel === 'sessions') {
+          if (sessionId) dispatchOpenSessionPanel(sessionId);
+          return;
+        }
+        // settings / mcp / memory / automation / skills surfaces are opened by
+        // their own pages — dispatch a best-effort intent event.
+        window.dispatchEvent(new CustomEvent(`duya:open-${panel}-panel`));
+      },
+      promptInput: ({ title, placeholder, initialValue }) =>
+        new Promise<string | null>((resolve) => {
+          setPromptRequest({ title, placeholder, initialValue, resolve });
+        }),
+      toast: (message, kind) => {
+        showToast({
+          title: message,
+          variant: kind === 'error' ? 'error' : kind === 'success' ? 'success' : 'default',
+        });
+      },
+    };
+    setCommandAppBridge(bridge);
+    return () => {
+      setCommandAppBridge(null);
+    };
+  }, [onSend, onClearMessages, sessionId, onStop, onCompact, onModelChange, onEffortChange, onPermissionModeChange, handleToggleMode, requestRecap, workingDirectory, modelName, selectedEffort, permissionMode, messages]);
+
+  const handlePasteEvent = useCallback(
+    async (e: React.ClipboardEvent<HTMLDivElement>) => {
+      // First check for image files in clipboard
+      const items = e.clipboardData?.items;
+      if (items) {
+        const imageItems: DataTransferItem[] = [];
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (item.type.startsWith('image/')) {
+            imageItems.push(item);
+          }
+        }
+
+        if (imageItems.length > 0) {
+          e.preventDefault();
+          for (const item of imageItems) {
+            const file = item.getAsFile();
+            if (file) {
+              // Generate a name if not provided (clipboard images often have no name)
+              const namedFile = new File(
+                [file],
+                file.name || `pasted-image-${Date.now()}.png`,
+                { type: file.type }
+              );
+              await addFile(namedFile);
+            }
+          }
+          adjustTextareaHeight();
+          return;
+        }
+      }
+
+      // Fall back to text paste handling
+      const prePasteValue = prePasteValueRef.current;
+      let pastedText = e.clipboardData.getData('text');
+      // Some clipboard sources only provide an `text/html` flavor. Extract
+      // plain text from the markup so the paste still lands as clean text.
+      if (!pastedText) {
+        const html = e.clipboardData.getData('text/html');
+        if (html) {
+          pastedText = htmlToPlainText(html);
+        }
+      }
+      // Plan 220 Phase 4: legacy `usePastedContent.handlePaste` is gone.
+      // Reproduce its threshold check (500 chars) inline — long pastes
+      // become a `pasted-text` attachment instead of streaming into the
+      // input value.
+      if (pastedText.length > 500) {
+        e.preventDefault();
+        addPastedText(pastedText);
+        setTimeout(() => {
+          if (
+            textareaRef.current &&
+            'value' in textareaRef.current &&
+            textareaRef.current.value !== prePasteValue
+          ) {
+            setInputValue(prePasteValue);
+          }
+        }, 0);
+        adjustTextareaHeight();
+        return;
+      }
+
+      // Strip rich-text formatting: always preventDefault and insert the
+      // plain-text clipboard payload so pasted content (e.g. colored text
+      // copied from a document or another app) never carries its HTML/span
+      // styling into the input. `insertText` preserves the caret position
+      // and emits an `input` event that RichTextInput forwards to onChange.
+      e.preventDefault();
+      if (textareaRef.current) {
+        document.execCommand('insertText', false, pastedText);
+      }
+    },
+    [addPastedText, adjustTextareaHeight, addFile],
+  );
+
+  // Drag-and-drop handlers — accept files dropped anywhere on the input box
+  const handleDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    if (disabled) return;
+    dragCounterRef.current += 1;
+    if (dragCounterRef.current === 1) {
+      setIsDraggingOver(true);
+    }
+  }, [disabled]);
+
+  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = disabled ? 'none' : 'copy';
+  }, [disabled]);
+
+  const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    if (disabled) return;
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+    if (dragCounterRef.current === 0) {
+      setIsDraggingOver(false);
+    }
+  }, [disabled]);
+
+  const handleDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
+    if (disabled) {
+      e.preventDefault();
+      return;
+    }
+    const files = e.dataTransfer.files;
+    if (files.length === 0) {
+      e.preventDefault();
+      return;
+    }
+    e.preventDefault();
+    dragCounterRef.current = 0;
+    setIsDraggingOver(false);
+
+    for (let i = 0; i < files.length; i++) {
+      await addFile(files[i]);
+    }
+    adjustTextareaHeight();
+  }, [addFile, adjustTextareaHeight, disabled]);
+
+  const handleSubmit = useCallback(
+    async (e: FormEvent) => {
+      e.preventDefault();
+      const trimmedValue = inputValue.trim();
+
+      // Check if we have any content to send (input or any attachment).
+      const hasContent = trimmedValue || attachments.length > 0;
+      if (!hasContent) return;
+      if (disabled || sendingRef.current) return;
+
+      // Block sending while document parsing is in progress — the parsed
+      // text would be missing and the agent would see "Not Parsed" warnings.
+      if (isParsing && hasUnparsedDocs) return;
+
+      const clearDraft = () => {
+        draftLoadedRef.current = false;
+        if (sessionId) {
+          saveDraftIPC(sessionId, '').catch(() => {});
+        }
+      };
+
+      // Build content + display content from the unified hook.
+      // `modelContent` is sent to the LLM and includes attachment text
+      // (pasted-text, terminal-ref, browser-ref, file-tree-ref bodies
+      // joined ahead of the user's input).
+      // `displayContent` is the pure user-typed text — attachment text
+      // is carried by the attachment objects themselves (persisted to
+      // `message.attachments`), so the rendered message body should NOT
+      // duplicate it. Otherwise the card AND the full text both show.
+      const modelContent = buildContentWithChips(trimmedValue);
+      const displayContentForUser = trimmedValue;
+
+      // Build output style config from selected style
+      const outputStyleConfig = selectedStyleId
+        ? responseStyles.find(s => s.id === selectedStyleId)
+        : null;
+      const styleOpts = outputStyleConfig
+        ? { name: outputStyleConfig.name, prompt: outputStyleConfig.prompt, keepCodingInstructions: outputStyleConfig.keepCodingInstructions }
+        : null;
+
+      // All attachment kinds are persisted to `message.attachments` for
+      // UI rendering (cards in history view). The worker (startStream)
+      // filters to file/image kinds internally when building LLM content
+      // blocks — pasted-text/terminal-ref/browser-ref/file-tree-ref are
+      // already baked into `modelContent` via `buildContentWithChips`.
+      const allAttachments = attachments.length > 0 ? attachments : undefined;
+
+      // Bang prefix: `!cmd` runs a shell command directly (minimax/codex
+      // parity). Output renders in the shared CommandResultDialog.
+      if (trimmedValue.startsWith('!')) {
+        const bangCommand = trimmedValue.slice(1).trim();
+        if (bangCommand) {
+          setCommandResult({ title: `$ ${bangCommand}`, content: '运行中…', mono: true });
+          const bangResult = await bangRun(bangCommand, workingDirectory ?? undefined);
+          setCommandResult({
+            title: `$ ${bangCommand}`,
+            content: bangResult.ok
+              ? (bangResult.output.trim() || '(无输出)')
+              : `命令失败${bangResult.error ? `：${bangResult.error}` : ''}`,
+            mono: true,
+            isError: !bangResult.ok,
+          });
+          clearDraft();
+          setInputValue('');
+          clearAttachments();
+          return;
+        }
+      }
+
+      // Check for direct slash commands — every command in the app registry
+      // dispatches through the executor table (lib/commands/executors).
+      // Unknown /tokens fall through to the agent as plain text.
+      const slashResult = resolveDirectSlash(trimmedValue);
+      if (slashResult.action === 'immediate_command') {
+        const cmd = slashResult.commandValue;
+        const result = await runSlashCommand(trimmedValue);
+        if (result.type === 'forward') {
+          // The executor decided the agent should handle it — send as a
+          // normal message; the composer shows the raw command text.
+          const sendMode = pickMessageMode(activeModes);
+          const conductorMode = activeModes.has('conductor') || undefined;
+          sendingRef.current = true;
+          setIsSubmitting(true);
+          setSendError(null);
+          try {
+            await onSend(result.prompt, allAttachments, styleOpts, sendMode, trimmedValue, conductorMode);
+          } catch (error) {
+            setSendError(error instanceof Error ? error.message : t('chat.pendingSaveFailed'));
+            return;
+          } finally {
+            sendingRef.current = false;
+            setIsSubmitting(false);
+          }
+          // Clear message-level modes (plan-task/research) after send; keep conductor (session-level).
+          setActiveModes(clearMessageModes);
+        } else if (result.type === 'text') {
+          setCommandResult({ title: cmd, content: result.content });
+        } else if (result.type === 'error') {
+          setCommandResult({ title: cmd, content: result.message, isError: true });
+        }
+        // 'dismiss' / 'session_reset': the executor already did its work.
+        clearDraft();
+        setInputValue('');
+        setHiddenPrompt('');
+        clearAttachments();
+        return;
+      }
+
+      // If CLI badge is active, inject systemPromptAppend to guide model
+      const cliAppend = buildCliAppend(cliBadge);
+      if (cliBadge) setCliBadge(null);
+
+      const sendMode = pickMessageMode(activeModes);
+      const conductorMode = activeModes.has('conductor') || undefined;
+      sendingRef.current = true;
+      setIsSubmitting(true);
+      setSendError(null);
+      try {
+        await onSend(modelContent, allAttachments, styleOpts, sendMode, displayContentForUser, conductorMode);
+      } catch (error) {
+        setSendError(error instanceof Error ? error.message : t('chat.pendingSaveFailed'));
+        return;
+      } finally { sendingRef.current = false; setIsSubmitting(false); }
+      clearDraft();
+      // The outgoing content carried every pending review-panel comment
+      // (see buildContentWithChips); flag them sent so the strip empties
+      // and the next message doesn't re-attach the same comments. The
+      // inline cards in the review panel stay for ongoing review.
+      if (workingDirectory) markCodeCommentsSent(workingDirectory);
+      // Clear message-level modes (plan-task/research) after send; keep conductor (session-level).
+      setActiveModes(clearMessageModes);
+      setInputValue('');
+      setHiddenPrompt('');
+      clearAttachments();
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+      }
+    },
+    [inputValue, hiddenPrompt, disabled, isStreaming, isParsing, cliBadge, attachments, hasUnparsedDocs, buildContentWithChips, clearAttachments, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, activeModes, requestRecap, workingDirectory, t, bangRun],
+  );
+
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLDivElement>) => {
+      // When popover is open, handle navigation
+      if (popoverMode && popoverMode !== 'cli' && filteredItems.length > 0) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setSelectedIndex((prev) => (prev + 1) % filteredItems.length);
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setSelectedIndex((prev) => (prev - 1 + filteredItems.length) % filteredItems.length);
+          return;
+        }
+        if (e.key === 'Enter' || e.key === 'Tab') {
+          e.preventDefault();
+          const item = filteredItems[selectedIndex];
+          if (!item) return;
+          // Dispatch by kind — same logic as popover's handleItemClick.
+          switch (item.kind) {
+            case 'settings_action':
+              if (item.value === '__add_files') {
+                fileInputRef.current?.click();
+              } else if (item.value.startsWith('/')) {
+                // Registry command (e.g. /recap) — dispatch through the
+                // executor table; the result surfaces in the shared dialog.
+                void (async () => {
+                  const result = await runSlashCommand(item.value);
+                  if (result.type === 'text') {
+                    setCommandResult({ title: item.value, content: result.content });
+                  } else if (result.type === 'error') {
+                    setCommandResult({ title: item.value, content: result.message, isError: true });
+                  }
+                })();
+              } else {
+                onExecuteCommand?.(item.value);
+              }
+              closePopover();
+              return;
+            case 'settings_submenu':
+              // Sub-view navigation is click-only; ignore keyboard activation.
+              return;
+            case 'conductor_toggle': {
+              // Deprecated kind — route through unified toggle.
+              handleToggleMode('conductor');
+              return;
+            }
+            case 'mode': {
+              const modeValue = item.modeValue as ModeModifierId | undefined;
+              if (!modeValue) return;
+              handleToggleMode(modeValue);
+              return;
+            }
+            default:
+              insertItem(item);
+              return;
+          }
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          closePopover();
+          return;
+        }
+      }
+
+      // Submit on Enter (without shift)
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        const hasContent = inputValue.trim() || attachments.length > 0;
+        if (hasContent) {
+          handleSubmit({ preventDefault: () => {} } as FormEvent);
+        }
+      }
+    },
+    [isStreaming, inputValue, attachments, popoverMode, filteredItems, selectedIndex, insertItem, closePopover, handleSubmit],
+  );
+
+  const handleStop = useCallback(() => {
+    onStop?.();
+  }, [onStop]);
+
+  // Plan 411 Phase 3: when the user taps the mic and the STT environment is
+  // not ready, auto-inject a guide message that directs the agent to the
+  // `voice-setup` skill. De-duplicated via localStorage so it only fires once
+  // per install (the agent drives the actual setup through `duya_cli`).
+  const handleVoiceNeedsSetup = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      if (localStorage.getItem('duya.voice.setupPromptShown') === '1') return;
+      localStorage.setItem('duya.voice.setupPromptShown', '1');
+    } catch {
+      // localStorage unavailable — still inject once per session below.
+    }
+    const guide =
+      '语音输入尚未就绪。用户可在 设置 → 语音输入 一键安装 whisper 运行时与模型；' +
+      '或使用 voice-setup 技能，通过 duya_cli 依次执行 voice doctor 诊断环境、' +
+      'voice setup 下载模型、voice enable / voice set 写入配置，最后复检确保语音立即可用。';
+    const sendMode = pickMessageMode(activeModes);
+    const conductorMode = activeModes.has('conductor') || undefined;
+    onSend(guide, undefined, undefined, sendMode, guide, conductorMode);
+  }, [onSend, activeModes]);
+
+  // Dictation appends to the input instead of replacing it: snapshot the
+  // text when a session starts, show interim as base + interim, and commit
+  // each final result onto the base. Logic lives in the pure helper
+  // `applyDictation` so the append semantics are unit-testable.
+  const voiceBaseTextRef = useRef('');
+  const inputValueRef = useRef(inputValue);
+  inputValueRef.current = inputValue;
+
+  // `dictating` spans a whole push-to-talk session (not just `recording`):
+  // interim transcripts land in the input while the mic is still held, and
+  // the voice/send button swap must not fire on that transient text.
+  const [dictating, setDictating] = useState(false);
+
+  // Session switches reset both transient composer states — a panel left
+  // open for thread A never bleeds into thread B, and a dictation session
+  // can never outlive its composer's session.
+  useEffect(() => {
+    setContextPanelOpen(false);
+    setDictating(false);
+  }, [sessionId]);
+
+  const handleVoiceSessionStart = useCallback(() => {
+    voiceBaseTextRef.current = inputValueRef.current;
+    setDictating(true);
+  }, []);
+
+  const handleVoiceSessionEnd = useCallback(() => {
+    voiceBaseTextRef.current = '';
+    setDictating(false);
+  }, []);
+
+  const handleVoiceTranscription = useCallback((text: string, kind: 'interim' | 'final') => {
+    const { display, base } = applyDictation(voiceBaseTextRef.current, text, kind);
+    voiceBaseTextRef.current = base;
+    setInputValue(display);
+  }, []);
+
+  // Remove CLI badge handler
+  const handleRemoveCliBadge = useCallback(() => {
+    setCliBadge(null);
+  }, []);
+
+  // STT module configured (enabled + model ready) — gates whether the mic
+  // earns the send-button slot on an empty composer.
+  const voiceConfigured = useVoiceConfigured();
+
+  // Typed intent = text or attachments present. Transient dictation text
+  // (interim transcripts while the mic is held) does not count — the
+  // voice/send swap must stay on the mic for the whole session.
+  const hasTypedContent =
+    (inputValue.trim().length > 0 || attachments.length > 0) && !dictating;
+
+  return (
+    <div className="flex flex-col">
+      {/* Document Parse Errors */}
+      {parseErrors.size > 0 && (
+        <div className="flex flex-wrap gap-2 mb-2">
+          {Array.from(parseErrors.entries()).map(([filename, error]) => (
+            <div
+              key={filename}
+              className="flex items-center gap-1 px-2 py-1 bg-destructive/10 text-destructive rounded-full text-xs"
+              title={error}
+            >
+              <XCircleIcon size={12} />
+              <span className="truncate max-w-[150px]">{filename}</span>
+              <span className="text-destructive/60 text-[10px]">解析失败</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Main Input Area */}
+      <form onSubmit={handleSubmit} className="relative">
+        {/* Slash Command Popover */}
+        <SlashCommandPopover
+          popoverMode={popoverMode}
+          popoverRef={popoverRef}
+          filteredItems={filteredItems}
+          selectedIndex={selectedIndex}
+          popoverFilter={popoverFilter}
+          inputValue={inputValue}
+          triggerPos={triggerPos}
+          searchInputRef={searchInputRef}
+          allDisplayedItems={filteredItems}
+          placement={popoverPlacement}
+          // Settings state + callbacks
+          thinkingEffort={selectedEffort ?? null}
+          onSelectThinkingEffort={handleEffortChange}
+          // Strip the `[provider] ` prefix so @duya/ai sees the raw model id
+          // (e.g. 'MiniMax-M3') it can look up in allProviderModels.
+          modelId={selectedModel.replace(/^\[[^\]]+\]\s*/, '')}
+          providerId={modelProviderMap.get(selectedModel)}
+          responseStyles={responseStyles.map(s => ({ id: s.id, name: s.name, description: s.description }))}
+          selectedStyle={selectedStyleId}
+          onSelectStyle={(styleId) => setSelectedStyleId(styleId)}
+          mcpServers={mcpServers}
+          onToggleMcpServer={(serverName, enabled) => {
+            const target = mcpServers.find((server) => server.name === serverName);
+            if (!target?.writable || !window.electronAPI?.settings?.getMcpServers || !window.electronAPI.settings.setMcpServers) return;
+            void (async () => {
+              const current = await window.electronAPI.settings.getMcpServers();
+              if (!current.success || !Array.isArray(current.data)) return;
+              const updated = current.data.map((server: {
+                name: string;
+                command: string;
+                args?: string[];
+                env?: Record<string, string>;
+                enabled?: boolean;
+              }) =>
+                server.name === serverName ? { ...server, enabled } : server,
+              );
+              const result = await window.electronAPI.settings.setMcpServers(updated);
+              if (result.success) {
+                setMcpServers((prev) => prev.map((server) =>
+                  server.name === serverName ? { ...server, enabled } : server,
+                ));
+              }
+            })();
+          }}
+          onReloadMcp={() => {
+            // Force a worker-side MCP reload (reconnect), then re-pull the
+            // snapshot so the status/tools reflect the reconnection.
+            void (async () => {
+              if (window.electronAPI?.settings?.reloadMcp) {
+                try {
+                  await window.electronAPI.settings.reloadMcp();
+                } catch {
+                  // best-effort: reload may fail if the agent server is down
+                }
+              }
+              await refreshMcpServers();
+            })();
+          }}
+          onAddFiles={() => fileInputRef.current?.click()}
+          onCompact={onCompact}
+          isCompacting={isCompacting}
+
+          focusEnabled={focusEnabled}
+          onToggleFocus={handleToggleFocus}
+
+          onRequestRecap={requestRecap}
+          sessionId={sessionId}
+          // Mode state (unified activeModes set, plan 224 Phase 5)
+          activeModes={activeModes}
+          onToggleMode={handleToggleMode}
+          onInsertItem={insertItem}
+          onSetSelectedIndex={setSelectedIndex}
+          onSetPopoverFilter={setPopoverFilter}
+          onSetInputValue={setInputValue}
+          onClosePopover={closePopover}
+          onFocusTextarea={() => textareaRef.current?.focus()}
+        />
+
+        <div
+          className={`message-input-surface relative z-[1] rounded-3xl p-2 transition-shadow ${isDraggingOver ? 'message-input-drop-active' : ''} ${planModeActive ? 'message-input-plan-mode-active' : ''}`}
+          style={{ backgroundColor: 'var(--composer-bg)', boxShadow: planModeActive
+            ? 'inset 0 0 0 1px var(--accent), 0 0 0 1px rgba(125, 180, 255, 0.35), 0 0 14px rgba(125, 180, 255, 0.45)'
+            : 'inset 0 0 0 1px var(--border-color)' }}
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          {editDraft && (
+            <div className="composer-edit-banner">
+              <span>{t('chat.editingMessage')}</span>
+              <Button type="button" variant="ghost" size="sm" disabled={isSubmitting} onClick={cancelEdit}>{t('mailbox.bubble.cancelEdit')}</Button>
+            </div>
+          )}
+          {sendError && <p className="composer-send-error" role="alert">{sendError}</p>}
+          {/* Drag-and-drop overlay */}
+          {isDraggingOver && (
+            <div className="message-input-drop-overlay" role="status" aria-live="polite">
+              <div className="message-input-drop-card">
+                <PaperclipIcon size={20} />
+                <span>{t('messageInput.dropFilesHint') || '松开以添加为附件'}</span>
+              </div>
+            </div>
+          )}
+          {/* ZCode-style per-line code comments from the review panel's
+              preview: pending chips above the attachments, injected into
+              the outgoing model content by buildContentWithChips. */}
+          <CodeCommentStrip workingDirectory={workingDirectory} />
+          {/* Plan 220 Phase 4: unified attachment bar above the editor.
+              All 5 attachment kinds (file / image / pasted-text /
+              terminal-ref / browser-ref / file-tree-ref) render through
+              this single component. */}
+          <AttachmentBar
+            attachments={attachments}
+            mode="input"
+            onRemove={(id) => {
+              removeAttachment(id);
+              requestAnimationFrame(() => adjustTextareaHeight());
+            }}
+          />
+
+          {/* Plan 416: in-input task progress row above the textarea.
+              Renders nothing when there are no tasks and no git
+              changes, so the input box stays compact. */}
+          {(tasks || turnReview) && gitStatus && onToggleTaskStatus && (
+            <InlineTaskRow
+              tasks={tasks ?? []}
+              gitStatus={gitStatus}
+              onToggleStatus={onToggleTaskStatus}
+              workingDirectory={workingDirectory ?? null}
+              showFileChanges={showFileChanges ?? true}
+              turnReview={turnReview ?? null}
+              sessionId={sessionId}
+            />
+          )}
+
+          {/* Textarea */}
+          <RichTextInput
+            ref={textareaRef}
+            value={inputValue}
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePasteEvent}
+            placeholder={cliBadge ? t('messageInput.describeWhat') : (placeholder || t('chat.placeholder'))}
+            disabled={disabled}
+            mentionTargets={pluginMentionTargets}
+          />
+
+          {/* CLI Badge */}
+          {cliBadge && (
+            <div className="mt-2 flex items-center gap-2">
+              <span className="px-2 py-0.5 bg-green-500/10 text-green-400 rounded text-xs">
+                CLI: {cliBadge.name}
+              </span>
+              <IconButton
+                variant="ghost"
+                shape="round"
+                size="sm"
+                aria-label="Remove CLI badge"
+                onClick={handleRemoveCliBadge}
+                className="bg-gray-700 hover:bg-gray-600"
+              >
+                <XIcon size={10} />
+              </IconButton>
+            </div>
+          )}
+
+          {/* Bottom Toolbar */}
+          <div className="mt-1 px-2 flex min-w-0 items-center gap-2">
+            <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-visible">
+              {/* Plus Button — opens the `@` context popup (添加附件 / mode / MCP). The
+                  `/` commands are only reachable by typing `/` in the input. */}
+              <IconButton
+                variant="ghost"
+                shape="square"
+                size="md"
+                aria-label={t('common.settings') || 'Settings'}
+                data-plus-trigger
+                onClick={() => {
+                  if (popoverMode === 'context') {
+                    closePopover();
+                  } else {
+                    openContextPopover();
+                  }
+                }}
+                className={`border ${
+                  popoverMode === 'context'
+                    ? 'text-foreground bg-chip border-border'
+                    : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-accent/50'
+                }`}
+                title={t('common.settings') || 'Settings'}
+              >
+                <PlusIcon size={16} />
+              </IconButton>
+              {/* Permission mode toggle — right of the attachment button. */}
+              {permissionMode && onPermissionModeChange && (
+                <PermissionModeSelector
+                  value={permissionMode}
+                  onChange={onPermissionModeChange}
+                />
+              )}
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={async (e) => {
+                  const input = e.target;
+                  if (!input.files) return;
+                  for (const file of Array.from(input.files)) {
+                    await addFile(file);
+                  }
+                  input.value = '';
+                }}
+              />
+
+              {/* Mode Badges — one chip per active mode (plan-task / research / conductor).
+                  Plan 224 follow-up: if the agent self-entered plan mode via a
+                  tool call (agentPlanMode) and the user hasn't ALSO toggled
+                  plan-task in the popover, render a read-only "Agent Plan Mode"
+                  chip so the user sees the agent's state. Clicking it is a no-op
+                  — only the agent can exit this state (via ExitPlanMode tool). */}
+              {activeModes.size > 0 && Array.from(activeModes).map((mode) => {
+                const label = mode === 'research'
+                  ? 'Deep Research'
+                  : mode === 'plan-task'
+                    ? 'Plan Mode'
+                    : mode === 'conductor'
+                      ? 'Conductor'
+                      : mode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => handleToggleMode(mode)}
+                    className="group flex min-w-0 max-w-24 shrink items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium text-[#7db4ff] border border-transparent hover:bg-[rgba(37,99,235,0.18)] hover:border-[#7db4ff]/40"
+                    title={`${label} (click to disable)`}
+                  >
+                    <XIcon
+                      size={14}
+                      className="hidden group-hover:block"
+                    />
+                    <span className="truncate">{label}</span>
+                  </button>
+                );
+              })}
+              {agentPlanMode && !activeModes.has('plan-task') && (
+                <span
+                  className="flex min-w-0 max-w-32 shrink items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-[#7db4ff] border border-[#7db4ff]/40 bg-[rgba(37,99,235,0.12)] cursor-default"
+                  title="Agent entered plan mode — it will exit automatically when done planning"
+                >
+                  <span className="truncate">Agent Plan Mode</span>
+                </span>
+              )}
+              {/* Live background-task chip (bash commands + sub-agents).
+                  Keep it after permission and active-mode controls; when no
+                  mode is active, it becomes the third toolbar action. */}
+              <BackgroundTasksIndicator sessionId={sessionId} />
+            </div>
+
+            {/* Right: one button slot, three states. While streaming with
+                nothing typed, show Stop. Once there is typed content (or
+                attachments), show Send — a Send during streaming queues the
+                message instead of interrupting. With an empty composer and
+                the STT module configured, the mic takes the slot; when voice
+                is not configured, Send keeps it (disabled while empty). */}
+            <div className="flex shrink-0 items-center gap-1">
+              {hasQueuedMessages && !isStreaming && (
+                <span className="text-xs text-muted-foreground bg-accent/20 px-1.5 py-0.5 rounded-full select-none">
+                  +{1}
+                </span>
+              )}
+              {/* Context-usage ring — trigger only (variant="panel"): the
+                  stats expand in a panel below the input box. Hidden on
+                  brand-new sessions where there is nothing to measure. */}
+              {messages.length > 0 && (
+                <ContextUsageRing
+                  variant="panel"
+                  expanded={contextPanelOpen}
+                  onToggle={() => setContextPanelOpen((v) => !v)}
+                  messages={messages}
+                  sessionId={sessionId}
+                  modelName={modelName}
+                  contextWindow={contextWindow}
+                  pricing={contextPricing}
+                  onCompress={onCompact}
+                  isCompacting={isCompacting}
+                />
+              )}
+              {/* Model / Provider / Effort selector — next to the send button */}
+              {hasProvider && providerGroups.length > 0 && (
+                <ModelProviderSelector
+                  ref={modelSelectorRef}
+                  providerGroups={providerGroups}
+                  selectedModelId={selectedModel}
+                  onSelectModel={handleModelChange}
+                  effortValue={selectedEffort}
+                  effortOptions={modelEffortOptions}
+                  onSelectEffort={handleEffortChange}
+                  disabled={isStreaming}
+                  loading={modelsLoading}
+                />
+              )}
+              {/* While dictating, the mic keeps the slot no matter what —
+                  swapping it for Stop/Send mid-recording would unmount the
+                  capture chain. Stop and Send only contend once it ends. */}
+              {!dictating && isStreaming && onStop ? (
+                <IconButton
+                  variant="danger"
+                  shape="round"
+                  size="md"
+                  aria-label="Stop"
+                  onClick={handleStop}
+                  className="bg-red-500/20 text-red-400 hover:bg-red-500/30 ml-1"
+                  title="Stop"
+                >
+                  <StopIcon size={16} />
+                </IconButton>
+              ) : !dictating && (hasTypedContent || !voiceConfigured) ? (
+                <IconButton
+                  type="submit"
+                  variant="primary"
+                  shape="round"
+                  size="md"
+                  aria-label="Send"
+                  title="Send"
+                  disabled={disabled || !hasTypedContent}
+                  className="bg-[var(--send-btn)] hover:bg-[var(--send-btn-hover)] ml-1"
+                >
+                  <ArrowUpIcon size={16} />
+                </IconButton>
+              ) : (
+                <VoiceButton
+                  disabled={disabled || isStreaming}
+                  onTranscription={handleVoiceTranscription}
+                  onNeedsSetup={handleVoiceNeedsSetup}
+                  onSessionStart={handleVoiceSessionStart}
+                  onSessionEnd={handleVoiceSessionEnd}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+
+      </form>
+
+      {/* Context-usage stats panel — rendered below the input box. The
+          composer column is bottom-anchored, so while it is open the input
+          box shifts up to make room and collapses back to zero height (no
+          reserved space) when the ring is clicked again. */}
+      {messages.length > 0 && (
+        <ContextUsagePanel
+          open={contextPanelOpen}
+          messages={messages}
+          sessionId={sessionId}
+          modelName={modelName}
+          contextWindow={contextWindow}
+          pricing={contextPricing}
+          onCompress={onCompact}
+          isCompacting={isCompacting}
+        />
+      )}
+
+      {/* Slash-command / `!cmd` output surface — shared dialog so info-style
+          commands don't each need their own UI. */}
+      <CommandResultDialog
+        open={commandResult !== null}
+        title={commandResult?.title ?? ''}
+        content={commandResult?.content ?? ''}
+        mono={commandResult?.mono}
+        isError={commandResult?.isError}
+        onClose={() => setCommandResult(null)}
+      />
+
+      {/* Single-line prompt bridge for executors (e.g. /rename). */}
+      <InputDialog
+        isOpen={promptRequest !== null}
+        title={promptRequest?.title ?? ''}
+        placeholder={promptRequest?.placeholder}
+        defaultValue={promptRequest?.initialValue}
+        onConfirm={(value) => {
+          promptRequest?.resolve(value);
+          setPromptRequest(null);
+        }}
+        onCancel={() => {
+          promptRequest?.resolve(null);
+          setPromptRequest(null);
+        }}
+      />
+
+    </div>
+  );
+}

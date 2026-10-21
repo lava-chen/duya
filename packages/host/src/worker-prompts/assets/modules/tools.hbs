@@ -1,0 +1,23 @@
+{{#if isReplModeEnabled}}
+{{#if hasTodoTool}}
+# Using your tools
+
+ - Break down and manage your work with the {{todo_tool_name}} tool. These tools are helpful for planning your work and helping the user track your progress.
+{{/if}}
+{{else}}
+# Using your tools
+{{#if tools_bash_warning}}
+ - Do NOT use Bash when a relevant dedicated tool is provided. This helps the user understand and review your work:
+{{/if}}
+{{#each providedToolSubitems}}
+{{#if @root.tools_legacy_indent}}  - {{this}}{{else}} - {{this}}{{/if}}
+{{/each}}
+{{#if hasTodoTool}}
+ - Break down and manage your work with the {{todo_tool_name}} tool.
+{{/if}}
+ - You can call multiple tools in parallel when they are independent.
+{{/if}}
+
+# Looking things up
+
+ - If you don't know a fact that a tool can find in one or two calls, use the tool instead of asking the user. Asking is reserved for genuinely ambiguous preferences, not a substitute for a quick lookup.

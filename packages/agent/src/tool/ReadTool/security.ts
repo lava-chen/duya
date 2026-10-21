@@ -1,0 +1,6 @@
+/**
+ * Plan 610 A8 shim   ?ReadTool path safety checks moved to
+ * `@duya/capabilities` (`fs/read-security`). Pass-through.
+ */
+
+export * from '@duya/capabilities/ReadTool/security';

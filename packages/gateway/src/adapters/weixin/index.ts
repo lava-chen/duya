@@ -1,0 +1,1013 @@
+/**
+ * WeChat (weixin) Platform Adapter
+ *
+ * Communicates with the WeChat personal account via iLink Bot API.
+ *
+ * Key design:
+ *   - Long-poll loop drives inbound message delivery
+ *   - Outbound replies are split by weixin-specific formatting rules
+ *   - Chunk delay between sequential sends for natural pacing
+ *   - Typing indicator support via sendTyping/stopTyping
+ *   - WeChat does NOT support message editing (SUPPORTS_MESSAGE_EDITING = false)
+ */
+
+import type {
+  PlatformType,
+  PlatformConfig,
+  NormalizedMessage,
+  NormalizedReply,
+  SendResult,
+} from '../../types.js';
+import { BaseAdapter } from '../base-adapter.js';
+import type { AdapterHealthState } from '../base-adapter.js';
+import {
+  formatMessage,
+  splitTextForWeixinDelivery,
+  WX_MAX_MESSAGE_LENGTH,
+  rewriteMarkdownLinks,
+} from './markdown-utils.js';
+import type { WeChatMessage, WeChatConfigOptions } from './types.js';
+import { parseMessageContent, isFromGroup } from './message-utils.js';
+import { createWeixinApiClient, getMimeFromFilename, MessageItemType } from './api.js';
+import type { IpcClient } from '../../ipc-client.js';
+import { WeixinStateStore, acquireTokenLock, releaseTokenLock } from './state-store.js';
+import path from 'node:path';
+import os from 'node:os';
+import fs from 'node:fs';
+import { createHash } from 'node:crypto';
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const ILINK_BASE_URL = 'https://ilinkai.weixin.qq.com';
+const DEFAULT_CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c';
+const LONG_POLL_TIMEOUT_MS = 35_000;
+const API_TIMEOUT_MS = 8_000;
+const MAX_CONSECUTIVE_FAILURES = 3;
+const RETRY_DELAY_SECONDS = 2;
+const BACKOFF_DELAY_SECONDS = 30;
+const MESSAGE_DEDUP_TTL_MS = 5 * 60 * 1000;
+
+const DEFAULT_CHUNK_DELAY_SECONDS = 0.35;
+const DEFAULT_CHUNK_RETRIES = 2;
+const DEFAULT_CHUNK_RETRY_DELAY_SECONDS = 1.0;
+
+const TYPING_START = 1;
+const TYPING_STOP = 2;
+
+// iLink error codes
+const SESSION_EXPIRED_ERRCODE = -14;
+const RATE_LIMIT_ERRCODE = -2;
+
+// Rate-limit circuit breaker
+const RATE_LIMIT_CIRCUIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_CIRCUIT_THRESHOLD = 3;
+const RATE_LIMIT_CIRCUIT_OPEN_MS = 30_000;
+
+/**
+ * Strip path separators and other unsafe chars from a filename so it can be
+ * safely embedded into a generated cache path. WeChat file names are user-
+ * supplied and could contain characters that would break path.join.
+ */
+function sanitizeFileName(name: string): string {
+  const base = path.basename(name.replace(/[\\/]/g, '_'));
+  return base.replace(/[^a-zA-Z0-9._-]/g, '_') || 'attachment';
+}
+
+// ---------------------------------------------------------------------------
+// Adapter
+// ---------------------------------------------------------------------------
+
+export class WeixinAdapter extends BaseAdapter {
+  readonly platform: PlatformType = 'weixin';
+  SUPPORTS_MESSAGE_EDITING = false;
+
+  private accountId = '';
+  private baseUrl = ILINK_BASE_URL;
+  private cdnBaseUrl = DEFAULT_CDN_BASE_URL;
+  /** Per-instance iLink API client (owns its own token/baseUrl/cdnBaseUrl). */
+  private client: ReturnType<typeof createWeixinApiClient> | null = null;
+  /** Override state store root (per-bot connectors isolate their WeChat state). */
+  private stateDir?: string;
+  /** Bound client accessor — throws if the adapter hasn't started yet. */
+  private get api(): ReturnType<typeof createWeixinApiClient> {
+    if (!this.client) {
+      throw new Error('WeixinApiClient not initialized (WeixinAdapter.start not called)');
+    }
+    return this.client;
+  }
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private sendChunkDelaySeconds: number = DEFAULT_CHUNK_DELAY_SECONDS;
+  private sendChunkRetries: number = DEFAULT_CHUNK_RETRIES;
+  private sendChunkRetryDelaySeconds: number = DEFAULT_CHUNK_RETRY_DELAY_SECONDS;
+  private splitMultilineMessages = false;
+  private pollSyncBuf = '';
+  private consecutiveFailures = 0;
+
+  // DM policy
+  private dmPolicy: 'open' | 'allowlist' | 'disabled' | 'pairing' = 'open';
+  private allowFrom: Set<string> = new Set();
+
+  // Group policy
+  private groupPolicy: 'disabled' | 'allowlist' | 'pairing' = 'disabled';
+  private groupAllowFrom: Set<string> = new Set();
+
+  // Deduplication (timestamp-based for WeChat)
+  private recentMsgIds = new Set<string>();
+  private dedupCleanupTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Content-fingerprint dedup (supplements message_id dedup)
+  private recentContentFingerprints = new Set<string>();
+
+  // Context token per peer (mirrors the persisted store)
+  private contextTokens = new Map<string, string>();
+
+  // Persisted state (context_token + sync_buf)
+  private stateStore: WeixinStateStore | null = null;
+  private tokenLockHeld = false;
+
+  // Rate-limit circuit breaker
+  private rateLimitEvents: number[] = [];
+  private rateLimitCircuitUntil = 0;
+
+  // Typing indicator
+  private typingActive = new Map<string, boolean>();
+  private typingKeepalives = new Map<string, ReturnType<typeof setInterval>>();
+  private typingTickets = new Map<string, string>();
+
+  constructor(options?: {
+    rateLimitMs?: number;
+    dedupCapacity?: number;
+    stateDir?: string;
+  }) {
+    super({
+      rateLimitMs: options?.rateLimitMs ?? 1000,
+      dedupCapacity: options?.dedupCapacity ?? 200,
+    });
+    this.stateDir = options?.stateDir;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Lifecycle
+  // ---------------------------------------------------------------------------
+
+  async start(config: PlatformConfig): Promise<void> {
+    console.log('[STARTUP] WeixinAdapter.start called');
+    console.log('[STARTUP] WeixinAdapter: config.credentials =', JSON.stringify({
+      hasBotToken: !!config.credentials.botToken,
+      botTokenLength: config.credentials.botToken?.length ?? 0,
+      botTokenPrefix: config.credentials.botToken?.substring(0, 4) ?? 'none',
+      hasIlinkBotId: !!config.credentials.ilinkBotId,
+      ilinkBotId: config.credentials.ilinkBotId ?? 'none',
+      baseUrl: config.credentials.baseUrl ?? config.credentials.base_url ?? 'none',
+    }));
+    const weixinOptions = config.options as WeChatConfigOptions | undefined;
+    this.token = (config.credentials.botToken ?? config.credentials.token ?? config.credentials.bot_token ?? '') as string;
+    this.accountId = (config.credentials.ilinkBotId ?? config.credentials.account_id ?? config.credentials.app_id ?? '') as string;
+
+    if (!this.token) {
+      console.warn('[Weixin] No token configured - adapter not starting');
+      console.warn('[Weixin] Available credentials keys:', Object.keys(config.credentials));
+      console.warn('[Weixin] Available credentials:', config.credentials);
+      return;
+    }
+
+    // Token exclusive lock: refuse to poll a token another instance is using.
+    this.tokenLockHeld = acquireTokenLock(this.token);
+    if (!this.tokenLockHeld) {
+      console.warn('[Weixin] Another instance already holds a lock for this token; continuing without lock');
+    }
+
+    // Restore persisted state (context_token + sync_buf) for continuity.
+    this.stateStore = new WeixinStateStore(this.accountId || 'default', this.stateDir);
+    for (const peer of this.contextTokens.keys()) {
+      this.contextTokens.delete(peer);
+    }
+    this.pollSyncBuf = this.stateStore.getSyncBuf();
+
+    this.baseUrl = (config.credentials.baseUrl ?? config.credentials.base_url ?? ILINK_BASE_URL) as string;
+    console.log('[STARTUP] WeixinAdapter: token=%s, accountId=%s, baseUrl=%s', this.token ? this.token.substring(0, 8) + '...' : 'MISSING', this.accountId || 'MISSING', this.baseUrl);
+    this.sendChunkDelaySeconds =
+      (weixinOptions?.send_chunk_delay_seconds as number) ??
+      (Number(config.credentials.send_chunk_delay_seconds) || DEFAULT_CHUNK_DELAY_SECONDS);
+    this.sendChunkRetries =
+      (weixinOptions?.send_chunk_retries as number) ??
+      (Number(config.credentials.send_chunk_retries) || DEFAULT_CHUNK_RETRIES);
+    this.sendChunkRetryDelaySeconds =
+      (weixinOptions?.send_chunk_retry_delay_seconds as number) ??
+      DEFAULT_CHUNK_RETRY_DELAY_SECONDS;
+
+    this.splitMultilineMessages =
+      (weixinOptions?.split_multiline_messages as boolean) ??
+      false;
+
+    // DM policy configuration
+    const dmPolicyRaw = (weixinOptions?.dm_policy as string) ??
+      (config.credentials.dm_policy as string) ?? 'open';
+    this.dmPolicy = ['open', 'allowlist', 'disabled', 'pairing'].includes(dmPolicyRaw)
+      ? (dmPolicyRaw as 'open' | 'allowlist' | 'disabled' | 'pairing')
+      : 'open';
+
+    const allowFromRaw = weixinOptions?.allow_from as string[] | undefined;
+    if (allowFromRaw) {
+      this.allowFrom = new Set(allowFromRaw);
+    }
+
+    // Group policy configuration
+    const groupPolicyRaw = (weixinOptions?.group_policy as string) ??
+      (config.credentials.group_policy as string) ?? 'disabled';
+    this.groupPolicy = ['disabled', 'allowlist', 'pairing'].includes(groupPolicyRaw)
+      ? (groupPolicyRaw as 'disabled' | 'allowlist' | 'pairing')
+      : 'disabled';
+
+    const groupAllowFromRaw = weixinOptions?.group_allow_from as string[] | undefined;
+    if (groupAllowFromRaw) {
+      this.groupAllowFrom = new Set(groupAllowFromRaw);
+    }
+
+    this.running = true;
+    this.consecutiveFailures = 0;
+    this.updateHealthConnected();
+
+    this.cdnBaseUrl = (config.credentials.cdnBaseUrl ?? config.credentials.cdn_base_url ?? DEFAULT_CDN_BASE_URL) as string;
+    this.client = createWeixinApiClient({
+      baseUrl: this.baseUrl,
+      token: this.token,
+      timeoutMs: API_TIMEOUT_MS,
+      cdnBaseUrl: this.cdnBaseUrl,
+      useProxy: config.useProxy ?? true,
+    });
+
+    this.startPollLoop();
+    this.startDedupCleanup();
+
+    console.log(
+      `[Weixin] Started account=${this.accountId.slice(0, 8)} ` +
+      `chunkDelay=${this.sendChunkDelaySeconds}s retries=${this.sendChunkRetries}`,
+    );
+  }
+
+  async stop(): Promise<void> {
+    this.running = false;
+
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = null;
+    }
+    if (this.dedupCleanupTimer) {
+      clearTimeout(this.dedupCleanupTimer);
+      this.dedupCleanupTimer = null;
+    }
+
+    this.recentMsgIds.clear();
+    this.recentContentFingerprints.clear();
+    this.typingActive.clear();
+
+    for (const interval of this.typingKeepalives.values()) {
+      clearInterval(interval);
+    }
+    this.typingKeepalives.clear();
+    this.typingTickets.clear();
+
+    if (this.stateStore) {
+      // Persist any in-memory context_token that was captured this run.
+      for (const [peer, token] of this.contextTokens) {
+        this.stateStore.setContextToken(peer, token);
+      }
+      this.stateStore.flush();
+      this.stateStore = null;
+    }
+    if (this.tokenLockHeld) {
+      releaseTokenLock(this.token);
+      this.tokenLockHeld = false;
+    }
+
+    console.log('[Weixin] Stopped');
+  }
+
+  isRunning(): boolean {
+    return this.running;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Outbound: sendReply
+  // ---------------------------------------------------------------------------
+
+  async sendReply(chatId: string, reply: NormalizedReply): Promise<SendResult> {
+    if (reply.type === 'error') {
+      return this.sendText(chatId, `❌ ${reply.message}`);
+    }
+
+    if (reply.type === 'text') {
+      return this.sendText(chatId, reply.text);
+    }
+
+    if (reply.type === 'stream_end') {
+      return this.sendText(chatId, reply.finalText);
+    }
+
+    if (reply.type === 'stream_start') {
+      return { ok: true };
+    }
+
+    if (reply.type === 'stream_chunk') {
+      return { ok: true };
+    }
+
+    if (reply.type === 'permission_request') {
+      return this.sendText(chatId, reply.text);
+    }
+
+    if (reply.type === 'media') {
+      return this.sendMedia(chatId, reply);
+    }
+
+    return { ok: false, error: `Unsupported reply type: ${(reply as NormalizedReply).type}` };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Typing indicators
+  // ---------------------------------------------------------------------------
+
+  async sendTyping(chatId: string): Promise<void> {
+    if (this.typingKeepalives.has(chatId)) return;
+
+    let ticket = this.typingTickets.get(chatId);
+    if (!ticket) {
+      try {
+        const cfg = await this.api.getConfig(chatId);
+        if (cfg && typeof cfg.typing_ticket === 'string') {
+          ticket = cfg.typing_ticket;
+          this.typingTickets.set(chatId, ticket);
+        }
+      } catch {
+        // Best-effort: proceed without ticket
+      }
+    }
+
+    const doTyping = async () => {
+      try {
+        await this.api.sendTyping(chatId, TYPING_START, ticket);
+        this.typingActive.set(chatId, true);
+      } catch {
+        // Best-effort
+      }
+    };
+
+    await doTyping();
+    this.typingKeepalives.set(chatId, setInterval(doTyping, 5000));
+    console.log('[WeChat] Typing started for:', chatId);
+  }
+
+  async stopTyping(chatId: string): Promise<void> {
+    const interval = this.typingKeepalives.get(chatId);
+    if (interval) {
+      clearInterval(interval);
+      this.typingKeepalives.delete(chatId);
+    }
+    try {
+      await this.api.sendTyping(chatId, TYPING_STOP);
+      this.typingActive.set(chatId, false);
+    } catch {
+      // Best-effort
+    }
+    console.log('[WeChat] Typing stopped for:', chatId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: text sending
+  // ---------------------------------------------------------------------------
+
+  private async sendText(chatId: string, text: string): Promise<SendResult> {
+    if (!text || !text.trim()) return { ok: true };
+
+    const formatted = formatMessage(text);
+    const chunks = splitTextForWeixinDelivery(
+      formatted,
+      WX_MAX_MESSAGE_LENGTH,
+      this.splitMultilineMessages,
+    );
+
+    let lastMsgId: string | undefined;
+    let sendErrors = 0;
+
+    for (let idx = 0; idx < chunks.length; idx++) {
+      const chunk = chunks[idx];
+
+      try {
+        const result = await this.sendChunk(chatId, chunk);
+        if (!result.ok) {
+          sendErrors++;
+          if (sendErrors >= this.sendChunkRetries) {
+            return result;
+          }
+        } else {
+          sendErrors = 0;
+          lastMsgId = result.platformMsgId;
+        }
+      } catch (err) {
+        sendErrors++;
+        console.error(`[Weixin] Chunk send failed (${idx + 1}/${chunks.length}):`, err);
+        if (sendErrors >= this.sendChunkRetries) {
+          return {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      }
+
+      if (idx < chunks.length - 1 && this.sendChunkDelaySeconds > 0) {
+        await this.delay(this.sendChunkDelaySeconds * 1000);
+      }
+    }
+
+    return { ok: true, platformMsgId: lastMsgId };
+  }
+
+  private async sendChunk(chatId: string, text: string): Promise<SendResult> {
+    // Circuit breaker: if a rate-limit circuit is currently open, block the
+    // send immediately instead of hammering the API.
+    if (Date.now() < this.rateLimitCircuitUntil) {
+      return { ok: false, error: 'iLink rate limited; circuit open' };
+    }
+
+    let lastError: Error | undefined;
+    let contextToken = this.getContextToken(chatId);
+    let retriedWithoutToken = false;
+
+    for (let attempt = 0; attempt <= this.sendChunkRetries; attempt++) {
+      try {
+        const resp = await this.api.sendMessage(chatId, text, contextToken);
+
+        if (resp.errcode && resp.errcode !== 0) {
+          const errcode = resp.errcode;
+          const errmsg = resp.errmsg ?? '';
+
+          // Session expired: retry once without context_token (degraded fallback).
+          if (errcode === SESSION_EXPIRED_ERRCODE && !retriedWithoutToken && contextToken) {
+            retriedWithoutToken = true;
+            contextToken = undefined;
+            this.clearContextToken(chatId);
+            console.warn(`[Weixin] Session expired for ${chatId}; retrying without context_token`);
+            continue;
+          }
+
+          // Rate limited: back off, and open a circuit breaker after repeated hits.
+          if (errcode === RATE_LIMIT_ERRCODE) {
+            if (this.recordRateLimitEvent()) {
+              lastError = new Error('iLink rate limited; cooldown active');
+              break;
+            }
+            if (attempt >= this.sendChunkRetries) break;
+            const wait = this.sendChunkRetryDelaySeconds * 3 * 1000;
+            console.warn(`[Weixin] Rate limited for ${chatId}; backing off ${wait}ms`);
+            await this.delay(wait);
+            continue;
+          }
+
+          throw new Error(`Weixin API error: errcode=${errcode} errmsg=${errmsg}`);
+        }
+
+        this.resetRateLimitCircuit();
+        this.incrementMessageCount();
+        return { ok: true, platformMsgId: resp.msg_id };
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        if (lastError.message.includes('rate limited')) break;
+        if (attempt >= this.sendChunkRetries) break;
+
+        const wait = this.sendChunkRetryDelaySeconds * (attempt + 1) * 1000;
+        console.warn(
+          `[Weixin] Send retry ${attempt + 1}/${this.sendChunkRetries}, waiting ${wait}ms: ${lastError.message}`,
+        );
+        await this.delay(wait);
+      }
+    }
+
+    return { ok: false, error: lastError?.message ?? 'Send failed' };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Media sending
+  // ---------------------------------------------------------------------------
+
+  private async sendMedia(
+    chatId: string,
+    reply: { 
+      mediaType: 'photo' | 'voice' | 'video' | 'document'; 
+      filePath: string; 
+      caption?: string;
+    }
+  ): Promise<SendResult> {
+    try {
+      const { mediaType, filePath, caption } = reply;
+      const fileName = path.basename(filePath);
+      const mime = getMimeFromFilename(filePath);
+      
+      console.log(`[Weixin] Sending ${mediaType}: ${filePath} to ${chatId}`);
+
+      let uploaded;
+      if (mime.startsWith('image/')) {
+        uploaded = await this.api.uploadImageToWeixin({ filePath, toUserId: chatId });
+        await this.api.sendImageMessage({ to: chatId, text: caption, uploaded });
+      } else if (mime.startsWith('video/')) {
+        uploaded = await this.api.uploadVideoToWeixin({ filePath, toUserId: chatId });
+        await this.api.sendVideoMessage({ to: chatId, text: caption, uploaded });
+      } else {
+        uploaded = await this.api.uploadFileAttachmentToWeixin({ filePath, toUserId: chatId });
+        await this.api.sendFileMessage({ to: chatId, text: caption, fileName, uploaded });
+      }
+
+      this.incrementMessageCount();
+      return { ok: true };
+    } catch (err) {
+      console.error('[Weixin] Failed to send media:', err);
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Poll loop
+  // ---------------------------------------------------------------------------
+
+  private startPollLoop(): void {
+    const poll = async () => {
+      if (!this.running) {
+        return;
+      }
+
+      try {
+        const response = await this.api.getUpdates(this.pollSyncBuf, LONG_POLL_TIMEOUT_MS);
+
+        const newSyncBuf = response.get_updates_buf;
+        if (newSyncBuf) {
+          this.pollSyncBuf = newSyncBuf;
+          this.stateStore?.setSyncBuf(newSyncBuf);
+        }
+
+        this.consecutiveFailures = 0;
+
+        for (const msg of response.msgs ?? []) {
+          await this.processMessage(msg).catch((err) => {
+            console.error('[Weixin] Message processing error:', err);
+          });
+        }
+      } catch (err) {
+        this.consecutiveFailures++;
+
+        if (this.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          this.updateHealthError(err);
+          this.consecutiveFailures = 0;
+          this.pollTimer = setTimeout(poll, BACKOFF_DELAY_SECONDS * 1000);
+          return;
+        }
+      }
+
+      if (this.running) {
+        this.pollTimer = setTimeout(poll, RETRY_DELAY_SECONDS * 1000);
+      }
+    };
+
+    poll();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Inbound message processing
+  // ---------------------------------------------------------------------------
+
+  private async processMessage(raw: Record<string, unknown>): Promise<void> {
+    const msg = raw as unknown as WeChatMessage;
+
+    // Support both old format (MsgId, FromUserName) and new format (message_id, from_user_id)
+    const senderId = (msg.from_user_id ?? msg.FromUserName ?? '').trim();
+    if (!senderId || senderId === this.accountId) return;
+
+    const msgId = String(msg.message_id ?? msg.MsgId ?? msg.Int64 ?? '');
+    if (!msgId || this.isWeixinDup(msgId)) return;
+
+    this.markWeixinDup(msgId);
+
+    const hasTextItem = msg.item_list?.some(
+      (item) => item.type === MessageItemType.TEXT && item.text_item?.text,
+    );
+
+    const isGroup = isFromGroup(msg.to_user_id ?? msg.ToUserName ?? '');
+    const chatId = isGroup ? (msg.to_user_id ?? msg.ToUserName ?? senderId) : senderId;
+
+    // Capture context_token from the inbound message for outbound session
+    // continuity. Persist it so it survives a process restart.
+    const inboundContextToken = msg.context_token;
+    if (inboundContextToken) {
+      this.contextTokens.set(chatId, inboundContextToken);
+      this.stateStore?.setContextToken(chatId, inboundContextToken);
+    }
+
+    // Group policy check. Do this before downloading media so disallowed
+    // groups never trigger CDN fetches.
+    if (isGroup) {
+      const groupAllowed = await this.isGroupAllowedAsync(chatId);
+      if (!groupAllowed) {
+        console.log('[Weixin] Group blocked by policy:', chatId, 'policy:', this.groupPolicy);
+        return;
+      }
+    }
+
+    // Download all media (images/voice/files/videos) from item_list
+    const { imagePaths, voicePaths, filePaths, videoPaths } =
+      await this.downloadMediaFromMessage(msg, senderId);
+
+    let text = parseMessageContent(msg);
+    // Some WeChat API formats embed raw binary/base64 data in the legacy
+    // Content/StrContent field for media messages. If this message carries
+    // media but has no explicit text item, ignore that payload so it does not
+    // leak into the chat UI as garbage text.
+    if (
+      !hasTextItem &&
+      (imagePaths.length > 0 ||
+        voicePaths.length > 0 ||
+        filePaths.length > 0 ||
+        videoPaths.length > 0)
+    ) {
+      text = '';
+    }
+
+    // Skip if no text and no attachments of any kind
+    if (
+      !text &&
+      imagePaths.length === 0 &&
+      voicePaths.length === 0 &&
+      filePaths.length === 0 &&
+      videoPaths.length === 0
+    ) {
+      return;
+    }
+
+    // Content-fingerprint dedup (supplements message_id dedup, which is
+    // unreliable when the platform returns unstable or missing ids).
+    const fingerprint = this.computeContentFingerprint(
+      text,
+      imagePaths,
+      voicePaths,
+      filePaths,
+      videoPaths,
+    );
+    if (fingerprint && this.isContentDup(fingerprint)) {
+      console.log('[Weixin] Duplicate content skipped:', fingerprint);
+      return;
+    }
+    if (fingerprint) {
+      this.markContentDup(fingerprint);
+    }
+
+    // DM policy check (async for pairing)
+    const dmAllowed = await this.isDmAllowedAsync(senderId);
+    if (!dmAllowed) {
+      console.log('[Weixin] DM blocked by policy:', senderId, 'policy:', this.dmPolicy);
+      return;
+    }
+
+    const normalizedMsg: NormalizedMessage = {
+      platform: 'weixin',
+      platformUserId: senderId,
+      platformChatId: chatId,
+      platformMsgId: msgId,
+      text: text || undefined,
+      imagePaths: imagePaths.length > 0 ? imagePaths : undefined,
+      voicePaths: voicePaths.length > 0 ? voicePaths : undefined,
+      filePaths: filePaths.length > 0 ? filePaths : undefined,
+      videoPaths: videoPaths.length > 0 ? videoPaths : undefined,
+      ts: msg.create_time_ms ?? msg.CreateTime ? (msg.create_time_ms ?? msg.CreateTime!) * 1000 : Date.now(),
+    };
+
+    if (text.startsWith('/') && this.commandHandler) {
+      const handled = await this.commandHandler(normalizedMsg).catch((err) => {
+        console.error('[Weixin] Command handler error:', err);
+        return false;
+      });
+      if (!handled) {
+        this.messageHandler?.(normalizedMsg);
+      }
+    } else {
+      this.messageHandler?.(normalizedMsg);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Media download from Weixin CDN
+  // ---------------------------------------------------------------------------
+
+  private async downloadMediaFromMessage(
+    msg: WeChatMessage,
+    senderId: string
+  ): Promise<{
+    imagePaths: string[];
+    voicePaths: string[];
+    filePaths: Array<{ name: string; path: string }>;
+    videoPaths: string[];
+  }> {
+    const imagePaths: string[] = [];
+    const voicePaths: string[] = [];
+    const filePaths: Array<{ name: string; path: string }> = [];
+    const videoPaths: string[] = [];
+    const itemList = msg.item_list ?? [];
+
+    const tmpDir = path.join(os.tmpdir(), 'duya-weixin-media');
+    fs.mkdirSync(tmpDir, { recursive: true });
+
+    const uniqueName = (prefix: string, ext: string): string =>
+      path.join(
+        tmpDir,
+        `${prefix}-${senderId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`
+      );
+
+    for (const item of itemList) {
+      const itemId = item.msg_id ?? '';
+
+      if (item.type === MessageItemType.IMAGE && item.image_item) {
+        const imageItem = item.image_item;
+        const media = imageItem.media;
+        const encryptQueryParam = media?.encrypt_query_param;
+        const aesKeyHex = imageItem.aeskey;
+
+        if (!encryptQueryParam) {
+          console.warn('[Weixin] Image item missing encrypt_query_param, skipping');
+          continue;
+        }
+
+        try {
+          const imageBuffer = await this.api.downloadImage({
+            cdnBaseUrl: this.cdnBaseUrl,
+            encryptQueryParam,
+            aesKeyHex,
+            aesKeyB64: media?.aes_key,
+          });
+
+          const filePath = uniqueName('wx-img', '.jpg');
+          fs.writeFileSync(filePath, imageBuffer);
+          imagePaths.push(filePath);
+
+          console.log(`[Weixin] Downloaded image: ${filePath} (${imageBuffer.length} bytes)`);
+        } catch (err) {
+          console.error('[Weixin] Failed to download image:', err);
+        }
+        continue;
+      }
+
+      if (item.type === MessageItemType.VOICE && item.voice_item) {
+        const media = item.voice_item.media;
+        const encryptQueryParam = media?.encrypt_query_param;
+        const aesKeyB64 = media?.aes_key;
+
+        if (!encryptQueryParam || !aesKeyB64) {
+          console.warn('[Weixin] Voice item missing media params, skipping');
+          continue;
+        }
+
+        try {
+          const voiceBuffer = await this.api.downloadAndDecryptMedia({
+            encryptedQueryParam: encryptQueryParam,
+            aesKeyB64,
+          });
+
+          const filePath = uniqueName('wx-voice', '.mp3');
+          fs.writeFileSync(filePath, voiceBuffer);
+          voicePaths.push(filePath);
+
+          console.log(`[Weixin] Downloaded voice: ${filePath} (${voiceBuffer.length} bytes)`);
+        } catch (err) {
+          console.error('[Weixin] Failed to download voice:', err);
+        }
+        continue;
+      }
+
+      if (item.type === MessageItemType.FILE && item.file_item) {
+        const media = item.file_item.media;
+        const encryptQueryParam = media?.encrypt_query_param;
+        const aesKeyB64 = media?.aes_key;
+        const fileName = item.file_item.file_name ?? (itemId ? `file-${itemId}` : 'attachment');
+
+        if (!encryptQueryParam || !aesKeyB64) {
+          console.warn('[Weixin] File item missing media params, skipping');
+          continue;
+        }
+
+        try {
+          const fileBuffer = await this.api.downloadAndDecryptMedia({
+            encryptedQueryParam: encryptQueryParam,
+            aesKeyB64,
+          });
+
+          const filePath = uniqueName('wx-file', '');
+          const finalPath = path.join(
+            path.dirname(filePath),
+            `${path.basename(filePath)}-${sanitizeFileName(fileName)}`
+          );
+          fs.writeFileSync(finalPath, fileBuffer);
+          filePaths.push({ name: fileName, path: finalPath });
+
+          console.log(`[Weixin] Downloaded file: ${finalPath} (${fileBuffer.length} bytes)`);
+        } catch (err) {
+          console.error('[Weixin] Failed to download file:', err);
+        }
+        continue;
+      }
+
+      if (item.type === MessageItemType.VIDEO && item.video_item) {
+        const media = item.video_item.media;
+        const encryptQueryParam = media?.encrypt_query_param;
+        const aesKeyB64 = media?.aes_key;
+
+        if (!encryptQueryParam || !aesKeyB64) {
+          console.warn('[Weixin] Video item missing media params, skipping');
+          continue;
+        }
+
+        try {
+          const videoBuffer = await this.api.downloadAndDecryptMedia({
+            encryptedQueryParam: encryptQueryParam,
+            aesKeyB64,
+          });
+
+          const filePath = uniqueName('wx-video', '.mp4');
+          fs.writeFileSync(filePath, videoBuffer);
+          videoPaths.push(filePath);
+
+          console.log(`[Weixin] Downloaded video: ${filePath} (${videoBuffer.length} bytes)`);
+        } catch (err) {
+          console.error('[Weixin] Failed to download video:', err);
+        }
+        continue;
+      }
+    }
+
+    return { imagePaths, voicePaths, filePaths, videoPaths };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Deduplication
+  // ---------------------------------------------------------------------------
+
+  private isWeixinDup(msgId: string): boolean {
+    return this.recentMsgIds.has(msgId);
+  }
+
+  private markWeixinDup(msgId: string): void {
+    this.recentMsgIds.add(msgId);
+    if (this.recentMsgIds.size > this.dedupCapacity) {
+      const toDelete: string[] = [];
+      let count = 0;
+      for (const id of this.recentMsgIds) {
+        if (count >= this.dedupCapacity / 4) break;
+        toDelete.push(id);
+        count++;
+      }
+      for (const id of toDelete) {
+        this.recentMsgIds.delete(id);
+      }
+    }
+  }
+
+  private startDedupCleanup(): void {
+    this.dedupCleanupTimer = setInterval(() => {
+      if (this.recentMsgIds.size > this.dedupCapacity / 2) {
+        this.recentMsgIds.clear();
+      }
+    }, MESSAGE_DEDUP_TTL_MS);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Context token helpers (per peer, backed by persisted state store)
+  // ---------------------------------------------------------------------------
+
+  private getContextToken(peerId: string): string | undefined {
+    if (this.contextTokens.has(peerId)) {
+      return this.contextTokens.get(peerId);
+    }
+    return this.stateStore?.getContextToken(peerId);
+  }
+
+  private clearContextToken(peerId: string): void {
+    this.contextTokens.delete(peerId);
+    this.stateStore?.clearContextToken(peerId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Rate-limit circuit breaker
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Record a rate-limit occurrence. Returns true when the circuit should open
+   * because the threshold was reached within the sliding window.
+   */
+  private recordRateLimitEvent(): boolean {
+    const now = Date.now();
+    this.rateLimitEvents = this.rateLimitEvents.filter((t) => now - t < RATE_LIMIT_CIRCUIT_WINDOW_MS);
+    this.rateLimitEvents.push(now);
+    if (this.rateLimitEvents.length >= RATE_LIMIT_CIRCUIT_THRESHOLD) {
+      this.rateLimitCircuitUntil = now + RATE_LIMIT_CIRCUIT_OPEN_MS;
+      this.rateLimitEvents = [];
+      return true;
+    }
+    return false;
+  }
+
+  private resetRateLimitCircuit(): void {
+    this.rateLimitCircuitUntil = 0;
+    this.rateLimitEvents = [];
+  }
+
+  // ---------------------------------------------------------------------------
+  // DM Policy
+  // ---------------------------------------------------------------------------
+
+  private async isDmAllowedAsync(senderId: string): Promise<boolean> {
+    if (this.dmPolicy === 'disabled') {
+      return false;
+    }
+    if (this.dmPolicy === 'allowlist') {
+      return this.allowFrom.has(senderId);
+    }
+    if (this.dmPolicy === 'pairing') {
+      // Plan 520: pairing codes are gone. Forward the message and let the
+      // Main Process channel allow-list decide; the gateway surfaces the
+      // unauthorized reply when the sender is not on the list.
+      return true;
+    }
+    // 'open' policy
+    return true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Group Policy
+  // ---------------------------------------------------------------------------
+
+  private async isGroupAllowedAsync(groupId: string): Promise<boolean> {
+    if (this.groupPolicy === 'disabled') {
+      return false;
+    }
+    if (this.groupPolicy === 'allowlist') {
+      return this.groupAllowFrom.has(groupId);
+    }
+    if (this.groupPolicy === 'pairing') {
+      // Plan 520: pairing codes are gone — forward, Main allow-list decides.
+      return true;
+    }
+    // 'open' group policy
+    return true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Content-fingerprint dedup
+  // ---------------------------------------------------------------------------
+
+  private computeContentFingerprint(
+    text: string,
+    imagePaths: string[],
+    voicePaths: string[],
+    filePaths: Array<{ name: string; path: string }>,
+    videoPaths: string[],
+  ): string {
+    if (
+      !text &&
+      imagePaths.length === 0 &&
+      voicePaths.length === 0 &&
+      filePaths.length === 0 &&
+      videoPaths.length === 0
+    ) {
+      return '';
+    }
+    const parts = [
+      text,
+      `img:${imagePaths.length}`,
+      `voice:${voicePaths.length}`,
+      `file:${filePaths.map((f) => f.name).join(',')}`,
+      `video:${videoPaths.length}`,
+    ];
+    return createHash('sha256').update(parts.join('|')).digest('hex').slice(0, 24);
+  }
+
+  private isContentDup(fingerprint: string): boolean {
+    return this.recentContentFingerprints.has(fingerprint);
+  }
+
+  private markContentDup(fingerprint: string): void {
+    this.recentContentFingerprints.add(fingerprint);
+    if (this.recentContentFingerprints.size > this.dedupCapacity) {
+      const toDelete: string[] = [];
+      let count = 0;
+      for (const fp of this.recentContentFingerprints) {
+        if (count >= this.dedupCapacity / 4) break;
+        toDelete.push(fp);
+        count++;
+      }
+      for (const fp of toDelete) {
+        this.recentContentFingerprints.delete(fp);
+      }
+    }
+  }
+}
+
+// Factory registration
+import { registerAdapterFactory } from '../base.js';
+registerAdapterFactory('weixin', () => new WeixinAdapter());

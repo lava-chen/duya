@@ -1,0 +1,22 @@
+{
+  "name": "@duya/command-catalog",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Canonical slash-command metadata shared by the Desktop composer and the CLI TUI",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  }
+}

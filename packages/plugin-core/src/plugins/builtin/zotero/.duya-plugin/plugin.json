@@ -1,0 +1,30 @@
+{
+  "name": "zotero",
+  "version": "0.1.0",
+  "description": "Connect duya to a local Zotero Desktop library: search items, list collections/tags, export BibTeX, insert citation keys into LaTeX or Markdown drafts, read indexed full text, and import BibTeX/RIS records through the Zotero local API and connector server.",
+  "author": {
+    "name": "OpenAI",
+    "url": "https://openai.com/"
+  },
+  "homepage": "https://github.com/lava-chen/duya",
+  "license": "MIT",
+  "keywords": [
+    "zotero",
+    "citations",
+    "bibliography",
+    "bibtex",
+    "references",
+    "research",
+    "papers",
+    "latex"
+  ],
+  "interface": {
+    "displayName": "Zotero",
+    "shortDescription": "Find papers and add citations from Zotero",
+    "longDescription": "Connect duya to your Zotero Desktop library so it can find saved papers, export BibTeX, add citation keys to drafts, read indexed attachment text when you ask, and import new reference records into Zotero with your approval. Requires the Zotero desktop app with its local API enabled (the bundled skill can enable it for you).",
+    "category": "research",
+    "brandColor": "#EF4444",
+    "icon": "./assets/icon.png",
+    "screenshots": []
+  }
+}

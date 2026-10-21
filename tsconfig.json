@@ -1,0 +1,16 @@
+{
+  "extends": "./apps/desktop/tsconfig.renderer.json",
+  "include": [
+    "apps/desktop/src/renderer/**/*.ts",
+    "apps/desktop/src/renderer/**/*.tsx",
+    "packages/conductor/src/renderer/**/*.ts",
+    "packages/conductor/src/renderer/**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "apps/desktop/src/renderer/**/*.stories.tsx",
+    "apps/desktop/src/renderer/**/*.stories.ts",
+    "apps/desktop/src/renderer/**/__stories__/**"
+  ]
+}

@@ -1,0 +1,127 @@
+/**
+ * packages/ai/src/api/emit-sse.ts
+ *
+ * Downgrades internal AssistantMessageEvent to the public SSEEvent wire format.
+ *
+ * Spec §6.7: The internal events carry partial AssistantMessage state (for
+ * signature accumulation), but consumers (DuyaAgent, agent-process-entry)
+ * only understand SSEEvent. This mapping is the ONLY place where the two
+ * event systems meet.
+ */
+
+import type { AssistantMessageEvent, SSEEvent } from '../types.js';
+
+export function emitSSE(internalEvent: AssistantMessageEvent): SSEEvent | null {
+  switch (internalEvent.type) {
+    // text_delta / thinking_delta carry incremental content and are
+    // mapped to the legacy `text` / `thinking` SSE types so that
+    // DuyaAgent and convertSSEToAgentMessage (which only handle `text`
+    // and `thinking`) receive streaming increments without any changes.
+    // text_end / thinking_end carry the full block content and are
+    // suppressed (null) to avoid duplicating content that was already
+    // streamed incrementally.
+    case 'text_delta': {
+      const block = internalEvent.partial.content[internalEvent.contentIndex];
+      if (block?.type === 'text' && block.phase === 'commentary') return null;
+      return { type: 'text', data: internalEvent.delta };
+    }
+    case 'text_end': {
+      const block = internalEvent.partial.content[internalEvent.contentIndex];
+      if (block?.type === 'text' && block.phase === 'commentary') {
+        return {
+          type: 'tool_group_progress',
+          data: { title: block.text, source: 'provider_commentary' },
+        };
+      }
+      return null;
+    }
+    case 'thinking_delta': {
+      // Forward the accumulated thinking signature (Anthropic signature_delta
+      // content, or the openai wire-field marker recorded at block creation)
+      // so consumers can rebuild a native signed thinking block. Without this
+      // the agent loop's reconstructed message is unsigned and
+      // transformMessages.isSameModel downgrades thinking to plain text.
+      const block = internalEvent.partial.content[internalEvent.contentIndex];
+      const signature =
+        block && block.type === 'thinking' ? block.thinkingSignature : undefined;
+      return signature
+        ? { type: 'thinking', data: internalEvent.delta, signature }
+        : { type: 'thinking', data: internalEvent.delta };
+    }
+    case 'thinking_end': {
+      // Redacted reasoning (Anthropic redacted_thinking): the encrypted
+      // payload must survive to the durable message or the next request's
+      // assistant turn starts with tool_use and Anthropic thinking mode
+      // rejects the chain. Emit an empty-data event carrying the payload.
+      const endBlock = internalEvent.partial.content[internalEvent.contentIndex];
+      if (endBlock && endBlock.type === 'thinking' && endBlock.redacted) {
+        return {
+          type: 'thinking',
+          data: '',
+          redacted: true,
+          ...(endBlock.encrypted ? { encrypted: endBlock.encrypted } : {}),
+        };
+      }
+      // The signature frequently arrives via signature_delta right before
+      // content_block_stop, so this is the last chance to hand it to
+      // consumers. Emit an empty-data thinking event carrying only the
+      // signature (content was already streamed incrementally); consumers
+      // must treat empty data as "no content" and only read `signature`.
+      const block = internalEvent.partial.content[internalEvent.contentIndex];
+      if (block && block.type === 'thinking' && block.thinkingSignature) {
+        return { type: 'thinking', data: '', signature: block.thinkingSignature };
+      }
+      return null;
+    }
+    case 'toolcall_start': {
+      const block = internalEvent.partial.content[internalEvent.contentIndex];
+      if (block && block.type === 'tool_use') {
+        return {
+          type: 'tool_use_started',
+          data: { id: block.id, name: block.name, input: block.input },
+        };
+      }
+      return null;
+    }
+    // Plan 461: surface tool-call argument fragments so the UI can render a
+    // file edit / write *while the model is still producing it* (Codex/pi
+    // TUI parity — the row shows the filename and a ticking line count
+    // instead of sitting blank until the whole tool_use arrives).
+    //
+    // `delta` is an incremental raw-JSON slice, so wire traffic stays
+    // O(total argument bytes) instead of O(n²). It is NOT a complete JSON
+    // document — consumers accumulate per tool_use id and parse leniently.
+    case 'toolcall_delta': {
+      const block = internalEvent.partial.content[internalEvent.contentIndex];
+      if (block && block.type === 'tool_use' && internalEvent.delta) {
+        return {
+          type: 'tool_use_delta',
+          data: { id: block.id, name: block.name, delta: internalEvent.delta },
+        };
+      }
+      return null;
+    }
+    case 'toolcall_end':
+      return {
+        type: 'tool_use',
+        data: {
+          id: internalEvent.toolCall.id,
+          name: internalEvent.toolCall.name,
+          input: internalEvent.toolCall.input,
+          // Gemini thought signatures ride the functionCall part; forward
+          // them so the durable tool_use block can replay the reasoning
+          // chain on the next round.
+          ...(internalEvent.toolCall.thoughtSignature
+            ? { signature: internalEvent.toolCall.thoughtSignature }
+            : {}),
+        },
+      };
+    case 'done':
+      return { type: 'done', reason: internalEvent.reason };
+    case 'error':
+      return { type: 'error', data: internalEvent.reason, code: undefined };
+    // start / text_start / thinking_start → no SSEEvent
+    default:
+      return null;
+  }
+}

@@ -1,0 +1,336 @@
+/**
+ * @duya/ai - Multi-model AI adapter layer
+ *
+ * Public entry point. Re-exports public types and provides the
+ * createAIClient factory with lazy loading for protocol modules.
+ */
+export { createAnthropicClient } from './api/anthropic-messages.js';
+export {
+  computeContextEstimate,
+  estimateMessageTokens as estimateContextMessageTokens,
+  estimateTextTokens as estimateContextTextTokens,
+  normalizePromptTokens,
+  computeContextComposition,
+  contextPartsTotal,
+  IMAGE_TOKEN_FLOOR,
+  CJK_CHARS_PER_TOKEN,
+  ASCII_CHARS_PER_TOKEN,
+  type ContextUsageBlock,
+  type ContextEstimateMessage,
+  type ContextEstimateOptions,
+  type ContextEstimate,
+  type ContextPart,
+  type ContextComposition,
+  type ContextCompositionOptions,
+} from './utils/context-estimate.js';
+export {
+  DEFAULT_CONTEXT_WINDOW,
+  resolveContextWindow,
+  type ContextWindowSource,
+  type ResolvedContextWindow,
+} from './utils/context-window.js';
+export {
+  projectNextInput,
+  applyLiveAnchorCorrection,
+  type ContextEstimateSource,
+  type ContextObservation,
+  type ContextAccountingState,
+  type LiveAnchorCorrectionInput,
+  type LiveAnchorCorrectionResult,
+} from './utils/context-accounting.js';
+export {
+  emptyContextSnapshot,
+  serializeContextSnapshot,
+  deserializeContextSnapshot,
+  CONTEXT_SNAPSHOT_SCHEMA_VERSION,
+  type ContextSnapshot,
+  type ContextSnapshotEstimateSource,
+  type ContextSnapshotConfidence,
+} from './utils/context-snapshot.js';
+export { createOpenAICompletionsClient } from './api/openai-completions.js';
+export { transformMessages, isSameModel } from './api/transform-messages.js';
+export { ThinkTagParser } from './utils/think-tag-parser.js';
+export {
+  calculateBackoffDelay,
+  calculatePersistentBackoffDelay,
+  sleep,
+  sleepWithHeartbeat,
+  BackoffPresets,
+  getBackoffPreset,
+  type BackoffOptions,
+} from './utils/backoff.js';
+export {
+  APIErrorType,
+  LLMAPIError,
+  createLLMAPIError,
+  isRetryableError,
+  isStaleConnectionError,
+  isAbortError,
+  classifyError,
+  formatErrorForDisplay,
+  createErrorEvent,
+  createRetryEvent,
+  extractProviderErrorMessage,
+  isBillingShortfallMessage,
+} from './utils/errors.js';
+export {
+  normalizeUsage,
+  calculateCacheHitRate,
+  formatUsage,
+  toOpenAiUsage,
+  ZERO_USAGE,
+  type UsageLike,
+  type NormalizedUsage,
+} from './utils/usage.js';
+export {
+  withRetry,
+  wrapStreamWithRetry,
+  createRetryWrapper,
+  retryOperation,
+  shouldResetConnection,
+  DEFAULT_RETRY_CONFIG,
+  type RetryConfig,
+  type RetryResult,
+} from './utils/retry.js';
+export { inferProvider, isMiniMaxURL, type LLMProvider } from './utils/infer-provider.js';
+export { resolveDefaultBaseURL } from './utils/default-base-url.js';
+export type { CacheRetention } from './utils/prompt-caching.js';
+export { createAIClientWithRetry, type RetryableAIClientOptions } from './retry-client.js';
+export {
+  toRuntimeConfig,
+  toRuntimeConfigFromLegacy,
+  buildHeaders,
+  normalizeBaseUrl,
+  validateRuntimeConfig,
+  toLegacyLlmProviderDiscriminator,
+  resolveLlmClientDiscriminator,
+  inferApiFormatFromLegacyProviderType,
+  redactSecrets,
+  type BuildOptions,
+} from './runtime-adapter.js';
+export type {
+  ProviderRuntimeConfig,
+  RuntimeAuthStyle,
+  RuntimeAuthSource,
+  RuntimeEndpointSource,
+  RuntimeLegacyProviderType,
+  RuntimeLegacyProviderSource,
+  RuntimeModelCapability,
+  RuntimeProviderSource,
+  RuntimeValidationResult,
+} from './runtime-adapter.js';
+export {
+  getSupportedThinkingLevels,
+  clampThinkingLevel,
+  getNativeLevel,
+  findModelCompat,
+  findModelById,
+  getEffortOptionsForModel,
+  getEffortOptionsForCapability,
+} from './models.js';
+export {
+  shouldDisableThinking,
+  getMaxOutputTokens,
+  getTemperature,
+  validateBudgets,
+  collectDiagnostics,
+  resolveReasoningSettings,
+} from './utils/simple-options.js';
+
+export type {
+  ApiFormat,
+  AIClient,
+  AIClientOptions,
+  AgentProgressEvent,
+  AssistantMessage,
+  AssistantMessageEvent,
+  DuyaReasoningSettings,
+  ImageContent,
+  Message,
+  MessageContent,
+  MessageRole,
+  Model,
+  ModelCompat,
+  ModelThinkingLevel,
+  OpenAIThinkingFormat,
+  PermissionRequestEvent,
+  SSEEvent,
+  StopReason,
+  TextContent,
+  ThinkingContent,
+  ThinkingLevel,
+  ThinkingLevelMap,
+  ModelCost,
+  ModelCostRates,
+  ModelCostTier,
+  ToolResult,
+  ToolResultContent,
+  ToolResultMetadata,
+  ToolUse,
+  ToolUseContent,
+  ToolGroupProgressSource,
+  TokenUsage,
+  UsageCall,
+  ParameterDiagnostic,
+} from './types.js';
+
+export { allProviderModels } from './providers/index.js';
+export {
+  minimaxModels,
+  minimaxCnModels,
+  deepseekModels,
+  qwenModels,
+  glmModels,
+  glmAnthropicModels,
+  kimiModels,
+  openAIModels,
+  openaiResponsesModels,
+  anthropicModels,
+  openrouterModels,
+  ollamaModels,
+  xaiModels,
+  stepfunModels,
+  volcengineModels,
+  bailianModels,
+} from './providers/index.js';
+
+export type {
+  AuthType,
+  AuthInteraction,
+  AuthInfoLink,
+  DeviceCodeInfo,
+  Credential,
+  CredentialStore,
+  AuthResult,
+} from './auth/types.js';
+
+// ─── Provider factory & Models (Task 2-6) ───
+export { createProvider, type CreateProviderOptions } from './providers/create-provider.js';
+export { createModels, type Models, type CreateModelsOptions } from './providers/models.js';
+export { lazyApi, lazyStream, type ProviderStreams } from './providers/lazy.js';
+export type { Provider, ProviderAuthConfig, ProviderOAuth, ProviderApi } from './providers/types.js';
+export { anthropicStreams, openAICompletionsStreams, openAIResponsesStreams } from './providers/adapters.js';
+export { ModelsError, type ModelsErrorCode } from './auth/error.js';
+export { InMemoryCredentialStore } from './auth/credential-store.js';
+export { envApiKeyAuth, lazyOAuth, type EnvResolver } from './auth/helpers.js';
+export { resolveProviderAuth, type AuthResolutionOverrides } from './auth/resolve.js';
+export { generatePkcePair, buildAuthorizeUrl } from './auth/oauth/pkce.js';
+export {
+  requestDeviceCode,
+  pollDeviceToken,
+  randomState,
+  type DeviceCodeRequest,
+  type DeviceCodeResponse,
+} from './auth/oauth/device-code.js';
+
+export {
+  createProviderCatalog,
+  BUILTIN_CATALOG,
+  BUILTIN_CATALOG_ENTRIES,
+  type ProviderCatalog,
+  type ProviderCatalogEntry,
+  type CatalogProtocol,
+  type CatalogModel,
+} from './providers/catalog.js';
+
+// ─── System One decision client (plan 551 Phase 1) ───
+export {
+  SystemOneClient,
+  resolveSystemOneConfig,
+  DEFAULT_SYSTEM_ONE_CONFIG,
+  DEFAULT_SYSTEM_ONE_BASE_URL,
+  DEFAULT_SYSTEM_ONE_MODEL,
+  DEFAULT_SYSTEM_ONE_TIMEOUT_MS,
+  MAX_CARDINALITY,
+  DecisionProtocolError,
+  validateDecisionRequest,
+  parseDecisionResponse,
+  type DecisionClient,
+  type SystemOneClientOptions,
+  type SystemOneConfig,
+  type DecisionKind,
+  type DecisionRequest,
+  type DecisionResponse,
+  type DecisionAnswer,
+  type ChoiceQuestion,
+  type ChoiceAnswer,
+  type ScoreQuestion,
+  type ScoreAnswer,
+  type NoulQuestion,
+  type NoulAnswer,
+  type Question,
+} from './system-one/index.js';
+
+import type { AIClient, AIClientOptions } from './types.js';
+
+/**
+ * Factory that creates an AIClient based on apiFormat.
+ * Uses lazy dynamic import() to keep startup fast — unused protocol
+ * SDKs (e.g. OpenAI when only Anthropic is configured) are not loaded
+ * until the first streamChat/chat call.
+ */
+export function createAIClient(options: AIClientOptions): AIClient {
+  switch (options.apiFormat) {
+    case 'anthropic':
+      return createLazyClient(() =>
+        import('./api/anthropic-messages.js').then(m => m.createAnthropicClient(options))
+      );
+    case 'openai-chat':
+      return createLazyClient(() =>
+        import('./api/openai-completions.js').then(m => m.createOpenAICompletionsClient(options))
+      );
+    case 'openai-responses':
+      return createLazyClient(() =>
+        import('./api/openai-responses.js').then(m => m.createOpenAIResponsesClient(options))
+      );
+    case 'ollama':
+      return createLazyClient(() =>
+        import('./api/ollama-chat.js').then(m => (m as any).createOllamaClient(options))
+      );
+    case 'gemini':
+      throw new Error('gemini not yet implemented (P2)');
+    default:
+      throw new Error(`Unsupported apiFormat: ${options.apiFormat}`);
+  }
+}
+
+/**
+ * Lazy proxy that defers module loading until first streamChat/chat call.
+ * Mirrors packages/agent/src/llm/base.ts LazyLLMClientProxy pattern.
+ */
+function createLazyClient(loader: () => Promise<AIClient>): AIClient {
+  let clientPromise: Promise<AIClient> | null = null;
+
+  const getClient = (): Promise<AIClient> => {
+    if (!clientPromise) {
+      clientPromise = loader().catch(err => {
+        clientPromise = null;
+        throw err;
+      });
+    }
+    return clientPromise;
+  };
+
+  return {
+    async *streamChat(messages, options) {
+      const client = await getClient();
+      const gen = client.streamChat(messages, options);
+      let next = await gen.next();
+      while (!next.done) {
+        yield next.value;
+        next = await gen.next();
+      }
+      return next.value;
+    },
+    async chat(messages, options) {
+      const client = await getClient();
+      if (!client.chat) throw new Error('Underlying client does not support chat()');
+      return client.chat(messages, options);
+    },
+    async embed(texts) {
+      const client = await getClient();
+      if (!client.embed) throw new Error('Underlying client does not support embed()');
+      return client.embed(texts);
+    },
+  };
+}

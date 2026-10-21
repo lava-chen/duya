@@ -1,0 +1,770 @@
+/**
+ * recorder/uia-probe.ts — unit tests.
+ *
+ * Drives the shared daemon spawn pipeline with a FakeProcess that
+ * captures stdin writes and feeds scripted stdout lines. Covers the
+ * ready gate, request/response correlation, per-request timeouts with
+ * the recycle-once-then-degrade policy, crash-driven degrade, idle
+ * recycle, and browserUrl/readUrl parsing.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
+import type { ChildProcess, StdioOptions } from 'node:child_process';
+
+vi.mock('../../logging/logger', () => {
+  const noop = () => undefined;
+  return {
+    getLogger: () => ({ debug: noop, info: noop, warn: noop, error: noop, fatal: noop }),
+    LogComponent: { ComputerUse: 'ComputerUse' },
+  };
+});
+
+import {
+  UiaProbeClient,
+  resolveUiaProbeScriptPath,
+  UIA_ENUMERATE_COLD_TOTAL_MS,
+  UIA_FG_TIMEOUT_MS,
+} from '../recorder/uia-probe';
+
+class FakeProcess extends EventEmitter {
+  pid = 1000 + Math.floor(Math.random() * 1000);
+  stdout = new EventEmitter();
+  stderr = new EventEmitter();
+  stdin = {
+    writes: [] as string[],
+    write(data: string): boolean {
+      this.writes.push(data);
+      return true;
+    },
+    end(): void {},
+  };
+  kill(signal: NodeJS.Signals = 'SIGTERM'): boolean {
+    this.emit('exit', null, signal);
+    return true;
+  }
+  pushStdout(text: string): void {
+    this.stdout.emit('data', Buffer.from(text, 'utf-8'));
+  }
+  exit(code: number | null): void {
+    this.emit('exit', code, null);
+  }
+}
+
+function makeSpawnFns() {
+  const procs: FakeProcess[] = [];
+  const spawnFn = vi.fn(
+    (
+      _cmd: string,
+      args: string[],
+      _opts: { stdio: StdioOptions; env: NodeJS.ProcessEnv; cwd?: string },
+    ): ChildProcess => {
+      const proc = new FakeProcess();
+      procs.push(proc);
+      void args;
+      return proc as unknown as ChildProcess;
+    },
+  );
+  return { procs, spawnFn };
+}
+
+/** an existing file path — spawn is mocked, only existsSync matters */
+const SCRIPT = process.execPath;
+
+function makeClient(
+  spawnFn: ReturnType<typeof makeSpawnFns>['spawnFn'],
+  overrides: Record<string, unknown> = {},
+): UiaProbeClient {
+  return new UiaProbeClient({
+    scriptPath: SCRIPT,
+    probeTimeoutMs: 100,
+    readUrlTimeoutMs: 100,
+    readyTimeoutMs: 1000,
+    // Long by default: the idle recycle would otherwise fire mid-test
+    // and reset the crash/stall budgets under observation.
+    idleRecycleMs: 3_600_000,
+    spawnFn,
+    ...overrides,
+  });
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe('UiaProbeClient', () => {
+  it('ensureStarted gates on the ready line', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn);
+    const started = client.ensureStarted();
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(client.currentState).toBe('starting');
+
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+    expect(client.currentState).toBe('running');
+    await client.dispose();
+  });
+
+  it('ready timeout recycles once, second failure degrades', async () => {
+    const { spawnFn } = makeSpawnFns();
+    const client = makeClient(spawnFn, { readyTimeoutMs: 50 });
+
+    const first = client.ensureStarted();
+    await vi.advanceTimersByTimeAsync(60);
+    await first;
+    expect(client.currentState).toBe('idle'); // recycled once (Add-Type too slow)
+    expect(client.isDegraded).toBe(false);
+
+    const second = client.ensureStarted();
+    await vi.advanceTimersByTimeAsync(60);
+    await second;
+    expect(client.currentState).toBe('degraded'); // second strike
+
+    // degraded clients short-circuit without spawning further processes
+    const descriptor = await client.probe(1, 2);
+    expect(descriptor).toEqual({ source: 'none' });
+    expect(spawnFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('probe correlates the response by id and maps the element', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn);
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    const probePromise = client.probe(120, 240);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(procs[0]!.stdin.writes).toHaveLength(1);
+    const request = JSON.parse(procs[0]!.stdin.writes[0]!.trim()) as { id: number; op: string; x: number; y: number };
+    expect(request).toMatchObject({ op: 'probe', x: 120, y: 240 });
+
+    procs[0]!.pushStdout(
+      JSON.stringify({
+        id: request.id,
+        ok: true,
+        element: {
+          name: 'OK',
+          controlType: 'Button',
+          rect: { x: 100, y: 220, w: 40, h: 20 },
+          isPassword: false,
+        },
+      }) + '\n',
+    );
+    const descriptor = await probePromise;
+    expect(descriptor).toEqual({
+      name: 'OK',
+      controlType: 'Button',
+      rect: { x: 100, y: 220, w: 40, h: 20 },
+      isPassword: false,
+      source: 'uia-probe',
+    });
+    await client.dispose();
+  });
+
+  it('readUrl parses the url response', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn);
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    const urlPromise = client.readUrl(197144);
+    await vi.advanceTimersByTimeAsync(10);
+    const request = JSON.parse(procs[0]!.stdin.writes[0]!.trim()) as { id: number; op: string; hwnd: number };
+    expect(request).toMatchObject({ op: 'readUrl', hwnd: 197144 });
+
+    procs[0]!.pushStdout(JSON.stringify({ id: request.id, ok: true, url: 'https://example.com' }) + '\n');
+    await expect(urlPromise).resolves.toBe('https://example.com');
+    await client.dispose();
+  });
+
+  it('three consecutive timeouts recycle the probe once, then degrade', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn);
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    // Three unanswered probes → stall recycle.
+    for (let i = 0; i < 3; i++) {
+      void client.probe(1, 1);
+      await vi.advanceTimersByTimeAsync(150);
+    }
+    expect(client.currentState).toBe('idle');
+    expect(client.isDegraded).toBe(false);
+
+    // Respawn works (fresh probe answers).
+    const started2 = client.ensureStarted();
+    procs[1]!.pushStdout('{"ready":true}\n');
+    await started2;
+    const probePromise = client.probe(5, 5);
+    await vi.advanceTimersByTimeAsync(10);
+    const request2 = JSON.parse(procs[1]!.stdin.writes[0]!.trim()) as { id: number };
+    procs[1]!.pushStdout(
+      JSON.stringify({ id: request2.id, ok: true, element: { name: 'A' } }) + '\n',
+    );
+    expect(await probePromise).toMatchObject({ name: 'A', source: 'uia-probe' });
+
+    // Second stall round → degraded for good.
+    for (let i = 0; i < 3; i++) {
+      void client.probe(1, 1);
+      await vi.advanceTimersByTimeAsync(150);
+    }
+    expect(client.isDegraded).toBe(true);
+    expect(await client.probe(1, 1)).toEqual({ source: 'none' });
+    expect(spawnFn).toHaveBeenCalledTimes(2); // no further spawns
+    await client.dispose();
+  });
+
+  it('crash restart budget: second crash degrades', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn);
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    // First crash → daemon restarts after its 1s backoff.
+    procs[0]!.exit(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    // New process must say ready again for the client to resume.
+    procs[1]!.pushStdout('{"ready":true}\n');
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Second crash → restart budget spent → degraded.
+    procs[1]!.exit(1);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(client.isDegraded).toBe(true);
+    expect(await client.probe(1, 2)).toEqual({ source: 'none' });
+    await client.dispose();
+  });
+
+  it('idle recycle returns to idle and resets the recycle budget', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn, { idleRecycleMs: 200 });
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    // Within the idle budget (200ms here) the probe stays up.
+    await vi.advanceTimersByTimeAsync(120);
+    expect(client.currentState).toBe('running');
+
+    // Idle past the budget → the check interval recycles it.
+    await vi.advanceTimersByTimeAsync(300);
+    expect(client.currentState).toBe('idle');
+    await client.dispose();
+  });
+
+  it('resolves the dev script path from the repo layout', async () => {
+    const { join } = await import('node:path');
+    // process.resourcesPath is unset under vitest → dev layout.
+    expect(resolveUiaProbeScriptPath()).toBe(
+      join(process.cwd(), 'resources', 'recorder', 'uia-probe.ps1'),
+    );
+  });
+
+  it('enumerate correlates the response and maps elements/truncated/reason', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn);
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    const enumeratePromise = client.enumerate(197144);
+    await vi.advanceTimersByTimeAsync(10);
+    const request = JSON.parse(procs[0]!.stdin.writes[0]!.trim()) as {
+      id: number;
+      op: string;
+      hwnd: number;
+    };
+    expect(request).toMatchObject({ op: 'enumerate', hwnd: 197144 });
+
+    procs[0]!.pushStdout(
+      JSON.stringify({
+        id: request.id,
+        ok: true,
+        elements: [
+          { name: '确定', controlType: 'Button', rect: { x: 1, y: 2, w: 30, h: 20 }, isPassword: false, interactive: true },
+        ],
+        truncated: true,
+        reason: null,
+        count: 1,
+      }) + '\n',
+    );
+    const result = await enumeratePromise;
+    expect(result).toEqual({
+      elements: [
+        {
+          name: '确定',
+          controlType: 'Button',
+          rect: { x: 1, y: 2, w: 30, h: 20 },
+          isPassword: false,
+          interactive: true,
+          source: 'uia-probe',
+        },
+      ],
+      truncated: true,
+      reason: null,
+    });
+    await client.dispose();
+  });
+
+  it('enumerateCached returns the cache while (hwnd,title) is unchanged', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn);
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    const first = client.enumerateCached(100, '记事本');
+    await vi.advanceTimersByTimeAsync(10);
+    const req1 = JSON.parse(procs[0]!.stdin.writes[0]!.trim()) as { id: number };
+    procs[0]!.pushStdout(
+      JSON.stringify({ id: req1.id, ok: true, elements: [{ name: 'A', controlType: 'Button' }], truncated: false }) + '\n',
+    );
+    const firstResult = await first;
+    expect(firstResult?.elements).toHaveLength(1);
+
+    // Same hwnd+title → cached, no new stdin write.
+    const second = await client.enumerateCached(100, '记事本');
+    expect(second).toBe(firstResult);
+    expect(procs[0]!.stdin.writes).toHaveLength(1);
+
+    // Title change → re-scan.
+    const third = client.enumerateCached(100, '记事本 *');
+    await vi.advanceTimersByTimeAsync(10);
+    const req3 = JSON.parse(procs[0]!.stdin.writes[1]!.trim()) as { id: number };
+    procs[0]!.pushStdout(
+      JSON.stringify({ id: req3.id, ok: true, elements: [{ name: 'B', controlType: 'Edit' }], truncated: false }) + '\n',
+    );
+    const thirdResult = await third;
+    expect(thirdResult?.elements[0]).toMatchObject({ name: 'B' });
+    await client.dispose();
+  });
+
+  it('enumerateCached TTL expiry forces a re-scan', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn, { enumerateCacheTtlMs: 200 });
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    // Non-empty tree: full TTL applies (empty trees get the short TTL —
+    // see the plan 576 test below).
+    const first = client.enumerateCached(300, 'Chrome');
+    await vi.advanceTimersByTimeAsync(10);
+    const req1 = JSON.parse(procs[0]!.stdin.writes[0]!.trim()) as { id: number };
+    procs[0]!.pushStdout(
+      JSON.stringify({
+        id: req1.id,
+        ok: true,
+        elements: [{ name: '地址栏', controlType: 'Edit' }],
+        truncated: false,
+      }) + '\n',
+    );
+    await first;
+
+    await vi.advanceTimersByTimeAsync(300);
+    const second = client.enumerateCached(300, 'Chrome');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(procs[0]!.stdin.writes).toHaveLength(2); // TTL elapsed → re-scan
+    const req2 = JSON.parse(procs[0]!.stdin.writes[1]!.trim()) as { id: number };
+    procs[0]!.pushStdout(
+      JSON.stringify({
+        id: req2.id,
+        ok: true,
+        elements: [{ name: '地址栏', controlType: 'Edit' }],
+        truncated: false,
+      }) + '\n',
+    );
+    await second;
+    await client.dispose();
+  });
+
+  it('enumerateCached caches an EMPTY tree only briefly (plan 576 overlay fix)', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    // Full TTL far in the future — the empty entry must expire well before.
+    const client = makeClient(spawnFn, { enumerateCacheTtlMs: 5 * 60_000 });
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    // First scan returns an empty tree (minimized window: every element
+    // reports offscreen).
+    const first = client.enumerateCached(400, '文件资源管理器');
+    await vi.advanceTimersByTimeAsync(10);
+    const req1 = JSON.parse(procs[0]!.stdin.writes[0]!.trim()) as { id: number };
+    procs[0]!.pushStdout(
+      JSON.stringify({ id: req1.id, ok: true, elements: [], truncated: false }) + '\n',
+    );
+    const firstResult = await first;
+    expect(firstResult?.elements).toHaveLength(0);
+
+    // Within the empty-TTL window the cache still serves (focus flapping
+    // must not hammer the walk).
+    await vi.advanceTimersByTimeAsync(1_000);
+    const second = await client.enumerateCached(400, '文件资源管理器');
+    expect(procs[0]!.stdin.writes).toHaveLength(1);
+    expect(second).toBe(firstResult);
+
+    // After 2s the empty entry expires even though the full TTL has not —
+    // the restored window must get a real re-scan instead of a pinned
+    // zero-frames overlay.
+    await vi.advanceTimersByTimeAsync(1_500);
+    const third = client.enumerateCached(400, '文件资源管理器');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(procs[0]!.stdin.writes).toHaveLength(2);
+    const req3 = JSON.parse(procs[0]!.stdin.writes[1]!.trim()) as { id: number };
+    procs[0]!.pushStdout(
+      JSON.stringify({
+        id: req3.id,
+        ok: true,
+        elements: [{ name: '最小化', controlType: 'Button' }],
+        truncated: false,
+      }) + '\n',
+    );
+    const thirdResult = await third;
+    expect(thirdResult?.elements).toHaveLength(1);
+
+    // A NON-empty entry keeps the full TTL.
+    await vi.advanceTimersByTimeAsync(30_000);
+    const fourth = await client.enumerateCached(400, '文件资源管理器');
+    expect(procs[0]!.stdin.writes).toHaveLength(2);
+    expect(fourth).toBe(thirdResult);
+    await client.dispose();
+  });
+
+  it('degraded client auto-retries after the retry window (plan 562 D5)', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn, { degradedRetryMs: 5_000 });
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    // Degrade via the ready-gate path: stop the daemon then force fatal
+    // through two stall rounds is slow — use two crashes instead.
+    procs[0]!.exit(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    procs[1]!.exit(1);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(client.isDegraded).toBe(true);
+
+    // Within the window: short-circuit, no spawn.
+    expect(await client.probe(1, 1)).toEqual({ source: 'none' });
+    expect(spawnFn).toHaveBeenCalledTimes(2);
+
+    // Past the window: the next call respawns and recovers.
+    await vi.advanceTimersByTimeAsync(5_500);
+    const revived = client.ensureStarted();
+    await vi.advanceTimersByTimeAsync(10);
+    procs[2]!.pushStdout('{"ready":true}\n');
+    await revived;
+    expect(client.currentState).toBe('running');
+    await client.dispose();
+  });
+
+  it('foreground maps the fg response (plan 562 phase 5)', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn);
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    const fgPromise = client.foreground();
+    await vi.advanceTimersByTimeAsync(10);
+    const request = JSON.parse(procs[0]!.stdin.writes[0]!.trim()) as { id: number; op: string };
+    expect(request.op).toBe('fg');
+
+    procs[0]!.pushStdout(
+      JSON.stringify({
+        id: request.id,
+        ok: true,
+        fg: { hwnd: 123456, pid: 30200, processName: 'explorer', title: 'Documents' },
+      }) + '\n',
+    );
+    await expect(fgPromise).resolves.toEqual({
+      hwnd: 123456,
+      pid: 30200,
+      processName: 'explorer',
+      title: 'Documents',
+    });
+    await client.dispose();
+  });
+
+  it('foreground timeouts never consume the stall budget', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn);
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    // Several fg timeouts (e.g. queued behind a long enumerate)…
+    for (let i = 0; i < 5; i++) {
+      const p = client.foreground();
+      await vi.advanceTimersByTimeAsync(UIA_FG_TIMEOUT_MS + 10);
+      await expect(p).resolves.toBeNull();
+    }
+    // …must not degrade the client: a normal op still flows.
+    const probePromise = client.probe(1, 2);
+    await vi.advanceTimersByTimeAsync(10);
+    const request = JSON.parse(procs[0]!.stdin.writes.at(-1)!.trim()) as { id: number; op: string };
+    procs[0]!.pushStdout(JSON.stringify({ id: request.id, ok: true }) + '\n');
+    await expect(probePromise).resolves.toEqual({ source: 'none' });
+    expect(client.currentState).toBe('running');
+    await client.dispose();
+  });
+
+  // --- structural invoke channel (plan 564) -----------------------------
+
+  /** Advance fake time past the write and return the last request line. */
+  async function readRequest(procs: FakeProcess[]): Promise<Record<string, unknown>> {
+    await vi.advanceTimersByTimeAsync(10);
+    return JSON.parse(procs[0]!.stdin.writes.at(-1)!.trim()) as Record<string, unknown>;
+  }
+
+  /** Answer the given request on the fake stdout. */
+  function respond(
+    procs: FakeProcess[],
+    request: Record<string, unknown>,
+    response: Record<string, unknown>,
+  ): void {
+    procs[0]!.pushStdout(JSON.stringify({ id: request.id, ...response }) + '\n');
+  }
+
+  it('invoke correlates the response and carries method/pattern/value/element', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn, { invokeTimeoutMs: 200 });
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    const invokePromise = client.invoke(197144, { index: 3, method: 'setValue', value: '你好' });
+    const request = await readRequest(procs);
+    expect(request).toMatchObject({
+      op: 'invoke',
+      hwnd: 197144,
+      index: 3,
+      method: 'setValue',
+      value: '你好',
+    });
+
+    respond(procs, request, {
+      ok: true,
+      method: 'setValue',
+      pattern: 'ValuePattern',
+      value: '你好',
+      element: { name: '消息', controlType: 'Edit', rect: { x: 1, y: 2, w: 3, h: 4 }, isPassword: false },
+    });
+    await expect(invokePromise).resolves.toMatchObject({
+      ok: true,
+      method: 'setValue',
+      pattern: 'ValuePattern',
+      value: '你好',
+      element: { name: '消息', controlType: 'Edit' },
+    });
+    await client.dispose();
+  });
+
+  it('invoke maps non-stale failures straight through', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn, { invokeTimeoutMs: 200 });
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    const invokePromise = client.invoke(197144, { index: 9 });
+    const request = await readRequest(procs);
+    respond(procs, request, { ok: false, reason: 'no-pattern' });
+    await expect(invokePromise).resolves.toEqual({ ok: false, reason: 'no-pattern' });
+    await client.dispose();
+  });
+
+  it('invoke auto-recovers once from stale-tree via a fresh enumerate', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn, { invokeTimeoutMs: 200 });
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    const invokePromise = client.invoke(197144, {
+      index: 2,
+      name: '登录',
+      controlType: 'Button',
+    });
+
+    // First attempt goes stale…
+    const first = await readRequest(procs);
+    expect(first).toMatchObject({ op: 'invoke', index: 2, name: '登录' });
+    respond(procs, first, { ok: false, reason: 'stale-tree' });
+
+    // …the recovery re-enumerates (fresh, bypassing the main-side cache)…
+    const refresh = await readRequest(procs);
+    expect(refresh).toMatchObject({ op: 'enumerate', hwnd: 197144 });
+    respond(procs, refresh, {
+      ok: true,
+      elements: [
+        { name: '取消', controlType: 'Button', rect: { x: 0, y: 0, w: 5, h: 5 }, interactive: true },
+        { name: '登录', controlType: 'Button', rect: { x: 6, y: 0, w: 5, h: 5 }, interactive: true },
+      ],
+      truncated: false,
+      reason: null,
+    });
+
+    // …and retries the invoke once more.
+    const retry = await readRequest(procs);
+    expect(retry).toMatchObject({ op: 'invoke', index: 2 });
+    respond(procs, retry, {
+      ok: true,
+      method: 'invoke',
+      pattern: 'InvokePattern',
+      value: null,
+      element: { name: '登录', controlType: 'Button', rect: { x: 6, y: 0, w: 5, h: 5 }, isPassword: false },
+    });
+
+    await expect(invokePromise).resolves.toMatchObject({
+      ok: true,
+      method: 'invoke',
+      pattern: 'InvokePattern',
+    });
+    await client.dispose();
+  });
+
+  it('invoke surfaces stale-tree when the recovery enumerate fails', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn, { invokeTimeoutMs: 200 });
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    const invokePromise = client.invoke(197144, { index: 1 });
+    const first = await readRequest(procs);
+    respond(procs, first, { ok: false, reason: 'stale-tree' });
+    // recovery enumerate fails → stale surfaces without a retry
+    const refresh = await readRequest(procs);
+    respond(procs, refresh, { ok: false, reason: 'timeout' });
+    await expect(invokePromise).resolves.toEqual({ ok: false, reason: 'stale-tree' });
+    await client.dispose();
+  });
+
+  // --- cold/warm enumerate tiers (plan 562 perf fix) --------------------
+
+  it('enumerateCached runs the cold tier on the first scan, warm on re-scans', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn, { enumerateTimeoutMs: 200 });
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    // Cache miss → cold tier: raised walk budget on the wire + raised race.
+    const first = client.enumerateCached(100, 'Chrome');
+    await vi.advanceTimersByTimeAsync(10);
+    const req1 = JSON.parse(procs[0]!.stdin.writes[0]!.trim()) as {
+      id: number;
+      totalMs?: number;
+    };
+    expect(req1.totalMs).toBe(UIA_ENUMERATE_COLD_TOTAL_MS);
+    procs[0]!.pushStdout(
+      JSON.stringify({ id: req1.id, ok: true, elements: [{ name: 'A', controlType: 'Button' }], truncated: false }) + '\n',
+    );
+    await first;
+
+    // Cache hit → no request at all.
+    await client.enumerateCached(100, 'Chrome');
+    expect(procs[0]!.stdin.writes).toHaveLength(1);
+
+    // Title change → warm re-scan: no totalMs override on the wire.
+    const third = client.enumerateCached(100, 'Chrome *');
+    await vi.advanceTimersByTimeAsync(10);
+    const req3 = JSON.parse(procs[0]!.stdin.writes[1]!.trim()) as {
+      id: number;
+      totalMs?: number;
+    };
+    expect(req3.totalMs).toBeUndefined();
+    procs[0]!.pushStdout(
+      JSON.stringify({ id: req3.id, ok: true, elements: [], truncated: false }) + '\n',
+    );
+    await third;
+    await client.dispose();
+  });
+
+  it('enumerate passes an explicit per-request walk budget through', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn);
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    const p = client.enumerate(197144, { totalMs: 8000 });
+    await vi.advanceTimersByTimeAsync(10);
+    const request = JSON.parse(procs[0]!.stdin.writes[0]!.trim()) as { id: number; totalMs?: number };
+    expect(request.totalMs).toBe(8000);
+    procs[0]!.pushStdout(
+      JSON.stringify({ id: request.id, ok: true, elements: [], truncated: false }) + '\n',
+    );
+    await p;
+    await client.dispose();
+  });
+
+  // --- per-target quarantine (plan 562 perf fix) ------------------------
+
+  it('quarantines a stalled window without recycling the probe', async () => {
+    const { spawnFn, procs } = makeSpawnFns();
+    const client = makeClient(spawnFn, {
+      enumerateTimeoutMs: 100,
+      targetQuarantineMs: 500,
+    });
+    const started = client.ensureStarted();
+    procs[0]!.pushStdout('{"ready":true}\n');
+    await started;
+
+    // Three consecutive timeouts on hwnd 1 → that window is quarantined…
+    for (let i = 0; i < 3; i++) {
+      void client.enumerate(1);
+      await vi.advanceTimersByTimeAsync(150);
+    }
+    // …but the probe process stays UP (no recycle, no degrade).
+    expect(client.currentState).toBe('running');
+    expect(client.isDegraded).toBe(false);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+
+    // The quarantined window short-circuits with a stable reason.
+    const quarantined = await client.enumerate(1);
+    expect(quarantined).toEqual({
+      elements: [],
+      truncated: true,
+      reason: 'target-unresponsive',
+    });
+    expect(await client.invoke(1, { index: 1 })).toEqual({
+      ok: false,
+      reason: 'target-unresponsive',
+    });
+
+    // A different window is unaffected.
+    const other = client.enumerate(2);
+    await vi.advanceTimersByTimeAsync(10);
+    const req = JSON.parse(procs[0]!.stdin.writes.at(-1)!.trim()) as { id: number };
+    procs[0]!.pushStdout(
+      JSON.stringify({ id: req.id, ok: true, elements: [{ name: 'B', controlType: 'Button' }], truncated: false }) + '\n',
+    );
+    await expect(other).resolves.toMatchObject({ elements: [{ name: 'B' }] });
+
+    // Past the quarantine window the window is walked again.
+    await vi.advanceTimersByTimeAsync(600);
+    const retry = client.enumerate(1);
+    await vi.advanceTimersByTimeAsync(10);
+    const reqRetry = JSON.parse(procs[0]!.stdin.writes.at(-1)!.trim()) as { id: number };
+    procs[0]!.pushStdout(
+      JSON.stringify({ id: reqRetry.id, ok: true, elements: [{ name: 'C', controlType: 'Button' }], truncated: false }) + '\n',
+    );
+    await expect(retry).resolves.toMatchObject({ elements: [{ name: 'C' }] });
+    expect(spawnFn).toHaveBeenCalledTimes(1); // never respawned
+    await client.dispose();
+  });
+});

@@ -1,0 +1,847 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { PermissionRequiredError } from '@duya/capabilities/BaseTool';
+import { ToolRegistry } from '../../../src/tools/catalog/registry.js';
+import {
+  StreamingToolExecutor as RuntimeStreamingToolExecutor,
+  type ExecutorConfig,
+} from '../../../src/tools/execution/StreamingToolExecutor.js';
+import type {
+  CanUseToolFn,
+  ToolCall,
+  ToolExecutionRegistry,
+} from '../../../src/tools/execution/contracts.js';
+import type { ToolExecutionPorts } from '../../../src/tools/execution/ports.js';
+import type {
+  RuntimeToolDefinition,
+  RuntimeToolResult,
+  ToolExecutor,
+} from '../../../src/tools/catalog/registry.js';
+
+interface ToolUseContext {
+  toolUseId: string;
+  abortController: AbortController;
+  getAppState(): Record<string, unknown>;
+  setAppState?(update: (state: Record<string, unknown>) => Record<string, unknown>): void;
+  requestPermission?(request: unknown): Promise<'allow' | 'deny' | 'paused'>;
+  options: {
+    tools: unknown[];
+    commands: unknown[];
+    mainLoopModel: string;
+    mcpClients: unknown[];
+    workingDirectory?: string;
+    sessionId?: string;
+    resolveMCPProviderToolName?: (name: string) => string;
+  };
+}
+
+interface ToolUse extends ToolCall {
+  input: Record<string, unknown>;
+}
+
+type SSEEvent = { type: 'tool_use'; data: ToolUse };
+
+interface PermissionCheckingExecutor {
+  execute(input: Record<string, unknown>, workingDirectory?: string, context?: object): Promise<RuntimeToolResult>;
+  checkPermissions?(input: unknown, context: unknown): {
+    allowed: boolean;
+    requiresUserConfirmation?: boolean;
+    reason?: string;
+    mode?: 'generic' | 'ask_user_question' | 'exit_plan_mode';
+  };
+  renderToolResultMessage?(result: { result: string }): { type: string; content: string };
+}
+
+type TestExecutor = ToolExecutor<object, RuntimeToolResult> & PermissionCheckingExecutor;
+type TestRegistry = ToolRegistry<RuntimeToolDefinition, RuntimeToolResult, object, TestExecutor>;
+
+function executionPorts(): ToolExecutionPorts<ToolUseContext> {
+  return {
+    readSession: (context) => ({
+      abortController: context.abortController,
+      workingDirectory: context.options.workingDirectory,
+      sessionId: context.options.sessionId,
+    }),
+    getAppState: (context) => context.getAppState(),
+    isInvocationApproved: (context, invocationId) => {
+      const approved = context.getAppState()._approvedToolUses;
+      return typeof approved === 'object' && approved !== null
+        && (approved as Record<string, unknown>)[invocationId] === true;
+    },
+    markInvocationApproved: (context, invocationId) => {
+      context.setAppState?.((state) => {
+        const approved = state._approvedToolUses;
+        return {
+          ...state,
+          _approvedToolUses: {
+            ...(typeof approved === 'object' && approved !== null
+              ? approved as Record<string, unknown>
+              : {}),
+            [invocationId]: true,
+          },
+        };
+      });
+    },
+    createToolContext: (context, input) => ({
+      ...context,
+      ...input,
+      getAppState: context.getAppState,
+      setAppState: context.setAppState,
+      options: {
+        ...context.options,
+        workingDirectory: input.workingDirectory ?? context.options.workingDirectory,
+        sessionId: input.sessionId ?? context.options.sessionId,
+      },
+    }),
+    createPermissionContext: (context, input) => ({
+      ...context,
+      ...input,
+      getAppState: context.getAppState,
+    }),
+  };
+}
+
+class StreamingToolExecutor extends RuntimeStreamingToolExecutor<ToolUseContext> {
+  constructor(
+    registry: TestRegistry,
+    canUseTool: CanUseToolFn,
+    context: ToolUseContext,
+    config?: ExecutorConfig,
+  ) {
+    const ports = executionPorts();
+    const permissionPort: ToolExecutionPorts<ToolUseContext>['requestPermission'] =
+      context.requestPermission === undefined
+        ? undefined
+        : async (current, request) => current.requestPermission!(request);
+    if (permissionPort) ports.requestPermission = permissionPort;
+    ports.resolveToolKey = (current, name) => current.options.resolveMCPProviderToolName?.(name) ?? name;
+    super(registry as unknown as ToolExecutionRegistry, canUseTool, context, config, ports);
+  }
+}
+
+
+/**
+ * Extract the tool-result text from a MessageUpdate, supporting both the
+ * legacy array-of-blocks shape and the plan-315 string-content tool message
+ * (role: 'tool', content: string).
+ */
+function toolResultText(update: {
+  message?: { role?: string; content?: unknown };
+}): string | null {
+  const msg = update.message;
+  if (!msg) return null;
+  const content = msg.content;
+  if (Array.isArray(content)) {
+    const first = content[0] as { type?: string; content?: unknown } | undefined;
+    if (first?.type === 'tool_result') return String(first.content);
+    return null;
+  }
+  if (msg.role === 'tool' && typeof content === 'string') return content;
+  return null;
+}
+
+describe('StreamingToolExecutor', () => {
+  let registry: TestRegistry;
+  let mockCanUseTool: CanUseToolFn;
+  let toolUseContext: ToolUseContext;
+
+  const createToolUseContext = (): ToolUseContext => ({
+    toolUseId: 'ctx-1',
+    abortController: new AbortController(),
+    getAppState: () => ({}),
+    setAppState: () => {},
+    options: {
+      tools: [],
+      commands: [],
+      mainLoopModel: 'test-model',
+      mcpClients: [],
+    },
+  });
+
+  beforeEach(() => {
+    registry = new ToolRegistry() as TestRegistry;
+    mockCanUseTool = vi.fn().mockResolvedValue(true);
+    toolUseContext = createToolUseContext();
+  });
+
+  describe('addTool', () => {
+    it('should queue tool for execution', () => {
+      const toolUse: ToolUse = {
+        id: 'use-1',
+        name: 'echo',
+        input: { value: 'test' },
+      };
+
+      // Register echo tool
+      registry.register(
+        { name: 'echo', description: 'Echo input', input_schema: { type: 'object' } },
+        {
+          execute: async (input) => ({
+            id: crypto.randomUUID(),
+            name: 'echo',
+            result: JSON.stringify(input),
+          }),
+        }
+      );
+
+      const executor = new StreamingToolExecutor(registry, mockCanUseTool, toolUseContext);
+      executor.addTool(toolUse);
+
+      const tools = executor.getTools();
+      expect(tools).toHaveLength(1);
+      expect(tools[0].id).toBe('use-1');
+    });
+
+    it('should create error result for non-existent tool', () => {
+      const toolUse: ToolUse = {
+        id: 'use-2',
+        name: 'nonExistent',
+        input: {},
+      };
+
+      const executor = new StreamingToolExecutor(registry, mockCanUseTool, toolUseContext);
+      executor.addTool(toolUse);
+
+      const tools = executor.getTools();
+      expect(tools).toHaveLength(1);
+      expect(tools[0].status).toBe('completed');
+    });
+
+    it('should handle tool execution error', () => {
+      // Register a tool that throws
+      registry.register(
+        { name: 'failing', description: 'Failing tool', input_schema: {} },
+        {
+          execute: async () => {
+            throw new Error('Tool execution failed');
+          },
+        }
+      );
+
+      const executor = new StreamingToolExecutor(registry, mockCanUseTool, toolUseContext);
+      const toolUse: ToolUse = { id: 'use-3', name: 'failing', input: {} };
+      executor.addTool(toolUse);
+
+      const tools = executor.getTools();
+      expect(tools).toHaveLength(1);
+    });
+  });
+
+  describe('getRemainingResults', () => {
+    it('should yield tool results in order', async () => {
+      // Register a simple echo tool
+      registry.register(
+        { name: 'echo', description: 'Echo', input_schema: {} },
+        {
+          execute: async (input) => ({
+            id: crypto.randomUUID(),
+            name: 'echo',
+            result: `Got: ${JSON.stringify(input)}`,
+          }),
+        }
+      );
+
+      const executor = new StreamingToolExecutor(registry, mockCanUseTool, toolUseContext);
+      executor.addTool({ id: 'use-1', name: 'echo', input: { value: 'hello' } });
+
+      const results: string[] = [];
+      for await (const update of executor.getRemainingResults()) {
+        const toolText = toolResultText(update);
+        if (toolText !== null) {
+          results.push(toolText);
+        }
+      }
+
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0]).toContain('hello');
+    });
+
+    it('should handle multiple concurrent-safe tools', async () => {
+      // Register concurrent-safe tools (read is in the safe list)
+      registry.register(
+        { name: 'read', description: 'Read', input_schema: {} },
+        {
+          execute: async () => ({
+            id: crypto.randomUUID(),
+            name: 'read',
+            result: 'file content',
+          }),
+        }
+      );
+
+      const executor = new StreamingToolExecutor(registry, mockCanUseTool, toolUseContext);
+      executor.addTool({ id: 'r1', name: 'read', input: {} });
+      executor.addTool({ id: 'r2', name: 'read', input: {} });
+
+      const results: string[] = [];
+      for await (const update of executor.getRemainingResults()) {
+        const toolText = toolResultText(update);
+        if (toolText !== null) {
+          results.push(toolText);
+        }
+      }
+
+      expect(results.length).toBe(2);
+    });
+
+    it('should handle permission denied', async () => {
+      registry.register(
+        { name: 'restricted', description: 'Restricted', input_schema: {} },
+        {
+          execute: async () => ({
+            id: crypto.randomUUID(),
+            name: 'restricted',
+            result: 'secret',
+          }),
+        }
+      );
+
+      const denyCanUseTool = vi.fn().mockResolvedValue(false);
+      const executor = new StreamingToolExecutor(registry, denyCanUseTool, toolUseContext);
+      executor.addTool({ id: 'use-1', name: 'restricted', input: {} });
+
+      const results: string[] = [];
+      for await (const update of executor.getRemainingResults()) {
+        const toolText = toolResultText(update);
+        if (toolText !== null) {
+          results.push(toolText);
+        }
+      }
+
+      expect(results.length).toBe(1);
+      expect(results[0]).toContain('Permission denied');
+    });
+
+    it('synthesises a tool_result for sibling-error-cancelled tools with no results', () => {
+      // A queued tool cancelled by a sibling_error abort never starts, so it
+      // has no results. It must still yield a synthetic tool_result so every
+      // tool_use stays paired (avoids "tool_use without tool_result" 400s).
+      registry.register(
+        { name: 'hang', description: 'Never resolves', input_schema: {} },
+        { execute: () => new Promise(() => {}) }
+      );
+
+      const executor = new StreamingToolExecutor(registry, mockCanUseTool, toolUseContext);
+      executor.addTool({ id: 'use-c', name: 'hang', input: {} });
+
+      const tool = executor.getTools()[0];
+      tool.status = 'cancelled';
+      tool.results = undefined;
+      // Simulate a sibling tool error aborting this queued tool.
+      (executor as unknown as { hasErrored: boolean }).hasErrored = true;
+
+      const yielded = [...executor.getCompletedResults()];
+      const synthetic = yielded.filter(
+        (u) => u.message?.tool_call_id === 'use-c'
+      );
+
+      expect(synthetic.length).toBe(1);
+      expect(synthetic[0].message!.role).toBe('tool');
+      expect(String(synthetic[0].message!.content)).toContain(
+        'Cancelled: parallel tool call'
+      );
+    });
+
+    it('does not synthesise a tool_result for discard-cancelled tools', () => {
+      // discard() is handled by upstream agent cleanup; synthesising here
+      // would leave an orphan tool_result. Only sibling_error is covered.
+      registry.register(
+        { name: 'hang', description: 'Never resolves', input_schema: {} },
+        { execute: () => new Promise(() => {}) }
+      );
+
+      const executor = new StreamingToolExecutor(registry, mockCanUseTool, toolUseContext);
+      executor.addTool({ id: 'use-d', name: 'hang', input: {} });
+
+      const tool = executor.getTools()[0];
+      tool.status = 'cancelled';
+      tool.results = undefined;
+      executor.discard();
+
+      const yielded = [...executor.getCompletedResults()];
+      expect(yielded.filter((u) => u.message?.tool_call_id === 'use-d')).toHaveLength(0);
+    });
+  });
+
+  describe('discard', () => {
+    it('should discard pending tools', async () => {
+      registry.register(
+        { name: 'slow', description: 'Slow tool', input_schema: {} },
+        {
+          execute: async () => {
+            await new Promise(r => setTimeout(r, 1000));
+            return { id: crypto.randomUUID(), name: 'slow', result: 'done' };
+          },
+        }
+      );
+
+      const executor = new StreamingToolExecutor(registry, mockCanUseTool, toolUseContext);
+      executor.addTool({ id: 'use-1', name: 'slow', input: {} });
+
+      // Discard before completion
+      executor.discard();
+
+      const tools = executor.getTools();
+      const results = [...executor.getCompletedResults()];
+
+      // Should have no completed results after discard
+      expect(results.length).toBe(0);
+    });
+  });
+
+  describe('concurrency control', () => {
+    it('should process concurrent-safe tools', async () => {
+      registry.register(
+        { name: 'read', description: 'Read file', input_schema: {} },
+        {
+          execute: async () => ({
+            id: crypto.randomUUID(),
+            name: 'read',
+            result: 'content',
+          }),
+        }
+      );
+
+      const executor = new StreamingToolExecutor(registry, mockCanUseTool, toolUseContext);
+      executor.addTool({ id: 't1', name: 'read', input: {} });
+      executor.addTool({ id: 't2', name: 'read', input: {} });
+
+      const results: string[] = [];
+      for await (const update of executor.getRemainingResults()) {
+        const toolText = toolResultText(update);
+        if (toolText !== null) {
+          results.push(toolText);
+        }
+      }
+
+      // Both tools should complete
+      expect(results.length).toBe(2);
+    });
+
+    it('should block non-concurrent tools until safe', async () => {
+      // 'bash' is not in the concurrent-safe list
+      registry.register(
+        { name: 'bash', description: 'Bash', input_schema: {} },
+        {
+          execute: async () => ({
+            id: crypto.randomUUID(),
+            name: 'bash',
+            result: 'bash done',
+          }),
+        }
+      );
+
+      registry.register(
+        { name: 'read', description: 'Read', input_schema: {} },
+        {
+          execute: async () => ({
+            id: crypto.randomUUID(),
+            name: 'read',
+            result: 'read done',
+          }),
+        }
+      );
+
+      const executor = new StreamingToolExecutor(registry, mockCanUseTool, toolUseContext);
+
+      // Add read first (concurrent-safe), then bash (non-concurrent)
+      executor.addTool({ id: 'r1', name: 'read', input: {} });
+      executor.addTool({ id: 'b1', name: 'bash', input: {} });
+
+      const results: string[] = [];
+      for await (const update of executor.getRemainingResults()) {
+        const toolText = toolResultText(update);
+        if (toolText !== null) {
+          results.push(toolText);
+        }
+      }
+
+      // Both should complete, bash after read
+      expect(results.length).toBe(2);
+    });
+  });
+
+  describe('abort handling', () => {
+    it('should report discarded state', async () => {
+      registry.register(
+        { name: 'slow', description: 'Slow tool', input_schema: {} },
+        {
+          execute: async () => {
+            await new Promise(r => setTimeout(r, 100));
+            return { id: crypto.randomUUID(), name: 'slow', result: 'done' };
+          },
+        }
+      );
+
+      const executor = new StreamingToolExecutor(registry, mockCanUseTool, toolUseContext);
+      executor.addTool({ id: 'use-1', name: 'slow', input: {} });
+
+      // Discard before completion
+      executor.discard();
+
+      const tools = executor.getTools();
+      expect(tools[0].status).toBeDefined();
+    });
+  });
+});
+
+describe('Tool use loop simulation', () => {
+  it('executes one tool call and returns its result', async () => {
+    const registry = new ToolRegistry() as TestRegistry;
+    const mockCanUseTool = vi.fn().mockResolvedValue(true);
+
+    // Register a tool that will be called
+    registry.register(
+      { name: 'read', description: 'Read file', input_schema: {} },
+      {
+        execute: async (input) => ({
+          id: crypto.randomUUID(),
+          name: 'read',
+          result: 'file content here',
+        }),
+      }
+    );
+
+    // Adapt a provider tool_use event into the Runtime executor's call shape.
+    const toolUseId = crypto.randomUUID();
+    const toolUseEvents: SSEEvent[] = [
+      {
+        type: 'tool_use',
+        data: { id: toolUseId, name: 'read', input: { file_path: '/test.txt' } },
+      },
+    ];
+
+    // Execute the queued call through the Runtime executor.
+    const toolUseContext: ToolUseContext = {
+      toolUseId: 'ctx-1',
+      abortController: new AbortController(),
+      getAppState: () => ({}),
+      setAppState: () => {},
+      options: {
+        tools: [],
+        commands: [],
+        mainLoopModel: 'test',
+        mcpClients: [],
+      },
+    };
+
+    const executor = new StreamingToolExecutor(registry, mockCanUseTool, toolUseContext);
+
+    for (const event of toolUseEvents) {
+      if (event.type === 'tool_use') {
+        executor.addTool(event.data);
+      }
+    }
+
+    // Collect the model-visible tool result.
+    const toolResults: string[] = [];
+    for await (const update of executor.getRemainingResults()) {
+      const toolText = toolResultText(update);
+      if (toolText !== null) {
+        toolResults.push(toolText);
+      }
+    }
+
+    // Verify tool was executed
+    expect(toolResults.length).toBe(1);
+    expect(toolResults[0]).toContain('file content');
+  });
+
+  /**
+   * Exercises multiple calls emitted in one provider batch.
+   */
+  it('handles multiple tool calls in one batch', async () => {
+    const registry = new ToolRegistry() as TestRegistry;
+    const mockCanUseTool = vi.fn().mockResolvedValue(true);
+
+    let callCount = 0;
+    registry.register(
+      { name: 'counter', description: 'Count calls', input_schema: {} },
+      {
+        execute: async () => {
+          callCount++;
+          return { id: crypto.randomUUID(), name: 'counter', result: `call ${callCount}` };
+        },
+      }
+    );
+
+    const toolUseContext: ToolUseContext = {
+      toolUseId: 'ctx-1',
+      abortController: new AbortController(),
+      getAppState: () => ({}),
+      setAppState: () => {},
+      options: { tools: [], commands: [], mainLoopModel: 'test', mcpClients: [] },
+    };
+
+    const executor = new StreamingToolExecutor(registry, mockCanUseTool, toolUseContext);
+
+    // Simulate LLM requesting multiple tools
+    executor.addTool({ id: 'use-1', name: 'counter', input: {} });
+    executor.addTool({ id: 'use-2', name: 'counter', input: {} });
+    executor.addTool({ id: 'use-3', name: 'counter', input: {} });
+
+    const results: string[] = [];
+    for await (const update of executor.getRemainingResults()) {
+      const toolText = toolResultText(update);
+      if (toolText !== null) {
+        results.push(toolText);
+      }
+    }
+
+    expect(results.length).toBe(3);
+    // Each result is wrapped in the status/duration envelope.
+    expect(results.map((r) => r.replace(/^\[completed\] counter\n/, '').replace(/\n\[Duration: \d+ms\]$/, '')))
+      .toEqual(['call 1', 'call 2', 'call 3']);
+    expect(results[0]).toContain('[completed] counter');
+    expect(results[0]).toContain('[Duration:');
+  });
+
+  /**
+   * Simulates a loop that encounters a bash error and cancels sibling tools
+   */
+  it('should cancel sibling tools when bash errors', async () => {
+    const registry = new ToolRegistry() as TestRegistry;
+    const mockCanUseTool = vi.fn().mockResolvedValue(true);
+
+    // Register bash (non-concurrent-safe) and a concurrent-safe tool
+    registry.register(
+      { name: 'bash', description: 'Bash command', input_schema: {} },
+      {
+        execute: async () => {
+          throw new Error('bash failed');
+        },
+      }
+    );
+
+    registry.register(
+      { name: 'read', description: 'Read', input_schema: {} },
+      {
+        execute: async () => {
+          return { id: crypto.randomUUID(), name: 'read', result: 'file content' };
+        },
+      }
+    );
+
+    const toolUseContext: ToolUseContext = {
+      toolUseId: 'ctx-1',
+      abortController: new AbortController(),
+      getAppState: () => ({}),
+      setAppState: () => {},
+      options: { tools: [], commands: [], mainLoopModel: 'test', mcpClients: [] },
+    };
+
+    const executor = new StreamingToolExecutor(registry, mockCanUseTool, toolUseContext);
+
+    // Bash errors cancel siblings per the implementation
+    executor.addTool({ id: 'use-1', name: 'bash', input: { command: 'ls' } });
+    executor.addTool({ id: 'use-2', name: 'read', input: {} });
+
+    const results: string[] = [];
+    for await (const update of executor.getRemainingResults()) {
+      const toolText = toolResultText(update);
+      if (toolText !== null) {
+        results.push(toolText);
+      }
+    }
+
+    // Should have error for bash and error/cancelled for the read
+    expect(results.some(r => r.includes('error') || r.includes('Error'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plan 419 P0: approval-marker channel (_approvedToolUses in appState)
+// ---------------------------------------------------------------------------
+// These tests use a REAL mutable appState context (the P0-fixed DuyaAgent
+// shape). They pin the "approve once, then retry without a second prompt"
+// semantics that was dead when getAppState/setAppState were no-ops.
+
+describe('permission approval channel (plan 419 P0)', () => {
+  interface MutableContext {
+    appState: Record<string, unknown>;
+    toolUseContext: ToolUseContext;
+  }
+
+  function makeMutableContext(requestPermission?: (r: unknown) => Promise<'allow' | 'deny'>): MutableContext {
+    const appState: Record<string, unknown> = {};
+    return {
+      appState,
+      toolUseContext: {
+        toolUseId: 'ctx-419',
+        abortController: new AbortController(),
+        getAppState: () => appState,
+        setAppState: (f) => { Object.assign(appState, f(appState)); },
+        requestPermission,
+        options: {
+          tools: [],
+          commands: [],
+          mainLoopModel: 'test-model',
+          mcpClients: [],
+        },
+      } as ToolUseContext,
+    };
+  }
+
+  async function drain(executor: StreamingToolExecutor): Promise<string[]> {
+    const results: string[] = [];
+    for await (const update of executor.getRemainingResults()) {
+      const toolText = toolResultText(update);
+      if (toolText !== null) {
+        results.push(toolText);
+      }
+    }
+    return results;
+  }
+
+  it('pre-check approval is visible to execute via _approvedToolUses', async () => {
+    const registry = new ToolRegistry() as TestRegistry;
+    const canUse = vi.fn().mockResolvedValue(true);
+    const requestPermission = vi.fn(async () => 'allow' as const);
+    const { appState, toolUseContext } = makeMutableContext(requestPermission);
+
+    const execute = vi.fn(async () => ({ id: 'use-1', name: 'needs-ok', result: 'executed' }));
+    registry.register(
+      { name: 'needs-ok', description: 'Needs confirmation', input_schema: {} },
+      {
+        checkPermissions: () => ({ allowed: false, requiresUserConfirmation: true, reason: 'test' }),
+        execute,
+      },
+    );
+
+    const executor = new StreamingToolExecutor(registry, canUse, toolUseContext);
+    executor.addTool({ id: 'use-1', name: 'needs-ok', input: {} });
+    const results = await drain(executor);
+
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(results.some((r) => r.includes('executed'))).toBe(true);
+    // The approval marker lands on the SHARED channel (plan 419 P0).
+    const approved = (appState._approvedToolUses as Record<string, boolean> | undefined) ?? {};
+    expect(approved['use-1']).toBe(true);
+  });
+
+  it('PermissionRequiredError retry does not prompt twice when pre-check approved', async () => {
+    const registry = new ToolRegistry() as TestRegistry;
+    const canUse = vi.fn().mockResolvedValue(true);
+    const requestPermission = vi.fn(async () => 'allow' as const);
+    const { appState, toolUseContext } = makeMutableContext(requestPermission);
+
+    // Two-phase tool (AskUserQuestion pattern): phase 1 throws
+    // PermissionRequiredError; the post-approval retry succeeds.
+    let calls = 0;
+    registry.register(
+      { name: 'two-phase', description: 'Two phase', input_schema: {} },
+      {
+        checkPermissions: () => ({ allowed: false, requiresUserConfirmation: true, reason: 'test' }),
+        execute: async () => {
+          calls++;
+          if (calls === 1) {
+            throw new PermissionRequiredError({
+              id: 'use-2',
+              toolName: 'two-phase',
+              toolInput: {},
+              mode: 'generic',
+              expiresAt: Date.now() + 5 * 60 * 1000,
+            });
+          }
+          return { id: 'use-2', name: 'two-phase', result: 'phase-2-ok' };
+        },
+      },
+    );
+
+    const executor = new StreamingToolExecutor(registry, canUse, toolUseContext);
+    executor.addTool({ id: 'use-2', name: 'two-phase', input: {} });
+    const results = await drain(executor);
+
+    // Exactly ONE prompt: the pre-check approval marker in appState makes
+    // the throw-path retry directly instead of re-asking the user.
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+    expect(calls).toBe(2);
+    expect(results.some((r) => r.includes('phase-2-ok'))).toBe(true);
+    const approved = (appState._approvedToolUses as Record<string, boolean> | undefined) ?? {};
+    expect(approved['use-2']).toBe(true);
+  });
+
+  it('deny finalizes with a permission error and never executes', async () => {
+    const registry = new ToolRegistry() as TestRegistry;
+    const canUse = vi.fn().mockResolvedValue(true);
+    const requestPermission = vi.fn(async () => 'deny' as const);
+    const { toolUseContext } = makeMutableContext(requestPermission);
+
+    const execute = vi.fn(async () => ({ id: 'use-3', name: 'needs-ok', result: 'never' }));
+    registry.register(
+      { name: 'needs-ok', description: 'Needs confirmation', input_schema: {} },
+      {
+        checkPermissions: () => ({ allowed: false, requiresUserConfirmation: true, reason: 'test' }),
+        execute,
+      },
+    );
+
+    const executor = new StreamingToolExecutor(registry, canUse, toolUseContext);
+    executor.addTool({ id: 'use-3', name: 'needs-ok', input: {} });
+    const results = await drain(executor);
+
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+    expect(execute).not.toHaveBeenCalled();
+    expect(results.some((r) => r.includes('Permission denied'))).toBe(true);
+  });
+});
+
+describe('StreamingToolExecutor subagent render', () => {
+  it('renders a serial subagent JSON result through renderToolResultMessage', async () => {
+    const registry = new ToolRegistry() as TestRegistry;
+    const mockCanUseTool = vi.fn().mockResolvedValue(true);
+    const toolUseContext: ToolUseContext = {
+      toolUseId: 'ctx-1',
+      abortController: new AbortController(),
+      getAppState: () => ({}),
+      setAppState: () => {},
+      options: {
+        tools: [],
+        commands: [],
+        mainLoopModel: 'test-model',
+        mcpClients: [],
+      },
+    };
+
+    // Simulate SubagentTool: execute returns a JSON string, and the executor
+    // also implements renderToolResultMessage that turns it into readable text.
+    const executorInstance = {
+      execute: async () => ({
+        id: crypto.randomUUID(),
+        name: 'task',
+        result: JSON.stringify({
+          agentType: 'Explore',
+          resolvedAgentType: 'Explore',
+          description: 'scan e:',
+          content: 'E:\\ scan report',
+          sessionId: 'sub-1',
+        }),
+      }),
+      renderToolResultMessage: (r: { result: string }) => {
+        const parsed = JSON.parse(r.result);
+        return {
+          type: 'markdown' as const,
+          content: `[Report] ${parsed.content}\n<subagent_meta>id=${parsed.sessionId}</subagent_meta>`,
+        };
+      },
+    };
+    registry.register(
+      { name: 'task', description: 'Spawn a subagent', input_schema: {} },
+      executorInstance,
+    );
+
+    const executor = new StreamingToolExecutor(registry, mockCanUseTool, toolUseContext);
+    executor.addTool({ id: 'use-sub-1', name: 'task', input: { prompt: 'x' } });
+    const results: string[] = [];
+    for await (const update of executor.getRemainingResults()) {
+      const text = toolResultText(update);
+      if (text !== null) results.push(text);
+    }
+
+    expect(results.length).toBe(1);
+    // The model should see the rendered markdown, not the raw JSON string.
+    expect(results[0]).toContain('[Report] E:\\ scan report');
+    expect(results[0]).toContain('<subagent_meta>id=sub-1</subagent_meta>');
+    expect(results[0]).not.toContain('"agentType"');
+  });
+});

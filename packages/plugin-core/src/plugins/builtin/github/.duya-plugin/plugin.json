@@ -1,0 +1,28 @@
+{
+  "name": "github",
+  "version": "0.1.0",
+  "description": "Connect duya to GitHub: inspect repositories, triage pull requests and issues, debug CI, and prepare code changes for review through the official GitHub remote MCP endpoint.",
+  "author": {
+    "name": "Duya"
+  },
+  "homepage": "https://github.com/lava-chen/duya",
+  "license": "MIT",
+  "keywords": [
+    "github",
+    "repositories",
+    "pull-requests",
+    "issues",
+    "ci",
+    "code-review",
+    "version-control"
+  ],
+  "interface": {
+    "displayName": "GitHub",
+    "shortDescription": "Inspect repos, triage PRs and issues, debug CI",
+    "longDescription": "Connect duya to your GitHub account so it can inspect repositories, triage pull requests and issues, debug failing CI checks, and prepare code changes for review. Uses the official GitHub remote MCP endpoint (https://api.githubcopilot.com/mcp) with OAuth. Requires connecting the GitHub account in the app connection settings.",
+    "category": "development",
+    "brandColor": "#FFFFFF",
+    "icon": "./assets/icon.svg",
+    "screenshots": []
+  }
+}
