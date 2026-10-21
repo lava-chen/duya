@@ -17,7 +17,7 @@
  *     toast, selection toolbar Delete).
  */
 import { test, expect, type Page } from '@playwright/test';
-import { launchDuya, closeDuya, invokeApi, type DuyaApp } from '../helpers';
+import { launchDuya, closeDuya, invokeApi, openConductorView, type DuyaApp } from '../helpers';
 
 // ─── Types matching renderer state ──────────────────────────────────────
 
@@ -94,12 +94,11 @@ async function waitForElementCount(
 
 /**
  * Navigate to the conductor view. Best-effort — if the nav button
- * isn't visible we fall back to IPC-only verification.
+ * isn't reachable we fall back to IPC-only verification.
  */
 async function navigateToConductor(page: Page, namespace: string): Promise<void> {
   try {
-    await page.waitForSelector('[data-testid="nav-conductor"]', { timeout: 20_000 });
-    await page.click('[data-testid="nav-conductor"]', { timeout: 5_000 }).catch(() => {});
+    await openConductorView(page);
   } catch {
     // Surface what we have so failure modes are debuggable
     const probe = await page.evaluate(() => ({
@@ -110,7 +109,7 @@ async function navigateToConductor(page: Page, namespace: string): Promise<void>
       url: location.href,
     })).catch(() => null);
     // eslint-disable-next-line no-console
-    console.warn(`[${namespace}] nav-conductor missing; probe:`, JSON.stringify(probe));
+    console.warn(`[${namespace}] conductor view unreachable; probe:`, JSON.stringify(probe));
   }
 }
 
