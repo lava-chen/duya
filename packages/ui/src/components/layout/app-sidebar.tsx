@@ -1238,6 +1238,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
               type="button"
               role="tab"
               aria-selected={sidebarTab === "work"}
+              data-testid="sidebar-tab-work"
               className={`sidebar-tab${sidebarTab === "work" ? " active" : ""}`}
               onClick={() => setSidebarTab("work")}
             >

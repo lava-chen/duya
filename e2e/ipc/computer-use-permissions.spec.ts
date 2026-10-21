@@ -15,6 +15,13 @@
 import { test, expect } from '@playwright/test';
 import { launchDuya, invokeApi, closeDuya, type DuyaApp } from '../helpers';
 
+// The contract these cases assert is macOS's. TCC states come from the
+// accessibility helper, which only exists on darwin, and the first case
+// asserts `platform === 'darwin'` outright. On any other platform this file
+// was not testing the API it describes — it was failing on the platform,
+// which is why the suite ran red on the Linux runner.
+test.skip(process.platform !== 'darwin', 'computer-use permissions are a macOS TCC contract');
+
 let app: DuyaApp;
 
 test.afterEach(async () => {

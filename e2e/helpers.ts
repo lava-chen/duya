@@ -161,6 +161,31 @@ export async function launchDuya(opts: LaunchOptions): Promise<DuyaApp> {
 }
 
 /**
+ * Open the Conductor view in the running app.
+ *
+ * ## Why this is a helper and not three copies of the same three lines
+ *
+ * The sidebar has two tabs. The primary navigation — the row that carries
+ * the Conductor entry — renders on the WORK tab only; the Bots tab is a flat
+ * contact list. The app starts on the Bots tab, so a spec that goes straight
+ * for `nav-conductor` waits out its timeout against a button that is not in
+ * the DOM, and the canvas it is trying to reach never appears.
+ *
+ * Every Conductor spec needs the same two steps in the same order, and every
+ * one of them used to carry its own copy of the wait — so the failure was
+ * three identical 20-second timeouts instead of one readable error.
+ */
+export async function openConductorView(page: Page): Promise<void> {
+  // The Work tab must be active before the primary navigation exists.
+  const workTab = page.getByTestId('sidebar-tab-work');
+  await workTab.waitFor({ state: 'visible', timeout: 20_000 });
+  if ((await workTab.getAttribute('aria-selected')) !== 'true') {
+    await workTab.click();
+  }
+  await page.getByTestId('nav-conductor').click({ timeout: 20_000 });
+}
+
+/**
  * Call a method on window.electronAPI from the renderer context.
  * Returns the resolved value of the IPC invoke.
  *
