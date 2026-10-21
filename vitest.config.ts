@@ -174,23 +174,27 @@ export default defineConfig({
       ],
     },
     // 30s, not the 10s this used to be. The number is not about how long a
-    // test SHOULD take — it is about how long a test may take before the
-    // runner gives up on it.
+    // test SHOULD take — it is about how long the runner waits before it
+    // gives up on one.
     //
-    // The suite runs four file workers on a four-vCPU CI runner, so a test
-    // that needs 8s of CPU gets roughly twice that wall clock while another
-    // worker's files are competing for the same cores. A 10s budget turns
-    // that into a timeout, and a timeout raised by load is
-    // indistinguishable from a timeout raised by a real defect: the same red
-    // job, the same message, two different meanings. The files that are
-    // genuinely heavy carry their own explicit budgets (the 30,000-delta
-    // simulation, the 80-column PTY suite, the child-session integration
-    // test), and those budgets are what a defect has to beat.
+    // The runner does not have idle cores to hand out: at four workers the
+    // per-file overhead of this suite grew 1.7-1.8x (collect 255s -> 463s,
+    // setup 99s -> 168s, prepare 108s -> 180s) against a worker count that
+    // doubled, which is what a contended machine looks like. So a test that
+    // needs a fixed amount of work gets noticeably less of it, and a 10s
+    // budget turns that into a timeout.
     //
-    // A synchronous test cannot be interrupted anyway — the budget is checked
-    // after it returns — so the files that blow past it (the UI popover
-    // suite, whose cases take 4-14s) were never at risk from this number in
-    // the first place.
+    // A timeout raised by load is indistinguishable from a timeout raised by
+    // a real defect: the same red job, the same message, two different
+    // meanings. The files that are genuinely heavy carry their own explicit
+    // budgets (the 30,000-delta simulation, the 80-column PTY suite, the
+    // child-session integration test), and those budgets are what a defect
+    // has to beat.
+    //
+    // A synchronous test cannot be interrupted anyway — the budget is
+    // checked after it returns — so the files that blow past it (the UI
+    // popover suite, whose cases take 4-14s) were never at risk from this
+    // number in the first place.
     testTimeout: 30000,
     hookTimeout: 30000,
   },
