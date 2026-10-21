@@ -49,9 +49,26 @@ export {
 /** Pull the decision facts off a live Electron IPC event. */
 function readFacts(event: IpcMainInvokeEvent): TrustedSenderFacts {
   const senderFrame = event.senderFrame ?? null;
+  // The sender's OWN main frame. `webContents.mainFrame` is the top frame of
+  // that webContents, and Electron guarantees that distinct WebFrameMain
+  // instances for the same frame share a `routingId` — so comparing the two
+  // routing ids is how "is this the top frame?" is asked without a magic
+  // number. Measured on Electron 44, a fresh BrowserWindow's main frame
+  // reports routing id 1, and it changes again after a reload, so a literal
+  // `=== 0` would refuse the app's own main frame.
+  let mainFrameRoutingId: number | null = null;
+  try {
+    const mainFrame = event.sender?.mainFrame ?? null;
+    mainFrameRoutingId = mainFrame ? mainFrame.routingId : null;
+  } catch {
+    // The webContents is already gone. We cannot confirm the frame, so the
+    // decision fails closed.
+    mainFrameRoutingId = null;
+  }
   return {
     senderId: event.sender?.id ?? -1,
     frameRoutingId: senderFrame ? senderFrame.routingId : null,
+    mainFrameRoutingId,
     frameUrl: senderFrame ? senderFrame.url : null,
   };
 }

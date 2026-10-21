@@ -39,10 +39,24 @@ export interface TrustedSenderFacts {
    */
   senderId: number;
   /**
-   * `WebFrameMain.routingId` of the sending frame. The main frame is always
-   * 0; anything else is an iframe.
+   * `WebFrameMain.routingId` of the sending frame. `null` when the frame
+   * could not be identified at all.
    */
   frameRoutingId: number | null;
+  /**
+   * `WebFrameMain.routingId` of the sending webContents' MAIN frame. `null`
+   * when it could not be identified.
+   *
+   * This is what "the main frame" actually means, and it is NOT a constant.
+   * Electron allocates frame ids per renderer process: measured on Electron
+   * 44, a freshly created BrowserWindow's main frame reports routing id 1,
+   * and the id changes again after a reload. So "is this the top frame" has
+   * to be answered by COMPARING against the sender's own main frame — never
+   * by comparing against a magic number. (Electron's own docs guarantee that
+   * distinct `WebFrameMain` instances for the same frame share a
+   * `routingId`, which is what makes the comparison sound.)
+   */
+  mainFrameRoutingId: number | null;
   /** The sending frame's URL, used only to confirm the app origin. */
   frameUrl: string | null;
 }
@@ -94,11 +108,18 @@ export function evaluateTrustedSender(
       detail: 'sender frame is unavailable; cannot confirm it is the main frame',
     };
   }
-  if (facts.frameRoutingId !== 0) {
+  if (facts.mainFrameRoutingId === null) {
     return {
       ok: false,
       reason: 'subframe',
-      detail: `frame routing id ${facts.frameRoutingId} is not the main frame`,
+      detail: 'sender webContents has no main frame to compare against',
+    };
+  }
+  if (facts.frameRoutingId !== facts.mainFrameRoutingId) {
+    return {
+      ok: false,
+      reason: 'subframe',
+      detail: `frame routing id ${facts.frameRoutingId} is not the main frame (${facts.mainFrameRoutingId})`,
     };
   }
   if (config.allowedOrigins.length === 0) {
