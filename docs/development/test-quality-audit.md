@@ -1,6 +1,6 @@
 # Test Quality Audit
 
-审计日期：2026-10-22。基线：`origin/master` @ `b6f69507`。所有数字都在这台机器、同一条件下测得；CI 数字注明来自哪个 run。
+审计日期：2026-10-22。审计起点：`origin/master` @ `b6f69507`；分支后来 rebase 到 `030db3de`（#348 之后）。所有数字都在这台机器、同一条件下测得；CI 数字注明来自哪个 run。
 
 ## 结论
 
@@ -17,7 +17,7 @@
 | 被跟踪的测试文件 | 1,198 | `git ls-files`（其中 20 个由 vitest 之外的其他 runner 收集） |
 | vitest 实际收集 | 1,178 | 全量 run |
 | 运行时用例 | 13,414（13,387 通过 / 27 pending / 0 失败） | vitest JSON reporter |
-| 静态用例调用点 / 断言调用点 | 12,917 / 31,803 | Test Inventory 静态扫描（`it(`/`test(`/`expect(`） |
+| 静态用例调用点 / 断言调用点 | 12,917 / 31,804 | Test Inventory 静态扫描（`it(`/`test(`/`expect(`） |
 | 全量运行墙钟（改前） | 440.24s | `--maxWorkers=2`（与 CI 同） |
 | 全量运行墙钟（改后） | 420.79s | 同上 |
 | 其中：collect | 237.38s | vitest 阶段分解 |
@@ -85,7 +85,7 @@ worker bundle 那一半同样是多余的：`packages/host/bundle/` 是 git 跟�
 
 本 PR 自己的 CI 把它拉红过两次，失败文件是 `packages/agent-runtime/test/run-cancel-budget.test.ts` 里"墙钟上限触发停止"那一条：`expected 'cancelled' to be 'budget_exhausted'`。
 
-它**不在本 PR 的 diff 里**（16 个文件没有一个在 `packages/agent-runtime`），但它暴露了一类问题，所以写在这里。
+它**不在本 PR 当时的 diff 里**（修复前 16 个文件没有一个在 `packages/agent-runtime`——是修复本身把这个目录带进 diff 的），但它暴露了一类问题，所以写在这里。
 
 **余量只有 1ms。** 预算判定发生在 settle 时，测的是 `Date.now() - startedAt >= 30`；`Date.now()` 只有毫秒精度，而 `setTimeout(30)` 在负载下会提前 1ms 触发，于是测得 29ms → 判定"未越界" → 终态从 `budget_exhausted` 落回 `cancelled`。
 
@@ -142,6 +142,8 @@ worker bundle 那一半同样是多余的：`packages/host/bundle/` 是 git 跟�
 见 [test-fault-injection 报告](test-fault-injection-report.md)。抽样的 **11 个缺陷全部被现有套件杀死**：契约层的 6 个（协议兼容的 MINOR 下限、canonical JSON 键序、SHA-256 填充、持久化的 bot 会话前缀、bypass 模式下的 config 硬边界、`WorkerEvent` 联合类型少一个成员），以及 UI 组件层的 5 个。
 
 UI 层那 5 个是第二轮加的，抽样刻意落在 `mock-heavy` 最密集的地方，**其中一条第一次跑是 `survived`**：注入"扩展页默认打开 installed 而不是 marketplace"之后，3 个用例全部通过——用户打开扩展页落在另一个面板上，套件一声不响。补了一条断言（打开时 marketplace 面板在场），再跑同一条变异：从 `survived` 变成 `killed`，未变异的源码上加强后的用例仍然全绿。
+
+这组对照是同源的：把 `ExtensionsPage.test.tsx` 换回 master 的版本、别的什么都不动，同一条变异在 master 树上 `survived`（3 个用例全过），在本分支树上 `killed`（1 个用例变红）。所以复核者在 master 上跑会得到 10/11，在本分支上是 11/11——差的那一条是本分支关掉的洞。
 
 **这条是"抽样能证伪"的最好证明**：它找出过一个用户看得见、套件看不见的缺陷，并且现在这个缺陷是关着的。
 
