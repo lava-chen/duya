@@ -8,36 +8,36 @@ flags, not the letter.
 
 | metric | value |
 | --- | --- |
-| test files | 1177 |
-| test cases | 12901 |
-| assertions | 31784 |
-| module mocks | 677 |
-| measured test time | 339.8s |
+| test files | 1178 |
+| test cases | 12917 |
+| assertions | 31803 |
+| module mocks | 679 |
+| measured test time | 335.8s |
 
 ## By module
 
 | module | files | cases | assertions | mocks | measured s | A | B | C |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `apps/desktop` | 296 | 3404 | 8868 | 328 | 84.5 | 279 | 17 | 0 |
-| `packages/cli` | 87 | 1005 | 2307 | 12 | 65.7 | 83 | 4 | 0 |
-| `scripts` | 29 | 495 | 1030 | 0 | 51.5 | 28 | 1 | 0 |
-| `packages/host` | 158 | 1537 | 4454 | 34 | 50.6 | 151 | 7 | 0 |
-| `packages/ui` | 209 | 2146 | 4745 | 283 | 29.4 | 190 | 19 | 0 |
-| `packages/agent-runtime` | 102 | 1054 | 2928 | 0 | 29.0 | 102 | 0 | 0 |
-| `evals` | 10 | 102 | 226 | 0 | 10.6 | 10 | 0 | 0 |
-| `packages/capabilities` | 71 | 602 | 1547 | 8 | 5.4 | 71 | 0 | 0 |
-| `packages/memory` | 18 | 248 | 634 | 2 | 3.5 | 18 | 0 | 0 |
+| `apps/desktop` | 296 | 3404 | 8868 | 328 | 81.0 | 279 | 17 | 0 |
+| `packages/cli` | 87 | 1005 | 2307 | 12 | 65.8 | 83 | 4 | 0 |
+| `packages/host` | 159 | 1547 | 4469 | 36 | 50.6 | 152 | 7 | 0 |
+| `scripts` | 29 | 496 | 1031 | 0 | 49.9 | 28 | 1 | 0 |
+| `packages/ui` | 209 | 2147 | 4745 | 283 | 29.9 | 190 | 19 | 0 |
+| `packages/agent-runtime` | 102 | 1055 | 2928 | 0 | 29.7 | 102 | 0 | 0 |
+| `evals` | 10 | 102 | 226 | 0 | 10.5 | 10 | 0 | 0 |
+| `packages/capabilities` | 71 | 602 | 1547 | 8 | 5.3 | 71 | 0 | 0 |
+| `packages/memory` | 18 | 248 | 634 | 2 | 3.4 | 18 | 0 | 0 |
 | `apps/web` | 8 | 68 | 218 | 0 | 2.8 | 8 | 0 | 0 |
 | `packages/agent-protocol` | 28 | 324 | 531 | 0 | 2.1 | 27 | 1 | 0 |
-| `packages/data` | 10 | 48 | 179 | 0 | 2.0 | 10 | 0 | 0 |
-| `packages/ai` | 51 | 504 | 978 | 4 | 1.2 | 51 | 0 | 0 |
+| `packages/data` | 10 | 48 | 179 | 0 | 2.1 | 10 | 0 | 0 |
+| `packages/ai` | 51 | 504 | 978 | 4 | 1.3 | 51 | 0 | 0 |
 | `packages/computer-use` | 24 | 331 | 862 | 0 | 0.4 | 24 | 0 | 0 |
 | `packages/conductor` | 16 | 140 | 295 | 6 | 0.3 | 16 | 0 | 0 |
 | `packages/gateway` | 8 | 58 | 144 | 0 | 0.3 | 8 | 0 | 0 |
 | `packages/plugin-core` | 21 | 349 | 681 | 0 | 0.2 | 21 | 0 | 0 |
 | `packages/agent` | 1 | 9 | 38 | 0 | 0.1 | 1 | 0 | 0 |
+| `packages/sandbox` | 3 | 62 | 93 | 0 | 0.1 | 3 | 0 | 0 |
 | `packages/agent-core` | 13 | 226 | 424 | 0 | 0.0 | 13 | 0 | 0 |
-| `packages/sandbox` | 3 | 59 | 90 | 0 | 0.0 | 3 | 0 | 0 |
 | `packages/voice` | 1 | 7 | 13 | 0 | 0.0 | 1 | 0 | 0 |
 | `packages/client-core` | 4 | 69 | 419 | 0 | 0.0 | 4 | 0 | 0 |
 | `packages/tooling` | 4 | 34 | 38 | 0 | 0.0 | 4 | 0 | 0 |
@@ -57,26 +57,26 @@ flags, not the letter.
 
 | file | measured ms | cases | grade | flags |
 | --- | ---: | ---: | :---: | --- |
-| `packages/cli/test/tui-pty.test.ts` | 19828 | 1 | A | - |
-| `scripts/architecture/boundary-gates.test.ts` | 16813 | 99 | A | - |
-| `packages/agent-runtime/test/coalescing-throughput.test.ts` | 14448 | 13 | A | - |
-| `packages/host/tests/run-execution.test.ts` | 13076 | 9 | B | stdout-write |
-| `scripts/architecture/browser-closure-gate.test.ts` | 11700 | 8 | A | - |
-| `scripts/architecture/bundle-verify.test.ts` | 10495 | 16 | A | - |
-| `packages/host/tests/worker-product-runtime/agent-process-entry-import.test.ts` | 9732 | 2 | A | - |
-| `packages/ui/src/components/ui/usePopoverPlacement.test.ts` | 9187 | 4 | A | - |
-| `packages/cli/tests/integration/host-child-sessions.test.ts` | 7239 | 1 | A | - |
-| `apps/desktop/src/main/db/core/__tests__/run-store-migration.test.ts` | 6956 | 7 | A | - |
-| `scripts/__tests__/memory-rag-lib.test.ts` | 6926 | 26 | A | - |
-| `evals/agent/runner/run-suite.test.ts` | 6652 | 4 | A | - |
-| `packages/cli/tests/integration/shared-client-vertical.test.ts` | 6533 | 1 | A | - |
-| `apps/desktop/src/main/memory-state/__tests__/catalogSync.test.ts` | 6372 | 18 | A | - |
-| `apps/desktop/src/main/control-plane/__tests__/c6-1-ownership.test.ts` | 6188 | 19 | A | - |
-| `packages/cli/src/__tests__/chat-tui-host-stop-continue.test.ts` | 5648 | 1 | B | mock-heavy |
-| `packages/agent-runtime/test/transport-boundary-scale.test.ts` | 5138 | 11 | A | - |
-| `packages/agent-runtime/test/context/compact/summaryRetry.test.ts` | 4077 | 18 | A | - |
-| `apps/desktop/src/main/__tests__/d71-kill-recovery.test.ts` | 3595 | 2 | A | - |
-| `evals/agent/performance/tui.test.ts` | 3522 | 1 | A | - |
+| `packages/cli/test/tui-pty.test.ts` | 19781 | 1 | A | - |
+| `scripts/architecture/boundary-gates.test.ts` | 16840 | 99 | A | - |
+| `packages/agent-runtime/test/coalescing-throughput.test.ts` | 14779 | 13 | A | - |
+| `packages/host/tests/run-execution.test.ts` | 13226 | 9 | B | stdout-write |
+| `scripts/architecture/browser-closure-gate.test.ts` | 11270 | 8 | A | - |
+| `scripts/architecture/bundle-verify.test.ts` | 10613 | 16 | A | - |
+| `packages/ui/src/components/ui/usePopoverPlacement.test.ts` | 9864 | 4 | A | - |
+| `packages/host/tests/worker-product-runtime/agent-process-entry-import.test.ts` | 9600 | 2 | A | - |
+| `packages/cli/tests/integration/host-child-sessions.test.ts` | 7104 | 1 | A | - |
+| `packages/cli/tests/integration/shared-client-vertical.test.ts` | 6672 | 1 | A | - |
+| `evals/agent/runner/run-suite.test.ts` | 6493 | 4 | A | - |
+| `scripts/__tests__/memory-rag-lib.test.ts` | 6424 | 26 | A | - |
+| `apps/desktop/src/main/control-plane/__tests__/c6-1-ownership.test.ts` | 6165 | 19 | A | - |
+| `packages/cli/src/__tests__/chat-tui-host-stop-continue.test.ts` | 5653 | 1 | B | mock-heavy |
+| `packages/agent-runtime/test/transport-boundary-scale.test.ts` | 5216 | 11 | A | - |
+| `apps/desktop/src/main/db/core/__tests__/run-store-migration.test.ts` | 4393 | 7 | A | - |
+| `apps/desktop/src/main/memory-state/__tests__/catalogSync.test.ts` | 4183 | 18 | A | - |
+| `packages/agent-runtime/test/context/compact/summaryRetry.test.ts` | 4091 | 18 | A | - |
+| `packages/host/tests/worker-hooks/executor.test.ts` | 3781 | 43 | B | stdout-write |
+| `apps/desktop/src/main/__tests__/d71-kill-recovery.test.ts` | 3594 | 2 | A | - |
 
 ## Highest risk
 
@@ -90,15 +90,15 @@ flags, not the letter.
 | `packages/ui/src/components/extensions/__tests__/ExtensionsPage.test.tsx` | B | mock-heavy | `packages/ui/src/components/extensions/ExtensionsPage.tsx` |
 | `packages/host/tests/worker-hooks/events.test.ts` | B | stdout-write | `packages/host/src/worker-hooks/events.ts`, `packages/host/src/worker-hooks/task-registry.ts`, `packages/host/src/worker-hooks/types.ts` |
 | `packages/host/tests/worker-product-runtime/worker-subprocess-ledger.test.ts` | B | stdout-write | - |
-| `apps/desktop/src/main/__tests__/desktop-native-run-closed-loop.test.ts` | B | mock-heavy | `apps/desktop/src/main/agents/db-bridge.ts`, `apps/desktop/src/main/agents/server/native-run-event-writer.ts`, `apps/desktop/src/main/agents/server/router.ts` |
 | `packages/agent-protocol/test/24-transcript-exports-resolution.test.ts` | B | stdout-write | - |
+| `apps/desktop/src/main/__tests__/desktop-native-run-closed-loop.test.ts` | B | mock-heavy | `apps/desktop/src/main/agents/db-bridge.ts`, `apps/desktop/src/main/agents/server/native-run-event-writer.ts`, `apps/desktop/src/main/agents/server/router.ts` |
 | `packages/ui/src/components/chat/newchat-mode-passthrough.test.tsx` | B | mock-heavy | `packages/ui/src/components/chat/NewChatView.tsx` |
-| `packages/host/tests/worker-product-runtime/prompt-context-rail-seam.test.ts` | B | stdout-write | `packages/host/tests/worker-product-runtime/engine-turn-harness.ts` |
 | `packages/host/tests/worker-transport-write-queue.test.ts` | B | stdout-write | `packages/host/src/worker-transport.ts` |
+| `packages/ui/src/components/extensions/__tests__/PluginInstallDialog.test.tsx` | B | mock-heavy | `packages/ui/src/components/extensions/PluginInstallDialog.tsx` |
 | `packages/ui/src/components/settings/__tests__/ProviderManagement.test.tsx` | B | mock-heavy | `packages/ui/src/components/settings/ProviderManagement.tsx` |
 | `packages/ui/src/components/layout/__tests__/BotDialogModel.test.tsx` | B | mock-heavy | `packages/ui/src/components/layout/EditBotDialog.tsx`, `packages/ui/src/components/layout/sidebar/bot-contacts.ts` |
-| `packages/ui/src/components/extensions/__tests__/PluginInstallDialog.test.tsx` | B | mock-heavy | `packages/ui/src/components/extensions/PluginInstallDialog.tsx` |
 | `apps/desktop/src/main/agents/process-pool/__tests__/releaseAndWait.test.ts` | B | mock-heavy | `apps/desktop/src/main/agents/process-pool/agent-process-pool.ts` |
+| `packages/host/tests/worker-product-runtime/prompt-context-rail-seam.test.ts` | B | stdout-write | `packages/host/tests/worker-product-runtime/engine-turn-harness.ts` |
 | `packages/ui/src/components/layout/panels/TerminalPanel.test.tsx` | B | mock-heavy | `packages/ui/src/components/layout/panels/TerminalPanel.tsx`, `packages/ui/src/components/layout/panels/registry.ts` |
 | `packages/ui/src/components/settings/__tests__/AgentsSection.test.tsx` | B | mock-heavy | `packages/ui/src/components/settings/AgentsSection.tsx` |
 | `packages/ui/src/components/chat/__tests__/MessageInput.test.tsx` | B | mock-heavy | `packages/ui/src/components/chat/MessageInput.tsx` |
@@ -106,7 +106,7 @@ flags, not the letter.
 | `packages/ui/src/components/chat/ToolActionsGroup.test.tsx` | B | skipped-2 | `packages/ui/src/components/chat/ToolActionsGroup.tsx` |
 | `packages/ui/src/components/chat/bot/AgentDmPairView.test.tsx` | B | mock-heavy | `packages/ui/src/components/chat/bot/AgentDmPairView.tsx` |
 | `packages/ui/src/components/layout/TaskDrawer.test.tsx` | B | mock-heavy | `packages/ui/src/components/layout/TaskDrawer.tsx` |
-| `packages/ui/src/components/layout/sidebar/BotContactListItem.test.tsx` | B | mock-heavy | `packages/ui/src/components/layout/sidebar/BotContactListItem.tsx`, `packages/ui/src/components/layout/sidebar/bot-contacts.ts` |
+| `packages/ui/src/components/layout/PanelHeader.test.tsx` | B | mock-heavy | `packages/ui/src/components/layout/PanelHeader.tsx` |
 
 ## Test files outside the vitest suite
 

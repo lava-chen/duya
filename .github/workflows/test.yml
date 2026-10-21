@@ -440,8 +440,8 @@ jobs:
         # by vitest or not imported by the suite at all. Measured on this tree
         # from a clean `dist/` and a clean `tsconfig.tsbuildinfo`:
         #
-        #   full build (23 packages)   174.1s
-        #   unit-suite profile (20)     34.7s
+        #   full build (22 packages)   151.8s
+        #   unit-suite profile (19)     39.8s
         #
         # The packages the profile leaves out are the expensive ones: `@duya/ui`
         # is a full `tsc` project over the renderer, and the unit suite

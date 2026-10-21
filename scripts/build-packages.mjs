@@ -180,8 +180,8 @@ const BUILD_ORDER_SET = new Set(BUILD_ORDER);
  * The saving is not marginal. Measured on 2026-10-22 on this tree, from a
  * clean `dist/` and a clean `tsconfig.tsbuildinfo`:
  *
- *   full build (23 packages)          174.1s
- *   this profile's closure (19)        29.8s
+ *   full build (22 packages)          151.8s
+ *   this profile's closure (19)        39.8s
  *
  * The packages the profile leaves out are the expensive ones: `@duya/ui` is a
  * full `tsc` project over the renderer, and the unit suite resolves it from
