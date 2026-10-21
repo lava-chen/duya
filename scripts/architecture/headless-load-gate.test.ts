@@ -25,7 +25,10 @@
  */
 
 import { describe, expect, it, beforeAll } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
+import { REPO_ROOT } from './boundary-gates.mjs';
 import {
   DECLARED_ELECTRON_HANDLERS,
   ELECTRON_SPECIFIER,
@@ -198,10 +201,26 @@ describe('A1 — the shipped handler layer', () => {
   it('A1b-full is still OPEN, and says which files', () => {
     // Deliberately asserted RED. The full server-entry closure is NOT decoupled
     // yet: `core/window-manager.ts` (BrowserWindow / dialog), `ipc/*` (ipcMain)
-    // and ~40 more still hard-import electron. Whoever closes that (A3/A4/A5)
-    // has to come here and change this number on purpose, which is the point.
+    // and two dozen more still hard-import electron. Whoever closes that
+    // (A3/A4/A5) has to come here and change this number on purpose, which is
+    // the point.
     expect(report.open.hardElectronImporters).toBeGreaterThan(0);
     expect(report.open.files).toContain('apps/desktop/src/main/core/window-manager.ts');
-    expect(report.open.files).toContain('apps/desktop/src/main/gateway/message-bus.ts');
+    expect(report.open.files).toContain('apps/desktop/src/main/ipc/system-handlers.ts');
+  });
+
+  it('no longer names the gateway message bus, whose electron use is now guarded', () => {
+    // The other direction of the same card, and the reason the list above no
+    // longer names `gateway/message-bus.ts`: its `ipcMain` access became a
+    // guarded `require('electron')` inside a function, so it is a call-time
+    // edge, not an evaluation-time one. Asserted on the SOURCE, so the day
+    // somebody puts a hard import back this case fails again instead of the
+    // open list quietly growing an entry nobody reads.
+    const source = readFileSync(
+      path.join(REPO_ROOT, 'apps/desktop/src/main/gateway/message-bus.ts'),
+      'utf8',
+    );
+    expect(hasHardElectronImport(source)).toBe(false);
+    expect(report.open.files).not.toContain('apps/desktop/src/main/gateway/message-bus.ts');
   });
 });
