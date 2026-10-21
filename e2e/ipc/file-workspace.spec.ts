@@ -73,7 +73,11 @@ test('expanded side panel keeps the floating composer and integrated project tre
     fullPage: false,
   });
 
-  await app.page.getByTestId('file-tree-toggle').click();
+  // `file-tree-toggle` exists twice by design: once in the file-preview
+  // header and once inside the tree panel itself (both flip the same
+  // `workspaceTreeOpen` flag). Scope to the header button, which stays
+  // mounted after the tree collapses.
+  await workspace.locator('.file-preview-actions').getByTestId('file-tree-toggle').click();
   await expect(workspace.locator('.panel-file-tree')).toHaveCount(0);
   await app.page.getByTestId('workspace-expand').click();
   await expect(app.page.locator('.panel-zone-expanded')).toHaveCount(0);

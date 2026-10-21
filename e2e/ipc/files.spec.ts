@@ -5,6 +5,12 @@
  * filesystem round-trip inside the Electron Main process. The temp dir
  * is created under the test namespace's userData so it's isolated and
  * cleaned up with the namespace.
+ *
+ * Every `files:*` channel takes the PROJECT ROOT as its last argument
+ * (plan 413 path safety): a renderer-supplied path is only served when
+ * it is anchored inside that root, so a compromised renderer cannot
+ * enumerate the host filesystem. The sandbox dir is therefore passed as
+ * both the target and the root.
  */
 import { test, expect } from '@playwright/test';
 import * as path from 'node:path';
@@ -43,7 +49,7 @@ test('files:browse returns a tree for a valid directory', async () => {
     success: boolean;
     error?: string;
     tree: Array<{ name: string; path: string; type: string; children?: unknown[] }>;
-  }>(app.page, 'files.browse', sandboxDir, 2);
+  }>(app.page, 'files.browse', sandboxDir, sandboxDir, 2);
 
   expect(result.success).toBe(true);
   expect(Array.isArray(result.tree)).toBe(true);
@@ -58,9 +64,10 @@ test('files:browse rejects non-existent path', async () => {
     app.page,
     'files.browse',
     path.join(sandboxDir, 'does-not-exist'),
+    sandboxDir,
   );
   expect(result.success).toBe(false);
-  expect(result.error).toBeTruthy();
+  expect(result.error).toContain('does not exist');
 });
 
 test('files:delete removes a file', async () => {
@@ -72,6 +79,7 @@ test('files:delete removes a file', async () => {
     app.page,
     'files.delete',
     filePath,
+    sandboxDir,
   );
   expect(result.success).toBe(true);
   expect(fs.existsSync(filePath)).toBe(false);
@@ -83,9 +91,10 @@ test('files:delete rejects non-existent path', async () => {
     app.page,
     'files.delete',
     path.join(sandboxDir, 'nope.txt'),
+    sandboxDir,
   );
   expect(result.success).toBe(false);
-  expect(result.error).toBeTruthy();
+  expect(result.error).toContain('does not exist');
 });
 
 test('files:rename renames a file and returns the new path', async () => {
@@ -98,6 +107,7 @@ test('files:rename renames a file and returns the new path', async () => {
     'files.rename',
     oldPath,
     'new-name.txt',
+    sandboxDir,
   );
   expect(result.success).toBe(true);
   expect(result.newPath).toBeTruthy();
@@ -117,9 +127,10 @@ test('files:rename rejects when target name already exists', async () => {
     'files.rename',
     oldPath,
     'existing.txt',
+    sandboxDir,
   );
   expect(result.success).toBe(false);
-  expect(result.error).toBeTruthy();
+  expect(result.error).toContain('already exists');
 });
 
 test('files:preview reads text through the real preload and main-process IPC', async () => {

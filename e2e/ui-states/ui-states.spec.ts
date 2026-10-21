@@ -308,13 +308,31 @@ async function sampleTurn(page: Page): Promise<string> {
   );
 }
 
-/** Poll for a run row that is live: `status='running'` and no terminal. */
+/** Read one run's ledger, oldest event first. */
+function readRunEvents(db: Database.Database, runId: string): RunEventRow[] {
+  return db
+    .prepare('SELECT * FROM run_events WHERE run_id = ? ORDER BY seq')
+    .all(runId) as RunEventRow[];
+}
+
+/**
+ * Poll for a run that is live AND whose start is durable.
+ *
+ * The `runs` ROW is written by `run:create`, before the worker has even
+ * booted; the ledger's first event is minted by the worker once it starts.
+ * So the row appears first and the ledger follows a beat later — observing
+ * the row alone observes a state that PREDATES the run's own start, and the
+ * ledger assertions would be racing the worker's first frame. On a loaded
+ * runner that beat is over a second, and the ledger was empty.
+ */
 async function pollForLiveRun(page: Page, db: Database.Database, sessionId: string): Promise<PollResult> {
   const deadline = Date.now() + 120_000;
   let lastProbe = 'the turn produced no result frame yet';
   while (Date.now() < deadline) {
     const row = readRun(db, sessionId);
-    if (row && row.terminal === null) return { row, lastProbe };
+    if (row && row.terminal === null && readRunEvents(db, row.id).length > 0) {
+      return { row, lastProbe };
+    }
     lastProbe = await sampleTurn(page);
     await page.waitForTimeout(200);
   }
@@ -496,9 +514,7 @@ test.describe('E4.4 - light/dark and the pending/terminal/approval states', () =
 
       // The ledger agrees with the row: the run opened, and nothing claims
       // otherwise while it is live.
-      const events = db
-        .prepare('SELECT * FROM run_events WHERE run_id = ? ORDER BY seq')
-        .all(pending.row!.id) as RunEventRow[];
+      const events = readRunEvents(db, pending.row!.id);
       expect(events.length).toBeGreaterThan(0);
       expect(events[0].event_type).toBe('run.started');
       const startedPayload = (JSON.parse(events[0].envelope_json) as {
@@ -563,9 +579,7 @@ test.describe('E4.4 - light/dark and the pending/terminal/approval states', () =
       // The event ledger: ordered, unique, terminal-last, and agreeing with
       // the row. A run whose row says `completed` while its own last event
       // says otherwise is exactly the disagreement this slice exists to catch.
-      const events = db
-        .prepare('SELECT * FROM run_events WHERE run_id = ? ORDER BY seq')
-        .all(settled.row!.id) as RunEventRow[];
+      const events = readRunEvents(db, settled.row!.id);
       expect(events.length).toBeGreaterThan(0);
       const seqs = events.map((e) => e.seq);
       expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
@@ -999,12 +1013,16 @@ async function startChatTurnInBackground(
             .join('');
         };
         for (;;) {
-          const next = await Promise.race([
-            reader.read(),
-            new Promise<null>((resolve) => setTimeout(() => resolve(null), 5_000)),
-          ]);
-          if (next === null) continue; // no chunk in this window
-          const { done, value } = next;
+          // AWAIT the read. The reader used to be raced against a 5s timeout
+          // so a stalled stream could not hang the page — but a read that LOSES
+          // that race still CONSUMES the chunk: its promise resolves with the
+          // chunk and nobody awaits it, so the chunk is gone from the stream
+          // and never reaches the frame list. The model fixture holds the
+          // response open for 20s, so the gap between frames exceeded the
+          // timeout and the `text` frame was dropped on the floor — the turn
+          // showed no text at all. The outer `waitForTurnText` owns the
+          // deadline, so the reader does not need one of its own.
+          const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
           const chunks = buffer.split('\n\n');
