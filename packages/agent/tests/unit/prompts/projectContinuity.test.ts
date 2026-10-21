@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { resolve } from 'node:path'
 import { PromptsRegistry } from '../../../src/prompts/registry.js'
-import { HbsPromptSystem } from '../../../src/prompts/hbs/HbsPromptSystem.js'
+import { HbsPromptSystem, resolvePromptAssetsRoot } from '../../../src/prompts/hbs/HbsPromptSystem.js'
 import type { PromptContext } from '../../../src/prompts/types.js'
 import { composeSubagentSystemPrompt } from '../../../src/tool/SubagentTool/promptComposition.js'
 
 const hbs = new HbsPromptSystem({
-  assetsRoot: resolve(__dirname, '../../../src/prompts/assets'),
+  assetsRoot: resolvePromptAssetsRoot(),
 })
 
 function makeContext(enabledTools: string[] = [], overrides: Partial<PromptContext> = {}): PromptContext {

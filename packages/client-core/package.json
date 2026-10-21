@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Client-side run surface state derived from protocol events.",
+  "description": "Client-side run projection and pure event-stream decoding.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

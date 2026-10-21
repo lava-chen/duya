@@ -24,11 +24,11 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { MODULES } from '../../../../src/prompts/modules/registry.js';
 import type { ModuleName } from '../../../../src/prompts/modules/registry.js';
-import { HbsPromptSystem } from '../../../../src/prompts/hbs/HbsPromptSystem.js';
+import { HbsPromptSystem, resolvePromptAssetsRoot } from '../../../../src/prompts/hbs/HbsPromptSystem.js';
 import { PromptSystem } from '../../../../src/prompts/PromptSystem.js';
 import type { PromptContext } from '../../../../src/prompts/types.js';
 
-const ASSETS_ROOT = resolve(__dirname, '../../../../src/prompts/assets');
+const ASSETS_ROOT = resolvePromptAssetsRoot();
 
 function context(
   overrides: Partial<{

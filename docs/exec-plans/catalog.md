@@ -49,6 +49,8 @@
 | [duya-app-mcp-layer](active/616-duya-app-mcp-layer.md) | P1 | 按本计划的 T 卡与验证记录接续；桌面扩展另见 618 |
 | [612 rollout 恢复](active/612-rollout-recovery-hardening.md) | P1 | 先核对 Phase 1 的实际落地与证据，Phase 2/3 决策见正文 |
 | [617 基础工具 v2](active/617-basic-tool-interface-v2.md) | P1 | 读取本计划切片和依赖，核对基础工具 schema 与生产接线 |
+| [619 提示词组装](active/619-prompt-assembly-context-channel.md) | P0 | observer 仅有可选 hash 接缝；无生产 sink/rollout 记录，接续 Phase 0 采样前先完成隐私边界 |
+| [620 会话记录架构](active/620-session-record-architecture.md) | P0 | 实现待认领；从 A1 开始，固定 fixture 验证，不读取真实用户 rollout 数据 |
 
 ## 关联切片与待确认提案
 

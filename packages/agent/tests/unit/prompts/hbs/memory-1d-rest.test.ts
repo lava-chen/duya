@@ -13,13 +13,12 @@
  *      extension.
  *   3. summary.md oversized — 12 000-char truncation kicks in.
  */
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createMemoryPreBuildHook } from '../../../../src/prompts/dynamic/memoryPreBuildHook.js';
-import { HbsPromptSystem } from '../../../../src/prompts/hbs/HbsPromptSystem.js';
+import { HbsPromptSystem, resolvePromptAssetsRoot } from '../../../../src/prompts/hbs/HbsPromptSystem.js';
 import type { PromptContext } from '../../../../src/prompts/types.js';
 
-const ASSETS_ROOT = resolve(__dirname, '../../../../src/prompts/assets');
+const ASSETS_ROOT = resolvePromptAssetsRoot();
 
 function ctxWith(overrides: Partial<PromptContext> = {}): PromptContext {
   return {

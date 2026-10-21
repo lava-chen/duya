@@ -48,12 +48,13 @@ export function cachedPromptSection(
 export function volatilePromptSection(
   name: string,
   compute: () => string | null | Promise<string | null>,
-  _reason?: string,
+  reason?: string,
 ): PromptSection {
   return {
     name,
     compute,
     volatile: true,
+    ...(reason === undefined ? {} : { description: reason }),
   }
 }
 

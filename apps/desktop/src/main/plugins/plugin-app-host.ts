@@ -221,7 +221,14 @@ async function dispatch(sessionId: string, message: PluginAppGuestMessage): Prom
     sessions.setBinding(sessionId, { bindingId: binding.bindingId, nonce: binding.nonce });
     return {
       ok: true,
-      result: { bindingId: binding.bindingId, runId: binding.runId },
+      result: {
+        bindingId: binding.bindingId,
+        runId: binding.runId,
+        // The App addresses a tool by its catalog id, and that id is not
+        // something it can derive: the host reports the ones this binding
+        // actually covers.
+        tools: invocationApi.boundTools(binding.bindingId),
+      },
     };
   }
 

@@ -93,6 +93,22 @@ function trackedFiles() {
 
 const globs = readIncludeGlobs();
 const matchers = globs.map(globToRegExp);
+const ALTERNATE_RUNNERS = new Map([
+  ['evals/agent/performance/recorder.test.mjs', 'eval:agent:core:check'],
+]);
+
+const rootPackage = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8'));
+const typecheckAll = rootPackage.scripts?.['typecheck:all'] ?? '';
+for (const [file, scriptName] of ALTERNATE_RUNNERS) {
+  const command = rootPackage.scripts?.[scriptName];
+  const typecheckCommands = typecheckAll.split('&&').map((part) => part.trim())
+  if (command !== `node --test ${file}` || !typecheckCommands.includes(`npm run ${scriptName}`)) {
+    process.stderr.write(
+      `check-test-coverage: alternate runner for ${file} must be exact and run from typecheck:all.\n`,
+    );
+    process.exit(2);
+  }
+}
 
 const orphans = [];
 let total = 0;
@@ -108,6 +124,7 @@ for (const file of trackedFiles()) {
   // on it (by collecting it) would be worse than leaving it alone.
   if (posix.startsWith('docs/')) continue;
   total++;
+  if (ALTERNATE_RUNNERS.has(posix)) continue;
   if (!matchers.some((re) => re.test(posix))) orphans.push(posix);
 }
 

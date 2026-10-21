@@ -62,7 +62,7 @@
 | `check-text-encoding.mjs` | `npm run check:encoding` | |
 | `check-manifest-keys.mjs` | `npm run check:manifest-keys` | |
 | `check-no-ts-suppress.mjs` | `npm run check:no-ts-suppress` | |
-| `check-test-coverage.mjs` | `npm run check:test-coverage` | |
+| `check-test-coverage.mjs` | `npm run check:test-coverage` | 精确登记的 alternate runner 接入 `typecheck:all`。 |
 | `check-packaged-artifacts.mjs` | `npm run check:packaged-artifacts` | |
 | `typecheck-electron-gate.mjs` | `npm run typecheck:electron` | |
 | `verify-packaged-parity.mjs` | `npm run electron:verify:packaged` | |
@@ -104,7 +104,11 @@
 | `showcase/` | 演示录制与 GIF 合成 |
 | `__tests__/` | `scripts/` 下脚本自身的测试 |
 
+### 一次构建的全量 typecheck
+
+`typecheck:all` 先跑静态门禁，再只运行一次 `build:packages`，随后调用 `typecheck:*:prepared` 与其余原有 TypeScript / Electron 错误门禁。prepared 入口只执行检查；直接调用原 `typecheck:runtime`、`typecheck:web`、`typecheck:electron`、`typecheck:agent` 或 `typecheck:cli` 仍保留各自先构建依赖的行为。所有原有 TS 检查和门禁均保留。
 ### 基线文件
+`check-test-coverage.mjs` 只接受源码映射中逐项登记的 alternate runner 路径。每项必须对应精确的 npm 脚本命令，并由 `typecheck:all` 精确调用；其余未收集测试仍会使门禁失败。recorder 的 Node 测试是单独登记项，不豁免整个 `evals/` 目录。
 
 `packaged-artifact-baseline.json`、`test-coverage-baseline.json`、
 `text-encoding-baseline.json`、`typecheck-electron-baseline.txt`

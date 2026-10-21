@@ -68,7 +68,7 @@
     "typecheck:plugin-core": "npm run -w @duya/plugin-core typecheck",
     "typecheck:conductor": "npm run -w @duya/conductor typecheck",
     "typecheck:voice": "npm run -w @duya/voice typecheck",
-    "typecheck:all": "npm run check:encoding && npm run check:manifest-keys && npm run check:test-coverage && npm run check:no-ts-suppress && npm run check:packaged-artifacts && npm run build:protocol && npm run typecheck:protocol && npm run typecheck:client-core && npm run typecheck:core && npm run build:core && npm run typecheck:runtime && npm run typecheck:web && npm run typecheck:electron && npm run typecheck:agent && npm run typecheck:cli && npm run typecheck:web-app && npm run typecheck:conductor && npm run typecheck:voice && npm run typecheck:evals",
+    "typecheck:all": "npm run check:encoding && npm run check:manifest-keys && npm run check:test-coverage && npm run check:no-ts-suppress && npm run check:packaged-artifacts && npm run build:packages && npm run typecheck:protocol && npm run typecheck:client-core && npm run typecheck:core && npm run typecheck:runtime:prepared && npm run typecheck:web:prepared && npm run typecheck:electron:prepared && npm run typecheck:agent:prepared && npm run typecheck:cli:prepared && npm run typecheck:web-app && npm run typecheck:conductor && npm run typecheck:voice && npm run typecheck:evals && npm run eval:agent:core:check",
     "architecture:check": "node scripts/architecture/architecture-check.mjs",
     "ci:test-scope": "node scripts/ci/test-scope.mjs",
     "architecture:self-test": "node scripts/architecture/architecture-check.mjs --self-test",
@@ -93,7 +93,7 @@
     "eval:agent:core": "npm run build:packages && node evals/agent/performance/run-core.mjs && node evals/agent/performance/run-io.mjs",
     "eval:agent:core:io": "node evals/agent/performance/run-io.mjs",
     "eval:agent:core:compare": "node evals/agent/performance/compare.mjs",
-    "eval:agent:core:check": "node --test evals/agent/performance/*.test.mjs",
+    "eval:agent:core:check": "node --test evals/agent/performance/recorder.test.mjs",
     "eval:agent:tui": "vitest run evals/agent/performance/tui.test.ts",
     "eval:agent:tui:compare": "node evals/agent/performance/compare-tui.mjs",
     "eval:agent:all": "npm run eval:agent:core && npm run eval:agent:tui",
@@ -123,7 +123,12 @@
     "rebuild:node": "node scripts/ensure-sqlite-abi.mjs node",
     "build:cli-dev": "npm run build:packages -- --target @duya/cli && node scripts/build-agent-bundle.mjs && npm run build:cli-bundle",
     "build:tui": "npm run build:cli-dev",
-    "dev:tui": "node packages/cli/bundle/cli.cjs tui"
+    "dev:tui": "node packages/cli/bundle/cli.cjs tui",
+    "typecheck:runtime:prepared": "npm run -w @duya/agent-runtime typecheck",
+    "typecheck:web:prepared": "tsc --noEmit",
+    "typecheck:electron:prepared": "node scripts/typecheck-electron-gate.mjs",
+    "typecheck:agent:prepared": "npm run -w @duya/agent typecheck",
+    "typecheck:cli:prepared": "npm run -w @duya/cli typecheck"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",
