@@ -1637,7 +1637,7 @@ packages/
 ├── tooling/              @duya/tooling - Extension contract + ExtensionRegistry with 13 independent slots
 ├── sandbox/              @duya/sandbox - Cross-platform command sandboxing (Docker / bubblewrap / none)
 ├── computer-use/         @duya/computer-use - Computer Use Mode desktop backend (nut.js + desktopCapturer)
-├── client-core/          @duya/client-core - Client-side run surface state derived from protocol events
+├── client-core/          @duya/client-core - Client run projection and pure SSE/envelope decoding
 ├── ui/                   @duya/ui - Shared renderer: components, stores, hooks, i18n, styles
 ├── command-catalog/      @duya/command-catalog - Canonical slash-command metadata
 ├── input-completion/     @duya/input-completion - Surface-neutral completion contract (pure functions)

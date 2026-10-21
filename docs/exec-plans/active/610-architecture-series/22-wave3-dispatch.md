@@ -143,3 +143,7 @@ Still open for full T31/T32 (unchanged by this slice): instance lifecycle UI
 in Desktop, production iframe creation plus the worker-RPC caller that
 captures T31a executors from the real tool registry/approval context, MCP
 approval-path integration for Apps, and the two-App/two-instance sample.
+
+## T23 branch handoff (2026-10-21)
+
+`codex/t23-desktop-shared-run-session` (`a8900a91`, `5f876f81`) is not an atomic merge candidate. Its start adapter nests `effort` under `options`, conflicting with the typed top-level `effort` contract merged in #328; its renderer adapter carries a Host bearer and calls Host HTTP directly despite the Origin boundary; and Desktop has no production `configureUiServices` caller. This integration extracts pure SSE framing and shallow run-envelope identity decoding into `@duya/client-core` and keeps the existing Web module paths as re-exports. It checks required identity/order fields and a non-empty payload discriminant, not variant-specific payload schemas. Rework the remaining Desktop adapter against the current contract and a real production caller in a separate T23 task.
