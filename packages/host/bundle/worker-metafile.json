@@ -35381,7 +35381,7 @@
       "format": "esm"
     },
     "packages/host/src/run-orchestrator.ts": {
-      "bytes": 133043,
+      "bytes": 132928,
       "imports": [
         {
           "path": "node:crypto",
@@ -43225,13 +43225,13 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/research-api.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 687
+          "bytesInOutput": 700
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 176
+          "bytesInOutput": 189
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -43249,7 +43249,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1955
+          "bytesInOutput": 1968
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -43348,10 +43348,10 @@
           "bytesInOutput": 115
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 21
+          "bytesInOutput": 34
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -43408,7 +43408,7 @@
           "bytesInOutput": 40
         },
         "packages/data/src/workspace-resolver.ts": {
-          "bytesInOutput": 39
+          "bytesInOutput": 52
         },
         "packages/data/src/terminal-history-store.ts": {
           "bytesInOutput": 30
@@ -43438,7 +43438,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -45049,7 +45049,7 @@
           "bytesInOutput": 6016
         },
         "packages/capabilities/src/BrowserTool/CDPClient.ts": {
-          "bytesInOutput": 21619
+          "bytesInOutput": 21606
         },
         "packages/capabilities/src/BrowserTool/SnapshotEngine.ts": {
           "bytesInOutput": 42365
@@ -48427,7 +48427,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 859
+          "bytesInOutput": 865
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -48595,7 +48595,7 @@
           "bytesInOutput": 5
         },
         "packages/host/src/run-orchestrator.ts": {
-          "bytesInOutput": 3841
+          "bytesInOutput": 3740
         },
         "packages/host/src/manifest-factory.ts": {
           "bytesInOutput": 5
@@ -49258,7 +49258,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 5528786
+      "bytes": 5528779
     }
   }
 }

@@ -2261,24 +2261,22 @@ export interface LegacyRetirement {
 export const LEGACY_RETIREMENT: readonly LegacyRetirement[] = Object.freeze([
   Object.freeze({
     obsolete: 'duyaAgent.streamChat as a CLI TURN entry (packages/agent/src/cli/index.ts)',
-    remainingConsumers: 1,
-    consumers: Object.freeze([
-      'packages/agent/src/process/__tests__/engine-session-end-parity.test.ts (session-end parity test: drives the facade directly)',
-    ]),
+    remainingConsumers: 0,
+    consumers: Object.freeze([]),
     consumerRationale:
-      'Measured, not estimated: ONE `.streamChat(` call site on a duyaAgent/subAgent receiver remains ' +
-      'in packages/agent/src, excluding @duya/ai client calls (a different type with no run ' +
-      'semantics), excluding comments, and excluding the sanctioned headless host. It is the ' +
-      'session-end parity test, which drives the facade directly to prove that the headless host ' +
-      'and the legacy engine end a session the same way. The two call sites this registry used ' +
-      'to name — the worker entry (packages/agent/src/process/agent-process-entry.ts) and the ' +
-      'sub-agent runner (packages/agent/src/tool/SubagentTool/runAgent.ts) — are now pure ' +
+      'Measured, not estimated: NO `.streamChat(` call site on a duyaAgent/subAgent receiver ' +
+      'remains in packages/agent/src, excluding @duya/ai client calls (a different type with no ' +
+      'run semantics), excluding comments, and excluding the sanctioned headless host. The last ' +
+      'one this registry named was the session-end parity test, which drove the facade directly ' +
+      'to prove that the headless host and the legacy engine end a session the same way; it went ' +
+      'away with the agent package\'s test suite. The two call sites the registry named before ' +
+      'that — the worker entry (packages/agent/src/process/agent-process-entry.ts) and the ' +
+      'sub-agent runner (packages/agent/src/tool/SubagentTool/runAgent.ts) — are pure ' +
       're-export shims over @duya/host (worker-process-entry and worker-subagents/run-agent) and ' +
-      'hold no facade call site at all, so naming them as consumers overstated what was left to ' +
-      'retire. Every other call of that method in the package is a one-shot model call with no ' +
-      'session, no run identity and no terminal — giving those a run would mean minting runs for ' +
-      'work that is not a run. The CLI turn call sites — the part H8.1 owned — are gone, and the ' +
-      'CLI now starts its turns through HeadlessRunHost.',
+      'hold no facade call site at all. Every other call of that method in the package is a ' +
+      'one-shot model call with no session, no run identity and no terminal — giving those a run ' +
+      'would mean minting runs for work that is not a run. The CLI turn call sites — the part ' +
+      'H8.1 owned — are gone, and the CLI now starts its turns through HeadlessRunHost.',
     removalConditions: Object.freeze([
       'every remaining streamChat caller is a named non-turn model call, or has been moved',
       'packaging and host smoke pass: a packaged Electron build reaches agent-server ready',
@@ -2287,8 +2285,8 @@ export const LEGACY_RETIREMENT: readonly LegacyRetirement[] = Object.freeze([
     removable: false,
     blockedOn:
       'Host smoke is not evidenced. H8.1 ran where a packaged Electron build cannot be produced, ' +
-      'and H8\'s exit condition names host smoke explicitly. The remaining consumers are also ' +
-      'non-zero, so the shim stays on both counts rather than on one.',
+      'and H8\'s exit condition names host smoke explicitly. The consumer count is now zero, so ' +
+      'the shim stays on the smoke condition alone rather than on two counts.',
   }),
 ]);
 
