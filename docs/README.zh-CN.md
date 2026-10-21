@@ -1,7 +1,7 @@
 # Duya
 
 <p align="center">
-  <img src="assets/icon.png" width="120" alt="Duya Logo">
+  <img src="../assets/icon.png" width="120" alt="Duya Logo">
 </p>
 
 <p align="center">
@@ -30,7 +30,7 @@
   <a href="https://github.com/lava-chen/duya/releases">
     <img src="https://img.shields.io/github/v/release/lava-chen/duya?style=flat-square" alt="GitHub release">
   </a>
-  <a href="LICENSE">
+  <a href="../LICENSE">
     <img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="MIT License">
   </a>
   <a href="https://github.com/lava-chen/duya/actions">
@@ -44,7 +44,7 @@
 
 ## Demo
 
-![Duya demo](assets/demo.gif)
+![Duya demo](../assets/readme/hero.gif)
 
 Duya 不仅仅是另一个聊天框。它是一个桌面工作区，智能体可以浏览网页、读写文件、编辑代码、运行命令、查阅项目引用、创建可视化产物，并在执行敏感操作前请求许可。
 
@@ -454,8 +454,8 @@ scripts/              构建、打包、诊断脚本
 docs/                 架构、执行计划、发布说明
 ```
 
-完整的包清单见 [ARCHITECTURE.md](./ARCHITECTURE.md)；「这个症状该打开哪个包」
-见 [ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md)。
+完整的包清单见 [ARCHITECTURE.md](architecture/ARCHITECTURE.md)；「这个症状该打开哪个包」
+见 [ARCHITECTURE_MAP.md](architecture/ARCHITECTURE_MAP.md)。
 
 ---
 

@@ -4,6 +4,8 @@
 
 <h1 align="center">Duya</h1>
 
+<p align="center"><a href="docs/README.zh-CN.md">简体中文</a></p>
+
 <p align="center">
   A local-first desktop AI agent that works inside your projects while keeping its tools, changes, and permission decisions visible.
 </p>
@@ -163,7 +165,7 @@ Duya separates responsibilities so one chat loop does not own the entire applica
 
 This process separation improves interruption, recovery, and session isolation. It is not a promise of a hardened operating-system sandbox on every platform.
 
-Core stack: Electron, Vite, React 19, TypeScript, SQLite / better-sqlite3, HTTP + SSE, and child-process agent workers. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the detailed data flows and [ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md) for the package map.
+Core stack: Electron, Vite, React 19, TypeScript, SQLite / better-sqlite3, HTTP + SSE, and child-process agent workers. See [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) for the detailed data flows and [ARCHITECTURE_MAP.md](docs/architecture/ARCHITECTURE_MAP.md) for the package map.
 
 ---
 
@@ -213,9 +215,9 @@ scripts/               Build, bundle, packaging, and diagnostics
 docs/                  Architecture, execution plans, and release notes
 ```
 
-The full package map is in [ARCHITECTURE.md](./ARCHITECTURE.md). For "which
+The full package map is in [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md). For "which
 package do I open for this symptom?", see
-[ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md).
+[ARCHITECTURE_MAP.md](docs/architecture/ARCHITECTURE_MAP.md).
 
 Before contributing, read [AGENTS.md](./AGENTS.md) and check the active work in [docs/exec-plans/README.md](./docs/exec-plans/README.md).
 

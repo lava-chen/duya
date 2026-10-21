@@ -243,7 +243,7 @@ Fixes #456
 
 Before making significant architectural changes:
 
-1. Read [ARCHITECTURE.md](./ARCHITECTURE.md)
+1. Read [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md)
 2. Read [AGENTS.md](./AGENTS.md) for development workflow
 3. Discuss major changes in an issue first
 4. Update architecture docs if your change affects the design

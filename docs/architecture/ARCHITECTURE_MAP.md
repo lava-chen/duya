@@ -2,7 +2,7 @@
 
 > **Which package do I open for this symptom?**
 >
-> Read [ARCHITECTURE.md](./ARCHITECTURE.md) for design and data flows.
+> Read [ARCHITECTURE.md](ARCHITECTURE.md) for design and data flows.
 > Read `packages/<pkg>/AGENTS.md` for that package's own responsibilities,
 > key files, and debug entries.
 
