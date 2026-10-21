@@ -36,8 +36,31 @@
 - [x] BUILD_ORDER 移除 @duya/agent + packages/agent scripts 清理
 - [x] apps/desktop 依赖闭包 + lock 同步
 - [x] CI/release/文档更新
-- [ ] 验证（验收 1-6）
-- [ ] commit + PR
+- [x] 验证（验收 1-6）
+- [x] commit + PR
+
+## 验证记录
+
+环境：Windows 11 / Node v24.16.0 / npm 11.x；worktree `.claude/worktrees/build-surface-ownership`（junction 依赖指向主检出）；base 5b12f721。
+
+| SHA / dirty 范围 | 命令或操作 | 退出码 / 结果 | 证据 |
+| --- | --- | --- | --- |
+| a7d2ac50（干净） | `npm run bundle:worker` | 0 | worker-entry.js 5.27 MB + BashTool/BashWorker.js 32.86 KB；无 tsc 前置（BashWorker 入口补插件后首次 exit 0） |
+| a7d2ac50（干净） | `npm run build:desktop:deps` | 0 | "built 15 package(s) for @duya/desktop"；闭包 = agent-core/agent-protocol/agent-runtime/ai/capabilities/client-core/command-catalog/computer-use/connectors/data/host/memory/plugin-core/sandbox/tooling；不含 @duya/agent、@duya/web、@duya/ui |
+| a7d2ac50（干净） | `npm run typecheck:all` | 0 | 含 typecheck:electron 门禁 |
+| a7d2ac50（干净） | `npm run architecture:check` | 0 | "OK — no new boundary violations"（2927/2927 均为既有 baseline） |
+| a7d2ac50（干净） | `npm run check:packaged-artifacts` | 0 | "OK — 0 new findings" |
+| a7d2ac50（干净） | `npm run bundle:verify` | 0 | FRESH，0/1083 输入变更 |
+| a7d2ac50（干净） | `npx vitest run scripts/check-packaged-artifacts.test.ts scripts/architecture/agent-retirement-gate.test.ts evals/agent/evaluators/families.test.ts` | 0 | 3 文件 / 80 测试全绿 |
+| a7d2ac50（干净） | `npm run build:cli-bundle` + `node scripts/build-electron.mjs` | 0 / 0 | dev 链三步（worker bundle、CLI bundle、build-electron）不触发任何 tsc |
+| a7d2ac50（干净） | `npm run build:web` | 0 | web 链（BFF tsc + 客户端 Vite）2m19s |
+| a7d2ac50（干净） | grep `bundle:agent\|build-agent-bundle\|rebuild:agent\|typecheck:agent` | — | 活代码零残留；命中只在历史计划文档（587/474 等执行记录）与 agent-retirement-gate 自身的检测正则/fixture |
+
+未验证：`npm run electron:build`（本机缺 Electron 二进制，preelectron 阶段的 fetch-ripgrep / ensure-sqlite-abi 无法完成）；打包后首轮聊天与 app.log 的 ERR_MODULE_NOT_FOUND 检查需真实安装包与 provider key，按 `check:packaged-artifacts` 的提示属人工验收项。
+
+## 接续 / 结果
+
+已交付：commit a7d2ac50，PR 待建。610 协调文档的"构建元数据"部分由此 PR 承接；`packages/agent` 目录本身与门禁 `legacyPackagePresent` 仍属 610 coordinator 的最终步骤，未在本 PR 处理。
 
 ## 发现与决策（补充，实施期）
 
