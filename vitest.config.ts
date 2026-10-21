@@ -173,8 +173,26 @@ export default defineConfig({
         '**/*.test.tsx',
       ],
     },
-    testTimeout: 10000,
-    hookTimeout: 10000,
+    // 30s, not the 10s this used to be. The number is not about how long a
+    // test SHOULD take — it is about how long a test may take before the
+    // runner gives up on it.
+    //
+    // The suite runs four file workers on a four-vCPU CI runner, so a test
+    // that needs 8s of CPU gets roughly twice that wall clock while another
+    // worker's files are competing for the same cores. A 10s budget turns
+    // that into a timeout, and a timeout raised by load is
+    // indistinguishable from a timeout raised by a real defect: the same red
+    // job, the same message, two different meanings. The files that are
+    // genuinely heavy carry their own explicit budgets (the 30,000-delta
+    // simulation, the 80-column PTY suite, the child-session integration
+    // test), and those budgets are what a defect has to beat.
+    //
+    // A synchronous test cannot be interrupted anyway — the budget is checked
+    // after it returns — so the files that blow past it (the UI popover
+    // suite, whose cases take 4-14s) were never at risk from this number in
+    // the first place.
+    testTimeout: 30000,
+    hookTimeout: 30000,
   },
   resolve: {
     // Mirror vite.config.ts: prefer `.ts` over `.js` so test runs pick
