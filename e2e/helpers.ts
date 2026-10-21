@@ -11,7 +11,7 @@
  * via contextBridge) is available — so calling it triggers real IPC
  * invoke/handle roundtrips through ipcMain.
  */
-import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
+import { _electron as electron, expect, type ElectronApplication, type Page } from '@playwright/test';
 import * as path from 'node:path';
 
 export interface LaunchOptions {
@@ -176,13 +176,28 @@ export async function launchDuya(opts: LaunchOptions): Promise<DuyaApp> {
  * three identical 20-second timeouts instead of one readable error.
  */
 export async function openConductorView(page: Page): Promise<void> {
-  // The Work tab must be active before the primary navigation exists.
+  await showWorkTab(page);
+  await page.getByTestId('nav-conductor').click({ timeout: 20_000 });
+}
+
+/**
+ * Switch the app sidebar to its Work tab.
+ *
+ * The sidebar has two top tabs and comes up on Bots. The primary nav —
+ * conductor, automation, workflow, projects — renders ONLY on the Work tab,
+ * so `nav-conductor` is not in the DOM at all until the tab is switched.
+ *
+ * The tab is addressed by its test id rather than by its accessible name: the
+ * name is the localised label, so a runner whose locale is not English would
+ * not find a tab called "Work" at all.
+ */
+export async function showWorkTab(page: Page): Promise<void> {
   const workTab = page.getByTestId('sidebar-tab-work');
-  await workTab.waitFor({ state: 'visible', timeout: 20_000 });
+  await expect(workTab).toBeVisible({ timeout: 20_000 });
   if ((await workTab.getAttribute('aria-selected')) !== 'true') {
     await workTab.click();
   }
-  await page.getByTestId('nav-conductor').click({ timeout: 20_000 });
+  await expect(workTab).toHaveAttribute('aria-selected', 'true');
 }
 
 /**

@@ -48,7 +48,7 @@ import { test, expect } from '@playwright/test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { launchDuya, closeDuya, invokeApi, userDataRootFor, type DuyaApp } from '../helpers';
+import { launchDuya, closeDuya, invokeApi, showWorkTab as showWorkTabIn, userDataRootFor, type DuyaApp } from '../helpers';
 
 let dua: DuyaApp;
 
@@ -145,14 +145,12 @@ async function waitForInteractiveShell(): Promise<void> {
  * asserts on, the project tree and the archive roster included, only
  * renders under the Work tab. The tablist has no test id, so it is
  * addressed by its accessible name.
+ *
+ * The implementation is shared with the conductor specs, which need the
+ * same tab before the primary nav (`nav-conductor`) exists in the DOM.
  */
 async function showWorkTab(): Promise<void> {
-  const workTab = dua.page.getByRole('tab', { name: 'Work' });
-  await expect(workTab).toBeVisible();
-  if ((await workTab.getAttribute('aria-selected')) !== 'true') {
-    await workTab.click();
-  }
-  await expect(workTab).toHaveAttribute('aria-selected', 'true');
+  await showWorkTabIn(dua.page);
 }
 
 /** Open a row's `⋯` menu and click one of its items by visible label. */

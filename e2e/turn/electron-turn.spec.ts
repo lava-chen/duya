@@ -89,45 +89,39 @@
  *     (terminal present; only the title frame may follow it) rather than at the
  *     literal last element, which would be flaky on the timeout path.
  *
- *  2. The `assistant.message_finalized` lookup — the ledger holds 0 such rows.
- *     **This assertion is RIGHT and the product is short, so it is left red.**
- *     A real completed turn persists `assistant.text_block` instead
- *     (`1:run.started 3:assistant.usage 5:assistant.text_block
- *     6:assistant.text_block 7:assistant.usage 8:assistant.usage
- *     9:run.completed`), and the event it wants has no producer on ANY path —
- *     desktop, headless, CLI and subagent all funnel through the one
- *     `translateFrame` seam, which has no arm for it.
+ *  2. The `assistant.message_finalized` lookup — the ledger held 0 such rows.
+ *     **This assertion is RIGHT, and the product was short; the product has
+ *     since caught up.** It was tempting to conclude the declaration was stale
+ *     and repoint this at `assistant.text_block`; that would have been wrong,
+ *     and the registry is the evidence. The event carries a written rationale
+ *     for its own existence (`legacy/sse-event.ts:185-186` — the legacy surface
+ *     "never marked the point where the message stopped changing, which is why
+ *     compaction had to guess a boundary"), the spec derives its payload from
+ *     `AssistantMessage` (`07-agent-protocol-spec.md:244`), contract §F
+ *     requires reconnect recovery from a "message snapshot" rather than from
+ *     discarded deltas, and the consumer already treats it as authoritative and
+ *     superseding (`transcript-snapshot.ts:28-31`). None of that is the shape
+ *     of a leftover.
  *
- *     It is tempting to conclude the declaration is stale and repoint this at
- *     `assistant.text_block`. That would be wrong, and the registry is the
- *     evidence. The event carries a written rationale for its own existence
- *     (`legacy/sse-event.ts:185-186` — the legacy surface "never marked the
- *     point where the message stopped changing, which is why compaction had to
- *     guess a boundary"), the spec derives its payload from `AssistantMessage`
- *     (`07-agent-protocol-spec.md:244`), contract §F requires reconnect
- *     recovery from a "message snapshot" rather than from discarded deltas, and
- *     the consumer already treats it as authoritative and superseding
- *     (`transcript-snapshot.ts:28-31`). None of that is the shape of a leftover.
+ *     The event now HAS its producer: the worker emits `chat:message_finalized`
+ *     ahead of `chat:done` (`worker-process-entry.ts`), `translateFrame` maps
+ *     it, and the control-plane census lists three producers with the gap
+ *     closed (`control-plane-census.ts`) — `control-plane-census.test.ts`
+ *     asserts that the gap is gone. So the lookup below passes, and a real
+ *     turn's ledger carries the finalized message beside the text blocks.
  *
- *     Nor is it a one-line translator fix. `content` and `stopReason` are both
- *     REQUIRED, and the only terminal frame the worker sends is `chat:done` =
- *     `{ sessionId }` (`worker-protocol.ts:326-329`), which carries neither;
- *     `translateFrame` is a pure per-frame function, so producing the event
- *     today would mean inventing the two facts it exists to record. Closing
- *     this is a wire extension — the agent has to carry the finalized message —
- *     which is a larger slice than an assertion change and is not this file's
- *     to land. The gap is recorded as a first-class row in the control-plane
- *     census (`control-plane-census.ts`, `assistant.message_finalized`,
- *     `producer: NOT YET WIRED`) with a gate that makes the whole class
- *     undroppable.
+ *  3. The `run.started` manifest hash — `startedPayload.manifestHash` did not
+ *     equal `run.manifest_hash`. **This was a PRODUCT bug, and it is fixed.**
+ *     The `runs` row records the Control Plane's fingerprint of the FROZEN
+ *     manifest (`host-run-api-adapter.ts` recomputes it over the manifest the
+ *     Control Plane sent). The worker's `run.started` event hashed a
+ *     DIFFERENT manifest — the legacy projection `buildLegacyRunManifest`
+ *     rebuilds from the run facts — so the two columns that exist to
+ *     cross-check each other could never agree. The worker now carries the
+ *     Control Plane's hash (it already verified it against the manifest it
+ *     received), and the ledger's first event names the row's manifest.
  *
- *     An earlier draft of this header proposed repointing the lookup to
- *     `assistant.text_block`. That advice is withdrawn: it would have frozen a
- *     contract violation into a green test, which is the exact outcome this
- *     file exists to prevent.
- *
- * Why the previous author could not have known: while `openRun` refused, the
- * stream stopped at `ready`. No text, no terminal, no ledger — so the frame
+ * Why the previous author could not have known: while `openRun` refused, the * stream stopped at `ready`. No text, no terminal, no ledger — so the frame
  * order and the event names were never observable, and both assertions were
  * guesses. The contract was written to fail, correctly; one of them also
  * guessed wrong about the far end, which only a real turn could reveal.
@@ -599,6 +593,7 @@ async function postChatFromRenderer(
     if (reader) {
       const decoder = new TextDecoder();
       let buffer = '';
+      let pendingRead = reader.read();
       for (;;) {
         if (Date.now() > deadline) {
           streamStalled = true;
@@ -606,12 +601,18 @@ async function postChatFromRenderer(
           break;
         }
         const next = await Promise.race([
-          reader.read(),
+          pendingRead,
           new Promise<null>((resolve) => setTimeout(() => resolve(null), 5_000)),
         ]);
+        // A read that LOSES the race is not cancelled: it still holds the
+        // chunk, and issuing a fresh read would consume that chunk into a
+        // promise nobody awaits — the frame would vanish from the stream. So
+        // the SAME pending read is raced again.
         if (next === null) continue; // no chunk in this window; re-check the budget
         const { done, value } = next;
         if (done) break;
+        // The next read is issued only AFTER this chunk was consumed.
+        pendingRead = reader.read();
         buffer += decoder.decode(value, { stream: true });
         const chunks = buffer.split('\n\n');
         buffer = chunks.pop() ?? '';
