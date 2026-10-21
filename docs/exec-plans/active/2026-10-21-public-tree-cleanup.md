@@ -1,7 +1,7 @@
 # Public repository tree cleanup
 
-状态：active · 负责人：本会话 · 更新：2026-10-21
-分支：`codex/public-tree-cleanup` · worktree：managed `public-tree-cleanup` · base：`c8df0e0192b7a4b55e74e78431417c71e9114df0`
+状态：active（draft PR #340）· 负责人：本会话 · 更新：2026-10-21
+分支：`codex/public-tree-cleanup` · worktree：managed `public-tree-cleanup` · 原始 base：`c8df0e0192b7a4b55e74e78431417c71e9114df0` · PR：[PR #340](https://github.com/lava-chen/duya/pull/340)
 
 ## 目标与边界
 
@@ -23,7 +23,7 @@
 - [x] 完成候选文件的归属决策。
 - [x] 在本 worktree 实施整理与链接更新。
 - [x] 验证文档链接、文件可见性、打包引用和根目录清单，审查 diff。
-- [ ] 提交并创建 draft PR；不合并。
+- [x] 提交并创建 draft PR；不合并。
 
 ## 发现与决策
 
@@ -47,7 +47,8 @@
 | `c8df0e0`; task slice dirty | Windows / PowerShell; Node 24.16.0 | `npm run architecture:check` | 0 | no new boundary violations after root config allowlist update |
 | `c8df0e0`; task slice dirty | Windows / PowerShell; Node 24.16.0 | parse `electron-builder.yml` and assert both `mac` entitlement paths exist | 0 | both paths resolve under `resources/packaging/`; full macOS packaging not run on Windows |
 | `c8df0e0`; task slice dirty | Windows / PowerShell; Node 24.16.0 | `git diff --check` | 0 | no whitespace errors |
+| `c1887b9`; clean committed worktree | Windows / PowerShell | compare branch with current `origin/master` (`5b12f72`) | 0 | 1 task commit ahead, 4 upstream commits ahead; no changed-path overlap; GitHub reports PR mergeable |
 
 ## 接续 / 结果
 
-未提交，未创建 PR，未产生外部副作用。下一步：复核暂存范围、提交并创建 draft PR；不合并。保留 managed worktree 直到结果可达并核对本地 ignored 材料。
+已提交 `c1887b9`，已推送分支并创建 draft PR [#340](https://github.com/lava-chen/duya/pull/340)；未合并。当前 PR head 为 `c1887b9`，目标 `master` 已前进到 `5b12f72`；两侧自原始 base 以来修改的路径无交集，GitHub 报告可合并。下一步等待必需 review 与 CI，并由获授权的集成者决定是否合并；保留 managed worktree 与本地 ignored 材料。
