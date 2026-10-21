@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { closeDuya, invokeApi, launchDuya, type DuyaApp } from '../helpers';
+import { closeDuya, invokeApi, launchDuya, openConductorView, type DuyaApp } from '../helpers';
 
 interface ConductorCanvas {
   id: string;
@@ -24,7 +24,7 @@ async function openConductor(page: Page): Promise<void> {
     () => typeof (window as unknown as { electronAPI?: unknown }).electronAPI !== 'undefined',
     { timeout: 30_000 },
   );
-  await page.getByTestId('nav-conductor').click();
+  await openConductorView(page);
 }
 
 async function firstCanvasId(page: Page): Promise<string> {
