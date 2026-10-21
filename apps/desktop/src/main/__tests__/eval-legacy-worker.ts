@@ -3,13 +3,14 @@
  *
  * ## What this drives
  *
- * `packages/cli/src/agent-worker-entry.ts`, built to
- * `packages/host/bundle/worker-entry.js` by `npm run bundle:worker` and
- * launched with `child_process.fork` over the same four stdio channels the
- * product uses (`pipe`, `pipe`, `pipe`, `ipc`). Nothing in this file imports
- * `DuyaAgent`, `handleChatStart`, or any executor symbol: the executor is
- * reached the only way production reaches it — a JSON command line on stdin,
- * and a JSON event line back on stdout.
+ * `packages/host/src/worker-process-entry.ts`, built to
+ * `packages/host/bundle/worker-entry.js` by `npm run bundle:agent` (from
+ * `packages/cli/src/agent-worker-entry.ts`) and launched with
+ * `child_process.fork` over the same four stdio channels the product uses
+ * (`pipe`, `pipe`, `pipe`, `ipc`). Nothing in this file imports a session
+ * class, a chat handler, or any executor symbol: the executor is reached the
+ * only way production reaches it — a JSON command line on stdin, and a JSON
+ * event line back on stdout.
  *
  * There is deliberately no way to inject a run event from the outside. The
  * point of E4.1 is that the loop is the worker's, so the harness's only verbs
@@ -17,14 +18,18 @@
  *
  * ## Why the bundle and not `dist/`
  *
- * `worker-manager.ts:resolveWorkerPath` prefers
- * `packages/host/bundle/worker-entry.js` and says why: the tsc output
- * is ESM whose runtime imports resolve to `@duya/plugin-core`'s
- * `src/index.ts`, which Node cannot load, so
- * `dist/` output dies with ERR_MODULE_NOT_FOUND before
- * it ever reads a command. Measured, not assumed — see the report. Forking the
- * bundle is therefore both what the product does and the only build that
- * reaches the executor at all.
+ * The product prefers the esbuild bundle over tsc-compiled dist
+ * (`worker-manager.ts:25`), and for a specific reason: the tsc output is ESM
+ * whose runtime imports resolve to `@duya/plugin-core`'s `src/index.ts`, which
+ * Node cannot load, so `dist/…` dies with ERR_MODULE_NOT_FOUND before it
+ * ever reads a command. Forking the bundle is therefore both what the product
+ * does and the only build that reaches the executor at all.
+ *
+ * The bundle this harness forks MOVED with the retirement of `packages/agent`
+ * (`8f7f5032`): it was `packages/agent/bundle/agent-process-entry.js`, and it
+ * is now `packages/host/bundle/worker-entry.js`. The old path is gitignored
+ * (`.gitignore:144`) and no build step emits it, so it can never exist on a
+ * clean checkout.
  *
  * ## The DB boundary is real where it matters, and says so where it does not
  *
@@ -40,9 +45,9 @@
  *    that store.
  *  - chat-session tables (`session:*`, `message:*`, `setting:getJson`,
  *    `plugin:*`, `toolApproval:*`, …) — narrow answers carrying the shapes
- *    `packages/agent/src/ipc/db-client.ts` documents. Every call is recorded
- *    in `dbCalls`, so the report can enumerate the host surface the real
- *    worker actually reached for and nothing is hidden.
+ *    the worker's db client documents. Every call is recorded in `dbCalls`,
+ *    so the report can enumerate the host surface the real worker actually
+ *    reached for and nothing is hidden.
  *
  * A run fact is never answered by the second class. That separation is the
  * difference between "the run ledger is proven end to end" and "the chat
@@ -112,7 +117,7 @@ export function isRunControlAction(action: string): boolean {
 export async function startLegacyWorker(options: WorkerOptions): Promise<LegacyWorker> {
   if (!existsSync(options.workerPath)) {
     throw new Error(
-      `worker bundle missing at ${options.workerPath} — run \`npm run bundle:worker\`. `
+      `worker bundle missing at ${options.workerPath} — run \`npm run bundle:agent\`. `
       + 'The tsc dist/ output cannot be forked (ESM reaching plugin-core src), so the bundle '
       + 'is the only build that reaches the executor.',
     );
@@ -134,12 +139,21 @@ export async function startLegacyWorker(options: WorkerOptions): Promise<LegacyW
     'utf8',
   );
 
+  // The child must NOT inherit `VITEST`. The worker's db client refuses to
+  // send a `db:request` over `process.send` when it sees that variable
+  // (`packages/host/src/worker-db-client.ts:113-121`): in a vitest worker that
+  // channel belongs to the pool, and a plain object there aborts the whole
+  // run before the summary prints. The fork is the product's process, and the
+  // product's process has no `VITEST` in its environment.
+  const childEnv = { ...process.env } as Record<string, string>;
+  delete childEnv.VITEST;
+
   const child: ChildProcess = fork(options.workerPath, [`--duya-namespace=${options.namespace}`], {
     stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
     cwd: options.repoRoot,
     execPath: process.execPath,
     env: {
-      ...process.env,
+      ...childEnv,
       // Product-shaped env, from worker-manager.ts createWorkerEnvironment.
       SESSION_ID: options.sessionId,
       DUYA_AGENT_MODE: 'true',

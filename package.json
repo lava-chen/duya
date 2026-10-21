@@ -15,7 +15,7 @@
     "dev": "vite",
     "dev:web": "npm run -w @duya/web dev",
     "build": "vite build",
-    "build:web": "node scripts/build-packages.mjs --target @duya/web && npm run -w @duya/web build",
+    "build:web": "node scripts/build-packages.mjs --target @duya/web",
     "build:ai": "npm run -w @duya/ai build",
     "build:protocol": "npm run -w @duya/agent-protocol build",
     "build:core": "npm run -w @duya/agent-core build",

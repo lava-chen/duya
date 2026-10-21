@@ -2,18 +2,38 @@
  * eval-legacy-loop.ts — E4.1's harness: the real executor, the real run layer,
  * real SQLite, and an offline PROVIDER.
  *
+ * ## The executor moved; this harness followed it
+ *
+ * The executor this harness was written for is retired. `packages/agent` is
+ * being retired (root `AGENTS.md`: "`packages/agent/` 正在退役，不新增实现"),
+ * and `8f7f5032` ("feat(host): run CLI and Desktop through the Host worker")
+ * moved the shipped worker artifact with it:
+ *
+ *  - the bundle producer now emits `packages/host/bundle/worker-entry.js`
+ *    from `packages/cli/src/agent-worker-entry.ts`, and REFUSES to build if
+ *    any `packages/agent/{src,dist}` file is in the bundle's input closure
+ *    (`scripts/build-agent-bundle.mjs:60-65`);
+ *  - the product forks THAT artifact (`worker-manager.ts:25`).
+ *
+ * `packages/agent/bundle/agent-process-entry.js` is gitignored
+ * (`.gitignore:144`) and no script emits it, so it can never exist on a clean
+ * checkout. The harness below is therefore pointed at the current artifact
+ * and wired to the current Control Plane seam. The cases that drove the
+ * retired executor are skipped, with the reason in `eval-legacy-loop.test.ts`.
+ *
  * ## The chain, end to end
  *
  * ```
  *   RunOrchestrator.openRun          (apps/desktop, real)
  *     -> buildRunManifest            (control-plane/manifest-factory, real)
  *     -> dispatchControlPlaneAction  (control-plane/run-control-plane, real)
- *          -> RunStore               (db/core/run-store, real)
- *               -> better-sqlite3    (real, isolated temp file)
+ *          -> Host Run API           (packages/host/src/run-api, real)
+ *               -> RunStore          (db/core/run-store, real)
+ *                    -> better-sqlite3    (real, isolated temp file)
  *     -> createWorkerExecutionChannel.dispatch
  *          -> stdin JSON line        (the REAL worker process)
- *               -> handleChatStart   (agent-process-entry, real)
- *                    -> DuyaAgent.streamChat          (real)
+ *               -> chat:start        (packages/host/src/worker-process-entry.ts, real)
+ *                    -> the Host worker session / engine driver  (real)
  *                         -> @duya/ai Anthropic client (real)
  *                              -> HTTP to 127.0.0.1   (the offline provider)
  *   stdout JSON frames
@@ -44,7 +64,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { manifestFingerprint, type PermissionPolicyMode } from '@duya/agent-protocol';
-import { RunOrchestrator, createWorkerExecutionChannel, type ChatStartCommand, type RunTurnIntent } from '../agents/server/run-orchestrator';
+import { RunOrchestrator, createWorkerExecutionChannel, type ChatStartCommand, type RunOrchestratorLogger, type RunTurnIntent } from '../agents/server/run-orchestrator';
+import { createDesktopNativeRunEventWriter } from '../agents/server/native-run-event-writer';
 import { normalizeAndObserve, type RouterDeps } from '../agents/server/router';
 import { dispatchControlPlaneAction } from '../control-plane/run-control-plane';
 import { RunStore } from '../db/core/run-store';
@@ -55,7 +76,15 @@ import { redactSecrets } from './eval-redaction';
 /** Repo root, resolved from this file. */
 export const REPO_ROOT = fileURLToPath(new URL('../../../../..', import.meta.url));
 
-/** The bundle the product forks. See `eval-legacy-worker.ts` for why. */
+/**
+ * The bundle the product forks. See `eval-legacy-worker.ts` for why.
+ *
+ * `packages/host/bundle/worker-entry.js` is what `worker-manager.ts:25`
+ * resolves and what `npm run bundle:agent` emits (via
+ * `packages/cli/src/agent-worker-entry.ts`). The retired
+ * `packages/agent/bundle/agent-process-entry.js` is gone: gitignored, and no
+ * build step emits it any more.
+ */
 export const AGENT_BUNDLE = path.join(REPO_ROOT, 'packages', 'host', 'bundle', 'worker-entry.js');
 
 export interface EvalCaseInput {
@@ -240,12 +269,17 @@ export async function runLegacyLoop(
   for (const migration of RunStore.migrations) {
     migration.up(sqlite as never);
   }
-  // The Control Plane reaches storage through `getCoreStores()`, a boot-time
-  // singleton. Injecting the real store into it is the ONE substitution on
-  // this side, and it substitutes a process boundary, not a behaviour.
-  await import('../db/core-connection').then((mod) => {
-    mod._setCoreStoresForTesting({ runs: runStore } as never);
-  });
+  // The Desktop Control Plane dispatches `run:*` to the HOST Run API
+  // (`control-plane/run-control-plane.ts:23`), and production always reaches
+  // it through a running Host. The seam the current measurement files use
+  // points that dispatch at the SAME real RunStore this harness asserts
+  // against, so the run layer stays real without standing up a Host process
+  // — the same recipe `h8-2-worker-run-channel-seam.test.ts` uses since
+  // `9cb96ef5`. The old `getCoreStores()` injection is dead: nothing on this
+  // path reads it any more.
+  const { __setDesktopHostRunApiForTesting } = await import('../control-plane/run-control-plane');
+  const { createHostRunApi } = await import('@duya/host/run-api');
+  __setDesktopHostRunApiForTesting(createHostRunApi({ runs: runStore }));
 
   const provider: OfflineProvider = await startOfflineProvider(input.script);
 
@@ -270,9 +304,32 @@ export async function runLegacyLoop(
   // else — so the run row keeps the honest hash the Control Plane pinned, and
   // the worker's recomputation is what notices the disagreement. Tampering the
   // store instead would make the two agree and the check would never fire.
+  // The durable writer for Runtime-minted envelopes, and the ONE seam this
+  // harness was missing.
+  //
+  // Without a native writer the orchestrator refuses every native `run:event`
+  // ("this Host has no native run event writer configured"), so a run row
+  // existed and the ledger stayed EMPTY — and the report failed
+  // `structure/runRowDurable` on a run that had really executed.
+  //
+  // It is the PRODUCTION writer (`agents/server/native-run-event-writer.ts`),
+  // over the same `dispatchControlPlaneAction` seam the orchestrator already
+  // uses, so the harness stays on the production path it claims to be.
+  const dbRequest = (action: string, payload: Record<string, unknown>): Promise<unknown> =>
+    dispatchControlPlaneAction(action, payload) as Promise<unknown>;
+  // A refused write is RECORDED, not swallowed: the protocol trace is where a
+  // lost batch becomes visible instead of a silently empty ledger.
+  const runLogger: RunOrchestratorLogger = {
+    info: () => undefined,
+    warn: (message, data) => { record('run_event', 'native_writer_warn', { message, data }); },
+    error: (message, error, data) => {
+      record('run_event', 'native_writer_error', { message, error: error?.message ?? null, data });
+    },
+  };
   const orchestrator = new RunOrchestrator({
-    dbRequest: (action, payload) =>
-      dispatchControlPlaneAction(action, payload as Record<string, unknown>) as Promise<unknown>,
+    dbRequest,
+    nativeWriter: createDesktopNativeRunEventWriter({ request: dbRequest, logger: runLogger }),
+    logger: runLogger,
     channel: createWorkerExecutionChannel({
       dispatch: (command) => {
         sentCommands.push(command);
@@ -313,6 +370,14 @@ export async function runLegacyLoop(
         record('run_event', 'late_frame', { type: frame['type'] ?? null });
       }
       return observed;
+    },
+    // The current worker writes the run's durable events as NATIVE
+    // `run:event` envelopes, and the router hands those to
+    // `queueNativeRunEvent` (`router.ts:826-828`). A view that forwards only
+    // `observe` drops every one of them: the ledger would stay empty while
+    // the run layer looked busy.
+    queueNativeRunEvent: (session: string, frame: Record<string, unknown>) => {
+      orchestrator.queueNativeRunEvent(session, frame);
     },
   } as unknown as RunOrchestrator;
 
@@ -526,6 +591,10 @@ export async function runLegacyLoop(
       await worker?.stop();
       await provider.close();
       sqlite.close();
+      // The seam is a module-level singleton; leaving it pointed at this
+      // run's store would hand the next file a store it did not open.
+      const { __setDesktopHostRunApiForTesting } = await import('../control-plane/run-control-plane');
+      __setDesktopHostRunApiForTesting(null);
     },
   };
 }
@@ -618,7 +687,7 @@ function buildMetadata(args: {
       substituted: [
         'LLM provider (real HTTP server on loopback speaking Anthropic Messages SSE)',
         'chat-session db tables (narrow stand-ins; run:* goes to the real Control Plane)',
-        'getCoreStores() singleton (injected real RunStore, not a boot-time Electron one)',
+        'the Host Run API (the seam points it at the same real RunStore this harness asserts against)',
       ],
       notCovered: [
         'Electron renderer / preload boundary',
